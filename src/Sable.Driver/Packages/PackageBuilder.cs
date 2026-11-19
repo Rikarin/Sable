@@ -21,6 +21,12 @@ public sealed record BuildRequest(
 
     /// <summary><c>--deny-reflection</c>: built without reflection, whatever the manifest says (docs/06 §6.1).</summary>
     public bool DenyReflection { get; init; }
+
+    /// <summary>
+    ///     <c>--deny-unsafe</c>: the build fails on any <c>unsafe</c> block or
+    ///     <c>unsafe fn</c> in the workspace's own packages (SYNTAX.md §23).
+    /// </summary>
+    public bool DenyUnsafe { get; init; }
 }
 
 /// <summary>An executable a build made.</summary>
@@ -95,6 +101,18 @@ public static class PackageBuilder {
         }
 
         return trees;
+    }
+
+    /// <summary>
+    ///     A member's own files, as <c>--deny-unsafe</c> holds them: its
+    ///     library's and its binaries' entry files, not its dependencies'.
+    /// </summary>
+    static IEnumerable<SyntaxTree> OwnSources(PackageGraph graph, string member, IEnumerable<BinTarget> bins, bool optimise, NativeTarget? target) {
+        var own = graph.Packages[member];
+        return [
+            ..bins.SelectMany(bin => ParseWithGenerated(graph, own, bin.Path, optimise, null, target)),
+            ..graph.LibrarySources(own).SelectMany(file => ParseWithGenerated(graph, own, file, optimise, null, target)),
+        ];
     }
 
     /// <summary>
@@ -355,6 +373,13 @@ public static class PackageBuilder {
             }
 
             environment.Status.WriteLine($"   Compiling {Describe(graph.Packages[member.Name], workspace)}");
+            if (request.DenyUnsafe && Pipeline.UnsafeDenied(OwnSources(graph, member.Name, bins, profile.Optimise, request.Target)) is { Count: > 0 } denied) {
+                Report(environment, denied);
+                DiagnosticDocs.WriteHint(environment.Error, denied);
+                environment.Error.WriteLine($"error: could not compile {member.Name}");
+                return null;
+            }
+
             var reported = new List<string>();
             if (Generate(graph, member.Name, environment, reported, profile.Optimise, timings) is not { } generated) {
                 DiagnosticDocs.WriteHint(environment.Error, reported);

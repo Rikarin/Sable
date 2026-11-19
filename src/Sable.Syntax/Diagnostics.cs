@@ -245,6 +245,11 @@ public enum ErrorCode {
 
     // ---- Memory (S3460-S3469): what ARC cannot free.
     WRN_StrongReferenceCycle = 3460,
+
+    // ---- Unsafe code (S3470-S3479): SYNTAX.md §23.
+    ERR_UnsafeCallOutsideUnsafe = 3470,
+    ERR_UnsafeNotAFunction = 3471,
+    ERR_UnsafeDenied = 3472,
     ERR_AlignTooLarge = 3510,
     ERR_AttributeArgumentNotConstant = 3511,
     ERR_NotPolymorphic = 3512,

@@ -33,6 +33,25 @@ fn wellFormedUtf8BecomesText() {
 }
 
 @test
+fn wellFormedUtf8BecomesTextUnchecked() {
+    unsafe {
+        assertEqual(String.fromUtf8Unchecked(bytes([0x63, 0x61, 0x66, 0xC3, 0xA9])), "café")
+        assertEqual(String.fromUtf8Unchecked(bytes([])), "")
+        let text = String.fromUtf8Unchecked(bytes([0xF0, 0x9F, 0x98, 0x80, 0x21]))
+        assertEqual(text.count, 2)
+        assertEqual(text.utf8Count, 5)
+    }
+}
+
+@test
+fn aStringsOwnBytesComeBackUnchecked() {
+    let original = "naïve 😀"
+    unsafe {
+        assertEqual(String.fromUtf8Unchecked(original.utf8Bytes()), original)
+    }
+}
+
+@test
 fn illFormedUtf8ThrowsWhereItIs() {
     var caught = false
     do {

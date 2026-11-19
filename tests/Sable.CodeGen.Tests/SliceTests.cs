@@ -75,7 +75,8 @@ public sealed class SliceTests {
 
         if (CanBuild) {
             var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
-            Assert.Contains("allocations 1,", stats, StringComparison.Ordinal);
+            // Not even the array: a literal of constants is one, in read-only memory.
+            Assert.Contains("allocations 0,", stats, StringComparison.Ordinal);
         }
     }
 

@@ -254,6 +254,31 @@ public static class Pipeline {
         return Formatted(checks, program);
     }
 
+    /// <summary>
+    ///     <c>--deny-unsafe</c> (SYNTAX.md §23): each <c>unsafe</c> block and
+    ///     <c>unsafe fn</c> in the files given — the program's own; the
+    ///     standard library and the dependencies may use <c>unsafe</c> behind
+    ///     safe APIs — as an error (S3472), formatted against its file.
+    /// </summary>
+    public static List<string> UnsafeDenied(IEnumerable<SyntaxTree> own) {
+        var errors = new List<string>();
+        foreach (var tree in own) {
+            foreach (var node in tree.Root.DescendantNodes()) {
+                var (keyword, what) = node switch {
+                    UnsafeStatementSyntax block => (block.UnsafeKeyword, "an 'unsafe' block"),
+                    FunctionDeclarationSyntax function when function.Modifiers.Any(SyntaxKind.UnsafeKeyword) =>
+                        (function.Modifiers.First(static m => m.Kind == SyntaxKind.UnsafeKeyword), $"the 'unsafe fn' '{function.Identifier.Text}'"),
+                    _ => (default(SyntaxToken), null),
+                };
+                if (what is not null) {
+                    errors.Add(Diagnostic.Error(ErrorCode.ERR_UnsafeDenied, keyword.Span, $"this program is built with --deny-unsafe, and this is {what}").Format(tree.Text));
+                }
+            }
+        }
+
+        return errors;
+    }
+
     static List<string> Formatted(IEnumerable<(Diagnostic Diagnostic, SyntaxTree? Tree)> diagnostics, IReadOnlyList<SyntaxTree> program) {
         var order = program.Select(static (tree, index) => (tree, index)).ToDictionary(static p => p.tree, static p => p.index);
         return [

@@ -65,6 +65,11 @@ internal static class SymbolDisplay {
     public static string FunctionSignature(FunctionSymbol function, bool withKeyword = true) {
         var builder = new StringBuilder();
         if (withKeyword) {
+            // What a caller must vouch for is the first thing hover says.
+            if (function.IsUnsafe) {
+                builder.Append("unsafe ");
+            }
+
             if (function.IsStatic) {
                 builder.Append("static ");
             }

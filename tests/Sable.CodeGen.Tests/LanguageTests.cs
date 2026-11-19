@@ -140,6 +140,65 @@ public sealed class LanguageTests {
             """
         );
 
+    // A unit element takes no storage: an empty LLVM struct, where 'void' is
+    // not allowed — in a tuple, a struct, an array's elements, a variable and
+    // a closure's parameter.
+    static readonly string HoldingUnit = Program(
+        """
+        struct Box<T> {
+            var value: T
+            var n: Int
+        }
+
+        fn pair() -> ((), Int) { return ((), 7) }
+
+        fn second<T>(_ t: (T, Int)) -> Int { return t.1 }
+        """,
+        """
+            let t = ((), 1)
+            print(t.1)
+            print(pair().1)
+            print(second(((), 8)))
+            let q: ((), Int)? = ((), 9)
+            if let r = q {
+                print(r.1)
+            }
+            var s = ((), "s", ())
+            s.1 = "t"
+            let u = s.0
+            print(s.1)
+            let w = ((), ((), 3))
+            print(w.1.1)
+            print(Box(value: (), n: 2).n)
+            let xs = [((), 3), ((), 4)]
+            print(xs[1].1)
+            let f = (x: ((), Int)) => x.1 + 1
+            print(f(((), 11)))
+        """
+    );
+
+    [Fact]
+    public void TuplesAndStructsHoldingUnit() =>
+        Assert.Equal("1\n7\n8\n9\nt\n3\n2\n4\n12\n", AssertAgree(HoldingUnit).Stdout);
+
+    /// <summary>With debug information too: a unit variable is not described, having no storage.</summary>
+    [Fact]
+    public void TuplesHoldingUnitBuildWithDebugInformation() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("sable-unit-");
+        try {
+            var result = Pipeline.Compile(new SourceText(HoldingUnit, "unit.sb"), directory.FullName);
+            Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+            var build = NativeBuild.Build(result.LlvmIr!, Platform.Executable(Path.Combine(directory.FullName, "unit")), debug: true);
+            Assert.True(build.Succeeded, build.Output);
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
     // ---- Unions, enums, match -------------------------------------------------
 
     const string Shapes = """

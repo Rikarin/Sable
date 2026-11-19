@@ -35,6 +35,9 @@ public sealed partial class LlvmEmitter {
     readonly StringBuilder _globals = new();
     readonly StringBuilder _helpers = new();
     readonly Dictionary<string, string> _strings = new(StringComparer.Ordinal);
+
+    /// <summary>The arrays of constants written so far, by their type and elements: the same array shares one.</summary>
+    readonly Dictionary<string, string> _constantArrays = new(StringComparer.Ordinal);
     readonly HashSet<string> _emitted = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> _trapMessages = new(StringComparer.Ordinal);
 
@@ -584,6 +587,13 @@ public sealed partial class LlvmEmitter {
         };
 
     /// <summary>
+    ///     A value's LLVM type as a part of an aggregate: a unit part is the
+    ///     empty struct, which takes no storage, where LLVM allows no
+    ///     <c>void</c>.
+    /// </summary>
+    static string PartType(SilType type) => type == SilType.Unit ? "{}" : Type(type);
+
+    /// <summary>
     ///     What a struct is laid out as: its fields, after a hidden byte for one
     ///     with a deinit — set when a value is made, so that storage left empty
     ///     by a move, all zeros, is not mistaken for a value to deinit.
@@ -713,6 +723,7 @@ public sealed partial class LlvmEmitter {
             _ when type == SilType.F16 => 2,
             _ when SilType.IntegerInfo(type) is var (bits, _) => bits / 8,
             _ when type == SilType.Int || type == SilType.F64 => 8,
+            _ when type == SilType.Unit => 1,
             StructType { IsInline: true } => PointerBytes,
             StructType structType => LayoutOf(structType).Align,
             TupleType tuple => LayoutOf(tuple).Align,
@@ -739,6 +750,33 @@ public sealed partial class LlvmEmitter {
             .Append(", i64 ").Append(scalars).Append(", [").Append(bytes.Length).Append(" x i8] c\"").Append(Escape(bytes))
             .Append("\" }, align 8\n");
         _strings[value] = name;
+        return name;
+    }
+
+    /// <summary>
+    ///     An array literal of constants (#265): an immortal array in
+    ///     read-only memory, as a string literal is — header, count, capacity,
+    ///     and its elements beside it. Its strong count is 2 and never
+    ///     changes, retains and releases passing an immortal object by, so
+    ///     copy on write always finds it shared: a change copies it first.
+    /// </summary>
+    string ArrayConstant(ArrayType type, IReadOnlyList<string> elements) {
+        var element = Type(type.Element);
+        var body = string.Join(", ", elements.Select(e => $"{element} {e}"));
+        var key = $"{type}|{body}";
+        if (_constantArrays.TryGetValue(key, out var name)) {
+            return name;
+        }
+
+        // Its metadata first, which may write globals of its own.
+        var metadata = ArrayMetadata(type);
+        name = $"@.array.{_constantArrays.Count}";
+        _globals.Append(name).Append(".elements = private unnamed_addr constant [").Append(elements.Count).Append(" x ").Append(element).Append("] [")
+            .Append(body).Append("], align ").Append(Align(type.Element)).Append('\n');
+        _globals.Append(name).Append(" = private unnamed_addr constant %SableArrayHeader { %SableObjectHeader { ptr ").Append(metadata)
+            .Append(", i32 2, i32 1 }, i64 ").Append(elements.Count).Append(", i64 ").Append(elements.Count).Append(", ptr ").Append(name)
+            .Append(".elements }, align 8\n");
+        _constantArrays[key] = name;
         return name;
     }
 
@@ -1747,7 +1785,7 @@ public sealed partial class LlvmEmitter {
                         _dbg = EntryLocation;
                     }
 
-                    Line($"{name} = alloca {Type(alloc.ElementType)}{StorageAlign(alloc.ElementType)}");
+                    Line($"{name} = alloca {PartType(alloc.ElementType)}{StorageAlign(alloc.ElementType)}");
 
                     // Storage for something with references starts empty: all zeros.
                     if (!alloc.ElementType.IsTrivial) {
@@ -1758,7 +1796,8 @@ public sealed partial class LlvmEmitter {
                     // though a debugger shows it only in the block declaring it.
                     // One a closure captures lives in a box, which the slot
                     // points to: the variable is the value inside it.
-                    if (_scope is not null && alloc.VariableName is { } variable) {
+                    // A unit variable has no storage for a debugger to show.
+                    if (_scope is not null && alloc.VariableName is { } variable && alloc.ElementType != SilType.Unit) {
                         var line = alloc.Location?.Line ?? function.Line;
                         var scope = ScopeNode(alloc.Location?.Scope ?? 0);
 
@@ -1783,6 +1822,14 @@ public sealed partial class LlvmEmitter {
                 }
 
                 case DeallocStackInst:
+                    return;
+
+                // A unit value takes no storage: nothing to read or write.
+                case LoadInst unitLoad when unitLoad.Type == SilType.Unit:
+                    _names[unitLoad] = "zeroinitializer";
+                    return;
+
+                case StoreInst unitStore when unitStore.Value.Type == SilType.Unit:
                     return;
 
                 case LoadInst load: {
@@ -2042,7 +2089,7 @@ public sealed partial class LlvmEmitter {
                     Line($"{current} = insertvalue {type} {(LayoutOf(made.StructType).Explicit ? "zeroinitializer" : "poison")}, i1 true, 0");
                     for (var i = 0; i < made.Operands.Count; i++) {
                         var next = Fresh();
-                        Line($"{next} = insertvalue {type} {current}, {Type(made.Operands[i].Type)} {Name(made.Operands[i])}, {FieldSlot(made.StructType, i)}");
+                        Line($"{next} = insertvalue {type} {current}, {PartType(made.Operands[i].Type)} {Name(made.Operands[i])}, {FieldSlot(made.StructType, i)}");
                         current = next;
                     }
 
@@ -2057,6 +2104,11 @@ public sealed partial class LlvmEmitter {
                     _names[instruction] = Aggregate(Type(instruction.Type), instruction.Operands, layout.Explicit ? layout.Slots : null);
                     return;
                 }
+
+                // A unit part takes no storage: there is nothing to read.
+                case StructExtractInst or TupleExtractInst when instruction.Type == SilType.Unit:
+                    _names[instruction] = "zeroinitializer";
+                    return;
 
                 case StructExtractInst extract: {
                     var name = Fresh();
@@ -2178,7 +2230,7 @@ public sealed partial class LlvmEmitter {
             var current = slots is null ? "poison" : "zeroinitializer";
             for (var i = 0; i < parts.Count; i++) {
                 var next = Fresh();
-                Line($"{next} = insertvalue {type} {current}, {Type(parts[i].Type)} {Name(parts[i])}, {slots?[i] ?? i}");
+                Line($"{next} = insertvalue {type} {current}, {PartType(parts[i].Type)} {Name(parts[i])}, {slots?[i] ?? i}");
                 current = next;
             }
 
@@ -2996,6 +3048,25 @@ public sealed partial class LlvmEmitter {
                 case "array_empty":
                     _names[builtin] = builtin.Type is SliceType ? "zeroinitializer" : "null";
                     return;
+
+                // An array of constants: the immortal one in read-only memory.
+                case "array_literal" when builtin.Operands.All(static o => o is IntegerLiteralInst or FloatLiteralInst):
+                    _names[builtin] = module.ArrayConstant((ArrayType)builtin.Type, [..operands]);
+                    return;
+
+                // Elements that are no longer literals: appended, one by one.
+                case "array_literal": {
+                    var arrayType = (ArrayType)builtin.Type;
+                    var slot = Scratch("ptr");
+                    Line($"store ptr null, ptr {slot}");
+                    for (var i = 0; i < operands.Length; i++) {
+                        var element = AppendSlot(slot, arrayType);
+                        Line($"store {Type(arrayType.Element)} {operands[i]}, ptr {element}, !tbaa {TbaaElement}");
+                    }
+
+                    Line($"{Result()} = load ptr, ptr {slot}");
+                    return;
+                }
 
                 // The array header is { object header (16), count, capacity, elements }:
                 // the count and the elements are read in place, not through a

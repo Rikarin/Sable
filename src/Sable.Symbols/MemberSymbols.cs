@@ -155,6 +155,13 @@ public sealed class FunctionSymbol : Symbol {
     public bool IsConst { get; internal set; }
 
     /// <summary>
+    ///     Declared <c>unsafe fn</c>: safe only when its caller keeps a promise
+    ///     the compiler cannot check (SYNTAX.md §23), so it may be called only
+    ///     inside an <c>unsafe</c> block or another <c>unsafe fn</c> (S3470).
+    /// </summary>
+    public bool IsUnsafe { get; internal set; }
+
+    /// <summary>
     ///     <c>@extern("c", "name")</c>: the C function this declares, which a
     ///     call calls by that name, with C's calling convention. Null for a
     ///     function written in Sable.

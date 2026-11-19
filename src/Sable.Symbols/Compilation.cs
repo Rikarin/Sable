@@ -788,6 +788,7 @@ public sealed partial class Compilation {
             IsOverride = declaration.Modifiers.Any(SyntaxKind.OverrideKeyword),
             IsOpen = declaration.Modifiers.Any(SyntaxKind.OpenKeyword),
             IsConst = declaration.Modifiers.Any(SyntaxKind.ConstKeyword),
+            IsUnsafe = declaration.Modifiers.Any(SyntaxKind.UnsafeKeyword),
             IsFinal = declaration.Modifiers.Any(SyntaxKind.FinalKeyword),
             IsAbstract = declaration.Body is null && declaration.ExpressionBody is null,
             IsPolymorphic = declaration.Attributes.Any(static a => AttributeName(a) == "polymorphic"),
@@ -989,7 +990,8 @@ public sealed partial class Compilation {
         ) {
             IsAsync = !declaration.AsyncKeyword.IsNone
                 || declaration.Modifiers.Any(SyntaxKind.AsyncKeyword),
-            IsConst = declaration.Modifiers.Any(SyntaxKind.ConstKeyword)
+            IsConst = declaration.Modifiers.Any(SyntaxKind.ConstKeyword),
+            IsUnsafe = declaration.Modifiers.Any(SyntaxKind.UnsafeKeyword)
         };
 
         if (declaration.TypeParameters is { } typeParameters) {

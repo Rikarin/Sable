@@ -307,6 +307,7 @@ public sealed partial class SemanticModel {
     }
 
     void BindMember(SyntaxNode member, FileScope scope) {
+        CheckUnsafeModifier(member);
         switch (member) {
             case FunctionDeclarationSyntax declaration:
                 BindBody(declaration, declaration.Body, declaration.ExpressionBody, scope);
@@ -371,6 +372,37 @@ public sealed partial class SemanticModel {
     void BindAll(SyntaxList<SyntaxNode> members, FileScope scope) {
         foreach (var member in members) {
             BindMember(member, scope);
+        }
+    }
+
+    /// <summary>
+    ///     <c>unsafe</c> modifies a function alone (S3471): what a caller must
+    ///     vouch for is a call. Not the <c>unsafe</c> of <c>unowned(unsafe)</c>,
+    ///     which follows a parenthesis.
+    /// </summary>
+    void CheckUnsafeModifier(SyntaxNode member) {
+        if (member is FunctionDeclarationSyntax) {
+            return;
+        }
+
+        var previous = SyntaxKind.None;
+        foreach (var child in member.ChildNodesAndTokens()) {
+            if (!child.IsToken) {
+                if (child.AsNode() is not AttributeSyntax) {
+                    return;
+                }
+
+                continue;
+            }
+
+            var token = child.AsToken();
+            if (token.Kind == SyntaxKind.UnsafeKeyword && previous != SyntaxKind.OpenParenToken) {
+                _diagnostics.Add(Diagnostic.Error(ErrorCode.ERR_UnsafeNotAFunction, token.Span,
+                    "only a function can be 'unsafe': what its caller vouches for is a call"));
+                return;
+            }
+
+            previous = token.Kind;
         }
     }
 

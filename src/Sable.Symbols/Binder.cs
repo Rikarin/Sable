@@ -106,6 +106,9 @@ public sealed partial class Binder {
     /// <summary>Depth of <c>do</c> bodies that have a <c>catch</c>.</summary>
     int _catchDepth;
 
+    /// <summary>Depth of <c>unsafe { }</c> blocks being bound, inside which an <c>unsafe fn</c> may be called.</summary>
+    int _unsafeDepth;
+
     /// <summary>True when something under the innermost <c>try</c> can throw.</summary>
     bool _threwInTry;
 
@@ -1322,10 +1325,44 @@ public sealed partial class Binder {
             Declare(local.Name, local);
         }
 
+        if (kind == ScopeKind.Unsafe) {
+            _unsafeDepth++;
+        }
+
         var body = BindBlock(bodySyntax);
+        if (kind == ScopeKind.Unsafe) {
+            _unsafeDepth--;
+        }
+
         PopScope();
 
         return Record(statement, new BoundScopedBlock(statement, kind, local, source, body));
+    }
+
+    /// <summary>
+    ///     An <c>unsafe fn</c> is used only where its caller vouches for the
+    ///     promise it asks: inside an <c>unsafe</c> block, or in the body of
+    ///     another <c>unsafe fn</c> — a closure's in either included (S3470).
+    ///     Taken as a value, it could be called anywhere, so taking it is held
+    ///     to the same.
+    /// </summary>
+    void CheckUnsafeUse(FunctionSymbol function, SyntaxNode at, string use) {
+        if (!function.IsUnsafe || _unsafeDepth > 0) {
+            return;
+        }
+
+        for (var container = _containingSymbol; container is not null; container = container.ContainingSymbol) {
+            if (container is FunctionSymbol { IsUnsafe: true }) {
+                return;
+            }
+        }
+
+        _diagnostics.Error(
+            ErrorCode.ERR_UnsafeCallOutsideUnsafe,
+            at.Span,
+            $"'{function.Name}' is an 'unsafe fn', safe only when its caller keeps the promise it documents; "
+            + $"{use} inside an 'unsafe' block, or in another 'unsafe fn'"
+        );
     }
 
     BoundStatement BindThrow(ThrowStatementSyntax statement) {
@@ -4741,6 +4778,7 @@ public sealed partial class Binder {
 
         ReportUnmetDerivation(resolved, group.Receiver?.Type, syntax);
         ReportUse(resolved, group.Syntax is MemberAccessExpressionSyntax { Name: var name } ? name : group.Syntax);
+        CheckUnsafeUse(resolved, syntax, "call it");
 
         var call = new BoundCall(syntax, group.Receiver, resolved, converted.ToImmutable(), result) {
             Substitution = substitution,
@@ -7844,6 +7882,7 @@ public sealed partial class Binder {
             return new BoundError(group.Syntax);
         }
 
+        CheckUnsafeUse(chosen, group.Syntax, "take it as a value");
         return new BoundFunctionReference(
             group.Syntax,
             Apply(chosen.FunctionType, substitution),

@@ -668,4 +668,66 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    /// <summary>
+    ///     A built-in type conforming to a program's protocol by an empty
+    ///     extension: its witnesses are what the conformance checker found —
+    ///     the built-in operators, and the numeric protocols' builtin families,
+    ///     generically and through an existential.
+    /// </summary>
+    [Fact]
+    public void ABuiltInTypesOperatorsMeetAProgramsProtocol() =>
+        Assert.Equal(
+            "3\n3.75\n7\n3 a\n-1\n3\n",
+            AssertAgree(
+                Program(
+                    """
+                    protocol Summable {
+                        operator + (lhs: Self, rhs: Self) -> Self
+                    }
+
+                    protocol Ordered {
+                        operator < (lhs: Self, rhs: Self) -> Bool
+                        operator == (lhs: Self, rhs: Self) -> Bool
+                    }
+
+                    protocol Signed {
+                        fn signum() -> Self
+                    }
+
+                    protocol Wordy {
+                        var trailingZeroCount: Int { get }
+                    }
+
+                    extension Int: Summable {}
+                    extension F64: Summable {}
+                    extension U8: Summable {}
+                    extension Int: Ordered {}
+                    extension String: Ordered {}
+                    extension Int: Signed {}
+                    extension Int: Wordy {}
+
+                    fn total<T: Summable>(_ a: T, _ b: T) -> T { return a + b }
+
+                    fn least<T: Ordered>(_ a: T, _ b: T) -> T {
+                        if a == b {
+                            return a
+                        }
+                        return a < b ? a : b
+                    }
+
+                    fn sign<T: Signed>(_ a: T) -> T { return a.signum() }
+                    """,
+                    """
+                        print(total(1, 2))
+                        print(total(1.5, 2.25))
+                        print(total(U8(3), U8(4)))
+                        print("\(least(5, 3)) \(least("b", "a"))")
+                        print(sign(-5))
+                        let w: any Wordy = 8
+                        print(w.trailingZeroCount)
+                    """
+                )
+            ).Stdout
+        );
 }

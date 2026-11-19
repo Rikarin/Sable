@@ -22,6 +22,22 @@ extension String {
         throw Utf8.error(in: bytes)!
     }
 
+    /// The text the bytes encode as UTF-8, copied and not checked: the
+    /// caller promises they are well-formed — bytes that came out of a
+    /// String, or were checked already — and calls it in an 'unsafe' block.
+    /// A String must hold well-formed UTF-8: counting, indexing and slicing
+    /// one that does not reads past a sequence cut short. 'fromUtf8' checks.
+    ///
+    /// ```sable
+    /// let bytes: U8[>..] = [0x63, 0x61, 0x66, 0xC3, 0xA9]
+    /// unsafe {
+    ///     assert(String.fromUtf8Unchecked(bytes) == "café")
+    /// }
+    /// ```
+    public unsafe static fn fromUtf8Unchecked(_ bytes: U8[:]) -> String {
+        return Runtime.stringFromValidUtf8(bytes)
+    }
+
     /// The text the bytes encode as UTF-8, each ill-formed sequence — the
     /// most of one that could have begun well — made U+FFFD, the
     /// replacement character, as Unicode recommends and browsers do.

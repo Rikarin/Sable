@@ -136,6 +136,9 @@ public abstract class PackageCommand : Command {
                 case "--deny-reflection":
                     request = request with { DenyReflection = true };
                     break;
+                case "--deny-unsafe":
+                    request = request with { DenyUnsafe = true };
+                    break;
                 default:
                     if (argument.StartsWith("--features=", StringComparison.Ordinal)) {
                         features.AddRange(argument["--features=".Length..].Split([',', ' '], StringSplitOptions.RemoveEmptyEntries));
@@ -190,5 +193,7 @@ public abstract class PackageCommand : Command {
                                    ...); output in target/<triple>/<profile>/
           --sysroot <dir>          where the target's C library is, for clang's link
           --deny-reflection        carry no reflection (also [targets.<triple>] reflection = false)
+          --deny-unsafe            fail on any 'unsafe' block or 'unsafe fn' in the workspace's own
+                                   packages (S3472); dependencies may use 'unsafe'
         """;
 }

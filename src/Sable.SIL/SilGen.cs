@@ -3092,9 +3092,12 @@ public sealed partial class SilGen {
     /// <summary>
     ///     A property an extension of the requirement's protocol gives by
     ///     default — <c>extension Error { var source: (any Error)? =&gt; none }</c>
-    ///     — or of a protocol refining it that the type conforms to.
+    ///     — or of a protocol refining it that the type conforms to, or failing
+    ///     that of any protocol it conforms to, as the conformance checker
+    ///     finds it.
     /// </summary>
     static FieldSymbol? DefaultProperty(NamedTypeSymbol concrete, FieldSymbol requirement) {
+        FieldSymbol? unrelated = null;
         static FieldSymbol? In(NamedTypeSymbol protocol, FieldSymbol requirement) =>
             protocol.OriginalDefinition.Members.OfType<FieldSymbol>().FirstOrDefault(f =>
                 f.ContainingSymbol is ExtensionSymbol && f.Name == requirement.Name && f.IsStatic == requirement.IsStatic && f.IsComputed);
@@ -3121,8 +3124,12 @@ public sealed partial class SilGen {
                 continue;
             }
 
-            if (protocol.Satisfies(required.OriginalDefinition) && In(protocol, requirement) is { } refined) {
-                return refined;
+            if (In(protocol, requirement) is { } found) {
+                if (protocol.Satisfies(required.OriginalDefinition)) {
+                    return found;
+                }
+
+                unrelated ??= found;
             }
 
             foreach (var inherited in protocol.BaseTypes.OfType<NamedTypeSymbol>()) {
@@ -3130,15 +3137,19 @@ public sealed partial class SilGen {
             }
         }
 
-        return null;
+        return unrelated;
     }
 
     /// <summary>
     ///     The default a protocol that refines the requirement's gives, among
     ///     those the type conforms to: <c>extension Error { fn
     ///     debugDescription() }</c> meets Debug's requirement for every Error.
+    ///     Failing that, one any protocol the type conforms to gives, as the
+    ///     conformance checker finds it: <c>extension Int: Summable {}</c> has
+    ///     its <c>+</c> from AdditiveArithmetic's extension, the built-in one.
     /// </summary>
     static FunctionSymbol? RefinedDefault(NamedTypeSymbol concrete, NamedTypeSymbol required, FunctionSymbol requirement) {
+        FunctionSymbol? unrelated = null;
         var seen = new HashSet<NamedTypeSymbol>();
         var pending = new Queue<NamedTypeSymbol>();
         for (var type = (NamedTypeSymbol?)concrete.OriginalDefinition; type is not null; type = SuperclassOf(type)?.OriginalDefinition) {
@@ -3153,14 +3164,18 @@ public sealed partial class SilGen {
                 continue;
             }
 
-            if (!ReferenceEquals(protocol, required) && protocol.Satisfies(required)
+            if (!ReferenceEquals(protocol, required)
                 && protocol.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
                     f.ContainingSymbol is ExtensionSymbol
                     && f.Name == requirement.Name
-                    && f.IsStatic == requirement.IsStatic
+                    && (f.IsStatic == requirement.IsStatic || requirement.FunctionKind == FunctionKind.Operator)
                     && f.Parameters.Length == requirement.Parameters.Length
-                    && SameLabels(f, requirement)) is { } refined) {
-                return refined;
+                    && SameLabels(f, requirement)) is { } found) {
+                if (protocol.Satisfies(required)) {
+                    return found;
+                }
+
+                unrelated ??= found;
             }
 
             foreach (var inherited in protocol.BaseTypes.OfType<NamedTypeSymbol>()) {
@@ -3168,7 +3183,7 @@ public sealed partial class SilGen {
             }
         }
 
-        return null;
+        return unrelated;
     }
 
     /// <summary>
@@ -3240,6 +3255,21 @@ public sealed partial class SilGen {
             // None of its own, and the requirement no body: the getter an
             // extension of its protocol, or of one refining it, gives.
             requirement = extensionDefaultGetter;
+        } else if (requirement is FieldSymbol { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } builtinRequired
+                   && FindField(concrete, builtinRequired.Name) is null
+                   && DefaultProperty(concrete, builtinRequired) is { Builtin: { } family } builtinDefault
+                   && Compilation.IsBuiltinFamily(family)
+                   && _builtinFamilies.TryGetValue(builtinDefault, out var verified) && verified.Contains(value)) {
+            // A built-in type's property a builtin family gives: the builtin,
+            // on the value in the box.
+            var builtin = FamilyMember(family, value);
+            var self = current.Append(new LoadInst(opened));
+            var result = (SilBuiltins.Find(builtin) ?? SilBuiltins.Resolve(builtin, [value]))!.Result;
+            var builtinValue = current.Append(new BuiltinInst(builtin, result, self));
+            ReleaseBox(current);
+            current.Append(new ReturnInst(builtinValue));
+            _module.Add(thunk);
+            return (name, code);
         }
 
         if (requirement is FieldSymbol field) {
@@ -7987,11 +8017,37 @@ public sealed partial class SilGen {
                 return Missing(array, $"an array of type '{type.ToDisplayString()}'");
             }
 
-            var empty = Emit(new BuiltinInst("array_empty", arrayType));
             if (array.Elements.IsEmpty) {
-                return empty;
+                return Emit(new BuiltinInst("array_empty", arrayType));
             }
 
+            // Numbers, Bools and Chars, every one a literal: the array as a
+            // constant, which native code keeps in read-only memory, made
+            // once and never counted (#265).
+            if (IsConstantElement(arrayType.Element)) {
+                var values = new List<SilValue>(array.Elements.Length);
+                foreach (var element in array.Elements) {
+                    if (Expression(element) is not { } value) {
+                        return null;
+                    }
+
+                    values.Add(value);
+                }
+
+                if (values.TrueForAll(IsConstantLiteral)) {
+                    return Emit(new BuiltinInst("array_literal", arrayType, [..values]));
+                }
+
+                var built = NewSlot(arrayType);
+                Emit(new StoreInst(Emit(new BuiltinInst("array_empty", arrayType)), built, StoreKind.Assign));
+                foreach (var value in values) {
+                    Emit(new BuiltinInst("array_append", SilType.Unit, built, value));
+                }
+
+                return Emit(new LoadInst(built, LoadKind.Take));
+            }
+
+            var empty = Emit(new BuiltinInst("array_empty", arrayType));
             var slot = NewSlot(arrayType);
             Emit(new StoreInst(empty, slot, StoreKind.Assign));
             foreach (var element in array.Elements) {
@@ -8004,6 +8060,14 @@ public sealed partial class SilGen {
 
             return Emit(new LoadInst(slot, LoadKind.Take));
         }
+
+        /// <summary>An element an array of constants can hold: a number, a Bool or a Char, written as it is.</summary>
+        static bool IsConstantElement(SilType type) =>
+            type == SilType.Int || type == SilType.Bool || type == SilType.Char || type == SilType.F64 || type == SilType.F32
+            || SilType.IntegerInfo(type) is not null;
+
+        /// <summary>A value written as a literal, which an array of constants holds as it is.</summary>
+        static bool IsConstantLiteral(SilValue value) => value is IntegerLiteralInst or FloatLiteralInst;
 
         /// <summary>
         ///     A protocol's subscript, used on a T that stands for a known type

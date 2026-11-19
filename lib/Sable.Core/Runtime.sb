@@ -193,13 +193,17 @@ public struct Runtime {
         if Runtime.validateUtf8(bytes) >= 0 {
             return none
         }
-        return Runtime.stringFromValidUtf8(bytes)
+        unsafe {
+            return Runtime.stringFromValidUtf8(bytes)
+        }
     }
 
-    // Bytes already validated, as a string: never to be given bytes that
-    // are not, which the runtime's indexing assumes well-formed.
+    /// The bytes as a string, copied and not checked: they must be
+    /// well-formed UTF-8, which the runtime's counting, indexing and slicing
+    /// of a string assume, reading past a sequence cut short otherwise.
+    /// Sable.Text's 'String.fromUtf8Unchecked' is written over it.
     @builtin("string_from_utf8_unchecked")
-    static fn stringFromValidUtf8(_ bytes: U8[:]) -> String
+    public unsafe static fn stringFromValidUtf8(_ bytes: U8[:]) -> String
 
     @builtin("string_join")
     public static fn joinStrings(parts: String[>..], separator: String) -> String

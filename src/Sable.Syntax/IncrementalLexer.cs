@@ -29,7 +29,9 @@ internal readonly record struct IncrementalLexResult(
 ///     <para>
 ///         Two conservative rules keep this sound. The prefix stops two tokens
 ///         short of the edit, because an edit can merge with its neighbours (typing a
-///         second <c>/</c> turns two tokens into a comment). And the suffix is only
+///         second <c>/</c> turns two tokens into a comment), and further back
+///         still when it ends in a run of <c>#</c>s that a raw string could
+///         open with. And the suffix is only
 ///         reused once the new lexer lands exactly on an old token boundary past the
 ///         edit, which means the two streams have resynchronised.
 ///     </para>
@@ -152,8 +154,25 @@ internal static class IncrementalLexer {
             count++;
         }
 
-        return Math.Max(0, count - PrefixSafetyMargin);
+        count = Math.Max(0, count - PrefixSafetyMargin);
+
+        // A raw string opens with any number of '#'s, and whether a '#' is
+        // one of them depends on what follows the whole run: a '"' typed after
+        // '######' turns six tokens into one. So a run of adjacent '#'s is
+        // never split; the prefix ends before it, however long it is.
+        while (count > 0 && AreAdjacentHashes(tokens[count - 1], tokens[count])) {
+            count--;
+        }
+
+        return count;
     }
+
+    /// <summary>A '#' followed, with nothing between, by another.</summary>
+    static bool AreAdjacentHashes(GreenToken token, GreenToken next) =>
+        token.Kind == SyntaxKind.HashToken
+        && next.Kind == SyntaxKind.HashToken
+        && token.TrailingTriviaWidth == 0
+        && next.LeadingTriviaWidth == 0;
 
     /// <summary>Index of the old token starting exactly at a position, or -1.</summary>
     static int FindTokenStartingAt(int[] positions, int position, int lowerBound) {

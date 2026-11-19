@@ -6,15 +6,21 @@ public class Queue<Element> {
     var incoming: Element[>..] = []
     var outgoing: Element[>..] = []
 
+    /// An empty queue.
     public init() { }
 
+    /// How many elements it holds.
     public var count: Int => incoming.count + outgoing.count
+
+    /// Whether it holds no elements.
     public var isEmpty: Bool => incoming.count + outgoing.count == 0
 
+    /// Adds the element at the back.
     public fn enqueue(_ item: Element) {
         incoming.append(item)
     }
 
+    /// Takes the front element out and gives it back, or none when empty.
     public fn dequeue() -> Element? {
         if outgoing.count == 0 {
             while incoming.count > 0 {

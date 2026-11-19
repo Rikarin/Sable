@@ -1544,6 +1544,15 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     : new object?[] { false, 0.0 };
             }
 
+            // To the nearest float in one rounding, as strtof does, not through a double.
+            case "string_to_F32": {
+                var text = Text(operands[0]).Value;
+                return IsDecimal(text) && float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+                    && float.IsFinite(value)
+                    ? new object?[] { true, value }
+                    : new object?[] { false, 0f };
+            }
+
             case "cmp_eq_String":
                 return Text(operands[0]).Value == Text(operands[1]).Value;
 

@@ -314,12 +314,12 @@ fn shortestDecimal(_ text: String) -> (String, Int) {
         i = i + 1
     }
     pieces.append(text.slice(from: start, to: mantissaEnd))
-    return trimmedDecimal(Runtime.joinStrings(pieces, ""), whole + exponent)
+    return normalizedDecimal(Runtime.joinStrings(pieces, ""), whole + exponent)
 }
 
 /// Digits and a point, the digits' leading zeros moved into the point and
 /// their trailing zeros dropped: the same value, written once.
-fn trimmedDecimal(_ digits: String, _ point: Int) -> (String, Int) {
+fn normalizedDecimal(_ digits: String, _ point: Int) -> (String, Int) {
     var start = 0
     while start < digits.count && digits.at(start) == '0' {
         start = start + 1
@@ -349,7 +349,7 @@ fn roundedDecimal(_ digits: String, _ point: Int, _ places: Int) -> (String, Int
     let sticky = kept + 1 < digits.count
     let odd = kept > 0 && (digits.at(kept - 1).codePoint - 48) % 2 == 1
     if first < 5 || first == 5 && !sticky && !odd {
-        return trimmedDecimal(digits.slice(from: 0, to: kept), point)
+        return normalizedDecimal(digits.slice(from: 0, to: kept), point)
     }
     // Up by one in the last kept digit: the nines before it become zeros,
     // which trimming drops, and a run of nothing but nines becomes "1".
@@ -361,7 +361,7 @@ fn roundedDecimal(_ digits: String, _ point: Int, _ places: Int) -> (String, Int
         return ("1", point + 1)
     }
     let bumped = Char.fromCodePoint(digits.at(last).codePoint + 1)!
-    return trimmedDecimal(digits.slice(from: 0, to: last) + String.fromChar(bumped), point)
+    return normalizedDecimal(digits.slice(from: 0, to: last) + String.fromChar(bumped), point)
 }
 
 /// A finite, non-negative float's exact value as decimal digits and a point.
@@ -404,7 +404,7 @@ fn exactDecimal(_ value: F64) -> (String, Int) {
         i = i - 1
     }
     let digits = Runtime.joinStrings(pieces, "")
-    return trimmedDecimal(digits, digits.count + (exponent < 0 ? exponent : 0))
+    return normalizedDecimal(digits, digits.count + (exponent < 0 ? exponent : 0))
 }
 
 /// The limbs (base 10^9, least first) times a factor small enough that a

@@ -1,0 +1,28 @@
+module Sable.Core
+
+extension U32: Parsable {
+    /// The number the text writes in decimal, with a sign if it likes: what
+    /// `format` writes with nothing said. `.Overflow` past the greatest U32,
+    /// `.Underflow` past the least.
+    ///
+    /// ```sable
+    /// assert(try! U32.parse("4294967295") == 4294967295)
+    /// ```
+    public static fn parse(_ text: String) throws(ParseError) -> U32 {
+        return try U32.parse(text, radix: 10, styles: .Sign)
+    }
+
+    /// The number the text writes in the radix — 2 to 36, with letters of
+    /// either case past 9; another traps — with what else the styles allow:
+    /// white space, a sign, the radix's prefix, separators.
+    ///
+    /// ```sable
+    /// assert(try! U32.parse("0x7f", radix: 16, styles: .Prefix) == 127)
+    /// ```
+    public static fn parse(_ text: String, radix: Int, styles: NumberStyles = .Sign) throws(ParseError) -> U32 {
+        let (negative, magnitude) = try parseInteger(text, radix, styles)
+        let greatest: U128 = 4294967295
+        let value = try unsignedValue(negative, magnitude, greatest)
+        return U32(value)
+    }
+}

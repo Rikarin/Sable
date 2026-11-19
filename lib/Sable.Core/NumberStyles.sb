@@ -1,0 +1,32 @@
+module Sable.Core
+
+/// What a number's text may have besides its digits, when it is parsed with
+/// `parse(_:radix:styles:)`: .NET's `NumberStyles`. Each is a flag, and
+/// `[.Sign, .Separators]` allows both. `parse(_:)` allows `.Sign` alone.
+///
+/// ```sable
+/// let n = try! Int.parse(" 0xff_ff ", radix: 16, styles: .Any)
+/// assert(n == 65535)
+/// ```
+@flags
+public enum NumberStyles {
+    /// Nothing but the digits (and, for a float, its point and exponent).
+    None = 0
+    /// White space before the number.
+    LeadingWhite = 1
+    /// White space after the number.
+    TrailingWhite = 2
+    /// A `+` or `-` before the digits.
+    Sign = 4
+    /// The radix's prefix before the digits, after any sign: `0x` for 16,
+    /// `0o` for 8, `0b` for 2.
+    Prefix = 8
+    /// A `_` between two digits, as a literal has: `1_000_000`.
+    Separators = 16
+    /// A `,` between two digits of a number's whole part: `1,000,000`.
+    Thousands = 32
+    /// White space on either side.
+    Whitespace = LeadingWhite | TrailingWhite
+    /// Everything.
+    Any = LeadingWhite | TrailingWhite | Sign | Prefix | Separators | Thousands
+}

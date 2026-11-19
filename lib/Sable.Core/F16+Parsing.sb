@@ -1,0 +1,56 @@
+module Sable.Core
+
+extension F16: Parsable {
+    /// The number the text writes, rounded to the nearest F16, ties to even;
+    /// or `inf`, `infinity` or `nan`. A sign is allowed, and a number too
+    /// large for an F16 (65520 and up) is an infinity.
+    ///
+    /// ```sable
+    /// let x: F16 = 0.1
+    /// assert(try! F16.parse("0.1") == x)
+    /// ```
+    public static fn parse(_ text: String) throws(ParseError) -> F16 {
+        return try F16.parse(text, styles: .Sign)
+    }
+
+    /// The number the text writes, with what else the styles allow: white
+    /// space, a sign, separators.
+    public static fn parse(_ text: String, styles: NumberStyles) throws(ParseError) -> F16 {
+        let plain = try plainFloat(text, styles)
+        if let special = specialFloat(plain) {
+            return F16(special)
+        }
+        let (parsed, wide) = plain.parseF64()
+        if !parsed {
+            return F16(overflowedFloat(plain))
+        }
+        return nearestHalf(plain, wide)
+    }
+}
+
+/// The F16 nearest the decimal, given the F64 nearest it. That F64 rounded
+/// again is the F16 unless it lies exactly halfway between two F16s while
+/// the decimal does not — rounding twice can land on a midpoint the decimal
+/// is only near — so then the decimal, compared exactly with the F64, says
+/// which side it is on.
+fn nearestHalf(_ plain: String, _ wide: F64) -> F16 {
+    let rounded = F16(wide)
+    let back = F64(rounded)
+    // The other F16 the F64 may lie halfway to, as far on its other side:
+    // past the greatest F16, where 'back' is an infinity, that is 65504.
+    let finite = back - back == 0.0
+    let other = finite ? 2.0 * wide - back : wide > 0.0 ? 65504.0 : -65504.0
+    let halfway = finite ? other != back && F64(F16(other)) == other : wide == 65520.0 || wide == -65520.0
+    if !halfway {
+        return rounded
+    }
+    let magnitude = wide < 0.0 ? 0.0 - wide : wide
+    let order = compareDecimals(decimalOf(plain), exactDecimal(magnitude))
+    if order == 0 {
+        return rounded
+    }
+    // Further from zero than the F64 is, or nearer.
+    let outer = magnitude < (other < 0.0 ? 0.0 - other : other) ? F16(other) : rounded
+    let inner = magnitude < (other < 0.0 ? 0.0 - other : other) ? rounded : F16(other)
+    return order > 0 ? outer : inner
+}

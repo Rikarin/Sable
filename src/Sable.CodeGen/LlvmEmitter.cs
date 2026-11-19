@@ -306,6 +306,7 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_string_from_bool(i1 zeroext)
                                 declare zeroext i1 @sable_string_to_int(ptr, ptr)
                                 declare zeroext i1 @sable_string_to_f64(ptr, ptr)
+                                declare zeroext i1 @sable_string_to_f32(ptr, ptr)
                                 declare zeroext i1 @sable_char_is_digit(i32)
                                 declare zeroext i1 @sable_char_from_int(i64, ptr)
                                 declare zeroext i1 @sable_char_is_letter(i32)
@@ -2730,14 +2731,18 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call ptr @sable_string_from_bool(i1 zeroext {operands[0]})");
                     return;
 
-                case "string_to_Int" or "string_to_F64": {
-                    var target = builtin.Name == "string_to_Int" ? "i64" : "double";
+                case "string_to_Int" or "string_to_F64" or "string_to_F32": {
+                    var (target, function) = builtin.Name switch {
+                        "string_to_Int" => ("i64", "sable_string_to_int"),
+                        "string_to_F32" => ("float", "sable_string_to_f32"),
+                        _ => ("double", "sable_string_to_f64"),
+                    };
                     var slot = Scratch(target);
                     var ok = Fresh();
                     var value = Fresh();
                     var partial = Fresh();
                     Line($"store {target} zeroinitializer, ptr {slot}");
-                    Line($"{ok} = call zeroext i1 @sable_{(target == "i64" ? "string_to_int" : "string_to_f64")}(ptr {operands[0]}, ptr {slot})");
+                    Line($"{ok} = call zeroext i1 @{function}(ptr {operands[0]}, ptr {slot})");
                     Line($"{value} = load {target}, ptr {slot}");
                     Line($"{partial} = insertvalue {{ i1, {target} }} poison, i1 {ok}, 0");
                     Line($"{Result()} = insertvalue {{ i1, {target} }} {partial}, {target} {value}, 1");

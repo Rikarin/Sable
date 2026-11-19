@@ -72,6 +72,7 @@ public sealed class StatementParserTests {
     [InlineData("{ }", SyntaxKind.Block)]
     [InlineData("defer { close() }", SyntaxKind.DeferStatement)]
     [InlineData("unsafe { p.store(0) }", SyntaxKind.UnsafeStatement)]
+    [InlineData("unsafe fn peek() -> Int { return 0 }", SyntaxKind.DeclarationStatement)]
     [InlineData("comptime { check() }", SyntaxKind.ComptimeStatement)]
     [InlineData("f(1)", SyntaxKind.ExpressionStatement)]
     public void ParsesSimpleStatements(string source, SyntaxKind expected) =>

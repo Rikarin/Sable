@@ -2715,6 +2715,10 @@ internal sealed class Parser {
             case SyntaxKind.DeferKeyword:
                 return new DeferStatementGreen(EatToken(), ParseBlock());
 
+            // 'unsafe fn' in a body: a local function the caller must vouch for.
+            case SyntaxKind.UnsafeKeyword when IsUnsafeFunctionModifier():
+                return new DeclarationStatementGreen(ParseMemberDeclaration(GreenList.Empty));
+
             case SyntaxKind.UnsafeKeyword:
                 return new UnsafeStatementGreen(EatToken(), ParseBlock());
 
@@ -3147,12 +3151,12 @@ internal sealed class Parser {
     }
 
     GreenList ParseModifiers() {
-        if (!IsModifier(Current.Kind) && !IsConstFunctionModifier()) {
+        if (!IsModifier(Current.Kind) && !IsConstFunctionModifier() && !IsUnsafeFunctionModifier()) {
             return GreenList.Empty;
         }
 
         var items = ImmutableArray.CreateBuilder<GreenNode>();
-        while (IsModifier(Current.Kind) || IsConstFunctionModifier()) {
+        while (IsModifier(Current.Kind) || IsConstFunctionModifier() || IsUnsafeFunctionModifier()) {
             items.Add(EatToken());
 
             // 'private(set)' and 'unowned(safe)' carry a parenthesised argument.
@@ -3171,6 +3175,17 @@ internal sealed class Parser {
     ///     a function in <c>const fn</c>.
     /// </summary>
     bool IsConstFunctionModifier() => At(SyntaxKind.ConstKeyword) && Peek(1).Kind == SyntaxKind.FnKeyword;
+
+    /// <summary>
+    ///     <c>unsafe</c> starts a block on its own, but modifies a function in
+    ///     <c>unsafe fn</c>, <c>unsafe static fn</c> and the like: where a
+    ///     function or another modifier follows it, not a brace.
+    /// </summary>
+    bool IsUnsafeFunctionModifier() =>
+        At(SyntaxKind.UnsafeKeyword)
+        && (Peek(1).Kind == SyntaxKind.FnKeyword
+            || IsModifier(Peek(1).Kind)
+            || Peek(1).Kind == SyntaxKind.ConstKeyword && Peek(2).Kind == SyntaxKind.FnKeyword);
 
     static bool IsModifier(SyntaxKind kind) =>
         kind switch {

@@ -67,7 +67,12 @@ Modifier          = Visibility
                   | "static" | "open" | "sealed" | "abstract" | "final"
                   | "override" | "required" | "convenience" | "mutating"
                   | "nonmutating" | "lazy" | "async" | "const" | "nonisolated"
+                  | "unsafe"
                   | "weak" | "unowned" [ "(" ( "safe" | "unsafe" ) ")" ] ;
+
+(* "unsafe" is a modifier only before "fn" or another modifier, on a
+   function: "unsafe fn", "unsafe static fn". Before a block it starts an
+   UnsafeBlock. *)
 
 Visibility        = "public" | "package" | "internal" | "private"
                   | "private" "(" "set" ")" ;

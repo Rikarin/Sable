@@ -16,7 +16,7 @@ public class BuildCommand : Command {
     public override string Usage => """
         usage: sable build [--release] [--features <a,b>] [-p <package>] [--bin <name>]
                sable build <file.sb> [-o <output>] [--emit sil|llvm-ir|obj|staticlib|dylib] [-O0] [-g] [--exclusivity=checked|unchecked]
-                                     [--target <triple>] [--sysroot <dir>] [--deny-reflection] [--vectorize-report]
+                                     [--target <triple>] [--sysroot <dir>] [--deny-reflection] [--deny-unsafe] [--vectorize-report]
 
         Without a file, builds the package in this directory or the nearest above it (sable.toml).
 
@@ -42,6 +42,7 @@ public class BuildCommand : Command {
           --sysroot <dir>    where the target's C library is, for clang's link
           --deny-reflection  carry no reflection: Mirror and TypeInfo are errors (S3450), and the
                              runtime's field descriptors have no names
+          --deny-unsafe      fail on any 'unsafe' block or 'unsafe fn' in the file (S3472)
         """;
 
     /// <summary>What the command line asked for.</summary>
@@ -53,6 +54,9 @@ public class BuildCommand : Command {
 
         /// <summary><c>--deny-reflection</c> (docs/06 §6.1).</summary>
         public bool DenyReflection { get; init; }
+
+        /// <summary><c>--deny-unsafe</c> (SYNTAX.md §23).</summary>
+        public bool DenyUnsafe { get; init; }
 
         /// <summary>What clang is asked for.</summary>
         public NativeOptions Native => NativeOptions.Of(Optimise, Debug) with { Target = Target, Sysroot = Sysroot };
@@ -70,6 +74,7 @@ public class BuildCommand : Command {
         string? triple = null;
         string? sysroot = null;
         var denyReflection = false;
+        var denyUnsafe = false;
         var arguments = new List<string>();
 
         for (var i = 0; i < args.Count; i++) {
@@ -84,6 +89,7 @@ public class BuildCommand : Command {
                 case "--target" when i + 1 < args.Count: triple = args[++i]; break;
                 case "--sysroot" when i + 1 < args.Count: sysroot = args[++i]; break;
                 case "--deny-reflection": denyReflection = true; break;
+                case "--deny-unsafe": denyUnsafe = true; break;
                 case "-O0": optimise = false; break;
                 case "-g": debug = true; break;
                 case "--vectorize-report" when !TakesProgramArguments: emit = "vectorize-report"; break;
@@ -109,7 +115,7 @@ public class BuildCommand : Command {
             return null;
         }
 
-        return new(input, output, emit, optimise, debug, exclusivity, arguments) { Target = target, Sysroot = sysroot, DenyReflection = denyReflection };
+        return new(input, output, emit, optimise, debug, exclusivity, arguments) { Target = target, Sysroot = sysroot, DenyReflection = denyReflection, DenyUnsafe = denyUnsafe };
     }
 
     public override int Run(IReadOnlyList<string> arguments) {
@@ -150,8 +156,14 @@ public class BuildCommand : Command {
         // A vectorisation report is of the optimised build, with the debug
         // information that gives LLVM's remarks their places in the source.
         var report = options.Emit == "vectorize-report";
+        var tree = SyntaxTree.Parse(source, Pipeline.ParseOptionsFor(options.Optimise, target));
+        if (options.DenyUnsafe && Pipeline.UnsafeDenied([tree]) is { Count: > 0 } denied) {
+            Report(denied);
+            return 1;
+        }
+
         var result = Pipeline.Compile(
-            [SyntaxTree.Parse(source, Pipeline.ParseOptionsFor(options.Optimise, target))],
+            [tree],
             options.Debug || report ? Path.GetDirectoryName(Path.GetFullPath(options.Input)) : null,
             options.Exclusivity ?? ((options.Debug && !report) || !options.Optimise),
             target: target,

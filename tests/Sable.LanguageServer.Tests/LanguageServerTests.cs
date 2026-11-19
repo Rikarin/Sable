@@ -265,6 +265,18 @@ public sealed class LanguageServerTests : IDisposable {
     }
 
     [Fact]
+    public async Task HoverOnAnUnsafeFunctionSaysItIsUnsafe() {
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/unsafe.sb";
+        const string text = "module App\n\nunsafe static fn peek() -> Int {\n    return 1\n}\n\nfn f() -> Int {\n    unsafe {\n        return peek()\n    }\n}\n";
+        await client.OpenAsync(uri, text);
+
+        var peek = (await client.AtAsync("textDocument/hover", uri, text, At(text, "return peek()", 8))).Get("contents")!.Value.GetString("value")!;
+        Assert.Contains("unsafe static fn peek() -> Int", peek, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DefinitionCrossesFiles() {
         var (client, geometry, main) = await OpenWorkspaceAsync();
         await using var _ = client;

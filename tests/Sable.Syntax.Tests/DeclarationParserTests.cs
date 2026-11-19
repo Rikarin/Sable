@@ -587,6 +587,16 @@ public sealed class DeclarationParserTests {
         Assert.Equal("const", constFn.Modifiers[0].Text);
     }
 
+    [Theory]
+    [InlineData("unsafe fn read(_ p: Int) -> Int => p", "unsafe")]
+    [InlineData("unsafe static fn make() -> Int => 0", "unsafe static")]
+    [InlineData("public unsafe mutating fn poke() { }", "public unsafe mutating")]
+    [InlineData("unsafe const fn twice(_ n: Int) -> Int => n * 2", "unsafe const")]
+    public void ParsesUnsafeFunctions(string source, string modifiers) {
+        var function = ParseMember<FunctionDeclarationSyntax>(source);
+        Assert.Equal(modifiers, string.Join(" ", function.Modifiers.Select(static m => m.Text)));
+    }
+
     [Fact]
     public void ParsesAttributes() {
         var declaration = ParseMember<StructDeclarationSyntax>(

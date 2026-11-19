@@ -1,0 +1,37 @@
+module Negative.UnsafeFunctions
+
+// An 'unsafe fn' is called, or taken as a value, only inside an 'unsafe'
+// block or another 'unsafe fn'; only a function can be 'unsafe'.
+
+struct Raw {
+    var n: Int
+
+    unsafe static fn make(_ n: Int) -> Raw {
+        return Raw(n: n)
+    }
+
+    unsafe fn peek() -> Int {
+        return n
+    }
+}
+
+unsafe fn twice(_ n: Int) -> Int {
+    return n * 2 + Raw.make(1).peek()
+}
+
+unsafe static let table = 1 //! S3471 only a function can be 'unsafe'
+
+fn outside() -> Int {
+    let raw = Raw.make(2) //! S3470 'make' is an 'unsafe fn'
+    let f = twice //! S3470 take it as a value inside an 'unsafe' block
+    return raw.peek() //! S3470 'peek' is an 'unsafe fn'
+}
+
+fn inside() -> Int {
+    unsafe {
+        let raw = Raw.make(2)
+        let f = twice
+        let later = () => twice(raw.peek())
+        return f(later())
+    }
+}

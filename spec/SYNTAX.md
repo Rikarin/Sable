@@ -1408,8 +1408,30 @@ incompatible layouts, and FFI with non-`@safe`-annotated signatures. Inside an
 `unsafe` block, root inference still runs but may be overridden with
 `unsafe.assumeRoot(p, as: x)`.
 
-`sable build --deny-unsafe` fails the build on any `unsafe` outside allow-listed
-packages.
+A function that is safe only when its caller keeps a promise the compiler
+cannot check is declared `unsafe fn` — `unsafe static fn`, `unsafe mutating
+fn` and so on; `unsafe` before a brace starts a block, before `fn` or another
+modifier it modifies a function. Its documentation states the promise:
+
+```sable
+extension String {
+    /// The bytes as a string, not checked: they must be well-formed UTF-8.
+    public unsafe static fn fromUtf8Unchecked(_ bytes: U8[:]) -> String
+}
+
+unsafe {
+    let s = String.fromUtf8Unchecked(bytes)   // the caller vouches
+}
+```
+
+An `unsafe fn` may be called, or taken as a function value, only inside an
+`unsafe` block or in the body of another `unsafe fn`, a closure's within either
+included (S3470). Only a function can be `unsafe` (S3471).
+
+`sable build --deny-unsafe` fails the build on any `unsafe` block or `unsafe
+fn` in the program's own code (S3472); the standard library and the
+package's dependencies may use them behind safe APIs. An allow-list of the
+packages that may is not built yet.
 
 ---
 

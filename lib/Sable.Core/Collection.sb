@@ -1,0 +1,81 @@
+module Sable.Core
+
+// The collection protocols: sequences that can be gone through again, by
+// position. Each refines the one before with what more it can do — go
+// backwards, jump, change an element in place, grow and shrink — and
+// generic code asks for as little as it needs. Every array conforms, by the
+// extensions in Array+Collection.sb; so do the ranges of integers and
+// 'String', each in its own file.
+
+/// A sequence whose elements stay put, to be read any number of times at
+/// the positions it gives out: from 'startIndex' up to, not including,
+/// 'endIndex', each after the one before.
+///
+/// ```sable
+/// fn middle<C: Collection>(_ items: C) -> C.Element? {
+///     var position = items.startIndex
+///     var steps = items.count / 2
+///     while steps > 0 && position < items.endIndex {
+///         position = items.index(after: position)
+///         steps -= 1
+///     }
+///     return position < items.endIndex ? items[position] : none
+/// }
+/// assert(middle([1, 2, 3]) == 2)
+/// ```
+public protocol Collection: Sequence {
+    /// A position of an element, ordered as the elements are.
+    associatedtype Index: Comparable
+
+    /// The position of the first element: 'endIndex' when there is none.
+    var startIndex: Index { get }
+
+    /// The position just past the last element.
+    var endIndex: Index { get }
+
+    /// How many elements it holds.
+    var count: Int { get }
+
+    /// The position after this one, which must not be 'endIndex'.
+    fn index(after position: Index) -> Index
+
+    /// The element at a position, which must be one of its elements'.
+    subscript(position: Index) -> Element { get }
+}
+
+/// A collection that can be gone through backwards as well.
+public protocol BidirectionalCollection: Collection {
+    /// The position before this one, which must not be 'startIndex'.
+    fn index(before position: Index) -> Index
+}
+
+/// A collection that can jump to any position at once, and say how far apart
+/// two positions are, without going through the elements between.
+public protocol RandomAccessCollection: BidirectionalCollection {
+    /// The position 'distance' after this one, or before it when negative.
+    fn index(_ position: Index, offsetBy distance: Int) -> Index
+
+    /// How many positions on 'end' is from 'start': negative when before it.
+    fn distance(from start: Index, to end: Index) -> Int
+}
+
+/// A collection whose elements can be replaced where they are.
+public protocol MutableCollection: Collection {
+    /// The element at a position, to read or to replace.
+    subscript(position: Index) -> Element { get set }
+}
+
+/// A collection that can be made empty, and grow and shrink at its end.
+public protocol RangeReplaceableCollection: Collection {
+    /// An empty collection.
+    init()
+
+    /// The element, added at the end.
+    mutating fn append(element: Element)
+
+    /// The last element, taken out; an empty collection traps.
+    mutating fn removeLast() -> Element
+
+    /// Every element, taken out.
+    mutating fn clear()
+}

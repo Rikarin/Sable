@@ -1,0 +1,21 @@
+module Sable.Core
+
+/// A type that can be made from a sequence of its elements: what
+/// 'collect()' makes. Rust's FromIterator; .NET's collection expressions.
+///
+/// ```sable
+/// let squares: Int[>..] = stride(from: 1, through: 3, by: 1).lazy.map { $0 * $0 }.collect()
+/// assert(squares[2] == 9)
+/// ```
+public protocol FromSequence<Element> {
+    /// One made of the sequence's elements, in order.
+    static fn from<S: Sequence>(_ elements: S) -> Self where S.Element == Element
+}
+
+extension Sequence {
+    /// The elements, made into whatever is wanted of them: an array, a
+    /// dictionary of pairs, a string of characters.
+    public fn collect<C: FromSequence<Element>>() -> C {
+        return C.from(self)
+    }
+}

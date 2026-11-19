@@ -18,12 +18,26 @@ public protocol Iterator {
     mutating fn next() -> Element?
 }
 
-/// Values that a 'for' loop can go through, by the iterator it makes. The
-/// loop is given the iterator's elements, 'Iter.Element': generic code
-/// constrains those, 'where S.Iter.Element == Int'.
+/// Values that a 'for' loop can go through, by the iterator it makes.
+/// Generic code constrains its elements, 'where S.Element == Int'. A
+/// conformer need only make its iterator: its Element is the iterator's.
+///
+/// ```sable
+/// fn total<S: Sequence>(_ values: S) -> Int where S.Element == Int {
+///     var sum = 0
+///     for value in values {
+///         sum += value
+///     }
+///     return sum
+/// }
+/// assert(total(stride(from: 1, through: 4, by: 1)) == 10)
+/// ```
 public protocol Sequence {
-    /// What goes through it.
-    associatedtype Iter: Iterator
+    /// What it gives.
+    associatedtype Element
+
+    /// What goes through it: an iterator of its elements.
+    associatedtype Iter: Iterator where Iter.Element == Element
 
     /// An iterator positioned at the first value.
     fn makeIterator() -> Iter
@@ -39,11 +53,13 @@ public protocol AsyncIterator {
     mutating fn next() async -> Element?
 }
 
-/// Values that a 'for await' loop can go through, by the iterator it makes,
-/// whose elements, 'Iter.Element', the loop is given.
+/// Values that a 'for await' loop can go through, by the iterator it makes.
 public protocol AsyncSequence {
-    /// What goes through it.
-    associatedtype Iter: AsyncIterator
+    /// What it gives.
+    associatedtype Element
+
+    /// What goes through it: an iterator of its elements.
+    associatedtype Iter: AsyncIterator where Iter.Element == Element
 
     /// An iterator positioned at the first value.
     fn makeAsyncIterator() -> Iter

@@ -1,0 +1,74 @@
+module Sable.Core
+
+// Every array is a random-access collection of its elements, by the slice's
+// extension, which every kind of array has; the arrays that own their
+// elements can also replace them in place, and the growable ones grow and
+// shrink. A 'for' over an array is counted by the compiler and never makes
+// an iterator: this is what generic code over a Sequence or a Collection
+// sees of one.
+
+/// Gives an array's elements, from the first. It views the array, sharing
+/// its buffer, so making one copies nothing.
+public struct ArrayIterator<Element>: Iterator {
+    let elements: Element[:]
+    var position: Int
+
+    /// The next element, or none past the last.
+    public mutating fn next() -> Element? {
+        if position >= elements.count {
+            return none
+        }
+        let element = elements[position]
+        position += 1
+        return element
+    }
+}
+
+extension<Element> Element[:]: RandomAccessCollection {
+    /// An iterator over the elements, from the first.
+    public fn makeIterator() -> ArrayIterator<Element> {
+        return ArrayIterator { elements: self, position: 0 }
+    }
+
+    /// The first element's position: 0.
+    public var startIndex: Int => 0
+
+    /// The position past the last element: the count.
+    public var endIndex: Int => self.count
+
+    /// The next position.
+    public fn index(after position: Int) -> Int => position + 1
+
+    /// The position before.
+    public fn index(before position: Int) -> Int => position - 1
+
+    /// The position 'distance' on.
+    public fn index(_ position: Int, offsetBy distance: Int) -> Int => position + distance
+
+    /// How far on 'end' is from 'start'.
+    public fn distance(from start: Int, to end: Int) -> Int => end - start
+}
+
+extension<Element> Element[]: MutableCollection { }
+
+extension<Element> Element[>..]: MutableCollection, RangeReplaceableCollection, FromSequence<Element> {
+    /// An array of the sequence's elements, in order.
+    public static fn from<S: Sequence>(_ elements: S) -> Element[>..] where S.Element == Element {
+        var array: Element[>..] = []
+        for element in elements {
+            array.append(element)
+        }
+        return array
+    }
+}
+
+extension<Element> Element[>..<]: MutableCollection, RangeReplaceableCollection, FromSequence<Element> {
+    /// An array of the sequence's elements, in order.
+    public static fn from<S: Sequence>(_ elements: S) -> Element[>..<] where S.Element == Element {
+        var array: Element[>..<] = []
+        for element in elements {
+            array.append(element)
+        }
+        return array
+    }
+}

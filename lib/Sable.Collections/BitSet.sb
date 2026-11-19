@@ -149,3 +149,38 @@ public class BitSet {
         return total
     }
 }
+
+extension BitSet: Sequence {
+    /// An iterator over the members, ascending.
+    public fn makeIterator() -> BitSetIterator {
+        return BitSetIterator { words: words, word: -1, bits: 0 }
+    }
+}
+
+/// Gives a bit set's members, ascending, a word at a time. It holds the
+/// set's words as they were when it was made.
+public struct BitSetIterator: Iterator {
+    let words: U64[>..]
+    var word: Int
+
+    // The current word's bits not given yet.
+    var bits: U64
+
+    /// The next member, or none past the largest.
+    public mutating fn next() -> Int? {
+        while bits == 0 {
+            word += 1
+            if word >= words.count {
+                return none
+            }
+            bits = words[word]
+        }
+
+        var at = 0
+        while ((bits >> U64(at)) & 1) == 0 {
+            at += 1
+        }
+        bits = bits & (bits - 1)
+        return word * 64 + at
+    }
+}

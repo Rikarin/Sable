@@ -36,3 +36,14 @@ extension String: Sequence {
         return StringIterator { text: self, cursor: 0 }
     }
 }
+
+extension String: FromSequence<Char> {
+    /// The characters, one after another, as a string.
+    public static fn from<S: Sequence>(_ characters: S) -> String where S.Element == Char {
+        var parts: String[>..] = []
+        for character in characters {
+            parts.append(String.fromChar(character))
+        }
+        return Runtime.joinStrings(parts, "")
+    }
+}

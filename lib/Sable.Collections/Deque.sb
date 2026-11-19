@@ -150,3 +150,30 @@ public class Deque<Element> {
         return result
     }
 }
+
+extension Deque: Sequence {
+    /// An iterator over the elements, front to back.
+    public fn makeIterator() -> DequeIterator<Element> {
+        return DequeIterator<Element> { slots: slots, position: head, remaining: used }
+    }
+}
+
+/// Gives a deque's elements, front to back. It holds the deque's slots as
+/// they were when it was made, sharing them until either changes, so a
+/// change to the deque after is not seen.
+public struct DequeIterator<Element>: Iterator {
+    let slots: Element?[>..]
+    var position: Int
+    var remaining: Int
+
+    /// The next element, or none past the back.
+    public mutating fn next() -> Element? {
+        if remaining == 0 {
+            return none
+        }
+        let element = slots[position]
+        position = position + 1 == slots.count ? 0 : position + 1
+        remaining -= 1
+        return element
+    }
+}

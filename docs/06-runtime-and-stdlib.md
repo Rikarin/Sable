@@ -218,7 +218,10 @@ But it is split into packages so that a binary pays only for what it uses.
 ```
 Sable.Core          ── always linked, no dependencies
   primitives, Optional, Outcome, String, the array family,
-  Comparable/Equatable/Hashable/Iterable, MemoryLayout, unsafe pointers
+  Comparable/Equatable/Hashable, MemoryLayout, unsafe pointers,
+  Iterator/Sequence and the Collection family (Bidirectional,
+  RandomAccess, Mutable, RangeReplaceable), FromSequence, and the
+  sequence algorithms, eager and behind '.lazy'
 
 Sable.Collections   List Dictionary Set Deque OrderedDictionary
                     PriorityQueue BitSet InlineArray SmallVec
@@ -254,7 +257,8 @@ Each module is a directory of `lib/` (`lib/Sable.Collections/`), its files
 all declaring `module Sable.Collections`, and each holds **one public type**,
 named after it: `Stack.sb`, `HashMap.sb`. Helpers private to a type live in
 its file; a family that is one concept shares one (`Sequence.sb` has
-`Iterator`, `Sequence` and their async forms; `Channel.sb` has
+`Iterator`, `Sequence` and their async forms, `Collection.sb` the
+collection protocols; `Channel.sb` has
 `ChannelIterator`); free functions are in a file named for what they do
 (`Sort.sb`, `Math.sb`); a large extension of a type for one feature is
 `<Type>+<Feature>.sb` (`String+Sequence.sb`). `lib/Sable.Core/` is flat.

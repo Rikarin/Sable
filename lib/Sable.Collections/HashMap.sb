@@ -205,3 +205,30 @@ public class HashMap<Key: Hashable, Value> {
         return result
     }
 }
+
+extension HashMap: Sequence {
+    /// An iterator over the entries, each key with its value, in the order
+    /// the keys were first set.
+    public fn makeIterator() -> HashMapIterator<Key, Value> {
+        return HashMapIterator<Key, Value> { entries: entries, position: 0 }
+    }
+}
+
+/// Gives a map's entries in the order their keys were first set, passing
+/// over those removed. It holds the entries as they were when it was made.
+public struct HashMapIterator<Key, Value>: Iterator {
+    let entries: HashEntry<Key, Value>[>..]
+    var position: Int
+
+    /// The next entry, or none past the last.
+    public mutating fn next() -> (Key, Value)? {
+        while position < entries.count {
+            let entry = entries[position]
+            position += 1
+            if entry.tag >= 0 {
+                return (entry.key, entry.value)
+            }
+        }
+        return none
+    }
+}

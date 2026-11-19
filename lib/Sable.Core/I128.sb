@@ -1,0 +1,21 @@
+module Sable.Core
+
+/// A 128-bit signed integer. Its arithmetic traps on overflow; FixedWidthInteger gives it
+/// the forms that do not, and its bit operations.
+extension I128: FixedWidthInteger, SignedInteger {
+    /// 0.
+    public static var zero: I128 => 0
+
+    /// 1.
+    public static var one: I128 => 1
+
+    /// The least I128, -2¹²⁷.
+    public static var min: I128 => -170141183460469231731687303715884105728
+
+    /// The greatest I128, 2¹²⁷ - 1.
+    public static var max: I128 => 170141183460469231731687303715884105727
+
+    /// The number in decimal.
+    @builtin("string_from_I128")
+    public fn toString() -> String
+}

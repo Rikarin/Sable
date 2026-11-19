@@ -63,6 +63,58 @@ public sealed partial class Compilation {
         return NameOf(attribute);
     }
 
+    /// <summary>
+    ///     The builtin an operator declaration names, or null: as a function's,
+    ///     an operator written <c>@builtin</c> has no body.
+    /// </summary>
+    string? BuiltinOf(OperatorDeclarationSyntax declaration) {
+        if (BuiltinAttributeOf(declaration.Attributes) is not { } attribute) {
+            return null;
+        }
+
+        if (declaration.Body is not null || declaration.ExpressionBody is not null) {
+            return Malformed(attribute, "a '@builtin' operator has no body: the builtin is its body");
+        }
+
+        return NameOf(attribute);
+    }
+
+    /// <summary>
+    ///     The segment of a builtin's name that stands for the conforming
+    ///     type, in a family declared in a protocol's extension.
+    /// </summary>
+    public const string BuiltinFamilySelf = "Self";
+
+    /// <summary>True for a builtin name with a <c>Self</c> segment: <c>count_leading_zeros_Self</c>.</summary>
+    public static bool IsBuiltinFamily(string name) => name.Split('_').Contains(BuiltinFamilySelf);
+
+    /// <summary>
+    ///     A builtin named with a <c>Self</c> segment is a family, one builtin
+    ///     for each type: written once, in an extension of a protocol, it is
+    ///     the default the built-in types conforming to the protocol take
+    ///     for a requirement — <c>count_leading_zeros_I8</c> for an I8,
+    ///     <c>count_leading_zeros_U64</c> for a U64 — so that what every
+    ///     integer can do is declared once rather than once per integer.
+    ///     Such a name belongs in a protocol's extension, and a builtin in a
+    ///     protocol's extension needs one, as nothing else says which type's
+    ///     builtin it is. Null, reported, where either is broken.
+    /// </summary>
+    string? BuiltinFamilyChecked(SyntaxList<AttributeSyntax> attributes, string? name, Symbol container) {
+        if (name is null) {
+            return null;
+        }
+
+        var inProtocolExtension = container is ExtensionSymbol { ExtendedType.TypeKind: TypeKind.Protocol };
+        if (IsBuiltinFamily(name) == inProtocolExtension) {
+            return name;
+        }
+
+        var attribute = attributes.First(static a => a.Name.ToString().Trim() == BuiltinAttribute);
+        return inProtocolExtension
+            ? Malformed(attribute, $"a '@builtin' in a protocol's extension names a family, with a 'Self' segment the conforming type takes: '{name}_Self'")
+            : Malformed(attribute, $"'{name}' has a 'Self' segment, which only a protocol's extension can fill: a family belongs in one");
+    }
+
     /// <summary>The builtin a computed property declaration names, or null.</summary>
     string? BuiltinOf(FieldDeclarationSyntax declaration) {
         if (BuiltinAttributeOf(declaration.Attributes) is not { } attribute) {

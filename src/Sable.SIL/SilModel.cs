@@ -1706,6 +1706,24 @@ public static class SilBuiltins {
         }
     }
 
+    /// <summary>
+    ///     The numeric protocols' builtins (bit counts, rotations, overflow
+    ///     reported or saturated, the floats' IEEE operations, their bits):
+    ///     pure, as none traps or has an effect.
+    /// </summary>
+    public static bool IsNumericIntrinsic(string name) {
+        var separator = name.LastIndexOf('_');
+        return separator > 0 && SilType.Numbers.Any(n => n.ToString() == name[(separator + 1)..])
+            && NumericIntrinsics.Contains(name[..separator]);
+    }
+
+    static readonly HashSet<string> NumericIntrinsics = [
+        "count_leading_zeros", "count_trailing_zeros", "count_ones", "byte_swap", "bit_reverse", "rotate_left", "rotate_right",
+        "add_overflow", "sub_overflow", "mul_overflow", "add_saturating", "sub_saturating", "mul_high",
+        "sqrt", "floor", "ceil", "trunc", "next_up", "round", "round_even", "copysign", "minimum", "maximum", "remainder", "fma",
+        "scale", "exponent", "bits", "from_bits",
+    ];
+
     static Dictionary<string, Signature> Build() {
         var table = new Dictionary<string, Signature>(StringComparer.Ordinal);
 
@@ -1737,6 +1755,72 @@ public static class SilBuiltins {
             if (SilType.IntegerInfo(integer)!.Value.Signed) {
                 Unary(WrappingPrefix + "abs", integer);
             }
+        }
+
+        // What the numeric protocols (lib/Sable.Core, FixedWidthInteger)
+        // are made of: the bit operations, and arithmetic that reports or
+        // saturates on overflow rather than trapping. Natively each is an
+        // LLVM intrinsic, or a few instructions; none traps.
+        foreach (var integer in SilType.Integers) {
+            // Counts of bits: as an Int, whatever the width. A zero has as
+            // many leading and trailing zeros as the type has bits.
+            foreach (var op in new[] { "count_leading_zeros", "count_trailing_zeros", "count_ones" }) {
+                Add($"{op}_{integer}", SilType.Int, integer);
+            }
+
+            Unary("byte_swap", integer);
+            Unary("bit_reverse", integer);
+
+            // By any number of places: the count is taken modulo the width.
+            Add($"rotate_left_{integer}", integer, integer, SilType.Int);
+            Add($"rotate_right_{integer}", integer, integer, SilType.Int);
+
+            // The result's low bits, and whether the exact result did not fit.
+            foreach (var op in new[] { "add", "sub", "mul" }) {
+                Add($"{op}_overflow_{integer}", SilType.Tuple([integer, SilType.Bool]), integer, integer);
+            }
+
+            // Clamped to the type's bounds.
+            Binary("add_saturating", integer, integer);
+            Binary("sub_saturating", integer, integer);
+
+            // The high half of the product at twice the width: the low half
+            // is the wrapping product.
+            Binary("mul_high", integer, integer);
+        }
+
+        // The floats' IEEE 754 operations: each correctly rounded, as the
+        // hardware or LLVM's intrinsic computes it.
+        foreach (var real in SilType.Floats) {
+            foreach (var op in new[] { "sqrt", "floor", "ceil", "trunc", "next_up" }) {
+                Unary(op, real);
+            }
+
+            // To the nearest integer: a half away from zero, or to even.
+            Unary("round", real);
+            Unary("round_even", real);
+
+            // The magnitude of the first with the sign of the second; the
+            // smaller and the larger, a NaN either side giving NaN and -0
+            // below +0 (IEEE 754-2019 minimum and maximum); and the
+            // remainder of the division rounded to the nearest, ties to even.
+            foreach (var op in new[] { "copysign", "minimum", "maximum", "remainder" }) {
+                Binary(op, real, real);
+            }
+
+            Add($"fma_{real}", real, real, real, real);
+
+            // x × 2ⁿ, rounded once; and, for a finite non-zero x, the n
+            // with x = m × 2ⁿ and 1 <= |m| < 2 — Int.min for a zero, and
+            // Int.max for an infinity or NaN, as C's 'ilogb' says.
+            Add($"scale_{real}", real, real, SilType.Int);
+            Add($"exponent_{real}", SilType.Int, real);
+        }
+
+        // A float's bits, as the unsigned integer of its width, and back.
+        foreach (var (real, bits) in new[] { (SilType.F16, SilType.U16), (SilType.F32, SilType.U32), (SilType.F64, SilType.U64) }) {
+            Add($"bits_{real}", bits, real);
+            Add($"from_bits_{real}", real, bits);
         }
 
         foreach (var real in SilType.Floats) {
@@ -1786,6 +1870,12 @@ public static class SilBuiltins {
                     table[$"wrap_{from}_{to}"] = new([from], to);
                 }
             }
+        }
+
+        // An integer to its own type, which a builtin family converting
+        // through U128 meets in U128 itself: the value.
+        foreach (var integer in SilType.Integers) {
+            table[$"wrap_{integer}_{integer}"] = new([integer], integer);
         }
 
         Unary("not", SilType.Bool);

@@ -1,0 +1,21 @@
+module Sable.Core
+
+/// An 8-bit unsigned integer: a byte. Its arithmetic traps on overflow; FixedWidthInteger gives it
+/// the forms that do not, and its bit operations.
+extension U8: FixedWidthInteger, UnsignedInteger {
+    /// 0.
+    public static var zero: U8 => 0
+
+    /// 1.
+    public static var one: U8 => 1
+
+    /// The least U8, 0.
+    public static var min: U8 => 0
+
+    /// The greatest U8, 2⁸ - 1.
+    public static var max: U8 => 255
+
+    /// The number in decimal.
+    @builtin("string_from_U8")
+    public fn toString() -> String
+}

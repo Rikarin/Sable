@@ -1,0 +1,53 @@
+module Sable.Core
+
+// Conversions from any integer to any fixed-width one, in the three ways
+// a value that does not fit can go (Swift's 'init(truncatingIfNeeded:)',
+// 'init(exactly:)' and 'init(clamping:)'). Each goes through the source's
+// 128 bits, 'wideBitPattern', which holds every built-in integer's value;
+// monomorphised, it is the one instruction 'as' or 'unchecked as' is.
+
+extension FixedWidthInteger {
+    /// The value's low bits, as 'unchecked as' gives them: a value that does
+    /// not fit wraps.
+    ///
+    /// ```sable
+    /// assert(U8.truncating(300) == 44)
+    /// assert(I8.truncating(255 as U8) == -1)
+    /// ```
+    public static fn truncating<Source: BinaryInteger>(_ source: Source) -> Self {
+        return Self.fromWideBitPattern(source.wideBitPattern)
+    }
+
+    /// The value, or none where it does not fit the type.
+    ///
+    /// ```sable
+    /// assert(U8.exactly(255) == 255)
+    /// assert(U8.exactly(256) == none)
+    /// assert(U8.exactly(-1) == none)
+    /// ```
+    public static fn exactly<Source: BinaryInteger>(_ source: Source) -> Self? {
+        let bits = source.wideBitPattern
+        let result = Self.fromWideBitPattern(bits)
+        // It fits when nothing was cut off going down and coming back up,
+        // and the sign is the same: U128's greatest value and I128's -1
+        // have the same bits.
+        if result.wideBitPattern != bits || (result < Self.zero) != (source < Source.zero) {
+            return none
+        }
+        return result
+    }
+
+    /// The value, or the bound it is past where it does not fit.
+    ///
+    /// ```sable
+    /// assert(U8.clamping(300) == 255)
+    /// assert(U8.clamping(-5) == 0)
+    /// assert(I8.clamping(100) == 100)
+    /// ```
+    public static fn clamping<Source: BinaryInteger>(_ source: Source) -> Self {
+        if let exact = Self.exactly(source) {
+            return exact
+        }
+        return source < Source.zero ? Self.min : Self.max
+    }
+}

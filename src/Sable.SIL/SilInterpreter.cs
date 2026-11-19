@@ -1679,7 +1679,147 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return null;
         }
 
-        return Numeric(builtin.Name, operands) ?? Builtin(builtin.Name, operands);
+        return NumericIntrinsic(builtin.Name, operands) ?? Numeric(builtin.Name, operands) ?? Builtin(builtin.Name, operands);
+    }
+
+    /// <summary>
+    ///     The numeric protocols' builtins (SilBuiltins.IsNumericIntrinsic), as
+    ///     the native code computes them: an integer's through BigInteger at
+    ///     its width, a float's in .NET's IEEE operations of its own width.
+    /// </summary>
+    static object? NumericIntrinsic(string name, object?[] operands) {
+        if (name.StartsWith("wrap_", StringComparison.Ordinal) && name.Split('_') is [_, var from, var to] && from == to) {
+            return operands[0];
+        }
+
+        if (!SilBuiltins.IsNumericIntrinsic(name)) {
+            return null;
+        }
+
+        var separator = name.LastIndexOf('_');
+        var op = name[..separator];
+        var type = SilType.Numbers.First(n => n.ToString() == name[(separator + 1)..]);
+        if (SilType.FloatBits(type) is { } floatBits) {
+            return FloatIntrinsic(op, type, floatBits, operands);
+        }
+
+        var (bits, signed) = SilType.IntegerInfo(type)!.Value;
+        var x = Big(operands[0]);
+        var pattern = Wrapped(x, bits, false);
+        object Typed(BigInteger value) => NarrowBig(Wrapped(value, bits, signed), type);
+        var (low, high) = signed
+            ? (-(BigInteger.One << (bits - 1)), (BigInteger.One << (bits - 1)) - 1)
+            : (BigInteger.Zero, (BigInteger.One << bits) - 1);
+
+        switch (op) {
+            case "count_leading_zeros":
+                return (long)(bits - (pattern.IsZero ? 0 : (int)pattern.GetBitLength()));
+            case "count_trailing_zeros": {
+                if (pattern.IsZero) {
+                    return (long)bits;
+                }
+
+                var count = 0L;
+                while (pattern.IsEven) {
+                    pattern >>= 1;
+                    count++;
+                }
+
+                return count;
+            }
+            case "count_ones": {
+                var count = 0L;
+                for (; !pattern.IsZero; pattern >>= 1) {
+                    count += (long)(pattern & 1);
+                }
+
+                return count;
+            }
+            case "byte_swap" or "bit_reverse": {
+                var unit = op == "byte_swap" ? 8 : 1;
+                var reversed = BigInteger.Zero;
+                for (var i = 0; i < bits; i += unit) {
+                    reversed = (reversed << unit) | ((pattern >> i) & ((BigInteger.One << unit) - 1));
+                }
+
+                return Typed(reversed);
+            }
+            case "rotate_left" or "rotate_right": {
+                var count = (int)((((long)operands[1]! % bits) + bits) % bits);
+                if (op == "rotate_right") {
+                    count = (bits - count) % bits;
+                }
+
+                return Typed((pattern << count) | (pattern >> (bits - count)));
+            }
+            case "add_overflow" or "sub_overflow" or "mul_overflow": {
+                var y = Big(operands[1]);
+                var exact = op[..3] switch { "add" => x + y, "sub" => x - y, _ => x * y };
+                return new object?[] { Typed(exact), exact < low || exact > high };
+            }
+            case "add_saturating" or "sub_saturating": {
+                var y = Big(operands[1]);
+                var exact = op[..3] == "add" ? x + y : x - y;
+                return NarrowBig(BigInteger.Clamp(exact, low, high), type);
+            }
+            case "mul_high":
+                return Typed((x * Big(operands[1])) >> bits);
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>A float's intrinsic, at its own width: F16 through the float or double that holds its every value exactly.</summary>
+    static object? FloatIntrinsic(string op, SilType type, int bits, object?[] operands) {
+        if (op == "from_bits") {
+            return bits switch {
+                16 => BitConverter.UInt16BitsToHalf((ushort)Wide(operands[0])),
+                32 => BitConverter.UInt32BitsToSingle((uint)Wide(operands[0])),
+                _ => BitConverter.UInt64BitsToDouble((ulong)operands[0]!),
+            };
+        }
+
+        if (op == "bits") {
+            return operands[0] switch {
+                Half h => (long)BitConverter.HalfToUInt16Bits(h),
+                float f => (long)BitConverter.SingleToUInt32Bits(f),
+                _ => (object)BitConverter.DoubleToUInt64Bits((double)operands[0]!),
+            };
+        }
+
+        var x = Real(operands[0]);
+        var y = operands.Length > 1 && op != "scale" ? Real(operands[1]) : 0.0;
+        object Of(double value) => RealOf(value, type);
+        switch (op) {
+            case "sqrt": return Of(Math.Sqrt(x));
+            case "floor": return Of(Math.Floor(x));
+            case "ceil": return Of(Math.Ceiling(x));
+            case "trunc": return Of(Math.Truncate(x));
+            case "round": return Of(Math.Round(x, MidpointRounding.AwayFromZero));
+            case "round_even": return Of(Math.Round(x, MidpointRounding.ToEven));
+            case "copysign": return Of(Math.CopySign(x, y));
+            case "minimum": return Of(Math.Min(x, y));
+            case "maximum": return Of(Math.Max(x, y));
+            case "remainder": return Of(Math.IEEERemainder(x, y));
+
+            // An F16's product is exact in a double and so is the sum, which
+            // is then rounded once; an F32's needs its own fused operation.
+            case "fma":
+                return type == SilType.F32
+                    ? MathF.FusedMultiplyAdd((float)operands[0]!, (float)operands[1]!, (float)operands[2]!)
+                    : Of(Math.FusedMultiplyAdd(x, y, Real(operands[2])));
+
+            case "scale": return Of(Math.ScaleB(x, (int)Math.Clamp((long)operands[1]!, -100000, 100000)));
+            case "exponent": return x == 0 ? long.MinValue : double.IsFinite(x) ? Math.ILogB(x) : long.MaxValue;
+            case "next_up":
+                return operands[0] switch {
+                    Half h => Half.BitIncrement(h),
+                    float f => MathF.BitIncrement(f),
+                    _ => Math.BitIncrement(x),
+                };
+            default:
+                return null;
+        }
     }
 
     /// <summary>

@@ -1,0 +1,32 @@
+module BinaryFloatingPointTests
+
+// BinaryFloatingPoint (Sable.Core): what a format's bit counts say about
+// it, through generic code. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn precision<T: BinaryFloatingPoint>(_ type: T.Type) -> Int {
+    return T.significandBitCount + 1
+}
+
+@test
+fn thePrecisionIsTheSignificandAndItsHiddenBit() {
+    assertEqual(precision(F64.self), 53)
+    assertEqual(precision(F32.self), 24)
+    assertEqual(precision(F16.self), 11)
+}
+
+@test
+fn theWidthIsTheSignExponentAndSignificand() {
+    assertEqual(F64.bitWidth, 64)
+    assertEqual(F32.bitWidth, 32)
+    assertEqual(F16.bitWidth, 16)
+}
+
+@test
+fn theExponentBiasIsTheExponentOfOne() {
+    assertEqual(F64.exponentBias, 1023)
+    assertEqual(F32.exponentBias, 127)
+    assertEqual(F16.exponentBias, 15)
+}

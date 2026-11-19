@@ -55,8 +55,9 @@ public sealed class ArrayExtensionTests {
         string[] Names(ArrayKind kind, TypeSymbol? element = null) =>
             [..model.GetMembersOf(new ArrayTypeSymbol(element ?? compilation.Core.Int, kind)).Select(static m => m.Name).Order(StringComparer.Ordinal)];
 
-        string[] everyArray = ["contains", "count", "isEmpty", "slice"];
-        string[] growing = ["append", "clear", "contains", "count", "isEmpty", "removeLast", "slice"];
+        // An Int is Numeric, so its arrays also have 'sum' and 'product'.
+        string[] everyArray = ["contains", "count", "isEmpty", "product", "slice", "sum"];
+        string[] growing = ["append", "clear", "contains", "count", "isEmpty", "product", "removeLast", "slice", "sum"];
         Assert.Equal(everyArray, Names(ArrayKind.Slice));
         Assert.Equal(everyArray, Names(ArrayKind.Fixed));
         Assert.Equal(growing, Names(ArrayKind.Grow));
@@ -67,6 +68,7 @@ public sealed class ArrayExtensionTests {
         Assert.Contains("toString", Names(ArrayKind.Grow, compilation.Core.U8));
         Assert.DoesNotContain("toString", Names(ArrayKind.Grow));
         Assert.DoesNotContain("contains", Names(ArrayKind.Grow, compilation.Core.Region));
+        Assert.DoesNotContain("sum", Names(ArrayKind.Grow, compilation.Core.String));
     }
 
     [Fact]

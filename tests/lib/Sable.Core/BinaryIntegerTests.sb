@@ -1,0 +1,140 @@
+module BinaryIntegerTests
+
+// BinaryInteger, SignedInteger and UnsignedInteger (Sable.Core): division
+// in its roundings, signs and comparisons, through generic code as well as
+// on each type. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+/// Generic over the protocol, so that the operators are its requirements.
+fn digitSum<T: BinaryInteger>(_ n: T, base: T) -> T {
+    var rest = n
+    var sum = T.zero
+    while rest != T.zero {
+        sum = sum + rest % base
+        rest = rest / base
+    }
+    return sum
+}
+
+fn bitsAgree<T: BinaryInteger>(_ a: T, _ b: T) -> Bool {
+    return ((a & b) | (a ^ b)) == (a | b) && ~(~a) == a && (a << T.one) >> T.one == a
+}
+
+@test
+fn genericCodeDividesWithTheProtocolsOperators() {
+    assertEqual(digitSum(1234, base: 10), 10)
+    assertEqual(digitSum(255 as U8, base: 16), 30)
+    assertEqual(digitSum(-99 as I16, base: 10), -18)
+}
+
+@test
+fn genericCodeUsesTheBitOperators() {
+    assert(bitsAgree(12 as U8, 10), "U8's bits agree")
+    assert(bitsAgree(-12 as I64, 10), "I64's bits agree")
+}
+
+@test
+fn signednessIsTheTypes() {
+    assert(Int.isSigned && I8.isSigned && I128.isSigned, "the I types are signed")
+    assert(!UInt.isSigned && !U8.isSigned && !U128.isSigned, "the U types are not")
+}
+
+@test
+fn signumIsMinusOneZeroOrOne() {
+    assertEqual((-7).signum(), -1)
+    assertEqual(0.signum(), 0)
+    assertEqual((7 as U8).signum(), 1)
+}
+
+@test
+fn positiveAndNegativeLeaveOutZero() {
+    assert(5.isPositive && !5.isNegative, "5 is positive")
+    assert((-5).isNegative && !(-5).isPositive, "-5 is negative")
+    assert(!0.isPositive && !0.isNegative, "0 is neither")
+}
+
+@test
+fn onlyZeroIsAMultipleOfZero() {
+    assert(12.isMultiple(of: 4), "12 is a multiple of 4")
+    assert(!12.isMultiple(of: 5), "12 is not a multiple of 5")
+    assert(0.isMultiple(of: 0), "0 is a multiple of 0")
+    assert(!3.isMultiple(of: 0), "3 is not a multiple of 0")
+}
+
+@test
+fn everythingIsAMultipleOfMinusOne() {
+    assert(I8.min.isMultiple(of: -1), "the least value divides by -1")
+    assert(Int.min.isMultiple(of: -1), "Int's least value divides by -1")
+}
+
+@test
+fn divRemGivesTheQuotientAndTheRemainder() {
+    let (quotient, remainder) = (-7).divRem(2)
+    assertEqual(quotient, -3)
+    assertEqual(remainder, -1)
+}
+
+@test
+fn euclideanDivisionLeavesNoNegativeRemainder() {
+    assertEqual((-7).divEuclid(2), -4)
+    assertEqual((-7).divEuclid(-2), 4)
+    assertEqual(7.divEuclid(-2), -3)
+    assertEqual(7.divEuclid(2), 3)
+    assertEqual((-7).remEuclid(2), 1)
+    assertEqual((-7).remEuclid(-2), 1)
+    assertEqual(7.remEuclid(-2), 1)
+    assertEqual((7 as U8).remEuclid(3), 1)
+}
+
+@test
+fn divCeilRoundsUp() {
+    assertEqual(7.divCeil(2), 4)
+    assertEqual((-7).divCeil(-2), 4)
+    assertEqual((-7).divCeil(2), -3)
+    assertEqual(8.divCeil(2), 4)
+}
+
+@test
+fn divFloorRoundsDown() {
+    assertEqual(7.divFloor(2), 3)
+    assertEqual((-7).divFloor(2), -4)
+    assertEqual(7.divFloor(-2), -4)
+    assertEqual((-8).divFloor(2), -4)
+}
+
+@test
+fn minAndMaxPickByOrder() {
+    assertEqual(5.min(other: 7), 5)
+    assertEqual(5.max(other: 7), 7)
+    assertEqual((200 as U8).min(other: 100), 100)
+    assertEqual((-3 as I8).max(other: -9), -3)
+}
+
+@test
+fn trailingZerosCountUpToTheLowestSetBit() {
+    assertEqual(8.trailingZeroCount, 3)
+    assertEqual((96 as U8).trailingZeroCount, 5)
+}
+
+@test
+fn theWideBitPatternCarriesTheSign() {
+    assertEqual((-1 as I8).wideBitPattern, U128.max)
+    assertEqual((255 as U8).wideBitPattern, 255)
+    assertEqual(I16.fromWideBitPattern(0x18000), -32768)
+}
+
+@test
+fn absIsTheDistanceFromZero() {
+    assertEqual((-5).abs(), 5)
+    assertEqual((-127 as I8).abs(), 127)
+    assertEqual(5.abs(), 5)
+    assertEqual((5 as U32).abs(), 5)
+}
+
+@test(traps: "division by zero")
+fn dividingByZeroTraps() {
+    let zero = 0
+    assertEqual(digitSum(10, base: zero), 0)
+}

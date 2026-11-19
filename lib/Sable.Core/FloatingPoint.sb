@@ -1,0 +1,303 @@
+module Sable.Core
+
+// The floats, as IEEE 754 defines them: F16, F32 and F64. The operations
+// the standard asks to be correctly rounded are builtin families, each an
+// LLVM intrinsic at the type's width; the rest (FloatingPoint+Classification.sb,
+// +Rounding.sb) is Sable over them and the comparisons.
+
+/// Binary floating-point numbers as IEEE 754 defines them: signed zeros,
+/// infinities, NaN, subnormals, and arithmetic rounded to the nearest
+/// value, ties to even.
+///
+/// ```sable
+/// fn hypotenuse<T: FloatingPoint>(_ a: T, _ b: T) -> T {
+///     return (a * a + b * b).squareRoot()
+/// }
+///
+/// assert(hypotenuse(3.0, 4.0) == 5.0)
+/// assert(hypotenuse(3.0 as F32, 4.0) == 5.0)
+/// ```
+public protocol FloatingPoint: SignedNumeric, Comparable, Hashable {
+    /// A quiet NaN: not a number, the result of '0.0 / 0.0'. It equals
+    /// nothing, itself included.
+    static var nan: Self { get }
+
+    /// Positive infinity, greater than every finite value.
+    static var infinity: Self { get }
+
+    /// The greatest finite value.
+    static var greatestFiniteMagnitude: Self { get }
+
+    /// The least positive normal value; those below it, down to
+    /// 'leastNonzeroMagnitude', are subnormal and have fewer bits.
+    static var leastNormalMagnitude: Self { get }
+
+    /// The least positive value: the least subnormal.
+    static var leastNonzeroMagnitude: Self { get }
+
+    /// The distance from 1 to the next value up: the precision relative
+    /// to the value, near 1 (Swift's 'ulpOfOne', C's 'EPSILON').
+    static var epsilon: Self { get }
+
+    /// π, the ratio of a circle's circumference to its diameter, rounded to the type.
+    static var pi: Self { get }
+
+    /// e, the base of the natural logarithm, rounded to the type.
+    static var e: Self { get }
+
+    /// The natural logarithm of 2, rounded to the type.
+    static var ln2: Self { get }
+
+    /// The natural logarithm of 10, rounded to the type.
+    static var ln10: Self { get }
+
+    /// The square root of 2, rounded to the type.
+    static var sqrt2: Self { get }
+
+    /// The value nearest the integer.
+    static fn converting(_ value: Int) -> Self
+
+    /// The quotient, rounded. Dividing by zero gives an infinity, or NaN
+    /// for zero over zero; it never traps.
+    operator / (lhs: Self, rhs: Self) -> Self
+
+    /// The remainder of the division rounded toward zero, exact, with the
+    /// dividend's sign: C's 'fmod'.
+    fn truncatingRemainder(dividingBy other: Self) -> Self
+
+    /// The remainder of the division rounded to the nearest, ties to even,
+    /// exact: IEEE 754's 'remainder', at most half the divisor either way.
+    fn remainder(dividingBy other: Self) -> Self
+
+    /// The square root, correctly rounded; NaN for a negative value.
+    fn squareRoot() -> Self
+
+    /// self × multiplier + addend, rounded once: more exact than '*' then
+    /// '+', which round twice.
+    fn fusedMultiplyAdd(_ multiplier: Self, _ addend: Self) -> Self
+
+    /// The greatest integer not above the value.
+    fn floor() -> Self
+
+    /// The least integer not below the value.
+    fn ceiling() -> Self
+
+    /// The integer part: the value rounded toward zero.
+    fn truncated() -> Self
+
+    /// The nearest integer, a half rounded away from zero: 2.5 is 3.
+    fn rounded() -> Self
+
+    /// The nearest integer, a half rounded to the even one: 2.5 is 2.
+    fn roundedToNearestOrEven() -> Self
+
+    /// The magnitude with the sign of the argument.
+    fn copySign(_ sign: Self) -> Self
+
+    /// The smaller of the two: NaN if either is, and -0 below +0 (IEEE
+    /// 754-2019 'minimum').
+    fn minimum(_ other: Self) -> Self
+
+    /// The larger of the two: NaN if either is, and +0 above -0 (IEEE
+    /// 754-2019 'maximum').
+    fn maximum(_ other: Self) -> Self
+
+    /// The smaller of the two, a number preferred to NaN (IEEE 754-2019
+    /// 'minimumNumber'; C's 'fmin').
+    fn minimumNumber(_ other: Self) -> Self
+
+    /// The larger of the two, a number preferred to NaN (IEEE 754-2019
+    /// 'maximumNumber'; C's 'fmax').
+    fn maximumNumber(_ other: Self) -> Self
+
+    /// The least value greater than this one: the least subnormal for a
+    /// zero, itself for +infinity or NaN, -greatestFiniteMagnitude for -infinity.
+    var nextUp: Self { get }
+
+    /// self × 2ⁿ, rounded once (C's 'ldexp', .NET's 'ScaleB').
+    fn scaled(byPowerOfTwo power: Int) -> Self
+
+    /// The power of two that a finite non-zero value is a number in [1, 2)
+    /// times (C's 'ilogb'): Int.min for a zero, Int.max for an infinity or NaN.
+    var exponent: Int { get }
+}
+
+extension FloatingPoint {
+    /// The built-in floats' conversion: as 'F64(n)' does it.
+    @builtin("convert_Int_Self")
+    public static fn converting(_ value: Int) -> Self
+
+    /// The built-in floats' quotient: the instruction.
+    @builtin("div_Self")
+    public operator / (lhs: Self, rhs: Self) -> Self
+
+    /// The built-in floats' remainder: LLVM's 'frem'.
+    @builtin("rem_Self")
+    public fn truncatingRemainder(dividingBy other: Self) -> Self
+
+    /// The built-in floats' remainder: C's 'remainder'.
+    @builtin("remainder_Self")
+    public fn remainder(dividingBy other: Self) -> Self
+
+    /// The built-in floats' square root: LLVM's 'sqrt'.
+    @builtin("sqrt_Self")
+    public fn squareRoot() -> Self
+
+    /// The built-in floats' fused multiply-add: LLVM's 'fma'.
+    @builtin("fma_Self")
+    public fn fusedMultiplyAdd(_ multiplier: Self, _ addend: Self) -> Self
+
+    /// The built-in floats' floor: LLVM's 'floor'.
+    @builtin("floor_Self")
+    public fn floor() -> Self
+
+    /// The built-in floats' ceiling: LLVM's 'ceil'.
+    @builtin("ceil_Self")
+    public fn ceiling() -> Self
+
+    /// The built-in floats' truncation: LLVM's 'trunc'.
+    @builtin("trunc_Self")
+    public fn truncated() -> Self
+
+    /// The built-in floats' rounding: LLVM's 'round'.
+    @builtin("round_Self")
+    public fn rounded() -> Self
+
+    /// The built-in floats' rounding: LLVM's 'roundeven'.
+    @builtin("round_even_Self")
+    public fn roundedToNearestOrEven() -> Self
+
+    /// The built-in floats' sign copy: LLVM's 'copysign'.
+    @builtin("copysign_Self")
+    public fn copySign(_ sign: Self) -> Self
+
+    /// The built-in floats' minimum: LLVM's 'minimum'.
+    @builtin("minimum_Self")
+    public fn minimum(_ other: Self) -> Self
+
+    /// The built-in floats' maximum: LLVM's 'maximum'.
+    @builtin("maximum_Self")
+    public fn maximum(_ other: Self) -> Self
+
+    /// The built-in floats' minimum: LLVM's 'minnum'.
+    @builtin("min_Self")
+    public fn minimumNumber(_ other: Self) -> Self
+
+    /// The built-in floats' maximum: LLVM's 'maxnum'.
+    @builtin("max_Self")
+    public fn maximumNumber(_ other: Self) -> Self
+
+    /// The built-in floats' next value: one step of the bits away from, or
+    /// toward, zero.
+    @builtin("next_up_Self")
+    public var nextUp: Self { get }
+
+    /// The built-in floats' scaling: LLVM's 'ldexp'.
+    @builtin("scale_Self")
+    public fn scaled(byPowerOfTwo power: Int) -> Self
+
+    /// The built-in floats' exponent: LLVM's 'frexp', less one.
+    @builtin("exponent_Self")
+    public var exponent: Int { get }
+
+    /// τ = 2π, the ratio of a circle's circumference to its radius.
+    public static var tau: Self => Self.pi + Self.pi
+
+    /// The value's distance from zero: its sign cleared, a NaN's too.
+    ///
+    /// ```sable
+    /// assert((-2.5).abs() == 2.5)
+    /// assert((-0.0).abs().isSignMinus == false)
+    /// ```
+    public fn abs() -> Self {
+        return self.copySign(Self.zero)
+    }
+
+    /// The smaller of the two, a number preferred to NaN: 'minimumNumber'.
+    public fn min(other: Self) -> Self {
+        return self.minimumNumber(other)
+    }
+
+    /// The larger of the two, a number preferred to NaN: 'maximumNumber'.
+    public fn max(other: Self) -> Self {
+        return self.maximumNumber(other)
+    }
+
+    /// self + lhs × rhs, rounded once (Swift's 'addingProduct').
+    public fn addingProduct(_ lhs: Self, _ rhs: Self) -> Self {
+        return lhs.fusedMultiplyAdd(rhs, self)
+    }
+
+    /// The greatest value less than this one: 'nextUp' the other way.
+    public var nextDown: Self => -(-self).nextUp
+
+    /// The unit in the last place: the distance from the value's magnitude
+    /// to the next value up — down, for the greatest finite one, which has
+    /// none up. NaN for an infinity or NaN.
+    ///
+    /// ```sable
+    /// assert((1.0).ulp == F64.epsilon)
+    /// assert((0.0).ulp == F64.leastNonzeroMagnitude)
+    /// ```
+    public var ulp: Self {
+        get {
+            if !self.isFinite {
+                return Self.nan
+            }
+            let magnitude = self.abs()
+            if magnitude == Self.greatestFiniteMagnitude {
+                return magnitude - magnitude.nextDown
+            }
+            return magnitude.nextUp - magnitude
+        }
+    }
+
+    /// The number in [1, 2) the value is a power of two times, with the
+    /// value's sign cleared: 'abs() == significand × 2^exponent' for a
+    /// finite non-zero value. A zero, an infinity or NaN is its own
+    /// magnitude.
+    ///
+    /// ```sable
+    /// assert((12.0).significand == 1.5 && (12.0).exponent == 3)
+    /// ```
+    public var significand: Self {
+        get {
+            if !self.isFinite || self == Self.zero {
+                return self.abs()
+            }
+            return self.abs().scaled(byPowerOfTwo: 0 - self.exponent)
+        }
+    }
+
+    /// 1 for a positive value, -1 for a negative one, the sign of a zero
+    /// kept (Rust's 'signum' gives 1 for +0); NaN for NaN.
+    public fn signum() -> Self {
+        if self.isNaN {
+            return self
+        }
+        if self == Self.zero {
+            return self
+        }
+        return Self.one.copySign(self)
+    }
+
+    /// The value the fraction of the way from this one to the other:
+    /// itself at 0, the other at 1 (.NET's 'Lerp').
+    ///
+    /// ```sable
+    /// assert((10.0).lerp(to: 20.0, by: 0.25) == 12.5)
+    /// ```
+    public fn lerp(to other: Self, by fraction: Self) -> Self {
+        return self * (Self.one - fraction) + other * fraction
+    }
+
+    /// An angle in degrees, in radians.
+    public fn toRadians() -> Self {
+        return self * (Self.pi / Self.converting(180))
+    }
+
+    /// An angle in radians, in degrees.
+    public fn toDegrees() -> Self {
+        return self * (Self.converting(180) / Self.pi)
+    }
+}

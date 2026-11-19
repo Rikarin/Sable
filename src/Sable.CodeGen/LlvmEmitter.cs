@@ -141,6 +141,7 @@ public sealed partial class LlvmEmitter {
         }
 
         output.Append(Declarations);
+        output.Append(IntrinsicDeclarations);
         output.Append('\n');
         output.Append(Counting);
         output.Append('\n');
@@ -237,6 +238,56 @@ public sealed partial class LlvmEmitter {
                               ret void
                             }
                             """;
+
+    /// <summary>
+    ///     The LLVM intrinsics (and the two libm functions) the numeric
+    ///     protocols' builtins call, at each width: bit counts and swaps,
+    ///     funnel shifts for rotation, saturating and overflow-reporting
+    ///     arithmetic, and the floats' IEEE operations.
+    /// </summary>
+    static readonly string IntrinsicDeclarations = BuildIntrinsicDeclarations();
+
+    static string BuildIntrinsicDeclarations() {
+        var text = new StringBuilder();
+        foreach (var bits in new[] { 8, 16, 32, 64, 128 }) {
+            var t = $"i{bits}";
+            text.Append($"declare {t} @llvm.ctlz.{t}({t}, i1)\n")
+                .Append($"declare {t} @llvm.cttz.{t}({t}, i1)\n")
+                .Append($"declare {t} @llvm.ctpop.{t}({t})\n")
+                .Append($"declare {t} @llvm.bitreverse.{t}({t})\n")
+                .Append($"declare {t} @llvm.fshl.{t}({t}, {t}, {t})\n")
+                .Append($"declare {t} @llvm.fshr.{t}({t}, {t}, {t})\n");
+            if (bits > 8) {
+                text.Append($"declare {t} @llvm.bswap.{t}({t})\n");
+            }
+
+            foreach (var op in new[] { "sadd", "ssub", "uadd", "usub" }) {
+                text.Append($"declare {t} @llvm.{op}.sat.{t}({t}, {t})\n");
+            }
+        }
+
+        text.Append("declare i64 @llvm.smax.i64(i64, i64)\n");
+
+        foreach (var t in new[] { "half", "float", "double" }) {
+            var suffix = t switch { "half" => "f16", "float" => "f32", _ => "f64" };
+            foreach (var op in new[] { "sqrt", "floor", "ceil", "trunc", "round", "roundeven" }) {
+                text.Append($"declare {t} @llvm.{op}.{suffix}({t})\n");
+            }
+
+            foreach (var op in new[] { "copysign", "minimum", "maximum" }) {
+                text.Append($"declare {t} @llvm.{op}.{suffix}({t}, {t})\n");
+            }
+
+            text.Append($"declare {t} @llvm.fma.{suffix}({t}, {t}, {t})\n")
+                .Append($"declare {t} @llvm.ldexp.{suffix}.i32({t}, i32)\n")
+                .Append($"declare {{ {t}, i32 }} @llvm.frexp.{suffix}.i32({t})\n");
+        }
+
+        // IEEE remainder has no intrinsic: C's, from libm.
+        text.Append("declare double @remainder(double, double)\n")
+            .Append("declare float @remainderf(float, float)\n\n");
+        return text.ToString();
+    }
 
     const string Declarations = """
                                 @sable_string_metadata = external constant %SableMetadata
@@ -2350,6 +2401,10 @@ public sealed partial class LlvmEmitter {
                 return name;
             }
 
+            if (NumericIntrinsic(builtin, operands, Result)) {
+                return;
+            }
+
             if (Numeric(builtin, operands, Result)) {
                 return;
             }
@@ -3254,6 +3309,223 @@ public sealed partial class LlvmEmitter {
         }
 
         /// <summary>
+        ///     The numeric protocols' builtins (SilBuiltins.IsNumericIntrinsic),
+        ///     at every width: each an LLVM intrinsic or a few instructions.
+        ///     Also an integer converted to its own type, which is itself.
+        /// </summary>
+        bool NumericIntrinsic(BuiltinInst builtin, string[] operands, Func<string> Result) {
+            var name = builtin.Name;
+            if (name.StartsWith("wrap_", StringComparison.Ordinal) && builtin.Operands[0].Type == builtin.Type) {
+                _names[builtin] = operands[0];
+                return true;
+            }
+
+            if (!SilBuiltins.IsNumericIntrinsic(name)) {
+                return false;
+            }
+
+            var separator = name.LastIndexOf('_');
+            var op = name[..separator];
+            var type = SilType.Numbers.First(n => n.ToString() == name[(separator + 1)..]);
+            var t = Type(type);
+
+            if (SilType.FloatBits(type) is { } floatBits) {
+                var suffix = $"f{floatBits}";
+                var bitsType = $"i{floatBits}";
+                switch (op) {
+                    case "sqrt" or "floor" or "ceil" or "trunc" or "round" or "round_even":
+                        Line($"{Result()} = call {t} @llvm.{op.Replace("_", "", StringComparison.Ordinal)}.{suffix}({t} {operands[0]})");
+                        return true;
+
+                    case "copysign" or "minimum" or "maximum":
+                        Line($"{Result()} = call {t} @llvm.{op}.{suffix}({t} {operands[0]}, {t} {operands[1]})");
+                        return true;
+
+                    case "fma":
+                        Line($"{Result()} = call {t} @llvm.fma.{suffix}({t} {operands[0]}, {t} {operands[1]}, {t} {operands[2]})");
+                        return true;
+
+                    // libm's, for a double or a float; a half's through the
+                    // float it widens to exactly, the remainder exact in either.
+                    case "remainder": {
+                        if (floatBits == 64) {
+                            Line($"{Result()} = call double @remainder(double {operands[0]}, double {operands[1]})");
+                            return true;
+                        }
+
+                        var (left, right) = (operands[0], operands[1]);
+                        if (floatBits == 16) {
+                            left = Fresh();
+                            right = Fresh();
+                            Line($"{left} = fpext half {operands[0]} to float");
+                            Line($"{right} = fpext half {operands[1]} to float");
+                        }
+
+                        var remainder = floatBits == 16 ? Fresh() : Result();
+                        Line($"{remainder} = call float @remainderf(float {left}, float {right})");
+                        if (floatBits == 16) {
+                            Line($"{Result()} = fptrunc float {remainder} to half");
+                        }
+
+                        return true;
+                    }
+
+                    // The power is clamped to what moves any float from its
+                    // least to beyond its greatest, so that it fits an i32.
+                    case "scale": {
+                        var low = Fresh();
+                        var clamped = Fresh();
+                        var power = Fresh();
+                        Line($"{low} = call i64 @llvm.smax.i64(i64 {operands[1]}, i64 -100000)");
+                        Line($"{clamped} = call i64 @llvm.smin.i64(i64 {low}, i64 100000)");
+                        Line($"{power} = trunc i64 {clamped} to i32");
+                        Line($"{Result()} = call {t} @llvm.ldexp.{suffix}.i32({t} {operands[0]}, i32 {power})");
+                        return true;
+                    }
+
+                    // frexp's significand is in [0.5, 1); its exponent, one
+                    // less, is the one for [1, 2). A zero, an infinity or a
+                    // NaN has none: Int.min for a zero and Int.max for the
+                    // others, as C's 'ilogb' and .NET's 'ILogB' say.
+                    case "exponent": {
+                        var parts = Fresh();
+                        var exponent = Fresh();
+                        var less = Fresh();
+                        var wide = Fresh();
+                        var magnitude = Fresh();
+                        var finite = Fresh();
+                        var isZero = Fresh();
+                        var unlessZero = Fresh();
+                        Line($"{parts} = call {{ {t}, i32 }} @llvm.frexp.{suffix}.i32({t} {operands[0]})");
+                        Line($"{exponent} = extractvalue {{ {t}, i32 }} {parts}, 1");
+                        Line($"{less} = sub i32 {exponent}, 1");
+                        Line($"{wide} = sext i32 {less} to i64");
+                        Line($"{magnitude} = call {t} @llvm.fabs.{suffix}({t} {operands[0]})");
+                        Line($"{finite} = fcmp olt {t} {magnitude}, {FloatInfinity}");
+                        Line($"{isZero} = fcmp oeq {t} {magnitude}, {FloatZero}");
+                        Line($"{unlessZero} = select i1 {finite}, i64 {wide}, i64 {long.MaxValue}");
+                        Line($"{Result()} = select i1 {isZero}, i64 {long.MinValue}, i64 {unlessZero}");
+                        return true;
+                    }
+
+                    // The next float up: a NaN or +infinity is itself, a zero
+                    // of either sign the least positive float, and otherwise
+                    // the bits counted one away from zero for a positive
+                    // value, one toward it for a negative.
+                    case "next_up": {
+                        var bits = Fresh();
+                        var up = Fresh();
+                        var down = Fresh();
+                        var positive = Fresh();
+                        var stepped = Fresh();
+                        var isZero = Fresh();
+                        var fromZero = Fresh();
+                        var isStuck = Fresh();
+                        var value = Fresh();
+                        Line($"{bits} = bitcast {t} {operands[0]} to {bitsType}");
+                        Line($"{up} = add {bitsType} {bits}, 1");
+                        Line($"{down} = sub {bitsType} {bits}, 1");
+                        Line($"{positive} = fcmp ogt {t} {operands[0]}, {FloatZero}");
+                        Line($"{stepped} = select i1 {positive}, {bitsType} {up}, {bitsType} {down}");
+                        Line($"{isZero} = fcmp oeq {t} {operands[0]}, {FloatZero}");
+                        Line($"{fromZero} = select i1 {isZero}, {bitsType} 1, {bitsType} {stepped}");
+                        Line($"{value} = bitcast {bitsType} {fromZero} to {t}");
+                        Line($"{isStuck} = fcmp ueq {t} {operands[0]}, {FloatInfinity}");
+                        Line($"{Result()} = select i1 {isStuck}, {t} {operands[0]}, {t} {value}");
+                        return true;
+                    }
+
+                    case "bits":
+                        Line($"{Result()} = bitcast {t} {operands[0]} to {bitsType}");
+                        return true;
+
+                    case "from_bits":
+                        Line($"{Result()} = bitcast {bitsType} {operands[0]} to {t}");
+                        return true;
+                }
+
+                return false;
+            }
+
+            var (bitWidth, signed) = SilType.IntegerInfo(type)!.Value;
+            var s = signed ? "s" : "u";
+            switch (op) {
+                case "count_leading_zeros" or "count_trailing_zeros" or "count_ones": {
+                    var intrinsic = op switch { "count_leading_zeros" => "ctlz", "count_trailing_zeros" => "cttz", _ => "ctpop" };
+                    var counted = bitWidth == 64 ? Result() : Fresh();
+                    Line(intrinsic == "ctpop"
+                        ? $"{counted} = call {t} @llvm.ctpop.{t}({t} {operands[0]})"
+                        : $"{counted} = call {t} @llvm.{intrinsic}.{t}({t} {operands[0]}, i1 false)");
+                    if (bitWidth != 64) {
+                        Line($"{Result()} = {(bitWidth < 64 ? "zext" : "trunc")} {t} {counted} to i64");
+                    }
+
+                    return true;
+                }
+
+                // A byte has nothing to swap with.
+                case "byte_swap" when bitWidth == 8:
+                    _names[builtin] = operands[0];
+                    return true;
+
+                case "byte_swap" or "bit_reverse":
+                    Line($"{Result()} = call {t} @llvm.{(op == "byte_swap" ? "bswap" : "bitreverse")}.{t}({t} {operands[0]})");
+                    return true;
+
+                // A funnel shift of the value with itself, which takes the
+                // count modulo the width: the Int's low bits, as the width
+                // is a power of two, whatever its sign.
+                case "rotate_left" or "rotate_right": {
+                    var count = operands[1];
+                    if (bitWidth != 64) {
+                        count = Fresh();
+                        Line($"{count} = {(bitWidth < 64 ? "trunc" : "zext")} i64 {operands[1]} to {t}");
+                    }
+
+                    Line($"{Result()} = call {t} @llvm.{(op == "rotate_left" ? "fshl" : "fshr")}.{t}({t} {operands[0]}, {t} {operands[0]}, {t} {count})");
+                    return true;
+                }
+
+                case "add_overflow" or "sub_overflow" or "mul_overflow": {
+                    var pair = Fresh();
+                    var value = Fresh();
+                    var overflowed = Fresh();
+                    Line($"{pair} = call {{ {t}, i1 }} @llvm.{s}{op[..3]}.with.overflow.{t}({t} {operands[0]}, {t} {operands[1]})");
+                    Line($"{value} = extractvalue {{ {t}, i1 }} {pair}, 0");
+                    Line($"{overflowed} = extractvalue {{ {t}, i1 }} {pair}, 1");
+                    var tuple = (TupleType)builtin.Type;
+                    var layout = LayoutOf(tuple);
+                    var first = Fresh();
+                    Line($"{first} = insertvalue {Type(tuple)} {(layout.Explicit ? "zeroinitializer" : "poison")}, {t} {value}, {layout.Slots[0]}");
+                    Line($"{Result()} = insertvalue {Type(tuple)} {first}, i1 {overflowed}, {layout.Slots[1]}");
+                    return true;
+                }
+
+                case "add_saturating" or "sub_saturating":
+                    Line($"{Result()} = call {t} @llvm.{s}{op[..3]}.sat.{t}({t} {operands[0]}, {t} {operands[1]})");
+                    return true;
+
+                // The product at twice the width, shifted down by one.
+                case "mul_high": {
+                    var wide = $"i{bitWidth * 2}";
+                    var left = Fresh();
+                    var right = Fresh();
+                    var product = Fresh();
+                    var high = Fresh();
+                    var extend = signed ? "sext" : "zext";
+                    Line($"{left} = {extend} {t} {operands[0]} to {wide}");
+                    Line($"{right} = {extend} {t} {operands[1]} to {wide}");
+                    Line($"{product} = mul {wide} {left}, {right}");
+                    Line($"{high} = {(signed ? "ashr" : "lshr")} {wide} {product}, {bitWidth}");
+                    Line($"{Result()} = trunc {wide} {high} to {t}");
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
         ///     The sized integers and F32 (Int and F64 have their own cases):
         ///     arithmetic that traps on overflow, as Int's does, comparisons
         ///     by signedness, and conversions between any two numeric types
@@ -3588,6 +3860,10 @@ public sealed partial class LlvmEmitter {
         ///     cannot reach it (an F16 past 65504, an F32 at 2^128), which
         ///     compares with every finite value of the type as the bound would.
         /// </summary>
+        static string FloatZero => Hex(0.0);
+
+        static string FloatInfinity => Hex(double.PositiveInfinity);
+
         static string FloatBound(BigInteger bound, SilType type) {
             var value = (double)bound;
             var largest = type == SilType.F16 ? (double)Half.MaxValue : type == SilType.F32 ? float.MaxValue : double.MaxValue;

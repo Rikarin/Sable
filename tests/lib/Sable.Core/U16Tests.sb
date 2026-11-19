@@ -1,0 +1,119 @@
+module U16Tests
+
+// U16 (Sable.Core): its limits, and the numeric protocols' operations at
+// its width, at the limits. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@test
+fn theLimitsAreTheWidthsBounds() {
+    assertEqual(U16.min, 0)
+    assertEqual(U16.max, 65535)
+    assertEqual(U16.zero, 0)
+    assertEqual(U16.one, 1)
+    assertEqual(U16.bitWidth, 16)
+    assert(!U16.isSigned, "U16 is unsigned")
+}
+
+@test
+fn theLimitsPrintInDecimal() {
+    assertEqual(U16.min.toString(), "0")
+    assertEqual(U16.max.toString(), "65535")
+}
+
+@test
+fn addingPastTheGreatestValueWrapsSaturatesOrReportsIt() {
+    assertEqual(U16.max.wrappingAdd(1), U16.min)
+    assertEqual(U16.max.saturatingAdd(1), U16.max)
+    assert(U16.max.checkedAdd(1) == none, "the sum does not fit")
+    let (sum, overflowed) = U16.max.overflowingAdd(1)
+    assertEqual(sum, U16.min)
+    assert(overflowed, "the sum overflowed")
+}
+
+@test
+fn subtractingPastTheLeastValueWrapsSaturatesOrReportsIt() {
+    assertEqual(U16.min.wrappingSub(1), U16.max)
+    assertEqual(U16.min.saturatingSub(1), U16.min)
+    assert(U16.min.checkedSub(1) == none, "the difference does not fit")
+    let (difference, overflowed) = U16.min.overflowingSub(1)
+    assertEqual(difference, U16.max)
+    assert(overflowed, "the difference overflowed")
+}
+
+@test
+fn multiplyingPastTheLimitsWrapsSaturatesOrReportsIt() {
+    assertEqual(U16.max.wrappingMul(2), U16.max - 1)
+    assertEqual(U16.max.saturatingMul(2), U16.max)
+    assert(U16.max.checkedMul(2) == none, "the product does not fit")
+    let (product, overflowed) = U16.max.overflowingMul(2)
+    assertEqual(product, U16.max - 1)
+    assert(overflowed, "the product overflowed")
+    let (high, low) = U16.max.multipliedFullWidth(by: U16.max)
+    assertEqual(high, 65534)
+    assertEqual(low, 1)
+}
+
+@test
+fn theBitCountsSeeEveryBit() {
+    assertEqual(U16.zero.leadingZeroCount, 16)
+    assertEqual(U16.zero.trailingZeroCount, 16)
+    assertEqual(U16.one.leadingZeroCount, 15)
+    assertEqual(U16.max.popCount, 16)
+    assertEqual(U16(32768).trailingZeroCount, 15)
+    assertEqual(U16.max.leadingOneCount, 16)
+    assertEqual(U16.max.trailingOneCount, 16)
+}
+
+@test
+fn rotationsAndSwapsWorkAtTheWidth() {
+    assertEqual(U16.one.rotatedLeft(by: 16), 1)
+    assertEqual(U16.one.rotatedRight(by: 1), 32768)
+    assertEqual(U16.one.rotatedLeft(by: -1), 32768)
+    assertEqual(U16.one.bitReversed, 32768)
+    assertEqual(U16(258).byteSwapped, 513)
+    assertEqual(U16(258).bigEndianBytes().count, 2)
+    assertEqual(U16.fromBigEndianBytes(U16.max.bigEndianBytes()) ?? 0, U16.max)
+    assertEqual(U16.fromLittleEndianBytes(U16.min.littleEndianBytes()) ?? 1, U16.min)
+}
+
+@test
+fn conversionsStopAtTheLimits() {
+    assert(U16.exactly(U128.max) == none, "only a U128 holds U128's greatest value")
+    assert(U16.exactly(I128.min) == none, "only an I128 holds I128's least value")
+    assertEqual(U16.clamping(U128.max), U16.max)
+    assertEqual(U16.clamping(I128.min), U16.min)
+    assertEqual(U16.truncating(U128.max), U16.max)
+    assertEqual(U16.exactly(U16.max) ?? 0, U16.max)
+}
+
+@test
+fn theRemainderOfTheLeastValueByMinusOneIsZero() {
+    assertEqual(U16.max.wrappingDiv(U16.max), 1)
+    assertEqual(U16.max.wrappingRem(2), 1)
+    assert(U16.max.checkedDiv(0) == none, "there is no quotient by zero")
+}
+
+@test(traps: "integer overflow")
+fn addingPastTheGreatestValueTraps() {
+    var x = U16.max
+    x = x + 1
+    assertEqual(x, 0)
+}
+
+@test(traps: "integer overflow")
+fn subtractingPastTheLeastValueTraps() {
+    var x = U16.min
+    x = x - 1
+    assertEqual(x, 0)
+}
+
+@test
+fn negatingAnUnsignedValueWrapsOrSaturates() {
+    assertEqual(U16.one.wrappingNeg(), U16.max)
+    assertEqual(U16.one.saturatingNeg(), 0)
+    assert(U16.one.checkedNeg() == none, "an unsigned type has no -1")
+    assertEqual(U16.zero.checkedNeg() ?? 1, 0)
+    assertEqual(U16.max.abs(), U16.max)
+}

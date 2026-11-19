@@ -614,8 +614,11 @@ public sealed partial class Binder {
     ///     What <c>self</c> is inside a type: the type — a generic one with
     ///     its own parameters as its arguments, <c>Nest&lt;T&gt;</c>, so that it is
     ///     the same type its signatures write — or, in an array extension, the array.
+    ///     In a protocol and its extensions it is Self, the conforming type,
+    ///     constrained to the protocol: it has the protocol's operators and
+    ///     static members, as a T constrained to it has.
     /// </summary>
-    static TypeSymbol SelfTypeOf(NamedTypeSymbol type) => type.ExtendedArray ?? (TypeSymbol)TypeBinder.OwnConstruction(type);
+    static TypeSymbol SelfTypeOf(NamedTypeSymbol type) => type.ExtendedArray ?? type.SelfTypeParameter ?? (TypeSymbol)TypeBinder.OwnConstruction(type);
 
     NamedTypeSymbol? EnclosingType() {
         for (var symbol = _containingSymbol; symbol is not null; symbol = symbol.ContainingSymbol) {
@@ -3085,6 +3088,15 @@ public sealed partial class Binder {
                     receiver = captured;
                 }
 
+                // A protocol's static property — a requirement, or one an
+                // extension of it gives — belongs to the type it is read
+                // through: 'T.zero' is the zero of whatever T stands for, and
+                // only that type says which, so it is kept as the receiver.
+                if (receiver is null && field.IsStatic
+                    && containingType?.OriginalDefinition is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } protocolSelf }) {
+                    receiver = new BoundTypeExpression(syntax, substitution.Lookup(protocolSelf) ?? protocolSelf);
+                }
+
                 if (receiver is null && !field.IsStatic && containingType is not null) {
                     // An array extension's member, reached from another's: self is this one's array.
                     var self = containingType.ExtendedArray is not null && EnclosingType() is { } enclosing ? SelfTypeOf(enclosing) : SelfTypeOf(containingType);
@@ -3214,7 +3226,7 @@ public sealed partial class Binder {
 
             // A type parameter reaches the static members of its constraints,
             // so the lookup is the same one a value uses.
-            if (LookupMember(typeExpression.ReferencedType, name) is { } onType) {
+            if (LookupMemberOfKind(typeExpression.ReferencedType, name, instance: false) is { } onType) {
                 var statics = onType.Members.Where(IsStaticMember).ToList();
 
                 if (statics.Count > 0) {
@@ -3302,7 +3314,7 @@ public sealed partial class Binder {
         }
 
         _unmetRequirement = null;
-        if (LookupMember(receiverType, name) is not { } found) {
+        if (LookupMemberOfKind(receiverType, name, instance: true) is not { } found) {
             if (_unmetRequirement is { } unmet) {
                 _diagnostics.Error(
                     ErrorCode.ERR_DoesNotConform,
@@ -3560,19 +3572,32 @@ public sealed partial class Binder {
             };
     }
 
-    MemberLookup? LookupMember(TypeSymbol type, string name) {
+    MemberLookup? LookupMember(TypeSymbol type, string name, Func<Symbol, bool>? wanted = null) {
         // After 'where T == Int' a T has Int's members.
         type = _conversions.Equivalence.Canonical(type);
         var visited = new HashSet<TypeSymbol>();
-        return LookupMemberCore(type, name, TypeSubstitution.Empty, visited, type);
+        return LookupMemberCore(type, name, TypeSubstitution.Empty, visited, type, wanted);
     }
+
+    /// <summary>
+    ///     The members of the name of the kind the access wants — instance
+    ///     members through a value, static ones through a type — looked for
+    ///     past a type whose members of that name are all of the other kind:
+    ///     'x.max(other: y)' is the instance method a protocol's extension
+    ///     gives Int, though Int has a static 'max' of its own. Failing
+    ///     that, the members of the name whatever their kind, for the
+    ///     diagnostic that says which kind they are.
+    /// </summary>
+    MemberLookup? LookupMemberOfKind(TypeSymbol type, string name, bool instance) =>
+        LookupMember(type, name, instance ? static m => !IsStaticMember(m) : IsStaticMember) ?? LookupMember(type, name);
 
     MemberLookup? LookupMemberCore(
         TypeSymbol type,
         string name,
         TypeSubstitution outer,
         HashSet<TypeSymbol> visited,
-        TypeSymbol selfType
+        TypeSymbol selfType,
+        Func<Symbol, bool>? wanted = null
     ) {
         if (!visited.Add(type)) {
             return null;
@@ -3612,7 +3637,7 @@ public sealed partial class Binder {
                     substitution = Combine(substitution, new(map));
                 }
 
-                var members = named.GetMembers(name).ToList();
+                var members = named.GetMembers(name).Where(m => wanted is null || wanted(m)).ToList();
 
                 if (members.Count > 0) {
                     // A constrained extension's member is there only where its
@@ -3642,7 +3667,7 @@ public sealed partial class Binder {
                 // 'Counted<String>', 'protocol Counted<U>: Source<U>' is a
                 // Source<String>, whose T is then String.
                 foreach (var baseType in named.BaseTypes) {
-                    if (LookupMemberCore(substitution.Apply(baseType), name, substitution, visited, selfType)
+                    if (LookupMemberCore(substitution.Apply(baseType), name, substitution, visited, selfType, wanted)
                         is { } inherited) {
                         return inherited;
                     }
@@ -3667,7 +3692,7 @@ public sealed partial class Binder {
 
             case TypeParameterSymbol or DependentMemberTypeSymbol:
                 foreach (var constraint in AssociatedTypes.ConstraintsOf(type, _conversions.Equivalence)) {
-                    if (LookupMemberCore(constraint, name, outer, visited, selfType) is { } found) {
+                    if (LookupMemberCore(constraint, name, outer, visited, selfType, wanted) is { } found) {
                         return found;
                     }
                 }
@@ -3675,14 +3700,14 @@ public sealed partial class Binder {
                 return null;
 
             case OpaqueTypeSymbol opaque:
-                return LookupMemberCore(opaque.Constraint, name, outer, visited, selfType);
+                return LookupMemberCore(opaque.Constraint, name, outer, visited, selfType, wanted);
 
             case ExistentialTypeSymbol existential:
-                return LookupMemberCore(existential.Constraint, name, outer, visited, selfType);
+                return LookupMemberCore(existential.Constraint, name, outer, visited, selfType, wanted);
 
             case CompositionTypeSymbol composition:
                 foreach (var part in composition.Parts) {
-                    if (LookupMemberCore(part, name, outer, visited, selfType) is { } found) {
+                    if (LookupMemberCore(part, name, outer, visited, selfType, wanted) is { } found) {
                         return found;
                     }
                 }
@@ -6510,7 +6535,7 @@ public sealed partial class Binder {
             if (FindUserUnaryOperator(syntax.OperatorToken.Text, operand.Type, OperatorFixity.Prefix) is { } method) {
                 return new BoundUnaryOperator(
                     syntax,
-                    method.ReturnType,
+                    UserResultType(method, operand.Type),
                     UnaryOperatorKind.UserDefined,
                     operand,
                     method
@@ -6568,7 +6593,7 @@ public sealed partial class Binder {
         }
 
         if (FindUserUnaryOperator(syntax.OperatorToken.Text, operand.Type, OperatorFixity.Postfix) is { } method) {
-            return new BoundUnaryOperator(syntax, method.ReturnType, UnaryOperatorKind.UserDefined, operand, method);
+            return new BoundUnaryOperator(syntax, UserResultType(method, operand.Type), UnaryOperatorKind.UserDefined, operand, method);
         }
 
         if (!operand.HasError) {
@@ -6944,6 +6969,16 @@ public sealed partial class Binder {
         TypeSymbol operand,
         OperatorFixity fixity
     ) {
+        // '-x' on an x: T where T: SignedNumeric — the protocol's
+        // requirement, met by whatever T turns out to be, as a binary
+        // operator's is.
+        if (AssociatedTypes.IsAbstract(operand)) {
+            return ConstraintProtocols(operand)
+                .SelectMany(static p => p.Members.OfType<FunctionSymbol>())
+                .FirstOrDefault(f => f is { FunctionKind: FunctionKind.Operator, Parameters.Length: 1 }
+                    && f.Fixity == fixity && string.Equals(f.Name, symbol, StringComparison.Ordinal));
+        }
+
         if (operand is not NamedTypeSymbol named) {
             return null;
         }

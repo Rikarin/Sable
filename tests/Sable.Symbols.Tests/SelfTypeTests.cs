@@ -126,4 +126,59 @@ public sealed class SelfTypeTests {
         var errors = Compilation.Create(source).GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error).ToList();
         Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
     }
+
+    /// <summary>
+    ///     In a protocol's extension, <c>self</c> is a Self, which has what the
+    ///     protocol requires: its operators, its static members through
+    ///     <c>Self</c>, and its prefix operators — as a T constrained to the
+    ///     protocol does.
+    /// </summary>
+    [Fact]
+    public void InAProtocolsExtensionSelfHasWhatTheProtocolRequires() =>
+        AssertClean(
+            """
+            protocol Scaled {
+                static var unit: Self { get }
+                operator * (lhs: Self, rhs: Self) -> Self
+                prefix operator - (operand: Self) -> Self
+            }
+            extension Scaled {
+                fn squared() -> Self { return self * self }
+                fn negatedUnit() -> Self { return -Self.unit }
+                static var twice: Self => Self.unit * Self.unit
+            }
+            fn probe<T: Scaled>(_ x: T) -> T { return -x.squared() * T.twice }
+            """
+        );
+
+    /// <summary>
+    ///     A property in a protocol's extension named as one of the
+    ///     protocol's requirements is its default, not a second declaration.
+    /// </summary>
+    [Fact]
+    public void APropertyInTheExtensionIsTheRequirementsDefault() =>
+        AssertClean(
+            """
+            protocol Sized {
+                var size: Int { get }
+            }
+            extension Sized {
+                var size: Int => 0
+            }
+            struct Empty: Sized { }
+            fn probe(_ e: Empty) -> Int { return e.size }
+            """
+        );
+
+    /// <summary>
+    ///     A static and an instance member of one name are told apart by how
+    ///     they are reached: Int's static 'max', and the 'max(other:)' its
+    ///     protocols give its values.
+    /// </summary>
+    [Fact]
+    public void StaticAndInstanceMembersOfOneNameAreToldApartByTheirReceiver() {
+        AssertClean("fn probe(_ x: Int) -> Int { return x.max(other: Int.max) }");
+        var errors = ErrorsIn("fn probe() -> Int { return Int.abs() }");
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_MemberAccessMismatch);
+    }
 }

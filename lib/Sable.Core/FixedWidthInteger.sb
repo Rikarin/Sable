@@ -1,0 +1,176 @@
+module Sable.Core
+
+// The integers of a fixed width: every built-in integer. What each can do
+// is declared here once, for all twelve: the requirements below that are
+// bit operations or arithmetic the language has no operator for are
+// builtin families, each an LLVM intrinsic at the type's width; the rest
+// (FixedWidthInteger+Overflow.sb, +Bits.sb, +Conversions.sb) is Sable over
+// them, monomorphised for each type it is used with.
+
+/// Integers of a fixed number of bits, with a least and a greatest value:
+/// every built-in integer, from I8 to U128.
+///
+/// Arithmetic with the operators traps on overflow. Each operation also
+/// comes in forms that do not: 'checked' gives none, 'wrapping' keeps the
+/// low bits, 'saturating' stops at the bounds and 'overflowing' gives the
+/// low bits and whether it overflowed.
+///
+/// ```sable
+/// let x: U8 = 250
+/// assert(x.checkedAdd(10) == none)
+/// assert(x.wrappingAdd(10) == 4)
+/// assert(x.saturatingAdd(10) == 255)
+/// let (low, overflowed) = x.overflowingAdd(10)
+/// assert(low == 4 && overflowed)
+/// ```
+public protocol FixedWidthInteger: BinaryInteger {
+    /// The least value of the type.
+    static var min: Self { get }
+
+    /// The greatest value of the type.
+    static var max: Self { get }
+
+    /// How many zero bits come above the highest set bit: the width, for zero.
+    var leadingZeroCount: Int { get }
+
+    /// How many bits are set.
+    var popCount: Int { get }
+
+    /// The value with its bytes in the opposite order.
+    var byteSwapped: Self { get }
+
+    /// The value with its bits in the opposite order.
+    var bitReversed: Self { get }
+
+    /// The bits moved toward the high end by the count, those leaving at
+    /// the top coming back in at the bottom. The count is taken modulo the
+    /// width, so a negative one rotates the other way.
+    fn rotatedLeft(by count: Int) -> Self
+
+    /// The bits moved toward the low end by the count, those leaving at the
+    /// bottom coming back in at the top. The count is taken modulo the width.
+    fn rotatedRight(by count: Int) -> Self
+
+    /// The sum's low bits, and whether the sum did not fit.
+    fn overflowingAdd(_ other: Self) -> (Self, Bool)
+
+    /// The difference's low bits, and whether the difference did not fit.
+    fn overflowingSub(_ other: Self) -> (Self, Bool)
+
+    /// The product's low bits, and whether the product did not fit.
+    fn overflowingMul(_ other: Self) -> (Self, Bool)
+
+    /// The sum, or the bound it passed.
+    fn saturatingAdd(_ other: Self) -> Self
+
+    /// The difference, or the bound it passed.
+    fn saturatingSub(_ other: Self) -> Self
+
+    /// The sum's low bits: two's-complement arithmetic, which never traps.
+    fn wrappingAdd(_ other: Self) -> Self
+
+    /// The difference's low bits.
+    fn wrappingSub(_ other: Self) -> Self
+
+    /// The product's low bits.
+    fn wrappingMul(_ other: Self) -> Self
+
+    /// The negation's low bits: the least value of a signed type is its
+    /// own, and an unsigned value's is its two's complement.
+    fn wrappingNeg() -> Self
+
+    /// The high half of the product at twice the width; 'wrappingMul' is
+    /// the low half (see 'multipliedFullWidth').
+    fn multipliedHigh(by other: Self) -> Self
+}
+
+extension FixedWidthInteger {
+    /// The built-in integers' count: LLVM's 'ctlz'.
+    @builtin("count_leading_zeros_Self")
+    public var leadingZeroCount: Int { get }
+
+    /// The built-in integers' count: LLVM's 'ctpop'.
+    @builtin("count_ones_Self")
+    public var popCount: Int { get }
+
+    /// The built-in integers' swap: LLVM's 'bswap'.
+    @builtin("byte_swap_Self")
+    public var byteSwapped: Self { get }
+
+    /// The built-in integers' reversal: LLVM's 'bitreverse'.
+    @builtin("bit_reverse_Self")
+    public var bitReversed: Self { get }
+
+    /// The built-in integers' rotation: LLVM's funnel shift 'fshl'.
+    @builtin("rotate_left_Self")
+    public fn rotatedLeft(by count: Int) -> Self
+
+    /// The built-in integers' rotation: LLVM's funnel shift 'fshr'.
+    @builtin("rotate_right_Self")
+    public fn rotatedRight(by count: Int) -> Self
+
+    /// The built-in integers' sum: LLVM's 'add.with.overflow'.
+    @builtin("add_overflow_Self")
+    public fn overflowingAdd(_ other: Self) -> (Self, Bool)
+
+    /// The built-in integers' difference: LLVM's 'sub.with.overflow'.
+    @builtin("sub_overflow_Self")
+    public fn overflowingSub(_ other: Self) -> (Self, Bool)
+
+    /// The built-in integers' product: LLVM's 'mul.with.overflow'.
+    @builtin("mul_overflow_Self")
+    public fn overflowingMul(_ other: Self) -> (Self, Bool)
+
+    /// The built-in integers' sum: LLVM's 'add.sat'.
+    @builtin("add_saturating_Self")
+    public fn saturatingAdd(_ other: Self) -> Self
+
+    /// The built-in integers' difference: LLVM's 'sub.sat'.
+    @builtin("sub_saturating_Self")
+    public fn saturatingSub(_ other: Self) -> Self
+
+    /// The built-in integers' sum: the instruction, without the check.
+    @builtin("wrapping_add_Self")
+    public fn wrappingAdd(_ other: Self) -> Self
+
+    /// The built-in integers' difference: the instruction, without the check.
+    @builtin("wrapping_sub_Self")
+    public fn wrappingSub(_ other: Self) -> Self
+
+    /// The built-in integers' product: the instruction, without the check.
+    @builtin("wrapping_mul_Self")
+    public fn wrappingMul(_ other: Self) -> Self
+
+    /// The built-in integers' negation: the instruction, without the check.
+    @builtin("wrapping_neg_Self")
+    public fn wrappingNeg() -> Self
+
+    /// The built-in integers' high half: the product at twice the width, shifted down.
+    @builtin("mul_high_Self")
+    public fn multipliedHigh(by other: Self) -> Self
+
+    /// How many bits the type has.
+    ///
+    /// ```sable
+    /// assert(I8.bitWidth == 8)
+    /// assert(U128.bitWidth == 128)
+    /// ```
+    public static var bitWidth: Int => Self.zero.leadingZeroCount
+
+    /// How many one bits come above the highest zero bit.
+    public var leadingOneCount: Int => (~self).leadingZeroCount
+
+    /// How many one bits come below the lowest zero bit.
+    public var trailingOneCount: Int => (~self).trailingZeroCount
+
+    /// The whole product, at twice the width, as its high half and its low
+    /// half's bits.
+    ///
+    /// ```sable
+    /// let (high, low) = (200 as U8).multipliedFullWidth(by: 3)
+    /// assert(high == 2 && low == 88)
+    /// ```
+    public fn multipliedFullWidth(by other: Self) -> (Self, Self) {
+        return (self.multipliedHigh(by: other), self.wrappingMul(other))
+    }
+}

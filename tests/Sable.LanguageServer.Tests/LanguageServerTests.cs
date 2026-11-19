@@ -496,9 +496,11 @@ public sealed class LanguageServerTests : IDisposable {
     /// </summary>
     [Fact]
     public async Task TheLibrarysOwnSourceInTheWorkspaceIsTheLibrary() {
+        // The repository's root, where Sable.slnx is: tests/ has a lib/ of
+        // its own, the library's tests, with a Sable.Core of its own.
         var repository = AppContext.BaseDirectory;
-        while (!Directory.Exists(Path.Combine(repository, "lib", "Sable.Core"))) {
-            repository = Path.GetDirectoryName(repository) ?? throw new InvalidOperationException("no lib/ above the tests");
+        while (!File.Exists(Path.Combine(repository, "Sable.slnx"))) {
+            repository = Path.GetDirectoryName(repository) ?? throw new InvalidOperationException("no Sable.slnx above the tests");
         }
 
         foreach (var module in new[] { "Sable.Core", "Sable.Text" }) {

@@ -1,0 +1,44 @@
+module Sable.Core
+
+// The root of the numeric protocols (docs/06 §6.4): what can be added and
+// subtracted. Generic code written against these is monomorphised for
+// each type it is used with, so a sum over a T costs what one over an Int
+// does. The built-in numbers take their arithmetic from the builtin
+// families below, one declaration for every type.
+
+/// Values that can be added and subtracted, with a zero that changes
+/// nothing: every integer and float, and any type of the program's own
+/// that says so.
+///
+/// ```sable
+/// fn total<T: AdditiveArithmetic>(_ values: T[:]) -> T {
+///     var sum = T.zero
+///     for value in values {
+///         sum = sum + value
+///     }
+///     return sum
+/// }
+///
+/// assert(total([1, 2, 3]) == 6)
+/// assert(total([0.5, 0.25]) == 0.75)
+/// ```
+public protocol AdditiveArithmetic: Equatable {
+    /// The value adding changes nothing: 'x + zero == x'.
+    static var zero: Self { get }
+
+    /// The sum. An integer's traps where it does not fit the type.
+    operator + (lhs: Self, rhs: Self) -> Self
+
+    /// The difference. An integer's traps where it does not fit the type.
+    operator - (lhs: Self, rhs: Self) -> Self
+}
+
+extension AdditiveArithmetic {
+    /// The built-in numbers' sum: the instruction, trapping on overflow.
+    @builtin("add_Self")
+    public operator + (lhs: Self, rhs: Self) -> Self
+
+    /// The built-in numbers' difference: the instruction, trapping on overflow.
+    @builtin("sub_Self")
+    public operator - (lhs: Self, rhs: Self) -> Self
+}

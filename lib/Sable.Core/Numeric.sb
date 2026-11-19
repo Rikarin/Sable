@@ -1,0 +1,27 @@
+module Sable.Core
+
+/// Values that can be multiplied as well as added: every integer and
+/// float. With 'one' as well as 'zero', generic code can make any small
+/// value it needs, and take products as well as sums.
+///
+/// ```sable
+/// fn cube<T: Numeric>(_ x: T) -> T {
+///     return x * x * x
+/// }
+///
+/// assert(cube(3) == 27)
+/// assert(cube(0.5) == 0.125)
+/// ```
+public protocol Numeric: AdditiveArithmetic {
+    /// The value multiplying by changes nothing: 'x * one == x'.
+    static var one: Self { get }
+
+    /// The product. An integer's traps where it does not fit the type.
+    operator * (lhs: Self, rhs: Self) -> Self
+}
+
+extension Numeric {
+    /// The built-in numbers' product: the instruction, trapping on overflow.
+    @builtin("mul_Self")
+    public operator * (lhs: Self, rhs: Self) -> Self
+}

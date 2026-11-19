@@ -979,9 +979,10 @@ readers and writers, memory-mapped files), and the names the plan lists that are
 
 The primitive types (`Int`, `String`, `Char`, …) are the compiler's, since
 every layer knows them by sight; their members are now Sable, in
-`lib/Sable.Core` — `String.sb`, `Char.sb`, `Numbers.sb` and
-`Runtime.sb`, beside the protocols (`Equatable.sb`, `Debug.sb`, …) and
-reflection (`Reflect.sb`, `Mirror.sb`, `TypeInfo.sb`). At the floor is
+`lib/Sable.Core` — `String.sb`, `Char.sb`, one file per number type
+(`Int.sb`, `U8.sb`, `F64.sb`, …) and `Runtime.sb`, beside the protocols
+(`Equatable.sb`, `Debug.sb`, the numeric ones from `AdditiveArithmetic.sb`
+to `BinaryFloatingPoint.sb`, …) and reflection (`Reflect.sb`, `Mirror.sb`, `TypeInfo.sb`). At the floor is
 `@builtin("name")` on a bodiless declaration, naming the SIL builtin it is:
 
 ```sable

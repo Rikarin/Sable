@@ -1,0 +1,21 @@
+module Sable.Core
+
+/// An 8-bit signed integer. Its arithmetic traps on overflow; FixedWidthInteger gives it
+/// the forms that do not, and its bit operations.
+extension I8: FixedWidthInteger, SignedInteger {
+    /// 0.
+    public static var zero: I8 => 0
+
+    /// 1.
+    public static var one: I8 => 1
+
+    /// The least I8, -2⁷.
+    public static var min: I8 => -128
+
+    /// The greatest I8, 2⁷ - 1.
+    public static var max: I8 => 127
+
+    /// The number in decimal.
+    @builtin("string_from_I8")
+    public fn toString() -> String
+}

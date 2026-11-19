@@ -1,0 +1,21 @@
+module Sable.Core
+
+/// A 16-bit signed integer. Its arithmetic traps on overflow; FixedWidthInteger gives it
+/// the forms that do not, and its bit operations.
+extension I16: FixedWidthInteger, SignedInteger {
+    /// 0.
+    public static var zero: I16 => 0
+
+    /// 1.
+    public static var one: I16 => 1
+
+    /// The least I16, -2¹⁵.
+    public static var min: I16 => -32768
+
+    /// The greatest I16, 2¹⁵ - 1.
+    public static var max: I16 => 32767
+
+    /// The number in decimal.
+    @builtin("string_from_I16")
+    public fn toString() -> String
+}

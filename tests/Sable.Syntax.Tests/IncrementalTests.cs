@@ -471,6 +471,31 @@ public sealed class IncrementalTests {
         var closed = edited.WithChange(TextChange.Delete(new TextSpan(edited.Text.Text.IndexOf('('), 1)));
         Assert.Equal(StrictDump(SyntaxTree.Parse(closed.Text.Text)), StrictDump(closed));
     }
+
+    /// <summary>
+    ///     Whether <c>e&lt;r</c> names a record's type is decided by looking for
+    ///     its <c>&gt;</c>, and that lookahead runs past the function's closing
+    ///     brace into the next member. An edit there, which leaves the function's
+    ///     own tokens alone, changes how the function parses, so the function
+    ///     must not be reused. Found by the coverage-guided parser fuzzer
+    ///     (crash-a7c378c6a01b92bd0f17bae80eca2c4d393d98bf), minimised.
+    /// </summary>
+    [Theory]
+    [InlineData("struct{//\npublic fn s(e:B){()&e<r}public n e<>{}")]
+    [InlineData("module M\nstruct S {\n    fn f(e: B) { () & e<r }\n    public n e<>{}\n}\n")]
+    public void LookaheadPastAMembersEndIsReparsedWhenItChanges(string source) {
+        var tree = SyntaxTree.Parse(source);
+        var at = source.LastIndexOf("<>", StringComparison.Ordinal);
+
+        // The '>' now closes 'e<r', and the brace after it is a record's.
+        var deleted = tree.WithChange(TextChange.Delete(new TextSpan(at, 1)));
+        Assert.Equal(StrictDump(SyntaxTree.Parse(deleted.Text.Text)), StrictDump(deleted));
+        AssertSameAsFullParse(tree, TextChange.Delete(new TextSpan(at, 1)));
+
+        // And back: the old reading of 'e<r' must not be reused either.
+        var restored = deleted.WithChange(TextChange.Insert(at, "<"));
+        Assert.Equal(StrictDump(SyntaxTree.Parse(restored.Text.Text)), StrictDump(restored));
+    }
 }
 
 /// <summary>

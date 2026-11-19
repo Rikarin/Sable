@@ -471,7 +471,7 @@ public sealed partial class SemanticModel {
                 continue;
             }
 
-            var binder = NewBinder(scope, function);
+            var binder = NewBinder(scope, function).ForDeclaredDefault(parameter);
             binder.BindInitializer(clause.Value, parameter.Type);
             Collect(binder);
         }
@@ -506,7 +506,7 @@ public sealed partial class SemanticModel {
         // A property kept in 'field', or observed, starts with its initial
         // value in its storage.
         if (declaration.Declarator.Initializer is { } initializer) {
-            BindInitializer(initializer.Value, field.BackingField ?? field, field.Type, scope);
+            BindInitializer(initializer.Value, field.BackingField ?? field, field.Type, scope, defaultOf: field);
         }
 
         BindAccessors(declaration.Accessors, field, field.Type, scope);
@@ -833,9 +833,14 @@ public sealed partial class SemanticModel {
         ExpressionSyntax value,
         Symbol owner,
         TypeSymbol expected,
-        FileScope scope
+        FileScope scope,
+        Symbol? defaultOf = null
     ) {
         var binder = NewBinder(scope, owner);
+        if (defaultOf is not null) {
+            binder.ForDeclaredDefault(defaultOf);
+        }
+
         var bound = binder.BindInitializer(value, expected);
         if (owner is FieldSymbol field) {
             _initializers[field] = bound;

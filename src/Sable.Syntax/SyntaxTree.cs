@@ -56,7 +56,8 @@ public sealed class SyntaxTree {
         ParseOptions options,
         ImmutableArray<GreenToken> tokens = default,
         bool hasDirectives = false,
-        IReadOnlyList<Diagnostic>? lexicalDiagnostics = null
+        IReadOnlyList<Diagnostic>? lexicalDiagnostics = null,
+        IReadOnlyDictionary<GreenNode, TokenExtent>? memberExtents = null
     ) {
         Text = text;
         Root = root;
@@ -74,7 +75,15 @@ public sealed class SyntaxTree {
         Tokens = tokens.IsDefault ? [] : tokens;
         HasDirectives = hasDirectives;
         LexicalDiagnostics = lexicalDiagnostics ?? [];
+        MemberExtents = memberExtents ?? new Dictionary<GreenNode, TokenExtent>();
     }
+
+    /// <summary>
+    ///     For each member, the tokens its parse read, as indices into
+    ///     <see cref="Tokens" />: its own, and any it looked at past either end.
+    ///     A member is reused only while all of these are unchanged.
+    /// </summary>
+    internal IReadOnlyDictionary<GreenNode, TokenExtent> MemberExtents { get; }
 
     /// <summary>
     ///     The diagnostics the lexer of the whole file produced, kept apart
@@ -115,7 +124,7 @@ public sealed class SyntaxTree {
 
         var lexResult = IncrementalLexer.Lex(newText, Options, Tokens, LexicalDiagnostics, HasDirectives, change);
 
-        var reuse = IncrementalReuse.Build(Root.Green, Tokens, [..ParserDiagnostics], lexResult);
+        var reuse = IncrementalReuse.Build(Root.Green, Tokens, MemberExtents, [..ParserDiagnostics], lexResult);
 
         // Conservative: an added '#' may have introduced a directive.
         var hasDirectives = HasDirectives || change.NewText.Contains('#');

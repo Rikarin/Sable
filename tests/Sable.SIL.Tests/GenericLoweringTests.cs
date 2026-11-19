@@ -134,6 +134,19 @@ public sealed class GenericLoweringTests {
                 }
             }
             extension Two: Hashable where T: Hashable, E: Hashable {
+                operator == (lhs: Two<T, E>, rhs: Two<T, E>) -> Bool {
+                    return match lhs {
+                        case .A(let a) => match rhs {
+                            case .A(let b) => a == b
+                            case .B(_)     => false
+                        }
+                        case .B(let a) => match rhs {
+                            case .A(_)     => false
+                            case .B(let b) => a == b
+                        }
+                    }
+                }
+
                 fn hash(into hasher: inout Hasher) {
                     if case .A(let value) = self {
                         hasher.write(0)

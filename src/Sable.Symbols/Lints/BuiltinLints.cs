@@ -186,7 +186,8 @@ internal sealed class BodyFacts {
             _ => null,
         };
 
-    public static bool Ignored(string name) => name.StartsWith('_');
+    /// <remarks>A '$' name is the compiler's own, as the element of 'for _ in xs' is.</remarks>
+    public static bool Ignored(string name) => name.StartsWith('_') || name.StartsWith('$');
 
     /// <summary>The identifier that names a binding in its declaration, if it is written there.</summary>
     public static SyntaxToken? NameToken(SyntaxNode declaration, string name) {

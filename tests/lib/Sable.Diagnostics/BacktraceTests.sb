@@ -1,0 +1,47 @@
+module BacktraceTests
+
+// Backtrace (Sable.Diagnostics), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Diagnostics
+
+import Sable.Diagnostics
+import Sable.Testing
+
+@test
+fn aCapturedBacktraceHasFrames() {
+    let trace = Backtrace.capture()
+    assert(!trace.isEmpty, "a native program has frames")
+    assert(trace.frames.count > 1)
+}
+
+@test
+fn eachFrameIsNamedOrAnAddress() {
+    for frame in Backtrace.capture().frames {
+        assert(frame.count > 0, "a frame is never blank")
+    }
+}
+
+@test
+fn theDescriptionNumbersEachFrame() {
+    let trace = Backtrace { frames: ["sable.A.inner + 4", "sable.A.outer + 12"] }
+    assertEqualText(trace.description(), "   0  sable.A.inner + 4\n   1  sable.A.outer + 12")
+}
+
+@test
+fn framesPastTheTenthAreNumberedToTheSameWidth() {
+    var frames: String[>..] = []
+    var i = 0
+    while i < 11 {
+        frames.append("f\(i)")
+        i = i + 1
+    }
+    let lines = Backtrace { frames: frames }.description().split('\n')
+    assertEqual(lines[9], "   9  f9")
+    assertEqual(lines[10], "  10  f10")
+}
+
+@test
+fn anEmptyBacktraceSaysSo() {
+    let trace = Backtrace { frames: [] }
+    assert(trace.isEmpty)
+    assertEqual(trace.description(), "<no frames>")
+}

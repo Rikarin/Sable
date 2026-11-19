@@ -1017,13 +1017,18 @@ internal sealed class TypeBinder(Compilation compilation) {
             case SliceTypeSyntax slice:
                 return new ArrayTypeSymbol(BindType(slice.ElementType, context, scope), ArrayKind.Slice);
 
-            case DictionaryTypeSyntax dictionary:
-                return compilation.Core.Dictionary.Construct(
-                    [
-                        BindType(dictionary.KeyType, context, scope),
-                        BindType(dictionary.ValueType, context, scope)
-                    ]
-                );
+            // '[Key: Value]' is Sable.Core's Dictionary, whose key must be
+            // Hashable: checked as 'Dictionary<Key, Value>' written out would be.
+            case DictionaryTypeSyntax dictionary: {
+                var keyType = BindType(dictionary.KeyType, context, scope);
+                var valueType = BindType(dictionary.ValueType, context, scope);
+                if (compilation.Core.Dictionary is not { } definition) {
+                    return Error(ErrorCode.ERR_NotAType, syntax.Span, "'[Key: Value]' needs Sable.Core's 'Dictionary', which is not here");
+                }
+
+                DeferLate(() => CheckTypeArguments(definition, [keyType, valueType], syntax.Span, context));
+                return definition.Construct([keyType, valueType]);
+            }
 
             case ParenthesizedTypeSyntax parenthesized:
                 return BindType(parenthesized.Type, context, scope);
@@ -1119,7 +1124,7 @@ internal sealed class TypeBinder(Compilation compilation) {
 
                 // Inside a protocol 'Self' is the conforming type, which is
                 // not known yet; everywhere else it is the type itself.
-                return enclosing.SelfTypeParameter ?? (TypeSymbol)OwnConstruction(enclosing);
+                return enclosing.SelfTypeParameter ?? enclosing.ExtendedSelf;
             }
 
             default:
@@ -1357,6 +1362,12 @@ internal sealed class TypeBinder(Compilation compilation) {
 
                 // Constraints bind later than this, so the check waits.
                 DeferLate(() => CheckTypeArguments(named, arguments, span, context));
+
+                // 'Optional<Int>' is another spelling of 'Int?'.
+                if (named.ExtendedOptional is not null) {
+                    return new OptionalTypeSymbol(arguments[0]);
+                }
+
                 return named.Construct(arguments);
             }
 

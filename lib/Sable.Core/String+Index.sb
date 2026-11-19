@@ -37,8 +37,8 @@ extension String {
             return lhs.utf8Offset < rhs.utf8Offset
         }
 
-        public fn hash() -> Int {
-            return utf8Offset
+        public fn hash(into hasher: inout Hasher) {
+            hasher.combine(utf8Offset)
         }
 
         /// The index as its offset: "String.Index(utf8Offset: 3)".

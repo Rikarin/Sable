@@ -1,0 +1,67 @@
+module ParseErrorTests
+
+// ParseError (Sable.Serialize), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Serialize
+
+import Sable.Serialize
+import Sable.Testing
+
+fn isAnError<T>(_ value: T) -> Bool where T: Error {
+    return true
+}
+
+let start = Position(offset: 0, line: 1, column: 1)
+
+@test
+fn aParseErrorIsAnError() {
+    assert(isAnError(ParseError.TrailingText(at: start)))
+}
+
+@test
+fn aParseErrorSaysWhereItIs() {
+    let error = ParseError.UnexpectedEnd(at: Position(offset: 4, line: 2, column: 3), expected: "a value")
+    assertEqual(errorLine(error), 2)
+    assertEqual(describeError(error), "line 2, column 3: the text ends where a value was expected")
+}
+
+fn at(_ line: Int) -> Position {
+    return Position(offset: 0, line: line, column: 5)
+}
+
+@test
+fn eachErrorIsDescribedWithItsPlace() {
+    assertEqual(describeError(ParseError.UnexpectedCharacter(at: at(1), found: 'x', expected: "a digit")),
+        "line 1, column 5: found 'x' where a digit was expected")
+    assertEqual(describeError(ParseError.InvalidNumber(at: at(2), reason: "no digits")),
+        "line 2, column 5: invalid number: no digits")
+    assertEqual(describeError(ParseError.InvalidEscape(at: at(3), found: 'q')),
+        "line 3, column 5: \\q is not an escape")
+    assertEqual(describeError(ParseError.InvalidUnicode(at: at(4), reason: "a lone surrogate")),
+        "line 4, column 5: invalid \\u escape: a lone surrogate")
+    assertEqual(describeError(ParseError.ControlCharacter(at: at(5), code: 10)),
+        "line 5, column 5: control character U+000a must be escaped")
+    assertEqual(describeError(ParseError.TooDeep(at: at(6), limit: 64)),
+        "line 6, column 5: nested more than 64 deep")
+    assertEqual(describeError(ParseError.TrailingText(at: at(7))),
+        "line 7, column 5: text after the value")
+    assertEqual(describeError(ParseError.DuplicateKey(at: at(8), key: "id")),
+        "line 8, column 5: the key \"id\" appears twice")
+}
+
+@test
+fn eachErrorKnowsItsLine() {
+    assertEqual(errorLine(ParseError.UnexpectedCharacter(at: at(1), found: 'x', expected: "")), 1)
+    assertEqual(errorLine(ParseError.InvalidNumber(at: at(2), reason: "")), 2)
+    assertEqual(errorLine(ParseError.InvalidEscape(at: at(3), found: 'q')), 3)
+    assertEqual(errorLine(ParseError.InvalidUnicode(at: at(4), reason: "")), 4)
+    assertEqual(errorLine(ParseError.ControlCharacter(at: at(5), code: 1)), 5)
+    assertEqual(errorLine(ParseError.TooDeep(at: at(6), limit: 1)), 6)
+    assertEqual(errorLine(ParseError.TrailingText(at: at(7))), 7)
+    assertEqual(errorLine(ParseError.DuplicateKey(at: at(8), key: "")), 8)
+}
+
+@test
+fn controlCharactersAreDescribedByCode() {
+    assertEqual(describeChar('\t'), "U+0009")
+    assertEqual(describeChar('a'), "'a'")
+}

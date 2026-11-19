@@ -14,81 +14,120 @@ public protocol Comparable: Equatable {
     operator < (lhs: Self, rhs: Self) -> Bool
 }
 
-/// Values that can be hashed: equal values hash equal.
+/// Values that can be hashed: equal values hash equal. A type feeds what
+/// its equality looks at to the hasher, field by field, and the hasher
+/// gives one Int for them all (`@derive(Hashable)` writes this for a struct
+/// or a union):
+///
+/// ```sable
+/// struct Point: Hashable {
+///     var x: Int
+///     var y: Int
+///     operator == (lhs: Point, rhs: Point) -> Bool { return lhs.x == rhs.x && lhs.y == rhs.y }
+///     fn hash(into hasher: inout Hasher) {
+///         hasher.combine(x)
+///         hasher.combine(y)
+///     }
+/// }
+/// assert(Point { x: 1, y: 2 }.hashValue == Point { x: 1, y: 2 }.hashValue)
+/// ```
 public protocol Hashable: Equatable {
-    fn hash() -> Int
+    /// Feeds the value to the hasher: the same parts its '==' compares.
+    fn hash(into hasher: inout Hasher)
+}
+
+extension Hashable {
+    /// The value's hash under this run's seed: equal values give equal
+    /// hashes, and a hash differs from one run to the next.
+    public var hashValue: Int {
+        get {
+            var hasher = Hasher()
+            self.hash(into: &hasher)
+            return hasher.finalize()
+        }
+    }
 }
 
 extension Int: Comparable, Hashable {
     public operator == (lhs: Int, rhs: Int) -> Bool { return lhs == rhs }
     public operator < (lhs: Int, rhs: Int) -> Bool { return lhs < rhs }
-    public fn hash() -> Int { return self }
+    public fn hash(into hasher: inout Hasher) { hasher.write(self unchecked as U64) }
 }
 
 extension I8: Comparable, Hashable {
     public operator == (lhs: I8, rhs: I8) -> Bool { return lhs == rhs }
     public operator < (lhs: I8, rhs: I8) -> Bool { return lhs < rhs }
-    public fn hash() -> Int { return Int(self) }
+    public fn hash(into hasher: inout Hasher) { hasher.write(self unchecked as U64) }
 }
 
 extension I16: Comparable, Hashable {
     public operator == (lhs: I16, rhs: I16) -> Bool { return lhs == rhs }
     public operator < (lhs: I16, rhs: I16) -> Bool { return lhs < rhs }
-    public fn hash() -> Int { return Int(self) }
+    public fn hash(into hasher: inout Hasher) { hasher.write(self unchecked as U64) }
 }
 
 extension I32: Comparable, Hashable {
     public operator == (lhs: I32, rhs: I32) -> Bool { return lhs == rhs }
     public operator < (lhs: I32, rhs: I32) -> Bool { return lhs < rhs }
-    public fn hash() -> Int { return Int(self) }
+    public fn hash(into hasher: inout Hasher) { hasher.write(self unchecked as U64) }
 }
 
 extension I64: Comparable, Hashable {
     public operator == (lhs: I64, rhs: I64) -> Bool { return lhs == rhs }
     public operator < (lhs: I64, rhs: I64) -> Bool { return lhs < rhs }
-    public fn hash() -> Int { return Int(self) }
+    public fn hash(into hasher: inout Hasher) { hasher.write(self unchecked as U64) }
 }
 
 extension U8: Comparable, Hashable {
     public operator == (lhs: U8, rhs: U8) -> Bool { return lhs == rhs }
     public operator < (lhs: U8, rhs: U8) -> Bool { return lhs < rhs }
-    public fn hash() -> Int { return Int(self) }
+    public fn hash(into hasher: inout Hasher) { hasher.write(self unchecked as U64) }
 }
 
 extension U16: Comparable, Hashable {
     public operator == (lhs: U16, rhs: U16) -> Bool { return lhs == rhs }
     public operator < (lhs: U16, rhs: U16) -> Bool { return lhs < rhs }
-    public fn hash() -> Int { return Int(self) }
+    public fn hash(into hasher: inout Hasher) { hasher.write(self unchecked as U64) }
 }
 
 extension U32: Comparable, Hashable {
     public operator == (lhs: U32, rhs: U32) -> Bool { return lhs == rhs }
     public operator < (lhs: U32, rhs: U32) -> Bool { return lhs < rhs }
-    public fn hash() -> Int { return Int(self) }
+    public fn hash(into hasher: inout Hasher) { hasher.write(self unchecked as U64) }
 }
 
 extension U64: Comparable, Hashable {
     public operator == (lhs: U64, rhs: U64) -> Bool { return lhs == rhs }
     public operator < (lhs: U64, rhs: U64) -> Bool { return lhs < rhs }
-    public fn hash() -> Int { return Int(self % 4611686018427387903) }
+    public fn hash(into hasher: inout Hasher) { hasher.write(self unchecked as U64) }
 }
 
 extension UInt: Comparable, Hashable {
     public operator == (lhs: UInt, rhs: UInt) -> Bool { return lhs == rhs }
     public operator < (lhs: UInt, rhs: UInt) -> Bool { return lhs < rhs }
-    public fn hash() -> Int { return Int(self % 4611686018427387903) }
+    public fn hash(into hasher: inout Hasher) { hasher.write(self unchecked as U64) }
 }
 
 extension I128: Comparable, Hashable {
     public operator == (lhs: I128, rhs: I128) -> Bool { return lhs == rhs }
     public operator < (lhs: I128, rhs: I128) -> Bool { return lhs < rhs }
-    public fn hash() -> Int { return Int(self % 4611686018427387903) }
+
+    /// Both halves: equal values have equal bits.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.write(self unchecked as U64)
+        hasher.write((self >> 64) unchecked as U64)
+    }
 }
 
 extension U128: Comparable, Hashable {
     public operator == (lhs: U128, rhs: U128) -> Bool { return lhs == rhs }
     public operator < (lhs: U128, rhs: U128) -> Bool { return lhs < rhs }
-    public fn hash() -> Int { return Int(self % 4611686018427387903) }
+
+    /// Both halves: equal values have equal bits.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.write(self unchecked as U64)
+        hasher.write((self >> 64) unchecked as U64)
+    }
 }
 
 extension F16: Comparable, Hashable {
@@ -96,32 +135,25 @@ extension F16: Comparable, Hashable {
     public operator < (lhs: F16, rhs: F16) -> Bool { return lhs < rhs }
 
     /// Every F16 is an F64 exactly, so it hashes as one: equal values hash equal.
-    public fn hash() -> Int { return F64(self).hash() }
+    public fn hash(into hasher: inout Hasher) { F64(self).hash(into: &hasher) }
 }
 
 extension F32: Comparable, Hashable {
     public operator == (lhs: F32, rhs: F32) -> Bool { return lhs == rhs }
     public operator < (lhs: F32, rhs: F32) -> Bool { return lhs < rhs }
-    public fn hash() -> Int {
-        // The integer part and four digits of the rest: equal values hash equal.
-        let scaled = F64(self) * 10000.0
-        if scaled > 4.0e18 || scaled < -4.0e18 {
-            return 0
-        }
-        return Int(scaled)
-    }
+
+    /// Every F32 is an F64 exactly, so it hashes as one: equal values hash equal.
+    public fn hash(into hasher: inout Hasher) { F64(self).hash(into: &hasher) }
 }
 
 extension F64: Comparable, Hashable {
     public operator == (lhs: F64, rhs: F64) -> Bool { return lhs == rhs }
     public operator < (lhs: F64, rhs: F64) -> Bool { return lhs < rhs }
-    public fn hash() -> Int {
-        // The integer part and four digits of the rest: equal values hash equal.
-        let scaled = F64(self) * 10000.0
-        if scaled > 4.0e18 || scaled < -4.0e18 {
-            return 0
-        }
-        return Int(scaled)
+
+    /// By its bits: equal values have equal bits, but for zero, whose two
+    /// signs compare equal and so hash as one.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.write(self == 0.0 ? 0 : self.bits)
     }
 }
 
@@ -135,20 +167,23 @@ extension String: Comparable, Hashable {
         return Runtime.compareStrings(lhs, rhs) < 0
     }
 
-    /// From the UTF-8 bytes, in the runtime: a scalar at a time, in Sable,
-    /// costs a call per scalar and overflows on long strings.
-    public fn hash() -> Int {
-        return Runtime.hashString(self)
+    /// By the UTF-8 bytes, hashed in the runtime under the hasher's seed: a
+    /// scalar at a time, in Sable, would cost a call per scalar.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.write(text: self)
     }
 }
 
 extension Char: Comparable, Hashable {
     public operator == (lhs: Char, rhs: Char) -> Bool { return lhs == rhs }
     public operator < (lhs: Char, rhs: Char) -> Bool { return lhs < rhs }
-    public fn hash() -> Int { return self.codePoint }
+    public fn hash(into hasher: inout Hasher) { hasher.write(self.codePoint unchecked as U64) }
 }
 
 extension Bool: Equatable, Hashable {
     public operator == (lhs: Bool, rhs: Bool) -> Bool { return lhs == rhs }
-    public fn hash() -> Int { return self ? 1 : 0 }
+    public fn hash(into hasher: inout Hasher) {
+        let bit: U64 = self ? 1 : 0
+        hasher.write(bit)
+    }
 }

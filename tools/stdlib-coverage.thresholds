@@ -23,8 +23,6 @@ lib/Sable.Concurrency/Sleep.sb                     0  70   # raise me: no tests 
 lib/Sable.Concurrency/TaskGroup.sb                 0  70   # raise me: no tests yet
 lib/Sable.Core/ClosedRange.sb                      0  70   # raise me: no tests yet
 lib/Sable.Core/Debug.sb                            0   0   # raise me: no tests yet
-lib/Sable.Core/Dictionary.sb                       0  70   # raise me: no tests yet
-lib/Sable.Core/Equatable.sb                        0   0   # raise me: no tests yet
 lib/Sable.Core/Mirror.sb                           0  70   # raise me: no tests yet
 lib/Sable.Core/Numbers.sb                          0  70   # raise me: no tests yet
 lib/Sable.Core/PartialRangeFrom.sb                 0  70   # raise me: no tests yet
@@ -58,7 +56,6 @@ lib/Sable.Process/Process.sb                       0   0   # raise me: no tests 
 lib/Sable.Serialize/Difference.sb                  0   0   # raise me: no tests yet
 lib/Sable.Serialize/JsonValue.sb                   0   0   # raise me: no tests yet
 lib/Sable.Serialize/MergePatch.sb                  0   0   # raise me: no tests yet
-lib/Sable.Serialize/ParseError.sb                  0   0   # raise me: no tests yet
 lib/Sable.Serialize/ParseOptions.sb                0  70   # raise me: no tests yet
 lib/Sable.Serialize/Parser.sb                      0   0   # raise me: no tests yet
 lib/Sable.Serialize/Pointer.sb                     0   0   # raise me: no tests yet

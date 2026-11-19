@@ -142,7 +142,7 @@ T[..]  T[..64]      // inline capacity, resizable within it
 T[>..]              // grow-only array
 T[>..<]             // grow/shrink array
 T[:]                // slice view
-[K: V]              // dictionary
+[K: V]              // dictionary (Dictionary<K, V>, K: Hashable), in insertion order
 (A, B, C)           // tuple
 (label: A, b: B)    // labelled tuple
 (A, B) -> C         // function type
@@ -1172,8 +1172,14 @@ whose value replaces the failed expression, or an expression after `catch`.
 abort("invariant violated: \(state)")
 assert(index < count, "out of range")      // debug only
 precondition(index < count)                // all builds
+fatalError("cannot go on")                 // -> Never
+todo()                                     // -> Never: not written yet
 unreachable()                              // -> Never
 ```
+
+Each reports the place it was called from: a parameter whose default is
+`#file`, `#line`, `#column` or `#function` takes the call's place, not its
+own.
 
 Panics are not catchable in normal code. `Task.catchingPanic { }` exists for
 supervisors and test harnesses only.

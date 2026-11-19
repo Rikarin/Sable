@@ -68,7 +68,7 @@ fn indicesCompareAndHashByOffset() {
     let b = String.Index(utf8Offset: 5)
     assert(a < b && !(b < a), "ordered by offset")
     assert(a == String.Index(utf8Offset: 3) && a != b, "equal by offset")
-    assertEqual(a.hash(), 3)
+    assertEqual(a.hashValue, String.Index(utf8Offset: 3).hashValue)
 }
 
 @test

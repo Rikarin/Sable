@@ -1,0 +1,44 @@
+module Sable.Diagnostics
+
+/// The calls that led to a point in the program, innermost first: what a
+/// trap prints with SABLE_BACKTRACE set, as a value. Rust's
+/// std::backtrace::Backtrace, .NET's StackTrace.
+///
+/// Each frame is named by its symbol and the offset into it,
+/// 'sable.Module.function + 52', where the program's symbol table has one,
+/// and by its address otherwise; a function the optimiser inlined has no
+/// frame of its own. The interpreter has no frames to give, so a backtrace
+/// captured there is empty.
+///
+/// ```sable
+/// let trace = Backtrace.capture()
+/// print(trace.description())
+/// ```
+public struct Backtrace {
+    /// The frames, a line of text each, the innermost first.
+    public let frames: String[>..]
+
+    /// The calls that led here, starting with the caller's.
+    public static fn capture() -> Backtrace {
+        return Backtrace { frames: Runtime.backtraceFrames() }
+    }
+
+    /// Whether it has no frames: captured where there are none to give.
+    public var isEmpty: Bool => self.frames.count == 0
+
+    /// A frame a line, numbered from the innermost, as a trap prints them;
+    /// '<no frames>' when there are none.
+    public fn description() -> String {
+        if self.isEmpty {
+            return "<no frames>"
+        }
+        var lines: String[>..] = []
+        var i = 0
+        while i < self.frames.count {
+            let number = i < 10 ? " \(i)" : "\(i)"
+            lines.append("  \(number)  \(self.frames[i])")
+            i = i + 1
+        }
+        return Runtime.joinStrings(lines, "\n")
+    }
+}

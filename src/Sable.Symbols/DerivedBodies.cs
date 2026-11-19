@@ -11,7 +11,7 @@ namespace Sable.Symbols;
 /// <remarks>
 ///     <para>
 ///         A field is compared, ordered, hashed or described through the core
-///         protocol's requirement — <c>Equatable.==</c>, <c>Hashable.hash</c> —
+///         protocol's requirement — <c>Equatable.==</c>, <c>Hashable.hash(into:)</c> —
 ///         so that SIL lowering finds the field type's own member once the type
 ///         is known, as it does for any call through a type parameter. That is
 ///         what lets one body serve every construction of a generic type. The
@@ -24,12 +24,6 @@ namespace Sable.Symbols;
 ///     </para>
 /// </remarks>
 internal sealed class DerivedBodies(CoreTypes core, Func<string, string, FunctionSymbol?> requirement) {
-    /// <summary>
-    ///     What a hash is kept within, so that combining the fields' hashes
-    ///     cannot overflow: below 2^31, times 31, plus another below it.
-    /// </summary>
-    const long HashModulus = 1_000_000_007;
-
     SyntaxNode _at = null!;
     FunctionSymbol _function = null!;
 
@@ -39,10 +33,19 @@ internal sealed class DerivedBodies(CoreTypes core, Func<string, string, Functio
         var type = derivation.Type;
         var self = type.IsGenericDefinition ? type.Construct([..type.TypeParameters]) : type;
 
+        // 'hash(into:)' is statements, each feeding the hasher, and returns nothing.
+        if (derivation.Member == DerivedMember.Hash) {
+            var fed = type.TypeKind switch {
+                TypeKind.Enum => EnumHash(type, self),
+                TypeKind.Union => UnionHash(type, self),
+                _ => StructHash(type, self),
+            };
+            return fed is null ? null : new BoundBlock(_at, [], [..fed]);
+        }
+
         var value = type.TypeKind == TypeKind.Enum ? Enum(derivation.Member, type, self) : derivation.Member switch {
             DerivedMember.Equals => type.TypeKind == TypeKind.Union ? UnionEquals(type, self) : StructEquals(type, self),
             DerivedMember.LessThan => type.TypeKind == TypeKind.Union ? UnionLessThan(type, self) : StructLessThan(type, self),
-            DerivedMember.Hash => type.TypeKind == TypeKind.Union ? UnionHash(type, self) : StructHash(type, self),
             _ => type.TypeKind == TypeKind.Union ? UnionDebug(type, self) : StructDebug(type, self),
         };
 
@@ -61,9 +64,9 @@ internal sealed class DerivedBodies(CoreTypes core, Func<string, string, Functio
         return Lexicographic([..DerivedConformance.StoredFields(type).Select(f => (f.Type, (Func<BoundExpression>)(() => Field(lhs(), f)), (Func<BoundExpression>)(() => Field(rhs(), f))))]);
     }
 
-    BoundExpression? StructHash(NamedTypeSymbol type, NamedTypeSymbol self) {
-        return Combine(17, DerivedConformance.StoredFields(type).Select(f => (f.Type, Field(new BoundSelfAccess(_at, self), f))));
-    }
+    /// <summary><c>hasher.combine(field)</c> for each field, in declaration order.</summary>
+    List<BoundStatement>? StructHash(NamedTypeSymbol type, NamedTypeSymbol self) =>
+        Feed(DerivedConformance.StoredFields(type).Select(f => Field(new BoundSelfAccess(_at, self), f)));
 
     /// <summary><c>Point(x: 1, y: 2)</c>: the name, and each field labelled.</summary>
     BoundExpression? StructDebug(NamedTypeSymbol type, NamedTypeSymbol self) {
@@ -121,20 +124,35 @@ internal sealed class DerivedBodies(CoreTypes core, Func<string, string, Functio
         return new BoundMatch(_at, core.Bool, lhs(), [..arms]);
     }
 
-    /// <summary>The case's position, then its payload's hashes.</summary>
-    BoundExpression? UnionHash(NamedTypeSymbol type, NamedTypeSymbol self) {
+    /// <summary>
+    ///     The case's position, then its payload, fed to the hasher in the
+    ///     case's arm: <c>match self { case .A(a0) => { 0.hash(into: &amp;hasher); a0.hash(into: &amp;hasher) } … }</c>.
+    /// </summary>
+    List<BoundStatement>? UnionHash(NamedTypeSymbol type, NamedTypeSymbol self) {
         var cases = Cases(type);
         var arms = new List<BoundMatchArm>();
         for (var i = 0; i < cases.Count; i++) {
             var (pattern, locals) = Bind(self, cases[i], "a");
-            if (Combine(i + 1L, cases[i].Payload.Select((p, k) => (p.Type, Local(locals[k])))) is not { } hash) {
+            if (Feed([Literal((long)i), ..cases[i].Payload.Select((_, k) => Local(locals[k]))]) is not { } fed) {
                 return null;
             }
 
-            arms.Add(Arm(pattern, hash));
+            arms.Add(new BoundMatchArm(_at, [pattern], null, new BoundBlock(_at, [], [..fed])));
         }
 
-        return new BoundMatch(_at, core.Int, new BoundSelfAccess(_at, self), [..arms]);
+        return [new BoundExpressionStatement(_at, new BoundMatch(_at, core.Void, new BoundSelfAccess(_at, self), [..arms]))];
+    }
+
+    /// <summary>The case's position, fed to the hasher.</summary>
+    List<BoundStatement>? EnumHash(NamedTypeSymbol type, NamedTypeSymbol self) {
+        var cases = type.Members.OfType<EnumCaseSymbol>().ToList();
+        var position = new BoundMatch(
+            _at,
+            core.Int,
+            new BoundSelfAccess(_at, self),
+            [..cases.Select((c, i) => Arm(new BoundEnumCasePattern(_at, self, c), Literal((long)i)))]
+        );
+        return Feed([position]);
     }
 
     /// <summary><c>Shape.Circle(radius: 1.5)</c>; <c>Shape.Empty</c> for a case that carries nothing.</summary>
@@ -176,7 +194,6 @@ internal sealed class DerivedBodies(CoreTypes core, Func<string, string, Functio
         return member switch {
             DerivedMember.Equals => ByCase(lhs(), core.Bool, i => new BoundMatch(_at, core.Bool, rhs(), [Arm(Case(i), Literal(true)), new BoundMatchArm(_at, [], null, Literal(false))])),
             DerivedMember.LessThan => ByCase(lhs(), core.Bool, i => ByCase(rhs(), core.Bool, j => Literal(i < j))),
-            DerivedMember.Hash => ByCase(new BoundSelfAccess(_at, self), core.Int, i => Literal(i + 1L)),
             _ => ByCase(new BoundSelfAccess(_at, self), core.String, i => Literal($"{type.Name}.{cases[i].Name}")),
         };
     }
@@ -292,25 +309,25 @@ internal sealed class DerivedBodies(CoreTypes core, Func<string, string, Functio
         return result;
     }
 
-    /// <summary><c>(h * 31 + value.hash() % M) % M</c> over each value in turn, from a seed.</summary>
-    BoundExpression? Combine(long seed, IEnumerable<(TypeSymbol Type, BoundExpression Value)> values) {
+    /// <summary>
+    ///     <c>value.hash(into: &amp;hasher)</c> for each value in turn: the
+    ///     requirement, so that each value's own conformance is found once its
+    ///     type is known, the hasher being the derived member's parameter.
+    /// </summary>
+    List<BoundStatement>? Feed(IEnumerable<BoundExpression> values) {
         if (requirement("Hashable", "hash") is not { } hash) {
             return null;
         }
 
-        BoundExpression result = Literal(seed);
-        foreach (var (_, value) in values) {
-            var hashed = new BoundCall(_at, value, hash, [], core.Int);
-            var bounded = Arithmetic(BinaryOperatorKind.Remainder, hashed, Literal(HashModulus));
-            var mixed = Arithmetic(BinaryOperatorKind.Add, Arithmetic(BinaryOperatorKind.Multiply, result, Literal(31L)), bounded);
-            result = Arithmetic(BinaryOperatorKind.Remainder, mixed, Literal(HashModulus));
+        // An inout argument is the place itself, as the binder leaves '&hasher'.
+        var hasher = _function.Parameters[0];
+        var statements = new List<BoundStatement>();
+        foreach (var value in values) {
+            statements.Add(new BoundExpressionStatement(_at, new BoundCall(_at, value, hash, [new BoundParameterAccess(_at, hasher)], core.Void)));
         }
 
-        return result;
+        return statements;
     }
-
-    BoundExpression Arithmetic(BinaryOperatorKind kind, BoundExpression left, BoundExpression right) =>
-        new BoundBinaryOperator(_at, core.Int, kind, left, right);
 
     /// <summary><c>"Name(" + "label: " + value.debugDescription() + ", " + … + ")"</c>.</summary>
     BoundExpression? Describe(string name, IEnumerable<(string? Label, TypeSymbol Type, BoundExpression Value)> values) {

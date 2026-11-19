@@ -24,7 +24,7 @@ fn aGrowShrinkIsNotGrow(_ xs: Int[>..<]) -> Int[>..] {
 }
 
 fn aDictionaryKeyIsChecked(_ d: [String: Int]) -> Int? {
-    return d[1]                         //! S3004 expected 'String'
+    return d[1]                         //! S3007 'key' takes 'String'
 }
 
 fn aDictionaryIsNotAnArray(_ d: [String: Int]) -> Int[] {

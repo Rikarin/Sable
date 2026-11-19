@@ -5,7 +5,7 @@ namespace Sable.CodeGen.Tests;
 /// <summary>
 ///     Sable.Collections beyond the first four types (docs/04 §4.3, docs/06
 ///     §6.4): Deque, PriorityQueue, OrderedDictionary and BitSet, the in-place
-///     sort, and the HashMap and String hashing the benchmarks against .NET
+///     sort, and the dictionary and String hashing the benchmarks against .NET
 ///     reworked. Native and interpreted, with leak checking.
 /// </summary>
 public sealed class CollectionLibraryTests {
@@ -323,18 +323,17 @@ public sealed class CollectionLibraryTests {
     ///     and long string keys — which overflowed the hash written in Sable.
     /// </summary>
     [Fact]
-    public void HashMapSurvivesGrowthAndRemoval() =>
+    public void ADictionarySurvivesGrowthAndRemoval() =>
         Assert.Equal(
             "666 332667 false true\na b false 2\n2 true 9998\nx y \n",
             AssertAgree("""
                 module P
-                import Sable.Collections
                 @main
                 fn main() {
-                    let m = HashMap<String, Int>()
+                    var m: [String: Int] = [:]
                     var i = 0
                     while i < 1000 {
-                        m.set("a rather long key, number \(i)", i)
+                        m["a rather long key, number \(i)"] = i
                         i = i + 1
                     }
                     i = 0
@@ -343,32 +342,30 @@ public sealed class CollectionLibraryTests {
                         i = i + 1
                     }
                     var sum = 0
-                    for k in m.allKeys() { sum = sum + (m.get(k) ?? 0) }
+                    for (_, v) in m { sum = sum + v }
                     print("\(m.count) \(sum) \(m.contains("a rather long key, number 3")) \(m.contains("a rather long key, number 4"))")
 
-                    let wide = HashMap<Int, String>()
-                    wide.set(1, "a")
-                    wide.set(4294967297, "b")
-                    wide.set(-1, "c")
+                    var wide: [Int: String] = [:]
+                    wide[1] = "a"
+                    wide[4294967297] = "b"
+                    wide[-1] = "c"
                     wide.remove(-1)
-                    print("\(wide.get(1) ?? "-") \(wide.get(4294967297) ?? "-") \(wide.contains(2)) \(wide.count)")
+                    print("\(wide[1] ?? "-") \(wide[4294967297] ?? "-") \(wide.contains(2)) \(wide.count)")
 
                     // Removing and adding the same keys over and over reuses the removed slots.
-                    let churn = HashMap<Int, Int>()
+                    var churn: [Int: Int] = [:]
                     i = 0
                     while i < 10000 {
-                        churn.set(i % 2, i)
+                        churn[i % 2] = i
                         churn.remove(i % 2)
-                        churn.set(i % 2, i)
+                        churn[i % 2] = i
                         i = i + 1
                     }
-                    print("\(churn.count) \(churn.contains(1)) \(churn.get(0) ?? -1)")
+                    print("\(churn.count) \(churn.contains(1)) \(churn[0] ?? -1)")
 
-                    let small = HashMap<String, Int>()
-                    small.set("x", 1)
-                    small.set("y", 2)
+                    let small: [String: Int] = ["x": 1, "y": 2]
                     var line = ""
-                    for k in small.allKeys() { line = line + k + " " }
+                    for (k, _) in small { line = line + k + " " }
                     print(line)
                 }
                 """).Stdout
@@ -384,24 +381,74 @@ public sealed class CollectionLibraryTests {
                 @main
                 fn main() {
                     print("\("abc" < "abd") \("ab" < "abc") \("b" > "abc") \("é" > "z")")
-                    print("\("abc".hash() == "abc".hash()) \("abc".hash() == "abd".hash())")
-                    print("\("same" < "same") \("a long string, past eight bytes".hash() >= 0)")
+                    print("\("abc".hashValue == "abc".hashValue) \("abc".hashValue == "abd".hashValue)")
+                    print("\("same" < "same") \("a long string, past eight bytes".hashValue == "a long string, past eight bytes".hashValue)")
                 }
                 """).Stdout
         );
 
-    /// <summary>A hash printed is the same number natively and interpreted.</summary>
+    /// <summary>
+    ///     A hash under a given seed is the same number natively and
+    ///     interpreted: the runtime's string hash and the interpreter's agree,
+    ///     at every length it reads differently (none, under four bytes,
+    ///     under eight, up to sixteen, more), and so do the Hasher's words.
+    /// </summary>
     [Fact]
-    public void StringHashIsTheSameNumberEverywhere() {
+    public void AHashUnderASeedIsTheSameNumberEverywhere() {
         var run = AssertAgree("""
+            module P
+            fn hashOf(_ text: String) -> Int {
+                var hasher = Hasher(seed: 12345)
+                hasher.combine(text)
+                return hasher.finalize()
+            }
+            @main
+            fn main() {
+                print(hashOf(""))
+                print(hashOf("ab"))
+                print(hashOf("seven b"))
+                print(hashOf("twelve bytes"))
+                print(hashOf("exactly sixteen!"))
+                print(hashOf("héllo, wörld — and more"))
+                var words = Hasher(seed: 0)
+                words.combine(-1)
+                words.combine(true)
+                words.combine(2.5)
+                print(words.finalize())
+            }
+            """);
+        var lines = run.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(7, lines.Length);
+        Assert.Equal(lines.Length, lines.Distinct().Count());
+    }
+
+    /// <summary>
+    ///     Without a seed of its own, a hasher takes the process's: random,
+    ///     so two runs differ, unless SABLE_DETERMINISTIC_HASHING=1 fixes it.
+    /// </summary>
+    [Fact]
+    public void TheProcessSeedIsRandomUnlessFixed() {
+        if (!CanBuild) {
+            return;
+        }
+
+        const string source = """
             module P
             @main
             fn main() {
-                print("".hash())
-                print("héllo, wörld — and more".hash())
+                print("seeded".hashValue)
             }
-            """);
-        Assert.Equal(2, run.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
+            """;
+        // Unless the tests themselves run with fixed hashing.
+        if (Environment.GetEnvironmentVariable("SABLE_DETERMINISTIC_HASHING") != "1") {
+            var first = BuildAndRun(source).Stdout;
+            var second = BuildAndRun(source).Stdout;
+            Assert.NotEqual(first, second);
+        }
+
+        var fixedFirst = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_DETERMINISTIC_HASHING"] = "1" }).Stdout;
+        var fixedSecond = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_DETERMINISTIC_HASHING"] = "1" }).Stdout;
+        Assert.Equal(fixedFirst, fixedSecond);
     }
 
     /// <summary>

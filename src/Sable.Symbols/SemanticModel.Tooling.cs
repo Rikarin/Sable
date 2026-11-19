@@ -464,6 +464,10 @@ public sealed partial class SemanticModel {
             yield return access;
         }
 
+        if (name.Parent is ImplicitMemberAccessExpressionSyntax implicitMember && ReferenceEquals(implicitMember.Name, name)) {
+            yield return implicitMember;
+        }
+
         if (name.Parent is QualifiedNameSyntax qualified && ReferenceEquals(qualified.Right, name)) {
             yield return qualified;
         }

@@ -1,0 +1,529 @@
+module DictionaryTests
+
+// Dictionary (Sable.Core), the type '[Key: Value]' names, tested with
+// '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@derive(Hashable)
+struct Point {
+    var x: Int
+    var y: Int
+}
+
+/// Keys that all hash alike: every lookup has to tell them apart by '=='.
+struct Clash: Hashable {
+    var id: Int
+
+    operator == (lhs: Clash, rhs: Clash) -> Bool { return lhs.id == rhs.id }
+
+    fn hash(into hasher: inout Hasher) {
+        hasher.combine(0)
+    }
+}
+
+fn squares(_ n: Int) -> [Int: Int] {
+    var d: [Int: Int] = [:]
+    var i = 0
+    while i < n {
+        d[i] = i * i
+        i = i + 1
+    }
+    return d
+}
+
+// ---- Literals and lookup ------------------------------------------------------
+
+@test
+fn aLiteralHoldsItsEntries() {
+    let ages: [String: Int] = ["ann": 31, "bob": 27]
+    assertEqual(ages.count, 2)
+    assertEqual(ages["ann"] ?? -1, 31)
+    assertEqual(ages["bob"] ?? -1, 27)
+}
+
+@test
+fn aMissingKeyHasNoValue() {
+    let ages: [String: Int] = ["ann": 31]
+    assert(ages["cy"] == none)
+    assert(!ages.contains("cy"))
+    assert(ages.contains("ann"))
+}
+
+@test
+fn anEmptyLiteralIsEmpty() {
+    let empty: [Int: String] = [:]
+    assert(empty.isEmpty)
+    assertEqual(empty.count, 0)
+    assertEqual(empty.capacity, 0)
+    assert(empty[1] == none)
+    assert(!empty.contains(1))
+}
+
+@test
+fn aRepeatedKeyInALiteralKeepsTheLastValue() {
+    let d: [String: Int] = ["a": 1, "b": 2, "a": 3]
+    assertEqual(d.count, 2)
+    assertEqual(d["a"] ?? -1, 3)
+    assert(d.keys() == ["a", "b"], "the key keeps its first place")
+}
+
+@test
+fn aDerivedHashableStructIsAKey() {
+    var names: [Point: String] = [:]
+    names[Point { x: 1, y: 2 }] = "a"
+    names[Point { x: 2, y: 1 }] = "b"
+    assertEqual(names[Point { x: 1, y: 2 }] ?? "", "a")
+    assertEqual(names[Point { x: 2, y: 1 }] ?? "", "b")
+    assert(names[Point { x: 1, y: 1 }] == none)
+}
+
+@test
+fn keysThatHashAlikeAreToldApartByEquality() {
+    var d: [Clash: Int] = [:]
+    var i = 0
+    while i < 40 {
+        d[Clash { id: i }] = i
+        i = i + 1
+    }
+    assertEqual(d.count, 40)
+    assertEqual(d[Clash { id: 0 }] ?? -1, 0)
+    assertEqual(d[Clash { id: 39 }] ?? -1, 39)
+    assert(d[Clash { id: 40 }] == none)
+    assertEqual(d.remove(Clash { id: 20 }) ?? -1, 20)
+    assertEqual(d[Clash { id: 21 }] ?? -1, 21)
+}
+
+@test
+fn floatKeysTreatBothZerosAsOne() {
+    var d: [F64: String] = [:]
+    d[0.0] = "zero"
+    assertEqual(d[-0.0] ?? "", "zero")
+    d[1.5] = "one and a half"
+    assertEqual(d[1.5] ?? "", "one and a half")
+    assertEqual(d.count, 2)
+}
+
+@test
+fn everyPrimitiveIsAKey() {
+    let chars: [Char: Int] = ['a': 1, 'b': 2]
+    assertEqual(chars['b'] ?? -1, 2)
+    let flags: [Bool: String] = [true: "yes", false: "no"]
+    assertEqual(flags[false] ?? "", "no")
+    let bytes: [U8: Int] = [255: 1]
+    assertEqual(bytes[255] ?? -1, 1)
+    let wide: [I128: Int] = [-1: 7]
+    assertEqual(wide[-1] ?? -1, 7)
+    let halves: [F32: Int] = [0.25: 4]
+    assertEqual(halves[0.25] ?? -1, 4)
+}
+
+// ---- Changing -----------------------------------------------------------------
+
+@test
+fn settingAnExistingKeyChangesItsValueNotItsPlace() {
+    var d: [String: Int] = ["a": 1, "b": 2]
+    d["a"] = 10
+    assertEqual(d["a"] ?? -1, 10)
+    assertEqual(d.count, 2)
+    assert(d.keys() == ["a", "b"])
+}
+
+@test
+fn settingNoneRemovesTheKey() {
+    var d: [String: Int] = ["a": 1, "b": 2]
+    d["a"] = none
+    assert(!d.contains("a"))
+    assertEqual(d.count, 1)
+    d["missing"] = none
+    assertEqual(d.count, 1)
+}
+
+@test
+fn updateValueGivesWhatItReplaced() {
+    var d: [String: Int] = [:]
+    assert(d.updateValue(1, forKey: "a") == none, "a new key replaces nothing")
+    assertEqual(d.updateValue(2, forKey: "a") ?? -1, 1)
+    assertEqual(d["a"] ?? -1, 2)
+}
+
+@test
+fn insertLeavesAKeyThatIsThereAlone() {
+    var d: [String: Int] = ["a": 1]
+    assert(!d.insert(5, forKey: "a"))
+    assertEqual(d["a"] ?? -1, 1)
+    assert(d.insert(2, forKey: "b"))
+    assertEqual(d["b"] ?? -1, 2)
+}
+
+@test
+fn removeGivesTheValueOnce() {
+    var d: [String: Int] = ["a": 1]
+    assertEqual(d.remove("a") ?? -1, 1)
+    assert(d.remove("a") == none, "a key is removed once")
+    assert(d.isEmpty)
+}
+
+@test
+fn theDefaultSubscriptCounts() {
+    var counts: [String: Int] = [:]
+    for word in ["to", "be", "or", "not", "to", "be"] {
+        counts[word, default: 0] += 1
+    }
+    assertEqual(counts["to"] ?? -1, 2)
+    assertEqual(counts["not"] ?? -1, 1)
+    assertEqual(counts["missing", default: 7], 7)
+    assert(counts.keys() == ["to", "be", "or", "not"])
+}
+
+@test
+fn removeAllEmptiesIt() {
+    var d = squares(20)
+    d.removeAll()
+    assert(d.isEmpty)
+    assertEqual(d.capacity, 0)
+    assert(d[3] == none)
+    d[3] = 9
+    assertEqual(d[3] ?? -1, 9)
+}
+
+@test
+fn removeAllCanKeepTheRoom() {
+    var d = squares(20)
+    let room = d.capacity
+    d.removeAll(keepingCapacity: true)
+    assert(d.isEmpty)
+    assertEqual(d.capacity, room)
+    assert(d[3] == none)
+    d[3] = 9
+    assertEqual(d[3] ?? -1, 9)
+    d.removeAll(keepingCapacity: false)
+    assertEqual(d.capacity, 0)
+}
+
+@test
+fn aCopyIsADictionaryOfItsOwn() {
+    var a: [String: Int] = ["x": 1]
+    var b = a
+    b["x"] = 2
+    b["y"] = 3
+    assertEqual(a["x"] ?? -1, 1)
+    assert(a["y"] == none)
+    assertEqual(b["x"] ?? -1, 2)
+    a["z"] = 4
+    assert(b["z"] == none)
+}
+
+// ---- Many keys ----------------------------------------------------------------
+
+@test
+fn manyKeysAreAllFound() {
+    let d = squares(10000)
+    assertEqual(d.count, 10000)
+    var i = 0
+    var wrong = 0
+    while i < 10000 {
+        if (d[i] ?? -1) != i * i {
+            wrong = wrong + 1
+        }
+        i = i + 1
+    }
+    assertEqual(wrong, 0)
+    assert(d[10000] == none)
+}
+
+@test
+fn removingHalfKeepsTheOtherHalfInOrder() {
+    var d = squares(1000)
+    var i = 0
+    while i < 1000 {
+        d.remove(i)
+        i = i + 2
+    }
+    assertEqual(d.count, 500)
+    let keys = d.keys()
+    assertEqual(keys[0], 1)
+    assertEqual(keys[1], 3)
+    assertEqual(keys[499], 999)
+    assert(d[2] == none)
+    assertEqual(d[3] ?? -1, 9)
+}
+
+@test
+fn addingAndRemovingOneKeyOverAndOverStaysSmall() {
+    var d = squares(3)
+    var i = 0
+    while i < 10000 {
+        d[100] = i
+        d[100] = none
+        i = i + 1
+    }
+    assertEqual(d.count, 3)
+    assert(d.capacity <= 8, "what removed keys leave is dropped as the table is rebuilt")
+    assert(d.keys() == [0, 1, 2])
+}
+
+@test
+fn removedSlotsAreReusedAndDroppedOnGrowth() {
+    var d: [Int: Int] = [:]
+    var i = 0
+    while i < 40 {
+        d[i] = i
+        i = i + 1
+    }
+    i = 0
+    while i < 40 {
+        assert(d.remove(i) != none)
+        i = i + 2
+    }
+    i = 100
+    while i < 200 {
+        d[i] = i
+        i = i + 1
+    }
+    assertEqual(d.count, 120)
+    assertEqual(d[1] ?? -1, 1)
+    assert(d[2] == none)
+    assertEqual(d[150] ?? -1, 150)
+    assertEqual(d.keys().count, 120)
+}
+
+@test
+fn aKeyAddedAfterRemovalsGoesLast() {
+    var d: [String: Int] = ["a": 1, "b": 2, "c": 3]
+    d["b"] = none
+    d["b"] = 4
+    assert(d.keys() == ["a", "c", "b"])
+    assert(d.values() == [1, 3, 4])
+}
+
+// ---- Capacity -----------------------------------------------------------------
+
+@test
+fn reserveCapacityMakesRoomAhead() {
+    var d: [Int: Int] = [:]
+    d.reserveCapacity(100)
+    let room = d.capacity
+    assert(room >= 100)
+    var i = 0
+    while i < 100 {
+        d[i] = i
+        i = i + 1
+    }
+    assertEqual(d.capacity, room)
+    d.reserveCapacity(10)
+    assertEqual(d.capacity, room)
+}
+
+@test
+fn minimumCapacityStartsWithRoom() {
+    let d = Dictionary<Int, Int>(minimumCapacity: 50)
+    assert(d.isEmpty)
+    assert(d.capacity >= 50)
+}
+
+@test
+fn shrinkToFitGivesBackRoom() {
+    var d = squares(1000)
+    var i = 10
+    while i < 1000 {
+        d.remove(i)
+        i = i + 1
+    }
+    d.shrinkToFit()
+    assertEqual(d.count, 10)
+    assert(d.capacity < 100)
+    assertEqual(d[9] ?? -1, 81)
+    d.removeAll(keepingCapacity: true)
+    d.shrinkToFit()
+    assertEqual(d.capacity, 0)
+}
+
+// ---- Entries ------------------------------------------------------------------
+
+@test
+fn orInsertAddsOnlyWhatIsMissing() {
+    var d: [String: Int] = ["a": 1]
+    assertEqual(d.orInsert("a", 5), 1)
+    assertEqual(d.orInsert("b", 2), 2)
+    assertEqual(d["b"] ?? -1, 2)
+}
+
+@test
+fn orInsertWithMakesTheValueOnlyWhenMissing() {
+    var d: [String: Int] = ["a": 1]
+    var made = 0
+    assertEqual(d.orInsertWith("a", { () -> Int in
+        made = made + 1
+        return 5
+    }), 1)
+    assertEqual(made, 0)
+    assertEqual(d.orInsertWith("b", { () -> Int in
+        made = made + 1
+        return 2
+    }), 2)
+    assertEqual(made, 1)
+}
+
+@test
+fn modifyChangesOnlyAKeyThatIsThere() {
+    var d: [String: Int] = ["a": 1]
+    assert(d.modify("a") { (n: Int) -> Int in n + 10 })
+    assertEqual(d["a"] ?? -1, 11)
+    assert(!d.modify("b") { (n: Int) -> Int in n + 10 })
+    assert(d["b"] == none)
+}
+
+@test
+fn modifyWithADefaultAddsTheKeyFirst() {
+    var lists: [String: Int[>..]] = [:]
+    for word in ["apple", "avocado", "banana"] {
+        let first = word.slice(from: 0, to: 1)
+        lists.modify(first, default: []) { (list: Int[>..]) -> Int[>..] in
+            var longer = list
+            longer.append(word.count)
+            return longer
+        }
+    }
+    assertEqual(lists["a"]?.count ?? -1, 2)
+    assertEqual(lists["b"]?.count ?? -1, 1)
+}
+
+// ---- Merging and transforming -------------------------------------------------
+
+@test
+fn mergeCombinesWhatBothHave() {
+    var a: [String: Int] = ["x": 1, "y": 2]
+    let b: [String: Int] = ["y": 10, "z": 20]
+    a.merge(b, uniquingKeysWith: { (mine: Int, theirs: Int) -> Int in mine + theirs })
+    assertEqual(a["x"] ?? -1, 1)
+    assertEqual(a["y"] ?? -1, 12)
+    assertEqual(a["z"] ?? -1, 20)
+    assert(a.keys() == ["x", "y", "z"])
+}
+
+@test
+fn mergingLeavesBothAsTheyWere() {
+    let a: [String: Int] = ["x": 1]
+    let b: [String: Int] = ["x": 5, "w": 2]
+    let both = a.merging(b, uniquingKeysWith: { (mine: Int, theirs: Int) -> Int in theirs })
+    assertEqual(both["x"] ?? -1, 5)
+    assertEqual(both["w"] ?? -1, 2)
+    assertEqual(a.count, 1)
+    assertEqual(a["x"] ?? -1, 1)
+}
+
+@test
+fn mapValuesKeepsTheKeysAndTheirOrder() {
+    var d: [String: Int] = ["a": 1, "b": 2, "c": 3]
+    d.remove("b")
+    let text = d.mapValues { (n: Int) -> String in "#\(n)" }
+    assertEqual(text.count, 2)
+    assertEqual(text["a"] ?? "", "#1")
+    assertEqual(text["c"] ?? "", "#3")
+    assert(text["b"] == none)
+    assert(text.keys() == ["a", "c"])
+}
+
+@test
+fn compactMapValuesDropsWhatMakesNothing() {
+    let d: [String: String] = ["one": "1", "two": "2", "many": "lots"]
+    let numbers = d.compactMapValues { (s: String) -> Int? in s.toInt() }
+    assertEqual(numbers.count, 2)
+    assertEqual(numbers["two"] ?? -1, 2)
+    assert(numbers["many"] == none)
+    assert(numbers.keys() == ["one", "two"])
+}
+
+@test
+fn filterKeepsWhatItSays() {
+    let d = squares(10)
+    let even = d.filter { (key: Int, value: Int) -> Bool in key % 2 == 0 }
+    assertEqual(even.count, 5)
+    assertEqual(even[4] ?? -1, 16)
+    assert(even[3] == none)
+}
+
+@test
+fn retainRemovesTheRest() {
+    var d = squares(10)
+    d.retain(where: { (key: Int, value: Int) -> Bool in value > 20 })
+    assert(d.keys() == [5, 6, 7, 8, 9])
+    d.retain(where: { (key: Int, value: Int) -> Bool in true })
+    assertEqual(d.count, 5)
+    d[10] = 100
+    assertEqual(d[10] ?? -1, 100)
+}
+
+// ---- Iteration ----------------------------------------------------------------
+
+@test
+fn iterationIsInTheOrderKeysWereAdded() {
+    var d: [String: Int] = [:]
+    d["c"] = 3
+    d["a"] = 1
+    d["b"] = 2
+    var seen: String[>..] = []
+    var total = 0
+    for (key, value) in d {
+        seen.append(key)
+        total = total + value
+    }
+    assert(seen == ["c", "a", "b"])
+    assertEqual(total, 6)
+}
+
+@test
+fn iterationPassesOverRemovedKeys() {
+    var d = squares(5)
+    d.remove(0)
+    d.remove(3)
+    var keys: Int[>..] = []
+    for (key, _) in d {
+        keys.append(key)
+    }
+    assert(keys == [1, 2, 4])
+    assert(d.values() == [1, 4, 16])
+}
+
+@test
+fn anIteratorGivesNoneAfterTheLast() {
+    let d: [Int: Int] = [1: 1]
+    var iterator = d.makeIterator()
+    assert(iterator.next() != none)
+    assert(iterator.next() == none)
+    assert(iterator.next() == none)
+}
+
+// ---- Hashing ------------------------------------------------------------------
+
+@bench
+fn insertingIntegers(_ b: Bencher) {
+    b.iterate(() => {
+        var d: [Int: Int] = [:]
+        var i = 0
+        while i < 1000 {
+            d[i * 7] = i
+            i = i + 1
+        }
+    })
+}
+
+@bench
+fn lookingUpStrings(_ b: Bencher) {
+    var d: [String: Int] = [:]
+    var i = 0
+    while i < 1000 {
+        d["key\(i)"] = i
+        i = i + 1
+    }
+    b.iterate(() => {
+        var sum = 0
+        var j = 0
+        while j < 1000 {
+            sum = sum + (d["key\(j)"] ?? 0)
+            j = j + 1
+        }
+    })
+}

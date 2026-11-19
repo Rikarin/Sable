@@ -217,3 +217,29 @@ SableString *sable_io_environment(const SableString *variable) {
     free(value);
     return result;
 }
+
+// ---- Traps and backtraces ------------------------------------------------
+
+// A trap the program asks for, with a message and place it made as it ran:
+// what fatalError and precondition stop with. An empty place is none.
+__attribute__((noinline)) _Noreturn void sable_trap_with(const SableString *message, const SableString *site) {
+    char place[512];
+    snprintf(place, sizeof place, "%.*s", (int)site->length, site->bytes);
+    trap_report(message->bytes, (int)message->length, site->length == 0 ? NULL : place, 3);
+}
+
+// The frames of the calls that led to the caller, a line of text each, the
+// caller's first (this function's own is left out): what
+// Backtrace.capture() holds.
+__attribute__((noinline)) SableArray *sable_backtrace_capture(void) {
+    void *frames[BACKTRACE_DEPTH];
+    int count = capture_frames(frames, BACKTRACE_DEPTH);
+    SableArray *lines = NULL;
+    for (int i = 1; i < count; i++) {
+        char text[600];
+        name_frame(frames[i], text, sizeof text);
+        *(SableString **)sable_array_append_slot(&lines, &string_array_metadata) = make_ctext(text);
+    }
+
+    return lines;
+}

@@ -1,0 +1,156 @@
+module OutcomeTests
+
+// Outcome (Sable.Core), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+alias Parsed = Outcome<Int, String>
+
+fn parse(_ text: String) throws(String) -> Int {
+    guard let n = text.toInt() else {
+        throw "'\(text)' is not a number"
+    }
+    return n
+}
+
+fn half(_ n: Int) -> Parsed {
+    return n % 2 == 0 ? .Ok(n / 2) : .Err("\(n) is odd")
+}
+
+@test
+fn aSuccessIsASuccess() {
+    let outcome: Parsed = .Ok(1)
+    assert(outcome.isSuccess)
+    assert(!outcome.isFailure)
+}
+
+@test
+fn aFailureIsAFailure() {
+    let outcome: Parsed = .Err("no")
+    assert(outcome.isFailure)
+    assert(!outcome.isSuccess)
+}
+
+@test
+fn okAndErrorGiveWhatItHolds() {
+    let good: Parsed = .Ok(5)
+    let bad: Parsed = .Err("no")
+    assertEqual(good.ok ?? -1, 5)
+    assert(good.error == none)
+    assert(bad.ok == none)
+    assertEqual(bad.error ?? "", "no")
+}
+
+@test
+fn catchingKeepsTheValue() {
+    let outcome = Parsed.catching({ try parse("12") })
+    assertEqual(outcome, Parsed.Ok(12))
+}
+
+@test
+fn catchingKeepsTheError() {
+    let outcome = Parsed.catching({ try parse("x") })
+    assertEqual(outcome, Parsed.Err("'x' is not a number"))
+}
+
+@test
+fn getGivesTheValueBack() {
+    let outcome: Parsed = .Ok(3)
+    let value = try outcome.get() catch { -1 }
+    assertEqual(value, 3)
+}
+
+@test
+fn getThrowsTheError() {
+    let outcome: Parsed = .Err("bad")
+    var caught = ""
+    do {
+        let value = try outcome.get()
+        print(value)
+    } catch {
+        caught = error
+    }
+    assertEqual(caught, "bad")
+}
+
+@test
+fn mapTransformsOnlyASuccess() {
+    assertEqual(half(4).map({ v in v * 10 }), Parsed.Ok(20))
+    assertEqual(half(3).map({ v in v * 10 }), Parsed.Err("3 is odd"))
+}
+
+@test
+fn mapErrorTransformsOnlyAFailure() {
+    assertEqual(half(4).mapError({ e in e.count }), Outcome<Int, Int>.Ok(2))
+    assertEqual(half(3).mapError({ e in e.count }), Outcome<Int, Int>.Err(8))
+}
+
+@test
+fn flatMapChainsStepsThatCanFail() {
+    assertEqual(half(8).flatMap(half), Parsed.Ok(2))
+    assertEqual(half(6).flatMap(half), Parsed.Err("3 is odd"))
+    assertEqual(half(5).flatMap(half), Parsed.Err("5 is odd"))
+}
+
+@test
+fn unwrapOrGivesTheFallbackForAFailure() {
+    assertEqual(half(4).unwrap(or: -1), 2)
+    assertEqual(half(3).unwrap(or: -1), -1)
+}
+
+@test
+fn unwrapOrElseMakesTheFallbackFromTheError() {
+    assertEqual(half(4).unwrap(orElse: { e in e.count }), 2)
+    assertEqual(half(3).unwrap(orElse: { e in e.count }), 8)
+}
+
+@test
+fn expectGivesASuccessValue() {
+    assertEqual(half(10).expect("even"), 5)
+}
+
+@test(traps: "it must be even")
+fn expectOfAFailureStopsWithTheMessage() {
+    print(half(7).expect("it must be even"))
+}
+
+@test
+fn outcomesAreEqualByCaseAndContents() {
+    assert(half(4) == half(4))
+    assert(half(4) != half(6))
+    assert(half(3) == half(3))
+    assert(half(3) != half(5))
+    assert(half(4) != Parsed.Err("2"))
+    assert(Parsed.Err("2") != half(4))
+}
+
+@test
+fn successesOrderBeforeFailures() {
+    assert(half(4) < half(6))
+    assert(!(half(6) < half(4)))
+    assert(half(100) < half(1))
+    assert(!(half(1) < half(100)))
+    assert(half(1) < half(3))
+}
+
+@test
+fn equalOutcomesHashAlike() {
+    assertEqual(hashOf(half(4)), hashOf(half(4)))
+    assertEqual(hashOf(half(3)), hashOf(half(3)))
+    let ok: Outcome<Int, Int> = .Ok(7)
+    let err: Outcome<Int, Int> = .Err(7)
+    assertNotEqual(hashOf(ok), hashOf(err))
+}
+
+@test
+fn debugDescriptionIsWrittenAsSource() {
+    assertEqual(half(4).debugDescription(), ".Ok(2)")
+    assertEqual(half(3).debugDescription(), ".Err(\"3 is odd\")")
+}
+
+fn hashOf<T: Hashable>(_ value: T) -> Int {
+    var hasher = Hasher()
+    value.hash(into: &hasher)
+    return hasher.finalize()
+}

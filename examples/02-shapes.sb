@@ -116,8 +116,8 @@ fn resolve(_ d: Dimension, relativeTo parent: F64) -> F64 {
         return d // narrowed to F64
     }
     if d is String {
-        guard hasSuffix(d, "%") else { return 0 } // narrowed to String
-        let pct = removingSuffix(d, "%").toF64() ?? 0
+        guard d.hasSuffix("%") else { return 0 } // narrowed to String
+        let pct = d.trimmingSuffix("%").toF64() ?? 0
         return parent * pct / 100
     }
     return 0

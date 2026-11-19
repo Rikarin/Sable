@@ -1532,6 +1532,11 @@ public sealed partial class SilGen {
             return substitution.Apply(array);
         }
 
+        // An optional's member: self is the optional, of what it wraps.
+        if (owner.ExtendedOptional is { } optional) {
+            return substitution.Apply(optional);
+        }
+
         return owner.TypeParameters.IsEmpty
             ? owner
             : owner.Construct([..owner.TypeParameters.Select(p => substitution.Apply(p))]);
@@ -1617,7 +1622,9 @@ public sealed partial class SilGen {
             return SilType.Char;
         }
 
-        if (type.Equals(Core.Void)) {
+        // Never has no values: what gives it never returns, so it is laid
+        // out as nothing at all, and a call to it is followed by 'unreachable'.
+        if (type.Equals(Core.Void) || type.Equals(Core.Never)) {
             return SilType.Unit;
         }
 
@@ -1654,18 +1661,6 @@ public sealed partial class SilGen {
                 return Lower(array.ElementType) is { } elementType && elementType is not NominalType { IsNoncopyable: true }
                     ? array.ArrayKind == ArrayKind.Slice ? new SliceType(elementType) : new ArrayType(elementType)
                     : null;
-
-            // A dictionary, until Sable.Core writes one: its entries, in an
-            // array, with the key type's equality — a builtin, or its '=='.
-            case NamedTypeSymbol { TypeArguments: [var key, var value] } named when named.OriginalDefinition.Equals(Core.Dictionary): {
-                if (Lower(key) is not { } keyType || Lower(value) is not { } valueType) {
-                    return null;
-                }
-
-                return SilBuiltins.Find($"cmp_eq_{keyType}") is null && KeyEquality(key) is null
-                    ? null
-                    : new ArrayType(SilType.Tuple([keyType, valueType]));
-            }
 
             // 'any Error': an object, which each error type boxes itself in.
             case ExistentialTypeSymbol { Constraint: var constraint } when constraint.Equals(Core.Error):
@@ -2564,156 +2559,6 @@ public sealed partial class SilGen {
 
         _module.Add(thunk);
         return thunkName;
-    }
-
-    /// <summary>
-    ///     The '==' a dictionary compares keys of a type with, when its
-    ///     equality is not a builtin: the operator the type declares or
-    ///     '@derive' gave it, as the binder would find for 'a == b'.
-    /// </summary>
-    static FunctionSymbol? KeyEquality(TypeSymbol key) =>
-        key is NamedTypeSymbol named
-            ? named.OriginalDefinition.Members.OfType<FunctionSymbol>().FirstOrDefault(static f =>
-                f is { FunctionKind: FunctionKind.Operator, Fixity: OperatorFixity.Infix, Name: "==", Parameters.Length: 2 })
-            : null;
-
-    /// <summary>The SIL function a key type's '==' is, for its construction; null when it cannot be had.</summary>
-    internal (string Name, FunctionType Type)? KeyEqualityFunction(TypeSymbol key, SyntaxNode at) {
-        if (KeyEquality(key) is not { } equality) {
-            return null;
-        }
-
-        if (IsGeneric(equality)) {
-            return Instance(equality, TypeSubstitution.For(key), at);
-        }
-
-        if (!_names.TryGetValue(equality, out var name)) {
-            return null;
-        }
-
-        return (_module.Find(name)?.Type ?? SignatureOf(equality, at, TypeSubstitution.Empty)) is { } type ? (name, type) : null;
-    }
-
-    /// <summary>The functions a dictionary of these entries is read and written with: get, set and remove.</summary>
-    /// <remarks>
-    ///     Each looks for the key from the front, comparing with the key
-    ///     type's builtin equality, or else with its <paramref name="equality" />:
-    ///     linear, and a stand-in until Sable.Core has a dictionary of its own
-    ///     that hashes.
-    /// </remarks>
-    internal (string Get, string Set, string Remove) DictionaryFunctions(ArrayType entries, EnumType optional, (string Name, FunctionType Type)? equality = null) {
-        var tuple = (TupleType)entries.Element;
-        var (key, value) = (tuple.Elements[0], tuple.Elements[1]);
-        var stem = Sanitise(entries.ToString());
-        var names = ($"$dictionary.get${stem}", $"$dictionary.set${stem}", $"$dictionary.remove${stem}");
-        if (_module.Find(names.Item1) is not null) {
-            return names;
-        }
-
-        var equal = $"cmp_eq_{key}";
-        SilValue Copy(SilBlock block, SilValue v) => v.Type.IsTrivial ? v : block.Append(new CopyValueInst(v));
-        void Destroy(SilBlock block, SilValue v) {
-            if (!v.Type.IsTrivial) {
-                block.Append(new DestroyValueInst(v));
-            }
-        }
-
-        SilValue Count(SilBlock block, SilValue array) => block.Append(new BuiltinInst("array_count", SilType.Int, array));
-        SilValue One(SilBlock block) => block.Append(new IntegerLiteralInst(SilType.Int, 1));
-
-        // A loop over the indices, calling 'found' where the key is, and
-        // 'missing' after the last; 'read' gives the array to look in.
-        void Search(SilFunction function, SilBlock entry, SilValue searched, bool byAddress, Action<SilBlock, SilValue, SilValue?> found, Action<SilBlock> missing) {
-            var header = function.AddBlock();
-            var index = header.AddArgument(SilType.Int);
-            var test = function.AddBlock();
-            var hit = function.AddBlock();
-            var next = function.AddBlock();
-            var end = function.AddBlock();
-            entry.Append(new BranchInst(header, entry.Append(new IntegerLiteralInst(SilType.Int, 0))));
-
-            // The entries are borrowed, never copied: a load_borrow of the
-            // address for each look, an element read in place.
-            var counted = byAddress ? header.Append(new LoadBorrowInst(searched)) : searched;
-            var count = Count(header, counted);
-            if (byAddress) {
-                header.Append(new EndBorrowInst(counted));
-            }
-
-            header.Append(new CondBranchInst(header.Append(new BuiltinInst("cmp_lt_Int", SilType.Bool, index, count)), test, [], end, []));
-
-            var array = byAddress ? test.Append(new LoadBorrowInst(searched)) : searched;
-            var element = test.Append(new BuiltinInst("array_get_borrowed", tuple, array, index));
-            var stored = test.Append(new TupleExtractInst(element, 0));
-            SilValue same = equality is { } byOperator
-                ? test.Append(new ApplyInst(test.Append(new FunctionRefInst(byOperator.Name, byOperator.Type)), SilType.Bool, stored, function.Entry.Arguments[1]))
-                : test.Append(new BuiltinInst(equal, SilType.Bool, stored, function.Entry.Arguments[1]));
-            if (byAddress) {
-                test.Append(new EndBorrowInst(array));
-            }
-
-            test.Append(new CondBranchInst(same, hit, [], next, []));
-            found(hit, index, byAddress ? null : element);
-
-            next.Append(new BranchInst(header, next.Append(new BuiltinInst("add_Int", SilType.Int, index, One(next)))));
-            missing(end);
-        }
-
-        // get(entries, key) -> Value?
-        var get = new SilFunction(names.Item1, new FunctionType([entries, key], optional));
-        var getEntry = get.AddBlock();
-        var getEntries = getEntry.AddArgument(entries);
-        getEntry.AddArgument(key);
-        Search(get, getEntry, getEntries, false,
-            (hit, _, element) => {
-                var found = Copy(hit, hit.Append(new TupleExtractInst(element!, 1)));
-                hit.Append(new ReturnInst(hit.Append(new EnumInst(optional, optional.CaseIndex("Some"), found))));
-            },
-            end => end.Append(new ReturnInst(end.Append(new EnumInst(optional, optional.CaseIndex("None"), null)))));
-        _module.Add(get);
-
-        // set(&entries, key, value): replaces the entry with the key, or adds one.
-        var set = new SilFunction(names.Item2, new FunctionType([SilType.Address(entries), key, value], SilType.Unit));
-        var setEntry = set.AddBlock();
-        var setAddress = setEntry.AddArgument(SilType.Address(entries));
-        var setKey = setEntry.AddArgument(key);
-        var setValue = setEntry.AddArgument(value);
-        Search(set, setEntry, setAddress, true,
-            (hit, index, _) => {
-                var pair = hit.Append(new TupleInst(tuple, Copy(hit, setKey), Copy(hit, setValue)));
-                hit.Append(new BuiltinInst("array_set", SilType.Unit, setAddress, index, pair));
-                hit.Append(new ReturnInst(null));
-            },
-            end => {
-                var pair = end.Append(new TupleInst(tuple, Copy(end, setKey), Copy(end, setValue)));
-                end.Append(new BuiltinInst("array_append", SilType.Unit, setAddress, pair));
-                end.Append(new ReturnInst(null));
-            });
-        _module.Add(set);
-
-        // remove(&entries, key): the last entry takes the removed one's place.
-        var remove = new SilFunction(names.Item3, new FunctionType([SilType.Address(entries), key], SilType.Unit));
-        var removeEntry = remove.AddBlock();
-        var removeAddress = removeEntry.AddArgument(SilType.Address(entries));
-        removeEntry.AddArgument(key);
-        Search(remove, removeEntry, removeAddress, true,
-            (hit, index, _) => {
-                var last = hit.Append(new BuiltinInst("array_remove_last", tuple, removeAddress));
-                var after = hit.Append(new LoadInst(removeAddress));
-                var remaining = Count(hit, after);
-                Destroy(hit, after);
-                var wasLast = remove.AddBlock();
-                var move = remove.AddBlock();
-                hit.Append(new CondBranchInst(hit.Append(new BuiltinInst("cmp_eq_Int", SilType.Bool, index, remaining)), wasLast, [], move, []));
-                Destroy(wasLast, last);
-                wasLast.Append(new ReturnInst(null));
-                move.Append(new BuiltinInst("array_set", SilType.Unit, removeAddress, index, last));
-                move.Append(new ReturnInst(null));
-            },
-            end => end.Append(new ReturnInst(null)));
-        _module.Add(remove);
-
-        return names;
     }
 
     /// <summary>What an existential of each protocol holds, in order after its box: each requirement's slot and member.</summary>
@@ -4807,11 +4652,6 @@ public sealed partial class SilGen {
                     ForArray(loop);
                     return;
 
-                // A dictionary's entries are an array of key and value pairs.
-                case BoundForEach loop when IsDictionary(loop.Sequence.Type):
-                    ForArray(loop);
-                    return;
-
                 case BoundBreak jump when FindLoop(jump.Label) is { } breakLoop:
                     DestroyTemporaries(breakLoop.Temporaries);
                     RunDefers(breakLoop.Scopes);
@@ -6180,8 +6020,18 @@ public sealed partial class SilGen {
                 case BoundTry tryExpression:
                     return Try(tryExpression);
 
-                case BoundCall call:
-                    return Call(call);
+                case BoundCall call: {
+                    var result = Call(call);
+
+                    // A call to a function that gives Never does not come back:
+                    // nothing after it runs.
+                    if (result is not null && _current is not null && Sub(call.Type).Equals(Core.Never)) {
+                        Jump(new UnreachableInst());
+                        return UnitValue.Instance;
+                    }
+
+                    return result;
+                }
 
                 default:
                     return Missing(expression, $"the expression '{Describe(expression.Syntax)}' ({expression.GetType().Name}{(expression is BoundConversion c ? " " + c.ConversionKind : "")})");
@@ -6412,13 +6262,6 @@ public sealed partial class SilGen {
 
             Hold(value);
 
-            // 'd[k] = v' sets; 'd[k] = none' removes.
-            if (assignment.Target is BoundIndexAccess { Indices: [var keyExpression] } dictionaryAccess
-                && IsDictionary(dictionaryAccess.Receiver.Type)) {
-                Unhold(value);
-                return DictionaryStore(dictionaryAccess, keyExpression, value);
-            }
-
             // 'a[i] = v': the array, made unique, takes the value.
             if (assignment.Target is BoundIndexAccess { Indices: [var indexExpression] } indexAccess
                 && Sub(indexAccess.Receiver.Type) is ArrayTypeSymbol) {
@@ -6536,89 +6379,28 @@ public sealed partial class SilGen {
                     };
         }
 
-        bool IsDictionary(TypeSymbol type) => Sub(type) is NamedTypeSymbol named && named.OriginalDefinition.Equals(Core.Dictionary);
-
-        (string Get, string Set, string Remove)? Dictionary(TypeSymbol type, BoundNode at) {
-            var named = (NamedTypeSymbol)Sub(type);
-            if (LowerType(named) is not ArrayType entries || LowerType(new OptionalTypeSymbol(named.TypeArguments[1])) is not EnumType optional) {
-                Missing(at, $"a dictionary of type '{named.ToDisplayString()}'");
-                return null;
-            }
-
-            var key = named.TypeArguments[0];
-            if (SilBuiltins.Find($"cmp_eq_{((TupleType)entries.Element).Elements[0]}") is not null) {
-                return generator.DictionaryFunctions(entries, optional);
-            }
-
-            if (generator.KeyEqualityFunction(Sub(key), at.Syntax) is not { } equality) {
-                Missing(at, $"comparing keys of type '{key.ToDisplayString()}'");
-                return null;
-            }
-
-            return generator.DictionaryFunctions(entries, optional, equality);
-        }
-
-        /// <summary>Stores an optional value under a key: set when it holds one, remove when it is none.</summary>
-        SilValue? DictionaryStore(BoundIndexAccess target, BoundExpression keyExpression, SilValue value) {
-            if (Dictionary(target.Receiver.Type, target) is not { } functions) {
-                return null;
-            }
-
-            Hold(value);
-            var ends = new List<SilValue>();
-            if (Address(target.Receiver, ends) is not { } address || Borrow(keyExpression) is not { } key) {
-                return null;
-            }
-
-            var optional = (EnumType)value.Type;
-            var setType = generator._module.Find(functions.Set)!.Type;
-            var removeType = generator._module.Find(functions.Remove)!.Type;
-            var present = function.AddBlock();
-            var payload = Payload(present, optional.Cases[optional.CaseIndex("Some")].Payload!);
-            var absent = function.AddBlock();
-            var after = function.AddBlock();
-            Jump(new SwitchEnumInst(value, [(optional.CaseIndex("Some"), present)], absent));
-
-            _current = present;
-            Emit(new ApplyInst(Emit(new FunctionRefInst(functions.Set, setType)), SilType.Unit, address, key, payload));
-            Branch(after);
-
-            _current = absent;
-            Emit(new ApplyInst(Emit(new FunctionRefInst(functions.Remove, removeType)), SilType.Unit, address, key));
-            Branch(after);
-
-            _current = after;
-            End(key);
-            End(value);
-            EndAll(ends);
-            return UnitValue.Instance;
-        }
-
-        /// <summary><c>["a": 1]</c>: an empty dictionary in a slot of its own, each entry set, then taken out.</summary>
+        /// <summary>
+        ///     <c>["a": 1]</c>: <c>Dictionary(dictionaryLiteral: [("a", 1)])</c>,
+        ///     the entries in an array that the initialiser adds in order, a
+        ///     later one with a key already there replacing it; <c>[:]</c>
+        ///     the same with none.
+        /// </summary>
         SilValue? DictionaryLiteral(BoundDictionary dictionary) {
-            if (Dictionary(dictionary.Type, dictionary) is not { } functions || LowerType(dictionary.Type) is not ArrayType entries) {
-                return null;
+            if (Sub(dictionary.Type) is not NamedTypeSymbol { TypeArguments: [var key, var value] } type
+                || type.OriginalDefinition.GetMembers("init").OfType<FunctionSymbol>()
+                    .FirstOrDefault(static f => f.Parameters is [{ Label: "dictionaryLiteral" }]) is not { } initializer) {
+                return Missing(dictionary, $"a dictionary of type '{Sub(dictionary.Type).ToDisplayString()}'");
             }
 
-            var empty = Emit(new BuiltinInst("array_empty", entries));
-            if (dictionary.Entries.IsEmpty) {
-                return empty;
-            }
-
-            var slot = NewSlot(entries);
-            Emit(new StoreInst(empty, slot, StoreKind.Assign));
-            var setType = generator._module.Find(functions.Set)!.Type;
-            foreach (var (keyExpression, valueExpression) in dictionary.Entries) {
-                if (Evaluate([keyExpression, valueExpression]) is not [var key, var value]) {
-                    return null;
-                }
-
-                Emit(new ApplyInst(Emit(new FunctionRefInst(functions.Set, setType)), SilType.Unit, slot, key, value));
-                Destroy(value);
-                Destroy(key);
-            }
-
-            return Emit(new LoadInst(slot, LoadKind.Take));
+            var pair = new TupleTypeSymbol([key, value], [null, null]);
+            var entries = new BoundArray(
+                dictionary.Syntax,
+                new ArrayTypeSymbol(pair, ArrayKind.Grow),
+                [..dictionary.Entries.Select(e => (BoundExpression)new BoundTuple(e.Key.Syntax, pair, [e.Key, e.Value]))]
+            );
+            return Expression(new BoundCall(dictionary.Syntax, null, initializer, [entries], type) {
+                Substitution = TypeSubstitution.For(type)
+            });
         }
 
         /// <summary>
@@ -7774,24 +7556,6 @@ public sealed partial class SilGen {
 
             if (IsInlineArray(index.Receiver)) {
                 return InlineRead(index);
-            }
-
-            if (IsDictionary(index.Receiver.Type) && index.Indices is [var keyExpression]) {
-                if (Dictionary(index.Receiver.Type, index) is not { } functions
-                    || Borrow(index.Receiver) is not { Type: ArrayType } entries) {
-                    return null;
-                }
-
-                if (Borrow(keyExpression) is not { } key) {
-                    End(entries);
-                    return null;
-                }
-
-                var type = generator._module.Find(functions.Get)!.Type;
-                var found = Emit(new ApplyInst(Emit(new FunctionRefInst(functions.Get, type)), type.Result, entries, key));
-                End(key);
-                End(entries);
-                return found;
             }
 
             if (Sub(index.Receiver.Type) is not ArrayTypeSymbol || index.Indices is not [var indexExpression]) {
@@ -9242,6 +9006,7 @@ public sealed partial class SilGen {
                     : null;
             var receiver = receiverOf is null ? TypeSubstitution.Empty
                 : OwnerOf(callee) is { ExtendedArray: not null } carrier ? Compilation.MatchArray(carrier, receiverOf) ?? TypeSubstitution.Empty
+                : OwnerOf(callee) is { ExtendedOptional: not null } && receiverOf is OptionalTypeSymbol optional ? TypeSubstitution.For(Core.Optional.Construct([optional.UnderlyingType]))
                 : TypeSubstitution.For(receiverOf is NamedTypeSymbol named && ConstructedOwner(named, callee) is { } owner ? owner : receiverOf);
             // A local function sees the type parameters around it as this
             // instance has them.

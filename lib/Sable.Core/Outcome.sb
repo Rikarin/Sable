@@ -1,0 +1,173 @@
+module Sable.Core
+
+/// A success holding a value, or a failure holding an error: what a call
+/// that can fail gives when the failure is to be kept, passed on or
+/// inspected rather than thrown (SYNTAX.md §9). Swift's Result, Rust's
+/// Result.
+///
+/// ```sable
+/// fn half(_ n: Int) -> Outcome<Int, String> {
+///     return n % 2 == 0 ? .Ok(n / 2) : .Err("\(n) is odd")
+/// }
+/// assert(half(4).ok == 2)
+/// assert(half(3).error == "3 is odd")
+/// ```
+public union Outcome<T, E> {
+    Ok(T)
+    Err(E)
+
+    /// The outcome of running the body: its value, or the error it threw.
+    ///
+    /// ```sable
+    /// fn parse(_ s: String) throws(String) -> Int {
+    ///     guard let n = s.toInt() else { throw "not a number" }
+    ///     return n
+    /// }
+    /// assert(Outcome.catching({ try parse("12") }).ok == 12)
+    /// ```
+    public static fn catching(_ body: () throws(E) -> T) -> Outcome<T, E> {
+        do {
+            return .Ok(try body())
+        } catch {
+            return .Err(error)
+        }
+    }
+
+    /// Whether it is a success.
+    public var isSuccess: Bool => match self {
+        case .Ok(_)  => true
+        case .Err(_) => false
+    }
+
+    /// Whether it is a failure.
+    public var isFailure: Bool => !self.isSuccess
+
+    /// The value, when it is a success; none otherwise.
+    public var ok: T? => match self {
+        case .Ok(let value) => value
+        case .Err(_)        => none
+    }
+
+    /// The error, when it is a failure; none otherwise.
+    public var error: E? => match self {
+        case .Ok(_)          => none
+        case .Err(let error) => error
+    }
+
+    /// The value, or the error thrown: from an outcome back to 'try'.
+    public fn get() throws(E) -> T {
+        match self {
+            case .Ok(let value)  => { return value }
+            case .Err(let error) => { throw error }
+        }
+    }
+
+    /// A success's value transformed; a failure as it is.
+    public fn map<U>(_ transform: (T) -> U) -> Outcome<U, E> {
+        return match self {
+            case .Ok(let value)  => .Ok(transform(value))
+            case .Err(let error) => .Err(error)
+        }
+    }
+
+    /// A failure's error transformed; a success as it is.
+    public fn mapError<F>(_ transform: (E) -> F) -> Outcome<T, F> {
+        return match self {
+            case .Ok(let value)  => .Ok(value)
+            case .Err(let error) => .Err(transform(error))
+        }
+    }
+
+    /// A success's value given to the next step that can fail, whose
+    /// outcome it becomes; a failure as it is.
+    public fn flatMap<U>(_ transform: (T) -> Outcome<U, E>) -> Outcome<U, E> {
+        return match self {
+            case .Ok(let value)  => transform(value)
+            case .Err(let error) => .Err(error)
+        }
+    }
+
+    /// The value, or the fallback when it is a failure.
+    public fn unwrap(or fallback: T) -> T {
+        return match self {
+            case .Ok(let value) => value
+            case .Err(_)        => fallback
+        }
+    }
+
+    /// The value, or what the closure makes of the error when it is a failure.
+    public fn unwrap(orElse makeFallback: (E) -> T) -> T {
+        return match self {
+            case .Ok(let value)  => value
+            case .Err(let error) => makeFallback(error)
+        }
+    }
+
+    /// The value; a failure stops the program with the message, at the
+    /// caller's line.
+    public fn expect(_ message: String, file: String = #file, line: Int = #line, column: Int = #column) -> T {
+        return match self {
+            case .Ok(let value) => value
+            case .Err(_)        => Runtime.trap(message, trapSite(file, line, column))
+        }
+    }
+}
+
+extension Outcome: Equatable where T: Equatable, E: Equatable {
+    /// Both successes with equal values, or both failures with equal errors.
+    public operator == (lhs: Outcome<T, E>, rhs: Outcome<T, E>) -> Bool {
+        return match lhs {
+            case .Ok(let a) => match rhs {
+                case .Ok(let b) => a == b
+                case .Err(_)    => false
+            }
+            case .Err(let a) => match rhs {
+                case .Ok(_)      => false
+                case .Err(let b) => a == b
+            }
+        }
+    }
+}
+
+extension Outcome: Hashable where T: Hashable, E: Hashable {
+    /// Which case it is, then the value or the error: a success and a
+    /// failure holding equal values do not hash alike.
+    public fn hash(into hasher: inout Hasher) {
+        match self {
+            case .Ok(let value) => {
+                hasher.combine(0)
+                hasher.combine(value)
+            }
+            case .Err(let error) => {
+                hasher.combine(1)
+                hasher.combine(error)
+            }
+        }
+    }
+}
+
+extension Outcome: Comparable where T: Comparable, E: Comparable {
+    /// Successes first, as Rust orders them; then by value, or by error.
+    public operator < (lhs: Outcome<T, E>, rhs: Outcome<T, E>) -> Bool {
+        return match lhs {
+            case .Ok(let a) => match rhs {
+                case .Ok(let b) => a < b
+                case .Err(_)    => true
+            }
+            case .Err(let a) => match rhs {
+                case .Ok(_)      => false
+                case .Err(let b) => a < b
+            }
+        }
+    }
+}
+
+extension Outcome: Debug where T: Debug, E: Debug {
+    /// As source writes it: '.Ok(1)', '.Err("bad")'.
+    public fn debugDescription() -> String {
+        return match self {
+            case .Ok(let value)  => ".Ok(\(value.debugDescription()))"
+            case .Err(let error) => ".Err(\(error.debugDescription()))"
+        }
+    }
+}

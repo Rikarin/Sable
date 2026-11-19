@@ -2756,6 +2756,7 @@ public sealed partial class Binder {
                 closure,
                 closure.CaptureList,
                 closure.Signature.Parameters,
+                closure.Signature.ThrowsSpec,
                 closure.Signature.ReturnType,
                 closure.Body,
                 expectedType,
@@ -5971,6 +5972,7 @@ public sealed partial class Binder {
             syntax,
             syntax.CaptureList,
             syntax.Header?.Parameters ?? default,
+            syntax.Header?.ThrowsSpec,
             syntax.Header?.ReturnType,
             syntax,
             expectedType,
@@ -5990,6 +5992,7 @@ public sealed partial class Binder {
         ExpressionSyntax syntax,
         CaptureListSyntax? captureList,
         SeparatedSyntaxList<ClosureParameterSyntax> declared,
+        ThrowsSpecSyntax? throwsSpec,
         TypeSyntax? returnTypeSyntax,
         SyntaxNode body,
         TypeSymbol? expectedType,
@@ -6008,7 +6011,11 @@ public sealed partial class Binder {
         // A closure passed where '() throws -> T' is wanted may throw. Where
         // the error type is the call's to infer, '() throws(E) -> T', it may
         // throw anything, and what it does throw is what E becomes.
-        var thrown = expected?.ThrownType is { } open && IsOpen(open) ? Core.AnyError : expected?.ThrownType;
+        // One that says what it throws, 'throws(ParseError)', throws that,
+        // whatever its body does; bare 'throws' is 'throws(any Error)'.
+        var declaredThrown = BindClosureThrows(throwsSpec, symbol);
+        var thrown = declaredThrown
+            ?? (expected?.ThrownType is { } open && IsOpen(open) ? Core.AnyError : expected?.ThrownType);
         symbol.ThrownTypeResolver = () => thrown;
 
         // Captures are bound in the enclosing scope, before the closure's own
@@ -6086,10 +6093,34 @@ public sealed partial class Binder {
             [..symbol.Parameters.Select(static p => p.Type)],
             symbol.ReturnType,
             symbol.IsAsync,
-            _closureThrows
+            declaredThrown ?? _closureThrows
         ) { InOutParameters = FunctionTypeSymbol.InOutOf(symbol.Parameters.Select(static p => p.Modifier == ParameterModifier.InOut)) };
 
         return Record(syntax, new BoundClosure(syntax, type, symbol, captures, bound));
+    }
+
+    /// <summary>
+    ///     What a closure's header says it throws, or null when it says
+    ///     nothing. A closure does not rethrow: what it throws is in its type.
+    /// </summary>
+    TypeSymbol? BindClosureThrows(ThrowsSpecSyntax? spec, FunctionSymbol closure) {
+        if (spec is null) {
+            return null;
+        }
+
+        if (spec.ThrowsKeyword.Kind == SyntaxKind.RethrowsKeyword) {
+            _diagnostics.Error(
+                ErrorCode.ERR_ClosureRethrows,
+                spec.Span,
+                "a closure does not rethrow: write 'throws(E)' for the error it throws, "
+                + "or leave it out and let its body say"
+            );
+            return null;
+        }
+
+        return spec.ErrorType is { } errorType
+            ? _compilation.TypeBinder.BindType(errorType, closure, _scope)
+            : Core.AnyError;
     }
 
     /// <summary>Binds a closure's body with its parameters in scope.</summary>

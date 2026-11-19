@@ -2040,10 +2040,14 @@ internal sealed class Parser {
             } else if (kind is SyntaxKind.CloseParenToken) {
                 depth--;
                 if (depth == 0) {
-                    // '=>' is the body; '->' is a written return type, and no
-                    // expression can follow a parenthesised one with an arrow.
+                    // '=>' is the body; '->' is a written return type, and
+                    // 'throws' what it throws: no expression can follow a
+                    // parenthesised one with either.
                     return Peek(offset + 1).Kind
-                        is SyntaxKind.FatArrowToken or SyntaxKind.ArrowToken;
+                        is SyntaxKind.FatArrowToken
+                        or SyntaxKind.ArrowToken
+                        or SyntaxKind.ThrowsKeyword
+                        or SyntaxKind.RethrowsKeyword;
                 }
             } else if (kind is SyntaxKind.EndOfFile) {
                 return false;
@@ -2100,6 +2104,7 @@ internal sealed class Parser {
                 GreenList.Create([new ClosureParameterGreen(EatIdentifier(), null, null, null)]),
                 null,
                 null,
+                null,
                 null
             );
         }
@@ -2108,6 +2113,7 @@ internal sealed class Parser {
                 var open = EatToken(SyntaxKind.OpenParenToken);
                 var parameters = ParseSeparatedList(SyntaxKind.CloseParenToken, ParseClosureParameter);
                 var close = EatToken(SyntaxKind.CloseParenToken);
+                var throwsSpec = ParseThrowsSpecOrNull();
 
                 GreenToken? arrow = null;
                 GreenNode? returnType = null;
@@ -2116,7 +2122,7 @@ internal sealed class Parser {
                     returnType = ParseType();
                 }
 
-                return new ClosureSignatureGreen(open, parameters, close, arrow, returnType);
+                return new ClosureSignatureGreen(open, parameters, close, throwsSpec, arrow, returnType);
             }
         );
     }
@@ -2179,6 +2185,8 @@ internal sealed class Parser {
                 case SyntaxKind.RefKeyword:
                 case SyntaxKind.InoutKeyword:
                 case SyntaxKind.CapitalSelfKeyword:
+                case SyntaxKind.ThrowsKeyword:
+                case SyntaxKind.RethrowsKeyword:
                     continue;
 
                 default:
@@ -2195,6 +2203,8 @@ internal sealed class Parser {
         var items = ImmutableArray.CreateBuilder<GreenNode>();
         while (!At(SyntaxKind.InKeyword)
                && !At(SyntaxKind.ArrowToken)
+               && !At(SyntaxKind.ThrowsKeyword)
+               && !At(SyntaxKind.RethrowsKeyword)
                && !At(SyntaxKind.CloseParenToken)
                && !At(SyntaxKind.EndOfFile)) {
             items.Add(ParseClosureParameter());
@@ -2207,6 +2217,7 @@ internal sealed class Parser {
         }
 
         var close = open is null ? null : TryEatToken(SyntaxKind.CloseParenToken);
+        var throwsSpec = ParseThrowsSpecOrNull();
 
         GreenToken? arrow = null;
         GreenNode? returnType = null;
@@ -2216,7 +2227,7 @@ internal sealed class Parser {
         }
 
         var inKeyword = EatToken(SyntaxKind.InKeyword);
-        return new ClosureHeaderGreen(open, GreenList.Create(items.ToImmutable()), close, arrow, returnType, inKeyword);
+        return new ClosureHeaderGreen(open, GreenList.Create(items.ToImmutable()), close, throwsSpec, arrow, returnType, inKeyword);
     }
 
     // =======================================================================

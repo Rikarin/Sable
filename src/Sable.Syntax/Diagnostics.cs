@@ -263,6 +263,7 @@ public enum ErrorCode {
     ERR_FormatKindNotForType = 3661,
     ERR_FormatOptionNotForType = 3662,
     ERR_FormatSpecNeedsFormattable = 3663,
+    ERR_ClosureRethrows = 3664,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------
     ERR_PatternTypeMismatch = 6000,

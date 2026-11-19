@@ -1188,6 +1188,12 @@ withLock(mutex) {
     counter += 1
 }
 
+// What a closure throws is what its body throws, unless it says: 'throws(E)'
+// as a function's, or bare 'throws' for 'throws(any Error)'. Never
+// 'rethrows': a closure's type says what it throws.
+let parse = { (s: String) throws(ParseError) -> Int in try Int.parse(s) }
+let check = (s: String) throws(ParseError) => try validate(s)
+
 // After the first trailing closure, more, each with its parameter's label,
 // starting on the line the one before ends on
 attempt {

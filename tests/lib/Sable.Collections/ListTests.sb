@@ -1,0 +1,334 @@
+module ListTests
+
+// List (Sable.Collections), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Collections
+
+import Sable.Collections
+import Sable.Testing
+
+fn isEven(_ x: Int) -> Bool {
+    return x % 2 == 0
+}
+
+@test
+fn anEmptyListHasNothing() {
+    let list = List<Int>()
+    assertEqual(list.count, 0)
+    assert(list.isEmpty)
+    assert(list.first == none)
+    assert(list.last == none)
+    assertEqual(list.toArray().count, 0)
+}
+
+@test
+fn aListOfElementsKeepsTheirOrder() {
+    let list = List<String>(["a", "b", "c"])
+    assertEqual(list.count, 3)
+    assert(!list.isEmpty)
+    assertEqual(list[0], "a")
+    assertEqual(list.first ?? "", "a")
+    assertEqual(list.last ?? "", "c")
+    assert(list.toArray() == ["a", "b", "c"])
+}
+
+@test
+fn aListOfASliceHoldsItsRun() {
+    let xs: Int[>..] = [1, 2, 3, 4]
+    let list = List<Int>(xs[1..<3])
+    assert(list.toArray() == [2, 3])
+}
+
+@test
+fn aListAndTheArrayItWasMadeFromAreIndependentValues() {
+    var xs: Int[>..] = [1, 2, 3]
+    var list = List<Int>(xs)
+    list[0] = 9
+    xs[1] = 8
+    assert(xs == [1, 8, 3])
+    assert(list.toArray() == [9, 2, 3])
+}
+
+@test
+fn copiesOfAListAreIndependentValues() {
+    var a = List<Int>([1, 2])
+    let b = a
+    a.append(3)
+    a[0] = 0
+    assert(a.toArray() == [0, 2, 3])
+    assert(b.toArray() == [1, 2])
+}
+
+@test
+fn capacityIsRoomBeforeGrowing() {
+    var list = List<Int>(capacity: 50)
+    assert(list.capacity >= 50)
+    assertEqual(list.count, 0)
+    list.reserveCapacity(200)
+    assert(list.capacity >= 200)
+    list.append(1)
+    assertEqual(list.count, 1)
+}
+
+@test
+fn subscriptReadsAndWrites() {
+    var list = List<Int>([1, 2, 3])
+    list[1] = 20
+    assertEqual(list[1], 20)
+    assertEqual(list[2], 3)
+}
+
+@test(traps: "array index out of range")
+fn subscriptPastTheEndTraps() {
+    let list = List<Int>([1])
+    let _ = list[1]
+}
+
+@test
+fn asSliceGivesEveryReadAnArrayHas() {
+    let list = List<Int>([5, 6, 7, 6])
+    let slice = list.asSlice()
+    assertEqual(slice.count, 4)
+    assertEqual(slice.firstIndex(of: 6) ?? -1, 1)
+    assertEqual(slice.lastIndex(of: 6) ?? -1, 3)
+    assertEqual(slice.max() ?? 0, 7)
+}
+
+@test
+fn forGoesThroughTheElementsInOrder() {
+    var list = List<Int>([1, 2, 3])
+    var total = 0
+    var order = ""
+    for x in list {
+        total = total + x
+        order = order + "\(x)"
+    }
+    assertEqual(total, 6)
+    assertEqual(order, "123")
+    list.removeAll()
+    for _ in list {
+        fail("an empty list has nothing to go through")
+    }
+}
+
+@test
+fn appendAddsAtTheEnd() {
+    var list = List<Int>()
+    list.append(1)
+    list.append(contentsOf: [2, 3])
+    assert(list.toArray() == [1, 2, 3])
+}
+
+@test
+fn insertPutsTheElementAtTheIndex() {
+    var list = List<Int>([1, 2, 4])
+    list.insert(3, at: 2)
+    list.insert(0, at: 0)
+    list.insert(5, at: list.count)
+    assert(list.toArray() == [0, 1, 2, 3, 4, 5])
+}
+
+@test(traps: "array slice out of range")
+fn insertPastTheEndTraps() {
+    var list = List<Int>([1, 2])
+    list.insert(3, at: 3)
+}
+
+@test(traps: "array slice out of range")
+fn insertAtANegativeIndexTraps() {
+    var list = List<Int>([1, 2])
+    list.insert(3, at: -1)
+}
+
+@test
+fn insertContentsOfPutsTheElementsAtTheIndex() {
+    var list = List<String>(["a", "d"])
+    list.insert(contentsOf: ["b", "c"], at: 1)
+    assert(list.toArray() == ["a", "b", "c", "d"])
+    list.insert(contentsOf: [], at: 4)
+    assertEqual(list.count, 4)
+}
+
+@test
+fn removeAtTakesOutTheElementAndClosesTheGap() {
+    var list = List<String>(["a", "b", "c", "d"])
+    assertEqual(list.remove(at: 1), "b")
+    assert(list.toArray() == ["a", "c", "d"])
+    assertEqual(list.remove(at: 2), "d")
+    assertEqual(list.remove(at: 0), "a")
+    assert(list.toArray() == ["c"])
+}
+
+@test(traps: "array index out of range")
+fn removeAtPastTheEndTraps() {
+    var list = List<Int>([1, 2])
+    let _ = list.remove(at: 2)
+}
+
+@test
+fn swapRemoveMovesTheLastIntoTheGap() {
+    var list = List<Int>([1, 2, 3, 4])
+    assertEqual(list.swapRemove(at: 0), 1)
+    assert(list.toArray() == [4, 2, 3])
+    assertEqual(list.swapRemove(at: 2), 3)
+    assert(list.toArray() == [4, 2])
+}
+
+@test(traps: "array index out of range")
+fn swapRemoveOfAnEmptyListTraps() {
+    var list = List<Int>()
+    let _ = list.swapRemove(at: 0)
+}
+
+@test
+fn removeFirstAndLastTakeTheEnds() {
+    var list = List<Int>([1, 2, 3])
+    assertEqual(list.removeFirst(), 1)
+    assertEqual(list.removeLast(), 3)
+    assert(list.toArray() == [2])
+}
+
+@test(traps: "array index out of range")
+fn removeFirstOfAnEmptyListTraps() {
+    var list = List<Int>()
+    let _ = list.removeFirst()
+}
+
+@test(traps: "removeLast of an empty array")
+fn removeLastOfAnEmptyListTraps() {
+    var list = List<Int>()
+    let _ = list.removeLast()
+}
+
+@test
+fn popLastIsNoneWhenEmpty() {
+    var list = List<Int>([7])
+    assertEqual(list.popLast() ?? 0, 7)
+    assert(list.popLast() == none)
+}
+
+@test
+fn removeAllWhereKeepsTheOrderOfTheRest() {
+    var list = List<Int>([1, 2, 3, 4, 5, 6])
+    list.removeAll(where: isEven)
+    assert(list.toArray() == [1, 3, 5])
+    list.removeAll(where: (x: Int) => x > 100)
+    assert(list.toArray() == [1, 3, 5])
+    list.removeAll(where: (x: Int) => true)
+    assert(list.isEmpty)
+}
+
+@test
+fn retainKeepsThoseThatPass() {
+    var list = List<String>(["apple", "fig", "pear", "kiwi"])
+    list.retain(where: (w: String) => w.count == 4)
+    assert(list.toArray() == ["pear", "kiwi"])
+}
+
+@test
+fn dedupLeavesOneOfEachRun() {
+    var list = List<Int>([1, 1, 2, 2, 2, 3, 1, 1])
+    list.dedup()
+    assert(list.toArray() == [1, 2, 3, 1])
+    var one = List<Int>([4])
+    one.dedup()
+    assert(one.toArray() == [4])
+    var distinct = List<Int>([1, 2, 3])
+    distinct.dedup()
+    assert(distinct.toArray() == [1, 2, 3])
+}
+
+@test
+fn containsFindsAnEqualElement() {
+    let list = List<String>(["a", "b"])
+    assert(list.contains("b"))
+    assert(!list.contains("c"))
+}
+
+@test
+fn truncateDropsTheElementsFromTheCountOn() {
+    var list = List<Int>([1, 2, 3, 4])
+    list.truncate(to: 10)
+    assertEqual(list.count, 4)
+    list.truncate(to: 2)
+    assert(list.toArray() == [1, 2])
+    list.truncate(to: 0)
+    assert(list.isEmpty)
+}
+
+@test(traps: "array slice out of range")
+fn truncateToANegativeCountTraps() {
+    var list = List<Int>([1, 2])
+    list.truncate(to: -1)
+}
+
+@test
+fn drainTakesOutARange() {
+    var list = List<Int>([1, 2, 3, 4, 5])
+    let middle = list.drain(1..<3)
+    assert(middle == [2, 3])
+    assert(list.toArray() == [1, 4, 5])
+    let nothing = list.drain(1..<1)
+    assertEqual(nothing.count, 0)
+    let all = list.drain(0..<3)
+    assert(all == [1, 4, 5])
+    assert(list.isEmpty)
+}
+
+@test
+fn replaceSubrangeTakesMoreOrFewer() {
+    var list = List<Int>([1, 2, 3])
+    list.replaceSubrange(1..<2, with: [7, 8, 9])
+    assert(list.toArray() == [1, 7, 8, 9, 3])
+    list.replaceSubrange(0..<4, with: [0])
+    assert(list.toArray() == [0, 3])
+    list.replaceSubrange(2..<2, with: [4])
+    assert(list.toArray() == [0, 3, 4])
+}
+
+@test(traps: "array slice out of range")
+fn replaceSubrangePastTheEndTraps() {
+    var list = List<Int>([1, 2])
+    list.replaceSubrange(1..<3, with: [])
+}
+
+@test
+fn reorderingChangesTheListInPlace() {
+    var list = List<Int>([3, 1, 2])
+    list.swapAt(0, 2)
+    assert(list.toArray() == [2, 1, 3])
+    list.reverse()
+    assert(list.toArray() == [3, 1, 2])
+    list.sort()
+    assert(list.toArray() == [1, 2, 3])
+    list.sort(by: (a: Int, b: Int) => b < a)
+    assert(list.toArray() == [3, 2, 1])
+}
+
+@test
+fn aListHoldsReferencesAndReleasesThem() {
+    var list = List<Box>()
+    list.append(Box(1))
+    list.append(Box(2))
+    list.insert(Box(0), at: 0)
+    let removed = list.remove(at: 1)
+    assertEqual(removed.value, 1)
+    assertEqual(list[0].value, 0)
+    assertEqual(list[1].value, 2)
+}
+
+class Box {
+    let value: Int
+    init(_ value: Int) {
+        self.value = value
+    }
+}
+
+@bench
+fn listInsertsAtTheFront() {
+    var list = List<Int>()
+    var i = 0
+    while i < 256 {
+        list.insert(i, at: 0)
+        i = i + 1
+    }
+}

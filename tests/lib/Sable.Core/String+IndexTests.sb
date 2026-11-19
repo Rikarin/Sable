@@ -20,6 +20,17 @@ fn indicesAreUtf8Offsets() {
 }
 
 @test
+fn theFirstAndLastScalarsAreNoneInAnEmptyString() {
+    let text = "é€😀"
+    assertEqual(text.first, 'é')
+    assertEqual(text.last, Char.fromCodePoint(0x1F600)!)
+    assertEqual("".first, none)
+    assertEqual("".last, none)
+    let initials = ["ab", "cd"].map { $0.first! }
+    assertEqual(initials[1], 'c')
+}
+
+@test
 fn readingAtAnIndex() {
     let text = "aé€😀"
     assertEqual(text[text.startIndex], 'a')

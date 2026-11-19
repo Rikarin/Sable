@@ -419,4 +419,69 @@ public sealed class OptionalAndUnionLoweringTests {
         Assert.Equal("a number", Run(module, "number"));
         Assert.Equal("t", Run(module, "text"));
     }
+
+    // ---- Calling an optional function that gives Void (#270) ----------------
+
+    [Fact]
+    public void AnOptionalFunctionThatGivesVoidIsCalledThroughItsChain() {
+        var module = Lower(
+            """
+            fn calls(_ present: Bool) -> Int {
+                var n = 0
+                let bump: (Int) -> Void = { n += $0 }
+                let g: ((Int) -> Void)? = present ? bump : none
+                g?(3)
+                let r = g?(4)
+                if r == none { return -1 }
+                return n
+            }
+            """
+        );
+
+        Assert.Equal(7L, Run(module, "calls", true));
+        Assert.Equal(-1L, Run(module, "calls", false));
+    }
+
+    // ---- A union case whose one field is a tuple (#275) ---------------------
+
+    [Fact]
+    public void ACaseWhoseOneFieldIsATupleCarriesTheTupleItself() {
+        var module = Lower(
+            """
+            union H {
+                Some(value: (Bool, Int))
+                Pair(a: Int, b: Int)
+            }
+            union Box<T> {
+                Full(T)
+                Empty
+            }
+            fn second() -> Int {
+                let h = H.Some(value: (true, 1))
+                if case .Some(let v) = h {
+                    return v.1
+                }
+                return -1
+            }
+            fn spread() -> Int {
+                let h = H.Some(value: (false, 7))
+                return match h {
+                    case .Some(let v) => v.0 ? 0 : v.1
+                    case .Pair(let a, let b) => a + b
+                }
+            }
+            fn generic() -> Int {
+                let b: Box<(Int, Int)> = .Full((2, 3))
+                if case .Full(let t) = b {
+                    return t.0 * t.1
+                }
+                return -1
+            }
+            """
+        );
+
+        Assert.Equal(1L, Run(module, "second"));
+        Assert.Equal(7L, Run(module, "spread"));
+        Assert.Equal(6L, Run(module, "generic"));
+    }
 }

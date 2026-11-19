@@ -421,7 +421,7 @@
   </Node>
 
   <Node Name="TypeExpressionSyntax" Base="ExpressionSyntax" Kind="TypeExpression"
-        Doc="A type written where an expression goes, which only `.self` may follow: `Token[&gt;..].self`, `Int?.self`, `(Int) -&gt; Bool.self`.">
+        Doc="A type written where an expression goes, which only `.self` may follow: `Token[&gt;..].self`, `Int?.self`, `(Int) -&gt; Bool.self`; or a call, for a dictionary type or a growable array's: `[String: Int]()`, `Int[&gt;..]()`.">
     <Field Name="Type" Type="TypeSyntax" />
   </Node>
 
@@ -451,10 +451,11 @@
   </Node>
 
   <Node Name="ClosureSignatureSyntax" Base="SyntaxNode" Kind="ClosureSignature"
-        Doc="An arrow closure's parameters, parenthesised or a single bare name.">
+        Doc="An arrow closure's parameters, parenthesised or a single bare name, and what it throws: `(s: String) throws(ParseError) -&gt; Int`.">
     <Field Name="OpenParenToken" Type="Token" Optional="true" />
     <Field Name="Parameters" Type="SeparatedList:ClosureParameterSyntax" />
     <Field Name="CloseParenToken" Type="Token" Optional="true" />
+    <Field Name="ThrowsSpec" Type="ThrowsSpecSyntax" Optional="true" />
     <Field Name="ArrowToken" Type="Token" Optional="true" />
     <Field Name="ReturnType" Type="TypeSyntax" Optional="true" />
   </Node>
@@ -477,10 +478,11 @@
   </Node>
 
   <Node Name="ClosureHeaderSyntax" Base="SyntaxNode" Kind="ClosureHeader"
-        Doc="`a, b -&gt; T in` at the head of a brace closure; the parentheses are optional.">
+        Doc="`a, b -&gt; T in` or `(a: Int) throws(E) -&gt; T in` at the head of a brace closure; the parentheses are optional.">
     <Field Name="OpenParenToken" Type="Token" Optional="true" />
     <Field Name="Parameters" Type="SeparatedList:ClosureParameterSyntax" />
     <Field Name="CloseParenToken" Type="Token" Optional="true" />
+    <Field Name="ThrowsSpec" Type="ThrowsSpecSyntax" Optional="true" />
     <Field Name="ArrowToken" Type="Token" Optional="true" />
     <Field Name="ReturnType" Type="TypeSyntax" Optional="true" />
     <Field Name="InKeyword" Type="Token" />

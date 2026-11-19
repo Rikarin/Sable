@@ -489,6 +489,28 @@ public sealed class StatementParserTests {
         Assert.NotNull(closure.Header!.ReturnType);
     }
 
+    /// <summary>A closure says what it throws as a function does (#273).</summary>
+    [Theory]
+    [InlineData("let f = { (s: String) throws(ParseError) -> Int in s.count }", "ParseError")]
+    [InlineData("let f = { s: String throws -> Int in s.count }", null)]
+    [InlineData("let f = { (s: String) throws in print(s) }", null)]
+    public void ParsesClosureHeaderWithThrows(string source, string? error) {
+        var declaration = Assert.IsType<LocalDeclarationStatementSyntax>(ParseRoot(source));
+        var closure = Assert.IsType<BraceClosureExpressionSyntax>(declaration.Declarator.Initializer!.Value);
+        var spec = closure.Header!.ThrowsSpec!;
+        Assert.Equal(SyntaxKind.ThrowsKeyword, spec.ThrowsKeyword.Kind);
+        Assert.Equal(error, spec.ErrorType?.ToString());
+    }
+
+    [Theory]
+    [InlineData("let f = (s: String) throws(ParseError) -> Int => s.count")]
+    [InlineData("let f = (s: String) throws => print(s)")]
+    public void ParsesArrowClosureWithThrows(string source) {
+        var declaration = Assert.IsType<LocalDeclarationStatementSyntax>(ParseRoot(source));
+        var closure = Assert.IsType<ClosureExpressionSyntax>(declaration.Declarator.Initializer!.Value);
+        Assert.Equal(SyntaxKind.ThrowsKeyword, closure.Signature.ThrowsSpec!.ThrowsKeyword.Kind);
+    }
+
     // ---- The brace ambiguity ----------------------------------------------
 
     [Fact]

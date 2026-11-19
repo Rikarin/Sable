@@ -53,6 +53,20 @@ extension String {
     /// The position past the last scalar.
     public var endIndex: String.Index => String.Index(utf8Offset: self.utf8Count)
 
+    /// The first scalar, or none in an empty string.
+    ///
+    /// ```sable
+    /// assert("héllo".first == 'h')
+    /// ```
+    public var first: Char? => self.utf8Count == 0 ? none : self[self.startIndex]
+
+    /// The last scalar, or none in an empty string.
+    ///
+    /// ```sable
+    /// assert("héllo".last == 'o')
+    /// ```
+    public var last: Char? => self.utf8Count == 0 ? none : self[self.index(before: self.endIndex)]
+
     /// How many bytes the string's UTF-8 encoding takes: its size, where
     /// `count` is its scalars.
     @builtin("string_utf8_count")

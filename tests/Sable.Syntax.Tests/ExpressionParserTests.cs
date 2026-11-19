@@ -380,6 +380,20 @@ public sealed class ExpressionParserTests {
     )]
     public void ParsesMetatypes(string source, string expected) => Assert.Equal(expected, Parse(source));
 
+    // ---- A collection type called, for its initialiser (#272) -------------
+
+    [Theory]
+    [InlineData("[String: Int]()", "DictionaryType")]
+    [InlineData("Int[>..]()", "GrowArrayType")]
+    [InlineData("Int[>..<]()", "GrowArrayType")]
+    [InlineData("[Int: Point[>..]]()", "DictionaryType")]
+    public void ACollectionTypeIsCalledForItsInitialiser(string source, string type) {
+        var tree = SyntaxTree.ParseExpression(source);
+        Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+        Assert.Equal(source, tree.ToFullString());
+        Assert.StartsWith($"(Invocation (Type ({type} ", Parse(source), StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("xs[0]")]
     [InlineData("p?.x")]
@@ -387,6 +401,11 @@ public sealed class ExpressionParserTests {
     [InlineData("a.b.c")]
     [InlineData("f(x).y")]
     [InlineData("xs[0] ?? 1")]
+    [InlineData("xs[8]()")]
+    [InlineData("[f][0]()")]
+    [InlineData("[a: b][a]")]
+    [InlineData("[\"k\": 1](x)")]
+    [InlineData("[weak self] (x: Int) => x")]
     public void TheMetatypeLookaheadLeavesEverythingElseAlone(string source) {
         var tree = SyntaxTree.ParseExpression(source);
         Assert.False(tree.HasErrors, tree.FormatDiagnostics());

@@ -2492,7 +2492,7 @@ public sealed partial class Binder {
         }
 
         if (_inferringReturn) {
-            var inferred = BindExpression(statement.Expression);
+            var inferred = AsValue(BindExpression(statement.Expression));
             _returnType = inferred.Type;
             _inferringReturn = false;
             return Record(statement, new BoundReturn(statement, inferred));
@@ -2756,6 +2756,7 @@ public sealed partial class Binder {
                 closure,
                 closure.CaptureList,
                 closure.Signature.Parameters,
+                closure.Signature.ThrowsSpec,
                 closure.Signature.ReturnType,
                 closure.Body,
                 expectedType,
@@ -4322,9 +4323,11 @@ public sealed partial class Binder {
             }
 
             // 'T(seed: 4)' for T: Makeable: the protocol's initialiser
-            // requirement, met by whatever T turns out to be.
+            // requirement, met by whatever T turns out to be. 'Int[>..]()' is
+            // RangeReplaceableCollection's 'init()', as a growable array meets it.
             case BoundTypeExpression typeExpression
-                when AssociatedTypes.IsAbstract(typeExpression.ReferencedType): {
+                when AssociatedTypes.IsAbstract(typeExpression.ReferencedType)
+                     || typeExpression.ReferencedType is ArrayTypeSymbol: {
                 var found = LookupMember(typeExpression.ReferencedType, "init");
                 var requirements = found is { } lookup
                     ? lookup.Members.OfType<FunctionSymbol>().Where(static f => f.FunctionKind == FunctionKind.Initializer).ToImmutableArray()
@@ -5969,6 +5972,7 @@ public sealed partial class Binder {
             syntax,
             syntax.CaptureList,
             syntax.Header?.Parameters ?? default,
+            syntax.Header?.ThrowsSpec,
             syntax.Header?.ReturnType,
             syntax,
             expectedType,
@@ -5988,6 +5992,7 @@ public sealed partial class Binder {
         ExpressionSyntax syntax,
         CaptureListSyntax? captureList,
         SeparatedSyntaxList<ClosureParameterSyntax> declared,
+        ThrowsSpecSyntax? throwsSpec,
         TypeSyntax? returnTypeSyntax,
         SyntaxNode body,
         TypeSymbol? expectedType,
@@ -6006,7 +6011,11 @@ public sealed partial class Binder {
         // A closure passed where '() throws -> T' is wanted may throw. Where
         // the error type is the call's to infer, '() throws(E) -> T', it may
         // throw anything, and what it does throw is what E becomes.
-        var thrown = expected?.ThrownType is { } open && IsOpen(open) ? Core.AnyError : expected?.ThrownType;
+        // One that says what it throws, 'throws(ParseError)', throws that,
+        // whatever its body does; bare 'throws' is 'throws(any Error)'.
+        var declaredThrown = BindClosureThrows(throwsSpec, symbol);
+        var thrown = declaredThrown
+            ?? (expected?.ThrownType is { } open && IsOpen(open) ? Core.AnyError : expected?.ThrownType);
         symbol.ThrownTypeResolver = () => thrown;
 
         // Captures are bound in the enclosing scope, before the closure's own
@@ -6084,10 +6093,34 @@ public sealed partial class Binder {
             [..symbol.Parameters.Select(static p => p.Type)],
             symbol.ReturnType,
             symbol.IsAsync,
-            _closureThrows
+            declaredThrown ?? _closureThrows
         ) { InOutParameters = FunctionTypeSymbol.InOutOf(symbol.Parameters.Select(static p => p.Modifier == ParameterModifier.InOut)) };
 
         return Record(syntax, new BoundClosure(syntax, type, symbol, captures, bound));
+    }
+
+    /// <summary>
+    ///     What a closure's header says it throws, or null when it says
+    ///     nothing. A closure does not rethrow: what it throws is in its type.
+    /// </summary>
+    TypeSymbol? BindClosureThrows(ThrowsSpecSyntax? spec, FunctionSymbol closure) {
+        if (spec is null) {
+            return null;
+        }
+
+        if (spec.ThrowsKeyword.Kind == SyntaxKind.RethrowsKeyword) {
+            _diagnostics.Error(
+                ErrorCode.ERR_ClosureRethrows,
+                spec.Span,
+                "a closure does not rethrow: write 'throws(E)' for the error it throws, "
+                + "or leave it out and let its body say"
+            );
+            return null;
+        }
+
+        return spec.ErrorType is { } errorType
+            ? _compilation.TypeBinder.BindType(errorType, closure, _scope)
+            : Core.AnyError;
     }
 
     /// <summary>Binds a closure's body with its parameters in scope.</summary>
@@ -6155,6 +6188,7 @@ public sealed partial class Binder {
             case ExpressionSyntax expression and not BraceClosureExpressionSyntax: {
                 var value = BindExpression(expression, inferring ? null : _returnType);
                 if (inferring) {
+                    value = AsValue(value);
                     _returnType = value.Type.Equals(Core.Never) ? Core.Void : value.Type;
                     _inferringReturn = false;
                 } else if (!_returnType.Equals(Core.Void)) {
@@ -6187,6 +6221,7 @@ public sealed partial class Binder {
                     var value = BindExpression(only.Expression, inferring ? null : _returnType);
 
                     if (inferring) {
+                        value = AsValue(value);
                         _returnType = value.Type.Equals(Core.Never) ? Core.Void : value.Type;
                         _inferringReturn = false;
                     } else if (!_returnType.Equals(Core.Void)) {
@@ -7257,7 +7292,7 @@ public sealed partial class Binder {
     }
 
     BoundExpression BindPostfixUnary(PostfixUnaryExpressionSyntax syntax) {
-        var operand = BindExpression(syntax.Operand);
+        var operand = AsValue(BindExpression(syntax.Operand));
 
         // The only postfix operator is '!', which unwraps an optional.
         if (operand.Type is OptionalTypeSymbol optional) {
@@ -7996,6 +8031,13 @@ public sealed partial class Binder {
         expression.Type is OptionalTypeSymbol { IsImplicitlyUnwrapped: true } optional
             ? new BoundConversion(expression.Syntax, optional.UnderlyingType, expression, ConversionKind.Explicit)
             : expression;
+
+    /// <summary>
+    ///     An expression used where nothing says what type it should be: a
+    ///     named function is the one function it names, as a value.
+    /// </summary>
+    BoundExpression AsValue(BoundExpression expression) =>
+        expression is BoundFunctionGroup group ? Record(group.Syntax, Materialize(group, null)) : expression;
 
     /// <summary>
     ///     Turns a named function into a value of function type.

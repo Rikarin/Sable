@@ -6029,9 +6029,12 @@ public sealed partial class SilGen {
             Sequence(parts, matched, failed);
         }
 
-        /// <summary>A union case's sub-patterns, against its payload: one value, or a tuple of them.</summary>
+        /// <summary>
+        ///     A union case's sub-patterns, against its payload: the one field
+        ///     itself, a tuple or not, or a tuple of the fields.
+        /// </summary>
         void PayloadPattern(BoundUnionCasePattern unionCase, SilValue payload, SilBlock matched, SilBlock failed) {
-            if (unionCase.Payload.Length == 1 && payload.Type is not TupleType) {
+            if (unionCase.Payload.Length == 1 && unionCase.UnionCase.Payload.Length == 1) {
                 Pattern(unionCase.Payload[0], payload, matched, failed);
             } else {
                 Sequence(
@@ -8019,7 +8022,8 @@ public sealed partial class SilGen {
             var payloadType = indirect ? ((ClassType)enumType.Cases[index].Payload!).Fields[0].Type : enumType.Cases[index].Payload;
             SilValue? payload = values.Count switch {
                 0 => null,
-                1 when payloadType is not TupleType => values[0],
+                // One field is the payload itself, even when it is a tuple.
+                1 => values[0],
                 _ => Emit(new TupleInst((TupleType)payloadType!, [..values])),
             };
 
@@ -8326,7 +8330,10 @@ public sealed partial class SilGen {
             BindLocal(temporary, payload, chained.Syntax, declaration: true);
             Destroy(value);
             if (Expression(through(new BoundLocalAccess(receiver.Syntax, temporary, unwrappedType))) is { } reached) {
-                Branch(after, flatten ? Owned(reached) : Emit(new EnumInst(resultType, resultType.CaseIndex("Some"), Owned(reached))));
+                // A member that gives Void makes a Void?, whose 'Some' carries nothing.
+                var resultSome = resultType.CaseIndex("Some");
+                Branch(after, flatten ? Owned(reached)
+                    : Emit(new EnumInst(resultType, resultSome, resultType.Cases[resultSome].Payload is null ? null : Owned(reached))));
             }
 
             _current = absent;

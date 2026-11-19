@@ -1048,7 +1048,9 @@ resolved against the receiver's members rather than against the grammar:
 only a name: `Int?.self`, `Point[].self`, `Token[>..].self`,
 `(Int, String).self`, `(Int) -> Bool.self`. A compound type is only read in
 expression position when `.self` follows it, so `xs[0]` stays an index and
-`p?.x` stays an optional chain.
+`p?.x` stays an optional chain — or, for a dictionary type and a growable
+array's, when it is called: `[String: Int]()`, `Int[>..]()` and
+`Int[>..<]()` call the type's `init()`, an empty one.
 
 The type of `T.self` is the metatype `T.Type` (written after a type's name,
 unless the type has a nested type called `Type`). Its one value is the type,
@@ -1104,6 +1106,8 @@ multi-line, leading indentation stripped to the closing delimiter
 [1, 2, 3]                  // array
 [:]                        // empty dictionary
 ["a": 1, "b": 2]           // dictionary
+[String: Int]()            // empty dictionary, by its type's init()
+Int[>..]()                 // empty grow-only array, likewise; and Int[>..<]()
 (1, "two", 3.0)            // tuple
 .Circle(radius: 1)         // inferred-context union case
 Point { x: 1, y: 2 }       // record literal; every field carries its value
@@ -1183,6 +1187,12 @@ fn withLock<T>(_ l: Lock, _ body: () throws -> T) rethrows -> T { }
 withLock(mutex) {
     counter += 1
 }
+
+// What a closure throws is what its body throws, unless it says: 'throws(E)'
+// as a function's, or bare 'throws' for 'throws(any Error)'. Never
+// 'rethrows': a closure's type says what it throws.
+let parse = { (s: String) throws(ParseError) -> Int in try Int.parse(s) }
+let check = (s: String) throws(ParseError) => try validate(s)
 
 // After the first trailing closure, more, each with its parameter's label,
 // starting on the line the one before ends on

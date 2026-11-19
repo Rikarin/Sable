@@ -1895,33 +1895,37 @@ internal sealed class ClosureSignatureGreen : GreenNode
     private readonly GreenToken? _openParenToken;
     private readonly GreenList? _parameters;
     private readonly GreenToken? _closeParenToken;
+    private readonly GreenNode? _throwsSpec;
     private readonly GreenToken? _arrowToken;
     private readonly GreenNode? _returnType;
 
-    public ClosureSignatureGreen(GreenToken? openParenToken, GreenList? parameters, GreenToken? closeParenToken, GreenToken? arrowToken, GreenNode? returnType)
+    public ClosureSignatureGreen(GreenToken? openParenToken, GreenList? parameters, GreenToken? closeParenToken, GreenNode? throwsSpec, GreenToken? arrowToken, GreenNode? returnType)
         : base(SyntaxKind.ClosureSignature, 0)
     {
         _openParenToken = openParenToken;
         _parameters = parameters;
         _closeParenToken = closeParenToken;
+        _throwsSpec = throwsSpec;
         _arrowToken = arrowToken;
         _returnType = returnType;
         FullWidth = (openParenToken?.FullWidth ?? 0)
                     + (parameters?.FullWidth ?? 0)
                     + (closeParenToken?.FullWidth ?? 0)
+                    + (throwsSpec?.FullWidth ?? 0)
                     + (arrowToken?.FullWidth ?? 0)
                     + (returnType?.FullWidth ?? 0);
     }
 
-    public override int SlotCount => 5;
+    public override int SlotCount => 6;
 
     public override GreenNode? GetSlot(int index) => index switch
     {
         0 => _openParenToken,
         1 => _parameters,
         2 => _closeParenToken,
-        3 => _arrowToken,
-        4 => _returnType,
+        3 => _throwsSpec,
+        4 => _arrowToken,
+        5 => _returnType,
         _ => null,
     };
 
@@ -2011,37 +2015,41 @@ internal sealed class ClosureHeaderGreen : GreenNode
     private readonly GreenToken? _openParenToken;
     private readonly GreenList? _parameters;
     private readonly GreenToken? _closeParenToken;
+    private readonly GreenNode? _throwsSpec;
     private readonly GreenToken? _arrowToken;
     private readonly GreenNode? _returnType;
     private readonly GreenToken? _inKeyword;
 
-    public ClosureHeaderGreen(GreenToken? openParenToken, GreenList? parameters, GreenToken? closeParenToken, GreenToken? arrowToken, GreenNode? returnType, GreenToken? inKeyword)
+    public ClosureHeaderGreen(GreenToken? openParenToken, GreenList? parameters, GreenToken? closeParenToken, GreenNode? throwsSpec, GreenToken? arrowToken, GreenNode? returnType, GreenToken? inKeyword)
         : base(SyntaxKind.ClosureHeader, 0)
     {
         _openParenToken = openParenToken;
         _parameters = parameters;
         _closeParenToken = closeParenToken;
+        _throwsSpec = throwsSpec;
         _arrowToken = arrowToken;
         _returnType = returnType;
         _inKeyword = inKeyword;
         FullWidth = (openParenToken?.FullWidth ?? 0)
                     + (parameters?.FullWidth ?? 0)
                     + (closeParenToken?.FullWidth ?? 0)
+                    + (throwsSpec?.FullWidth ?? 0)
                     + (arrowToken?.FullWidth ?? 0)
                     + (returnType?.FullWidth ?? 0)
                     + (inKeyword?.FullWidth ?? 0);
     }
 
-    public override int SlotCount => 6;
+    public override int SlotCount => 7;
 
     public override GreenNode? GetSlot(int index) => index switch
     {
         0 => _openParenToken,
         1 => _parameters,
         2 => _closeParenToken,
-        3 => _arrowToken,
-        4 => _returnType,
-        5 => _inKeyword,
+        3 => _throwsSpec,
+        4 => _arrowToken,
+        5 => _returnType,
+        6 => _inKeyword,
         _ => null,
     };
 

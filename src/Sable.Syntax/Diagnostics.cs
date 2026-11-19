@@ -200,6 +200,10 @@ public enum ErrorCode {
     // Globals and statics whose initial values need each other (S3411).
     ERR_GlobalInitializationCycle = 3411,
 
+    // A default value that leaves itself off a call it makes, so would be
+    // put in without end (S3412).
+    ERR_DefaultValueCycle = 3412,
+
     // ---- Compile-time evaluation (S3220-S3222): 'const', 'const fn' and
     // 'comptime' (SYNTAX.md §21).
     ERR_NotConstant = 3220,

@@ -456,15 +456,20 @@ public sealed class TomlReader {
         var clean = digits.Replace("_", "", StringComparison.Ordinal);
         try {
             return style switch {
-                10 when clean.All(char.IsAsciiDigit) => sign * long.Parse(clean, CultureInfo.InvariantCulture),
-                16 when clean.All(char.IsAsciiHexDigit) => Convert.ToInt64(clean, 16),
-                8 when clean.All(static c => c is >= '0' and <= '7') => Convert.ToInt64(clean, 8),
-                2 when clean.All(static c => c is '0' or '1') => Convert.ToInt64(clean, 2),
+                // Negated before parsing, so the most negative long reads too.
+                10 when clean.All(char.IsAsciiDigit) => long.Parse(sign < 0 ? "-" + clean : clean, CultureInfo.InvariantCulture),
+                16 when clean.All(char.IsAsciiHexDigit) => Unsigned(Convert.ToInt64(clean, 16)),
+                8 when clean.All(static c => c is >= '0' and <= '7') => Unsigned(Convert.ToInt64(clean, 8)),
+                2 when clean.All(static c => c is '0' or '1') => Unsigned(Convert.ToInt64(clean, 2)),
                 _ => null,
             };
         } catch (OverflowException) {
             return null;
         }
+
+        // Convert reads 64 bits as two's complement, so a value past
+        // long.MaxValue comes back negative rather than overflowing.
+        static long? Unsigned(long value) => value < 0 ? null : value;
     }
 
     static double? ParseFloat(string word) {
@@ -680,6 +685,10 @@ public sealed class TomlReader {
     string ParseEscape() {
         var position = Here;
         Advance();
+        if (AtEnd || Current == '\n') {
+            throw Error("'\\' must be followed by an escape on the same line", position);
+        }
+
         var c = Current;
         Advance();
         switch (c) {
@@ -698,7 +707,9 @@ public sealed class TomlReader {
                     throw Error($"'\\{c}' needs {length} hexadecimal digits", position);
                 }
 
-                var code = int.Parse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+                // Unsigned: eight digits can set the top bit, which as an int
+                // would wrap negative and slip past the range check below.
+                var code = uint.Parse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
                 if (code is > 0x10FFFF or (>= 0xD800 and <= 0xDFFF)) {
                     throw Error($"'\\{c}{hex}' is not a Unicode scalar value", position);
                 }
@@ -707,7 +718,7 @@ public sealed class TomlReader {
                     Advance();
                 }
 
-                return char.ConvertFromUtf32(code);
+                return char.ConvertFromUtf32((int)code);
             default:
                 throw Error($"'\\{c}' is not an escape TOML knows", position);
         }

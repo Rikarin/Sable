@@ -1,0 +1,91 @@
+module Sable.Text
+
+/// UTF-8 decoded a chunk at a time, as it comes from a file or a socket: a
+/// scalar split across two chunks is kept until the next completes it, so
+/// the text is what decoding all the bytes at once would give. Ill-formed
+/// sequences are made U+FFFD, as `String.fromUtf8Lossy` makes them.
+///
+/// ```sable
+/// var decoder = Utf8Decoder()
+/// let first: U8[>..] = [0x63, 0x61, 0x66, 0xC3]
+/// let second: U8[>..] = [0xA9, 0x21]
+/// var text = decoder.decode(first)
+/// text = text + decoder.decode(second) + decoder.finish()
+/// assert(text == "café!")
+/// assert(!decoder.sawInvalid)
+/// ```
+public struct Utf8Decoder {
+    // The bytes of a sequence the last chunk ended partway through.
+    var pending: U8[>..]
+
+    /// Whether any ill-formed sequence has been made U+FFFD so far.
+    public var sawInvalid: Bool
+
+    public init() {
+        self.pending = []
+        self.sawInvalid = false
+    }
+
+    /// The text the chunk completes: its well-formed scalars, each
+    /// ill-formed sequence as U+FFFD, and none of a sequence it ends
+    /// partway through, which waits for the next chunk.
+    public mutating fn decode(_ chunk: U8[:]) -> String {
+        var bytes = pending
+        for byte in chunk {
+            bytes.append(byte)
+        }
+        pending = []
+        // A sequence cut short at the end is held back: it may be the
+        // start of one the next chunk finishes.
+        let cut = Utf8Decoder.incompleteTail(bytes)
+        if cut < bytes.count {
+            var i = cut
+            while i < bytes.count {
+                pending.append(bytes[i])
+                i = i + 1
+            }
+        }
+        return self.decodeLossy(bytes[..<cut])
+    }
+
+    /// The end of the input: a sequence left partway through is U+FFFD.
+    public mutating fn finish() -> String {
+        if pending.count == 0 {
+            return ""
+        }
+        let rest = pending
+        pending = []
+        return self.decodeLossy(rest)
+    }
+
+    mutating fn decodeLossy(_ bytes: U8[:]) -> String {
+        if Utf8.isValid(bytes) {
+            return Runtime.decodeUtf8(bytes)!
+        }
+        sawInvalid = true
+        return String.fromUtf8Lossy(bytes)
+    }
+
+    /// Where a sequence the bytes end partway through starts — one whose
+    /// bytes so far could still begin a well-formed scalar — or their count
+    /// when they end with a whole one.
+    static fn incompleteTail(_ bytes: U8[:]) -> Int {
+        // A sequence is at most four bytes, so its lead is among the last
+        // three of an incomplete one.
+        var back = 1
+        while back <= 3 && back <= bytes.count {
+            let at = bytes.count - back
+            let lead = bytes[at]
+            if lead < 0x80 || lead >= 0xC0 {
+                if let length = Utf8.sequenceLength(lead: lead) {
+                    if length > back && Utf8.errorAt(bytes, at).errorLength == none {
+                        return at
+                    }
+                }
+                return bytes.count
+            }
+            back = back + 1
+        }
+        return bytes.count
+    }
+}

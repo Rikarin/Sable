@@ -1,0 +1,37 @@
+module Utf16Tests
+
+// Utf16 (Sable.Text), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Text
+
+import Sable.Testing
+import Sable.Text
+
+fn units(_ values: Int[>..]) -> U16[>..] {
+    var result: U16[>..] = []
+    for value in values {
+        result.append(U16(value))
+    }
+    return result
+}
+
+@test
+fn wellFormedUtf16IsValid() {
+    assert(Utf16.isValid(units([])), "nothing")
+    assert(Utf16.isValid(units([0x48, 0xD83D, 0xDE00, 0xFFFF])), "a pair, and the BMP's last")
+    assert(Utf16.validate(units([0xD7FF, 0xE000])) == none, "around the surrogates")
+}
+
+@test
+fn anUnpairedSurrogateIsFound() {
+    assertEqual(Utf16.validate(units([0xDE00, 0x48])) ?? -1, 0)
+    assertEqual(Utf16.validate(units([0x48, 0xD83D])) ?? -1, 1)
+    assertEqual(Utf16.validate(units([0xD83D, 0x48])) ?? -1, 0)
+    assertEqual(Utf16.validate(units([0xD83D, 0xD83D, 0xDE00])) ?? -1, 0)
+    assert(!Utf16.isValid(units([0xDBFF])), "a lone leading surrogate")
+}
+
+@test
+fn surrogateHalves() {
+    assert(Utf16.isLeading(0xD800) && Utf16.isLeading(0xDBFF) && !Utf16.isLeading(0xDC00), "leading")
+    assert(Utf16.isTrailing(0xDC00) && Utf16.isTrailing(0xDFFF) && !Utf16.isTrailing(0xDBFF) && !Utf16.isTrailing(0xE000), "trailing")
+}

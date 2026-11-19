@@ -1,0 +1,50 @@
+module Sable.Text
+
+/// UTF-16, the encoding of Windows, Java and JavaScript strings: code units
+/// of 16 bits, a scalar past U+FFFF taking two (a surrogate pair). Strings
+/// are made from code units by `String.fromUtf16`, and give theirs with
+/// `utf16Units()`.
+///
+/// ```sable
+/// let units: U16[>..] = [0x48, 0xD83D, 0xDE00]
+/// assert(Utf16.isValid(units))
+/// assert(Utf16.validate([0xDE00, 0x48]) == 0)
+/// ```
+public struct Utf16 {
+    private init() { }
+
+    /// The index of the first surrogate without its other half, or none
+    /// when the code units are all well-formed UTF-16.
+    public static fn validate(_ units: U16[:]) -> Int? {
+        var i = 0
+        while i < units.count {
+            let unit = units[i]
+            if unit >= 0xD800 && unit <= 0xDBFF {
+                if i + 1 >= units.count || !Utf16.isTrailing(units[i + 1]) {
+                    return i
+                }
+                i = i + 2
+            } else if Utf16.isTrailing(unit) {
+                return i
+            } else {
+                i = i + 1
+            }
+        }
+        return none
+    }
+
+    /// Whether the code units are well-formed UTF-16.
+    public static fn isValid(_ units: U16[:]) -> Bool {
+        return Utf16.validate(units) == none
+    }
+
+    /// Whether the code unit is a leading (high) surrogate, U+D800 to U+DBFF.
+    public static fn isLeading(_ unit: U16) -> Bool {
+        return unit >= 0xD800 && unit <= 0xDBFF
+    }
+
+    /// Whether the code unit is a trailing (low) surrogate, U+DC00 to U+DFFF.
+    public static fn isTrailing(_ unit: U16) -> Bool {
+        return unit >= 0xDC00 && unit <= 0xDFFF
+    }
+}

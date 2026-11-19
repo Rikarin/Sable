@@ -1,0 +1,97 @@
+module Sable.Text
+
+/// UTF-8, the encoding a String holds: checking bytes are well-formed, and
+/// finding where and why they are not. Strings are made from bytes by
+/// `String.fromUtf8` and `String.fromUtf8Lossy`, and give theirs with
+/// `utf8Bytes()`.
+///
+/// ```sable
+/// let good: U8[>..] = [0x68, 0xC3, 0xA9]
+/// let bad: U8[>..] = [0x68, 0xC0, 0xAF]
+/// assert(Utf8.isValid(good))
+/// assert(Utf8.validate(bad) == 1)
+/// ```
+public struct Utf8 {
+    private init() { }
+
+    /// Where the first ill-formed sequence starts, or none when the bytes
+    /// are all well-formed UTF-8. Natively, ASCII runs are checked sixteen
+    /// bytes at a time.
+    public static fn validate(_ bytes: U8[:]) -> Int? {
+        let at = Runtime.validateUtf8(bytes)
+        if at < 0 {
+            return none
+        }
+        return at
+    }
+
+    /// Whether the bytes are well-formed UTF-8.
+    public static fn isValid(_ bytes: U8[:]) -> Bool {
+        return Runtime.validateUtf8(bytes) < 0
+    }
+
+    /// Why the bytes are not UTF-8, or none when they are.
+    public static fn error(in bytes: U8[:]) -> Utf8Error? {
+        let at = Runtime.validateUtf8(bytes)
+        if at < 0 {
+            return none
+        }
+        return Utf8.errorAt(bytes, at)
+    }
+
+    /// How many bytes a sequence that starts with this byte takes: 1 to 4,
+    /// or none when no well-formed sequence starts with it (a continuation
+    /// byte, 0xC0, 0xC1, or 0xF5 and above).
+    public static fn sequenceLength(lead: U8) -> Int? {
+        if lead < 0x80 {
+            return 1
+        }
+        if lead >= 0xC2 && lead <= 0xDF {
+            return 2
+        }
+        if lead >= 0xE0 && lead <= 0xEF {
+            return 3
+        }
+        if lead >= 0xF0 && lead <= 0xF4 {
+            return 4
+        }
+        return none
+    }
+
+    /// The error at an offset where an ill-formed sequence starts: the
+    /// maximal subpart of a sequence it is (Unicode §3.9, "U+FFFD
+    /// Substitution of Maximal Subparts"), or none for its length when the
+    /// bytes end before the sequence could.
+    static fn errorAt(_ bytes: U8[:], _ at: Int) -> Utf8Error {
+        let lead = bytes[at]
+        let need = Utf8.sequenceLength(lead: lead) ?? 1
+        var k = 1
+        while k < need {
+            if at + k >= bytes.count {
+                return Utf8Error(validUpTo: at, errorLength: none)
+            }
+            let byte = bytes[at + k]
+            // The second byte's range is narrower after four leads: no
+            // overlong forms (E0, F0), no surrogates (ED), nothing past
+            // U+10FFFF (F4).
+            var low: U8 = 0x80
+            var high: U8 = 0xBF
+            if k == 1 {
+                if lead == 0xE0 {
+                    low = 0xA0
+                } else if lead == 0xED {
+                    high = 0x9F
+                } else if lead == 0xF0 {
+                    low = 0x90
+                } else if lead == 0xF4 {
+                    high = 0x8F
+                }
+            }
+            if byte < low || byte > high {
+                return Utf8Error(validUpTo: at, errorLength: k)
+            }
+            k = k + 1
+        }
+        return Utf8Error(validUpTo: at, errorLength: 1)
+    }
+}

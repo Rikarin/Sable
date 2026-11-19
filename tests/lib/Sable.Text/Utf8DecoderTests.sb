@@ -1,0 +1,72 @@
+module Utf8DecoderTests
+
+// Utf8Decoder (Sable.Text), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Text
+
+import Sable.Testing
+import Sable.Text
+
+fn bytes(_ values: Int[>..]) -> U8[>..] {
+    var result: U8[>..] = []
+    for value in values {
+        result.append(U8(value))
+    }
+    return result
+}
+
+@test
+fn aScalarSplitAcrossChunksIsKeptWhole() {
+    var decoder = Utf8Decoder()
+    assertEqual(decoder.decode(bytes([0x63, 0x61, 0x66, 0xC3])), "caf")
+    assertEqual(decoder.decode(bytes([0xA9, 0x21])), "é!")
+    assertEqual(decoder.finish(), "")
+    assert(!decoder.sawInvalid, "nothing was replaced")
+}
+
+@test
+fn aFourByteScalarSplitEachWay() {
+    let all: Int[>..] = [0x61, 0xF0, 0x9F, 0x98, 0x80, 0x62]
+    var cut = 1
+    while cut < all.count {
+        var decoder = Utf8Decoder()
+        var first: Int[>..] = []
+        var second: Int[>..] = []
+        var i = 0
+        while i < all.count {
+            if i < cut {
+                first.append(all[i])
+            } else {
+                second.append(all[i])
+            }
+            i = i + 1
+        }
+        let text = decoder.decode(bytes(first)) + decoder.decode(bytes(second)) + decoder.finish()
+        assertEqual(text, "a😀b")
+        cut = cut + 1
+    }
+}
+
+@test
+fn aSequenceLeftUnfinishedIsReplacedAtTheEnd() {
+    var decoder = Utf8Decoder()
+    assertEqual(decoder.decode(bytes([0x61, 0xE2, 0x82])), "a")
+    assertEqual(decoder.finish(), "\u{FFFD}")
+    assert(decoder.sawInvalid, "the unfinished sequence was replaced")
+}
+
+@test
+fn illFormedBytesAreReplacedAsTheyCome() {
+    var decoder = Utf8Decoder()
+    assertEqual(decoder.decode(bytes([0x61, 0xFF, 0x62])), "a\u{FFFD}b")
+    assert(decoder.sawInvalid, "replaced")
+    assertEqual(decoder.decode(bytes([0xC3, 0x28])), "\u{FFFD}(")
+}
+
+@test
+fn aContinuationByteAtTheEndIsNotHeldBack() {
+    var decoder = Utf8Decoder()
+    assertEqual(decoder.decode(bytes([0x61, 0x80])), "a\u{FFFD}")
+    assertEqual(decoder.decode(bytes([0xC3, 0xA9, 0x80, 0x80, 0x80])), "é\u{FFFD}\u{FFFD}\u{FFFD}")
+    assertEqual(decoder.decode(bytes([0xF0, 0x80])), "\u{FFFD}\u{FFFD}")
+    assertEqual(decoder.finish(), "")
+}

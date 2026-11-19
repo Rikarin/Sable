@@ -1,0 +1,198 @@
+module Sable.Text
+
+// Strings to and from the encodings text comes in: UTF-8 (checked, or with
+// what is ill-formed replaced), UTF-16, UTF-32, Latin-1 and ASCII. A String
+// always holds well-formed UTF-8, so bytes become one only once checked.
+
+extension String {
+    // ---- Decoding ---------------------------------------------------------
+
+    /// The text the bytes encode as UTF-8; Utf8Error, saying where, when
+    /// they are not well-formed. Checked, then copied: natively, ASCII is
+    /// checked sixteen bytes at a time.
+    ///
+    /// ```sable
+    /// let bytes: U8[>..] = [0x63, 0x61, 0x66, 0xC3, 0xA9]
+    /// assert((try? String.fromUtf8(bytes)) == "café")
+    /// ```
+    public static fn fromUtf8(_ bytes: U8[:]) throws(Utf8Error) -> String {
+        if let text = Runtime.decodeUtf8(bytes) {
+            return text
+        }
+        throw Utf8.error(in: bytes)!
+    }
+
+    /// The text the bytes encode as UTF-8, each ill-formed sequence — the
+    /// most of one that could have begun well — made U+FFFD, the
+    /// replacement character, as Unicode recommends and browsers do.
+    ///
+    /// ```sable
+    /// let bytes: U8[>..] = [0x61, 0xF0, 0x9F, 0x62]
+    /// assert(String.fromUtf8Lossy(bytes) == "a\u{FFFD}b")
+    /// ```
+    public static fn fromUtf8Lossy(_ bytes: U8[:]) -> String {
+        var pieces: String[>..] = []
+        var start = 0
+        while start < bytes.count {
+            let rest = bytes[start...]
+            let at = Runtime.validateUtf8(rest)
+            if at < 0 {
+                pieces.append(Runtime.decodeUtf8(rest)!)
+                break
+            }
+            pieces.append(Runtime.decodeUtf8(rest[..<at])!)
+            pieces.append("\u{FFFD}")
+            start = start + at + (Utf8.errorAt(rest, at).errorLength ?? rest.count - at)
+        }
+        return pieces.joined()
+    }
+
+    /// The text the code units encode as UTF-16; Utf16Error, saying where,
+    /// when a surrogate has lost its other half.
+    ///
+    /// ```sable
+    /// let units: U16[>..] = [0x48, 0x69, 0xD83D, 0xDE00]
+    /// assert((try? String.fromUtf16(units)) == "Hi😀")
+    /// ```
+    public static fn fromUtf16(_ units: U16[:]) throws(Utf16Error) -> String {
+        if let index = Utf16.validate(units) {
+            throw Utf16Error(index: index)
+        }
+        return String.fromUtf16Lossy(units)
+    }
+
+    /// The text the code units encode as UTF-16, each unpaired surrogate
+    /// made U+FFFD.
+    public static fn fromUtf16Lossy(_ units: U16[:]) -> String {
+        var bytes: U8[>..] = []
+        bytes.reserveCapacity(units.count)
+        var i = 0
+        while i < units.count {
+            let unit = Int(units[i])
+            var code = unit
+            if Utf16.isLeading(units[i]) && i + 1 < units.count && Utf16.isTrailing(units[i + 1]) {
+                code = 0x10000 + (unit - 0xD800) * 0x400 + (Int(units[i + 1]) - 0xDC00)
+                i = i + 1
+            } else if unit >= 0xD800 && unit <= 0xDFFF {
+                code = 0xFFFD
+            }
+            Char.fromCodePoint(code)!.encodeUtf8(into: &bytes)
+            i = i + 1
+        }
+        return Runtime.decodeUtf8(bytes)!
+    }
+
+    /// The text of the code points, as UTF-32 has them; none when one is not
+    /// a scalar (a surrogate, or past U+10FFFF).
+    public static fn fromUtf32(_ codes: U32[:]) -> String? {
+        var bytes: U8[>..] = []
+        bytes.reserveCapacity(codes.count)
+        for code in codes {
+            if let scalar = Char.fromCodePoint(Int(code)) {
+                scalar.encodeUtf8(into: &bytes)
+            } else {
+                return none
+            }
+        }
+        return Runtime.decodeUtf8(bytes)!
+    }
+
+    /// The text of Latin-1 (ISO 8859-1) bytes: each byte is the scalar of
+    /// its value, U+0000 to U+00FF, so every run of bytes is text.
+    ///
+    /// ```sable
+    /// let bytes: U8[>..] = [0x63, 0x61, 0x66, 0xE9]
+    /// assert(String.fromLatin1(bytes) == "café")
+    /// ```
+    public static fn fromLatin1(_ bytes: U8[:]) -> String {
+        if Ascii.isValid(bytes) {
+            return Runtime.decodeUtf8(bytes)!
+        }
+        var encoded: U8[>..] = []
+        encoded.reserveCapacity(bytes.count * 2)
+        for byte in bytes {
+            if byte < 0x80 {
+                encoded.append(byte)
+            } else {
+                encoded.append(0xC0 | byte >> 6)
+                encoded.append(0x80 | byte & 0x3F)
+            }
+        }
+        return Runtime.decodeUtf8(encoded)!
+    }
+
+    /// The text of ASCII bytes; none when one is 0x80 or above.
+    public static fn fromAscii(_ bytes: U8[:]) -> String? {
+        if !Ascii.isValid(bytes) {
+            return none
+        }
+        return Runtime.decodeUtf8(bytes)
+    }
+
+    // ---- Encoding ---------------------------------------------------------
+
+    /// The string's UTF-8 encoding: `utf8Count` bytes, no terminator.
+    public fn utf8Bytes() -> U8[>..] {
+        var bytes: U8[>..] = []
+        bytes.reserveCapacity(self.utf8Count)
+        for scalar in self {
+            scalar.encodeUtf8(into: &bytes)
+        }
+        return bytes
+    }
+
+    /// The string's UTF-16 encoding: a code unit for each scalar, two (a
+    /// surrogate pair) for one past U+FFFF.
+    public fn utf16Units() -> U16[>..] {
+        var units: U16[>..] = []
+        units.reserveCapacity(self.count)
+        for scalar in self {
+            scalar.encodeUtf16(into: &units)
+        }
+        return units
+    }
+
+    /// How many UTF-16 code units the string takes, as .NET's and Java's
+    /// `Length` count it.
+    public var utf16Count: Int {
+        get {
+            var count = 0
+            for scalar in self {
+                count = count + scalar.utf16Length
+            }
+            return count
+        }
+    }
+
+    /// The string's code points, as UTF-32 has them.
+    public fn utf32Units() -> U32[>..] {
+        var codes: U32[>..] = []
+        codes.reserveCapacity(self.count)
+        for scalar in self {
+            codes.append(scalar.code)
+        }
+        return codes
+    }
+
+    /// The string as Latin-1 bytes, one a scalar; none when a scalar is past
+    /// U+00FF, which Latin-1 cannot write.
+    public fn latin1Bytes() -> U8[>..]? {
+        var bytes: U8[>..] = []
+        bytes.reserveCapacity(self.count)
+        for scalar in self {
+            if scalar.codePoint > 0xFF {
+                return none
+            }
+            bytes.append(U8(scalar.codePoint))
+        }
+        return bytes
+    }
+
+    /// The string as ASCII bytes; none when a scalar is not ASCII.
+    public fn asciiBytes() -> U8[>..]? {
+        if !self.isAscii {
+            return none
+        }
+        return self.utf8Bytes()
+    }
+}

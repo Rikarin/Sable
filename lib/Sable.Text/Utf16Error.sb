@@ -1,0 +1,21 @@
+module Sable.Text
+
+/// Why code units are not UTF-16: a surrogate without its other half, at
+/// the index given. What `String.fromUtf16` throws.
+public struct Utf16Error: Equatable, Debug {
+    /// The index of the unpaired surrogate.
+    public let index: Int
+
+    public init(index: Int) {
+        self.index = index
+    }
+
+    public operator == (lhs: Utf16Error, rhs: Utf16Error) -> Bool {
+        return lhs.index == rhs.index
+    }
+
+    /// "unpaired surrogate at code unit 3".
+    public fn debugDescription() -> String {
+        return "unpaired surrogate at code unit \(index)"
+    }
+}

@@ -1,0 +1,34 @@
+module Utf8Validate
+
+// Validating UTF-8 against .NET's Utf8.IsValid: a megabyte of ASCII, and a
+// megabyte of text mixing ASCII with two-, three- and four-byte scalars.
+
+import Sable.Text
+
+@main
+fn main() {
+    var ascii: String[>..] = []
+    var mixed: String[>..] = []
+    var i = 0
+    while i < 16384 {
+        ascii.append("The quick brown fox jumps over the lazy dog, again. ")
+        mixed.append("Grüße, мир, 世界 😀 and plain words too. ")
+        i = i + 1
+    }
+    let asciiBytes = ascii.joined().utf8Bytes()
+    let mixedBytes = mixed.joined().utf8Bytes()
+
+    var valid = 0
+    var round = 0
+    while round < 400 {
+        if Utf8.isValid(asciiBytes) {
+            valid = valid + 1
+        }
+        if Utf8.isValid(mixedBytes) {
+            valid = valid + 1
+        }
+        round = round + 1
+    }
+
+    print("\(valid) \(asciiBytes.count) \(mixedBytes.count)")
+}

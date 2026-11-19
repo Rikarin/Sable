@@ -21,6 +21,8 @@ var benchmarks = new Dictionary<string, Func<string>> {
     ["list-edit"] = ListEdit,
     ["sort"] = Sort,
     ["string"] = Strings,
+    ["text-search"] = TextSearch,
+    ["utf8-validate"] = Utf8Validate,
 };
 
 if (args.Length == 0 || !benchmarks.TryGetValue(args[0], out var run)) {
@@ -256,5 +258,61 @@ static string Strings() {
         }
 
         return $"{words} {characters} {matches} {joinedLength} {sliced}";
+    }
+}
+
+static string TextSearch() {
+    checked {
+        var builder = new System.Text.StringBuilder();
+        for (var i = 0; i < 20000; i++) {
+            builder.Append("lorem ipsum dolor sit amet, consectetur adipiscing elit, ");
+        }
+
+        builder.Append("needle");
+        var text = builder.ToString();
+
+        long found = 0;
+        long pieces = 0;
+        for (var round = 0; round < 200; round++) {
+            var at = text.IndexOf("needle", StringComparison.Ordinal);
+            if (at >= 0) {
+                found += at;
+            }
+
+            if (text.IndexOf("haystack", StringComparison.Ordinal) < 0) {
+                found++;
+            }
+
+            pieces += text.Split(", ").Length;
+        }
+
+        return $"{found} {pieces}";
+    }
+}
+
+static string Utf8Validate() {
+    checked {
+        var ascii = new System.Text.StringBuilder();
+        var mixed = new System.Text.StringBuilder();
+        for (var i = 0; i < 16384; i++) {
+            ascii.Append("The quick brown fox jumps over the lazy dog, again. ");
+            mixed.Append("Grüße, мир, 世界 😀 and plain words too. ");
+        }
+
+        var asciiBytes = System.Text.Encoding.UTF8.GetBytes(ascii.ToString());
+        var mixedBytes = System.Text.Encoding.UTF8.GetBytes(mixed.ToString());
+
+        long valid = 0;
+        for (var round = 0; round < 400; round++) {
+            if (System.Text.Unicode.Utf8.IsValid(asciiBytes)) {
+                valid++;
+            }
+
+            if (System.Text.Unicode.Utf8.IsValid(mixedBytes)) {
+                valid++;
+            }
+        }
+
+        return $"{valid} {asciiBytes.Length} {mixedBytes.Length}";
     }
 }

@@ -1,0 +1,40 @@
+module Sable.Text
+
+/// Why bytes are not UTF-8, and where: what `String.fromUtf8` throws.
+///
+/// ```sable
+/// let bytes: U8[>..] = [0x61, 0xE2, 0x82, 0x28]
+/// do {
+///     let _ = try String.fromUtf8(bytes)
+/// } catch {
+///     assert(error.validUpTo == 1 && error.errorLength == 2)
+/// }
+/// ```
+public struct Utf8Error: Equatable, Debug {
+    /// How many bytes from the start are well-formed: where the first
+    /// ill-formed sequence begins.
+    public let validUpTo: Int
+
+    /// How many bytes the ill-formed sequence takes — the most of a
+    /// sequence that could have begun well (Unicode's "maximal subpart"),
+    /// at least one — or none when the bytes end partway through a sequence
+    /// that more bytes could complete.
+    public let errorLength: Int?
+
+    public init(validUpTo: Int, errorLength: Int?) {
+        self.validUpTo = validUpTo
+        self.errorLength = errorLength
+    }
+
+    public operator == (lhs: Utf8Error, rhs: Utf8Error) -> Bool {
+        return lhs.validUpTo == rhs.validUpTo && lhs.errorLength == rhs.errorLength
+    }
+
+    /// "invalid UTF-8 at byte 3 (2 bytes)", or "incomplete UTF-8 at byte 3".
+    public fn debugDescription() -> String {
+        if let length = errorLength {
+            return "invalid UTF-8 at byte \(validUpTo) (\(length) byte\(length == 1 ? "" : "s"))"
+        }
+        return "incomplete UTF-8 at byte \(validUpTo)"
+    }
+}

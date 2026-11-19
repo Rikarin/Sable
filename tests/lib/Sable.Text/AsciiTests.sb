@@ -1,0 +1,33 @@
+module AsciiTests
+
+// Ascii (Sable.Text), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Text
+
+import Sable.Testing
+import Sable.Text
+
+fn bytes(_ text: String) -> U8[>..] {
+    return text.utf8Bytes()
+}
+
+@test
+fn asciiIsBytesBelow128() {
+    assert(Ascii.isValid(bytes("Hello, world!\u{7F}")), "ASCII")
+    assert(Ascii.isValid(bytes("")), "nothing")
+    assert(!Ascii.isValid(bytes("café")), "é is not")
+}
+
+@test
+fn comparingIgnoringCase() {
+    assert(Ascii.equalsIgnoringCase(bytes("Content-Type"), bytes("content-type")), "same but for case")
+    assert(!Ascii.equalsIgnoringCase(bytes("Content-Type"), bytes("Content-Typf")), "a letter differs")
+    assert(!Ascii.equalsIgnoringCase(bytes("ab"), bytes("abc")), "lengths differ")
+    assert(!Ascii.equalsIgnoringCase(bytes("@"), bytes("`")), "neighbours of the letters are not letters")
+    assert(!Ascii.equalsIgnoringCase(bytes("É"), bytes("é")), "only ASCII letters fold")
+}
+
+@test
+fn changingCase() {
+    assert(Ascii.uppercased(bytes("abz-AZé")) == bytes("ABZ-AZé"), "upper")
+    assert(Ascii.lowercased(bytes("ABZ-azÉ")) == bytes("abz-azÉ"), "lower")
+}

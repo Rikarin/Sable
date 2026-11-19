@@ -1,0 +1,64 @@
+module Sable.Text
+
+/// ASCII, bytes below 0x80: checking for it, comparing it without case,
+/// and changing its case — what protocols and file formats, whose keywords
+/// and headers are ASCII, need, without Unicode's tables. Strings have
+/// `isAscii`, `asciiUppercased()` and `String.fromAscii` for the same.
+///
+/// ```sable
+/// let header: U8[>..] = [0x48, 0x6F, 0x53, 0x74]
+/// let lower: U8[>..] = [0x68, 0x6F, 0x73, 0x74]
+/// assert(Ascii.isValid(header))
+/// assert(Ascii.equalsIgnoringCase(header, lower))
+/// ```
+public struct Ascii {
+    private init() { }
+
+    /// Whether every byte is ASCII.
+    public static fn isValid(_ bytes: U8[:]) -> Bool {
+        var seen: U8 = 0
+        for byte in bytes {
+            seen = seen | byte
+        }
+        return seen < 0x80
+    }
+
+    /// Whether the bytes are the same but for the case of ASCII letters.
+    public static fn equalsIgnoringCase(_ a: U8[:], _ b: U8[:]) -> Bool {
+        if a.count != b.count {
+            return false
+        }
+        var i = 0
+        while i < a.count {
+            if Ascii.lowered(a[i]) != Ascii.lowered(b[i]) {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+
+    /// The bytes with each ASCII lower-case letter made upper case.
+    public static fn uppercased(_ bytes: U8[:]) -> U8[>..] {
+        var result: U8[>..] = []
+        result.reserveCapacity(bytes.count)
+        for byte in bytes {
+            result.append(byte >= 0x61 && byte <= 0x7A ? byte - 32 : byte)
+        }
+        return result
+    }
+
+    /// The bytes with each ASCII upper-case letter made lower case.
+    public static fn lowercased(_ bytes: U8[:]) -> U8[>..] {
+        var result: U8[>..] = []
+        result.reserveCapacity(bytes.count)
+        for byte in bytes {
+            result.append(Ascii.lowered(byte))
+        }
+        return result
+    }
+
+    static fn lowered(_ byte: U8) -> U8 {
+        return byte >= 0x41 && byte <= 0x5A ? byte + 32 : byte
+    }
+}

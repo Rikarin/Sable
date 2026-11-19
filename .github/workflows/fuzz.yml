@@ -263,7 +263,14 @@ jobs:
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
           restore-keys: fuzz-corpus-${{ matrix.target }}-
 
+      # coverage.sh holds itself to the minutes asked for: it kills an
+      # engine still running two minutes past them (FUZZ_GRACE) and stops
+      # triage ten minutes after that (FUZZ_TRIAGE). This step's own limit is
+      # the last resort, short of the job's, so that whatever happens the
+      # steps after it still summarise the run and keep what it found.
       - name: Fuzz
+        id: fuzz
+        timeout-minutes: 105
         env:
           MINUTES: ${{ inputs.coverage_minutes || '90' }}
           TARGET: ${{ matrix.target }}
@@ -276,12 +283,16 @@ jobs:
           path: artifacts/fuzz-corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
 
-      # The target must have run under libFuzzer, and found nothing.
+      # The target must have run under libFuzzer, and found nothing. Run when
+      # the fuzzing step failed too, as when its own limit stopped it; a run
+      # stopped before it summarised itself is summarised here.
       - name: Summarise
         id: summary
+        if: ${{ !cancelled() && steps.fuzz.outcome != 'skipped' }}
         run: |
           run=$(find artifacts/fuzz -mindepth 1 -maxdepth 1 -type d -name '[0-9]*' | sort | tail -1)
           echo "run=$run" >> "$GITHUB_OUTPUT"
+          [ -s "$run/summary.txt" ] || tools/fuzz/coverage.sh --summary "$run" > /dev/null
           {
             echo '```'
             cat "$run/summary.txt"

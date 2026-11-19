@@ -1,0 +1,307 @@
+module Sable.Core
+
+// What the numbers' Parsable conformances share (Int+Parsing.sb and the
+// rest): reading an integer's sign and magnitude in a radix, and checking a
+// float's text before the runtime rounds it. Neither allocates for text
+// that is only a number: the scalars are read in place, and a float's text
+// is copied only to take separators or white space out of it.
+
+/// Where the number's own text starts and ends, inside the white space the
+/// styles allow around it; Empty when there is nothing else.
+fn numberBounds(_ text: String, _ styles: NumberStyles) throws(ParseError) -> (Int, Int) {
+    var start = 0
+    var end = text.count
+    if styles.contains(.LeadingWhite) {
+        while start < end && text.at(start).isWhitespace {
+            start = start + 1
+        }
+    }
+    if styles.contains(.TrailingWhite) {
+        while end > start && text.at(end - 1).isWhitespace {
+            end = end - 1
+        }
+    }
+    if start == end {
+        throw .Empty
+    }
+    return (start, end)
+}
+
+/// A scalar's value as a digit, in any radix up to 36 — letters of either
+/// case past 9 — or 99 for one that is no digit at all.
+fn digitValue(_ c: Char) -> Int {
+    let code = c.codePoint
+    if code >= 48 && code <= 57 {
+        return code - 48
+    }
+    if code >= 97 && code <= 122 {
+        return code - 87
+    }
+    if code >= 65 && code <= 90 {
+        return code - 55
+    }
+    return 99
+}
+
+/// Whether the scalar is a separator the styles allow: '_', or ',' where a
+/// whole part's digits are read.
+fn isSeparator(_ c: Char, _ styles: NumberStyles, _ thousands: Bool) -> Bool {
+    return c == '_' && styles.contains(.Separators) || c == ',' && thousands && styles.contains(.Thousands)
+}
+
+/// An integer's sign and distance from zero, as the text writes it in the
+/// radix under the styles. Every scalar is checked before a magnitude past
+/// U128's greatest is reported, so a stray letter is the error a long
+/// number with one in it gets. A radix outside 2 to 36 is no radix: it traps.
+fn parseInteger(_ text: String, _ radix: Int, _ styles: NumberStyles) throws(ParseError) -> (Bool, U128) {
+    if radix < 2 || radix > 36 {
+        unreachable()
+    }
+    let (start, end) = try numberBounds(text, styles)
+    var i = start
+    var negative = false
+    let first = text.at(i)
+    if (first == '+' || first == '-') && styles.contains(.Sign) {
+        negative = first == '-'
+        i = i + 1
+    }
+    if styles.contains(.Prefix) && i + 1 < end && text.at(i) == '0' {
+        let mark = text.at(i + 1)
+        if radix == 16 && (mark == 'x' || mark == 'X') || radix == 8 && (mark == 'o' || mark == 'O') || radix == 2 && (mark == 'b' || mark == 'B') {
+            i = i + 2
+        }
+    }
+    let base = U128(radix)
+    let greatest: U128 = 340282366920938463463374607431768211455
+    let cutoff = greatest / base
+    var magnitude: U128 = 0
+    var overflowed = false
+    // A digit is wanted first, and after each separator.
+    var wanted = true
+    while i < end {
+        let c = text.at(i)
+        let digit = digitValue(c)
+        if digit < radix {
+            let value = U128(digit)
+            if overflowed || magnitude > cutoff || magnitude * base > greatest - value {
+                overflowed = true
+            } else {
+                magnitude = magnitude * base + value
+            }
+            wanted = false
+        } else if !wanted && i + 1 < end && isSeparator(c, styles, true) {
+            wanted = true
+        } else {
+            throw .InvalidDigit(at: i)
+        }
+        i = i + 1
+    }
+    if wanted {
+        throw .InvalidDigit(at: i)
+    }
+    if overflowed {
+        throw negative ? ParseError.Underflow : ParseError.Overflow
+    }
+    return (negative, magnitude)
+}
+
+/// A signed integer type's value from a sign and magnitude: at most its
+/// greatest, or one past it when negative, which is its least.
+fn signedValue(_ negative: Bool, _ magnitude: U128, _ greatest: U128) throws(ParseError) -> I128 {
+    if !negative {
+        if magnitude > greatest {
+            throw .Overflow
+        }
+        return I128(magnitude)
+    }
+    if magnitude > greatest + 1 {
+        throw .Underflow
+    }
+    if magnitude == 0 {
+        return 0
+    }
+    // Through one less, which is positive in every width: the least I128
+    // has no positive twin.
+    return 0 - I128(magnitude - 1) - 1
+}
+
+/// An unsigned integer type's value from a sign and magnitude: "-0" is 0,
+/// and any other negative number is below its least.
+fn unsignedValue(_ negative: Bool, _ magnitude: U128, _ greatest: U128) throws(ParseError) -> U128 {
+    if negative && magnitude != 0 {
+        throw .Underflow
+    }
+    if magnitude > greatest {
+        throw .Overflow
+    }
+    return magnitude
+}
+
+// ---- Floats -----------------------------------------------------------------
+
+/// A float's text checked against the form a float is written in —
+///
+///     [sign] (digits [. [digits]] | . digits) [(e | E) [sign] digits]
+///
+/// or the words inf, infinity and nan, in any case — with the white space
+/// and separators the styles allow; and given back as the runtime parses it:
+/// the text itself when it has nothing to take out, else without them. A
+/// word is given back as "inf", "-inf" or "nan".
+fn plainFloat(_ text: String, _ styles: NumberStyles) throws(ParseError) -> String {
+    let (start, end) = try numberBounds(text, styles)
+    var i = start
+    let first = text.at(i)
+    if first == '+' || first == '-' {
+        if !styles.contains(.Sign) {
+            throw .InvalidDigit(at: i)
+        }
+        i = i + 1
+    }
+    if i < end && (text.at(i) == 'i' || text.at(i) == 'I' || text.at(i) == 'n' || text.at(i) == 'N') {
+        let word = asciiLowercased(text.slice(from: i, to: end))
+        if word == "inf" || word == "infinity" {
+            return first == '-' ? "-inf" : "inf"
+        }
+        if word == "nan" {
+            return "nan"
+        }
+        throw .InvalidDigit(at: i)
+    }
+    var separated = false
+    let (whole, afterWhole, wholeSeparated) = try decimalRun(text, i, end, styles, true)
+    separated = wholeSeparated
+    i = afterWhole
+    var fraction = 0
+    if i < end && text.at(i) == '.' {
+        let (digits, afterFraction, fractionSeparated) = try decimalRun(text, i + 1, end, styles, false)
+        fraction = digits
+        separated = separated || fractionSeparated
+        i = afterFraction
+    }
+    if whole + fraction == 0 {
+        throw .InvalidDigit(at: i)
+    }
+    if i < end && (text.at(i) == 'e' || text.at(i) == 'E') {
+        var j = i + 1
+        if j < end && (text.at(j) == '+' || text.at(j) == '-') {
+            j = j + 1
+        }
+        let (digits, afterExponent, exponentSeparated) = try decimalRun(text, j, end, styles, false)
+        if digits == 0 {
+            throw .InvalidDigit(at: afterExponent)
+        }
+        separated = separated || exponentSeparated
+        i = afterExponent
+    }
+    if i < end {
+        throw .InvalidDigit(at: i)
+    }
+    if !separated && start == 0 && end == text.count {
+        return text
+    }
+    var pieces: String[>..] = []
+    var run = start
+    var k = start
+    while k < end {
+        let c = text.at(k)
+        if c == '_' || c == ',' {
+            pieces.append(text.slice(from: run, to: k))
+            run = k + 1
+        }
+        k = k + 1
+    }
+    pieces.append(text.slice(from: run, to: end))
+    return Runtime.joinStrings(pieces, "")
+}
+
+/// How many decimal digits there are from the position on, a separator the
+/// styles allow between two of them; where they end; and whether there was
+/// a separator. One anywhere else is refused where it is.
+fn decimalRun(_ text: String, _ start: Int, _ end: Int, _ styles: NumberStyles, _ thousands: Bool) throws(ParseError) -> (Int, Int, Bool) {
+    var digits = 0
+    var separated = false
+    var i = start
+    while i < end {
+        let c = text.at(i)
+        let code = c.codePoint
+        if code >= 48 && code <= 57 {
+            digits = digits + 1
+        } else if isSeparator(c, styles, thousands) {
+            if i == start || !text.at(i - 1).isDigit || i + 1 >= end || !text.at(i + 1).isDigit {
+                throw .InvalidDigit(at: i)
+            }
+            separated = true
+        } else {
+            break
+        }
+        i = i + 1
+    }
+    return (digits, i, separated)
+}
+
+/// ASCII letters in lower case: 'NaN' as 'nan'.
+fn asciiLowercased(_ text: String) -> String {
+    var pieces: String[>..] = []
+    for c in text {
+        let code = c.codePoint
+        pieces.append(code >= 65 && code <= 90 ? String.fromChar(Char.fromCodePoint(code + 32)!) : String.fromChar(c))
+    }
+    return Runtime.joinStrings(pieces, "")
+}
+
+/// The float a word plainFloat gave stands for, or none for a number.
+fn specialFloat(_ plain: String) -> F64? {
+    if plain == "inf" {
+        return infinity()
+    }
+    if plain == "-inf" {
+        return 0.0 - infinity()
+    }
+    if plain == "nan" {
+        let inf = infinity()
+        return inf - inf
+    }
+    return none
+}
+
+/// What a number too large for the type rounds to: infinity, of its sign.
+fn overflowedFloat(_ plain: String) -> F64 {
+    return plain.at(0) == '-' ? 0.0 - infinity() : infinity()
+}
+
+/// Positive infinity: the greatest F64 times ten, which rounds to it.
+fn infinity() -> F64 {
+    let greatest = 1.7976931348623157e308
+    return greatest * 10.0
+}
+
+/// The decimal a plain float's text writes, as NumberFormatting.sb's digits
+/// and point; its sign aside.
+fn decimalOf(_ plain: String) -> (String, Int) {
+    let start = plain.at(0) == '+' || plain.at(0) == '-' ? 1 : 0
+    var mantissaEnd = plain.count
+    var exponent = 0
+    var i = start
+    while i < plain.count {
+        let c = plain.at(i)
+        if c == 'e' || c == 'E' {
+            mantissaEnd = i
+            exponent = plain.slice(from: i + 1, to: plain.count).toInt() ?? 0
+            break
+        }
+        i = i + 1
+    }
+    return shortestDecimal(plain.slice(from: start, to: mantissaEnd) + "e" + "\(exponent)")
+}
+
+/// Which of two decimals (digits and point, both positive) is greater: -1,
+/// 0 or 1.
+fn compareDecimals(_ left: (String, Int), _ right: (String, Int)) -> Int {
+    let (a, pointA) = left
+    let (b, pointB) = right
+    if pointA != pointB {
+        return pointA < pointB ? -1 : 1
+    }
+    let order = Runtime.compareStrings(a, b)
+    return order < 0 ? -1 : order > 0 ? 1 : 0
+}

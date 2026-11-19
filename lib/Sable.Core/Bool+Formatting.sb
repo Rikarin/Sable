@@ -1,0 +1,12 @@
+module Sable.Core
+
+extension Bool: Formattable {
+    /// `true` or `false`, padded to the spec's width as text is.
+    ///
+    /// ```sable
+    /// assert(true.format(try! FormatSpec.parse(">6")) == "  true")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(self ? "true" : "false")
+    }
+}

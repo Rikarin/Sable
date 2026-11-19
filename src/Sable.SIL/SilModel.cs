@@ -1845,6 +1845,7 @@ public static class SilBuiltins {
         // Parsing gives whether it worked, and the value when it did.
         Add("string_to_Int", SilType.Tuple([SilType.Bool, SilType.Int]), SilType.String);
         Add("string_to_F64", SilType.Tuple([SilType.Bool, SilType.F64]), SilType.String);
+        Add("string_to_F32", SilType.Tuple([SilType.Bool, SilType.F32]), SilType.String);
 
         // The runtime's calls (Sable.IO's floor). Those that can fail give a
         // value either way; 'io_succeeded' then says whether the last one did.

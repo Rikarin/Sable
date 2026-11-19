@@ -50,6 +50,9 @@ public enum SyntaxKind : ushort {
     InterpolationEndToken = 110,
     InterpolatedStringEndToken = 111,
 
+    // A hole's format spec, from its colon to its closing paren: ':08x'.
+    InterpolationFormatToken = 112,
+
     // ---- Punctuation ------------------------------------------------------
     OpenParenToken = 200, // (
     CloseParenToken = 201, // )

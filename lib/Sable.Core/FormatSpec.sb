@@ -1,0 +1,247 @@
+module Sable.Core
+
+/// How to write a value as text: what follows the colon in an interpolation,
+/// `"\(price:>10.2)"`, and what `Formattable.format` is given. The text form,
+/// each part optional, in this order:
+///
+///     [[fill] align] [sign] [#] [0] [width] [separator] [.precision] [kind]
+///
+/// - `align` is `<`, `^` or `>`, and a `fill` before it is the scalar the
+///   rest of the field is filled with (a space when none is said).
+/// - `sign` is `+` (every number gets one), `-` (only a negative one, as
+///   when nothing is said) or a space (a space where `+` would be).
+/// - `#` writes `0x`, `0o` or `0b` before an integer in that radix, and keeps
+///   the trailing zeros `g` drops.
+/// - `0` pads a number with zeros after its sign, to the width.
+/// - `width` is the least number of scalars written.
+/// - `separator` is `,` or `_`, written between each three digits of a
+///   number's whole part (each four in a radix other than ten, for `_`).
+/// - `precision` is how many digits follow a float's point (for `g`, how
+///   many digits in all), or how many scalars of a string are kept.
+/// - `kind` is one of `d x X o b e E f g G % ?` (see `FormatKind`).
+///
+/// ```sable
+/// assert("\(255:#06x)" == "0x00ff")
+/// assert("\(3.14159:.2)" == "3.14")
+/// assert("\(1234567:_)" == "1_234_567")
+/// assert("[\("ab":*^6)]" == "[**ab**]")
+/// ```
+public struct FormatSpec {
+    /// What fills the field around a value narrower than the width.
+    public var fill: Char = ' '
+    /// Which side of the field the value goes.
+    public var alignment: FormatAlignment = .Automatic
+    /// Which numbers get a sign.
+    public var sign: FormatSign = .Negative
+    /// `#`: a radix prefix for an integer, trailing zeros kept for `g`.
+    public var alternate: Bool = false
+    /// `0`: a number padded with zeros after its sign rather than filled.
+    public var zeroPadded: Bool = false
+    /// The least number of scalars written: 0 for no padding at all.
+    public var width: Int = 0
+    /// What goes between each group of a number's whole digits, or none.
+    public var separator: Char? = none
+    /// Digits after a float's point, or scalars of a string kept; none says
+    /// a float is written in the shortest digits that read back the same.
+    public var precision: Int? = none
+    /// How the value is written.
+    public var kind: FormatKind = .Automatic
+
+    /// The spec that says nothing: what `"\(x)"` writes with.
+    public init() { }
+
+    /// The text, padded to the width with the fill, as text is: on the right
+    /// unless the alignment says otherwise. What a type's own `format` uses
+    /// once it has written itself.
+    ///
+    /// ```sable
+    /// var spec = FormatSpec()
+    /// spec.width = 5
+    /// assert(spec.padded("ab") == "ab   ")
+    /// ```
+    public fn padded(_ text: String) -> String {
+        return self.aligned(text, numeric: false)
+    }
+
+    /// The text padded to the width: a number's on the left and text's on
+    /// the right when the alignment is automatic; the extra fill of a
+    /// centred one after it.
+    fn aligned(_ text: String, numeric: Bool) -> String {
+        let missing = self.width - text.count
+        if missing <= 0 {
+            return text
+        }
+        let fill = String.fromChar(self.fill)
+        let side = self.alignment == .Automatic ? (numeric ? FormatAlignment.Right : FormatAlignment.Left) : self.alignment
+        var before = 0
+        if side == .Right {
+            before = missing
+        } else if side == .Center {
+            before = missing / 2
+        }
+        var pieces: String[>..] = []
+        var i = 0
+        while i < before {
+            pieces.append(fill)
+            i = i + 1
+        }
+        pieces.append(text)
+        while i < missing {
+            pieces.append(fill)
+            i = i + 1
+        }
+        return Runtime.joinStrings(pieces, "")
+    }
+}
+
+extension FormatSpec: Parsable {
+    /// The spec the text writes, in the form the type describes: what the
+    /// compiler checks after an interpolation's colon, for a spec chosen at
+    /// run time.
+    ///
+    /// ```sable
+    /// let spec = try! FormatSpec.parse("*>+8.3e")
+    /// assert(spec.fill == '*' && spec.width == 8 && spec.kind == .Exponent)
+    /// ```
+    public static fn parse(_ text: String) throws(ParseError) -> FormatSpec {
+        var spec = FormatSpec()
+        let count = text.count
+        var i = 0
+        if count >= 2 && isSpecAlignment(text.at(1)) {
+            spec.fill = text.at(0)
+            spec.alignment = specAlignment(text.at(1))
+            i = 2
+        } else if count >= 1 && isSpecAlignment(text.at(0)) {
+            spec.alignment = specAlignment(text.at(0))
+            i = 1
+        }
+        if i < count && (text.at(i) == '+' || text.at(i) == '-' || text.at(i) == ' ') {
+            let c = text.at(i)
+            spec.sign = c == '+' ? FormatSign.Always : c == ' ' ? FormatSign.Space : FormatSign.Negative
+            i = i + 1
+        }
+        if i < count && text.at(i) == '#' {
+            spec.alternate = true
+            i = i + 1
+        }
+        if i < count && text.at(i) == '0' {
+            spec.zeroPadded = true
+            i = i + 1
+        }
+        let (width, afterWidth) = try specNumber(text, i)
+        spec.width = width ?? 0
+        i = afterWidth
+        if i < count && (text.at(i) == ',' || text.at(i) == '_') {
+            spec.separator = text.at(i)
+            i = i + 1
+        }
+        if i < count && text.at(i) == '.' {
+            let (precision, afterPrecision) = try specNumber(text, i + 1)
+            if precision == none {
+                throw .InvalidDigit(at: i + 1)
+            }
+            spec.precision = precision
+            i = afterPrecision
+        }
+        if i < count {
+            if let kind = specKind(text.at(i)) {
+                spec.kind = kind
+                i = i + 1
+            }
+        }
+        if i < count {
+            throw .Invalid(at: i)
+        }
+        return spec
+    }
+}
+
+extension FormatSpec: Equatable {
+    public operator == (lhs: FormatSpec, rhs: FormatSpec) -> Bool {
+        return lhs.fill == rhs.fill && lhs.alignment == rhs.alignment && lhs.sign == rhs.sign
+            && lhs.alternate == rhs.alternate && lhs.zeroPadded == rhs.zeroPadded && lhs.width == rhs.width
+            && lhs.separator == rhs.separator && lhs.precision == rhs.precision && lhs.kind == rhs.kind
+    }
+}
+
+extension FormatSpec: Debug {
+    /// The fields that are not what a spec that says nothing has, by name:
+    /// `FormatSpec(fill: '*', alignment: .Right, width: 8)`.
+    public fn debugDescription() -> String {
+        var fields: String[>..] = []
+        if self.fill != ' ' {
+            fields.append("fill: \(self.fill:?)")
+        }
+        if self.alignment != .Automatic {
+            fields.append("alignment: .\(self.alignment)")
+        }
+        if self.sign != .Negative {
+            fields.append("sign: .\(self.sign)")
+        }
+        if self.alternate {
+            fields.append("alternate: true")
+        }
+        if self.zeroPadded {
+            fields.append("zeroPadded: true")
+        }
+        if self.width != 0 {
+            fields.append("width: \(self.width)")
+        }
+        if let separator = self.separator {
+            fields.append("separator: \(separator:?)")
+        }
+        if let precision = self.precision {
+            fields.append("precision: \(precision)")
+        }
+        if self.kind != .Automatic {
+            fields.append("kind: .\(self.kind)")
+        }
+        return "FormatSpec(" + Runtime.joinStrings(fields, ", ") + ")"
+    }
+}
+
+fn isSpecAlignment(_ c: Char) -> Bool {
+    return c == '<' || c == '^' || c == '>'
+}
+
+fn specAlignment(_ c: Char) -> FormatAlignment {
+    return c == '<' ? FormatAlignment.Left : c == '^' ? FormatAlignment.Center : FormatAlignment.Right
+}
+
+/// The kind a spec's last letter names, or none.
+fn specKind(_ c: Char) -> FormatKind? {
+    return match c {
+        case 'd' => FormatKind.Decimal
+        case 'x' => FormatKind.Hex
+        case 'X' => FormatKind.UpperHex
+        case 'o' => FormatKind.Octal
+        case 'b' => FormatKind.Binary
+        case 'e' => FormatKind.Exponent
+        case 'E' => FormatKind.UpperExponent
+        case 'f' => FormatKind.Fixed
+        case 'g' => FormatKind.General
+        case 'G' => FormatKind.UpperGeneral
+        case '%' => FormatKind.Percent
+        case '?' => FormatKind.Debug
+        case _   => none
+    }
+}
+
+/// The decimal number a spec has at the position, if it has one there, and
+/// where it ends.
+fn specNumber(_ text: String, _ start: Int) throws(ParseError) -> (Int?, Int) {
+    var i = start
+    var value = 0
+    while i < text.count && text.at(i).isDigit {
+        let digit = text.at(i).codePoint - 48
+        if value > (9223372036854775807 - digit) / 10 {
+            throw .Overflow
+        }
+        value = value * 10 + digit
+        i = i + 1
+    }
+    if i == start {
+        return (none, i)
+    }
+    return (value, i)
+}

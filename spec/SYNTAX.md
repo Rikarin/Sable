@@ -1006,6 +1006,54 @@ multi-line, leading indentation stripped to the closing delimiter
 Point { x: 1, y: 2 }       // record literal; every field carries its value
 ```
 
+### Interpolation and format specs
+
+A hole, `\(expr)`, writes its value: a string as it is, a number, a `Bool`
+or a `Char` as text, a `Formattable` value as its `format` writes it, an
+enum as its case's name, a `Debug` value as it describes itself, and
+anything else as `Reflect.describe` does. A colon after the expression starts
+a **format spec**, which runs to the hole's closing paren:
+
+```sable
+"\(n:#06x)"          // 0x00ff
+"\(price:>10.2)"     // right-aligned in 10, two decimals
+"\(total:,)"         // 1,234,567
+"\(ratio:.1%)"       // 12.5%
+"\(name:*^9)"        // **sable**
+"\(value:?)"         // as Debug describes it
+"\(ok ? a : b:x)"    // a ternary's colon is the expression's own
+```
+
+A spec is text, not tokens, in this form, each part optional:
+
+```
+[[fill] align] [sign] [#] [0] [width] [, or _] [.precision] [kind]
+```
+
+| Part | Meaning |
+|---|---|
+| `align` | `<` left, `^` centre, `>` right (default: a number right, text left); a `fill` scalar before it pads (default a space) |
+| `sign` | `+` every number signed, `-` only negative ones (default), a space where `+` would be |
+| `#` | an integer's radix prefix (`0x`, `0o`, `0b`); a float's trailing zeros kept by `g` |
+| `0` | a number padded with zeros after its sign, to the width |
+| `width` | the least number of scalars written |
+| `,` `_` | a separator between each three digits of a number's whole part (each four in another radix, for `_`) |
+| `.precision` | digits after a float's point (all of `g`'s digits); a string's scalars kept |
+| `kind` | `d x X o b` (integers), `e E f g G %` (floats), `?` (anything: `Debug`) |
+
+A float without a precision is written in its shortest digits that read
+back as the same value; with one, its exact value is rounded to nearest,
+ties to even. The fill cannot be a quote, a backslash or a paren, which end
+or nest the hole.
+
+The spec becomes a `FormatSpec` (Sable.Core) given to the value's
+`Formattable.format`, so a type of the program's own may honour it. The
+compiler reads the spec (S3660) and checks it against the value's type: a
+kind the type is not written in (S3661), an option it would ignore — a
+precision on an integer, a sign on a string (S3662) — and anything but a
+fill, an alignment, a width or `?` for a type that is not `Formattable`
+(S3663), which is padded as it would be written without a spec.
+
 ### Ranges
 
 ```sable

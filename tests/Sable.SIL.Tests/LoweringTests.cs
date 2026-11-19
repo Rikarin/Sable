@@ -78,6 +78,39 @@ public sealed class LoweringTests {
         Assert.Equal(1L, Run(module, "gcd", 17L, 5L));
     }
 
+    /// <summary>
+    ///     An enum without '==' of its own is compared case by case, in blocks
+    ///     made as the condition is; in an 'else if', once promoted, the second
+    ///     comparison switches on a block argument of a block printed after it.
+    ///     The text must still read back (Lower round-trips it).
+    /// </summary>
+    [Fact]
+    public void AnEnumComparedInAnElseIfReadsBackOncePromoted() {
+        var module = Lower(
+            """
+            enum Side {
+                Automatic
+                Left
+                Center
+                Right
+            }
+
+            fn before(_ chosen: Side, _ numeric: Bool, _ missing: Int) -> Int {
+                let side = chosen == .Automatic ? (numeric ? Side.Right : Side.Left) : chosen
+                var count = 0
+                if side == .Right {
+                    count = missing
+                } else if side == .Center {
+                    count = missing / 2
+                }
+                return count
+            }
+            """
+        );
+
+        Assert.Equal(6L, Run(module, "before", new SilInterpreter.EnumValue(0, null), true, 6L));
+    }
+
     [Fact]
     public void CompoundAssignmentAndRepeat() {
         var module = Lower(

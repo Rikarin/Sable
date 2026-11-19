@@ -4156,18 +4156,35 @@ internal sealed class Parser {
         var inner_parser = new Parser(source, _options);
         var expression = inner_parser.ParseExpression();
 
+        // A colon after the expression starts its format spec, '\(x:08x)',
+        // which runs to the closing paren. The spec is text, not tokens — '>8'
+        // or '.2' would lex as operators and numbers — so it is one token,
+        // which the binder reads. A ternary's colon is the expression's, so
+        // '\(a ? b : c)' has no spec.
+        var covered = expression.FullWidth;
+        GreenToken? format = null;
+        if (covered < inner.Length && inner[covered] == ':') {
+            var spec = inner[covered..];
+            format = new GreenToken(SyntaxKind.InterpolationFormatToken, spec, [], [], spec[1..]);
+            covered = inner.Length;
+        }
+
         // An unterminated hole is already reported, and what it swallowed up
         // to the end of the line is rarely an expression; its own complaints
-        // would only repeat the one that matters.
+        // would only repeat the one that matters. Nor is the lexer's opinion
+        // of a format spec's text one: the binder reads that.
         if (terminated) {
             foreach (var diagnostic in inner_parser._diagnostics) {
+                if (format is not null && diagnostic.Span.Start >= expression.FullWidth) {
+                    continue;
+                }
+
                 _diagnostics.Add(diagnostic with { Span = new(diagnostic.Span.Start + holeStart, diagnostic.Span.Length) });
             }
         }
 
         // Whatever the expression did not cover rides on the closing paren, so
         // the hole still tiles.
-        var covered = expression.FullWidth;
         var leftover = covered < inner.Length ? inner[covered..] : string.Empty;
 
         ImmutableArray<GreenTrivia> closeLeading = leftover.Length == 0
@@ -4190,7 +4207,7 @@ internal sealed class Parser {
             isMissing: !terminated
         );
 
-        return new InterpolationGreen(open, expression, close);
+        return new InterpolationGreen(open, expression, format, close);
     }
 }
 

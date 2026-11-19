@@ -1,0 +1,107 @@
+module ParsableTests
+
+// Parsable and ParseError (Sable.Core), with the conformances of Bool, Char
+// and String, and String.parse for a type the context names. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn boolError(_ text: String) -> ParseError? {
+    do {
+        let _ = try Bool.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+fn charError(_ text: String) -> ParseError? {
+    do {
+        let _ = try Char.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+/// The value the text is, for any type that parses, written back.
+fn reparsed<T: Parsable & Formattable>(_ text: String, as witness: T) -> String {
+    do {
+        let value: T = try text.parse()
+        return "\(value)"
+    } catch {
+        return "\(error:?)"
+    }
+}
+
+@test
+fn stringParseTakesItsTypeFromTheContext() {
+    let port: U16 = try! "8080".parse()
+    assertEqual(port, 8080)
+    let ratio: F64 = try! "0.25".parse()
+    assertEqual(ratio, 0.25)
+    assertEqual(reparsed("-7", as: 0), "-7")
+    assertEqual(reparsed("x", as: 0), "ParseError.InvalidDigit(at: 0)")
+}
+
+@test
+fn aBoolIsTrueOrFalse() {
+    assertEqual(try! Bool.parse("true"), true)
+    assertEqual(try! Bool.parse("false"), false)
+    let parsed: Bool = try! "true".parse()
+    assert(parsed)
+}
+
+@test
+fn aBoolIsNothingElse() {
+    assertEqual(boolError("") ?? .Overflow, .Empty)
+    assertEqual(boolError("True") ?? .Empty, .Invalid(at: 0))
+    assertEqual(boolError("tru") ?? .Empty, .Invalid(at: 3))
+    assertEqual(boolError("truth") ?? .Empty, .Invalid(at: 3))
+    assertEqual(boolError("fals") ?? .Empty, .Invalid(at: 4))
+    assertEqual(boolError("true ") ?? .Empty, .Invalid(at: 4))
+    assertEqual(boolError("yes") ?? .Empty, .Invalid(at: 0))
+}
+
+@test
+fn aCharIsOneScalar() {
+    assertEqual(try! Char.parse("a"), 'a')
+    assertEqual(try! Char.parse("😀"), '😀')
+    assertEqual(charError("") ?? .Overflow, .Empty)
+    assertEqual(charError("ab") ?? .Empty, .Invalid(at: 1))
+}
+
+@test
+fn aStringIsItself() {
+    assertEqual(try! String.parse("as is"), "as is")
+    assertEqual(try! String.parse(""), "")
+    assertEqual(reparsed("text", as: ""), "text")
+}
+
+@test
+fn whatIsFormattedParsesBack() {
+    assertEqual(try! Bool.parse("\(false)"), false)
+    assertEqual(try! Char.parse("\('é')"), 'é')
+    assertEqual(try! String.parse("\("s")"), "s")
+}
+
+@test
+fn parseErrorsAreEqualByCaseAndPosition() {
+    assertEqual(ParseError.Empty, ParseError.Empty)
+    assertEqual(ParseError.Overflow, ParseError.Overflow)
+    assertEqual(ParseError.Underflow, ParseError.Underflow)
+    assertEqual(ParseError.InvalidDigit(at: 2), ParseError.InvalidDigit(at: 2))
+    assertNotEqual(ParseError.InvalidDigit(at: 2), ParseError.InvalidDigit(at: 3))
+    assertNotEqual(ParseError.Invalid(at: 1), ParseError.Invalid(at: 2))
+    assertNotEqual(ParseError.Invalid(at: 1), ParseError.InvalidDigit(at: 1))
+    assertNotEqual(ParseError.Overflow, ParseError.Underflow)
+}
+
+@test
+fn aParseErrorDescribesItselfAsSourceWritesIt() {
+    assertEqual(ParseError.Empty.debugDescription(), "ParseError.Empty")
+    assertEqual(ParseError.InvalidDigit(at: 3).debugDescription(), "ParseError.InvalidDigit(at: 3)")
+    assertEqual(ParseError.Invalid(at: 0).debugDescription(), "ParseError.Invalid(at: 0)")
+    assertEqual(ParseError.Overflow.debugDescription(), "ParseError.Overflow")
+    assertEqual(ParseError.Underflow.debugDescription(), "ParseError.Underflow")
+}

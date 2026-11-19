@@ -60,6 +60,34 @@ public sealed class GenericLoweringTests {
         Assert.Equal(3L, Run(module, "test"));
     }
 
+    /// <summary>
+    ///     A protocol extension's property read on a value of another
+    ///     conformer, inside an instance where Self is the first: the
+    ///     value's own type is its Self, not the instance's.
+    /// </summary>
+    [Fact]
+    public void AnExtensionsPropertyIsReadAsTheReceiversOwn() {
+        var module = Lower(
+            """
+            protocol Named {
+                static var name: String { get }
+            }
+            extension Named {
+                var label: String => Self.name
+                fn both(_ other: B) -> String { return self.label + other.label }
+            }
+            struct A: Named {
+                static var name: String => "A"
+            }
+            struct B: Named {
+                static var name: String => "B"
+            }
+            fn test() -> String { return A().both(B()) }
+            """
+        );
+        Assert.Equal("AB", Run(module, "test"));
+    }
+
     [Fact]
     public void AGenericFunctionIsLoweredOncePerTypeArgument() {
         var module = Lower(

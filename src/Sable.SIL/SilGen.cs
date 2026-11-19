@@ -9235,10 +9235,14 @@ public sealed partial class SilGen {
                 }
             }
 
+            // What this instance's own parameters stand for is the fallback
+            // only for one the call says nothing of: a protocol's default
+            // called on an F64 from an instance where Self is an F32 is the
+            // F64's, which the receiver said above.
             foreach (var parameter in TypeParametersOf(callee)) {
                 var bound = call.Substitution.Lookup(parameter) is { } inferred
                     ? Sub(inferred)
-                    : receiver.Lookup(parameter) ?? substitution.Lookup(parameter);
+                    : receiver.Lookup(parameter) ?? (map.ContainsKey(parameter) ? null : substitution.Lookup(parameter));
                 if (bound is not null) {
                     map[parameter] = bound;
                 }

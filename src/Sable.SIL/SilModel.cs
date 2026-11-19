@@ -1909,6 +1909,12 @@ public static class SilBuiltins {
 
         Add("string_from_Bool", SilType.String, SilType.Bool);
 
+        // A finite F64's digits at a precision, correctly rounded, as C's
+        // printf writes them: that many after the point, in scientific
+        // form ('%.*e') or fixed ('%.*f').
+        Add("string_scientific_F64", SilType.String, SilType.F64, SilType.Int);
+        Add("string_fixed_F64", SilType.String, SilType.F64, SilType.Int);
+
         // Parsing gives whether it worked, and the value when it did.
         Add("string_to_Int", SilType.Tuple([SilType.Bool, SilType.Int]), SilType.String);
         Add("string_to_F64", SilType.Tuple([SilType.Bool, SilType.F64]), SilType.String);

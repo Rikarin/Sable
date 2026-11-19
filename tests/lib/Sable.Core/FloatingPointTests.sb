@@ -281,3 +281,88 @@ fn theTotalOrderOrdersEveryValue() {
     assert((2.0).isTotallyOrdered(belowOrEqualTo: 2.0), "2 with itself")
     assert((-2.0).isTotallyOrdered(belowOrEqualTo: -2.0), "-2 with itself")
 }
+
+// ---- text ---------------------------------------------------------------
+
+@test
+fn fixedDigitsAreRoundedFromTheExactValue() {
+    assertEqual((3.14159).toFixedString(2), "3.14")
+    assertEqual((0.125).toFixedString(2), "0.12")
+    assertEqual((0.375).toFixedString(2), "0.38")
+    assertEqual((2.5).toFixedString(0), "2")
+    assertEqual((0.1).toFixedString(20), "0.10000000000000000555")
+    assertEqual((-0.0).toFixedString(1), "-0.0")
+    assertEqual((1.5 as F16).toFixedString(3), "1.500")
+}
+
+@test
+fn scientificDigitsAreRoundedFromTheExactValue() {
+    assertEqual((1234.5).toScientificString(2), "1.23e+03")
+    assertEqual((0.125).toScientificString(1), "1.2e-01")
+    assertEqual((0.000125).toScientificString(1), "1.3e-04")
+    assertEqual((9.96).toScientificString(1), "1.0e+01")
+    assertEqual((0.0).toScientificString(0), "0e+00")
+    assertEqual(F64.leastNonzeroMagnitude.toScientificString(3), "4.941e-324")
+    assertEqual((1.0e300).toScientificString(0), "1e+300")
+}
+
+@test
+fn aValueNotFiniteIsWrittenByName() {
+    assertEqual(F64.nan.toFixedString(2), "nan")
+    assertEqual(F64.infinity.toScientificString(2), "inf")
+    assertEqual((-F32.infinity).toHexString(), "-inf")
+}
+
+@test
+fn hexadecimalIsExact() {
+    assertEqual((3.0).toHexString(), "0x1.8p+1")
+    assertEqual((0.1).toHexString(), "0x1.999999999999ap-4")
+    assertEqual((-1.0).toHexString(), "-0x1p+0")
+    assertEqual((0.1 as F32).toHexString(), "0x1.99999ap-4")
+    assertEqual(F64.leastNonzeroMagnitude.toHexString(), "0x1p-1074")
+    assertEqual((0.0).toHexString(), "0x0p+0")
+    assertEqual((-0.0).toHexString(), "-0x0p+0")
+}
+
+@test
+fn hexadecimalReadsBackAsTheValue() {
+    assertEqual(F64.fromHexString("0x1.8p1") ?? 0.0, 3.0)
+    assertEqual(F64.fromHexString("0X1.8P+1") ?? 0.0, 3.0)
+    assertEqual(F64.fromHexString("-0x.8") ?? 0.0, -0.5)
+    assertEqual(F64.fromHexString("+0x10") ?? 0.0, 16.0)
+    assertEqual(F64.fromHexString((0.1).toHexString()) ?? 0.0, 0.1)
+    assertEqual(F64.fromHexString("inf") ?? 0.0, F64.infinity)
+    assertEqual(F64.fromHexString("-infinity") ?? 0.0, -F64.infinity)
+    assert((F64.fromHexString("nan") ?? 0.0).isNaN, "nan is read")
+    assertEqual(F64.fromHexString("0x0p0") ?? 1.0, 0.0)
+}
+
+@test
+fn hexadecimalIsRoundedOnceToTheType() {
+    assertEqual(F32.fromHexString("0x1.000001p0") ?? 0.0, 1.0)
+    assertEqual(F32.fromHexString("0x1.000003p0") ?? 0.0, 1.0000002)
+    assertEqual(F32.fromHexString("0x1.0000010000000000000000000000001p0") ?? 0.0, 1.0000001)
+    assertEqual(F64.fromHexString("0x1.fffffffffffff8p1023") ?? 0.0, F64.infinity)
+    assertEqual(F16.fromHexString("0x1.ffcp15") ?? 0.0, F16.greatestFiniteMagnitude)
+}
+
+@test
+fn hexadecimalBelowTheNormalValuesRoundsToASubnormal() {
+    assertEqual(F64.fromHexString("0x1p-1074") ?? 1.0, F64.leastNonzeroMagnitude)
+    assertEqual(F64.fromHexString("0x1p-1075") ?? 1.0, 0.0)
+    assertEqual(F64.fromHexString("0x1.8p-1075") ?? 1.0, F64.leastNonzeroMagnitude)
+    assertEqual(F64.fromHexString("0x1.8p-1074") ?? 1.0, F64.leastNonzeroMagnitude * 2.0)
+    assertEqual(F64.fromHexString("0x1p-2000") ?? 1.0, 0.0)
+    assertEqual(F64.fromHexString("0x1p99999999") ?? 1.0, F64.infinity)
+}
+
+@test
+fn whatIsNotHexadecimalIsNone() {
+    assert(F64.fromHexString("1.5") == none, "no 0x")
+    assert(F64.fromHexString("0x") == none, "no digits")
+    assert(F64.fromHexString("0x.") == none, "a point is no digit")
+    assert(F64.fromHexString("0x1g") == none, "g is no digit")
+    assert(F64.fromHexString("0x1p") == none, "no power after p")
+    assert(F64.fromHexString("0x1pz") == none, "z is no power")
+    assert(F64.fromHexString("") == none, "nothing")
+}

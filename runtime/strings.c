@@ -679,6 +679,28 @@ SableString *sable_string_from_f64(double value) {
     return make_cstring(text);
 }
 
+// A finite double's digits at a precision, correctly rounded from its exact
+// binary value, as printf writes them: 'digits' after the point, in
+// scientific form (%.*e, "1.250e+03") or fixed (%.*f, "1250.000"). The
+// numeric protocols' formatting is built on these (FloatingPoint+Text.sb);
+// a narrower float comes widened, which is exact. The precision is held to
+// what a double's exact expansion needs, 1074 places after the point, and
+// the buffer is as long as that is.
+static SableString *format_f64_at(const char *format, double value, int64_t digits) {
+    int precision = digits < 0 ? 0 : digits > 1100 ? 1100 : (int)digits;
+    char text[1500];
+    snprintf(text, sizeof text, format, precision, value);
+    return make_cstring(text);
+}
+
+SableString *sable_string_scientific_f64(double value, int64_t digits) {
+    return format_f64_at("%.*e", value, digits);
+}
+
+SableString *sable_string_fixed_f64(double value, int64_t digits) {
+    return format_f64_at("%.*f", value, digits);
+}
+
 // F32 the same way, against a float: 1.1, not 1.10000002.
 static void format_f32(float value, char *text, size_t size) {
     if (format_special(value, text, size)) {

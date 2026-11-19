@@ -1525,6 +1525,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "string_from_Char":
                 return Allocate(new HeapString(((Rune)operands[0]!).ToString()));
 
+            case "string_scientific_F64" or "string_fixed_F64":
+                return Allocate(new HeapString(FormatAt((double)operands[0]!, (long)operands[1]!, builtin.Name == "string_fixed_F64")));
+
             case var _ when builtin.Name.StartsWith("string_from_", StringComparison.Ordinal) && builtin.Name != "string_from_Char":
                 return Allocate(new HeapString(Format(operands[0])));
 
@@ -2322,6 +2325,71 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 _ => throw new SilTrap($"builtin \"{name}\" cannot take these operands"),
             };
         }
+    }
+
+    /// <summary>
+    ///     A finite double's digits at a precision, as C's printf writes them
+    ///     natively ('%.*e' or '%.*f'): rounded from the exact binary value,
+    ///     a tie to the even digit. Worked out in BigInteger, as .NET's own
+    ///     formatting rounds a tie away from zero.
+    /// </summary>
+    static string FormatAt(double value, long requested, bool fixedPoint) {
+        var digits = (int)Math.Clamp(requested, 0, 1100);
+        var negative = double.IsNegative(value);
+        var bits = BitConverter.DoubleToInt64Bits(Math.Abs(value));
+        var exponentBits = (int)(bits >> 52) & 0x7FF;
+        var mantissa = (BigInteger)(bits & 0xFFFFFFFFFFFFF);
+        if (exponentBits != 0) {
+            mantissa += BigInteger.One << 52;
+        }
+
+        // The value is numerator / denominator exactly.
+        var power = (exponentBits == 0 ? 1 : exponentBits) - 1075;
+        var numerator = power >= 0 ? mantissa << power : mantissa;
+        var denominator = power >= 0 ? BigInteger.One : BigInteger.One << -power;
+
+        // Divided and rounded to the nearest integer, a tie to the even one.
+        static BigInteger Rounded(BigInteger n, BigInteger d) {
+            var quotient = BigInteger.DivRem(n, d, out var remainder);
+            var twice = remainder * 2;
+            return twice > d || twice == d && !quotient.IsEven ? quotient + 1 : quotient;
+        }
+
+        var sign = negative ? "-" : "";
+        if (fixedPoint) {
+            var scaled = Rounded(numerator * BigInteger.Pow(10, digits), denominator).ToString(CultureInfo.InvariantCulture);
+            if (digits == 0) {
+                return sign + scaled;
+            }
+
+            scaled = scaled.PadLeft(digits + 1, '0');
+            return $"{sign}{scaled[..^digits]}.{scaled[^digits..]}";
+        }
+
+        // The decimal exponent of the leading digit, then the digits, which
+        // may round up to one more of them.
+        var exponent = mantissa.IsZero ? 0 : (int)Math.Floor(BigInteger.Log10(numerator) - BigInteger.Log10(denominator));
+        BigInteger Significand(int at) =>
+            at - digits >= 0
+                ? Rounded(numerator, denominator * BigInteger.Pow(10, at - digits))
+                : Rounded(numerator * BigInteger.Pow(10, digits - at), denominator);
+
+        // The logarithm is a double's, and may be one off either way.
+        var significand = Significand(exponent);
+        var limit = BigInteger.Pow(10, digits + 1);
+        while (!mantissa.IsZero && significand < limit / 10) {
+            exponent--;
+            significand = Significand(exponent);
+        }
+
+        while (significand >= limit) {
+            exponent++;
+            significand = Significand(exponent);
+        }
+
+        var text = significand.ToString(CultureInfo.InvariantCulture).PadLeft(digits + 1, '0');
+        var fraction = digits == 0 ? "" : "." + text[1..];
+        return $"{sign}{text[0]}{fraction}e{(exponent < 0 ? '-' : '+')}{Math.Abs(exponent):00}";
     }
 
     /// <summary>

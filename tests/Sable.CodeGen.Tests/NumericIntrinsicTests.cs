@@ -172,6 +172,28 @@ public sealed class NumericIntrinsicTests {
         );
 
     /// <summary>
+    ///     A float's digits at a precision are rounded from its exact value,
+    ///     a tie to the even digit, natively by C's printf and in the
+    ///     interpreter by exact arithmetic — and the two agree.
+    /// </summary>
+    [Fact]
+    public void DigitsAtAPrecisionAreRoundedFromTheExactValue() =>
+        Assert.Equal(
+            "0.12 0.38 2 -0.0 0.1000000000000000055511151231257827021181583404541015625\n"
+            + "1.2e-01 1.0e+01 4.941e-324 1e+300 -2.50e+00 0e+00\n1.797693134862315708e+308 100000000000000000000.00\n",
+            AssertAgree(
+                Program(
+                    "",
+                    """
+                        print("\((0.125).toFixedString(2)) \((0.375).toFixedString(2)) \((2.5).toFixedString(0)) \((-0.0).toFixedString(1)) \((0.1).toFixedString(55))")
+                        print("\((0.125).toScientificString(1)) \((9.96).toScientificString(1)) \(F64.leastNonzeroMagnitude.toScientificString(3)) \((1.0e300).toScientificString(0)) \((-2.5 as F32).toScientificString(2)) \((0.0).toScientificString(0))")
+                        print("\(F64.greatestFiniteMagnitude.toScientificString(18)) \((1.0e20).toFixedString(2))")
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>
     ///     A 128-bit integer converts to an F16 without compiler-rt's
     ///     '__floattihf', which not every C library links: rounded once,
     ///     and an infinity of its sign past the F16's range.

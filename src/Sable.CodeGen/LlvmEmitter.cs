@@ -354,6 +354,8 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_string_from_char(i32)
                                 declare ptr @sable_string_from_int(i64)
                                 declare ptr @sable_string_from_f64(double)
+                                declare ptr @sable_string_scientific_f64(double, i64)
+                                declare ptr @sable_string_fixed_f64(double, i64)
                                 declare ptr @sable_string_from_bool(i1 zeroext)
                                 declare zeroext i1 @sable_string_to_int(ptr, ptr)
                                 declare zeroext i1 @sable_string_to_f64(ptr, ptr)
@@ -2779,6 +2781,10 @@ public sealed partial class LlvmEmitter {
 
                 case "string_from_F64":
                     Line($"{Result()} = call ptr @sable_string_from_f64(double {operands[0]})");
+                    return;
+
+                case "string_scientific_F64" or "string_fixed_F64":
+                    Line($"{Result()} = call ptr @sable_{(builtin.Name == "string_fixed_F64" ? "string_fixed_f64" : "string_scientific_f64")}(double {operands[0]}, i64 {operands[1]})");
                     return;
 
                 case "string_from_Bool":

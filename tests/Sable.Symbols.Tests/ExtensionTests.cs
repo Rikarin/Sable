@@ -434,6 +434,53 @@ public sealed class ExtensionTests {
         Assert.NotEmpty(errors);
     }
 
+    /// <summary>
+    ///     Found by the compiler fuzzer: a default is bound afresh into each
+    ///     call that leaves it off, so a field's initial value that makes its
+    ///     own type with the memberwise initialiser, leaving that field off,
+    ///     was put in again and again until the stack ran out.
+    /// </summary>
+    [Fact]
+    public void AFieldDefaultThatLeavesItselfOffIsACycle() {
+        var errors = ErrorsIn(
+            """
+            fn keep(_ h: H) -> Int { return h.id }
+            struct H { var id: Int; let c: Int = keep(H(id: 1)) }
+            struct S { var a: Int = 1; var b: Int = S(a: 2).b }
+            fn probe() -> Int { return H(id: 3).c + S().a }
+            """
+        );
+        Assert.Equal(2, errors.Count);
+        Assert.All(errors, static e => Assert.Equal(ErrorCode.ERR_DefaultValueCycle, e.Code));
+        Assert.Contains(errors, static e => e.Message.StartsWith("the default value of 'c' needs itself ('c' → 'c')", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ParameterDefaultsThatCallEachOtherAreACycle() {
+        var errors = ErrorsIn(
+            """
+            fn f(_ x: Int = g()) -> Int { return x }
+            fn g(_ y: Int = f()) -> Int { return y }
+            fn h(_ z: Int = h()) -> Int { return z }
+            fn probe() -> Int { return f() + g() + h() }
+            """
+        );
+        Assert.Equal(3, errors.Count);
+        Assert.All(errors, static e => Assert.Equal(ErrorCode.ERR_DefaultValueCycle, e.Code));
+        Assert.Contains(errors, static e => e.Message.StartsWith("the default value of 'x' needs itself ('x' → 'y' → 'x')", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ADefaultMayCallAFunctionWhoseBodyUsesIt() =>
+        AssertClean(
+            """
+            fn make() -> S { return S() }
+            fn f(_ x: Int = make().a) -> Int { return x }
+            struct S { var a: Int = f(1); var b: Int = f() }
+            fn probe() -> Int { return S().b + f() }
+            """
+        );
+
     // ---- Initialisers a class has without declaring them -------------------
 
     [Fact]

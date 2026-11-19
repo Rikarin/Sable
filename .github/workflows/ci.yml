@@ -72,6 +72,16 @@ jobs:
       - name: Library and examples are formatted
         run: src/Sable.Driver/bin/Release/net11.0/sable fmt --check lib examples tools/fuzz
 
+      # The library's own tests (tests/lib/<Module>/), with coverage counted
+      # in lib/<Module>/: each file must meet its threshold in
+      # tools/stdlib-coverage.thresholds. Once, on Linux: the library's code
+      # is the same everywhere.
+      - name: Standard library coverage
+        if: runner.os == 'Linux'
+        env:
+          SABLE: src/Sable.Driver/bin/Release/net11.0/sable
+        run: tools/stdlib-coverage.sh
+
   vscode:
     name: VS Code extension
     runs-on: ubuntu-24.04

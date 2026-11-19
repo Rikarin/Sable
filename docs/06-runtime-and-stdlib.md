@@ -248,6 +248,26 @@ floor — so the library is Sable down to the operations only the runtime can
 perform, at no cost over the compiler doing it by special case
 (docs/04, "Sable.Core in Sable").
 
+### Source layout
+
+Each module is a directory of `lib/` (`lib/Sable.Collections/`), its files
+all declaring `module Sable.Collections`, and each holds **one public type**,
+named after it: `Stack.sb`, `HashMap.sb`. Helpers private to a type live in
+its file; a family that is one concept shares one (`Sequence.sb` has
+`Iterator`, `Sequence` and their async forms; `Channel.sb` has
+`ChannelIterator`); free functions are in a file named for what they do
+(`Sort.sb`, `Math.sb`); a large extension of a type for one feature is
+`<Type>+<Feature>.sb` (`String+Sequence.sb`). `lib/Sable.Core/` is flat.
+Declarations are internal to their module by default, so how a module is
+cut into files changes nothing a program sees.
+
+Each type is tested in Sable, by `@test` functions in
+`tests/lib/<Module>/<Type>Tests.sb`, and each module's tests are run with
+coverage counted in the module (`sable test --cover lib/<Module>
+tests/lib/<Module>/`): `tools/stdlib-coverage.sh` holds every file to at
+least 85% of its lines and 70% of its branches, or the floor recorded for
+it in `tools/stdlib-coverage.thresholds` (CONTRIBUTING.md).
+
 Outside the standard set, in the registry but team-maintained:
 
 ```

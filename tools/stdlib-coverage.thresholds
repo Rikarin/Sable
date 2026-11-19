@@ -1,0 +1,90 @@
+# The least share of lines and of branches (percent) the standard library's
+# own tests must run in each file of lib/, checked by tools/stdlib-coverage.sh.
+#
+#   <file or glob>  <lines>  <branches>   # why
+#
+# The last line that names a file wins. '*' is the default every new file
+# must meet; an override below it needs a reason, and one marked "raise me"
+# is a file that was under the default when the check began: raise it (or
+# drop the line) as its tests grow, never lower it.
+
+*  85 70
+
+# Under the default when the check began (raise me): the share each had then.
+lib/Sable.Build/BuildScript.sb                     0  70   # raise me: no tests yet
+lib/Sable.Build/Condition.sb                       0   0   # raise me: no tests yet
+lib/Sable.Build/Dependency.sb                      0  70   # raise me: no tests yet
+lib/Sable.Build/Manifest.sb                        0   0   # raise me: no tests yet
+lib/Sable.Build/Profile.sb                         0  70   # raise me: no tests yet
+lib/Sable.Build/Target.sb                          0  70   # raise me: no tests yet
+lib/Sable.Build/TargetSettings.sb                  0  70   # raise me: no tests yet
+lib/Sable.Collections/BitSet.sb                   68  59   # raise me
+lib/Sable.Collections/Deque.sb                    61  70   # raise me
+lib/Sable.Collections/HashMap.sb                  81  70   # raise me
+lib/Sable.Collections/HashSet.sb                  55  70   # raise me
+lib/Sable.Collections/OrderedDictionary.sb         0  70   # raise me: no tests yet
+lib/Sable.Collections/PriorityQueue.sb            73  70   # raise me
+lib/Sable.Collections/Queue.sb                    81  70   # raise me
+lib/Sable.Collections/Sort.sb                     54  30   # raise me
+lib/Sable.Collections/Stack.sb                    70  70   # raise me
+lib/Sable.Concurrency/Channel.sb                   0  70   # raise me: no tests yet
+lib/Sable.Concurrency/Sleep.sb                     0  70   # raise me: no tests yet
+lib/Sable.Concurrency/TaskGroup.sb                 0  70   # raise me: no tests yet
+lib/Sable.Core/Array.sb                            0   0   # raise me: no tests yet
+lib/Sable.Core/Char.sb                             0   0   # raise me: no tests yet
+lib/Sable.Core/ClosedRange.sb                      0  70   # raise me: no tests yet
+lib/Sable.Core/Debug.sb                            0   0   # raise me: no tests yet
+lib/Sable.Core/Dictionary.sb                       0  70   # raise me: no tests yet
+lib/Sable.Core/Equatable.sb                        0   0   # raise me: no tests yet
+lib/Sable.Core/Mirror.sb                           0  70   # raise me: no tests yet
+lib/Sable.Core/Numbers.sb                          0  70   # raise me: no tests yet
+lib/Sable.Core/PartialRangeFrom.sb                 0  70   # raise me: no tests yet
+lib/Sable.Core/PartialRangeThrough.sb              0  70   # raise me: no tests yet
+lib/Sable.Core/PartialRangeUpTo.sb                 0  70   # raise me: no tests yet
+lib/Sable.Core/Range.sb                            0  70   # raise me: no tests yet
+lib/Sable.Core/Runtime.sb                          0   0   # raise me: no tests yet
+lib/Sable.Core/Stride.sb                           0   0   # raise me: no tests yet
+lib/Sable.Core/String+Sequence.sb                  0   0   # raise me: no tests yet
+lib/Sable.Core/String.sb                           0   0   # raise me: no tests yet
+lib/Sable.Core/TypeInfo.sb                         0   0   # raise me: no tests yet
+lib/Sable.Diagnostics/Field.sb                     0  70   # raise me: no tests yet
+lib/Sable.Diagnostics/Level.sb                     0   0   # raise me: no tests yet
+lib/Sable.Diagnostics/Logger.sb                    0   0   # raise me: no tests yet
+lib/Sable.Generators/Attribute.sb                  0   0   # raise me: no tests yet
+lib/Sable.Generators/Case.sb                       0   0   # raise me: no tests yet
+lib/Sable.Generators/Declaration.sb                0   0   # raise me: no tests yet
+lib/Sable.Generators/Field.sb                      0   0   # raise me: no tests yet
+lib/Sable.Generators/GeneratorRequest.sb           0   0   # raise me: no tests yet
+lib/Sable.Generators/Output.sb                     0  70   # raise me: no tests yet
+lib/Sable.Generators/Package.sb                    0   0   # raise me: no tests yet
+lib/Sable.Generators/Parameter.sb                  0   0   # raise me: no tests yet
+lib/Sable.Generators/TypeRef.sb                    0   0   # raise me: no tests yet
+lib/Sable.IO/Console.sb                            0   0   # raise me: no tests yet
+lib/Sable.IO/Directory.sb                          0   0   # raise me: no tests yet
+lib/Sable.IO/Environment.sb                        0   0   # raise me: no tests yet
+lib/Sable.IO/File.sb                               0   0   # raise me: no tests yet
+lib/Sable.IO/Path.sb                               0   0   # raise me: no tests yet
+lib/Sable.Math/Math.sb                             0   0   # raise me: no tests yet
+lib/Sable.Math/Random.sb                           0   0   # raise me: no tests yet
+lib/Sable.Process/Completed.sb                     0  70   # raise me: no tests yet
+lib/Sable.Process/Process.sb                       0   0   # raise me: no tests yet
+lib/Sable.Serialize/Difference.sb                  0   0   # raise me: no tests yet
+lib/Sable.Serialize/JsonValue.sb                   0   0   # raise me: no tests yet
+lib/Sable.Serialize/MergePatch.sb                  0   0   # raise me: no tests yet
+lib/Sable.Serialize/ParseError.sb                  0   0   # raise me: no tests yet
+lib/Sable.Serialize/ParseOptions.sb                0  70   # raise me: no tests yet
+lib/Sable.Serialize/Parser.sb                      0   0   # raise me: no tests yet
+lib/Sable.Serialize/Pointer.sb                     0   0   # raise me: no tests yet
+lib/Sable.Serialize/PrintOptions.sb                0  70   # raise me: no tests yet
+lib/Sable.Serialize/Printing.sb                    0   0   # raise me: no tests yet
+lib/Sable.Serialize/Statistics.sb                  0   0   # raise me: no tests yet
+lib/Sable.Serialize/TextHelpers.sb                 0   0   # raise me: no tests yet
+lib/Sable.Serialize/Transform.sb                   0   0   # raise me: no tests yet
+lib/Sable.Testing/Assertions.sb                    0   0   # raise me: no tests yet
+lib/Sable.Testing/Bencher.sb                       0   0   # raise me: no tests yet
+lib/Sable.Testing/TestCase.sb                     27   8   # raise me
+lib/Sable.Text/Text.sb                            85  68   # raise me
+lib/Sable.Time/Clock.sb                            0  70   # raise me: no tests yet
+lib/Sable.Time/DateTime.sb                         0   0   # raise me: no tests yet
+lib/Sable.Time/Duration.sb                         0   0   # raise me: no tests yet
+lib/Sable.Time/Instant.sb                          0  70   # raise me: no tests yet

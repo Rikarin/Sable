@@ -239,10 +239,12 @@ internal sealed class Conversions(CoreTypes core) {
             return AssociatedTypes.ConstraintsOf(source, context).Any(c => Satisfies(c, constraint, context));
         }
 
-        // Never has no values, so it is whatever a protocol asks: a
-        // sequence that cannot fail has Never for its Failure, an Error.
+        // Never has no values, so it is an Error (and what Error refines): a
+        // sequence that cannot fail has Never for its Failure. Only those:
+        // a type found conforming to any other would be one generic code
+        // and existentials are made for.
         if (source is NamedTypeSymbol { TypeKind: TypeKind.Builtin, Name: "Never", TypeArguments.IsEmpty: true }
-            && constraint is NamedTypeSymbol { TypeKind: TypeKind.Protocol }) {
+            && constraint is NamedTypeSymbol { TypeKind: TypeKind.Protocol, Name: "Error" or "Debug" or "Sendable", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } }) {
             return true;
         }
 

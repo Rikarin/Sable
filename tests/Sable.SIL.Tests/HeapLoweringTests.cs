@@ -523,6 +523,33 @@ public sealed class HeapLoweringTests {
         Assert.Equal("aadaabbccaad2", Run(module, "test").Result);
     }
 
+    // A body giving nothing that is an assignment — 'set => field = v', a
+    // closure '{ s = v }' — stores, and keeps nothing of the value.
+    [Fact]
+    public void AnAssignmentABodyGivingNothingReturnsIsOnlyAStore() {
+        var module = Lower(
+            """
+            struct Tag {
+                var text: String = "" {
+                    get => field
+                    set => field = newValue + "!"
+                }
+            }
+
+            fn test() -> String {
+                var tag = Tag()
+                tag.text = "a"
+                var s = ""
+                let write: (String) -> Void = { s = $0 }
+                write("b")
+                return tag.text + s
+            }
+            """
+        );
+
+        Assert.Equal("a!b", Run(module, "test").Result);
+    }
+
     // Through '?.' an assignment stores only when there is something to store
     // into, so its value is the stored value, wrapped, or none.
     [Fact]

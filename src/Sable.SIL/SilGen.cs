@@ -4729,6 +4729,12 @@ public sealed partial class SilGen {
             }
 
             if (function.Type.Result == SilType.Unit) {
+                // 'set => field = newValue': what a function giving nothing
+                // is handed to return is dropped.
+                if (value is not null) {
+                    Destroy(value);
+                }
+
                 Branch(_returnBlock);
             } else if (value is not null and not UnitValue) {
                 Branch(_returnBlock, Owned(value));
@@ -4932,7 +4938,9 @@ public sealed partial class SilGen {
 
                 case BoundReturn returnStatement: {
                     if (returnStatement.Value is { } returned) {
-                        if (Expression(returned) is { } value) {
+                        // An assignment a function giving nothing returns is only a store.
+                        var stores = returned is BoundAssignment && function.Type.Result == SilType.Unit;
+                        if ((stores ? Assignment((BoundAssignment)returned) : Expression(returned)) is { } value) {
                             Return(value);
                         }
                     } else if (symbol.FunctionKind == FunctionKind.Initializer && !_initializing) {

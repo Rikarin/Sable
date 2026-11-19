@@ -862,61 +862,77 @@ public static partial class SilVerifier {
 
     /// <summary>
     ///     For each block reachable from the entry, the blocks that dominate it,
-    ///     itself included. The simple iterative algorithm: fine for the sizes a
-    ///     function has.
+    ///     itself included.
     /// </summary>
+    /// <remarks>
+    ///     Each block's immediate dominator first, by Cooper, Harvey and
+    ///     Kennedy's iteration over the blocks in reverse postorder ("A Simple,
+    ///     Fast Dominance Algorithm"), which settles in a pass or two; then each
+    ///     block's set, its immediate dominator's with itself added. Iterating
+    ///     on the sets themselves, every one starting as every block, is
+    ///     quadratic in the blocks on every pass, which a large function — and
+    ///     the verifier runs after every pass, on every function — makes slow.
+    /// </remarks>
     public static Dictionary<SilBlock, HashSet<SilBlock>> Dominators(SilFunction function) {
-        var reachable = new List<SilBlock>();
-        var seen = new HashSet<SilBlock>();
-        var pending = new Stack<SilBlock>();
-        pending.Push(function.Entry);
-        while (pending.Count > 0) {
-            var block = pending.Pop();
-            if (!seen.Add(block)) {
-                continue;
-            }
+        var order = ReversePostorder(function);
+        var index = new Dictionary<SilBlock, int>(order.Count);
+        for (var i = 0; i < order.Count; i++) {
+            index[order[i]] = i;
+        }
 
-            reachable.Add(block);
-            foreach (var successor in block.Successors) {
-                pending.Push(successor);
+        var predecessors = new List<int>[order.Count];
+        for (var i = 0; i < order.Count; i++) {
+            predecessors[i] = [];
+        }
+
+        for (var i = 0; i < order.Count; i++) {
+            foreach (var successor in order[i].Successors) {
+                predecessors[index[successor]].Add(i);
             }
         }
 
-        var predecessors = reachable.ToDictionary(static b => b, static _ => new List<SilBlock>());
-        foreach (var block in reachable) {
-            foreach (var successor in block.Successors) {
-                predecessors[successor].Add(block);
-            }
-        }
-
-        var dominators = reachable.ToDictionary(static b => b, _ => new HashSet<SilBlock>(reachable));
-        dominators[function.Entry] = [function.Entry];
-
+        // By position in reverse postorder: the entry is 0, and a block's
+        // immediate dominator comes before it. -1 is not yet known.
+        var immediate = new int[order.Count];
+        Array.Fill(immediate, -1);
+        immediate[0] = 0;
         var changed = true;
         while (changed) {
             changed = false;
-            foreach (var block in reachable) {
-                if (block == function.Entry) {
-                    continue;
-                }
-
-                HashSet<SilBlock>? meet = null;
-                foreach (var predecessor in predecessors[block]) {
-                    if (meet is null) {
-                        meet = [..dominators[predecessor]];
-                    } else {
-                        meet.IntersectWith(dominators[predecessor]);
+            for (var i = 1; i < order.Count; i++) {
+                var found = -1;
+                foreach (var predecessor in predecessors[i]) {
+                    if (immediate[predecessor] < 0) {
+                        continue;
                     }
+
+                    found = found < 0 ? predecessor : Intersect(predecessor, found);
                 }
 
-                meet ??= [];
-                meet.Add(block);
-
-                if (!meet.SetEquals(dominators[block])) {
-                    dominators[block] = meet;
+                if (found != immediate[i]) {
+                    immediate[i] = found;
                     changed = true;
                 }
             }
+        }
+
+        int Intersect(int a, int b) {
+            while (a != b) {
+                while (a > b) {
+                    a = immediate[a];
+                }
+
+                while (b > a) {
+                    b = immediate[b];
+                }
+            }
+
+            return a;
+        }
+
+        var dominators = new Dictionary<SilBlock, HashSet<SilBlock>>(order.Count) { [order[0]] = [order[0]] };
+        for (var i = 1; i < order.Count; i++) {
+            dominators[order[i]] = [..dominators[order[immediate[i]]], order[i]];
         }
 
         return dominators;

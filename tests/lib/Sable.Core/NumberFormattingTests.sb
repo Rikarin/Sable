@@ -1,0 +1,285 @@
+module NumberFormattingTests
+
+// The numbers' Formattable conformances (Int+Formatting.sb and the rest) and
+// what they share (NumberFormatting.sb): radixes, signs, separators and
+// padding for integers; precisions and notations for floats. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn spec(_ text: String) -> FormatSpec {
+    return try! FormatSpec.parse(text)
+}
+
+// ---- Integers ----------------------------------------------------------------
+
+@test
+fn anIntegerWithNoSpecIsItsDecimal() {
+    assertEqual(0.format(FormatSpec()), "0")
+    assertEqual((-7).format(FormatSpec()), "-7")
+    assertEqual("\(1234)", "1234")
+}
+
+@test
+fn anIntegerIsWrittenInEachRadix() {
+    assertEqual("\(255:x)", "ff")
+    assertEqual("\(255:X)", "FF")
+    assertEqual("\(8:o)", "10")
+    assertEqual("\(5:b)", "101")
+    assertEqual("\(0:x)", "0")
+    assertEqual("\(42:d)", "42")
+    assertEqual("\(42:?)", "42")
+}
+
+@test
+fn aHashWritesTheRadixPrefix() {
+    assertEqual("\(255:#x)", "0xff")
+    assertEqual("\(255:#X)", "0xFF")
+    assertEqual("\(8:#o)", "0o10")
+    assertEqual("\(5:#b)", "0b101")
+    assertEqual("\(-255:#x)", "-0xff")
+}
+
+@test
+fn aNegativeIntegerInARadixIsSignedNotTwosComplement() {
+    let small: I8 = -128
+    assertEqual("\(small:x)", "-80")
+    assertEqual("\(small:b)", "-10000000")
+}
+
+@test
+fn aSignIsWrittenAsAsked() {
+    assertEqual("\(5:+)", "+5")
+    assertEqual("\(-5:+)", "-5")
+    assertEqual("\(5: )", " 5")
+    assertEqual("\(-5: )", "-5")
+    assertEqual("\(5:-)", "5")
+    assertEqual("\(0:+)", "+0")
+}
+
+@test
+fn anIntegerIsPaddedOnTheLeft() {
+    assertEqual("[\(42:5)]", "[   42]")
+    assertEqual("[\(42:<5)]", "[42   ]")
+    assertEqual("[\(42:^6)]", "[  42  ]")
+    assertEqual("[\(42:*>5)]", "[***42]")
+    assertEqual("[\(123456:3)]", "[123456]")
+}
+
+@test
+fn zerosGoAfterTheSignAndPrefix() {
+    assertEqual("\(-42:06)", "-00042")
+    assertEqual("\(42:+06)", "+00042")
+    assertEqual("\(255:#06x)", "0x00ff")
+    assertEqual("\(255:#04x)", "0xff")
+    assertEqual("\(255:02x)", "ff")
+}
+
+@test
+fn separatorsGroupTheDigits() {
+    assertEqual("\(1234567:,)", "1,234,567")
+    assertEqual("\(-1234567:_)", "-1_234_567")
+    assertEqual("\(123:,)", "123")
+    assertEqual("\(1000:,)", "1,000")
+    assertEqual("\(4294967295:_x)", "ffff_ffff")
+    assertEqual("\(65535:_b)", "1111_1111_1111_1111")
+}
+
+@test
+fn zerosAreGroupedWithTheDigits() {
+    assertEqual("\(1234:08,)", "0,001,234")
+    assertEqual("\(1234:09,)", "0,001,234")
+    assertEqual("\(1234:07,)", "001,234")
+    assertEqual("\(255:09_x)", "0000_00ff")
+}
+
+@test
+fn everyIntegerTypeFormatsItsExtremes() {
+    let a: I8 = -128
+    let b: I16 = -32768
+    let c: I32 = -2147483648
+    let d: I64 = -9223372036854775808
+    let e: I128 = -170141183460469231731687303715884105728
+    let f: Int = -9223372036854775808
+    assertEqual("\(a:x) \(b:x) \(c:x) \(d:x)", "-80 -8000 -80000000 -8000000000000000")
+    assertEqual("\(e:X)", "-80000000000000000000000000000000")
+    assertEqual("\(f:,)", "-9,223,372,036,854,775,808")
+    let g: U8 = 255
+    let h: U16 = 65535
+    let i: U32 = 4294967295
+    let j: U64 = 18446744073709551615
+    let k: U128 = 340282366920938463463374607431768211455
+    let l: UInt = 18446744073709551615
+    assertEqual("\(g:#b) \(h:#o) \(i:#x)", "0b11111111 0o177777 0xffffffff")
+    assertEqual("\(j:,) \(l:_)", "18,446,744,073,709,551,615 18_446_744_073_709_551_615")
+    assertEqual("\(k:x)", "ffffffffffffffffffffffffffffffff")
+    assertEqual("\(k)", "340282366920938463463374607431768211455")
+}
+
+@test
+fn anIntegerGivenAFloatsKindIsWrittenAsAnF64() {
+    assertEqual(1234.format(spec(".2e")), "1.23e+03")
+    assertEqual((-3).format(spec("f")), "-3.0")
+    let n: U8 = 1
+    assertEqual(n.format(spec("%")), "100%")
+}
+
+@test
+fn anIntegerIgnoresAPrecision() {
+    assertEqual(42.format(spec(".3")), "42")
+}
+
+// ---- Floats ------------------------------------------------------------------
+
+@test
+fn aFloatWithNoSpecIsItsShortestDigits() {
+    assertEqual((0.1).format(FormatSpec()), "0.1")
+    assertEqual((4.0).format(FormatSpec()), "4.0")
+    assertEqual((100.0).format(FormatSpec()), "100.0")
+    assertEqual((1e20).format(FormatSpec()), "1e+20")
+    assertEqual((1.5e-7).format(FormatSpec()), "1.5e-07")
+    assertEqual((0.0001).format(FormatSpec()), "0.0001")
+    assertEqual((0.0).format(FormatSpec()), "0.0")
+}
+
+@test
+fn aPrecisionRoundsTheExactValueTiesToEven() {
+    assertEqual("\(3.14159:.2)", "3.14")
+    assertEqual("\(2.5:.0)", "2")
+    assertEqual("\(3.5:.0)", "4")
+    assertEqual("\(0.125:.2)", "0.12")
+    assertEqual("\(0.375:.2)", "0.38")
+    // 2.675 is a little under, as an F64: down, where decimal would go up.
+    assertEqual("\(2.675:.2)", "2.67")
+    assertEqual("\(9.999:.2)", "10.00")
+    assertEqual("\(0.5:.3)", "0.500")
+    assertEqual("\(1e-10:.3)", "0.000")
+    assertEqual("\(0.0006:.3)", "0.001")
+    assertEqual("\(123.0:.0)", "123")
+}
+
+@test
+fn aPrecisionReachesTheExactBinaryDigits() {
+    assertEqual("\(0.1:.20)", "0.10000000000000000555")
+    assertEqual("\(1e22:.1)", "10000000000000000000000.0")
+    assertEqual("\(1e23:.0)", "99999999999999991611392")
+}
+
+@test
+fn fixedNotationNeverHasAnExponent() {
+    assertEqual("\(1e20:f)", "100000000000000000000.0")
+    assertEqual("\(1.5e-7:f)", "0.00000015")
+    assertEqual("\(2.0:f)", "2.0")
+    assertEqual("\(2.0:.3f)", "2.000")
+}
+
+@test
+fn scientificNotationHasOneDigitBeforeThePoint() {
+    assertEqual("\(1234.5:e)", "1.2345e+03")
+    assertEqual("\(1234.5:E)", "1.2345E+03")
+    assertEqual("\(1234.5:.2e)", "1.23e+03")
+    assertEqual("\(1234.5678:.3e)", "1.235e+03")
+    assertEqual("\(9.99:.1e)", "1.0e+01")
+    assertEqual("\(0.0:e)", "0e+00")
+    assertEqual("\(0.0:.2e)", "0.00e+00")
+    assertEqual("\(1e-300:e)", "1e-300")
+    assertEqual("\(1e300:.2e)", "1.00e+300")
+    assertEqual("\(5.0:.0e)", "5e+00")
+}
+
+@test
+fn theLeastFloatsAreWrittenExactly() {
+    assertEqual("\(5e-324:e)", "5e-324")
+    assertEqual("\(5e-324:.3e)", "4.941e-324")
+    assertEqual("\(1.7976931348623157e308:.3e)", "1.798e+308")
+}
+
+@test
+fn generalNotationSuitsTheSize() {
+    assertEqual("\(0.000123:g)", "0.000123")
+    assertEqual("\(123456789.0:.3g)", "1.23e+08")
+    assertEqual("\(123456.0:.6g)", "123456")
+    assertEqual("\(1234567.0:.6g)", "1.23457e+06")
+    assertEqual("\(0.0001:.2g)", "0.0001")
+    assertEqual("\(0.00001:.2g)", "1e-05")
+    assertEqual("\(4.0:g)", "4")
+    assertEqual("\(1e20:G)", "1E+20")
+    assertEqual("\(2.5:.0g)", "2")
+    assertEqual("\(0.0:.3g)", "0")
+}
+
+@test
+fn aHashKeepsGeneralsTrailingZeros() {
+    assertEqual("\(2.5:#.4g)", "2.500")
+    assertEqual("\(2.5:.4g)", "2.5")
+}
+
+@test
+fn aPercentIsAHundredTimesTheValue() {
+    assertEqual("\(0.25:%)", "25%")
+    assertEqual("\(0.07:%)", "7%")
+    assertEqual("\(0.125:.1%)", "12.5%")
+    assertEqual("\(1.0:.0%)", "100%")
+    assertEqual("\(0.001234:%)", "0.1234%")
+}
+
+@test
+fn aFloatsSignPaddingAndSeparators() {
+    assertEqual("\(1.5:+)", "+1.5")
+    assertEqual("\(-1.5:+)", "-1.5")
+    assertEqual("\(1.5: )", " 1.5")
+    assertEqual("[\(1.5:8)]", "[     1.5]")
+    assertEqual("[\(-1.5:08.2)]", "[-0001.50]")
+    assertEqual("\(1234567.891:,.1)", "1,234,567.9")
+    assertEqual("\(1234.5:012,.2)", "0,001,234.50")
+    assertEqual("\(1e6:_f)", "1_000_000.0")
+}
+
+@test
+fn negativeZeroKeepsItsSign() {
+    assertEqual("\(-0.0)", "-0.0")
+    assertEqual("\(-0.0:+)", "-0.0")
+    assertEqual("\(-0.001:.1)", "-0.0")
+}
+
+@test
+fn notANumberAndInfinityAreWords() {
+    let zero = 0.0
+    let nan = zero / zero
+    let inf = 1.0 / zero
+    assertEqual("\(nan)", "nan")
+    assertEqual("\(nan:+)", "nan")
+    assertEqual("\(inf:+)", "+inf")
+    assertEqual("\(0.0 - inf)", "-inf")
+    assertEqual("\(inf:E)", "INF")
+    assertEqual("\(nan:G)", "NAN")
+    assertEqual("[\(inf:06)]", "[   inf]")
+    assertEqual("\(inf:.2)", "inf")
+}
+
+@test
+fn aFloatsDebugIsItsLiteral() {
+    assertEqual("\(4.0:?)", "4.0")
+    assertEqual("[\(4.0:>5?)]", "[  4.0]")
+}
+
+@test
+fn anF32IsWrittenInItsOwnShortestDigits() {
+    let x: F32 = 0.1
+    assertEqual("\(x)", "0.1")
+    assertEqual("\(x:.10)", "0.1000000015")
+    assertEqual("\(x:e)", "1e-01")
+    assertEqual("\(x:?)", "0.1")
+    let big: F32 = 3.4028235e38
+    assertEqual("\(big:.2e)", "3.40e+38")
+}
+
+@test
+fn anF16IsWrittenInItsOwnShortestDigits() {
+    let x: F16 = 0.1
+    assertEqual("\(x)", "0.1")
+    assertEqual("\(x:.5)", "0.09998")
+    assertEqual("\(x:?)", "0.1")
+    let whole: F16 = 2048.0
+    assertEqual("\(whole:,.1f)", "2,048.0")
+}

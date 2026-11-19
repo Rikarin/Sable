@@ -2590,14 +2590,17 @@ public sealed partial class Binder {
 
     BoundExpression BindInterpolatedString(InterpolatedStringExpressionSyntax syntax) {
         var parts = ImmutableArray.CreateBuilder<BoundExpression>();
+        var formats = ImmutableArray.CreateBuilder<BoundFormatSpec?>();
 
         foreach (var content in syntax.Contents) {
             if (content is InterpolationSyntax hole) {
-                parts.Add(BindExpression(hole.Expression));
+                var part = BindExpression(hole.Expression);
+                parts.Add(part);
+                formats.Add(hole.FormatToken.IsNone ? null : BindFormatSpec(hole, part));
             }
         }
 
-        return new BoundInterpolatedString(syntax, Core.String, parts.ToImmutable());
+        return new BoundInterpolatedString(syntax, Core.String, parts.ToImmutable(), formats.ToImmutable());
     }
 
     BoundExpression BindSelf(SelfExpressionSyntax syntax) {

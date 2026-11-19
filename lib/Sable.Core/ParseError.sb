@@ -1,0 +1,52 @@
+module Sable.Core
+
+/// Why text is not a value of the type it was parsed as: what `Parsable`'s
+/// `parse` throws. Positions count Unicode scalars from 0.
+///
+/// ```sable
+/// do {
+///     let _ = try I8.parse("300")
+/// } catch {
+///     assert(error == .Overflow)
+/// }
+/// ```
+public union ParseError {
+    /// The text is empty, or nothing but the white space the styles allowed.
+    Empty
+    /// A number has something other than a digit of its radix there, or ends
+    /// there where a digit was wanted: `at` is the text's length then.
+    InvalidDigit(at: Int)
+    /// The text stops being a value of the type there: a word that is not
+    /// `true` or `false`, a second scalar after a `Char`'s one.
+    Invalid(at: Int)
+    /// The number is greater than the type's greatest.
+    Overflow
+    /// The number is less than the type's least.
+    Underflow
+}
+
+extension ParseError: Equatable {
+    public operator == (lhs: ParseError, rhs: ParseError) -> Bool {
+        return match (lhs, rhs) {
+            case (.Empty, .Empty)                             => true
+            case (.InvalidDigit(let a), .InvalidDigit(let b)) => a == b
+            case (.Invalid(let a), .Invalid(let b))           => a == b
+            case (.Overflow, .Overflow)                       => true
+            case (.Underflow, .Underflow)                     => true
+            case _                                            => false
+        }
+    }
+}
+
+extension ParseError: Debug {
+    /// The case as source writes it: `ParseError.InvalidDigit(at: 3)`.
+    public fn debugDescription() -> String {
+        return match self {
+            case .Empty                => "ParseError.Empty"
+            case .InvalidDigit(let at) => "ParseError.InvalidDigit(at: \(at))"
+            case .Invalid(let at)      => "ParseError.Invalid(at: \(at))"
+            case .Overflow             => "ParseError.Overflow"
+            case .Underflow            => "ParseError.Underflow"
+        }
+    }
+}

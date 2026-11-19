@@ -1,0 +1,21 @@
+module Sable.Core
+
+extension String: Formattable {
+    /// The text, cut to the precision's number of scalars when there is one,
+    /// or with `?` quoted and escaped as a literal is written; then padded to
+    /// the spec's width.
+    ///
+    /// ```sable
+    /// assert("sable".format(try! FormatSpec.parse("*<8.3")) == "sab*****")
+    /// assert("a\"b".format(try! FormatSpec.parse("?")) == "\"a\\\"b\"")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String {
+        var text = spec.kind == .Debug ? self.debugDescription() : self
+        if let precision = spec.precision {
+            if precision < text.count {
+                text = text.slice(from: 0, to: precision < 0 ? 0 : precision)
+            }
+        }
+        return spec.padded(text)
+    }
+}

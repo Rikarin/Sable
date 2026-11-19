@@ -94,6 +94,12 @@ public sealed class CoreTypes {
     /// <summary><c>InlineLayout</c>: what every <c>@inline_layout</c> struct conforms to (<c>InlineLayout.sb</c>).</summary>
     public NamedTypeSymbol? InlineLayout => Declared("InlineLayout", TypeKind.Protocol);
 
+    /// <summary><c>Formattable</c>: what an interpolation writes a value through (<c>Formattable.sb</c>).</summary>
+    public NamedTypeSymbol? Formattable => Declared("Formattable", TypeKind.Protocol);
+
+    /// <summary><c>FormatSpec</c>: what an interpolation's format spec becomes (<c>FormatSpec.sb</c>).</summary>
+    public NamedTypeSymbol? FormatSpec => Declared("FormatSpec", TypeKind.Struct);
+
     NamedTypeSymbol? Declared(string name, TypeKind kind) =>
         Module.GetType(name) is { } type && type.TypeKind == kind ? type : null;
 

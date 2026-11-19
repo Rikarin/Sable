@@ -1,0 +1,16 @@
+module Sable.Core
+
+extension I128: Formattable {
+    /// The number as the spec says: in decimal, or in the radix of `x`, `X`,
+    /// `o` or `b` (`#` writes its `0x`); with a sign, separators and
+    /// padding as asked. A float's kind writes it as an F64 would be.
+    ///
+    /// ```sable
+    /// let n: I128 = -42
+    /// assert(n.format(try! FormatSpec.parse("+06")) == "-00042")
+    /// assert(n.format(try! FormatSpec.parse("#x")) == "-0x2a")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String {
+        return formatInteger(magnitudeOf(self), self < 0, spec)
+    }
+}

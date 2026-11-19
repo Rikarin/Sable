@@ -1124,8 +1124,14 @@ whose value replaces the failed expression, or an expression after `catch`.
 abort("invariant violated: \(state)")
 assert(index < count, "out of range")      // debug only
 precondition(index < count)                // all builds
+fatalError("cannot go on")                 // -> Never
+todo()                                     // -> Never: not written yet
 unreachable()                              // -> Never
 ```
+
+Each reports the place it was called from: a parameter whose default is
+`#file`, `#line`, `#column` or `#function` takes the call's place, not its
+own.
 
 Panics are not catchable in normal code. `Task.catchingPanic { }` exists for
 supervisors and test harnesses only.

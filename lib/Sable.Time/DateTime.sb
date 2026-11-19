@@ -100,11 +100,11 @@ public struct DateTime: Comparable, Hashable {
         return y + "-" + two(month) + "-" + two(day)
     }
 
-    operator == (a: DateTime, b: DateTime) -> Bool {
+    public operator == (a: DateTime, b: DateTime) -> Bool {
         return a.secondsSinceEpoch == b.secondsSinceEpoch && a.nanosecond == b.nanosecond
     }
 
-    operator < (a: DateTime, b: DateTime) -> Bool {
+    public operator < (a: DateTime, b: DateTime) -> Bool {
         if a.secondsSinceEpoch != b.secondsSinceEpoch {
             return a.secondsSinceEpoch < b.secondsSinceEpoch
         }

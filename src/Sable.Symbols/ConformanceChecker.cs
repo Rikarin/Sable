@@ -801,6 +801,14 @@ internal static class ConformanceChecker {
             return;
         }
 
+        // An enum, or a union whose cases carry nothing, has an equality of
+        // its own, by case: that is its '=='.
+        if (candidates.Count == 0 && requirement is { FunctionKind: FunctionKind.Operator, Name: "==" or "!=" }
+            && (type.TypeKind == TypeKind.Enum
+                || type.TypeKind == TypeKind.Union && type.Members.OfType<UnionCaseSymbol>().All(static c => !c.HasPayload))) {
+            return;
+        }
+
         if (candidates.Count == 0) {
             Report(
                 diagnostics,
@@ -1157,9 +1165,11 @@ internal static class ConformanceChecker {
             function.Parameters.Select(static p => $"{p.Name}: {p.Type.ToDisplayString()}")
         );
 
-        return function.FunctionKind == FunctionKind.Initializer
-            ? $"init({parameters})"
-            : $"fn {function.Name}({parameters}) -> {function.ReturnType.ToDisplayString()}";
+        return function.FunctionKind switch {
+            FunctionKind.Initializer => $"init({parameters})",
+            FunctionKind.Operator => $"operator {function.Name} ({parameters}) -> {function.ReturnType.ToDisplayString()}",
+            _ => $"fn {function.Name}({parameters}) -> {function.ReturnType.ToDisplayString()}",
+        };
     }
 
     static void Report(

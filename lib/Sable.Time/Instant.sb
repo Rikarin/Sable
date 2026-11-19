@@ -21,11 +21,11 @@ public struct Instant: Comparable {
         return Instant { nanoseconds: nanoseconds + duration.totalNanoseconds }
     }
 
-    operator == (a: Instant, b: Instant) -> Bool {
+    public operator == (a: Instant, b: Instant) -> Bool {
         return a.nanoseconds == b.nanoseconds
     }
 
-    operator < (a: Instant, b: Instant) -> Bool {
+    public operator < (a: Instant, b: Instant) -> Bool {
         return a.nanoseconds < b.nanoseconds
     }
 }

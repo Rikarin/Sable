@@ -53,19 +53,19 @@ public struct Duration: Comparable, Hashable {
         return Duration { totalNanoseconds: totalNanoseconds / divisor }
     }
 
-    operator + (a: Duration, b: Duration) -> Duration {
+    public operator + (a: Duration, b: Duration) -> Duration {
         return Duration { totalNanoseconds: a.totalNanoseconds + b.totalNanoseconds }
     }
 
-    operator - (a: Duration, b: Duration) -> Duration {
+    public operator - (a: Duration, b: Duration) -> Duration {
         return Duration { totalNanoseconds: a.totalNanoseconds - b.totalNanoseconds }
     }
 
-    operator == (a: Duration, b: Duration) -> Bool {
+    public operator == (a: Duration, b: Duration) -> Bool {
         return a.totalNanoseconds == b.totalNanoseconds
     }
 
-    operator < (a: Duration, b: Duration) -> Bool {
+    public operator < (a: Duration, b: Duration) -> Bool {
         return a.totalNanoseconds < b.totalNanoseconds
     }
 

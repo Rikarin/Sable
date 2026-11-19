@@ -1830,7 +1830,11 @@ public static class SilBuiltins {
         Add("string_cursor_next", SilType.Int, SilType.String, SilType.Int);
         Add("string_trimmed", SilType.String, SilType.String);
         Add("string_split", new ArrayType(SilType.String), SilType.String, SilType.Char);
-        Add("string_hash", SilType.Int, SilType.String);
+        // A string's bytes hashed under a key (folded multiplies), and the key every
+        // Hasher starts from: random per process unless fixed by
+        // SABLE_DETERMINISTIC_HASHING=1.
+        Add("string_hash", SilType.Int, SilType.String, SilType.Int);
+        Add("hash_seed", SilType.Int);
         Add("string_join", SilType.String, new ArrayType(SilType.String), SilType.String);
         Add("string_compare", SilType.Int, SilType.String, SilType.String);
         // Where a part next occurs in a text, at or after a scalar position: a scalar index, or -1.

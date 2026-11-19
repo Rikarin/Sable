@@ -132,14 +132,14 @@ fn main() {
     q.enqueue("b")
     q.enqueue("c")
     print("\(q.dequeue() ?? "") \(q.dequeue() ?? "") \(q.count)")
-    let m = HashMap<String, Int>()
+    var m: [String: Int] = [:]
     for word in ["to", "be", "or", "not", "to", "be"] {
-        m.set(word, (m.get(word) ?? 0) + 1)
+        m[word] = (m[word] ?? 0) + 1
     }
-    print("\(m.count) \(m.get("to") ?? 0) \(m.get("not") ?? 0) \(m.contains("xyz"))")
-    print(m.remove("or"))
+    print("\(m.count) \(m["to"] ?? 0) \(m["not"] ?? 0) \(m.contains("xyz"))")
+    print(m.remove("or") != none)
     var keys = ""
-    for k in m.allKeys() {
+    for k in m.keys() {
         keys = keys + k + " "
     }
     print(keys)
@@ -712,7 +712,7 @@ fn main() {
     public void WhatAProgramDoesNotUseIsNotBuilt() {
         var result = Pipeline.Compile(new SourceText("module H\nimport Sable.Collections\n@main\nfn main() {\n    print(1)\n}\n", "test.sb"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
-        Assert.DoesNotContain("HashMap", result.LlvmIr!, StringComparison.Ordinal);
+        Assert.DoesNotContain("HashSet", result.LlvmIr!, StringComparison.Ordinal);
         Assert.DoesNotContain("Sable.Core.Int.<", result.LlvmIr!, StringComparison.Ordinal);
     }
 }

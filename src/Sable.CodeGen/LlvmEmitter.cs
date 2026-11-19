@@ -299,7 +299,8 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_process_change_directory(ptr)
                                 declare i64 @sable_process_id()
                                 declare ptr @sable_string_split(ptr, i32)
-                                declare i64 @sable_string_hash(ptr)
+                                declare i64 @sable_string_hash(ptr, i64)
+                                @sable_hash_seed = external global i64
                                 declare ptr @sable_string_join(ptr, ptr)
                                 declare i64 @sable_string_compare(ptr, ptr)
                                 declare i64 @sable_string_find(ptr, ptr, i64)
@@ -2679,7 +2680,13 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 case "string_hash":
-                    Line($"{Result()} = call i64 @sable_string_hash(ptr {operands[0]})");
+                    Line($"{Result()} = call i64 @sable_string_hash(ptr {operands[0]}, i64 {operands[1]})");
+                    return;
+
+                // The process's seed, set as the runtime starts: a load, not a
+                // call, since every Hasher made reads it.
+                case "hash_seed":
+                    Line($"{Result()} = load i64, ptr @sable_hash_seed");
                     return;
 
                 case "string_find":

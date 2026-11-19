@@ -105,4 +105,10 @@ static int64_t process_id(void);
 // The path the program can be started by again, from its arguments or the system.
 static char *executable_path(int argc, char **argv);
 
+// ---- Randomness ----------------------------------------------------------
+
+// 'length' bytes (at most 256) from the system's secure random source, for
+// the hash seed; false when the system gives none.
+static bool random_bytes(void *buffer, size_t length);
+
 #endif

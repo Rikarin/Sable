@@ -34,8 +34,10 @@ CATEGORY = "sable"
 # How much of a string is read, at most.
 STRING_LIMIT = 1024
 
-# What a HashMap's class is called, before its type arguments.
-HASH_MAP = "Sable.Collections.HashMap$of$"
+# What a dictionary's type is called: '[Key: Value]' is Sable.Core's
+# Dictionary, a struct of its entries (in the order the keys were added,
+# none where one was removed) and the index beside them.
+DICTIONARY = "^Sable\\.Core\\.Dictionary<.*>$"
 
 
 
@@ -442,13 +444,10 @@ class ObjectProvider(object):
         if dynamic and _canonical_name(self.valobj) != dynamic + "$ref":
             reference = _reference_of_type(self.valobj, self.valobj.GetName(), address) or reference
         body = _object_body(reference)
-        if dynamic and dynamic.startswith(HASH_MAP):
-            self.children = _hash_map_entries(body)
-        else:
-            for i in range(body.GetNumChildren()):
-                child = body.GetChildAtIndex(i)
-                if child.GetName() != "$header":
-                    self.children.append(child)
+        for i in range(body.GetNumChildren()):
+            child = body.GetChildAtIndex(i)
+            if child.GetName() != "$header":
+                self.children.append(child)
         # The count is the header's own field, so its type comes from the
         # program's DWARF: a basic type asked of the target would set up every
         # language's scratch context, Swift's included, which can hang.
@@ -474,19 +473,53 @@ class ObjectProvider(object):
         return self.children[index] if 0 <= index < len(self.children) else None
 
 
-def _hash_map_entries(body):
-    """A HashMap's live entries, in the order they were added, each named by its key."""
-    entries = body.GetChildMemberWithName("entries")
-    provider = ListProvider(entries, None)
+# ---------------------------------------------------------------------------
+# Dictionaries
+# ---------------------------------------------------------------------------
+
+def _dictionary_entries(value):
+    """A dictionary's values, in the order their keys were added, each named by its key."""
+    provider = ListProvider(_raw(value).GetChildMemberWithName("entries"), None)
     provider.update()
     children = []
     for i in range(provider.num_children()):
-        entry = provider.get_child_at_index(i)
-        if entry.GetChildMemberWithName("tag").GetValueAsSigned(-1) < 0:
+        case, entry = _active_case(provider.get_child_at_index(i))
+        if case != "Some" or entry is None:
             continue
         key = _describe(entry.GetChildMemberWithName("key"))
         children.append(entry.GetChildMemberWithName("value").Clone("[%s]" % key))
     return children
+
+
+class DictionaryProvider(object):
+    """A dictionary's values as children, each named by its key: ["ann"] = 31."""
+
+    def __init__(self, valobj, internal_dict):
+        self.valobj = valobj
+        self.children = []
+
+    def update(self):
+        self.children = _dictionary_entries(self.valobj)
+        return False
+
+    def num_children(self, max_children=None):
+        return len(self.children)
+
+    def has_children(self):
+        return True
+
+    def get_child_index(self, name):
+        for i, child in enumerate(self.children):
+            if child.GetName() == name:
+                return i
+        return -1
+
+    def get_child_at_index(self, index):
+        return self.children[index] if 0 <= index < len(self.children) else None
+
+
+def dictionary_summary(valobj, internal_dict):
+    return "count = %d" % _raw(valobj).GetChildMemberWithName("live").GetValueAsSigned(0)
 
 
 def object_summary(valobj, internal_dict):
@@ -497,14 +530,9 @@ def object_summary(valobj, internal_dict):
     process = valobj.GetProcess()
     name = _metadata_name(process, address) or raw.GetType().GetName()
     # The metadata names a generic class's instance as its symbols do,
-    # HashMap$of$String$Int; its type is named as Sable writes it.
+    # Box$of$String; its type is named as Sable writes it.
     sbtype = _find_type(valobj.GetTarget(), name)
-    shown = sbtype.GetName() if sbtype is not None and sbtype.GetName() else name
-    if name.startswith(HASH_MAP):
-        body = _object_body(raw)
-        used = body.GetChildMemberWithName("used").GetValueAsSigned(0)
-        return "%s count = %d" % (shown, used)
-    return shown
+    return sbtype.GetName() if sbtype is not None and sbtype.GetName() else name
 
 
 # ---------------------------------------------------------------------------
@@ -683,6 +711,7 @@ def _register(debugger, module):
         ("^SableString \\*$", "string_summary", "-v"),
         ("^Char$", "char_summary", "-v"),
         ("\\$list$", "list_summary", "-e"),
+        (DICTIONARY, "dictionary_summary", "-e"),
         ("\\$slice$", "slice_summary", "-e"),
         ("\\$union$", "union_summary", ""),
         ("\\$optional$", "optional_summary", ""),
@@ -694,6 +723,7 @@ def _register(debugger, module):
     ]
     synthetics = [
         ("\\$list$", "ListProvider"),
+        (DICTIONARY, "DictionaryProvider"),
         ("\\$slice$", "SliceProvider"),
         ("\\$union$", "UnionProvider"),
         ("\\$optional$", "OptionalProvider"),

@@ -29,6 +29,7 @@
 #include "coverage.c"
 #include "traps.c"
 #include "strings.c"
+#include "hashing.c"
 #include "arrays.c"
 #include "leaks.c"
 #include "inline_layout.c"
@@ -53,6 +54,7 @@ void sable_runtime_start(void) {
     started = true;
     platform_start();
     leaks_start();
+    hashing_start();
     tasks_start();
 }
 

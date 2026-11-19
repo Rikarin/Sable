@@ -11,7 +11,7 @@ public enum DerivedMember {
     /// <summary><c>&lt;</c>, lexicographic in declaration order: <c>Comparable</c>.</summary>
     LessThan,
 
-    /// <summary><c>hash()</c>, the fields' hashes combined: <c>Hashable</c>.</summary>
+    /// <summary><c>hash(into:)</c>, each field fed to the hasher: <c>Hashable</c>.</summary>
     Hash,
 
     /// <summary><c>debugDescription()</c>, as source would write the value: <c>Debug</c>.</summary>
@@ -116,7 +116,7 @@ public sealed partial class Compilation {
                 attribute.Span,
                 type.TypeKind is TypeKind.Class or TypeKind.Actor
                     ? $"'@derive' is for structs, unions and enums; '{type.Name}' is a {(type.TypeKind == TypeKind.Class ? "class" : "actor")}, "
-                      + "whose objects have identity, so equality and hashing by its fields would be wrong — write '==' and 'hash()' for it"
+                      + "whose objects have identity, so equality and hashing by its fields would be wrong — write '==' and 'hash(into:)' for it"
                     : type.IsFlags
                         ? $"'{type.Name}' is a '@flags' enum, compared as the integer it is; '@derive' is for structs, unions and other enums"
                         : $"'@derive' is for structs, unions and enums, not '{type.Name}'"
@@ -183,6 +183,12 @@ public sealed partial class Compilation {
             }
 
             var memberName = NameOf(member);
+            var hasher = member == DerivedMember.Hash ? GetModule("Sable.Core")?.GetType("Hasher") : null;
+            if (member == DerivedMember.Hash && hasher is null) {
+                ReportDeclaration(ErrorCode.ERR_CannotDerive, at, "'@derive(Hashable)' needs Sable.Core's 'Hasher', which is not here");
+                continue;
+            }
+
             if (type.GetMembers(memberName).Any()) {
                 // An implied '==' the type already has is the one to use.
                 if (isExplicit) {
@@ -196,7 +202,7 @@ public sealed partial class Compilation {
                 continue;
             }
 
-            var function = DeclareDerivedMember(type, self, member, attribute);
+            var function = DeclareDerivedMember(type, self, member, attribute, hasher);
             var derivation = new Derivation(function, type, protocol, member, attribute, tree);
             _derived.Add(derivation);
             _derivedByFunction[function] = derivation;
@@ -229,7 +235,12 @@ public sealed partial class Compilation {
             _ => "debugDescription",
         };
 
-    FunctionSymbol DeclareDerivedMember(NamedTypeSymbol type, NamedTypeSymbol self, DerivedMember member, AttributeSyntax attribute) {
+    /// <summary>
+    ///     The member's symbol on the type: <c>==</c> and <c>&lt;</c> static
+    ///     operators of two, <c>hash(into hasher: inout Hasher)</c> and
+    ///     <c>debugDescription()</c> methods.
+    /// </summary>
+    FunctionSymbol DeclareDerivedMember(NamedTypeSymbol type, NamedTypeSymbol self, DerivedMember member, AttributeSyntax attribute, NamedTypeSymbol? hasher) {
         var isOperator = member is DerivedMember.Equals or DerivedMember.LessThan;
         var function = new FunctionSymbol(
             NameOf(member),
@@ -246,10 +257,12 @@ public sealed partial class Compilation {
                 new ParameterSymbol("lhs", null, function, null, 0) { TypeResolver = () => self },
                 new ParameterSymbol("rhs", null, function, null, 1) { TypeResolver = () => self },
             ]
+            : member == DerivedMember.Hash
+            ? [new ParameterSymbol("hasher", "into", function, null, 0) { TypeResolver = () => hasher!, Modifier = ParameterModifier.InOut }]
             : [];
 
         var result = member switch {
-            DerivedMember.Hash => Core.Int,
+            DerivedMember.Hash => Core.Void,
             DerivedMember.Debug => Core.String,
             _ => Core.Bool,
         };

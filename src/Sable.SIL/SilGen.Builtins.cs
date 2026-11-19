@@ -71,12 +71,8 @@ public sealed partial class SilGen {
     ///     work for any element, so a declaration of one is checked for one
     ///     element type, and agrees for every other.
     /// </summary>
-    /// <remarks>
-    ///     So is <c>extension Dictionary</c>'s: its builtins are the array
-    ///     operations on its entries, which work for any key and value.
-    /// </remarks>
     TypeSubstitution Representative(NamedTypeSymbol? owner) =>
-        owner is { ExtendedArray: not null, TypeParameters.IsEmpty: false } || owner is not null && ReferenceEquals(owner, Core.Dictionary)
+        owner is { ExtendedArray: not null, TypeParameters.IsEmpty: false }
             ? new(owner.TypeParameters.ToDictionary(static p => p, TypeSymbol (_) => Core.Int))
             : TypeSubstitution.Empty;
 

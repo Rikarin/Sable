@@ -64,7 +64,7 @@ public sealed partial class SilGen {
             (OptionalTypeSymbol, EnumType) => Shape.Optional,
             (TupleTypeSymbol, TupleType) => Shape.Tuple,
             (ArrayTypeSymbol, ArrayType or SliceType) => Shape.Array,
-            (NamedTypeSymbol named, ArrayType) when named.OriginalDefinition.Equals(Core.Dictionary) => Shape.Dictionary,
+            (NamedTypeSymbol named, StructType { IsInline: false }) when Core.IsDictionary(named) => Shape.Dictionary,
             (NamedTypeSymbol { TypeKind: TypeKind.Struct }, StructType { IsInline: false }) => Shape.Struct,
             (NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } named, ClassType) when !named.OriginalDefinition.Equals(Core.Task) => Shape.Class,
             (NamedTypeSymbol { TypeKind: TypeKind.Union }, EnumType) => Shape.Union,
@@ -439,6 +439,34 @@ public sealed partial class SilGen {
         return s.Emit(new ApplyInst(callee, SilType.String, value, deeper));
     }
 
+    /// <summary>
+    ///     A loop over a dictionary's keys and values in their order — its
+    ///     <c>entries</c>, passing over the none a removed one left — each
+    ///     borrowed, with how many came before it; <paramref name="body" />
+    ///     appends to whatever block is current. Leaves the exit block current.
+    /// </summary>
+    static void EachEntry(Synthesis s, SilValue dictionary, Action<SilValue, SilValue, SilValue> body) {
+        var layout = (StructType)dictionary.Type;
+        var entries = s.Emit(new StructExtractInst(dictionary, layout.FieldIndex("entries")));
+        var optional = (EnumType)ArrayType.ElementOf(entries.Type)!;
+        var some = optional.CaseIndex("Some");
+        var entry = (StructType)optional.Cases[some].Payload!;
+        var shown = s.Slot(SilType.Int, s.Int(0));
+        s.Loop(entries, (_, item) => {
+            var present = s.Function.AddBlock();
+            var next = s.Function.AddBlock();
+            var payload = present.AddArgument(entry, !entry.IsTrivial);
+            s.Emit(new SwitchEnumInst(item, [(some, present)], next));
+            s.Block = present;
+            var index = s.Emit(new LoadInst(shown));
+            body(index, s.Emit(new StructExtractInst(payload, entry.FieldIndex("key"))), s.Emit(new StructExtractInst(payload, entry.FieldIndex("value"))));
+            s.Emit(new StoreInst(s.Emit(new BuiltinInst("add_Int", SilType.Int, index, s.Int(1))), shown, StoreKind.Assign));
+            s.Emit(new BranchInst(next));
+            s.Block = next;
+        });
+        s.Emit(new DeallocStackInst(shown));
+    }
+
     /// <summary>A part read, written out, and let go.</summary>
     SilValue DescribePart(Synthesis s, Part part, SilValue depth) {
         var (value, owned) = part.Read(s);
@@ -462,33 +490,38 @@ public sealed partial class SilGen {
         s.Emit(new ReturnInst(s.Text("...")));
         s.Block = body;
 
-        if (shape is Shape.Array or Shape.Dictionary) {
-            var dictionary = shape == Shape.Dictionary;
-            var element = dictionary ? null : ((ArrayTypeSymbol)type).ElementType;
+        if (shape is Shape.Array) {
+            var element = ((ArrayTypeSymbol)type).ElementType;
             var slot = s.Slot(SilType.String, s.Text("["));
             s.Loop(value, (index, item) => {
                 s.Separate(slot, index, ", ");
-                if (dictionary) {
-                    var arguments = ((NamedTypeSymbol)type).TypeArguments;
-                    s.Append(slot, DescribePart(s, s.Emit(new TupleExtractInst(item, 0)), arguments[0], depth));
-                    s.Append(slot, s.Text(": "));
-                    s.Append(slot, DescribePart(s, s.Emit(new TupleExtractInst(item, 1)), arguments[1], depth));
-                } else {
-                    s.Append(slot, DescribePart(s, item, element!, depth));
-                }
+                s.Append(slot, DescribePart(s, item, element, depth));
             });
 
-            if (dictionary) {
-                // '[:]' for an empty one, as it is written.
-                var empty = s.Function.AddBlock();
-                var full = s.Function.AddBlock();
-                var count = s.Emit(new BuiltinInst("array_count", SilType.Int, value));
-                s.Emit(new CondBranchInst(s.Emit(new BuiltinInst("cmp_eq_Int", SilType.Bool, count, s.Int(0))), empty, [], full, []));
-                s.Block = empty;
-                s.Append(slot, s.Text(":"));
-                s.Emit(new BranchInst(full));
-                s.Block = full;
-            }
+            s.Append(slot, s.Text("]"));
+            s.Emit(new ReturnInst(s.Close(slot)));
+            return;
+        }
+
+        if (shape is Shape.Dictionary) {
+            var arguments = ((NamedTypeSymbol)type).TypeArguments;
+            var slot = s.Slot(SilType.String, s.Text("["));
+            EachEntry(s, value, (index, key, item) => {
+                s.Separate(slot, index, ", ");
+                s.Append(slot, DescribePart(s, key, arguments[0], depth));
+                s.Append(slot, s.Text(": "));
+                s.Append(slot, DescribePart(s, item, arguments[1], depth));
+            });
+
+            // '[:]' for an empty one, as it is written.
+            var empty = s.Function.AddBlock();
+            var full = s.Function.AddBlock();
+            var count = s.Emit(new StructExtractInst(value, ((StructType)value.Type).FieldIndex("live")));
+            s.Emit(new CondBranchInst(s.Emit(new BuiltinInst("cmp_eq_Int", SilType.Bool, count, s.Int(0))), empty, [], full, []));
+            s.Block = empty;
+            s.Append(slot, s.Text(":"));
+            s.Emit(new BranchInst(full));
+            s.Block = full;
 
             s.Append(slot, s.Text("]"));
             s.Emit(new ReturnInst(s.Close(slot)));
@@ -533,17 +566,31 @@ public sealed partial class SilGen {
     void SynthesiseParts(Synthesis s, SilValue value, TypeSymbol type, Shape shape, string question) {
         var strings = new ArrayType(SilType.String);
         var zero = s.Int(0);
-        if (shape is Shape.Array or Shape.Dictionary) {
-            var dictionary = shape == Shape.Dictionary;
-            var element = dictionary ? ((NamedTypeSymbol)type).TypeArguments[1] : ((ArrayTypeSymbol)type).ElementType;
-            var key = dictionary ? ((NamedTypeSymbol)type).TypeArguments[0] : null;
+        if (shape is Shape.Array) {
+            var element = ((ArrayTypeSymbol)type).ElementType;
             var slot = s.Slot(strings, s.Emit(new BuiltinInst("array_empty", strings)));
             s.Loop(value, (index, item) => {
                 var part = question switch {
-                    "names" when dictionary => DescribePart(s, s.Emit(new TupleExtractInst(item, 0)), key!, zero),
                     "names" => s.Emit(new BuiltinInst("string_from_Int", SilType.String, index)),
                     "types" => s.Text(element.ToDisplayString()),
-                    _ => DescribePart(s, dictionary ? s.Emit(new TupleExtractInst(item, 1)) : item, element, zero),
+                    _ => DescribePart(s, item, element, zero),
+                };
+                s.Emit(new BuiltinInst("array_append", SilType.Unit, slot, part));
+            });
+            s.Emit(new ReturnInst(s.Close(slot)));
+            return;
+        }
+
+        // A dictionary's parts are its values, each named by its key.
+        if (shape is Shape.Dictionary) {
+            var key = ((NamedTypeSymbol)type).TypeArguments[0];
+            var element = ((NamedTypeSymbol)type).TypeArguments[1];
+            var slot = s.Slot(strings, s.Emit(new BuiltinInst("array_empty", strings)));
+            EachEntry(s, value, (_, entryKey, item) => {
+                var part = question switch {
+                    "names" => DescribePart(s, entryKey, key, zero),
+                    "types" => s.Text(element.ToDisplayString()),
+                    _ => DescribePart(s, item, element, zero),
                 };
                 s.Emit(new BuiltinInst("array_append", SilType.Unit, slot, part));
             });

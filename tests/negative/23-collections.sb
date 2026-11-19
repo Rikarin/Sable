@@ -7,7 +7,7 @@ fn indexAnArrayWithAString(_ xs: Int[], _ s: String) -> Int {
 }
 
 fn indexADictionaryWithTheWrongKey(_ d: [String: Int]) -> Int? {
-    return d[1]                         //! S3004 expected 'String'
+    return d[1]                         //! S3007 'key' takes 'String'
 }
 
 fn aDictionaryLookupIsOptional(_ d: [String: Int]) -> Int {

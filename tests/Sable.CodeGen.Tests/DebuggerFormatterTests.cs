@@ -104,9 +104,8 @@ public sealed class DebuggerFormatterTests {
                               let times = { (a: Int) -> Int in a * scale }
                               var ages: [String: Int] = [:]
                               ages["ann"] = 31
-                              let map = HashMap<String, Int>()
-                              map.set("one", 1)
-                              map.set("two", 2)
+                              var map: [String: Int] = ["one": 1, "gone": 0, "two": 2]
+                              map["gone"] = none
                               print(times(numbers.count)) // stop
                           }
                           """;
@@ -318,10 +317,10 @@ public sealed class DebuggerFormatterTests {
         Shows("((Int, String)) pair = (1, \"one\")", "(Char) letter = 'x'", "((Int) -> Int) times = Values.main$closure0");
 
     [PosixFact(NeedsLldb)]
-    public void DictionariesAndHashMapsShowTheirEntries() =>
+    public void DictionariesShowTheirEntriesByKey() =>
         Shows(
-            "([(String, Int)]) ages = count = 1 {\n  [0] = (\"ann\", 31)\n}",
-            "(Sable.Collections.HashMap<String, Int>) map = Sable.Collections.HashMap<String, Int> count = 2 {\n  [\"one\"] = 1\n  [\"two\"] = 2\n"
+            "(Sable.Core.Dictionary<String, Int>) ages = count = 1 {\n  [\"ann\"] = 31\n}",
+            "(Sable.Core.Dictionary<String, Int>) map = count = 2 {\n  [\"one\"] = 1\n  [\"two\"] = 2\n}"
         );
 
     [PosixFact(NeedsLldb)]

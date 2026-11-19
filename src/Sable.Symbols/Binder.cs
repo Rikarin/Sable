@@ -2500,7 +2500,7 @@ public sealed partial class Binder {
             InvocationExpressionSyntax invocation => AfterCall(BindInvocation(invocation, expectedType)),
             ElementAccessExpressionSyntax element => BindElementAccess(element),
             BinaryExpressionSyntax binary => BindBinary(binary),
-            PrefixUnaryExpressionSyntax unary => BindPrefixUnary(unary),
+            PrefixUnaryExpressionSyntax unary => BindPrefixUnary(unary, expectedType),
             PostfixUnaryExpressionSyntax unary => BindPostfixUnary(unary),
             AssignmentExpressionSyntax assignment => BindAssignment(assignment),
             ConditionalExpressionSyntax conditional => BindConditionalExpression(conditional, expectedType),
@@ -2610,6 +2610,8 @@ public sealed partial class Binder {
             long l => l,
             int i => i,
             ulong u => u,
+            Int128 i => i,
+            UInt128 u => u,
             _ => null,
         };
 
@@ -6784,7 +6786,7 @@ public sealed partial class Binder {
     static TypeSymbol Optional(TypeSymbol type) =>
         type is OptionalTypeSymbol || type.IsError ? type : new OptionalTypeSymbol(type);
 
-    BoundExpression BindPrefixUnary(PrefixUnaryExpressionSyntax syntax) {
+    BoundExpression BindPrefixUnary(PrefixUnaryExpressionSyntax syntax, TypeSymbol? expectedType = null) {
         if (syntax.OperatorToken.Kind == SyntaxKind.AwaitKeyword) {
             if (!_inAsyncContext) {
                 _diagnostics.Error(
@@ -6868,8 +6870,21 @@ public sealed partial class Binder {
             };
 
             if (negated is not null) {
+                // It takes the type its context asks for, as '5' does; an
+                // argument's is checked against its parameter's (Convert).
+                if (expectedType is not null
+                    && _conversions.Classify(type, expectedType is OptionalTypeSymbol optional ? optional.UnderlyingType : expectedType, true)
+                        is ConversionKind.LiteralTyping) {
+                    type = expectedType is OptionalTypeSymbol wrapped ? wrapped.UnderlyingType : expectedType;
+                }
+
                 var negative = new BoundLiteral(syntax, type, negated);
-                CheckIntegerFits(negative, type);
+                if (expectedType is null && syntax.Parent is ArgumentSyntax) {
+                    _uncheckedArguments.Add(negative);
+                } else {
+                    CheckIntegerFits(negative, type);
+                }
+
                 return negative;
             }
 

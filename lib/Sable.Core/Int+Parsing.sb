@@ -21,8 +21,7 @@ extension Int: Parsable {
     /// ```
     public static fn parse(_ text: String, radix: Int, styles: NumberStyles = .Sign) throws(ParseError) -> Int {
         let (negative, magnitude) = try parseInteger(text, radix, styles)
-        let greatest: U128 = 9223372036854775807
-        let value = try signedValue(negative, magnitude, greatest)
+        let value = try signedValue(negative, magnitude, 9223372036854775807)
         return Int(value)
     }
 }

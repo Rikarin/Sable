@@ -39,4 +39,24 @@ fn arguments() {
     let j = takeInt(9223372036854775808)    //! S3200 does not fit in 'Int'
     let k = same(9223372036854775808)       //! S3200 does not fit in 'Int'
     let l = F64.fromBits(0x8000_0000_0000_0000)
+    let m = takeU64(-1)                     //! S3200 '-1' does not fit in 'U64'
+    let n = takeI8(-128)
+    let o = takeI8(-129)                    //! S3200 '-129' does not fit in 'I8'
+}
+
+// Past 64 bits, I128 and U128 are held to their ranges too: as arguments,
+// negated, and where a type is given (#260).
+fn takeI128(_ x: I128) -> I128 => x
+fn takeU128(_ x: U128) -> U128 => x
+
+fn wide() {
+    let a = takeU128(340282366920938463463374607431768211455)
+    let b = takeI128(-170141183460469231731687303715884105728)
+    let c = takeI128(170141183460469231731687303715884105728)   //! S3200 does not fit in 'I128'
+    let d: I128 = 170141183460469231731687303715884105728      //! S3200 does not fit in 'I128'
+    let e: I128 = -170141183460469231731687303715884105728
+    let f = takeU128(-1)                                        //! S3200 '-1' does not fit in 'U128'
+    let g = takeInt(170141183460469231731687303715884105727)   //! S3200 does not fit in 'Int'
+    let h = same(-170141183460469231731687303715884105728)     //! S3200 does not fit in 'Int'
+    let i = e == -170141183460469231731687303715884105728
 }

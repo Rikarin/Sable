@@ -3418,7 +3418,22 @@ public sealed partial class Binder {
             return new BoundError(syntax, receiver);
         }
 
-        if (!CheckAccessible(instanceMembers[0], syntax.Name)) {
+        // A property and methods may share a name, as String's 'count' and
+        // 'count(of:)' do: called, the name is the methods; otherwise, the
+        // property. Left together, every plain 'text.count' would be an
+        // overload group with no call to choose from it.
+        if (instanceMembers.Any(static m => m is FunctionSymbol) && instanceMembers.Any(static m => m is not FunctionSymbol)) {
+            var called = syntax.Parent is InvocationExpressionSyntax invocation && invocation.Expression == syntax;
+            instanceMembers = [..instanceMembers.Where(m => m is FunctionSymbol == called)];
+        }
+
+        // What this code cannot see is not a candidate: another module's
+        // internal 'count(of:)' on every array is no reason Sable.Core's
+        // 'names.count' should fail. Only when nothing of the name is
+        // visible is that the error.
+        if (instanceMembers.Where(IsAccessible).ToList() is { Count: > 0 } accessible) {
+            instanceMembers = accessible;
+        } else if (!CheckAccessible(instanceMembers[0], syntax.Name)) {
             return new BoundError(syntax, receiver);
         }
 
@@ -3441,15 +3456,6 @@ public sealed partial class Binder {
             }
 
             instanceMembers = callable;
-        }
-
-        // A property and methods may share a name, as String's 'count' and
-        // 'count(of:)' do: called, the name is the methods; otherwise, the
-        // property. Left together, every plain 'text.count' would be an
-        // overload group with no call to choose from it.
-        if (instanceMembers.Any(static m => m is FunctionSymbol) && instanceMembers.Any(static m => m is not FunctionSymbol)) {
-            var called = syntax.Parent is InvocationExpressionSyntax invocation && invocation.Expression == syntax;
-            instanceMembers = [..instanceMembers.Where(m => m is FunctionSymbol == called)];
         }
 
         var member = BindMemberGroup(syntax, receiver, instanceMembers, found.Owner, found.Substitution);

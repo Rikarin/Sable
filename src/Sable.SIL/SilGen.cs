@@ -1260,7 +1260,30 @@ public sealed partial class SilGen {
         };
 
     /// <summary>A class's superclass, if it has one.</summary>
-    static NamedTypeSymbol? SuperclassOf(NamedTypeSymbol type) =>
+    /// <remarks>
+    ///     A class that inherits from itself, through any number of others,
+    ///     has none: the type checker reports the cycle (S3026), and every
+    ///     walk up the chain here — vtables, witnesses, metadata — would
+    ///     otherwise never end. A language server lowers programs with
+    ///     errors, so it reaches such a chain whenever one is written.
+    /// </remarks>
+    static NamedTypeSymbol? SuperclassOf(NamedTypeSymbol type) {
+        var superclass = DirectSuperclassOf(type);
+        if (superclass is null) {
+            return null;
+        }
+
+        var seen = new HashSet<NamedTypeSymbol>(ReferenceEqualityComparer.Instance) { type.OriginalDefinition };
+        for (var ancestor = superclass; ancestor is not null; ancestor = DirectSuperclassOf(ancestor)) {
+            if (!seen.Add(ancestor.OriginalDefinition)) {
+                return null;
+            }
+        }
+
+        return superclass;
+    }
+
+    static NamedTypeSymbol? DirectSuperclassOf(NamedTypeSymbol type) =>
         type.BaseTypes.OfType<NamedTypeSymbol>().FirstOrDefault(static b => b.TypeKind == TypeKind.Class);
 
     /// <summary>

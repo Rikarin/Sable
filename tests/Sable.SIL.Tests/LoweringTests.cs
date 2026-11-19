@@ -566,4 +566,22 @@ public sealed class LoweringTests {
         Assert.Equal(true, Run(module, "atMost", 3L, 3L));
         Assert.Equal(false, Run(module, "atMost", 4L, 3L));
     }
+
+    /// <summary>
+    ///     A class that inherits from itself is an error (S3026), but what
+    ///     lowers a program with errors — the language server does — must
+    ///     still finish: every walk up a cyclic chain never ended, and the
+    ///     server sat at full CPU over tests/negative/04-conformance.sb.
+    /// </summary>
+    [Theory]
+    [InlineData("class Loop: Loop { }")]
+    [InlineData("class RingA: RingB { }\nclass RingB: RingA { }")]
+    [InlineData("class RingA: RingB { }\nclass RingB: RingA { }\nclass Outside: RingA { }\nfn make() -> Outside { return Outside() }")]
+    public async Task LoweringAClassThatInheritsFromItselfFinishes(string source) {
+        var compilation = Compilation.Create($"module M\n{source}");
+        Assert.Contains(compilation.GetAllDiagnostics(), static d => d.Id == "S3026");
+        var lowering = Task.Run(() => SilGen.LowerByFile(compilation));
+        var finished = await Task.WhenAny(lowering, Task.Delay(TimeSpan.FromSeconds(30)));
+        Assert.True(finished == lowering, "lowering a cyclic class hierarchy did not finish");
+    }
 }

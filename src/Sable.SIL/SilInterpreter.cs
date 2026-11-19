@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -1743,8 +1744,72 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return null;
         }
 
-        return Numeric(builtin.Name, operands) ?? Builtin(builtin.Name, operands);
+        if (builtin.Name.StartsWith("bytes_load_", StringComparison.Ordinal)) {
+            var width = BytesWidth(builtin.Type);
+            var (buffer, start, count) = ElementsOf(operands[0]);
+            var at = (long)operands[1]!;
+            if (buffer is null || at < 0 || at > count - width) {
+                throw new SilTrap("array index out of range");
+            }
+
+            ulong value = 0;
+            for (var i = 0; i < width; i++) {
+                value |= (ulong)(long)buffer.Elements[start + (int)at + i]! << (8 * i);
+            }
+
+            return width == 8 ? value : (long)value;
+        }
+
+        if (builtin.Name.StartsWith("bytes_store_", StringComparison.Ordinal)) {
+            // The last byte's index checked, and the array made unique, as a
+            // write of that byte would; then every byte written.
+            var width = BytesWidth(builtin.Operands[2].Type);
+            var at = (long)operands[1]!;
+            if (at < 0 || at > long.MaxValue - width) {
+                throw new SilTrap("array index out of range");
+            }
+
+            var (array, last) = Writable(builtin.Operands[0], (IReference)operands[0]!, at + width - 1);
+            var value = operands[2] is ulong wide ? wide : (ulong)(long)operands[2]!;
+            for (var i = 0; i < width; i++) {
+                array.Elements[last - width + 1 + i] = (long)(byte)(value >> (8 * i));
+            }
+
+            return null;
+        }
+
+        if (FloatFunctions.Find(builtin.Name) is var (function, type)) {
+            return Libm.Call(function, type, operands);
+        }
+
+        return ByteOrder(builtin.Name, operands) ?? Numeric(builtin.Name, operands) ?? Builtin(builtin.Name, operands);
     }
+
+    /// <summary>How many bytes a 'bytes_load_' or 'bytes_store_' reads or writes.</summary>
+    static int BytesWidth(SilType type) => SilType.IntegerInfo(type)!.Value.Bits / 8;
+
+    /// <summary>
+    ///     An integer's bytes reversed, and a float's bits as an integer and
+    ///     back, on the values as the interpreter holds them (see <see cref="Numeric" />).
+    /// </summary>
+    static object? ByteOrder(string name, object?[] operands) =>
+        (name, operands) switch {
+            ("byte_swap_I16", [long x]) => (long)BinaryPrimitives.ReverseEndianness((short)x),
+            ("byte_swap_U16", [long x]) => (long)BinaryPrimitives.ReverseEndianness((ushort)x),
+            ("byte_swap_I32", [long x]) => (long)BinaryPrimitives.ReverseEndianness((int)x),
+            ("byte_swap_U32", [long x]) => (long)BinaryPrimitives.ReverseEndianness((uint)x),
+            ("byte_swap_I64" or "byte_swap_Int", [long x]) => BinaryPrimitives.ReverseEndianness(x),
+            ("byte_swap_U64" or "byte_swap_UInt", [ulong x]) => BinaryPrimitives.ReverseEndianness(x),
+            ("byte_swap_I128", [Int128 x]) => BinaryPrimitives.ReverseEndianness(x),
+            ("byte_swap_U128", [UInt128 x]) => BinaryPrimitives.ReverseEndianness(x),
+            ("bitcast_F64_U64", [double x]) => BitConverter.DoubleToUInt64Bits(x),
+            ("bitcast_U64_F64", [ulong x]) => BitConverter.UInt64BitsToDouble(x),
+            ("bitcast_F32_U32", [float x]) => (long)BitConverter.SingleToUInt32Bits(x),
+            ("bitcast_U32_F32", [long x]) => BitConverter.UInt32BitsToSingle((uint)x),
+            ("bitcast_F16_U16", [Half x]) => (long)BitConverter.HalfToUInt16Bits(x),
+            ("bitcast_U16_F16", [long x]) => BitConverter.UInt16BitsToHalf((ushort)x),
+            _ => null,
+        };
 
     /// <summary>
     ///     The sized integers, F32 and F16, as the native code computes them:

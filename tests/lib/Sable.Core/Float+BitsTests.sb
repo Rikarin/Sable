@@ -1,0 +1,50 @@
+module FloatBitsTests
+
+// A float's bits (Sable.Core), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@test
+fn anF64sBitsAreItsIEEEEncoding() {
+    assertEqual(1.0.bits, 0x3FF0_0000_0000_0000)
+    assertEqual((-2.0).bits, 0xC000_0000_0000_0000)
+    assertEqual(0.0.bits, 0)
+    assertEqual((-0.0).bits, 0x8000_0000_0000_0000)
+    assertEqual(F64.fromBits(0x4009_21FB_5444_2D18), F64.pi)
+}
+
+@test
+fn bitsSurviveTheRoundTrip() {
+    let values: F64[>..] = [0.0, -0.0, 1.5, -1e300, 5e-324, F64.pi]
+    for value in values {
+        assertEqual(F64.fromBits(value.bits).bits, value.bits)
+    }
+}
+
+@test
+fn aNaNsPayloadIsKept() {
+    let nan = F64.fromBits(0x7FF8_0000_0000_0001)
+    assert(nan != nan, "the bits are a NaN")
+    assertEqual(nan.bits, 0x7FF8_0000_0000_0001)
+    assertEqual(F64.fromBits(0x7FF0_0000_0000_0000), 1.0 / 0.0)
+}
+
+@test
+fn anF32sBitsAreItsIEEEEncoding() {
+    let one: F32 = 1.0
+    let minusZero: F32 = -0.0
+    assertEqual(one.bits, 0x3F80_0000)
+    assertEqual(minusZero.bits, 0x8000_0000)
+    assertEqual(F32.fromBits(0x4049_0FDB), F32(F64.pi))
+    assertEqual(F32.fromBits(0xBF80_0000), -one)
+}
+
+@test
+fn anF16sBitsAreItsIEEEEncoding() {
+    let one: F16 = 1.0
+    let two: F16 = 2.0
+    assertEqual(one.bits, 0x3C00)
+    assertEqual(F16.fromBits(0x4000), two)
+    assertEqual(F16.fromBits(0x7C00), one / 0.0)
+}

@@ -1885,6 +1885,36 @@ public static class SilBuiltins {
         Add("char_is_letter", SilType.Bool, SilType.Char);
         Add("char_is_whitespace", SilType.Bool, SilType.Char);
 
+        // sin, exp, pow, …: libm's, for F64 and F32.
+        foreach (var (name, signature) in FloatFunctions.Signatures()) {
+            table[name] = signature;
+        }
+
+        // An integer with its bytes in the other order (LLVM's bswap): what
+        // a value read from, or written to, bytes of the other endianness is.
+        foreach (var integer in SilType.Integers) {
+            if (SilType.IntegerInfo(integer)!.Value.Bits >= 16) {
+                Unary("byte_swap", integer);
+            }
+        }
+
+        // An integer read from, or written to, bytes at an offset, in the
+        // platform's order (little-endian everywhere): one range check and
+        // one unaligned load or store, rather than a byte at a time. A read
+        // is of any slice of bytes; a write, of a grow-only array, made the
+        // only reference to its buffer first.
+        foreach (var unsigned in new[] { SilType.U16, SilType.U32, SilType.U64 }) {
+            Add($"bytes_load_{unsigned}", unsigned, new SliceType(SilType.U8), SilType.Int);
+            Add($"bytes_store_{unsigned}", SilType.Unit, SilType.Address(new ArrayType(SilType.U8)), SilType.Int, unsigned);
+        }
+
+        // A float's bits as the unsigned integer of its width, and back: the
+        // same bits, not the same number (a NaN's payload is kept).
+        foreach (var (real, bits) in new[] { (SilType.F64, SilType.U64), (SilType.F32, SilType.U32), (SilType.F16, SilType.U16) }) {
+            Add($"bitcast_{real}_{bits}", bits, real);
+            Add($"bitcast_{bits}_{real}", real, bits);
+        }
+
         return table;
     }
 }

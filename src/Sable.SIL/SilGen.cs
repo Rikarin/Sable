@@ -1617,7 +1617,9 @@ public sealed partial class SilGen {
             return SilType.Char;
         }
 
-        if (type.Equals(Core.Void)) {
+        // Never has no values: what gives it never returns, so it is laid
+        // out as nothing at all, and a call to it is followed by 'unreachable'.
+        if (type.Equals(Core.Void) || type.Equals(Core.Never)) {
             return SilType.Unit;
         }
 
@@ -6170,8 +6172,18 @@ public sealed partial class SilGen {
                 case BoundTry tryExpression:
                     return Try(tryExpression);
 
-                case BoundCall call:
-                    return Call(call);
+                case BoundCall call: {
+                    var result = Call(call);
+
+                    // A call to a function that gives Never does not come back:
+                    // nothing after it runs.
+                    if (result is not null && _current is not null && Sub(call.Type).Equals(Core.Never)) {
+                        Jump(new UnreachableInst());
+                        return UnitValue.Instance;
+                    }
+
+                    return result;
+                }
 
                 default:
                     return Missing(expression, $"the expression '{Describe(expression.Syntax)}' ({expression.GetType().Name}{(expression is BoundConversion c ? " " + c.ConversionKind : "")})");

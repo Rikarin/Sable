@@ -135,6 +135,20 @@ public struct Runtime {
     @builtin("process_executable_path")
     public static fn executablePath() -> String
 
+    // ---- Stopping ----------------------------------------------------------
+
+    /// Stops the program as a trap does: 'fatal error: ' and the message on
+    /// standard error, the place on the next line ('at file:line', left out
+    /// when empty), a backtrace with SABLE_BACKTRACE set, and status 134.
+    /// What fatalError and precondition are written over.
+    @builtin("trap")
+    public static fn trap(message: String, site: String) -> Never
+
+    /// The frames of the calls that led here, a line each, the caller's
+    /// first: 'symbol + offset' natively, none in the interpreter.
+    @builtin("backtrace_capture")
+    public static fn backtraceFrames() -> String[>..]
+
     // ---- Strings, in one call --------------------------------------------
     // What String's conformances and Sable.Text are written over: hashing
     // and ordering by the UTF-8 bytes, and joining, in one call rather than

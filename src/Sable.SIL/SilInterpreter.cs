@@ -1304,6 +1304,17 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 ErrorOutput.Append(Text(operands[0]).Value);
                 return null;
 
+            // The place is the caller's, which the trap says rather than its own.
+            case "trap": {
+                var site = Text(operands[1]).Value;
+                throw new SilTrap(Text(operands[0]).Value) { Site = site.Length == 0 ? null : site };
+            }
+
+            // The interpreter's frames are not the program's, and it has no
+            // symbols to name them by: a backtrace here has none.
+            case "backtrace_capture":
+                return Allocate(new HeapArray(new ArrayType(SilType.String), []));
+
             case "io_succeeded":
                 return !_ioFailed;
 

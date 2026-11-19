@@ -247,6 +247,8 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_print_bool(i1 zeroext)
                                 declare void @sable_trap(ptr) noreturn cold
                                 declare void @sable_trap_at(ptr, ptr) noreturn cold
+                                declare void @sable_trap_with(ptr, ptr) noreturn cold
+                                declare ptr @sable_backtrace_capture()
                                 @sable_trap_site = external global ptr
                                 declare ptr @sable_alloc(ptr, i64)
                                 declare void @sable_retain(ptr)
@@ -2659,6 +2661,14 @@ public sealed partial class LlvmEmitter {
 
                 case "io_write" or "io_write_error":
                     Line($"call void @sable_{builtin.Name}(ptr {operands[0]})");
+                    return;
+
+                case "trap":
+                    Line($"call void @sable_trap_with(ptr {operands[0]}, ptr {operands[1]})");
+                    return;
+
+                case "backtrace_capture":
+                    Line($"{Result()} = call ptr @sable_backtrace_capture()");
                     return;
 
                 case "io_read_line" or "io_succeeded" or "io_argument_count":

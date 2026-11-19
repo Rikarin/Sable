@@ -4328,7 +4328,7 @@ public sealed partial class Binder {
 
             if (next < converted.Count && slots[next] == p) {
                 passed.Add(converted[next++]);
-            } else if (DefaultArgument(resolved.Parameters[p], substitution) is { } value) {
+            } else if (DefaultArgument(resolved.Parameters[p], substitution, syntax) is { } value) {
                 passed.Add(value);
             }
         }
@@ -4477,7 +4477,13 @@ public sealed partial class Binder {
     ///     is visible there, not at the call. Its diagnostics were reported
     ///     once, with the declaration, so they are not reported again here.
     /// </summary>
-    BoundExpression? DefaultArgument(ParameterSymbol parameter, TypeSubstitution substitution) {
+    /// <remarks>
+    ///     A default that is a place in the source alone — <c>#file</c>,
+    ///     <c>#line</c>, <c>#column</c>, <c>#function</c> — is the call's
+    ///     place instead, as Swift has it: that is how <c>precondition</c>
+    ///     and <c>fatalError</c> say where they were called from.
+    /// </remarks>
+    BoundExpression? DefaultArgument(ParameterSymbol parameter, TypeSubstitution substitution, SyntaxNode call) {
         if (MemberwiseField(parameter) is { } field) {
             return FieldDefault(field, substitution.Apply(parameter.Type));
         }
@@ -4486,6 +4492,11 @@ public sealed partial class Binder {
             || _compilation.FileScopeOf(syntax) is not { } scope
             || parameter.ContainingSymbol is not { } container) {
             return null;
+        }
+
+        if (clause.Value is BuiltinExpressionSyntax { NameToken.Text: var name } && name is "file" or "line" or "column" or "function") {
+            var type = name is "line" or "column" ? Core.Int : Core.String;
+            return Convert(new BoundBuiltin(call, type, name), substitution.Apply(parameter.Type), call);
         }
 
         return new Binder(_compilation, scope, container).BindInitializer(clause.Value, substitution.Apply(parameter.Type));
@@ -5787,6 +5798,7 @@ public sealed partial class Binder {
 
     /// <summary>True for a type inference has not settled yet.</summary>
     bool IsOpen(TypeSymbol type) => type is TypeParameterSymbol parameter && _openTypeParameters.Contains(parameter);
+
 
     /// <summary>Looks through an alias or an optional for a function type.</summary>
     static TypeSymbol? Expand(TypeSymbol? type) =>

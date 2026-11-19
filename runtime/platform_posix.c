@@ -21,28 +21,30 @@ extern char **environ;
 
 // ---- Traps -------------------------------------------------------------------
 
-// With SABLE_BACKTRACE set, a trap says where it happened: a frame per line,
-// as 'sable.Module.function + offset' where the symbol is known. Off by
-// default, so that a trap's message is the whole of its output. Each return
-// address is looked up one byte back: after a call that never returns, the
-// address is past the end of the caller, inside whatever comes next.
-__attribute__((noinline)) static void print_backtrace(void) {
-    if (getenv("SABLE_BACKTRACE") == NULL) {
-        return;
+// The return addresses of the calls that led here, this function's caller's
+// first.
+__attribute__((noinline)) static int capture_frames(void **frames, int capacity) {
+    void *all[BACKTRACE_DEPTH + 1];
+    int count = backtrace(all, capacity + 1 < BACKTRACE_DEPTH + 1 ? capacity + 1 : BACKTRACE_DEPTH + 1);
+    // The first is this function.
+    for (int i = 1; i < count; i++) {
+        frames[i - 1] = all[i];
     }
 
-    void *frames[64];
-    int count = backtrace(frames, 64);
-    fprintf(stderr, "backtrace:\n");
-    // The first two frames are this function and sable_trap.
-    for (int i = 2; i < count; i++) {
-        const char *at = (const char *)frames[i] - 1;
-        Dl_info info;
-        if (dladdr(at, &info) != 0 && info.dli_sname != NULL) {
-            fprintf(stderr, "  %2d  %s + %ld\n", i - 2, info.dli_sname, (long)(at + 1 - (const char *)info.dli_saddr));
-        } else {
-            fprintf(stderr, "  %2d  %p\n", i - 2, frames[i]);
-        }
+    return count > 0 ? count - 1 : 0;
+}
+
+// A frame as 'sable.Module.function + offset' where the symbol is known, its
+// address otherwise. The return address is looked up one byte back: after a
+// call that never returns, it is past the end of the caller, inside whatever
+// comes next.
+static void name_frame(void *frame, char *text, size_t size) {
+    const char *at = (const char *)frame - 1;
+    Dl_info info;
+    if (dladdr(at, &info) != 0 && info.dli_sname != NULL) {
+        snprintf(text, size, "%s + %ld", info.dli_sname, (long)(at + 1 - (const char *)info.dli_saddr));
+    } else {
+        snprintf(text, size, "%p", frame);
     }
 }
 

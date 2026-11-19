@@ -779,9 +779,14 @@ Metadata records, protocol conformance registry, generic metadata caching,
 existential boxing, dynamic casts, the error ABI, backtraces, the memory
 allocator (a size-class allocator — mimalloc is the reference to copy or embed).
 
-As implemented so far: with `SABLE_BACKTRACE` set, a trap prints a backtrace
-after its message, one frame per line, named through `dladdr` (on Linux the
-program links with `-rdynamic` so its functions can be named). Each frame is
+As implemented so far: with `SABLE_BACKTRACE` set (to anything but `0`), a
+trap prints a backtrace after its message, one frame per line, named through
+`dladdr` (on Linux the program links with `-rdynamic` so its functions can
+be named). `1` starts from the program's frame that trapped; `full` shows the
+runtime's own frames above it as well. `Backtrace.capture()`
+(Sable.Diagnostics) gives the same frames as a value; the interpreter has
+none to give. Frames are named by symbol, not yet by file and line: that
+needs the runtime to read the DWARF the `-g` build writes. Each frame is
 looked up one byte before its return address, because a call that never
 returns leaves that address past the end of its caller. Under LTO most of a
 small program is inlined into `main`, so expect few frames.
@@ -792,7 +797,11 @@ the compiled code makes passes its place to `sable_trap_at`; before a call
 into the runtime that can trap (a string index, an unowned read, an access
 check) the compiled code stores the call's place in `sable_trap_site`, a
 store on the slow path only. The interpreter reports the same place: the
-innermost instruction that trapped. Traps that belong to no line — memory
+innermost instruction that trapped. A trap the program asks for —
+`fatalError`, a failed `precondition`, `todo()`, `Optional.expect` — goes
+through the `trap` builtin (`sable_trap_with`), with a message and place
+made as it runs: the caller's, since a parameter that defaults to `#file`,
+`#line`, `#column` or `#function` takes the place of the call. Traps that belong to no line — memory
 run out, every task waiting — have no place. Running off the end of a stack
 is a trap too, not a bare SIGSEGV: every thread has a small signal stack
 (`sigaltstack`), and a fault at the low end of the thread's stack prints

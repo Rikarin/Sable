@@ -1,0 +1,91 @@
+module Sable.Core
+
+// Stopping the program when it cannot go on (SYNTAX.md §18, docs/06 §6.6):
+// a trap, not catchable and not unwound, that says why and where. Each
+// takes the caller's place as defaults ('#file', '#line', '#column' are the
+// call's when left off), so the report names the line that asked, not this
+// file.
+
+/// The place a trap reports: 'file:line:column', as the compiler's own
+/// traps write it.
+fn trapSite(_ file: String, _ line: Int, _ column: Int) -> String {
+    return "\(file):\(line):\(column)"
+}
+
+/// Stops the program: 'fatal error: ' and the message, and the line that
+/// called it. For a state the program cannot recover from; never returns.
+///
+/// ```sable
+/// fn colour(_ name: String) -> Int {
+///     if name == "red" {
+///         return 0xFF0000
+///     }
+///     fatalError("no colour called \(name)")
+/// }
+/// ```
+public fn fatalError(_ message: String = "", file: String = #file, line: Int = #line, column: Int = #column) -> Never {
+    Runtime.trap(message.isEmpty ? "fatal error" : message, trapSite(file, line, column))
+}
+
+/// Stops the program unless the condition holds, in every build: what a
+/// function demands of its caller. The message says what was demanded.
+///
+/// ```sable
+/// fn average(_ values: Int[>..]) -> Int {
+///     precondition(values.count > 0, "average of no values")
+///     var sum = 0
+///     for v in values {
+///         sum = sum + v
+///     }
+///     return sum / values.count
+/// }
+/// ```
+public fn precondition(_ condition: Bool, _ message: String = "", file: String = #file, line: Int = #line, column: Int = #column) {
+    if !condition {
+        Runtime.trap(message.isEmpty ? "precondition failed" : "precondition failed: \(message)", trapSite(file, line, column))
+    }
+}
+
+/// Stops the program, saying a precondition failed: for the branch of a
+/// check that cannot be written as one condition.
+public fn preconditionFailure(_ message: String = "", file: String = #file, line: Int = #line, column: Int = #column) -> Never {
+    Runtime.trap(message.isEmpty ? "precondition failed" : "precondition failed: \(message)", trapSite(file, line, column))
+}
+
+/// Stops the program unless the index is in 0..<count: what indexing
+/// anything with a count demands. The report gives both.
+///
+/// ```sable
+/// let names = ["a", "b"]
+/// precondition(index: 1, inBounds: names.count)
+/// ```
+public fn precondition(index: Int, inBounds count: Int, file: String = #file, line: Int = #line, column: Int = #column) {
+    if index < 0 || index >= count {
+        Runtime.trap("index \(index) is out of range for count \(count)", trapSite(file, line, column))
+    }
+}
+
+/// Stops the program if the value is negative, naming it: a count, a
+/// length, a capacity.
+///
+/// ```sable
+/// precondition(nonNegative: 3, "capacity")
+/// ```
+public fn precondition(nonNegative value: Int, _ name: String = "value", file: String = #file, line: Int = #line, column: Int = #column) {
+    if value < 0 {
+        Runtime.trap("\(name) must not be negative, but is \(value)", trapSite(file, line, column))
+    }
+}
+
+/// Stops the program, saying the code it is in is not written yet: a
+/// placeholder with the type of whatever is wanted, as Rust's 'todo!'.
+public fn todo(_ message: String = "", file: String = #file, line: Int = #line, column: Int = #column) -> Never {
+    Runtime.trap(message.isEmpty ? "not yet implemented" : "not yet implemented: \(message)", trapSite(file, line, column))
+}
+
+/// Stops the program, saying what it reached is not implemented, and will
+/// not be: an operation this type does not support, as Rust's
+/// 'unimplemented!'.
+public fn unimplemented(_ message: String = "", file: String = #file, line: Int = #line, column: Int = #column) -> Never {
+    Runtime.trap(message.isEmpty ? "not implemented" : "not implemented: \(message)", trapSite(file, line, column))
+}

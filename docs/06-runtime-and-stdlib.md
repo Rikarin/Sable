@@ -320,8 +320,10 @@ No unwinding tables, no landing pads, no `__cxa_throw`. A throw is a return.
 This is why typed throws are cheap enough to use everywhere, and why Sable does
 not need a separate `Result`-returning convention for performance-critical code.
 
-Panics (`abort`, failed `precondition`) do not unwind either: they print a
-backtrace and call `abort()`. Supervisors that need to survive a panic run the
+Panics (`fatalError`, a failed `precondition`, `todo()`, `unimplemented()`,
+`Optional.expect` — lib/Sable.Core/Assertions.sb) do not unwind either: they
+print `fatal error: ` and the message, the caller's place, a backtrace with
+`SABLE_BACKTRACE` set, and call `abort()`. Supervisors that need to survive a panic run the
 supervised code in a separate task on a separate stack with a guard page, and
 recover at the task boundary.
 

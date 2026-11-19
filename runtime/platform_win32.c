@@ -72,38 +72,37 @@ static void streams_start(void) {
 
 // ---- Traps -------------------------------------------------------------------
 
-// With SABLE_BACKTRACE set, a trap says where it happened: a frame per line,
-// as 'sable.Module.function + offset' where the symbol is known. Windows
-// walks the stack by the unwind tables every function has, and names a
-// frame from the program's PDB, which the link always writes.
-__attribute__((noinline)) static void print_backtrace(void) {
-    if (getenv("SABLE_BACKTRACE") == NULL) {
-        return;
+// The return addresses of the calls that led here, this function's caller's
+// first. Windows walks the stack by the unwind tables every function has.
+__attribute__((noinline)) static int capture_frames(void **frames, int capacity) {
+    return (int)CaptureStackBackTrace(1, (DWORD)capacity, frames, NULL);
+}
+
+// A frame as 'sable.Module.function + offset' where the symbol is known, its
+// address otherwise, named from the program's PDB, which the link always
+// writes. The return address is looked up one byte back, as on POSIX.
+static void name_frame(void *frame, char *text, size_t size) {
+    static bool started, symbols;
+    HANDLE process = GetCurrentProcess();
+    if (!started) {
+        started = true;
+        SymSetOptions(SYMOPT_DEFERRED_LOADS);
+        symbols = SymInitialize(process, NULL, TRUE) != FALSE;
     }
 
-    void *frames[64];
-    int count = (int)CaptureStackBackTrace(0, 64, frames, NULL);
-    HANDLE process = GetCurrentProcess();
-    SymSetOptions(SYMOPT_DEFERRED_LOADS);
-    bool symbols = SymInitialize(process, NULL, TRUE) != FALSE;
     union {
         SYMBOL_INFO info;
         char space[sizeof(SYMBOL_INFO) + 512];
     } symbol;
-
-    fprintf(stderr, "backtrace:\n");
-    // The first two frames are this function and sable_trap.
-    for (int i = 2; i < count; i++) {
-        const char *at = (const char *)frames[i] - 1;
-        memset(&symbol, 0, sizeof symbol);
-        symbol.info.SizeOfStruct = sizeof(SYMBOL_INFO);
-        symbol.info.MaxNameLen = 512;
-        DWORD64 offset = 0;
-        if (symbols && SymFromAddr(process, (DWORD64)(uintptr_t)at, &offset, &symbol.info)) {
-            fprintf(stderr, "  %2d  %s + %lld\n", i - 2, symbol.info.Name, (long long)offset + 1);
-        } else {
-            fprintf(stderr, "  %2d  %p\n", i - 2, frames[i]);
-        }
+    memset(&symbol, 0, sizeof symbol);
+    symbol.info.SizeOfStruct = sizeof(SYMBOL_INFO);
+    symbol.info.MaxNameLen = 512;
+    DWORD64 offset = 0;
+    const char *at = (const char *)frame - 1;
+    if (symbols && SymFromAddr(process, (DWORD64)(uintptr_t)at, &offset, &symbol.info)) {
+        snprintf(text, size, "%s + %lld", symbol.info.Name, (long long)offset + 1);
+    } else {
+        snprintf(text, size, "%p", frame);
     }
 }
 

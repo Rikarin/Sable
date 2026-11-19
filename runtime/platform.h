@@ -24,10 +24,16 @@ static void platform_start(void);
 
 // ---- Traps ---------------------------------------------------------------
 
-// With SABLE_BACKTRACE set, the frames of the calls that led to a trap, on
-// standard error; nothing without it. Called by sable_trap_at, whose frame
-// and its own it leaves out.
-static void print_backtrace(void);
+// The most frames a backtrace holds.
+enum { BACKTRACE_DEPTH = 64 };
+
+// The return addresses of the calls that led to the caller, its caller's
+// first, at most 'capacity' of them; how many there are.
+static int capture_frames(void **frames, int capacity);
+
+// A frame as text: 'symbol + offset' where the symbol is known, the
+// address otherwise.
+static void name_frame(void *frame, char *text, size_t size);
 
 // Ends the program as a trap does: as an abort is reported, status 134 in
 // a shell, on every platform.

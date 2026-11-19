@@ -74,3 +74,12 @@ fn anOptionalCallGivesAnOptional(_ f: ((Int) -> Int)?) -> Int {
 fn anOptionalCallUnwrapped(_ f: ((Int) -> Int)?) -> Int {
     return f?(1) ?? 0
 }
+
+public struct Vector {
+    public var x: Int
+    operator + (a: Vector, b: Vector&) -> Vector { return Vector { x: a.x + b.x } }
+}
+
+fn anOperatorsReferenceNeedsAPlace(_ v: Vector) -> Vector {
+    return v + Vector { x: 1 }          //! S3060
+}

@@ -1,0 +1,40 @@
+module Sable.Math
+
+// The hyperbolic functions and their inverses, of F64 and of F32: libm's
+// (F64's and F32's methods, in Sable.Core).
+
+/// The hyperbolic sine; an infinity past where it overflows.
+public fn sinh(_ x: F64) -> F64 => x.sinh()
+
+/// The hyperbolic sine; an infinity past where it overflows.
+public fn sinh(_ x: F32) -> F32 => x.sinh()
+
+/// The hyperbolic cosine, at least 1; +inf past where it overflows.
+public fn cosh(_ x: F64) -> F64 => x.cosh()
+
+/// The hyperbolic cosine, at least 1; +inf past where it overflows.
+public fn cosh(_ x: F32) -> F32 => x.cosh()
+
+/// The hyperbolic tangent, in [-1, 1].
+public fn tanh(_ x: F64) -> F64 => x.tanh()
+
+/// The hyperbolic tangent, in [-1, 1].
+public fn tanh(_ x: F32) -> F32 => x.tanh()
+
+/// The inverse hyperbolic sine.
+public fn asinh(_ x: F64) -> F64 => x.asinh()
+
+/// The inverse hyperbolic sine.
+public fn asinh(_ x: F32) -> F32 => x.asinh()
+
+/// The inverse hyperbolic cosine; NaN below 1.
+public fn acosh(_ x: F64) -> F64 => x.acosh()
+
+/// The inverse hyperbolic cosine; NaN below 1.
+public fn acosh(_ x: F32) -> F32 => x.acosh()
+
+/// The inverse hyperbolic tangent; NaN outside [-1, 1], an infinity at ±1.
+public fn atanh(_ x: F64) -> F64 => x.atanh()
+
+/// The inverse hyperbolic tangent; NaN outside [-1, 1], an infinity at ±1.
+public fn atanh(_ x: F32) -> F32 => x.atanh()

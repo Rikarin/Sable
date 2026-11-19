@@ -1,0 +1,96 @@
+module ArraySplitTests
+
+// Cutting an array into runs (Sable.Core, Array+Split.sb), tested with
+// '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn isZero(_ x: Int) -> Bool {
+    return x == 0
+}
+
+@test
+fn splitCutsAtEachSeparator() {
+    let xs: Int[>..] = [1, 0, 2, 3, 0, 4]
+    let runs = xs.split(where: isZero)
+    assertEqual(runs.count, 3)
+    assert(runs[0] == [1])
+    assert(runs[1] == [2, 3])
+    assert(runs[2] == [4])
+}
+
+@test
+fn splitKeepsEmptyRunsAtTheEndsAndBetweenSeparators() {
+    let xs: Int[>..] = [0, 1, 0, 0]
+    let runs = xs.split(where: isZero)
+    assertEqual(runs.count, 4)
+    assertEqual(runs[0].count, 0)
+    assert(runs[1] == [1])
+    assertEqual(runs[2].count, 0)
+    assertEqual(runs[3].count, 0)
+}
+
+@test
+fn splitOfAnArrayWithNoSeparatorIsTheWholeOfIt() {
+    let words: String[>..] = ["a", "b"]
+    let runs = words.split(where: (w: String) => w == ",")
+    assertEqual(runs.count, 1)
+    assert(runs[0] == ["a", "b"])
+    let empty: Int[>..] = []
+    assertEqual(empty.split(where: isZero).count, 1)
+}
+
+@test
+fn chunksAreRunsOfTheSizeTheLastShorter() {
+    let xs: Int[>..] = [1, 2, 3, 4, 5]
+    let chunks = xs.chunks(of: 2)
+    assertEqual(chunks.count, 3)
+    assert(chunks[0] == [1, 2])
+    assert(chunks[1] == [3, 4])
+    assert(chunks[2] == [5])
+}
+
+@test
+fn chunksOfAnExactMultipleAreAllFull() {
+    let xs: Int[>..] = [1, 2, 3, 4]
+    let chunks = xs.chunks(of: 2)
+    assertEqual(chunks.count, 2)
+    assert(chunks[1] == [3, 4])
+    assertEqual(xs.chunks(of: 10).count, 1)
+    let empty: Int[>..] = []
+    assertEqual(empty.chunks(of: 3).count, 0)
+}
+
+@test(traps: "unreachable")
+fn chunksOfZeroTraps() {
+    let xs: Int[>..] = [1, 2]
+    let _ = xs.chunks(of: 0)
+}
+
+@test
+fn windowsAreEveryRunOfTheSize() {
+    let xs: Int[>..] = [1, 2, 3, 4]
+    let windows = xs.windows(of: 3)
+    assertEqual(windows.count, 2)
+    assert(windows[0] == [1, 2, 3])
+    assert(windows[1] == [2, 3, 4])
+    assertEqual(xs.windows(of: 1).count, 4)
+    assertEqual(xs.windows(of: 4).count, 1)
+    assertEqual(xs.windows(of: 5).count, 0)
+}
+
+@test(traps: "unreachable")
+fn windowsOfZeroTraps() {
+    let xs: Int[>..] = [1, 2]
+    let _ = xs.windows(of: 0)
+}
+
+@test
+fn runsAreViewsThatOutliveChangesToTheArray() {
+    var xs: Int[>..] = [1, 2, 3, 4]
+    let chunks = xs.chunks(of: 2)
+    xs[0] = 9
+    assert(chunks[0] == [1, 2])
+    assert(xs == [9, 2, 3, 4])
+}

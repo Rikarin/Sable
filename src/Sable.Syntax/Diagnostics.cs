@@ -248,6 +248,12 @@ public enum ErrorCode {
     ERR_AttributeArgumentNotConstant = 3511,
     ERR_NotPolymorphic = 3512,
 
+    // ---- Format specs in interpolation (S3660-S3669) -------------------------
+    ERR_FormatSpecMalformed = 3660,
+    ERR_FormatKindNotForType = 3661,
+    ERR_FormatOptionNotForType = 3662,
+    ERR_FormatSpecNeedsFormattable = 3663,
+
     // ---- Patterns and flow (S6000-S6999) ---------------------------------
     ERR_PatternTypeMismatch = 6000,
     ERR_UnknownUnionCase = 6001,

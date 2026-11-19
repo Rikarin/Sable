@@ -1,0 +1,150 @@
+module ByteBufferTests
+
+// ByteBuffer (Sable.Core), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn hex(_ bytes: U8[:]) -> String {
+    let digits = "0123456789abcdef"
+    var text = ""
+    for byte in bytes {
+        text = text + String.fromChar(digits.at(Int(byte >> 4))) + String.fromChar(digits.at(Int(byte & 0x0F)))
+    }
+    return text
+}
+
+@test
+fn aNewBufferIsEmptyAndLittleEndian() {
+    let buffer = ByteBuffer()
+    assert(buffer.isEmpty, "nothing written yet")
+    assertEqual(buffer.count, 0)
+    assert(buffer.endian == .Little, "little-endian unless told otherwise")
+}
+
+@test
+fn integersAreWrittenInTheBuffersOrder() {
+    var little = ByteBuffer()
+    little.writeU16(0x0102)
+    little.writeU32(0x0304_0506)
+    little.writeU64(0x0708_090A_0B0C_0D0E)
+    assertEqual(hex(little.bytes), "020106050403" + "0e0d0c0b0a090807")
+
+    var big = ByteBuffer(endian: .Big)
+    big.writeU16(0x0102)
+    big.writeU32(0x0304_0506)
+    big.writeU64(0x0708_090A_0B0C_0D0E)
+    assertEqual(hex(big.bytes), "010203040506" + "0708090a0b0c0d0e")
+    assertEqual(big.count, 14)
+}
+
+@test
+fn signedIntegersAreTwosComplement() {
+    var buffer = ByteBuffer(endian: .Big)
+    buffer.writeI8(-1)
+    buffer.writeI16(-2)
+    buffer.writeI32(-3)
+    buffer.writeI64(-4)
+    buffer.writeU8(0x7F)
+    assertEqual(hex(buffer.bytes), "ff" + "fffe" + "fffffffd" + "fffffffffffffffc" + "7f")
+}
+
+@test
+fn floatsAreWrittenAsTheirBits() {
+    var buffer = ByteBuffer(endian: .Big)
+    buffer.writeF64(1.5)
+    let quarter: F32 = 0.25
+    buffer.writeF32(quarter)
+    assertEqual(hex(buffer.bytes), "3ff8000000000000" + "3e800000")
+}
+
+@test
+fn bytesAndTextAreAddedAsTheyAre() {
+    var buffer = ByteBuffer()
+    let raw: U8[>..] = [0xDE, 0xAD]
+    buffer.write(bytes: raw)
+    buffer.writeUtf8("aé€😀")
+    assertEqual(hex(buffer.bytes), "dead" + "61" + "c3a9" + "e282ac" + "f09f9880")
+}
+
+@test
+fn varUIntTakesSevenBitsAByte() {
+    var buffer = ByteBuffer()
+    buffer.writeVarUInt(0)
+    buffer.writeVarUInt(127)
+    buffer.writeVarUInt(128)
+    buffer.writeVarUInt(300)
+    assertEqual(hex(buffer.bytes), "00" + "7f" + "8001" + "ac02")
+    buffer.clear()
+    buffer.writeVarUInt(0xFFFF_FFFF_FFFF_FFFF)
+    assertEqual(hex(buffer.bytes), "ffffffffffffffffff01")
+}
+
+@test
+fn varIntZigZagsTheSign() {
+    var buffer = ByteBuffer()
+    buffer.writeVarInt(0)
+    buffer.writeVarInt(-1)
+    buffer.writeVarInt(1)
+    buffer.writeVarInt(-2)
+    buffer.writeVarInt(-64)
+    buffer.writeVarInt(64)
+    assertEqual(hex(buffer.bytes), "00" + "01" + "02" + "03" + "7f" + "8001")
+    buffer.clear()
+    buffer.writeVarInt(-9_223_372_036_854_775_808)
+    assertEqual(hex(buffer.bytes), "ffffffffffffffffff01")
+}
+
+@test
+fn aValueWrittenCanBeOverwrittenInPlace() {
+    var buffer = ByteBuffer(endian: .Big)
+    buffer.writeU32(0)
+    buffer.writeUtf8("hello")
+    buffer.writeU32(U32(buffer.count - 4), at: 0)
+    assertEqual(hex(buffer.bytes), "00000005" + "68656c6c6f")
+    buffer.writeU16(0xABCD, at: 1)
+    buffer.writeU64(0x0102_0304_0506_0708, at: 1)
+    assertEqual(hex(buffer.bytes), "00" + "0102030405060708")
+}
+
+@test(traps: "array index out of range")
+fn overwritingPastWhatWasWrittenTraps() {
+    var buffer = ByteBuffer()
+    buffer.writeU16(1)
+    buffer.writeU32(2, at: 0)
+}
+
+@test
+fn theBytesAreAValueTheBufferDoesNotChangeAfter() {
+    var buffer = ByteBuffer()
+    buffer.writeU8(1)
+    let before = buffer.bytes
+    buffer.writeU8(2)
+    buffer.writeU16(0x0303, at: 0)
+    assertEqual(before.count, 1)
+    assertEqual(before[0], 1)
+    assertEqual(buffer.count, 2)
+}
+
+@test
+fn clearEmptiesTheBuffer() {
+    var buffer = ByteBuffer()
+    buffer.writeU64(1)
+    buffer.clear()
+    assert(buffer.isEmpty, "cleared")
+    buffer.writeU8(9)
+    assertEqual(hex(buffer.bytes), "09")
+}
+
+@bench
+fn writeAThousandMixedValues() {
+    var buffer = ByteBuffer()
+    var i = 0
+    while i < 1000 {
+        buffer.writeU32(U32(i))
+        buffer.writeVarUInt(U64(i * 37))
+        buffer.writeF64(F64(i))
+        i = i + 1
+    }
+    assert(buffer.count > 12_000)
+}

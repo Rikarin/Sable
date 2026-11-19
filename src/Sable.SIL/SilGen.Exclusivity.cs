@@ -54,6 +54,12 @@ public sealed partial class SilGen {
         /// </summary>
         void BeginAccesses(List<SilValue> borrows) {
             foreach (var borrow in borrows) {
+                if (borrow is DeferredStep { Done: false } step) {
+                    step.Done = true;
+                    step.Run();
+                    continue;
+                }
+
                 if (borrow is AccessMarker { Begun: false } marker) {
                     Emit(new BuiltinInst(marker.Modify ? "access_begin_modify" : "access_begin_read", SilType.Unit, marker.Address));
                     marker.Begun = true;

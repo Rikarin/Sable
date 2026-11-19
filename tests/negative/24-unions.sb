@@ -23,6 +23,23 @@ fn aCaseNeedsItsPayload() -> Shape {
     return Shape.Circle                 //! S6002 so it needs them here
 }
 
+// Found by the compiler fuzzer (SABLE_FUZZ_SEED=987654): where nothing
+// converts it to the union, a case that carries a value was let through
+// bare, and lowering built it without one.
+fn aCaseNeedsItsPayloadWithNothingExpected() throws(Shape) {
+    let shape = Shape.Circle            //! S6002 so it needs them here
+    let pair = (Shape.Circle, 1)        //! S6002 so it needs them here
+    throw .Circle                       //! S6002 so it needs them here
+}
+
+fn aCaseNeedsItsPayloadWhenThrown() throws(Shape) {
+    throw Shape.Circle                  //! S6002 so it needs them here
+}
+
+fn aParenthesizedCaseIsStillCalled() -> Shape {
+    return (Shape.Circle)(radius: 1.0)
+}
+
 fn tooFewPayloadValues() -> Shape {
     return Shape.Rect(width: 1.0)       //! S6002 takes 2 value(s)
 }

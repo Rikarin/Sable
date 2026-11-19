@@ -1,0 +1,34 @@
+module Sable.Core
+
+extension F32: Parsable {
+    /// The number the text writes, rounded once to the nearest F32, ties to
+    /// even — not to an F64 first, which could round a decimal just past a
+    /// midpoint between two F32s onto it; or `inf`, `infinity` or `nan`. A
+    /// sign is allowed, and a number too large for an F32 is an infinity.
+    ///
+    /// ```sable
+    /// let x: F32 = 0.1
+    /// assert(try! F32.parse("0.1") == x)
+    /// ```
+    public static fn parse(_ text: String) throws(ParseError) -> F32 {
+        return try F32.parse(text, styles: .Sign)
+    }
+
+    /// The number the text writes, with what else the styles allow: white
+    /// space, a sign, separators.
+    public static fn parse(_ text: String, styles: NumberStyles) throws(ParseError) -> F32 {
+        let plain = try plainFloat(text, styles)
+        if let special = specialFloat(plain) {
+            return F32(special)
+        }
+        let (parsed, value) = plain.parseF32()
+        return parsed ? value : F32(overflowedFloat(plain))
+    }
+}
+
+extension String {
+    /// Whether the text is a finite F32, and the F32 when it is: the runtime's
+    /// strtof, which rounds the decimal once.
+    @builtin("string_to_F32")
+    fn parseF32() -> (Bool, F32)
+}

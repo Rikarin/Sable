@@ -1,0 +1,21 @@
+module Sable.Core
+
+extension F16: Formattable {
+    /// The number as the spec says. Without a precision, in the shortest
+    /// digits that read back as the same F16; with one, its exact value
+    /// rounded to that many places (to nearest, ties to even). `f` is plain
+    /// notation, `e` scientific, `g` whichever suits, `%` a percentage.
+    ///
+    /// ```sable
+    /// let x: F16 = 0.5
+    /// assert(x.format(try! FormatSpec.parse(".3")) == "0.500")
+    /// assert(x.format(try! FormatSpec.parse("e")) == "5e-01")
+    /// assert(x.format(try! FormatSpec.parse("%")) == "50%")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String {
+        if spec.kind == .Debug {
+            return spec.aligned(self.debugDescription(), numeric: true)
+        }
+        return formatFloat(F64(self), "\(self)", spec)
+    }
+}

@@ -6,62 +6,109 @@ module OrderedDictionaryTests
 import Sable.Collections
 import Sable.Testing
 
-fn letters() -> OrderedDictionary<String, Int> {
-    let d = OrderedDictionary<String, Int>()
-    d.set("a", 1)
-    d.set("b", 2)
-    d.set("c", 3)
-    return d
+@test
+fn anEmptyDictionaryHasNoKeys() {
+    let dictionary = OrderedDictionary<String, Int>()
+    assertEqual(dictionary.count, 0)
+    assert(dictionary.isEmpty)
+    assert(dictionary.get("a") == none)
+    assert(!dictionary.contains("a"))
+    assert(dictionary.index(of: "a") == none)
+    assert(dictionary.remove("a") == none)
 }
 
 @test
-fn anEmptyOneHasNothing() {
-    let d = OrderedDictionary<String, Int>()
-    assert(d.isEmpty)
-    assertEqual(d.count, 0)
-    assert(d.get("a") == none)
-    assert(!d.contains("a"))
-    assert(d.index(of: "a") == none)
-    assert(d.remove("a") == none)
+fn keysKeepTheOrderTheyWereAdded() {
+    let dictionary = OrderedDictionary<String, Int>()
+    dictionary.set("zebra", 1)
+    dictionary.set("apple", 2)
+    dictionary.set("mango", 3)
+    assertEqual(dictionary.count, 3)
+    assert(!dictionary.isEmpty)
+    assert(dictionary.keys() == ["zebra", "apple", "mango"])
+    assert(dictionary.values() == [1, 2, 3])
 }
 
 @test
-fn keysKeepTheOrderTheyWereAddedIn() {
-    let d = letters()
-    assertEqual(d.count, 3)
-    assert(!d.isEmpty)
-    assert(d.keys() == ["a", "b", "c"])
-    assert(d.values() == [1, 2, 3])
-    assertEqual(d.key(at: 1), "b")
-    assertEqual(d.value(at: 2), 3)
-    assertEqual(d.index(of: "c") ?? -1, 2)
+fn settingAKeyAgainKeepsItsPlace() {
+    let dictionary = OrderedDictionary<String, Int>()
+    dictionary.set("a", 1)
+    dictionary.set("b", 2)
+    dictionary.set("a", 10)
+    assertEqual(dictionary.count, 2)
+    assertEqual(dictionary.get("a") ?? 0, 10)
+    assertEqual(dictionary.index(of: "a") ?? -1, 0)
+    assert(dictionary.values() == [10, 2])
 }
 
 @test
-fn settingAKeyThatIsThereKeepsItsPlace() {
-    let d = letters()
-    d.set("a", 10)
-    assertEqual(d.get("a") ?? -1, 10)
-    assert(d.keys() == ["a", "b", "c"])
-    assert(d.contains("a"))
+fn keysAndValuesCanBeReadByPosition() {
+    let dictionary = OrderedDictionary<Int, String>()
+    dictionary.set(30, "thirty")
+    dictionary.set(10, "ten")
+    assertEqual(dictionary.key(at: 1), 10)
+    assertEqual(dictionary.value(at: 0), "thirty")
+    assertEqual(dictionary.index(of: 10) ?? -1, 1)
+    assert(dictionary.contains(30))
+}
+
+@test(traps: "array index out of range")
+fn aPositionPastTheEndTraps() {
+    let dictionary = OrderedDictionary<Int, Int>()
+    dictionary.set(1, 1)
+    let _ = dictionary.key(at: 1)
 }
 
 @test
 fn removingAKeyClosesUpTheOrder() {
-    let d = letters()
-    assertEqual(d.remove("a") ?? -1, 1)
-    assert(d.keys() == ["b", "c"])
-    assertEqual(d.index(of: "c") ?? -1, 1)
-    assertEqual(d.get("c") ?? -1, 3)
-    assert(!d.contains("a"))
+    let dictionary = OrderedDictionary<String, Int>()
+    dictionary.set("a", 1)
+    dictionary.set("b", 2)
+    dictionary.set("c", 3)
+    dictionary.set("d", 4)
+    assertEqual(dictionary.remove("b") ?? 0, 2)
+    assert(dictionary.keys() == ["a", "c", "d"])
+    assertEqual(dictionary.index(of: "c") ?? -1, 1)
+    assertEqual(dictionary.index(of: "d") ?? -1, 2)
+    assertEqual(dictionary.get("d") ?? 0, 4)
+    assert(dictionary.remove("b") == none)
+    assertEqual(dictionary.remove("d") ?? 0, 4)
+    assert(dictionary.keys() == ["a", "c"])
 }
 
 @test
-fn removeAllEmptiesIt() {
-    let d = letters()
-    d.removeAll()
-    assert(d.isEmpty)
-    assert(d.get("b") == none)
-    d.set("z", 26)
-    assertEqual(d.index(of: "z") ?? -1, 0)
+fn aRemovedKeyAddedAgainGoesAtTheEnd() {
+    let dictionary = OrderedDictionary<String, Int>()
+    dictionary.set("a", 1)
+    dictionary.set("b", 2)
+    let _ = dictionary.remove("a")
+    dictionary.set("a", 3)
+    assert(dictionary.keys() == ["b", "a"])
+    assert(dictionary.values() == [2, 3])
+}
+
+@test
+fn removeAllEmptiesTheDictionary() {
+    let dictionary = OrderedDictionary<String, Int>()
+    dictionary.set("a", 1)
+    dictionary.set("b", 2)
+    dictionary.removeAll()
+    assertEqual(dictionary.count, 0)
+    assert(!dictionary.contains("a"))
+    dictionary.set("c", 3)
+    assertEqual(dictionary.index(of: "c") ?? -1, 0)
+}
+
+@test
+fn manyKeysStayInOrder() {
+    let dictionary = OrderedDictionary<Int, Int>()
+    var i = 0
+    while i < 200 {
+        dictionary.set(i * 7 % 200, i)
+        i = i + 1
+    }
+    assertEqual(dictionary.count, 200)
+    assertEqual(dictionary.key(at: 0), 0)
+    assertEqual(dictionary.key(at: 1), 7)
+    assertEqual(dictionary.get(14) ?? -1, 2)
 }

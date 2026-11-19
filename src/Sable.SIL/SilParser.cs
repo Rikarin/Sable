@@ -440,6 +440,7 @@ public sealed class SilParser {
         _blocks = new(StringComparer.Ordinal);
         _definedBlocks = [];
         _pending = [];
+        _unresolvedCases = [];
 
         Expect("{");
         while (!At("}")) {
@@ -460,6 +461,10 @@ public sealed class SilParser {
             }
 
             user.SetOperand(operand, value);
+        }
+
+        foreach (var (switched, named, line) in _unresolvedCases) {
+            ResolveCases(switched, named, line);
         }
 
         // Blocks were created in order of first mention; put them in the
@@ -807,10 +812,12 @@ public sealed class SilParser {
             }
 
             case "switch_enum": {
-                var value = Defined(Operand(0), opcode, line);
-                var enumType = value.Type as EnumType
-                    ?? throw new SilParseException("switch_enum needs an enum value", line);
-                var cases = new List<(int, SilBlock)>();
+                // The operand may be written further down: a block argument
+                // of a block that dominates this one but comes later in the
+                // text, as promotion leaves them. Its cases are then kept by
+                // name until the function's end, when its type is known.
+                var value = Operand(0);
+                var named = new List<(string Case, SilBlock Target)>();
                 SilBlock? fallback = null;
                 while (Accept(",")) {
                     if (Accept("default")) {
@@ -820,16 +827,18 @@ public sealed class SilParser {
 
                     Expect("case");
                     var caseName = Expect(TokenKind.Member, "a case").Text;
-                    var index = enumType.CaseIndex(caseName);
-                    if (index < 0) {
-                        throw new SilParseException($"{enumType.Name} has no case #{caseName}", line);
-                    }
-
                     Expect(":");
-                    cases.Add((index, BlockNamed(Expect(TokenKind.Word, "a block label").Text)));
+                    named.Add((caseName, BlockNamed(Expect(TokenKind.Word, "a block label").Text)));
                 }
 
-                instruction = new SwitchEnumInst(value, cases, fallback);
+                var switched = new SwitchEnumInst(value, [], fallback);
+                if (value is Placeholder) {
+                    _unresolvedCases.Add((switched, named, line));
+                } else {
+                    ResolveCases(switched, named, line);
+                }
+
+                instruction = switched;
                 break;
             }
 
@@ -1070,6 +1079,23 @@ public sealed class SilParser {
         }
 
         return instruction;
+    }
+
+    /// <summary>The <c>switch_enum</c>s whose operand is written after them, with the cases they name.</summary>
+    List<(SwitchEnumInst Switch, List<(string Case, SilBlock Target)> Named, int Line)> _unresolvedCases = [];
+
+    /// <summary>A <c>switch_enum</c>'s named cases, as indices of its operand's enum.</summary>
+    static void ResolveCases(SwitchEnumInst switched, List<(string Case, SilBlock Target)> named, int line) {
+        var enumType = switched.Value.Type as EnumType
+            ?? throw new SilParseException("switch_enum needs an enum value", line);
+        foreach (var (caseName, target) in named) {
+            var index = enumType.CaseIndex(caseName);
+            if (index < 0) {
+                throw new SilParseException($"{enumType.Name} has no case #{caseName}", line);
+            }
+
+            switched.Cases.Add((index, target));
+        }
     }
 
     /// <summary>A value whose type an instruction needs while it is parsed, so it must already be defined.</summary>

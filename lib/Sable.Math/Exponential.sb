@@ -1,0 +1,73 @@
+module Sable.Math
+
+// Exponentials, logarithms and powers, of F64 and of F32: libm's (F64's
+// and F32's methods, in Sable.Core), and exp10, which libm has under no
+// portable name, as a power of ten.
+
+/// e to the power x; +inf past where it overflows, 0 below where it underflows.
+///
+/// ```sable
+/// assert(exp(0.0) == 1.0)
+/// ```
+public fn exp(_ x: F64) -> F64 => x.exp()
+
+/// e to the power x.
+public fn exp(_ x: F32) -> F32 => x.exp()
+
+/// 2 to the power x: exact at an integer x in range.
+public fn exp2(_ x: F64) -> F64 => x.exp2()
+
+/// 2 to the power x: exact at an integer x in range.
+public fn exp2(_ x: F32) -> F32 => x.exp2()
+
+/// 10 to the power x: exact at an integer x whose power an F64 holds
+/// exactly (up to 1e22).
+public fn exp10(_ x: F64) -> F64 => 10.0.pow(x)
+
+/// 10 to the power x: computed as an F64 and rounded.
+public fn exp10(_ x: F32) -> F32 => F32(exp10(F64(x)))
+
+/// e to the power x, less 1, without the loss of exp(x) - 1.0 where x is
+/// small: expm1(1e-10) is 1.00000000005e-10.
+public fn expm1(_ x: F64) -> F64 => x.expm1()
+
+/// e to the power x, less 1, without the loss of exp(x) - 1.0 where x is small.
+public fn expm1(_ x: F32) -> F32 => x.expm1()
+
+/// The natural logarithm: -inf at ±0, NaN below 0.
+public fn log(_ x: F64) -> F64 => x.log()
+
+/// The natural logarithm: -inf at ±0, NaN below 0.
+public fn log(_ x: F32) -> F32 => x.log()
+
+/// The base-2 logarithm: exact at a power of two.
+public fn log2(_ x: F64) -> F64 => x.log2()
+
+/// The base-2 logarithm: exact at a power of two.
+public fn log2(_ x: F32) -> F32 => x.log2()
+
+/// The base-10 logarithm.
+public fn log10(_ x: F64) -> F64 => x.log10()
+
+/// The base-10 logarithm.
+public fn log10(_ x: F32) -> F32 => x.log10()
+
+/// The natural logarithm of 1 + x, without the loss of log(1.0 + x) where x is small.
+public fn log1p(_ x: F64) -> F64 => x.log1p()
+
+/// The natural logarithm of 1 + x, without the loss of log(1.0 + x) where x is small.
+public fn log1p(_ x: F32) -> F32 => x.log1p()
+
+/// The logarithm of x in a base: log(x) / log(base), as .NET's Math.Log.
+public fn log(_ x: F64, base: F64) -> F64 => x.log() / base.log()
+
+/// The logarithm of x in a base.
+public fn log(_ x: F32, base: F32) -> F32 => F32(log(F64(x), base: F64(base)))
+
+/// x to the power y, with C's special cases: pow(x, 0.0) is 1 for every x,
+/// NaN included, pow(1.0, y) is 1 for every y, and a negative x to a power
+/// that is not an integer is NaN.
+public fn pow(_ x: F64, _ y: F64) -> F64 => x.pow(y)
+
+/// x to the power y, with C's special cases.
+public fn pow(_ x: F32, _ y: F32) -> F32 => x.pow(y)

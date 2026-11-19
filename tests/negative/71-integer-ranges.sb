@@ -25,3 +25,18 @@ fn locals() {
     let f: U64 = 18446744073709551615
     let g = 9223372036854775808         //! S3200 does not fit in 'Int'
 }
+
+// An argument takes its parameter's type, so it is held to that type's
+// range, not to Int's: a U64 parameter takes what no Int holds.
+fn takeU64(_ x: U64) -> U64 => x
+fn takeI8(_ x: I8) -> I8 => x
+fn takeInt(_ x: Int) -> Int => x
+fn same<T>(_ x: T) -> T => x
+
+fn arguments() {
+    let h = takeU64(18446744073709551615)
+    let i = takeI8(300)                     //! S3200 '300' does not fit in 'I8'
+    let j = takeInt(9223372036854775808)    //! S3200 does not fit in 'Int'
+    let k = same(9223372036854775808)       //! S3200 does not fit in 'Int'
+    let l = F64.fromBits(0x8000_0000_0000_0000)
+}

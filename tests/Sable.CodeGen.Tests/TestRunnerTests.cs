@@ -7,8 +7,11 @@ namespace Sable.CodeGen.Tests;
 /// <summary>
 ///     <c>sable test</c> (docs/05 §5.1): the harness the compiler writes
 ///     around the <c>@test</c> functions, run natively — each test in a
-///     process of its own — and in the interpreter, in one.
+///     process of its own — and in the interpreter, in one. The command
+///     prints to the console, which other tests take over to read it: so
+///     not at the same time as those.
 /// </summary>
+[Collection("Console")]
 public sealed class TestRunnerTests {
     const string Suite = """
         module Suite

@@ -265,6 +265,31 @@ fn addingAndRemovingOneKeyOverAndOverStaysSmall() {
 }
 
 @test
+fn removedSlotsAreReusedAndDroppedOnGrowth() {
+    var d: [Int: Int] = [:]
+    var i = 0
+    while i < 40 {
+        d[i] = i
+        i = i + 1
+    }
+    i = 0
+    while i < 40 {
+        assert(d.remove(i) != none)
+        i = i + 2
+    }
+    i = 100
+    while i < 200 {
+        d[i] = i
+        i = i + 1
+    }
+    assertEqual(d.count, 120)
+    assertEqual(d[1] ?? -1, 1)
+    assert(d[2] == none)
+    assertEqual(d[150] ?? -1, 150)
+    assertEqual(d.keys().count, 120)
+}
+
+@test
 fn aKeyAddedAfterRemovalsGoesLast() {
     var d: [String: Int] = ["a": 1, "b": 2, "c": 3]
     d["b"] = none

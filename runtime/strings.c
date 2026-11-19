@@ -764,10 +764,10 @@ bool sable_string_to_int(const SableString *s, int64_t *out) {
     return true;
 }
 
-// A decimal number — sign, digits, fraction, exponent — and nothing else: no
-// infinities, NaN, hex or surrounding space, which strtod would also take —
-// that is finite as a double.
-bool sable_string_to_f64(const SableString *s, double *out) {
+// Whether the string is a decimal number — sign, digits, fraction, exponent —
+// and nothing else: no infinities, NaN, hex or surrounding space, which
+// strtod and strtof would also take.
+static bool is_decimal(const SableString *s) {
     const char *b = s->bytes;
     int64_t n = s->length, i = 0, digits = 0;
     if (i < n && (b[i] == '+' || b[i] == '-')) {
@@ -808,17 +808,45 @@ bool sable_string_to_f64(const SableString *s, double *out) {
         }
     }
 
-    if (i != n) {
+    return i == n;
+}
+
+// A decimal number that is finite as a double, rounded to the nearest one.
+bool sable_string_to_f64(const SableString *s, double *out) {
+    if (!is_decimal(s)) {
         return false;
     }
 
-    char *text = malloc((size_t)n + 1);
-    memcpy(text, b, (size_t)n);
-    text[n] = '\0';
+    char *text = malloc((size_t)s->length + 1);
+    memcpy(text, s->bytes, (size_t)s->length);
+    text[s->length] = '\0';
     double value = strtod(text, NULL);
     free(text);
 
     // Too large for a double does not fit, as for sable_string_to_int.
+    if (isinf(value)) {
+        return false;
+    }
+
+    *out = value;
+    return true;
+}
+
+// The same for a float, rounded once, from the decimal digits to the nearest
+// float: through a double it would be rounded twice, and a decimal just past
+// a midpoint between two floats can land on the midpoint as a double and
+// then go the wrong way.
+bool sable_string_to_f32(const SableString *s, float *out) {
+    if (!is_decimal(s)) {
+        return false;
+    }
+
+    char *text = malloc((size_t)s->length + 1);
+    memcpy(text, s->bytes, (size_t)s->length);
+    text[s->length] = '\0';
+    float value = strtof(text, NULL);
+    free(text);
+
     if (isinf(value)) {
         return false;
     }

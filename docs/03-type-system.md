@@ -343,3 +343,30 @@ The subtyping relation is deliberately small:
 
 Notably absent: structural record subtyping, numeric subtyping (`I32 </: I64` —
 widening is an explicit `as`), and array covariance.
+
+---
+
+## 3.9 What each kind of array can do
+
+The kinds (docs/02 §2.5) differ in how they may change, and their members
+follow from that rather than from a common protocol (an array extension adds
+members, not conformances — SYNTAX.md §11):
+
+- **Every kind**, as a slice `T[:]`, can be read — `first`, `firstIndex(of:)`,
+  `starts(with:)`, `partitionPoint(where:)`, `min()`, `split(where:)`,
+  `chunks(of:)`, `windows(of:)`, `toArray()` — and reordered in place, as
+  nothing in that changes the count: `swapAt`, `reverse()`, `rotate(left:)`,
+  `fill`, `copy(from:)`, `partition(by:)`, `selectNth`, `sort()`. A
+  `mutating` member of `T[:]` called on an array changes the array where it
+  is (docs/02 §2.5). The non-mutating pairs (`reversed()`, `sorted()`) give
+  a `T[>..]`.
+- **`T[>..]` grows at its end and nowhere else**: `append`,
+  `append(contentsOf:)`, `reserveCapacity`, `capacity`, and, at the end,
+  `removeLast` and `clear`. It does not insert or remove in the middle:
+  that would move every element after the place, which a grow-only array —
+  the common, stable-reference case — never does. `T[>..<]` has the same.
+- **Inserting and removing anywhere** — `insert(_:at:)`, `remove(at:)`,
+  `removeAll(where:)`, `retain(where:)`, `dedup()`, `truncate(to:)`,
+  `drain`, `replaceSubrange`, `swapRemove(at:)` — is `List<Element>`'s
+  (Sable.Collections), a value that holds a `T[>..]` and converts to and
+  from one with no copy.

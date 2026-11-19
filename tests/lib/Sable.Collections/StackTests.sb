@@ -18,3 +18,23 @@ fn stackIsLastInFirstOut() {
     assertEqual(stack.pop() ?? -1, 1)
     assert(stack.pop() == none, "an empty stack pops none")
 }
+
+@test
+fn anEmptyStackHasNothingToPeekAt() {
+    let stack = Stack<String>()
+    assert(stack.isEmpty)
+    assertEqual(stack.count, 0)
+    assert(stack.peek() == none)
+}
+
+@test
+fn countFollowsPushesAndPops() {
+    let stack = Stack<String>()
+    stack.push("a")
+    stack.push("b")
+    assertEqual(stack.count, 2)
+    assert(!stack.isEmpty)
+    let _ = stack.pop()
+    assertEqual(stack.count, 1)
+    assertEqual(stack.peek() ?? "", "a")
+}

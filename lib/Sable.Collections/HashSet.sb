@@ -5,6 +5,7 @@ module Sable.Collections
 public class HashSet<Element: Hashable> {
     var map: [Element: Bool] = [:]
 
+    /// An empty set.
     public init() { }
 
     /// How many values it holds.
@@ -24,7 +25,7 @@ public class HashSet<Element: Hashable> {
         return map.contains(value)
     }
 
-    /// Removes the value; true if it was there.
+    /// Takes the value out; true if it was there.
     @discardable
     public fn remove(_ value: Element) -> Bool {
         if let _ = map.remove(value) {

@@ -42,7 +42,7 @@ public sealed class DeriveTests {
         var point = compilation.GetTypeByQualifiedName("M.Point")!;
         Assert.Contains(point.Members, static m => m is FunctionSymbol { Name: "==", FunctionKind: FunctionKind.Operator });
         Assert.Contains(point.Members, static m => m is FunctionSymbol { Name: "hash" });
-        Assert.Equal(2, compilation.Derivations.Count);
+        Assert.Equal(2, compilation.Derivations.Count(d => d.Type.Equals(point)));
     }
 
     [Fact]

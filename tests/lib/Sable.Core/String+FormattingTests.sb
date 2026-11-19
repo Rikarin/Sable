@@ -1,0 +1,58 @@
+module StringFormattingTests
+
+// String's, Char's and Bool's Formattable conformances: text padded to a
+// width, a string cut to a precision, and '?' for the literal form. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn spec(_ text: String) -> FormatSpec {
+    return try! FormatSpec.parse(text)
+}
+
+@test
+fn aStringWithNoSpecIsItself() {
+    assertEqual("sable".format(FormatSpec()), "sable")
+    assertEqual("".format(FormatSpec()), "")
+}
+
+@test
+fn aStringIsPaddedOnTheRight() {
+    assertEqual("[\("ab":5)]", "[ab   ]")
+    assertEqual("[\("ab":>5)]", "[   ab]")
+    assertEqual("[\("ab":*^6)]", "[**ab**]")
+    assertEqual("[\("abcdef":3)]", "[abcdef]")
+}
+
+@test
+fn aPrecisionKeepsThatManyScalars() {
+    assertEqual("\("sable":.3)", "sab")
+    assertEqual("\("sable":.0)", "")
+    assertEqual("\("ab":.5)", "ab")
+    assertEqual("\("é😀x":.2)", "é😀")
+    assertEqual("[\("sable":*<6.3)]", "[sab***]")
+}
+
+@test
+fn aStringsDebugIsItsLiteral() {
+    assertEqual("\("q\"d":?)", "\"q\\\"d\"")
+    assertEqual("[\("a":>5?)]", "[  \"a\"]")
+    assertEqual("\("tab\there":?)", "\"tab\\there\"")
+}
+
+@test
+fn aCharIsItselfOrItsLiteral() {
+    assertEqual("\('c')", "c")
+    assertEqual("[\('c':>3)]", "[  c]")
+    assertEqual("[\('c':-<3)]", "[c--]")
+    assertEqual("\('c':?)", "'c'")
+    assertEqual('😀'.format(FormatSpec()), "😀")
+}
+
+@test
+fn aBoolIsAWord() {
+    assertEqual("\(true)", "true")
+    assertEqual("[\(false:>7)]", "[  false]")
+    assertEqual("[\(true:<6)]", "[true  ]")
+    assertEqual(true.format(spec("?")), "true")
+}

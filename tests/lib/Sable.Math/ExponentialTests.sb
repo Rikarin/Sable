@@ -1,0 +1,132 @@
+module ExponentialTests
+
+// Exponential (Sable.Math), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Math
+// Reference values are correctly rounded (mpmath, 60 digits).
+
+import Sable.Math
+import Sable.Testing
+import FloatAssertions
+
+@test
+fn theExponentialsAreWithinAnUlpOfTheTrueValues() {
+    assertWithin(exp(1.0), 2.718281828459045, ulps: 1)
+    assertWithin(exp(-2.5), 0.0820849986238988, ulps: 1)
+    assertWithin(exp(100.0), 2.6881171418161356e43, ulps: 1)
+    assertWithin(exp2(0.5), 1.4142135623730951, ulps: 1)
+    assertWithin(exp2(-2.5), 0.1767766952966369, ulps: 1)
+    assertWithin(exp10(0.5), 3.1622776601683795, ulps: 1)
+    assertWithin(exp10(-2.5), 0.0031622776601683794, ulps: 1)
+    assertWithin(expm1(-0.5), -0.3934693402873666, ulps: 1)
+}
+
+@test
+fn integerPowersOfTwoAndTenAreExact() {
+    assertSame(exp2(10.0), 1024.0)
+    assertSame(exp2(-3.0), 0.125)
+    assertSame(exp10(3.0), 1000.0)
+    assertSame(exp10(22.0), 1e22)
+    assertSame(exp10(-2.0), 0.01)
+}
+
+@test
+fn expm1AndLog1pKeepTheDigitsOfSmallArguments() {
+    assertWithin(expm1(1e-5), 1.0000050000166668e-5, ulps: 1)
+    assertSame(expm1(1e-300), 1e-300)
+    assertWithin(log1p(1e-10), 9.999999999500001e-11, ulps: 1)
+    assertWithin(log1p(-0.5), -0.6931471805599453, ulps: 1)
+    assertWithin(log1p(1e300), 690.7755278982137, ulps: 1)
+}
+
+@test
+fn theLogarithmsAreWithinAnUlpOfTheTrueValues() {
+    assertWithin(log(10.0), 2.302585092994046, ulps: 1)
+    assertWithin(log(0.5), -0.6931471805599453, ulps: 1)
+    assertWithin(log(1e300), 690.7755278982137, ulps: 1)
+    assertWithin(log2(10.0), 3.321928094887362, ulps: 1)
+    assertWithin(log2(0.3), -1.7369655941662063, ulps: 1)
+    assertWithin(log10(2.0), 0.3010299956639812, ulps: 1)
+    assertWithin(log10(12345.0), 4.091491094267951, ulps: 1)
+    assertWithin(log(8.0, base: 3.0), 1.8927892607143724, ulps: 2)
+}
+
+@test
+fn logarithmsOfPowersOfTheirBaseAreExact() {
+    assertSame(log2(1024.0), 10.0)
+    assertSame(log2(0.125), -3.0)
+    assertSame(log10(1000.0), 3.0)
+    assertSame(log(1.0), 0.0)
+    assertSame(log(1024.0, base: 2.0), 10.0)
+}
+
+@test
+fn theExponentialsGoToTheirLimits() {
+    assertSame(exp(-inf), 0.0)
+    assertSame(exp(inf), inf)
+    assertSame(exp(-0.0), 1.0)
+    assertSame(exp(1000.0), inf)
+    assertSame(exp(-1000.0), 0.0)
+    assertSame(exp2(-inf), 0.0)
+    assertSame(exp10(inf), inf)
+    assertSame(expm1(-inf), -1.0)
+    assertSame(expm1(-0.0), -0.0)
+    assertSame(exp(nan), nan)
+}
+
+@test
+fn theLogarithmsOfZeroAreMinusInfinityAndOfNegativesNaN() {
+    assertSame(log(0.0), -inf)
+    assertSame(log(-0.0), -inf)
+    assertSame(log2(0.0), -inf)
+    assertSame(log10(-0.0), -inf)
+    assertSame(log(-1.0), nan)
+    assertSame(log2(-inf), nan)
+    assertSame(log(inf), inf)
+    assertSame(log1p(-1.0), -inf)
+    assertSame(log1p(-2.0), nan)
+    assertSame(log1p(-0.0), -0.0)
+}
+
+@test
+fn powIsWithinAnUlpOfTheTrueValue() {
+    assertWithin(pow(2.0, 0.5), 1.4142135623730951, ulps: 1)
+    assertWithin(pow(10.0, -3.5), 0.00031622776601683794, ulps: 1)
+    assertWithin(pow(1.0001, 10000.0), 2.7181459268249255, ulps: 1)
+    assertSame(pow(2.0, 10.0), 1024.0)
+    assertSame(pow(-2.0, 3.0), -8.0)
+}
+
+@test
+fn powHasCsSpecialCases() {
+    assertSame(pow(nan, 0.0), 1.0)
+    assertSame(pow(nan, -0.0), 1.0)
+    assertSame(pow(1.0, nan), 1.0)
+    assertSame(pow(-1.0, inf), 1.0)
+    assertSame(pow(-2.0, 0.5), nan)
+    assertSame(pow(0.0, -1.0), inf)
+    assertSame(pow(-0.0, -3.0), -inf)
+    assertSame(pow(-0.0, 3.0), -0.0)
+    assertSame(pow(0.5, inf), 0.0)
+    assertSame(pow(2.0, inf), inf)
+    assertSame(pow(-inf, 3.0), -inf)
+    assertSame(pow(-inf, -3.0), -0.0)
+    assertSame(pow(2.0, nan), nan)
+}
+
+@test
+fn theF32FunctionsAreWithinAnUlpOfTheTrueValues() {
+    let one: F32 = 1.0
+    let half: F32 = 0.5
+    let ten: F32 = 10.0
+    assertWithin(exp(one), 2.7182817, ulps: 1)
+    assertWithin(exp2(half), 1.4142135, ulps: 1)
+    assertWithin(exp10(half), 3.1622777, ulps: 1)
+    assertWithin(expm1(-half), -0.39346933, ulps: 1)
+    assertWithin(log(ten), 2.3025851, ulps: 1)
+    assertWithin(log2(ten), 3.321928, ulps: 1)
+    assertWithin(log10(ten), 1.0, ulps: 1)
+    assertWithin(log1p(-half), -0.6931472, ulps: 1)
+    assertWithin(log(ten, base: ten), 1.0, ulps: 1)
+    assertWithin(pow(ten, -half), 0.31622776, ulps: 1)
+    assertSame(log(-one), nan32)
+}

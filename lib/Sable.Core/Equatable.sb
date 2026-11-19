@@ -155,10 +155,6 @@ extension F64: Comparable, Hashable {
     public fn hash(into hasher: inout Hasher) {
         hasher.write(self == 0.0 ? 0 : self.bits)
     }
-
-    /// The value's IEEE 754 bits.
-    @builtin("float_bits_F64")
-    var bits: U64 { get }
 }
 
 extension String: Comparable, Hashable {

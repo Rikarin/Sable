@@ -1,0 +1,31 @@
+module Sable.Core
+
+extension F64: Parsable {
+    /// The number the text writes — digits with a point and an exponent if it
+    /// likes, `1.5`, `.5`, `2e-3` — rounded to the nearest F64, ties to even;
+    /// or `inf`, `infinity` or `nan` in any case. A sign is allowed. A number
+    /// too large for an F64 is an infinity, as it rounds to.
+    ///
+    /// ```sable
+    /// assert(try! F64.parse("0.1") == 0.1)
+    /// assert(try! F64.parse("1e400") > 1.7976931348623157e308)
+    /// ```
+    public static fn parse(_ text: String) throws(ParseError) -> F64 {
+        return try F64.parse(text, styles: .Sign)
+    }
+
+    /// The number the text writes, with what else the styles allow: white
+    /// space, a sign, separators. A prefix means nothing to a float.
+    ///
+    /// ```sable
+    /// assert(try! F64.parse(" 1_000.5 ", styles: .Any) == 1000.5)
+    /// ```
+    public static fn parse(_ text: String, styles: NumberStyles) throws(ParseError) -> F64 {
+        let plain = try plainFloat(text, styles)
+        if let special = specialFloat(plain) {
+            return special
+        }
+        let (parsed, value) = plain.parseF64()
+        return parsed ? value : overflowedFloat(plain)
+    }
+}

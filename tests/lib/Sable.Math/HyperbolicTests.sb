@@ -1,0 +1,82 @@
+module HyperbolicTests
+
+// Hyperbolic (Sable.Math), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Math
+// Reference values are correctly rounded (mpmath, 60 digits).
+
+import Sable.Math
+import Sable.Testing
+import FloatAssertions
+
+@test
+fn theHyperbolicFunctionsAreWithinAnUlpOfTheTrueValues() {
+    assertWithin(sinh(1.0), 1.1752011936438014, ulps: 1)
+    assertWithin(sinh(-2.5), -6.0502044810397875, ulps: 1)
+    assertWithin(cosh(1.0), 1.5430806348152437, ulps: 1)
+    assertWithin(cosh(-2.5), 6.132289479663686, ulps: 1)
+    assertWithin(cosh(10.0), 11013.232920103323, ulps: 1)
+    assertWithin(tanh(1.0), 0.7615941559557649, ulps: 1)
+    assertWithin(tanh(-0.5), -0.46211715726000974, ulps: 1)
+}
+
+@test
+fn theInversesAreWithinAnUlpOfTheTrueValues() {
+    assertWithin(asinh(1.0), 0.881373587019543, ulps: 1)
+    assertWithin(asinh(-2.5), -1.6472311463710958, ulps: 1)
+    assertWithin(asinh(1e10), 23.7189981105004, ulps: 1)
+    assertWithin(acosh(2.0), 1.3169578969248168, ulps: 1)
+    assertWithin(acosh(1.5), 0.9624236501192069, ulps: 1)
+    assertWithin(acosh(1e10), 23.7189981105004, ulps: 1)
+    assertWithin(atanh(0.5), 0.5493061443340549, ulps: 1)
+    assertWithin(atanh(-0.9), -1.4722194895832204, ulps: 1)
+}
+
+@test
+fn smallArgumentsKeepTheirDigits() {
+    assertWithin(sinh(1e-8), 1e-8, ulps: 1)
+    assertWithin(tanh(1e-8), 1e-8, ulps: 1)
+    assertWithin(asinh(1e-8), 1e-8, ulps: 1)
+    assertWithin(atanh(1e-8), 1e-8, ulps: 1)
+}
+
+@test
+fn zerosKeepTheirSignAndInfinitiesGoToTheLimits() {
+    assertSame(sinh(-0.0), -0.0)
+    assertSame(tanh(-0.0), -0.0)
+    assertSame(asinh(-0.0), -0.0)
+    assertSame(atanh(-0.0), -0.0)
+    assertSame(cosh(0.0), 1.0)
+    assertSame(acosh(1.0), 0.0)
+    assertSame(sinh(-inf), -inf)
+    assertSame(cosh(-inf), inf)
+    assertSame(tanh(inf), 1.0)
+    assertSame(tanh(-inf), -1.0)
+    assertSame(asinh(-inf), -inf)
+    assertSame(acosh(inf), inf)
+    assertSame(sinh(1000.0), inf)
+    assertSame(cosh(-1000.0), inf)
+}
+
+@test
+fn outsideTheirDomainTheInversesAreNaNOrInfinite() {
+    assertSame(acosh(0.5), nan)
+    assertSame(acosh(-inf), nan)
+    assertSame(atanh(2.0), nan)
+    assertSame(atanh(1.0), inf)
+    assertSame(atanh(-1.0), -inf)
+    assertSame(sinh(nan), nan)
+}
+
+@test
+fn theF32FunctionsAreWithinAnUlpOfTheTrueValues() {
+    let one: F32 = 1.0
+    let two: F32 = 2.0
+    let half: F32 = 0.5
+    assertWithin(sinh(one), 1.1752012, ulps: 1)
+    assertWithin(cosh(one), 1.5430807, ulps: 1)
+    assertWithin(tanh(one), 0.7615942, ulps: 1)
+    assertWithin(asinh(one), 0.8813736, ulps: 1)
+    assertWithin(acosh(two), 1.316958, ulps: 1)
+    assertWithin(atanh(half), 0.54930615, ulps: 1)
+    assertSame(tanh(inf32), 1.0)
+}

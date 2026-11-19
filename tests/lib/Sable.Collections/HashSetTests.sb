@@ -50,3 +50,16 @@ fn elementsComeInTheOrderTheyWereAdded() {
     assertEqual(elements[1], 1)
     assertEqual(elements[2], 2)
 }
+
+@test
+fn removeTakesOutAMember() {
+    let members = HashSet<String>()
+    let _ = members.insert("a")
+    let _ = members.insert("b")
+    assert(members.contains("a"))
+    assert(members.remove("a"))
+    assert(!members.contains("a"))
+    assertEqual(members.count, 1)
+    assert(!members.isEmpty)
+    assert(members.elements() == ["b"])
+}

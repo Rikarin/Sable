@@ -101,12 +101,24 @@ static void on_fault(int signal_number, siginfo_t *info, void *context) {
     signal(signal_number, SIG_DFL);
 }
 
-// Gives the calling thread a stack for the handler, and notes where its own
-// stack ends. A thread that runs tasks keeps it for as long as it lives.
-static void *watch_stack(void) {
+// The main thread's stack for the handler, for as long as the program runs.
+static _Alignas(16) char main_signal_stack[SIGNAL_STACK];
+
+// Another thread's, allocated as it starts and kept for as long as it lives.
+// Only the system holds a signal stack otherwise, so the pointer is kept
+// here too: LeakSanitizer sees it reachable, not leaked.
+static _Thread_local char *thread_signal_stack;
+
+// Gives the calling thread a stack for the handler, memory given or, if
+// none, allocated, and notes where its own stack ends.
+static void *watch_stack_on(char *memory) {
     stack_low = thread_stack_low();
+    if (memory == NULL) {
+        memory = thread_signal_stack = malloc(SIGNAL_STACK);
+    }
+
     stack_t alternate = { 0 };
-    alternate.ss_sp = malloc(SIGNAL_STACK);
+    alternate.ss_sp = memory;
     alternate.ss_size = SIGNAL_STACK;
     if (alternate.ss_sp != NULL) {
         sigaltstack(&alternate, NULL);
@@ -115,8 +127,13 @@ static void *watch_stack(void) {
     return alternate.ss_sp;
 }
 
+// A thread that runs tasks keeps its signal stack for as long as it lives.
+static void *watch_stack(void) {
+    return watch_stack_on(NULL);
+}
+
 static void platform_start(void) {
-    watch_stack();
+    watch_stack_on(main_signal_stack);
     struct sigaction action = { 0 };
     action.sa_sigaction = on_fault;
     action.sa_flags = SA_SIGINFO | SA_ONSTACK;

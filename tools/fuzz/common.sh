@@ -54,7 +54,7 @@ summarise() {
 # What makes two failures the same one, from a log: the first line that says
 # what went wrong, with numbers, addresses and quoted text taken out.
 signature() {
-    grep -m1 -E -A1 'Error Message:|ERROR: AddressSanitizer|runtime error:|fatal error|not write back|hang' "$1" \
+    grep -m1 -E -A1 'Error Message:|ERROR: (AddressSanitizer|LeakSanitizer)|runtime error:|fatal error|not write back|hang' "$1" \
         | grep -v -E '^\s*(Error Message:|--)\s*$' | head -1 \
         | sed -E 's/0x[0-9a-f]+/ADDR/g; s/[0-9]+/N/g; s/"[^"]*"/"…"/g; s/^[[:space:]]+//' \
         | cut -c1-200

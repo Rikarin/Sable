@@ -161,6 +161,12 @@ fn mutate(_ bytes: U8[>..], _ state: Int) -> U8[>..] {
     return result
 }
 
+/// A walk's sum folded to 0, 1 or 2. The sum can be negative (node values
+/// are signed), and a negative remainder must not read as a failure.
+fn fold(_ sum: Int) -> Int {
+    return (sum % 3 + 3) % 3
+}
+
 /// What fromBytes makes of one input, read as an order or as a tree:
 /// -1 when it is accepted but does not write back as the bytes it was read
 /// from (said on the way out), 0 when it is rejected, and otherwise 1 plus
@@ -173,7 +179,7 @@ fn check(_ bytes: U8[>..], _ isOrder: Bool) -> Int {
                     print("an order did not write back as it was read")
                     return -1
                 }
-                return 1 + walkOrder(order) % 3
+                return 1 + fold(walkOrder(order))
             }
             case .Invalid(let why) => {
                 return 0
@@ -186,7 +192,7 @@ fn check(_ bytes: U8[>..], _ isOrder: Bool) -> Int {
                 print("a tree did not write back as it was read")
                 return -1
             }
-            return 1 + walkTree(tree) % 3
+            return 1 + fold(walkTree(tree))
         }
         case .Invalid(let why) => {
             return 0
@@ -278,6 +284,7 @@ fn main() -> Int {
 
         let result = check(bytes, seed % 2 == 0)
         if result < 0 {
+            print("failed: case \(c) of seed \(given), from seed record \(seed); SABLE_FUZZ_SEED=\(given) SABLE_FUZZ_CASES=\(c + 1) reproduces it")
             return 1
         }
         if result == 0 {

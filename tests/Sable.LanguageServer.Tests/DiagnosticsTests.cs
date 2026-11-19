@@ -176,15 +176,43 @@ public sealed class DiagnosticsTests : IDisposable {
         var published = await client.MessageAsync("textDocument/publishDiagnostics", p => p.GetString("uri") == closed);
         Assert.Null(published.Get("version"));
 
-        // Fixed on disk, and the editor told so: cleared.
-        File.WriteAllText(Workspace.PathOf(closed)!, "module App\n\nfn f() -> Int {\n    return 2\n}\n");
+        // Fixed on disk, and the editor told so: cleared. With no type
+        // errors left, the other file's checks on SIL run.
+        File.WriteAllText(Workspace.PathOf(closed)!, "module App\n\nfn g() -> Int {\n    return 2\n}\n");
+        var since = client.Received;
         await client.NotifyAsync("workspace/didChangeWatchedFiles", new { changes = new[] { new { uri = closed, type = 2 } } });
-        await client.DiagnosticsAsync(closed, static d => d.GetArrayLength() == 0);
+        await client.DiagnosticsAsync(closed, static d => d.GetArrayLength() == 0, since);
+        await client.DiagnosticsAsync(moved, static d => Has(d, "S3057"), since);
 
-        // And deleted: cleared too.
+        // And deleted: cleared too. Its report before the checks ran may
+        // have been empty already; only one sent after the deletion counts.
         File.Delete(Workspace.PathOf(moved)!);
+        since = client.Received;
         await client.NotifyAsync("workspace/didChangeWatchedFiles", new { changes = new[] { new { uri = moved, type = 3 } } });
-        await client.DiagnosticsAsync(moved, static d => d.GetArrayLength() == 0);
+        await client.DiagnosticsAsync(moved, static d => d.GetArrayLength() == 0, since);
+    }
+
+    [Fact]
+    public async Task EachLoadOfThePackagesIsDiagnosed() {
+        // A manifest changed: the packages are read again, and the round
+        // after the reading starts at once, with no quiet to wait out. A
+        // change cancelled that round as it started, now and then, and no
+        // round came after it; each of these is a chance for that to happen.
+        var closed = Write("closed.sb", "module App\n");
+        var manifest = Workspace.UriOf(Path.Combine(_root, "sable.toml"));
+        await using var client = new TestClient();
+        await client.InitializeAsync(_root);
+        await client.NotifyAsync("initialized", new { });
+        await client.DiagnosticsAsync(closed);
+
+        for (var i = 0; i < 40; i++) {
+            // Each time wrong on another line, so no earlier report will do.
+            var text = "module App\n" + new string('\n', i) + "fn f() -> Int {\n    let s: String = 1\n    return 2\n}\n";
+            var line = text[..text.IndexOf("let s", StringComparison.Ordinal)].Count(static c => c == '\n');
+            File.WriteAllText(Workspace.PathOf(closed)!, text);
+            await client.NotifyAsync("workspace/didChangeWatchedFiles", new { changes = new[] { new { uri = closed, type = 2 }, new { uri = manifest, type = 2 } } });
+            await client.DiagnosticsAsync(closed, d => d.EnumerateArray().Any(e => e.Get("range")!.Value.Get("start")!.Value.GetInt("line") == line));
+        }
     }
 
     [Fact]

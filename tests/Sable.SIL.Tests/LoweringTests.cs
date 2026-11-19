@@ -304,6 +304,30 @@ public sealed class LoweringTests {
         Assert.Equal(7L, Run(module, "caller"));
     }
 
+    // Found by the compiler fuzzer (SABLE_FUZZ_SEED=429585833): binding what
+    // a function returning nothing gives back stored a value defined nowhere.
+    [Fact]
+    public void WhatAFunctionReturningNothingGivesIsAValue() {
+        var module = Lower(
+            """
+            fn nothing() {}
+            fn caller() -> Int {
+                let bound = nothing()
+                let pair = (nothing(), 1)
+                let list = [nothing(), nothing()]
+                let chosen = if pair.1 > 0 { nothing() } else { nothing() }
+                let later = { nothing() }
+                let called = later()
+                let kept = { bound }
+                let again = kept()
+                return pair.1 + list.count
+            }
+            """
+        );
+
+        Assert.Equal(3L, Run(module, "caller"));
+    }
+
     [Fact]
     public void OverloadsGetDistinctNames() {
         var module = Lower(

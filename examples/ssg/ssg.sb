@@ -553,7 +553,7 @@ fn build(_ root: String, _ output: String) throws(IoError) -> Int {
         let words = wordCount(page.body)
         totalWords += words
         print(format("  {} {} {} words, {} heading(s), {} code block(s)", [
-            page.slug + ".html".paddedEnd(toWidth: 24),
+            (page.slug + ".html").paddedEnd(toWidth: 24),
             size(html.count).paddedStart(toWidth: 8),
             formatted(words, width: 5),
             renderer.headings.toString(),

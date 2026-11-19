@@ -125,6 +125,22 @@ public sealed class TomlTests {
     [InlineData("a = 1 b = 2", 1, 7, "expected the end of the line, found 'b'")]
     [InlineData("a = 01", 1, 5, "'01' is not a value: a string needs quotes")]
     [InlineData("a = \"\\q\"", 1, 6, "'\\q' is not an escape TOML knows")]
+    // Found by the packages fuzz target: eight hex digits with the top bit
+    // set read as a negative int and reached ConvertFromUtf32 unchecked.
+    [InlineData("a = \"\\U87777777\"", 1, 6, "'\\U87777777' is not a Unicode scalar value")]
+    [InlineData("\"\\UFFFFFFFF\" = 1", 1, 2, "'\\UFFFFFFFF' is not a Unicode scalar value")]
+    [InlineData("a = \"\\U00110000\"", 1, 6, "'\\U00110000' is not a Unicode scalar value")]
+    [InlineData("a = \"\\uD800\"", 1, 6, "'\\uD800' is not a Unicode scalar value")]
+    [InlineData("a = \"\\u12\"", 1, 6, "'\\u' needs 4 hexadecimal digits")]
+    [InlineData("a = \"\\U1234", 1, 6, "'\\U' needs 8 hexadecimal digits")]
+    [InlineData("a = \"\"\"\\U80000000\"\"\"", 1, 8, "'\\U80000000' is not a Unicode scalar value")]
+    [InlineData("a = \"\\", 1, 6, "'\\' must be followed by an escape on the same line")]
+    [InlineData("a = \"\\\nb", 1, 6, "'\\' must be followed by an escape on the same line")]
+    // Past long.MaxValue in hex, octal and binary used to wrap to a negative.
+    [InlineData("a = 0xFFFFFFFFFFFFFFFF", 1, 5, "'0xFFFFFFFFFFFFFFFF' is not a value: a string needs quotes")]
+    [InlineData("a = 0o1777777777777777777777", 1, 5, "'0o1777777777777777777777' is not a value: a string needs quotes")]
+    [InlineData("a = 0b1111111111111111111111111111111111111111111111111111111111111111", 1, 5, "'0b1111111111111111111111111111111111111111111111111111111111111111' is not a value: a string needs quotes")]
+    [InlineData("a = 9223372036854775808", 1, 5, "'9223372036854775808' is not a value: a string needs quotes")]
     [InlineData("[a\nb = 1", 1, 3, "expected ']' to close the table header")]
     [InlineData("a = 1\n[a]", 2, 2, "'a' is already an integer, not a table")]
     [InlineData("x = { y = 1 }\n[x.z]", 2, 2, "'x' is an inline table, closed once written")]
@@ -134,6 +150,20 @@ public sealed class TomlTests {
         Assert.Equal(reason, error.Reason);
         Assert.Equal(new TomlPosition(line, column), error.Position);
         Assert.StartsWith($"test.toml:{line}:{column}: ", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EscapesAndIntegersAtTheirLimits() {
+        var table = Parse("""
+            top = "\U0010FFFF"
+            below = "\uD7FF"
+            hex = 0x7FFFFFFFFFFFFFFF
+            least = -9223372036854775808
+            """);
+        Assert.Equal(char.ConvertFromUtf32(0x10FFFF), ((TomlString)table["top"]!).Value);
+        Assert.Equal("\uD7FF", ((TomlString)table["below"]!).Value);
+        Assert.Equal(long.MaxValue, ((TomlInteger)table["hex"]!).Value);
+        Assert.Equal(long.MinValue, ((TomlInteger)table["least"]!).Value);
     }
 
     [Fact]

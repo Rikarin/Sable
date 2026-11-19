@@ -194,11 +194,9 @@ extension Sequence {
     /// true). The sort is stable: equal elements keep their order. It takes
     /// O(n log n) comparisons.
     public fn sorted(by areInIncreasingOrder: (Element, Element) throws -> Bool) rethrows -> Element[>..] {
-        var elements: Element[>..] = []
-        for element in self {
-            elements.append(element)
-        }
-        return try mergeSorted(elements, areInIncreasingOrder)
+        var elements = self.toArray()
+        try elements.sort(by: areInIncreasingOrder)
+        return elements
     }
 
     /// The elements, ordered by their keys, each computed once; stable.
@@ -207,9 +205,9 @@ extension Sequence {
         for element in self {
             keyed.append((key: try key(element), element: element))
         }
-        let ordered = mergeSorted(keyed) { $0.key < $1.key }
+        keyed.sort(by: { $0.key < $1.key })
         var result: Element[>..] = []
-        for entry in ordered {
+        for entry in keyed {
             result.append(entry.element)
         }
         return result
@@ -260,12 +258,14 @@ extension Sequence {
     }
 
     /// The elements in arrays of 'size', in order; the last may be shorter.
-    /// A size that is not positive holds nothing, so gives no arrays.
-    public fn chunked(into size: Int) -> Element[>..][>..] {
-        var chunks: Element[>..][>..] = []
-        if size <= 0 {
-            return chunks
+    /// A size of less than one traps, as an array's 'chunks(of:)' does: an
+    /// array's gives slices of itself instead of copies.
+    public fn chunks(of size: Int) -> Element[>..][>..] {
+        if size < 1 {
+            // A precondition (#21) once there is one.
+            unreachable()
         }
+        var chunks: Element[>..][>..] = []
         var chunk: Element[>..] = []
         for element in self {
             chunk.append(element)
@@ -281,12 +281,14 @@ extension Sequence {
     }
 
     /// Every run of 'size' elements in a row, each starting one on from the
-    /// last: none when there are fewer, or when the size is not positive.
+    /// last: none when there are fewer. A size of less than one traps, as an
+    /// array's 'windows(of:)' does, which gives slices of itself.
     public fn windows(of size: Int) -> Element[>..][>..] {
-        var windows: Element[>..][>..] = []
-        if size <= 0 {
-            return windows
+        if size < 1 {
+            // A precondition (#21) once there is one.
+            unreachable()
         }
+        var windows: Element[>..][>..] = []
         var elements: Element[>..] = []
         for element in self {
             elements.append(element)
@@ -409,7 +411,7 @@ extension Sequence {
     /// The runs of elements between those the closure says separate them,
     /// the separators left out; empty runs are kept, so there is always one
     /// more run than separators.
-    public fn split(whereSeparator isSeparator: (Element) throws -> Bool) rethrows -> Element[>..][>..] {
+    public fn split(where isSeparator: (Element) throws -> Bool) rethrows -> Element[>..][>..] {
         var runs: Element[>..][>..] = []
         var run: Element[>..] = []
         for element in self {

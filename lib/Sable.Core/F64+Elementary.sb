@@ -1,0 +1,131 @@
+module Sable.Core
+
+// An F64's elementary functions: each is C's of the same name in the
+// platform's libm, called natively through LLVM's intrinsic where it has
+// one, and by the interpreter in the same libm, so the two agree to the
+// bit. None traps: outside its domain a function gives NaN, and past the
+// largest F64 an infinity. Sable.Math has each as a function too.
+
+extension F64 {
+    /// The square root; NaN for a negative number, and -0.0 for -0.0.
+    @builtin("math_sqrt_F64")
+    public fn squareRoot() -> F64
+
+    /// The cube root, negative for a negative number: (-8.0).cbrt() is -2.0.
+    @builtin("math_cbrt_F64")
+    public fn cbrt() -> F64
+
+    /// The sine of an angle in radians.
+    ///
+    /// ```sable
+    /// assert(0.0.sin() == 0.0)
+    /// ```
+    @builtin("math_sin_F64")
+    public fn sin() -> F64
+
+    /// The cosine of an angle in radians.
+    @builtin("math_cos_F64")
+    public fn cos() -> F64
+
+    /// The tangent of an angle in radians.
+    @builtin("math_tan_F64")
+    public fn tan() -> F64
+
+    /// The angle in [-pi/2, pi/2] whose sine this is; NaN outside [-1, 1].
+    @builtin("math_asin_F64")
+    public fn asin() -> F64
+
+    /// The angle in [0, pi] whose cosine this is; NaN outside [-1, 1].
+    @builtin("math_acos_F64")
+    public fn acos() -> F64
+
+    /// The angle in [-pi/2, pi/2] whose tangent this is.
+    @builtin("math_atan_F64")
+    public fn atan() -> F64
+
+    /// The angle in [-pi, pi] of the point (x, self): self is y, as in
+    /// C's atan2(y, x), so the quadrant comes from both signs.
+    @builtin("math_atan2_F64")
+    public fn atan2(_ x: F64) -> F64
+
+    /// The hyperbolic sine.
+    @builtin("math_sinh_F64")
+    public fn sinh() -> F64
+
+    /// The hyperbolic cosine.
+    @builtin("math_cosh_F64")
+    public fn cosh() -> F64
+
+    /// The hyperbolic tangent, in [-1, 1].
+    @builtin("math_tanh_F64")
+    public fn tanh() -> F64
+
+    /// The inverse hyperbolic sine.
+    @builtin("math_asinh_F64")
+    public fn asinh() -> F64
+
+    /// The inverse hyperbolic cosine; NaN below 1.
+    @builtin("math_acosh_F64")
+    public fn acosh() -> F64
+
+    /// The inverse hyperbolic tangent; NaN outside [-1, 1], an infinity at ±1.
+    @builtin("math_atanh_F64")
+    public fn atanh() -> F64
+
+    /// e to the power of this.
+    @builtin("math_exp_F64")
+    public fn exp() -> F64
+
+    /// 2 to the power of this.
+    @builtin("math_exp2_F64")
+    public fn exp2() -> F64
+
+    /// e to the power of this, less 1: exact where exp() - 1.0 would lose
+    /// the digits of a small number.
+    @builtin("math_expm1_F64")
+    public fn expm1() -> F64
+
+    /// The natural logarithm; -inf at zero, NaN below it.
+    @builtin("math_log_F64")
+    public fn log() -> F64
+
+    /// The base-2 logarithm; -inf at zero, NaN below it.
+    @builtin("math_log2_F64")
+    public fn log2() -> F64
+
+    /// The base-10 logarithm; -inf at zero, NaN below it.
+    @builtin("math_log10_F64")
+    public fn log10() -> F64
+
+    /// The natural logarithm of 1 plus this: exact where (1.0 + x).log()
+    /// would lose the digits of a small number.
+    @builtin("math_log1p_F64")
+    public fn log1p() -> F64
+
+    /// This to the power of the exponent, with C's pow's special cases:
+    /// anything to the power 0 is 1, even NaN, and 1 to any power is 1.
+    @builtin("math_pow_F64")
+    public fn pow(_ exponent: F64) -> F64
+
+    /// The length of the hypotenuse, sqrt(self² + other²), without the
+    /// overflow or underflow of computing it so.
+    @builtin("math_hypot_F64")
+    public fn hypot(_ other: F64) -> F64
+
+    /// The gamma function, (n - 1)! at a positive integer n.
+    @builtin("math_gamma_F64")
+    public fn gamma() -> F64
+
+    /// The natural logarithm of the gamma function's magnitude.
+    @builtin("math_logGamma_F64")
+    public fn logGamma() -> F64
+
+    /// The error function, in [-1, 1].
+    @builtin("math_erf_F64")
+    public fn erf() -> F64
+
+    /// The complementary error function, 1 - erf(x), exact where that
+    /// difference would lose the digits of a large x's.
+    @builtin("math_erfc_F64")
+    public fn erfc() -> F64
+}

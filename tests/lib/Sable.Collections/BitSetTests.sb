@@ -33,3 +33,57 @@ fn bitSetAlgebra() {
     assert(BitSet([2, 3]).isSubset(of: a))
     assert(!b.isSubset(of: a), "4 is not in a")
 }
+
+@test
+fn insertAddsEachValueOnce() {
+    let members = BitSet()
+    assert(members.isEmpty)
+    assert(members.insert(70))
+    assert(!members.insert(70))
+    assert(members.insert(0))
+    assertEqual(members.count, 2)
+    assert(!members.isEmpty)
+    assert(members.contains(70))
+    assert(!members.contains(71))
+    assert(!members.contains(1000))
+    assert(!members.contains(-1))
+}
+
+@test(traps: "array index out of range")
+fn insertingANegativeValueTraps() {
+    let members = BitSet()
+    let _ = members.insert(-1)
+}
+
+@test
+fn removeTakesOutAValue() {
+    let members = BitSet([3, 130])
+    assert(members.remove(130))
+    assert(!members.remove(130))
+    assert(!members.remove(5))
+    assertEqual(members.count, 1)
+    assert(members.elements() == [3])
+}
+
+@test
+fn elementsAreAscending() {
+    let members = BitSet([200, 1, 64, 63, 0])
+    assert(members.elements() == [0, 1, 63, 64, 200])
+    members.removeAll()
+    assertEqual(members.count, 0)
+    assertEqual(members.elements().count, 0)
+}
+
+@test
+fn algebraWithSetsOfDifferentLengths() {
+    let short = BitSet([1, 2])
+    let long = BitSet([2, 300])
+    assert(short.union(long).elements() == [1, 2, 300])
+    assert(long.union(short).elements() == [1, 2, 300])
+    assert(short.intersection(long).elements() == [2])
+    assert(long.subtracting(short).elements() == [300])
+    assert(short.subtracting(long).elements() == [1])
+    assert(!long.isSubset(of: short))
+    assert(BitSet([2]).isSubset(of: long))
+    assert(BitSet().isSubset(of: short))
+}

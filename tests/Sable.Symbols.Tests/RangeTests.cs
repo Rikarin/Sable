@@ -156,4 +156,23 @@ public sealed class RangeTests {
                         return total
                     }
                     """);
+
+    /// <summary>
+    ///     A Sable.Core of the program's own whose range type is not generic
+    ///     over one bound has no range for the operator to make: that is an
+    ///     error, not a range built from a type with no parameter for the bound.
+    /// </summary>
+    [Theory]
+    [InlineData("struct Range { }", "for i in 0..<3 { }", "Range")]
+    [InlineData("struct Range { }", "let r = 0..<3", "Range")]
+    [InlineData("struct ClosedRange<A, B> { }", "for i in 0...3 { }", "ClosedRange")]
+    [InlineData("struct PartialRangeFrom { }", "for i in 0... { }", "PartialRangeFrom")]
+    [InlineData("struct PartialRangeUpTo { }", "let r = ..<3", "PartialRangeUpTo")]
+    public void ARangeTypeOfAnotherShapeIsNoRange(string declaration, string statement, string name) {
+        var diagnostics = Compilation.Create($"module Sable.Core\n{declaration}\nfn f() {{ {statement} }}").GetAllDiagnostics();
+        Assert.Contains(
+            diagnostics,
+            d => d.Code == ErrorCode.ERR_NameNotFound && d.Message.Contains($"'{name}<Bound>'", StringComparison.Ordinal)
+        );
+    }
 }

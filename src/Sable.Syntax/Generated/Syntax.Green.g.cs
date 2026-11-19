@@ -2170,26 +2170,30 @@ internal sealed class InterpolationGreen : GreenNode
 {
     private readonly GreenToken? _openToken;
     private readonly GreenNode? _expression;
+    private readonly GreenToken? _formatToken;
     private readonly GreenToken? _closeToken;
 
-    public InterpolationGreen(GreenToken? openToken, GreenNode? expression, GreenToken? closeToken)
+    public InterpolationGreen(GreenToken? openToken, GreenNode? expression, GreenToken? formatToken, GreenToken? closeToken)
         : base(SyntaxKind.Interpolation, 0)
     {
         _openToken = openToken;
         _expression = expression;
+        _formatToken = formatToken;
         _closeToken = closeToken;
         FullWidth = (openToken?.FullWidth ?? 0)
                     + (expression?.FullWidth ?? 0)
+                    + (formatToken?.FullWidth ?? 0)
                     + (closeToken?.FullWidth ?? 0);
     }
 
-    public override int SlotCount => 3;
+    public override int SlotCount => 4;
 
     public override GreenNode? GetSlot(int index) => index switch
     {
         0 => _openToken,
         1 => _expression,
-        2 => _closeToken,
+        2 => _formatToken,
+        3 => _closeToken,
         _ => null,
     };
 

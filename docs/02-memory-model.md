@@ -377,14 +377,25 @@ stored and returned, and it outlives the array it was taken from rather than
 being checked against it. The array copies its buffer on its next write while
 a slice shares it, and a write through a slice copies the slice's run, so
 neither sees the other's changes — the copy-on-write the array kinds already
-have, not a borrow that freezes the array. An index or a range is checked
+have, not a borrow that freezes the array. A `mutating` member of `T[:]`
+(`swapAt`, `reverse`, `sort`) called on an array is the exception that
+changes it: the array lends itself whole for the call, as an `inout`
+argument would, so the member writes the array's own buffer in place and
+the array has it back, changed, with nothing copied (a buffer it shared
+with another copy is copied by the first write, as the array's own write
+would). An index or a range is checked
 against the slice's own count and traps outside it, whatever lies beyond in
 the buffer. An array field of an `@inline_layout` struct is bytes in its block,
 laid out for the block, so passing one as a slice copies its elements out once.
 
 `String` is `U8[>..]` with a UTF-8 invariant. `List<T>` in the standard library
-is a Tier 2, heap-backed, copy-on-write container for the cases where none of
-the above fit.
+(Sable.Collections) is the growable array that also inserts and removes
+anywhere, which `T[>..]` does not (docs/03 §3.9). It is a struct holding a
+`T[>..]` — a value, as Swift's `Array` is, not a Tier 2 object — so it is
+copy-on-write by the array it holds: copying a list shares the buffer until
+one copy changes, and a list made from an array, or an array taken from one,
+copies nothing while only one of them is used. A class would have given it
+identity and a second heap object, which nothing about a list needs.
 
 ---
 
@@ -445,8 +456,9 @@ the churn** — is the idiom the language is designed to make natural.
    form is simpler to check. *Leaning: a value with a `region` type that cannot
    be stored in Tier 2 storage.*
 2. **COW containers vs inline arrays.** Two growable-array stories is one too
-   many. Can `List<T>` just be `T[>..]` in a Tier 2 box? *Probably yes; verify
-   the slicing ergonomics first.*
+   many. Can `List<T>` just be `T[>..]` in a Tier 2 box? *Settled: it is a
+   `T[>..]` in a struct — a value, not a box — which converts to and from one
+   with no copy (§2.5).*
 3. **Does `@inline_layout` compose with generics?** A `Box<T>` where `T` is
    variable-size needs layout to be computed per instantiation. Monomorphisation
    handles it, but `any P` cannot hold a variable-size value. *Restriction:

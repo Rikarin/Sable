@@ -7,7 +7,7 @@ module IteratorTests
 
 import Sable.Testing
 
-fn text(_ values: Int[>..]) -> String {
+fn text(_ values: Int[:]) -> String {
     return values.map { "\($0)" }.joined(separator: ",")
 }
 

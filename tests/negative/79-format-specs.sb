@@ -1,0 +1,43 @@
+module Negative.FormatSpecs
+
+// A format spec after an interpolation's colon is read the same for every
+// type; what the value's type would ignore is a mistake.
+
+struct Plain {
+    var x: Int
+}
+
+struct Custom: Formattable {
+    fn format(_ spec: FormatSpec) -> String { return "custom" }
+}
+
+fn malformed(_ n: Int) {
+    print("\(n:08q)") //! S3660 'q' has no meaning there
+    print("\(n:.x)") //! S3660 followed by the precision
+    print("\(n:99999999999)") //! S3660 at most 2147483647
+}
+
+fn wrongKinds(_ n: Int, _ x: F64, _ s: String) {
+    print("\(n:e)") //! S3661 writes a float, and 'Int' is an integer
+    print("\(x:x)") //! S3661 writes an integer, and 'F64' is a float
+    print("\(s:x)") //! S3661 'String' is written as it is
+}
+
+fn optionsANumberHasNot(_ n: Int, _ x: F64, _ c: Char, _ s: String) {
+    print("\(n:.2)") //! S3662 a precision means nothing to 'Int'
+    print("\(n:#)") //! S3662 '#' writes a radix's prefix
+    print("\(x:#e)") //! S3662 '#' keeps the trailing zeros
+    print("\(n:+?)") //! S3662 '?' writes the value as Debug describes it
+    print("\(s:+)") //! S3662 is for a number, not a 'String'
+    print("\(c:.1)") //! S3662 a precision means nothing to a 'Char'
+}
+
+fn notFormattable<T>(_ p: Plain, _ t: T) {
+    print("\(p:x)") //! S3663 'Plain' is not Formattable
+    print("\(t:.2)") //! S3663 'T' is not Formattable
+}
+
+// What every type takes, and what a type that writes itself decides.
+fn allowed<T: Formattable>(_ p: Plain, _ t: T, _ c: Custom, _ s: String, _ x: F32) {
+    print("\(p:*^20) \(p:?) \(t:x) \(c:+#012.3e) \(s:.3) \(s:?) \(x:#.3g) \(x:,.2%)")
+}

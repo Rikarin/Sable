@@ -969,6 +969,12 @@ internal static class ConformanceChecker {
             }
         }
 
+        // An initialiser makes its own type, which a generic one names as its
+        // definition, 'List', where the requirement says Self, 'List<Element>'.
+        if (requirement.FunctionKind == FunctionKind.Initializer && candidate.FunctionKind == FunctionKind.Initializer) {
+            return true;
+        }
+
         var expectedReturn = Expected(requirement.ReturnType);
         return expectedReturn.Equals(view.Apply(candidate.ReturnType))
             || expectedReturn.IsError

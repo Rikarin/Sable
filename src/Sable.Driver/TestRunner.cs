@@ -28,7 +28,8 @@ internal static class TestRunner {
     ///     Windows one that was stopped, or crashed, ends with a negative one.
     /// </param>
     /// <param name="Limit">The time limit it was stopped at, when it was.</param>
-    sealed record Outcome(TestEntry Test, bool Started, int Status, string Output, string Errors, TimeSpan Took, TimeSpan? Limit) {
+    /// <param name="Stuck">It would not stop, or left its output open after it ended, and was given up on.</param>
+    sealed record Outcome(TestEntry Test, bool Started, int Status, string Output, string Errors, TimeSpan Took, TimeSpan? Limit, bool Stuck) {
         public bool TimedOut => Limit is not null;
     }
 
@@ -124,11 +125,25 @@ internal static class TestRunner {
     static Outcome RunOne(string executable, TestEntry test, TimeSpan? timeout, IReadOnlyDictionary<string, string>? environment, Action runningLong) {
         var clock = Stopwatch.StartNew();
         var result = Capture(executable, ["--run-test", test.Name], timeout, environment, runningLong);
-        return new(test, result.Started, result.Status, result.Output, result.Errors, clock.Elapsed, result.TimedOut ? timeout : null);
+        return new(test, result.Started, result.Status, result.Output, result.Errors, clock.Elapsed, result.TimedOut ? timeout : null, result.Stuck);
     }
 
-    /// <summary>Runs the harness to its end (or its time limit), keeping what it wrote; not started, with why in its errors, when it could not be.</summary>
-    static (bool Started, int Status, string Output, string Errors, bool TimedOut) Capture(string executable, IReadOnlyList<string> arguments, TimeSpan? timeout,
+    /// <summary>How long a process told to stop is given to be gone, each time; and its output to end, once it is.</summary>
+    static readonly TimeSpan StopGrace = TimeSpan.FromSeconds(10);
+
+    /// <summary>How a harness's process ended, and what it wrote.</summary>
+    /// <param name="TimedOut">It ran past its time limit, and was told to stop.</param>
+    /// <param name="Stuck">It would not stop, or left its output open after it ended: it was given up on.</param>
+    internal sealed record Captured(bool Started, int Status, string Output, string Errors, bool TimedOut, bool Stuck = false);
+
+    /// <summary>
+    ///     Runs the harness to its end (or its time limit), keeping what it
+    ///     wrote; not started, with why in its errors, when it could not be.
+    ///     Past the limit nothing here waits without a bound: a process that
+    ///     cannot be stopped is given up on, and said to be, rather than
+    ///     holding up the whole run.
+    /// </summary>
+    internal static Captured Capture(string executable, IReadOnlyList<string> arguments, TimeSpan? timeout,
         IReadOnlyDictionary<string, string>? environment, Action? runningLong = null) {
         var start = new ProcessStartInfo(executable) {
             RedirectStandardInput = true,
@@ -152,25 +167,92 @@ internal static class TestRunner {
         try {
             process = Process.Start(start) ?? throw new InvalidOperationException();
         } catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException) {
-            return (false, -1, "", e.Message, false);
+            return new(false, -1, "", e.Message, false);
         }
 
         using (process) {
             process.StandardInput.Close();
-            var output = process.StandardOutput.ReadToEndAsync();
-            var errors = process.StandardError.ReadToEndAsync();
-            var timedOut = false;
+            var output = new Collected(process.StandardOutput);
+            var errors = new Collected(process.StandardError);
             if (timeout is { } limit) {
                 if (!process.WaitForExit(limit)) {
-                    timedOut = true;
-                    process.Kill(entireProcessTree: true);
+                    var stopped = Stop(process);
+                    // What a stopped test wrote is kept, to show; one that
+                    // would not stop is not waited for any longer. Its
+                    // output stays open if something it started lives on.
+                    var gone = Task.WaitAll([output.Done, errors.Done], stopped ? StopGrace : TimeSpan.Zero);
+                    return new(true, stopped ? process.ExitCode : -1, output.Text, errors.Text, true, !gone);
                 }
             } else if (!process.WaitForExit(SlowTest)) {
                 runningLong?.Invoke();
+                // No limit was asked for: the test takes as long as it takes.
+                process.WaitForExit();
             }
 
-            process.WaitForExit();
-            return (true, process.ExitCode, output.Result, errors.Result, timedOut);
+            // Ended; but a process it started may hold its output open still.
+            var closed = Task.WaitAll([output.Done, errors.Done], StopGrace);
+            return new(true, process.ExitCode, output.Text, errors.Text, false, !closed);
+        }
+    }
+
+    /// <summary>
+    ///     Stops a process and what it started, and says whether it is gone.
+    ///     Stopping the whole tree looks through every process there is, and
+    ///     can fail on one that comes or goes meanwhile; then the process is
+    ///     killed alone. Each kill is given a while to take, and tried again,
+    ///     a bounded number of times.
+    /// </summary>
+    internal static bool Stop(Process process) {
+        for (var attempt = 0; attempt < 3; attempt++) {
+            try {
+                process.Kill(entireProcessTree: true);
+            } catch (Exception e) when (e is AggregateException or InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) {
+                try {
+                    process.Kill();
+                } catch (Exception again) when (again is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) {
+                    // Gone already, or out of reach: the wait says which.
+                }
+            }
+
+            if (process.WaitForExit(StopGrace)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    ///     A stream read to its end in the background, whose text so far can
+    ///     be had at any time: the output of a process given up on is shown
+    ///     as far as it got, not waited for.
+    /// </summary>
+    sealed class Collected {
+        readonly StringBuilder _text = new();
+
+        public Collected(StreamReader reader) =>
+            Done = Task.Run(async () => {
+                var buffer = new char[4096];
+                try {
+                    int read;
+                    while ((read = await reader.ReadAsync(buffer)) > 0) {
+                        lock (_text) {
+                            _text.Append(buffer, 0, read);
+                        }
+                    }
+                } catch (Exception e) when (e is IOException or ObjectDisposedException) {
+                    // Closed under it, once given up on: what came is kept.
+                }
+            });
+
+        public Task Done { get; }
+
+        public string Text {
+            get {
+                lock (_text) {
+                    return _text.ToString();
+                }
+            }
         }
     }
 
@@ -184,7 +266,11 @@ internal static class TestRunner {
         if (outcome.TimedOut) {
             // The limit, not the time it took: stopping a process tree can
             // take a while, on Windows most of all.
-            return $"the test did not finish within {outcome.Limit!.Value.TotalSeconds:0.#} s, and was stopped";
+            return $"the test did not finish within {outcome.Limit!.Value.TotalSeconds:0.#} s, and {(outcome.Stuck ? "could not be stopped" : "was stopped")}";
+        }
+
+        if (outcome.Stuck) {
+            return "the test ended, but a process it started still holds its output open";
         }
 
         if (outcome.Test.Traps is not { } expected) {

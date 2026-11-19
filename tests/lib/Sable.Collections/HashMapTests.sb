@@ -39,6 +39,75 @@ fn hashMapSetsGetsAndRemoves() {
     assertEqual(map.allKeys().count, 99)
 }
 
+@test
+fn anEmptyMapHasNothing() {
+    let map = HashMap<Int, String>()
+    assert(map.isEmpty)
+    assertEqual(map.count, 0)
+    assert(map.get(1) == none)
+    assert(!map.contains(1))
+    assert(!map.remove(1))
+}
+
+@test
+fn settingAKeyAgainReplacesItsValue() {
+    let map = HashMap<String, Int>()
+    map.set("a", 1)
+    map.set("a", 2)
+    assertEqual(map.count, 1)
+    assert(!map.isEmpty)
+    assertEqual(map.get("a") ?? 0, 2)
+    assert(map.get("b") == none)
+}
+
+@test
+fn keysAndValuesAreInTheOrderTheyWereSet() {
+    let map = HashMap<String, Int>()
+    map.set("z", 1)
+    map.set("a", 2)
+    map.set("m", 3)
+    let _ = map.remove("a")
+    assert(map.allKeys() == ["z", "m"])
+    assert(map.allValues() == [1, 3])
+}
+
+@test
+fn removedSlotsAreReusedAndDroppedOnGrowth() {
+    let map = HashMap<Int, Int>()
+    var i = 0
+    while i < 40 {
+        map.set(i, i)
+        i = i + 1
+    }
+    i = 0
+    while i < 40 {
+        assert(map.remove(i))
+        i = i + 2
+    }
+    i = 100
+    while i < 200 {
+        map.set(i, i)
+        i = i + 1
+    }
+    assertEqual(map.count, 120)
+    assertEqual(map.get(1) ?? -1, 1)
+    assert(map.get(2) == none)
+    assertEqual(map.get(150) ?? -1, 150)
+    assertEqual(map.allKeys().count, 120)
+}
+
+@test
+fn removeAllEmptiesTheMap() {
+    let map = HashMap<Int, Int>()
+    map.set(1, 1)
+    map.set(2, 2)
+    map.removeAll()
+    assertEqual(map.count, 0)
+    assert(map.get(1) == none)
+    map.set(3, 3)
+    assertEqual(map.get(3) ?? 0, 3)
+}
+
 @bench
 fn hashMapInserts(_ b: Bencher) {
     b.iterate(() => {

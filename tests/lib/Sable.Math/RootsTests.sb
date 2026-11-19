@@ -1,0 +1,98 @@
+module RootsTests
+
+// Roots (Sable.Math), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Math
+// Reference values are correctly rounded (mpmath, 60 digits).
+
+import Sable.Math
+import Sable.Testing
+import FloatAssertions
+
+@test
+fn cbrtIsExactAtCubesAndNegativeForNegatives() {
+    assertSame(cbrt(27.0), 3.0)
+    assertSame(cbrt(-27.0), -3.0)
+    assertSame(cbrt(-0.0), -0.0)
+    assertSame(cbrt(-inf), -inf)
+    assertSame(cbrt(nan), nan)
+    assertWithin(cbrt(2.0), 1.2599210498948732, ulps: 1)
+    assertWithin(cbrt(-10.0), -2.154434690031884, ulps: 1)
+    assertWithin(cbrt(1e-300), 1e-100, ulps: 1)
+}
+
+@test
+fn hypotNeitherOverflowsNorUnderflows() {
+    assertSame(hypot(3.0, 4.0), 5.0)
+    assertSame(hypot(-3.0, -4.0), 5.0)
+    assertWithin(hypot(1e300, 1e300), 1.4142135623730952e300, ulps: 1)
+    assertWithin(hypot(1e-300, 1e-300), 1.414213562373095e-300, ulps: 1)
+    assertSame(hypot(1.0, 1e-10), 1.0)
+}
+
+@test
+fn hypotOfAnInfinityIsInfiniteEvenWithANaN() {
+    assertSame(hypot(inf, nan), inf)
+    assertSame(hypot(nan, -inf), inf)
+    assertSame(hypot(nan, 1.0), nan)
+}
+
+@test
+fn rootNTakesExactSquareAndCubeRoots() {
+    assertSame(rootN(16.0, 2), 4.0)
+    assertSame(rootN(-8.0, 3), -2.0)
+    assertSame(rootN(7.0, 1), 7.0)
+    assertSame(rootN(16.0, 4), 2.0)
+    assertSame(rootN(-32.0, 5), -2.0)
+}
+
+@test
+fn rootNOfOtherDegreesIsWithinAnUlp() {
+    assertWithin(rootN(10.0, 5), 1.5848931924611134, ulps: 1)
+    assertWithin(rootN(7.0, 5), 1.475773161594552, ulps: 1)
+    assertWithin(rootN(2.0, -4), 0.8408964152537145, ulps: 1)
+    assertSame(rootN(4.0, -2), 0.5)
+}
+
+@test
+fn rootNOfANegativeNumberHasOnlyOddRoots() {
+    assertSame(rootN(-16.0, 4), nan)
+    assertSame(rootN(-16.0, -2), nan)
+    assertSame(rootN(-inf, 4), nan)
+    assertSame(rootN(-inf, 5), -inf)
+    assertSame(rootN(16.0, 0), nan)
+}
+
+@test
+fn rootNOfZeroKeepsTheSignOfOddRoots() {
+    assertSame(rootN(-0.0, 5), -0.0)
+    assertSame(rootN(-0.0, 4), 0.0)
+    assertSame(rootN(0.0, -4), inf)
+    assertSame(rootN(-0.0, -5), -inf)
+    assertSame(rootN(-0.0, -4), inf)
+    assertSame(rootN(inf, -5), 0.0)
+    assertSame(rootN(nan, 5), nan)
+}
+
+@test
+fn theReciprocalEstimatesAreTheReciprocals() {
+    assertSame(reciprocalEstimate(4.0), 0.25)
+    assertSame(reciprocalEstimate(-0.0), -inf)
+    assertSame(reciprocalSqrtEstimate(4.0), 0.5)
+    assertSame(reciprocalSqrtEstimate(0.0), inf)
+    assertSame(reciprocalSqrtEstimate(-1.0), nan)
+    let four: F32 = 4.0
+    assertSame(reciprocalEstimate(four), 0.25)
+    assertSame(reciprocalSqrtEstimate(four), 0.5)
+}
+
+@test
+fn theF32RootsAreWithinAnUlpOfTheTrueValues() {
+    let two: F32 = 2.0
+    let three: F32 = 3.0
+    let minusEight: F32 = -8.0
+    assertWithin(cbrt(two), 1.2599211, ulps: 1)
+    assertSame(cbrt(minusEight), -2.0)
+    assertWithin(hypot(two, three), 3.6055512, ulps: 1)
+    assertSame(rootN(minusEight, 3), -2.0)
+    assertSame(rootN(minusEight, 2), nan32)
+}

@@ -1,0 +1,102 @@
+module Sable.Core
+
+// Finding elements in an array: by a test, by value, by order. Every kind
+// of array has these, as a slice (Array.sb). Each looks at each element at
+// most once, but for 'partitionPoint', which halves the elements it looks
+// at each step.
+
+extension<Element> Element[:] {
+    /// Whether each element goes ahead of, or alongside, the one after it,
+    /// by 'before': whether no element is 'before' the one ahead of it.
+    public fn isSorted(by before: (Element, Element) -> Bool) -> Bool {
+        var i = 1
+        while i < self.count {
+            if before(self[i], self[i - 1]) {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+
+    /// Where the elements that fail the test begin, in an array whose
+    /// elements that pass it all come first — a sorted array, with a test
+    /// of "goes before the value": the first place the value could go to
+    /// keep it sorted. Found by halving, in O(log n) tests; for an array
+    /// not split by the test, some place where one that passes is followed
+    /// by one that fails.
+    ///
+    /// ```sable
+    /// let xs: Int[>..] = [1, 3, 3, 7]
+    /// assert(xs.partitionPoint(where: (x: Int) => x < 3) == 1)
+    /// assert(xs.partitionPoint(where: (x: Int) => x <= 3) == 3)
+    /// ```
+    public fn partitionPoint(where predicate: (Element) -> Bool) -> Int {
+        var low = 0
+        var high = self.count
+        while low < high {
+            let middle = low + (high - low) / 2
+            if predicate(self[middle]) {
+                low = middle + 1
+            } else {
+                high = middle
+            }
+        }
+        return low
+    }
+}
+
+extension<Element: Equatable> Element[:] {
+    /// Where the first element equal to any of the candidates is, or none
+    /// (.NET's IndexOfAny).
+    public fn firstIndex(ofAny candidates: Element[:]) -> Int? {
+        var i = 0
+        while i < self.count {
+            if candidates.contains(element: self[i]) {
+                return i
+            }
+            i = i + 1
+        }
+        return none
+    }
+
+    /// Whether the array begins with the elements of 'start', in order.
+    /// Every array begins with the empty one.
+    public fn starts(with start: Element[:]) -> Bool {
+        return start.count <= self.count && self.commonPrefixLength(with: start) == start.count
+    }
+
+    /// Whether the array ends with the elements of 'suffix', in order.
+    public fn ends(with suffix: Element[:]) -> Bool {
+        if suffix.count > self.count {
+            return false
+        }
+        let offset = self.count - suffix.count
+        var i = 0
+        while i < suffix.count {
+            if self[offset + i] != suffix[i] {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+
+    /// How many elements, from the start, the two arrays have equal.
+    public fn commonPrefixLength(with other: Element[:]) -> Int {
+        let shorter = self.count < other.count ? self.count : other.count
+        var i = 0
+        while i < shorter && self[i] == other[i] {
+            i = i + 1
+        }
+        return i
+    }
+}
+
+extension<Element: Comparable> Element[:] {
+    /// Whether the elements are in ascending order: none less than the one
+    /// ahead of it.
+    public fn isSorted() -> Bool {
+        return self.isSorted(by: (a: Element, b: Element) => a < b)
+    }
+}

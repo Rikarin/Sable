@@ -173,7 +173,9 @@ Escapes: `\0 \\ \t \n \r \" \' \u{...}` and `\(expr)` for interpolation.
 Interpolation nests arbitrarily; the lexer tracks a brace-depth stack and
 keeps the whole string as one token. The parser then takes that token apart so
 that each hole is an ordinary expression in the tree, slicing the original
-characters so the pieces tile the token exactly.
+characters so the pieces tile the token exactly. A colon after a hole's
+expression, `\(x:08x)`, starts its format spec (SYNTAX.md §16), which is kept
+as one token of raw text up to the closing paren.
 
 Strings are UTF-8. `String` indexing is by `String.Index`, not by integer —
 byte offsets are available through `.utf8`, scalars through `.scalars`, and

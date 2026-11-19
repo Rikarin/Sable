@@ -4197,6 +4197,10 @@ public sealed partial class SilGen {
                 return;
             }
 
+            if (value is DeferredStep) {
+                return;
+            }
+
             if (value is AccessMarker marker) {
                 if (marker.Begun) {
                     Emit(new BuiltinInst("access_end", SilType.Unit, marker.Address));
@@ -5835,6 +5839,12 @@ public sealed partial class SilGen {
                 case BoundInterpolatedString interpolated:
                     return Interpolation(interpolated);
 
+                case BoundHoleText text:
+                    return text.Debug ? DebugText(text.Value) : Hole(text.Value, null);
+
+                case BoundFormatSpec spec:
+                    return Expression(spec.Value);
+
                 // An array where a slice of it is wanted: a view of it (SilGen.Slices.cs).
                 case BoundConversion { ConversionKind: ConversionKind.Identity } view when IsArrayView(view):
                     return ArrayView(view);
@@ -7049,7 +7059,7 @@ public sealed partial class SilGen {
 
                     piece = Emit(new StringLiteralInst(value));
                 } else {
-                    if (hole >= interpolated.Parts.Length || Hole(interpolated.Parts[hole]) is not { } written) {
+                    if (hole >= interpolated.Parts.Length || Hole(interpolated.Parts[hole], interpolated.Formats[hole]) is not { } written) {
                         return null;
                     }
 
@@ -7085,22 +7095,78 @@ public sealed partial class SilGen {
 
         /// <summary>
         ///     What a hole writes: a string itself; a number, a Bool or a Char
-        ///     as text; a <c>Debug</c> value as its <c>debugDescription()</c>
-        ///     says, so a type that describes itself is written that way; and
+        ///     as text; a <c>Formattable</c> value as its <c>format</c> writes
+        ///     it; a <c>Debug</c> value as its <c>debugDescription()</c> says,
+        ///     so a type that describes itself is written that way; and
         ///     anything else as <c>Reflect.describe</c> writes it. Decided for
         ///     the type a generic instance has, so <c>"\(t)"</c> writes a
-        ///     <c>T</c> that is a String as a string.
+        ///     <c>T</c> that is a String as a string. A hole with a format spec
+        ///     is <see cref="FormattedHole" />'s.
         /// </summary>
-        SilValue? Hole(BoundExpression part) {
+        SilValue? Hole(BoundExpression part, BoundFormatSpec? format) {
+            if (format is not null) {
+                return FormattedHole(part, format);
+            }
+
             if (LowerType(part.Type) is not { } lowered) {
                 return Missing(part, $"interpolating a value of type '{part.Type.ToDisplayString()}'");
             }
 
-            // A string, a scalar, and an enum, which writes its case's name.
-            if (lowered == SilType.String
-                || (lowered is ScalarType && SilBuiltins.Find($"string_from_{lowered}") is not null)
-                || Sub(part.Type) is NamedTypeSymbol { TypeKind: TypeKind.Enum }) {
+            // A string and a scalar: the runtime writes them, as their own
+            // 'format' would with a spec that says nothing, without the call.
+            if (lowered == SilType.String || (lowered is ScalarType && SilBuiltins.Find($"string_from_{lowered}") is not null)) {
                 return Expression(part) is { } value ? Stringify(value, part) : null;
+            }
+
+            // A type that writes itself, with the spec that says nothing.
+            if (FormatRequirement() is var (formattable, write) && Sub(part.Type).Satisfies(formattable)
+                && FormatSpecifier.Default.Bind(Core, part.Syntax) is { } plain) {
+                return Expression(new BoundCall(part.Syntax, part, write, [plain], Core.String));
+            }
+
+            // An enum, which writes its case's name.
+            if (Sub(part.Type) is NamedTypeSymbol { TypeKind: TypeKind.Enum }) {
+                return Expression(part) is { } value ? Stringify(value, part) : null;
+            }
+
+            return DebugText(part);
+        }
+
+        /// <summary><c>Formattable</c> and its <c>format</c>, when Sable.Core has them.</summary>
+        (NamedTypeSymbol, FunctionSymbol)? FormatRequirement() =>
+            Core.Formattable is { } formattable && formattable.GetMembers("format").OfType<FunctionSymbol>().FirstOrDefault() is { } format
+                ? (formattable, format)
+                : null;
+
+        /// <summary>
+        ///     A hole with a format spec, <c>\(x:&gt;8)</c>: a <c>Formattable</c>
+        ///     value's <c>format</c> given the spec; any other's text as a
+        ///     hole without one writes it (or as <c>Debug</c> describes it, for
+        ///     <c>?</c>) padded to the spec's width, which is all the binder
+        ///     lets such a spec say.
+        /// </summary>
+        SilValue? FormattedHole(BoundExpression part, BoundFormatSpec format) {
+            if (FormatRequirement() is var (formattable, write) && Sub(part.Type).Satisfies(formattable)) {
+                return Expression(new BoundCall(part.Syntax, part, write, [format.Value], Core.String));
+            }
+
+            if (Core.FormatSpec?.GetMembers("padded").OfType<FunctionSymbol>().FirstOrDefault() is not { } padded) {
+                return Missing(part, "a format spec without 'FormatSpec.padded'");
+            }
+
+            var text = new BoundHoleText(part.Syntax, Core.String, part, format.Specifier.Kind == "Debug");
+            return Expression(new BoundCall(part.Syntax, format.Value, padded, [text], Core.String));
+        }
+
+        /// <summary>
+        ///     A value as <c>Debug</c> describes it, or, for a type that says
+        ///     nothing of itself, as <c>Reflect.describe</c> does: what a hole
+        ///     writes for a type that does not write itself, and what <c>?</c>
+        ///     asks for.
+        /// </summary>
+        SilValue? DebugText(BoundExpression part) {
+            if (LowerType(part.Type) is not { } lowered) {
+                return Missing(part, $"interpolating a value of type '{part.Type.ToDisplayString()}'");
             }
 
             if (Core.Module.GetType("Debug") is { TypeKind: TypeKind.Protocol } debug
@@ -7229,9 +7295,12 @@ public sealed partial class SilGen {
             };
 
             var resultType = binary.OperatorKind == BinaryOperatorKind.UserDefined ? binary.Type : Core.Bool;
-            // An operator of a generic type takes its type arguments from the operands'.
+            // An operator of a generic type takes its type arguments from the
+            // operands' — from what an operand refers to, when it is passed
+            // by reference.
+            var owner = Sub(first.Type) is ReferenceTypeSymbol reference ? reference.ReferencedType : Sub(first.Type);
             var call = new BoundCall(binary.Syntax, null, callee, [first, second], resultType) {
-                Substitution = OwnerOf(callee) is { IsGenericDefinition: true } ? TypeSubstitution.For(Sub(first.Type)) : TypeSubstitution.Empty,
+                Substitution = OwnerOf(callee) is { IsGenericDefinition: true } ? TypeSubstitution.For(owner) : TypeSubstitution.Empty,
             };
             if (Expression(call) is not { } result) {
                 return null;
@@ -9019,6 +9088,9 @@ public sealed partial class SilGen {
                 SilValue? self;
                 if (type.Parameters[0] is AddressType) {
                     self = call.Receiver is null or BoundSelfAccess ? _selfAddress : Address(call.Receiver, borrows);
+                    if (self is not null) {
+                        self = AsMutableSliceReceiver(call, self, type.Parameters[0], borrows);
+                    }
                 } else if (call.Receiver is null) {
                     self = _selfValue ?? (_selfAddress is { } address ? Hold(Emit(new LoadInst(address))) : null)
                         ?? (CapturedSelf() is { } captured ? Hold(captured) : null);
@@ -9182,6 +9254,8 @@ public sealed partial class SilGen {
                     // the call leaves.
                     case WriteBack writeBack:
                         writeBack.Run();
+                        break;
+                    case DeferredStep:
                         break;
                     case LoadBorrowInst borrowed:
                         Emit(new EndBorrowInst(borrowed));

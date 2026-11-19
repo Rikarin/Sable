@@ -78,6 +78,39 @@ public sealed class LoweringTests {
         Assert.Equal(1L, Run(module, "gcd", 17L, 5L));
     }
 
+    /// <summary>
+    ///     An enum without '==' of its own is compared case by case, in blocks
+    ///     made as the condition is; in an 'else if', once promoted, the second
+    ///     comparison switches on a block argument of a block printed after it.
+    ///     The text must still read back (Lower round-trips it).
+    /// </summary>
+    [Fact]
+    public void AnEnumComparedInAnElseIfReadsBackOncePromoted() {
+        var module = Lower(
+            """
+            enum Side {
+                Automatic
+                Left
+                Center
+                Right
+            }
+
+            fn before(_ chosen: Side, _ numeric: Bool, _ missing: Int) -> Int {
+                let side = chosen == .Automatic ? (numeric ? Side.Right : Side.Left) : chosen
+                var count = 0
+                if side == .Right {
+                    count = missing
+                } else if side == .Center {
+                    count = missing / 2
+                }
+                return count
+            }
+            """
+        );
+
+        Assert.Equal(6L, Run(module, "before", new SilInterpreter.EnumValue(0, null), true, 6L));
+    }
+
     [Fact]
     public void CompoundAssignmentAndRepeat() {
         var module = Lower(
@@ -431,5 +464,53 @@ public sealed class LoweringTests {
         var (module, diagnostics) = SilGen.Lower(compilation);
         Assert.Contains(diagnostics, static d => d.Code == ErrorCode.ERR_NotLoweredYet);
         Assert.Empty(SilVerifier.Verify(module));
+    }
+    [Fact]
+    public void AnOperatorTakingAReferenceIsPassedTheOperandsAddress() {
+        var module = Lower(
+            """
+            struct Money {
+                var cents: Int
+                operator + (a: Money, b: Money&) -> Money {
+                    return Money { cents: a.cents + b.cents }
+                }
+                operator < (a: Money&, b: Money) -> Bool {
+                    return a.cents < b.cents
+                }
+                prefix operator - (m: Money&) -> Money {
+                    return Money { cents: 0 - m.cents }
+                }
+            }
+            fn add(_ x: Int, _ y: Int) -> Int {
+                let a = Money { cents: x }
+                let b = Money { cents: y }
+                return (a + b).cents
+            }
+            fn addParameters(_ a: Money, _ b: Money) -> Money {
+                return a + b
+            }
+            fn negate(_ x: Int) -> Int {
+                let m = Money { cents: x }
+                return (-m).cents
+            }
+            fn greater(_ x: Int, _ y: Int) -> Bool {
+                let a = Money { cents: x }
+                let b = Money { cents: y }
+                return a > b
+            }
+            fn atMost(_ x: Int, _ y: Int) -> Bool {
+                let a = Money { cents: x }
+                let b = Money { cents: y }
+                return a <= b
+            }
+            """
+        );
+
+        Assert.Equal(7L, Run(module, "add", 3L, 4L));
+        Assert.Equal(-5L, Run(module, "negate", 5L));
+        Assert.Equal(true, Run(module, "greater", 4L, 3L));
+        Assert.Equal(false, Run(module, "greater", 3L, 4L));
+        Assert.Equal(true, Run(module, "atMost", 3L, 3L));
+        Assert.Equal(false, Run(module, "atMost", 4L, 3L));
     }
 }

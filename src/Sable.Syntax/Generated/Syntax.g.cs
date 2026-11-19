@@ -1467,7 +1467,7 @@ public sealed class InterpolatedTextSyntax : SyntaxNode
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitInterpolatedText(this);
 }
 
-/// <summary>One `\(expr)` hole.</summary>
+/// <summary>One `\(expr)` hole, or `\(expr:spec)` with a format spec after the colon.</summary>
 public sealed class InterpolationSyntax : SyntaxNode
 {
     private ExpressionSyntax? _expression;
@@ -1477,7 +1477,8 @@ public sealed class InterpolationSyntax : SyntaxNode
 
     public SyntaxToken OpenToken => GetToken(0);
     public ExpressionSyntax Expression => GetRed(ref _expression, 1);
-    public SyntaxToken CloseToken => GetToken(2);
+    public SyntaxToken FormatToken => GetToken(2);
+    public SyntaxToken CloseToken => GetToken(3);
 
     internal override SyntaxNode? GetNodeSlot(int index) => index switch
     {

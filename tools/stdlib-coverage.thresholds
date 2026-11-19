@@ -18,16 +18,9 @@ lib/Sable.Build/Manifest.sb                        0   0   # raise me: no tests 
 lib/Sable.Build/Profile.sb                         0  70   # raise me: no tests yet
 lib/Sable.Build/Target.sb                          0  70   # raise me: no tests yet
 lib/Sable.Build/TargetSettings.sb                  0  70   # raise me: no tests yet
-lib/Sable.Collections/BitSet.sb                   72  64   # raise me
-lib/Sable.Collections/Deque.sb                    64  70   # raise me
-lib/Sable.Collections/HashSet.sb                  76  70   # raise me
-lib/Sable.Collections/PriorityQueue.sb            76  70   # raise me
-lib/Sable.Collections/Sort.sb                     54  30   # raise me
-lib/Sable.Collections/Stack.sb                    81  70   # raise me
 lib/Sable.Concurrency/Channel.sb                   0  70   # raise me: no tests yet
 lib/Sable.Concurrency/Sleep.sb                     0  70   # raise me: no tests yet
 lib/Sable.Concurrency/TaskGroup.sb                 0  70   # raise me: no tests yet
-lib/Sable.Core/Array.sb                            0   0   # raise me: no tests yet
 lib/Sable.Core/Char.sb                             0   0   # raise me: no tests yet
 lib/Sable.Core/ClosedRange.sb                      0  70   # raise me: no tests yet
 lib/Sable.Core/Debug.sb                            0   0   # raise me: no tests yet

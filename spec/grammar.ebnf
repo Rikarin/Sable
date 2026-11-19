@@ -525,5 +525,14 @@ NumericLiteral    = IntegerLiteral | FloatLiteral ;
 BoolLiteral       = "true" | "false" ;
 
 StringLiteral     = SimpleString | MultilineString | RawString ;
-                    (* interpolation segments \( Expression ) are parsed
-                       recursively by the lexer/parser pair *)
+                    (* interpolation segments \( Expression [ ":" FormatSpec ] )
+                       are parsed recursively by the lexer/parser pair *)
+
+(* A hole's format spec (SYNTAX.md §16) is raw text up to the hole's ')',
+   read by the binder, not tokens. *)
+FormatSpec        = [ [ Fill ] Align ] [ "+" | "-" | " " ] [ "#" ] [ "0" ]
+                    [ Digits ] [ "," | "_" ] [ "." Digits ]
+                    [ "d" | "x" | "X" | "o" | "b" | "e" | "E" | "f" | "g" | "G" | "%" | "?" ] ;
+Align             = "<" | "^" | ">" ;
+Fill              = ? any scalar but '"', "'", "\", "(" and ")" ? ;
+Digits            = Digit { Digit } ;

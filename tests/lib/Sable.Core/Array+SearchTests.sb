@@ -1,0 +1,143 @@
+module ArraySearchTests
+
+// Finding elements in an array (Sable.Core, Array+Search.sb), tested with
+// '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn isEven(_ x: Int) -> Bool {
+    return x % 2 == 0
+}
+
+@test
+fn firstIndexWhereFindsTheFirstThatPasses() {
+    let xs: Int[>..] = [3, 8, 5, 10]
+    assertEqual(xs.firstIndex(where: isEven) ?? -1, 1)
+    assert(xs.firstIndex(where: (x: Int) => x > 10) == none)
+    let empty: Int[>..] = []
+    assert(empty.firstIndex(where: isEven) == none)
+}
+
+@test
+fn lastIndexWhereFindsTheLastThatPasses() {
+    let xs: Int[>..] = [3, 8, 5, 10, 7]
+    assertEqual(xs.lastIndex(where: isEven) ?? -1, 3)
+    assert(xs.lastIndex(where: (x: Int) => x > 10) == none)
+}
+
+@test
+fn isSortedByComparesNeighbours() {
+    let descending: Int[>..] = [9, 5, 5, 1]
+    assert(descending.isSorted(by: (a: Int, b: Int) => b < a))
+    assert(!descending.isSorted(by: (a: Int, b: Int) => a < b))
+    let one: Int[>..] = [4]
+    assert(one.isSorted(by: (a: Int, b: Int) => a < b))
+}
+
+@test
+fn partitionPointIsWhereTheFailingElementsBegin() {
+    let xs: Int[>..] = [1, 3, 3, 7, 9]
+    assertEqual(xs.partitionPoint(where: (x: Int) => x < 3), 1)
+    assertEqual(xs.partitionPoint(where: (x: Int) => x <= 3), 3)
+    assertEqual(xs.partitionPoint(where: (x: Int) => x < 0), 0)
+    assertEqual(xs.partitionPoint(where: (x: Int) => x < 100), 5)
+    let empty: Int[>..] = []
+    assertEqual(empty.partitionPoint(where: (x: Int) => x < 3), 0)
+}
+
+@test
+fn partitionPointFindsTheInsertionPlaceInALargeArray() {
+    var xs: Int[>..] = []
+    var i = 0
+    while i < 1000 {
+        xs.append(i * 2)
+        i = i + 1
+    }
+    assertEqual(xs.partitionPoint(where: (x: Int) => x < 777), 389)
+    assertEqual(xs.partitionPoint(where: (x: Int) => x < 778), 389)
+    assertEqual(xs.partitionPoint(where: (x: Int) => x <= 778), 390)
+}
+
+@test
+fn firstAndLastIndexOfFindEqualElements() {
+    let xs: String[>..] = ["a", "b", "a", "c"]
+    assertEqual(xs.firstIndex(of: "a") ?? -1, 0)
+    assertEqual(xs.lastIndex(of: "a") ?? -1, 2)
+    assertEqual(xs.firstIndex(of: "c") ?? -1, 3)
+    assert(xs.firstIndex(of: "z") == none)
+    assert(xs.lastIndex(of: "z") == none)
+}
+
+@test
+fn firstIndexOfAnyFindsTheFirstOfSeveral() {
+    let xs: Char[>..] = ['h', 'e', 'l', 'l', 'o']
+    assertEqual(xs.firstIndex(ofAny: ['o', 'l']) ?? -1, 2)
+    assert(xs.firstIndex(ofAny: ['z']) == none)
+    assert(xs.firstIndex(ofAny: []) == none)
+}
+
+@test
+fn startsWithComparesTheFirstElements() {
+    let xs: Int[>..] = [1, 2, 3]
+    assert(xs.starts(with: [1, 2]))
+    assert(xs.starts(with: []))
+    assert(xs.starts(with: xs))
+    assert(!xs.starts(with: [2]))
+    assert(!xs.starts(with: [1, 2, 3, 4]))
+}
+
+@test
+fn endsWithComparesTheLastElements() {
+    let xs: Int[>..] = [1, 2, 3]
+    assert(xs.ends(with: [2, 3]))
+    assert(xs.ends(with: []))
+    assert(!xs.ends(with: [1, 3]))
+    assert(!xs.ends(with: [0, 1, 2, 3]))
+}
+
+@test
+fn commonPrefixLengthCountsTheEqualStart() {
+    let xs: String[>..] = ["a", "b", "c"]
+    assertEqual(xs.commonPrefixLength(with: ["a", "b", "x"]), 2)
+    assertEqual(xs.commonPrefixLength(with: ["a"]), 1)
+    assertEqual(xs.commonPrefixLength(with: ["x"]), 0)
+    assertEqual(xs.commonPrefixLength(with: xs), 3)
+}
+
+@test
+fn minAndMaxAreTheExtremes() {
+    let xs: Int[>..] = [4, -2, 9, 9, 0]
+    assertEqual(xs.min() ?? 0, -2)
+    assertEqual(xs.max() ?? 0, 9)
+    let words: String[>..] = ["pear", "apple", "fig"]
+    assertEqual(words.min() ?? "", "apple")
+    assertEqual(words.max() ?? "", "pear")
+}
+
+@test
+fn minAndMaxOfNothingAreNone() {
+    let empty: F64[>..] = []
+    assert(empty.min() == none)
+    assert(empty.max() == none)
+}
+
+@test
+fn isSortedIsAscendingOrder() {
+    let ascending: Int[>..] = [1, 1, 2, 5]
+    let unsorted: Int[>..] = [1, 3, 2]
+    let empty: Int[>..] = []
+    assert(ascending.isSorted())
+    assert(!unsorted.isSorted())
+    assert(empty.isSorted())
+}
+
+@test
+fn everyKindOfArrayCanBeSearched() {
+    let fixed: Int[] = [5, 6, 7]
+    var shrink: Int[>..<] = [5, 6]
+    shrink.append(7)
+    assertEqual(fixed.firstIndex(of: 7) ?? -1, 2)
+    assertEqual(shrink.lastIndex(where: isEven) ?? -1, 1)
+    assertEqual(fixed[1...].firstIndex(of: 7) ?? -1, 1)
+}

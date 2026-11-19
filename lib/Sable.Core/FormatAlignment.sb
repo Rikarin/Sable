@@ -1,0 +1,14 @@
+module Sable.Core
+
+/// Where a value goes in a field wider than it, the rest taken by the fill:
+/// `<`, `^` and `>` in a format spec.
+public enum FormatAlignment {
+    /// The value's own side: a number to the right, text to the left.
+    Automatic
+    /// To the left, the fill after it: `<`.
+    Left
+    /// In the middle, the fill around it, the extra one after it: `^`.
+    Center
+    /// To the right, the fill before it: `>`.
+    Right
+}

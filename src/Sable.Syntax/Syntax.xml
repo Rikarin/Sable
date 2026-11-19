@@ -511,9 +511,10 @@
   </Node>
 
   <Node Name="InterpolationSyntax" Base="SyntaxNode" Kind="Interpolation"
-        Doc="One `\(expr)` hole.">
+        Doc="One `\(expr)` hole, or `\(expr:spec)` with a format spec after the colon.">
     <Field Name="OpenToken" Type="Token" />
     <Field Name="Expression" Type="ExpressionSyntax" />
+    <Field Name="FormatToken" Type="Token" Optional="true" />
     <Field Name="CloseToken" Type="Token" />
   </Node>
 

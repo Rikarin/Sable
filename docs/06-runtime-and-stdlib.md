@@ -221,7 +221,9 @@ Sable.Core          ── always linked, no dependencies
   Comparable/Equatable/Hashable, MemoryLayout, unsafe pointers,
   Iterator/Sequence and the Collection family (Bidirectional,
   RandomAccess, Mutable, RangeReplaceable), FromSequence, and the
-  sequence algorithms, eager and behind '.lazy'
+  sequence algorithms, eager and behind '.lazy',
+  Formattable/FormatSpec (what "\(x:spec)" writes through) and
+  Parsable/ParseError/NumberStyles (text back to values)
 
 Sable.Collections   List Dictionary Set Deque OrderedDictionary
                     PriorityQueue BitSet InlineArray SmallVec

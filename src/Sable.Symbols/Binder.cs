@@ -28,6 +28,14 @@ public sealed partial class Binder {
     readonly Dictionary<SyntaxNode, BoundNode> _bound = [];
 
     /// <summary>
+    ///     Integer literals bound as a call's arguments before the call's
+    ///     parameter types are known, whose range is checked when each is
+    ///     converted to its parameter's type: 'take(0x8000_0000_0000_0000)'
+    ///     is a U64, though as an Int it would not fit.
+    /// </summary>
+    readonly HashSet<BoundLiteral> _uncheckedArguments = [];
+
+    /// <summary>
     ///     The declaration whose body is being bound. Setting it also brings
     ///     that declaration's same-type requirements into force.
     /// </summary>
@@ -2461,8 +2469,32 @@ public sealed partial class Binder {
         }
 
         var bound = BindExpressionCore(expression, expectedType);
+
+        // 'E.Bad' names a case that carries a value. Called, it makes one;
+        // anywhere else ('let x = E.Bad', 'throw .Bad', '(E.Bad, 1)') it is
+        // not a value of the union, whatever the context expects.
+        if (bound is BoundUnionCaseGroup { UnionCase.HasPayload: true } unionCase && !IsCallee(expression)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_WrongPayloadCount,
+                expression.Span,
+                $"'{unionCase.UnionCase.Name}' carries "
+                + $"{unionCase.UnionCase.Payload.Length} value(s), so it needs them here"
+            );
+            bound = new BoundError(expression);
+        }
+
         _bound[expression] = bound;
         return bound;
+    }
+
+    /// <summary>True when <paramref name="expression"/> is what a call calls: the 'E.Bad' of 'E.Bad(at: 1)', parentheses and all.</summary>
+    static bool IsCallee(ExpressionSyntax expression) {
+        SyntaxNode node = expression;
+        while (node.Parent is ParenthesizedExpressionSyntax parenthesized && ReferenceEquals(parenthesized.Expression, node)) {
+            node = parenthesized;
+        }
+
+        return node.Parent is InvocationExpressionSyntax invocation && ReferenceEquals(invocation.Expression, node);
     }
 
     BoundExpression BindExpressionCore(
@@ -2572,7 +2604,11 @@ public sealed partial class Binder {
         var bound = new BoundLiteral(literal, type, token.Value);
 
         // '-128' is checked as a whole, where it is negated.
-        if (literal.Parent is not PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.MinusToken }) {
+        // An argument with no type asked of it yet is checked against its
+        // parameter's, once the call has chosen one (Convert).
+        if (expectedType is null && literal.Parent is ArgumentSyntax) {
+            _uncheckedArguments.Add(bound);
+        } else if (literal.Parent is not PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.MinusToken }) {
             CheckIntegerFits(bound, type);
         }
 
@@ -2607,14 +2643,17 @@ public sealed partial class Binder {
 
     BoundExpression BindInterpolatedString(InterpolatedStringExpressionSyntax syntax) {
         var parts = ImmutableArray.CreateBuilder<BoundExpression>();
+        var formats = ImmutableArray.CreateBuilder<BoundFormatSpec?>();
 
         foreach (var content in syntax.Contents) {
             if (content is InterpolationSyntax hole) {
-                parts.Add(BindExpression(hole.Expression));
+                var part = BindExpression(hole.Expression);
+                parts.Add(part);
+                formats.Add(hole.FormatToken.IsNone ? null : BindFormatSpec(hole, part));
             }
         }
 
-        return new BoundInterpolatedString(syntax, Core.String, parts.ToImmutable());
+        return new BoundInterpolatedString(syntax, Core.String, parts.ToImmutable(), formats.ToImmutable());
     }
 
     BoundExpression BindSelf(SelfExpressionSyntax syntax) {
@@ -3663,7 +3702,10 @@ public sealed partial class Binder {
 
         static bool Hides(Symbol own, Symbol other) =>
             (own, other) switch {
-                (FunctionSymbol a, FunctionSymbol b) => a.IsStatic == b.IsStatic && SameLabels(a, b),
+                // A concrete method does not hide a generic one of the same labels:
+                // an array's 'append(contentsOf:)' of a slice, and every growable
+                // collection's of any sequence, are both there.
+                (FunctionSymbol a, FunctionSymbol b) => a.IsStatic == b.IsStatic && SameLabels(a, b) && a.TypeParameters.IsEmpty == b.TypeParameters.IsEmpty,
                 (FieldSymbol a, FieldSymbol b) => a.IsStatic == b.IsStatic,
                 _ => false,
             };
@@ -6423,7 +6465,7 @@ public sealed partial class Binder {
             _diagnostics.Error(
                 ErrorCode.ERR_NameNotFound,
                 syntax.Span,
-                $"no type named '{name}' is declared in Sable.Core"
+                $"no struct '{name}<Bound>' is declared in Sable.Core, so there is no range for this to make"
             );
             return new BoundError(syntax);
         }
@@ -6729,7 +6771,7 @@ public sealed partial class Binder {
                     syntax,
                     method.ReturnType,
                     UnaryOperatorKind.UserDefined,
-                    operand,
+                    UserOperand(method, operand),
                     method
                 );
             }
@@ -6785,7 +6827,7 @@ public sealed partial class Binder {
         }
 
         if (FindUserUnaryOperator(syntax.OperatorToken.Text, operand.Type, OperatorFixity.Postfix) is { } method) {
-            return new BoundUnaryOperator(syntax, method.ReturnType, UnaryOperatorKind.UserDefined, operand, method);
+            return new BoundUnaryOperator(syntax, method.ReturnType, UnaryOperatorKind.UserDefined, UserOperand(method, operand), method);
         }
 
         if (!operand.HasError) {
@@ -6940,7 +6982,8 @@ public sealed partial class Binder {
             && left.Type.Equals(Core.String) && right.Type.Equals(Core.String);
         if (!IsBuiltinOperand(left.Type) || !IsBuiltinOperand(right.Type) || stringOrdering) {
             if (FindUserOperator(symbol, left.Type, right.Type) is { } own) {
-                return new BoundBinaryOperator(syntax, UserResultType(own, left.Type), BinaryOperatorKind.UserDefined, left, right, own);
+                (left, right) = UserOperands(own, left, right);
+                return new BoundBinaryOperator(syntax, UserResultType(own.Method, left.Type), BinaryOperatorKind.UserDefined, left, right, own.Method);
             }
 
             var derivedFrom = kind switch {
@@ -6949,8 +6992,11 @@ public sealed partial class Binder {
                 _ => null,
             };
 
-            if (derivedFrom is not null && FindUserOperator(derivedFrom, left.Type, right.Type) is { } basis) {
-                return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, basis);
+            // '>' and '<=' pass their operands to '<' the other way round.
+            var swapped = kind is BinaryOperatorKind.GreaterThan or BinaryOperatorKind.LessThanOrEqual;
+            if (derivedFrom is not null && FindUserOperator(derivedFrom, left.Type, right.Type, swapped) is { } basis) {
+                (left, right) = UserOperands(basis, left, right);
+                return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, basis.Method);
             }
 
             if (ReportUnmetDerivedOperator(derivedFrom ?? symbol, left.Type, syntax)) {
@@ -6966,10 +7012,11 @@ public sealed partial class Binder {
                 or BinaryOperatorKind.GreaterThanOrEqual
             && left.Type.Equals(Core.String)
             && right.Type.Equals(Core.String)
-            && FindUserOperator("<", left.Type, right.Type) is { } order) {
+            && FindUserOperator("<", left.Type, right.Type, kind is BinaryOperatorKind.GreaterThan or BinaryOperatorKind.LessThanOrEqual) is { } order) {
+            (left, right) = UserOperands(order, left, right);
             return kind == BinaryOperatorKind.LessThan
-                ? new BoundBinaryOperator(syntax, Core.Bool, BinaryOperatorKind.UserDefined, left, right, order)
-                : new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, order);
+                ? new BoundBinaryOperator(syntax, Core.Bool, BinaryOperatorKind.UserDefined, left, right, order.Method)
+                : new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, order.Method);
         }
 
         // 'x == none' asks only which case x is, so any optional compares.
@@ -6989,13 +7036,14 @@ public sealed partial class Binder {
         }
 
         if (FindUserOperator(symbol, left.Type, right.Type) is { } method) {
+            (left, right) = UserOperands(method, left, right);
             return new BoundBinaryOperator(
                 syntax,
-                method.ReturnType,
+                method.Method.ReturnType,
                 BinaryOperatorKind.UserDefined,
                 left,
                 right,
-                method
+                method.Method
             );
         }
 
@@ -7156,6 +7204,17 @@ public sealed partial class Binder {
         };
 
     /// <summary>Looks for a one-operand <c>operator</c> member on the operand's type.</summary>
+    /// <summary>
+    ///     The operand of a prefix or postfix operator of the program's own,
+    ///     converted to the parameter it is passed to — a reference to it,
+    ///     where the operator takes a reference. A protocol's requirement
+    ///     takes it as it is: the type that meets it says what it takes.
+    /// </summary>
+    BoundExpression UserOperand(FunctionSymbol method, BoundExpression operand) =>
+        method.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol } || operand.Type is not NamedTypeSymbol named
+            ? operand
+            : Convert(operand, TypeSubstitution.For(named).Apply(method.Parameters[0].Type), operand.Syntax);
+
     FunctionSymbol? FindUserUnaryOperator(
         string symbol,
         TypeSymbol operand,
@@ -7238,7 +7297,36 @@ public sealed partial class Binder {
         }
     }
 
-    FunctionSymbol? FindUserOperator(string symbol, TypeSymbol left, TypeSymbol right) {
+    /// <summary>
+    ///     An infix operator found for two operands: the operator, and the
+    ///     type each operand is passed as — its parameter's, seen through the
+    ///     operand's type arguments — or null where it is passed as it is.
+    /// </summary>
+    readonly record struct UserOperator(FunctionSymbol Method, TypeSymbol? LeftParameter, TypeSymbol? RightParameter);
+
+    /// <summary>
+    ///     The operands of a user operator, each converted to the parameter
+    ///     it is passed to: 'a + b' to an 'operator + (a: Money, b: Money&)'
+    ///     passes b's address, and so needs b to have one.
+    /// </summary>
+    (BoundExpression Left, BoundExpression Right) UserOperands(UserOperator found, BoundExpression left, BoundExpression right) {
+        if (found.LeftParameter is { } leftParameter) {
+            left = Convert(left, leftParameter, left.Syntax);
+        }
+
+        if (found.RightParameter is { } rightParameter) {
+            right = Convert(right, rightParameter, right.Syntax);
+        }
+
+        return (left, right);
+    }
+
+    /// <summary>
+    ///     The infix operator <paramref name="symbol" /> that either operand's
+    ///     type declares for the two; <paramref name="swapped" /> when the
+    ///     left operand is passed second, as '>' passes its operands to '<'.
+    /// </summary>
+    UserOperator? FindUserOperator(string symbol, TypeSymbol left, TypeSymbol right, bool swapped = false) {
         // 'a < b' on two T: Comparable — the protocol's requirement, met by
         // whatever T turns out to be. 'C.Item' with 'associatedtype Item:
         // Comparable' is the same: its constraints are as good as T's.
@@ -7247,7 +7335,7 @@ public sealed partial class Binder {
                 if (protocol.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
                         f is { FunctionKind: FunctionKind.Operator, Fixity: OperatorFixity.Infix, Parameters.Length: 2 }
                         && string.Equals(f.Name, symbol, StringComparison.Ordinal)) is { } requirement) {
-                    return requirement;
+                    return new UserOperator(requirement, null, null);
                 }
             }
 
@@ -7279,10 +7367,13 @@ public sealed partial class Binder {
                 // A generic type's operator, seen through the operand's type
                 // arguments; a derived one only where its conformance holds.
                 var members = TypeSubstitution.For(named);
-                if (_conversions.HasImplicitConversion(left, members.Apply(function.Parameters[0].Type))
-                    && _conversions.HasImplicitConversion(right, members.Apply(function.Parameters[1].Type))
+                var first = members.Apply(function.Parameters[0].Type);
+                var second = members.Apply(function.Parameters[1].Type);
+                var (leftParameter, rightParameter) = swapped ? (second, first) : (first, second);
+                if (_conversions.HasImplicitConversion(left, leftParameter)
+                    && _conversions.HasImplicitConversion(right, rightParameter)
                     && (_compilation.GetDerivation(function) is not { } derivation || Conversions.Satisfies(named, derivation.Protocol))) {
-                    return function;
+                    return new UserOperator(function, leftParameter, rightParameter);
                 }
             }
         }
@@ -7301,6 +7392,15 @@ public sealed partial class Binder {
     ) {
         if (expression is BoundFunctionGroup group) {
             expression = Materialize(group, target);
+        }
+
+        // An argument's literal, given the type of the parameter it is for:
+        // an integer type's range, or, where it stays an Int (an 'any P'
+        // parameter), Int's.
+        var checkedArgument = expression is BoundLiteral argument && _uncheckedArguments.Remove(argument);
+        if (checkedArgument) {
+            var parameterType = target is OptionalTypeSymbol optionalTarget ? optionalTarget.UnderlyingType : target;
+            CheckIntegerFits((BoundLiteral)expression, Core.IsNumeric(parameterType) ? parameterType : expression.Type);
         }
 
         // 'Tree.Leaf' carries nothing to infer from, so the context says
@@ -7364,7 +7464,7 @@ public sealed partial class Binder {
         }
 
         // '-1' bound first, then given the 'U8' its place wants.
-        if (conversion == ConversionKind.LiteralTyping && expression is BoundLiteral literal) {
+        if (conversion == ConversionKind.LiteralTyping && !checkedArgument && expression is BoundLiteral literal) {
             CheckIntegerFits(literal, target is OptionalTypeSymbol optional ? optional.UnderlyingType : target);
         }
 
@@ -7780,6 +7880,28 @@ public sealed partial class Binder {
             }
 
             return new BoundErrorPattern(pattern);
+        }
+
+        // A qualifier names the input's own type or nothing it can match: a
+        // case of another union shares no tag with the input, and one of the
+        // same name and a different payload would be taken for the input's.
+        if (pattern.Qualifier is not null && !named.IsError
+            && (inputType is not NamedTypeSymbol input || !input.OriginalDefinition.Equals(named.OriginalDefinition))) {
+            if (!inputType.IsError) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_PatternTypeMismatch,
+                    pattern.Span,
+                    $"'{named.ToDisplayString()}.{name}' is a case of '{named.ToDisplayString()}', not of '{inputType.ToDisplayString()}'"
+                );
+            }
+
+            // Its bindings are still declared, so the arm does not report them unknown too.
+            return new BoundErrorPattern(
+                pattern,
+                pattern.ArgumentList is { } mismatched
+                    ? [..mismatched.Arguments.Select(a => BindPattern(a.Pattern, ErrorTypeSymbol.Instance))]
+                    : []
+            );
         }
 
         var member = named.GetMembers(name).FirstOrDefault();

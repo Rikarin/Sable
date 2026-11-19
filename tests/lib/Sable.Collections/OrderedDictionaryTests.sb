@@ -7,34 +7,110 @@ import Sable.Collections
 import Sable.Testing
 
 @test
-fn anOrderedDictionaryKeepsTheOrderKeysWereFirstSet() {
-    let ages = OrderedDictionary<String, Int>()
-    ages.set("cy", 3)
-    ages.set("ann", 31)
-    ages.set("bo", 40)
-    ages.set("cy", 4)
-    assertEqual(ages.count, 3)
-    assertEqualText(ages.keys().joined(separator: ","), "cy,ann,bo")
-    assertEqual(ages.get("cy") ?? -1, 4)
-    assertEqual(ages.index(of: "bo") ?? -1, 2)
-    assertEqualText(ages.key(at: 1), "ann")
-    assertEqual(ages.value(at: 2), 40)
+fn anEmptyDictionaryHasNoKeys() {
+    let dictionary = OrderedDictionary<String, Int>()
+    assertEqual(dictionary.count, 0)
+    assert(dictionary.isEmpty)
+    assert(dictionary.get("a") == none)
+    assert(!dictionary.contains("a"))
+    assert(dictionary.index(of: "a") == none)
+    assert(dictionary.remove("a") == none)
 }
 
 @test
-fn removingAKeyClosesTheGap() {
-    let ages = OrderedDictionary<String, Int>()
-    ages.set("a", 1)
-    ages.set("b", 2)
-    ages.set("c", 3)
-    assertEqual(ages.remove("b") ?? -1, 2)
-    assert(ages.remove("b") == none, "it is gone")
-    assert(!ages.contains("b"))
-    assertEqualText(ages.keys().joined(separator: ","), "a,c")
-    assertEqual(ages.values().reduce(0) { $0 + $1 }, 4)
-    assertEqual(ages.index(of: "c") ?? -1, 1)
-    ages.removeAll()
-    assert(ages.isEmpty)
+fn keysKeepTheOrderTheyWereAdded() {
+    let dictionary = OrderedDictionary<String, Int>()
+    dictionary.set("zebra", 1)
+    dictionary.set("apple", 2)
+    dictionary.set("mango", 3)
+    assertEqual(dictionary.count, 3)
+    assert(!dictionary.isEmpty)
+    assert(dictionary.keys() == ["zebra", "apple", "mango"])
+    assert(dictionary.values() == [1, 2, 3])
+}
+
+@test
+fn settingAKeyAgainKeepsItsPlace() {
+    let dictionary = OrderedDictionary<String, Int>()
+    dictionary.set("a", 1)
+    dictionary.set("b", 2)
+    dictionary.set("a", 10)
+    assertEqual(dictionary.count, 2)
+    assertEqual(dictionary.get("a") ?? 0, 10)
+    assertEqual(dictionary.index(of: "a") ?? -1, 0)
+    assert(dictionary.values() == [10, 2])
+}
+
+@test
+fn keysAndValuesCanBeReadByPosition() {
+    let dictionary = OrderedDictionary<Int, String>()
+    dictionary.set(30, "thirty")
+    dictionary.set(10, "ten")
+    assertEqual(dictionary.key(at: 1), 10)
+    assertEqual(dictionary.value(at: 0), "thirty")
+    assertEqual(dictionary.index(of: 10) ?? -1, 1)
+    assert(dictionary.contains(30))
+}
+
+@test(traps: "array index out of range")
+fn aPositionPastTheEndTraps() {
+    let dictionary = OrderedDictionary<Int, Int>()
+    dictionary.set(1, 1)
+    let _ = dictionary.key(at: 1)
+}
+
+@test
+fn removingAKeyClosesUpTheOrder() {
+    let dictionary = OrderedDictionary<String, Int>()
+    dictionary.set("a", 1)
+    dictionary.set("b", 2)
+    dictionary.set("c", 3)
+    dictionary.set("d", 4)
+    assertEqual(dictionary.remove("b") ?? 0, 2)
+    assert(dictionary.keys() == ["a", "c", "d"])
+    assertEqual(dictionary.index(of: "c") ?? -1, 1)
+    assertEqual(dictionary.index(of: "d") ?? -1, 2)
+    assertEqual(dictionary.get("d") ?? 0, 4)
+    assert(dictionary.remove("b") == none)
+    assertEqual(dictionary.remove("d") ?? 0, 4)
+    assert(dictionary.keys() == ["a", "c"])
+}
+
+@test
+fn aRemovedKeyAddedAgainGoesAtTheEnd() {
+    let dictionary = OrderedDictionary<String, Int>()
+    dictionary.set("a", 1)
+    dictionary.set("b", 2)
+    let _ = dictionary.remove("a")
+    dictionary.set("a", 3)
+    assert(dictionary.keys() == ["b", "a"])
+    assert(dictionary.values() == [2, 3])
+}
+
+@test
+fn removeAllEmptiesTheDictionary() {
+    let dictionary = OrderedDictionary<String, Int>()
+    dictionary.set("a", 1)
+    dictionary.set("b", 2)
+    dictionary.removeAll()
+    assertEqual(dictionary.count, 0)
+    assert(!dictionary.contains("a"))
+    dictionary.set("c", 3)
+    assertEqual(dictionary.index(of: "c") ?? -1, 0)
+}
+
+@test
+fn manyKeysStayInOrder() {
+    let dictionary = OrderedDictionary<Int, Int>()
+    var i = 0
+    while i < 200 {
+        dictionary.set(i * 7 % 200, i)
+        i = i + 1
+    }
+    assertEqual(dictionary.count, 200)
+    assertEqual(dictionary.key(at: 0), 0)
+    assertEqual(dictionary.key(at: 1), 7)
+    assertEqual(dictionary.get(14) ?? -1, 2)
 }
 
 @test

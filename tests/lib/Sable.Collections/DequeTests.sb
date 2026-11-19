@@ -55,3 +55,75 @@ fn dequeGrowsAtBothEnds() {
     assertEqual(deque.removeFirst() ?? 0, -19)
     assertEqual(deque.at(0), -18)
 }
+
+@test
+fn anEmptyDequeGivesNone() {
+    let deque = Deque<String>()
+    assert(deque.isEmpty)
+    assertEqual(deque.count, 0)
+    assert(deque.first == none)
+    assert(deque.last == none)
+    assert(deque.removeFirst() == none)
+    assert(deque.removeLast() == none)
+    assertEqual(deque.elements().count, 0)
+}
+
+@test
+fn aDequeOfValuesKeepsTheirOrder() {
+    let deque = Deque<String>(["a", "b", "c"])
+    assertEqual(deque.count, 3)
+    assert(!deque.isEmpty)
+    assert(deque.elements() == ["a", "b", "c"])
+    assertEqual(deque.removeLast() ?? "", "c")
+    assertEqual(deque.removeFirst() ?? "", "a")
+    assert(deque.elements() == ["b"])
+}
+
+@test
+fn removingFromBothEndsWrapsRoundTheSlots() {
+    let deque = Deque<Int>()
+    var i = 0
+    while i < 6 {
+        deque.append(i)
+        i = i + 1
+    }
+    assertEqual(deque.removeFirst() ?? -1, 0)
+    assertEqual(deque.removeFirst() ?? -1, 1)
+    deque.append(6)
+    deque.append(7)
+    deque.append(8)
+    deque.prepend(1)
+    assert(deque.elements() == [1, 2, 3, 4, 5, 6, 7, 8])
+    assertEqual(deque.removeLast() ?? -1, 8)
+    assertEqual(deque.last ?? -1, 7)
+    assertEqual(deque.at(6), 7)
+}
+
+@test
+fn setReplacesAnElementByPosition() {
+    let deque = Deque<Int>([1, 2, 3])
+    deque.prepend(0)
+    deque.set(2, 20)
+    assert(deque.elements() == [0, 1, 20, 3])
+}
+
+@test(traps: "array index out of range")
+fn atPastTheEndTraps() {
+    let deque = Deque<Int>([1, 2])
+    let _ = deque.at(2)
+}
+
+@test(traps: "array index out of range")
+fn setAtANegativeIndexTraps() {
+    let deque = Deque<Int>([1, 2])
+    deque.set(-1, 0)
+}
+
+@test
+fn removeAllEmptiesTheDeque() {
+    let deque = Deque<Int>([1, 2, 3])
+    deque.removeAll()
+    assert(deque.isEmpty)
+    deque.prepend(4)
+    assert(deque.elements() == [4])
+}

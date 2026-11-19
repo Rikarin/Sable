@@ -4465,7 +4465,7 @@ public sealed partial class Binder {
 
             if (next < converted.Count && slots[next] == p) {
                 passed.Add(converted[next++]);
-            } else if (DefaultArgument(resolved.Parameters[p], substitution) is { } value) {
+            } else if (DefaultArgument(syntax, resolved.Parameters[p], substitution) is { } value) {
                 passed.Add(value);
             }
         }
@@ -4609,14 +4609,43 @@ public sealed partial class Binder {
     }
 
     /// <summary>
+    ///     The defaults being put into a call right now, outermost first, each
+    ///     known by the parameter's or field's declaration — the same whatever
+    ///     a generic is instantiated with. A default is bound afresh at every
+    ///     call that leaves it off, so one whose value makes such a call again
+    ///     would be put in without end.
+    /// </summary>
+    ImmutableArray<(SyntaxNode Key, string Name)> _defaultsBeingBound = [];
+
+    /// <summary>The first of <see cref="_defaultsBeingBound" /> is the declaration this binder binds, not a call that left it off.</summary>
+    bool _bindsDeclaredDefault;
+
+    /// <summary>The binder whose call started <see cref="_defaultsBeingBound" />, and that call: where a cycle is reported.</summary>
+    (Binder Binder, SyntaxNode Call)? _defaultOrigin;
+
+    /// <summary>
+    ///     Makes this the binder of a parameter's default value or a stored
+    ///     field's initial value, as declared: a default that needs itself is
+    ///     reported here, once, rather than at every call that leaves it off.
+    /// </summary>
+    internal Binder ForDeclaredDefault(Symbol owner) {
+        if (owner.DeclaringSyntax is [var key]) {
+            _defaultsBeingBound = [(key, owner.Name)];
+            _bindsDeclaredDefault = true;
+        }
+
+        return this;
+    }
+
+    /// <summary>
     ///     A left-off parameter's default value, bound afresh for this call in
     ///     the file and the function that declare it — the default names what
     ///     is visible there, not at the call. Its diagnostics were reported
     ///     once, with the declaration, so they are not reported again here.
     /// </summary>
-    BoundExpression? DefaultArgument(ParameterSymbol parameter, TypeSubstitution substitution) {
+    BoundExpression? DefaultArgument(SyntaxNode call, ParameterSymbol parameter, TypeSubstitution substitution) {
         if (MemberwiseField(parameter) is { } field) {
-            return FieldDefault(field, substitution.Apply(parameter.Type));
+            return FieldDefault(call, field, substitution.Apply(parameter.Type));
         }
 
         if (parameter.DeclaringSyntax is not [ParameterSyntax { DefaultValue: { } clause } syntax]
@@ -4625,7 +4654,46 @@ public sealed partial class Binder {
             return null;
         }
 
-        return new Binder(_compilation, scope, container).BindInitializer(clause.Value, substitution.Apply(parameter.Type));
+        if (AlreadyDefaulting(call, parameter.Name, syntax)) {
+            return new BoundError(call);
+        }
+
+        return Within(new Binder(_compilation, scope, container), call, syntax, parameter.Name).BindInitializer(clause.Value, substitution.Apply(parameter.Type));
+    }
+
+    /// <summary>
+    ///     True when the default declared at <paramref name="key" /> is already
+    ///     being put in further out: a call in it leaves it off again —
+    ///     <c>var b: Int = S(a: 2).b</c> in S, or two functions whose defaults
+    ///     call each other — so it has no value to put in (S3412). The
+    ///     declaration's own binder reports it; a call elsewhere just gets an
+    ///     error in its place.
+    /// </summary>
+    bool AlreadyDefaulting(SyntaxNode call, string name, SyntaxNode key) {
+        var at = _defaultsBeingBound.Select(static d => d.Key).ToList().IndexOf(key);
+        if (at < 0) {
+            return false;
+        }
+
+        var (origin, originCall) = _defaultOrigin ?? (this, call);
+        if (at == 0 && origin._bindsDeclaredDefault
+            && !origin._diagnostics.Any(d => d.Code == ErrorCode.ERR_DefaultValueCycle && d.Span == originCall.Span)) {
+            var path = string.Join(" → ", _defaultsBeingBound.Select(static d => d.Name).Append(name).Select(static n => $"'{n}'"));
+            origin._diagnostics.Error(
+                ErrorCode.ERR_DefaultValueCycle,
+                originCall.Span,
+                $"the default value of '{name}' needs itself ({path}): a default is put into each call that leaves it off, so this one would be put in without end"
+            );
+        }
+
+        return true;
+    }
+
+    /// <summary>A binder for the default declared at <paramref name="key" />, put in at <paramref name="call" />: it knows every default being put in around it.</summary>
+    Binder Within(Binder inner, SyntaxNode call, SyntaxNode key, string name) {
+        inner._defaultsBeingBound = _defaultsBeingBound.Add((key, name));
+        inner._defaultOrigin = _defaultOrigin ?? (this, call);
+        return inner;
     }
 
     /// <summary>
@@ -4642,7 +4710,7 @@ public sealed partial class Binder {
     ///     bound afresh in the file that declares the field, as a parameter's
     ///     default is. A lazy property's storage starts as none.
     /// </summary>
-    BoundExpression? FieldDefault(FieldSymbol field, TypeSymbol type) {
+    BoundExpression? FieldDefault(SyntaxNode call, FieldSymbol field, TypeSymbol type) {
         if (field.DeclaringSyntax is not [FieldDeclarationSyntax declaration]
             || _compilation.FileScopeOf(declaration) is not { } scope) {
             return null;
@@ -4652,9 +4720,13 @@ public sealed partial class Binder {
             return new BoundLiteral(declaration.Declarator, type, null);
         }
 
-        return declaration.Declarator.Initializer is { } initializer
-            ? new Binder(_compilation, scope, field).BindInitializer(initializer.Value, type)
-            : null;
+        if (declaration.Declarator.Initializer is not { } initializer) {
+            return null;
+        }
+
+        return AlreadyDefaulting(call, field.Name, declaration)
+            ? new BoundError(call)
+            : Within(new Binder(_compilation, scope, field), call, declaration, field.Name).BindInitializer(initializer.Value, type);
     }
 
     /// <summary>

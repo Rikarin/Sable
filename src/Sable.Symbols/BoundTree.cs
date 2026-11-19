@@ -1078,9 +1078,15 @@ public sealed class BoundOrPattern(
     public override IEnumerable<BoundNode> Children => Nodes(Left, Right);
 }
 
-public sealed class BoundErrorPattern(SyntaxNode syntax)
+/// <summary>
+///     A pattern that did not bind. <paramref name="nested" /> are the
+///     sub-patterns bound anyway, so the names they declare count as written
+///     and the error is reported once.
+/// </summary>
+public sealed class BoundErrorPattern(SyntaxNode syntax, ImmutableArray<BoundPattern> nested = default)
     : BoundPattern(syntax, ErrorTypeSymbol.Instance) {
-    public override IEnumerable<BoundNode> Children => [];
+    public ImmutableArray<BoundPattern> Nested { get; } = nested.IsDefault ? [] : nested;
+    public override IEnumerable<BoundNode> Children => Nested;
 }
 
 // ---------------------------------------------------------------------------

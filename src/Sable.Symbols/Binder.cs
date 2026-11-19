@@ -7710,6 +7710,28 @@ public sealed partial class Binder {
             return new BoundErrorPattern(pattern);
         }
 
+        // A qualifier names the input's own type or nothing it can match: a
+        // case of another union shares no tag with the input, and one of the
+        // same name and a different payload would be taken for the input's.
+        if (pattern.Qualifier is not null && !named.IsError
+            && (inputType is not NamedTypeSymbol input || !input.OriginalDefinition.Equals(named.OriginalDefinition))) {
+            if (!inputType.IsError) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_PatternTypeMismatch,
+                    pattern.Span,
+                    $"'{named.ToDisplayString()}.{name}' is a case of '{named.ToDisplayString()}', not of '{inputType.ToDisplayString()}'"
+                );
+            }
+
+            // Its bindings are still declared, so the arm does not report them unknown too.
+            return new BoundErrorPattern(
+                pattern,
+                pattern.ArgumentList is { } mismatched
+                    ? [..mismatched.Arguments.Select(a => BindPattern(a.Pattern, ErrorTypeSymbol.Instance))]
+                    : []
+            );
+        }
+
         var member = named.GetMembers(name).FirstOrDefault();
 
         if (member is EnumCaseSymbol enumCase) {

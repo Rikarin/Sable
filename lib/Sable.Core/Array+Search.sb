@@ -6,35 +6,6 @@ module Sable.Core
 // at each step.
 
 extension<Element> Element[:] {
-    /// Where the first element that passes the test is, or none.
-    ///
-    /// ```sable
-    /// let xs: Int[>..] = [3, 8, 5, 10]
-    /// assert(xs.firstIndex(where: (x: Int) => x % 2 == 0) == 1)
-    /// ```
-    public fn firstIndex(where predicate: (Element) -> Bool) -> Int? {
-        var i = 0
-        while i < self.count {
-            if predicate(self[i]) {
-                return i
-            }
-            i = i + 1
-        }
-        return none
-    }
-
-    /// Where the last element that passes the test is, or none.
-    public fn lastIndex(where predicate: (Element) -> Bool) -> Int? {
-        var i = self.count - 1
-        while i >= 0 {
-            if predicate(self[i]) {
-                return i
-            }
-            i = i - 1
-        }
-        return none
-    }
-
     /// Whether each element goes ahead of, or alongside, the one after it,
     /// by 'before': whether no element is 'before' the one ahead of it.
     public fn isSorted(by before: (Element, Element) -> Bool) -> Bool {
@@ -76,36 +47,6 @@ extension<Element> Element[:] {
 }
 
 extension<Element: Equatable> Element[:] {
-    /// Where the first element equal to this one is, or none.
-    ///
-    /// ```sable
-    /// let xs: String[>..] = ["a", "b", "a"]
-    /// assert(xs.firstIndex(of: "a") == 0)
-    /// assert(xs.lastIndex(of: "a") == 2)
-    /// ```
-    public fn firstIndex(of element: Element) -> Int? {
-        var i = 0
-        while i < self.count {
-            if self[i] == element {
-                return i
-            }
-            i = i + 1
-        }
-        return none
-    }
-
-    /// Where the last element equal to this one is, or none.
-    public fn lastIndex(of element: Element) -> Int? {
-        var i = self.count - 1
-        while i >= 0 {
-            if self[i] == element {
-                return i
-            }
-            i = i - 1
-        }
-        return none
-    }
-
     /// Where the first element equal to any of the candidates is, or none
     /// (.NET's IndexOfAny).
     public fn firstIndex(ofAny candidates: Element[:]) -> Int? {
@@ -153,34 +94,6 @@ extension<Element: Equatable> Element[:] {
 }
 
 extension<Element: Comparable> Element[:] {
-    /// The least element, the first of those equal to it; none for none.
-    public fn min() -> Element? {
-        if self.count == 0 {
-            return none
-        }
-        var least = self[0]
-        for element in self {
-            if element < least {
-                least = element
-            }
-        }
-        return least
-    }
-
-    /// The greatest element, the first of those equal to it; none for none.
-    public fn max() -> Element? {
-        if self.count == 0 {
-            return none
-        }
-        var greatest = self[0]
-        for element in self {
-            if greatest < element {
-                greatest = element
-            }
-        }
-        return greatest
-    }
-
     /// Whether the elements are in ascending order: none less than the one
     /// ahead of it.
     public fn isSorted() -> Bool {

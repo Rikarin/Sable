@@ -112,7 +112,13 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     ///     protocol with one associated type is written <c>P</c> and not
     ///     <c>P&lt;Self&gt;</c> — its arity is what the source says.
     /// </remarks>
-    public TypeParameterSymbol? SelfTypeParameter { get; internal set; }
+    /// <remarks>A construction, <c>Source&lt;Int&gt;</c>, has its definition's.</remarks>
+    public TypeParameterSymbol? SelfTypeParameter {
+        get => ReferenceEquals(OriginalDefinition, this) ? _selfTypeParameter : OriginalDefinition.SelfTypeParameter;
+        internal set => _selfTypeParameter = value;
+    }
+
+    TypeParameterSymbol? _selfTypeParameter;
 
     /// <summary>
     ///     A protocol's <c>associatedtype</c> declarations.
@@ -123,7 +129,12 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     ///     name rather than positionally, so they are not part of the protocol's
     ///     arity.
     /// </remarks>
-    public ImmutableArray<TypeParameterSymbol> AssociatedTypes { get; internal set; } = [];
+    public ImmutableArray<TypeParameterSymbol> AssociatedTypes {
+        get => ReferenceEquals(OriginalDefinition, this) ? _associatedTypes : OriginalDefinition.AssociatedTypes;
+        internal set => _associatedTypes = value;
+    }
+
+    ImmutableArray<TypeParameterSymbol> _associatedTypes = [];
 
     /// <summary>
     ///     For the type an array extension declares its members on, the array
@@ -136,6 +147,25 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     ///     (Compilation.ArrayExtensions.cs).
     /// </remarks>
     public ArrayTypeSymbol? ExtendedArray { get; internal set; }
+
+    /// <summary>
+    ///     For a protocol, the array extensions that conform arrays to it,
+    ///     directly or through a protocol that refines it:
+    ///     <c>extension&lt;Element&gt; Element[:]: Sequence</c>.
+    /// </summary>
+    /// <remarks>
+    ///     An array type has no declaration to list its conformances on, so
+    ///     each protocol keeps those it is given; an array conforms where one
+    ///     of them matches it (<see cref="Compilation.ArrayConformance" />).
+    /// </remarks>
+    public ImmutableArray<NamedTypeSymbol> ArrayConformers { get; internal set; } = [];
+
+    /// <summary>
+    ///     For an array extension that declares conformances, what an array
+    ///     of its kind has by a name, from every array extension: the
+    ///     witnesses its conformances may be met by.
+    /// </summary>
+    internal Func<string, IEnumerable<Symbol>>? ArrayMembersNamed { get; set; }
 
     /// <summary>
     ///     For <c>Optional</c>, the shell <c>T?</c> desugars to: <c>Wrapped?</c>,

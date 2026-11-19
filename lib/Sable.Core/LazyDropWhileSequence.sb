@@ -1,0 +1,32 @@
+module Sable.Core
+
+/// A sequence's elements from the first for which a closure is false: what
+/// '.lazy.drop(while:)' makes.
+public struct LazyDropWhileSequence<Base: Sequence>: LazySequenceProtocol {
+    let base: Base
+    let predicate: (Base.Element) -> Bool
+
+    /// An iterator from the first element kept.
+    public fn makeIterator() -> LazyDropWhileIterator<Base.Iter> {
+        return LazyDropWhileIterator<Base.Iter> { base: base.makeIterator(), predicate: predicate, dropping: true }
+    }
+}
+
+/// Gives an iterator's elements from the first a closure is false for.
+public struct LazyDropWhileIterator<Base: Iterator>: Iterator {
+    var base: Base
+    let predicate: (Base.Element) -> Bool
+    var dropping: Bool
+
+    /// The next element kept, or none past the last.
+    public mutating fn next() -> Base.Element? {
+        while let element = base.next() {
+            if dropping && predicate(element) {
+                continue
+            }
+            dropping = false
+            return element
+        }
+        return none
+    }
+}

@@ -7,6 +7,21 @@ import Sable.Collections
 import Sable.Testing
 
 @test
+fn aStackIsGoneThroughFromTheTopDown() {
+    let stack = Stack<Int>()
+    stack.push(1)
+    stack.push(2)
+    stack.push(3)
+    var seen: String[>..] = []
+    for value in stack {
+        seen.append("\(value)")
+    }
+    assertEqualText(seen.joined(separator: ","), "3,2,1")
+    assertEqual(stack.count, 3)
+    assertEqual(Stack<Int>().toArray().count, 0)
+}
+
+@test
 fn stackIsLastInFirstOut() {
     let stack = Stack<Int>()
     stack.push(1)

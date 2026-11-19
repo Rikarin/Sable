@@ -23,10 +23,8 @@ internal sealed class Conversions(CoreTypes core) {
             return ConversionKind.Identity;
         }
 
-        if (!Equivalence.IsEmpty) {
-            source = Equivalence.Canonical(source);
-            target = Equivalence.Canonical(target);
-        }
+        source = Equivalence.Canonical(source);
+        target = Equivalence.Canonical(target);
 
         if (source.Equals(target)) {
             return ConversionKind.Identity;
@@ -232,6 +230,12 @@ internal sealed class Conversions(CoreTypes core) {
         if (source is NamedTypeSymbol { IsConstructed: true } derived && constraint is NamedTypeSymbol protocol
             && derived.OriginalDefinition.DerivedConformances.Contains(protocol)) {
             return DerivedConformance.Holds(derived, protocol, context);
+        }
+
+        // 'extension<Element> Element[:]: Sequence' conforms every array;
+        // 'extension<Element: Equatable> …', those of an equatable element.
+        if (source is ArrayTypeSymbol array && constraint is NamedTypeSymbol { TypeKind: TypeKind.Protocol } wanted) {
+            return Compilation.ArrayConformance(array, wanted, context) is not null;
         }
 
         // 'extension Box: P where T: P' conforms a Box<T> only where its T

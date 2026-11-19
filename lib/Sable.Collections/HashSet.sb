@@ -39,3 +39,23 @@ public class HashSet<Element: Hashable> {
         return map.keys()
     }
 }
+
+extension HashSet: Sequence {
+    /// An iterator over the members, in the order they were first inserted.
+    public fn makeIterator() -> HashSetIterator<Element> {
+        return HashSetIterator<Element> { entries: map.makeIterator() }
+    }
+}
+
+/// Gives a set's members in the order they were first inserted.
+public struct HashSetIterator<Element>: Iterator {
+    var entries: DictionaryIterator<Element, Bool>
+
+    /// The next member, or none past the last.
+    public mutating fn next() -> Element? {
+        if let entry = entries.next() {
+            return entry.0
+        }
+        return none
+    }
+}

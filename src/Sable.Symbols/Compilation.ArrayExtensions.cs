@@ -74,14 +74,6 @@ public sealed partial class Compilation {
             );
         }
 
-        if (declaration.BaseTypes is { } baseTypes) {
-            ReportDeclaration(
-                ErrorCode.ERR_MalformedArrayExtension,
-                baseTypes.Span,
-                "an array extension adds members, not conformances: an array's conformances are not declared yet"
-            );
-        }
-
         // Named for its kind, and numbered within its module: the name is what
         // its members' code is named for, never written or shown.
         var kind = syntax switch {
@@ -127,6 +119,10 @@ public sealed partial class Compilation {
 
         TypeBinder.BindArrayExtension(carrier, declaration, scope);
 
+        if (declaration.BaseTypes is { } baseTypes) {
+            DeclareArrayConformances(carrier, baseTypes, scope);
+        }
+
         var extension = new ExtensionSymbol(carrier, declaration) { DeclaringModule = scope?.Module };
         RecordDeclaration(declaration, extension);
         ArrayExtensions.Add(carrier);
@@ -138,6 +134,81 @@ public sealed partial class Compilation {
 
             DeclareMember(member, extension);
         }
+    }
+
+    /// <summary>
+    ///     <c>extension&lt;Element&gt; Element[:]: Sequence</c>: every array of
+    ///     the kind conforms, where its element meets the extension's
+    ///     constraints. The protocols are bound now, as every type has been
+    ///     declared, so that whether an array conforms can be asked as soon
+    ///     as any signature is bound; each protocol, and each it refines,
+    ///     keeps the extension, as an array has no declaration to keep them.
+    /// </summary>
+    void DeclareArrayConformances(NamedTypeSymbol carrier, BaseTypeListSyntax baseTypes, FileScope? scope) {
+        var protocols = new List<TypeSymbol>();
+        foreach (var syntax in baseTypes.Types) {
+            var bound = TypeBinder.BindType(syntax, carrier, scope);
+            if (bound.IsError) {
+                continue;
+            }
+
+            if (bound is not NamedTypeSymbol { TypeKind: TypeKind.Protocol }) {
+                ReportDeclaration(
+                    ErrorCode.ERR_MalformedArrayExtension,
+                    syntax.Span,
+                    $"an array can conform to a protocol, and '{bound.ToDisplayString()}' is not one"
+                );
+                continue;
+            }
+
+            protocols.Add(bound);
+        }
+
+        carrier.BaseTypes = [..protocols];
+
+        var registered = new HashSet<NamedTypeSymbol>();
+        var pending = new Stack<NamedTypeSymbol>(protocols.OfType<NamedTypeSymbol>());
+        while (pending.Count > 0) {
+            var protocol = pending.Pop().OriginalDefinition;
+            if (!registered.Add(protocol)) {
+                continue;
+            }
+
+            protocol.ArrayConformers = protocol.ArrayConformers.Add(carrier);
+            foreach (var refined in protocol.BaseTypes) {
+                if (refined is NamedTypeSymbol { TypeKind: TypeKind.Protocol } parent) {
+                    pending.Push(parent);
+                }
+            }
+        }
+
+        // A requirement may be met by what any array extension declares, as
+        // 'count' is by the slice's. What the conformance asks is checked
+        // once every signature is bound, as a named type's is.
+        carrier.ArrayMembersNamed = name =>
+            carrier.ExtendedArray is { } extended && LookupArrayMember(extended, name) is { Owner: not null } found
+                ? found.Members
+                : [];
+        TypeBinder.DeferConformanceCheck(carrier);
+    }
+
+    /// <summary>
+    ///     The array extension that conforms this array to the protocol, and
+    ///     what its parameters stand for here; null when the array does not
+    ///     conform, or its element does not meet the extension's constraints.
+    /// </summary>
+    internal static (NamedTypeSymbol Carrier, TypeSubstitution Substitution)? ArrayConformance(
+        ArrayTypeSymbol array,
+        NamedTypeSymbol protocol,
+        TypeEquivalence? context = null
+    ) {
+        foreach (var carrier in protocol.OriginalDefinition.ArrayConformers) {
+            if (MatchArray(carrier, array) is { } substitution && Unmet(carrier, substitution, context) is null) {
+                return (carrier, substitution);
+            }
+        }
+
+        return null;
     }
 
     static bool Mentions(TypeSymbol type, TypeParameterSymbol parameter) =>
@@ -152,6 +223,13 @@ public sealed partial class Compilation {
             MetatypeTypeSymbol metatype => Mentions(metatype.InstanceType, parameter),
             _ => false,
         };
+
+    /// <summary>
+    ///     The members an array has by this name, from its kind's extensions or
+    ///     else the slice's: what implements a protocol's requirement on it.
+    /// </summary>
+    public IReadOnlyList<Symbol> ArrayMembersNamed(ArrayTypeSymbol array, string name) =>
+        LookupArrayMember(array, name) is { Owner: not null } found ? found.Members : [];
 
     /// <summary>
     ///     The members of an array with this name: the array kind's own

@@ -1,9 +1,11 @@
 module Sable.Core
 
-// Sorting an array: in place, 'sort', or into an array of its own,
-// 'sorted' (docs/06's pairing). Every kind of array has these. The sort is
-// stable — elements neither goes before keep their order — and is a merge
-// sort, O(n log n) comparisons, with one scratch array of the array's size.
+// Sorting an array in place, 'sort'; every sequence's 'sorted' (docs/06's
+// pairing) is this sort of an array of its own (Sequence+Algorithms.sb).
+// Every kind of array has it. The sort is stable — elements neither goes
+// before keep their order — and is a merge sort, O(n log n) comparisons,
+// with one scratch array of the array's size. The comparison may throw,
+// and then so does the sort, leaving the elements in some order.
 
 extension<Element> Element[:] {
     /// Sorts the elements in place by 'before', which says whether its
@@ -21,7 +23,7 @@ extension<Element> Element[:] {
     /// words.sort(by: (a: String, b: String) => a.count < b.count)
     /// assert(words == ["fig", "pear", "banana"])
     /// ```
-    public mutating fn sort(by before: (Element, Element) -> Bool) {
+    public mutating fn sort(by before: (Element, Element) throws -> Bool) rethrows {
         let n = self.count
         if n < 2 {
             return
@@ -35,7 +37,7 @@ extension<Element> Element[:] {
             while i < end {
                 let held = self[i]
                 var j = i
-                while j > start && before(held, self[j - 1]) {
+                while j > start && (try before(held, self[j - 1])) {
                     self[j] = self[j - 1]
                     j = j - 1
                 }
@@ -57,9 +59,9 @@ extension<Element> Element[:] {
         var width = run
         while width < n {
             if inScratch {
-                self.mergeRuns(of: width, from: scratch, by: before)
+                try self.mergeRuns(of: width, from: scratch, by: before)
             } else {
-                scratch.mergeRuns(of: width, from: self, by: before)
+                try scratch.mergeRuns(of: width, from: self, by: before)
             }
             inScratch = !inScratch
             width = width * 2
@@ -72,14 +74,14 @@ extension<Element> Element[:] {
     /// Every pair of runs of 'width' in 'source', merged into one run of
     /// twice the width here, at the same place; 'source' has as many
     /// elements as this.
-    mutating fn mergeRuns(of width: Int, from source: Element[:], by before: (Element, Element) -> Bool) {
+    mutating fn mergeRuns(of width: Int, from source: Element[:], by before: (Element, Element) throws -> Bool) rethrows {
         let n = source.count
         var low = 0
         while low < n {
             let middle = low + width < n ? low + width : n
             let high = middle + width < n ? middle + width : n
             var k = low
-            if middle >= high || !before(source[middle], source[middle - 1]) {
+            if middle >= high || !(try before(source[middle], source[middle - 1])) {
                 while k < high {
                     self[k] = source[k]
                     k = k + 1
@@ -88,7 +90,7 @@ extension<Element> Element[:] {
                 var x = low
                 var y = middle
                 while x < middle && y < high {
-                    let takeRight = before(source[y], source[x])
+                    let takeRight = try before(source[y], source[x])
                     self[k] = source[takeRight ? y : x]
                     let step = takeRight ? 1 : 0
                     y = y + step
@@ -109,14 +111,6 @@ extension<Element> Element[:] {
             low = high
         }
     }
-
-    /// The elements ordered by 'before', in an array of their own: a stable
-    /// merge sort.
-    public fn sorted(by before: (Element, Element) -> Bool) -> Element[>..] {
-        var result = self.toArray()
-        result.sort(by: before)
-        return result
-    }
 }
 
 extension<Element: Comparable> Element[:] {
@@ -129,13 +123,5 @@ extension<Element: Comparable> Element[:] {
     /// ```
     public mutating fn sort() {
         self.sort(by: (a: Element, b: Element) => a < b)
-    }
-
-    /// The elements in ascending order, in an array of their own: a stable
-    /// merge sort.
-    public fn sorted() -> Element[>..] {
-        var result = self.toArray()
-        result.sort()
-        return result
     }
 }

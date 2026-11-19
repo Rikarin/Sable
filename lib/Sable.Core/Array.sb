@@ -28,31 +28,6 @@ extension<Element> Element[:] {
     @builtin("array_slice")
     public fn slice(from: Int, to: Int) -> Element[:]
 
-    /// The first element, or none when there are none.
-    ///
-    /// ```sable
-    /// let xs: Int[>..] = [4, 5]
-    /// assert(xs.first == 4)
-    /// ```
-    public var first: Element? {
-        get {
-            if self.count == 0 {
-                return none
-            }
-            return self[0]
-        }
-    }
-
-    /// The last element, or none when there are none.
-    public var last: Element? {
-        get {
-            if self.count == 0 {
-                return none
-            }
-            return self[self.count - 1]
-        }
-    }
-
     /// The elements in a grow-only array of their own. A value like any
     /// other copy: it shares the buffer while neither changes, so taking
     /// the whole of an array copies nothing; a slice of part of one is

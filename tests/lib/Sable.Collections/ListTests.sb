@@ -10,6 +10,61 @@ fn isEven(_ x: Int) -> Bool {
     return x % 2 == 0
 }
 
+// Through the protocols alone, as generic code sees a list.
+fn backwards<C: BidirectionalCollection>(_ items: C) -> C.Element[>..] {
+    var result: C.Element[>..] = []
+    var position = items.endIndex
+    while items.startIndex < position {
+        position = items.index(before: position)
+        result.append(items[position])
+    }
+    return result
+}
+
+fn doubled<C: MutableCollection>(_ items: inout C) where C.Element == Int {
+    var position = items.startIndex
+    while position < items.endIndex {
+        items[position] = items[position] * 2
+        position = items.index(after: position)
+    }
+}
+
+fn counting<C: RangeReplaceableCollection>(to n: Int) -> C where C.Element == Int {
+    var made = C()
+    var i = 1
+    while i <= n {
+        made.append(element: i)
+        i += 1
+    }
+    let _ = made.removeLast()
+    return made
+}
+
+fn emptied<C: RangeReplaceableCollection>(_ items: C) -> Int {
+    var all = items
+    all.clear()
+    return all.count
+}
+
+@test
+fn aListIsARandomAccessCollection() {
+    let list = List<Int>([1, 2, 3, 4])
+    assert(backwards(list) == [4, 3, 2, 1])
+    assertEqual(list.distance(from: list.startIndex, to: list.endIndex), 4)
+    assertEqual(list[list.index(list.startIndex, offsetBy: 2)], 3)
+    assertEqual(list.lazy.filter { $0 > 2 }.reduce(0) { $0 + $1 }, 7)
+}
+
+@test
+fn aListIsChangedInPlaceAndGrownThroughTheProtocols() {
+    var list = List<Int>([1, 2, 3])
+    doubled(&list)
+    assert(list.toArray() == [2, 4, 6])
+    let made: List<Int> = counting(to: 4)
+    assert(made.toArray() == [1, 2, 3])
+    assertEqual(emptied(made), 0)
+}
+
 @test
 fn anEmptyListHasNothing() {
     let list = List<Int>()

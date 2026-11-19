@@ -7,6 +7,22 @@ import Sable.Collections
 import Sable.Testing
 
 @test
+fn aHashSetIsGoneThroughInTheOrderOfInsertion() {
+    let members = HashSet<Int>()
+    let _ = members.insert(5)
+    let _ = members.insert(1)
+    let _ = members.insert(5)
+    let _ = members.insert(3)
+    let _ = members.remove(1)
+    var seen: String[>..] = []
+    for member in members {
+        seen.append("\(member)")
+    }
+    assertEqualText(seen.joined(separator: ","), "5,3")
+    assertEqual(HashSet<Int>().toArray().count, 0)
+}
+
+@test
 fn hashSetKeepsOneOfEach() {
     let seen = HashSet<Int>()
     assert(seen.insert(5))

@@ -2765,7 +2765,9 @@ public sealed partial class SilGen {
             && requirement.Name == member.Name
             && (requirement, member) switch {
                 (FunctionSymbol r, FunctionSymbol m) =>
-                    (r.IsStatic == m.IsStatic || r.FunctionKind == FunctionKind.Operator) && r.Parameters.Length == m.Parameters.Length,
+                    (r.IsStatic == m.IsStatic || r.FunctionKind == FunctionKind.Operator) && r.Parameters.Length == m.Parameters.Length
+                    // 'append(contentsOf:)' is not 'append(element:)'.
+                    && (r.FunctionKind == FunctionKind.Operator || SameLabels(r, m)),
                 (FieldSymbol r, FieldSymbol m) => r.IsStatic == m.IsStatic,
                 _ => false,
             };
@@ -2784,6 +2786,37 @@ public sealed partial class SilGen {
     static bool SameLabels(FunctionSymbol a, FunctionSymbol b) =>
         a.Parameters.Length == b.Parameters.Length
         && a.Parameters.Zip(b.Parameters).All(static p => (p.First.Label ?? p.First.Name) == (p.Second.Label ?? p.Second.Name));
+
+    /// <summary>
+    ///     The member of an array that implements a protocol's method: one an
+    ///     array extension declares (those of the array's own kind first, then
+    ///     the slice's), or else the protocol's default.
+    /// </summary>
+    internal FunctionSymbol? ArrayImplementation(ArrayTypeSymbol array, FunctionSymbol requirement) {
+        if (IsExtensionOnly(requirement)) {
+            return requirement;
+        }
+
+        var own = _compilation.ArrayMembersNamed(array, requirement.Name).OfType<FunctionSymbol>()
+            .FirstOrDefault(f => f.IsStatic == requirement.IsStatic && SameLabels(f, requirement));
+        if (own is not null) {
+            return own;
+        }
+
+        if (Owner(requirement) is { TypeKind: TypeKind.Protocol } protocol) {
+            return protocol.OriginalDefinition.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
+                f.ContainingSymbol is ExtensionSymbol
+                && f.Name == requirement.Name
+                && f.IsStatic == requirement.IsStatic
+                && f.Parameters.Length == requirement.Parameters.Length);
+        }
+
+        return null;
+    }
+
+    /// <summary>The instance property an array extension gives arrays of this kind by this name.</summary>
+    internal FieldSymbol? ArrayProperty(ArrayTypeSymbol array, string name) =>
+        _compilation.ArrayMembersNamed(array, name).OfType<FieldSymbol>().FirstOrDefault(static f => !f.IsStatic);
 
     internal static FunctionSymbol? Implementation(NamedTypeSymbol concrete, FunctionSymbol requirement) {
         // docs/03 §3.2: a protocol extension's member that is not a
@@ -6240,6 +6273,11 @@ public sealed partial class SilGen {
                 ));
             }
 
+            // 'c[i] = v' for C: MutableCollection, C an array: the array's own element.
+            if (assignment.Target is BoundIndexAccess indexTarget && AsArrayIndexing(indexTarget) is { } arrayTarget) {
+                return Assignment(new BoundAssignment(assignment.Syntax, arrayTarget, assignment.Value));
+            }
+
             // 'grid[x, y] = v': a call to the subscript's setter, which takes
             // the receiver where it is, as any mutating method does.
             if (assignment.Target is BoundIndexAccess { Subscript: { } subscript } subscripted) {
@@ -7561,6 +7599,15 @@ public sealed partial class SilGen {
                 : null;
 
         /// <summary>
+        ///     A protocol's subscript used where Self is now an array: the
+        ///     array's own indexing, which needs no subscript.
+        /// </summary>
+        BoundIndexAccess? AsArrayIndexing(BoundIndexAccess index) =>
+            index.Subscript is { } subscript && OwnerOf(subscript) is { TypeKind: TypeKind.Protocol } && Sub(index.Receiver.Type) is ArrayTypeSymbol
+                ? new BoundIndexAccess(index.Syntax, index.Type, index.Receiver, index.Indices)
+                : null;
+
+        /// <summary>
         ///     A protocol's static property read through a type: the type's own
         ///     property of that name when it is a requirement the type meets;
         ///     otherwise the protocol extension's, its getter called with Self
@@ -7602,6 +7649,10 @@ public sealed partial class SilGen {
         }
 
         SilValue? IndexRead(BoundIndexAccess index) {
+            if (AsArrayIndexing(index) is { } arrayIndexing) {
+                return IndexRead(arrayIndexing);
+            }
+
             // A type's own subscript: a call to its getter.
             if (index.Subscript is { } subscript) {
                 subscript = SubscriptWitness(subscript, index.Receiver);
@@ -8789,6 +8840,12 @@ public sealed partial class SilGen {
                 return ExistentialCall(existentialReceiver, SlotName(callee), call.Arguments, call, callee.IsMutating);
             }
 
+            // 'C()' for C: RangeReplaceableCollection, C an array: '[]'.
+            if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol } && callee is { FunctionKind: FunctionKind.Initializer, Parameters.IsEmpty: true }
+                && call.Receiver is BoundTypeExpression made && Sub(made.ReferencedType) is ArrayTypeSymbol emptyArray) {
+                return ArrayLiteral(new BoundArray(call.Syntax, emptyArray, []), emptyArray);
+            }
+
             // A protocol's requirement, called on a type parameter: the
             // concrete type's own member, now that the type is known.
             if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol } && Witness(call) is { } witness) {
@@ -8863,6 +8920,12 @@ public sealed partial class SilGen {
                         ?? (CapturedSelf() is { } captured ? Hold(captured) : null);
                     if (self is not null && IsOwned(self)) {
                         borrows.Add(self);
+                    }
+
+                    // A protocol's default, its Self an array, calling what the
+                    // slice's extension declares: self, viewed as a slice.
+                    if (self is not null) {
+                        self = AsSliceReceiver(self, type.Parameters[0], borrows);
                     }
                 } else {
                     self = Borrow(call.Receiver);
@@ -9060,9 +9123,14 @@ public sealed partial class SilGen {
             // In a protocol's default implementation, 'first()' is called on
             // self: the type Self stands for, whose own type arguments
             // a generic conformer's member needs.
+            // 'C.from(…)', static, is called on the type the call says Self
+            // is. A protocol's member called from an extension of a protocol
+            // refining it is called on this function's own Self.
             var receiverOf = call.Receiver is { } r ? Sub(r.Type)
                 : OwnerOf(call.Function)?.OriginalDefinition is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } implicitSelf }
-                    ? substitution.Lookup(implicitSelf)
+                    ? (call.Substitution.Lookup(implicitSelf) is { } statedSelf ? Sub(statedSelf) : null)
+                      ?? substitution.Lookup(implicitSelf)
+                      ?? (OwnerOf(symbol)?.OriginalDefinition is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } ownSelf } ? substitution.Lookup(ownSelf) : null)
                     : null;
             var receiver = receiverOf is null ? TypeSubstitution.Empty
                 : OwnerOf(callee) is { ExtendedArray: not null } carrier ? Compilation.MatchArray(carrier, receiverOf) ?? TypeSubstitution.Empty
@@ -9074,7 +9142,7 @@ public sealed partial class SilGen {
 
             // A protocol's default implementation: Self is the receiver's type.
             if (OwnerOf(callee)?.OriginalDefinition is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } self }) {
-                var receiverType = call.Receiver is { } selfReceiver ? Sub(selfReceiver.Type) : substitution.Lookup(self);
+                var receiverType = call.Receiver is { } selfReceiver ? Sub(selfReceiver.Type) : substitution.Lookup(self) ?? receiverOf;
                 if (receiverType is not null) {
                     map[self] = receiverType;
                 }
@@ -9090,6 +9158,16 @@ public sealed partial class SilGen {
                     : receiver.Lookup(parameter) ?? (map.ContainsKey(parameter) ? null : substitution.Lookup(parameter));
                 if (bound is not null) {
                     map[parameter] = bound;
+                }
+            }
+
+            // A generic requirement's witness has its own parameters, standing
+            // for what the call gave the requirement's, in order.
+            if (!ReferenceEquals(callee, call.Function) && callee.TypeParameters.Length == call.Function.TypeParameters.Length) {
+                for (var i = 0; i < callee.TypeParameters.Length; i++) {
+                    if (!map.ContainsKey(callee.TypeParameters[i]) && call.Substitution.Lookup(call.Function.TypeParameters[i]) is { } given) {
+                        map[callee.TypeParameters[i]] = Sub(given);
+                    }
                 }
             }
 
@@ -9123,7 +9201,11 @@ public sealed partial class SilGen {
                     ? CallSubstitution(call, call.Function).Lookup(selfParameter)
                     : null,
             };
-            return self is NamedTypeSymbol concrete ? Implementation(concrete, call.Function) : null;
+            return self switch {
+                NamedTypeSymbol concrete => Implementation(concrete, call.Function),
+                ArrayTypeSymbol array => generator.ArrayImplementation(array, call.Function),
+                _ => null,
+            };
         }
 
         /// <summary>
@@ -9725,6 +9807,13 @@ public sealed partial class SilGen {
                         ? Expression(new BoundCall(access.Syntax, receiver, fallbackGetter, [], access.Type))
                         : Missing(access, $"the property '{access.Field.Name}' of '{receiver.Type.ToDisplayString()}'");
                 }
+            }
+
+            // A protocol's property, read where Self is an array: the one an
+            // array extension declares, as 'count' is the slice's.
+            if (access.Field.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol } && Sub(receiver.Type) is ArrayTypeSymbol array
+                && generator.ArrayProperty(array, access.Field.Name) is { } arrayOwn) {
+                return Expression(new BoundFieldAccess(access.Syntax, receiver, arrayOwn, access.Type));
             }
 
             return Missing(access, $"the property '{access.Field.Name}' of '{receiver.Type.ToDisplayString()}'");

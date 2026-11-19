@@ -571,14 +571,15 @@ internal static class ConformanceChecker {
                     }
 
                     var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                    var view = ArrayWitnessView(witness, conformer);
                     var fits = (requirement, witness) switch {
                         (FunctionSymbol { IsAbstract: true } wanted, FunctionSymbol given) =>
                             wanted.IsStatic == given.IsStatic
                             && wanted.Parameters.Length == given.Parameters.Length
-                            && wanted.Parameters.Zip(given.Parameters).All(p => TypeSubstitution.Unify(p.First.Type, p.Second.Type, inferrable, map))
-                            && TypeSubstitution.Unify(wanted.ReturnType, given.ReturnType, inferrable, map),
+                            && wanted.Parameters.Zip(given.Parameters).All(p => TypeSubstitution.Unify(p.First.Type, view.Apply(p.Second.Type), inferrable, map))
+                            && TypeSubstitution.Unify(wanted.ReturnType, view.Apply(given.ReturnType), inferrable, map),
                         (FieldSymbol { IsAbstract: true } wanted, FieldSymbol given) =>
-                            TypeSubstitution.Unify(wanted.Type, given.Type, inferrable, map),
+                            TypeSubstitution.Unify(wanted.Type, view.Apply(given.Type), inferrable, map),
                         _ => false,
                     };
 
@@ -588,10 +589,58 @@ internal static class ConformanceChecker {
                 }
             }
 
-            return null;
+            return InferFromRequirements(conformer, protocol, associated);
         } finally {
             s_inferring.Remove((conformer, associated));
         }
+    }
+
+    /// <summary>
+    ///     An associated type a same-type requirement says is another the
+    ///     conformer has said: with <c>Iter.Element == Element</c>, a
+    ///     sequence's Element is its iterator's.
+    /// </summary>
+    static TypeSymbol? InferFromRequirements(NamedTypeSymbol conformer, NamedTypeSymbol protocol, TypeParameterSymbol associated) {
+        // The protocol's own requirements, and those of the protocols the
+        // conformer meets that refine it: Collection may say what a
+        // Sequence's Element is.
+        TypeSymbol self = (TypeSymbol?)conformer.ExtendedArray ?? TypeBinder.OwnConstruction(conformer);
+        foreach (var owner in (IEnumerable<NamedTypeSymbol>)[protocol, ..ProtocolsOf(conformer).Select(static p => p.OriginalDefinition)]) {
+            var throughConformer = AssociatedTypes.ThroughBase(owner, self);
+            foreach (var (left, right) in owner.SameTypeRequirements) {
+                var other = ReferenceEquals(left, associated) ? right
+                    : ReferenceEquals(right, associated) ? left
+                    : null;
+                if (other is null) {
+                    continue;
+                }
+
+                var inferred = throughConformer.Apply(other);
+                if (!inferred.IsError && !MentionsAssociated(inferred)) {
+                    return inferred;
+                }
+            }
+        }
+
+        return null;
+
+        // What the conformer has not said: a protocol's own associated type,
+        // or one read through the conformer itself. 'Base.Iter.Element',
+        // through a parameter of the conformer's, is said.
+        bool MentionsAssociated(TypeSymbol type) =>
+            type switch {
+                DependentMemberTypeSymbol member => RootOf(member).Equals(self) || MentionsAssociated(RootOf(member)),
+                TypeParameterSymbol parameter => parameter.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol },
+                NamedTypeSymbol named => named.TypeArguments.Any(MentionsAssociated),
+                OptionalTypeSymbol optional => MentionsAssociated(optional.UnderlyingType),
+                ArrayTypeSymbol array => MentionsAssociated(array.ElementType),
+                TupleTypeSymbol tuple => tuple.ElementTypes.Any(MentionsAssociated),
+                FunctionTypeSymbol function => function.ParameterTypes.Any(MentionsAssociated) || MentionsAssociated(function.ReturnType),
+                _ => false,
+            };
+
+        static TypeSymbol RootOf(DependentMemberTypeSymbol member) =>
+            member.BaseType is DependentMemberTypeSymbol inner ? RootOf(inner) : member.BaseType;
     }
 
     /// <summary>
@@ -641,6 +690,8 @@ internal static class ConformanceChecker {
             );
         }
 
+        CheckRequirements(type, protocol, arguments, diagnostics);
+
         foreach (var requirement in protocol.Members) {
             switch (requirement) {
                 case FunctionSymbol { IsAbstract: true } function:
@@ -651,6 +702,61 @@ internal static class ConformanceChecker {
                     CheckProperty(type, protocol, arguments, field, diagnostics, hasBuiltins);
                     break;
             }
+        }
+    }
+
+    /// <summary>
+    ///     A protocol's <c>where</c> requirements, read through the conformer:
+    ///     a Sequence whose Element is not its iterator's does not conform.
+    /// </summary>
+    static void CheckRequirements(
+        NamedTypeSymbol type,
+        NamedTypeSymbol protocol,
+        TypeSubstitution arguments,
+        DiagnosticBag diagnostics
+    ) {
+        if (protocol.SameTypeRequirements.IsEmpty && protocol.ConformanceRequirements.IsEmpty) {
+            return;
+        }
+
+        var throughConformer = AssociatedTypes.ThroughBase(protocol, TypeBinder.OwnConstruction(type));
+        TypeSymbol Read(TypeSymbol written) => throughConformer.Apply(arguments.Apply(written));
+
+        // A generic conformer's own requirements are in force: a wrapper
+        // whose Iter is its S.Iter has S's Element.
+        var equivalence = TypeEquivalence.ForSymbol(type);
+
+        foreach (var (left, right) in protocol.SameTypeRequirements) {
+            var leftType = Read(left);
+            var rightType = Read(right);
+            if (leftType.IsError || rightType.IsError || equivalence.AreSame(leftType, rightType)) {
+                continue;
+            }
+
+            Report(
+                diagnostics,
+                ErrorCode.ERR_DoesNotConform,
+                type,
+                $"'{type.Name}' does not conform to '{protocol.Name}', which requires "
+                + $"'{left.ToDisplayString()} == {right.ToDisplayString()}': here they are "
+                + $"'{leftType.ToDisplayString()}' and '{rightType.ToDisplayString()}'"
+            );
+        }
+
+        foreach (var (subject, constraint) in protocol.ConformanceRequirements) {
+            var subjectType = Read(subject);
+            if (Conversions.Satisfies(subjectType, Read(constraint), equivalence)) {
+                continue;
+            }
+
+            Report(
+                diagnostics,
+                ErrorCode.ERR_DoesNotConform,
+                type,
+                $"'{type.Name}' does not conform to '{protocol.Name}', which requires "
+                + $"'{subject.ToDisplayString()}: {constraint.ToDisplayString()}', and "
+                + $"'{subjectType.ToDisplayString()}' does not conform to '{constraint.ToDisplayString()}'"
+            );
         }
     }
 
@@ -668,6 +774,33 @@ internal static class ConformanceChecker {
             .ToList();
 
         var required = requirement.DeclaredHere($"'{protocol.Name}' requires it here");
+
+        // A growable array is made empty by '[]', the compiler's own, which
+        // meets 'init()'.
+        if (candidates.Count == 0 && requirement is { FunctionKind: FunctionKind.Initializer, Parameters.IsEmpty: true }
+            && type.ExtendedArray is { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink }) {
+            return;
+        }
+
+        // An array's subscript is the compiler's own, by an Int, giving an
+        // element: it meets a requirement asking for that, and nothing else.
+        if (candidates.Count == 0 && requirement.FunctionKind == FunctionKind.Subscript && type.ExtendedArray is { } array) {
+            if (requirement.Parameters is [var position] && !requirement.IsStatic
+                && SubstituteSelf(arguments.Apply(position.Type), protocol, type) is NamedTypeSymbol { TypeKind: TypeKind.Builtin, Name: "Int" }
+                && SubstituteSelf(arguments.Apply(requirement.ReturnType), protocol, type).Equals(array.ElementType)) {
+                return;
+            }
+
+            Report(
+                diagnostics,
+                ErrorCode.ERR_RequirementSignatureMismatch,
+                type,
+                $"an array's subscript takes an 'Int' and gives an element, and '{protocol.Name}' requires '{Describe(requirement)}'",
+                required
+            );
+            return;
+        }
+
         if (candidates.Count == 0) {
             Report(
                 diagnostics,
@@ -687,16 +820,19 @@ internal static class ConformanceChecker {
             }
 
             // A witness has to be visible wherever the conformance is, or the
-            // protocol's promise is one the caller cannot collect on.
-            if (candidate.DeclaredAccessibility < type.DeclaredAccessibility) {
+            // protocol's promise is one the caller cannot collect on. Every
+            // array is everywhere, so an array's conformance is as visible
+            // as the protocol it names.
+            var conformedWhere = type.ExtendedArray is null ? type.DeclaredAccessibility : protocol.DeclaredAccessibility;
+            if (candidate.DeclaredAccessibility < conformedWhere) {
                 Report(
                     diagnostics,
                     ErrorCode.ERR_DoesNotConform,
                     candidate,
-                    $"'{type.Name}.{candidate.Name}' is "
+                    $"'{type.ToDisplayString()}.{candidate.Name}' is "
                     + $"{candidate.DeclaredAccessibility.ToString().ToLowerInvariant()}, but "
-                    + $"'{type.Name}' conforms to '{protocol.Name}' "
-                    + $"{type.DeclaredAccessibility.ToString().ToLowerInvariant()}ly"
+                    + $"'{type.ToDisplayString()}' conforms to '{protocol.Name}' "
+                    + $"{conformedWhere.ToString().ToLowerInvariant()}ly"
                 );
                 return;
             }
@@ -822,13 +958,15 @@ internal static class ConformanceChecker {
 
         TypeSymbol Expected(TypeSymbol type) => rename.Apply(arguments.Apply(SubstituteSelf(type, protocol, conformer)));
 
-        // A default from a protocol's extension writes Self for the
-        // conformer too: 'static fn make(seed: Int) -> Self' meets the
-        // requirement of that signature for whichever type conforms.
+        // A witness from another array extension speaks of its own
+        // parameters, and a default from a protocol's extension writes Self
+        // for the conformer too: 'static fn make(seed: Int) -> Self' meets
+        // the requirement of that signature for whichever type conforms.
+        var view = ArrayWitnessView(candidate, conformer);
         TypeSymbol Actual(TypeSymbol type) =>
             candidate.ContainingSymbol is ExtensionSymbol { ExtendedType: { TypeKind: TypeKind.Protocol } owner }
                 ? SubstituteSelf(type, owner, conformer)
-                : type;
+                : view.Apply(type);
 
         for (var i = 0; i < requirement.Parameters.Length; i++) {
             var expected = Expected(requirement.Parameters[i].Type);
@@ -850,10 +988,33 @@ internal static class ConformanceChecker {
             }
         }
 
+        // An initialiser makes its own type, which a generic one names as its
+        // definition, 'List', where the requirement says Self, 'List<Element>'.
+        if (requirement.FunctionKind == FunctionKind.Initializer && candidate.FunctionKind == FunctionKind.Initializer) {
+            return true;
+        }
+
         var expectedReturn = Expected(requirement.ReturnType);
         return expectedReturn.Equals(Actual(candidate.ReturnType))
             || expectedReturn.IsError
             || candidate.ReturnType.IsError;
+    }
+
+    /// <summary>
+    ///     A witness of an array's conformance declared by another array
+    ///     extension, as the conforming one reads it: the slice's
+    ///     <c>count</c>, say, with the slice extension's Element as this one's.
+    /// </summary>
+    static TypeSubstitution ArrayWitnessView(Symbol witness, NamedTypeSymbol conformer) {
+        var owner = witness.ContainingSymbol switch {
+            ExtensionSymbol extension => extension.ExtendedType,
+            NamedTypeSymbol named => named,
+            _ => null,
+        };
+
+        return conformer.ExtendedArray is { } array && owner is { ExtendedArray: not null } && !ReferenceEquals(owner, conformer)
+            ? Compilation.MatchArray(owner, array) ?? TypeSubstitution.Empty
+            : TypeSubstitution.Empty;
     }
 
     /// <summary>
@@ -871,9 +1032,11 @@ internal static class ConformanceChecker {
     ) {
         // 'Self' is the conforming type as it names itself, which for a
         // generic conformer means with its own parameters applied.
-        var asItself = conformer.TypeParameters.IsEmpty
-            ? conformer
-            : conformer.Construct([..conformer.TypeParameters.Cast<TypeSymbol>()]);
+        // An array extension's Self is the array.
+        TypeSymbol asItself = (TypeSymbol?)conformer.ExtendedArray
+                              ?? (conformer.TypeParameters.IsEmpty
+                                  ? conformer
+                                  : conformer.Construct([..conformer.TypeParameters.Cast<TypeSymbol>()]));
 
         if (type.Equals(protocol)) {
             return asItself;
@@ -883,9 +1046,16 @@ internal static class ConformanceChecker {
             return asItself;
         }
 
+        // Its own associated types, and those of the protocols it refines:
+        // Collection's subscript gives Sequence's Element.
         if (type is TypeParameterSymbol parameter
-            && protocol.AssociatedTypes.Contains(parameter)) {
+            && AssociatedTypes.All(protocol).Contains(parameter)) {
             return ResolveAssociated(conformer, parameter) ?? type;
+        }
+
+        // 'Iter.Element', read through the conformer.
+        if (type is DependentMemberTypeSymbol) {
+            return AssociatedTypes.ThroughBase(protocol, asItself).Apply(type);
         }
 
         return type switch {
@@ -924,7 +1094,9 @@ internal static class ConformanceChecker {
                 continue;
             }
 
-            foreach (var member in current.GetMembers(name)) {
+            // An array's members are every array extension's, this one's among them.
+            var own = current.ArrayMembersNamed is { } arrayMembers ? arrayMembers(name) : current.GetMembers(name);
+            foreach (var member in own) {
                 if (member is FunctionSymbol { IsAbstract: true }) {
                     continue;
                 }

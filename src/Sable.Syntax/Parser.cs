@@ -3308,6 +3308,10 @@ internal sealed class Parser {
                 var baseTypes = At(SyntaxKind.ColonToken) ? ParseBaseTypeList() : null;
                 var equals = TryEatToken(SyntaxKind.EqualsToken);
                 var defaultType = equals is null ? null : ParseType();
+
+                // 'associatedtype Iter: Iterator where Iter.Element == Element':
+                // what the protocol asks of the type beyond its conformances.
+                var whereClause = At(SyntaxKind.WhereKeyword) ? ParseWhereClause() : null;
                 return new AssociatedTypeDeclarationGreen(
                     attributes,
                     modifiers,
@@ -3315,7 +3319,8 @@ internal sealed class Parser {
                     identifier,
                     baseTypes,
                     equals,
-                    defaultType
+                    defaultType,
+                    whereClause
                 );
             }
 

@@ -1,0 +1,92 @@
+module Sable.Core
+
+// The lazy views: '.lazy' on any sequence, and what its transforming
+// methods make. Each view holds the sequence it views and the closure it was
+// given, and does the work as it is gone through, an element at a time, so
+// 'xs.lazy.filter { … }.map { … }' goes through 'xs' once and makes no
+// array. Every view is generic over the one it views, so a chain is
+// monomorphised whole and its loop is one loop.
+
+/// A sequence whose 'map', 'filter' and the rest are views, not arrays.
+public protocol LazySequenceProtocol: Sequence { }
+
+/// A sequence, viewed lazily: what '.lazy' makes.
+///
+/// ```sable
+/// let firstBig = [3, 8, 1, 12].lazy.filter { $0 > 5 }.map { $0 * 10 }.first(where: { $0 > 0 })
+/// assert(firstBig == 80)
+/// ```
+public struct LazySequence<Base: Sequence>: LazySequenceProtocol {
+    let base: Base
+
+    /// The viewed sequence's own iterator.
+    public fn makeIterator() -> Base.Iter {
+        return base.makeIterator()
+    }
+}
+
+extension LazySequenceProtocol {
+    /// The elements, each transformed as it is reached.
+    public fn map<T>(_ transform: @escaping (Element) -> T) -> LazyMapSequence<Self, T> {
+        return LazyMapSequence<Self, T> { base: self, transform: transform }
+    }
+
+    /// The elements for which the closure is true, each tested as it is reached.
+    public fn filter(_ isIncluded: @escaping (Element) -> Bool) -> LazyFilterSequence<Self> {
+        return LazyFilterSequence<Self> { base: self, isIncluded: isIncluded }
+    }
+
+    /// The transformed elements that are not none.
+    public fn compactMap<T>(_ transform: @escaping (Element) -> T?) -> LazyCompactMapSequence<Self, T> {
+        return LazyCompactMapSequence<Self, T> { base: self, transform: transform }
+    }
+
+    /// The elements of the sequence the closure makes of each element, one
+    /// after another.
+    public fn flatMap<S: Sequence>(_ transform: @escaping (Element) -> S) -> LazyFlatMapSequence<Self, S> {
+        return LazyFlatMapSequence<Self, S> { base: self, transform: transform }
+    }
+
+    /// The elements up to the first for which the closure is false.
+    public fn prefix(while predicate: @escaping (Element) -> Bool) -> LazyPrefixWhileSequence<Self> {
+        return LazyPrefixWhileSequence<Self> { base: self, predicate: predicate }
+    }
+
+    /// The elements from the first for which the closure is false.
+    public fn drop(while predicate: @escaping (Element) -> Bool) -> LazyDropWhileSequence<Self> {
+        return LazyDropWhileSequence<Self> { base: self, predicate: predicate }
+    }
+
+    /// Each running result of the closure, applied to the one before and
+    /// the next element, starting from 'initial' (which is not given).
+    ///
+    /// ```sable
+    /// let totals = [1, 2, 3].lazy.scan(0) { $0 + $1 }.toArray()
+    /// assert(totals[2] == 6)
+    /// ```
+    public fn scan<R>(_ initial: R, _ next: @escaping (R, Element) -> R) -> LazyScanSequence<Self, R> {
+        return LazyScanSequence<Self, R> { base: self, initial: initial, next: next }
+    }
+
+    /// Every 'step'-th element, from the first. A step that is not positive
+    /// gives the first element alone.
+    public fn striding(by step: Int) -> LazyStrideSequence<Self> {
+        return LazyStrideSequence<Self> { base: self, step: step }
+    }
+
+    /// The elements, over and over: without end, unless there are none.
+    public fn cycled() -> LazyCycleSequence<Self> {
+        return LazyCycleSequence<Self> { base: self }
+    }
+
+    /// The elements, each handed to the closure as it is reached.
+    public fn inspect(_ body: @escaping (Element) -> Void) -> LazyMapSequence<Self, Element> {
+        return LazyMapSequence<Self, Element> {
+            base: self,
+            transform: { element in
+                body(element)
+                return element
+            }
+        }
+    }
+}

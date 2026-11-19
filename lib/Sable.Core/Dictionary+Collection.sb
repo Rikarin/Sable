@@ -1,0 +1,64 @@
+module Sable.Core
+
+// A dictionary is a sequence of its entries, each key with its value
+// (Dictionary.sb); here it is a collection of them as well, read again by
+// position, and something a sequence of pairs can be collected into.
+
+/// A position of an entry in a dictionary: what its 'startIndex',
+/// 'endIndex' and 'index(after:)' give, and its subscript by position
+/// takes. A dictionary's positions are its own, in the order its keys were
+/// first added; a key added or removed may move them.
+public struct DictionaryIndex: Comparable {
+    // Where the entry is in the dictionary's array of entries.
+    let offset: Int
+
+    public operator == (lhs: DictionaryIndex, rhs: DictionaryIndex) -> Bool {
+        return lhs.offset == rhs.offset
+    }
+
+    public operator < (lhs: DictionaryIndex, rhs: DictionaryIndex) -> Bool {
+        return lhs.offset < rhs.offset
+    }
+}
+
+extension Dictionary: Collection, FromSequence<(Key, Value)> {
+    /// The first entry's position: 'endIndex' when there are none.
+    public var startIndex: DictionaryIndex => DictionaryIndex { offset: liveFrom(0) }
+
+    /// The position past the last entry.
+    public var endIndex: DictionaryIndex => DictionaryIndex { offset: entries.count }
+
+    /// The position of the entry after this one, passing over removed ones.
+    public fn index(after position: DictionaryIndex) -> DictionaryIndex {
+        return DictionaryIndex { offset: liveFrom(position.offset + 1) }
+    }
+
+    /// The entry at a position: its key with its value. A position that is
+    /// not an entry's traps.
+    public subscript(position: DictionaryIndex) -> (Key, Value) {
+        get {
+            precondition(index: position.offset, inBounds: entries.count)
+            let entry = entries[position.offset]!
+            return (entry.key, entry.value)
+        }
+    }
+
+    // The first offset from this one that holds an entry, or the count.
+    fn liveFrom(_ offset: Int) -> Int {
+        var at = offset
+        while at < entries.count && entries[at] == none {
+            at += 1
+        }
+        return at
+    }
+
+    /// A dictionary of the pairs, each key with its value; a key that comes
+    /// again keeps the last value given it.
+    public static fn from<S: Sequence>(_ elements: S) -> [Key: Value] where S.Element == (Key, Value) {
+        var dictionary: [Key: Value] = [:]
+        for (key, value) in elements {
+            dictionary[key] = value
+        }
+        return dictionary
+    }
+}

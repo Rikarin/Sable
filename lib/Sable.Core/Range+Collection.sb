@@ -1,0 +1,52 @@
+module Sable.Core
+
+// A range of integers is a collection of them: a 'for' over one counts and
+// makes no iterator, and this is what generic code sees of it. Its
+// positions are its values, so reading one gives the position back.
+
+/// Gives a range's integers, from its lower bound up.
+public struct RangeIterator: Iterator {
+    var upcoming: Int
+    let end: Int
+
+    /// The next integer, or none at the end.
+    public mutating fn next() -> Int? {
+        if !(upcoming < end) {
+            return none
+        }
+        let value = upcoming
+        upcoming += 1
+        return value
+    }
+}
+
+extension Range: RandomAccessCollection where Bound == Int {
+    /// An iterator from the lower bound.
+    public fn makeIterator() -> RangeIterator {
+        return RangeIterator { upcoming: lowerBound, end: upperBound }
+    }
+
+    /// The first value's position: the lower bound.
+    public var startIndex: Int => lowerBound
+
+    /// The position past the last value: the upper bound, or the lower
+    /// bound when the range is empty, as one the wrong way round is.
+    public var endIndex: Int => isEmpty ? lowerBound : upperBound
+
+    /// The next position.
+    public fn index(after position: Int) -> Int => position + 1
+
+    /// The position before.
+    public fn index(before position: Int) -> Int => position - 1
+
+    /// The position 'distance' on.
+    public fn index(_ position: Int, offsetBy distance: Int) -> Int => position + distance
+
+    /// How far on 'end' is from 'start'.
+    public fn distance(from start: Int, to end: Int) -> Int => end - start
+
+    /// The value at a position, which is the position itself.
+    public subscript(position: Int) -> Int {
+        get => position
+    }
+}

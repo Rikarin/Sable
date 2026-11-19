@@ -1,0 +1,29 @@
+module Sable.Core
+
+/// A collection's elements from the last to the first, read in place: what
+/// 'reversed()' makes. It copies nothing.
+public struct ReversedCollection<Base: BidirectionalCollection>: LazySequenceProtocol {
+    let base: Base
+
+    /// An iterator from the last element.
+    public fn makeIterator() -> ReversedIterator<Base> {
+        return ReversedIterator<Base> { base: base, position: base.endIndex }
+    }
+}
+
+/// Gives a collection's elements backwards.
+public struct ReversedIterator<Base: BidirectionalCollection>: Iterator {
+    let base: Base
+
+    // Just past the next element to give.
+    var position: Base.Index
+
+    /// The element before the last given, or none once the first has been.
+    public mutating fn next() -> Base.Element? {
+        if !(base.startIndex < position) {
+            return none
+        }
+        position = base.index(before: position)
+        return base[position]
+    }
+}

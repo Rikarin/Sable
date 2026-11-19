@@ -150,7 +150,8 @@ ProtocolMember    = { Attribute } { Modifier }
                     | OperatorDecl ) ;
 
 AssociatedTypeDecl = "associatedtype" Identifier [ ":" TypeList ]
-                     [ "=" Type ] NL ;
+                     [ "=" Type ] [ WhereClause ] NL ;
+                     (* the where clause is the protocol's: "where Iter.Element == Element" *)
 
 UnionBody         = "{" { UnionCase } { MemberDecl } "}" ;
 UnionCase         = { Attribute } Identifier [ "(" [ CasePayload ] ")" ]

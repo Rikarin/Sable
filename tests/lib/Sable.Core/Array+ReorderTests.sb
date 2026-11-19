@@ -46,9 +46,9 @@ fn reversePutsTheElementsInTheOppositeOrder() {
 @test
 fn reversedLeavesTheArrayAsItWas() {
     let xs: String[>..] = ["x", "y", "z"]
-    assert(xs.reversed() == ["z", "y", "x"])
+    assert(xs.reversed().toArray() == ["z", "y", "x"])
     assert(xs == ["x", "y", "z"])
-    assert(xs[1...].reversed() == ["z", "y"])
+    assert(xs[1...].reversed().toArray() == ["z", "y"])
 }
 
 @test

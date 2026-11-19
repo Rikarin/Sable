@@ -1,6 +1,7 @@
 module ArrayNumericTests
 
-// The sums and products of arrays of numbers (Sable.Core, Array+Numeric.sb).
+// The sums and products of arrays of numbers: every sequence's, over the
+// numeric protocols (Sable.Core, Sequence+Algorithms.sb).
 // Run with
 //     tools/stdlib-coverage.sh Sable.Core
 

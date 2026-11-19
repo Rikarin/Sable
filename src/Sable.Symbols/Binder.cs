@@ -2060,6 +2060,15 @@ public sealed partial class Binder {
             );
         }
 
+        // 'for _ in xs' still takes each element, in a variable no one names,
+        // as a loop through an iterator does.
+        if (element is null && !sequence.Type.IsError) {
+            var elementType = ElementType();
+            element = new("$element", _containingSymbol, statement.Pattern, false) {
+                TypeResolver = () => elementType
+            };
+        }
+
         return Record(
             statement,
             new BoundForEach(statement, element, sequence, filter, body)
@@ -2143,7 +2152,9 @@ public sealed partial class Binder {
             return null;
         }
 
-        return new(iterator, makeIterator, next, optional.UnderlyingType);
+        // Read through the requirements in force: over S, where S.Element ==
+        // (K, V), an element is the tuple 'for (k, v) in s' takes apart.
+        return new(iterator, makeIterator, next, _conversions.Equivalence.Canonical(optional.UnderlyingType));
     }
 
     /// <summary>A call, with no arguments, to the instance member named on the receiver, as 'receiver.name()' binds.</summary>
@@ -3088,6 +3099,13 @@ public sealed partial class Binder {
     ) {
         substitution ??= TypeSubstitution.Empty;
 
+        // A property and methods of one name, as a collection's 'first' and
+        // 'first(where:)': called, it is the methods; read, the property.
+        if (members.Any(static m => m is FieldSymbol) && members.Any(static m => m is FunctionSymbol)) {
+            var called = syntax.Parent is InvocationExpressionSyntax invocation && ReferenceEquals(invocation.Expression, syntax);
+            members = called ? [..members.OfType<FunctionSymbol>()] : [..members.OfType<FieldSymbol>()];
+        }
+
         // A function is reported once its overload is chosen.
         if (members is [not FunctionSymbol and var used, ..]) {
             ReportUse(used, syntax is MemberAccessExpressionSyntax { Name: var name } ? name : syntax);
@@ -3122,7 +3140,10 @@ public sealed partial class Binder {
 
                 if (receiver is null && !field.IsStatic && containingType is not null) {
                     // An array extension's member, reached from another's: self is this one's array.
-                    var self = containingType.ExtendedArray is not null && EnclosingType() is { } enclosing ? SelfTypeOf(enclosing) : SelfTypeOf(containingType);
+                    // A protocol's, reached from one refining it: self is the refining one's Self.
+                    var self = (containingType.ExtendedArray is not null || containingType.TypeKind == TypeKind.Protocol) && EnclosingType() is { } enclosing
+                        ? SelfTypeOf(enclosing)
+                        : SelfTypeOf(containingType);
                     receiver = new BoundSelfAccess(syntax, self, SelfIsMutable(containingType));
                 }
 
@@ -3221,9 +3242,10 @@ public sealed partial class Binder {
         if (receiver.Type is ReferenceTypeSymbol reference) {
             receiver = new BoundConversion(syntax.Expression, reference.ReferencedType, receiver, ConversionKind.Dereference);
         }
+        // 's.`lazy`' names what 's.lazy' does: the member called 'lazy'.
         var name = syntax.Name switch {
-            IdentifierNameSyntax identifier => identifier.Identifier.Text,
-            GenericNameSyntax generic => generic.Identifier.Text,
+            IdentifierNameSyntax identifier => identifier.Identifier.Value as string ?? identifier.Identifier.Text,
+            GenericNameSyntax generic => generic.Identifier.Value as string ?? generic.Identifier.Text,
             _ => string.Empty,
         };
 
@@ -3498,6 +3520,40 @@ public sealed partial class Binder {
             $"'{member.Name}' is {Visibility.Describe(member, member.DeclaredAccessibility)}"
         );
 
+    /// <summary>
+    ///     Of two methods that fit a call equally well, the one declared
+    ///     closer to the type: on the type (or the array) itself rather than in
+    ///     a protocol's extension, or in a protocol refining the other's.
+    ///     Null when neither is.
+    /// </summary>
+    static FunctionSymbol? MoreSpecific(FunctionSymbol first, FunctionSymbol second) {
+        static NamedTypeSymbol? OwnerOf(FunctionSymbol function) =>
+            function.ContainingSymbol switch {
+                ExtensionSymbol extension => extension.ExtendedType.OriginalDefinition,
+                NamedTypeSymbol type => type.OriginalDefinition,
+                _ => null,
+            };
+
+        if (OwnerOf(first) is not { } a || OwnerOf(second) is not { } b || ReferenceEquals(a, b)) {
+            return null;
+        }
+
+        var aIsProtocol = a.TypeKind == TypeKind.Protocol;
+        var bIsProtocol = b.TypeKind == TypeKind.Protocol;
+        if (aIsProtocol != bIsProtocol) {
+            return aIsProtocol ? second : first;
+        }
+
+        if (!aIsProtocol) {
+            return null;
+        }
+
+        return Refines(a, b) ? first : Refines(b, a) ? second : null;
+
+        static bool Refines(NamedTypeSymbol protocol, NamedTypeSymbol other) =>
+            AssociatedTypes.RefinedProtocols(protocol).Any(p => ReferenceEquals(p, other));
+    }
+
     static FunctionSymbol? RequirementAndDefault(FunctionSymbol first, FunctionSymbol second) {
         static Symbol? Owner(FunctionSymbol f) => f.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : f.ContainingSymbol;
         static bool InExtension(FunctionSymbol f) => f.ContainingSymbol is ExtensionSymbol;
@@ -3617,6 +3673,61 @@ public sealed partial class Binder {
             };
     }
 
+    /// <summary>
+    ///     A lookup's members, with the same-named ones its protocols give that
+    ///     none of them hides: overloads, told apart by their labels. A
+    ///     sequence's 'count' property and its 'count(where:)' are both
+    ///     there, as are a lazy view's 'prefix(while:)' and every sequence's
+    ///     'prefix(_:)'; a member of the type's own, or of a more refined
+    ///     protocol, hides one with the same labels.
+    /// </summary>
+    MemberLookup WithProtocolOverloads(
+        MemberLookup found,
+        IEnumerable<TypeSymbol> bases,
+        string name,
+        TypeSubstitution outer,
+        HashSet<TypeSymbol> visited,
+        TypeSymbol selfType,
+        Func<Symbol, bool>? wanted
+    ) {
+        var members = found.Members.ToList();
+        var substitution = found.Substitution;
+        foreach (var baseType in bases) {
+            if (baseType is not NamedTypeSymbol { TypeKind: TypeKind.Protocol }
+                || LookupMemberCore(baseType, name, outer, visited, selfType, wanted) is not { } inherited) {
+                continue;
+            }
+
+            var added = false;
+            foreach (var member in inherited.Members) {
+                if (!members.Any(own => Hides(own, member))) {
+                    members.Add(member);
+                    added = true;
+                }
+            }
+
+            if (added) {
+                substitution = Combine(substitution, inherited.Substitution);
+            }
+        }
+
+        return members.Count == found.Members.Count ? found : found with { Members = members, Substitution = substitution };
+
+        static bool Hides(Symbol own, Symbol other) =>
+            (own, other) switch {
+                // A concrete method does not hide a generic one of the same labels:
+                // an array's 'append(contentsOf:)' of a slice, and every growable
+                // collection's of any sequence, are both there.
+                (FunctionSymbol a, FunctionSymbol b) => a.IsStatic == b.IsStatic && SameLabels(a, b) && a.TypeParameters.IsEmpty == b.TypeParameters.IsEmpty,
+                (FieldSymbol a, FieldSymbol b) => a.IsStatic == b.IsStatic,
+                _ => false,
+            };
+
+        static bool SameLabels(FunctionSymbol a, FunctionSymbol b) =>
+            a.Parameters.Length == b.Parameters.Length
+            && a.Parameters.Zip(b.Parameters).All(static p => (p.First.Label ?? p.First.Name) == (p.Second.Label ?? p.Second.Name));
+    }
+
     MemberLookup? LookupMember(TypeSymbol type, string name, Func<Symbol, bool>? wanted = null) {
         // After 'where T == Int' a T has Int's members.
         type = _conversions.Equivalence.Canonical(type);
@@ -3662,7 +3773,8 @@ public sealed partial class Binder {
                     // Through a generic parameter they are read through it:
                     // 'b.first()' for B: Bag is a B.Item, not any bag's Item.
                     if (AssociatedTypes.IsAbstract(selfType)
-                        && !AssociatedTypes.IsProtocolSelf(selfType)) {
+                        && !AssociatedTypes.IsProtocolSelf(selfType)
+                        || selfType is ArrayTypeSymbol) {
                         foreach (var associated in AssociatedTypes.All(named)) {
                             map[associated] = AssociatedTypes.Member(selfType, associated);
                         }
@@ -3671,7 +3783,7 @@ public sealed partial class Binder {
                         // parameter, so Tagged<String> binds Item to String.
                         var own = TypeSubstitution.For(conformer);
 
-                        foreach (var associated in named.AssociatedTypes) {
+                        foreach (var associated in AssociatedTypes.All(named)) {
                             if (ConformanceChecker.ResolveAssociated(conformer, associated)
                                 is { } bound) {
                                 map[associated] = own.Apply(bound);
@@ -3701,7 +3813,15 @@ public sealed partial class Binder {
                     }
 
                     if (available.Count > 0) {
-                        return new MemberLookup(available, named, substitution);
+                        return WithProtocolOverloads(
+                            new MemberLookup(available, named, substitution),
+                            named.BaseTypes.Select(substitution.Apply),
+                            name,
+                            substitution,
+                            visited,
+                            selfType,
+                            wanted
+                        );
                     }
 
                     _unmetRequirement = unmet;
@@ -3723,16 +3843,31 @@ public sealed partial class Binder {
 
             // An array's members are its extensions' (Compilation.ArrayExtensions.cs).
             case ArrayTypeSymbol array: {
-                if (_compilation.LookupArrayMember(array, name, _conversions.Equivalence) is not { } found) {
-                    return null;
+                var found = _compilation.LookupArrayMember(array, name, _conversions.Equivalence);
+
+                // What the protocols it conforms to give it as well: '[1,
+                // 2].map(…)' is Sequence's, with Self the array.
+                var protocols = _compilation.ArrayExtensions
+                    .Where(carrier => !carrier.BaseTypes.IsEmpty && Compilation.MatchArray(carrier, array) is not null)
+                    .SelectMany(static carrier => carrier.BaseTypes)
+                    .Where(protocol => protocol is NamedTypeSymbol wanted && Compilation.ArrayConformance(array, wanted, _conversions.Equivalence) is not null)
+                    .ToList();
+
+                if (found is { Owner: { } owner } lookup && lookup.Members.Where(m => wanted is null || wanted(m)).ToList() is { Count: > 0 } kept) {
+                    return WithProtocolOverloads(new MemberLookup(kept, owner, Combine(outer, lookup.Substitution)), protocols, name, outer, visited, selfType, wanted);
                 }
 
-                if (found.Owner is null) {
-                    _unmetRequirement = found.Unmet;
-                    return null;
+                foreach (var protocol in protocols) {
+                    if (LookupMemberCore(protocol, name, outer, visited, selfType, wanted) is { } inherited) {
+                        return WithProtocolOverloads(inherited, protocols, name, outer, visited, selfType, wanted);
+                    }
                 }
 
-                return new MemberLookup(found.Members, found.Owner, Combine(outer, found.Substitution));
+                if (found is { Unmet: { } unmet }) {
+                    _unmetRequirement = unmet;
+                }
+
+                return null;
             }
 
             case TypeParameterSymbol or DependentMemberTypeSymbol:
@@ -3803,9 +3938,10 @@ public sealed partial class Binder {
         ImplicitMemberAccessExpressionSyntax syntax,
         TypeSymbol? expectedType
     ) {
+        // 's.`lazy`' names what 's.lazy' does: the member called 'lazy'.
         var name = syntax.Name switch {
-            IdentifierNameSyntax identifier => identifier.Identifier.Text,
-            GenericNameSyntax generic => generic.Identifier.Text,
+            IdentifierNameSyntax identifier => identifier.Identifier.Value as string ?? identifier.Identifier.Text,
+            GenericNameSyntax generic => generic.Identifier.Value as string ?? generic.Identifier.Text,
             _ => string.Empty,
         };
 
@@ -4888,6 +5024,14 @@ public sealed partial class Binder {
             // to the conforming type's own, or to the default.
             if (RequirementAndDefault(best, candidate) is { } requirement) {
                 best = requirement;
+                continue;
+            }
+
+            // The type's own method beats what a protocol's extension gives
+            // every conformer, and a more refined protocol's beats the one
+            // it refines: an array's 'contains(element:)' is the one for it.
+            if (MoreSpecific(best, candidate) is { } specific) {
+                best = specific;
                 continue;
             }
 

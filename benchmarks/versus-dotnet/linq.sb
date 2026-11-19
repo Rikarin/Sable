@@ -1,0 +1,38 @@
+module Linq
+
+// A lazy filter, map and sum against LINQ's Where, Select and Sum: ten
+// million integers, through the chain five times, each round with its own
+// filter; then the same sum by a hand-written loop, which the chain should
+// match. The output is both sums.
+
+@main
+fn main() {
+    var values: Int[>..] = []
+    var i = 0
+    while i < 10000000 {
+        values.append(i)
+        i = i + 1
+    }
+
+    var chained = 0
+    var round = 0
+    while round < 5 {
+        let modulus = round + 3
+        chained = chained + values.lazy.filter { $0 % modulus != 0 }.map { $0 * 2 }.reduce(0) { $0 + $1 }
+        round = round + 1
+    }
+
+    var looped = 0
+    round = 0
+    while round < 5 {
+        let modulus = round + 3
+        for value in values {
+            if value % modulus != 0 {
+                looped = looped + value * 2
+            }
+        }
+        round = round + 1
+    }
+
+    print("\(chained) \(looped)")
+}

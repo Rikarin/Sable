@@ -88,3 +88,11 @@ public class PriorityQueue<Element: Comparable> {
         return result
     }
 }
+
+extension PriorityQueue: Sequence {
+    /// An iterator over the elements in no particular order: not the order
+    /// they come out in, which 'sortedElements()' gives.
+    public fn makeIterator() -> ArrayIterator<Element> {
+        return items.makeIterator()
+    }
+}

@@ -29,7 +29,6 @@ lib/Sable.Core/PartialRangeThrough.sb              0  70   # raise me: no tests 
 lib/Sable.Core/PartialRangeUpTo.sb                 0  70   # raise me: no tests yet
 lib/Sable.Core/Range.sb                            0  70   # raise me: no tests yet
 lib/Sable.Core/Runtime.sb                          0   0   # raise me: no tests yet
-lib/Sable.Core/Stride.sb                           0   0   # raise me: no tests yet
 lib/Sable.Core/TypeInfo.sb                         0   0   # raise me: no tests yet
 lib/Sable.Diagnostics/Field.sb                     0  70   # raise me: no tests yet
 lib/Sable.Diagnostics/Level.sb                     0   0   # raise me: no tests yet
@@ -69,3 +68,6 @@ lib/Sable.Time/Clock.sb                            0  70   # raise me: no tests 
 lib/Sable.Time/DateTime.sb                         0   0   # raise me: no tests yet
 lib/Sable.Time/Duration.sb                         0   0   # raise me: no tests yet
 lib/Sable.Time/Instant.sb                          0  70   # raise me: no tests yet
+
+# Under the default for a reason the tests cannot change.
+lib/Sable.Core/Array+Collection.sb                75  70   # T[>..<].from is unreachable beside T[>..].from: both lower to [T], so a program using both has one instance, the first

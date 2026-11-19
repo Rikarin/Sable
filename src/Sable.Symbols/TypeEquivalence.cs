@@ -24,12 +24,31 @@ public readonly record struct ConformanceRequirement(TypeSymbol Subject, TypeSym
 ///     member was named first. <see cref="Canonical" /> rewrites a type to use
 ///     representatives throughout, so two types are interchangeable exactly
 ///     when their canonical forms are equal.
+///     <para>
+///         A protocol's own requirements hold wherever it constrains a type:
+///         <c>protocol Sequence { associatedtype Iter: Iterator where Iter.Element == Element }</c>
+///         makes an <c>S.Iter.Element</c> an <c>S.Element</c> for every
+///         <c>S: Sequence</c>. There may be no end to those (a protocol may
+///         constrain an associated type by itself: <c>S.Slice.Slice…</c>), so
+///         they are read in as types are met: the first time a type is read
+///         through, its protocols' requirements are added, read through it.
+///     </para>
 /// </remarks>
 internal sealed class TypeEquivalence {
-    public static readonly TypeEquivalence Empty = new([], []);
+    /// <summary>No requirements of a declaration's own: only what its types' protocols bring.</summary>
+    /// <remarks>A new one each time, since what the protocols bring is read in as it is met.</remarks>
+    public static TypeEquivalence Empty => new([], []);
 
     readonly Dictionary<TypeSymbol, TypeSymbol> _parent = [];
     readonly List<ConformanceRequirement> _conformances;
+
+    // The generic types whose protocols' requirements have been read in.
+    readonly HashSet<TypeSymbol> _expanded = [];
+
+    // How deep reading in has gone: what one protocol brings in may be read
+    // through in turn, and a recursive constraint would go on for ever.
+    int _expanding;
+    const int MaxExpansionDepth = 8;
 
     TypeEquivalence(IEnumerable<SameTypeRequirement> requirements, List<ConformanceRequirement> conformances) {
         foreach (var (left, right) in requirements) {
@@ -45,29 +64,24 @@ internal sealed class TypeEquivalence {
     public static TypeEquivalence For(
         IEnumerable<SameTypeRequirement> requirements,
         IEnumerable<ConformanceRequirement> conformances
-    ) {
-        var sameTypes = requirements.ToList();
-        var extra = conformances.ToList();
-        return sameTypes.Count == 0 && extra.Count == 0 ? Empty : new TypeEquivalence(sameTypes, extra);
-    }
+    ) =>
+        new(requirements, conformances.ToList());
 
     /// <summary>The requirements in force inside a symbol, of both kinds.</summary>
     public static TypeEquivalence ForSymbol(Symbol? symbol) =>
         For(RequirementsOf(symbol), ConformanceRequirementsOf(symbol));
-
-    /// <summary>True when the same-type requirements say nothing.</summary>
-    public bool IsEmpty => _parent.Count == 0;
 
     /// <summary>
     ///     What a <c>where</c> clause adds to a type's constraints:
     ///     <c>where C.Item: Comparable</c> makes a <c>C.Item</c> comparable.
     /// </summary>
     public IEnumerable<TypeSymbol> ExtraConstraints(TypeSymbol type) {
+        // Reading it brings in what its base's protocols require of it.
+        var canonical = Canonical(type);
         if (_conformances.Count == 0) {
             return [];
         }
 
-        var canonical = Canonical(type);
         return _conformances
             .Where(r => Canonical(r.Subject).Equals(canonical))
             .Select(static r => r.Constraint);
@@ -132,18 +146,137 @@ internal sealed class TypeEquivalence {
             return;
         }
 
-        // A concrete type wins, so the class reads as that type.
-        if (AssociatedTypes.IsAbstract(a) && !AssociatedTypes.IsAbstract(b)) {
+        // A concrete type wins, so the class reads as that type; of two
+        // generic ones the shorter, so an S.Iter.Element reads as S.Element.
+        var aAbstract = AssociatedTypes.IsAbstract(a);
+        var bAbstract = AssociatedTypes.IsAbstract(b);
+        if (aAbstract && (!bAbstract || Depth(b) < Depth(a))) {
             _parent[a] = b;
         } else {
             _parent[b] = a;
         }
     }
 
+    /// <summary>How many associated types a type is read through: S is 0, S.Iter.Element 2.</summary>
+    static int Depth(TypeSymbol type) =>
+        type is DependentMemberTypeSymbol member ? 1 + Depth(member.BaseType) : 0;
+
+    /// <summary>
+    ///     True when no requirement could make the type another: it mentions
+    ///     no associated type, read through a parameter or named inside its
+    ///     protocol.
+    /// </summary>
+    static bool MentionsNoAssociatedType(TypeSymbol type) =>
+        type switch {
+            DependentMemberTypeSymbol => false,
+            TypeParameterSymbol parameter => parameter.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Protocol },
+            NamedTypeSymbol named => named.TypeArguments.All(MentionsNoAssociatedType),
+            OptionalTypeSymbol optional => MentionsNoAssociatedType(optional.UnderlyingType),
+            ArrayTypeSymbol array => MentionsNoAssociatedType(array.ElementType),
+            TupleTypeSymbol tuple => tuple.ElementTypes.All(MentionsNoAssociatedType),
+            FunctionTypeSymbol function => function.ParameterTypes.All(MentionsNoAssociatedType) && MentionsNoAssociatedType(function.ReturnType),
+            ReferenceTypeSymbol reference => MentionsNoAssociatedType(reference.ReferencedType),
+            MetatypeTypeSymbol metatype => MentionsNoAssociatedType(metatype.InstanceType),
+            _ => true,
+        };
+
+    /// <summary>
+    ///     Reads in the requirements of the protocols a generic type is
+    ///     constrained to, read through it: for <c>S: Sequence</c>, that
+    ///     <c>S.Iter.Element == S.Element</c>. Inside a protocol or an
+    ///     extension of one, its associated types are its <c>Self</c>'s, so
+    ///     its requirements hold of them as written.
+    /// </summary>
+    void Expand(TypeSymbol type) {
+        if (_expanding >= MaxExpansionDepth || !_expanded.Add(type)) {
+            return;
+        }
+
+        _expanding++;
+        try {
+            ImmutableArray<TypeSymbol> constraints;
+            if (type is TypeParameterSymbol { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } owner } parameter) {
+                if (ReferenceEquals(owner.SelfTypeParameter, parameter)) {
+                    // Self is whatever conforms to the protocol.
+                    constraints = [owner];
+                } else {
+                    // 'Iter', inside Sequence, is Self.Iter.
+                    if (owner.SelfTypeParameter is { } self) {
+                        Expand(self);
+                    }
+
+                    constraints = parameter.Constraints;
+                }
+            } else {
+                constraints = AssociatedTypes.ConstraintsOf(type);
+            }
+
+            // And what a 'where' clause around says of it: in 'extension
+            // Sequence where Element: Sequence', an Element's Iter.Element
+            // is its Element.Element.
+            constraints = [..constraints, .._conformances.Where(r => r.Subject.Equals(type)).Select(static r => r.Constraint)];
+
+            foreach (var constraint in constraints) {
+                foreach (var part in CompositionTypeSymbol.PartsOf(constraint)) {
+                    if (part is NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+                        ReadIn(protocol, type);
+                    }
+                }
+            }
+        } finally {
+            _expanding--;
+        }
+    }
+
+    /// <summary>A protocol's requirements, and those of every protocol it refines, read through a type.</summary>
+    void ReadIn(NamedTypeSymbol protocol, TypeSymbol through) {
+        var seen = new HashSet<NamedTypeSymbol>();
+        var pending = new Stack<NamedTypeSymbol>();
+        pending.Push(protocol);
+
+        while (pending.Count > 0) {
+            var current = pending.Pop();
+            var definition = current.OriginalDefinition;
+            if (!seen.Add(definition)) {
+                continue;
+            }
+
+            // 'Source<Int>' says what Source's own parameters are, too.
+            var arguments = TypeSubstitution.For(current);
+            var throughBase = AssociatedTypes.ThroughBase(definition, through);
+            TypeSymbol Read(TypeSymbol written) => throughBase.Apply(arguments.Apply(written));
+
+            foreach (var refined in definition.BaseTypes) {
+                if (arguments.Apply(refined) is NamedTypeSymbol { TypeKind: TypeKind.Protocol } parent) {
+                    pending.Push(parent);
+                }
+            }
+
+            foreach (var (left, right) in definition.SameTypeRequirements) {
+                Union(Read(left), Read(right));
+            }
+
+            foreach (var (subject, constraint) in definition.ConformanceRequirements) {
+                _conformances.Add(new(Read(subject), Read(constraint)));
+            }
+        }
+    }
+
     /// <summary>The type with every part replaced by its class's representative.</summary>
     public TypeSymbol Canonical(TypeSymbol type) {
-        if (IsEmpty) {
+        if (_parent.Count == 0 && MentionsNoAssociatedType(type)) {
             return type;
+        }
+
+        // What its protocols require of a generic type holds once it is met.
+        switch (type) {
+            case DependentMemberTypeSymbol member:
+                Expand(member.BaseType);
+                break;
+
+            case TypeParameterSymbol:
+                Expand(type);
+                break;
         }
 
         var rewritten = type switch {

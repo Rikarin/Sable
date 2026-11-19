@@ -1,0 +1,38 @@
+module Sable.Core
+
+/// The elements of the sequences a closure makes of each of a sequence's
+/// elements, one after another: what '.lazy.flatMap' makes.
+public struct LazyFlatMapSequence<Base: Sequence, Inner: Sequence>: LazySequenceProtocol {
+    let base: Base
+    let transform: (Base.Element) -> Inner
+
+    /// An iterator from the first inner element.
+    public fn makeIterator() -> LazyFlatMapIterator<Base.Iter, Inner> {
+        return LazyFlatMapIterator<Base.Iter, Inner> { base: base.makeIterator(), transform: transform, inner: none }
+    }
+}
+
+/// Gives the elements of the sequences a closure makes, one after another.
+public struct LazyFlatMapIterator<Base: Iterator, Inner: Sequence>: Iterator {
+    var base: Base
+    let transform: (Base.Element) -> Inner
+    var inner: Inner.Iter?
+
+    /// The next inner element, going on to the next outer one as each inner
+    /// sequence runs out; none past the last.
+    public mutating fn next() -> Inner.Element? {
+        while true {
+            if var current = inner {
+                if let element = current.next() {
+                    inner = current
+                    return element
+                }
+                inner = none
+            }
+            guard let outer = base.next() else {
+                return none
+            }
+            inner = transform(outer).makeIterator()
+        }
+    }
+}

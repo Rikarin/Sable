@@ -392,6 +392,19 @@ public protocol Drawable where Self: Sized {
 }
 ```
 
+An associated type may carry a `where` clause, which is the protocol's: it
+holds of every conformer, and wherever the protocol constrains a type. Here
+an `S.Iter.Element` is an `S.Element` for every `S: Sequence`, and a
+conformer that names only its iterator has that iterator's elements:
+
+```sable
+public protocol Sequence {
+    associatedtype Element
+    associatedtype Iter: Iterator where Iter.Element == Element
+    fn makeIterator() -> Iter
+}
+```
+
 ### Conformance
 
 ```sable

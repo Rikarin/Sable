@@ -98,3 +98,10 @@ public class OrderedDictionary<Key: Hashable, Value> {
         positions.removeAll()
     }
 }
+
+extension OrderedDictionary: Sequence {
+    /// An iterator over the entries, each key with its value, in order.
+    public fn makeIterator() -> Zip2Iterator<ArrayIterator<Key>, ArrayIterator<Value>> {
+        return zip(orderedKeys, orderedValues).makeIterator()
+    }
+}

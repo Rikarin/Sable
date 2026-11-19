@@ -112,3 +112,15 @@ fn manyKeysStayInOrder() {
     assertEqual(dictionary.key(at: 1), 7)
     assertEqual(dictionary.get(14) ?? -1, 2)
 }
+
+@test
+fn anOrderedDictionaryIsGoneThroughInOrder() {
+    let ages = OrderedDictionary<String, Int>()
+    ages.set("b", 2)
+    ages.set("a", 1)
+    var seen: String[>..] = []
+    for (key, value) in ages {
+        seen.append("\(key)=\(value)")
+    }
+    assertEqualText(seen.joined(separator: ","), "b=2,a=1")
+}

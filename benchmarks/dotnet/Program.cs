@@ -23,6 +23,7 @@ var benchmarks = new Dictionary<string, Func<string>> {
     ["string"] = Strings,
     ["text-search"] = TextSearch,
     ["utf8-validate"] = Utf8Validate,
+    ["linq"] = Linq,
 };
 
 if (args.Length == 0 || !benchmarks.TryGetValue(args[0], out var run)) {
@@ -151,6 +152,33 @@ static string List() {
         }
 
         return total.ToString();
+    }
+}
+
+static string Linq() {
+    checked {
+        var values = new List<long>();
+        for (long i = 0; i < 10000000; i++) {
+            values.Add(i);
+        }
+
+        long chained = 0;
+        for (long round = 0; round < 5; round++) {
+            var modulus = round + 3;
+            chained += values.Where(v => v % modulus != 0).Select(v => v * 2).Sum();
+        }
+
+        long looped = 0;
+        for (long round = 0; round < 5; round++) {
+            var modulus = round + 3;
+            foreach (var value in values) {
+                if (value % modulus != 0) {
+                    looped += value * 2;
+                }
+            }
+        }
+
+        return $"{chained} {looped}";
     }
 }
 

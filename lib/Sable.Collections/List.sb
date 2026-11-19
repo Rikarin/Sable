@@ -289,7 +289,33 @@ extension List where Element: Comparable {
     }
 }
 
-extension List: Sequence { }
+// A list is a random-access collection whose elements can be replaced in
+// place, and that grows and shrinks: what generic code over those
+// protocols sees of it. Its positions are its offsets, from 0.
+extension List: RandomAccessCollection, MutableCollection, RangeReplaceableCollection {
+    /// The first element's position: 0.
+    public var startIndex: Int => 0
+
+    /// The position past the last element: the count.
+    public var endIndex: Int => storage.count
+
+    /// The next position.
+    public fn index(after position: Int) -> Int => position + 1
+
+    /// The position before.
+    public fn index(before position: Int) -> Int => position - 1
+
+    /// The position 'distance' on.
+    public fn index(_ position: Int, offsetBy distance: Int) -> Int => position + distance
+
+    /// How far on 'end' is from 'start'.
+    public fn distance(from start: Int, to end: Int) -> Int => end - start
+
+    /// Takes out every element: 'removeAll()', by the name arrays give it.
+    public mutating fn clear() {
+        storage.clear()
+    }
+}
 
 /// The elements of a list, first to last: a view of them taken when it
 /// was made, which later changes to the list do not touch.

@@ -36,3 +36,11 @@ public class Stack<Element> {
         return items[items.count - 1]
     }
 }
+
+extension Stack: Sequence {
+    /// An iterator over the elements from the top down: the order 'pop'
+    /// would give them, leaving the stack as it is.
+    public fn makeIterator() -> ReversedIterator<Element[>..]> {
+        return items.reversed().makeIterator()
+    }
+}

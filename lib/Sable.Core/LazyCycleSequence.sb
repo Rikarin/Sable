@@ -1,0 +1,29 @@
+module Sable.Core
+
+/// A sequence's elements, over and over: what '.lazy.cycled()' makes. It
+/// goes through the sequence again from its first element each time, so
+/// it never ends unless the sequence is empty.
+public struct LazyCycleSequence<Base: Sequence>: LazySequenceProtocol {
+    let base: Base
+
+    /// An iterator from the first element.
+    public fn makeIterator() -> LazyCycleIterator<Base> {
+        return LazyCycleIterator<Base> { base: base, current: base.makeIterator() }
+    }
+}
+
+/// Gives a sequence's elements, starting again as each pass ends.
+public struct LazyCycleIterator<Base: Sequence>: Iterator {
+    let base: Base
+    var current: Base.Iter
+
+    /// The next element, from the start again past the last; none only
+    /// when the sequence has none.
+    public mutating fn next() -> Base.Element? {
+        if let element = current.next() {
+            return element
+        }
+        current = base.makeIterator()
+        return current.next()
+    }
+}

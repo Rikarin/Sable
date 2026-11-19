@@ -33,3 +33,11 @@ public class Queue<Element> {
         return outgoing.removeLast()
     }
 }
+
+extension Queue: Sequence {
+    /// An iterator over the elements from the front to the back: the order
+    /// 'dequeue' would give them, leaving the queue as it is.
+    public fn makeIterator() -> ChainIterator<ReversedIterator<Element[>..]>, ArrayIterator<Element>> {
+        return outgoing.reversed().chained(with: incoming).makeIterator()
+    }
+}

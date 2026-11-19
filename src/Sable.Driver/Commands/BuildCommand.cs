@@ -15,7 +15,7 @@ public class BuildCommand : Command {
 
     public override string Usage => """
         usage: sable build [--release] [--features <a,b>] [-p <package>] [--bin <name>]
-               sable build <file.sb> [-o <output>] [--emit sil|llvm-ir|obj|staticlib|dylib] [-O0] [-g] [--exclusivity=checked|unchecked]
+               sable build <file.sb> [-o <output>] [--emit sil|llvm-ir|obj|staticlib|dylib] [-O0|-O1|-O2|-O3|-Os|-Oz] [-g] [--exclusivity=checked|unchecked]
                                      [--target <triple>] [--sysroot <dir>] [--deny-reflection] [--vectorize-report]
 
         Without a file, builds the package in this directory or the nearest above it (sable.toml).
@@ -33,8 +33,10 @@ public class BuildCommand : Command {
           --emit dylib       the same as a shared library (libname.dylib, libname.so, name.dll)
           --vectorize-report say, for each loop by its place in the source, whether LLVM's loop
                              vectoriser vectorised it in an optimised build, and if not, why not
-          -O0                build without LLVM's optimiser
-          -g                 build with debug information, for lldb
+          -O0 ... -O3        the optimisation level, clang's and the SIL passes' (default -O2);
+          -Os, -Oz           -Os and -Oz optimise for size
+          -g                 build with debug information, for lldb: at -O0 unless a level is given,
+                             so that every variable is where the debugger looks
           --exclusivity=...  keep the dynamic exclusivity checks, or drop them; by default
                              kept in a debug or -O0 build, dropped in an optimised one
           --target <triple>  build for another machine: aarch64-unknown-linux-gnu, x86_64-apple-darwin,
@@ -45,7 +47,9 @@ public class BuildCommand : Command {
         """;
 
     /// <summary>What the command line asked for.</summary>
-    protected sealed record Options(string Input, string? Output, string? Emit, bool Optimise, bool Debug, bool? Exclusivity, IReadOnlyList<string> ProgramArguments) {
+    protected sealed record Options(string Input, string? Output, string? Emit, string OptLevel, bool Debug, bool? Exclusivity, IReadOnlyList<string> ProgramArguments) {
+        public bool Optimise => OptLevel != "0";
+
         /// <summary>What to build for: null for this machine.</summary>
         public NativeTarget? Target { get; init; }
 
@@ -55,7 +59,7 @@ public class BuildCommand : Command {
         public bool DenyReflection { get; init; }
 
         /// <summary>What clang is asked for.</summary>
-        public NativeOptions Native => NativeOptions.Of(Optimise, Debug) with { Target = Target, Sysroot = Sysroot };
+        public NativeOptions Native => new() { OptLevel = OptLevel, DebugInfo = Debug, Target = Target, Sysroot = Sysroot };
     }
 
     protected virtual bool TakesProgramArguments => false;
@@ -64,7 +68,7 @@ public class BuildCommand : Command {
         string? input = null;
         string? output = null;
         string? emit = null;
-        var optimise = true;
+        string? level = null;
         var debug = false;
         bool? exclusivity = null;
         string? triple = null;
@@ -84,7 +88,7 @@ public class BuildCommand : Command {
                 case "--target" when i + 1 < args.Count: triple = args[++i]; break;
                 case "--sysroot" when i + 1 < args.Count: sysroot = args[++i]; break;
                 case "--deny-reflection": denyReflection = true; break;
-                case "-O0": optimise = false; break;
+                case "-O0" or "-O1" or "-O2" or "-O3" or "-Os" or "-Oz": level = args[i][2..]; break;
                 case "-g": debug = true; break;
                 case "--vectorize-report" when !TakesProgramArguments: emit = "vectorize-report"; break;
                 case "--exclusivity=checked": exclusivity = true; break;
@@ -109,7 +113,11 @@ public class BuildCommand : Command {
             return null;
         }
 
-        return new(input, output, emit, optimise, debug, exclusivity, arguments) { Target = target, Sysroot = sysroot, DenyReflection = denyReflection };
+        // A debug build is unoptimised unless it asks for a level: then the
+        // passes run, and the debugger sees what they leave. A vectorisation
+        // report is of the optimised build.
+        level ??= debug && emit != "vectorize-report" ? "0" : "2";
+        return new(input, output, emit, level, debug, exclusivity, arguments) { Target = target, Sysroot = sysroot, DenyReflection = denyReflection };
     }
 
     public override int Run(IReadOnlyList<string> arguments) {
@@ -155,7 +163,8 @@ public class BuildCommand : Command {
             options.Debug || report ? Path.GetDirectoryName(Path.GetFullPath(options.Input)) : null,
             options.Exclusivity ?? ((options.Debug && !report) || !options.Optimise),
             target: target,
-            optimised: options.Optimise && (!options.Debug || report),
+            optimised: options.Optimise,
+            optLevel: options.OptLevel,
             library: LibraryKindOf(options.Emit) is not null,
             denyReflection: options.DenyReflection
         );
@@ -185,7 +194,7 @@ public class BuildCommand : Command {
         }
 
         if (report) {
-            var remarks = NativeBuild.Remarks(result.LlvmIr!, options.Native with { OptLevel = options.Optimise ? "2" : "0", DebugInfo = false }, VectorizationReport.Flags);
+            var remarks = NativeBuild.Remarks(result.LlvmIr!, options.Native with { DebugInfo = false }, VectorizationReport.Flags);
             if (!remarks.Succeeded) {
                 Console.Error.WriteLine($"internal error: compiling for {target.Triple} failed:");
                 Console.Error.Write(remarks.Output);
@@ -255,7 +264,7 @@ public sealed class RunCommand : BuildCommand {
 
     public override string Usage => """
         usage: sable run [--release] [--features <a,b>] [-p <package>] [--bin <name>] [-- <arguments>]
-               sable run <file.sb> [-O0] [-g] [--exclusivity=checked|unchecked] [-- <arguments>]
+               sable run <file.sb> [-O0|-O1|-O2|-O3|-Os|-Oz] [-g] [--exclusivity=checked|unchecked] [-- <arguments>]
 
         Without a file, builds and runs the package's binary (see 'sable build --help').
 

@@ -16,27 +16,31 @@ public struct Profile {
     var optSize: OptSize?
     var strip: Strip?
     var rpath: Bool?
+    var debugAssertions: Bool?
+    var incremental: Bool?
 
     /// `sable build --release`. `optSize` optimises for size, in place of
     /// `optLevel`'s speed.
     public static fn release(optLevel: Int? = none, debug: Bool? = none, lto: Lto? = none, codegenUnits: Int? = none, panic: Panic? = none,
         arcChecks: Bool? = none, exclusivity: Exclusivity? = none, overflowChecks: Bool? = none,
-        leakCheck: Bool? = none, optSize: OptSize? = none, strip: Strip? = none, rpath: Bool? = none) -> Profile {
+        leakCheck: Bool? = none, optSize: OptSize? = none, strip: Strip? = none, rpath: Bool? = none,
+        debugAssertions: Bool? = none, incremental: Bool? = none) -> Profile {
         return Profile {
             name: "release", optLevel: optLevel, debug: debug, lto: lto, codegenUnits: codegenUnits, panic: panic,
             arcChecks: arcChecks, exclusivity: exclusivity, overflowChecks: overflowChecks, leakCheck: leakCheck,
-            optSize: optSize, strip: strip, rpath: rpath,
+            optSize: optSize, strip: strip, rpath: rpath, debugAssertions: debugAssertions, incremental: incremental,
         }
     }
 
     /// Every other build.
     public static fn dev(optLevel: Int? = none, debug: Bool? = none, lto: Lto? = none, codegenUnits: Int? = none, panic: Panic? = none,
         arcChecks: Bool? = none, exclusivity: Exclusivity? = none, overflowChecks: Bool? = none,
-        leakCheck: Bool? = none, optSize: OptSize? = none, strip: Strip? = none, rpath: Bool? = none) -> Profile {
+        leakCheck: Bool? = none, optSize: OptSize? = none, strip: Strip? = none, rpath: Bool? = none,
+        debugAssertions: Bool? = none, incremental: Bool? = none) -> Profile {
         return Profile {
             name: "dev", optLevel: optLevel, debug: debug, lto: lto, codegenUnits: codegenUnits, panic: panic,
             arcChecks: arcChecks, exclusivity: exclusivity, overflowChecks: overflowChecks, leakCheck: leakCheck,
-            optSize: optSize, strip: strip, rpath: rpath,
+            optSize: optSize, strip: strip, rpath: rpath, debugAssertions: debugAssertions, incremental: incremental,
         }
     }
 }

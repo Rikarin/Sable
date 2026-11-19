@@ -1459,22 +1459,27 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
   `[[bin]]`, the three dependency tables, `[features]`, `[profile.dev]` and
   `[profile.release]`, `[workspace]`, `[build]`, `[registry] path` — and
   every validation error names the file, the line and the key. Profiles act
-  on `opt-level` (clang's `-O0` to `-O3`, `-Os`, `-Oz`), `debug` (at any
+  on `opt-level` (clang's `-O0` to `-O3`, `-Os`, `-Oz`, and the SIL passes
+  of that level: docs/05 §5.2.11), `debug` (at any
   level: an optimised build with debug information runs the SIL passes and
   keeps the entry point out of the C `main`, so the program's functions keep
   theirs), `lto` (`fat`, `thin` or off; on Linux through lld, used when clang
   can link with it), `codegen-units = 1` (compile whole even in an
-  unoptimised debug build), `strip`, `rpath`, `exclusivity`, `leak-check`
-  (`sable run` sets `SABLE_CHECK_LEAKS`) and `overflow-checks = false`
+  unoptimised debug build), `incremental = false` (the same),
+  `strip`, `rpath`, `exclusivity`, `leak-check`
+  (`sable run` sets `SABLE_CHECK_LEAKS`), `arc-checks` (compiled code's
+  retains and releases trap on an object whose deinit has run),
+  `debug-assertions` (`DEBUG` or `RELEASE` for `#if` in every package's
+  files, whatever the opt-level) and `overflow-checks = false`
   (integer `+`, `-`, `*`, negation, `abs` and `as` wrap rather than trap:
   SIL has `wrapping_` forms of them, which the interpreter, the emitter and
   constant folding read as written; division by zero, shifts out of range
   and an overflowing `const` are still errors). `package.sb` sets all of
   them, `optSize: .size` or `.minSize` for `-Os` and `-Oz`. A build prints
   the warnings of the profile it uses: `panic = "unwind"` (a trap always
-  aborts) and `arc-checks` (there are no optional ARC checks: the one
-  reference-count check, an object outliving its deinit, guards memory
-  safety and stays) have no effect.
+  aborts), a `codegen-units` count other than 1 (the units are the
+  packages), and what the target cannot do (`lto` written where the link
+  takes no bitcode, `strip` and `rpath` on Windows) have no effect.
 - **Packages of many files.** A package is every `.sb` under `src/`:
   `src/main.sb` (or `[[bin]]`, or `src/bin/*.sb`) is a binary's entry, the
   rest is the library. A binary is compiled with its package's library and
@@ -1861,6 +1866,13 @@ loaded in any test.
 
 `sable build -g` (and `sable debug`) builds at `-O0` with the SIL passes off,
 so every local stays in its slot (`src/Sable.CodeGen/LlvmEmitter.Debug.cs`).
+With a level as well (`sable build -g -O2`, or a profile with `debug = true`
+and an `opt-level` above 0) the build is optimised with debug information:
+the opt-level's SIL passes run, the inliner giving what it copies the call's
+place, and the debugger sees what they and LLVM leave — a frame LLVM inlined
+is still named, with its arguments. `ProfileTests` holds the DWARF at
+`-O1` to `-O3` and `-Os` to Apple's `dwarfdump --verify` (LLVM's
+`llvm-dwarfdump` on Linux, when installed) and lldb to the frames.
 Every function has a `DISubprogram` named by its full Sable name —
 `Demo.Point.length`, `Demo.main$closure0` — with no linkage name: the symbol
 is the same name behind `sable.`, nothing to demangle, and `b Demo.describe`

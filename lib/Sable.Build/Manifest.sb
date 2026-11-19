@@ -229,6 +229,12 @@ struct TomlWriter {
         if let rpath = profile.rpath {
             raw("rpath", rpath ? "true" : "false")
         }
+        if let assertions = profile.debugAssertions {
+            raw("debug-assertions", assertions ? "true" : "false")
+        }
+        if let incremental = profile.incremental {
+            raw("incremental", incremental ? "true" : "false")
+        }
     }
 
     fn text() -> String {

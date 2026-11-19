@@ -1322,7 +1322,8 @@ parameters or locals. `Platform.os`, `Platform.arch` and
 `Platform.pointerWidth` are the target's, as constants.
 
 `DEBUG` is defined in an unoptimised build (and by `sable check`), `RELEASE` in
-an optimised one; never both.
+an optimised one; never both. A package's profile may choose with
+`debug-assertions` (docs/05 §5.2.11), whatever its `opt-level`.
 
 ---
 

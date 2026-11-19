@@ -58,7 +58,7 @@ public sealed class SableManifestTests {
                                          version: "1.0.0",
                                          profiles: [
                                              .release(optLevel: 3, overflowChecks: false, optSize: .minSize, strip: .symbols, rpath: true),
-                                             .dev(optSize: .size, strip: .debuginfo),
+                                             .dev(arcChecks: false, optSize: .size, strip: .debuginfo, debugAssertions: false, incremental: false),
                                          ],
                                      }
                                      """);
@@ -71,6 +71,10 @@ public sealed class SableManifestTests {
         Assert.Equal(StripMode.DebugInfo, manifest.Dev.Strip);
         Assert.False(manifest.Dev.Rpath);
         Assert.True(manifest.Dev.OverflowChecks);
+        Assert.False(manifest.Dev.ArcChecks);
+        Assert.False(manifest.Dev.DebugAssertions);
+        Assert.False(manifest.Dev.Incremental);
+        Assert.True(manifest.Release.Incremental);
     }
 
     [Fact]

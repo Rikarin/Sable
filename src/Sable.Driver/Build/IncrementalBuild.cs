@@ -81,6 +81,28 @@ public sealed record BuildSettings(string Profile, bool Optimise, string? DebugD
 
     /// <summary>Built without reflection (docs/06 §6.1): <c>Mirror</c> and <c>TypeInfo</c> are refused, and field descriptors have no names.</summary>
     public bool DenyReflection { get; init; }
+
+    /// <summary>A profile's <c>arc-checks</c>: compiled code's retains and releases trap on an object whose deinit has run.</summary>
+    public bool ArcChecks { get; init; }
+
+    /// <summary>
+    ///     Whether the program's files and the library's are parsed with
+    ///     <c>DEBUG</c> defined rather than <c>RELEASE</c> (SYNTAX.md §21): a
+    ///     profile's <c>debug-assertions</c>, or else an unoptimised build.
+    /// </summary>
+    public bool DebugAssertions {
+        get => _debugAssertions ?? !Optimise;
+        init => _debugAssertions = value;
+    }
+
+    readonly bool? _debugAssertions;
+
+    /// <summary>
+    ///     The opt-level whose SIL passes run (<see cref="SilPassManager.ForLevel" />):
+    ///     the profile's, or <c>2</c> for an optimised build whose native
+    ///     options do not say, and <c>0</c> for an unoptimised one.
+    /// </summary>
+    public string SilLevel => !Optimise ? "0" : Native.Optimise ? Native.OptLevel : "2";
 }
 
 /// <summary>What a build did.</summary>
@@ -160,7 +182,7 @@ public static class IncrementalBuild {
             _ = Toolchain;
         }
 
-        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}|overflow={settings.OverflowChecks}|whole={settings.Whole}|deny-reflection={settings.DenyReflection}|native={settings.Native.Key}";
+        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}|overflow={settings.OverflowChecks}|whole={settings.Whole}|deny-reflection={settings.DenyReflection}|arc={settings.ArcChecks}|sil={settings.SilLevel}|debug-assertions={settings.DebugAssertions}|native={settings.Native.Key}";
 
         // ---- Read and hash every file --------------------------------------
         string[][] texts;
@@ -189,7 +211,7 @@ public static class IncrementalBuild {
         // found to need compiling again is parsed from its source.
         var target = settings.Native.TargetOrHost;
         // 'DEBUG' or 'RELEASE' follows from the settings, which key the cache.
-        var sources = new ProgramSources(units, texts, file => Pipeline.ParseOptionsFor(settings.Optimise, file.Options.ForTarget(target.Os, target.Arch)));
+        var sources = new ProgramSources(units, texts, file => Pipeline.ParseOptionsFor(!settings.DebugAssertions, file.Options.ForTarget(target.Os, target.Arch)));
         var known = new InterfaceFile?[units.Count];
         using (BuildTimings.Of(timings, "parse")) {
             if (settings.Separate) {
@@ -313,7 +335,7 @@ public static class IncrementalBuild {
     // =======================================================================
 
     static BuildOutcome Whole(IReadOnlyList<SyntaxTree> program, BuildSettings settings, string executable, string cacheDirectory, BuildTimings? timings) {
-        var result = Pipeline.Compile(program, settings.DebugDirectory, settings.Exclusivity, timings, optimised: settings.Optimise, target: settings.Native.TargetOrHost, checkOverflow: settings.OverflowChecks, denyReflection: settings.DenyReflection);
+        var result = Pipeline.Compile(program, settings.DebugDirectory, settings.Exclusivity, timings, optimised: settings.Optimise, target: settings.Native.TargetOrHost, checkOverflow: settings.OverflowChecks, denyReflection: settings.DenyReflection, optLevel: settings.SilLevel, checkArc: settings.ArcChecks);
         if (!result.Succeeded) {
             return BuildOutcome.Failed(result.Errors) with { Warnings = result.Warnings };
         }
@@ -465,6 +487,7 @@ public static class IncrementalBuild {
                 using (BuildTimings.Of(timings, "sil")) {
                     (module, lowering) = SilGen.LowerUnit(compilation, new SilUnit(owned.Contains), index, denyReflection: settings.DenyReflection);
                     module.CheckExclusivity = settings.Exclusivity;
+                    module.CheckArc = settings.ArcChecks;
                     if (!settings.OverflowChecks) {
                         WrappingArithmetic.Apply(module);
                     }

@@ -119,8 +119,45 @@ public sealed record Profile(
     public StripMode Strip { get; init; } = StripMode.None;
     public bool Rpath { get; init; }
 
+    /// <summary>
+    ///     <c>incremental</c>: false compiles the program whole every time
+    ///     it changes, keeping no unit's object between builds, as
+    ///     <c>codegen-units = 1</c> does. An unchanged build is still skipped.
+    /// </summary>
+    public bool Incremental { get; init; } = true;
+
+    /// <summary><c>debug-assertions</c> as written; null when the profile leaves it to the opt-level.</summary>
+    public bool? DebugAssertionsSetting { get; init; }
+
+    /// <summary>
+    ///     Whether the build defines <c>DEBUG</c> rather than <c>RELEASE</c>
+    ///     (SYNTAX.md §21), in the program's files and the library's: as
+    ///     <c>debug-assertions</c> says, or else in an unoptimised build.
+    /// </summary>
+    public bool DebugAssertions => DebugAssertionsSetting ?? !Optimise;
+
     /// <summary>What clang is asked for.</summary>
     public NativeOptions Native => new() { OptLevel = OptLevel, DebugInfo = Debug, Lto = Lto, Strip = Strip, Rpath = Rpath };
+
+    /// <summary>
+    ///     What the profile asks for that a build for <paramref name="target" />
+    ///     cannot do, each a warning: said rather than taken silently. Only
+    ///     what the manifest wrote is warned about, not a default.
+    /// </summary>
+    public IEnumerable<string> UnmetFor(NativeTarget target) {
+        var platform = target.Platform;
+        if (Optimise && Lto != LtoMode.Off && Recorded.ContainsKey("lto") && !NativeBuild.LinksBitcodeFor(target)) {
+            yield return $"profile.{Name}.lto: the link for {target.Triple} cannot take LLVM bitcode (it needs lld, which clang cannot use here); built without link-time optimisation";
+        }
+
+        if (Strip != StripMode.None && platform is not (NativePlatform.MacOS or NativePlatform.Linux)) {
+            yield return $"profile.{Name}.strip: has no effect for {target.Triple}: only macOS and Linux links strip";
+        }
+
+        if (Rpath && platform is not (NativePlatform.MacOS or NativePlatform.Linux)) {
+            yield return $"profile.{Name}.rpath: has no effect for {target.Triple}, which looks for a shared library beside the executable already";
+        }
+    }
 
     public static Profile Dev { get; } = new("dev", "0", true, true, true, true, false, new Dictionary<string, string>());
 
@@ -901,17 +938,11 @@ public sealed partial class Manifest {
                             "arc-checks" => profile with { ArcChecks = flag.Value },
                             "leak-check" => profile with { LeakCheck = flag.Value },
                             "rpath" => profile with { Rpath = flag.Value },
+                            "debug-assertions" => profile with { DebugAssertionsSetting = flag.Value },
+                            "incremental" => profile with { Incremental = flag.Value },
                             _ => profile,
                         };
                         recorded[key] = flag.Value ? "true" : "false";
-
-                        // The runtime has no reference-count checks beyond the
-                        // ones every build makes, so there is nothing to turn
-                        // on or off: say so rather than take it silently.
-                        if (key == "arc-checks") {
-                            Warn(table, key, path, "there are no optional ARC checks yet; this has no effect");
-                        }
-
                         break;
                     case "lto":
                         profile = value switch {
@@ -928,6 +959,14 @@ public sealed partial class Manifest {
                             _ => Invalid(profile, value, path, "must be a whole number from 1 to 256"),
                         };
                         recorded[key] = Written(value);
+
+                        // The units a build compiles are its packages, however
+                        // many there are (docs/05 §5.4): a count is not
+                        // something it can follow, only 1, compile it whole.
+                        if (value is TomlInteger { Value: > 1 and <= 256 }) {
+                            Warn(table, key, path, "a build compiles one unit per package, or the program whole with codegen-units = 1; any other count has no effect");
+                        }
+
                         break;
                     case "panic":
                         // A trap ends the program, as 'abort' says: there is no

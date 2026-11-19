@@ -1329,6 +1329,14 @@ public sealed class SilModule {
     /// </summary>
     public bool CheckExclusivity { get; set; } = true;
 
+    /// <summary>
+    ///     Whether compiled code's retains and releases check the object they
+    ///     count (a profile's <c>arc-checks</c>): one whose deinit has run, its
+    ///     count zero, is a reference that outlived its object, and traps
+    ///     rather than counting freed memory. Off unless a profile asks.
+    /// </summary>
+    public bool CheckArc { get; set; }
+
     /// <summary>The function a program starts in: the one marked <c>@main</c>, or else <c>main</c>.</summary>
     public string? EntryPoint { get; set; }
 

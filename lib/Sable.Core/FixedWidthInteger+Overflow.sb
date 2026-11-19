@@ -1,0 +1,257 @@
+module Sable.Core
+
+// Every arithmetic operation in the four forms that do not trap on
+// overflow (Rust's checked_, wrapping_, saturating_ and overflowing_):
+// Sable over the overflow-reporting builtins in FixedWidthInteger.sb.
+// Division by zero still traps in every form but 'checked', as it has no
+// result to wrap or saturate to.
+
+extension FixedWidthInteger {
+    /// -1 as the type's bits: every bit set. For a signed type it is -1, the
+    /// one divisor that overflows.
+    static var allOnes: Self => ~Self.zero
+
+    /// Whether dividing by the divisor overflows: a signed type's least
+    /// value by -1, whose quotient is one more than its greatest.
+    fn divisionOverflows(by divisor: Self) -> Bool {
+        return Self.isSigned && divisor == Self.allOnes && self == Self.min
+    }
+
+    // ---- checked: none where the result does not fit -------------------
+
+    /// The sum, or none where it does not fit.
+    public fn checkedAdd(_ other: Self) -> Self? {
+        let (sum, overflowed) = self.overflowingAdd(other)
+        if overflowed {
+            return none
+        }
+        return sum
+    }
+
+    /// The difference, or none where it does not fit.
+    public fn checkedSub(_ other: Self) -> Self? {
+        let (difference, overflowed) = self.overflowingSub(other)
+        if overflowed {
+            return none
+        }
+        return difference
+    }
+
+    /// The product, or none where it does not fit.
+    public fn checkedMul(_ other: Self) -> Self? {
+        let (product, overflowed) = self.overflowingMul(other)
+        if overflowed {
+            return none
+        }
+        return product
+    }
+
+    /// The quotient, or none for a zero divisor or a quotient that does not fit.
+    public fn checkedDiv(_ divisor: Self) -> Self? {
+        if divisor == Self.zero || self.divisionOverflows(by: divisor) {
+            return none
+        }
+        return self / divisor
+    }
+
+    /// The remainder, or none for a zero divisor or where the quotient does not fit.
+    public fn checkedRem(_ divisor: Self) -> Self? {
+        if divisor == Self.zero || self.divisionOverflows(by: divisor) {
+            return none
+        }
+        return self % divisor
+    }
+
+    /// The negation, or none where it does not fit: for an unsigned type,
+    /// anything but zero.
+    public fn checkedNeg() -> Self? {
+        return Self.zero.checkedSub(self)
+    }
+
+    /// The distance from zero, or none where it does not fit.
+    public fn checkedAbs() -> Self? {
+        return self < Self.zero ? self.checkedNeg() : self
+    }
+
+    /// The bits shifted left, or none for a count outside 0 up to the width.
+    public fn checkedShl(_ count: Int) -> Self? {
+        if count < 0 || count >= Self.bitWidth {
+            return none
+        }
+        return self << Self.truncating(count)
+    }
+
+    /// The bits shifted right, or none for a count outside 0 up to the width.
+    public fn checkedShr(_ count: Int) -> Self? {
+        if count < 0 || count >= Self.bitWidth {
+            return none
+        }
+        return self >> Self.truncating(count)
+    }
+
+    /// The power, or none where it does not fit (or the exponent is negative).
+    ///
+    /// ```sable
+    /// assert(2.checkedPow(10) == 1024)
+    /// assert((2 as U8).checkedPow(8) == none)
+    /// ```
+    public fn checkedPow(_ exponent: Int) -> Self? {
+        if exponent < 0 {
+            return none
+        }
+        let (power, overflowed) = self.overflowingPow(exponent)
+        if overflowed {
+            return none
+        }
+        return power
+    }
+
+    // ---- wrapping: the low bits, never trapping on overflow -------------
+
+    /// The quotient, the least value of a signed type divided by -1 giving
+    /// itself. A zero divisor traps.
+    public fn wrappingDiv(_ divisor: Self) -> Self {
+        return self.divisionOverflows(by: divisor) ? self : self / divisor
+    }
+
+    /// The remainder, 0 where the quotient overflows. A zero divisor traps.
+    public fn wrappingRem(_ divisor: Self) -> Self {
+        return self.divisionOverflows(by: divisor) ? Self.zero : self % divisor
+    }
+
+    /// The distance from zero's low bits: a signed type's least value is its own.
+    public fn wrappingAbs() -> Self {
+        return self < Self.zero ? self.wrappingNeg() : self
+    }
+
+    /// The bits shifted left by the count modulo the width.
+    public fn wrappingShl(_ count: Int) -> Self {
+        return self << Self.truncating(count & (Self.bitWidth - 1))
+    }
+
+    /// The bits shifted right by the count modulo the width.
+    public fn wrappingShr(_ count: Int) -> Self {
+        return self >> Self.truncating(count & (Self.bitWidth - 1))
+    }
+
+    /// The power's low bits. A negative exponent traps, as it has no
+    /// integer power.
+    public fn wrappingPow(_ exponent: Int) -> Self {
+        let (power, _) = self.overflowingPow(exponent)
+        return power
+    }
+
+    // ---- saturating: the bound the result passed ------------------------
+
+    /// The product, or the bound it passed.
+    public fn saturatingMul(_ other: Self) -> Self {
+        let (product, overflowed) = self.overflowingMul(other)
+        if !overflowed {
+            return product
+        }
+        // The product of two values of the same sign is positive.
+        return (self < Self.zero) == (other < Self.zero) ? Self.max : Self.min
+    }
+
+    /// The quotient, the least value of a signed type divided by -1 giving
+    /// the greatest. A zero divisor traps.
+    public fn saturatingDiv(_ divisor: Self) -> Self {
+        return self.divisionOverflows(by: divisor) ? Self.max : self / divisor
+    }
+
+    /// The negation, or the bound it passed: zero, for an unsigned type.
+    public fn saturatingNeg() -> Self {
+        return Self.zero.saturatingSub(self)
+    }
+
+    /// The distance from zero, the greatest value for a signed type's least.
+    public fn saturatingAbs() -> Self {
+        return self < Self.zero ? self.saturatingNeg() : self
+    }
+
+    /// The power, or the bound it passed. A negative exponent traps.
+    public fn saturatingPow(_ exponent: Int) -> Self {
+        if let power = self.checkedPow(exponent) {
+            return power
+        }
+        precondition(nonNegative: exponent, "an integer power's exponent")
+        let odd = exponent % 2 == 1
+        return self < Self.zero && odd ? Self.min : Self.max
+    }
+
+    // ---- overflowing: the low bits, and whether it overflowed -----------
+
+    /// The quotient's low bits, and whether it overflowed. A zero divisor traps.
+    public fn overflowingDiv(_ divisor: Self) -> (Self, Bool) {
+        return (self.wrappingDiv(divisor), self.divisionOverflows(by: divisor))
+    }
+
+    /// The remainder, 0 where the quotient overflows, and whether it did.
+    public fn overflowingRem(_ divisor: Self) -> (Self, Bool) {
+        return (self.wrappingRem(divisor), self.divisionOverflows(by: divisor))
+    }
+
+    /// The negation's low bits, and whether it overflowed.
+    public fn overflowingNeg() -> (Self, Bool) {
+        return Self.zero.overflowingSub(self)
+    }
+
+    /// The distance from zero's low bits, and whether it overflowed.
+    public fn overflowingAbs() -> (Self, Bool) {
+        return self < Self.zero ? self.overflowingNeg() : (self, false)
+    }
+
+    /// The power's low bits, and whether it overflowed, by squaring. A
+    /// negative exponent traps.
+    public fn overflowingPow(_ exponent: Int) -> (Self, Bool) {
+        var result = Self.one
+        var base = self
+        var overflowed = false
+        precondition(nonNegative: exponent, "an integer power's exponent")
+        var remaining = exponent
+        while remaining > 0 {
+            if remaining % 2 == 1 {
+                let (product, over) = result.overflowingMul(base)
+                result = product
+                overflowed = overflowed || over
+            }
+            remaining = remaining / 2
+            // Squared only while it is still needed: a square that is not
+            // used does not overflow the power.
+            if remaining > 0 {
+                let (square, over) = base.overflowingMul(base)
+                base = square
+                overflowed = overflowed || over
+            }
+        }
+        return (result, overflowed)
+    }
+
+    // ---- trapping, as the operators do ----------------------------------
+
+    /// The value to the power, by squaring: trapping where it does not fit,
+    /// as '*' does. A negative exponent traps, as it has no integer power.
+    ///
+    /// ```sable
+    /// assert(3.pow(4) == 81)
+    /// assert((-2 as I8).pow(7) == -128)
+    /// ```
+    public fn pow(_ exponent: Int) -> Self {
+        var result = Self.one
+        var base = self
+        precondition(nonNegative: exponent, "an integer power's exponent")
+        var remaining = exponent
+        while remaining > 0 {
+            if remaining % 2 == 1 {
+                result = result * base
+            }
+            remaining = remaining / 2
+            // Squared only while it is needed, so that the last squaring
+            // cannot overflow where the result does not.
+            if remaining > 0 {
+                base = base * base
+            }
+        }
+        return result
+    }
+}

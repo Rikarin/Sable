@@ -76,7 +76,7 @@ internal static class ConformanceChecker {
                     break;
 
                 case TypeKind.Protocol:
-                    CheckProtocol(type, named, diagnostics);
+                    CheckProtocol(type, named, diagnostics, HasBuiltins(type, core));
                     break;
 
                 case TypeKind.Class when type.TypeKind is TypeKind.Class or TypeKind.Actor:
@@ -643,10 +643,20 @@ internal static class ConformanceChecker {
             member.BaseType is DependentMemberTypeSymbol inner ? RootOf(inner) : member.BaseType;
     }
 
+    /// <summary>
+    ///     True for the types SIL's builtins work on — the numbers, Bool,
+    ///     Char and String — which alone take a protocol's builtin family
+    ///     (Compilation.Builtins.cs) as a requirement's default: there is no
+    ///     builtin for any other type, so it must meet the requirement itself.
+    /// </summary>
+    static bool HasBuiltins(NamedTypeSymbol type, CoreTypes core) =>
+        core.IsNumeric(type) || type.Equals(core.Bool) || type.Equals(core.Char) || type.Equals(core.String);
+
     static void CheckProtocol(
         NamedTypeSymbol type,
         NamedTypeSymbol protocol,
         DiagnosticBag diagnostics,
+        bool hasBuiltins,
         HashSet<NamedTypeSymbol>? seen = null
     ) {
         // A protocol that refines another requires everything the other does.
@@ -662,7 +672,7 @@ internal static class ConformanceChecker {
 
         foreach (var refined in protocol.BaseTypes) {
             if (arguments.Apply(refined) is NamedTypeSymbol { TypeKind: TypeKind.Protocol } parent) {
-                CheckProtocol(type, parent, diagnostics, seen);
+                CheckProtocol(type, parent, diagnostics, hasBuiltins, seen);
             }
         }
 
@@ -685,11 +695,11 @@ internal static class ConformanceChecker {
         foreach (var requirement in protocol.Members) {
             switch (requirement) {
                 case FunctionSymbol { IsAbstract: true } function:
-                    CheckFunction(type, protocol, arguments, function, diagnostics);
+                    CheckFunction(type, protocol, arguments, function, diagnostics, hasBuiltins);
                     break;
 
                 case FieldSymbol { IsAbstract: true } field:
-                    CheckProperty(type, protocol, arguments, field, diagnostics);
+                    CheckProperty(type, protocol, arguments, field, diagnostics, hasBuiltins);
                     break;
             }
         }
@@ -755,10 +765,11 @@ internal static class ConformanceChecker {
         NamedTypeSymbol protocol,
         TypeSubstitution arguments,
         FunctionSymbol requirement,
-        DiagnosticBag diagnostics
+        DiagnosticBag diagnostics,
+        bool hasBuiltins
     ) {
         // 'fn Printable.render()' implements Printable's requirement only.
-        var candidates = FindMembers(type, requirement.Name).OfType<FunctionSymbol>()
+        var candidates = FindMembers(type, requirement.Name, hasBuiltins).OfType<FunctionSymbol>()
             .Where(c => c.ExplicitProtocol is null || SameProtocol(c.ExplicitProtocol, protocol))
             .ToList();
 
@@ -860,9 +871,10 @@ internal static class ConformanceChecker {
         NamedTypeSymbol protocol,
         TypeSubstitution arguments,
         FieldSymbol requirement,
-        DiagnosticBag diagnostics
+        DiagnosticBag diagnostics,
+        bool hasBuiltins
     ) {
-        var candidate = FindMembers(type, requirement.Name).OfType<FieldSymbol>().FirstOrDefault();
+        var candidate = FindMembers(type, requirement.Name, hasBuiltins).OfType<FieldSymbol>().FirstOrDefault();
         var required = requirement.DeclaredHere($"'{protocol.Name}' requires it here");
 
         if (candidate is null) {
@@ -946,12 +958,19 @@ internal static class ConformanceChecker {
 
         TypeSymbol Expected(TypeSymbol type) => rename.Apply(arguments.Apply(SubstituteSelf(type, protocol, conformer)));
 
-        // A witness from another array extension speaks of its own parameters.
+        // A witness from another array extension speaks of its own
+        // parameters, and a default from a protocol's extension writes Self
+        // for the conformer too: 'static fn make(seed: Int) -> Self' meets
+        // the requirement of that signature for whichever type conforms.
         var view = ArrayWitnessView(candidate, conformer);
+        TypeSymbol Actual(TypeSymbol type) =>
+            candidate.ContainingSymbol is ExtensionSymbol { ExtendedType: { TypeKind: TypeKind.Protocol } owner }
+                ? SubstituteSelf(type, owner, conformer)
+                : view.Apply(type);
 
         for (var i = 0; i < requirement.Parameters.Length; i++) {
             var expected = Expected(requirement.Parameters[i].Type);
-            var actual = view.Apply(candidate.Parameters[i].Type);
+            var actual = Actual(candidate.Parameters[i].Type);
             if (!expected.Equals(actual) && !expected.IsError && !actual.IsError) {
                 return false;
             }
@@ -964,7 +983,7 @@ internal static class ConformanceChecker {
                 return false;
             }
 
-            if (!Expected(allowed).Equals(view.Apply(thrown)) && !thrown.IsError) {
+            if (!Expected(allowed).Equals(Actual(thrown)) && !thrown.IsError) {
                 return false;
             }
         }
@@ -976,7 +995,7 @@ internal static class ConformanceChecker {
         }
 
         var expectedReturn = Expected(requirement.ReturnType);
-        return expectedReturn.Equals(view.Apply(candidate.ReturnType))
+        return expectedReturn.Equals(Actual(candidate.ReturnType))
             || expectedReturn.IsError
             || candidate.ReturnType.IsError;
     }
@@ -1061,9 +1080,10 @@ internal static class ConformanceChecker {
     /// <remarks>
     ///     A protocol's own requirement is skipped — it is the thing being asked
     ///     about, not an answer to it — while a protocol's default implementation
-    ///     counts, because that is what a default is for.
+    ///     counts, because that is what a default is for — unless it is a
+    ///     builtin family, which is only a default for a type with builtins.
     /// </remarks>
-    static IEnumerable<Symbol> FindMembers(NamedTypeSymbol type, string name) {
+    static IEnumerable<Symbol> FindMembers(NamedTypeSymbol type, string name, bool hasBuiltins = true) {
         var seen = new HashSet<NamedTypeSymbol>();
         var queue = new Queue<NamedTypeSymbol>();
         queue.Enqueue(type);
@@ -1082,6 +1102,11 @@ internal static class ConformanceChecker {
                 }
 
                 if (member is FieldSymbol { IsAbstract: true }) {
+                    continue;
+                }
+
+                if (!hasBuiltins && member is FunctionSymbol { Builtin: { } function } && Compilation.IsBuiltinFamily(function)
+                    || !hasBuiltins && member is FieldSymbol { Builtin: { } field } && Compilation.IsBuiltinFamily(field)) {
                     continue;
                 }
 

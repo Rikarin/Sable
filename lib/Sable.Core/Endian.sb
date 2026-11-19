@@ -3,7 +3,7 @@ module Sable.Core
 // Byte order: which end of a multi-byte integer comes first in memory, in
 // a file or on the wire. Reading and writing binary data (Array+Binary.sb,
 // Sable.IO's ByteBuffer and ByteReader) takes one; an integer's own bytes
-// are reversed by 'byteSwapped', LLVM's bswap.
+// are reversed by FixedWidthInteger's 'byteSwapped', LLVM's bswap.
 
 /// The order of a multi-byte value's bytes: Little puts the least
 /// significant byte first (x86-64, ARM64, WebAssembly, most file formats),
@@ -16,69 +16,4 @@ public enum Endian {
     /// The order of the platform the program is compiled for. Every
     /// target Sable has is little-endian.
     public static var native: Endian => .Little
-}
-
-extension Int {
-    /// The integer with its bytes in the other order.
-    @builtin("byte_swap_Int")
-    public fn byteSwapped() -> Int
-}
-
-extension I16 {
-    /// The integer with its bytes in the other order.
-    @builtin("byte_swap_I16")
-    public fn byteSwapped() -> I16
-}
-
-extension I32 {
-    /// The integer with its bytes in the other order.
-    @builtin("byte_swap_I32")
-    public fn byteSwapped() -> I32
-}
-
-extension I64 {
-    /// The integer with its bytes in the other order.
-    @builtin("byte_swap_I64")
-    public fn byteSwapped() -> I64
-}
-
-extension I128 {
-    /// The integer with its bytes in the other order.
-    @builtin("byte_swap_I128")
-    public fn byteSwapped() -> I128
-}
-
-extension UInt {
-    /// The integer with its bytes in the other order.
-    @builtin("byte_swap_UInt")
-    public fn byteSwapped() -> UInt
-}
-
-extension U16 {
-    /// The integer with its bytes in the other order: 0x1234 becomes 0x3412.
-    @builtin("byte_swap_U16")
-    public fn byteSwapped() -> U16
-}
-
-extension U32 {
-    /// The integer with its bytes in the other order.
-    ///
-    /// ```sable
-    /// let x: U32 = 0x11223344
-    /// assert(x.byteSwapped() == 0x44332211)
-    /// ```
-    @builtin("byte_swap_U32")
-    public fn byteSwapped() -> U32
-}
-
-extension U64 {
-    /// The integer with its bytes in the other order.
-    @builtin("byte_swap_U64")
-    public fn byteSwapped() -> U64
-}
-
-extension U128 {
-    /// The integer with its bytes in the other order.
-    @builtin("byte_swap_U128")
-    public fn byteSwapped() -> U128
 }

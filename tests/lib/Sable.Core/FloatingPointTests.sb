@@ -1,0 +1,382 @@
+module FloatingPointTests
+
+// FloatingPoint (Sable.Core) and its extensions: the IEEE 754 operations,
+// classification, rounding, and the edge cases each has at NaN, the
+// zeros, the infinities and the subnormals. Each float type's own file
+// has its constants. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+/// Generic, so that each requirement is reached through the protocol.
+fn hypotenuse<T: FloatingPoint>(_ a: T, _ b: T) -> T {
+    return (a * a + b * b).squareRoot()
+}
+
+@test
+fn genericCodeComputesAtEachWidth() {
+    assertEqual(hypotenuse(3.0, 4.0), 5.0)
+    assertEqual(hypotenuse(3.0 as F32, 4.0), 5.0)
+    assertEqual(hypotenuse(3.0 as F16, 4.0), 5.0)
+}
+
+@test
+fn theSquareRootIsCorrectlyRounded() {
+    assertEqual((2.0).squareRoot(), 1.4142135623730951)
+    assertEqual((2.0 as F32).squareRoot(), 1.4142135)
+    assert((-1.0).squareRoot().isNaN, "-1 has no square root")
+    assertEqual((-0.0).squareRoot().isSignMinus, true)
+}
+
+@test
+fn divisionByZeroGivesAnInfinityOrNaN() {
+    let zero = 0.0
+    assertEqual(1.0 / zero, F64.infinity)
+    assertEqual(-1.0 / zero, -F64.infinity)
+    assert((zero / zero).isNaN, "0 / 0 is NaN")
+}
+
+@test
+fn theTwoRemaindersRoundTheQuotientDifferently() {
+    assertEqual((7.5).remainder(dividingBy: 2.0), -0.5)
+    assertEqual((7.5).truncatingRemainder(dividingBy: 2.0), 1.5)
+    assertEqual((-7.5).truncatingRemainder(dividingBy: 2.0), -1.5)
+    assertEqual((5.0 as F16).remainder(dividingBy: 2.0), 1.0)
+    assertEqual((7.0 as F32).remainder(dividingBy: 2.0), -1.0)
+}
+
+@test
+fn aFusedMultiplyAddRoundsOnce() {
+    assertEqual((2.0).fusedMultiplyAdd(3.0, 1.0), 7.0)
+    // 0.1 × 10 - 1 is not 0 exactly, which only the fused form shows.
+    assert((0.1).fusedMultiplyAdd(10.0, -1.0) != 0.0, "the product is kept exact")
+    assertEqual((1.0).addingProduct(2.0, 3.0), 7.0)
+    assertEqual((2.0 as F32).fusedMultiplyAdd(3.0, 1.0), 7.0)
+}
+
+@test
+fn roundingToIntegersByEachRule() {
+    assertEqual((3.7).floor(), 3.0)
+    assertEqual((-3.2).floor(), -4.0)
+    assertEqual((3.2).ceiling(), 4.0)
+    assertEqual((-3.7).truncated(), -3.0)
+    assertEqual((2.5).rounded(), 3.0)
+    assertEqual((-2.5).rounded(), -3.0)
+    assertEqual((2.5).roundedToNearestOrEven(), 2.0)
+    assertEqual((3.5).roundedToNearestOrEven(), 4.0)
+}
+
+@test
+fn roundedTakesARule() {
+    assertEqual((2.5).rounded(RoundingRule.ToNearestOrAwayFromZero), 3.0)
+    assertEqual((2.5).rounded(RoundingRule.ToNearestOrEven), 2.0)
+    assertEqual((2.1).rounded(RoundingRule.Up), 3.0)
+    assertEqual((2.9).rounded(RoundingRule.Down), 2.0)
+    assertEqual((-2.9).rounded(RoundingRule.TowardZero), -2.0)
+    assertEqual((-2.1).rounded(RoundingRule.AwayFromZero), -3.0)
+    assertEqual((2.1).rounded(RoundingRule.AwayFromZero), 3.0)
+}
+
+@test
+fn copySignTakesTheSignAlone() {
+    assertEqual((3.0).copySign(-0.0), -3.0)
+    assertEqual((-3.0).copySign(1.0), 3.0)
+    assert(F64.nan.copySign(-1.0).isSignMinus, "a NaN takes a sign too")
+}
+
+@test
+fn minimumAndMaximumPropagateNaN() {
+    assert((2.0).minimum(F64.nan).isNaN, "NaN wins the minimum")
+    assert(F64.nan.maximum(2.0).isNaN, "NaN wins the maximum")
+    assert((0.0).minimum(-0.0).isSignMinus, "-0 is below +0")
+    assert(!(0.0).maximum(-0.0).isSignMinus, "+0 is above -0")
+    assertEqual((1.0).minimum(2.0), 1.0)
+}
+
+@test
+fn minimumNumberAndMaximumNumberPreferANumber() {
+    assertEqual((2.0).minimumNumber(F64.nan), 2.0)
+    assertEqual(F64.nan.maximumNumber(2.0), 2.0)
+    assertEqual((2.0).min(other: 3.0), 2.0)
+    assertEqual((2.0).max(other: F64.nan), 2.0)
+}
+
+@test
+fn nextUpAndNextDownStepOneValue() {
+    assertEqual((1.0).nextUp, 1.0000000000000002)
+    assertEqual((1.0).nextDown, 0.9999999999999999)
+    assertEqual((0.0).nextUp, F64.leastNonzeroMagnitude)
+    assertEqual((-0.0).nextUp, F64.leastNonzeroMagnitude)
+    assertEqual((0.0).nextDown, -F64.leastNonzeroMagnitude)
+    assertEqual(F64.infinity.nextUp, F64.infinity)
+    assertEqual((-F64.infinity).nextUp, -F64.greatestFiniteMagnitude)
+    assertEqual(F64.greatestFiniteMagnitude.nextUp, F64.infinity)
+    assert(F64.nan.nextUp.isNaN, "NaN stays NaN")
+    assertEqual((1.0 as F16).nextUp, 1.001)
+}
+
+@test
+fn theUlpIsTheGapToTheNextValue() {
+    assertEqual((1.0).ulp, F64.epsilon)
+    assertEqual((0.0).ulp, F64.leastNonzeroMagnitude)
+    assertEqual((-2.0).ulp, F64.epsilon * 2.0)
+    assertEqual(F64.greatestFiniteMagnitude.ulp, F64.greatestFiniteMagnitude - F64.greatestFiniteMagnitude.nextDown)
+    assert(F64.infinity.ulp.isNaN, "infinity has no ulp")
+}
+
+@test
+fn exponentAndSignificandSplitTheValue() {
+    assertEqual((12.0).exponent, 3)
+    assertEqual((12.0).significand, 1.5)
+    assertEqual((-0.375).exponent, -2)
+    assertEqual((-0.375).significand, 1.5)
+    assertEqual(F64.leastNonzeroMagnitude.exponent, -1074)
+    assertEqual((0.0).exponent, Int.min)
+    assertEqual(F64.infinity.exponent, Int.max)
+    assertEqual(F64.nan.exponent, Int.max)
+    assertEqual((0.0).significand, 0.0)
+    assertEqual((-F64.infinity).significand, F64.infinity)
+}
+
+@test
+fn scalingByAPowerOfTwoRoundsOnce() {
+    assertEqual((1.0).scaled(byPowerOfTwo: 10), 1024.0)
+    assertEqual((3.0).scaled(byPowerOfTwo: -1), 1.5)
+    assertEqual((1.0).scaled(byPowerOfTwo: 5000), F64.infinity)
+    assertEqual((1.0).scaled(byPowerOfTwo: -5000), 0.0)
+    assertEqual((1.0).scaled(byPowerOfTwo: -1074), F64.leastNonzeroMagnitude)
+    assertEqual((1.0 as F16).scaled(byPowerOfTwo: 15), 32768.0)
+}
+
+@test
+fn absClearsTheSign() {
+    assertEqual((-2.5).abs(), 2.5)
+    assert(!(-0.0).abs().isSignMinus, "-0's magnitude is +0")
+    assertEqual((-2.5 as F32).abs(), 2.5)
+}
+
+@test
+fn signumIsOneMinusOneOrTheZeroOrNaN() {
+    assertEqual((3.0).signum(), 1.0)
+    assertEqual((-3.0).signum(), -1.0)
+    assert((-0.0).signum().isSignMinus, "-0 keeps its sign")
+    assert(F64.nan.signum().isNaN, "NaN stays NaN")
+}
+
+@test
+fn lerpGoesTheFractionOfTheWay() {
+    assertEqual((10.0).lerp(to: 20.0, by: 0.25), 12.5)
+    assertEqual((10.0).lerp(to: 20.0, by: 0.0), 10.0)
+    assertEqual((10.0).lerp(to: 20.0, by: 1.0), 20.0)
+}
+
+@test
+fn anglesConvertBetweenDegreesAndRadians() {
+    assertEqual((180.0).toRadians(), F64.pi)
+    assertEqual(F64.pi.toDegrees(), 180.0)
+    assertEqual((90.0 as F32).toRadians(), F32.pi / 2.0)
+}
+
+@test
+fn tauIsTwoPi() {
+    assertEqual(F64.tau, 6.283185307179586)
+    assertEqual(F32.tau, F32.pi * 2.0)
+}
+
+@test
+fn convertingAnIntGivesTheNearestValue() {
+    assertEqual(F64.converting(3), 3.0)
+    assertEqual(F32.converting(16777217), 16777216.0)
+    assertEqual(F16.converting(-2 as I8), -2.0)
+    assertEqual(F16.converting(U64.max), F16.infinity)
+    assertEqual(F64.converting(U128.max), 3.402823669209385e38)
+    assertEqual(F32.converting(I128.min), -1.7014118e38)
+}
+
+@test
+fn anIntegerIsExactlyAFloatOnlyWhereTheTypeHoldsIt() {
+    assertEqual(F32.exactly(16777216) ?? 0.0, 16777216.0)
+    assert(F32.exactly(16777217) == none, "2^24 + 1 needs 25 bits")
+    assertEqual(F64.exactly(-5 as I8) ?? 0.0, -5.0)
+    assert(F16.exactly(U64.max) == none, "an F16 is infinite there")
+    assert(F64.exactly(Int.max) == none, "2^63 - 1 needs 63 bits")
+    assertEqual(F64.exactly(Int.min) ?? 0.0, -9223372036854775808.0)
+}
+
+@test
+fn theWideValueIsTheFloatAsAnF64() {
+    assertEqual((0.1 as F32).wideValue, 0.10000000149011612)
+    assertEqual((1.5 as F16).wideValue, 1.5)
+    assertEqual((0.1).wideValue, 0.1)
+}
+
+// ---- classification -----------------------------------------------------
+
+@test
+fn nanIsTheOneValueNotEqualToItself() {
+    assert(F64.nan.isNaN, "NaN is NaN")
+    assert(!(1.0).isNaN, "1 is not NaN")
+    assert(F16.nan.isNaN && F32.nan.isNaN, "every type has one")
+}
+
+@test
+fn finiteAndInfiniteAreOpposites() {
+    assert(F64.infinity.isInfinite && !F64.infinity.isFinite, "infinity is infinite")
+    assert((-F64.infinity).isInfinite, "so is -infinity")
+    assert((1.0).isFinite && !(1.0).isInfinite, "1 is finite")
+    assert(!F64.nan.isFinite && !F64.nan.isInfinite, "NaN is neither")
+}
+
+@test
+fn normalAndSubnormalSplitTheFiniteNonZeroValues() {
+    assert(F64.leastNormalMagnitude.isNormal, "the least normal value is normal")
+    assert(F64.leastNormalMagnitude.nextDown.isSubnormal, "the one below is subnormal")
+    assert(!(0.0).isNormal && !(0.0).isSubnormal, "zero is neither")
+    assert(!F64.infinity.isNormal, "infinity is not normal")
+    assert((-1.0).isNormal, "-1 is normal")
+}
+
+@test
+fn bothZerosAreZero() {
+    assert((0.0).isZero && (-0.0).isZero, "both zeros are zero")
+    assert(!F64.leastNonzeroMagnitude.isZero, "the least subnormal is not")
+}
+
+@test
+fn theSignBitIsSeenOnZerosAndNaNs() {
+    assert((-0.0).isSignMinus, "-0 is negative")
+    assert(!(0.0).isSignMinus, "+0 is not")
+    assert((-F64.nan).isSignMinus, "a negated NaN is negative")
+    assert(!F64.nan.isSignMinus, "the quiet NaN is positive")
+}
+
+@test
+fn integersAreFiniteWithNothingAfterThePoint() {
+    assert((3.0).isInteger, "3 is an integer")
+    assert((-0.0).isInteger, "-0 is an integer")
+    assert(!(3.5).isInteger, "3.5 is not")
+    assert(!F64.infinity.isInteger, "infinity is not")
+    assert(!F64.nan.isInteger, "NaN is not")
+}
+
+@test
+fn classificationNamesTheKind() {
+    assert((1.0).classification == FloatingPointClassification.Normal, "1 is normal")
+    assert(F64.leastNonzeroMagnitude.classification == FloatingPointClassification.Subnormal, "the least is subnormal")
+    assert((-0.0).classification == FloatingPointClassification.Zero, "-0 is zero")
+    assert((-F64.infinity).classification == FloatingPointClassification.Infinite, "-infinity is infinite")
+    assert(F64.nan.classification == FloatingPointClassification.NaN, "NaN is NaN")
+}
+
+@test
+fn theTotalOrderOrdersEveryValue() {
+    assert((-0.0).isTotallyOrdered(belowOrEqualTo: 0.0), "-0 comes before +0")
+    assert(!(0.0).isTotallyOrdered(belowOrEqualTo: -0.0), "+0 comes after -0")
+    assert((1.0).isTotallyOrdered(belowOrEqualTo: F64.nan), "a positive NaN comes last")
+    assert(!F64.nan.isTotallyOrdered(belowOrEqualTo: F64.infinity), "nothing comes after a positive NaN")
+    assert((-F64.nan).isTotallyOrdered(belowOrEqualTo: -F64.infinity), "a negative NaN comes first")
+    assert(!(1.0).isTotallyOrdered(belowOrEqualTo: -F64.nan), "nothing comes before a negative NaN")
+    assert((1.0).isTotallyOrdered(belowOrEqualTo: 2.0), "1 before 2")
+    assert(!(2.0).isTotallyOrdered(belowOrEqualTo: 1.0), "2 after 1")
+    assert((2.0).isTotallyOrdered(belowOrEqualTo: 2.0), "2 with itself")
+    assert((-2.0).isTotallyOrdered(belowOrEqualTo: -2.0), "-2 with itself")
+}
+
+// ---- text ---------------------------------------------------------------
+
+@test
+fn fixedDigitsAreRoundedFromTheExactValue() {
+    assertEqual((3.14159).toFixedString(2), "3.14")
+    assertEqual((0.125).toFixedString(2), "0.12")
+    assertEqual((0.375).toFixedString(2), "0.38")
+    assertEqual((2.5).toFixedString(0), "2")
+    assertEqual((0.1).toFixedString(20), "0.10000000000000000555")
+    assertEqual((-0.0).toFixedString(1), "-0.0")
+    assertEqual((1.5 as F16).toFixedString(3), "1.500")
+}
+
+@test
+fn scientificDigitsAreRoundedFromTheExactValue() {
+    assertEqual((1234.5).toScientificString(2), "1.23e+03")
+    assertEqual((0.125).toScientificString(1), "1.2e-01")
+    assertEqual((0.000125).toScientificString(1), "1.3e-04")
+    assertEqual((9.96).toScientificString(1), "1.0e+01")
+    assertEqual((0.0).toScientificString(0), "0e+00")
+    assertEqual(F64.leastNonzeroMagnitude.toScientificString(3), "4.941e-324")
+    assertEqual((1.0e300).toScientificString(0), "1e+300")
+}
+
+@test
+fn generalDigitsAreFixedOrScientificAsCsPercentGIs() {
+    assertEqual((1234.5).toGeneralString(6), "1234.5")
+    assertEqual((0.0001).toGeneralString(3), "0.0001")
+    assertEqual((0.00001234).toGeneralString(3), "1.23e-05")
+    assertEqual((1.0e20).toGeneralString(6), "1e+20")
+    assertEqual((100.0).toGeneralString(1), "1e+02")
+    assertEqual((0.0).toGeneralString(3), "0")
+    assertEqual((-2.5).toGeneralString(1), "-2")
+    assertEqual((123456789.0).toGeneralString(4), "1.235e+08")
+    assertEqual((0.5).toGeneralString(0), "0.5")
+    assertEqual(F64.nan.toGeneralString(3), "nan")
+}
+
+@test
+fn aValueNotFiniteIsWrittenByName() {
+    assertEqual(F64.nan.toFixedString(2), "nan")
+    assertEqual(F64.infinity.toScientificString(2), "inf")
+    assertEqual((-F32.infinity).toHexString(), "-inf")
+}
+
+@test
+fn hexadecimalIsExact() {
+    assertEqual((3.0).toHexString(), "0x1.8p+1")
+    assertEqual((0.1).toHexString(), "0x1.999999999999ap-4")
+    assertEqual((-1.0).toHexString(), "-0x1p+0")
+    assertEqual((0.1 as F32).toHexString(), "0x1.99999ap-4")
+    assertEqual(F64.leastNonzeroMagnitude.toHexString(), "0x1p-1074")
+    assertEqual((0.0).toHexString(), "0x0p+0")
+    assertEqual((-0.0).toHexString(), "-0x0p+0")
+}
+
+@test
+fn hexadecimalReadsBackAsTheValue() {
+    assertEqual(F64.fromHexString("0x1.8p1") ?? 0.0, 3.0)
+    assertEqual(F64.fromHexString("0X1.8P+1") ?? 0.0, 3.0)
+    assertEqual(F64.fromHexString("-0x.8") ?? 0.0, -0.5)
+    assertEqual(F64.fromHexString("+0x10") ?? 0.0, 16.0)
+    assertEqual(F64.fromHexString((0.1).toHexString()) ?? 0.0, 0.1)
+    assertEqual(F64.fromHexString("inf") ?? 0.0, F64.infinity)
+    assertEqual(F64.fromHexString("-infinity") ?? 0.0, -F64.infinity)
+    assert((F64.fromHexString("nan") ?? 0.0).isNaN, "nan is read")
+    assertEqual(F64.fromHexString("0x0p0") ?? 1.0, 0.0)
+}
+
+@test
+fn hexadecimalIsRoundedOnceToTheType() {
+    assertEqual(F32.fromHexString("0x1.000001p0") ?? 0.0, 1.0)
+    assertEqual(F32.fromHexString("0x1.000003p0") ?? 0.0, 1.0000002)
+    assertEqual(F32.fromHexString("0x1.0000010000000000000000000000001p0") ?? 0.0, 1.0000001)
+    assertEqual(F64.fromHexString("0x1.fffffffffffff8p1023") ?? 0.0, F64.infinity)
+    assertEqual(F16.fromHexString("0x1.ffcp15") ?? 0.0, F16.greatestFiniteMagnitude)
+}
+
+@test
+fn hexadecimalBelowTheNormalValuesRoundsToASubnormal() {
+    assertEqual(F64.fromHexString("0x1p-1074") ?? 1.0, F64.leastNonzeroMagnitude)
+    assertEqual(F64.fromHexString("0x1p-1075") ?? 1.0, 0.0)
+    assertEqual(F64.fromHexString("0x1.8p-1075") ?? 1.0, F64.leastNonzeroMagnitude)
+    assertEqual(F64.fromHexString("0x1.8p-1074") ?? 1.0, F64.leastNonzeroMagnitude * 2.0)
+    assertEqual(F64.fromHexString("0x1p-2000") ?? 1.0, 0.0)
+    assertEqual(F64.fromHexString("0x1p99999999") ?? 1.0, F64.infinity)
+}
+
+@test
+fn whatIsNotHexadecimalIsNone() {
+    assert(F64.fromHexString("1.5") == none, "no 0x")
+    assert(F64.fromHexString("0x") == none, "no digits")
+    assert(F64.fromHexString("0x.") == none, "a point is no digit")
+    assert(F64.fromHexString("0x1g") == none, "g is no digit")
+    assert(F64.fromHexString("0x1p") == none, "no power after p")
+    assert(F64.fromHexString("0x1pz") == none, "z is no power")
+    assert(F64.fromHexString("") == none, "nothing")
+}

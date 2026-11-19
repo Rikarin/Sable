@@ -130,14 +130,15 @@ extension Outcome: Equatable where T: Equatable, E: Equatable {
 }
 
 extension Outcome: Hashable where T: Hashable, E: Hashable {
-    /// Feeds the hasher which case it is, then the value or the error: a
-    /// success and a failure holding equal values do not hash alike.
+    /// Which case it is, then the value or the error: a success and a
+    /// failure holding equal values do not hash alike.
     public fn hash(into hasher: inout Hasher) {
-        if let value = self.ok {
-            hasher.write(U64(0))
+        if case .Ok(let value) = self {
+            hasher.write(0)
             hasher.combine(value)
-        } else if let error = self.error {
-            hasher.write(U64(1))
+        }
+        if case .Err(let error) = self {
+            hasher.write(1)
             hasher.combine(error)
         }
     }

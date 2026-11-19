@@ -1,0 +1,11 @@
+module Sable.Core
+
+/// The integers without negative values: UInt, U8, U16, U32, U64 and U128.
+public protocol UnsignedInteger: BinaryInteger { }
+
+extension UnsignedInteger {
+    /// The value itself: an unsigned one is never below zero.
+    public fn abs() -> Self {
+        return self
+    }
+}

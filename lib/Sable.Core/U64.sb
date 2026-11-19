@@ -1,0 +1,24 @@
+module Sable.Core
+
+/// A 64-bit unsigned integer. Its arithmetic traps on overflow; FixedWidthInteger gives it
+/// the forms that do not, and its bit operations.
+extension U64: FixedWidthInteger, UnsignedInteger {
+    /// The type of its distance from zero.
+    public alias Magnitude = U64
+
+    /// 0.
+    public static var zero: U64 => 0
+
+    /// 1.
+    public static var one: U64 => 1
+
+    /// The least U64, 0.
+    public static var min: U64 => 0
+
+    /// The greatest U64, 2⁶⁴ - 1.
+    public static var max: U64 => 18446744073709551615
+
+    /// The number in decimal.
+    @builtin("string_from_U64")
+    public fn toString() -> String
+}

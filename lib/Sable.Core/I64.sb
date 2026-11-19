@@ -1,0 +1,24 @@
+module Sable.Core
+
+/// A 64-bit signed integer: Int's width, as a type of its own. Its arithmetic traps on overflow; FixedWidthInteger gives it
+/// the forms that do not, and its bit operations.
+extension I64: FixedWidthInteger, SignedInteger {
+    /// The type of its distance from zero.
+    public alias Magnitude = U64
+
+    /// 0.
+    public static var zero: I64 => 0
+
+    /// 1.
+    public static var one: I64 => 1
+
+    /// The least I64, -2⁶³.
+    public static var min: I64 => -9223372036854775808
+
+    /// The greatest I64, 2⁶³ - 1.
+    public static var max: I64 => 9223372036854775807
+
+    /// The number in decimal.
+    @builtin("string_from_I64")
+    public fn toString() -> String
+}

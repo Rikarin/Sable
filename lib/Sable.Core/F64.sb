@@ -1,0 +1,55 @@
+module Sable.Core
+
+/// IEEE 754's binary64: 53 bits of precision, about 16 decimal digits; the float Sable uses unless told otherwise. Its arithmetic is IEEE 754's, rounded to the nearest, ties to
+/// even; FloatingPoint gives it the rest of the standard's operations.
+extension F64: BinaryFloatingPoint {
+    /// 0.
+    public static var zero: F64 => 0.0
+
+    /// 1.
+    public static var one: F64 => 1.0
+
+    /// A quiet NaN. Bits 0x7FF8000000000000.
+    public static var nan: F64 => F64.fromBits(0x7FF8000000000000)
+
+    /// Positive infinity. Bits 0x7FF0000000000000.
+    public static var infinity: F64 => F64.fromBits(0x7FF0000000000000)
+
+    /// The greatest finite F64. Bits 0x7FEFFFFFFFFFFFFF.
+    public static var greatestFiniteMagnitude: F64 => F64.fromBits(0x7FEFFFFFFFFFFFFF)
+
+    /// The least positive normal F64. Bits 0x0010000000000000.
+    public static var leastNormalMagnitude: F64 => F64.fromBits(0x0010000000000000)
+
+    /// The least positive F64, a subnormal. Bits 0x0000000000000001.
+    public static var leastNonzeroMagnitude: F64 => F64.fromBits(0x0000000000000001)
+
+    /// The distance from 1 to the next F64 up. Bits 0x3CB0000000000000.
+    public static var epsilon: F64 => F64.fromBits(0x3CB0000000000000)
+
+    /// π, rounded to an F64. Bits 0x400921FB54442D18.
+    public static var pi: F64 => F64.fromBits(0x400921FB54442D18)
+
+    /// e, rounded to an F64. Bits 0x4005BF0A8B145769.
+    public static var e: F64 => F64.fromBits(0x4005BF0A8B145769)
+
+    /// The natural logarithm of 2, rounded to an F64. Bits 0x3FE62E42FEFA39EF.
+    public static var ln2: F64 => F64.fromBits(0x3FE62E42FEFA39EF)
+
+    /// The natural logarithm of 10, rounded to an F64. Bits 0x40026BB1BBB55516.
+    public static var ln10: F64 => F64.fromBits(0x40026BB1BBB55516)
+
+    /// The square root of 2, rounded to an F64. Bits 0x3FF6A09E667F3BCD.
+    public static var sqrt2: F64 => F64.fromBits(0x3FF6A09E667F3BCD)
+
+    /// 52: the bits of the significand after its leading one.
+    public static var significandBitCount: Int => 52
+
+    /// 11: the bits of the exponent.
+    public static var exponentBitCount: Int => 11
+
+    /// The number in decimal: the fewest digits that read back as the same
+    /// value.
+    @builtin("string_from_F64")
+    public fn toString() -> String
+}

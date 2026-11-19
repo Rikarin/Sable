@@ -1,0 +1,24 @@
+module Sable.Core
+
+/// A 128-bit unsigned integer. Its arithmetic traps on overflow; FixedWidthInteger gives it
+/// the forms that do not, and its bit operations.
+extension U128: FixedWidthInteger, UnsignedInteger {
+    /// The type of its distance from zero.
+    public alias Magnitude = U128
+
+    /// 0.
+    public static var zero: U128 => 0
+
+    /// 1.
+    public static var one: U128 => 1
+
+    /// The least U128, 0.
+    public static var min: U128 => 0
+
+    /// The greatest U128, 2¹²⁸ - 1.
+    public static var max: U128 => 340282366920938463463374607431768211455
+
+    /// The number in decimal.
+    @builtin("string_from_U128")
+    public fn toString() -> String
+}

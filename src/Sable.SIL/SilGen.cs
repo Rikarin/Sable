@@ -2750,6 +2750,12 @@ public sealed partial class SilGen {
     ///     has no witness, only its own body.
     /// </summary>
     static bool IsExtensionOnly(Symbol member) {
+        // A property's getter is its property's: 'hashValue''s 'get' is no
+        // requirement, and not a conformer's 'get()' either.
+        if (member is FunctionSymbol { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FieldSymbol property }) {
+            return IsExtensionOnly(property);
+        }
+
         if (member.ContainingSymbol is not ExtensionSymbol { ExtendedType: NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol }) {
             return false;
         }
@@ -2843,13 +2849,20 @@ public sealed partial class SilGen {
             }
         }
 
-        // None of its own: the default an extension of the protocol gives.
+        // None of its own: the default an extension of the protocol gives —
+        // the one with the requirement's labels and type parameters, where
+        // the extension overloads the name ('clamping(wideValue:)' beside
+        // the generic 'clamping(_:)').
         if (Owner(requirement) is { TypeKind: TypeKind.Protocol } protocol) {
-            return protocol.OriginalDefinition.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
-                f.ContainingSymbol is ExtensionSymbol
-                && f.Name == requirement.Name
-                && f.IsStatic == requirement.IsStatic
-                && f.Parameters.Length == requirement.Parameters.Length);
+            return protocol.OriginalDefinition.Members.OfType<FunctionSymbol>()
+                .Where(f =>
+                    f.ContainingSymbol is ExtensionSymbol
+                    && f.Name == requirement.Name
+                    && f.IsStatic == requirement.IsStatic
+                    && f.Parameters.Length == requirement.Parameters.Length)
+                .OrderBy(f => !SameLabels(f, requirement))
+                .ThenBy(f => f.TypeParameters.Length != requirement.TypeParameters.Length)
+                .FirstOrDefault();
         }
 
         return null;
@@ -5935,6 +5948,12 @@ public sealed partial class SilGen {
                 case BoundFieldAccess { Field.Builtin: not null } builtin:
                     return BuiltinProperty(builtin);
 
+                // 'T.zero': a protocol's static property, on the type T stands for here.
+                case BoundFieldAccess { Receiver: BoundTypeExpression on, Field.IsStatic: true } access
+                    when access.Field.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol }
+                        or ExtensionSymbol { ExtendedType: NamedTypeSymbol { TypeKind: TypeKind.Protocol } }:
+                    return StaticPropertyWitness(access, on);
+
                 // 'F64.pi': a static property's getter, called with nothing.
                 case BoundFieldAccess { Field: { IsComputed: true, IsStatic: true } } access when generator.GetterOf(access.Field) is { } staticGetter:
                     return Expression(new BoundCall(access.Syntax, null, staticGetter, [], access.Type));
@@ -7588,6 +7607,47 @@ public sealed partial class SilGen {
                 ? new BoundIndexAccess(index.Syntax, index.Type, index.Receiver, index.Indices)
                 : null;
 
+        /// <summary>
+        ///     A protocol's static property read through a type: the type's own
+        ///     property of that name when it is a requirement the type meets;
+        ///     otherwise the protocol extension's, its getter called with Self
+        ///     standing for the type.
+        /// </summary>
+        SilValue? StaticPropertyWitness(BoundFieldAccess access, BoundTypeExpression on) {
+            var property = access.Field;
+            if (!IsExtensionOnly(property)
+                && Sub(on.ReferencedType) is NamedTypeSymbol { TypeKind: not TypeKind.Protocol } concrete
+                && StaticField(concrete, property.Name) is { } own) {
+                return Expression(new BoundFieldAccess(access.Syntax, null, own, access.Type));
+            }
+
+            var chosen = IsExtensionOnly(property) ? property : DefaultStaticField(property);
+            return chosen is not null && generator.GetterOf(chosen) is { } getter
+                ? Expression(new BoundCall(access.Syntax, on, getter, [], access.Type))
+                : Missing(access, $"'{property.Name}' on '{Sub(on.ReferencedType).ToDisplayString()}'");
+        }
+
+        /// <summary>A type's own static property (not its protocols' defaults), by name.</summary>
+        static FieldSymbol? StaticField(NamedTypeSymbol concrete, string name) {
+            for (var type = (NamedTypeSymbol?)concrete.OriginalDefinition; type is not null; type = SuperclassOf(type)?.OriginalDefinition) {
+                if (type.Members.OfType<FieldSymbol>().FirstOrDefault(f => f.Name == name && f.IsStatic) is { } found) {
+                    return found;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>The default an extension of the requirement's protocol gives a static property.</summary>
+        static FieldSymbol? DefaultStaticField(FieldSymbol requirement) {
+            if (requirement.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+                return null;
+            }
+
+            return protocol.OriginalDefinition.Members.OfType<FieldSymbol>()
+                .FirstOrDefault(f => f.ContainingSymbol is ExtensionSymbol && f.Name == requirement.Name && f.IsStatic);
+        }
+
         SilValue? IndexRead(BoundIndexAccess index) {
             if (AsArrayIndexing(index) is { } arrayIndexing) {
                 return IndexRead(arrayIndexing);
@@ -9088,10 +9148,14 @@ public sealed partial class SilGen {
                 }
             }
 
+            // What this instance's own parameters stand for is the fallback
+            // only for one the call says nothing of: a protocol's default
+            // called on an F64 from an instance where Self is an F32 is the
+            // F64's, which the receiver said above.
             foreach (var parameter in TypeParametersOf(callee)) {
                 var bound = call.Substitution.Lookup(parameter) is { } inferred
                     ? Sub(inferred)
-                    : receiver.Lookup(parameter) ?? substitution.Lookup(parameter);
+                    : receiver.Lookup(parameter) ?? (map.ContainsKey(parameter) ? null : substitution.Lookup(parameter));
                 if (bound is not null) {
                     map[parameter] = bound;
                 }
@@ -9725,13 +9789,23 @@ public sealed partial class SilGen {
             }
 
             // A protocol's property, read where Self is known: the type's own field.
-            if (access.Field.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol } && Sub(receiver.Type) is NamedTypeSymbol concrete) {
+            if (access.Field.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol && Sub(receiver.Type) is NamedTypeSymbol concrete) {
                 for (var type = (NamedTypeSymbol?)concrete.OriginalDefinition; type is not null; type = SuperclassOf(type)?.OriginalDefinition) {
                     if (type.Members.OfType<FieldSymbol>().FirstOrDefault(f => f.Name == access.Field.Name && !f.IsStatic) is { } own) {
-                        return own.IsComputed && generator.GetterOf(own) is { } ownGetter
+                        return own.Builtin is not null ? BuiltinProperty(access, own)
+                            : own.IsComputed && generator.GetterOf(own) is { } ownGetter
                             ? Expression(new BoundCall(access.Syntax, receiver, ownGetter, [], access.Type))
                             : FieldAccess(access, receiver, own);
                     }
+                }
+
+                // None of its own: the default an extension of the protocol gives.
+                if (protocol.OriginalDefinition.Members.OfType<FieldSymbol>().FirstOrDefault(f =>
+                        f.ContainingSymbol is ExtensionSymbol && f.Name == access.Field.Name && !f.IsStatic) is { } fallback) {
+                    return fallback.Builtin is not null ? BuiltinProperty(new BoundFieldAccess(access.Syntax, receiver, fallback, access.Type), fallback)
+                        : generator.GetterOf(fallback) is { } fallbackGetter
+                        ? Expression(new BoundCall(access.Syntax, receiver, fallbackGetter, [], access.Type))
+                        : Missing(access, $"the property '{access.Field.Name}' of '{receiver.Type.ToDisplayString()}'");
                 }
             }
 

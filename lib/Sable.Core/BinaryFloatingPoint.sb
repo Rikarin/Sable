@@ -1,0 +1,30 @@
+module Sable.Core
+
+/// Floats in base 2, as IEEE 754's binary formats are: a sign bit, then
+/// the exponent's bits, then the significand's. F16, F32 and F64.
+///
+/// ```sable
+/// fn precision<T: BinaryFloatingPoint>(_ type: T.Type) -> Int {
+///     return T.significandBitCount + 1
+/// }
+///
+/// assert(precision(F64.self) == 53)
+/// assert(precision(F16.self) == 11)
+/// ```
+public protocol BinaryFloatingPoint: FloatingPoint {
+    /// How many bits the significand has, after the leading one a normal
+    /// value has without storing it: 52 for an F64.
+    static var significandBitCount: Int { get }
+
+    /// How many bits the exponent has: 11 for an F64.
+    static var exponentBitCount: Int { get }
+}
+
+extension BinaryFloatingPoint {
+    /// How many bits the type has: the sign's, the exponent's and the
+    /// significand's.
+    public static var bitWidth: Int => 1 + Self.exponentBitCount + Self.significandBitCount
+
+    /// What the exponent's bits are biased by: the exponent of 1.
+    public static var exponentBias: Int => (1 << (Self.exponentBitCount - 1)) - 1
+}

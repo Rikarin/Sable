@@ -31,12 +31,8 @@ public sealed partial class LlvmEmitter {
             }
         }
 
-        // An integer's bytes reversed, for a 'byte_swap_' builtin: what a
-        // value read from, or written to, the other endianness is.
-        foreach (var bits in new[] { 16, 32, 64, 128 }) {
-            text.Append($"declare i{bits} @llvm.bswap.i{bits}(i{bits})\n");
-        }
-
+        // An integer's bytes reversed, 'byte_swap_', is declared with the
+        // numeric protocols' other intrinsics (IntrinsicDeclarations).
         return text.ToString();
     }
 

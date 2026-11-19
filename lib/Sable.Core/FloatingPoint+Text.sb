@@ -1,0 +1,254 @@
+module Sable.Core
+
+// A float's text at a precision — fixed, scientific or general, as C's
+// printf's %f, %e and %g write it — and in hexadecimal both ways. The
+// decimal digits are NumberFormatting.sb's, the exact binary value's
+// rounded to nearest with a tie to even, which Formattable's conformances
+// use too; hexadecimal is exact, written and read here from the bits. A
+// narrower float goes through its F64, which holds it exactly.
+
+extension FloatingPoint {
+    /// The value in decimal, with exactly that many digits after the point,
+    /// rounded to the nearest from its exact value, a tie to the even
+    /// digit; "nan", "inf" or "-inf" for a value that is not finite.
+    ///
+    /// ```sable
+    /// assert((3.14159).toFixedString(2) == "3.14")
+    /// assert((0.125).toFixedString(2) == "0.12")
+    /// assert((2.5).toFixedString(0) == "2")
+    /// assert((1.0 / 3.0).toFixedString(5) == "0.33333")
+    /// ```
+    public fn toFixedString(_ digits: Int) -> String {
+        if !self.isFinite {
+            return self.toSpecialString()
+        }
+        let wide = self.wideValue
+        let places = digits.max(other: 0)
+        let (exact, point) = exactDecimal(wide.abs())
+        let (rounded, at) = roundedDecimal(exact, point, places)
+        let (whole, rest) = fixedParts(rounded, at, places)
+        return (wide.isSignMinus ? "-" : "") + whole + rest
+    }
+
+    /// The value in scientific notation, one digit before the point and
+    /// that many after it, then the power of ten: rounded to the nearest
+    /// from its exact value, a tie to the even digit.
+    ///
+    /// ```sable
+    /// assert((1234.5).toScientificString(2) == "1.23e+03")
+    /// assert((0.125).toScientificString(1) == "1.2e-01")
+    /// assert((0.0).toScientificString(0) == "0e+00")
+    /// ```
+    public fn toScientificString(_ digits: Int) -> String {
+        if !self.isFinite {
+            return self.toSpecialString()
+        }
+        let wide = self.wideValue
+        let places = digits.max(other: 0)
+        let (exact, point) = exactDecimal(wide.abs())
+        let (rounded, at) = roundedDecimal(exact, point, places + 1 - point)
+        let (whole, rest) = scientificParts(rounded, at, places, "e")
+        return (wide.isSignMinus ? "-" : "") + whole + rest
+    }
+
+    /// The value to that many significant digits (at least one), as C's
+    /// '%g' writes it: fixed where the power of ten is from -4 up to the
+    /// digits, scientific otherwise, and with no zeros at the end of the
+    /// fraction, nor a point with none after it.
+    ///
+    /// ```sable
+    /// assert((1234.5).toGeneralString(6) == "1234.5")
+    /// assert((0.00001234).toGeneralString(3) == "1.23e-05")
+    /// assert((100.0).toGeneralString(1) == "1e+02")
+    /// assert((0.0).toGeneralString(3) == "0")
+    /// ```
+    public fn toGeneralString(_ significantDigits: Int) -> String {
+        if !self.isFinite {
+            return self.toSpecialString()
+        }
+        let wide = self.wideValue
+        let (whole, rest) = generalParts(wide.abs(), significantDigits.max(other: 1), false, "e")
+        return (wide.isSignMinus ? "-" : "") + whole + rest
+    }
+
+    /// The value in hexadecimal, exactly, as C's '%a' writes it: the
+    /// significand after '0x1.' with no zeros at its end, then the power of
+    /// two after 'p' (a subnormal F64 written normalised, as '0x1p-1074').
+    ///
+    /// ```sable
+    /// assert((3.0).toHexString() == "0x1.8p+1")
+    /// assert((0.1).toHexString() == "0x1.999999999999ap-4")
+    /// assert((-1.0).toHexString() == "-0x1p+0")
+    /// assert((0.1 as F32).toHexString() == "0x1.99999ap-4")
+    /// ```
+    public fn toHexString() -> String {
+        if !self.isFinite {
+            return self.toSpecialString()
+        }
+        let wide = self.wideValue
+        let sign = wide.isSignMinus ? "-" : ""
+        if wide == 0.0 {
+            return sign + "0x0p+0"
+        }
+        // Scaled into [1, 2), which is exact, even for a subnormal: its
+        // bits past the leading one are the significand's 52.
+        let exponent = wide.exponent
+        var fraction = wide.abs().scaled(byPowerOfTwo: 0 - exponent).bits & 0xFFFFFFFFFFFFF
+        var count = 13
+        while count > 0 && (fraction & 0xF) == 0 {
+            fraction = fraction >> 4
+            count = count - 1
+        }
+        var text = ""
+        while text.count < count {
+            let digit = Int(fraction & 0xF)
+            text = "0123456789abcdef".slice(from: digit, to: digit + 1) + text
+            fraction = fraction >> 4
+        }
+        let point = count > 0 ? "." + text : ""
+        return "\(sign)0x1\(point)p\(exponent < 0 ? "-" : "+")\(exponent.abs())"
+    }
+
+    /// "nan", "inf" or "-inf", as the runtime writes them.
+    fn toSpecialString() -> String {
+        if self.isNaN {
+            return "nan"
+        }
+        return self < Self.zero ? "-inf" : "inf"
+    }
+
+    /// The value a hexadecimal float writes, rounded once to the nearest
+    /// value of the type, a tie to the even one; none when the text is not
+    /// one. It is '0x' (or '0X') and hexadecimal digits, a point and more
+    /// of them optional, then 'p' (or 'P') and a power of two in decimal,
+    /// which may be left out; a sign may come first. 'inf', 'infinity' and
+    /// 'nan' are read too, as .NET reads them.
+    ///
+    /// ```sable
+    /// assert(F64.fromHexString("0x1.8p1") == 3.0)
+    /// assert(F64.fromHexString("-0x.8") == -0.5)
+    /// assert(F32.fromHexString("0x1.000001p0") == 1.0)
+    /// assert(F64.fromHexString("0x1p-1075") == 0.0)
+    /// assert(F64.fromHexString("1.5") == none)
+    /// ```
+    public static fn fromHexString(_ text: String) -> Self? {
+        var i = 0
+        var negative = false
+        if text.count > 0 && (text.at(index: 0) == '-' || text.at(index: 0) == '+') {
+            negative = text.at(index: 0) == '-'
+            i = 1
+        }
+        let rest = text.slice(from: i, to: text.count)
+        if rest == "inf" || rest == "infinity" {
+            return negative ? -Self.infinity : Self.infinity
+        }
+        if rest == "nan" {
+            return Self.nan
+        }
+        if rest.count < 3 || rest.at(index: 0) != '0' || (rest.at(index: 1) != 'x' && rest.at(index: 1) != 'X') {
+            return none
+        }
+
+        // The digits as one integer, its first 116 bits kept and any after
+        // them only as whether one was set, and the power of two that
+        // scales it to the value.
+        var significand: U128 = 0
+        var power = 0
+        var sticky = false
+        var digits = 0
+        var seenPoint = false
+        i = 2
+        while i < rest.count {
+            let c = rest.at(index: i)
+            if c == '.' && !seenPoint {
+                seenPoint = true
+                i = i + 1
+                continue
+            }
+            guard let digit = hexDigitValue(c) else {
+                break
+            }
+            digits = digits + 1
+            if significand >> 112 == 0 {
+                significand = significand << 4 | U128(digit)
+                if seenPoint {
+                    power = power - 4
+                }
+            } else {
+                sticky = sticky || digit != 0
+                if !seenPoint {
+                    power = power + 4
+                }
+            }
+            i = i + 1
+        }
+        if digits == 0 {
+            return none
+        }
+
+        // The power of two, in decimal, if written.
+        if i < rest.count {
+            if rest.at(index: i) != 'p' && rest.at(index: i) != 'P' {
+                return none
+            }
+            guard let written = rest.slice(from: i + 1, to: rest.count).toInt() else {
+                return none
+            }
+            // Past these the value is zero or infinite whatever its digits.
+            power = power + written.max(other: -100000).min(other: 100000)
+        }
+
+        let magnitude = Self.fromBinary(significand, power, sticky)
+        return negative ? -magnitude : magnitude
+    }
+
+    /// significand × 2^power, rounded once to the type: to its precision,
+    /// or, where it falls below the least normal value, to the bits a
+    /// subnormal there has. 'sticky' says whether a bit was set past the
+    /// significand's.
+    static fn fromBinary(_ significand: U128, _ power: Int, _ sticky: Bool) -> Self {
+        if significand == 0 {
+            return Self.zero
+        }
+        let length = 128 - significand.leadingZeroCount
+        // The leading bit's power of two, and the bits the type has there:
+        // its precision, fewer below the least normal value's power.
+        let leading = power + length - 1
+        let precision = 1 - Self.epsilon.exponent
+        let leastNormal = Self.leastNormalMagnitude.exponent
+        let kept = (precision - (leastNormal - leading).max(other: 0)).min(other: length)
+        if kept < 0 {
+            // Below half the least subnormal: zero.
+            return Self.zero
+        }
+
+        // Rounded to 'kept' bits, a tie to the even one; what that leaves is
+        // exact, and so is scaling it. (Only a significand past 2^112 has
+        // bits beyond the ones kept here, and it always has some dropped.)
+        let dropped = length - kept
+        var rounded = significand >> U128(dropped)
+        if dropped > 0 {
+            let half = U128.one << U128(dropped - 1)
+            let rest = significand & ((U128.one << U128(dropped)) - 1)
+            if rest > half || rest == half && (sticky || (rounded & 1) == 1) {
+                rounded = rounded + 1
+            }
+        }
+        return Self.rounding(wideMagnitude: rounded).scaled(byPowerOfTwo: power + dropped)
+    }
+}
+
+/// The value of a hexadecimal digit, or none.
+fn hexDigitValue(_ c: Char) -> Int? {
+    let code = c.codePoint
+    if code >= 48 && code <= 57 {
+        return code - 48
+    }
+    if code >= 97 && code <= 102 {
+        return code - 87
+    }
+    if code >= 65 && code <= 70 {
+        return code - 55
+    }
+    return none
+}

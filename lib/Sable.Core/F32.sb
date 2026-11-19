@@ -1,0 +1,55 @@
+module Sable.Core
+
+/// IEEE 754's binary32: 24 bits of precision, about 7 decimal digits. Its arithmetic is IEEE 754's, rounded to the nearest, ties to
+/// even; FloatingPoint gives it the rest of the standard's operations.
+extension F32: BinaryFloatingPoint {
+    /// 0.
+    public static var zero: F32 => 0.0
+
+    /// 1.
+    public static var one: F32 => 1.0
+
+    /// A quiet NaN. Bits 0x7FC00000.
+    public static var nan: F32 => F32.fromBits(0x7FC00000)
+
+    /// Positive infinity. Bits 0x7F800000.
+    public static var infinity: F32 => F32.fromBits(0x7F800000)
+
+    /// The greatest finite F32. Bits 0x7F7FFFFF.
+    public static var greatestFiniteMagnitude: F32 => F32.fromBits(0x7F7FFFFF)
+
+    /// The least positive normal F32. Bits 0x00800000.
+    public static var leastNormalMagnitude: F32 => F32.fromBits(0x00800000)
+
+    /// The least positive F32, a subnormal. Bits 0x00000001.
+    public static var leastNonzeroMagnitude: F32 => F32.fromBits(0x00000001)
+
+    /// The distance from 1 to the next F32 up. Bits 0x34000000.
+    public static var epsilon: F32 => F32.fromBits(0x34000000)
+
+    /// π, rounded to an F32. Bits 0x40490FDB.
+    public static var pi: F32 => F32.fromBits(0x40490FDB)
+
+    /// e, rounded to an F32. Bits 0x402DF854.
+    public static var e: F32 => F32.fromBits(0x402DF854)
+
+    /// The natural logarithm of 2, rounded to an F32. Bits 0x3F317218.
+    public static var ln2: F32 => F32.fromBits(0x3F317218)
+
+    /// The natural logarithm of 10, rounded to an F32. Bits 0x40135D8E.
+    public static var ln10: F32 => F32.fromBits(0x40135D8E)
+
+    /// The square root of 2, rounded to an F32. Bits 0x3FB504F3.
+    public static var sqrt2: F32 => F32.fromBits(0x3FB504F3)
+
+    /// 23: the bits of the significand after its leading one.
+    public static var significandBitCount: Int => 23
+
+    /// 8: the bits of the exponent.
+    public static var exponentBitCount: Int => 8
+
+    /// The number in decimal: the fewest digits that read back as the same
+    /// value.
+    @builtin("string_from_F32")
+    public fn toString() -> String
+}

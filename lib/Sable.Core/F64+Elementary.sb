@@ -7,10 +7,6 @@ module Sable.Core
 // largest F64 an infinity. Sable.Math has each as a function too.
 
 extension F64 {
-    /// The square root; NaN for a negative number, and -0.0 for -0.0.
-    @builtin("math_sqrt_F64")
-    public fn squareRoot() -> F64
-
     /// The cube root, negative for a negative number: (-8.0).cbrt() is -2.0.
     @builtin("math_cbrt_F64")
     public fn cbrt() -> F64

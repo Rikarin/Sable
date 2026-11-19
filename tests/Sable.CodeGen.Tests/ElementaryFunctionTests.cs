@@ -102,7 +102,7 @@ public sealed class ElementaryFunctionTests {
                         let f: U64 = 0xFF
                         let g: U128 = 0x2201
                         let h: I128 = 0x0001
-                        print("\(a.byteSwapped()) \(b.byteSwapped()) \(c.byteSwapped()) \(d.byteSwapped()) \(e.byteSwapped()) \(f.byteSwapped()) \(g.byteSwapped() >> 112) \(h.byteSwapped() == I128(1) << 120 ? "0x0100" : "wrong")")
+                        print("\(a.byteSwapped) \(b.byteSwapped) \(c.byteSwapped) \(d.byteSwapped) \(e.byteSwapped) \(f.byteSwapped) \(g.byteSwapped >> 112) \(h.byteSwapped == I128(1) << 120 ? "0x0100" : "wrong")")
                     """
                 )
             ).Stdout
@@ -120,7 +120,7 @@ public sealed class ElementaryFunctionTests {
                         print(x.sin() + x.cbrt() + x.pow(x) + x.atan2(x))
                         print(f.sin() + f.tan())
                         let u = U32(x)
-                        print(u.byteSwapped())
+                        print(u.byteSwapped)
                         print(x.bits)
                     """
                 ),

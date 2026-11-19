@@ -1,0 +1,80 @@
+module MathTests
+
+// Sable.Math's free functions, generic over the numeric protocols: each
+// for integers of several widths and for floats. Run with
+//     tools/stdlib-coverage.sh Sable.Math
+
+import Sable.Math
+import Sable.Testing
+
+@test
+fn maxAndMinPickByOrder() {
+    assertEqual(max(3, 7), 7)
+    assertEqual(min(3, 7), 3)
+    assertEqual(max(2.5, -1.0), 2.5)
+    assertEqual(min("b", "a"), "a")
+}
+
+@test
+fn clampKeepsAValueWithinTheBounds() {
+    assertEqual(clamp(15, 0, 10), 10)
+    assertEqual(clamp(-5, 0, 10), 0)
+    assertEqual(clamp(5, 0, 10), 5)
+    assertEqual(clamp(0.5 as F32, 0.0, 1.0), 0.5)
+}
+
+@test
+fn gcdIsNeverNegative() {
+    assertEqual(gcd(1071, 462), 21)
+    assertEqual(gcd(-4 as I8, 6), 2)
+    assertEqual(gcd(4, -6), 2)
+    assertEqual(gcd(0, 0), 0)
+    assertEqual(gcd(0 as U64, 9), 9)
+}
+
+@test
+fn lcmIsNeverNegative() {
+    assertEqual(lcm(4, 6), 12)
+    assertEqual(lcm(-4, 6), 12)
+    assertEqual(lcm(0 as U8, 9), 0)
+    assertEqual(lcm(7, 0), 0)
+}
+
+@test(traps: "integer overflow")
+fn lcmTrapsWhereItDoesNotFit() {
+    assertEqual(lcm(200 as U8, 3), 0)
+}
+
+@test
+fn powerMultipliesBySquaring() {
+    assertEqual(power(2, 40), 1099511627776)
+    assertEqual(power(3 as U8, 5), 243)
+    assertEqual(power(1.5, 2), 2.25)
+    assertEqual(power(7, 0), 1)
+    assertEqual(power(7, -1), 1)
+}
+
+@test
+fn isPrimeTriesTheDivisors() {
+    assert(isPrime(97), "97 is prime")
+    assert(!isPrime(91), "91 is 7 x 13")
+    assert(isPrime(2) && isPrime(3 as U8), "2 and 3 are prime")
+    assert(!isPrime(1) && !isPrime(0) && !isPrime(-7), "nothing below 2 is")
+    assert(!isPrime(64 as I16), "an even number above 2 is not")
+    assert(isPrime(251 as U8), "251 is prime")
+}
+
+@test
+fn squareRootIsCorrectlyRounded() {
+    assertEqual(squareRoot(2.0), 1.4142135623730951)
+    assertEqual(squareRoot(9.0 as F32), 3.0)
+    assert(squareRoot(-1.0).isNaN, "-1 has no square root")
+}
+
+@test
+fn floorCeilingAndRoundGiveFloats() {
+    assertEqual(floor(-2.5), -3.0)
+    assertEqual(ceiling(2.1), 3.0)
+    assertEqual(round(2.5), 3.0)
+    assertEqual(round(-2.5 as F32), -3.0)
+}

@@ -134,18 +134,13 @@ fn successesOrderBeforeFailures() {
     assert(half(1) < half(3))
 }
 
-// Through a Hasher: 'hashValue' does not lower on an Outcome yet (#266).
-fn hashOf(_ outcome: Outcome<Int, String>) -> Int {
-    var hasher = Hasher(seed: 7)
-    outcome.hash(into: &hasher)
-    return hasher.finalize()
-}
-
 @test
 fn equalOutcomesHashAlike() {
-    assertEqual(hashOf(half(4)), hashOf(half(4)))
-    assertEqual(hashOf(half(3)), hashOf(half(3)))
-    assertNotEqual(hashOf(.Ok(7)), hashOf(.Err("7")))
+    assertEqual(half(4).hashValue, half(4).hashValue)
+    assertEqual(half(3).hashValue, half(3).hashValue)
+    let ok: Outcome<Int, Int> = .Ok(7)
+    let err: Outcome<Int, Int> = .Err(7)
+    assertNotEqual(ok.hashValue, err.hashValue)
 }
 
 @test

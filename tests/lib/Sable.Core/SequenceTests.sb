@@ -315,6 +315,15 @@ fn lexicographicallyPrecedesComparesInDictionaryOrder() {
 }
 
 @test
+fn sumAndProductOfAnySequenceOfNumbers() {
+    assertEqual(Countdown { from: 4 }.sum(), 10)
+    assertEqual(Countdown { from: 4 }.product(), 24)
+    assertEqual(Countdown { from: 0 }.sum(), 0)
+    assertEqual(Countdown { from: 0 }.product(), 1)
+    assertEqual([1, 2, 3, 4].lazy.filter { $0 % 2 == 0 }.map { $0 * 10 }.sum(), 60)
+}
+
+@test
 fn containsAnEqualElement() {
     assert(Countdown { from: 5 }.contains(3))
     assert(!Countdown { from: 5 }.contains(6))

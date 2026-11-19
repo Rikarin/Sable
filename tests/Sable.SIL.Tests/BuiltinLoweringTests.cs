@@ -75,4 +75,93 @@ public sealed class BuiltinLoweringTests {
         var error = Single(ErrorCode.ERR_BuiltinSignatureMismatch, core);
         Assert.Contains(message, error.Message);
     }
+
+    static List<string> BuiltinsOf(SilFunction function) =>
+        [..function.Blocks.SelectMany(static b => b.Instructions).OfType<BuiltinInst>().Select(static b => b.Name)];
+
+    /// <summary>
+    ///     A builtin family's member is, at each use, the builtin of the type
+    ///     Self stands for there: on a concrete type, and in each instance of
+    ///     generic code — with nothing called, as for any builtin.
+    /// </summary>
+    [Fact]
+    public void AFamilysMemberIsTheBuiltinOfTheTypeSelfStandsFor() {
+        var (module, diagnostics) = Lower(
+            """
+            module M
+            fn zeros<T: FixedWidthInteger>(_ x: T) -> Int { return x.leadingZeroCount }
+            fn probe(_ x: I8, _ y: U16) -> Int { return x.leadingZeroCount + zeros(y) + x.rotatedLeft(by: 3).popCount }
+            """
+        );
+        Assert.Empty(diagnostics);
+        Assert.Equal(["count_leading_zeros_I8", "rotate_left_I8", "count_ones_I8"], BuiltinsOf(module.Find("M.probe")!).Where(static n => !n.StartsWith("add_", StringComparison.Ordinal)));
+        var instance = module.Find("M.zeros$of$U16")!;
+        Assert.Equal(["count_leading_zeros_U16"], BuiltinsOf(instance));
+        Assert.Empty(instance.Blocks.SelectMany(static b => b.Instructions).OfType<ApplyInst>());
+        Assert.Equal(7L + 0L + 1L, new SilInterpreter(module).Run("M.probe", 1L, 0x8000L));
+    }
+
+    /// <summary>
+    ///     Generic arithmetic over the numeric protocols costs what concrete
+    ///     arithmetic does: monomorphised, a sum over a T is the instruction,
+    ///     with no call to an operator.
+    /// </summary>
+    [Fact]
+    public void GenericArithmeticIsTheInstructionOnceMonomorphised() {
+        var (module, diagnostics) = Lower(
+            """
+            module M
+            fn total<T: Numeric>(_ a: T, _ b: T) -> T { return a * b + a - T.one }
+            fn probe() -> F32 { return F32(total(3, 4)) + total(1.5 as F32, 2.0) }
+            """
+        );
+        Assert.Empty(diagnostics);
+        foreach (var type in new[] { "Int", "F32" }) {
+            var instance = module.Find($"M.total$of${type}")!;
+            Assert.Equal([$"mul_{type}", $"add_{type}", $"sub_{type}"], BuiltinsOf(instance));
+            // The one call is to 'one', a static property's getter, which LLVM inlines.
+            Assert.DoesNotContain(instance.Blocks.SelectMany(static b => b.Instructions).OfType<ApplyInst>(),
+                static a => a.Callee is not FunctionRefInst { Function: var name } || !name.Contains(".one", StringComparison.Ordinal));
+        }
+
+        Assert.Equal(14f + 3.5f, new SilInterpreter(module).Run("M.probe"));
+    }
+
+    /// <summary>
+    ///     A family is checked against each built-in type that conforms to
+    ///     its protocol, as any builtin is against its one.
+    /// </summary>
+    [Fact]
+    public void AFamilyWithoutABuiltinForAConformingTypeIsAnError() {
+        var error = Single(
+            ErrorCode.ERR_UnknownBuiltin,
+            """
+            public protocol Rooted {
+                fn root() -> Self
+            }
+            extension Rooted {
+                @builtin("sqrt_Self")
+                public fn root() -> Self
+            }
+            extension I8: Rooted { }
+            """
+        );
+        Assert.Contains("'sqrt_I8'", error.Message);
+    }
+
+    [Fact]
+    public void AFamilyMeetingNoRequirementIsAnError() {
+        var error = Single(
+            ErrorCode.ERR_MalformedBuiltin,
+            """
+            public protocol Rooted { }
+            extension Rooted {
+                @builtin("sqrt_Self")
+                public fn root() -> Self
+            }
+            extension F64: Rooted { }
+            """
+        );
+        Assert.Contains("meets none", error.Message);
+    }
 }

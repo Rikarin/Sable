@@ -59,7 +59,8 @@ public sealed class ArrayExtensionTests {
             [..model.GetMembersOf(new ArrayTypeSymbol(element ?? compilation.Core.Int, kind)).Select(static m => m.Name).Order(StringComparer.Ordinal)];
 
         // A slice's members are every kind's; the growable kinds add their
-        // own, and 'T[>..]' and 'T[>..<]' have the same (docs/03 §3.9).
+        // own, an Int's numeric ones ("sum", "product") among the first;
+        // and 'T[>..]' and 'T[>..<]' have the same (docs/03 §3.9).
         var everyArray = Names(ArrayKind.Slice);
         foreach (var name in (string[])["contains", "count", "isEmpty", "slice", "sort", "swapAt", "chunks", "toArray",
             // Every array is a RandomAccessCollection, by the slice's extension.
@@ -85,6 +86,7 @@ public sealed class ArrayExtensionTests {
         Assert.Contains("toString", Names(ArrayKind.Grow, compilation.Core.U8));
         Assert.DoesNotContain("toString", Names(ArrayKind.Grow));
         Assert.DoesNotContain("contains", Names(ArrayKind.Grow, compilation.Core.Region));
+        Assert.DoesNotContain("sum", Names(ArrayKind.Grow, compilation.Core.String));
     }
 
     [Fact]

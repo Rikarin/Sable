@@ -1,0 +1,23 @@
+module Sable.Core
+
+/// How a float is rounded to an integer ('FloatingPoint.rounded(_:)'):
+/// Swift's 'FloatingPointRoundingRule', .NET's 'MidpointRounding'.
+public enum RoundingRule {
+    /// To the nearest integer, a half away from zero: 2.5 is 3, -2.5 is -3.
+    ToNearestOrAwayFromZero
+
+    /// To the nearest integer, a half to the even one: 2.5 is 2, 3.5 is 4.
+    ToNearestOrEven
+
+    /// To the least integer not below the value: the ceiling.
+    Up
+
+    /// To the greatest integer not above the value: the floor.
+    Down
+
+    /// To the integer part: toward zero.
+    TowardZero
+
+    /// Away from zero: 2.1 is 3, -2.1 is -3.
+    AwayFromZero
+}

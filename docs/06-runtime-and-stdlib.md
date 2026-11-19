@@ -297,6 +297,23 @@ floor — so the library is Sable down to the operations only the runtime can
 perform, at no cost over the compiler doing it by special case
 (docs/04, "Sable.Core in Sable").
 
+A builtin whose name has a `Self` segment is a **family**, declared once in
+a protocol's extension as the default of one of its requirements: each use
+is the builtin of the type Self stands for there, so `x.leadingZeroCount`
+is `count_leading_zeros_I8` on an I8 and `count_leading_zeros_U64` on a
+U64. The numeric protocols are built this way (`AdditiveArithmetic`,
+`Numeric`, `SignedNumeric`, `BinaryInteger`, `FixedWidthInteger`,
+`SignedInteger`, `UnsignedInteger`, `FloatingPoint`, `BinaryFloatingPoint`):
+what every integer or float can do — its operators, bit counts, rotations,
+arithmetic that reports or saturates on overflow, IEEE operations — is
+declared once for every type rather than once per type, each an LLVM
+intrinsic at the type's width, and the rest of their API is Sable over
+those, monomorphised for each type it is used with. A family is only the
+built-in types' default: a type of the program's own conforming to the
+protocol meets the requirement itself. Each type's own file
+(`Int.sb`, `U8.sb`, `F64.sb`, …) says only what differs: its limits and
+constants.
+
 ### Source layout
 
 Each module is a directory of `lib/` (`lib/Sable.Collections/`), its files

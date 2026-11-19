@@ -285,4 +285,27 @@ public sealed class ClosureTests {
     [InlineData("let c: Counter? = none\nlet f = [unowned c] () => 0", ErrorCode.ERR_UnownedNeedsClass)]
     public void OnlyAClassInstanceIsCapturedWeakOrUnowned(string body, ErrorCode code) =>
         Assert.Contains(ErrorsIn(body, Counter), e => e.Code == code);
+
+    [Fact]
+    public void TheEmptyTupleIsVoid() {
+        // #261: '()' is the unit type by its other name, so a closure given
+        // for '(Int) -> ()' needs no value, as one for '(Int) -> Void' does not.
+        AssertClean(
+            """
+            var sum = 0
+            each { sum += $0 }
+            each { x in
+                sum += x
+            }
+            let f: () -> Void = nothing
+            let g: () -> () = f
+            let unit: () = ()
+            g()
+            """,
+            """
+            fn each(_ body: (Int) -> ()) { body(1) }
+            fn nothing() -> () { }
+            """);
+        Assert.Equal("Void", TypeOfLast("let u = ()"));
+    }
 }

@@ -82,6 +82,24 @@ extension<Element: Equatable> Element[:] {
         return true
     }
 
+    /// How many elements are equal to this one. Its 'count' is how many
+    /// there are in all.
+    ///
+    /// ```sable
+    /// let xs: Int[>..] = [3, 8, 3]
+    /// assert(xs.count(of: 3) == 2)
+    /// assert(xs.count == 3)
+    /// ```
+    public fn count(of element: Element) -> Int {
+        var n = 0
+        for candidate in self {
+            if candidate == element {
+                n = n + 1
+            }
+        }
+        return n
+    }
+
     /// How many elements, from the start, the two arrays have equal.
     public fn commonPrefixLength(with other: Element[:]) -> Int {
         let shorter = self.count < other.count ? self.count : other.count

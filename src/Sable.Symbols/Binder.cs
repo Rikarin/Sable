@@ -1905,6 +1905,9 @@ public sealed partial class Binder {
                 return Convert(bound, Core.Bool, expression.Expression);
             }
 
+            case OptionalBindingConditionSyntax { Declarator: { Pattern: not (BindingPatternSyntax or WildcardPatternSyntax), Initializer: { } taken } } destructuring:
+                return BindDestructuringCondition(destructuring, taken.Value);
+
             case OptionalBindingConditionSyntax binding: {
                 // 'if let x = e' binds x to the unwrapped value.
                 var declarator = binding.Declarator;
@@ -1950,6 +1953,38 @@ public sealed partial class Binder {
             default:
                 return new BoundLiteral(condition, Core.Bool, true);
         }
+    }
+
+    /// <summary>
+    ///     'if let (a, _) = e': the unwrapped value taken apart, as
+    ///     'let (a, _) =' would, binding each name the pattern declares —
+    ///     'if case (let a, _)? = e', in effect.
+    /// </summary>
+    BoundExpression BindDestructuringCondition(OptionalBindingConditionSyntax binding, ExpressionSyntax value) {
+        var source = BindExpression(value);
+        if (source.Type is not OptionalTypeSymbol optional) {
+            if (!source.Type.IsError) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_NotOptional,
+                    binding.Span,
+                    $"'{source.Type.ToDisplayString()}' is not optional, so there is nothing to unwrap"
+                );
+            }
+
+            // Taken apart as it is, so that what it names is still bound.
+            var saved = _declaringMutable;
+            _declaringMutable = binding.LetOrVarKeyword.Kind == SyntaxKind.VarKeyword;
+            var plain = BindPattern(binding.Declarator.Pattern, source.Type);
+            _declaringMutable = saved;
+            return new BoundConditionBinding(binding, Core.Bool, source, plain, null);
+        }
+
+        var savedMutable = _declaringMutable;
+        _declaringMutable = binding.LetOrVarKeyword.Kind == SyntaxKind.VarKeyword;
+        var pattern = BindPattern(binding.Declarator.Pattern, optional.UnderlyingType);
+        _declaringMutable = savedMutable;
+
+        return new BoundConditionBinding(binding, Core.Bool, source, new BoundSomePattern(binding, optional, pattern), null);
     }
 
     BoundStatement BindWhile(WhileStatementSyntax statement) {
@@ -2500,7 +2535,7 @@ public sealed partial class Binder {
             InvocationExpressionSyntax invocation => AfterCall(BindInvocation(invocation, expectedType)),
             ElementAccessExpressionSyntax element => BindElementAccess(element),
             BinaryExpressionSyntax binary => BindBinary(binary),
-            PrefixUnaryExpressionSyntax unary => BindPrefixUnary(unary),
+            PrefixUnaryExpressionSyntax unary => BindPrefixUnary(unary, expectedType),
             PostfixUnaryExpressionSyntax unary => BindPostfixUnary(unary),
             AssignmentExpressionSyntax assignment => BindAssignment(assignment),
             ConditionalExpressionSyntax conditional => BindConditionalExpression(conditional, expectedType),
@@ -2610,6 +2645,8 @@ public sealed partial class Binder {
             long l => l,
             int i => i,
             ulong u => u,
+            Int128 i => i,
+            UInt128 u => u,
             _ => null,
         };
 
@@ -3418,7 +3455,22 @@ public sealed partial class Binder {
             return new BoundError(syntax, receiver);
         }
 
-        if (!CheckAccessible(instanceMembers[0], syntax.Name)) {
+        // A property and methods may share a name, as String's 'count' and
+        // 'count(of:)' do: called, the name is the methods; otherwise, the
+        // property. Left together, every plain 'text.count' would be an
+        // overload group with no call to choose from it.
+        if (instanceMembers.Any(static m => m is FunctionSymbol) && instanceMembers.Any(static m => m is not FunctionSymbol)) {
+            var called = syntax.Parent is InvocationExpressionSyntax invocation && invocation.Expression == syntax;
+            instanceMembers = [..instanceMembers.Where(m => m is FunctionSymbol == called)];
+        }
+
+        // What this code cannot see is not a candidate: another module's
+        // internal 'count(of:)' on every array is no reason Sable.Core's
+        // 'names.count' should fail. Only when nothing of the name is
+        // visible is that the error.
+        if (instanceMembers.Where(IsAccessible).ToList() is { Count: > 0 } accessible) {
+            instanceMembers = accessible;
+        } else if (!CheckAccessible(instanceMembers[0], syntax.Name)) {
             return new BoundError(syntax, receiver);
         }
 
@@ -3441,15 +3493,6 @@ public sealed partial class Binder {
             }
 
             instanceMembers = callable;
-        }
-
-        // A property and methods may share a name, as String's 'count' and
-        // 'count(of:)' do: called, the name is the methods; otherwise, the
-        // property. Left together, every plain 'text.count' would be an
-        // overload group with no call to choose from it.
-        if (instanceMembers.Any(static m => m is FunctionSymbol) && instanceMembers.Any(static m => m is not FunctionSymbol)) {
-            var called = syntax.Parent is InvocationExpressionSyntax invocation && invocation.Expression == syntax;
-            instanceMembers = [..instanceMembers.Where(m => m is FunctionSymbol == called)];
         }
 
         var member = BindMemberGroup(syntax, receiver, instanceMembers, found.Owner, found.Substitution);
@@ -5535,7 +5578,8 @@ public sealed partial class Binder {
             .Select(static e => e.NameToken.IsNone ? null : e.NameToken.Text)
             .ToImmutableArray();
 
-        var type = new TupleTypeSymbol([..elements.Select(static e => e.Type)], names);
+        // '()' is the unit value, of the unit type 'Void' (TypeBinder).
+        TypeSymbol type = elements.IsEmpty ? Core.Void : new TupleTypeSymbol([..elements.Select(static e => e.Type)], names);
         return new BoundTuple(syntax, type, elements);
     }
 
@@ -6778,7 +6822,7 @@ public sealed partial class Binder {
     static TypeSymbol Optional(TypeSymbol type) =>
         type is OptionalTypeSymbol || type.IsError ? type : new OptionalTypeSymbol(type);
 
-    BoundExpression BindPrefixUnary(PrefixUnaryExpressionSyntax syntax) {
+    BoundExpression BindPrefixUnary(PrefixUnaryExpressionSyntax syntax, TypeSymbol? expectedType = null) {
         if (syntax.OperatorToken.Kind == SyntaxKind.AwaitKeyword) {
             if (!_inAsyncContext) {
                 _diagnostics.Error(
@@ -6862,8 +6906,21 @@ public sealed partial class Binder {
             };
 
             if (negated is not null) {
+                // It takes the type its context asks for, as '5' does; an
+                // argument's is checked against its parameter's (Convert).
+                if (expectedType is not null
+                    && _conversions.Classify(type, expectedType is OptionalTypeSymbol optional ? optional.UnderlyingType : expectedType, true)
+                        is ConversionKind.LiteralTyping) {
+                    type = expectedType is OptionalTypeSymbol wrapped ? wrapped.UnderlyingType : expectedType;
+                }
+
                 var negative = new BoundLiteral(syntax, type, negated);
-                CheckIntegerFits(negative, type);
+                if (expectedType is null && syntax.Parent is ArgumentSyntax) {
+                    _uncheckedArguments.Add(negative);
+                } else {
+                    CheckIntegerFits(negative, type);
+                }
+
                 return negative;
             }
 

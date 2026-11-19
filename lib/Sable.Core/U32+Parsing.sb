@@ -21,8 +21,7 @@ extension U32: Parsable {
     /// ```
     public static fn parse(_ text: String, radix: Int, styles: NumberStyles = .Sign) throws(ParseError) -> U32 {
         let (negative, magnitude) = try parseInteger(text, radix, styles)
-        let greatest: U128 = 4294967295
-        let value = try unsignedValue(negative, magnitude, greatest)
+        let value = try unsignedValue(negative, magnitude, 4294967295)
         return U32(value)
     }
 }

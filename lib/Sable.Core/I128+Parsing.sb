@@ -21,7 +21,6 @@ extension I128: Parsable {
     /// ```
     public static fn parse(_ text: String, radix: Int, styles: NumberStyles = .Sign) throws(ParseError) -> I128 {
         let (negative, magnitude) = try parseInteger(text, radix, styles)
-        let greatest: U128 = 170141183460469231731687303715884105727
-        return try signedValue(negative, magnitude, greatest)
+        return try signedValue(negative, magnitude, 170141183460469231731687303715884105727)
     }
 }

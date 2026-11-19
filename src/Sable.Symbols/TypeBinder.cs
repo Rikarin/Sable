@@ -1046,6 +1046,11 @@ internal sealed class TypeBinder(Compilation compilation) {
             case ParenthesizedTypeSyntax parenthesized:
                 return BindType(parenthesized.Type, context, scope);
 
+            // '()' is the unit type, which is 'Void' by its other name:
+            // '(Int) -> ()' and '(Int) -> Void' are one type.
+            case TupleTypeSyntax { Elements.Count: 0 }:
+                return compilation.Core.Void;
+
             case TupleTypeSyntax tuple:
                 return new TupleTypeSymbol(
                     [..tuple.Elements.Select(e => BindType(e.Type, context, scope))],

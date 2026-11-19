@@ -38,3 +38,33 @@ fn conformanceIsRequired(_ p: Point) -> String {
 }
 
 fn describe(_ value: some Named) -> String { return value.name() }
+
+// A protocol's operator is a requirement like its methods (#263). The
+// built-in numbers meet the numeric protocols' by their builtin families;
+// a type of the program's own has to write them, and an enum's '==' is
+// its own, by case.
+protocol Summable { operator + (lhs: Self, rhs: Self) -> Self }
+
+struct MissingOperator: Summable {      //! S3023 it is missing 'operator +
+    var cents: Int
+}
+
+struct WrittenOperator: Summable {
+    var cents: Int
+    operator + (lhs: WrittenOperator, rhs: WrittenOperator) -> WrittenOperator {
+        return WrittenOperator { cents: lhs.cents + rhs.cents }
+    }
+}
+
+struct NoBuiltinFamilyDefault: AdditiveArithmetic {    //! S3023 it is missing 'operator +
+    static var zero: NoBuiltinFamilyDefault => NoBuiltinFamilyDefault { }
+    operator == (lhs: NoBuiltinFamilyDefault, rhs: NoBuiltinFamilyDefault) -> Bool { return true }
+    operator - (lhs: NoBuiltinFamilyDefault, rhs: NoBuiltinFamilyDefault) -> NoBuiltinFamilyDefault { return lhs }
+}
+
+struct MissingEquality: Equatable { }   //! S3023 it is missing 'operator ==
+
+enum Suit: Equatable {
+    Hearts
+    Spades
+}

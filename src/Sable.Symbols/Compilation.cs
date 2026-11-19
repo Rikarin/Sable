@@ -1507,6 +1507,15 @@ public sealed partial class Compilation {
             )
         ];
 
+        // A protocol's 'operator + (lhs: Self, rhs: Self) -> Self' is a
+        // requirement, which a conformer has to meet, as a method's is. A
+        // builtin family in the protocol's extension is the built-in
+        // types' default for it, and no other type's (ConformanceChecker).
+        function.IsAbstract = container is NamedTypeSymbol { TypeKind: TypeKind.Protocol }
+                              && declaration.Body is null
+                              && declaration.ExpressionBody is null
+                              && function.Builtin is null;
+
         var scope = CurrentScope;
         function.ReturnTypeResolver = () =>
             TypeBinder.BindType(declaration.ReturnClause.Type, function, scope);

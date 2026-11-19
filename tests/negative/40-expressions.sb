@@ -69,7 +69,7 @@ fn aUnionCaseIsNotTheUnion(_ s: Shape) -> F64 {
     }
 }
 
-fn anEmptyTupleIsNotVoid() -> Int {
+fn theEmptyTupleIsVoidNotAnInt() -> Int {
     return ()                           //! S3004
 }
 

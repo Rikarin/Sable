@@ -65,3 +65,20 @@ fn questionDotReachesWhatItHoldsNotTheOptional(_ n: Int?) -> Bool? {
 fn optionalIsTheSameTypeAsTheQuestionMark(_ n: Optional<Int>) -> Int? {
     return n
 }
+
+fn aTupleIsTakenApartOnlyWhereThereIsSomethingToUnwrap(_ p: (Int, Int)) -> Int {
+    if let (a, _) = p { //! S3011 is not optional
+        return a
+    }
+    return 0
+}
+
+fn aTupleIsTakenApartWhereItIsUnwrapped(_ p: (Int, String)?) -> Int {
+    if let (a, word) = p {
+        return a + word.count
+    }
+    guard let (b, _) = p else {
+        return 0
+    }
+    return b + c //! S2002 no symbol named 'c'
+}

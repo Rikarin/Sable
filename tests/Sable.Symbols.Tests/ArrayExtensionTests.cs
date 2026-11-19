@@ -46,7 +46,7 @@ public sealed class ArrayExtensionTests {
         }
 
         // 'append(element:)' is the builtin; 'append(contentsOf:)' is Sable over it.
-        Assert.Equal("array_count", Assert.IsType<FieldSymbol>(members.Single(m => m.Name == "count")).Builtin);
+        Assert.Equal("array_count", members.OfType<FieldSymbol>().Single(m => m.Name == "count").Builtin);
         Assert.Equal([null, "array_append"], members.Where(m => m.Name == "append").Select(static m => ((FunctionSymbol)m).Builtin).Order());
         Assert.Null(Assert.IsType<FunctionSymbol>(members.Single(m => m.Name == "contains")).Builtin);
     }
@@ -206,6 +206,30 @@ public sealed class ArrayExtensionTests {
             "struct P { var x: Int }\nextension<T> T[:] where T: Hashable { fn h() -> Int { return 0 } }\nfn f(_ ps: P[]) -> Int { return ps.h() }",
             "S3023",
             "'T: Hashable'"
+        );
+    }
+
+    [Fact]
+    public void AMethodBesideAPropertyOfItsNameHidesNeither() {
+        // #254: the program's internal 'count(among:)' is a member of every
+        // array, beside Sable.Core's 'count'. Both are found, each where it
+        // fits — and Sable.Core's own '.count's, which cannot see the
+        // program's method, still find the property.
+        AssertClean(
+            """
+            extension<Element: Equatable> Element[:] {
+                fn count(among others: Element[:]) -> Int {
+                    var n = 0
+                    for e in self { if others.contains(element: e) { n = n + 1 } }
+                    return n
+                }
+            }
+            fn f(_ xs: Int[>..]) -> Int {
+                let matched: Int = xs.count(among: [3])
+                let all: Int = xs.count
+                return matched + all + xs.count(of: 8)
+            }
+            """
         );
     }
 

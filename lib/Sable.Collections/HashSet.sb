@@ -53,8 +53,8 @@ public struct HashSetIterator<Element>: Iterator {
 
     /// The next member, or none past the last.
     public mutating fn next() -> Element? {
-        if let entry = entries.next() {
-            return entry.0
+        if let (member, _) = entries.next() {
+            return member
         }
         return none
     }

@@ -97,6 +97,16 @@ fn endsWithComparesTheLastElements() {
 }
 
 @test
+fn countOfCountsTheEqualElementsBesideTheCountOfAll() {
+    let xs: Int[>..] = [3, 8, 3]
+    assertEqual(xs.count(of: 3), 2)
+    assertEqual(xs.count(of: 5), 0)
+    assertEqual(xs.count, 3)
+    let words: String[>..] = ["a", "b", "a", "a"]
+    assertEqual(words.count(of: "a"), 3)
+}
+
+@test
 fn commonPrefixLengthCountsTheEqualStart() {
     let xs: String[>..] = ["a", "b", "c"]
     assertEqual(xs.commonPrefixLength(with: ["a", "b", "x"]), 2)

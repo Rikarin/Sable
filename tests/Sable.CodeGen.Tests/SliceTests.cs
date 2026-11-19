@@ -325,4 +325,111 @@ public sealed class SliceTests {
                 print(order.lines.count)
             """
         );
+
+
+    const string Swap = """
+                        extension<Element> Element[:] {
+                            mutating fn swapEnds() {
+                                let first = self[0]
+                                self[0] = self[self.count - 1]
+                                self[self.count - 1] = first
+                            }
+
+                            mutating fn swapPair(_ i: Int, _ j: Int) {
+                                let held = self[i]
+                                self[i] = self[j]
+                                self[j] = held
+                            }
+                        }
+                        """;
+
+    /// <summary>
+    ///     A mutating member of <c>Element[:]</c> changes the array it is
+    ///     called on, where it is, whatever its kind and wherever it is kept:
+    ///     a local, a field of an object or a struct, an inout parameter, and
+    ///     <c>self</c> in a kind's own extension.
+    /// </summary>
+    [Fact]
+    public void AMutatingSliceMemberChangesTheArray() =>
+        Prints(
+            "[3, 2, 1] [6, 5] [9, 7, 8]\n[\"c\", \"b\", \"a\"]\n[2, 1] [4, 3]\n[1, 2, 3]\n4\n[6, 5]\n[3, 2, 1] [1, 2]\n",
+            Swap + """
+
+                   extension<Element> Element[>..] {
+                       mutating fn swapEndsTwice() {
+                           self.swapEnds()
+                           swapEnds()
+                       }
+                   }
+
+                   class Box {
+                       var items: Int[>..] = [1, 2]
+                   }
+
+                   struct Pair {
+                       var items: Int[>..<]
+                   }
+
+                   fn swapped(_ xs: inout Int[>..]) {
+                       xs.swapEnds()
+                   }
+                   """,
+            """
+                var grow: Int[>..] = [1, 2, 3]
+                grow.swapEnds()
+                var shrink: Int[>..<] = [5, 6]
+                shrink.swapEnds()
+                var fixed: Int[] = [8, 7, 9]
+                fixed.swapEnds()
+                print("\(grow) \(shrink) \(fixed)")
+                var words: String[>..] = ["a", "b", "c"]
+                words.swapEnds()
+                print("\(words)")
+                let box = Box()
+                box.items.swapEnds()
+                var pair = Pair { items: [3, 4] }
+                pair.items.swapEnds()
+                print("\(box.items) \(pair.items)")
+                grow.swapEndsTwice()
+                swapped(&grow)
+                print("\(grow)")
+                shrink.append(4)
+                print(shrink.removeLast())
+                print("\(shrink)")
+                grow.swapPair(0, grow.count - 1)
+                box.items.swapPair(box.items.count - 2, box.items.count - 1)
+                print("\(grow) \(box.items)")
+            """
+        );
+
+    /// <summary>
+    ///     The array is changed in place: viewed whole, its buffer changes
+    ///     where it is and comes back with nothing copied — the one allocation
+    ///     is the array's own. A buffer another array shares is copied by the
+    ///     first write, so the other keeps what it had.
+    /// </summary>
+    [Fact]
+    public void AMutatingSliceMemberWritesInPlace() {
+        var source = Program(
+            Swap,
+            """
+                var xs: Int[>..] = [1, 2, 3, 4, 5]
+                var k = 0
+                while k < 101 {
+                    xs.swapEnds()
+                    k = k + 1
+                }
+                let kept = xs
+                xs.swapEnds()
+                print(xs[0])
+                print(kept[0])
+            """
+        );
+        Assert.Equal("1\n5\n", AssertAgree(source).Stdout);
+
+        if (CanBuild) {
+            var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
+            Assert.Contains("allocations 2,", stats, StringComparison.Ordinal);
+        }
+    }
 }

@@ -18,3 +18,43 @@ fn priorityQueuePopsSmallestFirst() {
     }
     assertEqual(order, "12479")
 }
+
+@test
+fn anEmptyQueueGivesNone() {
+    let queue = PriorityQueue<String>()
+    assert(queue.isEmpty)
+    assertEqual(queue.count, 0)
+    assert(queue.peek() == none)
+    assert(queue.pop() == none)
+}
+
+@test
+fn anOrderGivenGoesFirst() {
+    let queue = PriorityQueue<Int>(by: (a: Int, b: Int) => a > b)
+    var i = 0
+    while i < 50 {
+        queue.push((i * 37) % 50)
+        i = i + 1
+    }
+    assertEqual(queue.count, 50)
+    assert(!queue.isEmpty)
+    assertEqual(queue.peek() ?? -1, 49)
+    var previous = 50
+    while let v = queue.pop() {
+        assert(v < previous)
+        previous = v
+    }
+    assertEqual(previous, 0)
+}
+
+@test
+fn sortedElementsLeavesTheQueueAsItIs() {
+    let queue = PriorityQueue<Int>()
+    queue.push(3)
+    queue.push(1)
+    queue.push(2)
+    assert(queue.sortedElements() == [1, 2, 3])
+    assertEqual(queue.count, 3)
+    queue.removeAll()
+    assert(queue.isEmpty)
+}

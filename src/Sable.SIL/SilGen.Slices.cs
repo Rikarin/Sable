@@ -72,6 +72,57 @@ public sealed partial class SilGen {
         }
 
         /// <summary>
+        ///     The place of an array passed to a <c>mutating</c> member of
+        ///     <c>Element[:]</c> — <c>xs.swapAt(0, 1)</c>, <c>xs.sort()</c> —
+        ///     which changes the array where it is. The array is moved out of
+        ///     its place and viewed whole, in a slot of the call's own; once
+        ///     the call's borrows end, the slice is the array again and is
+        ///     moved back. The view is the only reference to the buffer (the
+        ///     array gave its own up), so a write through it changes the
+        ///     buffer in place rather than copying it, and the buffer comes
+        ///     back as it went, with nothing copied; a buffer the array shared
+        ///     is copied by the first write, as the array's own write would.
+        ///     A slice cannot change its count, so the array keeps its own.
+        /// </summary>
+        SilValue? AsMutableSliceReceiver(BoundCall call, SilValue place, SilType wanted, List<SilValue> borrows) {
+            if (wanted is not AddressType { Pointee: SliceType sliceType }
+                || place.Type is AddressType { Pointee: SliceType }) {
+                return place;
+            }
+
+            if (place.Type is not AddressType { Pointee: ArrayType arrayType }) {
+                return Missing(call, $"'{Describe(call.Syntax)}', a mutating member of a slice on an inline array");
+            }
+
+            // Taken once every argument is evaluated, as an inout access
+            // begins then: 'xs.swapAt(0, xs.count - 1)' reads the array whole.
+            // The take comes before the access to the array begins and the
+            // array is put back after it ends, so that the access covers the
+            // call alone, as it would the array passed inout.
+            var view = NewSlot(sliceType);
+            borrows.Add(new DeferredStep(() =>
+                Emit(new StoreInst(WholeSlice(Emit(new LoadInst(place, LoadKind.Take))), view, StoreKind.Init))));
+            borrows.Add(new WriteBack(() => {
+                var slice = Emit(new LoadInst(view, LoadKind.Take));
+                var array = Builtin("array_of_slice", arrayType, slice);
+                Destroy(slice);
+                Emit(new StoreInst(array, place, StoreKind.Init));
+            }));
+            BeginAccess(place, modify: true, borrows);
+            return view;
+        }
+
+        /// <summary>
+        ///     Among a call's borrows: code to emit just before the call, once
+        ///     every argument is evaluated, when its accesses begin.
+        /// </summary>
+        sealed class DeferredStep(Action run) : SilValue {
+            public bool Done { get; set; }
+            public void Run() => run();
+            public override SilType Type => SilType.Unit;
+        }
+
+        /// <summary>
         ///     An array field of an <c>@inline_layout</c> struct as a slice: its
         ///     elements are bytes in the block, laid out for it rather than as
         ///     a buffer's, so they are copied out — each element read from the

@@ -1,0 +1,307 @@
+module Sable.Collections
+
+/// A growable array that can also shrink and change anywhere: inserting and
+/// removing at any index, which a grow-only array, 'Element[>..]', leaves
+/// out (docs/03 §3.9) — .NET's List<T>, Rust's Vec<T>, Swift's Array.
+///
+/// A value, as the array it holds is (docs/02 §2.5): copying a list shares
+/// the elements until one of the two changes, which copies them then. So a
+/// list made from an array, and an array taken from a list, copy nothing
+/// unless both are kept and one is changed. Appending and removing at the
+/// end are constant time (amortised); inserting and removing at an index
+/// move every element after it — moved as they are, with one memmove, not
+/// copied one by one — linear in how many there are. An index outside
+/// 0..<count traps.
+///
+/// What every array can do without changing its count — finding, slicing,
+/// splitting — is the list's through 'asSlice()'; what reorders in place
+/// is the list's own.
+///
+/// ```sable
+/// var list = List<Int>([1, 2, 4])
+/// list.insert(3, at: 2)
+/// list.remove(at: 0)
+/// assert(list.toArray() == [2, 3, 4])
+/// ```
+public struct List<Element> {
+    var storage: Element[>..] = []
+
+    /// An empty list.
+    public init() { }
+
+    /// A list of the elements, in order. The whole of an array is not
+    /// copied: the list shares it until either changes.
+    public init(_ elements: Element[:]) {
+        storage = elements.toArray()
+    }
+
+    /// An empty list with room for 'capacity' elements before it grows.
+    public init(capacity: Int) {
+        storage.reserveCapacity(capacity)
+    }
+
+    /// How many elements the list holds.
+    public var count: Int => storage.count
+
+    /// Whether the list holds no elements.
+    public var isEmpty: Bool => storage.count == 0
+
+    /// How many elements the list has room for before it must grow.
+    public var capacity: Int => storage.capacity
+
+    /// The first element, or none when there are none.
+    public var first: Element? => storage.first
+
+    /// The last element, or none when there are none.
+    public var last: Element? => storage.last
+
+    /// The element at 'index'; outside 0..<count traps.
+    public subscript(index: Int) -> Element {
+        get => storage[index]
+        set { storage[index] = newValue }
+    }
+
+    /// The elements, as a slice: a view, with nothing copied, that has
+    /// every read an array has.
+    ///
+    /// ```sable
+    /// let list = List<Int>([5, 6, 7])
+    /// assert(list.asSlice().firstIndex(of: 6) == 1)
+    /// ```
+    public fn asSlice() -> Element[:] {
+        return storage
+    }
+
+    /// The elements in a grow-only array: the list's own, shared until
+    /// either changes, with nothing copied.
+    public fn toArray() -> Element[>..] {
+        return storage
+    }
+
+    /// An iterator over the elements, first to last: what 'for' uses.
+    public fn makeIterator() -> ListIterator<Element> {
+        return ListIterator<Element>(elements: storage, position: 0)
+    }
+
+    // ---- Growing -----------------------------------------------------------
+
+    /// Adds the element at the end.
+    public mutating fn append(_ element: Element) {
+        storage.append(element)
+    }
+
+    /// Adds the elements at the end, in order.
+    public mutating fn append(contentsOf elements: Element[:]) {
+        storage.append(contentsOf: elements)
+    }
+
+    /// Room for at least 'minimumCapacity' elements in all.
+    public mutating fn reserveCapacity(_ minimumCapacity: Int) {
+        storage.reserveCapacity(minimumCapacity)
+    }
+
+    /// Puts the element at 'index', moving it and those after it up one;
+    /// 'index' may be the count, to add at the end, and outside 0...count
+    /// traps.
+    public mutating fn insert(_ element: Element, at index: Int) {
+        // The range is checked before anything moves: a slice past the end traps.
+        let _ = storage[index..<storage.count]
+        storage.append(element)
+        // Right by one: the new last element comes round to 'index'.
+        storage.rotate(from: index, to: storage.count, left: -1)
+    }
+
+    /// Puts the elements at 'index', in order, moving those after it up;
+    /// outside 0...count traps. Every element moves once.
+    public mutating fn insert(contentsOf elements: Element[:], at index: Int) {
+        self.replaceSubrange(index..<index, with: elements)
+    }
+
+    // ---- Shrinking ---------------------------------------------------------
+
+    /// Takes out the element at 'index' and gives it back, moving those
+    /// after it down one; outside 0..<count traps.
+    public mutating fn remove(at index: Int) -> Element {
+        let _ = storage[index]
+        storage.rotate(from: index, to: storage.count, left: 1)
+        return storage.removeLast()
+    }
+
+    /// Takes out the element at 'index' and gives it back, the last element
+    /// taking its place: constant time, but the order is not kept (Rust's
+    /// swap_remove). Outside 0..<count traps.
+    public mutating fn swapRemove(at index: Int) -> Element {
+        storage.swapAt(index, storage.count - 1)
+        return storage.removeLast()
+    }
+
+    /// Takes out the first element and gives it back; an empty list traps.
+    public mutating fn removeFirst() -> Element {
+        return self.remove(at: 0)
+    }
+
+    /// Takes out the last element and gives it back; an empty list traps.
+    public mutating fn removeLast() -> Element {
+        return storage.removeLast()
+    }
+
+    /// Takes out the last element and gives it back, or none when empty.
+    public mutating fn popLast() -> Element? {
+        if storage.count == 0 {
+            return none
+        }
+        return storage.removeLast()
+    }
+
+    /// Takes out every element.
+    public mutating fn removeAll() {
+        storage.clear()
+    }
+
+    /// Takes out every element that passes the test, keeping the order of
+    /// the rest. Linear: each element is tested once and moved at most once.
+    ///
+    /// ```sable
+    /// var list = List<Int>([1, 2, 3, 4, 5])
+    /// list.removeAll(where: (x: Int) => x % 2 == 0)
+    /// assert(list.toArray() == [1, 3, 5])
+    /// ```
+    public mutating fn removeAll(where shouldRemove: (Element) -> Bool) {
+        var kept = 0
+        var i = 0
+        while i < storage.count {
+            if !shouldRemove(storage[i]) {
+                if kept != i {
+                    storage[kept] = storage[i]
+                }
+                kept = kept + 1
+            }
+            i = i + 1
+        }
+        self.truncate(to: kept)
+    }
+
+    /// Keeps only the elements that pass the test, in their order (Rust's
+    /// retain).
+    public mutating fn retain(where shouldKeep: (Element) -> Bool) {
+        self.removeAll(where: (element: Element) => !shouldKeep(element))
+    }
+
+    /// Takes out the elements from 'count' on; a count at or past the
+    /// list's own changes nothing, and a negative one traps.
+    public mutating fn truncate(to count: Int) {
+        if count >= storage.count {
+            return
+        }
+        // A negative count is a range the wrong way round: the slice traps.
+        let _ = storage[0..<count]
+        while storage.count > count {
+            let _ = storage.removeLast()
+        }
+    }
+
+    /// Takes out the elements in the range and gives them back in order,
+    /// moving those after it down; a range not within 0...count traps.
+    ///
+    /// ```sable
+    /// var list = List<Int>([1, 2, 3, 4, 5])
+    /// let middle = list.drain(1..<3)
+    /// assert(middle == [2, 3])
+    /// assert(list.toArray() == [1, 4, 5])
+    /// ```
+    public mutating fn drain(_ range: Range<Int>) -> Element[>..] {
+        let drained = storage[range].toArray()
+        self.replaceSubrange(range, with: [])
+        return drained
+    }
+
+    /// Replaces the elements in the range with the new ones, which may be
+    /// more or fewer; a range not within 0...count traps. Linear: the
+    /// elements after the range are moved as they are, not copied.
+    ///
+    /// ```sable
+    /// var list = List<Int>([1, 2, 3])
+    /// list.replaceSubrange(1..<2, with: [7, 8, 9])
+    /// assert(list.toArray() == [1, 7, 8, 9, 3])
+    /// ```
+    public mutating fn replaceSubrange(_ range: Range<Int>, with elements: Element[:]) {
+        // Slicing checks the range, before anything changes.
+        let _ = storage[range]
+        let tail = storage.count - range.upperBound
+        // The range's elements go round to the end, and are dropped there;
+        // the new ones go on the end, and round to the front of the tail.
+        storage.rotate(from: range.lowerBound, to: storage.count, left: range.count)
+        self.truncate(to: range.lowerBound + tail)
+        storage.reserveCapacity(storage.count + elements.count)
+        storage.append(contentsOf: elements)
+        storage.rotate(from: range.lowerBound, to: storage.count, left: tail)
+    }
+
+    // ---- Reordering --------------------------------------------------------
+
+    /// Swaps the elements at 'i' and 'j'.
+    public mutating fn swapAt(_ i: Int, _ j: Int) {
+        storage.swapAt(i, j)
+    }
+
+    /// Puts the elements in the opposite order.
+    public mutating fn reverse() {
+        storage.reverse()
+    }
+
+    /// Sorts the elements in place by 'before': a stable merge sort.
+    public mutating fn sort(by before: (Element, Element) -> Bool) {
+        storage.sort(by: before)
+    }
+}
+
+extension List where Element: Equatable {
+    /// Whether an element equal to this one is in the list.
+    public fn contains(_ element: Element) -> Bool {
+        return storage.contains(element: element)
+    }
+
+    /// Takes out each element equal to the one before it, so that runs of
+    /// equal elements are left one long (Rust's dedup). Linear.
+    public mutating fn dedup() {
+        if storage.count < 2 {
+            return
+        }
+        var kept = 1
+        var i = 1
+        while i < storage.count {
+            if storage[i] != storage[kept - 1] {
+                if kept != i {
+                    storage[kept] = storage[i]
+                }
+                kept = kept + 1
+            }
+            i = i + 1
+        }
+        self.truncate(to: kept)
+    }
+}
+
+extension List where Element: Comparable {
+    /// Sorts the elements in place, ascending: a stable merge sort.
+    public mutating fn sort() {
+        storage.sort()
+    }
+}
+
+extension List: Sequence { }
+
+/// The elements of a list, first to last: a view of them taken when it
+/// was made, which later changes to the list do not touch.
+public struct ListIterator<Element>: Iterator {
+    let elements: Element[:]
+    var position: Int
+
+    public mutating fn next() -> Element? {
+        if position >= elements.count {
+            return none
+        }
+        position = position + 1
+        return elements[position - 1]
+    }
+}

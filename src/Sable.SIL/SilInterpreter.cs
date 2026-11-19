@@ -1648,6 +1648,70 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return new SliceValue(buffer, start + (int)from, (int)(to - from));
             }
 
+            // A slice as an array again: the buffer itself when the slice is
+            // the whole of it, else a copy of its run.
+            case "array_of_slice": {
+                var (buffer, start, count) = ElementsOf(operands[0]);
+                if (buffer is null || count == 0) {
+                    return null;
+                }
+
+                if (start == 0 && count == buffer.Elements.Count) {
+                    Retain(buffer.Type, buffer);
+                    return buffer;
+                }
+
+                var copy = Allocate(new HeapArray(buffer.Type, [..buffer.Elements.Skip(start).Take(count)]));
+                foreach (var element in copy.Elements) {
+                    Retain(buffer.Type.Element, element);
+                }
+
+                return copy;
+            }
+
+            case "array_rotate": {
+                var address = (IReference)operands[0]!;
+                var (from, to, by) = ((long)operands[1]!, (long)operands[2]!, (long)operands[3]!);
+                var (_, _, count) = ElementsOf(address.Peek());
+                if (from < 0 || to > count || from > to) {
+                    throw new SilTrap("array slice out of range");
+                }
+
+                var length = (int)(to - from);
+                var shift = length == 0 ? 0 : (int)(((by % length) + length) % length);
+                if (shift == 0) {
+                    return null;
+                }
+
+                // Made the only reference to the elements first, as a write is.
+                HeapArray buffer;
+                var start = 0;
+                if (address.Peek() is SliceValue) {
+                    var unique = UniqueSlice(builtin.Operands[0], address);
+                    (buffer, start) = (unique.Buffer!, unique.Start);
+                } else {
+                    buffer = Unique(builtin.Operands[0], address);
+                }
+
+                var at = start + (int)from;
+                var moved = buffer.Elements.GetRange(at, shift);
+                buffer.Elements.RemoveRange(at, shift);
+                buffer.Elements.InsertRange(at + length - shift, moved);
+                return null;
+            }
+
+            case "array_capacity":
+                return operands[0] is HeapArray held ? (long)Alive(held).Elements.Capacity : 0L;
+
+            case "array_reserve": {
+                var minimum = (long)operands[1]!;
+                if (minimum > 0) {
+                    Unique(builtin.Operands[0], (IReference)operands[0]!).Elements.EnsureCapacity((int)minimum);
+                }
+
+                return null;
+            }
+
             case "array_clear": {
                 var address = (IReference)operands[0]!;
                 var old = address.Peek();

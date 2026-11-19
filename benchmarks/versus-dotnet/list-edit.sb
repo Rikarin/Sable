@@ -1,0 +1,45 @@
+module ListEdit
+
+// List<Element> against .NET's List<long>: a million appends, reading every
+// element by index, 2,000 inserts and 2,000 removals in the middle of a
+// list of 20,000, and removing every even element; three times.
+
+import Sable.Collections
+
+@main
+fn main() {
+    var total = 0
+    var round = 0
+    while round < 3 {
+        var list = List<Int>()
+        var i = 0
+        while i < 1000000 {
+            list.append(i ^ round)
+            i = i + 1
+        }
+
+        i = 0
+        while i < list.count {
+            total = total + list[i] % 7
+            i = i + 1
+        }
+
+        list.truncate(to: 20000)
+        i = 0
+        while i < 2000 {
+            list.insert(i, at: list.count / 2)
+            i = i + 1
+        }
+        i = 0
+        while i < 2000 {
+            total = total + list.remove(at: list.count / 3)
+            i = i + 1
+        }
+
+        list.removeAll(where: (x: Int) => x % 2 == 0)
+        total = total + list.count + list[list.count / 2]
+        round = round + 1
+    }
+
+    print(total)
+}

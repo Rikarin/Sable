@@ -4164,6 +4164,10 @@ public sealed partial class SilGen {
                 return;
             }
 
+            if (value is DeferredStep) {
+                return;
+            }
+
             if (value is AccessMarker marker) {
                 if (marker.Begun) {
                     Emit(new BuiltinInst("access_end", SilType.Unit, marker.Address));
@@ -8965,6 +8969,9 @@ public sealed partial class SilGen {
                 SilValue? self;
                 if (type.Parameters[0] is AddressType) {
                     self = call.Receiver is null or BoundSelfAccess ? _selfAddress : Address(call.Receiver, borrows);
+                    if (self is not null) {
+                        self = AsMutableSliceReceiver(call, self, type.Parameters[0], borrows);
+                    }
                 } else if (call.Receiver is null) {
                     self = _selfValue ?? (_selfAddress is { } address ? Hold(Emit(new LoadInst(address))) : null)
                         ?? (CapturedSelf() is { } captured ? Hold(captured) : null);
@@ -9122,6 +9129,8 @@ public sealed partial class SilGen {
                     // the call leaves.
                     case WriteBack writeBack:
                         writeBack.Run();
+                        break;
+                    case DeferredStep:
                         break;
                     case LoadBorrowInst borrowed:
                         Emit(new EndBorrowInst(borrowed));

@@ -1905,6 +1905,9 @@ public sealed partial class Binder {
                 return Convert(bound, Core.Bool, expression.Expression);
             }
 
+            case OptionalBindingConditionSyntax { Declarator: { Pattern: not (BindingPatternSyntax or WildcardPatternSyntax), Initializer: { } taken } } destructuring:
+                return BindDestructuringCondition(destructuring, taken.Value);
+
             case OptionalBindingConditionSyntax binding: {
                 // 'if let x = e' binds x to the unwrapped value.
                 var declarator = binding.Declarator;
@@ -1950,6 +1953,38 @@ public sealed partial class Binder {
             default:
                 return new BoundLiteral(condition, Core.Bool, true);
         }
+    }
+
+    /// <summary>
+    ///     'if let (a, _) = e': the unwrapped value taken apart, as
+    ///     'let (a, _) =' would, binding each name the pattern declares —
+    ///     'if case (let a, _)? = e', in effect.
+    /// </summary>
+    BoundExpression BindDestructuringCondition(OptionalBindingConditionSyntax binding, ExpressionSyntax value) {
+        var source = BindExpression(value);
+        if (source.Type is not OptionalTypeSymbol optional) {
+            if (!source.Type.IsError) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_NotOptional,
+                    binding.Span,
+                    $"'{source.Type.ToDisplayString()}' is not optional, so there is nothing to unwrap"
+                );
+            }
+
+            // Taken apart as it is, so that what it names is still bound.
+            var saved = _declaringMutable;
+            _declaringMutable = binding.LetOrVarKeyword.Kind == SyntaxKind.VarKeyword;
+            var plain = BindPattern(binding.Declarator.Pattern, source.Type);
+            _declaringMutable = saved;
+            return new BoundConditionBinding(binding, Core.Bool, source, plain, null);
+        }
+
+        var savedMutable = _declaringMutable;
+        _declaringMutable = binding.LetOrVarKeyword.Kind == SyntaxKind.VarKeyword;
+        var pattern = BindPattern(binding.Declarator.Pattern, optional.UnderlyingType);
+        _declaringMutable = savedMutable;
+
+        return new BoundConditionBinding(binding, Core.Bool, source, new BoundSomePattern(binding, optional, pattern), null);
     }
 
     BoundStatement BindWhile(WhileStatementSyntax statement) {

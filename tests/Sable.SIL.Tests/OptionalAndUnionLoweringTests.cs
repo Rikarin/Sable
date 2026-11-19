@@ -75,6 +75,47 @@ public sealed class OptionalAndUnionLoweringTests {
     }
 
     [Fact]
+    public void AnOptionalTupleIsTakenApartWhereItIsUnwrapped() {
+        // #262: 'if let (a, _) = t' binds what the pattern names, in 'if',
+        // 'guard' and 'while', as 'let (a, _) = t' and 'for (k, v) in d' do.
+        var module = Lower(
+            """
+            fn pair(_ give: Bool) -> (Int, String)? {
+                return give ? (7, "seven") : none
+            }
+            fn first(_ give: Bool) -> Int {
+                if let (number, _) = pair(give) {
+                    return number
+                }
+                return -1
+            }
+            fn both(_ give: Bool) -> Int {
+                guard var (n, word) = pair(give), n > 0 else {
+                    return -1
+                }
+                n += word.count
+                return n
+            }
+            fn products() -> Int {
+                let items: (Int, Int)[>..] = [(1, 2), (3, 4)]
+                var it = items.makeIterator()
+                var total = 0
+                while let (a, b) = it.next() {
+                    total += a * b
+                }
+                return total
+            }
+            """
+        );
+
+        Assert.Equal(7L, Run(module, "first", true));
+        Assert.Equal(-1L, Run(module, "first", false));
+        Assert.Equal(12L, Run(module, "both", true));
+        Assert.Equal(-1L, Run(module, "both", false));
+        Assert.Equal(14L, Run(module, "products"));
+    }
+
+    [Fact]
     public void APlainAsGivesItsOperandTheType() {
         var module = Lower(
             """

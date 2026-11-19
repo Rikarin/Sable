@@ -148,6 +148,7 @@ T[:]                // slice view
 (A, B) -> C         // function type
 (A) throws(E) -> C  // throwing function type
 async (A) -> C      // async function type
+(inout A) -> ()     // takes the caller's A, to change in place; '()' is Void
 A | B | C           // structural union
 some P              // opaque type conforming to P
 any P               // existential box conforming to P
@@ -243,6 +244,15 @@ fn store(consuming h: FileHandle)   // takes ownership
 fn peek(borrowing h: FileHandle)    // may not escape it
 fn edit(v: inout Vec3)              // exclusive mutable access
 fn pick(ref a: Node, ref b: Node) -> ref Node    // root inferred as {a, b}
+```
+
+A function type's parameter may be `inout` too, and so may a closure's; the
+call passes `&x`, as to a declared function:
+
+```sable
+fn apply(_ change: (inout Int) -> ()) -> Int { var n = 1; change(&n); return n }
+apply { (v: inout Int) in v += 1 }   // 2
+apply { $0 *= 7 }                     // 7: '$0' is inout as the type says
 ```
 
 ### Local and nested functions

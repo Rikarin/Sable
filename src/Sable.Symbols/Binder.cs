@@ -4370,6 +4370,11 @@ public sealed partial class Binder {
                 bound[i] = BindExpression(syntaxes[i], type.ParameterTypes[i]);
             }
 
+            // '(inout Int) -> ()' called with '&n': n is changed where it is.
+            if (type.IsInOut(i)) {
+                CheckWritableArgument(bound[i], "inout");
+            }
+
             converted.Add(Convert(bound[i], type.ParameterTypes[i], bound[i].Syntax));
         }
 
@@ -5758,7 +5763,14 @@ public sealed partial class Binder {
 
         for (var i = 0; i < count; i++) {
             var parameterSyntax = declared[i];
-            var parameter = new ParameterSymbol(parameterSyntax.Identifier.Text, null, symbol, parameterSyntax, i);
+
+            // '(v: inout Int) in' changes the caller's Int where it is; so
+            // does a 'v' whose type the context gives as '(inout Int) -> ()'.
+            var inOut = !parameterSyntax.ModifierToken.IsNone
+                || parameterSyntax.Type is null && expected is not null && expected.IsInOut(i);
+            var parameter = new ParameterSymbol(parameterSyntax.Identifier.Text, null, symbol, parameterSyntax, i) {
+                Modifier = inOut ? ParameterModifier.InOut : ParameterModifier.None,
+            };
 
             TypeSymbol parameterType;
             if (parameterSyntax.Type is { } annotation) {
@@ -5789,7 +5801,9 @@ public sealed partial class Binder {
             && !expected.ParameterTypes.Any(IsOpen)) {
             for (var i = 0; i < expected.ParameterTypes.Length; i++) {
                 var implicitType = expected.ParameterTypes[i];
-                var parameter = new ParameterSymbol($"${i}", null, symbol, null, i);
+                var parameter = new ParameterSymbol($"${i}", null, symbol, null, i) {
+                    Modifier = expected.IsInOut(i) ? ParameterModifier.InOut : ParameterModifier.None,
+                };
                 parameter.TypeResolver = () => implicitType;
                 parameters.Add(parameter);
             }
@@ -5816,7 +5830,7 @@ public sealed partial class Binder {
             symbol.ReturnType,
             symbol.IsAsync,
             _closureThrows
-        );
+        ) { InOutParameters = FunctionTypeSymbol.InOutOf(symbol.Parameters.Select(static p => p.Modifier == ParameterModifier.InOut)) };
 
         return Record(syntax, new BoundClosure(syntax, type, symbol, captures, bound));
     }
@@ -6652,7 +6666,10 @@ public sealed partial class Binder {
     ///     must be a place an assignment could write: <c>inc(&amp;n)</c> changes
     ///     <c>n</c> as <c>n = n + 1</c> would, and is refused where that is.
     /// </summary>
-    void CheckWritableArgument(BoundExpression argument, ParameterSymbol parameter) {
+    void CheckWritableArgument(BoundExpression argument, ParameterSymbol parameter) =>
+        CheckWritableArgument(argument, parameter.Modifier == ParameterModifier.Out ? "out" : "inout");
+
+    void CheckWritableArgument(BoundExpression argument, string keyword) {
         var place = argument is BoundUnaryOperator { OperatorKind: UnaryOperatorKind.AddressOf, Operand: var operand }
             ? operand
             : argument;
@@ -6660,8 +6677,6 @@ public sealed partial class Binder {
         if (place.HasError) {
             return;
         }
-
-        var keyword = parameter.Modifier == ParameterModifier.Out ? "out" : "inout";
 
         if (!place.IsAssignable && !InitialisesLetField(place)) {
             _diagnostics.Error(
@@ -7818,7 +7833,7 @@ public sealed partial class Binder {
                 substitution.Apply(type.ReturnType),
                 type.IsAsync,
                 type.ThrownType is null ? null : substitution.Apply(type.ThrownType)
-            );
+            ) { InOutParameters = type.InOutParameters };
 
     // =======================================================================
     // Patterns

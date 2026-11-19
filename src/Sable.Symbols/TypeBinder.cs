@@ -1067,7 +1067,21 @@ internal sealed class TypeBinder(Compilation compilation) {
             case ParenthesizedTypeSyntax parenthesized:
                 return BindType(parenthesized.Type, context, scope);
 
+            // '()' is nothing, as Void is: '(inout Int) -> ()'.
+            case TupleTypeSyntax { Elements.Count: 0 }:
+                return compilation.Core.Void;
+
             case TupleTypeSyntax tuple:
+                foreach (var element in tuple.Elements) {
+                    if (!element.ModifierToken.IsNone) {
+                        _diagnostics.Error(
+                            ErrorCode.ERR_MisplacedInOut,
+                            element.ModifierToken.Span,
+                            "a tuple's element cannot be 'inout'; only a function type's parameter can, as in '(inout Int) -> ()'"
+                        );
+                    }
+                }
+
                 return new TupleTypeSymbol(
                     [..tuple.Elements.Select(e => BindType(e.Type, context, scope))],
                     [
@@ -1107,7 +1121,10 @@ internal sealed class TypeBinder(Compilation compilation) {
                     BindType(function.ReturnType, context, scope),
                     !function.AsyncKeyword.IsNone,
                     thrown
-                ) { IsRethrows = rethrows };
+                ) {
+                    IsRethrows = rethrows,
+                    InOutParameters = FunctionTypeSymbol.InOutOf(function.Parameters.Elements.Select(static e => !e.ModifierToken.IsNone)),
+                };
             }
 
             case OpaqueTypeSyntax opaque: {

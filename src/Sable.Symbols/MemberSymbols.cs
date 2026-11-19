@@ -263,7 +263,9 @@ public sealed class FunctionSymbol : Symbol {
 
     /// <summary>The function's type, as it would appear in a signature.</summary>
     public FunctionTypeSymbol FunctionType =>
-        new([..Parameters.Select(static p => p.Type)], ReturnType, IsAsync, ThrownType);
+        new([..Parameters.Select(static p => p.Type)], ReturnType, IsAsync, ThrownType) {
+            InOutParameters = FunctionTypeSymbol.InOutOf(Parameters.Select(static p => p.Modifier == ParameterModifier.InOut)),
+        };
 
     public override string ToString() => $"{QualifiedName}{SignatureString()}";
 

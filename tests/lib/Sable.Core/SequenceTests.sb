@@ -12,6 +12,10 @@ fn text(_ values: Int[:]) -> String {
 
 // A sequence of the program's own, by its iterator alone, so that the
 // algorithms are tested through the protocol and not only on arrays.
+union Stop: Error {
+    AtThree
+}
+
 struct Countdown: Sequence {
     let from: Int
 
@@ -84,6 +88,31 @@ fn compactMapLeavesOutNone() {
 @test
 fn flatMapJoinsTheSequencesTheClosureMakes() {
     assertEqualText(text(Countdown { from: 3 }.flatMap { Countdown { from: $0 } }), "3,2,1,2,1,1")
+}
+
+@test
+fn reduceIntoChangesOneResultInPlace() {
+    let evens = Countdown { from: 6 }.reduce(into: [] as Int[>..]) { (found: inout Int[>..], n: Int) in
+        if n % 2 == 0 {
+            found.append(n)
+        }
+    }
+    assert(evens == [6, 4, 2])
+    assertEqual(Countdown { from: 0 }.reduce(into: 7) { $0 += $1 }, 7)
+}
+
+@test
+fn reduceIntoRethrowsWhatTheClosureThrows() {
+    var reached = 0
+    let result = try? Countdown { from: 5 }.reduce(into: 0) { (sum: inout Int, n: Int) in
+        if n == 3 {
+            throw Stop.AtThree
+        }
+        sum += n
+        reached = sum
+    }
+    assert(result == none)
+    assertEqual(reached, 9)
 }
 
 @test

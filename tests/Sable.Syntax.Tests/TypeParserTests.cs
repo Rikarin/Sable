@@ -149,6 +149,14 @@ public sealed class TypeParserTests {
         "(FunctionType async (TupleType (TupleTypeElement (SimpleNameType Request))) "
         + "(ThrowsSpec throws (SimpleNameType HttpError)) -> (SimpleNameType Response))"
     )]
+    [InlineData(
+        "(inout Int, String) -> ()",
+        "(FunctionType (TupleType (TupleTypeElement inout (SimpleNameType Int)) (TupleTypeElement (SimpleNameType String))) -> (TupleType))"
+    )]
+    [InlineData(
+        "(total: inout R) -> Void",
+        "(FunctionType (TupleType (TupleTypeElement total inout (SimpleNameType R))) -> (SimpleNameType Void))"
+    )]
     public void ParsesFunctionTypes(string source, string expected) => Assert.Equal(expected, Parse(source));
 
     [Fact]

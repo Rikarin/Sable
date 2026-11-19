@@ -1,0 +1,14 @@
+module Negative.InOutFunctionTypes
+
+// A function type's parameter may be 'inout'; a tuple's element may not.
+
+fn tupleElement(_ t: (inout Int, Int)) { } //! S3208 a tuple's element cannot be 'inout'
+
+fn change(_ f: (inout Int) -> ()) {
+    let fixed = 1
+    f(&fixed) //! S3010 must be a mutable binding
+}
+
+fn mismatch() {
+    change({ (v: Int) in print(v) }) //! S3004 expected '(inout Int) -> Void'
+}

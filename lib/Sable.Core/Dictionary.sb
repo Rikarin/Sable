@@ -248,32 +248,37 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
         return value
     }
 
-    /// Replaces the key's value with what `change` makes of it, when the key
-    /// has one; true if it had. Rust's `entry(key).and_modify(change)`.
+    /// Changes the key's value where it is, when the key has one; true if it
+    /// had. Rust's `entry(key).and_modify(change)`.
     ///
-    /// The closure is given the value and gives back the one to keep. (An
-    /// `inout` closure, which would change the value where it is, waits on
-    /// the language: issue #255.)
+    /// The closure is given the value `inout`, held by nothing else while it
+    /// runs: an array value grows in place, not copied.
+    ///
+    /// ```sable
+    /// var stock: [String: Int] = ["pears": 3]
+    /// assert(stock.modify("pears") { $0 -= 1 })
+    /// assert(stock["pears"] == 2)
+    /// assert(!stock.modify("plums") { $0 -= 1 })
+    /// ```
     @discardable
-    public mutating fn modify(_ key: Key, _ change: (Value) -> Value) -> Bool {
+    public mutating fn modify(_ key: Key, _ change: (inout Value) -> Void) -> Bool {
         let at = find(key, Dictionary.hashOf(key))
         if at < 0 {
             return false
         }
-        replaceValue(at, change)
+        changeValue(at, change)
         return true
     }
 
-    /// Replaces the key's value with what `change` makes of it, the key
-    /// first set to the fallback if it had no value:
-    /// `counts.modify(word, default: 0) { (n: Int) -> Int in n + 1 }`.
-    public mutating fn modify(_ key: Key, default fallback: Value, _ change: (Value) -> Value) {
+    /// Changes the key's value where it is, the key first set to the
+    /// fallback if it had no value: `counts.modify(word, default: 0) { $0 += 1 }`.
+    public mutating fn modify(_ key: Key, default fallback: Value, _ change: (inout Value) -> Void) {
         let hash = Dictionary.hashOf(key)
         let at = place(key, hash)
         if slots[at] < 0 {
             add(at, key, fallback, hash)
         }
-        replaceValue(at, change)
+        changeValue(at, change)
     }
 
     // ---- Merging and transforming ---------------------------------------------
@@ -473,11 +478,11 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
     /// The value in the slot replaced by what `change` makes of it. The
     /// entry is taken out of the array while `change` runs, so the value it
     /// is given is referred to from nowhere else.
-    mutating fn replaceValue(_ at: Int, _ change: (Value) -> Value) {
+    mutating fn changeValue(_ at: Int, _ change: (inout Value) -> Void) {
         let index = slots[at] & 4294967295
         var entry = entries[index]!
         entries[index] = none
-        entry.value = change(entry.value)
+        change(&entry.value)
         entries[index] = entry
     }
 

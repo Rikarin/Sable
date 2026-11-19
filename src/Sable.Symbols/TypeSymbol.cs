@@ -672,9 +672,24 @@ public sealed class FunctionTypeSymbol(
     /// </summary>
     public bool IsRethrows { get; init; }
 
+    /// <summary>
+    ///     Which parameters are <c>inout</c>: <c>(inout Int) -&gt; ()</c> is
+    ///     given the caller's Int where it is, to change. Empty when none is.
+    /// </summary>
+    public ImmutableArray<bool> InOutParameters { get; init; } = [];
+
+    /// <summary>Whether parameter <paramref name="index" /> is <c>inout</c>.</summary>
+    public bool IsInOut(int index) => index < InOutParameters.Length && InOutParameters[index];
+
+    /// <summary>Which of these parameters are <c>inout</c>, empty when none is.</summary>
+    public static ImmutableArray<bool> InOutOf(IEnumerable<bool> inOut) {
+        var all = inOut.ToImmutableArray();
+        return all.Contains(true) ? all : [];
+    }
+
     public override string ToDisplayString() {
         var prefix = IsAsync ? "async " : string.Empty;
-        var parameters = string.Join(", ", ParameterTypes.Select(static t => t.ToDisplayString()));
+        var parameters = string.Join(", ", ParameterTypes.Select((t, i) => (IsInOut(i) ? "inout " : string.Empty) + t.ToDisplayString()));
         var throws = IsRethrows
             ? " rethrows"
             : ThrownType is null
@@ -713,7 +728,7 @@ public sealed class FunctionTypeSymbol(
         }
 
         for (var i = 0; i < ParameterTypes.Length; i++) {
-            if (!ParameterTypes[i].Equals(function.ParameterTypes[i])) {
+            if (!ParameterTypes[i].Equals(function.ParameterTypes[i]) || IsInOut(i) != function.IsInOut(i)) {
                 return false;
             }
         }

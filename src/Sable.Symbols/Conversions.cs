@@ -129,7 +129,9 @@ internal sealed class Conversions(CoreTypes core) {
             && (from.ThrownType is null || to.ThrownType is not null)) {
             var parametersMatch = true;
             for (var i = 0; i < from.ParameterTypes.Length; i++) {
-                if (from.ParameterTypes[i].Equals(to.ParameterTypes[i])) {
+                // 'inout' is how the argument is passed: '(Int) -> ()' does
+                // not take an Int where it is.
+                if (from.ParameterTypes[i].Equals(to.ParameterTypes[i]) && from.IsInOut(i) == to.IsInOut(i)) {
                     continue;
                 }
 

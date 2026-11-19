@@ -107,7 +107,8 @@ public sealed class TypeSubstitution {
                     || !returnType.Equals(function.ReturnType)
                     || !Equals(thrown, function.ThrownType)
                         ? new FunctionTypeSymbol(parameters, returnType, function.IsAsync, thrown) {
-                            IsRethrows = function.IsRethrows
+                            IsRethrows = function.IsRethrows,
+                            InOutParameters = function.InOutParameters,
                         }
                         : function;
             }

@@ -369,9 +369,9 @@ fn orInsertWithMakesTheValueOnlyWhenMissing() {
 @test
 fn modifyChangesOnlyAKeyThatIsThere() {
     var d: [String: Int] = ["a": 1]
-    assert(d.modify("a") { (n: Int) -> Int in n + 10 })
+    assert(d.modify("a") { (n: inout Int) in n += 10 })
     assertEqual(d["a"] ?? -1, 11)
-    assert(!d.modify("b") { (n: Int) -> Int in n + 10 })
+    assert(!d.modify("b") { $0 += 10 })
     assert(d["b"] == none)
 }
 
@@ -380,14 +380,21 @@ fn modifyWithADefaultAddsTheKeyFirst() {
     var lists: [String: Int[>..]] = [:]
     for word in ["apple", "avocado", "banana"] {
         let first = word.slice(from: 0, to: 1)
-        lists.modify(first, default: []) { (list: Int[>..]) -> Int[>..] in
-            var longer = list
-            longer.append(word.count)
-            return longer
-        }
+        lists.modify(first, default: []) { (list: inout Int[>..]) in list.append(word.count) }
     }
     assertEqual(lists["a"]?.count ?? -1, 2)
     assertEqual(lists["b"]?.count ?? -1, 1)
+}
+
+@test
+fn modifyChangesTheValueWhereItIs() {
+    var tally: [String: Int] = [:]
+    for word in ["x", "y", "x", "x"] {
+        tally.modify(word, default: 0) { $0 += 1 }
+    }
+    assertEqual(tally["x"] ?? -1, 3)
+    assertEqual(tally["y"] ?? -1, 1)
+    assert(tally.keys() == ["x", "y"])
 }
 
 // ---- Merging and transforming -------------------------------------------------

@@ -1733,12 +1733,13 @@ public sealed partial class SilGen {
             // A function as a value: code and a context, called with both.
             case FunctionTypeSymbol { IsRethrows: false } functionType: {
                 var parameters = ImmutableArray.CreateBuilder<SilType>();
-                foreach (var parameter in functionType.ParameterTypes) {
-                    if (Lower(parameter) is not { } lowered) {
+                for (var i = 0; i < functionType.ParameterTypes.Length; i++) {
+                    if (Lower(functionType.ParameterTypes[i]) is not { } lowered) {
                         return null;
                     }
 
-                    parameters.Add(lowered);
+                    // An inout parameter is the caller's storage, as a declared function's is.
+                    parameters.Add(functionType.IsInOut(i) ? SilType.Address(lowered) : lowered);
                 }
 
                 if (Lower(functionType.ReturnType) is not { } result) {
@@ -9821,7 +9822,21 @@ public sealed partial class SilGen {
 
             var arguments = new List<SilValue>();
             var borrows = new List<SilValue> { callee };
-            foreach (var argument in call.Arguments) {
+            var functionType = Sub(call.Callee.Type) as FunctionTypeSymbol;
+            for (var i = 0; i < call.Arguments.Length; i++) {
+                var argument = call.Arguments[i];
+
+                // An inout argument passes where it is, as to a declared function.
+                if (functionType?.IsInOut(i) == true) {
+                    if (Address(argument, borrows) is not { } address) {
+                        return null;
+                    }
+
+                    arguments.Add(address);
+                    BeginAccess(address, modify: true, borrows);
+                    continue;
+                }
+
                 if (Borrow(argument) is not { } value) {
                     return null;
                 }

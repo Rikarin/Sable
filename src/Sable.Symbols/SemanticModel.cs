@@ -128,6 +128,8 @@ public sealed partial class SemanticModel {
             BoundCall call => call.Function,
             BoundUnionCaseConstruction construction => construction.UnionCase,
             BoundUnionCaseGroup group => group.UnionCase,
+            BoundEnumCasePattern pattern => pattern.EnumCase,
+            BoundLiteral { Type: NamedTypeSymbol type, Value: string name } => EnumCaseOf(type, name),
             BoundBinaryOperator { Method: { } method } => method,
             BoundTypeExpression { ReferencedType: NamedTypeSymbol type } => type.OriginalDefinition,
             BoundTypeExpression { ReferencedType: var type } => type,
@@ -135,6 +137,10 @@ public sealed partial class SemanticModel {
             BoundFunctionGroup group => CalleeOf(group, syntax) ?? (group.Candidates.IsEmpty ? null : group.Candidates[0]),
             _ => null,
         };
+
+    /// <summary>An enum's case, which binds as a literal of the enum holding the case's name.</summary>
+    static EnumCaseSymbol? EnumCaseOf(NamedTypeSymbol type, string name) =>
+        type.OriginalDefinition.GetMembers(name).OfType<EnumCaseSymbol>().FirstOrDefault();
 
     /// <summary>The overload a call through a function group chose, when the group is a call's callee.</summary>
     FunctionSymbol? CalleeOf(BoundFunctionGroup group, SyntaxNode syntax) {

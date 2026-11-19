@@ -1,0 +1,16 @@
+module ProcessErrorTests
+
+// ProcessError (Sable.Process), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Process
+
+import Sable.Process
+import Sable.Testing
+
+fn isAnError<T>(_ value: T) -> Bool where T: Error {
+    return true
+}
+
+@test
+fn aProcessErrorIsAnError() {
+    assert(isAnError(ProcessError.NotFound(program: "nothing-by-this-name")))
+}

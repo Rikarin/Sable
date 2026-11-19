@@ -3,43 +3,43 @@ module Negative.Optionals
 struct Point { var x: Int, var y: Int }
 
 fn optionalMemberWithoutUnwrapping(_ p: Point?) -> Int {
-    return p.x                          //! S3011 may hold nothing
+    return p.x //! S3011 may hold nothing
 }
 
 fn coalesceNeedsAnOptional(_ n: Int) -> Int {
-    return n ?? 0                       //! S3011 needs an optional on the left
+    return n ?? 0 //! S3011 needs an optional on the left
 }
 
 fn coalesceFallbackIsChecked(_ n: Int?) -> Int {
-    return n ?? "zero"                  //! S3004 expected 'Int'
+    return n ?? "zero" //! S3004 expected 'Int'
 }
 
 fn bindingNeedsAnOptional(_ n: Int) -> Int {
-    if let value = n {                  //! S3011 is not optional
+    if let value = n { //! S3011 is not optional
         return value
     }
     return 0
 }
 
 fn anOptionalIsNotItsValue(_ n: Int?) -> Int {
-    let doubled = n * 2                 //! S3009
+    let doubled = n * 2 //! S3009
     return 0
 }
 
 fn doubleOptionalIsNotSingle(_ n: Int??) -> Int? {
-    return n                            //! S3004
+    return n //! S3004
 }
 
 fn forceUnwrapNeedsAnOptional(_ p: Point) -> Point {
-    return p!                           //! S3011 is not optional
+    return p! //! S3011 is not optional
 }
 
 fn comparingAnOptionalToAnotherType(_ n: Int?, _ s: String) -> Bool {
-    return n == s                       //! S3009
+    return n == s //! S3009
 }
 
 fn chainingGivesAnOptional(_ p: Point?) -> Int {
-    return p?.x                         //! S3004 expected 'Int'
+    return p?.x //! S3004 expected 'Int'
 }
 
 fn chainingIsFineWhenTheResultIsOptional(_ p: Point?) -> Int? {
@@ -48,4 +48,20 @@ fn chainingIsFineWhenTheResultIsOptional(_ p: Point?) -> Int? {
 
 fn questionDotOnANonOptional(_ p: Point) -> Int {
     return p?.x
+}
+
+fn optionalsOwnMembersAreReachedWithADot(_ n: Int?) -> Int {
+    return n.map({ v in v + 1 }) ?? 0
+}
+
+fn aMemberOfWhatItHoldsStillNeedsQuestionDot(_ s: String?) -> Int {
+    return s.count //! S3011 may hold nothing
+}
+
+fn questionDotReachesWhatItHoldsNotTheOptional(_ n: Int?) -> Bool? {
+    return n?.isSome //! S2002 'Int' has no member named 'isSome'
+}
+
+fn optionalIsTheSameTypeAsTheQuestionMark(_ n: Optional<Int>) -> Int? {
+    return n
 }

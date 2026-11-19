@@ -779,9 +779,14 @@ Metadata records, protocol conformance registry, generic metadata caching,
 existential boxing, dynamic casts, the error ABI, backtraces, the memory
 allocator (a size-class allocator — mimalloc is the reference to copy or embed).
 
-As implemented so far: with `SABLE_BACKTRACE` set, a trap prints a backtrace
-after its message, one frame per line, named through `dladdr` (on Linux the
-program links with `-rdynamic` so its functions can be named). Each frame is
+As implemented so far: with `SABLE_BACKTRACE` set (to anything but `0`), a
+trap prints a backtrace after its message, one frame per line, named through
+`dladdr` (on Linux the program links with `-rdynamic` so its functions can
+be named). `1` starts from the program's frame that trapped; `full` shows the
+runtime's own frames above it as well. `Backtrace.capture()`
+(Sable.Diagnostics) gives the same frames as a value; the interpreter has
+none to give. Frames are named by symbol, not yet by file and line: that
+needs the runtime to read the DWARF the `-g` build writes. Each frame is
 looked up one byte before its return address, because a call that never
 returns leaves that address past the end of its caller. Under LTO most of a
 small program is inlined into `main`, so expect few frames.
@@ -792,7 +797,11 @@ the compiled code makes passes its place to `sable_trap_at`; before a call
 into the runtime that can trap (a string index, an unowned read, an access
 check) the compiled code stores the call's place in `sable_trap_site`, a
 store on the slow path only. The interpreter reports the same place: the
-innermost instruction that trapped. Traps that belong to no line — memory
+innermost instruction that trapped. A trap the program asks for —
+`fatalError`, a failed `precondition`, `todo()`, `Optional.expect` — goes
+through the `trap` builtin (`sable_trap_with`), with a message and place
+made as it runs: the caller's, since a parameter that defaults to `#file`,
+`#line`, `#column` or `#function` takes the place of the call. Traps that belong to no line — memory
 run out, every task waiting — have no place. Running off the end of a stack
 is a trap too, not a bare SIGSEGV: every thread has a small signal stack
 (`sigaltstack`), and a fault at the low end of the thread's stack prints
@@ -904,12 +913,13 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   templates, `lines`, `trimmedStart`/`trimmedEnd`, `isBlank`,
   `removingPrefix`/`removingSuffix`, `findLast`, `occurrences` and
   `escapedHtml`.
-- `Sable.Collections`: `Stack`, `Queue`, `HashMap` and `HashSet` (open
-  addressing over `Hashable`, iterating in insertion order), `Deque` (a ring
+- `Sable.Collections`: `Stack`, `Queue`, `HashSet` (a `[Element: Bool]`
+  underneath, iterating in insertion order; the `HashMap` that was here
+  became the built-in dictionary, docs/06 "Dictionaries and hashing"), `Deque` (a ring
   buffer of optional slots, so a removed element is released at once),
   `PriorityQueue` (a binary heap, smallest first or by a stored ordering
   closure), `OrderedDictionary` (keys and values in arrays, positions in a
-  `HashMap`; removal closes the order up), `BitSet` (64 to a word, with
+  dictionary; removal closes the order up), `BitSet` (64 to a word, with
   union, intersection, subtraction and subset), and a stable merge sort —
   `sort(&values)` in place, `sorted(values)` a copy, either by `<` or by a
   predicate (`tests/Sable.CodeGen.Tests/CollectionLibraryTests.cs`).
@@ -1101,12 +1111,12 @@ String's hash overflowed past a dozen characters.
 (docs/06 §6.5; `tests/Sable.CodeGen.Tests/DeriveTests.cs`,
 `tests/Sable.Symbols.Tests/DeriveTests.cs`). It is conformance synthesis,
 not source generation: once every type is declared, the compilation adds the
-members (`==`, `<`, `hash()`, `debugDescription()`) as symbols on the type and
+members (`==`, `<`, `hash(into:)`, `debugDescription()`) as symbols on the type and
 the protocols to its base list, and builds their bodies as bound trees from
 the fields (`Compilation.Derive.cs`, `DerivedBodies.cs`), which SIL lowering
 takes like any other body. `==` is field-wise, `<` lexicographic in declaration
-order, `hash()` folds the fields' hashes (kept below 10^9+7, so it cannot
-overflow), and a union compares case by case — by case first, in declaration
+order, `hash(into:)` feeds the fields to the hasher in turn (a union's case
+position first), and a union compares case by case — by case first, in declaration
 order, then by payload. `Debug` is a new `Sable.Core` protocol,
 `fn debugDescription() -> String`, giving `Point(x: 1, y: 2)`,
 `Shape.Circle(radius: 1.5)`, strings quoted and escaped, characters in single
@@ -1284,13 +1294,10 @@ to the state machine where many tasks wait at once.
       (`Error`, `From`, `Optional`, `Dictionary`). I128, U128 and F16 are SIL
       types (`i128` and `half` in LLVM), with literals up to 128 bits and the
       same members, printing and conversions as the other numbers. The built-in `[Key: Value]`
-      dictionary is compiler-known as the arrays are — its entries an array
-      of key and value pairs, its indexing and `for (key, value) in d` lowered
-      directly — and its members are Sable (`lib/Sable.Core/Dictionary.sb`:
-      `count`, `isEmpty`, `contains`, `remove`, `removeAll`, `keys`,
-      `values`), `count` and `removeAll` `@builtin`s on the entries. Its key
-      search is still linear; `Sable.Collections.HashMap` is the one that
-      hashes
+      dictionary is Sable.Core's `Dictionary` (`lib/Sable.Core/Dictionary.sb`),
+      a hash table written in Sable over a seeded `Hasher`, which the
+      compiler knows only by name: its literal, subscript and iteration are
+      the type's own members (docs/06, "Dictionaries and hashing")
 - [x] Reflection: hello-world binary grows < 50 KB with reflection off —
       it grows not at all (51,736 bytes either way): reflection is code
       synthesised per type a program reflects on, and nothing else
@@ -1898,7 +1905,7 @@ object's metadata.
 (Int?) absent = none
 (any Values.Named) bird = Values.Bird { [value] = Values.Bird { legs = 2  [strong] = 1 } }
 (Values.Node) node = Values.Node { value = 7  label = "seven"  next = none  [strong] = 2 }
-(Sable.Collections.HashMap<String, Int>) map = … count = 2 { ["one"] = 1  ["two"] = 2 }
+([String: Int]) ages = count = 2 { ["one"] = 1  ["two"] = 2 }
 ((Int) -> Int) times = Values.main$closure0
 ```
 

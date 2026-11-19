@@ -105,6 +105,29 @@ fn aDictionaryIsASequenceOfItsEntries() {
 }
 
 @test
+fn aDictionaryIsACollectionOfItsEntries() {
+    var ages: [String: Int] = ["ann": 31, "bo": 40, "cy": 7]
+    let _ = ages.remove("bo")
+    var seen: String[>..] = []
+    var position = ages.startIndex
+    while position < ages.endIndex {
+        let (name, age) = ages[position]
+        seen.append("\(name)=\(age)")
+        position = ages.index(after: position)
+    }
+    assertEqualText(seen.joined(separator: ","), "ann=31,cy=7")
+    assert(ages.firstIndex(where: { entry in entry.1 > 10 }) == ages.startIndex)
+    let empty: [String: Int] = [:]
+    assert(empty.startIndex == empty.endIndex)
+}
+
+@test(traps: "out of range")
+fn aDictionaryPositionPastTheEndTraps() {
+    let ages: [String: Int] = ["ann": 31]
+    let _ = ages[ages.endIndex]
+}
+
+@test
 fn aDictionaryIsMadeFromPairs() {
     let pairs: (String, Int)[>..] = [("a", 1), ("b", 2), ("a", 3)]
     let made: [String: Int] = pairs.collect()

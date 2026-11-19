@@ -3,8 +3,8 @@ module Sable.Math
 // Integer functions beyond the operators, of Int: square root, factorial,
 // binomial coefficients and modular arithmetic. Each is exact, and each
 // traps where its result does not fit in an Int, as '*' does. A function
-// defined for non-negative numbers alone takes its argument as a UInt,
-// whose conversion traps for a negative one.
+// defined for non-negative numbers alone checks that it was given one, and
+// says which argument was not.
 
 /// The integer square root: the largest r with r * r <= n. A negative n traps.
 ///
@@ -13,8 +13,8 @@ module Sable.Math
 /// assert(isqrt(100) == 10)
 /// ```
 public fn isqrt(_ n: Int) -> Int {
-    let unsigned = UInt(n)
-    if unsigned < 2 {
+    precondition(nonNegative: n, "isqrt's argument")
+    if n < 2 {
         return n
     }
 
@@ -35,11 +35,11 @@ public fn isqrt(_ n: Int) -> Int {
 /// n!, the product of 1 through n: 1 for 0, and a trap past 20!, the
 /// largest an Int holds. A negative n traps.
 public fn factorial(_ n: Int) -> Int {
-    let count = UInt(n)
+    precondition(nonNegative: n, "factorial's argument")
     var product = 1
-    var i: UInt = 2
-    while i <= count {
-        product = product * Int(i)
+    var i = 2
+    while i <= n {
+        product = product * i
         i = i + 1
     }
     return product
@@ -75,15 +75,17 @@ public fn binomial(_ n: Int, _ k: Int) -> Int {
 
 /// base to the power exponent, modulo modulus: in [0, modulus), however
 /// large the power, with each product taken in 128 bits so that none
-/// overflows. A negative exponent or modulus traps, and so does a modulus
-/// of 0, as '%' by zero does.
+/// overflows. A negative exponent traps, and so does a modulus that is not
+/// positive.
 ///
 /// ```sable
 /// assert(powMod(4, 13, 497) == 445)
 /// ```
 public fn powMod(_ base: Int, _ exponent: Int, _ modulus: Int) -> Int {
-    let m = I128(UInt(modulus))
-    var e = UInt(exponent)
+    precondition(nonNegative: exponent, "the exponent")
+    precondition(modulus > 0, "the modulus must be positive, not \(modulus)")
+    let m = I128(modulus)
+    var e = exponent
     var b = (I128(base) % m + m) % m
     var result = I128(1) % m
     while e > 0 {
@@ -98,14 +100,15 @@ public fn powMod(_ base: Int, _ exponent: Int, _ modulus: Int) -> Int {
 
 /// The inverse of a modulo modulus: the x in [0, modulus) with a * x % modulus
 /// equal to 1 % modulus, or none when a and modulus have a common factor and
-/// there is no such x. A negative modulus traps, and so does a modulus of 0.
+/// there is no such x. A modulus that is not positive traps.
 ///
 /// ```sable
 /// assert(modInverse(3, 11) == 4)
 /// assert(modInverse(2, 4) == none)
 /// ```
 public fn modInverse(_ a: Int, _ modulus: Int) -> Int? {
-    let m = I128(UInt(modulus))
+    precondition(modulus > 0, "the modulus must be positive, not \(modulus)")
+    let m = I128(modulus)
 
     // The extended Euclidean algorithm, keeping only a's coefficient: each
     // step keeps r = a * t (mod m). Every |t| stays at most m, so in 128

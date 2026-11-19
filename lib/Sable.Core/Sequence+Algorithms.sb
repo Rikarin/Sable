@@ -213,7 +213,8 @@ extension Sequence {
         return result
     }
 
-    /// The elements, each under its key, in the order they came.
+    /// The elements, each under its key, in the order they came: one pass,
+    /// each key found in the dictionary's hash table.
     ///
     /// ```sable
     /// let byParity = [1, 2, 3, 4, 5].grouped(by: { $0 % 2 })
@@ -261,10 +262,7 @@ extension Sequence {
     /// A size of less than one traps, as an array's 'chunks(of:)' does: an
     /// array's gives slices of itself instead of copies.
     public fn chunks(of size: Int) -> Element[>..][>..] {
-        if size < 1 {
-            // A precondition (#21) once there is one.
-            unreachable()
-        }
+        precondition(size >= 1, "a chunk's size must be at least 1, not \(size)")
         var chunks: Element[>..][>..] = []
         var chunk: Element[>..] = []
         for element in self {
@@ -284,10 +282,7 @@ extension Sequence {
     /// last: none when there are fewer. A size of less than one traps, as an
     /// array's 'windows(of:)' does, which gives slices of itself.
     public fn windows(of size: Int) -> Element[>..][>..] {
-        if size < 1 {
-            // A precondition (#21) once there is one.
-            unreachable()
-        }
+        precondition(size >= 1, "a window's size must be at least 1, not \(size)")
         var windows: Element[>..][>..] = []
         var elements: Element[>..] = []
         for element in self {

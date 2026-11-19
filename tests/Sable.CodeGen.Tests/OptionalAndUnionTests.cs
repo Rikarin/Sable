@@ -27,6 +27,81 @@ public sealed class OptionalAndUnionTests {
             """
         );
 
+    /// <summary>
+    ///     An optional's own members — Optional's extensions, the library's
+    ///     and the program's — are reached with '.', self being the optional:
+    ///     generic ones, properties and mutating ones alike. 'Optional&lt;Int&gt;'
+    ///     is 'Int?' spelled out.
+    /// </summary>
+    [Fact]
+    public void AnOptionalsOwnMembersAreReachedWithADot() =>
+        Prints(
+            "yes\nno\n6\nn4\n42\nnone\n5\ntrue\n9\n",
+            """
+            extension Optional {
+                fn describe() -> String {
+                    return match self {
+                        case .Some(_) => "yes"
+                        case .None => "no"
+                    }
+                }
+            }
+            """,
+            """
+                let three: Int? = 3
+                let absent: Optional<Int> = none
+                print(three.describe())
+                print(absent.describe())
+                print(three.map({ v in v * 2 }) ?? 0)
+                print(three.map({ v in "n\(v + 1)" }) ?? "")
+                let text: String? = "42"
+                print(text.flatMap({ t in t.toInt() }) ?? 0)
+                print(absent.map({ v in "\(v)" }) ?? "none")
+                var slot: Int? = 5
+                print(slot.take() ?? 0)
+                print(slot.isNone)
+                print(slot.unwrap(or: 9))
+            """
+        );
+
+    /// <summary>Outcome (lib/Sable.Core/Outcome.sb), from a throwing call and back to one.</summary>
+    [Fact]
+    public void AnOutcomeCatchesAndRethrows() =>
+        Prints(
+            "12\nnot x\n.Ok(13)\ntrue\ncaught not y\n",
+            """
+            fn parse(_ s: String) throws(String) -> Int {
+                guard let n = s.toInt() else { throw "not \(s)" }
+                return n
+            }
+            """,
+            """
+                let good = Outcome.catching({ try parse("12") })
+                let bad = Outcome<Int, String>.catching({ try parse("x") })
+                print(good.ok ?? 0)
+                print(bad.error ?? "")
+                print(good.map({ v in v + 1 }).debugDescription())
+                print(bad == Outcome<Int, String>.Err("not x"))
+                do {
+                    let v = try Outcome<Int, String>.catching({ try parse("y") }).get()
+                    print(v)
+                } catch {
+                    print("caught \(error)")
+                }
+            """
+        );
+
+    /// <summary>'expect' stops with its message, at the line that called it.</summary>
+    [Fact]
+    public void ExpectOfNoneStopsWithItsMessageAtTheCaller() {
+        var run = AssertAgree(Program("", """
+                print("4".toInt().expect("a number"))
+                print("x".toInt().expect("a number"))
+            """));
+        Assert.Equal("4\n", run.Stdout);
+        Assert.Equal("fatal error: a number\n  at test.sb:6:11\n", run.Stderr);
+    }
+
     [Fact]
     public void ARecursiveUnionAndNarrowingAfterAReturn() =>
         Prints(

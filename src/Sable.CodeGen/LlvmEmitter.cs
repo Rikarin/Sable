@@ -248,6 +248,8 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_print_bool(i1 zeroext)
                                 declare void @sable_trap(ptr) noreturn cold
                                 declare void @sable_trap_at(ptr, ptr) noreturn cold
+                                declare void @sable_trap_with(ptr, ptr) noreturn cold
+                                declare ptr @sable_backtrace_capture()
                                 @sable_trap_site = external global ptr
                                 declare ptr @sable_alloc(ptr, i64)
                                 declare void @sable_retain(ptr)
@@ -297,7 +299,8 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_process_change_directory(ptr)
                                 declare i64 @sable_process_id()
                                 declare ptr @sable_string_split(ptr, i32)
-                                declare i64 @sable_string_hash(ptr)
+                                declare i64 @sable_string_hash(ptr, i64)
+                                @sable_hash_seed = external global i64
                                 declare ptr @sable_string_join(ptr, ptr)
                                 declare i64 @sable_string_compare(ptr, ptr)
                                 declare i64 @sable_string_find(ptr, ptr, i64)
@@ -2677,7 +2680,13 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 case "string_hash":
-                    Line($"{Result()} = call i64 @sable_string_hash(ptr {operands[0]})");
+                    Line($"{Result()} = call i64 @sable_string_hash(ptr {operands[0]}, i64 {operands[1]})");
+                    return;
+
+                // The process's seed, set as the runtime starts: a load, not a
+                // call, since every Hasher made reads it.
+                case "hash_seed":
+                    Line($"{Result()} = load i64, ptr @sable_hash_seed");
                     return;
 
                 case "string_find":
@@ -2720,6 +2729,14 @@ public sealed partial class LlvmEmitter {
 
                 case "io_write" or "io_write_error":
                     Line($"call void @sable_{builtin.Name}(ptr {operands[0]})");
+                    return;
+
+                case "trap":
+                    Line($"call void @sable_trap_with(ptr {operands[0]}, ptr {operands[1]})");
+                    return;
+
+                case "backtrace_capture":
+                    Line($"{Result()} = call ptr @sable_backtrace_capture()");
                     return;
 
                 case "io_read_line" or "io_succeeded" or "io_argument_count":

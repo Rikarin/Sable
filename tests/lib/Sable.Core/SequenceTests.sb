@@ -208,12 +208,12 @@ fn chunksSplitIntoArraysOfTheSize() {
     assertEqual(Countdown { from: 4 }.chunks(of: 2).count, 2)
 }
 
-@test(traps: "unreachable")
+@test(traps: "a chunk's size must be at least 1, not 0")
 fn chunksOfNothingTraps() {
     let _ = Countdown { from: 3 }.chunks(of: 0)
 }
 
-@test(traps: "unreachable")
+@test(traps: "a window's size must be at least 1, not 0")
 fn windowsOfNothingTraps() {
     let _ = Countdown { from: 3 }.windows(of: 0)
 }

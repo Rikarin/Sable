@@ -175,6 +175,54 @@ public sealed class ToolingTests {
     }
 
     [Fact]
+    public void GetSymbolAtResolvesImplicitMemberAccesses() {
+        var (_, tree, model) = Compile(
+            """
+            module M
+
+            enum Kind {
+                Automatic
+                Decimal
+            }
+
+            struct Spec {
+                public var kind: Kind = .Automatic
+            }
+
+            fn pick(_ k: Kind) -> Kind {
+                let other: Kind = .Decimal
+                if k == .Automatic {
+                    return other
+                }
+                return .Decimal
+            }
+
+            fn code(_ k: Kind) -> Int {
+                return match k {
+                    case .Automatic => 0
+                    case _ => if k == Kind.Decimal { 1 } else { 2 }
+                }
+            }
+            """
+        );
+
+        var automatic = model.GetSymbolAt(At(tree, ".Automatic\n", 2));
+        Assert.Equal("Automatic", automatic?.Name);
+        Assert.False(automatic!.DeclaringSyntax.IsEmpty);
+
+        var decimalCase = model.GetSymbolAt(At(tree, ".Decimal\n", 2));
+        Assert.Equal("Decimal", decimalCase?.Name);
+
+        Assert.Same(automatic, model.GetSymbolAt(At(tree, ".Automatic {", 2)));
+        Assert.Same(automatic, model.GetSymbolAt(At(tree, ".Automatic =>", 2)));
+        Assert.Same(decimalCase, model.GetSymbolAt(At(tree, "Kind.Decimal", 6)));
+
+        Assert.Same(automatic, model.GetSymbolAt(At(tree, "Automatic\n    Decimal", 1)));
+        // Its declaration, the default, the comparison and the pattern.
+        Assert.Equal(4, model.FindReferences(automatic).Count);
+    }
+
+    [Fact]
     public void FindReferencesFindsTheDeclarationAndEveryUse() {
         var (_, tree, model) = Compile();
         var total = model.GetSymbolAt(At(tree, "let total", 5))!;

@@ -585,17 +585,18 @@ fn build(_ root: String, _ output: String) throws(IoError) -> Int {
     print(format("  {} {}", [paddedRight("index.html", to: 24, with: ' '), paddedLeft(size(indexHtml.count), to: 8, with: ' ')]))
 
     // Tags: each, alphabetically, with its pages in the index's order.
-    let byTag = HashMap<String, String[>..]>()
+    var byTag: [String: String[>..]] = [:]
     for page in ordered {
         for tag in page.tags {
-            var titles = byTag.get(tag) ?? []
+            // Taken out, so that the append changes the only copy.
+            var titles = byTag.remove(tag) ?? []
             titles.append(format("<a href=\"{}.html\">{}</a>", [page.slug, escapedHtml(page.title)]))
-            byTag.set(tag, titles)
+            byTag[tag] = titles
         }
     }
     let tagsHtml = TextBuilder()
-    for tag in sorted(byTag.allKeys()) {
-        let links = byTag.get(tag) ?? []
+    for tag in sorted(byTag.keys()) {
+        let links = byTag[tag] ?? []
         tagsHtml.appendLine(format("<h2 id=\"{0}\">{0} ({1})</h2>", [escapedHtml(tag), links.count.toString()]))
         tagsHtml.appendLine("<ul><li>" + joined(links, separator: "</li><li>") + "</li></ul>")
     }

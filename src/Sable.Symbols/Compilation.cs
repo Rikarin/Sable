@@ -1435,9 +1435,9 @@ public sealed partial class Compilation {
 
         var value = EnumCaseValue(declaration, enumType);
         CheckDistinctValue(declaration, enumType, value);
-        enumType.AddMember(
-            new EnumCaseSymbol(name, enumType, declaration) { HasExplicitValue = declaration.Value is not null, RawValue = value }
-        );
+        var enumCase = new EnumCaseSymbol(name, enumType, declaration) { HasExplicitValue = declaration.Value is not null, RawValue = value };
+        enumType.AddMember(enumCase);
+        RecordDeclaration(declaration, enumCase);
     }
 
     void DeclareInitializer(InitDeclarationSyntax declaration, NamedTypeSymbol type) {

@@ -1,0 +1,133 @@
+module HasherTests
+
+// Hasher and Hashable (Sable.Core), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@derive(Hashable)
+struct Point {
+    var x: Int
+    var y: Int
+}
+
+@derive(Hashable)
+union Shape {
+    Circle(radius: Int)
+    Square(side: Int)
+    Empty
+}
+
+@derive(Hashable)
+enum Direction { North, South }
+
+fn hashOf<T: Hashable>(_ value: T, seed: U64) -> Int {
+    var hasher = Hasher(seed: seed)
+    hasher.combine(value)
+    return hasher.finalize()
+}
+
+@test
+fn theSameSeedGivesTheSameHash() {
+    assertEqual(hashOf("text", seed: 1), hashOf("text", seed: 1))
+    assertEqual(hashOf(42, seed: 9), hashOf(42, seed: 9))
+}
+
+@test
+fn anotherSeedGivesAnotherHash() {
+    assertNotEqual(hashOf("text", seed: 1), hashOf("text", seed: 2))
+    assertNotEqual(hashOf(42, seed: 1), hashOf(42, seed: 2))
+}
+
+@test
+fn equalValuesHashEqual() {
+    assertEqual("abc".hashValue, "ab\("c")".hashValue)
+    assertEqual(Point { x: 1, y: 2 }.hashValue, Point { x: 1, y: 2 }.hashValue)
+    assertEqual((0.0).hashValue, (-0.0).hashValue)
+    assertEqual(F32(1.5).hashValue, (1.5).hashValue)
+}
+
+@test
+fn theOrderOfWhatIsCombinedCounts() {
+    assertNotEqual(Point { x: 1, y: 2 }.hashValue, Point { x: 2, y: 1 }.hashValue)
+    var a = Hasher(seed: 3)
+    a.combine(1)
+    a.combine(2)
+    var b = Hasher(seed: 3)
+    b.combine(2)
+    b.combine(1)
+    assertNotEqual(a.finalize(), b.finalize())
+}
+
+@test
+fn finalizeLeavesTheHasherAsItWas() {
+    var hasher = Hasher(seed: 5)
+    hasher.combine("x")
+    let first = hasher.finalize()
+    assertEqual(hasher.finalize(), first)
+    hasher.combine("y")
+    assertNotEqual(hasher.finalize(), first)
+}
+
+@test
+fn bytesAreHashedWithTheirCount() {
+    let bytes: U8[>..] = [1, 2, 3]
+    var split = Hasher(seed: 0)
+    split.write(bytes.slice(from: 0, to: 1))
+    split.write(bytes.slice(from: 1, to: 3))
+    var joined = Hasher(seed: 0)
+    joined.write(bytes.slice(from: 0, to: 2))
+    joined.write(bytes.slice(from: 2, to: 3))
+    assertNotEqual(split.finalize(), joined.finalize())
+
+    let nine: U8[>..] = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    var once = Hasher(seed: 0)
+    once.write(nine.slice(from: 0, to: 9))
+    var again = Hasher(seed: 0)
+    again.write(nine.slice(from: 0, to: 9))
+    assertEqual(once.finalize(), again.finalize())
+}
+
+@test
+fn aWordCanBeWrittenDirectly() {
+    var a = Hasher(seed: 11)
+    a.write(7)
+    var b = Hasher(seed: 11)
+    b.combine(7)
+    assertEqual(a.finalize(), b.finalize())
+}
+
+@test
+fn aDerivedUnionHashesItsCaseAndPayload() {
+    assertEqual(Shape.Circle(radius: 1).hashValue, Shape.Circle(radius: 1).hashValue)
+    assertNotEqual(hashOf(Shape.Circle(radius: 1), seed: 1), hashOf(Shape.Square(side: 1), seed: 1))
+    assertNotEqual(hashOf(Shape.Empty, seed: 1), hashOf(Shape.Circle(radius: 0), seed: 1))
+}
+
+@test
+fn aDerivedEnumHashesItsCase() {
+    assertEqual(Direction.North.hashValue, Direction.North.hashValue)
+    assertNotEqual(hashOf(Direction.North, seed: 1), hashOf(Direction.South, seed: 1))
+}
+
+@test
+fn everyPrimitiveHashes() {
+    assertEqual(hashOf(true, seed: 1), hashOf(true, seed: 1))
+    assertNotEqual(hashOf(true, seed: 1), hashOf(false, seed: 1))
+    assertNotEqual(hashOf('a', seed: 1), hashOf('b', seed: 1))
+    assertNotEqual(hashOf(I8(-1), seed: 1), hashOf(I8(1), seed: 1))
+    assertNotEqual(hashOf(U128(1) << 64, seed: 1), hashOf(U128(1), seed: 1))
+    assertNotEqual(hashOf(1.5, seed: 1), hashOf(2.5, seed: 1))
+}
+
+@bench
+fn hashingIntegers(_ b: Bencher) {
+    b.iterate(() => {
+        var hasher = Hasher(seed: 1)
+        var i = 0
+        while i < 1000 {
+            hasher.combine(i)
+            i = i + 1
+        }
+    })
+}

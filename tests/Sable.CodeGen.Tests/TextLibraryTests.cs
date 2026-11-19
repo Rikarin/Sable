@@ -156,9 +156,10 @@ public sealed class TextLibraryTests {
                 module P
                 @main
                 fn main() {
-                    let a = "a string a good deal longer than a dozen characters".hash()
-                    let b = "a string a good deal longer than a dozen characters".hash()
-                    print(a == b && a >= 0)
+                    let a = "a string a good deal longer than a dozen characters".hashValue
+                    let b = "a string a good deal longer than a dozen characters".hashValue
+                    let c = "a string a good deal longer than a dozen characterz".hashValue
+                    print(a == b && a != c)
                 }
                 """).Stdout
         );

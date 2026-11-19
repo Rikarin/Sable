@@ -34,7 +34,7 @@ public sealed class DeriveTests {
                     print(q >= p)
                     print(Point(x: 2, y: 0) < p)
                     print(p <= Point(x: 1, y: 2))
-                    print(p.hash() == Point(x: 1, y: 2).hash())
+                    print(p.hashValue == Point(x: 1, y: 2).hashValue)
                     print(p.debugDescription())
                     print("\(Empty().debugDescription()) \(Empty() == Empty())")
                 }
@@ -63,9 +63,9 @@ public sealed class DeriveTests {
                     seen.insert(Point(x: 1, y: 3))
                     print(seen.count)
                     print("\(seen.contains(Point(x: 1, y: 3))) \(seen.contains(Point(x: 3, y: 1)))")
-                    let scores = HashMap<Point, Int>()
-                    scores.set(Point(x: 4, y: 4), 7)
-                    print(scores.get(Point(x: 4, y: 4)) ?? 0)
+                    var scores: [Point: Int] = [:]
+                    scores[Point(x: 4, y: 4)] = 7
+                    print(scores[Point(x: 4, y: 4)] ?? 0)
                     for p in sorted([Point(x: 1, y: 3), Point(x: 1, y: 2), Point(x: 0, y: 9)]) {
                         print(p.debugDescription())
                     }
@@ -102,9 +102,9 @@ public sealed class DeriveTests {
                     print(a < Pair(first: 1, second: "b"))
                     print(a.debugDescription())
                     print(has([Pair(first: 2, second: "z"), a], Pair(first: 1, second: "a")))
-                    let m = HashMap<Pair<Int, String>, Int>()
-                    m.set(a, 3)
-                    print(m.get(Pair(first: 1, second: "a")) ?? 0)
+                    var m: [Pair<Int, String>: Int] = [:]
+                    m[a] = 3
+                    print(m[Pair(first: 1, second: "a")] ?? 0)
                     let nested = Pair(first: Pair(first: 1, second: "x"), second: 'c')
                     print(nested.debugDescription())
                     for p in sorted([Pair(first: 2, second: "a"), Pair(first: 1, second: "b")]) {
@@ -273,7 +273,7 @@ public sealed class DeriveTests {
     ///     or the program's own, as well as a builtin's.
     /// </summary>
     [Fact]
-    public void ADictionaryTakesKeysWithAnEqualityOfTheirOwn() =>
+    public void ADictionaryTakesKeysWithAHashOfTheirOwn() =>
         Assert.Equal(
             "a\nb\nnone\n2\nc\n1\n",
             AssertAgree("""
@@ -285,10 +285,13 @@ public sealed class DeriveTests {
                     var y: Int
                 }
 
-                struct Name {
+                struct Name: Hashable {
                     var text: String
                     operator == (lhs: Name, rhs: Name) -> Bool {
                         return lhs.text.count == rhs.text.count
+                    }
+                    fn hash(into hasher: inout Hasher) {
+                        hasher.combine(text.count)
                     }
                 }
 

@@ -1217,7 +1217,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             }
 
             case "string_hash":
-                return StringHash(Encoding.UTF8.GetBytes(Text(operands[0]).Value));
+                return StringHash(Encoding.UTF8.GetBytes(Text(operands[0]).Value), (long)operands[1]!);
+
+            case "hash_seed":
+                return HashSeed;
 
             // Scalar by scalar, as the runtime's byte search finds the same place.
             case "string_find": {
@@ -1304,6 +1307,17 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "io_write_error":
                 ErrorOutput.Append(Text(operands[0]).Value);
                 return null;
+
+            // The place is the caller's, which the trap says rather than its own.
+            case "trap": {
+                var site = Text(operands[1]).Value;
+                throw new SilTrap(Text(operands[0]).Value) { Site = site.Length == 0 ? null : site };
+            }
+
+            // The interpreter's frames are not the program's, and it has no
+            // symbols to name them by: a backtrace here has none.
+            case "backtrace_capture":
+                return Allocate(new HeapArray(new ArrayType(SilType.String), []));
 
             case "io_succeeded":
                 return !_ioFailed;
@@ -2171,34 +2185,59 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     static bool IsWhitespace(Rune c) => c.Value is ' ' or '\t' or '\n' or '\r' or '\v' or '\f';
 
     /// <summary>
-    ///     A string's hash, from its UTF-8 bytes: <c>sable_string_hash</c>
-    ///     exactly, eight bytes at a time, so a program prints the same hash
-    ///     natively and interpreted.
+    ///     The seed every Hasher starts from: random per process, as the
+    ///     runtime's <c>sable_hash_seed</c> is, or the runtime's fixed one with
+    ///     <c>SABLE_DETERMINISTIC_HASHING=1</c>, so that a program then prints
+    ///     the same hashes natively and interpreted.
     /// </summary>
-    static long StringHash(byte[] bytes) {
+    internal static readonly long HashSeed =
+        Environment.GetEnvironmentVariable("SABLE_DETERMINISTIC_HASHING") == "1"
+            ? 0x243F6A8885A308D3
+            : BitConverter.ToInt64(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8));
+
+    /// <summary>
+    ///     A string's UTF-8 bytes hashed under a key, sixteen to a folded
+    ///     multiply: the runtime's <c>sable_string_hash</c> exactly, so a
+    ///     program hashes alike natively and interpreted.
+    /// </summary>
+    internal static long StringHash(byte[] bytes, long key) {
         unchecked {
-            const ulong multiplier = 0x9E3779B97F4A7C15;
-            var h = 0x243F6A8885A308D3UL ^ (ulong)bytes.Length;
-            var i = 0;
-            for (; i + 8 <= bytes.Length; i += 8) {
-                h = (h ^ System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(i))) * multiplier;
-                h ^= h >> 29;
+            static ulong Fold(ulong a, ulong b) {
+                var high = Math.BigMul(a, b, out var low);
+                return low ^ high;
             }
 
-            if (i < bytes.Length) {
-                ulong tail = 0;
-                for (var shift = 0; i < bytes.Length; i++, shift += 8) {
-                    tail |= (ulong)bytes[i] << shift;
+            ulong Load64(int at) => System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(at));
+            ulong Load32(int at) => System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at));
+
+            var k0 = (ulong)key;
+            var k1 = ulong.RotateLeft(k0, 32) ^ 0x9E3779B97F4A7C15;
+            var n = bytes.Length;
+            var acc = k0 ^ ((ulong)n * 0xD6E8FEB86659FD93);
+            if (n <= 16) {
+                ulong a = 0, b = 0;
+                if (n >= 8) {
+                    a = Load64(0);
+                    b = Load64(n - 8);
+                } else if (n >= 4) {
+                    a = Load32(0);
+                    b = Load32(n - 4);
+                } else if (n > 0) {
+                    a = bytes[0];
+                    b = ((ulong)bytes[n / 2] << 8) | bytes[n - 1];
                 }
 
-                h = (h ^ tail) * multiplier;
-                h ^= h >> 29;
+                acc = Fold(a ^ acc, b ^ k1);
+            } else {
+                var i = 0;
+                for (; i + 16 < n; i += 16) {
+                    acc = Fold(Load64(i) ^ acc, Load64(i + 8) ^ k1);
+                }
+
+                acc = Fold(Load64(n - 16) ^ acc, Load64(n - 8) ^ k1);
             }
 
-            h ^= h >> 32;
-            h *= 0xD6E8FEB86659FD93;
-            h ^= h >> 32;
-            return (long)(h & long.MaxValue);
+            return (long)Fold(acc, k1 ^ 0x2D358DCCAA6C78A5);
         }
     }
 

@@ -119,7 +119,39 @@ internal sealed class Parser {
         _diagnostics.AddRange(diagnostics);
     }
 
+    /// <summary>
+    ///     The lowest and highest token indices read since the current member
+    ///     began; see <see cref="ParseMembers" />.
+    /// </summary>
+    int _lowestRead = int.MaxValue;
+
+    int _highestRead = -1;
+
+    /// <summary>
+    ///     For each member parsed, the old token indices its parse read, by
+    ///     node: an incremental parse may reuse the member only if every one
+    ///     of them is unchanged (<see cref="IncrementalReuse" />).
+    /// </summary>
+    readonly Dictionary<GreenNode, TokenExtent> _memberExtents = new(ReferenceEqualityComparer.Instance);
+
+    void NoteRead(int index) {
+        if (index < _lowestRead) {
+            _lowestRead = index;
+        }
+
+        if (index > _highestRead) {
+            _highestRead = index;
+        }
+    }
+
+    /// <summary>The token as lexed, ignoring any split, noted as read.</summary>
+    GreenToken LexedTokenAt(int index) {
+        NoteRead(index);
+        return _tokens[index];
+    }
+
     GreenToken TokenAt(int index) {
+        NoteRead(index);
         if (_split is not null && _split.TryGetValue(index, out var replaced)) {
             return replaced;
         }
@@ -168,7 +200,8 @@ internal sealed class Parser {
             options,
             tokens,
             hasDirectives,
-            diagnostics
+            diagnostics,
+            parser._memberExtents
         );
     }
 
@@ -732,7 +765,7 @@ internal sealed class Parser {
 
     bool HasNewLineBeforeCurrent =>
         Current.Leading.Any(static t => t.Kind == SyntaxKind.NewLineTrivia)
-        || (_index > 0 && _tokens[_index - 1].Trailing.Any(static t => t.Kind == SyntaxKind.NewLineTrivia));
+        || (_index > 0 && LexedTokenAt(_index - 1).Trailing.Any(static t => t.Kind == SyntaxKind.NewLineTrivia));
 
     static bool StartsStatement(SyntaxKind kind) =>
         kind is SyntaxKind.LetKeyword or SyntaxKind.VarKeyword or SyntaxKind.IfKeyword
@@ -1387,7 +1420,7 @@ internal sealed class Parser {
     /// </remarks>
     bool HasSpaceBeforeCurrent =>
         Current.LeadingTriviaWidth > 0
-        || (_index > 0 && _tokens[_index - 1].TrailingTriviaWidth > 0);
+        || (_index > 0 && LexedTokenAt(_index - 1).TrailingTriviaWidth > 0);
 
     GreenNode ParseIntersectionType(bool inExpression = false) {
         var left = ParsePostfixType(inExpression);
@@ -1791,7 +1824,7 @@ internal sealed class Parser {
 
         try {
             while (true) {
-                var kind = _tokens[_index].Kind;
+                var kind = LexedTokenAt(_index).Kind;
 
                 if (brackets > 0
                     && kind is SyntaxKind.GreaterToken
@@ -3171,16 +3204,40 @@ internal sealed class Parser {
             if (pending.SlotCount == 0
                 && _skipped.Count == 0
                 && _reuse is not null
-                && _reuse.TryGet(_index, context, out var reused, out var tokenCount)
+                && _reuse.TryGet(_index, context, out var reused, out var tokenCount, out var behind, out var ahead)
                 && _index + tokenCount < _tokens.Length) {
+                // The old parse read these tokens, which are the same ones,
+                // so this parse would have read them too.
+                var translated = new TokenExtent(_index - behind, _index + ahead);
+                NoteRead(translated.Lowest);
+                NoteRead(translated.Highest);
+                _memberExtents[reused] = translated;
                 items.Add(reused);
                 _index += tokenCount;
                 _tokenPosition += reused.FullWidth;
                 continue;
             }
 
+            // What a member's parse makes of its tokens can depend on tokens
+            // outside it: lookahead that runs past its end, or a look back at
+            // the token before it. So the reads are noted, member by member
+            // (the enclosing member's include its members'), and kept for the
+            // next incremental parse.
+            var outerLowest = _lowestRead;
+            var outerHighest = _highestRead;
+            _lowestRead = int.MaxValue;
+            _highestRead = -1;
+
             var before = _index;
-            items.Add(parseMember(pending));
+            var member = parseMember(pending);
+            items.Add(member);
+            if (_highestRead >= 0) {
+                _memberExtents[member] = new(_lowestRead, _highestRead);
+            }
+
+            _lowestRead = Math.Min(outerLowest, _lowestRead);
+            _highestRead = Math.Max(outerHighest, _highestRead);
+
             pending = GreenList.Empty;
             if (_index == before) {
                 SkipCurrentToken();

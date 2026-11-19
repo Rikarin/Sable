@@ -28,6 +28,14 @@ public sealed partial class Binder {
     readonly Dictionary<SyntaxNode, BoundNode> _bound = [];
 
     /// <summary>
+    ///     Integer literals bound as a call's arguments before the call's
+    ///     parameter types are known, whose range is checked when each is
+    ///     converted to its parameter's type: 'take(0x8000_0000_0000_0000)'
+    ///     is a U64, though as an Int it would not fit.
+    /// </summary>
+    readonly HashSet<BoundLiteral> _uncheckedArguments = [];
+
+    /// <summary>
     ///     The declaration whose body is being bound. Setting it also brings
     ///     that declaration's same-type requirements into force.
     /// </summary>
@@ -2555,7 +2563,11 @@ public sealed partial class Binder {
         var bound = new BoundLiteral(literal, type, token.Value);
 
         // '-128' is checked as a whole, where it is negated.
-        if (literal.Parent is not PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.MinusToken }) {
+        // An argument with no type asked of it yet is checked against its
+        // parameter's, once the call has chosen one (Convert).
+        if (expectedType is null && literal.Parent is ArgumentSyntax) {
+            _uncheckedArguments.Add(bound);
+        } else if (literal.Parent is not PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.MinusToken }) {
             CheckIntegerFits(bound, type);
         }
 
@@ -7086,6 +7098,15 @@ public sealed partial class Binder {
             expression = Materialize(group, target);
         }
 
+        // An argument's literal, given the type of the parameter it is for:
+        // an integer type's range, or, where it stays an Int (an 'any P'
+        // parameter), Int's.
+        var checkedArgument = expression is BoundLiteral argument && _uncheckedArguments.Remove(argument);
+        if (checkedArgument) {
+            var parameterType = target is OptionalTypeSymbol optionalTarget ? optionalTarget.UnderlyingType : target;
+            CheckIntegerFits((BoundLiteral)expression, Core.IsNumeric(parameterType) ? parameterType : expression.Type);
+        }
+
         // 'Tree.Leaf' carries nothing to infer from, so the context says
         // which Tree it is.
         if (expression is BoundUnionCaseGroup { UnionCase.HasPayload: false } empty
@@ -7147,7 +7168,7 @@ public sealed partial class Binder {
         }
 
         // '-1' bound first, then given the 'U8' its place wants.
-        if (conversion == ConversionKind.LiteralTyping && expression is BoundLiteral literal) {
+        if (conversion == ConversionKind.LiteralTyping && !checkedArgument && expression is BoundLiteral literal) {
             CheckIntegerFits(literal, target is OptionalTypeSymbol optional ? optional.UnderlyingType : target);
         }
 

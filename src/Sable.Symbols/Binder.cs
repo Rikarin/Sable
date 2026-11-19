@@ -2444,8 +2444,32 @@ public sealed partial class Binder {
         }
 
         var bound = BindExpressionCore(expression, expectedType);
+
+        // 'E.Bad' names a case that carries a value. Called, it makes one;
+        // anywhere else ('let x = E.Bad', 'throw .Bad', '(E.Bad, 1)') it is
+        // not a value of the union, whatever the context expects.
+        if (bound is BoundUnionCaseGroup { UnionCase.HasPayload: true } unionCase && !IsCallee(expression)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_WrongPayloadCount,
+                expression.Span,
+                $"'{unionCase.UnionCase.Name}' carries "
+                + $"{unionCase.UnionCase.Payload.Length} value(s), so it needs them here"
+            );
+            bound = new BoundError(expression);
+        }
+
         _bound[expression] = bound;
         return bound;
+    }
+
+    /// <summary>True when <paramref name="expression"/> is what a call calls: the 'E.Bad' of 'E.Bad(at: 1)', parentheses and all.</summary>
+    static bool IsCallee(ExpressionSyntax expression) {
+        SyntaxNode node = expression;
+        while (node.Parent is ParenthesizedExpressionSyntax parenthesized && ReferenceEquals(parenthesized.Expression, node)) {
+            node = parenthesized;
+        }
+
+        return node.Parent is InvocationExpressionSyntax invocation && ReferenceEquals(invocation.Expression, node);
     }
 
     BoundExpression BindExpressionCore(

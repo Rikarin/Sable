@@ -17,7 +17,16 @@ dotnet build Sable.slnx
 dotnet test Sable.slnx
 ```
 
-That runs the five test projects. To run the `sable` you just built without
+That runs the five test projects. The randomised fuzz tests (`Category=Fuzz`)
+are CPU-heavy, and the timing tests (`Category=Timing`) are sensitive to a
+loaded machine; CI and the nightly fuzz job run both, so locally you can leave
+them out:
+
+```bash
+dotnet test Sable.slnx --filter "Category!=Fuzz&Category!=Timing"
+```
+
+To run the `sable` you just built without
 publishing it:
 
 ```bash

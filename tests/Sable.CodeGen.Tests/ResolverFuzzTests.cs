@@ -28,6 +28,7 @@ namespace Sable.CodeGen.Tests;
 ///         prints the registry.
 ///     </para>
 /// </remarks>
+[Trait("Category", "Fuzz")]
 public sealed class ResolverFuzzTests(Xunit.Abstractions.ITestOutputHelper output) {
     static int? Setting(string name) => int.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : null;
 

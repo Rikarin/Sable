@@ -497,7 +497,8 @@ public sealed class LanguageServerTests : IDisposable {
     [Fact]
     public async Task TheLibrarysOwnSourceInTheWorkspaceIsTheLibrary() {
         var repository = AppContext.BaseDirectory;
-        while (!Directory.Exists(Path.Combine(repository, "lib", "Sable.Core"))) {
+        // The repository's root, not tests/, whose lib/Sable.Core holds the library's tests.
+        while (!File.Exists(Path.Combine(repository, "Sable.slnx"))) {
             repository = Path.GetDirectoryName(repository) ?? throw new InvalidOperationException("no lib/ above the tests");
         }
 

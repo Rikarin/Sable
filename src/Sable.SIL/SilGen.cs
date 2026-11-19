@@ -7191,9 +7191,12 @@ public sealed partial class SilGen {
             };
 
             var resultType = binary.OperatorKind == BinaryOperatorKind.UserDefined ? binary.Type : Core.Bool;
-            // An operator of a generic type takes its type arguments from the operands'.
+            // An operator of a generic type takes its type arguments from the
+            // operands' — from what an operand refers to, when it is passed
+            // by reference.
+            var owner = Sub(first.Type) is ReferenceTypeSymbol reference ? reference.ReferencedType : Sub(first.Type);
             var call = new BoundCall(binary.Syntax, null, callee, [first, second], resultType) {
-                Substitution = OwnerOf(callee) is { IsGenericDefinition: true } ? TypeSubstitution.For(Sub(first.Type)) : TypeSubstitution.Empty,
+                Substitution = OwnerOf(callee) is { IsGenericDefinition: true } ? TypeSubstitution.For(owner) : TypeSubstitution.Empty,
             };
             if (Expression(call) is not { } result) {
                 return null;

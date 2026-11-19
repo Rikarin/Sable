@@ -6584,7 +6584,7 @@ public sealed partial class Binder {
                     syntax,
                     method.ReturnType,
                     UnaryOperatorKind.UserDefined,
-                    operand,
+                    UserOperand(method, operand),
                     method
                 );
             }
@@ -6640,7 +6640,7 @@ public sealed partial class Binder {
         }
 
         if (FindUserUnaryOperator(syntax.OperatorToken.Text, operand.Type, OperatorFixity.Postfix) is { } method) {
-            return new BoundUnaryOperator(syntax, method.ReturnType, UnaryOperatorKind.UserDefined, operand, method);
+            return new BoundUnaryOperator(syntax, method.ReturnType, UnaryOperatorKind.UserDefined, UserOperand(method, operand), method);
         }
 
         if (!operand.HasError) {
@@ -6795,7 +6795,8 @@ public sealed partial class Binder {
             && left.Type.Equals(Core.String) && right.Type.Equals(Core.String);
         if (!IsBuiltinOperand(left.Type) || !IsBuiltinOperand(right.Type) || stringOrdering) {
             if (FindUserOperator(symbol, left.Type, right.Type) is { } own) {
-                return new BoundBinaryOperator(syntax, UserResultType(own, left.Type), BinaryOperatorKind.UserDefined, left, right, own);
+                (left, right) = UserOperands(own, left, right);
+                return new BoundBinaryOperator(syntax, UserResultType(own.Method, left.Type), BinaryOperatorKind.UserDefined, left, right, own.Method);
             }
 
             var derivedFrom = kind switch {
@@ -6804,8 +6805,11 @@ public sealed partial class Binder {
                 _ => null,
             };
 
-            if (derivedFrom is not null && FindUserOperator(derivedFrom, left.Type, right.Type) is { } basis) {
-                return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, basis);
+            // '>' and '<=' pass their operands to '<' the other way round.
+            var swapped = kind is BinaryOperatorKind.GreaterThan or BinaryOperatorKind.LessThanOrEqual;
+            if (derivedFrom is not null && FindUserOperator(derivedFrom, left.Type, right.Type, swapped) is { } basis) {
+                (left, right) = UserOperands(basis, left, right);
+                return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, basis.Method);
             }
 
             if (ReportUnmetDerivedOperator(derivedFrom ?? symbol, left.Type, syntax)) {
@@ -6821,10 +6825,11 @@ public sealed partial class Binder {
                 or BinaryOperatorKind.GreaterThanOrEqual
             && left.Type.Equals(Core.String)
             && right.Type.Equals(Core.String)
-            && FindUserOperator("<", left.Type, right.Type) is { } order) {
+            && FindUserOperator("<", left.Type, right.Type, kind is BinaryOperatorKind.GreaterThan or BinaryOperatorKind.LessThanOrEqual) is { } order) {
+            (left, right) = UserOperands(order, left, right);
             return kind == BinaryOperatorKind.LessThan
-                ? new BoundBinaryOperator(syntax, Core.Bool, BinaryOperatorKind.UserDefined, left, right, order)
-                : new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, order);
+                ? new BoundBinaryOperator(syntax, Core.Bool, BinaryOperatorKind.UserDefined, left, right, order.Method)
+                : new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, order.Method);
         }
 
         // 'x == none' asks only which case x is, so any optional compares.
@@ -6844,13 +6849,14 @@ public sealed partial class Binder {
         }
 
         if (FindUserOperator(symbol, left.Type, right.Type) is { } method) {
+            (left, right) = UserOperands(method, left, right);
             return new BoundBinaryOperator(
                 syntax,
-                method.ReturnType,
+                method.Method.ReturnType,
                 BinaryOperatorKind.UserDefined,
                 left,
                 right,
-                method
+                method.Method
             );
         }
 
@@ -7011,6 +7017,17 @@ public sealed partial class Binder {
         };
 
     /// <summary>Looks for a one-operand <c>operator</c> member on the operand's type.</summary>
+    /// <summary>
+    ///     The operand of a prefix or postfix operator of the program's own,
+    ///     converted to the parameter it is passed to — a reference to it,
+    ///     where the operator takes a reference. A protocol's requirement
+    ///     takes it as it is: the type that meets it says what it takes.
+    /// </summary>
+    BoundExpression UserOperand(FunctionSymbol method, BoundExpression operand) =>
+        method.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol } || operand.Type is not NamedTypeSymbol named
+            ? operand
+            : Convert(operand, TypeSubstitution.For(named).Apply(method.Parameters[0].Type), operand.Syntax);
+
     FunctionSymbol? FindUserUnaryOperator(
         string symbol,
         TypeSymbol operand,
@@ -7093,7 +7110,36 @@ public sealed partial class Binder {
         }
     }
 
-    FunctionSymbol? FindUserOperator(string symbol, TypeSymbol left, TypeSymbol right) {
+    /// <summary>
+    ///     An infix operator found for two operands: the operator, and the
+    ///     type each operand is passed as — its parameter's, seen through the
+    ///     operand's type arguments — or null where it is passed as it is.
+    /// </summary>
+    readonly record struct UserOperator(FunctionSymbol Method, TypeSymbol? LeftParameter, TypeSymbol? RightParameter);
+
+    /// <summary>
+    ///     The operands of a user operator, each converted to the parameter
+    ///     it is passed to: 'a + b' to an 'operator + (a: Money, b: Money&)'
+    ///     passes b's address, and so needs b to have one.
+    /// </summary>
+    (BoundExpression Left, BoundExpression Right) UserOperands(UserOperator found, BoundExpression left, BoundExpression right) {
+        if (found.LeftParameter is { } leftParameter) {
+            left = Convert(left, leftParameter, left.Syntax);
+        }
+
+        if (found.RightParameter is { } rightParameter) {
+            right = Convert(right, rightParameter, right.Syntax);
+        }
+
+        return (left, right);
+    }
+
+    /// <summary>
+    ///     The infix operator <paramref name="symbol" /> that either operand's
+    ///     type declares for the two; <paramref name="swapped" /> when the
+    ///     left operand is passed second, as '>' passes its operands to '<'.
+    /// </summary>
+    UserOperator? FindUserOperator(string symbol, TypeSymbol left, TypeSymbol right, bool swapped = false) {
         // 'a < b' on two T: Comparable — the protocol's requirement, met by
         // whatever T turns out to be. 'C.Item' with 'associatedtype Item:
         // Comparable' is the same: its constraints are as good as T's.
@@ -7102,7 +7148,7 @@ public sealed partial class Binder {
                 if (protocol.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
                         f is { FunctionKind: FunctionKind.Operator, Fixity: OperatorFixity.Infix, Parameters.Length: 2 }
                         && string.Equals(f.Name, symbol, StringComparison.Ordinal)) is { } requirement) {
-                    return requirement;
+                    return new UserOperator(requirement, null, null);
                 }
             }
 
@@ -7134,10 +7180,13 @@ public sealed partial class Binder {
                 // A generic type's operator, seen through the operand's type
                 // arguments; a derived one only where its conformance holds.
                 var members = TypeSubstitution.For(named);
-                if (_conversions.HasImplicitConversion(left, members.Apply(function.Parameters[0].Type))
-                    && _conversions.HasImplicitConversion(right, members.Apply(function.Parameters[1].Type))
+                var first = members.Apply(function.Parameters[0].Type);
+                var second = members.Apply(function.Parameters[1].Type);
+                var (leftParameter, rightParameter) = swapped ? (second, first) : (first, second);
+                if (_conversions.HasImplicitConversion(left, leftParameter)
+                    && _conversions.HasImplicitConversion(right, rightParameter)
                     && (_compilation.GetDerivation(function) is not { } derivation || Conversions.Satisfies(named, derivation.Protocol))) {
-                    return function;
+                    return new UserOperator(function, leftParameter, rightParameter);
                 }
             }
         }

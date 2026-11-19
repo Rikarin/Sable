@@ -432,4 +432,52 @@ public sealed class LoweringTests {
         Assert.Contains(diagnostics, static d => d.Code == ErrorCode.ERR_NotLoweredYet);
         Assert.Empty(SilVerifier.Verify(module));
     }
+    [Fact]
+    public void AnOperatorTakingAReferenceIsPassedTheOperandsAddress() {
+        var module = Lower(
+            """
+            struct Money {
+                var cents: Int
+                operator + (a: Money, b: Money&) -> Money {
+                    return Money { cents: a.cents + b.cents }
+                }
+                operator < (a: Money&, b: Money) -> Bool {
+                    return a.cents < b.cents
+                }
+                prefix operator - (m: Money&) -> Money {
+                    return Money { cents: 0 - m.cents }
+                }
+            }
+            fn add(_ x: Int, _ y: Int) -> Int {
+                let a = Money { cents: x }
+                let b = Money { cents: y }
+                return (a + b).cents
+            }
+            fn addParameters(_ a: Money, _ b: Money) -> Money {
+                return a + b
+            }
+            fn negate(_ x: Int) -> Int {
+                let m = Money { cents: x }
+                return (-m).cents
+            }
+            fn greater(_ x: Int, _ y: Int) -> Bool {
+                let a = Money { cents: x }
+                let b = Money { cents: y }
+                return a > b
+            }
+            fn atMost(_ x: Int, _ y: Int) -> Bool {
+                let a = Money { cents: x }
+                let b = Money { cents: y }
+                return a <= b
+            }
+            """
+        );
+
+        Assert.Equal(7L, Run(module, "add", 3L, 4L));
+        Assert.Equal(-5L, Run(module, "negate", 5L));
+        Assert.Equal(true, Run(module, "greater", 4L, 3L));
+        Assert.Equal(false, Run(module, "greater", 3L, 4L));
+        Assert.Equal(true, Run(module, "atMost", 3L, 3L));
+        Assert.Equal(false, Run(module, "atMost", 4L, 3L));
+    }
 }

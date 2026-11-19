@@ -8324,7 +8324,10 @@ public sealed partial class SilGen {
             BindLocal(temporary, payload, chained.Syntax, declaration: true);
             Destroy(value);
             if (Expression(through(new BoundLocalAccess(receiver.Syntax, temporary, unwrappedType))) is { } reached) {
-                Branch(after, flatten ? Owned(reached) : Emit(new EnumInst(resultType, resultType.CaseIndex("Some"), Owned(reached))));
+                // A member that gives Void makes a Void?, whose 'Some' carries nothing.
+                var resultSome = resultType.CaseIndex("Some");
+                Branch(after, flatten ? Owned(reached)
+                    : Emit(new EnumInst(resultType, resultSome, resultType.Cases[resultSome].Payload is null ? null : Owned(reached))));
             }
 
             _current = absent;

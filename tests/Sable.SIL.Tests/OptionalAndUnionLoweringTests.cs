@@ -419,4 +419,26 @@ public sealed class OptionalAndUnionLoweringTests {
         Assert.Equal("a number", Run(module, "number"));
         Assert.Equal("t", Run(module, "text"));
     }
+
+    // ---- Calling an optional function that gives Void (#270) ----------------
+
+    [Fact]
+    public void AnOptionalFunctionThatGivesVoidIsCalledThroughItsChain() {
+        var module = Lower(
+            """
+            fn calls(_ present: Bool) -> Int {
+                var n = 0
+                let bump: (Int) -> Void = { n += $0 }
+                let g: ((Int) -> Void)? = present ? bump : none
+                g?(3)
+                let r = g?(4)
+                if r == none { return -1 }
+                return n
+            }
+            """
+        );
+
+        Assert.Equal(7L, Run(module, "calls", true));
+        Assert.Equal(-1L, Run(module, "calls", false));
+    }
 }

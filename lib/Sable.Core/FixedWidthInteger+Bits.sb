@@ -38,35 +38,47 @@ extension FixedWidthInteger {
     /// The least power of two not below the value. Anything up to 1 gives
     /// 1; it traps where the power does not fit.
     public fn nextPowerOfTwo() -> Self {
-        return self.checkedNextPowerOfTwo()!
+        guard let power = self.checkedNextPowerOfTwo() else {
+            preconditionFailure("the next power of two does not fit the type")
+        }
+        return power
     }
 
     /// The base-2 logarithm, rounded down: the place of the highest set
-    /// bit. None for zero or a negative value, which have none.
+    /// bit. It traps for zero or a negative value, which have none (see
+    /// 'checkedLog2').
     ///
     /// ```sable
     /// assert(1.log2() == 0)
     /// assert(1000.log2() == 9)
-    /// assert(0.log2() == none)
     /// ```
-    public fn log2() -> Int? {
-        if self <= Self.zero {
-            return none
-        }
+    public fn log2() -> Int {
+        precondition(self > Self.zero, "the logarithm of a value not above zero")
         return Self.bitWidth - 1 - self.leadingZeroCount
     }
 
+    /// The base-2 logarithm, rounded down, or none for zero or a negative value.
+    ///
+    /// ```sable
+    /// assert(8.checkedLog2() == 3)
+    /// assert(0.checkedLog2() == none)
+    /// ```
+    public fn checkedLog2() -> Int? {
+        if self <= Self.zero {
+            return none
+        }
+        return self.log2()
+    }
+
     /// The base-10 logarithm, rounded down: one less than the decimal
-    /// digits. None for zero or a negative value.
+    /// digits. It traps for zero or a negative value (see 'checkedLog10').
     ///
     /// ```sable
     /// assert(999.log10() == 2)
     /// assert(1000.log10() == 3)
     /// ```
-    public fn log10() -> Int? {
-        if self <= Self.zero {
-            return none
-        }
+    public fn log10() -> Int {
+        precondition(self > Self.zero, "the logarithm of a value not above zero")
         let ten = Self.truncating(10)
         var rest = self
         var digits = 0
@@ -77,22 +89,37 @@ extension FixedWidthInteger {
         return digits
     }
 
-    /// The square root, rounded down; none for a negative value.
+    /// The base-10 logarithm, rounded down, or none for zero or a negative value.
+    public fn checkedLog10() -> Int? {
+        if self <= Self.zero {
+            return none
+        }
+        return self.log10()
+    }
+
+    /// The square root, rounded down, or none for a negative value.
+    public fn checkedIsqrt() -> Self? {
+        if self < Self.zero {
+            return none
+        }
+        return self.isqrt()
+    }
+
+    /// The square root, rounded down. It traps for a negative value, which
+    /// has none (see 'checkedIsqrt').
     ///
     /// ```sable
     /// assert(17.isqrt() == 4)
     /// assert((255 as U8).isqrt() == 15)
     /// ```
-    public fn isqrt() -> Self? {
-        if self < Self.zero {
-            return none
-        }
+    public fn isqrt() -> Self {
+        precondition(self >= Self.zero, "the square root of a negative value")
         if self < Self.truncating(2) {
             return self
         }
         // Newton's method from a power of two above the root: each step
         // comes down toward it, and the first that does not is the root.
-        var root = Self.one << Self.truncating(self.log2()! / 2 + 1)
+        var root = Self.one << Self.truncating(self.log2() / 2 + 1)
         while true {
             let next = (root + self / root) >> Self.one
             if next >= root {

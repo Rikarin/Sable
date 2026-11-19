@@ -174,8 +174,8 @@ extension FixedWidthInteger {
         if let power = self.checkedPow(exponent) {
             return power
         }
-        // Converted for the trap a negative exponent gives.
-        let odd = UInt(exponent) % 2 == 1
+        precondition(nonNegative: exponent, "an integer power's exponent")
+        let odd = exponent % 2 == 1
         return self < Self.zero && odd ? Self.min : Self.max
     }
 
@@ -207,8 +207,8 @@ extension FixedWidthInteger {
         var result = Self.one
         var base = self
         var overflowed = false
-        // As a UInt, so that a negative exponent traps where it is converted.
-        var remaining = UInt(exponent)
+        precondition(nonNegative: exponent, "an integer power's exponent")
+        var remaining = exponent
         while remaining > 0 {
             if remaining % 2 == 1 {
                 let (product, over) = result.overflowingMul(base)
@@ -239,7 +239,8 @@ extension FixedWidthInteger {
     public fn pow(_ exponent: Int) -> Self {
         var result = Self.one
         var base = self
-        var remaining = UInt(exponent)
+        precondition(nonNegative: exponent, "an integer power's exponent")
+        var remaining = exponent
         while remaining > 0 {
             if remaining % 2 == 1 {
                 result = result * base

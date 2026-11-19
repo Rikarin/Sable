@@ -36,14 +36,14 @@ public sealed class StaticSiteTests {
 
             Assert.Equal(
                 """
-                  building.html              1.5 KB   105 words, 5 heading(s), 1 code block(s)
+                  building.html              1.5 KB   106 words, 5 heading(s), 1 code block(s)
                   memory.html                1.5 KB   126 words, 2 heading(s), 0 code block(s)
                   hello.html                 1.2 KB    72 words, 1 heading(s), 1 code block(s)
                   about.html                  628 B    26 words, 0 heading(s), 0 code block(s)
                   index.html                  966 B
                   tags.html                   874 B
                   style.css (copied)
-                4 pages, 329 words, 4 tags, written to out
+                4 pages, 330 words, 4 tags, written to out
 
                 """,
                 run.Stdout

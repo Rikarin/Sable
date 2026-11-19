@@ -1680,12 +1680,49 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return null;
         }
 
+        if (builtin.Name.StartsWith("bytes_load_", StringComparison.Ordinal)) {
+            var width = BytesWidth(builtin.Type);
+            var (buffer, start, count) = ElementsOf(operands[0]);
+            var at = (long)operands[1]!;
+            if (buffer is null || at < 0 || at > count - width) {
+                throw new SilTrap("array index out of range");
+            }
+
+            ulong value = 0;
+            for (var i = 0; i < width; i++) {
+                value |= (ulong)(long)buffer.Elements[start + (int)at + i]! << (8 * i);
+            }
+
+            return width == 8 ? value : (long)value;
+        }
+
+        if (builtin.Name.StartsWith("bytes_store_", StringComparison.Ordinal)) {
+            // The last byte's index checked, and the array made unique, as a
+            // write of that byte would; then every byte written.
+            var width = BytesWidth(builtin.Operands[2].Type);
+            var at = (long)operands[1]!;
+            if (at < 0 || at > long.MaxValue - width) {
+                throw new SilTrap("array index out of range");
+            }
+
+            var (array, last) = Writable(builtin.Operands[0], (IReference)operands[0]!, at + width - 1);
+            var value = operands[2] is ulong wide ? wide : (ulong)(long)operands[2]!;
+            for (var i = 0; i < width; i++) {
+                array.Elements[last - width + 1 + i] = (long)(byte)(value >> (8 * i));
+            }
+
+            return null;
+        }
+
         if (FloatFunctions.Find(builtin.Name) is var (function, type)) {
             return Libm.Call(function, type, operands);
         }
 
         return ByteOrder(builtin.Name, operands) ?? Numeric(builtin.Name, operands) ?? Builtin(builtin.Name, operands);
     }
+
+    /// <summary>How many bytes a 'bytes_load_' or 'bytes_store_' reads or writes.</summary>
+    static int BytesWidth(SilType type) => SilType.IntegerInfo(type)!.Value.Bits / 8;
 
     /// <summary>
     ///     An integer's bytes reversed, and a float's bits as an integer and

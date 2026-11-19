@@ -1577,6 +1577,13 @@ public sealed partial class LlvmEmitter {
         string NewLabel(string stem) => $"{stem}{_extraBlocks++}";
 
         /// <summary>Branches to a trap with this message when the condition holds, and carries on otherwise.</summary>
+        /// <summary>An offset into bytes below zero traps, as an index out of range.</summary>
+        void NegativeOffsetTraps(string offset) {
+            var negative = Fresh();
+            Line($"{negative} = icmp slt i64 {offset}, 0");
+            TrapIf(negative, "array index out of range");
+        }
+
         void TrapIf(string condition, string message) {
             var trap = NewLabel("trap");
             var ok = NewLabel("ok");
@@ -2359,6 +2366,37 @@ public sealed partial class LlvmEmitter {
             if (builtin.Name.StartsWith("byte_swap_", StringComparison.Ordinal)) {
                 var swapped = Type(builtin.Type);
                 Line($"{Result()} = call {swapped} @llvm.bswap.{swapped}({swapped} {operands[0]})");
+                return;
+            }
+
+            // Bytes read as an integer: the last byte's index checked as an
+            // element's would be, and a negative offset refused, so that all
+            // of them are in the slice; then one load, aligned or not.
+            if (builtin.Name.StartsWith("bytes_load_", StringComparison.Ordinal)) {
+                var integer = Type(builtin.Type);
+                var width = SilType.IntegerInfo(builtin.Type)!.Value.Bits / 8;
+                NegativeOffsetTraps(operands[1]);
+                var lastIndex = Fresh();
+                Line($"{lastIndex} = add i64 {operands[1]}, {width - 1}");
+                var last = SliceElement(operands[0], lastIndex, (SliceType)builtin.Operands[0].Type);
+                var first = Fresh();
+                Line($"{first} = getelementptr inbounds i8, ptr {last}, i64 {1 - width}");
+                Line($"{Result()} = load {integer}, ptr {first}, align 1");
+                return;
+            }
+
+            // An integer written as bytes: the array made unique and the last
+            // byte's index checked, as writing that byte would, then one store.
+            if (builtin.Name.StartsWith("bytes_store_", StringComparison.Ordinal)) {
+                var integer = Type(builtin.Operands[2].Type);
+                var width = SilType.IntegerInfo(builtin.Operands[2].Type)!.Value.Bits / 8;
+                NegativeOffsetTraps(operands[1]);
+                var lastIndex = Fresh();
+                Line($"{lastIndex} = add i64 {operands[1]}, {width - 1}");
+                var last = MutableElement(operands[0], lastIndex, (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee);
+                var first = Fresh();
+                Line($"{first} = getelementptr inbounds i8, ptr {last}, i64 {1 - width}");
+                Line($"store {integer} {operands[2]}, ptr {first}, align 1");
                 return;
             }
 

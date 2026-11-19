@@ -6302,7 +6302,7 @@ public sealed partial class Binder {
             _diagnostics.Error(
                 ErrorCode.ERR_NameNotFound,
                 syntax.Span,
-                $"no type named '{name}' is declared in Sable.Core"
+                $"no struct '{name}<Bound>' is declared in Sable.Core, so there is no range for this to make"
             );
             return new BoundError(syntax);
         }

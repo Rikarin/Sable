@@ -542,6 +542,57 @@ public sealed class VerifierTests {
     }
 
     /// <summary>
+    ///     A declaration after a deinit named '@$' is still a declaration:
+    ///     the global's name is not the '$' that starts a type's name. The
+    ///     'sil' fuzzer found the second class left undeclared.
+    /// </summary>
+    [Fact]
+    public void ADeclarationAfterADeinitNamedDollarReads() {
+        const string text = """
+                            sil_class A { } deinit @$
+                            sil_class B { } deinit @$
+                            sil_struct S { } deinit @$
+                            sil_enum E { a }
+
+                            """;
+        var module = SilParser.Parse(text);
+        Assert.Equal("$", Assert.IsType<ClassType>(module.FindType("A")).Deinit);
+        Assert.IsType<ClassType>(module.FindType("B"));
+        Assert.IsType<StructType>(module.FindType("S"));
+        Assert.IsType<EnumType>(module.FindType("E"));
+        Assert.Equal(SilPrinter.Print(module), SilPrinter.Print(SilParser.Parse(SilPrinter.Print(module))));
+    }
+
+    /// <summary>
+    ///     A 'return' with no value, then an instruction: the printer names
+    ///     the instruction's result on the next line, and '%3 =' there is
+    ///     that result, not the value returned. Two terminators in a block
+    ///     read, for the verifier to reject. The 'sil' fuzzer found it.
+    /// </summary>
+    [Theory]
+    [InlineData("return apply %1(%0) : $Int")]
+    [InlineData("return\n  %3 = apply %1(%0) : $Int")]
+    [InlineData("return %3 = apply %1(%0) : $Int")]
+    public void AReturnWithNoValueBeforeAnInstructionReadsBackAsPrinted(string instructions) {
+        var text = $$"""
+                     sil @f : $(Int) -> Int {
+                     bb0(%0 : $Int):
+                       %1 = function_ref @f : $(Int) -> Int
+                       {{instructions}}
+                       return %0
+                     }
+
+                     """;
+        var module = SilParser.Parse(text);
+        var block = module.Functions[0].Blocks[0];
+        Assert.Null(Assert.IsType<ReturnInst>(block.Instructions[1]).Value);
+        Assert.IsType<ApplyInst>(block.Instructions[2]);
+        Assert.Contains(SilVerifier.Verify(module), p => p.Contains("before its end", StringComparison.Ordinal));
+        var printed = SilPrinter.Print(module);
+        Assert.Equal(printed, SilPrinter.Print(SilParser.Parse(printed)));
+    }
+
+    /// <summary>
     ///     An instruction that needs its operand's type reads only after the
     ///     operand is defined in the text. Here bb2 dominates bb1, so printing
     ///     blocks in dominance order would put the use in bb2 before the

@@ -262,7 +262,7 @@ public sealed class SilParser {
         // contains it, so no order of declarations would do.
         for (var i = 0; i + 1 < _tokens.Count; i++) {
             if (_tokens[i] is { Kind: TokenKind.Word, Text: "sil_struct" or "sil_enum" or "sil_class" } keyword
-                && (i == 0 || _tokens[i - 1].Text != "$")) {
+                && (i == 0 || _tokens[i - 1] is not { Kind: TokenKind.Punctuation, Text: "$" })) {
                 // A name the compiler made is '$' and a word.
                 var at = _tokens[i + 1] is { Kind: TokenKind.Punctuation, Text: "$" } ? i + 2 : i + 1;
                 if (at >= _tokens.Count || _tokens[at].Kind != TokenKind.Word) {
@@ -355,8 +355,18 @@ public sealed class SilParser {
         return true;
     }
 
+    /// <summary>
+    ///     The type a declaration names, which the first look over the tokens
+    ///     made; one it did not make is malformed SIL, not a type to fill in.
+    /// </summary>
+    T Declared<T>(string what) where T : NominalType {
+        var line = Current.Line;
+        var name = TypeName(what);
+        return _module.FindType(name) as T ?? throw new SilParseException($"expected {what} but found '{name}'", line);
+    }
+
     void ParseStruct() {
-        var type = (StructType)_module.FindType(TypeName("a struct name"))!;
+        var type = Declared<StructType>("a struct name");
         type.IsNoncopyable = AcceptNoncopy();
         if (Current is { Kind: TokenKind.Global, Text: "inline" }) {
             Next();
@@ -391,7 +401,7 @@ public sealed class SilParser {
     }
 
     void ParseClass() {
-        var type = (ClassType)_module.FindType(TypeName("a class name"))!;
+        var type = Declared<ClassType>("a class name");
         if (Accept(":")) {
             type.Superclass = _module.FindType(TypeName("a superclass")) as ClassType
                 ?? throw Error("a class's superclass must be a class");
@@ -430,7 +440,7 @@ public sealed class SilParser {
     }
 
     void ParseEnum() {
-        var type = (EnumType)_module.FindType(TypeName("an enum name"))!;
+        var type = Declared<EnumType>("an enum name");
         type.IsNoncopyable = AcceptNoncopy();
         Expect("{");
         if (!At("}")) {
@@ -1116,7 +1126,13 @@ public sealed class SilParser {
             }
 
             case "return":
-                instruction = new ReturnInst(Current.Kind == TokenKind.Local ? Operand(0) : null);
+                // A name followed by '=' is the next instruction's result,
+                // not the value returned: 'return' then '%3 = apply …'.
+                instruction = new ReturnInst(
+                    Current.Kind == TokenKind.Local && _tokens[_index + 1] is not { Kind: TokenKind.Punctuation, Text: "=" }
+                        ? Operand(0)
+                        : null
+                );
                 break;
 
             case "unreachable":

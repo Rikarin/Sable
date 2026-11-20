@@ -16,6 +16,7 @@
 
 #include "internal.h"
 #include "platform.h"
+#include "lines.c"
 
 #ifdef _WIN32
 #include "platform_win32.c"

@@ -4953,6 +4953,10 @@ public sealed partial class SilGen {
 
         /// <summary>Sends an error to the innermost handler, running the defers on the way.</summary>
         void RouteError(SilValue error, SyntaxNode at) {
+            if (_handlers.Count == 0 && StopsUncaught(error, at)) {
+                return;
+            }
+
             var handler = _handlers.Count > 0 ? _handlers[^1] : FunctionHandler(error.Type, at);
             if (handler is null) {
                 return;
@@ -5036,6 +5040,42 @@ public sealed partial class SilGen {
             var converted = Emit(new ApplyInst(Emit(new FunctionRefInst(name, type)), wanted, error));
             Destroy(error);
             return converted;
+        }
+
+        /// <summary>
+        ///     An error leaving the program's <c>main</c>, sync or async, which
+        ///     nothing above it would catch: stopped at where it leaves, by
+        ///     Sable.Core's <c>uncaughtError</c> — 'fatal error: uncaught
+        ///     error: ' and its description, the place of the <c>throw</c>
+        ///     or <c>try</c>, through the panic hook, and status 1 — rather
+        ///     than thrown to a caller that has nothing to do with it. Boxed
+        ///     as <c>any Error</c> on the way, as any type may be. False
+        ///     where this is not main, or there is no <c>uncaughtError</c>
+        ///     to call (a Sable.Core without it), and the error is thrown.
+        /// </summary>
+        bool StopsUncaught(SilValue error, SyntaxNode at) {
+            if (!ReferenceEquals(symbol, generator._entrySymbol) || IsGlobalInit(function.Name) || Generator is not null
+                || Core.Module.GetMembers("uncaughtError").OfType<FunctionSymbol>().FirstOrDefault(static f => f.Parameters.Length == 4) is not { } report
+                || !generator._names.TryGetValue(report, out var name)
+                || (generator._module.Find(name)?.Type ?? generator.External(name) ?? generator.SignatureOf(report, at, TypeSubstitution.Empty)) is not { } type) {
+                return false;
+            }
+
+            var boxed = Convert(Owned(error), generator.AnyErrorType(), at);
+            if (boxed is null || _current is null) {
+                return true;
+            }
+
+            var place = source.GetLinePosition(at.Span.Start);
+            var arguments = new SilValue[] {
+                boxed,
+                Emit(new StringLiteralInst(function.SourceFile ?? "")),
+                Emit(new IntegerLiteralInst(SilType.Int, place.Line)),
+                Emit(new IntegerLiteralInst(SilType.Int, place.Column)),
+            };
+            Emit(new ApplyInst(Emit(new FunctionRefInst(name, type)), type.Result, arguments));
+            Jump(new UnreachableInst());
+            return true;
         }
 
         /// <summary>The function's own throw, as a handler.</summary>

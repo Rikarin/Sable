@@ -50,13 +50,33 @@ enum { BACKTRACE_DEPTH = 64 };
 // first, at most 'capacity' of them; how many there are.
 static int capture_frames(void **frames, int capacity);
 
-// A frame as text: 'symbol + offset' where the symbol is known, the
-// address otherwise.
+// A frame as text: 'symbol at file:line:column' where a debug build's line
+// table places it (lines.c, or the PDB on Windows), 'symbol + offset' where
+// only the symbol is known, the address otherwise.
 static void name_frame(void *frame, char *text, size_t size);
+
+// The program's own DWARF line table (lines.c reads it): .debug_line, and
+// the sections its names are in, in memory for as long as the program
+// runs; how far the program was moved from the addresses it gives as it
+// was loaded; and where the program itself starts in memory, as dladdr
+// gives an image's start. False where there is none: a build without -g,
+// a .dSYM that is not this build's, Windows and WASI.
+typedef struct LineSections {
+    const uint8_t *line, *line_str, *str;
+    size_t line_size, line_str_size, str_size;
+    intptr_t slide;
+    const void *image;
+} LineSections;
+
+static bool line_sections(LineSections *sections);
 
 // Ends the program as a trap does: as an abort is reported, status 134 in
 // a shell, on every platform.
 _Noreturn static void stop_trapped(void);
+
+// Whether a debugger is attached to the process now (Debugger.isAttached):
+// what Debugger.break() asks before it stops for one.
+bool sable_debugger_attached(void);
 
 // ---- Memory --------------------------------------------------------------
 

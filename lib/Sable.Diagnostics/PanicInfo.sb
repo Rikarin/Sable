@@ -1,0 +1,73 @@
+module Sable.Diagnostics
+
+/// A trap, as the panic hook is given it (Panic.setHook): why the program
+/// stopped, where, and the calls that led there. Rust's
+/// std::panic::PanicHookInfo.
+///
+/// ```sable
+/// let info = PanicInfo(message: "index 4 is out of range for count 2", site: "main.sb:3:5", frames: [])
+/// assert(info.file == "main.sb")
+/// assert(info.line == 3)
+/// assert(info.description() == "fatal error: index 4 is out of range for count 2\n  at main.sb:3:5")
+/// ```
+public struct PanicInfo {
+    /// What the trap says: 'precondition failed: …', 'arithmetic overflow',
+    /// 'uncaught error: …'.
+    public let message: String
+
+    /// The file the trap is in, as the program's traps name it; empty
+    /// when it has no place (memory run out, every task waiting).
+    public let file: String
+
+    /// Its line and column, from 1; 0 when it has no place.
+    public let line: Int
+    public let column: Int
+
+    /// The calls that led to it, from the one that trapped: as
+    /// SABLE_BACKTRACE=1 shows them, empty in the interpreter.
+    public let backtrace: Backtrace
+
+    /// The trap at a place written 'file:line:column', or none when empty.
+    public init(message: String, site: String, frames: String[>..]) {
+        self.message = message
+        self.backtrace = Backtrace { frames: frames }
+        var file = ""
+        var line = 0
+        var column = 0
+        if let (rest, last) = site.splitLastOnce(":") {
+            if let (name, middle) = rest.splitLastOnce(":") {
+                if let l = middle.toInt() {
+                    if let c = last.toInt() {
+                        file = name
+                        line = l
+                        column = c
+                    }
+                }
+            }
+        }
+        if file.isEmpty && !site.isEmpty {
+            file = site
+        }
+        self.file = file
+        self.line = line
+        self.column = column
+    }
+
+    /// The place as the trap names it, 'file:line:column'; empty when it
+    /// has none.
+    public var site: String => self.line == 0 ? self.file : "\(self.file):\(self.line):\(self.column)"
+
+    /// The trap's report, as the program says it without a hook: 'fatal
+    /// error: ' and the message, the place on the next line, and, when
+    /// asked for and there are frames, the backtrace after it.
+    public fn description(backtrace: Bool = false) -> String {
+        var text = "fatal error: \(self.message)"
+        if !self.site.isEmpty {
+            text = text + "\n  at \(self.site)"
+        }
+        if backtrace && !self.backtrace.isEmpty {
+            text = text + "\nbacktrace:\n" + self.backtrace.description()
+        }
+        return text
+    }
+}

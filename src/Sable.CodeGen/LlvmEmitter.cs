@@ -400,6 +400,11 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_trap_at(ptr, ptr) noreturn cold
                                 declare void @sable_trap_with(ptr, ptr) noreturn cold
                                 declare ptr @sable_backtrace_capture()
+                                declare void @sable_trap_uncaught(ptr, ptr) noreturn cold
+                                declare void @sable_trap_hook_set(ptr, ptr)
+                                declare void @sable_trap_hook_take(ptr, ptr, ptr)
+                                declare zeroext i1 @sable_debugger_attached()
+                                declare void @llvm.debugtrap()
                                 @sable_trap_site = external thread_local global ptr
                                 declare ptr @sable_alloc(ptr, i64)
                                 declare void @sable_retain(ptr)
@@ -3359,6 +3364,59 @@ public sealed partial class LlvmEmitter {
                 case "backtrace_capture":
                     Line($"{Result()} = call ptr @sable_backtrace_capture()");
                     return;
+
+                case "trap_uncaught":
+                    Line($"call void @sable_trap_uncaught(ptr {operands[0]}, ptr {operands[1]})");
+                    return;
+
+                // A closure to the runtime as its code and context, two
+                // pointers, as C takes them on every target; and back the
+                // same way, through a slot, rather than as a struct C returns.
+                case "trap_hook_set": {
+                    var code = Fresh();
+                    var context = Fresh();
+                    Line($"{code} = extractvalue {{ ptr, ptr }} {operands[0]}, 0");
+                    Line($"{context} = extractvalue {{ ptr, ptr }} {operands[0]}, 1");
+                    Line($"call void @sable_trap_hook_set(ptr {code}, ptr {context})");
+                    return;
+                }
+
+                case "trap_hook_take": {
+                    var code = Fresh();
+                    var context = Fresh();
+                    var slot = Fresh();
+                    _entryAllocas.Append($"  {slot} = alloca {{ ptr, ptr }}, align 8\n");
+                    Line($"{code} = extractvalue {{ ptr, ptr }} {operands[0]}, 0");
+                    Line($"{context} = extractvalue {{ ptr, ptr }} {operands[0]}, 1");
+                    Line($"call void @sable_trap_hook_take(ptr {slot}, ptr {code}, ptr {context})");
+                    Line($"{Result()} = load {{ ptr, ptr }}, ptr {slot}");
+                    return;
+                }
+
+                case "debugger_attached":
+                    Line($"{Result()} = call zeroext i1 @sable_debugger_attached()");
+                    return;
+
+                // The trap instruction a debugger stops at, in the caller's
+                // own code, so that it stops on the line that asked — when
+                // one is attached: with none, a trap instruction would end
+                // the program, as Debugger.break() does not.
+                case "debugger_break": {
+                    var attached = Fresh();
+                    Line($"{attached} = call zeroext i1 @sable_debugger_attached()");
+                    if (module._target.Platform == NativePlatform.Wasi) {
+                        return;
+                    }
+
+                    var stop = NewLabel("debugtrap");
+                    var go = NewLabel("debugged");
+                    Line($"br i1 {attached}, label %{stop}, label %{go}");
+                    _extra.Append(stop).Append(":\n")
+                        .Append("  call void @llvm.debugtrap()").Append(_dbg).Append('\n')
+                        .Append($"  br label %{go}\n");
+                    Continue(go);
+                    return;
+                }
 
                 case "io_read_line" or "io_succeeded" or "io_argument_count":
                     Line($"{Result()} = call {(builtin.Name == "io_read_line" ? "ptr" : builtin.Name == "io_succeeded" ? "zeroext i1" : "i64")} @sable_{builtin.Name}()");

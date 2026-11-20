@@ -1,0 +1,22 @@
+module DebuggerTests
+
+// Debugger (Sable.Diagnostics), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Diagnostics
+// The tests run with no debugger attached.
+
+import Sable.Diagnostics
+import Sable.Testing
+
+@test
+fn noDebuggerIsAttachedToATest() {
+    assert(!Debugger.isAttached)
+}
+
+@test
+fn breakWithNoDebuggerDoesNothing() {
+    var reached = 0
+    Debugger.break()
+    reached = reached + 1
+    Debugger.break()
+    assertEqual(reached, 1)
+}

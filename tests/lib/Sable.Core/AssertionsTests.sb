@@ -176,3 +176,18 @@ fn unreachableStopsTheProgramWithItsMessage() {
 fn unreachableWithoutAMessageStillSaysSo() {
     let _: String = unreachable()
 }
+
+union Lost: Error {
+    Key(String)
+
+    fn description() -> String {
+        return match self {
+            case .Key(let name) => "no key \(name)"
+        }
+    }
+}
+
+@test(traps: "uncaught error: no key colour")
+fn uncaughtErrorStopsWithTheErrorsDescription() {
+    uncaughtError(Lost.Key("colour"))
+}

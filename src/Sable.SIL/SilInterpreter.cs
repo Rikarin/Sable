@@ -19,8 +19,26 @@ public sealed class SilTrap(string message, bool located = true) : Exception(mes
 
     internal bool Located => located;
 
-    /// <summary>What the native program writes to standard error as it stops: the message, and the place on the next line.</summary>
-    public string Report => Site is null ? $"fatal error: {Message}\n" : $"fatal error: {Message}\n  at {Site}\n";
+    /// <summary>The status the program ends with: 134, as an abort is reported, or 1 for an error main threw.</summary>
+    public int ExitStatus { get; internal init; } = 134;
+
+    /// <summary>Whether the program's panic hook said it, in place of the report.</summary>
+    public bool Hooked { get; internal set; }
+
+    /// <summary>A trap in the panic hook, as it ran with this one.</summary>
+    public SilTrap? HookTrap { get; internal set; }
+
+    /// <summary>
+    ///     What the native program writes to standard error as it stops: the
+    ///     message, and the place on the next line — unless the panic hook
+    ///     said it instead. A trap in the hook adds its own after.
+    /// </summary>
+    public string Report =>
+        Hooked ? ""
+        : HookTrap is { } inner ? Plain + $"fatal error: the panic hook trapped: {inner.Message}\n" + (inner.Site is null ? "" : $"  at {inner.Site}\n")
+        : Plain;
+
+    string Plain => Site is null ? $"fatal error: {Message}\n" : $"fatal error: {Message}\n  at {Site}\n";
 }
 
 /// <summary>
@@ -796,14 +814,58 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
         _steps = 0;
         var passed = arguments.Select(static a => a is string s ? new HeapString(s) { Immortal = true } : a).ToArray();
-        var result = Call(target, passed, 0);
-        if (result is Thrown thrown) {
-            throw new SilTrap($"uncaught error: {Format(thrown.Error)}");
+        object? result;
+        try {
+            result = Call(target, passed, 0);
+            if (result is Thrown thrown) {
+                throw new SilTrap($"uncaught error: {Format(thrown.Error)}");
+            }
+        } catch (SilTrap trap) {
+            RunTrapHook(trap);
+            throw;
         }
 
         var plain = result is HeapString text ? Alive(text).Value : result;
         Release(target.Type.Result, result, 0);
+
+        // The hook let go of as the program ends, as the runtime does before it counts what is left.
+        if (_trapHook is { } hook) {
+            _trapHook = null;
+            Release(new ThickFunctionType(TrapHookSignature), hook, 0);
+        }
+
         return plain;
+    }
+
+    /// <summary>The panic hook the program set (<c>trap_hook_set</c>), or null for the default report.</summary>
+    ClosureValue? _trapHook;
+
+    static readonly FunctionType TrapHookSignature = new([SilType.String, SilType.String, new ArrayType(SilType.String)], SilType.Unit);
+
+    /// <summary>
+    ///     A trap said by the program's panic hook, as the runtime says it:
+    ///     the hook called with the message, the place and no frames (the
+    ///     interpreter has none to give), and the trap's own report then
+    ///     left out. A trap in the hook gives the default report of the
+    ///     trap it was given, and then its own.
+    /// </summary>
+    void RunTrapHook(SilTrap trap) {
+        if (_trapHook is not { } hook) {
+            return;
+        }
+
+        _trapHook = null;
+        var message = Allocate(new HeapString(trap.Message));
+        var site = Allocate(new HeapString(trap.Site ?? ""));
+        var frames = Allocate(new HeapArray(new ArrayType(SilType.String), []));
+        try {
+            _steps = 0;
+            var (function, passed) = Callee(hook, [message, site, frames]);
+            Call(function, passed, 0);
+            trap.Hooked = true;
+        } catch (SilTrap inner) {
+            trap.HookTrap = inner;
+        }
     }
 
     object? Call(SilFunction function, IReadOnlyList<object?> arguments, int depth) {
@@ -1511,6 +1573,44 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             // symbols to name them by: a backtrace here has none.
             case "backtrace_capture":
                 return Allocate(new HeapArray(new ArrayType(SilType.String), []));
+
+            // An error main threw: a trap, but the program ends with status 1.
+            case "trap_uncaught": {
+                var site = Text(operands[1]).Value;
+                throw new SilTrap(Text(operands[0]).Value) { Site = site.Length == 0 ? null : site, ExitStatus = 1 };
+            }
+
+            // The panic hook, held as the runtime holds it: retained until
+            // replaced, taken, or the program ends.
+            case "trap_hook_set": {
+                var hook = (ClosureValue)operands[0]!;
+                Retain(builtin.Operands[0].Type, hook);
+                var replaced = _trapHook;
+                _trapHook = hook;
+                if (replaced is not null) {
+                    Release(builtin.Operands[0].Type, replaced, depth);
+                }
+
+                return null;
+            }
+
+            case "trap_hook_take": {
+                var taken = _trapHook;
+                _trapHook = null;
+                if (taken is null) {
+                    taken = (ClosureValue)operands[0]!;
+                    Retain(builtin.Operands[0].Type, taken);
+                }
+
+                return taken;
+            }
+
+            // Nothing debugs the interpreted program, as a debugger traces a process.
+            case "debugger_attached":
+                return false;
+
+            case "debugger_break":
+                return null;
 
             case "io_succeeded":
                 return !_ioFailed;

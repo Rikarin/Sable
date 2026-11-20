@@ -87,6 +87,31 @@ public sealed class DebuggerTests {
         }
     }
 
+    /// <summary>
+    ///     Debugger.break() under lldb: the program sees it is attached, and
+    ///     stops on the line that asked, in its own frame, not the runtime's.
+    /// </summary>
+    [PosixFact("it drives lldb with DWARF; a Windows build is described in CodeView, for the PDB its debuggers read, which no test here drives")]
+    public async Task DebuggerBreakStopsOnTheLineThatAsked() {
+        const string source = """
+                              module Brk
+                              import Sable.Diagnostics
+
+                              @main
+                              fn main() {
+                                  print("attached \(Debugger.isAttached)")
+                                  Debugger.break()
+                                  print("after")
+                              }
+                              """;
+        if (await UnderLldb(source, "brk", "run", "bt 1") is not { } text) {
+            return;
+        }
+
+        Assert.Contains("attached true", text, StringComparison.Ordinal);
+        Assert.Contains("main at brk.sb:7", text, StringComparison.Ordinal);
+    }
+
     [PosixFact("it drives lldb with DWARF; a Windows build is described in CodeView, for the PDB its debuggers read, which no test here drives")]
     public async Task LldbShowsFramesLocalsAndTypes() {
         if (await UnderLldb(Source, "debug", "breakpoint set --file debug.sb --line 13", "run", "bt", "frame variable", "up", "frame variable", "kill") is not { } text) {

@@ -1,0 +1,63 @@
+module PanicInfoTests
+
+// PanicInfo (Sable.Diagnostics), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Diagnostics
+
+import Sable.Diagnostics
+import Sable.Testing
+
+@test
+fn aPlaceIsReadAsFileLineAndColumn() {
+    let info = PanicInfo(message: "stop", site: "src/main.sb:12:15", frames: [])
+    assertEqual(info.file, "src/main.sb")
+    assertEqual(info.line, 12)
+    assertEqual(info.column, 15)
+    assertEqual(info.site, "src/main.sb:12:15")
+}
+
+@test
+fn aFileWithAColonInItsNameIsKeptWhole() {
+    let info = PanicInfo(message: "stop", site: "C:\\work\\main.sb:3:1", frames: [])
+    assertEqual(info.file, "C:\\work\\main.sb")
+    assertEqual(info.line, 3)
+}
+
+@test
+fn noPlaceIsAnEmptyFileAndLineZero() {
+    let info = PanicInfo(message: "out of memory", site: "", frames: [])
+    assertEqual(info.file, "")
+    assertEqual(info.line, 0)
+    assertEqual(info.column, 0)
+    assertEqual(info.site, "")
+}
+
+@test
+fn aPlaceWithoutNumbersIsTakenAsTheFile() {
+    let info = PanicInfo(message: "stop", site: "somewhere:else", frames: [])
+    assertEqual(info.file, "somewhere:else")
+    assertEqual(info.line, 0)
+    assertEqual(info.site, "somewhere:else")
+}
+
+@test
+fn theFramesAreTheBacktrace() {
+    let info = PanicInfo(message: "stop", site: "", frames: ["sable.A.f + 4", "sable.A.main + 8"])
+    assertEqual(info.backtrace.frames.count, 2)
+    assertEqual(info.backtrace.frames[1], "sable.A.main + 8")
+}
+
+@test
+fn theDescriptionIsTheReport() {
+    let placed = PanicInfo(message: "the end", site: "a.sb:1:2", frames: ["f"])
+    assertEqualText(placed.description(), "fatal error: the end\n  at a.sb:1:2")
+    let placeless = PanicInfo(message: "out of memory", site: "", frames: [])
+    assertEqualText(placeless.description(), "fatal error: out of memory")
+}
+
+@test
+fn theDescriptionCanEndWithTheBacktrace() {
+    let info = PanicInfo(message: "the end", site: "a.sb:1:2", frames: ["sable.A.f + 4"])
+    assertEqualText(info.description(backtrace: true), "fatal error: the end\n  at a.sb:1:2\nbacktrace:\n   0  sable.A.f + 4")
+    let bare = PanicInfo(message: "the end", site: "", frames: [])
+    assertEqualText(bare.description(backtrace: true), "fatal error: the end")
+}

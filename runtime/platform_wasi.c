@@ -33,6 +33,12 @@ static void name_frame(void *frame, char *text, size_t size) {
     snprintf(text, size, "%p", frame);
 }
 
+// The engine runs the program; nothing debugs it from inside, as a
+// debugger traces a process (Debugger.isAttached).
+bool sable_debugger_attached(void) {
+    return false;
+}
+
 // abort() is an 'unreachable', which the engine reports as a crash of its
 // own; a trap ends the program as POSIX reports an abort, status 134.
 _Noreturn static void stop_trapped(void) {

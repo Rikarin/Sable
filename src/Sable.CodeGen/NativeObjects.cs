@@ -121,7 +121,12 @@ public static class NativeObjects {
     /// <param name="asProgram">Add the platform's flags for a link that makes a program, which a relocatable link must not have.</param>
     static NativeBuildResult Link(IReadOnlyList<string> objects, string outputPath, NativeOptions options, string? thinLtoCache, IReadOnlyList<string> kind, bool asProgram) {
         var target = options.TargetOrHost;
-        var temporary = outputPath + $".{Environment.ProcessId}.tmp";
+        // A Windows DLL is linked where it goes, as the whole program's
+        // build links it: lld-link names the DLL, in its exports, and its
+        // import library — what a C program links against — for the file it
+        // writes, so a DLL linked as 'counter.dll.123.tmp' and moved would
+        // have neither counter.lib beside it nor its own name.
+        var temporary = target.Platform == NativePlatform.Windows && kind.Contains("-shared") ? outputPath : outputPath + $".{Environment.ProcessId}.tmp";
         try {
             var lto = NativeBuild.LtoFlags(options, target.Platform, NativeBuild.LinksBitcodeFor(target));
             List<string> cache = thinLtoCache is null || options.Lto != LtoMode.Thin || lto.Count == 0 ? []
@@ -137,10 +142,15 @@ public static class NativeObjects {
                 return NativeBuild.Explained(new(false, output), options);
             }
 
-            File.Move(temporary, outputPath, overwrite: true);
+            if (temporary != outputPath) {
+                File.Move(temporary, outputPath, overwrite: true);
+            }
+
             return new(true, output);
         } finally {
-            File.Delete(temporary);
+            if (temporary != outputPath) {
+                File.Delete(temporary);
+            }
         }
     }
 

@@ -72,11 +72,26 @@ public static class CoreLibrary {
         tree.Root is CompilationUnitSyntax { Module: { } declaration } ? declaration.Name.ToString().Trim() : null;
 
     /// <summary>
-    ///     True when the files bring a Sable.Core of their own — the compiler's
-    ///     repository opened in an editor, its <c>lib/Sable.Core</c> read from
-    ///     disk — which then stands in for the embedded one rather than
-    ///     declaring everything in it a second time.
+    ///     The files of the standard library a program brings of its own, by
+    ///     module and file name: the compiler's repository opened in an
+    ///     editor, its <c>lib/</c> read from disk, or <c>sable test --doc
+    ///     lib/Sable.Core/Int.sb</c>. Each stands in for the embedded file of
+    ///     its module and name (<see cref="IsBrought" />) rather than
+    ///     declaring everything in it a second time; the module's other files
+    ///     stay. The trees given must be the program's own, none embedded.
     /// </summary>
-    public static bool IsBroughtBy(IEnumerable<SyntaxTree> trees) =>
-        trees.Any(static t => !Contains(t) && ModuleOf(t) == ModuleName);
+    public static HashSet<(string Module, string File)> Brought(IEnumerable<SyntaxTree> program) =>
+        [..program.Select(static t => (Module: ModuleOf(t), File: FileName(t)))
+            .Where(static f => IsStandardLibrary(f.Module))
+            .Select(static f => (f.Module!, f.File))];
+
+    /// <summary>True for an embedded file of the library the program brings its own of (<see cref="Brought" />).</summary>
+    public static bool IsBrought(SyntaxTree embedded, HashSet<(string Module, string File)> brought) =>
+        brought.Count > 0 && ModuleOf(embedded) is { } module && brought.Contains((module, FileName(embedded)));
+
+    /// <summary>A file's name without its directories: <c>Int.sb</c> for <c>lib/Sable.Core/Int.sb</c>.</summary>
+    static string FileName(SyntaxTree tree) {
+        var name = tree.Text.FileName;
+        return name[(name.LastIndexOfAny(['/', '\\']) + 1)..];
+    }
 }

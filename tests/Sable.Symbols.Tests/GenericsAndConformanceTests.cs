@@ -849,6 +849,26 @@ public sealed class GenericsAndConformanceTests {
         AssertClean(Shapes + "fn probe() { let b = Box(t: Square(side: 2)) }");
     }
 
+    /// <summary>
+    ///     A function declared in a body has its constraints as a top-level
+    ///     one does: its body may use what they promise, and a call is held
+    ///     to them.
+    /// </summary>
+    [Fact]
+    public void ALocalGenericFunctionHasItsConstraints() {
+        AssertClean(Shapes + """
+            fn probe() -> Int {
+                fn twice<T: Shape>(_ t: T) -> Int { return t.area() * 2 }
+                fn thrice<T>(_ t: T) -> Int where T: Shape { return t.area() * 3 }
+                return twice(Square(side: 2)) + thrice(Square(side: 1))
+            }
+            """);
+        Assert.Contains(
+            Errors(Shapes + "fn probe() -> Int {\n    fn twice<T: Shape>(_ t: T) -> Int { return t.area() * 2 }\n    return twice(NotShape(v: 1))\n}"),
+            static e => e.Code is ErrorCode.ERR_DoesNotConform or ErrorCode.ERR_NoMatchingOverload
+        );
+    }
+
     [Fact]
     public void AWhereClauseOnATypeIsChecked() {
         Assert.Contains(Errors(Shapes + "fn probe() { let h = Holder(t: NotShape(v: 1)) }"), static e => e.Code == ErrorCode.ERR_DoesNotConform);

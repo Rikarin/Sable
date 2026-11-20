@@ -82,7 +82,7 @@ public static class TestHarness {
         tests = [];
         var program = trees.ToList();
         if (docExamples) {
-            program.AddRange(program.ToList().SelectMany(DocExamples.Extract));
+            program.AddRange(DocExamples.Extract(program.ToList()));
         }
 
         // Every test build has Sable.Testing, whether or not a file imports it.
@@ -205,8 +205,12 @@ public static class TestHarness {
     static IReadOnlyList<SyntaxTree> LibraryFor(IEnumerable<SyntaxTree> trees) {
         var seen = new HashSet<SyntaxTree>();
         var all = new List<SyntaxTree>();
-        foreach (var tree in trees) {
-            foreach (var library in Library.For(tree)) {
+        var program = trees.ToList();
+        // Each file for its own target (a package's files may differ), but
+        // knowing the whole program: a library file it has its own of is its.
+        var brought = CoreLibrary.Brought(program);
+        foreach (var tree in program) {
+            foreach (var library in Library.For(tree).Where(l => !CoreLibrary.IsBrought(l, brought))) {
                 if (seen.Add(library)) {
                     all.Add(library);
                 }

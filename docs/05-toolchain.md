@@ -29,7 +29,7 @@ sable search <query>               search the registry
 sable login / logout               keep or forget a network registry's token
 sable owner [<pkg>] [--add|--remove <key>]  who may publish a package
 sable install <pkg>[@<ver>]        build a package's binaries into ~/.sable/bin
-sable cache <list|gc|clean>        the package cache, and collecting it
+sable cache <list|prune|clean|warm> the package and build cache: list, collect, fill
 sable registry <serve|token>       run a network registry, issue its tokens
 sable clean                        remove the target directory
 sable bindgen <header.h>           generate .sbi from a C header
@@ -679,9 +679,87 @@ an optimised build with debug information, compile the program whole. A
 package's native library (`[lib] kind`) is built the same way, its own
 unit leading in place of an entry file (§5.2.2).
 The standard library's unit is compiled to an archive (`libsable_std.a`) and
-the runtime to another (`libsable_runtime.a`), each compiled once per set of
-options and kept, in the build cache (or `$SABLE_HOME/cache` for a single
-file); a program's link takes its units' objects, then those archives.
+the runtime to another (`libsable_runtime.a`), each kept in the shared build
+cache below; a program's link takes its units' objects, then those archives.
+An unoptimised build of a single file (`sable build -O0`, `-g`, and `sable
+run` of either) is compiled the same way, the file its one unit, so that it
+compiles only itself against a warm cache; an optimised one is compiled
+whole, the library with it, so that the SIL passes see all of it.
+
+### The build cache
+
+What a build makes that does not depend on the program — the C runtime's
+archive and the standard library's — is kept in `$SABLE_HOME/cache/<key>/`
+(default `~/.sable/cache`), shared by every project and every build, and made
+lazily the first time a target and profile need it. `target/` keeps only the
+project's own units. An entry is a directory: the archive, the object it
+archives (a static library C links takes that whole), the library's `.abi`
+record of the types it laid out, and `entry.txt`, the key it was made for and
+the profile of the build that made it. It has room for the library's
+interface, `<unit>.sbi`, beside the archive: the hook
+(`LibraryUnit.Write`'s `writeInterface`) is where the interface writer of
+#182's stages 2–4 puts it.
+
+The key is a SHA-256 over:
+
+- the package's name and version, and its source checksum — every file's
+  name and text (the standard library's: Sable.Core's and the modules the
+  program imports, parsed for the target and profile);
+- the **compiler's identity** (`CompilerIdentity`): not its version string but
+  a hash of its own build — every assembly of it, every resource they embed
+  (`lib/`'s source and the runtime's among them) and the version — so a
+  compiler rebuilt with any change, even under the same version number, finds
+  none of the entries an earlier build of it wrote;
+- the target triple;
+- the profile, as the settings of it that change code: the opt-level and the
+  SIL passes it picks, debug information, link-time optimisation (bitcode or
+  not), exclusivity, overflow and ARC checks, `debug-assertions`, reflection,
+  position-independence, and the C compiler's identity. The profile's name
+  is recorded, not keyed, so two profiles that compile code the same way
+  share entries;
+- the enabled features, and the keys of the entries it was compiled
+  against (none yet: the standard library depends on nothing kept, and a
+  package dependency is still a unit of the project, until #182's stage 7);
+- and for the standard library, the fingerprint of the program's own
+  extensions, which can change how the library's methods are named — none,
+  in most programs, so they all link one archive.
+
+An entry is made in a temporary directory beside where it goes and renamed
+into place, so builds running at once and the language server see it whole
+or not at all; two builds that need the same entry at once each make it,
+and the first to rename keeps it. A unit whose archive does not link, or
+whose `.abi` disagrees with the program's, makes the build compile the
+program whole, as with any unit.
+
+`sable cache list` shows the entries with the fetched packages; `sable cache
+prune [--max-age <days>]` removes the entries another build of the compiler
+wrote, and the entries, packages and evaluated manifests no build has used
+in that many days (default 30), and what an interrupted build left half-made;
+`sable cache clean` removes everything. `sable cache warm [--target <triple>]
+[--profile dev|release]` makes the entries a build for that target and
+profile needs now: the runtime, and the standard library alone and with each
+module a program may import (`--import <Module>` for one set). With
+`--into <dir>` it writes them to `<dir>` instead: a release of the compiler
+carries the host's in a `cache/` directory beside `sable`, which is read as
+prebuilt and never written (`tools/release/package.sh`), so a first build
+on a fresh machine compiles only the program. Another target's entries are
+made in the user's cache on first use.
+
+Measured (#182), `sable` built Release, on a machine under a load average
+of 10–35, so the times are rough:
+
+| Build | Before | Cold cache | Warm cache |
+|---|---:|---:|---:|
+| `examples/01-hello.sb`, `sable build -O0` | 5.4 s | 6.2 s | 1.1 s |
+| the same, `-g` | 5.3 s | 5.8 s | 1.1 s |
+| the same, `-O2` (whole, as before) | 7.0 s | 8.0 s | 7.0 s |
+| `examples/ssg` as a package, dev, clean `target/` | 7.7–8.3 s | 10.1 s | 4.0–4.5 s |
+| the same, release (`lto = "thin"`), clean `target/` | 10.4 s | 12.9 s | 5.5 s |
+
+"Before" had the runtime cached and nothing else; a warm cache leaves a new
+project's first build its own unit to bind and lower against the library's
+source, which is #182's later stages. The benchmarks are optimised single
+files, compiled whole as before; their times are unchanged.
 
 **Measured** (#182) on `tools/incremental/genworkspace.py`'s workspace (100
 packages, 110k lines, 102 units), `sable` built Release, on a machine under
@@ -826,8 +904,8 @@ registry token` issues its tokens (only their hashes are kept).
 the version — `v1.2.0`, `1.2.0`, or a member's `name-v1.2.0` —
 (`--allow-untagged`), and failing tests (`--no-verify`). `search`,
 `install` (a package's binaries, built with the release profile, into
-`~/.sable/bin`), `uninstall`, `owner` and `cache list|gc|clean` (packages no
-build used, and evaluated manifests, in `--max-age` days) exist.
+`~/.sable/bin`), `uninstall`, `owner` and `cache list|prune|clean|warm` (§5.4,
+"The build cache") exist.
 
 What a real deployment needs beyond this: TLS in front of the server (it
 speaks plain HTTP), a store that is backed up and served from more than one

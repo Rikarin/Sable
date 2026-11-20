@@ -528,26 +528,27 @@ public sealed class NativeTests {
 
         var cache = Directory.CreateTempSubdirectory("sable-runtime-cache-");
         var executable = Platform.Executable(Path.Combine(cache.FullName, "program"));
+        var kept = new BuildCache(Path.Combine(cache.FullName, "cache"));
         try {
             var compiled = Pipeline.Compile(new SourceText("module Kept\n\n@main\nfn main() {\n    print(\"kept\")\n}\n", "test.sb"));
             Assert.True(compiled.Succeeded, string.Join("\n", compiled.Errors));
             var ir = compiled.LlvmIr!;
             var options = NativeOptions.Of(optimise: true, debug: false);
-            Assert.True(NativeBuild.Build(ir, executable, options, cache.FullName).Succeeded);
-            var runtime = Assert.Single(Directory.GetDirectories(cache.FullName, "runtime-*"));
+            Assert.True(NativeBuild.Build(ir, executable, options, kept).Succeeded);
+            var runtime = Assert.Single(kept.Entries(), static e => e.Package == "sable-runtime").Directory;
             var archive = Path.Combine(runtime, NativeBuild.LibraryFileName("sable_runtime", LibraryKind.Static, NativeTarget.Host));
             Assert.True(File.Exists(archive));
             var written = File.GetLastWriteTimeUtc(archive);
 
             Platform.DeleteExecutable(executable);
-            Assert.True(NativeBuild.Build(ir, executable, options, cache.FullName).Succeeded);
-            Assert.Equal(runtime, Assert.Single(Directory.GetDirectories(cache.FullName, "runtime-*")));
+            Assert.True(NativeBuild.Build(ir, executable, options, kept).Succeeded);
+            Assert.Equal(runtime, Assert.Single(kept.Entries()).Directory);
             Assert.Equal(written, File.GetLastWriteTimeUtc(archive));
             Assert.Equal(("kept\n", 0), PackageFixture.Execute(executable));
 
             // Unoptimised, it is another.
-            Assert.True(NativeBuild.Build(ir, executable, NativeOptions.Of(optimise: false, debug: false), cache.FullName).Succeeded);
-            Assert.Equal(2, Directory.GetDirectories(cache.FullName, "runtime-*").Length);
+            Assert.True(NativeBuild.Build(ir, executable, NativeOptions.Of(optimise: false, debug: false), kept).Succeeded);
+            Assert.Equal(2, kept.Entries().Count);
             Assert.Equal(("kept\n", 0), PackageFixture.Execute(executable));
         } finally {
             cache.Delete(true);

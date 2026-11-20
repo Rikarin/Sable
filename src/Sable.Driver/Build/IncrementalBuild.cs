@@ -64,18 +64,38 @@ public sealed record BuildSettings(string Profile, bool Optimise, string? DebugD
     /// <summary>
     ///     Separately compiled — each unit to an object of its own, cached —
     ///     when nothing needs to see the whole program at once: an unoptimised
-    ///     debug build, which runs no SIL passes and no link-time optimisation;
-    ///     or an optimised build whose profile asks for ThinLTO (or none),
-    ///     where each unit's SIL passes run on the unit and LLVM optimises
-    ///     across units as they link. A profile's default, whole-program
-    ///     link-time optimisation (<c>lto = "fat"</c>), compiles the program
-    ///     whole, so that the SIL passes see all of it; so does an optimised
-    ///     build with debug information, whose link-time objects Apple's
-    ///     debugger would need kept. Otherwise only an unchanged build is skipped.
+    ///     build, which runs no SIL pass that looks across functions and no
+    ///     link-time optimisation; or an optimised build whose profile asks
+    ///     for ThinLTO (or none), where each unit's SIL passes run on the unit
+    ///     and LLVM optimises across units as they link. A profile's default,
+    ///     whole-program link-time optimisation (<c>lto = "fat"</c>), compiles
+    ///     the program whole, so that the SIL passes see all of it; so does an
+    ///     optimised build with debug information, whose link-time objects
+    ///     Apple's debugger would need kept. Otherwise only an unchanged build
+    ///     is skipped.
     /// </summary>
     public bool Separate =>
-        !Whole && (Debug ? !Optimise : Optimise && Native.Lto != LtoMode.Fat)
+        !Whole && (!Optimise || !Debug && Native.Lto != LtoMode.Fat)
         && (Library is not { } kind || NativeObjects.LinksLibrary(kind, Native.TargetOrHost));
+
+    /// <summary>
+    ///     The settings that change a library's compiled code, each
+    ///     <c>name=value</c>: what its <see cref="BuildCache" /> entry is keyed
+    ///     by besides its source, target and compiler. Not the profile's name,
+    ///     where its output goes or how the program is linked.
+    /// </summary>
+    public IReadOnlyList<string> CodeOptions => [
+        $"optimise={Optimise}",
+        $"sil={SilLevel}",
+        $"debug={Debug}",
+        $"exclusivity={Exclusivity}",
+        $"overflow={OverflowChecks}",
+        $"arc={ArcChecks}",
+        $"deny-reflection={DenyReflection}",
+        $"debug-assertions={DebugAssertions}",
+        $"clang={string.Join(' ', [..NativeObjects.Flags(Native), ..NativeBuild.PositionIndependentFlags(Native)])}",
+        $"cc={CacheKey.Checksum(NativeObjects.CompilerIdentity)}",
+    ];
 
     /// <summary>
     ///     Build a library C links rather than an executable: the first unit
@@ -161,18 +181,16 @@ public sealed record BuildOutcome(bool Succeeded, IReadOnlyList<string> Errors, 
 ///     </para>
 /// </remarks>
 public static class IncrementalBuild {
-    /// <summary>The compiler's identity: its assemblies' contents, which include the embedded library, and the C compiler's version.</summary>
+    /// <summary>
+    ///     The toolchain's identity: the compiler's own (<see cref="CompilerIdentity" />:
+    ///     its assemblies, the library and runtime they embed, its version),
+    ///     the C compiler's version, and the machine's.
+    /// </summary>
     public static string Toolchain => ToolchainHash.Value;
 
     static readonly Lazy<string> ToolchainHash = new(() => {
         var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (var assembly in new[] { typeof(IncrementalBuild), typeof(LlvmEmitter), typeof(SilModule), typeof(Compilation), typeof(SyntaxTree) }.Select(static t => t.Assembly)) {
-            hash.AppendData(Encoding.UTF8.GetBytes(assembly.FullName ?? ""));
-            if (assembly.Location is { Length: > 0 } location && File.Exists(location)) {
-                hash.AppendData(File.ReadAllBytes(location));
-            }
-        }
-
+        hash.AppendData(Encoding.UTF8.GetBytes(CompilerIdentity.Current));
         hash.AppendData(Encoding.UTF8.GetBytes(NativeObjects.CompilerIdentity));
         hash.AppendData(Encoding.UTF8.GetBytes($"{System.Runtime.InteropServices.RuntimeInformation.OSDescription}|{System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}"));
         return Convert.ToHexStringLower(hash.GetHashAndReset());
@@ -187,8 +205,13 @@ public static class IncrementalBuild {
     ///     into <paramref name="executable" />, keeping what can be kept in
     ///     <paramref name="cacheDirectory" />.
     /// </summary>
-    public static BuildOutcome Build(IReadOnlyList<UnitPlan> units, BuildSettings settings, string executable, string cacheDirectory, BuildTimings? timings = null, TextWriter? log = null) {
+    /// <param name="cache">
+    ///     The build cache every project shares, where the runtime's and the
+    ///     standard library's archives are kept: the user's when not given.
+    /// </param>
+    public static BuildOutcome Build(IReadOnlyList<UnitPlan> units, BuildSettings settings, string executable, string cacheDirectory, BuildTimings? timings = null, TextWriter? log = null, BuildCache? cache = null) {
         units = [..units.Where(static u => u.Files.Count > 0)];
+        cache ??= BuildCache.Default;
         using (BuildTimings.Of(timings, "toolchain")) {
             _ = Toolchain;
         }
@@ -239,8 +262,8 @@ public static class IncrementalBuild {
         var library = Library.For(sources.Program);
 
         var outcome = settings.Separate
-            ? Separately(sources, known, fileHashes, library, settings, settingsKey, executable, cacheDirectory, timings, log)
-            : Whole(sources.Program, settings, executable, cacheDirectory, timings);
+            ? Separately(sources, known, fileHashes, library, settings, settingsKey, executable, cacheDirectory, cache, timings, log)
+            : Whole(sources.Program, settings, executable, cacheDirectory, cache, timings);
 
         if (outcome.Succeeded) {
             using var _ = BuildTimings.Of(timings, "record");
@@ -345,7 +368,7 @@ public static class IncrementalBuild {
     // The whole program
     // =======================================================================
 
-    static BuildOutcome Whole(IReadOnlyList<SyntaxTree> program, BuildSettings settings, string executable, string cacheDirectory, BuildTimings? timings) {
+    static BuildOutcome Whole(IReadOnlyList<SyntaxTree> program, BuildSettings settings, string executable, string cacheDirectory, BuildCache cache, BuildTimings? timings) {
         var result = Pipeline.Compile(program, settings.DebugDirectory, settings.Exclusivity, timings, optimised: settings.Optimise, target: settings.Native.TargetOrHost, checkOverflow: settings.OverflowChecks, denyReflection: settings.DenyReflection, optLevel: settings.SilLevel, checkArc: settings.ArcChecks, library: settings.Library is not null);
         if (!result.Succeeded) {
             return BuildOutcome.Failed(result.Errors) with { Warnings = result.Warnings };
@@ -355,8 +378,8 @@ public static class IncrementalBuild {
         NativeBuildResult native;
         using (BuildTimings.Of(timings, "clang")) {
             native = settings.Library is { } kind
-                ? NativeBuild.BuildLibrary(result.LlvmIr!, executable, kind, settings.Native, Path.Combine(cacheDirectory, "objects"))
-                : NativeBuild.Build(result.LlvmIr!, executable, settings.Native, Path.Combine(cacheDirectory, "objects"));
+                ? NativeBuild.BuildLibrary(result.LlvmIr!, executable, kind, settings.Native, cache)
+                : NativeBuild.Build(result.LlvmIr!, executable, settings.Native, cache);
         }
 
         return (native.Succeeded
@@ -393,7 +416,7 @@ public static class IncrementalBuild {
 
     static BuildOutcome Separately(
         ProgramSources sources, IReadOnlyList<InterfaceFile?> known, string[][] fileHashes, IReadOnlyList<SyntaxTree> library, BuildSettings settings,
-        string settingsKey, string executable, string cacheDirectory, BuildTimings? timings, TextWriter? log
+        string settingsKey, string executable, string cacheDirectory, BuildCache cache, BuildTimings? timings, TextWriter? log
     ) {
         var objects = Path.Combine(cacheDirectory, "objects");
         Directory.CreateDirectory(objects);
@@ -437,6 +460,7 @@ public static class IncrementalBuild {
         // whole program's (UnitGraph) — and every unit's extensions, which
         // any unit may see. The standard library depends on no unit of the
         // program, and every unit on it.
+        CacheKey? standardEntry = null;
         using (BuildTimings.Of(timings, "unit graph")) {
             var facts = own.Select((u, i) => {
                 var declared = u.Trees.Select(UnitFacts.Of).ToList();
@@ -449,6 +473,7 @@ public static class IncrementalBuild {
             var unitInterfaces = own.Select((u, i) => Hash(string.Join("\n", u.Trees.Select((t, j) => t.Text.FileName + "=" + faces[i][j].Fingerprint)))).ToList();
             var extensions = Hash(string.Join("\n", faces.SelectMany(static f => f).Select(static f => f.Extensions)));
             standard.Key = Hash($"{settingsKey}\nunit {standard.Name}\n{standard.ContentHash}\n{extensions}");
+            standardEntry = StandardLibraryKey(cache, settings, standard.Trees, OwnExtensions(faces));
             for (var i = 0; i < own.Count; i++) {
                 var seen = string.Join("\n", dependencies[i].Select(d => $"{own[d].Name}:{unitInterfaces[d]}"));
                 own[i].Key = Hash($"{settingsKey}\nunit {own[i].Name}\n{own[i].ContentHash}\n{extensions}\n{standard.ContentHash}\n{seen}");
@@ -457,7 +482,7 @@ public static class IncrementalBuild {
 
         foreach (var unit in units) {
             if (unit.IsLibrary) {
-                unit.Library = LibraryUnit.In(Path.Combine(objects, "lib-" + unit.Key[..32]), unit.Name, settings.Native.TargetOrHost);
+                unit.Library = LibraryUnit.In(cache, standardEntry!, settings.Profile, unit.Name, settings.Native.TargetOrHost);
                 (unit.ObjectPath, unit.AbiPath, unit.Cached) = (unit.Library.Object, unit.Library.Abi, unit.Library.Exists);
             } else {
                 unit.ObjectPath = Path.Combine(objects, unit.Key + ".o");
@@ -486,7 +511,7 @@ public static class IncrementalBuild {
         // The runtime, as an archive of its own: bitcode where the link
         // optimises across units, so that its small functions inline.
         var target = settings.Native.TargetOrHost;
-        var runtimeTask = Task.Run(() => NativeBuild.Runtime(settings.Native, NativeBuild.LtoFlags(settings.Native, target.Platform, NativeBuild.LinksBitcodeFor(target)), objects));
+        var runtimeTask = Task.Run(() => NativeBuild.Runtime(settings.Native, NativeBuild.LtoFlags(settings.Native, target.Platform, NativeBuild.LinksBitcodeFor(target)), cache, settings.Profile));
 
         var compiling = new List<(Unit Unit, Task<NativeBuildResult> Task)>();
         // '-j' bounds how many clang processes run at once.
@@ -511,62 +536,22 @@ public static class IncrementalBuild {
             }
 
             var index = timings is null ? SilProgram.Index([..program, ..standard.Trees]) : timings.Measure("index", () => SilProgram.Index([..program, ..standard.Trees]));
+            var embedded = Pipeline.EmbeddedSources(standard.Trees, program);
             foreach (var unit in stale) {
-                var owned = unit.Trees.ToHashSet();
-                SilModule module;
-                IReadOnlyList<Diagnostic> lowering;
-                using (BuildTimings.Of(timings, "sil")) {
-                    var leads = settings.Library is not null && ReferenceEquals(unit, own[0]);
-                    (module, lowering) = SilGen.LowerUnit(compilation, new SilUnit(owned.Contains), index, denyReflection: settings.DenyReflection, library: leads);
-                    module.CheckExclusivity = settings.Exclusivity;
-                    module.CheckArc = settings.ArcChecks;
-                    if (!settings.OverflowChecks) {
-                        WrappingArithmetic.Apply(module);
-                    }
-                }
-
-                // A unit sees less than the whole program: what it reports, the
-                // whole program's compilation says authoritatively.
-                if (lowering.Count > 0) {
+                var leads = settings.Library is not null && ReferenceEquals(unit, own[0]);
+                var lowered = Lower(compilation, index, unit.Trees, unit.IsLibrary, leads, settings, embedded, timings);
+                if (lowered.Alone) {
+                    // A unit sees less than the whole program: what it reports,
+                    // the whole program's compilation says authoritatively.
                     log?.WriteLine($"note: unit '{unit.Name}' could not be lowered on its own; compiling the program whole");
-                    return Whole(sources.Whole(), settings, executable, cacheDirectory, timings);
+                    return Whole(sources.Whole(), settings, executable, cacheDirectory, cache, timings);
                 }
 
-                var problems = timings is null ? SilVerifier.Verify(module) : timings.Measure("verify", () => SilVerifier.Verify(module));
-                if (problems.Count > 0) {
-                    return BuildOutcome.Failed([..problems.Select(static p => $"internal error: SIL verification failed: {p}")]);
+                if (lowered.Errors.Count > 0) {
+                    return BuildOutcome.Failed(lowered.Errors);
                 }
 
-                // Optimised, the opt-level's SIL passes run on the unit as on
-                // a whole program. What they learn about a function from its
-                // callees — whether a parameter escapes, whether a field is
-                // written — they assume the worst of for a function another
-                // unit defines, which this one only declares; the inliner
-                // copies in only what the unit has the body of (its own
-                // functions, and the instances of generic ones it uses), and
-                // devirtualisation leaves a unit alone. Across units, ThinLTO
-                // inlines as the objects link.
-                if (settings.Optimise) {
-                    try {
-                        using var _ = BuildTimings.Of(timings, "passes");
-                        SilPassManager.Run(module, SilPassManager.ForLevel(settings.SilLevel));
-                    } catch (SilPassException failure) {
-                        return BuildOutcome.Failed([$"internal error: {failure.Message}"]);
-                    }
-                }
-
-                // A library's files are named as the compiler embeds them,
-                // with their text in the debug information, the same for
-                // every program: its debug information is relative to no
-                // program's directory.
-                string ir;
-                using (BuildTimings.Of(timings, "emit")) {
-                    ir = settings.DebugDirectory is { } directory
-                        ? LlvmEmitter.EmitWithDebugInfo(module, unit.IsLibrary ? LibraryUnit.DebugDirectory : directory, settings.Native.TargetOrHost, settings.Optimise, Pipeline.EmbeddedSources(standard.Trees, program))
-                        : LlvmEmitter.Emit(module, settings.Native.TargetOrHost);
-                }
-
-                var abi = string.Join("\n", module.Unit!.Abi.Select(static p => $"{p.Key}\t{p.Value}"));
+                var (ir, abi) = (lowered.Ir!, lowered.Abi);
                 compiling.Add((unit, Task.Run(async () => {
                     await throttle.WaitAsync();
                     try {
@@ -607,7 +592,7 @@ public static class IncrementalBuild {
         // ---- Every unit must have seen the same types -----------------------
         if ((timings is null ? Disagreement(units) : timings.Measure("abi check", () => Disagreement(units))) is { } disagreement) {
             log?.WriteLine($"note: the units disagree about {disagreement}; compiling the program whole");
-            return Whole(sources.Whole(), settings, executable, cacheDirectory, timings);
+            return Whole(sources.Whole(), settings, executable, cacheDirectory, cache, timings);
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(executable))!);
@@ -626,42 +611,169 @@ public static class IncrementalBuild {
 
         if (!link.Succeeded) {
             log?.WriteLine($"note: the units did not link ({FirstLine(link.Output)}); compiling the program whole");
-            return Whole(sources.Whole(), settings, executable, cacheDirectory, timings);
+            return Whole(sources.Whole(), settings, executable, cacheDirectory, cache, timings);
         }
 
         using (BuildTimings.Of(timings, "cache upkeep")) {
-            Collect(objects, units, Path.GetDirectoryName(runtime.Archive)!);
+            Collect(objects, units);
             CollectInterfaces(interfaces, interfaceFiles);
         }
 
         return new(true, [], "incremental", stale.Count, units.Count - stale.Count) { Warnings = warnings };
     }
 
+    /// <summary>What lowering one unit came to: its IR and its record of the types it laid out, or why not.</summary>
+    /// <param name="Alone">The unit reported, alone, what the whole program's compilation may not: compile the program whole.</param>
+    sealed record LoweredUnit(string? Ir, string Abi, IReadOnlyList<string> Errors, bool Alone = false);
+
+    /// <summary>
+    ///     Lowers one unit of <paramref name="compilation" /> — the trees it
+    ///     owns — verifies it, runs the SIL passes the settings ask for, and
+    ///     writes it as LLVM IR.
+    /// </summary>
+    /// <param name="library">The standard library's unit, whose debug information is relative to no program's directory.</param>
+    /// <param name="leads">The unit leads a library C links: it sets up the globals as the library loads.</param>
+    static LoweredUnit Lower(
+        Compilation compilation, SilProgram index, IReadOnlyList<SyntaxTree> trees, bool library, bool leads, BuildSettings settings,
+        IReadOnlyDictionary<string, string> embedded, BuildTimings? timings
+    ) {
+        var owned = trees.ToHashSet();
+        SilModule module;
+        IReadOnlyList<Diagnostic> lowering;
+        using (BuildTimings.Of(timings, "sil")) {
+            (module, lowering) = SilGen.LowerUnit(compilation, new SilUnit(owned.Contains), index, denyReflection: settings.DenyReflection, library: leads);
+            module.CheckExclusivity = settings.Exclusivity;
+            module.CheckArc = settings.ArcChecks;
+            if (!settings.OverflowChecks) {
+                WrappingArithmetic.Apply(module);
+            }
+        }
+
+        if (lowering.Count > 0) {
+            return new(null, "", [..lowering.Select(static d => $"error[{d.Id}]: {d.Message}")], Alone: true);
+        }
+
+        var problems = timings is null ? SilVerifier.Verify(module) : timings.Measure("verify", () => SilVerifier.Verify(module));
+        if (problems.Count > 0) {
+            return new(null, "", [..problems.Select(static p => $"internal error: SIL verification failed: {p}")]);
+        }
+
+        // The opt-level's SIL passes run on the unit as on a whole program
+        // (all but an unoptimised build with debug information, which keeps
+        // every local in its slot). What they learn about a function from
+        // its callees — whether a parameter escapes, whether a field is
+        // written — they assume the worst of for a function another unit
+        // defines, which this one only declares; the inliner copies in only
+        // what the unit has the body of (its own functions, and the
+        // instances of generic ones it uses), and devirtualisation leaves a
+        // unit alone. Across units, ThinLTO inlines as the objects link.
+        if (RunsPasses(settings)) {
+            try {
+                using var _ = BuildTimings.Of(timings, "passes");
+                SilPassManager.Run(module, SilPassManager.ForLevel(settings.SilLevel));
+            } catch (SilPassException failure) {
+                return new(null, "", [$"internal error: {failure.Message}"]);
+            }
+        }
+
+        // A library's files are named as the compiler embeds them, with
+        // their text in the debug information, the same for every program:
+        // its debug information is relative to no program's directory.
+        string ir;
+        using (BuildTimings.Of(timings, "emit")) {
+            ir = settings.DebugDirectory is { } directory
+                ? LlvmEmitter.EmitWithDebugInfo(module, library ? LibraryUnit.DebugDirectory : directory, settings.Native.TargetOrHost, settings.Optimise, embedded)
+                : LlvmEmitter.Emit(module, settings.Native.TargetOrHost);
+        }
+
+        return new(ir, string.Join("\n", module.Unit!.Abi.Select(static p => $"{p.Key}\t{p.Value}")), []);
+    }
+
+    /// <summary>Whether a unit's SIL passes run: as a whole program's do, in every build but an unoptimised one with debug information.</summary>
+    static bool RunsPasses(BuildSettings settings) => settings.DebugDirectory is null || settings.SilLevel != "0";
+
+    /// <summary>
+    ///     The fingerprint of the program's own units' extensions — those
+    ///     that have any — which may change how the standard library's code
+    ///     is named (docs/05 §5.4); "none" for a program that has none, so
+    ///     that every such program links the same archive.
+    /// </summary>
+    static string OwnExtensions(IEnumerable<FileInterface[]> faces) {
+        var none = Hash("");
+        var extensions = faces.SelectMany(static f => f).Select(static f => f.Extensions).Where(e => e != none).ToList();
+        return extensions.Count == 0 ? "none" : Hash(string.Join("\n", extensions));
+    }
+
+    /// <summary>
+    ///     The build cache's key for the standard library's unit — Sable.Core
+    ///     and the modules the program imports, parsed for its target and
+    ///     profile: the files' names and text, the compiler, the target, the
+    ///     settings that change code, and the program's extensions.
+    /// </summary>
+    static CacheKey StandardLibraryKey(BuildCache cache, BuildSettings settings, IReadOnlyList<SyntaxTree> trees, string extensions) {
+        var source = CacheKey.Checksum(string.Join("\n", trees.Select(static t => t.Text.FileName).Order(StringComparer.Ordinal)
+            .Zip(trees.OrderBy(static t => t.Text.FileName, StringComparer.Ordinal).Select(static t => CacheKey.Checksum(t.Text.Text)), static (name, text) => $"{name}={text}")));
+        var modules = trees.Select(CoreLibrary.ModuleOf).OfType<string>().Distinct().Order(StringComparer.Ordinal);
+        return cache.Key("library", "sable-std", CompilerIdentity.Version, source, settings.Native.TargetOrHost.Triple, [
+            ..settings.CodeOptions,
+            $"modules={string.Join(",", modules)}",
+            $"extensions={extensions}",
+        ]);
+    }
+
+    /// <summary>
+    ///     <c>sable cache warm</c>: puts the standard library a program
+    ///     importing <paramref name="imports" /> links — and the runtime — in
+    ///     <paramref name="cache" /> for the settings' target and profile, as a
+    ///     program without extensions of its own would find it.
+    /// </summary>
+    public static BuildOutcome Warm(IReadOnlyList<string> imports, BuildSettings settings, BuildCache cache) {
+        var target = settings.Native.TargetOrHost;
+        var options = Pipeline.ParseOptionsFor(!settings.DebugAssertions, ParseOptions.Default.ForTarget(target.Os, target.Arch));
+        var program = SyntaxTree.Parse(new SourceText(string.Concat(imports.Select(static m => $"import {m}\n")), "warm.sb"), options);
+        var library = Library.For([program]);
+        // As a program's build has it (Separately): the program, with the
+        // library's modules, and the core every compilation has.
+        List<SyntaxTree> trees = [..library, ..CoreLibrary.TreesFor(program.Options)];
+        var unit = LibraryUnit.In(cache, StandardLibraryKey(cache, settings, trees, "none"), settings.Profile, "std", target);
+        var runtime = NativeBuild.Runtime(settings.Native, NativeBuild.LtoFlags(settings.Native, target.Platform, NativeBuild.LinksBitcodeFor(target)), cache, settings.Profile);
+        if (!runtime.Result.Succeeded) {
+            return BuildOutcome.Failed([NativeBuild.Explained(runtime.Result, settings.Native).Report]);
+        }
+
+        if (unit.Exists) {
+            return new(true, [], "fresh", 0, 2);
+        }
+
+        var compilation = Compilation.Create([program, ..library]);
+        var errors = compilation.GetAllDiagnosticsByFile().Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error).Select(static d => $"error[{d.Diagnostic.Id}]: {d.Diagnostic.Message}").ToList();
+        if (errors.Count > 0) {
+            return BuildOutcome.Failed(errors);
+        }
+
+        var lowered = Lower(compilation, SilProgram.Index([program, ..trees]), trees, library: true, leads: false, settings, Pipeline.EmbeddedSources(trees, [program]), null);
+        if (lowered.Errors.Count > 0) {
+            return BuildOutcome.Failed(lowered.Errors);
+        }
+
+        var written = unit.Write(lowered.Abi, temporary => NativeObjects.CompileIr(lowered.Ir!, temporary, settings.Native), target);
+        return written.Succeeded ? new(true, [], "warm", 1, 1) : BuildOutcome.Failed([$"internal error: compiling the standard library failed:\n{written.Output}"]);
+    }
+
     /// <summary>
     ///     Keeps the object cache from growing without end: each build marks
     ///     the objects it used (through their <c>.abi</c> files — an object's
     ///     own time is in the executable's debug map, and must not change),
-    ///     and past a limit the least recently used go. The libraries' and
-    ///     the runtime's directories are marked by their own times, and only
-    ///     a few of each are kept.
+    ///     and past a limit the least recently used go. A library's archive is
+    ///     the build cache's, marked used there and pruned by <c>sable cache</c>.
     /// </summary>
-    static void Collect(string objects, IReadOnlyList<Unit> used, string runtime) {
+    static void Collect(string objects, IReadOnlyList<Unit> used) {
         var now = DateTime.UtcNow;
         foreach (var unit in used) {
-            File.SetLastWriteTimeUtc(unit.AbiPath, now);
             if (unit.Library is { } library) {
-                Directory.SetLastWriteTimeUtc(library.Directory, now);
-            }
-        }
-
-        if (Path.GetDirectoryName(runtime) == objects) {
-            Directory.SetLastWriteTimeUtc(runtime, now);
-        }
-
-        foreach (var pattern in (string[])["lib-*", "runtime-*"]) {
-            var kept = new DirectoryInfo(objects).GetDirectories(pattern).Where(static d => !d.Name.Contains(AtomicDirectory.TemporaryMarker, StringComparison.Ordinal));
-            foreach (var stale in kept.OrderByDescending(static d => d.LastWriteTimeUtc).Skip(8)) {
-                stale.Delete(true);
+                BuildCache.MarkUsed(library.Directory);
+            } else {
+                File.SetLastWriteTimeUtc(unit.AbiPath, now);
             }
         }
 

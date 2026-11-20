@@ -57,7 +57,8 @@ editors/     the VS Code extension and setups for other editors
 benchmarks/  the benchmark suite and its history
 tools/       Sable.Syntax.Generator  generates the node classes
                Sable.Visualiser        the syntax-tree visualiser
-               and the scripts for benchmarks, fuzzing, Linux tests and the debugger
+               and the scripts for benchmarks, fuzzing, Linux tests, the debugger
+               and packaging a release (release/package.sh)
 tests/       the test suite
 ```
 

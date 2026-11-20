@@ -2085,7 +2085,7 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
   and the owner's signature. Owners are keys, several per package (`sable
   owner`); names are namespaced `org/name`, unprefixed ones reserved for the
   standard ecosystem's tokens. `publish` also wants a tag for the version
-  and passing tests; `search`, `install`/`uninstall` and `cache list|gc|clean`
+  and passing tests; `search`, `install`/`uninstall` and `cache list|prune|clean|warm`
   exist.
 
 Deferred: workspace inheritance
@@ -2586,16 +2586,17 @@ Sable.CodeGen. `sable build` and `sable run` on a package go through it;
     nothing. So a change to an ordinary body recompiles one unit; a change
     to an interface recompiles the units that depend on it; a change to an
     extension's interface recompiles every unit.
-  - `objects/lib-<key>/`: the standard library's unit — Sable.Core and
-    the modules the program imports — as `std.o`, the archive of it,
+  - Not in `target/`: the standard library's unit — Sable.Core and the
+    modules the program imports — as `std.o`, the archive of it,
     `libsable_std.a` (`sable_std.lib` on Windows), which the program
-    links against, and its `.abi`; and `objects/runtime-<key>/`, the C
-    runtime's object and archive (`libsable_runtime.a`), compiled once per
-    settings. Each directory is made under a temporary name and renamed
-    into place, so a build sees it whole or not at all; the link takes the
-    units' objects, then the library's archive, then the runtime's. A
-    static library C links (`[lib] kind = "static"`) takes the objects
-    instead, joined whole.
+    links against, and its `.abi`; and the C runtime's object and archive
+    (`libsable_runtime.a`). Both are entries of the shared build cache,
+    `$SABLE_HOME/cache/<key>/` (docs/05 §5.4, "The build cache"), keyed by
+    the compiler's own identity, the source, the target and the settings
+    that change code, and made under a temporary name and renamed into
+    place. The link takes the units' objects, then the library's archive,
+    then the runtime's. A static library C links (`[lib] kind = "static"`)
+    takes the objects instead, joined whole.
   - `target/resolution.txt`: the last resolution of a graph of local
     packages, keyed by every local manifest, the lock file and the
     request; while they are unchanged the resolver does not run. A graph

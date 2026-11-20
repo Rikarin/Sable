@@ -3,11 +3,12 @@ using Sable.CodeGen;
 namespace Sable.Driver.Build;
 
 /// <summary>
-///     A library's unit compiled (docs/05 §5.4): one directory holding its
-///     object, the archive of it a program links against, and the record of
-///     the types it laid out (<c>.abi</c>), which the units linked with it
-///     must agree with. Written whole or not at all
-///     (<see cref="AtomicDirectory" />), so that builds running at once share it.
+///     A library's unit compiled (docs/05 §5.4): an entry of the
+///     <see cref="BuildCache" /> holding its object, the archive of it a
+///     program links against, and the record of the types it laid out
+///     (<c>.abi</c>), which the units linked with it must agree with. Written
+///     whole or not at all, so that builds running at once — of any project —
+///     share it.
 /// </summary>
 /// <remarks>
 ///     A program links the archive, not the object: a linker takes from an
@@ -23,17 +24,21 @@ public sealed class LibraryUnit {
     /// </summary>
     public const string DebugDirectory = ".";
 
-    LibraryUnit(string directory, string name, NativeTarget target) {
-        Directory = directory;
+    readonly BuildCache _cache;
+    readonly CacheKey _key;
+    readonly string _profile;
+
+    LibraryUnit(BuildCache cache, CacheKey key, string profile, string name, NativeTarget target) {
+        (_cache, _key, _profile) = (cache, key, profile);
+        Directory = cache.DirectoryFor(key);
         Name = name;
-        var objectName = name + (target.Platform == NativePlatform.Windows ? ".obj" : ".o");
-        Object = Path.Combine(directory, objectName);
-        Archive = Path.Combine(directory, NativeBuild.LibraryFileName("sable_" + name, LibraryKind.Static, target));
-        Abi = Path.Combine(directory, name + ".abi");
-        Interface = Path.Combine(directory, name + ".sbi");
+        Object = Path.Combine(Directory, name + (target.Platform == NativePlatform.Windows ? ".obj" : ".o"));
+        Archive = Path.Combine(Directory, NativeBuild.LibraryFileName("sable_" + name, LibraryKind.Static, target));
+        Abi = Path.Combine(Directory, name + ".abi");
+        Interface = Path.Combine(Directory, name + ".sbi");
     }
 
-    /// <summary>The unit's directory; every file of it is there, or the directory is not.</summary>
+    /// <summary>The unit's entry; every file of it is there, or the directory is not.</summary>
     public string Directory { get; }
 
     public string Name { get; }
@@ -45,16 +50,18 @@ public sealed class LibraryUnit {
     public string Abi { get; }
 
     /// <summary>
-    ///     Where the unit's interface goes, once a build writes one: the bound
-    ///     symbols and the SIL other units need (#182's <c>.sbi</c>), beside
-    ///     the archive it describes. Nothing writes it yet.
+    ///     Where the unit's interface goes, beside the archive it describes:
+    ///     the bound symbols and the SIL other units need (#182's <c>.sbi</c>,
+    ///     stages 2–4). The entry has room for it; <see cref="Write" />'s
+    ///     <c>writeInterface</c> is the hook that writes it, and nothing does yet.
     /// </summary>
     public string Interface { get; }
 
     public bool Exists => System.IO.Directory.Exists(Directory);
 
-    /// <summary>The unit kept in <paramref name="directory" />, for <paramref name="target" />.</summary>
-    public static LibraryUnit In(string directory, string name, NativeTarget target) => new(directory, name, target);
+    /// <summary>The unit kept in <paramref name="cache" /> under <paramref name="key" />, for <paramref name="target" />.</summary>
+    /// <param name="profile">The profile the build is for, which the entry records.</param>
+    public static LibraryUnit In(BuildCache cache, CacheKey key, string profile, string name, NativeTarget target) => new(cache, key, profile, name, target);
 
     /// <summary>
     ///     Writes the unit, unless another build has: its <paramref name="abi" />
@@ -63,11 +70,11 @@ public sealed class LibraryUnit {
     /// </summary>
     /// <param name="writeInterface">
     ///     The hook for the unit's interface: given the path it goes to in
-    ///     the directory being made, it writes the <c>.sbi</c> there, which
-    ///     is then published with the archive.
+    ///     the entry being made, it writes the <c>.sbi</c> there, which is then
+    ///     published with the archive, whole.
     /// </param>
     public NativeBuildResult Write(string abi, Func<string, NativeBuildResult> compile, NativeTarget target, Action<string>? writeInterface = null) =>
-        AtomicDirectory.GetOrCreate(Directory, temporary => {
+        _cache.GetOrCreate(_key, _profile, temporary => {
             File.WriteAllText(Path.Combine(temporary, Path.GetFileName(Abi)), abi);
             var objectPath = Path.Combine(temporary, Path.GetFileName(Object));
             var compiled = compile(objectPath);
@@ -78,5 +85,5 @@ public sealed class LibraryUnit {
             writeInterface?.Invoke(Path.Combine(temporary, Path.GetFileName(Interface)));
             var archived = NativeBuild.Archive([objectPath], Path.Combine(temporary, Path.GetFileName(Archive)), target);
             return archived.Succeeded ? compiled : archived;
-        });
+        }).Result;
 }

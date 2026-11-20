@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Sable.CodeGen;
+using Sable.Driver.Build;
 using Sable.SIL;
 using Sable.Syntax;
 
@@ -171,6 +172,14 @@ public class BuildCommand : Command {
             return 1;
         }
 
+        // Unoptimised, the file is compiled on its own and linked against the
+        // standard library's archive in the build cache, compiled by the
+        // first build that needed it; optimised, the program is compiled
+        // whole, the library with it, so that the SIL passes see all of it.
+        if (!options.Optimise && !report && options.Emit is null or "staticlib" or "dylib" && target.HasRuntime) {
+            return BuildSeparately(options, executable, target);
+        }
+
         var result = Pipeline.Compile(
             [tree],
             options.Debug || report ? Path.GetDirectoryName(Path.GetFullPath(options.Input)) : null,
@@ -245,6 +254,43 @@ public class BuildCommand : Command {
         }
 
         return null;
+    }
+
+    /// <summary>
+    ///     An unoptimised build of one file, as a package's dev build is made
+    ///     (<see cref="IncrementalBuild" />): the file is its own unit, and the
+    ///     standard library and the runtime are archives from the build cache.
+    ///     Nothing of the file's is kept between builds.
+    /// </summary>
+    static int? BuildSeparately(Options options, string executable, NativeTarget target) {
+        if (!NativeObjects.CompilerAvailable) {
+            Console.Error.WriteLine($"sable: cannot run '{NativeBuild.CompilerPath}'; set CC to a clang that can link for this platform");
+            return 1;
+        }
+
+        var input = Path.GetFullPath(options.Input);
+        var settings = new BuildSettings("file", false, options.Debug ? Path.GetDirectoryName(input) : null, options.Exclusivity ?? true) {
+            Native = options.Native,
+            DenyReflection = options.DenyReflection,
+            Library = LibraryKindOf(options.Emit),
+        };
+        if (settings.Library is not null) {
+            settings = settings with { Native = settings.Native with { PositionIndependent = true } };
+        }
+
+        var cache = Directory.CreateTempSubdirectory("sable-file-");
+        try {
+            var outcome = IncrementalBuild.Build([new UnitPlan("main", [new SourceFile(input, Path.GetFileName(options.Input), [])])], settings, Path.GetFullPath(executable), cache.FullName);
+            Report(outcome.Warnings);
+            if (!outcome.Succeeded) {
+                Report(outcome.Errors);
+                return 1;
+            }
+
+            return null;
+        } finally {
+            cache.Delete(true);
+        }
     }
 
     protected static void Report(IReadOnlyList<string> diagnostics) {

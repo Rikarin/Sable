@@ -356,7 +356,7 @@ public sealed class NetworkRegistryTests {
         fixture.Package("app", "app", "1.0.0", "[dependencies]\nnumbers = \"1\"\n", ("src/lib.sb", "module App\n"));
         PackageGraph.Resolve(fixture.Load("app"), fixture.Environment);
         Assert.Contains("numbers-1.0.0", SableProcess.Run(fixture.Root, fixture.Home, "cache", "list").Output, StringComparison.Ordinal);
-        Assert.Equal(0, SableProcess.Run(fixture.Root, fixture.Home, "cache", "gc", "--max-age", "0").ExitCode);
+        Assert.Equal(0, SableProcess.Run(fixture.Root, fixture.Home, "cache", "prune", "--max-age", "0").ExitCode);
         Assert.Empty(PackageCache.List(fixture.Environment));
     }
 

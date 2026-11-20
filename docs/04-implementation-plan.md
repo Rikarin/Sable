@@ -707,7 +707,8 @@ The pass that makes idiomatic code fast: a `class` that does not escape its
 frame becomes a stack value with no header and no refcount. Driven by the same
 summaries as 3.3.
 
-Status: done, keeping the header and the count (`src/Sable.SIL/EscapeAnalysis.cs`).
+Status: done, keeping the header (`src/Sable.SIL/EscapeAnalysis.cs`); the
+count goes where nothing copies the object.
 A value escapes if it, or a copy, may be returned, thrown, stored anywhere
 but a local slot, put inside another value, captured, held weakly, or
 passed to a parameter that escapes or to a callee not known here; which
@@ -716,23 +717,34 @@ fixed point. A class's allocating initialiser is made where it is called,
 so the caller owns the allocation; then `alloc_ref [stack]`,
 `inline_new_stack` and `array_literal_stack` put what does not escape in
 the frame. Made in a loop, it is promoted when it is gone before the loop
-comes round: every copy, borrow and local slot holding it is made and used
-in its own block, and each slot emptied of it there, so the one place in
-the frame is reused turn after turn. A closure's context is an object like
+comes round, however many blocks the body has: every value holding it is
+made where the allocation's block dominates (or made and gone in one
+block), and each local slot holding it is emptied of it on every path back
+to the allocation, so the one place in the frame is reused turn after
+turn. A closure's context is an object like
 any other: making the closure lets it escape only when the closure's code
 keeps its context beyond a call, and calling a closure hands its context to
 that code alone. A closure captures a local that cannot change by value, as
-`[x]` would, so it needs no box of its own. An array literal is made whole
+`[x]` would, so it needs no box of its own; so does a local function, of a
+`let` that has its value where the function is declared. An array literal is made whole
 (`array_literal`, its elements consumed) and, in the frame, as a header
 with its elements after it; grown past them, the elements move to the heap
-and the header stays. ARC is unchanged: the last release runs the deinit
-and the fields' releases, in order, and frees nothing; an inline block that
-outgrows its room in the frame moves to the heap. The JSON program loses
+and the header stays. An object in the frame that nothing copies has one
+reference all its life, so its count is one from start to end: each
+destroy of it, of what is taken out of a slot that only ever held it, or of
+such a slot, is `[uncounted]`, and runs the deinit and the fields'
+releases where it is, in order, freeing nothing, with no release counted
+(`sable_destroy_uncounted`, which traps if the count is not one). One
+copied is counted as any object is, and its last release does the same.
+An inline block that outgrows its room in the frame moves to the heap,
+where an uncounted destroy releases it as any. The header stays: the
+runtime's operations on arrays and inline blocks, a deinit and a method
+call read it. The JSON program loses
 187 allocations; the order record of §3.8 loses all of them. A loop of
 100,000 turns that calls a closure capturing its counter, makes an object,
-and reads an array literal made 500,001 allocations and makes 1. Deferred:
-dropping the header and the count for promoted objects whose count is
-provably never read, and a loop body of more than one block.
+and reads an array literal made 500,001 allocations and makes 1. Orders' four
+million releases, all of blocks in the frame, are none (#188); a loop
+whose body branches, and a local function's context, allocate nothing.
 
 ### 3.8 Exit criteria
 

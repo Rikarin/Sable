@@ -2722,8 +2722,9 @@ public sealed partial class SilGen {
     ///     A closure captures a local that cannot change — a 'let', a loop's
     ///     element — by value, as '[x]' would: there is nothing a box could
     ///     share, and a context that holds no box is one allocation, not two.
-    ///     A local function's captures stay boxed: it may be declared, and
-    ///     made, before a 'let' it reads has its value.
+    ///     So does a local function, of a 'let' that has its value where the
+    ///     function is declared, and so made; one declared before a 'let' it
+    ///     reads has its value reads it through a box.
     /// </summary>
     internal List<Capture> CapturesOf(FunctionSymbol symbol, BoundBlock body, ImmutableArray<BoundCapture> listedCaptures, bool closure = false) {
         var inner = Descendants(body)
@@ -2760,7 +2761,8 @@ public sealed partial class SilGen {
                 case BoundLocalAccess access when !inner.Contains(access.Local.ContainingSymbol!):
                     if (listed.TryGetValue(access.Local, out var listedCapture)) {
                         Add(access.Local, access.Local.Type, false, listedCapture.Initializer, listedCapture.CaptureKind);
-                    } else if (closure && access.Local is { IsMutable: false, IsAsyncLet: false } && Lower(access.Local.Type) is { } held && !IsMoveOnly(held)) {
+                    } else if ((closure || HasValueBefore(access.Local, symbol)) && access.Local is { IsMutable: false, IsAsyncLet: false }
+                               && Lower(access.Local.Type) is { } held && !IsMoveOnly(held)) {
                         Add(access.Local, access.Local.Type, false, new BoundLocalAccess(access.Syntax, access.Local, access.Local.Type));
                     } else {
                         Add(access.Local, access.Local.Type, true, null);
@@ -2783,6 +2785,19 @@ public sealed partial class SilGen {
         }
 
         return captures;
+    }
+
+    /// <summary>
+    ///     True when a local has its value by the time a local function is
+    ///     declared: its declaration, with its initialiser — or a binding,
+    ///     which always has one — comes first in the source, around it.
+    /// </summary>
+    static bool HasValueBefore(LocalSymbol local, Symbol function) {
+        if (local.DeclaringSyntax is not [var declaration] || function.DeclaringSyntax is not [var declared] || declaration.Span.End > declared.Span.Start) {
+            return false;
+        }
+
+        return declaration is not LocalDeclarationStatementSyntax statement || statement.Declarator.Initializer is not null;
     }
 
     /// <summary>

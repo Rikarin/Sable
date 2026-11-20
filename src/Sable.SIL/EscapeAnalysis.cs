@@ -15,18 +15,19 @@ namespace Sable.SIL;
 ///         summary root inference keeps (docs/04 §3.3), so recursion converges.
 ///     </para>
 ///     <para>
-///         The object keeps its header and its count: ARC is unchanged, and
-///         the last release runs the deinit and the fields' releases as
-///         before, but frees nothing. Nor is one a weak reference could
-///         outlive promoted.
+///         The object keeps its header. One nothing copies is not counted
+///         (<see cref="Uncount" />); one copied keeps its count, and its last
+///         release runs the deinit and the fields' releases as before, but
+///         frees nothing. Nor is one a weak reference could outlive promoted.
 ///     </para>
 ///     <para>
 ///         One stack slot must never hold two live objects, so an allocation
 ///         inside a loop is promoted only when the object is gone before the
-///         loop can come round to it again: everything that holds it — each
-///         copy, each borrow, each local slot it is stored in — is made and
-///         used only in the allocation's own block, and every slot is emptied
-///         of it (destroyed, taken, or stored over) before the block ends.
+///         loop can come round to it again: every value that holds it — each
+///         copy, each borrow — is made in blocks the allocation's dominates,
+///         and every local slot it is stored in is emptied of it (destroyed,
+///         taken, or stored over) on every path back to the allocation, as
+///         many blocks as the loop's body has.
 ///     </para>
 ///     <para>
 ///         A closure's context is promoted as any object is. Making the
@@ -50,21 +51,85 @@ public sealed class PromoteToStack : ISilPass {
         InlineAllocators(function, module);
 
         var uses = new Uses(function);
+        Dictionary<SilBlock, HashSet<SilBlock>>? dominators = null;
+        Dictionary<SilBlock, HashSet<SilBlock>> Dominators() => dominators ??= SilVerifier.Dominators(function);
+        var promoted = new List<(SilInstruction, HashSet<SilValue>)>();
         foreach (var block in function.Blocks) {
             var inLoop = InLoop(block);
             foreach (var instruction in block.Instructions) {
                 switch (instruction) {
-                    case AllocRefInst { OnStack: false, ClassType.IsCoroutineFrame: false } alloc when Promotable(alloc, inLoop, uses, summaries):
+                    case AllocRefInst { OnStack: false, ClassType.IsCoroutineFrame: false } alloc when Promotable(alloc, inLoop, uses, summaries, Dominators, out var holders):
                         alloc.OnStack = true;
+                        promoted.Add((alloc, holders));
                         break;
 
-                    case BuiltinInst { Name: "inline_new" } made when Promotable(made, inLoop, uses, summaries):
+                    case BuiltinInst { Name: "inline_new" } made when Promotable(made, inLoop, uses, summaries, Dominators, out var holders):
                         made.Rename("inline_new_stack");
+                        promoted.Add((made, holders));
                         break;
 
                     // An array literal: its header and its elements together.
-                    case BuiltinInst { Name: "array_literal" } literal when !SilBuiltins.IsConstantArray(literal) && Promotable(literal, inLoop, uses, summaries):
+                    case BuiltinInst { Name: "array_literal" } literal when !SilBuiltins.IsConstantArray(literal) && Promotable(literal, inLoop, uses, summaries, Dominators, out var holders):
                         literal.Rename("array_literal_stack");
+                        promoted.Add((literal, holders));
+                        break;
+                }
+            }
+        }
+
+        Uncount(promoted, uses);
+    }
+
+    /// <summary>
+    ///     An object made in the frame that nothing copies has one reference
+    ///     all its life: no retain, so its count is one from start to end, and
+    ///     whatever ends that reference is the last release. Each destroy of
+    ///     it — of the value, of what was taken out of a slot it was put in,
+    ///     or of such a slot — is marked <c>[uncounted]</c>: destroyed in
+    ///     place, the count neither read nor written. A slot qualifies when
+    ///     all that is ever stored in it is such objects, so that it cannot
+    ///     hold anything counted instead. Nothing here may be held weakly or
+    ///     unowned, or kept by a callee: it would have escaped.
+    /// </summary>
+    static void Uncount(List<(SilInstruction Made, HashSet<SilValue> Holders)> promoted, Uses uses) {
+        var holders = new HashSet<SilValue>();
+        var only = new HashSet<SilValue>();
+        foreach (var (made, held) in promoted) {
+            if (!held.Any(static h => h is CopyValueInst or LoadInst { Kind: LoadKind.Copy })) {
+                only.Add(made);
+                holders.UnionWith(held);
+            }
+        }
+
+        // What holds such objects and nothing else: the objects; a slot
+        // every store into which is of such a value; what is taken out of
+        // one. A value merged with others at a join is not.
+        var slots = new HashSet<AllocStackInst>();
+        for (var changed = true; changed;) {
+            changed = false;
+            foreach (var holder in holders) {
+                if (holder is AllocStackInst { Unmanaged: false } slot && !slots.Contains(slot)
+                    && uses.Of(slot).All(u => u is not StoreInst store || ReferenceEquals(store.Address, slot) && only.Contains(store.Value))) {
+                    slots.Add(slot);
+                    only.Add(slot);
+                    changed = true;
+                }
+
+                if (holder is LoadInst { Kind: LoadKind.Take, Address: AllocStackInst from } taken && slots.Contains(from) && only.Add(taken)) {
+                    changed = true;
+                }
+            }
+        }
+
+        foreach (var holder in only) {
+            foreach (var user in uses.Of(holder)) {
+                switch (user) {
+                    case DestroyAddrInst destroy when holder is AllocStackInst:
+                        destroy.Uncounted = true;
+                        break;
+
+                    case DestroyValueInst destroy when holder is not AllocStackInst:
+                        destroy.Uncounted = true;
                         break;
                 }
             }
@@ -72,61 +137,160 @@ public sealed class PromoteToStack : ISilPass {
     }
 
     /// <summary>Whether what an instruction makes may live in the frame: it does not escape, and in a loop, it is gone before the loop comes round.</summary>
-    static bool Promotable(SilInstruction made, bool inLoop, Uses uses, Dictionary<string, bool[]> summaries) {
-        var holders = new HashSet<SilValue>();
-        return !Escapes(made, uses, summaries, holders) && (!inLoop || GoneInItsBlock(made, holders, uses));
+    static bool Promotable(
+        SilInstruction made,
+        bool inLoop,
+        Uses uses,
+        Dictionary<string, bool[]> summaries,
+        Func<Dictionary<SilBlock, HashSet<SilBlock>>> dominators,
+        out HashSet<SilValue> holders
+    ) {
+        holders = [];
+        return !Escapes(made, uses, summaries, holders) && (!inLoop || GoneBeforeItComesRound(made, holders, uses, dominators()));
     }
 
     /// <summary>
-    ///     True when nothing holds what <paramref name="made" /> made once its
-    ///     block has run: every value holding it is made and used in the
-    ///     block, and every local slot it was stored in is emptied of it there.
+    ///     True when nothing holds what <paramref name="made" /> made by the
+    ///     time the loop comes back round to it, through however many blocks
+    ///     the loop's body has. A local slot is followed from the allocation
+    ///     along every path: it must be emptied of the object — destroyed,
+    ///     taken, or stored over — before any path reaches the allocation's
+    ///     block again. A value holding it is defined in a block the
+    ///     allocation's dominates — not at a join the loop comes back through,
+    ///     where it could carry this turn's object into the next — and, being
+    ///     owned or borrowed, is gone before the allocation's block is entered
+    ///     again, as every path into a block must bring the same values; or
+    ///     it is made and gone in one block, as a slot's borrow often is; or
+    ///     it is read out of a slot at a point the slot cannot hold the
+    ///     object, and so holds something else.
     /// </summary>
-    static bool GoneInItsBlock(SilInstruction made, HashSet<SilValue> holders, Uses uses) {
-        var block = made.Block;
-        var slots = new HashSet<AllocStackInst>();
-        foreach (var holder in holders) {
-            if (holder is AllocStackInst slot) {
-                slots.Add(slot);
-                continue;
+    static bool GoneBeforeItComesRound(SilInstruction made, HashSet<SilValue> holders, Uses uses, Dictionary<SilBlock, HashSet<SilBlock>> dominators) {
+        var home = made.Block;
+        var slots = holders.OfType<AllocStackInst>().ToHashSet();
+        bool Dominated(SilBlock block) => dominators.TryGetValue(block, out var set) && set.Contains(home);
+
+        // Loads of a slot at a point it may hold the object.
+        var holdingLoads = new HashSet<SilInstruction>();
+
+        // Which slots may hold it at the end of each block reached from it.
+        var holdingOut = new Dictionary<SilBlock, HashSet<AllocStackInst>>();
+        var pending = new Queue<SilBlock>();
+        HashSet<AllocStackInst>? Walk(SilBlock block, int from, HashSet<AllocStackInst> holding) {
+            for (var i = from; i < block.Instructions.Count; i++) {
+                switch (block.Instructions[i]) {
+                    case StoreInst { Address: AllocStackInst slot } store when slots.Contains(slot):
+                        if (holders.Contains(store.Value)) {
+                            holding.Add(slot);
+                        } else {
+                            holding.Remove(slot);
+                        }
+
+                        break;
+
+                    case DestroyAddrInst { Address: AllocStackInst slot }:
+                        holding.Remove(slot);
+                        break;
+
+                    case LoadInst { Kind: LoadKind.Take, Address: AllocStackInst slot } load:
+                        if (holding.Remove(slot)) {
+                            holdingLoads.Add(load);
+                        }
+
+                        break;
+
+                    case LoadInst or LoadBorrowInst when block.Instructions[i].Operands[0] is AllocStackInst slot:
+                        if (holding.Contains(slot)) {
+                            holdingLoads.Add(block.Instructions[i]);
+                        }
+
+                        break;
+
+                    // Anything else given the address of a slot holding it may put it back.
+                    case var other when other.Operands.Any(o => o is AllocStackInst slot && holding.Contains(slot))
+                        && other is not (LoadInst or LoadBorrowInst or StoreInst or DeallocStackInst)
+                        && !ChangesArrayInPlace(other, other.Operands[0]):
+                        return null;
+                }
             }
 
-            if (holder is not SilInstruction instruction || instruction.Block != block || uses.Of(holder).Any(u => u.Block != block)) {
-                return false;
+            return holding;
+        }
+
+        void Leave(SilBlock block, HashSet<AllocStackInst> holding) {
+            if (holdingOut.TryGetValue(block, out var known) && holding.IsSubsetOf(known)) {
+                return;
+            }
+
+            holdingOut[block] = known is null ? holding : [..known, ..holding];
+            foreach (var successor in block.Successors) {
+                pending.Enqueue(successor);
             }
         }
 
-        // Walked in order from the allocation: which slots hold it at the end.
-        var holding = new HashSet<AllocStackInst>();
-        var index = block.Instructions.IndexOf(made);
-        for (var i = index + 1; i < block.Instructions.Count; i++) {
-            switch (block.Instructions[i]) {
-                case StoreInst { Address: AllocStackInst slot } store when slots.Contains(slot):
-                    if (holders.Contains(store.Value)) {
-                        holding.Add(slot);
-                    } else {
-                        holding.Remove(slot);
-                    }
+        if (Walk(home, home.Instructions.IndexOf(made) + 1, []) is not { } afterMade) {
+            return false;
+        }
 
-                    break;
+        Leave(home, afterMade);
+        while (pending.TryDequeue(out var block)) {
+            var holding = new HashSet<AllocStackInst>();
+            foreach (var (other, held) in holdingOut) {
+                if (other.Successors.Contains(block)) {
+                    holding.UnionWith(held);
+                }
+            }
 
-                case DestroyAddrInst { Address: AllocStackInst slot }:
-                    holding.Remove(slot);
-                    break;
+            if (block == home) {
+                if (holding.Count > 0) {
+                    return false;
+                }
 
-                case LoadInst { Kind: LoadKind.Take, Address: AllocStackInst slot }:
-                    holding.Remove(slot);
-                    break;
+                continue;
+            }
 
-                // Anything else given a slot's address may put it back.
-                case var other when other.Operands.Any(o => o is AllocStackInst slot && slots.Contains(slot))
-                    && other is not (LoadInst or LoadBorrowInst or StoreInst or DeallocStackInst)
-                    && !ChangesArrayInPlace(other, other.Operands[0]):
+            if (Walk(block, 0, holding) is not { } after) {
+                return false;
+            }
+
+            Leave(block, after);
+        }
+
+        // A value holding it is defined where the allocation's block
+        // dominates, so that it is made anew each turn — but a value read
+        // out of a slot that cannot hold it then does not hold it at all.
+        foreach (var holder in holders) {
+            switch (holder) {
+                case AllocStackInst:
+                    continue;
+
+                case SilArgument argument when argument.Block == home || !Dominated(argument.Block):
+                    return false;
+
+                case SilInstruction instruction when !Dominated(instruction.Block) && !ReadWhenEmpty(instruction)
+                    && uses.Of(instruction).Any(u => u.Block != instruction.Block):
                     return false;
             }
         }
 
-        return holding.Count == 0;
+        return true;
+
+        bool ReadWhenEmpty(SilInstruction value) {
+            for (var depth = 0; depth < 16; depth++) {
+                switch (value) {
+                    case LoadInst { Address: AllocStackInst } or LoadBorrowInst { Address: AllocStackInst }:
+                        return !holdingLoads.Contains(value);
+
+                    case CopyValueInst or UpcastInst or UncheckedRefCastInst when value.Operands[0] is SilInstruction from:
+                        value = from;
+                        continue;
+
+                    default:
+                        return false;
+                }
+            }
+
+            return false;
+        }
     }
 
     /// <summary>

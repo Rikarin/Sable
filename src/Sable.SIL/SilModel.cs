@@ -993,6 +993,16 @@ public sealed class CopyValueInst(SilValue value) : SilInstruction(value) {
 /// <summary><c>destroy_value %0</c>: consumes an owned value — a release, for a reference.</summary>
 public sealed class DestroyValueInst(SilValue value) : SilInstruction(value) {
     public SilValue Value => Operands[0];
+
+    /// <summary>
+    ///     <c>destroy_value [uncounted]</c>: the only reference to an object
+    ///     made in the frame (docs/04 §3.7), which nothing ever copied: it is
+    ///     destroyed where it is, its count neither read nor written. One that
+    ///     turns out to be on the heap — a block that outgrew its room — is
+    ///     released as any is.
+    /// </summary>
+    public bool Uncounted { get; set; }
+
     public override bool HasResult => false;
     public override string Opcode => "destroy_value";
 }
@@ -1000,6 +1010,10 @@ public sealed class DestroyValueInst(SilValue value) : SilInstruction(value) {
 /// <summary><c>destroy_addr %0</c>: destroys the value in storage, leaving it empty.</summary>
 public sealed class DestroyAddrInst(SilValue address) : SilInstruction(address) {
     public SilValue Address => Operands[0];
+
+    /// <summary><c>destroy_addr [uncounted]</c>: the storage holds only uncounted objects; see <see cref="DestroyValueInst.Uncounted" />.</summary>
+    public bool Uncounted { get; set; }
+
     public override bool HasResult => false;
     public override string Opcode => "destroy_addr";
 }

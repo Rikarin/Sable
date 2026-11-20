@@ -194,6 +194,17 @@ public sealed class SilParser {
         return true;
     }
 
+    /// <summary>A <c>[name]</c> flag, if one is next.</summary>
+    bool AcceptFlag(string name) {
+        if (!Accept("[")) {
+            return false;
+        }
+
+        Expect(name);
+        Expect("]");
+        return true;
+    }
+
     void Expect(string text) {
         if (!Accept(text)) {
             throw Error($"expected '{text}' but found '{Describe(Current)}'");
@@ -994,13 +1005,17 @@ public sealed class SilParser {
                 instruction = new StrongCopyUnownedValueInst(Defined(Operand(0), opcode, line));
                 break;
 
-            case "destroy_value":
-                instruction = new DestroyValueInst(Operand(0));
+            case "destroy_value": {
+                var uncounted = AcceptFlag("uncounted");
+                instruction = new DestroyValueInst(Operand(0)) { Uncounted = uncounted };
                 break;
+            }
 
-            case "destroy_addr":
-                instruction = new DestroyAddrInst(Operand(0));
+            case "destroy_addr": {
+                var uncounted = AcceptFlag("uncounted");
+                instruction = new DestroyAddrInst(Operand(0)) { Uncounted = uncounted };
                 break;
+            }
 
             case "alloc_ref": {
                 var onStack = Accept("[");

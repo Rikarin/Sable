@@ -404,6 +404,7 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_alloc(ptr, i64)
                                 declare void @sable_retain(ptr)
                                 declare void @sable_release(ptr)
+                                declare void @sable_destroy_uncounted(ptr)
                                 declare void @sable_heap_visit(ptr)
                                 declare void @sable_make_immortal(ptr)
                                 declare void @sable_array_destroy(ptr)
@@ -2146,6 +2147,11 @@ public sealed partial class LlvmEmitter {
                     Own(true, copy.Type, _names[copy]);
                     return;
 
+                // The only reference to an object made in the frame: destroyed where it is, uncounted.
+                case DestroyValueInst { Uncounted: true } destroy when Type(destroy.Value.Type) == "ptr":
+                    Line($"call void @sable_destroy_uncounted(ptr {Name(destroy.Value)})");
+                    return;
+
                 case DestroyValueInst destroy:
                     Own(false, destroy.Value.Type, Name(destroy.Value));
                     return;
@@ -2159,7 +2165,12 @@ public sealed partial class LlvmEmitter {
                     var old = Fresh();
                     Line($"{old} = load {Type(type)}, ptr {Name(destroy.Address)}{AccessAlign(destroy.Address, type)}");
                     Line($"store {Type(type)} zeroinitializer, ptr {Name(destroy.Address)}{AccessAlign(destroy.Address, type)}");
-                    Own(false, type, old);
+                    if (destroy.Uncounted && Type(type) == "ptr") {
+                        Line($"call void @sable_destroy_uncounted(ptr {old})");
+                    } else {
+                        Own(false, type, old);
+                    }
+
                     return;
                 }
 

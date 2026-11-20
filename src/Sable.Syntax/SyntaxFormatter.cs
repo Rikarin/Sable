@@ -53,6 +53,13 @@ public static class SyntaxFormatter {
         SyntaxKind _previousParent = SyntaxKind.None;
 
         /// <summary>
+        ///     True when the previous token was the operator of a range with no
+        ///     upper bound, 'b...': what follows is no operand, so it takes its
+        ///     usual space ('for x in b... {').
+        /// </summary>
+        bool _previousEndsRange;
+
+        /// <summary>
         ///     True when the previous token's trailing trivia ended its line.
         ///     Trailing trivia stops at the first line break, so a blank line
         ///     between two declarations is one newline on each side.
@@ -201,6 +208,7 @@ public static class SyntaxFormatter {
 
             _previousKind = token.Kind;
             _previousParent = parentKind;
+            _previousEndsRange = parent is RangeExpressionSyntax { Right: null } or RangePatternSyntax { Right: null };
 
             // Trailing trivia first, so a comment after '{' stays on its line.
             // The mark is taken before it: a body holding only a comment is
@@ -885,7 +893,7 @@ public static class SyntaxFormatter {
                 return false;
             }
 
-            if (NoSpaceAfter(_previousKind, _previousParent)) {
+            if (NoSpaceAfter(_previousKind, _previousParent) && !_previousEndsRange) {
                 return false;
             }
 

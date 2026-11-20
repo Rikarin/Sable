@@ -305,10 +305,25 @@ public sealed class VerifierTests {
     [InlineData("sil @f : $() -> () {\nbb0:\n  br bb9\n}", "bb9 is used but never defined")]
     [InlineData("sil @f : $() -> () {\nbb0:\n  %0 = alloc_stack $Bogus\n}", "unknown type")]
     [InlineData("sil @f : $() -> () {\nbb0:\n  %0 = return\n}", "produces no value")]
+    [InlineData("sil @f : $() -> () loc \"a.sb\":2sil {\nbb0:\n  return\n}", "expected a line but found '2sil'")]
+    [InlineData("sil @f : $() -> () {\nbb0:\n  return loc 2:44try\n}", "expected a column but found '44try'")]
+    [InlineData("sil @f : $() -> () {\nbb0:\n  return loc 99999999999:1\n}", "expected a line but found '99999999999'")]
+    [InlineData("sil @f : $() -> () {\nbb0:\n  return loc -1:1\n}", "expected a line but found '-1'")]
     public void MalformedTextIsReportedWithItsLine(string sil, string complaint) {
         var error = Assert.Throws<SilParseException>(() => SilParser.Parse(sil));
         Assert.Contains(complaint, error.Message, StringComparison.Ordinal);
         Assert.True(error.Line >= 1);
+    }
+
+    [Theory]
+    [InlineData("add_\"Int")]
+    [InlineData("add_\\nt")]
+    [InlineData("add_\nInt")]
+    public void ABuiltinNamedWithWhatMustBeEscapedPrintsAsItReads(string name) {
+        var sil = $"sil @f : $(Int) -> Int {{\nbb0(%0 : $Int):\n  %1 = builtin {SilPrinter.Quote(name)}(%0, %0) : $Int\n  return %1\n}}\n";
+        var printed = SilPrinter.Print(SilParser.Parse(sil));
+        Assert.Equal(printed, SilPrinter.Print(SilParser.Parse(printed)));
+        Assert.Contains(SilPrinter.Quote(name), printed, StringComparison.Ordinal);
     }
 
     [Fact]

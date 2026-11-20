@@ -79,6 +79,41 @@ whole directories, not single files:
 - Every diagnostic code must have a page in [docs/diagnostics/](docs/diagnostics/).
 - Native programs are also run in the SIL interpreter, and the two must agree.
 
+`Sable.CodeGen.Tests` is the slow project: most of its tests compile a program
+and run it, natively and in the interpreter. What keeps it quicker:
+
+- **The standard library checked once.** Once a build has checked the
+  library's every body, and lowered and verified its every function, with a
+  program that could not change any of that, the next such build checks only
+  its own bodies and lowers only the library functions it reaches
+  (`LibraryCheck`): a small program binds a few of the library's files, not
+  all of them. It is remembered for the process and in
+  `$SABLE_HOME/cache/library-checked`, under a hash of the compiler. A
+  program that extends a library type, subclasses a library class or brings
+  its own file of a library module has the whole library checked with it,
+  as before; `SABLE_CHECK_LIBRARY=1` does that for every program, to compare
+  against.
+- **Native builds where they matter.** A test that holds native code and the
+  interpreter to the same answer (`Programs.AssertAgree`) builds the program
+  natively only if it, or its class, is marked `[Native]`: tests of layout,
+  the ABI, reference counting, the runtime, the platform, traps. The rest
+  run in the interpreter alone, which compiles the program once rather than
+  twice and starts no clang. `SABLE_TEST_NATIVE=all` builds every one
+  natively too, as CI does, so CI's coverage is the whole of it:
+
+  ```bash
+  SABLE_TEST_NATIVE=all dotnet test tests/Sable.CodeGen.Tests --filter "Category!=Fuzz&Category!=Timing"
+  ```
+
+  A new test class about native code gets `[Native]`; `--filter
+  Category=Native` runs the marked ones. Tests that only build natively
+  (`Programs.BuildAndRun`, `Harnesses.Native`) always do.
+- **Shards in CI.** CI runs the project in four jobs per OS, split by test
+  class ([tools/ci/codegen-shard.sh](tools/ci/codegen-shard.sh)).
+  `ShardTests` fails if a class with tests is in no shard — which is what a
+  test class not declared `public sealed class` at the top level of its file
+  would be — or if the workflow's matrix does not list every shard.
+
 New diagnostics get a code in `src/Sable.Syntax/Diagnostics.cs` and a page under
 `docs/diagnostics/`.
 

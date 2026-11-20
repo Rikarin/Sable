@@ -7,6 +7,7 @@ namespace Sable.CodeGen.Tests;
 ///     call makes to overlapping storage, one of them a change, are rejected
 ///     when the compiler can see them, and trap at run time when it cannot.
 /// </summary>
+[Native]
 public sealed class ExclusivityTests {
     const string Declarations = """
                                 struct Pair {

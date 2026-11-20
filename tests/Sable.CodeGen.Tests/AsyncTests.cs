@@ -13,6 +13,7 @@ namespace Sable.CodeGen.Tests;
 ///     one. Actors serialise their calls; calls into one from outside it
 ///     await, and hop onto it.
 /// </summary>
+[Native]
 public sealed class AsyncTests {
     const string Declarations = """
                                 actor Counter {

@@ -8,6 +8,7 @@ namespace Sable.CodeGen.Tests;
 ///     builtin — natively and in the interpreter alike: a function that gives
 ///     <c>Never</c>, the caller's place as a default argument, and backtraces.
 /// </summary>
+[Native]
 public sealed class PanicTests {
     static void Prints(string expected, string declarations, string body) =>
         Assert.Equal(expected, AssertAgree(Program(declarations, body)).Stdout);

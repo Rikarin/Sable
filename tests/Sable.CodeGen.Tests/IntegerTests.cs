@@ -8,6 +8,7 @@ namespace Sable.CodeGen.Tests;
 ///     signedness, conversions that trap when the value does not fit, and
 ///     printing. Native and interpreted, held to the same answers.
 /// </summary>
+[Native]
 public sealed class IntegerTests {
     [Fact]
     public void EachWidthComputesAsItsOwn() =>

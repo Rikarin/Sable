@@ -8,6 +8,7 @@ namespace Sable.CodeGen.Tests;
 ///     a mortal global's run as the program ends — and they, and what they
 ///     keep alive, are no leak. Native and interpreted, leak-checked.
 /// </summary>
+[Native]
 public sealed class ImmortalTests {
     const string Declarations = """
                                 class Node {

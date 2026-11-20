@@ -305,9 +305,25 @@ static void thread_yield(void) {
 // completion posted with no key.
 static HANDLE reactor_port;
 
-static bool reactor_open(void) {
+// Winsock, started once, before the first socket call of any kind: a
+// socket is made and its address resolved before the reactor is opened to
+// watch it, and without WSAStartup every call fails (WSANOTINITIALISED).
+static INIT_ONCE sockets_once = INIT_ONCE_STATIC_INIT;
+
+static BOOL CALLBACK sockets_start_once(PINIT_ONCE once, PVOID parameter, PVOID *context) {
+    (void)once;
+    (void)parameter;
+    (void)context;
     WSADATA data;
-    if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
+    return WSAStartup(MAKEWORD(2, 2), &data) == 0;
+}
+
+static bool sockets_start(void) {
+    return InitOnceExecuteOnce(&sockets_once, sockets_start_once, NULL, NULL) != FALSE;
+}
+
+static bool reactor_open(void) {
+    if (!sockets_start()) {
         return false;
     }
 
@@ -388,6 +404,10 @@ static int64_t socket_status(void) {
 }
 
 static struct addrinfo *socket_resolve(const char *host, int port, bool passive) {
+    if (!sockets_start()) {
+        return NULL;
+    }
+
     char service[16];
     snprintf(service, sizeof service, "%d", port);
     struct addrinfo hints = { 0 };

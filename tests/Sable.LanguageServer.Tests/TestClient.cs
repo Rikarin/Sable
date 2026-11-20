@@ -1,5 +1,5 @@
 using System.Collections.Concurrent;
-using System.IO.Pipes;
+using System.IO.Pipelines;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Sable.Driver;
@@ -11,11 +11,21 @@ namespace Sable.LanguageServer.Tests;
 ///     in this process through its message loop, over a pair of in-process
 ///     pipes, framing and all.
 /// </summary>
+/// <remarks>
+///     The pipes are in memory (System.IO.Pipelines), not the system's
+///     anonymous pipes: on Windows those are synchronous, so every read and
+///     write — the framing reads a header a byte at a time — held a thread
+///     of the pool, and with the test classes running at once the pool was
+///     starved until a message the server sent was not read within a test's
+///     minute (EachLoadOfThePackagesIsDiagnosed, on the Windows runner).
+/// </remarks>
 internal sealed class TestClient : IAsyncDisposable {
-    readonly AnonymousPipeServerStream _toServer = new(PipeDirection.Out);
-    readonly AnonymousPipeClientStream _serverInput;
-    readonly AnonymousPipeServerStream _toClient = new(PipeDirection.Out);
-    readonly AnonymousPipeClientStream _clientInput;
+    readonly Pipe _toServerPipe = new();
+    readonly Pipe _toClientPipe = new();
+    readonly Stream _toServer;
+    readonly Stream _serverInput;
+    readonly Stream _toClient;
+    readonly Stream _clientInput;
     readonly JsonRpcChannel _channel;
     readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement>> _waiting = new();
     readonly List<JsonElement> _notifications = [];
@@ -45,8 +55,10 @@ internal sealed class TestClient : IAsyncDisposable {
     /// <param name="projects">How the server finds the packages under its folder; none, by default.</param>
     public TestClient(TimeSpan? diagnosticsDelay = null, Func<string, IReadOnlyList<LanguageProject>>? projects = null) {
         _log = TextWriter.Synchronized(_logged);
-        _serverInput = new(PipeDirection.In, _toServer.ClientSafePipeHandle);
-        _clientInput = new(PipeDirection.In, _toClient.ClientSafePipeHandle);
+        _toServer = _toServerPipe.Writer.AsStream();
+        _serverInput = _toServerPipe.Reader.AsStream();
+        _toClient = _toClientPipe.Writer.AsStream();
+        _clientInput = _toClientPipe.Reader.AsStream();
         var server = Server = new LanguageServer(_serverInput, _toClient, new LanguageServerOptions {
             LibraryFor = Library.For,
             LibraryModules = Library.ModuleNames,

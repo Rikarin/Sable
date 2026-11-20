@@ -132,6 +132,9 @@ public sealed class PanicTests {
     /// <summary>
     ///     SABLE_BACKTRACE=1 shows the program's frames from the caller of the
     ///     runtime's trap; 'full' the runtime's own too; '0' none at all.
+    ///     Unoptimised: on Linux and Windows only such a build keeps the
+    ///     program's functions where a backtrace finds their names
+    ///     (<see cref="NativeBuild.ForTarget" />'s namesFrames).
     /// </summary>
     [Fact]
     public void SableBacktraceChoosesWhichFramesATrapShows() {
@@ -140,15 +143,15 @@ public sealed class PanicTests {
         }
 
         var source = Program("", "    fatalError(\"stop\")");
-        var off = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_BACKTRACE"] = "0" });
+        var off = BuildAndRun(source, optimise: false, environment: new Dictionary<string, string> { ["SABLE_BACKTRACE"] = "0" });
         Assert.Equal("fatal error: stop\n  at test.sb:5:5\n", off.Stderr);
 
-        var on = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_BACKTRACE"] = "1" });
+        var on = BuildAndRun(source, optimise: false, environment: new Dictionary<string, string> { ["SABLE_BACKTRACE"] = "1" });
         Assert.Contains("\nbacktrace:\n", on.Stderr, StringComparison.Ordinal);
         Assert.Contains("fatalError", on.Stderr, StringComparison.Ordinal);
         Assert.DoesNotContain("sable_trap_with", on.Stderr, StringComparison.Ordinal);
 
-        var full = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_BACKTRACE"] = "full" });
+        var full = BuildAndRun(source, optimise: false, environment: new Dictionary<string, string> { ["SABLE_BACKTRACE"] = "full" });
         Assert.Contains("sable_trap_with", full.Stderr, StringComparison.Ordinal);
         Assert.Contains("fatalError", full.Stderr, StringComparison.Ordinal);
     }

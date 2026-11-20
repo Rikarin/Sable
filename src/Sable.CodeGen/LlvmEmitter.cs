@@ -370,7 +370,7 @@ public sealed partial class LlvmEmitter {
 
         foreach (var t in new[] { "half", "float", "double" }) {
             var suffix = t switch { "half" => "f16", "float" => "f32", _ => "f64" };
-            foreach (var op in new[] { "sqrt", "floor", "ceil", "trunc", "round", "roundeven" }) {
+            foreach (var op in new[] { "sqrt", "floor", "ceil", "trunc", "round", "nearbyint" }) {
                 text.Append($"declare {t} @llvm.{op}.{suffix}({t})\n");
             }
 
@@ -4071,8 +4071,17 @@ public sealed partial class LlvmEmitter {
                 var suffix = $"f{floatBits}";
                 var bitsType = $"i{floatBits}";
                 switch (op) {
-                    case "sqrt" or "floor" or "ceil" or "trunc" or "round" or "round_even":
-                        Line($"{Result()} = call {t} @llvm.{op.Replace("_", "", StringComparison.Ordinal)}.{suffix}({t} {operands[0]})");
+                    case "sqrt" or "floor" or "ceil" or "trunc" or "round":
+                        Line($"{Result()} = call {t} @llvm.{op}.{suffix}({t} {operands[0]})");
+                        return true;
+
+                    // To nearest, ties to even: 'nearbyint', which rounds by
+                    // the current mode, and Sable never changes it from that.
+                    // Not 'roundeven': where the machine has no instruction for
+                    // it (x86-64 before SSE4.1) it is a call to C's roundeven,
+                    // which Microsoft's C runtime does not have; nearbyint it has.
+                    case "round_even":
+                        Line($"{Result()} = call {t} @llvm.nearbyint.{suffix}({t} {operands[0]})");
                         return true;
 
                     case "copysign" or "minimum" or "maximum":
@@ -4125,6 +4134,11 @@ public sealed partial class LlvmEmitter {
                     // less, is the one for [1, 2). A zero, an infinity or a
                     // NaN has none: Int.min for a zero and Int.max for the
                     // others, as C's 'ilogb' and .NET's 'ILogB' say.
+                    //
+                    // A half's is the float's it widens to exactly: LLVM 18
+                    // expands a half's frexp, where the machine has no half
+                    // arithmetic (AArch64 without FP16), into a 16-bit shift
+                    // its instruction selection cannot then select.
                     case "exponent": {
                         var parts = Fresh();
                         var exponent = Fresh();
@@ -4134,8 +4148,15 @@ public sealed partial class LlvmEmitter {
                         var finite = Fresh();
                         var isZero = Fresh();
                         var unlessZero = Fresh();
-                        Line($"{parts} = call {{ {t}, i32 }} @llvm.frexp.{suffix}.i32({t} {operands[0]})");
-                        Line($"{exponent} = extractvalue {{ {t}, i32 }} {parts}, 1");
+                        var (frexpType, frexpSuffix, frexpOperand) = (t, suffix, operands[0]);
+                        if (floatBits == 16) {
+                            frexpOperand = Fresh();
+                            (frexpType, frexpSuffix) = ("float", "f32");
+                            Line($"{frexpOperand} = fpext half {operands[0]} to float");
+                        }
+
+                        Line($"{parts} = call {{ {frexpType}, i32 }} @llvm.frexp.{frexpSuffix}.i32({frexpType} {frexpOperand})");
+                        Line($"{exponent} = extractvalue {{ {frexpType}, i32 }} {parts}, 1");
                         Line($"{less} = sub i32 {exponent}, 1");
                         Line($"{wide} = sext i32 {less} to i64");
                         Line($"{magnitude} = call {t} @llvm.fabs.{suffix}({t} {operands[0]})");

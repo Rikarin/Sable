@@ -634,6 +634,19 @@ public static class NativeBuild {
     public static IReadOnlyList<string> PositionIndependentFlags(NativeOptions options) =>
         options.PositionIndependent && options.TargetOrHost.Platform is NativePlatform.Linux ? ["-fPIC"] : [];
 
+    /// <summary>
+    ///     The IR marked position-independent in itself, as clang marks a C
+    ///     file compiled <c>-fPIC</c>. <c>-fPIC</c> on IR reaches only the code
+    ///     clang generates from it; IR compiled to bitcode for link-time
+    ///     optimisation is generated as it links, and a relocatable link
+    ///     (<c>-r</c>, a static library's) takes the model from the module's
+    ///     'PIC Level' — without it, absolute addresses, which no PIE program
+    ///     can link. (A second <c>!llvm.module.flags</c> adds to the first;
+    ///     its node's number is past any the emitter gives.)
+    /// </summary>
+    public static string WithPicLevel(string llvmIr) =>
+        llvmIr + "\n!llvm.module.flags = !{!4000000000}\n!4000000000 = !{i32 8, !\"PIC Level\", i32 2}\n";
+
     /// <summary>The flags the program's IR is compiled with: its optimisation level, and <c>-g</c> for debug information.</summary>
     public static IReadOnlyList<string> CompileFlags(NativeOptions options) =>
         options.DebugInfo ? ["-g", $"-O{options.OptLevel}"] : [$"-O{options.OptLevel}"];

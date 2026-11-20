@@ -236,25 +236,37 @@ internal static class TestRunner {
     ///     be had at any time: the output of a process given up on is shown
     ///     as far as it got, not waited for.
     /// </summary>
+    /// <remarks>
+    ///     Read on a thread of its own, not the thread pool's. On Windows a
+    ///     process's redirected output is a synchronous pipe, whose
+    ///     asynchronous reads each hold a pool thread; with tests at once, and
+    ///     whatever else the process runs, the pool was starved long enough
+    ///     that the end of a stopped or trapped test's output was read later
+    ///     than <see cref="StopGrace" />, and the test was failed as one that
+    ///     left its output open.
+    /// </remarks>
     sealed class Collected {
         readonly StringBuilder _text = new();
+        readonly TaskCompletionSource _done = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Collected(StreamReader reader) =>
-            Done = Task.Run(async () => {
+            new Thread(() => {
                 var buffer = new char[4096];
                 try {
                     int read;
-                    while ((read = await reader.ReadAsync(buffer)) > 0) {
+                    while ((read = reader.Read(buffer, 0, buffer.Length)) > 0) {
                         lock (_text) {
                             _text.Append(buffer, 0, read);
                         }
                     }
                 } catch (Exception e) when (e is IOException or ObjectDisposedException) {
                     // Closed under it, once given up on: what came is kept.
+                } finally {
+                    _done.SetResult();
                 }
-            });
+            }) { IsBackground = true, Name = "sable test output" }.Start();
 
-        public Task Done { get; }
+        public Task Done => _done.Task;
 
         public string Text {
             get {

@@ -62,7 +62,8 @@ public static class NativeObjects {
         var temporary = objectPath + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
         var irPath = temporary + ".ll";
         try {
-            File.WriteAllText(irPath, NativeBuild.ForTarget(llvmIr, target, Bitcode(options).Count > 0));
+            var ir = NativeBuild.ForTarget(llvmIr, target, Bitcode(options).Count > 0);
+            File.WriteAllText(irPath, NativeBuild.PositionIndependentFlags(options).Count > 0 ? NativeBuild.WithPicLevel(ir) : ir);
             var (exitCode, output) = Run(NativeBuild.CompilerPath, [..target.ClangFlags, ..Flags(options), ..NativeBuild.PositionIndependentFlags(options), "-Wno-override-module", "-c", "-x", "ir", irPath, "-o", temporary]);
             if (exitCode != 0) {
                 return new(false, output);
@@ -87,7 +88,7 @@ public static class NativeObjects {
         var sources = temporary + ".src";
         try {
             var source = NativeBuild.WriteRuntime(sources);
-            var (exitCode, output) = Run(NativeBuild.CompilerPath, [..target.ClangFlags, ..NativeBuild.SysrootFlags(options), ..Flags(options), "-c", source, "-o", temporary]);
+            var (exitCode, output) = Run(NativeBuild.CompilerPath, [..target.ClangFlags, ..NativeBuild.SysrootFlags(options), ..Flags(options), ..NativeBuild.PositionIndependentFlags(options), "-c", source, "-o", temporary]);
             if (exitCode != 0) {
                 return NativeBuild.Explained(new(false, output), options);
             }
@@ -120,7 +121,12 @@ public static class NativeObjects {
     /// <param name="asProgram">Add the platform's flags for a link that makes a program, which a relocatable link must not have.</param>
     static NativeBuildResult Link(IReadOnlyList<string> objects, string outputPath, NativeOptions options, string? thinLtoCache, IReadOnlyList<string> kind, bool asProgram) {
         var target = options.TargetOrHost;
-        var temporary = outputPath + $".{Environment.ProcessId}.tmp";
+        // A Windows DLL is linked where it goes, as the whole program's
+        // build links it: lld-link names the DLL, in its exports, and its
+        // import library — what a C program links against — for the file it
+        // writes, so a DLL linked as 'counter.dll.123.tmp' and moved would
+        // have neither counter.lib beside it nor its own name.
+        var temporary = target.Platform == NativePlatform.Windows && kind.Contains("-shared") ? outputPath : outputPath + $".{Environment.ProcessId}.tmp";
         try {
             var lto = NativeBuild.LtoFlags(options, target.Platform, NativeBuild.LinksBitcodeFor(target));
             List<string> cache = thinLtoCache is null || options.Lto != LtoMode.Thin || lto.Count == 0 ? []
@@ -136,10 +142,15 @@ public static class NativeObjects {
                 return NativeBuild.Explained(new(false, output), options);
             }
 
-            File.Move(temporary, outputPath, overwrite: true);
+            if (temporary != outputPath) {
+                File.Move(temporary, outputPath, overwrite: true);
+            }
+
             return new(true, output);
         } finally {
-            File.Delete(temporary);
+            if (temporary != outputPath) {
+                File.Delete(temporary);
+            }
         }
     }
 

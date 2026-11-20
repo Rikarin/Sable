@@ -47,12 +47,15 @@ public static class Library {
         foreach (var resource in assembly.GetManifestResourceNames().Where(static n => n.StartsWith("lib/", StringComparison.Ordinal)).Order(StringComparer.Ordinal)) {
             using var stream = assembly.GetManifestResourceStream(resource)!;
             using var reader = new StreamReader(stream);
+            // Named lib/<Module>/<File>.sb everywhere: built on Windows, the
+            // resource's name has MSBuild's '\' between module and file.
+            var fileName = resource.Replace('\\', '/');
             var tree = CoreLibrary.ParseForProfile(
                 reader.ReadToEnd(),
-                resource,
+                fileName,
                 options,
                 profile,
-                plain is not null && plain.TryGetValue(resource, out var shared) ? () => shared : null
+                plain is not null && plain.TryGetValue(fileName, out var shared) ? () => shared : null
             );
             if (tree.Root is not CompilationUnitSyntax { Module: { } declaration }) {
                 continue;

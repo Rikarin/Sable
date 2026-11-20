@@ -225,7 +225,7 @@ extension FloatingPoint {
     @builtin("round_Self")
     public fn rounded() -> Self
 
-    /// The built-in floats' rounding: LLVM's 'roundeven'.
+    /// The built-in floats' rounding to nearest, ties to even: LLVM's 'nearbyint'.
     @builtin("round_even_Self")
     public fn roundedToNearestOrEven() -> Self
 

@@ -216,9 +216,11 @@ public sealed class VectorizationTests {
         }
 
         // Arrays of values, not constants: an array of constants is one LLVM
-        // can see into, and would fold the loops away.
+        // can see into, and would fold the loops away. The value comes
+        // through blackBox, as SIL folds 'one + 1' to a literal and an
+        // array of literals is a constant one.
         var loops = Report(Programs.Program(Sums,
-            "    let one = 1\n    var c: Int[>..] = [one - 1]\n    scaled([one], [one + 1], [one + 2], &c)\n    print(sum([one, one + 1]) + fall([one], 0) + c[0])"));
+            "    let one = blackBox(1)\n    var c: Int[>..] = [one - 1]\n    scaled([one], [one + 1], [one + 2], &c)\n    print(sum([one, one + 1]) + fall([one], 0) + c[0])"));
         Assert.True(loops.Any(l => l.Line is >= 3 and <= 6 && l.Vectorized), VectorizationReport.Format(loops));
         Assert.True(loops.Any(l => l.Line is >= 11 and <= 16 && l.Vectorized), VectorizationReport.Format(loops));
         Assert.True(loops.Any(l => l.Line is >= 21 and <= 25 && l.Vectorized), VectorizationReport.Format(loops));

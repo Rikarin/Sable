@@ -22,7 +22,7 @@ syn keyword sableFlow        return throw yield try catch await defer do where
 syn keyword sableStorage     fn let var const struct class actor union enum protocol extension alias associatedtype
 syn keyword sableStorage     init deinit subscript operator region
 syn keyword sableInclude     module import
-syn keyword sableModifier    public private internal package static mutating nonmutating override open final sealed
+syn keyword sableModifier    public private internal package static mutating nonmutating override open final sealed abstract
 syn keyword sableModifier    required convenience lazy weak unowned async throws rethrows inout out ref consuming
 syn keyword sableModifier    borrowing move unsafe unchecked comptime some any nonisolated prefix postfix using
 syn keyword sableBoolean     true false
@@ -30,13 +30,14 @@ syn keyword sableNone        none
 syn keyword sableSelf        self Self super
 syn keyword sableOperatorWord is as
 syn keyword sableReserved    macro trait impl become effect handler
-syn keyword sableBuiltinType Int UInt I8 I16 I32 I64 U8 U16 U32 U64 F32 F64 Bool Char String Never Void
+syn keyword sableBuiltinType Int UInt I8 I16 I32 I64 I128 U8 U16 U32 U64 U128 F16 F32 F64 Bool Char String Never Void
 
 " Declared names.
 syn match sableFunction "\<fn\s\+\zs`\?\h\w*`\?"
 syn match sableTypeDecl "\<\(struct\|class\|actor\|union\|enum\|protocol\|alias\|associatedtype\|extension\)\s\+\zs\h[A-Za-z0-9_.]*"
 syn match sableType     "\<\u\w*\>"
 syn match sableAccessor "\<\(get\|set\|willSet\|didSet\)\>\ze\s*\({\|(\|=>\)"
+syn match sableShorthand "\$\d\+"
 
 " Attributes and directives.
 syn match sableAttribute "@\h\w*"
@@ -79,6 +80,7 @@ hi def link sableModifier              StorageClass
 hi def link sableBoolean               Boolean
 hi def link sableNone                  Constant
 hi def link sableSelf                  Identifier
+hi def link sableShorthand             Identifier
 hi def link sableOperatorWord          Operator
 hi def link sableReserved              Error
 hi def link sableBuiltinType           Type

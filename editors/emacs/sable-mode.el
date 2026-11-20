@@ -53,7 +53,7 @@ Use `:json-false' for off."
     "region" "module" "import"
     ;; Modifiers.
     "public" "private" "internal" "package" "static" "mutating" "nonmutating"
-    "override" "open" "final" "sealed" "required" "convenience" "lazy" "weak"
+    "override" "open" "final" "sealed" "abstract" "required" "convenience" "lazy" "weak"
     "unowned" "async" "throws" "rethrows" "inout" "out" "ref" "consuming"
     "borrowing" "move" "unsafe" "unchecked" "comptime" "some" "any"
     "nonisolated" "prefix" "postfix" "using"
@@ -68,7 +68,8 @@ Use `:json-false' for off."
   "Words reserved for later, which are errors today.")
 
 (defconst sable--builtin-types
-  '("Int" "UInt" "I8" "I16" "I32" "I64" "U8" "U16" "U32" "U64" "F32" "F64"
+  '("Int" "UInt" "I8" "I16" "I32" "I64" "I128" "U8" "U16" "U32" "U64" "U128"
+    "F16" "F32" "F64"
     "Bool" "Char" "String" "Never" "Void")
   "The built-in types.")
 
@@ -79,6 +80,11 @@ Use `:json-false' for off."
     (,(regexp-opt sable--keywords 'symbols) . font-lock-keyword-face)
     (,(regexp-opt sable--constants 'symbols) . font-lock-constant-face)
     (,(regexp-opt sable--builtin-types 'symbols) . font-lock-type-face)
+    ;; An accessor's name, where an accessor begins: `get {', `set(v)', `get =>'.
+    (,(rx symbol-start (group (or "get" "set" "willSet" "didSet")) symbol-end (* space) (or "{" "(" "=>"))
+     1 font-lock-keyword-face)
+    ;; A closure's parameters by position: `$0', `$1'.
+    (,(rx "$" (+ digit)) . font-lock-variable-name-face)
     (,(rx symbol-start "fn" (+ space) (group (? "`") (any alpha "_") (* (any alnum "_")) (? "`")))
      1 font-lock-function-name-face)
     (,(rx symbol-start (or "struct" "class" "actor" "union" "enum" "protocol" "alias" "associatedtype" "extension")

@@ -55,6 +55,9 @@ module.exports = grammar({
     [$.record_literal, $._expression],
     [$.tuple_expression, $.parenthesized_expression],
     [$._pattern, $._expression],
+    [$.closure_signature, $.tuple_expression],
+    [$.closure_signature, $.parenthesized_expression],
+    [$.closure_signature, $._expression],
   ],
 
   rules: {
@@ -339,6 +342,8 @@ module.exports = grammar({
         $.await_expression,
         $.move_expression,
         $.closure_expression,
+        $.lambda_expression,
+        $.shorthand_parameter,
         $.match_expression,
         $.if_expression,
         $.comptime_expression,
@@ -367,8 +372,10 @@ module.exports = grammar({
       prec.right(PREC.call, seq(field("function", $._expression), optional("?"), choice(seq(field("arguments", $.argument_list), optional($.trailing_closure)), $.trailing_closure))),
 
     argument_list: ($) => seq("(", commaSep($.argument), ")"),
-    argument: ($) => seq(optional(seq(field("label", choice($.identifier, $._keyword_label)), ":")), optional("&"), field("value", $._expression)),
-    trailing_closure: ($) => prec.dynamic(-1, $.closure_expression),
+    argument: ($) => seq(optional(seq(field("label", choice($.identifier, $._keyword_label)), ":")), optional(choice("&", "out")), field("value", $._expression)),
+    // After the first, more trailing closures, each with its label: '} onFail: {'.
+    trailing_closure: ($) =>
+      prec.dynamic(-1, prec.right(seq($.closure_expression, repeat(seq(field("label", $.identifier), ":", $.closure_expression))))),
 
     index_expression: ($) => prec(PREC.call, seq(field("object", $._expression), optional("?"), "[", commaSep1($._expression), "]")),
 
@@ -409,9 +416,11 @@ module.exports = grammar({
 
     ternary_expression: ($) => prec.right(PREC.ternary, seq(field("condition", $._expression), "?", field("consequence", $._expression), ":", field("alternative", $._expression))),
 
-    cast_expression: ($) => prec.left(PREC.cast, seq(field("value", $._expression), field("operator", choice("as", "as?", "as!", "is")), field("type", $._type))),
+    cast_expression: ($) => prec.left(PREC.cast, seq(field("value", $._expression), field("operator", choice("as", "as?", "as!", seq("unchecked", "as"), "is")), field("type", $._type))),
 
-    try_expression: ($) => prec.right(PREC.prefix, seq(choice("try", "try?", "try!"), $._expression)),
+    // 'try f() catch fallback': the catch gives the value when f throws.
+    try_expression: ($) =>
+      prec.right(PREC.prefix, seq(choice("try", "try?", "try!"), $._expression, optional(seq("catch", choice($.block, $._expression))))),
     await_expression: ($) => prec.right(PREC.prefix, seq("await", $._expression)),
     move_expression: ($) => prec.right(PREC.prefix, seq("move", $._expression)),
     comptime_expression: ($) => prec.right(PREC.prefix, seq("comptime", $._expression)),
@@ -424,8 +433,22 @@ module.exports = grammar({
         repeat(choice($._statement, $._declaration)),
         "}",
       ),
-    capture_list: ($) => seq("[", commaSep1(seq(optional(choice("weak", "unowned", "move")), $.identifier)), "]"),
-    closure_parameters: ($) => seq("(", commaSep(seq(choice($.identifier, "_"), optional(seq(":", $._type)))), ")"),
+    capture_list: ($) =>
+      seq("[", commaSep1(seq(optional(choice("weak", "unowned", "move")), choice($.identifier, $.self), optional(seq("=", $._expression)))), "]"),
+    closure_parameters: ($) => seq("(", commaSep($.closure_parameter), ")"),
+    closure_parameter: ($) => seq(field("name", choice($.identifier, "_")), optional(seq(":", optional("inout"), field("type", $._type)))),
+
+    // '(x: Int) => x * 2', 'x => x.name', '[weak self] () => { ... }'.
+    lambda_expression: ($) =>
+      prec.right(
+        PREC.assign,
+        seq(optional($.capture_list), field("signature", $.closure_signature), "=>", field("body", choice($.block, $._expression))),
+      ),
+    closure_signature: ($) =>
+      choice(seq("(", commaSep($.closure_parameter), ")", optional(seq("->", field("result", $._type)))), field("name", $.identifier)),
+
+    // '$0', '$1': a brace closure's parameters by position.
+    shorthand_parameter: (_) => /\$[0-9]+/,
 
     match_expression: ($) => seq(choice("match", "switch"), field("subject", $._expression), "{", repeat($.match_arm), "}"),
     match_arm: ($) =>
@@ -484,7 +507,7 @@ module.exports = grammar({
     qualified_type: ($) => prec.left(seq($._type, ".", $._type_name)),
     optional_type: ($) => prec(2, seq($._type, choice("?", "!"))),
     reference_type: ($) => prec.left(2, seq($._type, "&", optional(seq("<", $.identifier, optional(seq("in", $.identifier)), ">")))),
-    array_type: ($) => prec(2, seq($._type, "[", optional(choice($.integer_literal, $.identifier, "..", seq("..", $.integer_literal), ">..", ">..<", ":")), "]")),
+    array_type: ($) => prec(2, seq($._type, "[", optional(choice($.integer_literal, $.identifier, "..", seq("..", choice($.integer_literal, $.identifier)), ">..", ">..<", ":")), "]")),
     dictionary_type: ($) => seq("[", $._type, ":", $._type, "]"),
     tuple_type: ($) => seq("(", commaSep(seq(optional(seq($.identifier, ":")), $._type)), ")"),
     function_type: ($) => prec.right(seq(optional("async"), $.tuple_type, optional($.throws_clause), "->", $._type)),

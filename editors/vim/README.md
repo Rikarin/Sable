@@ -22,6 +22,21 @@ set runtimepath+=/path/to/sable/editors/vim
 vim.opt.runtimepath:append("/path/to/sable/editors/vim")
 ```
 
+## Tree-sitter in Neovim
+
+With [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter)
+(either its `master` or its `main` branch), Neovim can highlight with the
+grammar in `editors/tree-sitter-sable` instead of the syntax file:
+
+```lua
+require("sable.treesitter").setup({ path = "/path/to/sable/editors/tree-sitter-sable" })
+```
+
+then `:TSInstall sable`. No parser is checked in, so nvim-treesitter generates
+it from `grammar.js`, which needs the `tree-sitter` CLI. The highlight queries
+are `queries/sable/highlights.scm` here, a link to the grammar's own. Until the
+parser is installed, the syntax file highlights.
+
 ## The language server in Neovim
 
 Neovim 0.11 and later read `lsp/sable.lua` from the runtime path:

@@ -1,0 +1,236 @@
+module Sable.Collections
+
+/// A growable array that keeps its first `N` elements inline, in the value
+/// itself, and moves to the heap only when it outgrows them: Rust's
+/// smallvec, LLVM's SmallVector. Most lists of a few things then cost no
+/// allocation at all.
+///
+/// Up to `N` elements live in an `Element[..N]`; the append that would make
+/// `N + 1` moves them, with the new one, into a heap array, where the
+/// elements stay — however few are left — until `removeAll()` or
+/// `shrinkToFit()` brings them back inline. Appending and removing at the
+/// end are constant time (amortised); inserting and removing at an index
+/// move the elements after it. An index outside 0..<count traps.
+///
+/// A value, as the arrays it holds are: a copy is a vector of its own.
+///
+/// ```sable
+/// var small = SmallVec<Int, 2>()
+/// small.append(1)
+/// small.append(2)
+/// assert(!small.isSpilled)
+/// small.append(3)
+/// assert(small.isSpilled)
+/// assert(small.toArray() == [1, 2, 3])
+/// ```
+public struct SmallVec<Element, N: Int> where N > 0 {
+    var inline: Element[..N] = []
+    var heap: Element[>..<] = []
+    var spilled: Bool = false
+
+    /// An empty vector, its elements inline.
+    public init() { }
+
+    /// A vector of the elements, in order: inline if there are at most `N`.
+    public init(_ elements: Element[:]) {
+        append(contentsOf: elements)
+    }
+
+    /// How many elements it holds.
+    public var count: Int => if spilled { heap.count } else { inline.count }
+
+    /// Whether it holds no elements.
+    public var isEmpty: Bool => count == 0
+
+    /// How many elements it holds inline before it moves to the heap: `N`.
+    public var inlineCapacity: Int => N
+
+    /// Whether the elements are on the heap rather than inline.
+    public var isSpilled: Bool => spilled
+
+    /// How many elements it has room for before it must grow.
+    public var capacity: Int => if spilled { heap.capacity } else { N }
+
+    /// The first element, or none when there are none.
+    public var first: Element? => if count == 0 { none } else { self[0] }
+
+    /// The last element, or none when there are none.
+    public var last: Element? => if count == 0 { none } else { self[count - 1] }
+
+    /// The element at 'index'; outside 0..<count traps.
+    public subscript(index: Int) -> Element {
+        get {
+            if spilled {
+                return heap[index]
+            }
+            return inline[index]
+        }
+        set {
+            if spilled {
+                heap[index] = newValue
+            } else {
+                inline[index] = newValue
+            }
+        }
+    }
+
+    /// The elements in a grow-only array, in order.
+    public fn toArray() -> Element[>..] {
+        if spilled {
+            return heap.toArray()
+        }
+        return inline.toArray()
+    }
+
+    // ---- Growing -----------------------------------------------------------
+
+    /// Adds the element at the end, moving to the heap if the inline room
+    /// is full.
+    public mutating fn append(_ element: Element) {
+        if !spilled {
+            if inline.count < N {
+                inline.append(element)
+                return
+            }
+            spill(room: N + 1)
+        }
+        heap.append(element)
+    }
+
+    /// Adds the elements at the end, in order.
+    public mutating fn append(contentsOf elements: Element[:]) {
+        if !spilled && inline.count + elements.count > N {
+            spill(room: inline.count + elements.count)
+        }
+        for element in elements {
+            append(element)
+        }
+    }
+
+    /// Room for at least 'minimumCapacity' elements in all: more than `N`
+    /// moves the elements to the heap.
+    public mutating fn reserveCapacity(_ minimumCapacity: Int) {
+        if spilled {
+            heap.reserveCapacity(minimumCapacity)
+        } else if minimumCapacity > N {
+            spill(room: minimumCapacity)
+        }
+    }
+
+    /// Puts the element at 'index', moving it and those after it up one;
+    /// 'index' may be the count, to add at the end, and outside 0...count
+    /// traps.
+    public mutating fn insert(_ element: Element, at index: Int) {
+        precondition(index >= 0 && index <= count, "SmallVec.insert: index out of range")
+        append(element)
+        // Right by one: the new last element comes round to 'index'.
+        if spilled {
+            heap.rotate(from: index, to: heap.count, left: -1)
+        } else {
+            inline.rotate(from: index, to: inline.count, left: -1)
+        }
+    }
+
+    // ---- Shrinking ---------------------------------------------------------
+
+    /// Takes out the last element and gives it back; an empty vector traps.
+    public mutating fn removeLast() -> Element {
+        if spilled {
+            return heap.removeLast()
+        }
+        return inline.removeLast()
+    }
+
+    /// Takes out the last element and gives it back, or none when empty.
+    public mutating fn popLast() -> Element? {
+        if count == 0 {
+            return none
+        }
+        return removeLast()
+    }
+
+    /// Takes out the element at 'index' and gives it back, moving those
+    /// after it down one; outside 0..<count traps.
+    public mutating fn remove(at index: Int) -> Element {
+        let _ = self[index]
+        if spilled {
+            heap.rotate(from: index, to: heap.count, left: 1)
+        } else {
+            inline.rotate(from: index, to: inline.count, left: 1)
+        }
+        return removeLast()
+    }
+
+    /// Takes out the elements from 'count' on; a count at or past the
+    /// vector's own changes nothing.
+    public mutating fn truncate(to count: Int) {
+        precondition(count >= 0, "SmallVec.truncate: negative count")
+        while self.count > count {
+            let _ = removeLast()
+        }
+    }
+
+    /// Takes out every element, and gives back the heap's memory: the
+    /// vector is inline again.
+    public mutating fn removeAll() {
+        inline.clear()
+        heap = []
+        spilled = false
+    }
+
+    /// Brings the elements back inline when there are `N` or fewer, giving
+    /// back the heap's memory.
+    public mutating fn shrinkToFit() {
+        if !spilled || heap.count > N {
+            return
+        }
+        for element in heap {
+            inline.append(element)
+        }
+        heap = []
+        spilled = false
+    }
+
+    /// Moves the inline elements to a heap array with room for 'room'.
+    mutating fn spill(room: Int) {
+        heap.reserveCapacity(room)
+        for element in inline {
+            heap.append(element)
+        }
+        inline.clear()
+        spilled = true
+    }
+}
+
+extension SmallVec where Element: Equatable {
+    /// Whether an element equal to this one is in the vector.
+    public fn contains(_ element: Element) -> Bool {
+        if spilled {
+            return heap.contains(element: element)
+        }
+        return inline.contains(element: element)
+    }
+}
+
+extension SmallVec: Sequence {
+    /// An iterator over the elements, first to last: a view of them taken
+    /// when it was made, which later changes to the vector do not touch.
+    public fn makeIterator() -> SmallVecIterator<Element> {
+        return SmallVecIterator<Element>(elements: toArray(), position: 0)
+    }
+}
+
+/// The elements of a small vector, first to last.
+public struct SmallVecIterator<Element>: Iterator {
+    let elements: Element[>..]
+    var position: Int
+
+    /// The next element, or none past the last.
+    public mutating fn next() -> Element? {
+        if position >= elements.count {
+            return none
+        }
+        position = position + 1
+        return elements[position - 1]
+    }
+}

@@ -1,0 +1,190 @@
+module SetTests
+
+// Set (Sable.Collections), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Collections
+
+import Sable.Collections
+import Sable.Testing
+
+@test
+fn aSetIsGoneThroughInTheOrderOfInsertion() {
+    var members = Set<Int>()
+    let _ = members.insert(5)
+    let _ = members.insert(1)
+    let _ = members.insert(5)
+    let _ = members.insert(3)
+    let _ = members.remove(1)
+    var seen: String[>..] = []
+    for member in members {
+        seen.append("\(member)")
+    }
+    assertEqualText(seen.joined(separator: ","), "5,3")
+    assertEqual(Set<Int>().toArray().count, 0)
+}
+
+@test
+fn aSetKeepsOneOfEach() {
+    var seen = Set<Int>()
+    assert(seen.insert(5))
+    assert(!seen.insert(5), "a second insert of the same value adds nothing")
+    assert(seen.insert(6))
+    assertEqual(seen.toArray().count, 2)
+}
+
+@test
+fn anEmptySetHasNothing() {
+    var empty = Set<String>()
+    assert(empty.isEmpty)
+    assertEqual(empty.count, 0)
+    assert(!empty.contains("a"))
+    assert(!empty.remove("a"), "nothing is removed from an empty set")
+}
+
+@test
+fn aRemovedValueIsGoneAndCanComeBack() {
+    var words = Set<String>()
+    assert(words.insert("one"))
+    assert(words.insert("two"))
+    assert(words.contains("one"))
+    assert(words.remove("one"))
+    assert(!words.contains("one"), "a removed value is gone")
+    assert(!words.remove("one"), "a value is removed once")
+    assertEqual(words.count, 1)
+    assert(words.insert("one"), "a removed value can be added again")
+    assert(!words.isEmpty)
+}
+
+@test
+fn elementsComeInTheOrderTheyWereAdded() {
+    var seen = Set<Int>()
+    for n in [3, 1, 2, 1, 3] {
+        seen.insert(n)
+    }
+    let elements = seen.toArray()
+    assertEqual(elements.count, 3)
+    assertEqual(elements[0], 3)
+    assertEqual(elements[1], 1)
+    assertEqual(elements[2], 2)
+}
+
+@test
+fn removeTakesOutAMember() {
+    var members = Set<String>()
+    let _ = members.insert("a")
+    let _ = members.insert("b")
+    assert(members.contains("a"))
+    assert(members.remove("a"))
+    assert(!members.contains("a"))
+    assertEqual(members.count, 1)
+    assert(!members.isEmpty)
+    assert(members.toArray() == ["b"])
+}
+
+@test
+fn aSetFromAnArrayKeepsTheFirstOfEachInOrder() {
+    let values = Set<Int>([4, 2, 4, 1, 2])
+    assert(values.toArray() == [4, 2, 1])
+    assertEqual(values.count, 3)
+}
+
+@test
+fn aCopyOfASetIsASetOfItsOwn() {
+    var a = Set<Int>([1, 2])
+    let b = a
+    a.insert(3)
+    assertEqual(a.count, 3)
+    assertEqual(b.count, 2)
+    assert(!b.contains(3))
+}
+
+@test
+fn capacityAndRemoveAllLeaveTheSetEmpty() {
+    var values = Set<Int>(minimumCapacity: 10)
+    assert(values.capacity >= 10)
+    values.reserveCapacity(40)
+    assert(values.capacity >= 40)
+    values.insert(1)
+    values.insert(2)
+    values.removeAll()
+    assert(values.isEmpty)
+    assert(!values.contains(1))
+}
+
+@test
+fn unionKeepsThisSetsOrderThenTheOthers() {
+    let a = Set<Int>([1, 3, 5])
+    let b = Set<Int>([5, 2, 1, 4])
+    assert(a.union(b).toArray() == [1, 3, 5, 2, 4])
+    var c = a
+    c.formUnion(b)
+    assert(c == a.union(b))
+}
+
+@test
+fn intersectionKeepsTheValuesInBoth() {
+    let a = Set<Int>([1, 3, 5, 7])
+    let b = Set<Int>([7, 2, 3])
+    assert(a.intersection(b).toArray() == [3, 7])
+    var c = a
+    c.formIntersection(b)
+    assert(c.toArray() == [3, 7])
+    assert(a.intersection(Set<Int>()).isEmpty)
+}
+
+@test
+fn subtractingTakesOutTheOthersValues() {
+    let a = Set<Int>([1, 2, 3, 4])
+    let b = Set<Int>([2, 4, 6])
+    assert(a.subtracting(b).toArray() == [1, 3])
+    var c = a
+    c.subtract(b)
+    assert(c.toArray() == [1, 3])
+}
+
+@test
+fn symmetricDifferenceKeepsTheValuesInOneButNotBoth() {
+    let a = Set<Int>([1, 2, 3])
+    let b = Set<Int>([3, 4, 1, 5])
+    assert(a.symmetricDifference(b).toArray() == [2, 4, 5])
+    var c = a
+    c.formSymmetricDifference(b)
+    assert(c.toArray() == [2, 4, 5])
+}
+
+@test
+fn subsetsAndSupersetsCompareMembers() {
+    let small = Set<Int>([1, 2])
+    let large = Set<Int>([2, 3, 1])
+    assert(small.isSubset(of: large))
+    assert(!large.isSubset(of: small))
+    assert(large.isSuperset(of: small))
+    assert(small.isStrictSubset(of: large))
+    assert(!small.isStrictSubset(of: small), "a values is not a strict subset of itself")
+    assert(small.isSubset(of: small))
+    assert(large.isStrictSuperset(of: small))
+    assert(!Set<Int>([1, 9]).isSubset(of: large), "a value the other lacks makes it no subset")
+}
+
+@test
+fn disjointSetsShareNoValue() {
+    let a = Set<Int>([1, 2])
+    assert(a.isDisjoint(with: Set<Int>([3, 4, 5])))
+    assert(Set<Int>([3, 4, 5]).isDisjoint(with: a))
+    assert(!a.isDisjoint(with: Set<Int>([5, 2, 7])))
+    assert(!Set<Int>([5, 2, 7]).isDisjoint(with: a))
+}
+
+@test
+fn setsAreEqualWhateverTheirOrder() {
+    assert(Set<String>(["a", "b"]) == Set<String>(["b", "a"]))
+    assert(Set<String>(["a", "b"]) != Set<String>(["a"]))
+    assert(Set<String>(["a", "b"]) != Set<String>(["a", "c"]))
+}
+
+@test
+fn filterAndRetainKeepWhatPassesTheTest() {
+    var values = Set<Int>([1, 2, 3, 4, 5, 6])
+    assert(values.filter((n: Int) => n % 2 == 0).toArray() == [2, 4, 6])
+    values.retain(where: (n: Int) => n > 3)
+    assert(values.toArray() == [4, 5, 6])
+}

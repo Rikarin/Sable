@@ -16,6 +16,7 @@
         { "include": "#module" },
         { "include": "#declarations" },
         { "include": "#keywords" },
+        { "include": "#shorthand" },
         { "include": "#numbers" },
         { "include": "#calls" },
         { "include": "#types" },
@@ -198,13 +199,18 @@
         { "name": "keyword.control.loop.sable", "match": "\\b(while|repeat|for|in|break|continue)\\b" },
         { "name": "keyword.control.flow.sable", "match": "\\b(return|throw|yield|try|catch|await|defer|do|where)\\b(?:[?!])?" },
         { "name": "storage.type.sable", "match": "\\b(fn|let|var|const|struct|class|actor|union|enum|protocol|extension|alias|associatedtype|init|deinit|subscript|operator|region|module|import)\\b" },
-        { "name": "storage.modifier.sable", "match": "\\b(public|private|internal|package|static|mutating|nonmutating|override|open|final|sealed|required|convenience|lazy|weak|unowned|async|throws|rethrows|inout|out|ref|consuming|borrowing|move|unsafe|unchecked|comptime|some|any|nonisolated|prefix|postfix|using)\\b" },
+        { "name": "storage.modifier.sable", "match": "\\b(public|private|internal|package|static|mutating|nonmutating|override|open|final|sealed|abstract|required|convenience|lazy|weak|unowned|async|throws|rethrows|inout|out|ref|consuming|borrowing|move|unsafe|unchecked|comptime|some|any|nonisolated|prefix|postfix|using)\\b" },
         { "name": "constant.language.boolean.sable", "match": "\\b(true|false)\\b" },
         { "name": "constant.language.none.sable", "match": "\\bnone\\b" },
         { "name": "variable.language.sable", "match": "\\b(self|Self|super)\\b" },
         { "name": "keyword.operator.type.sable", "match": "\\b(is|as)\\b[?!]?" },
         { "name": "invalid.illegal.reserved.sable", "match": "\\b(macro|trait|impl|become|effect|handler)\\b" }
       ]
+    },
+    "shorthand": {
+      "comment": "A closure's parameters by position: $0, $1.",
+      "name": "variable.language.shorthand.sable",
+      "match": "\\$[0-9]+\\b"
     },
     "numbers": {
       "patterns": [
@@ -220,7 +226,7 @@
     },
     "types": {
       "patterns": [
-        { "name": "support.type.builtin.sable", "match": "\\b(Int|UInt|I8|I16|I32|I64|U8|U16|U32|U64|F32|F64|Bool|Char|String|Never|Void)\\b" },
+        { "name": "support.type.builtin.sable", "match": "\\b(Int|UInt|I8|I16|I32|I64|I128|U8|U16|U32|U64|U128|F16|F32|F64|Bool|Char|String|Never|Void)\\b" },
         { "name": "entity.name.type.sable", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" }
       ]
     },

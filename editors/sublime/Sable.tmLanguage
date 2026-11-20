@@ -60,6 +60,10 @@
 				</dict>
 				<dict>
 					<key>include</key>
+					<string>#shorthand</string>
+				</dict>
+				<dict>
+					<key>include</key>
 					<string>#numbers</string>
 				</dict>
 				<dict>
@@ -583,7 +587,7 @@
 					<key>name</key>
 					<string>storage.modifier.sable</string>
 					<key>match</key>
-					<string>\b(public|private|internal|package|static|mutating|nonmutating|override|open|final|sealed|required|convenience|lazy|weak|unowned|async|throws|rethrows|inout|out|ref|consuming|borrowing|move|unsafe|unchecked|comptime|some|any|nonisolated|prefix|postfix|using)\b</string>
+					<string>\b(public|private|internal|package|static|mutating|nonmutating|override|open|final|sealed|abstract|required|convenience|lazy|weak|unowned|async|throws|rethrows|inout|out|ref|consuming|borrowing|move|unsafe|unchecked|comptime|some|any|nonisolated|prefix|postfix|using)\b</string>
 				</dict>
 				<dict>
 					<key>name</key>
@@ -616,6 +620,15 @@
 					<string>\b(macro|trait|impl|become|effect|handler)\b</string>
 				</dict>
 			</array>
+		</dict>
+		<key>shorthand</key>
+		<dict>
+			<key>comment</key>
+			<string>A closure's parameters by position: $0, $1.</string>
+			<key>name</key>
+			<string>variable.language.shorthand.sable</string>
+			<key>match</key>
+			<string>\$[0-9]+\b</string>
 		</dict>
 		<key>numbers</key>
 		<dict>
@@ -668,7 +681,7 @@
 					<key>name</key>
 					<string>support.type.builtin.sable</string>
 					<key>match</key>
-					<string>\b(Int|UInt|I8|I16|I32|I64|U8|U16|U32|U64|F32|F64|Bool|Char|String|Never|Void)\b</string>
+					<string>\b(Int|UInt|I8|I16|I32|I64|I128|U8|U16|U32|U64|U128|F16|F32|F64|Bool|Char|String|Never|Void)\b</string>
 				</dict>
 				<dict>
 					<key>name</key>

@@ -66,6 +66,10 @@
 (case_pattern case: (identifier) @constant)
 (field_initializer name: (identifier) @variable.member)
 (tuple_element label: (identifier) @label)
+(closure_parameter name: (identifier) @variable.parameter)
+(closure_signature name: (identifier) @variable.parameter)
+(trailing_closure label: (identifier) @label)
+(shorthand_parameter) @variable.parameter
 (self) @variable.builtin
 (super) @variable.builtin
 
@@ -101,7 +105,7 @@
 (parameter_modifier) @keyword.modifier
 
 [
-  "as" "as?" "as!" "is"
+  "as" "as?" "as!" "is" "unchecked"
 ] @keyword.operator
 
 ; ---- Punctuation and operators --------------------------------------------

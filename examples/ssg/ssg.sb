@@ -305,7 +305,7 @@ fn slugged(_ text: String) -> String {
 class Renderer {
     var html: TextBuilder = TextBuilder()
     /// Heading ids given out so far, so that each is unique on the page.
-    var ids: HashSet<String> = HashSet<String>()
+    var ids: Set<String> = Set<String>()
     var headings = 0
     var codeBlocks = 0
 

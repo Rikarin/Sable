@@ -263,8 +263,10 @@ compiler knows only by name: `[K: V]` binds to it (its key checked for
 `Hashable` as `Dictionary<K, V>` written out would be), `["a": 1]` calls its
 `init(dictionaryLiteral:)`, `d[k]` its subscript, and `for (k, v) in d` goes
 through its `Sequence` conformance like any other type's. There is one hashed
-map; `Sable.Collections.HashMap` is gone, and `HashSet` is a dictionary to
-`Bool` underneath.
+map; `Sable.Collections.HashMap` is gone, and `Set` (a value, with union,
+intersection and the subset tests) is a dictionary to `Bool` underneath.
+`InlineArray<T, N>` is the built-in `T[N]` by that name, and `SmallVec<T, N>`
+keeps `N` elements inline in a `T[..N]` before it moves to the heap.
 
 - **Layout.** An array of entries (key, value, the key's full hash) in the
   order keys were added, none where one was removed, and beside it an index:

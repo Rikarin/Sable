@@ -155,6 +155,44 @@ test("Neovim's language server configuration is a table that runs 'sable lsp'", 
   assert.equal(run.status, 0, run.stderr);
 });
 
+test("Neovim's tree-sitter setup registers the grammar with nvim-treesitter, either branch", { skip: !has("lua") && "lua is not installed" }, () => {
+  const file = path.join(editors, "vim", "lua", "sable", "treesitter.lua");
+  const run = cp.spawnSync("lua", ["-e", `
+    local function neovim()
+      local autocmds, registered = {}, {}
+      vim = {
+        log = { levels = { WARN = 2 } },
+        notify = function(message) error(message) end,
+        api = { nvim_create_autocmd = function(event, opts) autocmds[#autocmds + 1] = { event = event, opts = opts } end },
+        treesitter = { language = { register = function(lang, ft) registered[ft] = lang end }, start = function() end },
+      }
+      return autocmds, registered
+    end
+
+    -- The master branch: a table of parser configurations.
+    local autocmds, registered = neovim()
+    local configs = {}
+    package.loaded["nvim-treesitter.parsers"] = { get_parser_configs = function() return configs end }
+    dofile(${JSON.stringify(file)}).setup({ path = "/g" })
+    assert(configs.sable.install_info.url == "/g", "url")
+    assert(configs.sable.install_info.requires_generate_from_grammar, "generated from grammar.js")
+    assert(registered.sable == "sable", "filetype")
+    assert(autocmds[1].event == "FileType" and autocmds[1].opts.pattern == "sable", "started on a Sable buffer")
+
+    -- The main branch: the parser is declared on each :TSUpdate.
+    autocmds = neovim()
+    local parsers = {}
+    package.loaded["nvim-treesitter.parsers"] = parsers
+    dofile(${JSON.stringify(file)}).setup({ path = "/g" })
+    assert(autocmds[1].event == "User" and autocmds[1].opts.pattern == "TSUpdate", "TSUpdate")
+    autocmds[1].opts.callback()
+    assert(parsers.sable.install_info.path == "/g" and parsers.sable.install_info.generate, "main branch")
+  `], { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+  const query = path.join(editors, "vim", "queries", "sable", "highlights.scm");
+  assert.equal(fs.readFileSync(query, "utf8"), fs.readFileSync(path.join(editors, "tree-sitter-sable", "queries", "highlights.scm"), "utf8"));
+});
+
 test("Helix's languages.toml declares the language and its server", { skip: !has("python3") && "python3 is not installed" }, () => {
   const file = path.join(editors, "helix", "languages.toml");
   const run = cp.spawnSync("python3", ["-I", "-c", `
@@ -250,10 +288,31 @@ test("the tree-sitter grammar names only rules it defines", () => {
   assert.equal([...rules.keys()][0], "source_file", "source_file is the first rule");
 });
 
+test("the tree-sitter grammar has the syntax added since it was written", () => {
+  const { rules, strings } = readTreeSitterGrammar();
+  // The words a rule spells, its own and its fields', not those of the rules it names.
+  const words = (name) => {
+    const found = new Set();
+    const walk = (rule) => (rule.type === "STRING" && found.add(rule.value), rule.members.forEach(walk));
+    walk(rules.get(name));
+    return found;
+  };
+  for (const rule of ["yield_statement", "async_let_statement", "lambda_expression", "closure_signature", "shorthand_parameter", "unsafe_expression"]) {
+    assert.ok(rules.has(rule), `${rule} is a rule`);
+  }
+  assert.ok(words("for_statement").has("try"), "'for try' goes through a sequence that can fail");
+  assert.ok(words("throws_clause").has("rethrows"), "'rethrows(E)'");
+  assert.ok(words("cast_expression").has("unchecked"), "'x unchecked as T'");
+  assert.ok(words("try_expression").has("catch"), "'try f() catch fallback'");
+  assert.ok(words("modifier").has("unsafe"), "'unsafe fn'");
+  assert.ok(words("trailing_closure").size === 1 && words("trailing_closure").has(":"), "labelled trailing closures");
+  assert.ok(strings.has("=>"));
+});
+
 test("the tree-sitter grammar has every keyword of the VS Code grammar", () => {
   const { strings } = readTreeSitterGrammar();
   const reserved = new Set(["macro", "trait", "impl", "become", "effect", "handler"]);
-  const builtinTypes = new Set(["Int", "UInt", "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "F32", "F64", "Bool", "Char", "String", "Never", "Void"]);
+  const builtinTypes = new Set(["Int", "UInt", "I8", "I16", "I32", "I64", "I128", "U8", "U16", "U32", "U64", "U128", "F16", "F32", "F64", "Bool", "Char", "String", "Never", "Void"]);
   const missing = grammarWords().filter((w) => !reserved.has(w) && !builtinTypes.has(w) && !strings.has(w));
   assert.deepEqual(missing, []);
 });

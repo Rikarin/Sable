@@ -9,6 +9,7 @@ namespace Sable.CodeGen.Tests;
 ///     'private(set)', static stored properties and module-level variables,
 ///     and checked downcasts. Native and interpreted, leak-checked.
 /// </summary>
+[Native]
 public sealed class ClassTests {
     const string Declarations = """
                                 protocol Named {

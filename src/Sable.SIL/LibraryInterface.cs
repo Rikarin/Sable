@@ -152,10 +152,20 @@ public sealed class LibraryInterface {
             return (null, failed);
         }
 
+        return (Of(compilation, unit, owns, compiler, SettingsOf(compilation.Options, denyReflection), SilPrinter.Print(module, keepBlockOrder: true)), []);
+    }
+
+    /// <summary>
+    ///     The interface of a unit a build has lowered already: its files'
+    ///     symbols, and <paramref name="sil" />, the unit's SIL as lowering
+    ///     made it — before the passes — printed with each function's block
+    ///     order kept (<see cref="SilPrinter.Print(SilModule, bool)" />).
+    /// </summary>
+    public static LibraryInterface Of(Compilation compilation, string unit, Func<SyntaxTree, bool> owns, string compiler, string settings, string sil) {
+        var files = compilation.SyntaxTrees.Where(owns).ToList();
         var names = files.Select(CoreLibrary.ModuleOf).OfType<string>().ToHashSet(StringComparer.Ordinal);
         var modules = compilation.Modules.Where(m => names.Contains(m.Name)).OrderBy(static m => m.Name, StringComparer.Ordinal).ToList();
-        var settings = SettingsOf(compilation.Options, denyReflection);
-        return (new(
+        return new(
             unit,
             compiler,
             settings,
@@ -163,8 +173,8 @@ public sealed class LibraryInterface {
             [..modules.Select(static m => m.Name)],
             ExtensionsOf(compilation, modules),
             SymbolInterface.Write(modules, compilation.Modules),
-            SilPrinter.Print(module, keepBlockOrder: true)
-        ), []);
+            sil
+        );
     }
 
     /// <summary>

@@ -13,15 +13,13 @@ namespace Sable.Driver;
 ///     rather than lowered.
 /// </summary>
 public static partial class Pipeline {
-    static readonly Lazy<string> Identity = new(static () =>
-        LibraryInterface.IdentityOf([..LibraryInterface.FrontEnd, typeof(LlvmEmitter).Assembly, typeof(Pipeline).Assembly]));
-
     /// <summary>
     ///     This compiler's identity, as an interface it writes records it
-    ///     (<see cref="LibraryInterface.IdentityOf" />): a hash of its own
-    ///     build, so that no other build of it reads what this one wrote.
+    ///     (<see cref="Sable.CodeGen.CompilerIdentity" />, what the build
+    ///     cache is keyed by): a hash of its own build, so that no other
+    ///     build of it reads what this one wrote.
     /// </summary>
-    public static string CompilerIdentity => Identity.Value;
+    public static string CompilerIdentity => Sable.CodeGen.CompilerIdentity.Current;
 
     /// <summary>
     ///     <c>Sable.Core</c>'s interface for files parsed with
@@ -85,7 +83,7 @@ public static partial class Pipeline {
         }
 
         var level = optLevel ?? (optimised ? "2" : "0");
-        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, level, target, checkOverflow, false, denyReflection, checkArc,
+        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, level, target, checkOverflow, false, denyReflection, checkArc, onDemand: null,
             lower: c => LowerAgainst(c, interfaces, denyReflection)) with { Warnings = warnings };
     }
 
@@ -104,7 +102,10 @@ public static partial class Pipeline {
             library.LinkInto(module);
         }
 
+        // Of the libraries' code, what the program reaches: what compiling
+        // it whole lowers, and all the code generator would emit.
         module.Unit = null;
+        SilPassManager.RemoveUnreachable(module);
         return (module, diagnostics);
     }
 

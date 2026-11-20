@@ -10,6 +10,7 @@ namespace Sable.CodeGen.Tests;
 ///     and the two must print the same digits — the shortest that
 ///     round-trip, so the same bits.
 /// </summary>
+[Native]
 public sealed class ElementaryFunctionTests {
     const string Specials = """
                                 let inf = F64.fromBits(0x7FF0_0000_0000_0000)

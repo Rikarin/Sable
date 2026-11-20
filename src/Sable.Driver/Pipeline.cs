@@ -101,19 +101,32 @@ public static partial class Pipeline {
         string? optLevel = null,
         bool checkArc = false
     ) {
+        var level = optLevel ?? (optimised ? "2" : "0");
         Compilation compilation;
         List<string> errors;
         List<string> warnings;
+        LibraryCheck? check;
+        Func<SyntaxTree, bool>? standard;
         using (BuildTimings.Of(timings, "bind")) {
             compilation = CompilationOf(program);
+            // The standard library's bodies, once it is known to check
+            // cleanly with a program that cannot change that, are neither
+            // checked again nor lowered beyond what the program reaches. A
+            // library C links starts from its exports, and is lowered whole.
+            check = library ? null : Library.CheckFor(compilation, program);
+            standard = check?.Skipped;
             // The SIL checks run as the program is lowered, below.
-            errors = Formatted(compilation.GetAllDiagnosticsByFile(), program);
+            errors = Formatted(standard is null ? compilation.GetAllDiagnosticsByFile() : compilation.GetAllDiagnosticsByFile(t => !standard(t)), program);
             warnings = Warnings(compilation, program);
         }
 
         // The warnings go with whatever comes back, an error or the IR.
-        var level = optLevel ?? (optimised ? "2" : "0");
-        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, level, target, checkOverflow, library, denyReflection, checkArc) with { Warnings = warnings };
+        var result = CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, level, target, checkOverflow, library, denyReflection, checkArc, standard) with { Warnings = warnings };
+        if (standard is null && result.Succeeded) {
+            check?.Passed();
+        }
+
+        return result;
     }
 
     /// <summary>The rest of <see cref="Compile(IReadOnlyList{SyntaxTree}, string?, bool, BuildTimings?, bool)" />, from a checked program.</summary>
@@ -130,6 +143,7 @@ public static partial class Pipeline {
         bool library,
         bool denyReflection,
         bool checkArc,
+        Func<SyntaxTree, bool>? onDemand,
         Func<Compilation, (SilModule, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)>)>? lower = null
     ) {
         if (errors.Count > 0) {
@@ -140,7 +154,7 @@ public static partial class Pipeline {
         IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> lowering;
         using (BuildTimings.Of(timings, "sil")) {
             (module, lowering) = lower is not null ? lower(compilation)
-                : library ? SilGen.LowerLibraryByFile(compilation, denyReflection) : SilGen.LowerByFile(compilation, denyReflection);
+                : library ? SilGen.LowerLibraryByFile(compilation, denyReflection) : SilGen.LowerByFile(compilation, denyReflection, onDemand);
         }
 
         module.CheckExclusivity = checkExclusivity;
@@ -166,12 +180,17 @@ public static partial class Pipeline {
         }
 
         // The SIL passes the opt-level asks for, each followed by the
-        // verifier. An unoptimised debug build keeps every local in its slot,
-        // where the debug information says it is; an optimised one runs them
-        // as any other, and the debugger sees what they leave.
+        // verifier, over what the program can reach: nothing else is
+        // emitted, and what the inliner and the others decide of a function
+        // does not then depend on callers no program runs (nor on whether
+        // the library's were lowered: LibraryCheck). An unoptimised debug
+        // build keeps every local in its slot, where the debug information
+        // says it is; an optimised one runs them as any other, and the
+        // debugger sees what they leave.
         if (debugDirectory is null || optLevel != "0") {
             try {
                 using var _ = BuildTimings.Of(timings, "passes");
+                SilPassManager.RemoveUnreachable(module);
                 SilPassManager.Run(module, SilPassManager.ForLevel(optLevel));
             } catch (SilPassException failure) {
                 return new(module, null, [$"internal error: {failure.Message}"]);
@@ -336,8 +355,9 @@ public static partial class Pipeline {
     /// </summary>
     public static List<string> Warnings(Compilation compilation, IReadOnlyList<SyntaxTree> program) {
         var order = program.Select(static (tree, index) => (tree, index)).ToDictionary(static p => p.tree, static p => p.index);
+        // Only the program's bodies need binding for them.
         return [
-            ..compilation.GetAllDiagnosticsByFile()
+            ..compilation.GetAllDiagnosticsByFile(order.ContainsKey)
                 .Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Warning)
                 .Where(d => d.Tree is { } t && order.ContainsKey(t))
                 .OrderBy(d => order[d.Tree!])

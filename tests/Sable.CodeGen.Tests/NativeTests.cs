@@ -11,6 +11,7 @@ namespace Sable.CodeGen.Tests;
 ///     These need a C compiler. Without one they pass vacuously, saying so in
 ///     the output, rather than failing a machine that cannot build binaries.
 /// </remarks>
+[Native]
 public sealed class NativeTests {
     static readonly bool CanBuild = NativeBuild.IsAvailable();
 
@@ -516,9 +517,9 @@ public sealed class NativeTests {
 
     /// <summary>
     ///     The runtime is compiled once for each set of options that changes
-    ///     it, and kept: a second program built the same way links the object
-    ///     the first one left, rather than compiling 3,000 lines of C again.
-    ///     A build with other options makes, and keeps, another.
+    ///     it, and kept as an archive: a second program built the same way
+    ///     links the archive the first one left, rather than compiling 3,000
+    ///     lines of C again. A build with other options makes, and keeps, another.
     /// </summary>
     [Fact]
     public void TheRuntimeIsCompiledOnceAndKept() {
@@ -528,23 +529,27 @@ public sealed class NativeTests {
 
         var cache = Directory.CreateTempSubdirectory("sable-runtime-cache-");
         var executable = Platform.Executable(Path.Combine(cache.FullName, "program"));
+        var kept = new BuildCache(Path.Combine(cache.FullName, "cache"));
         try {
             var compiled = Pipeline.Compile(new SourceText("module Kept\n\n@main\nfn main() {\n    print(\"kept\")\n}\n", "test.sb"));
             Assert.True(compiled.Succeeded, string.Join("\n", compiled.Errors));
             var ir = compiled.LlvmIr!;
             var options = NativeOptions.Of(optimise: true, debug: false);
-            Assert.True(NativeBuild.Build(ir, executable, options, cache.FullName).Succeeded);
-            var runtime = Assert.Single(Directory.GetFiles(cache.FullName, "runtime-*.o"));
-            var written = File.GetLastWriteTimeUtc(runtime);
+            Assert.True(NativeBuild.Build(ir, executable, options, kept).Succeeded);
+            var runtime = Assert.Single(kept.Entries(), static e => e.Package == "sable-runtime").Directory;
+            var archive = Path.Combine(runtime, NativeBuild.LibraryFileName("sable_runtime", LibraryKind.Static, NativeTarget.Host));
+            Assert.True(File.Exists(archive));
+            var written = File.GetLastWriteTimeUtc(archive);
 
             Platform.DeleteExecutable(executable);
-            Assert.True(NativeBuild.Build(ir, executable, options, cache.FullName).Succeeded);
-            Assert.Equal(written, File.GetLastWriteTimeUtc(Assert.Single(Directory.GetFiles(cache.FullName, "runtime-*.o"))));
+            Assert.True(NativeBuild.Build(ir, executable, options, kept).Succeeded);
+            Assert.Equal(runtime, Assert.Single(kept.Entries()).Directory);
+            Assert.Equal(written, File.GetLastWriteTimeUtc(archive));
             Assert.Equal(("kept\n", 0), PackageFixture.Execute(executable));
 
-            // Unoptimised, it is another object.
-            Assert.True(NativeBuild.Build(ir, executable, NativeOptions.Of(optimise: false, debug: false), cache.FullName).Succeeded);
-            Assert.Equal(2, Directory.GetFiles(cache.FullName, "runtime-*.o").Length);
+            // Unoptimised, it is another.
+            Assert.True(NativeBuild.Build(ir, executable, NativeOptions.Of(optimise: false, debug: false), kept).Succeeded);
+            Assert.Equal(2, kept.Entries().Count);
             Assert.Equal(("kept\n", 0), PackageFixture.Execute(executable));
         } finally {
             cache.Delete(true);

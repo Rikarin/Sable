@@ -11,6 +11,7 @@ namespace Sable.CodeGen.Tests;
 ///     Each program runs natively and interpreted, the two agreeing, and
 ///     neither leaking.
 /// </summary>
+[Native]
 public sealed class StructuredConcurrencyTests {
     static string AsyncProgram(string declarations, string body) =>
         $"module Test\n{declarations}\n@main\nfn main() async {{\n{body}\n}}\n";

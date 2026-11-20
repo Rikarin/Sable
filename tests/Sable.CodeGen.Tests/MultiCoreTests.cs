@@ -12,6 +12,7 @@ namespace Sable.CodeGen.Tests;
 ///     nothing leaked. Every program here prints the same whatever the
 ///     interleaving, so the interpreter, on one thread, agrees with it.
 /// </summary>
+[Native]
 public sealed class MultiCoreTests {
     static string AsyncProgram(string declarations, string body) =>
         $"module Test\n{declarations}\n@main\nfn main() async {{\n{body}\n}}\n";

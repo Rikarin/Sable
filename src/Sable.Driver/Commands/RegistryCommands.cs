@@ -280,60 +280,6 @@ public sealed class UninstallCommand : PackageCommand {
     }
 }
 
-/// <summary><c>sable cache</c>: what the package cache holds, and collecting what is no longer used.</summary>
-public sealed class CacheCommand : PackageCommand {
-    public override string Name => "cache";
-    public override string Summary => "list or collect the package cache";
-
-    public override string Usage => """
-        usage: sable cache list
-               sable cache gc [--max-age <days>]
-               sable cache clean
-
-          list       the fetched packages, with their sizes and when a build last used them
-          gc         remove packages no build has used, and evaluated manifests not made, in
-                     --max-age days (default 30); a build fetches them again if it needs them
-          clean      remove the whole cache
-        """;
-
-    public override int Run(IReadOnlyList<string> arguments) {
-        switch (arguments) {
-            case ["list"]:
-                return Guard(() => {
-                    var packages = PackageCache.List(Environment);
-                    foreach (var package in packages) {
-                        Console.WriteLine($"{Path.GetFileName(package.Directory),-40} {PackageCache.Describe(package.Bytes),10}  used {package.LastUsed.ToLocalTime():yyyy-MM-dd}");
-                    }
-
-                    Console.WriteLine($"{packages.Count} package(s), {PackageCache.Describe(packages.Sum(static p => p.Bytes))}, in {Environment.CacheDirectory}");
-                    return 0;
-                });
-            case ["gc", ..]:
-                var days = 30;
-                if (arguments is ["gc", "--max-age", var text] && (!int.TryParse(text, out days) || days < 0) || arguments is not (["gc"] or ["gc", "--max-age", _])) {
-                    return BadUsage();
-                }
-
-                return Guard(() => {
-                    var (removed, bytes) = PackageCache.Collect(Environment, TimeSpan.FromDays(days));
-                    foreach (var path in removed) {
-                        Environment.Status.WriteLine($"    Removing {path}");
-                    }
-
-                    Environment.Status.WriteLine($"     Removed {removed.Count} item(s), {PackageCache.Describe(bytes)}");
-                    return 0;
-                });
-            case ["clean"]:
-                return Guard(() => {
-                    Environment.Status.WriteLine($"     Removed the cache, {PackageCache.Describe(PackageCache.Clear(Environment))}");
-                    return 0;
-                });
-            default:
-                return BadUsage();
-        }
-    }
-}
-
 /// <summary>
 ///     <c>sable registry</c>: runs a network registry (<see cref="RegistryServer" />)
 ///     and issues its tokens — for a team's or a company's own registry, and

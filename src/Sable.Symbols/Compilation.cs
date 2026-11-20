@@ -269,20 +269,20 @@ public sealed partial class Compilation {
     public IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> GetAllDiagnosticsByFile() => GetAllDiagnosticsByFile(static _ => true);
 
     /// <summary>
-    ///     <see cref="GetAllDiagnosticsByFile()" />, with only the bodies of
-    ///     the files <paramref name="checkBodies" /> picks bound and checked:
-    ///     a program compiled against a library's interface (<c>.sbi</c>) does
-    ///     not check the library's bodies again, which were checked when the
-    ///     interface was written. Every file's declarations are still checked.
+    ///     The same, with the bodies of only the files <paramref name="bodiesOf" />
+    ///     picks bound and checked: the declarations and signatures of every
+    ///     file still are. What a build asks once the standard library is
+    ///     known to check cleanly with whatever program it is compiled with
+    ///     (<see cref="ReachesIntoLibrary" />).
     /// </summary>
-    public IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> GetAllDiagnosticsByFile(Func<SyntaxTree, bool> checkBodies) {
+    public IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> GetAllDiagnosticsByFile(Func<SyntaxTree, bool> bodiesOf) {
         var all = new List<(Diagnostic, SyntaxTree?)>();
         foreach (var tree in SyntaxTrees) {
             all.AddRange(tree.Diagnostics.Select(d => (d, (SyntaxTree?)tree)));
         }
 
         foreach (var tree in SyntaxTrees) {
-            if (_fileScopes.ContainsKey(tree) && checkBodies(tree)) {
+            if (_fileScopes.ContainsKey(tree) && bodiesOf(tree)) {
                 all.AddRange(GetSemanticModel(tree).GetDiagnostics().Select(d => (d, (SyntaxTree?)tree)));
             }
         }
@@ -291,6 +291,51 @@ public sealed partial class Compilation {
         all.AddRange(_declarationDiagnostics.Select(d => (d, FileOf(d))));
         all.AddRange(TypeBinder.Diagnostics.Select(d => (d, FileOf(d))));
         return all;
+    }
+
+    /// <summary>
+    ///     Whether the files given — a program's own — can change how the
+    ///     compilation's other files, the standard library's, bind or lower:
+    ///     by extending one of the library's types or protocols (which adds
+    ///     members and conformances to the library's own symbols, where its
+    ///     bodies' overload resolution sees them), by subclassing one of its
+    ///     classes (which makes the class's methods dispatch), or by declaring
+    ///     a file of one of its modules. Name lookup in a library file sees
+    ///     only its module, Sable.Core and what it imports, never a program's
+    ///     module, so a program that does none of these leaves the library's
+    ///     bodies binding, and lowering, as they do with any other.
+    /// </summary>
+    public bool ReachesIntoLibrary(IReadOnlyCollection<SyntaxTree> own) {
+        var libraryModules = SyntaxTrees.Where(t => !own.Contains(t)).Select(CoreLibrary.ModuleOf).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        libraryModules.Add(CoreLibrary.ModuleName);
+        bool IsLibrary(TypeSymbol type) =>
+            type is not NamedTypeSymbol named || named.OriginalDefinition.ContainingModule?.Name is not { } module || libraryModules.Contains(module);
+
+        foreach (var tree in own) {
+            if (CoreLibrary.ModuleOf(tree) is { } module && libraryModules.Contains(module)) {
+                return true;
+            }
+
+            foreach (var node in tree.Root.DescendantNodes()) {
+                switch (node) {
+                    case ExtensionDeclarationSyntax extension:
+                        if (GetDeclaredSymbol(extension) is not ExtensionSymbol { ExtendedType: var extended } || IsLibrary(extended)) {
+                            return true;
+                        }
+
+                        break;
+                    case ClassDeclarationSyntax or ActorDeclarationSyntax:
+                        if (GetDeclaredSymbol(node) is NamedTypeSymbol type
+                            && type.BaseTypes.Any(b => b is NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } && IsLibrary(b))) {
+                            return true;
+                        }
+
+                        break;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>A declaration diagnostic found by a later check, in the file it was captured from.</summary>

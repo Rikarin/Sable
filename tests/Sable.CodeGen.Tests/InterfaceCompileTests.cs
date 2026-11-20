@@ -19,26 +19,41 @@ public sealed class InterfaceCompileTests {
     static SyntaxTree Parse(string source) => SyntaxTree.Parse(new SourceText(source, "test.sb"));
 
     /// <summary>
-    ///     A module's functions and declarations, each as SIL text, sorted.
-    ///     The interface's SIL was printed and read back, which numbers a
-    ///     function's blocks in the order their dominators come (SilPrinter);
-    ///     the whole program's is printed and read back too, so that the two
-    ///     are compared as SIL, not by the order lowering happened to make
-    ///     their blocks or functions in.
+    ///     The functions a module's program reaches — from its entry point,
+    ///     its exports and what its types name (vtables, deinits) — each as
+    ///     SIL text, sorted. Compiled whole, a program lowers only the
+    ///     library code it reaches; against an interface it links in all of
+    ///     the library's, of which it reaches the same. The interface's SIL
+    ///     was printed and read back, which numbers values and blocks afresh,
+    ///     so the whole program's is printed and read back too, and the two
+    ///     are compared as SIL, not by the order lowering made them in.
     /// </summary>
     static List<string> Sil(SilModule module) {
         var text = SilPrinter.Print(SilParser.Parse(SilPrinter.Print(module)));
-        var parts = new List<string>();
+        var functions = new Dictionary<string, string>(StringComparer.Ordinal);
+        var roots = new List<string> { module.EntryPoint! };
         foreach (var chunk in text.Split("\n\n")) {
             if (chunk.StartsWith("sil @", StringComparison.Ordinal)) {
-                parts.Add(chunk);
+                functions[chunk[5..chunk.IndexOf(' ', 5)]] = chunk.TrimEnd();
             } else {
-                parts.AddRange(chunk.Split('\n').Where(static l => l.Length > 0));
+                roots.AddRange(References(chunk));
             }
         }
 
-        parts.Sort(StringComparer.Ordinal);
-        return parts;
+        var reached = new HashSet<string>(StringComparer.Ordinal);
+        var waiting = new Stack<string>(roots);
+        while (waiting.TryPop(out var name)) {
+            if (reached.Add(name) && functions.TryGetValue(name, out var body)) {
+                foreach (var referenced in References(body)) {
+                    waiting.Push(referenced);
+                }
+            }
+        }
+
+        return [..reached.Where(functions.ContainsKey).Select(n => functions[n]).Order(StringComparer.Ordinal)];
+
+        static IEnumerable<string> References(string sil) =>
+            System.Text.RegularExpressions.Regex.Matches(sil, @"@([^\s:(),\[\]{}""]+)").Select(static m => m.Groups[1].Value);
     }
 
     static string Run(SilModule module) {

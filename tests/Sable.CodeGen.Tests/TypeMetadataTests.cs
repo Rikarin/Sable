@@ -8,6 +8,7 @@ namespace Sable.CodeGen.Tests;
 ///     field descriptors, conformance records and the registry's lookup, and
 ///     what <c>--deny-reflection</c> leaves out (#218).
 /// </summary>
+[Native]
 public sealed class TypeMetadataTests {
     const string Classes = """
                            module Zoo

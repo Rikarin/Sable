@@ -7,6 +7,7 @@ namespace Sable.CodeGen.Tests;
 ///     <c>TypeInfo.of</c> on a <c>@reflectable</c> type, native and
 ///     interpreted alike, leak-checked.
 /// </summary>
+[Native]
 public sealed class ReflectionTests {
     static void Prints(string expected, string declarations, string body) =>
         Assert.Equal(expected, AssertAgree(Program(declarations, body)).Stdout);

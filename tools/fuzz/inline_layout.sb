@@ -200,6 +200,22 @@ fn check(_ bytes: U8[>..], _ isOrder: Bool) -> Int {
     }
 }
 
+/// The same check as a target of 'sable fuzz' (the nightly workflow runs it
+/// so): the first byte says which record the rest is read as.
+@fuzz
+fn fromBytes(_ data: U8[:]) {
+    if data.count == 0 {
+        return
+    }
+    var bytes: U8[>..] = []
+    for i in 1..<data.count {
+        bytes.append(data[i])
+    }
+    if check(bytes, data[0] % 2 == 0) < 0 {
+        fatalError("fromBytes accepted a record that does not write back as it was read")
+    }
+}
+
 // The coverage-guided harness (tools/fuzz/from_bytes.c, built by
 // tools/fuzz/coverage.sh): libFuzzer chooses the bytes, and C hands them
 // over one at a time, as only integers cross to C, then asks for the check.

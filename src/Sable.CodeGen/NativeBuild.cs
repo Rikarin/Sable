@@ -775,7 +775,7 @@ public static class NativeBuild {
         }
     }
 
-    static (int ExitCode, string Output) Run(string program, IEnumerable<string> arguments) {
+    internal static (int ExitCode, string Output) Run(string program, IEnumerable<string> arguments) {
         var start = new ProcessStartInfo(program) {
             RedirectStandardOutput = true,
             RedirectStandardError = true,

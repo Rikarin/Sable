@@ -229,6 +229,19 @@ minimised copy (`.min`). `<run>/bin/Sable.Fuzz <target> replay <file>`
 reproduces one. A fixed bug's minimised input becomes a regression test in the
 layer's own project.
 
+`sable fuzz` is the toolchain's own fuzzer, for any package's `@fuzz`
+functions (docs/05 §5.1), and what replaces the C# fuzzers once the compiler
+is written in Sable. The repository's targets are in
+[tools/fuzz/stdlib.sb](tools/fuzz/stdlib.sb) and `fromBytes` in
+[tools/fuzz/inline_layout.sb](tools/fuzz/inline_layout.sb), fuzzed nightly;
+locally, as with the other fuzzers, keep runs short:
+
+```bash
+sable fuzz tools/fuzz/stdlib.sb --list
+sable fuzz tools/fuzz/stdlib.sb utf8 --time 5m    # needs a clang with libFuzzer
+sable fuzz tools/fuzz/stdlib.sb --replay          # the saved inputs, with any clang
+```
+
 ## Design documents
 
 [docs/04-implementation-plan.md](docs/04-implementation-plan.md) is the build

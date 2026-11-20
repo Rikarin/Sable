@@ -2609,6 +2609,24 @@ least a year past self-hosting: compile the corpus with both, diff the SIL.
 Discrepancies are bugs in one of them, and that is far cheaper than finding
 them in production.
 
+### Fuzzed from its first day
+
+`sable fuzz` (docs/05 §5.1, #252) is the toolchain's own fuzzing, ready
+before the port starts, so that each stage is fuzzed as it lands rather than
+when the C# fuzzers (tools/fuzz, `CompilerFuzzTests`, `ResolverFuzzTests`)
+retire. A `@fuzz` function takes the fuzzer's bytes (`U8[:]`); the program is
+built as a library whose exports C calls once an input, with LLVM's
+SanitizerCoverage, AddressSanitizer and UBSan, linked with libFuzzer; the
+corpus and what fails (minimised, summed up by distinct failure) are kept
+under `target/fuzz/<target>/`, and `--replay` runs them again with any clang.
+The nightly workflow fuzzes the repository's `@fuzz` targets
+(`tools/fuzz/stdlib.sb`, `fromBytes` in `tools/fuzz/inline_layout.sb`).
+**Deferred:** `sable test` replaying every saved input; `@derive(Arbitrary)`
+and a grammar-aware mutator built on the syntax tree; a dictionary from the
+lexer's tables; differential targets (self-hosted against C#, the
+interpreter against native code, `-O0` against `-O3`); and coverage from the
+same counters for `sable test --coverage`.
+
 ### Exit criteria
 - [ ] Stage 6 fixed point reached
 - [ ] Self-hosted compiler within 1.5× the C# compiler's speed

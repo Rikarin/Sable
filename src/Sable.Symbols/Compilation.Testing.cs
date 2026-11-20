@@ -2,15 +2,16 @@ using Sable.Syntax;
 
 namespace Sable.Symbols;
 
-/// <summary>Which harness a function is for: <c>@test</c>'s or <c>@bench</c>'s.</summary>
+/// <summary>Which harness a function is for: <c>@test</c>'s, <c>@bench</c>'s or <c>@fuzz</c>'s.</summary>
 public enum TestKind {
     Test,
     Bench,
+    Fuzz,
 }
 
 /// <summary>
-///     A function marked <c>@test</c> or <c>@bench</c> that the harness can
-///     call, and how.
+///     A function marked <c>@test</c>, <c>@bench</c> or <c>@fuzz</c> that the
+///     harness can call, and how.
 /// </summary>
 /// <param name="CallPath">
 ///     What names it from a file of its own module: the function's name, or
@@ -44,8 +45,9 @@ public sealed record TestFunction(
 }
 
 /// <summary>
-///     <c>@test</c> and <c>@bench</c> (docs/05 §5.1): the functions
-///     <c>sable test</c> and <c>sable bench</c> collect into a harness.
+///     <c>@test</c>, <c>@bench</c> and <c>@fuzz</c> (docs/05 §5.1): the
+///     functions <c>sable test</c>, <c>sable bench</c> and <c>sable fuzz</c>
+///     collect into a harness.
 /// </summary>
 /// <remarks>
 ///     <para>
@@ -56,6 +58,14 @@ public sealed record TestFunction(
 ///         a module or a static method of a type that is not generic, so that
 ///         the harness has one thing to call; neither is generic, and a
 ///         benchmark is not async. A test may be async, and is awaited.
+///     </para>
+///     <para>
+///         A fuzz target takes one <c>U8[:]</c>, the fuzzer's input, and gives
+///         nothing back; it fails by trapping — a failed assertion, an index
+///         out of range, a <c>fatalError</c> — or by throwing. It is called
+///         from C, once an input, so it is not async; like the others it is a
+///         function of a module or a static method of a type that is not
+///         generic, and is not generic itself.
 ///     </para>
 ///     <para>
 ///         <c>@test(traps)</c> marks a test that passes by trapping — an index
@@ -70,7 +80,7 @@ public sealed record TestFunction(
 ///     </para>
 /// </remarks>
 public sealed partial class Compilation {
-    const string TestAttribute = "test", BenchAttribute = "bench";
+    const string TestAttribute = "test", BenchAttribute = "bench", FuzzAttribute = "fuzz";
 
     /// <summary>Every well-formed <c>@test</c> (or <c>@bench</c>) function, in file and source order.</summary>
     public IReadOnlyList<TestFunction> GetTestFunctions(TestKind kind) {
@@ -90,7 +100,7 @@ public sealed partial class Compilation {
         return found;
     }
 
-    /// <summary>What is wrong with the file's <c>@test</c> and <c>@bench</c> functions; its semantic model reports these.</summary>
+    /// <summary>What is wrong with the file's <c>@test</c>, <c>@bench</c> and <c>@fuzz</c> functions; its semantic model reports these.</summary>
     internal IReadOnlyList<Diagnostic> CheckTestFunctions(SyntaxTree tree) {
         var diagnostics = new List<Diagnostic>();
         foreach (var declaration in tree.Root.DescendantNodes().OfType<FunctionDeclarationSyntax>()) {
@@ -107,6 +117,7 @@ public sealed partial class Compilation {
             switch (attribute.Name.ToString().Trim()) {
                 case TestAttribute: return TestKind.Test;
                 case BenchAttribute: return TestKind.Bench;
+                case FuzzAttribute: return TestKind.Fuzz;
             }
         }
 
@@ -115,10 +126,14 @@ public sealed partial class Compilation {
 
     /// <summary>The test the declaration is, or null, reporting why not when there is somewhere to.</summary>
     TestFunction? Examine(FunctionDeclarationSyntax declaration, SyntaxTree tree, List<Diagnostic>? diagnostics) {
-        var attributes = declaration.Attributes.Where(static a => a.Name.ToString().Trim() is TestAttribute or BenchAttribute).ToList();
+        var attributes = declaration.Attributes.Where(static a => a.Name.ToString().Trim() is TestAttribute or BenchAttribute or FuzzAttribute).ToList();
         var first = attributes[0];
-        var kind = first.Name.ToString().Trim() == TestAttribute ? TestKind.Test : TestKind.Bench;
-        var marker = kind == TestKind.Test ? "'@test'" : "'@bench'";
+        var kind = first.Name.ToString().Trim() switch {
+            TestAttribute => TestKind.Test,
+            BenchAttribute => TestKind.Bench,
+            _ => TestKind.Fuzz,
+        };
+        var marker = $"'@{first.Name.ToString().Trim()}'";
         var ok = true;
 
         void Report(ErrorCode code, TextSpan span, string message) {
@@ -127,13 +142,13 @@ public sealed partial class Compilation {
         }
 
         if (attributes.Select(static a => a.Name.ToString().Trim()).Distinct().Count() > 1) {
-            Report(ErrorCode.ERR_TestAndBench, attributes[1].Span, "a function is a test or a benchmark, not both");
+            Report(ErrorCode.ERR_TestAndBench, attributes[1].Span, "a function is one of a test, a benchmark and a fuzz target, not more");
         }
 
         string? expectedTrap = null;
         foreach (var attribute in attributes.Where(static a => a.ArgumentList is not null)) {
-            if (attribute.Name.ToString().Trim() == BenchAttribute) {
-                Report(ErrorCode.ERR_TestAttributeArguments, attribute.ArgumentList!.Span, "'@bench' takes no arguments");
+            if (attribute.Name.ToString().Trim() is BenchAttribute or FuzzAttribute) {
+                Report(ErrorCode.ERR_TestAttributeArguments, attribute.ArgumentList!.Span, $"'@{attribute.Name.ToString().Trim()}' takes no arguments");
             } else if (TrapExpected(attribute) is { } trap) {
                 expectedTrap = trap;
             } else {
@@ -152,13 +167,21 @@ public sealed partial class Compilation {
         }
 
         if (function.ReturnType is var returned && !ReferenceEquals(returned, Core.Void) && returned is not ErrorTypeSymbol) {
-            Report(ErrorCode.ERR_TestReturnsValue, declaration.ReturnClause?.Span ?? declaration.Identifier.Span, $"a {Noun(kind)} returns nothing: it fails by failing an assertion{(kind == TestKind.Test ? " or throwing" : "")}, not by what it returns");
+            Report(ErrorCode.ERR_TestReturnsValue, declaration.ReturnClause?.Span ?? declaration.Identifier.Span, $"a {Noun(kind)} returns nothing: it fails by failing an assertion{(kind == TestKind.Bench ? "" : " or throwing")}, not by what it returns");
         }
 
         var takesBencher = false;
         if (kind == TestKind.Test) {
             if (function.Parameters.Length > 0) {
                 Report(ErrorCode.ERR_TestTakesParameters, declaration.Parameters.Span, "a test takes no parameters: the harness has nothing to pass it");
+            }
+        } else if (kind == TestKind.Fuzz) {
+            if (function.Parameters is not [{ Type: ArrayTypeSymbol { ArrayKind: ArrayKind.Slice, ElementType: var element } }] || !ReferenceEquals(element, Core.U8)) {
+                Report(ErrorCode.ERR_FuzzSignature, declaration.Parameters.Span, "a fuzz target takes one 'U8[:]': the bytes the fuzzer chose");
+            }
+
+            if (function.IsAsync) {
+                Report(ErrorCode.ERR_FuzzSignature, declaration.Identifier.Span, "a fuzz target is not async: C calls it once an input, and waits for nothing");
             }
         } else if (function.Parameters.Length == 1 && IsBencher(function.Parameters[0].Type)) {
             takesBencher = true;
@@ -236,7 +259,11 @@ public sealed partial class Compilation {
         return null;
     }
 
-    static string Noun(TestKind kind) => kind == TestKind.Test ? "test" : "benchmark";
+    static string Noun(TestKind kind) => kind switch {
+        TestKind.Test => "test",
+        TestKind.Bench => "benchmark",
+        _ => "fuzz target",
+    };
 
     static bool IsBencher(TypeSymbol type) =>
         type is NamedTypeSymbol { Name: "Bencher" } named && named.ContainingModule?.Name == "Sable.Testing";

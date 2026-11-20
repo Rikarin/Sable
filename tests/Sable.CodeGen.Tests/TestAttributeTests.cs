@@ -1,10 +1,11 @@
+using Sable.Symbols;
 using static Sable.CodeGen.Tests.Harnesses;
 
 namespace Sable.CodeGen.Tests;
 
 /// <summary>
-///     What may be marked <c>@test</c> or <c>@bench</c>: S3100–S3110,
-///     reported in every build, not only a test build.
+///     What may be marked <c>@test</c>, <c>@bench</c> or <c>@fuzz</c>:
+///     S3100–S3110, reported in every build, not only a test build.
 /// </summary>
 public sealed class TestAttributeTests {
     static string Program(string declarations) =>
@@ -50,7 +51,7 @@ public sealed class TestAttributeTests {
 
     [Fact]
     public void NotBoth() =>
-        Rejects("S3106", "@test @bench\nfn t() { }", "not both");
+        Rejects("S3106", "@test @bench\nfn t() { }", "one of a test, a benchmark and a fuzz target");
 
     [Fact]
     public void TheAttributesTakeOnlyWhatTheyTake() {
@@ -67,6 +68,56 @@ public sealed class TestAttributeTests {
     public void NotOnAGenericTypeOrPrivateMethod() {
         Rejects("S3109", "struct Box<T> {\n    @test\n    static fn t() { }\n}", "a method of a generic type");
         Rejects("S3109", "struct S {\n    @test\n    private static fn t() { }\n}", "a private method");
+    }
+
+    [Fact]
+    public void AFuzzTargetTakesOneByteSlice() {
+        Rejects("S3104", "@fuzz\nfn f() { }", "one 'U8[:]'");
+        Rejects("S3104", "@fuzz\nfn f(_ data: U8[>..]) { }", "one 'U8[:]'");
+        Rejects("S3104", "@fuzz\nfn f(_ data: I8[:]) { }", "one 'U8[:]'");
+        Rejects("S3104", "@fuzz\nfn f(_ data: U8[:], _ n: Int) { }", "one 'U8[:]'");
+        Rejects("S3104", "@fuzz\nasync fn f(_ data: U8[:]) { }", "not async");
+    }
+
+    [Fact]
+    public void AFuzzTargetIsWhatTheHarnessCanCall() {
+        Rejects("S3101", "@fuzz\nfn f<T>(_ data: U8[:]) { }", "a fuzz target cannot be generic");
+        Rejects("S3102", "@fuzz\nfn f(_ data: U8[:]) -> Int { return 1 }", "a fuzz target returns nothing");
+        Rejects("S3103", "struct S {\n    @fuzz\n    fn f(_ data: U8[:]) { }\n}", "'@fuzz' marks an instance method");
+        Rejects("S3106", "@test @fuzz\nfn f() { }", "one of a test, a benchmark and a fuzz target");
+        Rejects("S3107", "@fuzz(slow)\nfn f(_ data: U8[:]) { }", "'@fuzz' takes no arguments");
+        Rejects("S3108", "fn outer() {\n    @fuzz\n    fn inner(_ data: U8[:]) { }\n}", "declared inside a body");
+    }
+
+    [Fact]
+    public void WhatAFuzzTargetMayBe() {
+        Assert.Empty(ErrorsOf(Program("""
+            union E { A }
+            @fuzz
+            fn plain(_ data: U8[:]) { }
+            @fuzz
+            fn throwing(_ bytes: U8[:]) throws(E) { }
+            @fuzz
+            private fn hidden(_ data: U8[:]) { }
+            struct S {
+                @fuzz
+                static fn inType(_ data: U8[:]) { }
+            }
+            """)));
+
+        // And the harness lists them, in order, by their names.
+        var result = TestHarness.Compile([new SourceText(Program("""
+            @fuzz
+            fn first(_ data: U8[:]) { }
+            struct S {
+                @fuzz
+                static fn second(_ data: U8[:]) { }
+            }
+            @test
+            fn notAFuzzTarget() { }
+            """), "test.sb")], TestKind.Fuzz, out var targets);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        Assert.Equal(["M.first", "M.S.second"], targets.Select(static t => t.QualifiedName));
     }
 
     [Fact]

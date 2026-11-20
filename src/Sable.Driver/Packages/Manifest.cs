@@ -1034,7 +1034,7 @@ public sealed partial class Manifest {
         static string? ProfileNameProblem(string name) =>
             !ProfileName().IsMatch(name) ? $"'{name}' is not a profile name: lower-case letters, digits, '-' and '_', starting with a letter"
             // Its output goes to target/<name>/, beside what these are.
-            : name is "check" or "doc" or "harness" or "coverage" or "bench" or "generated" ? $"'{name}' is a directory of target/ already; call the profile something else"
+            : name is "check" or "doc" or "harness" or "coverage" or "bench" or "fuzz" or "generated" ? $"'{name}' is a directory of target/ already; call the profile something else"
             : null;
 
         T Invalid<T>(T result, TomlValue value, string path, string message) {

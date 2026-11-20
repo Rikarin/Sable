@@ -11,7 +11,9 @@ namespace Sable.Driver;
 ///     A test or bench build (docs/05 §5.1): the program's files, with an
 ///     entry point the compiler writes in place of the program's own — a
 ///     table of the <c>@test</c> (or <c>@bench</c>) functions, handed to
-///     <c>Sable.Testing</c>'s <c>runTests</c> (or <c>runBenchmarks</c>).
+///     <c>Sable.Testing</c>'s <c>runTests</c> (or <c>runBenchmarks</c>). A
+///     fuzz build has no entry point: it is a library, whose <c>@export</c>
+///     functions C calls once an input (<see cref="FuzzBuild" />).
 /// </summary>
 /// <remarks>
 ///     <para>
@@ -102,9 +104,18 @@ public static class TestHarness {
             return new(null, null, [..harnessErrors.Select(static e => $"internal error: the {HarnessModule} harness did not compile:\n{e}")]);
         }
 
-        var entry = harness[^1].Root.DescendantNodes().OfType<FunctionDeclarationSyntax>().First(static f => f.Identifier.Text == EntryName);
-        // Measured, the decisions are marked as they are lowered, for branch coverage.
-        var (module, lowering) = SilGen.Lower(compilation, (FunctionSymbol)compilation.GetDeclaredSymbol(entry)!, markDecisions: coverage is not null);
+        SilModule module;
+        IReadOnlyList<Diagnostic> lowering;
+        if (kind == TestKind.Fuzz) {
+            // A library: libFuzzer's main, or the replay one, is the C side's.
+            var (lowered, placed) = SilGen.LowerLibraryByFile(compilation);
+            (module, lowering) = (lowered, [..placed.Select(static d => d.Diagnostic)]);
+        } else {
+            var entry = harness[^1].Root.DescendantNodes().OfType<FunctionDeclarationSyntax>().First(static f => f.Identifier.Text == EntryName);
+            // Measured, the decisions are marked as they are lowered, for branch coverage.
+            (module, lowering) = SilGen.Lower(compilation, (FunctionSymbol)compilation.GetDeclaredSymbol(entry)!, markDecisions: coverage is not null);
+        }
+
         module.CheckExclusivity = checkExclusivity;
         if (lowering.Count > 0) {
             return new(module, null, [..lowering.Select(d => Format(d, primary.Text))]);
@@ -239,6 +250,10 @@ public static class TestHarness {
     ///     point's. Public so that a test can see what the compiler writes.
     /// </summary>
     public static IReadOnlyList<SyntaxTree> Write(IReadOnlyList<TestFunction> tests, TestKind kind) {
+        if (kind == TestKind.Fuzz) {
+            return WriteFuzz(tests);
+        }
+
         var files = new List<SyntaxTree>();
         var main = new StringBuilder();
         main.Append(CultureInfo.InvariantCulture, $"module {HarnessModule}\n\nimport Sable.Testing\n");
@@ -297,6 +312,66 @@ public static class TestHarness {
     };
 
     static string Await(TestFunction test) => test.IsAsync ? "await " : "";
+
+    /// <summary>
+    ///     A fuzz build's harness: in each module with targets, a function
+    ///     listing a closure per target, as a test build's; then what C calls
+    ///     (<see cref="FuzzBuild.Shim" />) — <c>sable_harness_fuzz_begin</c>, then
+    ///     <c>sable_harness_fuzz_push</c> for each byte of an input, since only
+    ///     integers cross to C, then <c>sable_harness_fuzz_run</c> with the number of
+    ///     the target, in <paramref name="targets" />' order, to run on it.
+    /// </summary>
+    static IReadOnlyList<SyntaxTree> WriteFuzz(IReadOnlyList<TestFunction> targets) {
+        var files = new List<SyntaxTree>();
+        var main = new StringBuilder();
+        main.Append(CultureInfo.InvariantCulture, $"module {HarnessModule}\n\n");
+        var run = new StringBuilder();
+        var index = 0;
+        var modules = targets.GroupBy(static t => t.Module).ToList();
+        for (var m = 0; m < modules.Count; m++) {
+            var list = $"sableHarnessList{m}";
+            var thunks = new StringBuilder();
+            thunks.Append(CultureInfo.InvariantCulture, $"module {modules[m].Key}\n\n// Written by the compiler for 'sable fuzz'.\npublic fn {list}() -> ((U8[:]) -> Void)[>..] {{\n    return [\n");
+            var i = 0;
+            foreach (var target in modules[m]) {
+                // What a target throws fails it, as a trap does.
+                var call = target.Throws
+                    ? $"(data: U8[:]) => {{\n            do {{ try {target.CallPath}(data) }} catch {{ fatalError(\"{Escape(target.QualifiedName)} threw: \\(error)\") }}\n        }}"
+                    : $"(data: U8[:]) => {{ {target.CallPath}(data) }}";
+                thunks.Append("        ").Append(call).Append(",\n");
+                run.Append(CultureInfo.InvariantCulture, $"    if target == {index++} {{\n        {list}()[{i++}](sableFuzzInput)\n        return\n    }}\n");
+            }
+
+            thunks.Append("    ]\n}\n");
+            files.Add(SyntaxTree.Parse(new SourceText(thunks.ToString(), $"<harness:{modules[m].Key}>")));
+            main.Append(CultureInfo.InvariantCulture, $"import {modules[m].Key}.{{ {list} }}\n");
+        }
+
+        main.Append("""
+
+            // Written by the compiler for 'sable fuzz': the input, a byte at a time, and the target to run on it.
+            var sableFuzzInput: U8[>..] = []
+
+            @export("c", "sable_harness_fuzz_begin")
+            fn sableFuzzBegin() {
+                sableFuzzInput = []
+            }
+
+            @export("c", "sable_harness_fuzz_push")
+            fn sableFuzzPush(_ byte: U8) {
+                sableFuzzInput.append(byte)
+            }
+
+            @export("c", "sable_harness_fuzz_run")
+            fn sableFuzzRun(_ target: Int) {
+
+            """).Append(run).Append("}\n");
+        files.Add(SyntaxTree.Parse(new SourceText(main.ToString(), "<harness>")));
+        return files;
+    }
+
+    /// <summary>Text for inside a string literal: its quotes and backslashes escaped.</summary>
+    static string Escape(string text) => Quote(text)[1..^1];
 
     static string Quote(string text) {
         var quoted = new StringBuilder("\"");

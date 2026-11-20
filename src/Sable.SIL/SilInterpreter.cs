@@ -938,6 +938,47 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         break;
                     }
 
+                    case WeakCopyValueInst weak: {
+                        WeakEntry? entry = null;
+                        if (Get(weak.Value) is EnumValue { Payload: HeapObject target }) {
+                            entry = target.Side ??= new WeakEntry(target);
+                            entry.Count++;
+                        }
+
+                        values[weak] = entry;
+                        break;
+                    }
+
+                    case UnownedCopyValueInst unowned: {
+                        var held = (HeapObject)Get(unowned.Value)!;
+                        held.Unowned++;
+                        values[unowned] = held;
+                        break;
+                    }
+
+                    case StrongCopyWeakValueInst weak: {
+                        var optional = (EnumType)weak.Type;
+                        if (Get(weak.Value) is WeakEntry { Target: { } target }) {
+                            Retain(SilType.Object, target);
+                            values[weak] = new EnumValue(optional.CaseIndex("Some"), target);
+                        } else {
+                            values[weak] = new EnumValue(optional.CaseIndex("None"), null);
+                        }
+
+                        break;
+                    }
+
+                    case StrongCopyUnownedValueInst unowned: {
+                        var held = (HeapObject)Get(unowned.Value)!;
+                        if (held.Deinited) {
+                            throw new SilTrap("read an unowned reference to an object that is gone");
+                        }
+
+                        Retain(SilType.Object, held);
+                        values[unowned] = held;
+                        break;
+                    }
+
                     case LoadUnownedInst unowned: {
                         var held = (HeapObject)((IReference)Get(unowned.Address)!).Get()!;
                         if (held.Deinited) {
@@ -1174,7 +1215,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             // A fresh array of the constants, room for them alone, as the
             // native constant has.
-            case "array_literal":
+            case "array_literal" or "array_literal_stack":
                 return Allocate(new HeapArray((ArrayType)builtin.Type, new List<object?>(operands)));
 
             // The whole of an array, viewed: the buffer shared, not copied.
@@ -1883,6 +1924,19 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
         if (builtin.Name.StartsWith("net_", StringComparison.Ordinal)) {
             return Net(builtin.Name, operands);
+        }
+
+        if (builtin.Name.StartsWith("class_conforms:", StringComparison.Ordinal)) {
+            var dynamic = Alive((HeapObject)operands[0]!).Type;
+            return builtin.Name["class_conforms:".Length..].Split('&').All(protocol => {
+                for (var at = dynamic; at is not null; at = at.Superclass) {
+                    if (at.Conformances.Contains(protocol)) {
+                        return true;
+                    }
+                }
+
+                return false;
+            });
         }
 
         if (builtin.Name.StartsWith("class_is:", StringComparison.Ordinal)) {

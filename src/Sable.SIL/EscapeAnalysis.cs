@@ -17,9 +17,23 @@ namespace Sable.SIL;
 ///     <para>
 ///         The object keeps its header and its count: ARC is unchanged, and
 ///         the last release runs the deinit and the fields' releases as
-///         before, but frees nothing. An allocation inside a loop is not
-///         promoted, so one stack slot never holds two live objects; nor is
-///         one a weak reference could outlive.
+///         before, but frees nothing. Nor is one a weak reference could
+///         outlive promoted.
+///     </para>
+///     <para>
+///         One stack slot must never hold two live objects, so an allocation
+///         inside a loop is promoted only when the object is gone before the
+///         loop can come round to it again: everything that holds it — each
+///         copy, each borrow, each local slot it is stored in — is made and
+///         used only in the allocation's own block, and every slot is emptied
+///         of it (destroyed, taken, or stored over) before the block ends.
+///     </para>
+///     <para>
+///         A closure's context is promoted as any object is. Making the
+///         closure does not let the context escape when the closure's code
+///         keeps the context it is given no longer than the call, and
+///         calling a closure hands its context only to that code; so the
+///         closure is followed as the context is.
 ///     </para>
 /// </remarks>
 public sealed class PromoteToStack : ISilPass {
@@ -37,22 +51,82 @@ public sealed class PromoteToStack : ISilPass {
 
         var uses = new Uses(function);
         foreach (var block in function.Blocks) {
-            if (InLoop(block)) {
-                continue;
-            }
-
+            var inLoop = InLoop(block);
             foreach (var instruction in block.Instructions) {
                 switch (instruction) {
-                    case AllocRefInst alloc when !alloc.OnStack && !Escapes(alloc, uses, summaries):
+                    case AllocRefInst { OnStack: false, ClassType.IsCoroutineFrame: false } alloc when Promotable(alloc, inLoop, uses, summaries):
                         alloc.OnStack = true;
                         break;
 
-                    case BuiltinInst { Name: "inline_new" } made when !Escapes(made, uses, summaries):
+                    case BuiltinInst { Name: "inline_new" } made when Promotable(made, inLoop, uses, summaries):
                         made.Rename("inline_new_stack");
+                        break;
+
+                    // An array literal: its header and its elements together.
+                    case BuiltinInst { Name: "array_literal" } literal when !SilBuiltins.IsConstantArray(literal) && Promotable(literal, inLoop, uses, summaries):
+                        literal.Rename("array_literal_stack");
                         break;
                 }
             }
         }
+    }
+
+    /// <summary>Whether what an instruction makes may live in the frame: it does not escape, and in a loop, it is gone before the loop comes round.</summary>
+    static bool Promotable(SilInstruction made, bool inLoop, Uses uses, Dictionary<string, bool[]> summaries) {
+        var holders = new HashSet<SilValue>();
+        return !Escapes(made, uses, summaries, holders) && (!inLoop || GoneInItsBlock(made, holders, uses));
+    }
+
+    /// <summary>
+    ///     True when nothing holds what <paramref name="made" /> made once its
+    ///     block has run: every value holding it is made and used in the
+    ///     block, and every local slot it was stored in is emptied of it there.
+    /// </summary>
+    static bool GoneInItsBlock(SilInstruction made, HashSet<SilValue> holders, Uses uses) {
+        var block = made.Block;
+        var slots = new HashSet<AllocStackInst>();
+        foreach (var holder in holders) {
+            if (holder is AllocStackInst slot) {
+                slots.Add(slot);
+                continue;
+            }
+
+            if (holder is not SilInstruction instruction || instruction.Block != block || uses.Of(holder).Any(u => u.Block != block)) {
+                return false;
+            }
+        }
+
+        // Walked in order from the allocation: which slots hold it at the end.
+        var holding = new HashSet<AllocStackInst>();
+        var index = block.Instructions.IndexOf(made);
+        for (var i = index + 1; i < block.Instructions.Count; i++) {
+            switch (block.Instructions[i]) {
+                case StoreInst { Address: AllocStackInst slot } store when slots.Contains(slot):
+                    if (holders.Contains(store.Value)) {
+                        holding.Add(slot);
+                    } else {
+                        holding.Remove(slot);
+                    }
+
+                    break;
+
+                case DestroyAddrInst { Address: AllocStackInst slot }:
+                    holding.Remove(slot);
+                    break;
+
+                case LoadInst { Kind: LoadKind.Take, Address: AllocStackInst slot }:
+                    holding.Remove(slot);
+                    break;
+
+                // Anything else given a slot's address may put it back.
+                case var other when other.Operands.Any(o => o is AllocStackInst slot && slots.Contains(slot))
+                    && other is not (LoadInst or LoadBorrowInst or StoreInst or DeallocStackInst)
+                    && !ChangesArrayInPlace(other, other.Operands[0]):
+                    return false;
+            }
+        }
+
+        return holding.Count == 0;
     }
 
     /// <summary>
@@ -131,7 +205,7 @@ public sealed class PromoteToStack : ISilPass {
     }
 
     /// <summary>True when the value, or a copy of it, may outlive the function.</summary>
-    static bool Escapes(SilValue value, Uses uses, Dictionary<string, bool[]> summaries) {
+    static bool Escapes(SilValue value, Uses uses, Dictionary<string, bool[]> summaries, HashSet<SilValue>? holders = null) {
         var seen = new HashSet<SilValue>();
         var pending = new Stack<SilValue>();
         pending.Push(value);
@@ -140,6 +214,8 @@ public sealed class PromoteToStack : ISilPass {
             if (!seen.Add(current) || current.Type.IsTrivial && current is not AllocStackInst) {
                 continue;
             }
+
+            holders?.Add(current);
 
             foreach (var user in uses.Of(current)) {
                 if (Escapes(user, current, pending, uses, summaries)) {
@@ -209,11 +285,25 @@ public sealed class PromoteToStack : ISilPass {
                 return false;
             }
 
+            // A closure made with it as its context: followed as it is, when
+            // the closure's code keeps the context no longer than a call.
+            case PartialApplyInst closure when ReferenceEquals(closure.Context, value):
+                if (closure.Function is not FunctionRefInst code || !summaries.TryGetValue(code.Function, out var codeSummary)
+                    || codeSummary.Length == 0 || codeSummary[^1]) {
+                    return true;
+                }
+
+                pending.Push(closure);
+                return false;
+
             case ApplyInst apply:
                 return ArgumentEscapes(apply.Callee, [..apply.Arguments], value, summaries);
 
             case TryApplyInst apply:
                 return ArgumentEscapes(apply.Callee, [..apply.Arguments], value, summaries);
+
+            case BuiltinInst builtin when ChangesArrayInPlace(builtin, value):
+                return false;
 
             case BuiltinInst builtin:
                 return !BorrowsOnly(builtin, value);
@@ -224,7 +314,16 @@ public sealed class PromoteToStack : ISilPass {
     }
 
     /// <summary>A known callee keeps an argument only where its summary says the parameter escapes.</summary>
+    /// <remarks>
+    ///     A closure called is not kept by the call: its context goes to its
+    ///     code alone, and a context is followed only into code that does not
+    ///     keep it (the closure's own arguments are another matter).
+    /// </remarks>
     static bool ArgumentEscapes(SilValue callee, List<SilValue> arguments, SilValue value, Dictionary<string, bool[]> summaries) {
+        if (ReferenceEquals(callee, value) && value.Type is ThickFunctionType) {
+            return arguments.Any(a => ReferenceEquals(a, value));
+        }
+
         if (ReferenceEquals(callee, value) || callee is not FunctionRefInst reference || !summaries.TryGetValue(reference.Function, out var summary)) {
             return true;
         }
@@ -237,6 +336,22 @@ public sealed class PromoteToStack : ISilPass {
 
         return false;
     }
+
+    /// <summary>
+    ///     An array in a local slot, changed where it is — an element
+    ///     appended, set or removed, room made — by an operation that keeps
+    ///     neither the array nor the slot. The array stays the slot's,
+    ///     unless a copy of a shared one takes its place.
+    /// </summary>
+    static bool ChangesArrayInPlace(SilInstruction instruction, SilValue value) =>
+        instruction is BuiltinInst
+        {
+            Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_reserve"
+                or "array_rotate",
+        } builtin
+        && value is AllocStackInst
+        && ReferenceEquals(builtin.Operands[0], value)
+        && !builtin.Operands.Skip(1).Any(o => ReferenceEquals(o, value));
 
     /// <summary>The builtins that read a value, or the slot it is in, and keep neither.</summary>
     static bool BorrowsOnly(BuiltinInst builtin, SilValue value) {

@@ -383,6 +383,10 @@ public static class SilPrinter {
                         builder.Append(' ').Append(Name(copy.Value));
                         break;
 
+                    case WeakCopyValueInst or UnownedCopyValueInst or StrongCopyWeakValueInst or StrongCopyUnownedValueInst:
+                        builder.Append(' ').Append(Name(instruction.Operands[0]));
+                        break;
+
                     case DestroyValueInst destroy:
                         builder.Append(' ').Append(Name(destroy.Value));
                         break;

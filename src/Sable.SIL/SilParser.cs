@@ -966,6 +966,22 @@ public sealed class SilParser {
                 instruction = new CopyValueInst(Defined(Operand(0), opcode, line));
                 break;
 
+            case "weak_copy_value":
+                instruction = new WeakCopyValueInst(Defined(Operand(0), opcode, line));
+                break;
+
+            case "unowned_copy_value":
+                instruction = new UnownedCopyValueInst(Defined(Operand(0), opcode, line));
+                break;
+
+            case "strong_copy_weak_value":
+                instruction = new StrongCopyWeakValueInst(Defined(Operand(0), opcode, line));
+                break;
+
+            case "strong_copy_unowned_value":
+                instruction = new StrongCopyUnownedValueInst(Defined(Operand(0), opcode, line));
+                break;
+
             case "destroy_value":
                 instruction = new DestroyValueInst(Operand(0));
                 break;

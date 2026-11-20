@@ -120,6 +120,12 @@ typedef struct { int64_t kind;                                    // 1: a class
   or a superclass's conformance, or null; `sable_conforms(object, protocol)`
   answers `x is P`. A protocol is matched by its descriptor's address or,
   across images (a Sable shared library and the program), by its name.
+  Compiled code asks it for `animal is Named` (and `is A & B`, each part)
+  on any object: the builtin `class_conforms:M.Named`, a call of
+  `sable_conforms` with the descriptor. `animal as? any Named` puts the
+  object in the box of its static class and asks the existential cast
+  below, which already asks a box holding an object about the object's
+  own class.
 - **`--deny-reflection`** (`sable build`/`run`, for a file or a package; or
   `[targets.<triple>] reflection = false` in a manifest): the field descriptors carry
   no names, and `Mirror`, `TypeInfo` and the `Reflect` questions are refused

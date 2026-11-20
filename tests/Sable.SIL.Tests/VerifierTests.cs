@@ -432,6 +432,51 @@ public sealed class VerifierTests {
         Assert.Contains("(@owned M.Node, M.Node) -> ()", SilPrinter.Print(module), StringComparison.Ordinal);
     }
 
+    /// <summary>A struct's weak and unowned fields as values: made from the object, read back as it, each its own owned value.</summary>
+    [Fact]
+    public void WeakAndUnownedValuesOfAStructRoundTrip() {
+        const string text = """
+                            sil_class M.Node {  }
+                            sil_enum Optional$M.Node { Some($M.Node), None }
+                            sil_struct M.Link { target: $@sil_weak Optional$M.Node, owner: $@sil_unowned M.Node }
+
+                            sil @M.link : $(Optional$M.Node, M.Node) -> M.Link {
+                            bb0(%0 : $Optional$M.Node, %1 : $M.Node):
+                              %2 = weak_copy_value %0
+                              %3 = unowned_copy_value %1
+                              %4 = struct $M.Link (%2, %3)
+                              %5 = struct_extract %4, #target
+                              %6 = strong_copy_weak_value %5
+                              destroy_value %6
+                              %7 = struct_extract %4, #owner
+                              %8 = strong_copy_unowned_value %7
+                              destroy_value %8
+                              return %4
+                            }
+
+                            """;
+        var module = SilParser.Parse(text);
+        Assert.Empty(SilVerifier.Verify(module));
+        Assert.Equal(SilPrinter.Print(module), SilPrinter.Print(SilParser.Parse(SilPrinter.Print(module))));
+        Assert.Contains("strong_copy_weak_value %5", SilPrinter.Print(module), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AWeakValueIsMadeFromAnOptionalClassReference() =>
+        AssertRejected(
+            """
+            sil_class M.Node {  }
+
+            sil @f : $(M.Node) -> () {
+            bb0(%0 : $M.Node):
+              %1 = weak_copy_value %0
+              destroy_value %1
+              return
+            }
+            """,
+            "which is no optional class reference"
+        );
+
     [Fact]
     public void AnOwnedParameterMustBeConsumed() =>
         AssertRejected(

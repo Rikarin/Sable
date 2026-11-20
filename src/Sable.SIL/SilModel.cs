@@ -951,6 +951,38 @@ public sealed class StoreUnownedInst(SilValue value, SilValue address) : SilInst
     public override string Opcode => "store_unowned";
 }
 
+/// <summary>
+///     <c>weak_copy_value %0</c>: an optional's object held weakly, as a
+///     value — what a struct's <c>weak</c> field holds — borrowing the
+///     optional. Its own until stored in the struct, or destroyed.
+/// </summary>
+public sealed class WeakCopyValueInst(SilValue value) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public override SilType Type => Value.Type is EnumType optional ? new WeakStorageType(optional) : Value.Type; // the verifier rejects the rest
+    public override string Opcode => "weak_copy_value";
+}
+
+/// <summary><c>unowned_copy_value %0</c>: an object held unowned, as a value — what a struct's <c>unowned</c> field holds — borrowing it.</summary>
+public sealed class UnownedCopyValueInst(SilValue value) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public override SilType Type => Value.Type is ClassType referent ? new UnownedStorageType(referent) : Value.Type;
+    public override string Opcode => "unowned_copy_value";
+}
+
+/// <summary><c>strong_copy_weak_value %0</c>: the object a weak value holds, retained, or none if it is gone — <c>load_weak</c> of a value.</summary>
+public sealed class StrongCopyWeakValueInst(SilValue value) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public override SilType Type => (Value.Type as WeakStorageType)?.Optional ?? Value.Type;
+    public override string Opcode => "strong_copy_weak_value";
+}
+
+/// <summary><c>strong_copy_unowned_value %0</c>: the object an unowned value holds, retained; a trap if it is gone.</summary>
+public sealed class StrongCopyUnownedValueInst(SilValue value) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public override SilType Type => (Value.Type as UnownedStorageType)?.Referent ?? Value.Type;
+    public override string Opcode => "strong_copy_unowned_value";
+}
+
 /// <summary><c>copy_value %0</c>: a new owned copy of a value — a retain, for a reference.</summary>
 public sealed class CopyValueInst(SilValue value) : SilInstruction(value) {
     public SilValue Value => Operands[0];
@@ -1550,6 +1582,17 @@ public sealed class SilModule {
 ///     signatures are worked out from the operands.
 /// </remarks>
 public static class SilBuiltins {
+    /// <summary>
+    ///     An <c>array_literal</c> of numbers, Bools or Chars, every one written
+    ///     as a literal: natively a constant in read-only memory, made once
+    ///     and never counted (#265).
+    /// </summary>
+    public static bool IsConstantArray(BuiltinInst literal) =>
+        literal is { Name: "array_literal", Type: ArrayType array }
+        && (array.Element == SilType.Int || array.Element == SilType.Bool || array.Element == SilType.Char || array.Element == SilType.F64
+            || array.Element == SilType.F32 || SilType.IntegerInfo(array.Element) is not null)
+        && literal.Operands.All(static o => o is IntegerLiteralInst or FloatLiteralInst);
+
     public sealed record Signature(ImmutableArray<SilType> Operands, SilType Result) {
         /// <summary>The operands the builtin takes ownership of.</summary>
         public ImmutableArray<int> Consumed { get; init; } = [];
@@ -1595,9 +1638,9 @@ public static class SilBuiltins {
         // '[0, 7, 14]': an array of its elements, each a literal of the
         // element type — natively a constant, never counted, which copy on
         // write copies before it is changed (#265).
-        if (name == "array_literal") {
+        if (name is "array_literal" or "array_literal_stack") {
             return result is ArrayType literal && operands.Count > 0 && operands.All(o => o == literal.Element)
-                ? new([..operands], result)
+                ? new([..operands], result) { Consumed = [..Enumerable.Range(0, operands.Count)] }
                 : null;
         }
 
@@ -1667,6 +1710,13 @@ public static class SilBuiltins {
         // 'a === b': whether two references are to the one object.
         if (name == "ref_identical") {
             return operands is [ClassType, ClassType] ? new([operands[0], operands[1]], SilType.Bool) : null;
+        }
+
+        // 'x is Named', 'x is A & B': whether the object's class, or a
+        // superclass, conforms to each protocol named — the conformance
+        // registry (docs/06 §6.2).
+        if (name.StartsWith("class_conforms:", StringComparison.Ordinal)) {
+            return operands is [ClassType] ? new([operands[0]], SilType.Bool) : null;
         }
 
         // 'x is Dog': whether the object is of the class named, or a subclass of it.

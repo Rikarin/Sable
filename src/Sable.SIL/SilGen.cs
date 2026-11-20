@@ -1858,16 +1858,12 @@ public sealed partial class SilGen {
                     Alignment = named.OriginalDefinition.Alignment,
                 });
                 var members = TypeSubstitution.For(named);
-                if (StoredFields(named.OriginalDefinition).Any(static f => f.ReferenceKind != ReferenceKind.Strong)) {
-                    return null; // weak and unowned fields of structs wait for value witnesses of their own
-                }
-
                 foreach (var field in StoredFields(named.OriginalDefinition)) {
                     if (Lower(members.Apply(field.Type)) is not { } fieldType) {
                         return null;
                     }
 
-                    structType.Fields.Add((field.Name, fieldType));
+                    structType.Fields.Add((field.Name, Stored(field.ReferenceKind, fieldType)));
                 }
 
                 // A struct that holds a move-only value is move-only itself:
@@ -1905,14 +1901,7 @@ public sealed partial class SilGen {
                         return null;
                     }
 
-                    // A weak or unowned field holds its object without keeping it.
-                    SilType stored = (field.ReferenceKind, fieldType) switch {
-                        (ReferenceKind.Weak, EnumType optional) => new WeakStorageType(optional),
-                        (ReferenceKind.Unowned, ClassType referent) => new UnownedStorageType(referent),
-                        _ => fieldType,
-                    };
-
-                    classType.Fields.Add((field.Name, stored));
+                    classType.Fields.Add((field.Name, Stored(field.ReferenceKind, fieldType)));
                 }
 
                 // An actor's serial executor, the runtime's: after every
@@ -2725,13 +2714,18 @@ public sealed partial class SilGen {
     ///     functions around it by reference, through boxes; their parameters,
     ///     <c>self</c>, and what its capture list names, by value.
     /// </summary>
-    internal List<Capture> CapturesOf(BoundClosure closure) => CapturesOf(closure.Symbol, closure.Body, closure.Captures);
+    internal List<Capture> CapturesOf(BoundClosure closure) => CapturesOf(closure.Symbol, closure.Body, closure.Captures, closure: true);
 
     /// <summary>
     ///     What a closure, or a local function, captures. A local function
     ///     that captures is itself captured, as its closure, by what calls it.
+    ///     A closure captures a local that cannot change — a 'let', a loop's
+    ///     element — by value, as '[x]' would: there is nothing a box could
+    ///     share, and a context that holds no box is one allocation, not two.
+    ///     A local function's captures stay boxed: it may be declared, and
+    ///     made, before a 'let' it reads has its value.
     /// </summary>
-    internal List<Capture> CapturesOf(FunctionSymbol symbol, BoundBlock body, ImmutableArray<BoundCapture> listedCaptures) {
+    internal List<Capture> CapturesOf(FunctionSymbol symbol, BoundBlock body, ImmutableArray<BoundCapture> listedCaptures, bool closure = false) {
         var inner = Descendants(body)
             .Select(static n => n switch {
                     BoundClosure c => c.Symbol,
@@ -2766,6 +2760,8 @@ public sealed partial class SilGen {
                 case BoundLocalAccess access when !inner.Contains(access.Local.ContainingSymbol!):
                     if (listed.TryGetValue(access.Local, out var listedCapture)) {
                         Add(access.Local, access.Local.Type, false, listedCapture.Initializer, listedCapture.CaptureKind);
+                    } else if (closure && access.Local is { IsMutable: false, IsAsyncLet: false } && Lower(access.Local.Type) is { } held && !IsMoveOnly(held)) {
+                        Add(access.Local, access.Local.Type, false, new BoundLocalAccess(access.Syntax, access.Local, access.Local.Type));
                     } else {
                         Add(access.Local, access.Local.Type, true, null);
                     }
@@ -3870,6 +3866,41 @@ public sealed partial class SilGen {
             _ => false,
         };
 
+    /// <summary>What a field of a struct or a class holds: a weak or unowned one its object without keeping it.</summary>
+    static SilType Stored(ReferenceKind kind, SilType type) =>
+        (kind, type) switch {
+            (ReferenceKind.Weak, EnumType optional) => new WeakStorageType(optional),
+            (ReferenceKind.Unowned, ClassType referent) => new UnownedStorageType(referent),
+            _ => type,
+        };
+
+    /// <summary>
+    ///     A struct's field as a value — a weak or unowned one made from the
+    ///     object, which the field holds without keeping alive. Consumes the
+    ///     value, and gives one the struct takes.
+    /// </summary>
+    internal static SilValue IntoField(SilType field, SilValue value, Func<SilInstruction, SilValue> emit) {
+        if (field is not (WeakStorageType or UnownedStorageType) || value.Type == field) {
+            return value;
+        }
+
+        var made = emit(field is WeakStorageType ? new WeakCopyValueInst(value) : new UnownedCopyValueInst(value));
+        emit(new DestroyValueInst(value));
+        return made;
+    }
+
+    /// <summary>
+    ///     What a field read out of a struct value reads as: the object a weak or
+    ///     unowned field holds, retained (owned); any other field as extracted
+    ///     (borrowed from the struct).
+    /// </summary>
+    internal static SilValue OutOfField(SilValue extracted, Func<SilInstruction, SilValue> emit) =>
+        extracted.Type switch {
+            WeakStorageType => emit(new StrongCopyWeakValueInst(extracted)),
+            UnownedStorageType => emit(new StrongCopyUnownedValueInst(extracted)),
+            _ => extracted,
+        };
+
     static bool HoldsItself(NominalType type) {
         var seen = new HashSet<SilType>();
         bool Reaches(SilType part) {
@@ -4625,7 +4656,14 @@ public sealed partial class SilGen {
                     }
 
                     var index = structType.FieldIndex(field.Name);
-                    return index < 0 ? Missing(expression, $"the member '{field.Name}'") : Emit(new StructExtractInst(value, index));
+                    if (index < 0) {
+                        return Missing(expression, $"the member '{field.Name}'");
+                    }
+
+                    // A weak or unowned field is read as the object, held as any owned value borrowed is.
+                    var extracted = Emit(new StructExtractInst(value, index));
+                    var read = OutOfField(extracted, Emit);
+                    return ReferenceEquals(read, extracted) ? read : Hold(read);
                 }
 
                 default:
@@ -6380,8 +6418,9 @@ public sealed partial class SilGen {
                 case BoundConversion { ConversionKind: ConversionKind.Explicit } downcast when IsDowncast(downcast):
                     return Downcast(downcast);
 
-                // 'shape as? Square', 'shape as? any Named': asked of the existential's box.
-                case BoundConversion { ConversionKind: ConversionKind.Explicit } opened when IsExistential(opened.Operand.Type):
+                // 'shape as? Square', 'shape as? any Named': asked of the existential's box;
+                // 'animal as? any Named', of a box made for the object.
+                case BoundConversion { ConversionKind: ConversionKind.Explicit } opened when IsExistential(opened.Operand.Type) || IsObjectToProtocol(opened):
                     return ExistentialDowncast(opened);
 
                 case BoundTypeTest test:
@@ -7137,7 +7176,7 @@ public sealed partial class SilGen {
 
             // A field of something in memory, read without copying the whole of it.
             if (!IsTrivialType(receiver.Type) && !IsBorrowable(access) && Place(access) is { } place) {
-                return Emit(new LoadInst(place));
+                return ReadField(place);
             }
 
             if (!IsTrivialType(receiver.Type)) {
@@ -7150,7 +7189,9 @@ public sealed partial class SilGen {
                     return Missing(access, $"the member '{field.Name}'");
                 }
 
-                var copy = Owned(Emit(new StructExtractInst(borrowed, borrowedIndex)));
+                var extracted = Emit(new StructExtractInst(borrowed, borrowedIndex));
+                var read = OutOfField(extracted, Emit);
+                var copy = ReferenceEquals(read, extracted) ? Owned(extracted) : read;
                 End(borrowed);
                 return copy;
             }
@@ -7769,6 +7810,21 @@ public sealed partial class SilGen {
                 return Missing(at, $"the cast from '{operand.Type.ToDisplayString()}' to '{target.ToDisplayString()}'");
             }
 
+            // An object, not yet an existential: put in the box of its
+            // static class, which the cast asks as it asks any box holding
+            // an object — whether what it holds is of a class that conforms.
+            if (Sub(operand.Type).TypeKind is TypeKind.Class or TypeKind.Actor) {
+                if (Expression(operand) is not { Type: ClassType classType } value) {
+                    return null;
+                }
+
+                var box = Emit(new AllocRefInst(generator.ExistentialBox(classType)));
+                Emit(new StoreInst(Owned(value), Emit(new RefElementAddrInst(box, 0)), StoreKind.Init));
+                var asked = Emit(new ApplyInst(Emit(new FunctionRefInst(name, type)), type.Result, [Emit(new UpcastInst(box, generator.ExistentialBoxRoot()))]));
+                Emit(new DestroyValueInst(box));
+                return asked;
+            }
+
             if (Borrow(operand) is not { } existential) {
                 return null;
             }
@@ -7896,6 +7952,14 @@ public sealed partial class SilGen {
             return answer;
         }
 
+        /// <summary>'animal as? any Named': an object cast to an existential of protocols.</summary>
+        bool IsObjectToProtocol(BoundConversion conversion) {
+            var target = Sub(conversion.Type) is OptionalTypeSymbol optional ? optional.UnderlyingType : Sub(conversion.Type);
+            return Sub(conversion.Operand.Type).TypeKind is TypeKind.Class or TypeKind.Actor
+                && CastTarget(target) is ExistentialTypeSymbol { Constraint: var constraint } && !constraint.Equals(Core.Error)
+                && ExistentialProtocols(constraint) is not null;
+        }
+
         bool IsDowncast(BoundConversion conversion) {
             var target = Sub(conversion.Type) is OptionalTypeSymbol optional ? optional.UnderlyingType : Sub(conversion.Type);
             return Sub(conversion.Operand.Type).TypeKind == TypeKind.Class && target.TypeKind == TypeKind.Class;
@@ -7972,6 +8036,20 @@ public sealed partial class SilGen {
 
             if (StructuralUnionTypeSymbol.Of(Sub(test.Operand.Type)) is { } union) {
                 return UnionTypeTest(test, union);
+            }
+
+            // 'animal is Named': asked of the conformance registry, which the
+            // object's class's metadata, and its superclasses', carry.
+            if (CastTarget(test.TestedType) is ExistentialTypeSymbol { Constraint: var constraint }
+                && ExistentialProtocols(constraint) is { Count: > 0 } protocols
+                && Sub(test.Operand.Type).TypeKind is TypeKind.Class or TypeKind.Actor) {
+                if (Borrow(test.Operand) is not { Type: ClassType } reference) {
+                    return null;
+                }
+
+                var conforms = Emit(new BuiltinInst($"class_conforms:{string.Join("&", protocols.Select(QualifiedName))}", SilType.Bool, reference));
+                End(reference);
+                return conforms;
             }
 
             if (LowerType(test.TestedType) is not ClassType target || Borrow(test.Operand) is not { Type: ClassType } value) {
@@ -8122,7 +8200,7 @@ public sealed partial class SilGen {
                 return Missing(record, "a record that leaves a field to its default");
             }
 
-            return Emit(new StructInst(structType, [..fields!]));
+            return Emit(new StructInst(structType, [..fields!.Select((f, i) => IntoField(structType.Fields[i].Type, f!, Emit))]));
         }
 
         SilValue? UnionCase(TypeSymbol unionType, string name, IReadOnlyList<BoundExpression> arguments, BoundNode at) {
@@ -8186,7 +8264,7 @@ public sealed partial class SilGen {
             return Emit(new LoadInst(slot, LoadKind.Take));
         }
 
-        /// <summary><c>[a, b]</c>: an empty array in a slot of its own, each element appended, then taken out.</summary>
+        /// <summary><c>[a, b]</c>: an array made of its elements.</summary>
         SilValue? ArrayLiteral(BoundArray array, TypeSymbol type) {
             // '[1, 2, 3]' where a slice is wanted: the array, and the whole of it viewed.
             if (LowerType(type) is SliceType) {
@@ -8203,53 +8281,17 @@ public sealed partial class SilGen {
                 return Emit(new BuiltinInst("array_empty", arrayType));
             }
 
-            // Numbers, Bools and Chars, every one a literal: the array as a
-            // constant, which native code keeps in read-only memory, made
-            // once and never counted (#265).
-            if (IsConstantElement(arrayType.Element)) {
-                var values = new List<SilValue>(array.Elements.Length);
-                foreach (var element in array.Elements) {
-                    if (Expression(element) is not { } value) {
-                        return null;
-                    }
-
-                    values.Add(value);
-                }
-
-                if (values.TrueForAll(IsConstantLiteral)) {
-                    return Emit(new BuiltinInst("array_literal", arrayType, [..values]));
-                }
-
-                var built = NewSlot(arrayType);
-                Emit(new StoreInst(Emit(new BuiltinInst("array_empty", arrayType)), built, StoreKind.Assign));
-                foreach (var value in values) {
-                    Emit(new BuiltinInst("array_append", SilType.Unit, built, value));
-                }
-
-                return Emit(new LoadInst(built, LoadKind.Take));
+            // The elements, then the array of them: of numbers, Bools and
+            // Chars every one a literal, a constant, which native code keeps
+            // in read-only memory, made once and never counted (#265); of
+            // anything else, made and filled in one go, in the frame when it
+            // does not escape it (PromoteToStack).
+            if (Evaluate(array.Elements) is not { } values) {
+                return null;
             }
 
-            var empty = Emit(new BuiltinInst("array_empty", arrayType));
-            var slot = NewSlot(arrayType);
-            Emit(new StoreInst(empty, slot, StoreKind.Assign));
-            foreach (var element in array.Elements) {
-                if (Expression(element) is not { } value) {
-                    return null;
-                }
-
-                Emit(new BuiltinInst("array_append", SilType.Unit, slot, value));
-            }
-
-            return Emit(new LoadInst(slot, LoadKind.Take));
+            return Emit(new BuiltinInst("array_literal", arrayType, [..values.Select(Owned)]));
         }
-
-        /// <summary>An element an array of constants can hold: a number, a Bool or a Char, written as it is.</summary>
-        static bool IsConstantElement(SilType type) =>
-            type == SilType.Int || type == SilType.Bool || type == SilType.Char || type == SilType.F64 || type == SilType.F32
-            || SilType.IntegerInfo(type) is not null;
-
-        /// <summary>A value written as a literal, which an array of constants holds as it is.</summary>
-        static bool IsConstantLiteral(SilValue value) => value is IntegerLiteralInst or FloatLiteralInst;
 
         /// <summary>
         ///     A protocol's subscript, used on a T that stands for a known type
@@ -9579,7 +9621,7 @@ public sealed partial class SilGen {
                     return Missing(call, "a memberwise initialiser that leaves a field to its default");
                 }
 
-                return Emit(new StructInst(structType, [..fields]));
+                return Emit(new StructInst(structType, [..fields.Select((f, i) => IntoField(structType.Fields[i].Type, f, Emit))]));
             }
 
             // A requirement of Error's, called on 'any Error': through the

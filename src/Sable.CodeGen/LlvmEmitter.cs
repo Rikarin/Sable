@@ -496,6 +496,7 @@ public sealed partial class LlvmEmitter {
                                 declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64)
                                 declare ptr @sable_inline_new(ptr)
                                 declare zeroext i1 @sable_class_is(ptr, ptr)
+                                declare zeroext i1 @sable_conforms(ptr, ptr)
                                 declare ptr @sable_task_spawn(ptr, ptr, ptr, ptr, i64, i1 zeroext)
                                 declare i64 @sable_task_priority()
                                 declare void @sable_task_handler_push(ptr, ptr)
@@ -544,6 +545,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_access_end(ptr)
                                 declare ptr @sable_inline_new_stack(ptr, ptr, i64)
                                 declare ptr @sable_stack_object(ptr, ptr, i64)
+                                declare ptr @sable_stack_array(ptr, ptr, i64)
                                 declare ptr @sable_inline_unique(ptr)
                                 declare ptr @sable_inline_copy(ptr, ptr)
                                 declare ptr @sable_inline_field(ptr, ptr, i32)
@@ -1186,7 +1188,7 @@ public sealed partial class LlvmEmitter {
     ///     protocol's identity to <c>sable_conformance</c>; across images,
     ///     which each have their own, the name is.
     /// </summary>
-    string ProtocolDescriptor(string protocol) {
+    internal string ProtocolDescriptor(string protocol) {
         var name = $"@\"sable.protocol.{protocol}\"";
         if (_emitted.Add(name)) {
             var text = TrapMessage(protocol);
@@ -1813,6 +1815,46 @@ public sealed partial class LlvmEmitter {
 
         void Line(string text) => _out.Append("  ").Append(text).Append(_dbg).Append('\n');
 
+        /// <summary>The object an optional class reference holds, or null: what a weak reference is made from.</summary>
+        string WeakTarget(EnumType optional, string value) {
+            if (IsNullable(optional)) {
+                return value;
+            }
+
+            var type = Type(optional);
+            var tag = Fresh();
+            var word = Fresh();
+            var pointer = Fresh();
+            var present = Fresh();
+            var target = Fresh();
+            Line($"{tag} = extractvalue {type} {value}, 0");
+            Line($"{word} = extractvalue {type} {value}, 1, 0");
+            Line($"{pointer} = inttoptr i64 {word} to ptr");
+            Line($"{present} = icmp eq {TagType(optional)} {tag}, {optional.CaseIndex("Some")}");
+            Line($"{target} = select i1 {present}, ptr {pointer}, ptr null");
+            return target;
+        }
+
+        /// <summary>An object a weak reference held, or null, as the optional it reads as.</summary>
+        string WeakOptional(EnumType optional, string target) {
+            if (IsNullable(optional)) {
+                return target;
+            }
+
+            var type = Type(optional);
+            var absent = Fresh();
+            var tag = Fresh();
+            var word = Fresh();
+            var tagged = Fresh();
+            var name = Fresh();
+            Line($"{absent} = icmp eq ptr {target}, null");
+            Line($"{tag} = select i1 {absent}, {TagType(optional)} {optional.CaseIndex("None")}, {TagType(optional)} {optional.CaseIndex("Some")}");
+            Line($"{word} = ptrtoint ptr {target} to i64");
+            Line($"{tagged} = insertvalue {type} zeroinitializer, {TagType(optional)} {tag}, 0");
+            Line($"{name} = insertvalue {type} {tagged}, i64 {word}, 1, 0");
+            return name;
+        }
+
         /// <summary>A retain (copy) or release (destroy) of a value, as its type needs.</summary>
         void Own(bool copy, SilType type, string value) => module.Ownership(_out, "  ", copy, type, value, _dbg);
 
@@ -2008,65 +2050,51 @@ public sealed partial class LlvmEmitter {
                 }
 
                 // A weak reference read: the object, retained, or null — as an optional.
-                case LoadWeakInst nullableWeak when IsNullable((EnumType)nullableWeak.Type): {
-                    var entry = Fresh();
-                    var name = Fresh();
-                    _names[nullableWeak] = name;
-                    Line($"{entry} = load ptr, ptr {Name(nullableWeak.Address)}");
-                    Line($"{name} = call ptr @sable_weak_load(ptr {entry})");
-                    return;
-                }
-
                 case LoadWeakInst weak: {
-                    var optional = (EnumType)weak.Type;
-                    var type = Type(optional);
                     var entry = Fresh();
                     var target = Fresh();
-                    var absent = Fresh();
-                    var tag = Fresh();
-                    var word = Fresh();
-                    var tagged = Fresh();
-                    var name = Fresh();
-                    _names[weak] = name;
                     Line($"{entry} = load ptr, ptr {Name(weak.Address)}");
                     Line($"{target} = call ptr @sable_weak_load(ptr {entry})");
-                    Line($"{absent} = icmp eq ptr {target}, null");
-                    Line($"{tag} = select i1 {absent}, {TagType(optional)} {optional.CaseIndex("None")}, {TagType(optional)} {optional.CaseIndex("Some")}");
-                    Line($"{word} = ptrtoint ptr {target} to i64");
-                    Line($"{tagged} = insertvalue {type} zeroinitializer, {TagType(optional)} {tag}, 0");
-                    Line($"{name} = insertvalue {type} {tagged}, i64 {word}, 1, 0");
-                    return;
-                }
-
-                case StoreWeakInst nullableStore when IsNullable((EnumType)nullableStore.Value.Type): {
-                    var entry = Fresh();
-                    var old = Fresh();
-                    Line($"{entry} = call ptr @sable_weak_entry(ptr {Name(nullableStore.Value)})");
-                    Line($"{old} = load ptr, ptr {Name(nullableStore.Address)}");
-                    Line($"store ptr {entry}, ptr {Name(nullableStore.Address)}");
-                    Line($"call void @sable_weak_release(ptr {old})");
+                    _names[weak] = WeakOptional((EnumType)weak.Type, target);
                     return;
                 }
 
                 case StoreWeakInst weak: {
-                    var optional = (EnumType)weak.Value.Type;
-                    var type = Type(optional);
-                    var tag = Fresh();
-                    var word = Fresh();
-                    var pointer = Fresh();
-                    var present = Fresh();
-                    var target = Fresh();
                     var entry = Fresh();
                     var old = Fresh();
-                    Line($"{tag} = extractvalue {type} {Name(weak.Value)}, 0");
-                    Line($"{word} = extractvalue {type} {Name(weak.Value)}, 1, 0");
-                    Line($"{pointer} = inttoptr i64 {word} to ptr");
-                    Line($"{present} = icmp eq {TagType(optional)} {tag}, {optional.CaseIndex("Some")}");
-                    Line($"{target} = select i1 {present}, ptr {pointer}, ptr null");
-                    Line($"{entry} = call ptr @sable_weak_entry(ptr {target})");
+                    Line($"{entry} = call ptr @sable_weak_entry(ptr {WeakTarget((EnumType)weak.Value.Type, Name(weak.Value))})");
                     Line($"{old} = load ptr, ptr {Name(weak.Address)}");
                     Line($"store ptr {entry}, ptr {Name(weak.Address)}");
                     Line($"call void @sable_weak_release(ptr {old})");
+                    return;
+                }
+
+                // A struct's weak field as a value is the entry it holds, retained.
+                case WeakCopyValueInst weak: {
+                    var name = Fresh();
+                    _names[weak] = name;
+                    Line($"{name} = call ptr @sable_weak_entry(ptr {WeakTarget((EnumType)weak.Value.Type, Name(weak.Value))})");
+                    return;
+                }
+
+                case StrongCopyWeakValueInst weak: {
+                    var target = Fresh();
+                    Line($"{target} = call ptr @sable_weak_load(ptr {Name(weak.Value)})");
+                    _names[weak] = WeakOptional((EnumType)weak.Type, target);
+                    return;
+                }
+
+                // A struct's unowned field as a value is the object, its unowned count raised.
+                case UnownedCopyValueInst unowned: {
+                    Line($"call void @sable_unowned_retain(ptr {Name(unowned.Value)})");
+                    _names[unowned] = Name(unowned.Value);
+                    return;
+                }
+
+                case StrongCopyUnownedValueInst unowned: {
+                    SiteForRuntime();
+                    Line($"call void @sable_unowned_load(ptr {Name(unowned.Value)})");
+                    _names[unowned] = Name(unowned.Value);
                     return;
                 }
 
@@ -2910,6 +2938,26 @@ public sealed partial class LlvmEmitter {
                     return;
             }
 
+            // Asked of the registry: each protocol's descriptor, looked up
+            // in the records of the object's class and its superclasses.
+            if (builtin.Name.StartsWith("class_conforms:", StringComparison.Ordinal)) {
+                string? all = null;
+                foreach (var protocol in builtin.Name["class_conforms:".Length..].Split('&')) {
+                    var conforms = Fresh();
+                    Line($"{conforms} = call zeroext i1 @sable_conforms(ptr {operands[0]}, ptr {module.ProtocolDescriptor(protocol)})");
+                    if (all is null) {
+                        all = conforms;
+                    } else {
+                        var both = Fresh();
+                        Line($"{both} = and i1 {all}, {conforms}");
+                        all = both;
+                    }
+                }
+
+                _names[builtin] = all!;
+                return;
+            }
+
             if (builtin.Name.StartsWith("class_is:", StringComparison.Ordinal)) {
                 var target = (ClassType)function.Module!.FindType(builtin.Name["class_is:".Length..])!;
                 var metadata = Fresh();
@@ -3399,11 +3447,27 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 // An array of constants: the immortal one in read-only memory.
-                case "array_literal" when builtin.Operands.All(static o => o is IntegerLiteralInst or FloatLiteralInst):
+                case "array_literal" when SilBuiltins.IsConstantArray(builtin):
                     _names[builtin] = module.ArrayConstant((ArrayType)builtin.Type, [..operands]);
                     return;
 
-                // Elements that are no longer literals: appended, one by one.
+                // An array literal that does not escape its frame: made there,
+                // header and elements, each element stored where it goes.
+                case "array_literal_stack": {
+                    var arrayType = (ArrayType)builtin.Type;
+                    var layout = $"{{ [48 x i8], [{operands.Length} x {Type(arrayType.Element)}] }}";
+                    var memory = Scratch(layout, HeapAlign);
+                    Line($"{Result()} = call ptr @sable_stack_array(ptr {memory}, ptr {module.ArrayMetadata(arrayType)}, i64 {operands.Length})");
+                    for (var i = 0; i < operands.Length; i++) {
+                        var element = Fresh();
+                        Line($"{element} = getelementptr inbounds {layout}, ptr {memory}, i32 0, i32 1, i64 {i}");
+                        Line($"store {Type(arrayType.Element)} {operands[i]}, ptr {element}, !tbaa {TbaaElement}");
+                    }
+
+                    return;
+                }
+
+                // Elements that are not all literals: appended, one by one.
                 case "array_literal": {
                     var arrayType = (ArrayType)builtin.Type;
                     var slot = Scratch("ptr");

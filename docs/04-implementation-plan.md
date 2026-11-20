@@ -488,7 +488,12 @@ Status:
       `load_unowned`/`store_unowned`; weak references share a side-table
       entry per object, cleared when it dies; unowned ones count in the
       header's flags word, holding the memory, not the object, and trap on
-      a read once it is gone. Not yet: in structs, or in capture lists.
+      a read once it is gone. A struct's weak or unowned field is the same
+      storage, copied and destroyed by the struct's witnesses as a weak or
+      unowned retain and release; as a value it is made with
+      `weak_copy_value`/`unowned_copy_value` and read with
+      `strong_copy_weak_value`/`strong_copy_unowned_value`, in place with
+      `load_weak`/`load_unowned`.
 - [x] 6 — deinit ordering (subclass first, fields last to first), the
       immortal fast path, and a stack fast path (§3.7: an object made in
       its frame is counted as any other, and never freed). Atomic counts
@@ -695,14 +700,26 @@ but a local slot, put inside another value, captured, held weakly, or
 passed to a parameter that escapes or to a callee not known here; which
 parameters escape is a per-function summary computed for the module to a
 fixed point. A class's allocating initialiser is made where it is called,
-so the caller owns the allocation; then `alloc_ref [stack]` and
-`inline_new_stack` put what does not escape — and is not made in a loop —
-in the frame. ARC is unchanged: the last release runs the deinit and the
-fields' releases, in order, and frees nothing; an inline block that
+so the caller owns the allocation; then `alloc_ref [stack]`,
+`inline_new_stack` and `array_literal_stack` put what does not escape in
+the frame. Made in a loop, it is promoted when it is gone before the loop
+comes round: every copy, borrow and local slot holding it is made and used
+in its own block, and each slot emptied of it there, so the one place in
+the frame is reused turn after turn. A closure's context is an object like
+any other: making the closure lets it escape only when the closure's code
+keeps its context beyond a call, and calling a closure hands its context to
+that code alone. A closure captures a local that cannot change by value, as
+`[x]` would, so it needs no box of its own. An array literal is made whole
+(`array_literal`, its elements consumed) and, in the frame, as a header
+with its elements after it; grown past them, the elements move to the heap
+and the header stays. ARC is unchanged: the last release runs the deinit
+and the fields' releases, in order, and frees nothing; an inline block that
 outgrows its room in the frame moves to the heap. The JSON program loses
-187 allocations; the order record of §3.8 loses all of them. Deferred:
+187 allocations; the order record of §3.8 loses all of them. A loop of
+100,000 turns that calls a closure capturing its counter, makes an object,
+and reads an array literal made 500,001 allocations and makes 1. Deferred:
 dropping the header and the count for promoted objects whose count is
-provably never read, and promotion inside loops.
+provably never read, and a loop body of more than one block.
 
 ### 3.8 Exit criteria
 

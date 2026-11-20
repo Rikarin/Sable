@@ -64,6 +64,37 @@ public sealed class EscapeTests {
                           return keep(c).count
                       }
 
+                      fn keptFromTurnToTurn() -> Int {
+                          var last = Counter(0)
+                          var total = 0
+                          for i in 0..<3 {
+                              let c = Counter(i)
+                              total = total + read(c)
+                              last = c
+                          }
+                          return total + last.count
+                      }
+                      """
+        );
+
+        foreach (var function in new[] { "M.returned", "M.passedOn" }) {
+            Assert.False(Assert.Single(Allocations(module, function)).OnStack);
+        }
+
+        // The one made in the loop is still held when the loop comes round to it again.
+        var kept = module.Find("M.keptFromTurnToTurn")!;
+        Assert.False(Allocations(module, kept.Name).Single(a => a.Block != kept.Entry).OnStack);
+    }
+
+    /// <summary>
+    ///     One made in a loop and gone before the loop comes round again — every
+    ///     copy and slot holding it emptied in the same block — reuses one
+    ///     place in the frame turn after turn.
+    /// </summary>
+    [Fact]
+    public void AnObjectGoneEachTurnOfALoopIsMadeOnTheStack() {
+        var module = Optimised(
+            Counter + "\n" + """
                       fn inALoop() -> Int {
                           var total = 0
                           for i in 0..<3 {
@@ -75,9 +106,79 @@ public sealed class EscapeTests {
                       """
         );
 
-        foreach (var function in new[] { "M.returned", "M.passedOn", "M.inALoop" }) {
-            Assert.False(Assert.Single(Allocations(module, function)).OnStack);
-        }
+        Assert.True(Assert.Single(Allocations(module, "M.inALoop")).OnStack);
+        Assert.Equal(3L, new SilInterpreter(module).Run("M.inALoop"));
+    }
+
+    /// <summary>
+    ///     A closure's context is an object like any other: made in the frame
+    ///     when the closure is only called — here or by a callee that only
+    ///     calls it — and what it captures that cannot change is held in it
+    ///     by value, with no box of its own.
+    /// </summary>
+    [Fact]
+    public void AClosureOnlyCalledHasItsContextOnTheStack() {
+        var module = Optimised(
+            """
+            fn apply(_ f: (Int) -> Int, _ x: Int) -> Int {
+                return f(x) + f(1)
+            }
+
+            fn sum() -> Int {
+                var total = 0
+                for i in 0..<4 {
+                    total = total + apply({ x in x * i }, i)
+                }
+                return total
+            }
+
+            fn kept(_ n: Int) -> (Int) -> Int {
+                return { x in x + n }
+            }
+            """
+        );
+
+        Assert.True(Assert.Single(Allocations(module, "M.sum")).OnStack);
+        Assert.False(Assert.Single(Allocations(module, "M.kept")).OnStack);
+        Assert.Equal(20L, new SilInterpreter(module).Run("M.sum"));
+    }
+
+    static IEnumerable<BuiltinInst> ArrayLiterals(SilModule module, string function) =>
+        module.Find(function)!.Blocks.SelectMany(static b => b.Instructions.OfType<BuiltinInst>()).Where(static b => b.Name.StartsWith("array_literal", StringComparison.Ordinal));
+
+    /// <summary>An array literal that does not escape is made in the frame, its elements with it.</summary>
+    [Fact]
+    public void AnArrayLiteralUsedOnlyHereIsMadeOnTheStack() {
+        var module = Optimised(
+            """
+            fn sum(_ values: Int[]) -> Int {
+                var total = 0
+                for v in values {
+                    total = total + v
+                }
+                return total
+            }
+
+            fn local(_ n: Int) -> Int {
+                var total = 0
+                for i in 0..<n {
+                    var grown: Int[>..] = [i, i + 1]
+                    grown.append(i)
+                    total = total + sum([i, n]) + grown.count
+                }
+                return total
+            }
+
+            fn returned(_ n: Int) -> Int[] {
+                return [n, n]
+            }
+            """
+        );
+
+        Assert.Equal(2, ArrayLiterals(module, "M.local").Count());
+        Assert.All(ArrayLiterals(module, "M.local"), static l => Assert.Equal("array_literal_stack", l.Name));
+        Assert.Equal("array_literal", Assert.Single(ArrayLiterals(module, "M.returned")).Name);
+        Assert.Equal(21L, new SilInterpreter(module).Run("M.local", 3L));
     }
 
     [Fact]

@@ -12,6 +12,43 @@ typedef struct SableArray {
     char *elements;
 } SableArray;
 
+// An array literal that does not escape its frame (docs/04 §3.7) is made
+// there whole: the header, and its elements after it at this offset, which
+// the compiler's code stores. Counted as any array is, its last release
+// destroys the elements and frees neither. Grown past them, its elements
+// move to the heap; the header stays where it is.
+enum { SABLE_FRAME_ELEMENTS = 48 };
+_Static_assert(sizeof(SableArray) <= SABLE_FRAME_ELEMENTS, "a frame's array header fits before its elements");
+
+static bool elements_in_frame(const SableArray *array) {
+    return (object_flags(&array->header) & SABLE_STACK) && array->elements == (const char *)array + SABLE_FRAME_ELEMENTS;
+}
+
+void *sable_stack_array(void *memory, const SableMetadata *type, int64_t count) {
+    SableArray *array = memory;
+    memset(array, 0, sizeof *array);
+    array->header.type = type;
+    array->header.strong = 1;
+    array->header.flags = SABLE_STACK;
+    array->count = count;
+    array->capacity = count;
+    array->elements = (char *)memory + SABLE_FRAME_ELEMENTS;
+    object_born(&array->header);
+    return array;
+}
+
+// The elements given room for 'size' bytes, keeping the first 'old': out of
+// the frame, the first time an array made there grows.
+static char *resize_elements(SableArray *array, int64_t old, int64_t size) {
+    if (!elements_in_frame(array)) {
+        return buffer_resize(array->elements, old, size);
+    }
+
+    char *grown = buffer_alloc(size);
+    memcpy(grown, array->elements, (size_t)(old < size ? old : size));
+    return grown;
+}
+
 void sable_array_destroy(void *pointer) {
     SableArray *array = pointer;
     const SableMetadata *type = array->header.type;
@@ -21,7 +58,9 @@ void sable_array_destroy(void *pointer) {
         }
     }
 
-    buffer_free(array->elements, array->capacity * type->element_size);
+    if (!elements_in_frame(array)) {
+        buffer_free(array->elements, array->capacity * type->element_size);
+    }
 }
 
 int64_t sable_array_count(const SableArray *array) {
@@ -79,7 +118,7 @@ void *sable_array_append_slot(SableArray **slot, const SableMetadata *type) {
     if (array->count == array->capacity) {
         int64_t old = array->capacity * type->element_size;
         array->capacity = array->capacity < 4 ? 4 : array->capacity * 2;
-        array->elements = buffer_resize(array->elements, old, array->capacity * type->element_size);
+        array->elements = resize_elements(array, old, array->capacity * type->element_size);
     }
 
     return array->elements + array->count++ * type->element_size;
@@ -110,7 +149,7 @@ void sable_array_reserve(SableArray **slot, const SableMetadata *type, int64_t m
     if (array->capacity < minimum) {
         int64_t old = array->capacity * type->element_size;
         array->capacity = minimum;
-        array->elements = buffer_resize(array->elements, old, minimum * type->element_size);
+        array->elements = resize_elements(array, old, minimum * type->element_size);
     }
 }
 

@@ -681,34 +681,6 @@ internal sealed class AttributedTypeGreen : GreenNode
         new AttributedTypeSyntax(this, parent, position);
 }
 
-/// <summary>Green node for <see cref="RefTypeSyntax"/>.</summary>
-internal sealed class RefTypeGreen : GreenNode
-{
-    private readonly GreenToken? _refKeyword;
-    private readonly GreenNode? _elementType;
-
-    public RefTypeGreen(GreenToken? refKeyword, GreenNode? elementType)
-        : base(SyntaxKind.RefType, 0)
-    {
-        _refKeyword = refKeyword;
-        _elementType = elementType;
-        FullWidth = (refKeyword?.FullWidth ?? 0)
-                    + (elementType?.FullWidth ?? 0);
-    }
-
-    public override int SlotCount => 2;
-
-    public override GreenNode? GetSlot(int index) => index switch
-    {
-        0 => _refKeyword,
-        1 => _elementType,
-        _ => null,
-    };
-
-    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
-        new RefTypeSyntax(this, parent, position);
-}
-
 /// <summary>Green node for <see cref="CompositionTypeSyntax"/>.</summary>
 internal sealed class CompositionTypeGreen : GreenNode
 {

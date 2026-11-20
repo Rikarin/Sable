@@ -85,7 +85,7 @@ fn main() {
     print(energy(bodies))
     var step = 0
     while step < 200000 {
-        advance(bodies, 0.01)
+        advance(&bodies, 0.01)
         step = step + 1
     }
     print(energy(bodies))

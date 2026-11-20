@@ -1121,9 +1121,6 @@ internal sealed class TypeBinder(Compilation compilation) {
                     : new OptionalTypeSymbol(result);
             }
 
-            case RefTypeSyntax borrowed:
-                return new ReferenceTypeSymbol(BindType(borrowed.ElementType, context, scope));
-
             case FixedSizeArrayTypeSyntax array:
                 return new ArrayTypeSymbol(BindType(array.ElementType, context, scope), ArrayKind.Fixed, CapacityOf(array.Size), CapacityParameterOf(array.Size, context, scope));
 

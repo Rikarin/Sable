@@ -17,7 +17,7 @@ public fn measure(_ value: JsonValue) -> Statistics {
         values: 0, depth: 0, nulls: 0, booleans: 0, numbers: 0,
         strings: 0, arrays: 0, objects: 0, longestString: 0
     }
-    tally(value, 1, stats)
+    tally(value, 1, &stats)
     return stats
 }
 
@@ -41,13 +41,13 @@ fn tally(_ value: JsonValue, _ depth: Int, _ stats: inout Statistics) {
         case .Array(let items) => {
             stats.arrays = stats.arrays + 1
             for item in items {
-                tally(item, depth + 1, stats)
+                tally(item, depth + 1, &stats)
             }
         }
         case .Object(let members) => {
             stats.objects = stats.objects + 1
             for m in members {
-                tally(m.value, depth + 1, stats)
+                tally(m.value, depth + 1, &stats)
             }
         }
     }

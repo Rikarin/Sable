@@ -521,6 +521,36 @@ public sealed class DeclarationParserTests {
         Assert.Equal(source, tree.ToFullString());
     }
 
+    [Theory]
+    [InlineData("fn f(ref a: Node) {}", "'ref' is not Sable", "'a: Node&'", "fn f(a: Node&) {}")]
+    [InlineData("fn f(borrowing h: Node) {}", "'borrowing' is not Sable", "'h: Node&'", "fn f(h: Node&) {}")]
+    [InlineData("fn f(h: borrowing Node) {}", "'borrowing' is not Sable", "'h: Node&'", "fn f(h: Node&) {}")]
+    [InlineData("fn f(_ a: ref Node?) {}", "'ref' is not Sable", "'Node?&'", "fn f(_ a: Node?&) {}")]
+    [InlineData("fn f() -> ref Node {}", "'ref' is not Sable", "'Node&'", "fn f() -> Node& {}")]
+    public void RefAndBorrowingAreReadAsTheReferenceTheyMeantAndSaySo(string declaration, string says, string spelled, string fixedText) {
+        var source = "module M\n" + declaration + "\n";
+        var tree = SyntaxTree.Parse(source);
+        var error = Assert.Single(tree.Diagnostics);
+        Assert.Equal(ErrorCode.ERR_RefIsReferenceType, error.Code);
+        Assert.Contains(says, error.Message);
+        Assert.Contains(spelled, error.Message);
+        Assert.Equal(source, tree.ToFullString());
+
+        var function = Assert.IsType<FunctionDeclarationSyntax>(Assert.Single(((CompilationUnitSyntax)tree.Root).Members));
+        Assert.Contains(
+            function.DescendantNodes().OfType<ReferenceTypeSyntax>(),
+            static r => r.AmpersandToken.IsMissing
+        );
+
+        var fix = Assert.Single(error.Fixes);
+        var text = source;
+        foreach (var change in fix.Changes.OrderByDescending(static c => c.Span.Start)) {
+            text = text[..change.Span.Start] + change.NewText + text[change.Span.End..];
+        }
+
+        Assert.Equal("module M\n" + fixedText + "\n", text);
+    }
+
     [Fact]
     public void ParsesSetterWithNamedParameter() {
         var declaration = ParseMember<ClassDeclarationSyntax>("class C { var x: Int { get => y  set(v) { y = v } } }");

@@ -178,12 +178,6 @@
     <Field Name="Type" Type="TypeSyntax" />
   </Node>
 
-  <Node Name="RefTypeSyntax" Base="TypeSyntax" Kind="RefType"
-        Doc="`ref T`: a borrowed reference whose root is inferred.">
-    <Field Name="RefKeyword" Type="Token" />
-    <Field Name="ElementType" Type="TypeSyntax" />
-  </Node>
-
   <Node Name="CompositionTypeSyntax" Base="TypeSyntax" Kind="CompositionType"
         Doc="`P &amp; Q`: protocol composition.">
     <Field Name="Left" Type="TypeSyntax" />

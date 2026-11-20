@@ -65,6 +65,7 @@ public enum ErrorCode {
     ERR_ExpectedStatementEnd = 1010,
     ERR_BraceOnNewLine = 1011,
     ERR_TypealiasIsAlias = 1012,
+    ERR_RefIsReferenceType = 1013,
 
     // ---- Name resolution (S2000-S2999) -----------------------------------
     ERR_DuplicateDeclaration = 2000,
@@ -185,7 +186,7 @@ public enum ErrorCode {
     ERR_ConstGenericPredicateFails = 3421,
     ERR_SelfRequirementOnExistential = 3161,
 
-    // Ownership, escape and isolation checks (S3200-S3208).
+    // Ownership, escape and isolation checks (S3200-S3209).
     ERR_IntegerDoesNotFit = 3200,
     ERR_ConstantOverflow = 3201,
     ERR_OutNotAssigned = 3202,
@@ -195,6 +196,7 @@ public enum ErrorCode {
     ERR_ActorStateFromOutside = 3206,
     ERR_NotSendable = 3207,
     ERR_MisplacedInOut = 3208,
+    ERR_ArgumentMarker = 3209,
 
     // A type declared ': Sendable' that holds something that is not (S3410).
     ERR_DeclaredSendableIsNot = 3410,

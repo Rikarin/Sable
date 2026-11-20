@@ -3650,6 +3650,12 @@ public sealed partial class Binder {
     }
 
     /// <summary>True for an expression that names storage: something a reference can refer to.</summary>
+    /// <summary>What a reference refers to, read: '-x' and 'x + 1' with 'x: Int&amp;'.</summary>
+    static BoundExpression Dereferenced(BoundExpression expression) =>
+        expression.Type is ReferenceTypeSymbol { RelativeWidth: null } reference
+            ? new BoundConversion(expression.Syntax, reference.ReferencedType, expression, ConversionKind.Dereference)
+            : expression;
+
     static bool IsPlace(BoundExpression expression) =>
         expression switch {
             BoundLocalAccess or BoundParameterAccess or BoundSelfAccess => true,
@@ -4838,6 +4844,8 @@ public sealed partial class Binder {
                 CheckWritableArgument(bound[i], "inout");
             }
 
+            CheckArgumentMarker(syntaxes[i], type.IsInOut(i) ? ParameterModifier.InOut : ParameterModifier.None, $"argument {i + 1}");
+
             converted.Add(Convert(bound[i], type.ParameterTypes[i], bound[i].Syntax));
         }
 
@@ -4999,6 +5007,10 @@ public sealed partial class Binder {
                 CheckWritableArgument(arguments[i], parameter);
             }
 
+            if (i < syntaxes.Length) {
+                CheckArgumentMarker(syntaxes[i], parameter.Modifier, $"'{parameter.Name}'");
+            }
+
             // A parameter type inference could not settle is reported below,
             // once, rather than again as every argument that does not fit it.
             if (ContainsUninferred(wanted, resolved)) {
@@ -5006,7 +5018,11 @@ public sealed partial class Binder {
                 continue;
             }
 
-            converted.Add(Convert(arguments[i], wanted, arguments[i].Syntax));
+            converted.Add(
+                parameter is { IsByReference: true, IsVariadic: false } && wanted is ReferenceTypeSymbol shared
+                    ? SharedArgument(arguments[i], shared)
+                    : Convert(arguments[i], wanted, arguments[i].Syntax)
+            );
 
             // A 'some P' parameter is a generic one, bound to its argument's
             // type: a generator's sequence holds what it was given, so its
@@ -5015,7 +5031,7 @@ public sealed partial class Binder {
                 && resolved.OpaqueTypeParameters.FirstOrDefault(t => opaque.Equals(t.OpaqueParameter)) is { } standsFor
                 && substitution.Lookup(standsFor) is null
                 && !arguments[i].Type.IsError) {
-                substitution = Combine(substitution, new(new Dictionary<TypeParameterSymbol, TypeSymbol> { [standsFor] = arguments[i].Type }));
+                substitution = Combine(substitution, new(new Dictionary<TypeParameterSymbol, TypeSymbol> { [standsFor] = Decayed(parameter.Type, arguments[i].Type) }));
             }
         }
 
@@ -5501,8 +5517,20 @@ public sealed partial class Binder {
             }
         }
 
-        return argument.Type;
+        return Decayed(parameter, argument.Type);
     }
+
+    /// <summary>
+    ///     A reference passed where a value is wanted is the value it refers
+    ///     to: 'show(choose(s))', with 'choose' giving a 'String&amp;', makes
+    ///     'show&lt;T&gt;' a 'show&lt;String&gt;', as passing to a 'String'
+    ///     parameter would read the string. Only a 'T&amp;' parameter takes the
+    ///     reference itself.
+    /// </summary>
+    static TypeSymbol Decayed(TypeSymbol parameter, TypeSymbol argument) =>
+        argument is ReferenceTypeSymbol { RelativeWidth: null } reference && parameter is not ReferenceTypeSymbol
+            ? reference.ReferencedType
+            : argument;
 
     static TypeSubstitution Combine(TypeSubstitution outer, TypeSubstitution inner) {
         if (outer.IsEmpty) {
@@ -7212,6 +7240,67 @@ public sealed partial class Binder {
     void CheckWritableArgument(BoundExpression argument, ParameterSymbol parameter) =>
         CheckWritableArgument(argument, parameter.Modifier == ParameterModifier.Out ? "out" : "inout");
 
+    /// <summary>
+    ///     <c>&amp;</c> at a call marks an argument the call may write: an
+    ///     <c>inout</c> or <c>out</c> one has it (or, for <c>out</c>, the word),
+    ///     and nothing else does. A <c>T&amp;</c> parameter only reads, so its
+    ///     argument is written plainly.
+    /// </summary>
+    void CheckArgumentMarker(ExpressionSyntax argument, ParameterModifier modifier, string what) {
+        if (argument.Parent is not ArgumentSyntax written) {
+            return;
+        }
+
+        var marker = written.ModifierToken;
+        var writes = modifier is ParameterModifier.InOut or ParameterModifier.Out;
+        if (writes && marker.IsNone) {
+            var keyword = modifier == ParameterModifier.Out ? "out" : "inout";
+            _diagnostics.Add(QuickFixes.With(
+                Diagnostic.Error(
+                    ErrorCode.ERR_ArgumentMarker,
+                    argument.Span,
+                    $"{what} is '{keyword}': the call may write this argument, so it is marked '&{argument}'"
+                ),
+                "Add '&'",
+                new TextChange(new(argument.Span.Start, 0), "&")
+            ));
+        } else if (marker.Kind == SyntaxKind.AmpersandToken && !writes
+                   || marker.Kind == SyntaxKind.OutKeyword && modifier != ParameterModifier.Out) {
+            var word = marker.Kind == SyntaxKind.AmpersandToken ? "&" : "out";
+            _diagnostics.Add(QuickFixes.With(
+                Diagnostic.Error(
+                    ErrorCode.ERR_ArgumentMarker,
+                    marker.Span,
+                    $"'{word}' marks an argument the call may write, and {what} is not "
+                    + (word == "&" ? "'inout' or 'out'" : "'out'")
+                    + (word == "&" && !writes ? ": pass it as it is, '" + argument + "'" : "")
+                ),
+                $"Remove '{word}'",
+                new TextChange(new(marker.Span.Start, argument.Span.Start - marker.Span.Start), "")
+            ));
+        }
+    }
+
+    /// <summary>
+    ///     An argument for a <c>T&amp;</c> parameter: the place it names, or a
+    ///     value with no place, which the call holds in a temporary of its
+    ///     own for the length of the call.
+    /// </summary>
+    BoundExpression SharedArgument(BoundExpression argument, ReferenceTypeSymbol parameterType) {
+        if (argument.HasError || argument.Type is ReferenceTypeSymbol || IsPlace(argument) || argument is BoundConditional) {
+            return Convert(argument, parameterType, argument.Syntax);
+        }
+
+        var value = Convert(argument, parameterType.ReferencedType, argument.Syntax);
+        if (value.HasError) {
+            return value;
+        }
+
+        var shared = new BoundConversion(argument.Syntax, parameterType, value, ConversionKind.Reference);
+        _bound[argument.Syntax] = shared;
+        return shared;
+    }
+
     void CheckWritableArgument(BoundExpression argument, string keyword) {
         var place = argument is BoundUnaryOperator { OperatorKind: UnaryOperatorKind.AddressOf, Operand: var operand }
             ? operand
@@ -7436,7 +7525,7 @@ public sealed partial class Binder {
 
         var operand = BindExpression(syntax.Operand);
         if (syntax.OperatorToken.Kind is not (SyntaxKind.AmpersandToken or SyntaxKind.MoveKeyword)) {
-            operand = ImplicitlyUnwrapped(operand);
+            operand = ImplicitlyUnwrapped(Dereferenced(operand));
         }
 
         var kind = syntax.OperatorToken.Kind switch {
@@ -7633,6 +7722,14 @@ public sealed partial class Binder {
         if (left.HasError || right.HasError) {
             return new BoundError(syntax, left, right);
         }
+
+        // An operator reads what a reference refers to: 'x + 1' with 'x: Int&'.
+        // An assignment's target stays the place it names.
+        if (CompoundOperatorKind(operatorToken.Kind) is null) {
+            left = Dereferenced(left);
+        }
+
+        right = Dereferenced(right);
 
         // 'm += n' is 'm = m + n': the operator it looks for is '+'
         // (SYNTAX.md §13 — compound assignment derives from the binary one).

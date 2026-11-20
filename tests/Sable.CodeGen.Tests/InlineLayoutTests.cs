@@ -453,7 +453,7 @@ public sealed class InlineLayoutTests {
                              var items: Item[>..]
                          }
 
-                         fn first(_ bag: ref Bag) -> ref Item {
+                         fn first(_ bag: Bag&) -> Item& {
                              return &bag.items[0]
                          }
                          """;
@@ -468,16 +468,16 @@ public sealed class InlineLayoutTests {
                     """
                         var bag = Bag { items: [] }
                         bag.items.append(Item { value: 4 })
-                        let item = first(&bag)
-                        print("\(item.value) \(first(&bag).value + 1)")
+                        let item = first(bag)
+                        print("\(item.value) \(first(bag).value + 1)")
                     """
                 )
             ).Stdout
         );
 
     [Theory]
-    [InlineData("fn bad() -> ref Item {\n    var bag = Bag { items: [Item { value: 1 }] }\n    return &bag.items[0]\n}", "", "cannot return a reference rooted in local 'bag'")]
-    [InlineData("fn bad(_ bag: Bag) -> ref Item {\n    return &bag.items[0]\n}", "", "cannot return a reference rooted in parameter 'bag', which is passed by value")]
+    [InlineData("fn bad() -> Item& {\n    var bag = Bag { items: [Item { value: 1 }] }\n    return &bag.items[0]\n}", "", "cannot return a reference rooted in local 'bag'")]
+    [InlineData("fn bad(_ bag: Bag) -> Item& {\n    return &bag.items[0]\n}", "", "cannot return a reference rooted in parameter 'bag', which is passed by value")]
     [InlineData("", "    var bag = Bag { items: [Item { value: 1 }] }\n    let kept = &bag.items[0]\n    bag.items.append(Item { value: 2 })\n    print(kept.value)",
         "this reference into local 'bag' is stale — the value was changed at line")]
     [InlineData("", "    var bag = Bag { items: [Item { value: 1 }] }\n    for item in bag.items {\n        bag.items.append(Item { value: item.value })\n    }",

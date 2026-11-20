@@ -150,7 +150,7 @@ public sealed partial class LanguageServer {
         // Root inference runs on SIL, and lowering the workspace is not
         // free: only when something here returns a reference.
         RootSummaries? roots = null;
-        if (members.Any(static m => m is FunctionDeclarationSyntax { ReturnClause.Type: RefTypeSyntax or ReferenceTypeSyntax or OptionalTypeSyntax { ElementType: ReferenceTypeSyntax } })
+        if (members.Any(static m => m is FunctionDeclarationSyntax { ReturnClause.Type: ReferenceTypeSyntax or OptionalTypeSyntax { ElementType: ReferenceTypeSyntax } })
             || members.Any(static m => m.DescendantNodes().Any(static n => n is PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.AmpersandToken }))) {
             roots = await RootSummariesAsync(analysis);
         }

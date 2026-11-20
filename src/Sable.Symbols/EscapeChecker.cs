@@ -35,12 +35,11 @@ internal static class EscapeChecker {
 
     /// <summary>A closure parameter that is not '@escaping'.</summary>
     static bool IsNonEscapingClosure(ParameterSymbol parameter) =>
-        parameter is { IsEscaping: false, Modifier: not (ParameterModifier.InOut or ParameterModifier.Out or ParameterModifier.Ref) }
+        parameter is { IsEscaping: false, IsCallersStorage: false }
         && parameter.Type is FunctionTypeSymbol
         && !parameter.DeclaringSyntax.IsEmpty;
 
-    static bool IsByAddress(ParameterSymbol parameter) =>
-        parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out or ParameterModifier.Ref;
+    static bool IsByAddress(ParameterSymbol parameter) => parameter.IsCallersStorage;
 
     /// <summary>A closure, through the conversions that adapt it to the parameter it is passed to.</summary>
     static BoundExpression Unwrapped(BoundExpression expression) =>
@@ -106,7 +105,7 @@ internal static class EscapeChecker {
 
                 // An inout parameter may be captured: it is copied in to a box
                 // the closures share, and back out when the call ends. An
-                // 'out' parameter has nothing to copy in, and a 'ref' one is
+                // 'out' parameter has nothing to copy in, and a 'T&' one is
                 // the caller's storage itself, which a copy would not be.
                 case BoundParameterAccess { Parameter: { Modifier: not ParameterModifier.InOut } parameter } access when IsByAddress(parameter):
                     Captured(access, parameter);
@@ -162,7 +161,7 @@ internal static class EscapeChecker {
                 return;
             }
 
-            var kind = parameter.Modifier.ToString().ToLowerInvariant();
+            var kind = parameter.Modifier == ParameterModifier.None ? "a reference" : parameter.Modifier.ToString().ToLowerInvariant();
             diagnostics.Error(
                 ErrorCode.ERR_Escapes,
                 access.Syntax.Span,

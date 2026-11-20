@@ -298,8 +298,9 @@ public static partial class InterfaceFingerprint {
                 return null;
             }
 
-            // Nothing in the signature that makes it generic or a reference.
-            if (AnyToken(node, body, SyntaxKind.SomeKeyword, SyntaxKind.RefKeyword)) {
+            // Nothing in the signature that makes it generic or a reference
+            // ('T&'; an '&' that is something else only errs on the safe side).
+            if (AnyToken(node, body, SyntaxKind.SomeKeyword, SyntaxKind.AmpersandToken)) {
                 return null;
             }
 

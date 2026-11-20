@@ -25,7 +25,7 @@ public sealed class PipelineTests {
     [Theory]
     [InlineData("S3057", "@noncopy struct H { var v: Int }\nfn take(_ h: consuming H) {}\nfn f() {\n    let h = H(v: 1)\n    take(h)\n    take(h)\n}\n", 6)]
     [InlineData("S3062", "fn both(_ a: inout Int, _ b: inout Int) {}\nfn f() {\n    var n = 1\n    both(&n, &n)\n}\n", 4)]
-    [InlineData("S3061", "fn f() -> ref Int {\n    var n = 1\n    return &n\n}\n", 3)]
+    [InlineData("S3061", "fn f() -> Int& {\n    var n = 1\n    return &n\n}\n", 3)]
     public void CheckReportsWhatTheSilChecksFind(string code, string body, int line) {
         var errors = Pipeline.Check([SyntaxTree.Parse(new SourceText("module M\n" + body, "test.sb"))]);
         var error = Assert.Single(errors);

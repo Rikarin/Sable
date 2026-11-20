@@ -1,0 +1,52 @@
+module Negative.ReferenceSpelling
+
+// One reference type, 'T&' (#292): 'ref' and 'borrowing' are reserved, to
+// say so, and read as the reference they meant. '&' at a call marks an
+// argument the call may write: an 'inout' or 'out' one, and nothing else.
+
+struct Node { var value: Int }
+
+fn pick(ref a: Node, _ b: Node&) -> Node& { //! S1013 'a: Node&'
+    return a.value >= b.value ? a : b
+}
+
+fn first(_ a: Node&) -> ref Node { //! S1013 'Node&'
+    return a
+}
+
+fn peek(borrowing h: Node) -> Int { //! S1013 'h: Node&'
+    return h.value
+}
+
+fn labelled(from source: ref Node) -> Int { //! S1013 'Node&'
+    return source.value
+}
+
+fn bump(_ n: inout Int) {
+    n += 1
+}
+
+fn assign(out n: Int) {
+    n = 1
+}
+
+fn read(_ node: Node&) -> Int {
+    return node.value
+}
+
+fn twice(_ n: Int) -> Int {
+    return n * 2
+}
+
+fn calls() -> Int {
+    var n = 0
+    var m: Int
+    let node = Node { value: 1 }
+    bump(n)                             //! S3209 is 'inout'
+    assign(m)                           //! S3209 is 'out'
+    bump(&n)
+    assign(&m)
+    let a = read(&node)                 //! S3209 '&' marks an argument the call may write
+    let b = twice(&n)                   //! S3209 '&' marks an argument the call may write
+    return read(node) + n + m + a + b
+}

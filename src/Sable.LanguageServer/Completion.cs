@@ -113,7 +113,7 @@ public sealed partial class LanguageServer {
         "throw", "yield", "try", "await", "break", "continue", "defer", "do", "catch", "struct", "class", "actor",
         "union", "enum", "protocol", "extension", "import", "module", "public", "private", "internal",
         "static", "mutating", "init", "self", "Self", "true", "false", "none", "region", "unsafe", "async",
-        "throws", "is", "as", "where", "move", "ref", "inout", "consuming", "borrowing", "alias", "const",
+        "throws", "is", "as", "where", "move", "inout", "consuming", "alias", "const",
     ];
 
     [GeneratedRegex(@"^\s*(public\s+)?import\s+([A-Za-z0-9_.]*)$")]

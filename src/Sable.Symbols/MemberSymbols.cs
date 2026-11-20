@@ -371,6 +371,16 @@ public sealed class ParameterSymbol(
     public ParameterModifier Modifier { get; internal set; } = ParameterModifier.None;
 
     /// <summary>
+    ///     A <c>T&amp;</c> parameter: the caller's storage, shared for the
+    ///     call, with the argument written plainly (<c>f(x)</c>). Root
+    ///     inference decides whether the result may be rooted in it.
+    /// </summary>
+    public bool IsByReference => Type is ReferenceTypeSymbol { RelativeWidth: null };
+
+    /// <summary>An <c>inout</c>, <c>out</c> or <c>T&amp;</c> parameter: the caller's storage, not a copy of it.</summary>
+    public bool IsCallersStorage => Modifier is ParameterModifier.InOut or ParameterModifier.Out || IsByReference;
+
+    /// <summary>
     ///     <c>@escaping</c>: a closure passed here may outlive the call — be
     ///     stored, returned, or captured by a closure that does. Without it, a
     ///     closure parameter may only be called, or passed on to another that
@@ -392,8 +402,6 @@ public enum ParameterModifier {
     InOut,
     Out,
     Consuming,
-    Borrowing,
-    Ref,
     In
 }
 

@@ -32,7 +32,7 @@ public sealed class ExclusivityTests {
                                     y = y + 2
                                 }
 
-                                fn copy(_ from: ref Int, _ to: inout Int) {
+                                fn copy(_ from: Int&, _ to: inout Int) {
                                     to = from
                                 }
 
@@ -54,7 +54,7 @@ public sealed class ExclusivityTests {
     [InlineData("var p = Pair { a: 1, b: 2 }\nbump(&p.a, &p.a)", "argument 1 ('x') is inout, and argument 2 ('y') is inout")]
     [InlineData("var p = Pair { a: 1, b: 2 }\nvar q = p\nbump(&q.a, &q.a)", "overlapping accesses to 'q.a'")]
     [InlineData("var values = [1, 2, 3]\nbump(&values[0], &values[1])", "overlapping accesses to 'values[…]'")]
-    [InlineData("var n = 1\ncopy(&n, &n)", "argument 1 ('from') reads it by reference, and argument 2 ('to') is inout")]
+    [InlineData("var n = 1\ncopy(n, &n)", "argument 1 ('from') reads it by reference, and argument 2 ('to') is inout")]
     [InlineData("var p = Pair { a: 1, b: 2 }\np.absorb(&p.a)", "the call to the mutating 'absorb' changes it")]
     [InlineData("let box = Box(1)\nbump(&box.value, &box.value)", "overlapping accesses to 'box.value'")]
     // A closure written into the call may run during it (#125).
@@ -78,14 +78,14 @@ public sealed class ExclusivityTests {
                         bump(&p.a, &p.b)
                         var n = 3
                         p.absorb(&n)
-                        copy(&p.a, &p.b)
+                        copy(p.a, &p.b)
                         var q = Pair { a: 0, b: 0 }
                         bump(&p.b, &q.b)
                         print("\(p.a) \(p.b - 2) \(p.b + q.b - 1)")
                         let one = Box(3)
                         let two = Box(3)
                         both(one, two)
-                        copy(&one.value, &two.pair.a)
+                        copy(one.value, &two.pair.a)
                         print("\(one.value) \(two.pair.a) \(two.value - 1)")
                         var m = 1
                         var k = 1

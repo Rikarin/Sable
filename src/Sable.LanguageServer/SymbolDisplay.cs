@@ -138,8 +138,6 @@ internal static class SymbolDisplay {
             ParameterModifier.InOut => "inout ",
             ParameterModifier.Out => "out ",
             ParameterModifier.Consuming => "consuming ",
-            ParameterModifier.Borrowing => "borrowing ",
-            ParameterModifier.Ref => "ref ",
             ParameterModifier.In => "in ",
             _ => "",
         };

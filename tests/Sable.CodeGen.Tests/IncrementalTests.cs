@@ -614,7 +614,7 @@ public sealed class IncrementalTests {
         // into, and must assume either argument; the whole program knows it is 'a'.
         using var fixture = new PackageFixture();
         fixture.Package("refs", "refs", "0.1.0", "",
-            ("src/lib.sb", "module Refs\n\npublic fn first(ref a: String, ref b: String) -> ref String {\n    return a\n}\n"));
+            ("src/lib.sb", "module Refs\n\npublic fn first(a: String&, b: String&) -> String& {\n    return a\n}\n"));
         fixture.Package("app", "app", "0.1.0", "[dependencies]\nrefs = { path = \"../refs\" }\n",
             ("src/main.sb", """
                 module App
@@ -622,7 +622,7 @@ public sealed class IncrementalTests {
                 import Sable.IO
                 import Refs
 
-                fn choose(ref a: String) -> ref String {
+                fn choose(a: String&) -> String& {
                     let local = "local"
                     return first(a, local)
                 }

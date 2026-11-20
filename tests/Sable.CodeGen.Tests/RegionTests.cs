@@ -29,7 +29,7 @@ public sealed class RegionTests {
                                     var held: Noisy
                                 }
 
-                                fn build(in r: Region, _ v: Int) -> ref Node {
+                                fn build(in r: Region, _ v: Int) -> Node& {
                                     return r.alloc(Node { value: v, label: "n\(v)" })
                                 }
 
@@ -83,7 +83,7 @@ public sealed class RegionTests {
     public void AReferenceCannotBeReturnedOutOfItsRegion() =>
         Rejects(
             """
-            fn leak() -> ref Node {
+            fn leak() -> Node& {
                 region arena {
                     return arena.alloc(Node { value: 1, label: "x" })
                 }
@@ -114,7 +114,7 @@ public sealed class RegionTests {
                               var next: Link&?
                           }
 
-                          fn chain(in r: region, _ n: Int) -> ref Link {
+                          fn chain(in r: region, _ n: Int) -> Link& {
                               var head = r.alloc(Link { value: 0, next: none })
                               for i in 1..<n {
                                   head = r.alloc(Link { value: i, next: head })
@@ -122,7 +122,7 @@ public sealed class RegionTests {
                               return head
                           }
 
-                          fn sum(_ head: ref Link) -> Int {
+                          fn sum(_ head: Link&) -> Int {
                               var total = head.value
                               var current = head.next
                               while current != none {
@@ -151,8 +151,8 @@ public sealed class RegionTests {
         );
 
     [Theory]
-    [InlineData("fn bad(in r: region) -> ref Link {\n    var local = Link { value: 1, next: none }\n    return r.alloc(Link { value: 2, next: &local })\n}", "cannot store a reference rooted in local 'local' into region 'r', passed in")]
-    [InlineData("fn bad(in r: region, in s: region) -> ref Link {\n    let first = r.alloc(Link { value: 1, next: none })\n    return s.alloc(Link { value: 2, next: first })\n}", "cannot store a reference rooted in parameter 'r' into region 's', passed in")]
+    [InlineData("fn bad(in r: region) -> Link& {\n    var local = Link { value: 1, next: none }\n    return r.alloc(Link { value: 2, next: &local })\n}", "cannot store a reference rooted in local 'local' into region 'r', passed in")]
+    [InlineData("fn bad(in r: region, in s: region) -> Link& {\n    let first = r.alloc(Link { value: 1, next: none })\n    return s.alloc(Link { value: 2, next: first })\n}", "cannot store a reference rooted in parameter 'r' into region 's', passed in")]
     [InlineData("fn bad() -> Link {\n    let inner = Link { value: 1, next: none }\n    return Link { value: 2, next: &inner }\n}", "cannot return a reference rooted in local 'inner'")]
     public void AReferenceInAFieldIsHeldToItsRoot(string declaration, string message) =>
         Rejects(Linked + "\n" + declaration, "", message);

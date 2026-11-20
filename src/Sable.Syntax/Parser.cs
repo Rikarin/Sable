@@ -1634,8 +1634,13 @@ internal sealed class Parser {
                 return new ExistentialTypeGreen(anyKeyword, ParseIntersectionType());
             }
 
-            case SyntaxKind.RefKeyword:
-                return new RefTypeGreen(EatToken(), ParsePostfixType());
+            // 'ref T' is not Sable: a reference is written after its type,
+            // 'T&'. The word stays reserved so that it says so, and what
+            // follows reads as the reference it meant.
+            case SyntaxKind.RefKeyword: {
+                var keyword = RemovedKeyword();
+                return ReadAsReference(ParsePostfixType(), keyword, "a reference is written after its type");
+            }
 
             // '~Copyable': parsed wherever a type is, and bound only as a constraint.
             case SyntaxKind.TildeToken:
@@ -3611,9 +3616,21 @@ internal sealed class Parser {
         // reading the word as the label loses nothing. The modifier can still
         // be written after the colon ('r: in region') or before a label
         // ('in _ r: region').
+        //
+        // 'ref a: Node' and 'borrowing h: FileHandle' are not Sable: a
+        // parameter that refers to its argument says so in its type,
+        // 'a: Node&'. The words stay reserved so that they say so, and the
+        // parameter reads as the one it meant.
         var modifierItems = ImmutableArray.CreateBuilder<GreenNode>();
-        while (IsParameterModifier(Current.Kind) && !IsInLabel()) {
-            modifierItems.Add(EatToken());
+        (SyntaxKind Kind, TextSpan Span)? removed = null;
+        while (true) {
+            if (IsRemovedParameterModifier(Current.Kind)) {
+                removed ??= RemovedKeyword();
+            } else if (IsParameterModifier(Current.Kind) && !IsInLabel()) {
+                modifierItems.Add(EatToken());
+            } else {
+                break;
+            }
         }
 
         var modifiers = GreenList.Create(modifierItems.ToImmutable());
@@ -3632,10 +3649,26 @@ internal sealed class Parser {
 
         // 'into buf: inout U8[]' puts the modifier after the colon, which is
         // the form that reads well once a parameter has an external label.
+        // 'h: borrowing FileHandle' is not Sable either; 'a: ref Node' is a
+        // type, and says so as one.
+        if (At(SyntaxKind.BorrowingKeyword)) {
+            removed ??= RemovedKeyword();
+        }
+
         var typeModifier = IsParameterModifier(Current.Kind) ? EatToken() : null;
 
         // 'f: @escaping () -> Int' says of the type what '@escaping f: …' does.
         var type = At(SyntaxKind.AtToken) ? new AttributedTypeGreen(ParseAttributes(onType: true), ParseType()) : ParseType();
+        if (removed is { } keyword) {
+            type = ReadAsReference(
+                type,
+                keyword,
+                keyword.Kind == SyntaxKind.BorrowingKeyword
+                    ? "a parameter taken by reference says so in its type (a class or @noncopy one is, without it)"
+                    : "a parameter that refers to its argument says so in its type",
+                identifier.Text + ": "
+            );
+        }
         var ellipsis = TryEatToken(SyntaxKind.DotDotDotToken);
 
         GreenNode? defaultValue = null;
@@ -3668,11 +3701,47 @@ internal sealed class Parser {
             SyntaxKind.InoutKeyword
                 or SyntaxKind.OutKeyword
                 or SyntaxKind.ConsumingKeyword
-                or SyntaxKind.BorrowingKeyword
-                or SyntaxKind.RefKeyword
                 or SyntaxKind.InKeyword => true,
             _ => false,
         };
+
+    /// <summary>'ref' and 'borrowing' before a parameter: reserved, to say what Sable writes instead.</summary>
+    static bool IsRemovedParameterModifier(SyntaxKind kind) =>
+        kind is SyntaxKind.RefKeyword or SyntaxKind.BorrowingKeyword;
+
+    /// <summary>
+    ///     Skips 'ref' or 'borrowing', returning where it was with the
+    ///     whitespace after it, which the fix deletes with it.
+    /// </summary>
+    (SyntaxKind Kind, TextSpan Span) RemovedKeyword() {
+        var kind = Current.Kind;
+        var span = new TextSpan(CurrentSpan.Start, Current.Text.Length + Current.TrailingTriviaWidth);
+        SkipCurrentToken();
+        return (kind, span);
+    }
+
+    /// <summary>
+    ///     A type written with 'ref' or 'borrowing' before it, read as the
+    ///     reference it meant, 'T&amp;', with the error that says so and the
+    ///     fix that writes it.
+    /// </summary>
+    GreenNode ReadAsReference(GreenNode type, (SyntaxKind Kind, TextSpan Span) keyword, string why, string parameter = "") {
+        var text = type.ToFullString().Substring(type.LeadingTriviaWidth, type.Width);
+        var end = _tokenPosition - type.TrailingTriviaWidth;
+        var word = keyword.Kind == SyntaxKind.RefKeyword ? "ref" : "borrowing";
+        var diagnostic = Diagnostic.Error(
+            ErrorCode.ERR_RefIsReferenceType,
+            new TextSpan(keyword.Span.Start, word.Length),
+            $"'{word}' is not Sable: {why}, '{parameter}{text}&'"
+        ) with {
+            Fixes = [new($"Write '{text}&'", [new TextChange(keyword.Span, ""), new TextChange(new TextSpan(end, 0), "&")])],
+        };
+        _diagnostics.Add(diagnostic);
+
+        return type is ReferenceTypeGreen || type.Width == 0
+            ? type
+            : new ReferenceTypeGreen(type, CreateMissing(SyntaxKind.AmpersandToken), null, null);
+    }
 
     GreenNode ParseGenericParameterList() =>
         WithBracesAllowed<GreenNode>(() => {

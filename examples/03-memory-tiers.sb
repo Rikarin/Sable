@@ -61,7 +61,7 @@ public struct Expr {
 
 /// A recursive-descent parser for sums of products of digits, building its
 /// tree in the region it is given. Every node's root is inferred as 'r'.
-fn parseSum(_ text: String, _ at: inout Int, in r: region) -> ref Expr {
+fn parseSum(_ text: String, _ at: inout Int, in r: region) -> Expr& {
     var left = parseProduct(text, &at, in: r)
     while at < text.count && text.at(index: at) == '+' {
         at += 1
@@ -71,7 +71,7 @@ fn parseSum(_ text: String, _ at: inout Int, in r: region) -> ref Expr {
     return left
 }
 
-fn parseProduct(_ text: String, _ at: inout Int, in r: region) -> ref Expr {
+fn parseProduct(_ text: String, _ at: inout Int, in r: region) -> Expr& {
     var left = parseNumber(text, &at, in: r)
     while at < text.count && text.at(index: at) == '*' {
         at += 1
@@ -81,7 +81,7 @@ fn parseProduct(_ text: String, _ at: inout Int, in r: region) -> ref Expr {
     return left
 }
 
-fn parseNumber(_ text: String, _ at: inout Int, in r: region) -> ref Expr {
+fn parseNumber(_ text: String, _ at: inout Int, in r: region) -> Expr& {
     var value = 0.0
     while at < text.count && text.at(index: at).isDigit {
         value = value * 10 + F64(text.at(index: at).codePoint - 48)
@@ -90,7 +90,7 @@ fn parseNumber(_ text: String, _ at: inout Int, in r: region) -> ref Expr {
     return r.alloc(Expr { op: '#', value: value, left: none, right: none })
 }
 
-fn evaluate(_ e: ref Expr) -> F64 {
+fn evaluate(_ e: Expr&) -> F64 {
     if e.op == '+' {
         return evaluate(e.left!) + evaluate(e.right!)
     }
@@ -111,7 +111,7 @@ fn calculate(_ source: String) -> F64 {
 // This would be rejected — the compiler infers that the returned reference is
 // rooted in a region that dies at the end of the function:
 //
-//   fn bad(_ source: String) -> ref Expr {
+//   fn bad(_ source: String) -> Expr& {
 //       region r {
 //           var at = 0
 //           return parseSum(source, &at, in: r)
@@ -173,7 +173,7 @@ public class Document {
 
     deinit { print("closing \(path)") }
 
-    fn draw(_ call: ref DrawCall) {
+    fn draw(_ call: DrawCall&) {
         print("frame \(call.frame): \(call.path)")
     }
 }

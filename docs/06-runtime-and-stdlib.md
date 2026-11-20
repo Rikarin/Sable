@@ -407,15 +407,27 @@ recover at the task boundary.
 
 ## 6.7 Concurrency runtime
 
-- **Cooperative thread pool** sized to the core count, with work stealing.
-  (As built: one executor on the program's thread; see docs/04, "Async, as
-  implemented".)
+- **Cooperative thread pool** sized to the core count, with work stealing:
+  a Chase–Lev deque per worker and priority band, a global injection
+  queue, workers parked on a condition each, and one heap of timers that
+  whichever worker looks for work serves. `SABLE_WORKERS` sets the size;
+  0 runs every task on the main thread, in a deterministic order. (See
+  docs/04, "Async, as implemented".)
 - Tasks are heap-allocated with a growable stack segment chain; `async`
   functions are compiled to state machines so a suspended task costs only its
   live state, not a full stack. (As built: frames on a bump-allocated slab of
   chunks per task; each frame also has a drop function, so a task that can
   never go on is destroyed as the program ends rather than leaked.)
-- Actors own a serial executor; `@MainActor` binds to the platform main loop.
+- Actors own a serial executor: a lock-free inbox and a queue its holder
+  keeps. A call from outside the actor hops onto it — taking it at once if
+  it is free, waiting its turn otherwise — and back after; a call inside
+  it, or to a `nonisolated` member, does not hop. Actors are reentrant at
+  their suspension points: a task suspended inside an actor's method lets
+  the actor go, so other calls run meanwhile, and takes it again before it
+  goes on — so what the method read before an `await` may have changed
+  after it. `@MainActor` code runs on the main thread, which runs the
+  program's entry. Values crossing into or out of an actor are Sendable,
+  and counted atomically from then on (docs/02 §2.7).
 - Structured concurrency: a task spawned from another is its child — it is
   cancelled with its parent and keeps it from finishing until it has — and a
   group's children, and an `async let`'s, are awaited before their scope
@@ -425,6 +437,7 @@ recover at the task boundary.
 - Cancellation is a flag per task, set down through its children, which runs
   the task's cancellation handlers and wakes a sleep it is in; the task stops
   where it asks.
-- Priorities are inherited by children. Planned: priority inheritance across
-  `await` boundaries, so a high-priority task waiting on a low-priority actor
-  does not invert, and a run queue ordered by priority.
+- Priorities are inherited by children and order the run queues, by band.
+  A task waiting for a lower-priority one escalates it, what it waits for
+  and its children, so it does not invert. Planned: escalating the holder
+  of an actor a higher-priority task waits for.

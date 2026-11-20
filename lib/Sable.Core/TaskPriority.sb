@@ -1,8 +1,8 @@
 module Sable.Core
 
 /// How urgent a task is. A child has its parent's unless it is given one.
-/// The executor runs tasks in the order they become ready, whatever their
-/// priority, for now.
+/// The executor runs a higher priority's tasks first, and a task waiting
+/// for one of a lower priority raises it to its own while it waits.
 @derive(Equatable, Debug)
 public struct TaskPriority {
     public let rawValue: Int

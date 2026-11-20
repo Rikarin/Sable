@@ -202,7 +202,8 @@ Copy Roslyn's **red/green tree** design exactly:
       mutates the repository's programs at token boundaries (a token for
       another of its kind, runs deleted, duplicated, spliced, swapped)
       through parsing, binding, the semantic model, constant evaluation,
-      lowering, the SIL verifier and the passes, with a time limit per
+      lowering, the SIL verifier and the passes, the printed SIL read back,
+      async lowering and the optimising passes, with a time limit per
       input and failures minimised by delta debugging; and
       `ResolverFuzzTests`, random registries (cycles, self-dependencies,
       yanked versions, pre-releases, locks naming what is gone) through
@@ -213,8 +214,10 @@ Copy Roslyn's **red/green tree** design exactly:
       instruments the Sable assemblies, and libFuzzer (on Linux, through
       libfuzzer-dotnet; on macOS, the fuzzer's own in-process loop) drives
       the parser (round trips, spans that tile, incremental reparse equal to
-      a full one), the front end (as `CompilerFuzzTests` holds it), the
-      resolver and the package files, and `fromBytes` under libFuzzer with
+      a full one), the language server's documents (edits by line and
+      column equal to a full parse), the front end (as `CompilerFuzzTests`
+      holds it), SIL as text (read, printed and read back, verified, through
+      the passes), the resolver and the package files, and `fromBytes` under libFuzzer with
       ASan and UBSan, from the repository's sources and a dictionary from
       the lexer's tables, nightly for 90 minutes a target with the corpus kept from
       night to night. No fuzzer has yet run for 24 hours on end. Found and
@@ -222,7 +225,9 @@ Copy Roslyn's **red/green tree** design exactly:
       attaching; a self-dependency hung the resolver and crashed its
       explanation; a `-` in a requirement's build metadata threw; ranges
       past the largest number wrapped round to nothing; an edit in a file
-      with directives reparsed incrementally to a different tree
+      with directives reparsed incrementally to a different tree; the
+      SIL of a program with an `async let`, async lowered, did not read back
+      (a frame named for `$task.run`)
 
 ---
 

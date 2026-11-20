@@ -5,12 +5,15 @@
 # - the parser: the random-input round-trip tests, many times over;
 # - the compiler: CompilerFuzzTests, mutated programs from the repository
 #   through parsing, binding, constant evaluation, lowering, the SIL
-#   verifier and the passes;
+#   verifier and the passes, the printed SIL read back, async lowering and
+#   the optimising passes;
 # - the package resolver: ResolverFuzzTests, random registries through
 #   PubGrub (checked against trying every assignment) and random text
 #   through the version parsers.
 #
-# - coverage-guided: tools/fuzz/coverage.sh, the parser, the front end, the
+# - coverage-guided: tools/fuzz/coverage.sh, the parser, the language
+#   server's edits, the front end (through async lowering, the optimising
+#   passes and the printed SIL read back), SIL as text, the
 #   resolver, the package files and fromBytes under libFuzzer, steered by
 #   the code each input reaches, 90 minutes a target (each a job of its own,
 #   inside the two hours a job may take), from the corpus the night
@@ -44,7 +47,7 @@ on:
       compiler_scale:
         description: Compiler mutants, times the test's usual 24
         required: false
-        default: "600"
+        default: "400"
       resolver_scale:
         description: Resolver and version-parser iterations, times the tests' usual count
         required: false
@@ -166,7 +169,7 @@ jobs:
       - name: Fuzz
         env:
           SABLE_FUZZ_SEED: ${{ steps.seed.outputs.seed }}
-          SABLE_FUZZ_SCALE: ${{ inputs.compiler_scale || '600' }}
+          SABLE_FUZZ_SCALE: ${{ inputs.compiler_scale || '400' }}
           SABLE_FUZZ_CRASH_DIR: ${{ github.workspace }}/crash
         run: |
           dotnet test tests/Sable.SIL.Tests -c Release \
@@ -228,7 +231,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [parser, frontend, resolver, packages, frombytes]
+        target: [parser, editor, frontend, sil, resolver, packages, frombytes]
     steps:
       - uses: actions/checkout@v4
 

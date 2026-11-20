@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- The coverage-guided fuzzer: SharpFuzz targets for the parser, the front
-       end, the package resolver and the package files, run by libFuzzer
+  <!-- The coverage-guided fuzzer: SharpFuzz targets for the parser, the
+       language server's edits, the front end, SIL as text, the package
+       resolver and the package files, run by libFuzzer
        (through libfuzzer-dotnet) or by its own in-process loop.
        tools/fuzz/coverage.sh publishes it and instruments the Sable
        assemblies; Program.cs says how to run it by hand. It is not in
@@ -22,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="../../../src/Sable.SIL/Sable.SIL.csproj" />
     <ProjectReference Include="../../../src/Sable.Driver/Sable.Driver.csproj" />
+    <ProjectReference Include="../../../src/Sable.LanguageServer/Sable.LanguageServer.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- What the test suites' fuzzers hold the compiler and the resolver to,

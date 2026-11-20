@@ -22,7 +22,8 @@ using Sable.Fuzz;
 //     Sable.Fuzz <target> stability <file>  how steady an input's coverage is, run six times: the
 //                                           first run's extra edges are one-time set-up
 //
-// The targets are parser, frontend, resolver and packages (Targets.cs). Run
+// The targets are parser, editor, frontend, sil, resolver and packages
+// (Targets.cs, MoreTargets.cs). Run
 // from the repository's root, or anywhere under it. Exit codes: 0 when all is
 // well, 1 when an input failed, 3 when one hung (the in-process loop stops
 // there), 2 for a usage mistake.

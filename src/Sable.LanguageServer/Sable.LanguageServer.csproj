@@ -9,5 +9,7 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Sable.LanguageServer.Tests" />
+    <!-- tools/fuzz/Sable.Fuzz: the editor target edits the workspace's documents. -->
+    <InternalsVisibleTo Include="Sable.Fuzz" />
   </ItemGroup>
 </Project>

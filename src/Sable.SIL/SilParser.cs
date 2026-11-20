@@ -203,6 +203,13 @@ public sealed class SilParser {
     /// <summary>A field's name: a word, or one the compiler made, '$' and a word ('$state', '$executor').</summary>
     string FieldName() => Accept("$") ? "$" + Expect(TokenKind.Word, "a field name").Text : Expect(TokenKind.Word, "a field name").Text;
 
+    /// <summary>
+    ///     A type's name: a word, or '$' and a word, as the frame of a function
+    ///     the compiler made is named for it ('$task.run$Task$of$Int$frame').
+    ///     Where a type is expected it is written '$$task.run…'.
+    /// </summary>
+    string TypeName(string what) => Accept("$") ? "$" + Expect(TokenKind.Word, what).Text : Expect(TokenKind.Word, what).Text;
+
     Token Expect(TokenKind kind, string what) {
         if (Current.Kind != kind) {
             throw Error($"expected {what} but found '{Describe(Current)}'");
@@ -233,11 +240,16 @@ public sealed class SilParser {
         // contains it, so no order of declarations would do.
         for (var i = 0; i + 1 < _tokens.Count; i++) {
             if (_tokens[i] is { Kind: TokenKind.Word, Text: "sil_struct" or "sil_enum" or "sil_class" } keyword
-                && (i == 0 || _tokens[i - 1].Text != "$")
-                && _tokens[i + 1].Kind == TokenKind.Word) {
-                var name = _tokens[i + 1].Text;
+                && (i == 0 || _tokens[i - 1].Text != "$")) {
+                // A name the compiler made is '$' and a word.
+                var at = _tokens[i + 1] is { Kind: TokenKind.Punctuation, Text: "$" } ? i + 2 : i + 1;
+                if (at >= _tokens.Count || _tokens[at].Kind != TokenKind.Word) {
+                    continue;
+                }
+
+                var name = (at == i + 2 ? "$" : "") + _tokens[at].Text;
                 if (module.FindType(name) is not null || name is "Int" or "Bool" or "F64" or "String" or "Char" or "Object" or "Region") {
-                    throw new SilParseException($"the type {name} is declared twice", _tokens[i + 1].Line);
+                    throw new SilParseException($"the type {name} is declared twice", _tokens[at].Line);
                 }
 
                 module.AddType<NominalType>(keyword.Text switch {
@@ -322,7 +334,7 @@ public sealed class SilParser {
     }
 
     void ParseStruct() {
-        var type = (StructType)_module.FindType(Expect(TokenKind.Word, "a struct name").Text)!;
+        var type = (StructType)_module.FindType(TypeName("a struct name"))!;
         type.IsNoncopyable = AcceptNoncopy();
         if (Current is { Kind: TokenKind.Global, Text: "inline" }) {
             Next();
@@ -357,9 +369,9 @@ public sealed class SilParser {
     }
 
     void ParseClass() {
-        var type = (ClassType)_module.FindType(Expect(TokenKind.Word, "a class name").Text)!;
+        var type = (ClassType)_module.FindType(TypeName("a class name"))!;
         if (Accept(":")) {
-            type.Superclass = _module.FindType(Expect(TokenKind.Word, "a superclass").Text) as ClassType
+            type.Superclass = _module.FindType(TypeName("a superclass")) as ClassType
                 ?? throw Error("a class's superclass must be a class");
         }
 
@@ -396,7 +408,7 @@ public sealed class SilParser {
     }
 
     void ParseEnum() {
-        var type = (EnumType)_module.FindType(Expect(TokenKind.Word, "an enum name").Text)!;
+        var type = (EnumType)_module.FindType(TypeName("an enum name"))!;
         type.IsNoncopyable = AcceptNoncopy();
         Expect("{");
         if (!At("}")) {
@@ -647,7 +659,7 @@ public sealed class SilParser {
             return SilType.Tuple(parts.ToImmutable());
         }
 
-        var name = Expect(TokenKind.Word, "a type").Text;
+        var name = TypeName("a type");
         return name switch {
             "Int" => SilType.Int,
             "Bool" => SilType.Bool,

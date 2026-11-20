@@ -32,7 +32,7 @@ public abstract class Target {
     /// <summary>Tokens a mutation inserts whole, for libFuzzer's -dict and the in-process loop alike.</summary>
     public abstract IEnumerable<string> Dictionary();
 
-    public static readonly IReadOnlyList<Target> All = [new ParserTarget(), new FrontEndTarget(), new ResolverTarget(), new PackageFilesTarget()];
+    public static readonly IReadOnlyList<Target> All = [new ParserTarget(), new EditorTarget(), new FrontEndTarget(), new SilTarget(), new ResolverTarget(), new PackageFilesTarget()];
 
     public static Target? Named(string name) => All.FirstOrDefault(t => t.Name == name);
 
@@ -170,7 +170,7 @@ public sealed class ParserTarget : Target {
     }
 
     /// <summary>A tree's whole shape: every node's kind and place, and every token's text with its trivia.</summary>
-    static string Dump(SyntaxNode root) {
+    internal static string Dump(SyntaxNode root) {
         var builder = new StringBuilder();
 
         void Write(SyntaxNode node, int depth) {

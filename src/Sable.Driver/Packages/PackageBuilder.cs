@@ -393,7 +393,7 @@ public static class PackageBuilder {
 
             // '[lib] kind': the library, as one C links, beside the binaries.
             if (request.Bin is null && member.Manifest.LibKind is { } libraryKind && member.LibraryFile is not null) {
-                if (!BuildNativeLibrary(graph, member, libraryKind, profile, request, generated, output, environment)) {
+                if (!BuildNativeLibrary(graph, member, libraryKind, profile, request, generated, output, environment, timings)) {
                     environment.Error.WriteLine($"error: could not compile {member.Name}");
                     return null;
                 }
@@ -425,20 +425,7 @@ public static class PackageBuilder {
                 // Incrementally (docs/05 §5.4): the cache in target/<profile>/cache.
                 Directory.CreateDirectory(output);
                 var executable = Path.Combine(output, bin.Name + (request.Target ?? NativeTarget.Host).ExecutableSuffix);
-                var buildSettings = new BuildSettings(profile.Name, profile.Optimise, profile.Debug ? workspace.Root : null, profile.Exclusivity) {
-                    // What the build scripts found for the link: native libraries and where they are.
-                    Native = profile.Native with {
-                        Target = request.Target,
-                        Sysroot = request.Sysroot,
-                        LinkArguments = graph.LinkArguments(member.Name),
-                        LinkInputs = graph.LinkInputs(member.Name),
-                    },
-                    Whole = profile.CodegenUnits == 1 || !profile.Incremental,
-                    ArcChecks = profile.ArcChecks,
-                    DebugAssertions = profile.DebugAssertions,
-                    OverflowChecks = profile.OverflowChecks,
-                    DenyReflection = DeniesReflection(workspace, request),
-                };
+                var buildSettings = SettingsFor(graph, member.Name, profile, request, profile.Debug ? workspace.Root : null);
                 var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin, generated), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);
                 Report(environment, outcome.Warnings);
                 if (!outcome.Succeeded) {
@@ -470,10 +457,10 @@ public static class PackageBuilder {
     ///     A member's library built as a native one (<c>[lib] kind</c>), to
     ///     <c>target/&lt;profile&gt;/</c>, named for the package with
     ///     <c>-</c> made <c>_</c>, as C's linkers take names: the library and its
-    ///     dependencies compiled whole, with no entry point
-    ///     (<see cref="Pipeline.Compile(IReadOnlyList{SyntaxTree}, string?, bool, BuildTimings?, bool, NativeTarget?, bool, bool, bool, string?, bool)" />),
-    ///     and linked with the runtime. Not cached between builds, as a
-    ///     binary's units are.
+    ///     dependencies, with no entry point, linked with the runtime. Built as
+    ///     a binary is (<see cref="IncrementalBuild" />): each package a unit,
+    ///     cached, where the profile compiles separately — the member's own
+    ///     unit setting up the globals as the library loads — and else whole.
     /// </summary>
     static bool BuildNativeLibrary(
         PackageGraph graph,
@@ -483,49 +470,53 @@ public static class PackageBuilder {
         BuildRequest request,
         GeneratedSources generated,
         string output,
-        PackageEnvironment environment
+        PackageEnvironment environment,
+        BuildTimings? timings
     ) {
         if (!NativeObjects.CompilerAvailable) {
             environment.Error.WriteLine($"error: cannot run '{NativeBuild.CompilerPath}'; set CC to a clang that can link for this platform");
             return false;
         }
 
-        var result = Pipeline.Compile(
-            Program(graph, member.Name, null, !profile.DebugAssertions, generated: generated, target: request.Target),
-            profile.Debug ? member.Directory : null,
-            profile.Exclusivity,
-            optimised: profile.Optimise,
-            optLevel: profile.OptLevel,
-            checkArc: profile.ArcChecks,
-            target: request.Target,
-            checkOverflow: profile.OverflowChecks,
-            library: true,
-            denyReflection: DeniesReflection(graph.Workspace, request));
-        Report(environment, result.Warnings);
-        if (!result.Succeeded) {
-            Report(environment, result.Errors);
-            DiagnosticDocs.WriteHint(environment.Error, result.Errors);
-            return false;
-        }
-
         Directory.CreateDirectory(output);
         var path = Path.Combine(output, NativeBuild.LibraryFileName(member.Name.Replace('-', '_'), kind, request.Target ?? NativeTarget.Host));
-        var native = profile.Native with {
-            Target = request.Target,
-            Sysroot = request.Sysroot,
-            LinkArguments = graph.LinkArguments(member.Name),
-            LinkInputs = graph.LinkInputs(member.Name),
-        };
-        var built = NativeBuild.BuildLibrary(result.LlvmIr!, path, kind, native, Path.Combine(output, "cache", "runtime"));
-        if (!built.Succeeded) {
-            environment.Error.WriteLine("internal error: the native build failed:");
-            environment.Error.Write(built.Output);
+        var settings = SettingsFor(graph, member.Name, profile, request, profile.Debug ? member.Directory : null);
+        settings = settings with { Library = kind, Native = settings.Native with { PositionIndependent = true } };
+        var outcome = IncrementalBuild.Build(LibraryUnits(graph, member.Name, generated), settings, path, Path.Combine(output, "cache"), timings, environment.Error);
+        Report(environment, outcome.Warnings);
+        if (!outcome.Succeeded) {
+            Report(environment, outcome.Errors);
+            DiagnosticDocs.WriteHint(environment.Error, outcome.Errors);
             return false;
         }
 
-        environment.Status.WriteLine($"       Built {Path.GetFileName(path)}");
+        environment.Status.WriteLine(timings is null
+            ? $"       Built {Path.GetFileName(path)}"
+            : $"       Built {Path.GetFileName(path)}: {outcome.Kind}, {outcome.Compiled} unit(s) compiled, {outcome.Reused} reused");
         return true;
     }
+
+    /// <summary>A library's units (<see cref="Units" />): the member's own library first, which leads it, then each dependency's.</summary>
+    public static IReadOnlyList<UnitPlan> LibraryUnits(PackageGraph graph, string member, GeneratedSources? generated = null) => [
+        ..graph.Closure(member).Select(package =>
+            new UnitPlan($"lib {package.Name}-{package.Version}", [..graph.LibrarySources(package).SelectMany(file => WithGenerated(graph, package, file, generated))])),
+    ];
+
+    /// <summary>What a member's targets are built with under <paramref name="profile" />: its settings, and what the build scripts found for the link.</summary>
+    static BuildSettings SettingsFor(PackageGraph graph, string member, Profile profile, BuildRequest request, string? debugDirectory) =>
+        new(profile.Name, profile.Optimise, debugDirectory, profile.Exclusivity) {
+            Native = profile.Native with {
+                Target = request.Target,
+                Sysroot = request.Sysroot,
+                LinkArguments = graph.LinkArguments(member),
+                LinkInputs = graph.LinkInputs(member),
+            },
+            Whole = profile.CodegenUnits == 1 || !profile.Incremental,
+            ArcChecks = profile.ArcChecks,
+            DebugAssertions = profile.DebugAssertions,
+            OverflowChecks = profile.OverflowChecks,
+            DenyReflection = DeniesReflection(graph.Workspace, request),
+        };
 
     /// <summary>
     ///     Whether the build carries no reflection: <c>--deny-reflection</c>,

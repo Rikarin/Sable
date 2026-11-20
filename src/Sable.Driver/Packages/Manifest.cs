@@ -108,8 +108,13 @@ public sealed record Profile(
     IReadOnlyDictionary<string, string> Recorded) {
     public bool Optimise => OptLevel != "0";
 
-    /// <summary>Link-time optimisation, in an optimised build.</summary>
-    public LtoMode Lto { get; init; } = LtoMode.Fat;
+    /// <summary>
+    ///     Link-time optimisation, in an optimised build: by default ThinLTO,
+    ///     which compiles each package apart, cached, and inlines across them
+    ///     as they link; <c>"fat"</c> compiles the program whole, so that the
+    ///     SIL passes see all of it.
+    /// </summary>
+    public LtoMode Lto { get; init; } = LtoMode.Thin;
 
     /// <summary>
     ///     <c>codegen-units</c>: 1 compiles the program whole even in an

@@ -2349,9 +2349,13 @@ so a warm build re-parses only what changed; and early cut-off when a
 change's result is unchanged. (Since done: invalidation by dependency,
 and a binary `.sbi` that units whose objects are kept are parsed and bound
 from — docs/05 §5.4, "As built". Declarations are still bound from source
-text, the interfaces', on each build.) Also deferred: separate compilation for optimised builds
-(they need the whole program for the SIL passes and LTO — ThinLTO over
-units would parallelise their 26 s of clang); escape and root summaries
+text, the interfaces', on each build. Since done too (#181): an optimised
+build compiles unit by unit, its opt-level's SIL passes on each unit and
+ThinLTO across them — the release profile's default, `lto = "fat"` asking
+for the whole program; a package's native library is built so, cached, as
+a binary is; and constant evaluation binds only the files declaring a
+constant or a `comptime` block, where it bound every body of the program —
+the standard library's included — on every build.) Also deferred: escape and root summaries
 across units (a unit assumes the worst, and the program is compiled whole
 when that rejects it); lowering units in parallel; packages built once
 for several binaries or members (the entry unit depends on every unit,

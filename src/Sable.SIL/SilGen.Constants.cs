@@ -96,8 +96,18 @@ public sealed partial class SilGen {
         var constants = new List<(FieldSymbol Field, ConstDeclarationSyntax Syntax, SemanticModel Model)>();
         var blocks = new List<(SyntaxNode Syntax, FunctionSymbol Function, BoundBlock Body, SemanticModel Model)>();
         foreach (var tree in _compilation.SyntaxTrees) {
+            // Only a file declaring a constant or a 'comptime' block is bound
+            // here: asking a model for either binds every body of its file,
+            // which for a program's every file — the standard library's
+            // included — was most of a separately compiled build's time.
+            // A 'comptime' block may be in a body, so it is looked for by its keyword.
+            var declarations = tree.Root.DescendantNodes().OfType<ConstDeclarationSyntax>().ToList();
+            if (declarations.Count == 0 && !tree.Root.DescendantTokens().Any(static t => t.Kind == SyntaxKind.ComptimeKeyword)) {
+                continue;
+            }
+
             var model = _compilation.GetSemanticModel(tree);
-            foreach (var declaration in tree.Root.DescendantNodes().OfType<ConstDeclarationSyntax>()) {
+            foreach (var declaration in declarations) {
                 // A literal is its own value: lowering writes it where it is read.
                 if (_compilation.GetDeclaredSymbol(declaration) is FieldSymbol field && model.GetFieldInitializer(field) is not BoundLiteral) {
                     constants.Add((field, declaration, model));

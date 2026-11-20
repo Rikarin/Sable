@@ -320,13 +320,7 @@ public static class NativeBuild {
 
         options = options with { PositionIndependent = true };
         if (kind == LibraryKind.Dynamic) {
-            var name = Path.GetFileName(outputPath);
-            List<string> shared = target.Platform switch {
-                NativePlatform.MacOS => ["-shared", "-Wl,-install_name,@rpath/" + name],
-                NativePlatform.Linux => ["-shared", "-Wl,-soname," + name],
-                _ => ["-shared"],
-            };
-            return Build(llvmIr, outputPath, options, runtimeCache, shared);
+            return Build(llvmIr, outputPath, options, runtimeCache, SharedFlags(Path.GetFileName(outputPath), target));
         }
 
         options = options with { Lto = LtoMode.Off };
@@ -343,10 +337,27 @@ public static class NativeBuild {
                 return built;
             }
 
-            // The archive is made beside the library and moved over it: an
-            // archiver adds to an archive that is there.
+            return Archive([program, runtime], outputPath, target);
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    /// <summary>What links a shared library called <paramref name="name" />: <c>-shared</c>, and the name it is found by.</summary>
+    public static IReadOnlyList<string> SharedFlags(string name, NativeTarget target) => target.Platform switch {
+        NativePlatform.MacOS => ["-shared", "-Wl,-install_name,@rpath/" + name],
+        NativePlatform.Linux => ["-shared", "-Wl,-soname," + name],
+        _ => ["-shared"],
+    };
+
+    /// <summary>Archives <paramref name="objects" /> as the static library <paramref name="outputPath" />, written whole or not at all.</summary>
+    public static NativeBuildResult Archive(IReadOnlyList<string> objects, string outputPath, NativeTarget target) {
+        // The archive is made beside the library and moved over it: an
+        // archiver adds to an archive that is there.
+        var directory = Directory.CreateTempSubdirectory("sable-archive-");
+        try {
             var temporary = Path.Combine(directory.FullName, Path.GetFileName(outputPath));
-            var (archiver, arguments) = Archiver(target, temporary, [program, runtime]);
+            var (archiver, arguments) = Archiver(target, temporary, objects);
             var (exitCode, output) = Run(archiver, arguments);
             if (exitCode != 0) {
                 return new(false, output);

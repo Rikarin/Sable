@@ -111,17 +111,10 @@ public sealed class ParserRecoveryTests {
             "where", "is", "as", "...", "|", "self", "try", "using", "switch"
         ];
 
-        var random = Fuzzing.Random(20261118);
-        for (var iteration = 0; iteration < Fuzzing.Iterations(500); iteration++) {
-            var builder = new StringBuilder();
-            var length = random.Next(1, 16);
-            for (var i = 0; i < length; i++) {
-                builder.Append(pieces[random.Next(pieces.Length)]).Append(' ');
-            }
-
-            var source = builder.ToString();
-            AssertRoundTrips(SyntaxTree.ParseStatement(source), source);
-        }
+        Fuzzing.Guarded(
+            Soup(Fuzzing.Random(20261118), Fuzzing.Iterations(500), pieces, 16),
+            static source => AssertRoundTrips(SyntaxTree.ParseStatement(source), source)
+        );
     }
 
     [Fact]
@@ -135,17 +128,10 @@ public sealed class ParserRecoveryTests {
             "operator", "+", "A", "B", "1", "\"s\"", "inout", "throws", "async", "..."
         ];
 
-        var random = Fuzzing.Random(20261119);
-        for (var iteration = 0; iteration < Fuzzing.Iterations(500); iteration++) {
-            var builder = new StringBuilder();
-            var length = random.Next(1, 20);
-            for (var i = 0; i < length; i++) {
-                builder.Append(pieces[random.Next(pieces.Length)]).Append(' ');
-            }
-
-            var source = builder.ToString();
-            AssertRoundTrips(SyntaxTree.Parse(source), source);
-        }
+        Fuzzing.Guarded(
+            Soup(Fuzzing.Random(20261119), Fuzzing.Iterations(500), pieces, 20),
+            static source => AssertRoundTrips(SyntaxTree.Parse(source), source)
+        );
     }
 
     [Fact]
@@ -385,22 +371,13 @@ public sealed class ParserRecoveryTests {
             "..<", "...", "!", "#", "@", "some", "any", "ref", "self"
         ];
 
-        var random = Fuzzing.Random(20261117);
-        for (var iteration = 0; iteration < Fuzzing.Iterations(400); iteration++) {
-            var builder = new StringBuilder();
-            var length = random.Next(1, 14);
-            for (var i = 0; i < length; i++) {
-                builder.Append(pieces[random.Next(pieces.Length)]).Append(' ');
+        Fuzzing.Guarded(
+            Soup(Fuzzing.Random(20261117), Fuzzing.Iterations(400), pieces, 14),
+            static source => {
+                AssertRoundTrips(SyntaxTree.ParseExpression(source), source);
+                AssertRoundTrips(SyntaxTree.ParseType(source), source);
             }
-
-            var source = builder.ToString();
-
-            var expression = SyntaxTree.ParseExpression(source);
-            AssertRoundTrips(expression, source);
-
-            var type = SyntaxTree.ParseType(source);
-            AssertRoundTrips(type, source);
-        }
+        );
     }
 
     /// <summary>
@@ -422,22 +399,33 @@ public sealed class ParserRecoveryTests {
             ..Fuzzing.EveryFixedToken,
         ];
 
-        var random = Fuzzing.Random(20261120);
-        for (var iteration = 0; iteration < Fuzzing.Iterations(3000); iteration++) {
+        Fuzzing.Guarded(Soup(Fuzzing.Random(20261120), Fuzzing.Iterations(3000), pieces, 30, spaced: false), AssertRoundTripsEveryWay);
+    }
+
+    /// <summary>
+    ///     Random sources of fewer than <paramref name="longest" /> pieces,
+    ///     each followed by a space, or, not <paramref name="spaced" />, by
+    ///     one two times in three.
+    /// </summary>
+    static IEnumerable<string> Soup(Random random, int count, string[] pieces, int longest, bool spaced = true) {
+        for (var iteration = 0; iteration < count; iteration++) {
             var builder = new StringBuilder();
-            var length = random.Next(1, 30);
+            var length = random.Next(1, longest);
             for (var i = 0; i < length; i++) {
                 builder.Append(pieces[random.Next(pieces.Length)]);
-                if (random.Next(3) > 0) {
+                if (spaced || random.Next(3) > 0) {
                     builder.Append(' ');
                 }
             }
 
-            var source = builder.ToString();
-            AssertRoundTrips(SyntaxTree.Parse(source), source);
-            AssertRoundTrips(SyntaxTree.ParseStatement(source), source);
-            AssertRoundTrips(SyntaxTree.ParseExpression(source), source);
+            yield return builder.ToString();
         }
+    }
+
+    static void AssertRoundTripsEveryWay(string source) {
+        AssertRoundTrips(SyntaxTree.Parse(source), source);
+        AssertRoundTrips(SyntaxTree.ParseStatement(source), source);
+        AssertRoundTrips(SyntaxTree.ParseExpression(source), source);
     }
 
     /// <summary>Inputs the wide fuzzer found losing or duplicating text, minimised.</summary>
@@ -448,9 +436,20 @@ public sealed class ParserRecoveryTests {
     [InlineData("fn t throws async")]            // effects in the wrong order
     [InlineData("guard\"\"\"\\()\\(\n")]  // an unterminated hole in a multi-line string
     [InlineData("\"a\\(b")]                    // ...and in a one-line string
-    public void FuzzerFindingsRoundTrip(string source) {
-        AssertRoundTrips(SyntaxTree.Parse(source), source);
-        AssertRoundTrips(SyntaxTree.ParseStatement(source), source);
-        AssertRoundTrips(SyntaxTree.ParseExpression(source), source);
-    }
+    public void FuzzerFindingsRoundTrip(string source) => AssertRoundTripsEveryWay(source);
+
+    /// <summary>
+    ///     'ref' and 'borrowing' before a parameter are skipped, every one of
+    ///     them: a second was left where it was, and the loop that skips them
+    ///     met it again forever. The night's wide soup found
+    ///     'init ref borrowing'.
+    /// </summary>
+    [Theory]
+    [InlineData("init ref borrowing")]
+    [InlineData("fn f(ref ref x: Int) {}")]
+    [InlineData("fn f(borrowing ref inout x: Int) {}")]
+    [InlineData("fn f(x: borrowing borrowing Int) {}")]
+    [InlineData("fn f(ref x: borrowing Int) {}")]
+    public void EveryRemovedParameterModifierIsSkipped(string source) =>
+        Fuzzing.Guarded([source], AssertRoundTripsEveryWay, TimeSpan.FromSeconds(5));
 }

@@ -240,8 +240,8 @@ Sable.IO            File Directory Path Stream MemoryMappedFile stdio
 Sable.Serialize     Encoder/Decoder protocols, conformance synthesis via
                     @derive(Serializable), JSON, TOML, MessagePack, and the
                     zero-copy @inline_layout path
-Sable.Concurrency   Task TaskGroup Actor Channel Mutex RwLock Atomic<T>
-                    AsyncSequence AsyncStream
+Sable.Concurrency   Actor Channel Mutex RwLock Atomic<T> AsyncStream
+                    (Task, TaskGroup and AsyncSequence are Sable.Core's)
 Sable.Time          Instant Duration Clock Calendar TimeZone
 Sable.Net           Socket Tcp Udp Tls Http1 Http2 Uri
 Sable.Process       spawn, pipes, environment, signals
@@ -408,11 +408,23 @@ recover at the task boundary.
 ## 6.7 Concurrency runtime
 
 - **Cooperative thread pool** sized to the core count, with work stealing.
+  (As built: one executor on the program's thread; see docs/04, "Async, as
+  implemented".)
 - Tasks are heap-allocated with a growable stack segment chain; `async`
   functions are compiled to state machines so a suspended task costs only its
-  live state, not a full stack.
+  live state, not a full stack. (As built: frames on a bump-allocated slab of
+  chunks per task; each frame also has a drop function, so a task that can
+  never go on is destroyed as the program ends rather than leaked.)
 - Actors own a serial executor; `@MainActor` binds to the platform main loop.
-- Structured concurrency is enforced by the type system (a child task's handle
-  cannot escape the `withTaskGroup` scope — this falls out of root inference).
-- Priority inheritance across `await` boundaries, so a high-priority task
-  waiting on a low-priority actor does not invert.
+- Structured concurrency: a task spawned from another is its child — it is
+  cancelled with its parent and keeps it from finishing until it has — and a
+  group's children, and an `async let`'s, are awaited before their scope
+  ends, so none outlives it. `Task.detached` is the one escape. (Planned: the
+  type system enforcing it too — a child task's handle cannot escape the
+  `withTaskGroup` scope, which falls out of root inference.)
+- Cancellation is a flag per task, set down through its children, which runs
+  the task's cancellation handlers and wakes a sleep it is in; the task stops
+  where it asks.
+- Priorities are inherited by children. Planned: priority inheritance across
+  `await` boundaries, so a high-priority task waiting on a low-priority actor
+  does not invert, and a run queue ordered by priority.

@@ -149,6 +149,95 @@ public sealed class MultiCoreTests {
                 """)).Stdout
         );
 
+    /// <summary>
+    ///     '@MainActor' code called from tasks on the pool hops onto the main
+    ///     thread, one call at a time: a main-actor class's state, changed by
+    ///     eight tasks at once, loses nothing. Code in a spawned closure hops
+    ///     though it is written inside the entry point, which is on the main
+    ///     actor: it runs as a task of its own.
+    /// </summary>
+    [Fact]
+    public void MainActorCodeRunsOneCallAtATime() =>
+        Assert.Equal(
+            "800\n800\n",
+            AssertAgree(AsyncProgram("""
+                    @MainActor
+                    class Screen {
+                        var lines: String[>..] = []
+
+                        fn show(_ line: String) -> Int {
+                            lines.append(line)
+                            return lines.count
+                        }
+                    }
+
+                    @MainActor
+                    fn render(_ screen: Screen, _ text: String) -> Int {
+                        return screen.show(text)
+                    }
+                    """, """
+                    let screen = Screen()
+                    var tasks: Task<Int>[>..] = []
+                    for i in 0..<8 {
+                        tasks.append(Task.spawn {
+                            var last = 0
+                            for j in 0..<100 {
+                                last = await render(screen, "task \(i) line \(j)")
+                            }
+                            return last
+                        })
+                    }
+                    var most = 0
+                    for task in tasks {
+                        let last = await task.value
+                        if last > most {
+                            most = last
+                        }
+                    }
+                    print(most)
+                    print(screen.lines.count)
+                """)).Stdout
+        );
+
+    /// <summary>
+    ///     A task spawned inside an actor's method runs on no actor, but its
+    ///     calls into the actor hop onto it: twenty of them, each bumping the
+    ///     actor a hundred times, lose nothing.
+    /// </summary>
+    [Fact]
+    public void TasksSpawnedInsideAnActorCallIntoIt() =>
+        Assert.Equal(
+            "2000\n",
+            AssertAgree(AsyncProgram("""
+                    actor Tally {
+                        var n = 0
+
+                        fn bump() {
+                            n += 1
+                        }
+
+                        fn fanOut() async -> Int {
+                            var tasks: Task<Int>[>..] = []
+                            for _ in 0..<20 {
+                                tasks.append(Task.spawn {
+                                    for _ in 0..<100 {
+                                        await self.bump()
+                                    }
+                                    return 0
+                                })
+                            }
+                            for task in tasks {
+                                let _ = await task.value
+                            }
+                            return n
+                        }
+                    }
+                    """, """
+                    let tally = Tally()
+                    print(await tally.fanOut())
+                """)).Stdout
+        );
+
     /// <summary>Channels between many senders and receivers, each on its own task: every value arrives once.</summary>
     [Fact]
     public void ChannelsCarryEveryValueBetweenManyTasks() =>

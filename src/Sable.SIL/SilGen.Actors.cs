@@ -97,20 +97,28 @@ public sealed partial class SilGen {
             }
 
             if (ActorOf(callee) is { } actor) {
-                return (!Inside(symbol, actor), false);
+                return (InClosure || !Inside(symbol, actor), false);
             }
 
-            if (OnMainActor(callee) && !OnMainActor(symbol) && !InEntryPoint(symbol)) {
+            if (OnMainActor(callee) && (InClosure || !OnMainActor(symbol) && !InEntryPoint(symbol))) {
                 return (true, true);
             }
 
             return (false, false);
         }
 
+        /// <summary>
+        ///     Code in an async closure: it may run as a task of its own,
+        ///     spawned where it was written but not on the actor that code
+        ///     is on, so it hops into the actor whatever encloses it — at no
+        ///     more than a comparison when it is there already.
+        /// </summary>
+        bool InClosure => symbol is FunctionSymbol { Name.Length: 0 };
+
         /// <summary>An actor's 'var' read from outside it, in an async function: on the actor.</summary>
         bool IsolatedRead(FieldSymbol field) =>
             function.Type.IsAsync && field is { IsStatic: false, IsMutable: true } && !IsNonisolated(field)
-            && ActorOf(field) is { } actor && !Inside(symbol, actor);
+            && ActorOf(field) is { } actor && (InClosure || !Inside(symbol, actor));
 
         /// <summary>
         ///     Before a call into an actor: where the task runs now, kept to

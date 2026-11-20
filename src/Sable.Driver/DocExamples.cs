@@ -91,7 +91,7 @@ public static partial class DocExamples {
                     text.Append('\n');
                 }
 
-                text.Append(line > 2 ? "" : " ").Append("@test fn ").Append(name).Append("() {\n").Append(code).Append("}\n");
+                text.Append(line > 2 ? "" : " ").Append("@test fn ").Append(name).Append(Awaits().IsMatch(code) ? "() async {\n" : "() {\n").Append(code).Append("}\n");
                 files.Add(SyntaxTree.Parse(new SourceText(text.ToString(), tree.Text.FileName), tree.Options));
             }
         }
@@ -134,4 +134,8 @@ public static partial class DocExamples {
 
     [GeneratedRegex(@"\b(fn|struct|class|union|enum|protocol|actor|extension|var|let|const|init|operator)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)")]
     private static partial Regex DeclaredName();
+
+    /// <summary>An example that awaits runs as an async test, as its code would in an async function.</summary>
+    [GeneratedRegex(@"\bawait\b")]
+    private static partial Regex Awaits();
 }

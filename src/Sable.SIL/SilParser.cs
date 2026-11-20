@@ -909,7 +909,7 @@ public sealed class SilParser {
                     var other => throw new SilParseException($"'{other}' is not a load kind", line),
                 };
                 Expect("]");
-                instruction = new LoadInst(Operand(0), kind);
+                instruction = new LoadInst(Defined(Operand(0), opcode, line), kind);
                 break;
             }
 

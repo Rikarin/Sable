@@ -305,6 +305,8 @@ public sealed class VerifierTests {
     [InlineData("sil @f : $() -> () {\nbb0:\n  br bb9\n}", "bb9 is used but never defined")]
     [InlineData("sil @f : $() -> () {\nbb0:\n  %0 = alloc_stack $Bogus\n}", "unknown type")]
     [InlineData("sil @f : $() -> () {\nbb0:\n  %0 = return\n}", "produces no value")]
+    [InlineData("sil @f : $() -> Int {\nbb0:\n  %0 = load [trivial] %0\n  return %0\n}", "load needs its operand defined")]
+    [InlineData("sil @f : $() -> Int {\nbb0:\n  br bb2\nbb1:\n  %0 = load [trivial] %1\n  return %0\nbb2:\n  %1 = load [trivial] %0\n  br bb1\n}", "load needs its operand defined")]
     public void MalformedTextIsReportedWithItsLine(string sil, string complaint) {
         var error = Assert.Throws<SilParseException>(() => SilParser.Parse(sil));
         Assert.Contains(complaint, error.Message, StringComparison.Ordinal);

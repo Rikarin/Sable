@@ -19,7 +19,7 @@ static size_t tracked_capacity, tracked_used;
 #define TRACKED_GONE ((SableObject *)1)
 
 static size_t tracked_slot(const SableObject *object) {
-    uintptr_t h = (uintptr_t)object;
+    uint64_t h = (uintptr_t)object;
     h ^= h >> 33;
     h *= 0xff51afd7ed558ccdULL;
     h ^= h >> 33;

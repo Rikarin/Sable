@@ -199,7 +199,8 @@ public abstract class PackageCommand : Command {
           --timings                print the time each phase of the build took
           --target <triple>        build for another machine (aarch64-unknown-linux-gnu, x86_64-apple-darwin,
                                    ...); output in target/<triple>/<profile>/
-          --sysroot <dir>          where the target's C library is, for clang's link
+          --sysroot <dir>          where the target's C library is (default: $SABLE_HOME/sysroots/<triple>,
+                                   or for WASI, wasi-sdk's or wasi-libc's where they are installed)
           --deny-reflection        carry no reflection (also [targets.<triple>] reflection = false)
           --deny-unsafe            fail on any 'unsafe' block or 'unsafe fn' in the workspace's own
                                    packages (S3472); dependencies may use 'unsafe'

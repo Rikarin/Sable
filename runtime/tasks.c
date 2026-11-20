@@ -1129,6 +1129,20 @@ enum { BLOCKING_MOST = 512 };
 static SableTask *blocking_head, *blocking_tail;
 static int32_t blocking_threads, blocking_idle, blocking_queued, blocking_most;
 
+// The work of a task in the blocking pool, run; the task queued again.
+static void blocking_work(SableTask *task) {
+    // The work runs as its task: Task.isCancelled asks it.
+    SableTask *previous = current_task;
+    switch_to(task);
+    task->blocking_run(task->blocking_context);
+    switch_to(previous);
+
+    __atomic_fetch_add(&active, 1, __ATOMIC_SEQ_CST);
+    __atomic_fetch_sub(&blocking_running, 1, __ATOMIC_SEQ_CST);
+    schedule(task);
+    active_done();
+}
+
 static void blocking_main(void *argument) {
     (void)argument;
     for (;;) {
@@ -1147,22 +1161,18 @@ static void blocking_main(void *argument) {
 
         blocking_queued--;
         mutex_unlock(&blocking_lock);
-
-        // The work runs as its task: Task.isCancelled asks it.
-        SableTask *previous = current_task;
-        switch_to(task);
-        task->blocking_run(task->blocking_context);
-        switch_to(previous);
-
-        __atomic_fetch_add(&active, 1, __ATOMIC_SEQ_CST);
-        __atomic_fetch_sub(&blocking_running, 1, __ATOMIC_SEQ_CST);
-        schedule(task);
-        active_done();
+        blocking_work(task);
     }
 }
 
 static void blocking_submit(SableTask *task) {
     __atomic_fetch_add(&blocking_running, 1, __ATOMIC_SEQ_CST);
+    if (!PLATFORM_THREADS) {
+        // No thread to give it to: it runs here, and the task goes on after.
+        blocking_work(task);
+        return;
+    }
+
     mutex_lock(&blocking_lock);
     if (blocking_most == 0) {
         const char *setting = getenv("SABLE_BLOCKING_THREADS");
@@ -1627,11 +1637,12 @@ static void worker_main(void *argument) {
 }
 
 // The pool, as the first task is spawned: SABLE_WORKERS threads, by
-// default one per core; 0, none — the main thread runs every task.
+// default one per core; 0, none — the main thread runs every task, as it
+// always does where there are no threads (WASI).
 static void pool_start(void) {
     const char *setting = getenv("SABLE_WORKERS");
     int count = setting != NULL && setting[0] != '\0' ? atoi(setting) : processor_count();
-    if (count < 0) {
+    if (count < 0 || !PLATFORM_THREADS) {
         count = 0;
     }
 

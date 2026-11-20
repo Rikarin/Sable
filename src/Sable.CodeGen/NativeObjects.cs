@@ -89,7 +89,7 @@ public static class NativeObjects {
             var source = NativeBuild.WriteRuntime(sources);
             var (exitCode, output) = Run(NativeBuild.CompilerPath, [..target.ClangFlags, ..NativeBuild.SysrootFlags(options), ..Flags(options), "-c", source, "-o", temporary]);
             if (exitCode != 0) {
-                return new(false, output);
+                return NativeBuild.Explained(new(false, output), options);
             }
 
             File.Move(temporary, objectPath, overwrite: true);
@@ -133,7 +133,7 @@ public static class NativeObjects {
             ];
             var (exitCode, output) = Run(NativeBuild.CompilerPath, arguments);
             if (exitCode != 0) {
-                return new(false, output);
+                return NativeBuild.Explained(new(false, output), options);
             }
 
             File.Move(temporary, outputPath, overwrite: true);

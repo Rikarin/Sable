@@ -361,7 +361,7 @@ public static class IncrementalBuild {
 
         return (native.Succeeded
             ? new(true, [], "whole", 1, 0)
-            : BuildOutcome.Failed([$"internal error: the native build failed:\n{native.Output}"])) with { Warnings = result.Warnings };
+            : BuildOutcome.Failed([native.Report])) with { Warnings = result.Warnings };
     }
 
     // =======================================================================
@@ -571,7 +571,7 @@ public static class IncrementalBuild {
         }
 
         if (!runtimeTask.Result.Succeeded) {
-            return BuildOutcome.Failed([$"internal error: compiling the runtime failed:\n{runtimeTask.Result.Output}"]);
+            return BuildOutcome.Failed([runtimeTask.Result.Setup ? runtimeTask.Result.Output : $"internal error: compiling the runtime failed:\n{runtimeTask.Result.Output}"]);
         }
 
         // ---- Every unit must have seen the same types -----------------------

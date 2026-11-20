@@ -9,10 +9,10 @@ namespace Sable.CodeGen.Tests;
 ///     clang knows, and <c>--target</c> through a package build.
 /// </summary>
 /// <remarks>
-///     Only macOS and Linux have the runtime, and this machine may have no
-///     sysroot for another, so most targets are checked as object files —
-///     which need neither — by their headers. On an Apple Silicon Mac an
-///     x86-64 macOS program is also linked and, under Rosetta, run.
+///     This machine may have no sysroot for another, so most targets are
+///     checked as object files — which need none — by their headers. On an
+///     Apple Silicon Mac an x86-64 macOS program is also linked and, under
+///     Rosetta, run; WasiTests run WebAssembly where wasmtime is.
 /// </remarks>
 public sealed class TargetTests {
     static readonly bool CanBuild = NativeBuild.IsAvailable();
@@ -53,7 +53,7 @@ public sealed class TargetTests {
         Assert.Equal(os, target.Os);
         Assert.Equal(pointerBits, target.PointerBits);
         Assert.Equal(suffix, target.ExecutableSuffix);
-        Assert.Equal(target.Platform is not NativePlatform.Wasi, target.HasRuntime);
+        Assert.True(target.HasRuntime);
     }
 
     [Theory]
@@ -189,14 +189,62 @@ public sealed class TargetTests {
         }
     }
 
-    /// <summary>The runtime has no WebAssembly layer: an executable for it is refused with why, not left to clang's errors.</summary>
+    /// <summary>
+    ///     A build for another machine whose C library is not where clang
+    ///     looks says so, and where it is looked for — not an internal error
+    ///     made of clang's: here a sysroot with nothing in it.
+    /// </summary>
     [Theory]
-    [InlineData("wasm32-wasi")]
-    public void AnExecutableNeedsTheRuntimesPlatformLayer(string triple) {
+    [InlineData("wasm32-wasi", "wasi-libc")]
+    [InlineData("linux", "debootstrap")]
+    public void AMissingSysrootIsSaidWithWhereOneIsLookedFor(string triple, string hint) {
+        if (!CanBuild) {
+            return;
+        }
+
+        if (triple == "linux") {
+            // Linux, but not this machine's.
+            triple = NativeTarget.Host is { Platform: NativePlatform.Linux, Arch: "x86_64" } ? "aarch64-unknown-linux-gnu" : "x86_64-unknown-linux-gnu";
+        }
+
         var target = NativeTarget.Of(triple);
-        var build = NativeBuild.Build("", Path.Combine(Path.GetTempPath(), "never"), NativeOptions.Of(true, false) with { Target = target });
-        Assert.False(build.Succeeded);
-        Assert.Contains($"no platform layer for {triple}", build.Output, StringComparison.Ordinal);
+        var sysroot = Directory.CreateTempSubdirectory("sable-sysroot-");
+        var cache = Directory.CreateTempSubdirectory("sable-runtime-");
+        try {
+            var build = NativeBuild.Build("", Path.Combine(sysroot.FullName, "never"), NativeOptions.Of(true, false) with { Target = target, Sysroot = sysroot.FullName }, cache.FullName);
+            Assert.False(build.Succeeded);
+            Assert.True(build.Setup, build.Output);
+            Assert.StartsWith($"the C library for {triple} is not in the sysroot {sysroot.FullName}", build.Report, StringComparison.Ordinal);
+            Assert.Contains(target.SysrootHome, build.Output, StringComparison.Ordinal);
+            Assert.Contains(hint, build.Output, StringComparison.Ordinal);
+            Assert.Contains("clang said:", build.Output, StringComparison.Ordinal);
+        } finally {
+            sysroot.Delete(true);
+            cache.Delete(true);
+        }
+    }
+
+    /// <summary>
+    ///     A sysroot not given is looked for: first under
+    ///     <c>$SABLE_HOME/sysroots/&lt;triple&gt;</c>, then, for WASI, where
+    ///     wasi-sdk and wasi-libc install theirs. The host needs none, and a
+    ///     build's key holds the one it uses.
+    /// </summary>
+    [Fact]
+    public void ASysrootIsLookedForWhereTheTargetsAreKept() {
+        var wasi = NativeTarget.Of("wasm32-wasi");
+        var candidates = wasi.SysrootCandidates().ToList();
+        Assert.Equal(Path.Combine(NativeBuild.SableHome, "sysroots", "wasm32-wasi"), candidates[0]);
+        Assert.Contains("/opt/wasi-sdk/share/wasi-sysroot", candidates);
+        Assert.Contains("/usr/share/wasi-sysroot", candidates);
+
+        var linux = NativeTarget.Of("aarch64-unknown-linux-gnu");
+        Assert.Equal([linux.SysrootHome], linux.SysrootCandidates());
+        Assert.Null(NativeTarget.Host.FindSysroot());
+
+        var given = NativeOptions.Of(true, false) with { Target = wasi, Sysroot = "/somewhere" };
+        Assert.Equal(["--sysroot=/somewhere"], NativeBuild.SysrootFlags(given));
+        Assert.Contains("|/somewhere|", given.Key, StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -70,7 +70,7 @@ public sealed record NativeOptions {
     public string LinkInputs { get; init; } = "";
 
     /// <summary>The settings as text, every one of them: what a cache of builds made with them is keyed by.</summary>
-    public string Key => $"{OptLevel}|{DebugInfo}|{Lto}|{Strip}|{Rpath}|{Target?.Triple}|{Sysroot}|{string.Join(' ', LinkArguments)}|{LinkInputs}|{PositionIndependent}";
+    public string Key => $"{OptLevel}|{DebugInfo}|{Lto}|{Strip}|{Rpath}|{Target?.Triple}|{NativeBuild.SysrootFor(this)}|{string.Join(' ', LinkArguments)}|{LinkInputs}|{PositionIndependent}";
 
     /// <summary>
     ///     Compile the program and the runtime as position-independent code,
@@ -84,7 +84,8 @@ public sealed record NativeOptions {
 
     /// <summary>
     ///     Where the target's C library and headers are, for a target that is
-    ///     not this machine: clang's <c>--sysroot</c>. Null for clang's own idea.
+    ///     not this machine: clang's <c>--sysroot</c>. Null to look for one
+    ///     (<see cref="NativeTarget.FindSysroot" />), or else leave it to clang.
     /// </summary>
     public string? Sysroot { get; init; }
 
@@ -101,7 +102,15 @@ public sealed record NativeOptions {
 }
 
 /// <summary>The outcome of turning LLVM IR into an executable.</summary>
-public sealed record NativeBuildResult(bool Succeeded, string Output);
+/// <param name="Setup">
+///     The build failed for what this machine lacks — the target's C library,
+///     or the linker for it — not for anything the compiler did: the output
+///     says what is missing and where it is looked for.
+/// </param>
+public sealed record NativeBuildResult(bool Succeeded, string Output, bool Setup = false) {
+    /// <summary>The failure as the command line reports it.</summary>
+    public string Report => Setup ? Output : $"internal error: the native build failed:\n{Output}";
+}
 
 /// <summary>
 ///     Compiles LLVM IR and links it with the runtime into an executable, by
@@ -249,7 +258,7 @@ public static class NativeBuild {
         var lto = LtoFlags(options, target.Platform, LinksBitcodeFor(target));
         var (runtime, compiled) = RuntimeObject(options, lto, runtimeCache ?? DefaultRuntimeCache);
         if (!compiled.Succeeded) {
-            return compiled;
+            return Explained(compiled, options);
         }
 
         var directory = Directory.CreateTempSubdirectory("sable-build-");
@@ -278,7 +287,7 @@ public static class NativeBuild {
                 ShipLldbPlugin(outputPath);
             }
 
-            return new(exitCode == 0, output);
+            return Explained(new(exitCode == 0, output), options);
         } finally {
             directory.Delete(true);
         }
@@ -326,7 +335,7 @@ public static class NativeBuild {
         options = options with { Lto = LtoMode.Off };
         var (runtime, compiled) = RuntimeObject(options, [], runtimeCache ?? DefaultRuntimeCache);
         if (!compiled.Succeeded) {
-            return compiled;
+            return Explained(compiled, options);
         }
 
         var directory = Directory.CreateTempSubdirectory("sable-library-");
@@ -422,7 +431,7 @@ public static class NativeBuild {
 
     /// <summary>Why an executable cannot be linked for <paramref name="target" />.</summary>
     public static string NoRuntime(NativeTarget target) =>
-        $"the runtime has no platform layer for {target.Triple} yet: it is built for macOS, Linux and Windows only (docs/06); "
+        $"the runtime has no platform layer for {target.Triple} yet: it is built for macOS, Linux, Windows and WASI only (docs/06); "
         + "the program can still be compiled to an object file (--emit obj) or to LLVM IR (--emit llvm-ir)";
 
     /// <summary>
@@ -473,9 +482,68 @@ public static class NativeBuild {
             ? llvmIr
             : description.Header + llvmIr;
 
-    /// <summary>clang's <c>--sysroot</c>, when the options give one.</summary>
+    /// <summary>The sysroot a build with these options uses: theirs, or one found for the target; null for clang's own.</summary>
+    public static string? SysrootFor(NativeOptions options) => options.Sysroot ?? options.TargetOrHost.FindSysroot();
+
+    /// <summary>clang's <c>--sysroot</c>, when the options give one or one is found (<see cref="SysrootFor" />).</summary>
     public static IReadOnlyList<string> SysrootFlags(NativeOptions options) =>
-        options.Sysroot is { } sysroot ? ["--sysroot=" + sysroot] : [];
+        SysrootFor(options) is { } sysroot ? ["--sysroot=" + sysroot] : [];
+
+    /// <summary><c>$SABLE_HOME</c>, by default <c>~/.sable</c>: where the compiled runtime and the targets' sysroots are kept.</summary>
+    public static string SableHome =>
+        Environment.GetEnvironmentVariable("SABLE_HOME") is { Length: > 0 } home ? home : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".sable");
+
+    // What clang says when the target's C library is not where it looks —
+    // a header, a library or the start-up object — and when it has no
+    // linker for the target.
+    static readonly System.Text.RegularExpressions.Regex MissingLibrary = new(
+        @"fatal error: '[^']+' file not found|unable to find library -l|cannot find -l|library not found for -l|cannot (open|find) [^\s:]*crt[^\s:]*\.o|could not open '[^']*crt");
+
+    static readonly System.Text.RegularExpressions.Regex MissingLinker = new(
+        @"invalid linker name in argument|Executable ""[^""]*(lld|wasm-ld|lld-link)[^""]*"" doesn't exist|unable to execute command: [^\n]*(lld|wasm-ld)");
+
+    /// <summary>
+    ///     A failed build for another machine, or with a sysroot given, said
+    ///     as what this machine lacks when clang's output shows that is why:
+    ///     the target's C library (<see cref="NoSysroot" />), or its linker.
+    ///     Any other failure is left as it is.
+    /// </summary>
+    public static NativeBuildResult Explained(NativeBuildResult result, NativeOptions options) {
+        var target = options.TargetOrHost;
+        if (result.Succeeded || result.Setup || (target.IsHost && options.Sysroot is null)) {
+            return result;
+        }
+
+        var why = MissingLinker.IsMatch(result.Output) ? NoLinker(target)
+            : MissingLibrary.IsMatch(result.Output) ? NoSysroot(target, SysrootFor(options))
+            : null;
+        return why is null ? result : new(false, $"{why}\n\nclang said:\n{result.Output}", Setup: true);
+    }
+
+    /// <summary>Why a build for <paramref name="target" /> found no C library, and where one is looked for.</summary>
+    public static string NoSysroot(NativeTarget target, string? sysroot) {
+        var where = sysroot is null ? "on this machine" : $"in the sysroot {sysroot}";
+        var kind = target.Platform switch {
+            NativePlatform.Wasi => " For WASI it is wasi-libc's sysroot, such as wasi-sdk's share/wasi-sysroot, which is also found through WASI_SYSROOT or WASI_SDK_PATH.",
+            NativePlatform.Linux => " For Linux it is a root of the target system with its /usr/include and /usr/lib, such as one debootstrap makes, or a cross toolchain's.",
+            NativePlatform.MacOS => " For macOS it is an SDK, such as Xcode's MacOSX.sdk.",
+            NativePlatform.Windows => " For Windows, clang finds the Windows SDK and Microsoft's C runtime by itself only on Windows.",
+            _ => "",
+        };
+        return $"the C library for {target.Triple} is not {where}: the runtime is compiled with its headers, and the program linked with it. "
+            + $"Give its root with --sysroot <dir>, or put it at {target.SysrootHome}, where it is found by itself.{kind}";
+    }
+
+    /// <summary>Why a build for <paramref name="target" /> could not be linked: clang has no linker for it.</summary>
+    public static string NoLinker(NativeTarget target) {
+        var linker = target.Platform switch {
+            NativePlatform.Wasi => "wasm-ld",
+            NativePlatform.Windows => "lld-link",
+            NativePlatform.MacOS => "ld64.lld",
+            _ => "ld.lld",
+        };
+        return $"linking for {target.Triple} needs LLVM's linker, {linker}, which clang cannot find: install lld beside it";
+    }
 
     /// <summary>
     ///     What linking for another machine's Linux needs: lld, since the
@@ -487,7 +555,7 @@ public static class NativeBuild {
 
     /// <summary>Whether the link for <paramref name="target" /> takes LLVM bitcode: this machine's answer, or lld's for another's Linux.</summary>
     public static bool LinksBitcodeFor(NativeTarget target) =>
-        target.IsHost ? LinksBitcode : target.Platform is NativePlatform.MacOS or NativePlatform.Linux;
+        target.IsHost ? LinksBitcode : target.Platform is NativePlatform.MacOS or NativePlatform.Linux or NativePlatform.Wasi;
 
     // =======================================================================
     // The runtime, compiled once
@@ -499,11 +567,7 @@ public static class NativeBuild {
     ///     Where it is kept never changes what is built: the object is keyed
     ///     by everything that goes into it.
     /// </summary>
-    public static string DefaultRuntimeCache =>
-        Path.Combine(
-            Environment.GetEnvironmentVariable("SABLE_HOME") is { Length: > 0 } home ? home : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".sable"),
-            "cache",
-            "runtime");
+    public static string DefaultRuntimeCache => Path.Combine(SableHome, "cache", "runtime");
 
     /// <summary>
     ///     The runtime compiled as <paramref name="options" /> ask, from
@@ -659,6 +723,12 @@ public static class NativeBuild {
         // calls for what the machine has no instruction for (F16, 128-bit
         // division) and which Microsoft's C runtime does not have.
         NativePlatform.Windows => ["-fuse-ld=lld", "-Wl,/STACK:8388608", "-Wl,/DEBUG", ..CompilerRtBuiltins.Value is { } builtins ? [builtins] : Array.Empty<string>()],
+
+        // wasm-ld gives the stack 64 KiB unless asked: 8 MiB, as POSIX's
+        // main thread has. And the stack first in linear memory, below the
+        // data, so that running off its end is an access below address 0,
+        // which the engine traps, not a write over the program's globals.
+        NativePlatform.Wasi => ["-Wl,-z,stack-size=8388608", "-Wl,--stack-first"],
         _ => [],
     };
 

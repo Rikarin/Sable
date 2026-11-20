@@ -24,8 +24,10 @@ namespace Sable.CodeGen;
 ///     <para>
 ///         Every target the triple parser knows can be compiled to an object
 ///         file. Linking an executable needs the runtime, whose platform
-///         layer is POSIX for macOS and Linux and Win32 for Windows
-///         (<see cref="HasRuntime" />).
+///         layer is POSIX for macOS and Linux, Win32 for Windows and WASI
+///         for WebAssembly (<see cref="HasRuntime" />); and for another
+///         machine, its C library: a sysroot, given with <c>--sysroot</c> or
+///         found (<see cref="FindSysroot" />).
 ///     </para>
 /// </remarks>
 public sealed record NativeTarget {
@@ -56,11 +58,52 @@ public sealed record NativeTarget {
     /// <summary>
     ///     Whether the runtime can be built for it, and so an executable
     ///     linked: the runtime's platform layer (threads, a trap's backtrace,
-    ///     files, processes) is POSIX on macOS and Linux and Win32 on
-    ///     Windows. WebAssembly needs a layer of its own (docs/06), not
-    ///     written yet.
+    ///     files, processes) is POSIX on macOS and Linux, Win32 on Windows,
+    ///     and WASI's on WebAssembly, with one thread and no sockets or
+    ///     processes (runtime/platform_wasi.c).
     /// </summary>
-    public bool HasRuntime => Platform is NativePlatform.MacOS or NativePlatform.Linux or NativePlatform.Windows;
+    public bool HasRuntime => Platform is NativePlatform.MacOS or NativePlatform.Linux or NativePlatform.Windows or NativePlatform.Wasi;
+
+    /// <summary>
+    ///     Where a sysroot for this target is kept for Sable to find:
+    ///     <c>$SABLE_HOME/sysroots/&lt;triple&gt;</c>, the triple as written.
+    /// </summary>
+    public string SysrootHome => Path.Combine(NativeBuild.SableHome, "sysroots", Triple);
+
+    /// <summary>
+    ///     The sysroot a build for this target uses when none is given: the
+    ///     first of <see cref="SysrootCandidates" /> that is there. Null for
+    ///     the host, whose C library clang knows, and when there is none —
+    ///     clang may still know of one (a Linux system's cross libraries under
+    ///     <c>/usr/&lt;triple&gt;</c>, wasi-sdk's clang its own).
+    /// </summary>
+    public string? FindSysroot() => IsHost ? null : SysrootCandidates().FirstOrDefault(Directory.Exists);
+
+    /// <summary>
+    ///     Where a sysroot for this target is looked for, in order:
+    ///     <see cref="SysrootHome" />; and for WASI, <c>$WASI_SYSROOT</c>,
+    ///     wasi-sdk's (<c>$WASI_SDK_PATH</c>, <c>/opt/wasi-sdk</c>), and
+    ///     wasi-libc's as Homebrew and Debian install it.
+    /// </summary>
+    public IEnumerable<string> SysrootCandidates() {
+        yield return SysrootHome;
+        if (Platform != NativePlatform.Wasi) {
+            yield break;
+        }
+
+        if (Environment.GetEnvironmentVariable("WASI_SYSROOT") is { Length: > 0 } sysroot) {
+            yield return sysroot;
+        }
+
+        if (Environment.GetEnvironmentVariable("WASI_SDK_PATH") is { Length: > 0 } sdk) {
+            yield return Path.Combine(sdk, "share", "wasi-sysroot");
+        }
+
+        yield return "/opt/wasi-sdk/share/wasi-sysroot";
+        yield return "/opt/homebrew/share/wasi-sysroot";
+        yield return "/usr/local/share/wasi-sysroot";
+        yield return "/usr/share/wasi-sysroot";
+    }
 
     /// <summary>What an executable's file name ends with on the target.</summary>
     public string ExecutableSuffix => Platform switch {

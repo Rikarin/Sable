@@ -2586,7 +2586,16 @@ Sable.CodeGen. `sable build` and `sable run` on a package go through it;
     nothing. So a change to an ordinary body recompiles one unit; a change
     to an interface recompiles the units that depend on it; a change to an
     extension's interface recompiles every unit.
-  - `objects/runtime-<key>.o`: the C runtime, compiled once per settings.
+  - `objects/lib-<key>/`: the standard library's unit — Sable.Core and
+    the modules the program imports — as `std.o`, the archive of it,
+    `libsable_std.a` (`sable_std.lib` on Windows), which the program
+    links against, and its `.abi`; and `objects/runtime-<key>/`, the C
+    runtime's object and archive (`libsable_runtime.a`), compiled once per
+    settings. Each directory is made under a temporary name and renamed
+    into place, so a build sees it whole or not at all; the link takes the
+    units' objects, then the library's archive, then the runtime's. A
+    static library C links (`[lib] kind = "static"`) takes the objects
+    instead, joined whole.
   - `target/resolution.txt`: the last resolution of a graph of local
     packages, keyed by every local manifest, the lock file and the
     request; while they are unchanged the resolver does not run. A graph

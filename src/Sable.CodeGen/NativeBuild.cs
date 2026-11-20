@@ -240,7 +240,7 @@ public static class NativeBuild {
     /// </summary>
     /// <param name="runtimeCache">
     ///     Where the compiled runtime is kept between builds
-    ///     (<see cref="RuntimeObject" />); the user's cache when not given.
+    ///     (<see cref="Runtime" />); the user's cache when not given.
     /// </param>
     public static NativeBuildResult Build(string llvmIr, string outputPath, NativeOptions options, string? runtimeCache = null) =>
         Build(llvmIr, outputPath, options, runtimeCache, []);
@@ -256,9 +256,9 @@ public static class NativeBuild {
         // options: compiled once and kept, it no longer costs most of a
         // small program's build.
         var lto = LtoFlags(options, target.Platform, LinksBitcodeFor(target));
-        var (runtime, compiled) = RuntimeObject(options, lto, runtimeCache ?? DefaultRuntimeCache);
-        if (!compiled.Succeeded) {
-            return Explained(compiled, options);
+        var runtime = Runtime(options, lto, runtimeCache ?? DefaultRuntimeCache);
+        if (!runtime.Result.Succeeded) {
+            return Explained(runtime.Result, options);
         }
 
         var directory = Directory.CreateTempSubdirectory("sable-build-");
@@ -280,7 +280,7 @@ public static class NativeBuild {
                 arguments.Add("-Wl,-object_path_lto," + kept);
             }
 
-            arguments.AddRange(["-Wno-override-module", irPath, runtime, "-o", outputPath, ..LinkFlags(options, target.Platform), ..CrossLinkFlags(target)]);
+            arguments.AddRange(["-Wno-override-module", irPath, runtime.Archive, "-o", outputPath, ..LinkFlags(options, target.Platform), ..CrossLinkFlags(target)]);
 
             var (exitCode, output) = Run(CompilerPath, arguments);
             if (exitCode == 0 && options.DebugInfo) {
@@ -333,9 +333,9 @@ public static class NativeBuild {
         }
 
         options = options with { Lto = LtoMode.Off };
-        var (runtime, compiled) = RuntimeObject(options, [], runtimeCache ?? DefaultRuntimeCache);
-        if (!compiled.Succeeded) {
-            return Explained(compiled, options);
+        var runtime = Runtime(options, [], runtimeCache ?? DefaultRuntimeCache);
+        if (!runtime.Result.Succeeded) {
+            return Explained(runtime.Result, options);
         }
 
         var directory = Directory.CreateTempSubdirectory("sable-library-");
@@ -346,7 +346,9 @@ public static class NativeBuild {
                 return built;
             }
 
-            return Archive([program, runtime], outputPath, target);
+            // The runtime's object, not its archive: an archive in an
+            // archive is no member a linker reads.
+            return Archive([program, runtime.Object], outputPath, target);
         } finally {
             directory.Delete(true);
         }
@@ -571,60 +573,63 @@ public static class NativeBuild {
 
     /// <summary>
     ///     The runtime compiled as <paramref name="options" /> ask, from
-    ///     <paramref name="cacheDirectory" /> when it was compiled before. The
-    ///     object's name is a hash of all that makes it — the compiler, the
-    ///     runtime's source, the flags and the target — so a cached one is
-    ///     only ever the one this build would make. Written whole or not at all.
+    ///     <paramref name="cacheDirectory" /> when it was compiled before: its
+    ///     object, and the archive of it programs link against
+    ///     (<c>libsable_runtime.a</c>, <c>sable_runtime.lib</c> on Windows).
+    ///     The directory both are in is named by a hash of all that makes them
+    ///     — the compiler, the runtime's source, the flags and the target — so
+    ///     a cached one is only ever the one this build would make; it is
+    ///     written whole or not at all (<see cref="AtomicDirectory" />).
     /// </summary>
     /// <param name="lto">
     ///     Link-time optimisation's flags: with them the runtime is LLVM
     ///     bitcode, which the link optimises with the program, inlining the
     ///     runtime's small functions into it.
     /// </param>
-    public static (string Path, NativeBuildResult Result) RuntimeObject(NativeOptions options, IReadOnlyList<string> lto, string cacheDirectory) {
+    public static RuntimeBuild Runtime(NativeOptions options, IReadOnlyList<string> lto, string cacheDirectory) {
         var target = options.TargetOrHost;
-        var bitcode = lto.Where(static f => f.StartsWith("-flto", StringComparison.Ordinal));
-
-        // Without debug information the runtime is compiled as the program
-        // is; with it, optimised and without debug information — it is not
-        // the program's code, and stepping goes over it as over a system
-        // library.
-        var level = options.DebugInfo && !options.Optimise ? "-O2" : $"-O{options.OptLevel}";
-        List<string> flags = [..target.ClangFlags, ..SysrootFlags(options), "-c", level, ..PositionIndependentFlags(options), ..bitcode];
-
+        var flags = RuntimeFlags(options, lto);
         var key = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
-            $"sable-runtime-1\n{NativeObjects.CompilerIdentity}\n{string.Join(' ', flags)}\n{target.Triple}\n{RuntimeSource}")));
-        var path = Path.Combine(cacheDirectory, $"runtime-{key[..32]}.o");
-        if (File.Exists(path)) {
-            return (path, new(true, ""));
-        }
+            $"sable-runtime-2\n{NativeObjects.CompilerIdentity}\n{string.Join(' ', flags)}\n{target.Triple}\n{RuntimeSource}")));
+        return RuntimeIn(Path.Combine(cacheDirectory, $"runtime-{key[..32]}"), options, flags);
+    }
 
-        Directory.CreateDirectory(cacheDirectory);
-        var temporary = path + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
-        var sources = temporary + ".src";
-        try {
-            var source = WriteRuntime(sources);
-            var (exitCode, output) = Run(CompilerPath, [..flags, source, "-o", temporary]);
+    /// <summary>
+    ///     What the runtime is compiled with for <paramref name="options" />:
+    ///     without debug information as the program is; with it, optimised
+    ///     and without debug information — it is not the program's code, and
+    ///     stepping goes over it as over a system library.
+    /// </summary>
+    public static IReadOnlyList<string> RuntimeFlags(NativeOptions options, IReadOnlyList<string> lto) {
+        var level = options.DebugInfo && !options.Optimise ? "-O2" : $"-O{options.OptLevel}";
+        return [
+            ..options.TargetOrHost.ClangFlags, ..SysrootFlags(options), "-c", level, ..PositionIndependentFlags(options),
+            ..lto.Where(static f => f.StartsWith("-flto", StringComparison.Ordinal)),
+        ];
+    }
+
+    /// <summary>
+    ///     The runtime's object and archive in <paramref name="directory" />,
+    ///     compiled with <paramref name="flags" /> and put there first if they
+    ///     are not.
+    /// </summary>
+    public static RuntimeBuild RuntimeIn(string directory, NativeOptions options, IReadOnlyList<string> flags) {
+        var target = options.TargetOrHost;
+        var objectName = "sable_runtime" + (target.Platform == NativePlatform.Windows ? ".obj" : ".o");
+        var archiveName = LibraryFileName("sable_runtime", LibraryKind.Static, target);
+        var built = AtomicDirectory.GetOrCreate(directory, temporary => {
+            var sources = Path.Combine(temporary, "src");
+            var objectPath = Path.Combine(temporary, objectName);
+            var (exitCode, output) = Run(CompilerPath, [..flags, WriteRuntime(sources), "-o", objectPath]);
+            Directory.Delete(sources, true);
             if (exitCode != 0) {
-                return (path, new(false, output));
+                return new(false, output);
             }
 
-            try {
-                File.Move(temporary, path, overwrite: true);
-            } catch (Exception e) when (e is IOException or UnauthorizedAccessException && File.Exists(path)) {
-                // Another build compiled it at the same time, and on Windows
-                // a file a link has open cannot be replaced. Its key says
-                // everything it was compiled from, so theirs is as good.
-            }
-
-            return (path, new(true, output));
-        } finally {
-            if (Directory.Exists(sources)) {
-                Directory.Delete(sources, true);
-            }
-
-            File.Delete(temporary);
-        }
+            var archived = Archive([objectPath], Path.Combine(temporary, archiveName), target);
+            return archived.Succeeded ? new(true, output) : archived;
+        });
+        return new(Path.Combine(directory, objectName), Path.Combine(directory, archiveName), built);
     }
 
     /// <summary>

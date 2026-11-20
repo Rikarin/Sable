@@ -678,8 +678,10 @@ ThinLTO, keeping ThinLTO's own cache beside the objects. `lto = "fat"`, and
 an optimised build with debug information, compile the program whole. A
 package's native library (`[lib] kind`) is built the same way, its own
 unit leading in place of an entry file (§5.2.2).
-The runtime is compiled once per set of options and kept, in the build cache
-(or `$SABLE_HOME/cache/runtime` for a single file).
+The standard library's unit is compiled to an archive (`libsable_std.a`) and
+the runtime to another (`libsable_runtime.a`), each compiled once per set of
+options and kept, in the build cache (or `$SABLE_HOME/cache` for a single
+file); a program's link takes its units' objects, then those archives.
 
 **Measured** (#182) on `tools/incremental/genworkspace.py`'s workspace (100
 packages, 110k lines, 102 units), `sable` built Release, on a machine under

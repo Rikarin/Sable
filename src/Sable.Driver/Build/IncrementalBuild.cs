@@ -368,14 +368,27 @@ public static class IncrementalBuild {
     // Separately
     // =======================================================================
 
-    sealed class Unit(string name, IReadOnlyList<SyntaxTree> trees, string contentHash) {
+    /// <param name="library">
+    ///     A library's unit — the standard library's — whose compiled code is
+    ///     kept as an archive (<see cref="LibraryUnit" />) that programs link
+    ///     against, rather than as an object of this program's.
+    /// </param>
+    sealed class Unit(string name, IReadOnlyList<SyntaxTree> trees, string contentHash, bool library = false) {
         public string Name { get; } = name;
         public IReadOnlyList<SyntaxTree> Trees { get; set; } = trees;
         public string ContentHash { get; } = contentHash;
         public string Key { get; set; } = "";
         public string ObjectPath { get; set; } = "";
-        public string AbiPath => Path.ChangeExtension(ObjectPath, ".abi");
+        public string AbiPath { get; set; } = "";
         public bool Cached { get; set; }
+
+        /// <summary>For a library's unit, where its object, archive and records are.</summary>
+        public LibraryUnit? Library { get; set; }
+
+        public bool IsLibrary { get; } = library;
+
+        /// <summary>What a program links: an ordinary unit's object, or a library's archive.</summary>
+        public string Linked => Library?.Archive ?? ObjectPath;
     }
 
     static BuildOutcome Separately(
@@ -389,7 +402,7 @@ public static class IncrementalBuild {
         // which every compilation has, and the modules the program imports.
         var own = sources.Trees.Select((t, i) => new Unit(sources.Plans[i].Name, t, UnitContent(fileHashes[i]))).ToList();
         var units = own.ToList();
-        var standard = new Unit("std", [..library, ..CoreLibrary.TreesFor(sources.Trees[0][0].Options)], Hash(string.Join("\n", library.Select(static t => t.Text.FileName))));
+        var standard = new Unit("std", [..library, ..CoreLibrary.TreesFor(sources.Trees[0][0].Options)], Hash(string.Join("\n", library.Select(static t => t.Text.FileName))), library: true);
         units.Add(standard);
 
         // ---- Each unit's interface ---------------------------------------------
@@ -443,8 +456,14 @@ public static class IncrementalBuild {
         }
 
         foreach (var unit in units) {
-            unit.ObjectPath = Path.Combine(objects, unit.Key + ".o");
-            unit.Cached = File.Exists(unit.ObjectPath) && File.Exists(unit.AbiPath);
+            if (unit.IsLibrary) {
+                unit.Library = LibraryUnit.In(Path.Combine(objects, "lib-" + unit.Key[..32]), unit.Name, settings.Native.TargetOrHost);
+                (unit.ObjectPath, unit.AbiPath, unit.Cached) = (unit.Library.Object, unit.Library.Abi, unit.Library.Exists);
+            } else {
+                unit.ObjectPath = Path.Combine(objects, unit.Key + ".o");
+                unit.AbiPath = Path.ChangeExtension(unit.ObjectPath, ".abi");
+                unit.Cached = File.Exists(unit.ObjectPath) && File.Exists(unit.AbiPath);
+            }
         }
 
         var stale = units.Where(static u => !u.Cached).ToList();
@@ -464,11 +483,10 @@ public static class IncrementalBuild {
 
         var program = sources.Program;
 
-        // The runtime, as an object of its own.
-        var runtime = Path.Combine(objects, "runtime-" + Hash(settingsKey + "\nruntime") + ".o");
-        var runtimeTask = File.Exists(runtime)
-            ? Task.FromResult(new NativeBuildResult(true, ""))
-            : Task.Run(() => NativeObjects.CompileRuntime(runtime, settings.Native));
+        // The runtime, as an archive of its own: bitcode where the link
+        // optimises across units, so that its small functions inline.
+        var target = settings.Native.TargetOrHost;
+        var runtimeTask = Task.Run(() => NativeBuild.Runtime(settings.Native, NativeBuild.LtoFlags(settings.Native, target.Platform, NativeBuild.LinksBitcodeFor(target)), objects));
 
         var compiling = new List<(Unit Unit, Task<NativeBuildResult> Task)>();
         // '-j' bounds how many clang processes run at once.
@@ -537,10 +555,14 @@ public static class IncrementalBuild {
                     }
                 }
 
+                // A library's files are named as the compiler embeds them,
+                // with their text in the debug information, the same for
+                // every program: its debug information is relative to no
+                // program's directory.
                 string ir;
                 using (BuildTimings.Of(timings, "emit")) {
                     ir = settings.DebugDirectory is { } directory
-                        ? LlvmEmitter.EmitWithDebugInfo(module, directory, settings.Native.TargetOrHost, settings.Optimise, Pipeline.EmbeddedSources(standard.Trees, program))
+                        ? LlvmEmitter.EmitWithDebugInfo(module, unit.IsLibrary ? LibraryUnit.DebugDirectory : directory, settings.Native.TargetOrHost, settings.Optimise, Pipeline.EmbeddedSources(standard.Trees, program))
                         : LlvmEmitter.Emit(module, settings.Native.TargetOrHost);
                 }
 
@@ -549,8 +571,14 @@ public static class IncrementalBuild {
                     await throttle.WaitAsync();
                     try {
                         var started = System.Diagnostics.Stopwatch.GetTimestamp();
-                        File.WriteAllText(unit.AbiPath, abi);
-                        var result = NativeObjects.CompileIr(ir, unit.ObjectPath, settings.Native);
+                        NativeBuildResult result;
+                        if (unit.Library is { } library) {
+                            result = library.Write(abi, temporary => NativeObjects.CompileIr(ir, temporary, settings.Native), settings.Native.TargetOrHost);
+                        } else {
+                            File.WriteAllText(unit.AbiPath, abi);
+                            result = NativeObjects.CompileIr(ir, unit.ObjectPath, settings.Native);
+                        }
+
                         timings?.Add("clang (units, summed)", System.Diagnostics.Stopwatch.GetElapsedTime(started));
                         return result;
                     } finally {
@@ -570,8 +598,10 @@ public static class IncrementalBuild {
             }
         }
 
-        if (!runtimeTask.Result.Succeeded) {
-            return BuildOutcome.Failed([runtimeTask.Result.Setup ? runtimeTask.Result.Output : $"internal error: compiling the runtime failed:\n{runtimeTask.Result.Output}"]);
+        var runtime = runtimeTask.Result;
+        if (!runtime.Result.Succeeded) {
+            var failed = NativeBuild.Explained(runtime.Result, settings.Native);
+            return BuildOutcome.Failed([failed.Setup ? failed.Output : $"internal error: compiling the runtime failed:\n{failed.Output}"]);
         }
 
         // ---- Every unit must have seen the same types -----------------------
@@ -583,10 +613,15 @@ public static class IncrementalBuild {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(executable))!);
         NativeBuildResult link;
         using (BuildTimings.Of(timings, "link")) {
-            List<string> linked = [..units.Select(static u => u.ObjectPath), runtime];
-            link = settings.Library is { } kind
-                ? NativeObjects.LinkLibrary(linked, executable, kind, settings.Native, Path.Combine(cacheDirectory, "thinlto"))
-                : NativeObjects.Link(linked, executable, settings.Native, Path.Combine(cacheDirectory, "thinlto"));
+            // The program's units' objects, then the libraries' archives, the
+            // runtime's last: a linker takes from an archive only the members
+            // what came before it needs. A static library C links is the
+            // objects joined whole (-r), the libraries' and the runtime's too.
+            link = settings.Library is LibraryKind.Static
+                ? NativeObjects.LinkLibrary([..units.Select(static u => u.ObjectPath), runtime.Object], executable, LibraryKind.Static, settings.Native, Path.Combine(cacheDirectory, "thinlto"))
+                : settings.Library is { } kind
+                    ? NativeObjects.LinkLibrary([..units.Select(static u => u.Linked), runtime.Archive], executable, kind, settings.Native, Path.Combine(cacheDirectory, "thinlto"))
+                    : NativeObjects.Link([..units.Select(static u => u.Linked), runtime.Archive], executable, settings.Native, Path.Combine(cacheDirectory, "thinlto"));
         }
 
         if (!link.Succeeded) {
@@ -595,7 +630,7 @@ public static class IncrementalBuild {
         }
 
         using (BuildTimings.Of(timings, "cache upkeep")) {
-            Collect(objects, units);
+            Collect(objects, units, Path.GetDirectoryName(runtime.Archive)!);
             CollectInterfaces(interfaces, interfaceFiles);
         }
 
@@ -606,12 +641,28 @@ public static class IncrementalBuild {
     ///     Keeps the object cache from growing without end: each build marks
     ///     the objects it used (through their <c>.abi</c> files — an object's
     ///     own time is in the executable's debug map, and must not change),
-    ///     and past a limit the least recently used go.
+    ///     and past a limit the least recently used go. The libraries' and
+    ///     the runtime's directories are marked by their own times, and only
+    ///     a few of each are kept.
     /// </summary>
-    static void Collect(string objects, IReadOnlyList<Unit> used) {
+    static void Collect(string objects, IReadOnlyList<Unit> used, string runtime) {
         var now = DateTime.UtcNow;
         foreach (var unit in used) {
             File.SetLastWriteTimeUtc(unit.AbiPath, now);
+            if (unit.Library is { } library) {
+                Directory.SetLastWriteTimeUtc(library.Directory, now);
+            }
+        }
+
+        if (Path.GetDirectoryName(runtime) == objects) {
+            Directory.SetLastWriteTimeUtc(runtime, now);
+        }
+
+        foreach (var pattern in (string[])["lib-*", "runtime-*"]) {
+            var kept = new DirectoryInfo(objects).GetDirectories(pattern).Where(static d => !d.Name.Contains(AtomicDirectory.TemporaryMarker, StringComparison.Ordinal));
+            foreach (var stale in kept.OrderByDescending(static d => d.LastWriteTimeUtc).Skip(8)) {
+                stale.Delete(true);
+            }
         }
 
         var limit = Math.Max(256, 8 * used.Count);

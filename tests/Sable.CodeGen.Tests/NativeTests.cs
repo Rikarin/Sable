@@ -516,9 +516,9 @@ public sealed class NativeTests {
 
     /// <summary>
     ///     The runtime is compiled once for each set of options that changes
-    ///     it, and kept: a second program built the same way links the object
-    ///     the first one left, rather than compiling 3,000 lines of C again.
-    ///     A build with other options makes, and keeps, another.
+    ///     it, and kept as an archive: a second program built the same way
+    ///     links the archive the first one left, rather than compiling 3,000
+    ///     lines of C again. A build with other options makes, and keeps, another.
     /// </summary>
     [Fact]
     public void TheRuntimeIsCompiledOnceAndKept() {
@@ -534,17 +534,20 @@ public sealed class NativeTests {
             var ir = compiled.LlvmIr!;
             var options = NativeOptions.Of(optimise: true, debug: false);
             Assert.True(NativeBuild.Build(ir, executable, options, cache.FullName).Succeeded);
-            var runtime = Assert.Single(Directory.GetFiles(cache.FullName, "runtime-*.o"));
-            var written = File.GetLastWriteTimeUtc(runtime);
+            var runtime = Assert.Single(Directory.GetDirectories(cache.FullName, "runtime-*"));
+            var archive = Path.Combine(runtime, NativeBuild.LibraryFileName("sable_runtime", LibraryKind.Static, NativeTarget.Host));
+            Assert.True(File.Exists(archive));
+            var written = File.GetLastWriteTimeUtc(archive);
 
             Platform.DeleteExecutable(executable);
             Assert.True(NativeBuild.Build(ir, executable, options, cache.FullName).Succeeded);
-            Assert.Equal(written, File.GetLastWriteTimeUtc(Assert.Single(Directory.GetFiles(cache.FullName, "runtime-*.o"))));
+            Assert.Equal(runtime, Assert.Single(Directory.GetDirectories(cache.FullName, "runtime-*")));
+            Assert.Equal(written, File.GetLastWriteTimeUtc(archive));
             Assert.Equal(("kept\n", 0), PackageFixture.Execute(executable));
 
-            // Unoptimised, it is another object.
+            // Unoptimised, it is another.
             Assert.True(NativeBuild.Build(ir, executable, NativeOptions.Of(optimise: false, debug: false), cache.FullName).Succeeded);
-            Assert.Equal(2, Directory.GetFiles(cache.FullName, "runtime-*.o").Length);
+            Assert.Equal(2, Directory.GetDirectories(cache.FullName, "runtime-*").Length);
             Assert.Equal(("kept\n", 0), PackageFixture.Execute(executable));
         } finally {
             cache.Delete(true);

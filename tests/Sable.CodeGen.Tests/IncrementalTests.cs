@@ -748,7 +748,7 @@ public sealed class IncrementalTests {
             var trees = files.Select((text, i) => SyntaxTree.Parse(new SourceText(text, $"f{i}.sb"))).ToList();
             var compilation = Compilation.Create(trees);
             Assert.DoesNotContain(compilation.GetDiagnostics(), static d => d.Severity == DiagnosticSeverity.Error);
-            var (module, diagnostics) = SilGen.LowerUnit(compilation, new SilUnit(t => t == trees[0]), SilProgram.Index([..trees, ..CoreLibrary.TreesFor(trees[0].Options)]));
+            var (module, diagnostics) = SilGen.LowerUnit(compilation, new SilUnit(t => t == trees[0]), SilProgram.Index(compilation));
             Assert.Empty(diagnostics);
             return SilPrinter.Print(module);
         }

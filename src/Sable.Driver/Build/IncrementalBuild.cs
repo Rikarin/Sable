@@ -492,7 +492,7 @@ public static class IncrementalBuild {
                 return BuildOutcome.Failed(errors) with { Warnings = warnings };
             }
 
-            var index = timings is null ? SilProgram.Index([..program, ..standard.Trees]) : timings.Measure("index", () => SilProgram.Index([..program, ..standard.Trees]));
+            var index = timings is null ? SilProgram.Index(compilation) : timings.Measure("index", () => SilProgram.Index(compilation));
             foreach (var unit in stale) {
                 var owned = unit.Trees.ToHashSet();
                 SilModule module;

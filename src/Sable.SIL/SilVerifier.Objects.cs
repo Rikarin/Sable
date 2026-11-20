@@ -297,8 +297,11 @@ public static partial class SilVerifier {
                 case UpcastInst or CopyValueInst or UncheckedRefCastInst when aliases.Contains(instruction):
                 case RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst when fieldOf.ContainsKey(instruction):
                 case BuiltinInst { Name: "access_begin_read" or "access_begin_modify" or "access_end" or "access_check_read" or "access_check_modify" }:
-                // Destroying it destroys what is stored; an empty field is nothing to destroy.
+                // Destroying it destroys what is stored; an empty field is
+                // nothing to destroy. One whose initialiser threw is marked
+                // unmade first, with only some of its fields stored.
                 case DestroyValueInst:
+                case BuiltinInst { Name: "object_unmade" }:
                     return;
 
                 // The object as an initialiser's self.

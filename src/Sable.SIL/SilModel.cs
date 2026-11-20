@@ -1708,6 +1708,13 @@ public static class SilBuiltins {
             return operands is [var shared] ? new([shared], SilType.Unit) : null;
         }
 
+        // An object whose initialiser threw, on its way out: it was never
+        // made, so no deinit of its runs when it goes, though the fields
+        // set so far are destroyed as ever.
+        if (name == "object_unmade") {
+            return operands is [ClassType] ? new([operands[0]], SilType.Unit) : null;
+        }
+
         // An address, as an integer: an actor's executor, as a hop names it.
         if (name == "address_to_int") {
             return operands is [AddressType] ? new([operands[0]], SilType.Int) : null;
@@ -1834,7 +1841,7 @@ public static class SilBuiltins {
     }
 
     public static IEnumerable<string> Names =>
-        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", "task_blocking", "no_context", Coverage.Builtin]);
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", "task_blocking", "no_context", "object_unmade", Coverage.Builtin]);
 
     static SilType? Pointee(SilType? type) => (type as InlinePointerType)?.Pointee;
 

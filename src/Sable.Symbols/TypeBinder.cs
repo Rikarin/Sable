@@ -217,26 +217,7 @@ internal sealed class TypeBinder(Compilation compilation) {
             function.ExplicitProtocolResolver = () => BindType(explicitProtocol, function, scope);
         }
 
-        function.IsRethrows =
-            declaration.ThrowsSpec?.ThrowsKeyword.Kind == SyntaxKind.RethrowsKeyword;
-
-        function.ThrownTypeResolver = () => {
-            if (declaration.ThrowsSpec is not { } spec) {
-                return null;
-            }
-
-            if (function.IsRethrows) {
-                return RethrownType(function.Parameters.Select(static p => p.Type), function.RethrownAlso);
-            }
-
-            return spec.ErrorType is { } errorType
-                ? BindType(errorType, function, scope)
-                : compilation.Core.AnyError; // bare 'throws' is 'throws(any Error)'
-        };
-
-        if (function.IsRethrows && declaration.ThrowsSpec?.ErrorType is { } also) {
-            function.RethrownAlsoResolver = () => BindType(also, function, scope);
-        }
+        BindThrows(function, declaration.ThrowsSpec, scope);
 
         Defer(() => {
                 // Constraints first: a signature may mention 'T.Associated',
@@ -250,17 +231,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                     _ = parameter.Type;
                 }
 
-                if (function is { IsRethrows: true, ThrownType: null, RethrownAlso: null }) {
-                    using var _ = _diagnostics.AnchoredAt(declaration);
-                    _diagnostics.Error(
-                        ErrorCode.ERR_RethrowsWithoutThrowingParameter,
-                        declaration.ThrowsSpec!.Span,
-                        $"'{function.Name}' is 'rethrows', so it needs a parameter "
-                        + "of throwing function type to rethrow from"
-                    );
-                }
-
-                _ = function.ThrownType;
+                CheckRethrows(function, declaration, declaration.ThrowsSpec);
             }
         );
 
@@ -284,24 +255,80 @@ internal sealed class TypeBinder(Compilation compilation) {
     }
 
     /// <summary>
+    ///     What a function, method or initialiser throws: nothing without a
+    ///     <c>throws</c>; bare <c>throws</c> is <c>throws(any Error)</c>;
+    ///     <c>rethrows</c> what its throwing function parameters throw (and
+    ///     what <c>rethrows(E)</c> adds).
+    /// </summary>
+    internal void BindThrows(FunctionSymbol function, ThrowsSpecSyntax? spec, FileScope? scope) {
+        function.IsRethrows = spec?.ThrowsKeyword.Kind == SyntaxKind.RethrowsKeyword;
+
+        function.ThrownTypeResolver = () => {
+            if (spec is null) {
+                return null;
+            }
+
+            if (function.IsRethrows) {
+                return RethrownType(function.Parameters.Select(static p => p.Type), function.RethrownAlso);
+            }
+
+            return spec.ErrorType is { } errorType
+                ? BindType(errorType, function, scope)
+                : compilation.Core.AnyError; // bare 'throws' is 'throws(any Error)'
+        };
+
+        if (function.IsRethrows && spec?.ErrorType is { } also) {
+            function.RethrownAlsoResolver = () => BindType(also, function, scope);
+        }
+    }
+
+    /// <summary>A <c>rethrows</c> with nothing to rethrow from is an error; and the thrown type is bound.</summary>
+    void CheckRethrows(FunctionSymbol function, SyntaxNode declaration, ThrowsSpecSyntax? spec) {
+        if (function is { IsRethrows: true, ThrownType: null, RethrownAlso: null }) {
+            using var _ = _diagnostics.AnchoredAt(declaration);
+            _diagnostics.Error(
+                ErrorCode.ERR_RethrowsWithoutThrowingParameter,
+                spec!.Span,
+                $"'{function.Name}' is 'rethrows', so it needs a parameter "
+                + "of throwing function type to rethrow from"
+            );
+        }
+
+        _ = function.ThrownType;
+    }
+
+    /// <summary>
     ///     An initialiser's own type parameters' constraints and its
     ///     <c>where</c> clause, which may also mention its type's parameters:
     ///     <c>init&lt;S: Sequence&gt;(_ s: S) where S.Element == Element</c>.
     /// </summary>
     public void BindInitializerConstraints(FunctionSymbol function, InitDeclarationSyntax declaration) {
-        if (declaration.TypeParameters is null && declaration.WhereClause is null) {
+        var scope = compilation.CurrentScope;
+        BindThrows(function, declaration.ThrowsSpec, scope);
+        if (declaration.TypeParameters is null && declaration.WhereClause is null && declaration.ThrowsSpec is null) {
             return;
         }
 
-        var scope = compilation.CurrentScope;
         Defer(() => {
                 BindTypeParameterConstraints(function.TypeParameters, function, scope);
                 BindWhereClause(declaration.WhereClause, function, scope);
                 foreach (var parameter in function.Parameters) {
                     _ = parameter.Type;
                 }
+
+                CheckRethrows(function, declaration, declaration.ThrowsSpec);
             }
         );
+
+        if (declaration.ThrowsSpec?.ErrorType is { } errorType && !function.IsRethrows) {
+            DeferLate(() => {
+                    using var _ = _diagnostics.AnchoredAt(declaration);
+                    if (function.ThrownType is { } thrown) {
+                        CheckExposure(function, thrown, errorType.Span, "the error it throws");
+                    }
+                }
+            );
+        }
     }
 
     /// <summary>

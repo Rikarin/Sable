@@ -1025,26 +1025,7 @@ public sealed partial class Compilation {
             ? TypeBinder.BindReturnType(clause.Type, function, scope)
             : Core.Void;
 
-        function.IsRethrows =
-            declaration.ThrowsSpec?.ThrowsKeyword.Kind == SyntaxKind.RethrowsKeyword;
-
-        function.ThrownTypeResolver = () => {
-            if (declaration.ThrowsSpec is not { } spec) {
-                return null;
-            }
-
-            if (function.IsRethrows) {
-                return TypeBinder.RethrownType(function.Parameters.Select(static p => p.Type), function.RethrownAlso);
-            }
-
-            return spec.ErrorType is { } errorType
-                ? TypeBinder.BindType(errorType, function, scope)
-                : Core.AnyError;
-        };
-
-        if (function.IsRethrows && declaration.ThrowsSpec?.ErrorType is { } also) {
-            function.RethrownAlsoResolver = () => TypeBinder.BindType(also, function, scope);
-        }
+        TypeBinder.BindThrows(function, declaration.ThrowsSpec, scope);
 
         // Its constraints now, before its signature or body is looked at:
         // 'T: Numeric' is what lets the body multiply two T's.
@@ -1482,7 +1463,9 @@ public sealed partial class Compilation {
             declaration,
             AccessibilityOf(declaration.Modifiers, type),
             FunctionKind.Initializer
-        );
+        ) {
+            IsAsync = declaration.Modifiers.Any(SyntaxKind.AsyncKeyword)
+        };
 
         // 'init<S: Sequence>(contentsOf s: S) where S.Element == T': an
         // initialiser's own parameters, inferred at the call from its

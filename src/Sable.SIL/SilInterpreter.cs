@@ -341,6 +341,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         /// <summary>True once its last strong reference has gone and its deinit has run.</summary>
         public bool Deinited;
 
+        /// <summary>True when its initialiser threw: no deinit of it runs when it goes.</summary>
+        public bool Unmade;
+
         /// <summary>The entry its weak references share, made when the first is.</summary>
         public WeakEntry? Side;
     }
@@ -562,7 +565,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case HeapObject instance:
                 // The deinits, the class's own and then its superclasses',
                 // see the object alive; they may not keep it.
-                for (var type = instance.Type; type is not null; type = type.Superclass) {
+                for (var type = instance.Unmade ? null : instance.Type; type is not null; type = type.Superclass) {
                     if (type.Deinit is not { } deinit) {
                         continue;
                     }
@@ -1357,6 +1360,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             // One thread runs every task here: nothing is shared between threads.
             case "share" or "share_into":
+                return null;
+
+            case "object_unmade":
+                Alive((HeapObject)operands[0]!).Unmade = true;
                 return null;
 
             // An actor's identity: the interpreter's hops never wait, so need none.

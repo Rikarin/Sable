@@ -404,6 +404,12 @@ enum cases.
 
 - `mutating` is required on methods that modify `self`.
 - Structs get a memberwise initialiser unless they declare their own `init`.
+- An initialiser may be generic, `async`, and throw as a function does:
+  `init(_ text: String) throws(ParseError)`, bare `throws`, or `rethrows`. A
+  call to one is written with `try`, and a protocol's `init` requirement may
+  throw, met by a conformer's initialiser that throws that or nothing. One
+  that throws part way through made nothing: the fields it had set are
+  destroyed, those it had not are left alone, and no `deinit` runs.
 - Structs may conform to protocols, be generic, and nest other types.
 - `@noncopy struct` makes the type move-only and may declare `deinit`.
 
@@ -446,6 +452,11 @@ public open class Document: Serializable, Equatable {
 - `convenience init` must delegate to a designated `init`, `self.init(…)`
   (S3141); a struct's initialiser may delegate the same way. One that
   delegates leaves the fields' initial values to the one it calls.
+- An initialiser may throw (§6). An object whose initialiser throws — its
+  own, a superclass's it calls, or the one it delegates to, before or after
+  that call — is let go of unmade: the fields set so far are destroyed, its
+  memory is freed when nothing else holds it, and no `deinit` of its runs,
+  its class's or a superclass's.
 - A class that declares no `init`, whose own stored fields all have initial
   values, is made with `init()` — or, a subclass, inherits its superclass's
   initialisers, each of which sets the subclass's fields and then calls the

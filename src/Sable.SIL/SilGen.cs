@@ -916,12 +916,20 @@ public sealed partial class SilGen {
 
     internal static string InitializerName(string allocator) => allocator + "$initialize";
 
-    /// <summary>What initialising takes: the object, then the initialiser's own parameters; it gives nothing.</summary>
+    /// <summary>
+    ///     What initialising takes: the object, then the initialiser's own
+    ///     parameters; it gives nothing, and may suspend or throw as the
+    ///     initialiser may.
+    /// </summary>
     internal static FunctionType InitializerType(FunctionType allocator) =>
         new([allocator.Result, ..allocator.Parameters], SilType.Unit, allocator.Thrown,
-            allocator.Owned.IsEmpty ? default : [false, ..allocator.Owned]);
+            allocator.Owned.IsEmpty ? default : [false, ..allocator.Owned], allocator.IsAsync);
 
-    /// <summary>The allocating initialiser: a new object, initialised; or, if initialising throws, destroyed.</summary>
+    /// <summary>
+    ///     The allocating initialiser: a new object, initialised; or, if
+    ///     initialising throws, unmade — the fields set so far destroyed, no
+    ///     deinit run — and let go of.
+    /// </summary>
     static SilFunction Allocator(SilFunction allocator, ClassType type, SilFunction initialize) {
         var entry = allocator.AddBlock();
         var arguments = allocator.Type.Parameters.Select(p => (SilValue)entry.AddArgument(p)).ToList();
@@ -938,6 +946,7 @@ public sealed partial class SilGen {
         var error = failed.AddArgument(initialize.Type.Thrown);
         entry.Append(new TryApplyInst(reference, SilType.Unit, [instance, ..arguments], normal, failed));
         normal.Append(new ReturnInst(instance));
+        failed.Append(new BuiltinInst("object_unmade", SilType.Unit, instance));
         failed.Append(new DestroyValueInst(instance));
         failed.Append(new ThrowInst(error));
         return allocator;

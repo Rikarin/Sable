@@ -160,8 +160,13 @@ enum {
     // handed over with a release and an acquire.
     SABLE_SHARED = 1u << 9,
 
+    // Its initialiser threw: it was never made, so no deinit of its runs
+    // when it goes, though the fields set so far are destroyed as ever.
+    // Compiled code's class destroy functions test this bit (1024).
+    SABLE_UNMADE = 1u << 10,
+
     // The unowned count, above the flags.
-    SABLE_UNOWNED_SHIFT = 10,
+    SABLE_UNOWNED_SHIFT = 11,
     SABLE_UNOWNED_ONE = 1u << SABLE_UNOWNED_SHIFT,
 };
 

@@ -193,7 +193,7 @@ static bool line_sections(LineSections *sections) {
 // Where the program itself is loaded: the first object dl_iterate_phdr
 // gives, its load bias, and the start of its lowest segment, which is
 // what dladdr says an address of it is in.
-static int find_program(struct dl_phdr_info *info, size_t size, void *data) {
+static int find_program_image(struct dl_phdr_info *info, size_t size, void *data) {
     (void)size;
     LineSections *sections = data;
     uintptr_t lowest = UINTPTR_MAX;
@@ -248,7 +248,7 @@ static bool line_sections(LineSections *sections) {
         }
     }
 
-    dl_iterate_phdr(find_program, sections);
+    dl_iterate_phdr(find_program_image, sections);
     return sections->line != NULL && sections->image != NULL;
 }
 

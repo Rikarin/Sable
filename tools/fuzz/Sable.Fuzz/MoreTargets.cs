@@ -88,13 +88,13 @@ public sealed class EditorTarget : Target {
         }
 
         var full = SyntaxTree.Parse(new SourceText(expected, tree.Text.FileName), tree.Options);
-        if (ParserTarget.Dump(tree.Root) != ParserTarget.Dump(full.Root)) {
+        if (!ParserTarget.SameTree(tree.Root, full.Root)) {
             throw new BrokenPromise($"the edited document's tree differs from a full parse\n---- full ----\n{ParserTarget.Dump(full.Root)}\n---- edited ----\n{ParserTarget.Dump(tree.Root)}");
         }
 
-        var expectedDiagnostics = string.Join(" ", full.Diagnostics.Select(static d => $"{d.Id}@{d.Span}"));
-        var actualDiagnostics = string.Join(" ", tree.Diagnostics.Select(static d => $"{d.Id}@{d.Span}"));
-        if (expectedDiagnostics != actualDiagnostics) {
+        if (!full.Diagnostics.Select(static d => (d.Id, d.Span)).SequenceEqual(tree.Diagnostics.Select(static d => (d.Id, d.Span)))) {
+            var expectedDiagnostics = string.Join(" ", full.Diagnostics.Select(static d => $"{d.Id}@{d.Span}"));
+            var actualDiagnostics = string.Join(" ", tree.Diagnostics.Select(static d => $"{d.Id}@{d.Span}"));
             throw new BrokenPromise($"the edited document reports {actualDiagnostics}, a full parse {expectedDiagnostics}");
         }
 

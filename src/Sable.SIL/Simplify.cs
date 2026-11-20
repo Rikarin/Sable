@@ -13,14 +13,26 @@ namespace Sable.SIL;
 ///         body in a chain of blocks that, merged, they can see whole.
 ///     </para>
 ///     <para>
-///         Folding is of <c>Int</c> and <c>Bool</c> arithmetic, logic and
-///         comparison whose operands are literals; arithmetic that would
-///         overflow is left to trap as the program runs. A <c>cond_br</c> on a
-///         literal becomes a <c>br</c>, and a <c>switch_enum</c> of an enum
-///         made in the function a <c>br</c> to its case — when the case takes
-///         no payload, or a trivial one. An instruction is deleted when
-///         nothing uses it and it has no effect: it neither traps, writes nor
-///         owns anything.
+///         Folding is of <c>Int</c> and <c>Bool</c> arithmetic, logic, shifts
+///         and comparison whose operands are literals; arithmetic that would
+///         overflow, divide by zero or shift out of range is left to trap as
+///         the program runs. A trivial field extracted from a struct or tuple
+///         made in the function is the value it was made from. A
+///         <c>cond_br</c> on a literal becomes a <c>br</c>, and a
+///         <c>switch_enum</c> of an enum made in the function a <c>br</c> to
+///         its case — when the case takes no payload, or a trivial one; a
+///         <c>cond_fail</c> on a literal false goes. An instruction is deleted
+///         when nothing uses it and it has no effect: it neither traps,
+///         writes nor owns anything.
+///     </para>
+///     <para>
+///         Common subexpressions go: of two instructions computing the same
+///         trivial value from the same operands — a literal, a field, a pure
+///         or only-trapping builtin — the one dominated by the other uses the
+///         other's result. (If the first would trap, it traps first.) A block
+///         argument every branch passes the same value is that value, and a
+///         trivial one nothing uses is dropped, from the block and from each
+///         branch to it.
 ///     </para>
 /// </remarks>
 public sealed class Simplify : ISilPass {
@@ -33,13 +45,17 @@ public sealed class Simplify : ISilPass {
 
         for (var changed = true; changed;) {
             changed = FoldConstants(function);
+            changed |= FoldExtracts(function);
             changed |= FoldBranches(function);
+            changed |= RemoveDecidedChecks(function);
             var before = function.Blocks.Count;
             function.RemoveUnreachableBlocks();
             changed |= function.Blocks.Count != before;
             changed |= MergeBlocks(function);
             changed |= SkipForwardingBlocks(function);
             changed |= RemoveDead(function);
+            changed |= SimplifyArguments(function);
+            changed |= EliminateCommonSubexpressions(function);
         }
     }
 
@@ -83,6 +99,10 @@ public sealed class Simplify : ISilPass {
                 "wrapping_mul_Int" => unchecked(a * b),
                 "wrapping_neg_Int" => unchecked(-a),
                 "wrapping_abs_Int" => a < 0 ? unchecked(-a) : a,
+                "div_Int" when b != 0 && !(a == long.MinValue && b == -1) => a / b,
+                "rem_Int" when b != 0 && !(a == long.MinValue && b == -1) => a % b,
+                "shl_Int" when b is >= 0 and <= 63 => a << (int)b,
+                "shr_Int" when b is >= 0 and <= 63 => a >> (int)b,
                 "and_Int" or "and_Bool" => a & b,
                 "or_Int" or "or_Bool" => a | b,
                 "xor_Int" or "xor_Bool" => a ^ b,
@@ -100,6 +120,41 @@ public sealed class Simplify : ISilPass {
         } catch (OverflowException) {
             return null;
         }
+    }
+
+    /// <summary>A trivial field of a struct or tuple the function made is the value it was made from.</summary>
+    static bool FoldExtracts(SilFunction function) {
+        var changed = false;
+        foreach (var block in function.Blocks) {
+            for (var i = 0; i < block.Instructions.Count; i++) {
+                SilValue? part = block.Instructions[i] switch {
+                    StructExtractInst { Type.IsTrivial: true, Value: StructInst made } extract => made.Operands[extract.Field],
+                    TupleExtractInst { Type.IsTrivial: true, Value: TupleInst made } extract => made.Operands[extract.Element],
+                    _ => null,
+                };
+
+                if (part is null) {
+                    continue;
+                }
+
+                Uses.Replace(function, block.Instructions[i], part);
+                block.Instructions.RemoveAt(i);
+                i--;
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>A check whose condition is a literal false never fails.</summary>
+    static bool RemoveDecidedChecks(SilFunction function) {
+        var changed = false;
+        foreach (var block in function.Blocks) {
+            changed |= block.Instructions.RemoveAll(static i => i is CondFailInst { Condition: IntegerLiteralInst { Value: 0 } }) > 0;
+        }
+
+        return changed;
     }
 
     // ---- Branches -------------------------------------------------------------
@@ -293,6 +348,245 @@ public sealed class Simplify : ISilPass {
 
         return changed;
     }
+
+    // ---- Block arguments ----------------------------------------------------------
+
+    /// <summary>
+    ///     A trivial block argument every branch to its block passes the same
+    ///     value — or the argument itself, round a loop — is that value; one
+    ///     nothing uses is dropped. Only a block every predecessor reaches by
+    ///     <c>br</c> or <c>cond_br</c> is changed, as those can drop what they
+    ///     pass.
+    /// </summary>
+    static bool SimplifyArguments(SilFunction function) {
+        var edges = new Dictionary<SilBlock, List<SilInstruction>>();
+        foreach (var block in function.Blocks) {
+            foreach (var successor in block.Successors.Distinct()) {
+                if (!edges.TryGetValue(successor, out var list)) {
+                    edges[successor] = list = [];
+                }
+
+                list.Add(block.Terminator!);
+            }
+        }
+
+        var used = new HashSet<SilValue>();
+        foreach (var instruction in function.Blocks.SelectMany(static b => b.Instructions)) {
+            foreach (var operand in instruction.Operands) {
+                used.Add(operand);
+            }
+        }
+
+        foreach (var block in function.Blocks) {
+            if (block == function.Entry || block.Arguments.Count == 0 || !edges.TryGetValue(block, out var incoming)
+                || incoming.Any(static t => t is not (BranchInst or CondBranchInst))) {
+                continue;
+            }
+
+            var changed = false;
+            for (var i = block.Arguments.Count - 1; i >= 0; i--) {
+                var argument = block.Arguments[i];
+                if (!argument.Type.IsTrivial) {
+                    continue;
+                }
+
+                var passed = incoming.SelectMany(t => Passed(t, block, i)).Where(v => !ReferenceEquals(v, argument)).Distinct().ToList();
+                if (used.Contains(argument) && passed is not [_]) {
+                    continue;
+                }
+
+                if (passed is [var only]) {
+                    Uses.Replace(function, argument, only);
+                    used.Add(only);
+                }
+
+                block.Arguments.RemoveAt(i);
+                for (var k = 0; k < incoming.Count; k++) {
+                    incoming[k] = DropPassed(incoming[k], block, i);
+                }
+
+                changed = true;
+            }
+
+            // A branch replaced here may also lead to another block, whose
+            // list of branches still holds the old one: start again.
+            if (changed) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>What a branch passes a block's argument, on each of its edges to it.</summary>
+    static IEnumerable<SilValue> Passed(SilInstruction terminator, SilBlock block, int index) {
+        switch (terminator) {
+            case BranchInst branch:
+                yield return branch.Operands[index];
+                break;
+            case CondBranchInst conditional:
+                if (conditional.WhenTrue == block) {
+                    yield return conditional.TrueArguments.ElementAt(index);
+                }
+
+                if (conditional.WhenFalse == block) {
+                    yield return conditional.FalseArguments.ElementAt(index);
+                }
+
+                break;
+        }
+    }
+
+    static SilInstruction DropPassed(SilInstruction terminator, SilBlock block, int index) {
+        SilInstruction replacement = terminator switch {
+            BranchInst branch => new BranchInst(block, [..branch.Operands.Where((_, k) => k != index)]),
+            CondBranchInst conditional => new CondBranchInst(
+                conditional.Condition,
+                conditional.WhenTrue,
+                [..conditional.TrueArguments.Where((_, k) => conditional.WhenTrue != block || k != index)],
+                conditional.WhenFalse,
+                [..conditional.FalseArguments.Where((_, k) => conditional.WhenFalse != block || k != index)]
+            ),
+            _ => throw new InvalidOperationException("only a br or cond_br drops what it passes"),
+        };
+
+        var from = terminator.Block;
+        replacement.Location = terminator.Location;
+        replacement.Block = from;
+        from.Instructions[^1] = replacement;
+        return replacement;
+    }
+
+    // ---- Common subexpressions ----------------------------------------------------
+
+    /// <summary>
+    ///     Walks the dominator tree with what each block's dominators have
+    ///     computed: an instruction computing what one of those did already
+    ///     uses that one's result instead.
+    /// </summary>
+    static bool EliminateCommonSubexpressions(SilFunction function) {
+        var dominators = SilVerifier.Dominators(function);
+        var children = new Dictionary<SilBlock, List<SilBlock>>();
+        foreach (var (block, set) in dominators) {
+            var immediate = set.Where(d => d != block).OrderByDescending(d => dominators[d].Count).FirstOrDefault();
+            if (immediate is null) {
+                continue;
+            }
+
+            if (!children.TryGetValue(immediate, out var list)) {
+                children[immediate] = list = [];
+            }
+
+            list.Add(block);
+        }
+
+        var ids = new Dictionary<SilValue, int>(ReferenceEqualityComparer.Instance);
+        string Id(SilValue value) {
+            if (!ids.TryGetValue(value, out var id)) {
+                ids[value] = id = ids.Count;
+            }
+
+            return id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        var available = new Dictionary<string, SilInstruction>(StringComparer.Ordinal);
+        var replace = new Dictionary<SilValue, SilValue>(ReferenceEqualityComparer.Instance);
+        var pending = new Stack<(SilBlock Block, List<string>? Added)>();
+        pending.Push((function.Entry, null));
+        while (pending.TryPop(out var item)) {
+            // Leaving a block's subtree: what it computed is no longer available.
+            if (item.Added is { } added) {
+                foreach (var key in added) {
+                    available.Remove(key);
+                }
+
+                continue;
+            }
+
+            var mine = new List<string>();
+            foreach (var instruction in item.Block.Instructions) {
+                for (var i = 0; i < instruction.Operands.Count; i++) {
+                    if (replace.TryGetValue(instruction.Operands[i], out var earlier)) {
+                        instruction.SetOperand(i, earlier);
+                    }
+                }
+
+                if (Key(instruction, Id) is not { } key) {
+                    continue;
+                }
+
+                if (available.TryGetValue(key, out var same)) {
+                    replace[instruction] = same;
+                } else {
+                    available[key] = instruction;
+                    mine.Add(key);
+                }
+            }
+
+            pending.Push((item.Block, mine));
+            foreach (var child in children.GetValueOrDefault(item.Block) ?? []) {
+                pending.Push((child, null));
+            }
+        }
+
+        if (replace.Count == 0) {
+            return false;
+        }
+
+        // Every use was rewritten as the walk reached it, a use being
+        // dominated by what it uses; a block the walk cannot reach is
+        // rewritten too, until it is dropped.
+        foreach (var block in function.Blocks) {
+            block.Instructions.RemoveAll(i => replace.ContainsKey(i));
+            foreach (var instruction in block.Instructions) {
+                for (var i = 0; i < instruction.Operands.Count; i++) {
+                    if (replace.TryGetValue(instruction.Operands[i], out var earlier)) {
+                        instruction.SetOperand(i, earlier);
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    ///     What an instruction computes, as text equal for two that compute
+    ///     the same: only for a trivial value that depends on nothing but its
+    ///     operands; null for anything else.
+    /// </summary>
+    static string? Key(SilInstruction instruction, Func<SilValue, string> id) {
+        if (!instruction.HasResult || !instruction.Type.IsTrivial || instruction.Operands.Any(static o => o.Type is AddressType)) {
+            return null;
+        }
+
+        var operands = string.Join(",", instruction.Operands.Select(id));
+        return instruction switch {
+            IntegerLiteralInst literal => $"int {literal.Type} {literal.WideValue}",
+            FloatLiteralInst literal => $"float {literal.Type} {BitConverter.DoubleToInt64Bits(literal.Value)}",
+            FunctionRefInst reference => $"fn {reference.Function} {reference.Type}",
+            StructExtractInst extract => $"se {extract.Field} {operands}",
+            TupleExtractInst extract => $"te {extract.Element} {operands}",
+            StructInst made => $"s {made.Type} {operands}",
+            TupleInst made => $"t {made.Type} {operands}",
+            EnumInst made => $"e {made.Type} {made.Case} {operands}",
+            BuiltinInst builtin when Pure(builtin.Name) || OnlyTraps(builtin.Name) =>
+                $"b {builtin.Name} {builtin.InBounds} {builtin.Type} {operands}",
+            _ => null,
+        };
+    }
+
+    /// <summary>A builtin that computes its result from its operands alone, but may trap: checked arithmetic and conversion.</summary>
+    static bool OnlyTraps(string name) =>
+        name.StartsWith("add_", StringComparison.Ordinal)
+        || name.StartsWith("sub_", StringComparison.Ordinal)
+        || name.StartsWith("mul_", StringComparison.Ordinal)
+        || name.StartsWith("div_", StringComparison.Ordinal)
+        || name.StartsWith("rem_", StringComparison.Ordinal)
+        || name.StartsWith("shl_", StringComparison.Ordinal)
+        || name.StartsWith("shr_", StringComparison.Ordinal)
+        || name.StartsWith("neg_", StringComparison.Ordinal)
+        || name.StartsWith("convert_", StringComparison.Ordinal);
 
     /// <summary>An instruction that only computes a value: unused, it can go.</summary>
     static bool Removable(SilInstruction instruction) =>

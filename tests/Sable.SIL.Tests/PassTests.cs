@@ -482,6 +482,55 @@ public sealed class PassTests {
         Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.overflows"));
     }
 
+    /// <summary>
+    ///     What is computed twice is computed once; division, remainder and
+    ///     shifts of literals fold, but not by zero; a field of a tuple made
+    ///     here is what it was made from; a loop's value that never changes
+    ///     is no argument of its header.
+    /// </summary>
+    [Fact]
+    public void CommonValuesAreComputedOnceAndArgumentsThatNeverChangeGo() {
+        var module = Lowered(
+            """
+            fn twice(_ a: Int, _ b: Int) -> Int { return (a * b + 1) + (a * b + 1) }
+            fn divided() -> Int { return 100 / 7 + 100 % 7 + (1 << 4) }
+            fn byZero(_ a: Int) -> Int { return a / 0 }
+            fn pair(_ x: Int) -> Int {
+                let p = (x, x + 1)
+                return p.0 + p.1
+            }
+            fn steady(_ n: Int) -> Int {
+                var k = 5
+                var i = 0
+                var t = 0
+                while i < n {
+                    t = t + k
+                    i = i + 1
+                }
+                return t
+            }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        var twice = module.Find("M.twice")!;
+        Assert.Single(Instructions(twice).OfType<BuiltinInst>(), static b => b.Name == "mul_Int");
+        Assert.Equal(14L, new SilInterpreter(module).Run("M.twice", 3L, 2L));
+
+        Assert.Empty(Instructions(module.Find("M.divided")!).OfType<BuiltinInst>());
+        Assert.Equal(32L, new SilInterpreter(module).Run("M.divided"));
+        Assert.Single(Instructions(module.Find("M.byZero")!).OfType<BuiltinInst>(), static b => b.Name == "div_Int");
+
+        Assert.Empty(Instructions(module.Find("M.pair")!).OfType<TupleExtractInst>());
+        Assert.Equal(7L, new SilInterpreter(module).Run("M.pair", 3L));
+
+        // The header takes the count and the total; 5 is a literal in the body.
+        var steady = module.Find("M.steady")!;
+        Assert.Equal(2, steady.Blocks.Where(b => b != steady.Entry).Max(static b => b.Arguments.Count));
+        Assert.Equal(20L, new SilInterpreter(module).Run("M.steady", 4L));
+    }
+
     sealed class Vandal : ISilPass {
         public string Name => "vandal";
 

@@ -63,7 +63,9 @@ internal sealed class RootSummaries(
     ///     server's own is not held while it does — and keeps the summaries
     ///     root inference recorded on its functions.
     /// </summary>
-    public static RootSummaries Compute(Analysis analysis) {
+    public static RootSummaries Compute(Analysis analysis, Action<string> log) {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var name = analysis.Key.Length == 0 ? "the loose files" : analysis.Key;
         var functions = new Dictionary<string, (IReadOnlyList<int>, IReadOnlyList<string>)>(StringComparer.Ordinal);
         var checks = new Dictionary<SyntaxTree, IReadOnlyList<Diagnostic>>(ReferenceEqualityComparer.Instance);
         try {
@@ -84,8 +86,12 @@ internal sealed class RootSummaries(
             }
         } catch (Exception e) when (e is not OutOfMemoryException) {
             // A program the lowering cannot take yet has no summaries to show.
+            log($"lowering {name} for its checks failed: {e.GetType().Name}: {e.Message}");
         }
 
+        // Its time is in the log, as a compilation's is: the checks are what
+        // a report waits for last, so a slow one is why a report is late.
+        log($"lowered {name} for its checks in {watch.ElapsedMilliseconds} ms");
         return new(analysis.Snapshot.Generation, analysis.Key, functions, checks);
     }
 }
@@ -106,9 +112,11 @@ public sealed partial class LanguageServer {
             }
 
             // One lowering at a time: a lowering takes memory, and a newer
-            // request waits for the one under way, then for its own.
+            // request waits for the one under way, then for its own. One
+            // still waiting when the server stops is not started: it would
+            // take seconds of CPU for an answer nobody reads.
             Interlocked.Increment(ref _loweringsStarted);
-            var task = _lowering.ContinueWith(_ => RootSummaries.Compute(analysis), TaskScheduler.Default);
+            var task = _lowering.ContinueWith(_ => RootSummaries.Compute(analysis, Log), _stopping.Token, TaskContinuationOptions.None, TaskScheduler.Default);
             _lowering = task;
             _roots[analysis.Key] = (analysis, task);
             return task;

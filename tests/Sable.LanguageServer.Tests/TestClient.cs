@@ -165,10 +165,12 @@ internal sealed class TestClient : IAsyncDisposable {
     ///     The server reports a version in two rounds, the type errors then
     ///     the lints and checks, and an older version's second round may come
     ///     after an edit: a test waiting for the edit's report must not take
-    ///     it. A report without a version is of a file not open.
+    ///     it. A report without a version is of a file not open: of a file
+    ///     this client has open, it is of the file on disk before it was
+    ///     opened, from a round that ended late, and is not current either.
     /// </summary>
     bool IsCurrent(string uri, JsonElement report) =>
-        !_versions.TryGetValue(uri, out var sent) || report.GetInt("version") is not { } version || version >= sent;
+        !_versions.TryGetValue(uri, out var sent) || report.GetInt("version") is { } version && version >= sent;
 
     /// <param name="capabilities">What the editor says it can do; nothing, by default.</param>
     public Task<JsonElement> InitializeAsync(string? root = null, object? capabilities = null) =>

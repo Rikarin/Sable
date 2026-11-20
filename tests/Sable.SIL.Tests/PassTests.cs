@@ -31,6 +31,48 @@ public sealed class PassTests {
         Assert.Throws<ArgumentOutOfRangeException>(() => SilPassManager.ForLevel("4"));
     }
 
+    /// <summary>
+    ///     <c>@inline(never)</c> keeps a call however small the callee;
+    ///     <c>@inline(always)</c> inlines one however large, loops and all.
+    ///     Both are printed and parsed back.
+    /// </summary>
+    [Fact]
+    public void InlineAttributesDecideWhatIsInlined() {
+        var module = Lowered(
+            """
+            @inline(never)
+            fn one() -> Int { return 1 }
+
+            @inline(always)
+            fn sum(_ n: Int) -> Int {
+                var total = 0
+                var i = 0
+                while i < n {
+                    total += i
+                    i += 1
+                }
+                return total
+            }
+
+            fn probe(_ n: Int) -> Int { return one() + sum(n) }
+            """
+        );
+        Assert.Equal(SilInline.Never, module.Find("M.one")!.Inline);
+        Assert.Equal(SilInline.Always, module.Find("M.sum")!.Inline);
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        var called = module.Find("M.probe")!.Blocks.SelectMany(static b => b.Instructions).OfType<ApplyInst>()
+            .Select(static a => (a.Callee as FunctionRefInst)?.Function).ToList();
+        Assert.Contains("M.one", called);
+        Assert.DoesNotContain("M.sum", called);
+        Assert.Equal(11L, new SilInterpreter(module).Run("M.probe", 5L));
+
+        var text = SilPrinter.Print(module);
+        Assert.Contains("sil @M.one : $() -> Int inline(never)", text, StringComparison.Ordinal);
+        Assert.Equal(SilInline.Never, SilParser.Parse(text).Find("M.one")!.Inline);
+    }
+
     [Fact]
     public void ALoopsLocalsBecomeBlockArguments() {
         var module = Lowered(

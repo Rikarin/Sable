@@ -434,6 +434,14 @@ public sealed class SilParser {
             _function.ResultRoots = roots;
         }
 
+        if (Accept("inline")) {
+            Expect("(");
+            _function.Inline = Accept("always") ? SilInline.Always
+                : Accept("never") ? SilInline.Never
+                : throw Error("expected 'always' or 'never'");
+            Expect(")");
+        }
+
         if (Accept("loc")) {
             _function.SourceFile = Expect(TokenKind.String, "a file name").Text;
             Expect(":");

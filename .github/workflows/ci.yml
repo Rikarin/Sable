@@ -82,6 +82,16 @@ jobs:
           SABLE: src/Sable.Driver/bin/Release/net11.0/sable
         run: tools/stdlib-coverage.sh
 
+      # The ```sable examples of the library's doc comments, each module's
+      # run as its tests (sable test --doc). Once, on Linux, as above.
+      - name: Standard library doc examples
+        if: runner.os == 'Linux'
+        run: |
+          for module in lib/*/; do
+            echo "== $module"
+            src/Sable.Driver/bin/Release/net11.0/sable test --doc "$module"
+          done
+
   vscode:
     name: VS Code extension
     runs-on: ubuntu-24.04

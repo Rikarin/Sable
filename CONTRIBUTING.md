@@ -98,7 +98,10 @@ the compiler (`Sable.Core` by Sable.Symbols, the rest by Sable.Driver, every
   file per type, one behaviour per test, named as a sentence. Each module's
   tests are built as one program; `TestRunnerTests` runs every module's.
 - **Doc comments** on every public declaration, with a ```` ```sable ````
-  example where useful (`sable test --doc` runs them).
+  example where useful. `sable test --doc lib/<Module>` runs a module's
+  examples as tests, as CI does for every module, and `sable test --doc
+  lib/<Module>/<File>.sb` one file's: the files read from disk stand in
+  for the embedded ones of their names.
 
 Every file of the library is held to a coverage threshold by its own tests:
 

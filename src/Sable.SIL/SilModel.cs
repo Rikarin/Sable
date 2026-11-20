@@ -1286,6 +1286,13 @@ public sealed class SilBlock(SilFunction function) {
 /// <param name="Outcomes">A name for each outcome: <c>true</c> and <c>false</c>, a match's arms.</param>
 public sealed record SilDecision(SilLocation At, string Kind, IReadOnlyList<string> Outcomes);
 
+/// <summary>Whether a function is inlined where it is called: as the inliner judges, always, or never.</summary>
+public enum SilInline {
+    Default,
+    Always,
+    Never,
+}
+
 /// <summary>A SIL function: a signature and blocks, the first of which is the entry.</summary>
 public sealed class SilFunction(string name, FunctionType type) {
     public string Name { get; internal set; } = name;
@@ -1299,6 +1306,14 @@ public sealed class SilFunction(string name, FunctionType type) {
     ///     of its interface (docs/02 §2.4). Printed as <c>roots(0, 1)</c>.
     /// </summary>
     public IReadOnlyList<int>? ResultRoots { get; set; }
+
+    /// <summary>
+    ///     What its source's <c>@inline(always)</c> or <c>@inline(never)</c>
+    ///     asks of the inliners, SIL's and LLVM's. Printed as
+    ///     <c>inline(always)</c>.
+    /// </summary>
+    public SilInline Inline { get; set; }
+
     public FunctionType Type { get; internal set; } = type;
     public List<SilBlock> Blocks { get; } = [];
 

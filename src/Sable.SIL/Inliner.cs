@@ -61,12 +61,18 @@ public sealed class Inliner : ISilPass {
         }
     }
 
+    /// <summary>
+    ///     Whether to inline a call. <c>@inline(never)</c> says never;
+    ///     <c>@inline(always)</c> says whatever the callee's size or loops —
+    ///     but not when it calls itself or throws, which no inliner can.
+    /// </summary>
     static bool Inlinable(SilFunction callee, SilFunction caller) =>
         callee != caller
+        && callee.Inline != SilInline.Never
         && callee.Blocks.Count > 0
         && callee.Type.Thrown is null
-        && callee.Blocks.Sum(static b => b.Instructions.Count) <= Threshold
-        && !Loops(callee);
+        && (callee.Inline == SilInline.Always
+            || callee.Blocks.Sum(static b => b.Instructions.Count) <= Threshold && !Loops(callee));
 
     /// <summary>
     ///     True when the function has a loop. A call is cheap beside a loop,

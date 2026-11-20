@@ -831,10 +831,29 @@ public sealed partial class SilGen {
         }
     }
 
+    /// <summary>What the declaration's <c>@inline(always)</c> or <c>@inline(never)</c> asks, if it has one.</summary>
+    static SilInline InlineOf(FunctionSymbol symbol) {
+        foreach (var syntax in symbol.DeclaringSyntax) {
+            foreach (var attribute in syntax.ChildNodes().OfType<AttributeSyntax>()) {
+                if (attribute.Name.ToString().Trim() == "inline"
+                    && attribute.ArgumentList?.Arguments.ToList() is [{ Expression: IdentifierNameSyntax { Identifier.Text: var how } }]) {
+                    return how switch {
+                        "always" => SilInline.Always,
+                        "never" => SilInline.Never,
+                        _ => SilInline.Default,
+                    };
+                }
+            }
+        }
+
+        return SilInline.Default;
+    }
+
     void LowerBody(FunctionSymbol symbol, SyntaxNode syntax, BoundBlock body, SourceText source, string name, FunctionType type, TypeSubstitution substitution) {
         var function = new SilFunction(name, type) {
             SourceFile = source.FileName,
             Line = source.GetLinePosition(syntax.Span.Start).Line,
+            Inline = InlineOf(symbol),
         };
 
         if (HasSelf(symbol)) {
@@ -2597,6 +2616,7 @@ public sealed partial class SilGen {
         var function = new SilFunction(name, type) {
             SourceFile = source.FileName,
             Line = syntax is null ? 0 : source.GetLinePosition(syntax.Span.Start).Line,
+            Inline = InlineOf(symbol),
         };
         function.ParameterNames.AddRange(symbol.Parameters.Select(static p => p.Name));
 

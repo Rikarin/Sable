@@ -784,7 +784,7 @@ internal sealed class TypeBinder(Compilation compilation) {
             _ => null,
         };
 
-    void BindTypeParameterConstraints(
+    internal void BindTypeParameterConstraints(
         ImmutableArray<TypeParameterSymbol> typeParameters,
         Symbol context,
         FileScope? scope
@@ -846,7 +846,7 @@ internal sealed class TypeBinder(Compilation compilation) {
     ///     <c>fn f&lt;T: Named&gt;(x: T)</c> say the same thing, so they end in
     ///     the same place: the parameter's constraint list.
     /// </remarks>
-    void BindWhereClause(WhereClauseSyntax? clause, Symbol context, FileScope? scope) {
+    internal void BindWhereClause(WhereClauseSyntax? clause, Symbol context, FileScope? scope) {
         if (clause is null) {
             return;
         }

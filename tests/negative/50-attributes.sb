@@ -1,7 +1,7 @@
 module Negative.Attributes
 
 @frozen
-public struct Frozen { public var n: Int }
+public union Frozen { A, B }
 
 @noncopy
 public struct Lock { private let handle: Int }

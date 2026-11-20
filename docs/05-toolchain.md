@@ -511,7 +511,7 @@ Each module emits an interface file containing:
 - Generic bodies eligible for cross-module specialisation
 - `@inline(always)` bodies
 - **Escape summaries** (the key one — see `02-memory-model.md §2.2`)
-- Layout information for `@frozen` types
+- Which public unions are `@frozen`, and their cases
 - Conformance records
 
 `.sbi` is a binary format with a stable version header, designed so that a

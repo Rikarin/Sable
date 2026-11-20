@@ -81,6 +81,19 @@ public sealed class PipelineTests {
     }
 
     /// <summary>
+    ///     '@inline(always)' and '@inline(never)' are LLVM's 'alwaysinline'
+    ///     and 'noinline' too, so that an unoptimised build, whose SIL is not
+    ///     inlined, keeps to them.
+    /// </summary>
+    [Fact]
+    public void InlineAttributesReachLlvm() {
+        var result = Compile("module M\n@inline(always)\nfn twice(_ x: Int) -> Int { return x * 2 }\n@inline(never)\nfn once(_ x: Int) -> Int { return x }\n@main\nfn start() { print(twice(once(4))) }\n");
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        Assert.Contains("@\"sable.M.once\"(i64 %p0) nounwind noinline", result.LlvmIr, StringComparison.Ordinal);
+        Assert.Contains("@\"sable.M.twice\"(i64 %p0) nounwind alwaysinline", result.LlvmIr, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     The front end's warnings come back with the result — with or
     ///     without errors — each against its file, and none of the standard
     ///     library's.

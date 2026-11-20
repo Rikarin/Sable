@@ -119,15 +119,16 @@ internal sealed partial class Analysis {
         var own = trees.ToHashSet(ReferenceEqualityComparer.Instance);
         trees.AddRange(dependencies.Where(t => own.Add(t)));
 
-        // A library module the workspace has its own files for — the
-        // compiler's repository, its lib/ read from disk — is those files:
-        // the embedded copy would declare everything in it a second time.
-        var declared = trees.Select(CoreLibrary.ModuleOf).OfType<string>().ToHashSet(StringComparer.Ordinal);
+        // A library file the workspace has its own of — the compiler's
+        // repository, its lib/ read from disk — is that file: the embedded
+        // copy would declare everything in it a second time.
+        var embedded = trees.SelectMany(libraryFor).Concat(CoreLibrary.Trees).Distinct().ToLookup(static t => CoreLibrary.ModuleOf(t) ?? "");
+        var brought = CoreLibrary.Brought(trees.Where(t => !CoreLibrary.Contains(t)), m => embedded[m]);
         var library = new List<SyntaxTree>();
         var seen = new HashSet<SyntaxTree>(ReferenceEqualityComparer.Instance);
         foreach (var tree in trees) {
             foreach (var needed in libraryFor(tree)) {
-                if (CoreLibrary.ModuleOf(needed) is { } module && declared.Contains(module)) {
+                if (CoreLibrary.IsBrought(needed, brought)) {
                     continue;
                 }
 

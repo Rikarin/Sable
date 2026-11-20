@@ -104,11 +104,26 @@ internal abstract class GreenNode(SyntaxKind kind, int fullWidth) {
     }
 
     /// <summary>Appends this node's text, optionally including the outer trivia.</summary>
+    /// <remarks>
+    ///     The node's own leading and trailing trivia are those of its first
+    ///     and last slots that hold any text: an absent or empty slot at either
+    ///     end (an attribute's missing argument list) does not make the
+    ///     trivia before it the node's inside.
+    /// </remarks>
     public virtual void WriteTo(StringBuilder builder, bool leading, bool trailing) {
+        var first = 0;
+        while (first < SlotCount && GetSlot(first) is not { FullWidth: > 0 }) {
+            first++;
+        }
+
         var last = SlotCount - 1;
-        for (var i = 0; i <= last; i++) {
+        while (last > first && GetSlot(last) is not { FullWidth: > 0 }) {
+            last--;
+        }
+
+        for (var i = first; i <= last; i++) {
             var slot = GetSlot(i);
-            slot?.WriteTo(builder, leading || i > 0, trailing || i < last);
+            slot?.WriteTo(builder, leading || i > first, trailing || i < last);
         }
     }
 

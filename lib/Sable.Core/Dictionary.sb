@@ -67,7 +67,8 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
     /// pair may replace an earlier one.
     ///
     /// ```sable
-    /// let squares = Dictionary(uniqueKeysWithValues: [(1, 1), (2, 4), (3, 9)])
+    /// let pairs: (Int, Int)[>..] = [(1, 1), (2, 4), (3, 9)]
+    /// let squares = Dictionary(uniqueKeysWithValues: pairs)
     /// assert(squares[3]! == 9)
     /// assert(squares.count == 3)
     /// ```

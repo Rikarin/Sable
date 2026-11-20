@@ -47,7 +47,7 @@ extension String: Sequence {
 /// fn lastOf<C: BidirectionalCollection>(_ c: C) -> C.Element? {
 ///     return c.isEmpty ? none : c[c.index(before: c.endIndex)]
 /// }
-/// assert(lastOf("añb") == "b")
+/// assert(lastOf("añb") == 'b')
 /// ```
 extension String: BidirectionalCollection { }
 

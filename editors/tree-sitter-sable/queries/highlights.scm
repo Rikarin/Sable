@@ -97,7 +97,7 @@
 ] @keyword.control
 
 [
-  "async" "throws" "rethrows" "inout" "out" "ref" "consuming" "borrowing" "move" "unsafe" "comptime"
+  "async" "throws" "rethrows" "inout" "out" "consuming" "move" "unsafe" "comptime"
   "some" "any" "using" "get" "set" "willSet" "didSet"
 ] @keyword.modifier
 

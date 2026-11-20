@@ -199,7 +199,7 @@
         { "name": "keyword.control.loop.sable", "match": "\\b(while|repeat|for|in|break|continue)\\b" },
         { "name": "keyword.control.flow.sable", "match": "\\b(return|throw|yield|try|catch|await|defer|do|where)\\b(?:[?!])?" },
         { "name": "storage.type.sable", "match": "\\b(fn|let|var|const|struct|class|actor|union|enum|protocol|extension|alias|associatedtype|init|deinit|subscript|operator|region|module|import)\\b" },
-        { "name": "storage.modifier.sable", "match": "\\b(public|private|internal|package|static|mutating|nonmutating|override|open|final|sealed|abstract|required|convenience|lazy|weak|unowned|async|throws|rethrows|inout|out|ref|consuming|borrowing|move|unsafe|unchecked|comptime|some|any|nonisolated|prefix|postfix|using)\\b" },
+        { "name": "storage.modifier.sable", "match": "\\b(public|private|internal|package|static|mutating|nonmutating|override|open|final|sealed|abstract|required|convenience|lazy|weak|unowned|async|throws|rethrows|inout|out|consuming|move|unsafe|unchecked|comptime|some|any|nonisolated|prefix|postfix|using)\\b" },
         { "name": "constant.language.boolean.sable", "match": "\\b(true|false)\\b" },
         { "name": "constant.language.none.sable", "match": "\\bnone\\b" },
         { "name": "variable.language.sable", "match": "\\b(self|Self|super)\\b" },

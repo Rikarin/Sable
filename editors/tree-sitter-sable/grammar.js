@@ -161,7 +161,8 @@ module.exports = grammar({
     // A label may be a keyword: 'fn first(where p: ...)'.
     _keyword_label: (_) => choice("where", "in", "for", "to", "from", "as", "is", "default", "case", "of", "with", "by", "at"),
 
-    parameter_modifier: (_) => choice("inout", "out", "ref", "in", "consuming", "borrowing"),
+    // A parameter that refers to its argument says so in its type, 'a: Node&'.
+    parameter_modifier: (_) => choice("inout", "out", "in", "consuming"),
 
     type_parameters: ($) => seq("<", commaSep1($.type_parameter), ">"),
     type_parameter: ($) => seq(optional("comptime"), field("name", $.identifier), optional(seq(":", $._type)), optional(seq("=", $._type))),

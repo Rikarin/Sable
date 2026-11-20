@@ -1,0 +1,45 @@
+module Corpus.FromTheEnd
+
+// Counting from the end (#291): '^n' is a position back from a
+// collection's end, and a range with a bound written so is resolved
+// against the end of whatever it slices.
+
+/// The last word of a line, and the line without it.
+public fn splitLast(_ words: String[:]) -> (String, String[:]) {
+    return (words[^1], words[..<^1])
+}
+
+/// The middle of a list, without its first and last.
+public fn trimmed(_ values: Int[:]) -> Int[:] {
+    if values.count < 2 {
+        return values[0..<0]
+    }
+    return values[1..<^1]
+}
+
+/// The last n characters of a name.
+public fn suffix(_ name: String, _ n: Int) -> String {
+    return name[^n...]
+}
+
+/// A window of a series, counted from its end.
+public fn window(_ series: F64[>..], width: Int) -> F64 {
+    var total = 0.0
+    for value in series[^width...^1] {
+        total += value
+    }
+    return total / F64(width)
+}
+
+/// A position held, and used on several collections.
+public fn lastOfEach(_ a: Int[:], _ b: String) -> (Int, Char) {
+    let last = ^1
+    let tail = ^2...
+    let _ = a[tail]
+    return (a[last], b[last])
+}
+
+/// Exclusive or still reads as it did.
+public fn mix(_ a: Int, _ b: Int) -> Int {
+    return a ^ b ^ (a & b)
+}

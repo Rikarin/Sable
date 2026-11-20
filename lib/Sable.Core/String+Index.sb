@@ -79,19 +79,23 @@ extension String {
     }
 
     /// The scalars of the range, as a string of their own: a copy of their
-    /// bytes, found without counting. A bound not at a scalar's start traps.
-    public subscript(range: Range<String.Index>) -> String {
-        get => self.utf8Slice(range.lowerBound.utf8Offset, range.upperBound.utf8Offset)
-    }
-
-    /// The scalars from the index to the end.
-    public subscript(range: PartialRangeFrom<String.Index>) -> String {
-        get => self.utf8Slice(range.lowerBound.utf8Offset, self.utf8Count)
-    }
-
-    /// The scalars from the start up to, not including, the index.
-    public subscript(range: PartialRangeUpTo<String.Index>) -> String {
-        get => self.utf8Slice(0, range.upperBound.utf8Offset)
+    /// bytes. A range of indices is found without counting, and a bound
+    /// not at a scalar's start traps; a bound counted from the end,
+    /// '^n', steps back n scalars from it.
+    ///
+    /// ```sable
+    /// let text = "naïve café"
+    /// let space = text.firstIndex(of: ' ')!
+    /// assert(text[..<space] == "naïve")
+    /// assert(text[text.index(after: space)...] == "café")
+    /// assert(text[^4...] == "café")
+    /// assert(text[1..<^5] == "aïve")
+    /// ```
+    public subscript(range: some RangeExpression) -> String {
+        get {
+            let indices = range.relative(to: self)
+            return self.utf8Slice(indices.lowerBound.utf8Offset, indices.upperBound.utf8Offset)
+        }
     }
 
     /// The position of the scalar after the one at the index; stepping past

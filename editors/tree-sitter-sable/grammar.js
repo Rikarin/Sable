@@ -381,7 +381,7 @@ module.exports = grammar({
 
     generic_expression: ($) => prec(PREC.call, seq($.identifier, $.type_arguments)),
 
-    prefix_expression: ($) => prec(PREC.prefix, seq(field("operator", choice("-", "!", "~", "&", "*", "+")), field("operand", $._expression))),
+    prefix_expression: ($) => prec(PREC.prefix, seq(field("operator", choice("-", "!", "~", "&", "*", "+", "^")), field("operand", $._expression))),
     postfix_expression: ($) => prec(PREC.postfix, seq(field("operand", $._expression), field("operator", choice("!", "?")))),
 
     binary_expression: ($) => {

@@ -1503,8 +1503,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             // The place is the caller's, which the trap says rather than its own.
             case "trap": {
+                // An empty site is left out, as the native trap leaves it:
+                // not the place of this instruction, which is the library's.
                 var site = Text(operands[1]).Value;
-                throw new SilTrap(Text(operands[0]).Value) { Site = site.Length == 0 ? null : site };
+                throw site.Length == 0
+                    ? new SilTrap(Text(operands[0]).Value, located: false)
+                    : new SilTrap(Text(operands[0]).Value) { Site = site };
             }
 
             // The interpreter's frames are not the program's, and it has no

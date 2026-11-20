@@ -155,3 +155,27 @@ fn aDequeIsChangedInPlaceAsAMutableCollection() {
     deque.swapAt(0, 2)
     assert(deque.toArray() == [3, 2, 1])
 }
+
+@test
+fn aDequeIsReadFromTheEnd() {
+    let deque = Deque<Int>([2, 3])
+    deque.prepend(1)
+    assertEqual(deque[^1], 3)
+    assertEqual(deque[^3], 1)
+}
+
+@test
+fn aDequeIsSlicedRoundTheEndOfItsSlots() {
+    let deque = Deque<Int>([1, 2, 3])
+    deque.prepend(0)
+    assert(deque[1..<3] == [1, 2])
+    assert(deque[^2...] == [2, 3])
+    assert(deque[...^4] == [0])
+    assert(deque[2..<2] == [])
+}
+
+@test(traps: "array slice out of range")
+fn aDequeSlicedPastItsEndTraps() {
+    let deque = Deque<Int>([1, 2, 3])
+    let _ = deque[1..<blackBox(5)]
+}

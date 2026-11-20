@@ -1,0 +1,64 @@
+module Sable.Core
+
+// Indexing from the end, C#'s hat: '^n' makes a FromEnd, which the binder
+// builds by sight as it does a range. Every bidirectional collection reads
+// an element by one (Collection+FromEnd.sb), and a range with a bound
+// written '^n' is a RelativeRange, which every collection slices by.
+
+/// A position counted back from a collection's end: what '^n' makes. '^1'
+/// is the last element, '^2' the one before it, and '^0' the end itself —
+/// a bound a range may stop at, but no element, so reading at it traps
+/// (and '^0' written as an index is an error). Unlike Python's negative
+/// indices, counting from the end is in the type: a computed index that
+/// goes negative is not quietly taken from the other end, but traps.
+///
+/// ```sable
+/// let xs = [10, 20, 30, 40]
+/// assert(xs[^1] == 40)
+/// assert(xs[1..<^1] == [20, 30])
+/// assert(xs[^2...] == [30, 40])
+/// assert("héllo"[^4] == 'é')
+/// ```
+public struct FromEnd: Equatable, Hashable, Debug {
+    /// How many positions back from the end: 1 for the last element.
+    public let n: Int
+
+    /// The position 'n' back from the end, as '^n' writes it.
+    public init(_ n: Int) {
+        self.n = n
+    }
+
+    /// The offset from the start of the element this names in a collection
+    /// of 'count' elements: 'count - n'. Unless 'n' is 1 through 'count',
+    /// there is no such element, and it traps.
+    ///
+    /// ```sable
+    /// assert(FromEnd(1).elementOffset(in: 3) == 2)
+    /// ```
+    public fn elementOffset(in count: Int) -> Int {
+        if n <= 0 || n > count {
+            FromEnd.outOfRange(n, count)
+        }
+        return count - n
+    }
+
+    /// Stops the program: there is no element '^n' among 'count'. Out of
+    /// line, so a read that inlines the check carries only a call, and
+    /// of the count alone, so no FromEnd need be made for it.
+    static fn outOfRange(_ n: Int, _ count: Int) -> Never {
+        Runtime.trap("index ^\(n) is out of range for count \(count)", "")
+    }
+
+    public operator == (lhs: FromEnd, rhs: FromEnd) -> Bool {
+        return lhs.n == rhs.n
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(n)
+    }
+
+    /// The position as it is written: "^1".
+    public fn debugDescription() -> String {
+        return "^\(n)"
+    }
+}

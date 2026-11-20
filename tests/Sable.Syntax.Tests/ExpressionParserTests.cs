@@ -85,6 +85,9 @@ public sealed class ExpressionParserTests {
     [InlineData("-a * b", "(Binary (PrefixUnary - (IdentifierName a)) * (IdentifierName b))")]
     [InlineData("!a && b", "(Binary (PrefixUnary ! (IdentifierName a)) && (IdentifierName b))")]
     [InlineData("~a", "(PrefixUnary ~ (IdentifierName a))")]
+    [InlineData("^1", "(PrefixUnary ^ (Literal 1))")]
+    [InlineData("a ^ ^b", "(Binary (IdentifierName a) ^ (PrefixUnary ^ (IdentifierName b)))")]
+    [InlineData("^n - 1", "(Binary (PrefixUnary ^ (IdentifierName n)) - (Literal 1))")]
     [InlineData("&a", "(PrefixUnary & (IdentifierName a))")]
     [InlineData("await f()", "(PrefixUnary await (Invocation (IdentifierName f) (ArgumentList)))")]
     [InlineData("move b", "(PrefixUnary move (IdentifierName b))")]
@@ -197,6 +200,10 @@ public sealed class ExpressionParserTests {
     [InlineData("..<10", "(Range ..< (Literal 10))")]
     [InlineData("5...", "(Range (Literal 5) ...)")]
     [InlineData("a + 1 ..< b", "(Range (Binary (IdentifierName a) + (Literal 1)) ..< (IdentifierName b))")]
+    [InlineData("1..<^1", "(Range (Literal 1) ..< (PrefixUnary ^ (Literal 1)))")]
+    [InlineData("^3...", "(Range (PrefixUnary ^ (Literal 3)) ...)")]
+    [InlineData("^2...^1", "(Range (PrefixUnary ^ (Literal 2)) ... (PrefixUnary ^ (Literal 1)))")]
+    [InlineData("..<^n", "(Range ..< (PrefixUnary ^ (IdentifierName n)))")]
     public void ParsesRanges(string source, string expected) => Assert.Equal(expected, Parse(source));
 
     [Fact]

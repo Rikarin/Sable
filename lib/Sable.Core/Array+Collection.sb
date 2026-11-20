@@ -47,6 +47,24 @@ extension<Element> Element[:]: RandomAccessCollection {
 
     /// How far on 'end' is from 'start'.
     public fn distance(from start: Int, to end: Int) -> Int => end - start
+
+    /// The elements in the range, as a slice that shares the array's
+    /// buffer: what a range with a bound counted from the end, or any other
+    /// RangeExpression, slices an array by. A range of integers written in
+    /// place, 'xs[1..<3]', is the compiler's own slicing, which this is
+    /// written over.
+    ///
+    /// ```sable
+    /// let xs = [1, 2, 3, 4]
+    /// assert(xs[1..<^1] == [2, 3])
+    /// assert(xs[^2...] == [3, 4])
+    /// ```
+    public subscript(range: some RangeExpression) -> Element[:] {
+        get {
+            let positions = range.relative(to: self)
+            return self[positions.lowerBound..<positions.upperBound]
+        }
+    }
 }
 
 extension<Element> Element[]: MutableCollection { }

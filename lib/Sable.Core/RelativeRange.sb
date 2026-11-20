@@ -1,0 +1,68 @@
+module Sable.Core
+
+/// A range with a bound counted from the end: what '..<' and '...' make
+/// when either side is a FromEnd — '1..<^1', '^3...', '^2...^1', '..<^1'.
+/// It names no positions until it is applied to a collection, which gives
+/// the end it counts from; out of the collection's range, that traps.
+///
+/// ```sable
+/// let xs = [1, 2, 3, 4, 5]
+/// assert(xs[1..<^1] == [2, 3, 4])
+/// assert(xs[^2...^1] == [4, 5])
+/// assert(xs[..<^3] == [1, 2])
+/// let r = 1..<^1
+/// assert(r.relative(to: xs).upperBound == 4)
+/// ```
+public struct RelativeRange: RangeExpression, Equatable, Debug {
+    let lower: Int
+    let lowerFromEnd: Bool
+    let upper: Int
+    let upperFromEnd: Bool
+    let closed: Bool
+
+    /// The offsets, from the start, of the first position and the one past
+    /// the last, in a collection of 'count' elements: trapping unless
+    /// both are within it and in order.
+    ///
+    /// ```sable
+    /// let (start, end) = (^3...).offsets(in: 5)
+    /// assert(start == 2 && end == 5)
+    /// ```
+    public fn offsets(in count: Int) -> (Int, Int) {
+        let start = lowerFromEnd ? count - lower : lower
+        let last = upperFromEnd ? count - upper : upper
+        let end = closed ? last + 1 : last
+        if start < 0 || end > count || end < start {
+            RelativeRange.outOfRange(lower, lowerFromEnd, upper, upperFromEnd, closed, count)
+        }
+        return (start, end)
+    }
+
+    /// Stops the program: the range is not within 'count' elements. Out of
+    /// line, so a slice that inlines the check carries only a call, and of
+    /// the bounds, so no RelativeRange need be made for it.
+    static fn outOfRange(_ lower: Int, _ lowerFromEnd: Bool, _ upper: Int, _ upperFromEnd: Bool, _ closed: Bool, _ count: Int) -> Never {
+        let range = RelativeRange { lower: lower, lowerFromEnd: lowerFromEnd, upper: upper, upperFromEnd: upperFromEnd, closed: closed }
+        Runtime.trap("range \(range.debugDescription()) is out of range for count \(count)", "")
+    }
+
+    /// The collection's positions this range names, as a range of its
+    /// indices: the end counted back from is the collection's.
+    public fn relative<C: Collection>(to c: C) -> Range<C.Index> {
+        let (start, end) = self.offsets(in: c.count)
+        let first = c.index(c.startIndex, offsetBy: start)
+        return first..<c.index(first, offsetBy: end - start)
+    }
+
+    public operator == (lhs: RelativeRange, rhs: RelativeRange) -> Bool {
+        return lhs.lower == rhs.lower && lhs.lowerFromEnd == rhs.lowerFromEnd && lhs.upper == rhs.upper
+            && lhs.upperFromEnd == rhs.upperFromEnd && lhs.closed == rhs.closed
+    }
+
+    /// The range as it is written: "1..<^1", "^3..<^0".
+    public fn debugDescription() -> String {
+        let from = lowerFromEnd ? "^\(lower)" : "\(lower)"
+        let to = upperFromEnd ? "^\(upper)" : "\(upper)"
+        return closed ? "\(from)...\(to)" : "\(from)..<\(to)"
+    }
+}

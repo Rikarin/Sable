@@ -40,6 +40,11 @@ public protocol Collection: Sequence where Failure == Never {
     /// The position after this one, which must not be 'endIndex'.
     fn index(after position: Index) -> Index
 
+    /// The position 'distance' after this one, or before it when negative.
+    /// Every collection has one that steps forwards, one position at a
+    /// time; one that can jump, or go back, gives its own.
+    fn index(_ position: Index, offsetBy distance: Int) -> Index
+
     /// The element at a position, which must be one of its elements'.
     subscript(position: Index) -> Element { get }
 }
@@ -53,9 +58,6 @@ public protocol BidirectionalCollection: Collection {
 /// A collection that can jump to any position at once, and say how far apart
 /// two positions are, without going through the elements between.
 public protocol RandomAccessCollection: BidirectionalCollection {
-    /// The position 'distance' after this one, or before it when negative.
-    fn index(_ position: Index, offsetBy distance: Int) -> Index
-
     /// How many positions on 'end' is from 'start': negative when before it.
     fn distance(from start: Index, to end: Index) -> Int
 }

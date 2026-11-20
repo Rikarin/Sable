@@ -709,6 +709,12 @@
 				</dict>
 				<dict>
 					<key>name</key>
+					<string>keyword.operator.from-end.sable</string>
+					<key>match</key>
+					<string>(?&lt;![\w)\]'"])(?&lt;![\w)\]'"]\s)\^(?=[\w(])</string>
+				</dict>
+				<dict>
+					<key>name</key>
 					<string>keyword.operator.optional.sable</string>
 					<key>match</key>
 					<string>\?\.|\?\?</string>

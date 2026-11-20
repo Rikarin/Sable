@@ -612,6 +612,7 @@ internal sealed class Parser {
                 or SyntaxKind.PlusToken
                 or SyntaxKind.BangToken
                 or SyntaxKind.TildeToken
+                or SyntaxKind.CaretToken
                 or SyntaxKind.AmpersandToken => true,
             SyntaxKind.AwaitKeyword or SyntaxKind.MoveKeyword => true,
             _ => false,
@@ -1399,6 +1400,7 @@ internal sealed class Parser {
                 or SyntaxKind.PlusToken
                 or SyntaxKind.BangToken
                 or SyntaxKind.TildeToken
+                or SyntaxKind.CaretToken
                 or SyntaxKind.AmpersandToken => true,
             SyntaxKind.AwaitKeyword or SyntaxKind.MoveKeyword or SyntaxKind.TryKeyword => true,
             SyntaxKind.MatchKeyword or SyntaxKind.IfKeyword or SyntaxKind.CapitalSelfKeyword => true,

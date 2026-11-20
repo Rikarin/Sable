@@ -74,6 +74,26 @@ public struct SmallVec<Element, N: Int> where N > 0 {
         }
     }
 
+    /// The elements in the range, as a slice: a view of them once they are
+    /// on the heap, and of a copy while they are inline. Any range of
+    /// positions slices one, one counted from the end among them; outside
+    /// 0...count traps.
+    ///
+    /// ```sable
+    /// let small = SmallVec<Int, 4>([1, 2, 3])
+    /// assert(small[1...] == [2, 3])
+    /// assert(small[..<^1] == [1, 2])
+    /// ```
+    public subscript(range: some RangeExpression) -> Element[:] {
+        get {
+            let positions = range.relative(to: self)
+            if spilled {
+                return heap[positions.lowerBound..<positions.upperBound]
+            }
+            return inline.toArray()[positions.lowerBound..<positions.upperBound]
+        }
+    }
+
     /// The elements in a grow-only array, in order.
     public fn toArray() -> Element[>..] {
         if spilled {

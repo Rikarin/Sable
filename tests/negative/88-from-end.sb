@@ -1,0 +1,33 @@
+module Negative.FromEnd
+
+// '^n' counts back from a collection's end (#291). '^0' is the end itself:
+// a bound a range may stop at, but no element to read.
+
+fn elements(_ xs: Int[:], _ text: String) {
+    let last = xs[^1]
+    let end = xs[^0]                    //! S3090 '^0' is the end
+    let inParentheses = xs[(^0)]        //! S3090 '^0' is the end
+    let character = text[^0]            //! S3090 '^0' is the end
+    let all = xs[0..<^0]
+    let rest = xs[^0...]
+}
+
+// '^' counts an Int of positions.
+fn operands(_ xs: Int[:]) {
+    let flag = xs[^true]                //! S3009 '^' counts an 'Int' of positions
+    let text = ^"a"                     //! S3009 '^' counts an 'Int' of positions
+}
+
+// A range of indices names the collection's positions as they are, so it
+// must be a range of the collection's own kind of index.
+fn ranges(_ text: String) {
+    let wrong = text[1..<3]             //! S3004 cannot slice 'String', whose positions are 'String.Index'
+    let right = text[1..<^1]
+}
+
+// A range counted from the end is no sequence of its own: it means
+// nothing until a collection gives it an end.
+fn loops() {
+    for i in ^3... {                    //! S3013 'RelativeRange' cannot be iterated
+    }
+}

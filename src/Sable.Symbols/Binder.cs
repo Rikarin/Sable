@@ -5951,7 +5951,11 @@ public sealed partial class Binder {
         BoundExpression receiver,
         ImmutableArray<BoundExpression> indices
     ) {
-        if (receiver.Type is ArrayTypeSymbol array) {
+        CheckEndAsElement(syntax);
+
+        // 'xs[^1]' and 'xs[1..<^1]' are the collection protocols' subscripts,
+        // an array's as any collection's, written over its own indexing.
+        if (receiver.Type is ArrayTypeSymbol array && !IndexesThroughSubscript(indices)) {
             indices = BindUnbound(indices);
 
             // 'xs[1..<3]', 'xs[2...]', 'xs[..<2]': the elements in the range,
@@ -5975,6 +5979,10 @@ public sealed partial class Binder {
 
                 if (resolved is null) {
                     return new BoundError(syntax, [receiver, ..BindUnbound(indices)]);
+                }
+
+                if (MismatchedRange(syntax, receiver, indices, resolved)) {
+                    return new BoundError(syntax, [receiver, ..indices]);
                 }
 
                 var converted = ImmutableArray.CreateBuilder<BoundExpression>(indices.Length);
@@ -6006,6 +6014,81 @@ public sealed partial class Binder {
             $"'{receiver.Type.ToDisplayString()}' cannot be indexed"
         );
         return new BoundError(syntax, [receiver, ..BindUnbound(indices)]);
+    }
+
+    /// <summary>
+    ///     A range of one kind of index given to a slicing subscript, which
+    ///     takes any RangeExpression, of a collection with another: a range
+    ///     of Ints slicing a String, whose positions are String.Index. The
+    ///     range's bounds are the collection's positions as they are, so
+    ///     the two must be the same type.
+    /// </summary>
+    bool MismatchedRange(ElementAccessExpressionSyntax syntax, BoundExpression receiver, ImmutableArray<BoundExpression> indices, FunctionSymbol subscript) {
+        if (indices is not [{ Type: NamedTypeSymbol { TypeArguments: [var bound] } range } index]
+            || !Core.IsAnyRange(range)
+            || subscript.Parameters is not [{ Type: var parameter }]
+            || parameter is NamedTypeSymbol named && Core.IsAnyRange(named)
+            || Core.Collection is not { } collection
+            || AssociatedTypes.All(collection).FirstOrDefault(static a => a.Name == "Index") is not { } associated
+            || !Conversions.Satisfies(receiver.Type, collection, _conversions.Equivalence)) {
+            return false;
+        }
+
+        var position = AssociatedTypes.Member(receiver.Type, associated);
+        if (position.IsError || bound.IsError || position is DependentMemberTypeSymbol || _conversions.Equivalence.AreSame(position, bound)) {
+            return false;
+        }
+
+        _diagnostics.Error(
+            ErrorCode.ERR_TypeMismatch,
+            index.Syntax.Span,
+            $"a range of '{bound.ToDisplayString()}' cannot slice '{receiver.Type.ToDisplayString()}', "
+            + $"whose positions are '{Qualified(position)}'"
+        );
+        return true;
+
+        // 'String.Index', not 'Index'.
+        static string Qualified(TypeSymbol type) =>
+            type switch {
+                NamedTypeSymbol { ContainingSymbol: NamedTypeSymbol outer } => $"{Qualified(outer)}.{type.ToDisplayString()}",
+                NamedTypeSymbol { ContainingSymbol: ExtensionSymbol extension } => $"{Qualified(extension.ExtendedType)}.{type.ToDisplayString()}",
+                _ => type.ToDisplayString(),
+            };
+    }
+
+    /// <summary>
+    ///     An index an array does not take itself: a position from the end,
+    ///     or a range that is not one of integers, which the subscripts every
+    ///     collection has (Collection+FromEnd.sb, Array+Collection.sb) take.
+    /// </summary>
+    bool IndexesThroughSubscript(ImmutableArray<BoundExpression> indices) =>
+        indices is [{ Type: var type }]
+        && (Core.IsFromEnd(type)
+            || !Core.IsAnyRange(type) && Core.RangeExpression is { } rangeExpression && type is NamedTypeSymbol
+            && Conversions.Satisfies(type, rangeExpression, _conversions.Equivalence));
+
+    /// <summary>
+    ///     <c>xs[^0]</c>: the end, which is no element, so reading there
+    ///     always traps. Written so, it is refused (S3090).
+    /// </summary>
+    void CheckEndAsElement(ElementAccessExpressionSyntax syntax) {
+        if (syntax.ArgumentList.Arguments is not [{ Expression: var index }]) {
+            return;
+        }
+
+        while (index is ParenthesizedExpressionSyntax parenthesized) {
+            index = parenthesized.Expression;
+        }
+
+        if (index is PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.CaretToken, Operand: LiteralExpressionSyntax { Token: { Kind: SyntaxKind.IntegerLiteralToken } digits } }
+            && digits.Value is 0L or 0 or 0UL) {
+            _diagnostics.Error(
+                ErrorCode.ERR_EndIsNoElement,
+                index.Span,
+                "'^0' is the end, past the last element, so there is no element to read there; "
+                + "the last is '^1'"
+            );
+        }
     }
 
     /// <summary>Indices left unbound for a subscript's parameters to type, bound with none, where there is no subscript.</summary>
@@ -7140,6 +7223,12 @@ public sealed partial class Binder {
         var lower = syntax.Left is { } left ? BindExpression(left, bound) : null;
         var upper = syntax.Right is { } right ? BindExpression(right, bound ?? lower?.Type) : null;
 
+        // '1..<^1', '^3...': a bound counted from the end makes a range a
+        // collection resolves against its own end.
+        if (lower is { Type: var lowerType } && Core.IsFromEnd(lowerType) || upper is { Type: var upperType } && Core.IsFromEnd(upperType)) {
+            return BindRelativeRange(syntax, lower, upper, isInclusive);
+        }
+
         var element = bound ?? lower?.Type ?? upper?.Type;
 
         if (element is null) {
@@ -7186,6 +7275,61 @@ public sealed partial class Binder {
             syntax,
             new BoundRange(syntax, definition.Construct([element]), lower, upper, isInclusive)
         );
+    }
+
+    /// <summary>
+    ///     A range with a bound written <c>^n</c> — <c>1..&lt;^1</c>,
+    ///     <c>^3...</c>, <c>..&lt;^1</c>, <c>^2...^1</c> — as the Sable.Core
+    ///     struct <c>RelativeRange</c>: each bound an offset and whether it
+    ///     counts from the end. A range with no upper bound runs to
+    ///     <c>^0</c>, the end; one with no lower bound starts at 0.
+    /// </summary>
+    BoundExpression BindRelativeRange(RangeExpressionSyntax syntax, BoundExpression? lower, BoundExpression? upper, bool isInclusive) {
+        if (Core.RelativeRange is not { } relative || Core.FromEnd is not { } fromEnd) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NameNotFound,
+                syntax.Span,
+                "no struct 'RelativeRange' is declared in Sable.Core, so there is no range counted from the end for this to make"
+            );
+            return new BoundError(syntax, [..new[] { lower, upper }.OfType<BoundExpression>()]);
+        }
+
+        var count = fromEnd.Members.OfType<FieldSymbol>().First(static f => f is { Name: "n", IsStatic: false });
+        var (lowerOffset, lowerFromEnd) = Side(lower, false);
+        var (upperOffset, upperFromEnd) = Side(upper, true);
+        if (lowerOffset.HasError || upperOffset.HasError) {
+            return new BoundError(syntax, lowerOffset, upperOffset);
+        }
+
+        var values = new Dictionary<string, BoundExpression> {
+            ["lower"] = lowerOffset,
+            ["lowerFromEnd"] = new BoundLiteral(syntax, Core.Bool, lowerFromEnd),
+            ["upper"] = upperOffset,
+            ["upperFromEnd"] = new BoundLiteral(syntax, Core.Bool, upperFromEnd),
+            ["closed"] = new BoundLiteral(syntax, Core.Bool, isInclusive && upper is not null),
+        };
+
+        var fields = relative.Members.OfType<FieldSymbol>().Where(static f => !f.IsStatic && !f.IsComputed).ToList();
+        if (fields.Count != values.Count || fields.Any(f => !values.ContainsKey(f.Name))) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NameNotFound,
+                syntax.Span,
+                "Sable.Core's 'RelativeRange' is not the struct of 'lower', 'lowerFromEnd', 'upper', 'upperFromEnd' and 'closed' a range counted from the end is made of"
+            );
+            return new BoundError(syntax, lowerOffset, upperOffset);
+        }
+
+        return Record(syntax, new BoundRecordExpression(syntax, relative, [..fields.Select(f => (f, values[f.Name]))]));
+
+        // A bound counted from the end gives its count; one counted from the
+        // start, itself; a missing one, the start or the end.
+        (BoundExpression Offset, bool FromEnd) Side(BoundExpression? side, bool isUpper) =>
+            side switch {
+                null => (new BoundLiteral(syntax, Core.Int, 0L), isUpper),
+                BoundRecordExpression { Fields: [var (_, n)] } written when Core.IsFromEnd(written.Type) => (n, true),
+                _ when Core.IsFromEnd(side.Type) => (new BoundFieldAccess(side.Syntax, side, count), true),
+                _ => (Convert(side, Core.Int, side.Syntax), false),
+            };
     }
 
     BoundExpression BindTypeTest(TypeTestExpressionSyntax syntax) {
@@ -7434,6 +7578,10 @@ public sealed partial class Binder {
             return new BoundUnaryOperator(syntax, awaited.Type, UnaryOperatorKind.Await, awaited);
         }
 
+        if (syntax.OperatorToken.Kind == SyntaxKind.CaretToken) {
+            return BindFromEnd(syntax);
+        }
+
         var operand = BindExpression(syntax.Operand);
         if (syntax.OperatorToken.Kind is not (SyntaxKind.AmpersandToken or SyntaxKind.MoveKeyword)) {
             operand = ImplicitlyUnwrapped(operand);
@@ -7531,6 +7679,39 @@ public sealed partial class Binder {
         }
 
         return new BoundUnaryOperator(syntax, type, kind, operand);
+    }
+
+    /// <summary>
+    ///     <c>^n</c>: a position counted back from a collection's end, the
+    ///     Sable.Core struct <c>FromEnd</c> holding the integer (<c>xs[^1]</c>,
+    ///     <c>xs[1..&lt;^1]</c>). Prefix <c>^</c> means nothing else.
+    /// </summary>
+    BoundExpression BindFromEnd(PrefixUnaryExpressionSyntax syntax) {
+        var operand = ImplicitlyUnwrapped(BindExpression(syntax.Operand, Core.Int));
+        if (operand.HasError) {
+            return new BoundError(syntax, operand);
+        }
+
+        if (Core.FromEnd is not { } fromEnd) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NameNotFound,
+                syntax.Span,
+                "no struct 'FromEnd' with an 'n: Int' is declared in Sable.Core, so there is nothing for '^' to make"
+            );
+            return new BoundError(syntax, operand);
+        }
+
+        if (!operand.Type.Equals(Core.Int) && !_conversions.HasImplicitConversion(operand.Type, Core.Int, IsLiteral(operand))) {
+            _diagnostics.Error(
+                ErrorCode.ERR_OperatorNotDefined,
+                syntax.Span,
+                $"'^' counts an 'Int' of positions back from the end, not a '{operand.Type.ToDisplayString()}'"
+            );
+            return new BoundError(syntax, operand);
+        }
+
+        var count = fromEnd.Members.OfType<FieldSymbol>().First(static f => f is { Name: "n", IsStatic: false });
+        return new BoundRecordExpression(syntax, fromEnd, [(count, Convert(operand, Core.Int, syntax.Operand))]);
     }
 
     BoundExpression BindPostfixUnary(PostfixUnaryExpressionSyntax syntax) {

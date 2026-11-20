@@ -1021,7 +1021,7 @@ is written, runs when none is equal. A case ends where the next begins:
 
 ```
   1  a.b   a?.b   a!   a[i]   f(x)   a as T   a is T
-  2  prefix:  -a  !a  ~a  &a  await a  try a  move a
+  2  prefix:  -a  !a  ~a  &a  ^a  await a  try a  move a
   3  a * b   a / b   a % b   a &* b
   4  a + b   a - b   a &+ b   a &- b
   5  a << b  a >> b
@@ -1181,6 +1181,40 @@ fill, an alignment, a width or `?` for a type that is not `Formattable`
 ..<10         // partial, from the start
 5...          // partial, to the end
 ```
+
+### Indexing from the end
+
+Prefix `^n` is a position counted back from a collection's end, a
+`FromEnd` (C#'s hat): `^1` is the last element, `^2` the one before it,
+and `^0` the end itself. It binds tighter than every binary operator, so
+a range with a bound counted from the end needs no parentheses. Prefix
+`^` means nothing else; `a ^ b` is still exclusive or.
+
+```sable
+xs[^1]        // the last element
+xs[1..<^1]    // all but the first and the last
+xs[^3...]     // the last three
+xs[^2...^1]   // the last two
+xs[..<^1]     // all but the last
+s[^1]         // a String's last character, found stepping back
+```
+
+A range with either bound written `^n` is a `RelativeRange`, which the
+collection it slices resolves against its own end. Every bidirectional
+collection reads an element by a `FromEnd` — in constant time, `count - n`,
+on one with random access (every array, `List`, `Deque`), one step at a
+time back from the end on a `String` — and every collection has one
+slicing subscript, which takes `some RangeExpression`: any range of its
+indices, or a `RelativeRange`. On an array, neither a `FromEnd` nor a
+`RelativeRange` is made as the program runs: what is left after
+optimisation is arithmetic on the count, and the bounds check.
+
+`^0` is a bound, never an element: reading at it traps, and written as an
+index, `xs[^0]`, it is an error (S3090). A position from the end outside
+the collection traps, saying so: `index ^5 is out of range for count 3`.
+Unlike a negative index, counting from the end is in the type, so a
+computed index that goes negative traps rather than counting from the
+other end.
 
 ---
 

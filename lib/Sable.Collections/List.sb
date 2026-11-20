@@ -61,6 +61,22 @@ public struct List<Element> {
         set { storage[index] = newValue }
     }
 
+    /// The elements in the range, as a slice: a view of them, with nothing
+    /// copied. Any range of positions slices a list, one counted from the
+    /// end among them; outside 0...count traps.
+    ///
+    /// ```sable
+    /// let list = List<Int>([1, 2, 3, 4])
+    /// assert(list[1..<3] == [2, 3])
+    /// assert(list[^2...] == [3, 4])
+    /// ```
+    public subscript(range: some RangeExpression) -> Element[:] {
+        get {
+            let positions = range.relative(to: self)
+            return storage[positions.lowerBound..<positions.upperBound]
+        }
+    }
+
     /// The elements, as a slice: a view, with nothing copied, that has
     /// every read an array has.
     ///

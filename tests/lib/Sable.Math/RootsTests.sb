@@ -8,10 +8,12 @@ import Sable.Math
 import Sable.Testing
 import FloatAssertions
 
+// cbrt is the C library's, which need not be correctly rounded: glibc's
+// cbrt(27.0) is 3.0000000000000004.
 @test
-fn cbrtIsExactAtCubesAndNegativeForNegatives() {
-    assertSame(cbrt(27.0), 3.0)
-    assertSame(cbrt(-27.0), -3.0)
+fn cbrtIsWithinAnUlpAtCubesAndNegativeForNegatives() {
+    assertWithin(cbrt(27.0), 3.0, ulps: 1)
+    assertWithin(cbrt(-27.0), -3.0, ulps: 1)
     assertSame(cbrt(-0.0), -0.0)
     assertSame(cbrt(-inf), -inf)
     assertSame(cbrt(nan), nan)

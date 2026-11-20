@@ -139,6 +139,52 @@ internal static class AssociatedTypes {
     }
 
     /// <summary>
+    ///     <see cref="ThroughBase(NamedTypeSymbol, TypeSymbol)" /> for reading
+    ///     one type: only the associated types it mentions are resolved. A
+    ///     concrete conformer's associated type can be inferred from another
+    ///     one, which resolving every one of them for each would ask again and
+    ///     again, many times over for a type that does not say them.
+    /// </summary>
+    public static TypeSubstitution ThroughBase(NamedTypeSymbol protocol, TypeSymbol baseType, TypeSymbol reading) {
+        var mentioned = new HashSet<TypeParameterSymbol>();
+        if (!Mentioned(reading, mentioned)) {
+            return ThroughBase(protocol, baseType);
+        }
+
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        if (protocol.SelfTypeParameter is { } self) {
+            map[self] = baseType;
+        }
+
+        foreach (var associated in All(protocol)) {
+            if (mentioned.Contains(associated) && !map.ContainsKey(associated)) {
+                map[associated] = Member(baseType, associated);
+            }
+        }
+
+        return new(map);
+
+        // The type parameters a type is made of, or false for a kind of type
+        // this does not take apart.
+        static bool Mentioned(TypeSymbol type, HashSet<TypeParameterSymbol> found) =>
+            type switch {
+                TypeParameterSymbol parameter => found.Add(parameter) || true,
+                DependentMemberTypeSymbol member => Mentioned(member.BaseType, found),
+                NamedTypeSymbol named => named.TypeArguments.All(t => Mentioned(t, found)),
+                ArrayTypeSymbol array => Mentioned(array.ElementType, found)
+                                         && (array.CapacityParameter is not { } capacity || found.Add(capacity) || true),
+                OptionalTypeSymbol optional => Mentioned(optional.UnderlyingType, found),
+                ReferenceTypeSymbol reference => Mentioned(reference.ReferencedType, found),
+                TupleTypeSymbol tuple => tuple.ElementTypes.All(t => Mentioned(t, found)),
+                FunctionTypeSymbol function => function.ParameterTypes.All(t => Mentioned(t, found))
+                                               && Mentioned(function.ReturnType, found)
+                                               && (function.ThrownType is null || Mentioned(function.ThrownType, found)),
+                MetatypeTypeSymbol metatype => Mentioned(metatype.InstanceType, found),
+                _ => type.IsError,
+            };
+    }
+
+    /// <summary>
     ///     <c>Base.Associated</c>: resolved when the base is a concrete conformer,
     ///     and kept as a dependent member while it is still generic.
     /// </summary>

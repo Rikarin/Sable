@@ -625,7 +625,6 @@ internal static class ConformanceChecker {
         // Sequence's Element is.
         TypeSymbol self = (TypeSymbol?)conformer.ExtendedArray ?? TypeBinder.OwnConstruction(conformer);
         foreach (var owner in (IEnumerable<NamedTypeSymbol>)[protocol, ..ProtocolsOf(conformer).Select(static p => p.OriginalDefinition)]) {
-            var throughConformer = AssociatedTypes.ThroughBase(owner, self);
             foreach (var (left, right) in owner.SameTypeRequirements) {
                 var other = ReferenceEquals(left, associated) ? right
                     : ReferenceEquals(right, associated) ? left
@@ -634,7 +633,7 @@ internal static class ConformanceChecker {
                     continue;
                 }
 
-                var inferred = throughConformer.Apply(other);
+                var inferred = AssociatedTypes.ThroughBase(owner, self, other).Apply(other);
                 if (!inferred.IsError && !MentionsAssociated(inferred)) {
                     return inferred;
                 }

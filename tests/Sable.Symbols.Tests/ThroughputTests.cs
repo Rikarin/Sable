@@ -157,6 +157,57 @@ public sealed class ThroughputTests {
         );
     }
 
+    [Fact]
+    public void AMemberOfACollectionThatSaysNoneOfItsAssociatedTypesIsFoundQuickly() {
+        // A generic type that conforms to RandomAccessCollection,
+        // MutableCollection and RangeReplaceableCollection, and says none of
+        // their associated types: each is inferred, and one can be inferred
+        // from another through a protocol's where clause. Inferring one used
+        // to resolve every other the protocol has, each of which resolved
+        // every other again, so each member reached through self, 'storage'
+        // here, cost tens of thousands of inferences — 70 ms apiece, and a
+        // fuzzed file of a few hundred lines took longer than the fuzzer's
+        // twenty seconds. The two hundred here took fourteen seconds, and now
+        // take a fraction of one.
+        var source = new StringBuilder("module Bench\n\npublic struct Pile<Element> {\n    var storage: Element[>..] = []\n\n    public fn look() {\n");
+        for (var i = 0; i < 200; i++) {
+            source.Append(System.Globalization.CultureInfo.InvariantCulture, $"        let a{i} = storage[{i}]\n");
+        }
+
+        source.Append("    }\n}\n\nextension Pile: RandomAccessCollection, MutableCollection, RangeReplaceableCollection {\n    public var startIndex: Int => 0\n}\n");
+
+        _ = Bind(source.ToString()); // warm
+
+        var attempts = new List<string>();
+        for (var attempt = 0; attempt < 3; attempt++) {
+            var slowdown = Math.Max(1.0, Calibrate() / ReferenceCalibrationMs);
+            var budget = 3.0 * slowdown;
+
+            var watch = Stopwatch.StartNew();
+            var diagnostics = Bind(source.ToString());
+            watch.Stop();
+
+            // It does not conform, as it says no endIndex, among others; the
+            // lookups themselves all find 'storage'.
+            Assert.DoesNotContain(diagnostics, static d => d.Message.Contains("no symbol named", StringComparison.Ordinal));
+
+            var seconds = watch.Elapsed.TotalSeconds;
+            attempts.Add($"{seconds:F2} s against {budget:F1} s (the machine {slowdown:F1}x the reference)");
+            if (seconds < budget) {
+                return;
+            }
+        }
+
+        Assert.Fail($"binding two hundred lookups took {string.Join("; then ", attempts)}");
+
+        static List<Diagnostic> Bind(string text) {
+            var compilation = Compilation.Create(text);
+            var diagnostics = new List<Diagnostic>(compilation.GetSemanticModel(compilation.SyntaxTrees[0]).GetDiagnostics());
+            diagnostics.AddRange(compilation.GetDiagnostics());
+            return diagnostics;
+        }
+    }
+
     static double Measure(int types) {
         var source = LargeProgram(types);
         _ = Compilation.Create(source).GetAllDiagnostics(); // warm

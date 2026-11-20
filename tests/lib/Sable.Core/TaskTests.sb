@@ -62,24 +62,29 @@ fn aDetachedTaskIsNotCancelledWithItsSpawner() async {
 
 @test
 fn aTaskSpawnedByACancelledOneStartsCancelled() async {
+    let cancelled = Latch()
     let task = Task.spawn {
-        await Task.yield()
+        await cancelled.wait()
         let child = Task.spawn { Task.isCancelled }
         return await child.value
     }
     task.cancel()
+    await cancelled.open()
     assert(await task.value)
 }
 
 @test
 fn checkingForCancellationThrowsOnceCancelled() async {
+    let checked = Latch()
+    let cancelled = Latch()
     let task = Task.spawn {
         do {
             try Task.checkCancellation()
         } catch {
             return false
         }
-        await Task.yield()
+        await checked.open()
+        await cancelled.wait()
         do {
             try Task.checkCancellation()
         } catch {
@@ -87,8 +92,9 @@ fn checkingForCancellationThrowsOnceCancelled() async {
         }
         return false
     }
-    await Task.yield()
+    await checked.wait()
     task.cancel()
+    await cancelled.open()
     assert(await task.value)
 }
 
@@ -147,14 +153,16 @@ fn aCancellationErrorSaysTheTaskWasCancelled() {
 @test
 fn aCancellationHandlerRunsAsTheTaskIsCancelled() async {
     let ran = Flag()
+    let installed = Latch()
     let task = Task.spawn {
         return await withTaskCancellationHandler(operation: {
-            await nap()
+            await installed.open()
+            return await nap()
         }, onCancel: {
             ran.set()
         })
     }
-    await Task.yield()
+    await installed.wait()
     assert(!ran.value)
     task.cancel()
     assert(ran.value)
@@ -164,8 +172,9 @@ fn aCancellationHandlerRunsAsTheTaskIsCancelled() async {
 @test
 fn aCancellationHandlerRunsAtOnceIfTheTaskIsCancelledAlready() async {
     let ran = Flag()
+    let cancelled = Latch()
     let task = Task.spawn {
-        await Task.yield()
+        await cancelled.wait()
         return await withTaskCancellationHandler(operation: {
             ran.value
         }, onCancel: {
@@ -173,23 +182,28 @@ fn aCancellationHandlerRunsAtOnceIfTheTaskIsCancelledAlready() async {
         })
     }
     task.cancel()
+    await cancelled.open()
     assert(await task.value)
 }
 
 @test
 fn aCancellationHandlerIsRemovedOnceItsOperationEnds() async {
     let ran = Flag()
+    let removed = Latch()
+    let cancelled = Latch()
     let task = Task.spawn {
         let value = await withTaskCancellationHandler(operation: {
             1
         }, onCancel: {
             ran.set()
         })
-        await Task.yield()
+        await removed.open()
+        await cancelled.wait()
         return value
     }
-    await Task.yield()
+    await removed.wait()
     task.cancel()
+    await cancelled.open()
     assertEqual(await task.value, 1)
     assert(!ran.value)
 }
@@ -200,6 +214,23 @@ fn aCancellationHandlersOperationMayThrow() async {
         throw CancellationError()
     }, onCancel: { })
     assert(thrown == none)
+}
+
+/// Shut until opened: what a test waits on for another task to reach a point.
+actor Latch {
+    var isOpen = false
+    let opened = WaitList()
+
+    fn wait() async {
+        while !isOpen {
+            await opened.park()
+        }
+    }
+
+    fn open() {
+        isOpen = true
+        opened.wakeAll()
+    }
 }
 
 class Flag {

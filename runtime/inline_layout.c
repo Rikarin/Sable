@@ -228,14 +228,14 @@ SableBlock *sable_inline_new_stack(void *memory, const SableInlineLayout *layout
 static SableBlock *unique_block(SableBlock **slot, int64_t room) {
     SableBlock *block = *slot;
     int64_t needed = block->length + room;
-    if (block->header.strong == 1 && !(block->header.flags & SABLE_IMMORTAL) && needed <= block->capacity) {
+    if (strong_count(&block->header) == 1 && !(block->header.flags & SABLE_IMMORTAL) && needed <= block->capacity) {
         return block;
     }
 
     int64_t capacity = needed <= block->capacity ? block->capacity : needed < 2 * block->capacity ? 2 * block->capacity : needed;
     // Grown in place, by realloc, only when it came from malloc: one from a
     // size class is copied below, as a shared one is.
-    if (block->header.strong == 1 && !(block->header.flags & (SABLE_IMMORTAL | SABLE_STACK | SABLE_CLASS_MASK))) {
+    if (strong_count(&block->header) == 1 && !(block->header.flags & (SABLE_IMMORTAL | SABLE_STACK | SABLE_CLASS_MASK))) {
         SableBlock *grown = realloc(block, sizeof(SableBlock) + (size_t)capacity);
         if (grown == NULL) {
             sable_trap("out of memory");

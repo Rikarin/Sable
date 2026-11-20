@@ -1403,9 +1403,16 @@ awaited as the scope ends.
   a sleep it is in ends at once and throws `CancellationError`, and
   `withTaskCancellationHandler(operation:onCancel:)` runs a handler as the
   task is cancelled.
+- An actor runs one call at a time. A call into it from outside, or a
+  read of its state, awaits its turn; a call it makes to itself, or to a
+  `nonisolated` member, does not. Actors are reentrant where they wait: a
+  call suspended at an `await` inside the actor lets others in, and goes
+  on once it has the actor again, so state read before an `await` may
+  have changed after it.
 - `Sendable` is a protocol; crossing an isolation boundary requires it, checked
   at compile time.
-- `@MainActor` pins a declaration to the main executor.
+- `@MainActor` pins a declaration to the main executor: the main thread,
+  which runs the program's entry.
 - `for await x in stream { }` iterates an `AsyncSequence`; `for try await`
   one whose Failure is not Never.
 

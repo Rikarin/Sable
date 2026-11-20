@@ -6,11 +6,12 @@ namespace Sable.CodeGen.Tests;
 
 /// <summary>
 ///     async and await (docs/02 §2.7, docs/04 §5): async functions are
-///     state machines whose frames are on their task's slab, and tasks are
-///     run by one executor, one at a time, switching only where one waits —
-///     so the interleaving is deterministic, and the interpreter's is the
-///     native one. Actors serialise by construction; calls into one from
-///     outside it await.
+///     state machines whose frames are on their task's slab, and tasks run
+///     on a pool of threads. A test of how tasks interleave where they wait
+///     runs natively with no pool (<see cref="Programs.OneThread" />), where
+///     the interleaving is deterministic and the interpreter's is the native
+///     one. Actors serialise their calls; calls into one from outside it
+///     await, and hop onto it.
 /// </summary>
 public sealed class AsyncTests {
     const string Declarations = """
@@ -57,7 +58,7 @@ public sealed class AsyncTests {
                     print("total \(total) count \(await c.bump())")
                     let late = Task.spawn { "late \(await work(1))" }
                     print(await late.value)
-                """)).Stdout
+                """), environment: OneThread).Stdout
         );
 
     // An actor's stored property is read from outside it by waiting, as a call is (#123).
@@ -84,7 +85,7 @@ public sealed class AsyncTests {
                         return 0
                     }
                     print("main")
-                """)).Stdout
+                """), environment: OneThread).Stdout
         );
 
     [Fact]
@@ -98,7 +99,7 @@ public sealed class AsyncTests {
                     await t.value
                     print("after")
                     let unawaited = Task.spawn { print("quiet") }
-                """)).Stdout
+                """), environment: OneThread).Stdout
         );
 
     /// <summary>
@@ -207,7 +208,7 @@ public sealed class AsyncTests {
                 }
                 print("before")
                 print(await failing.value)
-            """));
+            """), environment: OneThread);
         Assert.Equal("before\n", execution.Stdout);
         Assert.Equal("fatal error: array index out of range\n  at test.sb:7:16\n", execution.Stderr);
     }

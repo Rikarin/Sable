@@ -1845,8 +1845,8 @@ public sealed partial class SilGen {
             case NamedTypeSymbol { TypeArguments: [var success] } task when task.OriginalDefinition.Equals(Core.Task):
                 return TaskClass(success);
 
-            // An actor is a class whose calls are serialised: the cooperative
-            // scheduler runs one task at a time, so its state needs no more.
+            // An actor is a class whose calls are serialised by its executor:
+            // a call from outside it hops onto it first (SilGen.Actors.cs).
             case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Class or TypeKind.Actor } named when !named.OriginalDefinition.Equals(Core.Task): {
                 var classType = Begin(named, new ClassType(TypeName(named)));
                 _classes[classType] = named;
@@ -1877,6 +1877,14 @@ public sealed partial class SilGen {
                     };
 
                     classType.Fields.Add((field.Name, stored));
+                }
+
+                // An actor's serial executor, the runtime's: after every
+                // field, where reflection, which pairs the declared fields
+                // with the first ones, does not see it (SilGen.Actors.cs).
+                if (named.TypeKind == TypeKind.Actor) {
+                    classType.Fields.Add((ExecutorField, SilType.Int));
+                    classType.Fields.Add((ExecutorQueueField, SilType.Int));
                 }
 
                 return classType;
@@ -7059,7 +7067,13 @@ public sealed partial class SilGen {
                     return Missing(access, $"the member '{field.Name}'");
                 }
 
+                // An actor's state read from outside it: on the actor (SilGen.Actors.cs).
+                var back = IsolatedRead(field) ? HopInto(reference, []) : null;
                 var loaded = ReadField(Emit(new RefElementAddrInst(reference, index)));
+                if (back is not null) {
+                    HopBack(back, loaded);
+                }
+
                 End(reference);
                 return loaded;
             }
@@ -9391,6 +9405,15 @@ public sealed partial class SilGen {
                         return UnitValue.Instance;
                     }
 
+                    if (callee.Name == "park") {
+                        if (Expression(call.Arguments[0]) is not { } list) {
+                            return null;
+                        }
+
+                        Emit(new BuiltinInst("task_park", SilType.Unit, list));
+                        return UnitValue.Instance;
+                    }
+
                     if (callee.Name == "sleepUncancelled") {
                         if (Expression(call.Arguments[0]) is not { } nanoseconds) {
                             return null;
@@ -9693,22 +9716,35 @@ public sealed partial class SilGen {
             SilValue code = HasSelf(callee) && call.Receiver is not BoundSuperAccess && generator.IsDynamic(callee)
                 ? Emit(new ClassMethodInst(arguments[0], VTableSlot(callee), type))
                 : Emit(new FunctionRefInst(name, type));
+
+            // Into an actor, or onto the main actor, from outside it: a hop
+            // there and back (SilGen.Actors.cs).
+            var (hops, main) = Crossing(callee);
+            var back = hops && (main || arguments is [{ Type: ClassType }, ..]) ? HopInto(main ? null : arguments[0], arguments) : null;
+
             // A 'rethrows' callee given functions that throw nothing throws
             // nothing: the binder asked for no 'try', and nothing handles it.
             // Nor does a 'rethrows(E)' one whose E is Never here.
             return Invoke(code, type, arguments, borrows, call.Syntax,
                 cannotThrow: callee.IsRethrows && RethrownBy(call) is null
-                             && (callee.RethrownAlso is not { } also || ThrowsNothing(Sub(call.Substitution.Apply(also)))));
+                             && (callee.RethrownAlso is not { } also || ThrowsNothing(Sub(call.Substitution.Apply(also)))),
+                hopBack: back);
         }
 
         /// <summary>
         ///     Calls a function or a closure with borrowed arguments: <c>apply</c>,
         ///     or <c>try_apply</c> with the borrows ended on both of its edges.
         /// </summary>
-        SilValue? Invoke(SilValue reference, FunctionType type, List<SilValue> arguments, List<SilValue> borrows, SyntaxNode at, bool cannotThrow = false) {
+        /// <param name="hopBack">After a call into an actor: where the task ran before, to hop back to on either way out.</param>
+        SilValue? Invoke(SilValue reference, FunctionType type, List<SilValue> arguments, List<SilValue> borrows, SyntaxNode at, bool cannotThrow = false,
+            SilValue? hopBack = null) {
             BeginAccesses(borrows);
             if (type.Thrown is null) {
                 var apply = Emit(new ApplyInst(reference, type.Result, [..arguments]));
+                if (hopBack is not null) {
+                    HopBack(hopBack, type.Result == SilType.Unit ? null : apply);
+                }
+
                 EndAll(borrows);
                 return type.Result == SilType.Unit ? UnitValue.Instance : apply;
             }
@@ -9750,6 +9786,10 @@ public sealed partial class SilGen {
             }
 
             _current = errorBlock;
+            if (hopBack is not null) {
+                HopBack(hopBack, error);
+            }
+
             for (var i = borrows.Count - 1; i >= 0; i--) {
                 Release(borrows[i]);
             }
@@ -9762,6 +9802,10 @@ public sealed partial class SilGen {
             }
 
             _current = normal;
+            if (hopBack is not null) {
+                HopBack(hopBack, result);
+            }
+
             for (var i = borrows.Count - 1; i >= 0; i--) {
                 Release(borrows[i]);
             }

@@ -1,9 +1,15 @@
 namespace Sable.SIL;
 
 /// <summary>
-///     Tasks, interpreted as the runtime runs them (runtime/tasks.c): one
-///     executor, on one thread, that resumes each task that can go on, in the
-///     same order — so the interpreter's interleaving is the native one. A
+///     Tasks, interpreted as the runtime runs them (runtime/tasks.c) with no
+///     pool (SABLE_WORKERS=0): one executor, on one thread, that resumes each
+///     task that can go on, in the same order — by priority band, then in the
+///     order they became ready — so the interpreter's interleaving is the
+///     native one's with one thread. The interpreter stays on one thread; a
+///     program whose output does not depend on how its tasks interleave
+///     prints the same natively on the pool. With one thread running at a
+///     time, an actor is never held by another task when one hops to it —
+///     a task lets its actor go as it suspends — so a hop never waits here. A
 ///     task is its root frame, made from its start function when it first
 ///     runs and polled by its resume function each time it is resumed
 ///     (<see cref="AsyncLowering" />); its frames come from a slab of its own.
@@ -23,8 +29,11 @@ public sealed partial class SilInterpreter {
         /// <summary>The root frame, once the task has begun.</summary>
         public HeapObject? Frame;
 
-        public bool Done, Finishing, Cancelled, Sleeping;
-        public long Deadline, SleepTicket, Priority = MediumPriority;
+        public bool Done, Finishing, Cancelled, Sleeping, Queued;
+        public long Deadline, SleepTicket, Priority = MediumPriority, Escalated = MediumPriority;
+
+        /// <summary>The task it waits for, which its escalation reaches.</summary>
+        public InterpretedTask? WaitingOn;
         public List<InterpretedTask> Waiters { get; } = [];
 
         /// <summary>Its parent, unless detached; its children not yet finished.</summary>
@@ -52,7 +61,56 @@ public sealed partial class SilInterpreter {
     /// <summary>TaskPriority.medium: the main task's, and a detached task's unless it says.</summary>
     const long MediumPriority = 21;
 
-    readonly Queue<InterpretedTask> _runQueue = new();
+    /// <summary>The run queue: a queue per priority band, high first, as the runtime's.</summary>
+    readonly Queue<InterpretedTask>[] _runQueues = [new(), new(), new(), new()];
+
+    static int Band(long priority) => priority >= 25 ? 0 : priority >= 21 ? 1 : priority >= 17 ? 2 : 3;
+
+    void Enqueue(InterpretedTask task) {
+        task.Queued = true;
+        _runQueues[Band(task.Escalated)].Enqueue(task);
+    }
+
+    bool TryDequeue([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out InterpretedTask? task) {
+        foreach (var queue in _runQueues) {
+            if (queue.TryDequeue(out task)) {
+                task.Queued = false;
+                return true;
+            }
+        }
+
+        task = null;
+        return false;
+    }
+
+    bool AnyQueued => _runQueues.Any(static q => q.Count > 0);
+
+    /// <summary>
+    ///     Raised to at least this priority, with what it waits for and its
+    ///     children: a higher-priority task waits for it. One queued already
+    ///     moves to the back of its new band, as the runtime's does.
+    /// </summary>
+    void Escalate(InterpretedTask? task, long priority) {
+        while (task is { Done: false } && task.Escalated < priority) {
+            var from = Band(task.Escalated);
+            task.Escalated = priority;
+            if (task.Queued && Band(priority) < from) {
+                var others = _runQueues[from].Where(t => !ReferenceEquals(t, task)).ToList();
+                _runQueues[from].Clear();
+                others.ForEach(_runQueues[from].Enqueue);
+                Enqueue(task);
+            }
+
+            foreach (var child in task.Children) {
+                Escalate(child, priority);
+            }
+
+            task = task.WaitingOn;
+        }
+    }
+
+    /// <summary>The wait lists, by handle: tasks parked until woken, in the order they parked.</summary>
+    readonly Dictionary<long, List<InterpretedTask>> _waitLists = [];
 
     // The sleepers, by deadline and then by when they began to sleep; a
     // ticket that is no longer the task's is one it has left (cancelled).
@@ -65,6 +123,9 @@ public sealed partial class SilInterpreter {
     readonly HashSet<long> _released = [];
     readonly Dictionary<long, InterpretedGroup> _groups = [];
     InterpretedTask? _currentTask;
+
+    /// <summary>The next task spawned starts cancelled: a cancelled group's child.</summary>
+    bool _spawnCancelled;
     long _nextHandle, _nextTicket;
 
     /// <summary>The entry's own task: what runs when no task does, and an async entry point's frames' owner.</summary>
@@ -113,7 +174,7 @@ public sealed partial class SilInterpreter {
             var (task, ticket) = _sleepers.Dequeue();
             if (task.Sleeping && task.SleepTicket == ticket) {
                 task.Sleeping = false;
-                _runQueue.Enqueue(task);
+                Enqueue(task);
             }
         }
     }
@@ -149,7 +210,7 @@ public sealed partial class SilInterpreter {
     void RunTasks(InterpretedTask? until) {
         while (true) {
             WakeSleepers();
-            if (!_runQueue.TryDequeue(out var task)) {
+            if (!TryDequeue(out var task)) {
                 if (AnySleeping()) {
                     WaitForSleeper();
                     continue;
@@ -206,7 +267,8 @@ public sealed partial class SilInterpreter {
         task.Done = true;
         task.Finishing = false;
         foreach (var waiter in task.Waiters) {
-            _runQueue.Enqueue(waiter);
+            waiter.WaitingOn = null;
+            Enqueue(waiter);
         }
 
         task.Waiters.Clear();
@@ -214,7 +276,7 @@ public sealed partial class SilInterpreter {
             group.Done.Enqueue(_handles[task]);
             group.Running--;
             if (group.Waiter is { } waiter) {
-                _runQueue.Enqueue(waiter);
+                Enqueue(waiter);
                 group.Waiter = null;
             }
         }
@@ -242,11 +304,11 @@ public sealed partial class SilInterpreter {
 
     bool Yield() {
         WakeSleepers();
-        if (_runQueue.Count == 0) {
+        if (!AnyQueued) {
             return false;
         }
 
-        _runQueue.Enqueue(Current);
+        Enqueue(Current);
         return true;
     }
 
@@ -264,7 +326,7 @@ public sealed partial class SilInterpreter {
 
         if (task.Sleeping) {
             task.Sleeping = false;
-            _runQueue.Enqueue(task);
+            Enqueue(task);
         }
 
         foreach (var child in task.Children.ToList()) {
@@ -309,14 +371,16 @@ public sealed partial class SilInterpreter {
                 var priority = (long)operands[4]!;
                 var task = new InterpretedTask((string)operands[0]!, (string)operands[1]!, (string)operands[2]!, operands[3]) {
                     Parent = parent,
-                    Cancelled = parent?.Cancelled ?? false,
+                    Cancelled = (parent?.Cancelled ?? false) || _spawnCancelled,
                     Priority = priority >= 0 ? priority : parent?.Priority ?? MediumPriority,
                 };
+                task.Escalated = task.Priority;
+                _spawnCancelled = false;
                 parent?.Children.Add(task);
                 var handle = ++_nextHandle;
                 _tasks[handle] = task;
                 _handles[task] = handle;
-                _runQueue.Enqueue(task);
+                Enqueue(task);
                 return handle;
             }
 
@@ -329,7 +393,44 @@ public sealed partial class SilInterpreter {
                 }
 
                 task.Waiters.Add(Current);
+                Current.WaitingOn = task;
+                Escalate(task, Current.Escalated);
                 return true;
+            }
+
+            case "task_spawn_cancelled":
+                _spawnCancelled = true;
+                return null;
+
+            // A hop never waits on one thread (see above); where a task runs is not kept.
+            case "async_hop":
+                return false;
+
+            case "task_actor_current":
+                return 0L;
+
+            case "task_waitlist_new": {
+                var handle = ++_nextHandle;
+                _waitLists[handle] = [];
+                return handle;
+            }
+
+            case "task_waitlist_free":
+                _waitLists.Remove((long)operands[0]!);
+                return null;
+
+            case "async_park":
+                _waitLists[(long)operands[0]!].Add(Current);
+                return true;
+
+            case "task_waitlist_wake": {
+                var list = _waitLists[(long)operands[0]!];
+                foreach (var parked in list) {
+                    Enqueue(parked);
+                }
+
+                list.Clear();
+                return null;
             }
 
             case "async_yield":

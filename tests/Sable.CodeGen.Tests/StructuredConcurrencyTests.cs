@@ -87,7 +87,7 @@ public sealed class StructuredConcurrencyTests {
                     for line in await task.value {
                         print(line)
                     }
-                """)).Stdout
+                """), environment: OneThread).Stdout
         );
 
     [Fact]
@@ -168,7 +168,7 @@ public sealed class StructuredConcurrencyTests {
                         return first
                     }
                     print("after \(taken)")
-                """)).Stdout
+                """), environment: OneThread).Stdout
         );
 
     const string Odd = """
@@ -266,7 +266,7 @@ public sealed class StructuredConcurrencyTests {
                     }
                     late.cancel()
                     print(await late.value)
-                """)).Stdout
+                """), environment: OneThread).Stdout
         );
 
     /// <summary>
@@ -324,7 +324,7 @@ public sealed class StructuredConcurrencyTests {
                     }
                     box.task = b
                     print("main ends")
-                """)).Stdout
+                """), environment: OneThread).Stdout
         );
 
     const string Children = """
@@ -374,7 +374,7 @@ public sealed class StructuredConcurrencyTests {
                     let names = ["x", "y"]
                     async let joined: String = "\(names[0])\(names[1])"
                     print(await joined)
-                """)).Stdout
+                """), environment: OneThread).Stdout
         );
 
     [Fact]

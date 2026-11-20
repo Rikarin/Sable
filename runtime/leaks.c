@@ -11,7 +11,9 @@
 // writes per class and per array element type; weak and unowned
 // references keep nothing alive, and are not followed.
 
-// Open addressing, by address; a removed object leaves a tombstone.
+// Open addressing, by address; a removed object leaves a tombstone. Every
+// thread makes and frees objects, so the set is taken under a lock.
+static SpinLock tracked_lock;
 static SableObject **tracked;
 static size_t tracked_capacity, tracked_used;
 #define TRACKED_GONE ((SableObject *)1)
@@ -81,17 +83,21 @@ static void leaks_start(void) {
 
 // An object is alive: counted, and kept in the set when leaks are checked.
 static void object_born(SableObject *object) {
-    live_objects++;
+    thread_count(&current_thread()->live_objects, 1);
     if (tracking) {
+        spin_lock(&tracked_lock);
         track_insert(object);
+        spin_unlock(&tracked_lock);
     }
 }
 
 // An object's memory is no longer the program's.
 static void object_gone(SableObject *object) {
-    live_objects--;
+    thread_count(&current_thread()->live_objects, -1);
     if (tracking) {
+        spin_lock(&tracked_lock);
         track_remove(object);
+        spin_unlock(&tracked_lock);
     }
 }
 
@@ -128,7 +134,7 @@ static int64_t leaked_index(const void *object) {
 // A strong reference the object being visited holds: what its visitor,
 // the compiler's, calls for each. Only references between leaked objects
 // are kept; the rest of the heap is gone by now.
-static void (*visit_hook)(void *pointer);
+static _Thread_local void (*visit_hook)(void *pointer);
 
 void sable_heap_visit(void *pointer) {
     if (visit_hook != NULL) {
@@ -160,7 +166,7 @@ void sable_array_destroy(void *pointer);
 // Each strong reference the object holds: a class's fields, an array's elements.
 static void visit_object(SableObject *object) {
     const SableMetadata *type = object->type;
-    if (type == NULL || type->visit == NULL || (object->flags & SABLE_DEINITED)) {
+    if (type == NULL || type->visit == NULL || (object_flags(object) & SABLE_DEINITED)) {
         return;
     }
 
@@ -353,6 +359,7 @@ static void print_cycle(int64_t start, const int64_t *first_edge, const int64_t 
 
 // What leaked: each type and how many, then the cycles that keep them.
 static void report_leaks(void) {
+    int64_t live_objects = live_object_count();
     leaked = malloc((size_t)live_objects * sizeof(SableObject *));
     if (leaked == NULL) {
         return;
@@ -477,8 +484,9 @@ void sable_make_immortal(void *pointer) {
         return;
     }
 
-    object->flags |= SABLE_IMMORTAL;
+    flags_set(object, SABLE_IMMORTAL);
     object_gone(object);
+    spin_lock(&tracked_lock);
     if (immortal_count == immortal_capacity) {
         immortal_capacity = immortal_capacity < 16 ? 16 : immortal_capacity * 2;
         immortals = realloc(immortals, (size_t)immortal_capacity * sizeof(SableObject *));
@@ -488,6 +496,7 @@ void sable_make_immortal(void *pointer) {
     }
 
     immortals[immortal_count++] = object;
+    spin_unlock(&tracked_lock);
 }
 
 static bool track_contains(const SableObject *object) {
@@ -516,7 +525,7 @@ static void reach_from_immortal(void *pointer) {
     }
 
     track_remove(object);
-    live_objects--;
+    thread_count(&current_thread()->live_objects, -1);
     if (reached_count == reached_capacity) {
         reached_capacity = reached_capacity < 64 ? 64 : reached_capacity * 2;
         reached = realloc(reached, (size_t)reached_capacity * sizeof(SableObject *));

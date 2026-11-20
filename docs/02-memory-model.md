@@ -465,5 +465,9 @@ the churn** — is the idiom the language is designed to make natural.
    variable-size types are not existential-compatible.*
 4. **Atomic vs non-atomic refcounts.** Decide whether to carry the flag bit
    (runtime branch, Objective-C-style) or to require `@shared`/`@local`
-   annotation. *Leaning: flag bit, with the compiler setting it statically where
-   it can prove locality.*
+   annotation. *Settled: the flag bit (SABLE_SHARED, in the header's flag
+   word), tested inline on every retain and release; the compiler sets it,
+   on an object and what it reaches, where a value crosses tasks — a
+   spawned closure, a task's result, an actor call's arguments and result
+   — and everything else is counted with plain loads and stores (docs/04,
+   "Async, as implemented").*

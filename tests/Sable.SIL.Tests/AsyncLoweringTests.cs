@@ -263,4 +263,45 @@ public sealed class AsyncLoweringTests {
         Assert.Contains(module.Functions.SelectMany(static f => f.Blocks).SelectMany(static b => b.Instructions), static i => i is BuiltinInst { Name: "task_spawn" });
         Assert.Equal("declared\na starts\na ends\na\nleaving\nunread starts\nunread ends\n", Run(module).Output);
     }
+
+    /// <summary>
+    ///     A call into an actor from outside it hops onto the actor and back
+    ///     (SilGen.Actors.cs), and so does a read of its state; a call the
+    ///     actor makes to itself, or to what is 'nonisolated', does not.
+    /// </summary>
+    [Fact]
+    public void ACallIntoAnActorFromOutsideItHopsThereAndBack() {
+        var module = Lower("""
+                           module M
+                           actor Counter {
+                               var n = 0
+                               fn bump() -> Int {
+                                   n += 1
+                                   return n
+                               }
+                               fn twice() -> Int {
+                                   let _ = bump()
+                                   return bump()
+                               }
+                               nonisolated fn name() -> String {
+                                   return "counter"
+                               }
+                           }
+                           @main
+                           fn main() async {
+                               let c = Counter()
+                               print(await c.bump())
+                               print(await c.twice())
+                               print(await c.n)
+                               print(c.name())
+                           }
+                           """);
+        static int Hops(SilFunction function) =>
+            function.Blocks.SelectMany(static b => b.Instructions).Count(static i => i is BuiltinInst { Name: "task_hop" });
+
+        Assert.All(module.Functions.Where(static f => f.Name.Contains("Counter", StringComparison.Ordinal)), f => Assert.Equal(0, Hops(f)));
+        // Three crossings — two calls and a read — each there and back.
+        Assert.Equal(6, module.Functions.Where(static f => f.Name.Contains("main", StringComparison.Ordinal)).Sum(Hops));
+        Assert.Equal("1\n3\n3\ncounter\n", Run(module).Output);
+    }
 }

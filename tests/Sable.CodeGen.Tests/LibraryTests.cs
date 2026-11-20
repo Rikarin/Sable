@@ -595,11 +595,11 @@ fn main() {
 
                 fn produce(_ channel: Channel<Int>, _ count: Int) async -> Int {
                     for i in 0..<count {
-                        channel.send(i * i)
+                        await channel.send(i * i)
                         print("sent \(i)")
                         await yieldNow()
                     }
-                    channel.close()
+                    await channel.close()
                     return count
                 }
 
@@ -623,7 +623,7 @@ fn main() {
                     let consumer = Task.spawn { await consume(channel) }
                     let producer = Task.spawn { await produce(channel, 4) }
                     print("sum \(await consumer.value) of \(await producer.value)")
-                    print(channel.tryReceive() == none)
+                    print(await channel.tryReceive() == none)
 
                     let squares = await withTaskGroup(of: Int.self) { group in
                         for i in 1...4 {
@@ -641,18 +641,18 @@ fn main() {
                     let stop = Channel<Int>()
                     let ticker = Task.spawn {
                         var ticks = 0
-                        while !stop.isClosed {
+                        while !(await stop.isClosed) {
                             ticks += 1
                             await yieldNow()
                         }
                         return ticks > 0
                     }
                     try? await sleep(Duration.milliseconds(10))
-                    stop.close()
+                    await stop.close()
                     print(start.elapsed >= Duration.milliseconds(10))
                     print(await ticker.value)
                 }
-                """).Stdout
+                """, environment: OneThread).Stdout
         );
 
     /// <summary>

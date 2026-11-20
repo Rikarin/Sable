@@ -1,0 +1,33 @@
+module Bench
+
+import Sable.Time
+
+// Spawn/await throughput: a million tasks that each give a number, spawned
+// in batches of ten thousand and awaited in order — once from the program's
+// own task, on the main thread, and once from a task on the pool.
+
+fn run(_ label: String) async -> Int {
+    let start = Instant.now()
+    var total = 0
+    for batch in 0..<100 {
+        var tasks: Task<Int>[>..] = []
+        for i in 0..<10_000 {
+            tasks.append(Task.spawn { i + batch })
+        }
+        for task in tasks {
+            total += await task.value
+        }
+    }
+    print("\(label): \(start.elapsed.totalNanoseconds / 1_000_000) ns per task")
+    return total
+}
+
+@main
+fn main() async {
+    let fromMain = await run("spawn+await from main")
+    let runner = Task.spawn { await run("spawn+await in a task") }
+    let inTask = await runner.value
+    if fromMain != inTask {
+        print("the totals differ")
+    }
+}

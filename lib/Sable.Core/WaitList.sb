@@ -1,0 +1,57 @@
+module Sable.Core
+
+/// Tasks parked until woken: what an actor's method waits in for a change
+/// another call to the actor makes — Sable.Concurrency's Channel parks its
+/// receivers in one. A task parked inside an actor's method lets the actor
+/// go while it waits, so the call that wakes it can run, and takes the
+/// actor again as it goes on. Being woken says only that something changed:
+/// a parked task looks again at what it waits for, and parks again if it
+/// must.
+///
+/// ```sable
+/// actor Gate {
+///     var isOpen = false
+///     let opened = WaitList()
+///
+///     fn pass() async {
+///         while !isOpen {
+///             await opened.park()
+///         }
+///     }
+///
+///     fn openUp() {
+///         isOpen = true
+///         opened.wakeAll()
+///     }
+/// }
+/// ```
+public class WaitList {
+    let handle: Int
+
+    public init() {
+        handle = WaitList.make()
+    }
+
+    deinit {
+        WaitList.free(handle)
+    }
+
+    /// Parks the running task until 'wakeAll()' is next called.
+    public fn park() async {
+        await Task.park(handle)
+    }
+
+    /// Wakes every task parked, in the order they parked.
+    public fn wakeAll() {
+        WaitList.wake(handle)
+    }
+
+    @builtin("task_waitlist_new")
+    static fn make() -> Int
+
+    @builtin("task_waitlist_free")
+    static fn free(_ handle: Int)
+
+    @builtin("task_waitlist_wake")
+    static fn wake(_ handle: Int)
+}

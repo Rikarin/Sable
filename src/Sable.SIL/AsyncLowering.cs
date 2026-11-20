@@ -29,9 +29,11 @@ namespace Sable.SIL;
 ///         again from its root. The places a task itself waits are the
 ///         runtime's: <c>async_wait</c> (a task not yet finished),
 ///         <c>async_group_wait</c> (a group's next child to finish),
-///         <c>async_yield</c> and <c>async_sleep</c>, each of which says
-///         whether the task must suspend, having queued it where it will be
-///         woken.
+///         <c>async_hop</c> (an actor to be free, or the main thread),
+///         <c>async_yield</c>, <c>async_sleep</c> and <c>async_park</c> (a
+///         wait list to be woken), each of which says whether the task must
+///         suspend, having noted what it waits for: the executor puts it
+///         where it will be woken once it has.
 ///     </para>
 ///     <para>
 ///         A task that can never go on — still waiting as the program ends,
@@ -126,7 +128,7 @@ public static class AsyncLowering {
             callee.Type as FunctionType ?? ((ThickFunctionType)callee.Type).Signature;
 
         static bool IsWait(SilInstruction instruction) =>
-            instruction is BuiltinInst { Name: "task_yield" or "task_sleep" or "task_wait" or "task_group_wait" };
+            instruction is BuiltinInst { Name: "task_yield" or "task_sleep" or "task_wait" or "task_group_wait" or "task_hop" or "task_park" };
 
         static bool IsSuspension(SilInstruction instruction) =>
             IsWait(instruction) || instruction is ApplyInst apply && IsAsyncCallee(apply.Callee) || instruction is TryApplyInst tryApply && IsAsyncCallee(tryApply.Callee);
@@ -655,7 +657,7 @@ public static class AsyncLowering {
             switch (instruction) {
                 // A task's own waits: the runtime says whether to suspend,
                 // having queued the task where it will be woken.
-                case BuiltinInst { Name: "task_wait" or "task_group_wait" } wait: {
+                case BuiltinInst { Name: "task_wait" or "task_group_wait" or "task_hop" } wait: {
                     if (!async) {
                         throw new InvalidOperationException($"'{wait.Name}' outside an async function, in {function.Name}");
                     }
@@ -663,17 +665,17 @@ public static class AsyncLowering {
                     // Woken, it asks again: the task may not have finished.
                     var check = function.AddBlock();
                     At(block, new BranchInst(check));
-                    var must = At(check, new BuiltinInst(wait.Name == "task_wait" ? "async_wait" : "async_group_wait", SilType.Bool, wait.Operands[0]));
+                    var must = At(check, new BuiltinInst(wait.Name switch { "task_wait" => "async_wait", "task_hop" => "async_hop", _ => "async_group_wait" }, SilType.Bool, wait.Operands[0]));
                     At(check, new CondBranchInst(must, Suspended(check), [], after, []));
                     break;
                 }
 
-                case BuiltinInst { Name: "task_yield" or "task_sleep" } wait: {
+                case BuiltinInst { Name: "task_yield" or "task_sleep" or "task_park" } wait: {
                     if (!async) {
                         throw new InvalidOperationException($"'{wait.Name}' outside an async function, in {function.Name}");
                     }
 
-                    var must = At(block, new BuiltinInst(wait.Name == "task_yield" ? "async_yield" : "async_sleep", SilType.Bool, [..wait.Operands]));
+                    var must = At(block, new BuiltinInst(wait.Name switch { "task_yield" => "async_yield", "task_park" => "async_park", _ => "async_sleep" }, SilType.Bool, [..wait.Operands]));
                     At(block, new CondBranchInst(must, Suspended(after), [], after, []));
                     break;
                 }

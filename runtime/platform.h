@@ -13,6 +13,14 @@
 #ifndef SABLE_RUNTIME_PLATFORM_H
 #define SABLE_RUNTIME_PLATFORM_H
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
 // ---- Start-up --------------------------------------------------------------
 
 // What the system needs set up before any Sable code runs: the main
@@ -56,6 +64,40 @@ static int64_t peak_memory(void);
 int64_t sable_time_monotonic(void);
 int64_t sable_time_wall_clock(void);
 void sable_time_sleep(int64_t nanoseconds);
+
+// ---- Threads -------------------------------------------------------------
+
+// The executor's pool (tasks.c) is a few threads, one per core, that wait
+// for work on a condition. A mutex and a condition are the system's own:
+// pthread's here, a slim reader/writer lock and a condition variable on
+// Windows. Each is set up once, by its init, before any thread uses it.
+#ifdef _WIN32
+typedef SRWLOCK PlatformMutex;
+typedef CONDITION_VARIABLE PlatformCondition;
+#else
+typedef pthread_mutex_t PlatformMutex;
+typedef pthread_cond_t PlatformCondition;
+#endif
+
+static void mutex_init(PlatformMutex *mutex);
+static void mutex_lock(PlatformMutex *mutex);
+static void mutex_unlock(PlatformMutex *mutex);
+static void condition_init(PlatformCondition *condition);
+// Waits, the mutex held, until signalled — or, given a time in
+// nanoseconds of sable_time_monotonic, until then at the latest (a
+// negative 'until' waits for a signal alone). May wake for no reason.
+static void condition_wait(PlatformCondition *condition, PlatformMutex *mutex, int64_t until);
+static void condition_signal(PlatformCondition *condition);
+static void condition_broadcast(PlatformCondition *condition);
+
+// A thread of its own running 'run(argument)', never joined, with a stack
+// as large as the main thread's and watched for overflow as it is; false
+// when the system will not make one.
+static bool thread_start(void (*run)(void *argument), void *argument);
+// The processors the program may run on, at least one.
+static int processor_count(void);
+// Lets another thread run: a spin that has waited long enough.
+static void thread_yield(void);
 
 // ---- Arguments, files and the environment -------------------------------
 

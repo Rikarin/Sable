@@ -184,9 +184,9 @@ async fn main() {
         }
         let queued: U64[>..] = [8, 3, 9, 14]
         for id in queued {
-            requests.send(id)
+            await requests.send(id)
         }
-        requests.close()
+        await requests.close()
         var served = 0
         for await count in workers {
             served += count

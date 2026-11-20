@@ -86,7 +86,8 @@ internal static class Programs {
         int stepLimit = 10_000_000,
         string input = "",
         IReadOnlyList<string>? arguments = null,
-        Action<string>? afterEach = null
+        Action<string>? afterEach = null,
+        IReadOnlyDictionary<string, string>? environment = null
     ) {
         var (output, errors, trap) = Interpret(source, stepLimit, input, arguments ?? []);
         afterEach?.Invoke("interpreter");
@@ -94,7 +95,7 @@ internal static class Programs {
             return new(output, errors + trap?.Report, trap is null ? 0 : 134);
         }
 
-        var native = BuildAndRun(source, input: input, arguments: arguments);
+        var native = BuildAndRun(source, input: input, arguments: arguments, environment: environment);
         afterEach?.Invoke("native");
         Assert.True(
             (trap is null) == (native.ExitCode == 0),
@@ -112,6 +113,14 @@ internal static class Programs {
 
         return native;
     }
+
+    /// <summary>
+    ///     The executor with no pool (runtime/tasks.c): the main thread runs
+    ///     every task, one at a time, in the order the interpreter does. For
+    ///     a test of how tasks interleave where they wait, which on the pool
+    ///     depends on how the threads are scheduled.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, string> OneThread = new Dictionary<string, string> { ["SABLE_WORKERS"] = "0" };
 
     /// <summary>A program with one main, as most tests want.</summary>
     public static string Program(string declarations, string body) =>

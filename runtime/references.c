@@ -172,19 +172,19 @@ void sable_region_pop(void *pointer) {
 
 void sable_unowned_retain(void *pointer) {
     SableObject *object = pointer;
-    if (object != NULL && !(object->flags & SABLE_IMMORTAL)) {
-        object->flags += SABLE_UNOWNED_ONE;
+    if (object != NULL && !(object_flags(object) & SABLE_IMMORTAL)) {
+        __atomic_fetch_add(&object->flags, SABLE_UNOWNED_ONE, __ATOMIC_RELAXED);
     }
 }
 
 void sable_unowned_release(void *pointer) {
     SableObject *object = pointer;
-    if (object == NULL || (object->flags & SABLE_IMMORTAL)) {
+    if (object == NULL || (object_flags(object) & SABLE_IMMORTAL)) {
         return;
     }
 
-    object->flags -= SABLE_UNOWNED_ONE;
-    if (unowned_count(object) == 0 && (object->flags & SABLE_DEINITED)) {
+    uint32_t flags = __atomic_sub_fetch(&object->flags, SABLE_UNOWNED_ONE, __ATOMIC_ACQ_REL);
+    if ((flags >> SABLE_UNOWNED_SHIFT) == 0 && (flags & SABLE_DEINITED)) {
         object_gone(object);
         object_free(object);
     }
@@ -193,7 +193,7 @@ void sable_unowned_release(void *pointer) {
 // Reading an unowned reference: the object, retained — or a trap, if it is gone.
 void sable_unowned_load(void *pointer) {
     SableObject *object = pointer;
-    if (object->flags & SABLE_DEINITED) {
+    if (object_flags(object) & SABLE_DEINITED) {
         trap_here("read an unowned reference to an object that is gone");
     }
 
@@ -212,6 +212,10 @@ typedef struct SableWeakEntry {
 
 static SableWeakEntry **side_table;
 static int64_t side_capacity, side_count;
+
+// The table and every entry's count, for every thread: weak references are
+// few, and each operation on one is short.
+static SpinLock side_lock;
 
 #define SIDE_TOMBSTONE ((SableWeakEntry *)1)
 
@@ -281,60 +285,96 @@ void *sable_weak_entry(void *pointer) {
         return NULL;
     }
 
+    spin_lock(&side_lock);
     SableWeakEntry *entry;
-    if (object->flags & SABLE_HAS_SIDE) {
+    if (object_flags(object) & SABLE_HAS_SIDE) {
         entry = *side_find(object);
     } else {
         entry = malloc(sizeof *entry);
+        if (entry == NULL) {
+            sable_trap("out of memory");
+        }
+
         entry->object = object;
         entry->count = 0;
         side_insert(entry);
-        object->flags |= SABLE_HAS_SIDE;
+        flags_set(object, SABLE_HAS_SIDE);
     }
 
     entry->count++;
+    spin_unlock(&side_lock);
     return entry;
 }
 
 void sable_weak_retain(void *pointer) {
     SableWeakEntry *entry = pointer;
     if (entry != NULL) {
+        spin_lock(&side_lock);
         entry->count++;
+        spin_unlock(&side_lock);
     }
 }
 
 void sable_weak_release(void *pointer) {
     SableWeakEntry *entry = pointer;
-    if (entry == NULL || --entry->count > 0) {
+    if (entry == NULL) {
+        return;
+    }
+
+    spin_lock(&side_lock);
+    if (--entry->count > 0) {
+        spin_unlock(&side_lock);
         return;
     }
 
     if (entry->object != NULL) {
         side_remove(entry->object);
-        entry->object->flags &= ~(uint32_t)SABLE_HAS_SIDE;
+        flags_clear(entry->object, SABLE_HAS_SIDE);
     }
 
+    spin_unlock(&side_lock);
     free(entry);
 }
 
 // Reading a weak reference: its object, retained, or null once it is gone.
+// Another thread may be releasing it at the same time: a count that has
+// reached zero is never raised again, and the dying object is taken out of
+// its entry, under the same lock, before its deinit runs.
 void *sable_weak_load(void *pointer) {
     SableWeakEntry *entry = pointer;
-    if (entry == NULL || entry->object == NULL) {
+    if (entry == NULL) {
         return NULL;
     }
 
-    sable_retain(entry->object);
-    return entry->object;
+    spin_lock(&side_lock);
+    SableObject *object = entry->object;
+    if (object != NULL) {
+        uint32_t strong = __atomic_load_n(&object->strong, __ATOMIC_RELAXED);
+        do {
+            if (strong == 0) {
+                object = NULL;
+                break;
+            }
+        } while (!__atomic_compare_exchange_n(&object->strong, &strong, strong + 1, true, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
+    }
+
+    spin_unlock(&side_lock);
+    if (object != NULL) {
+        count_retain();
+    }
+
+    return object;
 }
 
-// The object has died: its weak references now read as none.
+// The object is dying: its weak references now read as none.
 static void sable_weak_object_died(SableObject *object) {
+    spin_lock(&side_lock);
     SableWeakEntry **slot = side_find(object);
     if (slot != NULL) {
         (*slot)->object = NULL;
         *slot = SIDE_TOMBSTONE;
     }
 
-    object->flags &= ~(uint32_t)SABLE_HAS_SIDE;
+    flags_clear(object, SABLE_HAS_SIDE);
+    spin_unlock(&side_lock);
 }

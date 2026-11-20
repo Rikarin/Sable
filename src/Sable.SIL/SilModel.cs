@@ -1626,6 +1626,18 @@ public static class SilBuiltins {
             return operands is [AddressType { Pointee: ClassType }] ? new([operands[0]], SilType.Bool) : null;
         }
 
+        // A value crossing from one task to another — a task's result, an
+        // actor call's argument or result: every object it holds shared,
+        // counted atomically from then on (runtime/tasks.c's sable_share).
+        if (name == "share") {
+            return operands is [var shared] ? new([shared], SilType.Unit) : null;
+        }
+
+        // An address, as an integer: an actor's executor, as a hop names it.
+        if (name == "address_to_int") {
+            return operands is [AddressType] ? new([operands[0]], SilType.Int) : null;
+        }
+
         // '@immortal static let': every object the value holds made
         // immortal — never counted, never released, and no leak.
         if (name == "make_immortal") {
@@ -2075,6 +2087,22 @@ public static class SilBuiltins {
         Add("task_is_cancelled", SilType.Bool);
         Add("task_priority", SilType.Int);
         Add("task_handler_pop", SilType.Unit);
+
+        // Actors (runtime/tasks.c): where the running task runs — an actor
+        // object's identity, 1 for the main actor, 0 for anywhere — and a
+        // hop there, a place the task may suspend (AsyncLowering). Wait
+        // lists, by handle: made, freed, every task in one woken, and the
+        // running task parked in one until then.
+        Add("task_actor_current", SilType.Int);
+
+        // The next task the running thread spawns starts cancelled: a
+        // cancelled group's child, before any thread can run it.
+        Add("task_spawn_cancelled", SilType.Unit);
+        Add("task_hop", SilType.Unit, SilType.Int);
+        Add("task_waitlist_new", SilType.Int);
+        Add("task_waitlist_free", SilType.Unit, SilType.Int);
+        Add("task_waitlist_wake", SilType.Unit, SilType.Int);
+        Add("task_park", SilType.Unit, SilType.Int);
         Add("task_group_new", SilType.Int);
         Add("task_group_add", SilType.Unit, SilType.Int, SilType.Int);
         Add("task_group_wait", SilType.Unit, SilType.Int);

@@ -21,9 +21,10 @@ typedef struct SableAccess {
     int32_t modify;
 } SableAccess;
 
-static SableAccess *accesses;
-int64_t sable_access_count;
-static int64_t access_capacity;
+// Per thread: a task's accesses are its own, and run on its thread.
+static _Thread_local SableAccess *accesses;
+_Thread_local int64_t sable_access_count;
+static _Thread_local int64_t access_capacity;
 
 // A storage of no bytes still has a place: one byte of it.
 static bool overlaps(const SableAccess *access, const char *storage, int64_t size) {

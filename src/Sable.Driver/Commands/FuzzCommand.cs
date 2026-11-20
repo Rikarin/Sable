@@ -357,9 +357,21 @@ public sealed partial class FuzzCommand : HarnessCommand {
         text.Append(CultureInfo.InvariantCulture, $"{layout.Target}: {failing.Count} failing input{(failing.Count == 1 ? "" : "s")}");
         foreach (var group in failing.GroupBy(static o => Signature(o.Report!)).OrderBy(static g => g.Key, StringComparer.Ordinal)) {
             text.Append(CultureInfo.InvariantCulture, $"\n  {group.Key}");
+
+            // One input of each failure is minimised, the smallest, unless one
+            // already is: a minimisation runs for its whole time limit, and a
+            // run that finds one bug a hundred ways would otherwise spend a
+            // minute on each of them after it.
+            var minimise = group.Any(static o => File.Exists(o.Input + ".min"))
+                ? null
+                : group.Select(static o => o.Input)
+                    .Where(static i => Path.GetFileName(i) is var n && !n.StartsWith("timeout-", StringComparison.Ordinal) && !n.StartsWith("slow-unit-", StringComparison.Ordinal))
+                    .OrderBy(static i => new FileInfo(i).Length)
+                    .ThenBy(static i => i, StringComparer.Ordinal)
+                    .FirstOrDefault();
             foreach (var (input, report) in group) {
                 var name = Path.GetFileName(input);
-                if (!File.Exists(input + ".min") && !name.StartsWith("timeout-", StringComparison.Ordinal) && !name.StartsWith("slow-unit-", StringComparison.Ordinal)) {
+                if (input == minimise) {
                     RunEngine(fuzzer, MinimiseArguments(input, MinimiseSeconds), Environment(target), quiet: true);
                 }
 

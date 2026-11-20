@@ -2976,6 +2976,16 @@ public sealed partial class Binder {
 
     /// <summary>An 'async let': its child task's result, so reading it awaits, and tries when the child may throw.</summary>
     BoundExpression AwaitedLocal(SyntaxNode syntax, LocalSymbol local) {
+        // Its child belongs to the scope that declared it, which waits for
+        // it: a closure, which may run anywhere and later, cannot.
+        if (!ReferenceEquals(local.ContainingSymbol, _containingSymbol)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_AsyncLetCaptured,
+                syntax.Span,
+                $"'{local.Name}' is an 'async let', read only where it is declared, not from a closure: read it first, and capture the value"
+            );
+        }
+
         MarkAsync(syntax.Span, $"'{local.Name}', an 'async let',");
         if (local.AsyncLetThrownType is { } thrown) {
             MarkThrows(syntax.Span, $"'{local.Name}', an 'async let' whose child", thrown);

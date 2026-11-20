@@ -102,10 +102,10 @@ public class Task<Success> {
     @builtin("task_priority")
     static fn runningPriority() -> Int
 
-    /// Runs 'handler' if the running task is cancelled — at once, if it
+    /// Runs 'onCancel' if the running task is cancelled — at once, if it
     /// already is — until it is removed.
     @intrinsic
-    static fn installCancellationHandler(_ handler: () -> ())
+    static fn installCancellationHandler(_ onCancel: () -> ())
 
     @builtin("task_handler_pop")
     static fn removeCancellationHandler()

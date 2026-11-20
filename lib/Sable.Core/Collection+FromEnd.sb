@@ -1,0 +1,61 @@
+module Sable.Core
+
+// Reading by a position counted from the end (FromEnd.sb), which every
+// collection that can go backwards does: in constant time when it can
+// jump, 'count - n' from the start; one step at a time back from the end
+// when it cannot, as a String does.
+
+extension Collection {
+    /// The position 'distance' after this one, one step at a time: what a
+    /// collection that can neither jump nor go back has. A negative
+    /// distance traps.
+    public fn index(_ position: Index, offsetBy distance: Int) -> Index {
+        precondition(nonNegative: distance, "distance")
+        var at = position
+        var left = distance
+        while left > 0 {
+            at = self.index(after: at)
+            left -= 1
+        }
+        return at
+    }
+}
+
+extension BidirectionalCollection {
+    /// The element 'n' back from the end: '^1' is the last. Found by
+    /// stepping back from the end; '^0', or more than the count, traps.
+    ///
+    /// ```sable
+    /// assert("añb"[^2] == 'ñ')
+    /// ```
+    public subscript(fromEnd: FromEnd) -> Element {
+        get {
+            var position = endIndex
+            var left = fromEnd.n
+            if left <= 0 {
+                FromEnd.outOfRange(fromEnd.n, self.count)
+            }
+            while left > 0 {
+                if position == startIndex {
+                    FromEnd.outOfRange(fromEnd.n, self.count)
+                }
+                position = self.index(before: position)
+                left -= 1
+            }
+            return self[position]
+        }
+    }
+}
+
+extension RandomAccessCollection {
+    /// The element 'n' back from the end, in constant time: '^1' is the
+    /// last. '^0', or more than the count, traps.
+    ///
+    /// ```sable
+    /// let xs = [1, 2, 3]
+    /// assert(xs[^1] == 3 && xs[^3] == 1)
+    /// ```
+    public subscript(fromEnd: FromEnd) -> Element {
+        get => self[self.index(startIndex, offsetBy: fromEnd.elementOffset(in: self.count))]
+    }
+}

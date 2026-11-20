@@ -3074,6 +3074,12 @@ public sealed partial class SilGen {
             return IsExtensionOnly(property);
         }
 
+        // ... and a subscript's its subscript's: 'xs[^1]''s 'get' is not a
+        // conformer's 'get(_ key:)'.
+        if (member is FunctionSymbol { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FunctionSymbol { FunctionKind: FunctionKind.Subscript } subscript }) {
+            return IsExtensionOnly(subscript);
+        }
+
         if (member.ContainingSymbol is not ExtensionSymbol { ExtendedType: NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol }) {
             return false;
         }
@@ -8324,8 +8330,13 @@ public sealed partial class SilGen {
         ///     A protocol's subscript, used on a T that stands for a known type
         ///     now: that type's own. Any other subscript is itself.
         /// </summary>
+        /// <remarks>
+        ///     Only a requirement has a witness: a subscript a protocol's
+        ///     extension gives, by a FromEnd or a range, is its own getter.
+        /// </remarks>
         FunctionSymbol SubscriptWitness(FunctionSymbol subscript, BoundExpression receiver) =>
-            OwnerOf(subscript) is { TypeKind: TypeKind.Protocol } && Sub(receiver.Type) is NamedTypeSymbol concrete
+            OwnerOf(subscript) is { TypeKind: TypeKind.Protocol } && subscript.ContainingSymbol is not ExtensionSymbol
+            && Sub(receiver.Type) is NamedTypeSymbol concrete
                 && Implementation(concrete, subscript) is { FunctionKind: FunctionKind.Subscript } own
                 ? own
                 : subscript;
@@ -8344,8 +8355,13 @@ public sealed partial class SilGen {
         ///     A protocol's subscript used where Self is now an array: the
         ///     array's own indexing, which needs no subscript.
         /// </summary>
+        /// <remarks>
+        ///     A subscript a protocol's extension gives, by a FromEnd or a
+        ///     range, is a getter like any other, called with Self the array.
+        /// </remarks>
         BoundIndexAccess? AsArrayIndexing(BoundIndexAccess index) =>
-            index.Subscript is { } subscript && OwnerOf(subscript) is { TypeKind: TypeKind.Protocol } && Sub(index.Receiver.Type) is ArrayTypeSymbol
+            index.Subscript is { } subscript && OwnerOf(subscript) is { TypeKind: TypeKind.Protocol }
+            && subscript.ContainingSymbol is not ExtensionSymbol && Sub(index.Receiver.Type) is ArrayTypeSymbol
                 ? new BoundIndexAccess(index.Syntax, index.Type, index.Receiver, index.Indices)
                 : null;
 

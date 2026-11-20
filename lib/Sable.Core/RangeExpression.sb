@@ -1,0 +1,58 @@
+module Sable.Core
+
+// What a slicing subscript takes: each collection declares one, over this
+// protocol, rather than one for each shape of range. The ranges of a
+// collection's own indices name its positions as they are; a RelativeRange
+// counts a bound from its end.
+
+/// A range a collection can be sliced by: every range of its indices —
+/// 'a..<b', 'a...b', 'a...', '..<b', '...b' — and a range with a bound
+/// counted from the end, '1..<^1'. Applied to a collection, it gives the
+/// half-open range of the collection's indices it names.
+///
+/// ```sable
+/// let xs = [10, 20, 30, 40]
+/// assert((1...2).relative(to: xs).upperBound == 3)
+/// assert((2...).relative(to: xs).upperBound == 4)
+/// assert((..<^1).relative(to: xs).upperBound == 3)
+/// ```
+public protocol RangeExpression {
+    /// The positions of the collection this range names, as a half-open
+    /// range of its indices. A range of another type of index than the
+    /// collection's traps.
+    fn relative<C: Collection>(to c: C) -> Range<C.Index>
+}
+
+// The ranges of indices are a collection's positions as they are written.
+// Their bound is whatever they were made of; a range of one collection's
+// indices applied to a collection of another kind traps.
+
+extension Range: RangeExpression {
+    public fn relative<C: Collection>(to c: C) -> Range<C.Index> {
+        return (lowerBound as! C.Index)..<(upperBound as! C.Index)
+    }
+}
+
+extension ClosedRange: RangeExpression {
+    public fn relative<C: Collection>(to c: C) -> Range<C.Index> {
+        return (lowerBound as! C.Index)..<c.index(after: upperBound as! C.Index)
+    }
+}
+
+extension PartialRangeFrom: RangeExpression {
+    public fn relative<C: Collection>(to c: C) -> Range<C.Index> {
+        return (lowerBound as! C.Index)..<c.endIndex
+    }
+}
+
+extension PartialRangeUpTo: RangeExpression {
+    public fn relative<C: Collection>(to c: C) -> Range<C.Index> {
+        return c.startIndex..<(upperBound as! C.Index)
+    }
+}
+
+extension PartialRangeThrough: RangeExpression {
+    public fn relative<C: Collection>(to c: C) -> Range<C.Index> {
+        return c.startIndex..<c.index(after: upperBound as! C.Index)
+    }
+}

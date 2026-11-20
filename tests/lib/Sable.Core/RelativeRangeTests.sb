@@ -1,0 +1,79 @@
+module RelativeRangeTests
+
+// RelativeRange (Sable.Core): a range with a bound counted from the end,
+// what '..<' and '...' make when a side is '^n'.
+
+import Sable.Testing
+
+@test
+fn eachFormIsWrittenAsItWasMade() {
+    assertEqual((1..<^1).debugDescription(), "1..<^1")
+    assertEqual((^2...^1).debugDescription(), "^2...^1")
+    assertEqual((^3...).debugDescription(), "^3..<^0")
+    assertEqual((..<^1).debugDescription(), "0..<^1")
+    assertEqual((...^2).debugDescription(), "0...^2")
+    assertEqual((^4..<3).debugDescription(), "^4..<3")
+}
+
+@test
+fn theOffsetsAreCountedAgainstTheCount() {
+    let (start, end) = (1..<^1).offsets(in: 5)
+    assertEqual(start, 1)
+    assertEqual(end, 4)
+    let (from, to) = (^2...^1).offsets(in: 5)
+    assertEqual(from, 3)
+    assertEqual(to, 5)
+    let (a, b) = (^4..<3).offsets(in: 5)
+    assertEqual(a, 1)
+    assertEqual(b, 3)
+}
+
+@test
+fn aRangeHeldInAVariableIsTheSameRange() {
+    let end = ^1
+    let r = 1..<end
+    assertEqual(r, 1..<^1)
+    assert(r != 1...^1)
+    assert(r != ^1..<^1)
+    let positions = r.relative(to: [1, 2, 3, 4])
+    assertEqual(positions.lowerBound, 1)
+    assertEqual(positions.upperBound, 3)
+}
+
+@test
+fn anArrayIsSlicedFromTheEnd() {
+    let xs = [1, 2, 3, 4, 5]
+    assert(xs[1..<^1] == [2, 3, 4])
+    assert(xs[^3...] == [3, 4, 5])
+    assert(xs[^2...^1] == [4, 5])
+    assert(xs[..<^3] == [1, 2])
+    assert(xs[...^2] == [1, 2, 3, 4])
+    assert(xs[^5..<2] == [1, 2])
+    assert(xs[0..<^0] == xs[0...])
+    assert(xs[^0...] == [])
+}
+
+@test
+fn aStringIsSlicedFromTheEndByCharacter() {
+    let text = "naïve café"
+    assertEqual(text[^4...], "café")
+    assertEqual(text[1..<^5], "aïve")
+    assertEqual(text[..<^5], "naïve")
+}
+
+@test(traps: "range ^6..<^0 is out of range for count 5")
+fn aStartBeforeTheStartTraps() {
+    let xs = [1, 2, 3, 4, 5]
+    let _ = xs[^blackBox(6)...]
+}
+
+@test(traps: "range 3..<^3 is out of range for count 5")
+fn boundsTheWrongWayRoundTrap() {
+    let xs = [1, 2, 3, 4, 5]
+    let _ = xs[3..<^blackBox(3)]
+}
+
+@test(traps: "range 0..<^-1 is out of range for count 2")
+fn anEndPastTheEndTraps() {
+    let _ = "ab"[..<^blackBox(-1)]
+}

@@ -1,0 +1,51 @@
+module RangeExpressionTests
+
+// RangeExpression (Sable.Core): what a slicing subscript takes — every
+// range of a collection's indices, and a range counted from the end.
+
+import Sable.Testing
+
+fn positions(_ range: Range<Int>) -> String {
+    return "\(range.lowerBound)..<\(range.upperBound)"
+}
+
+@test
+fn eachShapeOfRangeNamesHalfOpenPositions() {
+    let xs = [10, 20, 30, 40]
+    assertEqual(positions((1..<3).relative(to: xs)), "1..<3")
+    assertEqual(positions((1...2).relative(to: xs)), "1..<3")
+    assertEqual(positions((2...).relative(to: xs)), "2..<4")
+    assertEqual(positions((..<2).relative(to: xs)), "0..<2")
+    assertEqual(positions((...2).relative(to: xs)), "0..<3")
+    assertEqual(positions((1..<^1).relative(to: xs)), "1..<3")
+}
+
+@test
+fn aStringIsSlicedByEachShapeOfRange() {
+    let text = "naïve café"
+    let space = text.firstIndex(of: ' ')!
+    let after = text.index(after: space)
+    assertEqual(text[text.startIndex..<space], "naïve")
+    assertEqual(text[after...], "café")
+    assertEqual(text[..<space], "naïve")
+    assertEqual(text[...space], "naïve ")
+    assertEqual(text[text.startIndex...text.index(before: space)], "naïve")
+}
+
+fn middle<C: Collection, R: RangeExpression>(_ c: C, _ range: R) -> Int {
+    let positions = range.relative(to: c)
+    var count = 0
+    var at = positions.lowerBound
+    while at < positions.upperBound {
+        count += 1
+        at = c.index(after: at)
+    }
+    return count
+}
+
+@test
+fn genericCodeTakesAnyRange() {
+    assertEqual(middle([1, 2, 3, 4], 1..<^1), 2)
+    assertEqual(middle("héllo", ^3...), 3)
+    assertEqual(middle([1, 2, 3], 0...1), 2)
+}

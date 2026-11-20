@@ -117,6 +117,124 @@ public sealed class SliceLoweringTests {
     }
 
     /// <summary>
+    ///     <c>xs[^n]</c> and a range with a bound counted from the end
+    ///     (#291): the collection protocols' subscripts, an array's as any
+    ///     collection's, trapping in the from-end form outside the array.
+    /// </summary>
+    [Fact]
+    public void AnArrayIsReadAndSlicedFromTheEnd() {
+        var module = Lower(
+            Sum + """
+
+                  fn last(_ n: Int) -> Int {
+                      let xs = [10, 20, 30]
+                      return xs[^n]
+                  }
+                  fn inner() -> Int {
+                      let xs = [1, 2, 3, 4, 5]
+                      return sum(xs[1..<^1])
+                  }
+                  fn tail(_ n: Int) -> Int {
+                      let xs: Int[>..] = [1, 2, 3, 4, 5]
+                      return sum(xs[^n...])
+                  }
+                  fn lastTwo() -> Int {
+                      let xs: Int[] = [1, 2, 3, 4, 5]
+                      return sum(xs[^2...^1]) * 100 + sum(xs[..<^3]) * 10 + sum(xs[...^5])
+                  }
+                  fn held(_ a: Int, _ b: Int) -> Int {
+                      let xs = [1, 2, 3, 4, 5]
+                      let r = a..<^b
+                      return sum(xs[r])
+                  }
+                  """
+        );
+
+        Assert.Equal(30L, Run(module, "last", 1L));
+        Assert.Equal(10L, Run(module, "last", 3L));
+        Assert.Equal(9L, Run(module, "inner"));
+        Assert.Equal(12L, Run(module, "tail", 3L));
+        Assert.Equal(15L, Run(module, "tail", 5L));
+        Assert.Equal(931L, Run(module, "lastTwo"));
+        Assert.Equal(5L, Run(module, "held", 1L, 2L));
+        var pastTheStart = Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.last", 4L));
+        Assert.Equal("index ^4 is out of range for count 3", pastTheStart.Message);
+
+        // Runtime.trap with no site says none, as the native trap does, not the library's line.
+        Assert.Null(pastTheStart.Site);
+        Assert.Equal("index ^0 is out of range for count 3", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.last", 0L)).Message);
+        Assert.Equal("range ^6..<^0 is out of range for count 5", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.tail", 6L)).Message);
+        Assert.Equal("range 4..<^2 is out of range for count 5", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.held", 4L, 2L)).Message);
+    }
+
+    /// <summary>
+    ///     The subscripts the collection protocols' extensions give are no
+    ///     requirements, so a conformer's own method that happens to share
+    ///     their getter's name, a <c>get(_:)</c>, is not called in their place.
+    /// </summary>
+    [Fact]
+    public void AnExtensionsSubscriptIsNotAConformersMethodOfTheSameName() {
+        var module = Lower(
+            """
+            struct Bag: RandomAccessCollection {
+                var items: Int[>..]
+                fn makeIterator() -> ArrayIterator<Int> { return items.makeIterator() }
+                var startIndex: Int => 0
+                var endIndex: Int => items.count
+                var count: Int => items.count
+                fn index(after position: Int) -> Int => position + 1
+                fn index(before position: Int) -> Int => position - 1
+                fn index(_ position: Int, offsetBy distance: Int) -> Int => position + distance
+                fn distance(from start: Int, to end: Int) -> Int => end - start
+                subscript(position: Int) -> Int { get => items[position] }
+                fn get(_ key: String) -> Int? { return none }
+            }
+            fn last() -> Int {
+                let bag = Bag { items: [4, 5, 6] }
+                return bag[^1] * 10 + bag[^3]
+            }
+            """
+        );
+
+        Assert.Equal(64L, Run(module, "last"));
+    }
+
+    /// <summary>
+    ///     An array pays nothing for counting from the end: after the
+    ///     optimising passes, no FromEnd or RelativeRange is made, nothing is
+    ///     allocated and nothing called but the out-of-line trap — what is
+    ///     left is arithmetic on the count, and the bounds check.
+    /// </summary>
+    [Fact]
+    public void CountingFromTheEndOfAnArrayIsArithmeticOnItsCount() {
+        var module = Lower(
+            """
+            fn last(_ xs: Int[:]) -> Int { return xs[^1] }
+            fn back(_ xs: Int[:], _ n: Int) -> Int { return xs[^n] }
+            fn inner(_ xs: Int[:]) -> Int[:] { return xs[1..<^1] }
+            fn tail(_ xs: Int[>..], _ n: Int) -> Int[:] { return xs[^n...] }
+            fn lastTwo(_ xs: Int[:]) -> Int[:] { return xs[^2...^1] }
+            fn run() -> Int {
+                let xs: Int[>..] = [1, 2, 3, 4, 5]
+                return last(xs) * 1000 + back(xs, 5) * 100 + inner(xs).count * 10 + tail(xs, 2)[0] + lastTwo(xs).count
+            }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        foreach (var name in new[] { "last", "back", "inner", "tail", "lastTwo" }) {
+            var instructions = module.Find($"M.{name}")!.Blocks.SelectMany(static b => b.Instructions).ToList();
+            Assert.DoesNotContain(instructions, static i => i is StructInst { StructType.Name: var type } && (type.Contains("FromEnd") || type.Contains("RelativeRange")));
+            Assert.DoesNotContain(instructions, static i => i is AllocRefInst or AllocStackInst);
+            Assert.All(instructions.OfType<FunctionRefInst>(), static f => Assert.EndsWith(".outOfRange", f.Function, StringComparison.Ordinal));
+            Assert.Contains(instructions, static i => i is BuiltinInst { Name: "array_count" });
+            Assert.Contains(instructions, static i => i is BuiltinInst { Name: "array_get" or "array_slice" });
+        }
+
+        Assert.Equal(5136L, new SilInterpreter(module).Run("M.run"));
+    }
+
+    /// <summary>
     ///     A slice is a type of its own, <c>[T:]</c> — a view of an array's
     ///     buffer — that prints and parses back; an array passed where one is
     ///     wanted is viewed with <c>slice_of</c>, and a range is taken with

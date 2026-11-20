@@ -150,6 +150,7 @@ public enum ErrorCode {
     ERR_BuiltinOutsideCore = 3081,
     ERR_MalformedBuiltin = 3082,
     ERR_MalformedArrayExtension = 3083,
+    ERR_EndIsNoElement = 3090,
     ERR_HalfOpenRangeWithoutEnd = 3091,
     ERR_UnknownAttribute = 3092,
     ERR_AttributeDoesNotApply = 3093,

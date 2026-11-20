@@ -234,6 +234,7 @@
       "patterns": [
         { "name": "keyword.operator.arrow.sable", "match": "->|=>" },
         { "name": "keyword.operator.range.sable", "match": "\\.\\.<|\\.\\.\\.|\\.\\." },
+        { "name": "keyword.operator.from-end.sable", "match": "(?<![\\w)\\]'\"])(?<![\\w)\\]'\"]\\s)\\^(?=[\\w(])" },
         { "name": "keyword.operator.optional.sable", "match": "\\?\\.|\\?\\?" },
         { "name": "keyword.operator.comparison.sable", "match": "===|!==|==|!=|<=|>=" },
         { "name": "keyword.operator.logical.sable", "match": "&&|\\|\\||!(?!=)" },

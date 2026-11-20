@@ -803,7 +803,10 @@ internal static class ConformanceChecker {
 
         // An array's subscript is the compiler's own, by an Int, giving an
         // element: it meets a requirement asking for that, and nothing else.
-        if (candidates.Count == 0 && requirement.FunctionKind == FunctionKind.Subscript && type.ExtendedArray is { } array) {
+        // The subscripts the protocols' extensions give every collection, by
+        // a FromEnd or a range, are others, which meet no such requirement.
+        if (requirement.FunctionKind == FunctionKind.Subscript && type.ExtendedArray is { } array
+            && !candidates.Any(c => Matches(requirement, c, protocol, arguments, type))) {
             if (requirement.Parameters is [var position] && !requirement.IsStatic
                 && SubstituteSelf(arguments.Apply(position.Type), protocol, type) is NamedTypeSymbol { TypeKind: TypeKind.Builtin, Name: "Int" }
                 && SubstituteSelf(arguments.Apply(requirement.ReturnType), protocol, type).Equals(array.ElementType)) {

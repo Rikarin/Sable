@@ -91,4 +91,48 @@ public sealed class RangeTests {
         Assert.Equal("254\n255\n", execution.Stdout);
         Assert.Equal("fatal error: integer overflow\n  at test.sb:6:17\n", execution.Stderr);
     }
+
+    // ---- Counting from the end (#291) --------------------------------------
+
+    [Fact]
+    public void EveryCollectionIsReadAndSlicedFromTheEnd() =>
+        Assert.Equal(
+            "50 10 40\n[20, 30, 40] [30, 40, 50] [40, 50] [10, 20] [10, 20, 30, 40]\nd wörld éllo wörl\n3 [2, 3] 9 [8, 9]\n1..<^1 ^3\n",
+            AssertAgree(
+                Program(
+                    "import Sable.Collections",
+                    """
+                        let xs = [10, 20, 30, 40, 50]
+                        let n = 2
+                        print("\(xs[^1]) \(xs[^5]) \(xs[^n])")
+                        print("\(xs[1..<^1]) \(xs[^3...]) \(xs[^2...^1]) \(xs[..<^3]) \(xs[...^2])")
+                        let s = "héllo wörld"
+                        print("\(s[^1]) \(s[^5...]) \(s[1..<^1])")
+                        let list = List<Int>([1, 2, 3])
+                        let deque = Deque<Int>([7, 8, 9])
+                        print("\(list[^1]) \(list[1...]) \(deque[^1]) \(deque[^2...])")
+                        let r = 1..<^1
+                        print("\(r.debugDescription()) \((^3).debugDescription())")
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void AnElementPastTheStartTrapsCountedFromTheEnd() {
+        var execution = AssertAgree(Program("", "let xs = [1, 2, 3]\nprint(xs[^blackBox(5)])"));
+        Assert.Equal("fatal error: index ^5 is out of range for count 3\n", execution.Stderr);
+    }
+
+    [Fact]
+    public void TheEndOfAStringIsNoCharacter() {
+        var execution = AssertAgree(Program("", "print(\"abc\"[^blackBox(0)])"));
+        Assert.Equal("fatal error: index ^0 is out of range for count 3\n", execution.Stderr);
+    }
+
+    [Fact]
+    public void ARangeFromTheEndOutsideTheArrayTraps() {
+        var execution = AssertAgree(Program("", "let xs = [1, 2, 3]\nprint(xs[2..<^blackBox(2)])"));
+        Assert.Equal("fatal error: range 2..<^2 is out of range for count 3\n", execution.Stderr);
+    }
 }

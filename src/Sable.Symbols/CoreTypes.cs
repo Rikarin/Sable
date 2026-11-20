@@ -176,6 +176,37 @@ public sealed class CoreTypes {
 
     NamedTypeSymbol? _range, _closedRange, _upTo, _through, _from;
 
+    /// <summary>
+    ///     <c>FromEnd</c>, what <c>^n</c> makes: a position counted back from
+    ///     a collection's end, declared in <c>lib/Sable.Core/FromEnd.sb</c>.
+    ///     Null only in a compilation that brings a Sable.Core of its own
+    ///     without it, or with one not a struct of one <c>n: Int</c>.
+    /// </summary>
+    public NamedTypeSymbol? FromEnd => _fromEnd ??= DeclaredStruct("FromEnd") is { TypeParameters.IsEmpty: true } type
+        && type.Members.OfType<FieldSymbol>().Any(static f => f is { Name: "n", IsStatic: false })
+            ? type
+            : null;
+
+    /// <summary>
+    ///     <c>RelativeRange</c>, what a range makes when a bound is counted
+    ///     from the end, <c>1..&lt;^1</c>: declared in <c>lib/Sable.Core/RelativeRange.sb</c>.
+    /// </summary>
+    public NamedTypeSymbol? RelativeRange => _relativeRange ??= DeclaredStruct("RelativeRange") is { TypeParameters.IsEmpty: true } type ? type : null;
+
+    /// <summary>
+    ///     <c>RangeExpression</c>, what a collection's one slicing subscript
+    ///     takes: every range, and a range counted from the end.
+    /// </summary>
+    public NamedTypeSymbol? RangeExpression => _rangeExpression ??= DeclaredProtocol("RangeExpression");
+
+    /// <summary><c>Collection</c>, whose <c>Index</c> a range of indices must be to slice one.</summary>
+    public NamedTypeSymbol? Collection => _collection ??= DeclaredProtocol("Collection");
+
+    NamedTypeSymbol? _fromEnd, _relativeRange, _rangeExpression, _collection;
+
+    /// <summary>True for <c>FromEnd</c>, what <c>^n</c> makes.</summary>
+    public bool IsFromEnd(TypeSymbol type) => FromEnd is { } fromEnd && type.Equals(fromEnd);
+
     /// <summary>True for a range a loop can count through: one with a lower bound, <c>Range</c>, <c>ClosedRange</c> or <c>PartialRangeFrom</c>.</summary>
     public bool IsCountableRange(TypeSymbol type) =>
         IsRange(type) || type is NamedTypeSymbol { TypeArguments.Length: 1 } named && named.OriginalDefinition.Equals(PartialRangeFrom);

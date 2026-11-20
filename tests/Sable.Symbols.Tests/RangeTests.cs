@@ -206,4 +206,68 @@ public sealed class RangeTests {
             d => d.Code == ErrorCode.ERR_NameNotFound && d.Message.Contains($"'{name}<Bound>'", StringComparison.Ordinal)
         );
     }
+
+    // ---- Counting from the end (#291) --------------------------------------
+
+    [Fact]
+    public void TheTypesOfCountingFromTheEndAreDeclaredInSable() {
+        var core = Compilation.Create("module M").Core;
+        Assert.Equal(TypeKind.Struct, Assert.IsType<NamedTypeSymbol>(core.FromEnd).TypeKind);
+        Assert.Equal(TypeKind.Struct, Assert.IsType<NamedTypeSymbol>(core.RelativeRange).TypeKind);
+        Assert.Equal(TypeKind.Protocol, Assert.IsType<NamedTypeSymbol>(core.RangeExpression).TypeKind);
+    }
+
+    [Fact]
+    public void ACaretMakesAFromEndAndARangeWithOneARelativeRange() =>
+        AssertClean(
+            """
+            fn last() -> FromEnd { return ^1 }
+            fn counted(_ n: Int) -> FromEnd { return ^(n + 1) }
+            fn inner() -> RelativeRange { return 1..<^1 }
+            fn tail() -> RelativeRange { return ^3... }
+            fn lastTwo() -> RelativeRange { return ^2...^1 }
+            fn head() -> RelativeRange { return ..<^1 }
+            fn through() -> RelativeRange { return ...^2 }
+            fn mixed() -> RelativeRange { return ^4..<3 }
+            fn held(_ end: FromEnd) -> RelativeRange { return 0..<end }
+            fn plain() -> Range<Int> { return 1..<3 }
+            """
+        );
+
+    [Fact]
+    public void EveryCollectionReadsAndSlicesFromTheEnd() =>
+        AssertClean(
+            """
+            fn reads(_ xs: Int[:], _ grown: Int[>..], _ text: String) -> Int {
+                let a: Int = xs[^1]
+                let b: Int = grown[^2]
+                let c: Char = text[^1]
+                let d: Int = (0..<10)[^1]
+                return a + b + d
+            }
+            fn slices(_ xs: Int[:], _ text: String) {
+                let a: Int[:] = xs[1..<^1]
+                let b: Int[:] = xs[^3...]
+                let c: String = text[^2...]
+                let d: String = text[text.startIndex..<text.endIndex]
+                let e: Int[:] = xs[1..<3]
+            }
+            fn generic<C: BidirectionalCollection>(_ c: C) -> C.Element {
+                return c[^1]
+            }
+            """
+        );
+
+    [Fact]
+    public void ARangeOfAnotherKindOfIndexIsRefused() {
+        var errors = ErrorsIn("fn f(_ text: String) -> String { return text[0..<2] }");
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_TypeMismatch && e.Message.Contains("'String.Index'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void TheEndIsNoElement() {
+        var errors = ErrorsIn("fn f(_ xs: Int[:]) -> Int { return xs[^0] }");
+        Assert.Equal(ErrorCode.ERR_EndIsNoElement, Assert.Single(errors).Code);
+        AssertClean("fn f(_ xs: Int[:]) -> Int[:] { return xs[0..<^0] }");
+    }
 }

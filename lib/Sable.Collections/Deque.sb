@@ -140,6 +140,34 @@ public class Deque<Element> {
         }
     }
 
+    /// The elements in the range, front to back, copied into an array of
+    /// their own: they may run round the end of the slots, so there is no
+    /// one stretch of them to view. Any range of positions slices a deque,
+    /// one counted from the end among them; outside 0...count traps.
+    ///
+    /// ```sable
+    /// let deque = Deque<Int>([1, 2, 3])
+    /// deque.prepend(0)
+    /// assert(deque[1..<3] == [1, 2])
+    /// assert(deque[^2...] == [2, 3])
+    /// ```
+    public subscript(range: some RangeExpression) -> Element[>..] {
+        get {
+            let positions = range.relative(to: self)
+            if positions.lowerBound < 0 || positions.upperBound > used || positions.upperBound < positions.lowerBound {
+                // Out of range: the trap an array's slice gives.
+                let nothing: Int[>..] = []
+                let _ = nothing[positions.lowerBound..<positions.upperBound]
+            }
+            var elements: Element[>..] = []
+            elements.reserveCapacity(positions.upperBound - positions.lowerBound)
+            for position in positions.lowerBound..<positions.upperBound {
+                elements.append(slots[slot(position)]!)
+            }
+            return elements
+        }
+    }
+
     /// Removes every element.
     public fn removeAll() {
         slots = []

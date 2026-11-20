@@ -140,3 +140,13 @@ fn anOrderedDictionaryIsACollectionOfItsEntriesByPosition() {
     assert(ages.reversed().map({ $0.0 }).toArray() == ["cy", "bo", "ann"])
     assertEqual(ages.index(before: ages.index(after: 0)), 0)
 }
+
+@test
+fn anOrderedDictionaryIsReadFromTheEndInItsOrder() {
+    let ordered = OrderedDictionary<String, Int>()
+    ordered.set("a", 1)
+    ordered.set("b", 2)
+    let last = ordered[^1]
+    assertEqual(last.0, "b")
+    assertEqual(last.1, 2)
+}

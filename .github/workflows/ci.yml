@@ -26,6 +26,9 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
 
 jobs:
+  # Every test project but Sable.CodeGen.Tests, which the codegen job runs
+  # in shards; then the timing tests, the formatting check and, on Linux
+  # x64, the library's coverage and doc examples.
   test:
     name: Test (${{ matrix.os }})
     strategy:
@@ -33,15 +36,9 @@ jobs:
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
-    # Sable.CodeGen.Tests alone takes 75 minutes on Linux and macOS, and on
-    # Windows, where each test program is linked by lld-link and started as
-    # a process, had not finished after 108; Linux x64 then measures the
-    # library's coverage and runs its doc examples.
-    timeout-minutes: ${{ matrix.os == 'windows-2025' && 210 || 150 }}
+    timeout-minutes: ${{ matrix.os == 'windows-2025' && 120 || 90 }}
     env:
-      # Every test that holds native code and the interpreter to the same
-      # answer builds natively here, where locally only those marked
-      # [Native] do (CONTRIBUTING.md).
+      # The timing tests include some of Sable.CodeGen.Tests': as the codegen job.
       SABLE_TEST_NATIVE: all
       # Linux arm64 leaves the fuzz tests to the nightly job, which runs them
       # on x64: what they find is the compiler's, not the machine's. Its
@@ -78,9 +75,11 @@ jobs:
       # A test that hangs is stopped and named, rather than taking the job
       # to its limit with nothing said: none takes near half an hour.
       - name: Test
-        run: >-
-          dotnet test Sable.slnx -c Release --no-build --logger "console;verbosity=minimal" --filter "$TEST_FILTER"
-          --blame-hang-timeout 30m --blame-hang-dump-type none
+        run: |
+          for project in Sable.Syntax.Tests Sable.Symbols.Tests Sable.SIL.Tests Sable.LanguageServer.Tests; do
+            dotnet test "tests/$project" -c Release --no-build --logger "console;verbosity=minimal" --filter "$TEST_FILTER" \
+              --blame-hang-timeout 30m --blame-hang-dump-type none
+          done
 
       # The tests that measure time, alone: with the rest of the suite running
       # beside them a shared runner's two or three cores are not theirs.
@@ -110,6 +109,53 @@ jobs:
             echo "== $module"
             src/Sable.Driver/bin/Release/net11.0/sable test --doc "$module"
           done
+
+  # Sable.CodeGen.Tests — native code, the runtime, packages and the CLI —
+  # split by test class into shards that run side by side
+  # (tools/ci/codegen-shard.sh, whose count the matrix's 'shard' must list:
+  # ShardTests checks both). Every test that holds native code and the
+  # interpreter to the same answer builds natively here (SABLE_TEST_NATIVE),
+  # where locally only those marked [Native] do.
+  codegen:
+    name: CodeGen tests ${{ matrix.shard }} (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025]
+        shard: [1, 2, 3, 4]
+    runs-on: ${{ matrix.os }}
+    # The whole project took 75 minutes on Linux and macOS and over 108 on
+    # Windows, where each test program is linked by lld-link and started as
+    # a process; a shard is about a quarter of it.
+    timeout-minutes: ${{ matrix.os == 'windows-2025' && 100 || 60 }}
+    env:
+      SABLE_TEST_NATIVE: all
+      # As the test job: Linux arm64 leaves the fuzz tests to the nightly job.
+      TEST_FILTER: ${{ matrix.os == 'ubuntu-24.04-arm' && 'Category!=Fuzz&Category!=Timing' || 'Category!=Timing' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "11.0.x"
+
+      - name: Install clang and lldb
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lldb
+
+      - name: Show the C compiler
+        run: clang --version
+
+      - name: Build
+        run: dotnet build tests/Sable.CodeGen.Tests -c Release
+
+      - name: Test
+        run: >-
+          dotnet test tests/Sable.CodeGen.Tests -c Release --no-build --logger "console;verbosity=minimal"
+          --filter "($(tools/ci/codegen-shard.sh ${{ matrix.shard }}))&$TEST_FILTER"
+          --blame-hang-timeout 30m --blame-hang-dump-type none
 
   # Programs built for wasm32-wasi (runtime/platform_wasi.c) and run under
   # wasmtime. The C compiler is wasi-sdk's clang, which has wasm-ld,

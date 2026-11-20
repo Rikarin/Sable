@@ -107,6 +107,11 @@ and run it, natively and in the interpreter. What keeps it quicker:
   A new test class about native code gets `[Native]`; `--filter
   Category=Native` runs the marked ones. Tests that only build natively
   (`Programs.BuildAndRun`, `Harnesses.Native`) always do.
+- **Shards in CI.** CI runs the project in four jobs per OS, split by test
+  class ([tools/ci/codegen-shard.sh](tools/ci/codegen-shard.sh)).
+  `ShardTests` fails if a class with tests is in no shard — which is what a
+  test class not declared `public sealed class` at the top level of its file
+  would be — or if the workflow's matrix does not list every shard.
 
 New diagnostics get a code in `src/Sable.Syntax/Diagnostics.cs` and a page under
 `docs/diagnostics/`.

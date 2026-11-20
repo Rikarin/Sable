@@ -126,6 +126,33 @@ extension RangeReplaceableCollection {
         self = rebuilt
     }
 
+    /// The elements in the range, as a collection of their own, to read or
+    /// to replace: any range of positions, one counted from the end among
+    /// them. Storing replaces the range with the elements stored, which
+    /// may be more or fewer. Read, it is a copy; a collection's own slicing
+    /// subscript, where it has one, is what a read uses.
+    ///
+    /// ```sable
+    /// var xs: Int[>..] = [1, 2, 3, 4]
+    /// xs[1..<^1] = [7, 8, 9]
+    /// assert(xs == [1, 7, 8, 9, 4])
+    /// xs[^2...] = []
+    /// assert(xs == [1, 7, 8])
+    /// ```
+    public subscript(range: some RangeExpression) -> Self {
+        get {
+            let positions = range.relative(to: self)
+            var elements = Self()
+            var position = positions.lowerBound
+            while position < positions.upperBound {
+                elements.append(element: self[position])
+                position = index(after: position)
+            }
+            return elements
+        }
+        set { replaceSubrange(range.relative(to: self), with: newValue) }
+    }
+
     /// Nothing: room is made as elements are added.
     public mutating fn reserveCapacity(_ minimumCapacity: Int) { }
 

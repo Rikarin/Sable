@@ -40,3 +40,56 @@ fn steppingBackPastTheStartTraps() {
 fn steppingBackNoneTraps() {
     let _ = stepBack([1, 2, 3], blackBox(0))
 }
+
+struct Point {
+    var x: Int
+}
+
+fn setFromEnd<C: MutableCollection>(_ c: inout C, _ n: Int, _ value: C.Element) {
+    c[FromEnd(n)] = value
+}
+
+fn readFromEnd<C: MutableCollection>(_ c: inout C, _ n: Int) -> C.Element {
+    return c[FromEnd(n)]
+}
+
+@test
+fn anArrayIsWrittenFromTheEnd() {
+    var xs: Int[>..] = [1, 2, 3]
+    xs[^1] = 9
+    xs[^3] += 10
+    assert(xs == [11, 2, 9])
+    var fixed: Int[3] = [1, 2, 3]
+    fixed[^2] = 7
+    assertEqual(fixed[1], 7)
+}
+
+@test
+fn aPartOfAnElementIsWrittenFromTheEnd() {
+    var points: Point[>..] = [Point { x: 1 }, Point { x: 2 }]
+    points[^1].x = 5
+    points[^2].x += 1
+    assertEqual(points[0].x, 2)
+    assertEqual(points[1].x, 5)
+}
+
+@test
+fn aMutableCollectionIsWrittenAndReadFromTheEnd() {
+    var xs: Int[>..] = [1, 2, 3]
+    setFromEnd(&xs, 1, 4)
+    setFromEnd(&xs, 3, 0)
+    assert(xs == [0, 2, 4])
+    assertEqual(readFromEnd(&xs, 2), 2)
+}
+
+@test(traps: "index ^4 is out of range for count 3")
+fn writingPastTheStartTraps() {
+    var xs: Int[>..] = [1, 2, 3]
+    xs[^blackBox(4)] = 0
+}
+
+@test(traps: "index ^0 is out of range for count 3")
+fn writingAtTheEndTraps() {
+    var xs: Int[>..] = [1, 2, 3]
+    setFromEnd(&xs, blackBox(0), 0)
+}

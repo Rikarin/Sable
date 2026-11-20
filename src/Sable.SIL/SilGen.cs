@@ -7053,8 +7053,14 @@ public sealed partial class SilGen {
 
             while (current is not null) {
                 switch (current) {
+                    // An array's own indexing; 'ps[^1].x = v' is a subscript's
+                    // element, written back through its setter (Address).
                     case BoundIndexAccess { Indices: [_] } index when Sub(index.Receiver.Type) is ArrayTypeSymbol && !IsInlineArray(index.Receiver):
-                        return index;
+                        if (index.Subscript is null) {
+                            return index;
+                        }
+
+                        return AsArrayIndexing(index);
 
                     case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } }
                         when Sub(receiver.Type).TypeKind is not (TypeKind.Class or TypeKind.Actor) && !IsInlineType(receiver.Type):

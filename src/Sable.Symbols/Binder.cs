@@ -4011,6 +4011,24 @@ public sealed partial class Binder {
             AssociatedTypes.RefinedProtocols(protocol).Any(p => ReferenceEquals(p, other));
     }
 
+    /// <summary>What an overload is resolved for: a call, or a subscript read or stored through.</summary>
+    enum SubscriptUse {
+        None,
+        Read,
+        Store,
+    }
+
+    /// <summary>Added to a read-only subscript's cost where it is stored through, so that any that fits and can store wins.</summary>
+    const int ReadOnlySubscriptCost = 1 << 20;
+
+    /// <summary>Of two subscripts, the one with no setter, when the other has one; null when both or neither do.</summary>
+    static FunctionSymbol? ReadOnlyOfTwo(FunctionSymbol first, FunctionSymbol second) =>
+        (BoundIndexAccess.HasSetter(first), BoundIndexAccess.HasSetter(second)) switch {
+            (false, true) => first,
+            (true, false) => second,
+            _ => null,
+        };
+
     static FunctionSymbol? RequirementAndDefault(FunctionSymbol first, FunctionSymbol second) {
         static Symbol? Owner(FunctionSymbol f) => f.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : f.ContainingSymbol;
         static bool InExtension(FunctionSymbol f) => f.ContainingSymbol is ExtensionSymbol;
@@ -4182,6 +4200,14 @@ public sealed partial class Binder {
 
         static bool Hides(Symbol own, Symbol other) =>
             (own, other) switch {
+                // A subscript that only reads does not hide one that stores as
+                // well: an array's 'subscript(fromEnd:)' is RandomAccessCollection's
+                // to read and MutableCollection's to store, and a List's
+                // 'subscript(range:)' its own to read and RangeReplaceableCollection's
+                // to store. Which is meant is the overload's choice (ResolveOverload).
+                (FunctionSymbol { FunctionKind: FunctionKind.Subscript } a, FunctionSymbol { FunctionKind: FunctionKind.Subscript } b)
+                    when !BoundIndexAccess.HasSetter(a) && BoundIndexAccess.HasSetter(b) => false,
+
                 // A concrete method does not hide a generic one of the same labels:
                 // an array's 'append(contentsOf:)' of a slice, and every growable
                 // collection's of any sequence, are both there.
@@ -5562,7 +5588,8 @@ public sealed partial class Binder {
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<string?> labels,
         SyntaxNode syntax,
-        TypeSubstitution outer
+        TypeSubstitution outer,
+        SubscriptUse use = SubscriptUse.None
     ) {
         FunctionSymbol? best = null;
         var bestCost = int.MaxValue;
@@ -5575,6 +5602,13 @@ public sealed partial class Binder {
             if (cost is null) {
                 rejected.Add((candidate, _rejection ?? "it does not fit"));
                 continue;
+            }
+
+            // A subscript stored through must be one that can store: one
+            // with no 'set' is chosen only when none that fits has one, and
+            // is then refused as read-only (BindAssignment).
+            if (use == SubscriptUse.Store && !BoundIndexAccess.HasSetter(candidate)) {
+                cost += ReadOnlySubscriptCost;
             }
 
             if (cost < bestCost) {
@@ -5615,6 +5649,15 @@ public sealed partial class Binder {
             // it refines: an array's 'contains(element:)' is the one for it.
             if (MoreSpecific(best, candidate) is { } specific) {
                 best = specific;
+                continue;
+            }
+
+            // Two subscripts of unrelated protocols' extensions, one of which
+            // can store as well: 'xs[^1]' on an array is RandomAccessCollection's
+            // and MutableCollection's. Either reads the same element; a read
+            // takes the one that only reads, which is written for reading.
+            if (use == SubscriptUse.Read && ReadOnlyOfTwo(best, candidate) is { } reader) {
+                best = reader;
                 continue;
             }
 
@@ -6003,7 +6046,10 @@ public sealed partial class Binder {
             };
 
             if (!group.Candidates.IsEmpty) {
-                var resolved = ResolveOverload(group.Candidates, indices, [], syntax, found.Substitution);
+                // Stored through, 'xs[^1] = v' and 'xs[^1].x = v' want a
+                // subscript with a setter, of those whose labels fit.
+                var use = _assignedSpine.Contains(syntax) ? SubscriptUse.Store : SubscriptUse.Read;
+                var resolved = ResolveOverload(group.Candidates, indices, [], syntax, found.Substitution, use);
 
                 if (resolved is null) {
                     return new BoundError(syntax, [receiver, ..BindUnbound(indices)]);
@@ -7532,6 +7578,16 @@ public sealed partial class Binder {
                 ErrorCode.ERR_NotAssignable,
                 syntax.Left.Span,
                 "a range of an array's elements is read as a slice, and cannot be stored to; store each element"
+            );
+            return new BoundError(syntax, target, value);
+        }
+
+        // 'text[^1] = c': a subscript with no 'set' only reads.
+        if (target is BoundIndexAccess { Subscript: { } readOnly } readOnlyTarget && !BoundIndexAccess.HasSetter(readOnly)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAssignable,
+                syntax.Left.Span,
+                $"'{Signature(readOnly)}' of '{readOnlyTarget.Receiver.Type.ToDisplayString()}' only reads: it has no 'set' to store through"
             );
             return new BoundError(syntax, target, value);
         }

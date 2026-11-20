@@ -62,7 +62,7 @@ fn aSubscriptResultIsChecked(_ s: Subscripted) -> String {
 
 fn aGetOnlySubscriptIsNotWritten(_ s: Subscripted) {
     var copy = s
-    copy[0] = 1                         //! S3010 must be a mutable binding
+    copy[0] = 1                         //! S3010 'subscript(index: Int)' of 'Subscripted' only reads
 }
 
 public struct Settable {

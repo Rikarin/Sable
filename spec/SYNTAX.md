@@ -1232,6 +1232,23 @@ indices, or a `RelativeRange`. On an array, neither a `FromEnd` nor a
 `RelativeRange` is made as the program runs: what is left after
 optimisation is arithmetic on the count, and the bounds check.
 
+A mutable collection (every array but a slice, `List`, `Deque`) is written
+through a `FromEnd` as well, and one that can replace a range of its
+elements (a growable array, `List`, `SmallVec`) through any range,
+`RelativeRange` among them; the elements stored may be more or fewer than
+the range's:
+
+```sable
+xs[^1] = 9         // the last element replaced
+xs[^2] += 1
+xs[1..<^1] = [7]   // all but the first and the last, replaced by one
+```
+
+Where a collection has a subscript of the same labels that only reads and
+one that stores as well, a store takes the one that stores and a read the
+one that only reads. A collection that only reads, as a `String`, refuses
+`s[^1] = c` (S3010).
+
 `^0` is a bound, never an element: reading at it traps, and written as an
 index, `xs[^0]`, it is an error (S3090). A position from the end outside
 the collection traps, saying so: `index ^5 is out of range for count 3`.

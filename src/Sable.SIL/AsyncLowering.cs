@@ -28,9 +28,18 @@ namespace Sable.SIL;
 ///         which the executor resumes once it can go on — polling the chain
 ///         again from its root. The places a task itself waits are the
 ///         runtime's: <c>async_wait</c> (a task not yet finished),
+///         <c>async_group_wait</c> (a group's next child to finish),
 ///         <c>async_yield</c> and <c>async_sleep</c>, each of which says
 ///         whether the task must suspend, having queued it where it will be
 ///         woken.
+///     </para>
+///     <para>
+///         A task that can never go on — still waiting as the program ends,
+///         on something no task will give — is dropped: each frame has a
+///         <i>drop</i> function too, which destroys what the frame holds
+///         where it stopped (the callee frame it waits in first, then the
+///         owned values live there, then its slots), and the runtime calls
+///         the root's.
 ///     </para>
 ///     <para>
 ///         As a generator's body (<see cref="CoroutineSplit" />), every slot the
@@ -51,10 +60,13 @@ public static class AsyncLowering {
     /// <summary>The state a frame is in once its function has returned, and once it has thrown.</summary>
     internal const long Finished = -1, Threw = -2;
 
-    const int ResumeField = 0, StateField = 1;
+    const int ResumeField = 0, DropField = 1, StateField = 2;
 
     /// <summary>What a resume function is: given its frame, it says whether its function has finished.</summary>
     internal static readonly FunctionType ResumeType = new([SilType.Object], SilType.Bool);
+
+    /// <summary>What a drop function is: given a frame suspended part-way, it destroys what the frame holds.</summary>
+    internal static readonly FunctionType DropType = new([SilType.Object], SilType.Unit);
 
     /// <summary>Makes the module's async functions coroutines, once.</summary>
     public static void Run(SilModule module) {
@@ -68,6 +80,9 @@ public static class AsyncLowering {
 
     /// <summary>The name of an async function's resume function.</summary>
     public static string ResumeName(string function) => function + "$resume";
+
+    /// <summary>The name of an async function's drop function.</summary>
+    public static string DropName(string function) => function + "$drop";
 
     sealed class Lowering(SilModule module) {
         readonly Dictionary<string, ClassType> _heads = new(StringComparer.Ordinal);
@@ -87,6 +102,7 @@ public static class AsyncLowering {
 
             head = new ClassType(name) { IsCoroutineFrame = true };
             head.Fields.Add(("$resume", ResumeType));
+            head.Fields.Add(("$drop", DropType));
             head.Fields.Add(("$state", SilType.Int));
             if (result != SilType.Unit) {
                 head.Fields.Add(("$result", result));
@@ -110,7 +126,7 @@ public static class AsyncLowering {
             callee.Type as FunctionType ?? ((ThickFunctionType)callee.Type).Signature;
 
         static bool IsWait(SilInstruction instruction) =>
-            instruction is BuiltinInst { Name: "task_yield" or "task_sleep" or "task_wait" };
+            instruction is BuiltinInst { Name: "task_yield" or "task_sleep" or "task_wait" or "task_group_wait" };
 
         static bool IsSuspension(SilInstruction instruction) =>
             IsWait(instruction) || instruction is ApplyInst apply && IsAsyncCallee(apply.Callee) || instruction is TryApplyInst tryApply && IsAsyncCallee(tryApply.Callee);
@@ -153,10 +169,12 @@ public static class AsyncLowering {
             // polls it each time the task is resumed.
             foreach (var block in module.Functions.SelectMany(static f => f.Blocks)) {
                 for (var i = 0; i < block.Instructions.Count; i++) {
-                    if (block.Instructions[i] is BuiltinInst { Name: "task_spawn", Operands: [FunctionRefInst run, var context] } spawn) {
+                    if (block.Instructions[i] is BuiltinInst { Name: "task_spawn", Operands: [FunctionRefInst run, var context, var priority, var detached] } spawn) {
                         var resume = new FunctionRefInst(ResumeName(run.Function), ResumeType) { Block = block, Location = spawn.Location };
                         block.Instructions.Insert(i++, resume);
-                        var started = new BuiltinInst("task_spawn", SilType.Int, run, resume, context) { Block = block, Location = spawn.Location };
+                        var drop = new FunctionRefInst(DropName(run.Function), DropType) { Block = block, Location = spawn.Location };
+                        block.Instructions.Insert(i++, drop);
+                        var started = new BuiltinInst("task_spawn", SilType.Int, run, resume, drop, context, priority, detached) { Block = block, Location = spawn.Location };
                         block.Instructions[i] = started;
                         ReplaceUses(block.Function, spawn, started);
                     }
@@ -309,9 +327,15 @@ public static class AsyncLowering {
         // ---- The split -----------------------------------------------------
 
         /// <summary>A place the body may suspend at: where it records its state, and where it goes on from when resumed.</summary>
-        sealed record Suspension(SilBlock Suspend, SilBlock Resume);
+        /// <param name="Owned">The owned values live where it suspends, which a drop destroys.</param>
+        /// <param name="Callee">For a call, the callee's frame, which a drop drops first.</param>
+        sealed record Suspension(SilBlock Suspend, SilBlock Resume, List<SilValue> Owned, SilValue? Callee);
+
+        /// <summary>For the function being split, the owned values live at each place it may suspend.</summary>
+        Dictionary<SilInstruction, List<SilValue>> _ownedAt = new(ReferenceEqualityComparer.Instance);
 
         void Split(SilFunction function) {
+            _ownedAt = OwnedAtSuspensions(function);
             var name = function.Name;
             var original = function.Type;
             var head = Head(original.Result, original.Thrown);
@@ -371,7 +395,12 @@ public static class AsyncLowering {
             }
 
             var fields = new Dictionary<AllocStackInst, SilInstruction>(ReferenceEqualityComparer.Instance);
+            var slotFields = new List<int>();
             foreach (var slot in slots) {
+                if (!unmanaged.Contains(slot) && !slot.ElementType.IsTrivial) {
+                    slotFields.Add(frame.Fields.Count);
+                }
+
                 fields[slot] = entry.Append(Field($"{slot.VariableName ?? "$slot"}${frame.Fields.Count}", slot.ElementType));
             }
 
@@ -418,7 +447,12 @@ public static class AsyncLowering {
             otherwise.Append(new UnreachableInst());
 
             // What is live where it goes on, kept in the frame meanwhile.
-            Spill(function, entry, suspensions.Select(static s => s.Resume), Field);
+            var spilled = Spill(function, entry, suspensions.Select(static s => s.Resume), Field);
+            for (var i = 0; i < parameters.Count; i++) {
+                spilled[parameters[i]] = parameterFields[i];
+            }
+
+            Drop(name, frame, suspensions, spilled, slotFields);
 
             // The start: the frame made, the parameters in it, nothing run.
             var start = new SilFunction(name, StartType(original)) { SourceFile = function.SourceFile, Line = function.Line };
@@ -426,6 +460,7 @@ public static class AsyncLowering {
             var startBlock = start.AddBlock();
             var made = startBlock.Append(new AllocRefInst(frame) { Location = at });
             startBlock.Append(new StoreInst(startBlock.Append(new FunctionRefInst(function.Name, ResumeType)), startBlock.Append(new RefElementAddrInst(made, ResumeField)), StoreKind.Init));
+            startBlock.Append(new StoreInst(startBlock.Append(new FunctionRefInst(DropName(name), DropType)), startBlock.Append(new RefElementAddrInst(made, DropField)), StoreKind.Init));
             startBlock.Append(new StoreInst(startBlock.Append(new IntegerLiteralInst(SilType.Int, 0)), startBlock.Append(new RefElementAddrInst(made, StateField)), StoreKind.Init));
             for (var i = 0; i < parameters.Count; i++) {
                 var argument = startBlock.AddArgument(original.Parameters[i]);
@@ -436,7 +471,129 @@ public static class AsyncLowering {
             module.Add(start);
             if (module.Unit is { } owner && owner.Owned.Contains(function.Name)) {
                 owner.Owned.Add(name);
+                owner.Owned.Add(DropName(name));
             }
+        }
+
+        /// <summary>
+        ///     The drop function: for a frame suspended part-way, whose task
+        ///     is dropped, what it holds where it stopped destroyed — the
+        ///     callee's frame it waits in first, dropped and given back, then
+        ///     the owned values live there, then every slot. Slots hold a
+        ///     value or nothing (all zeros), and destroying nothing does
+        ///     nothing; defers do not run, as the task goes no further.
+        /// </summary>
+        void Drop(string name, ClassType frame, List<Suspension> suspensions, Dictionary<SilValue, int> spilled, List<int> slotFields) {
+            var drop = new SilFunction(DropName(name), DropType);
+            drop.ParameterNames.Add("$frame");
+            var entry = drop.AddBlock();
+            var self = entry.Append(new UncheckedRefCastInst(entry.AddArgument(SilType.Object), frame));
+            var state = entry.Append(new LoadInst(entry.Append(new RefElementAddrInst(self, StateField)), LoadKind.Trivial));
+            var slots = drop.AddBlock();
+            var targets = new List<SilBlock>();
+            foreach (var suspension in suspensions) {
+                var block = drop.AddBlock();
+                targets.Add(block);
+                if (suspension.Callee is { } callee && spilled.TryGetValue(callee, out var calleeField)) {
+                    var calleeFrame = block.Append(new LoadInst(block.Append(new RefElementAddrInst(self, calleeField)), LoadKind.Trivial));
+                    var calleeDrop = block.Append(new LoadInst(block.Append(new RefElementAddrInst(calleeFrame, DropField)), LoadKind.Trivial));
+                    block.Append(new ApplyInst(calleeDrop, SilType.Unit, calleeFrame));
+                    block.Append(new BuiltinInst("async_frame_free", SilType.Unit, calleeFrame));
+                }
+
+                foreach (var value in suspension.Owned) {
+                    if (spilled.TryGetValue(value, out var field)) {
+                        block.Append(new DestroyValueInst(block.Append(new LoadInst(block.Append(new RefElementAddrInst(self, field)), LoadKind.Trivial))));
+                    }
+                }
+
+                block.Append(new BranchInst(slots));
+            }
+
+            var otherwise = CoroutineSplit.Dispatch(drop, entry, state, targets, 1);
+            otherwise.Append(new BranchInst(slots));
+            foreach (var field in slotFields) {
+                slots.Append(new DestroyAddrInst(slots.Append(new RefElementAddrInst(self, field))));
+            }
+
+            slots.Append(new ReturnInst(null));
+            module.Add(drop);
+        }
+
+        /// <summary>
+        ///     The owned values live — made and not yet consumed — at each
+        ///     place the function may suspend, as the verifier's walk finds
+        ///     them, less what that place consumes itself.
+        /// </summary>
+        static Dictionary<SilInstruction, List<SilValue>> OwnedAtSuspensions(SilFunction function) {
+            var found = new Dictionary<SilInstruction, List<SilValue>>(ReferenceEqualityComparer.Instance);
+            var liveIn = new Dictionary<SilBlock, HashSet<SilValue>> { [function.Entry] = new(ReferenceEqualityComparer.Instance) };
+
+            void Enter(SilBlock target, HashSet<SilValue> live) => liveIn.TryAdd(target, new(live, ReferenceEqualityComparer.Instance));
+
+            static bool Owned(SilValue value) => !value.Type.IsTrivial && SilVerifier.OwnershipOf(value) == Ownership.Owned;
+
+            foreach (var block in SilVerifier.ReversePostorder(function)) {
+                if (!liveIn.TryGetValue(block, out var incoming)) {
+                    continue;
+                }
+
+                var live = new HashSet<SilValue>(incoming, ReferenceEqualityComparer.Instance);
+                live.UnionWith(block.Arguments.Where(Owned));
+                foreach (var instruction in block.Instructions) {
+                    if (instruction is CondBranchInst conditional) {
+                        HashSet<SilValue> Edge(IEnumerable<SilValue> passed, SilBlock target) {
+                            var after = new HashSet<SilValue>(live, ReferenceEqualityComparer.Instance);
+                            var i = 0;
+                            foreach (var value in passed) {
+                                if (!target.Arguments[i++].IsGuaranteed) {
+                                    after.Remove(value);
+                                }
+                            }
+
+                            return after;
+                        }
+
+                        Enter(conditional.WhenTrue, Edge(conditional.TrueArguments, conditional.WhenTrue));
+                        Enter(conditional.WhenFalse, Edge(conditional.FalseArguments, conditional.WhenFalse));
+                        continue;
+                    }
+
+                    var consumed = SilVerifier.Consumed(instruction).Select(i => instruction.Operands[i]).ToList();
+                    if (IsSuspension(instruction)) {
+                        found[instruction] = live.Where(v => !consumed.Contains(v)).ToList();
+                    }
+
+                    live.ExceptWith(consumed);
+                    if (instruction.HasResult && Owned(instruction)) {
+                        live.Add(instruction);
+                    }
+
+                    switch (instruction) {
+                        case BranchInst branch:
+                            Enter(branch.Target, live);
+                            break;
+
+                        case SwitchEnumInst switchEnum:
+                            foreach (var (_, target) in switchEnum.Cases) {
+                                Enter(target, live);
+                            }
+
+                            if (switchEnum.Default is { } fallback) {
+                                Enter(fallback, live);
+                            }
+
+                            break;
+
+                        case TryApplyInst tryApply:
+                            Enter(tryApply.Normal, live);
+                            Enter(tryApply.Error, live);
+                            break;
+                    }
+                }
+            }
+
+            return found;
         }
 
         static bool IsSuspendBlock(SilBlock block, List<Suspension> suspensions) => suspensions.Any(s => ReferenceEquals(s.Suspend, block));
@@ -476,7 +633,7 @@ public static class AsyncLowering {
             block.Instructions.RemoveRange(index, block.Instructions.Count - index);
 
             // The suspension: the state to resume at, and 'false' returned.
-            SilBlock Suspended(SilBlock resume) {
+            SilBlock Suspended(SilBlock resume, SilValue? callee = null) {
                 var suspend = function.AddBlock();
                 if (!async) {
                     suspend.Append(new CondFailInst(suspend.Append(new IntegerLiteralInst(SilType.Bool, 1)), "an async call suspended where nothing can wait") { Location = location });
@@ -484,7 +641,7 @@ public static class AsyncLowering {
                     return suspend;
                 }
 
-                suspensions!.Add(new(suspend, resume));
+                suspensions!.Add(new(suspend, resume, _ownedAt.GetValueOrDefault(instruction) ?? [], callee));
                 SetState(suspend, self!, suspensions.Count, location);
                 suspend.Append(new ReturnInst(suspend.Append(new IntegerLiteralInst(SilType.Bool, 0))) { Location = location });
                 return suspend;
@@ -498,7 +655,7 @@ public static class AsyncLowering {
             switch (instruction) {
                 // A task's own waits: the runtime says whether to suspend,
                 // having queued the task where it will be woken.
-                case BuiltinInst { Name: "task_wait" } wait: {
+                case BuiltinInst { Name: "task_wait" or "task_group_wait" } wait: {
                     if (!async) {
                         throw new InvalidOperationException($"'{wait.Name}' outside an async function, in {function.Name}");
                     }
@@ -506,7 +663,7 @@ public static class AsyncLowering {
                     // Woken, it asks again: the task may not have finished.
                     var check = function.AddBlock();
                     At(block, new BranchInst(check));
-                    var must = At(check, new BuiltinInst("async_wait", SilType.Bool, wait.Operands[0]));
+                    var must = At(check, new BuiltinInst(wait.Name == "task_wait" ? "async_wait" : "async_group_wait", SilType.Bool, wait.Operands[0]));
                     At(check, new CondBranchInst(must, Suspended(check), [], after, []));
                     break;
                 }
@@ -536,7 +693,7 @@ public static class AsyncLowering {
                     var resume = At(poll, new LoadInst(At(poll, new RefElementAddrInst(frame, ResumeField)), LoadKind.Trivial));
                     var finished = At(poll, new ApplyInst(resume, SilType.Bool, frame));
                     var done = function.AddBlock();
-                    At(poll, new CondBranchInst(finished, done, [], Suspended(poll), []));
+                    At(poll, new CondBranchInst(finished, done, [], Suspended(poll, frame), []));
 
                     if (instruction is TryApplyInst tryApply) {
                         var normal = function.AddBlock();
@@ -593,7 +750,8 @@ public static class AsyncLowering {
         ///     the frame: stored as it is made, and read back where it is used.
         ///     A constant is made again where it is used instead.
         /// </summary>
-        static void Spill(SilFunction function, SilBlock entry, IEnumerable<SilBlock> resumes, Func<string, SilType, SilInstruction> field) {
+        static Dictionary<SilValue, int> Spill(SilFunction function, SilBlock entry, IEnumerable<SilBlock> resumes, Func<string, SilType, SilInstruction> field) {
+            var kept = new Dictionary<SilValue, int>(ReferenceEqualityComparer.Instance);
             var live = CoroutineSplit.LiveIn(function);
             var spilled = new HashSet<SilValue>(ReferenceEqualityComparer.Instance);
             var order = new List<SilValue>();
@@ -606,7 +764,7 @@ public static class AsyncLowering {
             }
 
             if (order.Count == 0) {
-                return;
+                return kept;
             }
 
             // Each use of each, by the instruction that uses it.
@@ -639,6 +797,7 @@ public static class AsyncLowering {
                 }
 
                 var address = field($"$live{entry.Instructions.Count}", value.Type);
+                kept[value] = ((RefElementAddrInst)address).Field;
                 address.Block = entry;
                 entry.Instructions.Insert(dispatchAt++, address);
 
@@ -657,6 +816,8 @@ public static class AsyncLowering {
                     Substitute(user, value, load);
                 }
             }
+
+            return kept;
         }
 
         static void Insert(SilBlock block, int index, SilInstruction instruction) {

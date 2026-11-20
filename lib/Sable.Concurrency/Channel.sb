@@ -2,8 +2,8 @@ module Sable.Concurrency
 
 import Sable.Time
 
-// Channels, task groups and waiting (docs/04 §4.3), written in Sable over the
-// core's Task. Tasks run one at a time and switch only where one awaits, so
+// Channels and waiting (docs/04 §4.3), written in Sable over the core's
+// Task; task groups are the core's. Tasks run one at a time and switch only where one awaits, so
 // none of this needs a lock: a task that must wait yields until it need not.
 // A task waiting on something no other task will ever provide yields for
 // ever; there is no deadlock detection yet.

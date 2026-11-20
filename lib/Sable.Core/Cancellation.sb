@@ -1,0 +1,23 @@
+module Sable.Core
+
+/// Runs 'operation', and runs 'handler' as soon as the running task is
+/// cancelled while it does — at once, if the task already is. The handler
+/// runs where the cancelling is done, so it must not wait; it is how a
+/// task waiting on something outside the runtime's view is told to stop.
+///
+/// ```sable
+/// fn nap() async -> Bool {
+///     return await withTaskCancellationHandler(operation: {
+///         (try? await Task.sleep(nanoseconds: 1_000_000)) != none
+///     }, onCancel: {
+///         print("woken early")
+///     })
+/// }
+/// ```
+public fn withTaskCancellationHandler<T, E: Error>(operation: async () throws(E) -> T, onCancel handler: () -> ()) async throws(E) -> T {
+    Task<T>.installCancellationHandler(handler)
+    defer {
+        Task<T>.removeCancellationHandler()
+    }
+    return try await operation()
+}

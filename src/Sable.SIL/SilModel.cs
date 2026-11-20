@@ -1579,10 +1579,14 @@ public static class SilBuiltins {
             return InlineSignature(name, operands, result);
         }
 
-        // Tasks: spawned, given a body and the task object (which the runtime then holds), waited for, yielded to.
+        // Tasks: spawned, given a body and the task object (which the runtime
+        // then holds), a priority (-1: inherited) and whether detached;
+        // waited for, yielded to, given a cancellation handler and its context.
         switch (name) {
-            case "task_spawn" when operands is [FunctionType, ClassType]:
-                return new([operands[0], operands[1]], SilType.Int) { Consumed = [1] };
+            case "task_spawn" when operands is [FunctionType, ClassType, var priority, var detached] && priority == SilType.Int && detached == SilType.Bool:
+                return new([..operands], SilType.Int) { Consumed = [1] };
+            case "task_handler_push" when operands is [FunctionType, ClassType]:
+                return new([..operands], SilType.Unit) { Consumed = [1] };
             case "task_wait" or "task_release" or "task_cancel" when operands is [var handle] && handle == SilType.Int:
                 return new([SilType.Int], SilType.Unit);
             // Off the run queue for at least this many nanoseconds, while the other tasks run.
@@ -1590,9 +1594,6 @@ public static class SilBuiltins {
                 return new([SilType.Int], SilType.Unit);
             case "task_yield" or "task_drain" when operands.Count == 0:
                 return new([], SilType.Unit);
-            // Whether the running task has been cancelled.
-            case "task_is_cancelled" when operands.Count == 0:
-                return new([], SilType.Bool);
             // A block ran, for 'sable test --coverage' (Coverage.cs): its counter's number.
             case Coverage.Builtin when operands is [var counter] && counter == SilType.Int:
                 return new([SilType.Int], SilType.Unit);
@@ -1718,7 +1719,7 @@ public static class SilBuiltins {
     }
 
     public static IEnumerable<string> Names =>
-        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_is_cancelled", "task_yield", "task_sleep", "task_drain", Coverage.Builtin]);
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", Coverage.Builtin]);
 
     static SilType? Pointee(SilType? type) => (type as InlinePointerType)?.Pointee;
 
@@ -2051,6 +2052,19 @@ public static class SilBuiltins {
         Add("time_monotonic", SilType.Int);
         Add("time_wall_clock", SilType.Int);
         Add("time_sleep", SilType.Unit, SilType.Int);
+
+        // Tasks (runtime/tasks.c): whether the running one is cancelled, its
+        // priority; and groups, by handle — made, given a child just spawned,
+        // waited on for a child to finish (a place a task suspends,
+        // AsyncLowering), the finished child taken, and freed.
+        Add("task_is_cancelled", SilType.Bool);
+        Add("task_priority", SilType.Int);
+        Add("task_handler_pop", SilType.Unit);
+        Add("task_group_new", SilType.Int);
+        Add("task_group_add", SilType.Unit, SilType.Int, SilType.Int);
+        Add("task_group_wait", SilType.Unit, SilType.Int);
+        Add("task_group_take", SilType.Int, SilType.Int);
+        Add("task_group_free", SilType.Unit, SilType.Int);
         Add("process_run", SilType.String, SilType.String, new ArrayType(SilType.String), SilType.String);
         Add("process_status", SilType.Int);
         Add("process_error_output", SilType.String);

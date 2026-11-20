@@ -1,0 +1,211 @@
+module TaskTests
+
+// Task, TaskPriority, CancellationError and withTaskCancellationHandler
+// (Sable.Core), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn nap() async -> String {
+    do {
+        try await Task.sleep(nanoseconds: 10_000_000_000)
+        return "woke"
+    } catch {
+        return error.description()
+    }
+}
+
+@test
+fn aTasksValueIsWhatItsBodyGives() async {
+    let task = Task.spawn { 6 * 7 }
+    assertEqual(await task.value, 42)
+}
+
+@test
+fn aTaskIsNotCancelledUntilAsked() async {
+    let task = Task.spawn { Task.isCancelled }
+    assert(!(await task.value))
+    assert(!Task.isCancelled)
+}
+
+@test
+fn cancellingATaskWakesItsSleep() async {
+    let task = Task.spawn { await nap() }
+    await Task.yield()
+    task.cancel()
+    assertEqual(await task.value, "the task was cancelled")
+}
+
+@test
+fn cancellingATaskCancelsItsChildren() async {
+    let task = Task.spawn {
+        let child = Task.spawn { await nap() }
+        return await child.value
+    }
+    await Task.yield()
+    task.cancel()
+    assertEqual(await task.value, "the task was cancelled")
+}
+
+@test
+fn aDetachedTaskIsNotCancelledWithItsSpawner() async {
+    let task = Task.spawn {
+        let free = Task.detached {
+            await Task.yield()
+            return Task.isCancelled
+        }
+        return await free.value
+    }
+    task.cancel()
+    assert(!(await task.value))
+}
+
+@test
+fn aTaskSpawnedByACancelledOneStartsCancelled() async {
+    let task = Task.spawn {
+        await Task.yield()
+        let child = Task.spawn { Task.isCancelled }
+        return await child.value
+    }
+    task.cancel()
+    assert(await task.value)
+}
+
+@test
+fn checkingForCancellationThrowsOnceCancelled() async {
+    let task = Task.spawn {
+        do {
+            try Task.checkCancellation()
+        } catch {
+            return false
+        }
+        await Task.yield()
+        do {
+            try Task.checkCancellation()
+        } catch {
+            return true
+        }
+        return false
+    }
+    await Task.yield()
+    task.cancel()
+    assert(await task.value)
+}
+
+@test
+fn aSleepNotCancelledWakesAndDoesNotThrow() async {
+    let slept = (try? await Task.sleep(nanoseconds: 1_000_000)) != none
+    assert(slept)
+}
+
+@test
+fn cancellingAFinishedTaskDoesNothing() async {
+    let task = Task.spawn { 1 }
+    assertEqual(await task.value, 1)
+    task.cancel()
+    task.cancel()
+    assertEqual(await task.value, 1)
+}
+
+@test
+fn aChildHasItsParentsPriority() async {
+    let task = Task.detached(priority: .high) {
+        let child = Task.spawn { Task.currentPriority }
+        return await child.value
+    }
+    assertEqual(await task.value, TaskPriority.high)
+}
+
+@test
+fn aPriorityGivenIsTheTasks() async {
+    let low = Task.spawn(priority: .low) { Task.currentPriority }
+    assertEqual(await low.value, TaskPriority.low)
+    let background = Task.detached(priority: .background) { Task.currentPriority.rawValue }
+    assertEqual(await background.value, 9)
+}
+
+@test
+fn aDetachedTasksPriorityIsMedium() async {
+    let task = Task.detached { Task.currentPriority }
+    assertEqual(await task.value, TaskPriority.medium)
+}
+
+@test
+fn prioritiesAreOrderedByTheirRawValues() {
+    assert(TaskPriority.high.rawValue > TaskPriority.medium.rawValue)
+    assert(TaskPriority.medium.rawValue > TaskPriority.low.rawValue)
+    assert(TaskPriority.low.rawValue > TaskPriority.background.rawValue)
+    assertEqual(TaskPriority(rawValue: 25), TaskPriority.high)
+}
+
+@test
+fn aCancellationErrorSaysTheTaskWasCancelled() {
+    let error = CancellationError()
+    assertEqual(error.description(), "the task was cancelled")
+}
+
+@test
+fn aCancellationHandlerRunsAsTheTaskIsCancelled() async {
+    let ran = Flag()
+    let task = Task.spawn {
+        return await withTaskCancellationHandler(operation: {
+            await nap()
+        }, onCancel: {
+            ran.set()
+        })
+    }
+    await Task.yield()
+    assert(!ran.value)
+    task.cancel()
+    assert(ran.value)
+    assertEqual(await task.value, "the task was cancelled")
+}
+
+@test
+fn aCancellationHandlerRunsAtOnceIfTheTaskIsCancelledAlready() async {
+    let ran = Flag()
+    let task = Task.spawn {
+        await Task.yield()
+        return await withTaskCancellationHandler(operation: {
+            ran.value
+        }, onCancel: {
+            ran.set()
+        })
+    }
+    task.cancel()
+    assert(await task.value)
+}
+
+@test
+fn aCancellationHandlerIsRemovedOnceItsOperationEnds() async {
+    let ran = Flag()
+    let task = Task.spawn {
+        let value = await withTaskCancellationHandler(operation: {
+            1
+        }, onCancel: {
+            ran.set()
+        })
+        await Task.yield()
+        return value
+    }
+    await Task.yield()
+    task.cancel()
+    assertEqual(await task.value, 1)
+    assert(!ran.value)
+}
+
+@test
+fn aCancellationHandlersOperationMayThrow() async {
+    let thrown = try? await withTaskCancellationHandler(operation: {
+        throw CancellationError()
+    }, onCancel: { })
+    assert(thrown == none)
+}
+
+class Flag {
+    var value: Bool = false
+
+    fn set() {
+        value = true
+    }
+}

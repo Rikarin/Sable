@@ -404,7 +404,7 @@ fn main() {
                     print(isLeapYear(1900))
                     print(daysInMonth(2024, 2))
                     let start = Instant.now()
-                    await Clock.sleep(Duration.milliseconds(20))
+                    try? await Clock.sleep(Duration.milliseconds(20))
                     print(start.elapsed >= Duration.milliseconds(20))
                     let took = Clock.measure({ Runtime.sleep(nanoseconds: 5_000_000) })
                     print(took >= Duration.milliseconds(5))
@@ -587,7 +587,7 @@ fn main() {
     [Fact]
     public void ConcurrencyIsWrittenInSable() =>
         Assert.Equal(
-            "sent 0\ngot 0\nsent 1\ngot 1\nsent 2\ngot 4\nsent 3\ngot 9\nsum 14 of 4\ntrue\n4\n4\n1 16\ntrue\ntrue\n",
+            "sent 0\ngot 0\nsent 1\ngot 1\nsent 2\ngot 4\nsent 3\ngot 9\nsum 14 of 4\ntrue\n30\ntrue\ntrue\n",
             AssertAgree("""
                 module P
                 import Sable.Concurrency
@@ -625,14 +625,17 @@ fn main() {
                     print("sum \(await consumer.value) of \(await producer.value)")
                     print(channel.tryReceive() == none)
 
-                    let group = TaskGroup<Int>()
-                    for i in 1...4 {
-                        group.add(Task.spawn { await square(i) })
+                    let squares = await withTaskGroup(of: Int.self) { group in
+                        for i in 1...4 {
+                            group.spawn { await square(i) }
+                        }
+                        var total = 0
+                        for await square in group {
+                            total += square
+                        }
+                        return total
                     }
-                    print(group.count)
-                    let results = await group.waitForAll()
-                    print(results.count)
-                    print("\(results[0]) \(results[3])")
+                    print(squares)
 
                     let start = Instant.now()
                     let stop = Channel<Int>()
@@ -644,7 +647,7 @@ fn main() {
                         }
                         return ticks > 0
                     }
-                    await sleep(Duration.milliseconds(10))
+                    try? await sleep(Duration.milliseconds(10))
                     stop.close()
                     print(start.elapsed >= Duration.milliseconds(10))
                     print(await ticker.value)

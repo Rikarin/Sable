@@ -1,0 +1,11 @@
+module Sable.Core
+
+/// What a cancelled task's waits throw: 'Task.sleep', and
+/// 'Task.checkCancellation()'.
+public struct CancellationError: Error {
+    public init() { }
+
+    public fn description() -> String {
+        return "the task was cancelled"
+    }
+}

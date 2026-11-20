@@ -62,14 +62,79 @@ public sealed partial class SilGen {
     /// <summary>What runs a task: async, the root of its task's frames, given the task to keep its result in.</summary>
     static FunctionType RunType(ClassType task) => new([task], SilType.Unit, null, [true], isAsync: true);
 
+    /// <summary>What a cancellation handler is: a closure taking nothing and giving nothing.</summary>
+    static readonly ThickFunctionType HandlerBody = new(new FunctionType([], SilType.Unit));
+
+    /// <summary>
+    ///     The object a cancellation handler is kept in while the runtime
+    ///     holds it, and the function the runtime calls it through, given
+    ///     that object: the closure, borrowed and called.
+    /// </summary>
+    ClassType CancellationHandler() {
+        const string name = "$task.handler";
+        if (_module.FindType(name) is ClassType existing) {
+            return existing;
+        }
+
+        var handler = _module.AddType(new ClassType(name));
+        handler.Fields.Add(("body", HandlerBody));
+
+        var run = new SilFunction(HandlerRunName, HandlerRunType);
+        var block = run.AddBlock();
+        var self = block.Append(new UncheckedRefCastInst(block.AddArgument(SilType.Object), handler));
+        var body = block.Append(new LoadBorrowInst(block.Append(new RefElementAddrInst(self, 0))));
+        block.Append(new ApplyInst(body, SilType.Unit));
+        block.Append(new EndBorrowInst(body));
+        block.Append(new ReturnInst(null));
+        _module.Add(run);
+        return handler;
+    }
+
+    const string HandlerRunName = "$task.handler.run";
+
+    static readonly FunctionType HandlerRunType = new([SilType.Object], SilType.Unit);
+
     sealed partial class FunctionLowering {
-        /// <summary>'Task.spawn { … }': a task made, its body kept in it, the runtime given it to run.</summary>
-        SilValue? Spawn(BoundCall call) {
+        /// <summary>
+        ///     'Task.installCancellationHandler(handler)': the closure kept in
+        ///     an object the runtime holds, and runs if the task is cancelled
+        ///     (at once, if it already is), until the handler is removed.
+        /// </summary>
+        SilValue? InstallCancellationHandler(BoundCall call) {
+            if (Expression(call.Arguments[0]) is not { Type: ThickFunctionType } body) {
+                return null;
+            }
+
+            var handler = generator.CancellationHandler();
+            var made = Emit(new AllocRefInst(handler));
+            Emit(new StoreInst(Owned(body), Emit(new RefElementAddrInst(made, 0)), StoreKind.Assign));
+            Emit(new BuiltinInst("task_handler_push", SilType.Unit, Emit(new FunctionRefInst(HandlerRunName, HandlerRunType)), made));
+            return UnitValue.Instance;
+        }
+
+        /// <summary>
+        ///     'Task.spawn { … }' and 'Task.detached { … }', with a priority
+        ///     or not: a task made, its body kept in it, the runtime given it
+        ///     to run — as a child of the running task, or detached.
+        /// </summary>
+        SilValue? Spawn(BoundCall call, bool detached) {
             if (Sub(call.Type) is not NamedTypeSymbol { TypeArguments: [var success] } || generator.TaskClass(success) is not { } task) {
                 return Missing(call, $"'{Describe(call.Syntax)}'");
             }
 
-            if (Expression(call.Arguments[0]) is not { Type: ThickFunctionType } body) {
+            // A priority given is its raw value; -1 has the runtime choose.
+            SilValue priority;
+            if (call.Arguments.Length == 2) {
+                if (Expression(call.Arguments[0]) is not { Type: StructType { Fields.Count: 1 } } given) {
+                    return null;
+                }
+
+                priority = Emit(new StructExtractInst(given, 0));
+            } else {
+                priority = Emit(new IntegerLiteralInst(SilType.Int, -1));
+            }
+
+            if (Expression(call.Arguments[^1]) is not { Type: ThickFunctionType } body) {
                 return null;
             }
 
@@ -81,9 +146,20 @@ public sealed partial class SilGen {
             // The runtime holds a reference of its own until the task has run.
             var lent = Emit(new CopyValueInst(made));
             var run = Emit(new FunctionRefInst(TaskRunName(task), RunType(task)));
-            var handle = Emit(new BuiltinInst("task_spawn", SilType.Int, run, lent));
+            var handle = Emit(new BuiltinInst("task_spawn", SilType.Int, run, lent, priority, Emit(new IntegerLiteralInst(SilType.Bool, detached ? 1 : 0))));
             Emit(new StoreInst(handle, Emit(new RefElementAddrInst(made, TaskHandle)), StoreKind.Assign));
             return made;
+        }
+
+        /// <summary>'task.handle', Sable.Core's own: the runtime's handle, which a group is given.</summary>
+        SilValue? HandleOf(BoundFieldAccess access) {
+            if (access.Receiver is null || Borrow(access.Receiver) is not { Type: ClassType } receiver) {
+                return Missing(access, "this task's handle");
+            }
+
+            var handle = Emit(new LoadInst(Emit(new RefElementAddrInst(receiver, TaskHandle))));
+            End(receiver);
+            return handle;
         }
 
         /// <summary>'task.cancel()': the runtime told, through the task's handle.</summary>

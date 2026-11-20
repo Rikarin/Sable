@@ -174,11 +174,11 @@ public sealed class AsyncLoweringTests {
                            @main
                            fn main() async {
                                let slow = Task.spawn {
-                                   await Task.sleep(nanoseconds: 60_000_000)
+                                   try? await Task.sleep(nanoseconds: 60_000_000)
                                    print("slow")
                                }
                                let fast = Task.spawn {
-                                   await Task.sleep(nanoseconds: 20_000_000)
+                                   try? await Task.sleep(nanoseconds: 20_000_000)
                                    print("fast")
                                }
                                await slow.value
@@ -187,5 +187,48 @@ public sealed class AsyncLoweringTests {
                            }
                            """);
         Assert.Equal("fast\nslow\ndone\n", Run(module).Output);
+    }
+
+    /// <summary>
+    ///     Every frame can be dropped part-way: its drop function destroys
+    ///     what it holds where it stopped — the callee frame it waits in, the
+    ///     owned values live there, its slots. Two tasks waiting on each
+    ///     other are dropped as the program ends, and nothing leaks.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TasksThatCanNeverGoOnAreDroppedAndWhatTheyHeldIsGivenBack(bool optimise) {
+        var module = Lower("""
+                           module M
+                           class Box {
+                               var task: Task<Int>? = none
+                           }
+                           fn wait(_ other: Task<Int>, _ label: String) async -> Int {
+                               let held = [label, label + "!"]
+                               let n = await other.value
+                               return n + held.count
+                           }
+                           @main
+                           fn main() async {
+                               let box = Box()
+                               let a = Task.detached {
+                                   let other = box.task!
+                                   box.task = none
+                                   return await wait(other, "a")
+                               }
+                               let b = Task.detached { await wait(a, "b") }
+                               box.task = b
+                               print("main ends")
+                           }
+                           """, optimise);
+        AsyncLowering.Run(module);
+        var drop = module.Find(AsyncLowering.DropName("M.wait"));
+        Assert.NotNull(drop);
+        Assert.Equal(AsyncLowering.DropType, drop.Type);
+
+        var (output, interpreter) = Run(module);
+        Assert.Equal("main ends\n", output);
+        Assert.Equal(2, interpreter.DroppedTasks);
     }
 }

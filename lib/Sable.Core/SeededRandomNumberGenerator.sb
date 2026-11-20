@@ -1,0 +1,56 @@
+module Sable.Core
+
+/// A random number generator whose sequence its seed fixes: the same seed
+/// gives the same numbers in every run, on every machine — for tests,
+/// simulations and procedural content that must repeat. It is
+/// xoshiro256** (Blackman and Vigna), its 256 bits of state filled from
+/// the seed by SplitMix64: fast, and statistically strong, but not for
+/// secrets — one who sees its output can predict the rest. For those, and
+/// for anything that should differ from run to run, use
+/// SystemRandomNumberGenerator.
+///
+/// ```sable
+/// var a = SeededRandomNumberGenerator(seed: 2024)
+/// var b = SeededRandomNumberGenerator(seed: 2024)
+/// assert(a.next() == b.next())
+/// let die = Int.random(in: 1...6, using: &a)
+/// assert(die == Int.random(in: 1...6, using: &b))
+/// ```
+public struct SeededRandomNumberGenerator: RandomNumberGenerator {
+    var s0: U64
+    var s1: U64
+    var s2: U64
+    var s3: U64
+
+    /// A generator whose sequence is the seed's.
+    public init(seed: U64) {
+        var mixer = seed
+        s0 = SeededRandomNumberGenerator.splitMix(&mixer)
+        s1 = SeededRandomNumberGenerator.splitMix(&mixer)
+        s2 = SeededRandomNumberGenerator.splitMix(&mixer)
+        s3 = SeededRandomNumberGenerator.splitMix(&mixer)
+    }
+
+    /// The next 64 bits of the sequence.
+    public mutating fn next() -> U64 {
+        let result = s1.wrappingMul(5).rotatedLeft(by: 7).wrappingMul(9)
+        let shifted = s1 << 17
+        s2 = s2 ^ s0
+        s3 = s3 ^ s1
+        s1 = s1 ^ s2
+        s0 = s0 ^ s3
+        s2 = s2 ^ shifted
+        s3 = s3.rotatedLeft(by: 45)
+        return result
+    }
+
+    /// SplitMix64's next output, the state moved on: what spreads one
+    /// seed's bits over the whole state.
+    static fn splitMix(_ state: inout U64) -> U64 {
+        state = state.wrappingAdd(0x9E3779B97F4A7C15)
+        var z = state
+        z = (z ^ (z >> 30)).wrappingMul(0xBF58476D1CE4E5B9)
+        z = (z ^ (z >> 27)).wrappingMul(0x94D049BB133111EB)
+        return z ^ (z >> 31)
+    }
+}

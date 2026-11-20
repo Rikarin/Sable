@@ -1,0 +1,45 @@
+module SystemRandomNumberGeneratorTests
+
+// SystemRandomNumberGenerator (Sable.Core): the operating system's random
+// bits. What they are cannot be tested; that they vary, and are spread
+// over all 64 bits, can.
+
+import Sable.Testing
+
+@test
+fn drawsDiffer() {
+    var system = SystemRandomNumberGenerator()
+    let first = system.next()
+    var differed = false
+    var i = 0
+    while i < 8 {
+        if system.next() != first {
+            differed = true
+        }
+        i += 1
+    }
+    assert(differed)
+}
+
+@test
+fn everyBitIsSometimesSetAndSometimesClear() {
+    var system = SystemRandomNumberGenerator()
+    var everSet: U64 = 0
+    var everClear: U64 = 0
+    var i = 0
+    while i < 200 {
+        let bits = system.next()
+        everSet = everSet | bits
+        everClear = everClear | ~bits
+        i += 1
+    }
+    assert(everSet == U64.max)
+    assert(everClear == U64.max)
+}
+
+@test
+fn twoGeneratorsDoNotRepeatEachOther() {
+    var a = SystemRandomNumberGenerator()
+    var b = SystemRandomNumberGenerator()
+    assert(a.next() != b.next() || a.next() != b.next())
+}

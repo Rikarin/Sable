@@ -45,7 +45,6 @@ lib/Sable.IO/Directory.sb                          0   0   # raise me: no tests 
 lib/Sable.IO/Environment.sb                        0   0   # raise me: no tests yet
 lib/Sable.IO/File.sb                               0   0   # raise me: no tests yet
 lib/Sable.IO/Path.sb                               0   0   # raise me: no tests yet
-lib/Sable.Math/Random.sb                           0   0   # raise me: no tests yet
 lib/Sable.Process/Completed.sb                     0  70   # raise me: no tests yet
 lib/Sable.Process/Process.sb                       0   0   # raise me: no tests yet
 lib/Sable.Serialize/Difference.sb                  0   0   # raise me: no tests yet

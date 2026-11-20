@@ -1,0 +1,74 @@
+module Sable.Core
+
+// Random floating-point values in a range, spread evenly over it: a random
+// fraction with as many bits as the type's significand holds, scaled to
+// the range.
+
+extension BinaryFloatingPoint {
+    /// A random value from the range, spread evenly over it, drawn from the
+    /// generator. A range that is empty, or not finite, traps.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(seed: 3)
+    /// let x = F64.random(in: -1.0..<1.0, using: &generator)
+    /// assert(x >= -1.0 && x < 1.0)
+    /// ```
+    public static fn random<G: RandomNumberGenerator>(in range: Range<Self>, using generator: inout G) -> Self {
+        precondition(range.lowerBound < range.upperBound, "a random value of an empty range")
+        let width = range.upperBound - range.lowerBound
+        precondition(width.isFinite, "a random value of a range that is not finite")
+        while true {
+            // Rounding can carry a value just under the upper bound up to
+            // it, which the range leaves out: then another is drawn.
+            let value = range.lowerBound + Self.fraction(&generator, inclusive: false) * width
+            if value < range.upperBound {
+                return value
+            }
+        }
+    }
+
+    /// A random value from the range, both ends included, spread evenly
+    /// over it, drawn from the generator. A range whose upper bound is
+    /// below its lower one, or that is not finite, traps.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(seed: 3)
+    /// let p = F32.random(in: 0.0...1.0, using: &generator)
+    /// assert(p >= 0.0 && p <= 1.0)
+    /// ```
+    public static fn random<G: RandomNumberGenerator>(in range: ClosedRange<Self>, using generator: inout G) -> Self {
+        precondition(range.lowerBound <= range.upperBound, "a random value of an empty range")
+        let width = range.upperBound - range.lowerBound
+        precondition(width.isFinite, "a random value of a range that is not finite")
+        let value = range.lowerBound + Self.fraction(&generator, inclusive: true) * width
+        return value > range.upperBound ? range.upperBound : value
+    }
+
+    /// A random value from the range, drawn from the system's generator.
+    ///
+    /// ```sable
+    /// let x = F64.random(in: 0.0..<10.0)
+    /// assert(x >= 0.0 && x < 10.0)
+    /// ```
+    public static fn random(in range: Range<Self>) -> Self {
+        var system = SystemRandomNumberGenerator()
+        return Self.random(in: range, using: &system)
+    }
+
+    /// A random value from the range, both ends included, drawn from the
+    /// system's generator.
+    public static fn random(in range: ClosedRange<Self>) -> Self {
+        var system = SystemRandomNumberGenerator()
+        return Self.random(in: range, using: &system)
+    }
+
+    /// A random fraction k / 2^p, p the significand's bits: in [0, 1), or
+    /// in [0, 1] when 'inclusive', each of the 2^p (or 2^p + 1) values as
+    /// likely. Each is exact in the type.
+    static fn fraction<G: RandomNumberGenerator>(_ generator: inout G, inclusive: Bool) -> Self {
+        let bits = Self.significandBitCount + 1
+        let steps = U64(1) << U64(bits)
+        let k = inclusive ? generator.next(upperBound: steps + 1) : generator.next() >> U64(64 - bits)
+        return Self.rounding(wideMagnitude: U128(k)).scaled(byPowerOfTwo: -bits)
+    }
+}

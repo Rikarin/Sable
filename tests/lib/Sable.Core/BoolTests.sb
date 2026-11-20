@@ -1,0 +1,37 @@
+module BoolTests
+
+// Bool's members (Sable.Core).
+
+import Sable.Testing
+
+@test
+fn toStringSpellsTheValue() {
+    assertEqual(true.toString(), "true")
+    assertEqual(false.toString(), "false")
+}
+
+@test
+fn randomGivesBothValues() {
+    var generator = SeededRandomNumberGenerator(seed: 40)
+    var heads = 0
+    var i = 0
+    while i < 200 {
+        if Bool.random(using: &generator) {
+            heads += 1
+        }
+        i += 1
+    }
+    assert(heads > 60 && heads < 140)
+    var sawTrue = false
+    var sawFalse = false
+    i = 0
+    while i < 64 && !(sawTrue && sawFalse) {
+        if Bool.random() {
+            sawTrue = true
+        } else {
+            sawFalse = true
+        }
+        i += 1
+    }
+    assert(sawTrue && sawFalse)
+}

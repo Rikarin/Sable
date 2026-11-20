@@ -1,0 +1,84 @@
+module CollectionRandomTests
+
+// Choosing and shuffling at random (Collection+Random.sb, Sable.Core).
+
+import Sable.Testing
+
+@test
+fn randomElementChoosesEachInTime() {
+    var generator = SeededRandomNumberGenerator(seed: 30)
+    let letters: String[>..] = ["a", "b", "c"]
+    var seen: [String: Int] = [:]
+    var i = 0
+    while i < 300 {
+        seen[letters.randomElement(using: &generator)!, default: 0] += 1
+        i += 1
+    }
+    assertEqual(seen.count, 3)
+}
+
+@test
+fn randomElementOfNothingIsNone() {
+    let empty: Int[>..] = []
+    assert(empty.randomElement() == none)
+    assert((1..<6).randomElement() != none)
+}
+
+@test
+fn shuffleKeepsTheElementsAndChangesTheOrder() {
+    var generator = SeededRandomNumberGenerator(seed: 31)
+    var deck: Int[>..] = []
+    var i = 0
+    while i < 52 {
+        deck.append(i)
+        i += 1
+    }
+    let ordered = deck
+    deck.shuffle(using: &generator)
+    assert(deck != ordered)
+    assert(deck.sorted() == ordered)
+}
+
+@test
+fn shuffleWithTheSameSeedGivesTheSameOrder() {
+    var a = SeededRandomNumberGenerator(seed: 32)
+    var b = SeededRandomNumberGenerator(seed: 32)
+    var first: Int[>..] = [1, 2, 3, 4, 5, 6, 7, 8]
+    var second: Int[>..] = [1, 2, 3, 4, 5, 6, 7, 8]
+    first.shuffle(using: &a)
+    second.shuffle(using: &b)
+    assert(first == second)
+}
+
+@test
+fn shuffleOfNoneOrOneLeavesItAlone() {
+    var empty: Int[>..] = []
+    empty.shuffle()
+    assertEqual(empty.count, 0)
+    var one: Int[>..] = [7]
+    one.shuffle()
+    assert(one == [7])
+}
+
+@test
+fn everyOrderComesUp() {
+    var generator = SeededRandomNumberGenerator(seed: 33)
+    var orders: [String: Bool] = [:]
+    var i = 0
+    while i < 200 {
+        var xs: Int[>..] = [1, 2, 3]
+        xs.shuffle(using: &generator)
+        orders["\(xs[0])\(xs[1])\(xs[2])"] = true
+        i += 1
+    }
+    assertEqual(orders.count, 6)
+}
+
+@test
+fn shuffledGivesANewArrayOfAnySequence() {
+    var generator = SeededRandomNumberGenerator(seed: 34)
+    let shuffled = (1...20).shuffled(using: &generator)
+    assert(shuffled.sorted() == (1...20).toArray())
+    let fixed: Int[4] = [1, 2, 3, 4]
+    assertEqual(fixed.shuffled().count, 4)
+}

@@ -1,0 +1,80 @@
+module RandomNumberGeneratorTests
+
+// RandomNumberGenerator (Sable.Core): a generator of the program's own,
+// and what every generator gets from the protocol.
+
+import Sable.Testing
+
+// Counts up: predictable, so what is built on it can be checked exactly.
+struct Counting: RandomNumberGenerator {
+    var value: U64
+
+    mutating fn next() -> U64 {
+        value = value.wrappingAdd(1)
+        return value
+    }
+}
+
+// Gives zero first, then counts from two: the first draw falls in the
+// zone a bound of three leaves at the bottom, which would favour zero.
+struct LowThenCounting: RandomNumberGenerator {
+    var drawn: Int
+
+    mutating fn next() -> U64 {
+        drawn += 1
+        return drawn == 1 ? 0 : U64(drawn)
+    }
+}
+
+@test
+fn aGeneratorOfTheProgramsOwnMeetsTheProtocol() {
+    // A power of two divides 2^64: no draw is thrown away.
+    var counting = Counting { value: 0 }
+    assert(counting.next(upperBound: 16) == 1)
+    assert(counting.next(upperBound: 16) == 2)
+    assert(Int.random(in: 0..<16, using: &counting) == 3)
+}
+
+@test
+fn nextBelowABoundStaysBelowIt() {
+    var generator = SeededRandomNumberGenerator(seed: 1)
+    var seen: Bool[>..] = [false, false, false, false, false, false, false]
+    var i = 0
+    while i < 500 {
+        let n = generator.next(upperBound: 7)
+        assert(n >= 0 && n < 7)
+        seen[n] = true
+        i += 1
+    }
+    assert(seen.allSatisfy({ $0 }))
+}
+
+@test
+fn aDrawInTheBiasedZoneIsDrawnAgain() {
+    // 2^64 % 3 == 1: a draw of 0 would make 0 a little likelier, so it
+    // is thrown away, and the next, 2, is taken.
+    var generator = LowThenCounting { drawn: 0 }
+    assert(generator.next(upperBound: 3 as U64) == 2)
+    assertEqual(generator.drawn, 2)
+}
+
+@test
+fn nextBelowA128BitBoundTakesTwoDraws() {
+    var counting = Counting { value: 0 }
+    let n = counting.next(upperBound: U128.max)
+    assert(n == ((U128(1) << 64) | U128(2)))
+}
+
+@test
+fn everyNarrowTypeCanBeABound() {
+    var generator = SeededRandomNumberGenerator(seed: 2)
+    assert(generator.next(upperBound: 1 as U8) == 0)
+    assert(generator.next(upperBound: 100 as I16) < 100)
+    assert(generator.next(upperBound: I64.max) >= 0)
+}
+
+@test(traps: "the upper bound must be positive")
+fn aBoundOfZeroTraps() {
+    var generator = SeededRandomNumberGenerator(seed: 3)
+    let _ = generator.next(upperBound: 0)
+}

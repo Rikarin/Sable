@@ -1,0 +1,77 @@
+module Sable.Core
+
+// Random integers in a range, every one as likely as every other, from a
+// generator given or the system's. The range's width is taken in 128 bits,
+// so that 'I8.min...I8.max', whose width does not fit an I8, works too.
+
+extension FixedWidthInteger {
+    /// A random value from the range, every one in it as likely, drawn from
+    /// the generator. An empty range traps: it has nothing to give.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(seed: 1)
+    /// let n = Int.random(in: 10..<20, using: &generator)
+    /// assert(n >= 10 && n < 20)
+    /// ```
+    public static fn random<G: RandomNumberGenerator>(in range: Range<Self>, using generator: inout G) -> Self {
+        precondition(range.lowerBound < range.upperBound, "a random value of an empty range")
+        let width = range.upperBound.wideBitPattern.wrappingSub(range.lowerBound.wideBitPattern)
+        return Self.offset(range.lowerBound, by: Self.below(width, &generator))
+    }
+
+    /// A random value from the range, both ends included, every one in it
+    /// as likely, drawn from the generator. A range whose upper bound is
+    /// below its lower one traps.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(seed: 1)
+    /// let byte = U8.random(in: U8.min...U8.max, using: &generator)
+    /// let die = Int.random(in: 1...6, using: &generator)
+    /// assert(die >= 1 && die <= 6)
+    /// ```
+    public static fn random<G: RandomNumberGenerator>(in range: ClosedRange<Self>, using generator: inout G) -> Self {
+        precondition(range.lowerBound <= range.upperBound, "a random value of an empty range")
+        let span = range.upperBound.wideBitPattern.wrappingSub(range.lowerBound.wideBitPattern)
+
+        // The whole of the type's values, whose count does not fit it: any
+        // bits will do.
+        let whole = Self.bitWidth == 128 ? U128.max : (U128(1) << U128(Self.bitWidth)) - 1
+        if span == whole {
+            return Self.fromWideBitPattern(generator.nextWide())
+        }
+        return Self.offset(range.lowerBound, by: Self.below(span + 1, &generator))
+    }
+
+    /// A random value from the range, drawn from the system's generator.
+    ///
+    /// ```sable
+    /// let n = Int.random(in: 0..<100)
+    /// assert(n >= 0 && n < 100)
+    /// ```
+    public static fn random(in range: Range<Self>) -> Self {
+        var system = SystemRandomNumberGenerator()
+        return Self.random(in: range, using: &system)
+    }
+
+    /// A random value from the range, both ends included, drawn from the
+    /// system's generator.
+    public static fn random(in range: ClosedRange<Self>) -> Self {
+        var system = SystemRandomNumberGenerator()
+        return Self.random(in: range, using: &system)
+    }
+
+    /// A random offset below the width, which is below 2^bitWidth: drawn
+    /// as a U64 where that holds it, so a narrow type takes one draw.
+    static fn below<G: RandomNumberGenerator>(_ width: U128, _ generator: inout G) -> U128 {
+        if Self.bitWidth <= 64 {
+            return U128(generator.next(upperBound: U64.truncating(width)))
+        }
+        return generator.next(upperBound: width)
+    }
+
+    /// The lower bound moved up by the offset, in 128 bits, then cut to the
+    /// type: the offset is below the range's width, so the result is in it.
+    static fn offset(_ lower: Self, by offset: U128) -> Self {
+        return Self.fromWideBitPattern(lower.wideBitPattern.wrappingAdd(offset))
+    }
+}

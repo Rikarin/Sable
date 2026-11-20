@@ -218,6 +218,12 @@ public struct Runtime {
     @builtin("hash_seed")
     public static fn hashSeed() -> Int
 
+    /// 64 bits from the operating system's random source (getentropy, or
+    /// rand_s on Windows), fresh at each call: what
+    /// SystemRandomNumberGenerator draws.
+    @builtin("random_bits")
+    public static fn randomBits() -> Int
+
     /// Where the part next occurs in the text at or after the scalar
     /// position: its scalar index, or -1. Natively a vectorised byte search.
     @builtin("string_find")

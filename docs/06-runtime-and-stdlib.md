@@ -234,8 +234,10 @@ Sable.Core          ── always linked, no dependencies
   pointers, Iterator/Sequence and the Collection family (Bidirectional,
   RandomAccess, Mutable, RangeReplaceable), FromSequence, and the
   sequence algorithms, eager and behind '.lazy',
-  Formattable/FormatSpec (what "\(x:spec)" writes through) and
-  Parsable/ParseError/NumberStyles (text back to values)
+  Formattable/FormatSpec (what "\(x:spec)" writes through),
+  Parsable/ParseError/NumberStyles (text back to values), and
+  RandomNumberGenerator with the system's generator and a seeded one
+  (xoshiro256**), behind 'random(in:)', 'randomElement' and 'shuffle'
 
 Sable.Collections   List Dictionary Set Deque OrderedDictionary
                     PriorityQueue BitSet InlineArray SmallVec
@@ -245,7 +247,7 @@ Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, normalisation,
 Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     generic over ElementaryFunctions; integer math;
                     BigInt, Decimal, SIMD<T, N>, Matrix, Quaternion,
-                    Random (PCG + ChaCha), statistics
+                    statistics
 Sable.IO            File Directory Path Stream MemoryMappedFile stdio
 Sable.Serialize     Encoder/Decoder protocols, conformance synthesis via
                     @derive(Serializable), JSON, TOML, MessagePack, and the

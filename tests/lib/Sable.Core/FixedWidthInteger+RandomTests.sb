@@ -1,0 +1,104 @@
+module FixedWidthIntegerRandomTests
+
+// Random integers in a range (FixedWidthInteger+Random.sb, Sable.Core).
+
+import Sable.Testing
+
+@test
+fn aHalfOpenRangeLeavesOutItsUpperBound() {
+    var generator = SeededRandomNumberGenerator(seed: 10)
+    var seen: Bool[>..] = [false, false, false]
+    var i = 0
+    while i < 300 {
+        let n = Int.random(in: 4..<7, using: &generator)
+        assert(n >= 4 && n < 7)
+        seen[n - 4] = true
+        i += 1
+    }
+    assert(seen.allSatisfy({ $0 }))
+}
+
+@test
+fn aClosedRangeTakesBothEnds() {
+    var generator = SeededRandomNumberGenerator(seed: 11)
+    var low = false
+    var high = false
+    var i = 0
+    while i < 300 {
+        let n = I8.random(in: -2...2, using: &generator)
+        assert(n >= -2 && n <= 2)
+        low = low || n == -2
+        high = high || n == 2
+        i += 1
+    }
+    assert(low && high)
+}
+
+@test
+fn aRangeWiderThanTheTypesPositivesWorks() {
+    var generator = SeededRandomNumberGenerator(seed: 12)
+    var negative = false
+    var positive = false
+    var i = 0
+    while i < 200 {
+        let n = I8.random(in: I8.min..<I8.max, using: &generator)
+        negative = negative || n < 0
+        positive = positive || n > 0
+        i += 1
+    }
+    assert(negative && positive)
+}
+
+@test
+fn theWholeOfATypeIsARange() {
+    var generator = SeededRandomNumberGenerator(seed: 13)
+    var everSet: U8 = 0
+    var i = 0
+    while i < 100 {
+        everSet = everSet | U8.random(in: U8.min...U8.max, using: &generator)
+        let _ = I64.random(in: I64.min...I64.max, using: &generator)
+        let _ = U128.random(in: U128.min...U128.max, using: &generator)
+        i += 1
+    }
+    assert(everSet == 255)
+}
+
+@test
+fn a128BitRangeStaysInIt() {
+    var generator = SeededRandomNumberGenerator(seed: 14)
+    let low: U128 = 100000000000000000000000
+    let high: U128 = 100000000000000000000010
+    var i = 0
+    while i < 50 {
+        let n = U128.random(in: low...high, using: &generator)
+        assert(n >= low && n <= high)
+        let m = I128.random(in: -5..<5, using: &generator)
+        assert(m >= -5 && m < 5)
+        i += 1
+    }
+}
+
+@test
+fn aOneValueRangeGivesThatValue() {
+    assertEqual(Int.random(in: 9...9), 9)
+    assertEqual(Int.random(in: 9..<10), 9)
+}
+
+@test
+fn theSystemsGeneratorIsTheDefault() {
+    let n = U16.random(in: 1000..<2000)
+    assert(n >= 1000 && n < 2000)
+    let m = Int.random(in: -3...3)
+    assert(m >= -3 && m <= 3)
+}
+
+@test(traps: "a random value of an empty range")
+fn anEmptyHalfOpenRangeTraps() {
+    let _ = Int.random(in: 3..<3)
+}
+
+@test(traps: "a random value of an empty range")
+fn anUpsideDownClosedRangeTraps() {
+    var generator = SeededRandomNumberGenerator(seed: 1)
+    let _ = Int.random(in: ClosedRange(lowerBound: 3, upperBound: 2), using: &generator)
+}

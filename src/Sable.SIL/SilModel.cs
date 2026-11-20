@@ -1503,6 +1503,9 @@ public static class SilBuiltins {
     /// </summary>
     public const string WrappingPrefix = "wrapping_";
 
+    /// <summary>What <c>blackBox(value)</c> lowers to: an address the optimiser knows nothing of the use of (SilGen's <c>BlackBox</c>).</summary>
+    public const string BlackBox = "black_box";
+
     /// <summary>A builtin with fixed operand types, by name.</summary>
     public static Signature? Find(string name) => Table.GetValueOrDefault(name);
 
@@ -1562,6 +1565,12 @@ public static class SilBuiltins {
         // a write through it (copy on write).
         if (name == "ref_is_unique") {
             return operands is [AddressType { Pointee: ClassType }] ? new([operands[0]], SilType.Bool) : null;
+        }
+
+        // 'blackBox(value)': a slot the optimiser must assume is read and
+        // written, for a benchmark's work to be kept.
+        if (name == BlackBox) {
+            return operands is [AddressType] ? new([operands[0]], SilType.Unit) : null;
         }
 
         // '@immortal static let': every object the value holds made

@@ -5,11 +5,12 @@ import Sable.Math
 import Sable.Collections
 
 /// One '@bench' function, as the compiler's entry point lists it: run with
-/// a Bencher, whose 'iterate' does the timing.
+/// a Bencher, whose 'iterate' (or 'iterateAsync') does the timing. It is
+/// awaited, so an async benchmark can await what it measures.
 public struct BenchCase {
     public var name: String
     public var location: String
-    public var run: (Bencher) -> Void
+    public var run: async (Bencher) -> Void
 }
 
 /// What one benchmark measured: nanoseconds per iteration.
@@ -76,6 +77,50 @@ public class Bencher {
             var k = 0
             while k < iterations {
                 body()
+                k = k + 1
+            }
+            let took = Runtime.monotonicNanoseconds() - begun
+            times.append(F64(took) / F64(iterations))
+            s = s + 1
+        }
+        measured = summarise(name, times, iterations)
+    }
+
+    /// As 'iterate', for a body that awaits: each iteration is awaited
+    /// before the next, and the time it spends suspended is part of its time.
+    public async fn iterateAsync(_ body: async () -> Void) {
+        // Warm-up, doubling the batch until it takes long enough: what it
+        // took per iteration sets the sample's size.
+        var batch = 1
+        var spent = 0
+        var perIteration = 1.0
+        while true {
+            let begun = Runtime.monotonicNanoseconds()
+            var k = 0
+            while k < batch {
+                await body()
+                k = k + 1
+            }
+            let took = Runtime.monotonicNanoseconds() - begun
+            spent = spent + took
+            perIteration = F64(took) / F64(batch)
+            if spent >= warmUpNanoseconds || batch >= 1073741824 {
+                break
+            }
+            batch = batch * 2
+        }
+        var iterations = Int(F64(sampleNanoseconds) / (perIteration > 1.0 ? perIteration : 1.0))
+        if iterations < 1 {
+            iterations = 1
+        }
+
+        var times: F64[>..] = []
+        var s = 0
+        while s < samples {
+            let begun = Runtime.monotonicNanoseconds()
+            var k = 0
+            while k < iterations {
+                await body()
                 k = k + 1
             }
             let took = Runtime.monotonicNanoseconds() - begun
@@ -164,7 +209,7 @@ fn parseBenchOptions() -> BenchOptions? {
 /// '--baseline <name>' (or when one called 'default' exists), compares
 /// with what was kept. Gives the exit code: 0, or 2 for arguments it does
 /// not understand or a baseline it cannot read or write.
-public fn runBenchmarks(_ benches: BenchCase[>..]) -> Int {
+public async fn runBenchmarks(_ benches: BenchCase[>..]) -> Int {
     guard let options = parseBenchOptions() else {
         return 2
     }
@@ -203,7 +248,7 @@ public fn runBenchmarks(_ benches: BenchCase[>..]) -> Int {
     var regressions = 0
     for bench in chosen {
         let bencher = Bencher(name: bench.name, samples: options.samples, sampleNanoseconds: options.sampleNanoseconds, warmUpNanoseconds: options.warmUpNanoseconds)
-        bench.run(bencher)
+        await bench.run(bencher)
         guard let result = bencher.measured else {
             print("bench \(bench.name) ... did not call 'iterate'")
             continue

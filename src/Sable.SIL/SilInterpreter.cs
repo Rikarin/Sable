@@ -1222,6 +1222,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 MakeImmortal(builtin.Operands[0].Type, operands[0]);
                 return null;
 
+            // Nothing to keep from an interpreter, which optimises nothing.
+            case SilBuiltins.BlackBox:
+                return null;
+
             case "string_count":
                 return (long)Text(operands[0]).Scalars.Count;
 

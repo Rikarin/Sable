@@ -1451,7 +1451,7 @@ Full design in [05-toolchain.md](05-toolchain.md).
   library's modules with `@test`/`@bench`, and the test suite runs them.
 - **Later (#205).** A test may be `async`: each test's closure is
   `async () -> String?` and the harness's entry point and `runTests` are
-  async, awaiting it (a benchmark still may not be, S3104). What a test
+  async, awaiting it. What a test
   throws is in its failure's report (`the test threw an error: Oops.Bad`,
   as interpolation describes it). `@test(traps)` passes by trapping and fails
   by returning, `@test(traps: "out of range")` also wants that in the trap's
@@ -1490,11 +1490,24 @@ Full design in [05-toolchain.md](05-toolchain.md).
 - The VS Code extension's Test Explorer has a Coverage profile: it runs
   `sable test --coverage` for the selected tests and reports each file's
   lines and branches from `lcov.info` (`editors/vscode/src/coverage.js`).
-- **Deferred:** a `blackBox` to keep the optimiser from deleting a
-  benchmark's work (it needs a core builtin); async benchmarks; snapshot and
-  property testing (docs/06 lists them under Sable.Testing; #73, #107); a
-  time limit inside the harness's own runner, which would need a builtin to
-  wait on a child with one.
+- A benchmark may be `async` too: each bench's closure is
+  `async (Bencher) -> Void`, `runBenchmarks` and the entry point are async,
+  and `Bencher.iterateAsync` times a body that awaits, each iteration
+  awaited before the next (one with no Bencher is timed whole so).
+  `blackBox(value)` (Sable.Core, `BlackBox.sb`) keeps the optimiser from
+  deleting or folding a benchmark's work: an `@intrinsic` SilGen lowers to
+  the value stored in a slot, the builtin `black_box` given the slot's
+  address, and the value taken out again; natively the builtin is an empty
+  `asm sideeffect` that may read and write any memory, so LLVM must store
+  the value and cannot know what it loads back. The interpreter does
+  nothing for it.
+- Isolation: each test is a process of its own, so tests that share
+  globals, or start tasks on the runtime's threads, never see each other;
+  several run at once only as several processes.
+- **Deferred:** snapshot and property testing (docs/06 lists them under
+  Sable.Testing; #73, #107); a time limit inside the harness's own runner
+  (`--in-process`, or the harness run directly rather than by `sable
+  test`), which would need a builtin to wait on a child with one.
 
 ### Packages, as implemented
 

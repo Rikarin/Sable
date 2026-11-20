@@ -1,0 +1,18 @@
+module Sable.Core
+
+/// The value, unchanged, through something the optimiser cannot see into:
+/// it must compute the value, as if something read it, and cannot assume
+/// what comes back. A benchmark passes its result through it (and its
+/// inputs, to keep them from being folded into constants) so that the work
+/// it measures is not deleted. It costs a store and a load. The compiler
+/// writes each call.
+///
+/// ```sable
+/// var total = 0
+/// for i in 0..<1000 {
+///     total = total + blackBox(i)
+/// }
+/// assert(blackBox(total) == 499500)
+/// ```
+@intrinsic
+public fn blackBox<T>(_ value: T) -> T

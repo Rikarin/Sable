@@ -9308,6 +9308,10 @@ public sealed partial class SilGen {
             }
 
             // Sable.Core's @intrinsic members: the compiler writes their bodies.
+            if (IsIntrinsic(callee) && callee is { Name: "blackBox", ContainingSymbol: ModuleSymbol }) {
+                return BlackBox(call);
+            }
+
             if (IsIntrinsic(callee) && callee is { Name: "compileError" or "unreachable", ContainingSymbol: ModuleSymbol }) {
                 return callee.Name == "unreachable" ? Unreachable() : CompileError(call);
             }
@@ -10461,6 +10465,30 @@ public sealed partial class SilGen {
             Emit(new StoreInst(Owned(allocated), room, StoreKind.Init));
             End(region);
             return room;
+        }
+
+        /// <summary>
+        ///     <c>blackBox(value)</c>: the value, put in a slot the builtin
+        ///     <c>black_box</c> is given the address of, and taken out again.
+        ///     Natively that is an empty assembly statement that may read and
+        ///     write any memory, so the optimiser must compute the value and
+        ///     cannot know what comes back: a benchmark's work is not deleted
+        ///     or folded away.
+        /// </summary>
+        SilValue? BlackBox(BoundCall call) {
+            if (call.Arguments is not [var argument]) {
+                return Missing(call, "'blackBox' without a value");
+            }
+
+            if (Expression(argument) is not { } value) {
+                return null;
+            }
+
+            var owned = Owned(value);
+            var slot = NewSlot(owned.Type, "$blackBox");
+            Emit(new StoreInst(owned, slot, StoreKind.Init));
+            Emit(new BuiltinInst(SilBuiltins.BlackBox, SilType.Unit, slot));
+            return Emit(new LoadInst(slot, owned.Type.IsTrivial ? LoadKind.Trivial : LoadKind.Take));
         }
 
         /// <summary>A property read through an existential or a getter.</summary>

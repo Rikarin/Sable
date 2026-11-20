@@ -4327,7 +4327,7 @@ public sealed partial class Binder {
                         var own = TypeSubstitution.For(conformer);
 
                         foreach (var associated in AssociatedTypes.All(named)) {
-                            if (ConformanceChecker.ResolveAssociated(conformer, associated)
+                            if (_compilation.ResolveAssociated(conformer, associated)
                                 is { } bound) {
                                 map[associated] = own.Apply(bound);
                             }

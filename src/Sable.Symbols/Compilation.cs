@@ -1924,6 +1924,29 @@ public sealed partial class Compilation {
 
     internal void RecordDeclaration(SyntaxNode declaration, Symbol symbol) => _symbolsBySyntax[declaration] = symbol;
 
+    /// <summary>What each conformer was found to bind each associated type to, and when.</summary>
+    readonly System.Collections.Concurrent.ConcurrentDictionary<(NamedTypeSymbol, TypeParameterSymbol), (TypeSymbol? Bound, long Version)> _associated = new();
+
+    /// <summary>
+    ///     <see cref="ConformanceChecker.ResolveAssociated(NamedTypeSymbol, TypeParameterSymbol)" />,
+    ///     worked out once for as long as no type's members or base types
+    ///     change. A member looked up through a protocol asks it of every
+    ///     associated type the protocol and those it refines have, for each
+    ///     lookup, and one a conformer does not name is inferred from its
+    ///     witnesses: binding Sable.Core's bodies asked it some sixteen
+    ///     thousand times of fewer than two hundred pairs.
+    /// </summary>
+    internal TypeSymbol? ResolveAssociated(NamedTypeSymbol conformer, TypeParameterSymbol associated) {
+        var version = NamedTypeSymbol.DeclarationVersion;
+        if (_associated.TryGetValue((conformer, associated), out var known) && known.Version == version) {
+            return known.Bound;
+        }
+
+        var bound = ConformanceChecker.ResolveAssociated(conformer, associated);
+        _associated[(conformer, associated)] = (bound, version);
+        return bound;
+    }
+
     static void AddTo(Symbol container, Symbol member) {
         switch (container) {
             case ModuleSymbol module:

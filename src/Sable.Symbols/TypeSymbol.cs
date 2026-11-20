@@ -131,7 +131,10 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     /// </remarks>
     public ImmutableArray<TypeParameterSymbol> AssociatedTypes {
         get => ReferenceEquals(OriginalDefinition, this) ? _associatedTypes : OriginalDefinition.AssociatedTypes;
-        internal set => _associatedTypes = value;
+        internal set {
+            _associatedTypes = value;
+            Interlocked.Increment(ref s_declarationVersion);
+        }
     }
 
     ImmutableArray<TypeParameterSymbol> _associatedTypes = [];
@@ -196,7 +199,15 @@ public sealed class NamedTypeSymbol : TypeSymbol {
         ExtendedArray ?? ExtendedOptional ?? (TypeSymbol)TypeBinder.OwnConstruction(this);
 
     /// <summary>The <c>where A == B</c> requirements on this type's parameters.</summary>
-    public ImmutableArray<SameTypeRequirement> SameTypeRequirements { get; internal set; } = [];
+    public ImmutableArray<SameTypeRequirement> SameTypeRequirements {
+        get => _sameTypeRequirements;
+        internal set {
+            _sameTypeRequirements = value;
+            Interlocked.Increment(ref s_declarationVersion);
+        }
+    }
+
+    ImmutableArray<SameTypeRequirement> _sameTypeRequirements = [];
 
     /// <summary>The <c>where C.Item: P</c> requirements on associated types.</summary>
     public ImmutableArray<ConformanceRequirement> ConformanceRequirements { get; internal set; } = [];
@@ -284,12 +295,26 @@ public sealed class NamedTypeSymbol : TypeSymbol {
             if (PendingBaseTypes is { } bind) {
                 PendingBaseTypes = null;
                 bind();
+                Interlocked.Increment(ref s_declarationVersion);
             }
 
             return _baseTypes;
         }
-        internal set => _baseTypes = value;
+        internal set {
+            _baseTypes = value;
+            Interlocked.Increment(ref s_declarationVersion);
+        }
     }
+
+    /// <summary>
+    ///     Counts the changes to any type's members and base types, which are
+    ///     added to as declarations are read, so that what is worked out from
+    ///     them (<see cref="Compilation.ResolveAssociated" />) is known to
+    ///     still hold while the count has not moved.
+    /// </summary>
+    internal static long DeclarationVersion => Interlocked.Read(ref s_declarationVersion);
+
+    static long s_declarationVersion;
 
     /// <summary>Binds the declaration's base types, its constraints and its 'where' clause; null once it has.</summary>
     internal Action? PendingBaseTypes { get; set; }
@@ -299,6 +324,7 @@ public sealed class NamedTypeSymbol : TypeSymbol {
 
     internal void AddMember(Symbol member) {
         _members.Add(member);
+        Interlocked.Increment(ref s_declarationVersion);
 
         if (_byName is null) {
             return;

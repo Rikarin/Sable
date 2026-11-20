@@ -73,6 +73,6 @@ fn aPlainParameterIsNot(_ n: Int) {
     n = 1                               //! S3010
 }
 
-fn aBorrowingParameterIsNotEither(borrowing n: Point) {
+fn aReferenceParameterIsNotEither(_ n: Point&) {
     n.x = 1                             //! S3010
 }

@@ -46,7 +46,6 @@ public sealed class TypeBindingTests {
     [InlineData("Int&<u32>", "Int&<u32>")]
     [InlineData("Int&<u16 in pool>", "Int&<u16 in pool>")]
     [InlineData("Int&?", "Int&?")]
-    [InlineData("ref Int", "Int&")]
     [InlineData("(Int, String)", "(Int, String)")]
     [InlineData("(q: Int, r: Int)", "(q: Int, r: Int)")]
     [InlineData("(Int)", "Int")]

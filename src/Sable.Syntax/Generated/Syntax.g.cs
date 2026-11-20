@@ -500,26 +500,6 @@ public sealed class AttributedTypeSyntax : TypeSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitAttributedType(this);
 }
 
-/// <summary>`ref T`: a borrowed reference whose root is inferred.</summary>
-public sealed class RefTypeSyntax : TypeSyntax
-{
-    private TypeSyntax? _elementType;
-
-    internal RefTypeSyntax(GreenNode green, SyntaxNode? parent, int position)
-        : base(green, parent, position) { }
-
-    public SyntaxToken RefKeyword => GetToken(0);
-    public TypeSyntax ElementType => GetRed(ref _elementType, 1);
-
-    internal override SyntaxNode? GetNodeSlot(int index) => index switch
-    {
-        1 => ElementType,
-        _ => null,
-    };
-
-    public override void Accept(SyntaxVisitor visitor) => visitor.VisitRefType(this);
-}
-
 /// <summary>`P &amp; Q`: protocol composition.</summary>
 public sealed class CompositionTypeSyntax : TypeSyntax
 {
@@ -3621,7 +3601,6 @@ public abstract class SyntaxVisitor
     public virtual void VisitExistentialType(ExistentialTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitSuppressedType(SuppressedTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitAttributedType(AttributedTypeSyntax node) => DefaultVisit(node);
-    public virtual void VisitRefType(RefTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitCompositionType(CompositionTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitUnionType(UnionTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitSelfType(SelfTypeSyntax node) => DefaultVisit(node);

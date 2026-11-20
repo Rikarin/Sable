@@ -96,6 +96,11 @@ unsafe     using      var        weak       where      while      yield
 protocol's `associatedtype` its type in a conforming one. It is reserved so
 that code written in Swift's spelling is told so (S1012).
 
+`ref` and `borrowing` declare nothing either: a reference is written after
+its type, `T&`, as a parameter's (`a: Node&`), a result's (`-> Node&`) or a
+variable's. They are reserved so that code written in either spelling is
+told so, and pointed at `T&` (S1013).
+
 ### Contextual
 
 Usable as identifiers except in their syntactic position:
@@ -202,7 +207,8 @@ empty dictionary in expression position.
 ```
 
 `&` is overloaded three ways and resolved by position: binary bitwise-and,
-prefix address-of, and postfix reference-type marker. The parser disambiguates
+prefix address-of (which, before a call's argument, marks one the call may
+write: `inc(&n)`), and postfix reference-type marker. The parser disambiguates
 by whether it is in type or expression position. An `&` immediately followed
 by `+`, `-` or `*` is not one of these: the lexer takes the pair (with an `=`
 after, the three) as a wrapping operator, `&+ &- &*` (`&+= &-= &*=`), longest

@@ -36,8 +36,8 @@ fn aLetNamingOneDoesNotEscapeEither(_ f: () -> Int) -> () -> Int {
     return g                            //! S3205 'g' is a closure that is not @escaping
 }
 
-fn refIsNotCaptured(ref x: Int) -> Int {
-    return call(() => x + 1)            //! S3205 'x' is ref, the caller's storage
+fn aReferenceIsNotCaptured(_ x: Int&) -> Int {
+    return call(() => x + 1)            //! S3205 'x' is a reference, the caller's storage
 }
 
 fn outIsNotCaptured(out x: Int) {

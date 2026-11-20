@@ -23,8 +23,8 @@ syn keyword sableStorage     fn let var const struct class actor union enum prot
 syn keyword sableStorage     init deinit subscript operator region
 syn keyword sableInclude     module import
 syn keyword sableModifier    public private internal package static mutating nonmutating override open final sealed abstract
-syn keyword sableModifier    required convenience lazy weak unowned async throws rethrows inout out ref consuming
-syn keyword sableModifier    borrowing move unsafe unchecked comptime some any nonisolated prefix postfix using
+syn keyword sableModifier    required convenience lazy weak unowned async throws rethrows inout out consuming
+syn keyword sableModifier    move unsafe unchecked comptime some any nonisolated prefix postfix using
 syn keyword sableBoolean     true false
 syn keyword sableNone        none
 syn keyword sableSelf        self Self super

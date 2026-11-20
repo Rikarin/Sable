@@ -566,10 +566,10 @@ fixes. A borrow checker with bad errors is a borrow checker nobody uses.
 
 Status: a first, working slice (`src/Sable.SIL/RootChecker.cs`). References
 are coherent in the front end — `T&` reads as its target, a place becomes a
-reference where one is wanted (`return a` from `-> ref T`, a `ref` argument,
+reference where one is wanted (`return a` from `-> T&`, a `T&` argument,
 each arm of `c ? a : b`), and a value with no place cannot (S3060) — and
 lower to addresses. Anchors (1) are a local's slot, a parameter, or `heap`;
-propagation (2) goes through field projections, ref variables, joins and
+propagation (2) goes through field projections, reference variables, joins and
 calls; summaries (4) are the parameters a result may refer into, inferred to
 a fixed point across the module so recursion converges, and recorded on the
 function (`roots(0, 1)` in SIL — `longest`'s `{a, b}`, with nothing written).
@@ -601,11 +601,11 @@ Static checking where accesses are to provably distinct storage; dynamic
 `begin_access`/`end_access` markers otherwise, elided in release builds.
 
 Status: done for the accesses a call makes (`src/Sable.SIL/SilGen.Exclusivity.cs`).
-Statically, each `inout` and `ref` argument, and a mutating method's
+Statically, each `inout` and `T&` argument, and a mutating method's
 receiver, is a path from a variable through fields and elements (an
 element is the whole collection); two that overlap, one of them a change,
 are error S3062, naming both arguments and the fix — `bump(&p.a, &p.a)`,
-`swap(&a[i], &a[j])`, `copy(&n, &n)`, `p.absorb(&p.a)` are rejected, and
+`swap(&a[i], &a[j])`, `copy(n, &n)`, `p.absorb(&p.a)` are rejected, and
 `bump(&p.a, &p.b)` is not. Where the compiler cannot tell — shared
 storage: a global, or a field of an object (a class's, a closure context's,
 a captured variable's box) — the call is bracketed by
@@ -641,7 +641,7 @@ region runs the destroys of what it holds, last first, then frees its
 chunks at once. And, as promised, it fell out of 3.3: what a region
 allocates is anchored where the region is, so returning a reference into
 a local region is rejected with its fixes, a reference used after its
-region ended is rejected, and `build(in r) -> ref Node` has `roots(0)`.
+region ended is rejected, and `build(in r) -> Node&` has `roots(0)`.
 Linked structures live in regions (`Link { next: Link&? }`, rule 4 above).
 `pool.reset()` destroys what the region holds and keeps its newest chunk
 for what comes next; root inference knows a reference made before the
@@ -691,7 +691,7 @@ the same walk. Values are built where they will live: a record is an
 empty block filled field by field, and with §3.7 that block is in the
 frame. Views are references, held to root inference: one is rooted where
 its block is held, so returning a view into a local block, or into a
-block passed by value, is rejected (a `ref` parameter's is fine); and a
+block passed by value, is rejected (a `T&` parameter's is fine); and a
 change to a block — copied on write, or grown and moved — makes every
 view taken from it before stale, as a region's reset does its references,
 so `let kept = &bag.items[0]; bag.items.append(…); kept.value`, or
@@ -773,7 +773,7 @@ whose body branches, and a local function's context, allocate nothing.
       reference one nullable word rather than a tag and a payload. The C
       ports in `benchmarks/c` — same allocations, checks and output — are
       timed beside it. Closing that gap was code generation, not ARC:
-      inout and ref parameters are LLVM `noalias` (exclusivity guarantees
+      inout and `T&` parameters are LLVM `noalias` (exclusivity guarantees
       it), array headers and elements carry distinct TBAA tags, array
       count, element access and append are emitted inline, a loop that only
       reads an array and writes its elements makes it unique once before
@@ -2575,7 +2575,7 @@ Sable.CodeGen. `sable build` and `sable run` on a package go through it;
     extensions'. The interface is a hash per file
     (`InterfaceFingerprint`) of its tokens with the bodies left out that
     only their own unit lowers: functions, initialisers, deinits, operators
-    and getters with no type parameters, no `some` or `ref` in the
+    and getters with no type parameters, no `some` or `&` in the
     signature, no attribute and no `const`, at module level or in a non-generic struct,
     class, union, enum or actor, or in an extension of a type the program
     declares only as such. Generic bodies, protocol defaults, subscripts,

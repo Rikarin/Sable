@@ -14,15 +14,15 @@ public sealed class RootTests {
                                  var count: Int
                              }
 
-                             fn longest(ref a: String, ref b: String) -> ref String {
+                             fn longest(a: String&, b: String&) -> String& {
                                  return a.count >= b.count ? a : b
                              }
 
-                             fn longestOfThree(ref a: String, ref b: String, ref c: String) -> ref String {
+                             fn longestOfThree(a: String&, b: String&, c: String&) -> String& {
                                  return longest(longest(a, b), c)
                              }
 
-                             fn alternate(ref a: String, ref b: String, _ n: Int) -> ref String {
+                             fn alternate(a: String&, b: String&, _ n: Int) -> String& {
                                  if n == 0 {
                                      return a
                                  }
@@ -53,6 +53,62 @@ public sealed class RootTests {
                         print(q.name)
                         p.name = "n!"
                         print(nameOf(q))
+                    """
+                )
+            ).Stdout
+        );
+
+    // A reference given to a generic parameter is the value it refers to:
+    // 'show(longest(x, y))' is a 'show<String>', not a 'show<String&>'.
+    [Fact]
+    public void AReferenceBoundToATypeParameterIsItsValue() =>
+        Assert.Equal(
+            "hello\nn\n3\n",
+            AssertAgree(
+                Program(
+                    Functions + """
+
+                                fn show<T>(_ value: T) {
+                                    print(value)
+                                }
+                                """,
+                    """
+                        let x = "hello"
+                        let y = "hi"
+                        show(longest(x, y))
+                        var p = Pair { name: "n", count: 2 }
+                        show(nameOf(p))
+                        show(nameOf(p).count + p.count)
+                    """
+                )
+            ).Stdout
+        );
+
+    // A 'T&' parameter takes its argument plainly, a value with no place
+    // included, and reads it as the value: operators and all.
+    [Fact]
+    public void AReferenceParameterTakesAPlainArgument() =>
+        Assert.Equal(
+            "7\n-3\nmany\n",
+            AssertAgree(
+                Program(
+                    """
+                    struct Big {
+                        var a: Int
+                        var b: Int
+                    }
+
+                    fn sum(_ big: Big&) -> Int => big.a + big.b
+
+                    fn negated(_ n: Int&) -> Int => -n
+
+                    fn label(_ count: Int&) -> String => count > 2 ? "many" : "few"
+                    """,
+                    """
+                        let big = Big { a: 3, b: 4 }
+                        print(sum(big))
+                        print(negated(big.a))
+                        print(label(Big { a: 5, b: 0 }.a))
                     """
                 )
             ).Stdout
@@ -92,7 +148,7 @@ public sealed class RootTests {
     public void ACalleeSummaryCarriesALocalOut() =>
         Rejects(
             """
-            fn leak() -> ref String {
+            fn leak() -> String& {
                 let s = "short"
                 let t = "much longer"
                 return longest(s, t)
@@ -106,7 +162,7 @@ public sealed class RootTests {
     public void AByValueParameterDiesWithTheFunction() =>
         Rejects(
             """
-            fn echo(_ s: String) -> ref String {
+            fn echo(_ s: String) -> String& {
                 return s
             }
             """,

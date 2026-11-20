@@ -1576,10 +1576,9 @@ public sealed partial class SilGen {
         }
 
         foreach (var parameter in symbol.Parameters) {
-            // 'in r: region' borrows the region, as any parameter is borrowed; so
-            // does a 'borrowing' one, which only says so (and may not let it escape).
+            // 'in r: region' borrows the region, as any parameter is borrowed.
             if (parameter.Modifier is not (ParameterModifier.None or ParameterModifier.InOut or ParameterModifier.Consuming
-                or ParameterModifier.Ref or ParameterModifier.In or ParameterModifier.Out or ParameterModifier.Borrowing)) {
+                or ParameterModifier.In or ParameterModifier.Out)) {
                 return Unsupported<FunctionType>(at, $"the '{parameter.Modifier}' parameter '{parameter.Name}'");
             }
 
@@ -1587,9 +1586,10 @@ public sealed partial class SilGen {
                 return Unsupported<FunctionType>(at, $"a parameter of type '{parameter.Type.ToDisplayString()}'");
             }
 
-            // An inout, out or ref parameter is the address of the caller's storage:
-            // an out one is written there before the callee returns.
-            parameters.Add(parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out or ParameterModifier.Ref ? SilType.Address(type) : type);
+            // An inout or out parameter is the address of the caller's storage:
+            // an out one is written there before the callee returns. A 'T&'
+            // one is an address by its type.
+            parameters.Add(parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out ? SilType.Address(type) : type);
         }
 
         var resultSymbol = symbol.FunctionKind == FunctionKind.Initializer ? SelfType(symbol, substitution) : symbol.ReturnType;
@@ -4693,7 +4693,7 @@ public sealed partial class SilGen {
         }
 
         /// <summary>
-        ///     True for a parameter passed by address — inout, out or ref — whose
+        ///     True for a parameter passed by address — inout or out — whose
         ///     address stands for its value; a parameter of reference type is
         ///     an address that is the value.
         /// </summary>
@@ -4746,7 +4746,7 @@ public sealed partial class SilGen {
             return (Emit(new StructElementAddrInst(outer, fieldIndex)), owner);
         }
 
-        static bool IsByAddressModifier(ParameterSymbol parameter) => parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out or ParameterModifier.Ref;
+        static bool IsByAddressModifier(ParameterSymbol parameter) => parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out;
 
         /// <summary>The slot of a move-only local or parameter, or null.</summary>
         AllocStackInst? MoveOnlyPlace(BoundExpression expression) =>
@@ -9840,9 +9840,25 @@ public sealed partial class SilGen {
             }
 
             for (var i = 0; i < passed; i++) {
-                // A ref argument passes where it is, or a temporary when it is nowhere.
-                if (i < callee.Parameters.Length && callee.Parameters[i].Modifier == ParameterModifier.Ref) {
-                    if (ReferenceTo(call.Arguments[i]) is not { } referred) {
+                // A 'T&' argument of inline bytes is a view of them.
+                if (i < callee.Parameters.Length && callee.Parameters[i].IsByReference
+                    && arguments.Count < type.Parameters.Length && type.Parameters[arguments.Count] is InlinePointerType) {
+                    var viewed = call.Arguments[i] is BoundConversion { ConversionKind: ConversionKind.Reference } shared
+                        ? shared.Operand
+                        : call.Arguments[i];
+                    if (View(viewed, borrows) is not { } view) {
+                        return null;
+                    }
+
+                    arguments.Add(view);
+                    continue;
+                }
+
+                // A 'T&' argument passes where it is, or a temporary when it
+                // is nowhere: the binder made it a reference.
+                if (i < callee.Parameters.Length && callee.Parameters[i].IsByReference
+                    && arguments.Count < type.Parameters.Length && type.Parameters[arguments.Count] is AddressType) {
+                    if (Expression(call.Arguments[i]) is not { } referred) {
                         return null;
                     }
 

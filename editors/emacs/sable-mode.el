@@ -54,8 +54,8 @@ Use `:json-false' for off."
     ;; Modifiers.
     "public" "private" "internal" "package" "static" "mutating" "nonmutating"
     "override" "open" "final" "sealed" "abstract" "required" "convenience" "lazy" "weak"
-    "unowned" "async" "throws" "rethrows" "inout" "out" "ref" "consuming"
-    "borrowing" "move" "unsafe" "unchecked" "comptime" "some" "any"
+    "unowned" "async" "throws" "rethrows" "inout" "out" "consuming"
+    "move" "unsafe" "unchecked" "comptime" "some" "any"
     "nonisolated" "prefix" "postfix" "using"
     ;; Operators spelled as words.
     "is" "as")

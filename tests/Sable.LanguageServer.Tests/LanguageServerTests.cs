@@ -276,6 +276,33 @@ public sealed class LanguageServerTests : IDisposable {
         Assert.Contains("unsafe static fn peek() -> Int", peek, StringComparison.Ordinal);
     }
 
+    // One reference type (#292): a 'T&' parameter and result show as written.
+    [Fact]
+    public async Task HoverShowsAReferenceAsTAmpersand() {
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/references.sb";
+        const string text = "module App\n\nstruct Node { var value: Int }\n\nfn pick(_ a: Node&, _ b: Node&) -> Node& {\n    return a.value >= b.value ? a : b\n}\n\nfn f(_ n: Node) -> Int {\n    return pick(n, n).value\n}\n";
+        await client.OpenAsync(uri, text);
+
+        var pick = (await client.AtAsync("textDocument/hover", uri, text, At(text, "pick(n, n)", 1))).Get("contents")!.Value.GetString("value")!;
+        Assert.Contains("fn pick(_ a: Node&, _ b: Node&) -> Node&", pick, StringComparison.Ordinal);
+        Assert.DoesNotContain("ref", pick, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CompletionNoLongerOffersRefOrBorrowing() {
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/keywords.sb";
+        const string text = "module App\n\nfn f() {\n    \n}\n";
+        await client.OpenAsync(uri, text);
+        var labels = Labels(await client.AtAsync("textDocument/completion", uri, text, At(text, "    \n", 4)));
+        Assert.Contains("inout", labels);
+        Assert.DoesNotContain("ref", labels);
+        Assert.DoesNotContain("borrowing", labels);
+    }
+
     [Fact]
     public async Task DefinitionCrossesFiles() {
         var (client, geometry, main) = await OpenWorkspaceAsync();
@@ -635,7 +662,7 @@ public sealed class LanguageServerTests : IDisposable {
                                 var count: Int
                             }
 
-                            fn longest(ref a: String, ref b: String) -> ref String {
+                            fn longest(a: String&, b: String&) -> String& {
                                 return a.count >= b.count ? a : b
                             }
 
@@ -662,7 +689,7 @@ public sealed class LanguageServerTests : IDisposable {
         Assert.Contains("roots(p)", labels);
 
         var longest = hints.EnumerateArray().First(static h => h.GetString("label") == "roots(a, b)");
-        Assert.Equal(TestClient.Position(text, At(text, "-> ref String", "-> ref String".Length)).ToString(), Shape(longest.Get("position")!.Value));
+        Assert.Equal(TestClient.Position(text, At(text, "-> String&", "-> String&".Length)).ToString(), Shape(longest.Get("position")!.Value));
         Assert.Contains("'a' and 'b'", longest.Get("tooltip")!.Value.GetString("value"), StringComparison.Ordinal);
     }
 

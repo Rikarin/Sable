@@ -70,7 +70,7 @@ public fn same(_ a: JsonValue, _ b: JsonValue) -> Bool {
 // The pointers at which two documents differ, in document order.
 public fn differences(_ a: JsonValue, _ b: JsonValue) -> String[>..] {
     var found: String[>..] = []
-    collectDifferences(a, b, "", found)
+    collectDifferences(a, b, "", &found)
     return found
 }
 
@@ -90,7 +90,7 @@ fn collectDifferences(_ a: JsonValue, _ b: JsonValue, _ at: String, _ found: ino
                 if i >= xs.count || i >= ys.count {
                     found.append(path)
                 } else {
-                    collectDifferences(xs[i], ys[i], path, found)
+                    collectDifferences(xs[i], ys[i], path, &found)
                 }
                 i = i + 1
             }
@@ -99,7 +99,7 @@ fn collectDifferences(_ a: JsonValue, _ b: JsonValue, _ at: String, _ found: ino
             for m in xs {
                 let path = at + "/" + escapePointerToken(m.key)
                 if let other = field(b, m.key) {
-                    collectDifferences(m.value, other, path, found)
+                    collectDifferences(m.value, other, path, &found)
                 } else {
                     found.append(path)
                 }

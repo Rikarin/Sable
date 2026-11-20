@@ -85,7 +85,7 @@ fn passingALetAsInOut() {
 
 fn passingALetWithoutAmpersand() {
     let n = 3
-    bump(n)                             //! S3010 an 'inout' argument
+    bump(n)                             //! S3010 an 'inout' argument //! S3209 is 'inout'
 }
 
 fn passingALetFieldAsInOut() {

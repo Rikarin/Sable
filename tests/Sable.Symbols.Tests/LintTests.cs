@@ -89,12 +89,13 @@ public sealed class LintTests {
                 var later: Int
                 later = 4
                 var passed = 1
-                bump(passed)
+                reset(out passed)
                 var referenced = 1
                 bump(&referenced)
                 return never + assigned + compound + p.x + q.x + later + passed + referenced
             }
             fn bump(_ n: inout Int) { n += 1 }
+            fn reset(out n: Int) { n = 0 }
             """;
         var found = Lint(source).Where(static d => d.Code == ErrorCode.LNT_VarNeverMutated).ToList();
         var single = Assert.Single(found);

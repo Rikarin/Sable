@@ -449,8 +449,8 @@ public static class SourceGenerators {
 
         var (declaration, output) = (function.Parameters[0], function.Parameters[1]);
         var ok = declaration.Label is null or "_"
-            && declaration.Modifier is ParameterModifier.None or ParameterModifier.Borrowing
-            && IsLibraryType(declaration.Type, generator.Kind == GeneratorKind.Package ? "Package" : "Declaration")
+            && declaration.Modifier == ParameterModifier.None
+            && IsLibraryType(declaration.Type is ReferenceTypeSymbol { RelativeWidth: null } shared ? shared.ReferencedType : declaration.Type, generator.Kind == GeneratorKind.Package ? "Package" : "Declaration")
             && output.Label == "into"
             && output.Modifier == ParameterModifier.InOut
             && IsLibraryType(output.Type, "Output")

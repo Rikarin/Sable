@@ -285,16 +285,16 @@ public sealed class MoveTests {
             "is borrowed, so it cannot be moved; take it as 'consuming'"
         );
 
-    // 'borrowing' and 'out' parameters lower (#132).
+    // A @noncopy parameter is borrowed without saying so, and 'out' parameters lower (#132, #292).
     [Fact]
-    public void ABorrowingParameterIsBorrowed() =>
+    public void ANoncopyParameterIsBorrowed() =>
         Assert.Equal(
             "opened 1\n1\n1\nclosed 1\n",
             AssertAgree(
                 Program(
                     Handle + """
 
-                             fn look(borrowing h: Handle) -> Int {
+                             fn look(_ h: Handle) -> Int {
                                  return h.id
                              }
                              """,
@@ -308,16 +308,16 @@ public sealed class MoveTests {
         );
 
     [Fact]
-    public void ABorrowingParameterCannotBeMoved() =>
+    public void AReferenceParameterCannotBeMovedOutOf() =>
         Rejects(
             Handle + """
 
-                     fn steal(borrowing h: Handle) {
+                     fn steal(_ h: Handle&) {
                          close(h)
                      }
                      """,
             "",
-            "is borrowed, so it cannot be moved; take it as 'consuming'"
+            "cannot be moved out of"
         );
 
     [Fact]

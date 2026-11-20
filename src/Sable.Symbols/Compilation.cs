@@ -1091,8 +1091,6 @@ public sealed partial class Compilation {
                 SyntaxKind.InoutKeyword => ParameterModifier.InOut,
                 SyntaxKind.OutKeyword => ParameterModifier.Out,
                 SyntaxKind.ConsumingKeyword => ParameterModifier.Consuming,
-                SyntaxKind.BorrowingKeyword => ParameterModifier.Borrowing,
-                SyntaxKind.RefKeyword => ParameterModifier.Ref,
                 SyntaxKind.InKeyword => ParameterModifier.In,
                 _ => ParameterModifier.None,
             };

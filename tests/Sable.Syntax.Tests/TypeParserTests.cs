@@ -167,12 +167,11 @@ public sealed class TypeParserTests {
             Parse("(A) -> (B) -> C")
         );
 
-    // ---- some / any / ref / composition / union ---------------------------
+    // ---- some / any / composition / union ---------------------------
 
     [Theory]
     [InlineData("some Drawable", "(OpaqueType some (SimpleNameType Drawable))")]
     [InlineData("any Drawable", "(ExistentialType any (SimpleNameType Drawable))")]
-    [InlineData("ref Node", "(RefType ref (SimpleNameType Node))")]
     [InlineData(
         "P & Q",
         "(CompositionType (SimpleNameType P) & (SimpleNameType Q))"

@@ -155,7 +155,7 @@ public sealed partial class SilGen {
 
             for (var i = 0; i < call.Arguments.Length && i < callee.Parameters.Length; i++) {
                 var modifier = callee.Parameters[i].Modifier;
-                if (modifier is not (ParameterModifier.InOut or ParameterModifier.Out or ParameterModifier.Ref) || PathOf(call.Arguments[i]) is not { } path) {
+                if (!callee.Parameters[i].IsCallersStorage || PathOf(call.Arguments[i]) is not { } path) {
                     continue;
                 }
 
@@ -164,7 +164,7 @@ public sealed partial class SilGen {
                     ParameterModifier.Out => $"argument {i + 1} ('{callee.Parameters[i].Name}') is out",
                     _ => $"argument {i + 1} ('{callee.Parameters[i].Name}') reads it by reference",
                 };
-                accesses.Add((path, modifier != ParameterModifier.Ref, what, false, call.Arguments[i].Syntax));
+                accesses.Add((path, modifier is ParameterModifier.InOut or ParameterModifier.Out, what, false, call.Arguments[i].Syntax));
             }
 
             // A closure written into the call may run during it, and reach a

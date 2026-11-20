@@ -244,7 +244,7 @@ public enum SyntaxKind : ushort {
     ThrowsSpec = 1015,
     OpaqueType = 1016,
     ExistentialType = 1017,
-    RefType = 1018,
+    // 1018 was RefType, 'ref T': a reference is written 'T&' (#292).
     CompositionType = 1019,
     UnionType = 1020,
     SelfType = 1021,

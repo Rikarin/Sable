@@ -133,9 +133,10 @@ optional is expected. `Optional<T>` is a `@frozen union { Some(T), None }`, so
 ```sable
 T?                  // optional
 T!                  // implicitly-unwrapped optional (interop only, discouraged)
-T&                  // reference (machine address)
+T&                  // reference (machine address); the one way to write one
 T&<u32>             // relative reference, 4-byte offset from the field
 T&<u16 in pool>     // relative reference from a named pool base
+T&?                 // optional reference
 T[]                 // fixed-at-construction array
 T[8]                // fixed size
 T[..]  T[..64]      // inline capacity, resizable within it
@@ -241,9 +242,31 @@ because `fn read(into buf: inout U8[])` reads better than
 
 ```sable
 fn store(consuming h: FileHandle)   // takes ownership
-fn peek(borrowing h: FileHandle)    // may not escape it
 fn edit(v: inout Vec3)              // exclusive mutable access
-fn pick(ref a: Node, ref b: Node) -> ref Node    // root inferred as {a, b}
+fn area(_ r: Rect&) -> F64          // shared: the caller's Rect, read in place
+fn pick(_ a: Node&, _ b: Node&) -> Node&   // root inferred as {a, b}
+```
+
+A parameter that refers to its argument says so in its type, `T&`: it reads
+the caller's storage in place for the call. Whether a reference rooted in it
+may be returned is decided by root inference from the body and the result
+type ([docs/02 §2.4](../docs/02-memory-model.md)). Classes and `@noncopy`
+values are passed by reference without it, so `T&` is written mostly on large
+structs and on functions that return a reference. `ref T`, `ref a: T` and
+`borrowing h: T` are not Sable; the words are reserved so that the compiler
+says so (S1013).
+
+`&` at a call marks an argument the call may write: it is required for an
+`inout` or `out` argument (an `out` one may be written `out x` instead), and
+an error anywhere else (S3209). A `T&` parameter only reads, so it takes a
+plain `x`. Anywhere else, `&expr` makes a reference value:
+`let first = &bag.items[0]` is an `Item&`, root-checked like any other.
+
+```sable
+var v = Vec3(x: 1, y: 2, z: 3)
+edit(v: &v)                         // may be written: '&'
+print(area(bounds))                 // read in place: plain
+let first = &bag.items[0]           // an 'Item&'
 ```
 
 A function type's parameter may be `inout` too, and so may a closure's; the
@@ -1490,7 +1513,7 @@ unowned(unsafe) let fast: Node      // no trap, no check
 
 region arena { }                    // scoped bump allocator
 let node = arena.alloc(Node)
-fn build(in r: region) -> ref Node  // root inferred as 'r'; 'in' is the label
+fn build(in r: region) -> Node&     // root inferred as 'r'; 'in' is the label
 let tree = build(in: arena)
 ```
 

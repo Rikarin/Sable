@@ -1521,6 +1521,31 @@ and so on up to the program's own task, read from each task's slab — a
 frame for each call not yet finished, named by its resume function, with
 the await it is at.
 
+**Measured** — the fourth stage, on an M1 Max (8+2 cores, 64 GB), loaded
+by other work as these ran, with `tools/bench/concurrency.sh` and
+`benchmarks/concurrency/compare/` (.NET 11's tasks, `dotnet run -c
+Release`; Swift 6.4's, `swiftc -O`; Go is not installed here, so no
+goroutines). A million tasks each sleeping a second (`sleepers.sb`) take
+1.46 s with no pool and 1.93 s on ten workers — the time is spawning
+them — and 1.07 GB at the peak, 1.04 KB a task: the task, its slab's first
+576-byte chunk inside it (896 bytes together), its `Task` object and its
+closure. That is the stage-1 extrapolation, measured.
+
+| | Sable, no pool | Sable, 1 worker | Sable, 10 workers | .NET tasks | Swift tasks |
+|---|---|---|---|---|---|
+| spawn+await, from main | 283 ns | 682 ns | 1262 ns | 323 ns | 558 ns |
+| spawn+await, in a task | 298 ns | 347 ns | 946 ns | — | — |
+| ping-pong through an actor, yielding | 108 ns | 113 ns | 716 ns | 1375 ns (two channels) | 528 ns |
+| a million tasks sleeping 1 s | 1.46 s, 1.07 GB | 1.52 s | 1.93 s, 1.07 GB | 2.41 s, 0.55 GB | 2.27 s, 2.13 GB |
+| fan-out over loopback (50 clients at once, 2000 requests) | 199 µs | 489 µs | 256 µs | 135–747 µs | — |
+
+The fan-out (`fan-out-http.sb`) is a server task serving each connection
+in a child task — a request read, 512 bytes written — and fifty client
+tasks connecting, asking and reading to the end at once, forty times;
+every wait is on the reactor. Its time per request on loopback swings
+between runs by four or five times, .NET's alike, with the host's load.
+(Fifty: past the listen backlog, 128 on macOS, connections are refused.)
+
 Not yet: task-local values. A drop runs no defers of the async functions
 dropped, only those of a generator whose object goes with them.
 

@@ -1,0 +1,25 @@
+module Bench
+
+import Sable.Time
+
+// A million tasks, each sleeping a second at once: how long it takes, and
+// (with SABLE_STATS, or /usr/bin/time) how much memory they hold. SLEEPERS
+// in the environment sets how many.
+
+@main
+fn main() async {
+    let count = (try? Int.parse(Runtime.environment(name: "SLEEPERS") ?? "1000000")) ?? 1_000_000
+    let start = Instant.now()
+    var tasks: Task<Int>[>..] = []
+    for i in 0..<count {
+        tasks.append(Task.spawn {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            return i & 1
+        })
+    }
+    var total = 0
+    for task in tasks {
+        total += await task.value
+    }
+    print("\(count) sleepers: \(start.elapsed.totalNanoseconds / 1_000_000) ms, \(total) odd")
+}

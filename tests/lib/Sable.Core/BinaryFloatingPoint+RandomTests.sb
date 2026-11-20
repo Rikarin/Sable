@@ -5,6 +5,17 @@ module BinaryFloatingPointRandomTests
 
 import Sable.Testing
 
+// Gives the values it was made with, in turn, then zeros.
+struct Scripted: RandomNumberGenerator {
+    var values: U64[>..]
+    var drawn: Int
+
+    mutating fn next() -> U64 {
+        drawn += 1
+        return drawn <= values.count ? values[drawn - 1] : 0
+    }
+}
+
 @test
 fn aHalfOpenRangeStaysBelowItsUpperBound() {
     var generator = SeededRandomNumberGenerator(seed: 20)
@@ -65,4 +76,22 @@ fn anInfiniteClosedRangeTraps() {
 @test(traps: "a random value of an empty range")
 fn anUpsideDownClosedRangeTraps() {
     let _ = F64.random(in: ClosedRange(lowerBound: 2.0, upperBound: 1.0))
+}
+
+@test
+fn aDrawThatRoundsUpToTheUpperBoundIsDrawnAgain() {
+    // The greatest fraction, times a width of one ulp, rounds up to the
+    // upper bound, which a half-open range leaves out: the next draw, zero,
+    // gives the lower bound.
+    var generator = Scripted { values: [U64.max], drawn: 0 }
+    assertEqual(F64.random(in: 1.0..<(1.0).nextUp, using: &generator), 1.0)
+    assertEqual(generator.drawn, 2)
+}
+
+@test
+fn aClosedRangeNeverGoesPastItsUpperBound() {
+    // A fraction of exactly one: the lower bound plus the width rounds past
+    // the upper bound here, and is held to it.
+    var generator = Scripted { values: [9007199254740992], drawn: 0 }
+    assertEqual(F64.random(in: -489861948521.1566...(-7.312715117751976e-16), using: &generator), -7.312715117751976e-16)
 }

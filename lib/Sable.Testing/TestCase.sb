@@ -223,20 +223,13 @@ public fn verdict(_ test: TestCase, _ status: Int, _ errors: String) -> String? 
     if status == 0 {
         return "the test was to trap\(trapWanted(expected)), and it returned"
     }
-    if status < 0 || reportsAssertion(errors) {
+    if status < 0 || ("\n" + errors).contains("\n" + failureMarker) {
         return ""
     }
     if expected.count > 0 && !errors.contains(expected) {
         return "the test trapped, but not with '\(expected)'"
     }
     return none
-}
-
-/// Whether a test's errors hold an assertion's report: a line that starts
-/// with the marker. Sable.Core's debug 'assert' traps with the same words
-/// after 'fatal error: ', which is a trap like any other.
-fn reportsAssertion(_ errors: String) -> Bool {
-    return errors.hasPrefix(failureMarker) || errors.contains("\n" + failureMarker)
 }
 
 fn trapWanted(_ expected: String) -> String {
@@ -254,9 +247,10 @@ fn failureReport(_ test: TestCase, _ status: Int, _ output: String, _ errors: St
     if output.count > 0 {
         report.append("\nstdout:\n" + indented(output))
     }
-    // An assertion's own trap says nothing its report has not.
+    // An assertion's own trap says nothing its report has not. Its report
+    // starts a line: Sable.Core's 'assert' says the same after 'fatal error: '.
     var shown = errors
-    if reportsAssertion(errors) {
+    if ("\n" + errors).contains("\n" + failureMarker) {
         shown = withoutAssertionTrap(errors)
     }
     if shown.count > 0 {
@@ -265,7 +259,7 @@ fn failureReport(_ test: TestCase, _ status: Int, _ output: String, _ errors: St
     if why.count > 0 {
         report.append("\n    \(why)")
     }
-    if !reportsAssertion(errors) {
+    if !("\n" + errors).contains("\n" + failureMarker) {
         report.append("\n    (exit status \(status))")
     }
     return report.build()

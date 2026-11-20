@@ -1996,18 +1996,36 @@ is, which the plugin shows as the case's fields.
 A generic type's instance is named as Sable writes it (`NominalType.DisplayName`):
 `HashMap<String, Int>`, where its symbols and its metadata say
 `HashMap$of$String$Int`; the plugin finds the class by the metadata's name
-and shows the type's. For Windows the same nodes are written as CodeView (the
+and shows the type's. A generic function's instance is too
+(`SilFunction.DisplayName`): `Demo.describe<Int>`, `Sable.Collections.Stack<Int>.push`,
+a protocol's default implementation under the type it is for — in a
+backtrace, and for `b 'Demo.describe<Int>'` (the symbol is still
+`sable.Demo.describe$of$Int`). An `@inline_layout` value is described as the
+block holding its bytes (`S$inline`, over `$block`: header, length,
+capacity, then its fixed-size fields packed as `InlineLayout` lays them
+out), which the plugin shows as those fields; a pointer into the bytes is a
+pointer to the fields. The standard library's files are in the compiler, not
+on disk: their text is carried in the DWARF 5 line table
+(`DW_LNCT_LLVM_source`, `Pipeline.EmbeddedSources`), so stepping into the
+library shows its lines. An optimised build's unit says `isOptimized`.
+For Windows the same nodes are written as CodeView (the
 `"CodeView"` module flag), which lld gathers into the PDB beside the
-executable, and which Windows' debuggers read; the debugger tests still drive
-lldb with the plugin's DWARF-shaped names, and are run on macOS and Linux only.
+executable, and which Windows' debuggers read (`AWindowsTargetIsDescribedInCodeView`
+compiles a Windows object and finds `.debug$S` in it, no DWARF); the debugger
+tests still drive lldb with the plugin's DWARF-shaped names, and are run on
+macOS and Linux only.
 
-Not yet: `@inline_layout` values, which show as a pointer to their bytes; the standard
-library's own source lines (its functions name a file the debugger cannot
-find); expression evaluation in Sable syntax (`expression` is lldb's C); a
-language code of Sable's own (the unit says `DW_LANG_C`, which is what lets
-lldb evaluate expressions at all); `inlinedAt` (a debug build inlines
-nothing); generic functions' readable names (`describe$of$Int`); debugger
-tests against a PDB on Windows; and gdb.
+Not yet: an `@inline_layout` value's variable-size fields (bounded and
+grow-only arrays, whose offsets are only found by walking the bytes); the
+library's text under CodeView, which has no place for it; expression
+evaluation in Sable syntax (`expression` is lldb's C); a language code of
+Sable's own (the unit says `DW_LANG_C`, which is what lets lldb evaluate
+expressions at all); `inlinedAt` (a debug build inlines nothing, and an
+optimised one's SIL inliner gives what it copies the call's place, while
+LLVM's own inlining writes `inlinedAt` itself); `b Demo.describe` finding
+every instance (`breakpoint set -r 'Demo\.describe<'` does); debugger tests
+against a PDB on Windows; the plugin loaded without importing it on Linux,
+where lldb reads no script from the binary; and gdb.
 
 ### Incremental builds, as implemented
 

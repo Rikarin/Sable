@@ -47,7 +47,7 @@ public sealed class DebuggerTests {
         }
     }
 
-    [PosixFact("it drives lldb with DWARF; a Windows debugger reads a PDB's CodeView, which the compiler does not write yet")]
+    [PosixFact("it drives lldb with DWARF; a Windows build is described in CodeView, for the PDB its debuggers read, which no test here drives")]
     public async Task LldbShowsFramesLocalsAndTypes() {
         if (!Programs.CanBuild || !OperatingSystem.IsMacOS() || !HasLldb()) {
             return;

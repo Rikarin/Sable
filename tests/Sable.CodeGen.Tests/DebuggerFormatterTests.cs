@@ -158,7 +158,7 @@ public sealed class DebuggerFormatterTests {
                          """;
 
     /// <summary>Why the tests that run lldb are skipped on Windows.</summary>
-    const string NeedsLldb = "lldb's Python formatter plugin and these sessions are for lldb on macOS and Linux; a Windows debugger reads a PDB's CodeView, which the compiler does not write yet";
+    const string NeedsLldb = "lldb's Python formatter plugin and these sessions are for lldb on macOS and Linux; a Windows build is described in CodeView, for the PDB its debuggers read, which no test here drives";
 
     static readonly Lazy<string?> Lldb = new(FindLldb);
 
@@ -546,6 +546,147 @@ public sealed class DebuggerFormatterTests {
         Expect(output, "(Int) limit = 3");
     }
 
+    /// <summary>
+    ///     Built for Windows, the same nodes are written as CodeView — what
+    ///     the linker gathers into the PDB Windows' debuggers read — and
+    ///     not as DWARF. The object is made here when clang is; nothing here
+    ///     can debug it.
+    /// </summary>
+    [Fact]
+    public void AWindowsTargetIsDescribedInCodeView() {
+        var directory = Directory.CreateTempSubdirectory("sable-codeview-");
+        try {
+            var windows = NativeTarget.Of("x86_64-pc-windows-msvc");
+            var result = Pipeline.Compile([SyntaxTree.Parse(new SourceText(Scopes, "scopes.sb"))], directory.FullName, target: windows);
+            Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+            var ir = result.LlvmIr!;
+            Assert.Contains("!{i32 2, !\"CodeView\", i32 1}", ir, StringComparison.Ordinal);
+            Assert.DoesNotContain("Dwarf Version", ir, StringComparison.Ordinal);
+            Assert.Contains("!DISubprogram(name: \"Scopes.main\"", ir, StringComparison.Ordinal);
+            Assert.Contains("distinct !DILexicalBlock(", ir, StringComparison.Ordinal);
+            Assert.Contains("!DIGlobalVariable(name: \"counter\"", ir, StringComparison.Ordinal);
+            // CodeView has no place for a file's text.
+            Assert.DoesNotContain("source: ", ir, StringComparison.Ordinal);
+
+            if (!Programs.CanBuild) {
+                return;
+            }
+
+            var objectPath = Path.Combine(directory.FullName, "scopes.obj");
+            var compiled = NativeObjects.CompileIr(ir, objectPath, new NativeOptions { Target = windows, DebugInfo = true });
+            Assert.True(compiled.Succeeded, compiled.Output);
+            var bytes = File.ReadAllBytes(objectPath);
+            Assert.True(bytes.AsSpan().IndexOf(".debug$S"u8) >= 0, "the object has no CodeView symbols section");
+            Assert.True(bytes.AsSpan().IndexOf(".debug_info"u8) < 0, "the object has DWARF");
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    /// <summary>An optimised build's compile unit says it is, so that a debugger is warier of what it reads.</summary>
+    [Fact]
+    public void AnOptimisedBuildSaysSo() {
+        var directory = Directory.CreateTempSubdirectory("sable-optimised-");
+        try {
+            var optimised = Pipeline.Compile(new SourceText(Scopes, "scopes.sb"), directory.FullName, optimised: true);
+            Assert.True(optimised.Succeeded, string.Join("\n", optimised.Errors));
+            Assert.Contains("isOptimized: true", optimised.LlvmIr!, StringComparison.Ordinal);
+
+            var plain = Pipeline.Compile(new SourceText(Scopes, "scopes.sb"), directory.FullName);
+            Assert.Contains("isOptimized: false", plain.LlvmIr!, StringComparison.Ordinal);
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    const string Library = """
+                           module Gen
+                           import Sable.Collections
+
+                           @inline_layout
+                           struct Spot {
+                               var x: I32
+                               var y: I32
+                           }
+
+                           @inline_layout
+                           struct Order {
+                               var id: U64
+                               var at: Spot
+                               var paid: Bool
+                               var codes: U16[..8]
+                           }
+
+                           fn describe<T>(_ value: T) -> Int {
+                               return 1
+                           }
+
+                           @main
+                           fn main() {
+                               var stack = Stack<Int>()
+                               let order = Order { id: 7, at: Spot { x: 3, y: -4 }, paid: true, codes: [1, 2] }
+                               stack.push(describe(5) + describe("five")) // push
+                               print(stack.count + Int(order.id))
+                           }
+                           """;
+
+    /// <summary>
+    ///     The standard library's files are in the compiler, not on disk: their
+    ///     text goes in the line table, so stepping into the library shows its
+    ///     lines. The program's own files are read where they are.
+    /// </summary>
+    [Fact]
+    public void TheLibrarysTextIsInTheDebugInformation() {
+        var directory = Directory.CreateTempSubdirectory("sable-sources-");
+        try {
+            var result = Pipeline.Compile(new SourceText(Library, "gen.sb"), directory.FullName);
+            Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+            var ir = result.LlvmIr!;
+            Assert.Matches(@"!DIFile\(filename: ""lib/Sable\.Collections/Stack\.sb"", directory: ""[^""]*"", source: ""[^""]*public fn push", ir);
+            Assert.Matches(@"!DIFile\(filename: ""gen\.sb"", directory: ""[^""]*""\)", ir);
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    /// <summary>A generic function's instance is named as Sable writes it, its type arguments in brackets.</summary>
+    [Fact]
+    public void GenericInstancesAreNamedAsSableWritesThem() {
+        var directory = Directory.CreateTempSubdirectory("sable-generic-names-");
+        try {
+            var result = Pipeline.Compile(new SourceText(Library, "gen.sb"), directory.FullName);
+            Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+            var ir = result.LlvmIr!;
+            Assert.Contains("!DISubprogram(name: \"Gen.describe<Int>\"", ir, StringComparison.Ordinal);
+            Assert.Contains("!DISubprogram(name: \"Gen.describe<String>\"", ir, StringComparison.Ordinal);
+            Assert.Contains("!DISubprogram(name: \"Sable.Collections.Stack<Int>.push\"", ir, StringComparison.Ordinal);
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    /// <summary>
+    ///     Stepping into the library lands on its source, a generic instance is
+    ///     found by its Sable name, and an <c>@inline_layout</c> value shows its
+    ///     fields rather than the address of its bytes.
+    /// </summary>
+    [PosixFact(NeedsLldb)]
+    public async Task TheLibraryGenericsAndInlineLayoutsReadAsWritten() {
+        if (Lldb.Value is not { } lldb) {
+            return;
+        }
+
+        var output = await Run(lldb, Library, "gen.sb", [
+            "b 'Gen.describe<String>'", $"b gen.sb:{LineOf(Library, "// push")}",
+            "run", "frame variable order", "continue", "bt 1", "finish", "step", "kill",
+        ]);
+
+        Expect(output, "(Gen.Order) order = {\n  id = 7\n  at = (x = 3, y = -4)\n  paid = true\n}");
+        Expect(output, "Gen.describe<String>(value=");
+        Expect(output, "Sable.Collections.Stack<Int>.push(");
+        Expect(output, "items.append(item)");
+    }
+
     [Fact]
     public void TheDebugCommandIsThere() {
         var command = Command.Find("debug");
@@ -567,7 +708,7 @@ public sealed class DebuggerFormatterTests {
     }
 
     /// <summary>The DWARF itself is well formed, as the platform's verifier sees it.</summary>
-    [PosixFact("the debug information is DWARF, for lldb and gdb; a Windows debugger reads CodeView from a PDB, which the compiler does not write yet")]
+    [PosixFact("the debug information is DWARF, for lldb and gdb; a Windows build is CodeView, checked by AWindowsTargetIsDescribedInCodeView")]
     public async Task DwarfVerifies() {
         // Apple's dwarfdump, or LLVM's, perhaps under its version's name.
         string[] candidates = OperatingSystem.IsMacOS()

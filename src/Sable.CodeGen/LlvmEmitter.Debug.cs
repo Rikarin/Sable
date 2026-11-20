@@ -38,6 +38,7 @@ public sealed partial class LlvmEmitter {
     ///         <item><c>T?</c>: <c>T?$optional</c>, laid out as a union; an optional class reference is the reference, null for none.</item>
     ///         <item><c>(A) -&gt; R</c>: <c>(A) -&gt; R$closure</c> — <c>$function</c> and the <c>$context</c> object.</item>
     ///         <item><c>any P</c>: <c>any P$existential</c> — a closure per requirement, all sharing the box that holds the value.</item>
+    ///         <item>An <c>@inline_layout</c> struct <c>S</c>: <c>S$inline</c>, holding <c>$block</c>, a pointer to <c>S$block</c> — header, length, capacity, then <c>S$fields</c>, its fixed-size fields.</item>
     ///     </list>
     ///     <para>
     ///         An enum whose cases carry nothing is a DWARF enumeration, which
@@ -51,7 +52,9 @@ public sealed partial class LlvmEmitter {
     ///     (Visual Studio, WinDbg, lldb) read, and ignores DWARF. The nodes are
     ///     the same; LLVM writes them as the module's flag asks.
     /// </param>
-    sealed class DebugInfo(string directory, bool codeView = false) {
+    /// <param name="optimised">Whether the compile unit says it was optimised.</param>
+    /// <param name="sources">The files whose text the line table carries, by name.</param>
+    sealed class DebugInfo(string directory, bool codeView = false, bool optimised = false, IReadOnlyDictionary<string, string>? sources = null) {
         readonly List<string> _nodes = [];
         readonly Dictionary<string, string> _unique = new(StringComparer.Ordinal);
         readonly Dictionary<string, string> _files = new(StringComparer.Ordinal);
@@ -105,7 +108,11 @@ public sealed partial class LlvmEmitter {
                 return file;
             }
 
-            file = Node($"!DIFile(filename: {Quote(fileName)}, directory: {Quote(directory)})");
+            // DWARF 5 can carry a file's text in the line table
+            // (DW_LNCT_LLVM_source), where lldb reads it; CodeView has no
+            // place for it.
+            var source = !codeView && sources is not null && sources.TryGetValue(fileName, out var text) ? $", source: {Quote(text)}" : "";
+            file = Node($"!DIFile(filename: {Quote(fileName)}, directory: {Quote(directory)}{source})");
             _files[fileName] = file;
             _firstFile ??= file;
             return file;
@@ -129,7 +136,8 @@ public sealed partial class LlvmEmitter {
 
         /// <summary>
         ///     A function's subprogram, named by the function's full Sable name
-        ///     — <c>Demo.Point.length</c>, <c>Demo.main$closure0</c> — which is
+        ///     — <c>Demo.Point.length</c>, <c>Demo.main$closure0</c>, and for a
+        ///     generic instance <c>Demo.describe&lt;Int&gt;</c> — which is
         ///     what a backtrace shows and what <c>breakpoint set -n</c> takes.
         /// </summary>
         /// <remarks>
@@ -169,7 +177,7 @@ public sealed partial class LlvmEmitter {
             }
 
             return Node(
-                $"!DISubprogram(name: {Quote(function.Name)}, scope: {file}, file: {file}, "
+                $"!DISubprogram(name: {Quote(function.DisplayName ?? function.Name)}, scope: {file}, file: {file}, "
                 + $"line: {line}, type: {Subroutine(function.Type)}, scopeLine: {scopeLine}, {(artificial ? "flags: DIFlagArtificial, " : "")}spFlags: DISPFlagDefinition, unit: {Unit}, {trampoline})".Replace(", )", ")", StringComparison.Ordinal),
                 distinct: true
             );
@@ -379,7 +387,24 @@ public sealed partial class LlvmEmitter {
                 case AddressType address:
                     return Pointer(Type(address.Pointee));
 
-                case InlinePointerType or StructType { IsInline: true }:
+                // The block that holds its bytes (runtime/inline_layout.c),
+                // as '$inline' — which the plugin shows as its fields — the
+                // fixed-size ones at the start of the bytes.
+                case StructType { IsInline: true } inline: {
+                    var block = Structure(DisplayName(inline) + "$block", 32 + InlineLayout.Of(inline).Prefix, [
+                        Member("$header", ObjectHeader, 16, 0, artificial: true),
+                        Member("length", Int64, 8, 16),
+                        Member("capacity", Int64, 8, 24),
+                        Member("fields", InlineFields(inline), InlineLayout.Of(inline).Prefix, 32),
+                    ]);
+                    return Typedef(DisplayName(inline), Structure(DisplayName(inline) + "$inline", 8, [Member("$block", Pointer(block), 8, 0)]));
+                }
+
+                // A field's place within the bytes.
+                case InlinePointerType { Pointee: StructType { IsInline: true } pointee }:
+                    return Typedef(DisplayName(type), Pointer(InlineFields(pointee)));
+
+                case InlinePointerType:
                     return Typedef(DisplayName(type), Pointer(Basic("uint8_t", 8, "DW_ATE_unsigned_char")));
 
                 case FunctionType function:
@@ -487,6 +512,29 @@ public sealed partial class LlvmEmitter {
             return Aggregate($"{DisplayName(union)}.{caseName}$case", fields, Size(payload), live: false);
         }
 
+        /// <summary>
+        ///     An <c>@inline_layout</c> struct's fixed-size fields, at the
+        ///     offsets <see cref="InlineLayout" /> packs them at, little-endian
+        ///     as the target is: scalars as themselves, a nested struct as its
+        ///     own fields, a relative reference as the signed offset it stores.
+        ///     A variable-size field has no offset known here, and is left out.
+        /// </summary>
+        string InlineFields(StructType type) {
+            var layout = InlineLayout.Of(type);
+            var members = new List<string>();
+            foreach (var slot in layout.Slots.Where(static s => s.IsFixed)) {
+                var size = InlineLayout.FixedSizeOf(slot.Type)!.Value;
+                var fieldType = slot.Type switch {
+                    StructType { IsInline: true } nested => InlineFields(nested),
+                    RelativeReferenceType reference => Basic($"int{reference.Width * 8}_t", reference.Width * 8, "DW_ATE_signed"),
+                    var scalar => Type(scalar),
+                };
+                members.Add(Member(slot.Name, fieldType, size, slot.Offset));
+            }
+
+            return Structure(DisplayName(type) + "$fields", layout.Prefix, members);
+        }
+
         string Subroutine(FunctionType function) {
             var types = new List<string> { function.Thrown is null && function.Result != SilType.Unit ? Type(function.Result) ?? "null" : "null" };
             types.AddRange(function.Parameters.Select(p => Type(p) ?? "null"));
@@ -519,8 +567,19 @@ public sealed partial class LlvmEmitter {
             return Structure(name, size, members);
         }
 
-        static string Quote(string text) =>
-            "\"" + text.Replace("\\", "\\5C", StringComparison.Ordinal).Replace("\"", "\\22", StringComparison.Ordinal) + "\"";
+        /// <summary>A metadata string, with a backslash, a quote and a control character escaped as <c>\XX</c>.</summary>
+        static string Quote(string text) {
+            var quoted = new StringBuilder(text.Length + 2).Append('"');
+            foreach (var c in text) {
+                if (c is '\\' or '"' or < ' ' or '\x7F') {
+                    quoted.Append('\\').Append(((int)c).ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
+                } else {
+                    quoted.Append(c);
+                }
+            }
+
+            return quoted.Append('"').ToString();
+        }
 
         /// <summary>
         ///     The metadata, and the global that keeps the classes' types: one
@@ -546,7 +605,7 @@ public sealed partial class LlvmEmitter {
             }
 
             Define(Unit,
-                $"distinct !DICompileUnit(language: DW_LANG_C, file: {_firstFile}, producer: \"sable\", isOptimized: false, "
+                $"distinct !DICompileUnit(language: DW_LANG_C, file: {_firstFile}, producer: \"sable\", isOptimized: {(optimised ? "true" : "false")}, "
                 + $"runtimeVersion: 0, emissionKind: FullDebug, globals: {(globals.Count == 0 ? "!{}" : Node($"!{{{string.Join(", ", globals)}}}"))})");
             output.Append($"\n!llvm.dbg.cu = !{{{Unit}}}\n!llvm.module.flags = !{{{dwarf}, {version}}}\n\n");
             foreach (var node in _nodes) {

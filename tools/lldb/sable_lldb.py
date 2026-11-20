@@ -21,6 +21,7 @@ in a suffix saying what kind of thing it is:
     T?              -> T?$optional            the same; an optional class is the reference, null for none
     (A) -> R        -> (A) -> R$closure       $function, $context
     any P           -> any P$existential      box (the value, in an any$box$of$T), then a witness per requirement
+    @inline_layout  -> S$inline               $block -> header, length, capacity, fields (the fixed-size ones, packed)
 
 The formatters match those names by regular expression, so they work with
 any lldb that runs Python (no recognizer functions needed), and they read
@@ -474,6 +475,35 @@ class ObjectProvider(object):
 
 
 # ---------------------------------------------------------------------------
+# @inline_layout values
+# ---------------------------------------------------------------------------
+
+class InlineProvider(object):
+    """An @inline_layout value's fixed fields, read where its bytes are."""
+
+    def __init__(self, valobj, internal_dict):
+        self.valobj = valobj
+        self.fields = None
+
+    def update(self):
+        block = _raw(self.valobj).GetChildMemberWithName("$block")
+        self.fields = block.Dereference().GetChildMemberWithName("fields") if block.IsValid() and block.GetValueAsUnsigned(0) != 0 else None
+        return False
+
+    def num_children(self, max_children=None):
+        return self.fields.GetNumChildren() if self.fields is not None else 0
+
+    def has_children(self):
+        return True
+
+    def get_child_index(self, name):
+        return self.fields.GetIndexOfChildWithName(name) if self.fields is not None else -1
+
+    def get_child_at_index(self, index):
+        return self.fields.GetChildAtIndex(index) if self.fields is not None else None
+
+
+# ---------------------------------------------------------------------------
 # Dictionaries
 # ---------------------------------------------------------------------------
 
@@ -730,6 +760,7 @@ def _register(debugger, module):
         ("\\$ref$", "ObjectProvider"),
         ("\\$closure$", "ClosureProvider"),
         ("\\$existential$", "ExistentialProvider"),
+        ("\\$inline$", "InlineProvider"),
     ]
     for regex, function, flags in summaries:
         run('type summary add -w %s -p -r %s -x "%s" -F %s.%s' % (CATEGORY, flags, regex, module, function))

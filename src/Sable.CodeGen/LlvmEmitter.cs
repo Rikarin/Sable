@@ -45,11 +45,19 @@ public sealed partial class LlvmEmitter {
     public static string Emit(SilModule module, NativeTarget? target = null) =>
         new LlvmEmitter { _target = target ?? NativeTarget.Host, _arch = (target ?? NativeTarget.Host).Arch, _windows = (target ?? NativeTarget.Host).Platform == NativePlatform.Windows }.EmitModule(module);
 
-    /// <summary>The same, with DWARF debug information, so that lldb can show frames, locals and types.</summary>
+    /// <summary>The same, with debug information, so that a debugger can show frames, locals and types.</summary>
     /// <param name="directory">The directory the source file names are relative to.</param>
-    public static string EmitWithDebugInfo(SilModule module, string directory, NativeTarget? target = null) =>
+    /// <param name="target">What the program is built for: a Windows target is described in CodeView, any other in DWARF 5.</param>
+    /// <param name="optimised">The program was optimised: the compile unit says so, and a debugger trusts what it reads less.</param>
+    /// <param name="sources">
+    ///     The text of files no debugger could find on disk — the standard
+    ///     library's, embedded in the compiler — by the name a function's
+    ///     <see cref="SilFunction.SourceFile" /> gives: carried in the line
+    ///     table, so that stepping into the library shows its lines.
+    /// </param>
+    public static string EmitWithDebugInfo(SilModule module, string directory, NativeTarget? target = null, bool optimised = false, IReadOnlyDictionary<string, string>? sources = null) =>
         new LlvmEmitter {
-            _debug = new DebugInfo(directory, codeView: (target ?? NativeTarget.Host).Platform == NativePlatform.Windows), _target = target ?? NativeTarget.Host, _arch = (target ?? NativeTarget.Host).Arch, _windows = (target ?? NativeTarget.Host).Platform == NativePlatform.Windows,
+            _debug = new DebugInfo(directory, codeView: (target ?? NativeTarget.Host).Platform == NativePlatform.Windows, optimised, sources), _target = target ?? NativeTarget.Host, _arch = (target ?? NativeTarget.Host).Arch, _windows = (target ?? NativeTarget.Host).Platform == NativePlatform.Windows,
         }.EmitModule(module);
 
     DebugInfo? _debug;

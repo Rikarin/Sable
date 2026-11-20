@@ -33,11 +33,14 @@ static void name_frame(void *frame, char *text, size_t size) {
     snprintf(text, size, "%p", frame);
 }
 
-// abort() is an 'unreachable', which the engine reports as a crash of its
-// own; a trap ends the program as POSIX reports an abort, status 134.
+// A trap ends the module with an 'unreachable', as abort() does: the
+// engine stops it, and wasmtime exits as POSIX reports an abort, status
+// 134 (3 on Windows), after the trap's own report. An exit with that
+// status would not do: WASI's proc_exit takes a status below 126 only,
+// and wasmtime takes any other for an error of its own, status 1.
 _Noreturn static void stop_trapped(void) {
     fflush(stderr);
-    _Exit(134);
+    __builtin_trap();
 }
 
 static void platform_start(void) {

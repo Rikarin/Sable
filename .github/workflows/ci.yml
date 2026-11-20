@@ -33,7 +33,11 @@ jobs:
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 110
+    # Sable.CodeGen.Tests alone takes 75 minutes on Linux and macOS, and on
+    # Windows, where each test program is linked by lld-link and started as
+    # a process, had not finished after 108; Linux x64 then measures the
+    # library's coverage and runs its doc examples.
+    timeout-minutes: ${{ matrix.os == 'windows-2025' && 210 || 150 }}
     env:
       # Linux arm64 leaves the fuzz tests to the nightly job, which runs them
       # on x64: what they find is the compiler's, not the machine's. Its
@@ -67,8 +71,12 @@ jobs:
       - name: Build
         run: dotnet build Sable.slnx -c Release
 
+      # A test that hangs is stopped and named, rather than taking the job
+      # to its limit with nothing said: none takes near half an hour.
       - name: Test
-        run: dotnet test Sable.slnx -c Release --no-build --logger "console;verbosity=minimal" --filter "$TEST_FILTER"
+        run: >-
+          dotnet test Sable.slnx -c Release --no-build --logger "console;verbosity=minimal" --filter "$TEST_FILTER"
+          --blame-hang-timeout 30m --blame-hang-dump-type none
 
       # The tests that measure time, alone: with the rest of the suite running
       # beside them a shared runner's two or three cores are not theirs.

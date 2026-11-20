@@ -1630,6 +1630,11 @@ public sealed partial class LlvmEmitter {
             var linkage = module.Linkage(function.Name);
             text.Append("define ").Append(linkage).Append(ReturnType(function.Type)).Append(" @").Append(Global(function.Name))
                 .Append('(').Append(string.Join(", ", parameters)).Append(") nounwind")
+                .Append(function.Inline switch {
+                    SilInline.Always => " alwaysinline",
+                    SilInline.Never => " noinline",
+                    _ => "",
+                })
                 .Append(module.Comdat("@" + Global(function.Name), linkage) is { Length: > 0 } ? " comdat" : "");
             if (_scope is not null) {
                 text.Append(" !dbg ").Append(_scope);

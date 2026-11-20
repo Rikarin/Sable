@@ -219,6 +219,10 @@ public static class SilPrinter {
         if (function.ResultRoots is { } roots) {
             builder.Append(" roots(").Append(string.Join(", ", roots)).Append(')');
         }
+
+        if (function.Inline != SilInline.Default) {
+            builder.Append(" inline(").Append(function.Inline == SilInline.Always ? "always" : "never").Append(')');
+        }
         if (function.SourceFile is { } file) {
             builder.Append(" loc ").Append(Quote(file)).Append(':').Append(function.Line);
         }

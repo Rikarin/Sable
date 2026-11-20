@@ -1452,26 +1452,26 @@ an optimised one; never both. A package's profile may choose with
 
 | Attribute | Applies to | Effect |
 |---|---|---|
-| `@inline(always)` / `@inline(never)` | fn | Inlining hint |
+| `@inline(always)` / `@inline(never)` | fn | Inlined at every call, or at none: SIL's inliner and LLVM's (`alwaysinline`, `noinline`); always does not inline a function into itself, nor one that throws |
 | `@inline_layout` | struct, union | Contiguous pointer-free layout |
 | `@noncopy` | struct, union | Move-only |
 | `@reflectable` | type | Emit full reflection metadata |
 | `@immutable` | class | Deeply immutable; implies `Sendable` |
 | `@immortal` | static let | Skip refcounting |
 | `@flags` | enum | Bitset semantics |
-| `@escaping` | closure param | Closure may outlive the call |
+| `@escaping` | param of function type | Closure may outlive the call |
 | `@polymorphic` | generic fn | Single boxed instantiation |
 | `@deprecated("use X")` | any | Warning at use site |
-| `@available(macos: "14.0")` | any | Platform gate |
+| `@available(macos, linux)` | any | Platform gate: a use in a build for another platform is S3096 |
 | `@extern("c", "name")` | fn | Foreign import |
 | `@export("name")` | fn, var | Foreign export |
 | `@packed` / `@align(16)` | struct | Layout control |
 | `@test` / `@bench` | fn | Collected by `sable test` / `sable bench` |
-| `@main` | fn, type | Program entry point |
+| `@main` | fn | Program entry point: a module-level fn taking nothing and returning nothing or an `Int` exit status, one per module (S3514) |
 | `@generator("name", members: [...], always: true)` | fn in `generators/` | A source generator, run for declarations marked `@name`; `members` are the attributes it reads on fields, cases and parameters; `always` runs a package generator for every package (docs/08) |
 | `@discardable` | fn | Result may be ignored without `_ =` |
 | `@MainActor` | any | Main-executor isolation |
-| `@frozen` | struct, union | ABI-stable layout; no new cases/fields ever |
+| `@frozen` | union | Never gains a case: another module may match it without `default` |
 
 `@packed` lays a struct's fields one after another with no padding, and
 aligns the struct to a byte. `@align(n)`, a power of two up to 16 (the
@@ -1506,7 +1506,9 @@ tuples of them (S3511). One may be written on any declaration, and more than
 once; on a `@reflectable` type, `attributes(of:)` gives the values of those
 of one type in the order written. A name that is neither in this table nor
 such a struct, or `@derive`, `@indirect`, `@allow` and `@warn`, is S3092; one
-of the table's written where it does not apply is S3093. A public union
+of the table's written where it does not apply is S3093, with arguments it
+does not take S3094, and twice on one declaration S3513 (`@derive`,
+`@allow`, `@warn` and the program's own may be repeated). A public union
 matched from another module needs `default` unless it is `@frozen` (docs/03
 §3.3).
 

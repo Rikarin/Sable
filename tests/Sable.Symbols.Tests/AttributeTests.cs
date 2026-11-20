@@ -2,7 +2,7 @@ namespace Sable.Symbols.Tests;
 
 /// <summary>
 ///     Attributes (spec/SYNTAX.md §22): only those there are, where they
-///     apply, with the arguments they take — and what <c>@deprecated</c>,
+///     apply, once, with the arguments they take — and what <c>@deprecated</c>,
 ///     <c>@available</c>, <c>@frozen</c>, <c>@immutable</c>,
 ///     <c>@discardable</c> and <c>@derive(Copy)</c> do.
 /// </summary>
@@ -28,7 +28,12 @@ public sealed class AttributeTests {
     [Theory]
     [InlineData("@noncopy\nfn f() { }", "'@noncopy' applies to a struct or a union, not to a function")]
     [InlineData("@test\nstruct S { }", "'@test' applies to a function, not to a struct")]
-    [InlineData("fn f(@frozen _ x: Int) { }", "'@frozen' applies to a struct, a union or an enum, not to a parameter")]
+    [InlineData("fn f(@frozen _ x: Int) { }", "'@frozen' applies to a union, not to a parameter")]
+    [InlineData("@frozen\nstruct S { }", "'@frozen' applies to a union, not to a struct")]
+    [InlineData("@main\nstruct S { }", "'@main' applies to a function, not to a struct")]
+    [InlineData("fn f(@escaping _ x: Int) { }", "'@escaping' applies to a closure parameter, and 'x' is of type 'Int'")]
+    [InlineData("fn f(_ x: @escaping Int?) { }", "'@escaping' applies to a closure parameter, and 'x' is of type 'Int?'")]
+    [InlineData("fn f(_ x: @discardable Int) { }", "'@discardable' applies to a function, not to a parameter")]
     [InlineData("struct S { @immortal var count: Int = 0 }", "'@immortal' applies to a 'static let', not to a property")]
     [InlineData("@flags\nstruct S { }", "'@flags' applies to an enum, not to a struct")]
     public void AnAttributeOnlyGoesWhereItApplies(string source, string message) {
@@ -42,9 +47,48 @@ public sealed class AttributeTests {
     [InlineData("@deprecated(3)\nfn f() { }")]
     [InlineData("@available\nfn f() { }")]
     [InlineData("@align(12)\nstruct S { }")]
-    [InlineData("@frozen(true)\nstruct S { }")]
+    [InlineData("@frozen(true)\nunion U { A, B }")]
+    [InlineData("@main(1)\nfn f() { }")]
+    [InlineData("@reflectable(true)\nstruct S { }")]
+    [InlineData("@inline_layout(1)\nstruct S { }")]
+    [InlineData("@available(macos: \"14.0\")\nfn f() { }")]
+    [InlineData("@available(macOS)\nfn f() { }")]
     public void AnAttributeTakesTheArgumentsItReads(string source) =>
         Assert.Equal(ErrorCode.ERR_MalformedAttribute, Assert.Single(Errors($"module M\n{source}")).Code);
+
+    [Theory]
+    [InlineData("@inline(always)\n@inline(never)\nfn f() { }", "'@inline'")]
+    [InlineData("@deprecated\n@deprecated(\"again\")\nfn f() { }", "'@deprecated'")]
+    [InlineData("@noncopy @noncopy struct S { }", "'@noncopy'")]
+    public void AnAttributeIsWrittenOnce(string source, string name) {
+        var error = Assert.Single(Errors($"module M\n{source}"));
+        Assert.Equal(ErrorCode.ERR_DuplicateAttribute, error.Code);
+        Assert.Equal($"{name} is written twice on one declaration", error.Message);
+    }
+
+    [Fact]
+    public void OnlySableCoreDeclaresAnIntrinsic() =>
+        Assert.Equal(ErrorCode.ERR_BuiltinOutsideCore, Assert.Single(Errors("module M\nstruct S {\n    @intrinsic\n    static fn name() -> String\n}")).Code);
+
+    /// <summary>'@main' marks a function the process can call with nothing, one per module.</summary>
+    [Theory]
+    [InlineData("struct S {\n    @main\n    fn start() { }\n}", "'start' is a function of the module, not a method")]
+    [InlineData("fn outer() {\n    @main\n    fn start() { }\n}", "'start' is a function of the module, not a method or a local function")]
+    [InlineData("@main\nfn start(_ n: Int) { }", "'start' takes no parameters")]
+    [InlineData("@main\nfn start<T>() { }", "'start' is not generic")]
+    [InlineData("@main\nfn start() -> String { return \"\" }", "returns nothing, or an 'Int' that is the exit status, not 'String'")]
+    [InlineData("@main\nfn start() { }\n@main\nfn again() { }", "a module has one, and 'start' is it")]
+    public void AMainIsWhereAProgramCanStart(string source, string why) {
+        var error = Assert.Single(Errors($"module M\n{source}"), static e => e.Code == ErrorCode.ERR_InvalidEntryPoint);
+        Assert.Contains(why, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AMainReturnsNothingOrAnExitStatus() {
+        AssertClean("module M\n@main\nfn start() { }");
+        AssertClean("module M\n@main\nfn start() -> Int { return 0 }");
+        AssertClean("module M\n@main\nasync fn start() { }");
+    }
 
     [Fact]
     public void AnAlignmentIsAtMostWhatTheHeapGives() {
@@ -127,13 +171,16 @@ public sealed class AttributeTests {
                     @inline(always) fn a() { }
                     @deprecated fn b() { }
                     @deprecated("use a") fn c() { }
-                    @available(macos: "14.0", linux) fn d() { }
-                    @align(16) @frozen struct E { }
+                    @available(macos, linux) fn d() { }
+                    @align(16) struct E { }
+                    @frozen union K { A, B }
                     @discardable fn f() -> Int { return 1 }
                     @immutable class G { let n: Int = 0 }
                     struct H { @immortal static let shared: Int = 1 }
                     fn i(@escaping _ k: () -> Int) -> Int { return k() }
+                    fn l(_ k: @escaping (() -> Int)?) -> Int { return 0 }
                     @derive(Equatable, Copy) struct J { var n: Int }
+                    @derive(Equatable) @derive(Hashable) struct N { var n: Int }
                     """);
 
     [Fact]

@@ -257,6 +257,8 @@ public enum ErrorCode {
     ERR_AlignTooLarge = 3510,
     ERR_AttributeArgumentNotConstant = 3511,
     ERR_NotPolymorphic = 3512,
+    ERR_DuplicateAttribute = 3513,
+    ERR_InvalidEntryPoint = 3514,
 
     // ---- Format specs in interpolation (S3660-S3669) -------------------------
     ERR_FormatSpecMalformed = 3660,

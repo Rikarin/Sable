@@ -995,6 +995,9 @@ public static class SyntaxFormatter {
                     or SyntaxKind.BangToken =>
                     parentKind is SyntaxKind.PrefixUnaryExpression or SyntaxKind.Argument or SyntaxKind.LiteralPattern,
 
+                // '^1', counted from the end.
+                SyntaxKind.CaretToken => parentKind is SyntaxKind.PrefixUnaryExpression,
+
                 // '~x' and '~Copyable'.
                 SyntaxKind.TildeToken =>
                     parentKind is SyntaxKind.PrefixUnaryExpression or SyntaxKind.Argument or SyntaxKind.LiteralPattern

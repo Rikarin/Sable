@@ -446,8 +446,9 @@ CastExpr          = UnaryExpr { CastOp Type } ;
 CastOp            = "as" | "as" "?" | "as" "!" | "unchecked" "as" | "is" ;
 
 UnaryExpr         = PrefixOp UnaryExpr | PostfixExpr ;
-PrefixOp          = "-" | "+" | "!" | "~" | "&"
+PrefixOp          = "-" | "+" | "!" | "~" | "&" | "^"
                   | "await" | "move" ;
+                    (* prefix '^' counts from the end: '^1', a FromEnd *)
 
 TryExpr           = ( "try" | "try" "?" | "try" "!" ) UnaryExpr
                     [ "catch" ( Block | Expression ) ] ;

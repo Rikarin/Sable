@@ -1351,6 +1351,12 @@ Each reports the place it was called from: a parameter whose default is
 `#file`, `#line`, `#column` or `#function` takes the call's place, not its
 own.
 
+`assert` checks only where `DEBUG` is defined (an unoptimised build, or a
+profile with `debug-assertions`), in the library's code as in the
+program's. A file that imports Sable.Testing means that module's `assert` by
+the bare name, as an import's names come before Sable.Core's: a test's
+assertion, checked in every build.
+
 Panics are not catchable in normal code. `Task.catchingPanic { }` exists for
 supervisors and test harnesses only.
 

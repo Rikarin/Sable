@@ -120,3 +120,59 @@ fn unimplementedSaysWhatIsNotSupported() {
 fn unimplementedWithoutAMessage() {
     unimplemented()
 }
+
+// Sable.Core's 'assert', named in full: a file that imports Sable.Testing
+// means that module's by a bare 'assert'. Tests are built for debugging,
+// where Sable.Core's checks.
+
+@test
+fn aDebugAssertionThatHoldsDoesNothing() {
+    Sable.Core.assert(1 + 1 == 2)
+    Sable.Core.assert(true, "always")
+}
+
+@test(traps: "assertion failed: the sum is wrong")
+fn aDebugAssertionThatFailsStopsTheProgram() {
+    Sable.Core.assert(1 + 1 == 3, "the sum is wrong")
+}
+
+@test(traps: "assertion failed")
+fn aDebugAssertionWithoutAMessageStillSaysSo() {
+    Sable.Core.assert(false)
+}
+
+@test(traps: "assertion failed: not this way")
+fn assertionFailureStopsTheProgram() {
+    assertionFailure("not this way")
+}
+
+@test(traps: "assertion failed")
+fn assertionFailureWithoutAMessageStillSaysSo() {
+    assertionFailure()
+}
+
+fn signText(_ n: Int) -> String {
+    if n < 0 {
+        return "-"
+    }
+    if n >= 0 {
+        return "+"
+    }
+    unreachable("every Int is one or the other")
+}
+
+@test
+fn unreachableCodeThatIsNotReachedDoesNothing() {
+    assertEqual(signText(-4), "-")
+    assertEqual(signText(4), "+")
+}
+
+@test(traps: "reached code marked unreachable(): no way")
+fn unreachableStopsTheProgramWithItsMessage() {
+    let _: Int = unreachable("no way")
+}
+
+@test(traps: "reached code marked unreachable()")
+fn unreachableWithoutAMessageStillSaysSo() {
+    let _: String = unreachable()
+}

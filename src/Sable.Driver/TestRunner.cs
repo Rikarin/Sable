@@ -36,6 +36,15 @@ internal static class TestRunner {
     /// <summary>The marker a failed assertion's report starts with (Sable.Testing's <c>failureMarker</c>).</summary>
     const string FailureMarker = "assertion failed: ";
 
+    /// <summary>
+    ///     Whether a test's errors hold Sable.Testing's report of a failed
+    ///     assertion: a line that starts with the marker. Sable.Core's
+    ///     debug <c>assert</c> traps with the same words after
+    ///     <c>fatal error: </c>, which is a trap like any other.
+    /// </summary>
+    static bool IsTestAssertion(string errors) =>
+        errors.StartsWith(FailureMarker, StringComparison.Ordinal) || errors.Contains("\n" + FailureMarker, StringComparison.Ordinal);
+
     /// <summary>After this long, a test with no time limit is said to be running long, once.</summary>
     static readonly TimeSpan SlowTest = TimeSpan.FromSeconds(60);
 
@@ -281,7 +290,7 @@ internal static class TestRunner {
             return $"the test was to trap{(expected.Length == 0 ? "" : $" with '{expected}'")}, and it returned";
         }
 
-        if (!outcome.Started || outcome.Errors.Contains(FailureMarker, StringComparison.Ordinal)) {
+        if (!outcome.Started || IsTestAssertion(outcome.Errors)) {
             return "";
         }
 
@@ -300,7 +309,7 @@ internal static class TestRunner {
         }
 
         // An assertion's own trap says nothing its report has not.
-        var assertion = outcome.Errors.Contains(FailureMarker, StringComparison.Ordinal);
+        var assertion = IsTestAssertion(outcome.Errors);
         var shown = assertion ? outcome.Errors.Replace("fatal error: 'try!' caught an error\n", "", StringComparison.Ordinal) : outcome.Errors;
         if (shown.Length > 0) {
             report.Append('\n').Append(Indented(shown));

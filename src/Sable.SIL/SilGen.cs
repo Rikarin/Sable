@@ -9494,8 +9494,8 @@ public sealed partial class SilGen {
                 return BlackBox(call);
             }
 
-            if (IsIntrinsic(callee) && callee is { Name: "compileError" or "unreachable", ContainingSymbol: ModuleSymbol }) {
-                return callee.Name == "unreachable" ? Unreachable() : CompileError(call);
+            if (IsIntrinsic(callee) && callee is { Name: "compileError", ContainingSymbol: ModuleSymbol }) {
+                return CompileError(call);
             }
 
             if (IsIntrinsic(callee)) {

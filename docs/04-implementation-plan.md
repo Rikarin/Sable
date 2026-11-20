@@ -1277,7 +1277,11 @@ loop versioning, simplification again (#179).
   the rest (`SpeculativeDevirtualise`); the test is `class_is`, which for a
   class nothing inherits from is one comparison of the object's metadata,
   and the call is then inlined. A protocol requirement on a generic is
-  already direct (generics are specialised).
+  already direct (generics are specialised). A call through an
+  existential made in the function (#179) calls the witness directly: the
+  closure the existential holds has no context, so it is found through the
+  struct and the slot it was put in, and its code called with
+  `no_context`, which LLVM then inlines (`Simplify`).
 - **Inlining.** By cost: an instruction costs one, except what only names
   or reshapes a value (a literal, an extract, a cast, a borrow's ends, a
   slot, a branch), which costs nothing, and a call, which costs five. Up to
@@ -1300,6 +1304,18 @@ loop versioning, simplification again (#179).
   speculative call leaves; an `inout` parameter is treated as a stack slot,
   exclusivity keeping a callee not handed it from writing it; and a load
   only borrowed for a call is borrowed before the call is inlined.
+  Loop-wide (#179): a `let` that copies a borrowed parameter, or storage
+  nothing changes wherever the binding may hold the copy — followed along
+  every path from its store to its destroys, a loop's turn however many
+  blocks long — borrows it, so the retain at the top of each turn and the
+  release at the bottom pair across the turn and go (`BorrowLets`; never
+  past a call, a write outside the function's slots, or a release that
+  could run a deinit, and a copy made from the binding to publish to
+  another task is its own); an element switched on is read in place when
+  the array's borrow outlives the switch, a load switched on is borrowed
+  when the case it does not destroy in only traps (`!`), and a copy loaded
+  out of a slot destroyed after it is put away whole — into an enum, an
+  array — is taken instead (`entries[i]!.value = v`).
 - **Simplification.** Constant folding (now division, remainder and shifts
   that cannot trap, and extracts of what the function made), decided
   branches and checks, dominator-scoped common subexpressions over trivial
@@ -1308,29 +1324,41 @@ loop versioning, simplification again (#179).
   and dead instructions.
 
 Measured with the compiler before and after, each benchmark its fastest of
-seven runs, `SABLE_STATS` for the counts:
+seven runs, `SABLE_STATS` for the counts. #179's first round, the
+dictionary's (a hit no longer copies its entry, the entry's key or the
+dictionary), took words from 6.8M retains to 0.8M, map-string from 6.7M to
+1.5M and map-int from 1M to 41. Its second round and #188's — loop-wide
+`let` borrowing, elements and loads read in place across a switch, copies
+moved into an array, uncounted objects in the frame, promotion in loop
+bodies of several blocks, local functions' `let`s by value, direct
+witness calls:
 
 | Benchmark | ms before | ms after | retains before | retains after | releases before | releases after |
 |---|---|---|---|---|---|---|
-| binary-trees | 418 | 420 | 0 | 0 | 14,723,790 | 14,723,790 |
-| nbody | 46 | 45 | 0 | 0 | 1 | 1 |
-| orders | 193 | 191 | 1,000 | 1,000 | 4,005,000 | 4,005,000 |
+| binary-trees | 422 | 419 | 0 | 0 | 14,723,790 | 14,723,790 |
+| nbody | 45 | 45 | 0 | 0 | 1 | 0 |
+| orders | 188 | 192 | 1,000 | 1,000 | 4,005,000 | 3,000 |
 | shapes | 5.0 | 5.3 | 2,600 | 2,600 | 4,602 | 4,602 |
-| sort | 39.9 | 41.5 | 967,230 | 967,230 | 1,447,230 | 1,447,230 |
-| words | 41.1 | 36.3 | 6,799,961 | 800,039 | 7,400,028 | 1,400,106 |
-| json | 9.0 | 9.4 | 63,596 | 63,576 | 208,300 | 208,280 |
-| map-string | 65.6 | 52.6 | 6,724,319 | 1,462,179 | 7,124,342 | 1,862,202 |
-| map-int | 179 | 175 | 1,000,041 | 41 | 1,000,067 | 67 |
+| sort | 40.4 | 39.8 | 967,230 | 967,230 | 1,447,230 | 1,447,230 |
+| words | 37.8 | 37.8 | 800,039 | 400,037 | 1,400,106 | 1,000,084 |
+| json | 8.8 | 9.0 | 63,576 | 60,549 | 208,280 | 205,249 |
+| map-string | 51.3 | 47.3 | 1,462,179 | 200,039 | 1,862,202 | 600,062 |
+| map-int | 165 | 165 | 41 | 41 | 67 | 67 |
 
-The gains are the dictionary's: a hit no longer copies its entry, the
-entry's key or the dictionary. Shapes', sort's and json's differences are
-run-to-run noise; allocations are unchanged everywhere. Not yet: hoisting
-releases out of loops and loop-wide ARC motion; a call through an
-existential whose value was made in the function (its witness is a context
--free closure, which would need a direct call that passes no context);
-devirtualising a speculative call by profile rather than by class shape;
-and the header and count of a stack-promoted object (orders' four million
-releases are of those).
+Map-string's lookups now retain nothing, and words' updates copy each
+entry once rather than twice. Orders' four million releases were of
+inline blocks in the frame, now destroyed uncounted; its time is the
+blocks' building and reading, not their counts, and is unchanged, as are
+shapes', json's and the rest's within run-to-run noise. Allocations are
+unchanged everywhere: these benchmarks' promotable objects were already
+in the frame. Not yet: hoisting a release out of a loop when the value it
+releases is not a `let` the loop borrows (the general case of docs/02
+§2.2's release hoisting and sinking); updating an entry in place rather
+than copying it out and back (words' remaining 400,000); the header of an
+uncounted object, which the runtime's operations on arrays and blocks, a
+deinit and a method call still read; a copy of an upcast of an object made
+in the function (shapes' boxes); and devirtualising a speculative call by
+profile rather than by class shape.
 
 ### Async, as implemented
 

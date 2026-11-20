@@ -1680,6 +1680,10 @@ public static class SilBuiltins {
                 return new([SilType.Int], SilType.Unit);
             case "task_yield" or "task_drain" when operands.Count == 0:
                 return new([], SilType.Unit);
+            // The context a closure made with none is called with: what a
+            // call of its code made directly passes (Simplify's DirectCalls).
+            case "no_context" when operands.Count == 0:
+                return new([], SilType.Object);
             // A block ran, for 'sable test --coverage' (Coverage.cs): its counter's number.
             case Coverage.Builtin when operands is [var counter] && counter == SilType.Int:
                 return new([SilType.Int], SilType.Unit);
@@ -1830,7 +1834,7 @@ public static class SilBuiltins {
     }
 
     public static IEnumerable<string> Names =>
-        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", "task_blocking", Coverage.Builtin]);
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", "task_blocking", "no_context", Coverage.Builtin]);
 
     static SilType? Pointee(SilType? type) => (type as InlinePointerType)?.Pointee;
 

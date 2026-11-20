@@ -1229,6 +1229,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "array_empty":
                 return builtin.Type is SliceType ? SliceValue.Empty : null;
 
+            case "no_context":
+                return null;
+
             // A fresh array of the constants, room for them alone, as the
             // native constant has.
             case "array_literal" or "array_literal_stack":

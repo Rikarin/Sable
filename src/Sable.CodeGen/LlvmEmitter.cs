@@ -3481,6 +3481,10 @@ public sealed partial class LlvmEmitter {
                     _names[builtin] = builtin.Type is SliceType ? "zeroinitializer" : "null";
                     return;
 
+                case "no_context":
+                    _names[builtin] = "null";
+                    return;
+
                 // An array of constants: the immortal one in read-only memory.
                 case "array_literal" when SilBuiltins.IsConstantArray(builtin):
                     _names[builtin] = module.ArrayConstant((ArrayType)builtin.Type, [..operands]);

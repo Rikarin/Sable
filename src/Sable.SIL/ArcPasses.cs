@@ -126,7 +126,8 @@ public sealed class BorrowLoads : ISilPass {
     /// <summary>
     ///     The destroys of a load that its block branches on: one at the top
     ///     of each successor, which only that block leads to — the shape of
-    ///     <c>if let</c>, <c>??</c> and <c>!</c>. Everything borrowed from the
+    ///     <c>if let</c>, <c>??</c> and <c>!</c>, whose none case only traps
+    ///     and need not destroy it. Everything borrowed from the
     ///     value, a payload included, must be used before its destroy, and
     ///     nothing on the way may write the storage.
     /// </summary>
@@ -154,8 +155,9 @@ public sealed class BorrowLoads : ISilPass {
             }
         }
 
-        // Every way out of the block ends the borrow, in a block only it leads to.
-        if (successors.Any(s => !ends.ContainsKey(s) || predecessors[s].Count != 1)) {
+        // Every way out of the block ends the borrow, in a block only it
+        // leads to — or only traps, as the none case of a '!' does.
+        if (successors.Any(s => !ends.ContainsKey(s) && s.Terminator is not UnreachableInst || predecessors[s].Count != 1)) {
             return null;
         }
 
@@ -395,7 +397,7 @@ public sealed class BorrowLoads : ISilPass {
     ///     exclusivity (docs/02 §2.3) keeps from any other access while the
     ///     call lasts — a callee not handed it, or a deinit, cannot reach it.
     /// </summary>
-    static SilValue? ExclusiveOf(SilValue address) =>
+    internal static SilValue? ExclusiveOf(SilValue address) =>
         address switch {
             AllocStackInst slot => slot,
             SilArgument { Type: AddressType } parameter when parameter.Block == parameter.Block.Function.Entry => parameter,
@@ -437,7 +439,7 @@ public sealed class BorrowLoads : ISilPass {
         };
 
     /// <summary>True when an instruction might change what the storage holds, or free it.</summary>
-    static bool MayWrite(SilInstruction instruction, SilValue? slot, SilValue? owner) {
+    internal static bool MayWrite(SilInstruction instruction, SilValue? slot, SilValue? owner) {
         if (slot is not null) {
             // A stack slot, or an inout parameter, is written only by something given its address.
             foreach (var operand in instruction.Operands) {
@@ -787,14 +789,13 @@ public sealed class ForwardCopies : ISilPass {
             }
         }
 
-        if (root is not null && early is null) {
-            return false;
-        }
-
+        // A borrow not ended in the block goes on into each case, where it
+        // must last to the destroy: the element is then read in place there.
         foreach (var (target, destroy) in destroys) {
             var end = target.Instructions.IndexOf(destroy);
             for (var k = 0; k < end; k++) {
-                if (MayChangeArray(target.Instructions[k], root)) {
+                if (MayChangeArray(target.Instructions[k], root)
+                    || early is null && root is not null && target.Instructions[k] is EndBorrowInst { Borrowed: var ended } && ReferenceEquals(ended, root)) {
                     return false;
                 }
             }
@@ -856,8 +857,9 @@ public sealed class ForwardCopies : ISilPass {
 
     /// <summary>
     ///     A copy loaded out of a slot that is destroyed next, with only other
-    ///     slots' ends between: the value is taken out instead — 'return
-    ///     result' moves. Destruction stays where the scope puts it.
+    ///     slots' ends between, or what puts the copy away: the value is
+    ///     taken out instead — 'return result' moves. Destruction stays where
+    ///     the scope puts it.
     /// </summary>
     static bool TryTake(SilFunction function, SilBlock block, int index, LoadInst load, Uses uses) {
         var slot = (AllocStackInst)load.Address;
@@ -875,15 +877,30 @@ public sealed class ForwardCopies : ISilPass {
                 return true;
             }
 
-            // Only other slots' ends may come between: anything else would see
-            // the value destroyed sooner than its scope says.
-            if (instruction is not (DestroyAddrInst or DeallocStackInst or EndBorrowInst) || instruction.Operands.Any(o => ReferenceEquals(o, slot))) {
+            // Only other slots' ends may come between, and what puts the
+            // copy away whole — into an enum, into an array — without
+            // destroying it: anything else might see the value destroyed
+            // sooner than its scope says. 'entries[i]!.value = v' copies the
+            // entry out, changes it, and stores it back.
+            if (instruction.Operands.Any(o => ReferenceEquals(o, slot))
+                || instruction is not (DestroyAddrInst or DeallocStackInst or EndBorrowInst) && !PutsAway(instruction)) {
                 return false;
             }
         }
 
         return false;
     }
+
+    /// <summary>
+    ///     An instruction that leaves every value it is given alive: one with
+    ///     no effect, a value made of others, or an element stored into an
+    ///     array — which releases the element it replaces, as the store it
+    ///     stands for would.
+    /// </summary>
+    static bool PutsAway(SilInstruction instruction) =>
+        Inert(instruction)
+        || instruction is StructInst or TupleInst or EnumInst
+        || instruction is BuiltinInst { Name: "array_set" or "array_set_unique" or "array_append" };
 
     static bool TryOutlivingCopy(SilFunction function, SilBlock block, int index, CopyValueInst copy, Uses uses) {
         var source = copy.Value;

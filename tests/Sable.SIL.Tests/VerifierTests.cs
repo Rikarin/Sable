@@ -434,6 +434,33 @@ public sealed class VerifierTests {
         Assert.Contains("(@owned M.Node, M.Node) -> ()", SilPrinter.Print(module), StringComparison.Ordinal);
     }
 
+    /// <summary>A load_weak or load_unowned of other storage is the verifier's to reject, not a crash on its type.</summary>
+    [Theory]
+    [InlineData("load_weak %1", "load_weak needs the address of weak storage")]
+    [InlineData("load_weak %2", "load_weak needs the address of weak storage")]
+    [InlineData("load_unowned %1", "load_unowned needs the address of unowned storage")]
+    [InlineData("load_unowned %2", "load_unowned needs the address of unowned storage")]
+    public void AWeakOrUnownedLoadNeedsItsKindOfStorage(string load, string complaint) {
+        var text = $$"""
+                    sil_class M.Node { next: $@sil_weak Optional$M.Node, parent: $M.Node }
+                    sil_enum Optional$M.Node { Some($M.Node), None }
+
+                    sil @f : $(@owned M.Node, M.Node) -> () {
+                    bb0(%0 : $M.Node, %1 : $M.Node):
+                      %2 = ref_element_addr %0, #parent
+                      %3 = {{load}}
+                      store_weak %3 to %2
+                      destroy_value %3
+                      destroy_value %0
+                      return
+                    }
+
+                    """;
+        var module = SilParser.Parse(text);
+        Assert.Contains("%3 = " + load, SilPrinter.Print(module), StringComparison.Ordinal);
+        AssertRejected(text, complaint);
+    }
+
     /// <summary>A struct's weak and unowned fields as values: made from the object, read back as it, each its own owned value.</summary>
     [Fact]
     public void WeakAndUnownedValuesOfAStructRoundTrip() {

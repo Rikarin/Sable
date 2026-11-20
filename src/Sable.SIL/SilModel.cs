@@ -924,7 +924,7 @@ public sealed class EndBorrowInst(SilValue borrowed) : SilInstruction(borrowed) 
 /// <summary><c>load_weak %0</c>: the object a weak reference holds, retained, or none if it is gone.</summary>
 public sealed class LoadWeakInst(SilValue address) : SilInstruction(address) {
     public SilValue Address => Operands[0];
-    public override SilType Type => ((WeakStorageType)((AddressType)Address.Type).Pointee).Optional;
+    public override SilType Type => ((Address.Type as AddressType)?.Pointee as WeakStorageType)?.Optional ?? SilType.Unit; // the verifier rejects the rest
     public override string Opcode => "load_weak";
 }
 
@@ -939,7 +939,7 @@ public sealed class StoreWeakInst(SilValue value, SilValue address) : SilInstruc
 /// <summary><c>load_unowned %0</c>: the object an unowned reference holds, retained; a trap if it is gone.</summary>
 public sealed class LoadUnownedInst(SilValue address) : SilInstruction(address) {
     public SilValue Address => Operands[0];
-    public override SilType Type => ((UnownedStorageType)((AddressType)Address.Type).Pointee).Referent;
+    public override SilType Type => ((Address.Type as AddressType)?.Pointee as UnownedStorageType)?.Referent ?? SilType.Unit; // the verifier rejects the rest
     public override string Opcode => "load_unowned";
 }
 

@@ -369,4 +369,6 @@ members, not conformances — SYNTAX.md §11):
   `removeAll(where:)`, `retain(where:)`, `dedup()`, `truncate(to:)`,
   `drain`, `replaceSubrange`, `swapRemove(at:)` — is `List<Element>`'s
   (Sable.Collections), a value that holds a `T[>..]` and converts to and
-  from one with no copy.
+  from one with no copy. (A growable array is a `RangeReplaceableCollection`,
+  so generic code can still replace a range of one: the protocol's default
+  `replaceSubrange` rebuilds the array, where List's moves elements in place.)

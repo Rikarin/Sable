@@ -12,6 +12,27 @@ public sealed class OperatorTests {
         Assert.Equal(expected, AssertAgree(Program(declarations, body)).Stdout);
 
     [Fact]
+    public void TheWrappingOperatorsKeepTheLowBits() =>
+        Prints(
+            "true\n4\n255\n253\n91\n14\n",
+            """
+            fn mixed<T: FixedWidthInteger>(_ a: T, _ b: T) -> T { return a &* b &+ b }
+            """,
+            """
+                print(Int.max &+ 1 == Int.min)
+                var x: U8 = 250
+                x &+= 10
+                print(x)
+                x &-= 5
+                print(x)
+                x &*= 3
+                print(x)
+                print(mixed(200 as U8, 3 as U8))
+                print(2 &+ 3 &* 4)
+            """
+        );
+
+    [Fact]
     public void OperatorsATypeDeclaresOrDerives() =>
         Prints(
             "8\n15\n12\ntrue\nfalse\ntrue\ntrue\nfalse\ntrue\ntrue\n",

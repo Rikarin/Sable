@@ -22,3 +22,18 @@ public protocol Formattable {
     /// The value as text, as the spec asks.
     fn format(_ spec: FormatSpec) -> String
 }
+
+extension Formattable {
+    /// Writes the value, as the spec asks, into the writer: what a hole
+    /// with the spec would give, without a string made for it on the way
+    /// when the writer is one that keeps pieces.
+    ///
+    /// ```sable
+    /// var text = "pi is "
+    /// (3.14159).write(to: &text, spec: try! FormatSpec.parse(".2"))
+    /// assert(text == "pi is 3.14")
+    /// ```
+    public fn write<W: TextWriter>(to writer: inout W, spec: FormatSpec = FormatSpec()) {
+        writer.write(self.format(spec))
+    }
+}

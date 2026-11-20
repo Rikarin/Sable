@@ -3655,7 +3655,7 @@ public sealed partial class Binder {
             BoundLocalAccess or BoundParameterAccess or BoundSelfAccess => true,
             BoundFieldAccess { Field.IsComputed: false, Field.IsStatic: false, Receiver: { } receiver } =>
                 receiver.Type.TypeKind == TypeKind.Struct && IsPlace(receiver),
-            BoundTupleElementAccess element => IsPlace(element.Receiver),
+            BoundTupleElementAccess element => element.Receiver.Type is not OptionalTypeSymbol && IsPlace(element.Receiver),
             BoundConversion { ConversionKind: ConversionKind.Dereference } => true,
             BoundConversion { ConversionKind: ConversionKind.Identity } conversion => IsPlace(conversion.Operand),
             _ => false,
@@ -3807,7 +3807,13 @@ public sealed partial class Binder {
         }
 
         if (receiverType is TupleTypeSymbol tuple) {
-            return BindTupleElementAccess(syntax, receiver, tuple, name);
+            var element = BindTupleElementAccess(syntax, receiver, tuple, name);
+
+            // 'pair?.0' is optional, as any member reached through '?.' is;
+            // an element optional already is given as it is.
+            return optionalChain && element is BoundTupleElementAccess { Type: not OptionalTypeSymbol } chained
+                ? new BoundTupleElementAccess(syntax, new OptionalTypeSymbol(chained.Type), receiver, chained.Index)
+                : element;
         }
 
         _unmetRequirement = null;
@@ -4006,8 +4012,18 @@ public sealed partial class Binder {
         if (Owner(first) is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol
             || !ReferenceEquals(Owner(second), protocol)
             || first.Parameters.Length != second.Parameters.Length
-            || !first.Parameters.Zip(second.Parameters).All(static p => p.First.Type.Equals(p.Second.Type))
+            || first.TypeParameters.Length != second.TypeParameters.Length
             || InExtension(first) == InExtension(second)) {
+            return null;
+        }
+
+        // A generic requirement and its default each have parameters of
+        // their own: 'replaceSubrange<C>' is the same method under either's C.
+        var renamed = new TypeSubstitution(
+            second.TypeParameters.Zip(first.TypeParameters)
+                .ToDictionary(static p => p.First, static p => (TypeSymbol)p.Second)
+        );
+        if (!first.Parameters.Zip(second.Parameters).All(p => p.First.Type.Equals(renamed.Apply(p.Second.Type)))) {
             return null;
         }
 
@@ -5837,7 +5853,9 @@ public sealed partial class Binder {
     ///     A numeric literal has no type until something asks for one, and an
     ///     array literal has no storage kind; both bend to fit.
     /// </remarks>
-    static bool IsLiteral(BoundExpression expression) => expression is BoundLiteral or BoundArray or BoundDictionary;
+    static bool IsLiteral(BoundExpression expression) =>
+        expression is BoundLiteral or BoundArray or BoundDictionary
+        || expression is BoundRange range && (range.Lower is null or BoundLiteral) && (range.Upper is null or BoundLiteral);
 
     /// <summary>The message for a value of one type where another is wanted.</summary>
     /// <remarks>
@@ -7344,6 +7362,9 @@ public sealed partial class Binder {
             SyntaxKind.LessLessEqualsToken => BinaryOperatorKind.LeftShift,
             SyntaxKind.GreaterGreaterEqualsToken => BinaryOperatorKind.RightShift,
             SyntaxKind.QuestionQuestionEqualsToken => BinaryOperatorKind.Coalesce,
+            SyntaxKind.AmpersandPlusEqualsToken
+                or SyntaxKind.AmpersandMinusEqualsToken
+                or SyntaxKind.AmpersandStarEqualsToken => BinaryOperatorKind.UserDefined,
             _ => null,
         };
 
@@ -7593,6 +7614,11 @@ public sealed partial class Binder {
             SyntaxKind.AmpersandAmpersandToken => BinaryOperatorKind.LogicalAnd,
             SyntaxKind.PipePipeToken => BinaryOperatorKind.LogicalOr,
             SyntaxKind.QuestionQuestionToken => BinaryOperatorKind.Coalesce,
+
+            // '&+', '&-' and '&*' are FixedWidthInteger's, declared in Sable.Core.
+            SyntaxKind.AmpersandPlusToken
+                or SyntaxKind.AmpersandMinusToken
+                or SyntaxKind.AmpersandStarToken => BinaryOperatorKind.UserDefined,
             _ => null,
         };
 
@@ -7733,7 +7759,7 @@ public sealed partial class Binder {
             (left, right) = UserOperands(method, left, right);
             return new BoundBinaryOperator(
                 syntax,
-                method.Method.ReturnType,
+                UserResultType(method.Method, left.Type),
                 BinaryOperatorKind.UserDefined,
                 left,
                 right,
@@ -8082,7 +8108,37 @@ public sealed partial class Binder {
             }
         }
 
+        // An operator a protocol's extension gives every conformer, on two
+        // of one conforming type: 'a &+ b' on two Ints is FixedWidthInteger's.
+        if (left is NamedTypeSymbol { TypeKind: not TypeKind.Protocol } conformer && left.Equals(right)) {
+            foreach (var protocol in ProtocolsConformedToBy(conformer)) {
+                if (protocol.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
+                        f is { FunctionKind: FunctionKind.Operator, Fixity: OperatorFixity.Infix, Parameters.Length: 2, IsAbstract: false }
+                        && string.Equals(f.Name, symbol, StringComparison.Ordinal)
+                        && f.Parameters.All(p => p.Type is TypeParameterSymbol self && ReferenceEquals(self, protocol.SelfTypeParameter))) is { } given) {
+                    return new UserOperator(given, conformer, conformer);
+                }
+            }
+        }
+
         return null;
+    }
+
+    /// <summary>Every protocol the type conforms to, and every one those refine.</summary>
+    static IEnumerable<NamedTypeSymbol> ProtocolsConformedToBy(NamedTypeSymbol type) {
+        var seen = new HashSet<NamedTypeSymbol>();
+        var pending = new Stack<NamedTypeSymbol>(type.OriginalDefinition.BaseTypes.OfType<NamedTypeSymbol>().Where(static b => b.TypeKind == TypeKind.Protocol));
+        while (pending.Count > 0) {
+            var protocol = pending.Pop();
+            if (!seen.Add(protocol)) {
+                continue;
+            }
+
+            yield return protocol;
+            foreach (var refined in protocol.BaseTypes.OfType<NamedTypeSymbol>().Where(static b => b.TypeKind == TypeKind.Protocol)) {
+                pending.Push(refined);
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -8146,6 +8202,23 @@ public sealed partial class Binder {
             if (expression.Type.Equals(target)) {
                 return expression;
             }
+        }
+
+        // '-1.0...1.0' where a 'ClosedRange<F32>' is wanted: each bound
+        // takes the bound type, as an array literal's elements do.
+        if (expression is BoundRange { Type: NamedTypeSymbol literalRange } rangeLiteral
+            && IsLiteral(rangeLiteral)
+            && target is NamedTypeSymbol { TypeArguments: [var wantedBound] } wantedRange
+            && ReferenceEquals(literalRange.OriginalDefinition, wantedRange.OriginalDefinition)
+            && !literalRange.Equals(wantedRange)) {
+            expression = new BoundRange(
+                rangeLiteral.Syntax,
+                wantedRange,
+                rangeLiteral.Lower is { } lowerBound ? Convert(lowerBound, wantedBound, lowerBound.Syntax) : null,
+                rangeLiteral.Upper is { } upperBound ? Convert(upperBound, wantedBound, upperBound.Syntax) : null,
+                rangeLiteral.IsInclusive
+            );
+            return expression;
         }
 
         var conversion = _conversions.Classify(expression.Type, target, IsLiteral(expression));

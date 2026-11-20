@@ -66,7 +66,11 @@ public protocol MutableCollection: Collection {
     subscript(position: Index) -> Element { get set }
 }
 
-/// A collection that can be made empty, and grow and shrink at its end.
+/// A collection that can be made empty, grow and shrink at its end, and
+/// have any run of its elements replaced. Only the first four need be
+/// written: 'replaceSubrange' and 'reserveCapacity' have defaults, which
+/// rebuild the collection and do nothing; a type that can do better (as
+/// List replaces in place) gives its own.
 public protocol RangeReplaceableCollection: Collection {
     /// An empty collection.
     init()
@@ -79,4 +83,58 @@ public protocol RangeReplaceableCollection: Collection {
 
     /// Every element, taken out.
     mutating fn clear()
+
+    /// The elements in the range, taken out, and these put in their
+    /// place: an empty range inserts them there, and no elements removes
+    /// the range. A range that is not within the collection traps.
+    mutating fn replaceSubrange<C: Collection>(_ range: Range<Index>, with elements: C) where C.Element == Element
+
+    /// Makes room for at least this many elements, so that adding them
+    /// does not grow the storage on the way; a hint, which a collection
+    /// may ignore.
+    mutating fn reserveCapacity(_ minimumCapacity: Int)
+}
+
+extension RangeReplaceableCollection {
+    /// The collection, rebuilt: what comes before the range, the
+    /// elements, then what comes after it. O(n) whatever the range.
+    ///
+    /// ```sable
+    /// var xs: Int[>..] = [1, 2, 3, 4]
+    /// xs.replaceSubrange(1..<3, with: [9])
+    /// assert(xs == [1, 9, 4])
+    /// ```
+    public mutating fn replaceSubrange<C: Collection>(_ range: Range<Index>, with elements: C) where C.Element == Element {
+        precondition(startIndex <= range.lowerBound && range.upperBound <= endIndex, "the range is not within the collection")
+        var rebuilt = Self()
+        rebuilt.reserveCapacity(count - distanceFrom(range.lowerBound, to: range.upperBound) + elements.count)
+        var position = startIndex
+        while position < range.lowerBound {
+            rebuilt.append(element: self[position])
+            position = index(after: position)
+        }
+        for element in elements {
+            rebuilt.append(element: element)
+        }
+        position = range.upperBound
+        while position < endIndex {
+            rebuilt.append(element: self[position])
+            position = index(after: position)
+        }
+        self = rebuilt
+    }
+
+    /// Nothing: room is made as elements are added.
+    public mutating fn reserveCapacity(_ minimumCapacity: Int) { }
+
+    /// How many positions there are from one to the other, by stepping.
+    fn distanceFrom(_ start: Index, to end: Index) -> Int {
+        var steps = 0
+        var position = start
+        while position < end {
+            position = index(after: position)
+            steps += 1
+        }
+        return steps
+    }
 }

@@ -13,12 +13,15 @@ module Sable.Core
 /// Arithmetic with the operators traps on overflow. Each operation also
 /// comes in forms that do not: 'checked' gives none, 'wrapping' keeps the
 /// low bits, 'saturating' stops at the bounds and 'overflowing' gives the
-/// low bits and whether it overflowed.
+/// low bits and whether it overflowed. The wrapping ones have operators of
+/// their own too: '&+', '&-' and '&*' (and '&+=', '&-=', '&*='), for
+/// hashing and checksums, where wrapping is what is meant.
 ///
 /// ```sable
 /// let x: U8 = 250
 /// assert(x.checkedAdd(10) == none)
 /// assert(x.wrappingAdd(10) == 4)
+/// assert(x &+ 10 == 4)
 /// assert(x.saturatingAdd(10) == 255)
 /// let (low, overflowed) = x.overflowingAdd(10)
 /// assert(low == 4 && overflowed)
@@ -82,6 +85,15 @@ public protocol FixedWidthInteger: BinaryInteger {
     /// The negation's low bits: the least value of a signed type is its
     /// own, and an unsigned value's is its two's complement.
     fn wrappingNeg() -> Self
+
+    /// The sum's low bits, as 'wrappingAdd': it never traps.
+    operator &+ (lhs: Self, rhs: Self) -> Self
+
+    /// The difference's low bits, as 'wrappingSub': it never traps.
+    operator &- (lhs: Self, rhs: Self) -> Self
+
+    /// The product's low bits, as 'wrappingMul': it never traps.
+    operator &* (lhs: Self, rhs: Self) -> Self
 
     /// The high half of the product at twice the width; 'wrappingMul' is
     /// the low half (see 'multipliedFullWidth').
@@ -157,6 +169,30 @@ extension FixedWidthInteger {
     /// The built-in integers' negation: the instruction, without the check.
     @builtin("wrapping_neg_Self")
     public fn wrappingNeg() -> Self
+
+    /// The sum's low bits, as 'wrappingAdd': it never traps.
+    ///
+    /// ```sable
+    /// assert(Int.max &+ 1 == Int.min)
+    /// ```
+    @builtin("wrapping_add_Self")
+    public operator &+ (lhs: Self, rhs: Self) -> Self
+
+    /// The difference's low bits, as 'wrappingSub': it never traps.
+    ///
+    /// ```sable
+    /// assert((0 as U8) &- 1 == 255)
+    /// ```
+    @builtin("wrapping_sub_Self")
+    public operator &- (lhs: Self, rhs: Self) -> Self
+
+    /// The product's low bits, as 'wrappingMul': it never traps.
+    ///
+    /// ```sable
+    /// assert((16 as U8) &* 17 == 16)
+    /// ```
+    @builtin("wrapping_mul_Self")
+    public operator &* (lhs: Self, rhs: Self) -> Self
 
     /// The built-in integers' high half: the product at twice the width, shifted down.
     @builtin("mul_high_Self")

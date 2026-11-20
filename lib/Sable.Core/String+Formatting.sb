@@ -19,3 +19,32 @@ extension String: Formattable {
         return spec.padded(text)
     }
 }
+
+extension String {
+    /// The value as an interpolation writes it, '"\(value)"': its own
+    /// 'format' for a Formattable type, its 'debugDescription' for a Debug
+    /// one, otherwise its fields as reflection finds them. Swift's
+    /// `String(describing:)`; a static function, as String's other ways of
+    /// being made are.
+    ///
+    /// ```sable
+    /// assert(String.describing(42) == "42")
+    /// assert(String.describing("text") == "text")
+    /// assert(String.describing([1, 2]) == "[1, 2]")
+    /// ```
+    public static fn describing<T>(_ value: T) -> String {
+        return "\(value)"
+    }
+
+    /// The value as debugging would show it, '"\(value:?)"': as source would
+    /// write it, a string quoted and escaped. Swift's `String(reflecting:)`.
+    ///
+    /// ```sable
+    /// assert(String.reflecting("text") == "\"text\"")
+    /// assert(String.reflecting(42) == "42")
+    /// assert(String.reflecting('c') == "'c'")
+    /// ```
+    public static fn reflecting<T>(_ value: T) -> String {
+        return "\(value:?)"
+    }
+}

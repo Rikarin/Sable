@@ -179,6 +179,24 @@ public sealed class OptionalAndUnionTests {
                 print(plusOne(3))
             """
         );
+
+    [Fact]
+    public void ReachesATupleElementThroughAnOptional() =>
+        Prints(
+            "a\n-1\n9\n5\n",
+            "",
+            """
+                let p: (String, Int)? = ("a", 1)
+                let q: (String, Int)? = none
+                print(p?.0 ?? "none")
+                print(q?.1 ?? -1)
+                let r: (Int?, Int)? = (none, 2)
+                let s: (Int?, Int)? = (5, 2)
+                print(r?.0 ?? 9)
+                print(s?.0 ?? 9)
+            """
+        );
+
     const string Layouts = """
                            union Color {
                                Red

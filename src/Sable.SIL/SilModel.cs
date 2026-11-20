@@ -2126,6 +2126,8 @@ public static class SilBuiltins {
         // SABLE_DETERMINISTIC_HASHING=1.
         Add("string_hash", SilType.Int, SilType.String, SilType.Int);
         Add("hash_seed", SilType.Int);
+        // 64 bits from the operating system's random source, fresh at each call.
+        Add("random_bits", SilType.Int);
         Add("string_join", SilType.String, new ArrayType(SilType.String), SilType.String);
         Add("string_compare", SilType.Int, SilType.String, SilType.String);
         // Where a part next occurs in a text, at or after a scalar position: a scalar index, or -1.

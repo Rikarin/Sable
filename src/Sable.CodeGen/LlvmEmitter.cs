@@ -452,6 +452,8 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_string_split(ptr, i32)
                                 declare i64 @sable_string_hash(ptr, i64)
                                 @sable_hash_seed = external global i64
+                                declare i32 @getentropy(ptr, i64)
+                                declare i32 @rand_s(ptr)
                                 declare ptr @sable_string_join(ptr, ptr)
                                 declare i64 @sable_string_compare(ptr, ptr)
                                 declare i64 @sable_string_find(ptr, ptr, i64)
@@ -3229,6 +3231,23 @@ public sealed partial class LlvmEmitter {
                 case "hash_seed":
                     Line($"{Result()} = load i64, ptr @sable_hash_seed");
                     return;
+
+                // 64 bits from the operating system's random source: C's
+                // getentropy, or, on Windows, two of the CRT's rand_s.
+                case "random_bits": {
+                    var bits = Scratch("i64", 8);
+                    if (module._windows) {
+                        var high = Fresh();
+                        Line($"{Fresh()} = call i32 @rand_s(ptr {bits})");
+                        Line($"{high} = getelementptr i8, ptr {bits}, i64 4");
+                        Line($"{Fresh()} = call i32 @rand_s(ptr {high})");
+                    } else {
+                        Line($"{Fresh()} = call i32 @getentropy(ptr {bits}, i64 8)");
+                    }
+
+                    Line($"{Result()} = load i64, ptr {bits}");
+                    return;
+                }
 
                 case "string_find":
                     Line($"{Result()} = call i64 @sable_string_find(ptr {operands[0]}, ptr {operands[1]}, i64 {operands[2]})");

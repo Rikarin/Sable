@@ -36,6 +36,37 @@ public sealed class RangeTests {
     }
 
     [Fact]
+    public void ARangeOfLiteralsArgumentTakesTheParametersBoundType() =>
+        AssertClean(
+            """
+            fn low(_ r: ClosedRange<F32>) -> F32 { return r.lowerBound }
+            fn pick(_ r: Range<U8>) -> U8 { return r.lowerBound }
+            fn pick(_ r: ClosedRange<U8>) -> U8 { return r.upperBound }
+            extension F32 {
+                static fn within(_ r: Range<Self>) -> Self { return r.lowerBound }
+            }
+            fn main() {
+                let a: F32 = low(-1.0...1.0)
+                let b: U8 = pick(1..<200)
+                let c: U8 = pick(1...200)
+                let d: F32 = F32.within(0.0..<1.0)
+            }
+            """
+        );
+
+    [Fact]
+    public void ARangeOfLiteralsStillChecksTheBoundsFit() =>
+        Assert.Contains(
+            ErrorsIn(
+                """
+                fn pick(_ r: Range<U8>) -> U8 { return r.lowerBound }
+                fn main() { let b = pick(1..<300) }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_IntegerDoesNotFit
+        );
+
+    [Fact]
     public void HalfOpenAndClosedRangesAreTheirOwnTypes() =>
         AssertClean("""
                     fn halfOpen(_ n: Int) -> Range<Int> { return 0..<n }

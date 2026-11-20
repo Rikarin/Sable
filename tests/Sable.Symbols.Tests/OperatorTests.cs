@@ -30,6 +30,48 @@ public sealed class OperatorTests {
     }
 
     [Fact]
+    public void AnOperatorAProtocolsExtensionGivesIsFoundOnAConformer() =>
+        AssertClean(
+            """
+            protocol Mixable {
+                operator ^ (lhs: Self, rhs: Self) -> Self
+            }
+            extension Mixable {
+                operator ^ (lhs: Self, rhs: Self) -> Self { return lhs }
+            }
+            struct Paint: Mixable { var hue: Int }
+            fn main() {
+                var p = Paint(hue: 1)
+                let mixed: Paint = p ^ Paint(hue: 2)
+                p ^= mixed
+            }
+            """
+        );
+
+    [Fact]
+    public void TheWrappingOperatorsAreFixedWidthIntegers() =>
+        AssertClean(
+            """
+            fn hash<T: FixedWidthInteger>(_ h: T, _ b: T) -> T { return (h &* b) &+ b &- h }
+            fn main() {
+                let a: Int = Int.max &+ 1
+                var b: U8 = 250
+                b &+= 10
+                b &-= 1
+                b &*= 3
+                let c: U32 = hash(7 as U32, 9)
+            }
+            """
+        );
+
+    [Fact]
+    public void TheWrappingOperatorsAreNotForFloats() =>
+        Assert.Contains(
+            ErrorsIn("fn main() { let x = 1.5 &+ 2.5 }"),
+            static e => e.Code == ErrorCode.ERR_OperatorNotDefined
+        );
+
+    [Fact]
     public void AnIndexingOperatorIsCalledByIndexing() =>
         AssertClean("fn f(_ m: Money) -> Int { return m[\"x\"] }");
 

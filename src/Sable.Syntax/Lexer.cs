@@ -1595,6 +1595,27 @@ public sealed class Lexer {
                     return SyntaxKind.AmpersandAmpersandToken;
                 }
 
+                // '&+', '&-' and '&*': the wrapping operators, and their
+                // compound assignments.
+                if (Current is '+' or '-' or '*') {
+                    var wrapping = Current;
+                    _position++;
+                    if (Current == '=') {
+                        _position++;
+                        return wrapping switch {
+                            '+' => SyntaxKind.AmpersandPlusEqualsToken,
+                            '-' => SyntaxKind.AmpersandMinusEqualsToken,
+                            _ => SyntaxKind.AmpersandStarEqualsToken,
+                        };
+                    }
+
+                    return wrapping switch {
+                        '+' => SyntaxKind.AmpersandPlusToken,
+                        '-' => SyntaxKind.AmpersandMinusToken,
+                        _ => SyntaxKind.AmpersandStarToken,
+                    };
+                }
+
                 if (Current == '=') {
                     _position++;
                     return SyntaxKind.AmpersandEqualsToken;

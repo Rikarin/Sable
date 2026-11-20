@@ -20,6 +20,9 @@ public sealed class ExpressionParserTests {
     [InlineData("a | b ^ c", "(Binary (IdentifierName a) | (Binary (IdentifierName b) ^ (IdentifierName c)))")]
     [InlineData("a && b | c", "(Binary (IdentifierName a) && (Binary (IdentifierName b) | (IdentifierName c)))")]
     [InlineData("a || b && c", "(Binary (IdentifierName a) || (Binary (IdentifierName b) && (IdentifierName c)))")]
+    [InlineData("a &+ b &* c", "(Binary (IdentifierName a) &+ (Binary (IdentifierName b) &* (IdentifierName c)))")]
+    [InlineData("a &- b + c", "(Binary (Binary (IdentifierName a) &- (IdentifierName b)) + (IdentifierName c))")]
+    [InlineData("a & -b", "(Binary (IdentifierName a) & (PrefixUnary - (IdentifierName b)))")]
     public void BindsOperatorsByPrecedence(string source, string expected) => Assert.Equal(expected, Parse(source));
 
     [Fact]
@@ -301,6 +304,16 @@ public sealed class ExpressionParserTests {
         var tree = SyntaxTree.ParseExpression("p . 0.1 ");
         Assert.Equal("p . 0.1 ", tree.Root.ToFullString());
         Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+    }
+
+    [Fact]
+    public void AShorthandParametersTupleElementIsTakenApart() {
+        var tree = SyntaxTree.ParseExpression("$0.1.2 ");
+        Assert.Equal("$0.1.2 ", tree.Root.ToFullString());
+        Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+        var outer = Assert.IsType<MemberAccessExpressionSyntax>(tree.Root);
+        var inner = Assert.IsType<MemberAccessExpressionSyntax>(outer.Expression);
+        Assert.IsType<ImplicitParameterExpressionSyntax>(inner.Expression);
     }
 
     [Fact]

@@ -25,7 +25,7 @@ namespace Sable.Symbols;
 public static class CoreLibrary {
     public const string ModuleName = "Sable.Core";
 
-    static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Os, string Arch), Lazy<IReadOnlyList<SyntaxTree>>> Parsed = new();
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Os, string Arch, string Profile), Lazy<IReadOnlyList<SyntaxTree>>> Parsed = new();
 
     /// <summary>The core's files, parsed for the machine running the compiler, in name order.</summary>
     public static IReadOnlyList<SyntaxTree> Trees => TreesFor(ParseOptions.Default);
@@ -33,21 +33,45 @@ public static class CoreLibrary {
     /// <summary>
     ///     The core's files parsed for the target <paramref name="options" />
     ///     name — what their <c>#if os(...)</c> and <c>#if arch(...)</c> test,
-    ///     such as <c>Platform.os</c> — once per target.
+    ///     such as <c>Platform.os</c> — and for its build profile, what
+    ///     <c>#if DEBUG</c> and <c>#if RELEASE</c> test, such as
+    ///     <c>assert</c>: once per target and profile.
     /// </summary>
     public static IReadOnlyList<SyntaxTree> TreesFor(ParseOptions options) =>
-        Parsed.GetOrAdd((options.TargetOs, options.TargetArch), static target => new(() => Load(target.Os, target.Arch))).Value;
+        Parsed.GetOrAdd((options.TargetOs, options.TargetArch, ProfileOf(options)), static key => new(() => Load(key.Os, key.Arch, key.Profile))).Value;
 
-    static IReadOnlyList<SyntaxTree> Load(string os, string arch) {
+    /// <summary>
+    ///     The build profile the options define, as the library's
+    ///     <c>#if</c> sees it: <c>DEBUG</c>, <c>RELEASE</c>, or neither (a
+    ///     compilation that is not a build, such as a test of the binder's).
+    /// </summary>
+    public static string ProfileOf(ParseOptions options) =>
+        options.IsDefined("DEBUG") ? "DEBUG" : options.IsDefined("RELEASE") ? "RELEASE" : "";
+
+    /// <summary>
+    ///     Library source parsed for a profile: a file that never names it
+    ///     reads the same under every profile, so it is the tree parsed
+    ///     without one, shared; only a file that says <c>DEBUG</c> or
+    ///     <c>RELEASE</c> is parsed again. A second profile costs a few
+    ///     trees, not the library.
+    /// </summary>
+    public static SyntaxTree ParseForProfile(string text, string fileName, ParseOptions plain, string profile, Func<SyntaxTree>? shared) =>
+        profile.Length > 0 && shared is not null && !text.Contains("DEBUG", StringComparison.Ordinal) && !text.Contains("RELEASE", StringComparison.Ordinal)
+            ? shared()
+            : SyntaxTree.Parse(new SourceText(text, fileName), profile.Length > 0 ? plain.WithSymbols(profile) : plain);
+
+    static IReadOnlyList<SyntaxTree> Load(string os, string arch, string profile) {
         var assembly = typeof(CoreLibrary).Assembly;
         var trees = new List<SyntaxTree>();
         var options = ParseOptions.Default.ForTarget(os, arch);
+        var plain = profile.Length > 0 ? TreesFor(options) : null;
         foreach (var resource in assembly.GetManifestResourceNames()
                      .Where(static n => n.StartsWith("lib/Sable.Core/", StringComparison.Ordinal))
                      .Order(StringComparer.Ordinal)) {
             using var stream = assembly.GetManifestResourceStream(resource)!;
             using var reader = new StreamReader(stream);
-            trees.Add(SyntaxTree.Parse(new SourceText(reader.ReadToEnd(), resource), options));
+            var index = trees.Count;
+            trees.Add(ParseForProfile(reader.ReadToEnd(), resource, options, profile, plain is null ? null : () => plain[index]));
         }
 
         return trees;

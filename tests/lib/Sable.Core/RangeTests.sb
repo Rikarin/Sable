@@ -1,0 +1,35 @@
+module RangeTests
+
+// Range (Sable.Core): the values from a lower bound up to, not including,
+// an upper one.
+
+import Sable.Testing
+
+@test
+fn aRangeHoldsItsLowerBoundAndNotItsUpper() {
+    let r = 2..<5
+    assert(r.contains(2))
+    assert(r.contains(4))
+    assert(!r.contains(5))
+    assert(!r.contains(1))
+    assert(!r.isEmpty)
+    assertEqual(r.count, 3)
+}
+
+@test
+fn aRangeWhoseBoundsMeetIsEmpty() {
+    let r = 3..<3
+    assert(r.isEmpty)
+    assertEqual(r.count, 0)
+    assert(!r.contains(3))
+    let words = "a"..<"c"
+    assert(words.contains("b"))
+    assert(!words.isEmpty)
+}
+
+@test
+fn anUpsideDownRangeIsEmpty() {
+    let r = Range(lowerBound: 5, upperBound: 2)
+    assert(r.isEmpty)
+    assertEqual(r.count, 0)
+}

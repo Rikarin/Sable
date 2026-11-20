@@ -1022,8 +1022,8 @@ is written, runs when none is equal. A case ends where the next begins:
 ```
   1  a.b   a?.b   a!   a[i]   f(x)   a as T   a is T
   2  prefix:  -a  !a  ~a  &a  await a  try a  move a
-  3  a * b   a / b   a % b
-  4  a + b   a - b
+  3  a * b   a / b   a % b   a &* b
+  4  a + b   a - b   a &+ b   a &- b
   5  a << b  a >> b
   6  a ..< b   a ... b
   7  a < b   a <= b   a > b   a >= b
@@ -1039,6 +1039,14 @@ is written, runs when none is equal. A case ends where the next begins:
 ```
 
 `&&`, `||` and `??` short-circuit. `===` is reference identity (Tier 2 only).
+
+`&+`, `&-` and `&*` are the wrapping operators: a fixed-width integer's sum,
+difference and product with the low bits kept, never trapping (where `+`,
+`-` and `*` trap on overflow). They are `FixedWidthInteger`'s, as
+`wrappingAdd`, `wrappingSub` and `wrappingMul` are, and bind as `+` and `*`
+do; `&+=`, `&-=` and `&*=` assign through them. `&` followed by `+`, `-` or
+`*` is always one of these tokens, so a bitwise-and with a negated operand
+is written with a space: `a & -b`.
 
 ### Member names
 
@@ -1342,6 +1350,12 @@ unreachable()                              // -> Never
 Each reports the place it was called from: a parameter whose default is
 `#file`, `#line`, `#column` or `#function` takes the call's place, not its
 own.
+
+`assert` checks only where `DEBUG` is defined (an unoptimised build, or a
+profile with `debug-assertions`), in the library's code as in the
+program's. A file that imports Sable.Testing means that module's `assert` by
+the bare name, as an import's names come before Sable.Core's: a test's
+assertion, checked in every build.
 
 Panics are not catchable in normal code. `Task.catchingPanic { }` exists for
 supervisors and test harnesses only.

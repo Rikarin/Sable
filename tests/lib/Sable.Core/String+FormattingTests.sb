@@ -56,3 +56,32 @@ fn aBoolIsAWord() {
     assertEqual("[\(true:<6)]", "[true  ]")
     assertEqual(true.format(spec("?")), "true")
 }
+
+struct Plain {
+    var name: String
+}
+
+@test
+fn describingWritesAValueAsInterpolationDoes() {
+    assertEqual(String.describing(42), "42")
+    assertEqual(String.describing("text"), "text")
+    assertEqual(String.describing([1, 2]), "[1, 2]")
+    assertEqual(String.describing(Plain(name: "a")), "Plain(name: \"a\")")
+}
+
+@test
+fn reflectingWritesAValueAsSourceWould() {
+    assertEqual(String.reflecting("te\"xt"), "\"te\\\"xt\"")
+    assertEqual(String.reflecting('c'), "'c'")
+    assertEqual(String.reflecting(2.0), "2.0")
+    assertEqual(String.reflecting(["a"]), "[\"a\"]")
+}
+
+@test
+fn aFormattableValueWritesItselfIntoAWriter() {
+    var text = "pi is "
+    (3.14159).write(to: &text, spec: try! FormatSpec.parse(".2"))
+    text.write(" and ")
+    7.write(to: &text)
+    assertEqual(text, "pi is 3.14 and 7")
+}

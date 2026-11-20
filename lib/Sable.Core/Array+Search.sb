@@ -44,6 +44,46 @@ extension<Element> Element[:] {
         }
         return low
     }
+
+    /// Where an element is in a sorted array, found by halving, in
+    /// O(log n) comparisons: '.Ok' with the place of one that 'compare'
+    /// says is the one wanted (gives 0), or '.Err' with the place it could
+    /// go to keep the array sorted. 'compare' says whether an element is
+    /// before what is wanted (less than 0), it (0), or after it (greater).
+    /// Rust's `binary_search_by`; .NET's `BinarySearch`, which gives the
+    /// complement of the place instead.
+    ///
+    /// ```sable
+    /// let xs: Int[>..] = [1, 3, 5, 7]
+    /// assert(xs.binarySearch(by: (x: Int) => x - 5) == .Ok(2))
+    /// assert(xs.binarySearch(by: (x: Int) => x - 4) == .Err(2))
+    /// ```
+    public fn binarySearch(by compare: (Element) -> Int) -> Outcome<Int, Int> {
+        var low = 0
+        var high = self.count
+        while low < high {
+            let middle = low + (high - low) / 2
+            let order = compare(self[middle])
+            if order == 0 {
+                return .Ok(middle)
+            }
+            if order < 0 {
+                low = middle + 1
+            } else {
+                high = middle
+            }
+        }
+        return .Err(low)
+    }
+
+    /// Where an element with this key is, in an array sorted by the key
+    /// each element gives: as 'binarySearch(for:)' does by the element.
+    public fn binarySearch<K: Comparable>(forKey key: K, by keyOf: (Element) -> K) -> Outcome<Int, Int> {
+        return self.binarySearch(by: (element: Element) => {
+            let k = keyOf(element)
+            return k < key ? -1 : (key < k ? 1 : 0)
+        })
+    }
 }
 
 extension<Element: Equatable> Element[:] {
@@ -116,5 +156,20 @@ extension<Element: Comparable> Element[:] {
     /// ahead of it.
     public fn isSorted() -> Bool {
         return self.isSorted(by: (a: Element, b: Element) => a < b)
+    }
+
+    /// Where the value is in this sorted array, found by halving: '.Ok'
+    /// with the place of an element equal to it (any one, if several are),
+    /// or '.Err' with the place it could be inserted to keep the array
+    /// sorted.
+    ///
+    /// ```sable
+    /// let xs: Int[>..] = [1, 3, 5, 7]
+    /// assert(xs.binarySearch(for: 7) == .Ok(3))
+    /// assert(xs.binarySearch(for: 4) == .Err(2))
+    /// assert(xs.binarySearch(for: 9) == .Err(4))
+    /// ```
+    public fn binarySearch(for value: Element) -> Outcome<Int, Int> {
+        return self.binarySearch(by: (element: Element) => element < value ? -1 : (value < element ? 1 : 0))
     }
 }

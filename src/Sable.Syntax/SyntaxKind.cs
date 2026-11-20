@@ -93,6 +93,9 @@ public enum SyntaxKind : ushort {
     AmpersandAmpersandToken = 252, // &&
     PipePipeToken = 253, // ||
     QuestionQuestionToken = 254, // ??
+    AmpersandPlusToken = 255, // &+  (wrapping add)
+    AmpersandMinusToken = 256, // &-  (wrapping subtract)
+    AmpersandStarToken = 257, // &*  (wrapping multiply)
 
     EqualsToken = 260, // =
     EqualsEqualsToken = 261, // ==
@@ -115,6 +118,9 @@ public enum SyntaxKind : ushort {
     LessLessEqualsToken = 288, // <<=
     GreaterGreaterEqualsToken = 289, // >>=
     QuestionQuestionEqualsToken = 290, // ??=
+    AmpersandPlusEqualsToken = 291, // &+=
+    AmpersandMinusEqualsToken = 292, // &-=
+    AmpersandStarEqualsToken = 293, // &*=
 
     // ---- Reserved keywords (spec/lexical.md §5) ---------------------------
     AbstractKeyword = 400,

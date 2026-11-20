@@ -1,0 +1,86 @@
+module Sable.Core
+
+// Choosing and shuffling at random: an element of a collection, every
+// array shuffled in place, and any sequence's elements in a shuffled
+// array. Each takes a generator, or draws from the system's.
+
+extension Collection {
+    /// An element chosen at random, each as likely, drawn from the
+    /// generator; none for an empty collection. Reaching it steps through
+    /// the positions before it, unless the collection jumps.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(seed: 9)
+    /// let colours: String[>..] = ["red", "green", "blue"]
+    /// let pick = colours.randomElement(using: &generator)!
+    /// assert(colours.contains(element: pick))
+    /// ```
+    public fn randomElement<G: RandomNumberGenerator>(using generator: inout G) -> Element? {
+        if isEmpty {
+            return none
+        }
+        var position = startIndex
+        var steps = generator.next(upperBound: count)
+        while steps > 0 {
+            position = index(after: position)
+            steps -= 1
+        }
+        return self[position]
+    }
+
+    /// An element chosen at random, drawn from the system's generator;
+    /// none for an empty collection.
+    public fn randomElement() -> Element? {
+        var system = SystemRandomNumberGenerator()
+        return self.randomElement(using: &system)
+    }
+}
+
+extension<Element> Element[:] {
+    /// Puts the elements in a random order, every order as likely, drawn
+    /// from the generator: the Fisher-Yates shuffle, in place.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(seed: 11)
+    /// var deck: Int[>..] = [1, 2, 3, 4, 5]
+    /// deck.shuffle(using: &generator)
+    /// assert(deck.sorted() == [1, 2, 3, 4, 5])
+    /// ```
+    public mutating fn shuffle<G: RandomNumberGenerator>(using generator: inout G) {
+        var i = self.count - 1
+        while i > 0 {
+            let j = generator.next(upperBound: i + 1)
+            self.swapAt(i, j)
+            i -= 1
+        }
+    }
+
+    /// Puts the elements in a random order, drawn from the system's generator.
+    public mutating fn shuffle() {
+        var system = SystemRandomNumberGenerator()
+        self.shuffle(using: &system)
+    }
+}
+
+extension Sequence where Failure == Never {
+    /// The elements in a new array, in a random order, every order as
+    /// likely, drawn from the generator.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(seed: 13)
+    /// let shuffled = (1...10).shuffled(using: &generator)
+    /// assert(shuffled.count == 10 && shuffled.sorted() == (1...10).toArray())
+    /// ```
+    public fn shuffled<G: RandomNumberGenerator>(using generator: inout G) -> Element[>..] {
+        var elements = self.toArray()
+        elements.shuffle(using: &generator)
+        return elements
+    }
+
+    /// The elements in a new array, in a random order, drawn from the
+    /// system's generator.
+    public fn shuffled() -> Element[>..] {
+        var system = SystemRandomNumberGenerator()
+        return self.shuffled(using: &system)
+    }
+}

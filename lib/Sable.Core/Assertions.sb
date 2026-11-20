@@ -46,6 +46,34 @@ public fn precondition(_ condition: Bool, _ message: String = "", file: String =
     }
 }
 
+/// Stops the program unless the condition holds — in a debug build only:
+/// a check of the program's own reasoning, which a release build trusts
+/// and does not make. (The condition is an argument, so it is still
+/// worked out, unless the optimiser sees nothing comes of it: keep it
+/// cheap and free of effects.) 'precondition' checks in every build.
+///
+/// ```sable
+/// fn half(_ n: Int) -> Int {
+///     assert(n % 2 == 0, "only even numbers are halved")
+///     return n / 2
+/// }
+/// ```
+public fn assert(_ condition: Bool, _ message: String = "", file: String = #file, line: Int = #line, column: Int = #column) {
+    #if DEBUG
+    if !condition {
+        Runtime.trap(message.isEmpty ? "assertion failed" : "assertion failed: \(message)", trapSite(file, line, column))
+    }
+    #endif
+}
+
+/// Stops the program, saying an assertion failed — in a debug build only:
+/// for the branch of a check that cannot be written as one condition.
+public fn assertionFailure(_ message: String = "", file: String = #file, line: Int = #line, column: Int = #column) {
+    #if DEBUG
+    Runtime.trap(message.isEmpty ? "assertion failed" : "assertion failed: \(message)", trapSite(file, line, column))
+    #endif
+}
+
 /// Stops the program, saying a precondition failed: for the branch of a
 /// check that cannot be written as one condition.
 public fn preconditionFailure(_ message: String = "", file: String = #file, line: Int = #line, column: Int = #column) -> Never {
@@ -71,10 +99,27 @@ public fn precondition(index: Int, inBounds count: Int, file: String = #file, li
 /// ```sable
 /// precondition(nonNegative: 3, "capacity")
 /// ```
-public fn precondition(nonNegative value: Int, _ name: String = "value", file: String = #file, line: Int = #line, column: Int = #column) {
-    if value < 0 {
+public fn precondition<T: BinaryInteger>(nonNegative value: T, _ name: String = "value", file: String = #file, line: Int = #line, column: Int = #column) {
+    if value < T.zero {
         Runtime.trap("\(name) must not be negative, but is \(value)", trapSite(file, line, column))
     }
+}
+
+/// Stops the program, saying it reached code that is never meant to run,
+/// and where. Its type is Never, so it stands for a value of any type —
+/// the quick fixes for a missing match case or protocol requirement write
+/// it as the body they leave to the programmer.
+///
+/// ```sable
+/// fn sign(_ n: Int) -> String {
+///     if n < 0 { return "-" }
+///     if n > 0 { return "+" }
+///     if n == 0 { return "0" }
+///     unreachable("every Int is negative, positive or zero")
+/// }
+/// ```
+public fn unreachable(_ message: String = "", file: String = #file, line: Int = #line, column: Int = #column) -> Never {
+    Runtime.trap(message.isEmpty ? "reached code marked unreachable()" : "reached code marked unreachable(): \(message)", trapSite(file, line, column))
 }
 
 /// Stops the program, saying the code it is in is not written yet: a

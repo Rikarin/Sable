@@ -12,7 +12,7 @@ public sealed class LibraryTests {
     [Fact]
     public void MathIsWrittenInSable() =>
         Assert.Equal(
-            "7\na\n10\n21\n12\n1099511627776\ntrue\nfalse\n1.4142135623730951\n-3.0 3.0 3.0 -3.0\n2027381 3 true\n",
+            "7\na\n10\n21\n12\n1099511627776\ntrue\nfalse\n1.4142135623730951\n-3.0 3.0 3.0 -3.0\n1546998764402558742 1 true\ntrue\n",
             AssertAgree("""
 module P
 import Sable.Math
@@ -28,8 +28,10 @@ fn main() {
     print(isPrime(91))
     print(squareRoot(2.0))
     print("\(floor(-2.5)) \(ceiling(2.1)) \(round(2.5)) \(round(-2.5))")
-    var r = Random(seed: 42)
-    print("\(r.next()) \(r.next(from: 1, to: 7)) \(r.nextUnit() < 1.0)")
+    var r = SeededRandomNumberGenerator(seed: 42)
+    print("\(r.next()) \(Int.random(in: 1..<7, using: &r)) \(F64.random(in: 0.0..<1.0, using: &r) < 1.0)")
+    var system = SystemRandomNumberGenerator()
+    print(system.next() != system.next() || system.next() != system.next())
 }
 """).Stdout
         );

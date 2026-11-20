@@ -1,0 +1,47 @@
+module SeededRandomNumberGeneratorTests
+
+// SeededRandomNumberGenerator (Sable.Core): xoshiro256** seeded by
+// SplitMix64, pinned to the reference algorithm's first outputs.
+
+import Sable.Testing
+
+@test
+fn aSeedGivesTheReferenceSequence() {
+    var zero = SeededRandomNumberGenerator(seed: 0)
+    let a: U64 = 11091344671253066420
+    let b: U64 = 13793997310169335082
+    assert(zero.next() == a)
+    assert(zero.next() == b)
+    assert(zero.next() == 1900383378846508768)
+    assert(zero.next() == 7684712102626143532)
+    var year = SeededRandomNumberGenerator(seed: 2024)
+    let c: U64 = 14427268137155694693
+    assert(year.next() == 1029197146548041518)
+    assert(year.next() == c)
+}
+
+@test
+fn theSameSeedRepeatsAndAnotherDiffers() {
+    var a = SeededRandomNumberGenerator(seed: 77)
+    var b = SeededRandomNumberGenerator(seed: 77)
+    var c = SeededRandomNumberGenerator(seed: 78)
+    var differed = false
+    var i = 0
+    while i < 100 {
+        let x = a.next()
+        assert(x == b.next())
+        if x != c.next() {
+            differed = true
+        }
+        i += 1
+    }
+    assert(differed)
+}
+
+@test
+fn aCopyGoesOnFromWhereItWasCopied() {
+    var original = SeededRandomNumberGenerator(seed: 5)
+    let _ = original.next()
+    var copy = original
+    assert(copy.next() == original.next())
+}

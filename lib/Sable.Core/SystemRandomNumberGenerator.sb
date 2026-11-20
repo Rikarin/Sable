@@ -1,0 +1,29 @@
+module Sable.Core
+
+/// The operating system's random numbers: each draw is fresh bits from its
+/// cryptographically secure source (getentropy on macOS, Linux and WASI,
+/// rand_s on Windows), so no run repeats another and no output predicts
+/// the next. What every 'random' function uses when not given a
+/// generator. Swift's `SystemRandomNumberGenerator`; Rust's `OsRng`.
+///
+/// It keeps no state, so one can be made wherever it is needed. Each draw
+/// asks the system, which is slower than a seeded generator; for many
+/// draws that need not be secret, seed a SeededRandomNumberGenerator from
+/// it.
+///
+/// ```sable
+/// var system = SystemRandomNumberGenerator()
+/// let token = system.next()
+/// var fast = SeededRandomNumberGenerator(seed: system.next())
+/// let roll = Int.random(in: 1...6, using: &fast)
+/// assert(roll >= 1 && roll <= 6)
+/// ```
+public struct SystemRandomNumberGenerator: RandomNumberGenerator {
+    /// A generator: there is nothing to set up.
+    public init() { }
+
+    /// 64 bits from the system's random source.
+    public mutating fn next() -> U64 {
+        return Runtime.randomBits() unchecked as U64
+    }
+}

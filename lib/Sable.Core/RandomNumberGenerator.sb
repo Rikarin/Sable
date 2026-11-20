@@ -1,0 +1,61 @@
+module Sable.Core
+
+/// A source of uniformly random bits, 64 at a time: what the 'random'
+/// functions draw from. Swift's `RandomNumberGenerator`; Rust's `RngCore`.
+/// Two ship with the library: `SystemRandomNumberGenerator`, seeded
+/// differently each time, which every 'random' function without a
+/// generator uses, and `SeededRandomNumberGenerator`, whose sequence a seed
+/// fixes, for tests and simulations that must repeat.
+///
+/// A type conforms by giving 'next()'; everything else is built on it.
+///
+/// ```sable
+/// var generator = SeededRandomNumberGenerator(seed: 42)
+/// let roll = generator.next(upperBound: 6) + 1
+/// assert(roll >= 1 && roll <= 6)
+/// ```
+public protocol RandomNumberGenerator {
+    /// The next 64 random bits, each as likely to be set as not.
+    mutating fn next() -> U64
+}
+
+extension RandomNumberGenerator {
+    /// A random value from 0 up to, not including, the bound, every one as
+    /// likely as every other: draws that would favour some values are
+    /// thrown away and drawn again, rather than taken modulo the bound. A
+    /// bound that is not positive traps.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(seed: 7)
+    /// let digit = generator.next(upperBound: 10 as U8)
+    /// assert(digit < 10)
+    /// ```
+    public mutating fn next<T: FixedWidthInteger>(upperBound: T) -> T {
+        precondition(upperBound > T.zero, "the upper bound must be positive")
+        if T.bitWidth <= 64 {
+            // 2^64 % bound values at the bottom would come up once more
+            // than the rest: below them, the draw is made again.
+            let bound = U64.truncating(upperBound)
+            let threshold = U64.zero.wrappingSub(bound) % bound
+            while true {
+                let bits = next()
+                if bits >= threshold {
+                    return T.truncating(bits % bound)
+                }
+            }
+        }
+        let bound = U128.truncating(upperBound)
+        let threshold = U128.zero.wrappingSub(bound) % bound
+        while true {
+            let bits = nextWide()
+            if bits >= threshold {
+                return T.truncating(bits % bound)
+            }
+        }
+    }
+
+    /// 128 random bits: two draws.
+    mutating fn nextWide() -> U128 {
+        return (U128(next()) << 64) | U128(next())
+    }
+}

@@ -1,101 +1,122 @@
 module Sable.Math
 
-// Integer functions beyond the operators, of Int: square root, factorial,
-// binomial coefficients and modular arithmetic. Each is exact, and each
-// traps where its result does not fit in an Int, as '*' does. A function
-// defined for non-negative numbers alone checks that it was given one, and
-// says which argument was not.
+// Integer functions beyond the operators, of any fixed-width integer:
+// square root, logarithm, factorial, binomial coefficients and modular
+// arithmetic. Each is exact, and each traps where its result does not fit
+// the type, as '*' does. A function defined for non-negative numbers alone
+// checks that it was given one, and says which argument was not.
 
 /// The integer square root: the largest r with r * r <= n. A negative n traps.
 ///
 /// ```sable
 /// assert(isqrt(99) == 9)
 /// assert(isqrt(100) == 10)
+/// assert(isqrt(255 as U8) == 15)
 /// ```
-public fn isqrt(_ n: Int) -> Int {
+public fn isqrt<T: FixedWidthInteger>(_ n: T) -> T {
     precondition(nonNegative: n, "isqrt's argument")
-    if n < 2 {
-        return n
-    }
-
-    // F64's square root is within one of the answer for every Int (an F64
-    // holds 53 bits of n, and the root of the error is below one), so at
-    // most a step each way puts it right. r <= n / r is r * r <= n
-    // without the overflow r * r can have.
-    var r = Int(F64(n).squareRoot())
-    while r > n / r {
-        r = r - 1
-    }
-    while r + 1 <= n / (r + 1) {
-        r = r + 1
-    }
-    return r
+    return n.isqrt()
 }
 
-/// n!, the product of 1 through n: 1 for 0, and a trap past 20!, the
-/// largest an Int holds. A negative n traps.
-public fn factorial(_ n: Int) -> Int {
+/// The integer logarithm: the largest e with base to the e <= n, how many
+/// times n can be divided by the base before it is less than it. An n that
+/// is not positive traps, and so does a base less than 2.
+///
+/// ```sable
+/// assert(ilog(1000, base: 10) == 3)
+/// assert(ilog(999, base: 10) == 2)
+/// assert(ilog(80 as U8, base: 3) == 3)
+/// ```
+public fn ilog<T: FixedWidthInteger>(_ n: T, base: T) -> Int {
+    if n <= T.zero {
+        preconditionFailure("ilog's argument must be positive, not \(n)")
+    }
+    if base <= T.one {
+        preconditionFailure("ilog's base must be at least 2, not \(base)")
+    }
+    var rest = n
+    var exponent = 0
+    while rest >= base {
+        rest = rest / base
+        exponent += 1
+    }
+    return exponent
+}
+
+/// n!, the product of 1 through n: 1 for 0, and a trap where it does not
+/// fit the type (past 20! for an Int, 5! for an I8). A negative n traps.
+///
+/// ```sable
+/// assert(factorial(5) == 120)
+/// let big: U128 = 295232799039604140847618609643520000000
+/// assert(factorial(34 as U128) == big)
+/// ```
+public fn factorial<T: FixedWidthInteger>(_ n: T) -> T {
     precondition(nonNegative: n, "factorial's argument")
-    var product = 1
-    var i = 2
+    var product = T.one
+    var i = T.one + T.one
     while i <= n {
         product = product * i
-        i = i + 1
+        i = i + T.one
     }
     return product
 }
 
 /// The binomial coefficient "n choose k": how many k-element subsets an
 /// n-element set has, 0 when k is not in 0...n. Traps when the result does
-/// not fit in an Int; one that fits is computed without overflowing on
-/// the way, by keeping each partial product C(n - k + i, i) exact.
+/// not fit the type; one that fits is computed without overflowing on the
+/// way, by keeping each partial product C(n - k + i, i) exact.
 ///
 /// ```sable
 /// assert(binomial(5, 2) == 10)
 /// assert(binomial(62, 31) == 465428353255261088)
+/// assert(binomial(10 as U8, 5) == 252)
 /// ```
-public fn binomial(_ n: Int, _ k: Int) -> Int {
-    if k < 0 || k > n {
-        return 0
+public fn binomial<T: FixedWidthInteger>(_ n: T, _ k: T) -> T {
+    if k < T.zero || k > n {
+        return T.zero
     }
 
     // C(n, k) = C(n, n - k): the smaller makes fewer steps.
     let smaller = k < n - k ? k : n - k
-    var result = 1
-    var i = 1
+    var result = T.one
+    var i = T.one
     while i <= smaller {
         // result * (n - smaller + i) / i, exactly: dividing what i has in
         // common with result out first leaves a divisor of the other factor.
         let common = gcd(result, i)
         result = result / common * ((n - smaller + i) / (i / common))
-        i = i + 1
+        i = i + T.one
     }
     return result
 }
 
 /// base to the power exponent, modulo modulus: in [0, modulus), however
-/// large the power, with each product taken in 128 bits so that none
-/// overflows. A negative exponent traps, and so does a modulus that is not
-/// positive.
+/// large the power, with no product overflowing on the way. A negative
+/// exponent traps, and so does a modulus that is not positive.
 ///
 /// ```sable
 /// assert(powMod(4, 13, 497) == 445)
+/// let expected: U64 = 13784367590845050696
+/// assert(powMod(3 as U64, 200, U64.max) == expected)
 /// ```
-public fn powMod(_ base: Int, _ exponent: Int, _ modulus: Int) -> Int {
+public fn powMod<T: FixedWidthInteger>(_ base: T, _ exponent: T, _ modulus: T) -> T {
     precondition(nonNegative: exponent, "the exponent")
-    precondition(modulus > 0, "the modulus must be positive, not \(modulus)")
-    let m = I128(modulus)
-    var e = exponent
-    var b = (I128(base) % m + m) % m
-    var result = I128(1) % m
-    while e > 0 {
-        if e % 2 == 1 {
-            result = result * b % m
-        }
-        e = e / 2
-        b = b * b % m
+    if modulus <= T.zero {
+        preconditionFailure("the modulus must be positive, not \(modulus)")
     }
-    return Int(result)
+    let two = T.one + T.one
+    var e = exponent
+    var b = reduced(base, modulus)
+    var result = T.one % modulus
+    while e > T.zero {
+        if e % two == T.one {
+            result = multipliedMod(result, b, modulus)
+        }
+        e = e / two
+        b = multipliedMod(b, b, modulus)
+    }
+    return result
 }
 
 /// The inverse of a modulo modulus: the x in [0, modulus) with a * x % modulus
@@ -105,29 +126,72 @@ public fn powMod(_ base: Int, _ exponent: Int, _ modulus: Int) -> Int {
 /// ```sable
 /// assert(modInverse(3, 11) == 4)
 /// assert(modInverse(2, 4) == none)
+/// assert(modInverse(3 as U8, 250) == 167)
 /// ```
-public fn modInverse(_ a: Int, _ modulus: Int) -> Int? {
-    precondition(modulus > 0, "the modulus must be positive, not \(modulus)")
-    let m = I128(modulus)
+public fn modInverse<T: FixedWidthInteger>(_ a: T, _ modulus: T) -> T? {
+    if modulus <= T.zero {
+        preconditionFailure("the modulus must be positive, not \(modulus)")
+    }
+    let m = modulus
 
     // The extended Euclidean algorithm, keeping only a's coefficient: each
-    // step keeps r = a * t (mod m). Every |t| stays at most m, so in 128
-    // bits no step overflows, whatever the modulus.
-    var r0 = (I128(a) % m + m) % m
+    // step keeps r = a * t (mod m). The coefficients are kept modulo m, so
+    // none goes negative, and an unsigned type does as well as a signed one.
+    var r0 = reduced(a, m)
     var r1 = m
-    var t0 = I128(1)
-    var t1 = I128(0)
-    while r1 != 0 {
+    var t0 = T.one % m
+    var t1 = T.zero
+    while r1 != T.zero {
         let q = r0 / r1
         let r = r0 - q * r1
         r0 = r1
         r1 = r
-        let t = t0 - q * t1
+        let t = subtractedMod(t0, multipliedMod(q % m, t1, m), m)
         t0 = t1
         t1 = t
     }
-    if r0 != 1 && m != 1 {
+    if r0 != T.one && m != T.one {
         return none
     }
-    return Int((t0 % m + m) % m)
+    return t0
+}
+
+// ---- Modular steps ----------------------------------------------------------
+// Each takes values already in [0, m), m positive, and gives one, without
+// overflowing whatever m is.
+
+/// value modulo m, in [0, m) even for a negative value.
+fn reduced<T: FixedWidthInteger>(_ value: T, _ m: T) -> T {
+    let r = value % m
+    return r < T.zero ? r + m : r
+}
+
+/// (a + b) % m.
+fn addedMod<T: FixedWidthInteger>(_ a: T, _ b: T, _ m: T) -> T {
+    return a >= m - b ? a - (m - b) : a + b
+}
+
+/// (a - b) % m, never negative.
+fn subtractedMod<T: FixedWidthInteger>(_ a: T, _ b: T, _ m: T) -> T {
+    return a >= b ? a - b : a + (m - b)
+}
+
+/// (a * b) % m: in 128 bits for a type of 64 or fewer, where the product
+/// of two values below 2^64 fits; otherwise by doubling and adding, one
+/// bit of b at a time.
+fn multipliedMod<T: FixedWidthInteger>(_ a: T, _ b: T, _ m: T) -> T {
+    if T.bitWidth <= 64 {
+        return T.truncating(a.wideBitPattern * b.wideBitPattern % m.wideBitPattern)
+    }
+    var result = T.zero
+    var x = a
+    var y = b
+    while y > T.zero {
+        if (y & T.one) == T.one {
+            result = addedMod(result, x, m)
+        }
+        x = addedMod(x, x, m)
+        y = y >> T.one
+    }
+    return result
 }

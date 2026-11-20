@@ -37,6 +37,20 @@ extension String: Sequence {
     }
 }
 
+/// A string is a bidirectional collection of its characters, by its
+/// String.Index, a byte offset (String+Index.sb): generic code over a
+/// Collection walks it without counting from the start each time. It is
+/// not random-access, as Swift's is not: reaching the nth character
+/// means passing the n before it.
+///
+/// ```sable
+/// fn lastOf<C: BidirectionalCollection>(_ c: C) -> C.Element? {
+///     return c.isEmpty ? none : c[c.index(before: c.endIndex)]
+/// }
+/// assert(lastOf("añb") == 'b')
+/// ```
+extension String: BidirectionalCollection { }
+
 extension String: FromSequence<Char> {
     /// The characters, one after another, as a string.
     public static fn from<S: Sequence>(_ characters: S) throws(S.Failure) -> String where S.Element == Char {

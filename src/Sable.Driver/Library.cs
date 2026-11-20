@@ -13,14 +13,19 @@ namespace Sable.Driver;
 public static class Library {
     public const string Core = CoreLibrary.ModuleName;
 
-    static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Os, string Arch), Lazy<IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>>>> Parsed = new();
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Os, string Arch, string Profile), Lazy<IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>>>> Parsed = new();
 
     /// <summary>The modules parsed for the machine running the compiler.</summary>
     static IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> Modules => ModulesFor(ParseOptions.Default);
 
-    /// <summary>The modules parsed for the target the options name, once per target: their <c>#if os(...)</c> follows it.</summary>
+    /// <summary>
+    ///     The modules parsed for the target the options name and their build
+    ///     profile, once per target and profile: their <c>#if os(...)</c>
+    ///     follows the target, and <c>#if DEBUG</c> the profile. Only the files
+    ///     that test the profile are parsed for each (<see cref="CoreLibrary.ParseForProfile" />).
+    /// </summary>
     static IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> ModulesFor(ParseOptions options) =>
-        Parsed.GetOrAdd((options.TargetOs, options.TargetArch), static target => new(() => Load(target.Os, target.Arch))).Value;
+        Parsed.GetOrAdd((options.TargetOs, options.TargetArch, CoreLibrary.ProfileOf(options)), static key => new(() => Load(key.Os, key.Arch, key.Profile))).Value;
 
     /// <summary>The library modules there are, by name.</summary>
     public static IReadOnlyCollection<string> ModuleNames => [..Modules.Keys];
@@ -29,15 +34,26 @@ public static class Library {
     public static string Source(string module) =>
         Modules.TryGetValue(module, out var files) ? string.Join("\n", files.Select(static f => f.Text.Text)) : "";
 
-    static IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> Load(string os, string arch) {
+    static IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> Load(string os, string arch, string profile) {
         var modules = new Dictionary<string, List<SyntaxTree>>(StringComparer.Ordinal);
         var assembly = typeof(Library).Assembly;
+
+        // The standard library is a workspace of its own: what it marks
+        // 'package' is shared between its modules, not with programs.
+        var options = ParseOptions.Default.ForTarget(os, arch) with { Workspace = "sable" };
+        var plain = profile.Length > 0
+            ? ModulesFor(options).Values.SelectMany(static files => files).ToDictionary(static t => t.Text.FileName, StringComparer.Ordinal)
+            : null;
         foreach (var resource in assembly.GetManifestResourceNames().Where(static n => n.StartsWith("lib/", StringComparison.Ordinal)).Order(StringComparer.Ordinal)) {
             using var stream = assembly.GetManifestResourceStream(resource)!;
             using var reader = new StreamReader(stream);
-            // The standard library is a workspace of its own: what it marks
-            // 'package' is shared between its modules, not with programs.
-            var tree = SyntaxTree.Parse(new SourceText(reader.ReadToEnd(), resource), ParseOptions.Default.ForTarget(os, arch) with { Workspace = "sable" });
+            var tree = CoreLibrary.ParseForProfile(
+                reader.ReadToEnd(),
+                resource,
+                options,
+                profile,
+                plain is not null && plain.TryGetValue(resource, out var shared) ? () => shared : null
+            );
             if (tree.Root is not CompilationUnitSyntax { Module: { } declaration }) {
                 continue;
             }

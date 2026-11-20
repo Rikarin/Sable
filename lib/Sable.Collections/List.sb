@@ -211,7 +211,8 @@ public struct List<Element> {
     /// ```
     public mutating fn drain(_ range: Range<Int>) -> Element[>..] {
         let drained = storage[range].toArray()
-        self.replaceSubrange(range, with: [])
+        let nothing: Element[>..] = []
+        self.replaceSubrange(range, with: nothing)
         return drained
     }
 
@@ -224,7 +225,7 @@ public struct List<Element> {
     /// list.replaceSubrange(1..<2, with: [7, 8, 9])
     /// assert(list.toArray() == [1, 7, 8, 9, 3])
     /// ```
-    public mutating fn replaceSubrange(_ range: Range<Int>, with elements: Element[:]) {
+    public mutating fn replaceSubrange<C: Collection>(_ range: Range<Int>, with elements: C) where C.Element == Element {
         // Slicing checks the range, before anything changes.
         let _ = storage[range]
         let tail = storage.count - range.upperBound
@@ -233,7 +234,9 @@ public struct List<Element> {
         storage.rotate(from: range.lowerBound, to: storage.count, left: range.count)
         self.truncate(to: range.lowerBound + tail)
         storage.reserveCapacity(storage.count + elements.count)
-        storage.append(contentsOf: elements)
+        for element in elements {
+            storage.append(element)
+        }
         storage.rotate(from: range.lowerBound, to: storage.count, left: tail)
     }
 

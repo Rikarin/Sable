@@ -86,6 +86,17 @@ internal sealed class Conversions(CoreTypes core) {
             return ConversionKind.LiteralTyping;
         }
 
+        // A range of literals, '0.0..<1.0', has bounds of no type of their
+        // own yet: it fits a range of the same kind whose bounds they fit.
+        if (sourceIsLiteral
+            && source is NamedTypeSymbol { TypeArguments: [var sourceBound] } sourceRange
+            && target is NamedTypeSymbol { TypeArguments: [var targetBound] } targetRange
+            && core.IsAnyRange(sourceRange)
+            && ReferenceEquals(sourceRange.OriginalDefinition, targetRange.OriginalDefinition)
+            && IsLiteralCompatible(sourceBound, targetBound)) {
+            return ConversionKind.LiteralTyping;
+        }
+
         if (target is OptionalTypeSymbol optional) {
             if (source.Equals(optional.UnderlyingType) || SameReferent(source, optional.UnderlyingType)) {
                 return ConversionKind.OptionalWrap;

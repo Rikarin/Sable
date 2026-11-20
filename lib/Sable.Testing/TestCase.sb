@@ -223,7 +223,7 @@ public fn verdict(_ test: TestCase, _ status: Int, _ errors: String) -> String? 
     if status == 0 {
         return "the test was to trap\(trapWanted(expected)), and it returned"
     }
-    if status < 0 || errors.contains(failureMarker) {
+    if status < 0 || ("\n" + errors).contains("\n" + failureMarker) {
         return ""
     }
     if expected.count > 0 && !errors.contains(expected) {
@@ -247,9 +247,10 @@ fn failureReport(_ test: TestCase, _ status: Int, _ output: String, _ errors: St
     if output.count > 0 {
         report.append("\nstdout:\n" + indented(output))
     }
-    // An assertion's own trap says nothing its report has not.
+    // An assertion's own trap says nothing its report has not. Its report
+    // starts a line: Sable.Core's 'assert' says the same after 'fatal error: '.
     var shown = errors
-    if errors.contains(failureMarker) {
+    if ("\n" + errors).contains("\n" + failureMarker) {
         shown = withoutAssertionTrap(errors)
     }
     if shown.count > 0 {
@@ -258,7 +259,7 @@ fn failureReport(_ test: TestCase, _ status: Int, _ output: String, _ errors: St
     if why.count > 0 {
         report.append("\n    \(why)")
     }
-    if !errors.contains(failureMarker) {
+    if !("\n" + errors).contains("\n" + failureMarker) {
         report.append("\n    (exit status \(status))")
     }
     return report.build()

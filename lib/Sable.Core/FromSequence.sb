@@ -3,6 +3,10 @@ module Sable.Core
 /// A type that can be made from a sequence of its elements: what
 /// 'collect()' makes. Rust's FromIterator; .NET's collection expressions.
 ///
+/// It is a static 'from' rather than Swift's 'init<S: Sequence>(_:)'
+/// because it throws what going through the sequence throws, and because
+/// the arrays conform: an initialiser can do neither yet (#287).
+///
 /// ```sable
 /// let squares: Int[>..] = stride(from: 1, through: 3, by: 1).lazy.map { $0 * $0 }.collect()
 /// assert(squares[2] == 9)

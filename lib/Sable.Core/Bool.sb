@@ -4,4 +4,21 @@ extension Bool {
     /// 'true' or 'false'.
     @builtin("string_from_Bool")
     public fn toString() -> String
+
+    /// True or false, each as likely, drawn from the generator.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(seed: 5)
+    /// let heads = Bool.random(using: &generator)
+    /// assert(heads || !heads)
+    /// ```
+    public static fn random<G: RandomNumberGenerator>(using generator: inout G) -> Bool {
+        return generator.next() >> 63 == 1
+    }
+
+    /// True or false, each as likely, drawn from the system's generator.
+    public static fn random() -> Bool {
+        var system = SystemRandomNumberGenerator()
+        return Bool.random(using: &system)
+    }
 }

@@ -1319,6 +1319,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "hash_seed":
                 return HashSeed;
 
+            case "random_bits":
+                return BitConverter.ToInt64(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8));
+
             // Scalar by scalar, as the runtime's byte search finds the same place.
             case "string_find": {
                 var text = Text(operands[0]).Scalars;

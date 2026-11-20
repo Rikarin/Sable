@@ -499,8 +499,10 @@ internal sealed class Parser {
                 or SyntaxKind.GreaterToken
                 or SyntaxKind.GreaterEqualsToken => BinaryLevel.Relational,
             SyntaxKind.LessLessToken or SyntaxKind.GreaterGreaterToken => BinaryLevel.Shift,
-            SyntaxKind.PlusToken or SyntaxKind.MinusToken => BinaryLevel.Additive,
-            SyntaxKind.StarToken or SyntaxKind.SlashToken or SyntaxKind.PercentToken => BinaryLevel.Multiplicative,
+            SyntaxKind.PlusToken or SyntaxKind.MinusToken
+                or SyntaxKind.AmpersandPlusToken or SyntaxKind.AmpersandMinusToken => BinaryLevel.Additive,
+            SyntaxKind.StarToken or SyntaxKind.SlashToken or SyntaxKind.PercentToken
+                or SyntaxKind.AmpersandStarToken => BinaryLevel.Multiplicative,
             _ => BinaryLevel.None,
         };
 
@@ -1028,6 +1030,23 @@ internal sealed class Parser {
 
             case SyntaxKind.DollarToken: {
                 var dollar = EatToken();
+
+                // '$0.1' lexes '0.1' as a float literal: it is the first
+                // parameter, then its element 1, so the token is taken apart.
+                if (IsTupleIndexPath(Current)) {
+                    var path = EatToken();
+                    var parts = path.Text.Split('.');
+                    var first = new GreenToken(SyntaxKind.IntegerLiteralToken, parts[0], path.Leading, parts.Length == 1 ? path.Trailing : []);
+                    GreenNode expression = new ImplicitParameterExpressionGreen(dollar, first);
+                    for (var i = 1; i < parts.Length; i++) {
+                        var index = new GreenToken(SyntaxKind.IntegerLiteralToken, parts[i], [], i == parts.Length - 1 ? path.Trailing : []);
+                        var dot = new GreenToken(SyntaxKind.DotToken, ".", [], []);
+                        expression = new MemberAccessExpressionGreen(expression, dot, new IdentifierNameGreen(index));
+                    }
+
+                    return expression;
+                }
+
                 return new ImplicitParameterExpressionGreen(dollar, EatToken(SyntaxKind.IntegerLiteralToken));
             }
 

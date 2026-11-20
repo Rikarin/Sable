@@ -87,7 +87,7 @@ public static class NativeObjects {
         var sources = temporary + ".src";
         try {
             var source = NativeBuild.WriteRuntime(sources);
-            var (exitCode, output) = Run(NativeBuild.CompilerPath, [..target.ClangFlags, ..NativeBuild.SysrootFlags(options), ..Flags(options), "-c", source, "-o", temporary]);
+            var (exitCode, output) = Run(NativeBuild.CompilerPath, [..target.ClangFlags, ..NativeBuild.SysrootFlags(options), ..Flags(options), ..NativeBuild.PositionIndependentFlags(options), "-c", source, "-o", temporary]);
             if (exitCode != 0) {
                 return NativeBuild.Explained(new(false, output), options);
             }

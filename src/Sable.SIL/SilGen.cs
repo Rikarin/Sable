@@ -6629,6 +6629,10 @@ public sealed partial class SilGen {
                         ? Emit(new IntegerLiteralInst(numberType, number.Value))
                         : Missing(valueParameter, $"'{valueParameter.Parameter.Name}' with its number unknown here");
 
+                case BoundConversion { ConversionKind: ConversionKind.Explicit, Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } } generic
+                    when IsKnownHere(generic.Operand.Type):
+                    return KnownCast(generic);
+
                 case BoundConversion { ConversionKind: ConversionKind.Explicit } conversion:
                     return NumericConversion(conversion);
 
@@ -8211,12 +8215,80 @@ public sealed partial class SilGen {
             return joined;
         }
 
+        /// <summary>
+        ///     True for a type parameter that this instance makes a type whose
+        ///     values carry nothing of what they are — not an object, an
+        ///     existential or a union — so a cast of one is decided here.
+        /// </summary>
+        bool IsKnownHere(TypeSymbol type) =>
+            type is TypeParameterSymbol
+            && Sub(type) is var known and not (TypeParameterSymbol or ExistentialTypeSymbol or OptionalTypeSymbol)
+            && known.TypeKind is not (TypeKind.Class or TypeKind.Actor)
+            && StructuralUnionTypeSymbol.Of(known) is null;
+
+        /// <summary>
+        ///     Whether two types are one in this instance. An instance is made
+        ///     once for each lowered type, and every kind of array lowers to
+        ///     one, so the answer is the same for all of them: one instance
+        ///     serves an S that is 'Int[]' and one that is 'Int[>..]'.
+        /// </summary>
+        bool IsSameHere(TypeSymbol type, TypeSymbol other) =>
+            Sub(type).Equals(Sub(other)) || LowerType(type) is { } lowered && lowered.Equals(LowerType(other));
+
+        /// <summary>
+        ///     'elements as? Element[>..]' for an S this instance makes a known
+        ///     type: the value itself when S is that type, none — or for 'as!',
+        ///     a trap — when it is not.
+        /// </summary>
+        SilValue? KnownCast(BoundConversion conversion) {
+            var optional = Sub(conversion.Type) is OptionalTypeSymbol;
+            var targetSymbol = optional ? ((OptionalTypeSymbol)Sub(conversion.Type)).UnderlyingType : Sub(conversion.Type);
+            if (LowerType(conversion.Type) is not { } resultType || Expression(conversion.Operand) is not { } value) {
+                return null;
+            }
+
+            var same = IsSameHere(conversion.Operand.Type, targetSymbol);
+            if (optional) {
+                var result = (EnumType)resultType;
+                if (same) {
+                    return Emit(new EnumInst(result, result.CaseIndex("Some"), Owned(value) is var owned && owned is UnitValue ? null : owned));
+                }
+
+                Destroy(value);
+                return Emit(new EnumInst(result, result.CaseIndex("None"), null));
+            }
+
+            if (same) {
+                return value;
+            }
+
+            Destroy(value);
+            Emit(new CondFailInst(Emit(new IntegerLiteralInst(SilType.Bool, 1)), $"cast to '{targetSymbol.ToDisplayString()}' failed"));
+            Jump(new UnreachableInst());
+
+            // Never reached: a block nothing branches to, dropped with what uses it.
+            _current = function.AddBlock();
+            return _current.AddArgument(resultType);
+        }
+
         /// <summary>'x is Dog': whether the object is of the class, or a subclass of it.</summary>
         SilValue? TypeTest(BoundTypeTest test) {
             // A value already known to be of the type: a union's binding that
             // an earlier test, failing, narrowed down to this one case.
             if (Sub(test.Operand.Type).Equals(Sub(test.TestedType))) {
                 return Emit(new IntegerLiteralInst(SilType.Bool, 1));
+            }
+
+            // 'elements is Int[>..]' for an S this instance makes a known
+            // type: whether it is that one, known now. (The operand is still
+            // evaluated, for what it does.)
+            if (IsKnownHere(test.Operand.Type) && CastTarget(test.TestedType) is not ExistentialTypeSymbol) {
+                if (Expression(test.Operand) is not { } evaluated) {
+                    return null;
+                }
+
+                Destroy(evaluated);
+                return Emit(new IntegerLiteralInst(SilType.Bool, IsSameHere(test.Operand.Type, test.TestedType) ? 1 : 0));
             }
 
             // 'shape is Square', 'shape is Named': whether the cast would succeed.

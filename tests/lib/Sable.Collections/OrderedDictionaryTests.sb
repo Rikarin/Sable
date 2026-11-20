@@ -153,7 +153,7 @@ fn anOrderedDictionaryIsReadFromTheEndInItsOrder() {
 
 @test
 fn anOrderedDictionaryIsMadeFromAnySequenceOfPairs() {
-    let ordered = OrderedDictionary<String, Int>([("b", 1), ("a", 2), ("b", 3)])
+    let ordered = OrderedDictionary([("b", 1), ("a", 2), ("b", 3)])
     assertEqual(ordered.count, 2)
     assertEqual(ordered.key(at: 0), "b")
     assertEqual(ordered.get("b"), 3)

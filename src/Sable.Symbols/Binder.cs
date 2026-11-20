@@ -4955,15 +4955,16 @@ public sealed partial class Binder {
     }
 
     /// <summary>
-    ///     The parameters of a generic type made bare by an initialiser with
-    ///     type parameters of its own: <c>Groups(grouping: xs, by: f)</c>
-    ///     infers Groups' K and V along with the initialiser's E, through its
-    ///     arguments and its <c>where</c> clause, as a generic function's are.
+    ///     The parameters of a generic type made bare by an initialiser that
+    ///     its arguments' types alone did not settle: <c>Groups(grouping: xs,
+    ///     by: f)</c> infers Groups' K and V along with the initialiser's E,
+    ///     through its arguments and its <c>where</c> clause, and
+    ///     <c>Box(each: { "z" })</c> Box's T from what the closure gives back,
+    ///     as a generic function's are.
     /// </summary>
     static ImmutableArray<TypeParameterSymbol> InitializerOwnerTypeParameters(BoundFunctionGroup group, TypeSubstitution outer) =>
         outer.IsEmpty
         && group.Receiver is null
-        && group.Candidates.Any(static c => !c.TypeParameters.IsEmpty)
         && group.Candidates.All(static c => c.FunctionKind == FunctionKind.Initializer)
         && InitializedType(group.Candidates[0]) is { IsConstructed: false, TypeParameters.IsEmpty: false, TypeKind: not TypeKind.Protocol } type
         && group.Candidates.All(c => ReferenceEquals(InitializedType(c), type))
@@ -5492,6 +5493,12 @@ public sealed partial class Binder {
                     TypeSubstitution.Unify(l, r, inferrable, map);
                 } else if (r is TypeParameterSymbol rp && inferrable.Contains(rp) && !map.ContainsKey(rp)) {
                     TypeSubstitution.Unify(r, l, inferrable, map);
+                } else if (Open(r) && !Open(l)) {
+                    // 'where S.Element == (Key, Value)': the known side's
+                    // parts are the open side's.
+                    TypeSubstitution.Unify(r, l, inferrable, map);
+                } else if (Open(l) && !Open(r)) {
+                    TypeSubstitution.Unify(l, r, inferrable, map);
                 }
             }
 
@@ -5499,6 +5506,9 @@ public sealed partial class Binder {
                 return;
             }
         }
+
+        // Whether a type still mentions a parameter nothing has settled.
+        bool Open(TypeSymbol type) => inferrable.Any(p => !map.ContainsKey(p) && TypeSubstitution.Mentions(type, p));
     }
 
     /// <summary>

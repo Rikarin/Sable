@@ -730,4 +730,93 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    /// <summary>
+    ///     A generic type's parameters, inferred where its initialiser's
+    ///     argument types do not name them: from a 'where S.Element == (K, V)'
+    ///     once S is known, and from what a closure gives back (#296).
+    /// </summary>
+    [Fact]
+    public void AnInitialiserInfersItsTypeFromRequirementsAndClosures() =>
+        Assert.Equal(
+            "2 b 1\nz\nlate 3\n",
+            AssertAgree(
+                Program(
+                    """
+                    struct Pairs<K, V> {
+                        var keys: K[>..] = []
+                        var values: V[>..] = []
+                        init<S: Sequence>(_ pairs: S) throws(S.Failure) where S.Element == (K, V) {
+                            for try (k, v) in pairs {
+                                keys.append(k)
+                                values.append(v)
+                            }
+                        }
+                    }
+
+                    struct Made<T> {
+                        var item: T
+                        init(each make: () -> T) {
+                            self.item = make()
+                        }
+                    }
+
+                    struct Fail: Error { let at: Int }
+
+                    struct Late<T> {
+                        var item: T
+                        init(each make: () throws(Fail) -> T) rethrows {
+                            self.item = try make()
+                        }
+                    }
+                    """,
+                    """
+                        let pairs = Pairs([("b", 1), ("a", 2)])
+                        print("\(pairs.keys.count) \(pairs.keys[0]) \(pairs.values[0])")
+                        let made = Made(each: { "z" })
+                        print(made.item)
+                        let late = Late(each: { 3 })
+                        print("late \(late.item)")
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>
+    ///     'as?', 'as!' and 'is' from a type parameter to an array or another
+    ///     value type: decided in each instance, as S is known there (#296).
+    /// </summary>
+    [Fact]
+    public void ACastFromATypeParameterIsDecidedInEachInstance() =>
+        Assert.Equal(
+            "some 3\nnone\ntrue false\n4\n",
+            AssertAgree(
+                Program(
+                    """
+                    fn asArray<S: Sequence>(_ s: S) -> Int[>..]? where S.Element == Int {
+                        return s as? Int[>..]
+                    }
+
+                    fn isArray<S: Sequence>(_ s: S) -> Bool where S.Element == Int {
+                        return s is Int[>..]
+                    }
+
+                    fn forced<T>(_ t: T) -> Int {
+                        return t as! Int
+                    }
+                    """,
+                    """
+                        let xs: Int[>..] = [1, 2, 3]
+                        if let ys = asArray(xs) {
+                            print("some \(ys.count)")
+                        }
+                        if asArray(0..<3) == none {
+                            print("none")
+                        }
+                        print("\(isArray(xs)) \(isArray(0..<3))")
+                        print(forced(4))
+                    """
+                )
+            ).Stdout
+        );
 }

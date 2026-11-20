@@ -30,8 +30,14 @@ public struct List<Element> {
     public init() { }
 
     /// A list of the sequence's elements, in order. What going through
-    /// them throws, it throws.
+    /// them throws, it throws. A growable array is not copied: the list
+    /// shares it until either changes.
     public init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element {
+        if let array = elements as? Element[>..] {
+            storage = array
+            return
+        }
+
         for try element in elements {
             storage.append(element)
         }

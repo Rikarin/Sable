@@ -94,6 +94,22 @@ fn aListOfASliceHoldsItsRun() {
 }
 
 @test
+fn aListMadeFromAGrowableArraySharesItsStorage() {
+    var xs: Int[>..] = []
+    xs.reserveCapacity(64)
+    xs.append(1)
+    let list = List(xs)
+    assertEqual(list.capacity, xs.capacity)
+    assert(list.toArray() == [1])
+}
+
+@test
+fn aListInfersItsElementFromTheSequence() {
+    let list = List(["a", "b"])
+    assertEqual(list.count, 2)
+}
+
+@test
 fn aListAndTheArrayItWasMadeFromAreIndependentValues() {
     var xs: Int[>..] = [1, 2, 3]
     var list = List<Int>(xs)

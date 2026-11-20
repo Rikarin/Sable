@@ -333,10 +333,10 @@ public sealed class ThrowingInitialiserTests {
                         } catch {
                             print("caught any")
                         }
-                        let each = Box<Tracked>(each: { Tracked("c") })
+                        let each = Box(each: { Tracked("c") })
                         print("each \(each.items[0].name)")
                         do {
-                            let failed = try Box<Tracked>(each: { () throws(Fail) -> Tracked in throw Fail { at: 3 } })
+                            let failed = try Box(each: { () throws(Fail) -> Tracked in throw Fail { at: 3 } })
                             print(failed.label)
                         } catch {
                             print("caught \(error.at)")

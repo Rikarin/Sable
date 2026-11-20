@@ -905,12 +905,13 @@ public sealed class IncrementalTests {
 
     /// <summary>
     ///     A separate build's link takes what the whole program's build does on
-    ///     each platform: on Linux, <c>-rdynamic</c> for a trap's backtrace and
-    ///     libm for the <c>fmod</c> a float's remainder calls. Checked by its
+    ///     each platform: on Linux, <c>-rdynamic</c> for a trap's backtrace,
+    ///     libm for the <c>fmod</c> a float's remainder calls, and
+    ///     <c>-pthread</c> for the task pool's threads. Checked by its
     ///     arguments, as this may not run where Linux does.
     /// </summary>
     [Theory]
-    [InlineData(NativePlatform.Linux, new[] { "-rdynamic", "-lm" })]
+    [InlineData(NativePlatform.Linux, new[] { "-rdynamic", "-lm", "-pthread" })]
     [InlineData(NativePlatform.MacOS, new string[0])]
     public void ASeparateLinkTakesThePlatformsLibraries(NativePlatform platform, string[] flags) {
         Assert.Equal(flags, NativeBuild.PlatformLinkFlags(platform));
@@ -938,10 +939,10 @@ public sealed class IncrementalTests {
         Assert.Empty(NativeBuild.LtoFlags(release with { Lto = LtoMode.Off }, NativePlatform.MacOS, linksBitcode: true));
         Assert.Empty(NativeBuild.LtoFlags(release with { OptLevel = "0" }, NativePlatform.MacOS, linksBitcode: true));
 
-        Assert.Equal(["-rdynamic", "-lm", "-Wl,--strip-all", "-Wl,-rpath,$ORIGIN"],
+        Assert.Equal(["-rdynamic", "-lm", "-pthread", "-Wl,--strip-all", "-Wl,-rpath,$ORIGIN"],
             NativeBuild.LinkFlags(release with { Strip = StripMode.Symbols, Rpath = true }, NativePlatform.Linux));
         Assert.Equal(["-Wl,-S"], NativeBuild.LinkFlags(release with { Strip = StripMode.DebugInfo }, NativePlatform.MacOS));
-        Assert.Equal(["a.o", "-o", "program", "-rdynamic", "-lm", "-Wl,--strip-debug"],
+        Assert.Equal(["a.o", "-o", "program", "-rdynamic", "-lm", "-pthread", "-Wl,--strip-debug"],
             NativeObjects.LinkArguments(["a.o"], "program", NativePlatform.Linux, release with { Strip = StripMode.DebugInfo }));
     }
 }

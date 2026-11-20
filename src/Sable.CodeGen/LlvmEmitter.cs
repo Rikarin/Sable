@@ -3621,9 +3621,12 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 // A block in the frame, with room to grow before it must move to the heap.
+                // Aligned as a heap block is: its header's counts are read
+                // atomically, which arm64 refuses at an address less aligned
+                // than the count, and an array of bytes is aligned to 1.
                 case "inline_new_stack": {
                     const int Room = 96;
-                    var memory = Scratch($"[{BytesOffset + Room} x i8]");
+                    var memory = Scratch($"[{BytesOffset + Room} x i8]", 16);
                     Line($"{Result()} = call ptr @sable_inline_new_stack(ptr {memory}, ptr {module.InlineLayoutGlobal((StructType)builtin.Type)}, i64 {Room})");
                     return;
                 }

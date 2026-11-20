@@ -114,6 +114,46 @@ fn checkedPowGivesNoneWhereItDoesNotFit() {
 
 // ---- wrapping -----------------------------------------------------------
 
+fn wrappedSum<T: FixedWidthInteger>(_ a: T, _ b: T) -> T {
+    return a &+ b
+}
+
+@test
+fn theWrappingOperatorsKeepTheLowBits() {
+    assertEqual(Int.max &+ 1, Int.min)
+    assertEqual(Int.min &- 1, Int.max)
+    assertEqual(Int.max &* 2, -2)
+    assertEqual((250 as U8) &+ 10, 4 as U8)
+    assertEqual((0 as U8) &- 1, 255 as U8)
+    assertEqual((16 as U8) &* 17, 16 as U8)
+    assertEqual(I8.min &- 1, I8.max)
+    assertEqual(U128.max &+ 1, 0 as U128)
+    assertEqual(I128.min &* -1, I128.min)
+    assertEqual(2 &+ 3 &* 4, 14)
+}
+
+@test
+fn theWrappingCompoundAssignmentsChangeInPlace() {
+    var hash: U32 = 2166136261
+    let bytes: U8[>..] = [97, 98]
+    for byte in bytes {
+        hash = hash ^ U32(byte)
+        hash &*= 16777619
+    }
+    assertEqual(hash, 1294271946 as U32)
+    var counter: U8 = 255
+    counter &+= 2
+    assertEqual(counter, 1 as U8)
+    counter &-= 3
+    assertEqual(counter, 254 as U8)
+}
+
+@test
+fn aGenericFixedWidthIntegerHasTheWrappingOperators() {
+    assertEqual(wrappedSum(I16.max, 1 as I16), I16.min)
+    assertEqual(wrappedSum(U64.max, 2 as U64), 1 as U64)
+}
+
 @test
 fn wrappingDivisionGivesTheLeastValueForMinusOne() {
     assertEqual(I8.min.wrappingDiv(-1), I8.min)

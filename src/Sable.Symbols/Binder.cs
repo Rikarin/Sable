@@ -7362,6 +7362,9 @@ public sealed partial class Binder {
             SyntaxKind.LessLessEqualsToken => BinaryOperatorKind.LeftShift,
             SyntaxKind.GreaterGreaterEqualsToken => BinaryOperatorKind.RightShift,
             SyntaxKind.QuestionQuestionEqualsToken => BinaryOperatorKind.Coalesce,
+            SyntaxKind.AmpersandPlusEqualsToken
+                or SyntaxKind.AmpersandMinusEqualsToken
+                or SyntaxKind.AmpersandStarEqualsToken => BinaryOperatorKind.UserDefined,
             _ => null,
         };
 
@@ -7611,6 +7614,11 @@ public sealed partial class Binder {
             SyntaxKind.AmpersandAmpersandToken => BinaryOperatorKind.LogicalAnd,
             SyntaxKind.PipePipeToken => BinaryOperatorKind.LogicalOr,
             SyntaxKind.QuestionQuestionToken => BinaryOperatorKind.Coalesce,
+
+            // '&+', '&-' and '&*' are FixedWidthInteger's, declared in Sable.Core.
+            SyntaxKind.AmpersandPlusToken
+                or SyntaxKind.AmpersandMinusToken
+                or SyntaxKind.AmpersandStarToken => BinaryOperatorKind.UserDefined,
             _ => null,
         };
 
@@ -7751,7 +7759,7 @@ public sealed partial class Binder {
             (left, right) = UserOperands(method, left, right);
             return new BoundBinaryOperator(
                 syntax,
-                method.Method.ReturnType,
+                UserResultType(method.Method, left.Type),
                 BinaryOperatorKind.UserDefined,
                 left,
                 right,
@@ -8100,7 +8108,37 @@ public sealed partial class Binder {
             }
         }
 
+        // An operator a protocol's extension gives every conformer, on two
+        // of one conforming type: 'a &+ b' on two Ints is FixedWidthInteger's.
+        if (left is NamedTypeSymbol { TypeKind: not TypeKind.Protocol } conformer && left.Equals(right)) {
+            foreach (var protocol in ProtocolsConformedToBy(conformer)) {
+                if (protocol.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
+                        f is { FunctionKind: FunctionKind.Operator, Fixity: OperatorFixity.Infix, Parameters.Length: 2, IsAbstract: false }
+                        && string.Equals(f.Name, symbol, StringComparison.Ordinal)
+                        && f.Parameters.All(p => p.Type is TypeParameterSymbol self && ReferenceEquals(self, protocol.SelfTypeParameter))) is { } given) {
+                    return new UserOperator(given, conformer, conformer);
+                }
+            }
+        }
+
         return null;
+    }
+
+    /// <summary>Every protocol the type conforms to, and every one those refine.</summary>
+    static IEnumerable<NamedTypeSymbol> ProtocolsConformedToBy(NamedTypeSymbol type) {
+        var seen = new HashSet<NamedTypeSymbol>();
+        var pending = new Stack<NamedTypeSymbol>(type.OriginalDefinition.BaseTypes.OfType<NamedTypeSymbol>().Where(static b => b.TypeKind == TypeKind.Protocol));
+        while (pending.Count > 0) {
+            var protocol = pending.Pop();
+            if (!seen.Add(protocol)) {
+                continue;
+            }
+
+            yield return protocol;
+            foreach (var refined in protocol.BaseTypes.OfType<NamedTypeSymbol>().Where(static b => b.TypeKind == TypeKind.Protocol)) {
+                pending.Push(refined);
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

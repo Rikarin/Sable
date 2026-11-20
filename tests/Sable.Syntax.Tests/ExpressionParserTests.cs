@@ -20,6 +20,9 @@ public sealed class ExpressionParserTests {
     [InlineData("a | b ^ c", "(Binary (IdentifierName a) | (Binary (IdentifierName b) ^ (IdentifierName c)))")]
     [InlineData("a && b | c", "(Binary (IdentifierName a) && (Binary (IdentifierName b) | (IdentifierName c)))")]
     [InlineData("a || b && c", "(Binary (IdentifierName a) || (Binary (IdentifierName b) && (IdentifierName c)))")]
+    [InlineData("a &+ b &* c", "(Binary (IdentifierName a) &+ (Binary (IdentifierName b) &* (IdentifierName c)))")]
+    [InlineData("a &- b + c", "(Binary (Binary (IdentifierName a) &- (IdentifierName b)) + (IdentifierName c))")]
+    [InlineData("a & -b", "(Binary (IdentifierName a) & (PrefixUnary - (IdentifierName b)))")]
     public void BindsOperatorsByPrecedence(string source, string expected) => Assert.Equal(expected, Parse(source));
 
     [Fact]

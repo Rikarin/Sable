@@ -249,6 +249,9 @@ public static class SyntaxFacts {
                 or SyntaxKind.StarToken
                 or SyntaxKind.SlashToken
                 or SyntaxKind.PercentToken => true,
+            SyntaxKind.AmpersandPlusToken
+                or SyntaxKind.AmpersandMinusToken
+                or SyntaxKind.AmpersandStarToken => true,
             SyntaxKind.AmpersandToken
                 or SyntaxKind.PipeToken
                 or SyntaxKind.CaretToken
@@ -284,7 +287,10 @@ public static class SyntaxFacts {
                 or SyntaxKind.CaretEqualsToken
                 or SyntaxKind.LessLessEqualsToken
                 or SyntaxKind.GreaterGreaterEqualsToken
-                or SyntaxKind.QuestionQuestionEqualsToken => true,
+                or SyntaxKind.QuestionQuestionEqualsToken
+                or SyntaxKind.AmpersandPlusEqualsToken
+                or SyntaxKind.AmpersandMinusEqualsToken
+                or SyntaxKind.AmpersandStarEqualsToken => true,
             _ => false,
         };
 
@@ -370,6 +376,12 @@ public static class SyntaxFacts {
             SyntaxKind.SlashEqualsToken => "/=",
             SyntaxKind.PercentEqualsToken => "%=",
             SyntaxKind.AmpersandEqualsToken => "&=",
+            SyntaxKind.AmpersandPlusToken => "&+",
+            SyntaxKind.AmpersandMinusToken => "&-",
+            SyntaxKind.AmpersandStarToken => "&*",
+            SyntaxKind.AmpersandPlusEqualsToken => "&+=",
+            SyntaxKind.AmpersandMinusEqualsToken => "&-=",
+            SyntaxKind.AmpersandStarEqualsToken => "&*=",
             SyntaxKind.PipeEqualsToken => "|=",
             SyntaxKind.CaretEqualsToken => "^=",
             SyntaxKind.LessLessEqualsToken => "<<=",

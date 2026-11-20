@@ -424,7 +424,7 @@ Expression        = AssignExpr ;
 
 AssignExpr        = TernaryExpr [ AssignOp AssignExpr ] ;        (* right assoc *)
 AssignOp          = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|="
-                  | "^=" | "<<=" | ">>=" | "??=" ;
+                  | "^=" | "<<=" | ">>=" | "??=" | "&+=" | "&-=" | "&*=" ;
 
 TernaryExpr       = CoalesceExpr [ "?" Expression ":" TernaryExpr ] ;
 
@@ -439,8 +439,8 @@ RelationalExpr    = RangeExpr { ( "<" | "<=" | ">" | ">=" ) RangeExpr } ;
 RangeExpr         = ShiftExpr [ ( "..<" | "..." ) [ ShiftExpr ] ]
                   | ( "..<" | "..." ) ShiftExpr ;
 ShiftExpr         = AdditiveExpr { ( "<<" | ">>" ) AdditiveExpr } ;
-AdditiveExpr      = MultiplicativeExpr { ( "+" | "-" ) MultiplicativeExpr } ;
-MultiplicativeExpr= CastExpr { ( "*" | "/" | "%" ) CastExpr } ;
+AdditiveExpr      = MultiplicativeExpr { ( "+" | "-" | "&+" | "&-" ) MultiplicativeExpr } ;
+MultiplicativeExpr= CastExpr { ( "*" | "/" | "%" | "&*" ) CastExpr } ;
 
 CastExpr          = UnaryExpr { CastOp Type } ;
 CastOp            = "as" | "as" "?" | "as" "!" | "unchecked" "as" | "is" ;

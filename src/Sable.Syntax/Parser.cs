@@ -499,8 +499,10 @@ internal sealed class Parser {
                 or SyntaxKind.GreaterToken
                 or SyntaxKind.GreaterEqualsToken => BinaryLevel.Relational,
             SyntaxKind.LessLessToken or SyntaxKind.GreaterGreaterToken => BinaryLevel.Shift,
-            SyntaxKind.PlusToken or SyntaxKind.MinusToken => BinaryLevel.Additive,
-            SyntaxKind.StarToken or SyntaxKind.SlashToken or SyntaxKind.PercentToken => BinaryLevel.Multiplicative,
+            SyntaxKind.PlusToken or SyntaxKind.MinusToken
+                or SyntaxKind.AmpersandPlusToken or SyntaxKind.AmpersandMinusToken => BinaryLevel.Additive,
+            SyntaxKind.StarToken or SyntaxKind.SlashToken or SyntaxKind.PercentToken
+                or SyntaxKind.AmpersandStarToken => BinaryLevel.Multiplicative,
             _ => BinaryLevel.None,
         };
 

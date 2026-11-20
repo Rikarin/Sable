@@ -193,8 +193,8 @@ empty dictionary in expression position.
 . ?. .. ..< ...
 , : ; ?
 -> =>
-= += -= *= /= %= &= |= ^= <<= >>= ??=
-+ - * / %
+= += -= *= /= %= &= |= ^= <<= >>= ??= &+= &-= &*=
++ - * / %   &+ &- &*
 & | ^ ~ << >>
 == != === !== < <= > >=
 && || !
@@ -203,7 +203,11 @@ empty dictionary in expression position.
 
 `&` is overloaded three ways and resolved by position: binary bitwise-and,
 prefix address-of, and postfix reference-type marker. The parser disambiguates
-by whether it is in type or expression position.
+by whether it is in type or expression position. An `&` immediately followed
+by `+`, `-` or `*` is not one of these: the lexer takes the pair (with an `=`
+after, the three) as a wrapping operator, `&+ &- &*` (`&+= &-= &*=`), longest
+match first, so `a&-b` is `a &- b` and a bitwise-and with a negated operand
+needs the space, `a & -b`.
 
 `<` and `>` are overloaded as comparison and as generic brackets. Resolution is
 parser-directed: on seeing `<` immediately after a type-position identifier with

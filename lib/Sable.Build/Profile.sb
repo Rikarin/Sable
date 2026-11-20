@@ -4,6 +4,7 @@ module Sable.Build
 /// profile's defaults.
 public struct Profile {
     var name: String
+    var inherits: InheritedProfile? = none
     var optLevel: Int?
     var debug: Bool?
     var lto: Lto?
@@ -43,6 +44,26 @@ public struct Profile {
             optSize: optSize, strip: strip, rpath: rpath, debugAssertions: debugAssertions, incremental: incremental,
         }
     }
+
+    /// A profile of the package's own, `sable build --profile <name>`,
+    /// output in `target/<name>/`: `inherits`' settings as this manifest
+    /// has them, with what is given here changed.
+    public static fn named(_ name: String, inherits: InheritedProfile, optLevel: Int? = none, debug: Bool? = none, lto: Lto? = none,
+        codegenUnits: Int? = none, panic: Panic? = none, arcChecks: Bool? = none, exclusivity: Exclusivity? = none,
+        overflowChecks: Bool? = none, leakCheck: Bool? = none, optSize: OptSize? = none, strip: Strip? = none, rpath: Bool? = none,
+        debugAssertions: Bool? = none, incremental: Bool? = none) -> Profile {
+        return Profile {
+            name: name, inherits: inherits, optLevel: optLevel, debug: debug, lto: lto, codegenUnits: codegenUnits, panic: panic,
+            arcChecks: arcChecks, exclusivity: exclusivity, overflowChecks: overflowChecks, leakCheck: leakCheck,
+            optSize: optSize, strip: strip, rpath: rpath, debugAssertions: debugAssertions, incremental: incremental,
+        }
+    }
+}
+
+/// The profile a package's own one starts from.
+public enum InheritedProfile {
+    dev,
+    release
 }
 
 /// Optimising for size rather than speed: clang's `-Os`, or `-Oz`, which

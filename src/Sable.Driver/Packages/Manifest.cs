@@ -91,7 +91,8 @@ public static class DependencyCondition {
 public sealed record BinTarget(string Name, string Path);
 
 /// <summary>
-///     A build profile (<c>[profile.dev]</c>, <c>[profile.release]</c>). The
+///     A build profile (<c>[profile.dev]</c>, <c>[profile.release]</c>, or
+///     one of the package's own that inherits one of them). The
 ///     settings the compiler acts on are properties; the flags and the settings
 ///     it cannot act on yet are also recorded in <see cref="Recorded" />, as written.
 /// </summary>
@@ -223,6 +224,10 @@ public sealed partial class Manifest {
 
     public Profile Dev { get; init; } = Profile.Dev;
     public Profile Release { get; init; } = Profile.Release;
+
+    /// <summary>The package's own profiles (<c>[profile.&lt;name&gt;]</c> with <c>inherits</c>), by name.</summary>
+    public IReadOnlyDictionary<string, Profile> Profiles { get; init; } = new Dictionary<string, Profile>();
+
     public WorkspaceSpec? Workspace { get; init; }
     public BuildSpec? Build { get; init; }
 
@@ -257,7 +262,16 @@ public sealed partial class Manifest {
     [GeneratedRegex(@"(^|[\s{,.])workspace\s*=\s*true", RegexOptions.Multiline)]
     private static partial Regex WorkspaceTrue();
 
-    public Profile ProfileFor(bool release) => release ? Release : Dev;
+    /// <summary>The profile a build asks for by name (<c>--profile</c>; <c>--release</c> is "release").</summary>
+    /// <exception cref="PackageException">The manifest has no profile of that name.</exception>
+    public Profile ProfileNamed(string name) =>
+        name switch {
+            "dev" => Dev,
+            "release" => Release,
+            _ when Profiles.TryGetValue(name, out var profile) => profile,
+            _ => throw new PackageException(
+                $"there is no profile '{name}': {File} has {string.Join(", ", ["dev", "release", ..Profiles.Keys.Order(StringComparer.Ordinal)])} (a profile of its own is [profile.{name}] with inherits = \"dev\" or \"release\")"),
+        };
 
     /// <summary>
     ///     This manifest, read from the canonical TOML a <c>package.sb</c>
@@ -276,6 +290,7 @@ public sealed partial class Manifest {
         Features = Features,
         Dev = Dev,
         Release = Release,
+        Profiles = Profiles,
         Workspace = Workspace,
         Build = Build,
         RegistryPath = RegistryPath,
@@ -293,10 +308,34 @@ public sealed partial class Manifest {
         IReadOnlyList<string> Authors,
         string? License,
         string? Description,
-        string? Repository);
+        string? Repository) {
+        /// <summary><c>readme</c>: the file, relative to the package, that describes it; published whatever <see cref="Include" /> says.</summary>
+        public string? Readme { get; init; }
+
+        /// <summary><c>keywords</c>: up to five words <c>sable search</c> finds the package by.</summary>
+        public IReadOnlyList<string> Keywords { get; init; } = [];
+
+        /// <summary><c>include</c>: globs of the files <c>sable publish</c> uploads; with none, every file.</summary>
+        public IReadOnlyList<string> Include { get; init; } = [];
+
+        /// <summary><c>exclude</c>: globs of files <c>sable publish</c> leaves out.</summary>
+        public IReadOnlyList<string> Exclude { get; init; } = [];
+
+        /// <summary><c>publish = false</c>: <c>sable publish</c> refuses the package.</summary>
+        public bool Publish { get; init; } = true;
+    }
+
+    /// <summary>The <c>[package]</c> settings besides its name, which are also what a member may take from <c>[workspace.package]</c>.</summary>
+    static readonly string[] PackageSettings = ["version", "edition", "authors", "license", "description", "repository", "readme", "keywords", "include", "exclude", "publish"];
 
     [GeneratedRegex("^([a-z][a-z0-9_-]*/)?[a-z][a-z0-9_-]*$")]
     private static partial Regex PackageName();
+
+    [GeneratedRegex("^[a-z][a-z0-9_-]{0,23}$")]
+    private static partial Regex Keyword();
+
+    [GeneratedRegex("^[a-z][a-z0-9_-]*$")]
+    private static partial Regex ProfileName();
 
     [GeneratedRegex("^[A-Za-z0-9_][A-Za-z0-9_+.-]*$")]
     private static partial Regex FeatureName();
@@ -340,22 +379,31 @@ public sealed partial class Manifest {
 
         void Warn(TomlTable table, string key, string path, string message) => _warnings.Add(new(file, table.KeyPosition(key).Line, path, message));
 
-        public Manifest Read(TomlTable root) {
-            string[] known = ["package", "lib", "bin", "dependencies", "dev-dependencies", "build-dependencies", "features", "profile", "workspace", "reflect", "targets", "build", "registry", "lints", "generators"];
-            foreach (var key in root.Keys.Where(k => !known.Contains(k))) {
-                if (key == "target") {
-                    // Cargo's [target.'cfg(...)'.dependencies]: ignoring it would build without them.
-                    Error(root, key, key, "there are no platform-specific dependency tables: give the dependency `when = \"os(linux)\"` (or `when: .os(.linux)` in package.sb)");
-                } else {
-                    Warn(root, key, key, "unknown manifest key, ignored");
-                }
+        /// <summary>Warns about each key of <paramref name="table" /> that is not one of <paramref name="known" />: nothing is ignored without a word.</summary>
+        void WarnUnknown(TomlTable table, string path, params string[] known) {
+            foreach (var key in table.Keys.Where(k => !known.Contains(k))) {
+                Warn(table, key, $"{path}.{key}", "unknown key, ignored");
             }
+        }
 
-            // Accepted, so a manifest written for a later toolchain still
-            // reads, but nothing here acts on them yet: say so.
-            if (root["reflect"] is not null) {
-                Warn(root, "reflect", "reflect",
-                    "has no effect yet: reflection is generated where a program asks for it, and nothing looks a type up by name (docs/04 §4.2)");
+        public Manifest Read(TomlTable root) {
+            string[] known = ["package", "lib", "bin", "dependencies", "dev-dependencies", "build-dependencies", "features", "profile", "workspace", "targets", "build", "registry", "lints", "generators"];
+            foreach (var key in root.Keys.Where(k => !known.Contains(k))) {
+                switch (key) {
+                    case "target":
+                        // Cargo's [target.'cfg(...)'.dependencies]: ignoring it would build without them.
+                        Error(root, key, key, "there are no platform-specific dependency tables: give the dependency `when = \"os(linux)\"` (or `when: .os(.linux)` in package.sb)");
+                        break;
+                    case "reflect":
+                        // Ignoring it would leave a type the manifest meant to
+                        // be reflected on without its information.
+                        Error(root, key, key,
+                            "there is no [reflect] table: a type is made reflectable in code, with @reflectable or `extension T: Reflectable {}`, which works for another package's type too (docs/06 §6.3)");
+                        break;
+                    default:
+                        Warn(root, key, key, "unknown manifest key, ignored");
+                        break;
+                }
             }
 
             var targets = new List<TargetSettings>();
@@ -379,15 +427,10 @@ public sealed partial class Manifest {
                             case "reflection":
                                 Error(settings, key, $"targets.{triple}.reflection", "must be true or false");
                                 break;
-                            case "runtime" when String(settings, key, $"targets.{triple}.runtime") is { } profile:
-                                if (profile is not ("minimal" or "standard" or "full")) {
-                                    Error(settings, key, $"targets.{triple}.runtime", "must be \"minimal\", \"standard\" or \"full\"");
-                                } else if (profile != "full") {
-                                    Warn(settings, key, $"targets.{triple}.runtime", "runtime profiles are not built yet (docs/06 §6.1): the full runtime is linked");
-                                }
-
-                                break;
                             case "runtime":
+                                // A smaller runtime asked for and not given would
+                                // be a binary larger than the target allows.
+                                Error(settings, key, $"targets.{triple}.runtime", "there are no runtime profiles: every build links the whole runtime (docs/06 §6.1)");
                                 break;
                             default:
                                 Warn(settings, key, $"targets.{triple}.{key}", "unknown key, ignored");
@@ -467,9 +510,14 @@ public sealed partial class Manifest {
                     "are for a build script, and there is no [build] script to use them (docs/05 §5.6)");
             }
             var features = ReadFeatures(root, dependencies);
-            var (dev, release) = ReadProfiles(root);
+            var (dev, release, customProfiles) = ReadProfiles(root);
             var build = Table(root, "build", "build") is { } b ? ReadBuild(b) : null;
-            var registry = Table(root, "registry", "registry") is { } r ? String(r, "path", "registry.path") : null;
+            string? registry = null;
+            if (Table(root, "registry", "registry") is { } r) {
+                WarnUnknown(r, "registry", "path");
+                registry = String(r, "path", "registry.path");
+            }
+
             var lints = Sable.Symbols.LintConfiguration.Default;
             if (Table(root, "lints", "lints") is { } lintTable) {
                 // 'plugins' names assemblies of more lints (docs/05 §5.7),
@@ -497,7 +545,12 @@ public sealed partial class Manifest {
                 }
             }
 
-            var generatorInputs = Table(root, "generators", "generators") is { } g ? Strings(g, "inputs", "generators.inputs") ?? [] : [];
+            List<string> generatorInputs = [];
+            if (Table(root, "generators", "generators") is { } g) {
+                WarnUnknown(g, "generators", "inputs");
+                generatorInputs = Strings(g, "inputs", "generators.inputs") ?? [];
+            }
+
             if (_errors.Count > 0) {
                 throw new ManifestException(_errors);
             }
@@ -515,6 +568,7 @@ public sealed partial class Manifest {
                 Features = features,
                 Dev = dev,
                 Release = release,
+                Profiles = customProfiles,
                 Workspace = workspace,
                 Build = build,
                 RegistryPath = registry,
@@ -610,9 +664,12 @@ public sealed partial class Manifest {
         }
 
         PackageInfo? ReadPackage(TomlTable table) {
-            string[] known = ["name", "version", "edition", "authors", "license", "description", "repository", "readme", "keywords", "categories", "homepage", "documentation", "include", "exclude", "publish"];
-            foreach (var key in table.Keys.Where(k => !known.Contains(k))) {
-                Warn(table, key, $"package.{key}", "unknown key, ignored");
+            foreach (var key in table.Keys.Where(k => k != "name" && !PackageSettings.Contains(k))) {
+                Warn(table, key, $"package.{key}", key switch {
+                    "categories" => "there are no registry categories: say what the package is about with 'keywords'; ignored",
+                    "homepage" or "documentation" => "the registry records a package's 'repository' and nothing else to link to; ignored",
+                    _ => "unknown key, ignored",
+                });
             }
 
             var name = String(table, "name", "package.name");
@@ -643,19 +700,63 @@ public sealed partial class Manifest {
             var license = String(table, "license", "package.license");
             var description = String(table, "description", "package.description");
             var repository = String(table, "repository", "package.repository");
-            return name is null || version is null ? null : new(name, version, edition, authors, license, description, repository);
+            var readme = String(table, "readme", "package.readme");
+            if (readme is { } readmePath && !IsRelativeWithin(readmePath)) {
+                Error(table, "readme", "package.readme", $"'{readmePath}' is not a path inside the package");
+            }
+
+            var keywords = Strings(table, "keywords", "package.keywords") ?? [];
+            foreach (var keyword in keywords.Where(static k => !Keyword().IsMatch(k))) {
+                Error(table, "keywords", "package.keywords", $"'{keyword}' is not a keyword: lower-case letters, digits, '-' and '_', starting with a letter, at most 24 characters");
+            }
+
+            if (keywords.Count > 5) {
+                Error(table, "keywords", "package.keywords", $"a package has at most 5 keywords, and this one has {keywords.Count}");
+            }
+
+            var include = Patterns(table, "include");
+            var exclude = Patterns(table, "exclude");
+            var publish = Bool(table, "publish", "package.publish") ?? true;
+            return name is null || version is null
+                ? null
+                : new(name, version, edition, authors, license, description, repository) {
+                    Readme = readme,
+                    Keywords = keywords,
+                    Include = include,
+                    Exclude = exclude,
+                    Publish = publish,
+                };
         }
 
+        /// <summary><c>include</c> or <c>exclude</c>: globs of the package's files, each checked to be one.</summary>
+        List<string> Patterns(TomlTable table, string key) {
+            var patterns = Strings(table, key, $"package.{key}") ?? [];
+            foreach (var pattern in patterns) {
+                if (FileGlob.Problem(pattern) is { } problem) {
+                    Error(table, key, $"package.{key}", $"'{pattern}': {problem}");
+                }
+            }
+
+            return patterns;
+        }
+
+        static bool IsRelativeWithin(string path) =>
+            path.Length > 0 && !Path.IsPathRooted(path) && !path.Replace('\\', '/').Split('/').Contains("..");
+
         WorkspaceSpec ReadWorkspace(TomlTable table) {
-            foreach (var key in table.Keys.Where(static k => k is not ("members" or "exclude" or "resolver" or "package" or "dependencies"))) {
-                Warn(table, key, $"workspace.{key}", key == "metadata" ? "nothing reads workspace metadata; ignored" : "unknown key, ignored");
+            foreach (var key in table.Keys.Where(static k => k is not ("members" or "exclude" or "package" or "dependencies"))) {
+                Warn(table, key, $"workspace.{key}", key switch {
+                    "metadata" => "nothing reads workspace metadata; ignored",
+                    // Cargo's resolver = "2": there is one way to resolve.
+                    "resolver" => "there is one resolver, PubGrub with features unified across the graph (docs/05 §5.3); ignored",
+                    _ => "unknown key, ignored",
+                });
             }
 
             // What members may take: the [package] keys, each as its own
             // [package] would have it, and dependencies as a member writes them.
             var package = Table(table, "package", "workspace.package");
-            string[] inheritable = ["version", "edition", "authors", "license", "description", "repository", "readme", "keywords", "categories", "homepage", "documentation", "include", "exclude", "publish"];
-            foreach (var key in package?.Keys.Where(k => !inheritable.Contains(k)) ?? []) {
+            foreach (var key in package?.Keys.Where(k => !PackageSettings.Contains(k)) ?? []) {
                 Error(package!, key, $"workspace.package.{key}", key == "name"
                     ? "each member names itself; a name cannot be shared"
                     : "is not a setting members can take from the workspace");
@@ -870,41 +971,82 @@ public sealed partial class Manifest {
             return features;
         }
 
-        (Profile Dev, Profile Release) ReadProfiles(TomlTable root) {
+        /// <summary>
+        ///     <c>[profile.dev]</c>, <c>[profile.release]</c>, and profiles of
+        ///     the package's own (<c>[profile.bench-fast]</c>), each of which
+        ///     <c>inherits</c> dev's or release's settings, as the manifest
+        ///     has them, and changes some.
+        /// </summary>
+        (Profile Dev, Profile Release, Dictionary<string, Profile> Custom) ReadProfiles(TomlTable root) {
             var dev = Profile.Dev;
             var release = Profile.Release;
+            var custom = new Dictionary<string, Profile>(StringComparer.Ordinal);
             if (Table(root, "profile", "profile") is not { } profiles) {
-                return (dev, release);
+                return (dev, release, custom);
             }
 
+            var tables = new List<(string Name, TomlTable Table)>();
             foreach (var (name, value) in profiles.Entries) {
-                if (name is not ("dev" or "release")) {
-                    Error(profiles, name, $"profile.{name}", "there are two profiles, 'dev' and 'release'");
-                    continue;
-                }
-
                 if (value is not TomlTable table) {
                     Error(profiles, name, $"profile.{name}", $"must be a table, not {value.Kind}");
-                    continue;
-                }
-
-                var profile = ReadProfile(table, name == "dev" ? dev : release);
-                if (name == "dev") {
-                    dev = profile;
+                } else if (name is not ("dev" or "release") && ProfileNameProblem(name) is { } problem) {
+                    Error(profiles, name, $"profile.{name}", problem);
                 } else {
-                    release = profile;
+                    tables.Add((name, table));
                 }
             }
 
-            return (dev, release);
+            // Dev and release first: the others start from them as written.
+            foreach (var (name, table) in tables.Where(static t => t.Name is "dev" or "release")) {
+                if (table["inherits"] is not null) {
+                    Error(table, "inherits", $"profile.{name}.inherits", $"'{name}' is a profile of its own, and inherits nothing");
+                }
+
+                if (name == "dev") {
+                    dev = ReadProfile(table, dev);
+                } else {
+                    release = ReadProfile(table, release);
+                }
+            }
+
+            foreach (var (name, table) in tables.Where(static t => t.Name is not ("dev" or "release"))) {
+                var basis = String(table, "inherits", $"profile.{name}.inherits") switch {
+                    "dev" => dev,
+                    "release" => release,
+                    null when table["inherits"] is null => Invalid<Profile?>(null, table, $"profile.{name}", "a profile of the package's own says which it starts from: inherits = \"dev\" or \"release\""),
+                    null => null,
+                    var other => Invalid<Profile?>(null, table["inherits"]!, $"profile.{name}.inherits", $"a profile inherits \"dev\" or \"release\", not \"{other}\""),
+                };
+                if (basis is not null) {
+                    custom[name] = ReadProfile(table, basis with { Name = name });
+                }
+            }
+
+            return (dev, release, custom);
+        }
+
+        /// <summary>Why a profile of the package's own cannot be called <paramref name="name" />; null when it can.</summary>
+        static string? ProfileNameProblem(string name) =>
+            !ProfileName().IsMatch(name) ? $"'{name}' is not a profile name: lower-case letters, digits, '-' and '_', starting with a letter"
+            // Its output goes to target/<name>/, beside what these are.
+            : name is "check" or "doc" or "harness" or "coverage" or "bench" or "generated" ? $"'{name}' is a directory of target/ already; call the profile something else"
+            : null;
+
+        T Invalid<T>(T result, TomlValue value, string path, string message) {
+            Error(value, path, message);
+            return result;
         }
 
         Profile ReadProfile(TomlTable table, Profile defaults) {
             var profile = defaults;
-            var recorded = new Dictionary<string, string>(StringComparer.Ordinal);
+            // What the profile inherits was written too, for what it says it cannot do.
+            var recorded = new Dictionary<string, string>(defaults.Recorded, StringComparer.Ordinal);
             foreach (var (key, value) in table.Entries) {
                 var path = $"profile.{defaults.Name}.{key}";
                 switch (key) {
+                    case "inherits":
+                        // Read by ReadProfiles.
+                        break;
                     case "opt-level":
                         profile = value switch {
                             TomlInteger { Value: >= 0 and <= 3 } level => profile with { OptLevel = Written(level) },
@@ -919,6 +1061,13 @@ public sealed partial class Manifest {
                             TomlString { Value: "none" or "line-tables-only" or "limited" or "full" } s => profile with { Debug = s.Value != "none" },
                             _ => Invalid(profile, value, path, "must be true, false, 0, 1 or 2"),
                         };
+
+                        // DWARF is emitted whole or not at all: a part of it
+                        // asked for is more than was asked for, said so.
+                        if (value is TomlInteger { Value: 1 } or TomlString { Value: "line-tables-only" or "limited" }) {
+                            Warn(table, key, path, "debug information is emitted in full or not at all; built with all of it");
+                        }
+
                         break;
                     case "exclusivity":
                         profile = value switch {
@@ -1011,6 +1160,7 @@ public sealed partial class Manifest {
         }
 
         BuildSpec? ReadBuild(TomlTable table) {
+            WarnUnknown(table, "build", "script", "allow-net", "allow-exec", "allow-read", "allow-write");
             var script = String(table, "script", "build.script");
             if (script is null) {
                 if (table["script"] is null) {

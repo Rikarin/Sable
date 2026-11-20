@@ -78,6 +78,39 @@ public sealed class SableManifestTests {
     }
 
     [Fact]
+    public void APackageSbHasPublishingSettingsAndProfilesOfItsOwn() {
+        using var fixture = new PackageFixture();
+        var manifest = Load(fixture, """
+                                     import Sable.Build
+
+                                     let manifest = Package {
+                                         name: "shown",
+                                         version: "1.0.0",
+                                         readme: "README.md",
+                                         keywords: ["render", "gpu"],
+                                         include: ["src/**", "*.md"],
+                                         exclude: ["*.png"],
+                                         publish: false,
+                                         profiles: [
+                                             .release(lto: .thin),
+                                             .named("profiling", inherits: .release, debug: true),
+                                         ],
+                                     }
+                                     """);
+
+        var package = manifest.Package!;
+        Assert.Equal("README.md", package.Readme);
+        Assert.Equal(["render", "gpu"], package.Keywords);
+        Assert.Equal(["src/**", "*.md"], package.Include);
+        Assert.Equal(["*.png"], package.Exclude);
+        Assert.False(package.Publish);
+        var profiling = manifest.ProfileNamed("profiling");
+        Assert.True(profiling.Debug);
+        Assert.Equal("3", profiling.OptLevel);
+        Assert.Equal(LtoMode.Thin, profiling.Lto);
+    }
+
+    [Fact]
     public void TheDesignDocumentsManifestEvaluates() {
         using var fixture = new PackageFixture();
         var manifest = Load(fixture, Full);

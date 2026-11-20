@@ -13,6 +13,19 @@ public fn renderManifest(_ p: Package) -> String {
     w.optionalString("license", p.license)
     w.optionalString("description", p.description)
     w.optionalString("repository", p.repository)
+    w.optionalString("readme", p.readme)
+    if !p.keywords.isEmpty {
+        w.strings("keywords", p.keywords)
+    }
+    if !p.include.isEmpty {
+        w.strings("include", p.include)
+    }
+    if !p.exclude.isEmpty {
+        w.strings("exclude", p.exclude)
+    }
+    if !p.publish {
+        w.raw("publish", "false")
+    }
 
     for target in p.targets {
         match target.kind {
@@ -47,11 +60,6 @@ public fn renderManifest(_ p: Package) -> String {
 
     for profile in p.profiles {
         w.profile(profile)
-    }
-
-    if !p.reflect.isEmpty {
-        w.table("reflect")
-        w.strings("include", p.reflect)
     }
 
     for settings in p.targetSettings {
@@ -177,7 +185,13 @@ struct TomlWriter {
     }
 
     mutating fn profile(_ profile: Profile) {
-        table("profile.\(profile.name)")
+        table("profile.\(quoteKey(profile.name))")
+        if let inherits = profile.inherits {
+            string("inherits", match inherits {
+                case .dev     => "dev"
+                case .release => "release"
+            })
+        }
         if let size = profile.optSize {
             match size {
                 case .size    => string("opt-level", "s")

@@ -254,9 +254,9 @@ public static class TestHarness {
             var closure = "async () -> String?";
             if (kind == TestKind.Bench) {
                 // Each is run with a Bencher: given it, if it takes one, or
-                // timed whole by it, if not.
+                // timed whole by it, if not; awaited, as an async one may be.
                 thunks.Append("import Sable.Testing\n\n");
-                closure = "(Bencher) -> Void";
+                closure = "async (Bencher) -> Void";
             }
 
             thunks.Append(CultureInfo.InvariantCulture, $"// Written by the compiler for '{(kind == TestKind.Test ? "sable test" : "sable bench")}'.\npublic fn {list}() -> ({closure})[>..] {{\n    return [\n");
@@ -270,9 +270,8 @@ public static class TestHarness {
         }
 
         var (caseType, run) = kind == TestKind.Test ? ("TestCase", "runTests") : ("BenchCase", "runBenchmarks");
-        // The tests' entry point is async: 'runTests' awaits each test.
-        var entryAsync = kind == TestKind.Test ? "async " : "";
-        main.Append(CultureInfo.InvariantCulture, $"\n@main\n{entryAsync}fn {EntryName}() -> Int {{\n    var all: {caseType}[>..] = []\n");
+        // The entry point is async: 'runTests' and 'runBenchmarks' await each one.
+        main.Append(CultureInfo.InvariantCulture, $"\n@main\nasync fn {EntryName}() -> Int {{\n    var all: {caseType}[>..] = []\n");
         for (var m = 0; m < modules.Count; m++) {
             main.Append(CultureInfo.InvariantCulture, $"    let list{m} = sableHarnessList{m}()\n");
             var i = 0;
@@ -282,7 +281,7 @@ public static class TestHarness {
             }
         }
 
-        main.Append(CultureInfo.InvariantCulture, $"    return {(kind == TestKind.Test ? "await " : "")}{run}(all)\n}}\n");
+        main.Append(CultureInfo.InvariantCulture, $"    return await {run}(all)\n}}\n");
         files.Add(SyntaxTree.Parse(new SourceText(main.ToString(), "<harness>")));
         return files;
     }
@@ -292,8 +291,9 @@ public static class TestHarness {
     static string Thunk(TestFunction test) => test switch {
         { Kind: TestKind.Test, Throws: false } => $"() => {{ {Await(test)}{test.CallPath}(); return none }}",
         { Kind: TestKind.Test, Throws: true } => $"() => {{\n            do {{ try {Await(test)}{test.CallPath}() }} catch {{ return \"\\(error)\" }}\n            return none\n        }}",
-        { Kind: TestKind.Bench, TakesBencher: true } => $"(b: Bencher) => {test.CallPath}(b)",
-        _ => $"(b: Bencher) => b.iterate(() => {test.CallPath}())",
+        { Kind: TestKind.Bench, TakesBencher: true } => $"(b: Bencher) => {{ {Await(test)}{test.CallPath}(b) }}",
+        { Kind: TestKind.Bench, IsAsync: true } => $"(b: Bencher) => {{ await b.iterateAsync(() => {{ await {test.CallPath}() }}) }}",
+        _ => $"(b: Bencher) => {{ b.iterate(() => {test.CallPath}()) }}",
     };
 
     static string Await(TestFunction test) => test.IsAsync ? "await " : "";

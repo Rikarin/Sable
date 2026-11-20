@@ -1241,6 +1241,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "address_to_int":
                 return 0L;
 
+            // Nothing to keep from an interpreter, which optimises nothing.
+            case SilBuiltins.BlackBox:
+                return null;
+
             case "string_count":
                 return (long)Text(operands[0]).Scalars.Count;
 

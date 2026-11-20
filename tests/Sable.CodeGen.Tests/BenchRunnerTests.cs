@@ -69,6 +69,44 @@ public sealed class BenchRunnerTests {
         );
     }
 
+    /// <summary>
+    ///     An async benchmark is awaited: given the Bencher, it awaits
+    ///     <c>iterateAsync</c>; without, it is timed whole, each iteration
+    ///     awaited. What one computes is kept with <c>blackBox</c>.
+    /// </summary>
+    [Fact]
+    public void AnAsyncBenchmarkIsAwaited() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var run = Native("""
+            module Waiting
+
+            import Sable.Testing
+
+            async fn twice(_ n: Int) -> Int {
+                await Task.yield()
+                return n * 2
+            }
+
+            @bench
+            async fn awaited(_ b: Bencher) {
+                await b.iterateAsync(() => {
+                    let doubled = blackBox(await twice(blackBox(21)))
+                })
+            }
+
+            @bench
+            async fn timedWhole() {
+                let doubled = blackBox(await twice(4))
+            }
+            """, TestKind.Bench, ["--quick"]);
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal("", run.Stderr);
+        Assert.Matches($"^running 2 benchmarks\nbench Waiting\\.awaited \\.\\.\\. {Line}\nbench Waiting\\.timedWhole \\.\\.\\. {Line}\n\nbench result: 2 measured\n$", run.Stdout);
+    }
+
     [Fact]
     public void FiltersAndListing() {
         if (!CanBuild) {

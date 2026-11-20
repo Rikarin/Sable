@@ -151,10 +151,6 @@ public sealed partial class Compilation {
             Report(ErrorCode.ERR_TestIsGeneric, declaration.TypeParameters.Span, $"a {Noun(kind)} cannot be generic: the harness calls it with no type arguments to give");
         }
 
-        if (function.IsAsync && kind == TestKind.Bench) {
-            Report(ErrorCode.ERR_TestIsAsync, declaration.Identifier.Span, "a benchmark cannot be async yet: the bencher times a body synchronously");
-        }
-
         if (function.ReturnType is var returned && !ReferenceEquals(returned, Core.Void) && returned is not ErrorTypeSymbol) {
             Report(ErrorCode.ERR_TestReturnsValue, declaration.ReturnClause?.Span ?? declaration.Identifier.Span, $"a {Noun(kind)} returns nothing: it fails by failing an assertion{(kind == TestKind.Test ? " or throwing" : "")}, not by what it returns");
         }

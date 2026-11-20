@@ -79,7 +79,14 @@ public abstract class PackageCommand : Command {
                     i = args.Count;
                     break;
                 case "--release" or "-r":
-                    request = request with { Release = true };
+                    request = request with { Profile = "release" };
+                    break;
+                case "--profile":
+                    if (Value() is not { } profile) {
+                        return null;
+                    }
+
+                    request = request with { Profile = profile };
                     break;
                 case "--locked":
                     request = request with { Locked = true };
@@ -182,6 +189,7 @@ public abstract class PackageCommand : Command {
 
     internal const string BuildOptions = """
           --release, -r            the release profile (default: dev); output in target/<profile>/
+          --profile <name>         the manifest's profile of that name: dev, release, or one of its own
           --features <a,b>         turn on these features of the package
           --no-default-features    leave its default features off
           --all-features           turn on every feature

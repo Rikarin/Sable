@@ -164,7 +164,6 @@ public enum ErrorCode {
     ERR_TestIsGeneric = 3101,
     ERR_TestReturnsValue = 3102,
     ERR_TestIsInstanceMethod = 3103,
-    ERR_TestIsAsync = 3104,
     ERR_BenchParameters = 3105,
     ERR_TestAndBench = 3106,
     ERR_TestAttributeArguments = 3107,

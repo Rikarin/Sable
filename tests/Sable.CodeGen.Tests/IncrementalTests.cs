@@ -194,7 +194,7 @@ public sealed class IncrementalTests {
             var workspace = Fixture.Load("app");
             var graph = PackageBuilder.Resolve(workspace, Fixture.Environment, request);
             var member = workspace.Members[0];
-            var profile = workspace.RootManifest.ProfileFor(request.Release);
+            var profile = workspace.RootManifest.ProfileNamed(request.Profile);
             var directory = Directory.CreateTempSubdirectory("sable-clean-").FullName;
             try {
                 var executable = Platform.Executable(Path.Combine(directory, "app"));
@@ -284,7 +284,7 @@ public sealed class IncrementalTests {
         }
 
         using var scenario = new Scenario();
-        var release = new BuildRequest(Release: true);
+        var release = new BuildRequest(Profile: "release");
         Assert.Equal("whole", scenario.Check(release).Kind);
 
         File.AppendAllText(scenario.PathOf("app/sable.toml"), "\n[profile.release]\nlto = \"thin\"\n");
@@ -539,7 +539,7 @@ public sealed class IncrementalTests {
 
         using var scenario = new Scenario();
         Assert.Equal(Expected, scenario.Check().Output);
-        var release = new BuildRequest(Release: true);
+        var release = new BuildRequest(Profile: "release");
         var built = scenario.Check(release);
         Assert.Equal(Expected, built.Output);
         Assert.Equal("whole", built.Kind);

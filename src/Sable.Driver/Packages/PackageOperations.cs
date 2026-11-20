@@ -187,6 +187,10 @@ public static class PackageOperations {
     /// </summary>
     public static PublishPlan Plan(Workspace workspace, PackageEnvironment environment, LocalPackage package) {
         var manifest = package.Manifest;
+        if (manifest.Package is { Publish: false }) {
+            throw new PackageException($"{package.ManifestPath}: {package.Name} says 'publish = false', so it is not published");
+        }
+
         var dependencies = new List<IndexDependency>();
         foreach (var (kind, specs) in new[] { ("normal", manifest.Dependencies), ("dev", manifest.DevDependencies), ("build", manifest.BuildDependencies) }) {
             foreach (var spec in specs) {
@@ -212,7 +216,9 @@ public static class PackageOperations {
 
         var files = Published(package.Directory);
         var archive = Registry.Pack(files);
-        var entry = new IndexEntry(package.Name, package.Version, Registry.Checksum(archive), dependencies, manifest.Features, false, "", "", manifest.Package?.Description);
+        var entry = new IndexEntry(package.Name, package.Version, Registry.Checksum(archive), dependencies, manifest.Features, false, "", "", manifest.Package?.Description) {
+            Keywords = manifest.Package?.Keywords ?? [],
+        };
         return new(package, files, archive, entry);
     }
 
@@ -230,9 +236,20 @@ public static class PackageOperations {
                 $"{ManifestFiles.PathIn(directory)} takes settings from its workspace ('workspace = true'), which a published package cannot: write them out in it before publishing");
         }
 
+        // The manifest is always published, and the readme it names; the
+        // rest as 'include' and 'exclude' say.
+        var info = ManifestFiles.Load(directory).Package;
+        var readme = info?.Readme?.Replace('\\', '/') is { } named ? (named.StartsWith("./", StringComparison.Ordinal) ? named[2..] : named) : null;
         var files = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
         foreach (var (path, bytes) in Files(directory)) {
-            files[path] = bytes;
+            var always = path is ManifestFiles.PackageFile or ManifestFiles.TomlFile || path == readme;
+            if (always || ((info is not { Include.Count: > 0 } || FileGlob.MatchesAny(info.Include, path)) && !FileGlob.MatchesAny(info?.Exclude ?? [], path))) {
+                files[path] = bytes;
+            }
+        }
+
+        if (readme is not null && !files.ContainsKey(readme)) {
+            throw new PackageException($"{ManifestFiles.PathIn(directory)}: package.readme names '{info!.Readme}', and the package has no such file");
         }
 
         if (files.Remove(ManifestFiles.PackageFile)) {

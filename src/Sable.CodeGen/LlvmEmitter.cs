@@ -2982,6 +2982,13 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = icmp eq ptr {operands[0]}, {operands[1]}");
                     return;
 
+                // An empty assembly statement given the slot, that may read
+                // and write any memory: LLVM must store the value before and
+                // load it after, knowing nothing of either.
+                case SilBuiltins.BlackBox:
+                    Line($"call void asm sideeffect \"\", \"r,~{{memory}}\"(ptr {operands[0]})");
+                    return;
+
                 // The only reference, and not immortal: free to change in place.
                 case "ref_is_unique": {
                     var objectPointer = Fresh();

@@ -1,0 +1,41 @@
+module BlackBoxTests
+
+// blackBox (Sable.Core), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+class Box {
+    var value: Int = 0
+}
+
+@test
+fn blackBoxGivesBackANumberUnchanged() {
+    assertEqual(blackBox(42), 42)
+}
+
+@test
+fn blackBoxGivesBackTheSameObject() {
+    let box = Box()
+    box.value = 7
+    let kept = blackBox(box)
+    kept.value = 8
+    assertEqual(box.value, 8)
+}
+
+@test
+fn blackBoxGivesBackAStringAndAnArray() {
+    assertEqual(blackBox("a" + "b"), "ab")
+    assertEqual(blackBox([1, 2, 3]).count, 3)
+}
+
+@bench
+fn summingKeptFromTheOptimiser(_ b: Bencher) {
+    b.iterate(() => {
+        var total = 0
+        for i in 0..<100 {
+            total = total + blackBox(i)
+        }
+        let kept = blackBox(total)
+    })
+}

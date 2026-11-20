@@ -171,8 +171,6 @@ let manifest = Package {
         .dev(arcChecks: true, exclusivity: .checked, leakCheck: true),
     ],
 
-    // Types reachable only through reflection; see "Deliberate departures".
-    reflect: ["Scene", "Material", "App.Config.*"],
 
     build: .script("build.sb",
                    allowExec: ["pkg-config", "glslc"],
@@ -222,6 +220,15 @@ let manifest = Package {
   `optLevel`); every table of the TOML format has a field. Enumerated
   settings are enum cases (`.fat`, `.abort`), so a misspelling is a type
   error, not a silently ignored string.
+- What `sable publish` does with the package is said in it too:
+  `readme: "README.md"` (a file inside the package, always published, an
+  error at publish if it is missing); `keywords:` (at most five, lower-case,
+  recorded in the registry's index and matched by `sable search` as the
+  description is); `include:` and `exclude:`, globs of the files published
+  (`*` within a name, `**` across directories, a pattern with no `/` a
+  name at any depth, a directory standing for what is under it; with no
+  `include`, every file; the manifest and the readme whatever they say);
+  and `publish: false`, which `sable publish` refuses.
 
 ### 5.2.3 Workspaces: `workspace.sb`
 
@@ -374,9 +381,10 @@ with both kinds is an error, so there is never a question which one applies.
 
 - Workspace inheritance in `package.sb` and `workspace.sb`: `shared` and
   `.workspace` (§5.2.3); `sable.toml` has it.
-- Runtime profiles: `[targets.<triple>] runtime = "minimal"` or `"standard"`
-  is accepted with a warning, and the full runtime is linked. The other
-  per-target setting is built: `reflection = false`
+- Runtime profiles (docs/06 §6.1): every build links the whole runtime,
+  and there is no setting for it — `[targets.<triple>] runtime` is an
+  error, as a smaller runtime asked for and not given would be. The
+  per-target setting there is is built: `reflection = false`
   (`targetSettings: [.target("wasm32-wasi", reflection: false)]` in
   package.sb) builds for that target as `--deny-reflection` does, the
   triple matched by its operating system and architecture. `when:` covers
@@ -394,6 +402,17 @@ with both kinds is an error, so there is never a question which one applies.
 one; `package.sb` writes them as `.dev(...)` and `.release(...)`. A value
 the compiler cannot use is an error naming the key; a setting it cannot
 act on is a warning the build prints, never taken silently.
+
+A package may have profiles of its own, as Cargo's custom profiles:
+`[profile.profiling]` with `inherits = "release"` (or `"dev"`) starts from
+that profile's settings as the manifest has them and changes what it
+writes; `.named("profiling", inherits: .release, debug: true)` in
+package.sb. `sable build --profile profiling` (and `run`, `check`,
+`debug`) uses it, and the build goes to `target/profiling/`. A name is
+lower-case, and not one of target/'s own directories (`check`, `doc`,
+`harness`, `coverage`, `bench`, `generated`); a profile of the package's
+own that inherits nothing, or `--profile` naming one there is not, is an
+error.
 
 | Setting | Default (dev / release) | What the build does |
 |---|---|---|
@@ -429,8 +448,15 @@ none. A single file's `sable build` takes the same levels as `-O0` to
 
 ### Deliberate departures from Cargo
 
-- **`reflect:`** is new and necessary: reflection reachability has to be
-  declared somewhere, and the manifest is the honest place for it.
+- **No `reflect:`.** What a program reflects on is said in its code:
+  `@reflectable`, or `extension T: Reflectable {}` for another package's
+  type, and reflection is generated where a program asks for it (docs/06
+  §6.3). An earlier design had the manifest list types to keep for
+  reflection; with nothing looking a type up by name, the list had nothing
+  to do, and `[reflect]` is an error.
+- **No `categories`, `homepage` or `documentation`.** The registry records
+  a package's description, repository and keywords; the others are warned
+  about and ignored.
 - **Memory-model knobs in profiles** (`arcChecks`, `exclusivity`,
   `leakCheck`) — these are the ones programmers will actually want to toggle.
 - **`edition` is a year, and editions may change syntax** but never ABI. A

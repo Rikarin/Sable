@@ -30,7 +30,9 @@ Profiles:
 | `standard` | + conformance, existential, region, task, actor | ~140 KB |
 | `full` | + reflect, backtrace | ~200 KB |
 
-Chosen per-target in the manifest. `minimal` plus `--deny-reflection` is the
+Not built: every build links the whole runtime, and until the runtime is
+split there is no setting for it (`[targets.<triple>] runtime` is an error,
+docs/05 §5.2.10). `minimal` plus `--deny-reflection` is meant to be the
 embedded story.
 
 ## 6.2 Object header and metadata
@@ -193,8 +195,8 @@ if let ty = Runtime.lookupType("App.Plugins.MyPlugin") { }
 
 At link time the compiler computes the reflection closure:
 
-1. Roots: `@reflectable` types, types named in `[reflect] include`, and types
-   passed to `TypeInfo.of` with a statically known argument.
+1. Roots: `@reflectable` types (or `extension T: Reflectable {}`, for a
+   type of another package), and types passed to `TypeInfo.of` with a statically known argument.
 2. Closure: field types, parameter and return types, generic arguments, and
    protocol conformances of everything in the set.
 3. Everything outside the closure has `full == null` and is stripped.
@@ -203,9 +205,11 @@ At link time the compiler computes the reflection closure:
 type that got pulled in by accident is then visible and fixable, which is
 exactly the problem `ILLink` warnings try and fail to solve.
 
-**`Runtime.lookupType(String)` forces conservatism**: a package that calls it
-with a non-constant string must declare `[reflect] dynamic = true`, which
-disables stripping for that package's public types. The cost is explicit.
+**`Runtime.lookupType(String)` would force conservatism** (it is not built):
+a call with a non-constant string would have to keep every public type of
+the package reflectable. How a package says so is to be designed with it;
+the manifest has no `[reflect]` table, since what is reflected on is said
+in code.
 
 ---
 

@@ -38,8 +38,8 @@ public sealed class TestAttributeTests {
         Rejects("S3103", "struct S {\n    @test\n    fn t() { }\n}", "marks an instance method");
 
     [Fact]
-    public void ABenchmarkIsNotAsync() =>
-        Rejects("S3104", "@bench\nasync fn b() { }", "cannot be async");
+    public void ABenchmarkMayBeAsync() =>
+        Assert.Empty(ErrorsOf(Program("@bench\nasync fn b() { }\n@bench\nasync fn c(_ x: Bencher) { await x.iterateAsync(() => { await Task.yield() }) }")));
 
     [Fact]
     public void ABenchmarkTakesNothingOrABencher() {

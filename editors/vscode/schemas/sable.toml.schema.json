@@ -25,7 +25,7 @@
             },
             "git": {
               "type": "string",
-              "description": "Not supported yet: use a path or the registry."
+              "description": "A git repository's URL; with 'tag', 'branch' or 'rev' to say which commit."
             },
             "tag": {
               "type": "string"
@@ -140,6 +140,13 @@
         },
         "rpath": {
           "type": "boolean"
+        },
+        "inherits": {
+          "enum": [
+            "dev",
+            "release"
+          ],
+          "description": "The profile a profile of the package's own starts from."
         }
       }
     }
@@ -185,40 +192,35 @@
           "type": "string"
         },
         "readme": {
-          "type": "string"
-        },
-        "homepage": {
-          "type": "string"
-        },
-        "documentation": {
-          "type": "string"
+          "type": "string",
+          "description": "The file, relative to the package, that describes it: always published."
         },
         "keywords": {
           "type": "array",
+          "maxItems": 5,
           "items": {
-            "type": "string"
-          }
-        },
-        "categories": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,23}$"
+          },
+          "description": "Up to five words 'sable search' finds the package by."
         },
         "include": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "description": "Globs of the files 'sable publish' uploads ('*' within a name, '**' across directories); with none, every file."
         },
         "exclude": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "description": "Globs of the files 'sable publish' leaves out."
         },
         "publish": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "false: 'sable publish' refuses the package."
         }
       }
     },
@@ -238,9 +240,6 @@
           "items": {
             "type": "string"
           }
-        },
-        "resolver": {
-          "type": "string"
         }
       }
     },
@@ -310,7 +309,17 @@
     },
     "profile": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": {
+        "allOf": [
+          {
+            "$ref": "#/definitions/profile"
+          }
+        ],
+        "required": [
+          "inherits"
+        ],
+        "description": "A profile of the package's own: 'sable build --profile <name>', output in target/<name>/."
+      },
       "properties": {
         "dev": {
           "$ref": "#/definitions/profile"
@@ -462,7 +471,6 @@
         }
       }
     },
-    "reflect": {},
     "targets": {}
   },
   "additionalProperties": false

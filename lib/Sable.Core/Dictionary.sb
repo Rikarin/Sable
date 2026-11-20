@@ -61,6 +61,24 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
         }
     }
 
+    /// A dictionary of the pairs, whose keys must all differ: a key that
+    /// comes twice traps, as a mistake. Swift's
+    /// `init(uniqueKeysWithValues:)`; `collect()` makes one where a later
+    /// pair may replace an earlier one.
+    ///
+    /// ```sable
+    /// let squares = Dictionary(uniqueKeysWithValues: [(1, 1), (2, 4), (3, 9)])
+    /// assert(squares[3]! == 9)
+    /// assert(squares.count == 3)
+    /// ```
+    public init<S: Sequence>(uniqueKeysWithValues pairs: S) where S.Element == (Key, Value), S.Failure == Never {
+        for (key, value) in pairs {
+            if self.updateValue(value, forKey: key) != none {
+                fatalError("Dictionary(uniqueKeysWithValues:) was given the key \(key) twice")
+            }
+        }
+    }
+
     /// The values grouped by the key each one gives: each key with the
     /// values that gave it, in the order they came; the keys in the order
     /// they were first given.

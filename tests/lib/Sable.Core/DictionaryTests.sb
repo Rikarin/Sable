@@ -558,3 +558,25 @@ fn lookingUpStrings(_ b: Bencher) {
         }
     })
 }
+
+@test
+fn uniqueKeysWithValuesHoldsEachPair() {
+    let pairs: (String, Int)[>..] = [("one", 1), ("two", 2), ("three", 3)]
+    let numbers = Dictionary(uniqueKeysWithValues: pairs)
+    assert(numbers.count == 3)
+    assert(numbers["two"]! == 2)
+    assert(numbers.map({ entry in entry.0 }) == ["one", "two", "three"])
+}
+
+@test
+fn uniqueKeysWithValuesTakesAnySequence() {
+    let squares = Dictionary(uniqueKeysWithValues: (1...4).map({ (n: Int) -> (Int, Int) in (n, n * n) }))
+    assert(squares[4]! == 16)
+    assert(squares.count == 4)
+}
+
+@test(traps: "Dictionary(uniqueKeysWithValues:) was given the key 2 twice")
+fn uniqueKeysWithValuesTrapsOnARepeatedKey() {
+    let pairs: (Int, String)[>..] = [(1, "a"), (2, "b"), (2, "c")]
+    let _ = Dictionary(uniqueKeysWithValues: pairs)
+}

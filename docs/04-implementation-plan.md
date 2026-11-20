@@ -1216,10 +1216,76 @@ this machine and puts them on every function the program defines
 — the string-heavy benchmarks gained the most (`string` 54 ms to 43,
 `map-string` 57 to 46).
 `list` is mostly the operating system faulting in fresh pages, which .NET's
-warmed-up heap already has; a `HashMap<String, _>` hit still copies the key
-across the call to `==`, which SIL cannot yet inline. `Sable.Text`'s
+warmed-up heap already has; a `HashMap<String, _>` hit no longer copies
+the entry or its key to compare it (see "The SIL optimiser" below). `Sable.Text`'s
 `joined` (and so `TextBuilder.build`) was quadratic, `result = result + part`;
 it is now one runtime call (`Runtime.joinStrings`) that sizes the result once.
+
+### The SIL optimiser, as implemented
+
+What runs at each opt-level is docs/05 §5.2.11's table. At `-O2` and `-O3`,
+in order (`SilPassManager.Optimising`): devirtualisation, speculative
+devirtualisation, borrowing loads, inlining, simplification, the ARC passes,
+loop versioning, simplification again (#179).
+
+- **Devirtualisation.** A `class_method` every possible class answers with
+  one function is a direct call (`Devirtualise`). One that can reach one or
+  two small overrides, each the method of exactly one class with no
+  subclass, tests for each class and calls it directly, the vtable left for
+  the rest (`SpeculativeDevirtualise`); the test is `class_is`, which for a
+  class nothing inherits from is one comparison of the object's metadata,
+  and the call is then inlined. A protocol requirement on a generic is
+  already direct (generics are specialised).
+- **Inlining.** By cost: an instruction costs one, except what only names
+  or reshapes a value (a literal, an extract, a cast, a borrow's ends, a
+  slot, a branch), which costs nothing, and a call, which costs five. Up to
+  24 is inlined, up to 72 where nothing else names the callee, and each
+  literal argument the callee branches on adds 8. A `try_apply` is inlined
+  too, the callee's `throw` a branch to the error block. Not inlined: a
+  callee with a loop, one that never returns (cold, and kept in a trap's
+  backtrace), and one that allocates into a loop, where what it makes would
+  no longer be promoted to the stack.
+- **ARC.** Besides the passes of §3.1 and §3.7: a release is sunk past what
+  only looks to pair with a copy's, which then goes (never past a call, a
+  write, a release, or a `share`, which publishes to another task, so a
+  retain that publishes is never removed: only copies that are borrowed and
+  then destroyed are); a case payload borrows from what was switched on; an
+  array element switched on is read in place across the switch; a load is
+  borrowed across a `switch_enum` to its join and across the tests a
+  speculative call leaves; an `inout` parameter is treated as a stack slot,
+  exclusivity keeping a callee not handed it from writing it; and a load
+  only borrowed for a call is borrowed before the call is inlined.
+- **Simplification.** Constant folding (now division, remainder and shifts
+  that cannot trap, and extracts of what the function made), decided
+  branches and checks, dominator-scoped common subexpressions over trivial
+  values (pure and only-trapping builtins included), unreachable and
+  forwarding blocks, block arguments that never change or are never used,
+  and dead instructions.
+
+Measured with the compiler before and after, each benchmark its fastest of
+seven runs, `SABLE_STATS` for the counts:
+
+| Benchmark | ms before | ms after | retains before | retains after | releases before | releases after |
+|---|---|---|---|---|---|---|
+| binary-trees | 418 | 420 | 0 | 0 | 14,723,790 | 14,723,790 |
+| nbody | 46 | 45 | 0 | 0 | 1 | 1 |
+| orders | 193 | 191 | 1,000 | 1,000 | 4,005,000 | 4,005,000 |
+| shapes | 5.0 | 5.3 | 2,600 | 2,600 | 4,602 | 4,602 |
+| sort | 39.9 | 41.5 | 967,230 | 967,230 | 1,447,230 | 1,447,230 |
+| words | 41.1 | 36.3 | 6,799,961 | 800,039 | 7,400,028 | 1,400,106 |
+| json | 9.0 | 9.4 | 63,596 | 63,576 | 208,300 | 208,280 |
+| map-string | 65.6 | 52.6 | 6,724,319 | 1,462,179 | 7,124,342 | 1,862,202 |
+| map-int | 179 | 175 | 1,000,041 | 41 | 1,000,067 | 67 |
+
+The gains are the dictionary's: a hit no longer copies its entry, the
+entry's key or the dictionary. Shapes', sort's and json's differences are
+run-to-run noise; allocations are unchanged everywhere. Not yet: hoisting
+releases out of loops and loop-wide ARC motion; a call through an
+existential whose value was made in the function (its witness is a context
+-free closure, which would need a direct call that passes no context);
+devirtualising a speculative call by profile rather than by class shape;
+and the header and count of a stack-promoted object (orders' four million
+releases are of those).
 
 ### Async, as implemented
 

@@ -370,7 +370,7 @@ public sealed partial class LlvmEmitter {
 
         foreach (var t in new[] { "half", "float", "double" }) {
             var suffix = t switch { "half" => "f16", "float" => "f32", _ => "f64" };
-            foreach (var op in new[] { "sqrt", "floor", "ceil", "trunc", "round", "roundeven" }) {
+            foreach (var op in new[] { "sqrt", "floor", "ceil", "trunc", "round", "nearbyint" }) {
                 text.Append($"declare {t} @llvm.{op}.{suffix}({t})\n");
             }
 
@@ -4037,8 +4037,17 @@ public sealed partial class LlvmEmitter {
                 var suffix = $"f{floatBits}";
                 var bitsType = $"i{floatBits}";
                 switch (op) {
-                    case "sqrt" or "floor" or "ceil" or "trunc" or "round" or "round_even":
-                        Line($"{Result()} = call {t} @llvm.{op.Replace("_", "", StringComparison.Ordinal)}.{suffix}({t} {operands[0]})");
+                    case "sqrt" or "floor" or "ceil" or "trunc" or "round":
+                        Line($"{Result()} = call {t} @llvm.{op}.{suffix}({t} {operands[0]})");
+                        return true;
+
+                    // To nearest, ties to even: 'nearbyint', which rounds by
+                    // the current mode, and Sable never changes it from that.
+                    // Not 'roundeven': where the machine has no instruction for
+                    // it (x86-64 before SSE4.1) it is a call to C's roundeven,
+                    // which Microsoft's C runtime does not have; nearbyint it has.
+                    case "round_even":
+                        Line($"{Result()} = call {t} @llvm.nearbyint.{suffix}({t} {operands[0]})");
                         return true;
 
                     case "copysign" or "minimum" or "maximum":

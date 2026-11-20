@@ -205,7 +205,7 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     ///     The <c>where N &gt; 0</c> predicates on this type's value generic
     ///     parameters, checked for each set of numbers the type is given.
     /// </summary>
-    public ImmutableArray<ExpressionSyntax> ValuePredicates { get; internal set; } = [];
+    public ImmutableArray<ValuePredicate> ValuePredicates { get; internal set; } = [];
 
     /// <summary>
     ///     The protocols <c>@derive</c> conformed this generic type to. Each

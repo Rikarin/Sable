@@ -22,47 +22,13 @@ public sealed partial class SilGen {
     const long MainActor = 1;
 
     /// <summary>Declared 'nonisolated': reached from anywhere without a hop.</summary>
-    static bool IsNonisolated(Symbol member) =>
-        member.DeclaringSyntax.Any(static syntax => {
-            for (SyntaxNode? node = syntax; node is not null; node = node.Parent) {
-                switch (node) {
-                    case FunctionDeclarationSyntax function:
-                        return function.Modifiers.Any(static m => m.Kind == SyntaxKind.NonisolatedKeyword);
-                    case FieldDeclarationSyntax field:
-                        return field.Modifiers.Any(static m => m.Kind == SyntaxKind.NonisolatedKeyword);
-                }
-            }
-
-            return false;
-        });
+    static bool IsNonisolated(Symbol member) => member.IsNonisolated;
 
     /// <summary>Declared '@MainActor', or inside a declaration that is.</summary>
-    static bool OnMainActor(Symbol symbol) {
-        for (var at = symbol; at is not null and not ModuleSymbol; at = at.ContainingSymbol) {
-            foreach (var syntax in at.DeclaringSyntax) {
-                for (SyntaxNode? node = syntax; node is not null; node = node.Parent) {
-                    if (node is DeclarationSyntax && node.ChildNodes().OfType<AttributeSyntax>().Any(static a => a.Name.ToString().Trim() == "MainActor")) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        return false;
-    }
+    static bool OnMainActor(Symbol symbol) => symbol.IsOnMainActor;
 
     /// <summary>The program's entry point, or code inside it: it runs on the main actor.</summary>
-    static bool InEntryPoint(Symbol symbol) {
-        for (var at = symbol; at is not null and not ModuleSymbol; at = at.ContainingSymbol) {
-            if (at is FunctionSymbol { ContainingSymbol: ModuleSymbol } function
-                && (function.Name == "main" || function.DeclaringSyntax.Any(static s => s is FunctionDeclarationSyntax declaration
-                    && declaration.Attributes.Any(static a => a.Name.ToString().Trim() == "main")))) {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    static bool InEntryPoint(Symbol symbol) => symbol.IsInEntryPoint;
 
     /// <summary>The actor a member belongs to, if it is an actor's instance member.</summary>
     static NamedTypeSymbol? ActorOf(Symbol member) {

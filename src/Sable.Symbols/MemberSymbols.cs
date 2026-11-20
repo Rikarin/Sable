@@ -238,6 +238,31 @@ public sealed class FunctionSymbol : Symbol {
     /// </summary>
     public string? Builtin { get; internal set; }
 
+    bool? _hasBody;
+
+    /// <summary>
+    ///     Whether the declaration has a body written for it — a block or
+    ///     <c>=&gt; e</c>; a deinitialiser always does. A requirement, an
+    ///     <c>@extern</c> or a <c>@builtin</c> has none, and neither has a
+    ///     function the compiler writes (whose body, if any, is a derived,
+    ///     lazy or inherited one the compilation keeps).
+    /// </summary>
+    public bool HasBody {
+        get => _hasBody ?? (!DeclaringSyntax.IsEmpty && HasBodyIn(DeclaringSyntax[0]));
+        internal set => _hasBody = value;
+    }
+
+    /// <summary>Whether a function's declaration has a body: what <see cref="HasBody" /> asks of a declaration.</summary>
+    public static bool HasBodyIn(SyntaxNode declaration) =>
+        declaration switch {
+            FunctionDeclarationSyntax f => f.Body is not null || f.ExpressionBody is not null,
+            InitDeclarationSyntax i => i.Body is not null,
+            DeinitDeclarationSyntax => true,
+            OperatorDeclarationSyntax o => o.Body is not null || o.ExpressionBody is not null,
+            AccessorSyntax a => a.Body is not null || a.ExpressionBody is not null,
+            _ => false,
+        };
+
     TypeSymbol? _explicitProtocol;
     internal Func<TypeSymbol?>? ExplicitProtocolResolver { get; set; }
 

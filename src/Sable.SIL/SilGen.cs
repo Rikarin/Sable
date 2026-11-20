@@ -354,8 +354,7 @@ public sealed partial class SilGen {
         // called main does. A library starts nowhere: a 'main' in it is an
         // ordinary function.
         var entry = _library ? null : _entryOverride ?? functions.FirstOrDefault(static f =>
-                f.Syntax is FunctionDeclarationSyntax declaration
-                && declaration.Attributes.Any(static a => a.Name.ToString().Trim() == "main")
+                f.Symbol.FunctionKind == FunctionKind.Ordinary && f.Symbol.GetAttribute("main") is { FromExtension: false }
             ).Symbol
             ?? functions.FirstOrDefault(static f => f.Symbol is { Name: "main", ContainingSymbol: ModuleSymbol }).Symbol;
 
@@ -478,15 +477,7 @@ public sealed partial class SilGen {
     /// </summary>
     void DeclareExternal(FunctionSymbol symbol, SyntaxNode syntax, string name) {
         // LowerBody makes nothing of a declaration without a body.
-        var hasBody = syntax switch {
-            FunctionDeclarationSyntax f => f.Body is not null || f.ExpressionBody is not null,
-            InitDeclarationSyntax i => i.Body is not null,
-            DeinitDeclarationSyntax => true,
-            OperatorDeclarationSyntax o => o.Body is not null || o.ExpressionBody is not null,
-            AccessorSyntax a => a.Body is not null || a.ExpressionBody is not null,
-            _ => false,
-        };
-        if (!hasBody && _compilation.GetDerivedBody(symbol) is null && _compilation.GetLazyBody(symbol) is null
+        if (!symbol.HasBody && _compilation.GetDerivedBody(symbol) is null && _compilation.GetLazyBody(symbol) is null
             && _compilation.GetInheritedInitializerBody(symbol) is null) {
             return;
         }
@@ -844,16 +835,13 @@ public sealed partial class SilGen {
 
     /// <summary>What the declaration's <c>@inline(always)</c> or <c>@inline(never)</c> asks, if it has one.</summary>
     static SilInline InlineOf(FunctionSymbol symbol) {
-        foreach (var syntax in symbol.DeclaringSyntax) {
-            foreach (var attribute in syntax.ChildNodes().OfType<AttributeSyntax>()) {
-                if (attribute.Name.ToString().Trim() == "inline"
-                    && attribute.ArgumentList?.Arguments.ToList() is [{ Expression: IdentifierNameSyntax { Identifier.Text: var how } }]) {
-                    return how switch {
-                        "always" => SilInline.Always,
-                        "never" => SilInline.Never,
-                        _ => SilInline.Default,
-                    };
-                }
+        foreach (var attribute in symbol.Attributes) {
+            if (attribute is { Name: "inline", FromExtension: false } && attribute.Arguments is [var how]) {
+                return how switch {
+                    "always" => SilInline.Always,
+                    "never" => SilInline.Never,
+                    _ => SilInline.Default,
+                };
             }
         }
 
@@ -3935,9 +3923,7 @@ public sealed partial class SilGen {
     internal bool IsIndirect(EnumType type, int index) => _indirect.TryGetValue(type, out var boxed) && boxed.Contains(index);
 
     static bool IsMarkedIndirect(NamedTypeSymbol union, string caseName) =>
-        union.Members.OfType<UnionCaseSymbol>().FirstOrDefault(c => c.Name == caseName)?.DeclaringSyntax.FirstOrDefault()
-            is UnionCaseDeclarationSyntax declaration
-        && declaration.Attributes.Any(static a => a.Name.ToString().Trim() == "indirect");
+        union.Members.OfType<UnionCaseSymbol>().FirstOrDefault(c => c.Name == caseName)?.HasAttribute("indirect") == true;
 
     /// <summary>True when a value of one type holds a value of another by value — through no reference.</summary>
     static bool Holds(SilType part, NominalType type) {
@@ -4305,7 +4291,7 @@ public sealed partial class SilGen {
                 // for it, which gives the superclass's fields their values.
                 if (owner.BaseTypes.OfType<NamedTypeSymbol>().FirstOrDefault(static b => b.TypeKind == TypeKind.Class) is { } superclass
                     && superclass.OriginalDefinition.GetMembers("init").OfType<FunctionSymbol>()
-                        .FirstOrDefault(i => i is { DeclaringSyntax.IsEmpty: true, Parameters.IsEmpty: true } && !generator._compilation.InheritedInitializers.ContainsKey(i)) is { } implicitInit
+                        .FirstOrDefault(i => i is { IsSynthesized: true, Parameters.IsEmpty: true } && !generator._compilation.InheritedInitializers.ContainsKey(i)) is { } implicitInit
                     && !Descendants(body).Any(static n => n is BoundCall { Function.FunctionKind: FunctionKind.Initializer, Receiver: BoundSuperAccess })) {
                     var call = new BoundCall(body.Syntax, new BoundSuperAccess(body.Syntax, superclass), implicitInit, [], Core.Void) { Substitution = TypeSubstitution.For(superclass) };
                     Statement(new BoundExpressionStatement(body.Syntax, call));
@@ -9850,7 +9836,7 @@ public sealed partial class SilGen {
 
             // 'flags.contains(.Write)', on a '@flags' enum: every flag of the
             // argument set in the receiver.
-            if (callee is { Name: "contains", DeclaringSyntax.IsEmpty: true, ContainingSymbol: NamedTypeSymbol { IsFlags: true } flagsType }) {
+            if (callee is { Name: "contains", IsSynthesized: true, ContainingSymbol: NamedTypeSymbol { IsFlags: true } flagsType }) {
                 return FlagsContains(call, flagsType);
             }
 
@@ -9874,13 +9860,13 @@ public sealed partial class SilGen {
             // 'super.init()' where the superclass has only the implicit
             // initialiser: its fields' initial values, stored into this object.
             var inheritedInit = generator._compilation.InheritedInitializers.ContainsKey(callee);
-            if (callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true, Parameters.IsEmpty: true }
+            if (callee is { FunctionKind: FunctionKind.Initializer, IsSynthesized: true, Parameters.IsEmpty: true }
                 && !inheritedInit && call.Receiver is BoundSuperAccess super) {
                 return SuperImplicitInit(call, super);
             }
 
             // A class or actor's implicit 'init()'.
-            if (!inheritedInit && callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true, Parameters.IsEmpty: true }
+            if (!inheritedInit && callee is { FunctionKind: FunctionKind.Initializer, IsSynthesized: true, Parameters.IsEmpty: true }
                 && LowerType(call.Type) is ClassType implicitClass) {
                 return ImplicitInit(call, implicitClass);
             }
@@ -9892,7 +9878,7 @@ public sealed partial class SilGen {
             }
 
             // A synthesised memberwise initialiser is the struct, built from its fields.
-            if (!inheritedInit && callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true }) {
+            if (!inheritedInit && callee is { FunctionKind: FunctionKind.Initializer, IsSynthesized: true }) {
                 if (LowerType(call.Type) is not StructType structType) {
                     return Missing(call, $"initialising '{Sub(call.Type).ToDisplayString()}'");
                 }

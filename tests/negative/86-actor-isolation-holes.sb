@@ -1,0 +1,47 @@
+module Negative.ActorIsolationHoles
+
+// An actor's isolated members are reached only by a call that waits
+// (SYNTAX.md §19): not through a protocol's requirement, not as a method
+// taken as a value from outside, and not from a closure run on another
+// thread that cannot wait.
+
+protocol Counting {
+    fn total() -> Int
+    var size: Int { get }
+}
+
+actor Counter: Counting {
+    var count = 0
+    let name = "c"
+
+    fn total() -> Int {                    //! S3237 'Counter.total' is isolated to the actor
+        return count
+    }
+
+    var size: Int => count                 //! S3237 'Counter.size' is isolated to the actor
+
+    fn add() {
+        count += 1
+    }
+
+    nonisolated fn label() -> String {
+        return name
+    }
+
+    fn offload() async -> Int {
+        return await Task.blocking { count } //! S3238 'count' is isolated to the actor 'Counter'
+    }
+
+    fn offloadCall() async {
+        await Task.blocking { add() }      //! S3238 'add' is isolated to the actor 'Counter'
+    }
+
+    fn inside() -> () -> () {
+        return self.add                    // inside the actor: its own
+    }
+}
+
+fn outside(_ counter: Counter) {
+    let label = counter.label              // nonisolated: a value anywhere
+    let add = counter.add                  //! S3237 'add' is isolated to the actor 'Counter'
+}

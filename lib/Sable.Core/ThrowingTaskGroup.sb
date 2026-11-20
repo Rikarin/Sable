@@ -29,12 +29,12 @@ public class ThrowingTaskGroup<ChildResult>: AsyncSequence {
 
     /// Spawns the body as a child of the group, at the running task's
     /// priority. A group cancelled already cancels it at once.
-    public fn spawn(_ body: async () throws -> ChildResult) {
+    public fn spawn(_ body: @Sendable async () throws -> ChildResult) {
         children.spawn({ await ThrowingTaskGroup<ChildResult>.outcome(of: body) })
     }
 
     /// Spawns the body as a child of the group, at this priority.
-    public fn spawn(priority: TaskPriority, _ body: async () throws -> ChildResult) {
+    public fn spawn(priority: TaskPriority, _ body: @Sendable async () throws -> ChildResult) {
         children.spawn(priority: priority, { await ThrowingTaskGroup<ChildResult>.outcome(of: body) })
     }
 

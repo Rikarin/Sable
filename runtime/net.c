@@ -46,7 +46,7 @@ int64_t sable_net_listen(const SableString *host, int64_t port) {
         return 0;
     }
 
-    int64_t handle = io_source_open(socket);
+    int64_t handle = io_source_open(socket, REACTOR_READABLE | REACTOR_WRITABLE);
     net_last_status = handle == 0 ? NET_FAILED : NET_DONE;
     if (handle != 0) {
         IoSource *source = source_of(handle);
@@ -83,7 +83,7 @@ int64_t sable_net_accept(int64_t handle) {
         return 0;
     }
 
-    int64_t accepted = io_source_open(socket);
+    int64_t accepted = io_source_open(socket, REACTOR_READABLE | REACTOR_WRITABLE);
     net_last_status = accepted == 0 ? NET_FAILED : NET_DONE;
     return accepted;
 }
@@ -99,18 +99,8 @@ int64_t sable_net_connect(const SableString *host, int64_t port) {
         return 0;
     }
 
-    int64_t handle = io_source_open(socket);
-    if (handle != 0) {
-        // Not writable until the connection is made: waited for first.
-        IoSource *source = source_of(handle);
-        spin_lock(&source->lock);
-        if (source->ticks[1] == 0) {
-            source->ready &= (uint8_t)~REACTOR_WRITABLE;
-        }
-
-        spin_unlock(&source->lock);
-    }
-
+    // Not writable until the connection is made: the reactor says when.
+    int64_t handle = io_source_open(socket, REACTOR_READABLE);
     net_last_status = handle == 0 ? NET_FAILED : NET_DONE;
     return handle;
 }

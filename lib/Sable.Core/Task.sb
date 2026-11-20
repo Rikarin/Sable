@@ -10,7 +10,8 @@ module Sable.Core
 // with its parent's priority, it is cancelled when its parent is, and its
 // parent does not finish until it has. 'Task.detached' is the one way out.
 
-/// A task running concurrently, and, once it finishes, its result.
+/// A task running concurrently, and, once it finishes, its result. A
+/// handle any task may hold: it is '@immutable', so Sendable.
 ///
 /// ```sable
 /// fn answer() async -> Int {
@@ -18,6 +19,7 @@ module Sable.Core
 ///     return await task.value
 /// }
 /// ```
+@immutable
 public class Task<Success> {
     /// Made by 'spawn' and 'detached' alone: a task is its body, queued.
     private init() { }
@@ -26,21 +28,21 @@ public class Task<Success> {
     /// running task's priority, is cancelled with it, and the running task
     /// does not finish until it has.
     @intrinsic
-    public static fn spawn<T>(_ body: async () -> T) -> Task<T>
+    public static fn spawn<T>(_ body: @Sendable async () -> T) -> Task<T>
 
     /// The body, queued as a child of the running task, at this priority.
     @intrinsic
-    public static fn spawn<T>(priority: TaskPriority, _ body: async () -> T) -> Task<T>
+    public static fn spawn<T>(priority: TaskPriority, _ body: @Sendable async () -> T) -> Task<T>
 
     /// The body, queued to run as a task of its own, no child of the
     /// running task: it is not cancelled with it, nor waited for by it. Its
     /// priority is medium.
     @intrinsic
-    public static fn detached<T>(_ body: async () -> T) -> Task<T>
+    public static fn detached<T>(_ body: @Sendable async () -> T) -> Task<T>
 
     /// The body, queued as a task of its own, at this priority.
     @intrinsic
-    public static fn detached<T>(priority: TaskPriority, _ body: async () -> T) -> Task<T>
+    public static fn detached<T>(priority: TaskPriority, _ body: @Sendable async () -> T) -> Task<T>
 
     /// The task's result, waiting for it to finish. Waiting does not end
     /// early when the waiting task is cancelled: a child is cancelled with
@@ -126,7 +128,7 @@ public class Task<Success> {
     ///     return await Task.blocking { count * (count + 1) / 2 }
     /// }
     /// ```
-    public static async fn blocking<T, E>(_ body: () throws(E) -> T) throws(E) -> T {
+    public static async fn blocking<T, E>(_ body: @Sendable () throws(E) -> T) throws(E) -> T {
         let result = BlockingResult<T, E>()
         await Task.runBlocking { result.outcome = Outcome.catching(body) }
         return try result.outcome!.get()

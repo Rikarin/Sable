@@ -252,5 +252,7 @@ fn main() {
         print("not found: \(path)")
     } catch .Failed(let path) {
         print("could not write \(path)")
+    } catch {
+        print(error.description())
     }
 }

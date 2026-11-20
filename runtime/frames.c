@@ -130,8 +130,12 @@ static void slab_destroy(FrameSlab *slab) {
 }
 
 // A frame for the running task: 'size' bytes, an object header's among them.
+// A frame is never counted, so its header's count says its size instead:
+// what an async backtrace walks a slab's frames by (tasks.c).
 void *sable_frame_alloc(int64_t size) {
-    return slab_push(current_frames, (size_t)size);
+    void *frame = slab_push(current_frames, (size_t)size);
+    ((SableObject *)frame)->strong = (uint32_t)size;
+    return frame;
 }
 
 void sable_frame_free(void *frame) {

@@ -99,10 +99,11 @@ enum {
     PENDING_BLOCKING, // its blocking work to be done, on the blocking pool
 };
 
-// An actor's serial executor: two words at the end of the actor object.
+// An actor's serial executor: three words at the end of the actor object.
 typedef struct SableExecutor {
     uintptr_t inbox;          // tasks waiting, the latest first, with EXECUTOR_HELD
     struct SableTask *queue;  // tasks waiting, in turn order: the holder's alone
+    struct SableTask *holder; // the task holding it, when known: what a waiter escalates
 } SableExecutor;
 
 enum { EXECUTOR_HELD = 1 };
@@ -182,7 +183,7 @@ static SpinLock tree_lock;
 static SableTask *alive;
 
 // What the executor has done, for SABLE_STATS; under tree_lock.
-static int64_t tasks_spawned, tasks_alive, tasks_most, tasks_dropped;
+static int64_t tasks_spawned, tasks_alive, tasks_most, tasks_dropped, actor_escalations;
 
 // ---- Sharing -----------------------------------------------------------------
 
@@ -872,8 +873,10 @@ static void io_source_free(IoSource *source) {
 }
 
 // The socket watched from now on: its handle, or 0 — the socket closed —
-// when the reactor will not take it.
-static int64_t io_source_open(PlatformSocket socket) {
+// when the reactor will not take it. 'ready' is what it is taken to be
+// ready for until the reactor says more: both, to be tried first; for a
+// connection still being made, not writing.
+static int64_t io_source_open(PlatformSocket socket, uint8_t ready) {
     if (!reactor_start()) {
         socket_close(socket);
         return 0;
@@ -896,8 +899,7 @@ static int64_t io_source_open(PlatformSocket socket) {
     spin_lock(&source->lock);
     __atomic_store_n(&source->socket, socket, __ATOMIC_RELEASE);
     source->port = 0;
-    // Tried first, waited for once the call would block.
-    source->ready = REACTOR_READABLE | REACTOR_WRITABLE;
+    source->ready = ready;
     source->waiter[0] = source->waiter[1] = NULL;
     int64_t handle = source_handle(source);
     spin_unlock(&source->lock);
@@ -1206,18 +1208,32 @@ static SableExecutor *executor_of(void *actor) {
     return actor;
 }
 
-// The actor taken, if no one holds it.
-static bool executor_try_take(SableExecutor *executor) {
+static void escalate(SableTask *task, int64_t priority);
+
+// The actor taken by the task, if no one holds it.
+static bool executor_try_take(SableExecutor *executor, SableTask *task) {
     uintptr_t free_now = 0;
-    return __atomic_compare_exchange_n(&executor->inbox, &free_now, EXECUTOR_HELD, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+    if (!__atomic_compare_exchange_n(&executor->inbox, &free_now, EXECUTOR_HELD, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+        return false;
+    }
+
+    __atomic_store_n(&executor->holder, task, __ATOMIC_RELEASE);
+    return true;
 }
 
 // The actor taken for the task, or the task in its inbox, to be handed it.
+// A task that waits escalates the holder to its own priority, so that a
+// lower-priority holder, queued behind others, does not keep it waiting
+// (docs/06 §6.7). The holder is read under the tree's lock: a task is freed
+// only under it, and lets the actor go — clearing 'holder' — before.
 static bool executor_take_or_wait(SableExecutor *executor, SableTask *task) {
+    // Read now: once in the inbox, the task is another thread's to run.
+    int64_t priority = __atomic_load_n(&task->priority, __ATOMIC_RELAXED);
     uintptr_t inbox = __atomic_load_n(&executor->inbox, __ATOMIC_RELAXED);
     for (;;) {
         if (inbox == 0) {
             if (__atomic_compare_exchange_n(&executor->inbox, &inbox, EXECUTOR_HELD, true, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+                __atomic_store_n(&executor->holder, task, __ATOMIC_RELEASE);
                 return true;
             }
 
@@ -1226,6 +1242,14 @@ static bool executor_take_or_wait(SableExecutor *executor, SableTask *task) {
 
         task->next_mail = (SableTask *)(inbox & ~(uintptr_t)EXECUTOR_HELD);
         if (__atomic_compare_exchange_n(&executor->inbox, &inbox, (uintptr_t)task | EXECUTOR_HELD, true, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
+            spin_lock(&tree_lock);
+            SableTask *holder = __atomic_load_n(&executor->holder, __ATOMIC_ACQUIRE);
+            if (holder != NULL && holder != task && __atomic_load_n(&holder->priority, __ATOMIC_RELAXED) < priority) {
+                escalate(holder, priority);
+                actor_escalations++;
+            }
+
+            spin_unlock(&tree_lock);
             return false;
         }
     }
@@ -1266,6 +1290,7 @@ static void executor_release(void *actor) {
             break;
         }
 
+        __atomic_store_n(&executor->holder, NULL, __ATOMIC_RELEASE);
         uintptr_t held = EXECUTOR_HELD;
         if (__atomic_compare_exchange_n(&executor->inbox, &held, 0, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
             return;
@@ -1275,6 +1300,7 @@ static void executor_release(void *actor) {
     SableTask *next = executor->queue;
     executor->queue = next->next_mail;
     next->held = actor;
+    __atomic_store_n(&executor->holder, next, __ATOMIC_RELEASE);
     schedule(next);
 }
 
@@ -1770,7 +1796,7 @@ bool sable_actor_hop(void *actor) {
         here = !on_main_thread || worker_count <= 0 || task == &main_task;
     } else if (actor == MAIN_ACTOR) {
         here = on_main_thread;
-    } else if (executor_try_take(executor_of(actor))) {
+    } else if (executor_try_take(executor_of(actor), task)) {
         task->held = actor;
         here = true;
     }
@@ -2186,8 +2212,96 @@ void sable_tasks_drain(void) {
     free(stuck);
 }
 
+// ---- Async backtraces ----------------------------------------------------------
+
+// A trap's backtrace (traps.c) shows the thread's frames: the running task's
+// async calls among them, each its function's resume function, polled from
+// the task's root, then the executor's. What it cannot show is where the
+// task came from: the task that spawned it is suspended, its calls on no
+// thread's stack. They are in its slab, though — a frame for each call not
+// yet finished, from the root up, each starting with its object header,
+// whose count says its size (frames.c), then its resume function and its
+// state (AsyncLowering's frame head) — so
+// they are read from there: the running task's, then its parent's, and so on
+// up to the program's own task. Read as the program stops, while the other
+// threads run on: the frames of a task another thread resumes meanwhile may
+// be seen part-way through a change, which a backtrace can live with.
+enum { ASYNC_DEPTH = 64 };
+
+// The frames in a slab, the oldest first, at most 'capacity': how many.
+static int slab_frames(const FrameSlab *slab, char *first, void **frames, int capacity) {
+    // Its chunks, the latest first, and where each region of frames ends.
+    FrameChunk *chunks[64];
+    int chunk_count = 0;
+    for (FrameChunk *chunk = slab->chunk; chunk != NULL && chunk_count < 64; chunk = chunk->previous) {
+        chunks[chunk_count++] = chunk;
+    }
+
+    int count = 0;
+    for (int region = chunk_count; region >= 0 && count < capacity; region--) {
+        char *at = region == chunk_count ? first : chunk_frames(chunks[region]);
+        char *end = region == 0 ? slab->top : chunks[region - 1]->previous_top;
+        while (at < end && count < capacity) {
+            uint32_t size = ((const SableObject *)at)->strong;
+            if (size < sizeof(SableObject) + 3 * sizeof(void *)) {
+                break;
+            }
+
+            frames[count++] = at;
+            at += frame_round(size);
+        }
+    }
+
+    return count;
+}
+
+// A frame's function, by its resume function's name less '$resume'.
+static void name_async_frame(void *frame, char *text, size_t size) {
+    void *resume = *(void **)((char *)frame + sizeof(SableObject));
+    name_frame((char *)resume + 1, text, size);
+    char *suffix = strstr(text, "$resume");
+    if (suffix != NULL) {
+        *suffix = '\0';
+    }
+}
+
+static void print_task_backtrace(void) {
+    SableTask *task = current_task;
+    int index = 0;
+    for (int depth = 0; task != NULL && depth < 16; depth++) {
+        void *frames[ASYNC_DEPTH];
+        int count = slab_frames(&task->frames, task->first_frames, frames, ASYNC_DEPTH);
+        if (count > 0 && index == 0) {
+            fprintf(stderr, "async backtrace:\n");
+        }
+
+        if (count > 0 && depth > 0) {
+            fprintf(stderr, "  in the task that spawned it, waiting:\n");
+        }
+
+        for (int i = count - 1; i >= 0; i--) {
+            char text[600];
+            name_async_frame(frames[i], text, sizeof text);
+            int64_t state = *(int64_t *)((char *)frames[i] + sizeof(SableObject) + 2 * sizeof(void *));
+            // The running task's innermost frame is where the trap is; the
+            // others are at the await they were last suspended at.
+            if (strstr(text, "$task.run") != NULL) {
+                snprintf(text, sizeof text, "(the task's body)");
+            }
+
+            if ((depth == 0 && i == count - 1) || state <= 0) {
+                fprintf(stderr, "  %2d  %s\n", index++, text);
+            } else {
+                fprintf(stderr, "  %2d  %s, at await %lld\n", index++, text, (long long)state);
+            }
+        }
+
+        task = task->parent;
+    }
+}
+
 static void report_tasks(void) {
-    fprintf(stderr, "sable: tasks %lld, %lld at most at once, %lld dropped, %lld bytes each, %d workers\n",
+    fprintf(stderr, "sable: tasks %lld, %lld at most at once, %lld dropped, %lld bytes each, %d workers, %lld actor holders escalated\n",
         (long long)tasks_spawned, (long long)tasks_most, (long long)tasks_dropped, (long long)sizeof(SableTask),
-        worker_count < 0 ? 0 : worker_count);
+        worker_count < 0 ? 0 : worker_count, (long long)actor_escalations);
 }

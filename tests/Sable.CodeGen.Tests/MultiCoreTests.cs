@@ -420,4 +420,114 @@ public sealed class MultiCoreTests {
         Assert.Matches(@"tasks 100000, \d+ at most at once, 0 dropped", run.Stderr);
         Assert.Equal(Environment.ProcessorCount.ToString(CultureInfo.InvariantCulture), Regex.Match(run.Stderr, @"(\d+) workers").Groups[1].Value);
     }
+
+    /// <summary>
+    ///     Sixteen tasks spawned inside an actor's method each add to its
+    ///     state from their closures: the read and the write hop onto the
+    ///     actor together, so no increment is lost.
+    /// </summary>
+    [Fact]
+    public void AnActorsStateWrittenFromItsSpawnedClosuresLosesNothing() =>
+        Assert.Equal(
+            "16000\n",
+            AssertAgree(AsyncProgram("""
+                    actor Counter {
+                        var count = 0
+
+                        fn run() async -> Int {
+                            var tasks: Task<Void>[>..] = []
+                            for _ in 0..<16 {
+                                tasks.append(Task.spawn {
+                                    for _ in 0..<1000 {
+                                        count += 1
+                                        await Task.yield()
+                                    }
+                                })
+                            }
+                            for task in tasks {
+                                await task.value
+                            }
+                            return count
+                        }
+                    }
+                    """, """
+                    print(await Counter().run())
+                """)).Stdout);
+
+    /// <summary>
+    ///     A high-priority task waiting for an actor that background tasks
+    ///     keep busy escalates the one holding it; the program ends with
+    ///     every call made.
+    /// </summary>
+    [Fact]
+    public void WaitingForAnActorEscalatesItsHolder() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var run = BuildAndRun(AsyncProgram(Spin + """
+
+                    actor Busy {
+                        var calls = 0
+
+                        fn work(_ rounds: Int) -> Int {
+                            calls += 1
+                            return spin(calls, rounds)
+                        }
+                    }
+                    """, """
+                    let busy = Busy()
+                    var low: Task<Int>[>..] = []
+                    for _ in 0..<32 {
+                        low.append(Task.spawn(priority: .background) { await busy.work(200_000) })
+                    }
+                    let high = Task.spawn(priority: .high) { await busy.work(10) }
+                    var total = await high.value
+                    for task in low {
+                        total = (total + await task.value) % 1000003
+                    }
+                    print(total >= 0)
+                """), environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" });
+        Assert.Equal("true\n", run.Stdout);
+        Assert.Matches(@"\d+ actor holders escalated", run.Stderr);
+    }
+
+    /// <summary>
+    ///     A trap in a task, with SABLE_BACKTRACE set, is followed by its
+    ///     async backtrace: its own calls, then those of the task that
+    ///     spawned it, read from the slabs where they wait.
+    /// </summary>
+    [Fact]
+    public void ATrapInATaskShowsTheTasksThatLedToIt() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var run = BuildAndRun(AsyncProgram("""
+                    fn fail(_ values: Int[>..]) async -> Int {
+                        await Task.yield()
+                        return values[5]
+                    }
+
+                    fn child() async -> Int {
+                        let n = await fail([1, 2])
+                        return n
+                    }
+
+                    fn parent() async -> Int {
+                        let task = Task.spawn { await child() }
+                        return await task.value
+                    }
+                    """, """
+                    print(await parent())
+                """), optimise: false, environment: new Dictionary<string, string> { ["SABLE_BACKTRACE"] = "1", ["SABLE_WORKERS"] = "0" });
+        Assert.NotEqual(0, run.ExitCode);
+        var text = run.Stderr;
+        Assert.Contains("async backtrace:", text, StringComparison.Ordinal);
+        var fail = text.IndexOf("Test.fail", text.IndexOf("async backtrace:", StringComparison.Ordinal), StringComparison.Ordinal);
+        var child = text.IndexOf("Test.child", Math.Max(fail, 0), StringComparison.Ordinal);
+        var spawned = text.IndexOf("in the task that spawned it, waiting:", StringComparison.Ordinal);
+        var parent = text.IndexOf("Test.parent, at await", StringComparison.Ordinal);
+        Assert.True(fail >= 0 && child > fail && spawned > child && parent > spawned, text);
+    }
 }

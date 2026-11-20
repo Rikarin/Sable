@@ -1691,7 +1691,24 @@ public sealed partial class LlvmEmitter {
 
                     var slot = $"%p{i}.debug";
                     var declarations = new List<(string Variable, string Expression)>();
-                    if (i < function.ParameterNames.Count) {
+                    if (argument.Type == SilType.Object && ContextType(argument) is { IsCoroutineFrame: true } frame) {
+                        // An async function's resume function is given its
+                        // frame, where its parameters and locals live across
+                        // its awaits (AsyncLowering): each shown by its own
+                        // name — a local's field is the name and a number —
+                        // through the box of one a closure captures.
+                        foreach (var (fieldName, fieldType, offset) in ObjectFields(frame)) {
+                            if (fieldName.StartsWith('$') || fieldType == SilType.Unit) {
+                                continue;
+                            }
+
+                            var cut = fieldName.LastIndexOf('$');
+                            var shown = cut > 0 && fieldName[(cut + 1)..].All(char.IsAsciiDigit) ? fieldName[..cut] : fieldName;
+                            declarations.Add(BoxedType(fieldType) is { } inner
+                                ? (Debug.Variable(shown, _scope, file, line, inner), $"DW_OP_deref, DW_OP_plus_uconst, {offset}, DW_OP_deref, DW_OP_plus_uconst, {ObjectHeaderSize}")
+                                : (Debug.Variable(shown, _scope, file, line, fieldType), $"DW_OP_deref, DW_OP_plus_uconst, {offset}"));
+                        }
+                    } else if (i < function.ParameterNames.Count) {
                         declarations.Add((Debug.Variable(function.ParameterNames[i], _scope, file, line, argument.Type, i + 1), ""));
                     } else if (argument.Type == SilType.Object && ContextType(argument) is { } context) {
                         if (BoxedType(context) is { } boxed) {
@@ -2775,6 +2792,27 @@ public sealed partial class LlvmEmitter {
                 case "share":
                     module.Ownership(_out, "  ", Witnessing.Share, builtin.Operands[0].Type, operands[0], _dbg);
                     return;
+
+                // A value stored into an object: shared too, if the object
+                // is — its header's flag word, at 12, has SABLE_SHARED (512).
+                case "share_into": {
+                    var at = Fresh();
+                    var flags = Fresh();
+                    var bit = Fresh();
+                    var shared = Fresh();
+                    Line($"{at} = getelementptr inbounds i8, ptr {operands[0]}, i64 12");
+                    Line($"{flags} = load atomic i32, ptr {at} monotonic, align 4");
+                    Line($"{bit} = and i32 {flags}, 512");
+                    Line($"{shared} = icmp ne i32 {bit}, 0");
+                    var share = NewLabel("share");
+                    var after = NewLabel("shared");
+                    Line($"br i1 {shared}, label %{share}, label %{after}");
+                    Continue(share);
+                    module.Ownership(_out, "  ", Witnessing.Share, builtin.Operands[1].Type, operands[1], _dbg);
+                    Line($"br label %{after}");
+                    Continue(after);
+                    return;
+                }
 
                 // Actors: where the running task is, by identity (an actor
                 // object's address, 1 for the main actor, 0 for anywhere), and

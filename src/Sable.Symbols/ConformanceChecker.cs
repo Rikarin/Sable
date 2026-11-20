@@ -864,6 +864,7 @@ internal static class ConformanceChecker {
                 return;
             }
 
+            ReportIsolatedWitness(type, protocol, candidate, diagnostics, required);
             return;
         }
 
@@ -936,6 +937,10 @@ internal static class ConformanceChecker {
 
         var expected = arguments.Apply(SubstituteSelf(requirement.Type, protocol, type));
         if (candidate.Type.Equals(expected) || candidate.Type.IsError || expected.IsError) {
+            if (candidate is { IsStatic: false } && (candidate.IsMutable || candidate.IsComputed)) {
+                ReportIsolatedWitness(type, protocol, candidate, diagnostics, required);
+            }
+
             return;
         }
 
@@ -949,6 +954,44 @@ internal static class ConformanceChecker {
             required
         );
     }
+
+    /// <summary>
+    ///     An actor's isolated member — not static, not 'nonisolated', its
+    ///     state not a 'let' — meets no requirement (SYNTAX.md §19): code
+    ///     reaching it through the protocol, as a generic's or an
+    ///     existential's, would call into the actor without waiting its
+    ///     turn. Swift's rule, for synchronous requirements and asynchronous
+    ///     ones alike here.
+    /// </summary>
+    static void ReportIsolatedWitness(NamedTypeSymbol type, NamedTypeSymbol protocol, Symbol witness, DiagnosticBag diagnostics, DiagnosticLocation? required) {
+        if (type.TypeKind != TypeKind.Actor || witness is FunctionSymbol { IsStatic: true } || witness is FunctionSymbol { FunctionKind: FunctionKind.Initializer }
+            || witness.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol } || DeclaredNonisolated(witness)) {
+            return;
+        }
+
+        Report(
+            diagnostics,
+            ErrorCode.ERR_IsolatedWitness,
+            witness,
+            $"'{type.Name}.{witness.Name}' is isolated to the actor, so it cannot meet '{protocol.Name}''s requirement: "
+            + "code reaching it through the protocol would not wait for the actor; declare it 'nonisolated', reaching only what is",
+            required
+        );
+    }
+
+    static bool DeclaredNonisolated(Symbol member) =>
+        member.DeclaringSyntax.Any(static syntax => {
+            for (SyntaxNode? node = syntax; node is not null; node = node.Parent) {
+                switch (node) {
+                    case FunctionDeclarationSyntax function:
+                        return function.Modifiers.Any(static m => m.Kind == SyntaxKind.NonisolatedKeyword);
+                    case FieldDeclarationSyntax field:
+                        return field.Modifiers.Any(static m => m.Kind == SyntaxKind.NonisolatedKeyword);
+                }
+            }
+
+            return false;
+        });
 
     static bool Matches(
         FunctionSymbol requirement,

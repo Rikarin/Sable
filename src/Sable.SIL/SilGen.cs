@@ -1885,6 +1885,7 @@ public sealed partial class SilGen {
                 if (named.TypeKind == TypeKind.Actor) {
                     classType.Fields.Add((ExecutorField, SilType.Int));
                     classType.Fields.Add((ExecutorQueueField, SilType.Int));
+                    classType.Fields.Add((ExecutorHolderField, SilType.Int));
                 }
 
                 return classType;
@@ -5043,7 +5044,7 @@ public sealed partial class SilGen {
 
                 case BoundExpressionStatement expression:
                     // An assignment on its own: its value, which nothing reads, is not made.
-                    if ((expression.Expression is BoundAssignment assignment ? Assignment(assignment) : Expression(expression.Expression)) is { } discarded) {
+                    if ((expression.Expression is BoundAssignment assignment ? OnActorFor(assignment, () => Assignment(assignment)) : Expression(expression.Expression)) is { } discarded) {
                         Destroy(discarded);
                     }
 
@@ -6733,7 +6734,9 @@ public sealed partial class SilGen {
         ///     result. Most stores — a setter's, a subscript's, 'array_set', a
         ///     non-trivial value's — give nothing back of their own.
         /// </summary>
-        SilValue? AssignmentValue(BoundAssignment assignment) {
+        SilValue? AssignmentValue(BoundAssignment assignment) => OnActorFor(assignment, () => AssignmentValueHere(assignment));
+
+        SilValue? AssignmentValueHere(BoundAssignment assignment) {
             // 'a.next?.v = 9' stores only when there is a next, evaluating the
             // value only then: its value is optional.
             if (assignment.Target is BoundFieldAccess { Receiver: { } chainedFrom } chainedTarget

@@ -52,6 +52,7 @@ public sealed partial class Compilation {
         ["immortal"] = (AttributeTargets.Field, "a 'static let'"),
         ["flags"] = (AttributeTargets.Enum, "an enum"),
         ["escaping"] = (AttributeTargets.Parameter, "a closure parameter"),
+        ["Sendable"] = (AttributeTargets.Parameter, "a closure parameter"),
         ["polymorphic"] = (AttributeTargets.Callable, "a generic function"),
         ["deprecated"] = (AttributeTargets.Any & ~AttributeTargets.Module, "a declaration"),
         ["available"] = (AttributeTargets.Any & ~AttributeTargets.Module, "a declaration"),
@@ -183,9 +184,9 @@ public sealed partial class Compilation {
 
             CheckAttributeArguments(attribute, name);
 
-            if (name == "escaping" && attribute.Parent is ParameterSyntax or AttributedTypeSyntax { Parent: ParameterSyntax }) {
+            if (name is "escaping" or "Sendable" && attribute.Parent is ParameterSyntax or AttributedTypeSyntax { Parent: ParameterSyntax }) {
                 var escaping = attribute;
-                TypeBinder.DeferLate(() => CheckEscaping(escaping));
+                TypeBinder.DeferLate(() => CheckEscaping(escaping, name));
             }
 
             if (name == "main" && attribute.Parent is FunctionDeclarationSyntax mainFunction) {
@@ -209,10 +210,12 @@ public sealed partial class Compilation {
 
     /// <summary>
     ///     <c>@escaping</c> says a closure parameter may outlive the call
-    ///     (SYNTAX.md §22); on a parameter of any other type it says nothing,
-    ///     so it is not written there.
+    ///     (SYNTAX.md §22), and <c>@Sendable</c> that a closure passed to it
+    ///     runs alongside the caller, in a task of its own (SYNTAX.md §19); on
+    ///     a parameter of any other type either says nothing, so it is not
+    ///     written there.
     /// </summary>
-    void CheckEscaping(AttributeSyntax attribute) {
+    void CheckEscaping(AttributeSyntax attribute, string name) {
         var syntax = attribute.Parent as ParameterSyntax ?? (ParameterSyntax)attribute.Parent!.Parent!;
         var owner = syntax.Parent;
         while (owner is not null && GetDeclaredSymbol(owner) is null) {
@@ -229,7 +232,7 @@ public sealed partial class Compilation {
             ReportDeclaration(
                 ErrorCode.ERR_AttributeDoesNotApply,
                 attribute.Span,
-                $"'@escaping' applies to a closure parameter, and '{parameter.Name}' is of type '{type.ToDisplayString()}'"
+                $"'@{name}' applies to a closure parameter, and '{parameter.Name}' is of type '{type.ToDisplayString()}'"
             );
         }
     }
@@ -454,7 +457,9 @@ public sealed partial class Compilation {
                 fieldType = fieldType is OptionalTypeSymbol optional ? optional.UnderlyingType : ((ArrayTypeSymbol)fieldType).ElementType;
             }
 
-            if (fieldType is NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } held
+            // An actor's state changes, but only on the actor, which every
+            // task waits for: holding one is as safe as holding a value.
+            if (fieldType is NamedTypeSymbol { TypeKind: TypeKind.Class } held
                 && !(held.OriginalDefinition.DeclaringSyntax is [var heldDeclaration, ..]
                     && AttributesOf(heldDeclaration).Any(static a => AttributeName(a) == "immutable"))) {
                 ReportDeclaration(
@@ -636,7 +641,7 @@ public sealed partial class Compilation {
                 );
                 return;
 
-            case "packed" or "discardable" or "frozen" or "immutable" or "immortal" or "polymorphic" or "noncopy" or "escaping" or "flags" or "MainActor"
+            case "packed" or "discardable" or "frozen" or "immutable" or "immortal" or "polymorphic" or "noncopy" or "escaping" or "Sendable" or "flags" or "MainActor"
                 or "reflectable" or "inline_layout" or "indirect" or "main" or "intrinsic"
                 when attribute.ArgumentList is not null:
                 Malformed($"'@{name}' takes no arguments");

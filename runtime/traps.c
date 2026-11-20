@@ -31,6 +31,8 @@ static int backtrace_wanted(void) {
 // The frames of the calls that led to a trap, on standard error: from the
 // caller of the runtime function the compiled code called, unless 'full'
 // asks for those too. 'own' is how many frames are the runtime's.
+static void print_task_backtrace(void);
+
 __attribute__((noinline)) static void print_backtrace(int own) {
     int wanted = backtrace_wanted();
     if (wanted == 0) {
@@ -46,6 +48,8 @@ __attribute__((noinline)) static void print_backtrace(int own) {
         name_frame(frames[i], text, sizeof text);
         fprintf(stderr, "  %2d  %s\n", i - first, text);
     }
+
+    print_task_backtrace();
 }
 
 // The trap, said and stopped at; 'own' as for print_backtrace.

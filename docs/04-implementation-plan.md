@@ -1362,9 +1362,11 @@ other leaks nothing.
   what it waits for and its children; one queued already is queued again
   in its new band, and whichever entry is taken first runs it.
   `Task.currentPriority` is still the priority given.
-- *Actors.* Each actor has a serial executor, two words after its fields:
-  an inbox a task pushes itself onto without a lock when the actor is
-  held, and a queue its holder keeps, by band then by arrival. A call into
+- *Actors.* Each actor has a serial executor, three words after its
+  fields: an inbox a task pushes itself onto without a lock when the actor
+  is held, a queue its holder keeps, by band then by arrival, and the
+  holder, which a task that waits escalates to its own priority (the
+  fourth stage; `SABLE_STATS` counts it). A call into
   an actor from outside it, a read of its state, or a call into
   `@MainActor` code hops (`sable_actor_hop`): the task takes the actor if
   it is free and goes on where it is — no suspension — or waits its turn,
@@ -1475,14 +1477,51 @@ channels between four senders and four receivers, main-actor code called
 from eight tasks, a CPU-bound fan-out. It found, and so no longer does,
 the allocator's slab counts updated under different classes' locks.
 
-Not yet: async backtraces; task-local values; Sendable
-checking of what a spawned closure captures (a non-Sendable class
-captured by two tasks races on its fields, though its counts are
-atomic, and a value stored later into such a shared object, or read
-through a weak reference from another task, is not marked shared); a
-write to an actor's state from a closure inside it does not hop; a call
-through a closure, a protocol or an existential reaches an actor's
-method without hopping. A drop runs no defers of the async functions
+**What crosses, checked** — the fourth stage (`tests/negative/85-task-captures.sb`,
+`86-actor-isolation-holes.sb`, `MultiCoreTests`).
+
+- *A task's captures.* What `Task.spawn`'s, `Task.detached`'s, a group's
+  `spawn`'s, `Task.blocking`'s or an `async let`'s closure captures must
+  be Sendable, and a `var` is captured only by its value (S3236): a class
+  two tasks shared raced on its fields. The parameters that run a closure
+  so are declared `@Sendable` (an attribute of a closure parameter, as
+  `@escaping` is), and take a closure written there — whose captures are
+  checked — a named function, or another `@Sendable` parameter. In an
+  `unsafe` block the programmer vouches for what is shared. `Task` is
+  `@immutable`, so a handle crosses; an `@immutable` class may hold an
+  actor.
+- *What is reached later.* A value stored into a field of an object that
+  is shared already is shared as it is stored (`share_into`, a test of the
+  header's bit, before every store of a value holding references into a
+  class's field), and an object a weak reference names is shared as the
+  first one is made, so a load through it on another thread never races a
+  plain count.
+- *Actor state from closures.* An assignment to an actor's state from an
+  async closure written inside it — `Task.spawn { count += 1 }` in an
+  actor's method — hops onto the actor for the read and the write
+  together, as its reads and calls did. A closure that cannot wait, run on
+  another thread (`Task.blocking`'s), may not touch an actor's state at all
+  (S3238).
+- *Calls that would not wait* are rejected, as Swift rejects them (S3237):
+  an actor's isolated member cannot meet a protocol's requirement — code
+  reaching it through a generic or an existential would call straight in —
+  and an isolated method cannot be taken as a value from outside its actor.
+  A `nonisolated` member can do both. (Swift lets an isolated method meet
+  an *async* requirement through a thunk that hops; that is not built.)
+
+**Debugging** — the fourth stage. An async function's resume function
+declares its frame's fields to the debugger as its variables — its
+parameters and the locals it keeps across its awaits, by their own names,
+through the box of one a closure captures — so lldb shows them in a
+suspended-and-resumed function as in any other
+(`DebuggerTests.LldbShowsTheLocalsOfAnAsyncFunction`). A trap's backtrace
+with `SABLE_BACKTRACE` set is followed by the *async backtrace*: the
+running task's calls, then those of the task that spawned it, waiting,
+and so on up to the program's own task, read from each task's slab — a
+frame for each call not yet finished, named by its resume function, with
+the await it is at.
+
+Not yet: task-local values. A drop runs no defers of the async functions
 dropped, only those of a generator whose object goes with them.
 
 ### Generators, as implemented

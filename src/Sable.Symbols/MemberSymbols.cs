@@ -377,6 +377,14 @@ public sealed class ParameterSymbol(
     ///     does not escape (SYNTAX.md §17).
     /// </summary>
     public bool IsEscaping { get; internal set; }
+
+    /// <summary>
+    ///     <c>@Sendable</c>: a closure passed here runs alongside the caller,
+    ///     as a task of its own or on another thread, so what it captures must
+    ///     be Sendable, and no 'var' (SYNTAX.md §19). What is passed is a
+    ///     closure written there, a named function, or such a parameter.
+    /// </summary>
+    public bool IsSendable { get; internal set; }
 }
 
 public enum ParameterModifier {

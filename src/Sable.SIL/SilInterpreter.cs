@@ -1234,7 +1234,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return null;
 
             // One thread runs every task here: nothing is shared between threads.
-            case "share":
+            case "share" or "share_into":
                 return null;
 
             // An actor's identity: the interpreter's hops never wait, so need none.

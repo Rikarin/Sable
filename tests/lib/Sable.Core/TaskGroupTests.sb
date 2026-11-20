@@ -62,7 +62,10 @@ fn theChildrenLeftAreWaitedForAsTheScopeEnds() async {
     await withTaskGroup(of: Void.self) { group in
         group.spawn {
             await bodyDone.wait()
-            log.add("child")
+            // Shared, but in turn: the latch, or the group's end, orders them.
+            unsafe {
+                log.add("child")
+            }
         }
         log.add("body")
         await bodyDone.open()
@@ -144,7 +147,10 @@ fn aThrowingGroupsBodyThatThrowsCancelsTheChildrenLeft() async {
     let thrown = try? await withThrowingTaskGroup(of: Int.self) { group in
         group.spawn {
             let slept = (try? await Task.sleep(nanoseconds: 10_000_000_000)) != none
-            log.add(slept ? "ran" : "cancelled")
+            // Shared, but in turn: the latch, or the group's end, orders them.
+            unsafe {
+                log.add(slept ? "ran" : "cancelled")
+            }
             return 1
         }
         assert(!group.isCancelled)

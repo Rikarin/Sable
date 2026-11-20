@@ -314,9 +314,13 @@ public sealed class StructuredConcurrencyTests {
                 """, """
                     let box = Box()
                     let a = Task.detached {
-                        let other = box.task!
-                        box.task = none
-                        return await deep(2, other)
+                        // Shared on purpose, on one thread: the cycle dropped here.
+                        var other: Task<Int>? = none
+                        unsafe {
+                            other = box.task
+                            box.task = none
+                        }
+                        return await deep(2, other!)
                     }
                     let b = Task.detached {
                         let n = await a.value

@@ -159,7 +159,10 @@ fn aCancellationHandlerRunsAsTheTaskIsCancelled() async {
             await installed.open()
             return await nap()
         }, onCancel: {
-            ran.set()
+            // Set as the task is cancelled, and read by the canceller after.
+            unsafe {
+                ran.set()
+            }
         })
     }
     await installed.wait()
@@ -176,9 +179,14 @@ fn aCancellationHandlerRunsAtOnceIfTheTaskIsCancelledAlready() async {
     let task = Task.spawn {
         await cancelled.wait()
         return await withTaskCancellationHandler(operation: {
-            ran.value
+            unsafe {
+                return ran.value
+            }
         }, onCancel: {
-            ran.set()
+            // Set as the task is cancelled, and read by the canceller after.
+            unsafe {
+                ran.set()
+            }
         })
     }
     task.cancel()
@@ -195,7 +203,10 @@ fn aCancellationHandlerIsRemovedOnceItsOperationEnds() async {
         let value = await withTaskCancellationHandler(operation: {
             1
         }, onCancel: {
-            ran.set()
+            // Set as the task is cancelled, and read by the canceller after.
+            unsafe {
+                ran.set()
+            }
         })
         await removed.open()
         await cancelled.wait()

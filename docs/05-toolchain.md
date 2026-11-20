@@ -443,8 +443,8 @@ The SIL passes each opt-level runs (`SilPassManager.ForLevel`):
 |---|---|
 | `0` | the ARC passes (slot promotion, copy forwarding, borrowing, stack promotion); none at all with debug information, so every local stays in its slot |
 | `1` | devirtualisation and block merging, then the ARC passes: nothing inlined or duplicated, every call a frame |
-| `2`, `3` | all of them: devirtualisation, inlining, the ARC passes, loop versioning; `3` differs in LLVM's passes only |
-| `s` | as `2` without loop versioning, which copies a loop for its fast path |
+| `2`, `3` | all of them: devirtualisation, speculative devirtualisation (a vtable call that can reach one or two small overrides tests for each and inlines it), inlining, the ARC passes, loop versioning; `3` differs in LLVM's passes only |
+| `s` | as `2` without loop versioning, which copies a loop for its fast path, or speculative devirtualisation, which copies a call for each guess |
 | `z` | as `s` without the inliner, which copies a callee into every caller |
 
 An optimised program compiled package by package (`lto = "thin"`, the

@@ -38,13 +38,18 @@ public static class SilPassManager {
 
     /// <summary>The passes an optimised build runs, in order.</summary>
     /// <remarks>
-    ///     Calls the vtable can only answer one way are made direct, then
-    ///     small callees inlined, and the chain of blocks each call leaves
+    ///     Calls the vtable can only answer one way are made direct, and
+    ///     those it answers with one of a few small overrides test for each
+    ///     first; loads only borrowed for a call are borrowed before the call
+    ///     is inlined, as afterwards the borrow would span the callee's
+    ///     blocks; then small callees are inlined, and the chain of blocks each call leaves
     ///     merged, so that the passes after see the callee's body in the
     ///     caller's; what is left is tidied last. An unoptimised build keeps
     ///     its calls, so that a trap's backtrace names every frame.
     /// </remarks>
-    public static IReadOnlyList<ISilPass> Optimising { get; } = [new Devirtualise(), new Inliner(), new Simplify(), ..Default, new VersionLoops(), new Simplify()];
+    public static IReadOnlyList<ISilPass> Optimising { get; } = [
+        new Devirtualise(), new SpeculativeDevirtualise(), new BorrowLoads(), new Inliner(), new Simplify(), ..Default, new VersionLoops(), new Simplify(),
+    ];
 
     /// <summary>
     ///     The passes a build at a profile's <c>opt-level</c> runs (docs/05
@@ -59,7 +64,10 @@ public static class SilPassManager {
     ///             SIL wrote, and nothing is duplicated.
     ///         </item>
     ///         <item><c>2</c> and <c>3</c>: <see cref="Optimising" />. What <c>3</c> adds is LLVM's.</item>
-    ///         <item><c>s</c>: <see cref="Optimising" /> without loop versioning, which copies a loop for its fast path.</item>
+    ///         <item>
+    ///             <c>s</c>: <see cref="Optimising" /> without loop versioning, which copies a loop for its fast
+    ///             path, or speculative devirtualisation, which copies a call for each guess.
+    ///         </item>
     ///         <item><c>z</c>: without the inliner too, which copies callees into every caller.</item>
     ///     </list>
     /// </remarks>
@@ -68,7 +76,7 @@ public static class SilPassManager {
             "0" => Default,
             "1" => [new Devirtualise(), new Simplify(), ..Default],
             "2" or "3" => Optimising,
-            "s" => [new Devirtualise(), new Inliner(), new Simplify(), ..Default, new Simplify()],
+            "s" => [new Devirtualise(), new BorrowLoads(), new Inliner(), new Simplify(), ..Default, new Simplify()],
             "z" => [new Devirtualise(), new Simplify(), ..Default, new Simplify()],
             _ => throw new ArgumentOutOfRangeException(nameof(optLevel), optLevel, "an opt-level is 0, 1, 2, 3, s or z"),
         };

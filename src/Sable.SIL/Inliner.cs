@@ -35,8 +35,12 @@ namespace Sable.SIL;
 ///         since the branch it decides folds away with what it skips. A
 ///         callee with a loop is not inlined, nor one that never returns,
 ///         which is cold and whose frame a trap's backtrace shows, nor, into
-///         a loop, one that allocates: in its own frame what it makes can be
-///         on the stack, but not made in a loop.
+///         a loop, one that allocates something it does not return: in its
+///         own frame that can be on the stack, but in the caller's loop only
+///         if it is gone before the loop comes round, which the callee's
+///         blocks may not let it be. What it returns has left its frame
+///         anyway, so an initialiser is inlined, and the caller may then
+///         keep the object in its frame.
 ///     </para>
 ///     <para>
 ///         Callees are inlined into their callers bottom up, so a small
@@ -113,10 +117,11 @@ public sealed class Inliner : ISilPass {
             return false;
         }
 
-        // What a callee allocates stays in its frame, on the stack, where
-        // it does not escape; inlined into a loop, it would be made on the
-        // heap each time round, as an allocation in a loop is not promoted.
-        if (Allocates(callee) && InLoop(call.Block)) {
+        // What a callee allocates for itself stays in its frame, on the
+        // stack, where it does not escape; inlined into a loop, it may be
+        // made on the heap each time round, as an allocation in a loop is
+        // promoted only when it is gone within its block.
+        if (AllocatesForItself(callee) && InLoop(call.Block)) {
             return false;
         }
 
@@ -125,9 +130,20 @@ public sealed class Inliner : ISilPass {
         return Cost(callee, budget) <= budget && !Loops(callee);
     }
 
-    static bool Allocates(SilFunction function) =>
-        function.Blocks.SelectMany(static b => b.Instructions)
-            .Any(static i => i is AllocRefInst || i is BuiltinInst { Name: "inline_new" or "inline_new_stack" });
+    /// <summary>
+    ///     Whether the function allocates anything it does not return: what
+    ///     it returns, an initialiser's object, has left its frame anyway.
+    /// </summary>
+    static bool AllocatesForItself(SilFunction function) {
+        var returned = function.Blocks
+            .Select(static b => b.Terminator)
+            .OfType<ReturnInst>()
+            .Select(static r => r.Value is UpcastInst or UncheckedRefCastInst ? ((SilInstruction)r.Value).Operands[0] : r.Value)
+            .OfType<SilValue>()
+            .ToHashSet();
+        return function.Blocks.SelectMany(static b => b.Instructions)
+            .Any(i => (i is AllocRefInst || i is BuiltinInst { Name: "inline_new" or "inline_new_stack" }) && !returned.Contains(i));
+    }
 
     /// <summary>True when a block can be reached again from itself.</summary>
     static bool InLoop(SilBlock block) {

@@ -1268,8 +1268,11 @@ loop versioning, simplification again (#179).
   literal argument the callee branches on adds 8. A `try_apply` is inlined
   too, the callee's `throw` a branch to the error block. Not inlined: a
   callee with a loop, one that never returns (cold, and kept in a trap's
-  backtrace), and one that allocates into a loop, where what it makes would
-  no longer be promoted to the stack.
+  backtrace), and, into a loop, one that allocates what it does not return,
+  which in its own frame is on the stack but in the caller's loop only if
+  gone before the loop comes round. An initialiser, whose object leaves its
+  frame anyway, is inlined into a loop, where the object is then
+  promoted (§3.7).
 - **ARC.** Besides the passes of §3.1 and §3.7: a release is sunk past what
   only looks to pair with a copy's, which then goes (never past a call, a
   write, a release, or a `share`, which publishes to another task, so a

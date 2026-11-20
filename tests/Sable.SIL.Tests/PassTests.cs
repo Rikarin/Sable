@@ -457,6 +457,39 @@ public sealed class PassTests {
     }
 
     /// <summary>
+    ///     An initialiser is inlined into a loop: the object it returns has
+    ///     left its frame anyway, and in the caller's it is gone before the
+    ///     loop comes round, so it is made on the stack.
+    /// </summary>
+    [Fact]
+    public void AnInitialiserIsInlinedIntoALoopAndItsObjectMadeOnTheStack() {
+        var module = Lowered(
+            """
+            class Cell {
+                var v: Int
+                init(_ v: Int) { self.v = v }
+            }
+            fn looped(_ n: Int) -> Int {
+                var t = 0
+                var i = 0
+                while i < n {
+                    t = t + Cell(i).v
+                    i = i + 1
+                }
+                return t
+            }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        var looped = module.Find("M.looped")!;
+        Assert.False(Calls(looped, "M.Cell.init"));
+        Assert.True(Assert.Single(Instructions(looped).OfType<AllocRefInst>()).OnStack);
+        Assert.Equal(6L, new SilInterpreter(module).Run("M.looped", 4L));
+    }
+
+    /// <summary>
     ///     A call through the vtable that can reach a few small overrides
     ///     tests for each, calls it directly and inlines it; anything else —
     ///     here the base class itself — still goes through the vtable.

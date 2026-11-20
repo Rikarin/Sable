@@ -119,7 +119,7 @@ I8 I16 I32 I64 I128    U8 U16 U32 U64 U128
 Int UInt               // platform word size; Int is the default integer literal type
 F16 F32 F64
 Char                   // one Unicode scalar value
-String                 // UTF-8, growable
+String                 // UTF-8, growable; a range of one, text[a..<b], is a Substring
 Void                   // the unit type; written () in type position
 Never                  // the empty type; a function returning Never does not return
 ```
@@ -1220,6 +1220,7 @@ xs[^3...]     // the last three
 xs[^2...^1]   // the last two
 xs[..<^1]     // all but the last
 s[^1]         // a String's last character, found stepping back
+s[^4...]      // a String's last four, a Substring: a view of its bytes, not a copy
 ```
 
 A range with either bound written `^n` is a `RelativeRange`, which the
@@ -1228,7 +1229,8 @@ collection reads an element by a `FromEnd` — in constant time, `count - n`,
 on one with random access (every array, `List`, `Deque`), one step at a
 time back from the end on a `String` — and every collection has one
 slicing subscript, which takes `some RangeExpression`: any range of its
-indices, or a `RelativeRange`. On an array, neither a `FromEnd` nor a
+indices, or a `RelativeRange`. A String's gives a `Substring`, the
+string's own bytes viewed, not copied (docs/03 §3.10). On an array, neither a `FromEnd` nor a
 `RelativeRange` is made as the program runs: what is left after
 optimisation is arithmetic on the count, and the bounds check.
 

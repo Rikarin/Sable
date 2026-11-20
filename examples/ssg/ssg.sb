@@ -59,9 +59,10 @@ struct Site {
 /// The value of 'key: value' among the lines, or none.
 fn setting(_ lines: String[>..], _ key: String) -> String? {
     for line in lines {
-        if let colon = line.indexOf(':') {
-            if line.slice(from: 0, to: colon).trimmedEnd() == key {
-                return line.slice(from: colon + 1, to: line.count).trimmed()
+        // Pieces of the line, compared where they lie; only the value is copied.
+        if let colon = line.firstIndex(of: ':') {
+            if line[..<colon].trimmedEnd() == key {
+                return line[line.index(after: colon)...].trimmed().toString()
             }
         }
     }

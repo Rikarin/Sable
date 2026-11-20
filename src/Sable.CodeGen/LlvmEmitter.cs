@@ -456,6 +456,11 @@ public sealed partial class LlvmEmitter {
                                 declare i64 @sable_process_id()
                                 declare ptr @sable_string_split(ptr, i32)
                                 declare i64 @sable_string_hash(ptr, i64)
+                                declare i64 @sable_string_hash_range(ptr, i64, i64, i64)
+                                declare i64 @sable_string_count_range(ptr, i64, i64)
+                                declare i64 @sable_string_compare_range(ptr, i64, i64, ptr, i64, i64)
+                                declare i64 @sable_string_utf8_find_range(ptr, i64, i64, ptr, i64, i64)
+                                declare i64 @sable_string_utf8_find_last_range(ptr, i64, i64, ptr, i64, i64)
                                 @sable_hash_seed = external global i64
                                 declare i32 @getentropy(ptr, i64)
                                 declare i32 @rand_s(ptr)
@@ -467,8 +472,8 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_string_from_f64(double)
                                 declare ptr @sable_string_from_bool(i1 zeroext)
                                 declare zeroext i1 @sable_string_to_int(ptr, ptr)
-                                declare zeroext i1 @sable_string_to_f64(ptr, ptr)
-                                declare zeroext i1 @sable_string_to_f32(ptr, ptr)
+                                declare zeroext i1 @sable_string_to_f64(ptr, i64, i64, ptr)
+                                declare zeroext i1 @sable_string_to_f32(ptr, i64, i64, ptr)
                                 declare zeroext i1 @sable_char_is_digit(i32)
                                 declare zeroext i1 @sable_char_from_int(i64, ptr)
                                 declare i64 @sable_array_count(ptr)
@@ -3269,6 +3274,18 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call i64 @sable_string_compare(ptr {operands[0]}, ptr {operands[1]})");
                     return;
 
+                case "string_hash_range":
+                    Line($"{Result()} = call i64 @sable_string_hash_range(ptr {operands[0]}, i64 {operands[1]}, i64 {operands[2]}, i64 {operands[3]})");
+                    return;
+
+                case "string_count_range":
+                    Line($"{Result()} = call i64 @sable_string_count_range(ptr {operands[0]}, i64 {operands[1]}, i64 {operands[2]})");
+                    return;
+
+                case "string_compare_range" or "string_utf8_find_range" or "string_utf8_find_last_range":
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}(ptr {operands[0]}, i64 {operands[1]}, i64 {operands[2]}, ptr {operands[3]}, i64 {operands[4]}, i64 {operands[5]})");
+                    return;
+
                 case "string_at":
                     SiteForRuntime();
                     Line($"{Result()} = call i32 @sable_string_at(ptr {operands[0]}, i64 {operands[1]})");
@@ -3505,7 +3522,9 @@ public sealed partial class LlvmEmitter {
                     var value = Fresh();
                     var partial = Fresh();
                     Line($"store {target} zeroinitializer, ptr {slot}");
-                    Line($"{ok} = call zeroext i1 @{function}(ptr {operands[0]}, ptr {slot})");
+                    // A float is read from a range of the string's bytes.
+                    var range = builtin.Name == "string_to_Int" ? "" : $", i64 {operands[1]}, i64 {operands[2]}";
+                    Line($"{ok} = call zeroext i1 @{function}(ptr {operands[0]}{range}, ptr {slot})");
                     Line($"{value} = load {target}, ptr {slot}");
                     Line($"{partial} = insertvalue {{ i1, {target} }} poison, i1 {ok}, 0");
                     Line($"{Result()} = insertvalue {{ i1, {target} }} {partial}, {target} {value}, 1");

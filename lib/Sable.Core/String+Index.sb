@@ -5,7 +5,7 @@ module Sable.Core
 // from the start: 'at(n)' and 'slice' are O(n) on text that is not ASCII. A
 // String.Index is instead where a scalar's bytes start — what a search
 // gives, and what reading, stepping and slicing take in constant time (a
-// slice copies its own bytes, and no more).
+// slice is a Substring, a view of the string's bytes: nothing is copied).
 
 extension String {
     /// A position in a string: the offset of a scalar's first UTF-8 byte, or
@@ -78,10 +78,11 @@ extension String {
         get => self.scalar(at: index.utf8Offset)
     }
 
-    /// The scalars of the range, as a string of their own: a copy of their
-    /// bytes. A range of indices is found without counting, and a bound
-    /// not at a scalar's start traps; a bound counted from the end,
-    /// '^n', steps back n scalars from it.
+    /// The scalars of the range, as a Substring: a view of the string's own
+    /// bytes, not a copy of them (`toString()` copies). A range of indices
+    /// is found without counting, and a bound not at a scalar's start
+    /// traps; a bound counted from the end, '^n', steps back n scalars
+    /// from it.
     ///
     /// ```sable
     /// let text = "naïve café"
@@ -90,11 +91,12 @@ extension String {
     /// assert(text[text.index(after: space)...] == "café")
     /// assert(text[^4...] == "café")
     /// assert(text[1..<^5] == "aïve")
+    /// assert(text[..<space].base == text)
     /// ```
-    public subscript(range: some RangeExpression) -> String {
+    public subscript(range: some RangeExpression) -> Substring {
         get {
             let indices = range.relative(to: self)
-            return self.utf8Slice(indices.lowerBound.utf8Offset, indices.upperBound.utf8Offset)
+            return Substring.checked(self, indices.lowerBound.utf8Offset, indices.upperBound.utf8Offset, within: 0, self.utf8Count)
         }
     }
 
@@ -124,47 +126,6 @@ extension String {
             left = left + 1
         }
         return String.Index(utf8Offset: offset)
-    }
-
-    /// The index of scalar number n, counting from 0 — `count` for the end:
-    /// O(n), as `at` is. Out of range traps.
-    public fn index(atScalar n: Int) -> String.Index {
-        return self.index(self.startIndex, offsetBy: n)
-    }
-
-    /// How many scalars lie from one index to the other: negative when the
-    /// second comes first. O(the distance).
-    public fn distance(from start: String.Index, to end: String.Index) -> Int {
-        if end < start {
-            return 0 - self.distance(from: end, to: start)
-        }
-        var offset = start.utf8Offset
-        var count = 0
-        while offset < end.utf8Offset {
-            offset = self.offsetAfter(offset)
-            count = count + 1
-        }
-        return count
-    }
-
-    /// Each scalar with its index, from the first.
-    ///
-    /// ```sable
-    /// var seen = ""
-    /// for (index, character) in "aé!".indexed() {
-    ///     seen = seen + "\(index.utf8Offset)\(character)"
-    /// }
-    /// assert(seen == "0a1é3!")
-    /// ```
-    public fn indexed() -> (String.Index, Char)[>..] {
-        var pairs: (String.Index, Char)[>..] = []
-        var offset = 0
-        let end = self.utf8Count
-        while offset < end {
-            pairs.append((String.Index(utf8Offset: offset), self.scalar(at: offset)))
-            offset = self.offsetAfter(offset)
-        }
-        return pairs
     }
 
     /// Whether the UTF-8 offset is where a scalar starts, or the end: an

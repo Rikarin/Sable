@@ -1,0 +1,199 @@
+module Sable.Core
+
+// What String and Substring share (Swift's StringProtocol): text of
+// Unicode scalars at String.Index byte offsets, read where its bytes lie.
+// Each member written over this protocol is written once, over the text as
+// a Substring — its string and a range of that string's bytes, which a
+// String is the whole of — so a piece of a text searches, splits, trims
+// and parses as the text does, without being copied out first. The members
+// that cut the text give back the same kind of text: a String's pieces are
+// Strings of their own, a Substring's are Substrings of the same string.
+// The searches and cuts are in StringProtocol+Search and
+// StringProtocol+Transform.
+
+/// Text: a String, or a Substring of one. Its members — searching,
+/// splitting, trimming, parsing — are written once for both, so generic
+/// code, and a piece of a text, reads as a String does.
+///
+/// ```sable
+/// fn words<S: StringProtocol>(_ text: S) -> Int {
+///     return text.splitWhitespace().count
+/// }
+/// let line = "  one two three  "
+/// assert(words(line) == 3)
+/// assert(words(line[..<line.firstIndex(of: "three")!]) == 2)
+/// ```
+public protocol StringProtocol: BidirectionalCollection, Comparable, Hashable where Element == Char, Index == String.Index {
+    /// The text as a Substring: a String's whole, a Substring itself.
+    /// Nothing is copied.
+    var asSubstring: Substring { get }
+
+    /// The text of a range of the text's indices, as this kind of text: a
+    /// String of those bytes, copied, of a String; a Substring of the same
+    /// string, not copied, of a Substring. The range must be one of the
+    /// text's, at scalar boundaries; it is not checked.
+    fn piece(_ range: Range<String.Index>) -> Self
+
+    /// How many bytes the text's UTF-8 encoding takes.
+    var utf8Count: Int { get }
+
+    /// The text as a String of its own: a String itself, a Substring's
+    /// scalars copied out.
+    fn toString() -> String
+}
+
+extension String: StringProtocol {
+    /// The whole of the string, as a Substring of it.
+    public var asSubstring: Substring => Substring(self)
+
+    /// The scalars of the range, copied to a string of their own.
+    public fn piece(_ range: Range<String.Index>) -> String {
+        return self.utf8Slice(range.lowerBound.utf8Offset, range.upperBound.utf8Offset)
+    }
+
+    /// The string itself.
+    public fn toString() -> String {
+        return self
+    }
+}
+
+extension StringProtocol {
+    /// The text of the bytes from one offset of its string up to another.
+    fn cut(_ from: Int, _ to: Int) -> Self {
+        return self.piece(String.Index(utf8Offset: from)..<String.Index(utf8Offset: to))
+    }
+
+    // ---- Positions ---------------------------------------------------------
+
+    /// The index of scalar n of the text, counting from 0 — `count` for
+    /// the end: O(n). Out of range traps.
+    ///
+    /// ```sable
+    /// let text = "añb"
+    /// assert(text[text.index(atScalar: 2)] == 'b')
+    /// ```
+    public fn index(atScalar n: Int) -> String.Index {
+        return self.index(self.startIndex, offsetBy: n)
+    }
+
+    /// How many scalars lie from one index to the other: negative when the
+    /// second comes first. O(the distance).
+    ///
+    /// ```sable
+    /// let text = "añb"
+    /// assert(text.distance(from: text.startIndex, to: text.endIndex) == 3)
+    /// ```
+    public fn distance(from start: String.Index, to end: String.Index) -> Int {
+        if end < start {
+            return 0 - self.distance(from: end, to: start)
+        }
+        let text = self.asSubstring
+        var offset = start.utf8Offset
+        var count = 0
+        while offset < end.utf8Offset {
+            offset = text.base.offsetAfter(offset)
+            count = count + 1
+        }
+        return count
+    }
+
+    /// Each scalar with its index, from the first.
+    ///
+    /// ```sable
+    /// var seen = ""
+    /// for (index, character) in "aé!".indexed() {
+    ///     seen = seen + "\(index.utf8Offset)\(character)"
+    /// }
+    /// assert(seen == "0a1é3!")
+    /// ```
+    public fn indexed() -> (String.Index, Char)[>..] {
+        let text = self.asSubstring
+        var pairs: (String.Index, Char)[>..] = []
+        var offset = text.start
+        while offset < text.end {
+            pairs.append((String.Index(utf8Offset: offset), text.base.scalar(at: offset)))
+            offset = text.base.offsetAfter(offset)
+        }
+        return pairs
+    }
+
+    // ---- Parsing -----------------------------------------------------------
+    // Sugar over each type's Parsable.parse, which reads the text where it
+    // lies: decimal, with an optional sign; none when the text is not a
+    // number of the type, or does not fit it.
+
+    /// The value of the type the text writes, or why it is not one:
+    /// `T.parse(self)`, for when the type comes from the context.
+    ///
+    /// ```sable
+    /// let port: U16 = try! "8080".parse()
+    /// assert(port == 8080)
+    /// let line = "port=8080"
+    /// let value: Int = try! line[line.index(atScalar: 5)...].parse()
+    /// assert(value == 8080)
+    /// ```
+    public fn parse<T: Parsable>() throws(ParseError) -> T {
+        return try T.parse(self)
+    }
+
+    /// The integer the text writes, or none: `try? Int.parse(self)`.
+    public fn toInt() -> Int? {
+        return try? Int.parse(self)
+    }
+
+    /// The number the text writes, or none — for an infinity or NaN too, as
+    /// for a number too large for an F64, which `F64.parse` rounds to one.
+    public fn toF64() -> F64? {
+        if let value = try? F64.parse(self) {
+            if value - value == 0.0 {
+                return value
+            }
+        }
+        return none
+    }
+
+    /// The integer the text writes, or none: `try? I8.parse(self)`.
+    public fn toI8() -> I8? {
+        return try? I8.parse(self)
+    }
+
+    /// The integer the text writes, or none: `try? I16.parse(self)`.
+    public fn toI16() -> I16? {
+        return try? I16.parse(self)
+    }
+
+    /// The integer the text writes, or none: `try? I32.parse(self)`.
+    public fn toI32() -> I32? {
+        return try? I32.parse(self)
+    }
+
+    /// The integer the text writes, or none: `try? I64.parse(self)`.
+    public fn toI64() -> I64? {
+        return try? I64.parse(self)
+    }
+
+    /// The integer the text writes, or none: `try? U8.parse(self)`.
+    public fn toU8() -> U8? {
+        return try? U8.parse(self)
+    }
+
+    /// The integer the text writes, or none: `try? U16.parse(self)`.
+    public fn toU16() -> U16? {
+        return try? U16.parse(self)
+    }
+
+    /// The integer the text writes, or none: `try? U32.parse(self)`.
+    public fn toU32() -> U32? {
+        return try? U32.parse(self)
+    }
+
+    /// The integer the text writes, or none: `try? U64.parse(self)`.
+    public fn toU64() -> U64? {
+        return try? U64.parse(self)
+    }
+
+    /// The integer the text writes, or none: `try? UInt.parse(self)`.
+    public fn toUInt() -> UInt? {
+        return try? UInt.parse(self)
+    }
+}

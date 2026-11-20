@@ -1,14 +1,15 @@
 module Sable.Core
 
 extension String: Parsable {
-    /// The text itself: every text is a string, the empty one too. So generic
-    /// code that parses a `T: Parsable` takes strings as they are.
+    /// The text itself, as a String: every text is a string, the empty one
+    /// too. So generic code that parses a `T: Parsable` takes strings as they
+    /// are; a Substring's scalars are copied out.
     ///
     /// ```sable
     /// let s: String = try! "as is".parse()
     /// assert(s == "as is")
     /// ```
-    public static fn parse(_ text: String) throws(ParseError) -> String {
-        return text
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> String {
+        return text.toString()
     }
 }

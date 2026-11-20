@@ -4,7 +4,8 @@ module Sable.Text
 // written in Sable over the core String.
 //
 // Searching, splitting, replacing, padding, trimming and case are String's
-// own members (Sable.Core's String+Search, String+Case and String+Transform);
+// own members (Sable.Core's StringProtocol+Search, StringProtocol+Transform
+// and String+Case, the first two shared with Substring);
 // writing a value with a width, a radix or a number of decimals is
 // interpolation's, by a format spec: "\(n:#06x)", "\(price:.2)".
 

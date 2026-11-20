@@ -2,29 +2,42 @@ module Sable.Core
 
 // What the numbers' Parsable conformances share (Int+Parsing.sb and the
 // rest): reading an integer's sign and magnitude in a radix, and checking a
-// float's text before the runtime rounds it. Neither allocates for text
-// that is only a number: the scalars are read in place, and a float's text
-// is copied only to take separators or white space out of it.
+// float's text before the runtime rounds it. Each reads a Substring — a
+// String's whole, or a piece of a larger text — at byte offsets of its
+// string, where its bytes lie, and neither allocates for text that is only
+// a number: a float's text is copied only to take separators out of it.
+// What an error says is where, in scalars from the text's start.
 
-/// Where the number's own text starts and ends, inside the white space the
-/// styles allow around it; Empty when there is nothing else.
-fn numberBounds(_ text: String, _ styles: NumberStyles) throws(ParseError) -> (Int, Int) {
-    var start = 0
-    var end = text.count
+/// Where the number's own text starts and ends, as byte offsets in the
+/// text's string, inside the white space the styles allow around it; Empty
+/// when there is nothing else.
+fn numberBounds(_ text: Substring, _ styles: NumberStyles) throws(ParseError) -> (Int, Int) {
+    var start = text.start
+    var end = text.end
     if styles.contains(.LeadingWhite) {
-        while start < end && text.at(start).isWhitespace {
-            start = start + 1
+        while start < end && text.base.scalar(at: start).isWhitespace {
+            start = text.base.offsetAfter(start)
         }
     }
     if styles.contains(.TrailingWhite) {
-        while end > start && text.at(end - 1).isWhitespace {
-            end = end - 1
+        while end > start {
+            let previous = text.base.offsetBefore(end)
+            if !text.base.scalar(at: previous).isWhitespace {
+                break
+            }
+            end = previous
         }
     }
     if start == end {
         throw .Empty
     }
     return (start, end)
+}
+
+/// Where a byte offset of the text's string is, in scalars from the text's
+/// start: what an error reports.
+fn scalarPosition(_ text: Substring, _ offset: Int) -> Int {
+    return Runtime.countScalars(text.base, text.start, offset)
 }
 
 /// A scalar's value as a digit, in any radix up to 36 — letters of either
@@ -53,18 +66,25 @@ fn isSeparator(_ c: Char, _ styles: NumberStyles, _ thousands: Bool) -> Bool {
 /// radix under the styles. Every scalar is checked before a magnitude past
 /// U128's greatest is reported, so a stray letter is the error a long
 /// number with one in it gets. A radix outside 2 to 36 is no radix: it traps.
-fn parseInteger(_ text: String, _ radix: Int, _ styles: NumberStyles) throws(ParseError) -> (Bool, U128) {
-    precondition(radix >= 2 && radix <= 36, "a radix must be 2 to 36, not \(radix)")
+fn parseInteger(_ text: Substring, _ radix: Int, _ styles: NumberStyles) throws(ParseError) -> (Bool, U128) {
+    if radix < 2 || radix > 36 {
+        // The message is made only when it is said: an integer parsed
+        // allocates nothing.
+        preconditionFailure("a radix must be 2 to 36, not \(radix)")
+    }
     let (start, end) = try numberBounds(text, styles)
+    let bytes = text.base
+    // A byte offset, stepped a byte at a time past the ASCII a number is
+    // written in: anything else is refused where it starts.
     var i = start
     var negative = false
-    let first = text.at(i)
+    let first = bytes.scalar(at: i)
     if (first == '+' || first == '-') && styles.contains(.Sign) {
         negative = first == '-'
         i = i + 1
     }
-    if styles.contains(.Prefix) && i + 1 < end && text.at(i) == '0' {
-        let mark = text.at(i + 1)
+    if styles.contains(.Prefix) && i + 1 < end && bytes.scalar(at: i) == '0' {
+        let mark = bytes.scalar(at: i + 1)
         if radix == 16 && (mark == 'x' || mark == 'X') || radix == 8 && (mark == 'o' || mark == 'O') || radix == 2 && (mark == 'b' || mark == 'B') {
             i = i + 2
         }
@@ -77,7 +97,7 @@ fn parseInteger(_ text: String, _ radix: Int, _ styles: NumberStyles) throws(Par
     // A digit is wanted first, and after each separator.
     var wanted = true
     while i < end {
-        let c = text.at(i)
+        let c = bytes.scalar(at: i)
         let digit = digitValue(c)
         if digit < radix {
             let value = U128(digit)
@@ -90,12 +110,12 @@ fn parseInteger(_ text: String, _ radix: Int, _ styles: NumberStyles) throws(Par
         } else if !wanted && i + 1 < end && isSeparator(c, styles, true) {
             wanted = true
         } else {
-            throw .InvalidDigit(at: i)
+            throw .InvalidDigit(at: scalarPosition(text, i))
         }
         i = i + 1
     }
     if wanted {
-        throw .InvalidDigit(at: i)
+        throw .InvalidDigit(at: scalarPosition(text, i))
     }
     if overflowed {
         throw negative ? ParseError.Underflow : ParseError.Overflow
@@ -143,90 +163,94 @@ fn unsignedValue(_ negative: Bool, _ magnitude: U128, _ greatest: U128) throws(P
 ///
 /// or the words inf, infinity and nan, in any case — with the white space
 /// and separators the styles allow; and given back as the runtime parses it:
-/// the text itself when it has nothing to take out, else without them. A
-/// word is given back as "inf", "-inf" or "nan".
-fn plainFloat(_ text: String, _ styles: NumberStyles) throws(ParseError) -> String {
+/// the text itself, not copied, when it has nothing to take out, else
+/// without them. A word is given back as "inf", "-inf" or "nan".
+fn plainFloat(_ text: Substring, _ styles: NumberStyles) throws(ParseError) -> Substring {
     let (start, end) = try numberBounds(text, styles)
+    let bytes = text.base
+    // Byte offsets, stepped a byte at a time past ASCII, as parseInteger's.
     var i = start
-    let first = text.at(i)
+    let first = bytes.scalar(at: i)
     if first == '+' || first == '-' {
         if !styles.contains(.Sign) {
-            throw .InvalidDigit(at: i)
+            throw .InvalidDigit(at: scalarPosition(text, i))
         }
         i = i + 1
     }
-    if i < end && (text.at(i) == 'i' || text.at(i) == 'I' || text.at(i) == 'n' || text.at(i) == 'N') {
-        let word = asciiLowercased(text.slice(from: i, to: end))
+    if i < end && (bytes.scalar(at: i) == 'i' || bytes.scalar(at: i) == 'I' || bytes.scalar(at: i) == 'n' || bytes.scalar(at: i) == 'N') {
+        let word = asciiLowercased(Substring.of(bytes, i, end))
         if word == "inf" || word == "infinity" {
-            return first == '-' ? "-inf" : "inf"
+            return Substring(first == '-' ? "-inf" : "inf")
         }
         if word == "nan" {
-            return "nan"
+            return Substring("nan")
         }
-        throw .InvalidDigit(at: i)
+        throw .InvalidDigit(at: scalarPosition(text, i))
     }
     var separated = false
     let (whole, afterWhole, wholeSeparated) = try decimalRun(text, i, end, styles, true)
     separated = wholeSeparated
     i = afterWhole
     var fraction = 0
-    if i < end && text.at(i) == '.' {
+    if i < end && bytes.scalar(at: i) == '.' {
         let (digits, afterFraction, fractionSeparated) = try decimalRun(text, i + 1, end, styles, false)
         fraction = digits
         separated = separated || fractionSeparated
         i = afterFraction
     }
     if whole + fraction == 0 {
-        throw .InvalidDigit(at: i)
+        throw .InvalidDigit(at: scalarPosition(text, i))
     }
-    if i < end && (text.at(i) == 'e' || text.at(i) == 'E') {
+    if i < end && (bytes.scalar(at: i) == 'e' || bytes.scalar(at: i) == 'E') {
         var j = i + 1
-        if j < end && (text.at(j) == '+' || text.at(j) == '-') {
+        if j < end && (bytes.scalar(at: j) == '+' || bytes.scalar(at: j) == '-') {
             j = j + 1
         }
         let (digits, afterExponent, exponentSeparated) = try decimalRun(text, j, end, styles, false)
         if digits == 0 {
-            throw .InvalidDigit(at: afterExponent)
+            throw .InvalidDigit(at: scalarPosition(text, afterExponent))
         }
         separated = separated || exponentSeparated
         i = afterExponent
     }
     if i < end {
-        throw .InvalidDigit(at: i)
+        throw .InvalidDigit(at: scalarPosition(text, i))
     }
-    if !separated && start == 0 && end == text.count {
-        return text
+    if !separated {
+        return Substring.of(bytes, start, end)
     }
+    // Every scalar from here to the end is ASCII, checked above.
     var pieces: String[>..] = []
     var run = start
     var k = start
     while k < end {
-        let c = text.at(k)
+        let c = bytes.scalar(at: k)
         if c == '_' || c == ',' {
-            pieces.append(text.slice(from: run, to: k))
+            pieces.append(bytes.utf8Slice(run, k))
             run = k + 1
         }
         k = k + 1
     }
-    pieces.append(text.slice(from: run, to: end))
-    return Runtime.joinStrings(pieces, "")
+    pieces.append(bytes.utf8Slice(run, end))
+    return Substring(Runtime.joinStrings(pieces, ""))
 }
 
-/// How many decimal digits there are from the position on, a separator the
-/// styles allow between two of them; where they end; and whether there was
-/// a separator. One anywhere else is refused where it is.
-fn decimalRun(_ text: String, _ start: Int, _ end: Int, _ styles: NumberStyles, _ thousands: Bool) throws(ParseError) -> (Int, Int, Bool) {
+/// How many decimal digits there are from the byte offset on, a separator
+/// the styles allow between two of them; where they end; and whether there
+/// was a separator. One anywhere else is refused where it is.
+fn decimalRun(_ text: Substring, _ start: Int, _ end: Int, _ styles: NumberStyles, _ thousands: Bool) throws(ParseError) -> (Int, Int, Bool) {
+    let bytes = text.base
     var digits = 0
     var separated = false
     var i = start
     while i < end {
-        let c = text.at(i)
+        let c = bytes.scalar(at: i)
         let code = c.codePoint
         if code >= 48 && code <= 57 {
             digits = digits + 1
         } else if isSeparator(c, styles, thousands) {
-            if i == start || !text.at(i - 1).isDigit || i + 1 >= end || !text.at(i + 1).isDigit {
-                throw .InvalidDigit(at: i)
+            if i == start || !isDigitByte(bytes.utf8Byte(i - 1)) || i + 1 >= end || !isDigitByte(bytes.utf8Byte(i + 1)) {
+                throw .InvalidDigit(at: scalarPosition(text, i))
             }
             separated = true
         } else {
@@ -237,8 +261,13 @@ fn decimalRun(_ text: String, _ start: Int, _ end: Int, _ styles: NumberStyles, 
     return (digits, i, separated)
 }
 
+/// Whether a byte is an ASCII decimal digit; no byte of another scalar is.
+fn isDigitByte(_ byte: U8) -> Bool {
+    return byte >= 48 && byte <= 57
+}
+
 /// ASCII letters in lower case: 'NaN' as 'nan'.
-fn asciiLowercased(_ text: String) -> String {
+fn asciiLowercased(_ text: Substring) -> String {
     var pieces: String[>..] = []
     for c in text {
         let code = c.codePoint
@@ -248,7 +277,7 @@ fn asciiLowercased(_ text: String) -> String {
 }
 
 /// The float a word plainFloat gave stands for, or none for a number.
-fn specialFloat(_ plain: String) -> F64? {
+fn specialFloat(_ plain: Substring) -> F64? {
     if plain == "inf" {
         return infinity()
     }
@@ -263,8 +292,8 @@ fn specialFloat(_ plain: String) -> F64? {
 }
 
 /// What a number too large for the type rounds to: infinity, of its sign.
-fn overflowedFloat(_ plain: String) -> F64 {
-    return plain.at(0) == '-' ? 0.0 - infinity() : infinity()
+fn overflowedFloat(_ plain: Substring) -> F64 {
+    return plain.first == '-' ? 0.0 - infinity() : infinity()
 }
 
 /// Positive infinity: the greatest F64 times ten, which rounds to it.
@@ -274,22 +303,25 @@ fn infinity() -> F64 {
 }
 
 /// The decimal a plain float's text writes, as NumberFormatting.sb's digits
-/// and point; its sign aside.
-fn decimalOf(_ plain: String) -> (String, Int) {
-    let start = plain.at(0) == '+' || plain.at(0) == '-' ? 1 : 0
-    var mantissaEnd = plain.count
+/// and point; its sign aside. The text is ASCII, so its bytes are its
+/// scalars.
+fn decimalOf(_ plain: Substring) -> (String, Int) {
+    let bytes = plain.base
+    let first = bytes.scalar(at: plain.start)
+    let start = first == '+' || first == '-' ? plain.start + 1 : plain.start
+    var mantissaEnd = plain.end
     var exponent = 0
     var i = start
-    while i < plain.count {
-        let c = plain.at(i)
+    while i < plain.end {
+        let c = bytes.scalar(at: i)
         if c == 'e' || c == 'E' {
             mantissaEnd = i
-            exponent = plain.slice(from: i + 1, to: plain.count).toInt() ?? 0
+            exponent = Substring.of(bytes, i + 1, plain.end).toInt() ?? 0
             break
         }
         i = i + 1
     }
-    return shortestDecimal(plain.slice(from: start, to: mantissaEnd) + "e" + "\(exponent)")
+    return shortestDecimal(bytes.utf8Slice(start, mantissaEnd) + "e" + "\(exponent)")
 }
 
 /// Which of two decimals (digits and point, both positive) is greater: -1,

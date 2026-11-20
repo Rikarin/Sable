@@ -290,6 +290,37 @@ public struct Runtime {
     @builtin("string_compare")
     public static fn compareStrings(left: String, right: String) -> Int
 
+    // ---- Ranges of a string's bytes ----------------------------------------
+    // What a Substring reads through: the forms above over a range of a
+    // string's bytes, each from one offset up to another that must be
+    // scalar boundaries in order inside it (the runtime does not check), so
+    // a piece of a text is read where it lies rather than copied out first.
+
+    /// How many scalars the bytes from one offset up to another hold: at
+    /// once for an ASCII string.
+    @builtin("string_count_range")
+    public static fn countScalars(_ text: String, _ from: Int, _ to: Int) -> Int
+
+    /// Negative, zero or positive as the left range of bytes orders before,
+    /// with or after the right: `compareStrings` over the two ranges.
+    @builtin("string_compare_range")
+    public static fn compareStrings(_ left: String, _ leftFrom: Int, _ leftTo: Int, _ right: String, _ rightFrom: Int, _ rightTo: Int) -> Int
+
+    /// Where the part's range of bytes first occurs inside the text's: its
+    /// UTF-8 offset in the text, or -1.
+    @builtin("string_utf8_find_range")
+    public static fn findUtf8(_ text: String, _ from: Int, _ to: Int, _ part: String, _ partFrom: Int, _ partTo: Int) -> Int
+
+    /// Where the part's range of bytes last occurs inside the text's: its
+    /// UTF-8 offset in the text, or -1.
+    @builtin("string_utf8_find_last_range")
+    public static fn findLastUtf8(_ text: String, _ from: Int, _ to: Int, _ part: String, _ partFrom: Int, _ partTo: Int) -> Int
+
+    /// The range of bytes hashed under a key as a string of just those
+    /// bytes is: a Substring hashes as its String.
+    @builtin("string_hash_range")
+    public static fn hashString(_ text: String, _ from: Int, _ to: Int, key: Int) -> Int
+
     // ---- The fallible calls, raw -----------------------------------------
 
     /// Whether the last fallible call succeeded.

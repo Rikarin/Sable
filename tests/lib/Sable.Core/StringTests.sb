@@ -16,6 +16,13 @@ fn countingAndReadingScalars() {
 }
 
 @test
+fn aStringIsAsciiWhenEveryScalarIsOneByte() {
+    assert("plain text".isAscii)
+    assert("".isAscii)
+    assert(!"café".isAscii)
+}
+
+@test
 fn findingACharacterByScalarPosition() {
     assert("aé€".contains(character: '€'), "contains")
     assertEqual("aé€".indexOf(character: '€') ?? -1, 2)

@@ -372,3 +372,45 @@ members, not conformances — SYNTAX.md §11):
   from one with no copy. (A growable array is a `RangeReplaceableCollection`,
   so generic code can still replace a range of one: the protocol's default
   `replaceSubrange` rebuilds the array, where List's moves elements in place.)
+
+---
+
+## 3.10 Strings and Substring
+
+A `String` is UTF-8, its positions `String.Index` byte offsets. A range of
+one, `text[a..<b]` — any range of its indices, or one with a bound counted
+from the end, `text[^4...]` — is a `Substring`: the string it is a piece of,
+held by one retain on that string's storage, and the byte offsets of its
+start and end. Nothing is copied; `toString()` copies a piece out when one
+is wanted (a piece that is its whole string gives that string back). Its
+indices are its string's, so a position found in a piece reads the same
+scalar in the whole, and stepping or slicing past the piece's ends traps.
+
+The name is Swift's. Slice syntax was not free for it: `String[:]` is
+already the slice of an array of strings (`T[:]` for `T = String`, §3.9),
+and a string is not an array of its scalars.
+
+What String and Substring share is `StringProtocol` — a bidirectional
+collection of `Char` at `String.Index`, `Comparable` and `Hashable`, that
+gives itself as a `Substring` (`asSubstring`, a String's whole) and cuts a
+range of itself as its own kind (`piece`). Searching (through `Pattern`,
+whose requirements look inside a `Substring`), splitting, trimming,
+prefixes and parsing are written once over it, and the cuts give back the
+text's own kind: a String's `split` is Strings, each copied; a Substring's
+is Substrings of the same string, none copied. A Substring equals, orders
+as and hashes as the String of its scalars, of whatever string, so:
+
+- a `[String: V]` is looked up by a Substring without making a String
+  (`Dictionary+Substring.sb`: the table is probed with the piece's hash and
+  its keys compared with the piece's bytes);
+- `Parsable.parse` takes any `StringProtocol`, and the numbers read a piece
+  where it lies — an integer, or a float's digits, cut from a line parse
+  with no allocation.
+
+The runtime reads a piece through forms of its string calls over a range of
+bytes: counted (`string_count_range`), compared (`string_compare_range`),
+searched (`string_utf8_find_range`, `string_utf8_find_last_range`), hashed
+as a string of those bytes (`string_hash_range`, so a piece and its String
+hash alike) and parsed as a float (`string_to_F64`, `string_to_F32`). A
+Substring's iterator is String's, walking its string's bytes up to the
+piece's end.

@@ -9,18 +9,18 @@ extension F16: Parsable {
     /// let x: F16 = 0.1
     /// assert(try! F16.parse("0.1") == x)
     /// ```
-    public static fn parse(_ text: String) throws(ParseError) -> F16 {
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> F16 {
         return try F16.parse(text, styles: .Sign)
     }
 
     /// The number the text writes, with what else the styles allow: white
     /// space, a sign, separators.
-    public static fn parse(_ text: String, styles: NumberStyles) throws(ParseError) -> F16 {
-        let plain = try plainFloat(text, styles)
+    public static fn parse<S: StringProtocol>(_ text: S, styles: NumberStyles) throws(ParseError) -> F16 {
+        let plain = try plainFloat(text.asSubstring, styles)
         if let special = specialFloat(plain) {
             return F16(special)
         }
-        let (parsed, wide) = plain.parseF64()
+        let (parsed, wide) = plain.base.parseF64(plain.start, plain.end)
         if !parsed {
             return F16(overflowedFloat(plain))
         }
@@ -33,7 +33,7 @@ extension F16: Parsable {
 /// the decimal does not — rounding twice can land on a midpoint the decimal
 /// is only near — so then the decimal, compared exactly with the F64, says
 /// which side it is on.
-fn nearestHalf(_ plain: String, _ wide: F64) -> F16 {
+fn nearestHalf(_ plain: Substring, _ wide: F64) -> F16 {
     let rounded = F16(wide)
     let back = F64(rounded)
     // The other F16 the F64 may lie halfway to, as far on its other side:

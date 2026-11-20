@@ -67,10 +67,10 @@ fn distancesCountScalars() {
 fn slicingByIndices() {
     let text = "naïve café"
     let space = text.firstIndex(of: ' ')!
-    assertEqual(text[text.startIndex..<space], "naïve")
-    assertEqual(text[text.index(after: space)...], "café")
-    assertEqual(text[..<space], "naïve")
-    assertEqual(text[space..<space], "")
+    assertEqual(text[text.startIndex..<space].toString(), "naïve")
+    assertEqual(text[text.index(after: space)...].toString(), "café")
+    assertEqual(text[..<space].toString(), "naïve")
+    assertEqual(text[space..<space].toString(), "")
 }
 
 @test
@@ -149,7 +149,7 @@ fn slicingBackwardsTraps() {
 fn anAsciiSliceIsAscii() {
     let text = "hello world"
     let piece = text[String.Index(utf8Offset: 6)...]
-    assertEqual(piece, "world")
+    assertEqual(piece.toString(), "world")
     assertEqual(piece.count, 5)
 }
 

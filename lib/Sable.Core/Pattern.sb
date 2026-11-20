@@ -1,8 +1,11 @@
 module Sable.Core
 
-// What String's searches look for (String+Search.sb): a character, a
-// string, a set of characters, or any character a closure accepts — each
-// written once, over this protocol, rather than once per kind of thing.
+// What the searches of a String or a Substring look for
+// (StringProtocol+Search.sb): a character, a string or a piece of one, a
+// set of characters, or any character a closure accepts — each written
+// once, over this protocol, rather than once per kind of thing. A search
+// looks inside a Substring, the text as a range of its string's bytes, and
+// a match is a range of that string's indices.
 
 /// Something a string can be searched for: a `Char`, a `String`, a
 /// `CharSet`, or — through the `where:` forms of String's searches — a
@@ -15,92 +18,111 @@ module Sable.Core
 /// assert(text.split(CharSet(" ="), omittingEmpty: true) == ["key", "value"])
 /// ```
 public protocol Pattern {
-    /// The first match that starts at or after the index, or none.
-    fn firstMatch(in text: String, from start: String.Index) -> Range<String.Index>?
+    /// The first match inside the text that starts at or after the index,
+    /// or none.
+    fn firstMatch(in text: Substring, from start: String.Index) -> Range<String.Index>?
 
-    /// The last match that ends at or before the index, or none.
-    fn lastMatch(in text: String, before end: String.Index) -> Range<String.Index>?
+    /// The last match inside the text that ends at or before the index, or
+    /// none.
+    fn lastMatch(in text: Substring, before end: String.Index) -> Range<String.Index>?
 
-    /// Where a match that starts exactly at the index ends, or none when
-    /// none starts there.
-    fn matchEnd(in text: String, startingAt start: String.Index) -> String.Index?
+    /// Where a match inside the text that starts exactly at the index ends,
+    /// or none when none starts there.
+    fn matchEnd(in text: Substring, startingAt start: String.Index) -> String.Index?
 
-    /// Where a match that ends exactly at the index starts, or none when
-    /// none ends there.
-    fn matchStart(in text: String, endingAt end: String.Index) -> String.Index?
+    /// Where a match inside the text that ends exactly at the index starts,
+    /// or none when none ends there.
+    fn matchStart(in text: Substring, endingAt end: String.Index) -> String.Index?
 }
 
 // A string matches where its bytes occur: UTF-8 is self-synchronising, so
 // a match of the bytes starts and ends at scalars. The runtime searches
-// forwards sixteen bytes at a time.
+// forwards sixteen bytes at a time. A String is searched for as the whole
+// of itself, a Substring as its range of its string's bytes.
 extension String: Pattern {
-    public fn firstMatch(in text: String, from start: String.Index) -> Range<String.Index>? {
-        let at = Runtime.findUtf8(text, self, start.utf8Offset)
+    public fn firstMatch(in text: Substring, from start: String.Index) -> Range<String.Index>? {
+        return Substring(self).firstMatch(in: text, from: start)
+    }
+
+    public fn lastMatch(in text: Substring, before end: String.Index) -> Range<String.Index>? {
+        return Substring(self).lastMatch(in: text, before: end)
+    }
+
+    public fn matchEnd(in text: Substring, startingAt start: String.Index) -> String.Index? {
+        return Substring(self).matchEnd(in: text, startingAt: start)
+    }
+
+    public fn matchStart(in text: Substring, endingAt end: String.Index) -> String.Index? {
+        return Substring(self).matchStart(in: text, endingAt: end)
+    }
+}
+
+extension Substring: Pattern {
+    public fn firstMatch(in text: Substring, from start: String.Index) -> Range<String.Index>? {
+        let from = start.utf8Offset < text.start ? text.start : start.utf8Offset
+        if from > text.end {
+            return none
+        }
+        let at = Runtime.findUtf8(text.base, from, text.end, base, self.start, self.end)
         if at < 0 {
             return none
         }
         return String.Index(utf8Offset: at)..<String.Index(utf8Offset: at + self.utf8Count)
     }
 
-    public fn lastMatch(in text: String, before end: String.Index) -> Range<String.Index>? {
-        let at = Runtime.findLastUtf8(text, self, end.utf8Offset)
+    public fn lastMatch(in text: Substring, before end: String.Index) -> Range<String.Index>? {
+        let to = end.utf8Offset > text.end ? text.end : end.utf8Offset
+        if to < text.start {
+            return none
+        }
+        let at = Runtime.findLastUtf8(text.base, text.start, to, base, self.start, self.end)
         if at < 0 {
             return none
         }
         return String.Index(utf8Offset: at)..<String.Index(utf8Offset: at + self.utf8Count)
     }
 
-    public fn matchEnd(in text: String, startingAt start: String.Index) -> String.Index? {
+    public fn matchEnd(in text: Substring, startingAt start: String.Index) -> String.Index? {
         let end = start.utf8Offset + self.utf8Count
-        if end > text.utf8Count || !self.bytesEqual(text, at: start.utf8Offset) {
+        if start.utf8Offset < text.start || end > text.end
+            || Runtime.compareStrings(text.base, start.utf8Offset, end, base, self.start, self.end) != 0 {
             return none
         }
         return String.Index(utf8Offset: end)
     }
 
-    public fn matchStart(in text: String, endingAt end: String.Index) -> String.Index? {
+    public fn matchStart(in text: Substring, endingAt end: String.Index) -> String.Index? {
         let start = end.utf8Offset - self.utf8Count
-        if start < 0 || !self.bytesEqual(text, at: start) {
+        if start < text.start || end.utf8Offset > text.end
+            || Runtime.compareStrings(text.base, start, end.utf8Offset, base, self.start, self.end) != 0 {
             return none
         }
         return String.Index(utf8Offset: start)
-    }
-
-    /// Whether the text has this string's bytes at the offset, which leaves
-    /// room for them.
-    fn bytesEqual(_ text: String, at offset: Int) -> Bool {
-        var i = 0
-        let size = self.utf8Count
-        while i < size {
-            if text.utf8Byte(offset + i) != self.utf8Byte(i) {
-                return false
-            }
-            i = i + 1
-        }
-        return true
     }
 }
 
 // A character is searched for as the string of its bytes.
 extension Char: Pattern {
-    public fn firstMatch(in text: String, from start: String.Index) -> Range<String.Index>? {
+    public fn firstMatch(in text: Substring, from start: String.Index) -> Range<String.Index>? {
         return String.fromChar(self).firstMatch(in: text, from: start)
     }
 
-    public fn lastMatch(in text: String, before end: String.Index) -> Range<String.Index>? {
+    public fn lastMatch(in text: Substring, before end: String.Index) -> Range<String.Index>? {
         return String.fromChar(self).lastMatch(in: text, before: end)
     }
 
-    public fn matchEnd(in text: String, startingAt start: String.Index) -> String.Index? {
-        if start.utf8Offset < text.utf8Count && text[start] == self {
-            return String.Index(utf8Offset: start.utf8Offset + self.utf8Length)
+    public fn matchEnd(in text: Substring, startingAt start: String.Index) -> String.Index? {
+        let offset = start.utf8Offset
+        if offset >= text.start && offset < text.end && text.base.scalar(at: offset) == self {
+            return String.Index(utf8Offset: offset + self.utf8Length)
         }
         return none
     }
 
-    public fn matchStart(in text: String, endingAt end: String.Index) -> String.Index? {
-        if end.utf8Offset > 0 && text[text.index(before: end)] == self {
-            return String.Index(utf8Offset: end.utf8Offset - self.utf8Length)
+    public fn matchStart(in text: Substring, endingAt end: String.Index) -> String.Index? {
+        let offset = end.utf8Offset
+        if offset > text.start && offset <= text.end && text.base.scalar(at: text.base.offsetBefore(offset)) == self {
+            return String.Index(utf8Offset: offset - self.utf8Length)
         }
         return none
     }
@@ -111,12 +133,11 @@ extension Char: Pattern {
 struct CharPredicate: Pattern {
     let test: (Char) -> Bool
 
-    fn firstMatch(in text: String, from start: String.Index) -> Range<String.Index>? {
-        var offset = start.utf8Offset
-        let end = text.utf8Count
-        while offset < end {
-            let next = text.offsetAfter(offset)
-            if test(text.scalar(at: offset)) {
+    fn firstMatch(in text: Substring, from start: String.Index) -> Range<String.Index>? {
+        var offset = start.utf8Offset < text.start ? text.start : start.utf8Offset
+        while offset < text.end {
+            let next = text.base.offsetAfter(offset)
+            if test(text.base.scalar(at: offset)) {
                 return String.Index(utf8Offset: offset)..<String.Index(utf8Offset: next)
             }
             offset = next
@@ -124,11 +145,11 @@ struct CharPredicate: Pattern {
         return none
     }
 
-    fn lastMatch(in text: String, before end: String.Index) -> Range<String.Index>? {
-        var offset = end.utf8Offset
-        while offset > 0 {
-            let previous = text.offsetBefore(offset)
-            if test(text.scalar(at: previous)) {
+    fn lastMatch(in text: Substring, before end: String.Index) -> Range<String.Index>? {
+        var offset = end.utf8Offset > text.end ? text.end : end.utf8Offset
+        while offset > text.start {
+            let previous = text.base.offsetBefore(offset)
+            if test(text.base.scalar(at: previous)) {
                 return String.Index(utf8Offset: previous)..<String.Index(utf8Offset: offset)
             }
             offset = previous
@@ -136,18 +157,20 @@ struct CharPredicate: Pattern {
         return none
     }
 
-    fn matchEnd(in text: String, startingAt start: String.Index) -> String.Index? {
-        if start.utf8Offset < text.utf8Count && test(text[start]) {
-            return text.index(after: start)
+    fn matchEnd(in text: Substring, startingAt start: String.Index) -> String.Index? {
+        let offset = start.utf8Offset
+        if offset >= text.start && offset < text.end && test(text.base.scalar(at: offset)) {
+            return String.Index(utf8Offset: text.base.offsetAfter(offset))
         }
         return none
     }
 
-    fn matchStart(in text: String, endingAt end: String.Index) -> String.Index? {
-        if end.utf8Offset > 0 {
-            let previous = text.index(before: end)
-            if test(text[previous]) {
-                return previous
+    fn matchStart(in text: Substring, endingAt end: String.Index) -> String.Index? {
+        let offset = end.utf8Offset
+        if offset > text.start && offset <= text.end {
+            let previous = text.base.offsetBefore(offset)
+            if test(text.base.scalar(at: previous)) {
+                return String.Index(utf8Offset: previous)
             }
         }
         return none

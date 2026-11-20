@@ -78,6 +78,12 @@ public struct Hasher {
         write(Runtime.hashString(text: text, key: key unchecked as Int) unchecked as U64)
     }
 
+    /// Mixes in a range of a string's bytes as the string of just those
+    /// bytes would be: what a Substring hashes as.
+    mutating fn write(text: String, from: Int, to: Int) {
+        write(Runtime.hashString(text, from, to, key: key unchecked as Int) unchecked as U64)
+    }
+
     /// The hash of everything mixed in so far. The hasher is left as it
     /// was: more can be mixed in, and a later `finalize` covers it all.
     public fn finalize() -> Int {

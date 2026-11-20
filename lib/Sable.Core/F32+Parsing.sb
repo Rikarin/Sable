@@ -10,18 +10,18 @@ extension F32: Parsable {
     /// let x: F32 = 0.1
     /// assert(try! F32.parse("0.1") == x)
     /// ```
-    public static fn parse(_ text: String) throws(ParseError) -> F32 {
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> F32 {
         return try F32.parse(text, styles: .Sign)
     }
 
     /// The number the text writes, with what else the styles allow: white
     /// space, a sign, separators.
-    public static fn parse(_ text: String, styles: NumberStyles) throws(ParseError) -> F32 {
-        let plain = try plainFloat(text, styles)
+    public static fn parse<S: StringProtocol>(_ text: S, styles: NumberStyles) throws(ParseError) -> F32 {
+        let plain = try plainFloat(text.asSubstring, styles)
         if let special = specialFloat(plain) {
             return F32(special)
         }
-        let (parsed, value) = plain.parseF32()
+        let (parsed, value) = plain.base.parseF32(plain.start, plain.end)
         return parsed ? value : F32(overflowedFloat(plain))
     }
 }
@@ -30,5 +30,5 @@ extension String {
     /// Whether the text is a finite F32, and the F32 when it is: the runtime's
     /// strtof, which rounds the decimal once.
     @builtin("string_to_F32")
-    fn parseF32() -> (Bool, F32)
+    fn parseF32(_ from: Int, _ to: Int) -> (Bool, F32)
 }

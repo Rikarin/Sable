@@ -1,0 +1,296 @@
+module SubstringTests
+
+// Substring (Sable.Core): a piece of a string, viewed where it lies, and
+// Dictionary's lookup by one. Tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+/// The piece from its scalar n on.
+fn after(_ piece: Substring, _ n: Int) -> Substring {
+    return piece[piece.index(atScalar: n)...]
+}
+
+@test
+fn aRangeOfAStringIsAPieceOfIt() {
+    let text = "naïve café"
+    let space = text.firstIndex(of: ' ')!
+    let word = text[..<space]
+    assert(word == "naïve")
+    assert(word.base == text)
+    assertEqual(word.startIndex, text.startIndex)
+    assertEqual(word.endIndex, space)
+    assertEqual(word.count, 5)
+    assertEqual(word.utf8Count, 6)
+    assert(!word.isEmpty)
+    assert(text[space..<space].isEmpty)
+}
+
+@test
+fn theWholeOfAStringIsAPieceOfItself() {
+    let whole = Substring("abc")
+    assertEqual(whole.count, 3)
+    assert(whole.base == "abc")
+    assertEqual(whole.asSubstring.utf8Count, 3)
+    assertEqual("abc".asSubstring.endIndex.utf8Offset, 3)
+}
+
+@test
+fn toStringCopiesOutAPieceAndGivesBackAWhole() {
+    let text = "hello, world"
+    let piece = text[..<text.firstIndex(of: ',')!]
+    assertEqual(piece.toString(), "hello")
+    assertEqual(Substring(text).toString(), text)
+    assertEqual(text.toString(), text)
+}
+
+@test
+fn aPieceCountsItsScalarsWhateverItsString() {
+    let ascii = "hello world"
+    assertEqual(ascii[ascii.index(atScalar: 6)...].count, 5)
+    let text = "aé€😀b"
+    assertEqual(text[text.index(atScalar: 1)..<text.index(atScalar: 4)].count, 3)
+}
+
+@test
+fn aPieceIsReadAtItsStringsIndices() {
+    let text = "xaé€y"
+    let piece = text[text.index(atScalar: 1)..<text.index(atScalar: 4)]
+    assertEqual(piece[piece.startIndex], 'a')
+    assertEqual(piece[piece.index(after: piece.startIndex)], 'é')
+    assertEqual(piece[piece.index(before: piece.endIndex)], '€')
+    assertEqual(piece.index(piece.startIndex, offsetBy: 2).utf8Offset, 4)
+    assertEqual(piece.index(piece.endIndex, offsetBy: -3), piece.startIndex)
+    assertEqual(piece.first, 'a')
+    assertEqual(piece.last, '€')
+}
+
+@test
+fn aPieceOfAPieceIsAPieceOfTheSameString() {
+    let text = "naïve café"
+    let word = text[..<text.firstIndex(of: ' ')!]
+    assert(word[^3...] == "ïve")
+    assert(word[word.index(after: word.startIndex)...] == "aïve")
+    assert(word[1..<^1] == "aïv")
+    assert(word[^2...].base == text)
+}
+
+@test
+fn aPieceIsASequenceOfItsScalars() {
+    let text = "-aé!-"
+    var seen = ""
+    for c in text[text.index(atScalar: 1)..<text.index(atScalar: 4)] {
+        seen = seen + String.fromChar(c)
+    }
+    assertEqual(seen, "aé!")
+    assert(text[^4..<^1].map({ c in c.codePoint }) == [97, 233, 33])
+}
+
+@test(traps: "string index out of range")
+fn readingAtAPiecesEndTraps() {
+    let text = "abc"
+    let piece = text[..<text.index(atScalar: 2)]
+    let _ = piece[piece.endIndex]
+}
+
+@test(traps: "string index out of range")
+fn readingBeforeAPiecesStartTraps() {
+    let text = "abc"
+    let piece = text[text.index(atScalar: 1)...]
+    let _ = piece[text.startIndex]
+}
+
+@test(traps: "string index out of range")
+fn steppingPastAPiecesEndTraps() {
+    let text = "abc"
+    let piece = text[..<text.index(atScalar: 1)]
+    let _ = piece.index(after: piece.endIndex)
+}
+
+@test(traps: "string index out of range")
+fn steppingBackFromAPiecesStartTraps() {
+    let text = "abc"
+    let piece = text[text.index(atScalar: 1)...]
+    let _ = piece.index(before: piece.startIndex)
+}
+
+@test(traps: "string slice out of range")
+fn slicingPastAPiecesEndTraps() {
+    let text = "abcdef"
+    let piece = text[..<text.index(atScalar: 3)]
+    let _ = piece[piece.startIndex..<text.endIndex]
+}
+
+@test(traps: "string index not on a character boundary")
+fn slicingInsideAScalarTraps() {
+    let text = "aé"
+    let _ = text[String.Index(utf8Offset: 0)..<String.Index(utf8Offset: 2)]
+}
+
+@test
+fn aPieceEqualsAndOrdersAsItsString() {
+    let text = "apple banana"
+    let apple = text[..<text.firstIndex(of: ' ')!]
+    let banana = text[text.index(after: text.firstIndex(of: ' ')!)...]
+    assert(apple == "apple" && "apple" == apple)
+    assert(apple != "apples" && "appl" != apple)
+    assert(apple == Substring("apple"))
+    assert(apple != banana)
+    assert(apple < banana)
+    assert(apple < "b" && "a" < apple)
+    assert(!(banana < apple))
+    assert(!(apple < "apple"))
+    assert(apple >= Substring("apple"))
+}
+
+@test
+fn aPieceHashesAsItsString() {
+    let text = "key=value"
+    let key = text[..<text.firstIndex(of: '=')!]
+    assertEqual(key.hashValue, "key".hashValue)
+    assertEqual(text[text.index(atScalar: 4)...].hashValue, "value".hashValue)
+    assert(key.hashValue != "kex".hashValue)
+}
+
+@test
+fn aStringDictionaryIsLookedUpByAPiece() {
+    let ports: [String: Int] = ["http": 80, "https": 443]
+    let url = "https://example.com"
+    let scheme = url[..<url.firstIndex(of: ':')!]
+    assertEqual(ports[scheme], 443)
+    assertEqual(ports[scheme[..<scheme.index(atScalar: 4)]], 80)
+    assertEqual(ports[url[^3...]], none)
+    assertEqual(ports[url[^3...], default: 0], 0)
+    assert(ports.contains(scheme))
+    assert(!ports.contains(url[^3...]))
+    let empty: [String: Int] = [:]
+    assertEqual(empty[scheme], none)
+}
+
+@test
+fn aLargeDictionaryIsProbedByAPiece() {
+    var table: [String: Int] = [:]
+    var i = 0
+    while i < 300 {
+        table["key\(i)"] = i
+        i = i + 1
+    }
+    i = 0
+    while i < 300 {
+        if i % 3 == 0 {
+            table["key\(i)"] = none
+        }
+        i = i + 1
+    }
+    let text = "key0 key1 key2 key150 key151 key299 key300 kex1"
+    var found: Int[>..] = []
+    for word in text.asSubstring.split(" ") {
+        found.append(table[word, default: -1])
+    }
+    assert(found == [-1, 1, 2, -1, 151, 299, -1, -1])
+    var hits = 0
+    i = 0
+    while i < 400 {
+        let key = "key\(i)!"
+        if table.contains(key[..<key.index(before: key.endIndex)]) {
+            hits = hits + 1
+        }
+        i = i + 1
+    }
+    assertEqual(hits, 200)
+}
+
+@test
+fn aPieceIsWrittenAsItsString() {
+    let text = "say \"hi\" now"
+    let quoted = text[text.index(atScalar: 4)..<text.index(atScalar: 8)]
+    assertEqual("[\(quoted)]", "[\"hi\"]")
+    assertEqual("\(quoted:?)", "\"\\\"hi\\\"\"")
+    assertEqual(quoted.debugDescription(), "\"\\\"hi\\\"\"")
+    assertEqual("\(quoted:>6)", "  \"hi\"")
+}
+
+@test
+fn aPieceIsAPattern() {
+    let text = "one, two, three"
+    let comma = text[text.index(atScalar: 3)..<text.index(atScalar: 5)]
+    assert(text.contains(comma))
+    assert(text.split(comma) == ["one", "two", "three"])
+    assertEqual(text.lastIndex(of: comma)?.utf8Offset, 8)
+    assert(!text.hasPrefix(comma))
+    assert("x, ".hasSuffix(comma))
+    assertEqual(text.count(of: comma), 2)
+    assertEqual(text.firstIndex(of: Substring(", t")), text.firstIndex(of: comma))
+    assertEqual("".firstIndex(of: comma), none)
+    assertEqual("".lastIndex(of: comma), none)
+}
+
+@test
+fn searchingAPieceStaysInsideIt() {
+    let text = "a=1;b=2;c=3"
+    let middle = text[text.index(atScalar: 4)..<text.index(atScalar: 7)]
+    assert(middle == "b=2")
+    assert(!middle.contains(";"))
+    assert(!middle.contains("a"))
+    assert(middle.hasPrefix("b") && middle.hasSuffix("2"))
+    assert(!middle.hasPrefix(";") && !middle.hasSuffix(";"))
+    assert(!middle.hasPrefix('a') && !middle.hasSuffix('c'))
+    assert(middle.hasPrefix('b') && middle.hasSuffix('2'))
+    assert(!middle.contains(CharSet("ac")))
+    assert(!middle.hasPrefix(CharSet(";")) && !middle.hasSuffix(CharSet(";")))
+    assertEqual(middle.firstIndex(of: "=")?.utf8Offset, 5)
+    assertEqual(middle.lastIndex(of: "=")?.utf8Offset, 5)
+    assertEqual(middle.lastIndex(of: CharSet("=a"))?.utf8Offset, 5)
+    assertEqual(middle.firstIndex(where: { c in c == 'c' }), none)
+    assertEqual(middle.lastIndex(where: { c in c == 'a' }), none)
+    assertEqual(middle.count(of: ""), 4)
+}
+
+@test
+fn aPiecesCutsArePiecesOfTheSameString() {
+    let line = "  name = sable ; size = 3  "
+    let fields = line.asSubstring.split(";")
+    assertEqual(fields.count, 2)
+    let pair = fields[0].splitOnce("=")!
+    assert(pair.0.trimmed() == "name" && pair.1.trimmed() == "sable")
+    assert(pair.1.base == line)
+    let size = fields[1].splitLastOnce('=')!
+    assertEqual(size.1.trimmed().toInt(), 3)
+    assert(fields[1].trimmedStart() == "size = 3  ")
+    assert(fields[1].trimmedEnd() == " size = 3")
+    assert(fields[0].trimmingPrefix("  ").trimmingSuffix(" ") == "name = sable")
+    assertEqual(fields[1].splitWhitespace().count, 3)
+    assertEqual(line.asSubstring.lines().count, 1)
+    assert(line.asSubstring.trimmed(where: { c in c == ' ' }).hasPrefix("name"))
+    assert(line[^2...].trimmed().isEmpty && line[^4...].trimmed() == "3")
+    assert(line[^2...].isBlank)
+}
+
+@test
+fn aPieceMakesNewTextAsAString() {
+    let text = "[ab-c]"
+    let inner = text[1..<^1]
+    assertEqual(inner.replacing("-", with: "+"), "ab+c")
+    assertEqual(inner.replacing("x", with: "+"), "ab-c")
+    assertEqual(inner.reversed(), "c-ba")
+    assertEqual(inner.repeated(2), "ab-cab-c")
+    assertEqual(inner.paddedStart(toWidth: 6, with: '.'), "..ab-c")
+    assertEqual(inner.paddedEnd(toWidth: 5), "ab-c ")
+    assertEqual(inner.paddedEnd(toWidth: 2), "ab-c")
+    assertEqual(inner.paddedStart(toWidth: 2), "ab-c")
+}
+
+@test
+fn aPieceParsesWhereItLies() {
+    let line = "x=17;y=-4;r=2.5;ok=true;c=é"
+    let fields = line.asSubstring.split(";")
+    assertEqual(try! Int.parse(after(fields[0], 2)), 17)
+    assertEqual(after(fields[1], 2).toInt(), -4)
+    assertEqual(after(fields[1], 2).toI8(), -4)
+    assertEqual(after(fields[2], 2).toF64(), 2.5)
+    let flag: Bool = try! after(fields[3], 3).parse()
+    assert(flag)
+    assertEqual(try! Char.parse(after(fields[4], 2)), 'é')
+    assertEqual(try! String.parse(after(fields[4], 2)), "é")
+    assertEqual(fields[0].toInt(), none)
+}

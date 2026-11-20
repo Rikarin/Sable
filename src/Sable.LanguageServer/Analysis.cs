@@ -122,7 +122,8 @@ internal sealed partial class Analysis {
         // A library file the workspace has its own of — the compiler's
         // repository, its lib/ read from disk — is that file: the embedded
         // copy would declare everything in it a second time.
-        var brought = CoreLibrary.Brought(trees);
+        var embedded = trees.SelectMany(libraryFor).Concat(CoreLibrary.Trees).Distinct().ToLookup(static t => CoreLibrary.ModuleOf(t) ?? "");
+        var brought = CoreLibrary.Brought(trees.Where(t => !CoreLibrary.Contains(t)), m => embedded[m]);
         var library = new List<SyntaxTree>();
         var seen = new HashSet<SyntaxTree>(ReferenceEqualityComparer.Instance);
         foreach (var tree in trees) {

@@ -78,16 +78,33 @@ public static class CoreLibrary {
     ///     lib/Sable.Core/Int.sb</c>. Each stands in for the embedded file of
     ///     its module and name (<see cref="IsBrought" />) rather than
     ///     declaring everything in it a second time; the module's other files
-    ///     stay. The trees given must be the program's own, none embedded.
+    ///     stay. A module none of whose files the program has under an
+    ///     embedded file's name is one of its own, standing in for the
+    ///     embedded module whole (a test's small Sable.Core). The trees given
+    ///     must be the program's own, none embedded; <paramref name="embedded" />
+    ///     gives a module's embedded files (none for one there is not).
     /// </summary>
-    public static HashSet<(string Module, string File)> Brought(IEnumerable<SyntaxTree> program) =>
-        [..program.Select(static t => (Module: ModuleOf(t), File: FileName(t)))
+    public static HashSet<(string Module, string File)> Brought(IEnumerable<SyntaxTree> program, Func<string, IEnumerable<SyntaxTree>> embedded) {
+        var brought = program.Select(static t => (Module: ModuleOf(t), File: FileName(t)))
             .Where(static f => IsStandardLibrary(f.Module))
-            .Select(static f => (f.Module!, f.File))];
+            .Select(static f => (f.Module!, f.File))
+            .ToHashSet();
+        foreach (var module in brought.Select(static b => b.Item1).Distinct().ToList()) {
+            var names = embedded(module).Select(FileName).ToHashSet(StringComparer.Ordinal);
+            if (!brought.Any(b => b.Item1 == module && names.Contains(b.Item2))) {
+                brought.Add((module, Whole));
+            }
+        }
+
+        return brought;
+    }
+
+    /// <summary>The file name <see cref="Brought" /> gives for a module brought whole.</summary>
+    const string Whole = "*";
 
     /// <summary>True for an embedded file of the library the program brings its own of (<see cref="Brought" />).</summary>
     public static bool IsBrought(SyntaxTree embedded, HashSet<(string Module, string File)> brought) =>
-        brought.Count > 0 && ModuleOf(embedded) is { } module && brought.Contains((module, FileName(embedded)));
+        brought.Count > 0 && ModuleOf(embedded) is { } module && (brought.Contains((module, FileName(embedded))) || brought.Contains((module, Whole)));
 
     /// <summary>A file's name without its directories: <c>Int.sb</c> for <c>lib/Sable.Core/Int.sb</c>.</summary>
     static string FileName(SyntaxTree tree) {

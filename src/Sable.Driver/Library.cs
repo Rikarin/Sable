@@ -70,8 +70,7 @@ public static class Library {
     /// </summary>
     public static IReadOnlyList<SyntaxTree> For(IReadOnlyList<SyntaxTree> program) {
         var modules = program.Count > 0 ? ModulesFor(program[0].Options) : Modules;
-        var own = program.Where(t => !IsEmbedded(t, modules)).ToList();
-        var brought = CoreLibrary.Brought(own);
+        var brought = Brought(program);
         var needed = new List<SyntaxTree>();
         var seen = new HashSet<string>(StringComparer.Ordinal) { Core };
         var pending = new Queue<string>([..program.SelectMany(ImportsOf), ..brought.Select(static b => b.Module)]);
@@ -89,6 +88,16 @@ public static class Library {
         }
 
         return needed;
+    }
+
+    /// <summary>The library files the program brings its own of (<see cref="CoreLibrary.Brought" />), against the embedded modules.</summary>
+    public static HashSet<(string Module, string File)> Brought(IReadOnlyList<SyntaxTree> program) {
+        var modules = program.Count > 0 ? ModulesFor(program[0].Options) : Modules;
+        var core = program.Count > 0 ? CoreLibrary.TreesFor(program[0].Options) : CoreLibrary.Trees;
+        return CoreLibrary.Brought(
+            program.Where(t => !IsEmbedded(t, modules)),
+            m => m == Core ? core : modules.TryGetValue(m, out var files) ? files : []
+        );
     }
 
     static bool IsEmbedded(SyntaxTree tree, IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> modules) =>

@@ -61,7 +61,7 @@ public sealed partial class Compilation {
         // its '#if os(...)' says follows what theirs does.
         var target = syntaxTrees.FirstOrDefault(static t => !CoreLibrary.Contains(t))?.Options ?? options;
         var own = syntaxTrees.Where(static t => !CoreLibrary.Contains(t)).ToList();
-        var brought = CoreLibrary.Brought(own);
+        var brought = CoreLibrary.Brought(own, m => m == CoreLibrary.ModuleName ? CoreLibrary.TreesFor(target) : []);
         SyntaxTrees = [..own, ..CoreLibrary.TreesFor(target).Where(t => !CoreLibrary.IsBrought(t, brought))];
         Options = options;
 

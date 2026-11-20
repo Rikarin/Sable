@@ -208,7 +208,7 @@ public static class TestHarness {
         var program = trees.ToList();
         // Each file for its own target (a package's files may differ), but
         // knowing the whole program: a library file it has its own of is its.
-        var brought = CoreLibrary.Brought(program);
+        var brought = Library.Brought(program);
         foreach (var tree in program) {
             foreach (var library in Library.For(tree).Where(l => !CoreLibrary.IsBrought(l, brought))) {
                 if (seen.Add(library)) {

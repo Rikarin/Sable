@@ -113,8 +113,12 @@ public static class NativeObjects {
     ///     Where ThinLTO keeps what it optimised for each unit, so that a link
     ///     after one unit changed optimises that unit again and not the rest.
     /// </param>
-    public static NativeBuildResult Link(IReadOnlyList<string> objects, string outputPath, NativeOptions? options = null, string? thinLtoCache = null) {
-        options ??= NativeOptions.Of(false, true);
+    public static NativeBuildResult Link(IReadOnlyList<string> objects, string outputPath, NativeOptions? options = null, string? thinLtoCache = null) =>
+        Link(objects, outputPath, options ?? NativeOptions.Of(false, true), thinLtoCache, [], asProgram: true);
+
+    /// <param name="kind">What the link makes other than an executable: <c>-shared</c> with its name, or <c>-r</c>.</param>
+    /// <param name="asProgram">Add the platform's flags for a link that makes a program, which a relocatable link must not have.</param>
+    static NativeBuildResult Link(IReadOnlyList<string> objects, string outputPath, NativeOptions options, string? thinLtoCache, IReadOnlyList<string> kind, bool asProgram) {
         var target = options.TargetOrHost;
         var temporary = outputPath + $".{Environment.ProcessId}.tmp";
         try {
@@ -124,8 +128,8 @@ public static class NativeObjects {
                 : target.Platform == NativePlatform.Windows ? ["-Wl,/lldltocache:" + thinLtoCache]
                 : ["-Wl,--thinlto-cache-dir=" + thinLtoCache];
             List<string> arguments = [
-                ..target.ClangFlags, ..NativeBuild.SysrootFlags(options), ..lto.Count > 0 ? NativeBuild.CompileFlags(options) : [], ..lto, ..cache,
-                ..LinkArguments(objects, temporary, target.Platform, options), ..NativeBuild.CrossLinkFlags(target),
+                ..target.ClangFlags, ..NativeBuild.SysrootFlags(options), ..lto.Count > 0 ? NativeBuild.CompileFlags(options) : [], ..lto, ..cache, ..kind,
+                ..asProgram ? LinkArguments(objects, temporary, target.Platform, options) : [..objects, "-o", temporary], ..NativeBuild.CrossLinkFlags(target),
             ];
             var (exitCode, output) = Run(NativeBuild.CompilerPath, arguments);
             if (exitCode != 0) {
@@ -136,6 +140,40 @@ public static class NativeObjects {
             return new(true, output);
         } finally {
             File.Delete(temporary);
+        }
+    }
+
+    /// <summary>
+    ///     Whether a library for <paramref name="target" /> can be made of
+    ///     separately compiled objects (<see cref="LinkLibrary" />): a shared
+    ///     library anywhere, and a static one where the link can join the
+    ///     objects into one (<c>-r</c>), which Microsoft's cannot.
+    /// </summary>
+    public static bool LinksLibrary(LibraryKind kind, NativeTarget target) =>
+        kind == LibraryKind.Dynamic || target.Platform is NativePlatform.MacOS or NativePlatform.Linux;
+
+    /// <summary>
+    ///     Makes a library C links of separately compiled objects, the
+    ///     runtime's among them, written whole or not at all. A shared library
+    ///     is linked as an executable is, <c>-shared</c>. A static one is the
+    ///     objects joined by a relocatable link (<c>-r</c>) into one, archived:
+    ///     so a C program that takes any of it takes all of it — the unit that
+    ///     sets up the globals included — and objects that are bitcode are
+    ///     optimised together as they join, as an executable's are.
+    /// </summary>
+    public static NativeBuildResult LinkLibrary(IReadOnlyList<string> objects, string outputPath, LibraryKind kind, NativeOptions options, string? thinLtoCache = null) {
+        var target = options.TargetOrHost;
+        if (kind == LibraryKind.Dynamic) {
+            return Link(objects, outputPath, options, thinLtoCache, NativeBuild.SharedFlags(Path.GetFileName(outputPath), target), asProgram: true);
+        }
+
+        var directory = Directory.CreateTempSubdirectory("sable-library-");
+        try {
+            var joined = Path.Combine(directory.FullName, "library.o");
+            var linked = Link(objects, joined, options, thinLtoCache, ["-r", "-nostdlib"], asProgram: false);
+            return linked.Succeeded ? NativeBuild.Archive([joined], outputPath, target) : linked;
+        } finally {
+            directory.Delete(true);
         }
     }
 

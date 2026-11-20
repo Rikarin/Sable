@@ -74,7 +74,17 @@ public sealed record BuildSettings(string Profile, bool Optimise, string? DebugD
     ///     debugger would need kept. Otherwise only an unchanged build is skipped.
     /// </summary>
     public bool Separate =>
-        !Whole && (Debug ? !Optimise : Optimise && Native.Lto != LtoMode.Fat);
+        !Whole && (Debug ? !Optimise : Optimise && Native.Lto != LtoMode.Fat)
+        && (Library is not { } kind || NativeObjects.LinksLibrary(kind, Native.TargetOrHost));
+
+    /// <summary>
+    ///     Build a library C links rather than an executable: the first unit
+    ///     leads it, with no entry point — it sets up the globals as the
+    ///     library is loaded (<see cref="SilGen.LowerUnit" />'s
+    ///     <c>library</c>). Compiled separately where the target's link can
+    ///     make one of objects (<see cref="NativeObjects.LinksLibrary" />).
+    /// </summary>
+    public LibraryKind? Library { get; init; }
 
     /// <summary>Compile the program whole even where it could be compiled separately: what a separate build is checked against.</summary>
     public bool Whole { get; init; }
@@ -172,7 +182,8 @@ public static class IncrementalBuild {
     const string CacheVersion = "sable-build-cache-1";
 
     /// <summary>
-    ///     Builds <paramref name="units" /> — the first holding the entry point —
+    ///     Builds <paramref name="units" /> — the first holding the entry point,
+    ///     or leading the library <see cref="BuildSettings.Library" /> asks for —
     ///     into <paramref name="executable" />, keeping what can be kept in
     ///     <paramref name="cacheDirectory" />.
     /// </summary>
@@ -182,7 +193,7 @@ public static class IncrementalBuild {
             _ = Toolchain;
         }
 
-        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}|overflow={settings.OverflowChecks}|whole={settings.Whole}|deny-reflection={settings.DenyReflection}|arc={settings.ArcChecks}|sil={settings.SilLevel}|debug-assertions={settings.DebugAssertions}|native={settings.Native.Key}";
+        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}|overflow={settings.OverflowChecks}|whole={settings.Whole}|deny-reflection={settings.DenyReflection}|arc={settings.ArcChecks}|sil={settings.SilLevel}|debug-assertions={settings.DebugAssertions}|native={settings.Native.Key}|library={settings.Library}";
 
         // ---- Read and hash every file --------------------------------------
         string[][] texts;
@@ -335,7 +346,7 @@ public static class IncrementalBuild {
     // =======================================================================
 
     static BuildOutcome Whole(IReadOnlyList<SyntaxTree> program, BuildSettings settings, string executable, string cacheDirectory, BuildTimings? timings) {
-        var result = Pipeline.Compile(program, settings.DebugDirectory, settings.Exclusivity, timings, optimised: settings.Optimise, target: settings.Native.TargetOrHost, checkOverflow: settings.OverflowChecks, denyReflection: settings.DenyReflection, optLevel: settings.SilLevel, checkArc: settings.ArcChecks);
+        var result = Pipeline.Compile(program, settings.DebugDirectory, settings.Exclusivity, timings, optimised: settings.Optimise, target: settings.Native.TargetOrHost, checkOverflow: settings.OverflowChecks, denyReflection: settings.DenyReflection, optLevel: settings.SilLevel, checkArc: settings.ArcChecks, library: settings.Library is not null);
         if (!result.Succeeded) {
             return BuildOutcome.Failed(result.Errors) with { Warnings = result.Warnings };
         }
@@ -343,7 +354,9 @@ public static class IncrementalBuild {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(executable))!);
         NativeBuildResult native;
         using (BuildTimings.Of(timings, "clang")) {
-            native = NativeBuild.Build(result.LlvmIr!, executable, settings.Native, Path.Combine(cacheDirectory, "objects"));
+            native = settings.Library is { } kind
+                ? NativeBuild.BuildLibrary(result.LlvmIr!, executable, kind, settings.Native, Path.Combine(cacheDirectory, "objects"))
+                : NativeBuild.Build(result.LlvmIr!, executable, settings.Native, Path.Combine(cacheDirectory, "objects"));
         }
 
         return (native.Succeeded
@@ -485,7 +498,8 @@ public static class IncrementalBuild {
                 SilModule module;
                 IReadOnlyList<Diagnostic> lowering;
                 using (BuildTimings.Of(timings, "sil")) {
-                    (module, lowering) = SilGen.LowerUnit(compilation, new SilUnit(owned.Contains), index, denyReflection: settings.DenyReflection);
+                    var leads = settings.Library is not null && ReferenceEquals(unit, own[0]);
+                    (module, lowering) = SilGen.LowerUnit(compilation, new SilUnit(owned.Contains), index, denyReflection: settings.DenyReflection, library: leads);
                     module.CheckExclusivity = settings.Exclusivity;
                     module.CheckArc = settings.ArcChecks;
                     if (!settings.OverflowChecks) {
@@ -505,15 +519,19 @@ public static class IncrementalBuild {
                     return BuildOutcome.Failed([..problems.Select(static p => $"internal error: SIL verification failed: {p}")]);
                 }
 
-                // Optimised, the SIL passes run on the unit as on a whole
-                // program. What they learn about a function from its callees
-                // — whether a parameter escapes, whether a field is written —
-                // they assume the worst of for a function another unit
-                // defines, which this one only declares.
+                // Optimised, the opt-level's SIL passes run on the unit as on
+                // a whole program. What they learn about a function from its
+                // callees — whether a parameter escapes, whether a field is
+                // written — they assume the worst of for a function another
+                // unit defines, which this one only declares; the inliner
+                // copies in only what the unit has the body of (its own
+                // functions, and the instances of generic ones it uses), and
+                // devirtualisation leaves a unit alone. Across units, ThinLTO
+                // inlines as the objects link.
                 if (settings.Optimise) {
                     try {
                         using var _ = BuildTimings.Of(timings, "passes");
-                        SilPassManager.Run(module, SilPassManager.Default);
+                        SilPassManager.Run(module, SilPassManager.ForLevel(settings.SilLevel));
                     } catch (SilPassException failure) {
                         return BuildOutcome.Failed([$"internal error: {failure.Message}"]);
                     }
@@ -563,7 +581,10 @@ public static class IncrementalBuild {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(executable))!);
         NativeBuildResult link;
         using (BuildTimings.Of(timings, "link")) {
-            link = NativeObjects.Link([..units.Select(static u => u.ObjectPath), runtime], executable, settings.Native, Path.Combine(cacheDirectory, "thinlto"));
+            List<string> linked = [..units.Select(static u => u.ObjectPath), runtime];
+            link = settings.Library is { } kind
+                ? NativeObjects.LinkLibrary(linked, executable, kind, settings.Native, Path.Combine(cacheDirectory, "thinlto"))
+                : NativeObjects.Link(linked, executable, settings.Native, Path.Combine(cacheDirectory, "thinlto"));
         }
 
         if (!link.Succeeded) {

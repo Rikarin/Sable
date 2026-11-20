@@ -126,6 +126,81 @@ public sealed class NativeLibraryTests {
         Assert.True(File.Exists(library), fixture.Errors.ToString());
     }
 
+    /// <summary>
+    ///     A package's native library is compiled as a binary is: each package
+    ///     a unit, cached, the member's own setting up every global — its
+    ///     dependency's too — as the library loads. Unoptimised and with
+    ///     ThinLTO (the release default), static and shared, a C program gets
+    ///     what the whole library gives it; a body edit compiles one unit
+    ///     again, and an unchanged build nothing.
+    /// </summary>
+    [Theory]
+    [InlineData(LibraryKind.Static, false)]
+    [InlineData(LibraryKind.Dynamic, false)]
+    [InlineData(LibraryKind.Static, true)]
+    [InlineData(LibraryKind.Dynamic, true)]
+    public void APackagesLibraryIsCompiledUnitByUnit(LibraryKind kind, bool release) {
+        if (!Programs.CanBuild || !NativeObjects.LinksLibrary(kind, NativeTarget.Host)) {
+            return;
+        }
+
+        using var fixture = new PackageFixture();
+        fixture.Package("pool", "pool", "0.1.0", "", ("src/lib.sb", """
+            module Pool
+
+            public class Resource {
+                public var name: String
+
+                public init(name: String) {
+                    self.name = name
+                }
+
+                deinit {
+                    print("released \(name)")
+                }
+            }
+
+            // Declared before what it reads: set up after it, as in a program.
+            public let resource = Resource(name: label)
+            let label = "the pool"
+            """));
+        var manifest = $"[lib]\nkind = \"{(kind == LibraryKind.Static ? "static" : "dynamic")}\"\n\n[dependencies]\npool = {{ path = \"../pool\" }}\n";
+        fixture.Package("counter", "counter", "0.1.0", manifest, ("src/lib.sb", """
+            module Counter
+
+            import Pool
+
+            var total: Int = 40
+
+            @export("counter_add")
+            public fn add(_ n: Int) -> Int {
+                total += n
+                return total
+            }
+
+            @export("counter_name_length")
+            public fn nameLength() -> Int => resource.name.count
+            """));
+
+        var request = new BuildRequest(Release: release, Timings: true);
+        var library = Path.Combine(fixture.Root, "counter", "target", release ? "release" : "dev", NativeBuild.LibraryFileName("counter", kind, NativeTarget.Host));
+        var name = Path.GetFileName(library);
+        Assert.Empty(PackageBuilder.Build(fixture.Load("counter"), fixture.Environment, request)!);
+        Assert.Contains($"Built {name}: incremental, 3 unit(s) compiled, 0 reused", fixture.Errors.ToString(), StringComparison.Ordinal);
+        Assert.Equal(Expected, LinkAndRun(library, kind));
+
+        fixture.Errors.GetStringBuilder().Clear();
+        var pool = Path.Combine(fixture.Root, "pool", "src", "lib.sb");
+        File.WriteAllText(pool, File.ReadAllText(pool).Replace("self.name = name", "self.name = name + \"!\"", StringComparison.Ordinal));
+        Assert.Empty(PackageBuilder.Build(fixture.Load("counter"), fixture.Environment, request)!);
+        Assert.Contains($"Built {name}: incremental, 1 unit(s) compiled, 2 reused", fixture.Errors.ToString(), StringComparison.Ordinal);
+        Assert.Equal("9\n42\n45\nreleased the pool!\n", LinkAndRun(library, kind));
+
+        fixture.Errors.GetStringBuilder().Clear();
+        Assert.Empty(PackageBuilder.Build(fixture.Load("counter"), fixture.Environment, request)!);
+        Assert.Contains($"Built {name}: fresh", fixture.Errors.ToString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void AManifestsLibraryKindIsStaticOrDynamic() {
         using var fixture = new PackageFixture();
@@ -156,36 +231,41 @@ public sealed class NativeLibraryTests {
             var library = Path.Combine(directory.FullName, NativeBuild.LibraryFileName("counter", kind, NativeTarget.Host));
             var built = NativeBuild.BuildLibrary(compiled.LlvmIr!, library, kind, NativeOptions.Of(optimise: true, debug: false), Path.Combine(directory.FullName, "runtime"));
             Assert.True(built.Succeeded, built.Output);
-
-            var host = Path.Combine(directory.FullName, "host.c");
-            File.WriteAllText(host, Host);
-            var executable = Platform.Executable(Path.Combine(directory.FullName, "host"));
-            // Windows: the C runtime the library's objects were compiled for,
-            // and a shared library's import library, which the link wrote
-            // beside it under the static one's name. macOS and Linux: the
-            // shared library is found beside the program. A static library's
-            // objects call the DLL C runtime too, which clang's driver, linking
-            // the static one (libcmt) by default, would conflict with: so the
-            // program is linked with only the one, as Microsoft's /MD links it.
-            List<string> arguments = [..NativeTarget.Host.ClangFlags, host];
-            arguments.AddRange((kind, NativeTarget.Host.Platform) switch {
-                (LibraryKind.Dynamic, NativePlatform.Windows) => [Path.Combine(directory.FullName, "counter.lib")],
-                (LibraryKind.Static, NativePlatform.Windows) => [library, "-Wl,/NODEFAULTLIB:libcmt"],
-                (LibraryKind.Dynamic, NativePlatform.MacOS) => [library, "-Wl,-rpath,@executable_path"],
-                (LibraryKind.Dynamic, _) => [library, "-Wl,-rpath,$ORIGIN"],
-                (_, NativePlatform.Linux) => [library, "-lm", "-lpthread"],
-                _ => [library],
-            });
-            arguments.AddRange(["-o", executable]);
-            var (linked, linkOutput) = Run(NativeBuild.CompilerPath, arguments, null);
-            Assert.True(linked == 0, linkOutput);
-
-            var (exitCode, output) = Run(executable, [], "1");
-            Assert.True(exitCode == 0, output);
-            return output.Replace("\r\n", "\n", StringComparison.Ordinal);
+            return LinkAndRun(library, kind);
         } finally {
             directory.Delete(true);
         }
+    }
+
+    /// <summary>A C program linked against <paramref name="library" />, beside it, and run with the leak check on: what it printed.</summary>
+    static string LinkAndRun(string library, LibraryKind kind) {
+        var directory = Path.GetDirectoryName(library)!;
+        var host = Path.Combine(directory, "host.c");
+        File.WriteAllText(host, Host);
+        var executable = Platform.Executable(Path.Combine(directory, "host"));
+        // Windows: the C runtime the library's objects were compiled for,
+        // and a shared library's import library, which the link wrote
+        // beside it under the static one's name. macOS and Linux: the
+        // shared library is found beside the program. A static library's
+        // objects call the DLL C runtime too, which clang's driver, linking
+        // the static one (libcmt) by default, would conflict with: so the
+        // program is linked with only the one, as Microsoft's /MD links it.
+        List<string> arguments = [..NativeTarget.Host.ClangFlags, host];
+        arguments.AddRange((kind, NativeTarget.Host.Platform) switch {
+            (LibraryKind.Dynamic, NativePlatform.Windows) => [Path.ChangeExtension(library, ".lib")],
+            (LibraryKind.Static, NativePlatform.Windows) => [library, "-Wl,/NODEFAULTLIB:libcmt"],
+            (LibraryKind.Dynamic, NativePlatform.MacOS) => [library, "-Wl,-rpath,@executable_path"],
+            (LibraryKind.Dynamic, _) => [library, "-Wl,-rpath,$ORIGIN"],
+            (_, NativePlatform.Linux) => [library, "-lm", "-lpthread"],
+            _ => [library],
+        });
+        arguments.AddRange(["-o", executable]);
+        var (linked, linkOutput) = Run(NativeBuild.CompilerPath, arguments, null);
+        Assert.True(linked == 0, linkOutput);
+
+        var (exitCode, output) = Run(executable, [], "1");
+        Assert.True(exitCode == 0, output);
+        return output.Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 
     static (int ExitCode, string Output) Run(string program, IReadOnlyList<string> arguments, string? checkLeaks) {

@@ -191,15 +191,23 @@ public sealed partial class SilGen {
     ///     <see cref="SilModule.Unit" /> says which is which.
     /// </summary>
     /// <param name="program">The program's declarations, gathered once for all its units; gathered here when not given.</param>
+    /// <param name="library">
+    ///     The unit leads a library C links (<see cref="LowerLibraryByFile" />):
+    ///     it has no entry point, and in its place sets up every global of the
+    ///     program and makes the library's constructor, as the unit the program
+    ///     starts in otherwise does.
+    /// </param>
     public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) LowerUnit(
         Compilation compilation,
         SilUnit unit,
         SilProgram? program = null,
         FunctionSymbol? entryPoint = null,
-        bool denyReflection = false
+        bool denyReflection = false,
+        bool library = false
     ) {
-        var generator = new SilGen(compilation) { _entryOverride = entryPoint, _unit = unit, _program = program, _denyReflection = denyReflection };
+        var generator = new SilGen(compilation) { _entryOverride = entryPoint, _unit = unit, _program = program, _denyReflection = denyReflection, _library = library };
         generator._module.Unit = new();
+        generator._module.IsLibrary = library;
         generator._module.DenyReflection = denyReflection;
         generator.LowerAll();
         return (generator._module, generator.Diagnostics);
@@ -357,7 +365,7 @@ public sealed partial class SilGen {
 
         // Separately, the unit the program starts in sets up every global;
         // another makes storage only for those its code names.
-        DeclareGlobals(all: _unit is null || _evaluation is not null
+        DeclareGlobals(all: _unit is null || _evaluation is not null || _library
             || entry is not null && _declarations.TryGetValue(entry, out var start) && _unit.Owns(start.Model.SyntaxTree));
         _entrySymbol = entry;
 
@@ -425,7 +433,7 @@ public sealed partial class SilGen {
 
         // Separately, the globals are set up by the unit the program starts
         // in. Their initial values may ask for instances nothing else did.
-        if (_unit is null || _module.EntryPoint is not null) {
+        if (_unit is null || _module.EntryPoint is not null || _library) {
             LowerGlobalLifetimes();
             LowerPendingInstances();
         }

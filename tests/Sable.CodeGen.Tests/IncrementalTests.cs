@@ -271,11 +271,11 @@ public sealed class IncrementalTests {
     }
 
     /// <summary>
-    ///     A release profile that asks for ThinLTO is compiled separately too:
-    ///     each unit's SIL passes run on the unit, its object is LLVM bitcode,
-    ///     and the link optimises across units. A body change compiles one
-    ///     unit again, and the program behaves as the whole program built
-    ///     from nothing does. The default, whole-program LTO, stays whole.
+    ///     A release build — ThinLTO, the profile's default — is compiled
+    ///     separately too: each unit's SIL passes run on the unit, its object
+    ///     is LLVM bitcode, and the link optimises across units. A body change
+    ///     compiles one unit again, and the program behaves as the whole
+    ///     program built from nothing does. Whole-program LTO stays whole.
     /// </summary>
     [Fact]
     public void AThinLtoReleaseBuildIsCompiledSeparately() {
@@ -285,9 +285,11 @@ public sealed class IncrementalTests {
 
         using var scenario = new Scenario();
         var release = new BuildRequest(Release: true);
+        File.AppendAllText(scenario.PathOf("app/sable.toml"), "\n[profile.release]\nlto = \"fat\"\n");
         Assert.Equal("whole", scenario.Check(release).Kind);
 
-        File.AppendAllText(scenario.PathOf("app/sable.toml"), "\n[profile.release]\nlto = \"thin\"\n");
+        // ThinLTO is the release profile's default.
+        scenario.Edit("app/sable.toml", "lto = \"fat\"\n", "");
         var first = scenario.Check(release);
         Assert.Equal(Expected, first.Output);
         Assert.Equal(("incremental", Units, 0), (first.Kind, first.Compiled, first.Reused));
@@ -298,7 +300,7 @@ public sealed class IncrementalTests {
         Assert.Equal(("incremental", 1, Units - 1), (built.Kind, built.Compiled, built.Reused));
 
         // Without link-time optimisation, the units are native objects.
-        scenario.Edit("app/sable.toml", "lto = \"thin\"", "lto = \"off\"");
+        File.AppendAllText(scenario.PathOf("app/sable.toml"), "lto = \"off\"\n");
         Assert.Equal(("incremental", Units), scenario.Check(release) is var off ? (off.Kind, off.Compiled) : default);
     }
 
@@ -542,7 +544,8 @@ public sealed class IncrementalTests {
         var release = new BuildRequest(Release: true);
         var built = scenario.Check(release);
         Assert.Equal(Expected, built.Output);
-        Assert.Equal("whole", built.Kind);
+        // Its own units: the profile's settings key them.
+        Assert.Equal(("incremental", Units, 0), (built.Kind, built.Compiled, built.Reused));
         Assert.Equal("fresh", scenario.Build(release).Kind);
         Assert.Equal("fresh", scenario.Build(new()).Kind);
 

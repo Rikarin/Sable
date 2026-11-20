@@ -216,8 +216,15 @@ let manifest = Package {
   destroys them as the process exits, before its leak check. On Windows it
   is compiled for the DLL C runtime, as `/MD` is, and a static library also
   holds compiler-rt's builtins, which Microsoft's toolchain lacks. A single file
-  is built so by `sable build file.sb --emit staticlib` (or `dylib`). Not
-  yet cached between builds as a binary's units are.
+  is built so by `sable build file.sb --emit staticlib` (or `dylib`). A
+  package's library is built as a binary is (§5.4, "As built"): each package
+  a unit, cached, the package's own unit setting up every global as the
+  library loads. A shared library is the units' objects linked `-shared`; a
+  static one is them joined by a relocatable link (`-r`, with ThinLTO where
+  they are bitcode) into one object, archived with the runtime, so that a C
+  program taking any of it takes all of it. Where the profile compiles whole
+  (`lto = "fat"`), and for a static library on Windows, whose linker makes
+  no relocatable object, the library is compiled whole.
 - Field names are the TOML keys in Sable's spelling (`defaultFeatures`,
   `optLevel`); every table of the TOML format has a field. Enumerated
   settings are enum cases (`.fat`, `.abort`), so a misspelling is a type
@@ -399,7 +406,7 @@ act on is a warning the build prints, never taken silently.
 |---|---|---|
 | `opt-level` | `0` / `3` | clang's `-O0`…`-O3`, `-Os`, `-Oz`, and the SIL passes below |
 | `debug` | `true` / `false` | DWARF (`-g`) at any level; optimised, the SIL passes still run |
-| `lto` | `"fat"` | `-flto` or `-flto=thin` in an optimised build, the runtime compiled to bitcode with it so that its small functions inline; on Linux and Windows through lld, and without, where clang cannot link with lld (a warning when the profile wrote `lto`) |
+| `lto` | `"thin"` | `-flto=thin` or `-flto` in an optimised build: `"thin"` compiles each package apart, cached, and inlines across them as they link; `"fat"` compiles the program whole; the runtime compiled to bitcode with it so that its small functions inline; on Linux and Windows through lld, and without, where clang cannot link with lld (a warning when the profile wrote `lto`) |
 | `codegen-units` | — | `1` compiles the program whole even in a dev build; the units are otherwise the packages, so another count is warned about |
 | `incremental` | `true` | `false` compiles the program whole each time, keeping no unit's object; an unchanged build is still skipped |
 | `panic` | `"abort"` | a trap always aborts; `"unwind"` is warned about |
@@ -421,9 +428,12 @@ The SIL passes each opt-level runs (`SilPassManager.ForLevel`):
 | `s` | as `2` without loop versioning, which copies a loop for its fast path |
 | `z` | as `s` without the inliner, which copies a callee into every caller |
 
-An optimised program compiled package by package (`lto = "thin"` or off)
-runs only the ARC passes, on each unit: inlining and devirtualisation need
-the whole program. A dev build with debug information, compiled so, runs
+An optimised program compiled package by package (`lto = "thin"`, the
+default, or off) runs the opt-level's passes on each unit: the inliner
+copies in what the unit has the body of — its own functions, and the
+instances of generic ones it uses — and ThinLTO inlines across units as
+they link; devirtualisation needs the whole program, and leaves a unit
+alone. A dev build with debug information, compiled so, runs
 none. A single file's `sable build` takes the same levels as `-O0` to
 `-O3`, `-Os` and `-Oz` (`-O2` by default), and `-g` alone builds at `-O0`.
 
@@ -574,11 +584,13 @@ the standard library's too, is keyed by every unit's extensions'
 fingerprint. A body inside an extension is its unit's own, as any other.
 Clang runs on units in parallel; lowering is still one unit at a time.
 An unoptimised debug build is compiled this way, and so is an optimised one
-whose profile asks for `lto = "thin"` (or `"off"`): each unit's SIL passes
-run on the unit — assuming the worst of what another unit defines — its
-object is LLVM bitcode, and the link optimises across units with ThinLTO,
-keeping ThinLTO's own cache beside the objects. The default `lto = "fat"`,
-and an optimised build with debug information, compile the program whole.
+whose profile has `lto = "thin"` — the default — or `"off"`: each unit's SIL
+passes run on the unit — assuming the worst of what another unit defines —
+its object is LLVM bitcode, and the link optimises across units with
+ThinLTO, keeping ThinLTO's own cache beside the objects. `lto = "fat"`, and
+an optimised build with debug information, compile the program whole. A
+package's native library (`[lib] kind`) is built the same way, its own
+unit leading in place of an entry file (§5.2.2).
 The runtime is compiled once per set of options and kept, in the build cache
 (or `$SABLE_HOME/cache/runtime` for a single file).
 

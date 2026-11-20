@@ -371,12 +371,20 @@ Order matters; each of these is a self-contained lowering:
   core library is parsed per target), a dependency's `when:` and the C ABI's
   classification follow the target. Every target compiles to an object
   (`--emit obj`); an executable links where the runtime has a platform layer —
-  macOS and Linux. A program can also be a library C links (`--emit
-  staticlib|dylib`, `[lib] kind`; docs/05 §5.2.2): no entry point, its
-  globals set up by a constructor and destroyed by the runtime at exit.
-  Not yet: the runtime's Windows and WASI layers (it needs
-  pthread, dlfcn, execinfo, posix_spawn, dirent and poll), WebAssembly's C ABI
-  for `@extern` structs, and CI beyond Linux x64 and macOS arm64.
+  `runtime/platform_posix.c` (macOS, Linux: kqueue or epoll),
+  `platform_win32.c` (Windows: an I/O completion port, SRW locks) and
+  `platform_wasi.c` (WASI preview 1: one thread, so no executor pool and the
+  blocking pool's work runs inline; no reactor, sockets or processes; a trap
+  exits 134). For another machine the target's C library comes from
+  `--sysroot`, else `$SABLE_HOME/sysroots/<triple>`, else for WASI
+  `$WASI_SYSROOT`, wasi-sdk's or wasi-libc's installed sysroot; a build that
+  finds none says so and where it looked, not as an internal error, and the
+  compiled runtime is cached by target and sysroot. A program can also be a
+  library C links (`--emit staticlib|dylib`, `[lib] kind`; docs/05 §5.2.2):
+  no entry point, its globals set up by a constructor and destroyed by the
+  runtime at exit. CI builds and tests on Linux x64 and arm64, macOS arm64
+  and Windows x64, and runs WASI programs under wasmtime. Not yet: WASI
+  threads (`wasm32-wasip1-threads`) and sockets (preview 2).
 
 ### 2.4 Minimal runtime (C)
 

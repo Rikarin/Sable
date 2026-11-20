@@ -1,0 +1,73 @@
+module Negative.ThrowingInitialisers
+
+// An initialiser throws as a function does (#287): typed, bare 'throws',
+// or 'rethrows'; a call to one needs 'try', and a requirement that cannot
+// throw is not met by one that can.
+
+struct Fail: Error { }
+
+struct Parsed {
+    var value: Int
+
+    init(_ text: String) throws(Fail) {
+        if text.isEmpty {
+            throw Fail()
+        }
+        self.value = text.count
+    }
+
+    init(any text: String) throws {
+        self.value = try Parsed(text).value
+    }
+
+    init(each make: () throws(Fail) -> Int) rethrows {
+        self.value = try make()
+    }
+
+    init(nothing: Int) rethrows { //! S3048 'init' is 'rethrows'
+        self.value = nothing
+    }
+
+    init(quiet: Int) {
+        self.value = quiet
+        throw Fail() //! S3033 does not declare 'throws'
+    }
+}
+
+fn untried() -> Int {
+    let parsed = Parsed("1") //! S3032 'init' can throw
+    return parsed.value
+}
+
+fn handled() -> Int {
+    let made = Parsed(each: { 1 })
+    return made.value
+}
+
+fn wrongType() throws(Fail) -> Int {
+    return try Parsed(any: "2").value //! S3054 throws 'any Error'
+}
+
+protocol Seeded {
+    init(seed: Int)
+}
+
+struct Strict: Seeded { //! S3027 'init(seed: Int)'
+    var seed: Int
+
+    init(seed: Int) throws(Fail) {
+        self.seed = seed
+    }
+}
+
+protocol Loaded {
+    init(path: String) throws(Fail)
+}
+
+struct Lenient: Loaded {
+    var path: String
+
+    init(path: String) {
+        self.path = path
+    }
+}

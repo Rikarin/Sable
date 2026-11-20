@@ -87,3 +87,13 @@ fn algebraWithSetsOfDifferentLengths() {
     assert(BitSet([2]).isSubset(of: long))
     assert(BitSet().isSubset(of: short))
 }
+
+@test
+fn aBitSetIsMadeFromAnySequenceOfInts() {
+    let small = BitSet(1...3)
+    assertEqual(small.count, 3)
+    assert(small.contains(2))
+    let collected: BitSet = [5, 5, 64].collect()
+    assertEqual(collected.count, 2)
+    assert(collected.contains(64))
+}

@@ -483,6 +483,14 @@ void sable_destroy_uncounted(void *pointer) {
     object_gone(object);
 }
 
+// An object whose initialiser threw, before its allocator lets go of it:
+// never made, so when it goes its class's destroy function runs no deinit
+// and only destroys the fields — those set before the throw; the rest are
+// still empty.
+void sable_object_unmade(void *pointer) {
+    flags_set(pointer, SABLE_UNMADE);
+}
+
 // The last strong reference gone: its count is zero, and it is counted.
 // The deinit runs, the fields are destroyed, and the memory goes when no
 // unowned reference holds it. No other thread can reach it now but through

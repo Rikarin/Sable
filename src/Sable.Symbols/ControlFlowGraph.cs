@@ -26,9 +26,23 @@ internal readonly record struct FlowOp(FlowOpKind Kind, Symbol? Symbol, BoundNod
 ///     and, for a subclass, the superclass whose part of the object
 ///     <c>super.init(…)</c> has to build.
 /// </summary>
-internal sealed class InitializedSelf(NamedTypeSymbol type, IReadOnlyList<FieldSymbol> fields, NamedTypeSymbol? superclass = null, bool superclassInitIsImplicit = false) {
+internal sealed class InitializedSelf(
+    NamedTypeSymbol type,
+    IReadOnlyList<FieldSymbol> fields,
+    NamedTypeSymbol? superclass = null,
+    bool superclassInitIsImplicit = false,
+    Symbol? whole = null
+) {
     public NamedTypeSymbol Type { get; } = type;
     public IReadOnlyList<FieldSymbol> Fields { get; } = fields;
+
+    /// <summary>
+    ///     For an initialiser of a type with no fields to set one by one — a
+    ///     built-in type's, an enum's or a union's, in an extension — self as
+    ///     a whole, tracked as a field is: given its value by <c>self = …</c>
+    ///     or <c>self.init(…)</c>. The symbol is the initialiser's own.
+    /// </summary>
+    public Symbol? Whole { get; } = whole;
 
     /// <summary>
     ///     The superclass, for a class that has one: tracked as a field is,
@@ -810,6 +824,10 @@ internal sealed class ControlFlowGraph {
         void WriteEveryField(BoundNode node) {
             foreach (var field in Self!.Fields) {
                 Op(FlowOpKind.Write, field, node);
+            }
+
+            if (Self.Whole is { } whole) {
+                Op(FlowOpKind.Write, whole, node);
             }
         }
 

@@ -581,7 +581,13 @@ public sealed partial class Compilation {
                 return;
 
             case InitDeclarationSyntax declaration when container is NamedTypeSymbol type:
-                DeclareInitializer(declaration, type);
+                DeclareInitializer(declaration, type, type);
+                return;
+
+            // Only a value type's extension's, or a growable array's, gets
+            // this far (RejectInExtension).
+            case InitDeclarationSyntax declaration when container is ExtensionSymbol extension:
+                DeclareInitializer(declaration, extension, extension.ExtendedType);
                 return;
 
             case OperatorDeclarationSyntax declaration:
@@ -1025,26 +1031,7 @@ public sealed partial class Compilation {
             ? TypeBinder.BindReturnType(clause.Type, function, scope)
             : Core.Void;
 
-        function.IsRethrows =
-            declaration.ThrowsSpec?.ThrowsKeyword.Kind == SyntaxKind.RethrowsKeyword;
-
-        function.ThrownTypeResolver = () => {
-            if (declaration.ThrowsSpec is not { } spec) {
-                return null;
-            }
-
-            if (function.IsRethrows) {
-                return TypeBinder.RethrownType(function.Parameters.Select(static p => p.Type), function.RethrownAlso);
-            }
-
-            return spec.ErrorType is { } errorType
-                ? TypeBinder.BindType(errorType, function, scope)
-                : Core.AnyError;
-        };
-
-        if (function.IsRethrows && declaration.ThrowsSpec?.ErrorType is { } also) {
-            function.RethrownAlsoResolver = () => TypeBinder.BindType(also, function, scope);
-        }
+        TypeBinder.BindThrows(function, declaration.ThrowsSpec, scope);
 
         // Its constraints now, before its signature or body is looked at:
         // 'T: Numeric' is what lets the body multiply two T's.
@@ -1475,14 +1462,18 @@ public sealed partial class Compilation {
         RecordDeclaration(declaration, enumCase);
     }
 
-    void DeclareInitializer(InitDeclarationSyntax declaration, NamedTypeSymbol type) {
+    /// <param name="container">The type, or an extension of it, or of every growable array of a kind.</param>
+    /// <param name="type">The type, or the array extension's own (whose ExtendedArray is the array).</param>
+    void DeclareInitializer(InitDeclarationSyntax declaration, Symbol container, NamedTypeSymbol type) {
         var function = new FunctionSymbol(
             "init",
-            type,
+            container,
             declaration,
-            AccessibilityOf(declaration.Modifiers, type),
+            AccessibilityOf(declaration.Modifiers, container),
             FunctionKind.Initializer
-        );
+        ) {
+            IsAsync = declaration.Modifiers.Any(SyntaxKind.AsyncKeyword)
+        };
 
         // 'init<S: Sequence>(contentsOf s: S) where S.Element == T': an
         // initialiser's own parameters, inferred at the call from its
@@ -1506,11 +1497,12 @@ public sealed partial class Compilation {
         // A protocol's 'init(seed: Int)' is a requirement, met by the
         // conformer's own initialiser, and it makes a Self: through a T it
         // makes a T.
+        // An array extension's makes the array, which its self starts as: '[]'.
         if (type.TypeKind == TypeKind.Protocol) {
             function.IsAbstract = declaration.Body is null;
             function.ReturnTypeResolver = () => type.SelfTypeParameter ?? (TypeSymbol)type;
         } else {
-            function.ReturnTypeResolver = () => type;
+            function.ReturnTypeResolver = () => (TypeSymbol?)type.ExtendedArray ?? type;
         }
 
         // Outside a protocol an initialiser is code: one written without a
@@ -1521,7 +1513,7 @@ public sealed partial class Compilation {
         }
 
         RecordDeclaration(declaration, function);
-        type.AddMember(function);
+        AddTo(container, function);
     }
 
     void DeclareOperator(OperatorDeclarationSyntax declaration, Symbol container) {
@@ -1732,8 +1724,13 @@ public sealed partial class Compilation {
                 extended.Extensions = extended.Extensions.Add(extension);
             }
 
+            // A value type's extension may add an initialiser that gives
+            // self its value — by 'self.init(…)', 'self = …', or, a
+            // struct's, field by field — as one in the type's body does
+            // (SYNTAX.md §11). A class's would be a designated one.
+            var initializers = extended.TypeKind is TypeKind.Struct or TypeKind.Enum or TypeKind.Union or TypeKind.Builtin;
             foreach (var member in declaration.Members) {
-                if (RejectInExtension(member)) {
+                if (!(initializers && member is InitDeclarationSyntax) && RejectInExtension(member)) {
                     continue;
                 }
 

@@ -226,7 +226,20 @@ public sealed partial class Binder {
     ///     superclass's fields.
     /// </summary>
     InitializedSelf? InitializedSelfOf(FunctionSymbol function) {
-        if (function is not { FunctionKind: FunctionKind.Initializer, ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor } type }) {
+        // One in an extension of a type with no fields of its own to set —
+        // a built-in type, an enum, a union — gives self its value whole.
+        // A growable array's starts as '[]'.
+        if (function is { FunctionKind: FunctionKind.Initializer, ContainingSymbol: ExtensionSymbol { ExtendedType: { ExtendedArray: null, TypeKind: TypeKind.Builtin or TypeKind.Enum or TypeKind.Union } extended } }) {
+            return new InitializedSelf(extended, [], whole: function);
+        }
+
+        // A struct's, in its body or an extension, sets its fields.
+        var type = function switch {
+            { FunctionKind: FunctionKind.Initializer, ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor } named } => named,
+            { FunctionKind: FunctionKind.Initializer, ContainingSymbol: ExtensionSymbol { ExtendedType: { ExtendedArray: null, TypeKind: TypeKind.Struct } extendedStruct } } => extendedStruct,
+            _ => null,
+        };
+        if (type is null) {
             return null;
         }
 
@@ -2492,8 +2505,10 @@ public sealed partial class Binder {
             return Record(statement, new BoundReturn(statement, null));
         }
 
+        // An initialiser's bare 'return' stops with what it has built.
         if (statement.Expression is null) {
-            if (!_returnType.Equals(Core.Void) && !_returnType.IsError) {
+            if (!_returnType.Equals(Core.Void) && !_returnType.IsError
+                && EnclosingFunction() is not { FunctionKind: FunctionKind.Initializer }) {
                 _diagnostics.Error(
                     ErrorCode.ERR_ReturnValueRequired,
                     statement.Span,
@@ -3605,7 +3620,7 @@ public sealed partial class Binder {
                     && _compilation.ObservedProperties.ContainsKey(field)
                     && EnclosingFunction() is { } within
                     && (within is { FunctionKind: FunctionKind.Accessor } && ReferenceEquals(within.ContainingSymbol, field)
-                        || within is { FunctionKind: FunctionKind.Initializer } && ReferenceEquals(within.ContainingSymbol, field.ContainingSymbol))) {
+                        || within is { FunctionKind: FunctionKind.Initializer } && ReferenceEquals(InitializedType(within), field.ContainingSymbol))) {
                     field = storage;
                 }
 
@@ -3767,7 +3782,7 @@ public sealed partial class Binder {
         // the type's own initialisers, which builds this value in its place.
         if (name == "init" && receiver is BoundSelfAccess
             && EnclosingFunction() is { FunctionKind: FunctionKind.Initializer } initializer
-            && initializer.ContainingSymbol is NamedTypeSymbol owner) {
+            && InitializedType(initializer) is { } owner) {
             var initializers = owner.GetMembers("init").OfType<FunctionSymbol>().Where(i => !ReferenceEquals(i, initializer)).ToList();
             if (initializers.Count > 0) {
                 return BindMemberGroup(syntax, receiver, initializers, owner, TypeSubstitution.For(receiver.Type));
@@ -4011,6 +4026,24 @@ public sealed partial class Binder {
             AssociatedTypes.RefinedProtocols(protocol).Any(p => ReferenceEquals(p, other));
     }
 
+    /// <summary>What an overload is resolved for: a call, or a subscript read or stored through.</summary>
+    enum SubscriptUse {
+        None,
+        Read,
+        Store,
+    }
+
+    /// <summary>Added to a read-only subscript's cost where it is stored through, so that any that fits and can store wins.</summary>
+    const int ReadOnlySubscriptCost = 1 << 20;
+
+    /// <summary>Of two subscripts, the one with no setter, when the other has one; null when both or neither do.</summary>
+    static FunctionSymbol? ReadOnlyOfTwo(FunctionSymbol first, FunctionSymbol second) =>
+        (BoundIndexAccess.HasSetter(first), BoundIndexAccess.HasSetter(second)) switch {
+            (false, true) => first,
+            (true, false) => second,
+            _ => null,
+        };
+
     static FunctionSymbol? RequirementAndDefault(FunctionSymbol first, FunctionSymbol second) {
         static Symbol? Owner(FunctionSymbol f) => f.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : f.ContainingSymbol;
         static bool InExtension(FunctionSymbol f) => f.ContainingSymbol is ExtensionSymbol;
@@ -4182,6 +4215,14 @@ public sealed partial class Binder {
 
         static bool Hides(Symbol own, Symbol other) =>
             (own, other) switch {
+                // A subscript that only reads does not hide one that stores as
+                // well: an array's 'subscript(fromEnd:)' is RandomAccessCollection's
+                // to read and MutableCollection's to store, and a List's
+                // 'subscript(range:)' its own to read and RangeReplaceableCollection's
+                // to store. Which is meant is the overload's choice (ResolveOverload).
+                (FunctionSymbol { FunctionKind: FunctionKind.Subscript } a, FunctionSymbol { FunctionKind: FunctionKind.Subscript } b)
+                    when !BoundIndexAccess.HasSetter(a) && BoundIndexAccess.HasSetter(b) => false,
+
                 // A concrete method does not hide a generic one of the same labels:
                 // an array's 'append(contentsOf:)' of a slice, and every growable
                 // collection's of any sequence, are both there.
@@ -4924,8 +4965,8 @@ public sealed partial class Binder {
         && group.Receiver is null
         && group.Candidates.Any(static c => !c.TypeParameters.IsEmpty)
         && group.Candidates.All(static c => c.FunctionKind == FunctionKind.Initializer)
-        && group.Candidates[0].ContainingSymbol is NamedTypeSymbol { IsConstructed: false, TypeParameters.IsEmpty: false, TypeKind: not TypeKind.Protocol } type
-        && group.Candidates.All(c => ReferenceEquals(c.ContainingSymbol, type))
+        && InitializedType(group.Candidates[0]) is { IsConstructed: false, TypeParameters.IsEmpty: false, TypeKind: not TypeKind.Protocol } type
+        && group.Candidates.All(c => ReferenceEquals(InitializedType(c), type))
             ? type.TypeParameters
             : [];
 
@@ -5109,7 +5150,7 @@ public sealed partial class Binder {
         // A type parameter is Copyable unless it says '~Copyable': a move-only
         // argument is refused here, at the call, not later inside the body
         // that copies it. An initialiser's are its type's.
-        var parametersOfCall = resolved.FunctionKind == FunctionKind.Initializer && resolved.ContainingSymbol is NamedTypeSymbol { TypeArguments.IsEmpty: true } constructedType
+        var parametersOfCall = resolved.FunctionKind == FunctionKind.Initializer && InitializedType(resolved) is { TypeArguments.IsEmpty: true } constructedType
             ? [..resolved.TypeParameters, ..constructedType.TypeParameters]
             : resolved.TypeParameters;
         foreach (var typeParameter in parametersOfCall) {
@@ -5562,7 +5603,8 @@ public sealed partial class Binder {
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<string?> labels,
         SyntaxNode syntax,
-        TypeSubstitution outer
+        TypeSubstitution outer,
+        SubscriptUse use = SubscriptUse.None
     ) {
         FunctionSymbol? best = null;
         var bestCost = int.MaxValue;
@@ -5575,6 +5617,13 @@ public sealed partial class Binder {
             if (cost is null) {
                 rejected.Add((candidate, _rejection ?? "it does not fit"));
                 continue;
+            }
+
+            // A subscript stored through must be one that can store: one
+            // with no 'set' is chosen only when none that fits has one, and
+            // is then refused as read-only (BindAssignment).
+            if (use == SubscriptUse.Store && !BoundIndexAccess.HasSetter(candidate)) {
+                cost += ReadOnlySubscriptCost;
             }
 
             if (cost < bestCost) {
@@ -5615,6 +5664,15 @@ public sealed partial class Binder {
             // it refines: an array's 'contains(element:)' is the one for it.
             if (MoreSpecific(best, candidate) is { } specific) {
                 best = specific;
+                continue;
+            }
+
+            // Two subscripts of unrelated protocols' extensions, one of which
+            // can store as well: 'xs[^1]' on an array is RandomAccessCollection's
+            // and MutableCollection's. Either reads the same element; a read
+            // takes the one that only reads, which is written for reading.
+            if (use == SubscriptUse.Read && ReadOnlyOfTwo(best, candidate) is { } reader) {
+                best = reader;
                 continue;
             }
 
@@ -6003,7 +6061,10 @@ public sealed partial class Binder {
             };
 
             if (!group.Candidates.IsEmpty) {
-                var resolved = ResolveOverload(group.Candidates, indices, [], syntax, found.Substitution);
+                // Stored through, 'xs[^1] = v' and 'xs[^1].x = v' want a
+                // subscript with a setter, of those whose labels fit.
+                var use = _assignedSpine.Contains(syntax) ? SubscriptUse.Store : SubscriptUse.Read;
+                var resolved = ResolveOverload(group.Candidates, indices, [], syntax, found.Substitution, use);
 
                 if (resolved is null) {
                     return new BoundError(syntax, [receiver, ..BindUnbound(indices)]);
@@ -7084,15 +7145,22 @@ public sealed partial class Binder {
 
         // A plain 'as' says what type a value is to have, so the operand is
         // bound expecting it: 'none as Int?' is that type's none, and
-        // '[1] as Int[>..]?' an array of that kind. A number is bound as it
-        // is written, so that 'as' to another number stays the checked
-        // conversion below, even for a literal.
+        // '[1] as Int[>..]?' an array of that kind. A number literal is
+        // given the type so, as 'let x: T = literal' gives it: '255 as U8'
+        // and '18446744073709551615 as U128' are that type's values, held to
+        // its range where they are written. Any other number is bound as it
+        // is, so that 'as' to another number stays the checked conversion
+        // below; and 'unchecked as' wraps a literal as it does any number.
         var isPlain = syntax.QuestionOrBangToken.IsNone;
-        var operand = BindExpression(syntax.Expression, isPlain && !Core.IsNumeric(target) ? target : null);
+        var isUnchecked = !syntax.UncheckedKeyword.IsNone;
+        var expected = !isPlain ? null
+            : !Core.IsNumeric(target) ? target
+            : !isUnchecked && IsNumberLiteral(syntax.Expression) ? target
+            : null;
+        var operand = BindExpression(syntax.Expression, expected);
 
         // 'as?' yields an optional; 'as' and 'as!' yield the type itself.
         var isOptional = syntax.QuestionOrBangToken.Kind == SyntaxKind.QuestionToken;
-        var isUnchecked = !syntax.UncheckedKeyword.IsNone;
         var type = isOptional ? new OptionalTypeSymbol(target) : target;
 
         if (operand.HasError || target.IsError) {
@@ -7205,6 +7273,15 @@ public sealed partial class Binder {
             $"'{source.ToDisplayString()}' cannot be cast to '{target.ToDisplayString()}'"
         );
     }
+
+    /// <summary>An integer or float literal as written, negated or in parentheses or not: '5', '-2.5', '(-1)'.</summary>
+    static bool IsNumberLiteral(ExpressionSyntax syntax) =>
+        syntax switch {
+            LiteralExpressionSyntax { Token.Kind: SyntaxKind.IntegerLiteralToken or SyntaxKind.FloatLiteralToken } => true,
+            PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.MinusToken, Operand: var operand } => IsNumberLiteral(operand),
+            ParenthesizedExpressionSyntax { Expression: var inner } => IsNumberLiteral(inner),
+            _ => false,
+        };
 
     /// <summary>A type whose values may turn out, as the program runs, to be some other type.</summary>
     static bool IsDynamicallyTyped(TypeSymbol type) =>
@@ -7373,8 +7450,19 @@ public sealed partial class Binder {
     bool InitialisesLetField(BoundExpression target) =>
         target is BoundFieldAccess { Receiver: BoundSelfAccess, Field: { IsStatic: false, IsComputed: false } field }
         && _containingSymbol is FunctionSymbol { FunctionKind: FunctionKind.Initializer } initializer
-        && initializer.ContainingSymbol is NamedTypeSymbol owner
+        && InitializedType(initializer) is { } owner
         && ReferenceEquals(field.ContainingSymbol, owner.OriginalDefinition);
+
+    /// <summary>
+    ///     The type an initialiser builds: its own, or the one its extension
+    ///     extends — but not an array extension's, whose self is the array.
+    /// </summary>
+    static NamedTypeSymbol? InitializedType(FunctionSymbol initializer) =>
+        initializer.ContainingSymbol switch {
+            NamedTypeSymbol owner => owner,
+            ExtensionSymbol { ExtendedType: { ExtendedArray: null } extended } => extended,
+            _ => null,
+        };
 
     /// <summary>
     ///     An <c>inout</c> or <c>out</c> argument is written by the callee, so it
@@ -7516,6 +7604,16 @@ public sealed partial class Binder {
                 ErrorCode.ERR_NotAssignable,
                 syntax.Left.Span,
                 "a range of an array's elements is read as a slice, and cannot be stored to; store each element"
+            );
+            return new BoundError(syntax, target, value);
+        }
+
+        // 'text[^1] = c': a subscript with no 'set' only reads.
+        if (target is BoundIndexAccess { Subscript: { } readOnly } readOnlyTarget && !BoundIndexAccess.HasSetter(readOnly)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAssignable,
+                syntax.Left.Span,
+                $"'{Signature(readOnly)}' of '{readOnlyTarget.Receiver.Type.ToDisplayString()}' only reads: it has no 'set' to store through"
             );
             return new BoundError(syntax, target, value);
         }

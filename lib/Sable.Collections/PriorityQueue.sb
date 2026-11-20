@@ -14,6 +14,15 @@ public class PriorityQueue<Element: Comparable> {
         before = (a: Element, b: Element) => a < b
     }
 
+    /// The sequence's values, smallest first. What going through them
+    /// throws, it throws.
+    public init<S: Sequence>(_ values: S) throws(S.Failure) where S.Element == Element {
+        before = (a: Element, b: Element) => a < b
+        for try value in values {
+            push(value)
+        }
+    }
+
     /// First whatever 'before' puts ahead: '(a, b) => a > b' for largest first.
     public init(by before: @escaping (Element, Element) -> Bool) {
         self.before = before
@@ -89,7 +98,7 @@ public class PriorityQueue<Element: Comparable> {
     }
 }
 
-extension PriorityQueue: Sequence {
+extension PriorityQueue: Sequence, FromSequence<Element> {
     /// An iterator over the elements in no particular order: not the order
     /// they come out in, which 'sortedElements()' gives.
     public fn makeIterator() -> ArrayIterator<Element> {

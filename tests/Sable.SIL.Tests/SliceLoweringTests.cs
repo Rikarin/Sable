@@ -235,6 +235,48 @@ public sealed class SliceLoweringTests {
     }
 
     /// <summary>
+    ///     Writing from the end (#293) is MutableCollection's subscript, which
+    ///     a store chooses over RandomAccessCollection's read-only one; on an
+    ///     array it too is no more than arithmetic on the count, the bounds
+    ///     check and the store, after the optimising passes.
+    /// </summary>
+    [Fact]
+    public void WritingFromTheEndOfAnArrayIsArithmeticOnItsCount() {
+        var module = Lower(
+            """
+            fn setLast(_ xs: inout Int[>..], _ v: Int) { xs[^1] = v }
+            fn bumpBack(_ xs: inout Int[>..], _ n: Int) { xs[^n] += 1 }
+            fn run() -> Int {
+                var xs: Int[>..] = [1, 2, 3]
+                setLast(&xs, 9)
+                bumpBack(&xs, 3)
+                return xs[0] * 100 + xs[1] * 10 + xs[^1]
+            }
+            fn pastTheStart(_ n: Int) {
+                var xs: Int[>..] = [1, 2, 3]
+                bumpBack(&xs, n)
+            }
+            """
+        );
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        foreach (var name in new[] { "setLast", "bumpBack" }) {
+            var instructions = module.Find($"M.{name}")!.Blocks.SelectMany(static b => b.Instructions).ToList();
+            Assert.DoesNotContain(instructions, static i => i is StructInst { StructType.Name: var type } && type.Contains("FromEnd"));
+            Assert.DoesNotContain(instructions, static i => i is AllocRefInst or AllocStackInst);
+            Assert.All(instructions.OfType<FunctionRefInst>(), static f => Assert.EndsWith(".outOfRange", f.Function, StringComparison.Ordinal));
+            Assert.Contains(instructions, static i => i is BuiltinInst { Name: "array_count" });
+            Assert.Contains(instructions, static i => i is BuiltinInst { Name: "array_set" });
+        }
+
+        Assert.Equal(229L, new SilInterpreter(module).Run("M.run"));
+        Assert.Equal(
+            "index ^4 is out of range for count 3",
+            Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.pastTheStart", 4L)).Message
+        );
+    }
+
+    /// <summary>
     ///     A slice is a type of its own, <c>[T:]</c> — a view of an array's
     ///     buffer — that prints and parses back; an array passed where one is
     ///     wanted is viewed with <c>slice_of</c>, and a range is taken with

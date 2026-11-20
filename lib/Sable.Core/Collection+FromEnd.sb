@@ -3,7 +3,9 @@ module Sable.Core
 // Reading by a position counted from the end (FromEnd.sb), which every
 // collection that can go backwards does: in constant time when it can
 // jump, 'count - n' from the start; one step at a time back from the end
-// when it cannot, as a String does.
+// when it cannot, as a String does. A mutable collection writes there too,
+// 'xs[^1] = v', through its own subscript, which a store chooses where a
+// read chooses the one that only reads.
 
 extension Collection {
     /// The position 'distance' after this one, one step at a time: what a
@@ -57,5 +59,25 @@ extension RandomAccessCollection {
     /// ```
     public subscript(fromEnd: FromEnd) -> Element {
         get => self[self.index(startIndex, offsetBy: fromEnd.elementOffset(in: self.count))]
+    }
+}
+
+extension MutableCollection {
+    /// The element 'n' back from the end, to read or to replace: '^1' is
+    /// the last. Found 'count - n' on from the start, in constant time
+    /// where the collection can jump. '^0', or more than the count, traps.
+    ///
+    /// ```sable
+    /// var xs = [1, 2, 3]
+    /// xs[^1] = 9
+    /// xs[^3] += 10
+    /// assert(xs == [11, 2, 9])
+    /// ```
+    public subscript(fromEnd: FromEnd) -> Element {
+        get => self[self.index(startIndex, offsetBy: fromEnd.elementOffset(in: self.count))]
+        set {
+            let position = self.index(startIndex, offsetBy: fromEnd.elementOffset(in: self.count))
+            self[position] = newValue
+        }
     }
 }

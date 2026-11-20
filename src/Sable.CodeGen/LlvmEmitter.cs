@@ -536,6 +536,7 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_task_yield()
                                 declare zeroext i1 @sable_task_sleep(i64)
                                 declare void @sable_share(ptr)
+                                declare void @sable_object_unmade(ptr)
                                 declare void @sable_task_spawn_cancelled()
                                 declare zeroext i1 @sable_actor_hop(ptr)
                                 declare ptr @sable_actor_current()
@@ -1124,10 +1125,30 @@ public sealed partial class LlvmEmitter {
         var destroy = $"@\"sable.deinit.{type.Name}\"";
         var objectType = ObjectType(type);
         var body = new StringBuilder($"define internal void {destroy}(ptr %o) {{\nentry:\n");
+
+        // One whose initialiser threw was never made (SABLE_UNMADE, 1024, in
+        // its header's flag word, at 12): no deinit sees it.
+        var deinits = false;
         for (var level = type; level is not null; level = level.Superclass) {
-            if (level.Deinit is { } deinit) {
-                body.Append($"  call void @{Global(deinit)}(ptr %o)\n");
+            if (level.Deinit is not { } deinit) {
+                continue;
             }
+
+            if (!deinits) {
+                deinits = true;
+                body.Append("  %flagsField = getelementptr inbounds { ptr, i32, i32 }, ptr %o, i32 0, i32 2\n")
+                    .Append("  %flags = load atomic i32, ptr %flagsField monotonic, align 4\n")
+                    .Append("  %unmadeBit = and i32 %flags, 1024\n")
+                    .Append("  %made = icmp eq i32 %unmadeBit, 0\n")
+                    .Append("  br i1 %made, label %deinit, label %fields\n")
+                    .Append("deinit:\n");
+            }
+
+            body.Append($"  call void @{Global(deinit)}(ptr %o)\n");
+        }
+
+        if (deinits) {
+            body.Append("  br label %fields\nfields:\n");
         }
 
         for (var i = type.Fields.Count - 1; i >= 0; i--) {
@@ -2855,6 +2876,10 @@ public sealed partial class LlvmEmitter {
 
                 case "task_drain":
                     Line("call void @sable_tasks_drain()");
+                    return;
+
+                case "object_unmade":
+                    Line($"call void @sable_object_unmade(ptr {operands[0]})");
                     return;
 
                 case "task_run_until_main":

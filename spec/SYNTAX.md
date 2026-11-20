@@ -404,6 +404,12 @@ enum cases.
 
 - `mutating` is required on methods that modify `self`.
 - Structs get a memberwise initialiser unless they declare their own `init`.
+- An initialiser may be generic, `async`, and throw as a function does:
+  `init(_ text: String) throws(ParseError)`, bare `throws`, or `rethrows`. A
+  call to one is written with `try`, and a protocol's `init` requirement may
+  throw, met by a conformer's initialiser that throws that or nothing. One
+  that throws part way through made nothing: the fields it had set are
+  destroyed, those it had not are left alone, and no `deinit` runs.
 - Structs may conform to protocols, be generic, and nest other types.
 - `@noncopy struct` makes the type move-only and may declare `deinit`.
 
@@ -446,6 +452,11 @@ public open class Document: Serializable, Equatable {
 - `convenience init` must delegate to a designated `init`, `self.init(…)`
   (S3141); a struct's initialiser may delegate the same way. One that
   delegates leaves the fields' initial values to the one it calls.
+- An initialiser may throw (§6). An object whose initialiser throws — its
+  own, a superclass's it calls, or the one it delegates to, before or after
+  that call — is let go of unmade: the fields set so far are destroyed, its
+  memory is freed when nothing else holds it, and no `deinit` of its runs,
+  its class's or a superclass's.
 - A class that declares no `init`, whose own stored fields all have initial
   values, is made with `init()` — or, a subclass, inherits its superclass's
   initialisers, each of which sets the subclass's fields and then calls the
@@ -688,7 +699,12 @@ extension Collection {
 
 Extensions may add methods, computed properties, subscripts, operators, static
 members, nested types, and conformances. They may **not** add stored properties
-or designated initialisers.
+or designated initialisers. A struct's, an enum's, a union's or a built-in
+type's extension may add an initialiser that gives `self` its value on every
+path — a struct's field by field, any of them by `self.init(…)` or by
+`self = …` — as `extension String { init(twice s: String) { self = s + s } }`
+does (S3028); a class's may not (S3030). An extension of every growable array
+of a kind may add initialisers too (below).
 
 ### Array extensions
 
@@ -720,8 +736,11 @@ extension U8[:] { fn toString() -> String { } }
   comes first.
 - Inside, `self` is the array. The parameters may be constrained, inline or
   with `where`; the members are an array's only where its element meets them.
-- Each parameter must appear in the array type. An array extension adds
-  members, not conformances.
+- Each parameter must appear in the array type.
+- An extension of every growable array of a kind, `T[>..]` or `T[>..<]`, may
+  declare initialisers, as such an array always has a value to begin from:
+  `self` starts as `[]`. `Int[>..](repeating: 0, times: 3)` calls one. An
+  `init()` requirement is met by `[]` unless the extension declares one.
 - Its members are generic over the parameters and monomorphised per element
   type, like any generic. `Sable.Core` declares the array family's own members
   (`count`, `append`, `contains`, …) this way.
@@ -1231,6 +1250,23 @@ slicing subscript, which takes `some RangeExpression`: any range of its
 indices, or a `RelativeRange`. On an array, neither a `FromEnd` nor a
 `RelativeRange` is made as the program runs: what is left after
 optimisation is arithmetic on the count, and the bounds check.
+
+A mutable collection (every array but a slice, `List`, `Deque`) is written
+through a `FromEnd` as well, and one that can replace a range of its
+elements (a growable array, `List`, `SmallVec`) through any range,
+`RelativeRange` among them; the elements stored may be more or fewer than
+the range's:
+
+```sable
+xs[^1] = 9         // the last element replaced
+xs[^2] += 1
+xs[1..<^1] = [7]   // all but the first and the last, replaced by one
+```
+
+Where a collection has a subscript of the same labels that only reads and
+one that stores as well, a store takes the one that stores and a read the
+one that only reads. A collection that only reads, as a `String`, refuses
+`s[^1] = c` (S3010).
 
 `^0` is a bound, never an element: reading at it traps, and written as an
 index, `xs[^0]`, it is an error (S3090). A position from the end outside

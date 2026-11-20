@@ -54,11 +54,15 @@ extension Dictionary: Collection, FromSequence<(Key, Value)> {
 
     /// A dictionary of the pairs, each key with its value; a key that comes
     /// again keeps the last value given it.
-    public static fn from<S: Sequence>(_ elements: S) throws(S.Failure) -> [Key: Value] where S.Element == (Key, Value) {
-        var dictionary: [Key: Value] = [:]
+    ///
+    /// ```sable
+    /// let counts = [String: Int]([("a", 1), ("b", 2), ("a", 3)])
+    /// assert(counts.count == 2 && counts["a"] == 3)
+    /// ```
+    public init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == (Key, Value) {
+        self.init()
         for try (key, value) in elements {
-            dictionary[key] = value
+            self[key] = value
         }
-        return dictionary
     }
 }

@@ -23,10 +23,10 @@ public struct Set<Element: Hashable> {
     /// An empty set.
     public init() { }
 
-    /// The distinct values among these, in the order each first appears.
-    public init(_ elements: Element[:]) {
-        map.reserveCapacity(elements.count)
-        for element in elements {
+    /// The distinct values among the sequence's, in the order each first
+    /// appears. What going through them throws, it throws.
+    public init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element {
+        for try element in elements {
             map.insert(true, forKey: element)
         }
     }
@@ -210,7 +210,7 @@ extension Set: Equatable {
     }
 }
 
-extension Set: Sequence {
+extension Set: Sequence, FromSequence<Element> {
     /// An iterator over the members, in the order they were first inserted.
     public fn makeIterator() -> SetIterator<Element> {
         return SetIterator<Element> { entries: map.makeIterator() }

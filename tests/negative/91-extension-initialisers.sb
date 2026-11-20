@@ -1,0 +1,56 @@
+module Negative.ExtensionInitialisers
+
+// A value type's extension may add an initialiser that gives self its
+// value (#287): a struct's sets its fields or delegates, a built-in type's,
+// an enum's or a union's assigns 'self' whole or delegates, on every path.
+// A class's extension cannot add one: it would be a designated initialiser.
+
+struct Point {
+    var x: Int
+    var y: Int
+}
+
+extension Point {
+    init(both: Int) {
+        self.init(x: both, y: both)
+    }
+
+    init(onlyX: Int) { //! S3028 'y' is not initialised
+        self.x = onlyX
+    }
+}
+
+extension String {
+    init(twice text: String) {
+        self = text + text
+    }
+
+    init(maybe: Bool) { //! S3028 'self' is not given a value
+        if maybe {
+            self = "yes"
+        }
+    }
+
+    init(early: Int) {
+        let n = self.count //! S6008 before the initialiser gives it a value
+        self = "\(n + early)"
+    }
+}
+
+enum Light { Red, Green }
+
+extension Light {
+    init(go: Bool) {
+        self = go ? .Green : .Red
+    }
+}
+
+class Node {
+    var value: Int = 0
+}
+
+extension Node {
+    init(value: Int) { //! S3030 designated initialiser
+        self.value = value
+    }
+}

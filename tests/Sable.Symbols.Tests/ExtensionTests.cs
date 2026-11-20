@@ -132,14 +132,40 @@ public sealed class ExtensionTests {
     }
 
     [Fact]
-    public void AnExtensionCannotAddAnInitializer() {
+    public void AClassExtensionCannotAddAnInitializer() {
+        var errors = ErrorsIn(
+            """
+            class Shape { var sides: Int = 0 }
+            extension Shape { init(_ n: Int) { } }
+            """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_ExtensionInitializer);
+    }
+
+    /// <summary>
+    ///     A struct's extension may add an initialiser that sets every field
+    ///     or delegates; one that leaves a field unset is told so.
+    /// </summary>
+    [Fact]
+    public void AStructExtensionAddsAnInitializerThatSetsSelf() {
+        Assert.Empty(
+            ErrorsIn(
+                $$"""
+                  {{Point}}
+                  extension Point {
+                      init(_ n: Int) { self.init(x: n, y: n) }
+                      init(x: Int) { self.x = x; self.y = 0 }
+                  }
+                  """
+            )
+        );
         var errors = ErrorsIn(
             $$"""
               {{Point}}
-              extension Point { init(_ n: Int) { } }
+              extension Point { init(_ n: Int) { self.x = n } }
               """
         );
-        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_ExtensionInitializer);
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_MissingFieldInitializer);
     }
 
     [Fact]

@@ -795,8 +795,8 @@ internal static class ConformanceChecker {
         var required = requirement.DeclaredHere($"'{protocol.Name}' requires it here");
 
         // A growable array is made empty by '[]', the compiler's own, which
-        // meets 'init()'.
-        if (candidates.Count == 0 && requirement is { FunctionKind: FunctionKind.Initializer, Parameters.IsEmpty: true }
+        // meets 'init()' — unless an extension declares an 'init()' of its own.
+        if (!candidates.Any(static c => c.Parameters.IsEmpty) && requirement is { FunctionKind: FunctionKind.Initializer, Parameters.IsEmpty: true }
             && type.ExtendedArray is { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink }) {
             return;
         }

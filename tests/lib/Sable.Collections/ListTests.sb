@@ -406,8 +406,33 @@ fn aListIsSlicedByAnyRange() {
     assert(list[^2...^1] == [3, 4])
 }
 
+@test
+fn aListIsWrittenFromTheEnd() {
+    var list = List<Int>([1, 2, 3])
+    list[^1] = 9
+    list[^3] += 10
+    assert(list.asSlice() == [11, 2, 9])
+}
+
+@test
+fn aListHasARangeFromTheEndReplaced() {
+    var list = List<Int>([1, 2, 3, 4])
+    list[1..<^1] = List<Int>([7, 8, 9])
+    assert(list.asSlice() == [1, 7, 8, 9, 4])
+    list[^3...] = List<Int>()
+    assert(list.asSlice() == [1, 7])
+}
+
 @test(traps: "index ^4 is out of range for count 3")
 fn aListPastItsStartTraps() {
     let list = List<Int>([1, 2, 3])
     let _ = list[^blackBox(4)]
+}
+
+@test
+fn aListIsMadeFromAnySequence() {
+    let list = List(1...3)
+    assert(list.toArray() == [1, 2, 3])
+    let collected: List<Int> = (1...4).filter { $0 % 2 == 0 }.collect()
+    assert(collected.toArray() == [2, 4])
 }

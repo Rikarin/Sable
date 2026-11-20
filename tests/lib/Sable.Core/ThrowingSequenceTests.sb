@@ -91,6 +91,20 @@ fn collectingThrowsWhatGoingThroughThrows() throws {
 }
 
 @test
+fn aConformersInitialiserThrowsWhatGoingThroughThrows() throws {
+    assert(try Int[>..](numbers(upTo: 3)) == [1, 2, 3])
+    assert(try Int[>..<](numbers(upTo: 2)) == [1, 2])
+    assertEqual(failure { try Int[>..](numbers(upTo: 3, failAt: 2)).count }, 2)
+    assertEqual(failure { try Int[>..<](numbers(upTo: 3, failAt: 1)).count }, 1)
+    let digits = try String(numbers(upTo: 3).map { Char.fromDigit($0)! })
+    assertEqual(digits, "123")
+    assertEqual(failure { try String(numbers(upTo: 3, failAt: 3).map { Char.fromDigit($0)! }).count }, 3)
+    let squares = try [Int: Int](numbers(upTo: 3).map { ($0, $0 * $0) })
+    assertEqual(squares[3], 9)
+    assertEqual(failure { try [Int: Int](numbers(upTo: 3, failAt: 2).map { ($0, $0) }).count }, 2)
+}
+
+@test
 fn lazyViewsThrowTheirBasesFailure() throws {
     var seen: Int[>..] = []
     for try n in numbers(upTo: 5).lazy.map({ $0 * 2 }).filter({ $0 > 2 }) {

@@ -416,3 +416,16 @@ fn collectMakesAStringOfCharacters() {
     let nothing: String = "".toArray().collect()
     assertEqualText(nothing, "")
 }
+
+@test
+fn aConformerIsMadeFromASequenceByItsInitialiser() {
+    assertEqualText(text(Int[>..](Countdown { from: 3 })), "3,2,1")
+    assertEqual(Int[>..<](1...4).count, 4)
+    assertEqualText(String("héllo".reversed()), "olléh")
+    assertEqualText(String(Char[>..]()), "")
+    let ages = [String: Int]([("ada", 36), ("alan", 41), ("ada", 37)])
+    assertEqual(ages.count, 2)
+    assertEqual(ages["ada"], 37)
+    let collected: [String: Int] = [("x", 1)].collect()
+    assertEqual(collected["x"], 1)
+}

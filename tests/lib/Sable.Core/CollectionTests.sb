@@ -241,3 +241,42 @@ fn aStringIsABidirectionalCollectionOfItsCharacters() {
     assert(backwards("añb") == reversedChars)
     assert("añb".lastIndex(of: "ñ") == "añb".index(after: "añb".startIndex))
 }
+
+fn replaceMiddle<C: RangeReplaceableCollection>(_ items: inout C, with replacement: C) {
+    items[1..<^1] = replacement
+}
+
+@test
+fn aGrowableArrayHasARangeFromTheEndReplaced() {
+    var values: Int[>..] = [1, 2, 3, 4]
+    values[1..<^1] = [7, 8, 9]
+    assertEqualText(text(values), "1,7,8,9,4")
+    values[^2...] = []
+    assertEqualText(text(values), "1,7,8")
+    values[..<^3] = [0]
+    assertEqualText(text(values), "0,1,7,8")
+    var shrinking: Int[>..<] = [1, 2, 3]
+    replaceMiddle(&shrinking, with: [5, 6])
+    assertEqualText(text(shrinking), "1,5,6,3")
+}
+
+@test
+fn aCollectionWithoutItsOwnSlicingIsSlicedAndReplacedByAnyRange() {
+    var bag = Bag()
+    bag.append(contentsOf: [1, 2, 3, 4])
+    let middle = bag[1..<^1]
+    assertEqualText(text(middle.items), "2,3")
+    assertEqualText(text(bag[2...].items), "3,4")
+    var replacement = Bag()
+    replacement.append(element: 9)
+    bag[1...2] = replacement
+    assertEqualText(text(bag.items), "1,9,4")
+    replaceMiddle(&bag, with: Bag())
+    assertEqualText(text(bag.items), "1,4")
+}
+
+@test(traps: "range 2..<^2 is out of range for count 3")
+fn replacingARangeOutsideTheCollectionTraps() {
+    var values: Int[>..] = [1, 2, 3]
+    values[2..<^blackBox(2)] = [0]
+}

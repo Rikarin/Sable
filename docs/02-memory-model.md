@@ -101,6 +101,13 @@ feature, not an implementation detail — it is why `defer`-free RAII works and
 why file handles close when you expect. Release order within a deinit is
 field-declaration order, reversed.
 
+An object whose initialiser throws was never made. Its allocator marks it
+unmade (a flag bit, `sable_object_unmade`) before letting go of it, and its
+class's destroy function then runs no `deinit` and only destroys its fields:
+those set before the throw, as the rest are still empty (zero). A struct
+built in its initialiser's slot is the same: the fields set are destroyed
+with the slot, and the empty ones are nothing to destroy.
+
 ### Cycles
 
 ARC leaks cycles. Sable does three things about it:

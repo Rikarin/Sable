@@ -71,7 +71,7 @@ public sealed class ArrayExtensionTests {
         Assert.Equal(everyArray, Names(ArrayKind.Fixed));
         Assert.Equal(Names(ArrayKind.Grow), Names(ArrayKind.GrowShrink));
         Assert.Equal(
-            ["append", "append", "capacity", "clear", "from", "removeLast", "reserveCapacity"],
+            ["append", "append", "capacity", "clear", "init", "removeLast", "reserveCapacity"],
             Names(ArrayKind.Grow).Where(n => !everyArray.Contains(n))
         );
         foreach (var name in (string[])["append", "clear", "removeLast"]) {
@@ -276,6 +276,57 @@ public sealed class ArrayExtensionTests {
             """
         );
 
+    /// <summary>
+    ///     A growable array always has a value to begin from, '[]': an
+    ///     extension of every one of a kind may declare initialisers, which
+    ///     make that kind of array and may throw; and an 'init()' requirement
+    ///     is still met by '[]' when the only initialisers it declares take
+    ///     something.
+    /// </summary>
+    [Fact]
+    public void AGrowableArraysExtensionCanDeclareAnInitialiser() {
+        var compilation = Compile(
+            """
+            struct Full: Error { }
+
+            extension<E> E[>..] {
+                init(repeating value: E, times: Int) {
+                    for _ in 0..<times {
+                        append(value)
+                    }
+                }
+            }
+
+            extension<E> E[>..<] {
+                init(upTo limit: Int, _ values: E[:]) throws(Full) {
+                    for value in values {
+                        if count == limit {
+                            throw Full()
+                        }
+                        self.append(value)
+                    }
+                }
+            }
+
+            protocol Empty {
+                init()
+            }
+
+            extension<E> E[>..]: Empty { }
+
+            fn f() throws(Full) -> Int {
+                let xs = Int[>..](repeating: 1, times: 3)
+                let ys = try String[>..<](upTo: 2, ["a"])
+                return xs.count + ys.count
+            }
+            """
+        );
+        Assert.DoesNotContain(compilation.GetAllDiagnostics(), static d => d.Severity == DiagnosticSeverity.Error);
+        var model = compilation.GetSemanticModel(compilation.SyntaxTrees[0]);
+        var inits = model.GetMembersOf(new ArrayTypeSymbol(compilation.Core.Int, ArrayKind.Grow)).Where(static m => m.Name == "init").ToList();
+        Assert.Contains(inits, static m => m is FunctionSymbol { Parameters.Length: 2 } f && f.Parameters[0].Label == "repeating");
+    }
+
     // ---- Misuse ------------------------------------------------------------------
 
     [Theory]
@@ -287,6 +338,8 @@ public sealed class ArrayExtensionTests {
     [InlineData("extension<T> (T, T) { }", "S3031", "array type")]
     [InlineData("extension<T> T[:] { var n: Int = 0 }", "S3029", "stored properties")]
     [InlineData("extension<T> T[:] { init() { } }", "S3030", "initialiser")]
+    [InlineData("extension<T> T[] { init(x: T) { } }", "S3030", "initialiser")]
+    [InlineData("extension<T> T[..] { init(x: T) { } }", "S3030", "initialiser")]
     [InlineData("extension<T> T[:] { @builtin(\"array_count\") var n: Int { get } }", "S3081", "only the standard library")]
     public void MisuseIsReported(string source, string id, string fragment) => AssertError(source, id, fragment);
 

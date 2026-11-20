@@ -25,6 +25,18 @@ fn ranges(_ text: String) {
     let right = text[1..<^1]
 }
 
+// A mutable collection is written from the end (#293); a collection that
+// only reads, as a String or a slice, has no 'set' to write through.
+fn writes(_ xs: Int[:]) {
+    var text = "abc"
+    text[^1] = 'x'                      //! S3010 'subscript(fromEnd: FromEnd)' of 'String' only reads
+    var slice = xs
+    slice[^1] = 1                       //! S3010 'subscript(fromEnd: FromEnd)' of 'Int[:]' only reads
+    var ys: Int[>..] = [1, 2, 3]
+    ys[^1] = 4
+    ys[1..<^1] = [5, 6]
+}
+
 // A range counted from the end is no sequence of its own: it means
 // nothing until a collection gives it an end.
 fn loops() {

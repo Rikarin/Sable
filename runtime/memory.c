@@ -7,8 +7,13 @@
 // size classes kept here rather than from malloc. Programs that make and
 // drop many small strings and arrays otherwise spend most of their time in
 // malloc and free, where a .NET program bumps a pointer (docs/04 §4.1 names
-// a size-class allocator). One task runs at a time (see Concurrency), so
-// nothing here needs a lock.
+// a size-class allocator).
+//
+// Tasks run on several threads (tasks.c), and an object made on one may be
+// freed on another. Each thread keeps a few free blocks of each class of
+// its own (threads.c's SableThread), and allocates from them and frees to
+// them without a lock; only as they run out, or grow past a limit, does it
+// take its class's lock and move a batch to or from the slabs.
 //
 // Each class has slabs of its own, taken from the system aligned to their
 // size, so a block's slab is its address with the low bits cleared. A slab
@@ -25,7 +30,10 @@
 // Classes up to a kilobyte: an array of a hundred numbers is as common as a
 // small object. Each step is at most half again the one before, so no more
 // than a third of a block is ever wasted.
-enum { SMALL_CLASSES = 12, SMALL_TABLED = 256, SMALL_LARGEST = 1024 };
+enum { SMALL_TABLED = 256, SMALL_LARGEST = 1024 };
+
+// How many free blocks of a class a thread keeps before giving a batch back.
+enum { CACHE_BATCH = 32, CACHE_LIMIT = 2 * CACHE_BATCH };
 
 static const int64_t small_sizes[SMALL_CLASSES] = { 0, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024 };
 
@@ -51,8 +59,10 @@ typedef struct Slab {
 
 _Static_assert(sizeof(Slab) <= SLAB_HEADER, "a slab's header fits before its first block");
 
-// Each class's slabs with room, the one handing out blocks first.
+// Each class's slabs with room, the one handing out blocks first, and the
+// lock its slabs are taken and given back under.
 static Slab *slabs_with_room[SMALL_CLASSES];
+static SpinLock class_locks[SMALL_CLASSES];
 
 _Noreturn void sable_trap(const char *message);
 
@@ -108,14 +118,17 @@ static Slab *slab_new(unsigned class) {
     slab->carved = (char *)slab + SLAB_HEADER;
     slab->live = 0;
     slab_list(slab, class);
-    if (++slabs_held > slabs_most) {
-        slabs_most = slabs_held;
+    // Counted across the classes, each under its own lock.
+    int64_t held = __atomic_add_fetch(&slabs_held, 1, __ATOMIC_RELAXED);
+    int64_t most = __atomic_load_n(&slabs_most, __ATOMIC_RELAXED);
+    while (held > most && !__atomic_compare_exchange_n(&slabs_most, &most, held, true, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
     }
 
     return slab;
 }
 
-static void *small_alloc(unsigned class) {
+// A block from the class's slabs; its lock held.
+static void *slab_take(unsigned class) {
     Slab *slab = slabs_with_room[class];
     if (slab == NULL) {
         slab = slab_new(class);
@@ -138,7 +151,8 @@ static void *small_alloc(unsigned class) {
     return block;
 }
 
-static inline void small_release(void *block, unsigned class) {
+// A block back to its slab; its class's lock held.
+static void slab_give(void *block, unsigned class) {
     Slab *slab = slab_of(block);
     *(void **)block = slab->free;
     slab->free = block;
@@ -149,8 +163,65 @@ static inline void small_release(void *block, unsigned class) {
         // Empty, and its class has room elsewhere: back to the system.
         slab_unlist(slab, class);
         unmap_slab(slab, SLAB_SIZE);
-        slabs_held--;
-        slabs_returned++;
+        __atomic_fetch_sub(&slabs_held, 1, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&slabs_returned, 1, __ATOMIC_RELAXED);
+    }
+}
+
+// The thread's blocks of the class ran out: a batch from the slabs.
+__attribute__((noinline)) static void cache_fill(BlockCache *cache, unsigned class) {
+    spin_lock(&class_locks[class]);
+    for (int i = 0; i < CACHE_BATCH; i++) {
+        void *block = slab_take(class);
+        *(void **)block = cache->head;
+        cache->head = block;
+    }
+
+    spin_unlock(&class_locks[class]);
+    cache->count += CACHE_BATCH;
+}
+
+// The thread holds too many blocks of the class: a batch back to the slabs.
+__attribute__((noinline)) static void cache_drain(BlockCache *cache, unsigned class, int count) {
+    spin_lock(&class_locks[class]);
+    for (int i = 0; i < count && cache->head != NULL; i++) {
+        void *block = cache->head;
+        cache->head = *(void **)block;
+        cache->count--;
+        slab_give(block, class);
+    }
+
+    spin_unlock(&class_locks[class]);
+}
+
+static inline void *small_alloc(unsigned class) {
+    BlockCache *cache = &current_thread()->blocks[class];
+    if (cache->head == NULL) {
+        cache_fill(cache, class);
+    }
+
+    void *block = cache->head;
+    cache->head = *(void **)block;
+    cache->count--;
+    return block;
+}
+
+static inline void small_release(void *block, unsigned class) {
+    BlockCache *cache = &current_thread()->blocks[class];
+    *(void **)block = cache->head;
+    cache->head = block;
+    if (++cache->count > CACHE_LIMIT) {
+        cache_drain(cache, class, CACHE_BATCH);
+    }
+}
+
+// Every block the thread keeps, back to the slabs: as a thread finishes
+// with a burst of work, so that what it freed can go back to the system.
+static void cache_flush(SableThread *thread) {
+    for (unsigned class = 1; class < SMALL_CLASSES; class++) {
+        if (thread->blocks[class].count > 0) {
+            cache_drain(&thread->blocks[class], class, thread->blocks[class].count);
+        }
     }
 }
 
@@ -163,28 +234,33 @@ static inline void small_release(void *block, unsigned class) {
 enum { LARGE_BUFFER = 1 << 20 };
 static void *large_spare;
 static int64_t large_spare_size;
+static SpinLock spare_lock;
 
 // The spare, if it holds 'size' bytes without wasting more than as much again.
 static void *take_spare(int64_t size) {
-    if (large_spare == NULL || large_spare_size < size || large_spare_size > 2 * size) {
-        return NULL;
+    spin_lock(&spare_lock);
+    void *buffer = NULL;
+    if (large_spare != NULL && large_spare_size >= size && large_spare_size <= 2 * size) {
+        buffer = large_spare;
+        large_spare = NULL;
     }
 
-    void *buffer = large_spare;
-    large_spare = NULL;
+    spin_unlock(&spare_lock);
     return buffer;
 }
 
 // A large buffer let go: kept as the spare if it is the larger, freed otherwise.
 static void keep_spare(void *buffer, int64_t size) {
-    if (large_spare != NULL && large_spare_size >= size) {
-        free(buffer);
-        return;
+    spin_lock(&spare_lock);
+    void *freed = buffer;
+    if (large_spare == NULL || large_spare_size < size) {
+        freed = large_spare;
+        large_spare = buffer;
+        large_spare_size = size;
     }
 
-    free(large_spare);
-    large_spare = buffer;
-    large_spare_size = size;
+    spin_unlock(&spare_lock);
+    free(freed);
 }
 
 // An array's elements: 'size' bytes, uninitialised.
@@ -291,7 +367,7 @@ static void *alloc_object(const SableMetadata *type, int64_t size, bool zero) {
     object->type = type;
     object->strong = 1;
     object_born(object);
-    allocations++;
+    thread_count(&current_thread()->allocations, 1);
     return object;
 }
 
@@ -316,10 +392,22 @@ void *sable_stack_object(void *memory, const SableMetadata *type, int64_t size) 
 // its retains and releases out of calls; the runtime's own code calls them.
 void sable_retain(void *pointer) {
     SableObject *object = pointer;
-    if (object != NULL && !(object->flags & SABLE_IMMORTAL)) {
-        object->strong++;
-        sable_retains++;
+    if (object == NULL) {
+        return;
     }
+
+    uint32_t flags = object_flags(object);
+    if (flags & SABLE_IMMORTAL) {
+        return;
+    }
+
+    if (flags & SABLE_SHARED) {
+        __atomic_fetch_add(&object->strong, 1, __ATOMIC_RELAXED);
+    } else {
+        object->strong++;
+    }
+
+    count_retain();
 }
 
 void sable_release_last(void *pointer);
@@ -338,12 +426,24 @@ _Noreturn void sable_arc_dead(void *pointer, int32_t operation) {
 
 void sable_release(void *pointer) {
     SableObject *object = pointer;
-    if (object == NULL || (object->flags & SABLE_IMMORTAL)) {
+    if (object == NULL) {
         return;
     }
 
-    sable_releases++;
-    if (--object->strong > 0) {
+    uint32_t flags = object_flags(object);
+    if (flags & SABLE_IMMORTAL) {
+        return;
+    }
+
+    count_release();
+    if (flags & SABLE_SHARED) {
+        // The last release sees every write the others made before theirs.
+        if (__atomic_fetch_sub(&object->strong, 1, __ATOMIC_RELEASE) != 1) {
+            return;
+        }
+
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    } else if (--object->strong > 0) {
         return;
     }
 
@@ -352,9 +452,13 @@ void sable_release(void *pointer) {
 
 // The last strong reference gone: its count is zero, and it is counted.
 // The deinit runs, the fields are destroyed, and the memory goes when no
-// unowned reference holds it.
+// unowned reference holds it. No other thread can reach it now but through
+// a weak reference, which reads as none from here on.
 void sable_release_last(void *pointer) {
     SableObject *object = pointer;
+    if (object_flags(object) & SABLE_HAS_SIDE) {
+        sable_weak_object_died(object);
+    }
 
     // The deinit, and the destruction of the fields, see the object alive.
     object->strong = 1;
@@ -367,18 +471,15 @@ void sable_release_last(void *pointer) {
     }
 
     object->strong = 0;
-    object->flags |= SABLE_DEINITED;
-    if (object->flags & SABLE_HAS_SIDE) {
-        sable_weak_object_died(object);
-    }
-
-    // Unowned references hold the memory, not the object, until they go.
-    if (unowned_count(object) > 0) {
+    // Unowned references hold the memory, not the object, until they go;
+    // the last of them, on another thread, frees it once it sees it deinited.
+    uint32_t flags = __atomic_fetch_or(&object->flags, SABLE_DEINITED, __ATOMIC_ACQ_REL);
+    if ((flags >> SABLE_UNOWNED_SHIFT) > 0) {
         return;
     }
 
     object_gone(object);
-    if (!(object->flags & SABLE_STACK)) {
+    if (!(flags & SABLE_STACK)) {
         object_free(object);
     }
 }

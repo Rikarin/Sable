@@ -200,7 +200,7 @@ public sealed partial class SilGen {
             ..boxed ? [SilType.Bool] : Array.Empty<SilType>(),
             ..fields.Take(captured).Select(static f => f.Type),
         ];
-        var resume = new SilFunction(iterator.Name + "$resume", new FunctionType(parameters, result, thrown)) {
+        var resume = new SilFunction(iterator.Name + "$resume", new FunctionType(parameters, result, thrown, isAsync: generator.IsAsync)) {
             SourceFile = source.FileName,
             Line = source.GetLinePosition(syntax.Span.Start).Line,
         };
@@ -583,28 +583,15 @@ public sealed partial class SilGen {
             var generator = Generator!;
             var entry = _entry;
 
-            // Each slot, the iterator's field instead.
-            var fields = new Dictionary<SilValue, SilValue>(ReferenceEqualityComparer.Instance);
+            // Each slot, the iterator's field instead, in its place in the entry.
+            var fields = new Dictionary<AllocStackInst, SilInstruction>(ReferenceEqualityComparer.Instance);
             foreach (var slot in _allocations) {
                 var index = generator.Fields.Count;
                 generator.Fields.Add(($"{slot.VariableName ?? "$slot"}${index}", slot.ElementType));
-                var field = FrameField(_iterator!, index);
-                field.Block = entry;
-                field.Location = slot.Location;
-                entry.Instructions[entry.Instructions.IndexOf(slot)] = field;
-                fields[slot] = field;
+                fields[slot] = FrameField(_iterator!, index);
             }
 
-            foreach (var block in function.Blocks) {
-                block.Instructions.RemoveAll(i => i is DeallocStackInst dealloc && fields.ContainsKey(dealloc.Address));
-                foreach (var instruction in block.Instructions) {
-                    for (var i = 0; i < instruction.Operands.Count; i++) {
-                        if (fields.TryGetValue(instruction.Operands[i], out var field)) {
-                            instruction.SetOperand(i, field);
-                        }
-                    }
-                }
-            }
+            CoroutineSplit.SlotsToFields(function, fields);
 
             // What the entry did before the body is the body's start, as state 0.
             var start = function.AddBlock();
@@ -642,13 +629,7 @@ public sealed partial class SilGen {
 
         /// <summary>To the block for each state from <paramref name="first" />; for any other, finished: no more, however often it is asked.</summary>
         void Dispatch(SilValue state, List<SilBlock> targets, int first) {
-            for (var k = 0; k < targets.Count; k++) {
-                var isState = Emit(new BuiltinInst("cmp_eq_Int", SilType.Bool, state, Emit(new IntegerLiteralInst(SilType.Int, first + k))));
-                var otherwise = function.AddBlock();
-                Jump(new CondBranchInst(isState, targets[k], [], otherwise, []));
-                _current = otherwise;
-            }
-
+            _current = CoroutineSplit.Dispatch(function, _current!, state, targets, first);
             Jump(new ReturnInst(NoMoreElements()));
         }
 
@@ -658,41 +639,9 @@ public sealed partial class SilGen {
         /// </summary>
         void CheckNothingLivesAcrossYields(List<SilBlock> resumes) {
             var entry = _entry;
-            var defined = new Dictionary<SilBlock, HashSet<SilValue>>();
-            var used = new Dictionary<SilBlock, HashSet<SilValue>>();
-            foreach (var block in function.Blocks) {
-                var defs = new HashSet<SilValue>(block.Arguments, ReferenceEqualityComparer.Instance);
-                var uses = new HashSet<SilValue>(ReferenceEqualityComparer.Instance);
-                foreach (var instruction in block.Instructions) {
-                    foreach (var operand in instruction.Operands) {
-                        if (!defs.Contains(operand) && operand is SilInstruction or SilArgument) {
-                            uses.Add(operand);
-                        }
-                    }
-
-                    defs.Add(instruction);
-                }
-
-                defined[block] = defs;
-                used[block] = uses;
-            }
-
-            var live = function.Blocks.ToDictionary(b => b, b => new HashSet<SilValue>(used[b], ReferenceEqualityComparer.Instance));
-            for (var changed = true; changed;) {
-                changed = false;
-                foreach (var block in Enumerable.Reverse(function.Blocks)) {
-                    foreach (var successor in block.Successors) {
-                        foreach (var value in live[successor]) {
-                            if (!defined[block].Contains(value) && live[block].Add(value)) {
-                                changed = true;
-                            }
-                        }
-                    }
-                }
-            }
-
+            var live = CoroutineSplit.LiveIn(function);
             foreach (var resume in resumes) {
-                if (live[resume].Any(v => !(v is SilArgument { Block: var b } && b == entry || v is SilInstruction { Block: var i } && i == entry))) {
+                if (live[resume].Any(v => !CoroutineSplit.MadeByEntry(v, entry))) {
                     Fail(_body!.Syntax, "a generator holding a value across 'yield' outside a variable");
                     return;
                 }

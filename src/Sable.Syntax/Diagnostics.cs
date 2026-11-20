@@ -221,6 +221,7 @@ public enum ErrorCode {
     ERR_GeneratorReported = 3232,
     WRN_GeneratorReported = 3233,
     ERR_GeneratedFileInvalid = 3234,
+    ERR_AsyncLetCaptured = 3235,
 
     // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
     // 'sable check' runs, never by compiling. Their severity is configured.
@@ -257,12 +258,15 @@ public enum ErrorCode {
     ERR_AlignTooLarge = 3510,
     ERR_AttributeArgumentNotConstant = 3511,
     ERR_NotPolymorphic = 3512,
+    ERR_DuplicateAttribute = 3513,
+    ERR_InvalidEntryPoint = 3514,
 
     // ---- Format specs in interpolation (S3660-S3669) -------------------------
     ERR_FormatSpecMalformed = 3660,
     ERR_FormatKindNotForType = 3661,
     ERR_FormatOptionNotForType = 3662,
     ERR_FormatSpecNeedsFormattable = 3663,
+    ERR_ClosureRethrows = 3664,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------
     ERR_PatternTypeMismatch = 6000,
@@ -440,9 +444,14 @@ public sealed class DiagnosticBag : IReadOnlyCollection<Diagnostic> {
         public void Dispose() => _bag.Anchor = _previous;
     }
 
+    /// <summary>How many errors were held back while suppressed: whether a speculative parse went wrong.</summary>
+    public int SuppressedErrors { get; private set; }
+
     public void Add(Diagnostic diagnostic) {
         if (_suppressed == 0) {
             _items.Add(diagnostic.AnchoredAt(Anchor));
+        } else if (diagnostic.Severity == DiagnosticSeverity.Error) {
+            SuppressedErrors++;
         }
     }
 

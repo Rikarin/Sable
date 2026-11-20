@@ -3,8 +3,9 @@
 //
 // Writing a line, stopping the way the language says a program stops, and the
 // heap: counted objects, strings and copy-on-write arrays. Every counted
-// object starts with the header of docs/06 §6.2. Counts are not atomic: one
-// task runs at a time (tasks.c).
+// object starts with the header of docs/06 §6.2. Tasks run on a pool of
+// threads (tasks.c); an object more than one of them can reach is counted
+// atomically (objects.c's SABLE_SHARED).
 //
 // This file is the runtime: it includes its parts, in this order, as one
 // translation unit, compiled to one object (or, for link-time optimisation,
@@ -22,6 +23,7 @@
 #include "platform_posix.c"
 #endif
 
+#include "threads.c"
 #include "objects.c"
 #include "memory.c"
 #include "exclusivity.c"
@@ -34,6 +36,7 @@
 #include "leaks.c"
 #include "inline_layout.c"
 #include "validation.c"
+#include "frames.c"
 #include "tasks.c"
 #include "io.c"
 #include "process.c"
@@ -54,6 +57,7 @@ void sable_runtime_start(void) {
     started = true;
     platform_start();
     leaks_start();
+    sable_counting = getenv("SABLE_STATS") != NULL;
     hashing_start();
     tasks_start();
 }

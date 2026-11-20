@@ -6,7 +6,7 @@
 // A call that can fail gives a value either way — an empty string, an empty
 // array — and sets this; the compiler reads it straight after, to make the
 // optional. One task runs at a time, so one flag serves them all.
-static bool io_last_failed;
+static _Thread_local bool io_last_failed;
 
 bool sable_io_succeeded(void) {
     return !io_last_failed;

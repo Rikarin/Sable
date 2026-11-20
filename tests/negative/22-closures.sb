@@ -61,3 +61,19 @@ fn aVoidClosureTakesNoValue() {
 fn assigningAClosureOfTheWrongShape() {
     var f: (Int) -> Int = (s: String) => 1   //! S3004
 }
+
+union ClosureError: Error {
+    Bad
+}
+
+union OtherError: Error {
+    Worse
+}
+
+fn aClosureDeclaresWhatItThrows() {
+    let rethrowing = { (x: Int) rethrows -> Int in x }   //! S3664 a closure does not rethrow
+    let wrong = { (x: Int) throws(ClosureError) -> Int in
+        throw OtherError.Worse   //! S3054 this throws 'OtherError'
+    }
+    let plain: (Int) -> Int = { (x: Int) throws(ClosureError) -> Int in x }   //! S3004
+}

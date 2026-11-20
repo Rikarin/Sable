@@ -1,0 +1,120 @@
+module Sable.Core
+
+/// A task group whose children may throw, 'withThrowingTaskGroup''s: a
+/// child's error comes out of 'next()' in its turn, as its result would.
+///
+/// ```sable
+/// fn parsed(_ texts: String[>..]) async throws -> Int {
+///     return try await withThrowingTaskGroup(of: Int.self) { group in
+///         for text in texts {
+///             group.spawn {
+///                 guard let n = text.toInt() else { throw "'\(text)' is no number" }
+///                 return n
+///             }
+///         }
+///         var sum = 0
+///         for try await n in group {
+///             sum += n
+///         }
+///         return sum
+///     }
+/// }
+/// ```
+public class ThrowingTaskGroup<ChildResult>: AsyncSequence {
+    public alias Iter = ThrowingTaskGroupIterator<ChildResult>
+
+    let children: TaskGroup<Outcome<ChildResult, any Error>> = TaskGroup<Outcome<ChildResult, any Error>>()
+
+    init() { }
+
+    /// Spawns the body as a child of the group, at the running task's
+    /// priority. A group cancelled already cancels it at once.
+    public fn spawn(_ body: async () throws -> ChildResult) {
+        children.spawn({ await ThrowingTaskGroup<ChildResult>.outcome(of: body) })
+    }
+
+    /// Spawns the body as a child of the group, at this priority.
+    public fn spawn(priority: TaskPriority, _ body: async () throws -> ChildResult) {
+        children.spawn(priority: priority, { await ThrowingTaskGroup<ChildResult>.outcome(of: body) })
+    }
+
+    static fn outcome(of body: async () throws -> ChildResult) async -> Outcome<ChildResult, any Error> {
+        do {
+            return .Ok(try await body())
+        } catch {
+            return .Err(error)
+        }
+    }
+
+    /// The result of the next child to finish, or the error it threw,
+    /// waiting for one; none once every child spawned has been taken.
+    public fn next() async throws -> ChildResult? {
+        guard let outcome = await children.next() else {
+            return none
+        }
+        return try outcome.get()
+    }
+
+    /// Waits for every child not yet taken, dropping their results; the
+    /// first error one threw is thrown, once all have finished.
+    public fn waitForAll() async throws {
+        var first: (any Error)? = none
+        while let outcome = await children.next() {
+            if let error = outcome.error {
+                first = first ?? error
+            }
+        }
+        if let error = first {
+            throw error
+        }
+    }
+
+    /// Cancels every child running, and every child spawned from now on.
+    public fn cancelAll() {
+        children.cancelAll()
+    }
+
+    /// Whether 'cancelAll()' was called, or the task running the group
+    /// was cancelled.
+    public var isCancelled: Bool => children.isCancelled
+
+    /// Whether no child is left to take.
+    public var isEmpty: Bool => children.isEmpty
+
+    /// The children's results as they finish, for 'for try await'.
+    public fn makeAsyncIterator() -> ThrowingTaskGroupIterator<ChildResult> {
+        return ThrowingTaskGroupIterator<ChildResult> { group: self }
+    }
+}
+
+/// A throwing group's children's results, one per 'next()', in the order
+/// they finish: what 'for try await result in group' goes through.
+public struct ThrowingTaskGroupIterator<Value>: AsyncIterator {
+    public alias Element = Value
+
+    let group: ThrowingTaskGroup<Value>
+
+    public mutating fn next() async throws -> Value? {
+        return try await group.next()
+    }
+}
+
+/// Runs the body with a new throwing task group, whose children each give
+/// a 'childType' or throw. As the body returns, every child it has not
+/// taken is waited for, their errors dropped; if the body throws, they are
+/// cancelled first, and its error is thrown once they have finished. None
+/// outlives the call.
+public fn withThrowingTaskGroup<ChildResult, Result>(of childType: ChildResult.Type, _ body: async (ThrowingTaskGroup<ChildResult>) throws -> Result) async throws -> Result {
+    let group = ThrowingTaskGroup<ChildResult>()
+    do {
+        let result = try await body(group)
+        await group.children.waitForAll()
+        group.children.close()
+        return result
+    } catch {
+        group.cancelAll()
+        await group.children.waitForAll()
+        group.children.close()
+        throw error
+    }
+}

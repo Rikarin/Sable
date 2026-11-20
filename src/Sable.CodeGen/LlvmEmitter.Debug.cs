@@ -483,7 +483,7 @@ public sealed partial class LlvmEmitter {
                 return Type(payload);
             }
 
-            var fields = payload is TupleType tuple ? labels.Zip(tuple.Elements) : [(labels[0], payload)];
+            var fields = labels.Length > 1 && payload is TupleType tuple ? labels.Zip(tuple.Elements) : [(labels[0], payload)];
             return Aggregate($"{DisplayName(union)}.{caseName}$case", fields, Size(payload), live: false);
         }
 

@@ -568,6 +568,9 @@ public sealed class LocalSymbol(
     /// <summary><c>async let</c>: its value comes from a child task, so reading it awaits.</summary>
     public bool IsAsyncLet { get; internal set; }
 
+    /// <summary>For an <c>async let</c> whose child may throw, what it throws: reading it tries.</summary>
+    public TypeSymbol? AsyncLetThrownType { get; internal set; }
+
     public bool IsMutable { get; } = isMutable;
 
     /// <summary>

@@ -831,10 +831,29 @@ public sealed partial class SilGen {
         }
     }
 
+    /// <summary>What the declaration's <c>@inline(always)</c> or <c>@inline(never)</c> asks, if it has one.</summary>
+    static SilInline InlineOf(FunctionSymbol symbol) {
+        foreach (var syntax in symbol.DeclaringSyntax) {
+            foreach (var attribute in syntax.ChildNodes().OfType<AttributeSyntax>()) {
+                if (attribute.Name.ToString().Trim() == "inline"
+                    && attribute.ArgumentList?.Arguments.ToList() is [{ Expression: IdentifierNameSyntax { Identifier.Text: var how } }]) {
+                    return how switch {
+                        "always" => SilInline.Always,
+                        "never" => SilInline.Never,
+                        _ => SilInline.Default,
+                    };
+                }
+            }
+        }
+
+        return SilInline.Default;
+    }
+
     void LowerBody(FunctionSymbol symbol, SyntaxNode syntax, BoundBlock body, SourceText source, string name, FunctionType type, TypeSubstitution substitution) {
         var function = new SilFunction(name, type) {
             SourceFile = source.FileName,
             Line = source.GetLinePosition(syntax.Span.Start).Line,
+            Inline = InlineOf(symbol),
         };
 
         if (HasSelf(symbol)) {
@@ -1002,6 +1021,19 @@ public sealed partial class SilGen {
         }
 
         substitution = WithAssociatedTypes(symbol, substitution);
+
+        // A static member of a generic class named without the class's
+        // arguments — 'Task.sleep(…)', which never mentions Success — is one
+        // function whatever they would be: they are Never.
+        if (symbol.IsStatic && Owner(symbol)?.OriginalDefinition is { TypeKind: TypeKind.Class, TypeParameters: { Length: > 0 } classParameters }
+            && classParameters.Any(p => substitution.Lookup(p) is null)) {
+            var map = substitution.Parameters.ToDictionary(static p => p, p => substitution.Lookup(p)!);
+            foreach (var parameter in classParameters.Where(p => substitution.Lookup(p) is null)) {
+                map[parameter] = Core.Never;
+            }
+
+            substitution = new(map);
+        }
 
         // '@polymorphic': the one instance, whatever the types, for a call
         // that passes its arguments as that instance takes them.
@@ -1492,10 +1524,10 @@ public sealed partial class SilGen {
     FunctionType? SignatureOf(FunctionSymbol symbol, SyntaxNode at, TypeSubstitution substitution) {
         SilType? Lower(TypeSymbol type) => this.Lower(Substitute(substitution, type));
 
-        // An async function is an ordinary one: a task suspends only where
-        // it waits, in the runtime, with its whole stack (docs/04 §5). A
-        // 'rethrows' one throws what its function parameters throw, together:
-        // the binder has made that its thrown type.
+        // An async function is lowered as an ordinary one, its type marked
+        // async: AsyncLowering makes it a coroutine once every pass has run.
+        // A 'rethrows' one throws what its function parameters throw,
+        // together: the binder has made that its thrown type.
         var parameters = ImmutableArray.CreateBuilder<SilType>();
 
         // 'self' comes first: by value, or by address when the method may change it.
@@ -1549,7 +1581,8 @@ public sealed partial class SilGen {
             && (symbol.FunctionKind == FunctionKind.Initializer
                 || i >= selfCount && symbol.Parameters[i - selfCount].Modifier == ParameterModifier.Consuming)).ToImmutableArray();
 
-        return new FunctionType(parameters.ToImmutable(), result, thrown, owned);
+        // A generator's call only captures: only its 'next()' may wait.
+        return new FunctionType(parameters.ToImmutable(), result, thrown, owned, symbol.IsAsync && !isGeneratorCall);
     }
 
     /// <summary>The type a member's <c>self</c> is: its owner, constructed with the type arguments in force.</summary>
@@ -1754,7 +1787,7 @@ public sealed partial class SilGen {
                     return null;
                 }
 
-                return new ThickFunctionType(new FunctionType(parameters.ToImmutable(), result, thrown));
+                return new ThickFunctionType(new FunctionType(parameters.ToImmutable(), result, thrown, isAsync: functionType.IsAsync));
             }
 
             case OptionalTypeSymbol optional: {
@@ -1812,8 +1845,8 @@ public sealed partial class SilGen {
             case NamedTypeSymbol { TypeArguments: [var success] } task when task.OriginalDefinition.Equals(Core.Task):
                 return TaskClass(success);
 
-            // An actor is a class whose calls are serialised: the cooperative
-            // scheduler runs one task at a time, so its state needs no more.
+            // An actor is a class whose calls are serialised by its executor:
+            // a call from outside it hops onto it first (SilGen.Actors.cs).
             case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Class or TypeKind.Actor } named when !named.OriginalDefinition.Equals(Core.Task): {
                 var classType = Begin(named, new ClassType(TypeName(named)));
                 _classes[classType] = named;
@@ -1844,6 +1877,14 @@ public sealed partial class SilGen {
                     };
 
                     classType.Fields.Add((field.Name, stored));
+                }
+
+                // An actor's serial executor, the runtime's: after every
+                // field, where reflection, which pairs the declared fields
+                // with the first ones, does not see it (SilGen.Actors.cs).
+                if (named.TypeKind == TypeKind.Actor) {
+                    classType.Fields.Add((ExecutorField, SilType.Int));
+                    classType.Fields.Add((ExecutorQueueField, SilType.Int));
                 }
 
                 return classType;
@@ -2359,8 +2400,9 @@ public sealed partial class SilGen {
 
     /// <summary>
     ///     A function value as a function type that throws where it does not,
-    ///     or throws another error: code that calls it, converting what it
-    ///     throws. Its context is a box holding the function converted.
+    ///     or throws another error, or is async where it is not: code that
+    ///     calls it, converting what it throws — async, a frame that never
+    ///     suspends. Its context is a box holding the function converted.
     /// </summary>
     internal (string Name, FunctionType Type)? ConversionThunk(ThickFunctionType from, ThickFunctionType to) {
         var name = $"$convert${Sanitise(from.ToString())}$to${Sanitise(to.ToString())}";
@@ -2371,7 +2413,7 @@ public sealed partial class SilGen {
 
         var source = from.Signature;
         if (!source.Parameters.SequenceEqual(to.Signature.Parameters) || source.Result != to.Signature.Result
-            || source.Thrown is not null && to.Signature.Thrown is null) {
+            || source.Thrown is not null && to.Signature.Thrown is null || source.IsAsync && !to.Signature.IsAsync) {
             return null;
         }
 
@@ -2582,6 +2624,7 @@ public sealed partial class SilGen {
         var function = new SilFunction(name, type) {
             SourceFile = source.FileName,
             Line = syntax is null ? 0 : source.GetLinePosition(syntax.Span.Start).Line,
+            Inline = InlineOf(symbol),
         };
         function.ParameterNames.AddRange(symbol.Parameters.Select(static p => p.Name));
 
@@ -2865,7 +2908,7 @@ public sealed partial class SilGen {
 
         // A slot's function: the requirement's own parameters, then the box —
         // where it is, for one that changes the value.
-        ThickFunctionType? Slot(IEnumerable<TypeSymbol> parameters, TypeSymbol result, TypeSymbol? thrown, bool changes, TypeSubstitution arguments) {
+        ThickFunctionType? Slot(IEnumerable<TypeSymbol> parameters, TypeSymbol result, TypeSymbol? thrown, bool changes, TypeSubstitution arguments, bool isAsync = false) {
             var lowered = new List<SilType>();
             foreach (var parameter in parameters) {
                 if (Lower(arguments.Apply(parameter)) is not { } type) {
@@ -2885,7 +2928,7 @@ public sealed partial class SilGen {
             }
 
             lowered.Add(changes ? new AddressType(root) : root);
-            return new ThickFunctionType(new FunctionType([..lowered], resultType, thrownType));
+            return new ThickFunctionType(new FunctionType([..lowered], resultType, thrownType, isAsync: isAsync));
         }
 
         foreach (var named in protocols) {
@@ -2906,7 +2949,7 @@ public sealed partial class SilGen {
                         case FunctionSymbol { IsStatic: false, FunctionKind: FunctionKind.Ordinary, TypeParameters.IsEmpty: true } method
                             when seen.Add(SlotName(method)) && !method.Parameters.Any(p => MentionsSelf(p.Type) || p.Modifier != ParameterModifier.None)
                                  && !MentionsSelf(method.ReturnType): {
-                            if (Slot(method.Parameters.Select(static p => p.Type), method.ReturnType, method.ThrownType, method.IsMutating, arguments) is { } thick) {
+                            if (Slot(method.Parameters.Select(static p => p.Type), method.ReturnType, method.ThrownType, method.IsMutating, arguments, method.IsAsync) is { } thick) {
                                 layout.Fields.Add((SlotName(method), thick));
                                 slots.Add((SlotName(method), method));
                             }
@@ -2915,7 +2958,7 @@ public sealed partial class SilGen {
                         }
 
                         case FieldSymbol { IsStatic: false } field when seen.Add(GetterSlot(field)) && !MentionsSelf(field.Type): {
-                            if (Slot([], field.Type, null, false, arguments) is { } getter) {
+                            if (Slot([], field.Type, null, false, arguments, field.IsAsyncGetter) is { } getter) {
                                 layout.Fields.Add((GetterSlot(field), getter));
                                 slots.Add((GetterSlot(field), field));
                             }
@@ -4687,6 +4730,10 @@ public sealed partial class SilGen {
                             Emit(new DestroyAddrInst(slot));
                             break;
 
+                        case AsyncLetEnd asyncLet:
+                            EndAsyncLet(asyncLet);
+                            break;
+
                         case RegionPop pop: {
                             var frameRegion = Emit(new LoadBorrowInst(pop.Slot));
                             Emit(new BuiltinInst("region_pop", SilType.Unit, frameRegion));
@@ -4957,6 +5004,10 @@ public sealed partial class SilGen {
 
                 case BoundDefer defer:
                     _scopes[^1].Add(defer.Body);
+                    return;
+
+                case BoundLocalDeclaration { Local.IsAsyncLet: true } asyncLet:
+                    AsyncLet(asyncLet);
                     return;
 
                 case BoundLocalDeclaration declaration:
@@ -6027,9 +6078,12 @@ public sealed partial class SilGen {
             Sequence(parts, matched, failed);
         }
 
-        /// <summary>A union case's sub-patterns, against its payload: one value, or a tuple of them.</summary>
+        /// <summary>
+        ///     A union case's sub-patterns, against its payload: the one field
+        ///     itself, a tuple or not, or a tuple of the fields.
+        /// </summary>
         void PayloadPattern(BoundUnionCasePattern unionCase, SilValue payload, SilBlock matched, SilBlock failed) {
-            if (unionCase.Payload.Length == 1 && payload.Type is not TupleType) {
+            if (unionCase.Payload.Length == 1 && unionCase.UnionCase.Payload.Length == 1) {
                 Pattern(unionCase.Payload[0], payload, matched, failed);
             } else {
                 Sequence(
@@ -6301,6 +6355,9 @@ public sealed partial class SilGen {
                 case BoundLocalAccess access when _views.Contains(access.Local):
                     return Emit(new BuiltinInst("inline_copy", ((InlinePointerType)_slots[access.Local].ElementType).Pointee, Emit(new LoadInst(_slots[access.Local]))));
 
+                case BoundLocalAccess access when _asyncLets.TryGetValue(access.Local, out var asyncLet):
+                    return AsyncLetValue(access, asyncLet);
+
                 case BoundLocalAccess access:
                     return LoadLocal(access);
 
@@ -6342,6 +6399,10 @@ public sealed partial class SilGen {
                 case BoundFieldAccess { Field: { Name: "value", IsAsyncGetter: true, ContainingSymbol: var task } } taskValue
                     when task is not null && ReferenceEquals(task, Core.Task):
                     return TaskValue(taskValue);
+
+                case BoundFieldAccess { Field: { Name: "handle", ContainingSymbol: var task } } taskHandle
+                    when task is not null && ReferenceEquals(task, Core.Task):
+                    return HandleOf(taskHandle);
 
                 // A constant: its value, computed as the program was compiled.
                 case BoundFieldAccess { Field: var constantField } when generator.ConstantRead(constantField) is { } constant
@@ -7006,7 +7067,13 @@ public sealed partial class SilGen {
                     return Missing(access, $"the member '{field.Name}'");
                 }
 
+                // An actor's state read from outside it: on the actor (SilGen.Actors.cs).
+                var back = IsolatedRead(field) ? HopInto(reference, []) : null;
                 var loaded = ReadField(Emit(new RefElementAddrInst(reference, index)));
+                if (back is not null) {
+                    HopBack(back, loaded);
+                }
+
                 End(reference);
                 return loaded;
             }
@@ -8017,7 +8084,8 @@ public sealed partial class SilGen {
             var payloadType = indirect ? ((ClassType)enumType.Cases[index].Payload!).Fields[0].Type : enumType.Cases[index].Payload;
             SilValue? payload = values.Count switch {
                 0 => null,
-                1 when payloadType is not TupleType => values[0],
+                // One field is the payload itself, even when it is a tuple.
+                1 => values[0],
                 _ => Emit(new TupleInst((TupleType)payloadType!, [..values])),
             };
 
@@ -8324,7 +8392,10 @@ public sealed partial class SilGen {
             BindLocal(temporary, payload, chained.Syntax, declaration: true);
             Destroy(value);
             if (Expression(through(new BoundLocalAccess(receiver.Syntax, temporary, unwrappedType))) is { } reached) {
-                Branch(after, flatten ? Owned(reached) : Emit(new EnumInst(resultType, resultType.CaseIndex("Some"), Owned(reached))));
+                // A member that gives Void makes a Void?, whose 'Some' carries nothing.
+                var resultSome = resultType.CaseIndex("Some");
+                Branch(after, flatten ? Owned(reached)
+                    : Emit(new EnumInst(resultType, resultSome, resultType.Cases[resultSome].Payload is null ? null : Owned(reached))));
             }
 
             _current = absent;
@@ -9317,11 +9388,33 @@ public sealed partial class SilGen {
 
                 // Tasks: made, slept, and yielded to (SilGen.Tasks.cs).
                 if (owner is not null && ReferenceEquals(owner, Core.Task)) {
-                    if (callee.Name == "spawn") {
-                        return Spawn(call);
+                    if (callee.Name is "spawn" or "detached") {
+                        return Spawn(call, callee.Name == "detached");
                     }
 
-                    if (callee.Name == "sleep") {
+                    if (callee.Name == "installCancellationHandler") {
+                        return InstallCancellationHandler(call);
+                    }
+
+                    if (callee.Name == "waitForGroup") {
+                        if (Expression(call.Arguments[0]) is not { } group) {
+                            return null;
+                        }
+
+                        Emit(new BuiltinInst("task_group_wait", SilType.Unit, group));
+                        return UnitValue.Instance;
+                    }
+
+                    if (callee.Name == "park") {
+                        if (Expression(call.Arguments[0]) is not { } list) {
+                            return null;
+                        }
+
+                        Emit(new BuiltinInst("task_park", SilType.Unit, list));
+                        return UnitValue.Instance;
+                    }
+
+                    if (callee.Name == "sleepUncancelled") {
                         if (Expression(call.Arguments[0]) is not { } nanoseconds) {
                             return null;
                         }
@@ -9332,10 +9425,6 @@ public sealed partial class SilGen {
 
                     if (callee.Name == "cancel") {
                         return CancelTask(call);
-                    }
-
-                    if (callee.Name == "isCancelled") {
-                        return Emit(new BuiltinInst("task_is_cancelled", SilType.Bool));
                     }
 
                     Emit(new BuiltinInst("task_yield", SilType.Unit));
@@ -9627,22 +9716,35 @@ public sealed partial class SilGen {
             SilValue code = HasSelf(callee) && call.Receiver is not BoundSuperAccess && generator.IsDynamic(callee)
                 ? Emit(new ClassMethodInst(arguments[0], VTableSlot(callee), type))
                 : Emit(new FunctionRefInst(name, type));
+
+            // Into an actor, or onto the main actor, from outside it: a hop
+            // there and back (SilGen.Actors.cs).
+            var (hops, main) = Crossing(callee);
+            var back = hops && (main || arguments is [{ Type: ClassType }, ..]) ? HopInto(main ? null : arguments[0], arguments) : null;
+
             // A 'rethrows' callee given functions that throw nothing throws
             // nothing: the binder asked for no 'try', and nothing handles it.
             // Nor does a 'rethrows(E)' one whose E is Never here.
             return Invoke(code, type, arguments, borrows, call.Syntax,
                 cannotThrow: callee.IsRethrows && RethrownBy(call) is null
-                             && (callee.RethrownAlso is not { } also || ThrowsNothing(Sub(call.Substitution.Apply(also)))));
+                             && (callee.RethrownAlso is not { } also || ThrowsNothing(Sub(call.Substitution.Apply(also)))),
+                hopBack: back);
         }
 
         /// <summary>
         ///     Calls a function or a closure with borrowed arguments: <c>apply</c>,
         ///     or <c>try_apply</c> with the borrows ended on both of its edges.
         /// </summary>
-        SilValue? Invoke(SilValue reference, FunctionType type, List<SilValue> arguments, List<SilValue> borrows, SyntaxNode at, bool cannotThrow = false) {
+        /// <param name="hopBack">After a call into an actor: where the task ran before, to hop back to on either way out.</param>
+        SilValue? Invoke(SilValue reference, FunctionType type, List<SilValue> arguments, List<SilValue> borrows, SyntaxNode at, bool cannotThrow = false,
+            SilValue? hopBack = null) {
             BeginAccesses(borrows);
             if (type.Thrown is null) {
                 var apply = Emit(new ApplyInst(reference, type.Result, [..arguments]));
+                if (hopBack is not null) {
+                    HopBack(hopBack, type.Result == SilType.Unit ? null : apply);
+                }
+
                 EndAll(borrows);
                 return type.Result == SilType.Unit ? UnitValue.Instance : apply;
             }
@@ -9684,6 +9786,10 @@ public sealed partial class SilGen {
             }
 
             _current = errorBlock;
+            if (hopBack is not null) {
+                HopBack(hopBack, error);
+            }
+
             for (var i = borrows.Count - 1; i >= 0; i--) {
                 Release(borrows[i]);
             }
@@ -9696,6 +9802,10 @@ public sealed partial class SilGen {
             }
 
             _current = normal;
+            if (hopBack is not null) {
+                HopBack(hopBack, result);
+            }
+
             for (var i = borrows.Count - 1; i >= 0; i--) {
                 Release(borrows[i]);
             }

@@ -60,18 +60,26 @@ public static class Library {
     /// </summary>
     public static IReadOnlyList<SyntaxTree> For(SyntaxTree program) => For([program]);
 
-    /// <summary>The library's trees a program of many files needs, parsed for the target its files are.</summary>
+    /// <summary>
+    ///     The library's trees a program of many files needs, parsed for the
+    ///     target its files are. A file of the library the program has of its
+    ///     own — <c>sable test --doc lib/Sable.Text</c>, read from disk —
+    ///     stands in for the embedded file of its name, as one of Sable.Core
+    ///     does (<see cref="CoreLibrary.Brought" />), and the rest of its
+    ///     module comes with it.
+    /// </summary>
     public static IReadOnlyList<SyntaxTree> For(IReadOnlyList<SyntaxTree> program) {
         var modules = program.Count > 0 ? ModulesFor(program[0].Options) : Modules;
+        var brought = Brought(program);
         var needed = new List<SyntaxTree>();
         var seen = new HashSet<string>(StringComparer.Ordinal) { Core };
-        var pending = new Queue<string>(program.SelectMany(ImportsOf));
+        var pending = new Queue<string>([..program.SelectMany(ImportsOf), ..brought.Select(static b => b.Module)]);
         while (pending.TryDequeue(out var module)) {
             if (!seen.Add(module) || !modules.TryGetValue(module, out var files)) {
                 continue;
             }
 
-            foreach (var file in files) {
+            foreach (var file in files.Where(f => !CoreLibrary.IsBrought(f, brought))) {
                 needed.Add(file);
                 foreach (var imported in ImportsOf(file)) {
                     pending.Enqueue(imported);
@@ -81,6 +89,19 @@ public static class Library {
 
         return needed;
     }
+
+    /// <summary>The library files the program brings its own of (<see cref="CoreLibrary.Brought" />), against the embedded modules.</summary>
+    public static HashSet<(string Module, string File)> Brought(IReadOnlyList<SyntaxTree> program) {
+        var modules = program.Count > 0 ? ModulesFor(program[0].Options) : Modules;
+        var core = program.Count > 0 ? CoreLibrary.TreesFor(program[0].Options) : CoreLibrary.Trees;
+        return CoreLibrary.Brought(
+            program.Where(t => !IsEmbedded(t, modules)),
+            m => m == Core ? core : modules.TryGetValue(m, out var files) ? files : []
+        );
+    }
+
+    static bool IsEmbedded(SyntaxTree tree, IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> modules) =>
+        CoreLibrary.Contains(tree) || CoreLibrary.ModuleOf(tree) is { } module && modules.TryGetValue(module, out var files) && files.Contains(tree);
 
     static IEnumerable<string> ImportsOf(SyntaxTree tree) =>
         tree.Root is CompilationUnitSyntax unit ? unit.Imports.Select(static i => NameOf(i.Name)) : [];

@@ -6,10 +6,12 @@
 #include <execinfo.h>
 #include <poll.h>
 #include <pthread.h>
+#include <sched.h>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/mman.h>
 #include <sys/random.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -107,19 +109,10 @@ static void on_fault(int signal_number, siginfo_t *info, void *context) {
 // The main thread's stack for the handler, for as long as the program runs.
 static _Alignas(16) char main_signal_stack[SIGNAL_STACK];
 
-// Another thread's, allocated as it starts and kept for as long as it lives.
-// Only the system holds a signal stack otherwise, so the pointer is kept
-// here too: LeakSanitizer sees it reachable, not leaked.
-static _Thread_local char *thread_signal_stack;
-
-// Gives the calling thread a stack for the handler, memory given or, if
-// none, allocated, and notes where its own stack ends.
+// Gives the calling thread — the main one, or a worker of the pool as it
+// starts — a stack for the handler, and notes where its own stack ends.
 static void *watch_stack_on(char *memory) {
     stack_low = thread_stack_low();
-    if (memory == NULL) {
-        memory = thread_signal_stack = malloc(SIGNAL_STACK);
-    }
-
     stack_t alternate = { 0 };
     alternate.ss_sp = memory;
     alternate.ss_size = SIGNAL_STACK;
@@ -130,11 +123,6 @@ static void *watch_stack_on(char *memory) {
     return alternate.ss_sp;
 }
 
-// A thread that runs tasks keeps its signal stack for as long as it lives.
-static void *watch_stack(void) {
-    return watch_stack_on(NULL);
-}
-
 static void platform_start(void) {
     watch_stack_on(main_signal_stack);
     struct sigaction action = { 0 };
@@ -143,68 +131,6 @@ static void platform_start(void) {
     sigemptyset(&action.sa_mask);
     sigaction(SIGSEGV, &action, NULL);
     sigaction(SIGBUS, &action, NULL);
-}
-
-// ---- Tasks' threads -------------------------------------------------------
-
-struct TaskCondition {
-    pthread_cond_t condition;
-};
-
-static pthread_mutex_t task_lock = PTHREAD_MUTEX_INITIALIZER;
-
-static void lock_tasks(void) {
-    pthread_mutex_lock(&task_lock);
-}
-
-static void condition_init(TaskCondition *condition) {
-    pthread_cond_init(&condition->condition, NULL);
-}
-
-static void condition_destroy(TaskCondition *condition) {
-    pthread_cond_destroy(&condition->condition);
-}
-
-static void condition_signal(TaskCondition *condition) {
-    pthread_cond_signal(&condition->condition);
-}
-
-static void condition_wait(TaskCondition *condition) {
-    pthread_cond_wait(&condition->condition, &task_lock);
-}
-
-typedef struct {
-    void (*body)(void *argument);
-    void *argument;
-} ThreadStart;
-
-static void *thread_entry(void *start) {
-    ThreadStart what = *(ThreadStart *)start;
-    free(start);
-    what.body(what.argument);
-    return NULL;
-}
-
-static bool start_thread(void (*body)(void *argument), void *argument) {
-    ThreadStart *start = malloc(sizeof(ThreadStart));
-    if (start == NULL) {
-        return false;
-    }
-
-    start->body = body;
-    start->argument = argument;
-    pthread_attr_t attributes;
-    pthread_attr_init(&attributes);
-    pthread_attr_setstacksize(&attributes, 8u << 20);
-    pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
-    pthread_t thread;
-    bool started = pthread_create(&thread, &attributes, thread_entry, start) == 0;
-    pthread_attr_destroy(&attributes);
-    if (!started) {
-        free(start);
-    }
-
-    return started;
 }
 
 // ---- Memory ----------------------------------------------------------------
@@ -234,6 +160,19 @@ static void unmap_slab(void *slab, size_t size) {
     munmap(slab, size);
 }
 
+static int64_t peak_memory(void) {
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) != 0) {
+        return 0;
+    }
+
+#ifdef __APPLE__
+    return (int64_t)usage.ru_maxrss; // bytes
+#else
+    return (int64_t)usage.ru_maxrss * 1024; // kilobytes
+#endif
+}
+
 // ---- Time (Sable.Time's floor) ------------------------------------------
 
 int64_t sable_time_monotonic(void) {
@@ -257,6 +196,108 @@ void sable_time_sleep(int64_t nanoseconds) {
     struct timespec wait = { (time_t)(nanoseconds / 1000000000), (long)(nanoseconds % 1000000000) };
     while (nanosleep(&wait, &wait) != 0 && errno == EINTR) {
     }
+}
+
+// ---- Threads ---------------------------------------------------------------
+
+static void mutex_init(PlatformMutex *mutex) {
+    pthread_mutex_init(mutex, NULL);
+}
+
+static void mutex_lock(PlatformMutex *mutex) {
+    pthread_mutex_lock(mutex);
+}
+
+static void mutex_unlock(PlatformMutex *mutex) {
+    pthread_mutex_unlock(mutex);
+}
+
+// A timed wait counts on the monotonic clock: macOS waits for a relative
+// time, and elsewhere the condition is made to use that clock.
+static void condition_init(PlatformCondition *condition) {
+#if defined(__APPLE__)
+    pthread_cond_init(condition, NULL);
+#else
+    pthread_condattr_t attributes;
+    pthread_condattr_init(&attributes);
+    pthread_condattr_setclock(&attributes, CLOCK_MONOTONIC);
+    pthread_cond_init(condition, &attributes);
+    pthread_condattr_destroy(&attributes);
+#endif
+}
+
+static void condition_wait(PlatformCondition *condition, PlatformMutex *mutex, int64_t until) {
+    if (until < 0) {
+        pthread_cond_wait(condition, mutex);
+        return;
+    }
+
+#if defined(__APPLE__)
+    int64_t left = until - sable_time_monotonic();
+    if (left <= 0) {
+        return;
+    }
+
+    struct timespec wait = { (time_t)(left / 1000000000), (long)(left % 1000000000) };
+    pthread_cond_timedwait_relative_np(condition, mutex, &wait);
+#else
+    struct timespec deadline = { (time_t)(until / 1000000000), (long)(until % 1000000000) };
+    pthread_cond_timedwait(condition, mutex, &deadline);
+#endif
+}
+
+static void condition_signal(PlatformCondition *condition) {
+    pthread_cond_signal(condition);
+}
+
+static void condition_broadcast(PlatformCondition *condition) {
+    pthread_cond_broadcast(condition);
+}
+
+typedef struct ThreadStart {
+    void (*run)(void *argument);
+    void *argument;
+} ThreadStart;
+
+static void *thread_main(void *pointer) {
+    ThreadStart start = *(ThreadStart *)pointer;
+    free(pointer);
+    // A stack for the overflow handler, for as long as the thread runs.
+    watch_stack_on(malloc(SIGNAL_STACK));
+    start.run(start.argument);
+    return NULL;
+}
+
+static bool thread_start(void (*run)(void *argument), void *argument) {
+    ThreadStart *start = malloc(sizeof *start);
+    if (start == NULL) {
+        return false;
+    }
+
+    start->run = run;
+    start->argument = argument;
+    pthread_attr_t attributes;
+    pthread_attr_init(&attributes);
+    // As large as the main thread's usually is: a task's calls run here.
+    pthread_attr_setstacksize(&attributes, 8 * 1024 * 1024);
+    pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+    pthread_t thread;
+    bool started = pthread_create(&thread, &attributes, thread_main, start) == 0;
+    pthread_attr_destroy(&attributes);
+    if (!started) {
+        free(start);
+    }
+
+    return started;
+}
+
+static int processor_count(void) {
+    long count = sysconf(_SC_NPROCESSORS_ONLN);
+    return count > 0 ? (int)count : 1;
+}
+
+static void thread_yield(void) {
+    sched_yield();
 }
 
 // ---- Arguments, files and the environment ----------------------------------

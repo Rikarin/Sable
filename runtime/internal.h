@@ -16,10 +16,17 @@
 #include <errno.h>
 #include <math.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+// The Microsoft C runtime's names for holding a stream across calls.
+#define flockfile _lock_file
+#define funlockfile _unlock_file
+#endif
 
 // Stops the program, saying why (traps.c).
 _Noreturn void sable_trap(const char *message);

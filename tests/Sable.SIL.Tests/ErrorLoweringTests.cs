@@ -241,4 +241,35 @@ public sealed class ErrorLoweringTests {
         Assert.Equal(1.5, Run(module, "rem", 7.5, 2.0));
         Assert.Equal(-1.5, Run(module, "rem", -7.5, 2.0));
     }
+
+    // ---- A closure that says what it throws (#273) --------------------------
+
+    [Fact]
+    public void AClosureThrowsTheErrorItsHeaderNames() {
+        var module = Lower(
+            """
+            union ParseError: Error { Empty }
+
+            fn apply<E: Error>(_ s: String, _ f: (String) throws(E) -> Int) throws(E) -> Int {
+                return try f(s)
+            }
+
+            fn measure(_ s: String) -> Int {
+                let parse = { (s: String) throws(ParseError) -> Int in
+                    if s.isEmpty { throw ParseError.Empty }
+                    return s.count
+                }
+                let arrow = (s: String) throws(ParseError) -> Int => try parse(s) * 10
+                do {
+                    return try apply(s, parse) + arrow(s)
+                } catch {
+                    return -1
+                }
+            }
+            """
+        );
+
+        Assert.Equal(33L, Run(module, "measure", "abc"));
+        Assert.Equal(-1L, Run(module, "measure", ""));
+    }
 }

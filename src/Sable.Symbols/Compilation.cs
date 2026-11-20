@@ -55,14 +55,14 @@ public sealed partial class Compilation {
         // Sable.Core's source comes with every compilation, after the files
         // given, so that those keep their places (CoreLibrary). A
         // compilation made from another passes the core's trees back in;
-        // they are not added twice. Files that declare Sable.Core themselves
-        // are the core, and the embedded one stays out. The core is parsed
-        // for the target the program's files are: what its '#if os(...)' says
-        // follows what theirs does.
+        // they are not added twice. A file that declares Sable.Core itself
+        // stands in for the embedded file of its name (CoreLibrary.Brought).
+        // The core is parsed for the target the program's files are: what
+        // its '#if os(...)' says follows what theirs does.
         var target = syntaxTrees.FirstOrDefault(static t => !CoreLibrary.Contains(t))?.Options ?? options;
-        SyntaxTrees = CoreLibrary.IsBroughtBy(syntaxTrees)
-            ? [..syntaxTrees.Where(static t => !CoreLibrary.Contains(t))]
-            : [..syntaxTrees.Where(static t => !CoreLibrary.Contains(t)), ..CoreLibrary.TreesFor(target)];
+        var own = syntaxTrees.Where(static t => !CoreLibrary.Contains(t)).ToList();
+        var brought = CoreLibrary.Brought(own, m => m == CoreLibrary.ModuleName ? CoreLibrary.TreesFor(target) : []);
+        SyntaxTrees = [..own, ..CoreLibrary.TreesFor(target).Where(t => !CoreLibrary.IsBrought(t, brought))];
         Options = options;
 
         var coreModule = new ModuleSymbol("Sable.Core");
@@ -1045,6 +1045,11 @@ public sealed partial class Compilation {
         if (function.IsRethrows && declaration.ThrowsSpec?.ErrorType is { } also) {
             function.RethrownAlsoResolver = () => TypeBinder.BindType(also, function, scope);
         }
+
+        // Its constraints now, before its signature or body is looked at:
+        // 'T: Numeric' is what lets the body multiply two T's.
+        TypeBinder.BindTypeParameterConstraints(function.TypeParameters, function, scope);
+        TypeBinder.BindWhereClause(declaration.WhereClause, function, scope);
 
         RecordDeclaration(declaration, function);
         return function;

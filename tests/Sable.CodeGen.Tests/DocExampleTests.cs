@@ -89,6 +89,44 @@ public sealed class DocExampleTests {
     }
 
     [Fact]
+    public void ExamplesOfOneNameInTwoFilesOfAModuleAreNumberedTogether() {
+        const string first = "module M\n\n/// ```sable\n/// assert(parse() == 1)\n/// ```\nfn parse() -> Int { return 1 }\n";
+        const string second = "module M\n\nstruct S {\n    /// ```sable\n    /// assert(S.parse() == 2)\n    /// ```\n    static fn parse() -> Int { return 2 }\n}\n";
+        var result = TestHarness.Compile([new SourceText(first, "a.sb"), new SourceText(second, "b.sb")], TestKind.Test, out var found, docExamples: true);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        Assert.Equal(["M.doc_parse_1", "M.doc_parse_2"], found.Select(static t => t.QualifiedName));
+    }
+
+    /// <summary>
+    ///     <c>sable test --doc lib/Sable.Text</c>, or one file of it: the
+    ///     files read from disk stand in for the embedded ones of their names,
+    ///     rather than declaring everything a second time, and the module's
+    ///     other files come with them.
+    /// </summary>
+    [Theory]
+    [InlineData("Sable.Text", null)]
+    [InlineData("Sable.Core", "Numeric.sb")]
+    [InlineData("Sable.Text", "String+Encoding.sb")]
+    public void TheLibrarysOwnExamplesCompileFromDisk(string module, string? file) {
+        var directory = Path.Combine(RepositoryRoot, "lib", module);
+        var files = file is null ? Directory.GetFiles(directory, "*.sb").Order(StringComparer.Ordinal).ToArray() : [Path.Combine(directory, file)];
+        var result = TestHarness.Compile([..files.Select(f => new SourceText(File.ReadAllText(f), Path.GetFileName(f)))], TestKind.Test, out var found, docExamples: true);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        Assert.NotEmpty(found);
+    }
+
+    static string RepositoryRoot {
+        get {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Sable.slnx"))) {
+                dir = dir.Parent;
+            }
+
+            return dir!.FullName;
+        }
+    }
+
+    [Fact]
     public void AnExampleThatDoesNotCompileSaysWhereItIs() {
         var result = TestHarness.Compile(
             [new SourceText("module M\n\n/// ```sable\n/// let x: Int = \"text\"\n/// ```\nfn f() { }\n", "m.sb")],

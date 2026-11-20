@@ -1048,7 +1048,9 @@ resolved against the receiver's members rather than against the grammar:
 only a name: `Int?.self`, `Point[].self`, `Token[>..].self`,
 `(Int, String).self`, `(Int) -> Bool.self`. A compound type is only read in
 expression position when `.self` follows it, so `xs[0]` stays an index and
-`p?.x` stays an optional chain.
+`p?.x` stays an optional chain — or, for a dictionary type and a growable
+array's, when it is called: `[String: Int]()`, `Int[>..]()` and
+`Int[>..<]()` call the type's `init()`, an empty one.
 
 The type of `T.self` is the metatype `T.Type` (written after a type's name,
 unless the type has a nested type called `Type`). Its one value is the type,
@@ -1104,6 +1106,8 @@ multi-line, leading indentation stripped to the closing delimiter
 [1, 2, 3]                  // array
 [:]                        // empty dictionary
 ["a": 1, "b": 2]           // dictionary
+[String: Int]()            // empty dictionary, by its type's init()
+Int[>..]()                 // empty grow-only array, likewise; and Int[>..<]()
 (1, "two", 3.0)            // tuple
 .Circle(radius: 1)         // inferred-context union case
 Point { x: 1, y: 2 }       // record literal; every field carries its value
@@ -1183,6 +1187,12 @@ fn withLock<T>(_ l: Lock, _ body: () throws -> T) rethrows -> T { }
 withLock(mutex) {
     counter += 1
 }
+
+// What a closure throws is what its body throws, unless it says: 'throws(E)'
+// as a function's, or bare 'throws' for 'throws(any Error)'. Never
+// 'rethrows': a closure's type says what it throws.
+let parse = { (s: String) throws(ParseError) -> Int in try Int.parse(s) }
+let check = (s: String) throws(ParseError) => try validate(s)
 
 // After the first trailing closure, more, each with its parameter's label,
 // starting on the line the one before ends on
@@ -1342,13 +1352,23 @@ async fn fetch(_ url: Url) throws(HttpError) -> Response { }
 async fn main() throws {
     let r = await fetch(url)
 
-    async let a = fetch(url1)         // starts immediately
+    async let a = fetch(url1)         // starts immediately, alongside
     async let b = fetch(url2)
-    let both = await (a, b)           // structured, both awaited here
+    let both = try await (a, b)       // structured, both awaited here
 
-    await withTaskGroup(of: Response.self) { group in
-        for u in urls { group.spawn { await fetch(u) } }
-        for await r in group { handle(r) }
+    await withTaskGroup(of: Response?.self) { group in
+        for u in urls { group.spawn { try? await fetch(u) } }
+        for await r in group { handle(r) }   // in the order they finish
+    }
+
+    let worker = Task.spawn { await work() }    // a child of this task
+    worker.cancel()                             // and of its children
+    let free = Task.detached { await poll() }   // no parent: the one way out
+}
+
+async fn work() {
+    while !Task.isCancelled {
+        try? await Task.sleep(nanoseconds: 1_000_000)  // throws CancellationError once cancelled
     }
 }
 
@@ -1363,12 +1383,36 @@ await c.increment()
 ```
 
 `async let` is a statement, not an expression: it starts a child task bound to
-the enclosing scope.
+the enclosing scope. Its value is the child's work, which may await and throw
+without saying so; reading the name awaits it, and tries when it may throw.
+A child never read, or left behind by a `return` or a throw, is cancelled and
+awaited as the scope ends.
 
-- Structured concurrency: child tasks cannot outlive their parent scope.
+- Structured concurrency: child tasks cannot outlive their parent scope. A
+  task spawned from another (`Task.spawn`, an `async let`, a group's
+  `spawn`) is its child: it takes its priority (`Task.currentPriority`;
+  `Task.spawn(priority:)` gives another), is cancelled with it, and its
+  parent finishes only once it has. `Task.detached` has no parent.
+- `withTaskGroup(of:)` and `withThrowingTaskGroup(of:)` run a body with a
+  group: `spawn` adds a child, `next()` and `for await` (`for try await`)
+  give results in the order the children finish, `cancelAll()` cancels them,
+  and the children the body leaves are awaited as it returns — cancelled
+  first when a throwing body throws.
+- Cancellation is cooperative: `task.cancel()` marks the task and its
+  children; a task asks `Task.isCancelled` or `try Task.checkCancellation()`,
+  a sleep it is in ends at once and throws `CancellationError`, and
+  `withTaskCancellationHandler(operation:onCancel:)` runs a handler as the
+  task is cancelled.
+- An actor runs one call at a time. A call into it from outside, or a
+  read of its state, awaits its turn; a call it makes to itself, or to a
+  `nonisolated` member, does not. Actors are reentrant where they wait: a
+  call suspended at an `await` inside the actor lets others in, and goes
+  on once it has the actor again, so state read before an `await` may
+  have changed after it.
 - `Sendable` is a protocol; crossing an isolation boundary requires it, checked
   at compile time.
-- `@MainActor` pins a declaration to the main executor.
+- `@MainActor` pins a declaration to the main executor: the main thread,
+  which runs the program's entry.
 - `for await x in stream { }` iterates an `AsyncSequence`; `for try await`
   one whose Failure is not Never.
 
@@ -1452,26 +1496,26 @@ an optimised one; never both. A package's profile may choose with
 
 | Attribute | Applies to | Effect |
 |---|---|---|
-| `@inline(always)` / `@inline(never)` | fn | Inlining hint |
+| `@inline(always)` / `@inline(never)` | fn | Inlined at every call, or at none: SIL's inliner and LLVM's (`alwaysinline`, `noinline`); always does not inline a function into itself, nor one that throws |
 | `@inline_layout` | struct, union | Contiguous pointer-free layout |
 | `@noncopy` | struct, union | Move-only |
 | `@reflectable` | type | Emit full reflection metadata |
 | `@immutable` | class | Deeply immutable; implies `Sendable` |
 | `@immortal` | static let | Skip refcounting |
 | `@flags` | enum | Bitset semantics |
-| `@escaping` | closure param | Closure may outlive the call |
+| `@escaping` | param of function type | Closure may outlive the call |
 | `@polymorphic` | generic fn | Single boxed instantiation |
 | `@deprecated("use X")` | any | Warning at use site |
-| `@available(macos: "14.0")` | any | Platform gate |
+| `@available(macos, linux)` | any | Platform gate: a use in a build for another platform is S3096 |
 | `@extern("c", "name")` | fn | Foreign import |
 | `@export("name")` | fn, var | Foreign export |
 | `@packed` / `@align(16)` | struct | Layout control |
 | `@test` / `@bench` | fn | Collected by `sable test` / `sable bench` |
-| `@main` | fn, type | Program entry point |
+| `@main` | fn | Program entry point: a module-level fn taking nothing and returning nothing or an `Int` exit status, one per module (S3514) |
 | `@generator("name", members: [...], always: true)` | fn in `generators/` | A source generator, run for declarations marked `@name`; `members` are the attributes it reads on fields, cases and parameters; `always` runs a package generator for every package (docs/08) |
 | `@discardable` | fn | Result may be ignored without `_ =` |
 | `@MainActor` | any | Main-executor isolation |
-| `@frozen` | struct, union | ABI-stable layout; no new cases/fields ever |
+| `@frozen` | union | Never gains a case: another module may match it without `default` |
 
 `@packed` lays a struct's fields one after another with no padding, and
 aligns the struct to a byte. `@align(n)`, a power of two up to 16 (the
@@ -1506,7 +1550,9 @@ tuples of them (S3511). One may be written on any declaration, and more than
 once; on a `@reflectable` type, `attributes(of:)` gives the values of those
 of one type in the order written. A name that is neither in this table nor
 such a struct, or `@derive`, `@indirect`, `@allow` and `@warn`, is S3092; one
-of the table's written where it does not apply is S3093. A public union
+of the table's written where it does not apply is S3093, with arguments it
+does not take S3094, and twice on one declaration S3513 (`@derive`,
+`@allow`, `@warn` and the program's own may be repeated). A public union
 matched from another module needs `default` unless it is `@frozen` (docs/03
 §3.3).
 

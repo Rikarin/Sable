@@ -1,0 +1,142 @@
+module Sable.Core
+
+/// Child tasks spawned together within one scope, 'withTaskGroup''s: their
+/// results come in the order they finish, and none outlives the scope —
+/// those not yet taken when the body returns are waited for there.
+///
+/// ```sable
+/// fn total() async -> Int {
+///     return await withTaskGroup(of: Int.self) { group in
+///         for n in 1...3 {
+///             group.spawn { n * 10 }
+///         }
+///         var sum = 0
+///         for await part in group {
+///             sum += part
+///         }
+///         return sum
+///     }
+/// }
+/// ```
+public class TaskGroup<ChildResult>: AsyncSequence {
+    public alias Iter = TaskGroupIterator<ChildResult>
+
+    let group: Int = TaskGroup<ChildResult>.made()
+    var running: [Int: Task<ChildResult>] = [:]
+    var cancelled: Bool = false
+    var accepting: Bool = true
+
+    init() { }
+
+    deinit {
+        TaskGroup<ChildResult>.free(group)
+    }
+
+    /// Spawns the body as a child of the group, at the running task's
+    /// priority. A group cancelled already cancels it at once.
+    public fn spawn(_ body: async () -> ChildResult) {
+        prepare()
+        add(Task.spawn(body))
+    }
+
+    /// Spawns the body as a child of the group, at this priority.
+    public fn spawn(priority: TaskPriority, _ body: async () -> ChildResult) {
+        prepare()
+        add(Task.spawn(priority: priority, body))
+    }
+
+    /// Before a child is spawned: in a group cancelled already, it starts
+    /// cancelled — before it can run, on whichever thread it runs.
+    fn prepare() {
+        precondition(accepting, "a task group's children are spawned within its scope")
+        if cancelled {
+            TaskGroup<ChildResult>.spawnCancelled()
+        }
+    }
+
+    fn add(_ task: Task<ChildResult>) {
+        TaskGroup<ChildResult>.adopt(group, task.handle)
+        running[task.handle] = task
+    }
+
+    /// The result of the next child to finish, waiting for one; none once
+    /// every child spawned has been taken.
+    public fn next() async -> ChildResult? {
+        await Task<ChildResult>.waitForGroup(group)
+        guard let task = running.remove(TaskGroup<ChildResult>.take(group)) else {
+            return none
+        }
+        return await task.value
+    }
+
+    /// Waits for every child not yet taken, dropping their results.
+    public fn waitForAll() async {
+        while !running.isEmpty {
+            let _ = await next()
+        }
+    }
+
+    /// Cancels every child running, and every child spawned from now on.
+    /// Their results are still waited for.
+    public fn cancelAll() {
+        cancelled = true
+        for (_, task) in running {
+            task.cancel()
+        }
+    }
+
+    /// Whether 'cancelAll()' was called, or the task running the group
+    /// was cancelled.
+    public var isCancelled: Bool => cancelled || Task.isCancelled
+
+    /// Whether no child is left to take.
+    public var isEmpty: Bool => running.isEmpty
+
+    /// The children's results as they finish, for 'for await'.
+    public fn makeAsyncIterator() -> TaskGroupIterator<ChildResult> {
+        return TaskGroupIterator<ChildResult> { group: self }
+    }
+
+    /// The scope has ended: no child may be spawned any more.
+    fn close() {
+        accepting = false
+    }
+
+    @builtin("task_group_new")
+    static fn made() -> Int
+
+    @builtin("task_spawn_cancelled")
+    static fn spawnCancelled()
+
+    @builtin("task_group_add")
+    static fn adopt(_ group: Int, _ task: Int)
+
+    @builtin("task_group_take")
+    static fn take(_ group: Int) -> Int
+
+    @builtin("task_group_free")
+    static fn free(_ group: Int)
+}
+
+/// A group's children's results, one per 'next()', in the order they
+/// finish: what 'for await result in group' goes through.
+public struct TaskGroupIterator<Value>: AsyncIterator {
+    public alias Element = Value
+
+    let group: TaskGroup<Value>
+
+    public mutating fn next() async -> Value? {
+        return await group.next()
+    }
+}
+
+/// Runs the body with a new task group, whose children each give a
+/// 'childType', and waits, as the body returns, for every child it has not
+/// taken: none outlives the call.
+public fn withTaskGroup<ChildResult, Result>(of childType: ChildResult.Type, _ body: async (TaskGroup<ChildResult>) -> Result) async -> Result {
+    let group = TaskGroup<ChildResult>()
+    let result = await body(group)
+    await group.waitForAll()
+    group.close()
+    return result
+}

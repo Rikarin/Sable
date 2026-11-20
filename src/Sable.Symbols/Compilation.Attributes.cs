@@ -61,10 +61,10 @@ public sealed partial class Compilation {
         ["align"] = (AttributeTargets.Struct, "a struct"),
         ["test"] = (AttributeTargets.Function, "a function"),
         ["bench"] = (AttributeTargets.Function, "a function"),
-        ["main"] = (AttributeTargets.Function | AttributeTargets.Type, "a function or a type"),
+        ["main"] = (AttributeTargets.Function, "a function"),
         ["discardable"] = (AttributeTargets.Callable, "a function"),
         ["MainActor"] = (AttributeTargets.Any & ~AttributeTargets.Module, "a declaration"),
-        ["frozen"] = (AttributeTargets.Struct | AttributeTargets.Union | AttributeTargets.Enum, "a struct, a union or an enum"),
+        ["frozen"] = (AttributeTargets.Union, "a union"),
         ["derive"] = (AttributeTargets.Type, "a type"),
         ["indirect"] = (AttributeTargets.Union | AttributeTargets.UnionCase, "a union or a union case"),
         ["generator"] = (AttributeTargets.Function, "a function in a package's generators/ directory (docs/08)"),
@@ -102,8 +102,18 @@ public sealed partial class Compilation {
             ParameterSyntax => (AttributeTargets.Parameter, "a parameter"),
             GenericParameterSyntax => (AttributeTargets.GenericParameter, "a type parameter"),
             ModuleDeclarationSyntax => (AttributeTargets.Module, "a module declaration"),
+            // 'f(_ k: @escaping () -> Int)': the parameter's, written on its type.
+            AttributedTypeSyntax { Parent: ParameterSyntax } => (AttributeTargets.Parameter, "a parameter"),
+            AttributedTypeSyntax => (AttributeTargets.None, "a type"),
             _ => null,
         };
+
+    /// <summary>
+    ///     The attributes a declaration may have more than one of: each names
+    ///     lints or protocols of its own. (A second <c>@builtin</c>,
+    ///     <c>@extern</c> or <c>@export</c> is reported where it is read.)
+    /// </summary>
+    static readonly HashSet<string> RepeatableAttributes = ["allow", "warn", "derive", "builtin", "extern", "export"];
 
     /// <summary>An attribute's name as written: <c>inline</c> for <c>@inline(always)</c>.</summary>
     internal static string AttributeName(AttributeSyntax attribute) => attribute.Name.ToString().Trim();
@@ -154,7 +164,34 @@ public sealed partial class Compilation {
                 continue;
             }
 
+            // Said once is said: a second would contradict the first, or repeat it.
+            if (!RepeatableAttributes.Contains(name) && SiblingAttributes(attribute).TakeWhile(a => a != attribute).Any(a => AttributeName(a) == name)) {
+                ReportDeclaration(ErrorCode.ERR_DuplicateAttribute, attribute.Span, $"'@{name}' is written twice on one declaration");
+                continue;
+            }
+
+            // A Sable.Core '@intrinsic' has the body each use is lowered to;
+            // anywhere else there is none, and the declaration would be empty.
+            if (name == "intrinsic" && CoreLibrary.ModuleOf(tree) != CoreLibrary.ModuleName) {
+                ReportDeclaration(
+                    ErrorCode.ERR_BuiltinOutsideCore,
+                    attribute.Span,
+                    "only Sable.Core may declare an '@intrinsic': its body is the compiler's, for each type it is used with"
+                );
+                continue;
+            }
+
             CheckAttributeArguments(attribute, name);
+
+            if (name == "escaping" && attribute.Parent is ParameterSyntax or AttributedTypeSyntax { Parent: ParameterSyntax }) {
+                var escaping = attribute;
+                TypeBinder.DeferLate(() => CheckEscaping(escaping));
+            }
+
+            if (name == "main" && attribute.Parent is FunctionDeclarationSyntax mainFunction) {
+                var main = attribute;
+                TypeBinder.DeferLate(() => CheckMain(mainFunction, main));
+            }
 
             if (name == "immutable" && attribute.Parent is ClassDeclarationSyntax immutableClass) {
                 TypeBinder.DeferLate(() => CheckImmutable(immutableClass));
@@ -163,6 +200,84 @@ public sealed partial class Compilation {
             if (name == "polymorphic" && attribute.Parent is FunctionDeclarationSyntax polymorphicFunction) {
                 TypeBinder.DeferLate(() => CheckPolymorphic(polymorphicFunction, attribute));
             }
+        }
+    }
+
+    /// <summary>The attributes written beside one, on the same declaration (or type), itself among them.</summary>
+    static IEnumerable<AttributeSyntax> SiblingAttributes(AttributeSyntax attribute) =>
+        attribute.Parent?.ChildNodes().OfType<AttributeSyntax>() ?? [];
+
+    /// <summary>
+    ///     <c>@escaping</c> says a closure parameter may outlive the call
+    ///     (SYNTAX.md §22); on a parameter of any other type it says nothing,
+    ///     so it is not written there.
+    /// </summary>
+    void CheckEscaping(AttributeSyntax attribute) {
+        var syntax = attribute.Parent as ParameterSyntax ?? (ParameterSyntax)attribute.Parent!.Parent!;
+        var owner = syntax.Parent;
+        while (owner is not null && GetDeclaredSymbol(owner) is null) {
+            owner = owner.Parent;
+        }
+
+        var parameters = owner is not null && GetDeclaredSymbol(owner) is FunctionSymbol function ? function.Parameters : [];
+        if (parameters.FirstOrDefault(p => p.DeclaringSyntax.Contains(syntax)) is not { Type: var type } parameter || type.IsError) {
+            return;
+        }
+
+        var held = type is OptionalTypeSymbol optional ? optional.UnderlyingType : type;
+        if (held is not FunctionTypeSymbol) {
+            ReportDeclaration(
+                ErrorCode.ERR_AttributeDoesNotApply,
+                attribute.Span,
+                $"'@escaping' applies to a closure parameter, and '{parameter.Name}' is of type '{type.ToDisplayString()}'"
+            );
+        }
+    }
+
+    /// <summary>The <c>@main</c> of each module, the first written: a module starts in one place.</summary>
+    readonly Dictionary<string, FunctionDeclarationSyntax> _mains = new(StringComparer.Ordinal);
+
+    /// <summary>
+    ///     <c>@main</c> marks where a program starts: a function of the
+    ///     module, called with nothing, whose result — none, or an
+    ///     <c>Int</c> — is the process's exit status. One per module.
+    /// </summary>
+    void CheckMain(FunctionDeclarationSyntax declaration, AttributeSyntax attribute) {
+        void Refuse(string why) =>
+            ReportDeclaration(ErrorCode.ERR_InvalidEntryPoint, attribute.Span, $"'@main' marks where the program starts, so {why}");
+
+        if (declaration.Parent is not CompilationUnitSyntax) {
+            Refuse($"'{declaration.Identifier.Text}' is a function of the module, not a method or a local function");
+            return;
+        }
+
+        if (GetDeclaredSymbol(declaration) is not FunctionSymbol function) {
+            return;
+        }
+
+        if (!function.TypeParameters.IsEmpty) {
+            Refuse($"'{function.Name}' is not generic: nothing would say what its type parameters are");
+            return;
+        }
+
+        if (!function.Parameters.IsEmpty) {
+            Refuse($"'{function.Name}' takes no parameters: the program's arguments are 'Environment.arguments()'");
+            return;
+        }
+
+        if (!function.ReturnType.IsError && !function.ReturnType.Equals(Core.Void) && !function.ReturnType.Equals(Core.Int)) {
+            Refuse($"'{function.Name}' returns nothing, or an 'Int' that is the exit status, not '{function.ReturnType.ToDisplayString()}'");
+            return;
+        }
+
+        var module = function.ContainingSymbol?.Name ?? "";
+        lock (_mains) {
+            if (_mains.TryGetValue(module, out var first) && first != declaration) {
+                Refuse($"a module has one, and '{first.Identifier.Text}' is it");
+                return;
+            }
+
+            _mains[module] = declaration;
         }
     }
 
@@ -474,6 +589,9 @@ public sealed partial class Compilation {
         return null;
     }
 
+    /// <summary>The platforms <c>@available</c> may name: what <c>#if os(...)</c> tests (ParseOptions.TargetOs).</summary>
+    static readonly string[] Platforms = ["macos", "linux", "windows", "wasi"];
+
     /// <summary>The arguments of the attributes whose meaning depends on them, which are read later.</summary>
     void CheckAttributeArguments(AttributeSyntax attribute, string name) {
         var arguments = attribute.ArgumentList?.Arguments.ToList() ?? [];
@@ -489,9 +607,15 @@ public sealed partial class Compilation {
                 Malformed("'@deprecated' takes at most a message, as a string: '@deprecated(\"use X\")'");
                 return;
 
+            // Platforms alone: a version would need a minimum one to build
+            // for, to compare it with, and there is none.
             case "available" when arguments.Count == 0
-                || arguments.Any(static a => a.NameToken.IsNone ? a.Expression is not IdentifierNameSyntax : !IsString(a.Expression)):
-                Malformed("'@available' names the platforms it is for, each alone or with a version: '@available(macos: \"14.0\", linux)'");
+                || arguments.Any(static a => !a.NameToken.IsNone || a.Expression is not IdentifierNameSyntax):
+                Malformed($"'@available' names the platforms it is for, among {string.Join(", ", Platforms)}: '@available(macos, linux)'");
+                return;
+
+            case "available" when arguments.Select(static a => ((IdentifierNameSyntax)a.Expression).Identifier.Text).FirstOrDefault(p => !Platforms.Contains(p)) is { } unknown:
+                Malformed($"'{unknown}' is no platform: '@available' names some of {string.Join(", ", Platforms)}");
                 return;
 
             case "inline" when arguments is not [{ Expression: IdentifierNameSyntax { Identifier.Text: "always" or "never" } }]:
@@ -513,6 +637,7 @@ public sealed partial class Compilation {
                 return;
 
             case "packed" or "discardable" or "frozen" or "immutable" or "immortal" or "polymorphic" or "noncopy" or "escaping" or "flags" or "MainActor"
+                or "reflectable" or "inline_layout" or "indirect" or "main" or "intrinsic"
                 when attribute.ArgumentList is not null:
                 Malformed($"'@{name}' takes no arguments");
                 return;

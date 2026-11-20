@@ -434,6 +434,14 @@ public sealed class SilParser {
             _function.ResultRoots = roots;
         }
 
+        if (Accept("inline")) {
+            Expect("(");
+            _function.Inline = Accept("always") ? SilInline.Always
+                : Accept("never") ? SilInline.Never
+                : throw Error("expected 'always' or 'never'");
+            Expect(")");
+        }
+
         if (Accept("loc")) {
             _function.SourceFile = Expect(TokenKind.String, "a file name").Text;
             Expect(":");
@@ -616,6 +624,7 @@ public sealed class SilParser {
 
             Expect(")");
 
+            var isAsync = Accept("async");
             SilType? thrown = null;
             if (Accept("throws")) {
                 Expect("(");
@@ -624,10 +633,10 @@ public sealed class SilParser {
             }
 
             if (Accept("->")) {
-                return new FunctionType(parts.ToImmutable(), ParseTypeBody(), thrown, owned.ToImmutable());
+                return new FunctionType(parts.ToImmutable(), ParseTypeBody(), thrown, owned.ToImmutable(), isAsync);
             }
 
-            if (thrown is not null || owned.Contains(true)) {
+            if (thrown is not null || isAsync || owned.Contains(true)) {
                 throw Error("'throws' and '@owned' belong to a function type");
             }
 

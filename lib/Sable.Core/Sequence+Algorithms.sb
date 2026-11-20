@@ -79,8 +79,7 @@ extension Sequence {
     /// or a dictionary grows where it is rather than being copied each time.
     ///
     /// ```sable
-    /// let empty: [String: Int] = [:]
-    /// let counts = ["a", "b", "a"].reduce(into: empty) { $0[$1, default: 0] += 1 }
+    /// let counts = ["a", "b", "a"].reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
     /// assert(counts["a"] == 2)
     /// ```
     public fn reduce<R>(into initial: R, _ update: (inout R, Element) throws -> Void) rethrows(Failure) -> R {

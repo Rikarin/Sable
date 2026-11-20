@@ -25,7 +25,20 @@ namespace Sable.Driver;
 /// </remarks>
 public static partial class DocExamples {
     /// <summary>A file of examples for each one the tree's doc comments hold; none when they hold none.</summary>
-    public static IReadOnlyList<SyntaxTree> Extract(SyntaxTree tree) {
+    public static IReadOnlyList<SyntaxTree> Extract(SyntaxTree tree) => Extract([tree]);
+
+    /// <summary>
+    ///     The same for a program's files. The examples of a module's files
+    ///     are numbered together, per name documented, so that two files of
+    ///     one module documenting a <c>parse</c> give <c>doc_parse_1</c> and
+    ///     <c>doc_parse_2</c>, not two functions of one name.
+    /// </summary>
+    public static IReadOnlyList<SyntaxTree> Extract(IEnumerable<SyntaxTree> trees) {
+        var counts = new Dictionary<(string Module, string Name), int>();
+        return [..trees.SelectMany(t => Extract(t, counts))];
+    }
+
+    static IReadOnlyList<SyntaxTree> Extract(SyntaxTree tree, Dictionary<(string Module, string Name), int> counts) {
         if (tree.Root is not CompilationUnitSyntax { Module: { } module } unit) {
             return [];
         }
@@ -38,10 +51,10 @@ public static partial class DocExamples {
             imports.Add("import Sable.Testing");
         }
 
-        var header = $"module {module.Name.ToString().Trim()} {string.Join(' ', imports)}";
+        var moduleName = module.Name.ToString().Trim();
+        var header = $"module {moduleName} {string.Join(' ', imports)}";
 
         var files = new List<SyntaxTree>();
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
         for (var i = 0; i < lines.Length; i++) {
             if (!IsDocLine(lines[i])) {
                 continue;
@@ -67,7 +80,7 @@ public static partial class DocExamples {
             }
 
             foreach (var (line, code) in Blocks(lines, start, end)) {
-                var n = counts[documented] = counts.GetValueOrDefault(documented) + 1;
+                var n = counts[(moduleName, documented)] = counts.GetValueOrDefault((moduleName, documented)) + 1;
                 var name = $"doc_{documented}_{n}";
 
                 // The '@test fn' line just above the code, which then starts
@@ -79,7 +92,7 @@ public static partial class DocExamples {
                 }
 
                 text.Append(line > 2 ? "" : " ").Append("@test fn ").Append(name).Append("() {\n").Append(code).Append("}\n");
-                files.Add(SyntaxTree.Parse(new SourceText(text.ToString(), tree.Text.FileName)));
+                files.Add(SyntaxTree.Parse(new SourceText(text.ToString(), tree.Text.FileName), tree.Options));
             }
         }
 

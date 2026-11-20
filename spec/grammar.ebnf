@@ -486,7 +486,11 @@ PrimaryExpr       = Literal
                   | TryExpr
                   | "unsafe" Block
                   | Type "." "self"
+                  | CalledType "(" [ ArgumentList ] ")"   (* its initialiser *)
                   | "#" Identifier ;                (* compiler builtins: #file, #line *)
+
+CalledType        = "[" Type ":" Type "]"                   (* [String: Int]()   *)
+                  | PostfixType "[" ">" ".." [ "<" ] "]" ;  (* Int[>..]()        *)
 
 TupleExpr         = "(" [ TupleElem { "," TupleElem } ] ")" ;
 TupleElem         = [ Identifier ":" ] Expression ;
@@ -509,11 +513,12 @@ IfExpr            = IfStatement ;         (* usable in expression position when
 ClosureExpr       = [ CaptureList ] ClosureSignature "=>" ( Expression | Block )
                   | [ CaptureList ] "{" [ ClosureHeader ] { Statement } "}" ;
 
-ClosureSignature  = "(" [ ClosureParams ] ")" [ "->" Type ]
+ClosureSignature  = "(" [ ClosureParams ] ")" [ ClosureThrows ] [ "->" Type ]
                   | Identifier ;
 ClosureParams     = ClosureParam { "," ClosureParam } ;
 ClosureParam      = Identifier [ ":" [ "inout" ] Type ] ;
-ClosureHeader     = [ "(" ] ClosureParams [ ")" ] [ "->" Type ] "in" ;
+ClosureHeader     = [ "(" ] ClosureParams [ ")" ] [ ClosureThrows ] [ "->" Type ] "in" ;
+ClosureThrows     = "throws" [ "(" Type ")" ] ;      (* 'rethrows' parses, and is S3664 *)
 
 CaptureList       = "[" CaptureItem { "," CaptureItem } "]" ;
 CaptureItem       = [ "weak" | "unowned" ] ( "self" | Identifier [ "=" Expression ] ) ;

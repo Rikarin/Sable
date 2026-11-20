@@ -90,7 +90,7 @@ internal static class EscapeChecker {
                     _allowed.Add(Unwrapped(callee));
                     break;
 
-                case BoundLocalDeclaration { Local.IsMutable: false, Initializer: { } initializer } declaration
+                case BoundLocalDeclaration { Local: { IsMutable: false, IsAsyncLet: false }, Initializer: { } initializer } declaration
                     when NonEscaping(Unwrapped(initializer)) is not null:
                     _allowed.Add(Unwrapped(initializer));
                     _nonEscapingLocals.Add(declaration.Local);

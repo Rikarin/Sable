@@ -8,14 +8,13 @@
 //
 // With SABLE_BACKTRACE set, a trap says where it happened, a frame per line
 // (print_backtrace, over the platform's capture_frames and name_frame). A
-// stack overflow is a trap too, which the platform catches (watch_stack).
+// stack overflow is a trap too, which the platform catches (platform_start).
 
 // Where the compiled code is: set just before a call into the runtime that
 // can trap (an index checked here, an unowned reference read), so that the
 // trap can say which line made the call. A trap the compiled code makes
-// itself passes its place to sable_trap_at instead. One task runs at a time,
-// so one variable serves them all.
-const char *sable_trap_site;
+// itself passes its place to sable_trap_at instead. Each thread has its own.
+_Thread_local const char *sable_trap_site;
 
 // Whether a trap prints a backtrace: SABLE_BACKTRACE set to anything but
 // '0' ('1', or 'full', which also shows the runtime's own frames). Off by

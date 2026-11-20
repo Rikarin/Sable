@@ -60,7 +60,11 @@ static void coverage_write(void) {
     coverage_counts = NULL;
 }
 
+// Blocks run on every thread: the table grows, and counts, under a lock.
+static SpinLock coverage_lock;
+
 void sable_coverage_hit(int64_t id) {
+    spin_lock(&coverage_lock);
     if (id >= coverage_size) {
         int64_t size = coverage_size == 0 ? 1024 : coverage_size;
         while (size <= id) {
@@ -69,6 +73,7 @@ void sable_coverage_hit(int64_t id) {
 
         int64_t *grown = realloc(coverage_counts, (size_t)size * sizeof *grown);
         if (grown == NULL) {
+            spin_unlock(&coverage_lock);
             return;
         }
 
@@ -82,4 +87,5 @@ void sable_coverage_hit(int64_t id) {
     }
 
     coverage_counts[id]++;
+    spin_unlock(&coverage_lock);
 }

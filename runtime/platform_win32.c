@@ -5,15 +5,12 @@
 // they are converted here, at the boundary, so that a path, an argument or
 // a variable holds any character on Windows as it does elsewhere.
 
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-
-#include <windows.h>
 #include <bcrypt.h>
 #include <dbghelp.h>
 #include <fcntl.h>
 #include <io.h>
 #include <shellapi.h>
+#include <psapi.h>
 
 #pragma comment(lib, "bcrypt")
 #pragma comment(lib, "dbghelp")
@@ -148,65 +145,6 @@ static void platform_start(void) {
     AddVectoredExceptionHandler(1, on_exception);
 }
 
-// ---- Tasks' threads -------------------------------------------------------
-
-// A slim reader-writer lock, held exclusively, and condition variables.
-struct TaskCondition {
-    CONDITION_VARIABLE condition;
-};
-
-static SRWLOCK task_lock = SRWLOCK_INIT;
-
-static void lock_tasks(void) {
-    AcquireSRWLockExclusive(&task_lock);
-}
-
-static void condition_init(TaskCondition *condition) {
-    InitializeConditionVariable(&condition->condition);
-}
-
-static void condition_destroy(TaskCondition *condition) {
-    (void)condition;
-}
-
-static void condition_signal(TaskCondition *condition) {
-    WakeConditionVariable(&condition->condition);
-}
-
-static void condition_wait(TaskCondition *condition) {
-    SleepConditionVariableSRW(&condition->condition, &task_lock, INFINITE, 0);
-}
-
-typedef struct {
-    void (*body)(void *argument);
-    void *argument;
-} ThreadStart;
-
-static DWORD WINAPI thread_entry(void *start) {
-    ThreadStart what = *(ThreadStart *)start;
-    free(start);
-    what.body(what.argument);
-    return 0;
-}
-
-static bool start_thread(void (*body)(void *argument), void *argument) {
-    ThreadStart *start = malloc(sizeof(ThreadStart));
-    if (start == NULL) {
-        return false;
-    }
-
-    start->body = body;
-    start->argument = argument;
-    HANDLE thread = CreateThread(NULL, 8u << 20, thread_entry, start, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
-    if (thread == NULL) {
-        free(start);
-        return false;
-    }
-
-    CloseHandle(thread);
-    return true;
-}
-
 // ---- Memory ----------------------------------------------------------------
 
 // What VirtualAlloc gives starts on its allocation granularity, 64 KiB: a
@@ -234,6 +172,16 @@ static void *map_slab(size_t size) {
 static void unmap_slab(void *slab, size_t size) {
     (void)size;
     VirtualFree(slab, 0, MEM_RELEASE);
+}
+
+// Kernel32's own name for it, which needs no psapi library to link.
+static int64_t peak_memory(void) {
+    PROCESS_MEMORY_COUNTERS counters;
+    if (!K32GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof counters)) {
+        return 0;
+    }
+
+    return (int64_t)counters.PeakWorkingSetSize;
 }
 
 // ---- Time (Sable.Time's floor) ------------------------------------------
@@ -267,6 +215,83 @@ void sable_time_sleep(int64_t nanoseconds) {
     for (int64_t left = nanoseconds; left > 0; left = until - sable_time_monotonic()) {
         Sleep((DWORD)((left + 999999) / 1000000));
     }
+}
+
+// ---- Threads ---------------------------------------------------------------
+
+static void mutex_init(PlatformMutex *mutex) {
+    InitializeSRWLock(mutex);
+}
+
+static void mutex_lock(PlatformMutex *mutex) {
+    AcquireSRWLockExclusive(mutex);
+}
+
+static void mutex_unlock(PlatformMutex *mutex) {
+    ReleaseSRWLockExclusive(mutex);
+}
+
+static void condition_init(PlatformCondition *condition) {
+    InitializeConditionVariable(condition);
+}
+
+static void condition_wait(PlatformCondition *condition, PlatformMutex *mutex, int64_t until) {
+    DWORD milliseconds = INFINITE;
+    if (until >= 0) {
+        int64_t left = until - sable_time_monotonic();
+        milliseconds = left <= 0 ? 0 : (DWORD)((left + 999999) / 1000000);
+    }
+
+    SleepConditionVariableSRW(condition, mutex, milliseconds, 0);
+}
+
+static void condition_signal(PlatformCondition *condition) {
+    WakeConditionVariable(condition);
+}
+
+static void condition_broadcast(PlatformCondition *condition) {
+    WakeAllConditionVariable(condition);
+}
+
+typedef struct ThreadStart {
+    void (*run)(void *argument);
+    void *argument;
+} ThreadStart;
+
+static DWORD WINAPI thread_main(void *pointer) {
+    ThreadStart start = *(ThreadStart *)pointer;
+    free(pointer);
+    watch_stack();
+    start.run(start.argument);
+    return 0;
+}
+
+static bool thread_start(void (*run)(void *argument), void *argument) {
+    ThreadStart *start = malloc(sizeof *start);
+    if (start == NULL) {
+        return false;
+    }
+
+    start->run = run;
+    start->argument = argument;
+    // 8 MiB, as the main thread is linked with (PlatformLinkFlags).
+    HANDLE thread = CreateThread(NULL, 8 * 1024 * 1024, thread_main, start, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+    if (thread == NULL) {
+        free(start);
+        return false;
+    }
+
+    CloseHandle(thread);
+    return true;
+}
+
+static int processor_count(void) {
+    DWORD count = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    return count > 0 ? (int)count : 1;
+}
+
+static void thread_yield(void) {
+    SwitchToThread();
 }
 
 // ---- Arguments, files and the environment ----------------------------------

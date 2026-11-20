@@ -173,10 +173,23 @@ public sealed class AddressType(SilType pointee) : SilType {
 ///     <c>@owned</c>: then the caller hands it over, and the callee must
 ///     consume it. An initialiser's are owned, since it usually stores them.
 /// </remarks>
-public sealed class FunctionType(ImmutableArray<SilType> parameters, SilType result, SilType? thrown = null, ImmutableArray<bool> owned = default)
+public sealed class FunctionType(ImmutableArray<SilType> parameters, SilType result, SilType? thrown = null, ImmutableArray<bool> owned = default, bool isAsync = false)
     : SilType {
     public ImmutableArray<SilType> Parameters { get; } = parameters;
     public SilType Result { get; } = result;
+
+    /// <summary>
+    ///     An <c>async</c> function: one that may suspend. Lowering and the
+    ///     passes treat a call to one as any other call; <see cref="AsyncLowering" />,
+    ///     last, makes each such function a coroutine — a frame on its task's
+    ///     slab and a resume function — and each call to one the start of a
+    ///     frame and the polling of it.
+    /// </summary>
+    public bool IsAsync { get; } = isAsync;
+
+    /// <summary>The same, async or not.</summary>
+    public FunctionType WithAsync(bool isAsync) =>
+        isAsync == IsAsync ? this : new(Parameters, Result, Thrown, Owned.IsEmpty ? default : Owned, isAsync);
 
     /// <summary>The error a <c>throws(E)</c> function may throw, or null when it cannot.</summary>
     public SilType? Thrown { get; } = thrown;
@@ -188,7 +201,8 @@ public sealed class FunctionType(ImmutableArray<SilType> parameters, SilType res
 
     public override string ToString() {
         var parameters = string.Join(", ", Parameters.Select((p, i) => IsOwned(i) ? $"@owned {p}" : p.ToString()));
-        return Thrown is null ? $"({parameters}) -> {Result}" : $"({parameters}) throws({Thrown}) -> {Result}";
+        var effects = (IsAsync ? " async" : "") + (Thrown is null ? "" : $" throws({Thrown})");
+        return $"({parameters}){effects} -> {Result}";
     }
 }
 
@@ -202,7 +216,7 @@ public sealed class ThickFunctionType(FunctionType signature) : SilType {
     public FunctionType Signature { get; } = signature;
 
     public FunctionType Implementation =>
-        new([..Signature.Parameters, Object], Signature.Result, Signature.Thrown, Signature.Owned.IsEmpty ? default : [..Signature.Owned, false]);
+        new([..Signature.Parameters, Object], Signature.Result, Signature.Thrown, Signature.Owned.IsEmpty ? default : [..Signature.Owned, false], Signature.IsAsync);
 
     public override bool IsTrivial => false;
     public override string ToString() => $"@thick {Signature}";
@@ -528,6 +542,15 @@ public sealed class ClassType(string name) : NominalType(name) {
     ///     stored first: a generator's frame, whose slots fill as its body runs.
     /// </summary>
     public int? EmptyFrom { get; set; }
+
+    /// <summary>
+    ///     An async function's frame (<see cref="AsyncLowering" />): made on
+    ///     its task's frame slab, not the heap, and given back by
+    ///     <c>async_frame_free</c> once its function has finished — never
+    ///     counted. Its fields hold what the function keeps while it is
+    ///     suspended, as bits: they are never destroyed with it.
+    /// </summary>
+    public bool IsCoroutineFrame { get; init; }
 
     /// <summary>
     ///     The protocols the class conforms to by its own declaration or its
@@ -1009,9 +1032,13 @@ public sealed class UpcastInst(SilValue value, ClassType type) : SilInstruction(
 ///     method for the class the object actually is, from its vtable.
 /// </summary>
 public sealed class ClassMethodInst(SilValue reference, string method, FunctionType type) : SilInstruction(reference) {
+    FunctionType _type = type;
     public SilValue Reference => Operands[0];
     public string Method { get; } = method;
-    public override SilType Type { get; } = type;
+    public override SilType Type => _type;
+
+    /// <summary>The method seen with another signature: an async one's, as the start of its frame (<see cref="AsyncLowering" />).</summary>
+    internal void Retype(FunctionType type) => _type = type;
     public override string Opcode => "class_method";
 }
 
@@ -1107,8 +1134,12 @@ public sealed class GlobalAddrInst(string global, SilType type) : SilInstruction
 
 /// <summary><c>function_ref @f : $(Int) -&gt; Int</c>: a function as a value.</summary>
 public sealed class FunctionRefInst(string function, FunctionType type) : SilInstruction {
+    FunctionType _type = type;
     public string Function { get; } = function;
-    public override SilType Type { get; } = type;
+    public override SilType Type => _type;
+
+    /// <summary>The function seen with another signature: its own, once <see cref="AsyncLowering" /> has changed it.</summary>
+    internal void Retype(FunctionType type) => _type = type;
     public override string Opcode => "function_ref";
 }
 
@@ -1255,9 +1286,16 @@ public sealed class SilBlock(SilFunction function) {
 /// <param name="Outcomes">A name for each outcome: <c>true</c> and <c>false</c>, a match's arms.</param>
 public sealed record SilDecision(SilLocation At, string Kind, IReadOnlyList<string> Outcomes);
 
+/// <summary>Whether a function is inlined where it is called: as the inliner judges, always, or never.</summary>
+public enum SilInline {
+    Default,
+    Always,
+    Never,
+}
+
 /// <summary>A SIL function: a signature and blocks, the first of which is the entry.</summary>
 public sealed class SilFunction(string name, FunctionType type) {
-    public string Name { get; } = name;
+    public string Name { get; internal set; } = name;
 
     /// <summary>The module the function belongs to, once it is added to one.</summary>
     public SilModule? Module { get; internal set; }
@@ -1268,7 +1306,15 @@ public sealed class SilFunction(string name, FunctionType type) {
     ///     of its interface (docs/02 §2.4). Printed as <c>roots(0, 1)</c>.
     /// </summary>
     public IReadOnlyList<int>? ResultRoots { get; set; }
-    public FunctionType Type { get; } = type;
+
+    /// <summary>
+    ///     What its source's <c>@inline(always)</c> or <c>@inline(never)</c>
+    ///     asks of the inliners, SIL's and LLVM's. Printed as
+    ///     <c>inline(always)</c>.
+    /// </summary>
+    public SilInline Inline { get; set; }
+
+    public FunctionType Type { get; internal set; } = type;
     public List<SilBlock> Blocks { get; } = [];
 
     /// <summary>The decisions of its source that lowering marked, for branch coverage: each kept though its blocks may be gone, as code never reached.</summary>
@@ -1416,6 +1462,21 @@ public sealed class SilModule {
 
     public SilFunction? Find(string name) => _byName.GetValueOrDefault(name);
 
+    /// <summary>Gives a function of the module another name, which it is then found by.</summary>
+    internal void Rename(SilFunction function, string name) {
+        _byName.Remove(function.Name);
+        function.Name = name;
+        _byName[name] = function;
+    }
+
+    /// <summary>
+    ///     Set once <see cref="AsyncLowering" /> has made the async functions
+    ///     coroutines: what runs the module — the interpreter, the code
+    ///     generator — needs it done, and done once. The verifier no longer
+    ///     holds the module to ownership after it.
+    /// </summary>
+    public bool AsyncLowered { get; set; }
+
     public SilFunction Add(SilFunction function) {
         Functions.Add(function);
         _byName[function.Name] = function;
@@ -1533,10 +1594,14 @@ public static class SilBuiltins {
             return InlineSignature(name, operands, result);
         }
 
-        // Tasks: spawned, given a body and the task object (which the runtime then holds), waited for, yielded to.
+        // Tasks: spawned, given a body and the task object (which the runtime
+        // then holds), a priority (-1: inherited) and whether detached;
+        // waited for, yielded to, given a cancellation handler and its context.
         switch (name) {
-            case "task_spawn" when operands is [FunctionType, ClassType]:
-                return new([operands[0], operands[1]], SilType.Int) { Consumed = [1] };
+            case "task_spawn" when operands is [FunctionType, ClassType, var priority, var detached] && priority == SilType.Int && detached == SilType.Bool:
+                return new([..operands], SilType.Int) { Consumed = [1] };
+            case "task_handler_push" when operands is [FunctionType, ClassType]:
+                return new([..operands], SilType.Unit) { Consumed = [1] };
             case "task_wait" or "task_release" or "task_cancel" when operands is [var handle] && handle == SilType.Int:
                 return new([SilType.Int], SilType.Unit);
             // Off the run queue for at least this many nanoseconds, while the other tasks run.
@@ -1544,9 +1609,6 @@ public static class SilBuiltins {
                 return new([SilType.Int], SilType.Unit);
             case "task_yield" or "task_drain" when operands.Count == 0:
                 return new([], SilType.Unit);
-            // Whether the running task has been cancelled.
-            case "task_is_cancelled" when operands.Count == 0:
-                return new([], SilType.Bool);
             // A block ran, for 'sable test --coverage' (Coverage.cs): its counter's number.
             case Coverage.Builtin when operands is [var counter] && counter == SilType.Int:
                 return new([SilType.Int], SilType.Unit);
@@ -1562,6 +1624,18 @@ public static class SilBuiltins {
         // a write through it (copy on write).
         if (name == "ref_is_unique") {
             return operands is [AddressType { Pointee: ClassType }] ? new([operands[0]], SilType.Bool) : null;
+        }
+
+        // A value crossing from one task to another — a task's result, an
+        // actor call's argument or result: every object it holds shared,
+        // counted atomically from then on (runtime/tasks.c's sable_share).
+        if (name == "share") {
+            return operands is [var shared] ? new([shared], SilType.Unit) : null;
+        }
+
+        // An address, as an integer: an actor's executor, as a hop names it.
+        if (name == "address_to_int") {
+            return operands is [AddressType] ? new([operands[0]], SilType.Int) : null;
         }
 
         // '@immortal static let': every object the value holds made
@@ -1672,7 +1746,7 @@ public static class SilBuiltins {
     }
 
     public static IEnumerable<string> Names =>
-        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_is_cancelled", "task_yield", "task_sleep", "task_drain", Coverage.Builtin]);
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", Coverage.Builtin]);
 
     static SilType? Pointee(SilType? type) => (type as InlinePointerType)?.Pointee;
 
@@ -2005,6 +2079,35 @@ public static class SilBuiltins {
         Add("time_monotonic", SilType.Int);
         Add("time_wall_clock", SilType.Int);
         Add("time_sleep", SilType.Unit, SilType.Int);
+
+        // Tasks (runtime/tasks.c): whether the running one is cancelled, its
+        // priority; and groups, by handle — made, given a child just spawned,
+        // waited on for a child to finish (a place a task suspends,
+        // AsyncLowering), the finished child taken, and freed.
+        Add("task_is_cancelled", SilType.Bool);
+        Add("task_priority", SilType.Int);
+        Add("task_handler_pop", SilType.Unit);
+
+        // Actors (runtime/tasks.c): where the running task runs — an actor
+        // object's identity, 1 for the main actor, 0 for anywhere — and a
+        // hop there, a place the task may suspend (AsyncLowering). Wait
+        // lists, by handle: made, freed, every task in one woken, and the
+        // running task parked in one until then.
+        Add("task_actor_current", SilType.Int);
+
+        // The next task the running thread spawns starts cancelled: a
+        // cancelled group's child, before any thread can run it.
+        Add("task_spawn_cancelled", SilType.Unit);
+        Add("task_hop", SilType.Unit, SilType.Int);
+        Add("task_waitlist_new", SilType.Int);
+        Add("task_waitlist_free", SilType.Unit, SilType.Int);
+        Add("task_waitlist_wake", SilType.Unit, SilType.Int);
+        Add("task_park", SilType.Unit, SilType.Int);
+        Add("task_group_new", SilType.Int);
+        Add("task_group_add", SilType.Unit, SilType.Int, SilType.Int);
+        Add("task_group_wait", SilType.Unit, SilType.Int);
+        Add("task_group_take", SilType.Int, SilType.Int);
+        Add("task_group_free", SilType.Unit, SilType.Int);
         Add("process_run", SilType.String, SilType.String, new ArrayType(SilType.String), SilType.String);
         Add("process_status", SilType.Int);
         Add("process_error_output", SilType.String);

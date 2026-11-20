@@ -40,7 +40,7 @@ void *sable_array_element(const SableArray *array, int64_t index) {
 // can be changed: a fresh one for the empty array, a copy of a shared one.
 static SableArray *unique(SableArray **slot, const SableMetadata *type, int64_t room) {
     SableArray *array = *slot;
-    if (array != NULL && array->header.strong == 1) {
+    if (array != NULL && strong_count(&array->header) == 1) {
         return array;
     }
 
@@ -68,7 +68,7 @@ static SableArray *unique(SableArray **slot, const SableMetadata *type, int64_t 
 // Made the only reference to its buffer, before a loop that writes it in
 // place: the empty array stays empty, and the loop's index checks trap.
 void sable_array_make_unique(SableArray **slot, const SableMetadata *type) {
-    if (*slot != NULL && (*slot)->header.strong != 1) {
+    if (*slot != NULL && strong_count(&(*slot)->header) != 1) {
         unique(slot, type, 0);
     }
 }
@@ -187,7 +187,7 @@ typedef struct SableSlice {
 // alone, as an array's copy is of its own elements.
 void sable_slice_make_unique(SableSlice *slice, const SableMetadata *type) {
     SableArray *buffer = slice->buffer;
-    if (buffer == NULL || buffer->header.strong == 1) {
+    if (buffer == NULL || strong_count(&buffer->header) == 1) {
         return;
     }
 

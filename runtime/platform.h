@@ -7,13 +7,19 @@
 // layer gives back is in memory the caller frees, and NULL where there is
 // none. Each layer also defines:
 //
-//   struct TaskCondition  what a task or a thread waits on, under the one
-//                         lock the running task holds (tasks.c)
 //   SABLE_AT_EXIT(f)    the start of the definition of 'static void f(void)',
 //                       which runs as the program exits
 
 #ifndef SABLE_RUNTIME_PLATFORM_H
 #define SABLE_RUNTIME_PLATFORM_H
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
 
 // ---- Start-up --------------------------------------------------------------
 
@@ -39,26 +45,6 @@ static void name_frame(void *frame, char *text, size_t size);
 // a shell, on every platform.
 _Noreturn static void stop_trapped(void);
 
-// Has a stack overflow on the calling thread reported as a trap, not as a
-// crash. Every thread that runs tasks calls it as it starts; the main
-// thread's is watched from the start.
-static void *watch_stack(void);
-
-// ---- Tasks' threads ------------------------------------------------------
-
-typedef struct TaskCondition TaskCondition;
-
-// The lock the running task holds; taken once by each thread as it starts
-// running tasks, and given up only while it waits on a condition.
-static void lock_tasks(void);
-static void condition_init(TaskCondition *condition);
-static void condition_destroy(TaskCondition *condition);
-static void condition_signal(TaskCondition *condition);
-static void condition_wait(TaskCondition *condition);
-
-// Starts a thread, detached, with a stack of 8 MiB, running body(argument).
-static bool start_thread(void (*body)(void *argument), void *argument);
-
 // ---- Memory --------------------------------------------------------------
 
 // 'size' bytes of zeroed memory straight from the system, starting at a
@@ -67,6 +53,10 @@ static bool start_thread(void (*body)(void *argument), void *argument);
 static void *map_slab(size_t size);
 static void unmap_slab(void *slab, size_t size);
 
+// The most memory the process has held at once, in bytes, as the system
+// counts it (its peak resident set); 0 where the system does not say.
+static int64_t peak_memory(void);
+
 // ---- Time ----------------------------------------------------------------
 
 // Nanoseconds from some fixed point, never going back; since 1970; and a
@@ -74,6 +64,40 @@ static void unmap_slab(void *slab, size_t size);
 int64_t sable_time_monotonic(void);
 int64_t sable_time_wall_clock(void);
 void sable_time_sleep(int64_t nanoseconds);
+
+// ---- Threads -------------------------------------------------------------
+
+// The executor's pool (tasks.c) is a few threads, one per core, that wait
+// for work on a condition. A mutex and a condition are the system's own:
+// pthread's here, a slim reader/writer lock and a condition variable on
+// Windows. Each is set up once, by its init, before any thread uses it.
+#ifdef _WIN32
+typedef SRWLOCK PlatformMutex;
+typedef CONDITION_VARIABLE PlatformCondition;
+#else
+typedef pthread_mutex_t PlatformMutex;
+typedef pthread_cond_t PlatformCondition;
+#endif
+
+static void mutex_init(PlatformMutex *mutex);
+static void mutex_lock(PlatformMutex *mutex);
+static void mutex_unlock(PlatformMutex *mutex);
+static void condition_init(PlatformCondition *condition);
+// Waits, the mutex held, until signalled — or, given a time in
+// nanoseconds of sable_time_monotonic, until then at the latest (a
+// negative 'until' waits for a signal alone). May wake for no reason.
+static void condition_wait(PlatformCondition *condition, PlatformMutex *mutex, int64_t until);
+static void condition_signal(PlatformCondition *condition);
+static void condition_broadcast(PlatformCondition *condition);
+
+// A thread of its own running 'run(argument)', never joined, with a stack
+// as large as the main thread's and watched for overflow as it is; false
+// when the system will not make one.
+static bool thread_start(void (*run)(void *argument), void *argument);
+// The processors the program may run on, at least one.
+static int processor_count(void);
+// Lets another thread run: a spin that has waited long enough.
+static void thread_yield(void);
 
 // ---- Arguments, files and the environment -------------------------------
 

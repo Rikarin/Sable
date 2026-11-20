@@ -1577,16 +1577,12 @@ public sealed partial class Binder {
         BoundExpression? initializer = null;
         if (declarator.Initializer is { } initSyntax) {
             if (isAsyncLet) {
-                _awaitDepth++;
-            }
-
-            initializer = BindExpression(initSyntax.Value, declaredType);
-            if (declaredType is not null) {
-                initializer = Convert(initializer, declaredType, initSyntax.Value);
-            }
-
-            if (isAsyncLet) {
-                _awaitDepth--;
+                initializer = BindAsyncLetChild(initSyntax.Value, declaredType);
+            } else {
+                initializer = BindExpression(initSyntax.Value, declaredType);
+                if (declaredType is not null) {
+                    initializer = Convert(initializer, declaredType, initSyntax.Value);
+                }
             }
         }
 
@@ -1597,7 +1593,7 @@ public sealed partial class Binder {
         }
 
         var type = declaredType
-            ?? initializer?.Type
+            ?? (initializer is BoundClosure { Type: FunctionTypeSymbol child } && isAsyncLet ? child.ReturnType : initializer?.Type)
             ?? ErrorTypeSymbol.Instance;
 
         if (declaredType is null && initializer is null) {
@@ -1620,6 +1616,7 @@ public sealed partial class Binder {
 
         var local = new LocalSymbol(binding.Identifier.Text, _containingSymbol, declaration, isMutable) {
             IsAsyncLet = isAsyncLet,
+            AsyncLetThrownType = isAsyncLet ? (initializer?.Type as FunctionTypeSymbol)?.ThrownType : null,
         };
 
         // 'let s: some Shape = Circle()' hides the initialiser's type behind
@@ -2492,7 +2489,7 @@ public sealed partial class Binder {
         }
 
         if (_inferringReturn) {
-            var inferred = BindExpression(statement.Expression);
+            var inferred = AsValue(BindExpression(statement.Expression));
             _returnType = inferred.Type;
             _inferringReturn = false;
             return Record(statement, new BoundReturn(statement, inferred));
@@ -2756,6 +2753,7 @@ public sealed partial class Binder {
                 closure,
                 closure.CaptureList,
                 closure.Signature.Parameters,
+                closure.Signature.ThrowsSpec,
                 closure.Signature.ReturnType,
                 closure.Body,
                 expectedType,
@@ -2977,10 +2975,46 @@ public sealed partial class Binder {
 
     BoundExpression BindName(ExpressionSyntax syntax, string name) => BindNameAsValue(name, syntax);
 
-    /// <summary>An 'async let': its child task's result, so reading it awaits.</summary>
+    /// <summary>An 'async let': its child task's result, so reading it awaits, and tries when the child may throw.</summary>
     BoundExpression AwaitedLocal(SyntaxNode syntax, LocalSymbol local) {
+        // Its child belongs to the scope that declared it, which waits for
+        // it: a closure, which may run anywhere and later, cannot.
+        if (!ReferenceEquals(local.ContainingSymbol, _containingSymbol)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_AsyncLetCaptured,
+                syntax.Span,
+                $"'{local.Name}' is an 'async let', read only where it is declared, not from a closure: read it first, and capture the value"
+            );
+        }
+
         MarkAsync(syntax.Span, $"'{local.Name}', an 'async let',");
+        if (local.AsyncLetThrownType is { } thrown) {
+            MarkThrows(syntax.Span, $"'{local.Name}', an 'async let' whose child", thrown);
+        }
+
         return new BoundLocalAccess(syntax, local, NarrowedType(local));
+    }
+
+    /// <summary>
+    ///     'async let x = value': the value is the work of a child task, run
+    ///     alongside the code that follows — an async closure taking nothing,
+    ///     its body the value, which may await and throw without saying so;
+    ///     what it throws comes out where 'x' is read.
+    /// </summary>
+    BoundClosure BindAsyncLetChild(ExpressionSyntax value, TypeSymbol? declaredType) {
+        var symbol = new FunctionSymbol(string.Empty, _containingSymbol, value, Accessibility.Private, FunctionKind.Ordinary) {
+            IsAsync = true,
+            Parameters = [],
+        };
+        symbol.ThrownTypeResolver = () => Core.AnyError;
+        symbol.ReturnTypeResolver = () => declaredType ?? Core.Void;
+
+        var outerNarrowing = EnterNestedBody();
+        var body = BindClosureBody(symbol, value, declaredType ?? Core.Void, declaredType is null, [], tryAndAwait: true);
+        ExitNestedBody(outerNarrowing);
+
+        var type = new FunctionTypeSymbol([], symbol.ReturnType, true, _closureThrows);
+        return new BoundClosure(value, type, symbol, [], body);
     }
 
     /// <summary>
@@ -4322,9 +4356,11 @@ public sealed partial class Binder {
             }
 
             // 'T(seed: 4)' for T: Makeable: the protocol's initialiser
-            // requirement, met by whatever T turns out to be.
+            // requirement, met by whatever T turns out to be. 'Int[>..]()' is
+            // RangeReplaceableCollection's 'init()', as a growable array meets it.
             case BoundTypeExpression typeExpression
-                when AssociatedTypes.IsAbstract(typeExpression.ReferencedType): {
+                when AssociatedTypes.IsAbstract(typeExpression.ReferencedType)
+                     || typeExpression.ReferencedType is ArrayTypeSymbol: {
                 var found = LookupMember(typeExpression.ReferencedType, "init");
                 var requirements = found is { } lookup
                     ? lookup.Members.OfType<FunctionSymbol>().Where(static f => f.FunctionKind == FunctionKind.Initializer).ToImmutableArray()
@@ -5969,6 +6005,7 @@ public sealed partial class Binder {
             syntax,
             syntax.CaptureList,
             syntax.Header?.Parameters ?? default,
+            syntax.Header?.ThrowsSpec,
             syntax.Header?.ReturnType,
             syntax,
             expectedType,
@@ -5988,6 +6025,7 @@ public sealed partial class Binder {
         ExpressionSyntax syntax,
         CaptureListSyntax? captureList,
         SeparatedSyntaxList<ClosureParameterSyntax> declared,
+        ThrowsSpecSyntax? throwsSpec,
         TypeSyntax? returnTypeSyntax,
         SyntaxNode body,
         TypeSymbol? expectedType,
@@ -6006,7 +6044,11 @@ public sealed partial class Binder {
         // A closure passed where '() throws -> T' is wanted may throw. Where
         // the error type is the call's to infer, '() throws(E) -> T', it may
         // throw anything, and what it does throw is what E becomes.
-        var thrown = expected?.ThrownType is { } open && IsOpen(open) ? Core.AnyError : expected?.ThrownType;
+        // One that says what it throws, 'throws(ParseError)', throws that,
+        // whatever its body does; bare 'throws' is 'throws(any Error)'.
+        var declaredThrown = BindClosureThrows(throwsSpec, symbol);
+        var thrown = declaredThrown
+            ?? (expected?.ThrownType is { } open && IsOpen(open) ? Core.AnyError : expected?.ThrownType);
         symbol.ThrownTypeResolver = () => thrown;
 
         // Captures are bound in the enclosing scope, before the closure's own
@@ -6084,10 +6126,34 @@ public sealed partial class Binder {
             [..symbol.Parameters.Select(static p => p.Type)],
             symbol.ReturnType,
             symbol.IsAsync,
-            _closureThrows
+            declaredThrown ?? _closureThrows
         ) { InOutParameters = FunctionTypeSymbol.InOutOf(symbol.Parameters.Select(static p => p.Modifier == ParameterModifier.InOut)) };
 
         return Record(syntax, new BoundClosure(syntax, type, symbol, captures, bound));
+    }
+
+    /// <summary>
+    ///     What a closure's header says it throws, or null when it says
+    ///     nothing. A closure does not rethrow: what it throws is in its type.
+    /// </summary>
+    TypeSymbol? BindClosureThrows(ThrowsSpecSyntax? spec, FunctionSymbol closure) {
+        if (spec is null) {
+            return null;
+        }
+
+        if (spec.ThrowsKeyword.Kind == SyntaxKind.RethrowsKeyword) {
+            _diagnostics.Error(
+                ErrorCode.ERR_ClosureRethrows,
+                spec.Span,
+                "a closure does not rethrow: write 'throws(E)' for the error it throws, "
+                + "or leave it out and let its body say"
+            );
+            return null;
+        }
+
+        return spec.ErrorType is { } errorType
+            ? _compilation.TypeBinder.BindType(errorType, closure, _scope)
+            : Core.AnyError;
     }
 
     /// <summary>Binds a closure's body with its parameters in scope.</summary>
@@ -6096,7 +6162,8 @@ public sealed partial class Binder {
         SyntaxNode body,
         TypeSymbol returnType,
         bool inferring,
-        ImmutableArray<BoundCapture> captures
+        ImmutableArray<BoundCapture> captures,
+        bool tryAndAwait = false
     ) {
         var savedSymbol = _containingSymbol;
         var savedReturn = _returnType;
@@ -6129,8 +6196,10 @@ public sealed partial class Binder {
         _rethrows = symbol.IsRethrows;
         _inAsyncContext = symbol.IsAsync;
         SeedRethrowSources(symbol);
-        _tryDepth = 0;
-        _awaitDepth = 0;
+        // An 'async let''s child is its initialiser, which needs neither
+        // 'try' nor 'await': the reads of the 'async let' are marked instead.
+        _tryDepth = tryAndAwait ? 1 : 0;
+        _awaitDepth = tryAndAwait ? 1 : 0;
         _catchDepth = 0;
         _threwInTry = false;
         _thrownInBody = null;
@@ -6155,6 +6224,7 @@ public sealed partial class Binder {
             case ExpressionSyntax expression and not BraceClosureExpressionSyntax: {
                 var value = BindExpression(expression, inferring ? null : _returnType);
                 if (inferring) {
+                    value = AsValue(value);
                     _returnType = value.Type.Equals(Core.Never) ? Core.Void : value.Type;
                     _inferringReturn = false;
                 } else if (!_returnType.Equals(Core.Void)) {
@@ -6187,6 +6257,7 @@ public sealed partial class Binder {
                     var value = BindExpression(only.Expression, inferring ? null : _returnType);
 
                     if (inferring) {
+                        value = AsValue(value);
                         _returnType = value.Type.Equals(Core.Never) ? Core.Void : value.Type;
                         _inferringReturn = false;
                     } else if (!_returnType.Equals(Core.Void)) {
@@ -7257,7 +7328,7 @@ public sealed partial class Binder {
     }
 
     BoundExpression BindPostfixUnary(PostfixUnaryExpressionSyntax syntax) {
-        var operand = BindExpression(syntax.Operand);
+        var operand = AsValue(BindExpression(syntax.Operand));
 
         // The only postfix operator is '!', which unwraps an optional.
         if (operand.Type is OptionalTypeSymbol optional) {
@@ -7996,6 +8067,13 @@ public sealed partial class Binder {
         expression.Type is OptionalTypeSymbol { IsImplicitlyUnwrapped: true } optional
             ? new BoundConversion(expression.Syntax, optional.UnderlyingType, expression, ConversionKind.Explicit)
             : expression;
+
+    /// <summary>
+    ///     An expression used where nothing says what type it should be: a
+    ///     named function is the one function it names, as a value.
+    /// </summary>
+    BoundExpression AsValue(BoundExpression expression) =>
+        expression is BoundFunctionGroup group ? Record(group.Syntax, Materialize(group, null)) : expression;
 
     /// <summary>
     ///     Turns a named function into a value of function type.

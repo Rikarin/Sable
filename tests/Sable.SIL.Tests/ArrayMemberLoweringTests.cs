@@ -150,4 +150,30 @@ public sealed class ArrayMemberLoweringTests {
         Assert.Equal(ErrorCode.ERR_BuiltinSignatureMismatch, error.Code);
         Assert.Contains(message, error.Message);
     }
+
+    /// <summary>
+    ///     A collection type called is its <c>init()</c>: an empty growable
+    ///     array, as <c>[]</c> makes, or an empty dictionary (#272).
+    /// </summary>
+    [Fact]
+    public void ACollectionTypeCalledIsAnEmptyOne() {
+        var module = Lower(
+            """
+            module M
+            fn sizes() -> Int {
+                var xs = Int[>..]()
+                xs.append(4)
+                var ys = String[>..<]()
+                ys.append("y")
+                ys.append("z")
+                var counts = [String: Int]()
+                counts["a"] = 1
+                let tally = ["a", "b", "a"].reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
+                return xs.count * 1000 + ys.count * 100 + counts.count * 10 + tally["a"]!
+            }
+            """
+        );
+
+        Assert.Equal(1212L, new SilInterpreter(module).Run("M.sizes"));
+    }
 }

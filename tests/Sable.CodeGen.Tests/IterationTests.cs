@@ -139,10 +139,10 @@ public sealed class IterationTests {
 
                     fn produce(_ channel: Channel<Int>) async {
                         for i in 1...3 {
-                            channel.send(i * 10)
+                            await channel.send(i * 10)
                             await Task.yield()
                         }
-                        channel.close()
+                        await channel.close()
                     }
 
                     fn consume(_ channel: Channel<Int>) async -> Int {

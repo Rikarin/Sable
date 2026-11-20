@@ -91,6 +91,7 @@ public sealed partial class LlvmEmitter {
     HashSet<string>? _reachable;
 
     string EmitModule(SilModule module) {
+        AsyncLowering.Run(module);
         _module = module;
         _pointerBytes = _arch == "wasm32" ? 4 : 8;
         _checkExclusivity = module.CheckExclusivity;
@@ -183,145 +184,140 @@ public sealed partial class LlvmEmitter {
     ///     otherwise inline — a call for every count, on Linux and Windows
     ///     without lld, or with LTO off. The object header is { metadata,
     ///     strong count, flags }; an immortal object (a string literal) is not
-    ///     counted, nor is null. Only a last release calls the runtime, to run
-    ///     the deinit and free the memory. The runtime's counts of retains and
-    ///     releases, which SABLE_STATS reports, are kept here as there.
+    ///     counted, nor is null. An object more than one thread can reach
+    ///     (the flags' shared bit, 512) is counted atomically, the rest with a
+    ///     plain load and store (docs/02 §2.7). Only a last release calls the
+    ///     runtime, to run the deinit and free the memory. Under SABLE_STATS
+    ///     (<c>sable_counting</c>) the runtime's counts of retains and
+    ///     releases are kept here as there. With <paramref name="checkArc" />
+    ///     (a profile's <c>arc-checks</c>) a retain or release of an object
+    ///     whose count is already zero — whose deinit has run, so that the
+    ///     reference outlived it — calls the runtime's <c>sable_arc_dead</c>,
+    ///     which traps, rather than counting what may be freed memory. (The
+    ///     runtime's own retains and releases, compiled once for every
+    ///     program, do not check.)
     /// </summary>
-    const string Counting = """
-                            @sable_retains = external global i64
-                            @sable_releases = external global i64
-                            declare void @sable_release_last(ptr) cold
-
-                            define internal void @sable.retain(ptr %object) alwaysinline nounwind {
-                            entry:
-                              %none = icmp eq ptr %object, null
-                              br i1 %none, label %done, label %present
-                            present:
-                              %flagsField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 2
-                              %flags = load i32, ptr %flagsField
-                              %immortalBit = and i32 %flags, 1
-                              %immortal = icmp ne i32 %immortalBit, 0
-                              br i1 %immortal, label %done, label %count
-                            count:
-                              %strongField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 1
-                              %strong = load i32, ptr %strongField
-                              %more = add i32 %strong, 1
-                              store i32 %more, ptr %strongField
-                              %retains = load i64, ptr @sable_retains
-                              %retainsMore = add i64 %retains, 1
-                              store i64 %retainsMore, ptr @sable_retains
-                              br label %done
-                            done:
-                              ret void
-                            }
-
-                            define internal void @sable.release(ptr %object) alwaysinline nounwind {
-                            entry:
-                              %none = icmp eq ptr %object, null
-                              br i1 %none, label %done, label %present
-                            present:
-                              %flagsField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 2
-                              %flags = load i32, ptr %flagsField
-                              %immortalBit = and i32 %flags, 1
-                              %immortal = icmp ne i32 %immortalBit, 0
-                              br i1 %immortal, label %done, label %count
-                            count:
-                              %releases = load i64, ptr @sable_releases
-                              %releasesMore = add i64 %releases, 1
-                              store i64 %releasesMore, ptr @sable_releases
-                              %strongField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 1
-                              %strong = load i32, ptr %strongField
-                              %less = sub i32 %strong, 1
-                              store i32 %less, ptr %strongField
-                              %gone = icmp eq i32 %less, 0
-                              br i1 %gone, label %last, label %done, !prof !{!"branch_weights", i32 1, i32 1000}
-                            last:
-                              call void @sable_release_last(ptr %object)
-                              br label %done
-                            done:
-                              ret void
-                            }
-                            """;
-
-    /// <summary>
-    ///     <see cref="Counting" /> with a profile's <c>arc-checks</c>: a retain
-    ///     or release of an object whose count is already zero — whose deinit
-    ///     has run, so that the reference outlived it — calls the runtime's
-    ///     <c>sable_arc_dead</c>, which traps, rather than counting what may
-    ///     be freed memory. (The runtime's own retains and releases, compiled
-    ///     once for every program, do not check.)
-    /// </summary>
-    /// <summary>The definitions of <c>@sable.retain</c> and <c>@sable.release</c> every module carries: checked under <c>arc-checks</c>.</summary>
     public static string RetainAndRelease(bool checkArc) => checkArc ? CheckedCounting : Counting;
 
-    const string CheckedCounting = """
-                                   @sable_retains = external global i64
-                                   @sable_releases = external global i64
-                                   declare void @sable_release_last(ptr) cold
-                                   declare void @sable_arc_dead(ptr, i32) cold noreturn
+    static readonly string Counting = BuildCounting(false);
+    static readonly string CheckedCounting = BuildCounting(true);
 
-                                   define internal void @sable.retain(ptr %object) alwaysinline nounwind {
-                                   entry:
-                                     %none = icmp eq ptr %object, null
-                                     br i1 %none, label %done, label %present
-                                   present:
-                                     %flagsField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 2
-                                     %flags = load i32, ptr %flagsField
-                                     %immortalBit = and i32 %flags, 1
-                                     %immortal = icmp ne i32 %immortalBit, 0
-                                     br i1 %immortal, label %done, label %check
-                                   check:
-                                     %strongField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 1
-                                     %strong = load i32, ptr %strongField
-                                     %dead = icmp eq i32 %strong, 0
-                                     br i1 %dead, label %deinited, label %count, !prof !{!"branch_weights", i32 1, i32 1000}
-                                   deinited:
-                                     call void @sable_arc_dead(ptr %object, i32 0)
-                                     unreachable
-                                   count:
-                                     %more = add i32 %strong, 1
-                                     store i32 %more, ptr %strongField
-                                     %retains = load i64, ptr @sable_retains
-                                     %retainsMore = add i64 %retains, 1
-                                     store i64 %retainsMore, ptr @sable_retains
-                                     br label %done
-                                   done:
-                                     ret void
-                                   }
+    static string BuildCounting(bool check) {
+        string Dead(int operation) => check
+            ? $$"""
+                 %dead = icmp eq i32 %strong, 0
+                 br i1 %dead, label %deinited, label %plain, !prof !{!"branch_weights", i32 1, i32 1000}
+               deinited:
+                 call void @sable_arc_dead(ptr %object, i32 {{operation}})
+                 unreachable
+               plain:
 
-                                   define internal void @sable.release(ptr %object) alwaysinline nounwind {
-                                   entry:
-                                     %none = icmp eq ptr %object, null
-                                     br i1 %none, label %done, label %present
-                                   present:
-                                     %flagsField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 2
-                                     %flags = load i32, ptr %flagsField
-                                     %immortalBit = and i32 %flags, 1
-                                     %immortal = icmp ne i32 %immortalBit, 0
-                                     br i1 %immortal, label %done, label %check
-                                   check:
-                                     %strongField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 1
-                                     %strong = load i32, ptr %strongField
-                                     %dead = icmp eq i32 %strong, 0
-                                     br i1 %dead, label %deinited, label %count, !prof !{!"branch_weights", i32 1, i32 1000}
-                                   deinited:
-                                     call void @sable_arc_dead(ptr %object, i32 1)
-                                     unreachable
-                                   count:
-                                     %releases = load i64, ptr @sable_releases
-                                     %releasesMore = add i64 %releases, 1
-                                     store i64 %releasesMore, ptr @sable_releases
-                                     %less = sub i32 %strong, 1
-                                     store i32 %less, ptr %strongField
-                                     %gone = icmp eq i32 %less, 0
-                                     br i1 %gone, label %last, label %done, !prof !{!"branch_weights", i32 1, i32 1000}
-                                   last:
-                                     call void @sable_release_last(ptr %object)
-                                     br label %done
-                                   done:
-                                     ret void
-                                   }
-                                   """;
+               """
+            : "";
+
+        // The shared path reads the count first only to check it is not zero.
+        string SharedDead(int operation) => check
+            ? $$"""
+                 %sharedStrong = load atomic i32, ptr %strongField monotonic, align 4
+                 %sharedDead = icmp eq i32 %sharedStrong, 0
+                 br i1 %sharedDead, label %sharedDeinited, label %sharedLive, !prof !{!"branch_weights", i32 1, i32 1000}
+               sharedDeinited:
+                 call void @sable_arc_dead(ptr %object, i32 {{operation}})
+                 unreachable
+               sharedLive:
+
+               """
+            : "";
+
+        return $"""
+                @sable_retains = external global i64
+                @sable_releases = external global i64
+                @sable_counting = external global i8
+                declare void @sable_release_last(ptr) cold
+                {(check ? "declare void @sable_arc_dead(ptr, i32) cold noreturn" : "")}
+
+                define internal void @sable.retain(ptr %object) alwaysinline nounwind {"{"}
+                entry:
+                  %none = icmp eq ptr %object, null
+                  br i1 %none, label %done, label %present
+                present:
+                  %flagsField = getelementptr inbounds {"{"} ptr, i32, i32 {"}"}, ptr %object, i32 0, i32 2
+                  %flags = load atomic i32, ptr %flagsField monotonic, align 4
+                  %special = and i32 %flags, 513
+                  %ordinary = icmp eq i32 %special, 0
+                  %strongField = getelementptr inbounds {"{"} ptr, i32, i32 {"}"}, ptr %object, i32 0, i32 1
+                  br i1 %ordinary, label %local, label %unusual, !prof !{"{"}!"branch_weights", i32 1000, i32 1{"}"}
+                local:
+                  %strong = load i32, ptr %strongField
+                {Dead(0)}  %more = add i32 %strong, 1
+                  store i32 %more, ptr %strongField
+                  br label %counted
+                unusual:
+                  %immortalBit = and i32 %flags, 1
+                  %immortal = icmp ne i32 %immortalBit, 0
+                  br i1 %immortal, label %done, label %shared
+                shared:
+                {SharedDead(0)}  %old = atomicrmw add ptr %strongField, i32 1 monotonic, align 4
+                  br label %counted
+                counted:
+                  %counting = load i8, ptr @sable_counting
+                  %counts = icmp ne i8 %counting, 0
+                  br i1 %counts, label %count, label %done, !prof !{"{"}!"branch_weights", i32 1, i32 1000{"}"}
+                count:
+                  %retains = atomicrmw add ptr @sable_retains, i64 1 monotonic, align 8
+                  br label %done
+                done:
+                  ret void
+                {"}"}
+
+                define internal void @sable.release(ptr %object) alwaysinline nounwind {"{"}
+                entry:
+                  %none = icmp eq ptr %object, null
+                  br i1 %none, label %done, label %present
+                present:
+                  %flagsField = getelementptr inbounds {"{"} ptr, i32, i32 {"}"}, ptr %object, i32 0, i32 2
+                  %flags = load atomic i32, ptr %flagsField monotonic, align 4
+                  %special = and i32 %flags, 513
+                  %ordinary = icmp eq i32 %special, 0
+                  %strongField = getelementptr inbounds {"{"} ptr, i32, i32 {"}"}, ptr %object, i32 0, i32 1
+                  %counting = load i8, ptr @sable_counting
+                  %counts = icmp ne i8 %counting, 0
+                  br i1 %ordinary, label %local, label %unusual, !prof !{"{"}!"branch_weights", i32 1000, i32 1{"}"}
+                local:
+                  %strong = load i32, ptr %strongField
+                {Dead(1)}  %less = sub i32 %strong, 1
+                  store i32 %less, ptr %strongField
+                  %gone = icmp eq i32 %less, 0
+                  br i1 %gone, label %last, label %counted, !prof !{"{"}!"branch_weights", i32 1, i32 1000{"}"}
+                unusual:
+                  %immortalBit = and i32 %flags, 1
+                  %immortal = icmp ne i32 %immortalBit, 0
+                  br i1 %immortal, label %done, label %shared
+                shared:
+                {SharedDead(1)}  %old = atomicrmw sub ptr %strongField, i32 1 release, align 4
+                  %sharedGone = icmp eq i32 %old, 1
+                  br i1 %sharedGone, label %acquire, label %counted, !prof !{"{"}!"branch_weights", i32 1, i32 1000{"}"}
+                acquire:
+                  fence acquire
+                  br label %last
+                last:
+                  br i1 %counts, label %countLast, label %free
+                countLast:
+                  %releasesLast = atomicrmw add ptr @sable_releases, i64 1 monotonic, align 8
+                  br label %free
+                free:
+                  call void @sable_release_last(ptr %object)
+                  br label %done
+                counted:
+                  br i1 %counts, label %count, label %done, !prof !{"{"}!"branch_weights", i32 1, i32 1000{"}"}
+                count:
+                  %releases = atomicrmw add ptr @sable_releases, i64 1 monotonic, align 8
+                  br label %done
+                done:
+                  ret void
+                {"}"}
+                """;
+    }
 
     /// <summary>
     ///     The LLVM intrinsics (and the two libm functions) the numeric
@@ -384,7 +380,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_trap_at(ptr, ptr) noreturn cold
                                 declare void @sable_trap_with(ptr, ptr) noreturn cold
                                 declare ptr @sable_backtrace_capture()
-                                @sable_trap_site = external global ptr
+                                @sable_trap_site = external thread_local global ptr
                                 declare ptr @sable_alloc(ptr, i64)
                                 declare void @sable_retain(ptr)
                                 declare void @sable_release(ptr)
@@ -495,20 +491,39 @@ public sealed partial class LlvmEmitter {
                                 declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64)
                                 declare ptr @sable_inline_new(ptr)
                                 declare zeroext i1 @sable_class_is(ptr, ptr)
-                                declare ptr @sable_task_spawn(ptr, ptr)
-                                declare void @sable_task_wait(ptr)
+                                declare ptr @sable_task_spawn(ptr, ptr, ptr, ptr, i64, i1 zeroext)
+                                declare i64 @sable_task_priority()
+                                declare void @sable_task_handler_push(ptr, ptr)
+                                declare void @sable_task_handler_pop()
+                                declare ptr @sable_group_new()
+                                declare void @sable_group_add(ptr, ptr)
+                                declare zeroext i1 @sable_group_wait(ptr)
+                                declare ptr @sable_group_take(ptr)
+                                declare void @sable_group_free(ptr)
+                                declare zeroext i1 @sable_task_wait(ptr)
                                 declare void @sable_task_release(ptr)
                                 declare void @sable_task_cancel(ptr)
                                 declare zeroext i1 @sable_task_is_cancelled()
-                                declare void @sable_task_yield()
-                                declare void @sable_task_sleep(i64)
+                                declare zeroext i1 @sable_task_yield()
+                                declare zeroext i1 @sable_task_sleep(i64)
+                                declare void @sable_share(ptr)
+                                declare void @sable_task_spawn_cancelled()
+                                declare zeroext i1 @sable_actor_hop(ptr)
+                                declare ptr @sable_actor_current()
+                                declare ptr @sable_waitlist_new()
+                                declare void @sable_waitlist_free(ptr)
+                                declare void @sable_waitlist_wake(ptr)
+                                declare zeroext i1 @sable_task_park(ptr)
                                 declare void @sable_tasks_drain()
+                                declare void @sable_task_run_until_main()
+                                declare ptr @sable_frame_alloc(i64)
+                                declare void @sable_frame_free(ptr)
                                 declare void @sable_coverage_hit(i64)
                                 declare void @sable_array_make_unique(ptr nocapture, ptr)
                                 @sable_empty_array_count = internal constant %SableArrayHeader zeroinitializer
                                 declare void @sable_access_begin(ptr, i64, i32)
                                 declare void @sable_access_check(ptr, i64, i32)
-                                @sable_access_count = external global i64
+                                @sable_access_count = external thread_local global i64
                                 declare void @sable_access_end(ptr)
                                 declare ptr @sable_inline_new_stack(ptr, ptr, i64)
                                 declare ptr @sable_stack_object(ptr, ptr, i64)
@@ -909,6 +924,13 @@ public sealed partial class LlvmEmitter {
 
         /// <summary>Hands each strong reference to <c>sable_make_immortal</c>: an '@immortal' global's objects.</summary>
         Immortal,
+
+        /// <summary>
+        ///     Hands each strong reference to <c>sable_share</c>: a value
+        ///     crossing from one task to another, whose objects are counted
+        ///     atomically from then on.
+        /// </summary>
+        Share,
     }
 
     void Ownership(StringBuilder output, string indent, Witnessing what, SilType type, string value, string dbg = "") {
@@ -923,6 +945,7 @@ public sealed partial class LlvmEmitter {
                 Witnessing.Copy => "sable.retain",
                 Witnessing.Destroy => "sable.release",
                 Witnessing.Immortal => "sable_make_immortal",
+                Witnessing.Share => "sable_share",
                 _ => "sable_heap_visit",
             };
             output.Append(indent).Append($"call void @{call}(ptr {value}){dbg}\n");
@@ -931,7 +954,7 @@ public sealed partial class LlvmEmitter {
 
         // A weak or unowned reference keeps nothing alive.
         if (type is WeakStorageType or UnownedStorageType) {
-            if (what is Witnessing.Visit or Witnessing.Immortal) {
+            if (what is Witnessing.Visit or Witnessing.Immortal or Witnessing.Share) {
                 return;
             }
 
@@ -1630,6 +1653,11 @@ public sealed partial class LlvmEmitter {
             var linkage = module.Linkage(function.Name);
             text.Append("define ").Append(linkage).Append(ReturnType(function.Type)).Append(" @").Append(Global(function.Name))
                 .Append('(').Append(string.Join(", ", parameters)).Append(") nounwind")
+                .Append(function.Inline switch {
+                    SilInline.Always => " alwaysinline",
+                    SilInline.Never => " noinline",
+                    _ => "",
+                })
                 .Append(module.Comdat("@" + Global(function.Name), linkage) is { Length: > 0 } ? " comdat" : "");
             if (_scope is not null) {
                 text.Append(" !dbg ").Append(_scope);
@@ -2061,6 +2089,13 @@ public sealed partial class LlvmEmitter {
                     var name = Fresh();
                     _names[alloc] = name;
                     var size = $"ptrtoint (ptr getelementptr ({ObjectType(alloc.ClassType)}, ptr null, i32 1) to i64)";
+
+                    // An async function's frame: on its task's slab, never counted (AsyncLowering).
+                    if (alloc.ClassType.IsCoroutineFrame) {
+                        Line($"{name} = call ptr @sable_frame_alloc(i64 {size})");
+                        return;
+                    }
+
                     if (alloc.OnStack) {
                         // In the frame: the header made there, freed with it.
                         // Aligned as the heap's blocks are, which the layout assumes.
@@ -2613,35 +2648,157 @@ public sealed partial class LlvmEmitter {
             }
 
             switch (builtin.Name) {
+                // A task: its root frame's start, resume and drop functions,
+                // what the start is given, its priority, and whether it is detached.
                 case "task_spawn": {
                     var handle = Fresh();
-                    Line($"{handle} = call ptr @sable_task_spawn(ptr {operands[0]}, ptr {operands[1]})");
+                    Line($"{handle} = call ptr @sable_task_spawn(ptr {operands[0]}, ptr {operands[1]}, ptr {operands[2]}, ptr {operands[3]}, i64 {operands[4]}, i1 zeroext {operands[5]})");
                     Line($"{Result()} = ptrtoint ptr {handle} to i64");
                     return;
                 }
 
-                case "task_wait" or "task_release" or "task_cancel": {
+                case "task_priority":
+                    Line($"{Result()} = call i64 @sable_task_priority()");
+                    return;
+
+                case "task_spawn_cancelled":
+                    Line("call void @sable_task_spawn_cancelled()");
+                    return;
+
+                case "task_handler_push":
+                    Line($"call void @sable_task_handler_push(ptr {operands[0]}, ptr {operands[1]})");
+                    return;
+
+                case "task_handler_pop":
+                    Line("call void @sable_task_handler_pop()");
+                    return;
+
+                // Groups, by handle: their children, in the order they finish.
+                case "task_group_new": {
+                    var group = Fresh();
+                    Line($"{group} = call ptr @sable_group_new()");
+                    Line($"{Result()} = ptrtoint ptr {group} to i64");
+                    return;
+                }
+
+                case "task_group_add": {
+                    var group = Fresh();
+                    var task = Fresh();
+                    Line($"{group} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"{task} = inttoptr i64 {operands[1]} to ptr");
+                    Line($"call void @sable_group_add(ptr {group}, ptr {task})");
+                    return;
+                }
+
+                case "task_group_take": {
+                    var group = Fresh();
+                    var task = Fresh();
+                    Line($"{group} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"{task} = call ptr @sable_group_take(ptr {group})");
+                    Line($"{Result()} = ptrtoint ptr {task} to i64");
+                    return;
+                }
+
+                case "task_group_free": {
+                    var group = Fresh();
+                    Line($"{group} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"call void @sable_group_free(ptr {group})");
+                    return;
+                }
+
+                case "async_group_wait": {
+                    var group = Fresh();
+                    Line($"{group} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"{Result()} = call zeroext i1 @sable_group_wait(ptr {group})");
+                    return;
+                }
+
+                case "task_release" or "task_cancel": {
                     var handle = Fresh();
                     Line($"{handle} = inttoptr i64 {operands[0]} to ptr");
                     Line($"call void @sable_{builtin.Name}(ptr {handle})");
                     return;
                 }
 
-                case "task_yield":
-                    Line("call void @sable_task_yield()");
+                // The places a task waits (AsyncLowering): each says whether it must suspend.
+                case "async_wait": {
+                    var handle = Fresh();
+                    Line($"{handle} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"{Result()} = call zeroext i1 @sable_task_wait(ptr {handle})");
+                    return;
+                }
+
+                case "async_yield":
+                    Line($"{Result()} = call zeroext i1 @sable_task_yield()");
+                    return;
+
+                case "async_sleep":
+                    Line($"{Result()} = call zeroext i1 @sable_task_sleep(i64 {operands[0]})");
+                    return;
+
+                case "async_frame_free":
+                    Line($"call void @sable_frame_free(ptr {operands[0]})");
                     return;
 
                 case "task_is_cancelled":
                     Line($"{Result()} = call zeroext i1 @sable_task_is_cancelled()");
                     return;
 
-                case "task_sleep":
-                    Line($"call void @sable_task_sleep(i64 {operands[0]})");
-                    return;
-
                 case "task_drain":
                     Line("call void @sable_tasks_drain()");
                     return;
+
+                case "task_run_until_main":
+                    Line("call void @sable_task_run_until_main()");
+                    return;
+
+                // A value crossing from one task to another: its objects shared.
+                case "share":
+                    module.Ownership(_out, "  ", Witnessing.Share, builtin.Operands[0].Type, operands[0], _dbg);
+                    return;
+
+                // Actors: where the running task is, by identity (an actor
+                // object's address, 1 for the main actor, 0 for anywhere), and
+                // a hop to one — a place the task may suspend.
+                case "address_to_int":
+                    Line($"{Result()} = ptrtoint ptr {operands[0]} to i64");
+                    return;
+
+                case "task_actor_current": {
+                    var actor = Fresh();
+                    Line($"{actor} = call ptr @sable_actor_current()");
+                    Line($"{Result()} = ptrtoint ptr {actor} to i64");
+                    return;
+                }
+
+                case "async_hop": {
+                    var actor = Fresh();
+                    Line($"{actor} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"{Result()} = call zeroext i1 @sable_actor_hop(ptr {actor})");
+                    return;
+                }
+
+                // Wait lists, by handle: what a channel's receivers park in.
+                case "task_waitlist_new": {
+                    var list = Fresh();
+                    Line($"{list} = call ptr @sable_waitlist_new()");
+                    Line($"{Result()} = ptrtoint ptr {list} to i64");
+                    return;
+                }
+
+                case "task_waitlist_free" or "task_waitlist_wake": {
+                    var list = Fresh();
+                    Line($"{list} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"call void @sable_{builtin.Name[5..]}(ptr {list})");
+                    return;
+                }
+
+                case "async_park": {
+                    var list = Fresh();
+                    Line($"{list} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"{Result()} = call zeroext i1 @sable_task_park(ptr {list})");
+                    return;
+                }
 
                 case Coverage.Builtin:
                     Line($"call void @sable_coverage_hit(i64 {operands[0]})");

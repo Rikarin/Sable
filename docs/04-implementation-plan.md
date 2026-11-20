@@ -339,9 +339,8 @@ Order matters; each of these is a self-contained lowering:
 1. `defer` / `using` → explicit cleanup on every exit path
 2. `match` → decision tree (Maranget's compilation, not a linear chain)
 3. Closures → boxes + `partial_apply`; non-escaping closures stay on the stack
-4. `async` → a state machine (coroutine split, see Phase 5). Interim, done:
-   an async function lowers as an ordinary one, and each task runs on a
-   stack of its own — see "Async, as implemented" under Phase 4
+4. `async` → a state machine: the coroutine split generators use, made
+   after the SIL passes — see "Async, as implemented" under Phase 4
 5. `throws` → a discriminated return with an error register, plus the error
    edges in the CFG
 6. Generic instantiation → monomorphised SIL functions
@@ -493,9 +492,8 @@ Status:
 - [x] 6 — deinit ordering (subclass first, fields last to first), the
       immortal fast path, and a stack fast path (§3.7: an object made in
       its frame is counted as any other, and never freed). Atomic counts
-      are deferred to the concurrency runtime (Phase 4.3, `Sable.Concurrency`):
-      with one thread there is nothing for the flag bit of docs/02 §2.8 to
-      choose between, and nothing to measure its cost against.
+      came with the concurrency runtime's pool: the flag bit of docs/02
+      §2.8, set where a value crosses tasks (see "Async, as implemented").
 
 Measured by `tools/bench/run.py` (`benchmarks/history.tsv`): against naive
 insertion, retains fall by 75% (binary trees), 92% (sort), 77% (shapes),
@@ -967,13 +965,12 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   threshold (or `SABLE_LOG`), context fields that `with` carries to child
   loggers, optional UTC timestamps, and quotes values where they would be
   misread. Not yet: tracing spans and metrics.
-- `Sable.Concurrency`, written in Sable over the core's `Task`: `Channel`
-  (unbounded, closable, `receive` awaits), `TaskGroup` (results in the order
-  the tasks were added), and a `sleep` that yields so that other tasks run
-  meanwhile. Tasks switch only where they await, so none of it needs a lock.
-  `TaskGroup.cancelAll()` cancels its tasks. Not yet: bounded channels, `Mutex` and `Atomic` (useless
-  until tasks run in parallel), and deadlock detection: a task waiting on
-  nothing yields for ever.
+- `Sable.Concurrency`, written in Sable over the core's `Task` and
+  `WaitList`: `Channel`, an actor (unbounded, closable, of `Sendable`
+  values; `receive` parks until a value comes) and a `sleep` that lets
+  other tasks run meanwhile. Task groups are the core's (`withTaskGroup`;
+  see "Async, as implemented"). Not yet: bounded channels, `Mutex` and
+  `Atomic`.
 
 What it took from the compiler: `forward-copies` no longer folds a copy into
 its source when the copy is consumed while the source is still in use (a
@@ -1226,39 +1223,222 @@ it is now one runtime call (`Runtime.joinStrings`) that sizes the result once.
 
 ### Async, as implemented
 
-Done ahead of `Sable.Concurrency`, with the core of it in `Sable.Core`
-(`tests/Sable.CodeGen.Tests/AsyncTests.cs`). Tasks are scheduled
-cooperatively: each runs on a thread, but one lock is held by whichever
-task is running, so exactly one runs at a time and switches only where a
-task waits — awaiting a task not yet finished, `Task.yield()`, or
-`Task.sleep(nanoseconds:)`. The interleaving is therefore deterministic
-(sleepers wake in the order of their deadlines), the interpreter reproduces
-it, and reference counts stay non-atomic. A task is given a thread only
-when it first runs, and a thread whose task finished runs the next task
-that has not begun, or waits to be given one: threads are held only by
-tasks waiting part-way through, so twenty thousand tasks that each run to
-the end take one thread between them. A sleeping task is off the run queue;
-when nothing is queued the scheduler waits for the earliest sleeper, so two
-tasks sleeping a second take a second. `Sable.Concurrency`'s `sleep` is
-`Task.sleep`; `Clock.sleep` does not await, so it still holds every task. An async function is an ordinary function,
-and `await` is its operand; `Task.spawn { … }` queues a task (a class holding
-the runtime's handle, the body and the result), `await task.value` waits for
-it, and the program ends once every task has. `task.cancel()` cancels
-cooperatively: the task sees `Task.isCancelled()`, and a sleep it is in, or
-starts, ends at once (it is taken off the sleepers and queued). Actors lower as classes: with
-one task running at a time a call into one runs alone, and the binder makes
-a call from outside it `await`. `async let` binds; reading it needs `await`.
-A class or actor whose fields all have initial values is made with `init()`.
+Stackless, as #276 decided, in the shape of Swift's runtime; this is its
+first stage (`tests/Sable.SIL.Tests/AsyncLoweringTests.cs`,
+`tests/Sable.CodeGen.Tests/AsyncTests.cs`).
 
-This trades the planned stackless state machine (§2.2, item 4) for a stack
-per task — far less compiler for the same semantics, at the cost of a
-thread (8 MB of address space) for each task waiting at once. Not yet:
-`async let` runs its child to completion at the declaration rather than
-alongside; actors have no executor or mailbox of their own; no task groups
-as scopes, priorities, I/O to
-wait on (an I/O reactor), and no parallelism (a work-stealing pool, and
-with it atomic counts) — all `Sable.Concurrency`'s, along with the switch
-to the state machine where many tasks wait at once.
+**The coroutine split.** Lowering marks an async function's SIL type
+`async` and otherwise lowers it, and every call to one, as an ordinary
+function and call; the places a task itself waits are builtins
+(`task_wait` for `await task.value`, `task_yield`, `task_sleep`). Every SIL
+pass sees them so, and inlines, borrows and simplifies through them. Last,
+before the interpreter or the code generator runs the module,
+`AsyncLowering` splits each async function that may suspend with the
+transform generators use (`CoroutineSplit`): a *start* function, under the
+function's name, that makes its frame and runs nothing, and a *resume*
+function, the body, which runs from where the frame's state says until it
+finishes or must wait, and says which. Every slot the body makes is a field
+of the frame, and so is every value live across a point where it may
+suspend — stored as it is made and read back where it is used, as bits,
+since its ownership is the body's as before. A call to an async function
+starts the callee's frame and polls it there and then, so an await that
+need not wait costs a bump of the slab and a call; when the callee must
+wait, the caller records its state and returns, and so on up to the task.
+Every frame starts as its signature's head does — the resume function,
+the state, the result, the error — so a caller that knows only the
+signature, through a closure, a vtable or an existential, starts and polls
+any of them alike. An async function that cannot reach a point where it may
+suspend, called only by name, stays an ordinary function, as do its calls,
+in a program compiled whole; a unit compiled separately keeps the async
+convention for every async function, which is all another unit can see. An
+async entry point is run as the program's first task by an ordinary entry
+made for it, which polls it, lets the other tasks run while it waits, and
+destroys the globals once every task has finished.
+
+**Frames on the task's slab.** A frame is never counted and never made by
+malloc: each task has a bump allocator (`runtime/frames.c`), its first
+512-byte chunk inside the task object, further 16 KiB chunks from the heap
+as its calls go deeper, one emptied chunk kept as a spare. Frames are made
+as calls begin and given back as they end, so they come and go as a
+stack's would; the slab checks that they do. A thousand rounds of an await
+chain six deep, each round waiting, allocate exactly what ten rounds do,
+and take no chunk (`AnAwaitAllocatesNothing`). On an M1 Max, an await of a
+call that need not wait — a frame made, polled once and given back — costs
+about 4 ns, through a chain ten deep, and a task suspending and being
+resumed (two tasks taking turns at `Task.yield()`) about 4 ns too.
+
+**The executor.** In the first stage one executor, on the program's one
+thread, resumed each task queued in turn until it finished or waited
+(`runtime/tasks.c`; the interpreter's is the same,
+`SilInterpreter.Tasks.cs`), and the third stage made it a pool (below);
+`SABLE_WORKERS=0` still runs a program so. Where a task waits, the runtime
+puts it where it will be woken — among the waiters of the task it awaits,
+at the back of the run queue, or among the sleepers, a heap by deadline —
+and the task suspends. On the one executor only those places switch tasks,
+so the interleaving is deterministic and the interpreter's is the native
+one, and there is no thread per task. A task holds its
+frames and nothing else while it waits: a hundred thousand tasks each
+sleeping a second take 1.04 s and under a kilobyte each — the task
+with its slab's first chunk 640 bytes, its `Task` object and its closure the
+rest — 93 MB at the peak (`AHundredThousandSleepingTasksTakeASecondInBoundedMemory`).
+`Clock.sleep` and `Sable.Concurrency`'s `sleep` are timers; only
+`Runtime.sleep` holds the thread. `SABLE_STATS` says how many tasks ran, how many
+were alive at once and were dropped, how many frames and chunks the slabs
+made, and the peak memory. `Task.spawn { … }` queues a task (a class
+holding the runtime's handle, the body and the result), `await task.value`
+waits for it, and the program ends once every task has finished or can no
+longer go on. A class or actor whose fields all have initial values is
+made with `init()`.
+
+**Structured concurrency** — the second stage, still on the one executor
+(`tests/Sable.CodeGen.Tests/StructuredConcurrencyTests.cs`,
+`tests/lib/Sable.Core/TaskTests.sb` and `TaskGroupTests.sb`). A task spawned
+from another is its child: it takes its parent's priority unless given one
+(`Task.spawn(priority:)`; `Task.currentPriority`), starts cancelled if its
+parent is, is cancelled with it, and its parent, once its own body has
+finished, finishes only when every child has. `Task.detached` is the one
+way out: no parent, medium priority. Cancelling marks the task, runs the
+handlers it has installed (`withTaskCancellationHandler`, which runs one
+at once in a task cancelled already) where the cancelling is done, wakes a
+sleep it is in, and goes on down through its children; the task goes on
+until it asks — `Task.isCancelled`, or `Task.checkCancellation()`, which
+throws `CancellationError`, as `Task.sleep`, `Clock.sleep` and `sleep` do
+when the sleep was cut short. Waiting for a task or a group's next child
+does not end early: the children are cancelled with the waiter, and finish
+as soon as they notice.
+
+`async let x = value` spawns the value as a child task where it is
+declared: the binder binds the value as the body of an async closure,
+which may await and throw without saying so, and a read of `x` waits for
+it and gives its result, or throws what it threw (so needs `try` as well
+as `await`). As its scope ends, on every way out, the child is cancelled —
+nothing, once it has finished — and waited for. Task groups are Sable.Core's
+`TaskGroup` and `ThrowingTaskGroup`, made only by `withTaskGroup(of:)` and
+`withThrowingTaskGroup(of:)`: `spawn` adds a child, `next()` and `for
+await` give results in the order the children finish (the runtime's group
+hears of each as it finishes, and wakes the task waiting), and the scope
+waits for every child not taken — cancelling them first if a throwing
+body threw — so none outlives it.
+
+A task that can never go on — still waiting as the program ends, on
+something no task will give — is dropped. Every frame has a drop function
+as well as a resume function: for the state it stopped in, it drops and
+frees the callee frame it waits in, then destroys the owned values live
+there (the verifier's ownership walk finds them) and every slot, which
+holds a value or nothing. The runtime drops each such task from its root,
+so what the frames held is given back — an async generator held part-way
+through runs its defers — and a program that ends with tasks stuck on each
+other leaks nothing.
+
+**Many cores** — the third stage (`tests/Sable.CodeGen.Tests/MultiCoreTests.cs`,
+`AsyncLoweringTests.ACallIntoAnActorFromOutsideItHopsThereAndBack`).
+
+- *The pool.* Tasks run on one worker thread per core (`SABLE_WORKERS`
+  says how many; 0 is the single executor above, on the main thread),
+  started as the first task is spawned, so a program with none starts no
+  thread. Each worker has a Chase–Lev deque per priority band, which it
+  pushes to and which every worker — itself included, so its own run in
+  the order they became ready — takes from at the far end; a task made
+  ready off the workers goes to a global injection queue, per band, which
+  a worker looks at first every sixteenth time so that its own work cannot
+  starve it, and `Task.yield()` goes there too, behind everything queued.
+  A worker looks for work in the highest band first — its own, injected,
+  then stolen — spins briefly (two workers at most), and parks on a
+  condition of its own; a task queued wakes one only when none is looking.
+  Tasks never block a worker. A task that must wait only notes what it
+  waits for and returns up to the worker, which puts it where it will be
+  woken once its resume function has returned, so another worker can
+  never resume it early; what it waits for may have happened meanwhile,
+  and the task asks again as it resumes. The task tree — parents,
+  children, waiters, groups, cancellation — is one spin lock's, held for a
+  few instructions; cancellation handlers run once it is let go.
+- *Timers.* One heap of sleepers under a lock of its own, served by
+  whichever worker looks for work once the earliest is due; a parked
+  worker waits no longer than the earliest deadline, and a new earlier one
+  wakes them. (One timer thread would be a thread more to wake; per-worker
+  heaps would need stealing of their own.)
+- *Priorities* order the run queues by band (high, medium, low,
+  background). A task waiting for one of a lower priority escalates it,
+  what it waits for and its children; one queued already is queued again
+  in its new band, and whichever entry is taken first runs it.
+  `Task.currentPriority` is still the priority given.
+- *Actors.* Each actor has a serial executor, two words after its fields:
+  an inbox a task pushes itself onto without a lock when the actor is
+  held, and a queue its holder keeps, by band then by arrival. A call into
+  an actor from outside it, a read of its state, or a call into
+  `@MainActor` code hops (`sable_actor_hop`): the task takes the actor if
+  it is free and goes on where it is — no suspension — or waits its turn,
+  and hops back to where it was after. A call inside the actor, or to what
+  is `nonisolated`, does not hop; code in an async closure always does,
+  since a spawned one runs on no actor, and when it is there already the
+  hop is a comparison. Actors are reentrant (docs/06 §6.7): a task
+  suspended inside one lets it go, so other calls run, and takes it again
+  as it resumes. The main task, and every task on the main actor, runs on
+  the main thread, which runs them while the main task waits and as the
+  program ends. `WaitList` parks tasks inside an actor's method until
+  another call wakes them, and `Channel` is now an actor whose receivers
+  park there instead of spinning on `Task.yield()`; what it carries is
+  `Sendable`.
+- *Atomic counts where values cross tasks.* An object's header has a
+  shared bit; a retain or release of an object with it is atomic, and of
+  one without it a plain load and store, the bit tested inline. It is set
+  — on the object and everything it reaches, a walk that stops at what is
+  shared already — where a value crosses from one task to another: a
+  spawned task's closure (and so its captures), a task's result, an actor
+  call's arguments and result, a cancellation handler. The compiler emits
+  the crossings from what the Sendable analysis says crosses; anything
+  else stays on its task, which one thread runs at a time, handed between
+  threads with a release and an acquire. The counts of retains and
+  releases are kept only under `SABLE_STATS`, so cores share no counter.
+- *The rest of the runtime is thread-safe:* each thread keeps a few free
+  blocks per size class and moves batches to and from the slabs under the
+  class's lock; the weak references' table, the leak set, the string
+  cursor cache and coverage counters are under locks; the exclusivity
+  checks, the trap site and the last I/O failure are per thread. A
+  `print` writes its line whole.
+- *The interpreter stays on one thread*, the single executor's order
+  (bands included); a program whose output does not depend on how its
+  tasks interleave prints the same natively on the pool. Tests of how they
+  interleave run natively with `SABLE_WORKERS=0` (`Programs.OneThread`).
+
+Measured on an M1 Max (8+2 cores, the machine loaded at 7), with
+`tools/bench/concurrency.sh` (`benchmarks/concurrency/`), against stage 2's
+single executor built from the commit before:
+
+| | stage 2 | no pool | 1 worker | 10 workers |
+|---|---|---|---|---|
+| spawn+await, from main | 150 ns | 270 ns | 480 ns | 910 ns |
+| spawn+await, in a task | 150 ns | 270 ns | 275 ns | 780 ns |
+| ping-pong through an actor, parked | — | 60 ns | 60 ns | 230 ns |
+| ping-pong, yielding | 7 ns | 110 ns | 110 ns | 400–660 ns |
+| fan-out of 16 CPU-bound tasks | 1030 ms | 1030 ms | 1030 ms | 160 ms |
+
+The fan-out runs 6.5 times faster on ten cores (`AFanOutRunsInParallel`
+asks for at least twice on four). What stage 2 did in a few nanoseconds
+it did by having nothing to share: an actor call was a plain call, and a
+task was never handed to another thread. One thread now pays for
+sharing the spawned closure and the task's result, the tree's lock and
+the actor hops (a yielding ping-pong hops four times a round); many pay
+for handing tasks between cores, which a task that does little between
+spawns and awaits cannot win back.
+
+ThreadSanitizer (`tools/tsan/run.sh`: the runtime compiled with
+`-fsanitize=thread`, and the program's own functions instrumented) reports
+nothing on the concurrency benchmarks, `examples/04-async-service.sb`, and
+programs like MultiCoreTests' — an actor counted by sixteen tasks,
+channels between four senders and four receivers, main-actor code called
+from eight tasks, a CPU-bound fan-out. It found, and so no longer does,
+the allocator's slab counts updated under different classes' locks.
+
+Not yet: an I/O reactor; async backtraces; task-local values; Sendable
+checking of what a spawned closure captures (a non-Sendable class
+captured by two tasks races on its fields, though its counts are
+atomic, and a value stored later into such a shared object, or read
+through a weak reference from another task, is not marked shared); a
+write to an actor's state from a closure inside it does not hop; a call
+through a closure, a protocol or an existential reaches an actor's
+method without hopping. A drop runs no defers of the async functions
+dropped, only those of a generator whose object goes with them.
 
 ### Generators, as implemented
 
@@ -1278,8 +1458,8 @@ range, specialised, inlines to a loop (`GeneratorLoweringTests`). A body with
 a `defer` keeps its state in an object instead, whose deinit resumes the body
 to leave it from where it stopped — `return` there, running the pending
 defers — when the last iterator holding it goes. An async generator is the
-same with an async `next()`, which, as any async function, runs on its task's
-stack. A generator that throws gives a sequence whose `Failure` is its error:
+same with an async `next()`, whose resume function is split again where it
+awaits, as any async function is. A generator that throws gives a sequence whose `Failure` is its error:
 the resume function throws, the iterator's `next()` passes the error on, and
 the throwing path stores the finished state, after the defers pending have
 run, as a return does; the generator's own call, which only captures, does
@@ -1288,8 +1468,8 @@ of its sequence's and iterator's own, not the protocol's: a requirement
 called on the iterator (`makeIterator()`, `next()`) binds the protocol's
 Self to the iterator, and the body's Self, its associated types read through
 it, is the conformer the call names, so each call site's opaque result is
-specialised for its conformer. This is the transform the stackless state machine of §2.2 item 4
-would build on.
+specialised for its conformer. Async functions are split by the same transform
+(`CoroutineSplit`), after the passes ("Async, as implemented").
 
 ### Throwing iteration, as implemented
 

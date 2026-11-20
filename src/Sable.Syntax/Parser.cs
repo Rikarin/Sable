@@ -876,8 +876,9 @@ internal sealed class Parser {
         };
 
     /// <summary>
-    ///     True when a type followed by <c>.self</c> starts here, which is the one
-    ///     place a compound type is written where an expression goes.
+    ///     True when a compound type written where an expression goes starts
+    ///     here: one followed by <c>.self</c>, or a collection type called, as
+    ///     <c>[String: Int]()</c> and <c>Int[&gt;..]()</c> call its initialiser.
     /// </summary>
     /// <remarks>
     ///     A simple name is left alone: <c>T.self</c> already works as a member
@@ -885,8 +886,11 @@ internal sealed class Parser {
     ///     would change which diagnostic a non-type name produces. What this is
     ///     for is <c>Token[&gt;..].self</c>, <c>Int?.self</c> and
     ///     <c>(Int) -&gt; Bool.self</c>, none of which parse as expressions.
+    ///     A called type is only a dictionary type or a growable array's,
+    ///     whose brackets no expression could fill: <c>xs[8]()</c> stays an
+    ///     index called.
     /// </remarks>
-    bool AtCompoundMetatype() {
+    bool AtCompoundTypeExpression() {
         if (!CanAppearInType(Current.Kind)) {
             return false;
         }
@@ -897,10 +901,12 @@ internal sealed class Parser {
             return false;
         }
 
-        // A bounded scan for '.self' over tokens a type could contain, so the
+        // A bounded scan for '.self', or for the ']' of a collection type
+        // with '(' after it, over tokens a type could contain, so the
         // speculative parse below is only ever reached for something shaped
         // like one.
         var found = false;
+        var growArray = false;
         for (var offset = 0; offset < MetatypeScanLimit; offset++) {
             var kind = Peek(offset).Kind;
 
@@ -908,6 +914,14 @@ internal sealed class Parser {
             // and the type parser splits it again.
             if (kind is SyntaxKind.DotToken or SyntaxKind.QuestionDotToken
                 && Peek(offset + 1).Kind == SyntaxKind.SelfKeyword) {
+                found = true;
+                break;
+            }
+
+            growArray |= kind == SyntaxKind.OpenBracketToken && Peek(offset + 1).Kind == SyntaxKind.GreaterToken;
+            if (kind == SyntaxKind.CloseBracketToken
+                && Peek(offset + 1).Kind == SyntaxKind.OpenParenToken
+                && (growArray || Current.Kind == SyntaxKind.OpenBracketToken)) {
                 found = true;
                 break;
             }
@@ -933,9 +947,14 @@ internal sealed class Parser {
 
         using (_diagnostics.Suppress()) {
             try {
-                ParseType();
-                return At(SyntaxKind.DotToken)
-                    && Peek(1).Kind == SyntaxKind.SelfKeyword;
+                // A called type must be one as written: '[missing] (x: Int) => x'
+                // is a capture list, read as a type only by error recovery.
+                var errors = _diagnostics.SuppressedErrors;
+                var type = ParseType();
+                return At(SyntaxKind.DotToken) && Peek(1).Kind == SyntaxKind.SelfKeyword
+                    || At(SyntaxKind.OpenParenToken)
+                    && type.Kind is SyntaxKind.DictionaryType or SyntaxKind.GrowArrayType
+                    && _diagnostics.SuppressedErrors == errors;
             } finally {
                 _index = index;
                 _tokenPosition = tokenPosition;
@@ -951,7 +970,7 @@ internal sealed class Parser {
     const int MetatypeScanLimit = 64;
 
     GreenNode ParsePrimary() {
-        if (AtCompoundMetatype()) {
+        if (AtCompoundTypeExpression()) {
             return new TypeExpressionGreen(ParseType());
         }
 
@@ -2021,10 +2040,14 @@ internal sealed class Parser {
             } else if (kind is SyntaxKind.CloseParenToken) {
                 depth--;
                 if (depth == 0) {
-                    // '=>' is the body; '->' is a written return type, and no
-                    // expression can follow a parenthesised one with an arrow.
+                    // '=>' is the body; '->' is a written return type, and
+                    // 'throws' what it throws: no expression can follow a
+                    // parenthesised one with either.
                     return Peek(offset + 1).Kind
-                        is SyntaxKind.FatArrowToken or SyntaxKind.ArrowToken;
+                        is SyntaxKind.FatArrowToken
+                        or SyntaxKind.ArrowToken
+                        or SyntaxKind.ThrowsKeyword
+                        or SyntaxKind.RethrowsKeyword;
                 }
             } else if (kind is SyntaxKind.EndOfFile) {
                 return false;
@@ -2081,6 +2104,7 @@ internal sealed class Parser {
                 GreenList.Create([new ClosureParameterGreen(EatIdentifier(), null, null, null)]),
                 null,
                 null,
+                null,
                 null
             );
         }
@@ -2089,6 +2113,7 @@ internal sealed class Parser {
                 var open = EatToken(SyntaxKind.OpenParenToken);
                 var parameters = ParseSeparatedList(SyntaxKind.CloseParenToken, ParseClosureParameter);
                 var close = EatToken(SyntaxKind.CloseParenToken);
+                var throwsSpec = ParseThrowsSpecOrNull();
 
                 GreenToken? arrow = null;
                 GreenNode? returnType = null;
@@ -2097,7 +2122,7 @@ internal sealed class Parser {
                     returnType = ParseType();
                 }
 
-                return new ClosureSignatureGreen(open, parameters, close, arrow, returnType);
+                return new ClosureSignatureGreen(open, parameters, close, throwsSpec, arrow, returnType);
             }
         );
     }
@@ -2160,6 +2185,8 @@ internal sealed class Parser {
                 case SyntaxKind.RefKeyword:
                 case SyntaxKind.InoutKeyword:
                 case SyntaxKind.CapitalSelfKeyword:
+                case SyntaxKind.ThrowsKeyword:
+                case SyntaxKind.RethrowsKeyword:
                     continue;
 
                 default:
@@ -2176,6 +2203,8 @@ internal sealed class Parser {
         var items = ImmutableArray.CreateBuilder<GreenNode>();
         while (!At(SyntaxKind.InKeyword)
                && !At(SyntaxKind.ArrowToken)
+               && !At(SyntaxKind.ThrowsKeyword)
+               && !At(SyntaxKind.RethrowsKeyword)
                && !At(SyntaxKind.CloseParenToken)
                && !At(SyntaxKind.EndOfFile)) {
             items.Add(ParseClosureParameter());
@@ -2188,6 +2217,7 @@ internal sealed class Parser {
         }
 
         var close = open is null ? null : TryEatToken(SyntaxKind.CloseParenToken);
+        var throwsSpec = ParseThrowsSpecOrNull();
 
         GreenToken? arrow = null;
         GreenNode? returnType = null;
@@ -2197,7 +2227,7 @@ internal sealed class Parser {
         }
 
         var inKeyword = EatToken(SyntaxKind.InKeyword);
-        return new ClosureHeaderGreen(open, GreenList.Create(items.ToImmutable()), close, arrow, returnType, inKeyword);
+        return new ClosureHeaderGreen(open, GreenList.Create(items.ToImmutable()), close, throwsSpec, arrow, returnType, inKeyword);
     }
 
     // =======================================================================
@@ -2841,7 +2871,7 @@ internal sealed class Parser {
         CanStartExpression(Current.Kind)
         || IsPrefixOperator(Current.Kind)
         || IsRangeOperator(Current.Kind)
-        || AtCompoundMetatype();
+        || AtCompoundTypeExpression();
 
     static bool IsLabelTarget(SyntaxKind kind) =>
         kind is SyntaxKind.ForKeyword

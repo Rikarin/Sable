@@ -1,0 +1,72 @@
+module WaitListTests
+
+// WaitList (Sable.Core), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+actor Gate {
+    var isOpen = false
+    var passed = 0
+    let opened = WaitList()
+
+    fn pass() async -> Int {
+        while !isOpen {
+            await opened.park()
+        }
+        passed += 1
+        return passed
+    }
+
+    fn openUp() {
+        isOpen = true
+        opened.wakeAll()
+    }
+
+    fn nudge() {
+        opened.wakeAll()
+    }
+}
+
+@test
+fn aParkedTaskGoesOnOnceWoken() async {
+    let gate = Gate()
+    let waiting = Task.spawn { await gate.pass() }
+    await Task.yield()
+    await gate.openUp()
+    assertEqual(await waiting.value, 1)
+}
+
+@test
+fn everyParkedTaskIsWoken() async {
+    let gate = Gate()
+    var waiting: Task<Int>[>..] = []
+    for _ in 0..<5 {
+        waiting.append(Task.spawn { await gate.pass() })
+    }
+    await gate.openUp()
+    var total = 0
+    for task in waiting {
+        total += await task.value
+    }
+    assertEqual(total, 15)
+}
+
+@test
+fn aTaskWokenTooSoonParksAgain() async {
+    let gate = Gate()
+    let waiting = Task.spawn { await gate.pass() }
+    await Task.yield()
+    await gate.nudge()
+    await Task.yield()
+    await gate.openUp()
+    assertEqual(await waiting.value, 1)
+}
+
+@test
+fn wakingAListNoTaskIsParkedInDoesNothing() async {
+    let gate = Gate()
+    await gate.nudge()
+    await gate.openUp()
+    assertEqual(await gate.pass(), 1)
+}

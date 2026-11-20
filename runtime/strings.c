@@ -147,13 +147,15 @@ static SableString *make_ctext(const char *text) {
 // every time makes the usual loop — at(0), at(1), at(2)... over a string
 // that is not ASCII — quadratic. So the runtime remembers where it last
 // was in a few strings, and finds the next position by stepping from the
-// nearest of that, the start and the end. One task runs at a time, so the
-// table needs no lock; a string whose memory is given back is forgotten,
+// nearest of that, the start and the end. Every thread shares the table, a
+// lock to each entry, since a string may be freed on another thread than
+// the one that read it; a string whose memory is given back is forgotten,
 // since the memory may become another string.
 
 enum { CURSORS = 8 };
 
 static struct {
+    SpinLock lock;
     const SableString *string;
     int64_t index;
     int64_t offset;
@@ -166,8 +168,13 @@ static unsigned cursor_slot(const void *string) {
 
 static void forget_string(const SableObject *object) {
     unsigned slot = cursor_slot(object);
-    if ((const void *)cursors[slot].string == (const void *)object) {
-        cursors[slot].string = NULL;
+    if ((const void *)__atomic_load_n(&cursors[slot].string, __ATOMIC_RELAXED) == (const void *)object) {
+        spin_lock(&cursors[slot].lock);
+        if ((const void *)cursors[slot].string == (const void *)object) {
+            cursors[slot].string = NULL;
+        }
+
+        spin_unlock(&cursors[slot].lock);
     }
 }
 
@@ -194,6 +201,7 @@ static int64_t offset_of(const SableString *s, int64_t index) {
     }
 
     unsigned slot = cursor_slot(s);
+    spin_lock(&cursors[slot].lock);
     if (cursors[slot].string == s) {
         int64_t distance = cursors[slot].index > index ? cursors[slot].index - index : index - cursors[slot].index;
         int64_t best = at > index ? at - index : index - at;
@@ -202,6 +210,8 @@ static int64_t offset_of(const SableString *s, int64_t index) {
             offset = cursors[slot].offset;
         }
     }
+
+    spin_unlock(&cursors[slot].lock);
 
     while (at < index) {
         offset++;
@@ -219,9 +229,11 @@ static int64_t offset_of(const SableString *s, int64_t index) {
         at--;
     }
 
+    spin_lock(&cursors[slot].lock);
     cursors[slot].string = s;
     cursors[slot].index = index;
     cursors[slot].offset = offset;
+    spin_unlock(&cursors[slot].lock);
     return offset;
 }
 
@@ -272,9 +284,12 @@ static int encode(int32_t scalar, char *out) {
     return 4;
 }
 
+// A line at a time, whatever other threads print meanwhile.
 void sable_print_string(const SableString *s) {
+    flockfile(stdout);
     fwrite(s->bytes, 1, (size_t)s->length, stdout);
     fputc('\n', stdout);
+    funlockfile(stdout);
 }
 
 // Byte-for-byte equality: strings compare by content, not identity.

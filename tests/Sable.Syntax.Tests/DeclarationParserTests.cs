@@ -615,6 +615,20 @@ public sealed class DeclarationParserTests {
         Assert.Null(declaration.Attributes[0].ArgumentList);
     }
 
+    /// <summary>
+    ///     A node's text is without its own trivia, wherever that trivia is
+    ///     held: an attribute with no arguments ends at its name, so the
+    ///     comment after it is the name token's trailing trivia, not text of
+    ///     the attribute or of its name.
+    /// </summary>
+    [Fact]
+    public void ANodesTextLeavesOutTheTriviaAfterItsLastToken() {
+        var declaration = ParseMember<StructDeclarationSyntax>("@frozen   // a comment\n@main /* another */ struct S { }");
+        Assert.Equal("@frozen", declaration.Attributes[0].ToString());
+        Assert.Equal("frozen", declaration.Attributes[0].Name.ToString());
+        Assert.Equal("main", declaration.Attributes[1].Name.ToString());
+    }
+
     [Fact]
     public void ParsesGenericVariance() {
         var declaration = ParseMember<ProtocolDeclarationSyntax>("protocol Producer<out T> { fn next() -> T? }");

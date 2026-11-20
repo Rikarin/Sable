@@ -77,11 +77,12 @@ public sealed class ExampleProgramTests {
             served 4
 
             """,
-            Run("04-async-service.sb")
+            Run("04-async-service.sb", OneThread)
         );
 
-    static string Run(string example) =>
-        AssertAgree(File.ReadAllText(Path.Combine(Root, "examples", example)), stepLimit: 50_000_000).Stdout;
+    /// <summary>Run with no pool, for the service: which of its workers serves which request depends on how they interleave.</summary>
+    static string Run(string example, IReadOnlyDictionary<string, string>? environment = null) =>
+        AssertAgree(File.ReadAllText(Path.Combine(Root, "examples", example)), stepLimit: 50_000_000, environment: environment).Stdout;
 
     static string Root {
         get {

@@ -372,7 +372,7 @@ fn main() {
                 import Sable.Time
 
                 @main
-                fn main() {
+                fn main() async {
                     let d = Duration.seconds(90) + Duration.milliseconds(250)
                     print(d.toString())
                     print(Duration.milliseconds(1500).toString())
@@ -404,9 +404,9 @@ fn main() {
                     print(isLeapYear(1900))
                     print(daysInMonth(2024, 2))
                     let start = Instant.now()
-                    Clock.sleep(Duration.milliseconds(20))
+                    try? await Clock.sleep(Duration.milliseconds(20))
                     print(start.elapsed >= Duration.milliseconds(20))
-                    let took = Clock.measure({ Clock.sleep(Duration.milliseconds(5)) })
+                    let took = Clock.measure({ Runtime.sleep(nanoseconds: 5_000_000) })
                     print(took >= Duration.milliseconds(5))
                     print(DateTime.now().year >= 2026)
                 }
@@ -587,7 +587,7 @@ fn main() {
     [Fact]
     public void ConcurrencyIsWrittenInSable() =>
         Assert.Equal(
-            "sent 0\ngot 0\nsent 1\ngot 1\nsent 2\ngot 4\nsent 3\ngot 9\nsum 14 of 4\ntrue\n4\n4\n1 16\ntrue\ntrue\n",
+            "sent 0\ngot 0\nsent 1\ngot 1\nsent 2\ngot 4\nsent 3\ngot 9\nsum 14 of 4\ntrue\n30\ntrue\ntrue\n",
             AssertAgree("""
                 module P
                 import Sable.Concurrency
@@ -595,11 +595,11 @@ fn main() {
 
                 fn produce(_ channel: Channel<Int>, _ count: Int) async -> Int {
                     for i in 0..<count {
-                        channel.send(i * i)
+                        await channel.send(i * i)
                         print("sent \(i)")
                         await yieldNow()
                     }
-                    channel.close()
+                    await channel.close()
                     return count
                 }
 
@@ -623,33 +623,36 @@ fn main() {
                     let consumer = Task.spawn { await consume(channel) }
                     let producer = Task.spawn { await produce(channel, 4) }
                     print("sum \(await consumer.value) of \(await producer.value)")
-                    print(channel.tryReceive() == none)
+                    print(await channel.tryReceive() == none)
 
-                    let group = TaskGroup<Int>()
-                    for i in 1...4 {
-                        group.add(Task.spawn { await square(i) })
+                    let squares = await withTaskGroup(of: Int.self) { group in
+                        for i in 1...4 {
+                            group.spawn { await square(i) }
+                        }
+                        var total = 0
+                        for await square in group {
+                            total += square
+                        }
+                        return total
                     }
-                    print(group.count)
-                    let results = await group.waitForAll()
-                    print(results.count)
-                    print("\(results[0]) \(results[3])")
+                    print(squares)
 
                     let start = Instant.now()
                     let stop = Channel<Int>()
                     let ticker = Task.spawn {
                         var ticks = 0
-                        while !stop.isClosed {
+                        while !(await stop.isClosed) {
                             ticks += 1
                             await yieldNow()
                         }
                         return ticks > 0
                     }
-                    await sleep(Duration.milliseconds(10))
-                    stop.close()
+                    try? await sleep(Duration.milliseconds(10))
+                    await stop.close()
                     print(start.elapsed >= Duration.milliseconds(10))
                     print(await ticker.value)
                 }
-                """).Stdout
+                """, environment: OneThread).Stdout
         );
 
     /// <summary>

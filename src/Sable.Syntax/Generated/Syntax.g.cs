@@ -1241,7 +1241,7 @@ public sealed class FieldInitializerSyntax : SyntaxNode
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitFieldInitializer(this);
 }
 
-/// <summary>A type written where an expression goes, which only `.self` may follow: `Token[&gt;..].self`, `Int?.self`, `(Int) -&gt; Bool.self`.</summary>
+/// <summary>A type written where an expression goes, which only `.self` may follow: `Token[&gt;..].self`, `Int?.self`, `(Int) -&gt; Bool.self`; or a call, for a dictionary type or a growable array's: `[String: Int]()`, `Int[&gt;..]()`.</summary>
 public sealed class TypeExpressionSyntax : ExpressionSyntax
 {
     private TypeSyntax? _type;
@@ -1303,9 +1303,10 @@ public sealed class ClosureExpressionSyntax : ExpressionSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitClosureExpression(this);
 }
 
-/// <summary>An arrow closure's parameters, parenthesised or a single bare name.</summary>
+/// <summary>An arrow closure's parameters, parenthesised or a single bare name, and what it throws: `(s: String) throws(ParseError) -&gt; Int`.</summary>
 public sealed class ClosureSignatureSyntax : SyntaxNode
 {
+    private ThrowsSpecSyntax? _throwsSpec;
     private TypeSyntax? _returnType;
 
     internal ClosureSignatureSyntax(GreenNode green, SyntaxNode? parent, int position)
@@ -1314,12 +1315,14 @@ public sealed class ClosureSignatureSyntax : SyntaxNode
     public SyntaxToken OpenParenToken => GetToken(0);
     public SeparatedSyntaxList<ClosureParameterSyntax> Parameters => GetSeparatedList<ClosureParameterSyntax>(1);
     public SyntaxToken CloseParenToken => GetToken(2);
-    public SyntaxToken ArrowToken => GetToken(3);
-    public TypeSyntax? ReturnType => GetRedOptional(ref _returnType, 4);
+    public ThrowsSpecSyntax? ThrowsSpec => GetRedOptional(ref _throwsSpec, 3);
+    public SyntaxToken ArrowToken => GetToken(4);
+    public TypeSyntax? ReturnType => GetRedOptional(ref _returnType, 5);
 
     internal override SyntaxNode? GetNodeSlot(int index) => index switch
     {
-        4 => ReturnType,
+        3 => ThrowsSpec,
+        5 => ReturnType,
         _ => null,
     };
 
@@ -1373,9 +1376,10 @@ public sealed class BraceClosureExpressionSyntax : ExpressionSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitBraceClosureExpression(this);
 }
 
-/// <summary>`a, b -&gt; T in` at the head of a brace closure; the parentheses are optional.</summary>
+/// <summary>`a, b -&gt; T in` or `(a: Int) throws(E) -&gt; T in` at the head of a brace closure; the parentheses are optional.</summary>
 public sealed class ClosureHeaderSyntax : SyntaxNode
 {
+    private ThrowsSpecSyntax? _throwsSpec;
     private TypeSyntax? _returnType;
 
     internal ClosureHeaderSyntax(GreenNode green, SyntaxNode? parent, int position)
@@ -1384,13 +1388,15 @@ public sealed class ClosureHeaderSyntax : SyntaxNode
     public SyntaxToken OpenParenToken => GetToken(0);
     public SeparatedSyntaxList<ClosureParameterSyntax> Parameters => GetSeparatedList<ClosureParameterSyntax>(1);
     public SyntaxToken CloseParenToken => GetToken(2);
-    public SyntaxToken ArrowToken => GetToken(3);
-    public TypeSyntax? ReturnType => GetRedOptional(ref _returnType, 4);
-    public SyntaxToken InKeyword => GetToken(5);
+    public ThrowsSpecSyntax? ThrowsSpec => GetRedOptional(ref _throwsSpec, 3);
+    public SyntaxToken ArrowToken => GetToken(4);
+    public TypeSyntax? ReturnType => GetRedOptional(ref _returnType, 5);
+    public SyntaxToken InKeyword => GetToken(6);
 
     internal override SyntaxNode? GetNodeSlot(int index) => index switch
     {
-        4 => ReturnType,
+        3 => ThrowsSpec,
+        5 => ReturnType,
         _ => null,
     };
 

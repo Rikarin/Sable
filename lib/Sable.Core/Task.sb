@@ -1,23 +1,65 @@
 module Sable.Core
 
-// Concurrency's one core type (docs/02 §2.7): Sable.Concurrency's channels,
-// groups and sleeping are written over it. Its members' bodies are the
-// compiler's ('@intrinsic'): a task is a class holding the runtime's handle,
-// the body to run and, once run, its result, laid out per result type, and
-// the runtime schedules it (SilGen.Tasks.cs).
+// Concurrency's core types (docs/02 §2.7, SYNTAX.md §19): tasks, groups of
+// them, and cancellation. The members marked '@intrinsic' have bodies the
+// compiler writes: a task is a class holding the runtime's handle, the body
+// to run and, once run, its result, laid out per result type, and the
+// runtime schedules it (SilGen.Tasks.cs, runtime/tasks.c).
+//
+// Tasks are structured: a task spawned from another is its child. It starts
+// with its parent's priority, it is cancelled when its parent is, and its
+// parent does not finish until it has. 'Task.detached' is the one way out.
 
 /// A task running concurrently, and, once it finishes, its result.
+///
+/// ```sable
+/// fn answer() async -> Int {
+///     let task = Task.spawn { 6 * 7 }
+///     return await task.value
+/// }
+/// ```
 public class Task<Success> {
-    /// Made by 'spawn' alone: a task is its body, queued.
+    /// Made by 'spawn' and 'detached' alone: a task is its body, queued.
     private init() { }
 
-    /// The body, queued to run as a task of its own; the task, to await.
+    /// The body, queued to run as a child of the running task: it has the
+    /// running task's priority, is cancelled with it, and the running task
+    /// does not finish until it has.
     @intrinsic
     public static fn spawn<T>(_ body: async () -> T) -> Task<T>
 
-    /// The task's result, waiting for it to finish.
+    /// The body, queued as a child of the running task, at this priority.
+    @intrinsic
+    public static fn spawn<T>(priority: TaskPriority, _ body: async () -> T) -> Task<T>
+
+    /// The body, queued to run as a task of its own, no child of the
+    /// running task: it is not cancelled with it, nor waited for by it. Its
+    /// priority is medium.
+    @intrinsic
+    public static fn detached<T>(_ body: async () -> T) -> Task<T>
+
+    /// The body, queued as a task of its own, at this priority.
+    @intrinsic
+    public static fn detached<T>(priority: TaskPriority, _ body: async () -> T) -> Task<T>
+
+    /// The task's result, waiting for it to finish. Waiting does not end
+    /// early when the waiting task is cancelled: a child is cancelled with
+    /// it, and finishes as soon as it notices.
     @intrinsic
     public var value: Success { async get }
+
+    /// The runtime's handle on the task, which a group is given.
+    @intrinsic
+    var handle: Int { get }
+
+    /// Waits until a child of the group has finished, unless one has or
+    /// none is running: TaskGroup's.
+    @intrinsic
+    static async fn waitForGroup(_ group: Int)
+
+    /// Parks the running task in a wait list until it is woken: WaitList's.
+    @intrinsic
+    static async fn park(_ waitList: Int)
 
     /// Lets every task queued run before this one goes on.
     @intrinsic
@@ -25,18 +67,50 @@ public class Task<Success> {
 
     /// Waits at least this many nanoseconds, off the run queue: every other
     /// task runs meanwhile, and the program waits only when none can. A
-    /// task cancelled while asleep wakes at once.
-    @intrinsic
-    public static async fn sleep(nanoseconds: Int)
+    /// task cancelled before or while it sleeps wakes at once, and the
+    /// sleep throws CancellationError.
+    public static async fn sleep(nanoseconds: Int) throws(CancellationError) {
+        await Task.sleepUncancelled(nanoseconds: nanoseconds)
+        try Task.checkCancellation()
+    }
 
-    /// Asks the task to stop. Cancelling is cooperative: the task goes on
-    /// until it asks 'Task.isCancelled()' and returns early itself, but a
-    /// sleep it is in, or starts, ends at once. Cancelling a task that has
-    /// finished, or cancelling twice, does nothing.
+    /// The sleep itself, which a cancellation ends without saying so.
+    @intrinsic
+    static async fn sleepUncancelled(nanoseconds: Int)
+
+    /// Asks the task to stop, and every child it has. Cancelling is
+    /// cooperative: the task goes on until it asks 'Task.isCancelled' or
+    /// 'Task.checkCancellation()', but its cancellation handlers run at
+    /// once, and a sleep it is in, or starts, ends at once. Cancelling a
+    /// task that has finished, or cancelling twice, does nothing.
     @intrinsic
     public fn cancel()
 
     /// Whether the running task has been cancelled.
+    public static var isCancelled: Bool => Task.runningIsCancelled()
+
+    @builtin("task_is_cancelled")
+    static fn runningIsCancelled() -> Bool
+
+    /// Throws CancellationError if the running task has been cancelled.
+    public static fn checkCancellation() throws(CancellationError) {
+        if Task.runningIsCancelled() {
+            throw CancellationError()
+        }
+    }
+
+    /// The running task's priority: the one it was given, its parent's
+    /// otherwise; the program's own task's is medium.
+    public static var currentPriority: TaskPriority => TaskPriority(rawValue: Task.runningPriority())
+
+    @builtin("task_priority")
+    static fn runningPriority() -> Int
+
+    /// Runs 'onCancel' if the running task is cancelled — at once, if it
+    /// already is — until it is removed.
     @intrinsic
-    public static fn isCancelled() -> Bool
+    static fn installCancellationHandler(_ onCancel: () -> ())
+
+    @builtin("task_handler_pop")
+    static fn removeCancellationHandler()
 }

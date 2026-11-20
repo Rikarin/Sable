@@ -1,0 +1,212 @@
+module TaskGroupTests
+
+// TaskGroup, ThrowingTaskGroup, withTaskGroup and withThrowingTaskGroup
+// (Sable.Core), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+union Bad: Error {
+    Odd(n: Int)
+}
+
+fn after(_ turns: Int, _ value: Int) async -> Int {
+    for _ in 0..<turns {
+        await Task.yield()
+    }
+    return value
+}
+
+fn even(_ n: Int) async throws -> Int {
+    await Task.yield()
+    if n % 2 == 1 {
+        throw Bad.Odd(n: n)
+    }
+    return n
+}
+
+@test
+fn aGroupsResultsComeInTheOrderTheChildrenFinish() async {
+    let gates = [Latch(), Latch(), Latch()]
+    let order = await withTaskGroup(of: Int.self) { group in
+        for n in [3, 1, 2] {
+            group.spawn {
+                await gates[n - 1].wait()
+                return n
+            }
+        }
+        // Each let go only once the one before has been taken.
+        var order: Int[>..] = []
+        for gate in gates {
+            await gate.open()
+            order.append(await group.next() ?? 0)
+        }
+        return order
+    }
+    assert(order == [1, 2, 3])
+}
+
+@test
+fn aGroupWithNoChildrenGivesNone() async {
+    let first = await withTaskGroup(of: Int.self) { group in
+        assert(group.isEmpty)
+        return await group.next()
+    }
+    assert(first == none)
+}
+
+@test
+fn theChildrenLeftAreWaitedForAsTheScopeEnds() async {
+    let log = Log()
+    let bodyDone = Latch()
+    await withTaskGroup(of: Void.self) { group in
+        group.spawn {
+            await bodyDone.wait()
+            log.add("child")
+        }
+        log.add("body")
+        await bodyDone.open()
+    }
+    log.add("after")
+    assertEqual(log.text, "body child after")
+}
+
+@test
+fn waitingForAllEmptiesTheGroup() async {
+    let empty = await withTaskGroup(of: Int.self) { group in
+        group.spawn { 1 }
+        group.spawn { await after(1, 2) }
+        assert(!group.isEmpty)
+        await group.waitForAll()
+        return group.isEmpty
+    }
+    assert(empty)
+}
+
+@test
+fn cancellingAGroupCancelsItsChildrenAndThoseSpawnedAfter() async {
+    let later = Latch()
+    let cancelled = await withTaskGroup(of: Bool.self) { group in
+        group.spawn {
+            await later.wait()
+            return Task.isCancelled
+        }
+        assert(!group.isCancelled)
+        group.cancelAll()
+        await later.open()
+        assert(group.isCancelled)
+        group.spawn { Task.isCancelled }
+        var all = true
+        for await one in group {
+            all = all && one
+        }
+        return all
+    }
+    assert(cancelled)
+}
+
+@test
+fn aChildMayBeGivenAPriority() async {
+    let priority = await withTaskGroup(of: TaskPriority.self) { group in
+        group.spawn(priority: .low) { Task.currentPriority }
+        return await group.next()
+    }
+    assert(priority == TaskPriority.low)
+}
+
+@test
+fn aThrowingGroupGivesResultsAndErrorsInTheirTurn() async {
+    let results = try? await withThrowingTaskGroup(of: Int.self) { group in
+        group.spawn { try await even(2) }
+        var results: Int[>..] = []
+        for try await n in group {
+            results.append(n)
+        }
+        return results
+    }
+    assert((results ?? []) == [2])
+
+    var caught = ""
+    do {
+        let _ = try await withThrowingTaskGroup(of: Int.self) { group in
+            group.spawn { try await even(3) }
+            return try await group.next() ?? 0
+        }
+    } catch {
+        caught = error.description()
+    }
+    assertEqual(caught, "Bad.Odd(n: 3)")
+}
+
+@test
+fn aThrowingGroupsBodyThatThrowsCancelsTheChildrenLeft() async {
+    let log = Log()
+    let thrown = try? await withThrowingTaskGroup(of: Int.self) { group in
+        group.spawn {
+            let slept = (try? await Task.sleep(nanoseconds: 10_000_000_000)) != none
+            log.add(slept ? "ran" : "cancelled")
+            return 1
+        }
+        assert(!group.isCancelled)
+        throw CancellationError()
+    }
+    assert(thrown == none)
+    assertEqual(log.text, "cancelled")
+}
+
+@test
+fn waitingForAllOfAThrowingGroupThrowsTheFirstError() async {
+    var caught = ""
+    do {
+        try await withThrowingTaskGroup(of: Int.self) { group in
+            group.spawn { 1 }
+            group.spawn(priority: .high) { try await even(5) }
+            assert(!group.isEmpty)
+            try await group.waitForAll()
+            return 0
+        }
+    } catch {
+        caught = error.description()
+    }
+    assertEqual(caught, "Bad.Odd(n: 5)")
+}
+
+@test
+fn aThrowingGroupCancelledCancelsItsChildren() async {
+    let cancelled = try? await withThrowingTaskGroup(of: Bool.self) { group in
+        group.cancelAll()
+        assert(group.isCancelled)
+        group.spawn { Task.isCancelled }
+        let first = try await group.next() ?? false
+        assert(group.isEmpty)
+        return first
+    }
+    assert(cancelled ?? false)
+}
+
+/// Shut until opened: what a test waits on for another task to reach a point.
+actor Latch {
+    var isOpen = false
+    let opened = WaitList()
+
+    fn wait() async {
+        while !isOpen {
+            await opened.park()
+        }
+    }
+
+    fn open() {
+        isOpen = true
+        opened.wakeAll()
+    }
+}
+
+class Log {
+    var lines: String[>..] = []
+
+    fn add(_ line: String) {
+        lines.append(line)
+    }
+
+    var text: String => lines.joined(separator: " ")
+}

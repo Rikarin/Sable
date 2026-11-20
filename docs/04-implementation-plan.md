@@ -978,8 +978,10 @@ Sable.Testing      the test harness `sable test` drives
 **Write the standard library in Sable from day one of this phase.** It is the
 first large program and the best source of language bugs.
 
-A library is shipped as its source and, built once per target and profile,
-its interface (`.sbi`, #182; docs/05 §5.4): its bound symbols and its SIL.
+A library — the standard library, or a registry or git dependency — is
+shipped as its source and, built once per target and profile into the
+shared build cache, an archive and its interface (`.sbi`, #182; docs/05
+§5.4): its bound symbols and its SIL.
 A program compiled against Sable.Core's interface (`Pipeline.CompileAgainst`)
 does not bind or check the core's bodies or lower its code again — 1.8 s of
 the 2.0 s a fresh process spends on a small program; it still declares the core from

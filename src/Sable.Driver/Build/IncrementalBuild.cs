@@ -39,7 +39,23 @@ public sealed record GeneratorAttributes(IReadOnlyList<string> Types, IReadOnlyL
 ///     entry file. The standard library the program imports is one more,
 ///     which the build adds.
 /// </summary>
-public sealed record UnitPlan(string Name, IReadOnlyList<SourceFile> Files);
+public sealed record UnitPlan(string Name, IReadOnlyList<SourceFile> Files) {
+    /// <summary>
+    ///     For a registry or git package's library, what its entry in the
+    ///     shared <see cref="BuildCache" /> is keyed by: built once for every
+    ///     project that uses it, as the standard library is. Null for a unit
+    ///     of the workspace's own, kept in its <c>target/</c>.
+    /// </summary>
+    public PackageUnit? Package { get; init; }
+}
+
+/// <summary>
+///     A dependency's library as a unit the <see cref="BuildCache" /> keeps
+///     (#182): its package and version, and the units of the packages it
+///     depends on, whose entries' keys are part of its own.
+/// </summary>
+/// <param name="Dependencies">The names of the units (<see cref="UnitPlan.Name" />) of everything it depends on, directly or not.</param>
+public sealed record PackageUnit(string Name, string Version, IReadOnlyList<string> Dependencies);
 
 /// <summary>How a program is built: the profile's settings that change what comes out.</summary>
 /// <param name="DebugDirectory">Where debug information's file names are relative to; null for no debug information.</param>
@@ -250,8 +266,16 @@ public static class IncrementalBuild {
         using (BuildTimings.Of(timings, "parse")) {
             if (settings.Separate) {
                 var interfaces = Path.Combine(cacheDirectory, "interfaces");
-                Parallel.For(0, units.Count, GlobalOptions.Current.ParallelOptions, i =>
-                    known[i] = InterfaceFile.Read(InterfacePath(interfaces, settingsKey, units[i].Name, fileHashes[i]), units[i].Name, [..units[i].Files.Select(static f => f.Name)]));
+                Parallel.For(0, units.Count, GlobalOptions.Current.ParallelOptions, i => {
+                    IReadOnlyList<string> names = [..units[i].Files.Select(static f => f.Name)];
+                    known[i] = InterfaceFile.Read(InterfacePath(interfaces, settingsKey, units[i].Name, fileHashes[i]), units[i].Name, names);
+
+                    // A dependency's, which another project may have worked
+                    // out already: from the shared cache.
+                    if (known[i] is null && SharedInterface(cache, units[i], fileHashes[i], settings) is { } shared) {
+                        known[i] = InterfaceFile.Read(shared, units[i].Name, names);
+                    }
+                });
             }
 
             sources.Parse(known);
@@ -272,6 +296,21 @@ public static class IncrementalBuild {
 
         return outcome;
     }
+
+    /// <summary>
+    ///     Where a dependency's unit's interface file (<see cref="InterfaceFile" />)
+    ///     is kept in the shared cache, an entry of its own keyed by its
+    ///     source and what it is parsed for — not by the program it is in, as
+    ///     its archive's entry is — so that every project finds it; null for
+    ///     a unit of the workspace's own.
+    /// </summary>
+    static string? SharedInterface(BuildCache cache, UnitPlan unit, IEnumerable<string> fileHashes, BuildSettings settings) =>
+        unit.Package is { } package ? Path.Combine(cache.DirectoryFor(SharedInterfaceKey(cache, package, fileHashes, settings)), SharedInterfaceFile) : null;
+
+    const string SharedInterfaceFile = "unit.sbi";
+
+    static CacheKey SharedInterfaceKey(BuildCache cache, PackageUnit package, IEnumerable<string> fileHashes, BuildSettings settings) =>
+        cache.Key("interface", package.Name, package.Version, UnitContent(fileHashes), settings.Native.TargetOrHost.Triple, [$"debug-assertions={settings.DebugAssertions}"]);
 
     /// <summary>Where a unit's <c>.sbi</c> is kept: under its content and the build's settings.</summary>
     static string InterfacePath(string interfaces, string settingsKey, string unit, IEnumerable<string> fileHashes) =>
@@ -392,9 +431,10 @@ public static class IncrementalBuild {
     // =======================================================================
 
     /// <param name="library">
-    ///     A library's unit — the standard library's — whose compiled code is
-    ///     kept as an archive (<see cref="LibraryUnit" />) that programs link
-    ///     against, rather than as an object of this program's.
+    ///     A library's unit — the standard library's, or a registry or git
+    ///     dependency's — whose compiled code is kept in the shared
+    ///     <see cref="BuildCache" /> as an archive (<see cref="LibraryUnit" />)
+    ///     that programs link against, rather than as an object of this program's.
     /// </param>
     sealed class Unit(string name, IReadOnlyList<SyntaxTree> trees, string contentHash, bool library = false) {
         public string Name { get; } = name;
@@ -410,6 +450,12 @@ public static class IncrementalBuild {
 
         public bool IsLibrary { get; } = library;
 
+        /// <summary>A library unit's key in the shared cache.</summary>
+        public CacheKey? Entry { get; set; }
+
+        /// <summary>What a library unit's files in its entry are named: <c>std</c>, or the package's name.</summary>
+        public string LibraryName { get; init; } = "std";
+
         /// <summary>What a program links: an ordinary unit's object, or a library's archive.</summary>
         public string Linked => Library?.Archive ?? ObjectPath;
     }
@@ -423,7 +469,10 @@ public static class IncrementalBuild {
 
         // The units: the program's, then the standard library's — the core,
         // which every compilation has, and the modules the program imports.
-        var own = sources.Trees.Select((t, i) => new Unit(sources.Plans[i].Name, t, UnitContent(fileHashes[i]))).ToList();
+        var plans = sources.Plans;
+        var own = sources.Trees.Select((t, i) => new Unit(plans[i].Name, t, UnitContent(fileHashes[i]), library: plans[i].Package is not null) {
+            LibraryName = plans[i].Package is { } package ? Sanitise(package.Name).Replace('-', '_') : "std",
+        }).ToList();
         var units = own.ToList();
         var standard = new Unit("std", [..library, ..CoreLibrary.TreesFor(sources.Trees[0][0].Options)], Hash(string.Join("\n", library.Select(static t => t.Text.FileName))), library: true);
         units.Add(standard);
@@ -450,7 +499,16 @@ public static class IncrementalBuild {
 
                 unit.Trees = sources.Full(i);
                 faces[i] = [..unit.Trees.AsParallel().AsOrdered().Select(tree => InterfaceFingerprint.Interface(tree, concrete))];
-                new InterfaceFile(unit.Name, extended, [..unit.Trees.Select(static t => t.Text.FileName).Zip(faces[i])]).WriteTo(interfaceFiles[i]);
+                var written = new InterfaceFile(unit.Name, extended, [..unit.Trees.Select(static t => t.Text.FileName).Zip(faces[i])]);
+                written.WriteTo(interfaceFiles[i]);
+                if (plans[i].Package is { } package) {
+                    // For every project that uses the dependency: written
+                    // whole, once, as the cache's entries are.
+                    cache.GetOrCreate(SharedInterfaceKey(cache, package, fileHashes[i], settings), settings.Profile, temporary => {
+                        written.WriteTo(Path.Combine(temporary, SharedInterfaceFile));
+                        return new(true, "");
+                    });
+                }
             });
             timings?.Count("interfaces read", read);
         }
@@ -461,6 +519,7 @@ public static class IncrementalBuild {
         // any unit may see. The standard library depends on no unit of the
         // program, and every unit on it.
         CacheKey? standardEntry = null;
+        var ownExtensions = "none";
         using (BuildTimings.Of(timings, "unit graph")) {
             var facts = own.Select((u, i) => {
                 var declared = u.Trees.Select(UnitFacts.Of).ToList();
@@ -473,7 +532,25 @@ public static class IncrementalBuild {
             var unitInterfaces = own.Select((u, i) => Hash(string.Join("\n", u.Trees.Select((t, j) => t.Text.FileName + "=" + faces[i][j].Fingerprint)))).ToList();
             var extensions = Hash(string.Join("\n", faces.SelectMany(static f => f).Select(static f => f.Extensions)));
             standard.Key = Hash($"{settingsKey}\nunit {standard.Name}\n{standard.ContentHash}\n{extensions}");
-            standardEntry = StandardLibraryKey(cache, settings, standard.Trees, OwnExtensions(faces));
+            ownExtensions = OwnExtensions(faces);
+            standardEntry = StandardLibraryKey(cache, settings, standard.Trees, ownExtensions);
+            standard.Entry = standardEntry;
+
+            // A dependency's entry: its source, and the entries it was
+            // compiled against — the standard library's, and its own
+            // dependencies', each worked out before it (they come after it).
+            var byName = own.Select(static (u, i) => (u.Name, i)).ToDictionary(static p => p.Name, static p => p.i, StringComparer.Ordinal);
+            for (var i = own.Count - 1; i >= 0; i--) {
+                if (plans[i].Package is not { } package) {
+                    continue;
+                }
+
+                var features = plans[i].Files.SelectMany(static f => f.Features).Distinct(StringComparer.Ordinal).ToList();
+                own[i].Entry = cache.Key("library", package.Name, package.Version, own[i].ContentHash, settings.Native.TargetOrHost.Triple,
+                    [..settings.CodeOptions, $"extensions={ownExtensions}"], features,
+                    [standardEntry.Hash, ..package.Dependencies.Select(d => own[byName[d]].Entry!.Hash)]);
+            }
+
             for (var i = 0; i < own.Count; i++) {
                 var seen = string.Join("\n", dependencies[i].Select(d => $"{own[d].Name}:{unitInterfaces[d]}"));
                 own[i].Key = Hash($"{settingsKey}\nunit {own[i].Name}\n{own[i].ContentHash}\n{extensions}\n{standard.ContentHash}\n{seen}");
@@ -482,7 +559,7 @@ public static class IncrementalBuild {
 
         foreach (var unit in units) {
             if (unit.IsLibrary) {
-                unit.Library = LibraryUnit.In(cache, standardEntry!, settings.Profile, unit.Name, settings.Native.TargetOrHost);
+                unit.Library = LibraryUnit.In(cache, unit.Entry!, settings.Profile, unit.LibraryName, settings.Native.TargetOrHost);
                 (unit.ObjectPath, unit.AbiPath, unit.Cached) = (unit.Library.Object, unit.Library.Abi, unit.Library.Exists);
             } else {
                 unit.ObjectPath = Path.Combine(objects, unit.Key + ".o");
@@ -536,7 +613,11 @@ public static class IncrementalBuild {
             }
 
             var index = timings is null ? SilProgram.Index(compilation) : timings.Measure("index", () => SilProgram.Index(compilation));
-            var embedded = Pipeline.EmbeddedSources(standard.Trees, program);
+            // A library's files are named the same in every program, and
+            // their text goes in its debug information: the standard
+            // library's, and the dependencies' compiled now.
+            var libraries = units.Where(static u => u.IsLibrary).SelectMany(static u => u.Trees).ToList();
+            var embedded = Pipeline.EmbeddedSources(libraries, program.Except(libraries));
             foreach (var unit in stale) {
                 var leads = settings.Library is not null && ReferenceEquals(unit, own[0]);
                 var lowered = Lower(compilation, index, unit.Trees, unit.IsLibrary, leads, settings, embedded, timings);
@@ -552,7 +633,7 @@ public static class IncrementalBuild {
                 }
 
                 var (ir, abi) = (lowered.Ir!, lowered.Abi);
-                var face = unit.Library is null ? null : InterfaceOf(compilation, unit.Trees, lowered, settings, program[0].Options);
+                var face = unit.Library is null ? null : InterfaceOf(compilation, unit.LibraryName, unit.Trees, lowered, settings, program[0].Options);
                 compiling.Add((unit, Task.Run(async () => {
                     await throttle.WaitAsync();
                     try {
@@ -637,13 +718,13 @@ public static class IncrementalBuild {
     ///     before the unit's object is compiled on another thread, since
     ///     writing the symbols may bind what is not bound yet.
     /// </summary>
-    static byte[]? InterfaceOf(Compilation compilation, IReadOnlyList<SyntaxTree> trees, LoweredUnit lowered, BuildSettings settings, ParseOptions options) {
+    static byte[]? InterfaceOf(Compilation compilation, string name, IReadOnlyList<SyntaxTree> trees, LoweredUnit lowered, BuildSettings settings, ParseOptions options) {
         if (lowered.Sil is not { } sil) {
             return null;
         }
 
         var owned = trees.ToHashSet();
-        return LibraryInterface.Of(compilation, "std", owned.Contains, CompilerIdentity.Current, LibraryInterface.SettingsOf(options, settings.DenyReflection), sil).Write();
+        return LibraryInterface.Of(compilation, name, owned.Contains, CompilerIdentity.Current, LibraryInterface.SettingsOf(options, settings.DenyReflection), sil).Write();
     }
 
     /// <summary>
@@ -778,7 +859,7 @@ public static class IncrementalBuild {
             return BuildOutcome.Failed(lowered.Errors);
         }
 
-        var face = InterfaceOf(compilation, trees, lowered, settings, program.Options);
+        var face = InterfaceOf(compilation, "std", trees, lowered, settings, program.Options);
         var written = unit.Write(lowered.Abi, temporary => NativeObjects.CompileIr(lowered.Ir!, temporary, settings.Native), target,
             face is null ? null : path => File.WriteAllBytes(path, face));
         return written.Succeeded ? new(true, [], "warm", 1, 1) : BuildOutcome.Failed([$"internal error: compiling the standard library failed:\n{written.Output}"]);

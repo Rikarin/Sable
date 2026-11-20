@@ -239,6 +239,13 @@ compiles the library with the program, whole, so that the SIL optimiser sees
 its bodies; a package's release build (ThinLTO) links the archive and lets
 LLVM inline across it.
 
+A registry or git dependency is shipped the same way: as source, pinned by
+the lock file's checksum, and built once per target and profile into an
+archive and interface of its own in the same cache, keyed besides by its
+version and the entries of what it depends on — so that every project
+using it at that version links the one archive. A workspace's own packages
+are compiled into its `target/`.
+
 ## 6.4 Framework layout
 
 The .NET BCL is the model: a large, coherent, well-documented standard library

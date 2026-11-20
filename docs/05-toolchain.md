@@ -773,16 +773,31 @@ whole, the library with it, so that the SIL passes see all of it.
 ### The build cache
 
 What a build makes that does not depend on the program — the C runtime's
-archive and the standard library's — is kept in `$SABLE_HOME/cache/<key>/`
+archive, the standard library's, and each registry or git dependency's — is
+kept in `$SABLE_HOME/cache/<key>/`
 (default `~/.sable/cache`), shared by every project and every build, and made
 lazily the first time a target and profile need it. `target/` keeps only the
 project's own units. An entry is a directory: the archive, the object it
 archives (a static library C links takes that whole), the library's `.abi`
-record of the types it laid out, and `entry.txt`, the key it was made for and
-the profile of the build that made it. It has room for the library's
-interface, `<unit>.sbi`, beside the archive: the hook
-(`LibraryUnit.Write`'s `writeInterface`) is where the interface writer of
-#182's stages 2–4 puts it.
+record of the types it laid out, the library's interface `<unit>.sbi`
+(its symbols and SIL, `LibraryInterface`), and `entry.txt`, the key it was
+made for and the profile of the build that made it.
+
+A **dependency** from a registry or git — one whose own dependencies are too
+— is a library unit like the standard library (`UnitPlan.Package`): its
+archive and interface go in an entry of the shared cache, so a dependency
+that two projects use, at the same version, for the same target and
+profile, is compiled once (`BuildCacheTests`). Beside it is a second,
+smaller entry (`interface` in `sable cache list`) holding the unit's
+interface file — its declarations with the bodies other units do not need
+blanked, which the build binds a kept unit from — keyed by its source and
+what it is parsed for alone, since that is all it depends on: a project
+that has never built the dependency finds it there, and neither parses its
+bodies nor works its interface out. A package of the workspace — a path
+dependency — stays a unit of the project, its object in `target/`: it
+changes as the project does, is used by that workspace alone, and is named
+in diagnostics and debug information relative to it; the shared cache
+would only fill with versions nobody else can use.
 
 The key is a SHA-256 over:
 
@@ -802,11 +817,11 @@ The key is a SHA-256 over:
   is recorded, not keyed, so two profiles that compile code the same way
   share entries;
 - the enabled features, and the keys of the entries it was compiled
-  against (none yet: the standard library depends on nothing kept, and a
-  package dependency is still a unit of the project, until #182's stage 7);
-- and for the standard library, the fingerprint of the program's own
-  extensions, which can change how the library's methods are named — none,
-  in most programs, so they all link one archive.
+  against: a dependency's, the standard library's and those of its own
+  dependencies (the standard library depends on nothing kept);
+- and the fingerprint of the program's extensions, which can change how
+  the library's methods are named — none, in most programs, so they all
+  link one archive.
 
 An entry is made in a temporary directory beside where it goes and renamed
 into place, so builds running at once and the language server see it whole

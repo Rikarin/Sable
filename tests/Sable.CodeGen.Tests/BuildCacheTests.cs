@@ -222,6 +222,53 @@ public sealed class BuildCacheTests {
     }
 
     /// <summary>
+    ///     A registry dependency is built once (#182): into an entry of the
+    ///     shared cache holding its archive and its interface, keyed by its
+    ///     package, version, source and the entries of what it depends on.
+    ///     A second project that uses it compiles only its own unit, and
+    ///     reads the dependency's interface rather than working it out.
+    /// </summary>
+    [Fact]
+    public void ADependencySharedByTwoProjectsIsBuiltOnce() {
+        if (!CanBuild) {
+            return;
+        }
+
+        using var fixture = new PackageFixture();
+        fixture.PublishLibrary("base", "1.0.0", value: "7");
+        fixture.PublishLibrary("numbers", "1.0.0", "base = \"1\"", value: "5");
+        foreach (var name in (string[])["first", "second"]) {
+            fixture.Package(name, name, "0.1.0", "[dependencies]\nnumbers = \"1\"\nbase = \"1\"\n",
+                ("src/main.sb", $"module App\n\nimport Numbers\nimport Base\n\n@main\nfn main() {{\n    print(\"{name}: \\(numbersValue() + baseValue())\")\n}}\n"));
+        }
+
+        // The binary's unit, the two dependencies' and the standard library's.
+        Assert.Equal(("first: 12\n", 4, 0), Build(fixture, "first"));
+        Assert.Equal(("second: 12\n", 1, 3), Build(fixture, "second"));
+
+        var entries = fixture.Environment.BuildCache.Entries();
+        var numbers = Assert.Single(entries, static e => e is { Package: "numbers", Kind: "library", Current: true });
+        Assert.Single(entries, static e => e is { Package: "base", Kind: "library" });
+        Assert.Single(entries, static e => e is { Package: "numbers", Kind: "interface" });
+
+        // Its key names the entries it was compiled against: base's, and the standard library's.
+        var key = File.ReadAllLines(Path.Combine(numbers.Directory, BuildCache.EntryFile));
+        Assert.Equal(2, key.Count(static l => l.StartsWith("dependency ", StringComparison.Ordinal)));
+        Assert.Contains("version=1.0.0", key);
+
+        Assert.True(File.Exists(Path.Combine(numbers.Directory, NativeBuild.LibraryFileName("sable_numbers", LibraryKind.Static, NativeTarget.Host))));
+        var face = LibraryInterface.Read(File.ReadAllBytes(Path.Combine(numbers.Directory, "numbers.sbi")), Pipeline.CompilerIdentity);
+        Assert.NotNull(face);
+        Assert.Equal(["Numbers"], face.Modules);
+
+        // Built again from scratch, the second project still finds it, and
+        // parses both dependencies from their interfaces in the shared cache.
+        Directory.Delete(Path.Combine(fixture.Root, "second", "target"), true);
+        Assert.Equal(("second: 12\n", 1, 3), Build(fixture, "second"));
+        Assert.Matches(@"files parsed from interfaces\s+2\b", fixture.Errors.ToString());
+    }
+
+    /// <summary>
     ///     <c>sable cache warm</c> fills the cache for a target and profile
     ///     ahead of a build, which then compiles only the program's own unit;
     ///     <c>list</c> shows the entries, and <c>clean</c> removes them.

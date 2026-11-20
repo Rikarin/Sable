@@ -5853,7 +5853,9 @@ public sealed partial class Binder {
     ///     A numeric literal has no type until something asks for one, and an
     ///     array literal has no storage kind; both bend to fit.
     /// </remarks>
-    static bool IsLiteral(BoundExpression expression) => expression is BoundLiteral or BoundArray or BoundDictionary;
+    static bool IsLiteral(BoundExpression expression) =>
+        expression is BoundLiteral or BoundArray or BoundDictionary
+        || expression is BoundRange range && (range.Lower is null or BoundLiteral) && (range.Upper is null or BoundLiteral);
 
     /// <summary>The message for a value of one type where another is wanted.</summary>
     /// <remarks>
@@ -8162,6 +8164,23 @@ public sealed partial class Binder {
             if (expression.Type.Equals(target)) {
                 return expression;
             }
+        }
+
+        // '-1.0...1.0' where a 'ClosedRange<F32>' is wanted: each bound
+        // takes the bound type, as an array literal's elements do.
+        if (expression is BoundRange { Type: NamedTypeSymbol literalRange } rangeLiteral
+            && IsLiteral(rangeLiteral)
+            && target is NamedTypeSymbol { TypeArguments: [var wantedBound] } wantedRange
+            && ReferenceEquals(literalRange.OriginalDefinition, wantedRange.OriginalDefinition)
+            && !literalRange.Equals(wantedRange)) {
+            expression = new BoundRange(
+                rangeLiteral.Syntax,
+                wantedRange,
+                rangeLiteral.Lower is { } lowerBound ? Convert(lowerBound, wantedBound, lowerBound.Syntax) : null,
+                rangeLiteral.Upper is { } upperBound ? Convert(upperBound, wantedBound, upperBound.Syntax) : null,
+                rangeLiteral.IsInclusive
+            );
+            return expression;
         }
 
         var conversion = _conversions.Classify(expression.Type, target, IsLiteral(expression));

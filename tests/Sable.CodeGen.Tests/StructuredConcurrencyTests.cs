@@ -326,4 +326,117 @@ public sealed class StructuredConcurrencyTests {
                     print("main ends")
                 """)).Stdout
         );
+
+    const string Children = """
+                            union Bad: Error {
+                                Odd(n: Int)
+                            }
+
+                            fn work(_ name: String, _ turns: Int) async -> String {
+                                for i in 0..<turns {
+                                    print("\(name) \(i)")
+                                    await Task.yield()
+                                }
+                                return name
+                            }
+
+                            fn risky(_ n: Int) async throws -> Int {
+                                await Task.yield()
+                                if n % 2 == 1 {
+                                    throw Bad.Odd(n: n)
+                                }
+                                return n
+                            }
+
+                            fn nap() async -> String {
+                                do {
+                                    try await Task.sleep(nanoseconds: 10_000_000_000)
+                                    return "woke"
+                                } catch {
+                                    print("nap cancelled")
+                                    return "cancelled"
+                                }
+                            }
+                            """;
+
+    /// <summary>An 'async let' runs its child alongside the code after it, until it is read (#185).</summary>
+    [Fact]
+    public void AnAsyncLetsChildRunsAlongsideItsParent() =>
+        Assert.Equal(
+            "both started\na 0\nb 0\na 1\nb 1\na 2\na\nb\nab\nxy\n",
+            AssertAgree(AsyncProgram(Children, """
+                    async let a = work("a", 3)
+                    async let b = work("b", 2)
+                    print("both started")
+                    print(await a)
+                    print(await b)
+                    print(await a + await b)
+                    let names = ["x", "y"]
+                    async let joined: String = "\(names[0])\(names[1])"
+                    print(await joined)
+                """)).Stdout
+        );
+
+    [Fact]
+    public void AnAsyncLetsChildThrowsWhereItIsRead() =>
+        Assert.Equal(
+            "4\ncaught Bad.Odd(n: 3)\n",
+            AssertAgree(AsyncProgram(Children, """
+                    async let good = risky(4)
+                    async let bad = risky(3)
+                    do {
+                        print(try await good)
+                        print(try await bad)
+                    } catch {
+                        print("caught \(error.description())")
+                    }
+                """)).Stdout
+        );
+
+    /// <summary>
+    ///     A child never read, or left behind by a return or a throw, is
+    ///     cancelled and waited for as its scope ends: a ten-second nap ends
+    ///     at once, and nothing outlives the scope.
+    /// </summary>
+    [Fact]
+    public void AnAsyncLetsChildIsCancelledAndWaitedForAsItsScopeEnds() =>
+        Assert.Equal(
+            "leaving\nnap cancelled\nafter\nnap cancelled\n2\nnap cancelled\ncaught Bad.Odd(n: 99)\ntrue\n",
+            AssertAgree(AsyncProgram("import Sable.Time\n" + Children + """
+
+                fn unused() async {
+                    async let sleeper = nap()
+                    print("leaving")
+                }
+
+                fn early(_ leave: Bool) async throws -> Int {
+                    async let a = risky(2)
+                    async let b = nap()
+                    if leave {
+                        throw Bad.Odd(n: 99)
+                    }
+                    return try await a
+                }
+                """, """
+                    let start = Instant.now()
+                    await unused()
+                    print("after")
+                    do {
+                        print(try await early(false))
+                        print(try await early(true))
+                    } catch {
+                        print("caught \(error.description())")
+                    }
+                    print(start.elapsed < Duration.seconds(5))
+                """)).Stdout
+        );
+
+    [Fact]
+    public void ReadingAnAsyncLetWhoseChildMayThrowNeedsTry() {
+        var result = Pipeline.Compile(new SourceText(AsyncProgram(Children, """
+                async let n = risky(1)
+                print(await n)
+            """), "test.sb"));
+        Assert.Contains(result.Errors, e => e.Contains("'n', an 'async let' whose child can throw, so the expression needs 'try'", StringComparison.Ordinal));
+    }
 }

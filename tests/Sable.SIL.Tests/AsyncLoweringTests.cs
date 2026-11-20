@@ -231,4 +231,36 @@ public sealed class AsyncLoweringTests {
         Assert.Equal("main ends\n", output);
         Assert.Equal(2, interpreter.DroppedTasks);
     }
+
+    /// <summary>
+    ///     'async let' is a child task, spawned where it is declared, read by
+    ///     waiting for it, and cancelled and waited for as its scope ends.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AnAsyncLetIsAChildTaskOfItsScope(bool optimise) {
+        var module = Lower("""
+                           module M
+                           fn work(_ name: String) async -> String {
+                               print("\(name) starts")
+                               await Task.yield()
+                               print("\(name) ends")
+                               return name
+                           }
+                           fn unread() async {
+                               async let never = work("unread")
+                               print("leaving")
+                           }
+                           @main
+                           fn main() async {
+                               async let a = work("a")
+                               print("declared")
+                               print(await a)
+                               await unread()
+                           }
+                           """, optimise);
+        Assert.Contains(module.Functions.SelectMany(static f => f.Blocks).SelectMany(static b => b.Instructions), static i => i is BuiltinInst { Name: "task_spawn" });
+        Assert.Equal("declared\na starts\na ends\na\nleaving\nunread starts\nunread ends\n", Run(module).Output);
+    }
 }

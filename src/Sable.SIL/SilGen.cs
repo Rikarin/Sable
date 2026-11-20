@@ -4702,6 +4702,10 @@ public sealed partial class SilGen {
                             Emit(new DestroyAddrInst(slot));
                             break;
 
+                        case AsyncLetEnd asyncLet:
+                            EndAsyncLet(asyncLet);
+                            break;
+
                         case RegionPop pop: {
                             var frameRegion = Emit(new LoadBorrowInst(pop.Slot));
                             Emit(new BuiltinInst("region_pop", SilType.Unit, frameRegion));
@@ -4972,6 +4976,10 @@ public sealed partial class SilGen {
 
                 case BoundDefer defer:
                     _scopes[^1].Add(defer.Body);
+                    return;
+
+                case BoundLocalDeclaration { Local.IsAsyncLet: true } asyncLet:
+                    AsyncLet(asyncLet);
                     return;
 
                 case BoundLocalDeclaration declaration:
@@ -6315,6 +6323,9 @@ public sealed partial class SilGen {
                 // A loop's element of an inline array, wanted as a value: a block of its own.
                 case BoundLocalAccess access when _views.Contains(access.Local):
                     return Emit(new BuiltinInst("inline_copy", ((InlinePointerType)_slots[access.Local].ElementType).Pointee, Emit(new LoadInst(_slots[access.Local]))));
+
+                case BoundLocalAccess access when _asyncLets.TryGetValue(access.Local, out var asyncLet):
+                    return AsyncLetValue(access, asyncLet);
 
                 case BoundLocalAccess access:
                     return LoadLocal(access);

@@ -8,6 +8,7 @@ namespace Sable.CodeGen.Tests;
 ///     into it are rooted in it, so root inference keeps them from outliving
 ///     it. Native and interpreted, leak-checked.
 /// </summary>
+[Native]
 public sealed class RegionTests {
     const string Declarations = """
                                 struct Node {

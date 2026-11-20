@@ -8,6 +8,7 @@ namespace Sable.CodeGen.Tests;
 ///     one unaligned load or store natively, a byte at a time in the
 ///     interpreter, and the same answers and the same traps either way.
 /// </summary>
+[Native]
 public sealed class BinaryDataTests {
     [Fact]
     public void ReadsAndWritesAgreeAtEveryWidthAndOffset() =>

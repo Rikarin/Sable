@@ -76,7 +76,9 @@ internal static class Programs {
 
     /// <summary>
     ///     Runs the program both ways and requires the same output and the same
-    ///     trap. Without a C compiler, the interpreter's answer is all there is.
+    ///     trap. Without a C compiler, the interpreter's answer is all there is;
+    ///     so it is for a test not marked <see cref="NativeAttribute" /> unless
+    ///     <c>SABLE_TEST_NATIVE=all</c> (<see cref="NativeMode" />), as CI runs.
     ///     A program that writes files is checked by <paramref name="afterEach" />,
     ///     called with "interpreter" and then "native" after each run, so it can
     ///     keep what the first wrote to compare with what the second does.
@@ -91,7 +93,7 @@ internal static class Programs {
     ) {
         var (output, errors, trap) = Interpret(source, stepLimit, input, arguments ?? []);
         afterEach?.Invoke("interpreter");
-        if (!CanBuild) {
+        if (!CanBuild || !NativeMode.Wanted) {
             return new(output, errors + trap?.Report, trap is null ? 0 : 134);
         }
 

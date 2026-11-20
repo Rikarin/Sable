@@ -95,16 +95,24 @@ public static class TestHarness {
         var testing = SyntaxTree.Parse(new SourceText($"module {HarnessModule}\nimport Sable.Testing\n", "<harness>"));
         var primary = program[0];
 
+        // The standard library's bodies, once it is known to check cleanly
+        // with a program that cannot change that, are neither checked again
+        // nor lowered beyond what the program reaches (LibraryCheck) — unless
+        // its coverage is measured, which counts what was never lowered. A
+        // fuzz harness is a library, lowered whole.
+        var wholeLibrary = coverage is { Library: not null };
         var checkedAlone = Compilation.Create([..program, ..LibraryFor([..program, testing])]);
         warnings.AddRange(Pipeline.Warnings(checkedAlone, program));
-        if (Errors(checkedAlone, primary) is { Count: > 0 } errors) {
+        if (Errors(checkedAlone, primary, wholeLibrary ? null : Library.CheckFor(checkedAlone, program)?.Skipped) is { Count: > 0 } errors) {
             return new(null, null, errors);
         }
 
         tests = checkedAlone.GetTestFunctions(kind);
         var harness = Write(tests, kind);
         var compilation = Compilation.Create([..program, ..harness, ..LibraryFor([..program, ..harness])]);
-        if (Errors(compilation, primary) is { Count: > 0 } harnessErrors) {
+        var check = wholeLibrary || kind == TestKind.Fuzz ? null : Library.CheckFor(compilation, [..program, ..harness]);
+        var standard = check?.Skipped;
+        if (Errors(compilation, primary, standard) is { Count: > 0 } harnessErrors) {
             return new(null, null, [..harnessErrors.Select(static e => $"internal error: the {HarnessModule} harness did not compile:\n{e}")]);
         }
 
@@ -117,7 +125,7 @@ public static class TestHarness {
         } else {
             var entry = harness[^1].Root.DescendantNodes().OfType<FunctionDeclarationSyntax>().First(static f => f.Identifier.Text == EntryName);
             // Measured, the decisions are marked as they are lowered, for branch coverage.
-            (module, lowering) = SilGen.Lower(compilation, (FunctionSymbol)compilation.GetDeclaredSymbol(entry)!, markDecisions: coverage is not null);
+            (module, lowering) = SilGen.Lower(compilation, (FunctionSymbol)compilation.GetDeclaredSymbol(entry)!, markDecisions: coverage is not null, onDemand: standard);
         }
 
         module.CheckExclusivity = checkExclusivity;
@@ -144,6 +152,8 @@ public static class TestHarness {
 
         if (debugDirectory is null) {
             try {
+                // Over what the harness can reach, as a build's (Pipeline.Compile).
+                SilPassManager.RemoveUnreachable(module);
                 SilPassManager.Run(module, SilPassManager.Default);
             } catch (SilPassException failure) {
                 return new(module, null, [$"internal error: {failure.Message}"]);
@@ -151,6 +161,10 @@ public static class TestHarness {
         }
 
         var ir = debugDirectory is null ? LlvmEmitter.Emit(module) : LlvmEmitter.EmitWithDebugInfo(module, debugDirectory, sources: Pipeline.EmbeddedSources(compilation.SyntaxTrees, program));
+        if (standard is null) {
+            check?.Passed();
+        }
+
         return new(module, ir, []);
     }
 
@@ -235,9 +249,9 @@ public static class TestHarness {
         return all;
     }
 
-    /// <summary>The compilation's errors, each against its own file.</summary>
-    static List<string> Errors(Compilation compilation, SyntaxTree primary) =>
-        compilation.GetAllDiagnosticsByFile()
+    /// <summary>The compilation's errors, each against its own file; with the standard library's bodies left out when it was checked once already (<see cref="LibraryCheck" />).</summary>
+    static List<string> Errors(Compilation compilation, SyntaxTree primary, Func<SyntaxTree, bool>? standard) =>
+        (standard is null ? compilation.GetAllDiagnosticsByFile() : compilation.GetAllDiagnosticsByFile(t => !standard(t)))
             .Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error)
             .OrderBy(d => d.Tree == primary ? 0 : 1)
             .ThenBy(static d => d.Diagnostic.Span.Start)

@@ -35,6 +35,13 @@ public sealed partial class Compilation {
     /// <summary>The types the array extensions declare their members on, in declaration order.</summary>
     internal List<NamedTypeSymbol> ArrayExtensions { get; } = [];
 
+    /// <summary>
+    ///     The types array extensions declare their members on, one for each
+    ///     <c>extension T[]</c>: no module lists them among its members, so
+    ///     what walks the program's declarations by its symbols walks these too.
+    /// </summary>
+    public IReadOnlyList<NamedTypeSymbol> ArrayCarriers => ArrayExtensions;
+
     static TypeSyntax Unparenthesised(TypeSyntax syntax) {
         while (syntax is ParenthesizedTypeSyntax parenthesized) {
             syntax = parenthesized.Type;

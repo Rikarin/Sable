@@ -9,6 +9,7 @@ namespace Sable.CodeGen.Tests;
 ///     bytes, and revived only after every count, tag and relative link is
 ///     checked. Native and interpreted, held to the same bytes.
 /// </summary>
+[Native]
 public sealed class InlineLayoutTests {
     const string Orders = """
                           @inline_layout

@@ -5,6 +5,7 @@ namespace Sable.CodeGen.Tests;
 ///     by its own remarks; and the loop versioning that lets it, held to the
 ///     same output and the same traps as the unoptimised program.
 /// </summary>
+[Native]
 public sealed class VectorizationTests {
     /// <summary>What LLVM's loop vectoriser made of the program's loops, optimised as a build would be.</summary>
     static IReadOnlyList<VectorizationReport.Loop> Report(string source) {

@@ -29,7 +29,7 @@ sable search <query>               search the registry
 sable login / logout               keep or forget a network registry's token
 sable owner [<pkg>] [--add|--remove <key>]  who may publish a package
 sable install <pkg>[@<ver>]        build a package's binaries into ~/.sable/bin
-sable cache <list|gc|clean>        the package cache, and collecting it
+sable cache <list|prune|clean|warm> the package and build cache: list, collect, fill
 sable registry <serve|token>       run a network registry, issue its tokens
 sable clean                        remove the target directory
 sable bindgen <header.h>           generate .sbi from a C header
@@ -631,25 +631,109 @@ instead saves nothing, since checking the bodies binds nearly all of them
 read from a `.sbi` at all: it is the embedded source, parsed whole (every
 module's, 247 files) on each build.
 
-Loading symbols without their source is blocked by what reads the source
-behind a symbol, not by the binder's tables alone: a symbol's
-`DeclaringSyntax` being empty means *synthesised* to lowering (the implicit
-initialisers and `contains` of `SilGen`), attributes such as
-`@inline(always|never)` and a type's reflected attributes are read from the
-declaration's syntax where they are used, value-generic predicates, enum raw
-values and default arguments are expressions, `SilProgram.Index` finds the
-declarations to lower or declare by walking every file's syntax, and the
-bodies another unit lowers — generic functions' instances, `@inline`
-bodies, defaults, `const fn`s and, for the entry unit, every global's
-initialiser — are bound from their file's source in its file scope. So a
-symbol `.sbi` needs, first, every such fact moved onto the symbols (an
-`IsSynthesised` flag, attributes, predicates and raw values as bound
-values), lowering's index built from symbols, and the bodies other units
-lower kept as something lowering can take without the file — serialised
-bound trees or SIL, as Swift's modules keep inlinable bodies as SIL. Only
-then can `Compilation.Create` take a unit's symbols beside other units'
-trees; per-module binding (`module_declarations`, below) is not needed
-first, but needs the same symbols-without-source.
+Loading symbols without their source was blocked by what reads the source
+behind a symbol, not by the binder's tables alone. What lowering and binding
+read of another unit's declaration is now a fact on its symbol (#182, stage
+2): `Symbol.IsSynthesized` (an implicit initialiser, a flags type's
+`contains`) rather than an empty `DeclaringSyntax`; `Symbol.Attributes`,
+each attribute's name and argument list as written, with those of the
+extension a member is declared in — `@inline(always|never)`, `@main`,
+`@intrinsic`, `@indirect`, `@MainActor` and a type's reflected attribute
+names are read there; `IsNonisolated`; `FunctionSymbol.HasBody`; and a
+type's const-generic predicates, bound once as `ValuePredicate`s that are
+evaluated without syntax. Enum raw values were facts already. Lowering's
+index of what another unit can see (`SilProgram.Index`) is built from the
+compilation's symbols — every module's members, every type's, extensions'
+among them, and properties' accessors — not by walking the other files'
+syntax (stage 3); a unit still walks its own files whole, for the
+declarations in its bodies. `SilProgramTests` holds the two to the same
+declarations in the same order.
+
+What still reads another unit's source, and so keeps
+`Compilation.Create` from taking a unit's symbols in place of its trees, is
+the bodies another unit lowers: a generic function's instances, `@inline`
+bodies, default arguments, `const fn`s, constants' values, field
+initialisers and, for the entry unit, every global's initialiser, and a
+type's reflected attribute values. They are bound from their file in its
+file scope. SIL cannot hold a generic body for an instance it does not know
+until generics are compiled once (#297); serialised bound trees are the
+other way, and neither is built.
+
+**Library interfaces (`.sbi`), as built** (#182, stage 4). A library unit's
+interface — `LibraryInterface` in Sable.SIL, written for Sable.Core by
+`Pipeline.CoreInterface` — holds its bound symbols and its SIL. The symbols
+(`SymbolInterface`) are a table of declarations in preorder, each with its
+kind, name, container, accessibility, flags, attributes and the facts above,
+followed by the types each refers to, written as trees: a declaration of the
+table by its index, one of another unit by module and dotted path, which
+reading resolves against the units read before it. They read back as symbols
+with no syntax that write back to the same bytes, and describe every
+declaration of Sable.Core as the bound ones do (`LibraryInterfaceTests`).
+Default arguments, initial values and accessors are not in the symbols:
+they are expressions and functions, in the SIL or the source. The SIL is
+every function of the unit's files lowered as a unit of a program compiled
+separately — what is not generic, with the instances it uses itself — as
+`SilPrinter`'s text, Brotli-compressed. The file is binary: `SBIL`, the
+format's version, then the compiler's identity, the settings (target os and
+arch, profile, `--deny-reflection`), the unit's name, each of its files'
+name and SHA-256, its modules, what other units' extensions add to its types
+in the compilation it was lowered in, the two sections, and the payload's
+SHA-256. One of another version, another compiler, cut short or corrupt is
+not read (`LibraryInterface.Read` gives null); the `interface` fuzz target
+holds the symbol reader to refusing what it cannot read and to writing what
+it reads back the same. The compiler's identity
+(`LibraryInterface.IdentityOf`) is the SHA-256 of its assemblies' module
+version ids, which a deterministic build derives from their content — the
+embedded library and runtime among it — so another build of the compiler
+never reads an interface this one wrote, whatever their version numbers.
+
+`Pipeline.CompileAgainst(program, interfaces)` compiles a program against
+them: every file no interface covers is checked and lowered as the unit
+holding the entry point (which sets up every global), and each interface's
+SIL is linked into the module, the program's copy kept of what both make (an
+instance, a thunk), and what the program does not reach dropped. The libraries' bodies are not bound or checked
+(`Compilation.GetAllDiagnosticsByFile(checkBodies)`) and their code is not
+lowered; their declarations are still declared from their source, which
+ships with the compiler and holds the generic bodies the program
+instantiates. An interface built from other files than the program's, for
+other settings, or before another unit's extension of its types (which
+changes how its methods are named) is refused, and a build answers by
+building it again. What the program says and builds is what compiling it
+whole does: `InterfaceCompileTests` compares the errors, the warnings, the
+SIL and the interpreter's output. The interface keeps each function's own
+order of its blocks (`blocks(...)` in the SIL text, which the printer
+otherwise orders by dominance), so that the passes see the library's code as
+lowering made it. An optimised build does the same, but its SIL may differ
+where lowering the whole program used what only the whole program shows —
+an existential's call made directly when nothing the program declares
+answers it otherwise — which the library, lowered as a unit, leaves to
+dispatch.
+
+Measured on the three-line program of #182 (`print("hi \(1 + 2)")`), in one
+process, on an M1 Max under a load average of about 15 from other builds —
+rough times; the shape is what counts. Before #182's stage 1, compiled
+whole, each compilation bound and checked every body of Sable.Core: 3.4 s
+the first time in the process, 1.6–1.7 s after, of which binding was
+1.28 s. Since stage 1 (`Library.CheckFor`), a process checks the core once
+and then neither checks nor lowers more of it than the program reaches: the
+first compilation still takes 2.0 s, the next ones 0.14–0.18 s. Against the
+core's interface, read once, the first compilation takes 0.18 s and the
+next ones 0.13–0.17 s (binding 0.05 s, lowering 0.08 s — the program's own
+code, the core's instances it uses, and parsing the interface's SIL, 60 ms
+of it — the interface's code the program does not reach dropped before it
+is verified). So the interface saves what a fresh process — a
+`sable build` of one file, a test harness's first program, the language
+server's first file — pays to check the core: 1.8 s of the first
+compilation's 2.0 s; a long-lived process that has checked the core already
+gains nothing more from it. Building the core's interface takes 5 s once per
+target and profile; reading the file back takes 5 ms, its symbols 10 ms,
+and it is 330 KB (the symbols 183 KB, the SIL 820 KB of text compressed to
+150 KB). A package build writes the standard library unit's interface
+(`std.sbi`) into its build cache entry, beside the archive (stage 5's
+`LibraryUnit.Write` hook). What is left is declaring the core from its
+source (`Compilation.Create`, about 60 ms warm) and lowering the instances
+of its generics the program uses; declaring from the interface's symbols
+instead waits on the bodies above.
 
 **Dependents only.** A unit depends on the units declaring a module it
 imports or names in full (`Shapes.Square` needs no import), on the units
@@ -678,8 +762,88 @@ ThinLTO, keeping ThinLTO's own cache beside the objects. `lto = "fat"`, and
 an optimised build with debug information, compile the program whole. A
 package's native library (`[lib] kind`) is built the same way, its own
 unit leading in place of an entry file (§5.2.2).
-The runtime is compiled once per set of options and kept, in the build cache
-(or `$SABLE_HOME/cache/runtime` for a single file).
+The standard library's unit is compiled to an archive (`libsable_std.a`) and
+the runtime to another (`libsable_runtime.a`), each kept in the shared build
+cache below; a program's link takes its units' objects, then those archives.
+An unoptimised build of a single file (`sable build -O0`, `-g`, and `sable
+run` of either) is compiled the same way, the file its one unit, so that it
+compiles only itself against a warm cache; an optimised one is compiled
+whole, the library with it, so that the SIL passes see all of it.
+
+### The build cache
+
+What a build makes that does not depend on the program — the C runtime's
+archive and the standard library's — is kept in `$SABLE_HOME/cache/<key>/`
+(default `~/.sable/cache`), shared by every project and every build, and made
+lazily the first time a target and profile need it. `target/` keeps only the
+project's own units. An entry is a directory: the archive, the object it
+archives (a static library C links takes that whole), the library's `.abi`
+record of the types it laid out, and `entry.txt`, the key it was made for and
+the profile of the build that made it. It has room for the library's
+interface, `<unit>.sbi`, beside the archive: the hook
+(`LibraryUnit.Write`'s `writeInterface`) is where the interface writer of
+#182's stages 2–4 puts it.
+
+The key is a SHA-256 over:
+
+- the package's name and version, and its source checksum — every file's
+  name and text (the standard library's: Sable.Core's and the modules the
+  program imports, parsed for the target and profile);
+- the **compiler's identity** (`CompilerIdentity`): not its version string but
+  a hash of its own build — every assembly of it, every resource they embed
+  (`lib/`'s source and the runtime's among them) and the version — so a
+  compiler rebuilt with any change, even under the same version number, finds
+  none of the entries an earlier build of it wrote;
+- the target triple;
+- the profile, as the settings of it that change code: the opt-level and the
+  SIL passes it picks, debug information, link-time optimisation (bitcode or
+  not), exclusivity, overflow and ARC checks, `debug-assertions`, reflection,
+  position-independence, and the C compiler's identity. The profile's name
+  is recorded, not keyed, so two profiles that compile code the same way
+  share entries;
+- the enabled features, and the keys of the entries it was compiled
+  against (none yet: the standard library depends on nothing kept, and a
+  package dependency is still a unit of the project, until #182's stage 7);
+- and for the standard library, the fingerprint of the program's own
+  extensions, which can change how the library's methods are named — none,
+  in most programs, so they all link one archive.
+
+An entry is made in a temporary directory beside where it goes and renamed
+into place, so builds running at once and the language server see it whole
+or not at all; two builds that need the same entry at once each make it,
+and the first to rename keeps it. A unit whose archive does not link, or
+whose `.abi` disagrees with the program's, makes the build compile the
+program whole, as with any unit.
+
+`sable cache list` shows the entries with the fetched packages; `sable cache
+prune [--max-age <days>]` removes the entries another build of the compiler
+wrote, and the entries, packages and evaluated manifests no build has used
+in that many days (default 30), and what an interrupted build left half-made;
+`sable cache clean` removes everything. `sable cache warm [--target <triple>]
+[--profile dev|release]` makes the entries a build for that target and
+profile needs now: the runtime, and the standard library alone and with each
+module a program may import (`--import <Module>` for one set). With
+`--into <dir>` it writes them to `<dir>` instead: a release of the compiler
+carries the host's in a `cache/` directory beside `sable`, which is read as
+prebuilt and never written (`tools/release/package.sh`), so a first build
+on a fresh machine compiles only the program. Another target's entries are
+made in the user's cache on first use.
+
+Measured (#182), `sable` built Release, on a machine under a load average
+of 10–35, so the times are rough:
+
+| Build | Before | Cold cache | Warm cache |
+|---|---:|---:|---:|
+| `examples/01-hello.sb`, `sable build -O0` | 5.4 s | 6.2 s | 1.1 s |
+| the same, `-g` | 5.3 s | 5.8 s | 1.1 s |
+| the same, `-O2` (whole, as before) | 7.0 s | 8.0 s | 7.0 s |
+| `examples/ssg` as a package, dev, clean `target/` | 7.7–8.3 s | 10.1 s | 4.0–4.5 s |
+| the same, release (`lto = "thin"`), clean `target/` | 10.4 s | 12.9 s | 5.5 s |
+
+"Before" had the runtime cached and nothing else; a warm cache leaves a new
+project's first build its own unit to bind and lower against the library's
+source, which is #182's later stages. The benchmarks are optimised single
+files, compiled whole as before; their times are unchanged.
 
 **Measured** (#182) on `tools/incremental/genworkspace.py`'s workspace (100
 packages, 110k lines, 102 units), `sable` built Release, on a machine under
@@ -824,8 +988,8 @@ registry token` issues its tokens (only their hashes are kept).
 the version — `v1.2.0`, `1.2.0`, or a member's `name-v1.2.0` —
 (`--allow-untagged`), and failing tests (`--no-verify`). `search`,
 `install` (a package's binaries, built with the release profile, into
-`~/.sable/bin`), `uninstall`, `owner` and `cache list|gc|clean` (packages no
-build used, and evaluated manifests, in `--max-age` days) exist.
+`~/.sable/bin`), `uninstall`, `owner` and `cache list|prune|clean|warm` (§5.4,
+"The build cache") exist.
 
 What a real deployment needs beyond this: TLS in front of the server (it
 speaks plain HTTP), a store that is backed up and served from more than one

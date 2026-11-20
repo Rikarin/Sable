@@ -8,6 +8,7 @@ namespace Sable.CodeGen.Tests;
 ///     initialises the object a subclass allocated, and deinits run from the
 ///     subclass up. Native and interpreted, leak-checked.
 /// </summary>
+[Native]
 public sealed class InheritanceTests {
     static void Prints(string expected, string declarations, string body) =>
         Assert.Equal(expected, AssertAgree(Program(declarations, body)).Stdout);

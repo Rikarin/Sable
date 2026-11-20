@@ -219,6 +219,26 @@ in code.
 
 ---
 
+### Shipping the runtime and the library
+
+The runtime and the standard library are shipped as source, carried inside
+the compiler, and compiled once per target and profile into archives —
+`libsable_runtime.a` and `libsable_std.a` (`.lib` on Windows) — kept in the
+build cache, `$SABLE_HOME/cache/<key>/` (docs/05 §5.4), which a program links
+against instead of compiling the library again: the model of Rust's `.rlib`
+and Swift's `libswiftCore`. The source stays the unit of distribution — for
+go-to-definition, debug information (an archive's debug information carries
+each library file's text), `sable test --doc`, a program bringing its own
+copy of a library file, and `#if os(...)`/`#if DEBUG`, which decide what the
+library holds for a target and profile. The format is tied to the exact
+compiler that made it, through its identity in every key; nothing is
+promised across compilers, and there are no binary-only packages. A release
+carries the host's archives prebuilt (`sable cache warm --into`); another
+target's are built on first use. An optimised single-file build still
+compiles the library with the program, whole, so that the SIL optimiser sees
+its bodies; a package's release build (ThinLTO) links the archive and lets
+LLVM inline across it.
+
 ## 6.4 Framework layout
 
 The .NET BCL is the model: a large, coherent, well-documented standard library

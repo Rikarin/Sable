@@ -426,7 +426,7 @@ public static class PackageBuilder {
                 Directory.CreateDirectory(output);
                 var executable = Path.Combine(output, bin.Name + (request.Target ?? NativeTarget.Host).ExecutableSuffix);
                 var buildSettings = SettingsFor(graph, member.Name, profile, request, profile.Debug ? workspace.Root : null);
-                var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin, generated), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);
+                var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin, generated), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error, environment.BuildCache);
                 Report(environment, outcome.Warnings);
                 if (!outcome.Succeeded) {
                     Report(environment, outcome.Errors);
@@ -482,7 +482,7 @@ public static class PackageBuilder {
         var path = Path.Combine(output, NativeBuild.LibraryFileName(member.Name.Replace('-', '_'), kind, request.Target ?? NativeTarget.Host));
         var settings = SettingsFor(graph, member.Name, profile, request, profile.Debug ? member.Directory : null);
         settings = settings with { Library = kind, Native = settings.Native with { PositionIndependent = true } };
-        var outcome = IncrementalBuild.Build(LibraryUnits(graph, member.Name, generated), settings, path, Path.Combine(output, "cache"), timings, environment.Error);
+        var outcome = IncrementalBuild.Build(LibraryUnits(graph, member.Name, generated), settings, path, Path.Combine(output, "cache"), timings, environment.Error, environment.BuildCache);
         Report(environment, outcome.Warnings);
         if (!outcome.Succeeded) {
             Report(environment, outcome.Errors);

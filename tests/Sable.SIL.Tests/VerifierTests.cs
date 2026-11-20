@@ -309,6 +309,8 @@ public sealed class VerifierTests {
     [InlineData("sil @f : $() -> () {\nbb0:\n  return loc 2:44try\n}", "expected a column but found '44try'")]
     [InlineData("sil @f : $() -> () {\nbb0:\n  return loc 99999999999:1\n}", "expected a line but found '99999999999'")]
     [InlineData("sil @f : $() -> () {\nbb0:\n  return loc -1:1\n}", "expected a line but found '-1'")]
+    [InlineData("sil @f : $() -> Int {\nbb0:\n  %0 = load [trivial] %0\n  return %0\n}", "load needs its operand defined")]
+    [InlineData("sil @f : $() -> Int {\nbb0:\n  br bb2\nbb1:\n  %0 = load [trivial] %1\n  return %0\nbb2:\n  %1 = load [trivial] %0\n  br bb1\n}", "load needs its operand defined")]
     public void MalformedTextIsReportedWithItsLine(string sil, string complaint) {
         var error = Assert.Throws<SilParseException>(() => SilParser.Parse(sil));
         Assert.Contains(complaint, error.Message, StringComparison.Ordinal);

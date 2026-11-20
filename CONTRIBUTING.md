@@ -78,6 +78,21 @@ whole directories, not single files:
 - Every diagnostic code must have a page in [docs/diagnostics/](docs/diagnostics/).
 - Native programs are also run in the SIL interpreter, and the two must agree.
 
+`Sable.CodeGen.Tests` is the slow project: most of its tests compile a program
+and run it, natively and in the interpreter. What keeps it quicker:
+
+- **The standard library checked once.** Once a build has checked the
+  library's every body, and lowered and verified its every function, with a
+  program that could not change any of that, the next such build checks only
+  its own bodies and lowers only the library functions it reaches
+  (`LibraryCheck`): a small program binds a few of the library's files, not
+  all of them. It is remembered for the process and in
+  `$SABLE_HOME/cache/library-checked`, under a hash of the compiler. A
+  program that extends a library type, subclasses a library class or brings
+  its own file of a library module has the whole library checked with it,
+  as before; `SABLE_CHECK_LIBRARY=1` does that for every program, to compare
+  against.
+
 New diagnostics get a code in `src/Sable.Syntax/Diagnostics.cs` and a page under
 `docs/diagnostics/`.
 

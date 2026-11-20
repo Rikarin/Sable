@@ -477,6 +477,26 @@ public sealed class VerifierTests {
             "which is no optional class reference"
         );
 
+    /// <summary>
+    ///     A type named for a function the compiler made starts with '$', as
+    ///     the coroutine frame of '$task.run' does: declared, extended and
+    ///     named in a field, it reads back. The fuzzers' round trip of the SIL
+    ///     after async lowering found it.
+    /// </summary>
+    [Fact]
+    public void ATypeNamedWithADollarRoundTrips() {
+        const string text = """
+                            sil_class AsyncHead$of$$$ { $state: $Int }
+                            sil_class $task.run$frame : AsyncHead$of$$$ { $state: $Int, $next: $Optional$$task.run$frame }
+                            sil_enum Optional$$task.run$frame { Some($$task.run$frame), None }
+
+                            """;
+        var module = SilParser.Parse(text);
+        var frame = Assert.IsType<ClassType>(module.FindType("$task.run$frame"));
+        Assert.Equal("AsyncHead$of$$$", frame.Superclass?.Name);
+        Assert.Equal(SilPrinter.Print(module), SilPrinter.Print(SilParser.Parse(SilPrinter.Print(module))));
+    }
+
     [Fact]
     public void AnOwnedParameterMustBeConsumed() =>
         AssertRejected(

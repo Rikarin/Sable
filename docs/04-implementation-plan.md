@@ -202,7 +202,8 @@ Copy Roslyn's **red/green tree** design exactly:
       mutates the repository's programs at token boundaries (a token for
       another of its kind, runs deleted, duplicated, spliced, swapped)
       through parsing, binding, the semantic model, constant evaluation,
-      lowering, the SIL verifier and the passes, with a time limit per
+      lowering, the SIL verifier and the passes, the printed SIL read back,
+      async lowering and the optimising passes, with a time limit per
       input and failures minimised by delta debugging; and
       `ResolverFuzzTests`, random registries (cycles, self-dependencies,
       yanked versions, pre-releases, locks naming what is gone) through
@@ -213,8 +214,10 @@ Copy Roslyn's **red/green tree** design exactly:
       instruments the Sable assemblies, and libFuzzer (on Linux, through
       libfuzzer-dotnet; on macOS, the fuzzer's own in-process loop) drives
       the parser (round trips, spans that tile, incremental reparse equal to
-      a full one), the front end (as `CompilerFuzzTests` holds it), the
-      resolver and the package files, and `fromBytes` under libFuzzer with
+      a full one), the language server's documents (edits by line and
+      column equal to a full parse), the front end (as `CompilerFuzzTests`
+      holds it), SIL as text (read, printed and read back, verified, through
+      the passes), the resolver and the package files, and `fromBytes` under libFuzzer with
       ASan and UBSan, from the repository's sources and a dictionary from
       the lexer's tables, nightly for 90 minutes a target with the corpus kept from
       night to night. No fuzzer has yet run for 24 hours on end. Found and
@@ -222,7 +225,9 @@ Copy Roslyn's **red/green tree** design exactly:
       attaching; a self-dependency hung the resolver and crashed its
       explanation; a `-` in a requirement's build metadata threw; ranges
       past the largest number wrapped round to nothing; an edit in a file
-      with directives reparsed incrementally to a different tree
+      with directives reparsed incrementally to a different tree; the
+      SIL of a program with an `async let`, async lowered, did not read back
+      (a frame named for `$task.run`)
 
 ---
 
@@ -2694,6 +2699,24 @@ Maintain the C# implementation as a **differential-testing oracle** for at
 least a year past self-hosting: compile the corpus with both, diff the SIL.
 Discrepancies are bugs in one of them, and that is far cheaper than finding
 them in production.
+
+### Fuzzed from its first day
+
+`sable fuzz` (docs/05 §5.1, #252) is the toolchain's own fuzzing, ready
+before the port starts, so that each stage is fuzzed as it lands rather than
+when the C# fuzzers (tools/fuzz, `CompilerFuzzTests`, `ResolverFuzzTests`)
+retire. A `@fuzz` function takes the fuzzer's bytes (`U8[:]`); the program is
+built as a library whose exports C calls once an input, with LLVM's
+SanitizerCoverage, AddressSanitizer and UBSan, linked with libFuzzer; the
+corpus and what fails (minimised, summed up by distinct failure) are kept
+under `target/fuzz/<target>/`, and `--replay` runs them again with any clang.
+The nightly workflow fuzzes the repository's `@fuzz` targets
+(`tools/fuzz/stdlib.sb`, `fromBytes` in `tools/fuzz/inline_layout.sb`).
+**Deferred:** `sable test` replaying every saved input; `@derive(Arbitrary)`
+and a grammar-aware mutator built on the syntax tree; a dictionary from the
+lexer's tables; differential targets (self-hosted against C#, the
+interpreter against native code, `-O0` against `-O3`); and coverage from the
+same counters for `sable test --coverage`.
 
 ### Exit criteria
 - [ ] Stage 6 fixed point reached

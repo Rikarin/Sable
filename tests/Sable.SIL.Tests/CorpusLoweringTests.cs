@@ -65,6 +65,22 @@ public sealed class CorpusLoweringTests {
         }
     }
 
+    /// <summary>
+    ///     And what the fuzzers hold every input to (<see cref="FrontEndCheck" />),
+    ///     which the corpus is the seeds of: through the passes, the printed SIL
+    ///     reading back, async lowering and the optimising passes. A corpus
+    ///     file reaches the end; an example, which imports library modules
+    ///     this check does not bring, stops where it stops.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Files))]
+    public void WhatTheFuzzersAskHolds(string file) {
+        var features = FrontEndCheck.Compile(File.ReadAllText(Path.Combine(Root, file)));
+        if (!file.StartsWith("examples", StringComparison.Ordinal)) {
+            Assert.Contains("stage:optimised", features);
+        }
+    }
+
     static string Root {
         get {
             var directory = new DirectoryInfo(AppContext.BaseDirectory);

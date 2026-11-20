@@ -13,6 +13,7 @@ namespace Sable.Driver.Commands;
 ///     What <c>sable test</c> and <c>sable bench</c> share: build the
 ///     files with the harness the compiler writes (<see cref="TestHarness" />),
 ///     run it with the filters and options given, and exit as it does.
+///     <c>sable fuzz</c> finds its program the same way, and builds it its own.
 /// </summary>
 public abstract class HarnessCommand : Command {
     protected abstract TestKind Kind { get; }
@@ -174,8 +175,11 @@ public abstract class HarnessCommand : Command {
     ///     library with its <c>tests/</c> and <c>benches/</c> files, and its
     ///     dependencies'. Null, having said why, when there is nothing to build.
     /// </summary>
-    /// <remarks>A package's harness is kept in <c>target/harness/</c> (<see cref="Build" />); files named on the command line have no cache.</remarks>
-    static (IReadOnlyList<SyntaxTree> Trees, string Directory, string? Cache, IReadOnlyList<string> Link, string LinkInputs)? Program(Options options) {
+    /// <remarks>
+    ///     A package's harness is kept in <c>target/harness/</c> (<see cref="Build" />); files named on the command line have no cache.
+    ///     <c>TargetDirectory</c> is the package's <c>target/</c>, or one beside the files.
+    /// </remarks>
+    protected static (IReadOnlyList<SyntaxTree> Trees, string Directory, string? Cache, IReadOnlyList<string> Link, string LinkInputs, string TargetDirectory)? Program(Options options) {
         if (options.Files.Count > 0) {
             foreach (var file in options.Files.Where(static f => !File.Exists(f))) {
                 Console.Error.WriteLine($"sable: no such file '{file}'");
@@ -183,8 +187,9 @@ public abstract class HarnessCommand : Command {
             }
 
             var parseOptions = Pipeline.ParseOptionsFor(options.Optimise);
+            var directory = Path.GetDirectoryName(Path.GetFullPath(options.Files[0]))!;
             return ([..options.Files.Select(f => SyntaxTree.Parse(new SourceText(File.ReadAllText(f), Path.GetFileName(f)), parseOptions))],
-                Path.GetDirectoryName(Path.GetFullPath(options.Files[0]))!, null, [], "");
+                directory, null, [], "", Path.Combine(directory, "target"));
         }
 
         try {
@@ -212,7 +217,7 @@ public abstract class HarnessCommand : Command {
 
             // What the package's build scripts found for the link: the harness links it too.
             return (trees, workspace.Root, Path.Combine(workspace.TargetDirectory, "harness", ResultCache.FileName(member.Name)),
-                graph.LinkArguments(member.Name), graph.LinkInputs(member.Name));
+                graph.LinkArguments(member.Name), graph.LinkInputs(member.Name), workspace.TargetDirectory);
         } catch (PackageException failure) {
             Console.Error.WriteLine($"error: {failure.Message}");
             return null;

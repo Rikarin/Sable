@@ -62,6 +62,7 @@ public sealed partial class Compilation {
         ["align"] = (AttributeTargets.Struct, "a struct"),
         ["test"] = (AttributeTargets.Function, "a function"),
         ["bench"] = (AttributeTargets.Function, "a function"),
+        ["fuzz"] = (AttributeTargets.Function, "a function"),
         ["main"] = (AttributeTargets.Function, "a function"),
         ["discardable"] = (AttributeTargets.Callable, "a function"),
         ["MainActor"] = (AttributeTargets.Any & ~AttributeTargets.Module, "a declaration"),

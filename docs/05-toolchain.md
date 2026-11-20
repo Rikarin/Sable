@@ -15,6 +15,7 @@ sable build [--release] [--target] compile
 sable run [-- args...]             build and execute
 sable test [filter] [--doc] [-j n] [--timeout s] [--coverage]  run @test functions and doc examples
 sable bench [filter]               run @bench functions, compare to baseline
+sable fuzz [target] [--time 8h]    fuzz a @fuzz function with libFuzzer; --replay, --minimise
 sable check                        type-check only, no codegen (fast)
 sable fix [--check]                apply the fixes the lints suggest
 sable fmt [--check]                format; no options, ever
@@ -72,6 +73,29 @@ LCOV elsewhere, and a directory given in place of a file is every `.sb`
 file under it, built as one program — so the library's tests are run as
 `sable test --cover lib/Sable.Collections tests/lib/Sable.Collections/`
 (what `tools/stdlib-coverage.sh` does, CONTRIBUTING.md).
+
+`sable fuzz` fuzzes a `@fuzz` function — one that takes the fuzzer's bytes,
+`U8[:]`, and fails by trapping or throwing (S3104 says what else it may not
+be) — of the package (its library, `tests/` and `benches/`) or of the files
+named. The program is built as a library: the compiler writes a harness whose
+`@export` functions take an input a byte at a time and run the target on it,
+and a C shim is libFuzzer's entry point. clang compiles the IR, the runtime
+and the shim with `-fsanitize=fuzzer,address,undefined`: SanitizerCoverage
+counts every edge of the Sable code with no rewriting, and AddressSanitizer
+and UBSan watch the C runtime and what crosses to C. libFuzzer runs in fork
+mode (`-j n` processes), so a failure does not end the run: until `--time`
+is up or Ctrl-C, it keeps the inputs that reach new code in
+`target/fuzz/<Module.function>/corpus/` (seeded from the package's
+`fuzz/<Module.function>/`, if there is one) and those that fail in
+`crashes/`. Then each failure is replayed, minimised (`.min`), its report kept
+(`.txt`), and the failures grouped by what they say — a trap's message and
+place, a sanitizer's summary, a hang — into `summary.txt`; the command exits
+1 while a saved input still fails. `--replay [input...]` runs the saved inputs
+(or those given) once each, and `--minimise <input>` shrinks one; `--list`
+lists the targets; what follows `--` goes to libFuzzer. libFuzzer's runtime
+comes with LLVM's clang; Apple's has none, so on macOS fuzzing says so (and
+how to get an LLVM clang) before it builds anything, and `--replay` — built
+with its own `main` and the sanitizers — is what runs there.
 
 `sable bindgen` writes Sable source, not `.sbi` (which waits on the
 interface file format of §5.4): a module of `@extern("c")` functions,

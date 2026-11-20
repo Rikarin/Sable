@@ -18,9 +18,17 @@
 #     parser     parsed as a file, statement, expression and type, text and
 #                tree must round-trip; edited, an incremental reparse must
 #                equal a full one
+#     editor     the language server's documents: a run of edits, as an
+#                editor sends them by line and column, applied by the
+#                incremental parser, must equal a full parse of the text
 #     frontend   the whole front end, as CompilerFuzzTests holds it: never
 #                throw, never hang, and SIL the verifier accepts for what
-#                lowers with nothing to say
+#                lowers with nothing to say, through the passes, async
+#                lowering and the optimising passes, printing as SIL that
+#                reads back as itself
+#     sil        SIL as text: refused only with the parser's own error;
+#                what reads prints as text that reads back as itself, and
+#                what verifies still verifies after the passes
 #     resolver   a registry as text through the package resolver, checked
 #                against trying every assignment; and the version parsers
 #     packages   a manifest, a lock file and a registry's index: refused
@@ -85,11 +93,11 @@ fi
 duration=${1:-1h}
 [ $# -gt 0 ] && shift
 targets=("$@")
-[ ${#targets[@]} -eq 0 ] && targets=(parser frontend resolver packages frombytes)
+[ ${#targets[@]} -eq 0 ] && targets=(parser editor frontend sil resolver packages frombytes)
 for target in "${targets[@]}"; do
     case "$target" in
-        parser|frontend|resolver|packages|frombytes) ;;
-        *) echo "error: no target '$target'; the targets are parser, frontend, resolver, packages and frombytes" >&2; exit 2 ;;
+        parser|editor|frontend|sil|resolver|packages|frombytes) ;;
+        *) echo "error: no target '$target'; the targets are parser, editor, frontend, sil, resolver, packages and frombytes" >&2; exit 2 ;;
     esac
 done
 deadline=$(( $(date +%s) + $(seconds_of "$duration") ))
@@ -130,7 +138,8 @@ if [ "$needs_dotnet" -eq 1 ]; then
             exit 1
         fi
     fi
-    for assembly in Sable.Syntax Sable.Symbols Sable.SIL; do
+    # The language server for the editor target: its documents and their edits.
+    for assembly in Sable.Syntax Sable.Symbols Sable.SIL Sable.LanguageServer; do
         DOTNET_ROLL_FORWARD=Major "$sharpfuzz" "$bin/$assembly.dll" >> "$out/build.log" 2>&1 || { echo "error: cannot instrument $assembly; see $out/build.log" >&2; exit 1; }
     done
     # Of the driver, only the package code: the rest is the command line.

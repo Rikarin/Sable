@@ -1,0 +1,47 @@
+module Negative.FuzzTargets
+
+// '@fuzz' marks a function sable fuzz runs on the fuzzer's bytes: one
+// 'U8[:]' in, nothing out, not async, reachable from the harness.
+
+union Broken: Error { Badly }
+
+@fuzz
+fn takesBytes(_ data: U8[:]) {
+}
+
+@fuzz
+fn mayThrow(_ data: U8[:]) throws(Broken) {
+}
+
+@fuzz
+fn takesNothing() { //! S3104 one 'U8[:]'
+}
+
+@fuzz
+fn takesAnArray(_ data: U8[>..]) { //! S3104 one 'U8[:]'
+}
+
+@fuzz
+fn takesTwo(_ data: U8[:], _ more: Int) { //! S3104 one 'U8[:]'
+}
+
+@fuzz
+async fn awaits(_ data: U8[:]) { //! S3104 not async
+}
+
+@fuzz
+fn answers(_ data: U8[:]) -> Bool { //! S3102 a fuzz target returns nothing
+    return true
+}
+
+@fuzz
+fn generic<T>(_ data: U8[:]) { //! S3101 a fuzz target cannot be generic
+}
+
+@fuzz(often) //! S3107 '@fuzz' takes no arguments
+fn withArguments(_ data: U8[:]) {
+}
+
+@test @fuzz //! S3106 one of a test, a benchmark and a fuzz target
+fn both() {
+}

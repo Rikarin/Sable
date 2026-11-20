@@ -199,11 +199,17 @@ sees the code: SharpFuzz rewrites the Sable assemblies to record the branches
 they take, and an input that takes a new one is kept and mutated further. Its
 targets ([tools/fuzz/Sable.Fuzz](tools/fuzz/Sable.Fuzz)) are the parser (round
 trips, every node's children covering it exactly, incremental reparse equal to
-a full one), the front end (what `CompilerFuzzTests` asks), the resolver (on a
-registry written as text, checked against trying every assignment), the
-package files (manifest, lock file, registry index) and `fromBytes`. The
-mutations use dictionaries generated from the lexer's own tables, and the
-corpus starts from the repository's `.sb` files.
+a full one), the editor (the language server's documents, edited by line and
+column as an editor sends them, equal to a full parse), the front end (what
+`CompilerFuzzTests` asks: through the passes, the printed SIL reading back,
+async lowering and the optimising passes), SIL as text (read or refused with
+the parser's error, printed and read back, verified SIL kept verified by the
+passes), the resolver (on a registry written as text, checked against trying
+every assignment), the package files (manifest, lock file, registry index)
+and `fromBytes`. The mutations use dictionaries generated from the lexer's own
+tables, and the corpus starts from the repository's `.sb` and `.sil` files;
+new syntax or a new kind of lowering wants a seed in `tests/corpus`, as
+`20-coroutines.sb` is for generators, throwing iteration and async functions.
 
 ```bash
 tools/fuzz/coverage.sh 30m                 # every target for half an hour
@@ -222,6 +228,19 @@ that hit it, and each input is kept with what replaying it says and a
 minimised copy (`.min`). `<run>/bin/Sable.Fuzz <target> replay <file>`
 reproduces one. A fixed bug's minimised input becomes a regression test in the
 layer's own project.
+
+`sable fuzz` is the toolchain's own fuzzer, for any package's `@fuzz`
+functions (docs/05 §5.1), and what replaces the C# fuzzers once the compiler
+is written in Sable. The repository's targets are in
+[tools/fuzz/stdlib.sb](tools/fuzz/stdlib.sb) and `fromBytes` in
+[tools/fuzz/inline_layout.sb](tools/fuzz/inline_layout.sb), fuzzed nightly;
+locally, as with the other fuzzers, keep runs short:
+
+```bash
+sable fuzz tools/fuzz/stdlib.sb --list
+sable fuzz tools/fuzz/stdlib.sb utf8 --time 5m    # needs a clang with libFuzzer
+sable fuzz tools/fuzz/stdlib.sb --replay          # the saved inputs, with any clang
+```
 
 ## Design documents
 

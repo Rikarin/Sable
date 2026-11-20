@@ -1,0 +1,159 @@
+module Corpus.Coroutines
+
+// Generators, throwing iteration and async functions: what lowering turns
+// into state machines and coroutine frames, here for the fuzzers' seeds.
+
+union WordError: Error { Empty, NotANumber(String) }
+
+fn evens(upTo n: Int) -> some Sequence<Int> {
+    var i = 0
+    while i <= n {
+        yield i
+        i += 2
+    }
+}
+
+fn countdown(from n: Int) -> some Iterator<Int> {
+    var i = n
+    while i > 0 {
+        yield i
+        i -= 1
+    }
+}
+
+fn numbers(_ words: String[]) throws(WordError) -> some Sequence<Int> {
+    if words.isEmpty {
+        throw .Empty
+    }
+    for word in words {
+        guard let n = try? Int.parse(word) else {
+            throw .NotANumber(word)
+        }
+        yield n
+    }
+}
+
+fn guarded(_ n: Int) -> some Sequence<Int> {
+    defer {
+        print("done")
+    }
+    for i in 0..<n {
+        yield i * i
+    }
+}
+
+fn twice<T>(_ value: T) -> some Sequence<T> {
+    yield value
+    yield value
+}
+
+extension Sequence {
+    fn everyOther() throws(Failure) -> some Sequence<Element> {
+        var keep = true
+        for try e in self {
+            if keep {
+                yield e
+            }
+            keep = !keep
+        }
+    }
+}
+
+fn sum(_ words: String[]) throws(WordError) -> Int {
+    var total = 0
+    for try n in numbers(words) {
+        total += n
+    }
+    return total
+}
+
+fn sumOrZero(_ words: String[]) -> Int {
+    do {
+        return try sum(words)
+    } catch .Empty {
+        return 0
+    } catch {
+        return -1
+    }
+}
+
+async fn double(_ n: Int) -> Int {
+    await Task.yield()
+    return n * 2
+}
+
+async fn parsed(_ word: String) throws(WordError) -> Int {
+    await Task.yield()
+    guard let n = try? Int.parse(word) else {
+        throw .NotANumber(word)
+    }
+    return n
+}
+
+async fn ticks(_ count: Int) -> some AsyncSequence<Int> {
+    for i in 0..<count {
+        yield await double(i)
+    }
+}
+
+async fn parsedAll(_ words: String[]) throws(WordError) -> some AsyncSequence<Int> {
+    for word in words {
+        yield try await parsed(word)
+    }
+}
+
+async fn together() -> Int {
+    async let a = double(1)
+    async let b = double(2)
+    let x = await a
+    let y = await b
+    return x + y
+}
+
+async fn total(_ words: String[]) throws(WordError) -> Int {
+    var sum = 0
+    for await tick in ticks(3) {
+        sum += tick
+    }
+    for try await n in parsedAll(words) {
+        sum += n
+    }
+    return sum
+}
+
+actor Tally {
+    private var count = 0
+
+    fn add(_ n: Int) -> Int {
+        count += n
+        return count
+    }
+}
+
+@main
+async fn main() {
+    for x in evens(upTo: 6) {
+        print(x)
+    }
+    var it = countdown(from: 3)
+    while let n = it.next() {
+        print(n)
+    }
+    for x in guarded(3).everyOther() {
+        print(x)
+    }
+    for s in twice("again") {
+        print(s)
+    }
+    print(sumOrZero(["1", "2", "3"]))
+    print(sumOrZero([]))
+    print(sumOrZero(["x"]))
+    print(await together())
+    let tally = Tally()
+    print(await tally.add(2))
+    do {
+        print(try await total(["4", "5"]))
+    } catch {
+        print("failed: \(error)")
+    }
+}

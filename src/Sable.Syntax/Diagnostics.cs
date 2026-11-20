@@ -159,11 +159,12 @@ public enum ErrorCode {
     ERR_NotDeeplyImmutable = 3097,
     ERR_NotSupportedYet = 3099,
 
-    // '@test' and '@bench' (docs/05 §5.1): what the harness can call.
+    // '@test', '@bench' and '@fuzz' (docs/05 §5.1): what the harness can call.
     ERR_TestTakesParameters = 3100,
     ERR_TestIsGeneric = 3101,
     ERR_TestReturnsValue = 3102,
     ERR_TestIsInstanceMethod = 3103,
+    ERR_FuzzSignature = 3104,
     ERR_BenchParameters = 3105,
     ERR_TestAndBench = 3106,
     ERR_TestAttributeArguments = 3107,

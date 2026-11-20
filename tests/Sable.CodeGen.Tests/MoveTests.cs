@@ -466,4 +466,153 @@ public sealed class MoveTests {
             """,
             "'text' is used after its value was moved out of it"
         );
+    const string Built = """
+                         struct Fail: Error { let at: Int }
+
+                         class Tracked {
+                             let name: String
+                             init(_ name: String) {
+                                 self.name = name
+                                 print("made \(name)")
+                             }
+                             deinit { print("gone \(name)") }
+                         }
+
+                         fn check(_ step: Int, _ failAt: Int) throws(Fail) {
+                             if step == failAt {
+                                 throw Fail { at: step }
+                             }
+                         }
+
+                         @noncopy struct Pair {
+                             let id: Int
+                             let tracked: Tracked
+
+                             init(id: Int) {
+                                 self.id = id
+                                 self.tracked = Tracked("t\(id)")
+                             }
+
+                             init(id: Int, failAt: Int) throws(Fail) {
+                                 try check(0, failAt)
+                                 self.id = id
+                                 try check(1, failAt)
+                                 self.tracked = Tracked("t\(id)")
+                                 try check(2, failAt)
+                             }
+
+                             init(early id: Int) {
+                                 self.id = id
+                                 self.tracked = Tracked("e\(id)")
+                                 if id > 0 {
+                                     return
+                                 }
+                                 print("late")
+                             }
+
+                             deinit { print("closed \(id)") }
+                         }
+
+                         @noncopy struct Holder<T> {
+                             let value: T
+                             init(_ value: T) {
+                                 self.value = value
+                             }
+                             deinit { print("let go") }
+                         }
+
+                         class Shelf<T> {
+                             let item: T
+                             init(_ item: T) {
+                                 self.item = item
+                             }
+                             deinit { print("shelf gone") }
+                         }
+                         """;
+
+    /// <summary>
+    ///     A generic type's deinit is lowered for each instance of the type,
+    ///     whether a literal or an initialiser made the value.
+    /// </summary>
+    [Fact]
+    public void AGenericTypesDeinitRunsForEachInstance() =>
+        Assert.Equal(
+            "let go\nlet go\nshelf gone\nshelf gone\n",
+            AssertAgree(
+                Program(
+                    Built,
+                    """
+                        do {
+                            let h = Holder { value: 1.5 }
+                        }
+                        do {
+                            let h = Holder([1])
+                        }
+                        do {
+                            let a = Shelf(1)
+                        }
+                        do {
+                            let b = Shelf("b")
+                        }
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>
+    ///     A @noncopy struct built field by field in an explicit init is a
+    ///     value once every field is set, so its deinit runs natively as it
+    ///     does interpreted (#295) — once, before its fields go.
+    /// </summary>
+    [Fact]
+    public void AStructBuiltByAnExplicitInitRunsItsDeinit() =>
+        Assert.Equal(
+            "made t1\nclosed 1\ngone t1\nmade e2\nclosed 2\ngone e2\nmade e0\nlate\nclosed 0\ngone e0\nlet go\nlet go\n",
+            AssertAgree(
+                Program(
+                    Built,
+                    """
+                        do {
+                            let p = Pair(id: 1)
+                        }
+                        do {
+                            let p = Pair(early: 2)
+                        }
+                        do {
+                            let p = Pair(early: 0)
+                        }
+                        do {
+                            let h = Holder(5)
+                            let s = Holder("s")
+                        }
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>
+    ///     An explicit init that throws part way made nothing: the fields it
+    ///     had set go, and the deinit does not run; one that finishes made a
+    ///     value whose deinit does (#295).
+    /// </summary>
+    [Fact]
+    public void AStructWhoseExplicitInitThrewRunsNoDeinit() =>
+        Assert.Equal(
+            "caught 0\ncaught 1\nmade t7\ngone t7\ncaught 2\nmade t7\nok 7\nclosed 7\ngone t7\n",
+            AssertAgree(
+                Program(
+                    Built,
+                    """
+                        for failAt in [0, 1, 2, 3] {
+                            do {
+                                let p = try Pair(id: 7, failAt: failAt)
+                                print("ok \(p.id)")
+                            } catch {
+                                print("caught \(error.at)")
+                            }
+                        }
+                    """
+                )
+            ).Stdout
+        );
 }

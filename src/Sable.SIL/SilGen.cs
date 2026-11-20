@@ -1753,6 +1753,17 @@ public sealed partial class SilGen {
     }
 
     /// <summary>Enters a named type before its members, so that they may refer to it.</summary>
+    /// <summary>
+    ///     A generic type's deinit for an instance of the type: lowered for
+    ///     its type arguments, as nothing calls it by name, and named now so
+    ///     that what destroys a value of the type runs it.
+    /// </summary>
+    string? GenericDeinit(NamedTypeSymbol named) =>
+        named.OriginalDefinition.Members.OfType<FunctionSymbol>().FirstOrDefault(static f => f.FunctionKind == FunctionKind.Deinitializer) is { } deinit
+        && IsGeneric(deinit) && deinit.DeclaringSyntax.FirstOrDefault() is { } at
+            ? Instance(deinit, TypeSubstitution.For(named), at)?.Name
+            : null;
+
     T Begin<T>(TypeSymbol symbol, T type) where T : NominalType {
         if (symbol is NamedTypeSymbol { IsConstructed: true } constructed) {
             type.DisplayName = $"{QualifiedName(constructed)}<{string.Join(", ", constructed.TypeArguments.Select(static a => a.ToDisplayString()))}>";
@@ -1938,7 +1949,12 @@ public sealed partial class SilGen {
                 // This is how 'Box<T: ~Copyable>' holding a '@noncopy' type
                 // is moved, never copied.
                 structType.IsNoncopyable |= structType.Fields.Exists(static f => IsMoveOnly(f.Type));
-                return HoldsItself(structType) ? null : structType;
+                if (HoldsItself(structType)) {
+                    return null;
+                }
+
+                structType.Deinit ??= GenericDeinit(named);
+                return structType;
             }
 
             case NamedTypeSymbol { TypeArguments: [var success] } task when task.OriginalDefinition.Equals(Core.Task):
@@ -1980,6 +1996,7 @@ public sealed partial class SilGen {
                     classType.Fields.Add((ExecutorHolderField, SilType.Int));
                 }
 
+                classType.Deinit ??= GenericDeinit(named);
                 return classType;
             }
 
@@ -4371,8 +4388,36 @@ public sealed partial class SilGen {
         SilValue TakeSelf() {
             var slot = _selfAddress!;
             var type = ((AddressType)slot.Type).Pointee;
+
+            // A struct with a deinit is a value once every field is set: built
+            // again from its fields, as a literal is, it is made live, so its
+            // deinit runs when it goes.
+            if (SelfFieldByField() is { } made) {
+                var fields = new SilValue[made.Fields.Count];
+                for (var i = 0; i < fields.Length; i++) {
+                    var field = Emit(new StructElementAddrInst(slot, i));
+                    fields[i] = Emit(new LoadInst(field, made.Fields[i].Type.IsTrivial ? LoadKind.Trivial : LoadKind.Take));
+                }
+
+                return Emit(new StructInst(made, fields));
+            }
+
             return Emit(new LoadInst(slot, type.IsTrivial ? LoadKind.Trivial : LoadKind.Take));
         }
+
+        /// <summary>
+        ///     The struct an initialiser builds when it has a deinit: its slot
+        ///     holds fields, not yet a value, so it is taken and destroyed
+        ///     field by field — a throw part way lets go of the fields set so
+        ///     far without running the deinit. (The type's deinit may not be
+        ///     lowered yet, so it is asked of the declaration.)
+        /// </summary>
+        StructType? SelfFieldByField() =>
+            _selfAddress is { Type: AddressType { Pointee: StructType made } }
+            && (symbol.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : symbol.ContainingSymbol) is NamedTypeSymbol owner
+            && owner.OriginalDefinition.Members.OfType<FunctionSymbol>().Any(static f => f.FunctionKind == FunctionKind.Deinitializer)
+                ? made
+                : null;
 
         SilBlock? _throwBlock;
 
@@ -4549,9 +4594,21 @@ public sealed partial class SilGen {
         /// <summary>Destroys what every non-trivial slot holds, then frees the slots, in reverse.</summary>
         void Deallocate() {
             for (var i = _allocations.Count - 1; i >= 0; i--) {
-                if (!_allocations[i].ElementType.IsTrivial && !_scoped.Contains(_allocations[i])) {
-                    Emit(new DestroyAddrInst(_allocations[i]));
+                if (_allocations[i].ElementType.IsTrivial || _scoped.Contains(_allocations[i])) {
+                    continue;
                 }
+
+                if (ReferenceEquals(_allocations[i], _selfAddress) && SelfFieldByField() is { } made) {
+                    for (var field = 0; field < made.Fields.Count; field++) {
+                        if (!made.Fields[field].Type.IsTrivial) {
+                            Emit(new DestroyAddrInst(Emit(new StructElementAddrInst(_allocations[i], field))));
+                        }
+                    }
+
+                    continue;
+                }
+
+                Emit(new DestroyAddrInst(_allocations[i]));
             }
 
             for (var i = _allocations.Count - 1; i >= 0; i--) {

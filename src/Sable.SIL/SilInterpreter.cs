@@ -482,6 +482,36 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     ///     object's only reference and not counted, as native code does not
     ///     count it; the releases its fields' destruction makes are.
     /// </remarks>
+    /// <summary>
+    ///     Whether storage holds something to destroy. An aggregate let go of
+    ///     part by part — a struct initialiser's self, whose deinit must not
+    ///     run — keeps its trivial parts, which need nothing.
+    /// </summary>
+    static bool Holds(SilType type, object? value) {
+        switch (type, value) {
+            case (_, null):
+                return false;
+            case (StructType structType, object?[] fields):
+                for (var i = 0; i < fields.Length; i++) {
+                    if (!structType.Fields[i].Type.IsTrivial && Holds(structType.Fields[i].Type, fields[i])) {
+                        return true;
+                    }
+                }
+
+                return false;
+            case (TupleType tuple, object?[] elements):
+                for (var i = 0; i < elements.Length; i++) {
+                    if (!tuple.Elements[i].IsTrivial && Holds(tuple.Elements[i], elements[i])) {
+                        return true;
+                    }
+                }
+
+                return false;
+            default:
+                return true;
+        }
+    }
+
     void Release(SilType type, object? value, int depth, bool uncounted = false) {
         if (value is null || type.IsTrivial) {
             return;
@@ -950,7 +980,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
                     case DeallocStackInst dealloc:
                         if (dealloc.Address is AllocStackInst { Unmanaged: false } deallocated && !deallocated.ElementType.IsTrivial
-                            && ((IReference)Get(dealloc.Address)!).Peek() is not null) {
+                            && Holds(deallocated.ElementType, ((IReference)Get(dealloc.Address)!).Peek())) {
                             throw new SilTrap("dealloc_stack of storage still holding a value");
                         }
 

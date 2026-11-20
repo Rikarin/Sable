@@ -1,0 +1,244 @@
+module Sable.Core
+
+// A piece of a string, viewed where it lies (docs/03 §3.9): the string it
+// is a piece of — one reference to that string's storage, nothing copied —
+// and the byte offsets of its start and end. Slicing a string gives one,
+// as `text[a..<b]`, so splitting, trimming and parsing the pieces of a
+// large text costs no copy per piece; `toString()` makes a String of the
+// piece's own bytes when one is wanted. Swift's Substring: `String[:]` is
+// already the slice of an array of strings.
+//
+// A Substring's indices are its string's, String.Index byte offsets from
+// that string's start: an index found in the piece reads the same scalar
+// in the whole. What it reads it reads through the runtime's forms over a
+// range of bytes (Runtime+Strings): counted, compared, hashed and searched
+// where the bytes are. Its members shared with String are StringProtocol's.
+
+/// A piece of a string: the string's own bytes from one scalar boundary up
+/// to another, not copied. `text[range]` gives one; `toString()` copies it
+/// out. Equal to, and hashed as, the String of the same scalars, so a
+/// `[String: V]` is looked up by one without making a String.
+///
+/// ```sable
+/// let line = "name = sable"
+/// let equals = line.firstIndex(of: '=')!
+/// let key = line[..<equals].trimmed()
+/// assert(key == "name")
+/// assert(key.startIndex == line.startIndex)
+/// assert(line[line.index(after: equals)...].trimmed().toString() == "sable")
+/// ```
+public struct Substring: StringProtocol {
+    public alias Iter = StringIterator
+
+    /// The string this is a piece of.
+    public let base: String
+
+    // The piece's bytes in the base: from 'start' up to, not including,
+    // 'end', both scalar boundaries.
+    let start: Int
+    let end: Int
+
+    /// The whole of the string, as a piece of itself: nothing is copied.
+    ///
+    /// ```sable
+    /// let whole = Substring("abc")
+    /// assert(whole.count == 3 && whole.base == "abc")
+    /// ```
+    public init(_ text: String) {
+        self.base = text
+        self.start = 0
+        self.end = text.utf8Count
+    }
+
+    /// The bytes of the text from one offset up to another, which are
+    /// scalar boundaries inside it: what a slicing subscript checks before
+    /// it makes one.
+    static fn of(_ text: String, _ from: Int, _ to: Int) -> Substring {
+        return Substring { base: text, start: from, end: to }
+    }
+
+    /// The piece of the text the offsets bound, checked as a String's
+    /// slicing subscript checks them: within it, in order, and each at a
+    /// scalar's start or the end; a bound out of place traps.
+    static fn checked(_ text: String, _ lower: Int, _ upper: Int, within from: Int, _ to: Int) -> Substring {
+        if lower < from || upper > to || lower > upper {
+            fatalError("string slice out of range")
+        }
+        if !text.isScalarBoundary(utf8Offset: lower) || !text.isScalarBoundary(utf8Offset: upper) {
+            fatalError("string index not on a character boundary")
+        }
+        return Substring { base: text, start: lower, end: upper }
+    }
+
+    // ---- What every StringProtocol is -------------------------------------
+
+    /// The piece itself.
+    public var asSubstring: Substring => self
+
+    /// The piece of the range, a piece of this one: nothing is copied.
+    public fn piece(_ range: Range<String.Index>) -> Substring {
+        return Substring { base: base, start: range.lowerBound.utf8Offset, end: range.upperBound.utf8Offset }
+    }
+
+    /// The piece's scalars, copied to a String of their own: no copy when
+    /// the piece is the whole of its string, which is then given back.
+    ///
+    /// ```sable
+    /// let text = "hello, world"
+    /// assert(text[..<text.firstIndex(of: ',')!].toString() == "hello")
+    /// ```
+    public fn toString() -> String {
+        if start == 0 && end == base.utf8Count {
+            return base
+        }
+        return base.utf8Slice(start, end)
+    }
+
+    // ---- Size and positions ----------------------------------------------
+
+    /// How many Unicode scalars the piece has: counted in its bytes, and at
+    /// once when its string is ASCII.
+    public var count: Int => Runtime.countScalars(base, start, end)
+
+    /// How many bytes the piece's UTF-8 encoding takes.
+    public var utf8Count: Int => end - start
+
+    /// Whether the piece has no scalars.
+    public var isEmpty: Bool => end == start
+
+    /// Where the piece's first scalar is, in its string: its end, when empty.
+    public var startIndex: String.Index => String.Index(utf8Offset: start)
+
+    /// The position past the piece's last scalar, in its string.
+    public var endIndex: String.Index => String.Index(utf8Offset: end)
+
+    /// The scalar at the index, which must be one of the piece's: the end,
+    /// or an index outside it, traps.
+    public subscript(index: String.Index) -> Char {
+        get {
+            let offset = index.utf8Offset
+            if offset < start || offset >= end {
+                fatalError("string index out of range")
+            }
+            return base.scalar(at: offset)
+        }
+    }
+
+    /// The scalars of the range, a piece of this piece — of the same
+    /// string, nothing copied. A bound outside the piece, or not at a
+    /// scalar's start, traps; '^n' steps back n scalars from the end.
+    ///
+    /// ```sable
+    /// let text = "naïve café"
+    /// let word = text[..<text.firstIndex(of: ' ')!]
+    /// assert(word[^3...] == "ïve")
+    /// assert(word[word.index(after: word.startIndex)...] == "aïve")
+    /// ```
+    public subscript(range: some RangeExpression) -> Substring {
+        get {
+            let indices = range.relative(to: self)
+            return Substring.checked(base, indices.lowerBound.utf8Offset, indices.upperBound.utf8Offset, within: start, end)
+        }
+    }
+
+    /// The position of the scalar after the one at the index; stepping past
+    /// the piece's end traps.
+    public fn index(after index: String.Index) -> String.Index {
+        if index.utf8Offset < start || index.utf8Offset >= end {
+            fatalError("string index out of range")
+        }
+        return String.Index(utf8Offset: base.offsetAfter(index.utf8Offset))
+    }
+
+    /// The position of the scalar before the index; stepping back from the
+    /// piece's start traps.
+    public fn index(before index: String.Index) -> String.Index {
+        if index.utf8Offset <= start || index.utf8Offset > end {
+            fatalError("string index out of range")
+        }
+        return String.Index(utf8Offset: base.offsetBefore(index.utf8Offset))
+    }
+
+    /// The index the distance away, in scalars, forwards or, when negative,
+    /// back: O(distance). Stepping past either end of the piece traps.
+    public fn index(_ index: String.Index, offsetBy distance: Int) -> String.Index {
+        var at = index
+        var left = distance
+        while left > 0 {
+            at = self.index(after: at)
+            left = left - 1
+        }
+        while left < 0 {
+            at = self.index(before: at)
+            left = left + 1
+        }
+        return at
+    }
+
+    /// An iterator over the piece's scalars, from the first.
+    public fn makeIterator() -> StringIterator {
+        return StringIterator { text: base, cursor: start, end: end }
+    }
+
+    // ---- Comparing and hashing -------------------------------------------
+    // By the bytes, as a String is: a piece is equal to, ordered as and
+    // hashed as the String of its scalars, of whatever string it is a piece.
+
+    public operator == (lhs: Substring, rhs: Substring) -> Bool {
+        return lhs.utf8Count == rhs.utf8Count && Runtime.compareStrings(lhs.base, lhs.start, lhs.end, rhs.base, rhs.start, rhs.end) == 0
+    }
+
+    public operator < (lhs: Substring, rhs: Substring) -> Bool {
+        return Runtime.compareStrings(lhs.base, lhs.start, lhs.end, rhs.base, rhs.start, rhs.end) < 0
+    }
+
+    /// Whether the piece has the string's scalars.
+    public operator == (lhs: Substring, rhs: String) -> Bool {
+        return lhs.utf8Count == rhs.utf8Count && Runtime.compareStrings(lhs.base, lhs.start, lhs.end, rhs, 0, rhs.utf8Count) == 0
+    }
+
+    /// Whether the string has the piece's scalars.
+    public operator == (lhs: String, rhs: Substring) -> Bool {
+        return rhs == lhs
+    }
+
+    /// Whether the piece does not have the string's scalars.
+    public operator != (lhs: Substring, rhs: String) -> Bool {
+        return !(lhs == rhs)
+    }
+
+    /// Whether the string does not have the piece's scalars.
+    public operator != (lhs: String, rhs: Substring) -> Bool {
+        return !(rhs == lhs)
+    }
+
+    /// Whether the piece orders before the string, by scalar.
+    public operator < (lhs: Substring, rhs: String) -> Bool {
+        return Runtime.compareStrings(lhs.base, lhs.start, lhs.end, rhs, 0, rhs.utf8Count) < 0
+    }
+
+    /// Whether the string orders before the piece, by scalar.
+    public operator < (lhs: String, rhs: Substring) -> Bool {
+        return Runtime.compareStrings(lhs, 0, lhs.utf8Count, rhs.base, rhs.start, rhs.end) < 0
+    }
+
+    /// The piece's bytes, hashed as a String of them is: a piece and the
+    /// string it equals hash alike.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.write(text: base, from: start, to: end)
+    }
+}
+
+extension Substring: Formattable {
+    /// The piece as its String would be formatted.
+    public fn format(_ spec: FormatSpec) -> String {
+        return self.toString().format(spec)
+    }
+}
+
+extension Substring: Debug {
+    /// In double quotes, escaped, as its String would be.
+    public fn debugDescription() -> String {
+        return self.toString().debugDescription()
+    }
+}

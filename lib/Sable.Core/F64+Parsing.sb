@@ -10,7 +10,7 @@ extension F64: Parsable {
     /// assert(try! F64.parse("0.1") == 0.1)
     /// assert(try! F64.parse("1e400") > 1.7976931348623157e308)
     /// ```
-    public static fn parse(_ text: String) throws(ParseError) -> F64 {
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> F64 {
         return try F64.parse(text, styles: .Sign)
     }
 
@@ -20,12 +20,12 @@ extension F64: Parsable {
     /// ```sable
     /// assert(try! F64.parse(" 1_000.5 ", styles: .Any) == 1000.5)
     /// ```
-    public static fn parse(_ text: String, styles: NumberStyles) throws(ParseError) -> F64 {
-        let plain = try plainFloat(text, styles)
+    public static fn parse<S: StringProtocol>(_ text: S, styles: NumberStyles) throws(ParseError) -> F64 {
+        let plain = try plainFloat(text.asSubstring, styles)
         if let special = specialFloat(plain) {
             return special
         }
-        let (parsed, value) = plain.parseF64()
+        let (parsed, value) = plain.base.parseF64(plain.start, plain.end)
         return parsed ? value : overflowedFloat(plain)
     }
 }

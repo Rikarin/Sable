@@ -34,11 +34,13 @@ public struct PanicInfo {
         var file = ""
         var line = 0
         var column = 0
-        if let (rest, last) = site.splitLastOnce(":") {
+        // Cut as pieces of the site, read where they lie: only the file's
+        // name is copied out.
+        if let (rest, last) = site.asSubstring.splitLastOnce(":") {
             if let (name, middle) = rest.splitLastOnce(":") {
                 if let l = middle.toInt() {
                     if let c = last.toInt() {
-                        file = name
+                        file = name.toString()
                         line = l
                         column = c
                     }

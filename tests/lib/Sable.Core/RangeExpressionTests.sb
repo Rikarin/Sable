@@ -25,11 +25,11 @@ fn aStringIsSlicedByEachShapeOfRange() {
     let text = "naïve café"
     let space = text.firstIndex(of: ' ')!
     let after = text.index(after: space)
-    assertEqual(text[text.startIndex..<space], "naïve")
-    assertEqual(text[after...], "café")
-    assertEqual(text[..<space], "naïve")
-    assertEqual(text[...space], "naïve ")
-    assertEqual(text[text.startIndex...text.index(before: space)], "naïve")
+    assertEqual(text[text.startIndex..<space].toString(), "naïve")
+    assertEqual(text[after...].toString(), "café")
+    assertEqual(text[..<space].toString(), "naïve")
+    assertEqual(text[...space].toString(), "naïve ")
+    assertEqual(text[text.startIndex...text.index(before: space)].toString(), "naïve")
 }
 
 fn middle<C: Collection, R: RangeExpression>(_ c: C, _ range: R) -> Int {

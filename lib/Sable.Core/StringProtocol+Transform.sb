@@ -1,0 +1,152 @@
+module Sable.Core
+
+// Text made from text, of a String or a Substring: trimmed — the text's
+// own kind, so a Substring's trim is a Substring of the same string, not a
+// copy — and padded, repeated and reversed, which make a String. Each
+// builds its result once: a '+' per piece copies everything so far again,
+// which is quadratic.
+
+extension StringProtocol {
+    /// The text without the white space — Unicode's White_Space, as
+    /// `Char.isWhitespace` has it — that begins and ends it.
+    ///
+    /// ```sable
+    /// let line = "  key = value  "
+    /// let equals = line.firstIndex(of: '=')!
+    /// assert(line[..<equals].trimmed() == "key")
+    /// ```
+    public fn trimmed() -> Self {
+        return self.trimmed(where: { c in c.isWhitespace })
+    }
+
+    /// The text without the white space it starts with.
+    public fn trimmedStart() -> Self {
+        return self.trimmedStart(where: { c in c.isWhitespace })
+    }
+
+    /// The text without the white space it ends with.
+    public fn trimmedEnd() -> Self {
+        return self.trimmedEnd(where: { c in c.isWhitespace })
+    }
+
+    /// The text without the characters the test accepts at either end.
+    ///
+    /// ```sable
+    /// assert("--a-b--".trimmed(where: { c in c == '-' }) == "a-b")
+    /// ```
+    public fn trimmed(where test: (Char) -> Bool) -> Self {
+        let text = self.asSubstring
+        let start = text.firstOffset(notMatching: test)
+        let end = text.lastOffset(notMatching: test)
+        return end <= start ? self.cut(text.start, text.start) : self.cut(start, end)
+    }
+
+    /// The text without the characters the test accepts at its start.
+    public fn trimmedStart(where test: (Char) -> Bool) -> Self {
+        let text = self.asSubstring
+        return self.cut(text.firstOffset(notMatching: test), text.end)
+    }
+
+    /// The text without the characters the test accepts at its end.
+    public fn trimmedEnd(where test: (Char) -> Bool) -> Self {
+        let text = self.asSubstring
+        return self.cut(text.start, text.lastOffset(notMatching: test))
+    }
+
+    /// Whether the text is empty or nothing but white space.
+    public var isBlank: Bool {
+        get {
+            let text = self.asSubstring
+            return text.firstOffset(notMatching: { c in c.isWhitespace }) == text.end
+        }
+    }
+
+    /// The text with the fill before it, as many times as make it 'width'
+    /// characters (scalars) long, as a String; a text that long already, as
+    /// it is.
+    ///
+    /// ```sable
+    /// assert("42".paddedStart(toWidth: 5, with: '0') == "00042")
+    /// assert("hello".paddedStart(toWidth: 3) == "hello")
+    /// ```
+    public fn paddedStart(toWidth width: Int, with fill: Char = ' ') -> String {
+        let missing = width - self.count
+        return missing <= 0 ? self.toString() : String.fromChar(fill).repeated(missing) + self.toString()
+    }
+
+    /// The text with the fill after it, as many times as make it 'width'
+    /// characters (scalars) long, as a String; a text that long already, as
+    /// it is.
+    public fn paddedEnd(toWidth width: Int, with fill: Char = ' ') -> String {
+        let missing = width - self.count
+        return missing <= 0 ? self.toString() : self.toString() + String.fromChar(fill).repeated(missing)
+    }
+
+    /// The text, 'times' times over, as a String; empty for none, or fewer.
+    ///
+    /// ```sable
+    /// assert("ab".repeated(3) == "ababab")
+    /// ```
+    public fn repeated(_ times: Int) -> String {
+        let piece = self.toString()
+        var copies: String[>..] = []
+        var i = 0
+        while i < times {
+            copies.append(piece)
+            i = i + 1
+        }
+        return Runtime.joinStrings(copies, "")
+    }
+
+    /// The text's scalars in reverse order, as a String.
+    public fn reversed() -> String {
+        let text = self.asSubstring
+        var scalars: String[>..] = []
+        var offset = text.end
+        while offset > text.start {
+            let previous = text.base.offsetBefore(offset)
+            scalars.append(text.base.utf8Slice(previous, offset))
+            offset = previous
+        }
+        return Runtime.joinStrings(scalars, "")
+    }
+}
+
+extension Substring {
+    /// Where the first character the test refuses starts; the end when it
+    /// accepts them all.
+    fn firstOffset(notMatching test: (Char) -> Bool) -> Int {
+        var offset = start
+        while offset < end && test(base.scalar(at: offset)) {
+            offset = base.offsetAfter(offset)
+        }
+        return offset
+    }
+
+    /// Where the last character the test refuses ends; the start when it
+    /// accepts them all.
+    fn lastOffset(notMatching test: (Char) -> Bool) -> Int {
+        var offset = end
+        while offset > start {
+            let previous = base.offsetBefore(offset)
+            if !test(base.scalar(at: previous)) {
+                return offset
+            }
+            offset = previous
+        }
+        return start
+    }
+}
+
+extension String[:] {
+    /// The strings, with the separator between each two.
+    ///
+    /// ```sable
+    /// let parts: String[>..] = ["a", "b", "c"]
+    /// assert(parts.joined(separator: ", ") == "a, b, c")
+    /// ```
+    public fn joined(separator: String = "") -> String {
+        // In the runtime, at once: a '+' per part copies everything so far again.
+        return Runtime.joinStrings(self.toArray(), separator)
+    }
+}

@@ -69,6 +69,27 @@ public sealed class StringUnicodeTests {
             print("[\("\u{85}é \u{2003}é\u{2029}".trimmed())]")
         """));
 
+    /// <summary>
+    ///     A Substring is read through the runtime's forms over a range of
+    ///     its string's bytes — counted, compared, searched both ways,
+    ///     hashed and parsed as a float — which the interpreter has too.
+    /// </summary>
+    [Fact]
+    public void ASubstringIsReadWhereItLiesBothWays() =>
+        Assert.Equal(
+            "3 13 true true false\n16 5 -1\ntrue 2.5 1280\nfin é\n",
+            Run("""
+                let text = "naïve café, fin, é, 2.5e0, 1280"
+                let fields = text.asSubstring.split(", ")
+                let word = fields[0]
+                print("\(word[^3...].count) \(word.utf8Count + text[..<text.index(atScalar: 1)].count) \(word[^4...] == "café") \(fields[1] < "fio") \(fields[2] > Substring("é"))")
+                print("\(text.lastIndex(of: fields[3])!.utf8Offset - 7) \(fields[1].firstIndex(of: "n")!.utf8Offset - 11) \(word.firstIndex(of: fields[1])?.utf8Offset ?? -1)")
+                let sizes: [String: Int] = ["café": 2, "fin": 3]
+                print("\(word[^4...].hashValue == "café".hashValue && sizes[word[^4...]] == 2) \(try! F64.parse(fields[3])) \(fields[4].toInt()!)")
+                print("\(fields[1]) \(fields[2])")
+            """)
+        );
+
     [Theory]
     [InlineData("let text = \"aé\"\nlet _ = text[String.Index(utf8Offset: 2)]", "string index not on a character boundary")]
     [InlineData("let text = \"ab\"\nlet _ = text[text.endIndex]", "string index out of range")]

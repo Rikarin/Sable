@@ -7,13 +7,14 @@ extension Char: Parsable {
     /// ```sable
     /// assert(try! Char.parse("é") == 'é')
     /// ```
-    public static fn parse(_ text: String) throws(ParseError) -> Char {
-        if text.isEmpty {
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> Char {
+        let piece = text.asSubstring
+        if piece.isEmpty {
             throw .Empty
         }
-        if text.count > 1 {
+        if piece.index(after: piece.startIndex) != piece.endIndex {
             throw .Invalid(at: 1)
         }
-        return text.at(0)
+        return piece[piece.startIndex]
     }
 }

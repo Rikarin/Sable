@@ -7,19 +7,23 @@ extension Bool: Parsable {
     /// ```sable
     /// assert(try! Bool.parse("false") == false)
     /// ```
-    public static fn parse(_ text: String) throws(ParseError) -> Bool {
-        if text.isEmpty {
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> Bool {
+        let piece = text.asSubstring
+        if piece.isEmpty {
             throw .Empty
         }
-        if text == "true" {
+        if piece == "true" {
             return true
         }
-        if text == "false" {
+        if piece == "false" {
             return false
         }
-        let word = text.at(0) == 't' ? "true" : "false"
+        let word = piece.first == 't' ? "true" : "false"
         var i = 0
-        while i < text.count && i < word.count && text.at(i) == word.at(i) {
+        for c in piece {
+            if i >= word.count || c != word.at(i) {
+                break
+            }
             i = i + 1
         }
         throw .Invalid(at: i)

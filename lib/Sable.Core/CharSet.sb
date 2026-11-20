@@ -117,20 +117,21 @@ public struct CharSet: Pattern {
     // without decoding; a scalar's other bytes are 0x80 and above, so the
     // map never matches inside one.
 
-    public fn firstMatch(in text: String, from start: String.Index) -> Range<String.Index>? {
-        var offset = start.utf8Offset
-        let end = text.utf8Count
+    public fn firstMatch(in text: Substring, from start: String.Index) -> Range<String.Index>? {
+        var offset = start.utf8Offset < text.start ? text.start : start.utf8Offset
+        let end = text.end
+        let bytes = text.base
         let hasRanges = ranges.count > 0
         while offset < end {
-            let byte = Int(text.utf8Byte(offset))
+            let byte = Int(bytes.utf8Byte(offset))
             if byte < 0x80 {
                 if self.hasAscii(byte) {
                     return String.Index(utf8Offset: offset)..<String.Index(utf8Offset: offset + 1)
                 }
                 offset = offset + 1
             } else {
-                let next = text.offsetAfter(offset)
-                if hasRanges && self.contains(text.scalar(at: offset)) {
+                let next = bytes.offsetAfter(offset)
+                if hasRanges && self.contains(bytes.scalar(at: offset)) {
                     return String.Index(utf8Offset: offset)..<String.Index(utf8Offset: next)
                 }
                 offset = next
@@ -139,32 +140,15 @@ public struct CharSet: Pattern {
         return none
     }
 
-    public fn lastMatch(in text: String, before end: String.Index) -> Range<String.Index>? {
-        var offset = end.utf8Offset
-        while offset > 0 {
-            let previous = text.offsetBefore(offset)
-            if self.contains(text.scalar(at: previous)) {
-                return String.Index(utf8Offset: previous)..<String.Index(utf8Offset: offset)
-            }
-            offset = previous
-        }
-        return none
+    public fn lastMatch(in text: Substring, before end: String.Index) -> Range<String.Index>? {
+        return CharPredicate { test: { c in self.contains(c) } }.lastMatch(in: text, before: end)
     }
 
-    public fn matchEnd(in text: String, startingAt start: String.Index) -> String.Index? {
-        if start.utf8Offset < text.utf8Count && self.contains(text[start]) {
-            return text.index(after: start)
-        }
-        return none
+    public fn matchEnd(in text: Substring, startingAt start: String.Index) -> String.Index? {
+        return CharPredicate { test: { c in self.contains(c) } }.matchEnd(in: text, startingAt: start)
     }
 
-    public fn matchStart(in text: String, endingAt end: String.Index) -> String.Index? {
-        if end.utf8Offset > 0 {
-            let previous = text.index(before: end)
-            if self.contains(text[previous]) {
-                return previous
-            }
-        }
-        return none
+    public fn matchStart(in text: Substring, endingAt end: String.Index) -> String.Index? {
+        return CharPredicate { test: { c in self.contains(c) } }.matchStart(in: text, endingAt: end)
     }
 }

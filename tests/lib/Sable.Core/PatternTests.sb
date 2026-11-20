@@ -11,28 +11,28 @@ fn at(_ offset: Int) -> String.Index {
 }
 
 fn firstOffset(_ pattern: some Pattern, _ text: String, from: Int) -> Int {
-    if let range = pattern.firstMatch(in: text, from: at(from)) {
+    if let range = pattern.firstMatch(in: Substring(text), from: at(from)) {
         return range.lowerBound.utf8Offset
     }
     return -1
 }
 
 fn lastOffset(_ pattern: some Pattern, _ text: String, before: Int) -> Int {
-    if let range = pattern.lastMatch(in: text, before: at(before)) {
+    if let range = pattern.lastMatch(in: Substring(text), before: at(before)) {
         return range.lowerBound.utf8Offset
     }
     return -1
 }
 
 fn endOffset(_ pattern: some Pattern, _ text: String, startingAt: Int) -> Int {
-    if let end = pattern.matchEnd(in: text, startingAt: at(startingAt)) {
+    if let end = pattern.matchEnd(in: Substring(text), startingAt: at(startingAt)) {
         return end.utf8Offset
     }
     return -1
 }
 
 fn startOffset(_ pattern: some Pattern, _ text: String, endingAt: Int) -> Int {
-    if let start = pattern.matchStart(in: text, endingAt: at(endingAt)) {
+    if let start = pattern.matchStart(in: Substring(text), endingAt: at(endingAt)) {
         return start.utf8Offset
     }
     return -1

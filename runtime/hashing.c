@@ -67,11 +67,11 @@ static inline uint64_t load_little32(const unsigned char *p) {
 // multiply over two loads that between them cover every byte; the length
 // goes in first, so that two such strings of different lengths differ. The
 // interpreter computes exactly this (SilInterpreter.StringHash).
-int64_t sable_string_hash(const SableString *s, int64_t key) {
+static int64_t hash_bytes(const char *bytes, int64_t length, int64_t key) {
     const uint64_t k0 = (uint64_t)key;
     const uint64_t k1 = ((k0 << 32) | (k0 >> 32)) ^ 0x9E3779B97F4A7C15ull;
-    const unsigned char *p = (const unsigned char *)s->bytes;
-    const uint64_t n = (uint64_t)s->length;
+    const unsigned char *p = (const unsigned char *)bytes;
+    const uint64_t n = (uint64_t)length;
     uint64_t acc = k0 ^ (n * 0xD6E8FEB86659FD93ull);
 
     if (n <= 16) {
@@ -97,4 +97,14 @@ int64_t sable_string_hash(const SableString *s, int64_t key) {
     }
 
     return (int64_t)fold_multiply(acc, k1 ^ 0x2D358DCCAA6C78A5ull);
+}
+
+int64_t sable_string_hash(const SableString *s, int64_t key) {
+    return hash_bytes(s->bytes, s->length, key);
+}
+
+// The bytes of a range of the string hashed as a string of just those bytes
+// is: a Substring hashes as the String it would copy to.
+int64_t sable_string_hash_range(const SableString *s, int64_t from, int64_t to, int64_t key) {
+    return hash_bytes(s->bytes + from, to - from, key);
 }

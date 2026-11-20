@@ -1,0 +1,64 @@
+module Sable.Core
+
+// Looking a String key up by a piece of a text: a Substring equals, and
+// hashes as, the String of its bytes, so the table is probed with the
+// piece's own hash and its entries' keys compared with its bytes where
+// they lie. A word cut from a line finds its count without being copied.
+
+extension Dictionary where Key == String {
+    /// The value of the key the piece spells, or none: found by the piece's
+    /// bytes, with no String made of them.
+    ///
+    /// ```sable
+    /// let ports: [String: Int] = ["http": 80, "https": 443]
+    /// let url = "https://example.com"
+    /// let scheme = url[..<url.firstIndex(of: ':')!]
+    /// assert(ports[scheme] == 443)
+    /// ```
+    public subscript(key: Substring) -> Value? {
+        get {
+            let at = find(piece: key)
+            if at < 0 {
+                return none
+            }
+            return entries[slots[at] & 4294967295]!.value
+        }
+    }
+
+    /// The value of the key the piece spells, or the fallback when it has
+    /// none.
+    public subscript(key: Substring, default fallback: Value) -> Value {
+        get {
+            return self[key] ?? fallback
+        }
+    }
+
+    /// Whether the key the piece spells has a value.
+    public fn contains(_ key: Substring) -> Bool {
+        return find(piece: key) >= 0
+    }
+
+    /// The slot holding the key the piece spells, or -1 when no slot does:
+    /// `find` with the piece's hash and bytes.
+    fn find(piece: Substring) -> Int {
+        if live == 0 {
+            return -1
+        }
+        var hasher = Hasher()
+        piece.hash(into: &hasher)
+        let hash = hasher.finalize()
+        let mask = slots.count - 1
+        let tag = Dictionary.tagOf(hash)
+        var at = hash & mask
+        while true {
+            let slot = slots[at]
+            if slot == -1 {
+                return -1
+            }
+            if slot >= 0 && slot >> 32 == tag && piece == entries[slot & 4294967295]!.key {
+                return at
+            }
+            at = (at + 1) & mask
+        }
+    }
+}

@@ -1415,6 +1415,39 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "string_hash":
                 return StringHash(Encoding.UTF8.GetBytes(Text(operands[0]).Value), (long)operands[1]!);
 
+            case "string_hash_range":
+                return StringHash(ByteRange(operands, 0).ToArray(), (long)operands[3]!);
+
+            case "string_count_range": {
+                var count = 0L;
+                foreach (var b in ByteRange(operands, 0)) {
+                    if (!IsContinuation(b)) {
+                        count++;
+                    }
+                }
+
+                return count;
+            }
+
+            case "string_compare_range":
+                return (long)Math.Sign(ByteRange(operands, 0).SequenceCompareTo(ByteRange(operands, 3)));
+
+            case "string_utf8_find_range": {
+                var found = ByteRange(operands, 0).IndexOf(ByteRange(operands, 3));
+                return found < 0 ? -1L : (long)operands[1]! + found;
+            }
+
+            case "string_utf8_find_last_range": {
+                var text = ByteRange(operands, 0);
+                var part = ByteRange(operands, 3);
+                if (part.Length > text.Length) {
+                    return -1L;
+                }
+
+                var found = part.Length == 0 ? text.Length : text.LastIndexOf(part);
+                return found < 0 ? -1L : (long)operands[1]! + found;
+            }
+
             case "hash_seed":
                 return HashSeed;
 
@@ -1885,7 +1918,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             }
 
             case "string_to_F64": {
-                var text = Text(operands[0]).Value;
+                var text = Encoding.UTF8.GetString(ByteRange(operands, 0));
                 // Too large for an F64 does not fit, as for toInt.
                 return IsDecimal(text) && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
                     && double.IsFinite(value)
@@ -1895,7 +1928,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             // To the nearest float in one rounding, as strtof does, not through a double.
             case "string_to_F32": {
-                var text = Text(operands[0]).Value;
+                var text = Encoding.UTF8.GetString(ByteRange(operands, 0));
                 return IsDecimal(text) && float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
                     && float.IsFinite(value)
                     ? new object?[] { true, value }
@@ -2651,6 +2684,17 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
     /// <summary>Whether the byte offset is where a scalar starts, or the end.</summary>
     static bool IsBoundary(byte[] bytes, long at) => at >= 0 && at <= bytes.Length && (at == bytes.Length || !IsContinuation(bytes[at]));
+
+    /// <summary>
+    ///     The bytes a range builtin's string and two offsets, from the
+    ///     operand at <paramref name="first" /> on, name: a Substring's, which
+    ///     the library has checked lie inside the string.
+    /// </summary>
+    ReadOnlySpan<byte> ByteRange(object?[] operands, int first) {
+        var from = (int)(long)operands[first + 1]!;
+        var to = (int)(long)operands[first + 2]!;
+        return Text(operands[first]).Utf8.AsSpan(from, to - from);
+    }
 
     /// <summary>The offset, checked to be where a scalar starts, as a String.Index must be to read there.</summary>
     static int ScalarStart(byte[] bytes, long at) {

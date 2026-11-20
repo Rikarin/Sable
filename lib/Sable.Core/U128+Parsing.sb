@@ -8,7 +8,7 @@ extension U128: Parsable {
     /// ```sable
     /// assert(try! U128.parse("340282366920938463463374607431768211455") == 340282366920938463463374607431768211455)
     /// ```
-    public static fn parse(_ text: String) throws(ParseError) -> U128 {
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> U128 {
         return try U128.parse(text, radix: 10, styles: .Sign)
     }
 
@@ -19,8 +19,8 @@ extension U128: Parsable {
     /// ```sable
     /// assert(try! U128.parse("0x7f", radix: 16, styles: .Prefix) == 127)
     /// ```
-    public static fn parse(_ text: String, radix: Int, styles: NumberStyles = .Sign) throws(ParseError) -> U128 {
-        let (negative, magnitude) = try parseInteger(text, radix, styles)
+    public static fn parse<S: StringProtocol>(_ text: S, radix: Int, styles: NumberStyles = .Sign) throws(ParseError) -> U128 {
+        let (negative, magnitude) = try parseInteger(text.asSubstring, radix, styles)
         return try unsignedValue(negative, magnitude, 340282366920938463463374607431768211455)
     }
 }

@@ -7,8 +7,8 @@ module Sable.Core
 // which keeps a loop over n linear); a String.Index (String+Index.sb) is a
 // byte offset, and constant time everywhere. What only the runtime can do
 // is a '@builtin', applied where it is called; the rest is Sable over
-// those. Searching, case, trimming and the like are in String+Search,
-// String+Case and String+Transform.
+// those. Searching, case, trimming and the like are in String+Case and
+// StringProtocol+Search and +Transform, shared with Substring.
 
 extension String {
     /// How many Unicode scalars the string has.
@@ -67,74 +67,10 @@ extension String {
     @builtin("string_from_Char")
     public static fn fromChar(character: Char) -> String
 
-    // ---- Parsing ---------------------------------------------------------
-    // Sugar over each type's Parsable.parse: decimal, with an optional sign;
-    // none when the text is not a number of the type, or does not fit it.
-
-    /// The integer the text writes, or none: `try? Int.parse(self)`.
-    public fn toInt() -> Int? {
-        return try? Int.parse(self)
-    }
-
-    /// The number the text writes, or none — for an infinity or NaN too, as
-    /// for a number too large for an F64, which `F64.parse` rounds to one.
-    public fn toF64() -> F64? {
-        if let value = try? F64.parse(self) {
-            if value - value == 0.0 {
-                return value
-            }
-        }
-        return none
-    }
-
-    /// The integer the text writes, or none: `try? I8.parse(self)`.
-    public fn toI8() -> I8? {
-        return try? I8.parse(self)
-    }
-
-    /// The integer the text writes, or none: `try? I16.parse(self)`.
-    public fn toI16() -> I16? {
-        return try? I16.parse(self)
-    }
-
-    /// The integer the text writes, or none: `try? I32.parse(self)`.
-    public fn toI32() -> I32? {
-        return try? I32.parse(self)
-    }
-
-    /// The integer the text writes, or none: `try? I64.parse(self)`.
-    public fn toI64() -> I64? {
-        return try? I64.parse(self)
-    }
-
-    /// The integer the text writes, or none: `try? U8.parse(self)`.
-    public fn toU8() -> U8? {
-        return try? U8.parse(self)
-    }
-
-    /// The integer the text writes, or none: `try? U16.parse(self)`.
-    public fn toU16() -> U16? {
-        return try? U16.parse(self)
-    }
-
-    /// The integer the text writes, or none: `try? U32.parse(self)`.
-    public fn toU32() -> U32? {
-        return try? U32.parse(self)
-    }
-
-    /// The integer the text writes, or none: `try? U64.parse(self)`.
-    public fn toU64() -> U64? {
-        return try? U64.parse(self)
-    }
-
-    /// The integer the text writes, or none: `try? UInt.parse(self)`.
-    public fn toUInt() -> UInt? {
-        return try? UInt.parse(self)
-    }
-
-    /// Whether the text is an F64, and the F64 when it is.
+    /// Whether the bytes from one offset up to another are an F64, and the
+    /// F64 when they are.
     @builtin("string_to_F64")
-    fn parseF64() -> (Bool, F64)
+    fn parseF64(_ from: Int, _ to: Int) -> (Bool, F64)
 
     /// The byte at the offset of the UTF-8 encoding; out of range traps.
     @builtin("string_utf8_at")

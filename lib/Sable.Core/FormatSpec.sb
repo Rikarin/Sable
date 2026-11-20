@@ -103,7 +103,9 @@ extension FormatSpec: Parsable {
     /// let spec = try! FormatSpec.parse("*>+8.3e")
     /// assert(spec.fill == '*' && spec.width == 8 && spec.kind == .Exponent)
     /// ```
-    public static fn parse(_ text: String) throws(ParseError) -> FormatSpec {
+    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> FormatSpec {
+        // A spec is a few scalars, read by number: as a String of its own.
+        let text = source.toString()
         var spec = FormatSpec()
         let count = text.count
         var i = 0

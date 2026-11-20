@@ -248,8 +248,8 @@ public sealed class RangeTests {
             fn slices(_ xs: Int[:], _ text: String) {
                 let a: Int[:] = xs[1..<^1]
                 let b: Int[:] = xs[^3...]
-                let c: String = text[^2...]
-                let d: String = text[text.startIndex..<text.endIndex]
+                let c: Substring = text[^2...]
+                let d: Substring = text[text.startIndex..<text.endIndex]
                 let e: Int[:] = xs[1..<3]
             }
             fn generic<C: BidirectionalCollection>(_ c: C) -> C.Element {

@@ -329,7 +329,9 @@ public fn formatBaseline(_ results: BenchResult[>..]) -> String {
 
 public fn parseBaseline(_ text: String) -> BenchResult[>..] {
     var results: BenchResult[>..] = []
-    for line in text.lines() {
+    // Lines and fields are pieces of the text, the numbers read where they
+    // lie: only a result's name is copied out.
+    for line in text.asSubstring.lines() {
         if line.hasPrefix("#") {
             continue
         }
@@ -339,7 +341,7 @@ public fn parseBaseline(_ text: String) -> BenchResult[>..] {
         }
         if let mean = fields[1].toInt(), let median = fields[2].toInt(), let deviation = fields[3].toInt(), let iterations = fields[4].toInt() {
             results.append(BenchResult {
-                name: fields[0], mean: F64(mean) / 1000.0, median: F64(median) / 1000.0,
+                name: fields[0].toString(), mean: F64(mean) / 1000.0, median: F64(median) / 1000.0,
                 deviation: F64(deviation) / 1000.0, iterations: iterations
             })
         }

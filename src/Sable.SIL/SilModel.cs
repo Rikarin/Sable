@@ -2122,6 +2122,15 @@ public static class SilBuiltins {
         Add("string_utf8_find", SilType.Int, SilType.String, SilType.String, SilType.Int);
         Add("string_utf8_find_last", SilType.Int, SilType.String, SilType.String, SilType.Int);
 
+        // A Substring's reads: a string's bytes from one offset up to
+        // another, which the library has checked are scalar boundaries
+        // inside it, counted, compared, searched and hashed where they lie.
+        Add("string_count_range", SilType.Int, SilType.String, SilType.Int, SilType.Int);
+        Add("string_compare_range", SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.String, SilType.Int, SilType.Int);
+        Add("string_utf8_find_range", SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.String, SilType.Int, SilType.Int);
+        Add("string_utf8_find_last_range", SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.String, SilType.Int, SilType.Int);
+        Add("string_hash_range", SilType.Int, SilType.String, SilType.Int, SilType.Int, SilType.Int);
+
         // Bytes as text: where the first ill-formed UTF-8 starts (-1 for
         // none), and bytes known to be well-formed made a string.
         Add("utf8_validate", SilType.Int, new SliceType(SilType.U8));
@@ -2148,8 +2157,9 @@ public static class SilBuiltins {
 
         // Parsing gives whether it worked, and the value when it did.
         Add("string_to_Int", SilType.Tuple([SilType.Bool, SilType.Int]), SilType.String);
-        Add("string_to_F64", SilType.Tuple([SilType.Bool, SilType.F64]), SilType.String);
-        Add("string_to_F32", SilType.Tuple([SilType.Bool, SilType.F32]), SilType.String);
+        // A float is read from a range of the string's bytes: a Substring's.
+        Add("string_to_F64", SilType.Tuple([SilType.Bool, SilType.F64]), SilType.String, SilType.Int, SilType.Int);
+        Add("string_to_F32", SilType.Tuple([SilType.Bool, SilType.F32]), SilType.String, SilType.Int, SilType.Int);
 
         // The runtime's calls (Sable.IO's floor). Those that can fail give a
         // value either way; 'io_succeeded' then says whether the last one did.

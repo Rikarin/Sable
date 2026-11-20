@@ -8,7 +8,7 @@ extension I64: Parsable {
     /// ```sable
     /// assert(try! I64.parse("-9223372036854775808") == -9223372036854775808)
     /// ```
-    public static fn parse(_ text: String) throws(ParseError) -> I64 {
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> I64 {
         return try I64.parse(text, radix: 10, styles: .Sign)
     }
 
@@ -19,8 +19,8 @@ extension I64: Parsable {
     /// ```sable
     /// assert(try! I64.parse("0x7f", radix: 16, styles: .Prefix) == 127)
     /// ```
-    public static fn parse(_ text: String, radix: Int, styles: NumberStyles = .Sign) throws(ParseError) -> I64 {
-        let (negative, magnitude) = try parseInteger(text, radix, styles)
+    public static fn parse<S: StringProtocol>(_ text: S, radix: Int, styles: NumberStyles = .Sign) throws(ParseError) -> I64 {
+        let (negative, magnitude) = try parseInteger(text.asSubstring, radix, styles)
         let value = try signedValue(negative, magnitude, 9223372036854775807)
         return I64(value)
     }

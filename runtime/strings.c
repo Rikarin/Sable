@@ -607,6 +607,73 @@ int64_t sable_string_utf8_find_last(const SableString *text, const SableString *
     return -1;
 }
 
+// ---- Byte ranges
+//
+// What a Substring is read through: a range of a string's bytes, its owner
+// and two offsets, which the library has checked are scalar boundaries
+// inside it. Each is its whole-string form over the range, so a piece of a
+// text is counted, compared, searched and hashed where it lies.
+
+// How many scalars the bytes from one offset up to another hold.
+int64_t sable_string_count_range(const SableString *s, int64_t from, int64_t to) {
+    if (s->count == s->length) {
+        return to - from;
+    }
+
+    return count_scalars(s->bytes + from, to - from);
+}
+
+// Negative, zero or positive as one range of bytes orders before, with or
+// after the other: by the bytes, a prefix first, as sable_string_compare.
+int64_t sable_string_compare_range(const SableString *a, int64_t aFrom, int64_t aTo, const SableString *b, int64_t bFrom, int64_t bTo) {
+    int64_t aLength = aTo - aFrom, bLength = bTo - bFrom;
+    int64_t shorter = aLength < bLength ? aLength : bLength;
+    int order = shorter > 0 ? memcmp(a->bytes + aFrom, b->bytes + bFrom, (size_t)shorter) : 0;
+    if (order != 0) {
+        return order < 0 ? -1 : 1;
+    }
+
+    return aLength < bLength ? -1 : aLength > bLength ? 1 : 0;
+}
+
+// Where the part's range of bytes first occurs inside the text's range: a
+// byte offset in the text, or -1.
+int64_t sable_string_utf8_find_range(const SableString *text, int64_t from, int64_t to, const SableString *part, int64_t partFrom, int64_t partTo) {
+    int64_t size = partTo - partFrom;
+    if (size > to - from) {
+        return -1;
+    }
+
+    if (size == 0) {
+        return from;
+    }
+
+    const char *found = find_bytes(text->bytes + from, to - from, part->bytes + partFrom, size);
+    return found == NULL ? -1 : found - text->bytes;
+}
+
+// Where the part's range of bytes last occurs inside the text's range: a
+// byte offset in the text, or -1.
+int64_t sable_string_utf8_find_last_range(const SableString *text, int64_t from, int64_t to, const SableString *part, int64_t partFrom, int64_t partTo) {
+    int64_t size = partTo - partFrom;
+    if (size > to - from) {
+        return -1;
+    }
+
+    if (size == 0) {
+        return to;
+    }
+
+    const char *needle = part->bytes + partFrom;
+    for (int64_t i = to - size; i >= from; i--) {
+        if (text->bytes[i] == needle[0] && memcmp(text->bytes + i, needle, (size_t)size) == 0) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
 // ---- Validating UTF-8
 //
 // Where the first ill-formed sequence in the bytes starts, or -1 when there
@@ -973,9 +1040,8 @@ bool sable_string_to_int(const SableString *s, int64_t *out) {
 // Whether the string is a decimal number — sign, digits, fraction, exponent —
 // and nothing else: no infinities, NaN, hex or surrounding space, which
 // strtod and strtof would also take.
-static bool is_decimal(const SableString *s) {
-    const char *b = s->bytes;
-    int64_t n = s->length, i = 0, digits = 0;
+static bool is_decimal(const char *b, int64_t n) {
+    int64_t i = 0, digits = 0;
     if (i < n && (b[i] == '+' || b[i] == '-')) {
         i++;
     }
@@ -1018,14 +1084,15 @@ static bool is_decimal(const SableString *s) {
 }
 
 // A decimal number that is finite as a double, rounded to the nearest one.
-bool sable_string_to_f64(const SableString *s, double *out) {
-    if (!is_decimal(s)) {
+bool sable_string_to_f64(const SableString *s, int64_t from, int64_t to, double *out) {
+    int64_t length = to - from;
+    if (!is_decimal(s->bytes + from, length)) {
         return false;
     }
 
-    char *text = malloc((size_t)s->length + 1);
-    memcpy(text, s->bytes, (size_t)s->length);
-    text[s->length] = '\0';
+    char *text = malloc((size_t)length + 1);
+    memcpy(text, s->bytes + from, (size_t)length);
+    text[length] = '\0';
     double value = strtod(text, NULL);
     free(text);
 
@@ -1042,14 +1109,15 @@ bool sable_string_to_f64(const SableString *s, double *out) {
 // float: through a double it would be rounded twice, and a decimal just past
 // a midpoint between two floats can land on the midpoint as a double and
 // then go the wrong way.
-bool sable_string_to_f32(const SableString *s, float *out) {
-    if (!is_decimal(s)) {
+bool sable_string_to_f32(const SableString *s, int64_t from, int64_t to, float *out) {
+    int64_t length = to - from;
+    if (!is_decimal(s->bytes + from, length)) {
         return false;
     }
 
-    char *text = malloc((size_t)s->length + 1);
-    memcpy(text, s->bytes, (size_t)s->length);
-    text[s->length] = '\0';
+    char *text = malloc((size_t)length + 1);
+    memcpy(text, s->bytes + from, (size_t)length);
+    text[length] = '\0';
     float value = strtof(text, NULL);
     free(text);
 

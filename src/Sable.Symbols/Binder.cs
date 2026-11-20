@@ -4236,6 +4236,41 @@ public sealed partial class Binder {
             && a.Parameters.Zip(b.Parameters).All(static p => (p.First.Label ?? p.First.Name) == (p.Second.Label ?? p.Second.Name));
     }
 
+    /// <summary>
+    ///     A type's bases in the order its members are looked for in them: a
+    ///     superclass first, then the protocols, each before any it refines.
+    ///     A refining protocol's extension member then hides the one of the
+    ///     same labels that a protocol it refines gives: String's
+    ///     <c>firstIndex(of:)</c> of a Pattern, from StringProtocol, rather
+    ///     than Collection's of an element, whichever conformance was
+    ///     declared first.
+    /// </summary>
+    static IEnumerable<TypeSymbol> MostRefinedFirst(ImmutableArray<TypeSymbol> bases) {
+        if (bases.Count(static b => b is NamedTypeSymbol { TypeKind: TypeKind.Protocol }) < 2) {
+            return bases;
+        }
+
+        return bases.Where(static b => b is not NamedTypeSymbol { TypeKind: TypeKind.Protocol })
+            .Concat(bases.Where(static b => b is NamedTypeSymbol { TypeKind: TypeKind.Protocol }).OrderByDescending(Refined));
+
+        // How many protocols the protocol refines, directly or not: more than
+        // any protocol it refines does.
+        static int Refined(TypeSymbol protocol) {
+            var seen = new HashSet<NamedTypeSymbol>(ReferenceEqualityComparer.Instance);
+            var pending = new Stack<NamedTypeSymbol>();
+            pending.Push(((NamedTypeSymbol)protocol).OriginalDefinition);
+            while (pending.TryPop(out var next)) {
+                foreach (var refined in next.BaseTypes) {
+                    if (refined is NamedTypeSymbol { TypeKind: TypeKind.Protocol } named && seen.Add(named.OriginalDefinition)) {
+                        pending.Push(named.OriginalDefinition);
+                    }
+                }
+            }
+
+            return seen.Count;
+        }
+    }
+
     MemberLookup? LookupMember(TypeSymbol type, string name, Func<Symbol, bool>? wanted = null) {
         // After 'where T == Int' a T has Int's members.
         type = _conversions.Equivalence.Canonical(type);
@@ -4323,7 +4358,7 @@ public sealed partial class Binder {
                     if (available.Count > 0) {
                         return WithProtocolOverloads(
                             new MemberLookup(available, named, substitution),
-                            named.BaseTypes.Select(substitution.Apply),
+                            MostRefinedFirst(named.BaseTypes).Select(substitution.Apply),
                             name,
                             substitution,
                             visited,
@@ -4339,7 +4374,7 @@ public sealed partial class Binder {
                 // A base is read with this type's arguments first: through
                 // 'Counted<String>', 'protocol Counted<U>: Source<U>' is a
                 // Source<String>, whose T is then String.
-                foreach (var baseType in named.BaseTypes) {
+                foreach (var baseType in MostRefinedFirst(named.BaseTypes)) {
                     if (LookupMemberCore(substitution.Apply(baseType), name, substitution, visited, selfType, wanted)
                         is { } inherited) {
                         return inherited;

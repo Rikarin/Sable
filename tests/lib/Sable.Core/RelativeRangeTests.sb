@@ -56,9 +56,9 @@ fn anArrayIsSlicedFromTheEnd() {
 @test
 fn aStringIsSlicedFromTheEndByCharacter() {
     let text = "naïve café"
-    assertEqual(text[^4...], "café")
-    assertEqual(text[1..<^5], "aïve")
-    assertEqual(text[..<^5], "naïve")
+    assertEqual(text[^4...].toString(), "café")
+    assertEqual(text[1..<^5].toString(), "aïve")
+    assertEqual(text[..<^5].toString(), "naïve")
 }
 
 @test(traps: "range ^6..<^0 is out of range for count 5")

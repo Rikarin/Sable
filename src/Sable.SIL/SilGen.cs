@@ -1665,9 +1665,27 @@ public sealed partial class SilGen {
             return cached;
         }
 
+        if (type is NamedTypeSymbol { IsConstructed: true } constructed && EndlessType(constructed) is { } endless) {
+            var definition = constructed.OriginalDefinition;
+            if (_endlessTypes.Add(definition)) {
+                _diagnostics.Add(Diagnostic.Error(ErrorCode.ERR_EndlessInstantiation, definition.Location ?? default, endless)
+                    .AnchoredAt(definition.DeclaringSyntax.FirstOrDefault()));
+            }
+
+            _types[type] = null;
+            return null;
+        }
+
         var lowered = _lowered.Count;
         var types = _module.Types.Count;
-        var result = LowerUncached(type);
+        _loweringTypes.Add(type);
+        SilType? result;
+        try {
+            result = LowerUncached(type);
+        } finally {
+            _loweringTypes.RemoveAt(_loweringTypes.Count - 1);
+        }
+
         if (result is null) {
             // Take back every type begun inside this one.
             foreach (var begun in _lowered.Skip(lowered)) {
@@ -1683,6 +1701,46 @@ public sealed partial class SilGen {
         _types[type] = result;
         _lowered.Add(type);
         return result;
+    }
+
+    /// <summary>The types being lowered, each needed by the one before: a member's type, a type argument's.</summary>
+    readonly List<TypeSymbol> _loweringTypes = [];
+
+    /// <summary>The generic types reported as needing endless copies, each reported once.</summary>
+    readonly HashSet<NamedTypeSymbol> _endlessTypes = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    ///     Why a copy of a generic type would be one of an endless series, or
+    ///     null: lowering it is needed by lowering a copy of the same type
+    ///     whose type arguments it grows from — 'Tree&lt;T&gt;' with a case that
+    ///     holds a 'Tree&lt;T?&gt;', which holds a 'Tree&lt;T??&gt;', and so on
+    ///     (<see cref="Grows" />) — or by a chain of types too long to be
+    ///     anything else. A generic type is laid out once for each set of
+    ///     type arguments, so its layout would never be finished.
+    /// </summary>
+    string? EndlessType(NamedTypeSymbol type) {
+        if (_loweringTypes.Count >= MaxInstanceDepth) {
+            return $"'{type.ToDisplayString()}' is reached through more than {MaxInstanceDepth} types, each needing the next to be laid out: "
+                + "a generic type is laid out once for each set of type arguments it is used with, so this would not finish compiling";
+        }
+
+        foreach (var outer in _loweringTypes) {
+            if (outer is not NamedTypeSymbol named || !ReferenceEquals(named.OriginalDefinition, type.OriginalDefinition)) {
+                continue;
+            }
+
+            for (var i = 0; i < type.TypeArguments.Length && i < named.TypeArguments.Length; i++) {
+                if (Grows(named.TypeArguments[i], type.TypeArguments[i])) {
+                    var parameter = type.OriginalDefinition.TypeParameters[i].Name;
+                    return $"'{named.ToDisplayString()}' holds a '{type.ToDisplayString()}', which holds a larger type again, without end "
+                        + $"({parameter} = '{named.TypeArguments[i].ToDisplayString()}' leads to {parameter} = '{type.TypeArguments[i].ToDisplayString()}'): "
+                        + "a generic type is laid out once for each set of type arguments it is used with, so this would not finish compiling; "
+                        + "hold the same type arguments, or keep what grows in a value rather than in a type";
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Enters a named type before its members, so that they may refer to it.</summary>

@@ -445,6 +445,37 @@ public sealed class GenericLoweringTests {
         Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_EndlessInstantiation);
     }
 
+    [Theory]
+    [InlineData(
+        // A case that holds the union with an optional argument: 'Tree<Int>'
+        // holds a 'Tree<Int?>', which holds a 'Tree<Int??>', … ('T!' is an
+        // optional too, as the compiler fuzzer found).
+        """
+        union Tree<Value> {
+            Leaf
+            Node(value: Value, left: Tree<Value>, right: Tree<Value! >)
+        }
+        fn count(_ tree: Tree<Int>) -> Int { return 0 }
+        fn test() -> Int { return count(.Leaf) }
+        """
+    )]
+    [InlineData(
+        // Through an array and another generic type, which lay out what they hold too.
+        """
+        struct Outer<T> {
+            let items: Inner<T>[]
+        }
+        struct Inner<U> {
+            let next: Outer<(U, U)>?
+        }
+        fn test() -> Int { return Outer<Int> { items: [] }.items.count }
+        """
+    )]
+    public void AGenericTypeThatHoldsItselfAtALargerTypeIsReportedNotLaidOutForever(string source) {
+        var errors = LoweringErrors(source);
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_EndlessInstantiation);
+    }
+
     [Fact]
     public void ARecursionThatSettlesOnOneTypeIsNotPolymorphicRecursion() {
         // 'show<String>' asks for 'show<Int>', which asks only for itself.

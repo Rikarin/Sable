@@ -527,6 +527,7 @@ public sealed class DeclarationParserTests {
     [InlineData("fn f(h: borrowing Node) {}", "'borrowing' is not Sable", "'h: Node&'", "fn f(h: Node&) {}")]
     [InlineData("fn f(_ a: ref Node?) {}", "'ref' is not Sable", "'Node?&'", "fn f(_ a: Node?&) {}")]
     [InlineData("fn f() -> ref Node {}", "'ref' is not Sable", "'Node&'", "fn f() -> Node& {}")]
+    [InlineData("fn f(borrowing a: borrowing Node) {}", "'borrowing' is not Sable", "'a: Node&'", "fn f(a: Node&) {}")]
     public void RefAndBorrowingAreReadAsTheReferenceTheyMeantAndSaySo(string declaration, string says, string spelled, string fixedText) {
         var source = "module M\n" + declaration + "\n";
         var tree = SyntaxTree.Parse(source);

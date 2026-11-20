@@ -109,7 +109,7 @@ public sealed class ParserTarget : Target {
             throw new BrokenPromise($"the incremental tree does not give back the edited text; edit {change}");
         }
 
-        if (Dump(incremental.Root) != Dump(full.Root)) {
+        if (!SameTree(incremental.Root, full.Root)) {
             throw new BrokenPromise($"the incremental tree differs from a full parse; edit {change}\n---- full ----\n{Dump(full.Root)}\n---- incremental ----\n{Dump(incremental.Root)}");
         }
 
@@ -166,6 +166,46 @@ public sealed class ParserTarget : Target {
 
         if (at != node.Position + node.FullWidth) {
             throw new BrokenPromise($"parsed as {what}, a {node.Kind}'s children cover {at - node.Position} of its {node.FullWidth} characters");
+        }
+    }
+
+    /// <summary>
+    ///     Whether two trees of the same text have the one shape
+    ///     <see cref="Dump" /> writes, found without writing it: a document
+    ///     edited hundreds of times is compared after every edit, and the
+    ///     dumps, a line and a JSON string for every token, were most of what
+    ///     an input cost. Of one text, a token with the same place, the same
+    ///     text and the same place for it has the same trivia too.
+    /// </summary>
+    internal static bool SameTree(SyntaxNode left, SyntaxNode right) {
+        if (left.Kind != right.Kind || left.FullSpan != right.FullSpan) {
+            return false;
+        }
+
+        using var lefts = left.ChildNodesAndTokens().GetEnumerator();
+        using var rights = right.ChildNodesAndTokens().GetEnumerator();
+        while (true) {
+            var more = lefts.MoveNext();
+            if (more != rights.MoveNext()) {
+                return false;
+            }
+
+            if (!more) {
+                return true;
+            }
+
+            var (a, b) = (lefts.Current, rights.Current);
+            if (a.AsNode() is { } leftNode) {
+                if (b.AsNode() is not { } rightNode || !SameTree(leftNode, rightNode)) {
+                    return false;
+                }
+            } else if (b.IsNode
+                || a.Kind != b.Kind
+                || a.FullSpan != b.FullSpan
+                || a.Span != b.Span
+                || a.AsToken().Text != b.AsToken().Text) {
+                return false;
+            }
         }
     }
 

@@ -3623,11 +3623,14 @@ internal sealed class Parser {
         // parameter that refers to its argument says so in its type,
         // 'a: Node&'. The words stay reserved so that they say so, and the
         // parameter reads as the one it meant.
+        //
+        // Every such word is skipped, however many are written: the error
+        // names the first, and its fix deletes them all.
         var modifierItems = ImmutableArray.CreateBuilder<GreenNode>();
-        (SyntaxKind Kind, TextSpan Span)? removed = null;
+        var removed = ImmutableArray.CreateBuilder<(SyntaxKind Kind, TextSpan Span)>();
         while (true) {
             if (IsRemovedParameterModifier(Current.Kind)) {
-                removed ??= RemovedKeyword();
+                removed.Add(RemovedKeyword());
             } else if (IsParameterModifier(Current.Kind) && !IsInLabel()) {
                 modifierItems.Add(EatToken());
             } else {
@@ -3653,22 +3656,24 @@ internal sealed class Parser {
         // the form that reads well once a parameter has an external label.
         // 'h: borrowing FileHandle' is not Sable either; 'a: ref Node' is a
         // type, and says so as one.
-        if (At(SyntaxKind.BorrowingKeyword)) {
-            removed ??= RemovedKeyword();
+        while (At(SyntaxKind.BorrowingKeyword)) {
+            removed.Add(RemovedKeyword());
         }
 
         var typeModifier = IsParameterModifier(Current.Kind) ? EatToken() : null;
 
         // 'f: @escaping () -> Int' says of the type what '@escaping f: …' does.
         var type = At(SyntaxKind.AtToken) ? new AttributedTypeGreen(ParseAttributes(onType: true), ParseType()) : ParseType();
-        if (removed is { } keyword) {
+        if (removed.Count > 0) {
+            var keyword = removed[0];
             type = ReadAsReference(
                 type,
                 keyword,
                 keyword.Kind == SyntaxKind.BorrowingKeyword
                     ? "a parameter taken by reference says so in its type (a class or @noncopy one is, without it)"
                     : "a parameter that refers to its argument says so in its type",
-                identifier.Text + ": "
+                identifier.Text + ": ",
+                removed.Skip(1).Select(static other => other.Span)
             );
         }
         var ellipsis = TryEatToken(SyntaxKind.DotDotDotToken);
@@ -3727,7 +3732,13 @@ internal sealed class Parser {
     ///     reference it meant, 'T&amp;', with the error that says so and the
     ///     fix that writes it.
     /// </summary>
-    GreenNode ReadAsReference(GreenNode type, (SyntaxKind Kind, TextSpan Span) keyword, string why, string parameter = "") {
+    GreenNode ReadAsReference(
+        GreenNode type,
+        (SyntaxKind Kind, TextSpan Span) keyword,
+        string why,
+        string parameter = "",
+        IEnumerable<TextSpan>? others = null
+    ) {
         var text = type.ToFullString().Substring(type.LeadingTriviaWidth, type.Width);
         var end = _tokenPosition - type.TrailingTriviaWidth;
         var word = keyword.Kind == SyntaxKind.RefKeyword ? "ref" : "borrowing";
@@ -3736,7 +3747,16 @@ internal sealed class Parser {
             new TextSpan(keyword.Span.Start, word.Length),
             $"'{word}' is not Sable: {why}, '{parameter}{text}&'"
         ) with {
-            Fixes = [new($"Write '{text}&'", [new TextChange(keyword.Span, ""), new TextChange(new TextSpan(end, 0), "&")])],
+            Fixes = [
+                new(
+                    $"Write '{text}&'",
+                    [
+                        new TextChange(keyword.Span, ""),
+                        ..(others ?? []).Select(static span => new TextChange(span, "")),
+                        new TextChange(new TextSpan(end, 0), "&"),
+                    ]
+                ),
+            ],
         };
         _diagnostics.Add(diagnostic);
 

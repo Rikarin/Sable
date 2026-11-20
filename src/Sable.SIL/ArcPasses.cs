@@ -238,6 +238,7 @@ public sealed class BorrowLoads : ISilPass {
 
         SilBlock? join = null;
         DestroyValueInst? destroy = null;
+        var elsewhere = new List<SilInstruction>();
         foreach (var user in uses.Of(load)) {
             if (user.IsTerminator || user is not DestroyValueInst && Uses.Consumes(user, load)) {
                 return null;
@@ -251,29 +252,32 @@ public sealed class BorrowLoads : ISilPass {
                 continue;
             }
 
-            join ??= user.Block;
-            if (user.Block != join) {
-                return null;
-            }
-
             if (user is DestroyValueInst found) {
                 if (destroy is not null) {
                     return null;
                 }
 
                 destroy = found;
+                join = user.Block;
+                continue;
             }
+
+            elsewhere.Add(user);
         }
 
         if (join is null || destroy is null) {
             return null;
         }
 
+        // A use outside the load's block and the join is in a block between,
+        // which only the region leads into — a call guessed at by
+        // SpeculativeDevirtualise, with the value cast — and is checked below.
+        var inJoin = elsewhere.Where(u => u.Block == join).ToList();
+        elsewhere.RemoveAll(u => u.Block == join);
+
         var end = join.Instructions.IndexOf(destroy);
-        foreach (var user in uses.Of(load)) {
-            if (user.Block == join && join.Instructions.IndexOf(user) > end) {
-                return null;
-            }
+        if (inJoin.Any(u => join.Instructions.IndexOf(u) > end)) {
+            return null;
         }
 
         var slot = ExclusiveOf(load.Address);
@@ -313,6 +317,27 @@ public sealed class BorrowLoads : ISilPass {
 
             foreach (var successor in next.Successors) {
                 pending.Push(successor);
+            }
+        }
+
+        // Uses between must be where the borrow surely is: in blocks entered
+        // only from the region, and only looking — what is derived from the
+        // value must not reach a terminator.
+        if (elsewhere.Count > 0) {
+            var region = new HashSet<SilBlock>(between) { block };
+            foreach (var other in block.Function.Blocks) {
+                if (!region.Contains(other) && other.Successors.Any(between.Contains)) {
+                    return null;
+                }
+            }
+
+            if (elsewhere.Any(u => !between.Contains(u.Block) || u is not (BuiltinInst or UncheckedRefCastInst or UpcastInst or StructExtractInst or ClassMethodInst or ApplyInst))) {
+                return null;
+            }
+
+            if (elsewhere.Any(u => u is UncheckedRefCastInst or UpcastInst or StructExtractInst && !u.Type.IsTrivial
+                    && uses.Of(u).Any(d => d.Block != u.Block || d.IsTerminator || Uses.Consumes(d, u)))) {
+                return null;
             }
         }
 

@@ -34,7 +34,9 @@ namespace Sable.SIL;
 ///         argument the callee branches on adds <see cref="ConstantBonus" />,
 ///         since the branch it decides folds away with what it skips. A
 ///         callee with a loop is not inlined, nor one that never returns,
-///         which is cold and whose frame a trap's backtrace shows.
+///         which is cold and whose frame a trap's backtrace shows, nor, into
+///         a loop, one that allocates: in its own frame what it makes can be
+///         on the stack, but not made in a loop.
 ///     </para>
 ///     <para>
 ///         Callees are inlined into their callers bottom up, so a small
@@ -111,9 +113,39 @@ public sealed class Inliner : ISilPass {
             return false;
         }
 
+        // What a callee allocates stays in its frame, on the stack, where
+        // it does not escape; inlined into a loop, it would be made on the
+        // heap each time round, as an allocation in a loop is not promoted.
+        if (Allocates(callee) && InLoop(call.Block)) {
+            return false;
+        }
+
         var budget = references is not null && references.GetValueOrDefault(callee.Name) == 1 ? SingleCallerThreshold : Threshold;
         budget += ConstantBonus * DecidingConstants(callee, call);
         return Cost(callee, budget) <= budget && !Loops(callee);
+    }
+
+    static bool Allocates(SilFunction function) =>
+        function.Blocks.SelectMany(static b => b.Instructions)
+            .Any(static i => i is AllocRefInst || i is BuiltinInst { Name: "inline_new" or "inline_new_stack" });
+
+    /// <summary>True when a block can be reached again from itself.</summary>
+    static bool InLoop(SilBlock block) {
+        var seen = new HashSet<SilBlock>();
+        var pending = new Stack<SilBlock>(block.Successors);
+        while (pending.TryPop(out var next)) {
+            if (next == block) {
+                return true;
+            }
+
+            if (seen.Add(next)) {
+                foreach (var successor in next.Successors) {
+                    pending.Push(successor);
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

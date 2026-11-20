@@ -400,6 +400,20 @@ public sealed class PassTests {
             fn first(_ a: Int) -> Int { return shared(a, 2) + chosen(true, a) }
             fn second(_ a: Int) -> Int { return shared(a, 3) + chosen(true, a) }
             fn third(_ a: Int, _ fast: Bool) -> Int { return chosen(fast, a) }
+            class Cell {
+                var v: Int
+                init(_ v: Int) { self.v = v }
+            }
+            fn made(_ i: Int) -> Int { return Cell(i).v }
+            fn looped(_ n: Int) -> Int {
+                var t = 0
+                var i = 0
+                while i < n {
+                    t = t + made(i)
+                    i = i + 1
+                }
+                return t
+            }
             """
         );
 
@@ -411,6 +425,11 @@ public sealed class PassTests {
         Assert.False(Calls(module.Find("M.first")!, "M.chosen"));
         Assert.False(Calls(module.Find("M.second")!, "M.chosen"));
         Assert.True(Calls(module.Find("M.third")!, "M.chosen"));
+
+        // What 'made' allocates stays on its own frame's stack, rather than
+        // being made on the heap round the caller's loop.
+        Assert.True(Calls(module.Find("M.looped")!, "M.made"));
+        Assert.Equal(6L, new SilInterpreter(module).Run("M.looped", 4L));
         Assert.Equal(56L, new SilInterpreter(module).Run("M.once", 2L));
         Assert.Equal(29L, new SilInterpreter(module).Run("M.first", 1L));
     }
@@ -434,6 +453,13 @@ public sealed class PassTests {
                 override fn weight() -> Int { return 20 }
             }
             fn weigh(_ a: Animal) -> Int { return a.weight() }
+            fn total(_ animals: Animal[>..]) -> Int {
+                var t = 0
+                for a in animals {
+                    t = t + a.weight()
+                }
+                return t
+            }
             fn run() -> Int { return weigh(Bird()) * 10000 + weigh(Dog()) * 100 + weigh(Animal()) }
             """
         );
@@ -448,6 +474,9 @@ public sealed class PassTests {
         Assert.Single(Instructions(weigh).OfType<ApplyInst>());
         Assert.Single(Instructions(weigh).OfType<ClassMethodInst>());
         Assert.Equal(12007L, new SilInterpreter(module).Run("M.run"));
+
+        // A loop's element, held in place, is borrowed across the guesses as across a call.
+        Assert.DoesNotContain(Instructions(module.Find("M.total")!).OfType<LoadInst>(), static l => l.Kind == LoadKind.Copy);
         Assert.DoesNotContain(SilPassManager.ForLevel("s"), static p => p is SpeculativeDevirtualise);
     }
 

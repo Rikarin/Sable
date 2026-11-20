@@ -7,6 +7,7 @@ namespace Sable.CodeGen.Tests;
 ///     compiled and run — natively and in the interpreter, which must agree —
 ///     and held to what they print. None of them needs a network.
 /// </summary>
+[Native]
 public sealed class ExampleProgramTests {
     [Fact]
     public void HelloGreetsEveryone() =>

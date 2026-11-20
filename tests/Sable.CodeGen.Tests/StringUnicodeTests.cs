@@ -8,6 +8,7 @@ namespace Sable.CodeGen.Tests;
 ///     both ways, which must agree; and the traps an index out of place
 ///     raises, with the same message both ways.
 /// </summary>
+[Native]
 public sealed class StringUnicodeTests {
     static string Run(string body) => AssertAgree(Program("", body)).Stdout;
 

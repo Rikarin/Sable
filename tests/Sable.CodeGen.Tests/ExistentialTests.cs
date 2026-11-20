@@ -8,6 +8,7 @@ namespace Sable.CodeGen.Tests;
 ///     subclass may override — or the protocol's default. Native and
 ///     interpreted, leak-checked.
 /// </summary>
+[Native]
 public sealed class ExistentialTests {
     static void Prints(string expected, string declarations, string body) =>
         Assert.Equal(expected, AssertAgree(Program(declarations, body)).Stdout);

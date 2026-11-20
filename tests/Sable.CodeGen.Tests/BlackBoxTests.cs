@@ -7,6 +7,7 @@ namespace Sable.CodeGen.Tests;
 ///     type — a counted one too, neither leaked nor freed twice — through an
 ///     assembly statement the optimiser cannot see into.
 /// </summary>
+[Native]
 public sealed class BlackBoxTests {
     const string Source = """
         module Example

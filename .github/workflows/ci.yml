@@ -39,6 +39,10 @@ jobs:
     # library's coverage and runs its doc examples.
     timeout-minutes: ${{ matrix.os == 'windows-2025' && 210 || 150 }}
     env:
+      # Every test that holds native code and the interpreter to the same
+      # answer builds natively here, where locally only those marked
+      # [Native] do (CONTRIBUTING.md).
+      SABLE_TEST_NATIVE: all
       # Linux arm64 leaves the fuzz tests to the nightly job, which runs them
       # on x64: what they find is the compiler's, not the machine's. Its
       # runners are no faster, and the job must end inside the limit.

@@ -11,6 +11,7 @@ namespace Sable.CodeGen.Tests;
 ///     These need a C compiler. Without one they pass vacuously, saying so in
 ///     the output, rather than failing a machine that cannot build binaries.
 /// </remarks>
+[Native]
 public sealed class NativeTests {
     static readonly bool CanBuild = NativeBuild.IsAvailable();
 

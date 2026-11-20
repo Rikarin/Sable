@@ -8,6 +8,7 @@ namespace Sable.CodeGen.Tests;
 ///     held without a count. Leaving them out must change nothing a program
 ///     sees — native and interpreted, leak-checked.
 /// </summary>
+[Native]
 public sealed class ArcTests {
     const string Declarations = """
                                 class Box {

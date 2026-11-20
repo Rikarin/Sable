@@ -92,6 +92,21 @@ and run it, natively and in the interpreter. What keeps it quicker:
   its own file of a library module has the whole library checked with it,
   as before; `SABLE_CHECK_LIBRARY=1` does that for every program, to compare
   against.
+- **Native builds where they matter.** A test that holds native code and the
+  interpreter to the same answer (`Programs.AssertAgree`) builds the program
+  natively only if it, or its class, is marked `[Native]`: tests of layout,
+  the ABI, reference counting, the runtime, the platform, traps. The rest
+  run in the interpreter alone, which compiles the program once rather than
+  twice and starts no clang. `SABLE_TEST_NATIVE=all` builds every one
+  natively too, as CI does, so CI's coverage is the whole of it:
+
+  ```bash
+  SABLE_TEST_NATIVE=all dotnet test tests/Sable.CodeGen.Tests --filter "Category!=Fuzz&Category!=Timing"
+  ```
+
+  A new test class about native code gets `[Native]`; `--filter
+  Category=Native` runs the marked ones. Tests that only build natively
+  (`Programs.BuildAndRun`, `Harnesses.Native`) always do.
 
 New diagnostics get a code in `src/Sable.Syntax/Diagnostics.cs` and a page under
 `docs/diagnostics/`.

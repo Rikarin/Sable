@@ -8,6 +8,7 @@ namespace Sable.CodeGen.Tests;
 ///     as any function does; <c>--deny-unsafe</c> counts it as it counts an
 ///     <c>unsafe</c> block.
 /// </summary>
+[Native]
 public sealed class UnsafeTests {
     const string Program = """
         module Main

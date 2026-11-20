@@ -7,6 +7,7 @@ namespace Sable.CodeGen.Tests;
 ///     the same traps, and — run with <c>SABLE_CHECK_LEAKS</c> — nothing left
 ///     allocated at the end.
 /// </summary>
+[Native]
 public sealed class HeapTests {
     static void Prints(string expected, string declarations, string body) =>
         Assert.Equal(expected, AssertAgree(Program(declarations, body)).Stdout);

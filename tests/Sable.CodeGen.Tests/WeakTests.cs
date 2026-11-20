@@ -8,6 +8,7 @@ namespace Sable.CodeGen.Tests;
 ///     gone; an unowned one traps. A cycle with a weak edge is freed whole.
 ///     Native and interpreted, leak-checked.
 /// </summary>
+[Native]
 public sealed class WeakTests {
     const string Workspace = """
                              class Workspace {

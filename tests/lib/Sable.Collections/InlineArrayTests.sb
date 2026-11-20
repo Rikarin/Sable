@@ -1,0 +1,25 @@
+module InlineArrayTests
+
+// InlineArray (Sable.Collections), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Collections
+
+import Sable.Collections
+import Sable.Testing
+
+@test
+fn anInlineArrayIsTheFixedSizeArray() {
+    var corners: InlineArray<Int, 4> = [0, 1, 2, 3]
+    corners[2] = 7
+    assertEqual(corners.count, 4)
+    assert(corners.toArray() == [0, 1, 7, 3])
+    let same: Int[4] = corners
+    assertEqual(same[2], 7)
+}
+
+@test
+fn anInlineArrayHasEveryArrayMember() {
+    var names: InlineArray<String, 3> = ["c", "a", "b"]
+    names.sort()
+    assert(names.toArray() == ["a", "b", "c"])
+    assert(names.contains(element: "b"))
+}

@@ -143,7 +143,7 @@ fn main() {
         keys = keys + k + " "
     }
     print(keys)
-    let unique = HashSet<Int>()
+    var unique = Set<Int>()
     print("\(unique.insert(3)) \(unique.insert(3)) \(unique.insert(5)) \(unique.count)")
     let ordered = sorted([5, 3, 9, 1])
     print("\(ordered[0]) \(ordered[3])")
@@ -712,7 +712,7 @@ fn main() {
     public void WhatAProgramDoesNotUseIsNotBuilt() {
         var result = Pipeline.Compile(new SourceText("module H\nimport Sable.Collections\n@main\nfn main() {\n    print(1)\n}\n", "test.sb"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
-        Assert.DoesNotContain("HashSet", result.LlvmIr!, StringComparison.Ordinal);
+        Assert.DoesNotContain("Sable.Collections.Set", result.LlvmIr!, StringComparison.Ordinal);
         Assert.DoesNotContain("Sable.Core.Int.<", result.LlvmIr!, StringComparison.Ordinal);
     }
 }

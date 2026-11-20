@@ -1,0 +1,231 @@
+module Sable.Collections
+
+/// Distinct values, by hash: .NET's HashSet<T>, Swift's Set, Rust's
+/// HashSet. A `[Element: Bool]` underneath, so a value is added, found and
+/// removed in constant time on average, and iteration is in the order values
+/// were first inserted.
+///
+/// A value, as a dictionary is: a copy is a set of its own, and the two
+/// share their storage until one of them changes.
+///
+/// ```sable
+/// var odd = Set<Int>([1, 3, 5, 7])
+/// let small = Set<Int>([1, 2, 3])
+/// assert(odd.intersection(small).toArray() == [1, 3])
+/// assert(odd.union(small).toArray() == [1, 3, 5, 7, 2])
+/// assert(odd.subtracting(small).toArray() == [5, 7])
+/// odd.insert(9)
+/// assert(odd.contains(9))
+/// ```
+public struct Set<Element: Hashable> {
+    var map: [Element: Bool] = [:]
+
+    /// An empty set.
+    public init() { }
+
+    /// The distinct values among these, in the order each first appears.
+    public init(_ elements: Element[:]) {
+        map.reserveCapacity(elements.count)
+        for element in elements {
+            map.insert(true, forKey: element)
+        }
+    }
+
+    /// An empty set with room for this many values before it grows.
+    public init(minimumCapacity: Int) {
+        map.reserveCapacity(minimumCapacity)
+    }
+
+    /// How many values it holds.
+    public var count: Int => map.count
+
+    /// Whether it holds no values.
+    public var isEmpty: Bool => map.count == 0
+
+    /// How many values it has room for before it must grow.
+    public var capacity: Int => map.capacity
+
+    /// The members in a grow-only array, in the order they were inserted.
+    public fn toArray() -> Element[>..] {
+        var members: Element[>..] = []
+        members.reserveCapacity(map.count)
+        for (member, _) in map {
+            members.append(member)
+        }
+        return members
+    }
+
+    // ---- Members -----------------------------------------------------------
+
+    /// Whether the value is in the set.
+    public fn contains(_ value: Element) -> Bool {
+        return map.contains(value)
+    }
+
+    /// Adds the value; true if it was not there before. A value already
+    /// there keeps its place in the order.
+    @discardable
+    public mutating fn insert(_ value: Element) -> Bool {
+        return map.insert(true, forKey: value)
+    }
+
+    /// Takes the value out; true if it was there.
+    @discardable
+    public mutating fn remove(_ value: Element) -> Bool {
+        if let _ = map.remove(value) {
+            return true
+        }
+        return false
+    }
+
+    /// Takes out every value.
+    public mutating fn removeAll() {
+        map.removeAll()
+    }
+
+    /// Room for at least this many values in all.
+    public mutating fn reserveCapacity(_ minimumCapacity: Int) {
+        map.reserveCapacity(minimumCapacity)
+    }
+
+    /// Keeps only the values that pass the test, in their order (Rust's
+    /// retain).
+    public mutating fn retain(where shouldKeep: (Element) -> Bool) {
+        map.retain(where: (member: Element, kept: Bool) => shouldKeep(member))
+    }
+
+    /// The values that pass the test, as a set of their own.
+    public fn filter(_ isIncluded: (Element) -> Bool) -> Set<Element> {
+        var kept = Set<Element>()
+        for (member, _) in map {
+            if isIncluded(member) {
+                kept.map.insert(true, forKey: member)
+            }
+        }
+        return kept
+    }
+
+    // ---- Combining ---------------------------------------------------------
+
+    /// Every value in this set or the other: this set's in their order,
+    /// then the other's that it lacks.
+    public fn union(_ other: Set<Element>) -> Set<Element> {
+        var result = self
+        result.formUnion(other)
+        return result
+    }
+
+    /// The values in both sets, in this set's order.
+    public fn intersection(_ other: Set<Element>) -> Set<Element> {
+        return self.filter((member: Element) => other.contains(member))
+    }
+
+    /// The values of this set that are not in the other.
+    public fn subtracting(_ other: Set<Element>) -> Set<Element> {
+        return self.filter((member: Element) => !other.contains(member))
+    }
+
+    /// The values in one set but not both: this set's in their order, then
+    /// the other's.
+    public fn symmetricDifference(_ other: Set<Element>) -> Set<Element> {
+        var result = self.subtracting(other)
+        for (member, _) in other.map {
+            if !map.contains(member) {
+                result.map.insert(true, forKey: member)
+            }
+        }
+        return result
+    }
+
+    /// Adds every value of the other set.
+    public mutating fn formUnion(_ other: Set<Element>) {
+        for (member, _) in other.map {
+            map.insert(true, forKey: member)
+        }
+    }
+
+    /// Keeps only the values that are also in the other set.
+    public mutating fn formIntersection(_ other: Set<Element>) {
+        map.retain(where: (member: Element, kept: Bool) => other.contains(member))
+    }
+
+    /// Takes out every value that is in the other set.
+    public mutating fn subtract(_ other: Set<Element>) {
+        for (member, _) in other.map {
+            map.remove(member)
+        }
+    }
+
+    /// Keeps the values in one set but not both.
+    public mutating fn formSymmetricDifference(_ other: Set<Element>) {
+        self = self.symmetricDifference(other)
+    }
+
+    // ---- Comparing ---------------------------------------------------------
+
+    /// Whether every value of this set is in the other.
+    public fn isSubset(of other: Set<Element>) -> Bool {
+        if map.count > other.count {
+            return false
+        }
+        for (member, _) in map {
+            if !other.contains(member) {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Whether every value of the other set is in this one.
+    public fn isSuperset(of other: Set<Element>) -> Bool {
+        return other.isSubset(of: self)
+    }
+
+    /// Whether this set is a subset of the other, and smaller.
+    public fn isStrictSubset(of other: Set<Element>) -> Bool {
+        return map.count < other.count && self.isSubset(of: other)
+    }
+
+    /// Whether this set is a superset of the other, and larger.
+    public fn isStrictSuperset(of other: Set<Element>) -> Bool {
+        return other.isStrictSubset(of: self)
+    }
+
+    /// Whether the two sets have no value in common.
+    public fn isDisjoint(with other: Set<Element>) -> Bool {
+        let (smaller, larger) = if map.count <= other.count { (self, other) } else { (other, self) }
+        for (member, _) in smaller.map {
+            if larger.contains(member) {
+                return false
+            }
+        }
+        return true
+    }
+}
+
+extension Set: Equatable {
+    /// Whether the two sets hold the same values, in whatever order.
+    public operator == (lhs: Set<Element>, rhs: Set<Element>) -> Bool {
+        return lhs.count == rhs.count && lhs.isSubset(of: rhs)
+    }
+}
+
+extension Set: Sequence {
+    /// An iterator over the members, in the order they were first inserted.
+    public fn makeIterator() -> SetIterator<Element> {
+        return SetIterator<Element> { entries: map.makeIterator() }
+    }
+}
+
+/// Gives a set's members in the order they were first inserted.
+public struct SetIterator<Element>: Iterator {
+    var entries: DictionaryIterator<Element, Bool>
+
+    /// The next member, or none past the last.
+    public mutating fn next() -> Element? {
+        if let (member, _) = entries.next() {
+            return member
+        }
+        return none
+    }
+}

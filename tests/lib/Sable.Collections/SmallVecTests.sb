@@ -1,0 +1,182 @@
+module SmallVecTests
+
+// SmallVec (Sable.Collections), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Collections
+
+import Sable.Collections
+import Sable.Testing
+
+@test
+fn aSmallVecStaysInlineUpToItsInlineCapacity() {
+    var small = SmallVec<Int, 3>()
+    assert(small.isEmpty)
+    assertEqual(small.inlineCapacity, 3)
+    assertEqual(small.capacity, 3)
+    small.append(1)
+    small.append(2)
+    small.append(3)
+    assert(!small.isSpilled)
+    assertEqual(small.count, 3)
+    assert(small.toArray() == [1, 2, 3])
+}
+
+@test
+fn oneElementPastTheInlineCapacityMovesToTheHeap() {
+    var small = SmallVec<Int, 2>([1, 2])
+    assert(!small.isSpilled)
+    small.append(3)
+    assert(small.isSpilled)
+    assert(small.capacity >= 3)
+    assertEqual(small.count, 3)
+    assert(small.toArray() == [1, 2, 3])
+}
+
+@test
+fn appendingManyAtOnceSpillsOnce() {
+    var small = SmallVec<Int, 2>()
+    small.append(contentsOf: [1, 2, 3, 4])
+    assert(small.isSpilled)
+    assert(small.toArray() == [1, 2, 3, 4])
+    small.append(contentsOf: [5])
+    assertEqual(small.count, 5)
+}
+
+@test
+fn subscriptReadsAndWritesInlineAndOnTheHeap() {
+    var small = SmallVec<String, 2>(["a", "b"])
+    small[1] = "B"
+    assertEqualText(small[1], "B")
+    small.append("c")
+    small[0] = "A"
+    assertEqualText(small[0], "A")
+    assertEqualText(small[2], "c")
+}
+
+@test
+fn firstAndLastAreNoneWhenEmpty() {
+    var small = SmallVec<Int, 2>()
+    assert(small.first == none)
+    assert(small.last == none)
+    small.append(4)
+    small.append(5)
+    assert(small.first == 4)
+    assert(small.last == 5)
+}
+
+@test
+fn insertMovesTheElementsAfterUp() {
+    var small = SmallVec<Int, 4>([1, 3])
+    small.insert(2, at: 1)
+    small.insert(0, at: 0)
+    assert(!small.isSpilled)
+    assert(small.toArray() == [0, 1, 2, 3])
+    small.insert(4, at: 4)
+    assert(small.isSpilled)
+    small.insert(9, at: 2)
+    assert(small.toArray() == [0, 1, 9, 2, 3, 4])
+}
+
+@test(traps: "SmallVec.insert: index out of range")
+fn insertPastTheEndTraps() {
+    var small = SmallVec<Int, 2>()
+    small.insert(1, at: 1)
+}
+
+@test(traps: "SmallVec.truncate: negative count")
+fn truncateToANegativeCountTraps() {
+    var small = SmallVec<Int, 2>([1])
+    small.truncate(to: -1)
+}
+
+@test
+fn removeAtClosesTheGap() {
+    var small = SmallVec<Int, 3>([1, 2, 3])
+    assertEqual(small.remove(at: 1), 2)
+    assert(small.toArray() == [1, 3])
+    small.append(contentsOf: [4, 5])
+    assertEqual(small.remove(at: 0), 1)
+    assert(small.toArray() == [3, 4, 5])
+}
+
+@test
+fn removeLastAndPopLastTakeFromTheEnd() {
+    var small = SmallVec<Int, 1>([1, 2])
+    assertEqual(small.removeLast(), 2)
+    assert(small.popLast() == 1)
+    assert(small.popLast() == none)
+    var inline = SmallVec<Int, 2>([7])
+    assertEqual(inline.removeLast(), 7)
+}
+
+@test
+fn truncateKeepsThePrefix() {
+    var small = SmallVec<Int, 2>([1, 2, 3, 4])
+    small.truncate(to: 10)
+    assertEqual(small.count, 4)
+    small.truncate(to: 1)
+    assert(small.toArray() == [1])
+}
+
+@test
+fn removeAllAndShrinkToFitComeBackInline() {
+    var small = SmallVec<Int, 2>([1, 2, 3])
+    small.removeAll()
+    assert(small.isEmpty)
+    assert(!small.isSpilled)
+    small.append(contentsOf: [1, 2, 3])
+    small.shrinkToFit()
+    assert(small.isSpilled, "three do not fit inline")
+    let _ = small.removeLast()
+    small.shrinkToFit()
+    assert(!small.isSpilled)
+    assert(small.toArray() == [1, 2])
+    small.shrinkToFit()
+    assert(!small.isSpilled)
+}
+
+@test
+fn reserveCapacityPastTheInlineRoomSpills() {
+    var small = SmallVec<Int, 4>([1])
+    small.reserveCapacity(3)
+    assert(!small.isSpilled)
+    small.reserveCapacity(10)
+    assert(small.isSpilled)
+    assert(small.capacity >= 10)
+    small.reserveCapacity(20)
+    assert(small.capacity >= 20)
+    assert(small.toArray() == [1])
+}
+
+@test
+fn containsFindsAnEqualElement() {
+    var small = SmallVec<String, 2>(["a"])
+    assert(small.contains("a"))
+    assert(!small.contains("b"))
+    small.append(contentsOf: ["b", "c"])
+    assert(small.contains("c"))
+    assert(!small.contains("d"))
+}
+
+@test
+fn aSmallVecIsGoneThroughInOrder() {
+    var small = SmallVec<Int, 2>([1, 2, 3])
+    var total = 0
+    for n in small {
+        total = total * 10 + n
+    }
+    assertEqual(total, 123)
+    small.removeAll()
+    for _ in small {
+        assert(false, "an empty vector gives nothing")
+    }
+}
+
+@test
+fn aCopyOfASmallVecIsItsOwn() {
+    var a = SmallVec<Int, 2>([1])
+    let b = a
+    a.append(2)
+    a[0] = 9
+    assertEqual(b.count, 1)
+    assertEqual(b[0], 1)
+}

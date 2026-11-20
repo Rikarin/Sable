@@ -867,7 +867,7 @@ Order of construction:
 ```
 Sable.Core         primitives, Optional, Outcome, String, Array family,
                    Comparable/Hashable/Equatable, iteration protocols
-Sable.Collections  List, Dictionary, Set, Deque, OrderedDictionary, Heap
+Sable.Collections  List, Dictionary, Set, Deque, OrderedDictionary, PriorityQueue, InlineArray, SmallVec
 Sable.Text         unicode, formatting, parsing, regex
 Sable.Math         fixed/float math, SIMD vectors, random
 Sable.IO           File, Directory, Stream, Path, stdin/stdout
@@ -915,7 +915,7 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   `escapedHtml`. (Since removed: the string functions are String's own
   members, and `format`/`formatted` gave way to interpolation's format
   specs, `"\(x:.2f)"`; `escapedHtml`, `parseInt` and `TextBuilder` stay.)
-- `Sable.Collections`: `Stack`, `Queue`, `HashSet` (a `[Element: Bool]`
+- `Sable.Collections`: `Stack`, `Queue`, `Set` (a `[Element: Bool]`
   underneath, iterating in insertion order; the `HashMap` that was here
   became the built-in dictionary, docs/06 "Dictionaries and hashing"), `Deque` (a ring
   buffer of optional slots, so a removed element is released at once),

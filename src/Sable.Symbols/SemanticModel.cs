@@ -510,7 +510,7 @@ public sealed partial class SemanticModel {
             }
 
             var binder = NewBinder(scope, function).ForDeclaredDefault(parameter);
-            binder.BindInitializer(clause.Value, parameter.Type);
+            binder.BindDefaultValue(clause.Value, parameter, parameter.Type);
             Collect(binder);
         }
     }

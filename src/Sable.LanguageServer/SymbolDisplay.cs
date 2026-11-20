@@ -19,7 +19,7 @@ internal static class SymbolDisplay {
                 return $"{(local.IsMutable ? "var" : "let")} {local.Name}: {Type(local.Type)}";
 
             case ParameterSymbol parameter:
-                return $"{Modifier(parameter.Modifier)}{parameter.Name}: {Type(parameter.Type)}";
+                return $"{Modifier(parameter.Modifier)}{parameter.Name}: {Attributes(parameter)}{Type(parameter.Type)}";
 
             case NamedTypeSymbol type: {
                 var builder = new StringBuilder();
@@ -130,8 +130,16 @@ internal static class SymbolDisplay {
         var label = parameter.Label is { } written && written != parameter.Name ? written + " " : "";
         var ellipsis = parameter.IsVariadic ? "..." : "";
         var defaulted = parameter.HasDefaultValue ? " = …" : "";
-        return $"{label}{Modifier(parameter.Modifier)}{parameter.Name}: {Type(parameter.Type)}{ellipsis}{defaulted}";
+        return $"{label}{Modifier(parameter.Modifier)}{parameter.Name}: {Attributes(parameter)}{Type(parameter.Type)}{ellipsis}{defaulted}";
     }
+
+    /// <summary>
+    ///     What a parameter's attributes say of its type, as the declaration
+    ///     writes them: an <c>@autoclosure</c> one's argument is written as
+    ///     the value, which hover and signature help have to say.
+    /// </summary>
+    static string Attributes(ParameterSymbol parameter) =>
+        (parameter.IsAutoclosure ? "@autoclosure " : "") + (parameter.IsEscaping ? "@escaping " : "");
 
     static string Modifier(ParameterModifier modifier) =>
         modifier switch {

@@ -98,6 +98,9 @@ public sealed partial class Compilation {
                         HasDefaultValue = p.HasDefaultValue,
                         IsVariadic = p.IsVariadic,
                         Modifier = p.Modifier,
+                        IsEscaping = p.IsEscaping,
+                        IsSendable = p.IsSendable,
+                        IsAutoclosure = p.IsAutoclosure,
                         TypeResolver = () => substitution.Apply(p.Type),
                     }
                 )

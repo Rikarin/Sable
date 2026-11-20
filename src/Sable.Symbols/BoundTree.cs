@@ -894,6 +894,13 @@ public sealed class BoundClosure(
     public ImmutableArray<BoundCapture> Captures { get; } = captures;
     public BoundBlock Body { get; } = body;
 
+    /// <summary>
+    ///     The closure made of an argument for an <c>@autoclosure</c>
+    ///     parameter: its syntax is the expression written, and its body
+    ///     returns it.
+    /// </summary>
+    public bool IsAutoclosure { get; init; }
+
     public override IEnumerable<BoundNode> Children =>
         Captures.Select(static c => c.Initializer).OfType<BoundNode>().Append(Body);
 }

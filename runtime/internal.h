@@ -26,6 +26,10 @@
 // The Microsoft C runtime's names for holding a stream across calls.
 #define flockfile _lock_file
 #define funlockfile _unlock_file
+#elif defined(__wasi__)
+// WASI's C library has one thread and no stream locks to hold.
+#define flockfile(stream) ((void)(stream))
+#define funlockfile(stream) ((void)(stream))
 #endif
 
 // Stops the program, saying why (traps.c).

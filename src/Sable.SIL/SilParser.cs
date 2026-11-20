@@ -239,6 +239,17 @@ public sealed class SilParser {
 
     SilParseException Error(string message) => new(message, Current.Line);
 
+    /// <summary>
+    ///     A count, an index, a line or a column: digits that fit an int, as
+    ///     anything else is malformed SIL rather than a number to read.
+    /// </summary>
+    int Count(string what) {
+        var token = Expect(TokenKind.Number, what);
+        return int.TryParse(token.Text, NumberStyles.None, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : throw new SilParseException($"expected {what} but found '{token.Text}'", token.Line);
+    }
+
     // ---- Module and function ------------------------------------------------
 
     SilModule _module = null!;
@@ -297,7 +308,7 @@ public sealed class SilParser {
                 Expect("=");
                 module.Foreign[name] = (Expect(TokenKind.String, "a C symbol").Text, type);
                 if (Accept("variadic")) {
-                    module.ForeignVariadic[name] = int.Parse(Expect(TokenKind.Number, "the count of fixed parameters").Text, CultureInfo.InvariantCulture);
+                    module.ForeignVariadic[name] = Count("the count of fixed parameters");
                 }
 
                 continue;
@@ -360,7 +371,7 @@ public sealed class SilParser {
         if (Current is { Kind: TokenKind.Global, Text: "align" }) {
             Next();
             Expect("(");
-            type.Alignment = int.Parse(Expect(TokenKind.Number, "an alignment").Text, CultureInfo.InvariantCulture);
+            type.Alignment = Count("an alignment");
             Expect(")");
         }
 
@@ -414,7 +425,7 @@ public sealed class SilParser {
         }
 
         if (Accept("empty_from")) {
-            type.EmptyFrom = int.Parse(Expect(TokenKind.Number, "the first field that may start empty").Text, CultureInfo.InvariantCulture);
+            type.EmptyFrom = Count("the first field that may start empty");
         }
     }
 
@@ -452,7 +463,7 @@ public sealed class SilParser {
             var roots = new List<int>();
             if (!At(")")) {
                 do {
-                    roots.Add(int.Parse(Expect(TokenKind.Number, "a parameter index").Text, CultureInfo.InvariantCulture));
+                    roots.Add(Count("a parameter index"));
                 } while (Accept(","));
             }
 
@@ -471,7 +482,7 @@ public sealed class SilParser {
         if (Accept("loc")) {
             _function.SourceFile = Expect(TokenKind.String, "a file name").Text;
             Expect(":");
-            _function.Line = int.Parse(Expect(TokenKind.Number, "a line").Text, CultureInfo.InvariantCulture);
+            _function.Line = Count("a line");
         }
 
         _values = new(StringComparer.Ordinal);
@@ -610,7 +621,7 @@ public sealed class SilParser {
             Next();
             Expect("(");
             var element = ParseTypeBody();
-            int? capacity = Accept(",") ? int.Parse(Expect(TokenKind.Number, "a capacity").Text, CultureInfo.InvariantCulture) : null;
+            int? capacity = Accept(",") ? Count("a capacity") : null;
             Expect(")");
             return new InlineArrayType(element, capacity);
         }
@@ -620,7 +631,7 @@ public sealed class SilParser {
             Expect("(");
             var target = ParseTypeBody() as StructType ?? throw Error("a relative reference needs an inline struct");
             Expect(",");
-            var width = int.Parse(Expect(TokenKind.Number, "a width").Text, CultureInfo.InvariantCulture);
+            var width = Count("a width");
             Expect(")");
             return new RelativeReferenceType(target, width, relative.Text == "relative_optional");
         }
@@ -827,7 +838,7 @@ public sealed class SilParser {
             case "tuple_extract" or "tuple_element_addr": {
                 var value = Defined(Operand(0), opcode, line);
                 Expect(",");
-                var index = int.Parse(Expect(TokenKind.Number, "an element index").Text, CultureInfo.InvariantCulture);
+                var index = Count("an element index");
                 instruction = opcode == "tuple_extract"
                     ? new TupleExtractInst(value, index)
                     : new TupleElementAddrInst(value, index);
@@ -920,7 +931,7 @@ public sealed class SilParser {
                     var other => throw new SilParseException($"'{other}' is not a load kind", line),
                 };
                 Expect("]");
-                instruction = new LoadInst(Operand(0), kind);
+                instruction = new LoadInst(Defined(Operand(0), opcode, line), kind);
                 break;
             }
 
@@ -1121,9 +1132,9 @@ public sealed class SilParser {
         }
 
         if (Accept("loc")) {
-            var sourceLine = int.Parse(Expect(TokenKind.Number, "a line").Text, CultureInfo.InvariantCulture);
+            var sourceLine = Count("a line");
             Expect(":");
-            var column = int.Parse(Expect(TokenKind.Number, "a column").Text, CultureInfo.InvariantCulture);
+            var column = Count("a column");
             instruction.Location = new SilLocation(sourceLine, column);
         }
 

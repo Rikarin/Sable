@@ -305,10 +305,27 @@ public sealed class VerifierTests {
     [InlineData("sil @f : $() -> () {\nbb0:\n  br bb9\n}", "bb9 is used but never defined")]
     [InlineData("sil @f : $() -> () {\nbb0:\n  %0 = alloc_stack $Bogus\n}", "unknown type")]
     [InlineData("sil @f : $() -> () {\nbb0:\n  %0 = return\n}", "produces no value")]
+    [InlineData("sil @f : $() -> () loc \"a.sb\":2sil {\nbb0:\n  return\n}", "expected a line but found '2sil'")]
+    [InlineData("sil @f : $() -> () {\nbb0:\n  return loc 2:44try\n}", "expected a column but found '44try'")]
+    [InlineData("sil @f : $() -> () {\nbb0:\n  return loc 99999999999:1\n}", "expected a line but found '99999999999'")]
+    [InlineData("sil @f : $() -> () {\nbb0:\n  return loc -1:1\n}", "expected a line but found '-1'")]
+    [InlineData("sil @f : $() -> Int {\nbb0:\n  %0 = load [trivial] %0\n  return %0\n}", "load needs its operand defined")]
+    [InlineData("sil @f : $() -> Int {\nbb0:\n  br bb2\nbb1:\n  %0 = load [trivial] %1\n  return %0\nbb2:\n  %1 = load [trivial] %0\n  br bb1\n}", "load needs its operand defined")]
     public void MalformedTextIsReportedWithItsLine(string sil, string complaint) {
         var error = Assert.Throws<SilParseException>(() => SilParser.Parse(sil));
         Assert.Contains(complaint, error.Message, StringComparison.Ordinal);
         Assert.True(error.Line >= 1);
+    }
+
+    [Theory]
+    [InlineData("add_\"Int")]
+    [InlineData("add_\\nt")]
+    [InlineData("add_\nInt")]
+    public void ABuiltinNamedWithWhatMustBeEscapedPrintsAsItReads(string name) {
+        var sil = $"sil @f : $(Int) -> Int {{\nbb0(%0 : $Int):\n  %1 = builtin {SilPrinter.Quote(name)}(%0, %0) : $Int\n  return %1\n}}\n";
+        var printed = SilPrinter.Print(SilParser.Parse(sil));
+        Assert.Equal(printed, SilPrinter.Print(SilParser.Parse(printed)));
+        Assert.Contains(SilPrinter.Quote(name), printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -430,6 +447,33 @@ public sealed class VerifierTests {
         Assert.Empty(SilVerifier.Verify(module));
         Assert.Equal(SilPrinter.Print(module), SilPrinter.Print(SilParser.Parse(SilPrinter.Print(module))));
         Assert.Contains("(@owned M.Node, M.Node) -> ()", SilPrinter.Print(module), StringComparison.Ordinal);
+    }
+
+    /// <summary>A load_weak or load_unowned of other storage is the verifier's to reject, not a crash on its type.</summary>
+    [Theory]
+    [InlineData("load_weak %1", "load_weak needs the address of weak storage")]
+    [InlineData("load_weak %2", "load_weak needs the address of weak storage")]
+    [InlineData("load_unowned %1", "load_unowned needs the address of unowned storage")]
+    [InlineData("load_unowned %2", "load_unowned needs the address of unowned storage")]
+    public void AWeakOrUnownedLoadNeedsItsKindOfStorage(string load, string complaint) {
+        var text = $$"""
+                    sil_class M.Node { next: $@sil_weak Optional$M.Node, parent: $M.Node }
+                    sil_enum Optional$M.Node { Some($M.Node), None }
+
+                    sil @f : $(@owned M.Node, M.Node) -> () {
+                    bb0(%0 : $M.Node, %1 : $M.Node):
+                      %2 = ref_element_addr %0, #parent
+                      %3 = {{load}}
+                      store_weak %3 to %2
+                      destroy_value %3
+                      destroy_value %0
+                      return
+                    }
+
+                    """;
+        var module = SilParser.Parse(text);
+        Assert.Contains("%3 = " + load, SilPrinter.Print(module), StringComparison.Ordinal);
+        AssertRejected(text, complaint);
     }
 
     /// <summary>A struct's weak and unowned fields as values: made from the object, read back as it, each its own owned value.</summary>

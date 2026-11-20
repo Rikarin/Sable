@@ -268,7 +268,7 @@ public static class SilPrinter {
                         break;
 
                     case BuiltinInst builtin:
-                        builder.Append(builtin.InBounds ? " [in_bounds]" : "").Append(" \"").Append(builtin.Name).Append("\"(")
+                        builder.Append(builtin.InBounds ? " [in_bounds]" : "").Append(' ').Append(Quote(builtin.Name)).Append('(')
                             .Append(string.Join(", ", builtin.Operands.Select(Name)))
                             .Append(") : $").Append(builtin.Type);
                         break;

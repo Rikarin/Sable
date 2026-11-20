@@ -1,20 +1,21 @@
 module Sable.Core
 
-/// A type that can be made from a sequence of its elements: what
-/// 'collect()' makes. Rust's FromIterator; .NET's collection expressions.
-///
-/// It is a static 'from' rather than Swift's 'init<S: Sequence>(_:)'
-/// because it throws what going through the sequence throws, and because
-/// the arrays conform: an initialiser can do neither yet (#287).
+/// A type that can be made from a sequence of its elements, by its
+/// initialiser 'init(_:)': what 'collect()' makes, and what 'String(chars)',
+/// '[K: V](pairs)' and a collection's 'Set(xs)' call. Swift's
+/// 'init<S: Sequence>(_:)'; Rust's FromIterator.
 ///
 /// ```sable
 /// let squares: Int[>..] = stride(from: 1, through: 3, by: 1).lazy.map { $0 * $0 }.collect()
 /// assert(squares[2] == 9)
+/// assert(String(['h', 'i']) == "hi")
+/// let ages = [String: Int]([("ada", 36), ("alan", 41)])
+/// assert(ages["alan"] == 41)
 /// ```
 public protocol FromSequence<Element> {
     /// One made of the sequence's elements, in order; what going through
     /// them throws, it throws.
-    static fn from<S: Sequence>(_ elements: S) throws(S.Failure) -> Self where S.Element == Element
+    init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element
 }
 
 extension Sequence {
@@ -22,6 +23,6 @@ extension Sequence {
     /// dictionary of pairs, a string of characters. What going through
     /// them throws, it throws.
     public fn collect<C: FromSequence<Element>>() throws(Failure) -> C {
-        return try C.from(self)
+        return try C(self)
     }
 }

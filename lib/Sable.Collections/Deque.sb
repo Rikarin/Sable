@@ -12,12 +12,13 @@ public class Deque<Element> {
 
     public init() { }
 
-    /// A deque of the values, in their order.
-    public init(_ values: Element[>..]) {
-        for value in values {
+    /// A deque of the sequence's values, in their order. What going
+    /// through them throws, it throws.
+    public init<S: Sequence>(_ values: S) throws(S.Failure) where S.Element == Element {
+        for try value in values {
             slots.append(value)
         }
-        used = values.count
+        used = slots.count
     }
 
     public var count: Int => used
@@ -179,7 +180,7 @@ public class Deque<Element> {
 // A deque is a random-access collection whose elements can be replaced
 // where they are: its positions are its offsets from the front, 0 up to
 // the count, whichever slots they are in.
-extension Deque: RandomAccessCollection, MutableCollection {
+extension Deque: RandomAccessCollection, MutableCollection, FromSequence<Element> {
     /// An iterator over the elements, front to back.
     public fn makeIterator() -> DequeIterator<Element> {
         return DequeIterator<Element> { slots: slots, position: head, remaining: used }

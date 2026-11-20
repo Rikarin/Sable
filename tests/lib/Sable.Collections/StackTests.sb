@@ -53,3 +53,12 @@ fn countFollowsPushesAndPops() {
     assertEqual(stack.count, 1)
     assertEqual(stack.peek() ?? "", "a")
 }
+
+@test
+fn aStackIsMadeFromAnySequenceLastOnTop() {
+    let stack = Stack(1...3)
+    assertEqual(stack.pop(), 3)
+    assertEqual(stack.count, 2)
+    let collected: Stack<String> = ["a", "b"].collect()
+    assertEqual(collected.peek(), "b")
+}

@@ -584,8 +584,9 @@ public sealed partial class Compilation {
                 DeclareInitializer(declaration, type, type);
                 return;
 
-            // Only an array extension's gets this far (RejectInExtension).
-            case InitDeclarationSyntax declaration when container is ExtensionSymbol { ExtendedType.ExtendedArray: not null } extension:
+            // Only a value type's extension's, or a growable array's, gets
+            // this far (RejectInExtension).
+            case InitDeclarationSyntax declaration when container is ExtensionSymbol extension:
                 DeclareInitializer(declaration, extension, extension.ExtendedType);
                 return;
 
@@ -1461,7 +1462,7 @@ public sealed partial class Compilation {
         RecordDeclaration(declaration, enumCase);
     }
 
-    /// <param name="container">The type, or an extension of every growable array of a kind.</param>
+    /// <param name="container">The type, or an extension of it, or of every growable array of a kind.</param>
     /// <param name="type">The type, or the array extension's own (whose ExtendedArray is the array).</param>
     void DeclareInitializer(InitDeclarationSyntax declaration, Symbol container, NamedTypeSymbol type) {
         var function = new FunctionSymbol(
@@ -1723,8 +1724,13 @@ public sealed partial class Compilation {
                 extended.Extensions = extended.Extensions.Add(extension);
             }
 
+            // A value type's extension may add an initialiser that gives
+            // self its value — by 'self.init(…)', 'self = …', or, a
+            // struct's, field by field — as one in the type's body does
+            // (SYNTAX.md §11). A class's would be a designated one.
+            var initializers = extended.TypeKind is TypeKind.Struct or TypeKind.Enum or TypeKind.Union or TypeKind.Builtin;
             foreach (var member in declaration.Members) {
-                if (RejectInExtension(member)) {
+                if (!(initializers && member is InitDeclarationSyntax) && RejectInExtension(member)) {
                     continue;
                 }
 

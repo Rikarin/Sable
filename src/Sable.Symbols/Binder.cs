@@ -226,7 +226,20 @@ public sealed partial class Binder {
     ///     superclass's fields.
     /// </summary>
     InitializedSelf? InitializedSelfOf(FunctionSymbol function) {
-        if (function is not { FunctionKind: FunctionKind.Initializer, ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor } type }) {
+        // One in an extension of a type with no fields of its own to set —
+        // a built-in type, an enum, a union — gives self its value whole.
+        // A growable array's starts as '[]'.
+        if (function is { FunctionKind: FunctionKind.Initializer, ContainingSymbol: ExtensionSymbol { ExtendedType: { ExtendedArray: null, TypeKind: TypeKind.Builtin or TypeKind.Enum or TypeKind.Union } extended } }) {
+            return new InitializedSelf(extended, [], whole: function);
+        }
+
+        // A struct's, in its body or an extension, sets its fields.
+        var type = function switch {
+            { FunctionKind: FunctionKind.Initializer, ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor } named } => named,
+            { FunctionKind: FunctionKind.Initializer, ContainingSymbol: ExtensionSymbol { ExtendedType: { ExtendedArray: null, TypeKind: TypeKind.Struct } extendedStruct } } => extendedStruct,
+            _ => null,
+        };
+        if (type is null) {
             return null;
         }
 
@@ -2492,8 +2505,10 @@ public sealed partial class Binder {
             return Record(statement, new BoundReturn(statement, null));
         }
 
+        // An initialiser's bare 'return' stops with what it has built.
         if (statement.Expression is null) {
-            if (!_returnType.Equals(Core.Void) && !_returnType.IsError) {
+            if (!_returnType.Equals(Core.Void) && !_returnType.IsError
+                && EnclosingFunction() is not { FunctionKind: FunctionKind.Initializer }) {
                 _diagnostics.Error(
                     ErrorCode.ERR_ReturnValueRequired,
                     statement.Span,
@@ -3605,7 +3620,7 @@ public sealed partial class Binder {
                     && _compilation.ObservedProperties.ContainsKey(field)
                     && EnclosingFunction() is { } within
                     && (within is { FunctionKind: FunctionKind.Accessor } && ReferenceEquals(within.ContainingSymbol, field)
-                        || within is { FunctionKind: FunctionKind.Initializer } && ReferenceEquals(within.ContainingSymbol, field.ContainingSymbol))) {
+                        || within is { FunctionKind: FunctionKind.Initializer } && ReferenceEquals(InitializedType(within), field.ContainingSymbol))) {
                     field = storage;
                 }
 
@@ -3767,7 +3782,7 @@ public sealed partial class Binder {
         // the type's own initialisers, which builds this value in its place.
         if (name == "init" && receiver is BoundSelfAccess
             && EnclosingFunction() is { FunctionKind: FunctionKind.Initializer } initializer
-            && initializer.ContainingSymbol is NamedTypeSymbol owner) {
+            && InitializedType(initializer) is { } owner) {
             var initializers = owner.GetMembers("init").OfType<FunctionSymbol>().Where(i => !ReferenceEquals(i, initializer)).ToList();
             if (initializers.Count > 0) {
                 return BindMemberGroup(syntax, receiver, initializers, owner, TypeSubstitution.For(receiver.Type));
@@ -4924,8 +4939,8 @@ public sealed partial class Binder {
         && group.Receiver is null
         && group.Candidates.Any(static c => !c.TypeParameters.IsEmpty)
         && group.Candidates.All(static c => c.FunctionKind == FunctionKind.Initializer)
-        && group.Candidates[0].ContainingSymbol is NamedTypeSymbol { IsConstructed: false, TypeParameters.IsEmpty: false, TypeKind: not TypeKind.Protocol } type
-        && group.Candidates.All(c => ReferenceEquals(c.ContainingSymbol, type))
+        && InitializedType(group.Candidates[0]) is { IsConstructed: false, TypeParameters.IsEmpty: false, TypeKind: not TypeKind.Protocol } type
+        && group.Candidates.All(c => ReferenceEquals(InitializedType(c), type))
             ? type.TypeParameters
             : [];
 
@@ -5109,7 +5124,7 @@ public sealed partial class Binder {
         // A type parameter is Copyable unless it says '~Copyable': a move-only
         // argument is refused here, at the call, not later inside the body
         // that copies it. An initialiser's are its type's.
-        var parametersOfCall = resolved.FunctionKind == FunctionKind.Initializer && resolved.ContainingSymbol is NamedTypeSymbol { TypeArguments.IsEmpty: true } constructedType
+        var parametersOfCall = resolved.FunctionKind == FunctionKind.Initializer && InitializedType(resolved) is { TypeArguments.IsEmpty: true } constructedType
             ? [..resolved.TypeParameters, ..constructedType.TypeParameters]
             : resolved.TypeParameters;
         foreach (var typeParameter in parametersOfCall) {
@@ -7373,8 +7388,19 @@ public sealed partial class Binder {
     bool InitialisesLetField(BoundExpression target) =>
         target is BoundFieldAccess { Receiver: BoundSelfAccess, Field: { IsStatic: false, IsComputed: false } field }
         && _containingSymbol is FunctionSymbol { FunctionKind: FunctionKind.Initializer } initializer
-        && initializer.ContainingSymbol is NamedTypeSymbol owner
+        && InitializedType(initializer) is { } owner
         && ReferenceEquals(field.ContainingSymbol, owner.OriginalDefinition);
+
+    /// <summary>
+    ///     The type an initialiser builds: its own, or the one its extension
+    ///     extends — but not an array extension's, whose self is the array.
+    /// </summary>
+    static NamedTypeSymbol? InitializedType(FunctionSymbol initializer) =>
+        initializer.ContainingSymbol switch {
+            NamedTypeSymbol owner => owner,
+            ExtensionSymbol { ExtendedType: { ExtendedArray: null } extended } => extended,
+            _ => null,
+        };
 
     /// <summary>
     ///     An <c>inout</c> or <c>out</c> argument is written by the callee, so it

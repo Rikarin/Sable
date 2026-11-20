@@ -234,3 +234,11 @@ fn aSmallVecIsSlicedInlineOrNot() {
     assert(small[^2...] == [4, 5])
     assert(small[1..<3] == [2, 3])
 }
+
+@test
+fn aSmallVecIsMadeFromAnySequence() {
+    let inline = SmallVec<Int, 4>(1...3)
+    assert(inline.toArray() == [1, 2, 3])
+    let spilled: SmallVec<Int, 2> = (1...5).collect()
+    assertEqual(spilled.count, 5)
+}

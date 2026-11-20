@@ -29,10 +29,12 @@ public struct List<Element> {
     /// An empty list.
     public init() { }
 
-    /// A list of the elements, in order. The whole of an array is not
-    /// copied: the list shares it until either changes.
-    public init(_ elements: Element[:]) {
-        storage = elements.toArray()
+    /// A list of the sequence's elements, in order. What going through
+    /// them throws, it throws.
+    public init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element {
+        for try element in elements {
+            storage.append(element)
+        }
     }
 
     /// An empty list with room for 'capacity' elements before it grows.
@@ -311,7 +313,7 @@ extension List where Element: Comparable {
 // A list is a random-access collection whose elements can be replaced in
 // place, and that grows and shrinks: what generic code over those
 // protocols sees of it. Its positions are its offsets, from 0.
-extension List: RandomAccessCollection, MutableCollection, RangeReplaceableCollection {
+extension List: RandomAccessCollection, MutableCollection, RangeReplaceableCollection, FromSequence<Element> {
     /// The first element's position: 0.
     public var startIndex: Int => 0
 

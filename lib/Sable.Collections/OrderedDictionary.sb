@@ -15,6 +15,15 @@ public class OrderedDictionary<Key: Hashable, Value> {
     /// An empty dictionary.
     public init() { }
 
+    /// The sequence's pairs, each key with its value, in the order each key
+    /// first comes; a key that comes again keeps its place and takes the
+    /// last value given it. What going through them throws, it throws.
+    public init<S: Sequence>(_ pairs: S) throws(S.Failure) where S.Element == (Key, Value) {
+        for try (key, value) in pairs {
+            self.set(key, value)
+        }
+    }
+
     /// How many keys it holds.
     public var count: Int => orderedKeys.count
 
@@ -91,7 +100,7 @@ public class OrderedDictionary<Key: Hashable, Value> {
 
 // An ordered dictionary is a random-access collection of its entries,
 // each key with its value, by their position in the order.
-extension OrderedDictionary: RandomAccessCollection {
+extension OrderedDictionary: RandomAccessCollection, FromSequence<(Key, Value)> {
     /// An iterator over the entries, each key with its value, in order.
     public fn makeIterator() -> Zip2Iterator<ArrayIterator<Key>, ArrayIterator<Value>> {
         return zip(orderedKeys, orderedValues).makeIterator()

@@ -9,6 +9,14 @@ public class Stack<Element> {
     /// An empty stack.
     public init() { }
 
+    /// The sequence's elements, pushed in order: the last is on top. What
+    /// going through them throws, it throws.
+    public init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element {
+        for try element in elements {
+            items.append(element)
+        }
+    }
+
     /// How many elements it holds.
     public var count: Int => items.count
 
@@ -37,7 +45,7 @@ public class Stack<Element> {
     }
 }
 
-extension Stack: Sequence {
+extension Stack: Sequence, FromSequence<Element> {
     /// An iterator over the elements from the top down: the order 'pop'
     /// would give them, leaving the stack as it is.
     public fn makeIterator() -> ReversedIterator<Element[>..]> {

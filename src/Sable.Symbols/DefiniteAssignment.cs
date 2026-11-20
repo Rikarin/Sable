@@ -49,6 +49,10 @@ internal static class DefiniteAssignment {
             index[field] = index.Count;
         }
 
+        if (self?.Whole is { } whole) {
+            index[whole] = index.Count;
+        }
+
         if (self?.Superclass is { } superclass) {
             index[superclass] = index.Count;
         }
@@ -175,6 +179,19 @@ internal static class DefiniteAssignment {
             }
         }
 
+        if (self.Whole is { } whole) {
+            foreach (var exit in new[] { graph.End, graph.Return }) {
+                if (reachable.Contains(exit) && !In(exit, graph, assignedOut, index.Count, reachable)[index[whole]]) {
+                    diagnostics.Error(
+                        ErrorCode.ERR_MissingFieldInitializer,
+                        at,
+                        "'self' is not given a value on every path through this initialiser: assign 'self = …', or call 'self.init(…)'"
+                    );
+                    break;
+                }
+            }
+        }
+
         if (missing.Count == 0) {
             return;
         }
@@ -244,6 +261,8 @@ internal static class DefiniteAssignment {
                     var unset = self.Fields.Where(f => !state[index[f]]).Select(static f => f.Name).ToList();
                     if (unset.Count > 0) {
                         report[self.Type] = (op.Node, $"'self' is used here before {Names(unset)} {(unset.Count == 1 ? "is" : "are")} initialised");
+                    } else if (self.Whole is { } whole && !state[index[whole]]) {
+                        report[self.Type] = (op.Node, "'self' is used here before the initialiser gives it a value");
                     }
                 }
 

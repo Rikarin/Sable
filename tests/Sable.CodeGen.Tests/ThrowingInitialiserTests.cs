@@ -163,7 +163,7 @@ public sealed class ThrowingInitialiserTests {
     [Fact]
     public void AStructInitialiserThatDelegatesThrowsThroughTheOneItCalls() =>
         Assert.Equal(
-            "caught 0\nmade a\ngone a\ncaught 1\nmade a\nok a\ngone a\n",
+            "caught 0\nmade a\ngone a\ncaught 1\nmade a\nok a\ngone a\nmade a\nok early\ngone a\n",
             AssertAgree(
                 Program(
                     Declarations + """
@@ -174,6 +174,10 @@ public sealed class ThrowingInitialiserTests {
                                        init(_ name: String, failAt: Int) throws(Fail) {
                                            self.a = Tracked(name)
                                            try check(1, failAt)
+                                           if failAt == 9 {
+                                               self.label = "early"
+                                               return
+                                           }
                                            self.label = name
                                        }
                                        init(failAt: Int) throws(Fail) {
@@ -183,13 +187,72 @@ public sealed class ThrowingInitialiserTests {
                                    }
                                    """,
                     """
-                        for failAt in [0, 1, 2] {
+                        for failAt in [0, 1, 2, 9] {
                             do {
                                 let one = try One(failAt: failAt)
                                 print("ok \(one.label)")
                             } catch {
                                 print("caught \(error.at)")
                             }
+                        }
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>
+    ///     A value type's extension adds initialisers that give self its
+    ///     value: a built-in type's and an enum's by <c>self = …</c>, a
+    ///     struct's by delegating — throwing, before or after.
+    /// </summary>
+    [Fact]
+    public void AnExtensionsInitialiserGivesSelfItsValue() =>
+        Assert.Equal(
+            "abab\ncaught 1\ntrue\nmade p\ngone p\n3\nmade q\ngone q\ncaught 2\n",
+            AssertAgree(
+                Program(
+                    Declarations + """
+
+                                   extension String {
+                                       init(twice text: String, failAt: Int) throws(Fail) {
+                                           try check(1, failAt)
+                                           self = text + text
+                                       }
+                                   }
+
+                                   enum Light { Red, Green }
+
+                                   extension Light {
+                                       init(go: Bool) {
+                                           self = go ? .Green : .Red
+                                       }
+                                   }
+
+                                   struct Pair {
+                                       var held: Tracked
+                                       var count: Int
+                                   }
+
+                                   extension Pair {
+                                       init(_ name: String, failAt: Int) throws(Fail) {
+                                           self.init(held: Tracked(name), count: 3)
+                                           try check(2, failAt)
+                                       }
+                                   }
+                                   """,
+                    """
+                        do {
+                            print(try String(twice: "ab", failAt: 0))
+                            print(try String(twice: "cd", failAt: 1))
+                        } catch {
+                            print("caught \(error.at)")
+                        }
+                        print(Light(go: true) == .Green)
+                        do {
+                            print(try Pair("p", failAt: 0).count)
+                            print(try Pair("q", failAt: 2).count)
+                        } catch {
+                            print("caught \(error.at)")
                         }
                     """
                 )

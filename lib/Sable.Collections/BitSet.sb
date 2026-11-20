@@ -9,9 +9,9 @@ public class BitSet {
 
     public init() { }
 
-    /// A set of the values.
-    public init(_ values: Int[>..]) {
-        for value in values {
+    /// A set of the sequence's values. What going through them throws, it throws.
+    public init<S: Sequence>(_ values: S) throws(S.Failure) where S.Element == Int {
+        for try value in values {
             insert(value)
         }
     }
@@ -131,7 +131,7 @@ public class BitSet {
     }
 }
 
-extension BitSet: Sequence {
+extension BitSet: Sequence, FromSequence<Int> {
     /// An iterator over the members, ascending.
     public fn makeIterator() -> BitSetIterator {
         return BitSetIterator { words: words, word: -1, bits: 0 }

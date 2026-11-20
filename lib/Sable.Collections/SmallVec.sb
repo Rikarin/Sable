@@ -31,9 +31,12 @@ public struct SmallVec<Element, N: Int> where N > 0 {
     /// An empty vector, its elements inline.
     public init() { }
 
-    /// A vector of the elements, in order: inline if there are at most `N`.
-    public init(_ elements: Element[:]) {
-        append(contentsOf: elements)
+    /// A vector of the sequence's elements, in order: inline if there are
+    /// at most `N`. What going through them throws, it throws.
+    public init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element {
+        for try element in elements {
+            append(element)
+        }
     }
 
     /// How many elements it holds.
@@ -235,7 +238,7 @@ extension SmallVec where Element: Equatable {
 // A small vector is a random-access collection whose elements can be
 // replaced in place, and that grows and shrinks, as an array is: its
 // positions are its offsets, from 0, wherever the elements are kept.
-extension SmallVec: RandomAccessCollection, MutableCollection, RangeReplaceableCollection {
+extension SmallVec: RandomAccessCollection, MutableCollection, RangeReplaceableCollection, FromSequence<Element> {
     /// An iterator over the elements, first to last: a view of them taken
     /// when it was made, which later changes to the vector do not touch.
     public fn makeIterator() -> SmallVecIterator<Element> {

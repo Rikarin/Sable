@@ -9,6 +9,14 @@ public class Queue<Element> {
     /// An empty queue.
     public init() { }
 
+    /// The sequence's elements, enqueued in order: the first is at the
+    /// front. What going through them throws, it throws.
+    public init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element {
+        for try element in elements {
+            incoming.append(element)
+        }
+    }
+
     /// How many elements it holds.
     public var count: Int => incoming.count + outgoing.count
 
@@ -34,7 +42,7 @@ public class Queue<Element> {
     }
 }
 
-extension Queue: Sequence {
+extension Queue: Sequence, FromSequence<Element> {
     /// An iterator over the elements from the front to the back: the order
     /// 'dequeue' would give them, leaving the queue as it is.
     public fn makeIterator() -> ChainIterator<ReversedIterator<Element[>..]>, ArrayIterator<Element>> {

@@ -699,8 +699,12 @@ extension Collection {
 
 Extensions may add methods, computed properties, subscripts, operators, static
 members, nested types, and conformances. They may **not** add stored properties
-or designated initialisers — but for an extension of every growable array of a
-kind, which may add initialisers (below).
+or designated initialisers. A struct's, an enum's, a union's or a built-in
+type's extension may add an initialiser that gives `self` its value on every
+path — a struct's field by field, any of them by `self.init(…)` or by
+`self = …` — as `extension String { init(twice s: String) { self = s + s } }`
+does (S3028); a class's may not (S3030). An extension of every growable array
+of a kind may add initialisers too (below).
 
 ### Array extensions
 

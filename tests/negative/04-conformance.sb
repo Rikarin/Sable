@@ -26,6 +26,12 @@ extension Point {
 }
 
 extension Point {
+    init(_ n: Int) { }                  //! S3028 'x' is not initialised
+}
+
+class Shape { var sides: Int = 0 }
+
+extension Shape {
     init(_ n: Int) { }                  //! S3030 cannot add a designated initialiser
 }
 

@@ -573,7 +573,9 @@ public sealed class DebuggerFormatterTests {
             }
 
             var objectPath = Path.Combine(directory.FullName, "scopes.obj");
-            var compiled = NativeObjects.CompileIr(ir, objectPath, new NativeOptions { Target = windows, DebugInfo = true });
+            // -g at -O0: optimised, the object would be bitcode for link-time
+            // optimisation, as it is when the host is Windows.
+            var compiled = NativeObjects.CompileIr(ir, objectPath, NativeOptions.Of(optimise: false, debug: true) with { Target = windows });
             Assert.True(compiled.Succeeded, compiled.Output);
             var bytes = File.ReadAllBytes(objectPath);
             Assert.True(bytes.AsSpan().IndexOf(".debug$S"u8) >= 0, "the object has no CodeView symbols section");
@@ -633,13 +635,16 @@ public sealed class DebuggerFormatterTests {
     /// <summary>
     ///     The standard library's files are in the compiler, not on disk: their
     ///     text goes in the line table, so stepping into the library shows its
-    ///     lines. The program's own files are read where they are.
+    ///     lines. The program's own files are read where they are. Built
+    ///     for Linux, as DWARF, the only format with a place for the text:
+    ///     a Windows host's own build is CodeView.
     /// </summary>
     [Fact]
     public void TheLibrarysTextIsInTheDebugInformation() {
         var directory = Directory.CreateTempSubdirectory("sable-sources-");
         try {
-            var result = Pipeline.Compile(new SourceText(Library, "gen.sb"), directory.FullName);
+            var linux = NativeTarget.Of("x86_64-unknown-linux-gnu");
+            var result = Pipeline.Compile([SyntaxTree.Parse(new SourceText(Library, "gen.sb"))], directory.FullName, target: linux);
             Assert.True(result.Succeeded, string.Join("\n", result.Errors));
             var ir = result.LlvmIr!;
             Assert.Matches(@"!DIFile\(filename: ""lib/Sable\.Collections/Stack\.sb"", directory: ""[^""]*"", source: ""[^""]*public fn push", ir);

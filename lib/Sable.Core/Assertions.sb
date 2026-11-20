@@ -71,8 +71,8 @@ public fn precondition(index: Int, inBounds count: Int, file: String = #file, li
 /// ```sable
 /// precondition(nonNegative: 3, "capacity")
 /// ```
-public fn precondition(nonNegative value: Int, _ name: String = "value", file: String = #file, line: Int = #line, column: Int = #column) {
-    if value < 0 {
+public fn precondition<T: BinaryInteger>(nonNegative value: T, _ name: String = "value", file: String = #file, line: Int = #line, column: Int = #column) {
+    if value < T.zero {
         Runtime.trap("\(name) must not be negative, but is \(value)", trapSite(file, line, column))
     }
 }

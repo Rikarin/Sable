@@ -129,3 +129,75 @@ fn powModByANegativeModulusTraps() {
 fn modInverseModuloANegativeNumberTraps() {
     let _ = modInverse(3, -11)
 }
+
+@test
+fn isqrtTakesEveryWidth() {
+    assertEqual(isqrt(255 as U8), 15 as U8)
+    assertEqual(isqrt(127 as I8), 11 as I8)
+    assertEqual(isqrt(U64.max), 4_294_967_295 as U64)
+    assertEqual(isqrt(U128.max), U128(U64.max))
+}
+
+@test
+fn ilogCountsTheWholePowersOfTheBase() {
+    assertEqual(ilog(1, base: 10), 0)
+    assertEqual(ilog(9, base: 10), 0)
+    assertEqual(ilog(10, base: 10), 1)
+    assertEqual(ilog(1_000_000, base: 10), 6)
+    assertEqual(ilog(999_999, base: 10), 5)
+    assertEqual(ilog(1024, base: 2), 10)
+    assertEqual(ilog(255 as U8, base: 2), 7)
+    assertEqual(ilog(U64.max, base: 16), 15)
+    assertEqual(ilog(Int.max, base: 3), 39)
+}
+
+@test(traps: "ilog's argument must be positive, not 0")
+fn ilogOfZeroTraps() {
+    let _ = ilog(0, base: 10)
+}
+
+@test(traps: "ilog's base must be at least 2, not 1")
+fn ilogInBaseOneTraps() {
+    let _ = ilog(8, base: 1)
+}
+
+@test
+fn factorialTakesEveryWidth() {
+    assertEqual(factorial(5 as I8), 120 as I8)
+    let expected: U128 = 295_232_799_039_604_140_847_618_609_643_520_000_000
+    assertEqual(factorial(34 as U128), expected)
+}
+
+@test(traps: "integer overflow")
+fn factorialPastWhatTheTypeHoldsTraps() {
+    let _ = factorial(6 as I8)
+}
+
+@test
+fn binomialTakesEveryWidth() {
+    assertEqual(binomial(10 as U8, 5), 252 as U8)
+    let expected: U128 = 95_067_625_827_960_698_145_584_333_020_095_113_100
+    assertEqual(binomial(130 as U128, 65), expected)
+}
+
+@test
+fn powModOfA128BitTypeDoesNotOverflow() {
+    let m: U128 = 170_141_183_460_469_231_731_687_303_715_884_105_727
+    let exponent: U128 = 1_000_000_000_000_000_000_000_000_000_000
+    let power: U128 = 77_365_983_643_526_108_570_615_817_422_012_409_412
+    assertEqual(powMod(7 as U128, exponent, m), power)
+    assertEqual(powMod(m - 1, 2, m), 1 as U128)
+    let small: U64 = 13_784_367_590_845_050_696
+    assertEqual(powMod(3 as U64, 200, U64.max), small)
+    assertEqual(powMod(-2 as I8, 3, 5), 2 as I8)
+}
+
+@test
+fn modInverseOfA128BitTypeDoesNotOverflow() {
+    let m: U128 = 170_141_183_460_469_231_731_687_303_715_884_105_727
+    let a: U128 = 123_456_789_123_456_789_123
+    let inverse: U128 = 82_984_245_440_425_468_002_353_066_831_922_575_035
+    assertEqual(modInverse(a, m) ?? 0, inverse)
+    assertEqual(modInverse(3 as U8, 250) ?? 0, 167 as U8)
+    assert(modInverse(4 as U8, 250) == none, "2 divides both")
+}

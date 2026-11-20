@@ -28,7 +28,8 @@ public fn fatalError(_ message: String = "", file: String = #file, line: Int = #
 }
 
 /// Stops the program unless the condition holds, in every build: what a
-/// function demands of its caller. The message says what was demanded.
+/// function demands of its caller. The message says what was demanded;
+/// it is an '@autoclosure' argument, worked out only if the condition fails.
 ///
 /// ```sable
 /// fn average(_ values: Int[>..]) -> Int {
@@ -40,17 +41,19 @@ public fn fatalError(_ message: String = "", file: String = #file, line: Int = #
 ///     return sum / values.count
 /// }
 /// ```
-public fn precondition(_ condition: Bool, _ message: String = "", file: String = #file, line: Int = #line, column: Int = #column) {
+public fn precondition(_ condition: Bool, _ message: @autoclosure () -> String = "", file: String = #file, line: Int = #line, column: Int = #column) {
     if !condition {
-        Runtime.trap(message.isEmpty ? "precondition failed" : "precondition failed: \(message)", trapSite(file, line, column))
+        let text = message()
+        Runtime.trap(text.isEmpty ? "precondition failed" : "precondition failed: \(text)", trapSite(file, line, column))
     }
 }
 
 /// Stops the program unless the condition holds — in a debug build only:
 /// a check of the program's own reasoning, which a release build trusts
-/// and does not make. (The condition is an argument, so it is still
-/// worked out, unless the optimiser sees nothing comes of it: keep it
-/// cheap and free of effects.) 'precondition' checks in every build.
+/// and does not make. The condition and the message are '@autoclosure'
+/// arguments, worked out only when asked for: in a release build neither
+/// is, and nothing written in the call runs. 'precondition' checks in
+/// every build.
 ///
 /// ```sable
 /// fn half(_ n: Int) -> Int {
@@ -58,26 +61,30 @@ public fn precondition(_ condition: Bool, _ message: String = "", file: String =
 ///     return n / 2
 /// }
 /// ```
-public fn assert(_ condition: Bool, _ message: String = "", file: String = #file, line: Int = #line, column: Int = #column) {
+public fn assert(_ condition: @autoclosure () -> Bool, _ message: @autoclosure () -> String = "", file: String = #file, line: Int = #line, column: Int = #column) {
     #if DEBUG
-    if !condition {
-        Runtime.trap(message.isEmpty ? "assertion failed" : "assertion failed: \(message)", trapSite(file, line, column))
+    if !condition() {
+        let text = message()
+        Runtime.trap(text.isEmpty ? "assertion failed" : "assertion failed: \(text)", trapSite(file, line, column))
     }
     #endif
 }
 
 /// Stops the program, saying an assertion failed — in a debug build only:
-/// for the branch of a check that cannot be written as one condition.
-public fn assertionFailure(_ message: String = "", file: String = #file, line: Int = #line, column: Int = #column) {
+/// for the branch of a check that cannot be written as one condition. The
+/// message is worked out only in a debug build.
+public fn assertionFailure(_ message: @autoclosure () -> String = "", file: String = #file, line: Int = #line, column: Int = #column) {
     #if DEBUG
-    Runtime.trap(message.isEmpty ? "assertion failed" : "assertion failed: \(message)", trapSite(file, line, column))
+    let text = message()
+    Runtime.trap(text.isEmpty ? "assertion failed" : "assertion failed: \(text)", trapSite(file, line, column))
     #endif
 }
 
 /// Stops the program, saying a precondition failed: for the branch of a
 /// check that cannot be written as one condition.
-public fn preconditionFailure(_ message: String = "", file: String = #file, line: Int = #line, column: Int = #column) -> Never {
-    Runtime.trap(message.isEmpty ? "precondition failed" : "precondition failed: \(message)", trapSite(file, line, column))
+public fn preconditionFailure(_ message: @autoclosure () -> String = "", file: String = #file, line: Int = #line, column: Int = #column) -> Never {
+    let text = message()
+    Runtime.trap(text.isEmpty ? "precondition failed" : "precondition failed: \(text)", trapSite(file, line, column))
 }
 
 /// Stops the program unless the index is in 0..<count: what indexing

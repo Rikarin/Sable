@@ -4555,6 +4555,88 @@ public sealed partial class Binder {
         InvocationExpressionSyntax syntax,
         TypeSymbol? expectedType = null
     ) {
+        // A call that may pass an '@autoclosure' parameter binds its
+        // arguments as a question first: which overload, and so which of
+        // them are closure bodies, is not known until they are bound. Each
+        // is then bound for real, in the place it turned out to have — the
+        // call's own, or a closure's.
+        if (!MayTakeAutoclosure(syntax.Expression)) {
+            return BindInvocationArguments(syntax, expectedType, speculative: false);
+        }
+
+        var bound = BindInvocationArguments(syntax, expectedType, speculative: true);
+        foreach (var argument in ArgumentSyntaxes(syntax)) {
+            if (_speculated.Remove(argument)) {
+                BindExpression(argument);
+            }
+        }
+
+        return bound;
+    }
+
+    /// <summary>The expressions a call passes, as written: in parentheses, then its trailing closures.</summary>
+    static IEnumerable<ExpressionSyntax> ArgumentSyntaxes(InvocationExpressionSyntax syntax) {
+        foreach (var argument in syntax.ArgumentList?.Arguments ?? default) {
+            yield return argument.Expression;
+        }
+
+        if (syntax.TrailingClosure is { } trailing) {
+            yield return trailing;
+        }
+
+        foreach (var labeled in syntax.LabeledClosures) {
+            yield return labeled.Closure;
+        }
+    }
+
+    /// <summary>
+    ///     The arguments bound only to choose an overload, by their syntax:
+    ///     their diagnostics and effects were held back, and are had when
+    ///     the argument is bound again for real (<see cref="BindResolvedCall" />),
+    ///     or, for a call that never got that far, once the call is bound.
+    /// </summary>
+    readonly HashSet<ExpressionSyntax> _speculated = [];
+
+    /// <summary>
+    ///     True when the function a call names may be one with an
+    ///     <c>@autoclosure</c> parameter, by the name it is called by.
+    /// </summary>
+    bool MayTakeAutoclosure(ExpressionSyntax callee) =>
+        CalleeName(callee) is { } name && _compilation.MayTakeAutoclosure(name);
+
+    static string? CalleeName(ExpressionSyntax callee) =>
+        callee switch {
+            IdentifierNameSyntax name => name.Identifier.Text,
+            GenericNameSyntax generic => generic.Identifier.Text,
+            MemberAccessExpressionSyntax member => CalleeName(member.Name),
+            ImplicitMemberAccessExpressionSyntax member => CalleeName(member.Name),
+            ParenthesizedExpressionSyntax parenthesized => CalleeName(parenthesized.Expression),
+            _ => null,
+        };
+
+    /// <summary>
+    ///     An argument bound to see what it is, with nothing it would report
+    ///     or mark kept: it is bound again where it belongs.
+    /// </summary>
+    BoundExpression Speculate(ExpressionSyntax syntax) {
+        var effects = SaveEffects();
+        var (thrown, threwOwn, closureThrows) = (_thrownInBody, _threwOwnError, _closureThrows);
+        BoundExpression bound;
+        using (_diagnostics.Suppress()) {
+            bound = BindExpression(syntax);
+        }
+
+        RestoreEffects(effects);
+        (_thrownInBody, _threwOwnError, _closureThrows) = (thrown, threwOwn, closureThrows);
+        _speculated.Add(syntax);
+        return bound;
+    }
+
+    BoundExpression BindInvocationArguments(
+        InvocationExpressionSyntax syntax,
+        TypeSymbol? expectedType,
+        bool speculative
+    ) {
         if (BindOptionalSome(syntax, expectedType) is { } wrapped) {
             return wrapped;
         }
@@ -4587,7 +4669,7 @@ public sealed partial class Binder {
         var labels = labelBuilder.ToImmutable();
 
         var arguments = syntaxes
-            .Select(e => IsClosure(e) ? new BoundUnboundClosure(e) : BindExpression(e))
+            .Select(e => IsClosure(e) ? new BoundUnboundClosure(e) : speculative ? Speculate(e) : BindExpression(e))
             .ToImmutableArray();
 
         var callee = BindCallee(syntax.Expression, expectedType);
@@ -5035,6 +5117,25 @@ public sealed partial class Binder {
         var inferrable = resolved.TypeParameters.AddRange(_ownerTypeParameters);
         var slots = Align(resolved, labels, arguments.Length);
 
+        // An argument bound as a question is bound for real, now that its
+        // parameter is known: an '@autoclosure' one's as the body of the
+        // closure the callee is passed.
+        if (_speculated.Count > 0 && syntaxes.Any(_speculated.Contains)) {
+            var realised = arguments.ToBuilder();
+            for (var i = 0; i < realised.Count && i < syntaxes.Length; i++) {
+                if (!_speculated.Remove(syntaxes[i])) {
+                    continue;
+                }
+
+                realised[i] = ParameterFor(resolved, slots, i) is { IsAutoclosure: true } lazy
+                              && substitution.Apply(lazy.Type) is FunctionTypeSymbol { ParameterTypes.IsEmpty: true } lazyType
+                    ? BindAutoclosure(syntaxes[i], lazyType)
+                    : BindExpression(syntaxes[i]);
+            }
+
+            arguments = realised.ToImmutable();
+        }
+
         // Now that a signature is chosen, the closures have parameter types.
         if (arguments.Any(static a => a is BoundUnboundClosure)) {
             var saved = _openTypeParameters;
@@ -5051,7 +5152,10 @@ public sealed partial class Binder {
                 var expected = slots[i] < resolved.Parameters.Length
                     ? substitution.Apply(resolved.Parameters[slots[i]].Type)
                     : null;
-                rebound[i] = BindExpression(syntaxes[i], expected);
+                rebound[i] = slots[i] < resolved.Parameters.Length && resolved.Parameters[slots[i]].IsAutoclosure
+                             && expected is FunctionTypeSymbol { ParameterTypes.IsEmpty: true } lazyType
+                    ? BindAutoclosure(syntaxes[i], lazyType)
+                    : BindExpression(syntaxes[i], expected);
             }
 
             _openTypeParameters = saved;
@@ -5098,7 +5202,9 @@ public sealed partial class Binder {
             converted.Add(
                 parameter is { IsByReference: true, IsVariadic: false } && wanted is ReferenceTypeSymbol shared
                     ? SharedArgument(arguments[i], shared)
-                    : Convert(arguments[i], wanted, arguments[i].Syntax)
+                    : parameter.IsAutoclosure && arguments[i] is not BoundClosure { IsAutoclosure: true } && wanted is FunctionTypeSymbol { ParameterTypes.IsEmpty: true } lazyWanted
+                        ? WrapAutoclosure(arguments[i], lazyWanted)
+                        : Convert(arguments[i], wanted, arguments[i].Syntax)
             );
 
             // A 'some P' parameter is a generic one, bound to its argument's
@@ -5354,7 +5460,118 @@ public sealed partial class Binder {
             return new BoundError(call);
         }
 
-        return Within(new Binder(_compilation, scope, container), call, syntax, parameter.Name).BindInitializer(clause.Value, substitution.Apply(parameter.Type));
+        return Within(new Binder(_compilation, scope, container), call, syntax, parameter.Name).BindDefaultValue(clause.Value, parameter, substitution.Apply(parameter.Type));
+    }
+
+    /// <summary>
+    ///     A parameter's default value, against its type: an
+    ///     <c>@autoclosure</c> one's is the body of the closure passed for it,
+    ///     worked out only if the callee asks, as an argument written there is.
+    /// </summary>
+    internal BoundExpression BindDefaultValue(ExpressionSyntax value, ParameterSymbol parameter, TypeSymbol type) =>
+        parameter.IsAutoclosure && type is FunctionTypeSymbol { ParameterTypes.IsEmpty: true } lazy
+            ? BindAutoclosure(value, lazy)
+            : BindInitializer(value, type);
+
+    /// <summary>The parameter the argument at <paramref name="index" /> is passed to, a variadic one's for each of its elements.</summary>
+    static ParameterSymbol? ParameterFor(FunctionSymbol function, int[] slots, int index) =>
+        index < slots.Length && slots[index] < function.Parameters.Length
+            ? function.Parameters[slots[index]]
+            : function.Parameters.Length > 0 && function.Parameters[^1].IsVariadic
+                ? function.Parameters[^1]
+                : null;
+
+    /// <summary>
+    ///     What an argument is written as, for the parameter it is passed to:
+    ///     the <c>T</c> an <c>@autoclosure () -&gt; T</c> wraps, unless it is
+    ///     already the closure made of it.
+    /// </summary>
+    static TypeSymbol ArgumentTypeFor(ParameterSymbol parameter, TypeSymbol wanted, BoundExpression argument) =>
+        parameter.IsAutoclosure && argument is not BoundClosure { IsAutoclosure: true } && wanted is FunctionTypeSymbol { ParameterTypes.IsEmpty: true } lazy
+            ? lazy.ReturnType
+            : wanted;
+
+    /// <summary>
+    ///     An argument for an <c>@autoclosure () -&gt; T</c> parameter: the
+    ///     expression, a <c>T</c>, bound as the body of a closure that takes
+    ///     nothing and gives it, so that it is worked out when the callee
+    ///     calls the closure, and not at all if it never does (SYNTAX.md §5).
+    ///     What it captures is what any closure's body would; what it throws
+    ///     or waits for is the closure's, which the parameter's type says.
+    /// </summary>
+    BoundExpression BindAutoclosure(ExpressionSyntax syntax, FunctionTypeSymbol type) {
+        // '{ x }' is a closure already, and not the T it would be wrapped
+        // as: the argument is written as the value.
+        if (Unparenthesised(syntax) is ClosureExpressionSyntax or BraceClosureExpressionSyntax) {
+            var closure = BindExpression(syntax);
+            return Convert(closure, type.ReturnType, syntax);
+        }
+
+        // 'assert(c)' for an '@autoclosure' 'c' passes a closure where its
+        // value is wanted: forwarding it is calling it, in the new closure.
+        if (Unparenthesised(syntax) is IdentifierNameSyntax name
+            && LookupLocal(name.Identifier.Text) is ParameterSymbol { IsAutoclosure: true } forwarded
+            && _conversions.Classify(forwarded.Type, type.ReturnType, false) is null) {
+            _diagnostics.Error(
+                ErrorCode.ERR_AutoclosureForwarded,
+                syntax.Span,
+                $"'{forwarded.Name}' is an @autoclosure parameter, so a closure, and its value, of type '{type.ReturnType.ToDisplayString()}', is wanted here: "
+                + $"pass '{forwarded.Name}()', which is still worked out only when it is asked for"
+            );
+            return new BoundError(syntax);
+        }
+
+        var symbol = new FunctionSymbol(
+            string.Empty,
+            _containingSymbol,
+            syntax,
+            Accessibility.Private,
+            FunctionKind.Ordinary
+        ) { Parameters = [] };
+        var thrown = type.ThrownType is { } open && IsOpen(open) ? Core.AnyError : type.ThrownType;
+        symbol.ThrownTypeResolver = () => thrown;
+        symbol.ReturnTypeResolver = () => type.ReturnType;
+
+        var outerNarrowing = EnterNestedBody();
+        var body = BindClosureBody(symbol, syntax, type.ReturnType, inferring: false, captures: []);
+        ExitNestedBody(outerNarrowing);
+
+        // What the body throws is the closure's only where the parameter
+        // lets it throw; elsewhere it was reported as having nowhere to go.
+        return new BoundClosure(
+            syntax,
+            new FunctionTypeSymbol([], type.ReturnType, false, type.ThrownType is null ? null : _closureThrows),
+            symbol,
+            [],
+            body
+        ) { IsAutoclosure = true };
+    }
+
+    static ExpressionSyntax Unparenthesised(ExpressionSyntax syntax) =>
+        syntax is ParenthesizedExpressionSyntax parenthesized ? Unparenthesised(parenthesized.Expression) : syntax;
+
+    /// <summary>
+    ///     An argument already bound, wrapped as an <c>@autoclosure</c>'s
+    ///     closure: for a call whose arguments were not bound as a question
+    ///     first, as an operator's are not.
+    /// </summary>
+    BoundExpression WrapAutoclosure(BoundExpression argument, FunctionTypeSymbol type) {
+        var value = Convert(argument, type.ReturnType, argument.Syntax);
+        var symbol = new FunctionSymbol(
+            string.Empty,
+            _containingSymbol,
+            argument.Syntax,
+            Accessibility.Private,
+            FunctionKind.Ordinary
+        ) { Parameters = [] };
+        symbol.ThrownTypeResolver = static () => null;
+        symbol.ReturnTypeResolver = () => type.ReturnType;
+        BoundStatement statement = type.ReturnType.Equals(Core.Void)
+            ? new BoundExpressionStatement(argument.Syntax, value)
+            : new BoundReturn(argument.Syntax, value);
+        return new BoundClosure(argument.Syntax, new FunctionTypeSymbol([], type.ReturnType, false, null), symbol, [], new BoundBlock(argument.Syntax, [], [statement])) {
+            IsAutoclosure = true,
+        };
     }
 
     /// <summary>
@@ -5461,7 +5678,7 @@ public sealed partial class Binder {
                 break;
             }
 
-            var wanted = outer.Apply(function.Parameters[slots[i]].Type);
+            var wanted = ArgumentTypeFor(function.Parameters[slots[i]], outer.Apply(function.Parameters[slots[i]].Type), arguments[i]);
             if (IsNumericLiteral(arguments[i])) {
                 literals.Add((wanted, arguments[i]));
                 continue;
@@ -5846,12 +6063,18 @@ public sealed partial class Binder {
                 return Reject($"argument {i + 1} needs the label '{requiredLabel}:'");
             }
 
-            var wanted = substitution.Apply(parameter.Type);
+            var wanted = ArgumentTypeFor(parameter, substitution.Apply(parameter.Type), arguments[i]);
             if (parameter.IsVariadic && wanted is ArrayTypeSymbol elements) {
                 wanted = elements.ElementType;
             }
 
             var conversion = _conversions.Classify(arguments[i].Type, wanted, IsLiteral(arguments[i]));
+
+            // An '@autoclosure' parameter passed on bare is the overload it
+            // was meant for, and is told to call it (S3516).
+            if (conversion is null && parameter.IsAutoclosure && arguments[i] is BoundParameterAccess { Parameter.IsAutoclosure: true }) {
+                continue;
+            }
 
             if (conversion is null) {
                 return Reject(

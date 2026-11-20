@@ -389,6 +389,17 @@ public sealed class ParameterSymbol(
     public bool IsEscaping { get; internal set; }
 
     /// <summary>
+    ///     <c>@autoclosure</c>: a <c>() -&gt; T</c> parameter whose argument is
+    ///     written as a <c>T</c>, and is wrapped in a closure the callee calls
+    ///     when, and only if, it wants the value (SYNTAX.md §5). Without
+    ///     <c>@escaping</c> too, the closure does not outlive the call.
+    /// </summary>
+    public bool IsAutoclosure { get; internal set; }
+
+    /// <summary>What an argument for this parameter is written as: <c>T</c> for an <c>@autoclosure () -&gt; T</c>, else the parameter's type.</summary>
+    public TypeSymbol ArgumentType => IsAutoclosure && Type is FunctionTypeSymbol { ParameterTypes.IsEmpty: true } function ? function.ReturnType : Type;
+
+    /// <summary>
     ///     <c>@Sendable</c>: a closure passed here runs alongside the caller,
     ///     as a task of its own or on another thread, so what it captures must
     ///     be Sendable, and no 'var' (SYNTAX.md §19). What is passed is a

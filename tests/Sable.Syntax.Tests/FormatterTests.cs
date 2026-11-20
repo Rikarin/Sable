@@ -98,6 +98,7 @@ public sealed class FormatterTests {
     [InlineData("fn f(){}", "fn f() { }\n")]
     [InlineData("let   x=1", "let x = 1\n")]
     [InlineData("let x:Int=1", "let x: Int = 1\n")]
+    [InlineData("fn check(_ ok:@autoclosure ()->Bool,_ why:@autoclosure @escaping ()->String=\"\"){}", "fn check(_ ok: @autoclosure () -> Bool, _ why: @autoclosure @escaping () -> String = \"\") { }\n")]
     [InlineData("let xs=[1,2,3]", "let xs = [1, 2, 3]\n")]
     [InlineData("let v=a.b.c(1,2)", "let v = a.b.c(1, 2)\n")]
     [InlineData("let t:List<Int>=x", "let t: List<Int> = x\n")]

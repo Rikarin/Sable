@@ -314,7 +314,7 @@ public sealed class Inliner : ISilPass {
                 .ToList();
     }
 
-    static void Inline(SilFunction caller, SilInstruction apply, SilFunction callee) {
+    internal static void Inline(SilFunction caller, SilInstruction apply, SilFunction callee) {
         var block = apply.Block;
         var at = block.Instructions.IndexOf(apply);
         SilBlock rest;

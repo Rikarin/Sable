@@ -1,0 +1,57 @@
+module Negative.Autoclosure
+
+// '@autoclosure' (spec/SYNTAX.md §5): a '() -> T' parameter whose argument
+// is written as a T and worked out only when the callee calls it.
+
+fn number(_ n: @autoclosure Int) -> Int { //! S3515 'n' is of type '() -> Int', not 'Int'
+    return n
+}
+
+fn takesOne(_ f: @autoclosure (Int) -> Int) -> Int { //! S3515 'f' takes nothing
+    return f(1)
+}
+
+fn many(_ fs: @autoclosure () -> Int...) -> Int { //! S3515 'fs' cannot be variadic
+    return 0
+}
+
+fn changed(_ f: inout @autoclosure () -> Int) -> Int { //! S3515 cannot be 'inout'
+    return f()
+}
+
+@autoclosure //! S3093 '@autoclosure' applies to a parameter, not to a function
+fn notAParameter() { }
+
+fn lazily(_ value: @autoclosure () -> Int) -> Int {
+    return value()
+}
+
+fn forwards(_ value: @autoclosure () -> Int) -> Int {
+    return lazily(value) //! S3516 pass 'value()'
+}
+
+fn aClosureIsNotTheValue() -> Int {
+    return lazily({ 1 }) //! S3004 expected 'Int'
+}
+
+fn theArgumentIsStillTyped() -> Int {
+    return lazily("one") //! S3007 argument 1 is 'String', and 'value' takes 'Int'
+}
+
+var kept: () -> Int = { 0 }
+
+fn keeps(_ value: @autoclosure () -> Int) {
+    kept = value //! S3205 mark it '@escaping'
+}
+
+fn fails() throws -> Int {
+    return 1
+}
+
+fn aThrowingArgumentNeedsAThrowingClosure() throws -> Int {
+    return lazily(try fails()) //! S3033 this error has nowhere to go
+}
+
+fn anEscapingOneMayBeKept(_ value: @autoclosure @escaping () -> Int) {
+    kept = value
+}

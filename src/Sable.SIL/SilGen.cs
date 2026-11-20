@@ -10615,6 +10615,9 @@ public sealed partial class SilGen {
             var code = new SilFunction(name, thick.Implementation) {
                 SourceFile = function.SourceFile,
                 Line = source.GetLinePosition(closureExpression.Syntax.Span.Start).Line,
+                // An '@autoclosure' argument is an expression, inlined
+                // where the callee, inlined, asks for it (InlineClosures).
+                Inline = closureExpression is BoundClosure { IsAutoclosure: true } ? SilInline.Always : SilInline.Default,
             };
             code.ParameterNames.AddRange(codeSymbol.Parameters.Select(static p => p.Name));
             var info = new ClosureInfo(contextType, captures.ToDictionary(static c => c.Key, static c => c));
@@ -10626,8 +10629,12 @@ public sealed partial class SilGen {
             // a move-only value it captures, or makes, is held to the same rules.
             MoveChecker.Check(code, source, generator._diagnostics);
 
-            // The context.
-            Locate(closureExpression.Syntax);
+            // The context. An '@autoclosure''s is made by the call, and
+            // stays at the call's place: the call that follows is there,
+            // as a backtrace through it names it.
+            if (closureExpression is not BoundClosure { IsAutoclosure: true }) {
+                Locate(closureExpression.Syntax);
+            }
             var reference = Emit(new FunctionRefInst(name, thick.Implementation));
             if (contextType is null) {
                 return Emit(new PartialApplyInst(reference, null, thick));

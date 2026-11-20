@@ -685,4 +685,94 @@ public sealed class PassTests {
         Assert.Equal(90L, new SilInterpreter(module).Run("M.run", 10L));
         Assert.Equal("array index out of range", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.run", 9L)).Message);
     }
+
+    /// <summary>A program lowered as a release build lowers it: Sable.Core's '#if RELEASE' side.</summary>
+    static SilModule LoweredForRelease(string source) {
+        var options = ParseOptions.Default.WithSymbols("RELEASE");
+        var (module, diagnostics) = SilGen.Lower(Compilation.Create([SyntaxTree.Parse(new SourceText($"module M\n{source}", "file0.sb"), options)], options));
+        Assert.Empty(diagnostics);
+        return module;
+    }
+
+    /// <summary>The closures the program's own functions still make, and the contexts they still allocate.</summary>
+    static List<SilInstruction> Closures(SilModule module) =>
+        [
+            ..module.Functions.Where(static f => !f.Name.StartsWith("Sable.Core.", StringComparison.Ordinal))
+                .SelectMany(Instructions)
+                .Where(static i => i is PartialApplyInst || i is AllocRefInst { ClassType.Name: var name } && name.EndsWith("$context", StringComparison.Ordinal)),
+        ];
+
+    /// <summary>
+    ///     An '@autoclosure' argument is a closure inlined away (#289): in a
+    ///     release build, 'assert' is empty, so its condition and message,
+    ///     closures before the passes, are made and destroyed and nothing
+    ///     more; afterwards nothing of them is left — no closure, no
+    ///     context, no call of their code — and nothing they would have
+    ///     done is done.
+    /// </summary>
+    [Fact]
+    public void AReleaseAssertLeavesNoClosureBehind() {
+        var module = LoweredForRelease(
+            """
+            fn counted(_ value: Bool) -> Bool {
+                print("evaluated")
+                return value
+            }
+            fn probe(_ limit: Int) -> Int {
+                var n = 2
+                assert(counted(n < limit), "n is \(n), and the limit \(limit)")
+                n = n + 1
+                return n
+            }
+            """
+        );
+        var probe = module.Find("M.probe")!;
+        Assert.NotEmpty(Closures(module));
+        Assert.Contains(Instructions(probe), i => i is PartialApplyInst { Function: FunctionRefInst { Function: var code } } && module.Find(code)!.Inline == SilInline.Always);
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        Assert.Empty(Closures(module));
+        Assert.DoesNotContain(Instructions(probe), static i => i is FunctionRefInst { Function: var name } && name.Contains("$closure", StringComparison.Ordinal));
+        // The box the closure captured 'n' in is made in the frame, as nothing else holds it.
+        Assert.DoesNotContain(Instructions(probe), static i => i is AllocRefInst { OnStack: false });
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(3L, interpreter.Run("M.probe", 1L));
+        Assert.Equal("", interpreter.Output.ToString());
+    }
+
+    /// <summary>
+    ///     A callee that asks for an '@autoclosure' argument, inlined, has the
+    ///     argument's code inlined where it asks, its captures read straight
+    ///     from the caller: no closure is made, and the result is as before.
+    /// </summary>
+    [Fact]
+    public void AnAutoclosureCalledByAnInlinedCalleeIsInlinedWhereItIsCalled() {
+        var module = Lowered(
+            """
+            fn orElse(_ value: Int?, _ fallback: @autoclosure () -> Int) -> Int {
+                if let v = value {
+                    return v
+                }
+                return fallback()
+            }
+            fn probe(_ n: Int) -> Int {
+                var calls = 0
+                let words = ["a", "b"]
+                let first = orElse(none, n * 2 + words.count)
+                let second = orElse(7, n * 1000)
+                calls = calls + first + second
+                return calls
+            }
+            """
+        );
+        var before = new SilInterpreter(module).Run("M.probe", 5L);
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        Assert.DoesNotContain(Instructions(module.Find("M.probe")!), static i => i is PartialApplyInst);
+        Assert.DoesNotContain(Instructions(module.Find("M.probe")!), static i => i is ApplyInst { Callee: not FunctionRefInst });
+        Assert.Equal(19L, before);
+        Assert.Equal(before, new SilInterpreter(module).Run("M.probe", 5L));
+    }
 }

@@ -1057,6 +1057,8 @@ public sealed partial class Compilation {
                 .Any(static a => a.Name.ToString().Trim() == "escaping"),
             IsSendable = syntax.Attributes.Concat((syntax.Type as AttributedTypeSyntax)?.Attributes ?? [])
                 .Any(static a => a.Name.ToString().Trim() == "Sendable"),
+            IsAutoclosure = syntax.Attributes.Concat((syntax.Type as AttributedTypeSyntax)?.Attributes ?? [])
+                .Any(static a => a.Name.ToString().Trim() == "autoclosure"),
         };
 
         TypeBinder.BindParameterType(parameter, syntax);

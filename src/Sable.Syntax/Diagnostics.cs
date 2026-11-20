@@ -267,6 +267,8 @@ public enum ErrorCode {
     ERR_NotPolymorphic = 3512,
     ERR_DuplicateAttribute = 3513,
     ERR_InvalidEntryPoint = 3514,
+    ERR_InvalidAutoclosure = 3515,
+    ERR_AutoclosureForwarded = 3516,
 
     // ---- Format specs in interpolation (S3660-S3669) -------------------------
     ERR_FormatSpecMalformed = 3660,

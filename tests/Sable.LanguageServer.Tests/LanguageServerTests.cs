@@ -525,6 +525,25 @@ public sealed class LanguageServerTests : IDisposable {
         Assert.Equal(1, help.GetInt("activeParameter"));
     }
 
+    /// <summary>
+    ///     An '@autoclosure' parameter's argument is written as the value it
+    ///     gives, which the signature has to say, or a '() -> Bool' reads as
+    ///     wanting a closure (#289).
+    /// </summary>
+    [Fact]
+    public async Task SignatureHelpAndHoverSayAParameterIsAnAutoclosure() {
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/autoclosure.sb";
+        const string text = "module App\n\nfn check(_ ok: @autoclosure () -> Bool) -> Bool => ok()\n\nfn main() {\n    let n = check(1 < 2)\n}\n";
+        await client.OpenAsync(uri, text);
+        var help = await client.AtAsync("textDocument/signatureHelp", uri, text, At(text, "check(1", 6));
+        Assert.Equal("check(_ ok: @autoclosure () -> Bool) -> Bool", help.Get("signatures")!.Value[0].GetString("label"));
+
+        var hover = await client.AtAsync("textDocument/hover", uri, text, At(text, "ok()", 0));
+        Assert.Contains("ok: @autoclosure () -> Bool", hover.Get("contents")!.Value.GetString("value"), StringComparison.Ordinal);
+    }
+
     // ---- A workspace with the library's source -------------------------------
 
     /// <summary>

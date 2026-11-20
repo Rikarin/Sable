@@ -53,6 +53,7 @@ public sealed partial class Compilation {
         ["flags"] = (AttributeTargets.Enum, "an enum"),
         ["escaping"] = (AttributeTargets.Parameter, "a closure parameter"),
         ["Sendable"] = (AttributeTargets.Parameter, "a closure parameter"),
+        ["autoclosure"] = (AttributeTargets.Parameter, "a parameter"),
         ["polymorphic"] = (AttributeTargets.Callable, "a generic function"),
         ["deprecated"] = (AttributeTargets.Any & ~AttributeTargets.Module, "a declaration"),
         ["available"] = (AttributeTargets.Any & ~AttributeTargets.Module, "a declaration"),
@@ -190,6 +191,11 @@ public sealed partial class Compilation {
                 TypeBinder.DeferLate(() => CheckEscaping(escaping, name));
             }
 
+            if (name == "autoclosure" && attribute.Parent is ParameterSyntax or AttributedTypeSyntax { Parent: ParameterSyntax }) {
+                var autoclosure = attribute;
+                TypeBinder.DeferLate(() => CheckAutoclosure(autoclosure));
+            }
+
             if (name == "main" && attribute.Parent is FunctionDeclarationSyntax mainFunction) {
                 var main = attribute;
                 TypeBinder.DeferLate(() => CheckMain(mainFunction, main));
@@ -217,14 +223,7 @@ public sealed partial class Compilation {
     ///     written there.
     /// </summary>
     void CheckEscaping(AttributeSyntax attribute, string name) {
-        var syntax = attribute.Parent as ParameterSyntax ?? (ParameterSyntax)attribute.Parent!.Parent!;
-        var owner = syntax.Parent;
-        while (owner is not null && GetDeclaredSymbol(owner) is null) {
-            owner = owner.Parent;
-        }
-
-        var parameters = owner is not null && GetDeclaredSymbol(owner) is FunctionSymbol function ? function.Parameters : [];
-        if (parameters.FirstOrDefault(p => p.DeclaringSyntax.Contains(syntax)) is not { Type: var type } parameter || type.IsError) {
+        if (AttributedParameter(attribute) is not { Type: var type } parameter || type.IsError) {
             return;
         }
 
@@ -235,6 +234,107 @@ public sealed partial class Compilation {
                 attribute.Span,
                 $"'@{name}' applies to a closure parameter, and '{parameter.Name}' is of type '{type.ToDisplayString()}'"
             );
+        }
+    }
+
+    /// <summary>
+    ///     The names a function with an <c>@autoclosure</c> parameter is
+    ///     called by: its own, or an initialiser's type's and <c>init</c>.
+    ///     A call by one of them binds its arguments as a question first
+    ///     (<see cref="Binder" />), as which are closures depends on the
+    ///     overload; any other call binds them once.
+    /// </summary>
+    HashSet<string> AutoclosureCallees => _autoclosureCallees ??= FindAutoclosureCallees();
+
+    HashSet<string>? _autoclosureCallees;
+
+    internal bool MayTakeAutoclosure(string name) => AutoclosureCallees.Contains(name);
+
+    HashSet<string> FindAutoclosureCallees() {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var tree in SyntaxTrees) {
+            if (!tree.Text.Text.Contains("autoclosure", StringComparison.Ordinal)) {
+                continue;
+            }
+
+            foreach (var parameter in tree.Root.DescendantNodes().OfType<ParameterSyntax>()) {
+                if (!parameter.Attributes.Concat((parameter.Type as AttributedTypeSyntax)?.Attributes ?? []).Any(static a => AttributeName(a) == "autoclosure")) {
+                    continue;
+                }
+
+                for (var owner = parameter.Parent; owner is not null; owner = owner.Parent) {
+                    if (owner is FunctionDeclarationSyntax function) {
+                        names.Add(function.Identifier.Text);
+                        break;
+                    }
+
+                    if (owner is InitDeclarationSyntax) {
+                        names.Add("init");
+                        for (var type = owner.Parent; type is not null; type = type.Parent) {
+                            if (TypeName(type) is { } typeName) {
+                                names.Add(typeName);
+                                break;
+                            }
+                        }
+
+                        break;
+                    }
+                }
+            }
+        }
+
+        return names;
+
+        static string? TypeName(SyntaxNode node) =>
+            node switch {
+                StructDeclarationSyntax s => s.Identifier.Text,
+                ClassDeclarationSyntax c => c.Identifier.Text,
+                ActorDeclarationSyntax a => a.Identifier.Text,
+                UnionDeclarationSyntax u => u.Identifier.Text,
+                EnumDeclarationSyntax e => e.Identifier.Text,
+                ExtensionDeclarationSyntax x => x.Type.ToString().Trim(),
+                _ => null,
+            };
+    }
+
+    /// <summary>The parameter an attribute is written on, or on the type of.</summary>
+    ParameterSymbol? AttributedParameter(AttributeSyntax attribute) {
+        var syntax = attribute.Parent as ParameterSyntax ?? (ParameterSyntax)attribute.Parent!.Parent!;
+        var owner = syntax.Parent;
+        while (owner is not null && GetDeclaredSymbol(owner) is null) {
+            owner = owner.Parent;
+        }
+
+        var parameters = owner is not null && GetDeclaredSymbol(owner) is FunctionSymbol function ? function.Parameters : [];
+        return parameters.FirstOrDefault(p => p.DeclaringSyntax.Contains(syntax));
+    }
+
+    /// <summary>
+    ///     <c>@autoclosure</c> makes the argument written at a call the body
+    ///     of a closure taking nothing (SYNTAX.md §5): the parameter is a
+    ///     <c>() -&gt; T</c>, and the argument a <c>T</c>. One argument is
+    ///     one closure, so not a variadic parameter's; and a closure made
+    ///     at the call is a value, not the caller's storage, so not
+    ///     <c>inout</c>, <c>out</c> or <c>consuming</c> (S3515).
+    /// </summary>
+    void CheckAutoclosure(AttributeSyntax attribute) {
+        if (AttributedParameter(attribute) is not { Type: var type } parameter || type.IsError) {
+            return;
+        }
+
+        void Refuse(string why) =>
+            ReportDeclaration(ErrorCode.ERR_InvalidAutoclosure, attribute.Span, $"'@autoclosure' wraps the argument in a closure that takes nothing, so {why}");
+
+        if (parameter.IsVariadic) {
+            Refuse($"'{parameter.Name}' cannot be variadic: each argument would be a closure of its own");
+        } else if (type is not FunctionTypeSymbol function) {
+            Refuse($"'{parameter.Name}' is of type '() -> {type.ToDisplayString()}', not '{type.ToDisplayString()}'");
+        } else if (!function.ParameterTypes.IsEmpty) {
+            Refuse($"'{parameter.Name}' takes nothing, and '{type.ToDisplayString()}' takes {(function.ParameterTypes.Length == 1 ? "a parameter" : "parameters")}");
+        } else if (function.IsAsync) {
+            Refuse($"'{parameter.Name}' cannot be 'async': the callee works the argument out where it asks for it, without waiting");
+        } else if (parameter.Modifier is not ParameterModifier.None) {
+            Refuse($"'{parameter.Name}' is the closure made at the call, not the caller's storage, and cannot be '{parameter.Modifier.ToString().ToLowerInvariant()}'");
         }
     }
 

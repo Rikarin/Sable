@@ -278,6 +278,43 @@ apply { (v: inout Int) in v += 1 }   // 2
 apply { $0 *= 7 }                     // 7: '$0' is inout as the type says
 ```
 
+### Lazily evaluated parameters
+
+`@autoclosure` on a parameter of type `() -> T` lets the call write a `T`:
+the argument expression becomes the body of a closure taking nothing, and is
+worked out when the callee calls it, each time it does, and not at all if it
+never does. `assert` uses it, so that a release build, whose `assert` does
+nothing, works out neither its condition nor its message:
+
+```sable
+fn assert(_ condition: @autoclosure () -> Bool, _ message: @autoclosure () -> String = "") {
+    #if DEBUG
+    if !condition() { Runtime.trap("assertion failed: \(message())", "") }
+    #endif
+}
+
+assert(index < count(), "index \(index) is past the end")   // nothing runs in release
+```
+
+The attribute is written where `@escaping` is, on the parameter or on its
+type (`@autoclosure _ c: () -> Bool` is the same). It is a parameter's, not
+a type's: `assert` passed as a value is a function taking a `() -> Bool`, and
+its caller writes the closure. The closure is non-escaping unless the
+parameter is `@escaping` too, and then the callee may keep it. A default
+value is wrapped as an argument is (`= ""` above). What the expression
+throws is the closure's, so the parameter says it may: `() throws -> T`
+lets it, and `try` is written inside the argument. The parameter is a
+`() -> T` taking nothing, neither `async`, variadic, `inout`, `out` nor
+`consuming` (S3515). Inside the callee it is an ordinary closure, called
+with `c()`; passed on to another `@autoclosure` parameter it is called there,
+`assert(c())`, which makes a new closure that calls it only when asked
+(writing `assert(c)` is S3516).
+
+An optimised build inlines the closure where the callee, inlined, calls it,
+and takes its context apart: what is left is the expression, where it is
+asked for, with nothing allocated. Where the callee never asks, nothing is
+left at all.
+
 ### Local and nested functions
 
 ```sable
@@ -1349,7 +1386,8 @@ unowned capture is the object itself, and reading it once the object is gone
 traps. `[weak x = expression]` captures what the expression gives.
 
 An escaping closure must be declared `@escaping` on the parameter; non-escaping
-closures are stack-allocated and cost nothing.
+closures are stack-allocated and cost nothing. An `@autoclosure` argument
+(§5) is a closure of this kind, written as the expression it returns.
 
 ---
 
@@ -1622,6 +1660,7 @@ an optimised one; never both. A package's profile may choose with
 | `@immortal` | static let | Skip refcounting |
 | `@flags` | enum | Bitset semantics |
 | `@escaping` | param of function type | Closure may outlive the call |
+| `@autoclosure` | param of type `() -> T` | The argument, written as a `T`, is the body of a closure the callee calls when it wants the value (§5, S3515) |
 | `@Sendable` | param of function type | Closure runs as a task: its captures are Sendable (§19) |
 | `@polymorphic` | generic fn | Single boxed instantiation |
 | `@deprecated("use X")` | any | Warning at use site |

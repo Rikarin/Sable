@@ -39,7 +39,11 @@ public static class TestHarness {
 
     const string EntryName = "sableHarnessMain";
 
-    /// <summary>Compiles the files for <paramref name="kind" />'s harness, with doc examples as tests if asked.</summary>
+    /// <summary>
+    ///     Compiles the files for <paramref name="kind" />'s harness, with doc
+    ///     examples as tests if asked: parsed as a test build is, unoptimised,
+    ///     with <c>DEBUG</c> defined, as <c>sable test</c> parses them.
+    /// </summary>
     /// <param name="tests">What the harness lists, in its order.</param>
     public static CompileResult Compile(
         IReadOnlyList<SourceText> sources,
@@ -48,7 +52,7 @@ public static class TestHarness {
         bool docExamples = false,
         string? debugDirectory = null,
         bool checkExclusivity = true
-    ) => Compile([..sources.Select(SyntaxTree.Parse)], kind, out tests, docExamples, debugDirectory, checkExclusivity);
+    ) => Compile([..sources.Select(static source => SyntaxTree.Parse(source, Pipeline.ParseOptionsFor(optimise: false)))], kind, out tests, docExamples, debugDirectory, checkExclusivity);
 
     /// <summary>The same, for files already parsed: a package's, each with its own package's features.</summary>
     /// <param name="coverage">Which of the program's own files to count coverage in (never its tests').</param>

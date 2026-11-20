@@ -25,9 +25,9 @@ public sealed class CollectionLibraryTests {
                         d.prepend("f\(i)")
                         i = i + 1
                     }
-                    print("\(d.count) \(d.first ?? "-") \(d.last ?? "-") \(d.at(3))")
+                    print("\(d.count) \(d.first ?? "-") \(d.last ?? "-") \(d[3])")
                     print("\(d.removeFirst() ?? "-") \(d.removeLast() ?? "-") \(d.count)")
-                    d.set(0, "zero")
+                    d[0] = "zero"
                     var line = ""
                     for s in d { line = line + s + " " }
                     print(line)
@@ -86,8 +86,8 @@ public sealed class CollectionLibraryTests {
             @main
             fn main() {
                 let d = Deque<Int>([1, 2, 3, 4, 5, 6, 7, 8])
-                print(d.at(7))
-                print(d.at(8))
+                print(d[7])
+                print(d[8])
             }
             """);
         Assert.Equal("8\n", run.Stdout);

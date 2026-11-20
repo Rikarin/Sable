@@ -637,8 +637,9 @@ public static class NativeBuild {
         // A trap's backtrace names frames through dladdr, which on Linux
         // sees only the dynamic symbol table: the program's functions go
         // there too. And 'frem' becomes a call to fmod, which glibc keeps
-        // in libm, not libc.
-        NativePlatform.Linux => ["-rdynamic", "-lm"],
+        // in libm, not libc. The executor's pool is threads: pthread, which
+        // older glibc keeps apart.
+        NativePlatform.Linux => ["-rdynamic", "-lm", "-pthread"],
 
         // lld, which takes LLVM bitcode as Microsoft's linker does not; the
         // main thread's stack the size a POSIX one's is, 8 MiB, not 1; a

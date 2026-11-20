@@ -57,6 +57,10 @@ public class Task<Success> {
     @intrinsic
     static async fn waitForGroup(_ group: Int)
 
+    /// Parks the running task in a wait list until it is woken: WaitList's.
+    @intrinsic
+    static async fn park(_ waitList: Int)
+
     /// Lets every task queued run before this one goes on.
     @intrinsic
     public static async fn `yield`()

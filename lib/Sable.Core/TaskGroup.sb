@@ -35,20 +35,27 @@ public class TaskGroup<ChildResult>: AsyncSequence {
     /// Spawns the body as a child of the group, at the running task's
     /// priority. A group cancelled already cancels it at once.
     public fn spawn(_ body: async () -> ChildResult) {
+        prepare()
         add(Task.spawn(body))
     }
 
     /// Spawns the body as a child of the group, at this priority.
     public fn spawn(priority: TaskPriority, _ body: async () -> ChildResult) {
+        prepare()
         add(Task.spawn(priority: priority, body))
     }
 
-    fn add(_ task: Task<ChildResult>) {
+    /// Before a child is spawned: in a group cancelled already, it starts
+    /// cancelled — before it can run, on whichever thread it runs.
+    fn prepare() {
         precondition(accepting, "a task group's children are spawned within its scope")
-        TaskGroup<ChildResult>.adopt(group, task.handle)
         if cancelled {
-            task.cancel()
+            TaskGroup<ChildResult>.spawnCancelled()
         }
+    }
+
+    fn add(_ task: Task<ChildResult>) {
+        TaskGroup<ChildResult>.adopt(group, task.handle)
         running[task.handle] = task
     }
 
@@ -97,6 +104,9 @@ public class TaskGroup<ChildResult>: AsyncSequence {
 
     @builtin("task_group_new")
     static fn made() -> Int
+
+    @builtin("task_spawn_cancelled")
+    static fn spawnCancelled()
 
     @builtin("task_group_add")
     static fn adopt(_ group: Int, _ task: Int)

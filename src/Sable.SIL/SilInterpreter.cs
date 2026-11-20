@@ -1233,6 +1233,14 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 MakeImmortal(builtin.Operands[0].Type, operands[0]);
                 return null;
 
+            // One thread runs every task here: nothing is shared between threads.
+            case "share":
+                return null;
+
+            // An actor's identity: the interpreter's hops never wait, so need none.
+            case "address_to_int":
+                return 0L;
+
             case "string_count":
                 return (long)Text(operands[0]).Scalars.Count;
 

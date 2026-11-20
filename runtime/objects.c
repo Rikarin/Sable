@@ -151,20 +151,45 @@ enum {
     SABLE_CLASS_SHIFT = 5,
     SABLE_CLASS_MASK = 15u << SABLE_CLASS_SHIFT,
 
+    // More than one thread may reach it: its counts are atomic (docs/02
+    // §2.7). Set as a value crosses from one task to another — into a
+    // task's closure, through an actor's call, as a task's result — on the
+    // object and on everything it reaches (sable_share). An object only one
+    // task can reach is counted with plain loads and stores; one task runs
+    // on one thread at a time, and a task moving to another thread is
+    // handed over with a release and an acquire.
+    SABLE_SHARED = 1u << 9,
+
     // The unowned count, above the flags.
-    SABLE_UNOWNED_SHIFT = 9,
+    SABLE_UNOWNED_SHIFT = 10,
     SABLE_UNOWNED_ONE = 1u << SABLE_UNOWNED_SHIFT,
 };
 
-static uint32_t unowned_count(const SableObject *object) {
-    return object->flags >> SABLE_UNOWNED_SHIFT;
+// The flags, read while another thread may change the unowned count.
+static inline uint32_t object_flags(const SableObject *object) {
+    return __atomic_load_n(&object->flags, __ATOMIC_RELAXED);
 }
+
+// The flags, changed: atomically, as another thread may change them too.
+static inline void flags_set(SableObject *object, uint32_t bits) {
+    __atomic_fetch_or(&object->flags, bits, __ATOMIC_RELAXED);
+}
+
+static inline void flags_clear(SableObject *object, uint32_t bits) {
+    __atomic_fetch_and(&object->flags, ~bits, __ATOMIC_RELAXED);
+}
+
+// The strong count, as a check of uniqueness reads it: the releases other
+// threads made before it are seen.
+static inline uint32_t strong_count(const SableObject *object) {
+    return __atomic_load_n(&object->strong, __ATOMIC_ACQUIRE);
+}
+
 
 _Noreturn void sable_trap(const char *message);
 _Noreturn static void trap_here(const char *message);
 static void sable_weak_object_died(SableObject *object);
 
-static int64_t live_objects;
 static void object_born(SableObject *object);
 static void object_gone(SableObject *object);
 static void report_leaks(void);
@@ -175,11 +200,25 @@ static bool tracking;
 
 // What ARC did: the counts the benchmarks track, and what the ARC passes are
 // measured by. Retains and releases count only those that touch a count —
-// not null, not immortal. The two are the program's to count too: compiled
-// code retains and releases inline, calling here only for an object's last
-// release (sable_release_last), and keeps these counts as the runtime does.
-static int64_t allocations;
-int64_t sable_retains, sable_releases;
+// not null, not immortal — and only under SABLE_STATS (threads.c). The two
+// are the program's to count too: compiled code retains and releases
+// inline, calling here only for an object's last release
+// (sable_release_last), and keeps these counts as the runtime does.
+// Allocations and the objects alive are counted by each thread (threads.c).
+static int64_t thread_sum(size_t offset) {
+    int64_t sum = 0;
+    spin_lock(&threads_lock);
+    for (SableThread *thread = all_threads; thread != NULL; thread = thread->next) {
+        sum += __atomic_load_n((int64_t *)((char *)thread + offset), __ATOMIC_RELAXED);
+    }
+
+    spin_unlock(&threads_lock);
+    return sum;
+}
+
+static int64_t live_object_count(void) {
+    return thread_sum(offsetof(SableThread, live_objects));
+}
 
 // What a library does as the process exits — destroy its globals — given by
 // its start-up (LlvmEmitter's LibraryLifetime). Run here, before the report,
@@ -208,6 +247,7 @@ SABLE_AT_EXIT(sable_report) {
 
     forget_immortal_reach();
 
+    int64_t live_objects = live_object_count();
     if (live_objects != 0 && getenv("SABLE_CHECK_LEAKS") != NULL) {
         fflush(stdout);
         fprintf(stderr, "sable: %lld object(s) leaked\n", (long long)live_objects);
@@ -219,9 +259,10 @@ SABLE_AT_EXIT(sable_report) {
     if (getenv("SABLE_STATS") != NULL) {
         fflush(stdout);
         fprintf(stderr, "sable: allocations %lld, retains %lld, releases %lld\n",
-            (long long)allocations, (long long)sable_retains, (long long)sable_releases);
+            (long long)thread_sum(offsetof(SableThread, allocations)), (long long)sable_retains, (long long)sable_releases);
         fprintf(stderr, "sable: slabs %lld held, %lld at most, %lld given back\n",
-            (long long)slabs_held, (long long)slabs_most, (long long)slabs_returned);
+            (long long)__atomic_load_n(&slabs_held, __ATOMIC_RELAXED), (long long)__atomic_load_n(&slabs_most, __ATOMIC_RELAXED),
+            (long long)__atomic_load_n(&slabs_returned, __ATOMIC_RELAXED));
         report_tasks();
         report_frames();
         fprintf(stderr, "sable: peak memory %lld KiB\n", (long long)(peak_memory() / 1024));

@@ -1,0 +1,93 @@
+module ChannelTests
+
+// Channel and ChannelIterator (Sable.Concurrency), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Concurrency
+
+import Sable.Concurrency
+import Sable.Testing
+
+@test
+fn valuesComeInTheOrderSent() async {
+    let channel = Channel<Int>()
+    for i in 1...3 {
+        await channel.send(i)
+    }
+    await channel.close()
+    var got: Int[>..] = []
+    for await value in channel {
+        got.append(value)
+    }
+    assert(got == [1, 2, 3])
+}
+
+@test
+fn aReceiverWaitsForAValue() async {
+    let channel = Channel<String>()
+    let receiver = Task.spawn { await channel.receive() }
+    await Task.yield()
+    await channel.send("late")
+    assertEqual(await receiver.value ?? "none", "late")
+}
+
+@test
+fn aClosedEmptyChannelGivesNone() async {
+    let channel = Channel<Int>()
+    let receiver = Task.spawn { await channel.receive() }
+    await channel.close()
+    assert(await receiver.value == none)
+    assert(await channel.isClosed)
+}
+
+@test
+fn aValueSentAfterClosingIsDropped() async {
+    let channel = Channel<Int>()
+    await channel.close()
+    await channel.send(1)
+    assertEqual(await channel.pending, 0)
+    assert(await channel.tryReceive() == none)
+}
+
+@test
+fn tryReceiveTakesWhatIsThere() async {
+    let channel = Channel<Int>()
+    assert(await channel.tryReceive() == none)
+    await channel.send(7)
+    await channel.send(8)
+    assertEqual(await channel.pending, 2)
+    assertEqual(await channel.tryReceive() ?? 0, 7)
+    assertEqual(await channel.receive() ?? 0, 8)
+    assertEqual(await channel.pending, 0)
+}
+
+@test
+fn manySendersAndReceiversLoseNothing() async {
+    let channel = Channel<Int>()
+    var receivers: Task<Int>[>..] = []
+    for _ in 0..<3 {
+        receivers.append(Task.spawn {
+            var total = 0
+            for await value in channel {
+                total += value
+            }
+            return total
+        })
+    }
+    var senders: Task<Int>[>..] = []
+    for s in 0..<3 {
+        senders.append(Task.spawn {
+            for i in 0..<100 {
+                await channel.send(s * 100 + i)
+            }
+            return 0
+        })
+    }
+    for sender in senders {
+        let _ = await sender.value
+    }
+    await channel.close()
+    var total = 0
+    for receiver in receivers {
+        total += await receiver.value
+    }
+    assertEqual(total, 44850)
+}

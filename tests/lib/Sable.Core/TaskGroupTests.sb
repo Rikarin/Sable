@@ -27,13 +27,19 @@ fn even(_ n: Int) async throws -> Int {
 
 @test
 fn aGroupsResultsComeInTheOrderTheChildrenFinish() async {
+    let gates = [Latch(), Latch(), Latch()]
     let order = await withTaskGroup(of: Int.self) { group in
-        group.spawn { await after(3, 3) }
-        group.spawn { await after(1, 1) }
-        group.spawn { await after(2, 2) }
+        for n in [3, 1, 2] {
+            group.spawn {
+                await gates[n - 1].wait()
+                return n
+            }
+        }
+        // Each let go only once the one before has been taken.
         var order: Int[>..] = []
-        for await n in group {
-            order.append(n)
+        for gate in gates {
+            await gate.open()
+            order.append(await group.next() ?? 0)
         }
         return order
     }
@@ -52,12 +58,14 @@ fn aGroupWithNoChildrenGivesNone() async {
 @test
 fn theChildrenLeftAreWaitedForAsTheScopeEnds() async {
     let log = Log()
+    let bodyDone = Latch()
     await withTaskGroup(of: Void.self) { group in
         group.spawn {
-            await Task.yield()
+            await bodyDone.wait()
             log.add("child")
         }
         log.add("body")
+        await bodyDone.open()
     }
     log.add("after")
     assertEqual(log.text, "body child after")
@@ -77,13 +85,15 @@ fn waitingForAllEmptiesTheGroup() async {
 
 @test
 fn cancellingAGroupCancelsItsChildrenAndThoseSpawnedAfter() async {
+    let later = Latch()
     let cancelled = await withTaskGroup(of: Bool.self) { group in
         group.spawn {
-            await Task.yield()
+            await later.wait()
             return Task.isCancelled
         }
         assert(!group.isCancelled)
         group.cancelAll()
+        await later.open()
         assert(group.isCancelled)
         group.spawn { Task.isCancelled }
         var all = true
@@ -133,8 +143,8 @@ fn aThrowingGroupsBodyThatThrowsCancelsTheChildrenLeft() async {
     let log = Log()
     let thrown = try? await withThrowingTaskGroup(of: Int.self) { group in
         group.spawn {
-            await Task.yield()
-            log.add(Task.isCancelled ? "cancelled" : "ran")
+            let slept = (try? await Task.sleep(nanoseconds: 10_000_000_000)) != none
+            log.add(slept ? "ran" : "cancelled")
             return 1
         }
         assert(!group.isCancelled)
@@ -172,6 +182,23 @@ fn aThrowingGroupCancelledCancelsItsChildren() async {
         return first
     }
     assert(cancelled ?? false)
+}
+
+/// Shut until opened: what a test waits on for another task to reach a point.
+actor Latch {
+    var isOpen = false
+    let opened = WaitList()
+
+    fn wait() async {
+        while !isOpen {
+            await opened.park()
+        }
+    }
+
+    fn open() {
+        isOpen = true
+        opened.wakeAll()
+    }
 }
 
 class Log {

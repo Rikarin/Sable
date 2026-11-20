@@ -71,6 +71,8 @@ public sealed partial class SilGen {
             var error = failed.AddArgument(thrown);
             block.Append(new TryApplyInst(body, result, [], normal, failed));
             failed.Append(new DestroyValueInst(body));
+            // Whoever waits for the task, on another thread, reads it.
+            failed.Append(new BuiltinInst("share", SilType.Unit, error));
             var someError = failed.Append(new EnumInst(optionalError, optionalError.CaseIndex("Some"), error));
             failed.Append(new StoreInst(someError, failed.Append(new RefElementAddrInst(owned, TaskError)), StoreKind.Assign));
             failed.Append(new DestroyValueInst(owned));
@@ -81,6 +83,10 @@ public sealed partial class SilGen {
         }
 
         block.Append(new DestroyValueInst(body));
+        if (value is not null && !value.Type.IsTrivial) {
+            block.Append(new BuiltinInst("share", SilType.Unit, value));
+        }
+
         // A body that gives nothing makes a Void?, whose 'Some' carries nothing.
         var carried = optional.Cases[optional.CaseIndex("Some")].Payload is null ? null : value;
         var some = block.Append(new EnumInst(optional, optional.CaseIndex("Some"), carried));

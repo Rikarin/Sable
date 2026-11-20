@@ -40,11 +40,8 @@ typedef struct FrameSlab {
     FrameChunk *spare;  // an emptied chunk, kept for the next time the slab outgrows the one before
 } FrameSlab;
 
-// The running task's slab (tasks.c sets it as it switches tasks).
-static FrameSlab *current_frames;
-
-// What the slabs have done, for SABLE_STATS.
-static int64_t frames_made, frame_chunks_taken;
+// The running task's slab, on each thread (tasks.c sets it as it switches tasks).
+static _Thread_local FrameSlab *current_frames;
 
 static inline size_t frame_round(size_t size) {
     return (size + FRAME_ALIGN - 1) & ~(size_t)(FRAME_ALIGN - 1);
@@ -76,7 +73,7 @@ static void *slab_push(FrameSlab *slab, size_t size) {
             }
 
             chunk->size = room;
-            frame_chunks_taken++;
+            thread_count(&current_thread()->frame_chunks, 1);
         }
 
         chunk->previous = slab->chunk;
@@ -91,7 +88,7 @@ static void *slab_push(FrameSlab *slab, size_t size) {
     void *frame = slab->top;
     memset(frame, 0, size);
     slab->top += size;
-    frames_made++;
+    thread_count(&current_thread()->frames_made, 1);
     return frame;
 }
 
@@ -142,5 +139,6 @@ void sable_frame_free(void *frame) {
 }
 
 static void report_frames(void) {
-    fprintf(stderr, "sable: frames %lld, frame chunks %lld\n", (long long)frames_made, (long long)frame_chunks_taken);
+    fprintf(stderr, "sable: frames %lld, frame chunks %lld\n", (long long)thread_sum(offsetof(SableThread, frames_made)),
+        (long long)thread_sum(offsetof(SableThread, frame_chunks)));
 }

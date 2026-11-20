@@ -89,9 +89,41 @@ public class OrderedDictionary<Key: Hashable, Value> {
     }
 }
 
-extension OrderedDictionary: Sequence {
+// An ordered dictionary is a random-access collection of its entries,
+// each key with its value, by their position in the order.
+extension OrderedDictionary: RandomAccessCollection {
     /// An iterator over the entries, each key with its value, in order.
     public fn makeIterator() -> Zip2Iterator<ArrayIterator<Key>, ArrayIterator<Value>> {
         return zip(orderedKeys, orderedValues).makeIterator()
     }
+
+    /// The entry at 'position' in the order; traps outside 0..<count.
+    ///
+    /// ```sable
+    /// let ages = OrderedDictionary<String, Int>()
+    /// ages.set("ann", 31)
+    /// ages.set("bo", 42)
+    /// assert(ages[1].0 == "bo" && ages[1].1 == 42)
+    /// ```
+    public subscript(position: Int) -> (Key, Value) {
+        get => (orderedKeys[position], orderedValues[position])
+    }
+
+    /// The first entry's position: 0.
+    public var startIndex: Int => 0
+
+    /// The position past the last entry: the count.
+    public var endIndex: Int => orderedKeys.count
+
+    /// The next position.
+    public fn index(after position: Int) -> Int => position + 1
+
+    /// The position before.
+    public fn index(before position: Int) -> Int => position - 1
+
+    /// The position 'distance' on.
+    public fn index(_ position: Int, offsetBy distance: Int) -> Int => position + distance
+
+    /// How far on 'end' is from 'start'.
+    public fn distance(from start: Int, to end: Int) -> Int => end - start
 }

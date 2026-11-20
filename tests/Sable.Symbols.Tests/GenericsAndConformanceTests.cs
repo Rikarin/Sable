@@ -453,6 +453,28 @@ public sealed class GenericsAndConformanceTests {
         );
 
     [Fact]
+    public void AGenericRequirementAndItsDefaultAreOneMethodToCall() =>
+        AssertClean(
+            """
+            protocol Store {
+                mutating fn put<S: Sequence>(_ items: S) where S.Element == Int
+            }
+            extension Store {
+                mutating fn put<S: Sequence>(_ items: S) where S.Element == Int { }
+            }
+            struct Bin: Store { }
+            fn fill<T: Store>(_ store: inout T) {
+                store.put([1, 2])
+            }
+            fn main() {
+                var bin = Bin { }
+                bin.put([3])
+                fill(&bin)
+            }
+            """
+        );
+
+    [Fact]
     public void SelfInARequirementMeansTheConformingType() =>
         AssertClean(
             """

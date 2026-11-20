@@ -66,6 +66,48 @@ fn incremented<C: MutableCollection>(_ items: inout C) where C.Element == Int {
     }
 }
 
+fn spliced<C: RangeReplaceableCollection>(_ items: C, from low: C.Index, to high: C.Index, with replacement: Int[>..]) -> C where C.Element == Int {
+    var changed = items
+    changed.replaceSubrange(low..<high, with: replacement)
+    return changed
+}
+
+// A collection that grows at its end and keeps no room ahead: what the
+// defaults of 'replaceSubrange' and 'reserveCapacity' are for.
+struct Bag: RangeReplaceableCollection {
+    var items: Int[>..]
+
+    init() {
+        items = []
+    }
+
+    var startIndex: Int => 0
+    var endIndex: Int => items.count
+    var count: Int => items.count
+
+    fn index(after position: Int) -> Int => position + 1
+
+    subscript(position: Int) -> Int {
+        get => items[position]
+    }
+
+    fn makeIterator() -> ArrayIterator<Int> {
+        return items.makeIterator()
+    }
+
+    mutating fn append(element: Int) {
+        items.append(element)
+    }
+
+    mutating fn removeLast() -> Int {
+        return items.removeLast()
+    }
+
+    mutating fn clear() {
+        items.clear()
+    }
+}
+
 fn counting<C: RangeReplaceableCollection>(to n: Int) -> C where C.Element == Int {
     var made = C()
     var i = 1
@@ -155,4 +197,47 @@ fn reversedReadsBackwardsWithoutCopying() {
         count += 1
     }
     assertEqual(count, 0)
+}
+
+@test
+fn replaceSubrangeRebuildsACollectionWithoutItsOwn() {
+    var bag = Bag()
+    bag.reserveCapacity(10)
+    bag.append(contentsOf: [1, 2, 3, 4])
+    bag.replaceSubrange(1..<3, with: [7, 8, 9])
+    assertEqualText(text(bag.items), "1,7,8,9,4")
+    bag.replaceSubrange(0..<0, with: [0])
+    assertEqualText(text(bag.items), "0,1,7,8,9,4")
+    bag.replaceSubrange(2..<6, with: Evens { low: 0, high: 0 })
+    assertEqualText(text(bag.items), "0,1")
+}
+
+@test
+fn aGrowableArrayHasARangeReplaced() {
+    let values: Int[>..] = [1, 2, 3]
+    assertEqualText(text(spliced(values, from: 1, to: 2, with: [5, 6])), "1,5,6,3")
+    let shrinking: Int[>..<] = [1, 2, 3]
+    assertEqualText(text(spliced(shrinking, from: 0, to: 3, with: [])), "")
+    assertEqualText(text(values), "1,2,3")
+}
+
+@test(traps: "the range is not within the collection")
+fn replaceSubrangePastTheEndTraps() {
+    var bag = Bag()
+    bag.append(element: 1)
+    bag.replaceSubrange(0..<2, with: [3])
+}
+
+fn lastOf<C: BidirectionalCollection>(_ items: C) -> C.Element? {
+    return items.isEmpty ? none : items[items.index(before: items.endIndex)]
+}
+
+@test
+fn aStringIsABidirectionalCollectionOfItsCharacters() {
+    assert(lastOf("añb") == 'b')
+    assert(lastOf("") == none)
+    assert(middle("héllo") == 'l')
+    let reversedChars: Char[>..] = ['b', 'ñ', 'a']
+    assert(backwards("añb") == reversedChars)
+    assert("añb".lastIndex(of: "ñ") == "añb".index(after: "añb".startIndex))
 }

@@ -343,7 +343,8 @@ fn replaceSubrangeTakesMoreOrFewer() {
 @test(traps: "array slice out of range")
 fn replaceSubrangePastTheEndTraps() {
     var list = List<Int>([1, 2])
-    list.replaceSubrange(1..<3, with: [])
+    let nothing: Int[>..] = []
+    list.replaceSubrange(1..<3, with: nothing)
 }
 
 @test

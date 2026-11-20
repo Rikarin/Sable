@@ -124,3 +124,19 @@ fn anOrderedDictionaryIsGoneThroughInOrder() {
     }
     assertEqualText(seen.joined(separator: ","), "b=2,a=1")
 }
+
+@test
+fn anOrderedDictionaryIsACollectionOfItsEntriesByPosition() {
+    let ages = OrderedDictionary<String, Int>()
+    ages.set("ann", 31)
+    ages.set("bo", 42)
+    ages.set("cy", 7)
+    assertEqual(ages[0].0, "ann")
+    assertEqual(ages[2].1, 7)
+    assertEqual(ages.distance(from: ages.startIndex, to: ages.endIndex), 3)
+    assertEqual(ages.index(ages.startIndex, offsetBy: 2), 2)
+    assertEqual(ages.firstIndex(where: { $0.1 > 40 }) ?? -1, 1)
+    assertEqual(ages.last?.0 ?? "", "cy")
+    assert(ages.reversed().map({ $0.0 }).toArray() == ["cy", "bo", "ann"])
+    assertEqual(ages.index(before: ages.index(after: 0)), 0)
+}

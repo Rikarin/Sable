@@ -4012,8 +4012,18 @@ public sealed partial class Binder {
         if (Owner(first) is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol
             || !ReferenceEquals(Owner(second), protocol)
             || first.Parameters.Length != second.Parameters.Length
-            || !first.Parameters.Zip(second.Parameters).All(static p => p.First.Type.Equals(p.Second.Type))
+            || first.TypeParameters.Length != second.TypeParameters.Length
             || InExtension(first) == InExtension(second)) {
+            return null;
+        }
+
+        // A generic requirement and its default each have parameters of
+        // their own: 'replaceSubrange<C>' is the same method under either's C.
+        var renamed = new TypeSubstitution(
+            second.TypeParameters.Zip(first.TypeParameters)
+                .ToDictionary(static p => p.First, static p => (TypeSymbol)p.Second)
+        );
+        if (!first.Parameters.Zip(second.Parameters).All(p => p.First.Type.Equals(renamed.Apply(p.Second.Type)))) {
             return null;
         }
 

@@ -180,3 +180,36 @@ fn aCopyOfASmallVecIsItsOwn() {
     assertEqual(b.count, 1)
     assertEqual(b[0], 1)
 }
+
+fn built<C: RangeReplaceableCollection>(_ n: Int) -> C where C.Element == Int {
+    var made = C()
+    made.reserveCapacity(n)
+    var i = 0
+    while i < n {
+        made.append(element: i)
+        i += 1
+    }
+    return made
+}
+
+@test
+fn aSmallVecIsMadeAndGrownAsARangeReplaceableCollection() {
+    var small: SmallVec<Int, 2> = built(5)
+    assertEqual(small.count, 5)
+    assert(small.isSpilled)
+    small.replaceSubrange(1..<4, with: [9])
+    assert(small.toArray() == [0, 9, 4])
+    small.clear()
+    assert(small.isEmpty)
+}
+
+@test
+fn aSmallVecIsARandomAccessCollection() {
+    var small = SmallVec<Int, 4>([5, 6, 7])
+    assertEqual(small.distance(from: small.startIndex, to: small.endIndex), 3)
+    assertEqual(small[small.index(before: small.endIndex)], 7)
+    assertEqual(small.index(small.startIndex, offsetBy: 1), 1)
+    assertEqual(small.lastIndex(of: 6) ?? -1, 1)
+    small.swapAt(0, 2)
+    assert(small.toArray() == [7, 6, 5])
+}

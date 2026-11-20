@@ -122,14 +122,22 @@ public class Deque<Element> {
         return slot(index)
     }
 
-    /// The element 'index' places from the front; traps outside 0..<count.
-    public fn at(_ index: Int) -> Element {
-        return slots[checked(index)]!
-    }
-
-    /// Replaces the element 'index' places from the front; traps outside 0..<count.
-    public fn set(_ index: Int, _ value: Element) {
-        slots[checked(index)] = value
+    /// The element 'position' places from the front, to read or to
+    /// replace; traps outside 0..<count.
+    ///
+    /// ```sable
+    /// let deque = Deque<Int>([1, 2, 3])
+    /// deque.prepend(0)
+    /// deque[3] = 30
+    /// assert(deque[0] == 0 && deque[3] == 30)
+    /// ```
+    public subscript(position: Int) -> Element {
+        get {
+            return slots[checked(position)]!
+        }
+        set {
+            slots[checked(position)] = newValue
+        }
     }
 
     /// Removes every element.
@@ -140,11 +148,32 @@ public class Deque<Element> {
     }
 }
 
-extension Deque: Sequence {
+// A deque is a random-access collection whose elements can be replaced
+// where they are: its positions are its offsets from the front, 0 up to
+// the count, whichever slots they are in.
+extension Deque: RandomAccessCollection, MutableCollection {
     /// An iterator over the elements, front to back.
     public fn makeIterator() -> DequeIterator<Element> {
         return DequeIterator<Element> { slots: slots, position: head, remaining: used }
     }
+
+    /// The front element's position: 0.
+    public var startIndex: Int => 0
+
+    /// The position past the back element: the count.
+    public var endIndex: Int => used
+
+    /// The next position.
+    public fn index(after position: Int) -> Int => position + 1
+
+    /// The position before.
+    public fn index(before position: Int) -> Int => position - 1
+
+    /// The position 'distance' on.
+    public fn index(_ position: Int, offsetBy distance: Int) -> Int => position + distance
+
+    /// How far on 'end' is from 'start'.
+    public fn distance(from start: Int, to end: Int) -> Int => end - start
 }
 
 /// Gives a deque's elements, front to back. It holds the deque's slots as

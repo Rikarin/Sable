@@ -53,7 +53,7 @@ fn dequeGrowsAtBothEnds() {
     assertEqual(deque.first ?? 0, -19)
     assertEqual(deque.last ?? 0, 19)
     assertEqual(deque.removeFirst() ?? 0, -19)
-    assertEqual(deque.at(0), -18)
+    assertEqual(deque[0], -18)
 }
 
 @test
@@ -96,27 +96,27 @@ fn removingFromBothEndsWrapsRoundTheSlots() {
     assert(deque.toArray() == [1, 2, 3, 4, 5, 6, 7, 8])
     assertEqual(deque.removeLast() ?? -1, 8)
     assertEqual(deque.last ?? -1, 7)
-    assertEqual(deque.at(6), 7)
+    assertEqual(deque[6], 7)
 }
 
 @test
-fn setReplacesAnElementByPosition() {
+fn theSubscriptReplacesAnElementByPosition() {
     let deque = Deque<Int>([1, 2, 3])
     deque.prepend(0)
-    deque.set(2, 20)
+    deque[2] = 20
     assert(deque.toArray() == [0, 1, 20, 3])
 }
 
 @test(traps: "array index out of range")
-fn atPastTheEndTraps() {
+fn readingPastTheEndTraps() {
     let deque = Deque<Int>([1, 2])
-    let _ = deque.at(2)
+    let _ = deque[2]
 }
 
 @test(traps: "array index out of range")
-fn setAtANegativeIndexTraps() {
+fn writingAtANegativeIndexTraps() {
     let deque = Deque<Int>([1, 2])
-    deque.set(-1, 0)
+    deque[-1] = 0
 }
 
 @test
@@ -126,4 +126,32 @@ fn removeAllEmptiesTheDeque() {
     assert(deque.isEmpty)
     deque.prepend(4)
     assert(deque.toArray() == [4])
+}
+
+fn reversedElements<C: BidirectionalCollection>(_ items: C) -> C.Element[>..] {
+    var result: C.Element[>..] = []
+    var position = items.endIndex
+    while items.startIndex < position {
+        position = items.index(before: position)
+        result.append(items[position])
+    }
+    return result
+}
+
+@test
+fn aDequeIsARandomAccessCollection() {
+    let deque = Deque<Int>([2, 3])
+    deque.prepend(1)
+    assert(reversedElements(deque) == [3, 2, 1])
+    assertEqual(deque.distance(from: deque.startIndex, to: deque.endIndex), 3)
+    assertEqual(deque[deque.index(deque.startIndex, offsetBy: 2)], 3)
+    assertEqual(deque.firstIndex(of: 2) ?? -1, 1)
+    assert(deque.reversed().toArray() == [3, 2, 1])
+}
+
+@test
+fn aDequeIsChangedInPlaceAsAMutableCollection() {
+    var deque = Deque<Int>([1, 2, 3])
+    deque.swapAt(0, 2)
+    assert(deque.toArray() == [3, 2, 1])
 }

@@ -4083,6 +4083,17 @@ public sealed partial class SilGen {
                         Statement(new BoundExpressionStatement(initial.Syntax, new BoundAssignment(initial.Syntax, new BoundFieldAccess(initial.Syntax, self, field), initial)));
                     }
                 }
+
+                // A subclass whose superclass is made with the implicit
+                // 'init()' need not call it: one that does not has it called
+                // for it, which gives the superclass's fields their values.
+                if (owner.BaseTypes.OfType<NamedTypeSymbol>().FirstOrDefault(static b => b.TypeKind == TypeKind.Class) is { } superclass
+                    && superclass.OriginalDefinition.GetMembers("init").OfType<FunctionSymbol>()
+                        .FirstOrDefault(i => i is { DeclaringSyntax.IsEmpty: true, Parameters.IsEmpty: true } && !generator._compilation.InheritedInitializers.ContainsKey(i)) is { } implicitInit
+                    && !Descendants(body).Any(static n => n is BoundCall { Function.FunctionKind: FunctionKind.Initializer, Receiver: BoundSuperAccess })) {
+                    var call = new BoundCall(body.Syntax, new BoundSuperAccess(body.Syntax, superclass), implicitInit, [], Core.Void) { Substitution = TypeSubstitution.For(superclass) };
+                    Statement(new BoundExpressionStatement(body.Syntax, call));
+                }
             }
 
             _body = body;

@@ -353,7 +353,7 @@ public sealed class ExistentialTests {
             }
 
             class Dog: Animal, Shape {
-                override init() {}
+                override init() { super.init() }
                 override fn name() -> String { return "dog" }
                 fn area() -> Int { return 7 }
             }

@@ -22,11 +22,26 @@ internal readonly record struct FlowOp(FlowOpKind Kind, Symbol? Symbol, BoundNod
 
 /// <summary>
 ///     What an initialiser is building: the type, and the stored fields its
-///     body has to give a value — those without an initial value of their own.
+///     body has to give a value — those without an initial value of their own —
+///     and, for a subclass, the superclass whose part of the object
+///     <c>super.init(…)</c> has to build.
 /// </summary>
-internal sealed class InitializedSelf(NamedTypeSymbol type, IReadOnlyList<FieldSymbol> fields) {
+internal sealed class InitializedSelf(NamedTypeSymbol type, IReadOnlyList<FieldSymbol> fields, NamedTypeSymbol? superclass = null, bool superclassInitIsImplicit = false) {
     public NamedTypeSymbol Type { get; } = type;
     public IReadOnlyList<FieldSymbol> Fields { get; } = fields;
+
+    /// <summary>
+    ///     The superclass, for a class that has one: tracked as a field is,
+    ///     written by <c>super.init(…)</c> or <c>self.init(…)</c>.
+    /// </summary>
+    public NamedTypeSymbol? Superclass { get; } = superclass;
+
+    /// <summary>
+    ///     The superclass is made with the implicit <c>init()</c>, which only
+    ///     gives its fields their initial values: a body that never calls
+    ///     <c>super.init</c> has it called for it.
+    /// </summary>
+    public bool SuperclassInitIsImplicit { get; } = superclassInitIsImplicit;
 
     /// <summary>The field as tracked, if it is one the body has to set; a generic type's own fields are read through its constructed self.</summary>
     public FieldSymbol? Tracked(FieldSymbol field) =>
@@ -755,6 +770,10 @@ internal sealed class ControlFlowGraph {
 
                     if (delegation.Receiver is BoundSelfAccess) {
                         WriteEveryField(delegation);
+                    }
+
+                    if (Self.Superclass is { } superclass) {
+                        Op(FlowOpKind.Write, superclass, delegation);
                     }
 
                     return;

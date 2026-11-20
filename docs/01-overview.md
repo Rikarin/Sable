@@ -78,7 +78,7 @@ useful 80% is cheap:
   statically where provable and dynamically where not).
 - **Move-only types** (`@noncopy struct`) for resource handles — files, sockets,
   GPU buffers, locks. Use-after-move is a compile error.
-- **Borrowed parameters** (`ref` / `ref mut`) with *inferred* lifetimes, in
+- **Borrowed parameters** (`T&`, one reference type) with *inferred* lifetimes, in
   Goose's style: no annotations, the compiler infers the root each reference is
   anchored to and rejects anything that could outlive it. Signatures that would
   need an explicit lifetime in Rust are simply rejected in Sable with a message

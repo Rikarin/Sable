@@ -123,7 +123,7 @@ be implemented:
 | Pass | What it does | Where |
 |---|---|---|
 | **Local pairing** | Delete `retain`/`release` pairs with no escape between them | SIL, function-local |
-| **Borrowed parameters** | A `ref` parameter is guaranteed live by the caller, so the callee emits nothing | SIL, from borrow analysis |
+| **Borrowed parameters** | A `T&` parameter (and a class or `@noncopy` one, by default) is guaranteed live by the caller, so the callee emits nothing | SIL, from borrow analysis |
 | **Guaranteed `self`** | Methods take `self` borrowed, not owned | Calling convention |
 | **Escape-based promotion** | A `class` that never escapes its frame becomes a stack value with no header | SIL → LLVM |
 | **Uniqueness (`isUnique`)** | Copy-on-write containers skip the copy when the count is 1 | Runtime intrinsic |
@@ -173,17 +173,26 @@ let owned = move buffer   // forces a move of a copyable type; 'buffer' is dead 
 Useful to suppress a retain when you know the source is dead, and to express
 transfer in APIs.
 
-### `consuming` / `borrowing` parameter modifiers
+### `consuming`, `inout` and `T&` parameters
 
 ```sable
 fn consume(consuming h: FileHandle)   // callee takes ownership, caller's binding dies
-fn peek(borrowing h: FileHandle)      // callee may not store it anywhere
+fn peek(_ m: Matrix&)                 // the caller's storage, shared, for the call
 fn mutate(inout v: Vec3)              // exclusive mutable access for the call
 ```
 
-Defaults: `borrowing` for class and `@noncopy` parameters, by-value copy for
-small structs, `borrowing` for large structs (the ABI decides; it is observable
-only through exclusivity).
+Sable has one reference type, `T&`, and a parameter that refers to its
+argument says so in its type. Whether it may be returned is not written
+either: root inference (§2.4) decides it from the body and the result type.
+Defaults: class and `@noncopy` parameters are passed by reference without
+writing anything, small structs by value; a large struct is passed however
+the ABI decides (it is observable only through exclusivity), and `T&` says
+"the caller's own, in place" when that matters.
+
+At a call, `&` marks what the call may write, and only that: `mutate(&v)`
+for an `inout` or `out` argument, while `peek(m)` takes the plain argument.
+Anywhere else `&expr` makes a reference value, root-checked like any other:
+`let first = &bag.items[0]` is an `Item&`.
 
 ### Exclusivity
 
@@ -206,7 +215,7 @@ global that bounds its lifetime. The compiler infers the root of every reference
 expression and rejects any flow where a reference could outlive its root.
 
 ```sable
-fn longest(ref a: String, ref b: String) -> ref String {
+fn longest(_ a: String&, _ b: String&) -> String& {
     return a.count >= b.count ? a : b
 }
 ```
@@ -247,7 +256,7 @@ error[S3061]: cannot return a reference rooted in local 'tmp'
    |
 help: three ways to fix this
    |  - return an owned value:        return tmp.name.toOwned()
-   |  - allocate in the caller's region: fn f(in r: region) -> &String
+   |  - allocate in the caller's region: fn f(in r: region) -> String&
    |  - return the whole value:       return tmp
 ```
 

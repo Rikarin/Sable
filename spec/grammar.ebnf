@@ -100,7 +100,7 @@ FunctionBody      = Block
 EffectSpec        = { "async" | ThrowsSpec } ;
 ThrowsSpec        = "throws" [ "(" Type ")" ] | "rethrows" ;
 
-ReturnType        = [ "ref" ] Type ;
+ReturnType        = Type ;                         (* "-> Node&" returns a reference *)
 
 ParamList         = Param { "," Param } [ "," ] ;
 Param             = { Attribute } [ ParamModifier ] [ ParamLabel ] Identifier
@@ -109,8 +109,10 @@ Param             = { Attribute } [ ParamModifier ] [ ParamLabel ] Identifier
                        the second form composes with an external label.
                        'in name:' is the label 'in', not the modifier:
                        'fn build(in r: region)' is called 'build(in: a)' *)
-ParamModifier     = "inout" | "out" | "consuming" | "borrowing" | "ref"
-                  | "ref" "mut" | "in" ;
+ParamModifier     = "inout" | "out" | "consuming" | "in" ;
+                    (* a parameter that refers to its argument says so in
+                       its type, "a: Node&"; "ref" and "borrowing" are
+                       reserved, and an error (S1013) *)
 ParamLabel        = Identifier | Keyword | "_" ;    (* external label *)
 
 
@@ -253,7 +255,6 @@ ArraySuffix       = "[" "]"                               (* T[]      *)
 PrimaryType       = QualifiedName [ GenericArgs ]
                   | "some" Type
                   | "any" Type
-                  | "ref" Type
                   | "~" Type                (* "~Copyable", as a constraint only *)
                   | TupleType
                   | FunctionType
@@ -468,6 +469,10 @@ MemberName        = Identifier | Keyword ;
 
 ArgumentList      = Argument { "," Argument } [ "," ] ;
 Argument          = [ Identifier ":" ] [ "&" | "out" | "move" ] Expression ;
+                    (* "&" marks an argument the call may write: required
+                       for an "inout" or "out" parameter ("out" may be
+                       written for an "out" one), an error anywhere else
+                       (S3209). A "T&" parameter takes the argument plainly. *)
 
 TrailingClosure   = ClosureExpr { Identifier ":" ClosureExpr } ;
 

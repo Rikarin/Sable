@@ -629,6 +629,8 @@ fn main() -> Int {
         Console.writeErrorLine("ssg: no such file or directory: " + path)
     } catch .Failed(let path) {
         Console.writeErrorLine("ssg: could not read or write " + path)
+    } catch {
+        Console.writeErrorLine("ssg: " + error.description())
     }
     return 1
 }

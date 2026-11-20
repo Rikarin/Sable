@@ -57,7 +57,7 @@ public sealed class DeriveTests {
 
                 @main
                 fn main() {
-                    let seen = HashSet<Point>()
+                    var seen = Set<Point>()
                     seen.insert(Point(x: 1, y: 2))
                     seen.insert(Point(x: 1, y: 2))
                     seen.insert(Point(x: 1, y: 3))
@@ -145,7 +145,7 @@ public sealed class DeriveTests {
                     for shape in sorted(shapes) {
                         print(shape.debugDescription())
                     }
-                    let seen = HashSet<Shape>()
+                    var seen = Set<Shape>()
                     for shape in shapes {
                         seen.insert(shape)
                     }
@@ -191,7 +191,7 @@ public sealed class DeriveTests {
                     print(r.debugDescription())
                     print(r == Record(label: "a\tb \"q\"", weight: 1.5, flag: true, initial: 'z', outcome: bad))
                     print(r == Record(label: "a\tb \"q\"", weight: 1.5, flag: false, initial: 'z', outcome: bad))
-                    let seen = HashSet<Record>()
+                    var seen = Set<Record>()
                     seen.insert(r)
                     seen.insert(Record(label: "a\tb \"q\"", weight: 1.5, flag: true, initial: 'z', outcome: bad))
                     print(seen.count)

@@ -127,8 +127,11 @@ public sealed partial class Compilation {
         RecordDeclaration(declaration, extension);
         ArrayExtensions.Add(carrier);
 
+        // An initialiser, in an extension of every growable array of a
+        // kind: such an array always has a value to begin from, '[]'.
+        var growable = carrier.ExtendedArray.ArrayKind is ArrayKind.Grow or ArrayKind.GrowShrink;
         foreach (var member in declaration.Members) {
-            if (RejectInExtension(member)) {
+            if (!(growable && member is InitDeclarationSyntax) && RejectInExtension(member)) {
                 continue;
             }
 

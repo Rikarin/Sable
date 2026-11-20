@@ -36,6 +36,66 @@ public sealed class ArrayMemberTests {
             """
         );
 
+    /// <summary>
+    ///     An extension of every growable array of a kind declares
+    ///     initialisers, whose self starts as '[]'; one throws part way,
+    ///     and what it had appended goes.
+    /// </summary>
+    [Fact]
+    public void AGrowableArraysExtensionDeclaresInitialisers() =>
+        Prints(
+            "[7, 7, 7]\n[\"a\", \"a\"]\n[1, 2, 3]\nfull at 2\n0\n",
+            """
+            struct Full: Error { let at: Int }
+
+            extension<E> E[>..] {
+                init(repeating value: E, times: Int) {
+                    for _ in 0..<times {
+                        append(value)
+                    }
+                }
+
+                init(upTo limit: Int, _ values: E[:]) throws(Full) {
+                    for value in values {
+                        if count == limit {
+                            throw Full { at: limit }
+                        }
+                        self.append(value)
+                    }
+                }
+            }
+
+            extension<E> E[>..<] {
+                init(twice value: E) {
+                    append(value)
+                    append(value)
+                }
+            }
+
+            protocol Empty {
+                init()
+            }
+
+            extension<E> E[>..]: Empty { }
+
+            fn makeEmpty<T: Empty>() -> T {
+                return T()
+            }
+            """,
+            """
+                print(Int[>..](repeating: 7, times: 3))
+                print(String[>..<](twice: "a"))
+                do {
+                    print(try Int[>..](upTo: 5, [1, 2, 3]))
+                    print(try String[>..](upTo: 2, ["a", "b", "c"]))
+                } catch {
+                    print("full at \(error.at)")
+                }
+                let empty: String[>..] = makeEmpty()
+                print(empty.count)
+            """
+        );
+
     [Fact]
     public void BytesReadAsUtf8() =>
         Prints(

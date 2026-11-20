@@ -699,7 +699,8 @@ extension Collection {
 
 Extensions may add methods, computed properties, subscripts, operators, static
 members, nested types, and conformances. They may **not** add stored properties
-or designated initialisers.
+or designated initialisers — but for an extension of every growable array of a
+kind, which may add initialisers (below).
 
 ### Array extensions
 
@@ -731,8 +732,11 @@ extension U8[:] { fn toString() -> String { } }
   comes first.
 - Inside, `self` is the array. The parameters may be constrained, inline or
   with `where`; the members are an array's only where its element meets them.
-- Each parameter must appear in the array type. An array extension adds
-  members, not conformances.
+- Each parameter must appear in the array type.
+- An extension of every growable array of a kind, `T[>..]` or `T[>..<]`, may
+  declare initialisers, as such an array always has a value to begin from:
+  `self` starts as `[]`. `Int[>..](repeating: 0, times: 3)` calls one. An
+  `init()` requirement is met by `[]` unless the extension declares one.
 - Its members are generic over the parameters and monomorphised per element
   type, like any generic. `Sable.Core` declares the array family's own members
   (`count`, `append`, `contains`, …) this way.

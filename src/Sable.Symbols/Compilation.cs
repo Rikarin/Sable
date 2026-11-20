@@ -581,7 +581,12 @@ public sealed partial class Compilation {
                 return;
 
             case InitDeclarationSyntax declaration when container is NamedTypeSymbol type:
-                DeclareInitializer(declaration, type);
+                DeclareInitializer(declaration, type, type);
+                return;
+
+            // Only an array extension's gets this far (RejectInExtension).
+            case InitDeclarationSyntax declaration when container is ExtensionSymbol { ExtendedType.ExtendedArray: not null } extension:
+                DeclareInitializer(declaration, extension, extension.ExtendedType);
                 return;
 
             case OperatorDeclarationSyntax declaration:
@@ -1456,12 +1461,14 @@ public sealed partial class Compilation {
         RecordDeclaration(declaration, enumCase);
     }
 
-    void DeclareInitializer(InitDeclarationSyntax declaration, NamedTypeSymbol type) {
+    /// <param name="container">The type, or an extension of every growable array of a kind.</param>
+    /// <param name="type">The type, or the array extension's own (whose ExtendedArray is the array).</param>
+    void DeclareInitializer(InitDeclarationSyntax declaration, Symbol container, NamedTypeSymbol type) {
         var function = new FunctionSymbol(
             "init",
-            type,
+            container,
             declaration,
-            AccessibilityOf(declaration.Modifiers, type),
+            AccessibilityOf(declaration.Modifiers, container),
             FunctionKind.Initializer
         ) {
             IsAsync = declaration.Modifiers.Any(SyntaxKind.AsyncKeyword)
@@ -1489,11 +1496,12 @@ public sealed partial class Compilation {
         // A protocol's 'init(seed: Int)' is a requirement, met by the
         // conformer's own initialiser, and it makes a Self: through a T it
         // makes a T.
+        // An array extension's makes the array, which its self starts as: '[]'.
         if (type.TypeKind == TypeKind.Protocol) {
             function.IsAbstract = declaration.Body is null;
             function.ReturnTypeResolver = () => type.SelfTypeParameter ?? (TypeSymbol)type;
         } else {
-            function.ReturnTypeResolver = () => type;
+            function.ReturnTypeResolver = () => (TypeSymbol?)type.ExtendedArray ?? type;
         }
 
         // Outside a protocol an initialiser is code: one written without a
@@ -1504,7 +1512,7 @@ public sealed partial class Compilation {
         }
 
         RecordDeclaration(declaration, function);
-        type.AddMember(function);
+        AddTo(container, function);
     }
 
     void DeclareOperator(OperatorDeclarationSyntax declaration, Symbol container) {

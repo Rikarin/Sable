@@ -40,13 +40,15 @@ public static class SilPassManager {
     /// <remarks>
     ///     Calls the vtable can only answer one way are made direct, and
     ///     those it answers with one of a few small overrides test for each
-    ///     first; then small callees are inlined, and the chain of blocks each call leaves
+    ///     first; loads only borrowed for a call are borrowed before the call
+    ///     is inlined, as afterwards the borrow would span the callee's
+    ///     blocks; then small callees are inlined, and the chain of blocks each call leaves
     ///     merged, so that the passes after see the callee's body in the
     ///     caller's; what is left is tidied last. An unoptimised build keeps
     ///     its calls, so that a trap's backtrace names every frame.
     /// </remarks>
     public static IReadOnlyList<ISilPass> Optimising { get; } = [
-        new Devirtualise(), new SpeculativeDevirtualise(), new Inliner(), new Simplify(), ..Default, new VersionLoops(), new Simplify(),
+        new Devirtualise(), new SpeculativeDevirtualise(), new BorrowLoads(), new Inliner(), new Simplify(), ..Default, new VersionLoops(), new Simplify(),
     ];
 
     /// <summary>
@@ -74,7 +76,7 @@ public static class SilPassManager {
             "0" => Default,
             "1" => [new Devirtualise(), new Simplify(), ..Default],
             "2" or "3" => Optimising,
-            "s" => [new Devirtualise(), new Inliner(), new Simplify(), ..Default, new Simplify()],
+            "s" => [new Devirtualise(), new BorrowLoads(), new Inliner(), new Simplify(), ..Default, new Simplify()],
             "z" => [new Devirtualise(), new Simplify(), ..Default, new Simplify()],
             _ => throw new ArgumentOutOfRangeException(nameof(optLevel), optLevel, "an opt-level is 0, 1, 2, 3, s or z"),
         };

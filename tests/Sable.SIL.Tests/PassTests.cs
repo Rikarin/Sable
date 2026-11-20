@@ -269,6 +269,28 @@ public sealed class PassTests {
         Assert.DoesNotContain(Instructions(bump).OfType<LoadInst>(), static l => l.Kind == LoadKind.Copy);
         Assert.Single(Instructions(bump).OfType<CopyValueInst>());
         Assert.Equal(21L, new SilInterpreter(module).Run("M.run"));
+
+        // Borrowed for the getter's call before the getter is inlined: after,
+        // the copy would span the getter's blocks, which no borrow is found across.
+        var optimised = Lowered(
+            """
+            fn total(_ keys: Int[>..]) -> Int {
+                var map: [Int: Int] = [:]
+                for key in keys {
+                    map[key] = key * 2
+                }
+                var sum = 0
+                for key in keys {
+                    sum = sum + (map[key] ?? 0)
+                }
+                return sum
+            }
+            fn run() -> Int { return total([1, 2, 3]) }
+            """
+        );
+        SilPassManager.Run(optimised, SilPassManager.Optimising);
+        Assert.DoesNotContain(Instructions(optimised.Find("M.total")!).OfType<LoadInst>(), static l => l.Kind == LoadKind.Copy);
+        Assert.Equal(12L, new SilInterpreter(optimised).Run("M.run"));
     }
 
     static List<SilInstruction> Instructions(SilFunction function) => [..function.Blocks.SelectMany(static b => b.Instructions)];

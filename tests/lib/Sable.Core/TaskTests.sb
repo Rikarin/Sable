@@ -240,3 +240,31 @@ class Flag {
         value = true
     }
 }
+
+union Refusal: Error {
+    No
+}
+
+@test
+fn blockingWorkGivesWhatItsBodyGives() async {
+    assertEqual(await Task.blocking { 6 * 7 }, 42)
+}
+
+@test
+fn blockingWorkThrowsWhatItsBodyThrows() async {
+    var thrown = false
+    do {
+        let _ = try await Task.blocking { () throws(Refusal) -> Int in
+            throw Refusal.No
+        }
+    } catch {
+        thrown = true
+    }
+    assert(thrown)
+}
+
+@test
+fn blockingWorkRunsAsItsTask() async {
+    let task = Task.spawn { await Task.blocking { Task.isCancelled } }
+    assert(!(await task.value))
+}

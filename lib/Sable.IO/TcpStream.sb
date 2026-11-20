@@ -1,0 +1,97 @@
+module Sable.IO
+
+/// A TCP connection: bytes read and written in order. A read or a write
+/// that must wait suspends the task, not its thread — the runtime's I/O
+/// reactor wakes it once the socket is ready — so a server can hold a
+/// connection per task, thousands of them, on a few threads. Deeply
+/// immutable, so Sendable: a connection accepted in one task may be served
+/// in another. One task at a time may read it, and one write it.
+///
+/// ```sable
+/// fn fetch(port: Int) async throws(IoError) -> U8[>..] {
+///     let connection = try await TcpStream.connect(host: "127.0.0.1", port: port)
+///     try await connection.write([0x50, 0x49, 0x4E, 0x47])
+///     connection.finishWriting()
+///     return try await connection.readAll()
+/// }
+/// ```
+@immutable
+public class TcpStream {
+    let handle: Int
+
+    init(handle: Int) {
+        self.handle = handle
+    }
+
+    deinit {
+        Runtime.closeSocket(handle)
+    }
+
+    /// A connection to the host — a name, or a numeric address — and port,
+    /// waiting until it is made.
+    public static async fn connect(host: String, port: Int) throws(IoError) -> TcpStream {
+        let handle = Runtime.connect(host: host, port: port)
+        if handle == 0 {
+            throw IoError.Unreachable(address: "\(host):\(port)")
+        }
+        let stream = TcpStream(handle: handle)
+        await Runtime.waitForSocket(handle, writable: true)
+        if Task.isCancelled {
+            throw IoError.Cancelled
+        }
+        if !Runtime.socketConnected(handle) {
+            throw IoError.Unreachable(address: "\(host):\(port)")
+        }
+        return stream
+    }
+
+    /// Up to 'count' bytes, as soon as any have come; none once the other
+    /// end has finished writing.
+    public fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
+        while true {
+            let bytes = Runtime.readSocket(handle, count)
+            if Runtime.socketStatus() == 0 {
+                return bytes
+            }
+            try await waitFor(handle, writable: false)
+        }
+    }
+
+    /// Every byte until the other end finishes writing.
+    public fn readAll() async throws(IoError) -> U8[>..] {
+        var all: U8[>..] = []
+        while true {
+            let bytes = try await self.read(upTo: 65536)
+            if bytes.count == 0 {
+                return all
+            }
+            all.append(contentsOf: bytes)
+        }
+    }
+
+    /// Every one of the bytes written, waiting while the other end is slow
+    /// to read them.
+    public fn write(_ bytes: U8[:]) async throws(IoError) {
+        var from = 0
+        while from < bytes.count {
+            let written = Runtime.writeSocket(handle, bytes[from..<bytes.count])
+            if Runtime.socketStatus() == 0 {
+                from += written
+            } else {
+                try await waitFor(handle, writable: true)
+            }
+        }
+    }
+
+    /// Nothing more is written: the other end reads to its end. Reading
+    /// goes on.
+    public fn finishWriting() {
+        Runtime.shutdownSocket(handle)
+    }
+
+    /// Closed, both ways: a task waiting on it wakes and throws. Dropping
+    /// the stream closes it too.
+    public fn close() {
+        Runtime.closeSocket(handle)
+    }
+}

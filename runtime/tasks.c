@@ -95,6 +95,8 @@ enum {
     PENDING_SLEEP,  // its deadline
     PENDING_HOP,    // an actor, or the main thread
     PENDING_PARK,   // a wait list to be woken
+    PENDING_IO,     // a socket to be ready
+    PENDING_BLOCKING, // its blocking work to be done, on the blocking pool
 };
 
 // An actor's serial executor: two words at the end of the actor object.
@@ -130,6 +132,11 @@ typedef struct SableTask {
     void *held;                      // the actor's executor it holds, or NULL
     void *pending_on;                // what it waits for
     int32_t pending;                 // PENDING_*
+    int32_t io_direction;            // PENDING_IO: 0 to read, 1 to write
+    void *io_source;                 // the socket it waits on, or NULL; under the source's lock
+    void (*blocking_run)(void *context); // PENDING_BLOCKING: the work, and what it is given
+    void *blocking_context;
+    struct SableTask *next_blocking; // in the blocking pool's queue
     int32_t runnable;                // queued and not yet taken: the first to take it runs it
     int32_t inject_band;             // the injection queue it is in, or -1; under inject_lock
     int64_t deadline;                // asleep until this monotonic time
@@ -337,6 +344,22 @@ static int64_t sleeper_count, sleeper_capacity;
 static uint64_t sleep_sequence;
 static int64_t earliest_deadline = INT64_MAX;
 
+// The I/O reactor (platform.h), opened as the pool starts or a socket is
+// first watched. One thread at a time waits in it — a parked worker, or
+// with no pool the main thread — until a socket it watches is ready or the
+// earliest sleeper is due ('polling' says one is); the others park on
+// their conditions. A wake for the thread in it is a reactor_wake.
+static bool reactor_on;
+static int32_t polling;
+
+// Tasks waiting for a socket, and tasks whose blocking work is on the
+// blocking pool: neither is queued or asleep, but each will go on.
+static int64_t io_waiting, blocking_running;
+
+// The blocking pool's queue (below).
+static PlatformMutex blocking_lock;
+static PlatformCondition blocking_condition;
+
 static void tasks_start(void) {
     slab_init(&main_task.frames, main_task.first_frames, sizeof main_task.first_frames);
     main_task.sleeper = -1;
@@ -348,6 +371,8 @@ static void tasks_start(void) {
     mutex_init(&park_lock);
     mutex_init(&timer_lock);
     condition_init(&main_condition);
+    mutex_init(&blocking_lock);
+    condition_init(&blocking_condition);
 }
 
 static void switch_to(SableTask *task) {
@@ -365,6 +390,11 @@ static int32_t main_waiting;
 
 static void wake_main(void) {
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    // With no pool, the main thread may be the one in the reactor.
+    if (worker_count <= 0 && __atomic_load_n(&polling, __ATOMIC_SEQ_CST)) {
+        reactor_wake();
+    }
+
     // One waker signals; the others see it no longer waiting.
     if (__atomic_load_n(&main_waiting, __ATOMIC_SEQ_CST) && __atomic_exchange_n(&main_waiting, 0, __ATOMIC_SEQ_CST)) {
         mutex_lock(&park_lock);
@@ -422,11 +452,16 @@ static void wake_worker(void) {
     }
 
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
-    if (__atomic_load_n(&parked, __ATOMIC_SEQ_CST) > 0 && __atomic_load_n(&searching, __ATOMIC_SEQ_CST) == 0) {
-        Worker *worker = idle_pop();
-        if (worker != NULL) {
-            notify(worker);
-        }
+    if (__atomic_load_n(&searching, __ATOMIC_SEQ_CST) != 0) {
+        return;
+    }
+
+    Worker *worker = __atomic_load_n(&parked, __ATOMIC_SEQ_CST) > 0 ? idle_pop() : NULL;
+    if (worker != NULL) {
+        notify(worker);
+    } else if (__atomic_load_n(&polling, __ATOMIC_SEQ_CST)) {
+        // The one parked is waiting in the reactor.
+        reactor_wake();
     }
 }
 
@@ -589,15 +624,17 @@ static void requeue(SableTask *task) {
     wake_worker();
 }
 
-// Nothing queued, running or asleep: nothing more will happen.
+// Nothing queued, running, asleep, waiting for a socket or blocking:
+// nothing more will happen.
 static bool quiescent(void) {
-    return __atomic_load_n(&active, __ATOMIC_SEQ_CST) == 0 && __atomic_load_n(&sleeper_count, __ATOMIC_SEQ_CST) == 0;
+    return __atomic_load_n(&active, __ATOMIC_SEQ_CST) == 0 && __atomic_load_n(&sleeper_count, __ATOMIC_SEQ_CST) == 0
+           && __atomic_load_n(&io_waiting, __ATOMIC_SEQ_CST) == 0 && __atomic_load_n(&blocking_running, __ATOMIC_SEQ_CST) == 0;
 }
 
 // A task has run and waits, or finished: the main thread hears when that
 // leaves nothing to do.
 static void active_done(void) {
-    if (__atomic_sub_fetch(&active, 1, __ATOMIC_SEQ_CST) == 0 && __atomic_load_n(&sleeper_count, __ATOMIC_SEQ_CST) == 0) {
+    if (__atomic_sub_fetch(&active, 1, __ATOMIC_SEQ_CST) == 0 && quiescent()) {
         wake_main();
     }
 }
@@ -717,6 +754,9 @@ static void sleepers_add(SableTask *task) {
         mutex_lock(&park_lock);
         condition_broadcast(&main_condition);
         mutex_unlock(&park_lock);
+        if (__atomic_load_n(&polling, __ATOMIC_SEQ_CST)) {
+            reactor_wake();
+        }
     }
 }
 
@@ -760,6 +800,403 @@ static void wake_sleepers(void) {
     }
 
     mutex_unlock(&timer_lock);
+}
+
+// ---- I/O: sockets the reactor watches ----------------------------------------
+
+// A socket a task may wait on (Sable.IO's TcpListener and TcpStream, net.c):
+// added to the reactor once, edge-triggered for both directions, as Tokio's
+// and Go's are. What the reactor has said is kept here, so a readiness that
+// comes while no task waits is not lost: 'ready' has a bit per direction,
+// set as the reactor reports it and cleared only when a call finds the
+// socket would block with no report since it began ('ticks'). A task waits
+// only while its direction is not ready.
+//
+// A source is never given back to the system: closed, it goes to a free
+// list and is used again for another socket, its generation bumped. A
+// handle carries the generation it was made with, so one kept past its
+// close names nothing; and a report the reactor had already gathered for
+// the old socket finds a source that is still memory, where at worst it
+// marks the new socket ready for nothing — whose call then finds it would
+// block, and waits.
+typedef struct IoSource {
+    SpinLock lock;
+    PlatformSocket socket;      // -1 once closed
+    int32_t port;               // a listener's, as bound
+    uint16_t generation;
+    uint8_t ready;              // REACTOR_* reported and not yet used up
+    uint64_t ticks[2];          // reports, to read and to write
+    SableTask *waiter[2];       // the task waiting to read, to write
+    struct IoSource *next_free;
+} IoSource;
+
+static SpinLock sources_lock;
+static IoSource *free_sources;
+
+// A handle: the source's address, its generation in the top 16 bits.
+static int64_t source_handle(IoSource *source) {
+    return (int64_t)(((uint64_t)source->generation << 48) | (uint64_t)(uintptr_t)source);
+}
+
+// The source a handle names, or NULL once it is closed.
+static IoSource *source_of(int64_t handle) {
+    IoSource *source = (IoSource *)(uintptr_t)((uint64_t)handle & 0xFFFFFFFFFFFFull);
+    if (source == NULL || (uint16_t)((uint64_t)handle >> 48) != __atomic_load_n(&source->generation, __ATOMIC_ACQUIRE)) {
+        return NULL;
+    }
+
+    return source;
+}
+
+// The reactor, opened the first time it is needed.
+static bool reactor_start(void) {
+    if (__atomic_load_n(&reactor_on, __ATOMIC_ACQUIRE)) {
+        return true;
+    }
+
+    static SpinLock opening;
+    spin_lock(&opening);
+    if (!reactor_on && reactor_open()) {
+        __atomic_store_n(&reactor_on, true, __ATOMIC_RELEASE);
+    }
+
+    spin_unlock(&opening);
+    return reactor_on;
+}
+
+static void io_source_free(IoSource *source) {
+    spin_lock(&sources_lock);
+    source->next_free = free_sources;
+    free_sources = source;
+    spin_unlock(&sources_lock);
+}
+
+// The socket watched from now on: its handle, or 0 — the socket closed —
+// when the reactor will not take it.
+static int64_t io_source_open(PlatformSocket socket) {
+    if (!reactor_start()) {
+        socket_close(socket);
+        return 0;
+    }
+
+    spin_lock(&sources_lock);
+    IoSource *source = free_sources;
+    if (source != NULL) {
+        free_sources = source->next_free;
+    }
+
+    spin_unlock(&sources_lock);
+    if (source == NULL) {
+        source = calloc(1, sizeof(IoSource));
+        if (source == NULL) {
+            sable_trap("out of memory");
+        }
+    }
+
+    spin_lock(&source->lock);
+    __atomic_store_n(&source->socket, socket, __ATOMIC_RELEASE);
+    source->port = 0;
+    // Tried first, waited for once the call would block.
+    source->ready = REACTOR_READABLE | REACTOR_WRITABLE;
+    source->waiter[0] = source->waiter[1] = NULL;
+    int64_t handle = source_handle(source);
+    spin_unlock(&source->lock);
+    if (!reactor_add(socket, source)) {
+        spin_lock(&source->lock);
+        __atomic_store_n(&source->socket, -1, __ATOMIC_RELEASE);
+        __atomic_store_n(&source->generation, (uint16_t)(source->generation + 1), __ATOMIC_RELEASE);
+        spin_unlock(&source->lock);
+        socket_close(socket);
+        io_source_free(source);
+        return 0;
+    }
+
+    return handle;
+}
+
+// A task taken from a source's waiters, queued: active before it stops
+// waiting, so the program never looks finished between.
+static void io_resume(SableTask *task) {
+    __atomic_fetch_add(&active, 1, __ATOMIC_SEQ_CST);
+    __atomic_fetch_sub(&io_waiting, 1, __ATOMIC_SEQ_CST);
+    schedule(task);
+    active_done();
+}
+
+// Under the source's lock: the task waiting in that direction, taken, or NULL.
+static SableTask *io_take_waiter(IoSource *source, int direction) {
+    SableTask *task = source->waiter[direction];
+    if (task != NULL) {
+        source->waiter[direction] = NULL;
+        __atomic_store_n(&task->io_source, NULL, __ATOMIC_RELEASE);
+    }
+
+    return task;
+}
+
+// The socket closed: no longer watched, and whoever waits on it woken, to
+// find it closed. Its handle names nothing from now on.
+static void io_source_close(int64_t handle) {
+    IoSource *source = source_of(handle);
+    if (source == NULL) {
+        return;
+    }
+
+    spin_lock(&source->lock);
+    if (source->generation != (uint16_t)((uint64_t)handle >> 48)) {
+        spin_unlock(&source->lock);
+        return;
+    }
+
+    PlatformSocket socket = source->socket;
+    __atomic_store_n(&source->socket, -1, __ATOMIC_RELEASE);
+    __atomic_store_n(&source->generation, (uint16_t)(source->generation + 1), __ATOMIC_RELEASE);
+    SableTask *reader = io_take_waiter(source, 0);
+    SableTask *writer = io_take_waiter(source, 1);
+    spin_unlock(&source->lock);
+    reactor_remove(socket);
+    socket_close(socket);
+    if (reader != NULL) {
+        io_resume(reader);
+    }
+
+    if (writer != NULL) {
+        io_resume(writer);
+    }
+
+    io_source_free(source);
+}
+
+// The reports in a direction so far: taken before a call that may find
+// the socket would block.
+static uint64_t io_ticks(IoSource *source, int direction) {
+    spin_lock(&source->lock);
+    uint64_t ticks = source->ticks[direction];
+    spin_unlock(&source->lock);
+    return ticks;
+}
+
+// The call found the socket would block: not ready that way, unless the
+// reactor has said otherwise since it began.
+static void io_would_block(IoSource *source, int direction, uint64_t ticks) {
+    spin_lock(&source->lock);
+    if (source->ticks[direction] == ticks) {
+        source->ready &= (uint8_t) ~(direction == 0 ? REACTOR_READABLE : REACTOR_WRITABLE);
+    }
+
+    spin_unlock(&source->lock);
+}
+
+// The reactor says the socket is ready: noted, and the tasks waiting for it woken.
+static void io_ready(IoSource *source, int events) {
+    SableTask *woken[2] = { NULL, NULL };
+    spin_lock(&source->lock);
+    if (source->socket != -1) {
+        for (int direction = 0; direction < 2; direction++) {
+            if (events & (direction == 0 ? REACTOR_READABLE : REACTOR_WRITABLE)) {
+                source->ticks[direction]++;
+                source->ready |= (uint8_t)(direction == 0 ? REACTOR_READABLE : REACTOR_WRITABLE);
+                woken[direction] = io_take_waiter(source, direction);
+            }
+        }
+    }
+
+    spin_unlock(&source->lock);
+    for (int direction = 0; direction < 2; direction++) {
+        if (woken[direction] != NULL) {
+            io_resume(woken[direction]);
+        }
+    }
+}
+
+// This thread waits in the reactor — until a socket is ready, a wake, or
+// the earliest sleeper's deadline; or, not blocking, only looks — if no
+// other thread is in it, and wakes the tasks it says may go on. Whether it
+// was this thread's turn. The sleepers due are served by whoever looks for
+// work next.
+static bool poll_reactor(bool block) {
+    if (!__atomic_load_n(&reactor_on, __ATOMIC_ACQUIRE) || __atomic_load_n(&polling, __ATOMIC_RELAXED)) {
+        return false;
+    }
+
+    int32_t free_now = 0;
+    if (!__atomic_compare_exchange_n(&polling, &free_now, 1, false, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {
+        return false;
+    }
+
+    // Looked at after 'polling' is set: a task queued after this sees it
+    // set, and wakes the reactor.
+    if (block && __atomic_load_n(&queued, __ATOMIC_SEQ_CST) > 0) {
+        __atomic_store_n(&polling, 0, __ATOMIC_SEQ_CST);
+        return true;
+    }
+
+    ReactorEvent events[64];
+    int64_t earliest = __atomic_load_n(&earliest_deadline, __ATOMIC_SEQ_CST);
+    int n = reactor_wait(events, 64, !block ? 0 : earliest == INT64_MAX ? -1 : earliest);
+    __atomic_store_n(&polling, 0, __ATOMIC_SEQ_CST);
+    for (int i = 0; i < n; i++) {
+        io_ready(events[i].key, events[i].events);
+    }
+
+    return true;
+}
+
+// 'await Task.waitForIO(handle, writable)': whether the running task must
+// wait for the socket to be ready that way. Not when it is ready already,
+// nor when it is closed — the call made next says so.
+bool sable_task_io_wait(int64_t handle, bool writable) {
+    IoSource *source = source_of(handle);
+    if (source == NULL) {
+        return false;
+    }
+
+    int bit = writable ? REACTOR_WRITABLE : REACTOR_READABLE;
+    spin_lock(&source->lock);
+    bool ready = (source->ready & bit) != 0 || source->socket == -1;
+    spin_unlock(&source->lock);
+    if (ready) {
+        return false;
+    }
+
+    current_task->pending = PENDING_IO;
+    current_task->pending_on = source;
+    current_task->io_direction = writable ? 1 : 0;
+    return true;
+}
+
+// The task has suspended to wait on the source: among its waiters, unless
+// the socket became ready, or closed, or the task was cancelled, meanwhile.
+static void io_wait_after_suspend(SableTask *task, IoSource *source) {
+    int direction = task->io_direction;
+    __atomic_fetch_add(&io_waiting, 1, __ATOMIC_SEQ_CST);
+    spin_lock(&source->lock);
+    bool go_on = (source->ready & (direction == 0 ? REACTOR_READABLE : REACTOR_WRITABLE)) != 0 || source->socket == -1
+                 || __atomic_load_n(&task->cancelled, __ATOMIC_ACQUIRE);
+    if (!go_on) {
+        if (source->waiter[direction] != NULL) {
+            spin_unlock(&source->lock);
+            sable_trap("two tasks wait to use one socket the same way at once");
+        }
+
+        source->waiter[direction] = task;
+        __atomic_store_n(&task->io_source, source, __ATOMIC_RELEASE);
+    }
+
+    spin_unlock(&source->lock);
+    if (go_on) {
+        io_resume(task);
+    }
+}
+
+// A task cancelled, or dropped, while it waits on a socket: woken, or
+// forgotten, now.
+static void io_cancel(SableTask *task, bool resume) {
+    IoSource *source = __atomic_load_n(&task->io_source, __ATOMIC_ACQUIRE);
+    if (source == NULL) {
+        return;
+    }
+
+    spin_lock(&source->lock);
+    bool taken = false;
+    for (int direction = 0; direction < 2; direction++) {
+        if (source->waiter[direction] == task) {
+            io_take_waiter(source, direction);
+            taken = true;
+        }
+    }
+
+    spin_unlock(&source->lock);
+    if (taken && resume) {
+        io_resume(task);
+    } else if (taken) {
+        __atomic_fetch_sub(&io_waiting, 1, __ATOMIC_SEQ_CST);
+    }
+}
+
+// ---- The blocking pool ---------------------------------------------------------
+
+// Work that must block — a call into C that waits, a file read whole —
+// runs on threads of its own, as Tokio's spawn_blocking does, so that no
+// worker waits: 'await Task.blocking { … }' suspends its task, the work
+// runs on a blocking thread, and the task is queued again once it is done.
+// Threads are made as work comes and none is free, up to BLOCKING_MOST
+// (or SABLE_BLOCKING_THREADS), and kept, waiting for more.
+enum { BLOCKING_MOST = 512 };
+
+static SableTask *blocking_head, *blocking_tail;
+static int32_t blocking_threads, blocking_idle, blocking_queued, blocking_most;
+
+static void blocking_main(void *argument) {
+    (void)argument;
+    for (;;) {
+        mutex_lock(&blocking_lock);
+        while (blocking_head == NULL) {
+            blocking_idle++;
+            condition_wait(&blocking_condition, &blocking_lock, -1);
+            blocking_idle--;
+        }
+
+        SableTask *task = blocking_head;
+        blocking_head = task->next_blocking;
+        if (blocking_head == NULL) {
+            blocking_tail = NULL;
+        }
+
+        blocking_queued--;
+        mutex_unlock(&blocking_lock);
+
+        // The work runs as its task: Task.isCancelled asks it.
+        SableTask *previous = current_task;
+        switch_to(task);
+        task->blocking_run(task->blocking_context);
+        switch_to(previous);
+
+        __atomic_fetch_add(&active, 1, __ATOMIC_SEQ_CST);
+        __atomic_fetch_sub(&blocking_running, 1, __ATOMIC_SEQ_CST);
+        schedule(task);
+        active_done();
+    }
+}
+
+static void blocking_submit(SableTask *task) {
+    __atomic_fetch_add(&blocking_running, 1, __ATOMIC_SEQ_CST);
+    mutex_lock(&blocking_lock);
+    if (blocking_most == 0) {
+        const char *setting = getenv("SABLE_BLOCKING_THREADS");
+        blocking_most = setting != NULL && atoi(setting) > 0 ? atoi(setting) : BLOCKING_MOST;
+    }
+
+    task->next_blocking = NULL;
+    if (blocking_tail != NULL) {
+        blocking_tail->next_blocking = task;
+    } else {
+        blocking_head = task;
+    }
+
+    blocking_tail = task;
+    blocking_queued++;
+    bool more = blocking_queued > blocking_idle && blocking_threads < blocking_most;
+    if (more) {
+        blocking_threads++;
+    }
+
+    condition_signal(&blocking_condition);
+    mutex_unlock(&blocking_lock);
+    if (more && !thread_start(blocking_main, NULL)) {
+        sable_trap("cannot start a thread for blocking work");
+    }
+}
+
+// 'await Task.blocking { … }': the running task suspends, and 'run(context)'
+// runs on the blocking pool; the task goes on once it has. The context is
+// the closure's, which another thread runs: shared. Always a suspension.
+bool sable_task_blocking(void (*run)(void *), void *context) {
+    sable_share(context);
+    current_task->pending = PENDING_BLOCKING;
+    current_task->blocking_run = run;
+    current_task->blocking_context = context;
+    return true;
 }
 
 // ---- Actors' executors -------------------------------------------------------
@@ -1005,6 +1442,14 @@ static void after_suspend(SableTask *task) {
             schedule_at(task, true);
             break;
 
+        case PENDING_IO:
+            io_wait_after_suspend(task, on);
+            break;
+
+        case PENDING_BLOCKING:
+            blocking_submit(task);
+            break;
+
         default:
             // A hop: queued again, to take its actor as it runs.
             schedule(task);
@@ -1076,6 +1521,11 @@ static void run_task(SableTask *task) {
 // On the idle list first, then a last look at the queues: a task queued
 // after that finds the worker there and notifies it.
 static void park(Worker *self) {
+    // One parked worker waits in the reactor instead, for sockets and timers.
+    if (poll_reactor(true)) {
+        return;
+    }
+
     mutex_lock(&self->lock);
     self->notified = false;
     spin_lock(&idle_lock);
@@ -1124,6 +1574,12 @@ static void worker_main(void *argument) {
                 wake_worker();
             }
 
+            // A worker kept busy looks at the reactor now and then, so
+            // that sockets ready are heard of while no worker parks.
+            if ((++polls & 63) == 0 && __atomic_load_n(&io_waiting, __ATOMIC_RELAXED) > 0) {
+                poll_reactor(false);
+            }
+
             run_task(task);
             continue;
         }
@@ -1169,6 +1625,7 @@ static void pool_start(void) {
         }
     }
 
+    reactor_start();
     __atomic_store_n(&worker_count, count, __ATOMIC_SEQ_CST);
     for (int i = 0; i < count; i++) {
         if (!thread_start(worker_main, &workers[i])) {
@@ -1378,6 +1835,7 @@ static void cancel(SableTask *task, HandlerList *handlers) {
     }
 
     mutex_unlock(&timer_lock);
+    io_cancel(task, true);
 
     for (SableTask *child = task->children; child != NULL; child = child->next_sibling) {
         cancel(child, handlers);
@@ -1634,6 +2092,14 @@ static void main_loop(SableTask *until) {
             return;
         }
 
+        if (idle && worker_count <= 0 && __atomic_load_n(&reactor_on, __ATOMIC_ACQUIRE)) {
+            // With no pool, the main thread is the one that waits in the reactor.
+            __atomic_store_n(&main_waiting, 0, __ATOMIC_SEQ_CST);
+            mutex_unlock(&park_lock);
+            poll_reactor(true);
+            continue;
+        }
+
         if (idle) {
             int64_t deadline = __atomic_load_n(&earliest_deadline, __ATOMIC_SEQ_CST);
             condition_wait(&main_condition, &park_lock, worker_count <= 0 && deadline != INT64_MAX ? deadline : -1);
@@ -1654,6 +2120,7 @@ void sable_task_run_until_main(void) {
 // A task that can no longer go on: its frames destroyed, from the root, as
 // their drop functions say, and given back. Its waiters are dropped too.
 static void drop_task(SableTask *task) {
+    io_cancel(task, false);
     if (task->frame != NULL) {
         SableTask *previous = current_task;
         switch_to(task);

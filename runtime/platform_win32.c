@@ -5,6 +5,8 @@
 // they are converted here, at the boundary, so that a path, an argument or
 // a variable holds any character on Windows as it does elsewhere.
 
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <bcrypt.h>
 #include <dbghelp.h>
 #include <fcntl.h>
@@ -15,6 +17,7 @@
 #pragma comment(lib, "bcrypt")
 #pragma comment(lib, "dbghelp")
 #pragma comment(lib, "shell32")
+#pragma comment(lib, "ws2_32")
 
 // Run as the program exits: given to atexit as the program starts. (A
 // destructor is run by the C runtime only for a DLL.)
@@ -292,6 +295,212 @@ static int processor_count(void) {
 
 static void thread_yield(void) {
     SwitchToThread();
+}
+
+// ---- The I/O reactor -------------------------------------------------------
+
+// An I/O completion port. A socket's readiness comes to it as a completion
+// through ProcessSocketNotifications (Windows 10 21H1 and later), edge-
+// triggered and persistent, as kqueue's and epoll's come; a wake is a
+// completion posted with no key.
+static HANDLE reactor_port;
+
+static bool reactor_open(void) {
+    WSADATA data;
+    if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
+        return false;
+    }
+
+    reactor_port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+    return reactor_port != NULL;
+}
+
+static bool reactor_notify(PlatformSocket socket, void *key, UINT8 operation) {
+    SOCK_NOTIFY_REGISTRATION registration = { 0 };
+    registration.socket = (SOCKET)socket;
+    registration.completionKey = key;
+    registration.eventFilter = SOCK_NOTIFY_REGISTER_EVENT_IN | SOCK_NOTIFY_REGISTER_EVENT_OUT | SOCK_NOTIFY_REGISTER_EVENT_HANGUP;
+    registration.operation = operation;
+    registration.triggerFlags = SOCK_NOTIFY_TRIGGER_EDGE | SOCK_NOTIFY_TRIGGER_PERSISTENT;
+    return ProcessSocketNotifications(reactor_port, 1, &registration, 0, 0, NULL, NULL) == ERROR_SUCCESS
+           && registration.registrationResult == ERROR_SUCCESS;
+}
+
+static bool reactor_add(PlatformSocket socket, void *key) {
+    return reactor_notify(socket, key, SOCK_NOTIFY_OP_ENABLE);
+}
+
+static void reactor_remove(PlatformSocket socket) {
+    reactor_notify(socket, NULL, SOCK_NOTIFY_OP_REMOVE);
+}
+
+static int reactor_wait(ReactorEvent *events, int capacity, int64_t until) {
+    OVERLAPPED_ENTRY ready[64];
+    if (capacity > 64) {
+        capacity = 64;
+    }
+
+    DWORD milliseconds = INFINITE;
+    if (until >= 0) {
+        int64_t left = until - sable_time_monotonic();
+        milliseconds = left <= 0 ? 0 : (DWORD)((left + 999999) / 1000000);
+    }
+
+    ULONG count = 0;
+    if (!GetQueuedCompletionStatusEx(reactor_port, ready, (ULONG)capacity, &count, milliseconds, FALSE)) {
+        return 0;
+    }
+
+    int n = 0;
+    for (ULONG i = 0; i < count; i++) {
+        if (ready[i].lpCompletionKey == 0) {
+            continue;
+        }
+
+        UINT32 what = SocketNotificationRetrieveEvents(&ready[i]);
+        if (what & SOCK_NOTIFY_EVENT_REMOVE) {
+            continue;
+        }
+
+        events[n].key = (void *)ready[i].lpCompletionKey;
+        events[n].events = (what & (SOCK_NOTIFY_EVENT_IN | SOCK_NOTIFY_EVENT_HANGUP | SOCK_NOTIFY_EVENT_ERR) ? REACTOR_READABLE : 0)
+                           | (what & (SOCK_NOTIFY_EVENT_OUT | SOCK_NOTIFY_EVENT_HANGUP | SOCK_NOTIFY_EVENT_ERR) ? REACTOR_WRITABLE : 0);
+        n++;
+    }
+
+    return n;
+}
+
+static void reactor_wake(void) {
+    PostQueuedCompletionStatus(reactor_port, 0, 0, NULL);
+}
+
+// ---- Sockets -----------------------------------------------------------------
+
+static bool socket_prepare(SOCKET socket) {
+    u_long one = 1;
+    return ioctlsocket(socket, FIONBIO, &one) == 0;
+}
+
+static int64_t socket_status(void) {
+    int error = WSAGetLastError();
+    return error == WSAEWOULDBLOCK ? IO_WOULD_BLOCK : IO_FAILED;
+}
+
+static struct addrinfo *socket_resolve(const char *host, int port, bool passive) {
+    char service[16];
+    snprintf(service, sizeof service, "%d", port);
+    struct addrinfo hints = { 0 };
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = passive ? AI_PASSIVE : 0;
+    struct addrinfo *found = NULL;
+    return getaddrinfo(host[0] == '\0' ? NULL : host, service, &hints, &found) == 0 ? found : NULL;
+}
+
+static PlatformSocket socket_listen(const char *host, int port, int *bound) {
+    struct addrinfo *found = socket_resolve(host, port, true);
+    SOCKET handle = INVALID_SOCKET;
+    for (struct addrinfo *at = found; at != NULL && handle == INVALID_SOCKET; at = at->ai_next) {
+        handle = socket(at->ai_family, at->ai_socktype, at->ai_protocol);
+        if (handle == INVALID_SOCKET) {
+            continue;
+        }
+
+        if (!socket_prepare(handle) || bind(handle, at->ai_addr, (int)at->ai_addrlen) != 0 || listen(handle, SOMAXCONN) != 0) {
+            closesocket(handle);
+            handle = INVALID_SOCKET;
+        }
+    }
+
+    if (found != NULL) {
+        freeaddrinfo(found);
+    }
+
+    if (handle == INVALID_SOCKET) {
+        return IO_FAILED;
+    }
+
+    struct sockaddr_storage address;
+    int length = sizeof address;
+    getsockname(handle, (struct sockaddr *)&address, &length);
+    *bound = address.ss_family == AF_INET6 ? ntohs(((struct sockaddr_in6 *)&address)->sin6_port)
+                                           : ntohs(((struct sockaddr_in *)&address)->sin_port);
+    return (PlatformSocket)handle;
+}
+
+static PlatformSocket socket_accept(PlatformSocket listener) {
+    SOCKET handle = accept((SOCKET)listener, NULL, NULL);
+    if (handle == INVALID_SOCKET) {
+        return (PlatformSocket)socket_status();
+    }
+
+    BOOL one = TRUE;
+    if (!socket_prepare(handle)) {
+        closesocket(handle);
+        return IO_FAILED;
+    }
+
+    setsockopt(handle, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one);
+    return (PlatformSocket)handle;
+}
+
+static PlatformSocket socket_connect(const char *host, int port) {
+    struct addrinfo *found = socket_resolve(host, port, false);
+    SOCKET handle = INVALID_SOCKET;
+    for (struct addrinfo *at = found; at != NULL && handle == INVALID_SOCKET; at = at->ai_next) {
+        handle = socket(at->ai_family, at->ai_socktype, at->ai_protocol);
+        if (handle == INVALID_SOCKET) {
+            continue;
+        }
+
+        if (!socket_prepare(handle) || (connect(handle, at->ai_addr, (int)at->ai_addrlen) != 0 && WSAGetLastError() != WSAEWOULDBLOCK)) {
+            closesocket(handle);
+            handle = INVALID_SOCKET;
+        }
+    }
+
+    if (found != NULL) {
+        freeaddrinfo(found);
+    }
+
+    if (handle == INVALID_SOCKET) {
+        return IO_FAILED;
+    }
+
+    BOOL one = TRUE;
+    setsockopt(handle, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one);
+    return (PlatformSocket)handle;
+}
+
+static int socket_connected(PlatformSocket socket) {
+    int error = 0;
+    int length = sizeof error;
+    if (getsockopt((SOCKET)socket, SOL_SOCKET, SO_ERROR, (char *)&error, &length) != 0 || error != 0) {
+        return IO_FAILED;
+    }
+
+    struct sockaddr_storage peer;
+    int peer_length = sizeof peer;
+    return getpeername((SOCKET)socket, (struct sockaddr *)&peer, &peer_length) == 0 ? 0 : IO_FAILED;
+}
+
+static int64_t socket_read(PlatformSocket socket, void *bytes, int64_t size) {
+    int got = recv((SOCKET)socket, bytes, size > INT32_MAX ? INT32_MAX : (int)size, 0);
+    return got >= 0 ? got : socket_status();
+}
+
+static int64_t socket_write(PlatformSocket socket, const void *bytes, int64_t size) {
+    int sent = send((SOCKET)socket, bytes, size > INT32_MAX ? INT32_MAX : (int)size, 0);
+    return sent >= 0 ? sent : socket_status();
+}
+
+static void socket_shutdown_write(PlatformSocket socket) {
+    shutdown((SOCKET)socket, SD_SEND);
+}
+
+static void socket_close(PlatformSocket socket) {
+    closesocket((SOCKET)socket);
 }
 
 // ---- Arguments, files and the environment ----------------------------------

@@ -1602,6 +1602,9 @@ public static class SilBuiltins {
                 return new([..operands], SilType.Int) { Consumed = [1] };
             case "task_handler_push" when operands is [FunctionType, ClassType]:
                 return new([..operands], SilType.Unit) { Consumed = [1] };
+            // Work run on the blocking pool while the task waits: a function and the object it is given, borrowed.
+            case "task_blocking" when operands is [FunctionType, ClassType]:
+                return new([..operands], SilType.Unit);
             case "task_wait" or "task_release" or "task_cancel" when operands is [var handle] && handle == SilType.Int:
                 return new([SilType.Int], SilType.Unit);
             // Off the run queue for at least this many nanoseconds, while the other tasks run.
@@ -1746,7 +1749,7 @@ public static class SilBuiltins {
     }
 
     public static IEnumerable<string> Names =>
-        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", Coverage.Builtin]);
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_yield", "task_sleep", "task_drain", "task_handler_push", "task_blocking", Coverage.Builtin]);
 
     static SilType? Pointee(SilType? type) => (type as InlinePointerType)?.Pointee;
 
@@ -2079,6 +2082,22 @@ public static class SilBuiltins {
         Add("time_monotonic", SilType.Int);
         Add("time_wall_clock", SilType.Int);
         Add("time_sleep", SilType.Unit, SilType.Int);
+
+        // Sockets (runtime/net.c), by handle, every one nonblocking: a call
+        // that would block says so ('net_status' 1, failed 2) and the
+        // library waits for the socket ('task_io_wait': a place a task
+        // suspends, AsyncLowering) before calling again.
+        Add("net_listen", SilType.Int, SilType.String, SilType.Int);
+        Add("net_port", SilType.Int, SilType.Int);
+        Add("net_accept", SilType.Int, SilType.Int);
+        Add("net_connect", SilType.Int, SilType.String, SilType.Int);
+        Add("net_connected", SilType.Bool, SilType.Int);
+        Add("net_read", new ArrayType(SilType.U8), SilType.Int, SilType.Int);
+        Add("net_write", SilType.Int, SilType.Int, new SliceType(SilType.U8));
+        Add("net_shutdown", SilType.Unit, SilType.Int);
+        Add("net_close", SilType.Unit, SilType.Int);
+        Add("net_status", SilType.Int);
+        Add("task_io_wait", SilType.Unit, SilType.Int, SilType.Bool);
 
         // Tasks (runtime/tasks.c): whether the running one is cancelled, its
         // priority; and groups, by handle — made, given a child just spawned,

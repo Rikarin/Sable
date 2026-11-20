@@ -99,6 +99,62 @@ static int processor_count(void);
 // Lets another thread run: a spin that has waited long enough.
 static void thread_yield(void);
 
+// ---- The I/O reactor -------------------------------------------------------
+
+// Where the executor's parked thread waits (tasks.c): for a socket to be
+// ready, for a timer, or to be woken. kqueue on macOS and the BSDs, epoll
+// on Linux, an I/O completion port on Windows, told of sockets' readiness
+// by ProcessSocketNotifications — the same shape on every system: a
+// socket is added once, with a key, and is reported, edge-triggered, as
+// it becomes readable or writable, until it is removed.
+//
+// A socket is a file descriptor, or Windows' SOCKET.
+typedef intptr_t PlatformSocket;
+
+enum { REACTOR_READABLE = 1, REACTOR_WRITABLE = 2 };
+
+typedef struct ReactorEvent {
+    void *key;  // as the socket was added with
+    int events; // REACTOR_*
+} ReactorEvent;
+
+// The reactor made; false when the system will not make one.
+static bool reactor_open(void);
+// The socket watched for both directions from now on, reported with 'key'.
+static bool reactor_add(PlatformSocket socket, void *key);
+// No longer watched: called before the socket is closed.
+static void reactor_remove(PlatformSocket socket);
+// Waits until a socket added is ready, reactor_wake is called, or — given a
+// time in nanoseconds of sable_time_monotonic, not negative — until then at
+// the latest. The sockets ready, at most 'capacity'; 0 for a wake or a time.
+static int reactor_wait(ReactorEvent *events, int capacity, int64_t until);
+// The thread in reactor_wait, or the next to call it, returns at once.
+static void reactor_wake(void);
+
+// ---- Sockets -----------------------------------------------------------------
+
+// TCP, nonblocking, for Sable.IO's TcpListener and TcpStream (net.c). A
+// call that would wait gives IO_WOULD_BLOCK, and the caller waits for the
+// reactor to say the socket is ready; one that fails, IO_FAILED.
+enum { IO_WOULD_BLOCK = -1, IO_FAILED = -2 };
+
+// Listening on the host's address (a name or a numeric address) and port
+// (0: any free one), the port bound in 'port'; IO_FAILED otherwise.
+static PlatformSocket socket_listen(const char *host, int port, int *bound);
+// A connection taken from the listener, nonblocking; or IO_WOULD_BLOCK, IO_FAILED.
+static PlatformSocket socket_accept(PlatformSocket listener);
+// A connection begun to the host and port: writable once made, when
+// socket_connected says how it went. IO_FAILED when it cannot begin.
+static PlatformSocket socket_connect(const char *host, int port);
+// 0 once the connection is made, IO_FAILED if it could not be.
+static int socket_connected(PlatformSocket socket);
+// Bytes read (0 at the end), or written; or IO_WOULD_BLOCK, IO_FAILED.
+static int64_t socket_read(PlatformSocket socket, void *bytes, int64_t size);
+static int64_t socket_write(PlatformSocket socket, const void *bytes, int64_t size);
+// No more is written: the other end reads to its end.
+static void socket_shutdown_write(PlatformSocket socket);
+static void socket_close(PlatformSocket socket);
+
 // ---- Arguments, files and the environment -------------------------------
 
 // The program's arguments, from what main() was given; how many in 'count'.

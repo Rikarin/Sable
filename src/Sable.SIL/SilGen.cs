@@ -5071,6 +5071,13 @@ public sealed partial class SilGen {
 
                 case BoundThrow throwStatement:
                     if (Expression(throwStatement.Value) is { } error) {
+                        // An error of type Never — a generic one's, made Never
+                        // in this instance — has no value: the throw is never reached.
+                        if (Sub(throwStatement.Value.Type).Equals(Core.Never)) {
+                            Jump(new UnreachableInst());
+                            return;
+                        }
+
                         RouteError(error, throwStatement.Syntax);
                     }
 
@@ -9412,6 +9419,19 @@ public sealed partial class SilGen {
 
                         Emit(new BuiltinInst("task_park", SilType.Unit, list));
                         return UnitValue.Instance;
+                    }
+
+                    if (callee.Name == "waitForSocket") {
+                        if (Expression(call.Arguments[0]) is not { } socket || Expression(call.Arguments[1]) is not { } writable) {
+                            return null;
+                        }
+
+                        Emit(new BuiltinInst("task_io_wait", SilType.Unit, socket, writable));
+                        return UnitValue.Instance;
+                    }
+
+                    if (callee.Name == "runBlocking") {
+                        return RunBlocking(call);
                     }
 
                     if (callee.Name == "sleepUncancelled") {

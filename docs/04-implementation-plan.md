@@ -1422,6 +1422,51 @@ the actor hops (a yielding ping-pong hops four times a round); many pay
 for handing tasks between cores, which a task that does little between
 spawns and awaits cannot win back.
 
+**I/O** — the fourth stage (`tests/Sable.CodeGen.Tests/ReactorTests.cs`,
+`tests/lib/Sable.IO/TcpListenerTests.sb` and `TcpStreamTests.sb`).
+
+- *The reactor* is the platform layer's (`platform.h`): kqueue on macOS and
+  the BSDs, epoll on Linux, an I/O completion port on Windows told of
+  sockets' readiness by `ProcessSocketNotifications` — the same shape on
+  each: a socket added once, edge-triggered for both directions, with a
+  key; a wait until one is ready, a wake, or a deadline. (The Windows one
+  is written to match and not yet built.) It is opened as the pool starts,
+  or as the first socket is. One parked thread at a time waits in it — a
+  worker, or with no pool the main thread — until the earliest sleeper's
+  deadline, so sockets and timers are served by one wait; the other
+  parked workers wait on their conditions, and a task queued while only
+  the reactor's thread is parked wakes it (`EVFILT_USER`, an eventfd, a
+  posted completion). A worker kept busy looks at the reactor, without
+  waiting, every 64th task, so that sockets ready are heard of while no
+  worker parks.
+- *Sockets* (`runtime/net.c`) are nonblocking, each an `IoSource` that
+  keeps what the reactor has said: a bit per direction, set as it reports
+  readiness and cleared only when a call finds the socket would block with
+  no report since the call began, so a report that comes while no task
+  waits is not lost. A call that would block says so, and the library
+  waits (`Runtime.waitForSocket`, the `task_io_wait` builtin, a place a
+  task suspends) and calls again. A source is never freed — closed, it is
+  used again with its generation bumped, which a handle carries — so a
+  report gathered for a socket since closed lands on memory that is still
+  a source, and a stale handle names nothing. Cancelling a task waiting
+  on a socket wakes it, and it throws; closing the socket wakes it too.
+  `Sable.IO` has `TcpListener` (`bind`, `accept`) and `TcpStream`
+  (`connect`, `read(upTo:)`, `readAll`, `write`, `finishWriting`), both
+  `@immutable` and so Sendable: a connection accepted in one task is
+  served in another. The interpreter has them too, over .NET's sockets,
+  its executor waiting in `Socket.Select` when nothing else can run.
+- *The blocking pool.* `Task.blocking { … }` (Tokio's `spawn_blocking`)
+  suspends the task and runs the body on a thread kept for work that
+  blocks, made as work comes and none is free, up to 512
+  (`SABLE_BLOCKING_THREADS`); the task is queued again once it is done,
+  with what the body gave or threw. Whole files (`File`, `Directory`) and
+  processes stay synchronous calls, for synchronous code and build
+  scripts alike; an async caller runs them there —
+  `try await Task.blocking { try File.read(path) }` — as Tokio's `fs` does,
+  since no system's readiness interface covers regular files. On one
+  worker, four tasks each blocking a thread for 200 ms take about 200 ms,
+  while a fifth ticks on (`BlockingWorkRunsOffTheWorkers`).
+
 ThreadSanitizer (`tools/tsan/run.sh`: the runtime compiled with
 `-fsanitize=thread`, and the program's own functions instrumented) reports
 nothing on the concurrency benchmarks, `examples/04-async-service.sb`, and
@@ -1430,7 +1475,7 @@ channels between four senders and four receivers, main-actor code called
 from eight tasks, a CPU-bound fan-out. It found, and so no longer does,
 the allocator's slab counts updated under different classes' locks.
 
-Not yet: an I/O reactor; async backtraces; task-local values; Sendable
+Not yet: async backtraces; task-local values; Sendable
 checking of what a spawned closure captures (a non-Sendable class
 captured by two tasks races on its fields, though its counts are
 atomic, and a value stored later into such a shared object, or read

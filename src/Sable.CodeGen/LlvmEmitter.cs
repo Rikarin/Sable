@@ -514,6 +514,18 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_waitlist_free(ptr)
                                 declare void @sable_waitlist_wake(ptr)
                                 declare zeroext i1 @sable_task_park(ptr)
+                                declare zeroext i1 @sable_task_io_wait(i64, i1 zeroext)
+                                declare zeroext i1 @sable_task_blocking(ptr, ptr)
+                                declare i64 @sable_net_status()
+                                declare i64 @sable_net_listen(ptr, i64)
+                                declare i64 @sable_net_port(i64)
+                                declare i64 @sable_net_accept(i64)
+                                declare i64 @sable_net_connect(ptr, i64)
+                                declare zeroext i1 @sable_net_connected(i64)
+                                declare ptr @sable_net_read(i64, i64, ptr)
+                                declare i64 @sable_net_write(i64, ptr, i64, i64)
+                                declare void @sable_net_shutdown(i64)
+                                declare void @sable_net_close(i64)
                                 declare void @sable_tasks_drain()
                                 declare void @sable_task_run_until_main()
                                 declare ptr @sable_frame_alloc(i64)
@@ -1717,7 +1729,8 @@ public sealed partial class LlvmEmitter {
                 }
 
                 foreach (var argument in block.Arguments) {
-                    if (!_incoming.TryGetValue(argument, out var incoming)) {
+                    // A block given nothing — a case's payload of Never, laid out as nothing — has no phi.
+                    if (!_incoming.TryGetValue(argument, out var incoming) || argument.Type == SilType.Unit) {
                         continue;
                     }
 
@@ -2432,7 +2445,13 @@ public sealed partial class LlvmEmitter {
                     continue;
                 }
 
-                // A payload of no bytes is all of its one value.
+                // A payload of no bytes is all of its one value; one laid
+                // out as nothing (Unit — Never's, say) has no value to pass.
+                if (payload == SilType.Unit) {
+                    arms.Add($"{tagType} {caseIndex}, label %{_labels[target]}");
+                    continue;
+                }
+
                 if (Area(enumType).Count == 0) {
                     var empty = NewLabel("case");
                     _extra.Append(empty).Append(":\n").Append($"  br label %{_labels[target]}\n");
@@ -2792,6 +2811,49 @@ public sealed partial class LlvmEmitter {
                     Line($"call void @sable_{builtin.Name[5..]}(ptr {list})");
                     return;
                 }
+
+                // A socket to be ready (the reactor), and work on the blocking pool.
+                case "async_io_wait":
+                    Line($"{Result()} = call zeroext i1 @sable_task_io_wait(i64 {operands[0]}, i1 zeroext {operands[1]})");
+                    return;
+
+                case "async_blocking":
+                    Line($"{Result()} = call zeroext i1 @sable_task_blocking(ptr {operands[0]}, ptr {operands[1]})");
+                    return;
+
+                // Sockets (runtime/net.c), by handle.
+                case "net_status":
+                    Line($"{Result()} = call i64 @sable_net_status()");
+                    return;
+
+                case "net_listen" or "net_connect":
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}(ptr {operands[0]}, i64 {operands[1]})");
+                    return;
+
+                case "net_port" or "net_accept":
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}(i64 {operands[0]})");
+                    return;
+
+                case "net_connected":
+                    Line($"{Result()} = call zeroext i1 @sable_net_connected(i64 {operands[0]})");
+                    return;
+
+                case "net_read":
+                    Line($"{Result()} = call ptr @sable_net_read(i64 {operands[0]}, i64 {operands[1]}, ptr {module.ArrayMetadata(new ArrayType(SilType.U8))})");
+                    return;
+
+                case "net_write": {
+                    var type = (SliceType)builtin.Operands[1].Type;
+                    var buffer = SlicePart(operands[1], type, 0);
+                    var start = SlicePart(operands[1], type, 1);
+                    var count = SlicePart(operands[1], type, 2);
+                    Line($"{Result()} = call i64 @sable_net_write(i64 {operands[0]}, ptr {buffer}, i64 {start}, i64 {count})");
+                    return;
+                }
+
+                case "net_shutdown" or "net_close":
+                    Line($"call void @sable_{builtin.Name}(i64 {operands[0]})");
+                    return;
 
                 case "async_park": {
                     var list = Fresh();

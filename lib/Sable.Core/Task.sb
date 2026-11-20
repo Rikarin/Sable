@@ -113,4 +113,40 @@ public class Task<Success> {
 
     @builtin("task_handler_pop")
     static fn removeCancellationHandler()
+
+    /// Runs the body on a thread kept for work that blocks — a call into C
+    /// that waits, a whole file read at once — and gives what it gives, or
+    /// throws what it throws. The running task waits meanwhile, but no
+    /// worker does: the others' tasks run on. The body runs as the running
+    /// task, which it may ask 'Task.isCancelled', on another thread, so
+    /// what it captures must be Sendable. Tokio's spawn_blocking.
+    ///
+    /// ```sable
+    /// fn total(_ count: Int) async -> Int {
+    ///     return await Task.blocking { count * (count + 1) / 2 }
+    /// }
+    /// ```
+    public static async fn blocking<T, E>(_ body: () throws(E) -> T) throws(E) -> T {
+        let result = BlockingResult<T, E>()
+        await Task.runBlocking { result.outcome = Outcome.catching(body) }
+        return try result.outcome!.get()
+    }
+
+    /// Runs the work on the blocking pool while the running task waits.
+    @intrinsic
+    static async fn runBlocking(_ work: () -> ())
+
+    /// Waits until the socket is ready to read, or to write, as the I/O
+    /// reactor says: Runtime.waitForSocket's.
+    @intrinsic
+    static async fn waitForSocket(_ socket: Int, _ writable: Bool)
+}
+
+/// Where Task.blocking's body leaves what it gives, for the task to take.
+class BlockingResult<T, E> {
+    var outcome: Outcome<T, E>?
+
+    init() {
+        outcome = none
+    }
 }

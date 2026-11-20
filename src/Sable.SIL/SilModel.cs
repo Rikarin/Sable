@@ -1582,6 +1582,17 @@ public sealed class SilModule {
 ///     signatures are worked out from the operands.
 /// </remarks>
 public static class SilBuiltins {
+    /// <summary>
+    ///     An <c>array_literal</c> of numbers, Bools or Chars, every one written
+    ///     as a literal: natively a constant in read-only memory, made once
+    ///     and never counted (#265).
+    /// </summary>
+    public static bool IsConstantArray(BuiltinInst literal) =>
+        literal is { Name: "array_literal", Type: ArrayType array }
+        && (array.Element == SilType.Int || array.Element == SilType.Bool || array.Element == SilType.Char || array.Element == SilType.F64
+            || array.Element == SilType.F32 || SilType.IntegerInfo(array.Element) is not null)
+        && literal.Operands.All(static o => o is IntegerLiteralInst or FloatLiteralInst);
+
     public sealed record Signature(ImmutableArray<SilType> Operands, SilType Result) {
         /// <summary>The operands the builtin takes ownership of.</summary>
         public ImmutableArray<int> Consumed { get; init; } = [];
@@ -1627,9 +1638,9 @@ public static class SilBuiltins {
         // '[0, 7, 14]': an array of its elements, each a literal of the
         // element type — natively a constant, never counted, which copy on
         // write copies before it is changed (#265).
-        if (name == "array_literal") {
+        if (name is "array_literal" or "array_literal_stack") {
             return result is ArrayType literal && operands.Count > 0 && operands.All(o => o == literal.Element)
-                ? new([..operands], result)
+                ? new([..operands], result) { Consumed = [..Enumerable.Range(0, operands.Count)] }
                 : null;
         }
 

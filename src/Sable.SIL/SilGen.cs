@@ -2714,13 +2714,18 @@ public sealed partial class SilGen {
     ///     functions around it by reference, through boxes; their parameters,
     ///     <c>self</c>, and what its capture list names, by value.
     /// </summary>
-    internal List<Capture> CapturesOf(BoundClosure closure) => CapturesOf(closure.Symbol, closure.Body, closure.Captures);
+    internal List<Capture> CapturesOf(BoundClosure closure) => CapturesOf(closure.Symbol, closure.Body, closure.Captures, closure: true);
 
     /// <summary>
     ///     What a closure, or a local function, captures. A local function
     ///     that captures is itself captured, as its closure, by what calls it.
+    ///     A closure captures a local that cannot change — a 'let', a loop's
+    ///     element — by value, as '[x]' would: there is nothing a box could
+    ///     share, and a context that holds no box is one allocation, not two.
+    ///     A local function's captures stay boxed: it may be declared, and
+    ///     made, before a 'let' it reads has its value.
     /// </summary>
-    internal List<Capture> CapturesOf(FunctionSymbol symbol, BoundBlock body, ImmutableArray<BoundCapture> listedCaptures) {
+    internal List<Capture> CapturesOf(FunctionSymbol symbol, BoundBlock body, ImmutableArray<BoundCapture> listedCaptures, bool closure = false) {
         var inner = Descendants(body)
             .Select(static n => n switch {
                     BoundClosure c => c.Symbol,
@@ -2755,6 +2760,8 @@ public sealed partial class SilGen {
                 case BoundLocalAccess access when !inner.Contains(access.Local.ContainingSymbol!):
                     if (listed.TryGetValue(access.Local, out var listedCapture)) {
                         Add(access.Local, access.Local.Type, false, listedCapture.Initializer, listedCapture.CaptureKind);
+                    } else if (closure && access.Local is { IsMutable: false, IsAsyncLet: false } && Lower(access.Local.Type) is { } held && !IsMoveOnly(held)) {
+                        Add(access.Local, access.Local.Type, false, new BoundLocalAccess(access.Syntax, access.Local, access.Local.Type));
                     } else {
                         Add(access.Local, access.Local.Type, true, null);
                     }
@@ -8219,7 +8226,7 @@ public sealed partial class SilGen {
             return Emit(new LoadInst(slot, LoadKind.Take));
         }
 
-        /// <summary><c>[a, b]</c>: an empty array in a slot of its own, each element appended, then taken out.</summary>
+        /// <summary><c>[a, b]</c>: an array made of its elements.</summary>
         SilValue? ArrayLiteral(BoundArray array, TypeSymbol type) {
             // '[1, 2, 3]' where a slice is wanted: the array, and the whole of it viewed.
             if (LowerType(type) is SliceType) {
@@ -8236,53 +8243,17 @@ public sealed partial class SilGen {
                 return Emit(new BuiltinInst("array_empty", arrayType));
             }
 
-            // Numbers, Bools and Chars, every one a literal: the array as a
-            // constant, which native code keeps in read-only memory, made
-            // once and never counted (#265).
-            if (IsConstantElement(arrayType.Element)) {
-                var values = new List<SilValue>(array.Elements.Length);
-                foreach (var element in array.Elements) {
-                    if (Expression(element) is not { } value) {
-                        return null;
-                    }
-
-                    values.Add(value);
-                }
-
-                if (values.TrueForAll(IsConstantLiteral)) {
-                    return Emit(new BuiltinInst("array_literal", arrayType, [..values]));
-                }
-
-                var built = NewSlot(arrayType);
-                Emit(new StoreInst(Emit(new BuiltinInst("array_empty", arrayType)), built, StoreKind.Assign));
-                foreach (var value in values) {
-                    Emit(new BuiltinInst("array_append", SilType.Unit, built, value));
-                }
-
-                return Emit(new LoadInst(built, LoadKind.Take));
+            // The elements, then the array of them: of numbers, Bools and
+            // Chars every one a literal, a constant, which native code keeps
+            // in read-only memory, made once and never counted (#265); of
+            // anything else, made and filled in one go, in the frame when it
+            // does not escape it (PromoteToStack).
+            if (Evaluate(array.Elements) is not { } values) {
+                return null;
             }
 
-            var empty = Emit(new BuiltinInst("array_empty", arrayType));
-            var slot = NewSlot(arrayType);
-            Emit(new StoreInst(empty, slot, StoreKind.Assign));
-            foreach (var element in array.Elements) {
-                if (Expression(element) is not { } value) {
-                    return null;
-                }
-
-                Emit(new BuiltinInst("array_append", SilType.Unit, slot, value));
-            }
-
-            return Emit(new LoadInst(slot, LoadKind.Take));
+            return Emit(new BuiltinInst("array_literal", arrayType, [..values.Select(Owned)]));
         }
-
-        /// <summary>An element an array of constants can hold: a number, a Bool or a Char, written as it is.</summary>
-        static bool IsConstantElement(SilType type) =>
-            type == SilType.Int || type == SilType.Bool || type == SilType.Char || type == SilType.F64 || type == SilType.F32
-            || SilType.IntegerInfo(type) is not null;
-
-        /// <summary>A value written as a literal, which an array of constants holds as it is.</summary>
-        static bool IsConstantLiteral(SilValue value) => value is IntegerLiteralInst or FloatLiteralInst;
 
         /// <summary>
         ///     A protocol's subscript, used on a T that stands for a known type

@@ -544,6 +544,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_access_end(ptr)
                                 declare ptr @sable_inline_new_stack(ptr, ptr, i64)
                                 declare ptr @sable_stack_object(ptr, ptr, i64)
+                                declare ptr @sable_stack_array(ptr, ptr, i64)
                                 declare ptr @sable_inline_unique(ptr)
                                 declare ptr @sable_inline_copy(ptr, ptr)
                                 declare ptr @sable_inline_field(ptr, ptr, i32)
@@ -3425,11 +3426,27 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 // An array of constants: the immortal one in read-only memory.
-                case "array_literal" when builtin.Operands.All(static o => o is IntegerLiteralInst or FloatLiteralInst):
+                case "array_literal" when SilBuiltins.IsConstantArray(builtin):
                     _names[builtin] = module.ArrayConstant((ArrayType)builtin.Type, [..operands]);
                     return;
 
-                // Elements that are no longer literals: appended, one by one.
+                // An array literal that does not escape its frame: made there,
+                // header and elements, each element stored where it goes.
+                case "array_literal_stack": {
+                    var arrayType = (ArrayType)builtin.Type;
+                    var layout = $"{{ [48 x i8], [{operands.Length} x {Type(arrayType.Element)}] }}";
+                    var memory = Scratch(layout, HeapAlign);
+                    Line($"{Result()} = call ptr @sable_stack_array(ptr {memory}, ptr {module.ArrayMetadata(arrayType)}, i64 {operands.Length})");
+                    for (var i = 0; i < operands.Length; i++) {
+                        var element = Fresh();
+                        Line($"{element} = getelementptr inbounds {layout}, ptr {memory}, i32 0, i32 1, i64 {i}");
+                        Line($"store {Type(arrayType.Element)} {operands[i]}, ptr {element}, !tbaa {TbaaElement}");
+                    }
+
+                    return;
+                }
+
+                // Elements that are not all literals: appended, one by one.
                 case "array_literal": {
                     var arrayType = (ArrayType)builtin.Type;
                     var slot = Scratch("ptr");

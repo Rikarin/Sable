@@ -74,6 +74,7 @@ public sealed partial class LanguageServer {
 
             using var round = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
             Volatile.Write(ref _round, round);
+            Interlocked.Increment(ref _roundsRun);
             try {
                 await _loading;
                 await DiagnoseAsync(round.Token);

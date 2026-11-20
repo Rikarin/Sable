@@ -151,9 +151,36 @@ internal sealed partial class Analysis {
         lock (analysis.Gate) {
             // Binding every signature reports the declarations' problems too.
             analysis._unplaced = [..compilation.GetDiagnostics().Except(trees.SelectMany(static t => t.Diagnostics))];
+            analysis.Failures = analysis.FindFailures();
         }
 
         return analysis;
+    }
+
+    /// <summary>
+    ///     The files compiled with the package that are not the workspace's
+    ///     to show — the standard library's, a dependency's read from disk —
+    ///     and do not compile: each one's first error. Nothing in the editor
+    ///     would say why the package's own files then fail; a library newer
+    ///     than the server's <c>sable</c> is the usual cause (#284).
+    /// </summary>
+    public IReadOnlyList<(SyntaxTree Tree, Diagnostic Error)> Failures { get; private set; } = [];
+
+    List<(SyntaxTree, Diagnostic)> FindFailures() {
+        var failures = new List<(SyntaxTree, Diagnostic)>();
+        foreach (var tree in Compilation.SyntaxTrees) {
+            if (_documentsByRoot.ContainsKey(tree.Root) || !(_library.Contains(tree) || _dependencies.Contains(tree))) {
+                continue;
+            }
+
+            var error = tree.Diagnostics.FirstOrDefault(static d => d.Severity == DiagnosticSeverity.Error)
+                        ?? _unplaced?.FirstOrDefault(d => d.Severity == DiagnosticSeverity.Error && ReferenceEquals(Compilation.FileOf(d), tree));
+            if (error is not null) {
+                failures.Add((tree, error));
+            }
+        }
+
+        return failures;
     }
 
     /// <summary>The workspace document a node belongs to, or null for the library's.</summary>
@@ -208,6 +235,39 @@ internal sealed partial class Analysis {
         }
 
         return own == Documents.Count(d => Snapshot.KeyOf(d) == Key);
+    }
+
+    /// <summary>
+    ///     Whether a package would be compiled from the same files in both
+    ///     snapshots — its own documents and its dependencies' — so that a
+    ///     build of it that failed in one would fail again in the other.
+    /// </summary>
+    public static bool SameSources(WorkspaceSnapshot before, WorkspaceSnapshot now, string key) {
+        if (!ReferenceEquals(before.Layout, now.Layout)) {
+            return false;
+        }
+
+        var project = now.Layout.Projects.FirstOrDefault(p => p.Directory == key);
+        if (project?.Generate is not null) {
+            return false;
+        }
+
+        var dependencies = project?.Dependencies.Select(static d => Path.GetFullPath(d.Path)).ToHashSet(StringComparer.Ordinal) ?? [];
+        bool Relevant(WorkspaceSnapshot snapshot, string path, Document document) => snapshot.KeyOf(document) == key || dependencies.Contains(path);
+
+        foreach (var (path, document) in now.Documents) {
+            if (Relevant(now, path, document) && !ReferenceEquals(before.Documents.GetValueOrDefault(path)?.Tree, document.Tree)) {
+                return false;
+            }
+        }
+
+        foreach (var (path, document) in before.Documents) {
+            if (Relevant(before, path, document) && !now.Documents.ContainsKey(path)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     static SyntaxNode RootOf(SyntaxNode node) {
@@ -371,6 +431,7 @@ internal sealed class AnalysisCache(Func<WorkspaceSnapshot, string, Analysis> bu
     readonly Dictionary<string, Analysis> _latest = new(StringComparer.Ordinal);
     readonly Dictionary<string, Analysis> _warm = new(StringComparer.Ordinal);
     readonly Dictionary<string, (long Generation, Task<Analysis> Task)> _building = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (WorkspaceSnapshot Snapshot, Task<Analysis> Task)> _failed = new(StringComparer.Ordinal);
 
     /// <summary>The newest analysis of a package built, of whatever snapshot: what a completion binds its edit against.</summary>
     public Analysis? Latest(string key) {
@@ -424,9 +485,26 @@ internal sealed class AnalysisCache(Func<WorkspaceSnapshot, string, Analysis> bu
                 return building.Task;
             }
 
+            // A build that threw throws again until a file it compiles
+            // changes: each request, each round, would otherwise try it anew.
+            if (_failed.TryGetValue(key, out var failed) && Analysis.SameSources(failed.Snapshot, snapshot, key)) {
+                return failed.Task;
+            }
+
             var task = Task.Run(() => {
-                var analysis = build(snapshot, key);
+                Analysis analysis;
+                try {
+                    analysis = build(snapshot, key);
+                } catch (Exception e) when (e is not OutOfMemoryException) {
+                    lock (_lock) {
+                        _failed[key] = (snapshot, Task.FromException<Analysis>(e));
+                    }
+
+                    throw;
+                }
+
                 lock (_lock) {
+                    _failed.Remove(key);
                     if (!_latest.TryGetValue(key, out var known) || known.Snapshot.Generation < snapshot.Generation) {
                         _latest[key] = analysis;
                     }

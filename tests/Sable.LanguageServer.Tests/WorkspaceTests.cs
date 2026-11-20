@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using Sable.Syntax;
 using Xunit;
@@ -29,6 +30,31 @@ public sealed class WorkspaceTests : IDisposable {
     }
 
     const string Broken = "module App\n\nfn broken() -> Int {\n    let s: String = 1\n    return 2\n}\n";
+
+    [Fact]
+    public async Task ACompilationThatThrowsIsNotTriedAgainUntilItsFilesChange() {
+        // Each request and each round asks for the package's analysis; one
+        // that throws would otherwise be built again for every snapshot.
+        var tries = 0;
+        var cache = new AnalysisCache((_, _) => {
+            Interlocked.Increment(ref tries);
+            throw new InvalidOperationException("the compiler gave up");
+        });
+
+        const string Uri = "file:///w/a.sb";
+        Document Of(string text) => new(Uri, SyntaxTree.Parse(new SourceText(text, "/w/a.sb")), 1, true);
+        var a = Of("module A\n");
+        WorkspaceSnapshot Snapshot(long generation, params Document[] documents) =>
+            new(documents.ToImmutableDictionary(static d => Workspace.KeyOf(d.Uri), StringComparer.Ordinal), generation, ProjectLayout.None);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => cache.GetAsync(Snapshot(1, a), ProjectLayout.Loose));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => cache.GetAsync(Snapshot(2, a), ProjectLayout.Loose));
+        Assert.Equal(1, tries);
+
+        // Its file changed: tried again.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => cache.GetAsync(Snapshot(3, Of("module A\n\nfn f() {}\n")), ProjectLayout.Loose));
+        Assert.Equal(2, tries);
+    }
 
     [Fact]
     public async Task EveryFolderIsLoaded() {

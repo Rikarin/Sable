@@ -35,7 +35,10 @@ through `sable` too.
 
 - `sable` on the `PATH`, or the `sable.path` setting pointing at it. In the compiler's own
   repository the extension uses the driver built under `src/Sable.Driver/bin/` when there is no
-  `sable` on the `PATH`.
+  `sable` on the `PATH`. There, the server compiles the standard library from the workspace's
+  `lib/`, so the extension warns when the `sable` it starts was built before `lib/` or `src/`
+  last changed, and **Sable: Rebuild the Language Server** runs
+  `dotnet build src/Sable.Driver -c Release -m:2` and restarts the server on the new build.
 - `clang`, which `sable` builds with.
 - For debugging, an lldb debug adapter: LLVM's
   [LLDB DAP](https://marketplace.visualstudio.com/items?itemName=llvm-vs-code-extensions.lldb-dap)

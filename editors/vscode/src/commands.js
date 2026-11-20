@@ -7,6 +7,7 @@ const vscode = require("vscode");
 const path = require("path");
 const sable = require("./sable");
 const client = require("./client");
+const freshness = require("./freshness");
 const tasks = require("./tasks");
 
 /** @param {vscode.ExtensionContext} context */
@@ -15,6 +16,7 @@ function register(context) {
     context.subscriptions.push(vscode.commands.registerCommand(id, handler));
 
   command("sable.restartServer", () => client.restart(context));
+  command("sable.rebuildServer", () => freshness.rebuild({ stop: client.stop, start: () => client.start(context) }));
   command("sable.showOutput", () => sable.channel().show());
   command("sable.run", (/** @type {vscode.Uri | undefined} */ uri) => runTask("run", uri));
   command("sable.build", (/** @type {vscode.Uri | undefined} */ uri) => runTask("build", uri));

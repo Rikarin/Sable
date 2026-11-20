@@ -237,6 +237,41 @@ public sealed class DiagnosticsTests : IDisposable {
     }
 
     [Fact]
+    public async Task AnIdleServerCompilesNothing() {
+        // Once a round's diagnostics are out, nothing the server does on its
+        // own may start another: no round, no compilation, no lowering. It
+        // sat at 100-150% CPU for hours twice (#284), each time from work
+        // that started itself again — the second, lowering a class that
+        // inherits from itself.
+        var moved = Write("moved.sb", Moved.Replace("module App", "module Moves", StringComparison.Ordinal));
+        var unused = Write("unused.sb", Unused);
+        var broken = Write("broken.sb", "module Broken\n\nfn g() -> Int {\n    let s: String = 1\n    return 2\n}\n\nclass Loop: Loop {}\n");
+        await using var client = new TestClient();
+        await client.InitializeAsync(_root);
+        await client.NotifyAsync("initialized", new { });
+        await client.OpenAsync(unused, Unused);
+        await client.DiagnosticsAsync(unused, static d => Has(d, "S3300"));
+        await client.DiagnosticsAsync(moved);
+        await client.DiagnosticsAsync(broken, static d => d.GetArrayLength() > 0);
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (client.Server.Diagnosing && DateTime.UtcNow < deadline) {
+            await Task.Delay(20);
+        }
+
+        Assert.False(client.Server.Diagnosing, "the first round never ended");
+        var (rounds, built, lowered, sent) = (client.Server.RoundsRun, client.Server.AnalysesBuilt, client.Server.LoweringsStarted, client.Received);
+
+        // Many times the debounce delay, with nothing changed.
+        await Task.Delay(TimeSpan.FromSeconds(1.5));
+        Assert.Equal(rounds, client.Server.RoundsRun);
+        Assert.Equal(built, client.Server.AnalysesBuilt);
+        Assert.Equal(lowered, client.Server.LoweringsStarted);
+        Assert.Equal(sent, client.Received);
+        Assert.False(client.Server.Diagnosing);
+    }
+
+    [Fact]
     public async Task EachLoadOfThePackagesIsDiagnosed() {
         // A manifest changed: the packages are read again, and the round
         // after the reading starts at once, with no quiet to wait out. A

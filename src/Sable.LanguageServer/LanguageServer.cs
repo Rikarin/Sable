@@ -96,14 +96,78 @@ public sealed partial class LanguageServer {
 
     int _analysesBuilt;
 
+    /// <summary>How many rounds of diagnostics have started, for tests of an idle server.</summary>
+    internal int RoundsRun => Volatile.Read(ref _roundsRun);
+
+    int _roundsRun;
+
+    /// <summary>How many lowerings for the SIL checks have been started, for tests of an idle server.</summary>
+    internal int LoweringsStarted => Volatile.Read(ref _loweringsStarted);
+
+    int _loweringsStarted;
+
+    /// <summary>Whether a round of diagnostics is under way, or one is due.</summary>
+    internal bool Diagnosing => Volatile.Read(ref _round) is not null || _changed.CurrentCount > 0;
+
     Analysis BuildAnalysis(WorkspaceSnapshot snapshot, string key) {
         Interlocked.Increment(ref _analysesBuilt);
         var watch = System.Diagnostics.Stopwatch.StartNew();
+        var name = key.Length == 0 ? "the loose files" : key;
         try {
-            return BuildAnalysisNow(snapshot, key);
+            var analysis = BuildAnalysisNow(snapshot, key);
+            _failuresShown.TryRemove($"build:{key}", out _);
+            ShowFailures(analysis);
+            return analysis;
+        } catch (Exception e) when (e is not OutOfMemoryException) {
+            Log($"compiling {name} failed: {e}");
+            ShowOnce($"build:{key}", e.Message, $"Sable could not compile {name}: {e.Message}");
+            throw;
         } finally {
-            Log($"compiled {(key.Length == 0 ? "the loose files" : key)} in {watch.ElapsedMilliseconds} ms");
+            Log($"compiled {name} in {watch.ElapsedMilliseconds} ms");
         }
+    }
+
+    /// <summary>What has been shown the user of each failure, by what failed: each is shown once, until it is fixed.</summary>
+    readonly ConcurrentDictionary<string, string> _failuresShown = new(StringComparer.Ordinal);
+
+    /// <summary>
+    ///     Says, once, that a library or dependency file the package is
+    ///     compiled with does not compile (#284): those files are no
+    ///     document's, so no diagnostic would show it, and every file of the
+    ///     package may fail because of it. A file that compiles again is
+    ///     forgotten, and said again if it breaks again.
+    /// </summary>
+    void ShowFailures(Analysis analysis) {
+        var failing = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (tree, error) in analysis.Failures) {
+            var file = tree.Text.FileName;
+            failing.Add(file);
+            var where = tree.Text.GetLinePosition(error.Span.Start);
+            var what = analysis.IsLibrary(tree) ? "The standard library" : "A dependency";
+            ShowOnce($"file:{file}", $"{error.Id} {error.Message}",
+                $"{what} does not compile: {file}:{where}: error {error.Id}: {error.Message}. If this sable is older than the code, rebuild it.");
+        }
+
+        foreach (var tree in analysis.Compilation.SyntaxTrees) {
+            if (!failing.Contains(tree.Text.FileName)) {
+                _failuresShown.TryRemove($"file:{tree.Text.FileName}", out _);
+            }
+        }
+    }
+
+    /// <summary>Shows a warning unless the same one about the same thing was shown last.</summary>
+    void ShowOnce(string about, string fingerprint, string message) {
+        if (_failuresShown.TryGetValue(about, out var shown) && shown == fingerprint) {
+            return;
+        }
+
+        _failuresShown[about] = fingerprint;
+        Log(message);
+        _ = _channel.WriteAsync(new JsonObject {
+            ["jsonrpc"] = "2.0",
+            ["method"] = "window/showMessage",
+            ["params"] = new JsonObject { ["type"] = 2, ["message"] = message }
+        });
     }
 
     Analysis BuildAnalysisNow(WorkspaceSnapshot snapshot, string key) {

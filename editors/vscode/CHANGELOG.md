@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- In the Sable repository, a warning when the `sable` the server runs was built before `lib/` or
+  `src/` last changed, and `sable.rebuildServer` to rebuild it and restart the server.
+
 ## 0.3.0
 
 - A Coverage profile in the Test Explorer (VS Code 1.88 or later): the selected tests run with

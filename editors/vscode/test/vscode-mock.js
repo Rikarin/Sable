@@ -222,7 +222,7 @@ function createTestController(id, label) {
 
 /**
  * A fresh `vscode` with folders, settings and an active editor as given.
- * @param {{ folders?: string[], settings?: Record<string, unknown>, folderSettings?: Record<string, Record<string, unknown>>, extensions?: string[] }} [world]
+ * @param {{ folders?: string[], settings?: Record<string, unknown>, folderSettings?: Record<string, Record<string, unknown>>, extensions?: string[], answer?: (text: string, choices: string[]) => string | undefined }} [world]
  */
 function create(world = {}) {
   /** @type {Set<(session: { configuration: unknown }) => void>} */
@@ -297,9 +297,10 @@ function create(world = {}) {
     openTextDocument: async (options) => ({ uri: new Uri("untitled", "/explain"), ...options }),
   };
 
+  // The user's answer to a message: `world.answer`'s, or none, as when it is dismissed.
   const message = (level) => async (text, ...choices) => {
     recorded.messages.push({ level, text, choices });
-    return undefined;
+    return world.answer?.(text, choices);
   };
 
   const window = {
@@ -450,7 +451,7 @@ function load(world) {
   };
 
   const modules = {};
-  for (const name of ["sable", "client", "commands", "tasks", "coverage", "testing", "debug", "extension"]) {
+  for (const name of ["sable", "freshness", "client", "commands", "tasks", "coverage", "testing", "debug", "extension"]) {
     modules[name] = require(path.join(source, name));
   }
 

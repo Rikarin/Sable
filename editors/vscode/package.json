@@ -186,6 +186,11 @@
         "category": "Sable"
       },
       {
+        "command": "sable.rebuildServer",
+        "title": "Rebuild the Language Server (Sable repository)",
+        "category": "Sable"
+      },
+      {
         "command": "sable.showOutput",
         "title": "Show Output",
         "category": "Sable"

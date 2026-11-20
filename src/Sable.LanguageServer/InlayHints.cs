@@ -107,6 +107,7 @@ public sealed partial class LanguageServer {
 
             // One lowering at a time: a lowering takes memory, and a newer
             // request waits for the one under way, then for its own.
+            Interlocked.Increment(ref _loweringsStarted);
             var task = _lowering.ContinueWith(_ => RootSummaries.Compute(analysis), TaskScheduler.Default);
             _lowering = task;
             _roots[analysis.Key] = (analysis, task);

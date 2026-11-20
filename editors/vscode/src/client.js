@@ -6,9 +6,13 @@
 const vscode = require("vscode");
 const { LanguageClient, TransportKind, State } = require("vscode-languageclient/node");
 const sable = require("./sable");
+const freshness = require("./freshness");
 
 /** @type {LanguageClient | undefined} */
 let client;
+
+/** The check, after the server started, that its sable is not older than the workspace's compiler sources. */
+let checked = Promise.resolve();
 
 /** @type {vscode.StatusBarItem | undefined} */
 let status;
@@ -65,6 +69,8 @@ async function start(context) {
 
   try {
     await client.start();
+    // Not waited for: the server is up, and the check runs `sable --version`.
+    checked = freshness.warnIfStale(command).catch((error) => sable.channel().appendLine(`checking the server's build failed: ${error}`));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     showStatus("$(error) Sable", `The language server did not start: ${message}`, "sable.restartServer");
@@ -129,4 +135,9 @@ function showStatus(text, tooltip, command) {
   status.show();
 }
 
-module.exports = { start, stop, restart, serverSettings };
+/** The latest check of the server's build, for what waits for it. */
+function whenChecked() {
+  return checked;
+}
+
+module.exports = { start, stop, restart, serverSettings, whenChecked };

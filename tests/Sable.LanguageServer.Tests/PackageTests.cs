@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using Sable.Driver.Packages;
 using Xunit;
@@ -101,6 +102,33 @@ public sealed class PackageTests : IDisposable {
         var unusedLocal = Sable.Symbols.Lints.Find("unused_local")!;
         Assert.Equal(Sable.Symbols.LintLevel.Allow, projects.Single(static p => p.Name == "a").Lints.LevelOf(unusedLocal));
         Assert.Equal(Sable.Symbols.LintLevel.Warn, app.Lints.LevelOf(unusedLocal));
+    }
+
+    [Fact]
+    public async Task ADependencyThatDoesNotCompileIsShownOnce() {
+        // A dependency's file is no document, so no diagnostic shows why the
+        // package's own files fail; the user is told once (#284), not with
+        // each compilation of the package after an edit.
+        WritePackages();
+        Write("util/src/lib.sb", "module Util\n\npublic fn twice(_ x: Int) -> Int {\n    return x *\n}\n");
+        var main = Write("root/app/src/main.sb", Main);
+        var uri = Workspace.UriOf(main);
+        await using var client = Client();
+        await client.InitializeAsync(Root);
+        await client.NotifyAsync("initialized", new { });
+        await client.OpenAsync(uri, Main);
+
+        var shown = await client.MessageAsync("window/showMessage");
+        Assert.Equal(2, shown.GetInt("type"));
+        Assert.Matches($@"{Regex.Escape(Path.Combine("util", "src", "lib.sb"))}:[45]:\d+: error S\d+", shown.GetString("message"));
+        Assert.StartsWith("A dependency does not compile", shown.GetString("message"), StringComparison.Ordinal);
+
+        // An edit compiles the package again, with the dependency as it was.
+        var built = client.Server.AnalysesBuilt;
+        await client.ChangeAsync(uri, 2, Main, Main.Length, Main.Length, "\nfn more() {}\n");
+        await client.DiagnosticsAsync(uri);
+        Assert.True(client.Server.AnalysesBuilt > built);
+        Assert.Single(client.Sent("window/showMessage"));
     }
 
     [Fact]

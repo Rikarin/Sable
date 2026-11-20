@@ -544,3 +544,110 @@ test("every snippet and grammar the manifest names exists", () => {
     assert.ok(fs.existsSync(path.join(__dirname, "..", file)), `${file} exists`);
   }
 });
+
+/**
+ * The compiler's repository, with a Release build of the driver built at
+ * `built` and its sources last changed at `changed` (seconds since the
+ * epoch). A file under obj/, a build's own, is newer than both.
+ */
+function repository(built, changed) {
+  const sources = ["src/Sable.Driver/Sable.Driver.csproj", "src/Sable.Driver/Program.cs", "lib/Sable.Core/Int.sb"];
+  const root = tree({
+    [sources[0]]: "<Project />\n",
+    [sources[1]]: "// the driver\n",
+    [sources[2]]: "module Sable.Core\n",
+    "src/Sable.Driver/obj/Generated.cs": "// a build's output\n",
+  });
+  const binary = path.join(root, "src", "Sable.Driver", "bin", "Release", "net11.0", "sable");
+  fs.mkdirSync(path.dirname(binary), { recursive: true });
+  fs.writeFileSync(binary, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "sable 0.5.0 (e3f0703fee57)"; fi\n');
+  fs.chmodSync(binary, 0o755);
+  fs.writeFileSync(path.join(path.dirname(binary), "sable.dll"), "");
+  for (const file of sources) {
+    fs.utimesSync(path.join(root, file), changed, changed);
+  }
+
+  fs.utimesSync(path.join(root, "src/Sable.Driver/obj/Generated.cs"), changed + 1000, changed + 1000);
+  fs.utimesSync(binary, built, built);
+  fs.utimesSync(path.join(path.dirname(binary), "sable.dll"), built, built);
+  return { root, binary };
+}
+
+test("a sable built before the repository's sources changed is warned of, with a rebuild offered", { skip: !posix && "needs a shell script for sable" }, async () => {
+  const { root, binary } = repository(1_600_000_000, 1_700_000_000);
+  fs.utimesSync(path.join(root, "lib/Sable.Core/Int.sb"), 1_700_000_100, 1_700_000_100);
+  const { modules, recorded } = load({ folders: [root], settings: { "sable.path": binary } });
+  await modules.extension.activate(context(root));
+  await modules.client.whenChecked();
+
+  const warning = recorded.messages.find((m) => m.level === "warning");
+  assert.ok(warning, "a warning");
+  assert.match(warning.text, /sable 0\.5\.0 \(e3f0703fee57\)/);
+  assert.ok(warning.text.includes(`before ${path.join("lib", "Sable.Core", "Int.sb")} changed`), warning.text);
+  assert.deepEqual(warning.choices, ["Rebuild", "Not Now"]);
+});
+
+test("a sable built after the sources changed, or outside the repository, is not warned of", { skip: !posix && "needs a shell script for sable" }, async () => {
+  const fresh = repository(1_700_000_000, 1_600_000_000);
+  const first = load({ folders: [fresh.root], settings: { "sable.path": fresh.binary } });
+  await first.modules.extension.activate(context(fresh.root));
+  await first.modules.client.whenChecked();
+  assert.equal(first.recorded.messages.length, 0);
+
+  // An old sable, in a workspace that is not the compiler's.
+  const stale = repository(1_600_000_000, 1_700_000_000);
+  const other = tree({ "package.sb": PACKAGE, "src/main.sb": MAIN });
+  const second = load({ folders: [other], settings: { "sable.path": stale.binary } });
+  await second.modules.extension.activate(context(other));
+  await second.modules.client.whenChecked();
+  assert.equal(second.recorded.messages.length, 0);
+});
+
+test("a stale sable from elsewhere is not offered a rebuild of the repository's", { skip: !posix && "needs a shell script for sable" }, async () => {
+  const { root } = repository(1_700_000_000, 1_700_000_000);
+  const elsewhere = repository(1_600_000_000, 1_600_000_000).binary;
+  const { modules, recorded } = load({ folders: [root], settings: { "sable.path": elsewhere } });
+  await modules.extension.activate(context(root));
+  await modules.client.whenChecked();
+  assert.deepEqual(recorded.messages.find((m) => m.level === "warning")?.choices, ["Open Settings", "Not Now"]);
+});
+
+test("rebuilding the server builds the driver in the repository, then starts the server again", { skip: !posix && "needs shell scripts" }, async () => {
+  const { root, binary } = repository(1_600_000_000, 1_700_000_000);
+
+  // A dotnet that records what it was asked, and builds by touching the output.
+  const tools = fs.mkdtempSync(path.join(os.tmpdir(), "sable-dotnet-"));
+  const log = path.join(tools, "args");
+  fs.writeFileSync(path.join(tools, "dotnet"), `#!/bin/sh\necho "$PWD $*" > "${log}"\ntouch "${path.join(path.dirname(binary), "sable.dll")}"\necho "Build succeeded."\n`);
+  fs.chmodSync(path.join(tools, "dotnet"), 0o755);
+  const saved = process.env.PATH;
+  process.env.PATH = `${tools}${path.delimiter}${saved}`;
+  try {
+    const { modules, recorded } = load({
+      folders: [root],
+      settings: { "sable.path": binary },
+      answer: (_text, choices) => (choices.includes("Rebuild") ? "Rebuild" : undefined),
+    });
+    await modules.extension.activate(context(root));
+    await modules.client.whenChecked();
+    assert.ok(recorded.executed.some((e) => e.id === "sable.rebuildServer"), "the warning's Rebuild runs the command");
+
+    assert.equal(await recorded.commands.get("sable.rebuildServer")(), true);
+    assert.equal(fs.readFileSync(log, "utf8").trim(), `${root} build src/Sable.Driver -c Release -m:2`);
+    assert.equal(recorded.clients.length, 2, "a new server");
+    assert.ok(!recorded.clients[0].isRunning() && recorded.clients[1].isRunning());
+
+    // Built now: the new server's check says nothing.
+    await modules.client.whenChecked();
+    assert.equal(recorded.messages.filter((m) => m.level === "warning").length, 1);
+  } finally {
+    process.env.PATH = saved;
+  }
+});
+
+test("rebuilding the server outside the repository says it cannot", async () => {
+  const { modules, recorded } = load({ folders: [tree({})] });
+  await modules.extension.activate(context(os.tmpdir()));
+  assert.equal(await recorded.commands.get("sable.rebuildServer")(), false);
+  assert.match(recorded.messages[0].text, /needs the Sable repository/);
+});

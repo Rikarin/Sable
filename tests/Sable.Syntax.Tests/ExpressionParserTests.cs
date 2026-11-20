@@ -304,6 +304,16 @@ public sealed class ExpressionParserTests {
     }
 
     [Fact]
+    public void AShorthandParametersTupleElementIsTakenApart() {
+        var tree = SyntaxTree.ParseExpression("$0.1.2 ");
+        Assert.Equal("$0.1.2 ", tree.Root.ToFullString());
+        Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+        var outer = Assert.IsType<MemberAccessExpressionSyntax>(tree.Root);
+        var inner = Assert.IsType<MemberAccessExpressionSyntax>(outer.Expression);
+        Assert.IsType<ImplicitParameterExpressionSyntax>(inner.Expression);
+    }
+
+    [Fact]
     public void AFloatLiteralIsStillAFloatLiteral() => Assert.Equal("(Literal 0.1)", Parse("0.1"));
 
     [Fact]

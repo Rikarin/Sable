@@ -584,4 +584,32 @@ public sealed class LoweringTests {
         var finished = await Task.WhenAny(lowering, Task.Delay(TimeSpan.FromSeconds(30)));
         Assert.True(finished == lowering, "lowering a cyclic class hierarchy did not finish");
     }
+
+    /// <summary>
+    ///     A subclass's initialiser that never calls 'super.init' has the
+    ///     superclass's implicit 'init()' called for it: the superclass's
+    ///     fields are given their initial values, a String's among them,
+    ///     which the verifier insists is stored before the object is used.
+    /// </summary>
+    [Fact]
+    public void AnInitialiserThatLeavesOutSuperInitHasTheImplicitOneCalled() {
+        var module = Lower(
+            """
+            open class Labelled {
+                var label: String = "x"
+                var weight: Int = 7
+            }
+            class Counted: Labelled {
+                var count: Int
+                init(count: Int) { self.count = count }
+            }
+            fn weigh(_ n: Int) -> Int {
+                let c = Counted(count: n)
+                return c.weight + c.count
+            }
+            """
+        );
+
+        Assert.Equal(10L, Run(module, "weigh", 3L));
+    }
 }

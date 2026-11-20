@@ -49,6 +49,10 @@ internal static class DefiniteAssignment {
             index[field] = index.Count;
         }
 
+        if (self?.Superclass is { } superclass) {
+            index[superclass] = index.Count;
+        }
+
         var outs = owner is FunctionSymbol function
             ? function.Parameters.Where(static p => p.Modifier == ParameterModifier.Out).ToList()
             : [];
@@ -148,6 +152,26 @@ internal static class DefiniteAssignment {
                     missing.Add(field.Name);
                     break;
                 }
+            }
+        }
+
+        // The superclass's part of the object: built by 'super.init(…)' on
+        // every way out — or, by a body that never calls it, implicitly, when
+        // all the superclass's 'init()' does is give its fields their
+        // initial values.
+        if (self.Superclass is { } superclass) {
+            var called = graph.AllOps().Any(o => o.Op.Kind == FlowOpKind.Write && ReferenceEquals(o.Op.Symbol, superclass));
+            var unbuilt = new[] { graph.End, graph.Return }
+                .Where(reachable.Contains)
+                .Any(exit => !In(exit, graph, assignedOut, index.Count, reachable)[index[superclass]]);
+            if (unbuilt && (called || !self.SuperclassInitIsImplicit)) {
+                diagnostics.Error(
+                    ErrorCode.ERR_MissingSuperInit,
+                    at,
+                    called
+                        ? $"'super.init' is not called on every path through this initialiser; '{superclass.Name}' is left unbuilt"
+                        : $"this initialiser never calls 'super.init', which '{superclass.Name}' needs to build its part of the object"
+                );
             }
         }
 

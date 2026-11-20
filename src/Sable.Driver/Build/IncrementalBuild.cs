@@ -539,7 +539,9 @@ public static class IncrementalBuild {
 
                 string ir;
                 using (BuildTimings.Of(timings, "emit")) {
-                    ir = settings.DebugDirectory is { } directory ? LlvmEmitter.EmitWithDebugInfo(module, directory, settings.Native.TargetOrHost) : LlvmEmitter.Emit(module, settings.Native.TargetOrHost);
+                    ir = settings.DebugDirectory is { } directory
+                        ? LlvmEmitter.EmitWithDebugInfo(module, directory, settings.Native.TargetOrHost, settings.Optimise, Pipeline.EmbeddedSources(standard.Trees, program))
+                        : LlvmEmitter.Emit(module, settings.Native.TargetOrHost);
                 }
 
                 var abi = string.Join("\n", module.Unit!.Abi.Select(static p => $"{p.Key}\t{p.Value}"));

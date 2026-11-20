@@ -178,10 +178,30 @@ public static class Pipeline {
 
         string ir;
         using (BuildTimings.Of(timings, "emit")) {
-            ir = debugDirectory is null ? LlvmEmitter.Emit(module, target) : LlvmEmitter.EmitWithDebugInfo(module, debugDirectory, target);
+            ir = debugDirectory is null
+                ? LlvmEmitter.Emit(module, target)
+                : LlvmEmitter.EmitWithDebugInfo(module, debugDirectory, target, optimised: optLevel != "0", sources: EmbeddedSources(compilation.SyntaxTrees, program));
         }
 
         return new(module, ir, []);
+    }
+
+    /// <summary>
+    ///     The text of each file of the compilation that is not one of the
+    ///     program's — the standard library's, embedded in the compiler — by
+    ///     its name: what the debug information carries, since no debugger
+    ///     could find those files on disk.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> EmbeddedSources(IEnumerable<SyntaxTree> compiled, IEnumerable<SyntaxTree> program) {
+        var own = program.Select(static t => t.Text.FileName).ToHashSet(StringComparer.Ordinal);
+        var sources = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var tree in compiled) {
+            if (!own.Contains(tree.Text.FileName)) {
+                sources.TryAdd(tree.Text.FileName, tree.Text.Text);
+            }
+        }
+
+        return sources;
     }
 
     /// <summary>

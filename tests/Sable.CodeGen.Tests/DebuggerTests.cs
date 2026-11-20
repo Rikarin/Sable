@@ -87,7 +87,7 @@ public sealed class DebuggerTests {
         }
     }
 
-    [PosixFact("it drives lldb with DWARF; a Windows debugger reads a PDB's CodeView, which the compiler does not write yet")]
+    [PosixFact("it drives lldb with DWARF; a Windows build is described in CodeView, for the PDB its debuggers read, which no test here drives")]
     public async Task LldbShowsFramesLocalsAndTypes() {
         if (await UnderLldb(Source, "debug", "breakpoint set --file debug.sb --line 13", "run", "bt", "frame variable", "up", "frame variable", "kill") is not { } text) {
             return;
@@ -113,7 +113,7 @@ public sealed class DebuggerTests {
     ///     parameters and locals in its frame, on its task's slab: lldb shows
     ///     them there, by their names, after the await as before it.
     /// </summary>
-    [PosixFact("it drives lldb with DWARF; a Windows debugger reads a PDB's CodeView, which the compiler does not write yet")]
+    [PosixFact("it drives lldb with DWARF; a Windows build is described in CodeView, for the PDB its debuggers read, which no test here drives")]
     public async Task LldbShowsTheLocalsOfAnAsyncFunction() {
         const string source = """
                               module AsyncDebug

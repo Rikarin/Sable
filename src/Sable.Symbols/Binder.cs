@@ -222,8 +222,10 @@ public sealed partial class Binder {
     ///     body has to set: those without an initial value, as a record literal
     ///     has to give them (S3028). A value with one unset would hold whatever
     ///     bytes were there, and a reference field would be followed to nothing.
+    ///     A subclass's has to call <c>super.init(…)</c> too (S3143), for the
+    ///     superclass's fields.
     /// </summary>
-    static InitializedSelf? InitializedSelfOf(FunctionSymbol function) {
+    InitializedSelf? InitializedSelfOf(FunctionSymbol function) {
         if (function is not { FunctionKind: FunctionKind.Initializer, ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor } type }) {
             return null;
         }
@@ -233,7 +235,19 @@ public sealed partial class Binder {
             .Where(static f => f is { IsStatic: false, IsComputed: false, HasInitializer: false })
             .ToList();
 
-        return fields.Count == 0 ? null : new InitializedSelf(type, fields);
+        // A subclass's object is the superclass's too, which only its own
+        // initialiser, called as 'super.init(…)', builds.
+        var superclass = type.TypeKind == TypeKind.Class
+            ? type.BaseTypes.OfType<NamedTypeSymbol>().FirstOrDefault(static b => b.TypeKind == TypeKind.Class)
+            : null;
+        if (fields.Count == 0 && superclass is null) {
+            return null;
+        }
+
+        var implicitInit = superclass?.OriginalDefinition.GetMembers("init").OfType<FunctionSymbol>()
+            .Any(i => i is { DeclaringSyntax.IsEmpty: true, Parameters.IsEmpty: true } && !_compilation.InheritedInitializers.ContainsKey(i))
+            ?? false;
+        return new InitializedSelf(type, fields, superclass, implicitInit);
     }
 
     /// <summary>Checks that a function returns on every path, and warns on dead code.</summary>

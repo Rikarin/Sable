@@ -1297,6 +1297,14 @@ public enum SilInline {
 public sealed class SilFunction(string name, FunctionType type) {
     public string Name { get; internal set; } = name;
 
+    /// <summary>
+    ///     For an instance of a generic function, its name as Sable writes it
+    ///     — <c>Demo.describe&lt;Int&gt;</c>, <c>M.Stack&lt;Int&gt;.push</c> —
+    ///     where <see cref="Name" /> is <c>Demo.describe$of$Int</c>: for a
+    ///     debugger to show. Null for any other function.
+    /// </summary>
+    public string? DisplayName { get; set; }
+
     /// <summary>The module the function belongs to, once it is added to one.</summary>
     public SilModule? Module { get; internal set; }
 

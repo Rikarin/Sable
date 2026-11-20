@@ -427,6 +427,10 @@ public open class Document: Serializable, Equatable {
   values, is made with `init()` — or, a subclass, inherits its superclass's
   initialisers, each of which sets the subclass's fields and then calls the
   one it inherits.
+- A subclass's own initialiser calls `super.init(…)` on every path that
+  returns, or delegates with `self.init(…)` (S3143). Only a superclass made
+  with the implicit `init()` may be left to it: one that never calls
+  `super.init` has that `init()` called for it.
 - In an expression, `Self` is the enclosing type: `Self(x: 3)` makes one,
   `Self.zero` reads a static member.
 - Members are non-virtual unless declared `open` or `abstract`; `override` is

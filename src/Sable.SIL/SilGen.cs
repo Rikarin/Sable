@@ -658,13 +658,16 @@ public sealed partial class SilGen {
                 var (symbol, name, type, substitution) = _pending.Dequeue();
                 if (_localGenerics.TryGetValue(symbol, out var local)) {
                     LowerLocalFunction(symbol, local.Body, name, type, local.Source, substitution, _localGenericClosures.GetValueOrDefault(name));
-                    continue;
+                } else {
+                    var (syntax, model) = _declarations[symbol];
+                    _loweringInstance = name;
+                    LowerBody(symbol, syntax, model, name, type, substitution);
+                    _loweringInstance = null;
                 }
 
-                var (syntax, model) = _declarations[symbol];
-                _loweringInstance = name;
-                LowerBody(symbol, syntax, model, name, type, substitution);
-                _loweringInstance = null;
+                if (_module.Find(name) is { } lowered) {
+                    lowered.DisplayName = InstanceDisplayName(symbol, _names[symbol], substitution);
+                }
             }
 
             BuildVTables();
@@ -1011,6 +1014,31 @@ public sealed partial class SilGen {
     }
 
     static bool IsGeneric(FunctionSymbol symbol) => TypeParametersOf(symbol).Any();
+
+    /// <summary>
+    ///     An instance's name as Sable writes it, for a debugger: the type
+    ///     arguments of a generic owner after the owner's name
+    ///     (<c>M.Stack&lt;Int&gt;.push</c>), the function's own after its
+    ///     name (<c>M.describe&lt;String&gt;</c>), and for a protocol's
+    ///     default implementation, the type it is for in the protocol's place
+    ///     (<c>Circle.describe</c>).
+    /// </summary>
+    static string InstanceDisplayName(FunctionSymbol symbol, string baseName, TypeSubstitution substitution) {
+        string Argument(TypeParameterSymbol parameter) => substitution.Lookup(parameter)?.ToDisplayString() ?? parameter.Name;
+
+        var name = baseName;
+        if (Owner(symbol)?.OriginalDefinition is { } owner && baseName.StartsWith(QualifiedName(owner) + ".", StringComparison.Ordinal)) {
+            var member = baseName[(QualifiedName(owner).Length + 1)..];
+            if (owner is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } self }) {
+                name = $"{Argument(self)}.{member}";
+            } else if (owner.TypeParameters.Length > 0) {
+                name = $"{QualifiedName(owner)}<{string.Join(", ", owner.TypeParameters.Select(Argument))}>.{member}";
+            }
+        }
+
+        var own = symbol.TypeParameters.Concat(OpaqueParametersOf(symbol)).ToList();
+        return own.Count == 0 ? name : $"{name}<{string.Join(", ", own.Select(Argument))}>";
+    }
 
     /// <summary>
     ///     The instance of a generic function for these type arguments: its
@@ -4134,6 +4162,17 @@ public sealed partial class SilGen {
                         var self = new BoundSelfAccess(initial.Syntax, selfType, true);
                         Statement(new BoundExpressionStatement(initial.Syntax, new BoundAssignment(initial.Syntax, new BoundFieldAccess(initial.Syntax, self, field), initial)));
                     }
+                }
+
+                // A subclass whose superclass is made with the implicit
+                // 'init()' need not call it: one that does not has it called
+                // for it, which gives the superclass's fields their values.
+                if (owner.BaseTypes.OfType<NamedTypeSymbol>().FirstOrDefault(static b => b.TypeKind == TypeKind.Class) is { } superclass
+                    && superclass.OriginalDefinition.GetMembers("init").OfType<FunctionSymbol>()
+                        .FirstOrDefault(i => i is { DeclaringSyntax.IsEmpty: true, Parameters.IsEmpty: true } && !generator._compilation.InheritedInitializers.ContainsKey(i)) is { } implicitInit
+                    && !Descendants(body).Any(static n => n is BoundCall { Function.FunctionKind: FunctionKind.Initializer, Receiver: BoundSuperAccess })) {
+                    var call = new BoundCall(body.Syntax, new BoundSuperAccess(body.Syntax, superclass), implicitInit, [], Core.Void) { Substitution = TypeSubstitution.For(superclass) };
+                    Statement(new BoundExpressionStatement(body.Syntax, call));
                 }
             }
 

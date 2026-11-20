@@ -145,3 +145,69 @@ public open class Node {
 }
 
 public class Branch: Node { }
+
+// Found by the compiler fuzzer (seed 1906060343): a subclass's
+// initialiser that never builds its superclass's part of the object, or
+// builds it on only some paths, left the superclass's fields unset.
+public open class Creature {
+    var name: String
+    init(name: String) { self.name = name }
+}
+
+public class Goblin: Creature {
+    var rage: Int
+    init(position: Int) {               //! S3143 never calls 'super.init'
+        (name: "goblin", health: 8, position: position)
+        self.rage = 0
+    }
+
+    init(angry: Bool) {                 //! S3143 not called on every path
+        self.rage = 1
+        if angry {
+            super.init(name: "angry goblin")
+        }
+    }
+
+    init(count: Int) {                  //! S3143 not called on every path
+        self.rage = 2
+        if count > 1 {
+            super.init(name: "goblins")
+        } else if count == 1 {
+            super.init(name: "goblin")
+        }
+    }
+
+    init(either: Bool) {
+        self.rage = 3
+        if either {
+            super.init(name: "left")
+        } else {
+            super.init(name: "right")
+        }
+    }
+
+    convenience init() {
+        self.init(either: true)
+    }
+}
+
+// A superclass made with the implicit 'init()' has it called for an
+// initialiser that does not call it; one it declares itself does not.
+public open class Defaults {
+    var label: String = "default"
+}
+
+public class OnDefaults: Defaults {
+    var count: Int
+    init(count: Int) { self.count = count }
+}
+
+public open class Declared {
+    var label: String
+    init() { self.label = "declared" }
+}
+
+public class OnDeclared: Declared {
+    var count: Int
+    init(count: Int) { self.count = count }     //! S3143 never calls 'super.init'
+}

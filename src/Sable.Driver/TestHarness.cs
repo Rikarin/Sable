@@ -135,7 +135,7 @@ public static class TestHarness {
             }
         }
 
-        var ir = debugDirectory is null ? LlvmEmitter.Emit(module) : LlvmEmitter.EmitWithDebugInfo(module, debugDirectory);
+        var ir = debugDirectory is null ? LlvmEmitter.Emit(module) : LlvmEmitter.EmitWithDebugInfo(module, debugDirectory, sources: Pipeline.EmbeddedSources(compilation.SyntaxTrees, program));
         return new(module, ir, []);
     }
 

@@ -125,16 +125,22 @@ public sealed class StructuredConcurrencyTests {
                 """)).Stdout
         );
 
+    /// <summary>
+    ///     The children finish last-spawned first, and the results come in
+    ///     that order. Whether the group's reader runs between two children
+    ///     finishing depends on how long it waits to be scheduled (on a loaded
+    ///     machine, interpreted, longer than the children's 20 ms apart), so
+    ///     only the reader prints.
+    /// </summary>
     [Fact]
     public void AGroupGivesItsChildrensResultsAsTheyFinish() =>
         Assert.Equal(
-            "child 3\ngot 30\nchild 2\ngot 20\nchild 1\ngot 10\n60\n",
+            "got 30\ngot 20\ngot 10\n60\n",
             AssertAgree(AsyncProgram("", """
                     let total = await withTaskGroup(of: Int.self) { group in
                         for n in 1...3 {
                             group.spawn {
                                 try? await Task.sleep(nanoseconds: (4 - n) * 20_000_000)
-                                print("child \(n)")
                                 return n * 10
                             }
                         }

@@ -197,6 +197,80 @@ public sealed class PassTests {
         Assert.Equal(33L, new SilInterpreter(module).Run("M.picked", false, 2L));
     }
 
+    /// <summary>
+    ///     An optional element unwrapped — a dictionary's entry — is read in
+    ///     place: the copy of its payload pairs with the element's release,
+    ///     sunk past what only looks at it, and the element itself is
+    ///     borrowed across the switch. A call between keeps the copy: the
+    ///     release does not move past what could see it.
+    /// </summary>
+    [Fact]
+    public void AnOptionalElementUnwrappedIsReadInPlace() {
+        var module = Lowered(
+            """
+            struct Entry {
+                var key: String
+                var value: Int
+            }
+            fn value(_ entries: Entry?[>..], _ i: Int) -> Int { return entries[i]!.value }
+            fn keyCount(_ entries: Entry?[>..], _ i: Int) -> Int { return entries[i]!.key.count }
+            fn touch() -> Int { return 1 }
+            fn keyAfterCall(_ entries: Entry?[>..], _ i: Int) -> Int {
+                let key = entries[i]!.key
+                let n = touch()
+                return key.count + n
+            }
+            fn make() -> Entry?[>..] { return [Entry { key: "ab", value: 1 }, none, Entry { key: "cde", value: 3 }] }
+            fn run() -> Int { return value(make(), 2) * 100 + keyCount(make(), 0) * 10 + keyAfterCall(make(), 2) }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Default);
+
+        foreach (var name in (string[])["M.value", "M.keyCount"]) {
+            var function = module.Find(name)!;
+            Assert.Empty(Instructions(function).OfType<CopyValueInst>());
+            Assert.Empty(Instructions(function).OfType<DestroyValueInst>());
+            Assert.DoesNotContain(Instructions(function).OfType<BuiltinInst>(), static b => b.Name == "array_get");
+        }
+
+        Assert.Single(Instructions(module.Find("M.keyAfterCall")!).OfType<CopyValueInst>());
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(324L, interpreter.Run("M.run"));
+    }
+
+    /// <summary>
+    ///     A dictionary updated through an inout parameter is read without a
+    ///     copy, though the read calls out: exclusivity keeps the callee from
+    ///     the parameter's storage. The key, held across the <c>??</c>, is
+    ///     borrowed to the update.
+    /// </summary>
+    [Fact]
+    public void ADictionaryUpdatedInPlaceIsNotCopied() {
+        var module = Lowered(
+            """
+            fn bump(_ counts: inout [String: Int], _ words: String[>..]) {
+                for word in words {
+                    counts[word] = (counts[word] ?? 0) + 1
+                }
+            }
+            fn run() -> Int {
+                var counts: [String: Int] = [:]
+                bump(&counts, ["a", "b", "a"])
+                return (counts["a"] ?? 0) * 10 + (counts["b"] ?? 0)
+            }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Default);
+
+        // What is left is the loop's own copy of the array it walks.
+        var bump = module.Find("M.bump")!;
+        Assert.DoesNotContain(Instructions(bump).OfType<LoadInst>(), static l => l.Kind == LoadKind.Copy);
+        Assert.Single(Instructions(bump).OfType<CopyValueInst>());
+        Assert.Equal(21L, new SilInterpreter(module).Run("M.run"));
+    }
+
     static List<SilInstruction> Instructions(SilFunction function) => [..function.Blocks.SelectMany(static b => b.Instructions)];
 
     static bool Calls(SilFunction function, string callee) =>

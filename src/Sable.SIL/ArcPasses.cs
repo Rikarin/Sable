@@ -159,7 +159,7 @@ public sealed class BorrowLoads : ISilPass {
             return null;
         }
 
-        var slot = SlotOf(load.Address);
+        var slot = ExclusiveOf(load.Address);
         var owner = Owner(load.Address);
         for (var k = index + 1; k < block.Instructions.Count - 1; k++) {
             if (MayWrite(block.Instructions[k], slot, owner)) {
@@ -224,13 +224,15 @@ public sealed class BorrowLoads : ISilPass {
     ///     The destroy of a load used in one later block, which every way on
     ///     from the load's block reaches through blocks that only branch —
     ///     the shape of an index or argument computed by <c>?:</c>,
-    ///     <c>&amp;&amp;</c> or <c>||</c> after the array is read,
-    ///     <c>values[c ? i : j]</c>. Uses in the load's own block come after
+    ///     <c>&amp;&amp;</c>, <c>||</c> or <c>??</c> after the array is read,
+    ///     <c>values[c ? i : j]</c>, or a dictionary's key held while the
+    ///     value it is stored with is worked out,
+    ///     <c>counts[word] = (counts[word] ?? 0) + 1</c>. Uses in the load's own block come after
     ///     it; in the later block, before the destroy. Nothing on the way may
     ///     write the storage.
     /// </summary>
     static DestroyValueInst? DestroyerAfterJoin(LoadInst load, SilBlock block, int index, Uses uses) {
-        if (block.Terminator is not (BranchInst or CondBranchInst)) {
+        if (block.Terminator is not (BranchInst or CondBranchInst or SwitchEnumInst)) {
             return null;
         }
 
@@ -274,7 +276,7 @@ public sealed class BorrowLoads : ISilPass {
             }
         }
 
-        var slot = SlotOf(load.Address);
+        var slot = ExclusiveOf(load.Address);
         var owner = Owner(load.Address);
         for (var k = index + 1; k < block.Instructions.Count - 1; k++) {
             if (MayWrite(block.Instructions[k], slot, owner)) {
@@ -297,7 +299,7 @@ public sealed class BorrowLoads : ISilPass {
                 continue;
             }
 
-            if (next == block || between.Count >= 32 || next.Terminator is not (BranchInst or CondBranchInst)) {
+            if (next == block || between.Count >= 32 || next.Terminator is not (BranchInst or CondBranchInst or SwitchEnumInst)) {
                 return null;
             }
 
@@ -351,7 +353,7 @@ public sealed class BorrowLoads : ISilPass {
             }
         }
 
-        var slot = SlotOf(load.Address);
+        var slot = ExclusiveOf(load.Address);
         var owner = Owner(load.Address);
         for (var k = index + 1; k < end; k++) {
             if (MayWrite(block.Instructions[k], slot, owner)) {
@@ -361,6 +363,21 @@ public sealed class BorrowLoads : ISilPass {
 
         return destroy;
     }
+
+    /// <summary>
+    ///     The storage an address is in when only what is given its address
+    ///     can write it: a stack slot, or an <c>inout</c> parameter, which
+    ///     exclusivity (docs/02 §2.3) keeps from any other access while the
+    ///     call lasts — a callee not handed it, or a deinit, cannot reach it.
+    /// </summary>
+    static SilValue? ExclusiveOf(SilValue address) =>
+        address switch {
+            AllocStackInst slot => slot,
+            SilArgument { Type: AddressType } parameter when parameter.Block == parameter.Block.Function.Entry => parameter,
+            StructElementAddrInst element => ExclusiveOf(element.Address),
+            TupleElementAddrInst element => ExclusiveOf(element.Address),
+            _ => null,
+        };
 
     static AllocStackInst? SlotOf(SilValue address) =>
         address switch {
@@ -395,11 +412,11 @@ public sealed class BorrowLoads : ISilPass {
         };
 
     /// <summary>True when an instruction might change what the storage holds, or free it.</summary>
-    static bool MayWrite(SilInstruction instruction, AllocStackInst? slot, SilValue? owner) {
+    static bool MayWrite(SilInstruction instruction, SilValue? slot, SilValue? owner) {
         if (slot is not null) {
-            // A stack slot is written only by something given its address.
+            // A stack slot, or an inout parameter, is written only by something given its address.
             foreach (var operand in instruction.Operands) {
-                if (operand.Type is AddressType && ReferenceEquals(SlotOf(operand), slot)
+                if (operand.Type is AddressType && ReferenceEquals(ExclusiveOf(operand), slot)
                     && instruction is not (LoadInst { Kind: not LoadKind.Take } or LoadBorrowInst or StructElementAddrInst or TupleElementAddrInst)) {
                     return true;
                 }
@@ -474,7 +491,7 @@ public sealed class ForwardCopies : ISilPass {
                     }
 
                     if (block.Instructions[i] is BuiltinInst { Name: "array_get" } read && !read.Type.IsTrivial) {
-                        if (TryBorrowedElement(block, i, read, uses)) {
+                        if (TryBorrowedElement(block, i, read, uses) || TryBorrowedElementAcrossSwitch(function, block, i, read, uses)) {
                             changed = true;
                             break;
                         }
@@ -527,12 +544,19 @@ public sealed class ForwardCopies : ISilPass {
         }
 
         // What the copy is of must stay alive to the destroy: neither it nor
-        // what it borrows from may be consumed, or a borrow of it ended.
+        // what it borrows from may be consumed, or a borrow of it ended —
+        // unless that end can wait for the copy's: see Sinkable.
         var source = copy.Value;
         var root = Root(source);
+        SilInstruction? sunk = null;
         for (var k = index + 1; k < end; k++) {
             var instruction = block.Instructions[k];
             if (root is not null && (Uses.Consumes(instruction, root) || instruction is EndBorrowInst { Borrowed: var ended } && ReferenceEquals(ended, root))) {
+                if (sunk is null && Sinkable(instruction, root, block, k, end)) {
+                    sunk = instruction;
+                    continue;
+                }
+
                 return false;
             }
         }
@@ -544,9 +568,53 @@ public sealed class ForwardCopies : ISilPass {
 
         Uses.Replace(function, copy, source);
         block.Instructions.Remove(copy);
-        block.Instructions.Remove(destroy);
+        if (sunk is not null) {
+            block.Instructions.Remove(sunk);
+            block.Instructions[block.Instructions.IndexOf(destroy)] = sunk;
+        } else {
+            block.Instructions.Remove(destroy);
+        }
+
         return true;
     }
+
+    /// <summary>
+    ///     True when the end of what a copy borrows from — its
+    ///     <c>destroy_value</c>, or the <c>end_borrow</c> of a load it was
+    ///     borrowed through — can move down to where the copy is destroyed,
+    ///     so that the copy is not needed: the release sunk to pair with the
+    ///     retain. Whatever the copy was of stayed alive to there through the
+    ///     copy; the rest of the value, freed later, is freed past nothing
+    ///     that could see it — every instruction between neither calls,
+    ///     writes, releases, nor publishes anything to another task (a
+    ///     <c>share</c> is a builtin with an effect).
+    /// </summary>
+    static bool Sinkable(SilInstruction end, SilValue root, SilBlock block, int at, int until) {
+        if (end is not (DestroyValueInst or EndBorrowInst) || !ReferenceEquals(end.Operands[0], root)) {
+            return false;
+        }
+
+        for (var k = at + 1; k < until; k++) {
+            if (!Inert(block.Instructions[k], root)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>An instruction with no effect anything else could observe, and that does not end <paramref name="root" />'s borrow.</summary>
+    internal static bool Inert(SilInstruction instruction, SilValue? root = null) =>
+        instruction switch {
+            IntegerLiteralInst or FloatLiteralInst or StringLiteralInst or FunctionRefInst => true,
+            StructExtractInst or TupleExtractInst or UpcastInst or UncheckedRefCastInst => true,
+            StructElementAddrInst or TupleElementAddrInst or RefElementAddrInst => true,
+            LoadInst { Kind: LoadKind.Trivial } or LoadBorrowInst or CopyValueInst => true,
+            EndBorrowInst ended => root is null || !ReferenceEquals(ended.Borrowed, root),
+            StructInst or TupleInst or EnumInst => instruction.Type.IsTrivial,
+            BuiltinInst builtin => Simplify.Pure(builtin.Name) || builtin.Name == "array_get_borrowed",
+            _ => false,
+        };
 
     /// <summary>
     ///     An element read out of an array only to be looked at, then
@@ -604,17 +672,7 @@ public sealed class ForwardCopies : ISilPass {
                 return false;
             }
 
-            // Anything that could change the array in place. An owned array is
-            // ours alone; one borrowed from a local slot changes only through
-            // the slot's address — reading it again, by a borrow, does not;
-            // one borrowed from a parameter, through anything that calls out
-            // or is given an address.
-            if (root is LoadBorrowInst { Address: AllocStackInst slot }) {
-                if (instruction is not LoadBorrowInst && instruction.Operands.Any(o => ReferenceEquals(o, slot))) {
-                    return false;
-                }
-            } else if ((root is null || root is LoadBorrowInst)
-                && (instruction is ApplyInst or TryApplyInst || instruction is BuiltinInst builtin && !SharedStorage.IsMarker(builtin.Name) && builtin.Operands.Any(static o => o.Type is AddressType))) {
+            if (MayChangeArray(instruction, root)) {
                 return false;
             }
         }
@@ -626,6 +684,148 @@ public sealed class ForwardCopies : ISilPass {
         }
 
         block.Instructions.Remove(destroy);
+        return true;
+    }
+
+    /// <summary>
+    ///     Anything that could change the array an element is read from in
+    ///     place. An owned array is ours alone; one borrowed from a local slot
+    ///     changes only through the slot's address — reading it again, by a
+    ///     borrow, does not; one borrowed from a parameter, through anything
+    ///     that calls out or is given an address.
+    /// </summary>
+    static bool MayChangeArray(SilInstruction instruction, SilValue? root) {
+        if (root is LoadBorrowInst { Address: AllocStackInst slot }) {
+            return instruction is not LoadBorrowInst && instruction.Operands.Any(o => ReferenceEquals(o, slot));
+        }
+
+        return (root is null || root is LoadBorrowInst)
+            && (instruction is ApplyInst or TryApplyInst || instruction is BuiltinInst builtin && !SharedStorage.IsMarker(builtin.Name) && builtin.Operands.Any(static o => o.Type is AddressType));
+    }
+
+    /// <summary>
+    ///     An element read out of an array to be switched on — an optional
+    ///     entry of a dictionary, unwrapped — and destroyed at the top of
+    ///     each case, its payload only looked at before: read in place, as
+    ///     <see cref="TryBorrowedElement" /> reads one used in its block. A
+    ///     case that only traps need not destroy it. A borrow of the array
+    ///     ended before the switch is ended in each case instead.
+    /// </summary>
+    static bool TryBorrowedElementAcrossSwitch(SilFunction function, SilBlock block, int index, BuiltinInst read, Uses uses) {
+        if (block.Terminator is not SwitchEnumInst switchEnum || !ReferenceEquals(switchEnum.Value, read)) {
+            return false;
+        }
+
+        var source = read.Operands[0];
+        var root = Root(source);
+        if (root is null && !IsParameterBorrow(source) || root is not null and not LoadBorrowInst) {
+            return false;
+        }
+
+        var cases = block.Successors.Distinct().ToList();
+        var destroys = new Dictionary<SilBlock, DestroyValueInst>();
+        foreach (var user in uses.Of(read)) {
+            if (user == switchEnum) {
+                continue;
+            }
+
+            if (user is DestroyValueInst destroy && cases.Contains(user.Block) && destroys.TryAdd(user.Block, destroy)) {
+                continue;
+            }
+
+            if (user.Block != block || user.IsTerminator || Uses.Consumes(user, read)) {
+                return false;
+            }
+        }
+
+        // Each case is entered from the switch alone, and destroys the
+        // element or only traps.
+        foreach (var target in cases) {
+            if (function.Blocks.Count(b => b.Successors.Contains(target)) != 1
+                || !destroys.ContainsKey(target) && target.Terminator is not UnreachableInst) {
+                return false;
+            }
+        }
+
+        // The borrow of the array may end in the block, after the read; it
+        // is carried into each case that destroys the element.
+        EndBorrowInst? early = null;
+        for (var k = index + 1; k < block.Instructions.Count - 1; k++) {
+            var instruction = block.Instructions[k];
+            if (root is not null && instruction is EndBorrowInst { Borrowed: var ended } && ReferenceEquals(ended, root) && early is null) {
+                early = (EndBorrowInst)instruction;
+                continue;
+            }
+
+            if (root is not null && Uses.Consumes(instruction, root) || MayChangeArray(instruction, root)) {
+                return false;
+            }
+        }
+
+        if (root is not null && early is null) {
+            return false;
+        }
+
+        foreach (var (target, destroy) in destroys) {
+            var end = target.Instructions.IndexOf(destroy);
+            for (var k = 0; k < end; k++) {
+                if (MayChangeArray(target.Instructions[k], root)) {
+                    return false;
+                }
+            }
+        }
+
+        // The element and all that is borrowed from it: used in the block
+        // after the read, or in a case before its destroy.
+        var borrowed = new List<SilValue> { read };
+        for (var n = 0; n < borrowed.Count; n++) {
+            foreach (var user in uses.Of(borrowed[n])) {
+                if (user is DestroyValueInst && ReferenceEquals(borrowed[n], read)) {
+                    continue;
+                }
+
+                if (user.Block == block) {
+                    if (block.Instructions.IndexOf(user) <= index) {
+                        return false;
+                    }
+                } else if (!destroys.TryGetValue(user.Block, out var end) || user.Block.Instructions.IndexOf(user) > user.Block.Instructions.IndexOf(end)) {
+                    return false;
+                }
+
+                switch (user) {
+                    case StructExtractInst or TupleExtractInst or UpcastInst or UncheckedRefCastInst or RefElementAddrInst when !user.Type.IsTrivial:
+                        borrowed.Add(user);
+                        break;
+
+                    case SwitchEnumInst when user == switchEnum:
+                        foreach (var target in cases) {
+                            if (target.Arguments is [{ IsGuaranteed: true } payload]) {
+                                borrowed.Add(payload);
+                            }
+                        }
+
+                        break;
+
+                    case { IsTerminator: true }:
+                        return false;
+                }
+            }
+        }
+
+        read.Rename("array_get_borrowed");
+        if (early is not null) {
+            block.Instructions.Remove(early);
+        }
+
+        foreach (var (target, destroy) in destroys) {
+            var at = target.Instructions.IndexOf(destroy);
+            if (early is not null) {
+                target.Instructions[at] = new EndBorrowInst(early.Borrowed) { Block = target, Location = early.Location };
+            } else {
+                target.Instructions.RemoveAt(at);
+            }
+        }
+
         return true;
     }
 
@@ -788,6 +988,7 @@ public sealed class ForwardCopies : ISilPass {
         value switch {
             _ when SilVerifier.OwnershipOf(value) == Ownership.Owned => value,
             LoadBorrowInst => value,
+            SilArgument { IsGuaranteed: true } payload when SwitchedFrom(payload) is { } switched => Root(switched),
             BuiltinInst { Name: "array_get_borrowed" } element => Root(element.Operands[0]),
             StructExtractInst extract => Root(extract.Value),
             TupleExtractInst extract => Root(extract.Value),
@@ -796,9 +997,36 @@ public sealed class ForwardCopies : ISilPass {
             _ => null,
         };
 
+    /// <summary>
+    ///     For a case's payload, borrowed: the value the one block that leads
+    ///     to it switched on.
+    /// </summary>
+    static SilValue? SwitchedFrom(SilArgument payload) {
+        var block = payload.Block;
+        if (block == block.Function.Entry || block.Arguments.Count != 1) {
+            return null;
+        }
+
+        SilValue? switched = null;
+        foreach (var predecessor in block.Function.Blocks) {
+            if (!predecessor.Successors.Contains(block)) {
+                continue;
+            }
+
+            if (switched is not null || predecessor.Terminator is not SwitchEnumInst switchEnum || switchEnum.Default == block) {
+                return null;
+            }
+
+            switched = switchEnum.Value;
+        }
+
+        return switched;
+    }
+
     /// <summary>True for a parameter, or something borrowed from one through fields and casts.</summary>
     static bool IsParameterBorrow(SilValue value) =>
         value switch {
+            SilArgument { IsGuaranteed: true } payload when SwitchedFrom(payload) is { } switched => IsParameterBorrow(switched),
             SilArgument argument => argument.Block == argument.Block.Function.Entry,
             BuiltinInst { Name: "array_get_borrowed" } element => IsParameterBorrow(element.Operands[0]),
             StructExtractInst extract => IsParameterBorrow(extract.Value),

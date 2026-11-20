@@ -220,7 +220,7 @@ static SpinLock side_lock;
 #define SIDE_TOMBSTONE ((SableWeakEntry *)1)
 
 static size_t side_slot(const SableObject *object) {
-    uintptr_t key = (uintptr_t)object;
+    uint64_t key = (uintptr_t)object;
     key ^= key >> 33;
     key *= 0xff51afd7ed558ccdULL;
     key ^= key >> 33;

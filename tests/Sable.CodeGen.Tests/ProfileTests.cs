@@ -302,14 +302,16 @@ public sealed class ProfileTests {
             Rpath = true,
             Recorded = new Dictionary<string, string> { ["lto"] = "thin", ["strip"] = "symbols", ["rpath"] = "true" },
         };
-        var warnings = profile.UnmetFor(NativeTarget.Of("x86_64-pc-windows-msvc")).ToList();
+        // Windows, but not this machine: on Windows itself the link is lld's, which takes bitcode.
+        var windows = NativeTarget.Host is { Platform: NativePlatform.Windows, Arch: "x86_64" } ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc";
+        var warnings = profile.UnmetFor(NativeTarget.Of(windows)).ToList();
         Assert.Equal(3, warnings.Count);
-        Assert.StartsWith("profile.release.lto: the link for x86_64-pc-windows-msvc cannot take LLVM bitcode", warnings[0], StringComparison.Ordinal);
+        Assert.StartsWith($"profile.release.lto: the link for {windows} cannot take LLVM bitcode", warnings[0], StringComparison.Ordinal);
         Assert.StartsWith("profile.release.strip: has no effect", warnings[1], StringComparison.Ordinal);
         Assert.StartsWith("profile.release.rpath: has no effect", warnings[2], StringComparison.Ordinal);
 
         // A default left alone is not warned about, and Linux strips and finds libraries by rpath.
-        Assert.Empty(Profile.Release.UnmetFor(NativeTarget.Of("x86_64-pc-windows-msvc")));
+        Assert.Empty(Profile.Release.UnmetFor(NativeTarget.Of(windows)));
         Assert.Empty(profile.UnmetFor(NativeTarget.Of("x86_64-unknown-linux-gnu")));
     }
 

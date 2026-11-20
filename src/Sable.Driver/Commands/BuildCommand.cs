@@ -41,7 +41,8 @@ public class BuildCommand : Command {
                              kept in a debug or -O0 build, dropped in an optimised one
           --target <triple>  build for another machine: aarch64-unknown-linux-gnu, x86_64-apple-darwin,
                              x86_64-pc-windows-msvc, wasm32-wasi, ... (default: this one)
-          --sysroot <dir>    where the target's C library is, for clang's link
+          --sysroot <dir>    where the target's C library is (default: $SABLE_HOME/sysroots/<triple>,
+                             or for WASI, wasi-sdk's or wasi-libc's where they are installed)
           --deny-reflection  carry no reflection: Mirror and TypeInfo are errors (S3450), and the
                              runtime's field descriptors have no names
           --deny-unsafe      fail on any 'unsafe' block or 'unsafe fn' in the file (S3472)
@@ -239,8 +240,7 @@ public class BuildCommand : Command {
             ? NativeBuild.BuildLibrary(result.LlvmIr!, executable, library, options.Native)
             : NativeBuild.Build(result.LlvmIr!, executable, options.Native);
         if (!build.Succeeded) {
-            Console.Error.WriteLine("internal error: the native build failed:");
-            Console.Error.Write(build.Output);
+            Console.Error.WriteLine((build.Setup ? "sable: " : "") + build.Report.TrimEnd());
             return 1;
         }
 

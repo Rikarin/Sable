@@ -38,7 +38,7 @@ typedef struct {
     size_t capacity;
 } Buffer;
 
-static void buffer_add(Buffer *buffer, const char *bytes, size_t length) {
+static inline void buffer_add(Buffer *buffer, const char *bytes, size_t length) {
     if (buffer->length + length > buffer->capacity) {
         size_t capacity = buffer->capacity == 0 ? 4096 : buffer->capacity;
         while (capacity < buffer->length + length) {

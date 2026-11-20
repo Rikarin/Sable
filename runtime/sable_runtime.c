@@ -19,6 +19,8 @@
 
 #ifdef _WIN32
 #include "platform_win32.c"
+#elif defined(__wasi__)
+#include "platform_wasi.c"
 #else
 #include "platform_posix.c"
 #endif

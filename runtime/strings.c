@@ -850,6 +850,30 @@ SableString *sable_string_from_f32(float value) {
     return make_cstring(text);
 }
 
+// A finite float rounded to the nearest half (ties to even) and widened
+// back: what '(float)(_Float16)value' is, done by hand, since not every
+// target has _Float16 in C (WebAssembly has not).
+static float round_to_half(float value) {
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof bits);
+    uint32_t sign = bits & 0x80000000u;
+    float magnitude = fabsf(value);
+    float rounded;
+    if (magnitude >= 65520.0f) {
+        // Past the largest half and the halfway point beyond it.
+        rounded = INFINITY;
+    } else if (magnitude < 0x1p-14f) {
+        // A subnormal half: a multiple of 2^-24, which the scaling keeps exact.
+        rounded = rintf(magnitude * 0x1p24f) * 0x1p-24f;
+    } else {
+        // A normal one keeps ten of the float's 23 fraction bits.
+        uint32_t kept = ((bits & 0x7fffffffu) + 0x0fffu + ((bits >> 13) & 1u)) & ~0x1fffu;
+        memcpy(&rounded, &kept, sizeof rounded);
+    }
+
+    return sign != 0 ? -rounded : rounded;
+}
+
 // F16 the same way, against a half: 0.1, not 0.0999755859375. It comes as
 // the float it widens to exactly; the digits are the fewest that round back
 // to it as a half, and five always do.
@@ -861,7 +885,7 @@ static void format_f16(float value, char *text, size_t size) {
     char scientific[40];
     for (int precision = 1; precision <= 5; precision++) {
         snprintf(scientific, sizeof scientific, "%.*e", precision - 1, (double)value);
-        if (precision == 5 || (float)(_Float16)strtof(scientific, NULL) == value) {
+        if (precision == 5 || round_to_half(strtof(scientific, NULL)) == value) {
             break;
         }
     }

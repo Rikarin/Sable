@@ -372,8 +372,9 @@ static SableBlock *splice_links(SableBlock **slot, int64_t at, int64_t removed, 
     return block;
 }
 
-// One splice, its links read from the block as it is.
-static SableBlock *splice(SableBlock **slot, const SableInlineLayout *layout, int64_t at, int64_t removed, const uint8_t *inserted, int64_t count) {
+// One splice, its links read from the block as it is. (Not "splice", which
+// glibc declares for GNU sources.)
+static SableBlock *splice_block(SableBlock **slot, const SableInlineLayout *layout, int64_t at, int64_t removed, const uint8_t *inserted, int64_t count) {
     InlineLinks links = collect_links(unique_block(slot, count > removed ? count - removed : 0), layout);
     SableBlock *block = splice_links(slot, at, removed, inserted, count, &links);
     free(links.links);
@@ -473,7 +474,7 @@ void sable_inline_assign_bytes(SableBlock **slot, const SableInlineLayout *root,
     }
 
     memcpy(encoded + width, bytes, (size_t)count);
-    splice(slot, root, at, old_size, encoded, width + count);
+    splice_block(slot, root, at, old_size, encoded, width + count);
     if (encoded != small) {
         free(encoded);
     }
@@ -499,7 +500,7 @@ void sable_inline_assign(SableBlock **slot, const SableInlineLayout *root, const
 
     // A value from another block may hold references of its own.
     block->header.flags |= SABLE_LINKED;
-    splice(slot, root, at, old_size, value, size);
+    splice_block(slot, root, at, old_size, value, size);
     free(copy);
 }
 

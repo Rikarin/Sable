@@ -1,7 +1,8 @@
 // The Sable runtime's platform layer: what the rest of the runtime asks of
 // the operating system. platform_posix.c gives it for macOS and Linux,
-// platform_win32.c for Windows; sable_runtime.c includes the one for the
-// system it is compiled for, before the parts that use it.
+// platform_win32.c for Windows, platform_wasi.c for WebAssembly under WASI;
+// sable_runtime.c includes the one for the system it is compiled for,
+// before the parts that use it.
 //
 // Every name and string crosses as UTF-8, NUL-terminated; a string the
 // layer gives back is in memory the caller frees, and NULL where there is
@@ -17,8 +18,20 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#else
+#elif !defined(__wasi__)
 #include <pthread.h>
+#endif
+
+// Whether the system runs more than one thread. WASI's does not: the
+// executor has no pool (as with SABLE_WORKERS=0), and the blocking pool's
+// work runs where it is asked for. (-DPLATFORM_THREADS=0 makes any
+// system's runtime so, which is how that path is tried off WASI.)
+#ifndef PLATFORM_THREADS
+#ifdef __wasi__
+#define PLATFORM_THREADS 0
+#else
+#define PLATFORM_THREADS 1
+#endif
 #endif
 
 // ---- Start-up --------------------------------------------------------------
@@ -70,10 +83,14 @@ void sable_time_sleep(int64_t nanoseconds);
 // The executor's pool (tasks.c) is a few threads, one per core, that wait
 // for work on a condition. A mutex and a condition are the system's own:
 // pthread's here, a slim reader/writer lock and a condition variable on
-// Windows. Each is set up once, by its init, before any thread uses it.
+// Windows, and on WASI, with its one thread, a flag each. Each is set up
+// once, by its init, before any thread uses it.
 #ifdef _WIN32
 typedef SRWLOCK PlatformMutex;
 typedef CONDITION_VARIABLE PlatformCondition;
+#elif defined(__wasi__)
+typedef struct { int held; } PlatformMutex;
+typedef struct { int signalled; } PlatformCondition;
 #else
 typedef pthread_mutex_t PlatformMutex;
 typedef pthread_cond_t PlatformCondition;
@@ -104,9 +121,10 @@ static void thread_yield(void);
 // Where the executor's parked thread waits (tasks.c): for a socket to be
 // ready, for a timer, or to be woken. kqueue on macOS and the BSDs, epoll
 // on Linux, an I/O completion port on Windows, told of sockets' readiness
-// by ProcessSocketNotifications — the same shape on every system: a
-// socket is added once, with a key, and is reported, edge-triggered, as
-// it becomes readable or writable, until it is removed.
+// by ProcessSocketNotifications, and none on WASI, where reactor_open
+// fails — the same shape on every system: a socket is added once, with a
+// key, and is reported, edge-triggered, as it becomes readable or
+// writable, until it is removed.
 //
 // A socket is a file descriptor, or Windows' SOCKET.
 typedef intptr_t PlatformSocket;

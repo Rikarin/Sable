@@ -1,4 +1,5 @@
-# Builds and tests the compiler on Linux, macOS and Windows, checks the library is
+# Builds and tests the compiler on Linux (x64 and arm64), macOS and Windows,
+# runs programs built for WebAssembly under WASI, checks the library is
 # formatted, and checks the VS Code extension — on every push to the main
 # branches and every pull request.
 name: CI
@@ -30,9 +31,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 110
+    env:
+      # Linux arm64 leaves the fuzz tests to the nightly job, which runs them
+      # on x64: what they find is the compiler's, not the machine's. Its
+      # runners are no faster, and the job must end inside the limit.
+      TEST_FILTER: ${{ matrix.os == 'ubuntu-24.04-arm' && 'Category!=Fuzz&Category!=Timing' || 'Category!=Timing' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -62,11 +68,12 @@ jobs:
         run: dotnet build Sable.slnx -c Release
 
       - name: Test
-        run: dotnet test Sable.slnx -c Release --no-build --logger "console;verbosity=minimal" --filter "Category!=Timing"
+        run: dotnet test Sable.slnx -c Release --no-build --logger "console;verbosity=minimal" --filter "$TEST_FILTER"
 
       # The tests that measure time, alone: with the rest of the suite running
       # beside them a shared runner's two or three cores are not theirs.
       - name: Timing tests
+        if: matrix.os != 'ubuntu-24.04-arm'
         run: dotnet test Sable.slnx -c Release --no-build --logger "console;verbosity=normal" --filter "Category=Timing"
 
       - name: Library and examples are formatted
@@ -74,23 +81,75 @@ jobs:
 
       # The library's own tests (tests/lib/<Module>/), with coverage counted
       # in lib/<Module>/: each file must meet its threshold in
-      # tools/stdlib-coverage.thresholds. Once, on Linux: the library's code
-      # is the same everywhere.
+      # tools/stdlib-coverage.thresholds. Once, on Linux x64: the library's
+      # code is the same everywhere.
       - name: Standard library coverage
-        if: runner.os == 'Linux'
+        if: matrix.os == 'ubuntu-24.04'
         env:
           SABLE: src/Sable.Driver/bin/Release/net11.0/sable
         run: tools/stdlib-coverage.sh
 
       # The ```sable examples of the library's doc comments, each module's
-      # run as its tests (sable test --doc). Once, on Linux, as above.
+      # run as its tests (sable test --doc). Once, on Linux x64, as above.
       - name: Standard library doc examples
-        if: runner.os == 'Linux'
+        if: matrix.os == 'ubuntu-24.04'
         run: |
           for module in lib/*/; do
             echo "== $module"
             src/Sable.Driver/bin/Release/net11.0/sable test --doc "$module"
           done
+
+  # Programs built for wasm32-wasi (runtime/platform_wasi.c) and run under
+  # wasmtime. The C compiler is wasi-sdk's clang, which has wasm-ld,
+  # compiler-rt's WebAssembly builtins and wasi-libc's sysroot together;
+  # the compiler finds the sysroot in /opt/wasi-sdk by itself.
+  wasi:
+    name: WASI (wasm32-wasi under wasmtime)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      WASI_SDK_VERSION: "25"
+      CC: /opt/wasi-sdk/bin/clang
+      # WasiTests fail, rather than pass vacuously, without wasmtime or a sysroot.
+      SABLE_WASI_TESTS: required
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "11.0.x"
+
+      - name: Install wasi-sdk
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/wasi-sdk.tar.gz" \
+            "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz"
+          sudo mkdir -p /opt/wasi-sdk
+          sudo tar -xzf "$RUNNER_TEMP/wasi-sdk.tar.gz" -C /opt/wasi-sdk --strip-components=1
+          "$CC" --version
+
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+
+      - name: Show wasmtime
+        run: wasmtime --version
+
+      - name: Runtime compiles for WASI
+        run: |
+          "$CC" --target=wasm32-wasi --sysroot=/opt/wasi-sdk/share/wasi-sysroot \
+            -c -O2 -Wall -Wextra runtime/sable_runtime.c -o "$RUNNER_TEMP/sable_runtime.o"
+
+      - name: Build
+        run: dotnet build tests/Sable.CodeGen.Tests -c Release
+
+      - name: WASI tests
+        run: >-
+          dotnet test tests/Sable.CodeGen.Tests -c Release --no-build
+          --logger "console;verbosity=normal"
+          --filter "Category!=Fuzz&Category!=Timing&FullyQualifiedName~WasiTests"
+
+      - name: Hello, world under wasmtime
+        run: |
+          src/Sable.Driver/bin/Release/net11.0/sable build examples/01-hello.sb --target wasm32-wasi -o "$RUNNER_TEMP/hello.wasm"
+          wasmtime run "$RUNNER_TEMP/hello.wasm"
 
   vscode:
     name: VS Code extension

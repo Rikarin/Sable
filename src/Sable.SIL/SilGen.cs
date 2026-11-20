@@ -6294,6 +6294,18 @@ public sealed partial class SilGen {
                         flatten: chained.FlattensChain
                     );
 
+                // 'pair?.0': the element, reached through the optional.
+                case BoundTupleElementAccess { Receiver: { } chainedFrom } chainedElement
+                    when Sub(chainedFrom.Type) is OptionalTypeSymbol { UnderlyingType: TupleTypeSymbol chainedTuple }: {
+                    var elementType = chainedTuple.ElementTypes[chainedElement.Index];
+                    return OptionalChain(
+                        chainedElement,
+                        chainedFrom,
+                        through => new BoundTupleElementAccess(chainedElement.Syntax, elementType, through, chainedElement.Index),
+                        flatten: Sub(elementType) is OptionalTypeSymbol
+                    );
+                }
+
                 case BoundConversion { ConversionKind: ConversionKind.OptionalWrap, Operand: BoundCall { Receiver: { } chainedFrom } chainedCall }
                     when IsChainedThrough(chainedFrom, chainedCall.Function):
                     return OptionalChain(

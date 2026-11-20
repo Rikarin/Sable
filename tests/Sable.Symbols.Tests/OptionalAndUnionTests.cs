@@ -268,6 +268,20 @@ public sealed class OptionalAndUnionTests {
         );
 
     [Fact]
+    public void ATupleElementReachedThroughAnOptionalIsOptional() =>
+        AssertClean(
+            """
+            fn first(_ pair: (String, Int)?) -> String {
+                let count: Int? = pair?.1
+                return pair?.0 ?? "none"
+            }
+            fn inner(_ pair: (Int?, Int)?) -> Int? {
+                return pair?.0
+            }
+            """
+        );
+
+    [Fact]
     public void AStoreThroughAChainTakesTheFieldsType() {
         var error = Assert.Single(
             ErrorsIn(

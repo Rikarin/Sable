@@ -3655,7 +3655,7 @@ public sealed partial class Binder {
             BoundLocalAccess or BoundParameterAccess or BoundSelfAccess => true,
             BoundFieldAccess { Field.IsComputed: false, Field.IsStatic: false, Receiver: { } receiver } =>
                 receiver.Type.TypeKind == TypeKind.Struct && IsPlace(receiver),
-            BoundTupleElementAccess element => IsPlace(element.Receiver),
+            BoundTupleElementAccess element => element.Receiver.Type is not OptionalTypeSymbol && IsPlace(element.Receiver),
             BoundConversion { ConversionKind: ConversionKind.Dereference } => true,
             BoundConversion { ConversionKind: ConversionKind.Identity } conversion => IsPlace(conversion.Operand),
             _ => false,
@@ -3807,7 +3807,13 @@ public sealed partial class Binder {
         }
 
         if (receiverType is TupleTypeSymbol tuple) {
-            return BindTupleElementAccess(syntax, receiver, tuple, name);
+            var element = BindTupleElementAccess(syntax, receiver, tuple, name);
+
+            // 'pair?.0' is optional, as any member reached through '?.' is;
+            // an element optional already is given as it is.
+            return optionalChain && element is BoundTupleElementAccess { Type: not OptionalTypeSymbol } chained
+                ? new BoundTupleElementAccess(syntax, new OptionalTypeSymbol(chained.Type), receiver, chained.Index)
+                : element;
         }
 
         _unmetRequirement = null;

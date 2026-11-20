@@ -66,11 +66,14 @@ public sealed class PassTests {
             .Select(static a => (a.Callee as FunctionRefInst)?.Function).ToList();
         Assert.Contains("M.one", called);
         Assert.DoesNotContain("M.sum", called);
-        Assert.Equal(11L, new SilInterpreter(module).Run("M.probe", 5L));
 
+        // Printed before it runs: the interpreter splits the module's async
+        // functions (Sable.Core's among them), and split SIL has no text yet.
         var text = SilPrinter.Print(module);
         Assert.Contains("sil @M.one : $() -> Int inline(never)", text, StringComparison.Ordinal);
         Assert.Equal(SilInline.Never, SilParser.Parse(text).Find("M.one")!.Inline);
+
+        Assert.Equal(11L, new SilInterpreter(module).Run("M.probe", 5L));
     }
 
     [Fact]

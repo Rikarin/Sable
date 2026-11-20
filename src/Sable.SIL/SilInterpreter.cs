@@ -879,7 +879,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         var address = (IReference)Get(load.Address)!;
 
                         // Empty storage for an array is the empty array.
-                        var loaded = load.Type is ArrayType || address is Field { Instance.Type.IsCoroutineFrame: true } ? address.Peek() : address.Get();
+                        // A struct with no fields is whole before anything is stored: an initialiser's self.
+                        var loaded = load.Type is StructType { Fields.Count: 0 }
+                            ? address.Peek() ?? Array.Empty<object?>()
+                            : load.Type is ArrayType || address is Field { Instance.Type.IsCoroutineFrame: true } ? address.Peek() : address.Get();
                         switch (load.Kind) {
                             case LoadKind.Copy:
                                 Retain(load.Type, loaded);
@@ -960,7 +963,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     // Borrowed: no count changes; the storage keeps it alive.
                     case LoadBorrowInst borrow: {
                         var address = (IReference)Get(borrow.Address)!;
-                        values[borrow] = borrow.Type is ArrayType ? address.Peek() : address.Get();
+                        values[borrow] = borrow.Type is StructType { Fields.Count: 0 } ? address.Peek() ?? Array.Empty<object?>() : borrow.Type is ArrayType ? address.Peek() : address.Get();
                         break;
                     }
 
@@ -1863,7 +1866,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         }
 
         if (builtin.Name.StartsWith("task_", StringComparison.Ordinal) || builtin.Name.StartsWith("async_", StringComparison.Ordinal)) {
-            return Task(builtin.Name, operands);
+            return Task(builtin.Name, operands, depth);
         }
 
         if (builtin.Name.StartsWith("class_is:", StringComparison.Ordinal)) {

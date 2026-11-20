@@ -525,6 +525,24 @@ public sealed class IncrementalTests {
     }
 
     /// <summary>
+    ///     A raw string opens with any number of <c>#</c>s, so text typed after
+    ///     a run of them can turn the whole run into one token. Lexing again
+    ///     from two tokens before the edit, as for any other edit, left the
+    ///     run's first <c>#</c>s standing alone. Found by the coverage-guided
+    ///     parser fuzzer (crash-87b0b5ea4e1987617584a032e1607d71c3fd0ca8),
+    ///     minimised.
+    /// </summary>
+    [Theory]
+    [InlineData("######", 4, 2, "################\"#####.0}")]
+    [InlineData("module Sable.Mat\"s\"r and flo\uFFFD\uFFFD################", 35, 11, "################\"#####.0}\n")]
+    [InlineData("module M\nlet a = 1\n##########\n", 26, 0, "\"x\"##########")]
+    public void TypingARawStringsQuoteAfterARunOfHashesRelexesTheRun(string source, int start, int length, string replacement) {
+        var tree = SyntaxTree.Parse(source);
+        var change = new TextChange(new TextSpan(start, length), replacement);
+        AssertSameAsFullParse(tree, change);
+    }
+
+    /// <summary>
     ///     The nesting limit is reported once per file, so whether a member
     ///     too deep says so depends on every member before it. One that reached
     ///     the limit is never reused.

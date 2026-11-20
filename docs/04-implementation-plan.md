@@ -967,12 +967,12 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   loggers, optional UTC timestamps, and quotes values where they would be
   misread. Not yet: tracing spans and metrics.
 - `Sable.Concurrency`, written in Sable over the core's `Task`: `Channel`
-  (unbounded, closable, `receive` awaits), `TaskGroup` (results in the order
-  the tasks were added), and a `sleep` that yields so that other tasks run
-  meanwhile. Tasks switch only where they await, so none of it needs a lock.
-  `TaskGroup.cancelAll()` cancels its tasks. Not yet: bounded channels, `Mutex` and `Atomic` (useless
-  until tasks run in parallel), and deadlock detection: a task waiting on
-  nothing yields for ever.
+  (unbounded, closable, `receive` awaits) and a `sleep` that lets other
+  tasks run meanwhile. Task groups are the core's (`withTaskGroup`; see
+  "Async, as implemented"). Tasks switch only where they await, so none of
+  it needs a lock. Not yet: bounded channels, `Mutex` and `Atomic` (useless
+  until tasks run in parallel), and a receiver that waits rather than
+  yielding until a value comes.
 
 What it took from the compiler: `forward-copies` no longer folds a copy into
 its source when the copy is consumed while the source is still in use (a
@@ -1284,22 +1284,61 @@ with its slab's first chunk 640 bytes, its `Task` object and its closure the
 rest — 93 MB at the peak (`AHundredThousandSleepingTasksTakeASecondInBoundedMemory`).
 `Clock.sleep` and `Sable.Concurrency`'s `sleep` are timers; only
 `Runtime.sleep` holds the thread. `SABLE_STATS` says how many tasks ran, how many
-were alive at once, how many frames and chunks the slabs made, and the
-peak memory. `task.cancel()` is cooperative: the task
-sees `Task.isCancelled()`, and a sleep it is in, or starts, ends at once.
-`Task.spawn { … }` queues a task (a class holding the runtime's handle, the
-body and the result), `await task.value` waits for it, and the program ends
-once every task has. Actors lower as classes: with one task running at a
-time a call into one runs alone, and the binder makes a call from outside
-it `await`. `async let` binds; reading it needs `await`. A class or actor
-whose fields all have initial values is made with `init()`.
+were alive at once and were dropped, how many frames and chunks the slabs
+made, and the peak memory. `Task.spawn { … }` queues a task (a class
+holding the runtime's handle, the body and the result), `await task.value`
+waits for it, and the program ends once every task has finished or can no
+longer go on. Actors lower as classes: with one task running at a time a
+call into one runs alone, and the binder makes a call from outside it
+`await`. A class or actor whose fields all have initial values is made with
+`init()`.
 
-Not yet, all later stages of #276: `async let` runs its child to completion
-at the declaration rather than alongside; task groups as scopes and
-cancellation that propagates; actors' own executors; a pool of one thread
-per core with work stealing, and with it atomic counts where values cross
-tasks; an I/O reactor; priorities; async backtraces. A frame of a task
-dropped while it waits is not destroyed, since no task is dropped yet.
+**Structured concurrency** — the second stage, still on the one executor
+(`tests/Sable.CodeGen.Tests/StructuredConcurrencyTests.cs`,
+`tests/lib/Sable.Core/TaskTests.sb` and `TaskGroupTests.sb`). A task spawned
+from another is its child: it takes its parent's priority unless given one
+(`Task.spawn(priority:)`; `Task.currentPriority`), starts cancelled if its
+parent is, is cancelled with it, and its parent, once its own body has
+finished, finishes only when every child has. `Task.detached` is the one
+way out: no parent, medium priority. Cancelling marks the task, runs the
+handlers it has installed (`withTaskCancellationHandler`, which runs one
+at once in a task cancelled already) where the cancelling is done, wakes a
+sleep it is in, and goes on down through its children; the task goes on
+until it asks — `Task.isCancelled`, or `Task.checkCancellation()`, which
+throws `CancellationError`, as `Task.sleep`, `Clock.sleep` and `sleep` do
+when the sleep was cut short. Waiting for a task or a group's next child
+does not end early: the children are cancelled with the waiter, and finish
+as soon as they notice.
+
+`async let x = value` spawns the value as a child task where it is
+declared: the binder binds the value as the body of an async closure,
+which may await and throw without saying so, and a read of `x` waits for
+it and gives its result, or throws what it threw (so needs `try` as well
+as `await`). As its scope ends, on every way out, the child is cancelled —
+nothing, once it has finished — and waited for. Task groups are Sable.Core's
+`TaskGroup` and `ThrowingTaskGroup`, made only by `withTaskGroup(of:)` and
+`withThrowingTaskGroup(of:)`: `spawn` adds a child, `next()` and `for
+await` give results in the order the children finish (the runtime's group
+hears of each as it finishes, and wakes the task waiting), and the scope
+waits for every child not taken — cancelling them first if a throwing
+body threw — so none outlives it.
+
+A task that can never go on — still waiting as the program ends, on
+something no task will give — is dropped. Every frame has a drop function
+as well as a resume function: for the state it stopped in, it drops and
+frees the callee frame it waits in, then destroys the owned values live
+there (the verifier's ownership walk finds them) and every slot, which
+holds a value or nothing. The runtime drops each such task from its root,
+so what the frames held is given back — an async generator held part-way
+through runs its defers — and a program that ends with tasks stuck on each
+other leaks nothing.
+
+Not yet, all later stages of #276: actors' own executors; a pool of one
+thread per core with work stealing, and with it atomic counts where values
+cross tasks; priorities that order the run queue, and escalation; an I/O
+reactor; async backtraces; task-local values. The run queue is FIFO
+whatever a task's priority. A drop runs no defers of the async functions
+dropped, only those of a generator whose object goes with them.
 
 ### Generators, as implemented
 

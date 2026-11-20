@@ -221,6 +221,7 @@ public enum ErrorCode {
     ERR_GeneratorReported = 3232,
     WRN_GeneratorReported = 3233,
     ERR_GeneratedFileInvalid = 3234,
+    ERR_AsyncLetCaptured = 3235,
 
     // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
     // 'sable check' runs, never by compiling. Their severity is configured.

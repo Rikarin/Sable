@@ -2,9 +2,10 @@ module Sable.Concurrency
 
 import Sable.Time
 
-/// Waits at least this long, letting every other task run meanwhile.
-public fn sleep(_ duration: Duration) async {
-    await Task.sleep(nanoseconds: duration.totalNanoseconds)
+/// Waits at least this long, letting every other task run meanwhile; a
+/// task cancelled before or while it sleeps wakes at once, and throws.
+public fn sleep(_ duration: Duration) async throws(CancellationError) {
+    try await Task.sleep(nanoseconds: duration.totalNanoseconds)
 }
 
 /// Lets every task queued run before this one goes on.

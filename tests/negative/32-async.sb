@@ -42,3 +42,9 @@ async fn anAsyncClosureParameterCarriesIt(_ url: String) -> Response {
 fn run(_ body: async () -> Response) -> Response {
     return body()                       //! S3035 is async
 }
+
+async fn asyncLetReadFromAClosure(_ url: String) -> Response {
+    async let response = fetch(url)
+    let later = Task.spawn { await response }  //! S3235 read only where it is declared
+    return await later.value
+}

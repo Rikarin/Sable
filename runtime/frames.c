@@ -19,7 +19,7 @@
 enum {
     // What a task holds inside itself, enough for the frames of most tasks:
     // the root, a call or two beneath it.
-    FRAME_FIRST_CHUNK = 512,
+    FRAME_FIRST_CHUNK = 576,
     // Each chunk after the first, at least.
     FRAME_CHUNK = 16 * 1024,
     FRAME_ALIGN = 16,

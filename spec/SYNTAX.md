@@ -1352,13 +1352,23 @@ async fn fetch(_ url: Url) throws(HttpError) -> Response { }
 async fn main() throws {
     let r = await fetch(url)
 
-    async let a = fetch(url1)         // starts immediately
+    async let a = fetch(url1)         // starts immediately, alongside
     async let b = fetch(url2)
-    let both = await (a, b)           // structured, both awaited here
+    let both = try await (a, b)       // structured, both awaited here
 
-    await withTaskGroup(of: Response.self) { group in
-        for u in urls { group.spawn { await fetch(u) } }
-        for await r in group { handle(r) }
+    await withTaskGroup(of: Response?.self) { group in
+        for u in urls { group.spawn { try? await fetch(u) } }
+        for await r in group { handle(r) }   // in the order they finish
+    }
+
+    let worker = Task.spawn { await work() }    // a child of this task
+    worker.cancel()                             // and of its children
+    let free = Task.detached { await poll() }   // no parent: the one way out
+}
+
+async fn work() {
+    while !Task.isCancelled {
+        try? await Task.sleep(nanoseconds: 1_000_000)  // throws CancellationError once cancelled
     }
 }
 
@@ -1373,9 +1383,26 @@ await c.increment()
 ```
 
 `async let` is a statement, not an expression: it starts a child task bound to
-the enclosing scope.
+the enclosing scope. Its value is the child's work, which may await and throw
+without saying so; reading the name awaits it, and tries when it may throw.
+A child never read, or left behind by a `return` or a throw, is cancelled and
+awaited as the scope ends.
 
-- Structured concurrency: child tasks cannot outlive their parent scope.
+- Structured concurrency: child tasks cannot outlive their parent scope. A
+  task spawned from another (`Task.spawn`, an `async let`, a group's
+  `spawn`) is its child: it takes its priority (`Task.currentPriority`;
+  `Task.spawn(priority:)` gives another), is cancelled with it, and its
+  parent finishes only once it has. `Task.detached` has no parent.
+- `withTaskGroup(of:)` and `withThrowingTaskGroup(of:)` run a body with a
+  group: `spawn` adds a child, `next()` and `for await` (`for try await`)
+  give results in the order the children finish, `cancelAll()` cancels them,
+  and the children the body leaves are awaited as it returns — cancelled
+  first when a throwing body throws.
+- Cancellation is cooperative: `task.cancel()` marks the task and its
+  children; a task asks `Task.isCancelled` or `try Task.checkCancellation()`,
+  a sleep it is in ends at once and throws `CancellationError`, and
+  `withTaskCancellationHandler(operation:onCancel:)` runs a handler as the
+  task is cancelled.
 - `Sendable` is a protocol; crossing an isolation boundary requires it, checked
   at compile time.
 - `@MainActor` pins a declaration to the main executor.

@@ -1,4 +1,5 @@
 using Sable.Symbols;
+using Sable.Syntax;
 
 namespace Sable.SIL;
 
@@ -12,15 +13,28 @@ namespace Sable.SIL;
 ///     and the calls suspension points, after the passes.
 /// </summary>
 public sealed partial class SilGen {
-    const int TaskHandle = 0, TaskResult = 1, TaskBody = 2;
+    const int TaskHandle = 0, TaskResult = 1, TaskBody = 2, TaskError = 3;
 
-    /// <summary>The class a <c>Task&lt;T&gt;</c> is, and the thunk that runs one.</summary>
-    internal ClassType? TaskClass(TypeSymbol success) {
+    /// <summary>
+    ///     The class a <c>Task&lt;T&gt;</c> is, and the thunk that runs one.
+    ///     An 'async let' whose child may throw is a task of a class of its
+    ///     own, which keeps the error the body threw, if it threw one,
+    ///     where its result would have been.
+    /// </summary>
+    internal ClassType? TaskClass(TypeSymbol success, TypeSymbol? failure = null) {
         if (Lower(success) is not { } result || Lower(new OptionalTypeSymbol(success)) is not EnumType optional) {
             return null;
         }
 
-        var name = $"Task$of${Sanitise(result.ToString())}";
+        SilType? thrown = null;
+        EnumType? optionalError = null;
+        if (failure is not null && (!failure.Equals(Core.Never))
+            && ((thrown = Lower(failure)) is null || (optionalError = Lower(new OptionalTypeSymbol(failure)) as EnumType) is null)) {
+            return null;
+        }
+
+        var suffix = Sanitise(result.ToString()) + (thrown is null ? "" : $"$throws${Sanitise(thrown.ToString())}");
+        var name = $"Task$of${suffix}";
         if (_module.FindType(name) is ClassType existing) {
             return existing;
         }
@@ -28,10 +42,13 @@ public sealed partial class SilGen {
         var task = _module.AddType(new ClassType(name));
         task.Fields.Add(("handle", SilType.Int));
         task.Fields.Add(("result", optional));
-        task.Fields.Add(("body", new ThickFunctionType(new FunctionType([], result, isAsync: true))));
+        task.Fields.Add(("body", new ThickFunctionType(new FunctionType([], result, thrown, isAsync: true))));
+        if (optionalError is not null) {
+            task.Fields.Add(("error", optionalError));
+        }
 
         // Its deinit gives the runtime's task back.
-        var deinit = new SilFunction($"$task.deinit${Sanitise(result.ToString())}", new FunctionType([task], SilType.Unit));
+        var deinit = new SilFunction($"$task.deinit${suffix}", new FunctionType([task], SilType.Unit));
         var entry = deinit.AddBlock();
         var self = entry.AddArgument(task);
         var handle = entry.Append(new LoadInst(entry.Append(new RefElementAddrInst(self, TaskHandle))));
@@ -45,7 +62,24 @@ public sealed partial class SilGen {
         var block = run.AddBlock();
         var owned = block.AddArgument(task);
         var body = block.Append(new LoadInst(block.Append(new RefElementAddrInst(owned, TaskBody))));
-        var value = block.Append(new ApplyInst(body, result));
+        SilValue? value;
+        if (thrown is not null && optionalError is not null) {
+            // What it throws is kept as its error; the task finishes all the same.
+            var normal = run.AddBlock();
+            var failed = run.AddBlock();
+            value = result == SilType.Unit ? null : normal.AddArgument(result);
+            var error = failed.AddArgument(thrown);
+            block.Append(new TryApplyInst(body, result, [], normal, failed));
+            failed.Append(new DestroyValueInst(body));
+            var someError = failed.Append(new EnumInst(optionalError, optionalError.CaseIndex("Some"), error));
+            failed.Append(new StoreInst(someError, failed.Append(new RefElementAddrInst(owned, TaskError)), StoreKind.Assign));
+            failed.Append(new DestroyValueInst(owned));
+            failed.Append(new ReturnInst(null));
+            block = normal;
+        } else {
+            value = block.Append(new ApplyInst(body, result));
+        }
+
         block.Append(new DestroyValueInst(body));
         // A body that gives nothing makes a Void?, whose 'Some' carries nothing.
         var carried = optional.Cases[optional.CaseIndex("Some")].Payload is null ? null : value;
@@ -62,14 +96,79 @@ public sealed partial class SilGen {
     /// <summary>What runs a task: async, the root of its task's frames, given the task to keep its result in.</summary>
     static FunctionType RunType(ClassType task) => new([task], SilType.Unit, null, [true], isAsync: true);
 
+    /// <summary>What a cancellation handler is: a closure taking nothing and giving nothing.</summary>
+    static readonly ThickFunctionType HandlerBody = new(new FunctionType([], SilType.Unit));
+
+    /// <summary>
+    ///     The object a cancellation handler is kept in while the runtime
+    ///     holds it, and the function the runtime calls it through, given
+    ///     that object: the closure, borrowed and called.
+    /// </summary>
+    ClassType CancellationHandler() {
+        const string name = "$task.handler";
+        if (_module.FindType(name) is ClassType existing) {
+            return existing;
+        }
+
+        var handler = _module.AddType(new ClassType(name));
+        handler.Fields.Add(("body", HandlerBody));
+
+        var run = new SilFunction(HandlerRunName, HandlerRunType);
+        var block = run.AddBlock();
+        var self = block.Append(new UncheckedRefCastInst(block.AddArgument(SilType.Object), handler));
+        var body = block.Append(new LoadBorrowInst(block.Append(new RefElementAddrInst(self, 0))));
+        block.Append(new ApplyInst(body, SilType.Unit));
+        block.Append(new EndBorrowInst(body));
+        block.Append(new ReturnInst(null));
+        _module.Add(run);
+        return handler;
+    }
+
+    const string HandlerRunName = "$task.handler.run";
+
+    static readonly FunctionType HandlerRunType = new([SilType.Object], SilType.Unit);
+
     sealed partial class FunctionLowering {
-        /// <summary>'Task.spawn { … }': a task made, its body kept in it, the runtime given it to run.</summary>
-        SilValue? Spawn(BoundCall call) {
+        /// <summary>
+        ///     'Task.installCancellationHandler(handler)': the closure kept in
+        ///     an object the runtime holds, and runs if the task is cancelled
+        ///     (at once, if it already is), until the handler is removed.
+        /// </summary>
+        SilValue? InstallCancellationHandler(BoundCall call) {
+            if (Expression(call.Arguments[0]) is not { Type: ThickFunctionType } body) {
+                return null;
+            }
+
+            var handler = generator.CancellationHandler();
+            var made = Emit(new AllocRefInst(handler));
+            Emit(new StoreInst(Owned(body), Emit(new RefElementAddrInst(made, 0)), StoreKind.Assign));
+            Emit(new BuiltinInst("task_handler_push", SilType.Unit, Emit(new FunctionRefInst(HandlerRunName, HandlerRunType)), made));
+            return UnitValue.Instance;
+        }
+
+        /// <summary>
+        ///     'Task.spawn { … }' and 'Task.detached { … }', with a priority
+        ///     or not: a task made, its body kept in it, the runtime given it
+        ///     to run — as a child of the running task, or detached.
+        /// </summary>
+        SilValue? Spawn(BoundCall call, bool detached) {
             if (Sub(call.Type) is not NamedTypeSymbol { TypeArguments: [var success] } || generator.TaskClass(success) is not { } task) {
                 return Missing(call, $"'{Describe(call.Syntax)}'");
             }
 
-            if (Expression(call.Arguments[0]) is not { Type: ThickFunctionType } body) {
+            // A priority given is its raw value; -1 has the runtime choose.
+            SilValue priority;
+            if (call.Arguments.Length == 2) {
+                if (Expression(call.Arguments[0]) is not { Type: StructType { Fields.Count: 1 } } given) {
+                    return null;
+                }
+
+                priority = Emit(new StructExtractInst(given, 0));
+            } else {
+                priority = Emit(new IntegerLiteralInst(SilType.Int, -1));
+            }
+
+            if (Expression(call.Arguments[^1]) is not { Type: ThickFunctionType } body) {
                 return null;
             }
 
@@ -81,9 +180,76 @@ public sealed partial class SilGen {
             // The runtime holds a reference of its own until the task has run.
             var lent = Emit(new CopyValueInst(made));
             var run = Emit(new FunctionRefInst(TaskRunName(task), RunType(task)));
-            var handle = Emit(new BuiltinInst("task_spawn", SilType.Int, run, lent));
+            var handle = Emit(new BuiltinInst("task_spawn", SilType.Int, run, lent, priority, Emit(new IntegerLiteralInst(SilType.Bool, detached ? 1 : 0))));
             Emit(new StoreInst(handle, Emit(new RefElementAddrInst(made, TaskHandle)), StoreKind.Assign));
             return made;
+        }
+
+        /// <summary>
+        ///     'async let x = value': the value's closure run as a child task
+        ///     of the running one, which this scope holds in a slot of its own.
+        ///     As the scope ends, on every way out, the child is cancelled —
+        ///     which does nothing once it has finished — and waited for: it
+        ///     never outlives the scope.
+        /// </summary>
+        void AsyncLet(BoundLocalDeclaration declaration) {
+            if (declaration.Initializer is not BoundClosure { Type: FunctionTypeSymbol child } closureExpression
+                || generator.TaskClass(child.ReturnType, child.ThrownType) is not { } task) {
+                Missing(declaration, $"the 'async let' '{declaration.Local.Name}'");
+                return;
+            }
+
+            if (Expression(closureExpression) is not { Type: ThickFunctionType } body) {
+                return;
+            }
+
+            var made = Emit(new AllocRefInst(task));
+            Emit(new StoreInst(Owned(body), Emit(new RefElementAddrInst(made, TaskBody)), StoreKind.Assign));
+            foreach (var field in (int[])[TaskResult, TaskError]) {
+                if (field < task.Fields.Count && task.Fields[field].Type is EnumType optional) {
+                    Emit(new StoreInst(Emit(new EnumInst(optional, optional.CaseIndex("None"), null)), Emit(new RefElementAddrInst(made, field)), StoreKind.Assign));
+                }
+            }
+
+            var lent = Emit(new CopyValueInst(made));
+            var run = Emit(new FunctionRefInst(TaskRunName(task), RunType(task)));
+            var handle = Emit(new BuiltinInst("task_spawn", SilType.Int, run, lent, Emit(new IntegerLiteralInst(SilType.Int, -1)), Emit(new IntegerLiteralInst(SilType.Bool, 0))));
+            Emit(new StoreInst(handle, Emit(new RefElementAddrInst(made, TaskHandle)), StoreKind.Assign));
+
+            var slot = NewSlot(task, declaration.Local.Name);
+            Emit(new StoreInst(made, slot, StoreKind.Init));
+            _asyncLets[declaration.Local] = slot;
+            EndsWithScope(slot);
+            _scopes[^1].Add(new AsyncLetEnd(slot));
+        }
+
+        /// <summary>An 'async let''s child, waited for and, if it has not finished, cancelled first, as its scope ends.</summary>
+        sealed record AsyncLetEnd(AllocStackInst Slot);
+
+        /// <summary>Each 'async let' in scope: the slot holding its child task.</summary>
+        readonly Dictionary<LocalSymbol, AllocStackInst> _asyncLets = [];
+
+        void EndAsyncLet(AsyncLetEnd end) {
+            var task = Emit(new LoadBorrowInst(end.Slot));
+            var handle = Emit(new LoadInst(Emit(new RefElementAddrInst(task, TaskHandle))));
+            Emit(new BuiltinInst("task_cancel", SilType.Unit, handle));
+            Emit(new BuiltinInst("task_wait", SilType.Unit, handle));
+            Emit(new EndBorrowInst(task));
+        }
+
+        /// <summary>A read of an 'async let': its child's result, waiting for it — or the error it threw.</summary>
+        SilValue? AsyncLetValue(BoundLocalAccess access, AllocStackInst slot) =>
+            Waited(Hold(Emit(new LoadBorrowInst(slot))), (ClassType)slot.ElementType, access.Syntax);
+
+        /// <summary>'task.handle', Sable.Core's own: the runtime's handle, which a group is given.</summary>
+        SilValue? HandleOf(BoundFieldAccess access) {
+            if (access.Receiver is null || Borrow(access.Receiver) is not { Type: ClassType } receiver) {
+                return Missing(access, "this task's handle");
+            }
+
+            var handle = Emit(new LoadInst(Emit(new RefElementAddrInst(receiver, TaskHandle))));
+            End(receiver);
+            return handle;
         }
 
         /// <summary>'task.cancel()': the runtime told, through the task's handle.</summary>
@@ -103,7 +269,38 @@ public sealed partial class SilGen {
                 return Missing(access, "this task's value");
             }
 
+            return Waited(receiver, task, access.Syntax);
+        }
+
+        /// <summary>
+        ///     The result of the task <paramref name="receiver" /> borrows,
+        ///     waiting for it to finish; the borrow ended. A task that keeps
+        ///     an error, and has one, throws it here instead.
+        /// </summary>
+        SilValue? Waited(SilValue receiver, ClassType task, SyntaxNode at) {
             Emit(new BuiltinInst("task_wait", SilType.Unit, Emit(new LoadInst(Emit(new RefElementAddrInst(receiver, TaskHandle))))));
+            if (task.Fields.Count > TaskError && task.Fields[TaskError].Type is EnumType optionalError) {
+                var kept = Emit(new LoadInst(Emit(new RefElementAddrInst(receiver, TaskError))));
+                var failed = function.AddBlock();
+                var thrown = Payload(failed, optionalError.Cases[optionalError.CaseIndex("Some")].Payload!);
+                var fine = function.AddBlock();
+                Jump(new SwitchEnumInst(kept, [(optionalError.CaseIndex("Some"), failed)], fine));
+                _current = failed;
+                var error = Owned(thrown);
+                if (!ReferenceEquals(error, thrown) || thrown.Type.IsTrivial) {
+                    Destroy(kept);
+                }
+
+                // The borrow is held: on the way to the handler it ends with the temporaries.
+                RouteError(error, at);
+                if (_current is not null) {
+                    Jump(new UnreachableInst());
+                }
+
+                _current = fine;
+                Destroy(kept);
+            }
+
             var optional = (EnumType)task.Fields[TaskResult].Type;
             var result = Emit(new LoadInst(Emit(new RefElementAddrInst(receiver, TaskResult))));
             End(receiver);

@@ -1577,16 +1577,12 @@ public sealed partial class Binder {
         BoundExpression? initializer = null;
         if (declarator.Initializer is { } initSyntax) {
             if (isAsyncLet) {
-                _awaitDepth++;
-            }
-
-            initializer = BindExpression(initSyntax.Value, declaredType);
-            if (declaredType is not null) {
-                initializer = Convert(initializer, declaredType, initSyntax.Value);
-            }
-
-            if (isAsyncLet) {
-                _awaitDepth--;
+                initializer = BindAsyncLetChild(initSyntax.Value, declaredType);
+            } else {
+                initializer = BindExpression(initSyntax.Value, declaredType);
+                if (declaredType is not null) {
+                    initializer = Convert(initializer, declaredType, initSyntax.Value);
+                }
             }
         }
 
@@ -1597,7 +1593,7 @@ public sealed partial class Binder {
         }
 
         var type = declaredType
-            ?? initializer?.Type
+            ?? (initializer is BoundClosure { Type: FunctionTypeSymbol child } && isAsyncLet ? child.ReturnType : initializer?.Type)
             ?? ErrorTypeSymbol.Instance;
 
         if (declaredType is null && initializer is null) {
@@ -1620,6 +1616,7 @@ public sealed partial class Binder {
 
         var local = new LocalSymbol(binding.Identifier.Text, _containingSymbol, declaration, isMutable) {
             IsAsyncLet = isAsyncLet,
+            AsyncLetThrownType = isAsyncLet ? (initializer?.Type as FunctionTypeSymbol)?.ThrownType : null,
         };
 
         // 'let s: some Shape = Circle()' hides the initialiser's type behind
@@ -2978,10 +2975,46 @@ public sealed partial class Binder {
 
     BoundExpression BindName(ExpressionSyntax syntax, string name) => BindNameAsValue(name, syntax);
 
-    /// <summary>An 'async let': its child task's result, so reading it awaits.</summary>
+    /// <summary>An 'async let': its child task's result, so reading it awaits, and tries when the child may throw.</summary>
     BoundExpression AwaitedLocal(SyntaxNode syntax, LocalSymbol local) {
+        // Its child belongs to the scope that declared it, which waits for
+        // it: a closure, which may run anywhere and later, cannot.
+        if (!ReferenceEquals(local.ContainingSymbol, _containingSymbol)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_AsyncLetCaptured,
+                syntax.Span,
+                $"'{local.Name}' is an 'async let', read only where it is declared, not from a closure: read it first, and capture the value"
+            );
+        }
+
         MarkAsync(syntax.Span, $"'{local.Name}', an 'async let',");
+        if (local.AsyncLetThrownType is { } thrown) {
+            MarkThrows(syntax.Span, $"'{local.Name}', an 'async let' whose child", thrown);
+        }
+
         return new BoundLocalAccess(syntax, local, NarrowedType(local));
+    }
+
+    /// <summary>
+    ///     'async let x = value': the value is the work of a child task, run
+    ///     alongside the code that follows — an async closure taking nothing,
+    ///     its body the value, which may await and throw without saying so;
+    ///     what it throws comes out where 'x' is read.
+    /// </summary>
+    BoundClosure BindAsyncLetChild(ExpressionSyntax value, TypeSymbol? declaredType) {
+        var symbol = new FunctionSymbol(string.Empty, _containingSymbol, value, Accessibility.Private, FunctionKind.Ordinary) {
+            IsAsync = true,
+            Parameters = [],
+        };
+        symbol.ThrownTypeResolver = () => Core.AnyError;
+        symbol.ReturnTypeResolver = () => declaredType ?? Core.Void;
+
+        var outerNarrowing = EnterNestedBody();
+        var body = BindClosureBody(symbol, value, declaredType ?? Core.Void, declaredType is null, [], tryAndAwait: true);
+        ExitNestedBody(outerNarrowing);
+
+        var type = new FunctionTypeSymbol([], symbol.ReturnType, true, _closureThrows);
+        return new BoundClosure(value, type, symbol, [], body);
     }
 
     /// <summary>
@@ -6129,7 +6162,8 @@ public sealed partial class Binder {
         SyntaxNode body,
         TypeSymbol returnType,
         bool inferring,
-        ImmutableArray<BoundCapture> captures
+        ImmutableArray<BoundCapture> captures,
+        bool tryAndAwait = false
     ) {
         var savedSymbol = _containingSymbol;
         var savedReturn = _returnType;
@@ -6162,8 +6196,10 @@ public sealed partial class Binder {
         _rethrows = symbol.IsRethrows;
         _inAsyncContext = symbol.IsAsync;
         SeedRethrowSources(symbol);
-        _tryDepth = 0;
-        _awaitDepth = 0;
+        // An 'async let''s child is its initialiser, which needs neither
+        // 'try' nor 'await': the reads of the 'async let' are marked instead.
+        _tryDepth = tryAndAwait ? 1 : 0;
+        _awaitDepth = tryAndAwait ? 1 : 0;
         _catchDepth = 0;
         _threwInTry = false;
         _thrownInBody = null;

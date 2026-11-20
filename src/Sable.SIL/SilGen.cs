@@ -1003,6 +1003,19 @@ public sealed partial class SilGen {
 
         substitution = WithAssociatedTypes(symbol, substitution);
 
+        // A static member of a generic class named without the class's
+        // arguments — 'Task.sleep(…)', which never mentions Success — is one
+        // function whatever they would be: they are Never.
+        if (symbol.IsStatic && Owner(symbol)?.OriginalDefinition is { TypeKind: TypeKind.Class, TypeParameters: { Length: > 0 } classParameters }
+            && classParameters.Any(p => substitution.Lookup(p) is null)) {
+            var map = substitution.Parameters.ToDictionary(static p => p, p => substitution.Lookup(p)!);
+            foreach (var parameter in classParameters.Where(p => substitution.Lookup(p) is null)) {
+                map[parameter] = Core.Never;
+            }
+
+            substitution = new(map);
+        }
+
         // '@polymorphic': the one instance, whatever the types, for a call
         // that passes its arguments as that instance takes them.
         if (polymorphic && symbol.IsPolymorphic && PolymorphicInstance(symbol, at) is { } single) {
@@ -4689,6 +4702,10 @@ public sealed partial class SilGen {
                             Emit(new DestroyAddrInst(slot));
                             break;
 
+                        case AsyncLetEnd asyncLet:
+                            EndAsyncLet(asyncLet);
+                            break;
+
                         case RegionPop pop: {
                             var frameRegion = Emit(new LoadBorrowInst(pop.Slot));
                             Emit(new BuiltinInst("region_pop", SilType.Unit, frameRegion));
@@ -4959,6 +4976,10 @@ public sealed partial class SilGen {
 
                 case BoundDefer defer:
                     _scopes[^1].Add(defer.Body);
+                    return;
+
+                case BoundLocalDeclaration { Local.IsAsyncLet: true } asyncLet:
+                    AsyncLet(asyncLet);
                     return;
 
                 case BoundLocalDeclaration declaration:
@@ -6306,6 +6327,9 @@ public sealed partial class SilGen {
                 case BoundLocalAccess access when _views.Contains(access.Local):
                     return Emit(new BuiltinInst("inline_copy", ((InlinePointerType)_slots[access.Local].ElementType).Pointee, Emit(new LoadInst(_slots[access.Local]))));
 
+                case BoundLocalAccess access when _asyncLets.TryGetValue(access.Local, out var asyncLet):
+                    return AsyncLetValue(access, asyncLet);
+
                 case BoundLocalAccess access:
                     return LoadLocal(access);
 
@@ -6347,6 +6371,10 @@ public sealed partial class SilGen {
                 case BoundFieldAccess { Field: { Name: "value", IsAsyncGetter: true, ContainingSymbol: var task } } taskValue
                     when task is not null && ReferenceEquals(task, Core.Task):
                     return TaskValue(taskValue);
+
+                case BoundFieldAccess { Field: { Name: "handle", ContainingSymbol: var task } } taskHandle
+                    when task is not null && ReferenceEquals(task, Core.Task):
+                    return HandleOf(taskHandle);
 
                 // A constant: its value, computed as the program was compiled.
                 case BoundFieldAccess { Field: var constantField } when generator.ConstantRead(constantField) is { } constant
@@ -9326,11 +9354,24 @@ public sealed partial class SilGen {
 
                 // Tasks: made, slept, and yielded to (SilGen.Tasks.cs).
                 if (owner is not null && ReferenceEquals(owner, Core.Task)) {
-                    if (callee.Name == "spawn") {
-                        return Spawn(call);
+                    if (callee.Name is "spawn" or "detached") {
+                        return Spawn(call, callee.Name == "detached");
                     }
 
-                    if (callee.Name == "sleep") {
+                    if (callee.Name == "installCancellationHandler") {
+                        return InstallCancellationHandler(call);
+                    }
+
+                    if (callee.Name == "waitForGroup") {
+                        if (Expression(call.Arguments[0]) is not { } group) {
+                            return null;
+                        }
+
+                        Emit(new BuiltinInst("task_group_wait", SilType.Unit, group));
+                        return UnitValue.Instance;
+                    }
+
+                    if (callee.Name == "sleepUncancelled") {
                         if (Expression(call.Arguments[0]) is not { } nanoseconds) {
                             return null;
                         }
@@ -9341,10 +9382,6 @@ public sealed partial class SilGen {
 
                     if (callee.Name == "cancel") {
                         return CancelTask(call);
-                    }
-
-                    if (callee.Name == "isCancelled") {
-                        return Emit(new BuiltinInst("task_is_cancelled", SilType.Bool));
                     }
 
                     Emit(new BuiltinInst("task_yield", SilType.Unit));

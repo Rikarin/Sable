@@ -108,20 +108,21 @@ public class UserService {
         return user
     }
 
-    /// Fan out, then wait: every child is awaited before this returns.
+    /// Fan out, then gather as they finish: no child outlives the group.
     public async fn fetchMany(_ ids: U64[>..]) -> User[>..] {
-        let group = TaskGroup<User?>()
-        for id in ids {
-            group.add(Task.spawn { try? await self.fetch(id) })
-        }
-
-        var found: User[>..] = []
-        for result in await group.waitForAll() {
-            if let user = result {
-                found.append(user)
+        return await withTaskGroup(of: User?.self) { group in
+            for id in ids {
+                group.spawn { try? await self.fetch(id) }
             }
+
+            var found: User[>..] = []
+            for await result in group {
+                if let user = result {
+                    found.append(user)
+                }
+            }
+            return found
         }
-        return found
     }
 }
 
@@ -170,25 +171,27 @@ async fn main() {
 
     // Requests queued on a channel, served by two workers.
     let requests = Channel<U64>()
-    let workers = TaskGroup<Int>()
-    for worker in 1...2 {
-        workers.add(Task.spawn {
-            var served = 0
-            while let id = await requests.receive() {
-                print("worker \(worker): \(await report(service, id))")
-                served += 1
+    let served = await withTaskGroup(of: Int.self) { workers in
+        for worker in 1...2 {
+            workers.spawn {
+                var served = 0
+                while let id = await requests.receive() {
+                    print("worker \(worker): \(await report(service, id))")
+                    served += 1
+                }
+                return served
             }
-            return served
-        })
-    }
-    let queued: U64[>..] = [8, 3, 9, 14]
-    for id in queued {
-        requests.send(id)
-    }
-    requests.close()
-    var served = 0
-    for count in await workers.waitForAll() {
-        served += count
+        }
+        let queued: U64[>..] = [8, 3, 9, 14]
+        for id in queued {
+            requests.send(id)
+        }
+        requests.close()
+        var served = 0
+        for await count in workers {
+            served += count
+        }
+        return served
     }
     print("served \(served)")
 }

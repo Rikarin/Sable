@@ -496,7 +496,15 @@ public sealed partial class LlvmEmitter {
                                 declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64)
                                 declare ptr @sable_inline_new(ptr)
                                 declare zeroext i1 @sable_class_is(ptr, ptr)
-                                declare ptr @sable_task_spawn(ptr, ptr, ptr)
+                                declare ptr @sable_task_spawn(ptr, ptr, ptr, ptr, i64, i1 zeroext)
+                                declare i64 @sable_task_priority()
+                                declare void @sable_task_handler_push(ptr, ptr)
+                                declare void @sable_task_handler_pop()
+                                declare ptr @sable_group_new()
+                                declare void @sable_group_add(ptr, ptr)
+                                declare zeroext i1 @sable_group_wait(ptr)
+                                declare ptr @sable_group_take(ptr)
+                                declare void @sable_group_free(ptr)
                                 declare zeroext i1 @sable_task_wait(ptr)
                                 declare void @sable_task_release(ptr)
                                 declare void @sable_task_cancel(ptr)
@@ -2624,11 +2632,64 @@ public sealed partial class LlvmEmitter {
             }
 
             switch (builtin.Name) {
-                // A task: its root frame's start and resume functions, and what the start is given.
+                // A task: its root frame's start, resume and drop functions,
+                // what the start is given, its priority, and whether it is detached.
                 case "task_spawn": {
                     var handle = Fresh();
-                    Line($"{handle} = call ptr @sable_task_spawn(ptr {operands[0]}, ptr {operands[1]}, ptr {operands[2]})");
+                    Line($"{handle} = call ptr @sable_task_spawn(ptr {operands[0]}, ptr {operands[1]}, ptr {operands[2]}, ptr {operands[3]}, i64 {operands[4]}, i1 zeroext {operands[5]})");
                     Line($"{Result()} = ptrtoint ptr {handle} to i64");
+                    return;
+                }
+
+                case "task_priority":
+                    Line($"{Result()} = call i64 @sable_task_priority()");
+                    return;
+
+                case "task_handler_push":
+                    Line($"call void @sable_task_handler_push(ptr {operands[0]}, ptr {operands[1]})");
+                    return;
+
+                case "task_handler_pop":
+                    Line("call void @sable_task_handler_pop()");
+                    return;
+
+                // Groups, by handle: their children, in the order they finish.
+                case "task_group_new": {
+                    var group = Fresh();
+                    Line($"{group} = call ptr @sable_group_new()");
+                    Line($"{Result()} = ptrtoint ptr {group} to i64");
+                    return;
+                }
+
+                case "task_group_add": {
+                    var group = Fresh();
+                    var task = Fresh();
+                    Line($"{group} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"{task} = inttoptr i64 {operands[1]} to ptr");
+                    Line($"call void @sable_group_add(ptr {group}, ptr {task})");
+                    return;
+                }
+
+                case "task_group_take": {
+                    var group = Fresh();
+                    var task = Fresh();
+                    Line($"{group} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"{task} = call ptr @sable_group_take(ptr {group})");
+                    Line($"{Result()} = ptrtoint ptr {task} to i64");
+                    return;
+                }
+
+                case "task_group_free": {
+                    var group = Fresh();
+                    Line($"{group} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"call void @sable_group_free(ptr {group})");
+                    return;
+                }
+
+                case "async_group_wait": {
+                    var group = Fresh();
+                    Line($"{group} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"{Result()} = call zeroext i1 @sable_group_wait(ptr {group})");
                     return;
                 }
 

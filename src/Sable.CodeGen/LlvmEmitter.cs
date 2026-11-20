@@ -4100,6 +4100,11 @@ public sealed partial class LlvmEmitter {
                     // less, is the one for [1, 2). A zero, an infinity or a
                     // NaN has none: Int.min for a zero and Int.max for the
                     // others, as C's 'ilogb' and .NET's 'ILogB' say.
+                    //
+                    // A half's is the float's it widens to exactly: LLVM 18
+                    // expands a half's frexp, where the machine has no half
+                    // arithmetic (AArch64 without FP16), into a 16-bit shift
+                    // its instruction selection cannot then select.
                     case "exponent": {
                         var parts = Fresh();
                         var exponent = Fresh();
@@ -4109,8 +4114,15 @@ public sealed partial class LlvmEmitter {
                         var finite = Fresh();
                         var isZero = Fresh();
                         var unlessZero = Fresh();
-                        Line($"{parts} = call {{ {t}, i32 }} @llvm.frexp.{suffix}.i32({t} {operands[0]})");
-                        Line($"{exponent} = extractvalue {{ {t}, i32 }} {parts}, 1");
+                        var (frexpType, frexpSuffix, frexpOperand) = (t, suffix, operands[0]);
+                        if (floatBits == 16) {
+                            frexpOperand = Fresh();
+                            (frexpType, frexpSuffix) = ("float", "f32");
+                            Line($"{frexpOperand} = fpext half {operands[0]} to float");
+                        }
+
+                        Line($"{parts} = call {{ {frexpType}, i32 }} @llvm.frexp.{frexpSuffix}.i32({frexpType} {frexpOperand})");
+                        Line($"{exponent} = extractvalue {{ {frexpType}, i32 }} {parts}, 1");
                         Line($"{less} = sub i32 {exponent}, 1");
                         Line($"{wide} = sext i32 {less} to i64");
                         Line($"{magnitude} = call {t} @llvm.fabs.{suffix}({t} {operands[0]})");

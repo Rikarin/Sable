@@ -232,6 +232,7 @@ public sealed class NumericIntrinsicTests {
     [InlineData("let x: F64 = 3.0\nprint(x.squareRoot())", "call double @llvm.sqrt.f64(")]
     [InlineData("let x: F32 = 3.0\nprint(x.fusedMultiplyAdd(2.0, 1.0))", "call float @llvm.fma.f32(")]
     [InlineData("let x: F16 = 3.0\nprint(x.roundedToNearestOrEven())", "call half @llvm.nearbyint.f16(")]
+    [InlineData("let x: F16 = 3.0\nprint(x.exponent)", "call { float, i32 } @llvm.frexp.f32.i32(")]
     [InlineData("let x: F64 = 3.0\nprint(x.minimum(2.0))", "call double @llvm.minimum.f64(")]
     [InlineData("let x: F64 = 3.0\nprint(x.scaled(byPowerOfTwo: 2))", "call double @llvm.ldexp.f64.i32(")]
     public void EachIsItsIntrinsic(string body, string call) {

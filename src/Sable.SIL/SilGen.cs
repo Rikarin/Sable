@@ -1513,7 +1513,7 @@ public sealed partial class SilGen {
     static string SubscriptName(FunctionSymbol subscript) =>
         "subscript" + string.Concat(subscript.Parameters.Select(static p => "$" + Sanitise(p.Type.ToDisplayString())));
 
-    static string Sanitise(string text) =>
+    internal static string Sanitise(string text) =>
         new([..text.Select(static c => char.IsLetterOrDigit(c) || c is '_' or '.' ? c : '$')]);
 
     /// <summary>True for a method that takes <c>self</c>, as opposed to a static one or an initialiser.</summary>
@@ -9396,6 +9396,17 @@ public sealed partial class SilGen {
             if (IsIntrinsic(callee)) {
                 var owner = Owner(callee)?.OriginalDefinition;
 
+                // 'Runtime.waitForSocket(socket, writable:)': a place the task
+                // suspends until the I/O reactor says the socket is ready.
+                if (owner is { Name: "Runtime", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } } && callee.Name == "waitForSocket") {
+                    if (Expression(call.Arguments[0]) is not { } socket || Expression(call.Arguments[1]) is not { } writable) {
+                        return null;
+                    }
+
+                    Emit(new BuiltinInst("task_io_wait", SilType.Unit, socket, writable));
+                    return UnitValue.Instance;
+                }
+
                 // Tasks: made, slept, and yielded to (SilGen.Tasks.cs).
                 if (owner is not null && ReferenceEquals(owner, Core.Task)) {
                     if (callee.Name is "spawn" or "detached") {
@@ -9421,15 +9432,6 @@ public sealed partial class SilGen {
                         }
 
                         Emit(new BuiltinInst("task_park", SilType.Unit, list));
-                        return UnitValue.Instance;
-                    }
-
-                    if (callee.Name == "waitForSocket") {
-                        if (Expression(call.Arguments[0]) is not { } socket || Expression(call.Arguments[1]) is not { } writable) {
-                            return null;
-                        }
-
-                        Emit(new BuiltinInst("task_io_wait", SilType.Unit, socket, writable));
                         return UnitValue.Instance;
                     }
 

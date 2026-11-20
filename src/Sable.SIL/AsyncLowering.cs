@@ -119,7 +119,7 @@ public static class AsyncLowering {
         ///     starts as: the resume function, the state, the result and the error.
         /// </summary>
         ClassType Head(SilType result, SilType? thrown) {
-            var name = $"$async.head${result}" + (thrown is null ? "" : $"$throws${thrown}");
+            var name = $"AsyncHead$of${SilGen.Sanitise(result.ToString())}" + (thrown is null ? "" : $"$throws${SilGen.Sanitise(thrown.ToString())}");
             if (_heads.TryGetValue(name, out var head)) {
                 return head;
             }
@@ -136,7 +136,8 @@ public static class AsyncLowering {
                 head.Fields.Add(("$error", thrown));
             }
 
-            return _heads[name] = head;
+            // In the module's types, so that its printed SIL reads back.
+            return _heads[name] = module.AddType(head);
         }
 
         /// <summary>An async function's start: its parameters in, its frame out.</summary>
@@ -363,7 +364,7 @@ public static class AsyncLowering {
             var name = function.Name;
             var original = function.Type;
             var head = Head(original.Result, original.Thrown);
-            var frame = new ClassType(name + "$frame") { Superclass = head, IsCoroutineFrame = true };
+            var frame = module.AddType(new ClassType(name + "$frame") { Superclass = head, IsCoroutineFrame = true });
             frame.Fields.AddRange(head.Fields);
 
             // The body is the resume function's; the start takes the name.

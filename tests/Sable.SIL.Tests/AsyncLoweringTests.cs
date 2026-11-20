@@ -78,7 +78,7 @@ public sealed class AsyncLoweringTests {
         var start = module.Find("M.middle")!;
         Assert.Equal(AsyncLowering.ResumeType, resume.Type);
         Assert.False(start.Type.IsAsync);
-        Assert.Equal("(Int) -> $async.head$Int", start.Type.ToString());
+        Assert.Equal("(Int) -> AsyncHead$of$Int", start.Type.ToString());
 
         // The start makes the frame and runs nothing; every slot is a field of it.
         var made = Assert.Single(start.Blocks.SelectMany(static b => b.Instructions).OfType<AllocRefInst>());
@@ -213,9 +213,13 @@ public sealed class AsyncLoweringTests {
                            fn main() async {
                                let box = Box()
                                let a = Task.detached {
-                                   let other = box.task!
-                                   box.task = none
-                                   return await wait(other, "a")
+                                   // Shared on purpose, on one thread: the cycle dropped here.
+                                   var other: Task<Int>? = none
+                                   unsafe {
+                                       other = box.task
+                                       box.task = none
+                                   }
+                                   return await wait(other!, "a")
                                }
                                let b = Task.detached { await wait(a, "b") }
                                box.task = b

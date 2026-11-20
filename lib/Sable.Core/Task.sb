@@ -137,11 +137,6 @@ public class Task<Success> {
     /// Runs the work on the blocking pool while the running task waits.
     @intrinsic
     static async fn runBlocking(_ work: () -> ())
-
-    /// Waits until the socket is ready to read, or to write, as the I/O
-    /// reactor says: Runtime.waitForSocket's.
-    @intrinsic
-    static async fn waitForSocket(_ socket: Int, _ writable: Bool)
 }
 
 /// Where Task.blocking's body leaves what it gives, for the task to take.

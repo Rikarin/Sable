@@ -1475,7 +1475,12 @@ nothing on the concurrency benchmarks, `examples/04-async-service.sb`, and
 programs like MultiCoreTests' — an actor counted by sixteen tasks,
 channels between four senders and four receivers, main-actor code called
 from eight tasks, a CPU-bound fan-out. It found, and so no longer does,
-the allocator's slab counts updated under different classes' locks.
+the allocator's slab counts updated under different classes' locks. In
+the fourth stage it reports nothing on those, the sleepers, the loopback
+fan-out and an echo server with blocking work either, once the last
+release of a shared object became one acquire-release operation instead
+of a release and an acquire fence after, which it does not model: a task
+object dropped by its spawner while the task ran looked like a race.
 
 **What crosses, checked** — the fourth stage (`tests/negative/85-task-captures.sb`,
 `86-actor-isolation-holes.sb`, `MultiCoreTests`).

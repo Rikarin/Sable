@@ -150,9 +150,9 @@ public struct Runtime {
 
     /// Waits until the socket is ready to read, or to write: the running
     /// task suspends until the reactor says so, and its worker runs others.
-    public static async fn waitForSocket(_ socket: Int, writable: Bool) {
-        await Task.waitForSocket(socket, writable)
-    }
+    /// The compiler writes it: a place the task may suspend.
+    @intrinsic
+    public static async fn waitForSocket(_ socket: Int, writable: Bool)
 
     // ---- Processes -------------------------------------------------------
     // Another program run to its end, its output kept; and this one's

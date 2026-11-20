@@ -294,12 +294,9 @@ public sealed partial class LlvmEmitter {
                   %immortal = icmp ne i32 %immortalBit, 0
                   br i1 %immortal, label %done, label %shared
                 shared:
-                {SharedDead(1)}  %old = atomicrmw sub ptr %strongField, i32 1 release, align 4
+                {SharedDead(1)}  %old = atomicrmw sub ptr %strongField, i32 1 acq_rel, align 4
                   %sharedGone = icmp eq i32 %old, 1
-                  br i1 %sharedGone, label %acquire, label %counted, !prof !{"{"}!"branch_weights", i32 1, i32 1000{"}"}
-                acquire:
-                  fence acquire
-                  br label %last
+                  br i1 %sharedGone, label %last, label %counted, !prof !{"{"}!"branch_weights", i32 1, i32 1000{"}"}
                 last:
                   br i1 %counts, label %countLast, label %free
                 countLast:

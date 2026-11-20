@@ -351,8 +351,12 @@ public sealed class PassTests {
         Assert.Equal(120L, new SilInterpreter(module).Run("M.factorial", 5L));
     }
 
+    /// <summary>
+    ///     A call that can throw is inlined: the callee's return goes to the
+    ///     call's normal block, its throw to the error block.
+    /// </summary>
     [Fact]
-    public void ACallThatCanThrowIsNotInlined() {
+    public void ACallThatCanThrowIsInlinedIntoItsTry() {
         var module = Lowered(
             """
             enum Problem: Error { case negative }
@@ -370,9 +374,81 @@ public sealed class PassTests {
 
         SilPassManager.Run(module, SilPassManager.Optimising);
 
-        Assert.NotEmpty(Instructions(module.Find("M.total")!).OfType<TryApplyInst>());
+        Assert.Empty(Instructions(module.Find("M.total")!).OfType<TryApplyInst>());
         Assert.Equal(-1L, new SilInterpreter(module).Run("M.total", -5L));
         Assert.Equal(5L, new SilInterpreter(module).Run("M.total", 5L));
+    }
+
+    /// <summary>
+    ///     The inliner's cost: a callee too large to copy everywhere is
+    ///     inlined where it is the only caller, or where a literal argument
+    ///     decides a branch in it; elsewhere it stays a call.
+    /// </summary>
+    [Fact]
+    public void ACalleesCostAndItsCallersDecideInlining() {
+        var module = Lowered(
+            """
+            fn wide(_ x: Int, _ y: Int) -> Int { return x * y + x * y + x * y + x * y + x * y + x * y + x * y + x * y + x * y + x * y + x * y + x * y + x * y + x * y }
+            fn shared(_ x: Int, _ y: Int) -> Int { return x * y + x * y + x * y + x * y + x * y + x * y + x * y + x * y + x * y + x * y + x * y + x * y + x * y + x * y }
+            fn chosen(_ fast: Bool, _ x: Int) -> Int {
+                if fast {
+                    return x
+                }
+                return x * x + x * x + x * x + x * x + x * x + x * x + x * x + x * x + x * x + x * x + x * x + x * x + x * x + x * x
+            }
+            fn once(_ a: Int) -> Int { return wide(a, 2) }
+            fn first(_ a: Int) -> Int { return shared(a, 2) + chosen(true, a) }
+            fn second(_ a: Int) -> Int { return shared(a, 3) + chosen(true, a) }
+            fn third(_ a: Int, _ fast: Bool) -> Int { return chosen(fast, a) }
+            """
+        );
+
+        Assert.InRange(Inliner.Cost(module.Find("M.wide")!), Inliner.Threshold + 1, Inliner.SingleCallerThreshold);
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        Assert.False(Calls(module.Find("M.once")!, "M.wide"));
+        Assert.True(Calls(module.Find("M.first")!, "M.shared"));
+        Assert.False(Calls(module.Find("M.first")!, "M.chosen"));
+        Assert.False(Calls(module.Find("M.second")!, "M.chosen"));
+        Assert.True(Calls(module.Find("M.third")!, "M.chosen"));
+        Assert.Equal(56L, new SilInterpreter(module).Run("M.once", 2L));
+        Assert.Equal(29L, new SilInterpreter(module).Run("M.first", 1L));
+    }
+
+    /// <summary>
+    ///     A call through the vtable that can reach a few small overrides
+    ///     tests for each, calls it directly and inlines it; anything else —
+    ///     here the base class itself — still goes through the vtable.
+    /// </summary>
+    [Fact]
+    public void AFewSmallOverridesAreTestedForAndInlined() {
+        var module = Lowered(
+            """
+            open class Animal {
+                open fn weight() -> Int { return 7 }
+            }
+            class Bird: Animal {
+                override fn weight() -> Int { return 1 }
+            }
+            class Dog: Animal {
+                override fn weight() -> Int { return 20 }
+            }
+            fn weigh(_ a: Animal) -> Int { return a.weight() }
+            fn run() -> Int { return weigh(Bird()) * 10000 + weigh(Dog()) * 100 + weigh(Animal()) }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        var weigh = module.Find("M.weigh")!;
+        Assert.Equal(
+            ["class_is:M.Bird", "class_is:M.Dog"],
+            Instructions(weigh).OfType<BuiltinInst>().Select(static b => b.Name).Where(static n => n.StartsWith("class_is:", StringComparison.Ordinal))
+        );
+        Assert.Single(Instructions(weigh).OfType<ApplyInst>());
+        Assert.Single(Instructions(weigh).OfType<ClassMethodInst>());
+        Assert.Equal(12007L, new SilInterpreter(module).Run("M.run"));
+        Assert.DoesNotContain(SilPassManager.ForLevel("s"), static p => p is SpeculativeDevirtualise);
     }
 
     /// <summary>Constants fold, and the branches they decide go with what they skip.</summary>

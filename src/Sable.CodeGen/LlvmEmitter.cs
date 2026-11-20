@@ -89,10 +89,25 @@ public sealed partial class LlvmEmitter {
 
     SilModule? _module;
     HashSet<string>? _reachable;
+    HashSet<ClassType>? _inherited;
+
+    /// <summary>
+    ///     True for a class no other class inherits from, in a whole program;
+    ///     one unit of a program compiled separately cannot know the others'.
+    /// </summary>
+    bool IsLeaf(ClassType type) {
+        if (_module is not { Unit: null } module) {
+            return false;
+        }
+
+        _inherited ??= [..module.Types.OfType<ClassType>().Select(static c => c.Superclass).OfType<ClassType>()];
+        return !_inherited.Contains(type);
+    }
 
     string EmitModule(SilModule module) {
         AsyncLowering.Run(module);
         _module = module;
+        _inherited = null;
         _pointerBytes = _arch == "wasm32" ? 4 : 8;
         _checkExclusivity = module.CheckExclusivity;
         _debug?.Begin(module);
@@ -2906,7 +2921,16 @@ public sealed partial class LlvmEmitter {
                 var target = (ClassType)function.Module!.FindType(builtin.Name["class_is:".Length..])!;
                 var metadata = Fresh();
                 Line($"{metadata} = load ptr, ptr {operands[0]}");
-                Line($"{Result()} = call zeroext i1 @sable_class_is(ptr {metadata}, ptr {module.ClassMetadata(target)})");
+
+                // A class nothing in the whole program inherits from is its
+                // object's class exactly, or not: one comparison, which a
+                // speculatively devirtualised call is guarded by.
+                if (module.IsLeaf(target)) {
+                    Line($"{Result()} = icmp eq ptr {metadata}, {module.ClassMetadata(target)}");
+                } else {
+                    Line($"{Result()} = call zeroext i1 @sable_class_is(ptr {metadata}, ptr {module.ClassMetadata(target)})");
+                }
+
                 return;
             }
 

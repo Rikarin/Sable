@@ -65,7 +65,7 @@ public sealed class PackageTests {
         }
 
         foreach (var release in new[] { false, true }) {
-            var built = PackageBuilder.Build(workspace, fixture.Environment, new(Release: release));
+            var built = PackageBuilder.Build(workspace, fixture.Environment, new(Profile: release ? "release" : "dev"));
             Assert.True(built is not null, fixture.Errors.ToString());
             var binary = Assert.Single(built);
             Assert.Equal(Platform.Executable(Path.Combine(fixture.Root, "app", "target", release ? "release" : "dev", "app")), binary.Path);
@@ -92,7 +92,7 @@ public sealed class PackageTests {
         File.AppendAllText(manifest, "\n[profile.release]\nopt-level = 1\ndebug = true\nlto = \"thin\"\npanic = \"unwind\"\n\n[profile.dev]\ncodegen-units = 1\n");
         var workspace = fixture.Load("app");
 
-        var release = Assert.Single(PackageBuilder.Build(workspace, fixture.Environment, new(Release: true, Timings: true))!);
+        var release = Assert.Single(PackageBuilder.Build(workspace, fixture.Environment, new(Profile: "release", Timings: true))!);
         Assert.Equal(("hello from a package\n42\n", 0), PackageFixture.Execute(release.Path));
         Assert.Contains("profile.release.panic: a trap always aborts the program", fixture.Errors.ToString(), StringComparison.Ordinal);
         Assert.Contains("[optimised + debuginfo]", fixture.Errors.ToString(), StringComparison.Ordinal);
@@ -291,13 +291,13 @@ public sealed class PackageTests {
     [Fact]
     public void WhatAManifestSaysThatIsNotActedOnIsWarnedAbout() {
         using var fixture = new PackageFixture();
-        fixture.Package("app", "app", "1.0.0", "flavour = \"mint\"\n[reflect]\ninclude = [\"Scene\"]\n",
+        fixture.Package("app", "app", "1.0.0", "flavour = \"mint\"\n[profile.dev]\ndebug = 1\n",
             ("src/main.sb", "module App\nfn main() {}\n"));
         Assert.Equal(0, PackageBuilder.Check(fixture.Load("app"), fixture.Environment, new()));
         var errors = fixture.Errors.ToString();
         Assert.Contains("warning: ", errors, StringComparison.Ordinal);
         Assert.Contains("package.flavour: unknown key, ignored", errors, StringComparison.Ordinal);
-        Assert.Contains("reflect: has no effect yet", errors, StringComparison.Ordinal);
+        Assert.Contains("profile.dev.debug: debug information is emitted in full or not at all", errors, StringComparison.Ordinal);
     }
 
     [Fact]

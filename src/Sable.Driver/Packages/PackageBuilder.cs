@@ -7,7 +7,7 @@ namespace Sable.Driver.Packages;
 
 /// <summary>What <c>sable build</c>, <c>run</c> and <c>check</c> were asked to do with a package.</summary>
 public sealed record BuildRequest(
-    bool Release = false,
+    string Profile = "dev",
     FeatureRequest? Features = null,
     string? Package = null,
     string? Bin = null,
@@ -56,7 +56,7 @@ public static class PackageBuilder {
         var graph = PackageGraph.ResolveCached(workspace, environment, new(
             request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)],
             request.Target is { } target ? (target.Os, target.Arch) : null));
-        graph.BuildOutputs = BuildScripts.Run(graph, workspace.RootManifest.ProfileFor(request.Release), environment);
+        graph.BuildOutputs = BuildScripts.Run(graph, workspace.RootManifest.ProfileNamed(request.Profile), environment);
         return graph;
     }
 
@@ -342,7 +342,7 @@ public static class PackageBuilder {
             graph = Resolve(workspace, environment, request);
         }
 
-        var profile = workspace.RootManifest.ProfileFor(request.Release);
+        var profile = workspace.RootManifest.ProfileNamed(request.Profile);
 
         // Another machine's build goes to target/<triple>/<profile>/, as
         // Cargo's does, beside this machine's.

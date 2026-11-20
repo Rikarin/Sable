@@ -21,6 +21,9 @@ public sealed record IndexEntry(
     string PublicKey,
     string Signature,
     string? Description = null) {
+    /// <summary>The manifest's keywords, which <c>sable search</c> matches as it does the description: not signed.</summary>
+    public IReadOnlyList<string> Keywords { get; init; } = [];
+
     /// <summary>
     ///     The text a signature covers: everything about the version but
     ///     whether it is yanked. Canonical — sorted, one fact per line — so it
@@ -61,7 +64,9 @@ public sealed record IndexEntry(
         v["yanked"]!.GetValue<bool>(),
         v["key"]!.GetValue<string>(),
         v["signature"]!.GetValue<string>(),
-        v["description"]?.GetValue<string>());
+        v["description"]?.GetValue<string>()) {
+        Keywords = v["keywords"] is JsonArray keywords ? [..keywords.Select(static k => k!.GetValue<string>())] : [],
+    };
 
     public JsonObject Write() {
         var json = new JsonObject {
@@ -83,6 +88,10 @@ public sealed record IndexEntry(
         };
         if (Description is not null) {
             json["description"] = Description;
+        }
+
+        if (Keywords.Count > 0) {
+            json["keywords"] = new JsonArray([..Keywords.Select(static k => (JsonNode)JsonValue.Create(k)!)]);
         }
 
         return json;
@@ -419,7 +428,7 @@ public sealed class Registry(string directory) : IRegistry {
             }
 
             var latest = versions.Where(static e => !e.Version.IsPrerelease).DefaultIfEmpty(versions[^1]).MaxBy(static e => e.Version)!;
-            if (SearchRank(name, latest.Description, query) is { } rank) {
+            if (SearchRank(name, latest.Description, query, latest.Keywords) is { } rank) {
                 hits.Add((rank, new(name, latest.Version, latest.Description)));
             }
         }
@@ -427,8 +436,8 @@ public sealed class Registry(string directory) : IRegistry {
         return [..hits.OrderBy(static h => h.Rank).ThenBy(static h => h.Hit.Name, StringComparer.Ordinal).Take(limit).Select(static h => h.Hit)];
     }
 
-    /// <summary>How well a package matches a search, lower first: its name exactly, its name holding the words, then its description; null for no match.</summary>
-    public static int? SearchRank(string name, string? description, string query) {
+    /// <summary>How well a package matches a search, lower first: its name exactly, its name holding the words, then its keywords and description; null for no match.</summary>
+    public static int? SearchRank(string name, string? description, string query, IReadOnlyList<string>? keywords = null) {
         var words = query.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (words.Length == 0) {
             return 3;
@@ -443,7 +452,7 @@ public sealed class Registry(string directory) : IRegistry {
             return 1;
         }
 
-        var text = $"{lowered} {description?.ToLowerInvariant()}";
+        var text = $"{lowered} {string.Join(' ', keywords ?? [])} {description?.ToLowerInvariant()}";
         return words.All(text.Contains) ? 2 : null;
     }
 

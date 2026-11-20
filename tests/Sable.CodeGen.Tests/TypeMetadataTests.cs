@@ -177,7 +177,7 @@ public sealed class TypeMetadataTests {
     }
 }
 
-/// <summary><c>[targets.&lt;triple&gt;]</c> (docs/05 §5.2.10): a target's reflection setting, and a runtime profile not built yet.</summary>
+/// <summary><c>[targets.&lt;triple&gt;]</c> (docs/05 §5.2.10): a target's reflection setting.</summary>
 public sealed class TargetSettingsTests {
     /// <summary>This machine as a triple <c>--target</c> takes.</summary>
     static string HostTriple => (NativeTarget.Host.Platform, NativeTarget.Host.Arch) switch {
@@ -191,12 +191,11 @@ public sealed class TargetSettingsTests {
     [Fact]
     public void AManifestSaysWhatABuildForATargetCarries() {
         using var fixture = new Sable.CodeGen.Tests.PackageFixture();
-        fixture.Package("p", "p", "0.1.0", "[targets.wasm32-wasi]\nreflection = false\nruntime = \"minimal\"\n\n[targets.x86_64-unknown-linux-gnu]\nreflection = true\n", ("src/lib.sb", "module P\n"));
+        fixture.Package("p", "p", "0.1.0", "[targets.wasm32-wasi]\nreflection = false\n\n[targets.x86_64-unknown-linux-gnu]\nreflection = true\n", ("src/lib.sb", "module P\n"));
         var manifest = fixture.Load("p").RootManifest;
         Assert.False(manifest.TargetSettingsFor(NativeTarget.Of("wasm32-wasi"))!.Reflection);
         Assert.True(manifest.TargetSettingsFor(NativeTarget.Of("x86_64-unknown-linux-gnu"))!.Reflection);
         Assert.Null(manifest.TargetSettingsFor(NativeTarget.Of("aarch64-unknown-linux-gnu")));
-        Assert.Contains(manifest.Warnings, static w => w.Key == "targets.wasm32-wasi.runtime");
 
         fixture.Package("q", "q", "0.1.0", "[targets.nowhere]\nreflection = false\n", ("src/lib.sb", "module Q\n"));
         Assert.Contains(Assert.Throws<Sable.Driver.Packages.ManifestException>(() => fixture.Load("q")).Errors, static e => e.Key == "targets.nowhere");

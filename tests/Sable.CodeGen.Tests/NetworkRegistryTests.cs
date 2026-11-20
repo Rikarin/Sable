@@ -75,7 +75,7 @@ public sealed class NetworkRegistryTests {
         Assert.Equal(SemVersion.Parse("1.1.0"), graph.Packages["alice/numbers"].Version);
         Assert.Equal(0, PackageBuilder.Check(fixture.Load("app"), server.Environment, new()));
         if (Programs.CanBuild) {
-            var binary = Assert.Single(PackageBuilder.Build(fixture.Load("app"), server.Environment, new(Release: true))!);
+            var binary = Assert.Single(PackageBuilder.Build(fixture.Load("app"), server.Environment, new(Profile: "release"))!);
             Assert.Equal("11\n", PackageFixture.Execute(binary.Path).Output);
         }
 

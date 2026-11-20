@@ -1589,10 +1589,17 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
 
 Deferred: workspace inheritance
 (`version.workspace = true` and `{ workspace = true }` are refused,
-`[workspace.package]` and `[workspace.dependencies]` warned about); `[reflect]`
-(accepted with a warning: nothing looks a type up by name yet); `[targets]`'s
-`runtime` (warned about: there are no runtime profiles yet — its
-`reflection = false` is built). A dependency's `package =` and
+`[workspace.package]` and `[workspace.dependencies]` warned about). Removed
+from the format, as errors: `[reflect]` (what is reflected on is said in
+code, `@reflectable` or `extension T: Reflectable {}`) and `[targets]`'s
+`runtime` (there are no runtime profiles; its `reflection = false` is
+built). Profiles of a package's own (`[profile.<name>]` with `inherits`,
+`--profile <name>`, output in `target/<name>/`) are built, as are
+`package.readme`, `keywords` (in the index, searched), `include`/`exclude`
+(globs of what is published) and `publish = false`; `categories`,
+`homepage`, `documentation` and `[workspace] resolver` are warned about and
+ignored, as is an unknown key of `[build]`, `[registry]` and `[generators]`,
+and a `debug` level short of full. A dependency's `package =` and
 `registry =` are refused: code imports a package's modules, so a rename means
 nothing, and every dependency comes from the workspace's one registry. Cargo's
 `[target.'cfg(...)'.dependencies]` is refused in favour of `when`. Every

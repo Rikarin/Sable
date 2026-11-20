@@ -242,7 +242,7 @@ public sealed class ProfileTests {
                 }
                 """));
 
-        var release = Assert.Single(PackageBuilder.Build(fixture.Load("app"), fixture.Environment, new(Release: true, Timings: true))!);
+        var release = Assert.Single(PackageBuilder.Build(fixture.Load("app"), fixture.Environment, new(Profile: "release", Timings: true))!);
         Assert.Equal(("debug assertions\n", 0), PackageFixture.Execute(release.Path));
         var errors = fixture.Errors.ToString();
         Assert.Contains("[optimised + debuginfo]", errors, StringComparison.Ordinal);
@@ -252,6 +252,45 @@ public sealed class ProfileTests {
         // The dev profile, unoptimised, defines DEBUG by default.
         var dev = Assert.Single(PackageBuilder.Build(fixture.Load("app"), fixture.Environment, new())!);
         Assert.Equal(("debug assertions\n", 0), PackageFixture.Execute(dev.Path));
+    }
+
+    /// <summary>
+    ///     A profile of the package's own, <c>--profile</c>'s: release's
+    ///     settings as the manifest has them, changed, built to
+    ///     <c>target/&lt;name&gt;/</c>; a profile the manifest lacks is refused.
+    /// </summary>
+    [Fact]
+    public void APackageBuildsWithAProfileOfItsOwn() {
+        if (!CanBuild) {
+            return;
+        }
+
+        using var fixture = new PackageFixture();
+        fixture.Package("app", "app", "1.0.0", """
+            [profile.shipping]
+            inherits = "release"
+            debug-assertions = true
+            """,
+            ("src/main.sb", """
+                module App
+
+                fn main() {
+                    #if DEBUG
+                    print("debug assertions")
+                    #else
+                    print("release")
+                    #endif
+                }
+                """));
+
+        var workspace = fixture.Load("app");
+        var built = Assert.Single(PackageBuilder.Build(workspace, fixture.Environment, new(Profile: "shipping"))!);
+        Assert.Equal(Path.Combine(workspace.TargetDirectory, "shipping"), Path.GetDirectoryName(built.Path));
+        Assert.True(built.Profile.Optimise);
+        Assert.Equal(("debug assertions\n", 0), PackageFixture.Execute(built.Path));
+        Assert.Throws<PackageException>(() => PackageBuilder.Build(workspace, fixture.Environment, new(Profile: "nope")));
+        Assert.Equal("shipping", Sable.Driver.Commands.PackageCommand.ParseBuildRequest(["--profile", "shipping"])!.Profile);
+        Assert.Equal("release", Sable.Driver.Commands.PackageCommand.ParseBuildRequest(["--release"])!.Profile);
     }
 
     /// <summary>What a target cannot do with a profile's settings is a warning, not taken silently.</summary>

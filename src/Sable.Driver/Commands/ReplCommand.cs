@@ -28,7 +28,7 @@ public sealed class ReplCommand : PackageCommand {
     public override int Run(IReadOnlyList<string> arguments) {
         var noPackage = arguments.Contains("--no-package");
         var options = arguments.Where(static a => a != "--no-package").ToList();
-        if (ParseBuildRequest(options) is not { } request || request.Bin is not null || request.Release || noPackage && options.Count > 0) {
+        if (ParseBuildRequest(options) is not { } request || request.Bin is not null || request.Profile != "dev" || noPackage && options.Count > 0) {
             return BadUsage();
         }
 

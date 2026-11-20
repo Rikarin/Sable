@@ -56,7 +56,7 @@ public sealed class RegistryTests {
 
         Assert.Equal(0, PackageBuilder.Check(fixture.Load("app"), fixture.Environment, new()));
         if (NativeBuild.IsAvailable()) {
-            var binary = Assert.Single(PackageBuilder.Build(fixture.Load("app"), fixture.Environment, new(Release: true))!);
+            var binary = Assert.Single(PackageBuilder.Build(fixture.Load("app"), fixture.Environment, new(Profile: "release"))!);
             Assert.Equal("11\n", PackageFixture.Execute(binary.Path).Output);
         }
     }
@@ -113,6 +113,37 @@ public sealed class RegistryTests {
         Assert.Contains("Dry run: nothing was uploaded", shown, StringComparison.Ordinal);
         Assert.Empty(RegistryOf(fixture).Entries("numbers"));
         Assert.False(File.Exists(fixture.Environment.KeyPath));
+    }
+
+    [Fact]
+    public void IncludeExcludeReadmeAndKeywordsSayWhatIsPublished() {
+        using var fixture = new PackageFixture();
+        fixture.Package("lib", "numbers", "1.0.0", "readme = \"docs/README.md\"\nkeywords = [\"maths\", \"bignum\"]\ninclude = [\"src/**\"]\nexclude = [\"*.png\"]\n",
+            ("src/lib.sb", "module Numbers\n"), ("src/logo.png", "png"), ("docs/README.md", "# numbers"), ("docs/guide.md", "guide"), ("notes.txt", "x"));
+        var workspace = fixture.Load("lib");
+        var plan = PackageOperations.Publish(workspace, fixture.Environment, workspace.Members[0], dryRun: true, allowDirty: true);
+
+        // The manifest and the readme whatever the patterns say.
+        Assert.Equal(["docs/README.md", "sable.toml", "src/lib.sb"], plan.Files.Keys);
+        Assert.Equal(["maths", "bignum"], plan.Entry.Keywords);
+        Assert.Equal(["maths", "bignum"], IndexEntry.Read("numbers", plan.Entry.Write()).Keywords);
+        Assert.Equal(2, Registry.SearchRank("numbers", null, "bignum", plan.Entry.Keywords));
+        Assert.Null(Registry.SearchRank("numbers", null, "bignum"));
+
+        // A readme that is not there.
+        fixture.Package("missing", "missing", "1.0.0", "readme = \"README.md\"\n", ("src/lib.sb", "module Missing\n"));
+        workspace = fixture.Load("missing");
+        var error = Assert.Throws<PackageException>(() => PackageOperations.Publish(workspace, fixture.Environment, workspace.Members[0], true, true));
+        Assert.Contains("no such file", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void APackageThatSaysPublishFalseIsNotPublished() {
+        using var fixture = new PackageFixture();
+        fixture.Package("lib", "internal", "1.0.0", "publish = false\n", ("src/lib.sb", "module Internal\n"));
+        var workspace = fixture.Load("lib");
+        var error = Assert.Throws<PackageException>(() => PackageOperations.Publish(workspace, fixture.Environment, workspace.Members[0], true, true));
+        Assert.Contains("'publish = false'", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

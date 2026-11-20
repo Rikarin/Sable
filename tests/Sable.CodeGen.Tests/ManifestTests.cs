@@ -62,9 +62,6 @@ public sealed class ManifestTests {
             exclusivity      = "checked"
             leak-check       = true
 
-            [reflect]
-            include = ["Scene"]
-
             [workspace]
             members = ["crates/*", "tools/shader-tool"]
             exclude = ["experiments"]
@@ -262,14 +259,107 @@ public sealed class ManifestTests {
         Assert.Contains(Errors(Package + "[target.'cfg(unix)'.dependencies]\nb = \"1\"\n"),
             static e => e.Key == "target" && e.Message.Contains("when", StringComparison.Ordinal));
 
-        // Warned about: accepted, with a word that nothing uses them yet.
-        var manifest = Parse(Package + "[build-dependencies]\nb = \"1\"\n[reflect]\ninclude = [\"Scene\"]\n[targets.wasm32-wasi]\nruntime = \"minimal\"\nx = 1\n");
+        // Not part of the format: [reflect] is said in code, and there are no runtime profiles.
+        Assert.Contains(Errors(Package + "[reflect]\ninclude = [\"Scene\"]\n"),
+            static e => e.Key == "reflect" && e.Message.Contains("@reflectable", StringComparison.Ordinal));
+        Assert.Contains(Errors(Package + "[targets.wasm32-wasi]\nruntime = \"minimal\"\n"),
+            static e => e.Key == "targets.wasm32-wasi.runtime" && e.Message.Contains("no runtime profiles", StringComparison.Ordinal));
+        Assert.Contains(Errors(Package + "[targets.wasm32-wasi]\nruntime = \"full\"\n"),
+            static e => e.Key == "targets.wasm32-wasi.runtime");
+
+        // Warned about: accepted, with a word that nothing uses them.
+        var manifest = Parse(Package + "categories = [\"x\"]\nhomepage = \"https://a\"\n[build-dependencies]\nb = \"1\"\n[targets.wasm32-wasi]\nx = 1\n" +
+            "[registry]\npath = \"r\"\nurl = \"u\"\n[generators]\ninputs = []\nmore = 1\n[profile.dev]\ndebug = \"line-tables-only\"\n");
         Assert.Contains(manifest.Warnings, static w => w.Key == "build-dependencies");
-        Assert.Contains(manifest.Warnings, static w => w.Key == "reflect");
-        Assert.Contains(manifest.Warnings, static w => w.Key == "targets.wasm32-wasi.runtime");
         Assert.Contains(manifest.Warnings, static w => w.Key == "targets.wasm32-wasi.x");
+        Assert.Contains(manifest.Warnings, static w => w.Key == "package.categories" && w.Message.Contains("keywords", StringComparison.Ordinal));
+        Assert.Contains(manifest.Warnings, static w => w.Key == "package.homepage");
+        Assert.Contains(manifest.Warnings, static w => w.Key == "registry.url");
+        Assert.Contains(manifest.Warnings, static w => w.Key == "generators.more");
+        Assert.Contains(manifest.Warnings, static w => w.Key == "profile.dev.debug");
+        Assert.Contains(Parse(Package + "[build]\nscript = \"build.sb\"\nallow-everything = true\n").Warnings, static w => w.Key == "build.allow-everything");
         Assert.Contains(Parse("[workspace]\nmembers = [\"a\"]\n[workspace.metadata]\nb = 1\n").Warnings,
             static w => w.Key == "workspace.metadata");
+        Assert.Contains(Parse("[workspace]\nmembers = [\"a\"]\nresolver = \"2\"\n").Warnings,
+            static w => w.Key == "workspace.resolver" && w.Message.Contains("one resolver", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ThePackagesPublishingSettingsAreReadAndChecked() {
+        const string Package = "[package]\nname = \"a\"\nversion = \"1.0.0\"\n";
+        var package = Parse(Package + "readme = \"README.md\"\nkeywords = [\"render\", \"gpu\"]\ninclude = [\"src/**\", \"*.md\"]\nexclude = [\"*.png\"]\npublish = false\n").Package!;
+        Assert.Equal("README.md", package.Readme);
+        Assert.Equal(["render", "gpu"], package.Keywords);
+        Assert.Equal(["src/**", "*.md"], package.Include);
+        Assert.Equal(["*.png"], package.Exclude);
+        Assert.False(package.Publish);
+        Assert.True(Parse(Package).Package!.Publish);
+
+        Assert.Contains(Errors(Package + "keywords = [\"Not A Keyword\"]\n"), static e => e.Key == "package.keywords");
+        Assert.Contains(Errors(Package + "keywords = [\"a\", \"b\", \"c\", \"d\", \"e\", \"f\"]\n"),
+            static e => e.Key == "package.keywords" && e.Message.Contains("at most 5", StringComparison.Ordinal));
+        Assert.Contains(Errors(Package + "include = [\"../outside\"]\n"), static e => e.Key == "package.include");
+        Assert.Contains(Errors(Package + "exclude = [\"\"]\n"), static e => e.Key == "package.exclude");
+        Assert.Contains(Errors(Package + "readme = \"../README.md\"\n"), static e => e.Key == "package.readme");
+        Assert.Contains(Errors(Package + "publish = \"no\"\n"), static e => e.Key == "package.publish");
+    }
+
+    [Theory]
+    [InlineData("*.png", "logo.png", true)]
+    [InlineData("*.png", "assets/logo.png", true)]
+    [InlineData("assets/*.png", "assets/logo.png", true)]
+    [InlineData("assets/*.png", "assets/big/logo.png", false)]
+    [InlineData("assets/**/*.png", "assets/big/logo.png", true)]
+    [InlineData("assets/**/*.png", "assets/logo.png", true)]
+    [InlineData("/README.md", "README.md", true)]
+    [InlineData("/README.md", "docs/README.md", false)]
+    [InlineData("tests", "tests/a/b.sb", true)]
+    [InlineData("tests/", "tests/b.sb", true)]
+    [InlineData("src/**", "src/a/b.sb", true)]
+    [InlineData("src/**", "srcs/a.sb", false)]
+    [InlineData("?.sb", "a.sb", true)]
+    [InlineData("?.sb", "ab.sb", false)]
+    public void AnIncludeOrExcludePatternMatchesFilesAndDirectories(string pattern, string path, bool matches) =>
+        Assert.Equal(matches, FileGlob.Matches(pattern, path));
+
+    [Fact]
+    public void APackageMayHaveProfilesOfItsOwn() {
+        var manifest = Parse("""
+            [package]
+            name = "a"
+            version = "1.0.0"
+
+            [profile.release]
+            lto = "thin"
+
+            [profile.profiling]
+            inherits = "release"
+            debug = true
+
+            [profile.fast-dev]
+            inherits = "dev"
+            opt-level = 1
+            """);
+        var profiling = manifest.ProfileNamed("profiling");
+        Assert.Equal("profiling", profiling.Name);
+        Assert.Equal("3", profiling.OptLevel);
+        Assert.True(profiling.Debug);
+        // As the manifest has release, not as release is by default.
+        Assert.Equal(LtoMode.Thin, profiling.Lto);
+        Assert.Equal("thin", profiling.Recorded["lto"]);
+        var fast = manifest.ProfileNamed("fast-dev");
+        Assert.Equal("1", fast.OptLevel);
+        Assert.True(fast.Exclusivity);
+        Assert.Same(manifest.Release, manifest.ProfileNamed("release"));
+        Assert.Contains("there is no profile 'nope'", Assert.Throws<PackageException>(() => manifest.ProfileNamed("nope")).Message, StringComparison.Ordinal);
+
+        const string Package = "[package]\nname = \"a\"\nversion = \"1.0.0\"\n";
+        Assert.Contains(Errors(Package + "[profile.bench-fast]\nopt-level = 3\n"),
+            static e => e.Key == "profile.bench-fast" && e.Message.Contains("inherits", StringComparison.Ordinal));
+        Assert.Contains(Errors(Package + "[profile.x]\ninherits = \"x\"\n"), static e => e.Key == "profile.x.inherits");
+        Assert.Contains(Errors(Package + "[profile.release]\ninherits = \"dev\"\n"), static e => e.Key == "profile.release.inherits");
+        Assert.Contains(Errors(Package + "[profile.Fast]\ninherits = \"dev\"\n"), static e => e.Key == "profile.Fast");
+        Assert.Contains(Errors(Package + "[profile.doc]\ninherits = \"dev\"\n"), static e => e.Key == "profile.doc");
     }
 
     [Fact]

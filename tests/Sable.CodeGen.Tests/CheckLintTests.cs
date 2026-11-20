@@ -79,7 +79,7 @@ public sealed class CheckLintTests {
 
         foreach (var release in new[] { false, true }) {
             fixture.Errors.GetStringBuilder().Clear();
-            var built = PackageBuilder.Build(fixture.Load("app"), fixture.Environment, new BuildRequest(Release: release));
+            var built = PackageBuilder.Build(fixture.Load("app"), fixture.Environment, new BuildRequest(Profile: release ? "release" : "dev"));
             var binary = Assert.Single(built!);
             Assert.Contains("warning[S0030]: look here", fixture.Errors.ToString(), StringComparison.Ordinal);
             Assert.Equal((release ? "release\n" : "debug\n", 0), PackageFixture.Execute(binary.Path));

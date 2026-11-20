@@ -17,6 +17,18 @@ public struct Package {
     public var license: String? = none
     public var description: String? = none
     public var repository: String? = none
+    /// The file, relative to the package, that describes it: always published.
+    public var readme: String? = none
+    /// Up to five words `sable search` finds the package by.
+    public var keywords: String[>..] = []
+    /// Globs of the files `sable publish` uploads; with none, every file.
+    /// `*` is within a name, `**` any number of directories; a pattern with
+    /// no `/` matches a name at any depth.
+    public var include: String[>..] = []
+    /// Globs of the files `sable publish` leaves out.
+    public var exclude: String[>..] = []
+    /// With false, `sable publish` refuses the package.
+    public var publish: Bool = true
 
     /// The library and the executables. With none, `src/lib.sb` is the
     /// library and `src/main.sb` the executable, when they exist.
@@ -30,10 +42,9 @@ public struct Package {
     /// optional dependency, `name/feature` for a dependency's feature.
     public var features: [String: String[>..]] = [:]
 
+    /// `.dev(...)`, `.release(...)`, and profiles of the package's own,
+    /// `.named("profiling", inherits: .release, ...)`.
     public var profiles: Profile[>..] = []
-
-    /// Types reachable only through reflection, which the linker must keep.
-    public var reflect: String[>..] = []
 
     /// What a build for a given target is, beyond what `--target` says.
     public var targetSettings: TargetSettings[>..] = []

@@ -80,7 +80,7 @@ public sealed class BuildScriptTests {
         File.AppendAllText(Path.Combine(directory, "build.sb"), "\n// changed\n");
         Assert.Equal(1, Runs());
         errors.GetStringBuilder().Clear();
-        Assert.Equal(0, PackageBuilder.Check(fixture.Load("gen"), environment, new(Release: true)));
+        Assert.Equal(0, PackageBuilder.Check(fixture.Load("gen"), environment, new(Profile: "release")));
         Assert.Contains("Running build script", errors.ToString(), StringComparison.Ordinal);
     }
 

@@ -60,7 +60,7 @@ public static class Installer {
             }
 
             // Its dependencies come from the registry it came from.
-            var built = PackageBuilder.Build(workspace, environment with { RegistryDirectory = registry.Location }, new(Release: true, Package: member.Name, Bin: bin))
+            var built = PackageBuilder.Build(workspace, environment with { RegistryDirectory = registry.Location }, new(Profile: "release", Package: member.Name, Bin: bin))
                 ?? throw new PackageException($"could not build {name} v{entry.Version}");
 
             var target = BinDirectory(environment);

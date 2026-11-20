@@ -157,11 +157,11 @@ public sealed class DebugCommand : PackageCommand {
         }
 
         var (member, bin) = candidates[0];
-        if (!workspace.RootManifest.ProfileFor(false).Debug) {
-            Console.Error.WriteLine("warning: the dev profile has 'debug = false', so lldb will see no source lines or variables");
+        if (!workspace.RootManifest.ProfileNamed(request.Profile).Debug) {
+            Console.Error.WriteLine($"warning: the {request.Profile} profile has 'debug = false', so lldb will see no source lines or variables");
         }
 
-        return PackageBuilder.Build(workspace, Environment, request with { Release = false, Package = member.Name, Bin = bin.Name }) is [var binary] ? binary.Path : null;
+        return PackageBuilder.Build(workspace, Environment, request with { Package = member.Name, Bin = bin.Name }) is [var binary] ? binary.Path : null;
     }
 
     /// <summary>Starts lldb on <paramref name="executable" /> with the formatters, and waits for it.</summary>

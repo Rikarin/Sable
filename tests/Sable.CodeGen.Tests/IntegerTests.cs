@@ -67,7 +67,7 @@ public sealed class IntegerTests {
 
     [Theory]
     [InlineData("let x: I32 = 300000\nprint(x as I16)", "I32 does not fit in I16")]
-    [InlineData("print(300 as U8)", "Int does not fit in U8")]
+    [InlineData("let x = 300\nprint(x as U8)", "Int does not fit in U8")]
     public void AsTrapsWhereTheValueDoesNotFit(string body, string trap) {
         var execution = AssertAgree(Program("", body));
         Assert.StartsWith($"fatal error: {trap}\n  at test.sb:", execution.Stderr, StringComparison.Ordinal);

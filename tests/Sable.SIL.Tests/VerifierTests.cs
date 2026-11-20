@@ -541,6 +541,46 @@ public sealed class VerifierTests {
         Assert.Equal(SilPrinter.Print(module), SilPrinter.Print(SilParser.Parse(SilPrinter.Print(module))));
     }
 
+    /// <summary>
+    ///     An instruction that needs its operand's type reads only after the
+    ///     operand is defined in the text. Here bb2 dominates bb1, so printing
+    ///     blocks in dominance order would put the use in bb2 before the
+    ///     definition in bb1 — SIL the verifier rejects but the parser reads,
+    ///     so it is printed in the order it was read. The 'sil' fuzzer found it.
+    /// </summary>
+    [Theory]
+    [InlineData("%3 = load [trivial] %0")]
+    [InlineData("%3 = load_borrow %0")]
+    [InlineData("%3 = struct_extract %2, #x")]
+    [InlineData("%3 = struct_element_addr %0, #x")]
+    [InlineData("%3 = copy_value %2")]
+    [InlineData("%3 = tuple_extract %4, 0")]
+    [InlineData("%3 = ref_element_addr %5, #x")]
+    public void AUseItsDefinitionDoesNotDominateReadsBackAsPrinted(string use) {
+        var text = $$"""
+                     sil_struct S { x: $Int }
+                     sil_class C { x: $Int }
+
+                     sil @f : $() -> () {
+                     bb0:
+                       br bb2
+                     bb1:
+                       %0 = alloc_stack $S
+                       %1 = integer_literal $Int, 0
+                       %2 = struct $S (%1)
+                       %4 = tuple $(Int, Int) (%1, %1)
+                       %5 = alloc_ref $C
+                       return
+                     bb2:
+                       {{use}}
+                       br bb1
+                     }
+
+                     """;
+        var printed = SilPrinter.Print(SilParser.Parse(text));
+        Assert.Equal(printed, SilPrinter.Print(SilParser.Parse(printed)));
+    }
+
     [Fact]
     public void AnOwnedParameterMustBeConsumed() =>
         AssertRejected(

@@ -160,7 +160,39 @@ public static class SilPrinter {
     ///     value hands a block the value of one created after it, as the
     ///     block an 'if let' binds in is created after the one it leads to. Where
     ///     the function's order is already so, it is kept as it is.
+    ///     SIL with a use its definition does not dominate (which the
+    ///     verifier rejects, but the parser reads) can have a value printed
+    ///     after a use in that order; it is then printed in the function's
+    ///     order, the one it was read in.
     /// </summary>
+    static List<SilBlock> InPrintOrder(SilFunction function) {
+        var ordered = InDominanceOrder(function);
+        return DefinesBeforeUses(ordered) ? ordered : [..function.Blocks];
+    }
+
+    /// <summary>Whether, read through these blocks in order, every value of theirs is defined before it is used.</summary>
+    static bool DefinesBeforeUses(IReadOnlyList<SilBlock> blocks) {
+        var local = new HashSet<SilValue>();
+        foreach (var block in blocks) {
+            local.UnionWith(block.Arguments);
+            local.UnionWith(block.Instructions);
+        }
+
+        var defined = new HashSet<SilValue>();
+        foreach (var block in blocks) {
+            defined.UnionWith(block.Arguments);
+            foreach (var instruction in block.Instructions) {
+                if (instruction.Operands.Any(o => local.Contains(o) && !defined.Contains(o))) {
+                    return false;
+                }
+
+                defined.Add(instruction);
+            }
+        }
+
+        return true;
+    }
+
     static List<SilBlock> InDominanceOrder(SilFunction function) {
         if (function.Blocks.Count == 0) {
             return [];
@@ -187,7 +219,7 @@ public static class SilPrinter {
     static void Print(SilFunction function, StringBuilder builder) {
         var names = new Dictionary<SilValue, string>();
         var blocks = new Dictionary<SilBlock, string>();
-        var ordered = InDominanceOrder(function);
+        var ordered = InPrintOrder(function);
 
         for (var i = 0; i < ordered.Count; i++) {
             blocks[ordered[i]] = $"bb{i}";

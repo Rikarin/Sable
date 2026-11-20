@@ -388,11 +388,11 @@ public static class SilPrinter {
                         break;
 
                     case DestroyValueInst destroy:
-                        builder.Append(' ').Append(Name(destroy.Value));
+                        builder.Append(destroy.Uncounted ? " [uncounted] " : " ").Append(Name(destroy.Value));
                         break;
 
                     case DestroyAddrInst destroy:
-                        builder.Append(' ').Append(Name(destroy.Address));
+                        builder.Append(destroy.Uncounted ? " [uncounted] " : " ").Append(Name(destroy.Address));
                         break;
 
                     case AllocRefInst alloc:

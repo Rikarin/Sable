@@ -56,7 +56,107 @@ public sealed class Simplify : ISilPass {
             changed |= RemoveDead(function);
             changed |= SimplifyArguments(function);
             changed |= EliminateCommonSubexpressions(function);
+            changed |= DirectCalls(function);
         }
+    }
+
+    // ---- Calls --------------------------------------------------------------
+
+    /// <summary>
+    ///     A call of a closure the function made with no context — an
+    ///     existential's witness, made where the existential was — calls its
+    ///     code directly, passing no context: LLVM can then inline it. The
+    ///     closure is found through the struct it was put in, and a local
+    ///     slot stored once, before the call, with what holds it.
+    /// </summary>
+    static bool DirectCalls(SilFunction function) {
+        var changed = false;
+        Dictionary<SilBlock, HashSet<SilBlock>>? dominators = null;
+        Uses? uses = null;
+        foreach (var block in function.Blocks) {
+            for (var i = 0; i < block.Instructions.Count; i++) {
+                var instruction = block.Instructions[i];
+                if (instruction is not (ApplyInst or TryApplyInst) || instruction.Operands[0].Type is not ThickFunctionType { Signature.IsAsync: false } thick) {
+                    continue;
+                }
+
+                uses ??= new Uses(function);
+                if (ContextFree(instruction.Operands[0], instruction, uses, () => dominators ??= SilVerifier.Dominators(function), 0) is not { Function: FunctionRefInst code }) {
+                    continue;
+                }
+
+                var target = new FunctionRefInst(code.Function, thick.Implementation) { Block = block, Location = instruction.Location };
+                var none = new BuiltinInst("no_context", SilType.Object, []) { Block = block, Location = instruction.Location };
+                SilValue[] arguments = [..instruction.Operands.Skip(1), none];
+                SilInstruction direct = instruction switch {
+                    ApplyInst apply => new ApplyInst(target, apply.Type, arguments),
+                    TryApplyInst tryApply => new TryApplyInst(target, tryApply.ResultType, arguments, tryApply.Normal, tryApply.Error),
+                    _ => throw new InvalidOperationException(),
+                };
+
+                direct.Block = block;
+                direct.Location = instruction.Location;
+                block.Instructions[i] = direct;
+                block.Instructions.Insert(i, none);
+                block.Instructions.Insert(i, target);
+                Uses.Replace(function, instruction, direct);
+                i += 2;
+                uses = null;
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>The closure with no context a value is, when the function made it: directly, as a field of a struct it made, or through a slot stored once before <paramref name="at" />.</summary>
+    static PartialApplyInst? ContextFree(SilValue value, SilInstruction at, Uses uses, Func<Dictionary<SilBlock, HashSet<SilBlock>>> dominators, int depth) {
+        if (depth > 8) {
+            return null;
+        }
+
+        switch (value) {
+            case PartialApplyInst { Context: null } closure:
+                return closure;
+
+            case StructExtractInst extract:
+                return Made(extract.Value, at, uses, dominators, depth + 1) is StructInst made
+                    ? ContextFree(made.Operands[extract.Field], at, uses, dominators, depth + 1)
+                    : null;
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>The instruction a value was made by, seen through a borrow or copy of a local slot stored once, before <paramref name="at" />, and otherwise only read.</summary>
+    static SilValue Made(SilValue value, SilInstruction at, Uses uses, Func<Dictionary<SilBlock, HashSet<SilBlock>>> dominators, int depth) {
+        if (depth > 8 || value is not (LoadBorrowInst { Address: AllocStackInst } or LoadInst { Kind: LoadKind.Copy, Address: AllocStackInst })) {
+            return value;
+        }
+
+        var slot = (AllocStackInst)((SilInstruction)value).Operands[0];
+        StoreInst? only = null;
+        foreach (var user in uses.Of(slot)) {
+            switch (user) {
+                case StoreInst store when ReferenceEquals(store.Address, slot) && only is null:
+                    only = store;
+                    break;
+                case LoadBorrowInst or LoadInst { Kind: not LoadKind.Take } or DestroyAddrInst or DeallocStackInst:
+                    break;
+                default:
+                    return value;
+            }
+        }
+
+        if (only is null) {
+            return value;
+        }
+
+        var stored = only.Block == at.Block
+            ? at.Block.Instructions.IndexOf(only) < at.Block.Instructions.IndexOf(at)
+            : dominators().TryGetValue(at.Block, out var set) && set.Contains(only.Block);
+        return stored ? Made(only.Value, at, uses, dominators, depth + 1) : value;
     }
 
     // ---- Constants ----------------------------------------------------------

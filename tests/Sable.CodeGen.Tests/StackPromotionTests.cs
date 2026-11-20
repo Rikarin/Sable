@@ -185,4 +185,165 @@ public sealed class StackPromotionTests {
                 )
             ).Stdout
         );
+    /// <summary>
+    ///     An object in the frame that nothing copies is never counted: its
+    ///     one reference ends in a destroy that runs its deinit where it is,
+    ///     with no release (#188). One copied is counted as before, and an
+    ///     inline value that outgrew its frame is released from the heap.
+    /// </summary>
+    [Fact]
+    public void AnObjectInTheFrameThatNothingCopiesIsNotCounted() {
+        var source = Program(
+            """
+            class Noisy {
+                var value: Int
+                init(_ value: Int) {
+                    self.value = value
+                }
+                deinit {
+                    if value % 250 == 0 {
+                        print(value)
+                    }
+                }
+            }
+
+            @inline_layout
+            struct Line {
+                var sku: U8[..8]
+                var qty: U16
+            }
+
+            @inline_layout
+            struct Order {
+                var lines: Line[>..]
+            }
+
+            fn total(_ order: Order) -> Int {
+                var t = 0
+                for line in order.lines {
+                    t = t + Int(line.qty)
+                }
+                return t
+            }
+
+            fn priced(_ i: Int) -> Int {
+                var order = Order { lines: [] }
+                order.lines.append(Line { sku: "A", qty: U16(i % 5) })
+                order.lines.append(Line { sku: "B", qty: 1 })
+                return total(order)
+            }
+            """,
+            """
+                var sum = 0
+                for i in 0..<1000 {
+                    let n = Noisy(i)
+                    sum = sum + n.value + priced(i)
+                }
+                print(sum)
+            """
+        );
+        Assert.Equal("0\n250\n500\n750\n502500\n", AssertAgree(source, stepLimit: 50_000_000).Stdout);
+
+        var sil = Pipeline.Compile(new SourceText(source, "test.sb"), optimised: true).Sil!;
+        Assert.Contains(sil.Functions.SelectMany(static f => f.Blocks).SelectMany(static b => b.Instructions),
+            static i => i is DestroyValueInst { Uncounted: true } or DestroyAddrInst { Uncounted: true });
+        if (CanBuild) {
+            var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
+            Assert.Contains("retains 0, releases 0", stats, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    ///     A loop body of several blocks — an 'if' in it, a local assigned
+    ///     another object in one branch — makes its objects and array in
+    ///     the frame too, when each is gone on every path back to where it
+    ///     is made (#188): nothing is allocated, and the deinits run as
+    ///     before.
+    /// </summary>
+    [Fact]
+    public void ALoopBodyOfSeveralBlocksMakesItsObjectsInTheFrame() {
+        var source = Program(
+            """
+            class Point {
+                var x: Int
+                var y: Int
+                init(_ x: Int, _ y: Int) {
+                    self.x = x
+                    self.y = y
+                }
+                deinit {
+                    if x % 2500 == 0 {
+                        print(x)
+                    }
+                }
+            }
+            """,
+            """
+                var total = 0
+                for i in 0..<10000 {
+                    let p = Point(i, 1)
+                    if i % 3 == 0 {
+                        total = total + p.x
+                    } else {
+                        total = total - p.y
+                    }
+                    let a = [i, p.y, 2]
+                    var q = Point(i, 2)
+                    if i % 2 == 0 {
+                        q = Point(i + 1, 3)
+                    }
+                    total = total + a.count + a[1] + q.y
+                }
+                print(total)
+            """
+        );
+        Assert.Equal("0\n0\n2500\n2500\n5000\n5000\n7500\n7500\n16726667\n", AssertAgree(source, stepLimit: 50_000_000).Stdout);
+        if (CanBuild) {
+            var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
+            Assert.Contains("allocations 0,", stats, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    ///     A local function captures a 'let' that has its value where the
+    ///     function is declared by value, as a closure does, with no box
+    ///     (#188); its context, made each turn, is then in the frame.
+    /// </summary>
+    [Fact]
+    public void ALocalFunctionCapturesALetByValue() {
+        var source = Program(
+            """
+            fn run(_ n: Int) -> Int {
+                let base = n * 2
+                fn scaled(_ x: Int) -> Int {
+                    return x * base
+                }
+                var total = 0
+                for i in 0..<n {
+                    let step = i % 3
+                    fn bump() -> Int {
+                        return step + base
+                    }
+                    total = total + scaled(i) + bump()
+                }
+                return total
+            }
+            """,
+            """
+                var sum = 0
+                for k in 0..<200 {
+                    sum = sum + run(k % 7)
+                }
+                print(sum)
+            """
+        );
+        var sil = SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sb")).Sil!);
+        Assert.DoesNotContain("alloc_ref $Box$of$Int", sil, StringComparison.Ordinal);
+        var output = AssertAgree(source, stepLimit: 50_000_000);
+        Assert.Equal("15426\n", output.Stdout);
+        if (CanBuild) {
+            var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
+            Assert.Contains("allocations 0,", stats, StringComparison.Ordinal);
+        }
+    }
 }

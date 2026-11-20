@@ -551,4 +551,46 @@ public sealed class ComputedPropertyTests {
                 }
                 print(told(Boom.Bang) + " " + told(Context(cause: Boom.Bang, doing: "testing")))
             """)).Stdout);
+    /// <summary>
+    ///     An existential made in the function that calls through it: its
+    ///     witnesses are closures with no context, so each call is a direct
+    ///     call of the witness, passing none (#179) — which LLVM can inline.
+    /// </summary>
+    [Fact]
+    public void AWitnessOfAnExistentialMadeHereIsCalledDirectly() {
+        var source = Program(
+            """
+            protocol Shape {
+                fn area() -> F64
+                fn name() -> String
+            }
+
+            struct Circle: Shape {
+                var r: F64
+                fn area() -> F64 { return 3.0 * r * r }
+                fn name() -> String { return "circle" }
+            }
+
+            fn describe(_ r: F64) -> F64 {
+                let s: any Shape = Circle { r: r }
+                return s.area() + F64(s.name().count)
+            }
+            """,
+            """
+                var total = 0.0
+                var i = 0
+                while i < 10 {
+                    total = total + describe(F64(i))
+                    i = i + 1
+                }
+                print(total)
+            """
+        );
+        Assert.Equal("915.0\n", AssertAgree(source).Stdout);
+
+        var sil = SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sb"), optimised: true).Sil!);
+        var describe = sil[sil.IndexOf("sil @Test.describe", StringComparison.Ordinal)..];
+        describe = describe[..describe.IndexOf("\n}", StringComparison.Ordinal)];
+        Assert.Equal(2, describe.Split("builtin \"no_context\"").Length - 1);
+    }
 }

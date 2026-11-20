@@ -291,6 +291,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     internal abstract class Counted {
         public int Strong = 1;
         public bool Immortal;
+
+        /// <summary>Made in a frame (docs/04 §3.7), as native code would.</summary>
+        public bool OnStack;
         public bool Freed;
     }
 
@@ -385,6 +388,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
     T Allocate<T>(T value, bool onStack = false) where T : Counted {
         _live.Add(value);
+        value.OnStack = onStack;
         if (!onStack) {
             Allocations++;
         }
@@ -452,7 +456,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     }
 
     /// <summary>The end of a copy's life: every reference it holds released, and freed when the last goes.</summary>
-    void Release(SilType type, object? value, int depth) {
+    /// <remarks>
+    ///     An uncounted release, <c>destroy_value [uncounted]</c>, is of an
+    ///     object's only reference and not counted, as native code does not
+    ///     count it; the releases its fields' destruction makes are.
+    /// </remarks>
+    void Release(SilType type, object? value, int depth, bool uncounted = false) {
         if (value is null || type.IsTrivial) {
             return;
         }
@@ -482,7 +491,14 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     return;
                 }
 
-                Releases++;
+                // Native code counts an uncounted release only of an object
+                // that is on the heap after all, which it releases as any.
+                if (!uncounted || !counted.OnStack) {
+                    Releases++;
+                } else if (counted.Strong != 1) {
+                    throw new SilTrap("an uncounted object was shared");
+                }
+
                 if (--counted.Strong > 0) {
                     return;
                 }
@@ -1019,7 +1035,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                             break;
                         }
 
-                        Release(((AddressType)destroy.Address.Type).Pointee, old, depth);
+                        Release(((AddressType)destroy.Address.Type).Pointee, old, depth, destroy.Uncounted);
                         break;
                     }
 
@@ -1029,7 +1045,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         break;
 
                     case DestroyValueInst destroy:
-                        Release(destroy.Value.Type, Get(destroy.Value), depth);
+                        Release(destroy.Value.Type, Get(destroy.Value), depth, destroy.Uncounted);
                         break;
 
                     case AllocRefInst alloc:
@@ -1212,6 +1228,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             case "array_empty":
                 return builtin.Type is SliceType ? SliceValue.Empty : null;
+
+            case "no_context":
+                return null;
 
             // A fresh array of the constants, room for them alone, as the
             // native constant has.

@@ -450,6 +450,39 @@ void sable_release(void *pointer) {
     sable_release_last(object);
 }
 
+// The only reference to an object made in a frame (docs/04 §3.7), which the
+// compiler found nothing ever copied, held weakly or unowned, or kept: its
+// count is one and stays so, and it is destroyed where it is without being
+// counted down — compiled code's 'destroy_value [uncounted]'. One that is on
+// the heap after all, a block that outgrew its room in the frame, is
+// released as any is.
+void sable_destroy_uncounted(void *pointer) {
+    SableObject *object = pointer;
+    if (object == NULL) {
+        return;
+    }
+
+    if (!(object_flags(object) & SABLE_STACK)) {
+        sable_release(object);
+        return;
+    }
+
+    if (object->strong != 1) {
+        sable_trap("an uncounted object was shared");
+    }
+
+    if (object->type->destroy != NULL) {
+        object->type->destroy(object);
+    }
+
+    if (object->strong != 1) {
+        sable_trap("an object outlived its deinit");
+    }
+
+    object->strong = 0;
+    object_gone(object);
+}
+
 // The last strong reference gone: its count is zero, and it is counted.
 // The deinit runs, the fields are destroyed, and the memory goes when no
 // unowned reference holds it. No other thread can reach it now but through

@@ -302,4 +302,80 @@ public sealed class ArcTests {
         Assert.Equal("a\nend\nbye a\nbye b\n", AssertAgree(source).Stdout);
         Assert.DoesNotContain("[unmanaged] $Test.Named, var \"n\"", SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sb")).Sil!), StringComparison.Ordinal);
     }
+
+    /// <summary>
+    ///     #179's loop-wide ARC: a 'let' copying a field of a borrowed object
+    ///     in a loop that changes nothing borrows it, its retain and release
+    ///     paired across the turn and gone; one whose loop writes the field
+    ///     keeps its copy. A dictionary's entry read and switched on, and an
+    ///     entry copied out to change and stored back, are read in place and
+    ///     moved.
+    /// </summary>
+    [Fact]
+    public void ALetOfWhatALoopLeavesAloneIsBorrowedAcrossTheTurn() {
+        var source = Program(
+            """
+            class Node {
+                var value: Int
+                var name: String
+                init(_ value: Int, _ name: String) {
+                    self.value = value
+                    self.name = name
+                }
+            }
+
+            fn walk(_ head: Node, _ n: Int) -> Int {
+                var total = 0
+                var i = 0
+                while i < n {
+                    let label = head.name
+                    if i % 2 == 0 {
+                        total = total + label.count
+                    } else {
+                        total = total + head.value
+                    }
+                    i = i + 1
+                }
+                return total
+            }
+
+            fn renaming(_ head: Node, _ n: Int) -> Int {
+                var total = 0
+                for i in 0..<n {
+                    let label = head.name
+                    head.name = "n\(i)"
+                    total = total + label.count
+                }
+                return total
+            }
+            """,
+            """
+                let head = Node(3, "head\(3)")
+                var counts: [String: Int] = [:]
+                let keys = ["a\(1)", "b\(2)", "c\(3)"]
+                var found = 0
+                for round in 0..<100 {
+                    for key in keys {
+                        counts[key] = (counts[key] ?? 0) + round
+                        found = found + (counts[key] ?? 0)
+                    }
+                }
+                print(walk(head, 100))
+                print(renaming(head, 100))
+                print(head.name)
+                print(found)
+            """
+        );
+        Assert.Equal("400\n292\nn99\n499950\n", AssertAgree(source).Stdout);
+
+        var sil = SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sb"), optimised: true).Sil!);
+        Assert.Contains("alloc_stack [unmanaged] $String, var \"label\"", sil, StringComparison.Ordinal);
+        Assert.Contains("alloc_stack $String, var \"label\"", sil, StringComparison.Ordinal);
+        if (CanBuild) {
+            // Was 899: walk's label each turn, and the dictionary's entries
+            // as they were looked up and updated; renaming's labels stay.
+            var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
+            Assert.Contains("retains 502,", stats, StringComparison.Ordinal);
+        }
+    }
 }

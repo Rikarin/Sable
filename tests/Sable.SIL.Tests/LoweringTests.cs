@@ -37,6 +37,28 @@ public sealed class LoweringTests {
     static object? Run(SilModule module, string function, params object[] arguments) =>
         new SilInterpreter(module).Run($"M.{function}", arguments);
 
+    /// <summary>An object made in the frame and never copied is destroyed uncounted, which prints and parses back (#188).</summary>
+    [Fact]
+    public void AnObjectInTheFrameThatNothingCopiesIsDestroyedUncounted() {
+        var module = Lower(
+            """
+            class Pair {
+                var a: Int
+                init(_ a: Int) {
+                    self.a = a
+                }
+            }
+
+            fn twice(_ x: Int) -> Int {
+                let p = Pair(x)
+                return p.a * 2
+            }
+            """
+        );
+        Assert.Contains("[uncounted]", SilPrinter.Print(module), StringComparison.Ordinal);
+        Assert.Equal(6L, Run(module, "twice", 3L));
+    }
+
     // ---- Arithmetic and calls ----------------------------------------------
 
     [Fact]

@@ -93,11 +93,11 @@ fi
 duration=${1:-1h}
 [ $# -gt 0 ] && shift
 targets=("$@")
-[ ${#targets[@]} -eq 0 ] && targets=(parser editor frontend sil resolver packages frombytes)
+[ ${#targets[@]} -eq 0 ] && targets=(parser editor frontend sil resolver packages interface frombytes)
 for target in "${targets[@]}"; do
     case "$target" in
-        parser|editor|frontend|sil|resolver|packages|frombytes) ;;
-        *) echo "error: no target '$target'; the targets are parser, editor, frontend, sil, resolver, packages and frombytes" >&2; exit 2 ;;
+        parser|editor|frontend|sil|resolver|packages|interface|frombytes) ;;
+        *) echo "error: no target '$target'; the targets are parser, editor, frontend, sil, resolver, packages, interface and frombytes" >&2; exit 2 ;;
     esac
 done
 deadline=$(( $(date +%s) + $(seconds_of "$duration") ))

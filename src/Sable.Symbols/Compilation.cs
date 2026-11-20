@@ -266,14 +266,23 @@ public sealed partial class Compilation {
     ///     signatures and late checks when they were reported with an anchor
     ///     (<see cref="Diagnostic.Anchor" />); the rest come without one.
     /// </summary>
-    public IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> GetAllDiagnosticsByFile() {
+    public IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> GetAllDiagnosticsByFile() => GetAllDiagnosticsByFile(static _ => true);
+
+    /// <summary>
+    ///     <see cref="GetAllDiagnosticsByFile()" />, with only the bodies of
+    ///     the files <paramref name="checkBodies" /> picks bound and checked:
+    ///     a program compiled against a library's interface (<c>.sbi</c>) does
+    ///     not check the library's bodies again, which were checked when the
+    ///     interface was written. Every file's declarations are still checked.
+    /// </summary>
+    public IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> GetAllDiagnosticsByFile(Func<SyntaxTree, bool> checkBodies) {
         var all = new List<(Diagnostic, SyntaxTree?)>();
         foreach (var tree in SyntaxTrees) {
             all.AddRange(tree.Diagnostics.Select(d => (d, (SyntaxTree?)tree)));
         }
 
         foreach (var tree in SyntaxTrees) {
-            if (_fileScopes.ContainsKey(tree)) {
+            if (_fileScopes.ContainsKey(tree) && checkBodies(tree)) {
                 all.AddRange(GetSemanticModel(tree).GetDiagnostics().Select(d => (d, (SyntaxTree?)tree)));
             }
         }

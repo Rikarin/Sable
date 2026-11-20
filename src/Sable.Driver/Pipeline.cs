@@ -24,7 +24,7 @@ public sealed record CompileResult(
 ///     it as LLVM IR. Each stage stops the pipeline when it has something to
 ///     say, so a later stage never runs on a broken earlier one.
 /// </summary>
-public static class Pipeline {
+public static partial class Pipeline {
     /// <param name="debugDirectory">
     ///     When set, emit DWARF debug information, with source file names
     ///     relative to this directory.
@@ -129,7 +129,8 @@ public static class Pipeline {
         bool checkOverflow,
         bool library,
         bool denyReflection,
-        bool checkArc
+        bool checkArc,
+        Func<Compilation, (SilModule, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)>)>? lower = null
     ) {
         if (errors.Count > 0) {
             return new(null, null, errors);
@@ -138,7 +139,8 @@ public static class Pipeline {
         SilModule module;
         IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> lowering;
         using (BuildTimings.Of(timings, "sil")) {
-            (module, lowering) = library ? SilGen.LowerLibraryByFile(compilation, denyReflection) : SilGen.LowerByFile(compilation, denyReflection);
+            (module, lowering) = lower is not null ? lower(compilation)
+                : library ? SilGen.LowerLibraryByFile(compilation, denyReflection) : SilGen.LowerByFile(compilation, denyReflection);
         }
 
         module.CheckExclusivity = checkExclusivity;

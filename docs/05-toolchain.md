@@ -631,25 +631,100 @@ instead saves nothing, since checking the bodies binds nearly all of them
 read from a `.sbi` at all: it is the embedded source, parsed whole (every
 module's, 247 files) on each build.
 
-Loading symbols without their source is blocked by what reads the source
-behind a symbol, not by the binder's tables alone: a symbol's
-`DeclaringSyntax` being empty means *synthesised* to lowering (the implicit
-initialisers and `contains` of `SilGen`), attributes such as
-`@inline(always|never)` and a type's reflected attributes are read from the
-declaration's syntax where they are used, value-generic predicates, enum raw
-values and default arguments are expressions, `SilProgram.Index` finds the
-declarations to lower or declare by walking every file's syntax, and the
-bodies another unit lowers — generic functions' instances, `@inline`
-bodies, defaults, `const fn`s and, for the entry unit, every global's
-initialiser — are bound from their file's source in its file scope. So a
-symbol `.sbi` needs, first, every such fact moved onto the symbols (an
-`IsSynthesised` flag, attributes, predicates and raw values as bound
-values), lowering's index built from symbols, and the bodies other units
-lower kept as something lowering can take without the file — serialised
-bound trees or SIL, as Swift's modules keep inlinable bodies as SIL. Only
-then can `Compilation.Create` take a unit's symbols beside other units'
-trees; per-module binding (`module_declarations`, below) is not needed
-first, but needs the same symbols-without-source.
+Loading symbols without their source was blocked by what reads the source
+behind a symbol, not by the binder's tables alone. What lowering and binding
+read of another unit's declaration is now a fact on its symbol (#182, stage
+2): `Symbol.IsSynthesized` (an implicit initialiser, a flags type's
+`contains`) rather than an empty `DeclaringSyntax`; `Symbol.Attributes`,
+each attribute's name and argument list as written, with those of the
+extension a member is declared in — `@inline(always|never)`, `@main`,
+`@intrinsic`, `@indirect`, `@MainActor` and a type's reflected attribute
+names are read there; `IsNonisolated`; `FunctionSymbol.HasBody`; and a
+type's const-generic predicates, bound once as `ValuePredicate`s that are
+evaluated without syntax. Enum raw values were facts already. Lowering's
+index of what another unit can see (`SilProgram.Index`) is built from the
+compilation's symbols — every module's members, every type's, extensions'
+among them, and properties' accessors — not by walking the other files'
+syntax (stage 3); a unit still walks its own files whole, for the
+declarations in its bodies. `SilProgramTests` holds the two to the same
+declarations in the same order.
+
+What still reads another unit's source, and so keeps
+`Compilation.Create` from taking a unit's symbols in place of its trees, is
+the bodies another unit lowers: a generic function's instances, `@inline`
+bodies, default arguments, `const fn`s, constants' values, field
+initialisers and, for the entry unit, every global's initialiser, and a
+type's reflected attribute values. They are bound from their file in its
+file scope. SIL cannot hold a generic body for an instance it does not know
+until generics are compiled once (#297); serialised bound trees are the
+other way, and neither is built.
+
+**Library interfaces (`.sbi`), as built** (#182, stage 4). A library unit's
+interface — `LibraryInterface` in Sable.SIL, written for Sable.Core by
+`Pipeline.CoreInterface` — holds its bound symbols and its SIL. The symbols
+(`SymbolInterface`) are a table of declarations in preorder, each with its
+kind, name, container, accessibility, flags, attributes and the facts above,
+followed by the types each refers to, written as trees: a declaration of the
+table by its index, one of another unit by module and dotted path, which
+reading resolves against the units read before it. They read back as symbols
+with no syntax that write back to the same bytes, and describe every
+declaration of Sable.Core as the bound ones do (`LibraryInterfaceTests`).
+Default arguments, initial values and accessors are not in the symbols:
+they are expressions and functions, in the SIL or the source. The SIL is
+every function of the unit's files lowered as a unit of a program compiled
+separately — what is not generic, with the instances it uses itself — as
+`SilPrinter`'s text, Brotli-compressed. The file is binary: `SBIL`, the
+format's version, then the compiler's identity, the settings (target os and
+arch, profile, `--deny-reflection`), the unit's name, each of its files'
+name and SHA-256, its modules, what other units' extensions add to its types
+in the compilation it was lowered in, the two sections, and the payload's
+SHA-256. One of another version, another compiler, cut short or corrupt is
+not read (`LibraryInterface.Read` gives null); the `interface` fuzz target
+holds the symbol reader to refusing what it cannot read and to writing what
+it reads back the same. The compiler's identity
+(`LibraryInterface.IdentityOf`) is the SHA-256 of its assemblies' module
+version ids, which a deterministic build derives from their content — the
+embedded library and runtime among it — so another build of the compiler
+never reads an interface this one wrote, whatever their version numbers.
+
+`Pipeline.CompileAgainst(program, interfaces)` compiles a program against
+them: every file no interface covers is checked and lowered as the unit
+holding the entry point (which sets up every global), and each interface's
+SIL is linked into the module, the program's copy kept of what both make (an
+instance, a thunk). The libraries' bodies are not bound or checked
+(`Compilation.GetAllDiagnosticsByFile(checkBodies)`) and their code is not
+lowered; their declarations are still declared from their source, which
+ships with the compiler and holds the generic bodies the program
+instantiates. An interface built from other files than the program's, for
+other settings, or before another unit's extension of its types (which
+changes how its methods are named) is refused, and a build answers by
+building it again. What the program says and builds is what compiling it
+whole does: `InterfaceCompileTests` compares the errors, the warnings, the
+SIL and the interpreter's output. The interface keeps each function's own
+order of its blocks (`blocks(...)` in the SIL text, which the printer
+otherwise orders by dominance), so that the passes see the library's code as
+lowering made it. An optimised build does the same, but its SIL may differ
+where lowering the whole program used what only the whole program shows —
+an existential's call made directly when nothing the program declares
+answers it otherwise — which the library, lowered as a unit, leaves to
+dispatch.
+
+Measured on the three-line program of #182 (`print("hi \(1 + 2)")`), in one
+process, on an M1 Max under a load average of about 15 from other builds —
+rough times; the shape is what counts. Compiled whole, each compilation
+binds and checks every body of Sable.Core: 3.4 s the first time in the
+process, 1.6–1.7 s after, of which binding is 1.28 s, lowering 0.13 s and
+the passes 0.2 s. Against the core's interface, read once: 0.78 s the
+first time, 0.37–0.42 s after, binding 0.04 s, lowering 0.08 s (the
+program's own code and the core's instances it uses, and parsing the
+interface's SIL, 60 ms of it), the passes 0.23 s — about 1.25 s saved of
+each compilation, three quarters of it. Building the core's interface takes
+5 s once per target and profile; reading the file back takes 5 ms, its
+symbols 10 ms, and it is 330 KB (the symbols 183 KB, the SIL 820 KB of text
+compressed to 150 KB). What is left is declaring the core from its
+source (`Compilation.Create`, about 60 ms warm) and lowering the instances
+of its generics the program uses; declaring from the interface's symbols
+instead waits on the bodies above.
 
 **Dependents only.** A unit depends on the units declaring a module it
 imports or names in full (`Shapes.Square` needs no import), on the units

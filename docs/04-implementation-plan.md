@@ -978,6 +978,13 @@ Sable.Testing      the test harness `sable test` drives
 **Write the standard library in Sable from day one of this phase.** It is the
 first large program and the best source of language bugs.
 
+A library is shipped as its source and, built once per target and profile,
+its interface (`.sbi`, #182; docs/05 §5.4): its bound symbols and its SIL.
+A program compiled against Sable.Core's interface (`Pipeline.CompileAgainst`)
+does not bind or check the core's bodies or lower its code again, which is
+three quarters of compiling a small program; it still declares the core from
+its source, which holds the generic bodies the program instantiates.
+
 ### The library, as begun
 
 The library is Sable source in `lib/<Module>/*.sb`, embedded in the driver

@@ -213,6 +213,24 @@ public sealed partial class SilGen {
         return (generator._module, generator.Diagnostics);
     }
 
+    /// <summary>
+    ///     <see cref="LowerUnit" />, with the file each diagnostic is in where
+    ///     lowering knows it, as <see cref="LowerByFile" /> gives them: what a
+    ///     program compiled against its libraries' interfaces reports.
+    /// </summary>
+    public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerUnitByFile(
+        Compilation compilation,
+        SilUnit unit,
+        SilProgram? program = null,
+        bool denyReflection = false
+    ) {
+        var generator = new SilGen(compilation) { _unit = unit, _program = program, _denyReflection = denyReflection };
+        generator._module.Unit = new();
+        generator._module.DenyReflection = denyReflection;
+        generator.LowerAll();
+        return (generator._module, generator.PlacedDiagnostics);
+    }
+
     SilUnit? _unit;
     SilProgram? _program;
 

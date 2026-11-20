@@ -32,7 +32,7 @@ public abstract class Target {
     /// <summary>Tokens a mutation inserts whole, for libFuzzer's -dict and the in-process loop alike.</summary>
     public abstract IEnumerable<string> Dictionary();
 
-    public static readonly IReadOnlyList<Target> All = [new ParserTarget(), new EditorTarget(), new FrontEndTarget(), new SilTarget(), new ResolverTarget(), new PackageFilesTarget()];
+    public static readonly IReadOnlyList<Target> All = [new ParserTarget(), new EditorTarget(), new FrontEndTarget(), new SilTarget(), new ResolverTarget(), new PackageFilesTarget(), new InterfaceTarget()];
 
     public static Target? Named(string name) => All.FirstOrDefault(t => t.Name == name);
 

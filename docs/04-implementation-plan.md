@@ -2580,7 +2580,10 @@ so a warm build re-parses only what changed; and early cut-off when a
 change's result is unchanged. (Since done: invalidation by dependency,
 and a binary `.sbi` that units whose objects are kept are parsed and bound
 from — docs/05 §5.4, "As built". Declarations are still bound from source
-text, the interfaces', on each build. Since done too (#181): an optimised
+text, the interfaces', on each build; docs/05 §5.4 measures what symbols in
+the `.sbi` would save (at most about 0.25 s of a 2.8 s body edit of
+`examples/ssg`) and lists what reads a symbol's source and must move onto
+the symbols first. Since done too (#181): an optimised
 build compiles unit by unit, its opt-level's SIL passes on each unit and
 ThinLTO across them — the release profile's default, `lto = "fat"` asking
 for the whole program; a package's native library is built so, cached, as

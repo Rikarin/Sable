@@ -614,6 +614,43 @@ summaries (a unit assumes the worst of another's functions, docs/02 §2.2),
 and declarations as symbols rather than source — binding them is still the
 front end's work on each build, over the interfaces' shorter text.
 
+**Declarations as symbols: what stands in the way.** Measured on
+`examples/ssg` built as a package (one 636-line unit and the standard
+library's, 186 files and 15.7k lines of it imported; `sable` built Release,
+load average about 10): a no-op build is fresh in 0.06 s (0.12 s with the
+process), and a body edit 2.7–3.0 s, of which bind is 0.62–0.69 s, SIL
+1.3–1.5 s, clang 0.3 s and link 0.05 s. Of bind, declaring the program
+(`Compilation.Create`) is 130–180 ms in a fresh process and 45–65 ms warm,
+binding every signature 125–135 ms fresh and 45–55 ms warm, and checking the
+edited unit's bodies the rest (390–450 ms fresh, 110–150 ms warm), much of
+the fresh times being JIT. Symbols read from a `.sbi` in place of declaring
+and binding the kept units would save at most the first two, about 0.25 s of
+the 2.8 s fresh and less warm; binding the kept units' signatures lazily
+instead saves nothing, since checking the bodies binds nearly all of them
+(0.54–0.62 s against 0.52–0.58 s eagerly). The standard library is not
+read from a `.sbi` at all: it is the embedded source, parsed whole (every
+module's, 247 files) on each build.
+
+Loading symbols without their source is blocked by what reads the source
+behind a symbol, not by the binder's tables alone: a symbol's
+`DeclaringSyntax` being empty means *synthesised* to lowering (the implicit
+initialisers and `contains` of `SilGen`), attributes such as
+`@inline(always|never)` and a type's reflected attributes are read from the
+declaration's syntax where they are used, value-generic predicates, enum raw
+values and default arguments are expressions, `SilProgram.Index` finds the
+declarations to lower or declare by walking every file's syntax, and the
+bodies another unit lowers — generic functions' instances, `@inline`
+bodies, defaults, `const fn`s and, for the entry unit, every global's
+initialiser — are bound from their file's source in its file scope. So a
+symbol `.sbi` needs, first, every such fact moved onto the symbols (an
+`IsSynthesised` flag, attributes, predicates and raw values as bound
+values), lowering's index built from symbols, and the bodies other units
+lower kept as something lowering can take without the file — serialised
+bound trees or SIL, as Swift's modules keep inlinable bodies as SIL. Only
+then can `Compilation.Create` take a unit's symbols beside other units'
+trees; per-module binding (`module_declarations`, below) is not needed
+first, but needs the same symbols-without-source.
+
 **Dependents only.** A unit depends on the units declaring a module it
 imports or names in full (`Shapes.Square` needs no import), on the units
 that share one of its modules (what one declares there, the other sees as

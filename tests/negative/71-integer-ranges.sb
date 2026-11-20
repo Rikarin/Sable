@@ -60,3 +60,19 @@ fn wide() {
     let h = same(-170141183460469231731687303715884105728)     //! S3200 does not fit in 'Int'
     let i = e == -170141183460469231731687303715884105728
 }
+
+// 'literal as T' gives the literal its type, as 'let x: T = literal' does,
+// so it is held to T's range, not to Int's (#288). 'unchecked as' wraps it.
+fn casts() {
+    let a = 18446744073709551615 as U128
+    let b = (-170141183460469231731687303715884105728) as I128
+    let c = 255 as U8
+    let d = 256 as U8                                   //! S3200 '256' does not fit in 'U8'
+    let e = (-1) as UInt                                //! S3200 '-1' does not fit in 'UInt'
+    let f = (300) as I8                                 //! S3200 '300' does not fit in 'I8'
+    let g = 340282366920938463463374607431768211455 as U128
+    let k = 340282366920938463463374607431768211455 as I128 //! S3200 does not fit in 'I128'
+    let h = 300 unchecked as U8
+    let i = 18446744073709551615 as F64
+    let j = 1.5 as F32
+}

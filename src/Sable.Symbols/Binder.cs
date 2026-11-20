@@ -7084,15 +7084,22 @@ public sealed partial class Binder {
 
         // A plain 'as' says what type a value is to have, so the operand is
         // bound expecting it: 'none as Int?' is that type's none, and
-        // '[1] as Int[>..]?' an array of that kind. A number is bound as it
-        // is written, so that 'as' to another number stays the checked
-        // conversion below, even for a literal.
+        // '[1] as Int[>..]?' an array of that kind. A number literal is
+        // given the type so, as 'let x: T = literal' gives it: '255 as U8'
+        // and '18446744073709551615 as U128' are that type's values, held to
+        // its range where they are written. Any other number is bound as it
+        // is, so that 'as' to another number stays the checked conversion
+        // below; and 'unchecked as' wraps a literal as it does any number.
         var isPlain = syntax.QuestionOrBangToken.IsNone;
-        var operand = BindExpression(syntax.Expression, isPlain && !Core.IsNumeric(target) ? target : null);
+        var isUnchecked = !syntax.UncheckedKeyword.IsNone;
+        var expected = !isPlain ? null
+            : !Core.IsNumeric(target) ? target
+            : !isUnchecked && IsNumberLiteral(syntax.Expression) ? target
+            : null;
+        var operand = BindExpression(syntax.Expression, expected);
 
         // 'as?' yields an optional; 'as' and 'as!' yield the type itself.
         var isOptional = syntax.QuestionOrBangToken.Kind == SyntaxKind.QuestionToken;
-        var isUnchecked = !syntax.UncheckedKeyword.IsNone;
         var type = isOptional ? new OptionalTypeSymbol(target) : target;
 
         if (operand.HasError || target.IsError) {
@@ -7205,6 +7212,15 @@ public sealed partial class Binder {
             $"'{source.ToDisplayString()}' cannot be cast to '{target.ToDisplayString()}'"
         );
     }
+
+    /// <summary>An integer or float literal as written, negated or in parentheses or not: '5', '-2.5', '(-1)'.</summary>
+    static bool IsNumberLiteral(ExpressionSyntax syntax) =>
+        syntax switch {
+            LiteralExpressionSyntax { Token.Kind: SyntaxKind.IntegerLiteralToken or SyntaxKind.FloatLiteralToken } => true,
+            PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.MinusToken, Operand: var operand } => IsNumberLiteral(operand),
+            ParenthesizedExpressionSyntax { Expression: var inner } => IsNumberLiteral(inner),
+            _ => false,
+        };
 
     /// <summary>A type whose values may turn out, as the program runs, to be some other type.</summary>
     static bool IsDynamicallyTyped(TypeSymbol type) =>

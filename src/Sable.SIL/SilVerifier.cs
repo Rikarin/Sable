@@ -253,6 +253,18 @@ public static partial class SilVerifier {
             case StoreUnownedInst unowned when unowned.Address.Type is not AddressType { Pointee: UnownedStorageType storage } || storage.Referent != unowned.Value.Type:
                 return $"store_unowned of {unowned.Value.Type} to {unowned.Address.Type}";
 
+            case WeakCopyValueInst weak when weak.Value.Type is not EnumType { Cases: [("Some", ClassType), ("None", null)] }:
+                return $"weak_copy_value of {weak.Value.Type}, which is no optional class reference";
+
+            case UnownedCopyValueInst unowned when unowned.Value.Type is not ClassType:
+                return $"unowned_copy_value of {unowned.Value.Type}, which is no class reference";
+
+            case StrongCopyWeakValueInst weak when weak.Value.Type is not WeakStorageType:
+                return $"strong_copy_weak_value of {weak.Value.Type}, which is not weak";
+
+            case StrongCopyUnownedValueInst unowned when unowned.Value.Type is not UnownedStorageType:
+                return $"strong_copy_unowned_value of {unowned.Value.Type}, which is not unowned";
+
             case LoadInst { Type: WeakStorageType or UnownedStorageType }:
                 return "weak and unowned storage is read with load_weak and load_unowned";
 

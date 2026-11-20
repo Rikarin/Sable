@@ -488,7 +488,12 @@ Status:
       `load_unowned`/`store_unowned`; weak references share a side-table
       entry per object, cleared when it dies; unowned ones count in the
       header's flags word, holding the memory, not the object, and trap on
-      a read once it is gone. Not yet: in structs, or in capture lists.
+      a read once it is gone. A struct's weak or unowned field is the same
+      storage, copied and destroyed by the struct's witnesses as a weak or
+      unowned retain and release; as a value it is made with
+      `weak_copy_value`/`unowned_copy_value` and read with
+      `strong_copy_weak_value`/`strong_copy_unowned_value`, in place with
+      `load_weak`/`load_unowned`.
 - [x] 6 — deinit ordering (subclass first, fields last to first), the
       immortal fast path, and a stack fast path (§3.7: an object made in
       its frame is counted as any other, and never freed). Atomic counts

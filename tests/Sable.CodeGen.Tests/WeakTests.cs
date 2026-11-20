@@ -167,6 +167,140 @@ public sealed class WeakTests {
             ).Stdout
         );
 
+    const string Links = """
+                         class Node {
+                             var name: String
+                             init(_ name: String) {
+                                 self.name = name
+                             }
+                             deinit {
+                                 print("bye " + name)
+                             }
+                         }
+
+                         struct Link {
+                             weak var target: Node?
+                             unowned var owner: Node
+                         }
+
+                         struct Tagged {
+                             weak var node: Node?
+                             var tag: Int
+                             init(_ node: Node?, _ tag: Int) {
+                                 self.node = node
+                                 self.tag = tag
+                             }
+                         }
+
+                         fn nameOf(_ node: Node?) -> String {
+                             if let node = node {
+                                 return node.name
+                             }
+                             return "none"
+                         }
+
+                         fn describe(_ link: Link) -> String {
+                             return nameOf(link.target) + " owned by " + link.owner.name
+                         }
+                         """;
+
+    /// <summary>
+    ///     A struct may hold a weak or an unowned reference: built memberwise
+    ///     or by its own initialiser, read from a value or from where it is,
+    ///     copied (each copy holds the object weakly in its own right) and
+    ///     stored to. Nothing it holds that way keeps an object alive.
+    /// </summary>
+    [Fact]
+    public void AStructsWeakAndUnownedFieldsHoldWithoutKeeping() =>
+        Assert.Equal(
+            "a owned by a\nb\na\nbye b\nnone\nnone\na\n3\na none\nbye a\n",
+            AssertAgree(
+                Program(
+                    Links,
+                    """
+                        let a = Node("a")
+                        var link = Link(target: a, owner: a)
+                        print(describe(link))
+                        var copy = link
+                        if true {
+                            let b = Node("b")
+                            link.target = b
+                            print(nameOf(link.target))
+                            print(nameOf(copy.target))
+                        }
+                        print(nameOf(link.target))
+                        copy.target = none
+                        print(nameOf(copy.target))
+                        let tagged = Tagged(a, 3)
+                        print(nameOf(tagged.node))
+                        print(tagged.tag)
+                        let all = [tagged, Tagged(none, 4)]
+                        print(nameOf(all[0].node) + " " + nameOf(all[1].node))
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>A parent holding its children by value, each pointing back weakly: no cycle, so all of it goes.</summary>
+    [Fact]
+    public void AStructsWeakBackReferenceBreaksTheCycle() =>
+        Assert.Equal(
+            "home\n2\nfolder home closed\n",
+            AssertAgree(
+                Program(
+                    """
+                    class Folder {
+                        var name: String
+                        var entries: Entry[>..]
+                        init(_ name: String) {
+                            self.name = name
+                            self.entries = []
+                        }
+                        deinit {
+                            print("folder " + name + " closed")
+                        }
+                    }
+
+                    struct Entry {
+                        weak var folder: Folder?
+                        var size: Int
+                    }
+                    """,
+                    """
+                        let home = Folder("home")
+                        home.entries.append(Entry(folder: home, size: 1))
+                        home.entries.append(Entry(folder: home, size: 2))
+                        if let folder = home.entries[1].folder {
+                            print(folder.name)
+                        }
+                        print(home.entries.count)
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void AStructsUnownedFieldTrapsOnceItsObjectIsGone() {
+        var execution = AssertAgree(
+            Program(
+                Links + """
+
+                        fn dangling() -> Link {
+                            let gone = Node("gone")
+                            return Link(target: gone, owner: gone)
+                        }
+                        """,
+                """
+                    let link = dangling()
+                    print(nameOf(link.target))
+                    print(link.owner.name)
+                """
+            )
+        );
+        Assert.Equal("bye gone\nnone\n", execution.Stdout);
+        Assert.StartsWith("fatal error: read an unowned reference to an object that is gone\n", execution.Stderr, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("class C {}\nclass D { weak let c: C? }", "'weak' needs a 'var'")]
     [InlineData("class C {}\nclass D { weak var c: C }", "'weak' needs a 'var' of an optional class type")]

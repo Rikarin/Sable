@@ -951,6 +951,38 @@ public sealed class StoreUnownedInst(SilValue value, SilValue address) : SilInst
     public override string Opcode => "store_unowned";
 }
 
+/// <summary>
+///     <c>weak_copy_value %0</c>: an optional's object held weakly, as a
+///     value — what a struct's <c>weak</c> field holds — borrowing the
+///     optional. Its own until stored in the struct, or destroyed.
+/// </summary>
+public sealed class WeakCopyValueInst(SilValue value) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public override SilType Type => Value.Type is EnumType optional ? new WeakStorageType(optional) : Value.Type; // the verifier rejects the rest
+    public override string Opcode => "weak_copy_value";
+}
+
+/// <summary><c>unowned_copy_value %0</c>: an object held unowned, as a value — what a struct's <c>unowned</c> field holds — borrowing it.</summary>
+public sealed class UnownedCopyValueInst(SilValue value) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public override SilType Type => Value.Type is ClassType referent ? new UnownedStorageType(referent) : Value.Type;
+    public override string Opcode => "unowned_copy_value";
+}
+
+/// <summary><c>strong_copy_weak_value %0</c>: the object a weak value holds, retained, or none if it is gone — <c>load_weak</c> of a value.</summary>
+public sealed class StrongCopyWeakValueInst(SilValue value) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public override SilType Type => (Value.Type as WeakStorageType)?.Optional ?? Value.Type;
+    public override string Opcode => "strong_copy_weak_value";
+}
+
+/// <summary><c>strong_copy_unowned_value %0</c>: the object an unowned value holds, retained; a trap if it is gone.</summary>
+public sealed class StrongCopyUnownedValueInst(SilValue value) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public override SilType Type => (Value.Type as UnownedStorageType)?.Referent ?? Value.Type;
+    public override string Opcode => "strong_copy_unowned_value";
+}
+
 /// <summary><c>copy_value %0</c>: a new owned copy of a value — a retain, for a reference.</summary>
 public sealed class CopyValueInst(SilValue value) : SilInstruction(value) {
     public SilValue Value => Operands[0];

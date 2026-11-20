@@ -1858,16 +1858,12 @@ public sealed partial class SilGen {
                     Alignment = named.OriginalDefinition.Alignment,
                 });
                 var members = TypeSubstitution.For(named);
-                if (StoredFields(named.OriginalDefinition).Any(static f => f.ReferenceKind != ReferenceKind.Strong)) {
-                    return null; // weak and unowned fields of structs wait for value witnesses of their own
-                }
-
                 foreach (var field in StoredFields(named.OriginalDefinition)) {
                     if (Lower(members.Apply(field.Type)) is not { } fieldType) {
                         return null;
                     }
 
-                    structType.Fields.Add((field.Name, fieldType));
+                    structType.Fields.Add((field.Name, Stored(field.ReferenceKind, fieldType)));
                 }
 
                 // A struct that holds a move-only value is move-only itself:
@@ -1905,14 +1901,7 @@ public sealed partial class SilGen {
                         return null;
                     }
 
-                    // A weak or unowned field holds its object without keeping it.
-                    SilType stored = (field.ReferenceKind, fieldType) switch {
-                        (ReferenceKind.Weak, EnumType optional) => new WeakStorageType(optional),
-                        (ReferenceKind.Unowned, ClassType referent) => new UnownedStorageType(referent),
-                        _ => fieldType,
-                    };
-
-                    classType.Fields.Add((field.Name, stored));
+                    classType.Fields.Add((field.Name, Stored(field.ReferenceKind, fieldType)));
                 }
 
                 // An actor's serial executor, the runtime's: after every
@@ -3870,6 +3859,41 @@ public sealed partial class SilGen {
             _ => false,
         };
 
+    /// <summary>What a field of a struct or a class holds: a weak or unowned one its object without keeping it.</summary>
+    static SilType Stored(ReferenceKind kind, SilType type) =>
+        (kind, type) switch {
+            (ReferenceKind.Weak, EnumType optional) => new WeakStorageType(optional),
+            (ReferenceKind.Unowned, ClassType referent) => new UnownedStorageType(referent),
+            _ => type,
+        };
+
+    /// <summary>
+    ///     A struct's field as a value — a weak or unowned one made from the
+    ///     object, which the field holds without keeping alive. Consumes the
+    ///     value, and gives one the struct takes.
+    /// </summary>
+    internal static SilValue IntoField(SilType field, SilValue value, Func<SilInstruction, SilValue> emit) {
+        if (field is not (WeakStorageType or UnownedStorageType) || value.Type == field) {
+            return value;
+        }
+
+        var made = emit(field is WeakStorageType ? new WeakCopyValueInst(value) : new UnownedCopyValueInst(value));
+        emit(new DestroyValueInst(value));
+        return made;
+    }
+
+    /// <summary>
+    ///     What a field read out of a struct value reads as: the object a weak or
+    ///     unowned field holds, retained (owned); any other field as extracted
+    ///     (borrowed from the struct).
+    /// </summary>
+    internal static SilValue OutOfField(SilValue extracted, Func<SilInstruction, SilValue> emit) =>
+        extracted.Type switch {
+            WeakStorageType => emit(new StrongCopyWeakValueInst(extracted)),
+            UnownedStorageType => emit(new StrongCopyUnownedValueInst(extracted)),
+            _ => extracted,
+        };
+
     static bool HoldsItself(NominalType type) {
         var seen = new HashSet<SilType>();
         bool Reaches(SilType part) {
@@ -4625,7 +4649,14 @@ public sealed partial class SilGen {
                     }
 
                     var index = structType.FieldIndex(field.Name);
-                    return index < 0 ? Missing(expression, $"the member '{field.Name}'") : Emit(new StructExtractInst(value, index));
+                    if (index < 0) {
+                        return Missing(expression, $"the member '{field.Name}'");
+                    }
+
+                    // A weak or unowned field is read as the object, held as any owned value borrowed is.
+                    var extracted = Emit(new StructExtractInst(value, index));
+                    var read = OutOfField(extracted, Emit);
+                    return ReferenceEquals(read, extracted) ? read : Hold(read);
                 }
 
                 default:
@@ -7137,7 +7168,7 @@ public sealed partial class SilGen {
 
             // A field of something in memory, read without copying the whole of it.
             if (!IsTrivialType(receiver.Type) && !IsBorrowable(access) && Place(access) is { } place) {
-                return Emit(new LoadInst(place));
+                return ReadField(place);
             }
 
             if (!IsTrivialType(receiver.Type)) {
@@ -7150,7 +7181,9 @@ public sealed partial class SilGen {
                     return Missing(access, $"the member '{field.Name}'");
                 }
 
-                var copy = Owned(Emit(new StructExtractInst(borrowed, borrowedIndex)));
+                var extracted = Emit(new StructExtractInst(borrowed, borrowedIndex));
+                var read = OutOfField(extracted, Emit);
+                var copy = ReferenceEquals(read, extracted) ? Owned(extracted) : read;
                 End(borrowed);
                 return copy;
             }
@@ -8122,7 +8155,7 @@ public sealed partial class SilGen {
                 return Missing(record, "a record that leaves a field to its default");
             }
 
-            return Emit(new StructInst(structType, [..fields!]));
+            return Emit(new StructInst(structType, [..fields!.Select((f, i) => IntoField(structType.Fields[i].Type, f!, Emit))]));
         }
 
         SilValue? UnionCase(TypeSymbol unionType, string name, IReadOnlyList<BoundExpression> arguments, BoundNode at) {
@@ -9579,7 +9612,7 @@ public sealed partial class SilGen {
                     return Missing(call, "a memberwise initialiser that leaves a field to its default");
                 }
 
-                return Emit(new StructInst(structType, [..fields]));
+                return Emit(new StructInst(structType, [..fields.Select((f, i) => IntoField(structType.Fields[i].Type, f, Emit))]));
             }
 
             // A requirement of Error's, called on 'any Error': through the

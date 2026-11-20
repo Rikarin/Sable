@@ -34,3 +34,12 @@ fn aBareThrowsCarriesAnIoError() {
     }
     assertEqual(path, "missing.txt")
 }
+
+@test
+fn eachIoErrorSaysWhatWentWrong() {
+    assertEqual(IoError.NotFound(path: "a").description(), "nothing is at 'a'")
+    assertEqual(IoError.Failed(path: "a").description(), "'a' could not be read, written or changed")
+    assertEqual(IoError.Unreachable(address: "h:1").description(), "'h:1' could not be reached")
+    assertEqual(IoError.Disconnected.description(), "the connection failed or was closed")
+    assertEqual(IoError.Cancelled.description(), "the task was cancelled while it waited")
+}

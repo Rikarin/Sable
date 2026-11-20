@@ -1,0 +1,96 @@
+module TcpListenerTests
+
+// TcpListener (Sable.IO), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.IO
+
+import Sable.IO
+import Sable.Testing
+
+/// Bytes as text, to compare.
+fn text(_ bytes: U8[>..]) -> String {
+    var said = ""
+    for b in bytes {
+        said += "\(b) "
+    }
+    return said
+}
+
+@test
+fn aListenerOnPortZeroIsGivenAFreePort() {
+    do {
+        let listener = try TcpListener.bind(host: "127.0.0.1", port: 0)
+        assert(listener.port > 0)
+    } catch {
+        assert(false, error.description())
+    }
+}
+
+@test
+fn listeningOnAnAddressThatIsNotOursThrows() {
+    var thrown = ""
+    do {
+        let _ = try TcpListener.bind(host: "192.0.2.1", port: 0)
+    } catch {
+        thrown = error.description()
+    }
+    assertEqual(thrown, "'192.0.2.1:0' could not be reached")
+}
+
+@test
+fn aListenerAcceptsAConnection() async {
+    do {
+        let listener = try TcpListener.bind(host: "127.0.0.1", port: 0)
+        let port = listener.port
+        let client = Task.spawn { try? await TcpStream.connect(host: "127.0.0.1", port: port) }
+        let accepted = try await listener.accept()
+        try await accepted.write([7])
+        accepted.close()
+        if let stream = await client.value {
+            assertEqual(text(try await stream.readAll()), text([7]))
+        } else {
+            assert(false, "the client did not connect")
+        }
+    } catch {
+        assert(false, error.description())
+    }
+}
+
+@test
+fn closingAListenerWakesItsAccept() async {
+    do {
+        let listener = try TcpListener.bind(host: "127.0.0.1", port: 0)
+        let waiting = Task.spawn { () -> String in
+            do {
+                let _ = try await listener.accept()
+                return "accepted"
+            } catch {
+                return error.description()
+            }
+        }
+        await Task.yield()
+        listener.close()
+        assertEqual(await waiting.value, "the connection failed or was closed")
+    } catch {
+        assert(false, error.description())
+    }
+}
+
+@test
+fn cancellingATaskWakesItsAccept() async {
+    do {
+        let listener = try TcpListener.bind(host: "127.0.0.1", port: 0)
+        let waiting = Task.spawn { () -> String in
+            do {
+                let _ = try await listener.accept()
+                return "accepted"
+            } catch {
+                return error.description()
+            }
+        }
+        await Task.yield()
+        waiting.cancel()
+        assertEqual(await waiting.value, "the task was cancelled while it waited")
+    } catch {
+        assert(false, error.description())
+    }
+}

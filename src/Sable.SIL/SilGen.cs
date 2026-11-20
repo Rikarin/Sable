@@ -1521,7 +1521,7 @@ public sealed partial class SilGen {
     static string SubscriptName(FunctionSymbol subscript) =>
         "subscript" + string.Concat(subscript.Parameters.Select(static p => "$" + Sanitise(p.Type.ToDisplayString())));
 
-    static string Sanitise(string text) =>
+    internal static string Sanitise(string text) =>
         new([..text.Select(static c => char.IsLetterOrDigit(c) || c is '_' or '.' ? c : '$')]);
 
     /// <summary>True for a method that takes <c>self</c>, as opposed to a static one or an initialiser.</summary>
@@ -1893,6 +1893,7 @@ public sealed partial class SilGen {
                 if (named.TypeKind == TypeKind.Actor) {
                     classType.Fields.Add((ExecutorField, SilType.Int));
                     classType.Fields.Add((ExecutorQueueField, SilType.Int));
+                    classType.Fields.Add((ExecutorHolderField, SilType.Int));
                 }
 
                 return classType;
@@ -5051,7 +5052,7 @@ public sealed partial class SilGen {
 
                 case BoundExpressionStatement expression:
                     // An assignment on its own: its value, which nothing reads, is not made.
-                    if ((expression.Expression is BoundAssignment assignment ? Assignment(assignment) : Expression(expression.Expression)) is { } discarded) {
+                    if ((expression.Expression is BoundAssignment assignment ? OnActorFor(assignment, () => Assignment(assignment)) : Expression(expression.Expression)) is { } discarded) {
                         Destroy(discarded);
                     }
 
@@ -5079,6 +5080,13 @@ public sealed partial class SilGen {
 
                 case BoundThrow throwStatement:
                     if (Expression(throwStatement.Value) is { } error) {
+                        // An error of type Never — a generic one's, made Never
+                        // in this instance — has no value: the throw is never reached.
+                        if (Sub(throwStatement.Value.Type).Equals(Core.Never)) {
+                            Jump(new UnreachableInst());
+                            return;
+                        }
+
                         RouteError(error, throwStatement.Syntax);
                     }
 
@@ -6734,7 +6742,9 @@ public sealed partial class SilGen {
         ///     result. Most stores — a setter's, a subscript's, 'array_set', a
         ///     non-trivial value's — give nothing back of their own.
         /// </summary>
-        SilValue? AssignmentValue(BoundAssignment assignment) {
+        SilValue? AssignmentValue(BoundAssignment assignment) => OnActorFor(assignment, () => AssignmentValueHere(assignment));
+
+        SilValue? AssignmentValueHere(BoundAssignment assignment) {
             // 'a.next?.v = 9' stores only when there is a next, evaluating the
             // value only then: its value is optional.
             if (assignment.Target is BoundFieldAccess { Receiver: { } chainedFrom } chainedTarget
@@ -9398,6 +9408,17 @@ public sealed partial class SilGen {
             if (IsIntrinsic(callee)) {
                 var owner = Owner(callee)?.OriginalDefinition;
 
+                // 'Runtime.waitForSocket(socket, writable:)': a place the task
+                // suspends until the I/O reactor says the socket is ready.
+                if (owner is { Name: "Runtime", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } } && callee.Name == "waitForSocket") {
+                    if (Expression(call.Arguments[0]) is not { } socket || Expression(call.Arguments[1]) is not { } writable) {
+                        return null;
+                    }
+
+                    Emit(new BuiltinInst("task_io_wait", SilType.Unit, socket, writable));
+                    return UnitValue.Instance;
+                }
+
                 // Tasks: made, slept, and yielded to (SilGen.Tasks.cs).
                 if (owner is not null && ReferenceEquals(owner, Core.Task)) {
                     if (callee.Name is "spawn" or "detached") {
@@ -9424,6 +9445,10 @@ public sealed partial class SilGen {
 
                         Emit(new BuiltinInst("task_park", SilType.Unit, list));
                         return UnitValue.Instance;
+                    }
+
+                    if (callee.Name == "runBlocking") {
+                        return RunBlocking(call);
                     }
 
                     if (callee.Name == "sleepUncancelled") {

@@ -294,12 +294,9 @@ public sealed partial class LlvmEmitter {
                   %immortal = icmp ne i32 %immortalBit, 0
                   br i1 %immortal, label %done, label %shared
                 shared:
-                {SharedDead(1)}  %old = atomicrmw sub ptr %strongField, i32 1 release, align 4
+                {SharedDead(1)}  %old = atomicrmw sub ptr %strongField, i32 1 acq_rel, align 4
                   %sharedGone = icmp eq i32 %old, 1
-                  br i1 %sharedGone, label %acquire, label %counted, !prof !{"{"}!"branch_weights", i32 1, i32 1000{"}"}
-                acquire:
-                  fence acquire
-                  br label %last
+                  br i1 %sharedGone, label %last, label %counted, !prof !{"{"}!"branch_weights", i32 1, i32 1000{"}"}
                 last:
                   br i1 %counts, label %countLast, label %free
                 countLast:
@@ -514,6 +511,18 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_waitlist_free(ptr)
                                 declare void @sable_waitlist_wake(ptr)
                                 declare zeroext i1 @sable_task_park(ptr)
+                                declare zeroext i1 @sable_task_io_wait(i64, i1 zeroext)
+                                declare zeroext i1 @sable_task_blocking(ptr, ptr)
+                                declare i64 @sable_net_status()
+                                declare i64 @sable_net_listen(ptr, i64)
+                                declare i64 @sable_net_port(i64)
+                                declare i64 @sable_net_accept(i64)
+                                declare i64 @sable_net_connect(ptr, i64)
+                                declare zeroext i1 @sable_net_connected(i64)
+                                declare ptr @sable_net_read(i64, i64, ptr)
+                                declare i64 @sable_net_write(i64, ptr, i64, i64)
+                                declare void @sable_net_shutdown(i64)
+                                declare void @sable_net_close(i64)
                                 declare void @sable_tasks_drain()
                                 declare void @sable_task_run_until_main()
                                 declare ptr @sable_frame_alloc(i64)
@@ -1679,7 +1688,24 @@ public sealed partial class LlvmEmitter {
 
                     var slot = $"%p{i}.debug";
                     var declarations = new List<(string Variable, string Expression)>();
-                    if (i < function.ParameterNames.Count) {
+                    if (argument.Type == SilType.Object && ContextType(argument) is { IsCoroutineFrame: true } frame) {
+                        // An async function's resume function is given its
+                        // frame, where its parameters and locals live across
+                        // its awaits (AsyncLowering): each shown by its own
+                        // name — a local's field is the name and a number —
+                        // through the box of one a closure captures.
+                        foreach (var (fieldName, fieldType, offset) in ObjectFields(frame)) {
+                            if (fieldName.StartsWith('$') || fieldType == SilType.Unit) {
+                                continue;
+                            }
+
+                            var cut = fieldName.LastIndexOf('$');
+                            var shown = cut > 0 && fieldName[(cut + 1)..].All(char.IsAsciiDigit) ? fieldName[..cut] : fieldName;
+                            declarations.Add(BoxedType(fieldType) is { } inner
+                                ? (Debug.Variable(shown, _scope, file, line, inner), $"DW_OP_deref, DW_OP_plus_uconst, {offset}, DW_OP_deref, DW_OP_plus_uconst, {ObjectHeaderSize}")
+                                : (Debug.Variable(shown, _scope, file, line, fieldType), $"DW_OP_deref, DW_OP_plus_uconst, {offset}"));
+                        }
+                    } else if (i < function.ParameterNames.Count) {
                         declarations.Add((Debug.Variable(function.ParameterNames[i], _scope, file, line, argument.Type, i + 1), ""));
                     } else if (argument.Type == SilType.Object && ContextType(argument) is { } context) {
                         if (BoxedType(context) is { } boxed) {
@@ -1717,7 +1743,8 @@ public sealed partial class LlvmEmitter {
                 }
 
                 foreach (var argument in block.Arguments) {
-                    if (!_incoming.TryGetValue(argument, out var incoming)) {
+                    // A block given nothing — a case's payload of Never, laid out as nothing — has no phi.
+                    if (!_incoming.TryGetValue(argument, out var incoming) || argument.Type == SilType.Unit) {
                         continue;
                     }
 
@@ -2432,7 +2459,13 @@ public sealed partial class LlvmEmitter {
                     continue;
                 }
 
-                // A payload of no bytes is all of its one value.
+                // A payload of no bytes is all of its one value; one laid
+                // out as nothing (Unit — Never's, say) has no value to pass.
+                if (payload == SilType.Unit) {
+                    arms.Add($"{tagType} {caseIndex}, label %{_labels[target]}");
+                    continue;
+                }
+
                 if (Area(enumType).Count == 0) {
                     var empty = NewLabel("case");
                     _extra.Append(empty).Append(":\n").Append($"  br label %{_labels[target]}\n");
@@ -2757,6 +2790,27 @@ public sealed partial class LlvmEmitter {
                     module.Ownership(_out, "  ", Witnessing.Share, builtin.Operands[0].Type, operands[0], _dbg);
                     return;
 
+                // A value stored into an object: shared too, if the object
+                // is — its header's flag word, at 12, has SABLE_SHARED (512).
+                case "share_into": {
+                    var at = Fresh();
+                    var flags = Fresh();
+                    var bit = Fresh();
+                    var shared = Fresh();
+                    Line($"{at} = getelementptr inbounds i8, ptr {operands[0]}, i64 12");
+                    Line($"{flags} = load atomic i32, ptr {at} monotonic, align 4");
+                    Line($"{bit} = and i32 {flags}, 512");
+                    Line($"{shared} = icmp ne i32 {bit}, 0");
+                    var share = NewLabel("share");
+                    var after = NewLabel("shared");
+                    Line($"br i1 {shared}, label %{share}, label %{after}");
+                    Continue(share);
+                    module.Ownership(_out, "  ", Witnessing.Share, builtin.Operands[1].Type, operands[1], _dbg);
+                    Line($"br label %{after}");
+                    Continue(after);
+                    return;
+                }
+
                 // Actors: where the running task is, by identity (an actor
                 // object's address, 1 for the main actor, 0 for anywhere), and
                 // a hop to one — a place the task may suspend.
@@ -2792,6 +2846,49 @@ public sealed partial class LlvmEmitter {
                     Line($"call void @sable_{builtin.Name[5..]}(ptr {list})");
                     return;
                 }
+
+                // A socket to be ready (the reactor), and work on the blocking pool.
+                case "async_io_wait":
+                    Line($"{Result()} = call zeroext i1 @sable_task_io_wait(i64 {operands[0]}, i1 zeroext {operands[1]})");
+                    return;
+
+                case "async_blocking":
+                    Line($"{Result()} = call zeroext i1 @sable_task_blocking(ptr {operands[0]}, ptr {operands[1]})");
+                    return;
+
+                // Sockets (runtime/net.c), by handle.
+                case "net_status":
+                    Line($"{Result()} = call i64 @sable_net_status()");
+                    return;
+
+                case "net_listen" or "net_connect":
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}(ptr {operands[0]}, i64 {operands[1]})");
+                    return;
+
+                case "net_port" or "net_accept":
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}(i64 {operands[0]})");
+                    return;
+
+                case "net_connected":
+                    Line($"{Result()} = call zeroext i1 @sable_net_connected(i64 {operands[0]})");
+                    return;
+
+                case "net_read":
+                    Line($"{Result()} = call ptr @sable_net_read(i64 {operands[0]}, i64 {operands[1]}, ptr {module.ArrayMetadata(new ArrayType(SilType.U8))})");
+                    return;
+
+                case "net_write": {
+                    var type = (SliceType)builtin.Operands[1].Type;
+                    var buffer = SlicePart(operands[1], type, 0);
+                    var start = SlicePart(operands[1], type, 1);
+                    var count = SlicePart(operands[1], type, 2);
+                    Line($"{Result()} = call i64 @sable_net_write(i64 {operands[0]}, ptr {buffer}, i64 {start}, i64 {count})");
+                    return;
+                }
+
+                case "net_shutdown" or "net_close":
+                    Line($"call void @sable_{builtin.Name}(i64 {operands[0]})");
+                    return;
 
                 case "async_park": {
                     var list = Fresh();

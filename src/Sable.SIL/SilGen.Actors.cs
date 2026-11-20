@@ -5,7 +5,7 @@ namespace Sable.SIL;
 
 /// <summary>
 ///     Actors (SYNTAX.md §19, docs/06 §6.7): each actor object has a serial
-///     executor, two words the runtime owns at the end of its fields, and a
+///     executor, three words the runtime owns at the end of its fields, and a
 ///     call into an actor — or into '@MainActor' code — from outside it hops
 ///     there first and back after (runtime/tasks.c's sable_actor_hop): the
 ///     task takes the actor if it is free, and waits its turn otherwise. What
@@ -15,8 +15,8 @@ namespace Sable.SIL;
 ///     'nonisolated', does not hop.
 /// </summary>
 public sealed partial class SilGen {
-    /// <summary>The executor's two words: an inbox, and a queue the actor's holder keeps.</summary>
-    internal const string ExecutorField = "$executor", ExecutorQueueField = "$executor.queue";
+    /// <summary>The executor's three words: an inbox, a queue the actor's holder keeps, and the holder.</summary>
+    internal const string ExecutorField = "$executor", ExecutorQueueField = "$executor.queue", ExecutorHolderField = "$executor.holder";
 
     /// <summary>The main actor, as a hop names it; 0 is anywhere.</summary>
     const long MainActor = 1;
@@ -119,6 +119,51 @@ public sealed partial class SilGen {
         bool IsolatedRead(FieldSymbol field) =>
             function.Type.IsAsync && field is { IsStatic: false, IsMutable: true } && !IsNonisolated(field)
             && ActorOf(field) is { } actor && (InClosure || !Inside(symbol, actor));
+
+        /// <summary>
+        ///     The actor whose state an assignment writes, from an async closure
+        ///     written inside it — which may run as a task of its own, off the
+        ///     actor: 'self.count += 1' in 'Task.spawn { … }'. The receiver is
+        ///     what can be read twice: 'self', a local or a parameter.
+        /// </summary>
+        BoundExpression? IsolatedWrite(BoundAssignment assignment) {
+            if (!function.Type.IsAsync || !InClosure) {
+                return null;
+            }
+
+            for (var target = assignment.Target; target is not null;) {
+                switch (target) {
+                    case BoundFieldAccess { Field: { IsStatic: false } field, Receiver: { } receiver } when ActorOf(field) is not null && !IsNonisolated(field):
+                        return receiver is BoundSelfAccess or BoundLocalAccess or BoundParameterAccess ? receiver : null;
+                    case BoundFieldAccess { Receiver: var inner }:
+                        target = inner;
+                        break;
+                    case BoundIndexAccess index:
+                        target = index.Receiver;
+                        break;
+                    default:
+                        return null;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>An assignment to an actor's state from an async closure inside it: on the actor, the read and the write together.</summary>
+        SilValue? OnActorFor(BoundAssignment assignment, Func<SilValue?> lower) {
+            if (IsolatedWrite(assignment) is not { } receiver || Borrow(receiver) is not { Type: ClassType } actor) {
+                return lower();
+            }
+
+            var back = HopInto(actor, []);
+            End(actor);
+            var result = lower();
+            if (_current is not null) {
+                HopBack(back, null);
+            }
+
+            return result;
+        }
 
         /// <summary>
         ///     Before a call into an actor: where the task runs now, kept to

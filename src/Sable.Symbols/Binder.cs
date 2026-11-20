@@ -1578,6 +1578,9 @@ public sealed partial class Binder {
         if (declarator.Initializer is { } initSyntax) {
             if (isAsyncLet) {
                 initializer = BindAsyncLetChild(initSyntax.Value, declaredType);
+                if (initializer is BoundClosure childBody) {
+                    CheckTaskCaptures(childBody, "'async let'");
+                }
             } else {
                 initializer = BindExpression(initSyntax.Value, declaredType);
                 if (declaredType is not null) {
@@ -3145,6 +3148,165 @@ public sealed partial class Binder {
             };
         }
     }
+
+    static BoundExpression Unconverted(BoundExpression expression) =>
+        expression is BoundConversion conversion ? Unconverted(conversion.Operand) : expression;
+
+    /// <summary>
+    ///     What is passed to a <c>@Sendable</c> parameter: a closure written
+    ///     there, whose captures are checked; a named function, which
+    ///     captures nothing; or a <c>@Sendable</c> parameter, checked where
+    ///     its closure was written. Any other closure's captures cannot be seen.
+    /// </summary>
+    void CheckSendableClosure(BoundExpression argument, string spawner) {
+        switch (Unconverted(argument)) {
+            case BoundClosure closure:
+                CheckTaskCaptures(closure, spawner);
+                return;
+
+            case BoundParameterAccess { Parameter.IsSendable: true }:
+            case BoundFunctionReference:
+            case BoundFunctionGroup:
+            case BoundError:
+                return;
+
+            case var other when other.Type is FunctionTypeSymbol or OptionalTypeSymbol { UnderlyingType: FunctionTypeSymbol }:
+                _diagnostics.Error(
+                    ErrorCode.ERR_TaskCaptureNotSendable,
+                    argument.Syntax.Span,
+                    $"the closure {spawner} runs alongside the code around it must be written here, or be a named function or a '@Sendable' parameter, "
+                    + "so that what it captures can be seen to be Sendable"
+                );
+                return;
+        }
+    }
+
+    /// <summary>
+    ///     What a task's closure captures (SYNTAX.md §19): it runs alongside
+    ///     the code that spawned it, maybe on another thread, so everything it
+    ///     captures crosses a boundary as an actor's arguments do, and must be
+    ///     Sendable. A 'var' would be shared between the two, each changing
+    ///     what the other reads: it is captured by value, '[x = x]', or not at all.
+    /// </summary>
+    void CheckTaskCaptures(BoundClosure closure, string spawner) {
+        var inner = new HashSet<Symbol>(ReferenceEqualityComparer.Instance) { closure.Symbol };
+        var listed = new HashSet<Symbol>(ReferenceEqualityComparer.Instance);
+        foreach (var capture in closure.Captures) {
+            listed.Add(capture.Symbol);
+            if (capture.Initializer is { } value && Sendability.Why(value.Type, []) is { } listedReason) {
+                ReportTaskCapture(capture.Syntax, capture.Symbol.Name, value.Type, listedReason, spawner);
+            }
+        }
+
+        var reported = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        var pending = new Stack<BoundNode>([closure.Body]);
+        var nodes = new List<BoundNode>();
+        while (pending.TryPop(out var node)) {
+            nodes.Add(node);
+            switch (node) {
+                case BoundClosure nested:
+                    inner.Add(nested.Symbol);
+                    break;
+                case BoundLocalFunction local:
+                    inner.Add(local.Symbol);
+                    break;
+            }
+
+            foreach (var child in node.Children) {
+                pending.Push(child);
+            }
+        }
+
+        // A closure that cannot wait runs on another thread with no way to
+        // wait for an actor's turn: it may not touch an actor's state.
+        var synchronous = closure.Type is FunctionTypeSymbol { IsAsync: false };
+        foreach (var node in nodes) {
+            if (synchronous && !InUnsafe(node.Syntax) && IsolatedMemberIn(node) is { } isolated) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_IsolatedStateInSendableClosure,
+                    node.Syntax.Span,
+                    $"'{isolated.Name}' is isolated to {Isolation(isolated)}, and the closure {spawner} runs on another thread cannot wait for its turn; "
+                    + "read what it needs before, or make the closure async, so that it hops"
+                );
+            }
+
+            switch (node) {
+                // In an 'unsafe' block the programmer vouches for what is shared.
+                case BoundNode vouched when InUnsafe(vouched.Syntax):
+                    break;
+
+                case BoundLocalAccess access when access.Local.ContainingSymbol is { } owner && !inner.Contains(owner)
+                    && !listed.Contains(access.Local) && reported.Add(access.Local):
+                    if (access.Local.IsMutable) {
+                        _diagnostics.Error(
+                            ErrorCode.ERR_TaskCaptureNotSendable,
+                            access.Syntax.Span,
+                            $"'{access.Local.Name}' is a 'var' the task made by {spawner} would share with the code around it, each changing what the other reads; "
+                            + $"copy it into a 'let' to capture, or capture its value in a capture list, '[{access.Local.Name} = {access.Local.Name}]'"
+                        );
+                    } else if (Sendability.Why(access.Local.Type, []) is { } reason) {
+                        ReportTaskCapture(access.Syntax, access.Local.Name, access.Local.Type, reason, spawner);
+                    }
+
+                    break;
+
+                case BoundParameterAccess access when access.Parameter.ContainingSymbol is { } owner && !inner.Contains(owner) && reported.Add(access.Parameter):
+                    // A '@Sendable' closure parameter was checked where it was written.
+                    if (!access.Parameter.IsSendable && Sendability.Why(access.Parameter.Type, []) is { } parameterReason) {
+                        ReportTaskCapture(access.Syntax, access.Parameter.Name, access.Parameter.Type, parameterReason, spawner);
+                    }
+
+                    break;
+
+                case BoundSelfAccess self when reported.Add(SelfCaptureKey):
+                    if (Sendability.Why(self.Type, []) is { } selfReason) {
+                        ReportTaskCapture(self.Syntax, "self", self.Type, selfReason, spawner);
+                    }
+
+                    break;
+            }
+        }
+    }
+
+    static readonly object SelfCaptureKey = new();
+
+    /// <summary>The actor-isolated member a node reaches: a 'var' of an actor, or a method of one; '@MainActor' state too.</summary>
+    static Symbol? IsolatedMemberIn(BoundNode node) {
+        Symbol? member = node switch {
+            BoundFieldAccess { Field: { IsStatic: false } field } when field.IsMutable || field.IsComputed => field,
+            BoundCall { Function: { IsStatic: false, FunctionKind: FunctionKind.Ordinary } function } => function,
+            _ => null,
+        };
+
+        return member is not null && IsActorIsolated(member) ? member : null;
+    }
+
+    static bool IsActorIsolated(Symbol member) {
+        if (IsNonisolated(member)) {
+            return false;
+        }
+
+        var owner = member.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : member.ContainingSymbol;
+        return owner is NamedTypeSymbol { TypeKind: TypeKind.Actor } || OnMainActor(member);
+    }
+
+    static bool InUnsafe(SyntaxNode node) {
+        for (SyntaxNode? at = node; at is not null; at = at.Parent) {
+            if (at is UnsafeStatementSyntax) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void ReportTaskCapture(SyntaxNode at, string name, TypeSymbol type, string reason, string spawner) =>
+        _diagnostics.Error(
+            ErrorCode.ERR_TaskCaptureNotSendable,
+            at.Span,
+            $"'{name}' is captured by the task {spawner} makes, which runs alongside the code around it, "
+            + $"so it must be Sendable, and '{type.ToDisplayString()}' is not: {reason}"
+        );
 
     /// <summary>Reports a value crossing into or out of an actor whose type is not Sendable.</summary>
     void CheckSendable(TypeSymbol type, TextSpan span, string what, Symbol member) {
@@ -4951,6 +5113,15 @@ public sealed partial class Binder {
             MarkAsync(syntax.Span, $"'{resolved.Name}'");
         } else if (CrossesIntoActor(resolved)) {
             MarkAsync(syntax.Span, $"'{resolved.Name}', isolated to {(OnMainActor(resolved) ? "the main actor" : "its actor")},");
+        }
+
+        // A task's body runs alongside the code that made it: what it captures crosses.
+        if (converted.Count == resolved.Parameters.Length) {
+            for (var i = 0; i < converted.Count; i++) {
+                if (resolved.Parameters[i].IsSendable) {
+                    CheckSendableClosure(converted[i], $"'{resolved.Name}'");
+                }
+            }
         }
 
         // What goes into the actor, and what comes back out, crosses.
@@ -8143,6 +8314,18 @@ public sealed partial class Binder {
                 group.Syntax.Span,
                 $"'{chosen.Name}' changes the value it is called on, so it cannot be taken with it as a value; "
                 + "call it in a closure instead"
+            );
+            return new BoundError(group.Syntax);
+        }
+
+        // 'counter.bump' of an actor: a closure called later, anywhere,
+        // would call into the actor without waiting its turn (Swift's rule).
+        if (group.Receiver is not null && !chosen.IsStatic && chosen.FunctionKind == FunctionKind.Ordinary && !OnMainActor(chosen) && IsActorIsolated(chosen) && IsolatedFromHere(chosen)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_IsolatedWitness,
+                group.Syntax.Span,
+                $"'{chosen.Name}' is isolated to {Isolation(chosen)}, so it cannot be taken as a value: a call through it would not wait for the actor; "
+                + "call it in an async closure instead, which waits"
             );
             return new BoundError(group.Syntax);
         }

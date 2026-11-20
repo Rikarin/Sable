@@ -200,6 +200,9 @@ public sealed class SilParser {
         }
     }
 
+    /// <summary>A field's name: a word, or one the compiler made, '$' and a word ('$state', '$executor').</summary>
+    string FieldName() => Accept("$") ? "$" + Expect(TokenKind.Word, "a field name").Text : Expect(TokenKind.Word, "a field name").Text;
+
     Token Expect(TokenKind kind, string what) {
         if (Current.Kind != kind) {
             throw Error($"expected {what} but found '{Describe(Current)}'");
@@ -341,7 +344,7 @@ public sealed class SilParser {
         Expect("{");
         if (!At("}")) {
             do {
-                var field = Expect(TokenKind.Word, "a field name").Text;
+                var field = FieldName();
                 Expect(":");
                 type.Fields.Add((field, ParseType()));
             } while (Accept(","));
@@ -363,7 +366,7 @@ public sealed class SilParser {
         Expect("{");
         if (!At("}")) {
             do {
-                var field = Expect(TokenKind.Word, "a field name").Text;
+                var field = FieldName();
                 Expect(":");
                 type.Fields.Add((field, ParseType()));
             } while (Accept(","));

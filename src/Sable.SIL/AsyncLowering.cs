@@ -30,8 +30,10 @@ namespace Sable.SIL;
 ///         runtime's: <c>async_wait</c> (a task not yet finished),
 ///         <c>async_group_wait</c> (a group's next child to finish),
 ///         <c>async_hop</c> (an actor to be free, or the main thread),
-///         <c>async_yield</c>, <c>async_sleep</c> and <c>async_park</c> (a
-///         wait list to be woken), each of which says whether the task must
+///         <c>async_yield</c>, <c>async_sleep</c>, <c>async_park</c> (a
+///         wait list to be woken), <c>async_io_wait</c> (a socket to be
+///         ready, which the reactor says) and <c>async_blocking</c> (work
+///         run on the blocking pool), each of which says whether the task must
 ///         suspend, having noted what it waits for: the executor puts it
 ///         where it will be woken once it has.
 ///     </para>
@@ -77,7 +79,27 @@ public static class AsyncLowering {
         }
 
         module.AsyncLowered = true;
+        ShareStores(module);
         new Lowering(module).Run();
+    }
+
+    /// <summary>
+    ///     A value stored into an object's field may be reached from every
+    ///     thread the object is: each store of one that holds references
+    ///     into a class's field is preceded by <c>share_into</c>, which shares
+    ///     the value — counts it atomically, and what it reaches — when the
+    ///     object is shared already (runtime/tasks.c's sable_share), and is a
+    ///     test of a bit otherwise. A frame's fields are its task's alone.
+    /// </summary>
+    static void ShareStores(SilModule module) {
+        foreach (var block in module.Functions.SelectMany(static f => f.Blocks)) {
+            for (var i = 0; i < block.Instructions.Count; i++) {
+                if (block.Instructions[i] is StoreInst { Value: var value, Address: RefElementAddrInst { Reference: { Type: ClassType { IsCoroutineFrame: false } } owner } } store
+                    && !value.Type.IsTrivial && value.Type is not AddressType) {
+                    block.Instructions.Insert(i++, new BuiltinInst("share_into", SilType.Unit, owner, value) { Block = block, Location = store.Location });
+                }
+            }
+        }
     }
 
     /// <summary>The name of an async function's resume function.</summary>
@@ -97,7 +119,7 @@ public static class AsyncLowering {
         ///     starts as: the resume function, the state, the result and the error.
         /// </summary>
         ClassType Head(SilType result, SilType? thrown) {
-            var name = $"$async.head${result}" + (thrown is null ? "" : $"$throws${thrown}");
+            var name = $"AsyncHead$of${SilGen.Sanitise(result.ToString())}" + (thrown is null ? "" : $"$throws${SilGen.Sanitise(thrown.ToString())}");
             if (_heads.TryGetValue(name, out var head)) {
                 return head;
             }
@@ -114,7 +136,8 @@ public static class AsyncLowering {
                 head.Fields.Add(("$error", thrown));
             }
 
-            return _heads[name] = head;
+            // In the module's types, so that its printed SIL reads back.
+            return _heads[name] = module.AddType(head);
         }
 
         /// <summary>An async function's start: its parameters in, its frame out.</summary>
@@ -128,7 +151,7 @@ public static class AsyncLowering {
             callee.Type as FunctionType ?? ((ThickFunctionType)callee.Type).Signature;
 
         static bool IsWait(SilInstruction instruction) =>
-            instruction is BuiltinInst { Name: "task_yield" or "task_sleep" or "task_wait" or "task_group_wait" or "task_hop" or "task_park" };
+            instruction is BuiltinInst { Name: "task_yield" or "task_sleep" or "task_wait" or "task_group_wait" or "task_hop" or "task_park" or "task_io_wait" or "task_blocking" };
 
         static bool IsSuspension(SilInstruction instruction) =>
             IsWait(instruction) || instruction is ApplyInst apply && IsAsyncCallee(apply.Callee) || instruction is TryApplyInst tryApply && IsAsyncCallee(tryApply.Callee);
@@ -341,7 +364,7 @@ public static class AsyncLowering {
             var name = function.Name;
             var original = function.Type;
             var head = Head(original.Result, original.Thrown);
-            var frame = new ClassType(name + "$frame") { Superclass = head, IsCoroutineFrame = true };
+            var frame = module.AddType(new ClassType(name + "$frame") { Superclass = head, IsCoroutineFrame = true });
             frame.Fields.AddRange(head.Fields);
 
             // The body is the resume function's; the start takes the name.
@@ -670,12 +693,14 @@ public static class AsyncLowering {
                     break;
                 }
 
-                case BuiltinInst { Name: "task_yield" or "task_sleep" or "task_park" } wait: {
+                case BuiltinInst { Name: "task_yield" or "task_sleep" or "task_park" or "task_io_wait" or "task_blocking" } wait: {
                     if (!async) {
                         throw new InvalidOperationException($"'{wait.Name}' outside an async function, in {function.Name}");
                     }
 
-                    var must = At(block, new BuiltinInst(wait.Name switch { "task_yield" => "async_yield", "task_park" => "async_park", _ => "async_sleep" }, SilType.Bool, [..wait.Operands]));
+                    var must = At(block, new BuiltinInst(wait.Name switch {
+                        "task_yield" => "async_yield", "task_park" => "async_park", "task_io_wait" => "async_io_wait", "task_blocking" => "async_blocking", _ => "async_sleep",
+                    }, SilType.Bool, [..wait.Operands]));
                     At(block, new CondBranchInst(must, Suspended(after), [], after, []));
                     break;
                 }

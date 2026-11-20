@@ -210,7 +210,14 @@ public sealed partial class SilInterpreter {
     void RunTasks(InterpretedTask? until) {
         while (true) {
             WakeSleepers();
+            PollSockets(0);
             if (!TryDequeue(out var task)) {
+                // Waiting for a socket, until the earliest sleeper at the latest.
+                if (_ioWaiters.Count > 0) {
+                    PollSockets(AnySleeping() && _sleepers.TryPeek(out _, out var earliest) ? earliest.Deadline : -1);
+                    continue;
+                }
+
                 if (AnySleeping()) {
                     WaitForSleeper();
                     continue;
@@ -329,6 +336,7 @@ public sealed partial class SilInterpreter {
             Enqueue(task);
         }
 
+        IoCancel(task, resume: true);
         foreach (var child in task.Children.ToList()) {
             Cancel(child, depth);
         }
@@ -336,6 +344,7 @@ public sealed partial class SilInterpreter {
 
     /// <summary>A task that can no longer go on, as the program ends: its frames destroyed from the root, and given back.</summary>
     void DropTask(InterpretedTask task) {
+        IoCancel(task, resume: false);
         if (task.Frame is { } frame) {
             var previous = _currentTask;
             _currentTask = task;
@@ -450,6 +459,15 @@ public sealed partial class SilInterpreter {
                 _sleepers.Enqueue((self, self.SleepTicket), (self.Deadline, self.SleepTicket));
                 return true;
             }
+
+            // A socket to be ready: off the run queue until it is.
+            case "async_io_wait":
+                return IoWait(operands[0], (bool)operands[1]!);
+
+            // Blocking work runs at once here, on the one thread: nothing waits.
+            case "async_blocking":
+                Call(module.Find((string)operands[0]!) ?? throw new SilTrap($"call to undefined @{operands[0]}"), [operands[1]], depth + 1);
+                return false;
 
             case "async_frame_free":
                 PopFrame(Current, (HeapObject)operands[0]!);

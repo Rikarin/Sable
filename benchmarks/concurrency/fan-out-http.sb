@@ -1,0 +1,72 @@
+module Bench
+
+import Sable.IO
+import Sable.Time
+
+// A fan-out HTTP-like workload over loopback: a server task accepts each
+// connection and serves it in a task of its own — a request line read, a
+// reply of a few hundred bytes written — while fifty client tasks
+// each connect, ask, and read to the end, all at once, forty times over
+// (fifty: well inside the listen backlog, 128 on macOS).
+// Every wait is on the I/O reactor.
+
+fn reply(_ connection: TcpStream) async {
+    do {
+        let _ = try await connection.read(upTo: 1024)
+        var body: U8[>..] = []
+        for i in 0..<512 {
+            body.append(U8(48 + i % 10))
+        }
+        try await connection.write(body)
+        connection.close()
+    } catch { }
+}
+
+/// Accepts connections until cancelled, serving each in a child task, which
+/// the server waits for before it finishes.
+fn serve(_ listener: TcpListener) async {
+    while let connection = try? await listener.accept() {
+        let _ = Task.spawn { await reply(connection) }
+    }
+}
+
+fn ask(_ port: Int) async -> Int {
+    do {
+        let connection = try await TcpStream.connect(host: "127.0.0.1", port: port)
+        try await connection.write([71, 69, 84, 32, 47, 10])
+        return (try await connection.readAll()).count
+    } catch {
+        return 0
+    }
+}
+
+@main
+fn main() async {
+    let clients = 50
+    let rounds = 40
+    let bound = try? TcpListener.bind(host: "127.0.0.1", port: 0)
+    guard let listener = bound else {
+        print("cannot listen")
+        return
+    }
+    let server = Task.spawn { await serve(listener) }
+    let start = Instant.now()
+    var bytes = 0
+    var failed = 0
+    for _ in 0..<rounds {
+        var asking: Task<Int>[>..] = []
+        for _ in 0..<clients {
+            let port = listener.port
+            asking.append(Task.spawn { await ask(port) })
+        }
+        for task in asking {
+            let got = await task.value
+            bytes += got
+            failed += got == 0 ? 1 : 0
+        }
+    }
+    let micros = start.elapsed.totalNanoseconds / 1000
+    server.cancel()
+    await server.value
+    print("fan-out over loopback: \(micros / (clients * rounds)) us per request, \(bytes / (clients * rounds)) bytes each, \(failed) failed")
+}

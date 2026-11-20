@@ -221,6 +221,9 @@ public enum ErrorCode {
     WRN_GeneratorReported = 3233,
     ERR_GeneratedFileInvalid = 3234,
     ERR_AsyncLetCaptured = 3235,
+    ERR_TaskCaptureNotSendable = 3236,
+    ERR_IsolatedWitness = 3237,
+    ERR_IsolatedStateInSendableClosure = 3238,
 
     // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
     // 'sable check' runs, never by compiling. Their severity is configured.

@@ -1234,7 +1234,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return null;
 
             // One thread runs every task here: nothing is shared between threads.
-            case "share":
+            case "share" or "share_into":
                 return null;
 
             // An actor's identity: the interpreter's hops never wait, so need none.
@@ -1879,6 +1879,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
         if (builtin.Name.StartsWith("task_", StringComparison.Ordinal) || builtin.Name.StartsWith("async_", StringComparison.Ordinal)) {
             return Task(builtin.Name, operands, depth);
+        }
+
+        if (builtin.Name.StartsWith("net_", StringComparison.Ordinal)) {
+            return Net(builtin.Name, operands);
         }
 
         if (builtin.Name.StartsWith("class_is:", StringComparison.Ordinal)) {

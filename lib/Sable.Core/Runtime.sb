@@ -100,6 +100,60 @@ public struct Runtime {
     @builtin("time_sleep")
     public static fn sleep(nanoseconds: Int)
 
+    // ---- Sockets -----------------------------------------------------------
+    // TCP, by handle (0: none), every socket nonblocking and watched by the
+    // runtime's I/O reactor: kqueue, epoll or an I/O completion port. A call
+    // that would block gives nothing, and 'socketStatus' then says 1 (2: it
+    // failed); the caller waits for the socket with 'waitForSocket' — the
+    // task suspends, its worker runs others — and calls again. What
+    // Sable.IO's TcpListener and TcpStream are written over.
+
+    /// A socket listening on the host's address and port (0: any free one).
+    @builtin("net_listen")
+    public static fn listen(host: String, port: Int) -> Int
+
+    /// The port a listening socket is bound to.
+    @builtin("net_port")
+    public static fn socketPort(_ socket: Int) -> Int
+
+    /// A connection taken from a listening socket.
+    @builtin("net_accept")
+    public static fn accept(_ socket: Int) -> Int
+
+    /// A connection begun: once the socket is writable, 'socketConnected'
+    /// says whether it was made.
+    @builtin("net_connect")
+    public static fn connect(host: String, port: Int) -> Int
+
+    @builtin("net_connected")
+    public static fn socketConnected(_ socket: Int) -> Bool
+
+    /// Up to so many bytes read; none at the end of what the other end sends.
+    @builtin("net_read")
+    public static fn readSocket(_ socket: Int, _ most: Int) -> U8[>..]
+
+    /// Some of the bytes written: how many.
+    @builtin("net_write")
+    public static fn writeSocket(_ socket: Int, _ bytes: U8[:]) -> Int
+
+    /// What the last socket call did: 0 done, 1 would block, 2 failed.
+    @builtin("net_status")
+    public static fn socketStatus() -> Int
+
+    /// No more is written: the other end reads to its end.
+    @builtin("net_shutdown")
+    public static fn shutdownSocket(_ socket: Int)
+
+    /// Closed; waiting tasks wake to find it so. Closing twice does nothing.
+    @builtin("net_close")
+    public static fn closeSocket(_ socket: Int)
+
+    /// Waits until the socket is ready to read, or to write: the running
+    /// task suspends until the reactor says so, and its worker runs others.
+    /// The compiler writes it: a place the task may suspend.
+    @intrinsic
+    public static async fn waitForSocket(_ socket: Int, writable: Bool)
+
     // ---- Processes -------------------------------------------------------
     // Another program run to its end, its output kept; and this one's
     // directory and identity.

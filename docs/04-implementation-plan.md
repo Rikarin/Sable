@@ -1362,9 +1362,11 @@ other leaks nothing.
   what it waits for and its children; one queued already is queued again
   in its new band, and whichever entry is taken first runs it.
   `Task.currentPriority` is still the priority given.
-- *Actors.* Each actor has a serial executor, two words after its fields:
-  an inbox a task pushes itself onto without a lock when the actor is
-  held, and a queue its holder keeps, by band then by arrival. A call into
+- *Actors.* Each actor has a serial executor, three words after its
+  fields: an inbox a task pushes itself onto without a lock when the actor
+  is held, a queue its holder keeps, by band then by arrival, and the
+  holder, which a task that waits escalates to its own priority (the
+  fourth stage; `SABLE_STATS` counts it). A call into
   an actor from outside it, a read of its state, or a call into
   `@MainActor` code hops (`sable_actor_hop`): the task takes the actor if
   it is free and goes on where it is — no suspension — or waits its turn,
@@ -1422,22 +1424,134 @@ the actor hops (a yielding ping-pong hops four times a round); many pay
 for handing tasks between cores, which a task that does little between
 spawns and awaits cannot win back.
 
+**I/O** — the fourth stage (`tests/Sable.CodeGen.Tests/ReactorTests.cs`,
+`tests/lib/Sable.IO/TcpListenerTests.sb` and `TcpStreamTests.sb`).
+
+- *The reactor* is the platform layer's (`platform.h`): kqueue on macOS and
+  the BSDs, epoll on Linux, an I/O completion port on Windows told of
+  sockets' readiness by `ProcessSocketNotifications` — the same shape on
+  each: a socket added once, edge-triggered for both directions, with a
+  key; a wait until one is ready, a wake, or a deadline. (The Windows one
+  is written to match and not yet built.) It is opened as the pool starts,
+  or as the first socket is. One parked thread at a time waits in it — a
+  worker, or with no pool the main thread — until the earliest sleeper's
+  deadline, so sockets and timers are served by one wait; the other
+  parked workers wait on their conditions, and a task queued while only
+  the reactor's thread is parked wakes it (`EVFILT_USER`, an eventfd, a
+  posted completion). A worker kept busy looks at the reactor, without
+  waiting, every 64th task, so that sockets ready are heard of while no
+  worker parks.
+- *Sockets* (`runtime/net.c`) are nonblocking, each an `IoSource` that
+  keeps what the reactor has said: a bit per direction, set as it reports
+  readiness and cleared only when a call finds the socket would block with
+  no report since the call began, so a report that comes while no task
+  waits is not lost. A call that would block says so, and the library
+  waits (`Runtime.waitForSocket`, the `task_io_wait` builtin, a place a
+  task suspends) and calls again. A source is never freed — closed, it is
+  used again with its generation bumped, which a handle carries — so a
+  report gathered for a socket since closed lands on memory that is still
+  a source, and a stale handle names nothing. Cancelling a task waiting
+  on a socket wakes it, and it throws; closing the socket wakes it too.
+  `Sable.IO` has `TcpListener` (`bind`, `accept`) and `TcpStream`
+  (`connect`, `read(upTo:)`, `readAll`, `write`, `finishWriting`), both
+  `@immutable` and so Sendable: a connection accepted in one task is
+  served in another. The interpreter has them too, over .NET's sockets,
+  its executor waiting in `Socket.Select` when nothing else can run.
+- *The blocking pool.* `Task.blocking { … }` (Tokio's `spawn_blocking`)
+  suspends the task and runs the body on a thread kept for work that
+  blocks, made as work comes and none is free, up to 512
+  (`SABLE_BLOCKING_THREADS`); the task is queued again once it is done,
+  with what the body gave or threw. Whole files (`File`, `Directory`) and
+  processes stay synchronous calls, for synchronous code and build
+  scripts alike; an async caller runs them there —
+  `try await Task.blocking { try File.read(path) }` — as Tokio's `fs` does,
+  since no system's readiness interface covers regular files. On one
+  worker, four tasks each blocking a thread for 200 ms take about 200 ms,
+  while a fifth ticks on (`BlockingWorkRunsOffTheWorkers`).
+
 ThreadSanitizer (`tools/tsan/run.sh`: the runtime compiled with
 `-fsanitize=thread`, and the program's own functions instrumented) reports
 nothing on the concurrency benchmarks, `examples/04-async-service.sb`, and
 programs like MultiCoreTests' — an actor counted by sixteen tasks,
 channels between four senders and four receivers, main-actor code called
 from eight tasks, a CPU-bound fan-out. It found, and so no longer does,
-the allocator's slab counts updated under different classes' locks.
+the allocator's slab counts updated under different classes' locks. In
+the fourth stage it reports nothing on those, the sleepers, the loopback
+fan-out and an echo server with blocking work either, once the last
+release of a shared object became one acquire-release operation instead
+of a release and an acquire fence after, which it does not model: a task
+object dropped by its spawner while the task ran looked like a race.
 
-Not yet: an I/O reactor; async backtraces; task-local values; Sendable
-checking of what a spawned closure captures (a non-Sendable class
-captured by two tasks races on its fields, though its counts are
-atomic, and a value stored later into such a shared object, or read
-through a weak reference from another task, is not marked shared); a
-write to an actor's state from a closure inside it does not hop; a call
-through a closure, a protocol or an existential reaches an actor's
-method without hopping. A drop runs no defers of the async functions
+**What crosses, checked** — the fourth stage (`tests/negative/85-task-captures.sb`,
+`86-actor-isolation-holes.sb`, `MultiCoreTests`).
+
+- *A task's captures.* What `Task.spawn`'s, `Task.detached`'s, a group's
+  `spawn`'s, `Task.blocking`'s or an `async let`'s closure captures must
+  be Sendable, and a `var` is captured only by its value (S3236): a class
+  two tasks shared raced on its fields. The parameters that run a closure
+  so are declared `@Sendable` (an attribute of a closure parameter, as
+  `@escaping` is), and take a closure written there — whose captures are
+  checked — a named function, or another `@Sendable` parameter. In an
+  `unsafe` block the programmer vouches for what is shared. `Task` is
+  `@immutable`, so a handle crosses; an `@immutable` class may hold an
+  actor.
+- *What is reached later.* A value stored into a field of an object that
+  is shared already is shared as it is stored (`share_into`, a test of the
+  header's bit, before every store of a value holding references into a
+  class's field), and an object a weak reference names is shared as the
+  first one is made, so a load through it on another thread never races a
+  plain count.
+- *Actor state from closures.* An assignment to an actor's state from an
+  async closure written inside it — `Task.spawn { count += 1 }` in an
+  actor's method — hops onto the actor for the read and the write
+  together, as its reads and calls did. A closure that cannot wait, run on
+  another thread (`Task.blocking`'s), may not touch an actor's state at all
+  (S3238).
+- *Calls that would not wait* are rejected, as Swift rejects them (S3237):
+  an actor's isolated member cannot meet a protocol's requirement — code
+  reaching it through a generic or an existential would call straight in —
+  and an isolated method cannot be taken as a value from outside its actor.
+  A `nonisolated` member can do both. (Swift lets an isolated method meet
+  an *async* requirement through a thunk that hops; that is not built.)
+
+**Debugging** — the fourth stage. An async function's resume function
+declares its frame's fields to the debugger as its variables — its
+parameters and the locals it keeps across its awaits, by their own names,
+through the box of one a closure captures — so lldb shows them in a
+suspended-and-resumed function as in any other
+(`DebuggerTests.LldbShowsTheLocalsOfAnAsyncFunction`). A trap's backtrace
+with `SABLE_BACKTRACE` set is followed by the *async backtrace*: the
+running task's calls, then those of the task that spawned it, waiting,
+and so on up to the program's own task, read from each task's slab — a
+frame for each call not yet finished, named by its resume function, with
+the await it is at.
+
+**Measured** — the fourth stage, on an M1 Max (8+2 cores, 64 GB), loaded
+by other work as these ran, with `tools/bench/concurrency.sh` and
+`benchmarks/concurrency/compare/` (.NET 11's tasks, `dotnet run -c
+Release`; Swift 6.4's, `swiftc -O`; Go is not installed here, so no
+goroutines). A million tasks each sleeping a second (`sleepers.sb`) take
+1.46 s with no pool and 1.93 s on ten workers — the time is spawning
+them — and 1.07 GB at the peak, 1.04 KB a task: the task, its slab's first
+576-byte chunk inside it (896 bytes together), its `Task` object and its
+closure. That is the stage-1 extrapolation, measured.
+
+| | Sable, no pool | Sable, 1 worker | Sable, 10 workers | .NET tasks | Swift tasks |
+|---|---|---|---|---|---|
+| spawn+await, from main | 283 ns | 682 ns | 1262 ns | 323 ns | 558 ns |
+| spawn+await, in a task | 298 ns | 347 ns | 946 ns | — | — |
+| ping-pong through an actor, yielding | 108 ns | 113 ns | 716 ns | 1375 ns (two channels) | 528 ns |
+| a million tasks sleeping 1 s | 1.46 s, 1.07 GB | 1.52 s | 1.93 s, 1.07 GB | 2.41 s, 0.55 GB | 2.27 s, 2.13 GB |
+| fan-out over loopback (50 clients at once, 2000 requests) | 199 µs | 489 µs | 256 µs | 135–747 µs | — |
+
+The fan-out (`fan-out-http.sb`) is a server task serving each connection
+in a child task — a request read, 512 bytes written — and fifty client
+tasks connecting, asking and reading to the end at once, forty times;
+every wait is on the reactor. Its time per request on loopback swings
+between runs by four or five times, .NET's alike, with the host's load.
+(Fifty: past the listen backlog, 128 on macOS, connections are refused.)
+
+Not yet: task-local values. A drop runs no defers of the async functions
 dropped, only those of a generator whose object goes with them.
 
 ### Generators, as implemented

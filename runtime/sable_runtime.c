@@ -38,6 +38,7 @@
 #include "validation.c"
 #include "frames.c"
 #include "tasks.c"
+#include "net.c"
 #include "io.c"
 #include "process.c"
 

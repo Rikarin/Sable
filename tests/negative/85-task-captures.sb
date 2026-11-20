@@ -1,0 +1,69 @@
+module Negative.TaskCaptures
+
+// What a task's closure captures crosses into another task (SYNTAX.md §19):
+// it must be Sendable, a 'var' is not captured but by its value, and a
+// closure passed to a '@Sendable' parameter is written there, a named
+// function, or such a parameter itself.
+
+class Counter {
+    var count: Int = 0
+}
+
+actor Tally {
+    var count = 0
+
+    fn add() {
+        count += 1
+    }
+}
+
+@immutable
+class Settings {
+    let name: String = "a"
+    let tally: Tally = Tally()
+}
+
+fn work() async -> Int {
+    return 1
+}
+
+fn spawnAll(_ counter: Counter, _ settings: Settings, _ tally: Tally) async {
+    let a = Task.spawn { counter.count }   //! S3236 'counter' is captured by the task 'spawn' makes
+    let b = Task.spawn { settings.name }   // @immutable: Sendable
+    let c = Task.spawn { await tally.add() } // an actor: Sendable
+    var n = 0
+    let d = Task.detached { n + 1 }        //! S3236 'n' is a 'var'
+    let m = n
+    let e = Task.spawn { m + 1 }           // a 'let': by value
+    n = 2
+    let body = { () -> Int in 1 }
+    let f = Task.spawn(body)               //! S3236 must be written here
+    let g = Task.spawn(work)               // a named function captures nothing
+    let h = Task.spawn {
+        unsafe {
+            counter.count                  // vouched for
+        }
+    }
+    let _ = await (a.value, b.value, c.value, d.value, e.value, f.value, g.value, h.value)
+}
+
+fn later(_ counter: Counter) async -> Int {
+    async let x = counter.count            //! S3236 'counter' is captured by the task 'async let' makes
+    return await x
+}
+
+fn grouped(_ counter: Counter) async {
+    await withTaskGroup(of: Int.self) { group in
+        group.spawn { counter.count }      //! S3236 'Counter' is a class, whose state is shared
+    }
+}
+
+fn blockingWork(_ counter: Counter) async -> Int {
+    return await Task.blocking { counter.count } //! S3236 'counter' is captured by the task 'blocking' makes
+}
+
+fn forward(_ body: @Sendable async () -> Int) -> Task<Int> {
+    return Task.spawn(body)                // checked where its closure is written
+}
+
+fn notAClosure(@Sendable _ n: Int) { }     //! S3093 '@Sendable' applies to a closure parameter

@@ -1,16 +1,28 @@
 module Sable.IO
 
-/// Why a file or directory could not be read, written or changed: an
-/// Error, so a bare 'throws' can throw it.
+/// Why a file, a directory or a connection could not be read, written or
+/// changed: an Error, so a bare 'throws' can throw it.
 public union IoError: Error {
     NotFound(path: String),
     Failed(path: String),
 
-    /// What went wrong, and with which path.
+    /// Nothing could listen on, or connect to, the address.
+    Unreachable(address: String),
+
+    /// The connection failed, or was closed, while it was used.
+    Disconnected,
+
+    /// The task was cancelled while it waited.
+    Cancelled,
+
+    /// What went wrong, and with which path or address.
     public fn description() -> String {
         return match self {
-            case .NotFound(let path) => "nothing is at '\(path)'"
-            case .Failed(let path)   => "'\(path)' could not be read, written or changed"
+            case .NotFound(let path)       => "nothing is at '\(path)'"
+            case .Failed(let path)         => "'\(path)' could not be read, written or changed"
+            case .Unreachable(let address) => "'\(address)' could not be reached"
+            case .Disconnected             => "the connection failed or was closed"
+            case .Cancelled                => "the task was cancelled while it waited"
         }
     }
 }

@@ -437,12 +437,12 @@ void sable_release(void *pointer) {
 
     count_release();
     if (flags & SABLE_SHARED) {
-        // The last release sees every write the others made before theirs.
-        if (__atomic_fetch_sub(&object->strong, 1, __ATOMIC_RELEASE) != 1) {
+        // The last release sees every write the others made before theirs:
+        // acquire and release in the one operation, rather than a fence
+        // after, which ThreadSanitizer does not see.
+        if (__atomic_fetch_sub(&object->strong, 1, __ATOMIC_ACQ_REL) != 1) {
             return;
         }
-
-        __atomic_thread_fence(__ATOMIC_ACQUIRE);
     } else if (--object->strong > 0) {
         return;
     }

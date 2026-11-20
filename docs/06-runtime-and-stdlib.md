@@ -419,6 +419,10 @@ recover at the task boundary.
   whichever worker looks for work serves. `SABLE_WORKERS` sets the size;
   0 runs every task on the main thread, in a deterministic order. (See
   docs/04, "Async, as implemented".)
+- An I/O reactor — kqueue, epoll, or an I/O completion port — which the
+  parked worker waits in until the earliest timer: a task waiting for a
+  socket suspends, and no worker blocks. Work that must block runs on a
+  blocking pool (`Task.blocking`). (See docs/04, "Async, as implemented".)
 - Tasks are heap-allocated with a growable stack segment chain; `async`
   functions are compiled to state machines so a suspended task costs only its
   live state, not a full stack. (As built: frames on a bump-allocated slab of
@@ -445,5 +449,5 @@ recover at the task boundary.
   where it asks.
 - Priorities are inherited by children and order the run queues, by band.
   A task waiting for a lower-priority one escalates it, what it waits for
-  and its children, so it does not invert. Planned: escalating the holder
-  of an actor a higher-priority task waits for.
+  and its children, so it does not invert; one waiting for an actor
+  escalates the task holding it.

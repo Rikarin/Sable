@@ -279,10 +279,21 @@ static void side_remove(const SableObject *object) {
 }
 
 // The entry for an object, retained: made, and the object marked, the first time.
+// A weak reference may be read on any thread — whoever holds it, an object
+// or a closure another task reaches — so the object it names is shared
+// from the first, while only the thread making it holds it, and counted
+// atomically from then on: a load through it on another thread never races
+// a plain count.
+void sable_share(void *pointer);
+
 void *sable_weak_entry(void *pointer) {
     SableObject *object = pointer;
     if (object == NULL) {
         return NULL;
+    }
+
+    if (!(object_flags(object) & SABLE_HAS_SIDE)) {
+        sable_share(object);
     }
 
     spin_lock(&side_lock);

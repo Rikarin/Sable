@@ -1068,6 +1068,8 @@ public sealed partial class Compilation {
             Modifier = ModifierOf(syntax),
             IsEscaping = syntax.Attributes.Concat((syntax.Type as AttributedTypeSyntax)?.Attributes ?? [])
                 .Any(static a => a.Name.ToString().Trim() == "escaping"),
+            IsSendable = syntax.Attributes.Concat((syntax.Type as AttributedTypeSyntax)?.Attributes ?? [])
+                .Any(static a => a.Name.ToString().Trim() == "Sendable"),
         };
 
         TypeBinder.BindParameterType(parameter, syntax);

@@ -4,6 +4,10 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #include <execinfo.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <pthread.h>
 #include <sched.h>
@@ -12,10 +16,18 @@
 #include <sys/mman.h>
 #include <sys/random.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#if defined(__linux__)
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#else
+#include <sys/event.h>
+#endif
 
 extern char **environ;
 
@@ -298,6 +310,308 @@ static int processor_count(void) {
 
 static void thread_yield(void) {
     sched_yield();
+}
+
+// ---- The I/O reactor -------------------------------------------------------
+
+// kqueue where there is one (macOS, the BSDs), epoll on Linux. Sockets are
+// watched edge-triggered for both directions (EV_CLEAR, EPOLLET), and a
+// wake is a user event (EVFILT_USER) or an eventfd.
+static int reactor_fd = -1;
+
+#if defined(__linux__)
+static int reactor_waker = -1;
+
+static bool reactor_open(void) {
+    reactor_fd = epoll_create1(EPOLL_CLOEXEC);
+    reactor_waker = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (reactor_fd < 0 || reactor_waker < 0) {
+        return false;
+    }
+
+    struct epoll_event event = { .events = EPOLLIN | EPOLLET, .data.ptr = NULL };
+    return epoll_ctl(reactor_fd, EPOLL_CTL_ADD, reactor_waker, &event) == 0;
+}
+
+static bool reactor_add(PlatformSocket socket, void *key) {
+    struct epoll_event event = { .events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET, .data.ptr = key };
+    return epoll_ctl(reactor_fd, EPOLL_CTL_ADD, (int)socket, &event) == 0;
+}
+
+static void reactor_remove(PlatformSocket socket) {
+    epoll_ctl(reactor_fd, EPOLL_CTL_DEL, (int)socket, NULL);
+}
+
+static int reactor_wait(ReactorEvent *events, int capacity, int64_t until) {
+    struct epoll_event ready[64];
+    if (capacity > 64) {
+        capacity = 64;
+    }
+
+    int timeout = -1;
+    if (until >= 0) {
+        int64_t left = until - sable_time_monotonic();
+        // Milliseconds, rounded up: never woken before the deadline.
+        timeout = left <= 0 ? 0 : left / 1000000 >= INT32_MAX ? INT32_MAX : (int)((left + 999999) / 1000000);
+    }
+
+    int count = epoll_wait(reactor_fd, ready, capacity, timeout);
+    int n = 0;
+    for (int i = 0; i < count; i++) {
+        if (ready[i].data.ptr == NULL) {
+            uint64_t ignored;
+            ssize_t got = read(reactor_waker, &ignored, sizeof ignored);
+            (void)got;
+            continue;
+        }
+
+        uint32_t what = ready[i].events;
+        events[n].key = ready[i].data.ptr;
+        // A hang-up or an error is readiness too: the call made next says what it is.
+        events[n].events = (what & (EPOLLIN | EPOLLRDHUP | EPOLLHUP | EPOLLERR) ? REACTOR_READABLE : 0)
+                           | (what & (EPOLLOUT | EPOLLHUP | EPOLLERR) ? REACTOR_WRITABLE : 0);
+        n++;
+    }
+
+    return n;
+}
+
+static void reactor_wake(void) {
+    uint64_t one = 1;
+    ssize_t written = write(reactor_waker, &one, sizeof one);
+    (void)written;
+}
+#else
+static bool reactor_open(void) {
+    reactor_fd = kqueue();
+    if (reactor_fd < 0) {
+        return false;
+    }
+
+    fcntl(reactor_fd, F_SETFD, FD_CLOEXEC);
+    struct kevent wake;
+    EV_SET(&wake, 0, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
+    return kevent(reactor_fd, &wake, 1, NULL, 0, NULL) == 0;
+}
+
+static bool reactor_add(PlatformSocket socket, void *key) {
+    struct kevent changes[2];
+    EV_SET(&changes[0], (uintptr_t)socket, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, key);
+    EV_SET(&changes[1], (uintptr_t)socket, EVFILT_WRITE, EV_ADD | EV_CLEAR, 0, 0, key);
+    return kevent(reactor_fd, changes, 2, NULL, 0, NULL) == 0;
+}
+
+static void reactor_remove(PlatformSocket socket) {
+    struct kevent changes[2];
+    EV_SET(&changes[0], (uintptr_t)socket, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+    EV_SET(&changes[1], (uintptr_t)socket, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+    kevent(reactor_fd, changes, 2, NULL, 0, NULL);
+}
+
+static int reactor_wait(ReactorEvent *events, int capacity, int64_t until) {
+    struct kevent ready[64];
+    if (capacity > 64) {
+        capacity = 64;
+    }
+
+    struct timespec timeout, *wait = NULL;
+    if (until >= 0) {
+        int64_t left = until - sable_time_monotonic();
+        if (left < 0) {
+            left = 0;
+        }
+
+        timeout.tv_sec = (time_t)(left / 1000000000);
+        timeout.tv_nsec = (long)(left % 1000000000);
+        wait = &timeout;
+    }
+
+    int count = kevent(reactor_fd, NULL, 0, ready, capacity, wait);
+    int n = 0;
+    for (int i = 0; i < count; i++) {
+        if (ready[i].filter == EVFILT_USER) {
+            continue;
+        }
+
+        // The two directions of one socket come as two events: one each.
+        events[n].key = ready[i].udata;
+        events[n].events = ready[i].filter == EVFILT_READ ? REACTOR_READABLE : REACTOR_WRITABLE;
+        n++;
+    }
+
+    return n;
+}
+
+static void reactor_wake(void) {
+    struct kevent wake;
+    EV_SET(&wake, 0, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+    kevent(reactor_fd, &wake, 1, NULL, 0, NULL);
+}
+#endif
+
+// ---- Sockets -----------------------------------------------------------------
+
+// Nonblocking, closed on exec, and never a SIGPIPE: a write to a closed
+// connection fails instead.
+static bool socket_prepare(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        return false;
+    }
+
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+#ifdef SO_NOSIGPIPE
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+#endif
+    return true;
+}
+
+#ifdef MSG_NOSIGNAL
+#define SOCKET_SEND_FLAGS MSG_NOSIGNAL
+#else
+#define SOCKET_SEND_FLAGS 0
+#endif
+
+static struct addrinfo *socket_resolve(const char *host, int port, bool passive) {
+    char service[16];
+    snprintf(service, sizeof service, "%d", port);
+    struct addrinfo hints = { 0 };
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = passive ? AI_PASSIVE : 0;
+    struct addrinfo *found = NULL;
+    return getaddrinfo(host[0] == '\0' ? NULL : host, service, &hints, &found) == 0 ? found : NULL;
+}
+
+static PlatformSocket socket_listen(const char *host, int port, int *bound) {
+    struct addrinfo *found = socket_resolve(host, port, true);
+    int fd = -1;
+    for (struct addrinfo *at = found; at != NULL && fd < 0; at = at->ai_next) {
+        fd = socket(at->ai_family, at->ai_socktype, at->ai_protocol);
+        if (fd < 0) {
+            continue;
+        }
+
+        int one = 1;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        if (!socket_prepare(fd) || bind(fd, at->ai_addr, at->ai_addrlen) != 0 || listen(fd, SOMAXCONN) != 0) {
+            close(fd);
+            fd = -1;
+        }
+    }
+
+    if (found != NULL) {
+        freeaddrinfo(found);
+    }
+
+    if (fd < 0) {
+        return IO_FAILED;
+    }
+
+    struct sockaddr_storage address;
+    socklen_t length = sizeof address;
+    getsockname(fd, (struct sockaddr *)&address, &length);
+    *bound = address.ss_family == AF_INET6 ? ntohs(((struct sockaddr_in6 *)&address)->sin6_port)
+                                           : ntohs(((struct sockaddr_in *)&address)->sin_port);
+    return fd;
+}
+
+static PlatformSocket socket_accept(PlatformSocket listener) {
+    for (;;) {
+        int fd = accept((int)listener, NULL, NULL);
+        if (fd >= 0) {
+            if (!socket_prepare(fd)) {
+                close(fd);
+                return IO_FAILED;
+            }
+
+            int one = 1;
+            setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+            return fd;
+        }
+
+        if (errno == EINTR || errno == ECONNABORTED) {
+            continue;
+        }
+
+        return errno == EAGAIN || errno == EWOULDBLOCK ? IO_WOULD_BLOCK : IO_FAILED;
+    }
+}
+
+static PlatformSocket socket_connect(const char *host, int port) {
+    struct addrinfo *found = socket_resolve(host, port, false);
+    int fd = -1;
+    for (struct addrinfo *at = found; at != NULL && fd < 0; at = at->ai_next) {
+        fd = socket(at->ai_family, at->ai_socktype, at->ai_protocol);
+        if (fd < 0) {
+            continue;
+        }
+
+        if (!socket_prepare(fd) || (connect(fd, at->ai_addr, at->ai_addrlen) != 0 && errno != EINPROGRESS)) {
+            close(fd);
+            fd = -1;
+        }
+    }
+
+    if (found != NULL) {
+        freeaddrinfo(found);
+    }
+
+    if (fd < 0) {
+        return IO_FAILED;
+    }
+
+    int one = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+    return fd;
+}
+
+static int socket_connected(PlatformSocket socket) {
+    int error = 0;
+    socklen_t length = sizeof error;
+    if (getsockopt((int)socket, SOL_SOCKET, SO_ERROR, &error, &length) != 0 || error != 0) {
+        return IO_FAILED;
+    }
+
+    // Writable with no error yet is not always made: a peer says it is.
+    struct sockaddr_storage peer;
+    socklen_t peer_length = sizeof peer;
+    return getpeername((int)socket, (struct sockaddr *)&peer, &peer_length) == 0 ? 0 : IO_FAILED;
+}
+
+static int64_t socket_read(PlatformSocket socket, void *bytes, int64_t size) {
+    for (;;) {
+        ssize_t got = recv((int)socket, bytes, (size_t)size, 0);
+        if (got >= 0) {
+            return got;
+        }
+
+        if (errno != EINTR) {
+            return errno == EAGAIN || errno == EWOULDBLOCK ? IO_WOULD_BLOCK : IO_FAILED;
+        }
+    }
+}
+
+static int64_t socket_write(PlatformSocket socket, const void *bytes, int64_t size) {
+    for (;;) {
+        ssize_t sent = send((int)socket, bytes, (size_t)size, SOCKET_SEND_FLAGS);
+        if (sent >= 0) {
+            return sent;
+        }
+
+        if (errno != EINTR) {
+            return errno == EAGAIN || errno == EWOULDBLOCK ? IO_WOULD_BLOCK : IO_FAILED;
+        }
+    }
+}
+
+static void socket_shutdown_write(PlatformSocket socket) {
+    shutdown((int)socket, SHUT_WR);
+}
+
+static void socket_close(PlatformSocket socket) {
+    close((int)socket);
 }
 
 // ---- Arguments, files and the environment ----------------------------------

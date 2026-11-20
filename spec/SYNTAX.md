@@ -1410,7 +1410,12 @@ awaited as the scope ends.
   on once it has the actor again, so state read before an `await` may
   have changed after it.
 - `Sendable` is a protocol; crossing an isolation boundary requires it, checked
-  at compile time.
+  at compile time. A task's closure — `Task.spawn`'s, `Task.detached`'s, a
+  group's `spawn`'s, `Task.blocking`'s, an `async let`'s — crosses one:
+  what it captures must be Sendable, and a `var` is captured only by value
+  (S3236). A closure parameter run as a task is declared `@Sendable`, and
+  takes a closure written there, a named function, or another `@Sendable`
+  parameter. In an `unsafe` block the programmer vouches for what is shared.
 - `@MainActor` pins a declaration to the main executor: the main thread,
   which runs the program's entry.
 - `for await x in stream { }` iterates an `AsyncSequence`; `for try await`
@@ -1504,6 +1509,7 @@ an optimised one; never both. A package's profile may choose with
 | `@immortal` | static let | Skip refcounting |
 | `@flags` | enum | Bitset semantics |
 | `@escaping` | param of function type | Closure may outlive the call |
+| `@Sendable` | param of function type | Closure runs as a task: its captures are Sendable (§19) |
 | `@polymorphic` | generic fn | Single boxed instantiation |
 | `@deprecated("use X")` | any | Warning at use site |
 | `@available(macos, linux)` | any | Platform gate: a use in a build for another platform is S3096 |

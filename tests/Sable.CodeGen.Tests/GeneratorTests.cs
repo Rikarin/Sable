@@ -448,7 +448,9 @@ public sealed class GeneratorTests {
                             await run()
                         }
                     }
-                """
+                """,
+                // Where the other task's line falls is the order of one thread's queue.
+                environment: OneThread
             ).Stdout
         );
 }

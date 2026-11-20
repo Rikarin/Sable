@@ -153,6 +153,25 @@ public sealed partial class SilGen {
         }
 
         /// <summary>
+        ///     'Task.runBlocking(work)': the closure kept in an object, which
+        ///     the frame holds while the task waits and the blocking pool runs
+        ///     it through the same function a cancellation handler is run by;
+        ///     the task goes on once it has run.
+        /// </summary>
+        SilValue? RunBlocking(BoundCall call) {
+            if (Expression(call.Arguments[0]) is not { Type: ThickFunctionType } body) {
+                return null;
+            }
+
+            var holder = generator.CancellationHandler();
+            var made = Emit(new AllocRefInst(holder));
+            Emit(new StoreInst(Owned(body), Emit(new RefElementAddrInst(made, 0)), StoreKind.Assign));
+            Emit(new BuiltinInst("task_blocking", SilType.Unit, Emit(new FunctionRefInst(HandlerRunName, HandlerRunType)), made));
+            Destroy(made);
+            return UnitValue.Instance;
+        }
+
+        /// <summary>
         ///     'Task.spawn { … }' and 'Task.detached { … }', with a priority
         ///     or not: a task made, its body kept in it, the runtime given it
         ///     to run — as a child of the running task, or detached.

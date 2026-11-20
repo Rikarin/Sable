@@ -127,7 +127,7 @@ function versionOf(file) {
  */
 function compare(command, root) {
   const binary = resolve(command);
-  const built = binary && builtAt(binary);
+  const built = binary ? builtAt(binary) : undefined;
   const newest = newestSource(root);
   if (!binary || built === undefined || !newest) {
     return undefined;

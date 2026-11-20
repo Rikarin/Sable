@@ -130,7 +130,7 @@ public sealed partial class LlvmEmitter {
         }
 
         if (module.EntryPoint is { } entry && module.Find(entry) is { } main) {
-            functions.Append(MainShim(main, keepEntry: _debug is not null));
+            functions.Append(MainShim(main, keepEntry: _debug is not null, wasm: _arch == "wasm32"));
         }
 
         if (module.IsLibrary) {
@@ -627,11 +627,18 @@ public sealed partial class LlvmEmitter {
     ///     as the shim has none, and what LLVM inlines into a function without
     ///     any loses its own — in an optimised build, often the whole program.
     /// </param>
-    static string MainShim(SilFunction entry, bool keepEntry) {
+    /// <param name="wasm">
+    ///     For WebAssembly, where wasi-libc's start code calls a
+    ///     <c>main(argc, argv)</c> by the name clang gives it when compiling C,
+    ///     <c>__main_argc_argv</c>; from IR nothing renames it, and a
+    ///     <c>main</c> of that shape is left undefined.
+    /// </param>
+    static string MainShim(SilFunction entry, bool keepEntry, bool wasm = false) {
         var call = $"@{Global(entry.Name)}()" + (keepEntry ? " noinline" : "");
+        var name = wasm ? "__main_argc_argv" : "main";
         return entry.Type.Result == SilType.Int
-            ? $"define i32 @main(i32 %argc, ptr %argv) {{\n  call void @sable_set_arguments(i32 %argc, ptr %argv)\n  %r = call i64 {call}\n  %c = trunc i64 %r to i32\n  ret i32 %c\n}}\n"
-            : $"define i32 @main(i32 %argc, ptr %argv) {{\n  call void @sable_set_arguments(i32 %argc, ptr %argv)\n  call void {call}\n  ret i32 0\n}}\n";
+            ? $"define i32 @{name}(i32 %argc, ptr %argv) {{\n  call void @sable_set_arguments(i32 %argc, ptr %argv)\n  %r = call i64 {call}\n  %c = trunc i64 %r to i32\n  ret i32 %c\n}}\n"
+            : $"define i32 @{name}(i32 %argc, ptr %argv) {{\n  call void @sable_set_arguments(i32 %argc, ptr %argv)\n  call void {call}\n  ret i32 0\n}}\n";
     }
 
     /// <summary>

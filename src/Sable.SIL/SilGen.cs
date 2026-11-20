@@ -6418,8 +6418,9 @@ public sealed partial class SilGen {
                 case BoundConversion { ConversionKind: ConversionKind.Explicit } downcast when IsDowncast(downcast):
                     return Downcast(downcast);
 
-                // 'shape as? Square', 'shape as? any Named': asked of the existential's box.
-                case BoundConversion { ConversionKind: ConversionKind.Explicit } opened when IsExistential(opened.Operand.Type):
+                // 'shape as? Square', 'shape as? any Named': asked of the existential's box;
+                // 'animal as? any Named', of a box made for the object.
+                case BoundConversion { ConversionKind: ConversionKind.Explicit } opened when IsExistential(opened.Operand.Type) || IsObjectToProtocol(opened):
                     return ExistentialDowncast(opened);
 
                 case BoundTypeTest test:
@@ -7809,6 +7810,21 @@ public sealed partial class SilGen {
                 return Missing(at, $"the cast from '{operand.Type.ToDisplayString()}' to '{target.ToDisplayString()}'");
             }
 
+            // An object, not yet an existential: put in the box of its
+            // static class, which the cast asks as it asks any box holding
+            // an object — whether what it holds is of a class that conforms.
+            if (Sub(operand.Type).TypeKind is TypeKind.Class or TypeKind.Actor) {
+                if (Expression(operand) is not { Type: ClassType classType } value) {
+                    return null;
+                }
+
+                var box = Emit(new AllocRefInst(generator.ExistentialBox(classType)));
+                Emit(new StoreInst(Owned(value), Emit(new RefElementAddrInst(box, 0)), StoreKind.Init));
+                var asked = Emit(new ApplyInst(Emit(new FunctionRefInst(name, type)), type.Result, [Emit(new UpcastInst(box, generator.ExistentialBoxRoot()))]));
+                Emit(new DestroyValueInst(box));
+                return asked;
+            }
+
             if (Borrow(operand) is not { } existential) {
                 return null;
             }
@@ -7936,6 +7952,14 @@ public sealed partial class SilGen {
             return answer;
         }
 
+        /// <summary>'animal as? any Named': an object cast to an existential of protocols.</summary>
+        bool IsObjectToProtocol(BoundConversion conversion) {
+            var target = Sub(conversion.Type) is OptionalTypeSymbol optional ? optional.UnderlyingType : Sub(conversion.Type);
+            return Sub(conversion.Operand.Type).TypeKind is TypeKind.Class or TypeKind.Actor
+                && CastTarget(target) is ExistentialTypeSymbol { Constraint: var constraint } && !constraint.Equals(Core.Error)
+                && ExistentialProtocols(constraint) is not null;
+        }
+
         bool IsDowncast(BoundConversion conversion) {
             var target = Sub(conversion.Type) is OptionalTypeSymbol optional ? optional.UnderlyingType : Sub(conversion.Type);
             return Sub(conversion.Operand.Type).TypeKind == TypeKind.Class && target.TypeKind == TypeKind.Class;
@@ -8012,6 +8036,20 @@ public sealed partial class SilGen {
 
             if (StructuralUnionTypeSymbol.Of(Sub(test.Operand.Type)) is { } union) {
                 return UnionTypeTest(test, union);
+            }
+
+            // 'animal is Named': asked of the conformance registry, which the
+            // object's class's metadata, and its superclasses', carry.
+            if (CastTarget(test.TestedType) is ExistentialTypeSymbol { Constraint: var constraint }
+                && ExistentialProtocols(constraint) is { Count: > 0 } protocols
+                && Sub(test.Operand.Type).TypeKind is TypeKind.Class or TypeKind.Actor) {
+                if (Borrow(test.Operand) is not { Type: ClassType } reference) {
+                    return null;
+                }
+
+                var conforms = Emit(new BuiltinInst($"class_conforms:{string.Join("&", protocols.Select(QualifiedName))}", SilType.Bool, reference));
+                End(reference);
+                return conforms;
             }
 
             if (LowerType(test.TestedType) is not ClassType target || Borrow(test.Operand) is not { Type: ClassType } value) {

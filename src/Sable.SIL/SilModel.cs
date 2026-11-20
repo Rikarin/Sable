@@ -1712,6 +1712,13 @@ public static class SilBuiltins {
             return operands is [ClassType, ClassType] ? new([operands[0], operands[1]], SilType.Bool) : null;
         }
 
+        // 'x is Named', 'x is A & B': whether the object's class, or a
+        // superclass, conforms to each protocol named — the conformance
+        // registry (docs/06 §6.2).
+        if (name.StartsWith("class_conforms:", StringComparison.Ordinal)) {
+            return operands is [ClassType] ? new([operands[0]], SilType.Bool) : null;
+        }
+
         // 'x is Dog': whether the object is of the class named, or a subclass of it.
         if (name.StartsWith("class_is:", StringComparison.Ordinal)) {
             return operands is [ClassType] ? new([operands[0]], SilType.Bool) : null;

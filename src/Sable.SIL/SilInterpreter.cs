@@ -1926,6 +1926,19 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return Net(builtin.Name, operands);
         }
 
+        if (builtin.Name.StartsWith("class_conforms:", StringComparison.Ordinal)) {
+            var dynamic = Alive((HeapObject)operands[0]!).Type;
+            return builtin.Name["class_conforms:".Length..].Split('&').All(protocol => {
+                for (var at = dynamic; at is not null; at = at.Superclass) {
+                    if (at.Conformances.Contains(protocol)) {
+                        return true;
+                    }
+                }
+
+                return false;
+            });
+        }
+
         if (builtin.Name.StartsWith("class_is:", StringComparison.Ordinal)) {
             var target = module.FindType(builtin.Name["class_is:".Length..]) as ClassType ?? throw new SilTrap($"no class {builtin.Name}");
             return Alive((HeapObject)operands[0]!).Type.IsSubclassOf(target);

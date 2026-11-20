@@ -175,6 +175,52 @@ public sealed class TypeMetadataTests {
             directory.Delete(true);
         }
     }
+
+    /// <summary>
+    ///     'animal is Named' asks the registry of the object's dynamic class;
+    ///     'animal as? any Named' puts the object in a box and asks the cast
+    ///     what any box holding an object is asked. Native and interpreted.
+    /// </summary>
+    [Fact]
+    public void AnObjectIsTestedAndCastToAProtocolByItsDynamicClass() {
+        var source = Programs.Program(
+            """
+            protocol Named {
+                fn name() -> String
+            }
+
+            protocol Loud {}
+
+            class Animal {}
+
+            class Dog: Animal, Named {
+                fn name() -> String => "dog"
+            }
+
+            class Puppy: Dog, Loud {}
+
+            fn describe(_ animal: Animal) -> String {
+                var text = "\(animal is Named) \(animal is Loud) \(animal is Named & Loud)"
+                if let named = animal as? any Named {
+                    text = text + " " + named.name()
+                }
+                return text
+            }
+            """,
+            """
+                print(describe(Animal()))
+                print(describe(Dog()))
+                print(describe(Puppy()))
+                let loud = Puppy() as! any Named
+                print(loud.name())
+            """
+        );
+        Assert.Equal(
+            "false false false\ntrue false false dog\ntrue true true dog\ndog\n",
+            Programs.AssertAgree(source).Stdout
+        );
+        Assert.Contains("@sable_conforms(", Pipeline.Compile(new SourceText(source, "test.sb")).LlvmIr!, StringComparison.Ordinal);
+    }
 }
 
 /// <summary><c>[targets.&lt;triple&gt;]</c> (docs/05 §5.2.10): a target's reflection setting.</summary>

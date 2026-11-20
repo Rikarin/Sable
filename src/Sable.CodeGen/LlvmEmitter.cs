@@ -496,6 +496,7 @@ public sealed partial class LlvmEmitter {
                                 declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64)
                                 declare ptr @sable_inline_new(ptr)
                                 declare zeroext i1 @sable_class_is(ptr, ptr)
+                                declare zeroext i1 @sable_conforms(ptr, ptr)
                                 declare ptr @sable_task_spawn(ptr, ptr, ptr, ptr, i64, i1 zeroext)
                                 declare i64 @sable_task_priority()
                                 declare void @sable_task_handler_push(ptr, ptr)
@@ -1187,7 +1188,7 @@ public sealed partial class LlvmEmitter {
     ///     protocol's identity to <c>sable_conformance</c>; across images,
     ///     which each have their own, the name is.
     /// </summary>
-    string ProtocolDescriptor(string protocol) {
+    internal string ProtocolDescriptor(string protocol) {
         var name = $"@\"sable.protocol.{protocol}\"";
         if (_emitted.Add(name)) {
             var text = TrapMessage(protocol);
@@ -2935,6 +2936,26 @@ public sealed partial class LlvmEmitter {
                 case Coverage.Builtin:
                     Line($"call void @sable_coverage_hit(i64 {operands[0]})");
                     return;
+            }
+
+            // Asked of the registry: each protocol's descriptor, looked up
+            // in the records of the object's class and its superclasses.
+            if (builtin.Name.StartsWith("class_conforms:", StringComparison.Ordinal)) {
+                string? all = null;
+                foreach (var protocol in builtin.Name["class_conforms:".Length..].Split('&')) {
+                    var conforms = Fresh();
+                    Line($"{conforms} = call zeroext i1 @sable_conforms(ptr {operands[0]}, ptr {module.ProtocolDescriptor(protocol)})");
+                    if (all is null) {
+                        all = conforms;
+                    } else {
+                        var both = Fresh();
+                        Line($"{both} = and i1 {all}, {conforms}");
+                        all = both;
+                    }
+                }
+
+                _names[builtin] = all!;
+                return;
             }
 
             if (builtin.Name.StartsWith("class_is:", StringComparison.Ordinal)) {

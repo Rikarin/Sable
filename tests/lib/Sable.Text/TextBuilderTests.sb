@@ -26,3 +26,14 @@ fn buildingText(_ b: Bencher) {
         let built = builder.build()
     })
 }
+
+@test
+fn aTextBuilderIsATextWriter() {
+    let builder = TextBuilder()
+    builder.append("a")
+    var writer = builder
+    writer.write("b")
+    print(3, to: &writer)
+    writer.write(describing: [4])
+    assertEqual(builder.build(), "ab3\n[4]")
+}

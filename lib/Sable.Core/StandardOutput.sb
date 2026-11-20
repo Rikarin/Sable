@@ -1,0 +1,19 @@
+module Sable.Core
+
+/// The program's standard output, as a TextWriter: where 'print' writes.
+/// It keeps nothing, so one can be made wherever it is wanted.
+///
+/// ```sable
+/// var output = StandardOutput()
+/// output.writeLine("to the standard output")
+/// print("and again", to: &output)
+/// ```
+public struct StandardOutput: TextWriter {
+    /// The standard output.
+    public init() { }
+
+    /// Writes the text to the standard output.
+    public mutating fn write(_ text: String) {
+        Runtime.write(text: text)
+    }
+}

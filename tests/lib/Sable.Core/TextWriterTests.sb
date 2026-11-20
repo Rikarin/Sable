@@ -1,0 +1,73 @@
+module TextWriterTests
+
+// TextWriter (Sable.Core), the writers that ship with it — a String,
+// StandardOutput, StandardError — and 'print' into them.
+
+import Sable.Testing
+
+// Keeps each piece it is given, to see how it was written.
+struct Pieces: TextWriter {
+    var pieces: String[>..] = []
+
+    mutating fn write(_ text: String) {
+        pieces.append(text)
+    }
+}
+
+struct Point {
+    var x: Int
+    var y: Int
+}
+
+@test
+fn aWriterOfTheProgramsOwnGetsEachPiece() {
+    var pieces = Pieces()
+    pieces.write("a")
+    pieces.writeLine("b")
+    pieces.write(describing: 3)
+    assert(pieces.pieces == ["a", "b", "\n", "3"])
+}
+
+@test
+fn aStringIsWrittenAtItsEnd() {
+    var text = "start"
+    text.write(" and ")
+    text.write(describing: true)
+    text.writeLine("")
+    assertEqual(text, "start and true\n")
+}
+
+@test
+fn printToAWriterEndsTheLine() {
+    var text = ""
+    print("one", to: &text)
+    print(2, to: &text)
+    print(Point(x: 1, y: 2), to: &text)
+    assertEqual(text, "one\n2\nPoint(x: 1, y: 2)\n")
+}
+
+@test
+fn printToAWriterOfTheProgramsOwnWritesTheTextThenTheBreak() {
+    var pieces = Pieces()
+    print("hi", to: &pieces)
+    assert(pieces.pieces == ["hi", "\n"])
+}
+
+@test
+fn writeDescribingWritesWhatInterpolationWould() {
+    var text = ""
+    text.write(describing: [1, 2])
+    text.write(describing: (1, "one"))
+    text.write(describing: Point(x: 3, y: 4))
+    assertEqual(text, "[1, 2](1, \"one\")Point(x: 3, y: 4)")
+}
+
+@test
+fn theStandardWritersWrite() {
+    var output = StandardOutput()
+    output.write("written by TextWriterTests\n")
+    print("printed by TextWriterTests", to: &output)
+    var errors = StandardError()
+    errors.writeLine("written to the standard error by TextWriterTests")
+    print([1, 2, 3])
+}

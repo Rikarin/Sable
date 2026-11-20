@@ -38,3 +38,42 @@ public fn print(_ value: U128)
 public fn print(_ value: F16)
 @builtin("print_Char")
 public fn print(_ value: Char)
+
+/// Writes the value as an interpolation would, '"\(value)"', and a line
+/// break, to standard output: any value, where the overloads above take
+/// the built-in ones.
+///
+/// ```sable
+/// print([1, 2, 3])
+/// print((1, "one"))
+/// ```
+public fn print<T>(_ value: T) {
+    Runtime.write(text: "\(value)\n")
+}
+
+/// Writes the text and a line break to the writer, rather than to standard
+/// output: a String being built, a TextBuilder, StandardError.
+///
+/// ```sable
+/// var text = ""
+/// print("one", to: &text)
+/// print("two", to: &text)
+/// assert(text == "one\ntwo\n")
+/// ```
+public fn print<W: TextWriter>(_ text: String, to output: inout W) {
+    output.write(text)
+    output.write("\n")
+}
+
+/// Writes the value as an interpolation would, and a line break, to the
+/// writer.
+///
+/// ```sable
+/// var text = ""
+/// print(42, to: &text)
+/// assert(text == "42\n")
+/// ```
+public fn print<T, W: TextWriter>(_ value: T, to output: inout W) {
+    output.write("\(value)")
+    output.write("\n")
+}

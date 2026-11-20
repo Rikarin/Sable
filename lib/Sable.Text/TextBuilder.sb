@@ -1,21 +1,40 @@
 module Sable.Text
 
 /// Collects text piece by piece without rebuilding it each time a piece is
-/// added: the pieces are kept, and joined once.
-public class TextBuilder {
+/// added: the pieces are kept, and joined once. A TextWriter, so 'print'
+/// and a Formattable value can write into it.
+///
+/// ```sable
+/// let builder = TextBuilder()
+/// builder.append("a")
+/// builder.appendLine("b")
+/// var writer = builder
+/// print(3, to: &writer)
+/// assert(builder.build() == "ab\n3\n")
+/// ```
+public class TextBuilder: TextWriter {
     var pieces: String[>..] = []
 
+    /// An empty builder.
     public init() { }
 
+    /// Adds the piece at the end.
     public fn append(_ piece: String) {
         pieces.append(piece)
     }
 
+    /// Adds the line, and a newline after it.
     public fn appendLine(_ line: String) {
         pieces.append(line)
         pieces.append("\n")
     }
 
+    /// Adds the text at the end: 'append', as a TextWriter writes.
+    public fn write(_ text: String) {
+        pieces.append(text)
+    }
+
+    /// The pieces, joined.
     public fn build() -> String {
         return pieces.joined()
     }

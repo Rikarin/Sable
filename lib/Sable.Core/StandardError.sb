@@ -1,0 +1,18 @@
+module Sable.Core
+
+/// The program's standard error, as a TextWriter: for diagnostics, kept
+/// apart from what the program outputs.
+///
+/// ```sable
+/// var errors = StandardError()
+/// print("warning: nothing to do", to: &errors)
+/// ```
+public struct StandardError: TextWriter {
+    /// The standard error.
+    public init() { }
+
+    /// Writes the text to the standard error.
+    public mutating fn write(_ text: String) {
+        Runtime.writeError(text: text)
+    }
+}

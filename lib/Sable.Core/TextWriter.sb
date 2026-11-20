@@ -1,0 +1,55 @@
+module Sable.Core
+
+/// Somewhere text can be written, a piece at a time: the standard output
+/// and error (StandardOutput, StandardError), a String being built up,
+/// Sable.Text's TextBuilder, or a type of the program's own. What
+/// 'print(_:to:)' writes to, and what a Formattable value can write itself
+/// into. Swift's `TextOutputStream`; Rust's `fmt::Write`.
+///
+/// A type conforms by writing a piece of text; writing values, and lines,
+/// comes with it.
+///
+/// ```sable
+/// struct Counter: TextWriter {
+///     var written = 0
+///     mutating fn write(_ text: String) {
+///         written += text.count
+///     }
+/// }
+/// var counter = Counter()
+/// print("hello", to: &counter)
+/// counter.write(describing: 42)
+/// assert(counter.written == 8)
+/// ```
+public protocol TextWriter {
+    /// Writes the text, as it is.
+    mutating fn write(_ text: String)
+}
+
+extension TextWriter {
+    /// Writes the value as an interpolation would: '"\(value)"'.
+    public mutating fn write<T>(describing value: T) {
+        write("\(value)")
+    }
+
+    /// Writes the text and a newline.
+    public mutating fn writeLine(_ text: String) {
+        write(text)
+        write("\n")
+    }
+}
+
+/// A string is a writer: what is written is added to its end.
+///
+/// ```sable
+/// var log = ""
+/// print("one", to: &log)
+/// log.write(describing: 2)
+/// assert(log == "one\n2")
+/// ```
+extension String: TextWriter {
+    /// Adds the text to the end of the string.
+    public mutating fn write(_ text: String) {
+        self = self + text
+    }
+}

@@ -233,4 +233,28 @@ public sealed class AssociatedTypeTests {
         );
         Assert.Contains(errors, static e => e.Message.Contains("C.Item", StringComparison.Ordinal));
     }
+
+    /// <summary>
+    ///     A type that inherits from itself is an error (S3026), but binding
+    ///     goes on: appending one to an array asks for its associated types,
+    ///     and the walk up its bases came back round to it until the stack
+    ///     overflowed. Found by the compiler fuzzer, from 'struct AddHeader:
+    ///     AddHeader: Middleware'.
+    /// </summary>
+    [Theory]
+    [InlineData("struct Loop: Loop { }", "Loop")]
+    [InlineData("struct RingA: RingB { }\nstruct RingB: RingA { }", "RingA")]
+    [InlineData("class RingA: RingB { init() { } }\nclass RingB: RingA { init() { } }", "RingA")]
+    public void AskingATypeThatInheritsFromItselfEnds(string types, string type) {
+        var errors = ErrorsIn(
+            $$"""
+              {{types}}
+              fn grow() {
+                  var items: {{type}}[>..] = []
+                  items.append({{type}}())
+              }
+              """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_CircularInheritance);
+    }
 }

@@ -517,10 +517,20 @@ internal static class ConformanceChecker {
     ///     meeting <c>fn get() -&gt; Item</c> makes Item an Int. Failing that the
     ///     declaration's own default applies, and failing that the conformance
     ///     is not met.
+    ///     A type that inherits from itself (S3026), directly or through
+    ///     others, is still asked: the binder resolves associated types in
+    ///     programs with errors. Each type in the chain is asked once, so a
+    ///     cycle ends where it comes back round instead of overflowing the stack.
     /// </remarks>
     public static TypeSymbol? ResolveAssociated(
         NamedTypeSymbol conformer,
         TypeParameterSymbol associated
+    ) => ResolveAssociated(conformer, associated, null);
+
+    static TypeSymbol? ResolveAssociated(
+        NamedTypeSymbol conformer,
+        TypeParameterSymbol associated,
+        HashSet<NamedTypeSymbol>? asked
     ) {
         foreach (var member in conformer.GetMembers(associated.Name)) {
             switch (member) {
@@ -530,8 +540,13 @@ internal static class ConformanceChecker {
         }
 
         foreach (var baseType in conformer.BaseTypes) {
-            if (baseType is NamedTypeSymbol { TypeKind: not TypeKind.Protocol } baseClass
-                && ResolveAssociated(baseClass, associated) is { } inherited) {
+            if (baseType is not NamedTypeSymbol { TypeKind: not TypeKind.Protocol } baseClass) {
+                continue;
+            }
+
+            asked ??= new HashSet<NamedTypeSymbol>(ReferenceEqualityComparer.Instance) { conformer.OriginalDefinition };
+            if (asked.Add(baseClass.OriginalDefinition)
+                && ResolveAssociated(baseClass, associated, asked) is { } inherited) {
                 return inherited;
             }
         }

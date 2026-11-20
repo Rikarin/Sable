@@ -130,6 +130,60 @@ public sealed class RangeTests {
         Assert.Equal("fatal error: index ^0 is out of range for count 3\n", execution.Stderr);
     }
 
+    // ---- Writing from the end (#293) ---------------------------------------
+
+    [Fact]
+    public void EveryMutableCollectionIsWrittenFromTheEnd() =>
+        Assert.Equal(
+            "[11, 2, 9] 9\n5\n[1, 0, 3] [9, 8]\n[1, 7, 8, 9, 4] [1, 7]\n[1, 5, 6, 3] 3\n[1, 42]\n",
+            AssertAgree(
+                Program(
+                    """
+                    import Sable.Collections
+
+                    struct Point {
+                        var x: Int
+                    }
+
+                    fn setLast<C: MutableCollection>(_ c: inout C, _ v: C.Element) {
+                        c[^1] = v
+                    }
+                    """,
+                    """
+                        var xs = [1, 2, 3]
+                        xs[^1] = 9
+                        xs[^3] += 10
+                        print("\(xs) \(xs[^1])")
+                        var points: Point[>..] = [Point { x: 1 }, Point { x: 2 }]
+                        points[^1].x = 5
+                        print(points[^1].x)
+                        var list = List<Int>([1, 2, 3])
+                        list[^2] = 0
+                        var deque = Deque<Int>([7, 8])
+                        deque[^2] = 9
+                        print("\(list.asSlice()) \(deque.toArray())")
+                        var grown: Int[>..] = [1, 2, 3, 4]
+                        grown[1..<^1] = [7, 8, 9]
+                        var shrunk: Int[>..] = [1, 7, 8, 9, 4]
+                        shrunk[^3...] = []
+                        print("\(grown) \(shrunk)")
+                        var replaced = List<Int>([1, 2, 3])
+                        replaced[1..<^1] = List<Int>([5, 6])
+                        print("\(replaced.asSlice()) \(replaced[^1])")
+                        var ys = [1, 2]
+                        setLast(&ys, 42)
+                        print(ys)
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void WritingPastTheStartTrapsCountedFromTheEnd() {
+        var execution = AssertAgree(Program("", "var xs = [1, 2, 3]\nxs[^blackBox(4)] = 0\nprint(xs)"));
+        Assert.Equal("fatal error: index ^4 is out of range for count 3\n", execution.Stderr);
+    }
+
     [Fact]
     public void ARangeFromTheEndOutsideTheArrayTraps() {
         var execution = AssertAgree(Program("", "let xs = [1, 2, 3]\nprint(xs[2..<^blackBox(2)])"));

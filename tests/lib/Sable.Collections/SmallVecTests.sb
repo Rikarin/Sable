@@ -242,3 +242,14 @@ fn aSmallVecIsMadeFromAnySequence() {
     let spilled: SmallVec<Int, 2> = (1...5).collect()
     assertEqual(spilled.count, 5)
 }
+
+@test
+fn aSmallVecIsWrittenFromTheEndInlineOrNot() {
+    var small = SmallVec<Int, 2>([1, 2])
+    small[^1] = 9
+    assert(small.toArray() == [1, 9])
+    small.append(3)
+    small[^3] = 0
+    small[1...^1] = SmallVec<Int, 2>([5])
+    assert(small.toArray() == [0, 5])
+}

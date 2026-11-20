@@ -114,6 +114,18 @@ public sealed class FormatterTests {
     [InlineData("let p=Point{x:1,y:2}", "let p = Point { x: 1, y: 2 }\n")]
     public void NormalisesSpacing(string source, string expected) => Assert.Equal(expected, Format(source));
 
+    // A range with no upper bound ends its operand: the loop's brace, or a
+    // case's arrow, keeps its space after it (#294).
+    [Theory]
+    [InlineData("fn f() {\n    for x in b... {\n    }\n}", "fn f() {\n    for x in b... { }\n}\n")]
+    [InlineData("fn f() {\n    for x in b...{\n        g(x)\n    }\n}", "fn f() {\n    for x in b... {\n        g(x)\n    }\n}\n")]
+    [InlineData("fn f() {\n    for i in ^3... {\n    }\n}", "fn f() {\n    for i in ^3... { }\n}\n")]
+    [InlineData("let a = match n {\n    case 5... => 1\n    default   => 0\n}", "let a = match n {\n    case 5... => 1\n    default   => 0\n}\n")]
+    public void APartialRangeKeepsTheSpaceAfterIt(string source, string expected) {
+        Assert.Equal(expected, Format(source));
+        Assert.Equal(expected, Format(expected));
+    }
+
     [Theory]
     [InlineData("extension < Element > Element [ > .. ] { }", "extension<Element> Element[>..] { }\n")]
     [InlineData("extension<Element:Equatable>Element[:]{}", "extension<Element: Equatable> Element[:] { }\n")]

@@ -80,15 +80,20 @@ __attribute__((noinline)) static int capture_frames(void **frames, int capacity)
     return (int)CaptureStackBackTrace(1, (DWORD)capacity, frames, NULL);
 }
 
-// A frame as 'sable.Module.function + offset' where the symbol is known, its
-// address otherwise, named from the program's PDB, which the link always
-// writes. The return address is looked up one byte back, as on POSIX.
+// A frame as 'sable.Module.function at file:line' where the PDB has its
+// line (a debug build's, described in CodeView), 'sable.Module.function +
+// offset' where it has only the symbol, and its address otherwise, named
+// from the program's PDB, which the link always writes. The return address
+// is looked up one byte back, as on POSIX. DbgHelp is not safe to call
+// from two threads at once, so the lookups take turns.
 static void name_frame(void *frame, char *text, size_t size) {
     static bool started, symbols;
+    static SRWLOCK lock = SRWLOCK_INIT;
+    AcquireSRWLockExclusive(&lock);
     HANDLE process = GetCurrentProcess();
     if (!started) {
         started = true;
-        SymSetOptions(SYMOPT_DEFERRED_LOADS);
+        SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
         symbols = SymInitialize(process, NULL, TRUE) != FALSE;
     }
 
@@ -101,11 +106,39 @@ static void name_frame(void *frame, char *text, size_t size) {
     symbol.info.MaxNameLen = 512;
     DWORD64 offset = 0;
     const char *at = (const char *)frame - 1;
+    IMAGEHLP_LINE64 line;
+    memset(&line, 0, sizeof line);
+    line.SizeOfStruct = sizeof line;
+    DWORD displacement = 0;
     if (symbols && SymFromAddr(process, (DWORD64)(uintptr_t)at, &offset, &symbol.info)) {
-        snprintf(text, size, "%s + %lld", symbol.info.Name, (long long)offset + 1);
+        if (SymGetLineFromAddr64(process, (DWORD64)(uintptr_t)at, &displacement, &line) && line.FileName != NULL && line.LineNumber != 0) {
+            // A file's absolute path by its name, as the trap's own place
+            // gives it; a relative one (the library's) as it is.
+            const char *file = line.FileName;
+            if (file[0] == '\\' || file[0] == '/' || (file[0] != '\0' && file[1] == ':')) {
+                for (const char *c = line.FileName; *c != '\0'; c++) {
+                    if (*c == '\\' || *c == '/') {
+                        file = c + 1;
+                    }
+                }
+            }
+
+            snprintf(text, size, "%s at %s:%lu", symbol.info.Name, file, (unsigned long)line.LineNumber);
+        } else {
+            snprintf(text, size, "%s + %lld", symbol.info.Name, (long long)offset + 1);
+        }
     } else {
         snprintf(text, size, "%p", frame);
     }
+
+    ReleaseSRWLockExclusive(&lock);
+}
+
+// ---- The debugger --------------------------------------------------------
+
+// Whether a debugger is attached to the process now (Debugger.isAttached).
+bool sable_debugger_attached(void) {
+    return IsDebuggerPresent() != FALSE;
 }
 
 // abort() would end the program with status 3, after offering it to

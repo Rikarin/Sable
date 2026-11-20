@@ -1,0 +1,31 @@
+module Sable.Diagnostics
+
+/// The debugger the program runs under, if any: lldb, gdb, a Windows
+/// debugger. .NET's System.Diagnostics.Debugger.
+///
+/// Asked of the system each time, as a debugger can attach or leave as
+/// the program runs: on macOS the kernel's P_TRACED flag, on Linux the
+/// TracerPid of /proc/self/status, on Windows IsDebuggerPresent. Never
+/// attached in the interpreter, nor on WASI.
+///
+/// ```sable
+/// if Debugger.isAttached {
+///     print("under a debugger")
+/// }
+/// Debugger.break()
+/// ```
+public struct Debugger {
+    /// Whether a debugger is attached to the program now.
+    public static var isAttached: Bool => Debugger.attached()
+
+    /// Stops in the debugger, on the line that called this, as a
+    /// breakpoint there would: a trap instruction the debugger stops at,
+    /// and goes on from. With no debugger attached it does nothing — the
+    /// trap instruction is not reached — rather than end the program, as
+    /// one would with none to catch it.
+    @builtin("debugger_break")
+    public static fn `break`()
+
+    @builtin("debugger_attached")
+    static fn attached() -> Bool
+}

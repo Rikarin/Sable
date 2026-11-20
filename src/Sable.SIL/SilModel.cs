@@ -2154,6 +2154,17 @@ public static class SilBuiltins {
         // frames of the calls that led here, a line each.
         Add("trap", SilType.Unit, SilType.String, SilType.String);
         Add("backtrace_capture", new ArrayType(SilType.String));
+        // An error main threw, stopped at as a trap is, but with status 1.
+        Add("trap_uncaught", SilType.Unit, SilType.String, SilType.String);
+        // The panic hook (Panic.setHook): a closure given a trap's message,
+        // place and frames, which the runtime holds; set, or taken out with
+        // the default given back in its place when there is none.
+        var trapHook = new ThickFunctionType(new FunctionType([SilType.String, SilType.String, new ArrayType(SilType.String)], SilType.Unit));
+        Add("trap_hook_set", SilType.Unit, trapHook);
+        Add("trap_hook_take", trapHook, trapHook);
+        // Whether a debugger is attached; and stopping for it, if one is.
+        Add("debugger_attached", SilType.Bool);
+        Add("debugger_break", SilType.Unit);
         Add("io_read_line", SilType.String);
         Add("io_read_file", SilType.String, SilType.String);
         Add("io_write_file", SilType.Bool, SilType.String, SilType.String, SilType.Bool);

@@ -4,11 +4,14 @@ module Sable.Diagnostics
 /// trap prints with SABLE_BACKTRACE set, as a value. Rust's
 /// std::backtrace::Backtrace, .NET's StackTrace.
 ///
-/// Each frame is named by its symbol and the offset into it,
-/// 'sable.Module.function + 52', where the program's symbol table has one,
-/// and by its address otherwise; a function the optimiser inlined has no
-/// frame of its own. The interpreter has no frames to give, so a backtrace
-/// captured there is empty.
+/// Each frame is named by its symbol and its line,
+/// 'sable.Module.function at main.sb:12:15', in a debug build (-g), whose
+/// line table the runtime reads (on Windows, its PDB: the line alone); by
+/// its symbol and the offset into it, 'sable.Module.function + 52', where
+/// there is no line table; and by its address where there is no symbol
+/// either. A function the optimiser inlined has no frame of its own. The
+/// interpreter has no frames to give, so a backtrace captured there is
+/// empty.
 ///
 /// ```sable
 /// let trace = Backtrace.capture()
@@ -22,6 +25,10 @@ public struct Backtrace {
     public static fn capture() -> Backtrace {
         return Backtrace { frames: Runtime.backtraceFrames() }
     }
+
+    /// Whether a trap's report is to show its backtrace: SABLE_BACKTRACE
+    /// set to anything but '0' ('1', or 'full').
+    public static var isWanted: Bool => (Runtime.environment("SABLE_BACKTRACE") ?? "0") != "0"
 
     /// Whether it has no frames: captured where there are none to give.
     public var isEmpty: Bool => self.frames.count == 0

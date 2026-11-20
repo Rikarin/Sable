@@ -196,6 +196,7 @@ static void report_leaks(void);
 static void report_frames(void);
 static void report_tasks(void);
 static void forget_immortal_reach(void);
+static void trap_hook_forget(void);
 static bool tracking;
 
 // What ARC did: the counts the benchmarks track, and what the ARC passes are
@@ -245,6 +246,7 @@ SABLE_AT_EXIT(sable_report) {
         exit_hooks[--exit_hook_count]();
     }
 
+    trap_hook_forget();
     forget_immortal_reach();
 
     int64_t live_objects = live_object_count();

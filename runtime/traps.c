@@ -52,24 +52,83 @@ __attribute__((noinline)) static void print_backtrace(int own) {
     print_task_backtrace();
 }
 
-// The trap, said and stopped at; 'own' as for print_backtrace.
-__attribute__((noinline)) _Noreturn static void trap_report(const char *message, int message_length, const char *site, int own) {
-    fflush(stdout);
+// The trap as it is said with no panic hook: the message, and the place
+// on the next line.
+static void print_trap(const char *message, int message_length, const char *site) {
     fprintf(stderr, "fatal error: %.*s\n", message_length, message);
     if (site != NULL) {
         fprintf(stderr, "  at %s\n", site);
     }
+}
 
-    print_backtrace(own);
+// The program's panic hook (Panic.setHook), run with the trap and the
+// frames of the calls that led to it ('own' as for print_backtrace); false
+// when the program has none, and the default report is said instead. In
+// io.c, where strings and arrays are made.
+static bool run_trap_hook(const char *message, int message_length, const char *site, int own);
+
+// How a trap ends the program: with 0 as a trap does (stop_trapped, status
+// 134); with another status as main's error does (1), standard output and
+// error written out first.
+_Noreturn static void stop_with(int status) {
     coverage_write();
-    stop_trapped();
+    if (status == 0) {
+        stop_trapped();
+    }
+
+    fflush(stdout);
+    fflush(stderr);
+    _Exit(status);
+}
+
+// The first trap ends the program: one on another thread at the same time
+// — a trap can happen on any of the pool's threads — waits for it to. The
+// thread saying a trap remembers it, so that a trap in the panic hook can
+// still say what the hook was given.
+static int trap_claimed;
+static _Thread_local bool trap_reporting;
+static const char *first_message, *first_site;
+static int first_length;
+
+// The trap, said and stopped at; 'own' as for print_backtrace, 'status' as
+// for stop_with. The program's panic hook says it, if it set one; a trap
+// in the hook falls back to the default report, of the trap the hook was
+// given and then of its own.
+__attribute__((noinline)) _Noreturn static void trap_report(const char *message, int message_length, const char *site, int own, int status) {
+    fflush(stdout);
+    if (trap_reporting) {
+        print_trap(first_message, first_length, first_site);
+        fprintf(stderr, "fatal error: the panic hook trapped: %.*s\n", message_length, message);
+        if (site != NULL) {
+            fprintf(stderr, "  at %s\n", site);
+        }
+
+        stop_with(0);
+    }
+
+    if (__atomic_exchange_n(&trap_claimed, 1, __ATOMIC_ACQ_REL) != 0) {
+        for (;;) {
+            sable_time_sleep(1000000000);
+        }
+    }
+
+    trap_reporting = true;
+    first_message = message;
+    first_length = message_length;
+    first_site = site;
+    if (!run_trap_hook(message, message_length, site, own)) {
+        print_trap(message, message_length, site);
+        print_backtrace(own);
+    }
+
+    stop_with(status);
 }
 
 // A trap with the place in the source it happened at, as 'file:line:column',
 // or none: the message on one line, and the place on the next.
 __attribute__((noinline)) _Noreturn void sable_trap_at(const char *message, const char *site) {
-    // print_backtrace, trap_report and this one.
-    trap_report(message, (int)strlen(message), site, 3);
+    // print_backtrace (or run_trap_hook), trap_report and this one.
+    trap_report(message, (int)strlen(message), site, 3, 0);
 }
 
 // A trap that has no place in the source: one the whole program reaches —

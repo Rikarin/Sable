@@ -23,10 +23,14 @@
 #include <unistd.h>
 
 #if defined(__linux__)
+#include <link.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #else
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
 #include <sys/event.h>
+#include <sys/sysctl.h>
 #endif
 
 extern char **environ;
@@ -49,22 +53,245 @@ __attribute__((noinline)) static int capture_frames(void **frames, int capacity)
     return count > 0 ? count - 1 : 0;
 }
 
-// A frame as 'sable.Module.function + offset' where the symbol is known, its
-// address otherwise. The return address is looked up one byte back: after a
-// call that never returns, it is past the end of the caller, inside whatever
-// comes next.
+// A frame as 'sable.Module.function at file:line:column' where the line
+// table places it (a debug build's), 'sable.Module.function + offset' where
+// only the symbol is known, its address otherwise. The return address is
+// looked up one byte back: after a call that never returns, it is past the
+// end of the caller, inside whatever comes next; one byte back is in the
+// call, whose line is the one that made it.
 static void name_frame(void *frame, char *text, size_t size) {
     const char *at = (const char *)frame - 1;
     Dl_info info;
+    char place[300];
     if (dladdr(at, &info) != 0 && info.dli_sname != NULL) {
-        snprintf(text, size, "%s + %ld", info.dli_sname, (long)(at + 1 - (const char *)info.dli_saddr));
+        if (frame_place(at, info.dli_fbase, place, sizeof place)) {
+            snprintf(text, size, "%s at %s", info.dli_sname, place);
+        } else {
+            snprintf(text, size, "%s + %ld", info.dli_sname, (long)(at + 1 - (const char *)info.dli_saddr));
+        }
     } else {
         snprintf(text, size, "%p", frame);
     }
 }
 
+// The whole of a file, mapped read-only for as long as the program runs;
+// NULL when it cannot be.
+static const uint8_t *map_whole_file(const char *path, size_t *size) {
+    int file = open(path, O_RDONLY | O_CLOEXEC);
+    if (file < 0) {
+        return NULL;
+    }
+
+    struct stat status;
+    void *mapped = MAP_FAILED;
+    if (fstat(file, &status) == 0 && status.st_size > 0) {
+        mapped = mmap(NULL, (size_t)status.st_size, PROT_READ, MAP_PRIVATE, file, 0);
+    }
+
+    close(file);
+    if (mapped == MAP_FAILED) {
+        return NULL;
+    }
+
+    *size = (size_t)status.st_size;
+    return mapped;
+}
+
+// A section of a mapped file, if it lies inside it.
+static bool section_in(const uint8_t *file, size_t file_size, uint64_t offset, uint64_t size, const uint8_t **section, size_t *section_size) {
+    if (offset > file_size || size > file_size - offset) {
+        return false;
+    }
+
+    *section = file + offset;
+    *section_size = (size_t)size;
+    return true;
+}
+
+#if defined(__APPLE__)
+
+// The program's own UUID, which its .dSYM was written with: LC_UUID in the
+// load commands that follow its header in memory.
+static const uint8_t *image_uuid(const struct mach_header_64 *header) {
+    const uint8_t *command = (const uint8_t *)(header + 1);
+    for (uint32_t i = 0; i < header->ncmds; i++) {
+        const struct load_command *load = (const struct load_command *)command;
+        if (load->cmd == LC_UUID) {
+            return ((const struct uuid_command *)load)->uuid;
+        }
+
+        command += load->cmdsize;
+    }
+
+    return NULL;
+}
+
+// The line table of a debug build on macOS: in the .dSYM clang leaves
+// beside the program (dsymutil's), 'program.dSYM/Contents/Resources/DWARF/
+// program', a Mach-O file whose __DWARF segment holds it. Only one of this
+// very build — its UUID the program's — is read.
+static bool line_sections(LineSections *sections) {
+    const struct mach_header_64 *image = (const struct mach_header_64 *)_dyld_get_image_header(0);
+    const uint8_t *uuid = image != NULL && image->magic == MH_MAGIC_64 ? image_uuid(image) : NULL;
+    char path[PATH_MAX], real[PATH_MAX], dsym[PATH_MAX + 64];
+    uint32_t length = sizeof path;
+    if (uuid == NULL || _NSGetExecutablePath(path, &length) != 0 || realpath(path, real) == NULL) {
+        return false;
+    }
+
+    const char *name = strrchr(real, '/');
+    snprintf(dsym, sizeof dsym, "%s.dSYM/Contents/Resources/DWARF/%s", real, name != NULL ? name + 1 : real);
+    size_t size = 0;
+    const uint8_t *file = map_whole_file(dsym, &size);
+    if (file == NULL) {
+        return false;
+    }
+
+    const struct mach_header_64 *header = (const struct mach_header_64 *)file;
+    if (size < sizeof *header || header->magic != MH_MAGIC_64 || header->sizeofcmds > size - sizeof *header) {
+        return false;
+    }
+
+    bool same = false;
+    const uint8_t *command = file + sizeof *header;
+    const uint8_t *commands_end = command + header->sizeofcmds;
+    for (uint32_t i = 0; i < header->ncmds && command + sizeof(struct load_command) <= commands_end; i++) {
+        const struct load_command *load = (const struct load_command *)command;
+        if (load->cmdsize < sizeof *load || load->cmdsize > (size_t)(commands_end - command)) {
+            return false;
+        }
+
+        if (load->cmd == LC_UUID && load->cmdsize >= sizeof(struct uuid_command)) {
+            same = memcmp(((const struct uuid_command *)load)->uuid, uuid, 16) == 0;
+        } else if (load->cmd == LC_SEGMENT_64 && load->cmdsize >= sizeof(struct segment_command_64)) {
+            const struct segment_command_64 *segment = (const struct segment_command_64 *)load;
+            const struct section_64 *section = (const struct section_64 *)(segment + 1);
+            if (strncmp(segment->segname, "__DWARF", 16) == 0
+                && segment->nsects <= (load->cmdsize - sizeof *segment) / sizeof *section) {
+                for (uint32_t s = 0; s < segment->nsects; s++) {
+                    if (strncmp(section[s].sectname, "__debug_line", 16) == 0) {
+                        section_in(file, size, section[s].offset, section[s].size, &sections->line, &sections->line_size);
+                    } else if (strncmp(section[s].sectname, "__debug_line_str", 16) == 0) {
+                        section_in(file, size, section[s].offset, section[s].size, &sections->line_str, &sections->line_str_size);
+                    } else if (strncmp(section[s].sectname, "__debug_str", 16) == 0) {
+                        section_in(file, size, section[s].offset, section[s].size, &sections->str, &sections->str_size);
+                    }
+                }
+            }
+        }
+
+        command += load->cmdsize;
+    }
+
+    sections->slide = _dyld_get_image_vmaddr_slide(0);
+    sections->image = image;
+    return same && sections->line != NULL;
+}
+
+#else
+
+// Where the program itself is loaded: the first object dl_iterate_phdr
+// gives, its load bias, and the start of its lowest segment, which is
+// what dladdr says an address of it is in.
+static int find_program(struct dl_phdr_info *info, size_t size, void *data) {
+    (void)size;
+    LineSections *sections = data;
+    uintptr_t lowest = UINTPTR_MAX;
+    for (int i = 0; i < info->dlpi_phnum; i++) {
+        if (info->dlpi_phdr[i].p_type == PT_LOAD && info->dlpi_phdr[i].p_vaddr < lowest) {
+            lowest = info->dlpi_phdr[i].p_vaddr;
+        }
+    }
+
+    // A segment is mapped from the start of its page.
+    lowest = lowest == UINTPTR_MAX ? 0 : lowest & ~(uintptr_t)4095;
+    sections->slide = (intptr_t)info->dlpi_addr;
+    sections->image = (const void *)(info->dlpi_addr + lowest);
+    return 1;
+}
+
+// The line table of a debug build on Linux: in the program's own ELF
+// file, its .debug_line section. A section compressed (-gz) is not read.
+static bool line_sections(LineSections *sections) {
+    size_t size = 0;
+    const uint8_t *file = map_whole_file("/proc/self/exe", &size);
+    if (file == NULL) {
+        return false;
+    }
+
+    const Elf64_Ehdr *header = (const Elf64_Ehdr *)file;
+    if (size < sizeof *header || memcmp(header->e_ident, ELFMAG, SELFMAG) != 0 || header->e_ident[EI_CLASS] != ELFCLASS64
+        || header->e_shentsize != sizeof(Elf64_Shdr) || header->e_shoff > size
+        || (uint64_t)header->e_shnum * sizeof(Elf64_Shdr) > size - header->e_shoff || header->e_shstrndx >= header->e_shnum) {
+        return false;
+    }
+
+    const Elf64_Shdr *table = (const Elf64_Shdr *)(file + header->e_shoff);
+    const uint8_t *names;
+    size_t names_size;
+    if (!section_in(file, size, table[header->e_shstrndx].sh_offset, table[header->e_shstrndx].sh_size, &names, &names_size)) {
+        return false;
+    }
+
+    for (int i = 0; i < header->e_shnum; i++) {
+        const char *name = line_string_at(names, names_size, table[i].sh_name);
+        if (name == NULL || (table[i].sh_flags & SHF_COMPRESSED) != 0 || table[i].sh_type == SHT_NOBITS) {
+            continue;
+        }
+
+        if (strcmp(name, ".debug_line") == 0) {
+            section_in(file, size, table[i].sh_offset, table[i].sh_size, &sections->line, &sections->line_size);
+        } else if (strcmp(name, ".debug_line_str") == 0) {
+            section_in(file, size, table[i].sh_offset, table[i].sh_size, &sections->line_str, &sections->line_str_size);
+        } else if (strcmp(name, ".debug_str") == 0) {
+            section_in(file, size, table[i].sh_offset, table[i].sh_size, &sections->str, &sections->str_size);
+        }
+    }
+
+    dl_iterate_phdr(find_program, sections);
+    return sections->line != NULL && sections->image != NULL;
+}
+
+#endif
+
 _Noreturn static void stop_trapped(void) {
     abort();
+}
+
+// ---- The debugger --------------------------------------------------------
+
+// Whether a debugger is tracing the process now (Debugger.isAttached): on
+// macOS the kernel's P_TRACED flag for it, on Linux the TracerPid its
+// /proc/self/status gives. Asked each time, as one may attach or leave.
+bool sable_debugger_attached(void) {
+#if defined(__APPLE__)
+    int name[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid() };
+    struct kinfo_proc info;
+    memset(&info, 0, sizeof info);
+    size_t size = sizeof info;
+    if (sysctl(name, 4, &info, &size, NULL, 0) != 0) {
+        return false;
+    }
+
+    return (info.kp_proc.p_flag & P_TRACED) != 0;
+#else
+    FILE *status = fopen("/proc/self/status", "r");
+    if (status == NULL) {
+        return false;
+    }
+
+    char line[256];
+    long tracer = 0;
+    while (fgets(line, sizeof line, status) != NULL) {
+        if (strncmp(line, "TracerPid:", 10) == 0) {
+            tracer = strtol(line + 10, NULL, 10);
+            break;
+        }
+    }
+
+    fclose(status);
+    return tracer != 0;
+#endif
 }
 
 // ---- Stack overflow ------------------------------------------------------

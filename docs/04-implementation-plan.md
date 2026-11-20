@@ -825,11 +825,66 @@ trap prints a backtrace after its message, one frame per line, named through
 be named). `1` starts from the program's frame that trapped; `full` shows the
 runtime's own frames above it as well. `Backtrace.capture()`
 (Sable.Diagnostics) gives the same frames as a value; the interpreter has
-none to give. Frames are named by symbol, not yet by file and line: that
-needs the runtime to read the DWARF the `-g` build writes. Each frame is
-looked up one byte before its return address, because a call that never
-returns leaves that address past the end of its caller. Under LTO most of a
-small program is inlined into `main`, so expect few frames.
+none to give. Each frame is looked up one byte before its return address,
+because a call that never returns leaves that address past the end of its
+caller, and one byte back is in the call, on the line that made it. Under
+LTO most of a small program is inlined into `main`, so expect few frames.
+
+In a debug build (`-g`) a frame is named by its line, the program's and the
+library's alike: `sable.Main.parse at main.sb:12:15`, `sable.Sable.Core.precondition…
+at lib/Sable.Core/Assertions.sb:45:99`. The runtime reads the build's own
+DWARF line table (runtime/lines.c, a few hundred lines of C, no library):
+the `.debug_line` section, with `.debug_line_str` for its file names, run
+as the small program DWARF writes it until the row that holds the address.
+On Linux the table is in the executable itself (`/proc/self/exe`, mapped);
+on macOS it is in the `.dSYM` clang's dsymutil writes beside the program,
+read only when its UUID is the running program's, so a stale one is never
+believed. The address is first moved back by how far the loader slid the
+program (`_dyld_get_image_vmaddr_slide`, `dl_iterate_phdr`), and only a
+frame in the program itself is looked up — the system's libraries keep
+`symbol + offset`. The table is found once, by whichever thread first asks,
+and kept mapped. Windows describes a debug build in CodeView, in the PDB the
+link always writes, so there DbgHelp's `SymGetLineFromAddr64` gives the
+line (no column; a PDB has none for this). Two alternatives were set
+aside: running `atos` or `addr2line` is another process, not allowed from a
+crashing one; and an address→line table the compiler embeds itself would
+work on every platform but needs the addresses, which only the linker knows.
+An optimised build without `-g` has no line table and keeps `symbol +
+offset` — line tables alone (`-gline-tables-only`) would cost a `.dSYM` per
+build on macOS, and are left for when they are wanted. WASI has no frames.
+
+**The panic hook.** `Panic.setHook { info in … }` (Sable.Diagnostics, Rust's
+`std::panic::set_hook`) has every trap said by the program's own hook, in
+place of the report: `PanicInfo` has the message, the file, line and
+column, and the backtrace. Every trap goes through it — one the compiled
+code makes, one the runtime makes, one the program asks for, an error main
+threw — because they all end in the runtime's `trap_report`. The hook is a
+closure the runtime holds (`trap_hook_set`), its context shared, since a
+trap can happen on any of the pool's threads; the first thread to trap
+claims the report and any other that traps meanwhile waits for the program
+to end, so the hook runs once. A trap inside the hook falls back to the
+default report, of the trap the hook was given and then its own (`fatal
+error: the panic hook trapped: …`). `Panic.takeHook()` takes it out and
+gives it back, or, with none set, the default report as a hook, so a hook
+can be put in front of whatever was there. The program then ends as it
+would have. A stack overflow does not run it: there is no stack left to run
+it on. The interpreter runs the hook the same way, with no frames.
+
+**An error that leaves main** is a trap too, as in Swift and Rust: `fatal
+error: uncaught error: ` and the error's `description()`, the place of the
+`throw` or `try` it left main from, through the panic hook, and status 1
+rather than an abort's 134. SilGen does it where the error would leave
+main (sync or async: before async lowering), calling Sable.Core's
+`uncaughtError` with the error boxed as `any Error` instead of throwing it
+to the C `main`, which had nothing to do with it and returned 0.
+
+**`Debugger.isAttached` and `Debugger.break()`** (Sable.Diagnostics): asked
+of the system each time — `sysctl`'s `P_TRACED` on macOS, `TracerPid` in
+`/proc/self/status` on Linux, `IsDebuggerPresent` on Windows, never on
+WASI or in the interpreter. `break()` is `llvm.debugtrap` in the caller's
+own code, so the debugger stops on the line that asked and goes on from it;
+with no debugger attached it is skipped, rather than ending the program as a
+trap instruction nothing catches would.
 
 Every trap says where it happened, on the line after its message:
 `fatal error: array index out of range` then `  at main.sb:12:15`. A trap

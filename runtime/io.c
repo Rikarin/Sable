@@ -225,7 +225,28 @@ SableString *sable_io_environment(const SableString *variable) {
 __attribute__((noinline)) _Noreturn void sable_trap_with(const SableString *message, const SableString *site) {
     char place[512];
     snprintf(place, sizeof place, "%.*s", (int)site->length, site->bytes);
-    trap_report(message->bytes, (int)message->length, site->length == 0 ? NULL : place, 3);
+    trap_report(message->bytes, (int)message->length, site->length == 0 ? NULL : place, 3, 0);
+}
+
+// An error main threw, which nothing caught (Sable.Core's uncaughtError):
+// said as a trap is, through the panic hook, but the program ends with
+// status 1, as Rust's and Swift's do, not as an abort.
+__attribute__((noinline)) _Noreturn void sable_trap_uncaught(const SableString *message, const SableString *site) {
+    char place[512];
+    snprintf(place, sizeof place, "%.*s", (int)site->length, site->bytes);
+    trap_report(message->bytes, (int)message->length, site->length == 0 ? NULL : place, 3, 1);
+}
+
+// The frames from 'first' on, a line of text each.
+static SableArray *frame_lines(void **frames, int first, int count) {
+    SableArray *lines = NULL;
+    for (int i = first; i < count; i++) {
+        char text[600];
+        name_frame(frames[i], text, sizeof text);
+        *(SableString **)sable_array_append_slot(&lines, &string_array_metadata) = make_ctext(text);
+    }
+
+    return lines;
 }
 
 // The frames of the calls that led to the caller, a line of text each, the
@@ -234,12 +255,81 @@ __attribute__((noinline)) _Noreturn void sable_trap_with(const SableString *mess
 __attribute__((noinline)) SableArray *sable_backtrace_capture(void) {
     void *frames[BACKTRACE_DEPTH];
     int count = capture_frames(frames, BACKTRACE_DEPTH);
-    SableArray *lines = NULL;
-    for (int i = 1; i < count; i++) {
-        char text[600];
-        name_frame(frames[i], text, sizeof text);
-        *(SableString **)sable_array_append_slot(&lines, &string_array_metadata) = make_ctext(text);
+    return frame_lines(frames, 1, count);
+}
+
+// ---- The panic hook ------------------------------------------------------
+
+// What Panic.setHook (Sable.Diagnostics) sets, through Sable.Core's
+// Runtime.setTrapHook: a closure given a trap's message, its place
+// ('file:line:column', or empty) and the frames of the calls that led to
+// it, a line each, all borrowed. Its context is shared — a trap can happen
+// on any thread — and held here until the hook is replaced or taken, or
+// the program ends.
+typedef void (*TrapHookCode)(SableString *message, SableString *site, SableArray *frames, void *context);
+
+static TrapHookCode trap_hook_code;
+static void *trap_hook_context;
+static SpinLock trap_hook_lock;
+
+// The hook set, in place of the one before; the closure is borrowed.
+void sable_trap_hook_set(TrapHookCode code, void *context) {
+    sable_share(context);
+    sable_retain(context);
+    spin_lock(&trap_hook_lock);
+    void *replaced = trap_hook_context;
+    trap_hook_code = code;
+    trap_hook_context = context;
+    spin_unlock(&trap_hook_lock);
+    sable_release(replaced);
+}
+
+// The hook taken out, leaving none: written to 'taken' as a closure is
+// laid out (code, context), owned by the caller. With none set, the
+// closure 'otherwise' (borrowed) is given instead: the default report.
+void sable_trap_hook_take(void **taken, TrapHookCode otherwise, void *context) {
+    spin_lock(&trap_hook_lock);
+    TrapHookCode code = trap_hook_code;
+    void *held = trap_hook_context;
+    trap_hook_code = NULL;
+    trap_hook_context = NULL;
+    spin_unlock(&trap_hook_lock);
+    if (code == NULL) {
+        code = otherwise;
+        held = context;
+        sable_retain(held);
     }
 
-    return lines;
+    taken[0] = (void *)code;
+    taken[1] = held;
+}
+
+// The hook run with a trap (traps.c's trap_report), its frames from the
+// caller of the runtime's trap; false when there is none.
+__attribute__((noinline)) static bool run_trap_hook(const char *message, int message_length, const char *site, int own) {
+    spin_lock(&trap_hook_lock);
+    TrapHookCode code = trap_hook_code;
+    void *context = trap_hook_context;
+    sable_retain(context);
+    spin_unlock(&trap_hook_lock);
+    if (code == NULL) {
+        return false;
+    }
+
+    void *frames[BACKTRACE_DEPTH];
+    int count = capture_frames(frames, BACKTRACE_DEPTH);
+    SableArray *lines = frame_lines(frames, own, count);
+    SableString *text = make_text(message, message_length);
+    SableString *place = make_ctext(site == NULL ? "" : site);
+    code(text, place, lines, context);
+    fflush(stdout);
+    return true;
+}
+
+// The hook let go of as the program ends, before what is left is counted.
+static void trap_hook_forget(void) {
+    void *context = trap_hook_context;
+    trap_hook_code = NULL;
+    trap_hook_context = NULL;
+    sable_release(context);
 }

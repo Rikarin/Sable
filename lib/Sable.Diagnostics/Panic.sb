@@ -1,0 +1,45 @@
+module Sable.Diagnostics
+
+/// What happens as the program traps: a hook of the program's own, run
+/// with the trap before the program ends, in place of the report. Rust's
+/// std::panic::set_hook and take_hook.
+///
+/// Every trap goes through it — fatalError, precondition, an index out of
+/// range, arithmetic overflow, assert, a none unwrapped, an error main
+/// threw — on whichever thread it happens; the program then ends as it
+/// would have (status 134, or 1 for main's error). A trap at the same
+/// time on another thread waits for that. A trap in the hook itself gives
+/// the default report, of the trap the hook was given and then its own.
+/// A stack overflow does not run it: there is no stack left to run it on.
+///
+/// ```sable
+/// Panic.setHook { info in
+///     Runtime.writeError("crashed: \(info.message) (\(info.site))\n")
+/// }
+/// let previous = Panic.takeHook()
+/// Panic.setHook(previous)
+/// let _ = Panic.takeHook()
+/// ```
+public struct Panic {
+    /// Has every trap from now on said by the hook, in place of the
+    /// report: the hook before it is dropped. It runs on the thread that
+    /// trapped, so what it captures is shared between threads.
+    public static fn setHook(_ hook: @escaping (PanicInfo) -> Void) {
+        Runtime.setTrapHook({ message, site, frames in hook(PanicInfo(message: message, site: site, frames: frames)) })
+    }
+
+    /// The hook set, taken out, the default report in its place again; the
+    /// default report itself when none was set, so that a hook can be put
+    /// in front of whatever was there and still call it.
+    public static fn takeHook() -> (PanicInfo) -> Void {
+        let taken = Runtime.takeTrapHook(otherwise: { message, site, frames in Panic.defaultHook(PanicInfo(message: message, site: site, frames: frames)) })
+        return { info in taken(info.message, info.site, info.backtrace.frames) }
+    }
+
+    /// The report a trap gives without a hook, on standard error: the
+    /// message, the place, and the backtrace when SABLE_BACKTRACE asks for
+    /// one.
+    public static fn defaultHook(_ info: PanicInfo) {
+        Runtime.writeError(info.description(backtrace: Backtrace.isWanted) + "\n")
+    }
+}

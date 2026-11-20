@@ -1,0 +1,72 @@
+module PanicTests
+
+// Panic (Sable.Diagnostics), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Diagnostics
+// A hook says a trap in place of the report, so each that traps here
+// writes what it was given to standard error, where the harness looks.
+
+import Sable.Diagnostics
+import Sable.Testing
+
+class Seen {
+    var messages: String[>..] = []
+}
+
+@test(traps: "hooked: precondition failed: the hook says so")
+fn aHookSaysTheTrapInPlaceOfTheReport() {
+    Panic.setHook { info in
+        Runtime.writeError("hooked: \(info.message) at line \(info.line)\n")
+    }
+    precondition(false, "the hook says so")
+}
+
+@test(traps: "hooked in PanicTests.sb: true, at 28:5")
+fn theHookIsGivenThePlaceOfTheTrap() {
+    Panic.setHook { info in
+        Runtime.writeError("hooked in PanicTests.sb: \(info.file.hasSuffix("PanicTests.sb")), at \(info.line):\(info.column)\n")
+    }
+    fatalError("here")
+}
+
+@test
+fn takingTheHookGivesBackTheOneSet() {
+    let seen = Seen()
+    Panic.setHook { info in seen.messages.append(info.message) }
+    let hook = Panic.takeHook()
+    hook(PanicInfo(message: "given", site: "", frames: []))
+    assertEqual(seen.messages.count, 1)
+    assertEqual(seen.messages[0], "given")
+}
+
+@test(traps: "fatal error: given\n  at a.sb:1:2")
+fn takingTheHookWithNoneSetGivesTheDefaultReport() {
+    let report = Panic.takeHook()
+    report(PanicInfo(message: "given", site: "a.sb:1:2", frames: []))
+    fatalError("the end")
+}
+
+@test(traps: "first: the end")
+fn aHookPutInFrontStillCallsTheOneBefore() {
+    let previous = Panic.takeHook()
+    Panic.setHook { info in
+        Runtime.writeError("first: \(info.message)\n")
+        previous(info)
+    }
+    fatalError("the end")
+}
+
+@test(traps: "fatal error: the panic hook trapped: again")
+fn aTrapInTheHookFallsBackToTheDefaultReport() {
+    Panic.setHook { info in fatalError("again") }
+    fatalError("first")
+}
+
+@test
+fn aHookSetAgainReplacesTheOneBefore() {
+    let seen = Seen()
+    Panic.setHook { info in seen.messages.append("old") }
+    Panic.setHook { info in seen.messages.append("new") }
+    Panic.takeHook()(PanicInfo(message: "", site: "", frames: []))
+    assertEqual(seen.messages.count, 1)
+    assertEqual(seen.messages[0], "new")
+}

@@ -40,6 +40,12 @@ fn framesPastTheTenthAreNumberedToTheSameWidth() {
 }
 
 @test
+fn whetherABacktraceIsWantedIsSABLE_BACKTRACEs() {
+    let setting = Runtime.environment("SABLE_BACKTRACE") ?? "0"
+    assertEqual(Backtrace.isWanted, setting != "0")
+}
+
+@test
 fn anEmptyBacktraceSaysSo() {
     let trace = Backtrace { frames: [] }
     assert(trace.isEmpty)

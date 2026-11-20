@@ -134,3 +134,13 @@ public fn todo(_ message: String = "", file: String = #file, line: Int = #line, 
 public fn unimplemented(_ message: String = "", file: String = #file, line: Int = #line, column: Int = #column) -> Never {
     Runtime.trap(message.isEmpty ? "not implemented" : "not implemented: \(message)", trapSite(file, line, column))
 }
+
+/// Stops the program, saying the error was not caught — 'fatal error:
+/// uncaught error: ' and its description — and where: what an error that
+/// leaves 'main', sync or async, does, the compiler passing the place of
+/// the 'throw' or 'try' it left from. Reported as a trap is, through the
+/// panic hook, but the program ends with status 1, not as an abort, as
+/// Rust's and Swift's do.
+public fn uncaughtError(_ error: any Error, file: String = #file, line: Int = #line, column: Int = #column) -> Never {
+    Runtime.stopUncaught("uncaught error: \(error.description())", trapSite(file, line, column))
+}

@@ -415,7 +415,10 @@ not need a separate `Result`-returning convention for performance-critical code.
 Panics (`fatalError`, a failed `precondition`, `todo()`, `unimplemented()`,
 `Optional.expect` — lib/Sable.Core/Assertions.sb) do not unwind either: they
 print `fatal error: ` and the message, the caller's place, a backtrace with
-`SABLE_BACKTRACE` set, and call `abort()`. Supervisors that need to survive a panic run the
+`SABLE_BACKTRACE` set (each frame by its line in a `-g` build), and call `abort()` — or
+run the program's panic hook in place of the report (`Panic.setHook`, Sable.Diagnostics).
+An error that leaves `main` is reported the same way, as `uncaught error: `, and ends the
+program with status 1. Supervisors that need to survive a panic run the
 supervised code in a separate task on a separate stack with a guard page, and
 recover at the task boundary.
 

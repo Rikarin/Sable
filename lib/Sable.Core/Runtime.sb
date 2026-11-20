@@ -199,9 +199,27 @@ public struct Runtime {
     public static fn trap(message: String, site: String) -> Never
 
     /// The frames of the calls that led here, a line each, the caller's
-    /// first: 'symbol + offset' natively, none in the interpreter.
+    /// first: 'symbol at file:line:column' in a debug build, 'symbol +
+    /// offset' otherwise, natively; none in the interpreter.
     @builtin("backtrace_capture")
     public static fn backtraceFrames() -> String[>..]
+
+    /// Stops the program as a trap does, but with status 1: what an error
+    /// that leaves main ends it with (uncaughtError).
+    @builtin("trap_uncaught")
+    public static fn stopUncaught(message: String, site: String) -> Never
+
+    /// Has every trap from now on said by the hook, in place of the
+    /// report: given the message, the place ('file:line:column', or empty)
+    /// and the frames, a line each. What Sable.Diagnostics' Panic.setHook
+    /// is written over; it runs on whichever thread trapped.
+    @builtin("trap_hook_set")
+    public static fn setTrapHook(_ hook: @escaping (String, String, String[>..]) -> Void)
+
+    /// The hook set, taken out, leaving the default report in its place;
+    /// 'otherwise' when none was set.
+    @builtin("trap_hook_take")
+    public static fn takeTrapHook(otherwise: @escaping (String, String, String[>..]) -> Void) -> (String, String, String[>..]) -> Void
 
     // ---- Strings, in one call --------------------------------------------
     // What String's conformances and Sable.Text are written over: hashing

@@ -20,6 +20,16 @@ namespace Sable.LanguageServer.Tests;
 ///     minute (EachLoadOfThePackagesIsDiagnosed, on the Windows runner).
 /// </remarks>
 internal sealed class TestClient : IAsyncDisposable {
+    /// <summary>
+    ///     How long an answer or a message is waited for. A report with the
+    ///     lints and the SIL checks waits for the program to be lowered whole,
+    ///     Sable.Core's bodies too: 2–3s for one server alone, but each test
+    ///     class runs a server of its own at once, and under the suite they
+    ///     took up to 33s on a ten-core Mac; on a four-core runner shared with
+    ///     the other test projects, over the minute this once was.
+    /// </summary>
+    static readonly TimeSpan Patience = TimeSpan.FromMinutes(3);
+
     readonly Pipe _toServerPipe = new();
     readonly Pipe _toClientPipe = new();
     readonly Stream _toServer;
@@ -112,7 +122,7 @@ internal sealed class TestClient : IAsyncDisposable {
             ["method"] = method,
             ["params"] = Json.ToNode(parameters)
         });
-        return await waiting.Task.WaitAsync(TimeSpan.FromSeconds(60));
+        return await waiting.Task.WaitAsync(Patience);
     }
 
     /// <summary>Sends a request and returns its result, failing on an error.</summary>
@@ -155,10 +165,12 @@ internal sealed class TestClient : IAsyncDisposable {
     ///     The server reports a version in two rounds, the type errors then
     ///     the lints and checks, and an older version's second round may come
     ///     after an edit: a test waiting for the edit's report must not take
-    ///     it. A report without a version is of a file not open.
+    ///     it. A report without a version is of a file not open: of a file
+    ///     this client has open, it is of the file on disk before it was
+    ///     opened, from a round that ended late, and is not current either.
     /// </summary>
     bool IsCurrent(string uri, JsonElement report) =>
-        !_versions.TryGetValue(uri, out var sent) || report.GetInt("version") is not { } version || version >= sent;
+        !_versions.TryGetValue(uri, out var sent) || report.GetInt("version") is { } version && version >= sent;
 
     /// <param name="capabilities">What the editor says it can do; nothing, by default.</param>
     public Task<JsonElement> InitializeAsync(string? root = null, object? capabilities = null) =>
@@ -238,7 +250,7 @@ internal sealed class TestClient : IAsyncDisposable {
     /// <summary>Waits for a notification or request from the server, of a method and satisfying a condition; returns its parameters.</summary>
     /// <param name="since">A <see cref="Received" /> count: only messages sent after it are taken.</param>
     public async Task<JsonElement> MessageAsync(string method, Func<JsonElement, bool>? until = null, int since = 0) {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+        var deadline = DateTime.UtcNow + Patience;
         var seen = since;
         while (DateTime.UtcNow < deadline) {
             List<JsonElement> pending;

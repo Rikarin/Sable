@@ -140,6 +140,29 @@ public sealed class NumericIntrinsicTests {
             ).Stdout
         );
 
+    /// <summary>
+    ///     An F16 scaled by a power known only as the program runs — as
+    ///     <c>random(in:)</c>'s fraction does, which LLVM 18 could not compile
+    ///     for AArch64 — is scaled as the F32 it widens to, and rounded once,
+    ///     to the F16's subnormals, its infinity, or a zero.
+    /// </summary>
+    [Fact]
+    public void AnF16IsScaledByAPowerOnlyTheRunKnows() =>
+        Assert.Equal(
+            "12.0 1.5 inf -0.0\n6e-08 0.0 2e-07 6e-08 65500.0\n",
+            AssertAgree(
+                Program(
+                    """
+                    fn scale(_ x: F16, _ power: Int) -> F16 => x.scaled(byPowerOfTwo: power)
+                    """,
+                    """
+                        print("\(scale(1.5, 3)) \(scale(3.0, -1)) \(scale(1.0, 16)) \(scale(-1.0, -100000))")
+                        print("\(scale(1.0, -24)) \(scale(1.0, -26)) \(scale(1.5, -23)) \(scale(1.5, -25)) \(scale(F16.greatestFiniteMagnitude, 0))")
+                    """
+                )
+            ).Stdout
+        );
+
     [Fact]
     public void NextUpStepsOneValueAtEveryWidth() =>
         Assert.Equal(
@@ -235,6 +258,7 @@ public sealed class NumericIntrinsicTests {
     [InlineData("let x: F16 = 3.0\nprint(x.exponent)", "call { float, i32 } @llvm.frexp.f32.i32(")]
     [InlineData("let x: F64 = 3.0\nprint(x.minimum(2.0))", "call double @llvm.minimum.f64(")]
     [InlineData("let x: F64 = 3.0\nprint(x.scaled(byPowerOfTwo: 2))", "call double @llvm.ldexp.f64.i32(")]
+    [InlineData("let x: F16 = 3.0\nprint(x.scaled(byPowerOfTwo: 2))", "call float @llvm.ldexp.f32.i32(")]
     public void EachIsItsIntrinsic(string body, string call) {
         var result = Pipeline.Compile(new SourceText(Program("", body), "test.sb"), optimised: false);
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));

@@ -42,6 +42,15 @@ public sealed class CompilerFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
     /// <summary>How long one input may take through every stage: a mutant that is slower than this has found a hang, or something close.</summary>
     static readonly TimeSpan Limit = TimeSpan.FromSeconds(Setting("SABLE_FUZZ_CASE_SECONDS") ?? 20);
 
+    /// <summary>
+    ///     How long the first input may take: it pays for the whole compiler
+    ///     being JIT-compiled and Sable.Core being bound for the first time,
+    ///     which on a CI runner shared with the other test projects can take
+    ///     <see cref="Limit" /> by itself (a seed that type-checks takes about
+    ///     7s cold on a fast machine, and 2–3s warm).
+    /// </summary>
+    static readonly TimeSpan ColdLimit = Limit * 4;
+
     /// <summary>The stack an input runs on: the 8 MB a process's main thread gets, so that a recursion too deep here is too deep for 'sable'.</summary>
     const int StackSize = 8 * 1024 * 1024;
 
@@ -72,14 +81,14 @@ public sealed class CompilerFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var stages = new Dictionary<string, int>(StringComparer.Ordinal);
 
-        void Try(List<Piece> input) {
+        void Try(List<Piece> input, TimeSpan limit) {
             var source = string.Concat(input.Select(static p => p.Text));
             if (crashDirectory is not null) {
                 Directory.CreateDirectory(crashDirectory);
                 File.WriteAllText(Path.Combine(crashDirectory, "current.sb"), source);
             }
 
-            var (features, failure) = Run(source);
+            var (features, failure) = Run(source, limit);
             if (failure is not null) {
                 var smallest = failure.StartsWith("hang", StringComparison.Ordinal) ? input : Minimise(input, Signature(failure));
                 Assert.Fail($"{failure}\n{Reproduce(source)}\n\nminimised to:\n{string.Concat(smallest.Select(static p => p.Text))}");
@@ -98,15 +107,16 @@ public sealed class CompilerFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
             }
         }
 
-        // The seeds themselves first: they set the features a mutant has to beat.
-        foreach (var seed in seeds) {
-            Try(seed);
+        // The seeds themselves first: they set the features a mutant has to
+        // beat. The first of them runs on a cold compiler, so it has longer.
+        for (var i = 0; i < seeds.Count; i++) {
+            Try(seeds[i], i == 0 ? ColdLimit : Limit);
         }
 
         var fromSeeds = stages.ToDictionary();
         for (var i = 0; i < cases; i++) {
             var parents = checkedPool.Count > 0 && random.Next(2) == 0 ? checkedPool : pool;
-            Try(Mutate(random, parents[random.Next(parents.Count)], pool, vocabulary));
+            Try(Mutate(random, parents[random.Next(parents.Count)], pool, vocabulary), Limit);
         }
 
         output.WriteLine($"{seeds.Count} seeds ({Stages(fromSeeds)}), then {cases} mutants: {seen.Count} features, a pool of {pool.Count} ({checkedPool.Count} type-checking); "
@@ -120,7 +130,7 @@ public sealed class CompilerFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
     ///     One input through every stage, on a thread of its own so that a
     ///     hang is reported, not waited out: its features, or what went wrong.
     /// </summary>
-    static (HashSet<string>? Features, string? Failure) Run(string source) {
+    static (HashSet<string>? Features, string? Failure) Run(string source, TimeSpan limit) {
         HashSet<string>? features = null;
         Exception? failure = null;
         var thread = new Thread(() => {
@@ -131,8 +141,8 @@ public sealed class CompilerFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
             }
         }, StackSize) { IsBackground = true };
         thread.Start();
-        if (!thread.Join(Limit)) {
-            return (null, $"hang: the compiler took over {Limit.TotalSeconds}s");
+        if (!thread.Join(limit)) {
+            return (null, $"hang: the compiler took over {limit.TotalSeconds}s");
         }
 
         return failure is null ? (features, null) : (null, $"the compiler threw {failure}");
@@ -153,7 +163,7 @@ public sealed class CompilerFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
     /// </summary>
     static List<Piece> Minimise(List<Piece> tokens, string signature) {
         bool StillFails(List<Piece> candidate) =>
-            Run(string.Concat(candidate.Select(static p => p.Text))).Failure is { } f && !f.StartsWith("hang", StringComparison.Ordinal) && Signature(f) == signature;
+            Run(string.Concat(candidate.Select(static p => p.Text)), Limit).Failure is { } f && !f.StartsWith("hang", StringComparison.Ordinal) && Signature(f) == signature;
 
         var current = tokens;
         for (var chunk = current.Count / 2; chunk >= 1; chunk /= 2) {

@@ -4184,6 +4184,14 @@ public sealed partial class LlvmEmitter {
 
                     // The power is clamped to what moves any float from its
                     // least to beyond its greatest, so that it fits an i32.
+                    //
+                    // A half's is scaled as the float it widens to exactly,
+                    // then narrowed: LLVM 18 expands a half's ldexp, where the
+                    // machine has no half arithmetic (AArch64 without FP16),
+                    // into a 16-bit shift of the exponent its instruction
+                    // selection cannot select, as it does a half's frexp. The
+                    // float's range holds any half scaled into the half's, so
+                    // the one rounding is the narrowing's, as the half's own.
                     case "scale": {
                         var low = Fresh();
                         var clamped = Fresh();
@@ -4191,6 +4199,15 @@ public sealed partial class LlvmEmitter {
                         Line($"{low} = call i64 @llvm.smax.i64(i64 {operands[1]}, i64 -100000)");
                         Line($"{clamped} = call i64 @llvm.smin.i64(i64 {low}, i64 100000)");
                         Line($"{power} = trunc i64 {clamped} to i32");
+                        if (floatBits == 16) {
+                            var wide = Fresh();
+                            var scaled = Fresh();
+                            Line($"{wide} = fpext half {operands[0]} to float");
+                            Line($"{scaled} = call float @llvm.ldexp.f32.i32(float {wide}, i32 {power})");
+                            Line($"{Result()} = fptrunc float {scaled} to half");
+                            return true;
+                        }
+
                         Line($"{Result()} = call {t} @llvm.ldexp.{suffix}.i32({t} {operands[0]}, i32 {power})");
                         return true;
                     }

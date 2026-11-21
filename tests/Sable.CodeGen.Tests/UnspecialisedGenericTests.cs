@@ -1383,4 +1383,55 @@ public sealed class UnspecialisedGenericTests {
         Assert.DoesNotContain(functions, static f => f.StartsWith("Test.Tag.", StringComparison.Ordinal) && f.Contains("$of$", StringComparison.Ordinal));
         Assert.DoesNotContain(functions, static f => f.StartsWith("Test.Named.shout$of$", StringComparison.Ordinal));
     }
+
+    const string SomeParameters = """
+        protocol Shape {
+            fn area() -> Int
+        }
+
+        struct Square: Shape {
+            var side: Int
+            fn area() -> Int => side * side
+        }
+
+        struct Circle: Shape {
+            var radius: Int
+            fn area() -> Int => 3 * radius * radius
+        }
+
+        fn total(_ a: some Shape, _ b: some Shape) -> Int {
+            return a.area() + b.area()
+        }
+
+        fn twice(_ shape: some Shape) -> Int {
+            return total(shape, shape)
+        }
+
+        fn describe(_ value: some Equatable, _ other: some Hashable) -> String {
+            return "\(value) \(other)"
+        }
+        """;
+
+    /// <summary>
+    ///     A 'some P' parameter is an anonymous type parameter: its function
+    ///     is compiled once, taking its metadata and its table, as a generic
+    ///     one is — and so are StringProtocol's searches over a 'some Pattern'.
+    /// </summary>
+    [Fact]
+    public void SomeParametersAreCompiledOnce() {
+        const string body = """
+                print(total(Square { side: 2 }, Square { side: 1 }) + Circle { radius: 1 }.area())
+                print(twice(Square { side: 3 }))
+                print(describe(1, "a"))
+                print("hello".contains("ll"))
+                print("hello".firstIndex(of: 'l')!.utf8Offset)
+                print("a,b,c".split(",").count)
+                print("hello".contains(where: { $0 == 'e' }))
+            """;
+        Prints("8\n18\n1 a\ntrue\n2\n3\ntrue\n", SomeParameters, body);
+        var functions = Unspecialised(SomeParameters, body);
+        foreach (var name in new[] { "Test.total", "Test.twice", "Test.describe", "Sable.Core.StringProtocol.contains$some$Pattern", "Sable.Core.StringProtocol.split$some$Pattern$Int$Bool", "Sable.Core.StringProtocol.contains$$Char$$$$$Bool" }) {
+            Assert.Contains($"{name}$generic", functions);
+        }
+    }
 }

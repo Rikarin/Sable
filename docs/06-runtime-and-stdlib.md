@@ -330,6 +330,11 @@ was given says.
 
 A protocol extension's member is generic over `Self`: it takes `Self`'s
 metadata and the protocol's table, and `self` where its caller holds it.
+A `some P` parameter is an anonymous type parameter, after the named ones
+(`@opaque(some1)`, `$metadata.some1`): `contains(_ pattern: some Pattern)`
+takes the pattern where its caller holds it, its type's metadata and its
+table for Pattern, as `contains<P: Pattern>(_ pattern: P)` would. (One
+with arguments, `some Sequence<Int>`, is still specialised.)
 
 An array of a type parameter's values (`T[]`, `T[>..]`, `T[>..<]`) is a
 buffer of them, as any array is: its object metadata — the element's size,

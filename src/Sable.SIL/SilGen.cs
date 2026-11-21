@@ -10467,7 +10467,7 @@ public sealed partial class SilGen {
                 // A value of a type parameter's type, to unspecialised code: borrowed where it is.
                 // So is an optional or a tuple of them, laid out at run time.
                 if (genericShape is not null && i < callee.Parameters.Length && SilType.IsIndirect(type.Parameters[arguments.Count])) {
-                    var given = WithAssociatedTypes(callee, bound).Apply(callee.Parameters[i].Type);
+                    var given = Substitute(WithAssociatedTypes(callee, bound), callee.Parameters[i].Type);
                     if (GenericArgument(call.Arguments[i], given, type.Parameters[arguments.Count], borrows) is not { } genericArgument) {
                         return null;
                     }
@@ -10585,13 +10585,13 @@ public sealed partial class SilGen {
             (SilValue Passed, AllocStackInst? Slot, bool CannotThrow)? genericError = null;
             if (genericShape is not null) {
                 if (type.Result == SilType.Unit && arguments.Count < type.Parameters.Length && !callee.ReturnType.Equals(Core.Void)
-                    && (genericOut = GenericOut(type.Parameters[arguments.Count], WithAssociatedTypes(callee, bound).Apply(callee.ReturnType))) is { } into) {
+                    && (genericOut = GenericOut(type.Parameters[arguments.Count], Substitute(WithAssociatedTypes(callee, bound), callee.ReturnType))) is { } into) {
                     arguments.Add(into.Passed);
                 }
 
                 // An error of a type parameter's type or an associated type's: where it goes.
                 if (type.Thrown is AddressType errorAddress && arguments.Count < type.Parameters.Length && type.Parameters[arguments.Count] == errorAddress) {
-                    if (callee.ThrownType is not { } calleeThrown || GenericErrorOut(errorAddress, WithAssociatedTypes(callee, bound).Apply(calleeThrown)) is not { } place) {
+                    if (callee.ThrownType is not { } calleeThrown || GenericErrorOut(errorAddress, Substitute(WithAssociatedTypes(callee, bound), calleeThrown)) is not { } place) {
                         EndAll(borrows);
                         return Missing(call, "where this call's error goes");
                     }

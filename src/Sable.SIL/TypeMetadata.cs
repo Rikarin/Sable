@@ -50,6 +50,19 @@ public enum MetadataFlags {
 
     /// <summary>Its field descriptors name their fields' types' metadata.</summary>
     FieldTypes = 16,
+
+    /// <summary>
+    ///     One counted reference, never null — an object, a string: an optional
+    ///     of it is the reference, null for none, as unspecialised code lays one
+    ///     out at run time (#297) as TypeLayout does.
+    /// </summary>
+    NullablePayload = 32,
+
+    /// <summary>A Bool: an enum of it and cases without payloads takes its spare values, 2 on.</summary>
+    BoolNiche = 64,
+
+    /// <summary>A Char: an enum of it and cases without payloads takes the values past U+10FFFF.</summary>
+    CharNiche = 128,
 }
 
 /// <summary>How a type's values are copied and destroyed, as its value-witness table does it.</summary>
@@ -143,7 +156,10 @@ public sealed class TypeMetadata {
         var deinit = type is StructType { Deinit: not null } || type is ClassType classType && Deinits(classType);
         var flags = (type.IsTrivial && !noncopyable ? MetadataFlags.Trivial : MetadataFlags.None)
                     | (noncopyable ? MetadataFlags.Noncopyable : MetadataFlags.None)
-                    | (deinit ? MetadataFlags.HasDeinit : MetadataFlags.None);
+                    | (deinit ? MetadataFlags.HasDeinit : MetadataFlags.None)
+                    | (type is ClassType || type == SilType.String ? MetadataFlags.NullablePayload : MetadataFlags.None)
+                    | (type == SilType.Bool ? MetadataFlags.BoolNiche : MetadataFlags.None)
+                    | (type == SilType.Char ? MetadataFlags.CharNiche : MetadataFlags.None);
         return new TypeMetadata(type) {
             Kind = kind,
             Name = DisplayName(type),

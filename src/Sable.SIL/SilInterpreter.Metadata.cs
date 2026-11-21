@@ -56,8 +56,78 @@ public sealed partial class SilInterpreter {
         type switch {
             OpaqueType opaque => OpaqueTypeOf(opaque),
             ArrayType { Element: var element } when SilType.MentionsOpaque(element) => new ArrayType(Concrete(element)),
+            TupleType tuple when SilType.MentionsOpaque(tuple) => SilType.Tuple([..tuple.Elements.Select(Concrete)]),
+            EnumType optional when SilType.MentionsOpaque(optional) && TypeMetadata.OptionalPayload(optional) is { } payload => ConcreteOptional(Concrete(payload)),
+            NominalType { TypeArguments.IsEmpty: false } generic when SilType.MentionsOpaque(generic) => ConcreteGeneric(generic),
             _ => type,
         };
+
+    readonly Dictionary<string, NominalType> _concreteGenerics = new(StringComparer.Ordinal);
+
+    /// <summary>
+    ///     A generic struct or union of a type known here, as lowering names
+    ///     and lays one out: the module's own, or one made alike, its parts
+    ///     and type arguments as the function running now has them.
+    /// </summary>
+    NominalType ConcreteGeneric(NominalType generic) {
+        var arguments = generic.TypeArguments.Select(Concrete).ToList();
+        var at = generic.Name.IndexOf("$of$", StringComparison.Ordinal);
+        var name = $"{(at < 0 ? generic.Name : generic.Name[..at])}$of${string.Join("$", arguments.Select(static a => SilGen.Sanitise(a.ToString())))}";
+        if (module.FindType(name) is { } existing) {
+            return existing;
+        }
+
+        if (_concreteGenerics.TryGetValue(name, out var made)) {
+            return made;
+        }
+
+        var display = generic.DisplayName is { } written && written.IndexOf('<') is > 0 and var open
+            ? $"{written[..open]}<{string.Join(", ", arguments.Select(TypeMetadata.DisplayName))}>"
+            : null;
+        switch (generic) {
+            case StructType structType: {
+                var concrete = new StructType(name) { DisplayName = display, TypeArguments = [..arguments] };
+                _concreteGenerics[name] = concrete;
+                concrete.Fields.AddRange(structType.Fields.Select(f => (f.Name, Concrete(f.Type))));
+                concrete.Conformances.AddRange(structType.Conformances);
+                return concrete;
+            }
+
+            case EnumType enumType: {
+                var concrete = new EnumType(name) { DisplayName = display, TypeArguments = [..arguments], IsUnion = enumType.IsUnion };
+                _concreteGenerics[name] = concrete;
+                concrete.Cases.AddRange(enumType.Cases.Select(c => (c.Name, c.Payload is { } payload ? Concrete(payload) : null)));
+                foreach (var (key, labels) in enumType.PayloadLabels) {
+                    concrete.PayloadLabels[key] = labels;
+                }
+
+                concrete.Conformances.AddRange(enumType.Conformances);
+                return concrete;
+            }
+
+            default:
+                return generic;
+        }
+    }
+
+    readonly Dictionary<string, EnumType> _concreteOptionals = new(StringComparer.Ordinal);
+
+    /// <summary>An optional of a type known here, as lowering names and lays one out: the module's own, or one made alike.</summary>
+    EnumType ConcreteOptional(SilType payload) {
+        var name = $"Optional${SilGen.Sanitise(payload.ToString())}";
+        if (module.FindType(name) is EnumType existing) {
+            return existing;
+        }
+
+        if (!_concreteOptionals.TryGetValue(name, out var made)) {
+            made = new EnumType(name);
+            made.Cases.Add(("Some", payload == SilType.Unit ? null : payload));
+            made.Cases.Add(("None", null));
+            _concreteOptionals[name] = made;
+        }
+
+        return made;
+    }
 
     /// <summary>A value's storage seen as itself: what <c>opaque_address</c> gives, read-only.</summary>
     sealed class Held(object? value) : IReference {

@@ -34,6 +34,9 @@ enum {
     SABLE_TYPE_HAS_DEINIT = 4,   // destroying one runs a deinit
     SABLE_TYPE_FIELDS = 8,       // the metadata carries its field descriptors
     SABLE_TYPE_FIELD_TYPES = 16, // and each names its field's type's metadata
+    SABLE_TYPE_NULLABLE = 32,    // one counted reference, never null: an optional of it is null for none
+    SABLE_TYPE_BOOL = 64,        // a Bool: an enum of it and empty cases takes its spare values, 2 on
+    SABLE_TYPE_CHAR = 128,       // a Char: an enum of it and empty cases takes the values past U+10FFFF
 };
 
 // A stored field: where it is in an instance, and what it holds. The names

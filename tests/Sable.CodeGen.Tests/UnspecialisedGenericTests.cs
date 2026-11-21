@@ -394,6 +394,275 @@ public sealed class UnspecialisedGenericTests {
         }
     }
 
+    const string Optionals = """
+        final class Box {
+            var label: String
+            init(label: String) {
+                self.label = label
+            }
+        }
+
+        struct Pair {
+            var name: String
+            var count: Int
+        }
+
+        fn firstOf<T>(_ items: T[]) -> T? {
+            if items.count == 0 {
+                return none
+            }
+            return items[0]
+        }
+
+        fn orElse<T>(_ value: T?, _ fallback: T) -> T {
+            if let present = value {
+                return present
+            }
+            return fallback
+        }
+
+        fn either<T>(_ value: T?, _ fallback: T) -> T => value ?? fallback
+
+        fn holds<T>(_ value: T?) -> Bool {
+            return match value {
+                case .Some(_) => true
+                case .None => false
+            }
+        }
+
+        fn isNone<T>(_ value: T?) -> Bool => value == none
+
+        fn forced<T>(_ value: T?) -> T => value!
+
+        fn wrapped<T>(_ value: T) -> T? => value
+
+        fn twiceWrapped<T>(_ value: T) -> T?? => wrapped(wrapped(value))
+
+        fn typeName<T>(_ value: T) -> String => "\(type(of: value))"
+
+        fn namesOf<T>(_ value: T) -> String => "\(typeName(wrapped(value))) \(typeName((value, 1))) \(typeName(twiceWrapped(value)))"
+
+        fn swapped<T, U>(_ pair: (T, U)) -> (U, T) => (pair.1, pair.0)
+
+        fn split<T>(_ items: T[]) -> (T?, Int) {
+            let (head, count) = (firstOf(items), items.count)
+            return (head, count)
+        }
+        """;
+
+    /// <summary>
+    ///     An optional and a tuple of a type parameter's values are laid out
+    ///     at run time from its metadata, as code that knows the type lays
+    ///     out its own — a tag and a payload, a null reference, a Bool's or a
+    ///     Char's spare values — so each passes between the two as it is.
+    /// </summary>
+    [Fact]
+    public void OptionalsAndTuplesOfATypeParametersValues() {
+        Prints(
+            "3\n-1\na\nz\nlabel\nfalse\ntrue\nfalse\nx\ntrue\nn 2\nq\n2\nfalse\ntrue\n"
+            + "Int? (Int, Int) Int??\nString? (String, Int) String??\n"
+            + "b 1\n(2, \"s\")\n(3, 2)\n(none, 0)\n7\n",
+            Optionals,
+            """
+                let empty: Int[] = []
+                print(firstOf([3, 4]) ?? -1)
+                print(firstOf(empty) ?? -1)
+                print(orElse(firstOf(["a", "b"]), "z"))
+                print(either(none, "z"))
+                print(orElse(firstOf([Box(label: "label")]), Box(label: "other")).label)
+                print(firstOf([false]) ?? true)
+                print(holds(firstOf([true])))
+                print(holds(firstOf(empty)))
+                print(forced(wrapped('x')))
+                let noBoxes: Box[] = []
+                print(isNone(firstOf(noBoxes)))
+                let pair = forced(firstOf([Pair(name: "n", count: 2)]))
+                print("\(pair.name) \(pair.count)")
+                print(either(wrapped("q"), "r"))
+                print(forced(forced(twiceWrapped(2))))
+                print(isNone(wrapped(Box(label: "c"))))
+                let noPairs: Pair[] = []
+                print(isNone(firstOf(noPairs)))
+                print(namesOf(1))
+                print(namesOf("s"))
+                let (label, number) = swapped((1, Box(label: "b")))
+                print("\(label.label) \(number)")
+                print(swapped(("s", 2)))
+                print(split([3, 4]))
+                print(split(empty))
+                print(forced(split([7]).0))
+            """);
+        var functions = Unspecialised(Optionals, """
+                print(namesOf(1))
+                print(either(firstOf([1]), 2) + forced(split([1]).0) + swapped((1, 2)).0)
+                print(orElse(none, 1))
+                print(holds(wrapped(1)) && isNone(wrapped(1)))
+            """);
+        foreach (var name in new[] { "firstOf", "orElse", "either", "holds", "isNone", "forced", "wrapped", "twiceWrapped", "typeName", "namesOf", "swapped", "split" }) {
+            Assert.Contains($"Test.{name}$generic", functions);
+        }
+    }
+
+    const string GenericTypes = """
+        struct Stack<T> {
+            var items: T[>..]
+            var label: String
+
+            fn peek() -> T? {
+                if items.count == 0 {
+                    return none
+                }
+                return items[items.count - 1]
+            }
+
+            mutating fn push(_ item: T) {
+                items.append(item)
+            }
+
+            mutating fn pop() -> T? {
+                return items.removeLast()
+            }
+
+            fn size() -> Int => items.count
+
+            fn described() -> String => "\(label) of \(size())"
+        }
+
+        struct Pair<A, B> {
+            var first: A
+            var second: B
+
+            fn swapped() -> Pair<B, A> => Pair<B, A> { first: second, second: first }
+        }
+
+        union Either<L, R> {
+            Left(L)
+            Right(R)
+
+            fn left() -> L? => match self {
+                case .Left(let value) => value
+                case .Right(_) => none
+            }
+
+            fn isRight() -> Bool => match self {
+                case .Left(_) => false
+                case .Right(_) => true
+            }
+        }
+
+        final class Token {
+            var name: String
+            init(name: String) {
+                self.name = name
+            }
+        }
+
+        fn wrap<T>(_ value: T) -> Pair<T, Int> => Pair<T, Int> { first: value, second: 1 }
+
+        fn eitherOf<T>(_ value: T, _ left: Bool) -> Either<T, String> => left ? .Left(value) : .Right("none")
+
+        fn typeName<T>(_ value: T) -> String => "\(type(of: value))"
+        """;
+
+    /// <summary>
+    ///     A generic struct's or union's members are compiled once: the type is
+    ///     laid out at run time from its type arguments' metadata, as code that
+    ///     knows them lays it out, so a value passes between the two as it is.
+    /// </summary>
+    [Fact]
+    public void MembersOfGenericStructsAndUnionsAreCompiledOnce() {
+        Prints(
+            "b\nwords of 2\nb\n1\nx 1\nw\n3\nfalse\ntrue\nt\nfalse\n2\nTest.Pair<String, Int> Test.Either<Int, String>\n",
+            GenericTypes,
+            """
+                var stack = Stack<String> { items: [], label: "words" }
+                stack.push("a")
+                stack.push("b")
+                print(stack.peek() ?? "-")
+                print(stack.described())
+                print(stack.pop() ?? "-")
+                print(stack.size())
+                let pair = Pair<Int, String> { first: 1, second: "x" }
+                let other = pair.swapped()
+                print("\(other.first) \(other.second)")
+                print(wrap("w").first)
+                let e: Either<Int, String> = .Left(3)
+                print(e.left() ?? 0)
+                print(e.isRight())
+                print(eitherOf(Token(name: "t"), false).isRight())
+                print(eitherOf(Token(name: "t"), true).left()!.name)
+                var tokens = Stack<Token> { items: [Token(name: "u")], label: "tokens" }
+                tokens.push(Token(name: "v"))
+                print(tokens.pop()!.name == "u")
+                print(tokens.size() + wrap(Token(name: "w")).second)
+                print("\(typeName(wrap("p"))) \(typeName(eitherOf(1, true)))")
+            """);
+        var functions = Unspecialised(GenericTypes, """
+                var stack = Stack<Int> { items: [], label: "n" }
+                stack.push(1)
+                print(stack.pop() ?? stack.peek() ?? stack.size())
+                print(stack.described())
+                print(Pair<Int, Int> { first: 1, second: 2 }.swapped().first)
+                print(eitherOf(1, true).left() ?? 0)
+                print(eitherOf(1, true).isRight())
+            """);
+        foreach (var name in new[] { "Stack.push", "Stack.pop", "Stack.peek", "Stack.size", "Stack.described", "Pair.swapped", "Either.left", "Either.isRight", "eitherOf" }) {
+            Assert.Contains($"Test.{name}$generic", functions);
+        }
+    }
+
+    /// <summary>
+    ///     A requirement that takes or gives an optional or a tuple of Self is
+    ///     called through the witness table as one of Self is: the value where
+    ///     its caller holds it, the result written where the caller says.
+    /// </summary>
+    [Fact]
+    public void RequirementsOfOptionalsAndTuplesOfSelf() {
+        const string declarations = """
+            protocol Halving {
+                fn halved() -> (Self, Bool)
+                fn exactHalf() -> Self?
+                fn joined(_ other: (Self, Int)) -> Self
+                var doubled: (Self, Self) { get }
+            }
+
+            struct Count: Halving {
+                var n: Int
+                fn halved() -> (Count, Bool) => (Count(n: n / 2), n % 2 == 0)
+                fn exactHalf() -> Self? => n % 2 == 0 ? Count(n: n / 2) : none
+                fn joined(_ other: (Count, Int)) -> Count => Count(n: n + other.0.n * other.1)
+                var doubled: (Count, Count) => (self, self)
+            }
+
+            final class Word: Halving {
+                var text: String
+                init(text: String) {
+                    self.text = text
+                }
+                fn exactHalf() -> Self? => text.count % 2 == 0 ? Word(text: "half") : none
+                var doubled: (Self, Self) => (self, Word(text: text + text))
+            }
+
+            extension Halving {
+                fn halved() -> (Self, Bool) => (self.exactHalf() ?? self, self.exactHalf() != none)
+                fn joined(_ other: (Self, Int)) -> Self => other.1 > 2 ? other.0 : self
+            }
+
+            fn report<H: Halving>(_ value: H) -> String {
+                let (half, even) = value.halved()
+                let exact = value.exactHalf()
+                let pair = value.doubled
+                let again = pair.1.joined((half, 3))
+                return "\(even) \(exact == none) \(half.halved().1) \(again.halved().1) \(pair.0.exactHalf() != none)"
+            }
+            """;
+        Prints("true false true true true\nfalse true false false false\n", declarations, """
+                print(report(Count(n: 4)))
+                print(report(Word(text: "abc")))
+            """);
+        Assert.Contains("Test.report$generic", Unspecialised(declarations, "print(report(Count(n: 4)))"));
+    }
+
     /// <summary>
     ///     Polymorphic recursion — a generic function calling itself with an
     ///     array of its type parameter — has no end of specialised copies (a

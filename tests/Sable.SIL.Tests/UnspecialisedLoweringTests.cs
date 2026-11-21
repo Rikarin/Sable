@@ -192,20 +192,20 @@ public sealed class UnspecialisedLoweringTests {
 
     /// <summary>
     ///     A function whose type parameter is used in a way unspecialised
-    ///     code cannot serve yet — in a tuple — is still specialised, for
+    ///     code cannot serve yet — given to a closure — is still specialised, for
     ///     each type it is used with, in a program that is otherwise unspecialised.
     /// </summary>
     [Fact]
     public void WhatUnspecialisedCodeCannotServeIsStillSpecialised() {
         var module = Lower("""
-                           fn first<T>(_ pair: (T, T)) -> T { return pair.0 }
+                           fn first<T>(_ value: T, _ change: (T) -> T) -> T { return change(value) }
 
                            fn pass<T>(_ value: T) -> T { return value }
 
                            fn main() {
-                               print(first((1, 2)))
-                               print(first(("a", "b")))
-                               print(pass(first((3, 4))))
+                               print(first(1) { x in x })
+                               print(first("a") { x in x })
+                               print(pass(first(3) { x in x }))
                            }
                            """);
         Assert.NotNull(module.Find("M.pass$generic"));
@@ -301,5 +301,82 @@ public sealed class UnspecialisedLoweringTests {
         Assert.Contains(Instructions(module.Find("M.nest$generic")!), static i => i is BuiltinInst { Name: "metadata_array" });
         Assert.Equal("2\n3\n", Run(module));
         Assert.Equal("2\n3\n", Run(SilParser.Parse(SilPrinter.Print(module))));
+    }
+
+    /// <summary>
+    ///     A function that only hands its parameters to a requirement stays
+    ///     specialised, its copies the witness called directly; an enum's
+    ///     generic '==' compares cases, as code that knows the enum does; and
+    ///     a trivial result written again where a loop's call left the last
+    ///     one is no store over a live value.
+    /// </summary>
+    [Fact]
+    public void ForwardersStaySpecialisedAndAnEnumsEqualityIsItsCases() {
+        var module = Lower("""
+                           enum Suit: Equatable { Hearts, Spades }
+
+                           protocol Doubling {
+                               static fn twice(_ x: Self) -> Self
+                           }
+
+                           struct Count: Doubling {
+                               var n: Int
+                               static fn twice(_ x: Count) -> Count => Count { n: x.n * 2 }
+                           }
+
+                           fn twice<T: Doubling>(_ x: T) -> T => T.twice(x)
+
+                           fn same<T: Equatable>(_ a: T, _ b: T) -> Bool { return a == b }
+
+                           fn pass<T>(_ value: T) -> T { return value }
+
+                           fn main() {
+                               print(twice(Count { n: 2 }).n)
+                               print(same(Suit.Hearts, Suit.Hearts))
+                               print(same(Suit.Hearts, Suit.Spades))
+                               var total = 0
+                               for i in 0..<3 {
+                                   total = total + pass(i)
+                               }
+                               print(total)
+                           }
+                           """);
+        Assert.Null(module.Find("M.twice$generic"));
+        Assert.NotNull(module.Find("M.same$generic"));
+        Assert.Equal("4\ntrue\nfalse\n3\n", Run(module));
+    }
+
+    /// <summary>
+    ///     An optional or a tuple of a type parameter's values is held as the
+    ///     value itself is, by address, and returned through one; as a type
+    ///     argument its metadata is made at run time from its parts'.
+    /// </summary>
+    [Fact]
+    public void AnOptionalOrATupleOfATypeParametersValuesIsHeldByAddress() {
+        var module = Lower("""
+                           fn firstOf<T>(_ items: T[]) -> T? {
+                               if items.count == 0 {
+                                   return none
+                               }
+                               return items[0]
+                           }
+
+                           fn swapped<T, U>(_ pair: (T, U)) -> (U, T) => (pair.1, pair.0)
+
+                           fn named<T>(_ value: T) -> String => "\(type(of: value))"
+
+                           fn wrappedName<T>(_ value: T) -> String => named(firstOf([value]))
+
+                           fn main() {
+                               print(firstOf([3]) ?? 0)
+                               print(swapped((1, "a")).0)
+                               print(wrappedName("s"))
+                           }
+                           """);
+        Assert.Equal("([@opaque(T)], *Optional$$opaque$T$, Metadata) -> ()", module.Find("M.firstOf$generic")!.Type.ToString());
+        Assert.Equal("((@opaque(T), @opaque(U)), *(@opaque(U), @opaque(T)), Metadata, Metadata) -> ()", module.Find("M.swapped$generic")!.Type.ToString());
+        Assert.Contains(Instructions(module.Find("M.wrappedName$generic")!), static i => i is MetadataInst { Described: EnumType { Name: "Optional$$opaque$T$" } });
+        Assert.Equal("3\na\nString?\n", Run(module));
+        Assert.Equal("3\na\nString?\n", Run(SilParser.Parse(SilPrinter.Print(module))));
     }
 }

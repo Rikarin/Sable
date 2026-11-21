@@ -339,10 +339,49 @@ type argument: **polymorphic recursion** — `nest<T>` calling `nest([x])` —
 is one function, where a specialised build makes it the one instance over
 existentials (its arrays then hold `any Any`).
 
-What unspecialised code cannot serve yet — a `T?`, a tuple of `T`, a slice
-of them, a closure over one, an associated type, a member of a generic
-type, a `where` clause, an accessor or initialiser, `"\(x:?)"`, an async
-function or a generator — is still specialised for its type arguments in
+An optional or a tuple of a type parameter's values (`T?`, `(T, Int)`,
+`(T?, U)`, `T??`) is held indirectly too, as SIL's optional or tuple of an
+`@opaque(T)`: its metadata is made at run time from its parts' — once per
+set of parts, kept for the program's life and at each call that asks
+(`sable_enum_type`, `sable_tuple_type`) — and lays the value out as
+`TypeLayout` lays out the same type where its parts are known, so that code
+that knows the type passes its own `Int?` or `(String, Bool)` where
+unspecialised code takes one, and takes one back, as it is. So an optional
+of an object or a string is the reference, null for none; one of a Bool or
+a Char is the scalar, none one of its spare values (which the metadata of
+those types says with the flags `SABLE_TYPE_NULLABLE`, `_BOOL` and
+`_CHAR`); any other is a tag and the payload after it; a tuple's elements
+follow one another, each aligned. Its value witnesses copy, destroy and
+visit the active case's payload or each element; the runtime says what case
+a value is (`sable_enum_tag`), where its payload or an element is
+(`sable_enum_payload`, `sable_tuple_element`), and writes a case
+(`sable_enum_inject`), so `none`, wrapping, `if let`, `match`, `??`, `!`,
+`== none`, building a tuple, taking it apart and `let (a, b) =` all work on
+one. Such a type is a type argument as an array of them is (`T?` passed as
+another function's `U`), and a requirement may take or give one of Self
+(`overflowingAdd(_:) -> (Self, Bool)`), written where the caller says.
+
+A member of a generic struct or union (`Stack<T>.push`, `Outcome<T,
+E>.unwrap`), of an optional's extension or of an array's is generic over the
+type's type parameters, then its own: it takes their metadata and the tables
+their constraints and its extension's `where T: P` ask for, as a generic
+function does, and `self` as any value of a type parameter's — a struct or
+union that holds one of them by value is held indirectly, laid out at run
+time (`sable_aggregate_type`, from a shape the compiler writes: the kind,
+the fields' or cases' names, the name, and the type arguments' count) as
+`TypeLayout` lays it out. Its fields are where the metadata says
+(`sable_field_address`); a struct that holds them only through a reference
+(`T[]`) has the layout it has whatever `T` is, and is passed as it is. Such a
+type is a type argument and a type's name as Sable writes it
+(`M.Pair<String, Int>`) as one made where its arguments are known. A type
+with a deinit, packed or aligned, move-only, a union with a boxed case, a
+class, and an extension with `where T == X` are still specialised.
+
+What unspecialised code cannot serve yet — an optional chain through a
+`T?`, a structural union of `T`, a slice of them, a closure over one, an
+associated type, a member of a generic class, an accessor or initialiser,
+`"\(x:?)"`, an async function or a generator — is still specialised for its
+type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
 says, for each generic function, which way it went and why. A specialised
 build (the default) makes neither the generic entries nor the describers.

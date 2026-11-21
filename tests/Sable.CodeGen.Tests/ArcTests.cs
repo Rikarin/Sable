@@ -375,6 +375,8 @@ public sealed class ArcTests {
         if (CanBuild) {
             // Was 899: walk's label each turn, and the dictionary's entries
             // as they were looked up and updated; renaming's labels stay.
+            // Counted for specialised code: compiled once (#297), the dictionary copies its entries through their value witnesses.
+            using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
             var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
             Assert.Contains("retains 502,", stats, StringComparison.Ordinal);
         }

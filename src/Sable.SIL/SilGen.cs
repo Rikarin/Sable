@@ -1821,7 +1821,19 @@ public sealed partial class SilGen {
             return Lower(((ArrayTypeSymbol)type).ElementType) is { } opaqueElement ? new ArrayType(opaqueElement) : null;
         }
 
-        if (_types.TryGetValue(type, out var cached)) {
+        // An optional or a tuple of them: laid out at run time from its parts' metadata.
+        if (_opaque.Count > 0 && type is OptionalTypeSymbol or TupleTypeSymbol && Mentions(type, _opaque)) {
+            return LowerOpaqueAggregate(type);
+        }
+
+        // A generic type of them is laid out at run time, and found again by its name:
+        // not kept for the type, whose type parameters are opaque only while their code is lowered.
+        var mentionsOpaque = _opaque.Count > 0 && Mentions(type, _opaque);
+        if (mentionsOpaque && type is NamedTypeSymbol { IsConstructed: true } heldType && _module.FindType(TypeName(heldType)) is { } named) {
+            return named;
+        }
+
+        if (!mentionsOpaque && _types.TryGetValue(type, out var cached)) {
             return cached;
         }
 
@@ -1859,8 +1871,55 @@ public sealed partial class SilGen {
         }
 
         _types[type] = result;
+        if (mentionsOpaque) {
+            _types.Remove(type);
+        }
+
         _lowered.Add(type);
         return result;
+    }
+
+    /// <summary>
+    ///     An optional or a tuple with a type parameter of unspecialised code
+    ///     among its parts (#297), as it is held there: an
+    ///     <c>Optional$$opaque$T$</c> whose payload is opaque, laid out at run
+    ///     time from its metadata; not kept for the type, which mentions a type
+    ///     parameter that is opaque only while its code is lowered.
+    /// </summary>
+    SilType? LowerOpaqueAggregate(TypeSymbol type) {
+        switch (type) {
+            case TupleTypeSymbol tuple: {
+                var elements = ImmutableArray.CreateBuilder<SilType>();
+                foreach (var element in tuple.ElementTypes) {
+                    if (Lower(element) is not { } lowered) {
+                        return null;
+                    }
+
+                    elements.Add(lowered);
+                }
+
+                return SilType.Tuple(elements.ToImmutable());
+            }
+
+            case OptionalTypeSymbol optional: {
+                if (Lower(optional.UnderlyingType) is not { } wrapped || wrapped == SilType.Unit) {
+                    return null;
+                }
+
+                var name = $"Optional${Sanitise(wrapped.ToString())}";
+                if (_module.FindType(name) is EnumType existing) {
+                    return existing;
+                }
+
+                var enumType = new EnumType(name);
+                enumType.Cases.Add(("Some", wrapped));
+                enumType.Cases.Add(("None", null));
+                return _module.AddType(enumType);
+            }
+
+            default:
+                return null;
+        }
     }
 
     /// <summary>The types being lowered, each needed by the one before: a member's type, a type argument's.</summary>
@@ -10308,8 +10367,9 @@ public sealed partial class SilGen {
 
             for (var i = 0; i < passed; i++) {
                 // A value of a type parameter's type, to unspecialised code: borrowed where it is.
-                if (genericShape is not null && i < callee.Parameters.Length && callee.Parameters[i].Type is TypeParameterSymbol typeParameter
-                    && bound.Lookup(typeParameter) is { } given) {
+                // So is an optional or a tuple of them, laid out at run time.
+                if (genericShape is not null && i < callee.Parameters.Length && SilType.IsIndirect(type.Parameters[arguments.Count])) {
+                    var given = bound.Apply(callee.Parameters[i].Type);
                     if (GenericArgument(call.Arguments[i], given, type.Parameters[arguments.Count], borrows) is not { } genericArgument) {
                         return null;
                     }
@@ -10318,9 +10378,9 @@ public sealed partial class SilGen {
                     continue;
                 }
 
-                // An array of them: the same buffer, seen as the callee's.
-                if (genericShape is not null && i < callee.Parameters.Length && IsArrayOf(callee.Parameters[i].Type, genericShape.Parameters)
-                    && type.Parameters[arguments.Count] is var arrayParameter) {
+                // An array of them, or a generic struct holding them by reference: the same bits, seen as the callee's.
+                if (genericShape is not null && i < callee.Parameters.Length && callee.Parameters[i] is { IsByReference: false, Modifier: ParameterModifier.None or ParameterModifier.In }
+                    && !type.IsOwned(arguments.Count) && type.Parameters[arguments.Count] is var arrayParameter && SilType.MentionsOpaque(arrayParameter) && arrayParameter is not AddressType) {
                     if (Borrow(call.Arguments[i]) is not { } array) {
                         EndAll(borrows);
                         return null;
@@ -10412,8 +10472,8 @@ public sealed partial class SilGen {
             // and before them where a result of a type parameter's type goes.
             (SilValue Passed, AllocStackInst Slot)? genericOut = null;
             if (genericShape is not null) {
-                if (callee.ReturnType is TypeParameterSymbol returned && bound.Lookup(returned) is { } returnedAs
-                    && (genericOut = GenericOut(type.Parameters[arguments.Count], returnedAs)) is { } into) {
+                if (type.Result == SilType.Unit && arguments.Count < type.Parameters.Length && !callee.ReturnType.Equals(Core.Void)
+                    && (genericOut = GenericOut(type.Parameters[arguments.Count], bound.Apply(callee.ReturnType))) is { } into) {
                     arguments.Add(into.Passed);
                 }
 
@@ -10458,8 +10518,8 @@ public sealed partial class SilGen {
                 return TakeOut(invoked, written.Slot);
             }
 
-            // A result of an array of them, seen as the array it is here.
-            if (genericShape is not null && invoked is { Type: ArrayType } arrayResult && IsArrayOf(callee.ReturnType, genericShape.Parameters)
+            // A result of an array of them, or of a generic struct holding them by reference, seen as the type it is here.
+            if (genericShape is not null && invoked is { Type: var resultType } arrayResult && SilType.MentionsOpaque(resultType) && !SilType.IsIndirect(resultType)
                 && LowerType(call.Type) is { } wanted && wanted != arrayResult.Type) {
                 return Emit(new BuiltinInst("opaque_take_as", wanted, arrayResult));
             }

@@ -339,3 +339,451 @@ const SableWitnessTable *sable_witness_table_cached(SableWitnessCacheEntry **cac
 
     return table;
 }
+
+// ---- Optionals, enums, structs and tuples of a type known only at run time --
+
+// An optional, an enum or union, a struct or a tuple with a type parameter's
+// value among its parts (#297), as unspecialised code holds one: its metadata
+// is made at run time from its parts' — once per set of parts, kept for the
+// program's life and at each call that asks — and lays the value out as the
+// compiler lays out the same type where it knows its parts (TypeLayout), so
+// that code that knows the type passes its own value where unspecialised code
+// takes one:
+//
+// - an enum of two cases, one holding an object or a string and the other
+//   nothing, is the reference, null for the empty case;
+// - one holding a Bool or a Char, the rest nothing, is that scalar, each empty
+//   case one of the values it never takes, in order: 2 on, or U+110000 on;
+// - any other is a tag (a byte, or four past 256 cases) and room for the
+//   largest payload after it, aligned for the most aligned one;
+// - a struct or a tuple is its fields, each at the next offset its alignment
+//   allows, as C lays a struct out.
+//
+// Its copy and destroy go to the active case's payload or each field.
+typedef struct SableAggregateShape {
+    int64_t kind;                  // SABLE_KIND_OPTIONAL, _ENUM, _UNION or _STRUCT
+    int64_t part_count;            // its cases or fields
+    const char *const *part_names; // each case's or field's name
+    const char *name;              // a generic type's, without its arguments: 'Sable.Core.Outcome'
+    int64_t argument_count;        // its type arguments, whose metadata follows the parts'
+} SableAggregateShape;
+
+enum { LAYOUT_TAGGED = 0, LAYOUT_NULLABLE = 1, LAYOUT_BOOL = 2, LAYOUT_CHAR = 3, LAYOUT_FIELDS = 4 };
+
+typedef struct SableAggregateInstance {
+    SableTypeMetadata type;
+    const SableAggregateShape *shape; // null for a tuple
+    int64_t layout;                   // LAYOUT_*
+    int64_t payload_offset;           // where an enum's payload is
+    int64_t tag_bytes;                // a tagged enum's tag
+    int64_t some;                     // the case with the payload, for a nullable or niche layout
+    int64_t spare;                    // a niche's first value no payload takes
+    int64_t part_count;               // its cases or fields
+    int64_t key_count;                // and its type arguments after them
+    const SableTypeMetadata **parts;  // each case's payload or null, each field, then each type argument
+    SableField *fields;
+    struct SableAggregateInstance *next;
+} SableAggregateInstance;
+
+static const SableAggregateInstance *aggregate_of(const SableTypeMetadata *type) {
+    return (const SableAggregateInstance *)(const void *)type;
+}
+
+static int64_t round_up(int64_t offset, int64_t align) {
+    return (offset + align - 1) / align * align;
+}
+
+int64_t sable_enum_tag(const void *value, const SableTypeMetadata *type) {
+    const SableAggregateInstance *instance = aggregate_of(type);
+    switch (instance->layout) {
+    case LAYOUT_NULLABLE:
+        return *(void *const *)value == NULL ? 1 - instance->some : instance->some;
+    case LAYOUT_BOOL:
+    case LAYOUT_CHAR: {
+        int64_t scalar = instance->layout == LAYOUT_BOOL ? *(const uint8_t *)value : *(const uint32_t *)value;
+        if (scalar < instance->spare) {
+            return instance->some;
+        }
+
+        // The (scalar - spare)th case without a payload.
+        int64_t empty = scalar - instance->spare;
+        for (int64_t i = 0; i < instance->part_count; i++) {
+            if (instance->parts[i] == NULL && empty-- == 0) {
+                return i;
+            }
+        }
+
+        sable_trap("an enum holds no case");
+    }
+    default:
+        return instance->tag_bytes == 1 ? *(const uint8_t *)value : *(const uint32_t *)value;
+    }
+}
+
+void *sable_enum_payload(void *value, const SableTypeMetadata *type) {
+    return (char *)value + aggregate_of(type)->payload_offset;
+}
+
+// The case written, once its payload is in place: its tag, or a niche's or a
+// null reference's value for an empty case.
+void sable_enum_inject(void *value, int64_t tag, const SableTypeMetadata *type) {
+    const SableAggregateInstance *instance = aggregate_of(type);
+    switch (instance->layout) {
+    case LAYOUT_NULLABLE:
+        if (tag != instance->some) {
+            *(void **)value = NULL;
+        }
+
+        return;
+    case LAYOUT_BOOL:
+    case LAYOUT_CHAR: {
+        if (tag == instance->some) {
+            return;
+        }
+
+        int64_t scalar = instance->spare;
+        for (int64_t i = 0; i < tag; i++) {
+            scalar += instance->parts[i] == NULL;
+        }
+
+        if (instance->layout == LAYOUT_BOOL) {
+            *(uint8_t *)value = (uint8_t)scalar;
+        } else {
+            *(uint32_t *)value = (uint32_t)scalar;
+        }
+
+        return;
+    }
+    default:
+        if (instance->tag_bytes == 1) {
+            *(uint8_t *)value = (uint8_t)tag;
+        } else {
+            *(uint32_t *)value = (uint32_t)tag;
+        }
+    }
+}
+
+// Where a struct's or a tuple's field is.
+void *sable_field_address(void *value, int64_t index, const SableTypeMetadata *type) {
+    return (char *)value + type->fields[index].offset;
+}
+
+// The witnesses of a tagged enum, a struct or a tuple that holds references:
+// the active case's payload's, or each field's, where it is.
+static void aggregate_copy(void *destination, void *source, const SableTypeMetadata *type) {
+    const SableAggregateInstance *instance = aggregate_of(type);
+    memmove(destination, source, (size_t)type->size);
+    if (instance->layout == LAYOUT_FIELDS) {
+        for (int64_t i = 0; i < instance->part_count; i++) {
+            const SableTypeMetadata *part = instance->parts[i];
+            int64_t offset = type->fields[i].offset;
+            part->witnesses->initialize_with_copy((char *)destination + offset, (char *)source + offset, part);
+        }
+
+        return;
+    }
+
+    const SableTypeMetadata *payload = instance->parts[sable_enum_tag(source, type)];
+    if (payload != NULL) {
+        int64_t offset = instance->payload_offset;
+        payload->witnesses->initialize_with_copy((char *)destination + offset, (char *)source + offset, payload);
+    }
+}
+
+static void aggregate_destroy(void *value, const SableTypeMetadata *type) {
+    const SableAggregateInstance *instance = aggregate_of(type);
+    if (instance->layout == LAYOUT_FIELDS) {
+        for (int64_t i = 0; i < instance->part_count; i++) {
+            const SableTypeMetadata *part = instance->parts[i];
+            part->witnesses->destroy((char *)value + type->fields[i].offset, part);
+        }
+
+        return;
+    }
+
+    const SableTypeMetadata *payload = instance->parts[sable_enum_tag(value, type)];
+    if (payload != NULL) {
+        payload->witnesses->destroy((char *)value + instance->payload_offset, payload);
+    }
+}
+
+static void aggregate_visit(void *value, const SableTypeMetadata *type) {
+    const SableAggregateInstance *instance = aggregate_of(type);
+    if (instance->layout == LAYOUT_FIELDS) {
+        for (int64_t i = 0; i < instance->part_count; i++) {
+            const SableTypeMetadata *part = instance->parts[i];
+            part->witnesses->visit((char *)value + type->fields[i].offset, part);
+        }
+
+        return;
+    }
+
+    const SableTypeMetadata *payload = instance->parts[sable_enum_tag(value, type)];
+    if (payload != NULL) {
+        payload->witnesses->visit((char *)value + instance->payload_offset, payload);
+    }
+}
+
+static const SableValueWitnesses aggregate_witnesses = {
+    aggregate_copy, sable_vw_take, sable_vw_assign_with_copy, sable_vw_assign_with_take, aggregate_destroy, aggregate_visit,
+};
+
+static SableAggregateInstance *aggregate_instances;
+
+static size_t name_length(const SableTypeMetadata *type) {
+    return type == NULL || type->name == NULL ? 0 : strlen(type->name);
+}
+
+static const char *name_of(const SableTypeMetadata *type) {
+    return type == NULL || type->name == NULL ? "" : type->name;
+}
+
+// The parts' names joined, between an opening and a closing text.
+static char *joined_name(const char *before, int64_t count, const SableTypeMetadata *const *parts, const char *after) {
+    size_t length = strlen(before) + strlen(after) + 1;
+    for (int64_t i = 0; i < count; i++) {
+        length += name_length(parts[i]) + 2;
+    }
+
+    char *name = malloc(length);
+    if (name == NULL) {
+        sable_trap("out of memory");
+    }
+
+    strcpy(name, before);
+    for (int64_t i = 0; i < count; i++) {
+        if (i > 0) {
+            strcat(name, ", ");
+        }
+
+        strcat(name, name_of(parts[i]));
+    }
+
+    strcat(name, after);
+    return name;
+}
+
+// The name it is written with: 'Int?', '(Int, String)', 'M.Box<Int>'.
+static char *aggregate_name(const SableAggregateInstance *made) {
+    const SableAggregateShape *shape = made->shape;
+    if (shape == NULL) {
+        return joined_name("(", made->part_count, made->parts, ")");
+    }
+
+    if (shape->kind == SABLE_KIND_OPTIONAL) {
+        return joined_name("", 1, &made->parts[made->some], "?");
+    }
+
+    if (shape->argument_count == 0) {
+        return joined_name(shape->name, 0, made->parts, "");
+    }
+
+    size_t base = strlen(shape->name);
+    char *before = malloc(base + 2);
+    if (before == NULL) {
+        sable_trap("out of memory");
+    }
+
+    memcpy(before, shape->name, base);
+    before[base] = '<';
+    before[base + 1] = 0;
+    char *name = joined_name(before, shape->argument_count, made->parts + made->part_count, ">");
+    free(before);
+    return name;
+}
+
+static void lay_out_enum(SableAggregateInstance *made) {
+    const SableTypeMetadata *payload = NULL;
+    int64_t payloads = 0, empties = 0;
+    for (int64_t i = 0; i < made->part_count; i++) {
+        if (made->parts[i] != NULL) {
+            payload = made->parts[i];
+            made->some = i;
+            payloads++;
+        } else {
+            empties++;
+        }
+    }
+
+    SableTypeMetadata *type = &made->type;
+    if (made->part_count == 2 && payloads == 1 && (payload->flags & SABLE_TYPE_NULLABLE) != 0) {
+        made->layout = LAYOUT_NULLABLE;
+        type->size = type->alignment = (int64_t)sizeof(void *);
+        type->witnesses = &sable_reference_witnesses;
+        return;
+    }
+
+    if (payloads == 1 && (payload->flags & SABLE_TYPE_BOOL) != 0 && empties <= 254) {
+        made->layout = LAYOUT_BOOL;
+        made->spare = 2;
+        type->size = type->alignment = 1;
+        type->flags |= SABLE_TYPE_TRIVIAL;
+        type->witnesses = &sable_bits_witnesses;
+        return;
+    }
+
+    if (payloads == 1 && (payload->flags & SABLE_TYPE_CHAR) != 0 && empties <= 0x7FFFFFFF - 0x110000) {
+        made->layout = LAYOUT_CHAR;
+        made->spare = 0x110000;
+        type->size = type->alignment = 4;
+        type->flags |= SABLE_TYPE_TRIVIAL;
+        type->witnesses = &sable_bits_witnesses;
+        return;
+    }
+
+    made->layout = LAYOUT_TAGGED;
+    made->tag_bytes = made->part_count <= 256 ? 1 : 4;
+    int64_t size = 0, unit = 1;
+    bool trivial = true;
+    for (int64_t i = 0; i < made->part_count; i++) {
+        if (made->parts[i] != NULL) {
+            size = made->parts[i]->size > size ? made->parts[i]->size : size;
+            unit = made->parts[i]->alignment > unit ? made->parts[i]->alignment : unit;
+            trivial = trivial && (made->parts[i]->flags & SABLE_TYPE_TRIVIAL) != 0;
+        }
+    }
+
+    if (size == 0) {
+        unit = 1;
+    }
+
+    int64_t count = (size + unit - 1) / unit;
+    made->payload_offset = round_up(made->tag_bytes, unit);
+    int64_t align = unit > made->tag_bytes ? unit : made->tag_bytes;
+    int64_t end = count == 0 ? made->tag_bytes : made->payload_offset + count * unit;
+    type->size = round_up(end, align);
+    type->alignment = align;
+    type->flags |= trivial ? SABLE_TYPE_TRIVIAL : 0;
+    type->witnesses = trivial ? &sable_bits_witnesses : &aggregate_witnesses;
+}
+
+static void lay_out_fields(SableAggregateInstance *made) {
+    SableTypeMetadata *type = &made->type;
+    int64_t end = 0, align = 1;
+    bool trivial = true;
+    for (int64_t i = 0; i < made->part_count; i++) {
+        const SableTypeMetadata *part = made->parts[i];
+        int64_t part_align = part->alignment < 1 ? 1 : part->alignment;
+        int64_t at = round_up(end, part_align);
+        made->fields[i].offset = at;
+        end = at + part->size;
+        align = part_align > align ? part_align : align;
+        trivial = trivial && (part->flags & SABLE_TYPE_TRIVIAL) != 0;
+    }
+
+    made->layout = LAYOUT_FIELDS;
+    type->size = round_up(end, align);
+    type->alignment = align;
+    type->flags |= trivial ? SABLE_TYPE_TRIVIAL : 0;
+    type->witnesses = trivial ? &sable_bits_witnesses : &aggregate_witnesses;
+}
+
+static bool aggregate_matches(const SableAggregateInstance *at, const SableAggregateShape *shape, int64_t count, const SableTypeMetadata *const *parts) {
+    if (at->shape != shape || at->key_count != count) {
+        return false;
+    }
+
+    for (int64_t i = 0; i < count; i++) {
+        if (at->parts[i] != parts[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static SableAggregateInstance *aggregate_make(const SableAggregateShape *shape, int64_t count, const SableTypeMetadata *const *parts) {
+    SableAggregateInstance *made = calloc(1, sizeof *made);
+    const SableTypeMetadata **kept = calloc((size_t)(count > 0 ? count : 1), sizeof *kept);
+    int64_t part_count = shape == NULL ? count : shape->part_count;
+    SableField *fields = calloc((size_t)(part_count > 0 ? part_count : 1), sizeof *fields);
+    if (made == NULL || kept == NULL || fields == NULL) {
+        sable_trap("out of memory");
+    }
+
+    memcpy(kept, parts, (size_t)count * sizeof *kept);
+    bool optional = shape != NULL && shape->kind == SABLE_KIND_OPTIONAL;
+    bool enumeration = shape != NULL && shape->kind != SABLE_KIND_STRUCT;
+    made->shape = shape;
+    made->part_count = part_count;
+    made->key_count = count;
+    made->parts = kept;
+    made->fields = fields;
+    made->type.kind = shape == NULL ? SABLE_KIND_TUPLE : shape->kind;
+    made->type.field_count = part_count;
+    made->type.fields = fields;
+    made->type.flags = SABLE_TYPE_FIELDS | SABLE_TYPE_FIELD_TYPES;
+    if (enumeration) {
+        lay_out_enum(made);
+    } else {
+        lay_out_fields(made);
+    }
+
+    made->type.name = aggregate_name(made);
+    made->type.argument_count = optional ? 1 : shape == NULL ? part_count : shape->argument_count;
+    made->type.arguments = optional ? &kept[made->some] : shape == NULL ? kept : kept + part_count;
+    made->type.stride = round_up(made->type.size, made->type.alignment);
+    for (int64_t i = 0; i < part_count; i++) {
+        fields[i].type = parts[i];
+        fields[i].type_name = name_of(parts[i]);
+        fields[i].kind = parts[i] == NULL || (parts[i]->flags & SABLE_TYPE_TRIVIAL) != 0 ? SABLE_FIELD_DATA : SABLE_FIELD_AGGREGATE;
+        if (enumeration) {
+            fields[i].offset = made->payload_offset;
+        }
+
+        if (shape != NULL) {
+            fields[i].name = shape->part_names[i];
+            continue;
+        }
+
+        char *index = malloc(24);
+        if (index == NULL) {
+            sable_trap("out of memory");
+        }
+
+        snprintf(index, 24, "%lld", (long long)i);
+        fields[i].name = index;
+    }
+
+    return made;
+}
+
+static const SableTypeMetadata *aggregate_instance(void **cache, const SableAggregateShape *shape, int64_t count, const SableTypeMetadata *const *parts) {
+    SableAggregateInstance *known = __atomic_load_n((SableAggregateInstance **)cache, __ATOMIC_ACQUIRE);
+    if (known != NULL && aggregate_matches(known, shape, count, parts)) {
+        return &known->type;
+    }
+
+    SableAggregateInstance *found = NULL;
+    for (SableAggregateInstance *at = __atomic_load_n(&aggregate_instances, __ATOMIC_ACQUIRE); at != NULL; at = at->next) {
+        if (aggregate_matches(at, shape, count, parts)) {
+            found = at;
+            break;
+        }
+    }
+
+    if (found == NULL) {
+        found = aggregate_make(shape, count, parts);
+
+        // Another thread may have made one meanwhile: either serves, and both are kept.
+        found->next = __atomic_load_n(&aggregate_instances, __ATOMIC_ACQUIRE);
+        while (!__atomic_compare_exchange_n(&aggregate_instances, &found->next, found, true, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+        }
+    }
+
+    if (known == NULL) {
+        __atomic_store_n((SableAggregateInstance **)cache, found, __ATOMIC_RELEASE);
+    }
+
+    return &found->type;
+}
+
+// An optional's, an enum's or a struct's metadata: its parts' (null for a
+// case without a payload), then its type arguments'.
+const SableTypeMetadata *sable_aggregate_type(void **cache, const SableAggregateShape *shape, const SableTypeMetadata *const *parts) {
+    return aggregate_instance(cache, shape, shape->part_count + shape->argument_count, parts);
+}
+
+const SableTypeMetadata *sable_tuple_type(void **cache, int64_t count, const SableTypeMetadata *const *elements) {
+    return aggregate_instance(cache, NULL, count, elements);
+}

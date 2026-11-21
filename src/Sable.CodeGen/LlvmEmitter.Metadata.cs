@@ -171,6 +171,34 @@ public sealed partial class LlvmEmitter {
         return name;
     }
 
+    /// <summary>
+    ///     What the runtime makes an optional's, an enum's or a struct's
+    ///     metadata from, besides its parts' and its type arguments'
+    ///     (<c>SableAggregateShape</c>, #297): its kind, its cases' or fields'
+    ///     count and names, its name without its type arguments, and how many
+    ///     of those there are.
+    /// </summary>
+    internal string AggregateShape(NominalType type) {
+        var name = $"@\"sable.shape.{Mangled(type)}\"";
+        if (!_emitted.Add(name)) {
+            return name;
+        }
+
+        var parts = type switch {
+            EnumType enumType => enumType.Cases.Select(static c => c.Name).ToList(),
+            StructType structType => structType.Fields.Select(static f => f.Name).ToList(),
+            _ => throw new NotSupportedException($"no shape for {type}"),
+        };
+        var names = $"@\"sable.shape.parts.{Mangled(type)}\"";
+        var listed = string.Join(", ", parts.Select(p => $"ptr {TrapMessage(p)}").ToList());
+        var display = TypeMetadata.DisplayName(type);
+        var written = TrapMessage(type.TypeArguments.IsEmpty || display.IndexOf('<') is not (> 0 and var open) ? display : display[..open]);
+        _globals.Append($"{names} = {SharedLinkage} constant [{parts.Count} x ptr] [{listed}]{Comdat(names, SharedLinkage)}\n");
+        _globals.Append($"{name} = {SharedLinkage} constant {{ i64, i64, ptr, ptr, i64 }} {{ i64 {(int)TypeMetadata.KindOf(type)}, i64 {parts.Count}, ptr {names}, ")
+            .Append($"ptr {written}, i64 {type.TypeArguments.Length} }}{Comdat(name, SharedLinkage)}\n");
+        return name;
+    }
+
     int _witnessCaches;
 
     /// <summary>A new call's cache of the registry's answer (<c>sable_witness_table_cached</c>): one word, empty at first.</summary>
@@ -333,6 +361,12 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_witness_table_cached(ptr, ptr, ptr)
                                         declare ptr @sable_array_metadata(ptr, ptr)
                                         declare ptr @sable_array_type(ptr, ptr)
+                                        declare ptr @sable_aggregate_type(ptr, ptr, ptr)
+                                        declare ptr @sable_tuple_type(ptr, i64, ptr)
+                                        declare i64 @sable_enum_tag(ptr, ptr)
+                                        declare void @sable_enum_inject(ptr, i64, ptr)
+                                        declare ptr @sable_enum_payload(ptr, ptr)
+                                        declare ptr @sable_field_address(ptr, i64, ptr)
                                         declare ptr @sable_opaque_type(ptr, ptr)
                                         declare ptr @sable_opaque_describe(ptr, ptr)
                                         declare void @sable_register_describer(ptr, ptr)

@@ -763,7 +763,7 @@ public sealed partial class LlvmEmitter {
             AddressType or FunctionType or ClassType or ArrayType => "ptr",
             StructType { IsInline: true } or InlinePointerType => "ptr",
             _ when type == SilType.Object || type == SilType.Region => "ptr",
-            OpaqueType => "ptr",
+            _ when SilType.IsIndirect(type) => "ptr",
             _ when type == SilType.Metadata || type == SilType.WitnessTable => "ptr",
             ThickFunctionType => "{ ptr, ptr }",
             WeakStorageType or UnownedStorageType => "ptr",
@@ -1526,19 +1526,75 @@ public sealed partial class LlvmEmitter {
 
         readonly Dictionary<string, string> _opaqueSizes = new(StringComparer.Ordinal);
 
-        string OpaqueMetadata(OpaqueType type) =>
-            _opaqueMetadata.TryGetValue(type.Name, out var metadata)
-                ? metadata
-                : throw new NotSupportedException($"{function.Name} has no metadata for {type}\n{SilPrinter.Print(function)}");
+        /// <summary>
+        ///     The metadata of a type unspecialised code holds indirectly: a
+        ///     type parameter's as the function is given it; an optional's or a
+        ///     tuple's made at run time from its parts' where the function starts
+        ///     (<c>sable_aggregate_type</c>, <c>sable_tuple_type</c>), once per
+        ///     instance and kept at the call that asks.
+        /// </summary>
+        string OpaqueMetadata(SilType type) {
+            if (type is OpaqueType opaque) {
+                return _opaqueMetadata.TryGetValue(opaque.Name, out var metadata)
+                    ? metadata
+                    : throw new NotSupportedException($"{function.Name} has no metadata for {type}\n{SilPrinter.Print(function)}");
+            }
+
+            var key = type.ToString();
+            if (_runtimeMetadata.TryGetValue(key, out var made)) {
+                return made;
+            }
+
+            List<string> parts = type switch {
+                TupleType tuple => tuple.Elements.Select(PartMetadata).ToList(),
+                EnumType enumType => [..enumType.Cases.Select(c => c.Payload is { } payload ? PartMetadata(payload) : "null"), ..enumType.TypeArguments.Select(PartMetadata)],
+                StructType structType => [..structType.Fields.Select(f => PartMetadata(f.Type)), ..structType.TypeArguments.Select(PartMetadata)],
+                _ => throw new NotSupportedException($"no metadata made at run time for {type}"),
+            };
+            var list = Fresh();
+            _entryAllocas.Append($"  {list} = alloca [{parts.Count} x ptr], align 8\n");
+            for (var i = 0; i < parts.Count; i++) {
+                var at = Fresh();
+                _entryAllocas.Append($"  {at} = getelementptr inbounds [{parts.Count} x ptr], ptr {list}, i32 0, i32 {i}\n")
+                    .Append($"  store ptr {parts[i]}, ptr {at}\n");
+            }
+
+            made = Fresh();
+            var cache = module.RuntimeCache();
+            _entryAllocas.Append(type is TupleType
+                ? $"  {made} = call ptr @sable_tuple_type(ptr {cache}, i64 {parts.Count}, ptr {list})\n"
+                : $"  {made} = call ptr @sable_aggregate_type(ptr {cache}, ptr {module.AggregateShape((NominalType)type)}, ptr {list})\n");
+            _runtimeMetadata[key] = made;
+            return made;
+        }
+
+        /// <summary>A part's metadata, for one made at run time: an indirect one's, an array of them's, or a constant.</summary>
+        string PartMetadata(SilType part) {
+            if (!SilType.MentionsOpaque(part)) {
+                return module.TypeMetadataGlobal(part);
+            }
+
+            if (part is ArrayType { Element: var element }) {
+                var of = PartMetadata(element);
+                var made = Fresh();
+                _entryAllocas.Append($"  {made} = call ptr @sable_array_type(ptr {module.RuntimeCache()}, ptr {of})\n");
+                return made;
+            }
+
+            return OpaqueMetadata(part);
+        }
+
+        readonly Dictionary<string, string> _runtimeMetadata = new(StringComparer.Ordinal);
 
         /// <summary>The size of an opaque type's values, read from its metadata where the function starts.</summary>
-        string OpaqueSize(OpaqueType type) {
-            if (!_opaqueSizes.TryGetValue(type.Name, out var size)) {
+        string OpaqueSize(SilType type) {
+            if (!_opaqueSizes.TryGetValue(type.ToString(), out var size)) {
+                var of = OpaqueMetadata(type);
                 var at = Fresh();
                 size = Fresh();
-                _entryAllocas.Append($"  {at} = getelementptr inbounds %SableTypeMetadata, ptr {OpaqueMetadata(type)}, i32 0, i32 {MetadataSizeField}\n")
+                _entryAllocas.Append($"  {at} = getelementptr inbounds %SableTypeMetadata, ptr {of}, i32 0, i32 {MetadataSizeField}\n")
                     .Append($"  {size} = load i64, ptr {at}\n");
-                _opaqueSizes[type.Name] = size;
+                _opaqueSizes[type.ToString()] = size;
             }
 
             return size;
@@ -1549,7 +1605,7 @@ public sealed partial class LlvmEmitter {
         ///     the function starts — one for each value, which a loop reuses,
         ///     so the frame does not grow as it runs.
         /// </summary>
-        string OpaqueBuffer(OpaqueType type) {
+        string OpaqueBuffer(SilType type) {
             var size = OpaqueSize(type);
             var buffer = Fresh();
             _entryAllocas.Append($"  {buffer} = alloca i8, i64 {size}, align 16\n");
@@ -1557,13 +1613,14 @@ public sealed partial class LlvmEmitter {
         }
 
         /// <summary>The stride of an opaque type's values in an array, read from its metadata where the function starts.</summary>
-        string OpaqueStride(OpaqueType type) {
-            if (!_opaqueStrides.TryGetValue(type.Name, out var stride)) {
+        string OpaqueStride(SilType type) {
+            if (!_opaqueStrides.TryGetValue(type.ToString(), out var stride)) {
+                var of = OpaqueMetadata(type);
                 var at = Fresh();
                 stride = Fresh();
-                _entryAllocas.Append($"  {at} = getelementptr inbounds %SableTypeMetadata, ptr {OpaqueMetadata(type)}, i32 0, i32 {MetadataStrideField}\n")
+                _entryAllocas.Append($"  {at} = getelementptr inbounds %SableTypeMetadata, ptr {of}, i32 0, i32 {MetadataStrideField}\n")
                     .Append($"  {stride} = load i64, ptr {at}\n");
-                _opaqueStrides[type.Name] = stride;
+                _opaqueStrides[type.ToString()] = stride;
             }
 
             return stride;
@@ -1580,16 +1637,17 @@ public sealed partial class LlvmEmitter {
         ///     found where the function starts.
         /// </summary>
         string ArrayMetadataOf(ArrayType type) {
-            if (type.Element is not OpaqueType element) {
+            if (!SilType.IsIndirect(type.Element)) {
                 return module.ArrayMetadata(type);
             }
 
-            if (!_opaqueArrays.TryGetValue(element.Name, out var metadata)) {
+            var element = type.Element;
+            if (!_opaqueArrays.TryGetValue(element.ToString(), out var metadata)) {
                 var cache = module.RuntimeCache();
                 var of = OpaqueMetadata(element);
                 metadata = Fresh();
                 _entryAllocas.Append($"  {metadata} = call ptr @sable_array_metadata(ptr {cache}, ptr {of})\n");
-                _opaqueArrays[element.Name] = metadata;
+                _opaqueArrays[element.ToString()] = metadata;
             }
 
             return metadata;
@@ -1597,30 +1655,30 @@ public sealed partial class LlvmEmitter {
 
         /// <summary>The address of an element of an array's buffer, by its index: by the stride, for an opaque one.</summary>
         string ElementAt(SilType element, string elements, string index) {
-            if (element is not OpaqueType opaque) {
+            if (!SilType.IsIndirect(element)) {
                 return $"getelementptr inbounds {Type(element)}, ptr {elements}, i64 {index}";
             }
 
             var offset = Fresh();
-            Line($"{offset} = mul nsw i64 {index}, {OpaqueStride(opaque)}");
+            Line($"{offset} = mul nsw i64 {index}, {OpaqueStride(element)}");
             return $"getelementptr inbounds i8, ptr {elements}, i64 {offset}";
         }
 
         /// <summary>A value stored into an element's place: an opaque one moved there.</summary>
         void StoreElement(SilType element, string value, string at) {
-            if (element is OpaqueType opaque) {
-                OpaqueMove(opaque, at, value);
+            if (SilType.IsIndirect(element)) {
+                OpaqueMove(element, at, value);
             } else {
                 Line($"store {Type(element)} {value}, ptr {at}, !tbaa {TbaaElement}");
             }
         }
 
         /// <summary>An opaque value moved from one place to another: its bits, as every type's take is.</summary>
-        void OpaqueMove(OpaqueType type, string destination, string source) =>
+        void OpaqueMove(SilType type, string destination, string source) =>
             Line($"call void @llvm.memmove.p0.p0.i64(ptr {destination}, ptr {source}, i64 {OpaqueSize(type)}, i1 false)");
 
         /// <summary>One of an opaque type's value witnesses, called on its values' addresses and its metadata.</summary>
-        void OpaqueWitness(OpaqueType type, int witness, params string[] addresses) {
+        void OpaqueWitness(SilType type, int witness, params string[] addresses) {
             var metadata = OpaqueMetadata(type);
             var field = Fresh();
             var table = Fresh();
@@ -1708,7 +1766,7 @@ public sealed partial class LlvmEmitter {
             foreach (var block in function.Blocks.Skip(1)) {
                 foreach (var argument in block.Arguments) {
                     // A block's opaque argument is a buffer of its own, which each edge moves the value into.
-                    if (argument.Type is OpaqueType opaqueArgument) {
+                    if (argument.Type is var opaqueArgument && SilType.IsIndirect(opaqueArgument)) {
                         _names[argument] = OpaqueBuffer(opaqueArgument);
                         continue;
                     }
@@ -2017,6 +2075,11 @@ public sealed partial class LlvmEmitter {
                     _names[literal] = module.StringConstant(literal.Value);
                     return;
 
+                // An optional or a tuple of a type parameter's values: made at run time.
+                case MetadataInst indirectMetadata when SilType.MentionsOpaque(indirectMetadata.Described):
+                    _names[indirectMetadata] = PartMetadata(indirectMetadata.Described);
+                    return;
+
                 case MetadataInst metadata:
                     _names[metadata] = module.TypeMetadataGlobal(metadata.Described);
                     return;
@@ -2026,7 +2089,7 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 // Storage for an opaque value: a buffer of its metadata's size, empty.
-                case AllocStackInst { ElementType: OpaqueType opaqueSlot } alloc: {
+                case AllocStackInst { ElementType: var opaqueSlot } alloc when SilType.IsIndirect(opaqueSlot): {
                     var buffer = OpaqueBuffer(opaqueSlot);
                     _names[alloc] = buffer;
                     Line($"call void @llvm.memset.p0.i64(ptr align 16 {buffer}, i8 0, i64 {OpaqueSize(opaqueSlot)}, i1 false)");
@@ -2098,7 +2161,7 @@ public sealed partial class LlvmEmitter {
 
                 // An opaque value read: copied by its value witness into a buffer
                 // of its own, or moved there, leaving the storage empty.
-                case LoadInst { Type: OpaqueType opaqueLoad } load: {
+                case LoadInst { Type: var opaqueLoad } load when SilType.IsIndirect(opaqueLoad): {
                     var buffer = OpaqueBuffer(opaqueLoad);
                     _names[load] = buffer;
                     if (load.Kind == LoadKind.Take) {
@@ -2111,7 +2174,7 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
-                case StoreInst { Value.Type: OpaqueType opaqueStore } store: {
+                case StoreInst { Value.Type: var opaqueStore } store when SilType.IsIndirect(opaqueStore): {
                     if (store.Kind == StoreKind.Assign && store.Address is not AllocStackInst { Unmanaged: true }) {
                         OpaqueWitness(opaqueStore, AssignWithTakeWitness, Name(store.Address), Name(store.Value));
                     } else {
@@ -2221,7 +2284,7 @@ public sealed partial class LlvmEmitter {
                 }
 
                 // Borrowed where it is: the storage is the value's buffer.
-                case LoadBorrowInst { Type: OpaqueType } opaqueBorrow:
+                case LoadBorrowInst opaqueBorrow when SilType.IsIndirect(opaqueBorrow.Type):
                     _names[opaqueBorrow] = Name(opaqueBorrow.Address);
                     return;
 
@@ -2235,18 +2298,18 @@ public sealed partial class LlvmEmitter {
                 case EndBorrowInst:
                     return;
 
-                case CopyValueInst { Type: OpaqueType opaqueCopy } copy: {
+                case CopyValueInst { Type: var opaqueCopy } copy when SilType.IsIndirect(opaqueCopy): {
                     var buffer = OpaqueBuffer(opaqueCopy);
                     _names[copy] = buffer;
                     OpaqueWitness(opaqueCopy, CopyWitness, buffer, Name(copy.Value));
                     return;
                 }
 
-                case DestroyValueInst { Value.Type: OpaqueType opaqueDestroy } destroy:
+                case DestroyValueInst { Value.Type: var opaqueDestroy } destroy when SilType.IsIndirect(opaqueDestroy):
                     OpaqueWitness(opaqueDestroy, DestroyWitness, Name(destroy.Value));
                     return;
 
-                case DestroyAddrInst { Address.Type: AddressType { Pointee: OpaqueType opaqueDestroyed } } destroy when destroy.Address is not AllocStackInst { Unmanaged: true }:
+                case DestroyAddrInst { Address.Type: AddressType { Pointee: var opaqueDestroyed } } destroy when SilType.IsIndirect(opaqueDestroyed) && destroy.Address is not AllocStackInst { Unmanaged: true }:
                     OpaqueWitness(opaqueDestroyed, DestroyWitness, Name(destroy.Address));
                     Line($"call void @llvm.memset.p0.i64(ptr {Name(destroy.Address)}, i8 0, i64 {OpaqueSize(opaqueDestroyed)}, i1 false)");
                     return;
@@ -2352,8 +2415,9 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
-                case ApplyInst { Type: OpaqueType }:
-                case ReturnInst { Value.Type: OpaqueType }:
+                case ApplyInst indirectApply when SilType.IsIndirect(indirectApply.Type):
+                    throw new NotSupportedException("an opaque value is returned through an address its caller passes");
+                case ReturnInst { Value: { } indirectReturned } when SilType.IsIndirect(indirectReturned.Type):
                     throw new NotSupportedException("an opaque value is returned through an address its caller passes");
 
                 case ApplyInst apply: {
@@ -2399,6 +2463,19 @@ public sealed partial class LlvmEmitter {
                     Line("ret void");
                     return;
 
+                case StructInst indirectStruct when SilType.IsIndirect(indirectStruct.Type):
+                    IndirectFields(indirectStruct, [..((StructType)indirectStruct.Type).Fields.Select(static f => f.Type)]);
+                    return;
+
+                case StructExtractInst indirectField when SilType.IsIndirect(indirectField.Value.Type):
+                    _names[indirectField] = IndirectField(Name(indirectField.Value), indirectField.Value.Type, ((StructType)indirectField.Value.Type).Fields[indirectField.Field].Type, indirectField.Field, load: true);
+                    return;
+
+                case StructElementAddrInst indirectFieldAddress when SilType.IsIndirect(((AddressType)indirectFieldAddress.Address.Type).Pointee):
+                    _names[indirectFieldAddress] = IndirectField(Name(indirectFieldAddress.Address), ((AddressType)indirectFieldAddress.Address.Type).Pointee,
+                        ((StructType)((AddressType)indirectFieldAddress.Address.Type).Pointee).Fields[indirectFieldAddress.Field].Type, indirectFieldAddress.Field, load: false);
+                    return;
+
                 case StructInst { StructType.Deinit: not null } made: {
                     // The live byte, then the fields.
                     var type = Type(made.Type);
@@ -2416,6 +2493,18 @@ public sealed partial class LlvmEmitter {
 
                 // An aggregate laid out with padding of its own starts from
                 // zeros, so that its padding is never poison where C reads it.
+                case TupleInst indirectTuple when SilType.IsIndirect(indirectTuple.Type):
+                    IndirectFields(indirectTuple, ((TupleType)indirectTuple.Type).Elements);
+                    return;
+
+                case TupleExtractInst indirectExtract when SilType.IsIndirect(indirectExtract.Value.Type):
+                    _names[indirectExtract] = IndirectField(Name(indirectExtract.Value), indirectExtract.Value.Type, ((TupleType)indirectExtract.Value.Type).Elements[indirectExtract.Element], indirectExtract.Element, load: true);
+                    return;
+
+                case TupleElementAddrInst indirectElement when SilType.IsIndirect(((AddressType)indirectElement.Address.Type).Pointee):
+                    _names[indirectElement] = IndirectField(Name(indirectElement.Address), ((AddressType)indirectElement.Address.Type).Pointee, ((TupleType)((AddressType)indirectElement.Address.Type).Pointee).Elements[indirectElement.Element], indirectElement.Element, load: false);
+                    return;
+
                 case StructInst or TupleInst: {
                     var layout = instruction.Type is StructType madeStruct ? LayoutOf(madeStruct) : LayoutOf((TupleType)instruction.Type);
                     _names[instruction] = Aggregate(Type(instruction.Type), instruction.Operands, layout.Explicit ? layout.Slots : null);
@@ -2456,6 +2545,10 @@ public sealed partial class LlvmEmitter {
                     Line($"{name} = getelementptr inbounds {Type(tupleType)}, ptr {Name(element.Address)}, i32 0, i32 {LayoutOf(tupleType).Slots[element.Element]}");
                     return;
                 }
+
+                case EnumInst indirectEnum when SilType.IsIndirect(indirectEnum.Type):
+                    IndirectEnum(indirectEnum);
+                    return;
 
                 case EnumInst nullableInst when IsNullable(nullableInst.EnumType):
                     _names[nullableInst] = nullableInst.Payload is { } held ? Name(held) : "null";
@@ -2529,22 +2622,22 @@ public sealed partial class LlvmEmitter {
             // the edge: through a buffer of each first when there are several,
             // which may be one another's.
             var moves = new StringBuilder();
-            var opaque = Enumerable.Range(0, arguments.Count).Where(i => target.Arguments[i].Type is OpaqueType).ToList();
+            var opaque = Enumerable.Range(0, arguments.Count).Where(i => SilType.IsIndirect(target.Arguments[i].Type)).ToList();
             if (opaque.Count > 0) {
                 var output = _out;
                 _out = moves;
                 var sources = opaque.Select(i => Name(arguments[i])).ToList();
                 if (opaque.Count > 1) {
                     for (var j = 0; j < opaque.Count; j++) {
-                        var staged = OpaqueBuffer((OpaqueType)target.Arguments[opaque[j]].Type);
-                        OpaqueMove((OpaqueType)target.Arguments[opaque[j]].Type, staged, sources[j]);
+                        var staged = OpaqueBuffer(target.Arguments[opaque[j]].Type);
+                        OpaqueMove(target.Arguments[opaque[j]].Type, staged, sources[j]);
                         sources[j] = staged;
                     }
                 }
 
                 for (var j = 0; j < opaque.Count; j++) {
                     if (sources[j] != Name(target.Arguments[opaque[j]])) {
-                        OpaqueMove((OpaqueType)target.Arguments[opaque[j]].Type, Name(target.Arguments[opaque[j]]), sources[j]);
+                        OpaqueMove(target.Arguments[opaque[j]].Type, Name(target.Arguments[opaque[j]]), sources[j]);
                     }
                 }
 
@@ -2560,7 +2653,7 @@ public sealed partial class LlvmEmitter {
             }
 
             for (var i = 0; i < arguments.Count; i++) {
-                if (target.Arguments[i].Type is OpaqueType) {
+                if (SilType.IsIndirect(target.Arguments[i].Type)) {
                     continue;
                 }
 
@@ -2602,8 +2695,127 @@ public sealed partial class LlvmEmitter {
             return filled;
         }
 
+        // -------------------------------------------------------------------
+        // Optionals, enums and tuples laid out at run time (#297): a value is
+        // the address of a buffer its metadata sizes, and the runtime says
+        // where a payload or an element is and what case a value is.
+        // -------------------------------------------------------------------
+
+        /// <summary>A part moved into its place: an indirect one's bits, any other stored; a unit one has none.</summary>
+        void PlacePart(SilType type, string value, string at) {
+            if (SilType.IsIndirect(type)) {
+                OpaqueMove(type, at, value);
+            } else if (type != SilType.Unit) {
+                Line($"store {Type(type)} {value}, ptr {at}");
+            }
+        }
+
+        /// <summary>A case made in a buffer of its own: emptied, its payload put where the metadata says, and the case written.</summary>
+        void IndirectEnum(EnumInst made) {
+            var metadata = OpaqueMetadata(made.Type);
+            var buffer = OpaqueBuffer(made.Type);
+            _names[made] = buffer;
+            Line($"call void @llvm.memset.p0.i64(ptr align 16 {buffer}, i8 0, i64 {OpaqueSize(made.Type)}, i1 false)");
+            if (made.Payload is { } payload) {
+                var at = Fresh();
+                Line($"{at} = call ptr @sable_enum_payload(ptr {buffer}, ptr {metadata})");
+                PlacePart(payload.Type, Name(payload), at);
+            }
+
+            Line($"call void @sable_enum_inject(ptr {buffer}, i64 {made.Case}, ptr {metadata})");
+        }
+
+        /// <summary>
+        ///     A switch on a value laid out at run time: its case, as the
+        ///     runtime reads it, and a payload, on an edge of its own, moved
+        ///     into the target's buffer or loaded.
+        /// </summary>
+        void IndirectSwitch(SwitchEnumInst switchEnum) {
+            var enumType = (EnumType)switchEnum.Value.Type;
+            var value = Name(switchEnum.Value);
+            var metadata = OpaqueMetadata(enumType);
+            var tag = Fresh();
+            Line($"{tag} = call i64 @sable_enum_tag(ptr {value}, ptr {metadata})");
+
+            string fallback;
+            if (switchEnum.Default is { } defaultBlock) {
+                fallback = _labels[defaultBlock];
+            } else {
+                fallback = NewLabel("nocase");
+                _extra.Append(fallback).Append(":\n  unreachable\n");
+            }
+
+            var arms = new List<string>();
+            foreach (var (caseIndex, target) in switchEnum.Cases) {
+                if (enumType.Cases[caseIndex].Payload is not { } payload || target.Arguments.Count == 0) {
+                    arms.Add($"i64 {caseIndex}, label %{_labels[target]}");
+                    continue;
+                }
+
+                var edge = NewLabel("case");
+                var output = _out;
+                _out = new StringBuilder();
+                var at = Fresh();
+                Line($"{at} = call ptr @sable_enum_payload(ptr {value}, ptr {metadata})");
+                if (SilType.IsIndirect(payload)) {
+                    OpaqueMove(payload, Name(target.Arguments[0]), at);
+                } else if (payload == SilType.Unit) {
+                    _incoming[target.Arguments[0]].Add(("zeroinitializer", edge));
+                } else {
+                    var unpacked = Fresh();
+                    Line($"{unpacked} = load {Type(payload)}, ptr {at}");
+                    _incoming[target.Arguments[0]].Add((unpacked, edge));
+                }
+
+                Line($"br label %{_labels[target]}");
+                _extra.Append(edge).Append(":\n").Append(_out);
+                _out = output;
+                arms.Add($"i64 {caseIndex}, label %{edge}");
+            }
+
+            Line($"switch i64 {tag}, label %{fallback} [ {string.Join(" ", arms)} ]");
+        }
+
+        /// <summary>A struct or a tuple made in a buffer of its own, each field moved or stored where the metadata says.</summary>
+        void IndirectFields(SilInstruction made, IReadOnlyList<SilType> parts) {
+            var metadata = OpaqueMetadata(made.Type);
+            var buffer = OpaqueBuffer(made.Type);
+            _names[made] = buffer;
+            for (var i = 0; i < parts.Count; i++) {
+                var at = Fresh();
+                Line($"{at} = call ptr @sable_field_address(ptr {buffer}, i64 {i}, ptr {metadata})");
+                PlacePart(parts[i], Name(made.Operands[i]), at);
+            }
+        }
+
+        /// <summary>
+        ///     A field of a struct or a tuple laid out at run time: its address;
+        ///     read, an indirect one borrowed where it is and any other loaded.
+        /// </summary>
+        string IndirectField(string value, SilType type, SilType part, int index, bool load) {
+            var metadata = OpaqueMetadata(type);
+            var address = Fresh();
+            Line($"{address} = call ptr @sable_field_address(ptr {value}, i64 {index}, ptr {metadata})");
+            if (!load || SilType.IsIndirect(part)) {
+                return address;
+            }
+
+            if (part == SilType.Unit) {
+                return "zeroinitializer";
+            }
+
+            var loaded = Fresh();
+            Line($"{loaded} = load {Type(part)}, ptr {address}");
+            return loaded;
+        }
+
         void SwitchEnum(SwitchEnumInst switchEnum) {
             var enumType = (EnumType)switchEnum.Value.Type;
+            if (SilType.IsIndirect(enumType)) {
+                IndirectSwitch(switchEnum);
+                return;
+            }
+
             var type = Type(enumType);
             var value = Name(switchEnum.Value);
 
@@ -2763,7 +2975,7 @@ public sealed partial class LlvmEmitter {
         ///     so it is copied to a slot that is, and back after the call.
         /// </summary>
         string Aligned(SilValue argument) {
-            if (argument.Type is not AddressType { Pointee: var pointee } || pointee is OpaqueType || AddressAlign(argument) >= Align(pointee)) {
+            if (argument.Type is not AddressType { Pointee: var pointee } || SilType.IsIndirect(pointee) || AddressAlign(argument) >= Align(pointee)) {
                 return Name(argument);
             }
 
@@ -3729,7 +3941,7 @@ public sealed partial class LlvmEmitter {
 
                 // An array literal that does not escape its frame: made there,
                 // header and elements, each element stored where it goes.
-                case "array_literal_stack" when builtin.Type is not ArrayType { Element: OpaqueType }: {
+                case "array_literal_stack" when !SilType.IsIndirect(((ArrayType)builtin.Type).Element): {
                     var arrayType = (ArrayType)builtin.Type;
                     var layout = $"{{ [48 x i8], [{operands.Length} x {Type(arrayType.Element)}] }}";
                     var memory = Scratch(layout, HeapAlign);
@@ -3770,7 +3982,7 @@ public sealed partial class LlvmEmitter {
                         ? SliceElement(operands[0], operands[1], viewed, check: !builtin.InBounds)
                         : InlineElement(operands[0], operands[1], ((ArrayType)builtin.Operands[0].Type).Element, check: !builtin.InBounds);
                     // An opaque element: borrowed where it is, or copied into a buffer of its own.
-                    if (builtin.Type is OpaqueType opaqueElement) {
+                    if (builtin.Type is var opaqueElement && SilType.IsIndirect(opaqueElement)) {
                         if (builtin.Name == "array_get_borrowed") {
                             _names[builtin] = element;
                         } else {
@@ -3846,7 +4058,7 @@ public sealed partial class LlvmEmitter {
                     var array = Fresh();
                     Line($"{array} = load ptr, ptr {operands[0]}");
                     var element = InlineElement(array, operands[1], arrayType.Element, check: !builtin.InBounds);
-                    if (arrayType.Element is OpaqueType replacedUnique) {
+                    if (arrayType.Element is var replacedUnique && SilType.IsIndirect(replacedUnique)) {
                         OpaqueWitness(replacedUnique, AssignWithTakeWitness, element, operands[2]);
                         return;
                     }
@@ -3862,7 +4074,7 @@ public sealed partial class LlvmEmitter {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     var elementType = Type(arrayType.Element);
                     var element = MutableElement(operands[0], operands[1], arrayType);
-                    if (arrayType.Element is OpaqueType replaced) {
+                    if (arrayType.Element is var replaced && SilType.IsIndirect(replaced)) {
                         OpaqueWitness(replaced, AssignWithTakeWitness, element, operands[2]);
                         return;
                     }
@@ -3902,7 +4114,7 @@ public sealed partial class LlvmEmitter {
                 case "array_remove_last": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     var element = LastSlot(operands[0], arrayType);
-                    if (arrayType.Element is OpaqueType removed) {
+                    if (arrayType.Element is var removed && SilType.IsIndirect(removed)) {
                         var buffer = OpaqueBuffer(removed);
                         _names[builtin] = buffer;
                         OpaqueMove(removed, buffer, element);

@@ -146,14 +146,46 @@ public abstract class SilType : IEquatable<SilType> {
             (OpaqueType, _) or (_, OpaqueType) => opaqueOnly,
             (ArrayType x, ArrayType y) => SameErasingOpaque(x.Element, y.Element, opaqueOnly),
             (AddressType x, AddressType y) => SameErasingOpaque(x.Pointee, y.Pointee, opaqueOnly),
+            (StructType x, StructType y) => x.Fields.Count == y.Fields.Count && (MentionsOpaque(x) || MentionsOpaque(y)) && GenericBase(x.Name) == GenericBase(y.Name)
+                                            && x.Fields.Zip(y.Fields).All(p => p.First.Name == p.Second.Name && SameErasingOpaque(p.First.Type, p.Second.Type, opaqueOnly)),
+            (TupleType x, TupleType y) => x.Elements.Length == y.Elements.Length && x.Elements.Zip(y.Elements).All(p => SameErasingOpaque(p.First, p.Second, opaqueOnly)),
+            (EnumType x, EnumType y) => x.Cases.Count == y.Cases.Count && (MentionsOpaque(x) || MentionsOpaque(y))
+                                        && x.Cases.Zip(y.Cases).All(p => p.First.Name == p.Second.Name
+                                                                         && (p.First.Payload is null ? p.Second.Payload is null : p.Second.Payload is not null && SameErasingOpaque(p.First.Payload, p.Second.Payload, opaqueOnly))),
             _ => false,
         };
 
-    static string ErasedOpaque(string text) =>
-        text.Contains("@opaque(", StringComparison.Ordinal) ? System.Text.RegularExpressions.Regex.Replace(text, @"@opaque\([^)]*\)", "@opaque") : text;
+    /// <summary>A generic type's name without its type arguments: <c>M.Box</c> of <c>M.Box$of$Int</c>.</summary>
+    static string GenericBase(string name) => name.IndexOf("$of$", StringComparison.Ordinal) is >= 0 and var at ? name[..at] : name;
 
-    /// <summary>True when the type is, or holds, an <see cref="OpaqueType" />.</summary>
-    public static bool MentionsOpaque(SilType type) => type.ToString().Contains("@opaque(", StringComparison.Ordinal);
+    static string ErasedOpaque(string text) =>
+        text.Contains("opaque", StringComparison.Ordinal)
+            ? System.Text.RegularExpressions.Regex.Replace(System.Text.RegularExpressions.Regex.Replace(text, @"@opaque\([^)]*\)", "@opaque"), @"\$opaque\$\w*?\$", "$opaque$")
+            : text;
+
+    /// <summary>
+    ///     True when the type is, or holds, an <see cref="OpaqueType" />: in
+    ///     its parts, or in an optional's or a tuple's made in unspecialised
+    ///     code, whose names say so (<c>Optional$$opaque$T$</c>).
+    /// </summary>
+    public static bool MentionsOpaque(SilType type) => type.ToString() is var text && (text.Contains("@opaque(", StringComparison.Ordinal) || text.Contains("$opaque$", StringComparison.Ordinal));
+
+    /// <summary>
+    ///     True for a type unspecialised code holds indirectly, as it holds a
+    ///     type parameter's value (#297): an <see cref="OpaqueType" />, or an
+    ///     optional, an enum or a tuple with one among its parts — not behind a
+    ///     reference, as an array's elements are — whose layout its metadata,
+    ///     made at run time from its parts', says. A value of one is the
+    ///     address of a buffer of that size.
+    /// </summary>
+    public static bool IsIndirect(SilType type) =>
+        type switch {
+            OpaqueType => true,
+            TupleType tuple => tuple.Elements.Any(IsIndirect),
+            StructType structType => MentionsOpaque(structType) && structType.Fields.Any(static f => IsIndirect(f.Type)),
+            EnumType enumType => MentionsOpaque(enumType) && enumType.Cases.Any(static c => c.Payload is { } payload && IsIndirect(payload)),
+            _ => false,
+        };
     public static bool operator !=(SilType? a, SilType? b) => !(a == b);
 }
 
@@ -2151,7 +2183,7 @@ public static class SilBuiltins {
             // metadata; and it written out, by its type's describer.
             case "opaque_cast" when operands is [AddressType from] && result is AddressType to && (SilType.MentionsOpaque(from) || SilType.MentionsOpaque(to)):
                 return new([from], to);
-            case "opaque_address" when operands is [OpaqueType value] && result is AddressType:
+            case "opaque_address" when operands is [var value] && SilType.IsIndirect(value) && result is AddressType:
                 return new([value], result);
             // A value whose type names an opaque type seen as the same type
             // naming another, or a type known here: the same bits, borrowed

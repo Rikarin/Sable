@@ -981,7 +981,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         break;
 
                     case MetadataInst metadata:
-                        values[metadata] = MetadataOf(metadata.Described);
+                        values[metadata] = MetadataOf(SilType.MentionsOpaque(metadata.Described) ? Concrete(metadata.Described) : metadata.Described);
                         break;
 
                     case StringLiteralInst literal:
@@ -1036,7 +1036,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     case StoreInst store: {
                         var address = (IReference)Get(store.Address)!;
                         var old = address.Peek();
-                        if (!store.Value.Type.IsTrivial && store.Kind == StoreKind.Init && old is not null && address is not Field { Instance.Type.IsCoroutineFrame: true }) {
+                        if (!store.Value.Type.IsTrivial && store.Kind == StoreKind.Init && old is not null && address is not Field { Instance.Type.IsCoroutineFrame: true }
+                            // An opaque value of a trivial type, written where its caller left one: bits over bits, as natively.
+                            && !(SilType.MentionsOpaque(store.Value.Type) && Concrete(store.Value.Type).IsTrivial)) {
                             throw new SilTrap("store [init] into storage that holds a value");
                         }
 

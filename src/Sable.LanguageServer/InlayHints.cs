@@ -73,10 +73,11 @@ internal sealed class RootSummaries(
         try {
             var compilation = Compilation.Create(analysis.Compilation.SyntaxTrees);
 
-            // The standard library, once it is known to check cleanly with a
-            // program like this one, is lowered only where the program
-            // reaches, and its bodies are not checked again.
-            var library = libraryCheck(compilation, [..compilation.SyntaxTrees.Where(t => !analysis.IsLibrary(t))]);
+            // The standard library and the dependencies' files, once they are
+            // known to check cleanly with a program like this one — the
+            // dependencies' by their text — are lowered only where the
+            // program reaches, and their bodies are not checked again.
+            var library = libraryCheck(compilation, [..compilation.SyntaxTrees.Where(analysis.IsOwn)]);
             var clean = library?.Clean;
             known = clean is not null;
             var (module, lowering) = SilGen.LowerByFile(compilation, onDemand: clean);

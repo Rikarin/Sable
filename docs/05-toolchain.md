@@ -904,9 +904,18 @@ Measured on a small file (`"a,b".split(",")` and an interpolation), a fresh
 type errors) come 0.7 s after the file is opened, before and after; the
 complete ones, with the SIL checks, 5.3–5.6 s after with the library
 checked whole (lowering 4.6–4.9 s), 2.6–2.9 s once it is known (lowering
-1.9–2.1 s). A dependency's files are still checked with the package: the
-server compiles them from the workspace's view of their source, which it
-does not yet match to their cache entries.
+1.9–2.1 s). A dependency's files read from disk are library files to
+these checks: the package's own are its documents and what its generators
+write (`Analysis.IsOwn`), and `Library.CheckFor` records any library file
+that is not the standard library's by its name, features and text, so a
+dependency known to check cleanly with the package — a server that checked
+it whole found nothing — has its bodies left alone too, until its text
+changes. Since a unit binds only the members of other files it reaches
+(above), the same small file's checks lower in 0.46–0.47 s against
+0.60–0.62 s before, and complete 1.1 s after the file is opened (load
+average about 10); a first server, with the library not yet known, lowers
+it whole in 1.7 s. A build's records are not the server's: its files are
+parsed with `DEBUG` or `RELEASE`, so the server learns its own.
 
 Measured (#182), `sable` built Release, on a machine under a load average
 of 10–35, so the times are rough:

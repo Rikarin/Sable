@@ -140,6 +140,7 @@ internal sealed partial class Analysis {
 
         var compilation = Compilation.Create([..trees, ..library]);
         var analysis = new Analysis(snapshot, key, lints ?? LintConfiguration.Default, compilation, library, dependencies) { _generated = generate is not null };
+        analysis._generatedTrees.UnionWith(generated.Trees);
         foreach (var (diagnostic, tree) in generated.Diagnostics) {
             if (!analysis._generatorDiagnostics.TryGetValue(tree, out var list)) {
                 analysis._generatorDiagnostics[tree] = list = [];
@@ -193,6 +194,17 @@ internal sealed partial class Analysis {
 
     /// <summary>Whether the tree is a dependency's file read from disk, not a document of the snapshot.</summary>
     public bool IsDependencyFile(SyntaxTree tree) => _dependencies.Contains(tree);
+
+    /// <summary>What the package's source generators wrote for its documents: compiled as a dependency's files are, but the package's own.</summary>
+    readonly HashSet<SyntaxTree> _generatedTrees = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    ///     Whether the tree is the package's own: a document, or what its
+    ///     generators wrote — not the standard library's, nor a dependency's
+    ///     file read from disk, whose bodies the SIL checks leave alone once
+    ///     they are known to check cleanly (<see cref="LanguageServerOptions.LibraryCheck" />).
+    /// </summary>
+    public bool IsOwn(SyntaxTree tree) => !_library.Contains(tree) && (!_dependencies.Contains(tree) || _generatedTrees.Contains(tree));
 
     public bool Contains(SyntaxTree tree) => _treesByRoot.TryGetValue(tree.Root, out var known) && ReferenceEquals(known, tree);
 

@@ -126,10 +126,13 @@ public static class Library {
     // =======================================================================
 
     /// <summary>
-    ///     What is known of the standard library's files of <paramref name="compilation" />
-    ///     for a program that cannot change how they bind or lower
-    ///     (<see cref="Compilation.ReachesIntoLibrary" />); null for any other
-    ///     program, whose compilation checks and lowers the library whole.
+    ///     What is known of the library files of <paramref name="compilation" />
+    ///     — the standard library's, and every other file that is not
+    ///     <paramref name="own" />: a dependency's, which the language server
+    ///     compiles with a package — for a program that cannot change how they
+    ///     bind or lower (<see cref="Compilation.ReachesIntoLibrary" />); null
+    ///     for any other program, whose compilation checks and lowers them
+    ///     whole.
     /// </summary>
     public static LibraryCheck? CheckFor(Compilation compilation, IReadOnlyCollection<SyntaxTree> own) {
         if (own.Count == 0 || Environment.GetEnvironmentVariable("SABLE_CHECK_LIBRARY") is { Length: > 0 }) {
@@ -140,26 +143,38 @@ public static class Library {
         var options = own.First().Options;
         var modules = ModulesFor(options);
         var library = compilation.SyntaxTrees.Where(t => !ownSet.Contains(t)).ToList();
-        if (library.Count == 0 || !library.All(t => IsEmbedded(t, modules)) || compilation.ReachesIntoLibrary(ownSet)) {
+        if (library.Count == 0 || compilation.ReachesIntoLibrary(ownSet)) {
             return null;
         }
 
-        // In the process, by the trees themselves, parsed once and kept; on
-        // disk, by what they are parsed from: their names and the target and
-        // profile, under the compiler's own hash, whose assemblies carry them.
-        var key = $"{string.Join(",", library.Select(IdOf).Order())}|{compilation.BindOptions}";
-        return new(library, key, LastingKey(library, options, compilation.BindOptions));
+        // The standard library's files in the process by the trees
+        // themselves, parsed once and kept, and on disk by what they are
+        // parsed from — their names and the target and profile — under the
+        // compiler's own hash, whose assemblies carry them. Any other file,
+        // a dependency's, by its name, features and text: a dependency
+        // edited, or another version of it, is another library.
+        var others = library.Where(t => !IsEmbedded(t, modules)).Select(ContentOf).Order(StringComparer.Ordinal).ToList();
+        var embedded = library.Where(t => IsEmbedded(t, modules)).ToList();
+        var key = $"{string.Join(",", embedded.Select(IdOf).Order())}|{string.Join(",", others)}|{compilation.BindOptions}";
+        return new(library, key, LastingKey(embedded, others, options, compilation.BindOptions));
     }
+
+    /// <summary>A file that is not the standard library's, as a record of a library checked knows it: its name, features and text.</summary>
+    static string ContentOf(SyntaxTree tree) =>
+        $"{tree.Text.FileName}:{string.Join(",", tree.Options.Features.Order(StringComparer.Ordinal))}:{IncrementalBuild.Hash(tree.Text.Text)}";
 
     /// <summary>
     ///     What <c>$SABLE_HOME/cache/library-checked</c> records a library as:
-    ///     what its files are parsed from — their names, the target and
-    ///     profile — and the binding options, under the compiler's identity
-    ///     (<see cref="CodeGen.CompilerIdentity" />), whose assemblies carry the
-    ///     files: a single-file build of the compiler has one too.
+    ///     what the standard library's files are parsed from — their names,
+    ///     the target and profile — any other files' contents
+    ///     (<see cref="ContentOf" />), and the binding options, under the
+    ///     compiler's identity (<see cref="CodeGen.CompilerIdentity" />), whose
+    ///     assemblies carry the standard library's files: a single-file build
+    ///     of the compiler has one too.
     /// </summary>
-    static string LastingKey(IEnumerable<SyntaxTree> library, ParseOptions options, BindOptions bindOptions) =>
-        IncrementalBuild.Hash($"sable-library-checked-2\n{CodeGen.CompilerIdentity.Current}\n{options.TargetOs}\n{options.TargetArch}\n{CoreLibrary.ProfileOf(options)}\n{string.Join("\n", library.Select(static t => t.Text.FileName).Order(StringComparer.Ordinal))}\n{bindOptions}");
+    static string LastingKey(IEnumerable<SyntaxTree> library, IReadOnlyList<string> others, ParseOptions options, BindOptions bindOptions) =>
+        IncrementalBuild.Hash($"sable-library-checked-2\n{CodeGen.CompilerIdentity.Current}\n{options.TargetOs}\n{options.TargetArch}\n{CoreLibrary.ProfileOf(options)}\n{string.Join("\n", library.Select(static t => t.Text.FileName).Order(StringComparer.Ordinal))}\n{bindOptions}"
+            + (others.Count == 0 ? "" : $"\nother files\n{string.Join("\n", others)}"));
 
     /// <summary>
     ///     Records that the standard library's <paramref name="library" /> —
@@ -184,7 +199,7 @@ public static class Library {
             return;
         }
 
-        new LibraryCheck(library, $"{string.Join(",", library.Select(IdOf).Order())}|{BindOptions.Default}", LastingKey(library, options, BindOptions.Default)).Passed(Path.Combine(cache, CheckedDirectory));
+        new LibraryCheck(library, $"{string.Join(",", library.Select(IdOf).Order())}||{BindOptions.Default}", LastingKey(library, [], options, BindOptions.Default)).Passed(Path.Combine(cache, CheckedDirectory));
     }
 
     internal static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> CheckedTrees = new(StringComparer.Ordinal);

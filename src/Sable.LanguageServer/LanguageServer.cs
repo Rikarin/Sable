@@ -29,9 +29,11 @@ public sealed class LanguageServerOptions {
     public Func<SyntaxTree, IReadOnlyList<SyntaxTree>> LibraryFor { get; init; } = static _ => [];
 
     /// <summary>
-    ///     What is known of a compilation's standard library, given the
-    ///     program's own files (the driver's <c>Library.CheckFor</c>); null
-    ///     for a program that could change how the library binds or lowers.
+    ///     What is known of a compilation's library files — the standard
+    ///     library's, and its dependencies' files read from disk, known by
+    ///     their text — given the package's own files (the driver's
+    ///     <c>Library.CheckFor</c>); null for a program that could change how
+    ///     they bind or lower.
     /// </summary>
     public Func<Symbols.Compilation, IReadOnlyCollection<SyntaxTree>, LibraryKnowledge?> LibraryCheck { get; init; } = static (_, _) => null;
 

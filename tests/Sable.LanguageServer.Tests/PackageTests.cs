@@ -152,6 +152,41 @@ public sealed class PackageTests : IDisposable {
         Assert.Contains("Twice its argument", hover.Get("contents")!.Value.GetString("value"), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    ///     A dependency's files read from disk are library files to the SIL
+    ///     checks (#182): the package's own are its documents (its manifest
+    ///     among them), and the dependency's, known by their text, can be
+    ///     known to check cleanly as the standard library's are — so a
+    ///     package's checks need not bind its dependencies' bodies.
+    /// </summary>
+    [Fact]
+    public async Task ADependencysFilesAreLibraryFilesToTheChecks() {
+        WritePackages();
+        var main = Write("root/app/src/main.sb", Main);
+        var uri = Workspace.UriOf(main);
+        var environment = PackageEnvironment.At(Path.Combine(_top, "home"));
+        var asked = new List<(IReadOnlyCollection<Sable.Syntax.SyntaxTree> Own, bool Checkable)>();
+        await using var client = new TestClient(projects: root => LanguageProjects.For(root, environment), libraryCheck: (compilation, own) => {
+            lock (asked) {
+                asked.Add((own, Sable.Driver.Library.CheckFor(compilation, own) is not null));
+            }
+
+            return null;
+        });
+        await client.InitializeAsync(Root);
+        await client.NotifyAsync("initialized", new { });
+        await client.OpenAsync(uri, Main);
+        await client.DiagnosticsAsync(uri, static d => d.GetArrayLength() == 0);
+        for (var i = 0; i < 600 && asked.Count == 0; i++) {
+            await Task.Delay(50);
+        }
+
+        var (own, checkable) = Assert.Single(asked);
+        Assert.Contains(main, own.Select(static t => t.Text.FileName));
+        Assert.DoesNotContain(own, static t => t.Text.FileName.EndsWith(Path.Combine("util", "src", "lib.sb"), StringComparison.Ordinal));
+        Assert.True(checkable);
+    }
+
     [Fact]
     public async Task TheMembersOfAWorkspaceAreCompiledApart() {
         WritePackages();

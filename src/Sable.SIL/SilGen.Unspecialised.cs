@@ -1067,6 +1067,10 @@ public sealed partial class SilGen {
                 // An optional or a tuple of them, made, unwrapped, taken apart and chosen between.
                 BoundConversion { ConversionKind: ConversionKind.OptionalWrap } wrap => Simple(wrap.Operand.Type),
                 BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol { UnderlyingType: var unwrapped } } force => unwrapped.Equals(force.Type),
+                // 'lowerBound as! C.Index': the value, when its metadata is the other's.
+                BoundConversion { ConversionKind: ConversionKind.Explicit } cast when IsOpaqueCast(cast) => true,
+                // A range of them, a generic struct.
+                BoundRange range => Simple(range.Type),
                 BoundLiteral { Value: null, Type: OptionalTypeSymbol } => true,
                 BoundBinaryOperator { OperatorKind: BinaryOperatorKind.Coalesce } => true,
                 BoundTuple or BoundTupleElementAccess or BoundMatch or BoundIfExpression => true,
@@ -1100,6 +1104,8 @@ public sealed partial class SilGen {
                 BoundConditionBinding binding => ReferenceEquals(child, binding.Source),
                 BoundConversion { ConversionKind: ConversionKind.OptionalWrap } => true,
                 BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol } => true,
+                BoundConversion { ConversionKind: ConversionKind.Explicit } cast => IsOpaqueCast(cast),
+                BoundRange => true,
                 BoundIndexAccess { Subscript: not null } => true,
                 BoundIndexAccess index => ReferenceEquals(child, index.Receiver),
                 BoundForEach loop => ReferenceEquals(child, loop.Sequence),
@@ -1111,6 +1117,9 @@ public sealed partial class SilGen {
 
         bool DescribesSelf => checkedSymbol is { Name: "debugDescription" } && OwnerOf(checkedSymbol) is { TypeKind: TypeKind.Protocol };
 
+        /// <summary>An 'as!' from one of the function's opaque types to another (<see cref="FunctionLowering.OpaqueForcedCast" />).</summary>
+        bool IsOpaqueCast(BoundConversion cast) =>
+            cast is { Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } } && cast.Type is not OptionalTypeSymbol && IsOwn(cast.Type) && IsOwn(cast.Operand.Type);
         /// <summary>A dictionary literal: a call of its type's 'init(dictionaryLiteral:)' with an array of its pairs, as lowering makes it.</summary>
         bool DictionaryAllowed(BoundDictionary dictionary) {
             if (dictionary.Type is not NamedTypeSymbol { TypeArguments: [var key, var value] } type
@@ -2747,10 +2756,12 @@ public sealed partial class SilGen {
         /// <summary>
         ///     An argument for a parameter of a type parameter's type, to an
         ///     unspecialised callee, which borrows it where it is: a value of a
-        ///     type parameter here as it is, and any other in a slot of its
-        ///     own, seen as the callee's type parameter, until the call is done.
+        ///     type parameter here as it is; a local, or a field of one, in
+        ///     its own storage when the call cannot change it (<paramref name="inPlace" />);
+        ///     and any other in a slot that holds it without a copy, seen as
+        ///     the callee's type parameter, until the call is done.
         /// </summary>
-        SilValue? GenericArgument(BoundExpression argument, TypeSymbol given, SilType expected, List<SilValue> borrows) {
+        SilValue? GenericArgument(BoundExpression argument, TypeSymbol given, SilType expected, List<SilValue> borrows, bool inPlace = false) {
             if (IsOpaqueHere(given) || LowerType(given) is { } held && SilType.IsIndirect(held)) {
                 if (Borrow(argument) is not { } value) {
                     return null;
@@ -2760,21 +2771,125 @@ public sealed partial class SilGen {
                 return SilType.SameErasingOpaque(value.Type, expected) ? value : Emit(new BuiltinInst("opaque_borrow_as", expected, value));
             }
 
-            if (LowerType(given) is not { } type || Expression(argument) is not { } evaluated) {
+            if (LowerType(given) is not { } type) {
                 return null;
             }
 
-            var slot = NewSlot(type);
-            Emit(new StoreInst(Owned(evaluated), slot, StoreKind.Init));
-            var borrowed = Emit(new LoadBorrowInst(Emit(new BuiltinInst("opaque_cast", SilType.Address(expected), slot))));
-            borrows.Add(new WriteBack(() => {
-                Emit(new EndBorrowInst(borrowed));
-                if (!type.IsTrivial) {
-                    Emit(new DestroyAddrInst(slot));
-                }
-            }));
-            return borrowed;
+            if (inPlace && GenericInPlace(argument, type, expected, borrows) is { } lent) {
+                return lent;
+            }
+
+            if (Borrow(argument) is not { } borrowed) {
+                return null;
+            }
+
+            borrows.Add(borrowed);
+            return GenericLent(borrowed, type, expected, borrows);
         }
+
+        /// <summary>
+        ///     <c>lowerBound as! C.Index</c> between two types only their
+        ///     metadata knows: the same value, seen as the other, when the two
+        ///     are one type — their metadata the same — and a trap when not.
+        /// </summary>
+        SilValue? OpaqueForcedCast(BoundConversion conversion) {
+            if (MetadataOf(conversion.Operand.Type) is not { } from || MetadataOf(conversion.Type) is not { } to || LowerType(conversion.Type) is not { } target
+                || Expression(conversion.Operand) is not { } value) {
+                return null;
+            }
+
+            var same = Emit(new BuiltinInst("metadata_equal", SilType.Bool, from, to));
+            Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, same)), $"cast to '{conversion.Type.ToDisplayString()}' failed"));
+            var owned = Owned(value);
+            return owned.Type == target ? owned : Emit(new BuiltinInst("opaque_take_as", target, owned));
+        }
+
+        /// <summary>
+        ///     A local, or a stored field of one, for an unspecialised callee:
+        ///     borrowed in its own storage, seen as the callee's type
+        ///     parameter, with no copy and no slot of its own. Only where
+        ///     nothing the call evaluates or passes can change it (see
+        ///     <see cref="LendsInPlace" />); null for anything else.
+        /// </summary>
+        SilValue? GenericInPlace(BoundExpression argument, SilType type, SilType expected, List<SilValue> borrows) {
+            if (!HasOwnPlace(argument) || UsesLent(argument) || LowerType(argument.Type) != type
+                || Place(argument) is not { Type: AddressType { Pointee: var held } } place || held != type) {
+                return null;
+            }
+
+            var lent = Hold(Emit(new LoadBorrowInst(Emit(new BuiltinInst("opaque_cast", SilType.Address(expected), place)))));
+            borrows.Add(lent);
+            return lent;
+        }
+
+        /// <summary>
+        ///     A value a call borrows, for an unspecialised callee that takes
+        ///     it by address: put in a slot that holds it unowned —
+        ///     <c>alloc_stack [unmanaged]</c>, stored without a copy, never
+        ///     destroyed — and borrowed from there, seen as the callee's type
+        ///     parameter. Whoever lent the value keeps it alive until the
+        ///     call is done: it is among <paramref name="borrows" /> already,
+        ///     ended after the slot's borrow.
+        /// </summary>
+        SilValue GenericLent(SilValue value, SilType type, SilType expected, List<SilValue> borrows) {
+            // An array or a slice of them, or a generic struct holding them by reference: the same bits, seen as the callee's.
+            if (!SilType.IsIndirect(expected) && SilType.SameErasingOpaque(value.Type, expected, opaqueOnly: true)) {
+                return Emit(new BuiltinInst("opaque_borrow_as", expected, value));
+            }
+
+            var slot = NewSlot(type);
+
+            // A generator's slots are its iterator's fields, which own what
+            // they hold: a copy there, destroyed after the call.
+            if (Generator is not null) {
+                Emit(new StoreInst(type.IsTrivial ? value : Emit(new CopyValueInst(value)), slot, StoreKind.Init));
+                var copied = Emit(new LoadBorrowInst(Emit(new BuiltinInst("opaque_cast", SilType.Address(expected), slot))));
+                borrows.Add(new WriteBack(() => {
+                    Emit(new EndBorrowInst(copied));
+                    if (!type.IsTrivial) {
+                        Emit(new DestroyAddrInst(slot));
+                    }
+                }));
+                return copied;
+            }
+
+            slot.Unmanaged = true;
+            Emit(new StoreInst(value, slot, StoreKind.Assign));
+            var lent = Hold(Emit(new LoadBorrowInst(Emit(new BuiltinInst("opaque_cast", SilType.Address(expected), slot)))));
+            borrows.Add(lent);
+            return lent;
+        }
+
+        /// <summary>True for a local in a slot of its own, or a stored field of a struct in one: an address reached with no code.</summary>
+        bool HasOwnPlace(BoundExpression expression) =>
+            expression switch {
+                BoundLocalAccess local => _slots.ContainsKey(local.Local) && !_boxed.Contains(local.Local) && !_views.Contains(local.Local)
+                                          && !_asyncLets.ContainsKey(local.Local),
+                BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field } =>
+                    !SilGen.IsGlobal(field) && Sub(receiver.Type).TypeKind == TypeKind.Struct && !IsInlineType(receiver.Type) && HasOwnPlace(receiver),
+                _ => false,
+            };
+
+        /// <summary>
+        ///     True when a call to an unspecialised callee may lend it the
+        ///     locals it passes in their own storage: it changes nothing of
+        ///     the caller's — no inout, out or reference parameter, no
+        ///     mutating receiver — and its arguments are evaluated with no
+        ///     code that could (<see cref="Quiet" />).
+        /// </summary>
+        bool LendsInPlace(FunctionSymbol callee, FunctionType type, BoundCall call) =>
+            !callee.Parameters.Any(static p => p.IsByReference || p.Modifier is ParameterModifier.InOut or ParameterModifier.Out)
+            && !(HasSelf(callee) && type.Parameters.Length > 0 && type.Parameters[0] is AddressType)
+            && call.Arguments.All(Quiet);
+
+        /// <summary>An expression evaluated with no call and no write: a literal, a variable, or a stored field of one.</summary>
+        static bool Quiet(BoundExpression expression) =>
+            expression switch {
+                BoundLiteral or BoundLocalAccess or BoundParameterAccess or BoundSelfAccess => true,
+                BoundFieldAccess { Receiver: { } receiver, Field.IsComputed: false } => Quiet(receiver),
+                BoundConversion { ConversionKind: ConversionKind.Identity } conversion => Quiet(conversion.Operand),
+                _ => false,
+            };
 
         /// <summary>True when a closure in unspecialised code has a type parameter's values in its type, its captures or its body.</summary>
         bool MentionsOpaqueHere(BoundClosure closureExpression) {
@@ -2994,25 +3109,11 @@ public sealed partial class SilGen {
         /// <summary>
         ///     A receiver of a type known here for an unspecialised callee
         ///     that knows it only as Self: its storage's address seen as Self's,
-        ///     for one that changes it; else a copy in a slot of its own,
-        ///     borrowed until the call is done.
+        ///     for one that changes it; else the value, already borrowed for
+        ///     the call, lent from a slot that holds it without a copy.
         /// </summary>
-        SilValue GenericReceiver(SilValue self, SilType expected, List<SilValue> borrows) {
-            if (expected is AddressType) {
-                return Emit(new BuiltinInst("opaque_cast", expected, self));
-            }
-
-            var slot = NewSlot(self.Type);
-            Emit(new StoreInst(self.Type.IsTrivial ? self : Emit(new CopyValueInst(self)), slot, StoreKind.Init));
-            var borrowed = Emit(new LoadBorrowInst(Emit(new BuiltinInst("opaque_cast", SilType.Address(expected), slot))));
-            borrows.Add(new WriteBack(() => {
-                Emit(new EndBorrowInst(borrowed));
-                if (!slot.ElementType.IsTrivial) {
-                    Emit(new DestroyAddrInst(slot));
-                }
-            }));
-            return borrowed;
-        }
+        SilValue GenericReceiver(SilValue self, SilType expected, List<SilValue> borrows) =>
+            expected is AddressType ? Emit(new BuiltinInst("opaque_cast", expected, self)) : GenericLent(self, self.Type, expected, borrows);
 
         /// <summary>
         ///     The metadata and witness tables an unspecialised callee takes

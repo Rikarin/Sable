@@ -4933,7 +4933,7 @@ public sealed partial class SilGen {
         /// <summary>Destroys what every non-trivial slot holds, then frees the slots, in reverse.</summary>
         void Deallocate() {
             for (var i = _allocations.Count - 1; i >= 0; i--) {
-                if (_allocations[i].ElementType.IsTrivial || _scoped.Contains(_allocations[i])) {
+                if (_allocations[i].ElementType.IsTrivial || _allocations[i].Unmanaged || _scoped.Contains(_allocations[i])) {
                     continue;
                 }
 
@@ -6986,6 +6986,11 @@ public sealed partial class SilGen {
                 case BoundConversion { ConversionKind: ConversionKind.Explicit, Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } } generic
                     when IsKnownHere(generic.Operand.Type):
                     return KnownCast(generic);
+
+                // 'x as! C.Index' in unspecialised code, between two types only their metadata knows.
+                case BoundConversion { ConversionKind: ConversionKind.Explicit, Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } } opaqueCast
+                    when Sub(opaqueCast.Type) is not OptionalTypeSymbol && IsOpaqueHere(opaqueCast.Operand.Type) && IsOpaqueHere(opaqueCast.Type):
+                    return OpaqueForcedCast(opaqueCast);
 
                 case BoundConversion { ConversionKind: ConversionKind.Explicit } conversion:
                     return NumericConversion(conversion);
@@ -10412,6 +10417,7 @@ public sealed partial class SilGen {
             var arguments = new List<SilValue>();
             var borrows = new List<SilValue>();
             var owned = new List<SilValue>();
+            var inPlace = genericShape is not null && LendsInPlace(callee, type, call);
             if (HasSelf(callee) || superInit) {
                 SilValue? self;
                 if (type.Parameters[0] is AddressType) {
@@ -10431,6 +10437,10 @@ public sealed partial class SilGen {
                     if (self is not null) {
                         self = AsSliceReceiver(self, type.Parameters[0], borrows);
                     }
+                } else if (inPlace && SilType.IsIndirect(type.Parameters[0]) && LowerType(Sub(call.Receiver.Type)) is { } receiverType && !SilType.IsIndirect(receiverType)
+                           && GenericInPlace(call.Receiver, receiverType, type.Parameters[0], borrows) is { } lent) {
+                    // A local the callee knows only as Self: lent where it is.
+                    self = lent;
                 } else {
                     self = Borrow(call.Receiver);
                     if (self is not null) {
@@ -10475,7 +10485,7 @@ public sealed partial class SilGen {
                 // So is an optional or a tuple of them, laid out at run time.
                 if (genericShape is not null && i < callee.Parameters.Length && SilType.IsIndirect(type.Parameters[arguments.Count])) {
                     var given = Substitute(WithAssociatedTypes(callee, bound), callee.Parameters[i].Type);
-                    if (GenericArgument(call.Arguments[i], given, type.Parameters[arguments.Count], borrows) is not { } genericArgument) {
+                    if (GenericArgument(call.Arguments[i], given, type.Parameters[arguments.Count], borrows, inPlace) is not { } genericArgument) {
                         return null;
                     }
 

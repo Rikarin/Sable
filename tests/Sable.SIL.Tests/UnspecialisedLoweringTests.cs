@@ -493,4 +493,122 @@ public sealed class UnspecialisedLoweringTests {
         Assert.Equal(text, SilPrinter.Print(parsed));
         Assert.Equal(expected, Run(parsed));
     }
+
+    const string Lending = """
+                           struct Pair {
+                               var left: String
+                               var right: String
+
+                               mutating fn swapIn(_ other: String) -> String {
+                                   let was = left
+                                   left = other
+                                   return was
+                               }
+                           }
+
+                           fn same<T: Equatable>(_ a: T, _ b: T) -> Bool {
+                               return a == b
+                           }
+
+                           fn keep<T>(_ value: T, _ also: T) -> T {
+                               return value
+                           }
+
+                           fn touch(_ text: inout String) -> String {
+                               text = text + "!"
+                               return text
+                           }
+
+                           fn lend(_ given: String) -> String {
+                               var local = "a" + given
+                               let pair = Pair { left: local, right: given }
+                               var result = "\(same(local, given)) \(same(pair.left, pair.right)) \(given.hasPrefix("b"))"
+                               // Arguments that change the local are evaluated first: the call sees each as it was.
+                               result += " " + keep(local, touch(&local)) + " " + local
+                               var changed = pair
+                               result += " " + keep(changed.swapIn(changed.right), changed.left)
+                               return result
+                           }
+
+                           fn main() {
+                               print(lend("b"))
+                           }
+                           """;
+
+    /// <summary>
+    ///     A call from code that knows the type lends an unspecialised callee
+    ///     its arguments without a copy: a local, or a stored field of one,
+    ///     where it is, when nothing the call evaluates or passes can change
+    ///     it; a parameter, or anything else borrowed, from a slot that holds
+    ///     it unowned (<c>alloc_stack [unmanaged]</c>), never destroyed. An
+    ///     argument evaluated after one that could change it is passed as it
+    ///     was when it was evaluated, as the specialised program passes it.
+    /// </summary>
+    [Fact]
+    public void ArgumentsAreLentToUnspecialisedCodeWithoutACopy() {
+        var module = Lower(Lending);
+        var lend = Instructions(module.Find("M.lend")!);
+        var calls = lend.OfType<ApplyInst>().Where(static a => a.Callee is FunctionRefInst { Function: "M.same$generic" }).ToList();
+        Assert.Equal(2, calls.Count);
+
+        // 'same(local, given)': the local in its own slot, the parameter in an unmanaged one.
+        Assert.Collection(calls[0].Arguments.Take(2),
+            static a => Assert.True(a is LoadBorrowInst { Address: BuiltinInst { Name: "opaque_cast", Operands: [AllocStackInst { VariableName: "local", Unmanaged: false }] } }),
+            static a => Assert.True(a is LoadBorrowInst { Address: BuiltinInst { Name: "opaque_cast", Operands: [AllocStackInst { VariableName: null, Unmanaged: true }] } }));
+
+        // 'same(pair.left, pair.right)': each field where it is.
+        Assert.All(calls[1].Arguments.Take(2), static a => Assert.True(a is LoadBorrowInst { Address: BuiltinInst { Name: "opaque_cast", Operands: [StructElementAddrInst] } }));
+
+        // The receiver of 'given.hasPrefix(...)' is not copied — the one copy is the pair's — nor is anything lent destroyed from its slot.
+        var hasPrefix = lend.OfType<ApplyInst>().Single(static a => a.Callee is FunctionRefInst { Function: var f } && f.StartsWith("Sable.Core.StringProtocol.hasPrefix", StringComparison.Ordinal));
+        Assert.True(hasPrefix.Arguments.First() is LoadBorrowInst { Address: BuiltinInst { Operands: [AllocStackInst { Unmanaged: true }] } });
+        Assert.Single(lend, static i => i is CopyValueInst { Value: SilArgument });
+        Assert.DoesNotContain(lend, static i => i is DestroyAddrInst { Address: AllocStackInst { Unmanaged: true } });
+
+        const string expected = "false false true ab ab! ab\n";
+        Assert.Equal(expected, Run(module));
+        Assert.Equal(expected, Run(Lower(Lending, GenericsMode.Specialised)));
+        var text = SilPrinter.Print(module);
+        var parsed = SilParser.Parse(text);
+        Assert.Equal(text, SilPrinter.Print(parsed));
+        Assert.Equal(expected, Run(parsed));
+    }
+
+    const string Relative = """
+                            fn show(_ r: Range<Int>) {
+                                print("\(r.lowerBound)..<\(r.upperBound)")
+                            }
+
+                            fn main() {
+                                let xs = [10, 20, 30, 40]
+                                show((1..<2).relative(to: xs))
+                                show((1...2).relative(to: xs))
+                                show((2...).relative(to: xs))
+                                show((..<1).relative(to: xs))
+                                show((...1).relative(to: xs))
+                            }
+
+                            fn wrong() {
+                                let _ = (0..<1).relative(to: "abc")
+                            }
+                            """;
+
+    /// <summary>
+    ///     A range's bounds made a collection's indices, <c>lowerBound as! C.Index</c>,
+    ///     are compiled once: the same value when the bound's metadata is the
+    ///     index's, a trap when not; and the range of them made, a generic struct.
+    /// </summary>
+    [Fact]
+    public void ARangeIsMadeACollectionsIndicesOnceForEveryType() {
+        var module = Lower(Relative);
+        foreach (var range in new[] { "Range", "ClosedRange", "PartialRangeFrom", "PartialRangeUpTo", "PartialRangeThrough" }) {
+            Assert.NotNull(module.Find($"Sable.Core.{range}.relative$generic"));
+        }
+
+        Assert.Contains(Instructions(module.Find("Sable.Core.Range.relative$generic")!), static i => i is BuiltinInst { Name: "metadata_equal" });
+        const string expected = "1..<2\n1..<3\n2..<4\n0..<1\n0..<2\n";
+        Assert.Equal(expected, Run(module));
+        Assert.Equal(expected, Run(Lower(Relative, GenericsMode.Specialised)));
+        Assert.Equal("cast to 'C.Index' failed", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.wrong")).Message);
+    }
 }

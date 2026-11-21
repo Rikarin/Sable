@@ -79,6 +79,8 @@ public sealed class Specialise(bool forSize = false) : ISilPass {
         // What no longer has a caller goes: the generic functions every
         // call of which was specialised. Only those, and only from a whole
         // program, whose callers are all here.
+        // One a function that stays still names — a witness of a type
+        // nothing makes any more, which the passes after drop — stays too.
         if (module.Unit is null && SilPassManager.Reachable(module) is { } reached) {
             // Whatever is kept keeps what it names: the pass leaves every
             // other function, a witness thunk the walk did not reach among

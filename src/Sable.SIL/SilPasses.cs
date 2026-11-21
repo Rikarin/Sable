@@ -89,7 +89,7 @@ public static class SilPassManager {
     /// </summary>
     public static void RemoveUnreachable(SilModule module) {
         if (Reachable(module) is { } reached) {
-            module.Functions.RemoveAll(f => !reached.Contains(f.Name));
+            module.RemoveAll(f => !reached.Contains(f.Name));
         }
     }
 
@@ -114,8 +114,18 @@ public static class SilPassManager {
                 case StructType { Deinit: { } deinit }:
                     pending.Push(deinit);
                     break;
-                case ClassType { Deinit: { } deinit }:
-                    pending.Push(deinit);
+                case ClassType @class:
+                    if (@class.Deinit is { } classDeinit) {
+                        pending.Push(classDeinit);
+                    }
+
+                    // A class's vtable is part of its metadata, which is
+                    // emitted whether or not anything makes one (an
+                    // existential's box among them), so what it names stays.
+                    foreach (var (_, method) in @class.VTable) {
+                        pending.Push(method);
+                    }
+
                     break;
             }
         }

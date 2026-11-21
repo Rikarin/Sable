@@ -770,6 +770,42 @@ run` of either) is compiled the same way, the file its one unit, so that it
 compiles only itself against a warm cache; an optimised one is compiled
 whole, the library with it, so that the SIL passes see all of it.
 
+**What a unit binds of the files it does not own** (#182). Lowering a unit
+— and lowering a library known to check cleanly on demand, as `sable
+check`, a single-file build and the language server do — binds another
+file's body only where it reaches it: a generic function's instance, a
+function lowered on demand, a global's or a field's initial value, a
+constant. Each is bound by a model of the one member it is in
+(`SemanticModel.GetMemberModel`, which shares the file's accessor
+functions, so a setter's `newValue` is the parameter declaring it gave),
+not by binding every body of its file (`SilGen.BodyModel`); a file the
+lowering checks, or has bound already, is read as it is. Compile-time
+evaluation searches a file's text for `const` and `comptime` before
+walking its tree, and finding the generators searches a function's text for
+`yield`. Measured on `examples/ssg` as a package (a one-body edit in its
+636-line unit, the standard library's archive and `.sbi` cached, `sable`
+built Release, load average 5–10): the build falls from 2.03–2.05 s to
+1.58–1.67 s; lowering from 0.77–0.82 s to 0.37–0.50 s, of which
+instantiating the 70 instances of the library's generics the unit uses fell
+from 0.41 s to 0.19 s (they were binding all of `Dictionary.sb`, the string
+extensions and `Array.sb`), compile-time evaluation from 0.10 s to 0.01 s
+and finding generators from 38 ms to 3 ms. Of the rest: binding 0.41 s
+(declaring the program from source 0.12 s, its signatures 0.08 s, the
+unit's bodies 0.22 s), clang 0.30 s, link 0.05 s.
+
+*Why a build does not compile against the standard library's `.sbi`.*
+`Pipeline.CompileAgainst` saves a whole-program compilation from lowering
+the library: it links the interface's SIL in. A separately compiled build
+already has none of the library to lower — its code is the archive — and
+what the unit lowers of it is the instances of its generics, which the
+`.sbi` cannot carry: of the 70 `examples/ssg` uses, the library's own unit
+had made none (it instantiates 13 generics, all different). Declaring the
+library from the `.sbi`'s symbols would save `Compilation.Create`'s 0.12 s
+and part of the signatures' 0.08 s, but the instances' bodies are bound
+from the library's source against its declarations, so the library would
+have to be declared from source anyway; that waits for generics compiled
+once (#297), after which the `.sbi` holds what a program needs of them.
+
 ### The build cache
 
 What a build makes that does not depend on the program — the C runtime's

@@ -40,7 +40,8 @@ public sealed partial class SemanticModel {
 
     readonly Dictionary<SyntaxNode, SemanticModel> _memberModels = [];
 
-    SemanticModel(Compilation compilation, SyntaxTree tree, SyntaxNode member, SyntaxNode? original, int capturePosition) {
+    SemanticModel(Compilation compilation, SyntaxTree tree, SyntaxNode member, SyntaxNode? original, int capturePosition, Dictionary<AccessorSyntax, FunctionSymbol>? accessors = null) {
+        _accessors = accessors ?? [];
         _compilation = compilation;
         SyntaxTree = tree;
         _member = member;
@@ -166,7 +167,7 @@ public sealed partial class SemanticModel {
         }
 
         if (!_memberModels.TryGetValue(member, out var model)) {
-            model = new(_compilation, SyntaxTree, member, null, -1);
+            model = new(_compilation, SyntaxTree, member, null, -1, _accessors);
             _memberModels[member] = model;
         }
 

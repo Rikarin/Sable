@@ -100,4 +100,62 @@ public sealed class SilProgramTests {
                 fn main() { }
                 """, "m.sb")),
         ]));
+
+    /// <summary>
+    ///     A unit lowered against files it does not own binds only what it
+    ///     reaches of them, one member at a time (#182): instantiating one
+    ///     generic method of another unit's type — a subscript's setter, whose
+    ///     body names the accessor's own 'newValue' — binds that member, not
+    ///     the other file whole, and lowers as it did.
+    /// </summary>
+    [Fact]
+    public void AUnitBindsOnlyTheMembersOfOtherFilesItReaches() {
+        var library = SyntaxTree.Parse(new SourceText("""
+            module Lib
+
+            public struct Box<T> {
+                var items: T[>..]
+
+                public init() { items = [] }
+
+                public subscript(index: Int) -> T {
+                    get { items[index] }
+                    set { items[index] = newValue }
+                }
+
+                public mutating fn add(_ item: T) { items.append(item) }
+
+                public fn unused() -> Int { items.count * 2 }
+            }
+
+            public fn helper() -> Int { 40 + 2 }
+            """, "lib.sb"));
+        var program = SyntaxTree.Parse(new SourceText("""
+            module App
+
+            import Lib
+
+            @main
+            fn main() {
+                var box = Box<Int>()
+                box.add(1)
+                box[0] = 2
+                var words: [String: Int] = [:]
+                words["a"] = box[0]
+                print(helper() + (words["a"] ?? 0))
+            }
+            """, "app.sb"));
+        var compilation = Compilation.Create([program, library]);
+        Assert.DoesNotContain(compilation.GetAllDiagnosticsByFile(tree => ReferenceEquals(tree, program)), static d => d.Diagnostic.Severity == DiagnosticSeverity.Error);
+
+        var (module, diagnostics) = SilGen.LowerUnit(compilation, new SilUnit(tree => ReferenceEquals(tree, program)), SilProgram.Index(compilation));
+        Assert.Empty(diagnostics);
+        Assert.Empty(SilVerifier.Verify(module));
+        Assert.Contains(module.Functions, static f => f.Name.Contains("subscript", StringComparison.Ordinal) && f.Name.Contains("set$of$Int", StringComparison.Ordinal));
+
+        // Neither the other unit's file nor the core's Dictionary was bound whole.
+        Assert.False(compilation.GetSemanticModel(library).BodiesBound);
+        var dictionary = compilation.SyntaxTrees.Single(static t => t.Text.FileName.EndsWith("/Dictionary.sb", StringComparison.Ordinal));
+        Assert.False(compilation.GetSemanticModel(dictionary).BodiesBound);
+    }
 }

@@ -122,7 +122,7 @@ public sealed partial class SilGen {
                 : (null, null);
 
         if ((_compilation.GetDerivedBody(function) ?? _compilation.GetLazyBody(function) ?? _compilation.GetInheritedInitializerBody(function)
-                ?? (syntax is null ? null : model!.GetBoundNode(syntax))) is { } body) {
+                ?? (syntax is null ? null : BodyModel(model!, syntax).GetBoundNode(syntax))) is { } body) {
             bodies.Add(body);
         }
 

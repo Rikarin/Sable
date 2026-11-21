@@ -61,10 +61,11 @@ public sealed partial class SilGen {
     ///     compilation; lowering it uses what is found.
     /// </summary>
     public static IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree Tree)> EvaluateConstants(Compilation compilation) =>
-        ConstantsOf(compilation).Diagnostics;
+        ConstantsOf(compilation, null).Diagnostics;
 
-    static ConstantTable ConstantsOf(Compilation compilation) =>
-        s_constants.GetValue(compilation, static c => new SilGen(c) { _evaluation = new() }.Evaluate());
+    /// <param name="unchecked">The files the lowering asking does not check: their constants are bound one at a time (<see cref="BodyModel" />).</param>
+    static ConstantTable ConstantsOf(Compilation compilation, Func<SyntaxTree, bool>? @unchecked) =>
+        s_constants.GetValue(compilation, c => new SilGen(c) { _evaluation = new(), _unchecked = @unchecked }.Evaluate());
 
     /// <summary>In the program's lowering: what compile-time evaluation found.</summary>
     ConstantTable? _constants;
@@ -97,21 +98,34 @@ public sealed partial class SilGen {
         var blocks = new List<(SyntaxNode Syntax, FunctionSymbol Function, BoundBlock Body, SemanticModel Model)>();
         foreach (var tree in _compilation.SyntaxTrees) {
             // Only a file declaring a constant or a 'comptime' block is bound
-            // here: asking a model for either binds every body of its file,
-            // which for a program's every file — the standard library's
-            // included — was most of a separately compiled build's time.
-            // A 'comptime' block may be in a body, so it is looked for by its keyword.
-            var declarations = tree.Root.DescendantNodes().OfType<ConstDeclarationSyntax>().ToList();
-            if (declarations.Count == 0 && !tree.Root.DescendantTokens().Any(static t => t.Kind == SyntaxKind.ComptimeKeyword)) {
+            // here: asking a file's model for either binds every body of the
+            // file, which for a program's every file — the standard library's
+            // included — was most of a separately compiled build's time. A
+            // file the lowering does not check has its constants bound alone
+            // (BodyModel). A 'comptime' block may be in a body, so it is
+            // looked for by its keyword. The text is searched first: walking
+            // every file's tree for either was most of a small edit's
+            // lowering, the standard library's files having neither.
+            var text = tree.Text.Text;
+            var declarations = text.Contains("const", StringComparison.Ordinal)
+                ? tree.Root.DescendantNodes().OfType<ConstDeclarationSyntax>().ToList()
+                : [];
+            var comptime = text.Contains("comptime", StringComparison.Ordinal)
+                && tree.Root.DescendantTokens().Any(static t => t.Kind == SyntaxKind.ComptimeKeyword);
+            if (declarations.Count == 0 && !comptime) {
                 continue;
             }
 
             var model = _compilation.GetSemanticModel(tree);
             foreach (var declaration in declarations) {
                 // A literal is its own value: lowering writes it where it is read.
-                if (_compilation.GetDeclaredSymbol(declaration) is FieldSymbol field && model.GetFieldInitializer(field) is not BoundLiteral) {
+                if (_compilation.GetDeclaredSymbol(declaration) is FieldSymbol field && BodyModel(model, declaration).GetFieldInitializer(field) is not BoundLiteral) {
                     constants.Add((field, declaration, model));
                 }
+            }
+
+            if (!comptime) {
+                continue;
             }
 
             blocks.AddRange(model.GetComptimeBlocks().Select(b => (b.Syntax, b.Function, b.Body, model)));
@@ -231,7 +245,7 @@ public sealed partial class SilGen {
         }
 
         var tree = _compilation.SyntaxTrees.FirstOrDefault(t => ReferenceEquals(t.Root, root));
-        return tree is null ? null : _compilation.GetSemanticModel(tree);
+        return tree is null ? null : BodyModel(_compilation.GetSemanticModel(tree), syntax);
     }
 
     /// <summary>Runs the function in the interpreter; false, having said why, when it traps.</summary>

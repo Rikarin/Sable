@@ -258,6 +258,40 @@ public sealed partial class SilGen {
     bool Binds(SyntaxTree tree) => (_unit is null || _unit.Owns(tree)) && _onDemand?.Invoke(tree) != true;
 
     /// <summary>
+    ///     For compile-time evaluation's generator, the files the lowering
+    ///     that asked for it does not check (<see cref="BodyModel" />).
+    /// </summary>
+    Func<SyntaxTree, bool>? _unchecked;
+
+    /// <summary>Whether a file's bodies are bound only as lowering needs them, one member at a time (<see cref="BodyModel" />).</summary>
+    bool Unchecked(SyntaxTree tree) => _evaluation is not null ? _unchecked?.Invoke(tree) == true : !Binds(tree);
+
+    /// <summary>
+    ///     The model to bind <paramref name="syntax" /> with. A file this
+    ///     lowering does not check — another unit's, or a library's lowered on
+    ///     demand — has only the bodies lowering reaches bound, each by a
+    ///     model of the member it is in (<see cref="SemanticModel.GetMemberModel" />),
+    ///     rather than every body of the file: a program that instantiates
+    ///     one generic method of <c>Dictionary</c> binds that method, not the
+    ///     whole of <c>Dictionary.sb</c>. A file whose bodies are bound
+    ///     already is read from as it is.
+    /// </summary>
+    SemanticModel BodyModel(SemanticModel model, SyntaxNode syntax) {
+        if (model.Member is not null || model.BodiesBound || !Unchecked(model.SyntaxTree)) {
+            return model;
+        }
+
+        SyntaxNode? member = null;
+        for (var node = syntax; node is not null; node = node.Parent) {
+            if (SemanticModel.IsBindableMember(node)) {
+                member = node;
+            }
+        }
+
+        return member is null ? model : model.GetMemberModel(member);
+    }
+
+    /// <summary>
     ///     A method of a class or an actor, or of an extension of one: its
     ///     vtable is built from the methods lowered by then, so these are
     ///     never left for later.
@@ -323,7 +357,9 @@ public sealed partial class SilGen {
         // is lowered: lowering writes each constant's value where it is read
         // (SilGen.Constants.cs). Each unit reports what is in its own files.
         if (_evaluation is null) {
-            _constants = ConstantsOf(_compilation);
+            // What this lowering does not check, without this generator.
+            var (unit, onDemand) = (_unit, _onDemand);
+            _constants = ConstantsOf(_compilation, tree => unit is not null && !unit.Owns(tree) || onDemand?.Invoke(tree) == true);
             foreach (var (diagnostic, tree) in _constants.Diagnostics) {
                 if (diagnostic.Code is ErrorCode.ERR_ConstantEvaluationFailed or ErrorCode.ERR_ConstantOverflow or ErrorCode.ERR_CompileError && (_unit is null || _unit.Owns(tree))) {
                     _diagnostics.Add(diagnostic);
@@ -704,7 +740,7 @@ public sealed partial class SilGen {
                 }
 
                 if (DeclareGlobal(field, declaration) is { } name) {
-                    _globalFields.Add((field, name, model));
+                    _globalFields.Add((field, name, BodyModel(model, declaration)));
                 }
             }
         }
@@ -926,7 +962,7 @@ public sealed partial class SilGen {
         }
 
         if ((_compilation.GetDerivedBody(symbol) ?? _compilation.GetLazyBody(symbol) ?? _compilation.GetInheritedInitializerBody(symbol)
-                ?? model.GetBoundNode(syntax)) is not BoundBlock body) {
+                ?? BodyModel(model, syntax).GetBoundNode(syntax)) is not BoundBlock body) {
             return;
         }
 
@@ -4184,7 +4220,7 @@ public sealed partial class SilGen {
         }
 
         var tree = _compilation.SyntaxTrees.FirstOrDefault(t => ReferenceEquals(t.Root, root));
-        return tree is null ? null : _compilation.GetSemanticModel(tree).GetFieldInitializer(field);
+        return tree is null ? null : BodyModel(_compilation.GetSemanticModel(tree), syntax).GetFieldInitializer(field);
     }
 
     T? Unsupported<T>(SyntaxNode at, string what) where T : class {

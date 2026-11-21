@@ -25,12 +25,16 @@ public sealed partial class SilGen {
     /// </summary>
     void AddGenerators(List<(FunctionSymbol Symbol, SyntaxNode Syntax, SemanticModel Model)> functions) {
         foreach (var (symbol, syntax, model) in functions.ToList()) {
-            if (!syntax.DescendantNodes().OfType<YieldStatementSyntax>().Any()) {
+            // The text first: walking every function's syntax for a 'yield'
+            // was a noticeable part of lowering a small unit.
+            var text = model.SyntaxTree.Text.Text;
+            if (text.IndexOf("yield", syntax.Span.Start, syntax.Span.Length, StringComparison.Ordinal) < 0
+                || !syntax.DescendantNodes().OfType<YieldStatementSyntax>().Any()) {
                 continue;
             }
 
             // Binding the body is what makes the generator.
-            _ = model.GetBoundNode(syntax);
+            _ = BodyModel(model, syntax).GetBoundNode(syntax);
             if (_compilation.GetGenerator(symbol) is not { } generator || !ReferenceEquals(generator.Function, symbol)) {
                 continue;
             }

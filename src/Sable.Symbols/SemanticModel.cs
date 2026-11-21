@@ -18,7 +18,11 @@ public sealed partial class SemanticModel {
     readonly Dictionary<SyntaxNode, BoundNode> _bound = [];
     bool _bodiesBound;
 
+    /// <summary>Whether the file's bodies have been bound, every one of them, by this model.</summary>
+    public bool BodiesBound => _bodiesBound;
+
     internal SemanticModel(Compilation compilation, SyntaxTree tree) {
+        _accessors = [];
         _compilation = compilation;
         SyntaxTree = tree;
     }
@@ -62,7 +66,13 @@ public sealed partial class SemanticModel {
         return _bound.TryGetValue(syntax, out var node) ? node : null;
     }
 
-    readonly Dictionary<AccessorSyntax, FunctionSymbol> _accessors = [];
+    /// <summary>
+    ///     Each accessor's function, made once: shared by a file's model and
+    ///     the models of its members (<see cref="GetMemberModel" />), so that
+    ///     binding an accessor's body in either gives the function declaring
+    ///     it gave — and its parameters, which the body refers to.
+    /// </summary>
+    readonly Dictionary<AccessorSyntax, FunctionSymbol> _accessors;
 
     /// <summary>
     ///     The function an accessor's body was bound as: its parameters, and

@@ -165,7 +165,7 @@ public sealed partial class SilGen {
         }
 
         if (!_declarations.TryGetValue(generator.Function, out var declaration)
-            || declaration.Model.GetBoundNode(declaration.Syntax) is not BoundBlock body) {
+            || BodyModel(declaration.Model, declaration.Syntax).GetBoundNode(declaration.Syntax) is not BoundBlock body) {
             return null;
         }
 

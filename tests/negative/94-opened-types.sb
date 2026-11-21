@@ -1,0 +1,77 @@
+module Negative.OpenedTypes
+
+// Opening a Type (spec/SYNTAX.md "Opening a type"): a 'Type' given for a
+// generic callee's 'T.Type' binds T to the type it holds at run time. No
+// other parameter may be of T, T may be constrained only to protocols that
+// are not generic, and a result may be T (as 'any P') or T.Type (as a Type).
+
+protocol Zero {
+    static fn zero() -> Self
+}
+
+protocol Producer<Item> {
+    fn produce() -> Item
+}
+
+open class Animal { }
+
+struct Meters: Zero {
+    var value: Int
+    static fn zero() -> Meters { return Meters { value: 0 } }
+}
+
+fn make<T: Zero>(_ type: T.Type) -> T { return T.zero() }
+
+fn fill<T: Zero>(_ type: T.Type, with values: T[]) -> Int { return values.count }
+
+fn produced<T: Producer<Int>>(_ type: T.Type) -> Int { return 0 }
+
+fn animal<T: Animal>(_ type: T.Type) -> Int { return 0 }
+
+fn anything<T>(_ type: T.Type) -> T? { return none }
+
+fn bare<T>(_ type: T.Type) -> T { fatalError("never") }
+
+fn listed<T: Zero>(_ type: T.Type) -> T[] { return [] }
+
+fn failing<T: Zero & Error>(_ type: T.Type) throws(T) -> Int { return 0 }
+
+fn takesAValue(_ t: Type) {
+    let n = fill(t, with: []) //! S3162 parameter 'values' is of 'T' too
+}
+
+fn genericProtocol(_ t: Type) {
+    let n = produced(t) //! S3162 only a protocol that is not generic can be checked of a type known at run time
+}
+
+fn classBound(_ t: Type) {
+    let n = animal(t) //! S3162 'T' must be 'Animal'
+}
+
+fn optionalResult(_ t: Type) {
+    let made = anything(t) //! S3163 gives back a 'T?', which mentions 'T', open here
+}
+
+fn arrayResult(_ t: Type) {
+    let made = listed(t) //! S3163 only a 'T' itself (as 'any P') or a 'T.Type' (as a 'Type') can be given back
+}
+
+fn unconstrainedResult(_ t: Type) {
+    let made = bare(t) //! S3163 has no protocol to be erased to as 'any P'
+}
+
+fn thrownOpened(_ t: Type) {
+    let n = try? failing(t) //! S3163 throws a 'T', which a call that opens a 'Type' as 'T' cannot give back
+}
+
+fn erased(_ t: Type) -> Meters {
+    return make(t) //! S3004 expected 'Meters' but found 'any Zero'
+}
+
+fn opens(_ t: Type) -> any Zero {
+    return make(t)
+}
+
+fn bindsFromAnotherArgument(_ t: Type) -> Int {
+    return fill(t, with: [Meters.zero()]) //! S3007 argument 1 is 'Type', and 'type' takes 'Meters.Type'
+}

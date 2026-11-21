@@ -205,4 +205,79 @@ public sealed class MetatypeTests {
             static d => d.Severity == DiagnosticSeverity.Error
         );
     }
+
+    const string Opening = """
+                           module M
+                           protocol Zero { static fn zero() -> Self }
+                           protocol Named { fn name() -> String }
+                           struct Meters: Zero, Named {
+                               var v: Int
+                               static fn zero() -> Meters { return Meters { v: 0 } }
+                               fn name() -> String { return "m" }
+                           }
+                           fn make<T: Zero>(_ type: T.Type) -> T { return T.zero() }
+                           fn both<T: Zero & Named>(_ type: T.Type) -> T { return T.zero() }
+                           fn same<T>(_ type: T.Type) -> T.Type { return type }
+                           fn size<T>(_ type: T.Type) -> Int { return 0 }
+                           """;
+
+    /// <summary>The type of the probe's one initialised local, and the errors.</summary>
+    static (string? Type, IReadOnlyList<Diagnostic> Errors) Probe(string body) {
+        var compilation = Compilation.Create($"{Opening}\nfn probe(_ t: Type) {{ let made = {body} }}");
+        var tree = compilation.SyntaxTrees[0];
+        var initializer = tree.Root.DescendantNodes().OfType<LocalDeclarationStatementSyntax>().Single().Declarator.Initializer!.Value;
+        var type = compilation.GetSemanticModel(tree).GetTypeOf(initializer)?.ToDisplayString();
+        return (type, [..compilation.GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error)]);
+    }
+
+    /// <summary>
+    ///     A <c>Type</c> for a <c>T.Type</c> that nothing else settles opens
+    ///     it (SYNTAX.md "Opening a type"): a result of T is the existential of
+    ///     T's protocols, of T.Type a Type, of anything else as it is. A
+    ///     metatype known where the code is compiled is not opened.
+    /// </summary>
+    [Theory]
+    [InlineData("make(t)", "any Zero")]
+    [InlineData("both(t)", "any Zero & Named")]
+    [InlineData("same(t)", "Type")]
+    [InlineData("size(t)", "Int")]
+    [InlineData("make(type(of: Meters.zero()))", "any Zero")]
+    [InlineData("make(Meters.self)", "Meters")]
+    public void ATypeOpensForAMetatypeParameter(string body, string type) {
+        var (found, errors) = Probe(body);
+        Assert.Empty(errors);
+        Assert.Equal(type, found);
+    }
+
+    /// <summary>The call binds T to an opened type of its own, with T's constraints, and the argument is an Open conversion.</summary>
+    [Fact]
+    public void TheCallBindsTToAnOpenedTypeWithItsConstraints() {
+        var compilation = Compilation.Create($"{Opening}\nfn probe(_ t: Type) -> any Zero {{ return make(t) }}");
+        Assert.DoesNotContain(compilation.GetAllDiagnostics(), static d => d.Severity == DiagnosticSeverity.Error);
+        var tree = compilation.SyntaxTrees[0];
+        var invocation = tree.Root.DescendantNodes().OfType<InvocationExpressionSyntax>().Last();
+        var erased = Assert.IsType<BoundConversion>(compilation.GetSemanticModel(tree).GetBoundNode(invocation));
+        Assert.Equal(ConversionKind.OpenedErasure, erased.ConversionKind);
+        var call = Assert.IsType<BoundCall>(erased.Operand);
+        var parameter = call.Function.TypeParameters[0];
+        var opened = Assert.IsType<TypeParameterSymbol>(call.Substitution.Lookup(parameter));
+        Assert.Same(parameter, opened.OpenedFrom);
+        Assert.Equal(parameter.Constraints, opened.Constraints);
+        var argument = Assert.IsType<BoundConversion>(call.Arguments[0]);
+        Assert.Equal(ConversionKind.Open, argument.ConversionKind);
+        Assert.Same(opened, ((MetatypeTypeSymbol)argument.Type).InstanceType);
+    }
+
+    /// <summary>What a call cannot open: S3162 and S3163, each saying why.</summary>
+    [Theory]
+    [InlineData("fn f<T: Zero>(_ type: T.Type, _ xs: T[]) -> Int { return 0 }", "f(t, [])", ErrorCode.ERR_CannotOpenType, "parameter 'xs' is of 'T' too")]
+    [InlineData("open class Animal {}\nfn f<T: Animal>(_ type: T.Type) -> Int { return 0 }", "f(t)", ErrorCode.ERR_CannotOpenType, "'T' must be 'Animal'")]
+    [InlineData("fn f<T>(_ type: T.Type) -> T? { return none }", "f(t)", ErrorCode.ERR_OpenedResultNotErasable, "gives back a 'T?'")]
+    [InlineData("fn f<T>(_ type: T.Type) -> T { fatalError(\"no\") }", "f(t)", ErrorCode.ERR_OpenedResultNotErasable, "no protocol to be erased to")]
+    public void WhatCannotBeOpenedIsAnError(string declaration, string body, ErrorCode code, string fragment) {
+        var compilation = Compilation.Create($"{Opening}\n{declaration}\nfn probe(_ t: Type) {{ let made = {body} }}");
+        var error = Assert.Single(compilation.GetAllDiagnostics(), static d => d.Severity == DiagnosticSeverity.Error);
+        Assert.Equal(code, error.Code);
+        Assert.Contains(fragment, error.Message, StringComparison.Ordinal);
+    }
 }

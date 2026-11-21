@@ -65,6 +65,13 @@ internal sealed class Conversions(CoreTypes core) {
             return ConversionKind.MetatypeErasure;
         }
 
+        // A 'Type' given for a generic callee's 'T.Type', which inference
+        // bound to the type it holds at run time: opened (SYNTAX.md "Opening
+        // a type").
+        if (source.Equals(core.Type) && target is MetatypeTypeSymbol { InstanceType: TypeParameterSymbol { OpenedFrom: not null } }) {
+            return ConversionKind.Open;
+        }
+
         // 'Never' is the bottom type: an expression that does not return fits
         // anywhere.
         if (source.Equals(core.Never)) {
@@ -363,6 +370,7 @@ internal sealed class Conversions(CoreTypes core) {
             ConversionKind.LiteralTyping => 1,
             ConversionKind.ArrayView => 1,
             ConversionKind.MetatypeErasure => 2,
+            ConversionKind.Open => 6,
             ConversionKind.Upcast => 2,
             ConversionKind.OptionalWrap => 3,
             ConversionKind.UnionInjection => 4,

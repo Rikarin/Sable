@@ -187,6 +187,9 @@ public enum ErrorCode {
     ERR_ValueGenericArgument = 3420,
     ERR_ConstGenericPredicateFails = 3421,
     ERR_SelfRequirementOnExistential = 3161,
+    ERR_CannotOpenType = 3162,
+    ERR_OpenedResultNotErasable = 3163,
+    ERR_OpenedCalleeSpecialised = 3164,
 
     // Ownership, escape and isolation checks (S3200-S3209).
     ERR_IntegerDoesNotFit = 3200,

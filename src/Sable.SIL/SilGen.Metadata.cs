@@ -209,7 +209,9 @@ public sealed partial class SilGen {
         SilValue MetatypeValue(BoundMetatype metatype) =>
             Sub(metatype.InstanceType) is TypeParameterSymbol parameter && _genericMetadata.TryGetValue(parameter, out var given)
                 ? given
-                : Emit(new MetadataInst(LowerType(Sub(metatype.InstanceType)) ?? SilType.Unit));
+                : _genericMetadata.Count > 0 && Mentions(Sub(metatype.InstanceType), [.._genericMetadata.Keys]) && MetadataOf(Sub(metatype.InstanceType)) is { } made
+                    ? made
+                    : Emit(new MetadataInst(LowerType(Sub(metatype.InstanceType)) ?? SilType.Unit));
 
         /// <summary>
         ///     <c>type(of: x)</c>: the metadata of the value's dynamic type — an

@@ -83,6 +83,20 @@ public sealed partial class SilGen {
 
     readonly GenericsMode _generics = Generics;
 
+    /// <summary>
+    ///     Whether a call has opened a <c>Type</c> (SYNTAX.md "Opening a type"):
+    ///     from then on, in a specialised build too, generic functions are
+    ///     compiled once where code that knows a type only by its metadata
+    ///     calls them, and the tables made have their generic entries.
+    /// </summary>
+    bool _opening;
+
+    /// <summary>Whether generic code compiled once is made: in an unspecialised build, or once a call has opened a Type.</summary>
+    internal bool CompilesOnce => _generics == GenericsMode.Unspecialised || _opening;
+
+    /// <summary>Notes that a call opens a Type: from now on, generic code is compiled once where it is called so.</summary>
+    internal void Opening() => _opening = true;
+
     /// <summary>The type parameters of the unspecialised code being lowered: each lowers to an <see cref="OpaqueType" />.</summary>
     readonly List<TypeParameterSymbol> _opaque = [];
 
@@ -315,6 +329,9 @@ public sealed partial class SilGen {
 
     readonly Dictionary<FunctionSymbol, GenericShape?> _shapes = new(ReferenceEqualityComparer.Instance);
 
+    /// <summary>Why each generic function that is not compiled once is not: what a call that opens a Type says of it (S3164).</summary>
+    readonly Dictionary<FunctionSymbol, string> _refusals = new(ReferenceEqualityComparer.Instance);
+
     /// <summary>For each unspecialised function, whether it, or unspecialised code it calls, writes a value of a type it is given out.</summary>
     readonly Dictionary<FunctionSymbol, bool> _describes = new(ReferenceEqualityComparer.Instance);
 
@@ -338,7 +355,7 @@ public sealed partial class SilGen {
     ///     unspecialised code cannot serve yet.
     /// </summary>
     internal GenericShape? UnspecialisedShape(FunctionSymbol symbol) {
-        if (_generics != GenericsMode.Unspecialised) {
+        if (!CompilesOnce) {
             return null;
         }
 
@@ -347,8 +364,9 @@ public sealed partial class SilGen {
         }
 
         // A library's generic function: as the library compiled it, without
-        // binding its body — compiled once in its archive, or not at all.
-        if (CompiledBy(symbol) is { } library) {
+        // binding its body — compiled once in its archive, or not at all. A
+        // specialised archive has none: what an opened call needs is made here.
+        if (_generics == GenericsMode.Unspecialised && CompiledBy(symbol) is { } library) {
             var compiled = library.Functions.TryGetValue(_names[symbol], out var describes) ? SignatureShape(symbol, out _) : null;
             if (compiled is not null) {
                 _describes[symbol] = describes;
@@ -360,6 +378,10 @@ public sealed partial class SilGen {
         }
 
         if (SignatureShape(symbol, out var refused) is not { } shape) {
+            if (refused is not null) {
+                _refusals[symbol] = refused;
+            }
+
             if (refused is not null && Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
                 Console.Error.WriteLine($"specialised {TraceName(symbol)}: {refused}");
             }
@@ -872,7 +894,8 @@ public sealed partial class SilGen {
         // 'sin(x) => T.sin(x)' — stays specialised: each copy is the
         // requirement's witness called directly, which becomes an intrinsic
         // or a library call where the type is known, and costs nothing.
-        if (IsForwarder(body)) {
+        if (!_opening && IsForwarder(body)) {
+            _refusals[symbol] = "it only hands its parameters to a requirement, so it is copied for each type";
             if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
                 Console.Error.WriteLine($"specialised {TraceName(symbol)}: a forwarder to a requirement");
             }
@@ -892,6 +915,10 @@ public sealed partial class SilGen {
             }
 
             return true;
+        }
+
+        if (checker.Refused is { } why) {
+            _refusals[symbol] = $"'{why.Syntax.ToString().Trim().ReplaceLineEndings(" ")}' in its body";
         }
 
         // Why each function that could be is not, for whoever is widening what can be.
@@ -1013,6 +1040,11 @@ public sealed partial class SilGen {
             // A value given a callee's 'some P' parameter is the value, of the type it is: the call says what that type is.
             if (node is BoundConversion { ConversionKind: ConversionKind.Existential, Type: OpaqueTypeSymbol { Origin: null } } opened) {
                 return !inClosure && Simple(opened.Operand.Type) && Allows(opened.Operand, false);
+            }
+
+            // A type made of them as a value, 'T[].self', 'T?.self', 'Box<T>.self': its metadata, made at run time from theirs.
+            if (node is BoundMetatype { InstanceType: var described } && Mentions(described) && described is not MetatypeTypeSymbol && IsHeld(V(described), _own)) {
+                return !inClosure;
             }
 
             if (node is BoundExpression expression && Mentions(expression.Type) && (inClosure || !Simple(expression.Type) || !Produces(expression))) {
@@ -1808,7 +1840,7 @@ public sealed partial class SilGen {
             if (!closure.TrueForAll(p => declared.Contains(QualifiedName(p)))) {
                 return false;
             }
-        } else if (_generics != GenericsMode.Unspecialised || value is not ArrayType) {
+        } else if (!CompilesOnce || value is not ArrayType) {
             return false;
         }
 
@@ -1831,7 +1863,7 @@ public sealed partial class SilGen {
         }
 
         // An error of the type, which unspecialised code may throw on as 'any Error'.
-        if (_generics == GenericsMode.Unspecialised && closure.Exists(p => ReferenceEquals(p, Core.Error.OriginalDefinition))) {
+        if (CompilesOnce && closure.Exists(p => ReferenceEquals(p, Core.Error.OriginalDefinition))) {
             ErrorEraser(value);
         }
 
@@ -1842,7 +1874,7 @@ public sealed partial class SilGen {
         // code that may write one out.
         var tabled = _associatedTabled.Add((concrete, protocol.OriginalDefinition));
         var described = describe && _associatedDescribed.Add((concrete, protocol.OriginalDefinition));
-        if (_generics == GenericsMode.Unspecialised && (tabled || described)) {
+        if (CompilesOnce && (tabled || described)) {
             foreach (var each in closure) {
                 foreach (var associated in each.AssociatedTypes) {
                     if (described && AssociatedBinding(concrete, associated) is { } read && Lower(read) is { } lowered && !SilType.MentionsOpaque(lowered)) {
@@ -1890,7 +1922,7 @@ public sealed partial class SilGen {
     /// </summary>
     void GenericEntries(SilWitnessTable table, TypeSymbol concrete, SilType value, NamedTypeSymbol protocol, SyntaxNode at) {
         // A value laid out as another type than its nominal one (an optional, whose members are Optional's) has none yet.
-        if (_generics != GenericsMode.Unspecialised || !IsTabledProtocol(protocol) || Lower(concrete) != value || !_genericTabled.Add(table)) {
+        if (!CompilesOnce || !IsTabledProtocol(protocol) || Lower(concrete) != value || !_genericTabled.Add(table)) {
             return;
         }
 
@@ -2825,6 +2857,15 @@ public sealed partial class SilGen {
         /// </summary>
         bool CallsUnspecialised(FunctionSymbol callee, TypeSubstitution bound, SyntaxNode at, out GenericShape? shape) {
             shape = null;
+
+            // A specialised build calls generic code compiled once only from
+            // code that knows a type by its metadata alone: what a call that
+            // opens a Type runs, and the call itself.
+            if (generator._generics != GenericsMode.Unspecialised && !_genericMetadata.Keys.Any(static k => k.OpenedFrom is null)
+                && !bound.Parameters.Any(p => bound.Lookup(p) is TypeParameterSymbol { OpenedFrom: not null })) {
+                return false;
+            }
+
             if (generator.UnspecialisedShape(callee) is not { } found) {
                 return false;
             }

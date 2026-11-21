@@ -406,6 +406,22 @@ public enum ConversionKind {
     ///     it as <see cref="Identity" />.
     /// </summary>
     MetatypeErasure,
+
+    /// <summary>
+    ///     A <c>Type</c> given for a generic callee's <c>T.Type</c>, opening it
+    ///     (SYNTAX.md "Opening a type", #297): the target is the metatype of
+    ///     the opened type (<see cref="TypeParameterSymbol.OpenedFrom" />), and
+    ///     the call runs the callee compiled once, with the value's metadata
+    ///     as T's.
+    /// </summary>
+    Open,
+
+    /// <summary>
+    ///     A call's result of the type it opened, erased to the existential of
+    ///     the callee's constraints on it: <c>make(t)</c> for
+    ///     <c>make&lt;T: Zero&gt;(_: T.Type) -&gt; T</c> is an <c>any Zero</c>.
+    /// </summary>
+    OpenedErasure,
 }
 
 public sealed class BoundConversion(

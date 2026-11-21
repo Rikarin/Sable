@@ -1728,6 +1728,15 @@ public sealed class SilModule {
     public Dictionary<string, (SilType Type, string Function)> ErrorErasers { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
+    ///     For each type a call that opens a Type may erase a result of, by
+    ///     the type's name: the function that copies such a value into the
+    ///     box an existential keeps one of its type in, given where it is and
+    ///     its metadata (<c>opaque_box</c>, #297 stage 6) — made where the
+    ///     type is known, and registered with the runtime as describers are.
+    /// </summary>
+    public Dictionary<string, (SilType Type, string Function)> Boxers { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
     ///     A type's conformance records, by protocol name: one per protocol
     ///     the type declares it conforms to (a class's own; its superclass's
     ///     are its superclass's), each with the conformance's witness table
@@ -2254,6 +2263,15 @@ public static class SilBuiltins {
             // An error of one, boxed as 'any Error' by its type's eraser: taken.
             case "opaque_erase_error" when operands is [OpaqueType erased] && result is ClassType:
                 return new([erased], result) { Consumed = [0] };
+            // A call that opens a Type (#297 stage 6): a buffer its metadata
+            // sizes for a result of it; that result, boxed by its type's
+            // boxer, the buffer let go; and the buffer let go unwritten.
+            case "opaque_alloc" when operands is [var m] && m == metadata && result is AddressType:
+                return new([metadata], result);
+            case "opaque_box" when operands is [AddressType buffer, var m] && m == metadata && result is ClassType:
+                return new([buffer, metadata], result);
+            case "opaque_free" when operands is [AddressType buffer]:
+                return new([buffer], SilType.Unit);
         }
 
         // A requirement's witness in the generic calling convention, and an associated type's metadata.
@@ -2270,7 +2288,8 @@ public static class SilBuiltins {
             return operands is [var table] && table == SilType.WitnessTable ? new([SilType.WitnessTable], metadata) : null;
         }
 
-        if (name.StartsWith("witness_table:", StringComparison.Ordinal) || name.StartsWith("witness_table_known:", StringComparison.Ordinal)) {
+        if (name.StartsWith("witness_table:", StringComparison.Ordinal) || name.StartsWith("witness_table_known:", StringComparison.Ordinal)
+            || name.StartsWith("witness_table_required:", StringComparison.Ordinal)) {
             return operands is [var m] && m == metadata ? new([metadata], SilType.WitnessTable) : null;
         }
 

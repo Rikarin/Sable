@@ -339,6 +339,10 @@ public sealed class LibraryInterface {
         foreach (var (name, eraser) in library.ErrorErasers) {
             program.ErrorErasers.TryAdd(name, eraser);
         }
+
+        foreach (var (name, boxer) in library.Boxers) {
+            program.Boxers.TryAdd(name, boxer);
+        }
     }
 
     // =======================================================================

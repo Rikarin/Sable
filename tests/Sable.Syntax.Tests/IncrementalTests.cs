@@ -618,10 +618,11 @@ public sealed class IncrementalTimingTests {
         // The plan's exit criterion is 2 ms, and this measures about 1 ms on
         // a development machine, against about 20 ms to reparse. A
         // regression to reparsing the file, or most of it, brings the two
-        // together; a sixth of a parse is the bound, which holds on any
-        // machine however slow, as both are slower alike.
+        // within a factor of one or two; a quarter of a parse is the bound.
+        // A sixth was too close for CI's Windows runners, which measured an
+        // edit at 4.7–5.6 ms against a 26–28 ms parse, a factor of 5–6.
         var message = $"incremental reparse took {perEdit:F2} ms per edit, a full parse {perParse:F2} ms, for {source.LineCount:N0} lines";
-        Assert.True(perEdit * 6 < perParse, message);
+        Assert.True(perEdit * 4 < perParse, message);
         Console.WriteLine(message);
     }
 }

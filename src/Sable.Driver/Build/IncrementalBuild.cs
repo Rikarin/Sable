@@ -159,6 +159,15 @@ public sealed record BuildOutcome(bool Succeeded, IReadOnlyList<string> Errors, 
 
     /// <summary>The front end's warnings about the files it checked: none when nothing was compiled again.</summary>
     public IReadOnlyList<string> Warnings { get; init; } = [];
+
+    /// <summary>
+    ///     Why a program that could be compiled in units was compiled whole
+    ///     after all — a unit that could not be lowered alone, units that
+    ///     disagree about a type, units that did not link — with what the
+    ///     step that failed said; null when nothing fell back. Never silent:
+    ///     the build's log says it too.
+    /// </summary>
+    public string? FellBack { get; init; }
 }
 
 /// <summary>
@@ -640,8 +649,7 @@ public static class IncrementalBuild {
                 if (lowered.Alone) {
                     // A unit sees less than the whole program: what it reports,
                     // the whole program's compilation says authoritatively.
-                    log?.WriteLine($"note: unit '{unit.Name}' could not be lowered on its own; compiling the program whole");
-                    return Whole(sources.Whole(), settings, executable, cacheDirectory, cache, timings);
+                    return FallBack($"unit '{unit.Name}' could not be lowered on its own", string.Join("\n", lowered.Errors));
                 }
 
                 if (lowered.Errors.Count > 0) {
@@ -690,8 +698,7 @@ public static class IncrementalBuild {
 
         // ---- Every unit must have seen the same types -----------------------
         if ((timings is null ? Disagreement(units) : timings.Measure("abi check", () => Disagreement(units))) is { } disagreement) {
-            log?.WriteLine($"note: the units disagree about {disagreement}; compiling the program whole");
-            return Whole(sources.Whole(), settings, executable, cacheDirectory, cache, timings);
+            return FallBack($"the units disagree about {disagreement}", "");
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(executable))!);
@@ -709,8 +716,7 @@ public static class IncrementalBuild {
         }
 
         if (!link.Succeeded) {
-            log?.WriteLine($"note: the units did not link ({FirstLine(link.Output)}); compiling the program whole");
-            return Whole(sources.Whole(), settings, executable, cacheDirectory, cache, timings);
+            return FallBack($"the units did not link ({FirstError(link.Output)})", link.Output);
         }
 
         using (BuildTimings.Of(timings, "cache upkeep")) {
@@ -726,6 +732,14 @@ public static class IncrementalBuild {
         }
 
         return new(true, [], "incremental", stale.Count, units.Count - stale.Count) { Warnings = warnings };
+
+        // The program compiled whole instead, saying why: in the log, and in
+        // the outcome with all that the step that failed said.
+        BuildOutcome FallBack(string reason, string said) {
+            log?.WriteLine($"note: {reason}; compiling the program whole");
+            var whole = Whole(sources.Whole(), settings, executable, cacheDirectory, cache, timings);
+            return whole with { FellBack = said.Length == 0 ? reason : $"{reason}:\n{said.TrimEnd()}" };
+        }
     }
 
     /// <summary>
@@ -1063,7 +1077,14 @@ public static class IncrementalBuild {
         ];
     }
 
-    static string FirstLine(string text) => text.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+    /// <summary>
+    ///     The line of a tool's output that says what went wrong: its first
+    ///     error — a linker may warn first — or failing one its first line.
+    /// </summary>
+    static string FirstError(string text) {
+        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return lines.FirstOrDefault(static l => l.Contains("error", StringComparison.OrdinalIgnoreCase)) ?? lines.FirstOrDefault() ?? "";
+    }
 
     static string Sanitise(string name) => string.Concat(name.Select(static c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '_'));
 

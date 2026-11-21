@@ -186,6 +186,7 @@ public sealed class NativeLibraryTests {
         var library = Path.Combine(fixture.Root, "counter", "target", release ? "release" : "dev", NativeBuild.LibraryFileName("counter", kind, NativeTarget.Host));
         var name = Path.GetFileName(library);
         Assert.Empty(PackageBuilder.Build(fixture.Load("counter"), fixture.Environment, request)!);
+        Assert.False(fixture.Errors.ToString().Contains("compiling the program whole", StringComparison.Ordinal), fixture.Errors.ToString());
         Assert.Contains($"Built {name}: incremental, 3 unit(s) compiled, 0 reused", fixture.Errors.ToString(), StringComparison.Ordinal);
         Assert.Equal(Expected, LinkAndRun(library, kind));
 

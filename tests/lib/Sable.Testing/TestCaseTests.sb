@@ -1,0 +1,72 @@
+module TestCaseTests
+
+// The test harness's verdicts and times (Sable.Testing), tested with '@test':
+// run with
+//     tools/stdlib-coverage.sh Sable.Testing
+
+import Sable.Testing
+
+async fn returns() -> String? {
+    return none
+}
+
+fn testCase(traps: String?) -> TestCase {
+    return TestCase { name: "Suite.example", location: "example.sb:1", run: returns, traps: traps }
+}
+
+@test
+fn aTestThatMustNotTrapPassesByExitingCleanly() {
+    let test = testCase(traps: none)
+    assert(verdict(test, 0, "") == none)
+    assertEqual(verdict(test, 1, "fatal error: index out of range\n"), "")
+    assertEqual(verdict(test, -1, ""), "")
+}
+
+@test
+fn aTestThatMustTrapFailsByReturning() {
+    assertEqual(verdict(testCase(traps: ""), 0, ""), "the test was to trap, and it returned")
+    assertEqual(verdict(testCase(traps: "small"), 0, ""), "the test was to trap with 'small', and it returned")
+}
+
+@test
+fn aTestThatMustTrapPassesByTrappingWithItsMessage() {
+    assert(verdict(testCase(traps: ""), 134, "fatal error: anything\n") == none)
+    assert(verdict(testCase(traps: "small"), 134, "fatal error: precondition failed: small\n") == none)
+    assertEqual(verdict(testCase(traps: "small"), 134, "fatal error: precondition failed: big\n"), "the test trapped, but not with 'small'")
+}
+
+@test
+fn aFailedAssertionIsNotTheTrapATestWasToMake() {
+    // An assertion's report starts a line; a trap's message only mentioning one does not.
+    let test = testCase(traps: "assertion")
+    assertEqual(verdict(test, 134, "assertion failed: 1 == 2\nfatal error: 'try!' caught an error\n"), "")
+    assertEqual(verdict(test, 134, "note\nassertion failed: left\n"), "")
+    assert(verdict(test, 134, "fatal error: not an assertion failed: here\n") == none)
+    // Its process not started at all, the test failed whatever it was to do.
+    assertEqual(verdict(test, -1, ""), "")
+}
+
+@test
+fn aTestCaseRunsWhatItWasGiven() async {
+    let test = testCase(traps: none)
+    assertEqual(test.name, "Suite.example")
+    assertEqual(test.location, "example.sb:1")
+    assert(await test.run() == none)
+}
+
+@test
+fn timesAreInTheUnitThatReadsBest() {
+    assertEqualText(formatNanoseconds(5.0), "5.00 ns")
+    assertEqualText(formatNanoseconds(42.5), "42.5 ns")
+    assertEqualText(formatNanoseconds(850.0), "850 ns")
+    assertEqualText(formatNanoseconds(12400.0), "12.40 µs")
+    assertEqualText(formatNanoseconds(3050000.0), "3.05 ms")
+    assertEqualText(formatNanoseconds(1200000000.0), "1.20 s")
+}
+
+@test
+fn aDurationIsWholeNanoseconds() {
+    assertEqualText(formatDuration(0), "0.00 ns")
+    assertEqualText(formatDuration(850), "850 ns")
+    assertEqualText(formatDuration(2500000000), "2.50 s")
+}

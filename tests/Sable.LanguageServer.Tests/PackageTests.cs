@@ -32,8 +32,13 @@ public sealed class PackageTests : IDisposable {
         }
     }
 
+    /// <summary>
+    ///     Writes a file, and gives its full path as the server names the
+    ///     file: with the platform's separators, which <paramref name="relative" />'s
+    ///     '/' are not on Windows.
+    /// </summary>
     string Write(string relative, string text) {
-        var path = Path.Combine(_top, relative);
+        var path = Path.GetFullPath(Path.Combine(_top, relative));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, text);
         return path;

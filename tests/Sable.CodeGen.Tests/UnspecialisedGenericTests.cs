@@ -1434,4 +1434,76 @@ public sealed class UnspecialisedGenericTests {
             Assert.Contains($"{name}$generic", functions);
         }
     }
+
+    const string Requirements = """
+        protocol Counter {
+            mutating fn next() -> Int
+        }
+
+        struct Up: Counter {
+            var n: Int
+            mutating fn next() -> Int {
+                n += 1
+                return n
+            }
+        }
+
+        fn twice<C: Counter>(_ c: inout C) -> Int {
+            return c.next() + c.next()
+        }
+
+        fn advance<C: Counter>(_ c: inout C) -> Int {
+            return twice(&c)
+        }
+
+        fn at<C: Collection>(_ c: C, _ i: C.Index) -> C.Element {
+            return c[i]
+        }
+
+        fn firstOf<C: Collection>(_ c: C) -> C.Element? {
+            return c.first
+        }
+
+        fn mix<T: Hashable>(_ x: T, into hasher: inout Hasher) {
+            hasher.combine(x)
+        }
+
+        fn sameHash<T: Hashable>(_ x: T) -> Bool {
+            var a = Hasher(seed: 1)
+            mix(x, into: &a)
+            var b = Hasher(seed: 1)
+            b.combine(x)
+            return a.finalize() == b.finalize()
+        }
+        """;
+
+    /// <summary>
+    ///     An 'inout' parameter of a type parameter's type is the address of
+    ///     its caller's storage, changed there; a protocol's subscript
+    ///     requirement is read through the table, as a method is; and an
+    ///     inout parameter of a known type may be changed by a method.
+    /// </summary>
+    [Fact]
+    public void InoutParametersAndSubscriptRequirementsAreCompiledOnce() {
+        const string body = """
+                var up = Up { n: 0 }
+                print(advance(&up))
+                print(up.n)
+                print(at([7, 8], 1))
+                print(at("abc", "abc".startIndex))
+                print(firstOf([4, 5]) ?? 0)
+                print(firstOf("") ?? '-')
+                let three = 3
+                let nothing = ""
+                print(sameHash(three))
+                print(sameHash(nothing))
+            """;
+        Prints("3\n2\n8\na\n4\n-\ntrue\ntrue\n", Requirements, body);
+        var functions = Unspecialised(Requirements, body);
+        foreach (var name in new[] { "Test.twice", "Test.advance", "Test.at", "Test.firstOf", "Test.mix", "Test.sameHash" }) {
+            Assert.Contains($"{name}$generic", functions);
+        }
+
+        Assert.Contains(functions, static f => f.StartsWith("Sable.Core.Collection.first", StringComparison.Ordinal));
+    }
 }

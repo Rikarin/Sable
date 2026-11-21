@@ -9032,6 +9032,13 @@ public sealed partial class SilGen {
 
             // A type's own subscript: a call to its getter.
             if (index.Subscript is { } subscript) {
+                // A protocol's requirement on a type parameter of unspecialised code: through the table it is given.
+                if (subscript.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol }
+                    && new BoundCall(index.Syntax, index.Receiver, subscript, index.Indices, index.Type) { Substitution = index.Substitution } is var required
+                    && OpaqueSelf(required) is { } opaqueSelf) {
+                    return GenericRequirementCall(required, opaqueSelf);
+                }
+
                 subscript = SubscriptWitness(subscript, index.Receiver);
                 return generator.SubscriptGetter(subscript) is { } getter
                     ? Expression(new BoundCall(index.Syntax, index.Receiver, getter, index.Indices, index.Type) { Substitution = index.Substitution })
@@ -10540,6 +10547,12 @@ public sealed partial class SilGen {
 
                     arguments.Add(address);
                     BeginAccess(address, modify: true, borrows);
+
+                    // To unspecialised code, a type parameter's: the same storage, seen as the callee's.
+                    if (genericShape is not null && type.Parameters[arguments.Count - 1] is var changed && changed != address.Type && SilType.MentionsOpaque(changed)) {
+                        arguments[^1] = Emit(new BuiltinInst("opaque_cast", changed, address));
+                    }
+
                     continue;
                 }
 

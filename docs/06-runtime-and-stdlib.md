@@ -334,7 +334,13 @@ A `some P` parameter is an anonymous type parameter, after the named ones
 (`@opaque(some1)`, `$metadata.some1`): `contains(_ pattern: some Pattern)`
 takes the pattern where its caller holds it, its type's metadata and its
 table for Pattern, as `contains<P: Pattern>(_ pattern: P)` would. (One
-with arguments, `some Sequence<Int>`, is still specialised.)
+with arguments, `some Sequence<Int>`, is still specialised.) An `inout`
+parameter of a type parameter's type, `using generator: inout G`, is the
+address of the caller's storage, seen as `*@opaque(G)`, and a mutating
+requirement changes the value there. A protocol's subscript requirement,
+`self[position]` on a Collection, is read through the table as a method
+of its indices is: the table's generic entries hold its getter, in its
+place among the protocol's requirements (a setter is not one yet).
 
 An array of a type parameter's values (`T[]`, `T[>..]`, `T[>..<]`) is a
 buffer of them, as any array is: its object metadata — the element's size,

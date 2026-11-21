@@ -731,8 +731,11 @@ public sealed partial class SilGen {
         var asThemselves = OpaqueParametersAsThemselves(symbol);
         foreach (var parameter in symbol.Parameters) {
             var parameterType = asThemselves.IsEmpty ? parameter.Type : Substitute(asThemselves, parameter.Type);
+
+            // 'using generator: inout G' is the address of the caller's storage, as any inout parameter is.
+            var inoutOwn = parameter.Modifier == ParameterModifier.InOut && parameterType is TypeParameterSymbol changed && own.Contains(changed);
             if (!Passable(parameterType) && !IsGenericFunction(parameterType, own)
-                || Mentions(parameterType, own) && (parameter.IsVariadic || parameter.IsByReference || parameter.Modifier is not (ParameterModifier.None or ParameterModifier.In))) {
+                || Mentions(parameterType, own) && !inoutOwn && (parameter.IsVariadic || parameter.IsByReference || parameter.Modifier is not (ParameterModifier.None or ParameterModifier.In))) {
                 refused = $"the parameter '{parameter.Name}: {parameter.Type.ToDisplayString()}'";
                 return null;
             }
@@ -974,6 +977,10 @@ public sealed partial class SilGen {
                     return false;
                 case BoundCall call when CallMentions(call) && (inClosure || !CallAllowed(call)):
                     return false;
+                // A protocol's property or subscript set on a type parameter's value: no table entry sets one yet.
+                case BoundAssignment { Target: BoundFieldAccess { Receiver: { } setOn, Field.ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } } when Mentions(setOn.Type):
+                case BoundAssignment { Target: BoundIndexAccess { Receiver: var indexedOn, Subscript.ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } } when Mentions(indexedOn.Type):
+                    return false;
                 case BoundBinaryOperator binary when (Mentions(binary.Left.Type) || Mentions(binary.Right.Type)) && (inClosure || !BinaryAllowed(binary)):
                     return false;
                 case BoundUnaryOperator unary when Mentions(unary.Operand.Type)
@@ -1123,6 +1130,11 @@ public sealed partial class SilGen {
 
         /// <summary>A subscript of a type this code holds: a call of its getter, or, given the value stored, of its setter.</summary>
         bool SubscriptAllowed(BoundIndexAccess index, BoundExpression? stored) {
+            // A protocol's subscript requirement, read on a type parameter: through its table, as a method's.
+            if (index.Subscript is { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } required && stored is null) {
+                return RequirementAllowed(new BoundCall(index.Syntax, index.Receiver, required, [..index.Indices], index.Type) { Substitution = index.Substitution });
+            }
+
             if (index.Subscript is not { } subscript || subscript.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol }
                 || (stored is null ? generator.SubscriptGetter(subscript) : generator.SubscriptSetter(subscript)) is not { } accessor) {
                 return false;
@@ -1192,13 +1204,14 @@ public sealed partial class SilGen {
             }
 
             if (calleeOwner is not null && callee.IsMutating && call.Receiver is not (BoundLocalAccess { Local.IsMutable: true } or null or BoundSelfAccess)
+                && !(call.Receiver is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0)
                 && !(call.Receiver is BoundFieldAccess { Receiver: BoundSelfAccess, Field: { IsComputed: false, IsStatic: false } } changed && FieldsMutable && PropertyAllowed(changed))) {
                 return false;
             }
 
             // One that changes self changes a local, or this function's own self.
             if (calleeSelf is not null && callee.IsMutating && receiverType is not null && IsOwn(receiverType)
-                && call.Receiver is not (BoundLocalAccess { Local.IsMutable: true } or null or BoundSelfAccess) || callee.IsMutating && call.Receiver is null or BoundSelfAccess && !OwnMutating) {
+                && call.Receiver is not (BoundLocalAccess { Local.IsMutable: true } or null or BoundSelfAccess) && !(call.Receiver is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0) || callee.IsMutating && call.Receiver is null or BoundSelfAccess && !OwnMutating) {
                 return false;
             }
 
@@ -1282,6 +1295,7 @@ public sealed partial class SilGen {
             // protocol extension's own self, when it may change it.
             // Or a stored field of the self of a method that may change it: 'base.next()'.
             if (callee.IsMutating && call.Receiver is not BoundLocalAccess { Local.IsMutable: true }
+                && !(call.Receiver is BoundParameterAccess { Parameter.Modifier: ParameterModifier.InOut } && _closureDepth == 0)
                 && !(call.Receiver is null or BoundSelfAccess && OwnMutating)
                 && !(call.Receiver is BoundFieldAccess { Receiver: BoundSelfAccess, Field: { IsComputed: false, IsStatic: false } } stored && FieldsMutable && PropertyAllowed(stored))) {
                 return false;
@@ -1519,7 +1533,8 @@ public sealed partial class SilGen {
     /// <summary>
     ///     The requirements a protocol itself declares that a witness table's
     ///     generic entries hold, in declaration order: its methods, static
-    ///     ones and operators among them, and its properties' getters.
+    ///     ones and operators among them, its properties' getters, and its
+    ///     subscripts' getters.
     /// </summary>
     internal List<(string Key, Symbol Member)> GenericRequirements(NamedTypeSymbol protocol) {
         protocol = protocol.OriginalDefinition;
@@ -1536,6 +1551,11 @@ public sealed partial class SilGen {
                         break;
                     case FieldSymbol field:
                         requirements.Add(((field.IsStatic ? "static$" : "") + GetterSlot(field), field));
+                        break;
+
+                    // 'subscript(position: Index) -> Element': its getter, called as a method of its indices is.
+                    case FunctionSymbol { FunctionKind: FunctionKind.Subscript, IsStatic: false } subscript:
+                        requirements.Add((SubscriptName(subscript) + "$get", subscript));
                         break;
                 }
             }
@@ -1841,6 +1861,14 @@ public sealed partial class SilGen {
         // a function the type may not have.
         if (requirement is { FunctionKind: FunctionKind.Operator, Parameters: [var left, var right] } && OperatorKindOf(requirement.Name) is { } kind) {
             call = new BoundBinaryOperator(syntax, requirement.ReturnType, kind, new BoundParameterAccess(syntax, left), new BoundParameterAccess(syntax, right), requirement);
+        }
+
+        // A subscript is indexed, as code that knows the type indexes it: an array's elements, or the type's own subscript.
+        if (requirement.FunctionKind == FunctionKind.Subscript && receiver is not null) {
+            call = new BoundIndexAccess(syntax, requirement.ReturnType, receiver, [..requirement.Parameters.Select(p => (BoundExpression)new BoundParameterAccess(syntax, p))]) {
+                Subscript = requirement,
+                Substitution = substitution,
+            };
         }
         BoundStatement[] statements = requirement.ReturnType.Equals(Core.Void)
             ? [new BoundExpressionStatement(syntax, call), new BoundReturn(syntax, null)]

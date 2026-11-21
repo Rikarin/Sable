@@ -97,7 +97,8 @@ public static partial class Pipeline {
         IReadOnlyList<LibraryInterface> interfaces,
         bool denyReflection
     ) {
-        var (module, diagnostics) = SilGen.LowerUnitByFile(compilation, new SilUnit(tree => !interfaces.Any(i => i.Covers(tree))), SilProgram.Index(compilation), denyReflection);
+        var unit = new SilUnit(tree => !interfaces.Any(i => i.Covers(tree))) { Libraries = [..interfaces.Select(static i => i.CompiledGenerics())] };
+        var (module, diagnostics) = SilGen.LowerUnitByFile(compilation, unit, SilProgram.Index(compilation), denyReflection);
         foreach (var library in interfaces) {
             library.LinkInto(module);
         }

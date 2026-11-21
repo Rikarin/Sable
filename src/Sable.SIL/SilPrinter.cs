@@ -23,7 +23,14 @@ public static class SilPrinter {
     ///     what a library's interface keeps, so that the passes see its
     ///     functions as lowering made them (<see cref="LibraryInterface" />).
     /// </summary>
-    public static string Print(SilModule module, bool keepBlockOrder) {
+    public static string Print(SilModule module, bool keepBlockOrder) => Print(module, keepBlockOrder, null);
+
+    /// <summary>
+    ///     <see cref="Print(SilModule, bool)" />, with only the functions
+    ///     <paramref name="include" /> picks: the module's types, globals and
+    ///     tables, and those functions' bodies.
+    /// </summary>
+    public static string Print(SilModule module, bool keepBlockOrder, Func<SilFunction, bool>? include) {
         var builder = new StringBuilder();
 
         // Types first, each after the types it holds, so that the parser
@@ -144,16 +151,22 @@ public static class SilPrinter {
         }
 
         if ((module.Types.Count > 0 || module.Globals.Count > 0 || module.Foreign.Count > 0 || module.Exports.Count > 0 || module.WitnessTables.Count > 0 || module.Describers.Count > 0 || module.ErrorErasers.Count > 0)
-            && module.Functions.Count > 0) {
+            && module.Functions.Exists(f => include?.Invoke(f) != false)) {
             builder.Append('\n');
         }
 
-        for (var i = 0; i < module.Functions.Count; i++) {
-            if (i > 0) {
+        var first = true;
+        foreach (var function in module.Functions) {
+            if (include?.Invoke(function) == false) {
+                continue;
+            }
+
+            if (!first) {
                 builder.Append('\n');
             }
 
-            Print(module.Functions[i], builder, keepBlockOrder);
+            first = false;
+            Print(function, builder, keepBlockOrder);
         }
 
         return builder.ToString();

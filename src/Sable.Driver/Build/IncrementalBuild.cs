@@ -242,7 +242,7 @@ public static class IncrementalBuild {
             _ = Toolchain;
         }
 
-        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}|overflow={settings.OverflowChecks}|whole={settings.Whole}|deny-reflection={settings.DenyReflection}|arc={settings.ArcChecks}|sil={settings.SilLevel}|debug-assertions={settings.DebugAssertions}|native={settings.Native.Key}|library={settings.Library}";
+        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}|overflow={settings.OverflowChecks}|whole={settings.Whole}|deny-reflection={settings.DenyReflection}|arc={settings.ArcChecks}|sil={settings.SilLevel}|debug-assertions={settings.DebugAssertions}|native={settings.Native.Key}|library={settings.Library}|generics={SilGen.Generics}";
 
         // ---- Read and hash every file --------------------------------------
         string[][] texts;
@@ -643,9 +643,28 @@ public static class IncrementalBuild {
             // library's, and the dependencies' compiled now.
             var libraries = units.Where(static u => u.IsLibrary).SelectMany(static u => u.Trees).ToList();
             var embedded = Pipeline.EmbeddedSources(libraries, program.Except(libraries));
+
+            // The libraries first — the standard library, then each
+            // dependency after those it depends on, which come after it — so
+            // that each unit after calls their generic code compiled once in
+            // their archives rather than lowering it again (#297 stage 7). A
+            // kept library's is read from its interface.
+            var compiled = new Dictionary<Unit, LibraryInterface>();
+            if (SilGen.Generics == GenericsMode.Unspecialised) {
+                using var _ = BuildTimings.Of(timings, "library generics");
+                foreach (var unit in units.Where(static u => u.IsLibrary && u.Cached)) {
+                    if (CompiledInterfaceOf(unit) is { } found) {
+                        compiled[unit] = found;
+                    }
+                }
+            }
+
+            stale = [..stale.Where(static u => u.IsLibrary).Reverse(), ..stale.Where(static u => !u.IsLibrary)];
             foreach (var unit in stale) {
                 var leads = settings.Library is not null && ReferenceEquals(unit, own[0]);
-                var lowered = Lower(compilation, index, unit.Trees, unit.IsLibrary, leads, settings, embedded, timings);
+                IReadOnlyList<LibraryInterface> before = [..compiled.Where(c => !ReferenceEquals(c.Key, unit)).Select(static c => c.Value)];
+                var lowered = Lower(compilation, index, unit.Trees, unit.IsLibrary, leads, settings, embedded, timings, before);
+
                 if (lowered.Alone) {
                     // A unit sees less than the whole program: what it reports,
                     // the whole program's compilation says authoritatively.
@@ -657,7 +676,12 @@ public static class IncrementalBuild {
                 }
 
                 var (ir, abi) = (lowered.Ir!, lowered.Abi);
-                var face = unit.Library is null ? null : InterfaceOf(compilation, unit.LibraryName, unit.Trees, lowered, settings, program[0].Options);
+                var built = unit.Library is null ? null : InterfaceOf(compilation, unit.LibraryName, unit.Trees, lowered, settings, program[0].Options);
+                if (built is { Generics.Count: > 0 }) {
+                    compiled[unit] = built;
+                }
+
+                var face = built?.Write();
                 compiling.Add((unit, Task.Run(async () => {
                     await throttle.WaitAsync();
                     try {
@@ -820,6 +844,30 @@ public static class IncrementalBuild {
     sealed record LoweredUnit(string? Ir, string Abi, IReadOnlyList<string> Errors, bool Alone = false) {
         /// <summary>A library unit's SIL as lowering made it, before the passes: what its interface keeps.</summary>
         public string? Sil { get; init; }
+
+        /// <summary>What lowering said of the unit: among it, a library's generic code compiled once.</summary>
+        public SilUnitInfo? Unit { get; init; }
+    }
+
+    /// <summary>
+    ///     What a kept library unit's archive holds of its generic code
+    ///     compiled once, as its interface records it; null when it has no
+    ///     interface this compiler reads, or none of its generics are compiled
+    ///     once — a unit lowered against it then lowers what it uses of them,
+    ///     as it would of any other unit's.
+    /// </summary>
+    static LibraryInterface? CompiledInterfaceOf(Unit unit) {
+        if (unit.Library is not { } library || !File.Exists(library.Interface)) {
+            return null;
+        }
+
+        var face = LibraryInterface.Read(File.ReadAllBytes(library.Interface), CompilerIdentity.Current);
+        if (face is not { Generics.Count: > 0 }) {
+            return null;
+        }
+
+        var names = unit.Trees.Select(static t => t.Text.FileName).ToHashSet(StringComparer.Ordinal);
+        return names.SetEquals(face.Sources.Select(static s => s.File)) ? face : null;
     }
 
     /// <summary>
@@ -828,13 +876,13 @@ public static class IncrementalBuild {
     ///     before the unit's object is compiled on another thread, since
     ///     writing the symbols may bind what is not bound yet.
     /// </summary>
-    static byte[]? InterfaceOf(Compilation compilation, string name, IReadOnlyList<SyntaxTree> trees, LoweredUnit lowered, BuildSettings settings, ParseOptions options) {
+    static LibraryInterface? InterfaceOf(Compilation compilation, string name, IReadOnlyList<SyntaxTree> trees, LoweredUnit lowered, BuildSettings settings, ParseOptions options) {
         if (lowered.Sil is not { } sil) {
             return null;
         }
 
         var owned = trees.ToHashSet();
-        return LibraryInterface.Of(compilation, name, owned.Contains, CompilerIdentity.Current, LibraryInterface.SettingsOf(options, settings.DenyReflection), sil).Write();
+        return LibraryInterface.Of(compilation, name, owned.Contains, CompilerIdentity.Current, LibraryInterface.SettingsOf(options, settings.DenyReflection), sil, lowered.Unit);
     }
 
     /// <summary>
@@ -844,17 +892,31 @@ public static class IncrementalBuild {
     /// </summary>
     /// <param name="library">The standard library's unit, whose debug information is relative to no program's directory.</param>
     /// <param name="leads">The unit leads a library C links: it sets up the globals as the library loads.</param>
+    /// <param name="libraries">The library units lowered or kept before this one, whose generic code compiled once it calls in their archives.</param>
     static LoweredUnit Lower(
         Compilation compilation, SilProgram index, IReadOnlyList<SyntaxTree> trees, bool library, bool leads, BuildSettings settings,
-        IReadOnlyDictionary<string, string> embedded, BuildTimings? timings
+        IReadOnlyDictionary<string, string> embedded, BuildTimings? timings, IReadOnlyList<LibraryInterface>? libraries = null
     ) {
         var owned = trees.ToHashSet();
         SilModule module;
         IReadOnlyList<Diagnostic> lowering;
         string? sil;
         using (BuildTimings.Of(timings, "sil")) {
-            (module, lowering) = SilGen.LowerUnit(compilation, new SilUnit(owned.Contains), index, denyReflection: settings.DenyReflection, library: leads);
-            sil = library && lowering.Count == 0 ? SilPrinter.Print(module, keepBlockOrder: true) : null;
+            var unit = new SilUnit(owned.Contains) {
+                CompilesGenerics = library,
+                Libraries = [..(libraries ?? []).Select(static l => l.CompiledGenerics())],
+            };
+            (module, lowering) = SilGen.LowerUnit(compilation, unit, index, denyReflection: settings.DenyReflection, library: leads);
+            // A library's interface keeps the SIL other units may copy.
+            sil = library && lowering.Count == 0 ? LibraryInterface.InlinableSil(module, module.Unit!) : null;
+
+            // An optimised build copies in the libraries' inlinable generic
+            // code it calls, for the specialisation pass to make its copies of.
+            if (settings.SilLevel != "0" && lowering.Count == 0 && Specialise.Enabled) {
+                foreach (var face in libraries ?? []) {
+                    face.LinkInlinable(module);
+                }
+            }
             module.CheckExclusivity = settings.Exclusivity;
             module.CheckArc = settings.ArcChecks;
             if (!settings.OverflowChecks) {
@@ -899,7 +961,7 @@ public static class IncrementalBuild {
                 : LlvmEmitter.Emit(module, settings.Native.TargetOrHost);
         }
 
-        return new(ir, string.Join("\n", module.Unit!.Abi.Select(static p => $"{p.Key}\t{p.Value}")), []) { Sil = sil };
+        return new(ir, string.Join("\n", module.Unit!.Abi.Select(static p => $"{p.Key}\t{p.Value}")), []) { Sil = sil, Unit = module.Unit };
     }
 
     /// <summary>Whether a unit's SIL passes run: as a whole program's do, in every build but an unoptimised one with debug information.</summary>
@@ -969,7 +1031,7 @@ public static class IncrementalBuild {
             return BuildOutcome.Failed(lowered.Errors);
         }
 
-        var face = InterfaceOf(compilation, "std", trees, lowered, settings, program.Options);
+        var face = InterfaceOf(compilation, "std", trees, lowered, settings, program.Options)?.Write();
         var written = unit.Write(lowered.Abi, temporary => NativeObjects.CompileIr(lowered.Ir!, temporary, settings.Native), target,
             face is null ? null : path => File.WriteAllBytes(path, face));
         if (!written.Succeeded) {

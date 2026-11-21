@@ -345,6 +345,19 @@ public sealed partial class SilGen {
             return known;
         }
 
+        // A library's generic function: as the library compiled it, without
+        // binding its body — compiled once in its archive, or not at all.
+        if (CompiledBy(symbol) is { } library) {
+            var compiled = library.Functions.TryGetValue(_names[symbol], out var describes) ? SignatureShape(symbol, out _) : null;
+            if (compiled is not null) {
+                _describes[symbol] = describes;
+            }
+
+            _shapes[symbol] = compiled;
+            _shapeOrder.Add(symbol);
+            return compiled;
+        }
+
         if (SignatureShape(symbol, out var refused) is not { } shape) {
             if (refused is not null && Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
                 Console.Error.WriteLine($"specialised {TraceName(symbol)}: {refused}");
@@ -381,6 +394,46 @@ public sealed partial class SilGen {
         _shapeOrder.Add(symbol);
         return allowed ? shape : null;
     }
+
+    /// <summary>
+    ///     The library whose archive compiled the generic functions of the
+    ///     file declaring <paramref name="symbol" />, when that is not this
+    ///     unit's (<see cref="SilUnit.Libraries" />); null otherwise.
+    /// </summary>
+    CompiledGenerics? CompiledBy(FunctionSymbol symbol) {
+        if (_unit is not { Libraries.Count: > 0 } unit || !_declarations.TryGetValue(symbol, out var declared) || unit.Owns(declared.Model.SyntaxTree)
+            || !_names.ContainsKey(symbol)) {
+            return null;
+        }
+
+        foreach (var library in unit.Libraries) {
+            if (library.Covers(declared.Model.SyntaxTree)) {
+                return library;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    ///     The largest unspecialised function, in SIL instructions, whose body
+    ///     a library's interface offers other units to copy and specialise
+    ///     without its being marked <c>@inline</c> or <c>@inlinable</c>
+    ///     (#297 stage 7).
+    /// </summary>
+    public const int InlinableSize = 120;
+
+    /// <summary>
+    ///     Whether other units may copy a library's generic function compiled
+    ///     once, to specialise it for the types they know: it says so
+    ///     (<c>@inlinable</c>, <c>@inline(always)</c>), or it is small and
+    ///     not <c>@inline(never)</c>.
+    /// </summary>
+    static bool IsInlinable(FunctionSymbol symbol, SilFunction function) =>
+        symbol.GetAttribute("inlinable") is not null
+        || (symbol.GetAttribute("inline")?.Arguments is not { } inline
+            ? function.Blocks.Sum(static b => b.Instructions.Count) <= InlinableSize
+            : inline.Contains("always"));
 
     /// <summary>A protocol generic code reaches through a witness table: neither it nor one it refines generic.</summary>
     static bool IsTabledProtocol(NamedTypeSymbol protocol) =>
@@ -1413,6 +1466,15 @@ public sealed partial class SilGen {
         _instances[name] = type;
         _instanceOrigins[name] = (symbol, OpaqueParametersAsThemselves(symbol), _loweringInstance);
         _unspecialised[name] = (symbol, shape);
+
+        // A library's, compiled in its archive: called there, its body not
+        // bound. An optimised build copies in the inlinable ones from the
+        // library's interface, to specialise (LibraryInterface.LinkInlinable).
+        if (CompiledBy(symbol) is not null) {
+            _external[name] = () => type;
+            return (name, type);
+        }
+
         _pending.Enqueue((symbol, name, type, OpaqueParametersAsThemselves(symbol)));
         return (name, type);
     }

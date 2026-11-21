@@ -45,6 +45,7 @@ public sealed partial class Compilation {
     /// <summary>Every attribute there is, with where it may go and how that place is described.</summary>
     static readonly Dictionary<string, (AttributeTargets Targets, string Where)> KnownAttributes = new(StringComparer.Ordinal) {
         ["inline"] = (AttributeTargets.Callable, "a function"),
+        ["inlinable"] = (AttributeTargets.Callable, "a function"),
         ["inline_layout"] = (AttributeTargets.Struct | AttributeTargets.Union, "a struct or a union"),
         ["noncopy"] = (AttributeTargets.Struct | AttributeTargets.Union, "a struct or a union"),
         ["reflectable"] = (AttributeTargets.Type, "a type"),
@@ -743,7 +744,7 @@ public sealed partial class Compilation {
                 return;
 
             case "packed" or "discardable" or "frozen" or "immutable" or "immortal" or "polymorphic" or "noncopy" or "escaping" or "Sendable" or "flags" or "MainActor"
-                or "reflectable" or "inline_layout" or "indirect" or "main" or "intrinsic"
+                or "reflectable" or "inline_layout" or "indirect" or "main" or "intrinsic" or "inlinable"
                 when attribute.ArgumentList is not null:
                 Malformed($"'@{name}' takes no arguments");
                 return;

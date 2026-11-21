@@ -242,13 +242,22 @@ public sealed class BuildCacheTests {
 
         // Beside its archive, the entry keeps the unit's interface (#182),
         // which this compiler reads back: the core's and the imported
-        // module's symbols, and the unit's SIL.
+        // module's symbols, and — built unspecialised — the generic code its
+        // archive compiled once, and the SIL of what of it other units may
+        // copy to specialise (#297 stage 7).
         var std = entries.First(static e => e is { Package: "sable-std", Current: true });
         var face = LibraryInterface.Read(File.ReadAllBytes(Path.Combine(std.Directory, "std.sbi")), Pipeline.CompilerIdentity);
         Assert.NotNull(face);
         Assert.Equal(["Sable.Core", "Sable.Text"], face.Modules);
         Assert.Equal(face.Modules, face.ReadSymbols().Select(static m => m.Name));
-        Assert.NotEmpty(face.ReadSil().Functions);
+        if (SilGen.Generics == GenericsMode.Unspecialised) {
+            Assert.NotEmpty(face.Generics);
+            var sil = face.ReadSil();
+            Assert.All(face.Inlinable, name => Assert.NotNull(sil.Find(name + "$generic")));
+        } else {
+            Assert.Empty(face.Generics);
+            Assert.Empty(face.SilText);
+        }
 
         // And that the library checks cleanly is recorded beside it: a fresh
         // process — a build of one file, 'sable check', the language

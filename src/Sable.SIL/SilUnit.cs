@@ -26,7 +26,42 @@ namespace Sable.SIL;
 ///     </para>
 /// </remarks>
 /// <param name="Owns">Whether a file is one of this unit's.</param>
-public sealed record SilUnit(Func<SyntaxTree, bool> Owns);
+public sealed record SilUnit(Func<SyntaxTree, bool> Owns) {
+    /// <summary>
+    ///     The library units compiled before this one whose generic code is
+    ///     compiled once in their archives (#297 stage 7): a generic function
+    ///     of theirs this unit calls with types it knows is called there, not
+    ///     lowered here again — its body is neither bound nor lowered.
+    /// </summary>
+    public IReadOnlyList<CompiledGenerics> Libraries { get; init; } = [];
+
+    /// <summary>
+    ///     The unit is a library's, kept as an archive other programs link
+    ///     (<see cref="CompiledGenerics" />): in an unspecialised build it
+    ///     compiles every generic function of its files that can be compiled
+    ///     once, whether or not its own code calls it, and defines each for
+    ///     every unit linked with it.
+    /// </summary>
+    public bool CompilesGenerics { get; init; }
+}
+
+/// <summary>
+///     What a library unit compiled of its generic functions (#297 stage 7,
+///     #182): each generic function it compiled once for every type, by its
+///     name, and whether that code writes out a value of a type it is given
+///     — which tells a caller to register that type's describer. Its interface
+///     (<see cref="LibraryInterface" />) records it, so that a unit lowered
+///     against the library calls those functions in its archive without
+///     binding their bodies, and lowers again only the generic functions the
+///     library left to be specialised.
+/// </summary>
+/// <param name="Covers">Whether a file is one of the library's.</param>
+/// <param name="Functions">Each generic function compiled once, by its name without <c>$generic</c>, and whether it describes values.</param>
+/// <param name="Inlinable">
+///     Those whose bodies other units may copy for the types they know: the
+///     interface's SIL has them (<see cref="SilUnitInfo.Inlinable" />).
+/// </param>
+public sealed record CompiledGenerics(Func<SyntaxTree, bool> Covers, IReadOnlyDictionary<string, bool> Functions, IReadOnlySet<string> Inlinable);
 
 /// <summary>What separate lowering tells the code generator about a unit's module.</summary>
 public sealed class SilUnitInfo {
@@ -47,6 +82,21 @@ public sealed class SilUnitInfo {
     ///     cannot be linked.
     /// </summary>
     public SortedDictionary<string, string> Abi { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    ///     For a unit that compiles a library's generics (<see cref="SilUnit.CompilesGenerics" />):
+    ///     each generic function of its files it compiled once, by its name
+    ///     without <c>$generic</c>, and whether that code describes values
+    ///     (<see cref="CompiledGenerics.Functions" />).
+    /// </summary>
+    public SortedDictionary<string, bool> Generics { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    ///     Of <see cref="Generics" />, those other units may copy and
+    ///     specialise: marked <c>@inline</c> or <c>@inlinable</c>, or small
+    ///     (<see cref="SilGen.InlinableSize" />).
+    /// </summary>
+    public SortedSet<string> Inlinable { get; } = new(StringComparer.Ordinal);
 }
 
 /// <summary>

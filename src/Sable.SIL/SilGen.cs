@@ -577,6 +577,18 @@ public sealed partial class SilGen {
             }
         }
 
+        // A library kept as an archive compiles each of its generic functions
+        // that can be compiled once, for the units linked with it to call
+        // rather than lower again (#297 stage 7).
+        if (_unit is { CompilesGenerics: true } && _generics == GenericsMode.Unspecialised) {
+            foreach (var (symbol, syntax, model) in functions) {
+                if (IsGeneric(symbol) && !IsIntrinsic(symbol) && symbol.ForeignName is null && _unit.Owns(model.SyntaxTree) && !InsideBody(syntax)
+                    && _declarations.ContainsKey(symbol) && UnspecialisedShape(symbol) is { } shape) {
+                    UnspecialisedInstance(symbol, shape, syntax);
+                }
+            }
+        }
+
         LowerReached();
 
         // Separately, the globals are set up by the unit the program starts
@@ -594,8 +606,31 @@ public sealed partial class SilGen {
             }
         });
         if (_module.Unit is { } unitInfo) {
+            RecordGenerics(unitInfo);
             DeclareReferenced(unitInfo);
             RecordAbi(unitInfo);
+        }
+    }
+
+    /// <summary>
+    ///     For a library's unit, the generic functions of its files it
+    ///     compiled once: each defined here for every unit linked with it,
+    ///     and recorded for its interface (<see cref="SilUnitInfo.Generics" />).
+    /// </summary>
+    void RecordGenerics(SilUnitInfo info) {
+        if (_unit is not { CompilesGenerics: true } unit) {
+            return;
+        }
+
+        foreach (var (name, (symbol, _)) in _unspecialised) {
+            if (_names.TryGetValue(symbol, out var baseName) && name == baseName + "$generic" && _declarations.TryGetValue(symbol, out var declared)
+                && unit.Owns(declared.Model.SyntaxTree) && _module.Find(name) is { } function) {
+                info.Owned.Add(name);
+                info.Generics[baseName] = DescribesValues(symbol);
+                if (IsInlinable(symbol, function)) {
+                    info.Inlinable.Add(baseName);
+                }
+            }
         }
     }
 
@@ -680,6 +715,13 @@ public sealed partial class SilGen {
             if (type.Deinit is { } deinit) {
                 referenced.Add(deinit);
             }
+        }
+
+        // A table's witnesses, which the specialisation pass calls directly:
+        // a library's generic code compiled once among them (#297 stage 7).
+        foreach (var table in _module.WitnessTables) {
+            referenced.UnionWith(table.Entries.Select(static e => e.Function));
+            referenced.UnionWith(table.GenericEntries.Select(static e => e.Function).OfType<string>());
         }
 
         foreach (var name in referenced) {

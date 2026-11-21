@@ -46,7 +46,7 @@ namespace Sable.SIL;
 /// </remarks>
 public sealed class LibraryInterface {
     /// <summary>The format's version: bump when what is written, or what it means, changes.</summary>
-    public const int Version = 1;
+    public const int Version = 2;
 
     static ReadOnlySpan<byte> Magic => "SBIL"u8;
 
@@ -58,7 +58,9 @@ public sealed class LibraryInterface {
         IReadOnlyList<string> modules,
         IReadOnlyList<string> extensions,
         byte[] symbols,
-        string sil
+        string sil,
+        IReadOnlyDictionary<string, bool> generics,
+        IReadOnlySet<string> inlinable
     ) {
         Unit = unit;
         Compiler = compiler;
@@ -68,6 +70,8 @@ public sealed class LibraryInterface {
         Extensions = extensions;
         SymbolBytes = symbols;
         SilText = sil;
+        Generics = generics;
+        Inlinable = inlinable;
     }
 
     /// <summary>The unit's name: <c>Sable.Core</c>, a package's library.</summary>
@@ -100,6 +104,22 @@ public sealed class LibraryInterface {
     public string SilText { get; }
 
     /// <summary>
+    ///     The generic functions of the unit compiled once for every type into
+    ///     its archive (#297 stage 7), by name without <c>$generic</c>, and
+    ///     whether each writes out a value of a type it is given: a unit
+    ///     compiled against the library calls them there rather than lowering
+    ///     them again (<see cref="CompiledGenerics" />). Empty for a unit
+    ///     compiled specialised.
+    /// </summary>
+    public IReadOnlyDictionary<string, bool> Generics { get; }
+
+    /// <summary>Of <see cref="Generics" />, those other units may copy to specialise, whose code <see cref="SilText" /> holds.</summary>
+    public IReadOnlySet<string> Inlinable { get; }
+
+    /// <summary>What a unit lowered against this library is told of the generic code its archive holds.</summary>
+    public CompiledGenerics CompiledGenerics() => new(Covers, Generics, Inlinable);
+
+    /// <summary>
     ///     The identity of a compiler made of these assemblies: the SHA-256 of
     ///     each one's module version id, which a deterministic build derives
     ///     from everything compiled into it — its code and its embedded
@@ -121,7 +141,7 @@ public sealed class LibraryInterface {
 
     /// <summary>The settings a unit is compiled with, as an interface records them: its files' target and profile, and whether reflection is denied.</summary>
     public static string SettingsOf(ParseOptions options, bool denyReflection) =>
-        $"{options.TargetOs}-{options.TargetArch}-{CoreLibrary.ProfileOf(options)}{(denyReflection ? "-deny-reflection" : "")}";
+        $"{options.TargetOs}-{options.TargetArch}-{CoreLibrary.ProfileOf(options)}{(denyReflection ? "-deny-reflection" : "")}{(SilGen.Generics == GenericsMode.Unspecialised ? "-unspecialised" : "")}";
 
     /// <summary>The SHA-256 of a file's text, as <see cref="Sources" /> records it.</summary>
     public static string HashOf(SyntaxTree tree) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(tree.Text.Text)));
@@ -146,13 +166,13 @@ public sealed class LibraryInterface {
             return (null, errors);
         }
 
-        var (module, lowering) = SilGen.LowerUnit(compilation, new SilUnit(owns), SilProgram.Index(compilation), denyReflection: denyReflection);
+        var (module, lowering) = SilGen.LowerUnit(compilation, new SilUnit(owns) { CompilesGenerics = true }, SilProgram.Index(compilation), denyReflection: denyReflection);
         var failed = lowering.Where(static d => d.Severity == DiagnosticSeverity.Error).Select(static d => (d, (SyntaxTree?)null)).ToList();
         if (failed.Count > 0) {
             return (null, failed);
         }
 
-        return (Of(compilation, unit, owns, compiler, SettingsOf(compilation.Options, denyReflection), SilPrinter.Print(module, keepBlockOrder: true)), []);
+        return (Of(compilation, unit, owns, compiler, SettingsOf(compilation.Options, denyReflection), SilPrinter.Print(module, keepBlockOrder: true), module.Unit), []);
     }
 
     /// <summary>
@@ -161,7 +181,8 @@ public sealed class LibraryInterface {
     ///     made it — before the passes — printed with each function's block
     ///     order kept (<see cref="SilPrinter.Print(SilModule, bool)" />).
     /// </summary>
-    public static LibraryInterface Of(Compilation compilation, string unit, Func<SyntaxTree, bool> owns, string compiler, string settings, string sil) {
+    /// <param name="lowered">What lowering the unit recorded of its generic code compiled once (<see cref="Generics" />); null for none.</param>
+    public static LibraryInterface Of(Compilation compilation, string unit, Func<SyntaxTree, bool> owns, string compiler, string settings, string sil, SilUnitInfo? lowered = null) {
         var files = compilation.SyntaxTrees.Where(owns).ToList();
         var names = files.Select(CoreLibrary.ModuleOf).OfType<string>().ToHashSet(StringComparer.Ordinal);
         var modules = compilation.Modules.Where(m => names.Contains(m.Name)).OrderBy(static m => m.Name, StringComparer.Ordinal).ToList();
@@ -173,7 +194,9 @@ public sealed class LibraryInterface {
             [..modules.Select(static m => m.Name)],
             ExtensionsOf(compilation, modules),
             SymbolInterface.Write(modules, compilation.Modules),
-            sil
+            sil,
+            lowered?.Generics ?? new SortedDictionary<string, bool>(StringComparer.Ordinal),
+            lowered?.Inlinable ?? new SortedSet<string>(StringComparer.Ordinal)
         );
     }
 
@@ -306,6 +329,236 @@ public sealed class LibraryInterface {
         foreach (var (name, symbol) in library.Exports) {
             program.Exports.TryAdd(name, symbol);
         }
+
+        // What the library's generic code compiled once finds at run time:
+        // the describers and error erasers it made.
+        foreach (var (name, describer) in library.Describers) {
+            program.Describers.TryAdd(name, describer);
+        }
+
+        foreach (var (name, eraser) in library.ErrorErasers) {
+            program.ErrorErasers.TryAdd(name, eraser);
+        }
+    }
+
+    // =======================================================================
+    // Inlinable code (#297 stage 7)
+    // =======================================================================
+
+    /// <summary>
+    ///     The SIL of a library unit that other units may copy, as its
+    ///     interface keeps it: its generic functions compiled once that are
+    ///     inlinable (<see cref="SilUnitInfo.Inlinable" />), and what they
+    ///     refer to that the unit's archive does not define for every unit
+    ///     linked with it — closures, thunks, instances of generic functions —
+    ///     each with what it refers to in turn; and, of each class the code
+    ///     names, its vtable's and its deinit's code, which a unit that has
+    ///     not made the class needs to make it. The rest of the unit's code a
+    ///     unit compiled against it calls in the archive. Printed before the
+    ///     passes, with each function's own block order.
+    /// </summary>
+    public static string InlinableSil(SilModule module, SilUnitInfo info) {
+        var kept = new HashSet<string>(StringComparer.Ordinal);
+        var classes = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Stack<string>(info.Inlinable.Select(static name => name + "$generic"));
+        while (pending.TryPop(out var name)) {
+            if (module.Find(name) is not { } function || !kept.Add(name)) {
+                continue;
+            }
+
+            foreach (var reference in References(function)) {
+                if (!info.Owned.Contains(reference.Function)) {
+                    pending.Push(reference.Function);
+                }
+            }
+
+            foreach (var type in NominalsOf(function).OfType<ClassType>()) {
+                if (classes.Add(type.Name)) {
+                    foreach (var method in ClassCode(type)) {
+                        pending.Push(method);
+                    }
+                }
+            }
+        }
+
+        return kept.Count == 0 ? "" : SilPrinter.Print(module, keepBlockOrder: true, f => kept.Contains(f.Name));
+    }
+
+    static IEnumerable<FunctionRefInst> References(SilFunction function) =>
+        function.Blocks.SelectMany(static b => b.Instructions).OfType<FunctionRefInst>();
+
+    /// <summary>The functions a class's metadata names: its vtable's, and its deinit.</summary>
+    static IEnumerable<string> ClassCode(ClassType type) =>
+        type.VTable.Select(static m => m.Function).Concat(type.Deinit is { } deinit ? [deinit] : []);
+
+    /// <summary>The named types a function's code mentions — in its signature, its blocks' arguments and its instructions' types — and those they hold.</summary>
+    static List<NominalType> NominalsOf(SilFunction function) {
+        var seen = new HashSet<SilType>(ReferenceEqualityComparer.Instance);
+        var found = new List<NominalType>();
+        Visit(function.Type);
+        foreach (var block in function.Blocks) {
+            foreach (var argument in block.Arguments) {
+                Visit(argument.Type);
+            }
+
+            foreach (var instruction in block.Instructions) {
+                Visit(instruction.Type);
+            }
+        }
+
+        return found;
+
+        void Visit(SilType? type) {
+            if (type is null || !seen.Add(type)) {
+                return;
+            }
+
+            if (type is NominalType nominal) {
+                found.Add(nominal);
+            }
+
+            switch (type) {
+                case ClassType classType:
+                    Visit(classType.Superclass);
+                    foreach (var field in classType.Fields) {
+                        Visit(field.Type);
+                    }
+
+                    break;
+                case StructType structType:
+                    foreach (var field in structType.Fields) {
+                        Visit(field.Type);
+                    }
+
+                    break;
+                case EnumType enumType:
+                    foreach (var @case in enumType.Cases) {
+                        Visit(@case.Payload);
+                    }
+
+                    break;
+                case TupleType tuple:
+                    foreach (var element in tuple.Elements) {
+                        Visit(element);
+                    }
+
+                    break;
+                case FunctionType signature:
+                    foreach (var parameter in signature.Parameters) {
+                        Visit(parameter);
+                    }
+
+                    Visit(signature.Result);
+                    Visit(signature.Thrown);
+                    break;
+                case ThickFunctionType thick:
+                    Visit(thick.Signature);
+                    break;
+                case ArrayType array:
+                    Visit(array.Element);
+                    break;
+                case SliceType slice:
+                    Visit(slice.Element);
+                    break;
+                case InlineArrayType inline:
+                    Visit(inline.Element);
+                    break;
+                case AddressType address:
+                    Visit(address.Pointee);
+                    break;
+                case InlinePointerType pointer:
+                    Visit(pointer.Pointee);
+                    break;
+                case WeakStorageType weak:
+                    Visit(weak.Optional);
+                    break;
+                case UnownedStorageType unowned:
+                    Visit(unowned.Referent);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Copies into a unit's module, lowered against the library, the
+    ///     library's inlinable generic code it calls — and what that refers to
+    ///     of <see cref="InlinableSil" /> — so that the specialisation pass
+    ///     makes copies of it for the types the unit knows (#297 stage 7).
+    ///     What the copied code refers to that the interface does not hold,
+    ///     the library's archive defines: the unit declares it. A type the
+    ///     copied code names that the unit has not made it takes from the
+    ///     interface, with its class's code. A copy the pass does not use is
+    ///     the unit's own, linked once with the library's.
+    /// </summary>
+    /// <returns>How many functions were copied.</returns>
+    public int LinkInlinable(SilModule unit) {
+        if (Inlinable.Count == 0 || unit.Unit is not { } info) {
+            return 0;
+        }
+
+        var roots = info.External.Keys.Where(name => name.EndsWith("$generic", StringComparison.Ordinal) && Inlinable.Contains(name[..^"$generic".Length])).ToList();
+        if (roots.Count == 0) {
+            return 0;
+        }
+
+        // Parsed afresh: each unit takes, and changes, a copy of its own.
+        var library = SilParser.Parse(SilText);
+        var copied = 0;
+        var globals = unit.Globals.Select(static g => g.Name).ToHashSet(StringComparer.Ordinal);
+        var pending = new Stack<string>(roots);
+        while (pending.TryPop(out var name)) {
+            if (unit.Find(name) is not null || library.Find(name) is not { } function) {
+                continue;
+            }
+
+            unit.Add(function);
+            info.External.Remove(name);
+            copied++;
+            foreach (var reference in References(function)) {
+                Need(reference.Function, (FunctionType)reference.Type);
+            }
+
+            foreach (var global in function.Blocks.SelectMany(static b => b.Instructions).OfType<GlobalAddrInst>()) {
+                if (globals.Add(global.Global) && library.Globals.FirstOrDefault(g => g.Name == global.Global) is { Name: not null } declared) {
+                    unit.Globals.Add(declared);
+                }
+            }
+
+            // A type the unit has not made, the interface's; a class's with its code.
+            foreach (var type in NominalsOf(function)) {
+                if (unit.FindType(type.Name) is not null) {
+                    continue;
+                }
+
+                unit.AddType(type);
+                if (type is ClassType classType) {
+                    foreach (var method in ClassCode(classType)) {
+                        Need(method, null);
+                    }
+                }
+            }
+        }
+
+        return copied;
+
+        // What copied code names: copied in turn from the interface, else
+        // declared, to be called in the archive.
+        void Need(string name, FunctionType? type) {
+            if (unit.Find(name) is not null) {
+                return;
+            }
+
+            if (library.Find(name) is not null) {
+                pending.Push(name);
+            } else if (library.Foreign.TryGetValue(name, out var foreign)) {
+                unit.Foreign.TryAdd(name, foreign);
+                if (library.ForeignVariadic.TryGetValue(name, out var count)) {
+                    unit.ForeignVariadic.TryAdd(name, count);
+                }
+            } else if (type is not null && !unit.Foreign.ContainsKey(name)) {
+                info.External.TryAdd(name, type);
+            }
+        }
     }
 
     // =======================================================================
@@ -332,6 +585,11 @@ public sealed class LibraryInterface {
             var sil = Compress(Encoding.UTF8.GetBytes(SilText));
             writer.Write(sil.Length);
             writer.Write(sil);
+            writer.Write(Generics.Count);
+            foreach (var (name, describes) in Generics.OrderBy(static g => g.Key, StringComparer.Ordinal)) {
+                writer.Write(name);
+                writer.Write((byte)((describes ? 1 : 0) | (Inlinable.Contains(name) ? 2 : 0)));
+            }
         }
 
         var body = payload.ToArray();
@@ -386,11 +644,25 @@ public sealed class LibraryInterface {
             var extensions = ReadList(reader, body.Length);
             var symbols = reader.ReadBytes(Count(reader, body.Length));
             var sil = reader.ReadBytes(Count(reader, body.Length));
+            var generics = new SortedDictionary<string, bool>(StringComparer.Ordinal);
+            var inlinable = new SortedSet<string>(StringComparer.Ordinal);
+            for (var left = Count(reader, body.Length); left > 0; left--) {
+                var name = reader.ReadString();
+                var flags = reader.ReadByte();
+                if (flags > 3 || !generics.TryAdd(name, (flags & 1) != 0)) {
+                    return null;
+                }
+
+                if ((flags & 2) != 0) {
+                    inlinable.Add(name);
+                }
+            }
+
             if (reader.BaseStream.Position != reader.BaseStream.Length) {
                 return null;
             }
 
-            return new(unit, compiler, settings, sources, modules, extensions, symbols, Encoding.UTF8.GetString(Decompress(sil)));
+            return new(unit, compiler, settings, sources, modules, extensions, symbols, Encoding.UTF8.GetString(Decompress(sil)), generics, inlinable);
         } catch (Exception failure) when (failure is EndOfStreamException or IOException or InvalidDataException or ArgumentException
                                               or DecoderFallbackException or OverflowException) {
             return null;

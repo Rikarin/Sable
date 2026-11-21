@@ -75,7 +75,7 @@ public static class SourceGenerators {
 
     /// <summary>The attributes the compiler gives a meaning: no generator may answer to one (SYNTAX.md §22).</summary>
     static readonly HashSet<string> BuiltInAttributes = new(StringComparer.Ordinal) {
-        "inline", "inline_layout", "noncopy", "reflectable", "immutable", "immortal", "flags", "escaping", "polymorphic",
+        "inline", "inlinable", "inline_layout", "noncopy", "reflectable", "immutable", "immortal", "flags", "escaping", "polymorphic",
         "deprecated", "available", "extern", "export", "packed", "align", "test", "bench", "fuzz", "main", "discardable",
         "MainActor", "frozen", "derive", "generator", "builtin", "comptime", "allow", "warn", "deny", "indirect", "intrinsic",
     };

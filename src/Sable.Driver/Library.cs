@@ -173,7 +173,7 @@ public static class Library {
     ///     of the compiler has one too.
     /// </summary>
     static string LastingKey(IEnumerable<SyntaxTree> library, IReadOnlyList<string> others, ParseOptions options, BindOptions bindOptions) =>
-        IncrementalBuild.Hash($"sable-library-checked-2\n{CodeGen.CompilerIdentity.Current}\n{options.TargetOs}\n{options.TargetArch}\n{CoreLibrary.ProfileOf(options)}\n{string.Join("\n", library.Select(static t => t.Text.FileName).Order(StringComparer.Ordinal))}\n{bindOptions}"
+        IncrementalBuild.Hash($"sable-library-checked-2\n{CodeGen.CompilerIdentity.Current}\n{options.TargetOs}\n{options.TargetArch}\n{CoreLibrary.ProfileOf(options)}\n{string.Join("\n", library.Select(static t => t.Text.FileName).Order(StringComparer.Ordinal))}\n{bindOptions}\n{SIL.SilGen.Generics}"
             + (others.Count == 0 ? "" : $"\nother files\n{string.Join("\n", others)}"));
 
     /// <summary>

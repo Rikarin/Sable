@@ -184,7 +184,8 @@ public sealed class StructuredConcurrencyTests {
                        }
 
                        fn check(_ n: Int) async throws -> Int {
-                           try await Task.sleep(nanoseconds: n * 2_000_000)
+                           // Far enough apart that a loaded machine still finishes them in order: 20, 80 and 125 ms.
+                           try await Task.sleep(nanoseconds: n * n * 5_000_000)
                            if n % 2 == 1 {
                                throw Bad.Odd(n: n)
                            }

@@ -500,7 +500,7 @@ public sealed class PanicTests {
         Assert.StartsWith($"{prefix}Test.main at test.sb:15{(OperatingSystem.IsWindows() ? "" : ":18")}\n2\n", debug.Stdout, StringComparison.Ordinal);
         Assert.Contains($"  1  {prefix}Test.inner at test.sb:5{(OperatingSystem.IsWindows() ? "" : ":5")}\n", debug.Stderr, StringComparison.Ordinal);
         Assert.Contains($"  2  {prefix}Test.outer at test.sb:10{(OperatingSystem.IsWindows() ? "" : ":12")}\n", debug.Stderr, StringComparison.Ordinal);
-        Assert.Contains($"  3  sable.Test.main at test.sb:21{(OperatingSystem.IsWindows() ? "" : ":11")}\n", debug.Stderr, StringComparison.Ordinal);
+        Assert.Contains($"  3  {prefix}Test.main at test.sb:21{(OperatingSystem.IsWindows() ? "" : ":11")}\n", debug.Stderr, StringComparison.Ordinal);
         Assert.Contains("precondition", debug.Stderr, StringComparison.Ordinal);
         Assert.Contains(" at lib/Sable.Core/Assertions.sb:", debug.Stderr.Replace('\\', '/'), StringComparison.Ordinal);
 

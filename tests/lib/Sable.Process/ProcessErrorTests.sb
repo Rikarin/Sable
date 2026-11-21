@@ -14,3 +14,9 @@ fn isAnError<T>(_ value: T) -> Bool where T: Error {
 fn aProcessErrorIsAnError() {
     assert(isAnError(ProcessError.NotFound(program: "nothing-by-this-name")))
 }
+
+@test
+fn aProcessErrorSaysWhatCouldNotBeStarted() {
+    let error = ProcessError.NotFound(program: "nothing-by-this-name")
+    assertEqual(error.description(), "no program 'nothing-by-this-name' could be started")
+}

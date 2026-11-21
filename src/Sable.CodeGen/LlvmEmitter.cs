@@ -189,7 +189,14 @@ public sealed partial class LlvmEmitter {
             output.Append('\n');
         }
 
-        output.Append(Declarations);
+        // The checked I128 multiply helper is linkonce_odr like the rest:
+        // on COFF that needs a COMDAT, or every unit's copy is a duplicate.
+        if (_windows) {
+            output.Append(Declarations.Replace(SmulOverflowHeader, SmulOverflowHeader[..^1] + "comdat {", StringComparison.Ordinal));
+            _comdatNames.Add("@sable_smul_overflow_i128");
+        } else {
+            output.Append(Declarations);
+        }
         output.Append(MetadataDeclarations);
         output.Append(IntrinsicDeclarations);
         output.Append(MathDeclarations);
@@ -411,6 +418,8 @@ public sealed partial class LlvmEmitter {
             .Append("declare float @remainderf(float, float)\n\n");
         return text.ToString();
     }
+
+    const string SmulOverflowHeader = "@sable_smul_overflow_i128(i128 %a, i128 %b) {";
 
     const string Declarations = """
                                 @sable_string_metadata = external constant %SableMetadata

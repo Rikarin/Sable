@@ -44,7 +44,7 @@ public sealed partial class SilInterpreter {
     SilType OpaqueTypeOf(OpaqueType opaque) => OpaqueModel(opaque.Name).Type;
 
     /// <summary>The function running now and its arguments, when it finds associated types' metadata from its tables.</summary>
-    (SilFunction Function, IReadOnlyList<object?> Arguments)? _associatedTypes;
+    (SilFunction Function, Func<string, object?> Parameter)? _associatedTypes;
 
     /// <summary>
     ///     An opaque type's metadata in the function running now: a type
@@ -56,13 +56,13 @@ public sealed partial class SilInterpreter {
             return model;
         }
 
-        if (_opaqueTypes is null || _associatedTypes is not var (function, arguments) || function.AssociatedMetadata.Find(a => a.Name == name) is not { } associated) {
+        if (_opaqueTypes is null || _associatedTypes is not var (function, parameter) || function.AssociatedMetadata.Find(a => a.Name == name) is not { } associated) {
             throw new SilTrap($"no metadata for @opaque({name}) here");
         }
 
         var baseModel = OpaqueModel(associated.Base);
         SilWitnessTable table;
-        if (associated.Table is { } given && function.ParameterNames.IndexOf(given) is var at and >= 0 && arguments[at] is SilWitnessTable passed) {
+        if (associated.Table is { } given && parameter(given) is SilWitnessTable passed) {
             table = passed;
             foreach (var step in associated.Path) {
                 table = module.FindWitnessTable(table.Conformer, table.Bases[step]) ?? WitnessTableOf(table.Conformer, table.Bases[step])
@@ -162,6 +162,18 @@ public sealed partial class SilInterpreter {
     }
 
     /// <summary>A value's storage seen as itself: what <c>opaque_address</c> gives, read-only.</summary>
+    /// <summary>
+    ///     A buffer of an unspecialised async function's frame (#297,
+    ///     <see cref="ClassType.TailSlots" />): storage the frame holds as
+    ///     bits, as it holds its fields.
+    /// </summary>
+    internal sealed class FrameTail : IReference {
+        object? _value;
+        public object? Get() => _value ?? throw new SilTrap("load from uninitialised storage");
+        public void Set(object? value) => _value = value;
+        public object? Peek() => _value;
+    }
+
     sealed class Held(object? value) : IReference {
         public object? Get() => value ?? throw new SilTrap("load from uninitialised storage");
         public object? Peek() => value;

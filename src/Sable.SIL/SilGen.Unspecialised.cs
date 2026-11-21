@@ -37,8 +37,9 @@ public enum GenericsMode {
 ///         values of the type parameter itself, passed, stored, returned,
 ///         compared by metatype, written out, given to a requirement of its
 ///         protocols or to another such function, a closure over them among
-///         them. Anything else — a slice of <c>T</c>, a method of a generic
-///         class, an async function — is still specialised for its type
+///         them, an async function's awaits among them (its frame keeps the
+///         metadata, <see cref="AsyncLowering" />). Anything else — a slice of
+///         <c>T</c>, a method of a generic class — is still specialised for its type
 ///         arguments, so a program builds either way.
 ///     </para>
 ///     <para>
@@ -618,7 +619,6 @@ public sealed partial class SilGen {
 
         refused = _localGenerics.ContainsKey(symbol) ? "a local generic function"
             : symbol.IsPolymorphic ? "polymorphic recursion"
-            : symbol.IsAsync ? "async"
             : symbol.FunctionKind != FunctionKind.Ordinary && !IsGetter(symbol) && !IsSubscriptAccessor(symbol) && !IsValueInitializer(symbol) ? $"{(symbol.FunctionKind.ToString()[0] is 'A' or 'E' or 'I' or 'O' or 'U' ? "an" : "a")} {symbol.FunctionKind.ToString().ToLowerInvariant()}"
             : symbol.ForeignName is not null ? "foreign"
             : symbol.OpaqueTypeParameters.Any(static p => !p.OpaqueParameter!.Arguments.IsEmpty) ? "a 'some P<…>' parameter"
@@ -983,7 +983,7 @@ public sealed partial class SilGen {
                     return false;
                 case BoundBinaryOperator binary when (Mentions(binary.Left.Type) || Mentions(binary.Right.Type)) && (inClosure || !BinaryAllowed(binary)):
                     return false;
-                case BoundUnaryOperator unary when Mentions(unary.Operand.Type)
+                case BoundUnaryOperator { OperatorKind: not UnaryOperatorKind.Await } unary when Mentions(unary.Operand.Type)
                                                    && (inClosure || unary.Method is not { } method || OwnerOf(method) is not { TypeKind: TypeKind.Protocol }
                                                        || !RequirementAllowed(new BoundCall(unary.Syntax, null, method, [unary.Operand], unary.Type))):
                     return false;
@@ -1057,6 +1057,8 @@ public sealed partial class SilGen {
                 // A call of a function of them, in the generic convention.
                 BoundIndirectCall { Callee.Type: var calleeType } => IsGenericFunction(V(calleeType), _own),
                 BoundBinaryOperator { Method: not null } or BoundUnaryOperator { Method: not null } => true,
+                // An await of a call: the call, which the task may suspend in.
+                BoundUnaryOperator { OperatorKind: UnaryOperatorKind.Await, Operand: var awaited } => Produces(awaited),
                 BoundFieldAccess access => PropertyAllowed(access),
                 BoundConversion { ConversionKind: ConversionKind.Identity } conversion => conversion.Type.Equals(conversion.Operand.Type),
                 // A closure that throws nothing where one that may throw is taken.

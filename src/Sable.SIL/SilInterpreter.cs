@@ -919,7 +919,17 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         // Unspecialised code's values are copied and destroyed as the metadata it is given says.
         var outer = _opaqueTypes;
         var outerAssociated = _associatedTypes;
-        if (OpaqueParametersOf(function) is { Length: > 0 } opaque) {
+        if (function.HiddenFrame is { } hiddenFrame && arguments is [HeapObject frame, ..]) {
+            // An unspecialised async function's resume or drop function: given what its frame keeps.
+            _opaqueTypes = [];
+            for (var i = 0; i < hiddenFrame.Fields.Count; i++) {
+                if (hiddenFrame.Fields[i].Name.StartsWith("$metadata.", StringComparison.Ordinal) && frame.Fields[i] is MetadataModel model) {
+                    _opaqueTypes[hiddenFrame.Fields[i].Name["$metadata.".Length..]] = model;
+                }
+            }
+
+            _associatedTypes = function.AssociatedMetadata.Count > 0 ? (function, name => hiddenFrame.FieldIndex(name) is var at and >= 0 ? frame.Fields[at] : null) : null;
+        } else if (OpaqueParametersOf(function) is { Length: > 0 } opaque) {
             _opaqueTypes = [];
             foreach (var (index, name) in opaque) {
                 if (index < arguments.Count && arguments[index] is MetadataModel model) {
@@ -927,7 +937,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 }
             }
 
-            _associatedTypes = function.AssociatedMetadata.Count > 0 ? (function, arguments) : null;
+            _associatedTypes = function.AssociatedMetadata.Count > 0
+                ? (function, name => function.ParameterNames.IndexOf(name) is var at and >= 0 && at < arguments.Count ? arguments[at] : null)
+                : null;
         }
 
         try {
@@ -1024,7 +1036,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         // A struct with no fields is whole before anything is stored: an initialiser's self.
                         var loaded = load.Type is StructType { Fields.Count: 0 }
                             ? address.Peek() ?? Array.Empty<object?>()
-                            : load.Type is ArrayType or OpaqueType || address is Field { Instance.Type.IsCoroutineFrame: true } ? address.Peek() : address.Get();
+                            : load.Type is ArrayType or OpaqueType || address is Field { Instance.Type.IsCoroutineFrame: true } or FrameTail ? address.Peek() : address.Get();
                         switch (load.Kind) {
                             case LoadKind.Copy:
                                 Retain(load.Type, loaded);
@@ -1041,7 +1053,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     case StoreInst store: {
                         var address = (IReference)Get(store.Address)!;
                         var old = address.Peek();
-                        if (!store.Value.Type.IsTrivial && store.Kind == StoreKind.Init && old is not null && address is not Field { Instance.Type.IsCoroutineFrame: true }
+                        if (!store.Value.Type.IsTrivial && store.Kind == StoreKind.Init && old is not null && address is not (Field { Instance.Type.IsCoroutineFrame: true } or FrameTail)
                             // An opaque value of a trivial type, written where its caller left one: bits over bits, as natively.
                             && !(SilType.MentionsOpaque(store.Value.Type) && Concrete(store.Value.Type).IsTrivial)) {
                             throw new SilTrap("store [init] into storage that holds a value");

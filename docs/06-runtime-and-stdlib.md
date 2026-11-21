@@ -492,6 +492,20 @@ of a type parameter's type, or captures `self`, or is inside another,
 keeps its function specialised, as does a function that returns a closure
 over its type parameters.
 
+**Async functions.** An async function compiled once is split as any is
+(§6.7): its start function takes the metadata and tables with its
+parameters and keeps them in the frame, where its resume and drop functions
+find them by name each time they run. A parameter of a type parameter's type
+stays where its caller holds it — the caller's frame, which outlives the
+call — and the frame keeps its address. Its slots of such a type, and such
+values live across an await, are buffers after the frame's fixed part, on
+the task's slab with it: the start function sizes each from the metadata
+as it makes the frame, all zeros, and the field holds the buffer's address.
+A value borrowed from storage is borrowed again after an await rather than
+kept. A task dropped part-way destroys what its frames hold through their
+metadata, as a frame of known types does. The specialisation pass copies an
+async function as any other where its types are known.
+
 **Existential witnesses.** A slot of an existential's witness table whose
 witness is generic code compiled once — a method of a generic type boxed as
 `any P` (`Tag<Int>`), a protocol extension's default for the boxed type, an
@@ -506,8 +520,8 @@ on its witness alone, so every unit's copy of a table is the same.
 What unspecialised code cannot serve yet — an optional chain through a
 `T?`, a structural union of `T`, a method of a generic class
 a subclass may override or whose fields hold `T` by value, a field of a
-function type in a generic type, a property's setter, a class's initialiser or a struct's that holds `T` by value, `"\(x:?)"`, an async function or a
-generator — is still specialised for its type arguments in
+function type in a generic type, a property's setter, a class's initialiser or a struct's that holds `T` by value, `"\(x:?)"`, an async closure's
+parameter, or a generator — is still specialised for its type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
 says, for each generic function, which way it went and why. A specialised
 build (the default) makes neither the generic entries nor the describers.

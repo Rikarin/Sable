@@ -1589,8 +1589,8 @@ public sealed partial class LlvmEmitter {
         string AssociatedMetadata(SilAssociatedMetadata associated) {
             var baseMetadata = OpaqueMetadata(new OpaqueType(associated.Base));
             string table;
-            if (associated.Table is { } given && function.ParameterNames.IndexOf(given) is var at and >= 0) {
-                table = $"%p{at}";
+            if (associated.Table is { } given && Hidden(given) is { } passed) {
+                table = passed;
                 foreach (var step in associated.Path) {
                     table = EntryTableEntry(table, 10, step);
                 }
@@ -1603,6 +1603,34 @@ public sealed partial class LlvmEmitter {
             _opaqueMetadata[associated.Name] = made;
             return made;
         }
+
+        /// <summary>
+        ///     A hidden parameter by its name (<c>$metadata.T</c>, a table): the
+        ///     function's own, or, for an unspecialised async function's resume
+        ///     and drop functions, its frame's field of that name, read where
+        ///     the function starts.
+        /// </summary>
+        string? Hidden(string name) {
+            if (function.ParameterNames.IndexOf(name) is var at and >= 0 && at < function.Entry.Arguments.Count && function.HiddenFrame is null) {
+                return $"%p{at}";
+            }
+
+            if (function.HiddenFrame is not { } frame || frame.FieldIndex(name) is not (var field and >= 0)) {
+                return null;
+            }
+
+            if (!_hiddenFields.TryGetValue(name, out var loaded)) {
+                var address = Fresh();
+                loaded = Fresh();
+                _entryAllocas.Append($"  {address} = getelementptr inbounds {ObjectType(frame)}, ptr %p0, i32 0, i32 {ObjectSlot(frame, field)}\n")
+                    .Append($"  {loaded} = load ptr, ptr {address}\n");
+                _hiddenFields[name] = loaded;
+            }
+
+            return loaded;
+        }
+
+        readonly Dictionary<string, string> _hiddenFields = new(StringComparer.Ordinal);
 
         /// <summary>An entry of a witness table's array, read where the function starts.</summary>
         string EntryTableEntry(string table, int field, int index) {
@@ -1805,10 +1833,20 @@ public sealed partial class LlvmEmitter {
                 parameters.Add(argument.Type is AddressType ? $"ptr noalias %p{i}" : $"{Type(argument.Type)} %p{i}");
             }
 
-            // Unspecialised code's metadata (#297): what its opaque values are sized and copied by.
-            for (var i = 0; i < function.ParameterNames.Count && i < function.Entry.Arguments.Count; i++) {
-                if (function.ParameterNames[i].StartsWith("$metadata.", StringComparison.Ordinal)) {
-                    _opaqueMetadata[function.ParameterNames[i]["$metadata.".Length..]] = $"%p{i}";
+            // Unspecialised code's metadata (#297): what its opaque values are
+            // sized and copied by — in an async function's resume and drop
+            // functions, as its frame keeps them.
+            if (function.HiddenFrame is { } hiddenFrame) {
+                foreach (var (fieldName, _) in hiddenFrame.Fields) {
+                    if (fieldName.StartsWith("$metadata.", StringComparison.Ordinal)) {
+                        _opaqueMetadata[fieldName["$metadata.".Length..]] = Hidden(fieldName)!;
+                    }
+                }
+            } else {
+                for (var i = 0; i < function.ParameterNames.Count && i < function.Entry.Arguments.Count; i++) {
+                    if (function.ParameterNames[i].StartsWith("$metadata.", StringComparison.Ordinal)) {
+                        _opaqueMetadata[function.ParameterNames[i]["$metadata.".Length..]] = $"%p{i}";
+                    }
                 }
             }
 
@@ -2410,7 +2448,45 @@ public sealed partial class LlvmEmitter {
 
                     // An async function's frame: on its task's slab, never counted (AsyncLowering).
                     if (alloc.ClassType.IsCoroutineFrame) {
-                        Line($"{name} = call ptr @sable_frame_alloc(i64 {size})");
+                        if (alloc.ClassType.TailSlots.Count == 0) {
+                            Line($"{name} = call ptr @sable_frame_alloc(i64 {size})");
+                            return;
+                        }
+
+                        // An unspecialised one's (#297): its buffers sized by the
+                        // metadata it is given, after its fixed part, each aligned
+                        // as the slab aligns frames and empty.
+                        var frameClass = alloc.ClassType;
+                        var offsets = new List<string>();
+                        var total = Fresh();
+                        Line($"{total} = add i64 {size}, 15");
+                        var running = Fresh();
+                        Line($"{running} = and i64 {total}, -16");
+                        foreach (var slot in frameClass.TailSlots) {
+                            offsets.Add(running);
+                            var pointee = ((AddressType)frameClass.Fields[slot].Type).Pointee;
+                            var grown = Fresh();
+                            Line($"{grown} = add i64 {running}, {OpaqueSize(pointee)}");
+                            var padded = Fresh();
+                            Line($"{padded} = add i64 {grown}, 15");
+                            running = Fresh();
+                            Line($"{running} = and i64 {padded}, -16");
+                        }
+
+                        Line($"{name} = call ptr @sable_frame_alloc(i64 {running})");
+                        var tail = Fresh();
+                        Line($"{tail} = getelementptr inbounds i8, ptr {name}, i64 {offsets[0]}");
+                        var tailSize = Fresh();
+                        Line($"{tailSize} = sub i64 {running}, {offsets[0]}");
+                        Line($"call void @llvm.memset.p0.i64(ptr align 16 {tail}, i8 0, i64 {tailSize}, i1 false)");
+                        for (var i = 0; i < frameClass.TailSlots.Count; i++) {
+                            var buffer = Fresh();
+                            Line($"{buffer} = getelementptr inbounds i8, ptr {name}, i64 {offsets[i]}");
+                            var field = Fresh();
+                            Line($"{field} = getelementptr inbounds {ObjectType(frameClass)}, ptr {name}, i32 0, i32 {ObjectSlot(frameClass, frameClass.TailSlots[i])}");
+                            Line($"store ptr {buffer}, ptr {field}");
+                        }
+
                         return;
                     }
 

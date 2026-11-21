@@ -1506,4 +1506,186 @@ public sealed class UnspecialisedGenericTests {
 
         Assert.Contains(functions, static f => f.StartsWith("Sable.Core.Collection.first", StringComparison.Ordinal));
     }
+
+    /// <summary>
+    ///     An async program's prints, both ways, on one thread — the
+    ///     interleaving the interpreter's — and its own generic functions compiled once.
+    /// </summary>
+    static void AsyncPrints(string expected, string declarations, string body, params string[] compiledOnce) {
+        var program = $"module Test\n{declarations}\n@main\nfn main() async {{\n{body}\n}}\n";
+        string unspecialised;
+        using (SilGen.UseGenerics(GenericsMode.Unspecialised)) {
+            unspecialised = AssertAgree(program, environment: OneThread).Stdout;
+
+            // Optimised, the specialisation pass makes copies where the types
+            // are known: unoptimised, the native program runs the code compiled once.
+            if (CanBuild && NativeMode.Wanted) {
+                var debug = BuildAndRun(program, optimise: false, environment: OneThread);
+                Assert.Equal(0, debug.ExitCode);
+                Assert.Equal(unspecialised, debug.Stdout);
+            }
+        }
+
+        string specialised;
+        using (SilGen.UseGenerics(GenericsMode.Specialised)) {
+            specialised = AssertAgree(program, environment: OneThread).Stdout;
+        }
+
+        Assert.Equal(expected, specialised);
+        Assert.Equal(specialised, unspecialised);
+        using var _ = SilGen.UseGenerics(GenericsMode.Unspecialised);
+        var result = Pipeline.Compile(new SourceText(program, "test.sb"));
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        foreach (var name in compiledOnce) {
+            Assert.Contains($"Test.{name}$generic", result.Sil!.Functions.Select(static f => f.Name));
+        }
+    }
+
+    const string Waiting = """
+        protocol Named {
+            var name: String { get }
+        }
+
+        struct Tag: Named {
+            var label: String
+            var name: String => "tag \(label)"
+        }
+
+        final class Noisy: Named {
+            let id: Int
+            init(_ id: Int) { self.id = id }
+            deinit { print("noisy \(id) gone") }
+            var name: String => "noisy \(id)"
+        }
+
+        struct Failure: Error {
+            let code: Int
+        }
+
+        fn later<T>(_ value: T) async -> T {
+            await Task.yield()
+            return value
+        }
+
+        fn swapped<A, B>(_ a: A, _ b: B) async -> (B, A) {
+            var first = a
+            let second = await later(b)
+            await Task.yield()
+            first = await later(first)
+            return (second, first)
+        }
+
+        fn names<T: Named>(_ items: T[]) async -> String {
+            var text = ""
+            for item in items {
+                let held = await later(item)
+                await Task.yield()
+                text = text + held.name + ";"
+            }
+            return text
+        }
+
+        fn checked<T>(_ value: T, fail: Bool) async throws(Failure) -> T {
+            let kept = value
+            await Task.yield()
+            if fail {
+                throw Failure { code: 7 }
+            }
+            return kept
+        }
+
+        fn sleepy<T: Named>(_ value: T) async -> String {
+            let kept = value
+            try? await Task.sleep(nanoseconds: 1_000_000_000_000)
+            return kept.name
+        }
+        """;
+
+    /// <summary>
+    ///     An async function generic over its types is compiled once: its
+    ///     frame keeps the metadata and tables it was given, for each time
+    ///     it is resumed, and its values of a type parameter's type in
+    ///     buffers sized by them after the frame's fixed part — its locals,
+    ///     what it holds across an await, what it throws.
+    /// </summary>
+    [Fact]
+    public void AsyncFunctionsAreCompiledOnceWithTheirValuesInTheFrame() =>
+        AsyncPrints(
+            "3\ntext\none 1\n[2, 3] noisy 1\ntag a;tag b;\nnoisy 2 gone\nnoisy 3 gone\nnoisy 2;noisy 3;\nfine\nnoisy 6 gone\nfailed 7\nnoisy 8 gone\nnoisy 8\nnoisy 1 gone\n",
+            Waiting,
+            """
+                print(await later(3))
+                print(await later("text"))
+                let pair = await swapped(1, "one")
+                print("\(pair.0) \(pair.1)")
+                let pair2 = await swapped(Noisy(1), [2, 3])
+                print("\(pair2.0) \(pair2.1.name)")
+                print(await names([Tag { label: "a" }, Tag { label: "b" }]))
+                print(await names([Noisy(2), Noisy(3)]))
+                do {
+                    print(try await checked("fine", fail: false))
+                    print(try await checked(Noisy(6), fail: true).name)
+                } catch {
+                    print("failed \(error.code)")
+                }
+                let task = Task.spawn { await sleepy(Noisy(8)) }
+                await Task.yield()
+                task.cancel()
+                print(await task.value)
+            """,
+            "later", "swapped", "names", "checked", "sleepy");
+
+    /// <summary>
+    ///     Tasks that can never go on are dropped as the program ends: what
+    ///     the frames of async functions compiled once held — values of a type
+    ///     parameter's type in their buffers, a chain of calls deep — is
+    ///     destroyed through its metadata, so nothing leaks.
+    /// </summary>
+    [Fact]
+    public void AFrameCompiledOnceDroppedPartWayDestroysWhatItHolds() =>
+        AsyncPrints(
+            "main ends\nlevel 0 gone\nlevel 1 gone\nlevel 2 gone\n",
+            """
+            class Box {
+                var task: Task<Int>? = none
+            }
+
+            final class Noisy {
+                let name: String
+                init(_ name: String) { self.name = name }
+                deinit { print("\(name) gone") }
+            }
+
+            fn deep<T>(_ level: Int, _ value: T, _ blocker: Task<Int>) async -> Int {
+                let mine = value
+                var spare: T? = none
+                if level == 0 {
+                    return await blocker.value
+                }
+                spare = mine
+                let below = await deep(level - 1, Noisy("level \(level - 1)"), blocker)
+                if let _ = spare {
+                    return below + 1
+                }
+                return below
+            }
+            """,
+            """
+                let box = Box()
+                let a = Task.detached {
+                    var other: Task<Int>? = none
+                    unsafe {
+                        other = box.task
+                        box.task = none
+                    }
+                    return await deep(2, Noisy("level 2"), other!)
+                }
+                let b = Task.detached {
+                    let n = await a.value
+                    return n
+                }
+                box.task = b
+                print("main ends")
+            """,
+            "deep");
 }

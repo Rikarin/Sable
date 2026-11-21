@@ -137,6 +137,15 @@ public sealed partial class SilInterpreter {
                 return concrete;
             }
 
+            // A class laid out for its arguments, none of whose code runs as it dies: it has no deinit, no superclass, no vtable.
+            case ClassType { IsGenericInstance: true } classType: {
+                var concrete = new ClassType(name) { DisplayName = display, TypeArguments = [..arguments] };
+                _concreteGenerics[name] = concrete;
+                concrete.Fields.AddRange(classType.Fields.Select(f => (f.Name, Concrete(f.Type))));
+                concrete.Conformances.AddRange(classType.Conformances);
+                return concrete;
+            }
+
             default:
                 return generic;
         }
@@ -386,10 +395,11 @@ public sealed partial class SilInterpreter {
             case "opaque_address":
                 result = new Held(operands[0]);
                 return true;
-            // Written out by its type's describer.
-            case "generic_describe": {
+            // Written out by its type's describer, or its debug describer for '"\(x:?)"'.
+            case "generic_describe" or "generic_debug_describe": {
                 var type = (MetadataModel)operands[1]!;
-                if (!module.Describers.TryGetValue(type.Type.ToString(), out var describer) || module.Find(describer.Function) is not { } describe) {
+                var describers = builtin.Name == "generic_describe" ? module.Describers : module.DebugDescribers;
+                if (!describers.TryGetValue(type.Type.ToString(), out var describer) || module.Find(describer.Function) is not { } describe) {
                     throw new SilTrap($"a '{type.Described.Name}' with no description");
                 }
 

@@ -342,6 +342,18 @@ public sealed partial class SilGen {
     ///     recursion — yes.
     /// </summary>
     internal bool DescribesValues(FunctionSymbol callee) => _describes.GetValueOrDefault(callee, true);
+
+    /// <summary>
+    ///     For each unspecialised function, whether it, or unspecialised code
+    ///     it calls, writes a value of a type it is given out with <c>?</c>
+    ///     (<c>generic_debug_describe</c>), and so needs that type's debug
+    ///     describer — which writes a value as <c>Debug</c> or
+    ///     <c>Formattable</c> say, and so reaches code a describer does not.
+    ///     A library's interface records it (<see cref="SilUnitInfo.DebugDescribing" />).
+    /// </summary>
+    readonly Dictionary<FunctionSymbol, bool> _debugDescribes = new(ReferenceEqualityComparer.Instance);
+
+    internal bool DebugDescribesValues(FunctionSymbol callee) => _debugDescribes.GetValueOrDefault(callee, false);
     readonly List<FunctionSymbol> _shapeOrder = [];
     readonly HashSet<FunctionSymbol> _shaping = new(ReferenceEqualityComparer.Instance);
 
@@ -370,6 +382,7 @@ public sealed partial class SilGen {
             var compiled = library.Functions.TryGetValue(_names[symbol], out var describes) ? SignatureShape(symbol, out _) : null;
             if (compiled is not null) {
                 _describes[symbol] = describes;
+                _debugDescribes[symbol] = library.DebugDescribing?.Contains(_names[symbol]) == true;
             }
 
             _shapes[symbol] = compiled;
@@ -571,7 +584,21 @@ public sealed partial class SilGen {
         && !definition.TypeParameters.Any(static p => p.IsValue || p.AllowsNoncopyable)
         && definition.BaseTypes.OfType<NamedTypeSymbol>().All(static b => b.TypeKind != TypeKind.Class)
         && StoredFields(definition).All(f => f.ReferenceKind == default && !MentionsDefinition(f.Type, definition)
-                                             && (!Mentions(f.Type, definition.TypeParameters) || ByReference(f.Type, definition.TypeParameters)));
+                                             && (!Mentions(f.Type, definition.TypeParameters) || ByReference(f.Type, definition.TypeParameters)
+                                                 // One held by value: the object laid out at run time, from its arguments' metadata, which has no deinit to run.
+                                                 || !HasDeinit(definition) && IsHeld(f.Type, definition.TypeParameters) && f.Type is not MetatypeTypeSymbol));
+
+    static bool HasDeinit(NamedTypeSymbol definition) => definition.Members.OfType<FunctionSymbol>().Any(static f => f.FunctionKind == FunctionKind.Deinitializer);
+
+    /// <summary>
+    ///     A generic class's own initialiser, compiled once: its object made
+    ///     from its class's metadata for the arguments, made at run time
+    ///     (<c>sable_class_type</c>), as a class that has no deinit needs
+    ///     nothing else of them.
+    /// </summary>
+    static bool IsClassInitializer(FunctionSymbol symbol) =>
+        symbol is { FunctionKind: FunctionKind.Initializer, IsSynthesized: false } && Owner(symbol)?.OriginalDefinition is { TypeKind: TypeKind.Class } owner
+        && IsPlainGenericClass(owner) && !HasDeinit(owner);
 
     /// <summary>A type that mentions type parameters only behind a reference: an array or a slice of held values, or a plain generic class of them.</summary>
     static bool ByReference(TypeSymbol type, IReadOnlyCollection<TypeParameterSymbol> parameters) =>
@@ -694,7 +721,7 @@ public sealed partial class SilGen {
 
         refused = _localGenerics.ContainsKey(symbol) ? "a local generic function"
             : symbol.IsPolymorphic ? "polymorphic recursion"
-            : symbol.FunctionKind != FunctionKind.Ordinary && !IsGetter(symbol) && !IsSubscriptAccessor(symbol) && !IsValueInitializer(symbol) ? $"{(symbol.FunctionKind.ToString()[0] is 'A' or 'E' or 'I' or 'O' or 'U' ? "an" : "a")} {symbol.FunctionKind.ToString().ToLowerInvariant()}"
+            : symbol.FunctionKind != FunctionKind.Ordinary && !IsGetter(symbol) && !IsSubscriptAccessor(symbol) && !IsValueInitializer(symbol) && !IsClassInitializer(symbol) ? $"{(symbol.FunctionKind.ToString()[0] is 'A' or 'E' or 'I' or 'O' or 'U' ? "an" : "a")} {symbol.FunctionKind.ToString().ToLowerInvariant()}"
             : symbol.ForeignName is not null ? "foreign"
             : symbol.OpaqueTypeParameters.Any(static p => !p.OpaqueParameter!.Arguments.IsEmpty) ? "a 'some P<…>' parameter"
             : _compilation.GetGenerator(symbol) is not null ? "a generator"
@@ -708,7 +735,13 @@ public sealed partial class SilGen {
         var requirements = new List<(TypeParameterSymbol, NamedTypeSymbol)>();
         var own = new List<TypeParameterSymbol>();
         var owner = Owner(symbol)?.OriginalDefinition;
-        if (owner is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } self }) {
+        var independent = owner is not null && IsIndependentStatic(symbol, owner);
+        if (independent) {
+            // A static member of a generic type that names none of its type
+            // parameters — 'Task.sleep', 'Task.isCancelled' — is generic over
+            // its own alone, whatever its type's are (its body is checked to
+            // name none either).
+        } else if (owner is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } self }) {
             if (!IsTabledProtocol(owner)) {
                 refused = "a member of a generic protocol";
                 return null;
@@ -749,7 +782,7 @@ public sealed partial class SilGen {
         // A 'some P' parameter is an anonymous type parameter, after the named ones.
         own.AddRange(symbol.TypeParameters);
         own.AddRange(symbol.OpaqueTypeParameters);
-        if (!all.SequenceEqual(own)) {
+        if (!(independent ? all.Skip(owner!.TypeParameters.Length) : all).SequenceEqual(own)) {
             refused = "type parameters from around it";
             return null;
         }
@@ -825,6 +858,25 @@ public sealed partial class SilGen {
 
         return new([..own], [..requirements]);
     }
+
+    /// <summary>
+    ///     A static member of a generic class, struct or union — a method or
+    ///     a property's accessor — whose signature names none of its type's
+    ///     type parameters: compiled once without their metadata, which
+    ///     nothing it does needs (<see cref="BodyAllows" /> checks its body).
+    /// </summary>
+    static bool IsIndependentStatic(FunctionSymbol symbol, NamedTypeSymbol owner) =>
+        owner is { TypeKind: TypeKind.Class or TypeKind.Struct or TypeKind.Union, TypeParameters.IsEmpty: false, ExtendedArray: null, ExtendedOptional: null }
+        && (symbol is { IsStatic: true, FunctionKind: FunctionKind.Ordinary } || symbol is { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FieldSymbol { IsStatic: true } })
+        && !symbol.Parameters.Any(p => Mentions(p.Type, owner.TypeParameters)) && !Mentions(symbol.ReturnType, owner.TypeParameters)
+        && (symbol.ThrownType is not { } thrown || !Mentions(thrown, owner.TypeParameters));
+
+    /// <summary>Whether a body names any of its type's type parameters but as the type a static member is called on (<c>Task.yield()</c>).</summary>
+    static bool NamesOwnerParameters(BoundNode node, NamedTypeSymbol owner) =>
+        node is not BoundTypeExpression
+        && (node is BoundExpression { Type: var type } && Mentions(type, owner.TypeParameters)
+            || node is BoundLocalDeclaration { Local.Type: var local } && Mentions(local, owner.TypeParameters)
+            || node.Children.Any(child => NamesOwnerParameters(child, owner)));
 
     /// <summary>A function as SABLE_GENERICS_TRACE names it: an accessor by its type and property, <c>Sable.Core.FloatingPoint.isNaN.get</c>.</summary>
     string TraceName(FunctionSymbol symbol) =>
@@ -903,13 +955,23 @@ public sealed partial class SilGen {
             return false;
         }
 
+        // One that names its type's type parameters is given their metadata after all: it stays specialised.
+        if (Owner(symbol)?.OriginalDefinition is { } independentOwner && IsIndependentStatic(symbol, independentOwner) && NamesOwnerParameters(body, independentOwner)) {
+            if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
+                Console.Error.WriteLine($"specialised {TraceName(symbol)}: a static member naming its type's type parameters");
+            }
+
+            return false;
+        }
+
         var checker = new ShapeChecker(this, shape, symbol);
-        var initialValues = IsValueInitializer(symbol) && Owner(symbol) is { } built
+        var initialValues = (IsValueInitializer(symbol) || IsClassInitializer(symbol)) && Owner(symbol) is { } built
             ? built.OriginalDefinition.Members.OfType<FieldSymbol>().Where(static f => f is { IsStatic: false, IsComputed: false, HasInitializer: true })
                 .Select(FieldInitializer).OfType<BoundExpression>().ToList()
             : [];
         if (initialValues.TrueForAll(v => checker.Allows(v, false)) && checker.Allows(body, false)) {
             _describes[symbol] = checker.Describes;
+            _debugDescribes[symbol] = checker.DebugDescribes;
             if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
                 Console.Error.WriteLine($"unspecialised {TraceName(symbol)}");
             }
@@ -980,6 +1042,9 @@ public sealed partial class SilGen {
 
         /// <summary>Whether the body, or unspecialised code it calls, writes a value of a type parameter's type out: its callers make describers.</summary>
         public bool Describes { get; private set; }
+
+        /// <summary>Whether it writes one out with <c>?</c>: its callers make debug describers too.</summary>
+        public bool DebugDescribes { get; private set; }
 
         public bool Allows(BoundNode node, bool inClosure) {
             var allowed = AllowsHere(node, inClosure);
@@ -1220,7 +1285,8 @@ public sealed partial class SilGen {
                 BoundThrow => _handlers == 0 && _closureDepth == 0 && checkedSymbol.ThrownType is { } own && Canonical(own).Equals(Canonical(child.Type)),
                 // Not inside a protocol's own 'debugDescription' (Error's
                 // '"\(self)"'): a describer would call it back.
-                BoundInterpolatedString interpolated => interpolated.Parts.IndexOf(child) is var at and >= 0 && interpolated.Formats[at] is null && !DescribesSelf && (Describes = true),
+                BoundInterpolatedString interpolated => interpolated.Parts.IndexOf(child) is var at and >= 0
+                                                        && (interpolated.Formats[at] is null || interpolated.Formats[at]!.Specifier == DebugFormat && (DebugDescribes = true)) && !DescribesSelf && (Describes = true),
                 _ => false,
             };
 
@@ -1305,6 +1371,7 @@ public sealed partial class SilGen {
             }
 
             Describes |= generator.DescribesValues(callee);
+            DebugDescribes |= generator.DebugDescribesValues(callee);
 
             // A protocol extension's member: on a value of a type parameter of
             // this function, or on self, its Self that type parameter.
@@ -1529,7 +1596,7 @@ public sealed partial class SilGen {
 
         // An initialiser borrows what it is given, as any function compiled
         // once does: its callers pass values of a type parameter where they are.
-        var owned = signature.Owned.IsEmpty || IsValueInitializer(symbol) ? default : signature.Owned.Concat(hidden.Select(static _ => false)).ToImmutableArray();
+        var owned = signature.Owned.IsEmpty || IsValueInitializer(symbol) || IsClassInitializer(symbol) ? default : signature.Owned.Concat(hidden.Select(static _ => false)).ToImmutableArray();
         var type = new FunctionType([..signature.Parameters, ..hidden], result, thrown, owned, signature.IsAsync);
         _instances[name] = type;
         _instanceOrigins[name] = (symbol, OpaqueParametersAsThemselves(symbol), _loweringInstance);
@@ -1824,7 +1891,7 @@ public sealed partial class SilGen {
     ///     which finds the refined ones in the registry. False when the type
     ///     does not declare each conformance itself, or it cannot be lowered.
     /// </summary>
-    internal bool GenericTable(TypeSymbol concrete, NamedTypeSymbol protocol, SyntaxNode at, bool describe = true) {
+    internal bool GenericTable(TypeSymbol concrete, NamedTypeSymbol protocol, SyntaxNode at, bool describe = true, bool debugDescribe = false) {
         if (Lower(concrete) is not { } value || concrete is not (NamedTypeSymbol or ArrayTypeSymbol)) {
             return false;
         }
@@ -1874,11 +1941,12 @@ public sealed partial class SilGen {
         // code that may write one out.
         var tabled = _associatedTabled.Add((concrete, protocol.OriginalDefinition));
         var described = describe && _associatedDescribed.Add((concrete, protocol.OriginalDefinition));
-        if (CompilesOnce && (tabled || described)) {
+        var debugDescribed = debugDescribe && _associatedDebugDescribed.Add((concrete, protocol.OriginalDefinition));
+        if (CompilesOnce && (tabled || described || debugDescribed)) {
             foreach (var each in closure) {
                 foreach (var associated in each.AssociatedTypes) {
-                    if (described && AssociatedBinding(concrete, associated) is { } read && Lower(read) is { } lowered && !SilType.MentionsOpaque(lowered)) {
-                        Describer(read, lowered, at);
+                    if ((described || debugDescribed) && AssociatedBinding(concrete, associated) is { } read && Lower(read) is { } lowered && !SilType.MentionsOpaque(lowered)) {
+                        Describer(read, lowered, at, debugDescribed);
                     }
 
                     if (AssociatedBinding(concrete, associated) is not { } bound || bound is not (NamedTypeSymbol or ArrayTypeSymbol)) {
@@ -1901,6 +1969,8 @@ public sealed partial class SilGen {
 
     /// <summary>The conformances whose associated types have describers made, for code that may write their values out.</summary>
     readonly HashSet<(TypeSymbol, NamedTypeSymbol)> _associatedDescribed = [];
+
+    readonly HashSet<(TypeSymbol, NamedTypeSymbol)> _associatedDebugDescribed = [];
 
     /// <summary>What a conformer binds an associated type to, read with the conformer's own type arguments; null when it does not, or binds it to Never.</summary>
     TypeSymbol? AssociatedBinding(TypeSymbol concrete, TypeParameterSymbol associated) {
@@ -2145,7 +2215,7 @@ public sealed partial class SilGen {
     ///     getter, the expression it returns, and whether it takes its
     ///     symbol's parameters at all.
     /// </summary>
-    internal sealed record Bridge(bool OpaqueSelfValue, ImmutableHashSet<ParameterSymbol> OpaqueParameters, bool OpaqueResult, SyntaxNode? Describes = null) {
+    internal sealed record Bridge(bool OpaqueSelfValue, ImmutableHashSet<ParameterSymbol> OpaqueParameters, bool OpaqueResult, SyntaxNode? Describes = null, bool Debug = false) {
         public BoundExpression? Returns { get; init; }
         public bool TakesNoParameters { get; init; }
 
@@ -2324,22 +2394,39 @@ public sealed partial class SilGen {
     ///     metadata. Made the first time code that knows the type hands its
     ///     metadata to unspecialised code.
     /// </summary>
-    internal void Describer(TypeSymbol type, SilType value, SyntaxNode at) {
-        if (!_described.Add(value)) {
-            return;
-        }
-
-
+    internal void Describer(TypeSymbol type, SilType value, SyntaxNode at, bool debug = false) {
         if (PrintSymbol() is not { } print || print.DeclaringSyntax.FirstOrDefault() is not { } syntax || SourceOf(syntax) is not { } source) {
             return;
         }
 
+        var substitution = new TypeSubstitution(new Dictionary<TypeParameterSymbol, TypeSymbol> { [print.TypeParameters[0]] = type });
+        var type0 = new FunctionType([new OpaqueType(print.TypeParameters[0].Name), SilType.Metadata], SilType.String);
+
+        // And, for code that writes one out with '?', what writes it as '"\(x:?)"' would.
+        if (debug && _debugDescribed.Add(value)) {
+            var debugName = $"$debugdescribe${Sanitise(value.ToString())}";
+            var made = new SilFunction(debugName, type0) { SourceFile = source.FileName, Line = source.GetLinePosition(syntax.Span.Start).Line };
+            var debugLowering = new FunctionLowering(this, print, made, source, substitution) { Bridged = new Bridge(false, [print.Parameters[0]], false, at, Debug: true) };
+            using (_diagnostics.Suppress()) {
+                debugLowering.Lower(new BoundBlock(syntax, [], []));
+            }
+
+            if (!debugLowering.Failed) {
+                made.RemoveUnreachableBlocks();
+                _module.Add(made);
+                _module.DebugDescribers[value.ToString()] = (value, debugName);
+            }
+        }
+
+        if (!_described.Add(value)) {
+            return;
+        }
+
         var name = $"$describe${Sanitise(value.ToString())}";
-        var function = new SilFunction(name, new FunctionType([new OpaqueType(print.TypeParameters[0].Name), SilType.Metadata], SilType.String)) {
+        var function = new SilFunction(name, type0) {
             SourceFile = source.FileName,
             Line = source.GetLinePosition(syntax.Span.Start).Line,
         };
-        var substitution = new TypeSubstitution(new Dictionary<TypeParameterSymbol, TypeSymbol> { [print.TypeParameters[0]] = type });
         var lowering = new FunctionLowering(this, print, function, source, substitution) { Bridged = new Bridge(false, [print.Parameters[0]], false, at) };
         using (_diagnostics.Suppress()) {
             lowering.Lower(new BoundBlock(syntax, [], []));
@@ -2353,6 +2440,12 @@ public sealed partial class SilGen {
         _module.Add(function);
         _module.Describers[value.ToString()] = (value, name);
     }
+
+    /// <summary>The types whose debug describer has been asked for.</summary>
+    readonly HashSet<SilType> _debugDescribed = [];
+
+    /// <summary>What <c>?</c> in a hole says, and nothing else: <c>"\(x:?)"</c>.</summary>
+    internal static readonly FormatSpecifier DebugFormat = FormatSpecifier.Default with { Kind = "Debug", KindLetter = '?' };
 
     sealed partial class FunctionLowering {
         /// <summary>
@@ -2592,7 +2685,12 @@ public sealed partial class SilGen {
                 return false;
             }
 
-            if (Hole(new BoundParameterAccess(at, symbol.Parameters[0]), null) is { } text) {
+            // A debug describer writes it as '"\(x:?)"' would.
+            var value = new BoundParameterAccess(at, symbol.Parameters[0]);
+            var text = Bridged.Debug
+                ? DebugSpec(at) is { } spec ? FormattedHole(value, new BoundFormatSpec(at, spec, DebugFormat)) : null
+                : Hole(value, null);
+            if (text is not null) {
                 Return(text);
             }
 
@@ -2894,7 +2992,7 @@ public sealed partial class SilGen {
                 }
 
                 foreach (var protocol in found.ProtocolsOf(parameter)) {
-                    if (!generator.GenericTable(given, protocol, at, generator.DescribesValues(callee))) {
+                    if (!generator.GenericTable(given, protocol, at, generator.DescribesValues(callee), generator.DebugDescribesValues(callee))) {
                         return false;
                     }
                 }
@@ -2911,7 +3009,7 @@ public sealed partial class SilGen {
                 }
 
                 foreach (var protocol in CompositionTypeSymbol.PartsOf(constraint).OfType<NamedTypeSymbol>()) {
-                    if (!generator.GenericTable(named, protocol.OriginalDefinition, at, generator.DescribesValues(callee))) {
+                    if (!generator.GenericTable(named, protocol.OriginalDefinition, at, generator.DescribesValues(callee), generator.DebugDescribesValues(callee))) {
                         return false;
                     }
                 }
@@ -3299,7 +3397,7 @@ public sealed partial class SilGen {
                 }
 
                 if (!IsOpaqueHere(given) && LowerType(given) is { } lowered && !SilType.MentionsOpaque(lowered) && (callee is null || generator.DescribesValues(callee))) {
-                    generator.Describer(given, lowered, at);
+                    generator.Describer(given, lowered, at, callee is null || generator.DebugDescribesValues(callee));
                 }
 
                 hidden.Add(metadata);

@@ -298,6 +298,58 @@ public sealed class OpenedTypeTests {
             """
         );
 
+    /// <summary>
+    ///     A factory that makes a generic class for the type it opens: the
+    ///     class's initialiser is compiled once, its object made from the
+    ///     class's metadata for that type, made at run time.
+    /// </summary>
+    [Fact]
+    public void AnOpenedCallMakesAGenericClassForTheType() =>
+        Prints(
+            """
+            Test.SqlRepository<Test.Config> 2
+            Test.SqlRepository<Test.User> 2
+            Test.SqlRepository<Int> 2
+
+            """,
+            """
+            struct Config {
+                var url: String
+            }
+
+            final class User {
+                var name: String = "ann"
+            }
+
+            class SqlRepository<Entity> {
+                var rows: Int
+                var last: Entity?
+
+                init() {
+                    rows = 0
+                    last = none
+                }
+
+                fn insert() {
+                    rows += 1
+                }
+            }
+
+            fn describe<T>(_ entity: T.Type) -> String {
+                let repository = SqlRepository<T>()
+                repository.insert()
+                repository.insert()
+                return "\(SqlRepository<T>.self) \(repository.rows)"
+            }
+            """,
+            """
+            let types: Type[] = [Config.self, User.self, Int.self]
+            for t in types {
+                print(describe(t))
+            }
+            """
+        );
+
     [Fact]
     public void AnOpenedCallThatThrowsLetsItsResultsBufferGo() =>
         Prints(

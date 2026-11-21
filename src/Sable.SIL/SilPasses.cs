@@ -164,6 +164,7 @@ public static class SilPassManager {
 
         var made = new HashSet<ClassType>();
         var describing = new HashSet<bool>();
+        var debugDescribing = new HashSet<bool>();
         var erasing = new HashSet<bool>();
         var boxing = new HashSet<bool>();
         while (pending.Count > 0) {
@@ -206,6 +207,13 @@ public static class SilPassManager {
                     // A boxed value written out: whatever type it is, its describer.
                     case BuiltinInst { Name: "generic_describe" } when describing.Add(true):
                         foreach (var (_, (_, describer)) in module.Describers) {
+                            pending.Push(describer);
+                        }
+
+                        break;
+
+                    case BuiltinInst { Name: "generic_debug_describe" } when debugDescribing.Add(true):
+                        foreach (var (_, (_, describer)) in module.DebugDescribers) {
                             pending.Push(describer);
                         }
 

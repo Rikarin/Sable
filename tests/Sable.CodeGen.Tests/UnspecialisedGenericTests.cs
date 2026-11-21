@@ -1764,6 +1764,157 @@ public sealed class UnspecialisedGenericTests {
             """,
             "later", "swapped", "names", "checked", "sleepy");
 
+    const string Slots = """
+        import Sable.Collections
+
+        final class Noisy {
+            let name: String
+            init(_ name: String) { self.name = name }
+            deinit { print("\(name) gone") }
+        }
+
+        protocol Labeled {
+            var summary: String { get }
+        }
+
+        class Slot<A, B>: Labeled {
+            var first: A
+            var second: B?
+            var pair: (A, Int)
+            var tag: String = "slot"
+
+            init(_ first: A, _ count: Int) {
+                self.first = first
+                second = none
+                pair = (first, count)
+            }
+
+            fn put(_ b: B) {
+                second = b
+            }
+
+            fn take() -> B? {
+                let b = second
+                second = none
+                return b
+            }
+
+            var summary: String => "\(tag) \(pair.1)"
+        }
+
+        fn fill<A, B>(_ a: A, _ b: B) -> Slot<A, B> {
+            let slot = Slot<A, B>(a, 2)
+            slot.put(b)
+            return slot
+        }
+        """;
+
+    /// <summary>
+    ///     A generic class whose fields hold its type parameters' values by
+    ///     value is laid out at run time, from its arguments' metadata, and its
+    ///     initialisers are compiled once with its methods: the object they
+    ///     make is of the same class — the same metadata, which 'as?' and
+    ///     'is' compare — as one code that knows its types makes, and its
+    ///     fields are destroyed through their value witnesses.
+    /// </summary>
+    [Fact]
+    public void GenericClassesAreLaidOutAtRunTimeAndMadeByCodeCompiledOnce() {
+        Prints(
+            "a\nb\n-\nslot 2\n1.5\nc\nsame class 7\ntrue\nd\nq\nd gone\nc gone\na gone\n",
+            Slots,
+            """
+                let s = fill(Noisy("a"), "b")
+                print(s.first.name)
+                print(s.take() ?? "-")
+                print(s.take() ?? "-")
+                print(s.summary)
+                let t = fill(1.5, Noisy("c"))
+                print(t.pair.0)
+                if let n = t.take() {
+                    print(n.name)
+                }
+                let labeled: any Labeled = fill(7, 8)
+                if let back = labeled as? Slot<Int, Int> {
+                    print("same class \(back.first)")
+                }
+                let direct = Slot<Int, Int>(1, 1)
+                let other: any Labeled = direct
+                print(other is Slot<Int, Int>)
+                let stack = Stack<Noisy>()
+                stack.push(Noisy("d"))
+                print(stack.pop()?.name ?? "-")
+                let queue = Queue<String>()
+                queue.enqueue("q")
+                print(queue.dequeue() ?? "-")
+            """);
+        var functions = Unspecialised(Slots, """
+                let s = fill(1, "b")
+                print(s.take() ?? "-")
+                print(s.summary)
+                let stack = Stack<Int>()
+                stack.push(1)
+            """);
+        foreach (var name in new[] { "Test.Slot.init", "Test.Slot.put", "Test.Slot.take", "Test.fill", "Sable.Collections.Stack.init" }) {
+            Assert.Contains($"{name}$generic", functions);
+        }
+    }
+
+    const string Debugged = """
+        struct Point {
+            var x: Int
+            var y: Int
+        }
+
+        fn debugged<T>(_ value: T) -> String {
+            return "<\(value:?)> <\(value)>"
+        }
+
+        fn waits<T>(_ value: T) async -> T {
+            do {
+                try await Task.sleep(nanoseconds: 1000)
+            } catch {
+                print("cancelled")
+            }
+            if Task.isCancelled {
+                print("cancelled")
+            }
+            return value
+        }
+        """;
+
+    /// <summary>
+    ///     <c>"\(x:?)"</c> of a type parameter's value is written by its
+    ///     type's debug describer, made beside its describer where the type
+    ///     is known; and a static member of a generic type that names none of
+    ///     its type parameters — <c>Task.sleep</c>, <c>Task.isCancelled</c> —
+    ///     is compiled once, given none of its type's metadata.
+    /// </summary>
+    [Fact]
+    public void DebugHolesAndStaticMembersNamingNoTypeParameterAreCompiledOnce() {
+        AsyncPrints(
+            "3\nx\n<\"text\"> <text>\n<42> <42>\n<Point(x: 1, y: 2)> <Point(x: 1, y: 2)>\n<[1, 2]> <[1, 2]>\n<none> <none>\n\"r\"\n",
+            Debugged,
+            """
+                print(await waits(3))
+                print(await waits("x"))
+                print(debugged("text"))
+                print(debugged(42))
+                print(debugged(Point { x: 1, y: 2 }))
+                print(debugged([1, 2]))
+                let missing: Int? = none
+                print(debugged(missing))
+                print(String.reflecting("r"))
+            """,
+            "debugged", "waits");
+        using var _ = SilGen.UseGenerics(GenericsMode.Unspecialised);
+        var result = Pipeline.Compile(new SourceText($"module Test\n{Debugged}\n@main\nfn main() async {{\n print(await waits(1))\n print(String.reflecting(2))\n}}\n", "test.sb"));
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        var functions = result.Sil!.Functions.Select(static f => f.Name).ToList();
+        foreach (var name in new[] { "Sable.Core.Task.sleep", "Sable.Core.String.reflecting" }) {
+            Assert.Contains(functions, f => f.StartsWith(name, StringComparison.Ordinal) && f.EndsWith("$generic", StringComparison.Ordinal));
+        }
+    }
+
     /// <summary>
     ///     Tasks that can never go on are dropped as the program ends: what
     ///     the frames of async functions compiled once held — values of a type

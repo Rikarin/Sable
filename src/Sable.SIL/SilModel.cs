@@ -681,6 +681,18 @@ public sealed class ClassType(string name) : NominalType(name) {
     /// </summary>
     public List<int> TailSlots { get; } = [];
 
+    /// <summary>
+    ///     A generic class whose objects unspecialised code lays out at run
+    ///     time (#297): a field holds a type parameter's value by value, so
+    ///     where each field is depends on the metadata of its type arguments.
+    ///     Not a closure's context or a frame, whose field of a type parameter's
+    ///     type holds the address of a value held elsewhere.
+    /// </summary>
+    public bool IsLaidOutAtRunTime => IsGenericInstance && Fields.Exists(static f => IsIndirect(f.Type));
+
+    /// <summary>An instance of a generic class the program declares, <c>Test.Slot&lt;Int, String&gt;</c>: not a box, a context or a frame.</summary>
+    public bool IsGenericInstance => !TypeArguments.IsEmpty && DisplayName?.Contains('<', StringComparison.Ordinal) == true;
+
     /// <summary>The methods called through the vtable: each slot's name, and the function in it for this class.</summary>
     public List<(string Method, string Function)> VTable { get; } = [];
 
@@ -1630,6 +1642,14 @@ public sealed class SilModule {
     /// </summary>
     public bool DenyReflection { get; set; }
 
+    /// <summary>
+    ///     Lowered with generic code compiled once (<see cref="GenericsMode.Unspecialised" />):
+    ///     the program's generic classes it makes metadata for are registered
+    ///     as it starts, so that metadata made at run time for the same type
+    ///     arguments is the same record (#297).
+    /// </summary>
+    public bool UnspecialisedGenerics { get; set; }
+
     /// <summary>Set when the module is one unit of a program compiled separately (<see cref="SilUnit" />).</summary>
     public SilUnitInfo? Unit { get; set; }
 
@@ -1717,6 +1737,12 @@ public sealed class SilModule {
     ///     program starts.
     /// </summary>
     public Dictionary<string, (SilType Type, string Function)> Describers { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    ///     The same for <c>"\(x:?)"</c>: the function that writes such a value
+    ///     out as <c>Debug</c> describes it (<c>generic_debug_describe</c>).
+    /// </summary>
+    public Dictionary<string, (SilType Type, string Function)> DebugDescribers { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
     ///     For each error type unspecialised code may throw on as
@@ -2258,7 +2284,7 @@ public static class SilBuiltins {
                 return new([metadata], metadata);
             case "opaque_type" when operands is [OpaqueType value, var m] && m == metadata:
                 return new([value, metadata], metadata);
-            case "generic_describe" when operands is [OpaqueType described, var m] && m == metadata:
+            case "generic_describe" or "generic_debug_describe" when operands is [OpaqueType described, var m] && m == metadata:
                 return new([described, metadata], SilType.String);
             // An error of one, boxed as 'any Error' by its type's eraser: taken.
             case "opaque_erase_error" when operands is [OpaqueType erased] && result is ClassType:

@@ -115,6 +115,9 @@ public sealed partial class LlvmEmitter {
     string EmitModule(SilModule module) {
         AsyncLowering.Run(module);
         _module = module;
+
+        // A specialised build that opens a Type has code compiled once too, which may make a generic class's object.
+        module.UnspecialisedGenerics |= module.Functions.Exists(static f => f.IsUnspecialised);
         _inherited = null;
         TypeLayout.PointerBytes = _arch == "wasm32" ? 4 : 8;
         _checkExclusivity = module.CheckExclusivity;
@@ -145,6 +148,10 @@ public sealed partial class LlvmEmitter {
 
         if (ErrorEraserRegistration(module) is { } erasers) {
             constructors.Add(erasers);
+        }
+
+        if (GenericClassRegistration(module) is { } classes) {
+            constructors.Add(classes);
         }
 
         if (BoxerRegistration(module) is { } boxers) {
@@ -1098,6 +1105,13 @@ public sealed partial class LlvmEmitter {
             return name;
         }
 
+        // A generic class's, which metadata made at run time for the same
+        // type arguments must be (GenericClassRegistration).
+        if (_module?.UnspecialisedGenerics == true && type.IsGenericInstance
+            && type.Superclass is null && type.VTable.Count == 0) {
+            _genericClasses.Add(type);
+        }
+
         var destroy = $"@\"sable.deinit.{type.Name}\"";
         var objectType = ObjectType(type);
         var body = new StringBuilder($"define internal void {destroy}(ptr %o) {{\nentry:\n");
@@ -1566,7 +1580,8 @@ public sealed partial class LlvmEmitter {
                 TupleType tuple => tuple.Elements.Select(PartMetadata).ToList(),
                 EnumType enumType => [..enumType.Cases.Select(c => c.Payload is { } payload ? PartMetadata(payload) : "null"), ..enumType.TypeArguments.Select(PartMetadata)],
                 StructType structType => [..structType.Fields.Select(f => PartMetadata(f.Type)), ..structType.TypeArguments.Select(PartMetadata)],
-                _ => throw new NotSupportedException($"no metadata made at run time for {type}"),
+                ClassType classType => [..classType.Fields.Select(f => PartMetadata(f.Type)), ..classType.TypeArguments.Select(PartMetadata)],
+                _ => throw new NotSupportedException($"no metadata made at run time for {type} in {function.Name}"),
             };
             var list = Fresh();
             _entryAllocas.Append($"  {list} = alloca [{parts.Count} x ptr], align 8\n");
@@ -1578,9 +1593,11 @@ public sealed partial class LlvmEmitter {
 
             made = Fresh();
             var cache = module.RuntimeCache();
-            _entryAllocas.Append(type is TupleType
-                ? $"  {made} = call ptr @sable_tuple_type(ptr {cache}, i64 {parts.Count}, ptr {list})\n"
-                : $"  {made} = call ptr @sable_aggregate_type(ptr {cache}, ptr {module.AggregateShape((NominalType)type)}, ptr {list})\n");
+            _entryAllocas.Append(type switch {
+                TupleType => $"  {made} = call ptr @sable_tuple_type(ptr {cache}, i64 {parts.Count}, ptr {list})\n",
+                ClassType => $"  {made} = call ptr @sable_class_type(ptr {cache}, ptr {module.AggregateShape((NominalType)type)}, ptr {list})\n",
+                _ => $"  {made} = call ptr @sable_aggregate_type(ptr {cache}, ptr {module.AggregateShape((NominalType)type)}, ptr {list})\n",
+            });
             _runtimeMetadata[key] = made;
             return made;
         }
@@ -2496,6 +2513,22 @@ public sealed partial class LlvmEmitter {
                         return;
                     }
 
+                    // A generic class of types only metadata knows (#297): its
+                    // metadata made at run time, which says how large it is.
+                    if (alloc.ClassType.IsGenericInstance && SilType.MentionsOpaque(alloc.ClassType)) {
+                        var classMetadata = OpaqueMetadata(alloc.ClassType);
+                        var objectField = Fresh();
+                        Line($"{objectField} = getelementptr inbounds %SableTypeMetadata, ptr {classMetadata}, i32 0, i32 13");
+                        var objectMetadata = Fresh();
+                        Line($"{objectMetadata} = load ptr, ptr {objectField}");
+                        var sizeField = Fresh();
+                        Line($"{sizeField} = getelementptr inbounds %SableMetadata, ptr {objectMetadata}, i32 0, i32 5");
+                        var objectSize = Fresh();
+                        Line($"{objectSize} = load i64, ptr {sizeField}");
+                        Line($"{name} = call ptr @sable_alloc(ptr {objectMetadata}, i64 {objectSize})");
+                        return;
+                    }
+
                     if (alloc.OnStack) {
                         // In the frame: the header made there, freed with it.
                         // Aligned as the heap's blocks are, which the layout assumes.
@@ -2512,6 +2545,13 @@ public sealed partial class LlvmEmitter {
                     var name = Fresh();
                     _names[element] = name;
                     var classType = (ClassType)element.Reference.Type;
+
+                    // Where its metadata, made at run time, says (#297).
+                    if (classType.IsLaidOutAtRunTime) {
+                        Line($"{name} = call ptr @sable_field_address(ptr {Name(element.Reference)}, i64 {element.Field}, ptr {OpaqueMetadata(classType)})");
+                        return;
+                    }
+
                     Line($"{name} = getelementptr inbounds {ObjectType(classType)}, ptr {Name(element.Reference)}, i32 0, i32 {ObjectSlot(classType, element.Field)}");
                     return;
                 }
@@ -2913,6 +2953,20 @@ public sealed partial class LlvmEmitter {
             }
 
             Line($"switch i64 {tag}, label %{fallback} [ {string.Join(" ", arms)} ]");
+        }
+
+        /// <summary>
+        ///     Shares the objects a value holds, as it crosses to another task
+        ///     or into a shared object: one held indirectly (#297) through its
+        ///     metadata's visit witness.
+        /// </summary>
+        void Share(SilType type, string value) {
+            if (SilType.IsIndirect(type)) {
+                Line($"call void @sable_opaque_share(ptr {value}, ptr {OpaqueMetadata(type)})");
+                return;
+            }
+
+            module.Ownership(_out, "  ", Witnessing.Share, type, value, _dbg);
         }
 
         /// <summary>A struct or a tuple made in a buffer of its own, each field moved or stored where the metadata says.</summary>
@@ -3349,7 +3403,7 @@ public sealed partial class LlvmEmitter {
 
                 // A value crossing from one task to another: its objects shared.
                 case "share":
-                    module.Ownership(_out, "  ", Witnessing.Share, builtin.Operands[0].Type, operands[0], _dbg);
+                    Share(builtin.Operands[0].Type, operands[0]);
                     return;
 
                 // A value stored into an object: shared too, if the object
@@ -3367,7 +3421,7 @@ public sealed partial class LlvmEmitter {
                     var after = NewLabel("shared");
                     Line($"br i1 {shared}, label %{share}, label %{after}");
                     Continue(share);
-                    module.Ownership(_out, "  ", Witnessing.Share, builtin.Operands[1].Type, operands[1], _dbg);
+                    Share(builtin.Operands[1].Type, operands[1]);
                     Line($"br label %{after}");
                     Continue(after);
                     return;

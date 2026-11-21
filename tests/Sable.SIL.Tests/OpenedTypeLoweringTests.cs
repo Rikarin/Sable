@@ -104,14 +104,19 @@ public sealed class OpenedTypeLoweringTests {
             """
             protocol Zero {
                 static fn zero() -> Self
+                fn name() -> String
             }
 
             struct Meters: Zero {
                 var value: Int
                 static fn zero() -> Meters => Meters { value: 0 }
+                fn name() -> String => "\(value)m"
             }
 
-            fn debug<T: Zero>(_ type: T.Type) -> String => "\(T.zero():?)"
+            fn debug<T: Zero>(_ type: T.Type) -> String {
+                let made: T? = T.zero()
+                return made?.name() ?? "none"
+            }
 
             fn main() {
                 let t: Type = Meters.self

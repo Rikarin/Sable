@@ -247,6 +247,17 @@ static FILE *open_file(const char *name, const char *mode) {
     return fopen(name, mode);
 }
 
+// One process: nothing else appends at once.
+static bool append_file(const char *name, const char *bytes, size_t length) {
+    FILE *file = fopen(name, "ab");
+    if (file == NULL) {
+        return false;
+    }
+
+    size_t written = fwrite(bytes, 1, length, file);
+    return fclose(file) == 0 && written == length;
+}
+
 static bool file_exists(const char *name) {
     struct stat info;
     return stat(name, &info) == 0;

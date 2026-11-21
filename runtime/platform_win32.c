@@ -617,6 +617,22 @@ static FILE *open_file(const char *name, const char *mode) {
     return file;
 }
 
+static bool append_file(const char *name, const char *bytes, size_t length) {
+    wchar_t *wide = to_wide(name);
+    // With FILE_APPEND_DATA and no FILE_WRITE_DATA, every write goes at the
+    // end of the file as it is then, however many processes write at once.
+    HANDLE file = CreateFileW(wide, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    free(wide);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    DWORD written = 0;
+    BOOL ok = length <= MAXDWORD && WriteFile(file, bytes, (DWORD)length, &written, NULL);
+    CloseHandle(file);
+    return ok && written == length;
+}
+
 static DWORD attributes_of(const char *name) {
     wchar_t *wide = to_wide(name);
     DWORD attributes = GetFileAttributesW(wide);

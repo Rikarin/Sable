@@ -200,6 +200,12 @@ static void socket_close(PlatformSocket socket);
 static char **platform_arguments(int argc, char **argv, int *count);
 
 static FILE *open_file(const char *name, const char *mode);
+// Adds the bytes at the end of the file, making it if there is none, in one
+// write other processes appending to it at once cannot split or overwrite:
+// O_APPEND on POSIX, FILE_APPEND_DATA on Windows (whose C runtime's "a"
+// seeks to the end and then writes, so two processes can write over each
+// other). False if the file could not be opened or the write fell short.
+static bool append_file(const char *name, const char *bytes, size_t length);
 static bool file_exists(const char *name);
 static bool is_directory(const char *name);
 // A file, or an empty directory.

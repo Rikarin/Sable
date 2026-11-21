@@ -19,12 +19,12 @@ static void coverage_write(void) {
     }
 
     const char *path = getenv("SABLE_COVERAGE");
-    FILE *file = path != NULL && path[0] != '\0' ? fopen(path, "a") : NULL;
-    if (file == NULL) {
+    if (path == NULL || path[0] == '\0') {
         return;
     }
 
-    // One write, so that processes appending at once do not interleave lines.
+    // One append, so that processes appending at once neither interleave
+    // lines nor write over each other's (append_file).
     char *text = NULL;
     size_t length = 0, capacity = 0;
     for (int64_t id = 0; id < coverage_size; id++) {
@@ -49,11 +49,9 @@ static void coverage_write(void) {
     }
 
     if (text != NULL) {
-        fwrite(text, 1, length, file);
+        append_file(path, text, length);
         free(text);
     }
-
-    fclose(file);
 
     // Written once: a trap during exit must not write the counts again.
     free(coverage_counts);

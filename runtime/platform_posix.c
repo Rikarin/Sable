@@ -877,6 +877,17 @@ static FILE *open_file(const char *name, const char *mode) {
     return fopen(name, mode);
 }
 
+static bool append_file(const char *name, const char *bytes, size_t length) {
+    int fd = open(name, O_WRONLY | O_APPEND | O_CREAT, 0644);
+    if (fd < 0) {
+        return false;
+    }
+
+    ssize_t written = write(fd, bytes, length);
+    close(fd);
+    return written == (ssize_t)length;
+}
+
 static bool file_exists(const char *name) {
     struct stat info;
     return stat(name, &info) == 0;

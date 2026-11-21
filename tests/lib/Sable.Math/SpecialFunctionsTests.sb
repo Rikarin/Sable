@@ -14,7 +14,9 @@ import FloatAssertions
 fn gammaExtendsTheFactorial() {
     assertSame(gamma(1.0), 1.0)
     assertSame(gamma(5.0), 24.0)
-    assertSame(gamma(11.0), 3628800.0)
+    // gamma is C's tgamma: exact at 10! in glibc and Apple's libm, an ulp
+    // under it in Windows' C runtime.
+    assertWithin(gamma(11.0), 3628800.0, ulps: 1)
     assertWithin(gamma(0.5), 1.772453850905516, ulps: 2)
     assertWithin(gamma(4.5), 11.631728396567448, ulps: 2)
     assertWithin(gamma(-1.5), 2.363271801207355, ulps: 2)

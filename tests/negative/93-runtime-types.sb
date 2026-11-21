@@ -31,8 +31,8 @@ fn reachesNoStatic(_ t: Type) {
     let m = t.zero() //! S2002 a 'Type' is known only at run time, so it reaches no static member
 }
 
-fn opensNoType(_ t: Type) -> Meters {
-    return make(t) //! S3007 argument 1 is 'Type', and 'type' takes 'T.Type'
+fn opensAsAnExistential(_ t: Type) -> Meters {
+    return make(t) //! S3004 expected 'Meters' but found 'any Zero'
 }
 
 fn narrowsNoType(_ t: Type) {

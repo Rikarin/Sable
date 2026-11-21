@@ -147,6 +147,10 @@ public sealed partial class LlvmEmitter {
             constructors.Add(erasers);
         }
 
+        if (BoxerRegistration(module) is { } boxers) {
+            constructors.Add(boxers);
+        }
+
         if (module.IsLibrary) {
             functions.Append(LibraryLifetime(module));
             constructors.Add("@\"sable.library.start\"");

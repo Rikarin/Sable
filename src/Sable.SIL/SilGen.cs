@@ -2079,6 +2079,12 @@ public sealed partial class SilGen {
         if (symbol is NamedTypeSymbol { IsConstructed: true } generic
             && generic.TypeArguments.Select(Lower).ToList() is var arguments && arguments.TrueForAll(static a => a is not null)) {
             type.TypeArguments = [..arguments!];
+
+            // Its name has its arguments' as their metadata has them, qualified,
+            // as one made at run time from theirs does (sable_aggregate_type).
+            if (!arguments.Exists(static a => SilType.MentionsOpaque(a!))) {
+                type.DisplayName = $"{QualifiedName(generic)}<{string.Join(", ", arguments.Select(static a => TypeMetadata.DisplayName(a!)))}>";
+            }
         }
 
         // What it declares it conforms to: its metadata's conformance records.
@@ -5107,7 +5113,7 @@ public sealed partial class SilGen {
                 return;
             }
 
-            if (value is DeferredStep) {
+            if (value is DeferredStep or OnError) {
                 return;
             }
 
@@ -5208,6 +5214,9 @@ public sealed partial class SilGen {
 
                 case BoundConversion { ConversionKind: ConversionKind.Identity } conversion when !IsArrayView(conversion):
                     return Borrow(conversion.Operand);
+
+                case BoundConversion { ConversionKind: ConversionKind.Open, Type: MetatypeTypeSymbol { InstanceType: TypeParameterSymbol openedType } } when _genericMetadata.TryGetValue(openedType, out var openedMetadata):
+                    return openedMetadata;
 
                 case BoundConversion { ConversionKind: ConversionKind.Existential, Type: OpaqueTypeSymbol } opened:
                     return Borrow(opened.Operand);
@@ -6992,6 +7001,14 @@ public sealed partial class SilGen {
 
                 case BoundConversion { ConversionKind: ConversionKind.OptionalWrap } conversion:
                     return Wrap(conversion);
+
+                // A call's result of the type it opened a Type as, erased (SilGen.Opening.cs).
+                case BoundConversion { ConversionKind: ConversionKind.OpenedErasure, Operand: BoundCall erased } erasure:
+                    return OpenedCall(erased, erasure);
+
+                // The Type a call opens: its metadata, evaluated as the call began.
+                case BoundConversion { ConversionKind: ConversionKind.Open, Type: MetatypeTypeSymbol { InstanceType: TypeParameterSymbol openedType } } open:
+                    return _genericMetadata.TryGetValue(openedType, out var openedMetadata) ? openedMetadata : Missing(open, "a Type opened outside its call");
 
                 // A value passed as 'some P' is passed as it is: the callee is
                 // an instance for its type.
@@ -10220,6 +10237,11 @@ public sealed partial class SilGen {
         SilValue? Call(BoundCall call) {
             Locate(call.Syntax);
 
+            // A call that opens a Type: its metadata and tables found first (SilGen.Opening.cs).
+            if (!ReferenceEquals(_openingCall, call) && call.Arguments.Any(static a => a is BoundConversion { ConversionKind: ConversionKind.Open })) {
+                return OpenedCall(call, null);
+            }
+
             var callee = call.Function;
 
             // An inline array's members are the inline layout's, whatever declares them.
@@ -10681,10 +10703,19 @@ public sealed partial class SilGen {
             // and before them where a result of a type parameter's type goes.
             (SilValue Passed, AllocStackInst Slot)? genericOut = null;
             (SilValue Passed, AllocStackInst? Slot, bool CannotThrow)? genericError = null;
+            SilValue? openedBuffer = null;
             if (genericShape is not null) {
-                if (type.Result == SilType.Unit && arguments.Count < type.Parameters.Length && !callee.ReturnType.Equals(Core.Void)
-                    && (genericOut = GenericOut(type.Parameters[arguments.Count], Substitute(WithAssociatedTypes(callee, bound), callee.ReturnType))) is { } into) {
-                    arguments.Add(into.Passed);
+                if (type.Result == SilType.Unit && arguments.Count < type.Parameters.Length && !callee.ReturnType.Equals(Core.Void)) {
+                    var returned = Substitute(WithAssociatedTypes(callee, bound), callee.ReturnType);
+                    if (returned is TypeParameterSymbol { OpenedFrom: not null } openedResult && type.Parameters[arguments.Count] is AddressType && MetadataOf(openedResult) is { } resultMetadata) {
+                        // Of a type a Type was opened as: a buffer its metadata sizes, let go if the call throws.
+                        var buffer = Emit(new BuiltinInst("opaque_alloc", type.Parameters[arguments.Count], resultMetadata));
+                        openedBuffer = buffer;
+                        arguments.Add(buffer);
+                        borrows.Add(new OnError(() => Emit(new BuiltinInst("opaque_free", SilType.Unit, buffer))));
+                    } else if ((genericOut = GenericOut(type.Parameters[arguments.Count], returned)) is { } into) {
+                        arguments.Add(into.Passed);
+                    }
                 }
 
                 // An error of a type parameter's type or an associated type's: where it goes.
@@ -10739,6 +10770,10 @@ public sealed partial class SilGen {
                 return TakeOut(invoked, written.Slot);
             }
 
+            if (openedBuffer is not null) {
+                return invoked is null || _current is null ? invoked : openedBuffer;
+            }
+
             // A result of an array of them, or of a generic struct holding them by reference, seen as the type it is here.
             if (genericShape is not null && invoked is { Type: var resultType } arrayResult && SilType.MentionsOpaque(resultType) && !SilType.IsIndirect(resultType)
                 && LowerType(call.Type) is { } wanted && wanted != arrayResult.Type) {
@@ -10780,7 +10815,7 @@ public sealed partial class SilGen {
 
             // Already off the temporaries: a borrow of a place is ended, an
             // access closed, a temporary destroyed.
-            void Release(SilValue borrow) {
+            void Release(SilValue borrow, bool failed = false) {
                 switch (borrow) {
                     case AccessMarker marker:
                         Emit(new BuiltinInst("access_end", SilType.Unit, marker.Address));
@@ -10791,6 +10826,13 @@ public sealed partial class SilGen {
                         writeBack.Run();
                         break;
                     case DeferredStep:
+                        break;
+                    // Only on the error's path.
+                    case OnError step:
+                        if (failed) {
+                            step.Run();
+                        }
+
                         break;
                     case LoadBorrowInst borrowed:
                         Emit(new EndBorrowInst(borrowed));
@@ -10808,7 +10850,7 @@ public sealed partial class SilGen {
             }
 
             for (var i = borrows.Count - 1; i >= 0; i--) {
-                Release(borrows[i]);
+                Release(borrows[i], failed: true);
             }
 
             if (cannotThrow) {

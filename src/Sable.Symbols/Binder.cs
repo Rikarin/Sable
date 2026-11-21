@@ -5366,10 +5366,14 @@ public sealed partial class Binder {
             Substitution = substitution,
         };
 
+        // A call that opens a Type: its result erased.
+        var made = OpenedCall(call, resolved, substitution, syntax);
+        result = made.Type;
+
         // A call through '?.' that gives an optional already gives that one.
         return group.IsOptionalChain && result is not OptionalTypeSymbol
-            ? new BoundConversion(syntax, new OptionalTypeSymbol(result), call, ConversionKind.OptionalWrap)
-            : call;
+            ? new BoundConversion(syntax, new OptionalTypeSymbol(result), made, ConversionKind.OptionalWrap)
+            : made;
     }
 
     /// <summary>
@@ -5660,6 +5664,17 @@ public sealed partial class Binder {
             TypeSubstitution.Unify(wanted, AdaptForInference(wanted, arguments[i]), inferrable, map);
         }
 
+        // A 'Type' given for a 'T.Type' that nothing else settles opens it:
+        // T is the type the value holds at run time (SYNTAX.md "Opening a type").
+        for (var i = 0; i < arguments.Length && i < slots.Length; i++) {
+            if (slots[i] < function.Parameters.Length
+                && outer.Apply(function.Parameters[slots[i]].Type) is MetatypeTypeSymbol { InstanceType: TypeParameterSymbol opening }
+                && function.TypeParameters.Contains(opening) && !map.ContainsKey(opening)
+                && Decayed(function.Parameters[slots[i]].Type, arguments[i].Type).Equals(Core.Type)) {
+                map[opening] = OpenedType(arguments[i], opening);
+            }
+        }
+
         if (expectedType is not null && inferrable.Any(p => !map.ContainsKey(p))) {
             InferFromContext(outer.Apply(function.ReturnType), expectedType, inferrable, map);
         }
@@ -5691,6 +5706,145 @@ public sealed partial class Binder {
         }
 
         return new(map);
+    }
+
+    /// <summary>The types calls open their <c>Type</c> arguments as, one for each argument and type parameter.</summary>
+    readonly Dictionary<(BoundExpression, TypeParameterSymbol), TypeParameterSymbol> _openedTypes = [];
+
+    /// <summary>
+    ///     The type a <c>Type</c> argument is opened as for a callee's type
+    ///     parameter: one of its own, with the parameter's constraints,
+    ///     standing for whatever type the value holds when the call runs.
+    /// </summary>
+    TypeParameterSymbol OpenedType(BoundExpression argument, TypeParameterSymbol parameter) {
+        if (!_openedTypes.TryGetValue((argument, parameter), out var opened)) {
+            opened = new TypeParameterSymbol(parameter.Name, parameter.ContainingSymbol!, null, parameter.Ordinal) {
+                OpenedFrom = parameter,
+                Constraints = parameter.Constraints,
+                AllowsNoncopyable = parameter.AllowsNoncopyable,
+            };
+            _openedTypes[(argument, parameter)] = opened;
+        }
+
+        return opened;
+    }
+
+    /// <summary>
+    ///     A call that opens a <c>Type</c> (SYNTAX.md "Opening a type", #297),
+    ///     checked: the opened type may be constrained only to protocols that
+    ///     are not generic, which the call finds the type's conformances to
+    ///     at run time; no other parameter may mention it, as no value of a
+    ///     type known only at run time can be written; and a result of it is
+    ///     erased to the existential of its protocols (a result of its
+    ///     metatype, to a <c>Type</c>). Anything else mentioning it is S3162
+    ///     or S3163.
+    /// </summary>
+    BoundExpression OpenedCall(BoundCall call, FunctionSymbol resolved, TypeSubstitution substitution, SyntaxNode syntax) {
+        var opened = resolved.TypeParameters
+            .Select(p => substitution.Lookup(p) as TypeParameterSymbol)
+            .OfType<TypeParameterSymbol>()
+            .Where(static o => o.OpenedFrom is not null)
+            .ToList();
+        if (opened.Count == 0) {
+            return call;
+        }
+
+        var name = resolved.FunctionKind == FunctionKind.Initializer ? resolved.ContainingSymbol!.Name : resolved.Name;
+        bool Mentions(TypeSymbol type, TypeParameterSymbol of) =>
+            !TypeSubstitution.ContainsError(type)
+            && TypeSubstitution.ContainsError(new TypeSubstitution(new Dictionary<TypeParameterSymbol, TypeSymbol> { [of] = ErrorTypeSymbol.Instance }).Apply(type));
+
+        var ok = true;
+        var protocols = new List<TypeSymbol>();
+        foreach (var each in opened) {
+            var parameter = each.OpenedFrom!;
+            foreach (var constraint in parameter.Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c))) {
+                if (constraint is NamedTypeSymbol { TypeKind: TypeKind.Protocol, IsConstructed: false, TypeParameters.IsEmpty: true } protocol) {
+                    protocols.Add(protocol);
+                    continue;
+                }
+
+                _diagnostics.Error(
+                    ErrorCode.ERR_CannotOpenType,
+                    syntax.Span,
+                    $"'{name}' cannot open a 'Type' as '{parameter.Name}': '{parameter.Name}' must be '{constraint.ToDisplayString()}', "
+                    + "and only a protocol that is not generic can be checked of a type known at run time"
+                );
+                ok = false;
+            }
+
+            for (var i = 0; i < resolved.Parameters.Length && i < call.Arguments.Length; i++) {
+                if (call.Arguments[i] is BoundConversion { ConversionKind: ConversionKind.Open, Type: MetatypeTypeSymbol { InstanceType: var instance } } && ReferenceEquals(instance, each)) {
+                    continue;
+                }
+
+                if (Mentions(substitution.Apply(resolved.Parameters[i].Type), each)) {
+                    _diagnostics.Error(
+                        ErrorCode.ERR_CannotOpenType,
+                        syntax.Span,
+                        $"'{name}' cannot open a 'Type' as '{parameter.Name}': parameter '{resolved.Parameters[i].Name}' is of '{parameter.Name}' too, "
+                        + "and nothing here has a value of a type known only at run time to give it"
+                    );
+                    ok = false;
+                }
+            }
+
+            if (resolved.SameTypeRequirements.Any(r => Mentions(substitution.Apply(r.Left), each) || Mentions(substitution.Apply(r.Right), each))) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_CannotOpenType,
+                    syntax.Span,
+                    $"'{name}' cannot open a 'Type' as '{parameter.Name}': its 'where' clause makes '{parameter.Name}' the same as another type, "
+                    + "which a type known only at run time cannot be checked to be"
+                );
+                ok = false;
+            }
+
+            if (resolved.ThrownType is { } thrown && Mentions(substitution.Apply(thrown), each)) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_OpenedResultNotErasable,
+                    syntax.Span,
+                    $"'{name}' throws a '{parameter.Name}', which a call that opens a 'Type' as '{parameter.Name}' cannot give back"
+                );
+                ok = false;
+            }
+        }
+
+        if (!ok) {
+            return new BoundError(syntax, call);
+        }
+
+        var result = call.Type;
+        if (opened.Count == 1 && ReferenceEquals(result, opened[0])) {
+            if (protocols.Count == 0) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_OpenedResultNotErasable,
+                    syntax.Span,
+                    $"'{name}' gives back a '{opened[0].Name}', which is open here and has no protocol to be erased to as 'any P'"
+                );
+                return new BoundError(syntax, call);
+            }
+
+            var erased = new ExistentialTypeSymbol(protocols.Count == 1 ? protocols[0] : new CompositionTypeSymbol(protocols));
+            return new BoundConversion(syntax, erased, call, ConversionKind.OpenedErasure);
+        }
+
+        if (opened.Count == 1 && result is MetatypeTypeSymbol { InstanceType: var instanceType } && ReferenceEquals(instanceType, opened[0])) {
+            return new BoundConversion(syntax, Core.Type, call, ConversionKind.Identity);
+        }
+
+        foreach (var each in opened) {
+            if (Mentions(result, each)) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_OpenedResultNotErasable,
+                    syntax.Span,
+                    $"'{name}' gives back a '{result.ToDisplayString()}', which mentions '{each.Name}', open here: only a '{each.Name}' itself "
+                    + $"(as 'any P') or a '{each.Name}.Type' (as a 'Type') can be given back"
+                );
+                return new BoundError(syntax, call);
+            }
+        }
+
+        return call;
     }
 
     /// <summary>
@@ -8908,6 +9062,11 @@ public sealed partial class Binder {
 
         if (conversion == ConversionKind.Identity) {
             return expression;
+        }
+
+        // A Type opened for a callee's 'T.Type': the metadata it holds, as T's.
+        if (conversion == ConversionKind.Open) {
+            return new BoundConversion(syntax, target, expression, ConversionKind.Open);
         }
 
         // An array as a slice of it, a metatype as a Type: the same value, with the wanted type.

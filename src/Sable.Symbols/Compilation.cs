@@ -1947,6 +1947,9 @@ public sealed partial class Compilation {
         return bound;
     }
 
+    /// <summary>What a conformer binds a protocol's associated type to, or null when it does not: what its witness table lists.</summary>
+    public TypeSymbol? AssociatedTypeOf(NamedTypeSymbol conformer, TypeParameterSymbol associated) => ResolveAssociated(conformer, associated);
+
     static void AddTo(Symbol container, Symbol member) {
         switch (container) {
             case ModuleSymbol module:

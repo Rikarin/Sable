@@ -99,7 +99,25 @@ public static class SilPrinter {
             builder.Append("sil_export @").Append(name).Append(" = ").Append(Quote(symbol)).Append('\n');
         }
 
-        if ((module.Types.Count > 0 || module.Globals.Count > 0 || module.Foreign.Count > 0 || module.Exports.Count > 0) && module.Functions.Count > 0) {
+        foreach (var table in module.WitnessTables) {
+            builder.Append("sil_witness_table $").Append(table.Conformer).Append(" : ").Append(Quote(table.Protocol)).Append(" {\n");
+            foreach (var (requirement, function, type) in table.Entries) {
+                builder.Append("  ").Append(Quote(requirement)).Append(": @").Append(function).Append(" : $").Append(type).Append('\n');
+            }
+
+            foreach (var (name, type) in table.AssociatedTypes) {
+                builder.Append("  associated ").Append(Quote(name)).Append(": $").Append(type).Append('\n');
+            }
+
+            foreach (var (associated, protocol) in table.AssociatedConformances) {
+                builder.Append("  conforms ").Append(associated).Append(": ").Append(Quote(protocol)).Append('\n');
+            }
+
+            builder.Append("}\n");
+        }
+
+        if ((module.Types.Count > 0 || module.Globals.Count > 0 || module.Foreign.Count > 0 || module.Exports.Count > 0 || module.WitnessTables.Count > 0)
+            && module.Functions.Count > 0) {
             builder.Append('\n');
         }
 

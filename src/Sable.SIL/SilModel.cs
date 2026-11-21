@@ -1573,29 +1573,19 @@ public sealed class SilModule {
         return _witnessTables[(table.Conformer.ToString(), table.Protocol)];
     }
 
+    /// <summary>What each built-in type (<c>Int</c>, <c>String</c>, …) declares it conforms to, by the type's name: its conformance records.</summary>
+    public Dictionary<string, List<string>> PrimitiveConformances { get; } = new(StringComparer.Ordinal);
+
     /// <summary>
-    ///     A type's conformance records, by protocol name: those a nominal
-    ///     type declares (a class's own; its superclass's are its
-    ///     superclass's), and each conformance a witness table was made for.
+    ///     A type's conformance records, by protocol name: one per protocol
+    ///     the type declares it conforms to (a class's own; its superclass's
+    ///     are its superclass's), each with the conformance's witness table
+    ///     where this module made one. Which records a type has depends on its
+    ///     declarations alone, so every unit of a program writes the same.
     /// </summary>
     public List<(string Protocol, SilWitnessTable? Witnesses)> ConformancesOf(SilType type) {
-        var records = new List<(string, SilWitnessTable?)>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        if (type is NominalType nominal) {
-            foreach (var protocol in nominal.Conformances) {
-                if (seen.Add(protocol)) {
-                    records.Add((protocol, FindWitnessTable(type, protocol)));
-                }
-            }
-        }
-
-        foreach (var table in _witnessTableList) {
-            if (table.Conformer == type && seen.Add(table.Protocol)) {
-                records.Add((table.Protocol, table));
-            }
-        }
-
-        return records;
+        var declared = type is NominalType nominal ? nominal.Conformances : PrimitiveConformances.GetValueOrDefault(type.ToString()) ?? [];
+        return [..declared.Distinct(StringComparer.Ordinal).Select(p => (p, FindWitnessTable(type, p)))];
     }
 
     public T AddType<T>(T type) where T : NominalType {

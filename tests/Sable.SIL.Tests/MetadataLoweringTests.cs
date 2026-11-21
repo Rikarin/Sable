@@ -90,4 +90,82 @@ public sealed class MetadataLoweringTests {
         var described = TypeMetadata.Of(((MetadataInst)module.Find("f")!.Blocks[0].Instructions[0]).Described);
         Assert.Equal((kind, size, alignment, stride), (described.Kind, described.Size, described.Alignment, described.Stride));
     }
+
+    const string Tabled = """
+                          protocol Named {
+                              fn name() -> String
+                          }
+
+                          protocol Holder {
+                              associatedtype Item: Named
+                              fn count() -> Int
+                          }
+
+                          struct Tag: Named {
+                              var text: String
+                              fn name() -> String => text
+                          }
+
+                          struct Shelf: Holder {
+                              alias Item = Tag
+                              var n: Int
+                              fn count() -> Int => n
+                          }
+
+                          fn main() {
+                              let h: any Holder = Shelf { n: 2 }
+                              if let named = h as? any Named {
+                                  print(named.name())
+                              } else {
+                                  print(h.count())
+                              }
+                          }
+                          """;
+
+    /// <summary>
+    ///     A conformance an existential needs has a witness table: its
+    ///     requirements' witnesses in slot order, its associated types as the
+    ///     conformance binds them and what each must conform to; a cast to a
+    ///     protocol looks it up in the registry rather than trying each type.
+    /// </summary>
+    [Fact]
+    public void AConformanceHasAWitnessTableWithItsAssociatedTypes() {
+        var module = Lower(Tabled);
+        var table = module.FindWitnessTable(module.FindType("M.Shelf")!, "M.Holder")!;
+        Assert.Equal("count", Assert.Single(table.Entries).Requirement);
+        Assert.Equal(("Item", "M.Tag"), (Assert.Single(table.AssociatedTypes).Name, table.AssociatedTypes[0].Type.ToString()));
+        Assert.Equal((0, "M.Named"), Assert.Single(table.AssociatedConformances));
+        Assert.NotNull(module.FindWitnessTable(module.FindType("M.Tag")!, "M.Named"));
+        Assert.Contains(("M.Holder", table), module.ConformancesOf(module.FindType("M.Shelf")!));
+
+        var cast = module.Functions.Single(static f => f.Name.StartsWith("$cast$to$any$M.Named", StringComparison.Ordinal));
+        var builtins = cast.Blocks.SelectMany(static b => b.Instructions).OfType<BuiltinInst>().Select(static b => b.Name).ToList();
+        Assert.Contains("box_metadata", builtins);
+        Assert.Contains("witness_table:M.Named", builtins);
+        Assert.DoesNotContain(builtins, static b => b.StartsWith("class_is:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void WitnessTablesRoundTripThroughTextAndRun() {
+        var text = SilPrinter.Print(Lower(Tabled));
+        Assert.Contains("sil_witness_table $M.Shelf : \"M.Holder\" {", text, StringComparison.Ordinal);
+        Assert.Contains("  associated \"Item\": $M.Tag\n  conforms 0: \"M.Named\"\n", text, StringComparison.Ordinal);
+        var parsed = SilParser.Parse(text);
+        Assert.Equal(text, SilPrinter.Print(parsed));
+        var interpreter = new SilInterpreter(parsed);
+        interpreter.Run("M.main");
+        Assert.Equal("2\n", interpreter.Output.ToString());
+        Assert.Equal(0, interpreter.LiveObjects);
+    }
+
+    /// <summary>A witness table's witnesses are kept while its conformer can be made or boxed, and dropped with it.</summary>
+    [Fact]
+    public void AWitnessTablesWitnessesAreReachedWithItsConformer() {
+        var module = Lower(Tabled);
+        var reached = SilPassManager.Reachable(module)!;
+        var shelf = module.FindWitnessTable(module.FindType("M.Shelf")!, "M.Holder")!;
+        Assert.Contains(shelf.Entries[0].Function, reached);
+        var tag = module.FindWitnessTable(module.FindType("M.Tag")!, "M.Named")!;
+        Assert.DoesNotContain(tag.Entries[0].Function, reached);
+    }
 }

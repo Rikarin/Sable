@@ -133,8 +133,21 @@ public sealed partial class LlvmEmitter {
             functions.Append(MainShim(main, keepEntry: _debug is not null, wasm: _arch == "wasm32"));
         }
 
+        // What runs as the image is loaded: a library's start, and the witness tables a unit registers.
+        var constructors = new List<string>();
+        if (WitnessRegistration(module) is { } registration) {
+            constructors.Add(registration);
+        }
+
         if (module.IsLibrary) {
             functions.Append(LibraryLifetime(module));
+            constructors.Add("@\"sable.library.start\"");
+        }
+
+        if (constructors.Count > 0) {
+            functions.Append($"@llvm.global_ctors = appending global [{constructors.Count} x {{ i32, ptr, ptr }}] [")
+                .Append(string.Join(", ", constructors.Select(static c => $"{{ i32, ptr, ptr }} {{ i32 65535, ptr {c}, ptr null }}")))
+                .Append("]\n\n");
         }
 
         var output = new StringBuilder();
@@ -690,9 +703,8 @@ public sealed partial class LlvmEmitter {
             text.Append($"  call void @sable_runtime_at_exit(ptr @{Global(deinit)})\n");
         }
 
-        text.Append("  ret void\n}\n\n")
-            .Append("@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @\"sable.library.start\", ptr null }]\n");
-        return text.Append('\n').ToString();
+        text.Append("  ret void\n}\n\n");
+        return text.ToString();
     }
 
     /// <summary>

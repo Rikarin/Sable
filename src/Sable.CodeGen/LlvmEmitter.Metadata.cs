@@ -66,7 +66,7 @@ public sealed partial class LlvmEmitter {
             _globals.Append($"{fieldArray} = {SharedLinkage} constant [{fields.Length} x {FieldDescriptorType}] [{string.Join(", ", descriptors)}]{Comdat(fieldArray, SharedLinkage)}\n");
         }
 
-        var records = (_module?.ConformancesOf(type) ?? []).Select(r => $"{{ ptr, ptr }} {{ ptr {ProtocolDescriptor(r.Protocol)}, ptr {(r.Witnesses is { } table ? WitnessTableGlobal(table) : "null")} }}").ToList();
+        var records = (_module?.ConformancesOf(type) ?? []).Select(r => $"{{ ptr, ptr }} {{ ptr {ProtocolDescriptor(r.Protocol)}, ptr {WitnessesOf(r.Witnesses)} }}").ToList();
         var conformances = "null";
         if (records.Count > 0) {
             conformances = $"@\"sable.conformances.{Mangled(type)}\"";
@@ -166,6 +166,41 @@ public sealed partial class LlvmEmitter {
         return name;
     }
 
+    /// <summary>The name of a conformance's witness table.</summary>
+    static string WitnessTableName(SilType conformer, string protocol) =>
+        $"@\"sable.witnesses.{Mangled(conformer)}.{protocol.Replace("\"", "", StringComparison.Ordinal)}\"";
+
+    /// <summary>
+    ///     What a conformance record's witnesses are: the table, where this
+    ///     module made one. A unit of several leaves it null whether it made
+    ///     the table or not, and registers the tables it made as the program
+    ///     starts (<see cref="WitnessRegistration" />): which tables a unit
+    ///     makes depends on what its own code boxes and casts, and every
+    ///     unit's copy of a type's records must be the same, as
+    ///     <c>linkonce_odr</c> requires.
+    /// </summary>
+    string WitnessesOf(SilWitnessTable? table) => table is not null && _module?.Unit is null ? WitnessTableGlobal(table) : "null";
+
+    /// <summary>
+    ///     In one unit of several, a constructor that hands the runtime each
+    ///     witness table the unit made, with its conformer's metadata
+    ///     (<c>sable_register_witness_table</c>): where the registry finds the
+    ///     tables a record leaves null. Null when there are none.
+    /// </summary>
+    string? WitnessRegistration(SilModule module) {
+        if (module.Unit is null || module.WitnessTables.Count == 0) {
+            return null;
+        }
+
+        var body = new StringBuilder("define internal void @\"sable.witnesses.register\"() {\nentry:\n");
+        foreach (var table in module.WitnessTables) {
+            body.Append($"  call void @sable_register_witness_table(ptr {TypeMetadataGlobal(table.Conformer)}, ptr {WitnessTableGlobal(table)})\n");
+        }
+
+        _helpers.Append(body.Append("  ret void\n}\n\n"));
+        return "@\"sable.witnesses.register\"";
+    }
+
     /// <summary>
     ///     A conformance's witness table, <c>@"sable.witnesses.T.P"</c>: the
     ///     protocol, its requirements' witnesses in order, its associated
@@ -173,7 +208,7 @@ public sealed partial class LlvmEmitter {
     ///     reachable code can need was not built: its slot is empty.
     /// </summary>
     string WitnessTableGlobal(SilWitnessTable table) {
-        var name = $"@\"sable.witnesses.{Mangled(table.Conformer)}.{table.Protocol.Replace("\"", "", StringComparison.Ordinal)}\"";
+        var name = WitnessTableName(table.Conformer, table.Protocol);
         if (!_emitted.Add(name)) {
             return name;
         }
@@ -235,6 +270,7 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_metadata_argument(ptr, i64)
                                         declare ptr @sable_box_value_metadata(ptr)
                                         declare ptr @sable_witness_table(ptr, ptr)
+                                        declare void @sable_register_witness_table(ptr, ptr)
 
                                         """;
 

@@ -160,7 +160,7 @@ typedef struct SableTypeMetadata {
   which each unit makes and the linker keeps one of. A superclass's
   conformances are in the superclass's records.
 - **The registry** is the records themselves, found from a value's
-  metadata, with nothing built as the program starts:
+  metadata, with nothing built as the program starts (but the tables of a program built in units, below):
   `sable_type_conformance(type, protocol)` returns the record of the type's
   (or a superclass's) conformance, or null, and `sable_conformance` the same
   from an object's metadata; `sable_conforms(object, protocol)` answers
@@ -195,27 +195,60 @@ that hold one another strongly: the type-level strong-reference graph's
 cycles through two or more classes, broken by a `weak` or `unowned` field.
 
 An existential, `any P`, is its box — an object of a class for the value's
-type, `any$box$of$T`, each a subclass of one root class — and P's witness
-table for that type, laid out inline after it: a function per requirement
-that takes the box. Copying an existential shares the box; a witness that
-changes the value (a setter, a mutating method) is given the box where the
-existential keeps it and first copies it if another existential shares it.
-A dynamic cast or test, `e as? Square`, `e is any Named`, asks the box's class:
-to a concrete type, whether it is that type's box; to another protocol,
-whether it is the box of any type of the program that conforms to it, in a
-table the compiler writes out for each protocol cast to — the conformance
-lookup, done without the registry above. The two answer different
-questions and are kept apart for now: the registry's records hang off a
-class's metadata, so it answers for objects alone, while an existential's
-box is an object of the compiler's own class whatever the value's type,
-struct or union as much as class, and has no records of its own. A cast of
-an existential to a protocol therefore asks which box class it is, and
-builds the existential from witnesses the compiler emitted for each
-conforming type. Once conformance records carry their witness tables (the
-`witnesses` field above) and non-class types have type information, a box
-can point at its value's metadata and the cast can become a registry lookup
-— a cast table for a library's types that the program does not see whole
-would need that.
+type, `any$box$of$T`, each a subclass of one root class, whose metadata has
+T as its one type argument — and P's witnesses for that type, laid out
+inline after it: a function per requirement that takes the box. Copying an
+existential shares the box; a witness that changes the value (a setter, a
+mutating method) is given the box where the existential keeps it and first
+copies it if another existential shares it.
+
+**Witness tables.** The same functions are the conformance's witness
+table, `SableWitnessTable`, which T's metadata's conformance record for P
+points at: P's requirements in the order of its existential's slots, then
+T's associated types' metadata and what each must conform to (by index and
+protocol, found in the registry from that metadata).
+
+```c
+typedef struct { const SableProtocol *protocol;
+                 int64_t requirement_count; void *const *requirements;
+                 int64_t associated_type_count; const SableTypeMetadata *const *associated_types;
+                 int64_t associated_conformance_count;
+                 const SableAssociatedConformance *associated_conformances; } SableWitnessTable;
+```
+
+A table is made for each conformance an existential needs: a type put in
+an existential of P, and every type conforming to a protocol cast to — the
+program's non-generic conformers and each type boxed anywhere, whichever the
+program lowers first. Its witnesses are kept while its conformer can be made,
+boxed or asked about, and are dropped with it. An existential built where the
+type is known copies them into its slots, so a call through it costs what it
+did: there is no load from the table, and the inline slots are the table's
+contents cached in the value. Which records a type has follows from its
+declarations alone (a built-in type's from Sable.Core's extensions); which
+tables a unit makes depends on what its own code boxes and casts. So in a
+program built in units a record's `witnesses` is null, every unit's copy of
+it the same as `linkonce_odr` requires, and each unit's constructor hands
+the runtime the tables it made (`sable_register_witness_table`), which the
+lookup consults after the records; a program compiled whole points its
+records at its tables and registers nothing. (Swift keeps such records in a
+section the linker gathers; a constructor works on every target Sable has.)
+
+**Casts.** `e as? Square` asks the box's class whether it is that type's
+box (or, for an object, a superclass's box, and then the object). `e as?
+any Q` and `e is any Q` are registry lookups: the metadata of what the box
+holds — an object's own class, which may be a subclass of the one boxed
+(`sable_box_value_metadata`) — is asked for Q's witness table
+(`sable_witness_table`, each part's for `any A & B`), and the existential is
+the same box, shared, with the table's witnesses. `animal as? any Named`
+boxes the object as its static class and asks the same. An instance of a
+generic protocol, `any Producer<Animal>`, whose slots a conformer to
+`Producer<Dog>` may fill by variance, is still cast by trying each conforming
+type of the program in turn, from witnesses the compiler picks for each.
+
+As built, a table holds only what an existential can call — requirements
+that mention `Self` have no slot — each taking the box: the existential's
+convention. Generic code compiled once (#297 stage 4) will add entries of
+its own convention, the value and Self's metadata, for every requirement.
 
 Field descriptors were meant to be emitted always, for every type; as built
 they are a class's always and every other type's only in a program that

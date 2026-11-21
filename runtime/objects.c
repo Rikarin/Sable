@@ -161,11 +161,46 @@ static const SableTypeMetadata *superclass_of(const SableTypeMetadata *type) {
     return super == NULL ? NULL : super->type;
 }
 
+// The witness tables a program built in units registers as it starts: a
+// unit's copy of a type's conformance records leaves their tables null, since
+// which tables a unit makes depends on its own code and every unit's copy of
+// a record must be the same. A program compiled whole registers none.
+static struct {
+    const SableTypeMetadata *type;
+    const SableWitnessTable *table;
+} *registered_tables;
+static int64_t registered_count, registered_capacity;
+
+void sable_register_witness_table(const SableTypeMetadata *type, const SableWitnessTable *table) {
+    if (registered_count == registered_capacity) {
+        registered_capacity = registered_capacity == 0 ? 64 : registered_capacity * 2;
+        registered_tables = realloc(registered_tables, (size_t)registered_capacity * sizeof *registered_tables);
+        if (registered_tables == NULL) {
+            sable_trap("out of memory");
+        }
+    }
+
+    registered_tables[registered_count].type = type;
+    registered_tables[registered_count].table = table;
+    registered_count++;
+}
+
+static const SableWitnessTable *registered_table(const SableTypeMetadata *type, const SableProtocol *protocol) {
+    for (int64_t i = 0; i < registered_count; i++) {
+        if (registered_tables[i].type == type && same_protocol(registered_tables[i].table->protocol, protocol)) {
+            return registered_tables[i].table;
+        }
+    }
+
+    return NULL;
+}
+
 // The record of the type's conformance to the protocol — its own, or for a
 // class one it inherits from a superclass — or null when it does not
 // conform. This is the conformance registry: each type's metadata carries
-// its records, so a lookup walks the type and its superclasses, and no
-// table is built as the program starts.
+// its records, so a lookup walks the type and its superclasses, and nothing
+// is built as the program starts (but for the tables a program built in
+// units registers, above).
 const SableConformance *sable_type_conformance(const SableTypeMetadata *type, const SableProtocol *protocol) {
     for (; type != NULL; type = superclass_of(type)) {
         for (int64_t i = 0; i < type->conformance_count; i++) {
@@ -183,11 +218,24 @@ const SableConformance *sable_conformance(const SableMetadata *type, const Sable
     return type == NULL ? NULL : sable_type_conformance(type->type, protocol);
 }
 
-// The witness table of the type's conformance to the protocol, or null:
-// what 'e as? any Q' builds the existential from.
+// The witness table of the type's conformance to the protocol — its own,
+// or for a class a superclass's — or null: what 'e as? any Q' builds the
+// existential from.
 const SableWitnessTable *sable_witness_table(const SableTypeMetadata *type, const SableProtocol *protocol) {
-    const SableConformance *conformance = sable_type_conformance(type, protocol);
-    return conformance == NULL ? NULL : conformance->witnesses;
+    for (; type != NULL; type = superclass_of(type)) {
+        for (int64_t i = 0; i < type->conformance_count; i++) {
+            if (same_protocol(type->conformances[i].protocol, protocol) && type->conformances[i].witnesses != NULL) {
+                return type->conformances[i].witnesses;
+            }
+        }
+
+        const SableWitnessTable *table = registered_table(type, protocol);
+        if (table != NULL) {
+            return table;
+        }
+    }
+
+    return NULL;
 }
 
 // Whether the object's dynamic type conforms to the protocol: 'x is P' on a class reference.

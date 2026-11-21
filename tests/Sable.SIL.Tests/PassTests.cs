@@ -781,4 +781,51 @@ public sealed class PassTests {
         Assert.Equal(19L, before);
         Assert.Equal(before, new SilInterpreter(module).Run("M.probe", 5L));
     }
+
+    /// <summary>
+    ///     A <c>let</c> in a loop that borrows what stays put is held in an
+    ///     unmanaged slot, stored each turn and never destroyed: the slot owns
+    ///     nothing, so the store of the next turn, <c>[init]</c> as the slot
+    ///     was managed, writes over the last turn's borrow and leaks nothing.
+    /// </summary>
+    [Fact]
+    public void ALetBorrowedInALoopIsStoredEachTurnOverTheLastTurnsBorrow() {
+        var module = SilParser.Parse(
+            """
+            sil @f : $() -> Int {
+            bb0:
+              %0 = alloc_stack $String
+              %1 = alloc_stack $String
+              %2 = string_literal "abc"
+              store %2 to [init] %0
+              %3 = integer_literal $Int, 0
+              %4 = integer_literal $Int, 3
+              %5 = integer_literal $Int, 1
+              br bb1(%3)
+            bb1(%6 : $Int):
+              %7 = builtin "cmp_lt_Int"(%6, %4) : $Bool
+              cond_br %7, bb2, bb3
+            bb2:
+              %8 = load [copy] %0
+              store %8 to [init] %1
+              %9 = load_borrow %1
+              end_borrow %9
+              destroy_addr %1
+              %10 = builtin "add_Int"(%6, %5) : $Int
+              br bb1(%10)
+            bb3:
+              destroy_addr %0
+              dealloc_stack %1
+              dealloc_stack %0
+              return %6
+            }
+            """
+        );
+
+        SilPassManager.Run(module, [new BorrowLets()]);
+        var function = module.Find("f")!;
+        Assert.True(Instructions(function).OfType<AllocStackInst>().ElementAt(1).Unmanaged, SilPrinter.Print(function));
+        Assert.DoesNotContain(Instructions(function), static i => i is LoadInst { Kind: LoadKind.Copy });
+        Assert.Equal(3L, new SilInterpreter(module).Run("f"));
+    }
 }

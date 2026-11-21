@@ -315,7 +315,10 @@ so it is held indirectly, and nothing is allocated on the heap for it.
   (`sable_opaque_describe`): a function, made for each type whose metadata
   code that knows the type hands to unspecialised code and registered as
   the image starts, that writes the value out as an interpolation in code
-  that knows its type does.
+  that knows its type does. `"\(x:?)"` asks for its **debug describer**
+  (`sable_opaque_debug_describe`), made beside it, which writes the value
+  as `?` in code that knows its type does; a whole program keeps the debug
+  describers only when something asks for one.
 - Where the types are known, a call passes each argument of a type
   parameter's type by address, copying nothing: a local, or a stored field
   of one, where it is, when nothing the call evaluates or passes can change
@@ -479,7 +482,9 @@ specialised, as its vtable holds an instance for each class's arguments, and
 so is the initialiser of one with a deinit, which the metadata made at run
 time does not run. A **subscript**'s getter and setter, of a generic struct,
 union or class, are compiled once as methods are (a dictionary's `d[key]` and
-`d[key] = v`).
+`d[key] = v`). A static member of a generic type that names none of its type
+parameters (`Task.sleep`, `Task.isCancelled`) is generic over its own alone,
+and takes none of its type's metadata.
 
 **Associated types.** An associated type read through a type parameter —
 `S.Element`, `C.Index`, `S.Iter`, `S.Iter.Element`, and inside a protocol
@@ -571,7 +576,7 @@ on its witness alone, so every unit's copy of a table is the same.
 What unspecialised code cannot serve yet — an optional chain through a
 `T?`, a structural union of `T`, a method of a generic class
 a subclass may override, a field of a function type in a generic type, the
-initialiser of a class with a deinit or of a struct that holds `T` by value, `"\(x:?)"`, an async closure's
+initialiser of a class with a deinit or of a struct that holds `T` by value, an async closure's
 parameter, or a generator — is still specialised for its type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
 says, for each generic function, which way it went and why. A specialised

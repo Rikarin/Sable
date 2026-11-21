@@ -700,7 +700,13 @@ public sealed partial class SilGen {
         var requirements = new List<(TypeParameterSymbol, NamedTypeSymbol)>();
         var own = new List<TypeParameterSymbol>();
         var owner = Owner(symbol)?.OriginalDefinition;
-        if (owner is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } self }) {
+        var independent = owner is not null && IsIndependentStatic(symbol, owner);
+        if (independent) {
+            // A static member of a generic type that names none of its type
+            // parameters — 'Task.sleep', 'Task.isCancelled' — is generic over
+            // its own alone, whatever its type's are (its body is checked to
+            // name none either).
+        } else if (owner is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } self }) {
             if (!IsTabledProtocol(owner)) {
                 refused = "a member of a generic protocol";
                 return null;
@@ -741,7 +747,7 @@ public sealed partial class SilGen {
         // A 'some P' parameter is an anonymous type parameter, after the named ones.
         own.AddRange(symbol.TypeParameters);
         own.AddRange(symbol.OpaqueTypeParameters);
-        if (!all.SequenceEqual(own)) {
+        if (!(independent ? all.Skip(owner!.TypeParameters.Length) : all).SequenceEqual(own)) {
             refused = "type parameters from around it";
             return null;
         }
@@ -818,6 +824,25 @@ public sealed partial class SilGen {
         return new([..own], [..requirements]);
     }
 
+    /// <summary>
+    ///     A static member of a generic class, struct or union — a method or
+    ///     a property's accessor — whose signature names none of its type's
+    ///     type parameters: compiled once without their metadata, which
+    ///     nothing it does needs (<see cref="BodyAllows" /> checks its body).
+    /// </summary>
+    static bool IsIndependentStatic(FunctionSymbol symbol, NamedTypeSymbol owner) =>
+        owner is { TypeKind: TypeKind.Class or TypeKind.Struct or TypeKind.Union, TypeParameters.IsEmpty: false, ExtendedArray: null, ExtendedOptional: null }
+        && (symbol is { IsStatic: true, FunctionKind: FunctionKind.Ordinary } || symbol is { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FieldSymbol { IsStatic: true } })
+        && !symbol.Parameters.Any(p => Mentions(p.Type, owner.TypeParameters)) && !Mentions(symbol.ReturnType, owner.TypeParameters)
+        && (symbol.ThrownType is not { } thrown || !Mentions(thrown, owner.TypeParameters));
+
+    /// <summary>Whether a body names any of its type's type parameters but as the type a static member is called on (<c>Task.yield()</c>).</summary>
+    static bool NamesOwnerParameters(BoundNode node, NamedTypeSymbol owner) =>
+        node is not BoundTypeExpression
+        && (node is BoundExpression { Type: var type } && Mentions(type, owner.TypeParameters)
+            || node is BoundLocalDeclaration { Local.Type: var local } && Mentions(local, owner.TypeParameters)
+            || node.Children.Any(child => NamesOwnerParameters(child, owner)));
+
     /// <summary>A function as SABLE_GENERICS_TRACE names it: an accessor by its type and property, <c>Sable.Core.FloatingPoint.isNaN.get</c>.</summary>
     string TraceName(FunctionSymbol symbol) =>
         symbol is { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FieldSymbol property } && Owner(symbol) is { } owner
@@ -889,6 +914,15 @@ public sealed partial class SilGen {
         if (IsForwarder(body)) {
             if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
                 Console.Error.WriteLine($"specialised {TraceName(symbol)}: a forwarder to a requirement");
+            }
+
+            return false;
+        }
+
+        // One that names its type's type parameters is given their metadata after all: it stays specialised.
+        if (Owner(symbol)?.OriginalDefinition is { } independentOwner && IsIndependentStatic(symbol, independentOwner) && NamesOwnerParameters(body, independentOwner)) {
+            if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
+                Console.Error.WriteLine($"specialised {TraceName(symbol)}: a static member naming its type's type parameters");
             }
 
             return false;
@@ -1202,7 +1236,8 @@ public sealed partial class SilGen {
                 BoundThrow => _handlers == 0 && _closureDepth == 0 && checkedSymbol.ThrownType is { } own && Canonical(own).Equals(Canonical(child.Type)),
                 // Not inside a protocol's own 'debugDescription' (Error's
                 // '"\(self)"'): a describer would call it back.
-                BoundInterpolatedString interpolated => interpolated.Parts.IndexOf(child) is var at and >= 0 && interpolated.Formats[at] is null && !DescribesSelf && (Describes = true),
+                BoundInterpolatedString interpolated => interpolated.Parts.IndexOf(child) is var at and >= 0
+                                                        && (interpolated.Formats[at] is null || interpolated.Formats[at]!.Specifier == DebugFormat) && !DescribesSelf && (Describes = true),
                 _ => false,
             };
 
@@ -2127,7 +2162,7 @@ public sealed partial class SilGen {
     ///     getter, the expression it returns, and whether it takes its
     ///     symbol's parameters at all.
     /// </summary>
-    internal sealed record Bridge(bool OpaqueSelfValue, ImmutableHashSet<ParameterSymbol> OpaqueParameters, bool OpaqueResult, SyntaxNode? Describes = null) {
+    internal sealed record Bridge(bool OpaqueSelfValue, ImmutableHashSet<ParameterSymbol> OpaqueParameters, bool OpaqueResult, SyntaxNode? Describes = null, bool Debug = false) {
         public BoundExpression? Returns { get; init; }
         public bool TakesNoParameters { get; init; }
 
@@ -2334,7 +2369,24 @@ public sealed partial class SilGen {
         function.RemoveUnreachableBlocks();
         _module.Add(function);
         _module.Describers[value.ToString()] = (value, name);
+
+        // And what writes it out as '"\(x:?)"' would: kept where something asks for it.
+        var debugName = $"$debugdescribe${Sanitise(value.ToString())}";
+        var debug = new SilFunction(debugName, function.Type) { SourceFile = function.SourceFile, Line = function.Line };
+        var debugLowering = new FunctionLowering(this, print, debug, source, substitution) { Bridged = new Bridge(false, [print.Parameters[0]], false, at, Debug: true) };
+        using (_diagnostics.Suppress()) {
+            debugLowering.Lower(new BoundBlock(syntax, [], []));
+        }
+
+        if (!debugLowering.Failed) {
+            debug.RemoveUnreachableBlocks();
+            _module.Add(debug);
+            _module.DebugDescribers[value.ToString()] = (value, debugName);
+        }
     }
+
+    /// <summary>What <c>?</c> in a hole says, and nothing else: <c>"\(x:?)"</c>.</summary>
+    internal static readonly FormatSpecifier DebugFormat = FormatSpecifier.Default with { Kind = "Debug", KindLetter = '?' };
 
     sealed partial class FunctionLowering {
         /// <summary>
@@ -2574,7 +2626,12 @@ public sealed partial class SilGen {
                 return false;
             }
 
-            if (Hole(new BoundParameterAccess(at, symbol.Parameters[0]), null) is { } text) {
+            // A debug describer writes it as '"\(x:?)"' would.
+            var value = new BoundParameterAccess(at, symbol.Parameters[0]);
+            var text = Bridged.Debug
+                ? DebugSpec(at) is { } spec ? FormattedHole(value, new BoundFormatSpec(at, spec, DebugFormat)) : null
+                : Hole(value, null);
+            if (text is not null) {
                 Return(text);
             }
 

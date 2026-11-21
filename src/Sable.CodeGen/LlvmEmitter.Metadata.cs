@@ -240,13 +240,18 @@ public sealed partial class LlvmEmitter {
     /// </summary>
     string? DescriberRegistration(SilModule module) {
         var describers = module.Describers.Values.Where(d => _reachable?.Contains(d.Function) != false && module.Find(d.Function) is not null).ToList();
-        if (describers.Count == 0) {
+        var debugDescribers = module.DebugDescribers.Values.Where(d => _reachable?.Contains(d.Function) != false && module.Find(d.Function) is not null).ToList();
+        if (describers.Count == 0 && debugDescribers.Count == 0) {
             return null;
         }
 
         var body = new StringBuilder("define internal void @\"sable.describers.register\"() {\nentry:\n");
         foreach (var (type, function) in describers) {
             body.Append($"  call void @sable_register_describer(ptr {TypeMetadataGlobal(type)}, ptr @{Global(function)})\n");
+        }
+
+        foreach (var (type, function) in debugDescribers) {
+            body.Append($"  call void @sable_register_debug_describer(ptr {TypeMetadataGlobal(type)}, ptr @{Global(function)})\n");
         }
 
         _helpers.Append(body.Append("  ret void\n}\n\n"));
@@ -421,6 +426,8 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_opaque_type(ptr, ptr)
                                         declare ptr @sable_opaque_describe(ptr, ptr)
                                         declare void @sable_register_describer(ptr, ptr)
+                                        declare ptr @sable_opaque_debug_describe(ptr, ptr)
+                                        declare void @sable_register_debug_describer(ptr, ptr)
                                         declare ptr @sable_opaque_erase_error(ptr, ptr)
                                         declare void @sable_register_error_eraser(ptr, ptr)
                                         declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
@@ -631,6 +638,10 @@ public sealed partial class LlvmEmitter {
                 case "generic_describe":
                     SiteForRuntime();
                     Line($"{Result()} = call ptr @sable_opaque_describe(ptr {operands[0]}, ptr {operands[1]})");
+                    return true;
+                case "generic_debug_describe":
+                    SiteForRuntime();
+                    Line($"{Result()} = call ptr @sable_opaque_debug_describe(ptr {operands[0]}, ptr {operands[1]})");
                     return true;
             }
 

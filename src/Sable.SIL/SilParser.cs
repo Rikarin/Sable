@@ -340,6 +340,13 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_debug_describer")) {
+                var described = ParseType();
+                Expect("=");
+                module.DebugDescribers[described.ToString()] = (described, Expect(TokenKind.Global, "a describer's name").Text);
+                continue;
+            }
+
             if (Accept("sil_global")) {
                 var global = Expect(TokenKind.Global, "a global's name").Text;
                 Expect(":");

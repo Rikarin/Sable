@@ -8230,12 +8230,13 @@ public sealed partial class SilGen {
         /// </summary>
         SilValue? Hole(BoundExpression part, BoundFormatSpec? format) {
             part = AsTypeValue(part);
-            if (format is null && IsOpaqueHere(Sub(part.Type)) && MetadataOf(Sub(part.Type)) is { } described) {
+            // '"\(x:?)"' of one too, by its debug describer (#297).
+            if ((format is null || format.Specifier == DebugFormat) && IsOpaqueHere(Sub(part.Type)) && MetadataOf(Sub(part.Type)) is { } described) {
                 if (Borrow(part) is not { } value) {
                     return null;
                 }
 
-                var text = Emit(new BuiltinInst("generic_describe", SilType.String, value, described));
+                var text = Emit(new BuiltinInst(format is null ? "generic_describe" : "generic_debug_describe", SilType.String, value, described));
                 End(value);
                 return text;
             }
@@ -8288,6 +8289,9 @@ public sealed partial class SilGen {
         ///     <c>?</c>) padded to the spec's width, which is all the binder
         ///     lets such a spec say.
         /// </summary>
+        /// <summary>The bound value of <c>?</c>'s spec, for a debug describer to write a value with.</summary>
+        BoundExpression? DebugSpec(SyntaxNode at) => DebugFormat.Bind(Core, at);
+
         SilValue? FormattedHole(BoundExpression part, BoundFormatSpec format) {
             if (FormatRequirement() is var (formattable, write) && Sub(part.Type).Satisfies(formattable)) {
                 return Expression(new BoundCall(part.Syntax, part, write, [format.Value], Core.String));

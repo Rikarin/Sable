@@ -1739,6 +1739,12 @@ public sealed class SilModule {
     public Dictionary<string, (SilType Type, string Function)> Describers { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
+    ///     The same for <c>"\(x:?)"</c>: the function that writes such a value
+    ///     out as <c>Debug</c> describes it (<c>generic_debug_describe</c>).
+    /// </summary>
+    public Dictionary<string, (SilType Type, string Function)> DebugDescribers { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
     ///     For each error type unspecialised code may throw on as
     ///     <c>any Error</c>, by the type's name: the function that boxes such
     ///     a value as one, given where it is and its metadata
@@ -2269,7 +2275,7 @@ public static class SilBuiltins {
                 return new([metadata], metadata);
             case "opaque_type" when operands is [OpaqueType value, var m] && m == metadata:
                 return new([value, metadata], metadata);
-            case "generic_describe" when operands is [OpaqueType described, var m] && m == metadata:
+            case "generic_describe" or "generic_debug_describe" when operands is [OpaqueType described, var m] && m == metadata:
                 return new([described, metadata], SilType.String);
             // An error of one, boxed as 'any Error' by its type's eraser: taken.
             case "opaque_erase_error" when operands is [OpaqueType erased] && result is ClassType:

@@ -395,10 +395,11 @@ public sealed partial class SilInterpreter {
             case "opaque_address":
                 result = new Held(operands[0]);
                 return true;
-            // Written out by its type's describer.
-            case "generic_describe": {
+            // Written out by its type's describer, or its debug describer for '"\(x:?)"'.
+            case "generic_describe" or "generic_debug_describe": {
                 var type = (MetadataModel)operands[1]!;
-                if (!module.Describers.TryGetValue(type.Type.ToString(), out var describer) || module.Find(describer.Function) is not { } describe) {
+                var describers = builtin.Name == "generic_describe" ? module.Describers : module.DebugDescribers;
+                if (!describers.TryGetValue(type.Type.ToString(), out var describer) || module.Find(describer.Function) is not { } describe) {
                     throw new SilTrap($"a '{type.Described.Name}' with no description");
                 }
 

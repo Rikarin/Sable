@@ -1859,6 +1859,62 @@ public sealed class UnspecialisedGenericTests {
         }
     }
 
+    const string Debugged = """
+        struct Point {
+            var x: Int
+            var y: Int
+        }
+
+        fn debugged<T>(_ value: T) -> String {
+            return "<\(value:?)> <\(value)>"
+        }
+
+        fn waits<T>(_ value: T) async -> T {
+            do {
+                try await Task.sleep(nanoseconds: 1000)
+            } catch {
+                print("cancelled")
+            }
+            if Task.isCancelled {
+                print("cancelled")
+            }
+            return value
+        }
+        """;
+
+    /// <summary>
+    ///     <c>"\(x:?)"</c> of a type parameter's value is written by its
+    ///     type's debug describer, made beside its describer where the type
+    ///     is known; and a static member of a generic type that names none of
+    ///     its type parameters — <c>Task.sleep</c>, <c>Task.isCancelled</c> —
+    ///     is compiled once, given none of its type's metadata.
+    /// </summary>
+    [Fact]
+    public void DebugHolesAndStaticMembersNamingNoTypeParameterAreCompiledOnce() {
+        AsyncPrints(
+            "3\nx\n<\"text\"> <text>\n<42> <42>\n<Point(x: 1, y: 2)> <Point(x: 1, y: 2)>\n<[1, 2]> <[1, 2]>\n<none> <none>\n\"r\"\n",
+            Debugged,
+            """
+                print(await waits(3))
+                print(await waits("x"))
+                print(debugged("text"))
+                print(debugged(42))
+                print(debugged(Point { x: 1, y: 2 }))
+                print(debugged([1, 2]))
+                let missing: Int? = none
+                print(debugged(missing))
+                print(String.reflecting("r"))
+            """,
+            "debugged", "waits");
+        using var _ = SilGen.UseGenerics(GenericsMode.Unspecialised);
+        var result = Pipeline.Compile(new SourceText($"module Test\n{Debugged}\n@main\nfn main() async {{\n print(await waits(1))\n print(String.reflecting(2))\n}}\n", "test.sb"));
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        var functions = result.Sil!.Functions.Select(static f => f.Name).ToList();
+        foreach (var name in new[] { "Sable.Core.Task.sleep", "Sable.Core.String.reflecting" }) {
+            Assert.Contains(functions, f => f.StartsWith(name, StringComparison.Ordinal) && f.EndsWith("$generic", StringComparison.Ordinal));
+        }
+    }
+
     /// <summary>
     ///     Tasks that can never go on are dropped as the program ends: what
     ///     the frames of async functions compiled once held — values of a type

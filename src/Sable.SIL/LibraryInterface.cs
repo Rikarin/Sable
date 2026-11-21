@@ -336,6 +336,10 @@ public sealed class LibraryInterface {
             program.Describers.TryAdd(name, describer);
         }
 
+        foreach (var (name, describer) in library.DebugDescribers) {
+            program.DebugDescribers.TryAdd(name, describer);
+        }
+
         foreach (var (name, eraser) in library.ErrorErasers) {
             program.ErrorErasers.TryAdd(name, eraser);
         }

@@ -309,6 +309,43 @@ SableString *sable_opaque_describe(void *value, const SableTypeMetadata *type) {
     sable_trap("a value with no description");
 }
 
+// The same for '"\(x:?)"': what writes a value out as Debug describes it.
+static struct {
+    const SableTypeMetadata *type;
+    SableDescriber describe;
+} *debug_describers;
+static int64_t debug_describer_count, debug_describer_capacity;
+
+void sable_register_debug_describer(const SableTypeMetadata *type, SableDescriber describe) {
+    if (debug_describer_count == debug_describer_capacity) {
+        debug_describer_capacity = debug_describer_capacity == 0 ? 16 : debug_describer_capacity * 2;
+        debug_describers = realloc(debug_describers, (size_t)debug_describer_capacity * sizeof *debug_describers);
+        if (debug_describers == NULL) {
+            sable_trap("out of memory");
+        }
+    }
+
+    debug_describers[debug_describer_count].type = type;
+    debug_describers[debug_describer_count].describe = describe;
+    debug_describer_count++;
+}
+
+SableString *sable_opaque_debug_describe(void *value, const SableTypeMetadata *type) {
+    for (int64_t i = 0; i < debug_describer_count; i++) {
+        if (debug_describers[i].type == type) {
+            return debug_describers[i].describe(value, type);
+        }
+    }
+
+    for (int64_t i = 0; i < debug_describer_count; i++) {
+        if (sable_metadata_equal(debug_describers[i].type, type)) {
+            return debug_describers[i].describe(value, type);
+        }
+    }
+
+    sable_trap("a value with no description");
+}
+
 // What boxes an error of each type unspecialised code may throw on as
 // 'any Error' (#297): registered by each image as it starts, as describers
 // are. The eraser copies the value into a box of its type; the value, which

@@ -120,6 +120,10 @@ public static class SilPrinter {
             builder.Append("sil_describer $").Append(type).Append(" = @").Append(function).Append('\n');
         }
 
+        foreach (var (_, (type, function)) in module.DebugDescribers.OrderBy(static d => d.Key, StringComparer.Ordinal)) {
+            builder.Append("sil_debug_describer $").Append(type).Append(" = @").Append(function).Append('\n');
+        }
+
         foreach (var (_, (type, function)) in module.ErrorErasers.OrderBy(static d => d.Key, StringComparer.Ordinal)) {
             builder.Append("sil_error_eraser $").Append(type).Append(" = @").Append(function).Append('\n');
         }
@@ -150,7 +154,7 @@ public static class SilPrinter {
             builder.Append("}\n");
         }
 
-        if ((module.Types.Count > 0 || module.Globals.Count > 0 || module.Foreign.Count > 0 || module.Exports.Count > 0 || module.WitnessTables.Count > 0 || module.Describers.Count > 0 || module.ErrorErasers.Count > 0)
+        if ((module.Types.Count > 0 || module.Globals.Count > 0 || module.Foreign.Count > 0 || module.Exports.Count > 0 || module.WitnessTables.Count > 0 || module.Describers.Count > 0 || module.DebugDescribers.Count > 0 || module.ErrorErasers.Count > 0)
             && module.Functions.Exists(f => include?.Invoke(f) != false)) {
             builder.Append('\n');
         }

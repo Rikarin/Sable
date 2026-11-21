@@ -1457,6 +1457,10 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                 Boxing(builtin, _module.Describers, takes: false);
                 return;
 
+            case "generic_debug_describe":
+                Boxing(builtin, _module.DebugDescribers, takes: false);
+                return;
+
             // An error of a type with no values — Never, laid out as nothing — is never thrown: the code that boxes one is not reached.
             case "opaque_erase_error" when Value(builtin.Operands[0]).Type == SilType.Unit:
                 Emit(new UnreachableInst(), builtin);

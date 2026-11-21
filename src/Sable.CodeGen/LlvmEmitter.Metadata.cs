@@ -401,6 +401,23 @@ public sealed partial class LlvmEmitter {
 
     sealed partial class FunctionEmitter {
         /// <summary>
+        ///     What the function finds once where it starts, by what it is: the
+        ///     registry's tables of types known here, and the metadata of
+        ///     arrays and slices of types whose metadata it has from the start.
+        /// </summary>
+        readonly Dictionary<string, string> _knownTables = new(StringComparer.Ordinal);
+
+        /// <summary>True for metadata the function has where it starts: a parameter's, a constant, an opaque type's, or an array's of one.</summary>
+        bool KnownAtEntry(SilValue metadata) =>
+            metadata switch {
+                SilArgument argument => argument.Block == function.Entry,
+                MetadataInst => true,
+                BuiltinInst { Name: var name } when name.StartsWith("opaque_metadata:", StringComparison.Ordinal) => true,
+                BuiltinInst { Name: "metadata_array" or "metadata_slice", Operands: [var element] } => KnownAtEntry(element),
+                _ => false,
+            };
+
+        /// <summary>
         ///     The builtins that read a type's metadata, call its value
         ///     witnesses, and look a conformance up in the registry; false for
         ///     any other.
@@ -553,9 +570,25 @@ public sealed partial class LlvmEmitter {
                     _names[builtin] = operands[0];
                     return true;
                 // The metadata of an array of the type, made at run time.
-                case "metadata_array" or "metadata_slice":
-                    Line($"{Result()} = call ptr @sable_{builtin.Name["metadata_".Length..]}_type(ptr {module.RuntimeCache()}, ptr {operands[0]})");
+                // Of an element's known where the function starts, made there,
+                // once, whichever calls want it.
+                case "metadata_array" or "metadata_slice": {
+                    var made = $"call ptr @sable_{builtin.Name["metadata_".Length..]}_type(ptr {module.RuntimeCache()}, ptr {operands[0]})";
+                    if (!KnownAtEntry(builtin.Operands[0])) {
+                        Line($"{Result()} = {made}");
+                        return true;
+                    }
+
+                    var key = $"{builtin.Name}:{operands[0]}";
+                    if (!_knownTables.TryGetValue(key, out var found)) {
+                        found = Fresh();
+                        _entryAllocas.Append($"  {found} = {made}\n");
+                        _knownTables[key] = found;
+                    }
+
+                    _names[builtin] = found;
                     return true;
+                }
                 case "opaque_borrow_as" or "opaque_take_as":
                     _names[builtin] = operands[0];
                     return true;
@@ -580,13 +613,27 @@ public sealed partial class LlvmEmitter {
             }
 
             // A table code that knows the type refers to: the constant this
-            // module made for it; else the registry's answer, kept at the call
-            // the first time it is found.
+            // module — or this unit, whose copy is the one the linker keeps
+            // of every unit's, as the registry's is — made for it. Else the
+            // registry's answer, kept the first time it is found: for a type
+            // known here, found once where the function starts, whichever
+            // calls want it.
             if (builtin.Name.StartsWith("witness_table_known:", StringComparison.Ordinal)) {
                 var protocol = builtin.Name["witness_table_known:".Length..];
-                if (builtin.Operands[0] is MetadataInst { Described: var described } && module._module?.FindWitnessTable(described, protocol) is { } known
-                    && module._module?.Unit is null) {
-                    _names[builtin] = module.WitnessTableGlobal(known);
+                if (builtin.Operands[0] is MetadataInst { Described: var described } metadata && !SilType.MentionsOpaque(described)) {
+                    if (module._module?.FindWitnessTable(described, protocol) is { } known) {
+                        _names[builtin] = module.WitnessTableGlobal(known);
+                        return true;
+                    }
+
+                    var key = $"{described}:{protocol}";
+                    if (!_knownTables.TryGetValue(key, out var found)) {
+                        found = Fresh();
+                        _entryAllocas.Append($"  {found} = call ptr @sable_witness_table_cached(ptr {module.WitnessCache()}, ptr {module.TypeMetadataGlobal(described)}, ptr {module.ProtocolDescriptor(protocol)})\n");
+                        _knownTables[key] = found;
+                    }
+
+                    _names[builtin] = found;
                     return true;
                 }
 

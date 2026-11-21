@@ -2171,8 +2171,10 @@ public sealed partial class LlvmEmitter {
                         _entryAllocas.Append($"  {name} = alloca {PartType(alloc.ElementType)}{StorageAlign(alloc.ElementType)}\n");
                     }
 
-                    // Storage for something with references starts empty: all zeros.
-                    if (!alloc.ElementType.IsTrivial) {
+                    // Storage for something with references starts empty: all
+                    // zeros. One that holds without owning is never destroyed,
+                    // so what it held before it is written is never read.
+                    if (!alloc.ElementType.IsTrivial && !alloc.Unmanaged) {
                         Line($"store {Type(alloc.ElementType)} zeroinitializer, ptr {name}");
                     }
 

@@ -1125,6 +1125,10 @@ internal static class ConformanceChecker {
             ArrayTypeSymbol array =>
                 new ArrayTypeSymbol(SubstituteSelf(array.ElementType, protocol, conformer), array.ArrayKind),
 
+            // '(Self, Bool)': each element.
+            TupleTypeSymbol tuple =>
+                new TupleTypeSymbol([..tuple.ElementTypes.Select(e => SubstituteSelf(e, protocol, conformer))], tuple.ElementNames),
+
             // 'Decoded<Self>': Self as a type argument, or deeper.
             NamedTypeSymbol { IsConstructed: true } constructed when protocol.SelfTypeParameter is { } selfParameter =>
                 new TypeSubstitution(new() { [selfParameter] = asItself }).Apply(constructed),

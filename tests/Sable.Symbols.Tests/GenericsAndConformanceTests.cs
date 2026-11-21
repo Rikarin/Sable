@@ -126,6 +126,40 @@ public sealed class GenericsAndConformanceTests {
         );
     }
 
+    /// <summary>A requirement's tuple of Self is met by the same tuple of the conforming type.</summary>
+    [Fact]
+    public void ATupleOfSelfInARequirementIsATupleOfTheConformer() {
+        AssertClean(
+            """
+            protocol Halving {
+                fn halved() -> (Self, Bool)
+                fn joined(_ other: (Self, Int)) -> Self
+                var doubled: (Self, Self) { get }
+            }
+            struct Count: Halving {
+                var n: Int
+                fn halved() -> (Count, Bool) => (Count(n: n / 2), n % 2 == 0)
+                fn joined(_ other: (Count, Int)) -> Count => other.0
+                var doubled: (Count, Count) => (self, self)
+            }
+            """
+        );
+
+        Assert.Contains(
+            Errors(
+                """
+                protocol Halving {
+                    fn halved() -> (Self, Bool)
+                }
+                struct Count: Halving {
+                    fn halved() -> (Int, Bool) => (1, true)
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_RequirementSignatureMismatch
+        );
+    }
+
     // ---- Inference ---------------------------------------------------------
 
     [Fact]

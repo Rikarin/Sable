@@ -129,7 +129,11 @@ public sealed partial class SilGen {
             return known;
         }
 
-        if (SignatureShape(symbol) is not { } shape) {
+        if (SignatureShape(symbol, out var refused) is not { } shape) {
+            if (refused is not null && Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
+                Console.Error.WriteLine($"specialised {QualifiedName(symbol)}: {refused}");
+            }
+
             _shapes[symbol] = null;
             _shapeOrder.Add(symbol);
             return null;
@@ -209,26 +213,70 @@ public sealed partial class SilGen {
             _ => false,
         });
 
-    /// <summary>What a generic function's signature lets it take compiled once: null for one it does not.</summary>
-    GenericShape? SignatureShape(FunctionSymbol symbol) {
-        if (symbol.TypeParameters.IsEmpty || !_declarations.ContainsKey(symbol) || _localGenerics.ContainsKey(symbol)
-            || symbol is { IsPolymorphic: true } or { IsRethrows: true } or { IsAsync: true } || symbol.FunctionKind != FunctionKind.Ordinary
-            || symbol.ForeignName is not null || !symbol.OpaqueTypeParameters.IsEmpty
-            || _compilation.GetGenerator(symbol) is not null || _compilation.GetDerivedBody(symbol) is not null
-            || _compilation.GetLazyBody(symbol) is not null || _compilation.GetInheritedInitializerBody(symbol) is not null
-            || !TypeParametersOf(symbol).SequenceEqual(symbol.TypeParameters)
-            || !symbol.SameTypeRequirements.IsEmpty || !symbol.ConformanceRequirements.IsEmpty) {
+    /// <summary>
+    ///     What a generic function's signature lets it take compiled once:
+    ///     null for one it does not, with why, for <c>SABLE_GENERICS_TRACE</c>
+    ///     (null for a function that is not generic or has no body here).
+    /// </summary>
+    /// <remarks>
+    ///     A protocol extension's member is generic over <c>Self</c>, which
+    ///     conforms to the protocol: its shape is <c>Self</c> and the
+    ///     protocol's table, then its own type parameters.
+    /// </remarks>
+    GenericShape? SignatureShape(FunctionSymbol symbol, out string? refused) {
+        refused = null;
+        var all = TypeParametersOf(symbol).ToList();
+        if (all.Count == 0 || !_declarations.ContainsKey(symbol)) {
+            return null;
+        }
+
+        refused = _localGenerics.ContainsKey(symbol) ? "a local generic function"
+            : symbol.IsPolymorphic ? "polymorphic recursion"
+            : symbol.IsRethrows ? "rethrows"
+            : symbol.IsAsync ? "async"
+            : symbol.FunctionKind != FunctionKind.Ordinary ? $"{(symbol.FunctionKind.ToString()[0] is 'A' or 'E' or 'I' or 'O' or 'U' ? "an" : "a")} {symbol.FunctionKind.ToString().ToLowerInvariant()}"
+            : symbol.ForeignName is not null ? "foreign"
+            : !symbol.OpaqueTypeParameters.IsEmpty ? "a 'some P' parameter"
+            : _compilation.GetGenerator(symbol) is not null ? "a generator"
+            : _compilation.GetDerivedBody(symbol) is not null || _compilation.GetLazyBody(symbol) is not null
+              || _compilation.GetInheritedInitializerBody(symbol) is not null ? "a body the compiler writes"
+            : !symbol.SameTypeRequirements.IsEmpty || !symbol.ConformanceRequirements.IsEmpty ? "a 'where' clause"
+            : null;
+        if (refused is not null) {
             return null;
         }
 
         var requirements = new List<(TypeParameterSymbol, NamedTypeSymbol)>();
+        var own = new List<TypeParameterSymbol>();
+        var owner = Owner(symbol)?.OriginalDefinition;
+        if (owner is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } self }) {
+            if (!IsTabledProtocol(owner)) {
+                refused = "a member of a generic protocol";
+                return null;
+            }
+
+            own.Add(self);
+            requirements.Add((self, owner));
+        } else if (owner is { TypeParameters.IsEmpty: false } || owner is { ExtendedArray: not null } or { ExtendedOptional: not null }) {
+            refused = "a member of a generic type";
+            return null;
+        }
+
+        own.AddRange(symbol.TypeParameters);
+        if (!all.SequenceEqual(own)) {
+            refused = "type parameters from around it";
+            return null;
+        }
+
         foreach (var parameter in symbol.TypeParameters) {
             if (parameter is { IsValue: true } or { AllowsNoncopyable: true } || parameter.OpaqueParameter is not null) {
+                refused = $"the type parameter '{parameter.Name}'";
                 return null;
             }
 
             foreach (var part in parameter.Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c))) {
                 if (part is not NamedTypeSymbol protocol || !IsTabledProtocol(protocol)) {
+                    refused = $"the constraint '{part.ToDisplayString()}'";
                     return null;
                 }
 
@@ -238,22 +286,25 @@ public sealed partial class SilGen {
             }
         }
 
-        var own = symbol.TypeParameters;
+        // A protocol's associated types, which its extension names bare, are not passed yet.
+        var associated = owner is { TypeKind: TypeKind.Protocol } ? ProtocolClosure([owner]).SelectMany(static p => p.AssociatedTypes).ToList() : [];
         bool Passable(TypeSymbol type) =>
-            !Mentions(type, own) || type is TypeParameterSymbol || type is MetatypeTypeSymbol { InstanceType: TypeParameterSymbol };
+            !Mentions(type, associated) && (!Mentions(type, own) || type is TypeParameterSymbol || type is MetatypeTypeSymbol { InstanceType: TypeParameterSymbol });
 
         foreach (var parameter in symbol.Parameters) {
             if (!Passable(parameter.Type)
                 || Mentions(parameter.Type, own) && (parameter.IsVariadic || parameter.IsByReference || parameter.Modifier is not (ParameterModifier.None or ParameterModifier.In))) {
+                refused = $"the parameter '{parameter.Name}: {parameter.Type.ToDisplayString()}'";
                 return null;
             }
         }
 
         if (!Passable(symbol.ReturnType) || symbol.ThrownType is { } thrown && Mentions(thrown, own)) {
+            refused = $"the result '{symbol.ReturnType.ToDisplayString()}'";
             return null;
         }
 
-        return new(own, [..requirements]);
+        return new([..own], [..requirements]);
     }
 
     bool BodyAllows(FunctionSymbol symbol, GenericShape shape) {
@@ -262,7 +313,7 @@ public sealed partial class SilGen {
             return false;
         }
 
-        var checker = new ShapeChecker(this, shape);
+        var checker = new ShapeChecker(this, shape, symbol);
         if (checker.Allows(body, false)) {
             if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
                 Console.Error.WriteLine($"unspecialised {QualifiedName(symbol)}");
@@ -288,7 +339,7 @@ public sealed partial class SilGen {
     ///     requirement of the parameter's protocols, or a generic function
     ///     that is unspecialised too, given the parameter itself.
     /// </summary>
-    sealed class ShapeChecker(SilGen generator, GenericShape shape) {
+    sealed class ShapeChecker(SilGen generator, GenericShape shape, FunctionSymbol checkedSymbol) {
         readonly ImmutableArray<TypeParameterSymbol> _own = shape.Parameters;
 
         bool Mentions(TypeSymbol type) => SilGen.Mentions(type, _own);
@@ -361,7 +412,7 @@ public sealed partial class SilGen {
 
         bool Produces(BoundExpression expression) =>
             expression switch {
-                BoundParameterAccess { IsNarrowed: false } or BoundLocalAccess { IsNarrowed: false } => true,
+                BoundParameterAccess { IsNarrowed: false } or BoundLocalAccess { IsNarrowed: false } or BoundSelfAccess => true,
                 BoundCall or BoundMetatype or BoundTypeExpression or BoundConditional or BoundAssignment or BoundTry => true,
                 BoundBinaryOperator { Method: not null } or BoundUnaryOperator { Method: not null } => true,
                 BoundFieldAccess access => PropertyAllowed(access),
@@ -378,9 +429,13 @@ public sealed partial class SilGen {
                 BoundFieldAccess access => ReferenceEquals(child, access.Receiver) && PropertyAllowed(access),
                 BoundConditional conditional => !ReferenceEquals(child, conditional.Condition),
                 BoundConversion { ConversionKind: ConversionKind.Identity } => true,
-                BoundInterpolatedString interpolated => interpolated.Parts.IndexOf(child) is var at and >= 0 && interpolated.Formats[at] is null,
+                // Not inside a protocol's own 'debugDescription' (Error's
+                // '"\(self)"'): a describer would call it back.
+                BoundInterpolatedString interpolated => interpolated.Parts.IndexOf(child) is var at and >= 0 && interpolated.Formats[at] is null && !DescribesSelf,
                 _ => false,
             };
+
+        bool DescribesSelf => checkedSymbol is { Name: "debugDescription" } && OwnerOf(checkedSymbol) is { TypeKind: TypeKind.Protocol };
 
         bool CallMentions(BoundCall call) =>
             Mentions(call.Type) || call.Receiver is { } receiver && Mentions(receiver.Type) || call.Arguments.Any(a => Mentions(a.Type))
@@ -394,7 +449,7 @@ public sealed partial class SilGen {
                 return call.Arguments is [var argument] && IsOwn(argument.Type);
             }
 
-            if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol }) {
+            if (callee.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol }) {
                 return RequirementAllowed(call);
             }
 
@@ -402,12 +457,27 @@ public sealed partial class SilGen {
                 return false;
             }
 
-            if (call.Receiver is { } receiver && Mentions(receiver.Type)) {
+            // A protocol extension's member: on a value of a type parameter of
+            // this function, or on self, its Self that type parameter.
+            var calleeSelf = OwnerOf(callee)?.OriginalDefinition is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } protocolSelf } ? protocolSelf : null;
+            var receiverType = call.Receiver switch {
+                null => calleeSelf is not null && IsOwn(calleeSelf) ? calleeSelf : null,
+                BoundTypeExpression type => type.ReferencedType,
+                { Type: MetatypeTypeSymbol metatype } => metatype.InstanceType,
+                { } receiver => receiver.Type,
+            };
+            if (call.Receiver is { } onValue && Mentions(onValue.Type) && (calleeSelf is null || receiverType is null || !IsOwn(receiverType))) {
+                return false;
+            }
+
+            // One that changes self changes a local, or this function's own self.
+            if (calleeSelf is not null && callee.IsMutating && receiverType is not null && IsOwn(receiverType)
+                && call.Receiver is not (BoundLocalAccess { Local.IsMutable: true } or null or BoundSelfAccess) || callee.IsMutating && call.Receiver is null or BoundSelfAccess && !checkedSymbol.IsMutating) {
                 return false;
             }
 
             foreach (var parameter in calleeShape.Parameters) {
-                if (call.Substitution.Lookup(parameter) is not { } bound) {
+                if ((ReferenceEquals(parameter, calleeSelf) ? call.Substitution.Lookup(parameter) ?? receiverType : call.Substitution.Lookup(parameter)) is not { } bound) {
                     return false;
                 }
 
@@ -451,8 +521,10 @@ public sealed partial class SilGen {
                 return false;
             }
 
-            // A method that changes its value changes it in a local.
-            if (callee.IsMutating && call.Receiver is not BoundLocalAccess { Local.IsMutable: true }) {
+            // A method that changes its value changes it in a local, or a
+            // protocol extension's own self, when it may change it.
+            if (callee.IsMutating && call.Receiver is not BoundLocalAccess { Local.IsMutable: true }
+                && !(call.Receiver is null or BoundSelfAccess && checkedSymbol.IsMutating)) {
                 return false;
             }
 
@@ -1171,7 +1243,10 @@ public sealed partial class SilGen {
             var arguments = new List<SilValue>();
             var borrows = new List<SilValue>();
             if (HasSelf(callee)) {
-                var self = callee.IsMutating ? call.Receiver is { } receiver ? Address(receiver, borrows) : null : call.Receiver is { } value ? Borrow(value) : null;
+                // Implicitly, a protocol extension's own self.
+                var self = callee.IsMutating
+                    ? call.Receiver is { } receiver ? Address(receiver, borrows) : _selfAddress
+                    : call.Receiver is { } value ? Borrow(value) : _selfValue ?? (_selfAddress is { } at ? Hold(Emit(new LoadInst(at))) : null);
                 if (self is null) {
                     EndAll(borrows);
                     return Missing(call, "the receiver of this call");
@@ -1326,6 +1401,44 @@ public sealed partial class SilGen {
             borrows.Add(new WriteBack(() => {
                 Emit(new EndBorrowInst(borrowed));
                 if (!type.IsTrivial) {
+                    Emit(new DestroyAddrInst(slot));
+                }
+            }));
+            return borrowed;
+        }
+
+        /// <summary>
+        ///     What a call binds its callee's type parameters to, with a
+        ///     protocol extension's Self, which a call on this function's own
+        ///     self leaves unsaid, bound to this function's Self.
+        /// </summary>
+        TypeSubstitution OwnSelfBound(FunctionSymbol callee, TypeSubstitution bound) {
+            if (OwnerOf(callee)?.OriginalDefinition is not { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } self } || bound.Lookup(self) is not null || !IsOpaqueHere(self)) {
+                return bound;
+            }
+
+            var map = bound.Parameters.ToDictionary(p => p, p => bound.Lookup(p)!);
+            map[self] = self;
+            return new TypeSubstitution(map);
+        }
+
+        /// <summary>
+        ///     A receiver of a type known here for an unspecialised callee
+        ///     that knows it only as Self: its storage's address seen as Self's,
+        ///     for one that changes it; else a copy in a slot of its own,
+        ///     borrowed until the call is done.
+        /// </summary>
+        SilValue GenericReceiver(SilValue self, SilType expected, List<SilValue> borrows) {
+            if (expected is AddressType) {
+                return Emit(new BuiltinInst("opaque_cast", expected, self));
+            }
+
+            var slot = NewSlot(self.Type);
+            Emit(new StoreInst(self.Type.IsTrivial ? self : Emit(new CopyValueInst(self)), slot, StoreKind.Init));
+            var borrowed = Emit(new LoadBorrowInst(Emit(new BuiltinInst("opaque_cast", SilType.Address(expected), slot))));
+            borrows.Add(new WriteBack(() => {
+                Emit(new EndBorrowInst(borrowed));
+                if (!slot.ElementType.IsTrivial) {
                     Emit(new DestroyAddrInst(slot));
                 }
             }));

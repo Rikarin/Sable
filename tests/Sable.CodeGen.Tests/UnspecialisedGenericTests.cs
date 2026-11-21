@@ -255,4 +255,65 @@ public sealed class UnspecialisedGenericTests {
                 print("\(sum(2, 2)) \(sum(1, 5))")
                 print(repeated(English(), 3))
             """);
+
+    const string Extended = """
+        protocol Shape {
+            fn area() -> Int
+            mutating fn grow()
+        }
+
+        extension Shape {
+            fn doubled() -> Int => area() * 2
+
+            fn describe() -> String { return "area \(area()), doubled \(self.doubled())" }
+
+            mutating fn growTwice() {
+                grow()
+                self.grow()
+            }
+
+            fn same(as other: Self) -> Bool { return area() == other.area() }
+
+            fn bigger(_ other: Self) -> Self { return area() >= other.area() ? self : other }
+        }
+
+        struct Square: Shape {
+            var side: Int
+            fn area() -> Int => side * side
+            mutating fn grow() { side = side + 1 }
+        }
+
+        final class Circle: Shape {
+            var r: Int
+            init(r: Int) { self.r = r }
+            fn area() -> Int => 3 * r * r
+            fn grow() { r = r + 1 }
+        }
+
+        fn report<S: Shape>(_ shape: S) -> String { return shape.describe() }
+        """;
+
+    const string UsesExtended = """
+            var square = Square { side: 2 }
+            print(square.describe())
+            square.growTwice()
+            print(square.doubled())
+            print(report(Circle(r: 1)))
+            print(square.same(as: Square { side: 4 }))
+            print(square.bigger(Square { side: 9 }).area())
+        """;
+
+    /// <summary>
+    ///     A protocol extension's members are generic over Self: compiled once,
+    ///     given self where its caller holds it — its storage, for a mutating
+    ///     one — and Self's metadata and table; one calls another on self.
+    /// </summary>
+    [Fact]
+    public void ProtocolExtensionMembersAreCompiledOnce() {
+        Prints("area 4, doubled 8\n32\narea 3, doubled 6\ntrue\n81\n", Extended, UsesExtended);
+        var functions = Unspecialised(Extended, UsesExtended);
+        foreach (var member in new[] { "doubled", "describe", "growTwice", "same", "bigger" }) {
+            Assert.Contains($"Test.Shape.{member}$generic", functions);
+        }
+    }
 }

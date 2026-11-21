@@ -10191,7 +10191,7 @@ public sealed partial class SilGen {
             string name;
             FunctionType? type;
             GenericShape? genericShape = null;
-            var bound = IsGeneric(callee) ? CallSubstitution(call, callee) : TypeSubstitution.Empty;
+            var bound = IsGeneric(callee) ? OwnSelfBound(callee, CallSubstitution(call, callee)) : TypeSubstitution.Empty;
             if (IsGeneric(callee) && CallsUnspecialised(callee, bound, call.Syntax, out genericShape)) {
                 // One instance for every type (#297): boxes, metadata and witness tables.
                 if (generator.UnspecialisedInstance(callee, genericShape!, call.Syntax) is not { } generic) {
@@ -10276,6 +10276,12 @@ public sealed partial class SilGen {
                 // A method a superclass declares takes the object as that class.
                 if (self.Type is ClassType selfClass && type.Parameters[0] is ClassType parameterClass && selfClass != parameterClass) {
                     self = Emit(new UpcastInst(self, parameterClass));
+                }
+
+                // One unspecialised code knows only by its metadata (a protocol
+                // extension's member) takes it where it is, seen as Self.
+                if (genericShape is not null && SilType.MentionsOpaque(type.Parameters[0]) && !SilType.SameErasingOpaque(self.Type, type.Parameters[0])) {
+                    self = GenericReceiver(self, type.Parameters[0], borrows);
                 }
 
                 arguments.Add(self);

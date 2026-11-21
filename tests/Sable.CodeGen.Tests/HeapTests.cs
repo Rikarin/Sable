@@ -420,6 +420,24 @@ public sealed class HeapTests {
         Assert.True(held < most, line);
     }
 
+    /// <summary>
+    ///     The peak memory SABLE_STATS reports is the program's own. On Linux
+    ///     getrusage's ru_maxrss survives exec and starts at the parent's
+    ///     resident set: a program this test host starts said it peaked at
+    ///     the host's few hundred megabytes, whatever it used.
+    /// </summary>
+    [Fact]
+    public void ThePeakMemoryReportedIsTheProgramsOwn() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var stats = BuildAndRun(Program("", "    print(1)"), environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
+        var match = System.Text.RegularExpressions.Regex.Match(stats, @"peak memory (\d+) KiB");
+        Assert.True(match.Success, stats);
+        Assert.InRange(long.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture), 1, 32 * 1024);
+    }
+
     static string Before(string text, string marker) => text.IndexOf(marker, StringComparison.Ordinal) is var at and >= 0 ? text[..at] : text;
 
     static string Root {

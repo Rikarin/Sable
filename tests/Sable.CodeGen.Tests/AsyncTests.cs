@@ -311,6 +311,12 @@ public sealed class AsyncTests {
     ///     A sleeping task is its frames and a timer: a hundred thousand of
     ///     them, each sleeping a second, take about a second and little memory
     ///     each — a thread each would be 800 GB of stacks (#185, #276).
+    ///     A task is about a kilobyte: the task itself, 896 bytes with the
+    ///     first 576 of its frames inside (tasks.c, frames.c), so its root
+    ///     frame and the sleep's take no other memory; its closure and its
+    ///     handle, a hundred bytes from the slabs; and eight bytes each in
+    ///     the sleepers' heap and the array of handles. It peaks at about
+    ///     110 MB, the bound's 256 MiB less than half.
     /// </summary>
     [Fact]
     [Trait("Category", "Timing")]

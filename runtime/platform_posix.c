@@ -399,7 +399,32 @@ static void unmap_slab(void *slab, size_t size) {
     munmap(slab, size);
 }
 
+// The most this program's memory has held. On Linux, getrusage's ru_maxrss
+// is the wrong measure: it survives execve, and exec sets it from the memory
+// the process had before — after a fork that is the parent's resident set,
+// and after a vfork (what .NET's Process.Start and posix_spawn use) the
+// parent's memory itself. A program started by a test host of 270 MB says
+// it peaked at 270 MB, whatever it used. VmHWM in /proc/self/status is the
+// high-water mark of this program's own memory, which exec made new.
 static int64_t peak_memory(void) {
+#if defined(__linux__)
+    FILE *status = fopen("/proc/self/status", "r");
+    if (status != NULL) {
+        char line[256];
+        long long kib = -1;
+        while (fgets(line, sizeof line, status) != NULL) {
+            if (sscanf(line, "VmHWM: %lld kB", &kib) == 1) {
+                break;
+            }
+        }
+
+        fclose(status);
+        if (kib >= 0) {
+            return (int64_t)kib * 1024;
+        }
+    }
+#endif
+
     struct rusage usage;
     if (getrusage(RUSAGE_SELF, &usage) != 0) {
         return 0;

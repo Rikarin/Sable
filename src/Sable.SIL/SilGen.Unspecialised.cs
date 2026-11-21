@@ -37,8 +37,9 @@ public enum GenericsMode {
 ///         values of the type parameter itself, passed, stored, returned,
 ///         compared by metatype, written out, given to a requirement of its
 ///         protocols or to another such function, a closure over them among
-///         them. Anything else — a slice of <c>T</c>, a method of a generic
-///         class, an async function — is still specialised for its type
+///         them, an async function's awaits among them (its frame keeps the
+///         metadata, <see cref="AsyncLowering" />). Anything else — a slice of
+///         <c>T</c>, a method of a generic class — is still specialised for its type
 ///         arguments, so a program builds either way.
 ///     </para>
 ///     <para>
@@ -671,7 +672,6 @@ public sealed partial class SilGen {
 
         refused = _localGenerics.ContainsKey(symbol) ? "a local generic function"
             : symbol.IsPolymorphic ? "polymorphic recursion"
-            : symbol.IsAsync ? "async"
             : symbol.FunctionKind != FunctionKind.Ordinary && !IsGetter(symbol) && !IsSubscriptAccessor(symbol) && !IsValueInitializer(symbol) ? $"{(symbol.FunctionKind.ToString()[0] is 'A' or 'E' or 'I' or 'O' or 'U' ? "an" : "a")} {symbol.FunctionKind.ToString().ToLowerInvariant()}"
             : symbol.ForeignName is not null ? "foreign"
             : symbol.OpaqueTypeParameters.Any(static p => !p.OpaqueParameter!.Arguments.IsEmpty) ? "a 'some P<…>' parameter"
@@ -1030,13 +1030,20 @@ public sealed partial class SilGen {
                     return false;
                 case BoundCall call when CallMentions(call) && (inClosure || !CallAllowed(call)):
                     return false;
-                // A protocol's property or subscript set on a type parameter's value: no table entry sets one yet.
-                case BoundAssignment { Target: BoundFieldAccess { Receiver: { } setOn, Field.ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } } when Mentions(setOn.Type):
-                case BoundAssignment { Target: BoundIndexAccess { Receiver: var indexedOn, Subscript.ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } } when Mentions(indexedOn.Type):
-                    return false;
+                // A protocol's property set on a type parameter's value: a call of its setter's entry.
+                case BoundAssignment { Target: BoundFieldAccess { Receiver: { } setOn, Field: { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } setField } } setting when Mentions(setOn.Type):
+                    return !inClosure && generator.SetterOf(setField) is { } fieldSetter
+                           && RequirementAllowed(new BoundCall(setting.Syntax, setOn, fieldSetter, [setting.Value], generator.Core.Void))
+                           && Allows(setOn, false) && Allows(setting.Value, false);
+                // 'x == none' tests x's case, borrowed where it is: the 'none',
+                // and x's view as the type the comparison reads it as, are nothing more.
+                case BoundBinaryOperator { OperatorKind: BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual, Method: null } none
+                    when (Mentions(none.Left.Type) || Mentions(none.Right.Type)) && (IsNone(none.Right) ? none.Left : IsNone(none.Left) ? none.Right : null) is { } tested:
+                    tested = Viewed(tested);
+                    return !inClosure && Simple(tested.Type) && Produces(tested) && Allows(tested, false);
                 case BoundBinaryOperator binary when (Mentions(binary.Left.Type) || Mentions(binary.Right.Type)) && (inClosure || !BinaryAllowed(binary)):
                     return false;
-                case BoundUnaryOperator unary when Mentions(unary.Operand.Type)
+                case BoundUnaryOperator { OperatorKind: not UnaryOperatorKind.Await } unary when Mentions(unary.Operand.Type)
                                                    && (inClosure || unary.Method is not { } method || OwnerOf(method) is not { TypeKind: TypeKind.Protocol }
                                                        || !RequirementAllowed(new BoundCall(unary.Syntax, null, method, [unary.Operand], unary.Type))):
                     return false;
@@ -1092,6 +1099,19 @@ public sealed partial class SilGen {
                    || IsOwn(Canonical(thrown)) && own is ExistentialTypeSymbol { Constraint: var constraint } && constraint.Equals(generator.Core.Error);
         }
 
+        static bool IsNone(BoundExpression expression) =>
+            expression switch {
+                BoundLiteral { Value: null } => true,
+                BoundConversion conversion => IsNone(conversion.Operand),
+                _ => false,
+            };
+
+        /// <summary>A value seen as a type that is the same as its own — an associated type named through another path, 'S.Iter.Element' as 'S.Element': the value.</summary>
+        BoundExpression Viewed(BoundExpression expression) =>
+            expression is BoundConversion { ConversionKind: ConversionKind.Identity, Operand: var operand } conversion && Canonical(conversion.Type).Equals(Canonical(operand.Type))
+                ? Viewed(operand)
+                : expression;
+
         static IEnumerable<BoundNode> Descendants(BoundNode node) {
             foreach (var child in node.Children) {
                 yield return child;
@@ -1110,6 +1130,8 @@ public sealed partial class SilGen {
                 // A call of a function of them, in the generic convention.
                 BoundIndirectCall { Callee.Type: var calleeType } => IsGenericFunction(V(calleeType), _own),
                 BoundBinaryOperator { Method: not null } or BoundUnaryOperator { Method: not null } => true,
+                // An await of a call: the call, which the task may suspend in.
+                BoundUnaryOperator { OperatorKind: UnaryOperatorKind.Await, Operand: var awaited } => Produces(awaited),
                 BoundFieldAccess access => PropertyAllowed(access),
                 BoundConversion { ConversionKind: ConversionKind.Identity } conversion => conversion.Type.Equals(conversion.Operand.Type),
                 // A closure that throws nothing where one that may throw is taken.
@@ -1162,6 +1184,8 @@ public sealed partial class SilGen {
                 BoundIndexAccess { Subscript: not null } => true,
                 BoundIndexAccess index => ReferenceEquals(child, index.Receiver),
                 BoundForEach loop => ReferenceEquals(child, loop.Sequence),
+                // An error of the type this function throws, out of it: written where its caller says.
+                BoundThrow => _handlers == 0 && _closureDepth == 0 && checkedSymbol.ThrownType is { } own && Canonical(own).Equals(Canonical(child.Type)),
                 // Not inside a protocol's own 'debugDescription' (Error's
                 // '"\(self)"'): a describer would call it back.
                 BoundInterpolatedString interpolated => interpolated.Parts.IndexOf(child) is var at and >= 0 && interpolated.Formats[at] is null && !DescribesSelf && (Describes = true),
@@ -1193,8 +1217,11 @@ public sealed partial class SilGen {
         /// <summary>A subscript of a type this code holds: a call of its getter, or, given the value stored, of its setter.</summary>
         bool SubscriptAllowed(BoundIndexAccess index, BoundExpression? stored) {
             // A protocol's subscript requirement, read on a type parameter: through its table, as a method's.
-            if (index.Subscript is { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } required && stored is null) {
-                return RequirementAllowed(new BoundCall(index.Syntax, index.Receiver, required, [..index.Indices], index.Type) { Substitution = index.Substitution });
+            if (index.Subscript is { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } required) {
+                return stored is null
+                    ? RequirementAllowed(new BoundCall(index.Syntax, index.Receiver, required, [..index.Indices], index.Type) { Substitution = index.Substitution })
+                    : generator.SubscriptSetter(required) is { } setter
+                      && RequirementAllowed(new BoundCall(index.Syntax, index.Receiver, setter, [..index.Indices, stored], generator.Core.Void) { Substitution = index.Substitution });
             }
 
             if (index.Subscript is not { } subscript || subscript.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol }
@@ -1331,7 +1358,7 @@ public sealed partial class SilGen {
         /// <summary>A requirement of the protocols a type parameter has, called on one, as its generic witness takes it.</summary>
         bool RequirementAllowed(BoundCall call) {
             var callee = call.Function;
-            if (callee.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } declared || generator.GenericEntryType(declared, callee) is null
+            if (RequirementProtocol(callee) is not { } declared || generator.GenericEntryType(declared, callee) is null
                 || !generator.GenericRequirements(declared).Exists(r => ReferenceEquals(r.Member, callee))) {
                 return false;
             }
@@ -1601,11 +1628,20 @@ public sealed partial class SilGen {
 
     readonly Dictionary<NamedTypeSymbol, List<(string Key, Symbol Member)>> _genericRequirements = new(ReferenceEqualityComparer.Instance);
 
+    /// <summary>The protocol a requirement is of: its own, or, for an accessor, its property's or subscript's.</summary>
+    internal static NamedTypeSymbol? RequirementProtocol(FunctionSymbol requirement) =>
+        requirement.ContainingSymbol switch {
+            NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol => protocol,
+            FieldSymbol { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol } => protocol,
+            FunctionSymbol { FunctionKind: FunctionKind.Subscript, ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol } => protocol,
+            _ => null,
+        };
+
     /// <summary>
     ///     The requirements a protocol itself declares that a witness table's
     ///     generic entries hold, in declaration order: its methods, static
-    ///     ones and operators among them, its properties' getters, and its
-    ///     subscripts' getters.
+    ///     ones and operators among them, its properties' getters and
+    ///     setters, and its subscripts' getters and setters.
     /// </summary>
     internal List<(string Key, Symbol Member)> GenericRequirements(NamedTypeSymbol protocol) {
         protocol = protocol.OriginalDefinition;
@@ -1622,11 +1658,22 @@ public sealed partial class SilGen {
                         break;
                     case FieldSymbol field:
                         requirements.Add(((field.IsStatic ? "static$" : "") + GetterSlot(field), field));
+
+                        // 'var size: Int { get set }': its setter too, called as a mutating method of the new value.
+                        if (!field.IsStatic && SetterOf(field) is { } setter) {
+                            requirements.Add((SetterSlot(field), setter));
+                        }
+
                         break;
 
-                    // 'subscript(position: Index) -> Element': its getter, called as a method of its indices is.
+                    // 'subscript(position: Index) -> Element': its getter, called as a method of its indices is;
+                    // '{ get set }', its setter, of its indices and the new value.
                     case FunctionSymbol { FunctionKind: FunctionKind.Subscript, IsStatic: false } subscript:
                         requirements.Add((SubscriptName(subscript) + "$get", subscript));
+                        if (SubscriptSetter(subscript) is { } subscriptSetter) {
+                            requirements.Add((SubscriptName(subscript) + "$set", subscriptSetter));
+                        }
+
                         break;
                 }
             }
@@ -1944,6 +1991,24 @@ public sealed partial class SilGen {
         BoundStatement[] statements = requirement.ReturnType.Equals(Core.Void)
             ? [new BoundExpressionStatement(syntax, call), new BoundReturn(syntax, null)]
             : [new BoundReturn(syntax, call)];
+
+        // A setter stores, as code that knows the type stores: to the type's own property or subscript.
+        if (requirement.FunctionKind == FunctionKind.Accessor && receiver is not null && requirement.Parameters.Length > 0) {
+            var given = requirement.Parameters.Select(p => (BoundExpression)new BoundParameterAccess(syntax, p)).ToList();
+            BoundExpression? target = requirement.ContainingSymbol switch {
+                FieldSymbol property => new BoundFieldAccess(syntax, receiver, property, property.Type),
+                FunctionSymbol { FunctionKind: FunctionKind.Subscript } subscript => new BoundIndexAccess(syntax, subscript.ReturnType, receiver, [..given.SkipLast(1)]) {
+                    Subscript = subscript,
+                    Substitution = substitution,
+                },
+                _ => null,
+            };
+            if (target is null) {
+                return null;
+            }
+
+            statements = [new BoundExpressionStatement(syntax, new BoundAssignment(syntax, target, given[^1])), new BoundReturn(syntax, null)];
+        }
 
         var function = new SilFunction(name, type) {
             SourceFile = source.FileName,
@@ -2586,7 +2651,7 @@ public sealed partial class SilGen {
 
         /// <summary>The type parameter of this function a requirement's call is on, as Self, or an associated type read through one; null for a call on anything else.</summary>
         TypeSymbol? OpaqueSelf(BoundCall call) {
-            if (_genericMetadata.Count == 0 || call.Function.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+            if (_genericMetadata.Count == 0 || RequirementProtocol(call.Function) is not { } protocol) {
                 return null;
             }
 
@@ -2630,7 +2695,7 @@ public sealed partial class SilGen {
         /// </summary>
         SilValue? GenericRequirementCall(BoundCall call, TypeSymbol parameter) {
             var callee = call.Function;
-            var protocol = ((NamedTypeSymbol)callee.ContainingSymbol!).OriginalDefinition;
+            var protocol = RequirementProtocol(callee)!.OriginalDefinition;
             var index = generator.GenericRequirements(protocol).FindIndex(r => ReferenceEquals(r.Member, callee));
             if (index < 0 || generator.GenericEntryType(protocol, (Symbol)callee) is not { } type) {
                 return Missing(call, $"'{callee.Name}' through a witness table");

@@ -610,5 +610,46 @@ public sealed class UnspecialisedLoweringTests {
         Assert.Equal(expected, Run(module));
         Assert.Equal(expected, Run(Lower(Relative, GenericsMode.Specialised)));
         Assert.Equal("cast to 'C.Index' failed", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.wrong")).Message);
+
+    /// <summary>
+    ///     An async function compiled once is split as any is: its resume and
+    ///     drop functions read its metadata from the frame, its parameter of a
+    ///     type parameter's type is kept by address, and its slot of one is a
+    ///     buffer after the frame's fixed part — which the interpreter runs as
+    ///     the specialised program runs.
+    /// </summary>
+    [Fact]
+    public void AnAsyncFunctionsFrameKeepsItsMetadataAndBuffers() {
+        const string source = """
+                              fn later<T>(_ value: T) async -> T {
+                                  var kept = value
+                                  await Task.yield()
+                                  kept = value
+                                  return kept
+                              }
+
+                              fn main() async {
+                                  print(await later(3))
+                                  print(await later("three"))
+                              }
+                              """;
+        var module = Lower(source);
+        AsyncLowering.Run(module);
+        var resume = module.Find(AsyncLowering.ResumeName("M.later$generic"));
+        Assert.NotNull(resume);
+        Assert.NotNull(resume.HiddenFrame);
+        Assert.Equal(resume.HiddenFrame, module.Find(AsyncLowering.DropName("M.later$generic"))!.HiddenFrame);
+        Assert.Contains(resume.HiddenFrame.Fields, static f => f.Name == "$metadata.T");
+        Assert.NotEmpty(resume.HiddenFrame.TailSlots);
+        Assert.All(resume.HiddenFrame.TailSlots, slot => Assert.IsType<AddressType>(resume.HiddenFrame.Fields[slot].Type));
+        Assert.Equal("3\nthree\n", RunEntry(module));
+        Assert.Equal("3\nthree\n", RunEntry(Lower(source, GenericsMode.Specialised)));
+
+        static string RunEntry(SilModule module) {
+            var interpreter = new SilInterpreter(module);
+            interpreter.Run(module.EntryPoint!);
+            Assert.Equal(0, interpreter.LiveObjects);
+            return interpreter.Output.ToString();
+        }
     }
 }

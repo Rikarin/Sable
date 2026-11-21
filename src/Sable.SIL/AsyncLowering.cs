@@ -360,6 +360,9 @@ public static class AsyncLowering {
         Dictionary<SilInstruction, List<SilValue>> _ownedAt = new(ReferenceEqualityComparer.Instance);
 
         void Split(SilFunction function) {
+            var unspecialised = function.IsUnspecialised || function.AssociatedMetadata.Count > 0;
+            Reborrow(function);
+
             _ownedAt = OwnedAtSuspensions(function);
             var name = function.Name;
             var original = function.Type;
@@ -390,13 +393,29 @@ public static class AsyncLowering {
                 return new RefElementAddrInst(self, index) { Location = at };
             }
 
+            // The storage of a value of a type parameter's type (#297): a
+            // buffer sized at run time after the frame's fixed part, whose
+            // address the field holds, read in every state.
+            SilInstruction Tail(string fieldName, SilType type) {
+                var field = entry.Append(Field(fieldName, new AddressType(type)));
+                frame.TailSlots.Add(frame.Fields.Count - 1);
+                return entry.Append(new LoadInst(field, LoadKind.Trivial) { Location = at });
+            }
+
             // The parameters, in the frame from the start: read in every state.
+            // One of a type parameter's type is where its caller holds it, for
+            // the whole call: the frame keeps its address.
             var parameters = body.Arguments.ToList();
             var parameterFields = new List<int>();
             for (var i = 0; i < parameters.Count; i++) {
-                var field = entry.Append(Field(i < parameterNames.Count ? parameterNames[i] : $"$parameter{i}", parameters[i].Type));
+                var indirect = SilType.IsIndirect(parameters[i].Type);
+                var field = entry.Append(Field(i < parameterNames.Count ? parameterNames[i] : $"$parameter{i}", indirect ? new AddressType(parameters[i].Type) : parameters[i].Type));
                 parameterFields.Add(frame.Fields.Count - 1);
-                var value = entry.Append(new LoadInst(field, LoadKind.Trivial) { Location = at });
+                SilValue value = entry.Append(new LoadInst(field, LoadKind.Trivial) { Location = at });
+                if (indirect) {
+                    value = entry.Append(new LoadBorrowInst(value) { Location = at });
+                }
+
                 ReplaceUses(function, parameters[i], value);
             }
 
@@ -426,7 +445,8 @@ public static class AsyncLowering {
                     slotFields.Add(frame.Fields.Count);
                 }
 
-                fields[slot] = entry.Append(Field($"{slot.VariableName ?? "$slot"}${frame.Fields.Count}", slot.ElementType));
+                var slotName = $"{slot.VariableName ?? "$slot"}${frame.Fields.Count}";
+                fields[slot] = SilType.IsIndirect(slot.ElementType) ? Tail(slotName, slot.ElementType) : entry.Append(Field(slotName, slot.ElementType));
             }
 
             CoroutineSplit.SlotsToFields(function, fields);
@@ -472,12 +492,15 @@ public static class AsyncLowering {
             otherwise.Append(new UnreachableInst());
 
             // What is live where it goes on, kept in the frame meanwhile.
-            var spilled = Spill(function, entry, suspensions.Select(static s => s.Resume), Field);
+            var spilled = Spill(function, entry, suspensions.Select(static s => s.Resume), Field, Tail);
             for (var i = 0; i < parameters.Count; i++) {
                 spilled[parameters[i]] = parameterFields[i];
             }
 
-            Drop(name, frame, suspensions, spilled, slotFields);
+            Drop(name, frame, suspensions, spilled, slotFields, unspecialised ? function : null);
+            if (unspecialised) {
+                function.HiddenFrame = frame;
+            }
 
             // The start: the frame made, the parameters in it, nothing run.
             var start = new SilFunction(name, StartType(original)) { SourceFile = function.SourceFile, Line = function.Line };
@@ -488,9 +511,16 @@ public static class AsyncLowering {
             startBlock.Append(new StoreInst(startBlock.Append(new FunctionRefInst(DropName(name), DropType)), startBlock.Append(new RefElementAddrInst(made, DropField)), StoreKind.Init));
             startBlock.Append(new StoreInst(startBlock.Append(new IntegerLiteralInst(SilType.Int, 0)), startBlock.Append(new RefElementAddrInst(made, StateField)), StoreKind.Init));
             for (var i = 0; i < parameters.Count; i++) {
-                var argument = startBlock.AddArgument(original.Parameters[i]);
+                SilValue argument = startBlock.AddArgument(original.Parameters[i]);
+                if (SilType.IsIndirect(argument.Type)) {
+                    argument = startBlock.Append(new BuiltinInst("opaque_address", new AddressType(argument.Type), argument));
+                }
+
                 startBlock.Append(new StoreInst(argument, startBlock.Append(new RefElementAddrInst(made, parameterFields[i])), StoreKind.Init));
             }
+
+            // Its frame's buffers are sized by the metadata it is given, as its body's are.
+            start.AssociatedMetadata.AddRange(function.AssociatedMetadata);
 
             startBlock.Append(new ReturnInst(startBlock.Append(new UpcastInst(made, head))));
             module.Add(start);
@@ -508,11 +538,26 @@ public static class AsyncLowering {
         ///     value or nothing (all zeros), and destroying nothing does
         ///     nothing; defers do not run, as the task goes no further.
         /// </summary>
-        void Drop(string name, ClassType frame, List<Suspension> suspensions, Dictionary<SilValue, int> spilled, List<int> slotFields) {
+        void Drop(string name, ClassType frame, List<Suspension> suspensions, Dictionary<SilValue, int> spilled, List<int> slotFields, SilFunction? unspecialised) {
             var drop = new SilFunction(DropName(name), DropType);
             drop.ParameterNames.Add("$frame");
+            if (unspecialised is not null) {
+                // What it destroys is sized and destroyed by the metadata in the frame.
+                drop.HiddenFrame = frame;
+                drop.AssociatedMetadata.AddRange(unspecialised.AssociatedMetadata);
+            }
+
             var entry = drop.AddBlock();
             var self = entry.Append(new UncheckedRefCastInst(entry.AddArgument(SilType.Object), frame));
+
+            // A field that holds the address of a buffer, or of a caller's
+            // storage: what it holds is destroyed there.
+            SilValue Held(SilBlock block, int field) {
+                var address = block.Append(new RefElementAddrInst(self, field));
+                return frame.Fields[field].Type is AddressType { Pointee: var pointee } && SilType.IsIndirect(pointee)
+                    ? block.Append(new LoadInst(address, LoadKind.Trivial))
+                    : address;
+            }
             var state = entry.Append(new LoadInst(entry.Append(new RefElementAddrInst(self, StateField)), LoadKind.Trivial));
             var slots = drop.AddBlock();
             var targets = new List<SilBlock>();
@@ -528,7 +573,11 @@ public static class AsyncLowering {
 
                 foreach (var value in suspension.Owned) {
                     if (spilled.TryGetValue(value, out var field)) {
-                        block.Append(new DestroyValueInst(block.Append(new LoadInst(block.Append(new RefElementAddrInst(self, field)), LoadKind.Trivial))));
+                        if (SilType.IsIndirect(value.Type)) {
+                            block.Append(new DestroyAddrInst(Held(block, field)));
+                        } else {
+                            block.Append(new DestroyValueInst(block.Append(new LoadInst(block.Append(new RefElementAddrInst(self, field)), LoadKind.Trivial))));
+                        }
                     }
                 }
 
@@ -538,7 +587,7 @@ public static class AsyncLowering {
             var otherwise = CoroutineSplit.Dispatch(drop, entry, state, targets, 1);
             otherwise.Append(new BranchInst(slots));
             foreach (var field in slotFields) {
-                slots.Append(new DestroyAddrInst(slots.Append(new RefElementAddrInst(self, field))));
+                slots.Append(new DestroyAddrInst(Held(slots, field)));
             }
 
             slots.Append(new ReturnInst(null));
@@ -773,11 +822,31 @@ public static class AsyncLowering {
         }
 
         /// <summary>
+        ///     In unspecialised code (#297), a value of a type parameter's type
+        ///     borrowed from storage is that storage: borrowed again where it is
+        ///     used, so what lives across a suspension is the storage's address
+        ///     — the frame's, or a caller's — and not a copy of what it holds.
+        /// </summary>
+        static void Reborrow(SilFunction function) {
+            foreach (var borrow in function.Blocks.SelectMany(static b => b.Instructions).OfType<LoadBorrowInst>().Where(static b => SilType.IsIndirect(b.Type)).ToList()) {
+                var users = function.Blocks.SelectMany(static b => b.Instructions).Where(i => i.Operands.Any(o => ReferenceEquals(o, borrow))).ToList();
+                foreach (var user in users) {
+                    var again = new LoadBorrowInst(borrow.Address) { Location = user.Location };
+                    Insert(user.Block, user.Block.Instructions.IndexOf(user), again);
+                    Substitute(user, borrow, again);
+                }
+
+                borrow.Block.Instructions.Remove(borrow);
+            }
+        }
+
+        /// <summary>
         ///     Every value made in one state and used in a later one, kept in
         ///     the frame: stored as it is made, and read back where it is used.
         ///     A constant is made again where it is used instead.
         /// </summary>
-        static Dictionary<SilValue, int> Spill(SilFunction function, SilBlock entry, IEnumerable<SilBlock> resumes, Func<string, SilType, SilInstruction> field) {
+        static Dictionary<SilValue, int> Spill(SilFunction function, SilBlock entry, IEnumerable<SilBlock> resumes, Func<string, SilType, SilInstruction> field,
+            Func<string, SilType, SilInstruction> tail) {
             var kept = new Dictionary<SilValue, int>(ReferenceEqualityComparer.Instance);
             var live = CoroutineSplit.LiveIn(function);
             var spilled = new HashSet<SilValue>(ReferenceEqualityComparer.Instance);
@@ -823,10 +892,24 @@ public static class AsyncLowering {
                     continue;
                 }
 
-                var address = field($"$live{entry.Instructions.Count}", value.Type);
-                kept[value] = ((RefElementAddrInst)address).Field;
-                address.Block = entry;
-                entry.Instructions.Insert(dispatchAt++, address);
+                // A value of a type parameter's type (#297) is kept in a buffer
+                // of the frame's, its bits moved there as it is made: where it is
+                // used, it is that buffer's.
+                var indirect = SilType.IsIndirect(value.Type);
+                SilInstruction address;
+                if (indirect) {
+                    address = tail($"$live{entry.Instructions.Count}", value.Type);
+                    kept[value] = ((RefElementAddrInst)((LoadInst)address).Address).Field;
+                    foreach (var made in new[] { (SilInstruction)((LoadInst)address).Address, address }) {
+                        entry.Instructions.Remove(made);
+                        entry.Instructions.Insert(dispatchAt++, made);
+                    }
+                } else {
+                    address = field($"$live{entry.Instructions.Count}", value.Type);
+                    kept[value] = ((RefElementAddrInst)address).Field;
+                    address.Block = entry;
+                    entry.Instructions.Insert(dispatchAt++, address);
+                }
 
                 // Stored as it is made.
                 var (block, index) = value switch {
@@ -838,7 +921,7 @@ public static class AsyncLowering {
 
                 // Read back at each use.
                 foreach (var user in uses) {
-                    var load = new LoadInst(address, LoadKind.Trivial) { Location = user.Location };
+                    SilInstruction load = indirect ? new LoadBorrowInst(address) { Location = user.Location } : new LoadInst(address, LoadKind.Trivial) { Location = user.Location };
                     Insert(user.Block, user.Block.Instructions.IndexOf(user), load);
                     Substitute(user, value, load);
                 }

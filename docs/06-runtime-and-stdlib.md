@@ -263,7 +263,7 @@ type of the program in turn, from witnesses the compiler picks for each.
 A table's first entries are what an existential can call — requirements
 that mention `Self` have no slot — each taking the existential's box. Then
 come its **generic entries** (`generic_requirements`): every method,
-operator and property getter the protocol itself declares, in declaration
+operator, property getter and setter the protocol itself declares, in declaration
 order, in the convention unspecialised code calls them in — `self` (the
 address of its storage, for a `mutating` one) unless the requirement is
 static, its parameters, the address a result of `Self` is written to, the
@@ -391,8 +391,8 @@ parameter of a type parameter's type, `using generator: inout G`, is the
 address of the caller's storage, seen as `*@opaque(G)`, and a mutating
 requirement changes the value there. A protocol's subscript requirement,
 `self[position]` on a Collection, is read through the table as a method
-of its indices is: the table's generic entries hold its getter, in its
-place among the protocol's requirements (a setter is not one yet).
+of its indices is, and set as a mutating method of its indices and the new value: the table's generic entries hold its getter, and its setter for one `{ get set }`, in its
+place among the protocol's requirements; a settable property's setter is an entry after its getter.
 
 An array of a type parameter's values (`T[]`, `T[>..]`, `T[>..<]`) is a
 buffer of them, as any array is: its object metadata — the element's size,
@@ -496,7 +496,8 @@ where a result goes, and the function throws that address. A caller that
 knows the type passes a slot of it and takes the error from there; one
 whose error is `Never` passes a slot never written; unspecialised code
 that throws the same passes its own caller's place, and so throws on what
-it is thrown untouched. One that throws `any Error` — a `rethrows`
+it is thrown untouched; its own `throw error` of that type writes the error
+there. One that throws `any Error` — a `rethrows`
 function, `rethrows(Failure)` among them, throws that — takes such an
 error in a slot of its own and boxes it as `any Error` with the type's
 **eraser** (`opaque_erase_error`, `sable_opaque_erase_error`): a function
@@ -530,6 +531,20 @@ of a type parameter's type, or captures `self`, or is inside another,
 keeps its function specialised, as does a function that returns a closure
 over its type parameters.
 
+**Async functions.** An async function compiled once is split as any is
+(§6.7): its start function takes the metadata and tables with its
+parameters and keeps them in the frame, where its resume and drop functions
+find them by name each time they run. A parameter of a type parameter's type
+stays where its caller holds it — the caller's frame, which outlives the
+call — and the frame keeps its address. Its slots of such a type, and such
+values live across an await, are buffers after the frame's fixed part, on
+the task's slab with it: the start function sizes each from the metadata
+as it makes the frame, all zeros, and the field holds the buffer's address.
+A value borrowed from storage is borrowed again after an await rather than
+kept. A task dropped part-way destroys what its frames hold through their
+metadata, as a frame of known types does. The specialisation pass copies an
+async function as any other where its types are known.
+
 **Existential witnesses.** A slot of an existential's witness table whose
 witness is generic code compiled once — a method of a generic type boxed as
 `any P` (`Tag<Int>`), a protocol extension's default for the boxed type, an
@@ -544,8 +559,8 @@ on its witness alone, so every unit's copy of a table is the same.
 What unspecialised code cannot serve yet — an optional chain through a
 `T?`, a structural union of `T`, a method of a generic class
 a subclass may override or whose fields hold `T` by value, a field of a
-function type in a generic type, a property's setter, a class's initialiser or a struct's that holds `T` by value, `"\(x:?)"`, an async function or a
-generator — is still specialised for its type arguments in
+function type in a generic type, a class's initialiser or a struct's that holds `T` by value, `"\(x:?)"`, an async closure's
+parameter, or a generator — is still specialised for its type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
 says, for each generic function, which way it went and why. A specialised
 build (the default) makes neither the generic entries nor the describers.

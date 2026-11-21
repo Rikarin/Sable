@@ -144,6 +144,10 @@ public sealed partial class SilInterpreter {
     /// <summary>A frame for the running task, on its slab.</summary>
     HeapObject PushFrame(ClassType type) {
         var frame = new HeapObject(type);
+        foreach (var slot in type.TailSlots) {
+            frame.Fields[slot] = new FrameTail();
+        }
+
         var frames = Current.Frames;
         frames.Push(frame);
         MostFrames = Math.Max(MostFrames, frames.Count);

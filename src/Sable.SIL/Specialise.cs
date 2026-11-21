@@ -140,7 +140,7 @@ sealed class Specialiser(SilModule module, bool forSize) {
     /// <summary>Each parameter's role, or null for a function the copy cannot be made of.</summary>
     internal static Role[]? Roles(SilFunction function) {
         var parameters = function.Type.Parameters;
-        if (function.Blocks.Count == 0 || function.Entry.Arguments.Count != parameters.Length || function.Type.IsAsync) {
+        if (function.Blocks.Count == 0 || function.Entry.Arguments.Count != parameters.Length) {
             return null;
         }
 

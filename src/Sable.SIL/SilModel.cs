@@ -672,6 +672,15 @@ public sealed class ClassType(string name) : NominalType(name) {
     /// </summary>
     public bool IsCoroutineFrame { get; init; }
 
+    /// <summary>
+    ///     In an unspecialised async function's frame (#297), the fields that
+    ///     each hold the address of storage sized at run time — a slot of a
+    ///     type parameter's type, or such a value live across a suspension:
+    ///     buffers after the frame's fixed part, on the slab with it, sized by
+    ///     the metadata its start function is given, empty when it is made.
+    /// </summary>
+    public List<int> TailSlots { get; } = [];
+
     /// <summary>The methods called through the vtable: each slot's name, and the function in it for this class.</summary>
     public List<(string Method, string Function)> VTable { get; } = [];
 
@@ -1539,6 +1548,15 @@ public sealed class SilFunction(string name, FunctionType type) {
     ///     <c>associated("S.Element", "S", "Sable.Core.Sequence", 0, "$witnesses.S.Collection", 0)</c>.
     /// </summary>
     public List<SilAssociatedMetadata> AssociatedMetadata { get; } = [];
+
+    /// <summary>
+    ///     For an unspecialised async function's resume and drop functions
+    ///     (#297), given only its frame: the frame, whose fields of the
+    ///     parameters' names hold the metadata and tables the function was
+    ///     started with (<c>$metadata.T</c>), which its opaque values are sized
+    ///     and copied by.
+    /// </summary>
+    public ClassType? HiddenFrame { get; set; }
 
     /// <summary>
     ///     The blocks within the function's body that a debugger tells apart,

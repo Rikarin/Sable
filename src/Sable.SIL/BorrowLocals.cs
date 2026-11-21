@@ -89,6 +89,12 @@ public sealed class BorrowLocals : ISilPass {
             _ => false,
         });
 
+    /// <summary>True when ending this borrow ends the value: it is the value, or the borrow a switch hands the value from.</summary>
+    static bool Borrows(SilValue ended, SilValue value) =>
+        ReferenceEquals(ended, value)
+        || value is SilArgument { IsGuaranteed: true } payload && payload.Block.Function.Blocks.Select(static b => b.Terminator).OfType<SwitchEnumInst>()
+            .Any(s => ReferenceEquals(s.Value, ended) && s.Cases.Any(c => c.Target == payload.Block));
+
     static bool Writes(SilInstruction instruction, AllocStackInst owner) =>
         instruction switch {
             StoreInst store => ReferenceEquals(store.Address, owner),
@@ -104,9 +110,11 @@ public sealed class BorrowLocals : ISilPass {
     ///     stored", true at the entry, where nothing is stored yet.
     /// </summary>
     static bool Unchanged(SilFunction function, AllocStackInst slot, StoreInst store, CopyValueInst copy, AllocStackInst owner) {
+        // Nor does the borrow end before the store, which would then store
+        // what it no longer borrows: the copy outlived it.
         var instructions = store.Block.Instructions;
         for (var i = instructions.IndexOf(copy) + 1; i < instructions.IndexOf(store); i++) {
-            if (Writes(instructions[i], owner)) {
+            if (Writes(instructions[i], owner) || instructions[i] is EndBorrowInst { Borrowed: var ended } && Borrows(ended, copy.Value)) {
                 return false;
             }
         }

@@ -396,6 +396,12 @@ public sealed partial class SilGen {
             // An observed property's 'willSet' and 'didSet' are methods too,
             // which the setter the compiler writes for it calls.
             foreach (var accessor in Declarations(tree).OfType<AccessorSyntax>()) {
+                // A protocol's settable property's setter: what a witness table's entry for it is (#297), with no body to lower.
+                if (accessor.Keyword.Kind == SyntaxKind.SetKeyword && model.GetRequirementAccessor(accessor) is { ContainingSymbol: FieldSymbol required } requirementSetter) {
+                    _setters[required] = requirementSetter;
+                    continue;
+                }
+
                 if (accessor.Keyword.Kind is not (SyntaxKind.GetKeyword or SyntaxKind.SetKeyword or SyntaxKind.WillSetKeyword or SyntaxKind.DidSetKeyword)
                     || (Binds(tree) ? model.GetAccessorSymbol(accessor) : model.GetAccessorDeclaration(accessor))
                         is not { ContainingSymbol: FieldSymbol field } function
@@ -428,6 +434,12 @@ public sealed partial class SilGen {
                 }
 
                 foreach (var accessor in declaration.Accessors?.Accessors ?? []) {
+                    // A protocol's subscript's setter, as a property's.
+                    if (accessor.Keyword.Kind == SyntaxKind.SetKeyword && model.GetRequirementAccessor(accessor) is { } requiredSetter) {
+                        _subscriptSetters[subscript] = requiredSetter;
+                        continue;
+                    }
+
                     if (accessor.Keyword.Kind is not (SyntaxKind.GetKeyword or SyntaxKind.SetKeyword)
                         || (Binds(tree) ? model.GetAccessorSymbol(accessor) : model.GetAccessorDeclaration(accessor))
                             is not { } function) {

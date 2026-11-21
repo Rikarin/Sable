@@ -1506,4 +1506,315 @@ public sealed class UnspecialisedGenericTests {
 
         Assert.Contains(functions, static f => f.StartsWith("Sable.Core.Collection.first", StringComparison.Ordinal));
     }
+
+    const string Setters = """
+        protocol Sized {
+            var size: Int { get set }
+        }
+
+        struct Box: Sized {
+            var size: Int
+        }
+
+        final class Shelf: Sized {
+            var width: Int = 1
+            var size: Int {
+                get { return width }
+                set { width = newValue * 10 }
+            }
+        }
+
+        fn grow<T: Sized>(_ x: inout T) {
+            x.size = x.size + 1
+        }
+
+        fn swapEnds<C: MutableCollection>(_ c: inout C) {
+            let first = c.startIndex
+            var last = first
+            var i = first
+            while i != c.endIndex {
+                last = i
+                i = c.index(after: i)
+            }
+            let kept = c[first]
+            c[first] = c[last]
+            c[last] = kept
+        }
+
+        fn bumped<C: MutableCollection>(_ items: C) -> C where C.Element == Int {
+            var changed = items
+            var i = changed.startIndex
+            while i != changed.endIndex {
+                changed[i] = changed[i] + 1
+                i = changed.index(after: i)
+            }
+            return changed
+        }
+
+        struct Oops: Error {
+            let code: Int
+        }
+
+        @immutable
+        final class Loud: Error {
+            let code: Int
+            init(_ code: Int) { self.code = code }
+            deinit { print("loud \(code) gone") }
+        }
+
+        fn rethrown<E: Error>(_ error: E, _ really: Bool) throws(E) -> Int {
+            if really {
+                throw error
+            }
+            return 1
+        }
+
+        fn sameLength<S: Sequence, U: Sequence>(_ s: S, _ u: U) -> Bool where S.Failure == Never, U.Failure == Never {
+            var mine = s.makeIterator()
+            var theirs = u.makeIterator()
+            while true {
+                let a = mine.next()
+                let b = theirs.next()
+                if a == none || b == none {
+                    return a == none && b == none
+                }
+            }
+        }
+        """;
+
+    /// <summary>
+    ///     A protocol's settable property and subscript are set through the
+    ///     table's entries for their setters, as code that knows the type
+    ///     sets them — a struct's stored field, a class's setter, an array's
+    ///     element; and 'x == none' on an associated type's optional, read
+    ///     through another path, tests its case; and an error of a type
+    ///     parameter's type is thrown where the caller says.
+    /// </summary>
+    [Fact]
+    public void SetterRequirementsNoneTestsAndThrownErrorsAreCompiledOnce() {
+        const string body = """
+                var b = Box { size: 3 }
+                grow(&b)
+                print(b.size)
+                var s = Shelf()
+                grow(&s)
+                print(s.width)
+                var xs = [1, 2, 3]
+                swapEnds(&xs)
+                print(xs)
+                var words = ["a", "b", "c", "d"]
+                swapEnds(&words)
+                print(words)
+                print(bumped([4, 5]))
+                print(sameLength([1, 2], "ab"))
+                print(sameLength([1, 2], "abc"))
+                do {
+                    print(try rethrown(Oops { code: 1 }, false))
+                    print(try rethrown(Oops { code: 2 }, true))
+                } catch {
+                    print("caught \(error.code)")
+                }
+                do {
+                    print(try rethrown(Loud(3), true))
+                } catch {
+                    print("caught \(error.code)")
+                }
+                let good: Outcome<Int, Oops> = .Ok(5)
+                let bad: Outcome<Int, Oops> = .Err(Oops { code: 6 })
+                do {
+                    print(try good.get())
+                    print(try bad.get())
+                } catch {
+                    print("caught \(error.code)")
+                }
+            """;
+        Prints("4\n20\n[3, 2, 1]\n[\"d\", \"b\", \"c\", \"a\"]\n[5, 6]\ntrue\nfalse\n1\ncaught 2\ncaught 3\n5\ncaught 6\nloud 3 gone\n", Setters, body);
+        var functions = Unspecialised(Setters, body);
+        Assert.Contains(functions, static f => f.StartsWith("Sable.Core.Outcome.get", StringComparison.Ordinal));
+        foreach (var name in new[] { "Test.grow", "Test.swapEnds", "Test.bumped", "Test.sameLength", "Test.rethrown" }) {
+            Assert.Contains($"{name}$generic", functions);
+        }
+    }
+
+    /// <summary>
+    ///     An async program's prints, both ways, on one thread — the
+    ///     interleaving the interpreter's — and its own generic functions compiled once.
+    /// </summary>
+    static void AsyncPrints(string expected, string declarations, string body, params string[] compiledOnce) {
+        var program = $"module Test\n{declarations}\n@main\nfn main() async {{\n{body}\n}}\n";
+        string unspecialised;
+        using (SilGen.UseGenerics(GenericsMode.Unspecialised)) {
+            unspecialised = AssertAgree(program, environment: OneThread).Stdout;
+
+            // Optimised, the specialisation pass makes copies where the types
+            // are known: unoptimised, the native program runs the code compiled once.
+            if (CanBuild && NativeMode.Wanted) {
+                var debug = BuildAndRun(program, optimise: false, environment: OneThread);
+                Assert.Equal(0, debug.ExitCode);
+                Assert.Equal(unspecialised, debug.Stdout);
+            }
+        }
+
+        string specialised;
+        using (SilGen.UseGenerics(GenericsMode.Specialised)) {
+            specialised = AssertAgree(program, environment: OneThread).Stdout;
+        }
+
+        Assert.Equal(expected, specialised);
+        Assert.Equal(specialised, unspecialised);
+        using var _ = SilGen.UseGenerics(GenericsMode.Unspecialised);
+        var result = Pipeline.Compile(new SourceText(program, "test.sb"));
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        foreach (var name in compiledOnce) {
+            Assert.Contains($"Test.{name}$generic", result.Sil!.Functions.Select(static f => f.Name));
+        }
+    }
+
+    const string Waiting = """
+        protocol Named {
+            var name: String { get }
+        }
+
+        struct Tag: Named {
+            var label: String
+            var name: String => "tag \(label)"
+        }
+
+        final class Noisy: Named {
+            let id: Int
+            init(_ id: Int) { self.id = id }
+            deinit { print("noisy \(id) gone") }
+            var name: String => "noisy \(id)"
+        }
+
+        struct Failure: Error {
+            let code: Int
+        }
+
+        fn later<T>(_ value: T) async -> T {
+            await Task.yield()
+            return value
+        }
+
+        fn swapped<A, B>(_ a: A, _ b: B) async -> (B, A) {
+            var first = a
+            let second = await later(b)
+            await Task.yield()
+            first = await later(first)
+            return (second, first)
+        }
+
+        fn names<T: Named>(_ items: T[]) async -> String {
+            var text = ""
+            for item in items {
+                let held = await later(item)
+                await Task.yield()
+                text = text + held.name + ";"
+            }
+            return text
+        }
+
+        fn checked<T>(_ value: T, fail: Bool) async throws(Failure) -> T {
+            let kept = value
+            await Task.yield()
+            if fail {
+                throw Failure { code: 7 }
+            }
+            return kept
+        }
+
+        fn sleepy<T: Named>(_ value: T) async -> String {
+            let kept = value
+            try? await Task.sleep(nanoseconds: 1_000_000_000_000)
+            return kept.name
+        }
+        """;
+
+    /// <summary>
+    ///     An async function generic over its types is compiled once: its
+    ///     frame keeps the metadata and tables it was given, for each time
+    ///     it is resumed, and its values of a type parameter's type in
+    ///     buffers sized by them after the frame's fixed part — its locals,
+    ///     what it holds across an await, what it throws.
+    /// </summary>
+    [Fact]
+    public void AsyncFunctionsAreCompiledOnceWithTheirValuesInTheFrame() =>
+        AsyncPrints(
+            "3\ntext\none 1\n[2, 3] noisy 1\ntag a;tag b;\nnoisy 2 gone\nnoisy 3 gone\nnoisy 2;noisy 3;\nfine\nnoisy 6 gone\nfailed 7\nnoisy 8 gone\nnoisy 8\nnoisy 1 gone\n",
+            Waiting,
+            """
+                print(await later(3))
+                print(await later("text"))
+                let pair = await swapped(1, "one")
+                print("\(pair.0) \(pair.1)")
+                let pair2 = await swapped(Noisy(1), [2, 3])
+                print("\(pair2.0) \(pair2.1.name)")
+                print(await names([Tag { label: "a" }, Tag { label: "b" }]))
+                print(await names([Noisy(2), Noisy(3)]))
+                do {
+                    print(try await checked("fine", fail: false))
+                    print(try await checked(Noisy(6), fail: true).name)
+                } catch {
+                    print("failed \(error.code)")
+                }
+                let task = Task.spawn { await sleepy(Noisy(8)) }
+                await Task.yield()
+                task.cancel()
+                print(await task.value)
+            """,
+            "later", "swapped", "names", "checked", "sleepy");
+
+    /// <summary>
+    ///     Tasks that can never go on are dropped as the program ends: what
+    ///     the frames of async functions compiled once held — values of a type
+    ///     parameter's type in their buffers, a chain of calls deep — is
+    ///     destroyed through its metadata, so nothing leaks.
+    /// </summary>
+    [Fact]
+    public void AFrameCompiledOnceDroppedPartWayDestroysWhatItHolds() =>
+        AsyncPrints(
+            "main ends\nlevel 0 gone\nlevel 1 gone\nlevel 2 gone\n",
+            """
+            class Box {
+                var task: Task<Int>? = none
+            }
+
+            final class Noisy {
+                let name: String
+                init(_ name: String) { self.name = name }
+                deinit { print("\(name) gone") }
+            }
+
+            fn deep<T>(_ level: Int, _ value: T, _ blocker: Task<Int>) async -> Int {
+                let mine = value
+                var spare: T? = none
+                if level == 0 {
+                    return await blocker.value
+                }
+                spare = mine
+                let below = await deep(level - 1, Noisy("level \(level - 1)"), blocker)
+                if let _ = spare {
+                    return below + 1
+                }
+                return below
+            }
+            """,
+            """
+                let box = Box()
+                let a = Task.detached {
+                    var other: Task<Int>? = none
+                    unsafe {
+                        other = box.task
+                        box.task = none
+                    }
+                    return await deep(2, Noisy("level 2"), other!)
+                }
+                let b = Task.detached {
+                    let n = await a.value
+                    return n
+                }
+                box.task = b
+                print("main ends")
+            """,
+            "deep");
 }

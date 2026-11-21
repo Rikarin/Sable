@@ -74,7 +74,7 @@ public static class TypeLayout {
             _ when type == SilType.String || type == SilType.Metadata => PointerBytes,
             AddressType or FunctionType or ClassType or ArrayType => PointerBytes,
             StructType { IsInline: true } or InlinePointerType => PointerBytes,
-            _ when type == SilType.Object || type == SilType.Region => PointerBytes,
+            _ when type == SilType.Object || type == SilType.Region || type == SilType.Box => PointerBytes,
             ThickFunctionType => 2 * PointerBytes,
             WeakStorageType or UnownedStorageType => PointerBytes,
             EnumType enumType when IsNullable(enumType) => PointerBytes,

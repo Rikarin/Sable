@@ -178,7 +178,7 @@ public sealed class TypeMetadata {
         type switch {
             _ when type == SilType.String => MetadataKind.String,
             _ when type == SilType.Metadata => MetadataKind.Metatype,
-            _ when type == SilType.Object || type == SilType.Region || type == SilType.WitnessTable => MetadataKind.Opaque,
+            _ when type == SilType.Object || type == SilType.Region || type == SilType.WitnessTable || type == SilType.Box => MetadataKind.Opaque,
             ScalarType => MetadataKind.Scalar,
             ClassType => MetadataKind.Class,
             StructType when IsExistential(type) => MetadataKind.Existential,
@@ -320,6 +320,24 @@ public sealed class SilWitnessTable(SilType conformer, string protocol) {
 
     /// <summary>Each requirement's slot, and the function that witnesses it.</summary>
     public List<(string Requirement, string Function, FunctionType Type)> Entries { get; } = [];
+
+    /// <summary>
+    ///     Whether <see cref="Entries" /> are made: a table made first for
+    ///     generic code has its existential slots filled when an existential
+    ///     or a cast first needs them.
+    /// </summary>
+    public bool HasEntries { get; set; } = true;
+
+    /// <summary>
+    ///     Each requirement the protocol itself declares, in declaration order,
+    ///     with its witness in the generic calling convention (#297): what
+    ///     unspecialised code calls — its parameters, then <c>self</c>'s box
+    ///     (its slot's address, for one that changes it) unless it is static,
+    ///     then <c>Self</c>'s metadata. A value of <c>Self</c> or of an
+    ///     associated type is a <see cref="SilType.Box" />. Null where no
+    ///     witness is made: a requirement that convention cannot pass.
+    /// </summary>
+    public List<(string Requirement, string? Function, FunctionType? Type)> GenericEntries { get; } = [];
 
     /// <summary>Each associated type the protocol has, by name, as the conformance binds it.</summary>
     public List<(string Name, SilType Type)> AssociatedTypes { get; } = [];

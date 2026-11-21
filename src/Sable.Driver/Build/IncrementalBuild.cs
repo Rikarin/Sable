@@ -109,6 +109,7 @@ public sealed record BuildSettings(string Profile, bool Optimise, string? DebugD
         $"arc={ArcChecks}",
         $"deny-reflection={DenyReflection}",
         $"debug-assertions={DebugAssertions}",
+        $"generics={Sable.SIL.SilGen.Generics}",
         $"clang={string.Join(' ', [..NativeObjects.Flags(Native), ..NativeBuild.PositionIndependentFlags(Native)])}",
         $"cc={CacheKey.Checksum(NativeObjects.CompilerIdentity)}",
     ];

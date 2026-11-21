@@ -658,6 +658,8 @@ public sealed class DebuggerFormatterTests {
     [Fact]
     public void GenericInstancesAreNamedAsSableWritesThem() {
         var directory = Directory.CreateTempSubdirectory("sable-generic-names-");
+        // The names of specialised instances: an unspecialised function is one, named for its type parameters.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         try {
             var result = Pipeline.Compile(new SourceText(Library, "gen.sb"), directory.FullName);
             Assert.True(result.Succeeded, string.Join("\n", result.Errors));
@@ -681,6 +683,8 @@ public sealed class DebuggerFormatterTests {
             return;
         }
 
+        // Specialised frames: lldb reading unspecialised ones from their metadata is stage 9 of #297.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var output = await Run(lldb, Library, "gen.sb", [
             "b 'Gen.describe<String>'", $"b gen.sb:{LineOf(Library, "// push")}",
             "run", "frame variable order", "continue", "bt 1", "finish", "step", "kill",

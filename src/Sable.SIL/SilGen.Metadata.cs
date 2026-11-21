@@ -71,8 +71,8 @@ public sealed partial class SilGen {
     /// </summary>
     internal bool WitnessTable(NamedTypeSymbol concrete, SilType value, NamedTypeSymbol protocol, SyntaxNode at) {
         var name = QualifiedName(protocol);
-        if (_module.FindWitnessTable(value, name) is not null) {
-            return true;
+        if (_module.FindWitnessTable(value, name) is { } existing) {
+            return existing.HasEntries;
         }
 
         if (ExistentialLayout([protocol]) is not { } single) {
@@ -107,6 +107,9 @@ public sealed partial class SilGen {
         }
 
         _module.AddWitnessTable(table);
+
+        // Unspecialised code's entries too, so that every unit's copy of the table is the same.
+        GenericEntries(table, concrete, value, protocol, at);
         return true;
     }
 
@@ -201,7 +204,9 @@ public sealed partial class SilGen {
         ///     has the metadata of <c>()</c>'s.
         /// </summary>
         SilValue MetatypeValue(BoundMetatype metatype) =>
-            Emit(new MetadataInst(LowerType(Sub(metatype.InstanceType)) ?? SilType.Unit));
+            Sub(metatype.InstanceType) is TypeParameterSymbol parameter && _genericMetadata.TryGetValue(parameter, out var given)
+                ? given
+                : Emit(new MetadataInst(LowerType(Sub(metatype.InstanceType)) ?? SilType.Unit));
 
         /// <summary>
         ///     <c>type(of: x)</c>: the metadata of the value's dynamic type — an
@@ -215,6 +220,18 @@ public sealed partial class SilGen {
             }
 
             var type = Sub(argument.Type);
+
+            // A box: the type it holds.
+            if (IsOpaqueHere(type)) {
+                if (Borrow(argument) is not { } box) {
+                    return null;
+                }
+
+                var held = Emit(new BuiltinInst("generic_box_type", SilType.Metadata, box));
+                End(box);
+                return held;
+            }
+
             if (LowerType(type) is not { } lowered) {
                 return Missing(call, $"the type of a '{type.ToDisplayString()}'");
             }

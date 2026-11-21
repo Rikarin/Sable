@@ -270,7 +270,7 @@ public sealed class SilParser {
                 }
 
                 var name = (at == i + 2 ? "$" : "") + _tokens[at].Text;
-                if (module.FindType(name) is not null || name is "Int" or "Bool" or "F64" or "String" or "Char" or "Object" or "Region") {
+                if (module.FindType(name) is not null || name is "Int" or "Bool" or "F64" or "String" or "Char" or "Object" or "Region" or "Box") {
                     throw new SilParseException($"the type {name} is declared twice", _tokens[at].Line);
                 }
 
@@ -326,6 +326,13 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_describer")) {
+                var described = ParseType();
+                Expect("=");
+                module.Describers[described.ToString()] = (described, Expect(TokenKind.Global, "a describer's name").Text);
+                continue;
+            }
+
             if (Accept("sil_global")) {
                 var global = Expect(TokenKind.Global, "a global's name").Text;
                 Expect(":");
@@ -344,7 +351,7 @@ public sealed class SilParser {
         return module;
     }
 
-    /// <summary><c>sil_witness_table $T : "M.P" { "slot": @f : $type … associated "A": $T … conforms 0: "M.Q" … }</c>.</summary>
+    /// <summary><c>sil_witness_table $T : "M.P" { "slot": @f : $type … associated "A": $T … conforms 0: "M.Q" … generic "m": @g : $type … }</c>.</summary>
     void ParseWitnessTable() {
         var conformer = ParseType();
         Expect(":");
@@ -359,6 +366,16 @@ public sealed class SilParser {
                 var index = Count("an associated type's index");
                 Expect(":");
                 table.AssociatedConformances.Add((index, Expect(TokenKind.String, "a protocol's name").Text));
+            } else if (Accept("generic")) {
+                var requirement = Expect(TokenKind.String, "a requirement's name").Text;
+                Expect(":");
+                if (Accept("none")) {
+                    table.GenericEntries.Add((requirement, null, null));
+                } else {
+                    var function = Expect(TokenKind.Global, "a witness's name").Text;
+                    Expect(":");
+                    table.GenericEntries.Add((requirement, function, ParseType() as FunctionType ?? throw Error("a witness's type is a function type")));
+                }
             } else {
                 var requirement = Expect(TokenKind.String, "a requirement's slot").Text;
                 Expect(":");
@@ -798,6 +815,7 @@ public sealed class SilParser {
             "Region" => SilType.Region,
             "Metadata" => SilType.Metadata,
             "WitnessTable" => SilType.WitnessTable,
+            "Box" => SilType.Box,
             _ when SilType.Numbers.FirstOrDefault(n => n.ToString() == name) is { } number => number,
             _ => _module.FindType(name) ?? throw Error($"unknown type '{name}'"),
         };

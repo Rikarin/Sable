@@ -43,6 +43,24 @@ var (options, rest) = parsed;
 
 GlobalOptions.Current = options;
 
+// '-generics=unspecialised|specialised' (#297), from anywhere before '--':
+// how generic functions are compiled. It changes what a build produces, so
+// it is not one of the global options; it is the process's, and what the
+// process runs — a test harness's build among them — inherits it.
+for (var i = 0; i < rest.Length && rest[i] != "--"; i++) {
+    if (rest[i].StartsWith("-generics=", StringComparison.Ordinal) || rest[i].StartsWith("--generics=", StringComparison.Ordinal)) {
+        var mode = rest[i][(rest[i].IndexOf('=') + 1)..];
+        if (Sable.SIL.SilGen.ParseGenerics(mode) is null) {
+            Console.Error.WriteLine($"sable: -generics takes unspecialised or specialised, not '{mode}'");
+            return 2;
+        }
+
+        Environment.SetEnvironmentVariable("SABLE_GENERICS", mode);
+        rest = [..rest[..i], ..rest[(i + 1)..]];
+        i--;
+    }
+}
+
 if (rest is ["-V" or "--version", ..]) {
     Console.WriteLine($"sable {Toolchains.RunningVersion} ({Toolchains.RunningBuild})");
     return 0;

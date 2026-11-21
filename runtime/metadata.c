@@ -244,3 +244,118 @@ bool sable_metadata_is_subtype(const SableTypeMetadata *type, const SableTypeMet
 
     return false;
 }
+
+// ---- Generic boxes ----------------------------------------------------------
+
+// A value of a type unspecialised code knows only by its metadata (docs/06
+// §6.2, #297): a counted object holding the metadata and then the value, at
+// its type's alignment, in a buffer sized by the metadata at run time.
+// Copying the value shares the box; it is changed in place only once it is
+// the box's only reference (sable_box_make_unique), and destroyed by its
+// type's value witness when the last reference goes.
+typedef struct SableBox {
+    SableObject header;
+    const SableTypeMetadata *type;
+} SableBox;
+
+static int64_t box_value_offset(const SableTypeMetadata *type) {
+    int64_t alignment = type->alignment < 1 ? 1 : type->alignment;
+    return ((int64_t)sizeof(SableBox) + alignment - 1) / alignment * alignment;
+}
+
+void *sable_box_project(void *box) {
+    return (char *)box + box_value_offset(((SableBox *)box)->type);
+}
+
+// The type of what the box holds: for an object, of the object's own class.
+const SableTypeMetadata *sable_box_type(const void *box) {
+    const SableTypeMetadata *type = ((const SableBox *)box)->type;
+    if (type->kind == SABLE_KIND_CLASS) {
+        const void *object = *(const void *const *)((const char *)box + box_value_offset(type));
+        if (object != NULL) {
+            return (*(const SableMetadata *const *)object)->type;
+        }
+    }
+
+    return type;
+}
+
+static void box_destroy(void *box) {
+    const SableTypeMetadata *type = ((SableBox *)box)->type;
+    type->witnesses->destroy(sable_box_project(box), type);
+}
+
+static void box_visit(void *box) {
+    const SableTypeMetadata *type = ((SableBox *)box)->type;
+    type->witnesses->visit(sable_box_project(box), type);
+}
+
+static const SableMetadata sable_box_metadata = {
+    box_destroy, "Box", 0, NULL, NULL, 0, 16, box_visit, NULL,
+};
+
+// A new box for a value of the type, the value not yet in it: all zeros.
+void *sable_box_alloc(const SableTypeMetadata *type) {
+    SableBox *box = sable_alloc(&sable_box_metadata, box_value_offset(type) + (type->size < 1 ? 1 : type->size));
+    box->type = type;
+    return box;
+}
+
+// What writes out a value of each type unspecialised code was given a box of,
+// as an interpolation would: registered by each image as it starts, with the
+// type's metadata, and found by it (or, across images, by the type's name).
+static struct {
+    const SableTypeMetadata *type;
+    SableString *(*describe)(void *box);
+} *describers;
+static int64_t describer_count, describer_capacity;
+
+void sable_register_describer(const SableTypeMetadata *type, SableString *(*describe)(void *box)) {
+    if (describer_count == describer_capacity) {
+        describer_capacity = describer_capacity == 0 ? 32 : describer_capacity * 2;
+        describers = realloc(describers, (size_t)describer_capacity * sizeof *describers);
+        if (describers == NULL) {
+            sable_trap("out of memory");
+        }
+    }
+
+    describers[describer_count].type = type;
+    describers[describer_count].describe = describe;
+    describer_count++;
+}
+
+SableString *sable_box_describe(void *box) {
+    const SableTypeMetadata *type = ((SableBox *)box)->type;
+    for (int64_t i = 0; i < describer_count; i++) {
+        if (describers[i].type == type) {
+            return describers[i].describe(box);
+        }
+    }
+
+    for (int64_t i = 0; i < describer_count; i++) {
+        if (sable_metadata_equal(describers[i].type, type)) {
+            return describers[i].describe(box);
+        }
+    }
+
+    sable_trap("a value with no description");
+}
+
+// The box in the slot made its only reference before its value is changed:
+// one another value shares is replaced by a copy of its own.
+void sable_box_make_unique(void **slot) {
+    SableBox *box = *slot;
+    if (!(object_flags(&box->header) & SABLE_IMMORTAL) && __atomic_load_n(&box->header.strong, __ATOMIC_ACQUIRE) == 1) {
+        return;
+    }
+
+    const SableTypeMetadata *type = box->type;
+    if (type->witnesses->initialize_with_copy == NULL) {
+        sable_trap("a move-only value is shared");
+    }
+
+    void *copy = sable_box_alloc(type);
+    type->witnesses->initialize_with_copy(sable_box_project(copy), sable_box_project(box), type);
+    *slot = copy;
+    sable_release(box);
+}

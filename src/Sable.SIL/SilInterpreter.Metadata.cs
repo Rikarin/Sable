@@ -18,6 +18,19 @@ public sealed partial class SilInterpreter {
 
     readonly Dictionary<SilType, MetadataModel> _metadata = [];
 
+    /// <summary>A generic box (<see cref="SilType.Box" />): a value of the type its metadata describes, counted as an object is.</summary>
+    sealed class GenericBox(MetadataModel type) : Counted {
+        public MetadataModel Type { get; } = type;
+        public object? Value;
+    }
+
+    /// <summary>The value a generic box holds, where it is.</summary>
+    sealed class BoxedValue(GenericBox box) : IReference {
+        public object? Get() => Peek() ?? throw new SilTrap("load from uninitialised storage");
+        public object? Peek() => Alive(box).Value;
+        public void Set(object? value) => Alive(box).Value = value;
+    }
+
     MetadataModel MetadataOf(SilType type) {
         if (!_metadata.TryGetValue(type, out var model)) {
             _metadata[type] = model = new MetadataModel(TypeMetadata.Of(type), module);
@@ -208,6 +221,56 @@ public sealed partial class SilInterpreter {
             case "witness_table_exists":
                 result = operands[0] is not null;
                 return true;
+
+            case "generic_box_alloc":
+                result = Allocate(new GenericBox((MetadataModel)operands[0]!));
+                return true;
+            case "generic_box_project":
+                result = new BoxedValue(Alive((GenericBox)operands[0]!));
+                return true;
+            // A boxed value written out, by its type's describer.
+            case "generic_describe": {
+                var box = Alive((GenericBox)operands[0]!);
+                if (!module.Describers.TryGetValue(box.Type.Type.ToString(), out var describer) || module.Find(describer.Function) is not { } describe) {
+                    throw new SilTrap($"a '{box.Type.Described.Name}' with no description");
+                }
+
+                result = Call(describe, [box], depth + 1);
+                return true;
+            }
+            case "generic_box_type": {
+                var box = Alive((GenericBox)operands[0]!);
+                result = box.Type.Type is ClassType && box.Value is HeapObject held ? MetadataOf(Alive(held).Type) : box.Type;
+                return true;
+            }
+            case "generic_box_make_unique": {
+                var slot = (IReference)operands[0]!;
+                var box = Alive((GenericBox)slot.Get()!);
+                if (box is { Strong: 1, Immortal: false }) {
+                    return true;
+                }
+
+                var copy = Allocate(new GenericBox(box.Type));
+                Retain(box.Type.Type, box.Value);
+                copy.Value = box.Value;
+                slot.Set(copy);
+                Release(SilType.Box, box, depth);
+                return true;
+            }
+        }
+
+        if (builtin.Name.StartsWith("witness_generic:", StringComparison.Ordinal)) {
+            var table = (SilWitnessTable)operands[0]!;
+            var index = int.Parse(builtin.Name["witness_generic:".Length..], System.Globalization.CultureInfo.InvariantCulture);
+            result = table.GenericEntries[index].Function ?? throw new SilTrap("a requirement with no witness for generic code");
+            return true;
+        }
+
+        if (builtin.Name.StartsWith("witness_associated:", StringComparison.Ordinal)) {
+            var table = (SilWitnessTable)operands[0]!;
+            var index = int.Parse(builtin.Name["witness_associated:".Length..], System.Globalization.CultureInfo.InvariantCulture);
+            result = MetadataOf(table.AssociatedTypes[index].Type);
+            return true;
         }
 
         if (builtin.Name.StartsWith("witness_table:", StringComparison.Ordinal)) {

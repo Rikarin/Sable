@@ -139,6 +139,10 @@ public sealed partial class LlvmEmitter {
             constructors.Add(registration);
         }
 
+        if (DescriberRegistration(module) is { } describers) {
+            constructors.Add(describers);
+        }
+
         if (module.IsLibrary) {
             functions.Append(LibraryLifetime(module));
             constructors.Add("@\"sable.library.start\"");
@@ -758,7 +762,7 @@ public sealed partial class LlvmEmitter {
             _ when type == SilType.Unit => "void",
             AddressType or FunctionType or ClassType or ArrayType => "ptr",
             StructType { IsInline: true } or InlinePointerType => "ptr",
-            _ when type == SilType.Object || type == SilType.Region => "ptr",
+            _ when type == SilType.Object || type == SilType.Region || type == SilType.Box => "ptr",
             _ when type == SilType.Metadata || type == SilType.WitnessTable => "ptr",
             ThickFunctionType => "{ ptr, ptr }",
             WeakStorageType or UnownedStorageType => "ptr",

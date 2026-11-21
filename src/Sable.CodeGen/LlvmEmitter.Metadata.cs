@@ -44,7 +44,7 @@ public sealed partial class LlvmEmitter {
     const string FieldDescriptorType = "{ ptr, ptr, i64, i64, ptr }";
 
     /// <summary>The runtime's <c>SableWitnessTable</c>.</summary>
-    const string WitnessTableRecord = "{ ptr, i64, ptr, i64, ptr, i64, ptr }";
+    const string WitnessTableRecord = "{ ptr, i64, ptr, i64, ptr, i64, ptr, i64, ptr }";
 
     /// <summary>
     ///     A type's metadata, <c>@"sable.type.T"</c>: its kind, its fields, its
@@ -192,6 +192,26 @@ public sealed partial class LlvmEmitter {
     ///     (<c>sable_register_witness_table</c>): where the registry finds the
     ///     tables a record leaves null. Null when there are none.
     /// </summary>
+    /// <summary>
+    ///     A constructor that hands the runtime each describer the module made,
+    ///     with its type's metadata (<c>sable_register_describer</c>): what
+    ///     <c>sable_box_describe</c> finds a boxed value's in. Null for none reached.
+    /// </summary>
+    string? DescriberRegistration(SilModule module) {
+        var describers = module.Describers.Values.Where(d => _reachable?.Contains(d.Function) != false && module.Find(d.Function) is not null).ToList();
+        if (describers.Count == 0) {
+            return null;
+        }
+
+        var body = new StringBuilder("define internal void @\"sable.describers.register\"() {\nentry:\n");
+        foreach (var (type, function) in describers) {
+            body.Append($"  call void @sable_register_describer(ptr {TypeMetadataGlobal(type)}, ptr @{Global(function)})\n");
+        }
+
+        _helpers.Append(body.Append("  ret void\n}\n\n"));
+        return "@\"sable.describers.register\"";
+    }
+
     string? WitnessRegistration(SilModule module) {
         if (module.Unit is null || module.WitnessTables.Count == 0) {
             return null;
@@ -240,8 +260,19 @@ public sealed partial class LlvmEmitter {
             _globals.Append($"{associatedConformances} = {SharedLinkage} constant [{records.Count} x {{ i64, ptr }}] [{string.Join(", ", records)}]{Comdat(associatedConformances, SharedLinkage)}\n");
         }
 
+        // The requirements in the generic calling convention (#297), for unspecialised code.
+        var generic = "null";
+        if (table.GenericEntries.Count > 0) {
+            generic = name[..^1] + ".generic\"";
+            var entries = table.GenericEntries.Select(e => e.Function is not { } witness || _reachable?.Contains(witness) == false || _module?.Find(witness) is null && _module?.Unit is null
+                ? "ptr null"
+                : $"ptr @{Global(witness)}");
+            _globals.Append($"{generic} = {SharedLinkage} constant [{table.GenericEntries.Count} x ptr] [{string.Join(", ", entries)}]{Comdat(generic, SharedLinkage)}\n");
+        }
+
         _globals.Append($"{name} = {SharedLinkage} constant {WitnessTableRecord} {{ ptr {protocol}, i64 {table.Entries.Count}, ptr {requirements}, ")
-            .Append($"i64 {table.AssociatedTypes.Count}, ptr {associatedTypes}, i64 {table.AssociatedConformances.Count}, ptr {associatedConformances} }}{Comdat(name, SharedLinkage)}\n");
+            .Append($"i64 {table.AssociatedTypes.Count}, ptr {associatedTypes}, i64 {table.AssociatedConformances.Count}, ptr {associatedConformances}, ")
+            .Append($"i64 {table.GenericEntries.Count}, ptr {generic} }}{Comdat(name, SharedLinkage)}\n");
         return name;
     }
 
@@ -279,6 +310,12 @@ public sealed partial class LlvmEmitter {
                                         declare i1 @sable_metadata_is_subtype(ptr, ptr)
                                         declare ptr @sable_witness_table(ptr, ptr)
                                         declare void @sable_register_witness_table(ptr, ptr)
+                                        declare ptr @sable_box_alloc(ptr)
+                                        declare ptr @sable_box_project(ptr)
+                                        declare ptr @sable_box_type(ptr)
+                                        declare void @sable_box_make_unique(ptr)
+                                        declare ptr @sable_box_describe(ptr)
+                                        declare void @sable_register_describer(ptr, ptr)
 
                                         """;
 
@@ -288,6 +325,17 @@ public sealed partial class LlvmEmitter {
         ///     witnesses, and look a conformance up in the registry; false for
         ///     any other.
         /// </summary>
+        /// <summary>A load of the pointer at an index of one of a witness table's arrays, its field <paramref name="field" />.</summary>
+        string TableEntry(string table, int field, int index) {
+            var at = Fresh();
+            Line($"{at} = getelementptr inbounds {WitnessTableRecord}, ptr {table}, i32 0, i32 {field}");
+            var array = Fresh();
+            Line($"{array} = load ptr, ptr {at}");
+            var slot = Fresh();
+            Line($"{slot} = getelementptr inbounds ptr, ptr {array}, i64 {index}");
+            return $"load ptr, ptr {slot}";
+        }
+
         bool MetadataBuiltin(BuiltinInst builtin, string[] operands) {
             string Result() {
                 var result = Fresh();
@@ -418,6 +466,37 @@ public sealed partial class LlvmEmitter {
                 case "witness_table_exists":
                     Line($"{Result()} = icmp ne ptr {operands[0]}, null");
                     return true;
+
+                // Generic boxes (#297), the runtime's: sized by the metadata at run time.
+                case "generic_box_alloc":
+                    Line($"{Result()} = call ptr @sable_box_alloc(ptr {operands[0]})");
+                    return true;
+                case "generic_box_project":
+                    Line($"{Result()} = call ptr @sable_box_project(ptr {operands[0]})");
+                    return true;
+                case "generic_box_type":
+                    Line($"{Result()} = call ptr @sable_box_type(ptr {operands[0]})");
+                    return true;
+                case "generic_box_make_unique":
+                    Line($"call void @sable_box_make_unique(ptr {operands[0]})");
+                    return true;
+                case "generic_describe":
+                    Line($"{Result()} = call ptr @sable_box_describe(ptr {operands[0]})");
+                    return true;
+            }
+
+            // A requirement's witness in the generic calling convention.
+            if (builtin.Name.StartsWith("witness_generic:", StringComparison.Ordinal)) {
+                var index = int.Parse(builtin.Name["witness_generic:".Length..], CultureInfo.InvariantCulture);
+                Line($"{Result()} = {TableEntry(operands[0], 8, index)}");
+                return true;
+            }
+
+            // An associated type's metadata, as the conformance binds it.
+            if (builtin.Name.StartsWith("witness_associated:", StringComparison.Ordinal)) {
+                var index = int.Parse(builtin.Name["witness_associated:".Length..], CultureInfo.InvariantCulture);
+                Line($"{Result()} = {TableEntry(operands[0], 4, index)}");
+                return true;
             }
 
             // The registry: the witness table of the type's conformance to the protocol, or null.

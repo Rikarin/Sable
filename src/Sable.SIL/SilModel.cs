@@ -105,6 +105,15 @@ public abstract class SilType : IEquatable<SilType> {
     /// </summary>
     public static readonly SilType WitnessTable = new ScalarType("WitnessTable");
 
+    /// <summary>
+    ///     A value of a type unspecialised generic code knows only by its
+    ///     metadata (#297): a counted box holding the metadata and the value,
+    ///     sized at run time. Copying the value shares the box; the value's
+    ///     own value witnesses copy it when it must be changed and the box is
+    ///     shared, and destroy it with the last reference.
+    /// </summary>
+    public static readonly SilType Box = new ScalarType("Box", trivial: false);
+
     /// <summary><c>()</c>: no value. What a function that returns nothing returns.</summary>
     public static readonly SilType Unit = new ScalarType("()");
 
@@ -1577,6 +1586,15 @@ public sealed class SilModule {
     public Dictionary<string, List<string>> PrimitiveConformances { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
+    ///     For each type unspecialised code was given a box of, by the type's
+    ///     name: the function that writes such a value out as an interpolation
+    ///     would, given its box (<c>generic_describe</c>, #297). Natively, each
+    ///     is registered with the runtime, with the type's metadata, as the
+    ///     program starts.
+    /// </summary>
+    public Dictionary<string, (SilType Type, string Function)> Describers { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
     ///     A type's conformance records, by protocol name: one per protocol
     ///     the type declares it conforms to (a class's own; its superclass's
     ///     are its superclass's), each with the conformance's witness table
@@ -2078,6 +2096,29 @@ public static class SilBuiltins {
                 return new([type], metadata);
             case "witness_table_exists" when operands is [var table] && table == SilType.WitnessTable:
                 return new([SilType.WitnessTable], SilType.Bool);
+
+            // Generic boxes (#297): a new one for a value of the type, the
+            // address of the value it holds, the type it holds, and the box
+            // in a slot made the slot's own before its value is changed.
+            case "generic_box_alloc" when operands is [var m] && m == metadata:
+                return new([metadata], SilType.Box);
+            case "generic_box_project" when operands is [var box] && box == SilType.Box && result is AddressType:
+                return new([SilType.Box], result);
+            case "generic_box_type" when operands is [var box] && box == SilType.Box:
+                return new([SilType.Box], metadata);
+            case "generic_box_make_unique" when operands is [AddressType { Pointee: var held } slot] && held == SilType.Box:
+                return new([slot], SilType.Unit);
+            case "generic_describe" when operands is [var described] && described == SilType.Box:
+                return new([SilType.Box], SilType.String);
+        }
+
+        // A requirement's witness in the generic calling convention, and an associated type's metadata.
+        if (name.StartsWith("witness_generic:", StringComparison.Ordinal)) {
+            return operands is [var table] && table == SilType.WitnessTable && result is FunctionType ? new([SilType.WitnessTable], result) : null;
+        }
+
+        if (name.StartsWith("witness_associated:", StringComparison.Ordinal)) {
+            return operands is [var table] && table == SilType.WitnessTable ? new([SilType.WitnessTable], metadata) : null;
         }
 
         if (name.StartsWith("witness_table:", StringComparison.Ordinal)) {

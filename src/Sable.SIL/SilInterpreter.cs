@@ -633,6 +633,11 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
                 break;
 
+            // A generic box destroys its value by its type's value witness.
+            case GenericBox box:
+                Release(box.Type.Type, box.Value, depth);
+                break;
+
             // A region destroys what was allocated in it, last first.
             case RegionObject region:
                 for (var i = region.Cells.Count - 1; i >= 0; i--) {

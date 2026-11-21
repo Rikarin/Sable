@@ -158,9 +158,15 @@ public sealed class MetadataLoweringTests {
         Assert.Equal(0, interpreter.LiveObjects);
     }
 
-    /// <summary>A witness table's witnesses are kept while its conformer can be made or boxed, and dropped with it.</summary>
+    /// <summary>
+    ///     A witness table's witnesses are kept while its conformer can be made
+    ///     or boxed, and dropped with it — in a specialised build: an
+    ///     unspecialised one keeps the tables of a table's associated types
+    ///     too, as its code finds them from the table.
+    /// </summary>
     [Fact]
     public void AWitnessTablesWitnessesAreReachedWithItsConformer() {
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var module = Lower(Tabled);
         var reached = SilPassManager.Reachable(module)!;
         var shelf = module.FindWitnessTable(module.FindType("M.Shelf")!, "M.Holder")!;

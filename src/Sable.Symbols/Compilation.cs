@@ -2004,6 +2004,36 @@ public sealed partial class Compilation {
     /// <summary>What a conformer binds a protocol's associated type to, or null when it does not: what its witness table lists.</summary>
     public TypeSymbol? AssociatedTypeOf(NamedTypeSymbol conformer, TypeParameterSymbol associated) => ResolveAssociated(conformer, associated);
 
+    readonly Dictionary<Symbol, TypeEquivalence> _equivalences = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    ///     A type as the same-type requirements in force inside a declaration
+    ///     — its own 'where' clauses and those of its protocols — make it:
+    ///     each part its class's representative, so that an <c>S.Iter.Element</c>
+    ///     reads as <c>S.Element</c>, and an <c>S.Element</c> after
+    ///     <c>where S.Element == Int</c> as <c>Int</c>.
+    /// </summary>
+    public TypeSymbol CanonicalType(Symbol context, TypeSymbol type) {
+        lock (_equivalences) {
+            return EquivalenceIn(context).Canonical(type);
+        }
+    }
+
+    TypeEquivalence EquivalenceIn(Symbol context) {
+        if (!_equivalences.TryGetValue(context, out var equivalence)) {
+            _equivalences[context] = equivalence = TypeEquivalence.ForSymbol(context);
+        }
+
+        return equivalence;
+    }
+
+    /// <summary>The protocols a generic type is known to conform to inside a declaration: its own constraints, its protocols' on an associated type, and 'where' clauses'.</summary>
+    public ImmutableArray<TypeSymbol> ConstraintsIn(Symbol context, TypeSymbol type) {
+        lock (_equivalences) {
+            return AssociatedTypes.ConstraintsOf(type, EquivalenceIn(context));
+        }
+    }
+
     static void AddTo(Symbol container, Symbol member) {
         switch (container) {
             case ModuleSymbol module:

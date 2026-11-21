@@ -574,6 +574,12 @@ public sealed partial class LlvmEmitter {
                 return true;
             }
 
+            // An opaque type's metadata, found where the function starts.
+            if (builtin.Name.StartsWith("opaque_metadata:", StringComparison.Ordinal)) {
+                _names[builtin] = OpaqueMetadata(new OpaqueType(builtin.Name["opaque_metadata:".Length..]));
+                return true;
+            }
+
             // An associated type's metadata, as the conformance binds it.
             if (builtin.Name.StartsWith("witness_associated:", StringComparison.Ordinal)) {
                 var index = int.Parse(builtin.Name["witness_associated:".Length..], CultureInfo.InvariantCulture);

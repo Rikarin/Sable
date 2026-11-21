@@ -266,11 +266,16 @@ come its **generic entries** (`generic_requirements`): every method,
 operator and property getter the protocol itself declares, in declaration
 order, in the convention unspecialised code calls them in — `self` (the
 address of its storage, for a `mutating` one) unless the requirement is
-static, its parameters, the address a result of `Self` is written to, and
-`Self`'s metadata last; a value of `Self` is passed by the address of its
-caller's storage. A requirement that convention cannot pass yet (generic
-itself, async, an initialiser, or `Self` or an associated type inside
-another type) has an empty entry. Each witness is the requirement lowered
+static, its parameters, the address a result of `Self` is written to, the
+address an error of an associated type is written to, and `Self`'s
+metadata last; a value of `Self` or of one of its associated types
+(`next() -> Element?`, `index(after: Index) -> Index`) is passed by the
+address of its caller's storage. A requirement whose error is of an
+associated type, `throws(Failure)`, writes the error where its caller says
+and throws that address: the witness of a conformer whose `Failure` is
+`Never` never writes it. A requirement that convention cannot pass yet
+(generic itself, async, an initialiser, or `Self` inside another type than
+an optional or a tuple) has an empty entry. Each witness is the requirement lowered
 as if its body called itself on the conforming type, so it is met as
 specialised code meets it: the type's member, a default, a builtin. Last
 come its **bases** (`bases`): the conformer's tables of the protocols this
@@ -377,9 +382,39 @@ type is a type argument and a type's name as Sable writes it
 with a deinit, packed or aligned, move-only, a union with a boxed case, a
 class, and an extension with `where T == X` are still specialised.
 
+**Associated types.** An associated type read through a type parameter —
+`S.Element`, `C.Index`, `S.Iter`, `S.Iter.Element`, and inside a protocol
+extension its `Self`'s, named bare (`Element`) — is opaque too
+(`@opaque(S.Element)`), first read as the function's same-type requirements
+and its protocols' read it (`S.Iter.Element` is `S.Element`; after `where
+S.Element == Int` it is an `Int`). Its metadata is found where the function
+starts, one step at a time from the type parameter it is read through: the
+step's associated type in the table of the conformance that declares it —
+the table the function is given (through its bases), else the registry's
+for the step before's metadata. SIL keeps how on the function,
+`associated("S.Element", "S", "Sable.Core.Sequence", 0, "$witnesses.S.Sequence")`,
+which the code generator and the interpreter read; the body asks for the
+metadata with `opaque_metadata:S.Element`. What an associated type is known
+to conform to — its protocol's constraints (`Iter: Iterator`), a `where
+S.Element: Equatable` — is found in the registry; code that knows the
+type makes those tables when it makes the conformer's (every table of a
+conformance's associated types' conformances, and a `where` clause's),
+and a table's associated types' tables are kept with it. An array is a
+conformer as any type is (`Int[]` as `C: Collection`): its tables are
+made from its conforming extensions.
+
+An error of a type parameter's or an associated type's type,
+`throws(S.Failure)`, is written to an address the caller passes after
+where a result goes, and the function throws that address. A caller that
+knows the type passes a slot of it and takes the error from there; one
+whose error is `Never` passes a slot never written; unspecialised code
+that throws the same passes its own caller's place, and so throws on what
+it is thrown untouched. An error of one caught inside unspecialised code
+(`do`/`catch`, `try?`) keeps the function specialised.
+
 What unspecialised code cannot serve yet — an optional chain through a
-`T?`, a structural union of `T`, a slice of them, a closure over one, an
-associated type, a member of a generic class, an accessor or initialiser,
+`T?`, a structural union of `T`, a slice of them, a closure over one, a
+member of a generic class, an accessor or initialiser,
 `"\(x:?)"`, an async function or a generator — is still specialised for its
 type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`

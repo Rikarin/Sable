@@ -704,4 +704,180 @@ public sealed class UnspecialisedGenericTests {
 
         Assert.Contains("Test.nest$generic", Unspecialised(declarations, "print(nest(1, 3))"));
     }
+
+    const string Sequences = """
+        enum Stop: Error {
+            Early
+        }
+
+        struct Countdown: Sequence {
+            let from: Int
+            fn makeIterator() -> CountdownIterator => CountdownIterator { left: from }
+        }
+
+        struct CountdownIterator: Iterator {
+            var left: Int
+            mutating fn next() -> Int? {
+                if left == 0 {
+                    return none
+                }
+                left -= 1
+                return left + 1
+            }
+        }
+
+        struct Failing: Sequence {
+            let after: Int
+            fn makeIterator() -> FailingIterator => FailingIterator { left: after }
+        }
+
+        struct FailingIterator: Iterator {
+            var left: Int
+            mutating fn next() throws(Stop) -> String? {
+                if left == 0 {
+                    throw Stop.Early
+                }
+                left -= 1
+                return "x\(left)"
+            }
+        }
+
+        protocol Bag {
+            associatedtype Item: Equatable
+            fn items() -> Item[>..]
+            fn first() -> Item?
+        }
+
+        struct Words: Bag {
+            let words: String[>..]
+            fn items() -> String[>..] => words
+            fn first() -> String? => words.count > 0 ? words[0] : none
+        }
+
+        extension Bag {
+            fn holds(_ item: Item) -> Bool {
+                for each in items() {
+                    if each == item {
+                        return true
+                    }
+                }
+                return false
+            }
+
+            fn firstOrNone() -> String => first().map { "\($0)" } ?? "none"
+        }
+
+        fn collect<S: Sequence>(_ s: S) throws(S.Failure) -> S.Element[>..] {
+            var result: S.Element[>..] = []
+            for try x in s {
+                result.append(x)
+            }
+            return result
+        }
+
+        fn joined<S: Sequence>(_ s: S) -> String where S.Failure == Never {
+            var text = ""
+            for x in s {
+                text += "\(x) "
+            }
+            return text
+        }
+
+        fn firstOf<C: Collection>(_ c: C) -> C.Element? {
+            var it = c.makeIterator()
+            return it.next()
+        }
+
+        fn count<S: Sequence>(_ s: S, of wanted: S.Element) -> Int where S.Element: Equatable, S.Failure == Never {
+            var n = 0
+            for x in s {
+                if x == wanted {
+                    n += 1
+                }
+            }
+            return n
+        }
+
+        fn kindOf<S: Sequence>(_ s: S) -> String where S.Failure == Never {
+            var it = s.makeIterator()
+            guard let x = it.next() else {
+                return "empty"
+            }
+            return "\(type(of: x))"
+        }
+        """;
+
+    [Fact]
+    public void AssociatedTypesAreReadFromTheWitnessTables() {
+        Prints(
+            "3 2 1 \n[3, 2, 1]\n2\n1\nInt String\n0 1 2 \ntrue\nfalse\na\n",
+            Sequences,
+            """
+                print(joined(Countdown(from: 3)))
+                print(collect(Countdown(from: 3)))
+                print(count(Countdown(from: 4), of: 2) + count(Countdown(from: 1), of: 1))
+                print(firstOf(1..<5) ?? 0)
+                print(kindOf(Countdown(from: 1)) + " " + kindOf(["s"].lazy))
+                print(joined(0..<3))
+                let words = Words { words: ["a", "b"] }
+                print(words.holds("b"))
+                print(words.holds("c"))
+                print(words.firstOrNone())
+            """);
+    }
+
+    [Fact]
+    public void ComputedPropertiesOfAProtocolExtensionAreCompiledOnce() {
+        const string declarations = """
+            protocol Sized {
+                var size: Int { get }
+                static var unit: Int { get }
+            }
+
+            extension Sized {
+                var doubled: Int => size * 2
+                static var units: Int => Self.unit * 10
+                var big: Bool => doubled > Self.units
+            }
+
+            struct Box: Sized {
+                var size: Int
+                static var unit: Int => 3
+            }
+
+            fn report<T: Sized>(_ x: T) -> String {
+                return "\(x.doubled) \(T.units) \(x.big)"
+            }
+
+            fn widths<T: FixedWidthInteger>(_ x: T) -> String => "\(T.bitWidth) \(x.nextPowerOfTwo())"
+            """;
+        Prints(
+            "8 30 false\n80 30 true\nfalse\n8 4\n64 16\n",
+            declarations,
+            """
+                print(report(Box(size: 4)))
+                print(report(Box(size: 40)))
+                print(Box(size: 1).big)
+                let small: U8 = 3
+                print(widths(small))
+                print(widths(16))
+            """);
+        Assert.Contains(Unspecialised(declarations, "print(report(Box(size: 4)))"), static f => f.Contains("big", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AnErrorOfAnAssociatedTypeIsWrittenWhereTheCallerSays() {
+        Prints(
+            "[2, 1]\nstopped: Early\n",
+            Sequences,
+            """
+                print(collect(Countdown(from: 2)))
+                do {
+                    let got = try collect(Failing(after: 3))
+                    print(got)
+                } catch {
+                    print("stopped: \(error)")
+                }
+            """);
+    }
 }

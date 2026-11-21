@@ -801,8 +801,12 @@ public sealed partial class SilGen {
                 } else {
                     var (syntax, model) = _declarations[symbol];
                     _loweringInstance = name;
-                    using (_unspecialised.TryGetValue(name, out var generic) ? Opaque(generic.Shape) : null) {
+                    using (_unspecialised.TryGetValue(name, out var generic) ? Opaque(generic.Shape) : null)
+                    using (generic.Shape is not null ? AssociatedContext(symbol) : null) {
                         LowerBody(symbol, syntax, model, name, type, substitution);
+                        if (generic.Shape is { } shape && _module.Find(name) is { } unspecialised) {
+                            AssociatedRecipes(unspecialised, symbol, shape);
+                        }
                     }
 
                     _loweringInstance = null;
@@ -1813,8 +1817,14 @@ public sealed partial class SilGen {
         // In unspecialised code, a value of a type parameter's type is held
         // indirectly (#297), and an array of them is a buffer of such values:
         // neither kept, as the type parameter is one only while its code is lowered.
+        // An associated type read through one is too, by the name its class
+        // of same-type requirements reads it as — or the type they make it.
+        if (_opaque.Count > 0 && IsAssociatedOf(type, _opaque) && Canonical(type) is var canonical && !canonical.Equals(type)) {
+            return Lower(canonical);
+        }
+
         if (IsOpaque(type)) {
-            return new OpaqueType(((TypeParameterSymbol)type).Name);
+            return new OpaqueType(OpaqueName(type));
         }
 
         if (_opaque.Count > 0 && IsArrayOf(type, _opaque)) {
@@ -5343,6 +5353,13 @@ public sealed partial class SilGen {
                 return;
             }
 
+            if (ErrorOut(ref error) && FunctionHandler(error.Type, at) is { } written) {
+                DestroyTemporaries(written.Temporaries);
+                RunDefers(written.Scopes);
+                Branch(written.Block, error);
+                return;
+            }
+
             var handler = _handlers.Count > 0 ? _handlers[^1] : FunctionHandler(error.Type, at);
             if (handler is null) {
                 return;
@@ -8036,12 +8053,12 @@ public sealed partial class SilGen {
         /// </summary>
         SilValue? Hole(BoundExpression part, BoundFormatSpec? format) {
             part = AsTypeValue(part);
-            if (format is null && IsOpaqueHere(Sub(part.Type)) && Sub(part.Type) is TypeParameterSymbol described) {
+            if (format is null && IsOpaqueHere(Sub(part.Type)) && MetadataOf(Sub(part.Type)) is { } described) {
                 if (Borrow(part) is not { } value) {
                     return null;
                 }
 
-                var text = Emit(new BuiltinInst("generic_describe", SilType.String, value, _genericMetadata[described]));
+                var text = Emit(new BuiltinInst("generic_describe", SilType.String, value, described));
                 End(value);
                 return text;
             }
@@ -10369,7 +10386,7 @@ public sealed partial class SilGen {
                 // A value of a type parameter's type, to unspecialised code: borrowed where it is.
                 // So is an optional or a tuple of them, laid out at run time.
                 if (genericShape is not null && i < callee.Parameters.Length && SilType.IsIndirect(type.Parameters[arguments.Count])) {
-                    var given = bound.Apply(callee.Parameters[i].Type);
+                    var given = WithAssociatedTypes(callee, bound).Apply(callee.Parameters[i].Type);
                     if (GenericArgument(call.Arguments[i], given, type.Parameters[arguments.Count], borrows) is not { } genericArgument) {
                         return null;
                     }
@@ -10471,10 +10488,22 @@ public sealed partial class SilGen {
             // Unspecialised code's metadata and witness tables, after the rest,
             // and before them where a result of a type parameter's type goes.
             (SilValue Passed, AllocStackInst Slot)? genericOut = null;
+            (SilValue Passed, AllocStackInst? Slot, bool CannotThrow)? genericError = null;
             if (genericShape is not null) {
                 if (type.Result == SilType.Unit && arguments.Count < type.Parameters.Length && !callee.ReturnType.Equals(Core.Void)
-                    && (genericOut = GenericOut(type.Parameters[arguments.Count], bound.Apply(callee.ReturnType))) is { } into) {
+                    && (genericOut = GenericOut(type.Parameters[arguments.Count], WithAssociatedTypes(callee, bound).Apply(callee.ReturnType))) is { } into) {
                     arguments.Add(into.Passed);
+                }
+
+                // An error of a type parameter's type or an associated type's: where it goes.
+                if (type.Thrown is AddressType errorAddress && arguments.Count < type.Parameters.Length && type.Parameters[arguments.Count] == errorAddress) {
+                    if (callee.ThrownType is not { } calleeThrown || GenericErrorOut(errorAddress, WithAssociatedTypes(callee, bound).Apply(calleeThrown)) is not { } place) {
+                        EndAll(borrows);
+                        return Missing(call, "where this call's error goes");
+                    }
+
+                    genericError = place;
+                    arguments.Add(place.Passed);
                 }
 
                 if (GenericHiddenArguments(genericShape, bound, call.Syntax) is not { } hidden) {
@@ -10511,9 +10540,9 @@ public sealed partial class SilGen {
             // nothing: the binder asked for no 'try', and nothing handles it.
             // Nor does a 'rethrows(E)' one whose E is Never here.
             var invoked = Invoke(code, type, arguments, borrows, call.Syntax,
-                cannotThrow: callee.IsRethrows && RethrownBy(call) is null
+                cannotThrow: genericError is { CannotThrow: true } || callee.IsRethrows && RethrownBy(call) is null
                              && (callee.RethrownAlso is not { } also || ThrowsNothing(Sub(call.Substitution.Apply(also)))),
-                hopBack: back);
+                hopBack: back, errorSlot: genericError?.Slot);
             if (genericOut is { } written) {
                 return TakeOut(invoked, written.Slot);
             }
@@ -10533,7 +10562,7 @@ public sealed partial class SilGen {
         /// </summary>
         /// <param name="hopBack">After a call into an actor: where the task ran before, to hop back to on either way out.</param>
         SilValue? Invoke(SilValue reference, FunctionType type, List<SilValue> arguments, List<SilValue> borrows, SyntaxNode at, bool cannotThrow = false,
-            SilValue? hopBack = null) {
+            SilValue? hopBack = null, AllocStackInst? errorSlot = null) {
             BeginAccesses(borrows);
             if (type.Thrown is null) {
                 var apply = Emit(new ApplyInst(reference, type.Result, [..arguments]));
@@ -10591,8 +10620,15 @@ public sealed partial class SilGen {
             }
 
             if (cannotThrow) {
-                Destroy(error);
+                // An error written where it was told — none, here — is no value to destroy.
+                if (error.Type is not AddressType) {
+                    Destroy(error);
+                }
+
                 Jump(new UnreachableInst());
+            } else if (errorSlot is not null) {
+                // An error written where it was told, of a type known here: taken from there.
+                RouteError(Emit(new LoadInst(errorSlot, errorSlot.ElementType.IsTrivial ? LoadKind.Trivial : LoadKind.Take)), at);
             } else {
                 RouteError(error, at);
             }

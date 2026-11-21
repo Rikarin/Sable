@@ -300,6 +300,20 @@ public static class SilPrinter {
         if (function.Inline != SilInline.Default) {
             builder.Append(" inline(").Append(function.Inline == SilInline.Always ? "always" : "never").Append(')');
         }
+
+        foreach (var associated in function.AssociatedMetadata) {
+            builder.Append(" associated(").Append(Quote(associated.Name)).Append(", ").Append(Quote(associated.Base)).Append(", ")
+                .Append(Quote(associated.Protocol)).Append(", ").Append(associated.Index);
+            if (associated.Table is { } table) {
+                builder.Append(", ").Append(Quote(table));
+                foreach (var step in associated.Path) {
+                    builder.Append(", ").Append(step);
+                }
+            }
+
+            builder.Append(')');
+        }
+
         if (function.SourceFile is { } file) {
             builder.Append(" loc ").Append(Quote(file)).Append(':').Append(function.Line);
         }

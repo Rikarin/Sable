@@ -742,6 +742,18 @@ public readonly record struct SilLocation(int Line, int Column, int Scope = 0) {
 public readonly record struct SilScope(int Parent, int Line, int Column);
 
 /// <summary>
+///     How unspecialised code finds an associated type's metadata (#297): the
+///     <paramref name="Index" />-th associated type of <paramref name="Protocol" />
+///     in the witness table of <paramref name="Base" />'s conformance to it —
+///     the table the function is given as its parameter
+///     <paramref name="Table" />, through the bases <paramref name="Path" />
+///     names, or, with no table given, the registry's for the base's metadata.
+///     <paramref name="Name" /> and <paramref name="Base" /> are
+///     <see cref="OpaqueType" /> names.
+/// </summary>
+public sealed record SilAssociatedMetadata(string Name, string Base, string Protocol, int Index, string? Table, ImmutableArray<int> Path);
+
+/// <summary>
 ///     One SIL instruction. An instruction that produces a value is itself the
 ///     value, as in Swift's SIL, so a use names the instruction.
 /// </summary>
@@ -1515,6 +1527,14 @@ public sealed class SilFunction(string name, FunctionType type) {
     public bool IsUnspecialised => ParameterNames.Exists(static n => n.StartsWith("$metadata.", StringComparison.Ordinal));
 
     /// <summary>
+    ///     In unspecialised code, the metadata of each associated type its
+    ///     opaque values have (<c>@opaque(S.Element)</c>), by how it is found
+    ///     from the metadata and tables the function is given. Printed as
+    ///     <c>associated("S.Element", "S", "Sable.Core.Sequence", 0, "$witnesses.S.Collection", 0)</c>.
+    /// </summary>
+    public List<SilAssociatedMetadata> AssociatedMetadata { get; } = [];
+
+    /// <summary>
     ///     The blocks within the function's body that a debugger tells apart,
     ///     so that a name shadowed in one shows only there; scope <c>n</c> of
     ///     a <see cref="SilLocation" /> is the <c>n</c>-th.
@@ -2203,6 +2223,11 @@ public static class SilBuiltins {
         // A requirement's witness in the generic calling convention, and an associated type's metadata.
         if (name.StartsWith("witness_generic:", StringComparison.Ordinal)) {
             return operands is [var table] && table == SilType.WitnessTable && result is FunctionType ? new([SilType.WitnessTable], result) : null;
+        }
+
+        // An opaque type's metadata, as the function finds it where it starts: an associated type's.
+        if (name.StartsWith("opaque_metadata:", StringComparison.Ordinal)) {
+            return operands is [] ? new([], metadata) : null;
         }
 
         if (name.StartsWith("witness_associated:", StringComparison.Ordinal)) {

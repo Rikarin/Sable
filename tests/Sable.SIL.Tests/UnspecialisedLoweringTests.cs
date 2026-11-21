@@ -379,4 +379,79 @@ public sealed class UnspecialisedLoweringTests {
         Assert.Equal("3\na\nString?\n", Run(module));
         Assert.Equal("3\na\nString?\n", Run(SilParser.Parse(SilPrinter.Print(module))));
     }
+
+    const string Iteration = """
+                             enum Stop: Error {
+                                 Early
+                             }
+
+                             struct Countdown: Sequence {
+                                 let from: Int
+                                 fn makeIterator() -> CountdownIterator => CountdownIterator { left: from }
+                             }
+
+                             struct CountdownIterator: Iterator {
+                                 var left: Int
+                                 mutating fn next() throws(Stop) -> Int? {
+                                     if left == 0 {
+                                         throw Stop.Early
+                                     }
+                                     left -= 1
+                                     return left
+                                 }
+                             }
+
+                             fn firstOf<S: Sequence>(_ s: S) throws(S.Failure) -> S.Element? {
+                                 var it = s.makeIterator()
+                                 return try it.next()
+                             }
+
+                             fn joined<S: Sequence>(_ s: S) -> String where S.Failure == Never {
+                                 var text = ""
+                                 for x in s {
+                                     text += "\(x);"
+                                 }
+                                 return text
+                             }
+
+                             fn main() {
+                                 print(try! firstOf(Countdown(from: 2)) ?? -1)
+                                 print(joined(1...3))
+                                 do {
+                                     let _ = try firstOf(Countdown(from: 0))
+                                 } catch {
+                                     print("stopped")
+                                 }
+                             }
+                             """;
+
+    /// <summary>
+    ///     An associated type read through a type parameter, <c>S.Element</c>,
+    ///     is opaque too: its metadata is found where the function starts, from
+    ///     the table of its base's conformance the function is given, or from
+    ///     the registry (<c>associated(...)</c>, which SIL text keeps); an
+    ///     error of one, <c>throws(S.Failure)</c>, is written where the caller
+    ///     says, and the address is thrown.
+    /// </summary>
+    [Fact]
+    public void AssociatedTypesAreFoundFromTheTablesAndTheirErrorsWrittenWhereTheCallerSays() {
+        var module = Lower(Iteration);
+        var firstOf = module.Find("M.firstOf$generic")!;
+        Assert.Equal("(@opaque(S), *Optional$$opaque$S.Element$, *@opaque(S.Failure), Metadata, WitnessTable) throws(*@opaque(S.Failure)) -> ()", firstOf.Type.ToString());
+        Assert.Contains(firstOf.AssociatedMetadata, static a => a is { Name: "S.Iter", Base: "S", Protocol: "Sable.Core.Sequence", Table: "$witnesses.S.Sequence" });
+        Assert.Contains(Instructions(firstOf), static i => i is BuiltinInst { Name: "opaque_metadata:S.Iter" });
+        Assert.NotNull(module.Find("M.joined$generic"));
+
+        var table = module.FindWitnessTable(module.FindType("M.CountdownIterator")!, "Sable.Core.Iterator")!;
+        Assert.Equal("(*@opaque(Self), *Optional$$opaque$Self.Element$, *@opaque(Self.Failure), Metadata) throws(*@opaque(Self.Failure)) -> ()", table.GenericEntries[0].Type!.ToString());
+
+        const string expected = "1\n1;2;3;\nstopped\n";
+        Assert.Equal(expected, Run(module));
+        Assert.Equal(expected, Run(Lower(Iteration, GenericsMode.Specialised)));
+        var text = SilPrinter.Print(module);
+        Assert.Contains("associated(\"S.Iter\", \"S\", \"Sable.Core.Sequence\", 2, \"$witnesses.S.Sequence\")", text, StringComparison.Ordinal);
+        var parsed = SilParser.Parse(text);
+        Assert.Equal(text, SilPrinter.Print(parsed));
+        Assert.Equal(expected, Run(parsed));
+    }
 }

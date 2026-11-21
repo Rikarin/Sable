@@ -95,12 +95,15 @@ public sealed partial class SilGen {
 
         // The associated types, as the conformance binds them, and the protocols each must conform to.
         foreach (var associated in protocol.OriginalDefinition.AssociatedTypes) {
-            if (_compilation.AssociatedTypeOf(concrete, associated) is not { } bound || Lower(bound) is not { } lowered) {
+            // Each in its place, which unspecialised code reads it from: one
+            // the conformance does not bind, or binds to Never, as '()'.
+            var lowered = AssociatedBinding(concrete, associated) is { } bound ? Lower(bound) : null;
+            var index = table.AssociatedTypes.Count;
+            table.AssociatedTypes.Add((associated.Name, lowered ?? SilType.Unit));
+            if (lowered is null) {
                 continue;
             }
 
-            var index = table.AssociatedTypes.Count;
-            table.AssociatedTypes.Add((associated.Name, lowered));
             foreach (var constraint in associated.Constraints.OfType<NamedTypeSymbol>().Where(static c => c.TypeKind == TypeKind.Protocol)) {
                 table.AssociatedConformances.Add((index, QualifiedName(constraint)));
             }
@@ -222,12 +225,12 @@ public sealed partial class SilGen {
             var type = Sub(argument.Type);
 
             // A type parameter's value: its metadata, or for an object, its own class's.
-            if (IsOpaqueHere(type) && type is TypeParameterSymbol parameter) {
+            if (IsOpaqueHere(type) && MetadataOf(type) is { } typeMetadata) {
                 if (Borrow(argument) is not { } given) {
                     return null;
                 }
 
-                var held = Emit(new BuiltinInst("opaque_type", SilType.Metadata, given, _genericMetadata[parameter]));
+                var held = Emit(new BuiltinInst("opaque_type", SilType.Metadata, given, typeMetadata));
                 End(given);
                 return held;
             }

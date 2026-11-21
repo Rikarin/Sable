@@ -173,7 +173,8 @@ static void visit_object(SableObject *object) {
     if (type->destroy == sable_array_destroy) {
         SableArray *array = (SableArray *)object;
         for (int64_t i = 0; i < array->count; i++) {
-            type->visit(array->elements + i * type->element_size);
+            // An array of a type known only at run time visits by the element's witnesses.
+            element_visit(type, array->elements + i * type->element_size);
         }
     } else {
         type->visit(object);

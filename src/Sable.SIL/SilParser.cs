@@ -595,6 +595,29 @@ public sealed class SilParser {
             Expect(")");
         }
 
+        // How unspecialised code finds an associated type's metadata.
+        while (Accept("associated")) {
+            Expect("(");
+            var associatedName = Expect(TokenKind.String, "an opaque type's name").Text;
+            Expect(",");
+            var baseName = Expect(TokenKind.String, "an opaque type's name").Text;
+            Expect(",");
+            var protocol = Expect(TokenKind.String, "a protocol's name").Text;
+            Expect(",");
+            var index = Count("an associated type's index");
+            string? table = null;
+            var path = ImmutableArray.CreateBuilder<int>();
+            if (Accept(",")) {
+                table = Expect(TokenKind.String, "a witness table parameter's name").Text;
+                while (Accept(",")) {
+                    path.Add(Count("a base's index"));
+                }
+            }
+
+            Expect(")");
+            _function.AssociatedMetadata.Add(new(associatedName, baseName, protocol, index, table, path.ToImmutable()));
+        }
+
         if (Accept("loc")) {
             _function.SourceFile = Expect(TokenKind.String, "a file name").Text;
             Expect(":");

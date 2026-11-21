@@ -88,6 +88,8 @@ public sealed class SequenceLoweringTests {
 
     [Fact]
     public void GenericIterationIsMonomorphisedWithNothingIndirect() {
+        // Of specialised code (#297): each instance its own.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var module = Lower(Source);
 
         var instances = module.Functions.Where(static f => f.Name.StartsWith("M.total$of$", StringComparison.Ordinal)).ToList();
@@ -109,6 +111,8 @@ public sealed class SequenceLoweringTests {
 
     [Fact]
     public void GoingThroughWhatCannotFailHasNoErrorPath() {
+        // Of specialised code (#297): each instance its own.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var module = Lower(Source);
 
         // 'throws(S.Failure)' and 'for try', specialised for an array and a

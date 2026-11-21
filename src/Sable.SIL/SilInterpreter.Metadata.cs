@@ -41,10 +41,41 @@ public sealed partial class SilInterpreter {
     }
 
     /// <summary>The type an opaque type is in the function running now.</summary>
-    SilType OpaqueTypeOf(OpaqueType opaque) =>
-        _opaqueTypes is not null && _opaqueTypes.TryGetValue(opaque.Name, out var model)
-            ? model.Type
-            : throw new SilTrap($"no metadata for {opaque} here");
+    SilType OpaqueTypeOf(OpaqueType opaque) => OpaqueModel(opaque.Name).Type;
+
+    /// <summary>The function running now and its arguments, when it finds associated types' metadata from its tables.</summary>
+    (SilFunction Function, IReadOnlyList<object?> Arguments)? _associatedTypes;
+
+    /// <summary>
+    ///     An opaque type's metadata in the function running now: a type
+    ///     parameter's as given, an associated type's found from the table of
+    ///     its base's conformance the first time it is asked for.
+    /// </summary>
+    MetadataModel OpaqueModel(string name) {
+        if (_opaqueTypes is not null && _opaqueTypes.TryGetValue(name, out var model)) {
+            return model;
+        }
+
+        if (_opaqueTypes is null || _associatedTypes is not var (function, arguments) || function.AssociatedMetadata.Find(a => a.Name == name) is not { } associated) {
+            throw new SilTrap($"no metadata for @opaque({name}) here");
+        }
+
+        var baseModel = OpaqueModel(associated.Base);
+        SilWitnessTable table;
+        if (associated.Table is { } given && function.ParameterNames.IndexOf(given) is var at and >= 0 && arguments[at] is SilWitnessTable passed) {
+            table = passed;
+            foreach (var step in associated.Path) {
+                table = module.FindWitnessTable(table.Conformer, table.Bases[step]) ?? WitnessTableOf(table.Conformer, table.Bases[step])
+                    ?? throw new SilTrap($"no table of {table.Conformer}'s conformance to {table.Bases[step]}");
+            }
+        } else {
+            table = WitnessTableOf(baseModel.Type, associated.Protocol) ?? throw new SilTrap($"no table of {baseModel.Type}'s conformance to {associated.Protocol}");
+        }
+
+        model = MetadataOf(table.AssociatedTypes[associated.Index].Type);
+        _opaqueTypes[name] = model;
+        return model;
+    }
 
     /// <summary>
     ///     A type as the function running now has it: an opaque type, or an
@@ -368,6 +399,11 @@ public sealed partial class SilInterpreter {
             var table = (SilWitnessTable)operands[0]!;
             var index = int.Parse(builtin.Name["witness_generic:".Length..], System.Globalization.CultureInfo.InvariantCulture);
             result = table.GenericEntries[index].Function ?? throw new SilTrap("a requirement with no witness for generic code");
+            return true;
+        }
+
+        if (builtin.Name.StartsWith("opaque_metadata:", StringComparison.Ordinal)) {
+            result = OpaqueModel(builtin.Name["opaque_metadata:".Length..]);
             return true;
         }
 

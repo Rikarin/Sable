@@ -1535,8 +1535,8 @@ public sealed partial class LlvmEmitter {
         /// </summary>
         string OpaqueMetadata(SilType type) {
             if (type is OpaqueType opaque) {
-                return _opaqueMetadata.TryGetValue(opaque.Name, out var metadata)
-                    ? metadata
+                return _opaqueMetadata.TryGetValue(opaque.Name, out var metadata) ? metadata
+                    : function.AssociatedMetadata.Find(a => a.Name == opaque.Name) is { } associated ? AssociatedMetadata(associated)
                     : throw new NotSupportedException($"{function.Name} has no metadata for {type}\n{SilPrinter.Print(function)}");
             }
 
@@ -1566,6 +1566,42 @@ public sealed partial class LlvmEmitter {
                 : $"  {made} = call ptr @sable_aggregate_type(ptr {cache}, ptr {module.AggregateShape((NominalType)type)}, ptr {list})\n");
             _runtimeMetadata[key] = made;
             return made;
+        }
+
+        /// <summary>
+        ///     An associated type's metadata, found where the function starts:
+        ///     from the table of its base's conformance — one the function is
+        ///     given, through its bases, or the registry's — as its conformer binds it.
+        /// </summary>
+        string AssociatedMetadata(SilAssociatedMetadata associated) {
+            var baseMetadata = OpaqueMetadata(new OpaqueType(associated.Base));
+            string table;
+            if (associated.Table is { } given && function.ParameterNames.IndexOf(given) is var at and >= 0) {
+                table = $"%p{at}";
+                foreach (var step in associated.Path) {
+                    table = EntryTableEntry(table, 10, step);
+                }
+            } else {
+                table = Fresh();
+                _entryAllocas.Append($"  {table} = call ptr @sable_witness_table_cached(ptr {module.WitnessCache()}, ptr {baseMetadata}, ptr {module.ProtocolDescriptor(associated.Protocol)})\n");
+            }
+
+            var made = EntryTableEntry(table, 4, associated.Index);
+            _opaqueMetadata[associated.Name] = made;
+            return made;
+        }
+
+        /// <summary>An entry of a witness table's array, read where the function starts.</summary>
+        string EntryTableEntry(string table, int field, int index) {
+            var at = Fresh();
+            var array = Fresh();
+            var slot = Fresh();
+            var entry = Fresh();
+            _entryAllocas.Append($"  {at} = getelementptr inbounds {WitnessTableRecord}, ptr {table}, i32 0, i32 {field}\n")
+                .Append($"  {array} = load ptr, ptr {at}\n")
+                .Append($"  {slot} = getelementptr inbounds ptr, ptr {array}, i64 {index}\n")
+                .Append($"  {entry} = load ptr, ptr {slot}\n");
+            return entry;
         }
 
         /// <summary>A part's metadata, for one made at run time: an indirect one's, an array of them's, or a constant.</summary>

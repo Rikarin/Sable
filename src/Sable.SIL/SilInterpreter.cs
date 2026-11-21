@@ -918,6 +918,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
         // Unspecialised code's values are copied and destroyed as the metadata it is given says.
         var outer = _opaqueTypes;
+        var outerAssociated = _associatedTypes;
         if (OpaqueParametersOf(function) is { Length: > 0 } opaque) {
             _opaqueTypes = [];
             foreach (var (index, name) in opaque) {
@@ -925,6 +926,8 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     _opaqueTypes[name] = model;
                 }
             }
+
+            _associatedTypes = function.AssociatedMetadata.Count > 0 ? (function, arguments) : null;
         }
 
         try {
@@ -937,6 +940,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             throw;
         } finally {
             _opaqueTypes = outer;
+            _associatedTypes = outerAssociated;
         }
     }
 

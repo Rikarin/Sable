@@ -378,11 +378,7 @@ void sable_slice_make_unique(SableSlice *slice, const SableMetadata *type) {
     copy->elements = buffer_alloc(copy->capacity * size);
     for (int64_t i = 0; i < copy->count; i++) {
         const char *source = buffer->elements + (slice->start + i) * size;
-        if (type->copy_element != NULL) {
-            type->copy_element(copy->elements + i * size, source);
-        } else {
-            memcpy(copy->elements + i * size, source, (size_t)size);
-        }
+        element_copy(type, copy->elements + i * size, source);
     }
 
     sable_release(buffer);
@@ -410,11 +406,7 @@ SableArray *sable_array_of_slice(SableArray *buffer, int64_t start, int64_t coun
     copy->elements = buffer_alloc(count * size);
     for (int64_t i = 0; i < count; i++) {
         const char *source = buffer->elements + (start + i) * size;
-        if (type->copy_element != NULL) {
-            type->copy_element(copy->elements + i * size, source);
-        } else {
-            memcpy(copy->elements + i * size, source, (size_t)size);
-        }
+        element_copy(type, copy->elements + i * size, source);
     }
 
     return copy;

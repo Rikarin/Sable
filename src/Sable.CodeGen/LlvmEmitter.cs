@@ -2161,7 +2161,15 @@ public sealed partial class LlvmEmitter {
                         _dbg = EntryLocation;
                     }
 
-                    Line($"{name} = alloca {PartType(alloc.ElementType)}{StorageAlign(alloc.ElementType)}");
+                    // The storage itself is the frame's, made where the
+                    // function starts: a slot of a block in a loop — a
+                    // callee's, inlined there — is the same storage each
+                    // time round, not a new one that grows the stack.
+                    if (_out == _entryAllocas) {
+                        Line($"{name} = alloca {PartType(alloc.ElementType)}{StorageAlign(alloc.ElementType)}");
+                    } else {
+                        _entryAllocas.Append($"  {name} = alloca {PartType(alloc.ElementType)}{StorageAlign(alloc.ElementType)}\n");
+                    }
 
                     // Storage for something with references starts empty: all zeros.
                     if (!alloc.ElementType.IsTrivial) {

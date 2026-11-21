@@ -320,9 +320,23 @@ so it is held indirectly, and nothing is allocated on the heap for it.
   subclass inheriting a conformance), the registry's answer is kept at the
   call the first time it is found (`sable_witness_table_cached`).
 - The SIL inliner leaves unspecialised code alone: its opaque values are
-  sized by its own metadata parameters. (LLVM, which sees the constant
-  metadata and tables, may still inline and fold a call from code that
-  knows the types.)
+  sized by its own metadata parameters. But an optimised build (`-O2`,
+  `-O3`, `-Os`) first specialises it where the types are known (#297
+  stage 5, `Specialise` in src/Sable.SIL/Specialise.cs): a call passing
+  constant metadata and tables calls a copy of the function made for those
+  types (`M.pick$specialised$Int`), with each opaque type the type it is,
+  its views of a value the value, its metadata constants, a requirement
+  called through a table the conformance's witness (copied for its `Self`
+  too), a value witness the type's own copy or destroy, a describer or an
+  error eraser the copy of it for the type, and a result written where the
+  caller said returned. Calls inside a copy are specialised as it is made;
+  a closure the caller reabstracted to the generic convention is passed as
+  it was made. The copies are ordinary code, which the inliner and the
+  passes after it treat as any other; what cannot be copied stays generic
+  and is called as before, and the generic functions nothing calls any more
+  are dropped. `-Os` copies only small functions and calls in loops;
+  `SABLE_SPECIALISE=0` turns the pass off, and `SABLE_SPECIALISE_TRACE=1`
+  says why a copy was not made.
 
 The interpreter runs the same SIL: an opaque value is held as a value of the
 type it is, and copied and destroyed as the metadata the running function

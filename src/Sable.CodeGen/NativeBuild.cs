@@ -731,6 +731,12 @@ public static class NativeBuild {
         // data, so that running off its end is an access below address 0,
         // which the engine traps, not a write over the program's globals.
         NativePlatform.Wasi => ["-Wl,-z,stack-size=8388608", "-Wl,--stack-first"],
+
+        // Apple's linker takes an archive's object whole: the standard
+        // library's is one object, which holds every generic function of the
+        // library compiled once (#297 stage 7). What nothing reaches — a
+        // constructor, an export or the entry point — it leaves out.
+        NativePlatform.MacOS => ["-Wl,-dead_strip"],
         _ => [],
     };
 

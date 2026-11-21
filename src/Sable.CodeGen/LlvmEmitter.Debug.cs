@@ -583,7 +583,7 @@ public sealed partial class LlvmEmitter {
                 var expression = Node($"!DIGlobalVariableExpression(var: {variable}, expr: !DIExpression())");
                 globals.Add(expression);
                 output.Append($"\n@\"sable.debug.classes\" = internal constant [{_classes.Count} x i64] zeroinitializer, !dbg {expression}\n")
-                    .Append("@llvm.compiler.used = appending global [1 x ptr] [ptr @\"sable.debug.classes\"], section \"llvm.metadata\"\n");
+                    .Append("@llvm.used = appending global [1 x ptr] [ptr @\"sable.debug.classes\"], section \"llvm.metadata\"\n");
             }
 
             Define(Unit,

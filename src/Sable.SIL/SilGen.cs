@@ -632,6 +632,27 @@ public sealed partial class SilGen {
                 }
             }
         }
+
+        // A copy is made whole or not at all: what an inlinable function
+        // calls of the generic code compiled once — directly, or through a
+        // closure or a thunk of its — is inlinable too, whatever its size.
+        var pending = new Stack<string>(info.Inlinable.Select(static n => n + "$generic"));
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        while (pending.TryPop(out var name)) {
+            if (!seen.Add(name) || _module.Find(name) is not { } function) {
+                continue;
+            }
+
+            foreach (var reference in function.Blocks.SelectMany(static b => b.Instructions).OfType<FunctionRefInst>()) {
+                var callee = reference.Function;
+                if (callee.EndsWith("$generic", StringComparison.Ordinal) && info.Generics.ContainsKey(callee[..^"$generic".Length])) {
+                    info.Inlinable.Add(callee[..^"$generic".Length]);
+                    pending.Push(callee);
+                } else if (!info.Owned.Contains(callee)) {
+                    pending.Push(callee);
+                }
+            }
+        }
     }
 
     /// <summary>

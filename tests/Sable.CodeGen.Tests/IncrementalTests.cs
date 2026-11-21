@@ -1006,12 +1006,14 @@ public sealed class IncrementalTests {
     ///     A separate build's link takes what the whole program's build does on
     ///     each platform: on Linux, <c>-rdynamic</c> for a trap's backtrace,
     ///     libm for the <c>fmod</c> a float's remainder calls, and
-    ///     <c>-pthread</c> for the task pool's threads. Checked by its
+    ///     <c>-pthread</c> for the task pool's threads; on macOS,
+    ///     <c>-dead_strip</c>, which leaves out what of the standard library's
+    ///     one object nothing reaches. Checked by its
     ///     arguments, as this may not run where Linux does.
     /// </summary>
     [Theory]
     [InlineData(NativePlatform.Linux, new[] { "-rdynamic", "-lm", "-pthread" })]
-    [InlineData(NativePlatform.MacOS, new string[0])]
+    [InlineData(NativePlatform.MacOS, new[] { "-Wl,-dead_strip" })]
     public void ASeparateLinkTakesThePlatformsLibraries(NativePlatform platform, string[] flags) {
         Assert.Equal(flags, NativeBuild.PlatformLinkFlags(platform));
         Assert.Equal(
@@ -1040,7 +1042,7 @@ public sealed class IncrementalTests {
 
         Assert.Equal(["-rdynamic", "-lm", "-pthread", "-Wl,--strip-all", "-Wl,-rpath,$ORIGIN"],
             NativeBuild.LinkFlags(release with { Strip = StripMode.Symbols, Rpath = true }, NativePlatform.Linux));
-        Assert.Equal(["-Wl,-S"], NativeBuild.LinkFlags(release with { Strip = StripMode.DebugInfo }, NativePlatform.MacOS));
+        Assert.Equal(["-Wl,-dead_strip", "-Wl,-S"], NativeBuild.LinkFlags(release with { Strip = StripMode.DebugInfo }, NativePlatform.MacOS));
         Assert.Equal(["a.o", "-o", "program", "-rdynamic", "-lm", "-pthread", "-Wl,--strip-debug"],
             NativeObjects.LinkArguments(["a.o"], "program", NativePlatform.Linux, release with { Strip = StripMode.DebugInfo }));
     }

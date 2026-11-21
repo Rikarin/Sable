@@ -75,13 +75,17 @@ static void reference_assign_copy(void *destination, void *source, const SableTy
     sable_release(old);
 }
 
+// The source's reference is handed over: what the destination held is
+// released, even the same object, which the source held a count of its own on.
 static void reference_assign_take(void *destination, void *source, const SableTypeMetadata *type) {
     (void)type;
+    if (destination == source) {
+        return;
+    }
+
     void *old = *(void **)destination;
     *(void **)destination = *(void **)source;
-    if (old != *(void **)destination) {
-        sable_release(old);
-    }
+    sable_release(old);
 }
 
 static void reference_destroy(void *value, const SableTypeMetadata *type) {

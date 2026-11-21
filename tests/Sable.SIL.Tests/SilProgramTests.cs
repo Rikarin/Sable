@@ -110,6 +110,8 @@ public sealed class SilProgramTests {
     /// </summary>
     [Fact]
     public void AUnitBindsOnlyTheMembersOfOtherFilesItReaches() {
+        // Of specialised code (#297): unspecialised, the subscript is its one generic instance.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var library = SyntaxTree.Parse(new SourceText("""
             module Lib
 

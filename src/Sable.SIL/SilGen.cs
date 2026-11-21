@@ -1828,7 +1828,9 @@ public sealed partial class SilGen {
         }
 
         if (_opaque.Count > 0 && IsArrayOf(type, _opaque)) {
-            return Lower(((ArrayTypeSymbol)type).ElementType) is { } opaqueElement ? new ArrayType(opaqueElement) : null;
+            return Lower(((ArrayTypeSymbol)type).ElementType) is { } opaqueElement
+                ? ((ArrayTypeSymbol)type).ArrayKind == ArrayKind.Slice ? new SliceType(opaqueElement) : new ArrayType(opaqueElement)
+                : null;
         }
 
         // An optional or a tuple of them: laid out at run time from its parts' metadata.
@@ -2242,7 +2244,11 @@ public sealed partial class SilGen {
                     classType.Fields.Add((ExecutorHolderField, SilType.Int));
                 }
 
-                classType.Deinit ??= GenericDeinit(named);
+                // Unspecialised code never makes one of a type only its metadata knows (#297): nothing destroys one as that.
+                if (!SilType.MentionsOpaque(classType)) {
+                    classType.Deinit ??= GenericDeinit(named);
+                }
+
                 return classType;
             }
 
@@ -10018,7 +10024,7 @@ public sealed partial class SilGen {
 
         /// <summary>True for an error type that, here, has no values: Never, or a union of nothing else.</summary>
         bool ThrowsNothing(TypeSymbol thrown) =>
-            thrown.Equals(Core.Never) || thrown is StructuralUnionTypeSymbol union && union.Cases.All(c => c.Equals(Core.Never));
+            CanonicalHere(thrown).Equals(Core.Never) || thrown is StructuralUnionTypeSymbol union && union.Cases.All(c => CanonicalHere(c).Equals(Core.Never));
 
         void CollectThrown(BoundNode node, List<TypeSymbol> into) {
             switch (node) {
@@ -10389,7 +10395,7 @@ public sealed partial class SilGen {
 
                 // A method a superclass declares takes the object as that class.
                 if (self.Type is ClassType selfClass && type.Parameters[0] is ClassType parameterClass && selfClass != parameterClass) {
-                    self = Emit(new UpcastInst(self, parameterClass));
+                    self = SilType.SameErasingOpaque(selfClass, parameterClass, opaqueOnly: true) ? Emit(new BuiltinInst("opaque_borrow_as", parameterClass, self)) : Emit(new UpcastInst(self, parameterClass));
                 }
 
                 // One unspecialised code knows only by its metadata (a protocol
@@ -11399,7 +11405,7 @@ public sealed partial class SilGen {
 
             // A method a superclass declares takes the object as that class.
             if (self.Type is ClassType selfClass && type.Parameters[0] is ClassType parameterClass && selfClass != parameterClass) {
-                self = Emit(new UpcastInst(self, parameterClass));
+                self = SilType.SameErasingOpaque(selfClass, parameterClass, opaqueOnly: true) ? Emit(new BuiltinInst("opaque_borrow_as", parameterClass, self)) : Emit(new UpcastInst(self, parameterClass));
             }
 
             var boxed = Emit(new AllocRefInst(generator.BoxType(type.Parameters[0])));

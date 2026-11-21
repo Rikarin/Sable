@@ -67,7 +67,7 @@ public sealed partial class LlvmEmitter {
             fieldArray = $"@\"sable.fields.{Mangled(type)}\"";
             var descriptors = fields.Select((f, i) =>
                 $"{FieldDescriptorType} {{ {(denied ? "ptr null, ptr null" : $"ptr {TrapMessage(f.Name)}, ptr {TrapMessage(f.TypeName)}")}, "
-                + $"i64 {LlvmOffset(type, i, f)}, i64 {f.Kind}, ptr {(fieldTypes && f.Type is { } fieldType ? TypeMetadataGlobal(fieldType) : "null")} }}").ToList();
+                + $"i64 {LlvmOffset(type, i, f)}, i64 {f.Kind}, ptr {(fieldTypes && f.Type is { } fieldType && !SilType.MentionsOpaque(fieldType) ? TypeMetadataGlobal(fieldType) : "null")} }}").ToList();
             _globals.Append($"{fieldArray} = {SharedLinkage} constant [{fields.Length} x {FieldDescriptorType}] [{string.Join(", ", descriptors)}]{Comdat(fieldArray, SharedLinkage)}\n");
         }
 
@@ -382,6 +382,7 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_witness_table_cached(ptr, ptr, ptr)
                                         declare ptr @sable_array_metadata(ptr, ptr)
                                         declare ptr @sable_array_type(ptr, ptr)
+                                        declare ptr @sable_slice_type(ptr, ptr)
                                         declare ptr @sable_aggregate_type(ptr, ptr, ptr)
                                         declare ptr @sable_tuple_type(ptr, i64, ptr)
                                         declare i64 @sable_enum_tag(ptr, ptr)
@@ -552,8 +553,8 @@ public sealed partial class LlvmEmitter {
                     _names[builtin] = operands[0];
                     return true;
                 // The metadata of an array of the type, made at run time.
-                case "metadata_array":
-                    Line($"{Result()} = call ptr @sable_array_type(ptr {module.RuntimeCache()}, ptr {operands[0]})");
+                case "metadata_array" or "metadata_slice":
+                    Line($"{Result()} = call ptr @sable_{builtin.Name["metadata_".Length..]}_type(ptr {module.RuntimeCache()}, ptr {operands[0]})");
                     return true;
                 case "opaque_borrow_as" or "opaque_take_as":
                     _names[builtin] = operands[0];

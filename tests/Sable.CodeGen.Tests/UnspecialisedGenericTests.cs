@@ -1012,4 +1012,294 @@ public sealed class UnspecialisedGenericTests {
         var compiled = Unspecialised(Sequences, "print(Countdown(from: 1).map({ $0 }))");
         Assert.Contains("Sable.Core.Sequence.map$generic", compiled);
     }
+
+    const string Slices = """
+        struct Named {
+            var name: String
+        }
+
+        fn firstOf<T>(_ items: T[:]) -> T? {
+            if items.count == 0 {
+                return none
+            }
+            return items[0]
+        }
+
+        fn total<T>(_ items: T[:], _ weigh: (T) -> Int) -> Int {
+            var sum = 0
+            for item in items {
+                sum += weigh(item)
+            }
+            return sum
+        }
+
+        fn middle<T>(_ items: T[:]) -> T[:] => items.slice(from: 1, to: items.count - 1)
+
+        // Each element written over itself, in a copy of the run: the
+        // assignment hands its reference over though the object is the same.
+        fn rewritten<T>(_ items: T[:]) -> T[:] {
+            var copy = items
+            var k = 0
+            while k < items.count {
+                copy[k] = items[k]
+                k = k + 1
+            }
+            return copy
+        }
+
+        fn overwrite<T>(_ items: T[>..], with value: T) -> T[>..] {
+            var changed = items
+            changed.fill(value)
+            return changed
+        }
+
+        struct Window<T> {
+            var items: T[:]
+            fn last() -> T? => items.count == 0 ? none : items[items.count - 1]
+        }
+        """;
+
+    /// <summary>
+    ///     A slice of a type parameter's values is a view of an array of them,
+    ///     its elements where the element's metadata says: passed, sliced,
+    ///     walked and written through in code compiled once, held in a generic
+    ///     struct, and the slice extensions' members (sort, reverse, swapAt,
+    ///     iterators) compiled once for every element type.
+    /// </summary>
+    [Fact]
+    public void SlicesOfATypeParametersValues() {
+        Prints(
+            "2\nb\n6\n[2, 3]\nyy\n[\"z\", \"z\", \"z\"]\n[1, 2, 3]\n[\"c\", \"b\", \"a\"]\n[3, 2, 1]\nzz\n3\nq\nq\n",
+            Slices,
+            """
+                let numbers = [1, 2, 3, 4]
+                print(firstOf(numbers.slice(from: 1, to: 4)) ?? 0)
+                print(firstOf(["a", "b"].slice(from: 1, to: 2)) ?? "-")
+                print(total(["x", "yy", "zzz"][0...], { $0.count }))
+                print(middle(numbers[0...]).toArray())
+                print(middle(["x", "yy", "zzz"][0...])[0])
+                print(overwrite(["x", "y", "z"], with: "z"))
+                var sorted = [3, 1, 2]
+                sorted.sort()
+                print(sorted)
+                var reversed = ["a", "b", "c"]
+                reversed.reverse()
+                print(reversed)
+                var swapped = [1, 3, 2]
+                swapped.swapAt(0, 1)
+                swapped.swapAt(1, 2)
+                print(swapped)
+                print(Window<String> { items: ["x", "zz"][0...] }.last() ?? "-")
+                var it = numbers.slice(from: 2, to: 4).makeIterator()
+                print(it.next() ?? 0)
+                let names = [Named { name: "p" }, Named { name: "q" }]
+                print(firstOf(names.slice(from: 1, to: 2))!.name)
+                print(rewritten(names[0...])[1].name)
+            """);
+        var functions = Unspecialised(Slices, """
+                print(firstOf([1][0...]) ?? total([1][0...], { $0 }))
+                print(middle([1, 2, 3][0...]).count)
+                print(overwrite([1], with: 2))
+                print(Window<Int> { items: [1][0...] }.last() ?? 0)
+                var xs = [2, 1]
+                xs.sort()
+                print(xs)
+                var it = xs.makeIterator()
+                print(it.next() ?? 0)
+            """);
+        foreach (var name in new[] { "Test.firstOf", "Test.total", "Test.middle", "Test.overwrite", "Test.Window.last", "Sable.Core.Array$Slice$8.sort", "Sable.Core.ArrayIterator.next" }) {
+            Assert.Contains($"{name}$generic", functions);
+        }
+    }
+
+    const string Classes = """
+        import Sable.Collections
+
+        class Bag<T> {
+            var items: T[>..] = []
+            var label: String
+
+            init(label: String) {
+                self.label = label
+            }
+
+            fn add(_ item: T) {
+                items.append(item)
+            }
+
+            fn first() -> T? {
+                if items.count == 0 {
+                    return none
+                }
+                return items[0]
+            }
+
+            fn take() -> T? {
+                if items.count == 0 {
+                    return none
+                }
+                return items.removeLast()
+            }
+
+            var size: Int => items.count
+
+            fn describe() -> String => "\(label) of \(size)"
+        }
+
+        struct Grid<T> {
+            var cells: T[>..]
+            var width: Int
+
+            subscript(x: Int, y: Int) -> T {
+                get { return cells[y * width + x] }
+                set { cells[y * width + x] = newValue }
+            }
+        }
+
+        fn fill<T>(_ bag: Bag<T>, _ a: T, _ b: T) -> Int {
+            bag.add(a)
+            bag.add(b)
+            return bag.size
+        }
+
+        fn corner<T>(_ grid: Grid<T>) -> T => grid[x: 0, y: 0]
+
+        fn named<V>(_ table: [String: V], _ key: String) -> V? => table[key]
+        """;
+
+    /// <summary>
+    ///     A generic class whose fields hold its type parameters' values only
+    ///     behind references is laid out alike for every argument, so its
+    ///     methods are compiled once, as Sable.Collections' Stack, Queue and
+    ///     Deque are; so are a generic type's subscripts, a dictionary's among them.
+    /// </summary>
+    [Fact]
+    public void MembersOfGenericClassesAndSubscriptsAreCompiledOnce() {
+        Prints(
+            "a\nwords of 2\nb\n3\n2\n2\ny\ny\n1\nl\nm\n1\n9\n7\n3\nnone\n",
+            Classes,
+            """
+                let words = Bag<String>(label: "words")
+                words.add("a")
+                words.add("b")
+                print(words.first() ?? "-")
+                print(words.describe())
+                print(words.take() ?? "-")
+                print(fill(words, "c", "d"))
+                let numbers = Bag<Int>(label: "numbers")
+                print(fill(numbers, 1, 2))
+                print(numbers.take() ?? 0)
+                let stack = Stack<String>()
+                stack.push("x")
+                stack.push("y")
+                print(stack.peek() ?? "-")
+                print(stack.pop() ?? "-")
+                let queue = Queue<Int>()
+                queue.enqueue(1)
+                queue.enqueue(2)
+                print(queue.dequeue() ?? 0)
+                let deque = Deque<String>()
+                deque.append("m")
+                deque.prepend("l")
+                print(deque.first ?? "-")
+                print(deque.removeLast() ?? "-")
+                var grid = Grid<Int> { cells: [1, 2, 3, 4], width: 2 }
+                print(corner(grid))
+                grid[x: 1, y: 1] = 9
+                print(grid[x: 1, y: 1])
+                let ages = ["ann": 7, "bo": 3]
+                print(named(ages, "ann") ?? 0)
+                print(ages["bo"] ?? 0)
+                print(named(ages, "cy") == none ? "none" : "some")
+            """);
+        var functions = Unspecialised(Classes, """
+                let bag = Bag<Int>(label: "n")
+                print(fill(bag, 1, 2))
+                print(bag.first() ?? bag.take() ?? 0)
+                print(bag.describe())
+                var grid = Grid<Int> { cells: [1], width: 1 }
+                grid[x: 0, y: 0] = 2
+                print(corner(grid))
+                print(named(["a": 1], "a") ?? 0)
+                let stack = Stack<Int>()
+                stack.push(1)
+                print(stack.pop() ?? 0)
+            """);
+        foreach (var name in new[] { "Test.Bag.add", "Test.Bag.first", "Test.Bag.take", "Test.Bag.describe", "Test.fill", "Test.corner", "Test.named",
+                     "Sable.Collections.Stack.push", "Sable.Collections.Stack.pop" }) {
+            Assert.Contains($"{name}$generic", functions);
+        }
+
+        Assert.Contains(functions, static f => f.StartsWith("Test.Grid.subscript", StringComparison.Ordinal) && f.EndsWith(".set$generic", StringComparison.Ordinal));
+        Assert.Contains(functions, static f => f.StartsWith("Sable.Core.Dictionary.subscript", StringComparison.Ordinal) && f.EndsWith(".get$generic", StringComparison.Ordinal));
+    }
+
+    const string Initialisers = """
+        import Sable.Collections
+
+        struct Box<T> {
+            var items: T[>..]
+            var label: String = "box"
+
+            init() {
+                items = []
+            }
+
+            init(one: T) {
+                items = [one]
+            }
+        }
+
+        fn make<T>(_ x: T) -> Box<T> {
+            var box = Box<T>()
+            box.items.append(x)
+            return box
+        }
+
+        fn distinct<T: Hashable>(_ xs: T[>..]) -> Int {
+            var seen = Set<T>()
+            for x in xs {
+                seen.insert(x)
+            }
+            return seen.count
+        }
+
+        fn tally<K: Hashable>(_ keys: K[>..]) -> [K: Int] {
+            var counts: [K: Int] = [:]
+            for key in keys {
+                counts[key] = (counts[key] ?? 0) + 1
+            }
+            return counts
+        }
+        """;
+
+    /// <summary>
+    ///     A generic struct's own initialiser is compiled once, its fields'
+    ///     initial values with it — a set's, a dictionary's, its literal's —
+    ///     borrowing what it is given as every function compiled once does.
+    /// </summary>
+    [Fact]
+    public void InitialisersOfGenericStructsAreCompiledOnce() {
+        Prints(
+            "[\"a\"] box\n[3]\n2\n2\n2\n1\n",
+            Initialisers,
+            """
+                let made = make("a")
+                print("\(made.items) \(made.label)")
+                print(Box<Int>(one: 3).items)
+                print(distinct([1, 2, 1]))
+                print(distinct(["x", "y"]))
+                let counts = tally(["a", "b", "a"])
+                print(counts["a"] ?? 0)
+                print(counts["b"] ?? 0)
+            """);
+        var functions = Unspecialised(Initialisers, """
+                print(make(1).items)
+                print(distinct([1]))
+                print(tally([1])[1] ?? 0)
+            """);
+        foreach (var name in new[] { "Test.make", "Test.distinct", "Test.tally", "Test.Box.init", "Sable.Collections.Set.init" }) {
+            Assert.Contains($"{name}$generic", functions);
+        }
+    }
 }

@@ -87,6 +87,7 @@ public sealed partial class SilInterpreter {
         type switch {
             OpaqueType opaque => OpaqueTypeOf(opaque),
             ArrayType { Element: var element } when SilType.MentionsOpaque(element) => new ArrayType(Concrete(element)),
+            SliceType { Element: var element } when SilType.MentionsOpaque(element) => new SliceType(Concrete(element)),
             TupleType tuple when SilType.MentionsOpaque(tuple) => SilType.Tuple([..tuple.Elements.Select(Concrete)]),
             EnumType optional when SilType.MentionsOpaque(optional) && TypeMetadata.OptionalPayload(optional) is { } payload => ConcreteOptional(Concrete(payload)),
             NominalType { TypeArguments.IsEmpty: false } generic when SilType.MentionsOpaque(generic) => ConcreteGeneric(generic),
@@ -366,6 +367,9 @@ public sealed partial class SilInterpreter {
                 return true;
             case "metadata_array":
                 result = MetadataOf(new ArrayType(((MetadataModel)operands[0]!).Type));
+                return true;
+            case "metadata_slice":
+                result = MetadataOf(new SliceType(((MetadataModel)operands[0]!).Type));
                 return true;
             case "opaque_address":
                 result = new Held(operands[0]);

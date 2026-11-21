@@ -249,6 +249,8 @@ public sealed class PassTests {
     /// </summary>
     [Fact]
     public void ADictionaryUpdatedInPlaceIsNotCopied() {
+        // Of specialised code (#297): the inliner leaves unspecialised code alone.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var module = Lowered(
             """
             fn bump(_ counts: inout [String: Int], _ words: String[>..]) {

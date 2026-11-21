@@ -305,6 +305,10 @@ so it is held indirectly, and nothing is allocated on the heap for it.
   `destroy`; a move is a copy of its bits, as every type's take is.
 - `T.self` is the metadata, `T.self == Int.self` asks `metadata_equal`,
   `type(of: x)` the metadata or an object's own class (`sable_opaque_type`).
+  `x as! U` from one type parameter or associated type to another (a range's
+  bound made a collection's index, `lowerBound as! C.Index`) is the same
+  value, seen as the other, when the two metadata are the same, and a trap
+  when not.
   A requirement is called through the table's generic entry; one of a
   protocol a given one refines, through the table's bases.
 - `"\(x)"` asks the runtime for the **describer** of the type

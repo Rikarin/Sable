@@ -6987,6 +6987,11 @@ public sealed partial class SilGen {
                     when IsKnownHere(generic.Operand.Type):
                     return KnownCast(generic);
 
+                // 'x as! C.Index' in unspecialised code, between two types only their metadata knows.
+                case BoundConversion { ConversionKind: ConversionKind.Explicit, Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } } opaqueCast
+                    when Sub(opaqueCast.Type) is not OptionalTypeSymbol && IsOpaqueHere(opaqueCast.Operand.Type) && IsOpaqueHere(opaqueCast.Type):
+                    return OpaqueForcedCast(opaqueCast);
+
                 case BoundConversion { ConversionKind: ConversionKind.Explicit } conversion:
                     return NumericConversion(conversion);
 

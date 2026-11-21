@@ -1067,6 +1067,10 @@ public sealed partial class SilGen {
                 // An optional or a tuple of them, made, unwrapped, taken apart and chosen between.
                 BoundConversion { ConversionKind: ConversionKind.OptionalWrap } wrap => Simple(wrap.Operand.Type),
                 BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol { UnderlyingType: var unwrapped } } force => unwrapped.Equals(force.Type),
+                // 'lowerBound as! C.Index': the value, when its metadata is the other's.
+                BoundConversion { ConversionKind: ConversionKind.Explicit } cast when IsOpaqueCast(cast) => true,
+                // A range of them, a generic struct.
+                BoundRange range => Simple(range.Type),
                 BoundLiteral { Value: null, Type: OptionalTypeSymbol } => true,
                 BoundBinaryOperator { OperatorKind: BinaryOperatorKind.Coalesce } => true,
                 BoundTuple or BoundTupleElementAccess or BoundMatch or BoundIfExpression => true,
@@ -1100,6 +1104,8 @@ public sealed partial class SilGen {
                 BoundConditionBinding binding => ReferenceEquals(child, binding.Source),
                 BoundConversion { ConversionKind: ConversionKind.OptionalWrap } => true,
                 BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol } => true,
+                BoundConversion { ConversionKind: ConversionKind.Explicit } cast => IsOpaqueCast(cast),
+                BoundRange => true,
                 BoundIndexAccess { Subscript: not null } => true,
                 BoundIndexAccess index => ReferenceEquals(child, index.Receiver),
                 BoundForEach loop => ReferenceEquals(child, loop.Sequence),
@@ -1110,6 +1116,10 @@ public sealed partial class SilGen {
             };
 
         bool DescribesSelf => checkedSymbol is { Name: "debugDescription" } && OwnerOf(checkedSymbol) is { TypeKind: TypeKind.Protocol };
+
+        /// <summary>An 'as!' from one of the function's opaque types to another (<see cref="FunctionLowering.OpaqueForcedCast" />).</summary>
+        bool IsOpaqueCast(BoundConversion cast) =>
+            cast is { Syntax: CastExpressionSyntax { QuestionOrBangToken.IsNone: false } } && cast.Type is not OptionalTypeSymbol && IsOwn(cast.Type) && IsOwn(cast.Operand.Type);
         /// <summary>A dictionary literal: a call of its type's 'init(dictionaryLiteral:)' with an array of its pairs, as lowering makes it.</summary>
         bool DictionaryAllowed(BoundDictionary dictionary) {
             if (dictionary.Type is not NamedTypeSymbol { TypeArguments: [var key, var value] } type
@@ -2775,6 +2785,23 @@ public sealed partial class SilGen {
 
             borrows.Add(borrowed);
             return GenericLent(borrowed, type, expected, borrows);
+        }
+
+        /// <summary>
+        ///     <c>lowerBound as! C.Index</c> between two types only their
+        ///     metadata knows: the same value, seen as the other, when the two
+        ///     are one type — their metadata the same — and a trap when not.
+        /// </summary>
+        SilValue? OpaqueForcedCast(BoundConversion conversion) {
+            if (MetadataOf(conversion.Operand.Type) is not { } from || MetadataOf(conversion.Type) is not { } to || LowerType(conversion.Type) is not { } target
+                || Expression(conversion.Operand) is not { } value) {
+                return null;
+            }
+
+            var same = Emit(new BuiltinInst("metadata_equal", SilType.Bool, from, to));
+            Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, same)), $"cast to '{conversion.Type.ToDisplayString()}' failed"));
+            var owned = Owned(value);
+            return owned.Type == target ? owned : Emit(new BuiltinInst("opaque_take_as", target, owned));
         }
 
         /// <summary>

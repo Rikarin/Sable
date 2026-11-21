@@ -573,4 +573,42 @@ public sealed class UnspecialisedLoweringTests {
         Assert.Equal(text, SilPrinter.Print(parsed));
         Assert.Equal(expected, Run(parsed));
     }
+
+    const string Relative = """
+                            fn show(_ r: Range<Int>) {
+                                print("\(r.lowerBound)..<\(r.upperBound)")
+                            }
+
+                            fn main() {
+                                let xs = [10, 20, 30, 40]
+                                show((1..<2).relative(to: xs))
+                                show((1...2).relative(to: xs))
+                                show((2...).relative(to: xs))
+                                show((..<1).relative(to: xs))
+                                show((...1).relative(to: xs))
+                            }
+
+                            fn wrong() {
+                                let _ = (0..<1).relative(to: "abc")
+                            }
+                            """;
+
+    /// <summary>
+    ///     A range's bounds made a collection's indices, <c>lowerBound as! C.Index</c>,
+    ///     are compiled once: the same value when the bound's metadata is the
+    ///     index's, a trap when not; and the range of them made, a generic struct.
+    /// </summary>
+    [Fact]
+    public void ARangeIsMadeACollectionsIndicesOnceForEveryType() {
+        var module = Lower(Relative);
+        foreach (var range in new[] { "Range", "ClosedRange", "PartialRangeFrom", "PartialRangeUpTo", "PartialRangeThrough" }) {
+            Assert.NotNull(module.Find($"Sable.Core.{range}.relative$generic"));
+        }
+
+        Assert.Contains(Instructions(module.Find("Sable.Core.Range.relative$generic")!), static i => i is BuiltinInst { Name: "metadata_equal" });
+        const string expected = "1..<2\n1..<3\n2..<4\n0..<1\n0..<2\n";
+        Assert.Equal(expected, Run(module));
+        Assert.Equal(expected, Run(Lower(Relative, GenericsMode.Specialised)));
+        Assert.Equal("cast to 'C.Index' failed", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.wrong")).Message);
+    }
 }

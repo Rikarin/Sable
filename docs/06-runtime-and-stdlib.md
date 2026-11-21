@@ -344,6 +344,17 @@ was given says.
 
 A protocol extension's member is generic over `Self`: it takes `Self`'s
 metadata and the protocol's table, and `self` where its caller holds it.
+A `some P` parameter is an anonymous type parameter, after the named ones
+(`@opaque(some1)`, `$metadata.some1`): `contains(_ pattern: some Pattern)`
+takes the pattern where its caller holds it, its type's metadata and its
+table for Pattern, as `contains<P: Pattern>(_ pattern: P)` would. (One
+with arguments, `some Sequence<Int>`, is still specialised.) An `inout`
+parameter of a type parameter's type, `using generator: inout G`, is the
+address of the caller's storage, seen as `*@opaque(G)`, and a mutating
+requirement changes the value there. A protocol's subscript requirement,
+`self[position]` on a Collection, is read through the table as a method
+of its indices is: the table's generic entries hold its getter, in its
+place among the protocol's requirements (a setter is not one yet).
 
 An array of a type parameter's values (`T[]`, `T[>..]`, `T[>..<]`) is a
 buffer of them, as any array is: its object metadata — the element's size,
@@ -480,6 +491,17 @@ closure captures by value (a `let`, a parameter); one that shares a `var`
 of a type parameter's type, or captures `self`, or is inside another,
 keeps its function specialised, as does a function that returns a closure
 over its type parameters.
+
+**Existential witnesses.** A slot of an existential's witness table whose
+witness is generic code compiled once — a method of a generic type boxed as
+`any P` (`Tag<Int>`), a protocol extension's default for the boxed type, an
+optional's member — calls that code, with the boxed type's metadata and
+tables, rather than an instance made for the slot alone. The thunk opens
+the box and makes the call as code that knows the type makes it (its
+arguments stored where unspecialised code takes them, its result taken out
+of a slot); it is lowered once everything pending has been, since the call
+may ask for the very table the thunk is in. Which way a slot goes depends
+on its witness alone, so every unit's copy of a table is the same.
 
 What unspecialised code cannot serve yet — an optional chain through a
 `T?`, a structural union of `T`, a method of a generic class

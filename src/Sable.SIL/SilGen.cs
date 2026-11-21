@@ -817,8 +817,14 @@ public sealed partial class SilGen {
                 }
             }
 
-            BuildVTables();
-        } while (_pending.Count > 0);
+            while (_pending.Count == 0 && _pendingThunks.TryDequeue(out var thunk)) {
+                thunk();
+            }
+
+            if (_pending.Count == 0) {
+                BuildVTables();
+            }
+        } while (_pending.Count > 0 || _pendingThunks.Count > 0);
     }
 
     static bool InsideBody(SyntaxNode node) {
@@ -3655,6 +3661,24 @@ public sealed partial class SilGen {
         }
 
         var thunk = new SilFunction(name, code);
+        if (!FillWitnessThunk(thunk, concrete, value, box, slot, requirement, signature, at, _generics == GenericsMode.Unspecialised)) {
+            return null;
+        }
+
+        _module.Add(thunk);
+        return (name, code);
+    }
+
+    /// <summary>
+    ///     Builds a witness thunk's body (<see cref="WitnessThunk" />). One
+    ///     whose witness is generic code compiled once, in an unspecialised
+    ///     build (<paramref name="viaGeneric" />), is left empty, and its body
+    ///     lowered later as a call of that code (<see cref="GenericWitnessThunk" />).
+    ///     False when it cannot be made.
+    /// </summary>
+    bool FillWitnessThunk(SilFunction thunk, NamedTypeSymbol concrete, SilType value, ClassType box, string slot, Symbol requirement, ThickFunctionType signature, SyntaxNode at, bool viaGeneric) {
+        var parameters = signature.Signature.Parameters;
+        var code = signature.Implementation;
         var entry = thunk.AddBlock();
         var arguments = parameters.Take(parameters.Length - 1).Select(p => (SilValue)entry.AddArgument(p)).ToList();
         var given = entry.AddArgument(parameters[^1]);
@@ -3682,13 +3706,12 @@ public sealed partial class SilGen {
         if (slot.StartsWith("set$", StringComparison.Ordinal) && requirement is FieldSymbol written) {
             if (!StoreThrough(current, concrete, value, opened, written, arguments[0], at)) {
                 Unsupported<object>(at, $"storing '{written.Name}' of '{concrete.ToDisplayString()}' through an existential");
-                return null;
+                return false;
             }
 
             ReleaseBox(current);
             current.Append(new ReturnInst(null));
-            _module.Add(thunk);
-            return (name, code);
+            return true;
         }
 
         // A property an extension of the protocol adds, and no requirement:
@@ -3721,8 +3744,7 @@ public sealed partial class SilGen {
             var builtinValue = current.Append(new BuiltinInst(builtin, result, self));
             ReleaseBox(current);
             current.Append(new ReturnInst(builtinValue));
-            _module.Add(thunk);
-            return (name, code);
+            return true;
         }
 
         if (requirement is FieldSymbol field) {
@@ -3746,52 +3768,74 @@ public sealed partial class SilGen {
 
                 default:
                     Unsupported<object>(at, $"'{field.Name}' of '{concrete.ToDisplayString()}' through an existential");
-                    return null;
+                    return false;
             }
 
             ReleaseBox(current);
             current.Append(new ReturnInst(read));
-            _module.Add(thunk);
-            return (name, code);
+            return true;
         }
 
         var method = (FunctionSymbol)requirement;
-        string target;
-        FunctionType? targetType;
+        var target = "";
+        FunctionType? targetType = null;
+        (FunctionSymbol Callee, TypeSubstitution Substitution)? deferred = null;
+
+        // A generic witness, for the boxed value's type arguments: in an
+        // unspecialised build, the code compiled once, called with their
+        // metadata and tables, when it can be; else its instance for them.
+        bool Via(FunctionSymbol generic, TypeSubstitution substitution) {
+            if (viaGeneric && CallsGenericWitness(generic, substitution, signature, loaded is not null, at)) {
+                deferred = (generic, substitution);
+                return true;
+            }
+
+            if (Instance(generic, substitution, at) is not { } instance) {
+                return false;
+            }
+
+            (target, targetType) = instance;
+            return true;
+        }
+
         var implementation = method.FunctionKind == FunctionKind.Accessor ? method : Implementation(concrete, method);
         if (implementation is not null && !IsGeneric(implementation) && _names.TryGetValue(implementation, out var implementationName)) {
             target = implementationName;
             targetType = _module.Find(target)?.Type ?? SignatureOf(implementation, at, TypeSubstitution.Empty);
         } else if (implementation is { ContainingSymbol: NamedTypeSymbol or FieldSymbol { ContainingSymbol: NamedTypeSymbol }, TypeParameters.IsEmpty: true }
                    && ConstructedOwner(concrete, implementation) is { } owner
-                   && Instance(implementation, TypeSubstitution.For(owner), at) is { } generic) {
+                   && Via(implementation, TypeSubstitution.For(owner))) {
             // A method of a generic type, 'G<Int>' boxed as 'any P': its
             // instance for the type arguments the boxed value has.
-            (target, targetType) = generic;
         } else if (implementation is { ContainingSymbol: ExtensionSymbol { ExtendedType.ExtendedOptional: not null }, TypeParameters.IsEmpty: true }
-                   && Instance(implementation, TypeSubstitution.For(concrete), at) is { } optionalWitness) {
+                   && Via(implementation, TypeSubstitution.For(concrete))) {
             // An 'Int?' boxed as 'any Debug': the Optional extension's member,
             // for what the optional holds.
-            (target, targetType) = optionalWitness;
         } else if ((implementation is { ContainingSymbol: ExtensionSymbol }
                     || (implementation is { FunctionKind: FunctionKind.Accessor } && Owner(implementation) is { TypeKind: TypeKind.Protocol })
                         ? implementation
                         : implementation is null ? method : null) is { } fallback
                    && _declarations.ContainsKey(fallback) && Owner(fallback)!.SelfTypeParameter is { } self
-                   && Instance(fallback, new(new() { [self] = concrete }), at) is { } instance) {
+                   && Via(fallback, new(new() { [self] = concrete }))) {
             // The protocol's default, for this type: an instance with Self bound.
-            (target, targetType) = instance;
             implementation = null;
         } else {
             Unsupported<object>(at, $"'{method.Name}' of '{concrete.ToDisplayString()}' through an existential");
-            return null;
+            return false;
+        }
+
+        // Lowered later, as a call: what it asks for may need this table.
+        if (deferred is var (witness, bound)) {
+            thunk.Blocks.Clear();
+            _pendingThunks.Enqueue(() => GenericWitnessThunk(thunk, concrete, value, box, slot, requirement, signature, witness, bound, at));
+            return true;
         }
 
         // A method that changes its value takes it where it is, in the box;
         // only a slot given the box where it is can give it that.
         if (targetType is null || targetType.Parameters.Length == 0 || targetType.Parameters[0] is AddressType && loaded is null) {
             Unsupported<object>(at, $"'{method.Name}' of '{concrete.ToDisplayString()}' through an existential");
-            return null;
+            return false;
         }
 
         SilValue? selfValue = targetType.Parameters[0] is AddressType ? null : current.Append(new LoadInst(opened));
@@ -3831,7 +3875,7 @@ public sealed partial class SilGen {
             SilValue? returned = null;
             if (targetType.Result != SilType.Unit && (returned = Upcast(thunk, ref block, result, promised)) is null) {
                 Unsupported<object>(at, $"'{method.Name}' of '{concrete.ToDisplayString()}' through an existential, as a '{promised}'");
-                return null;
+                return false;
             }
 
             block.Append(new ReturnInst(returned));
@@ -3846,7 +3890,7 @@ public sealed partial class SilGen {
             SilValue? returned = null;
             if (result is not null && (returned = Upcast(thunk, ref block, result, promised)) is null) {
                 Unsupported<object>(at, $"'{method.Name}' of '{concrete.ToDisplayString()}' through an existential, as a '{promised}'");
-                return null;
+                return false;
             }
 
             block.Append(new ReturnInst(returned));
@@ -3855,8 +3899,7 @@ public sealed partial class SilGen {
             failed.Append(new ThrowInst(error));
         }
 
-        _module.Add(thunk);
-        return (name, code);
+        return true;
     }
 
     /// <summary>
@@ -8989,6 +9032,13 @@ public sealed partial class SilGen {
 
             // A type's own subscript: a call to its getter.
             if (index.Subscript is { } subscript) {
+                // A protocol's requirement on a type parameter of unspecialised code: through the table it is given.
+                if (subscript.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol }
+                    && new BoundCall(index.Syntax, index.Receiver, subscript, index.Indices, index.Type) { Substitution = index.Substitution } is var required
+                    && OpaqueSelf(required) is { } opaqueSelf) {
+                    return GenericRequirementCall(required, opaqueSelf);
+                }
+
                 subscript = SubscriptWitness(subscript, index.Receiver);
                 return generator.SubscriptGetter(subscript) is { } getter
                     ? Expression(new BoundCall(index.Syntax, index.Receiver, getter, index.Indices, index.Type) { Substitution = index.Substitution })
@@ -10424,7 +10474,7 @@ public sealed partial class SilGen {
                 // A value of a type parameter's type, to unspecialised code: borrowed where it is.
                 // So is an optional or a tuple of them, laid out at run time.
                 if (genericShape is not null && i < callee.Parameters.Length && SilType.IsIndirect(type.Parameters[arguments.Count])) {
-                    var given = WithAssociatedTypes(callee, bound).Apply(callee.Parameters[i].Type);
+                    var given = Substitute(WithAssociatedTypes(callee, bound), callee.Parameters[i].Type);
                     if (GenericArgument(call.Arguments[i], given, type.Parameters[arguments.Count], borrows) is not { } genericArgument) {
                         return null;
                     }
@@ -10497,6 +10547,12 @@ public sealed partial class SilGen {
 
                     arguments.Add(address);
                     BeginAccess(address, modify: true, borrows);
+
+                    // To unspecialised code, a type parameter's: the same storage, seen as the callee's.
+                    if (genericShape is not null && type.Parameters[arguments.Count - 1] is var changed && changed != address.Type && SilType.MentionsOpaque(changed)) {
+                        arguments[^1] = Emit(new BuiltinInst("opaque_cast", changed, address));
+                    }
+
                     continue;
                 }
 
@@ -10542,13 +10598,13 @@ public sealed partial class SilGen {
             (SilValue Passed, AllocStackInst? Slot, bool CannotThrow)? genericError = null;
             if (genericShape is not null) {
                 if (type.Result == SilType.Unit && arguments.Count < type.Parameters.Length && !callee.ReturnType.Equals(Core.Void)
-                    && (genericOut = GenericOut(type.Parameters[arguments.Count], WithAssociatedTypes(callee, bound).Apply(callee.ReturnType))) is { } into) {
+                    && (genericOut = GenericOut(type.Parameters[arguments.Count], Substitute(WithAssociatedTypes(callee, bound), callee.ReturnType))) is { } into) {
                     arguments.Add(into.Passed);
                 }
 
                 // An error of a type parameter's type or an associated type's: where it goes.
                 if (type.Thrown is AddressType errorAddress && arguments.Count < type.Parameters.Length && type.Parameters[arguments.Count] == errorAddress) {
-                    if (callee.ThrownType is not { } calleeThrown || GenericErrorOut(errorAddress, WithAssociatedTypes(callee, bound).Apply(calleeThrown)) is not { } place) {
+                    if (callee.ThrownType is not { } calleeThrown || GenericErrorOut(errorAddress, Substitute(WithAssociatedTypes(callee, bound), calleeThrown)) is not { } place) {
                         EndAll(borrows);
                         return Missing(call, "where this call's error goes");
                     }

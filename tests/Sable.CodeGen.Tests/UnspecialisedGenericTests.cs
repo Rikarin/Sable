@@ -1302,4 +1302,208 @@ public sealed class UnspecialisedGenericTests {
             Assert.Contains($"{name}$generic", functions);
         }
     }
+
+    /// <summary>Every function a program's unspecialised build lowers: their SIL names.</summary>
+    static List<string> Lowered(string declarations, string body) {
+        using var _ = SilGen.UseGenerics(GenericsMode.Unspecialised);
+        var result = Pipeline.Compile(new SourceText(Program(declarations, body), "test.sb"));
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        return [..result.Sil!.Functions.Select(static f => f.Name)];
+    }
+
+    const string Witnesses = """
+        protocol Named {
+            fn name() -> String
+            mutating fn rename(_ to: String)
+            fn throwing(_ fail: Bool) throws -> Int
+        }
+
+        extension Named {
+            fn shout() -> String => name() + "!"
+        }
+
+        protocol Loud {
+            fn shout() -> String
+        }
+
+        enum Failure: Error { Bad }
+
+        struct Tag<T>: Named, Loud {
+            var value: T
+            var label: String
+
+            fn name() -> String => "\(label)=\(value)"
+            mutating fn rename(_ to: String) {
+                label = to
+            }
+            fn throwing(_ fail: Bool) throws -> Int {
+                if fail {
+                    throw Failure.Bad
+                }
+                return label.count
+            }
+        }
+
+        extension Int: Named {
+            fn name() -> String => "int"
+            mutating fn rename(_ to: String) {}
+            fn throwing(_ fail: Bool) throws -> Int => 1
+        }
+
+        extension Int: Loud {}
+        """;
+
+    /// <summary>
+    ///     An existential's slot whose witness is generic code compiled once —
+    ///     a generic type's method, a protocol's default — calls that code with
+    ///     the boxed type's metadata, and no instance is made for the slot.
+    /// </summary>
+    [Fact]
+    public void ExistentialWitnessesCallCodeCompiledOnce() {
+        const string body = """
+                var named: any Named = Tag<Int> { value: 3, label: "n" }
+                print(named.name())
+                named.rename("m")
+                print(named.name())
+                print(try! named.throwing(false))
+                do {
+                    print(try named.throwing(true))
+                } catch {
+                    print("caught")
+                }
+                let loud: any Loud = Tag<String> { value: "s", label: "l" }
+                print(loud.shout())
+                let other: any Loud = 5
+                print(other.shout())
+            """;
+        Prints("n=3\nm=3\n1\ncaught\nl=s!\nint!\n", Witnesses, body);
+        var functions = Lowered(Witnesses, body);
+        Assert.Contains("Test.Tag.name$generic", functions);
+        Assert.Contains("Test.Named.shout$generic", functions);
+        Assert.DoesNotContain(functions, static f => f.StartsWith("Test.Tag.", StringComparison.Ordinal) && f.Contains("$of$", StringComparison.Ordinal));
+        Assert.DoesNotContain(functions, static f => f.StartsWith("Test.Named.shout$of$", StringComparison.Ordinal));
+    }
+
+    const string SomeParameters = """
+        protocol Shape {
+            fn area() -> Int
+        }
+
+        struct Square: Shape {
+            var side: Int
+            fn area() -> Int => side * side
+        }
+
+        struct Circle: Shape {
+            var radius: Int
+            fn area() -> Int => 3 * radius * radius
+        }
+
+        fn total(_ a: some Shape, _ b: some Shape) -> Int {
+            return a.area() + b.area()
+        }
+
+        fn twice(_ shape: some Shape) -> Int {
+            return total(shape, shape)
+        }
+
+        fn describe(_ value: some Equatable, _ other: some Hashable) -> String {
+            return "\(value) \(other)"
+        }
+        """;
+
+    /// <summary>
+    ///     A 'some P' parameter is an anonymous type parameter: its function
+    ///     is compiled once, taking its metadata and its table, as a generic
+    ///     one is — and so are StringProtocol's searches over a 'some Pattern'.
+    /// </summary>
+    [Fact]
+    public void SomeParametersAreCompiledOnce() {
+        const string body = """
+                print(total(Square { side: 2 }, Square { side: 1 }) + Circle { radius: 1 }.area())
+                print(twice(Square { side: 3 }))
+                print(describe(1, "a"))
+                print("hello".contains("ll"))
+                print("hello".firstIndex(of: 'l')!.utf8Offset)
+                print("a,b,c".split(",").count)
+                print("hello".contains(where: { $0 == 'e' }))
+            """;
+        Prints("8\n18\n1 a\ntrue\n2\n3\ntrue\n", SomeParameters, body);
+        var functions = Unspecialised(SomeParameters, body);
+        foreach (var name in new[] { "Test.total", "Test.twice", "Test.describe", "Sable.Core.StringProtocol.contains$some$Pattern", "Sable.Core.StringProtocol.split$some$Pattern$Int$Bool", "Sable.Core.StringProtocol.contains$$Char$$$$$Bool" }) {
+            Assert.Contains($"{name}$generic", functions);
+        }
+    }
+
+    const string Requirements = """
+        protocol Counter {
+            mutating fn next() -> Int
+        }
+
+        struct Up: Counter {
+            var n: Int
+            mutating fn next() -> Int {
+                n += 1
+                return n
+            }
+        }
+
+        fn twice<C: Counter>(_ c: inout C) -> Int {
+            return c.next() + c.next()
+        }
+
+        fn advance<C: Counter>(_ c: inout C) -> Int {
+            return twice(&c)
+        }
+
+        fn at<C: Collection>(_ c: C, _ i: C.Index) -> C.Element {
+            return c[i]
+        }
+
+        fn firstOf<C: Collection>(_ c: C) -> C.Element? {
+            return c.first
+        }
+
+        fn mix<T: Hashable>(_ x: T, into hasher: inout Hasher) {
+            hasher.combine(x)
+        }
+
+        fn sameHash<T: Hashable>(_ x: T) -> Bool {
+            var a = Hasher(seed: 1)
+            mix(x, into: &a)
+            var b = Hasher(seed: 1)
+            b.combine(x)
+            return a.finalize() == b.finalize()
+        }
+        """;
+
+    /// <summary>
+    ///     An 'inout' parameter of a type parameter's type is the address of
+    ///     its caller's storage, changed there; a protocol's subscript
+    ///     requirement is read through the table, as a method is; and an
+    ///     inout parameter of a known type may be changed by a method.
+    /// </summary>
+    [Fact]
+    public void InoutParametersAndSubscriptRequirementsAreCompiledOnce() {
+        const string body = """
+                var up = Up { n: 0 }
+                print(advance(&up))
+                print(up.n)
+                print(at([7, 8], 1))
+                print(at("abc", "abc".startIndex))
+                print(firstOf([4, 5]) ?? 0)
+                print(firstOf("") ?? '-')
+                let three = 3
+                let nothing = ""
+                print(sameHash(three))
+                print(sameHash(nothing))
+            """;
+        Prints("3\n2\n8\na\n4\n-\ntrue\ntrue\n", Requirements, body);
+        var functions = Unspecialised(Requirements, body);
+        foreach (var name in new[] { "Test.twice", "Test.advance", "Test.at", "Test.firstOf", "Test.mix", "Test.sameHash" }) {
+            Assert.Contains($"{name}$generic", functions);
+        }
+
+        Assert.Contains(functions, static f => f.StartsWith("Sable.Core.Collection.first", StringComparison.Ordinal));
+    }
 }

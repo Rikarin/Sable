@@ -291,25 +291,56 @@ public sealed class SpecialiseTests {
 
     /// <summary>
     ///     A closure given to generic code is reabstracted to its convention
-    ///     where it is made; given to a copy, the reabstraction is copied for
-    ///     the types too, so the copy calls a closure taking the values as
-    ///     they are. A requirement whose error type is Never boxes no error.
+    ///     where it is made: one that returns a type parameter's value then
+    ///     writes it where it is told. A copy is given the closure itself,
+    ///     returning its result, and the reabstraction goes. A requirement
+    ///     whose error type is Never boxes no error.
     /// </summary>
     [Fact]
-    public void AClosureGivenToGenericCodeIsReabstractedForTheCopy() {
+    public void AClosureGivenToGenericCodeIsGivenToTheCopyAsItWasMade() {
         var module = Specialised(Lazy);
         var reduce = module.Functions.Single(static f => f.Name.StartsWith("Sable.Core.Sequence.reduce", StringComparison.Ordinal) && f.Name.Contains("$specialised$", StringComparison.Ordinal));
         AssertNothingGeneric(reduce);
-        Assert.Contains(reduce.Type.Parameters, static p => p is ThickFunctionType { Signature.Parameters: [var a, var b, AddressType] } && a == SilType.Int && b == SilType.Int);
+        Assert.Contains(reduce.Type.Parameters, static p => p.ToString() == "@thick (Int, Int) throws(any$Error) -> Int");
         var main = Instructions(module.Find("M.main")!);
-        Assert.DoesNotContain(main, static i => i is FunctionRefInst { Type: var type } && SilType.MentionsOpaque(type));
-        Assert.Contains(main, static i => i is FunctionRefInst { Function: var f } && f.StartsWith("$reabstract$", StringComparison.Ordinal) && f.Contains("$specialised$", StringComparison.Ordinal));
+        Assert.DoesNotContain(main, static i => i is FunctionRefInst { Function: var f } && f.StartsWith("$reabstract$", StringComparison.Ordinal));
         Assert.DoesNotContain(module.Functions, static f => f.Name.StartsWith("Sable.Core.Sequence.reduce", StringComparison.Ordinal) && f.IsUnspecialised);
 
         const string expected = "254\n";
         Assert.Equal(expected, Run(Lower(Lazy, GenericsMode.Specialised)));
         Assert.Equal(expected, Run(module));
         Assert.Equal(expected, Run(Optimised(Lazy)));
+    }
+
+    const string Predicates = """
+                              fn holds<T>(_ value: T, _ test: (T) -> Bool) -> Bool { return test(value) }
+
+                              fn main() {
+                                  let limit = 3
+                                  print(holds(5) { $0 > limit })
+                                  print(holds("ab") { $0.count > limit })
+                              }
+                              """;
+
+    /// <summary>
+    ///     A closure reabstracted to take a type parameter's value where it
+    ///     is: given to the copy with its reabstraction copied for the types,
+    ///     which takes the value as it is.
+    /// </summary>
+    [Fact]
+    public void AReabstractionIsCopiedForTheTypesOfTheCopyItIsGivenTo() {
+        var module = Specialised(Predicates);
+        var holds = module.Find("M.holds$specialised$Int")!;
+        AssertNothingGeneric(holds);
+        Assert.Equal("(Int, @thick (Int) -> Bool) -> Bool", holds.Type.ToString());
+        var main = Instructions(module.Find("M.main")!);
+        Assert.DoesNotContain(main, static i => i is FunctionRefInst { Type: var type } && SilType.MentionsOpaque(type));
+        Assert.Contains(main, static i => i is FunctionRefInst { Function: var f } && f.StartsWith("$reabstract$", StringComparison.Ordinal) && f.Contains("$specialised$", StringComparison.Ordinal));
+
+        const string expected = "true\nfalse\n";
+        Assert.Equal(expected, Run(Lower(Predicates, GenericsMode.Specialised)));
+        Assert.Equal(expected, Run(module));
+        Assert.Equal(expected, Run(Optimised(Predicates)));
     }
 
     /// <summary>A module lowered specialised has nothing for the pass to do.</summary>

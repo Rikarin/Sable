@@ -109,7 +109,14 @@ sealed class Specialiser(SilModule module, bool forSize) {
     }
 
     /// <summary>A call of a generic function, with its types: the copy it calls, by <see cref="Key" />.</summary>
-    internal sealed record Plan(SilFunction Generic, Role[] Roles, Dictionary<string, SilType> Types, List<SilWitnessTable> Tables, string Key);
+    internal sealed record Plan(SilFunction Generic, Role[] Roles, Dictionary<string, SilType> Types, List<SilWitnessTable> Tables, string Key) {
+        /// <summary>
+        ///     The closure parameters the copy takes as the caller made them,
+        ///     before their reabstraction to the generic convention — a result
+        ///     returned rather than written where the caller says — by index.
+        /// </summary>
+        public Dictionary<int, ThickFunctionType> Natural { get; init; } = [];
+    }
 
     /// <summary>Each parameter's role, or null for a function the copy cannot be made of.</summary>
     internal static Role[]? Roles(SilFunction function) {
@@ -322,6 +329,18 @@ sealed class Specialiser(SilModule module, bool forSize) {
                 }
 
                 var hot = InLoop(call.Block);
+                var natural = Naturals(function, call, plan);
+                var reabstracted = natural.Keys.Select(i => (PartialApplyInst)call.Operands[i + 1]).ToList();
+                if (natural.Count > 0 && CopyFor(plan with { Key = $"{plan.Key}|{string.Join(",", natural.Select(static n => $"{n.Key}={n.Value}"))}", Natural = natural }, hot) is { } direct
+                    && CallCopy(function, call, plan with { Natural = natural }, direct)) {
+                    foreach (var closure in reabstracted) {
+                        DropReabstraction(function, closure);
+                    }
+
+                    changed = true;
+                    continue;
+                }
+
                 if (CopyFor(plan, hot) is not { } copy || !CallCopy(function, call, plan, copy)) {
                     continue;
                 }
@@ -346,12 +365,13 @@ sealed class Specialiser(SilModule module, bool forSize) {
     ///     the slot go.
     /// </summary>
     internal static void ForwardCopiedSlots(SilFunction function) {
+        ForwardUnmanagedSlots(function);
         var uses = new Uses(function);
         foreach (var block in function.Blocks) {
             foreach (var slot in block.Instructions.OfType<AllocStackInst>().Where(static s => !s.Unmanaged && !s.ElementType.IsTrivial).ToList()) {
                 var users = uses.Of(slot);
                 if (users.Count(static u => u is StoreInst) != 1 || users.First(static u => u is StoreInst) is not StoreInst { Kind: StoreKind.Init } store
-                    || !ReferenceEquals(store.Address, slot) || store.Value is not (CopyValueInst or LoadInst { Kind: LoadKind.Copy, Address: AllocStackInst }) || uses.Of(store.Value).Count != 1
+                    || !ReferenceEquals(store.Address, slot) || store.Value is not SilInstruction || uses.Of(store.Value).Count != 1
                     || users.Any(static u => u is not (StoreInst or LoadBorrowInst or DestroyAddrInst or DeallocStackInst))) {
                     continue;
                 }
@@ -368,6 +388,7 @@ sealed class Specialiser(SilModule module, bool forSize) {
                 var last = ends.Max(Position);
                 var copied = (SilInstruction)store.Value;
                 SilValue value;
+                var keep = false;
                 if (copied is CopyValueInst { Value: var original }) {
                     // The value must be borrowed for longer: a parameter, borrowed for the whole call,
                     // a borrow in this block ended after them, or a copy destroyed here after them and taken by nothing else.
@@ -382,6 +403,16 @@ sealed class Specialiser(SilModule module, bool forSize) {
                     }
 
                     value = original;
+                } else if (copied is not LoadInst { Kind: LoadKind.Copy, Address: AllocStackInst }) {
+                    // A value made to be stored there, destroyed with the slot in this block: the value, destroyed there.
+                    var destroys = users.OfType<DestroyAddrInst>().Where(d => d.Block == at).ToList();
+                    if (copied.Block != at || destroys is not [var destroy] || Position(destroy) < last) {
+                        continue;
+                    }
+
+                    at.Instructions.Insert(Position(destroy), new DestroyValueInst(copied) { Block = at, Location = destroy.Location });
+                    value = copied;
+                    keep = true;
                 } else {
                     // A local's slot nothing names from the copy until the last borrow ends: borrowed there instead.
                     var local = ((LoadInst)copied).Address;
@@ -399,7 +430,11 @@ sealed class Specialiser(SilModule module, bool forSize) {
                     Uses.Replace(function, borrow, value);
                 }
 
-                var gone = new HashSet<SilInstruction>([..borrows, ..ends, store, copied, slot, ..users.Where(static u => u is DestroyAddrInst or DeallocStackInst)]);
+                var gone = new HashSet<SilInstruction>([..borrows, ..ends, store, slot, ..users.Where(static u => u is DestroyAddrInst or DeallocStackInst)]);
+                if (!keep) {
+                    gone.Add(copied);
+                }
+
                 foreach (var each in function.Blocks) {
                     each.Instructions.RemoveAll(gone.Contains);
                 }
@@ -408,6 +443,108 @@ sealed class Specialiser(SilModule module, bool forSize) {
             }
         }
     }
+
+    /// <summary>
+    ///     A slot that holds, unmanaged, the one value stored in it — a
+    ///     witness's <c>self</c>, which its caller keeps alive — and is only
+    ///     borrowed from: each borrow is the value, and the slot goes.
+    /// </summary>
+    static void ForwardUnmanagedSlots(SilFunction function) {
+        var uses = new Uses(function);
+        var gone = new HashSet<SilInstruction>();
+        foreach (var slot in function.Blocks.SelectMany(static b => b.Instructions).OfType<AllocStackInst>().Where(static s => s.Unmanaged).ToList()) {
+            var users = uses.Of(slot);
+            if (users.OfType<StoreInst>().ToList() is not [{ Kind: StoreKind.Init } store] || !ReferenceEquals(store.Address, slot)
+                || users.Any(static u => u is not (StoreInst or LoadBorrowInst or DeallocStackInst))) {
+                continue;
+            }
+
+            // The value is the one stored where the slot is made, before anything borrows it.
+            var borrows = users.OfType<LoadBorrowInst>().ToList();
+            if (store.Block != slot.Block || borrows.Any(b => b.Block == store.Block && b.Block.Instructions.IndexOf(b) < b.Block.Instructions.IndexOf(store))
+                || !(store.Value is SilArgument { Block: var given } && given == function.Entry || store.Value is SilInstruction { Block: var defined } && defined == function.Entry)
+                   && borrows.Any(b => b.Block != store.Block)) {
+                continue;
+            }
+
+            foreach (var borrow in borrows) {
+                gone.UnionWith(uses.Of(borrow).OfType<EndBorrowInst>());
+                Uses.Replace(function, borrow, store.Value);
+                gone.Add(borrow);
+            }
+
+            gone.UnionWith([store, slot, ..users.OfType<DeallocStackInst>()]);
+        }
+
+        if (gone.Count > 0) {
+            foreach (var block in function.Blocks) {
+                block.Instructions.RemoveAll(gone.Contains);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     The closure arguments of a call that the caller reabstracted to the
+    ///     generic convention, writing their result where they are told, from
+    ///     closures that return it (<c>$reabstract$</c>, its context's
+    ///     <c>function</c> a copy of the closure): by index, the closure's own type.
+    /// </summary>
+    static Dictionary<int, ThickFunctionType> Naturals(SilFunction function, SilInstruction call, Plan plan) {
+        var natural = new Dictionary<int, ThickFunctionType>();
+        for (var i = 0; i < plan.Roles.Length; i++) {
+            if (plan.Roles[i] == Role.Value && call.Operands[i + 1] is PartialApplyInst { Context: AllocRefInst context } closure
+                && closure.ThickType.Signature is { Result: var result, Parameters: [.., AddressType { Pointee: var written }] } generic && result == SilType.Unit && SilType.IsIndirect(written)
+                && Reabstracted(function, context) is { Type: ThickFunctionType { Signature: var own } original }
+                && own.Result != SilType.Unit && own.Parameters.Length == generic.Parameters.Length - 1) {
+                natural[i] = original;
+            }
+        }
+
+        return natural;
+    }
+
+    /// <summary>
+    ///     A reabstraction nothing calls any more, only destroys: gone, with
+    ///     its context and the copy of the closure it held, so that what
+    ///     calls the closure sees the closure itself.
+    /// </summary>
+    static void DropReabstraction(SilFunction function, PartialApplyInst closure) {
+        var all = function.Blocks.SelectMany(static b => b.Instructions).ToList();
+        List<SilInstruction> UsersOf(SilValue value) => [..all.Where(i => i.Operands.Any(o => ReferenceEquals(o, value)))];
+        if (closure.Context is not AllocRefInst context || UsersOf(closure).Any(static u => u is not DestroyValueInst)) {
+            return;
+        }
+
+        var contextUsers = UsersOf(context);
+        var field = contextUsers.OfType<RefElementAddrInst>().ToList();
+        if (field is not [var address] || contextUsers.Any(u => u != closure && u != address && u is not BuiltinInst { Name: "share_into" })
+            || UsersOf(address).Where(static u => u is not BuiltinInst { Name: var marker } || !SharedStorage.IsMarker(marker)).ToList() is not [StoreInst { Value: SilInstruction held } store]
+            || UsersOf(held).Any(u => u != store && u is not BuiltinInst { Name: "share_into" } && held is CopyValueInst)) {
+            return;
+        }
+
+        // The closure the context held: a copy of it goes; one moved in is destroyed where it was.
+        var gone = new HashSet<SilInstruction>([closure, context, address, store, ..UsersOf(closure), ..contextUsers.Where(static u => u is BuiltinInst), ..UsersOf(address).Where(static u => u is BuiltinInst)]);
+        if (held is CopyValueInst) {
+            gone.Add(held);
+        } else {
+            store.Block.Instructions.Insert(store.Block.Instructions.IndexOf(store), new DestroyValueInst(held) { Block = store.Block, Location = store.Location });
+        }
+
+        foreach (var block in function.Blocks) {
+            block.Instructions.RemoveAll(gone.Contains);
+        }
+    }
+
+    /// <summary>The closure a reabstraction's context was given a copy of, or null.</summary>
+    static SilValue? Reabstracted(SilFunction function, AllocRefInst context) =>
+        context.ClassType.Fields is [("function", ThickFunctionType)]
+            ? function.Blocks.SelectMany(static b => b.Instructions).OfType<StoreInst>()
+                .FirstOrDefault(s => s.Address is RefElementAddrInst { Field: 0 } field && ReferenceEquals(field.Reference, context))?.Value switch {
+                    CopyValueInst { Value: var original } => original,
+                    var moved => moved,
+                }
+            : null;
 
     static bool InLoop(SilBlock block) {
         var seen = new HashSet<SilBlock>();
@@ -442,6 +579,10 @@ sealed class Specialiser(SilModule module, bool forSize) {
         var p = 0;
         for (var i = 0; i < arguments.Count; i++) {
             switch (plan.Roles[i]) {
+                case Role.Value when plan.Natural.ContainsKey(i):
+                    conversions.Add(NaturalClosure(function, (PartialApplyInst)arguments[i]));
+                    p++;
+                    break;
                 case Role.Value:
                     if (Convert(function, arguments[i], parameters[p], copy.Type.IsOwned(p), call) is not { } conversion) {
                         return false;
@@ -467,8 +608,13 @@ sealed class Specialiser(SilModule module, bool forSize) {
             TryApplyInst tryApply => tryApply.ResultType,
             _ => SilType.Unit,
         };
+        if (call is TryApplyInst { Error.Arguments: [var thrownArgument] } && copy.Type.Thrown is { } copyThrown && thrownArgument.Type != copyThrown
+            && !(thrownArgument.Type is AddressType && copyThrown is AddressType && SilType.SameErasingOpaque(thrownArgument.Type, copyThrown, opaqueOnly: true))) {
+            return false;
+        }
+
         if (outAddress is null && resultType != copy.Type.Result) {
-            if (call is TryApplyInst || !SilType.SameErasingOpaque(copy.Type.Result, resultType, opaqueOnly: true)) {
+            if (call is TryApplyInst { Normal.Arguments.Count: not 1 } || !SilType.SameErasingOpaque(copy.Type.Result, resultType, opaqueOnly: true)) {
                 return false;
             }
         }
@@ -491,7 +637,8 @@ sealed class Specialiser(SilModule module, bool forSize) {
 
         var at = block.Instructions.IndexOf(call);
         SilInstruction replacement = call switch {
-            TryApplyInst tryApply => new TryApplyInst(reference, copy.Type.Result, [..converted], tryApply.Normal, tryApply.Error),
+            TryApplyInst tryApply => new TryApplyInst(reference, copy.Type.Result, [..converted],
+                resultType == copy.Type.Result ? tryApply.Normal : Returned(function, tryApply.Normal, copy.Type.Result), Thrown(function, tryApply.Error, copy.Type.Thrown)),
             _ => new ApplyInst(reference, copy.Type.Result, [..converted]),
         };
         replacement.Location = call.Location;
@@ -519,6 +666,50 @@ sealed class Specialiser(SilModule module, bool forSize) {
         return true;
     }
 
+    /// <summary>
+    ///     Where a throwing call that now returns the type it is goes: its
+    ///     normal block, taking that type — what only viewed the result as
+    ///     the type it is now the result — or else a block that views it as
+    ///     the call's users did and goes on there.
+    /// </summary>
+    static SilBlock Returned(SilFunction function, SilBlock normal, SilType type) {
+        var argument = normal.Arguments[0];
+        var users = function.Blocks.SelectMany(static b => b.Instructions).Where(i => i.Operands.Any(o => ReferenceEquals(o, argument))).ToList();
+        var predecessors = function.Blocks.Count(b => b.Successors.Contains(normal));
+        if (predecessors == 1 && users.Count > 0 && users.All(u => u is BuiltinInst { Name: "opaque_take_as" } view && view.Type == type)) {
+            var retyped = new SilArgument(normal, type);
+            normal.Arguments[0] = retyped;
+            foreach (var view in users) {
+                Uses.Replace(function, view, retyped);
+                view.Block.Instructions.Remove(view);
+            }
+
+            return normal;
+        }
+
+        var relay = function.AddBlock();
+        var result = relay.AddArgument(type);
+        var seen = relay.Append(new BuiltinInst("opaque_take_as", argument.Type, result));
+        relay.Append(new BranchInst(normal, seen));
+        return relay;
+    }
+
+    /// <summary>
+    ///     Where a throwing call whose error the copy throws as the type it is
+    ///     goes: its error block, or, for an error written where the caller
+    ///     said, a block that views that address as the call's users did.
+    /// </summary>
+    static SilBlock Thrown(SilFunction function, SilBlock error, SilType? thrown) {
+        if (thrown is null || error.Arguments is not [var argument] || argument.Type == thrown) {
+            return error;
+        }
+
+        var relay = function.AddBlock();
+        var address = relay.AddArgument(thrown);
+        relay.Append(new BranchInst(error, relay.Append(new BuiltinInst("opaque_cast", argument.Type, address))));
+        return relay;
+    }
+
     static T Insert<T>(SilBlock block, SilInstruction before, T instruction) where T : SilInstruction {
         instruction.Block = block;
         block.Instructions.Insert(block.Instructions.IndexOf(before), instruction);
@@ -537,6 +728,26 @@ sealed class Specialiser(SilModule module, bool forSize) {
             }
         }
     }
+
+    /// <summary>
+    ///     A reabstracted closure passed as the closure it reabstracts: a copy
+    ///     of that, made where the reabstraction's context was given one, and
+    ///     destroyed wherever the reabstraction is.
+    /// </summary>
+    static Conversion NaturalClosure(SilFunction function, PartialApplyInst closure) =>
+        new(_ => {
+            var given = function.Blocks.SelectMany(static b => b.Instructions).OfType<StoreInst>()
+                .First(s => s.Address is RefElementAddrInst { Field: 0 } field && ReferenceEquals(field.Reference, closure.Context));
+            // A copy of the closure, made where the context was given it (or its own copy of it).
+            var copy = given.Value is CopyValueInst { Value: var original }
+                ? InsertAfter(given.Value as SilInstruction ?? given, new CopyValueInst(original) { Location = closure.Location })
+                : Insert(given.Block, given, new CopyValueInst(given.Value) { Location = closure.Location });
+            foreach (var destroy in function.Blocks.SelectMany(static b => b.Instructions).OfType<DestroyValueInst>().Where(d => ReferenceEquals(d.Value, closure)).ToList()) {
+                InsertAfter(destroy, new DestroyValueInst(copy) { Location = destroy.Location });
+            }
+
+            return copy;
+        });
 
     /// <summary>
     ///     How a caller's argument is seen as the type the copy takes: as it
@@ -678,6 +889,12 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
         public override SilType Type => SilType.Unit;
     }
 
+    /// <summary>A closure parameter taken as its caller made it, which returns its result: only called, its result stored where the call said.</summary>
+    sealed class NaturalClosureValue(SilArgument closure) : SilValue {
+        public SilArgument Closure { get; } = closure;
+        public override SilType Type => Closure.Type;
+    }
+
     /// <summary>The storage of a borrowed value, read only: what is read from it is the value.</summary>
     sealed class ValueAddress(SilValue value) : SilValue {
         public SilValue Value { get; } = value;
@@ -723,6 +940,19 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
             var result = Substitute(_generic.Type.Result);
             for (var i = 0; i < plan.Roles.Length; i++) {
                 switch (plan.Roles[i]) {
+                    case Specialiser.Role.Value when plan.Natural.TryGetValue(i, out var natural):
+                        // The generic convention's signature, as the types make it, must be the closure's with its result written out.
+                        var substituted = ((ThickFunctionType)Substitute(_generic.Type.Parameters[i])).Signature;
+                        if (substituted.Parameters[..^1].Length != natural.Signature.Parameters.Length
+                            || !substituted.Parameters[..^1].SequenceEqual(natural.Signature.Parameters)
+                            || substituted.Parameters[^1] != SilType.Address(natural.Signature.Result)
+                            || substituted.Thrown?.ToString() != natural.Signature.Thrown?.ToString() || substituted.IsAsync != natural.Signature.IsAsync) {
+                            throw new Refused($"{natural} is not {substituted} with its result returned");
+                        }
+
+                        parameters.Add(natural);
+                        owned.Add(_generic.Type.IsOwned(i));
+                        break;
                     case Specialiser.Role.Value:
                         parameters.Add(Substitute(_generic.Type.Parameters[i]));
                         owned.Add(_generic.Type.IsOwned(i));
@@ -770,6 +1000,8 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
         try {
             Body();
             Specialiser.RemoveDeadViews(_copy);
+            // What the generic body read by copying, the copy borrows where it can, and a slot given a copy of a parameter is the parameter.
+            new BorrowLoads().Run(_copy);
             Specialiser.ForwardCopiedSlots(_copy);
             return true;
         } catch (Refused why) {
@@ -808,6 +1040,9 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
         for (var i = 0; i < plan.Roles.Length; i++) {
             var parameter = _generic.Entry.Arguments[i];
             switch (plan.Roles[i]) {
+                case Specialiser.Role.Value when plan.Natural.TryGetValue(i, out var natural):
+                    _values[parameter] = new NaturalClosureValue(entry.AddArgument(natural));
+                    break;
                 case Specialiser.Role.Value:
                     _values[parameter] = entry.AddArgument(Substitute(parameter.Type));
                     break;
@@ -855,7 +1090,7 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
     /// <summary>The copy's value for one of the generic body's; a function value of a generic function or a value's storage only where <see cref="Copy" /> takes one.</summary>
     SilValue Value(SilValue value) {
         var mapped = Raw(value);
-        return mapped is GenericReference or ValueAddress ? throw new Refused($"a generic function value or a value's storage used as {mapped.Type}") : mapped;
+        return mapped is GenericReference or ValueAddress or NaturalClosureValue ? throw new Refused($"a generic function value or a value's storage used as {mapped.Type}") : mapped;
     }
 
     SilValue Raw(SilValue value) => _values.TryGetValue(value, out var mapped) ? mapped : throw new Refused("a value used where it is not defined");
@@ -1007,6 +1242,25 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
     void Call(SilInstruction call) {
         var callee = Raw(call.Operands[0]);
         var arguments = call.Operands.Skip(1).Select(Value).ToList();
+        if (callee is NaturalClosureValue { Closure: var closure }) {
+            // Its result returned, and stored where the generic convention would have had it written.
+            var signature = ((ThickFunctionType)closure.Type).Signature;
+            var into = arguments[^1];
+            switch (call) {
+                case TryApplyInst tryApply: {
+                    var returned = _copy.AddBlock();
+                    var result = returned.AddArgument(signature.Result);
+                    Emit(new TryApplyInst(closure, signature.Result, [..arguments[..^1]], returned, Block(tryApply.Error)), call);
+                    returned.Append(new StoreInst(result, into, StoreKind.Init) { Location = call.Location });
+                    returned.Append(new BranchInst(Block(tryApply.Normal)) { Location = call.Location });
+                    return;
+                }
+                default:
+                    Emit(new StoreInst(Emit(new ApplyInst(closure, signature.Result, [..arguments[..^1]]), call), into, StoreKind.Init), call);
+                    return;
+            }
+        }
+
         if (callee is not GenericReference generic) {
             var callee1 = Value(call.Operands[0]);
             Map(call, call switch {
@@ -1022,6 +1276,10 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
             case TryApplyInst tryApply:
                 if (Substitute(tryApply.ResultType) != copy.Type.Result) {
                     throw new Refused("a throwing call whose result changes type");
+                }
+
+                if (Block(tryApply.Error).Arguments is [var thrown] && copy.Type.Thrown is { } copyThrown && thrown.Type != copyThrown) {
+                    throw new Refused($"a call throwing {copyThrown} to a block taking {thrown.Type}");
                 }
 
                 Map(call, Emit(new TryApplyInst(reference, copy.Type.Result, [..passed], Block(tryApply.Normal), Block(tryApply.Error)), call));

@@ -344,6 +344,17 @@ type argument: **polymorphic recursion** — `nest<T>` calling `nest([x])` —
 is one function, where a specialised build makes it the one instance over
 existentials (its arrays then hold `any Any`).
 
+A slice of them (`T[:]`) is a view of such a buffer, laid out as any
+slice is — the buffer, the start, the count — its elements where the
+element's stride says. It is passed, sliced, walked, read and written
+through (copying its run first when the buffer is shared, from the
+array's run-time metadata), and its type's metadata, `[T:]`, is made at
+run time beside the array's (`sable_slice_type`), with value witnesses
+that count its buffer. So the slice extensions' members — `sort`,
+`reverse`, `swapAt`, `contains`, `ArrayIterator`, the Collection
+conformance — are compiled once for every element type, and a mutating
+one called on an array is given the array's own slice, seen as its own.
+
 An optional or a tuple of a type parameter's values (`T?`, `(T, Int)`,
 `(T?, U)`, `T??`) is held indirectly too, as SIL's optional or tuple of an
 `@opaque(T)`: its metadata is made at run time from its parts' — once per
@@ -444,7 +455,7 @@ keeps its function specialised, as does a function that returns a closure
 over its type parameters.
 
 What unspecialised code cannot serve yet — an optional chain through a
-`T?`, a structural union of `T`, a slice of them, a member of a generic
+`T?`, a structural union of `T`, a member of a generic
 class, an accessor or initialiser, `"\(x:?)"`, an async function or a
 generator — is still specialised for its type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`

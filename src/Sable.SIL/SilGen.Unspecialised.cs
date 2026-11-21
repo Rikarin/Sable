@@ -396,7 +396,7 @@ public sealed partial class SilGen {
     ///     values, with the array's metadata made at run time from its element's.
     /// </summary>
     internal static bool IsArrayOf(TypeSymbol type, IReadOnlyCollection<TypeParameterSymbol> parameters) =>
-        type is ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed, ElementType: var element }
+        type is ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed or ArrayKind.Slice, ElementType: var element }
         && element is not MetatypeTypeSymbol && IsHeld(element, parameters);
 
     /// <summary>
@@ -596,7 +596,7 @@ public sealed partial class SilGen {
             // A member of an optional's or an array's extension, or of a generic
             // struct or union laid out at run time: generic over its type's
             // type parameters, then its own.
-            if (owner is { ExtendedArray.ArrayKind: not (ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed) }
+            if (owner is { ExtendedArray.ArrayKind: not (ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed or ArrayKind.Slice) }
                 || owner is { ExtendedArray: null, ExtendedOptional: null } && !IsPlainGeneric(owner)) {
                 refused = "a member of a generic type";
                 return null;
@@ -743,7 +743,7 @@ public sealed partial class SilGen {
 
         // Why each function that could be is not, for whoever is widening what can be.
         if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 } && checker.Refused is { } refused) {
-            Console.Error.WriteLine($"specialised {TraceName(symbol)}: {refused.GetType().Name} '{refused.Syntax.ToString().Trim().ReplaceLineEndings(" ")}'{(Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") == "2" && refused is BoundExpression e ? $" : {e.Type.ToDisplayString()} ({e.Type.GetType().Name})" : "")}");
+            Console.Error.WriteLine($"specialised {TraceName(symbol)}: {refused.GetType().Name} '{refused.Syntax.ToString().Trim().ReplaceLineEndings(" ")}'{(Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") == "2" && refused is BoundExpression e ? $" : {e.Type.ToDisplayString()} ({e.Type.GetType().Name}){(e is BoundConversion c ? $" {c.ConversionKind} of {c.Operand.GetType().Name} {c.Operand.Type.ToDisplayString()}" : "")}" : "")}");
         }
 
         return false;
@@ -937,6 +937,8 @@ public sealed partial class SilGen {
                 BoundBinaryOperator { Method: not null } or BoundUnaryOperator { Method: not null } => true,
                 BoundFieldAccess access => PropertyAllowed(access),
                 BoundConversion { ConversionKind: ConversionKind.Identity } conversion => conversion.Type.Equals(conversion.Operand.Type),
+                // A closure that throws nothing where one that may throw is taken.
+                BoundConversion { ConversionKind: ConversionKind.Upcast, Operand: BoundClosure } upcast => IsGenericFunction(upcast.Type, _own),
                 BoundArray array => IsOwnArray(array.Type),
                 BoundIndexAccess { Subscript: null, Indices: [_] } index => IsOwnArray(index.Receiver.Type),
                 // An optional or a tuple of them, made, unwrapped, taken apart and chosen between.
@@ -959,12 +961,13 @@ public sealed partial class SilGen {
                                               && ReferenceEquals(child, assignment.Target) && PropertyAllowed(stored)
                                               || assignment.Target is BoundSelfAccess && OwnMutating && ReferenceEquals(child, assignment.Target)
                                               || assignment.Target is BoundIndexAccess { Subscript: null, Indices: [_], Receiver: var array } && IsOwnArray(array.Type) && ReferenceEquals(child, assignment.Target)
-                                              && (array is BoundLocalAccess { Local.IsMutable: true } || array is BoundFieldAccess { Receiver: BoundSelfAccess } && OwnMutating),
+                                              && (array is BoundLocalAccess { Local.IsMutable: true } || array is BoundFieldAccess { Receiver: BoundSelfAccess } or BoundSelfAccess && OwnMutating),
                 BoundCall or BoundBinaryOperator or BoundUnaryOperator or BoundTry => true,
                 BoundIndirectCall indirect => IsGenericFunction(indirect.Callee.Type, _own) && (ReferenceEquals(child, indirect.Callee) ? indirect.Callee is BoundParameterAccess or BoundLocalAccess : true),
                 BoundFieldAccess access => ReferenceEquals(child, access.Receiver) && PropertyAllowed(access),
                 BoundConditional conditional => !ReferenceEquals(child, conditional.Condition),
                 BoundConversion { ConversionKind: ConversionKind.Identity } => true,
+                BoundConversion { ConversionKind: ConversionKind.Upcast, Operand: BoundClosure } upcast => IsGenericFunction(upcast.Type, _own),
                 BoundArray or BoundTuple or BoundMatchArm or BoundIf or BoundRecordExpression or BoundUnionCaseConstruction => true,
                 BoundTupleElementAccess element => ReferenceEquals(child, element.Receiver),
                 BoundMatch match => ReferenceEquals(child, match.Subject),
@@ -998,8 +1001,14 @@ public sealed partial class SilGen {
             }
 
             // An array's own builtins, on an array of a type parameter's values held in a local.
-            if (callee.Builtin is "array_append" or "array_remove_last" && call.Receiver is { } array && IsOwnArray(array.Type)) {
+            // One that only reads it: a slice of it, or a copy of a slice's run.
+            if (callee.Builtin is "array_slice" or "array_of_slice" && call.Receiver is { } viewed && IsOwnArray(viewed.Type)) {
+                return call.Arguments.All(a => !Mentions(a.Type));
+            }
+
+            if (callee.Builtin is "array_append" or "array_remove_last" or "array_rotate" or "array_reserve" or "array_clear" && call.Receiver is { } array && IsOwnArray(array.Type)) {
                 return (call.Receiver is BoundLocalAccess { Local.IsMutable: true }
+                        || call.Receiver is BoundSelfAccess && OwnMutating
                         || call.Receiver is BoundFieldAccess { Receiver: BoundSelfAccess } stored && OwnMutating && PropertyAllowed(stored))
                        && call.Arguments.All(a => Simple(a.Type));
             }
@@ -1073,7 +1082,19 @@ public sealed partial class SilGen {
                 }
             }
 
-            return callee.ThrownType is not { } calleeThrown || ThrowsAllowed(WithAssociatedTypes(callee, new TypeSubstitution(boundMap)).Apply(calleeThrown));
+            var calleeSubstitution = WithAssociatedTypes(callee, new TypeSubstitution(boundMap));
+
+            // A 'rethrows(E)' callee whose E is a type only metadata knows here,
+            // and whose functions may throw something else too, throws them
+            // together as 'any Error' (#297): only a function that throws one
+            // may throw it on, as it is; it cannot be seen as E again yet.
+            if (callee is { IsRethrows: true, RethrownAlso: { } also } && Canonical(calleeSubstitution.Apply(also)) is var rethrown && Mentions(rethrown) && !rethrown.Equals(generator.Core.Never)
+                && (callee.ThrownType is not { } declared || !Canonical(calleeSubstitution.Apply(declared)).Equals(rethrown))
+                && (_handlers > 0 || _closureDepth > 0 || checkedSymbol.ThrownType is not ExistentialTypeSymbol { Constraint: var erased } || !erased.Equals(generator.Core.Error))) {
+                return false;
+            }
+
+            return callee.ThrownType is not { } calleeThrown || ThrowsAllowed(calleeSubstitution.Apply(calleeThrown));
         }
 
         /// <summary>A requirement of the protocols a type parameter has, called on one, as its generic witness takes it.</summary>
@@ -1124,7 +1145,7 @@ public sealed partial class SilGen {
             var field = access.Field;
 
             // An array's own: 'items.count'.
-            if (field.Builtin is "array_count" && access.Receiver is { } array && IsOwnArray(array.Type)) {
+            if (field.Builtin is "array_count" or "array_capacity" && access.Receiver is { } array && IsOwnArray(array.Type)) {
                 return true;
             }
 
@@ -2150,8 +2171,8 @@ public sealed partial class SilGen {
             }
 
             // An array of a type parameter's values: made at run time from the element's.
-            if (type is ArrayTypeSymbol { ElementType: var element } && IsArrayOf(type, [.._genericMetadata.Keys])) {
-                return MetadataOf(element) is { } of ? Emit(new BuiltinInst("metadata_array", SilType.Metadata, of)) : null;
+            if (type is ArrayTypeSymbol { ElementType: var element } array && IsArrayOf(type, [.._genericMetadata.Keys])) {
+                return MetadataOf(element) is { } of ? Emit(new BuiltinInst(array.ArrayKind == ArrayKind.Slice ? "metadata_slice" : "metadata_array", SilType.Metadata, of)) : null;
             }
 
             return LowerType(type) is { } lowered ? Emit(new MetadataInst(lowered)) : null;

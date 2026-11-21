@@ -1828,7 +1828,9 @@ public sealed partial class SilGen {
         }
 
         if (_opaque.Count > 0 && IsArrayOf(type, _opaque)) {
-            return Lower(((ArrayTypeSymbol)type).ElementType) is { } opaqueElement ? new ArrayType(opaqueElement) : null;
+            return Lower(((ArrayTypeSymbol)type).ElementType) is { } opaqueElement
+                ? ((ArrayTypeSymbol)type).ArrayKind == ArrayKind.Slice ? new SliceType(opaqueElement) : new ArrayType(opaqueElement)
+                : null;
         }
 
         // An optional or a tuple of them: laid out at run time from its parts' metadata.
@@ -10018,7 +10020,7 @@ public sealed partial class SilGen {
 
         /// <summary>True for an error type that, here, has no values: Never, or a union of nothing else.</summary>
         bool ThrowsNothing(TypeSymbol thrown) =>
-            thrown.Equals(Core.Never) || thrown is StructuralUnionTypeSymbol union && union.Cases.All(c => c.Equals(Core.Never));
+            CanonicalHere(thrown).Equals(Core.Never) || thrown is StructuralUnionTypeSymbol union && union.Cases.All(c => CanonicalHere(c).Equals(Core.Never));
 
         void CollectThrown(BoundNode node, List<TypeSymbol> into) {
             switch (node) {

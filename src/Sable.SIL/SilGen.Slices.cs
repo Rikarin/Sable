@@ -99,7 +99,9 @@ public sealed partial class SilGen {
             // The take comes before the access to the array begins and the
             // array is put back after it ends, so that the access covers the
             // call alone, as it would the array passed inout.
-            var view = NewSlot(sliceType);
+            // A member compiled once for every element type (#297) is given
+            // the slot of the array's own slice, seen as its own.
+            var view = NewSlot(new SliceType(arrayType.Element));
             borrows.Add(new DeferredStep(() =>
                 Emit(new StoreInst(WholeSlice(Emit(new LoadInst(place, LoadKind.Take))), view, StoreKind.Init))));
             borrows.Add(new WriteBack(() => {
@@ -109,7 +111,7 @@ public sealed partial class SilGen {
                 Emit(new StoreInst(array, place, StoreKind.Init));
             }));
             BeginAccess(place, modify: true, borrows);
-            return view;
+            return view.Type == wanted ? view : Emit(new BuiltinInst("opaque_cast", wanted, view));
         }
 
         /// <summary>

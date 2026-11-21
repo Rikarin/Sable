@@ -2699,7 +2699,8 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return view;
         }
 
-        var type = new ArrayType(((SliceType)((AddressType)addressValue.Type).Pointee).Element);
+        // The buffer's own type: an opaque element's is the type it is (#297).
+        var type = buffer.Type;
         var copy = Allocate(new HeapArray(type, [..buffer.Elements.Skip(view.Start).Take(view.Count)]));
         foreach (var element in copy.Elements) {
             Retain(type.Element, element);

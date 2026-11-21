@@ -207,6 +207,8 @@ public sealed class SliceLoweringTests {
     /// </summary>
     [Fact]
     public void CountingFromTheEndOfAnArrayIsArithmeticOnItsCount() {
+        // Of specialised code (#297): the inliner leaves unspecialised code alone.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var module = Lower(
             """
             fn last(_ xs: Int[:]) -> Int { return xs[^1] }
@@ -242,6 +244,8 @@ public sealed class SliceLoweringTests {
     /// </summary>
     [Fact]
     public void WritingFromTheEndOfAnArrayIsArithmeticOnItsCount() {
+        // Of specialised code (#297): the inliner leaves unspecialised code alone.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var module = Lower(
             """
             fn setLast(_ xs: inout Int[>..], _ v: Int) { xs[^1] = v }

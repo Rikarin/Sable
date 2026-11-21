@@ -12,6 +12,13 @@ typedef struct SableArray {
     char *elements;
 } SableArray;
 
+// A slice: a view of a run of an array's elements (see "Slices" below).
+typedef struct SableSlice {
+    SableArray *buffer;
+    int64_t start;
+    int64_t count;
+} SableSlice;
+
 // ---- Arrays of a type known only at run time (#297) -------------------------
 
 // An array of a type parameter's values, made by unspecialised generic code:
@@ -28,8 +35,13 @@ typedef struct SableArrayInstance {
     const SableTypeMetadata *element;  // the element's, which the witnesses take
     SableTypeMetadata type;            // the array type's, [T]
     const SableTypeMetadata *argument; // its one type argument: the element
+    SableTypeMetadata slice;           // a slice's of it, [T:], which has the same argument
     struct SableArrayInstance *next;
 } SableArrayInstance;
+
+// A slice's value witnesses: its buffer is one counted reference, and its
+// start and count are bits. Defined with the slice, below.
+static const SableValueWitnesses slice_witnesses;
 
 static void witnessed_element_copy(void *destination, const void *source) {
     (void)destination;
@@ -95,7 +107,8 @@ static SableArrayInstance *array_instance(const SableTypeMetadata *element) {
     SableArrayInstance *made = calloc(1, sizeof *made);
     size_t length = element->name == NULL ? 0 : strlen(element->name);
     char *name = malloc(length + 3);
-    if (made == NULL || name == NULL) {
+    char *slice_name = malloc(length + 4);
+    if (made == NULL || name == NULL || slice_name == NULL) {
         sable_trap("out of memory");
     }
 
@@ -103,6 +116,8 @@ static SableArrayInstance *array_instance(const SableTypeMetadata *element) {
     memcpy(name + 1, element->name == NULL ? "" : element->name, length);
     name[length + 1] = ']';
     name[length + 2] = 0;
+    memcpy(slice_name, name, length + 1);
+    memcpy(slice_name + length + 1, ":]", 3);
 
     bool trivial = (element->flags & SABLE_TYPE_TRIVIAL) != 0;
     made->element = element;
@@ -123,6 +138,14 @@ static SableArrayInstance *array_instance(const SableTypeMetadata *element) {
     made->type.witnesses = &sable_reference_witnesses;
     made->type.argument_count = 1;
     made->type.arguments = &made->argument;
+    made->slice.kind = SABLE_KIND_SLICE;
+    made->slice.name = slice_name;
+    made->slice.size = (int64_t)sizeof(SableSlice);
+    made->slice.alignment = (int64_t)_Alignof(SableSlice);
+    made->slice.stride = (int64_t)sizeof(SableSlice);
+    made->slice.witnesses = &slice_witnesses;
+    made->slice.argument_count = 1;
+    made->slice.arguments = &made->argument;
 
     // Another thread may have made one meanwhile: either serves, and both are kept.
     made->next = __atomic_load_n(&array_instances, __ATOMIC_ACQUIRE);
@@ -155,6 +178,11 @@ const SableMetadata *sable_array_metadata(SableArrayInstance **cache, const Sabl
 // The type metadata of an array of the element type, [T].
 const SableTypeMetadata *sable_array_type(SableArrayInstance **cache, const SableTypeMetadata *element) {
     return &array_instance_cached(cache, element)->type;
+}
+
+// The type metadata of a slice of the element type, [T:].
+const SableTypeMetadata *sable_slice_type(SableArrayInstance **cache, const SableTypeMetadata *element) {
+    return &array_instance_cached(cache, element)->slice;
 }
 
 // An array literal that does not escape its frame (docs/04 §3.7) is made
@@ -356,11 +384,55 @@ void *sable_array_remove_last(SableArray **slot, const SableMetadata *type) {
 // how many elements it has. The empty slice is no buffer. Taking one, and
 // reading through one, is code the compiler writes in place; only a write,
 // which may need a copy, calls here.
-typedef struct SableSlice {
-    SableArray *buffer;
-    int64_t start;
-    int64_t count;
-} SableSlice;
+
+void sable_heap_visit(void *pointer);
+
+// A slice moved, copied, assigned, destroyed and visited as a value of a type
+// known only by its metadata (#297): its buffer counted, its run's bits copied.
+static void slice_copy(void *destination, void *source, const SableTypeMetadata *type) {
+    (void)type;
+    SableSlice *from = source;
+    sable_retain(from->buffer);
+    memmove(destination, source, sizeof(SableSlice));
+}
+
+static void slice_take(void *destination, void *source, const SableTypeMetadata *type) {
+    (void)type;
+    memmove(destination, source, sizeof(SableSlice));
+}
+
+static void slice_assign_copy(void *destination, void *source, const SableTypeMetadata *type) {
+    (void)type;
+    SableArray *old = ((SableSlice *)destination)->buffer;
+    sable_retain(((SableSlice *)source)->buffer);
+    memmove(destination, source, sizeof(SableSlice));
+    sable_release(old);
+}
+
+static void slice_assign_take(void *destination, void *source, const SableTypeMetadata *type) {
+    (void)type;
+    if (destination == source) {
+        return;
+    }
+
+    SableArray *old = ((SableSlice *)destination)->buffer;
+    memmove(destination, source, sizeof(SableSlice));
+    sable_release(old);
+}
+
+static void slice_destroy(void *value, const SableTypeMetadata *type) {
+    (void)type;
+    sable_release(((SableSlice *)value)->buffer);
+}
+
+static void slice_visit(void *value, const SableTypeMetadata *type) {
+    (void)type;
+    sable_heap_visit(((SableSlice *)value)->buffer);
+}
+
+static const SableValueWitnesses slice_witnesses = {
+    slice_copy, slice_take, slice_assign_copy, slice_assign_take, slice_destroy, slice_visit,
+};
 
 // The slice at '*slice', made the only reference to its buffer, so that an
 // element can be changed: a shared buffer gives way to a copy of the run

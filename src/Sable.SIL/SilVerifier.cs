@@ -228,7 +228,7 @@ public static partial class SilVerifier {
             case BuiltinInst builtin: {
                 if (SilBuiltins.Resolve(builtin.Name, [..builtin.Operands.Select(static o => o.Type)], builtin.Type) is not { } signature) {
                     return SilBuiltins.Find(builtin.Name) is null && !SilBuiltins.ArrayOperations.Contains(builtin.Name)
-                        ? $"no builtin named \"{builtin.Name}\""
+                        ? $"no builtin named \"{builtin.Name}\" takes ({Types(builtin.Operands)}) to {builtin.Type}"
                         : $"builtin \"{builtin.Name}\" cannot take ({Types(builtin.Operands)})";
                 }
 

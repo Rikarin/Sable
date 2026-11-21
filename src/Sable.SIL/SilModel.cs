@@ -147,6 +147,7 @@ public abstract class SilType : IEquatable<SilType> {
             // A function's convention differs where a value is indirect: only another opaque type's name may.
             (ThickFunctionType, ThickFunctionType) => ErasedOpaque(a.ToString()) == ErasedOpaque(b.ToString()),
             (ArrayType x, ArrayType y) => SameErasingOpaque(x.Element, y.Element, opaqueOnly),
+            (SliceType x, SliceType y) => SameErasingOpaque(x.Element, y.Element, opaqueOnly),
             (AddressType x, AddressType y) => SameErasingOpaque(x.Pointee, y.Pointee, opaqueOnly),
             (StructType x, StructType y) => x.Fields.Count == y.Fields.Count && (MentionsOpaque(x) || MentionsOpaque(y)) && GenericBase(x.Name) == GenericBase(y.Name)
                                             && x.Fields.Zip(y.Fields).All(p => p.First.Name == p.Second.Name && SameErasingOpaque(p.First.Type, p.Second.Type, opaqueOnly)),
@@ -2223,7 +2224,7 @@ public static class SilBuiltins {
                 return new([viewed], result!);
             case "opaque_take_as" when operands is [var taken] && result is not null && result != taken && SilType.SameErasingOpaque(taken, result, opaqueOnly: true):
                 return new([taken], result!) { Consumed = [0] };
-            case "metadata_array" when operands is [var element] && element == metadata:
+            case "metadata_array" or "metadata_slice" when operands is [var element] && element == metadata:
                 return new([metadata], metadata);
             case "opaque_type" when operands is [OpaqueType value, var m] && m == metadata:
                 return new([value, metadata], metadata);

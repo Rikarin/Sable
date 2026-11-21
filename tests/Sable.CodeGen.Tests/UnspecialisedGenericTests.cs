@@ -1012,4 +1012,103 @@ public sealed class UnspecialisedGenericTests {
         var compiled = Unspecialised(Sequences, "print(Countdown(from: 1).map({ $0 }))");
         Assert.Contains("Sable.Core.Sequence.map$generic", compiled);
     }
+
+    const string Slices = """
+        struct Named {
+            var name: String
+        }
+
+        fn firstOf<T>(_ items: T[:]) -> T? {
+            if items.count == 0 {
+                return none
+            }
+            return items[0]
+        }
+
+        fn total<T>(_ items: T[:], _ weigh: (T) -> Int) -> Int {
+            var sum = 0
+            for item in items {
+                sum += weigh(item)
+            }
+            return sum
+        }
+
+        fn middle<T>(_ items: T[:]) -> T[:] => items.slice(from: 1, to: items.count - 1)
+
+        // Each element written over itself, in a copy of the run: the
+        // assignment hands its reference over though the object is the same.
+        fn rewritten<T>(_ items: T[:]) -> T[:] {
+            var copy = items
+            var k = 0
+            while k < items.count {
+                copy[k] = items[k]
+                k = k + 1
+            }
+            return copy
+        }
+
+        fn overwrite<T>(_ items: T[>..], with value: T) -> T[>..] {
+            var changed = items
+            changed.fill(value)
+            return changed
+        }
+
+        struct Window<T> {
+            var items: T[:]
+            fn last() -> T? => items.count == 0 ? none : items[items.count - 1]
+        }
+        """;
+
+    /// <summary>
+    ///     A slice of a type parameter's values is a view of an array of them,
+    ///     its elements where the element's metadata says: passed, sliced,
+    ///     walked and written through in code compiled once, held in a generic
+    ///     struct, and the slice extensions' members (sort, reverse, swapAt,
+    ///     iterators) compiled once for every element type.
+    /// </summary>
+    [Fact]
+    public void SlicesOfATypeParametersValues() {
+        Prints(
+            "2\nb\n6\n[2, 3]\nyy\n[\"z\", \"z\", \"z\"]\n[1, 2, 3]\n[\"c\", \"b\", \"a\"]\n[3, 2, 1]\nzz\n3\nq\nq\n",
+            Slices,
+            """
+                let numbers = [1, 2, 3, 4]
+                print(firstOf(numbers.slice(from: 1, to: 4)) ?? 0)
+                print(firstOf(["a", "b"].slice(from: 1, to: 2)) ?? "-")
+                print(total(["x", "yy", "zzz"][0...], { $0.count }))
+                print(middle(numbers[0...]).toArray())
+                print(middle(["x", "yy", "zzz"][0...])[0])
+                print(overwrite(["x", "y", "z"], with: "z"))
+                var sorted = [3, 1, 2]
+                sorted.sort()
+                print(sorted)
+                var reversed = ["a", "b", "c"]
+                reversed.reverse()
+                print(reversed)
+                var swapped = [1, 3, 2]
+                swapped.swapAt(0, 1)
+                swapped.swapAt(1, 2)
+                print(swapped)
+                print(Window<String> { items: ["x", "zz"][0...] }.last() ?? "-")
+                var it = numbers.slice(from: 2, to: 4).makeIterator()
+                print(it.next() ?? 0)
+                let names = [Named { name: "p" }, Named { name: "q" }]
+                print(firstOf(names.slice(from: 1, to: 2))!.name)
+                print(rewritten(names[0...])[1].name)
+            """);
+        var functions = Unspecialised(Slices, """
+                print(firstOf([1][0...]) ?? total([1][0...], { $0 }))
+                print(middle([1, 2, 3][0...]).count)
+                print(overwrite([1], with: 2))
+                print(Window<Int> { items: [1][0...] }.last() ?? 0)
+                var xs = [2, 1]
+                xs.sort()
+                print(xs)
+                var it = xs.makeIterator()
+                print(it.next() ?? 0)
+            """);
+        foreach (var name in new[] { "Test.firstOf", "Test.total", "Test.middle", "Test.overwrite", "Test.Window.last", "Sable.Core.Array$Slice$8.sort", "Sable.Core.ArrayIterator.next" }) {
+            Assert.Contains($"{name}$generic", functions);
+        }
+    }
 }

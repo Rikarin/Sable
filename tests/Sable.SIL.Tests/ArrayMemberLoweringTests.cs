@@ -56,6 +56,8 @@ public sealed class ArrayMemberLoweringTests {
 
     [Fact]
     public void TheSableMembersAreMonomorphisedPerElement() {
+        // Of specialised code (#297): unspecialised, a slice's members are compiled once.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var module = Lower(
             """
             module M

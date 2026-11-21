@@ -1614,10 +1614,10 @@ public sealed partial class LlvmEmitter {
                 return module.TypeMetadataGlobal(part);
             }
 
-            if (part is ArrayType { Element: var element }) {
-                var of = PartMetadata(element);
+            if (part is ArrayType or SliceType) {
+                var of = PartMetadata(ArrayType.ElementOf(part)!);
                 var made = Fresh();
-                _entryAllocas.Append($"  {made} = call ptr @sable_array_type(ptr {module.RuntimeCache()}, ptr {of})\n");
+                _entryAllocas.Append($"  {made} = call ptr @sable_{(part is SliceType ? "slice" : "array")}_type(ptr {module.RuntimeCache()}, ptr {of})\n");
                 return made;
             }
 
@@ -4053,7 +4053,7 @@ public sealed partial class LlvmEmitter {
                 // A slice made the only reference to its buffer: the runtime
                 // copies its run alone when the buffer is shared.
                 case "array_make_unique" when builtin.Operands[0].Type is AddressType { Pointee: SliceType unique }:
-                    Line($"call void @sable_slice_make_unique(ptr {operands[0]}, ptr {module.ArrayMetadata(new ArrayType(unique.Element))})");
+                    Line($"call void @sable_slice_make_unique(ptr {operands[0]}, ptr {ArrayMetadataOf(new ArrayType(unique.Element))})");
                     return;
 
                 // Unique already — the loop's 'array_make_unique' made it so —
@@ -4064,6 +4064,11 @@ public sealed partial class LlvmEmitter {
                     var slice = Fresh();
                     Line($"{slice} = load {Type(unique)}, ptr {operands[0]}");
                     var element = SliceElement(slice, operands[1], unique, check: !builtin.InBounds);
+                    if (SilType.IsIndirect(unique.Element)) {
+                        OpaqueWitness(unique.Element, AssignWithTakeWitness, element, operands[2]);
+                        return;
+                    }
+
                     var old = Fresh();
                     Line($"{old} = load {elementType}, ptr {element}, !tbaa {TbaaElement}");
                     Line($"store {elementType} {operands[2]}, ptr {element}, !tbaa {TbaaElement}");
@@ -4074,6 +4079,11 @@ public sealed partial class LlvmEmitter {
                 case "array_set" or "array_set_unique" when builtin.Operands[0].Type is AddressType { Pointee: SliceType written }: {
                     var elementType = Type(written.Element);
                     var element = SliceMutableElement(operands[0], operands[1], written);
+                    if (SilType.IsIndirect(written.Element)) {
+                        OpaqueWitness(written.Element, AssignWithTakeWitness, element, operands[2]);
+                        return;
+                    }
+
                     var old = Fresh();
                     Line($"{old} = load {elementType}, ptr {element}");
                     Line($"store {elementType} {operands[2]}, ptr {element}");
@@ -4141,7 +4151,7 @@ public sealed partial class LlvmEmitter {
                     var element = pointee is SliceType rotated ? rotated.Element : ((ArrayType)pointee).Element;
                     var function = pointee is SliceType ? "sable_slice_rotate" : "sable_array_rotate";
                     SiteForRuntime();
-                    Line($"call void @{function}(ptr {operands[0]}, ptr {module.ArrayMetadata(new ArrayType(element))}, i64 {operands[1]}, i64 {operands[2]}, i64 {operands[3]})");
+                    Line($"call void @{function}(ptr {operands[0]}, ptr {ArrayMetadataOf(new ArrayType(element))}, i64 {operands[1]}, i64 {operands[2]}, i64 {operands[3]})");
                     return;
                 }
 
@@ -4199,7 +4209,7 @@ public sealed partial class LlvmEmitter {
                 case "array_of_slice": {
                     var slice = (SliceType)builtin.Operands[0].Type;
                     var (buffer, start, count) = (SlicePart(operands[0], slice, 0), SlicePart(operands[0], slice, 1), SlicePart(operands[0], slice, 2));
-                    Line($"{Result()} = call ptr @sable_array_of_slice(ptr {buffer}, i64 {start}, i64 {count}, ptr {module.ArrayMetadata(new ArrayType(slice.Element))})");
+                    Line($"{Result()} = call ptr @sable_array_of_slice(ptr {buffer}, i64 {start}, i64 {count}, ptr {ArrayMetadataOf(new ArrayType(slice.Element))})");
                     return;
                 }
 
@@ -5354,7 +5364,7 @@ public sealed partial class LlvmEmitter {
             Line($"{elementsField} = getelementptr inbounds %SableArrayHeader, ptr {buffer}, i32 0, i32 3");
             Line($"{elements} = load ptr, ptr {elementsField}, !tbaa {TbaaHeader}");
             Line($"{position} = add i64 {start}, {index}");
-            Line($"{element} = getelementptr inbounds {Type(type.Element)}, ptr {elements}, i64 {position}");
+            Line($"{element} = {ElementAt(type.Element, elements, position)}");
             return element;
         }
 
@@ -5365,7 +5375,7 @@ public sealed partial class LlvmEmitter {
         string SliceMutableElement(string slot, string index, SliceType type) {
             var element = Fresh();
             SiteForRuntime();
-            Line($"{element} = call ptr @sable_slice_mutable_element(ptr {slot}, ptr {module.ArrayMetadata(new ArrayType(type.Element))}, i64 {index})");
+            Line($"{element} = call ptr @sable_slice_mutable_element(ptr {slot}, ptr {ArrayMetadataOf(new ArrayType(type.Element))}, i64 {index})");
             return element;
         }
 

@@ -1111,4 +1111,126 @@ public sealed class UnspecialisedGenericTests {
             Assert.Contains($"{name}$generic", functions);
         }
     }
+
+    const string Classes = """
+        import Sable.Collections
+
+        class Bag<T> {
+            var items: T[>..] = []
+            var label: String
+
+            init(label: String) {
+                self.label = label
+            }
+
+            fn add(_ item: T) {
+                items.append(item)
+            }
+
+            fn first() -> T? {
+                if items.count == 0 {
+                    return none
+                }
+                return items[0]
+            }
+
+            fn take() -> T? {
+                if items.count == 0 {
+                    return none
+                }
+                return items.removeLast()
+            }
+
+            var size: Int => items.count
+
+            fn describe() -> String => "\(label) of \(size)"
+        }
+
+        struct Grid<T> {
+            var cells: T[>..]
+            var width: Int
+
+            subscript(x: Int, y: Int) -> T {
+                get { return cells[y * width + x] }
+                set { cells[y * width + x] = newValue }
+            }
+        }
+
+        fn fill<T>(_ bag: Bag<T>, _ a: T, _ b: T) -> Int {
+            bag.add(a)
+            bag.add(b)
+            return bag.size
+        }
+
+        fn corner<T>(_ grid: Grid<T>) -> T => grid[x: 0, y: 0]
+
+        fn named<V>(_ table: [String: V], _ key: String) -> V? => table[key]
+        """;
+
+    /// <summary>
+    ///     A generic class whose fields hold its type parameters' values only
+    ///     behind references is laid out alike for every argument, so its
+    ///     methods are compiled once, as Sable.Collections' Stack, Queue and
+    ///     Deque are; so are a generic type's subscripts, a dictionary's among them.
+    /// </summary>
+    [Fact]
+    public void MembersOfGenericClassesAndSubscriptsAreCompiledOnce() {
+        Prints(
+            "a\nwords of 2\nb\n3\n2\n2\ny\ny\n1\nl\nm\n1\n9\n7\n3\nnone\n",
+            Classes,
+            """
+                let words = Bag<String>(label: "words")
+                words.add("a")
+                words.add("b")
+                print(words.first() ?? "-")
+                print(words.describe())
+                print(words.take() ?? "-")
+                print(fill(words, "c", "d"))
+                let numbers = Bag<Int>(label: "numbers")
+                print(fill(numbers, 1, 2))
+                print(numbers.take() ?? 0)
+                let stack = Stack<String>()
+                stack.push("x")
+                stack.push("y")
+                print(stack.peek() ?? "-")
+                print(stack.pop() ?? "-")
+                let queue = Queue<Int>()
+                queue.enqueue(1)
+                queue.enqueue(2)
+                print(queue.dequeue() ?? 0)
+                let deque = Deque<String>()
+                deque.append("m")
+                deque.prepend("l")
+                print(deque.first ?? "-")
+                print(deque.removeLast() ?? "-")
+                var grid = Grid<Int> { cells: [1, 2, 3, 4], width: 2 }
+                print(corner(grid))
+                grid[x: 1, y: 1] = 9
+                print(grid[x: 1, y: 1])
+                let ages = ["ann": 7, "bo": 3]
+                print(named(ages, "ann") ?? 0)
+                print(ages["bo"] ?? 0)
+                print(named(ages, "cy") == none ? "none" : "some")
+            """);
+        var functions = Unspecialised(Classes, """
+                let bag = Bag<Int>(label: "n")
+                print(fill(bag, 1, 2))
+                print(bag.first() ?? bag.take() ?? 0)
+                print(bag.describe())
+                var grid = Grid<Int> { cells: [1], width: 1 }
+                grid[x: 0, y: 0] = 2
+                print(corner(grid))
+                print(named(["a": 1], "a") ?? 0)
+                let stack = Stack<Int>()
+                stack.push(1)
+                print(stack.pop() ?? 0)
+            """);
+        foreach (var name in new[] { "Test.Bag.add", "Test.Bag.first", "Test.Bag.take", "Test.Bag.describe", "Test.fill", "Test.corner", "Test.named",
+                     "Sable.Collections.Stack.push", "Sable.Collections.Stack.pop" }) {
+            Assert.Contains($"{name}$generic", functions);
+        }
+
+        Assert.Contains(functions, static f => f.StartsWith("Test.Grid.subscript", StringComparison.Ordinal) && f.EndsWith(".set$generic", StringComparison.Ordinal));
+        Assert.Contains(functions, static f => f.StartsWith("Sable.Core.Dictionary.subscript", StringComparison.Ordinal) && f.EndsWith(".get$generic", StringComparison.Ordinal));
+    }
 }

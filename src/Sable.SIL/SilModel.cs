@@ -152,6 +152,9 @@ public abstract class SilType : IEquatable<SilType> {
             (StructType x, StructType y) => x.Fields.Count == y.Fields.Count && (MentionsOpaque(x) || MentionsOpaque(y)) && GenericBase(x.Name) == GenericBase(y.Name)
                                             && x.Fields.Zip(y.Fields).All(p => p.First.Name == p.Second.Name && SameErasingOpaque(p.First.Type, p.Second.Type, opaqueOnly)),
             (TupleType x, TupleType y) => x.Elements.Length == y.Elements.Length && x.Elements.Zip(y.Elements).All(p => SameErasingOpaque(p.First, p.Second, opaqueOnly)),
+            // A generic class's reference, its fields laid out alike whatever its arguments.
+            (ClassType x, ClassType y) => x.Fields.Count == y.Fields.Count && (MentionsOpaque(x) || MentionsOpaque(y)) && GenericBase(x.Name) == GenericBase(y.Name)
+                                          && x.Fields.Zip(y.Fields).All(p => p.First.Name == p.Second.Name && SameErasingOpaque(p.First.Type, p.Second.Type, opaqueOnly)),
             (EnumType x, EnumType y) => x.Cases.Count == y.Cases.Count && (MentionsOpaque(x) || MentionsOpaque(y))
                                         && x.Cases.Zip(y.Cases).All(p => p.First.Name == p.Second.Name
                                                                          && (p.First.Payload is null ? p.Second.Payload is null : p.Second.Payload is not null && SameErasingOpaque(p.First.Payload, p.Second.Payload, opaqueOnly))),

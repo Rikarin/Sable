@@ -391,7 +391,20 @@ the fields' or cases' names, the name, and the type arguments' count) as
 type is a type argument and a type's name as Sable writes it
 (`M.Pair<String, Int>`) as one made where its arguments are known. A type
 with a deinit, packed or aligned, move-only, a union with a boxed case, a
-class, and an extension with `where T == X` are still specialised.
+class with a field of `T` by value, and an extension with `where T == X` are still specialised.
+
+A **generic class** whose stored fields hold its type parameters' values
+only behind references — arrays and slices of them, plain generic structs
+that do (`[Key: Int]`), other such classes — and which has no superclass is
+laid out alike whatever its arguments, so its methods and getters are
+compiled once as a struct's are, the reference passed as it is
+(`Stack`, `Queue`, `Deque`, `OrderedDictionary`); any method may change
+self's fields. One that a subclass may override is still specialised, as
+its vtable holds an instance for each class's arguments; so is an
+initialiser, which makes the object and so needs its class's metadata for
+the arguments, not made at run time yet. A **subscript**'s getter and
+setter, of a generic struct, union or class, are compiled once as methods
+are (a dictionary's `d[key]` and `d[key] = v`).
 
 **Associated types.** An associated type read through a type parameter —
 `S.Element`, `C.Index`, `S.Iter`, `S.Iter.Element`, and inside a protocol
@@ -455,8 +468,9 @@ keeps its function specialised, as does a function that returns a closure
 over its type parameters.
 
 What unspecialised code cannot serve yet — an optional chain through a
-`T?`, a structural union of `T`, a member of a generic
-class, an accessor or initialiser, `"\(x:?)"`, an async function or a
+`T?`, a structural union of `T`, a method of a generic class
+a subclass may override or whose fields hold `T` by value, a field of a
+function type in a generic type, a property's setter, an initialiser, `"\(x:?)"`, an async function or a
 generator — is still specialised for its type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
 says, for each generic function, which way it went and why. A specialised

@@ -1,0 +1,50 @@
+module Sable.Core
+
+/// What kind of type a `TypeMetadata` describes: the runtime's
+/// `SABLE_KIND_*` (docs/06 §6.2).
+public enum TypeMetadataKind {
+    /// A class (or an actor): a value of it is a reference to an object.
+    Class
+
+    /// A struct.
+    Struct
+
+    /// An enum of cases alone.
+    Enum
+
+    /// A union, declared or written `A | B`.
+    Union
+
+    /// `T?`.
+    Optional
+
+    /// A tuple, `(A, B)`.
+    Tuple
+
+    /// A function, `(A) -> B`.
+    Function
+
+    /// An array, `T[>..]` and its kinds.
+    Array
+
+    /// A slice of an array, `T[:]`.
+    Slice
+
+    /// An existential, `any P`.
+    Existential
+
+    /// A type's metadata as a value: `TypeMetadata`.
+    Metatype
+
+    /// A number, `Bool`, `Char`, `()`.
+    Scalar
+
+    /// `String`.
+    String
+
+    /// A weak or unowned reference, as a field holds one.
+    Reference
+
+    /// What the runtime holds without describing: a closure's context, a region.
+    Opaque
+}

@@ -46,6 +46,10 @@ public sealed class CoreTypes {
         // A bump-allocated arena (docs/02 §2.1, Tier 1): what 'region arena { }'
         // makes and an 'in r: region' parameter borrows.
         Region = Primitive("Region");
+
+        // A type's metadata (docs/06 §6.2): what the runtime knows of a type —
+        // its kind, layout, value witnesses, fields and conformances.
+        TypeMetadata = Primitive("TypeMetadata");
         Void = Primitive("Void");
         Never = Primitive("Never");
 
@@ -118,6 +122,7 @@ public sealed class CoreTypes {
     public NamedTypeSymbol Char { get; }
     public NamedTypeSymbol String { get; }
     public NamedTypeSymbol Region { get; }
+    public NamedTypeSymbol TypeMetadata { get; }
     public NamedTypeSymbol Void { get; }
     public NamedTypeSymbol Never { get; }
     public NamedTypeSymbol Sendable { get; }

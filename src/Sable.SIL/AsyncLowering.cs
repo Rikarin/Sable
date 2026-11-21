@@ -812,7 +812,7 @@ public static class AsyncLowering {
                 }
 
                 var uses = users.GetValueOrDefault(value) ?? [];
-                if (value is IntegerLiteralInst or FloatLiteralInst or StringLiteralInst or FunctionRefInst or GlobalAddrInst) {
+                if (value is IntegerLiteralInst or FloatLiteralInst or StringLiteralInst or FunctionRefInst or GlobalAddrInst or MetadataInst) {
                     var made = (SilInstruction)value;
                     foreach (var user in uses) {
                         var copy = made.Clone(static v => v, static b => b);

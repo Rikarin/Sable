@@ -1771,6 +1771,18 @@ public sealed partial class SilGen {
 
         _types[symbol] = type;
         _lowered.Add(symbol);
+
+        // Its type arguments, for its metadata: TypeName has lowered each already.
+        if (symbol is NamedTypeSymbol { IsConstructed: true } generic
+            && generic.TypeArguments.Select(Lower).ToList() is var arguments && arguments.TrueForAll(static a => a is not null)) {
+            type.TypeArguments = [..arguments!];
+        }
+
+        // What it declares it conforms to: its metadata's conformance records.
+        if (symbol is NamedTypeSymbol named) {
+            type.Conformances.AddRange(DeclaredProtocols(named.OriginalDefinition));
+        }
+
         return _module.AddType(type);
     }
 
@@ -1815,6 +1827,10 @@ public sealed partial class SilGen {
 
         if (type.Equals(Core.Region)) {
             return SilType.Region;
+        }
+
+        if (type.Equals(Core.TypeMetadata)) {
+            return SilType.Metadata;
         }
 
         switch (type) {
@@ -1976,8 +1992,6 @@ public sealed partial class SilGen {
                     classType.Fields.AddRange(superType.Fields);
                 }
 
-                classType.Conformances.AddRange(DeclaredProtocols(named.OriginalDefinition));
-
                 var members = TypeSubstitution.For(named);
                 foreach (var field in StoredFields(named.OriginalDefinition)) {
                     if (Lower(members.Apply(field.Type)) is not { } fieldType) {
@@ -2001,7 +2015,7 @@ public sealed partial class SilGen {
             }
 
             case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Union } named: {
-                var enumType = Begin(named, new EnumType(TypeName(named)) { IsNoncopyable = named.OriginalDefinition.IsNoncopyable });
+                var enumType = Begin(named, new EnumType(TypeName(named)) { IsNoncopyable = named.OriginalDefinition.IsNoncopyable, IsUnion = true });
                 var members = TypeSubstitution.For(named);
                 foreach (var unionCase in named.OriginalDefinition.Members.OfType<UnionCaseSymbol>()) {
                     SilType? payload = null;
@@ -2378,7 +2392,7 @@ public sealed partial class SilGen {
             return existing;
         }
 
-        var enumType = Begin(union, new EnumType(name));
+        var enumType = Begin(union, new EnumType(name) { IsUnion = true });
         foreach (var lowered in cases) {
             enumType.Cases.Add((UnionCaseName(lowered), lowered));
         }
@@ -2403,7 +2417,7 @@ public sealed partial class SilGen {
             return existing;
         }
 
-        var enumType = Begin(recursive, new EnumType(name));
+        var enumType = Begin(recursive, new EnumType(name) { IsUnion = true });
         _unions.Add(enumType);
         foreach (var member in union.Cases) {
             if (Lower(member) is not { } lowered || enumType.Cases.Exists(c => Equals(c.Payload, lowered))) {
@@ -9842,6 +9856,11 @@ public sealed partial class SilGen {
                 // 'arena.alloc(value)'.
                 if (owner is not null && owner.Equals(Core.Region)) {
                     return RegionAlloc(call);
+                }
+
+                // A type's metadata, and its value witnesses (SilGen.Metadata.cs).
+                if (owner is not null && owner.Equals(Core.TypeMetadata)) {
+                    return MetadataIntrinsic(call);
                 }
 
                 // Reflection (SilGen.Reflection.cs).

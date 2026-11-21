@@ -331,6 +331,11 @@ public sealed partial class SilGen {
                 borrowed.Add(value);
             }
 
+            // A program that reads a type's fields from its metadata has every type's metadata carry them.
+            if (name.StartsWith("metadata_field_", StringComparison.Ordinal)) {
+                generator._module.FieldDescriptors = true;
+            }
+
             var result = (SilBuiltins.Find(name) ?? SilBuiltins.Resolve(name, [..borrowed.Select(static b => b.Type)]))!.Result;
             var applied = Emit(new BuiltinInst(name, result, [..borrowed]));
             EndAll(borrowed);

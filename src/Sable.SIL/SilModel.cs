@@ -91,6 +91,20 @@ public abstract class SilType : IEquatable<SilType> {
     /// </summary>
     public static readonly SilType Region = new ScalarType("Region", trivial: false);
 
+    /// <summary>
+    ///     A type's metadata (docs/06 §6.2, <see cref="TypeMetadata" />): a
+    ///     pointer to a constant record, never counted. What
+    ///     <c>metadata $T</c> gives, and what a <c>TypeMetadata</c> value is.
+    /// </summary>
+    public static readonly SilType Metadata = new ScalarType("Metadata");
+
+    /// <summary>
+    ///     A conformance's witness table (docs/06 §6.2, <see cref="SilWitnessTable" />),
+    ///     or null where a type does not conform: a pointer to a constant
+    ///     record, never counted. What the conformance registry gives.
+    /// </summary>
+    public static readonly SilType WitnessTable = new ScalarType("WitnessTable");
+
     /// <summary><c>()</c>: no value. What a function that returns nothing returns.</summary>
     public static readonly SilType Unit = new ScalarType("()");
 
@@ -266,6 +280,21 @@ public abstract class NominalType(string name) : SilType {
 
     /// <summary>A move-only struct or enum: a value of it is never copied, so it has ownership even when its parts are trivial.</summary>
     public bool IsNoncopyable { get; set; }
+
+    /// <summary>
+    ///     The protocols the type conforms to by its own declaration or its
+    ///     extensions', each by its qualified name, with those they refine: its
+    ///     metadata's conformance records (docs/06 §6.2). A class's
+    ///     superclass's are its superclass's.
+    /// </summary>
+    public List<string> Conformances { get; } = [];
+
+    /// <summary>
+    ///     A generic type's instance: its type arguments, as its metadata
+    ///     lists them — what metadata made at run time will be cached by
+    ///     (#297); empty for any other type.
+    /// </summary>
+    public ImmutableArray<SilType> TypeArguments { get; set; } = [];
 
     public override string ToString() => Name;
 }
@@ -514,6 +543,9 @@ public sealed class EnumType(string name) : NominalType(name) {
 
     public int CaseIndex(string @case) => Cases.FindIndex(c => c.Name == @case);
 
+    /// <summary>A union, <c>A | B</c> or a declared one, rather than an enum of cases alone: what its metadata's kind says.</summary>
+    public bool IsUnion { get; set; }
+
     public override bool IsTrivial => !IsNoncopyable && Cases.All(static c => c.Payload?.IsTrivial ?? true);
 }
 
@@ -551,14 +583,6 @@ public sealed class ClassType(string name) : NominalType(name) {
     ///     suspended, as bits: they are never destroyed with it.
     /// </summary>
     public bool IsCoroutineFrame { get; init; }
-
-    /// <summary>
-    ///     The protocols the class conforms to by its own declaration or its
-    ///     extensions', each by its qualified name, with those they refine: its
-    ///     metadata's conformance records (docs/06 §6.2). Its superclass's are
-    ///     its superclass's.
-    /// </summary>
-    public List<string> Conformances { get; } = [];
 
     /// <summary>The methods called through the vtable: each slot's name, and the function in it for this class.</summary>
     public List<(string Method, string Function)> VTable { get; } = [];
@@ -739,6 +763,18 @@ public sealed class FloatLiteralInst(double value, SilType? type = null) : SilIn
 }
 
 /// <summary><c>string_literal "hello"</c>: an immortal string.</summary>
+/// <summary>
+///     <c>metadata $T</c>: the type's metadata (docs/06 §6.2) — its kind,
+///     layout, value witnesses, fields and conformances, as
+///     <see cref="TypeMetadata" /> describes them. Natively a constant record,
+///     one per type in the program; in the interpreter, its model.
+/// </summary>
+public sealed class MetadataInst(SilType described) : SilInstruction {
+    public SilType Described { get; } = described;
+    public override SilType Type => SilType.Metadata;
+    public override string Opcode => "metadata";
+}
+
 public sealed class StringLiteralInst(string value) : SilInstruction {
     public override SilType Type => SilType.String;
     public string Value { get; } = value;
@@ -1503,6 +1539,65 @@ public sealed class SilModule {
 
     public NominalType? FindType(string name) => _types.GetValueOrDefault(name);
 
+    /// <summary>
+    ///     Whether every type's metadata carries field descriptors, each with
+    ///     its field's type metadata (docs/06 §6.2): on when the program reads
+    ///     them (<c>TypeMetadata.fieldCount</c> and the like) — and, once
+    ///     generic code is compiled unspecialised (#297), where that code
+    ///     finds a generic type's field offsets. Off, only a class's metadata
+    ///     has them, without the field types: what the leak report names.
+    /// </summary>
+    public bool FieldDescriptors { get; set; }
+
+    readonly Dictionary<(string Type, string Protocol), SilWitnessTable> _witnessTables = [];
+
+    /// <summary>
+    ///     The witness tables of the program's conformances (docs/06 §6.2), in
+    ///     the order they were made: <c>sil_witness_table $T : "M.P" { … }</c>.
+    ///     Each is in its conformer's metadata, in the conformance record the
+    ///     registry finds it by.
+    /// </summary>
+    public IReadOnlyList<SilWitnessTable> WitnessTables => _witnessTableList;
+
+    readonly List<SilWitnessTable> _witnessTableList = [];
+
+    /// <summary>The witness table of a type's conformance to a protocol, or null when none was made.</summary>
+    public SilWitnessTable? FindWitnessTable(SilType conformer, string protocol) =>
+        _witnessTables.GetValueOrDefault((conformer.ToString(), protocol));
+
+    public SilWitnessTable AddWitnessTable(SilWitnessTable table) {
+        if (_witnessTables.TryAdd((table.Conformer.ToString(), table.Protocol), table)) {
+            _witnessTableList.Add(table);
+        }
+
+        return _witnessTables[(table.Conformer.ToString(), table.Protocol)];
+    }
+
+    /// <summary>
+    ///     A type's conformance records, by protocol name: those a nominal
+    ///     type declares (a class's own; its superclass's are its
+    ///     superclass's), and each conformance a witness table was made for.
+    /// </summary>
+    public List<(string Protocol, SilWitnessTable? Witnesses)> ConformancesOf(SilType type) {
+        var records = new List<(string, SilWitnessTable?)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (type is NominalType nominal) {
+            foreach (var protocol in nominal.Conformances) {
+                if (seen.Add(protocol)) {
+                    records.Add((protocol, FindWitnessTable(type, protocol)));
+                }
+            }
+        }
+
+        foreach (var table in _witnessTableList) {
+            if (table.Conformer == type && seen.Add(table.Protocol)) {
+                records.Add((table.Protocol, table));
+            }
+        }
+
+        return records;
+    }
+
     public T AddType<T>(T type) where T : NominalType {
         Types.Add(type);
         _types[type.Name] = type;
@@ -1697,6 +1792,10 @@ public static class SilBuiltins {
         // Whether the object the address holds is referred to from there
         // alone, and may be changed in place: an existential's box, before
         // a write through it (copy on write).
+        if (MetadataSignature(name, operands, result) is { } metadata) {
+            return metadata;
+        }
+
         if (name == "ref_is_unique") {
             return operands is [AddressType { Pointee: ClassType }] ? new([operands[0]], SilType.Bool) : null;
         }
@@ -1940,6 +2039,54 @@ public static class SilBuiltins {
         "sqrt", "floor", "ceil", "trunc", "next_up", "round", "round_even", "copysign", "minimum", "maximum", "remainder", "fma",
         "scale", "exponent",
     ];
+
+    /// <summary>
+    ///     The builtins over type metadata and witness tables (docs/06 §6.2):
+    ///     what a type's metadata says, its value witnesses applied to a value
+    ///     — a copy, a move, an assignment, a destruction, each through the
+    ///     table as unspecialised code will call them — and the conformance
+    ///     registry's lookups.
+    /// </summary>
+    static Signature? MetadataSignature(string name, IReadOnlyList<SilType> operands, SilType? result) {
+        var metadata = SilType.Metadata;
+        switch (name) {
+            case "metadata_kind" or "metadata_size" or "metadata_alignment" or "metadata_stride" or "metadata_flags" or "metadata_field_count" or "metadata_argument_count"
+                when operands is [var m] && m == metadata:
+                return new([metadata], SilType.Int);
+            case "metadata_name" when operands is [var m] && m == metadata:
+                return new([metadata], SilType.String);
+            case "metadata_field_name" when operands is [var m, var i] && m == metadata && i == SilType.Int:
+                return new([metadata, SilType.Int], SilType.String);
+            case "metadata_field_offset" when operands is [var m, var i] && m == metadata && i == SilType.Int:
+                return new([metadata, SilType.Int], SilType.Int);
+            case "metadata_field_type" or "metadata_argument" when operands is [var m, var i] && m == metadata && i == SilType.Int:
+                return new([metadata, SilType.Int], metadata);
+            case "metadata_equal" when operands is [var a, var b] && a == metadata && b == metadata:
+                return new([metadata, metadata], SilType.Bool);
+            case "value_witness_copy" when operands is [var m, var value] && m == metadata:
+                return new([metadata, value], value);
+            case "value_witness_take" when operands is [var m, var value] && m == metadata:
+                return new([metadata, value], value) { Consumed = [1] };
+            case "value_witness_assign" when operands is [var m, AddressType target, var value] && m == metadata && target.Pointee == value:
+                return new([metadata, target, value], SilType.Unit);
+            case "value_witness_destroy" when operands is [var m, var value] && m == metadata:
+                return new([metadata, value], SilType.Unit) { Consumed = [1] };
+            case "box_metadata" when operands is [ClassType box]:
+                return new([box], metadata);
+            case "witness_table_exists" when operands is [var table] && table == SilType.WitnessTable:
+                return new([SilType.WitnessTable], SilType.Bool);
+        }
+
+        if (name.StartsWith("witness_table:", StringComparison.Ordinal)) {
+            return operands is [var m] && m == metadata ? new([metadata], SilType.WitnessTable) : null;
+        }
+
+        if (name.StartsWith("witness_entry:", StringComparison.Ordinal)) {
+            return operands is [var table] && table == SilType.WitnessTable && result is FunctionType ? new([SilType.WitnessTable], result) : null;
+        }
+
+        return null;
+    }
 
     static Dictionary<string, Signature> Build() {
         var table = new Dictionary<string, Signature>(StringComparer.Ordinal);
@@ -2249,6 +2396,18 @@ public static class SilBuiltins {
         Add("process_change_directory", SilType.Bool, SilType.String);
         Add("process_id", SilType.Int);
         Add("process_executable_path", SilType.String);
+
+        // What a type's metadata says (docs/06 §6.2): MetadataSignature has the rest of the metadata builtins.
+        foreach (var question in new[] { "metadata_kind", "metadata_size", "metadata_alignment", "metadata_stride", "metadata_flags", "metadata_field_count", "metadata_argument_count" }) {
+            Add(question, SilType.Int, SilType.Metadata);
+        }
+
+        Add("metadata_name", SilType.String, SilType.Metadata);
+        Add("metadata_field_name", SilType.String, SilType.Metadata, SilType.Int);
+        Add("metadata_field_offset", SilType.Int, SilType.Metadata, SilType.Int);
+        Add("metadata_field_type", SilType.Metadata, SilType.Metadata, SilType.Int);
+        Add("metadata_argument", SilType.Metadata, SilType.Metadata, SilType.Int);
+        Add("metadata_equal", SilType.Bool, SilType.Metadata, SilType.Metadata);
 
         Add("region_create", SilType.Region);
 

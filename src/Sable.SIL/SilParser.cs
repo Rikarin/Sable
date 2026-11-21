@@ -700,6 +700,8 @@ public sealed class SilParser {
             "Char" => SilType.Char,
             "Object" => SilType.Object,
             "Region" => SilType.Region,
+            "Metadata" => SilType.Metadata,
+            "WitnessTable" => SilType.WitnessTable,
             _ when SilType.Numbers.FirstOrDefault(n => n.ToString() == name) is { } number => number,
             _ => _module.FindType(name) ?? throw Error($"unknown type '{name}'"),
         };
@@ -775,6 +777,10 @@ public sealed class SilParser {
 
             case "string_literal":
                 instruction = new StringLiteralInst(Expect(TokenKind.String, "a string").Text);
+                break;
+
+            case "metadata":
+                instruction = new MetadataInst(ParseType());
                 break;
 
             case "builtin": {

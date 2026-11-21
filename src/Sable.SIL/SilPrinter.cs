@@ -295,6 +295,10 @@ public static class SilPrinter {
                         builder.Append(' ').Append(Quote(literal.Value));
                         break;
 
+                    case MetadataInst metadata:
+                        builder.Append(" $").Append(metadata.Described);
+                        break;
+
                     case FloatLiteralInst literal:
                         builder.Append(" $").Append(literal.Type).Append(", ").Append(literal.Value.ToString("R", CultureInfo.InvariantCulture));
                         break;

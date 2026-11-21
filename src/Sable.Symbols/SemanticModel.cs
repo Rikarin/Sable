@@ -85,6 +85,33 @@ public sealed partial class SemanticModel {
     }
 
     /// <summary>
+    ///     A protocol's property or subscript requirement's accessor, which
+    ///     has no body: the function a witness table's entry for it stands
+    ///     for, which unspecialised generic code calls (#297). Made once,
+    ///     apart from the accessors that have bodies.
+    /// </summary>
+    public FunctionSymbol? GetRequirementAccessor(AccessorSyntax accessor) {
+        if (_requirementAccessors.TryGetValue(accessor, out var known)) {
+            return known;
+        }
+
+        if (accessor.Body is not null || accessor.ExpressionBody is not null) {
+            return null;
+        }
+
+        return accessor.Parent?.Parent switch {
+            FieldDeclarationSyntax declaration when _compilation.GetDeclaredSymbol(declaration) is FieldSymbol { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } field =>
+                AccessorFunction(accessor, field, field.Type, _requirementAccessors),
+            SubscriptDeclarationSyntax { ExpressionBody: null } declaration
+                when _compilation.GetDeclaredSymbol(declaration) is FunctionSymbol { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } subscript =>
+                AccessorFunction(accessor, subscript, subscript.ReturnType, _requirementAccessors),
+            _ => null,
+        };
+    }
+
+    readonly Dictionary<AccessorSyntax, FunctionSymbol> _requirementAccessors = [];
+
+    /// <summary>
     ///     The same symbol, without binding any body: what a unit of a
     ///     separately compiled program needs of another unit's accessors — to
     ///     name them and call them. Binding later gives the same symbol.
@@ -823,8 +850,9 @@ public sealed partial class SemanticModel {
     }
 
     /// <summary>An accessor's function, made the first time it is asked for: binding its body and declaring it share one.</summary>
-    FunctionSymbol AccessorFunction(AccessorSyntax accessor, Symbol owner, TypeSymbol valueType) {
-        if (_accessors.TryGetValue(accessor, out var existing)) {
+    FunctionSymbol AccessorFunction(AccessorSyntax accessor, Symbol owner, TypeSymbol valueType, Dictionary<AccessorSyntax, FunctionSymbol>? made = null) {
+        made ??= _accessors;
+        if (made.TryGetValue(accessor, out var existing)) {
             return existing;
         }
 
@@ -866,7 +894,7 @@ public sealed partial class SemanticModel {
 
         var returnType = isGetter ? valueType : _compilation.Core.Void;
         function.ReturnTypeResolver = () => returnType;
-        _accessors[accessor] = function;
+        made[accessor] = function;
         return function;
     }
 

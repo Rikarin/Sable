@@ -263,7 +263,7 @@ type of the program in turn, from witnesses the compiler picks for each.
 A table's first entries are what an existential can call — requirements
 that mention `Self` have no slot — each taking the existential's box. Then
 come its **generic entries** (`generic_requirements`): every method,
-operator and property getter the protocol itself declares, in declaration
+operator, property getter and setter the protocol itself declares, in declaration
 order, in the convention unspecialised code calls them in — `self` (the
 address of its storage, for a `mutating` one) unless the requirement is
 static, its parameters, the address a result of `Self` is written to, the
@@ -353,8 +353,8 @@ parameter of a type parameter's type, `using generator: inout G`, is the
 address of the caller's storage, seen as `*@opaque(G)`, and a mutating
 requirement changes the value there. A protocol's subscript requirement,
 `self[position]` on a Collection, is read through the table as a method
-of its indices is: the table's generic entries hold its getter, in its
-place among the protocol's requirements (a setter is not one yet).
+of its indices is, and set as a mutating method of its indices and the new value: the table's generic entries hold its getter, and its setter for one `{ get set }`, in its
+place among the protocol's requirements; a settable property's setter is an entry after its getter.
 
 An array of a type parameter's values (`T[]`, `T[>..]`, `T[>..<]`) is a
 buffer of them, as any array is: its object metadata — the element's size,
@@ -458,7 +458,8 @@ where a result goes, and the function throws that address. A caller that
 knows the type passes a slot of it and takes the error from there; one
 whose error is `Never` passes a slot never written; unspecialised code
 that throws the same passes its own caller's place, and so throws on what
-it is thrown untouched. One that throws `any Error` — a `rethrows`
+it is thrown untouched; its own `throw error` of that type writes the error
+there. One that throws `any Error` — a `rethrows`
 function, `rethrows(Failure)` among them, throws that — takes such an
 error in a slot of its own and boxes it as `any Error` with the type's
 **eraser** (`opaque_erase_error`, `sable_opaque_erase_error`): a function
@@ -520,7 +521,7 @@ on its witness alone, so every unit's copy of a table is the same.
 What unspecialised code cannot serve yet — an optional chain through a
 `T?`, a structural union of `T`, a method of a generic class
 a subclass may override or whose fields hold `T` by value, a field of a
-function type in a generic type, a property's setter, a class's initialiser or a struct's that holds `T` by value, `"\(x:?)"`, an async closure's
+function type in a generic type, a class's initialiser or a struct's that holds `T` by value, `"\(x:?)"`, an async closure's
 parameter, or a generator — is still specialised for its type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
 says, for each generic function, which way it went and why. A specialised

@@ -1507,6 +1507,135 @@ public sealed class UnspecialisedGenericTests {
         Assert.Contains(functions, static f => f.StartsWith("Sable.Core.Collection.first", StringComparison.Ordinal));
     }
 
+    const string Setters = """
+        protocol Sized {
+            var size: Int { get set }
+        }
+
+        struct Box: Sized {
+            var size: Int
+        }
+
+        final class Shelf: Sized {
+            var width: Int = 1
+            var size: Int {
+                get { return width }
+                set { width = newValue * 10 }
+            }
+        }
+
+        fn grow<T: Sized>(_ x: inout T) {
+            x.size = x.size + 1
+        }
+
+        fn swapEnds<C: MutableCollection>(_ c: inout C) {
+            let first = c.startIndex
+            var last = first
+            var i = first
+            while i != c.endIndex {
+                last = i
+                i = c.index(after: i)
+            }
+            let kept = c[first]
+            c[first] = c[last]
+            c[last] = kept
+        }
+
+        fn bumped<C: MutableCollection>(_ items: C) -> C where C.Element == Int {
+            var changed = items
+            var i = changed.startIndex
+            while i != changed.endIndex {
+                changed[i] = changed[i] + 1
+                i = changed.index(after: i)
+            }
+            return changed
+        }
+
+        struct Oops: Error {
+            let code: Int
+        }
+
+        @immutable
+        final class Loud: Error {
+            let code: Int
+            init(_ code: Int) { self.code = code }
+            deinit { print("loud \(code) gone") }
+        }
+
+        fn rethrown<E: Error>(_ error: E, _ really: Bool) throws(E) -> Int {
+            if really {
+                throw error
+            }
+            return 1
+        }
+
+        fn sameLength<S: Sequence, U: Sequence>(_ s: S, _ u: U) -> Bool where S.Failure == Never, U.Failure == Never {
+            var mine = s.makeIterator()
+            var theirs = u.makeIterator()
+            while true {
+                let a = mine.next()
+                let b = theirs.next()
+                if a == none || b == none {
+                    return a == none && b == none
+                }
+            }
+        }
+        """;
+
+    /// <summary>
+    ///     A protocol's settable property and subscript are set through the
+    ///     table's entries for their setters, as code that knows the type
+    ///     sets them — a struct's stored field, a class's setter, an array's
+    ///     element; and 'x == none' on an associated type's optional, read
+    ///     through another path, tests its case; and an error of a type
+    ///     parameter's type is thrown where the caller says.
+    /// </summary>
+    [Fact]
+    public void SetterRequirementsNoneTestsAndThrownErrorsAreCompiledOnce() {
+        const string body = """
+                var b = Box { size: 3 }
+                grow(&b)
+                print(b.size)
+                var s = Shelf()
+                grow(&s)
+                print(s.width)
+                var xs = [1, 2, 3]
+                swapEnds(&xs)
+                print(xs)
+                var words = ["a", "b", "c", "d"]
+                swapEnds(&words)
+                print(words)
+                print(bumped([4, 5]))
+                print(sameLength([1, 2], "ab"))
+                print(sameLength([1, 2], "abc"))
+                do {
+                    print(try rethrown(Oops { code: 1 }, false))
+                    print(try rethrown(Oops { code: 2 }, true))
+                } catch {
+                    print("caught \(error.code)")
+                }
+                do {
+                    print(try rethrown(Loud(3), true))
+                } catch {
+                    print("caught \(error.code)")
+                }
+                let good: Outcome<Int, Oops> = .Ok(5)
+                let bad: Outcome<Int, Oops> = .Err(Oops { code: 6 })
+                do {
+                    print(try good.get())
+                    print(try bad.get())
+                } catch {
+                    print("caught \(error.code)")
+                }
+            """;
+        Prints("4\n20\n[3, 2, 1]\n[\"d\", \"b\", \"c\", \"a\"]\n[5, 6]\ntrue\nfalse\n1\ncaught 2\ncaught 3\n5\ncaught 6\nloud 3 gone\n", Setters, body);
+        var functions = Unspecialised(Setters, body);
+        Assert.Contains(functions, static f => f.StartsWith("Sable.Core.Outcome.get", StringComparison.Ordinal));
+        foreach (var name in new[] { "Test.grow", "Test.swapEnds", "Test.bumped", "Test.sameLength", "Test.rethrown" }) {
+            Assert.Contains($"{name}$generic", functions);
+        }
+    }
+
     /// <summary>
     ///     An async program's prints, both ways, on one thread — the
     ///     interleaving the interpreter's — and its own generic functions compiled once.

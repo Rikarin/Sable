@@ -1356,7 +1356,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             // A fresh array of the constants, room for them alone, as the
             // native constant has.
             case "array_literal" or "array_literal_stack":
-                return Allocate(new HeapArray((ArrayType)builtin.Type, new List<object?>(operands)));
+                return Allocate(new HeapArray((ArrayType)Concrete(builtin.Type), new List<object?>(operands)));
 
             // The whole of an array, viewed: the buffer shared, not copied.
             case "slice_of": {
@@ -2636,7 +2636,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
     /// <summary>The array at an address, made unique — copied if it is shared — so that it can be changed.</summary>
     HeapArray Unique(SilValue addressValue, IReference address) {
-        var type = (ArrayType)((AddressType)addressValue.Type).Pointee;
+        var type = (ArrayType)Concrete(((AddressType)addressValue.Type).Pointee);
         if (address.Peek() is not HeapArray array) {
             var fresh = Allocate(new HeapArray(type, []));
             address.Set(fresh);

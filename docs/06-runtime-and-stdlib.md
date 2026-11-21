@@ -323,10 +323,27 @@ The interpreter runs the same SIL: an opaque value is held as a value of the
 type it is, and copied and destroyed as the metadata the running function
 was given says.
 
-What unspecialised code cannot serve yet — a `T[]`, a `T?`, a tuple of `T`,
-a closure over one, an associated type, a method of a generic type, an
-async function or a generator — is still specialised for its type arguments
-in the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
+A protocol extension's member is generic over `Self`: it takes `Self`'s
+metadata and the protocol's table, and `self` where its caller holds it.
+
+An array of a type parameter's values (`T[]`, `T[>..]`, `T[>..<]`) is a
+buffer of them, as any array is: its object metadata — the element's size,
+and its copy and destroy — is made at run time from the element's type
+metadata (`sable_array_metadata`), once per element type, and the
+runtime's array code copies and destroys such elements through the
+element's value witnesses. Such an array can be made, indexed, walked with
+`for`, appended to, popped, and passed to and returned from code that knows
+the type, which sees it as the array it is. Its type's own metadata, `[T]`,
+is made the same way (`sable_array_type`), so that an array of one can be a
+type argument: **polymorphic recursion** — `nest<T>` calling `nest([x])` —
+is one function, where a specialised build makes it the one instance over
+existentials (its arrays then hold `any Any`).
+
+What unspecialised code cannot serve yet — a `T?`, a tuple of `T`, a slice
+of them, a closure over one, an associated type, a member of a generic
+type, a `where` clause, an accessor or initialiser, `"\(x:?)"`, an async
+function or a generator — is still specialised for its type arguments in
+the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
 says, for each generic function, which way it went and why. A specialised
 build (the default) makes neither the generic entries nor the describers.
 

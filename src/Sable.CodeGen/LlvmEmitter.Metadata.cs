@@ -174,8 +174,11 @@ public sealed partial class LlvmEmitter {
     int _witnessCaches;
 
     /// <summary>A new call's cache of the registry's answer (<c>sable_witness_table_cached</c>): one word, empty at first.</summary>
-    internal string WitnessCache() {
-        var name = $"@\"sable.witness_cache.{_witnessCaches++}\"";
+    internal string WitnessCache() => RuntimeCache();
+
+    /// <summary>A word a call keeps what the runtime made or found the first time in: empty at first.</summary>
+    internal string RuntimeCache() {
+        var name = $"@\"sable.cache.{_witnessCaches++}\"";
         _globals.Append($"{name} = internal global ptr null\n");
         return name;
     }
@@ -328,6 +331,8 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_witness_table(ptr, ptr)
                                         declare void @sable_register_witness_table(ptr, ptr)
                                         declare ptr @sable_witness_table_cached(ptr, ptr, ptr)
+                                        declare ptr @sable_array_metadata(ptr, ptr)
+                                        declare ptr @sable_array_type(ptr, ptr)
                                         declare ptr @sable_opaque_type(ptr, ptr)
                                         declare ptr @sable_opaque_describe(ptr, ptr)
                                         declare void @sable_register_describer(ptr, ptr)
@@ -487,6 +492,13 @@ public sealed partial class LlvmEmitter {
                 // Unspecialised code's values (#297): an address seen as another
                 // type is the same address, and a value is the address of its buffer.
                 case "opaque_cast" or "opaque_address":
+                    _names[builtin] = operands[0];
+                    return true;
+                // The metadata of an array of the type, made at run time.
+                case "metadata_array":
+                    Line($"{Result()} = call ptr @sable_array_type(ptr {module.RuntimeCache()}, ptr {operands[0]})");
+                    return true;
+                case "opaque_borrow_as" or "opaque_take_as":
                     _names[builtin] = operands[0];
                     return true;
                 case "opaque_type":

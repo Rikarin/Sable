@@ -1810,9 +1810,15 @@ public sealed partial class SilGen {
     ///     every type begun while lowering it is taken back with it.
     /// </remarks>
     internal SilType? Lower(TypeSymbol type) {
-        // In unspecialised code, a value of a type parameter's type is held indirectly (#297).
+        // In unspecialised code, a value of a type parameter's type is held
+        // indirectly (#297), and an array of them is a buffer of such values:
+        // neither kept, as the type parameter is one only while its code is lowered.
         if (IsOpaque(type)) {
             return new OpaqueType(((TypeParameterSymbol)type).Name);
+        }
+
+        if (_opaque.Count > 0 && IsArrayOf(type, _opaque)) {
+            return Lower(((ArrayTypeSymbol)type).ElementType) is { } opaqueElement ? new ArrayType(opaqueElement) : null;
         }
 
         if (_types.TryGetValue(type, out var cached)) {
@@ -10312,6 +10318,19 @@ public sealed partial class SilGen {
                     continue;
                 }
 
+                // An array of them: the same buffer, seen as the callee's.
+                if (genericShape is not null && i < callee.Parameters.Length && IsArrayOf(callee.Parameters[i].Type, genericShape.Parameters)
+                    && type.Parameters[arguments.Count] is var arrayParameter) {
+                    if (Borrow(call.Arguments[i]) is not { } array) {
+                        EndAll(borrows);
+                        return null;
+                    }
+
+                    borrows.Add(array);
+                    arguments.Add(array.Type == arrayParameter ? array : Emit(new BuiltinInst("opaque_borrow_as", arrayParameter, array)));
+                    continue;
+                }
+
                 // A 'T&' argument of inline bytes is a view of them.
                 if (i < callee.Parameters.Length && callee.Parameters[i].IsByReference
                     && arguments.Count < type.Parameters.Length && type.Parameters[arguments.Count] is InlinePointerType) {
@@ -10435,7 +10454,17 @@ public sealed partial class SilGen {
                 cannotThrow: callee.IsRethrows && RethrownBy(call) is null
                              && (callee.RethrownAlso is not { } also || ThrowsNothing(Sub(call.Substitution.Apply(also)))),
                 hopBack: back);
-            return genericOut is { } written ? TakeOut(invoked, written.Slot) : invoked;
+            if (genericOut is { } written) {
+                return TakeOut(invoked, written.Slot);
+            }
+
+            // A result of an array of them, seen as the array it is here.
+            if (genericShape is not null && invoked is { Type: ArrayType } arrayResult && IsArrayOf(callee.ReturnType, genericShape.Parameters)
+                && LowerType(call.Type) is { } wanted && wanted != arrayResult.Type) {
+                return Emit(new BuiltinInst("opaque_take_as", wanted, arrayResult));
+            }
+
+            return invoked;
         }
 
         /// <summary>

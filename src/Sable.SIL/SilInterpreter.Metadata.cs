@@ -46,6 +46,19 @@ public sealed partial class SilInterpreter {
             ? model.Type
             : throw new SilTrap($"no metadata for {opaque} here");
 
+    /// <summary>
+    ///     A type as the function running now has it: an opaque type, or an
+    ///     array of them, as the metadata it was given says — what an array
+    ///     made in unspecialised code holds, so that it is destroyed as that
+    ///     wherever it goes.
+    /// </summary>
+    SilType Concrete(SilType type) =>
+        type switch {
+            OpaqueType opaque => OpaqueTypeOf(opaque),
+            ArrayType { Element: var element } when SilType.MentionsOpaque(element) => new ArrayType(Concrete(element)),
+            _ => type,
+        };
+
     /// <summary>A value's storage seen as itself: what <c>opaque_address</c> gives, read-only.</summary>
     sealed class Held(object? value) : IReference {
         public object? Get() => value ?? throw new SilTrap("load from uninitialised storage");
@@ -247,8 +260,11 @@ public sealed partial class SilInterpreter {
             // A type parameter's value is held as the value of the type it
             // is: an address seen as another type is the same storage, and a
             // value's own storage is the value.
-            case "opaque_cast":
+            case "opaque_cast" or "opaque_borrow_as" or "opaque_take_as":
                 result = operands[0];
+                return true;
+            case "metadata_array":
+                result = MetadataOf(new ArrayType(((MetadataModel)operands[0]!).Type));
                 return true;
             case "opaque_address":
                 result = new Held(operands[0]);

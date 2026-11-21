@@ -192,20 +192,20 @@ public sealed class UnspecialisedLoweringTests {
 
     /// <summary>
     ///     A function whose type parameter is used in a way unspecialised
-    ///     code cannot serve yet — in an array — is still specialised, for
+    ///     code cannot serve yet — in a tuple — is still specialised, for
     ///     each type it is used with, in a program that is otherwise unspecialised.
     /// </summary>
     [Fact]
     public void WhatUnspecialisedCodeCannotServeIsStillSpecialised() {
         var module = Lower("""
-                           fn first<T>(_ items: T[]) -> T { return items[0] }
+                           fn first<T>(_ pair: (T, T)) -> T { return pair.0 }
 
                            fn pass<T>(_ value: T) -> T { return value }
 
                            fn main() {
-                               print(first([1, 2]))
-                               print(first(["a"]))
-                               print(pass(first([3])))
+                               print(first((1, 2)))
+                               print(first(("a", "b")))
+                               print(pass(first((3, 4))))
                            }
                            """);
         Assert.NotNull(module.Find("M.pass$generic"));
@@ -273,5 +273,33 @@ public sealed class UnspecialisedLoweringTests {
         var witnesses = table.GenericEntries.Select(static e => e.Function).OfType<string>().ToList();
         Assert.Equal(witnesses.Count, witnesses.Distinct().Count());
         Assert.Equal("13\n7\n0.75\n", Run(module));
+    }
+
+    /// <summary>
+    ///     An array of a type parameter's values is an array of opaque values,
+    ///     passed as any array is; an array of one passed as a type argument —
+    ///     polymorphic recursion — has its metadata made at run time.
+    /// </summary>
+    [Fact]
+    public void AnArrayOfATypeParametersValuesIsABufferOfThem() {
+        var module = Lower("""
+                           fn twice<T>(_ value: T) -> T[>..] { return [value, value] }
+
+                           fn nest<T>(_ value: T, _ depth: Int) -> Int {
+                               if depth == 0 {
+                                   return 0
+                               }
+                               return 1 + nest([value], depth - 1)
+                           }
+
+                           fn main() {
+                               print(twice("a").count)
+                               print(nest(1, 3))
+                           }
+                           """);
+        Assert.Equal("(@opaque(T), Metadata) -> [@opaque(T)]", module.Find("M.twice$generic")!.Type.ToString());
+        Assert.Contains(Instructions(module.Find("M.nest$generic")!), static i => i is BuiltinInst { Name: "metadata_array" });
+        Assert.Equal("2\n3\n", Run(module));
+        Assert.Equal("2\n3\n", Run(SilParser.Parse(SilPrinter.Print(module))));
     }
 }

@@ -12,6 +12,151 @@ typedef struct SableArray {
     char *elements;
 } SableArray;
 
+// ---- Arrays of a type known only at run time (#297) -------------------------
+
+// An array of a type parameter's values, made by unspecialised generic code:
+// its object metadata is made at run time from the element's type metadata,
+// and its elements are copied, destroyed and visited by the element's value
+// witnesses. The copy, destroy and visit entries name the functions below,
+// which stand for that: the runtime's array code calls the witnesses instead
+// (element_copy, element_destroy, element_visit), and nothing else calls them.
+// With it, the array type's own metadata, [T] — an array's argument is its
+// element — for generic code to pass on as a type argument. Each is made once
+// per element type, kept for the program's life, and found again by it.
+typedef struct SableArrayInstance {
+    SableMetadata elements;            // the array object's metadata
+    const SableTypeMetadata *element;  // the element's, which the witnesses take
+    SableTypeMetadata type;            // the array type's, [T]
+    const SableTypeMetadata *argument; // its one type argument: the element
+    struct SableArrayInstance *next;
+} SableArrayInstance;
+
+static void witnessed_element_copy(void *destination, const void *source) {
+    (void)destination;
+    (void)source;
+    sable_trap("an element copied without its type");
+}
+
+static void witnessed_element_destroy(void *element) {
+    (void)element;
+    sable_trap("an element destroyed without its type");
+}
+
+static void witnessed_element_visit(void *element) {
+    (void)element;
+    sable_trap("an element visited without its type");
+}
+
+static const SableTypeMetadata *witnessed_element(const SableMetadata *type) {
+    return ((const SableArrayInstance *)(const void *)type)->element;
+}
+
+static void element_copy(const SableMetadata *type, void *destination, const void *source) {
+    if (type->copy_element == witnessed_element_copy) {
+        const SableTypeMetadata *element = witnessed_element(type);
+        element->witnesses->initialize_with_copy(destination, (void *)source, element);
+    } else if (type->copy_element != NULL) {
+        type->copy_element(destination, source);
+    } else {
+        memcpy(destination, source, (size_t)type->element_size);
+    }
+}
+
+static void element_destroy(const SableMetadata *type, void *element) {
+    if (type->destroy_element == witnessed_element_destroy) {
+        const SableTypeMetadata *of = witnessed_element(type);
+        of->witnesses->destroy(element, of);
+    } else if (type->destroy_element != NULL) {
+        type->destroy_element(element);
+    }
+}
+
+static void element_visit(const SableMetadata *type, void *element) {
+    if (type->visit == witnessed_element_visit) {
+        const SableTypeMetadata *of = witnessed_element(type);
+        of->witnesses->visit(element, of);
+    } else if (type->visit != NULL) {
+        type->visit(element);
+    }
+}
+
+void sable_array_destroy(void *pointer);
+extern const SableValueWitnesses sable_reference_witnesses;
+
+static SableArrayInstance *array_instances;
+
+static SableArrayInstance *array_instance(const SableTypeMetadata *element) {
+    for (SableArrayInstance *at = __atomic_load_n(&array_instances, __ATOMIC_ACQUIRE); at != NULL; at = at->next) {
+        if (at->element == element) {
+            return at;
+        }
+    }
+
+    SableArrayInstance *made = calloc(1, sizeof *made);
+    size_t length = element->name == NULL ? 0 : strlen(element->name);
+    char *name = malloc(length + 3);
+    if (made == NULL || name == NULL) {
+        sable_trap("out of memory");
+    }
+
+    name[0] = '[';
+    memcpy(name + 1, element->name == NULL ? "" : element->name, length);
+    name[length + 1] = ']';
+    name[length + 2] = 0;
+
+    bool trivial = (element->flags & SABLE_TYPE_TRIVIAL) != 0;
+    made->element = element;
+    made->elements.destroy = sable_array_destroy;
+    made->elements.name = name;
+    made->elements.element_size = element->stride;
+    made->elements.copy_element = trivial ? NULL : witnessed_element_copy;
+    made->elements.destroy_element = trivial ? NULL : witnessed_element_destroy;
+    made->elements.size = (int64_t)sizeof(SableArray);
+    made->elements.alignment = (int64_t)_Alignof(SableArray);
+    made->elements.visit = trivial ? NULL : witnessed_element_visit;
+    made->argument = element;
+    made->type.kind = SABLE_KIND_ARRAY;
+    made->type.name = name;
+    made->type.size = (int64_t)sizeof(void *);
+    made->type.alignment = (int64_t)_Alignof(void *);
+    made->type.stride = (int64_t)sizeof(void *);
+    made->type.witnesses = &sable_reference_witnesses;
+    made->type.argument_count = 1;
+    made->type.arguments = &made->argument;
+
+    // Another thread may have made one meanwhile: either serves, and both are kept.
+    made->next = __atomic_load_n(&array_instances, __ATOMIC_ACQUIRE);
+    while (!__atomic_compare_exchange_n(&array_instances, &made->next, made, true, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+    }
+
+    return made;
+}
+
+// A call's cache of the instance for the element it was first asked about.
+static SableArrayInstance *array_instance_cached(SableArrayInstance **cache, const SableTypeMetadata *element) {
+    SableArrayInstance *known = __atomic_load_n(cache, __ATOMIC_ACQUIRE);
+    if (known != NULL && known->element == element) {
+        return known;
+    }
+
+    SableArrayInstance *found = array_instance(element);
+    if (known == NULL) {
+        __atomic_store_n(cache, found, __ATOMIC_RELEASE);
+    }
+
+    return found;
+}
+
+// The object metadata of an array of the element type: what array code is given.
+const SableMetadata *sable_array_metadata(SableArrayInstance **cache, const SableTypeMetadata *element) {
+    return &array_instance_cached(cache, element)->elements;
+}
+
+// The type metadata of an array of the element type, [T].
+const SableTypeMetadata *sable_array_type(SableArrayInstance **cache, const SableTypeMetadata *element) {
+    return &array_instance_cached(cache, element)->type;
+}
+
 // An array literal that does not escape its frame (docs/04 §3.7) is made
 // there whole: the header, and its elements after it at this offset, which
 // the compiler's code stores. Counted as any array is, its last release
@@ -54,7 +199,7 @@ void sable_array_destroy(void *pointer) {
     const SableMetadata *type = array->header.type;
     if (type->destroy_element != NULL) {
         for (int64_t i = 0; i < array->count; i++) {
-            type->destroy_element(array->elements + i * type->element_size);
+            element_destroy(type, array->elements + i * type->element_size);
         }
     }
 
@@ -89,11 +234,7 @@ static SableArray *unique(SableArray **slot, const SableMetadata *type, int64_t 
         copy->capacity = array->count + room;
         copy->elements = buffer_alloc(copy->capacity * size);
         for (int64_t i = 0; i < array->count; i++) {
-            if (type->copy_element != NULL) {
-                type->copy_element(copy->elements + i * size, array->elements + i * size);
-            } else {
-                memcpy(copy->elements + i * size, array->elements + i * size, (size_t)size);
-            }
+            element_copy(type, copy->elements + i * size, array->elements + i * size);
         }
 
         copy->count = array->count;

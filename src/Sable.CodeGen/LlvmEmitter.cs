@@ -1556,6 +1556,65 @@ public sealed partial class LlvmEmitter {
             return buffer;
         }
 
+        /// <summary>The stride of an opaque type's values in an array, read from its metadata where the function starts.</summary>
+        string OpaqueStride(OpaqueType type) {
+            if (!_opaqueStrides.TryGetValue(type.Name, out var stride)) {
+                var at = Fresh();
+                stride = Fresh();
+                _entryAllocas.Append($"  {at} = getelementptr inbounds %SableTypeMetadata, ptr {OpaqueMetadata(type)}, i32 0, i32 {MetadataStrideField}\n")
+                    .Append($"  {stride} = load i64, ptr {at}\n");
+                _opaqueStrides[type.Name] = stride;
+            }
+
+            return stride;
+        }
+
+        readonly Dictionary<string, string> _opaqueStrides = new(StringComparer.Ordinal);
+
+        readonly Dictionary<string, string> _opaqueArrays = new(StringComparer.Ordinal);
+
+        /// <summary>
+        ///     An array's object metadata: a constant for a type known here;
+        ///     for an opaque element, the runtime's, made from the element's
+        ///     metadata the first time any code asks (<c>sable_array_metadata</c>),
+        ///     found where the function starts.
+        /// </summary>
+        string ArrayMetadataOf(ArrayType type) {
+            if (type.Element is not OpaqueType element) {
+                return module.ArrayMetadata(type);
+            }
+
+            if (!_opaqueArrays.TryGetValue(element.Name, out var metadata)) {
+                var cache = module.RuntimeCache();
+                var of = OpaqueMetadata(element);
+                metadata = Fresh();
+                _entryAllocas.Append($"  {metadata} = call ptr @sable_array_metadata(ptr {cache}, ptr {of})\n");
+                _opaqueArrays[element.Name] = metadata;
+            }
+
+            return metadata;
+        }
+
+        /// <summary>The address of an element of an array's buffer, by its index: by the stride, for an opaque one.</summary>
+        string ElementAt(SilType element, string elements, string index) {
+            if (element is not OpaqueType opaque) {
+                return $"getelementptr inbounds {Type(element)}, ptr {elements}, i64 {index}";
+            }
+
+            var offset = Fresh();
+            Line($"{offset} = mul nsw i64 {index}, {OpaqueStride(opaque)}");
+            return $"getelementptr inbounds i8, ptr {elements}, i64 {offset}";
+        }
+
+        /// <summary>A value stored into an element's place: an opaque one moved there.</summary>
+        void StoreElement(SilType element, string value, string at) {
+            if (element is OpaqueType opaque) {
+                OpaqueMove(opaque, at, value);
+            } else {
+                Line($"store {Type(element)} {value}, ptr {at}, !tbaa {TbaaElement}");
+            }
+        }
+
         /// <summary>An opaque value moved from one place to another: its bits, as every type's take is.</summary>
         void OpaqueMove(OpaqueType type, string destination, string source) =>
             Line($"call void @llvm.memmove.p0.p0.i64(ptr {destination}, ptr {source}, i64 {OpaqueSize(type)}, i1 false)");
@@ -3670,7 +3729,7 @@ public sealed partial class LlvmEmitter {
 
                 // An array literal that does not escape its frame: made there,
                 // header and elements, each element stored where it goes.
-                case "array_literal_stack": {
+                case "array_literal_stack" when builtin.Type is not ArrayType { Element: OpaqueType }: {
                     var arrayType = (ArrayType)builtin.Type;
                     var layout = $"{{ [48 x i8], [{operands.Length} x {Type(arrayType.Element)}] }}";
                     var memory = Scratch(layout, HeapAlign);
@@ -3684,14 +3743,15 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
-                // Elements that are not all literals: appended, one by one.
-                case "array_literal": {
+                // Elements that are not all literals: appended, one by one;
+                // an opaque type's always, its size known only at run time.
+                case "array_literal" or "array_literal_stack": {
                     var arrayType = (ArrayType)builtin.Type;
                     var slot = Scratch("ptr");
                     Line($"store ptr null, ptr {slot}");
                     for (var i = 0; i < operands.Length; i++) {
                         var element = AppendSlot(slot, arrayType);
-                        Line($"store {Type(arrayType.Element)} {operands[i]}, ptr {element}, !tbaa {TbaaElement}");
+                        StoreElement(arrayType.Element, operands[i], element);
                     }
 
                     Line($"{Result()} = load ptr, ptr {slot}");
@@ -3709,6 +3769,19 @@ public sealed partial class LlvmEmitter {
                     var element = builtin.Operands[0].Type is SliceType viewed
                         ? SliceElement(operands[0], operands[1], viewed, check: !builtin.InBounds)
                         : InlineElement(operands[0], operands[1], ((ArrayType)builtin.Operands[0].Type).Element, check: !builtin.InBounds);
+                    // An opaque element: borrowed where it is, or copied into a buffer of its own.
+                    if (builtin.Type is OpaqueType opaqueElement) {
+                        if (builtin.Name == "array_get_borrowed") {
+                            _names[builtin] = element;
+                        } else {
+                            var buffer = OpaqueBuffer(opaqueElement);
+                            _names[builtin] = buffer;
+                            OpaqueWitness(opaqueElement, CopyWitness, buffer, element);
+                        }
+
+                        return;
+                    }
+
                     var value = Result();
                     Line($"{value} = load {Type(builtin.Type)}, ptr {element}, !tbaa {TbaaElement}");
                     if (builtin.Name == "array_get") {
@@ -3721,7 +3794,7 @@ public sealed partial class LlvmEmitter {
                 case "array_append": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     var element = AppendSlot(operands[0], arrayType);
-                    Line($"store {Type(arrayType.Element)} {operands[1]}, ptr {element}, !tbaa {TbaaElement}");
+                    StoreElement(arrayType.Element, operands[1], element);
                     return;
                 }
 
@@ -3762,7 +3835,7 @@ public sealed partial class LlvmEmitter {
 
                 case "array_make_unique": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
-                    Line($"call void @sable_array_make_unique(ptr {operands[0]}, ptr {module.ArrayMetadata(arrayType)})");
+                    Line($"call void @sable_array_make_unique(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)})");
                     return;
                 }
 
@@ -3773,6 +3846,11 @@ public sealed partial class LlvmEmitter {
                     var array = Fresh();
                     Line($"{array} = load ptr, ptr {operands[0]}");
                     var element = InlineElement(array, operands[1], arrayType.Element, check: !builtin.InBounds);
+                    if (arrayType.Element is OpaqueType replacedUnique) {
+                        OpaqueWitness(replacedUnique, AssignWithTakeWitness, element, operands[2]);
+                        return;
+                    }
+
                     var old = Fresh();
                     Line($"{old} = load {elementType}, ptr {element}, !tbaa {TbaaElement}");
                     Line($"store {elementType} {operands[2]}, ptr {element}, !tbaa {TbaaElement}");
@@ -3784,6 +3862,11 @@ public sealed partial class LlvmEmitter {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     var elementType = Type(arrayType.Element);
                     var element = MutableElement(operands[0], operands[1], arrayType);
+                    if (arrayType.Element is OpaqueType replaced) {
+                        OpaqueWitness(replaced, AssignWithTakeWitness, element, operands[2]);
+                        return;
+                    }
+
                     var old = Fresh();
                     Line($"{old} = load {elementType}, ptr {element}");
                     Line($"store {elementType} {operands[2]}, ptr {element}");
@@ -3812,13 +3895,20 @@ public sealed partial class LlvmEmitter {
 
                 case "array_reserve": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
-                    Line($"call void @sable_array_reserve(ptr {operands[0]}, ptr {module.ArrayMetadata(arrayType)}, i64 {operands[1]})");
+                    Line($"call void @sable_array_reserve(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, i64 {operands[1]})");
                     return;
                 }
 
                 case "array_remove_last": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     var element = LastSlot(operands[0], arrayType);
+                    if (arrayType.Element is OpaqueType removed) {
+                        var buffer = OpaqueBuffer(removed);
+                        _names[builtin] = buffer;
+                        OpaqueMove(removed, buffer, element);
+                        return;
+                    }
+
                     Line($"{Result()} = load {Type(arrayType.Element)}, ptr {element}");
                     return;
                 }
@@ -4896,14 +4986,14 @@ public sealed partial class LlvmEmitter {
             var grown = Fresh();
             Line($"{elementsField} = getelementptr inbounds %SableArrayHeader, ptr {array}, i32 0, i32 3");
             Line($"{elements} = load ptr, ptr {elementsField}, !tbaa {TbaaHeader}");
-            Line($"{direct} = getelementptr inbounds {Type(arrayType.Element)}, ptr {elements}, i64 {count}");
+            Line($"{direct} = {ElementAt(arrayType.Element, elements, count)}");
             Line($"{grown} = add nuw i64 {count}, 1");
             Line($"store i64 {grown}, ptr {countField}, !tbaa {TbaaHeader}");
             Line($"br label %{done}");
 
             Continue(slow);
             var called = Fresh();
-            Line($"{called} = call ptr @sable_array_append_slot(ptr {slot}, ptr {module.ArrayMetadata(arrayType)})");
+            Line($"{called} = call ptr @sable_array_append_slot(ptr {slot}, ptr {ArrayMetadataOf(arrayType)})");
             Line($"br label %{done}");
 
             Continue(done);
@@ -4956,13 +5046,13 @@ public sealed partial class LlvmEmitter {
             Line($"{elements} = load ptr, ptr {elementsField}, !tbaa {TbaaHeader}");
             Line($"{lowered} = sub nsw i64 {count}, 1");
             Line($"store i64 {lowered}, ptr {countField}, !tbaa {TbaaHeader}");
-            Line($"{direct} = getelementptr inbounds {Type(arrayType.Element)}, ptr {elements}, i64 {lowered}");
+            Line($"{direct} = {ElementAt(arrayType.Element, elements, lowered)}");
             Line($"br label %{done}");
 
             Continue(slow);
             var called = Fresh();
             SiteForRuntime();
-            Line($"{called} = call ptr @sable_array_remove_last(ptr {slot}, ptr {module.ArrayMetadata(arrayType)})");
+            Line($"{called} = call ptr @sable_array_remove_last(ptr {slot}, ptr {ArrayMetadataOf(arrayType)})");
             Line($"br label %{done}");
 
             Continue(done);
@@ -5043,7 +5133,7 @@ public sealed partial class LlvmEmitter {
             var element = Fresh();
             Line($"{elementsField} = getelementptr inbounds %SableArrayHeader, ptr {array}, i32 0, i32 3");
             Line($"{elements} = load ptr, ptr {elementsField}, !tbaa {TbaaHeader}");
-            Line($"{element} = getelementptr inbounds {Type(elementType)}, ptr {elements}, i64 {index}");
+            Line($"{element} = {ElementAt(elementType, elements, index)}");
             return element;
         }
 
@@ -5086,13 +5176,13 @@ public sealed partial class LlvmEmitter {
             var direct = Fresh();
             Line($"{elementsField} = getelementptr inbounds %SableArrayHeader, ptr {array}, i32 0, i32 3");
             Line($"{elements} = load ptr, ptr {elementsField}, !tbaa {TbaaHeader}");
-            Line($"{direct} = getelementptr inbounds {Type(arrayType.Element)}, ptr {elements}, i64 {index}");
+            Line($"{direct} = {ElementAt(arrayType.Element, elements, index)}");
             Line($"br label %{done}");
 
             Continue(slow);
             var copied = Fresh();
             SiteForRuntime();
-            Line($"{copied} = call ptr @sable_array_mutable_element(ptr {slot}, ptr {module.ArrayMetadata(arrayType)}, i64 {index})");
+            Line($"{copied} = call ptr @sable_array_mutable_element(ptr {slot}, ptr {ArrayMetadataOf(arrayType)}, i64 {index})");
             Line($"br label %{done}");
 
             Continue(done);

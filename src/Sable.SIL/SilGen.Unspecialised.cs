@@ -193,6 +193,16 @@ public sealed partial class SilGen {
         return found;
     }
 
+    /// <summary>
+    ///     True for an array — <c>T[]</c>, <c>T[&gt;..]</c> or <c>T[&gt;..&lt;]</c>, a
+    ///     buffer whatever its elements — of one of the type parameters, or of
+    ///     such arrays: what unspecialised code holds as an array of opaque
+    ///     values, with the array's metadata made at run time from its element's.
+    /// </summary>
+    internal static bool IsArrayOf(TypeSymbol type, IReadOnlyCollection<TypeParameterSymbol> parameters) =>
+        type is ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed, ElementType: var element }
+        && (element is TypeParameterSymbol parameter && parameters.Contains(parameter) || IsArrayOf(element, parameters));
+
     /// <summary>True when the type is one of <paramref name="parameters" />, or is made of one.</summary>
     internal static bool Mentions(TypeSymbol type, IReadOnlyCollection<TypeParameterSymbol> parameters) =>
         parameters.Count > 0 && (type switch {
@@ -289,7 +299,8 @@ public sealed partial class SilGen {
         // A protocol's associated types, which its extension names bare, are not passed yet.
         var associated = owner is { TypeKind: TypeKind.Protocol } ? ProtocolClosure([owner]).SelectMany(static p => p.AssociatedTypes).ToList() : [];
         bool Passable(TypeSymbol type) =>
-            !Mentions(type, associated) && (!Mentions(type, own) || type is TypeParameterSymbol || type is MetatypeTypeSymbol { InstanceType: TypeParameterSymbol });
+            !Mentions(type, associated) && (!Mentions(type, own) || type is TypeParameterSymbol || type is MetatypeTypeSymbol { InstanceType: TypeParameterSymbol }
+                                            || IsArrayOf(type, own));
 
         foreach (var parameter in symbol.Parameters) {
             if (!Passable(parameter.Type)
@@ -347,7 +358,9 @@ public sealed partial class SilGen {
         bool IsOwn(TypeSymbol type) => type is TypeParameterSymbol parameter && _own.Contains(parameter);
 
         /// <summary>A type a value may have here: a type parameter, its metatype, or one that mentions none.</summary>
-        bool Simple(TypeSymbol type) => !Mentions(type) || IsOwn(type) || type is MetatypeTypeSymbol { InstanceType: var instance } && IsOwn(instance);
+        bool Simple(TypeSymbol type) => !Mentions(type) || IsOwn(type) || type is MetatypeTypeSymbol { InstanceType: var instance } && IsOwn(instance) || IsOwnArray(type);
+
+        bool IsOwnArray(TypeSymbol type) => IsArrayOf(type, _own);
 
         /// <summary>The innermost node that kept the body from being unspecialised, for SABLE_GENERICS_TRACE.</summary>
         public BoundNode? Refused { get; private set; }
@@ -371,10 +384,11 @@ public sealed partial class SilGen {
             }
 
             switch (node) {
-                case BoundLocalDeclaration declaration when Mentions(declaration.Local.Type) && (inClosure || !IsOwn(declaration.Local.Type)):
+                case BoundLocalDeclaration declaration when Mentions(declaration.Local.Type) && (inClosure || !IsOwn(declaration.Local.Type) && !IsOwnArray(declaration.Local.Type)):
                 case BoundPatternDeclaration pattern when Descendants(pattern).Any(n => n is BoundBindingPattern binding && Mentions(binding.Local.Type)):
                 case BoundTypeTest test when Mentions(test.TestedType):
-                case BoundForEach { Element: { } element } when Mentions(element.Type):
+                case BoundForEach { Element: { } element } loop when Mentions(element.Type)
+                                                                    && (inClosure || !IsOwnArray(loop.Sequence.Type) || !Simple(element.Type) || loop.Sequence is not (BoundLocalAccess or BoundParameterAccess)):
                     return false;
                 case BoundCall call when CallMentions(call) && (inClosure || !CallAllowed(call)):
                     return false;
@@ -417,6 +431,8 @@ public sealed partial class SilGen {
                 BoundBinaryOperator { Method: not null } or BoundUnaryOperator { Method: not null } => true,
                 BoundFieldAccess access => PropertyAllowed(access),
                 BoundConversion { ConversionKind: ConversionKind.Identity } conversion => conversion.Type.Equals(conversion.Operand.Type),
+                BoundArray array => IsOwnArray(array.Type),
+                BoundIndexAccess { Subscript: null, Indices: [_] } index => IsOwnArray(index.Receiver.Type),
                 _ => false,
             };
 
@@ -429,6 +445,9 @@ public sealed partial class SilGen {
                 BoundFieldAccess access => ReferenceEquals(child, access.Receiver) && PropertyAllowed(access),
                 BoundConditional conditional => !ReferenceEquals(child, conditional.Condition),
                 BoundConversion { ConversionKind: ConversionKind.Identity } => true,
+                BoundArray => true,
+                BoundIndexAccess index => ReferenceEquals(child, index.Receiver),
+                BoundForEach loop => ReferenceEquals(child, loop.Sequence),
                 // Not inside a protocol's own 'debugDescription' (Error's
                 // '"\(self)"'): a describer would call it back.
                 BoundInterpolatedString interpolated => interpolated.Parts.IndexOf(child) is var at and >= 0 && interpolated.Formats[at] is null && !DescribesSelf,
@@ -451,6 +470,11 @@ public sealed partial class SilGen {
 
             if (callee.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol }) {
                 return RequirementAllowed(call);
+            }
+
+            // An array's own builtins, on an array of a type parameter's values held in a local.
+            if (callee.Builtin is "array_append" or "array_remove_last" && call.Receiver is { } array && IsOwnArray(array.Type)) {
+                return call.Receiver is BoundLocalAccess { Local.IsMutable: true } && call.Arguments.All(a => Simple(a.Type));
             }
 
             if (!IsGeneric(callee) || generator.UnspecialisedShape(callee) is not { } calleeShape) {
@@ -482,6 +506,17 @@ public sealed partial class SilGen {
                 }
 
                 if (!Mentions(bound)) {
+                    continue;
+                }
+
+                // An array of this function's type parameter's values, its
+                // metadata made at run time — polymorphic recursion — for a
+                // callee that asks nothing of it.
+                if (IsOwnArray(bound)) {
+                    if (calleeShape.ProtocolsOf(parameter).Any()) {
+                        return false;
+                    }
+
                     continue;
                 }
 
@@ -540,6 +575,12 @@ public sealed partial class SilGen {
         /// <summary>A property requirement of a type parameter's protocols, read on one: through its getter's generic entry.</summary>
         bool PropertyAllowed(BoundFieldAccess access) {
             var field = access.Field;
+
+            // An array's own: 'items.count'.
+            if (field.Builtin is "array_count" && access.Receiver is { } array && IsOwnArray(array.Type)) {
+                return true;
+            }
+
             if (field.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } declared || generator.GenericEntryType(declared, field) is null
                 || !generator.GenericRequirements(declared).Exists(r => ReferenceEquals(r.Member, field))) {
                 return false;
@@ -1187,6 +1228,11 @@ public sealed partial class SilGen {
                 return given;
             }
 
+            // An array of a type parameter's values: made at run time from the element's.
+            if (type is ArrayTypeSymbol { ElementType: var element } && IsArrayOf(type, [.._genericMetadata.Keys])) {
+                return MetadataOf(element) is { } of ? Emit(new BuiltinInst("metadata_array", SilType.Metadata, of)) : null;
+            }
+
             return LowerType(type) is { } lowered ? Emit(new MetadataInst(lowered)) : null;
         }
 
@@ -1359,6 +1405,15 @@ public sealed partial class SilGen {
                     continue;
                 }
 
+                // An array of this function's type parameter's values: its metadata made at run time.
+                if (IsArrayOf(given, [.._genericMetadata.Keys])) {
+                    if (found.ProtocolsOf(parameter).Any()) {
+                        return false;
+                    }
+
+                    continue;
+                }
+
                 if (Mentions(given, [.._genericMetadata.Keys]) || LowerType(given) is not { } lowered || lowered == SilType.Unit
                     || lowered is NominalType { IsNoncopyable: true } || given.Equals(Core.Never)) {
                     return false;
@@ -1460,7 +1515,7 @@ public sealed partial class SilGen {
                     return null;
                 }
 
-                if (!IsOpaqueHere(given) && LowerType(given) is { } lowered) {
+                if (!IsOpaqueHere(given) && LowerType(given) is { } lowered && !SilType.MentionsOpaque(lowered)) {
                     generator.Describer(given, lowered, at);
                 }
 

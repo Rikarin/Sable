@@ -316,4 +316,123 @@ public sealed class UnspecialisedGenericTests {
             Assert.Contains($"Test.Shape.{member}$generic", functions);
         }
     }
+
+    const string Arrays = """
+        struct Named {
+            var name: String
+        }
+
+        final class Counter {
+            var n: Int
+            init(n: Int) { self.n = n }
+        }
+
+        fn first<T>(_ items: T[>..]) -> T { return items[0] }
+
+        fn twice<T>(_ value: T) -> T[>..] { return [value, value] }
+
+        fn counted<T>(_ items: T[>..]) -> Int {
+            var n = 0
+            for item in items {
+                let kept = item
+                n = n + 1
+            }
+            return n + items.count
+        }
+
+        fn appended<T>(_ items: T[>..], _ value: T) -> T[>..] {
+            var copy = items
+            copy.append(value)
+            return copy
+        }
+
+        fn last<T>(_ items: T[>..]) -> T {
+            var copy = items
+            return copy.removeLast()
+        }
+
+        fn show<T>(_ items: T[>..]) -> String {
+            var text = ""
+            for item in items {
+                text = text + "<\(item)>"
+            }
+            return text
+        }
+        """;
+
+    /// <summary>
+    ///     An array of a type parameter's values is a buffer of them, laid out
+    ///     by the element's metadata: made, read, walked, appended to and
+    ///     popped in code compiled once, with the array's metadata made at
+    ///     run time from the element's, and handed to code that knows the type.
+    /// </summary>
+    [Fact]
+    public void ArraysOfATypeParametersValues() {
+        Prints(
+            "1\nb\n6\n4\n2\n<x><y><z>\n<Named(name: \"p\")><Named(name: \"q\")>\nq\n7\n",
+            Arrays,
+            """
+                print(first([1, 2]))
+                print(first(appended(["a"], "b").slice(from: 1, to: 2).toArray()))
+                print(counted(["a", "b", "c"]))
+                print(counted(twice(Named { name: "n" })))
+                print(last(appended([1], 2)))
+                print(show(appended(["x", "y"], "z")))
+                print(show(appended(twice(Named { name: "p" }).slice(from: 0, to: 1).toArray(), Named { name: "q" })))
+                print(last([Named { name: "p" }, Named { name: "q" }]).name)
+                let counters = appended([Counter(n: 5)], Counter(n: 7))
+                print(last(counters).n)
+            """);
+        var functions = Unspecialised(Arrays, """
+                print(first(twice(1)))
+                print(counted(appended([1], 2)))
+                print(last([1]))
+                print(show([1]))
+            """);
+        foreach (var name in new[] { "first", "twice", "counted", "appended", "last", "show" }) {
+            Assert.Contains($"Test.{name}$generic", functions);
+        }
+    }
+
+    /// <summary>
+    ///     Polymorphic recursion — a generic function calling itself with an
+    ///     array of its type parameter — has no end of specialised copies (a
+    ///     specialised build makes it one instance over existentials);
+    ///     compiled once it is one function, given the array's metadata made
+    ///     at run time.
+    /// </summary>
+    [Fact]
+    public void PolymorphicRecursionWorksUnspecialised() {
+        const string declarations = """
+            fn nest<T>(_ value: T, _ depth: Int) -> String {
+                if depth == 0 {
+                    return "\(type(of: value))"
+                }
+                return nest([value], depth - 1)
+            }
+
+            fn count<T>(_ value: T, _ depth: Int) -> Int {
+                if depth == 0 {
+                    return 0
+                }
+                return 1 + count([value, value], depth - 1)
+            }
+            """;
+        var program = Program(declarations, """
+                print(nest(1, 0))
+                print(nest(1, 3))
+                print(nest("s", 2))
+                print(count(1, 5))
+            """);
+        using (SilGen.UseGenerics(GenericsMode.Unspecialised)) {
+            Assert.Equal("Int\n[[[Int]]]\n[[String]]\n5\n", AssertAgree(program).Stdout);
+        }
+
+        // Specialised, it is the one instance that takes existentials, whose arrays are of 'any Any'.
+        using (SilGen.UseGenerics(GenericsMode.Specialised)) {
+            Assert.Equal("Int\n[any Any]\n[any Any]\n5\n", AssertAgree(program).Stdout);
+        }
+
+        Assert.Contains("Test.nest$generic", Unspecialised(declarations, "print(nest(1, 3))"));
+    }
 }

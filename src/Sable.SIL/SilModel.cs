@@ -135,6 +135,20 @@ public abstract class SilType : IEquatable<SilType> {
     public static bool SameErasingOpaque(SilType a, SilType b) =>
         a == b || ErasedOpaque(a.ToString()) == ErasedOpaque(b.ToString());
 
+    /// <summary>
+    ///     With <paramref name="opaqueOnly" />: whether two types differ only
+    ///     where one has an opaque type and the other any type — an array of a
+    ///     type parameter's values and an array of Ints, laid out alike.
+    /// </summary>
+    public static bool SameErasingOpaque(SilType a, SilType b, bool opaqueOnly) =>
+        (a, b) switch {
+            _ when a == b => true,
+            (OpaqueType, _) or (_, OpaqueType) => opaqueOnly,
+            (ArrayType x, ArrayType y) => SameErasingOpaque(x.Element, y.Element, opaqueOnly),
+            (AddressType x, AddressType y) => SameErasingOpaque(x.Pointee, y.Pointee, opaqueOnly),
+            _ => false,
+        };
+
     static string ErasedOpaque(string text) =>
         text.Contains("@opaque(", StringComparison.Ordinal) ? System.Text.RegularExpressions.Regex.Replace(text, @"@opaque\([^)]*\)", "@opaque") : text;
 
@@ -2139,6 +2153,15 @@ public static class SilBuiltins {
                 return new([from], to);
             case "opaque_address" when operands is [OpaqueType value] && result is AddressType:
                 return new([value], result);
+            // A value whose type names an opaque type seen as the same type
+            // naming another, or a type known here: the same bits, borrowed
+            // or handed over.
+            case "opaque_borrow_as" when operands is [var viewed] && result is not null && result != viewed && SilType.SameErasingOpaque(viewed, result, opaqueOnly: true):
+                return new([viewed], result!);
+            case "opaque_take_as" when operands is [var taken] && result is not null && result != taken && SilType.SameErasingOpaque(taken, result, opaqueOnly: true):
+                return new([taken], result!) { Consumed = [0] };
+            case "metadata_array" when operands is [var element] && element == metadata:
+                return new([metadata], metadata);
             case "opaque_type" when operands is [OpaqueType value, var m] && m == metadata:
                 return new([value, metadata], metadata);
             case "generic_describe" when operands is [OpaqueType described, var m] && m == metadata:

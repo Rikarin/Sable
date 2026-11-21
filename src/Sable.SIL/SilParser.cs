@@ -321,6 +321,11 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_witness_table")) {
+                ParseWitnessTable();
+                continue;
+            }
+
             if (Accept("sil_global")) {
                 var global = Expect(TokenKind.Global, "a global's name").Text;
                 Expect(":");
@@ -337,6 +342,37 @@ public sealed class SilParser {
         }
 
         return module;
+    }
+
+    /// <summary><c>sil_witness_table $T : "M.P" { "slot": @f : $type … associated "A": $T … conforms 0: "M.Q" … }</c>.</summary>
+    void ParseWitnessTable() {
+        var conformer = ParseType();
+        Expect(":");
+        var table = new SilWitnessTable(conformer, Expect(TokenKind.String, "a protocol's name").Text);
+        Expect("{");
+        while (!Accept("}")) {
+            if (Accept("associated")) {
+                var name = Expect(TokenKind.String, "an associated type's name").Text;
+                Expect(":");
+                table.AssociatedTypes.Add((name, ParseType()));
+            } else if (Accept("conforms")) {
+                var index = Count("an associated type's index");
+                Expect(":");
+                table.AssociatedConformances.Add((index, Expect(TokenKind.String, "a protocol's name").Text));
+            } else {
+                var requirement = Expect(TokenKind.String, "a requirement's slot").Text;
+                Expect(":");
+                var function = Expect(TokenKind.Global, "a witness's name").Text;
+                Expect(":");
+                table.Entries.Add((requirement, function, ParseType() as FunctionType ?? throw Error("a witness's type is a function type")));
+            }
+        }
+
+        if (_module.FindWitnessTable(table.Conformer, table.Protocol) is not null) {
+            throw Error($"the witness table of {table.Conformer} for {table.Protocol} is declared twice");
+        }
+
+        _module.AddWitnessTable(table);
     }
 
     // Per function: names to values, names to blocks, and uses waiting for a definition.
@@ -721,6 +757,8 @@ public sealed class SilParser {
             "Char" => SilType.Char,
             "Object" => SilType.Object,
             "Region" => SilType.Region,
+            "Metadata" => SilType.Metadata,
+            "WitnessTable" => SilType.WitnessTable,
             _ when SilType.Numbers.FirstOrDefault(n => n.ToString() == name) is { } number => number,
             _ => _module.FindType(name) ?? throw Error($"unknown type '{name}'"),
         };
@@ -796,6 +834,10 @@ public sealed class SilParser {
 
             case "string_literal":
                 instruction = new StringLiteralInst(Expect(TokenKind.String, "a string").Text);
+                break;
+
+            case "metadata":
+                instruction = new MetadataInst(ParseType());
                 break;
 
             case "builtin": {

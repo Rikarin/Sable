@@ -63,6 +63,14 @@ public sealed partial class SilGen {
 
     SilGen(Compilation compilation) {
         _compilation = compilation;
+
+        // What the built-in types declare they conform to: their metadata's
+        // conformance records, the same in every unit of a program.
+        foreach (var primitive in (NamedTypeSymbol[]) [..Core.Numerics, Core.Bool, Core.Char, Core.String]) {
+            if (Lower(primitive) is { } lowered) {
+                _module.PrimitiveConformances[lowered.ToString()] = [..DeclaredProtocols(primitive)];
+            }
+        }
     }
 
     CoreTypes Core => _compilation.Core;
@@ -1900,6 +1908,18 @@ public sealed partial class SilGen {
 
         _types[symbol] = type;
         _lowered.Add(symbol);
+
+        // Its type arguments, for its metadata: TypeName has lowered each already.
+        if (symbol is NamedTypeSymbol { IsConstructed: true } generic
+            && generic.TypeArguments.Select(Lower).ToList() is var arguments && arguments.TrueForAll(static a => a is not null)) {
+            type.TypeArguments = [..arguments!];
+        }
+
+        // What it declares it conforms to: its metadata's conformance records.
+        if (symbol is NamedTypeSymbol named) {
+            type.Conformances.AddRange(DeclaredProtocols(named.OriginalDefinition));
+        }
+
         return _module.AddType(type);
     }
 
@@ -1944,6 +1964,10 @@ public sealed partial class SilGen {
 
         if (type.Equals(Core.Region)) {
             return SilType.Region;
+        }
+
+        if (type.Equals(Core.TypeMetadata)) {
+            return SilType.Metadata;
         }
 
         switch (type) {
@@ -2105,8 +2129,6 @@ public sealed partial class SilGen {
                     classType.Fields.AddRange(superType.Fields);
                 }
 
-                classType.Conformances.AddRange(DeclaredProtocols(named.OriginalDefinition));
-
                 var members = TypeSubstitution.For(named);
                 foreach (var field in StoredFields(named.OriginalDefinition)) {
                     if (Lower(members.Apply(field.Type)) is not { } fieldType) {
@@ -2130,7 +2152,7 @@ public sealed partial class SilGen {
             }
 
             case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Union } named: {
-                var enumType = Begin(named, new EnumType(TypeName(named)) { IsNoncopyable = named.OriginalDefinition.IsNoncopyable });
+                var enumType = Begin(named, new EnumType(TypeName(named)) { IsNoncopyable = named.OriginalDefinition.IsNoncopyable, IsUnion = true });
                 var members = TypeSubstitution.For(named);
                 foreach (var unionCase in named.OriginalDefinition.Members.OfType<UnionCaseSymbol>()) {
                     SilType? payload = null;
@@ -2507,7 +2529,7 @@ public sealed partial class SilGen {
             return existing;
         }
 
-        var enumType = Begin(union, new EnumType(name));
+        var enumType = Begin(union, new EnumType(name) { IsUnion = true });
         foreach (var lowered in cases) {
             enumType.Cases.Add((UnionCaseName(lowered), lowered));
         }
@@ -2532,7 +2554,7 @@ public sealed partial class SilGen {
             return existing;
         }
 
-        var enumType = Begin(recursive, new EnumType(name));
+        var enumType = Begin(recursive, new EnumType(name) { IsUnion = true });
         _unions.Add(enumType);
         foreach (var member in union.Cases) {
             if (Lower(member) is not { } lowered || enumType.Cases.Exists(c => Equals(c.Payload, lowered))) {
@@ -3120,7 +3142,7 @@ public sealed partial class SilGen {
             return existing;
         }
 
-        var box = _module.AddType(new ClassType(name) { Superclass = ExistentialBoxRoot() });
+        var box = _module.AddType(new ClassType(name) { Superclass = ExistentialBoxRoot(), TypeArguments = [value] });
         box.Fields.Add(("value", value));
         return box;
     }
@@ -3256,6 +3278,7 @@ public sealed partial class SilGen {
 
         _module.AddType(layout);
         _existentials[layout] = slots;
+        _layoutProtocols[layout] = protocols;
         return layout;
     }
 
@@ -3855,11 +3878,13 @@ public sealed partial class SilGen {
     ///     as <typeparamref name="T" />, or none. To a concrete type, the box
     ///     is asked whether its class is that type's box — or, for an object,
     ///     the box of a class it derives from, and the object then whether it
-    ///     is one. To another existential, <c>any Q</c>, each type of the
-    ///     program that conforms to Q is tried in turn, and the first the box
-    ///     holds is given Q's witnesses for it: the conformance lookup, as a
-    ///     table the compiler writes out. Made once per type, the same in every
-    ///     unit of a program, since every unit sees every declaration.
+    ///     is one. To another existential, <c>any Q</c>, the conformance
+    ///     registry is asked for the witness table of what the box holds
+    ///     (<see cref="RegistryCast" />); an instance of a generic protocol,
+    ///     whose slots may be variant, has each type of the program that
+    ///     conforms tried in turn instead, the first the box holds given Q's
+    ///     witnesses for it. Made once per type, the same in every unit of a
+    ///     program, since every unit sees every declaration.
     /// </summary>
     internal (string Name, FunctionType Type)? ExistentialCast(TypeSymbol target, SyntaxNode at) {
         if (Lower(target) is not { } wanted || Lower(new OptionalTypeSymbol(target)) is not EnumType optional) {
@@ -3882,6 +3907,12 @@ public sealed partial class SilGen {
         var none = optional.CaseIndex("None");
 
         var layout = target is ExistentialTypeSymbol ? wanted as StructType : null;
+        if (layout is not null && TabledProtocols(layout) is { } tabled && SlotTables(layout) is not null) {
+            RegistryCast(cast, entry, box, joined, optional, layout, tabled, at);
+            _module.Add(cast);
+            return (name, type);
+        }
+
         List<TypeSymbol> candidates = target switch {
             ExistentialTypeSymbol existential when layout is not null => [..ConformingTypes(existential.Constraint)],
             ExistentialTypeSymbol => [],
@@ -9971,6 +10002,11 @@ public sealed partial class SilGen {
                     return RegionAlloc(call);
                 }
 
+                // A type's metadata, and its value witnesses (SilGen.Metadata.cs).
+                if (owner is not null && owner.Equals(Core.TypeMetadata)) {
+                    return MetadataIntrinsic(call);
+                }
+
                 // Reflection (SilGen.Reflection.cs).
                 return Intrinsic(call);
             }
@@ -10544,6 +10580,11 @@ public sealed partial class SilGen {
                 }
 
                 fields.Add(Emit(new PartialApplyInst(Emit(new FunctionRefInst(thunk.Name, thunk.Type)), null, thick)));
+            }
+
+            // The same witnesses, as the type's witness tables: what a cast finds in the registry.
+            if (concrete is NamedTypeSymbol named) {
+                generator.Boxed(named, value, layout, at.Syntax);
             }
 
             return Emit(new StructInst(layout, [..fields]));

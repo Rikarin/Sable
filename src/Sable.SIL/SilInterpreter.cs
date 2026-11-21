@@ -958,6 +958,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                             : (object)literal.Value;
                         break;
 
+                    case MetadataInst metadata:
+                        values[metadata] = MetadataOf(metadata.Described);
+                        break;
+
                     case StringLiteralInst literal:
                         if (!_literals.TryGetValue(literal, out var immortal)) {
                             _literals[literal] = immortal = new HeapString(literal.Value) { Immortal = true };
@@ -2120,6 +2124,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
         if (builtin.Name.StartsWith("net_", StringComparison.Ordinal)) {
             return Net(builtin.Name, operands);
+        }
+
+        if (MetadataBuiltin(builtin, operands, depth, out var answer)) {
+            return answer;
         }
 
         if (builtin.Name.StartsWith("class_conforms:", StringComparison.Ordinal)) {

@@ -44,25 +44,19 @@ public sealed partial class LlvmEmitter {
 
     static readonly ConditionalWeakTable<SilType, AggregateLayout> Layouts = new();
 
-    /// <summary>The bytes of a pointer on the target: 4 on WebAssembly, 8 elsewhere.</summary>
-    [ThreadStatic] static int _pointerBytes;
-
-    static int PointerBytes => _pointerBytes == 0 ? 8 : _pointerBytes;
+    /// <summary>The bytes of a pointer on the target: 4 on WebAssembly, 8 elsewhere (<see cref="TypeLayout.PointerBytes" />).</summary>
+    static int PointerBytes => TypeLayout.PointerBytes;
 
     /// <summary>A struct's layout: its parts, a live byte first for one with a deinit.</summary>
     static AggregateLayout LayoutOf(StructType type) =>
-        Layouts.GetValue(type, static t => {
-                var structType = (StructType)t;
-                return LayOut([..StructParts(structType)], structType.IsPacked, structType.Alignment);
-            }
-        );
+        Layouts.GetValue(type, static t => Written([..StructParts((StructType)t)], TypeLayout.Of((StructType)t)));
 
     static AggregateLayout LayoutOf(TupleType type) =>
-        Layouts.GetValue(type, static t => LayOut([..((TupleType)t).Elements], false, 0));
+        Layouts.GetValue(type, static t => Written([..((TupleType)t).Elements], TypeLayout.Of((TupleType)t)));
 
     /// <summary>An object's layout: the header — its type, its count, its flags — then its fields.</summary>
     static AggregateLayout ObjectLayout(ClassType type) =>
-        ObjectLayouts.GetValue(type, static t => LayOut([SilType.Object, SilType.U32, SilType.U32, ..t.Fields.Select(static f => f.Type)], false, 0));
+        ObjectLayouts.GetValue(type, static t => Written(TypeLayout.ObjectParts(t), TypeLayout.Object(t)));
 
     static readonly ConditionalWeakTable<ClassType, AggregateLayout> ObjectLayouts = new();
 
@@ -71,59 +65,47 @@ public sealed partial class LlvmEmitter {
     ///     <see cref="Align" /> for an aggregate written as a packed LLVM
     ///     struct, which LLVM aligns to a byte.
     /// </summary>
-    static int LlvmAlign(SilType type) =>
-        type switch {
-            StructType { IsInline: false } structType => LayoutOf(structType).Explicit ? 1 : Align(type),
-            TupleType tuple => LayoutOf(tuple).Explicit ? 1 : Align(type),
-            _ => Align(type),
-        };
+    static int LlvmAlign(SilType type) => TypeLayout.WrittenAlign(type);
 
-    static AggregateLayout LayOut(List<SilType> parts, bool packed, int alignment) {
-        var natural = parts.Select(Align).DefaultIfEmpty(1).Max();
-        var align = packed ? Math.Max(1, alignment) : Math.Max(natural, alignment);
+    /// <summary>
+    ///     An aggregate as LLVM is given it: a literal struct of its parts,
+    ///     when LLVM lays it out as <see cref="TypeLayout" /> does; otherwise a
+    ///     packed one, with the padding written out as byte arrays.
+    /// </summary>
+    static AggregateLayout Written(List<SilType> parts, TypeLayout.Aggregate layout) {
         var slots = new int[parts.Count];
-        var offsets = new int[parts.Count];
-
-        // As LLVM would lay it out: nothing to say beyond the parts.
-        if (!packed && alignment <= natural && parts.TrueForAll(static p => LlvmAlign(p) == Align(p))) {
-            var offset = 0;
+        if (!layout.Explicit) {
             for (var i = 0; i < parts.Count; i++) {
-                var partAlign = Align(parts[i]);
-                offset = (offset + partAlign - 1) / partAlign * partAlign;
                 slots[i] = i;
-                offsets[i] = offset;
-                offset += Size(parts[i]);
             }
 
-            return new($"{{ {string.Join(", ", parts.Select(PartType))} }}", slots, offsets, RoundUp(offset, align), align, false);
+            return new($"{{ {string.Join(", ", parts.Select(PartType))} }}", slots, layout.Offsets, layout.Size, layout.Align, false);
         }
 
         var elements = new List<string>();
         var end = 0;
         for (var i = 0; i < parts.Count; i++) {
-            var at = packed ? end : RoundUp(end, Align(parts[i]));
+            var at = layout.Offsets[i];
             if (at > end) {
                 elements.Add($"[{at - end} x i8]");
             }
 
             slots[i] = elements.Count;
-            offsets[i] = at;
             elements.Add(PartType(parts[i]));
             end = at + Size(parts[i]);
         }
 
-        var size = RoundUp(end, align);
-        if (size > end) {
-            elements.Add($"[{size - end} x i8]");
+        if (layout.Size > end) {
+            elements.Add($"[{layout.Size - end} x i8]");
         }
 
-        return new($"<{{ {string.Join(", ", elements)} }}>", slots, offsets, size, align, true);
+        return new($"<{{ {string.Join(", ", elements)} }}>", slots, layout.Offsets, layout.Size, layout.Align, true);
     }
 
     /// <summary>How the runtime aligns every block it allocates.</summary>
-    const int HeapAlign = 16;
+    const int HeapAlign = TypeLayout.HeapAlign;
 
-    static int RoundUp(int offset, int align) => (offset + align - 1) / align * align;
+    static int RoundUp(int offset, int align) => TypeLayout.RoundUp(offset, align);
 
     /// <summary>The largest power of two an offset is a multiple of, up to a limit; the limit for 0.</summary>
     static int AlignmentAt(int offset, int limit) => offset == 0 ? limit : Math.Min(limit, offset & -offset);

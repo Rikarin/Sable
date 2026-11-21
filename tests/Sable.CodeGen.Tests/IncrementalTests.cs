@@ -508,6 +508,50 @@ public sealed class IncrementalTests {
         Assert.Equal(1, body.Compiled);
     }
 
+    /// <summary>
+    ///     A type's metadata and a conformance's witness table are one for
+    ///     the program however many units write them (docs/06 §6.2): metadata
+    ///     asked for in two packages is equal, and an existential made in one
+    ///     is cast, in another, to a protocol a type of a third conforms to —
+    ///     through the registry, whichever unit's copy of the records the
+    ///     linker kept.
+    /// </summary>
+    [Fact]
+    public void MetadataAndWitnessTablesAreOneForTheProgram() {
+        if (!CanBuild) {
+            return;
+        }
+
+        using var scenario = new Scenario();
+        scenario.Edit("shapes/src/lib.sb", "/// How many shapes have been made.", """
+            public protocol Labelled {
+                var label: String { get }
+            }
+
+            public protocol Sized {
+                fn area() -> Int
+            }
+
+            extension Shape: Labelled, Sized {}
+
+            public fn labelled(_ shape: Shape) -> any Labelled => shape
+
+            public fn pointMetadata() -> TypeMetadata => TypeMetadata.of(Point.self)
+
+            /// How many shapes have been made.
+            """);
+        scenario.Edit("app/src/main.sb", "print(survey(shapes))", """
+            print(survey(shapes))
+                print(pointMetadata() == TypeMetadata.of(Point.self))
+                if let sized = labelled(Square(side: 5)) as? any Sized {
+                    print(sized.area())
+                }
+            """);
+        var built = scenario.Check();
+        Assert.Contains("largest 12\ntrue\n25\n", built.Output);
+        Assert.True(built.Compiled > 1, "the program was built in units");
+    }
+
     [Fact]
     public void AGenericFunctionsChangeReachesTheUnitsThatUseIt() {
         if (!CanBuild) {

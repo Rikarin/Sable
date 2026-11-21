@@ -468,7 +468,7 @@ public sealed class BorrowLoads : ISilPass {
             DestroyValueInst destroy => module is null || module.MayRunDeinit(destroy.Value.Type),
             DeallocStackInst or AllocStackInst => false,
             LoadInst { Kind: not LoadKind.Take } or LoadBorrowInst or EndBorrowInst => false,
-            IntegerLiteralInst or FloatLiteralInst or StringLiteralInst or FunctionRefInst => false,
+            IntegerLiteralInst or FloatLiteralInst or StringLiteralInst or FunctionRefInst or MetadataInst => false,
             StructInst or TupleInst or EnumInst or StructExtractInst or TupleExtractInst => false,
             StructElementAddrInst or TupleElementAddrInst or RefElementAddrInst => false,
             CopyValueInst or UpcastInst or UncheckedRefCastInst or ClassMethodInst => false,
@@ -633,7 +633,7 @@ public sealed class ForwardCopies : ISilPass {
     /// <summary>An instruction with no effect anything else could observe, and that does not end <paramref name="root" />'s borrow.</summary>
     internal static bool Inert(SilInstruction instruction, SilValue? root = null) =>
         instruction switch {
-            IntegerLiteralInst or FloatLiteralInst or StringLiteralInst or FunctionRefInst => true,
+            IntegerLiteralInst or FloatLiteralInst or StringLiteralInst or FunctionRefInst or MetadataInst => true,
             StructExtractInst or TupleExtractInst or UpcastInst or UncheckedRefCastInst => true,
             StructElementAddrInst or TupleElementAddrInst or RefElementAddrInst => true,
             LoadInst { Kind: LoadKind.Trivial } or LoadBorrowInst or CopyValueInst => true,

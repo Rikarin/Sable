@@ -1,0 +1,122 @@
+module Sable.Core
+
+// A type's metadata (docs/06 §6.2): what the runtime knows of a type — its
+// kind, its layout, how its values are copied and destroyed (its value
+// witnesses), its fields, its type arguments and its name. Natively it is a
+// constant record, one per type in the program; the interpreter models the
+// same. Generic code compiled once for every type (#297) is given it in
+// place of the type.
+
+extension TypeMetadata: Equatable {
+    /// The metadata of a type.
+    ///
+    /// ```sable
+    /// let m = TypeMetadata.of(Int.self)
+    /// assert(m.size == 8 && m.alignment == 8 && m.stride == 8)
+    /// assert(m.kind == .Scalar && m.name == "Int")
+    /// ```
+    @intrinsic
+    public static fn of<T: ~Copyable>(_ type: T.Type) -> TypeMetadata
+
+    /// The type's name, as Sable writes it: `Int?`, `[String]`, `M.Box<Int>`.
+    @builtin("metadata_name")
+    public var name: String { get }
+
+    /// The bytes a value of the type takes.
+    @builtin("metadata_size")
+    public var size: Int { get }
+
+    /// What a value of the type's address is a multiple of.
+    @builtin("metadata_alignment")
+    public var alignment: Int { get }
+
+    /// The bytes from one value of the type to the next in an array: its
+    /// size rounded up to its alignment.
+    @builtin("metadata_stride")
+    public var stride: Int { get }
+
+    @builtin("metadata_kind")
+    var kindCode: Int { get }
+
+    @builtin("metadata_flags")
+    var flags: Int { get }
+
+    /// What kind of type it is.
+    public var kind: TypeMetadataKind {
+        get {
+            let kinds: TypeMetadataKind[] = [
+                .Class, .Struct, .Enum, .Union, .Optional, .Tuple, .Function, .Array, .Slice, .Existential, .Metatype, .Scalar, .String,
+                .Reference, .Opaque,
+            ]
+            return kinds[kindCode - 1]
+        }
+    }
+
+    /// Whether a value of the type is copied by copying its bits, and
+    /// destroyed by doing nothing: it holds no reference.
+    public var isTrivial: Bool => flags % 2 == 1
+
+    /// Whether a value of the type is never copied, only moved.
+    public var isNoncopyable: Bool => flags / 2 % 2 == 1
+
+    /// How many fields the type has: a struct's or a class's stored
+    /// fields (a superclass's first), a tuple's elements, an enum's or a
+    /// union's cases. A program that asks has every type's metadata carry
+    /// its fields.
+    @builtin("metadata_field_count")
+    public var fieldCount: Int { get }
+
+    /// A field's name: a tuple's element's index, a case's name.
+    @builtin("metadata_field_name")
+    public fn fieldName(at index: Int) -> String
+
+    /// Where a field is from the start of a value — of the object, for a
+    /// class; where a case's payload is, for an enum.
+    @builtin("metadata_field_offset")
+    public fn fieldOffset(at index: Int) -> Int
+
+    /// A field's type's metadata: a case's payload's (traps for a case
+    /// with none).
+    @builtin("metadata_field_type")
+    public fn fieldType(at index: Int) -> TypeMetadata
+
+    /// How many type arguments the type has: a generic type's, an
+    /// optional's wrapped type, an array's element, a tuple's elements, a
+    /// function's parameters and then its result.
+    @builtin("metadata_argument_count")
+    public var argumentCount: Int { get }
+
+    /// A type argument's metadata.
+    @builtin("metadata_argument")
+    public fn argument(at index: Int) -> TypeMetadata
+
+    @builtin("metadata_equal")
+    fn isSame(as other: TypeMetadata) -> Bool
+
+    /// Whether the two describe the one type.
+    public operator == (lhs: TypeMetadata, rhs: TypeMetadata) -> Bool { return lhs.isSame(as: rhs) }
+
+    /// A copy of the value, made by the type's value witnesses (its
+    /// initializeWithCopy) as code that knows the type only by its metadata
+    /// copies one. Traps unless this is the metadata of the value's type.
+    @intrinsic
+    public fn copy<T>(_ value: T) -> T
+
+    /// A copy of the value, moved into place by the type's value witnesses
+    /// (initializeWithCopy, then initializeWithTake). Traps unless this is
+    /// the metadata of the value's type.
+    @intrinsic
+    public fn move<T>(_ value: T) -> T
+
+    /// A copy of the value put in place of the target's, by the type's
+    /// value witnesses (assignWithCopy, which destroys what was there).
+    /// Traps unless this is the metadata of the value's type.
+    @intrinsic
+    public fn assign<T>(_ value: T, to target: inout T)
+
+    /// A copy of the value made and destroyed by the type's value witnesses
+    /// (initializeWithCopy, then destroy). Traps unless this is the metadata
+    /// of the value's type.
+    @intrinsic
+    public fn destroyCopy<T>(of value: T)
+}

@@ -1302,4 +1302,85 @@ public sealed class UnspecialisedGenericTests {
             Assert.Contains($"{name}$generic", functions);
         }
     }
+
+    /// <summary>Every function a program's unspecialised build lowers: their SIL names.</summary>
+    static List<string> Lowered(string declarations, string body) {
+        using var _ = SilGen.UseGenerics(GenericsMode.Unspecialised);
+        var result = Pipeline.Compile(new SourceText(Program(declarations, body), "test.sb"));
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        return [..result.Sil!.Functions.Select(static f => f.Name)];
+    }
+
+    const string Witnesses = """
+        protocol Named {
+            fn name() -> String
+            mutating fn rename(_ to: String)
+            fn throwing(_ fail: Bool) throws -> Int
+        }
+
+        extension Named {
+            fn shout() -> String => name() + "!"
+        }
+
+        protocol Loud {
+            fn shout() -> String
+        }
+
+        enum Failure: Error { Bad }
+
+        struct Tag<T>: Named, Loud {
+            var value: T
+            var label: String
+
+            fn name() -> String => "\(label)=\(value)"
+            mutating fn rename(_ to: String) {
+                label = to
+            }
+            fn throwing(_ fail: Bool) throws -> Int {
+                if fail {
+                    throw Failure.Bad
+                }
+                return label.count
+            }
+        }
+
+        extension Int: Named {
+            fn name() -> String => "int"
+            mutating fn rename(_ to: String) {}
+            fn throwing(_ fail: Bool) throws -> Int => 1
+        }
+
+        extension Int: Loud {}
+        """;
+
+    /// <summary>
+    ///     An existential's slot whose witness is generic code compiled once —
+    ///     a generic type's method, a protocol's default — calls that code with
+    ///     the boxed type's metadata, and no instance is made for the slot.
+    /// </summary>
+    [Fact]
+    public void ExistentialWitnessesCallCodeCompiledOnce() {
+        const string body = """
+                var named: any Named = Tag<Int> { value: 3, label: "n" }
+                print(named.name())
+                named.rename("m")
+                print(named.name())
+                print(try! named.throwing(false))
+                do {
+                    print(try named.throwing(true))
+                } catch {
+                    print("caught")
+                }
+                let loud: any Loud = Tag<String> { value: "s", label: "l" }
+                print(loud.shout())
+                let other: any Loud = 5
+                print(other.shout())
+            """;
+        Prints("n=3\nm=3\n1\ncaught\nl=s!\nint!\n", Witnesses, body);
+        var functions = Lowered(Witnesses, body);
+        Assert.Contains("Test.Tag.name$generic", functions);
+        Assert.Contains("Test.Named.shout$generic", functions);
+        Assert.DoesNotContain(functions, static f => f.StartsWith("Test.Tag.", StringComparison.Ordinal) && f.Contains("$of$", StringComparison.Ordinal));
+        Assert.DoesNotContain(functions, static f => f.StartsWith("Test.Named.shout$of$", StringComparison.Ordinal));
+    }
 }

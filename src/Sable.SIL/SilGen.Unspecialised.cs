@@ -1366,6 +1366,113 @@ public sealed partial class SilGen {
     }
 
     // -----------------------------------------------------------------------
+    // Existential witnesses that call unspecialised code
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    ///     Witness thunks whose bodies are lowered once what is pending is:
+    ///     a call into unspecialised code may ask for the very table the
+    ///     thunk is being made for.
+    /// </summary>
+    readonly Queue<Action> _pendingThunks = new();
+
+    /// <summary>
+    ///     True when an existential's slot, in an unspecialised build, calls a
+    ///     generic witness compiled once rather than an instance of it: a
+    ///     method of the boxed value whose instance would take what the slot
+    ///     is given as it is, and give what the slot gives. The instance is
+    ///     then not made for the slot alone (#297).
+    /// </summary>
+    bool CallsGenericWitness(FunctionSymbol generic, TypeSubstitution bound, ThickFunctionType signature, bool givenBox, SyntaxNode at) {
+        if (!HasSelf(generic) || generic.IsAsync || IsDynamic(generic) || !_declarations.ContainsKey(generic) || UnspecialisedShape(generic) is null) {
+            return false;
+        }
+
+        var parameters = signature.Signature.Parameters;
+        if (SignatureOf(generic, at, WithAssociatedTypes(generic, bound)) is not { } type || type.Parameters.Length != parameters.Length
+            || type.Parameters[0] is AddressType && !givenBox
+            || type.Result != signature.Signature.Result || type.Thrown != signature.Implementation.Thrown) {
+            return false;
+        }
+
+        for (var i = 0; i + 1 < parameters.Length; i++) {
+            if (type.Parameters[i + 1] != parameters[i]) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    ///     The body of a witness thunk whose witness is generic code compiled
+    ///     once: it opens the box, and calls the witness on the value as code
+    ///     that knows the type does — with the type's metadata and tables.
+    ///     Lowered from the call, so that it passes and takes everything as
+    ///     any such call does; when that cannot be done, the thunk calls the
+    ///     witness's instance instead.
+    /// </summary>
+    void GenericWitnessThunk(SilFunction thunk, NamedTypeSymbol concrete, SilType value, ClassType box, string slot, Symbol requirement, ThickFunctionType signature,
+        FunctionSymbol callee, TypeSubstitution bound, SyntaxNode at) {
+        var parameters = signature.Signature.Parameters;
+        var entry = thunk.AddBlock();
+        var arguments = parameters.Take(parameters.Length - 1).Select(p => (SilValue)entry.AddArgument(p)).ToList();
+        var given = entry.AddArgument(parameters[^1]);
+        entry.AddArgument(SilType.Object);
+
+        var current = entry;
+        var held = (SilValue)given;
+        SilValue? loaded = null;
+        if (given.Type is AddressType) {
+            current = UniqueBox(thunk, entry, given, box);
+            loaded = held = current.Append(new LoadInst(given));
+        }
+
+        var opened = current.Append(new RefElementAddrInst(current.Append(new UncheckedRefCastInst(held, box)), 0));
+        var syntax = callee.DeclaringSyntax.FirstOrDefault() ?? at;
+        var lowered = false;
+        if (SourceOf(syntax) is { } source) {
+            var substitution = WithAssociatedTypes(callee, bound);
+            var call = new BoundCall(syntax, new BoundSelfAccess(syntax, concrete, callee.IsMutating), callee,
+                [..callee.Parameters.Select(p => (BoundExpression)new BoundParameterAccess(syntax, p))], callee.ReturnType) { Substitution = substitution };
+            var lowering = new FunctionLowering(this, callee, thunk, source, substitution);
+            using (_diagnostics.Suppress()) {
+                lowered = lowering.LowerWitnessCall(entry, current, opened, arguments, call, block => {
+                    if (loaded is not null) {
+                        block.Append(new DestroyValueInst(loaded));
+                    }
+                });
+            }
+        }
+
+        if (lowered) {
+            // The call is all it does: no line of its own, as the thunk it replaces had none.
+            foreach (var instruction in thunk.Blocks.SelectMany(static b => b.Instructions)) {
+                instruction.Location = null;
+            }
+
+            thunk.RemoveUnreachableBlocks();
+            return;
+        }
+
+        thunk.Blocks.Clear();
+        using (_diagnostics.Suppress()) {
+            if (FillWitnessThunk(thunk, concrete, value, box, slot, requirement, signature, at, viaGeneric: false)) {
+                return;
+            }
+        }
+
+        // Neither: a slot no program can reach yet, as a table that could not be made would be.
+        thunk.Blocks.Clear();
+        var stub = thunk.AddBlock();
+        foreach (var parameter in thunk.Type.Parameters) {
+            stub.AddArgument(parameter);
+        }
+
+        stub.Append(new UnreachableInst());
+    }
+
+    // -----------------------------------------------------------------------
     // Witness tables in the generic calling convention
     // -----------------------------------------------------------------------
 
@@ -2014,6 +2121,48 @@ public sealed partial class SilGen {
     }
 
     sealed partial class FunctionLowering {
+        /// <summary>
+        ///     Lowers a witness thunk's call (<see cref="GenericWitnessThunk" />)
+        ///     into the thunk, from <paramref name="current" /> on: <c>self</c>
+        ///     the value in the box, at <paramref name="opened" />, and the
+        ///     callee's parameters what the thunk is given. Each way out frees
+        ///     what the call needed, then lets go of the box (<paramref name="release" />).
+        ///     False when the call cannot be lowered.
+        /// </summary>
+        internal bool LowerWitnessCall(SilBlock entry, SilBlock current, SilValue opened, IReadOnlyList<SilValue> arguments, BoundCall call, Action<SilBlock> release) {
+            _entry = entry;
+            _current = current;
+            _selfAddress = opened;
+            for (var i = 0; i < symbol.Parameters.Length; i++) {
+                _parameters[symbol.Parameters[i]] = arguments[i];
+            }
+
+            BoundStatement[] statements = symbol.ReturnType.Equals(Core.Void)
+                ? [new BoundExpressionStatement(call.Syntax, call), new BoundReturn(call.Syntax, null)]
+                : [new BoundReturn(call.Syntax, call)];
+            _body = new BoundBlock(call.Syntax, [], [..statements]);
+            Statement(_body);
+            if (_failed || _current is not null) {
+                return false;
+            }
+
+            if (_returnBlock is { } returnBlock) {
+                _current = returnBlock;
+                Deallocate();
+                release(_current);
+                Jump(new ReturnInst(returnBlock.Arguments.Count == 0 ? null : returnBlock.Arguments[0]));
+            }
+
+            if (_throwBlock is { } throwBlock) {
+                _current = throwBlock;
+                Deallocate();
+                release(_current);
+                Jump(new ThrowInst(throwBlock.Arguments[0]));
+            }
+
+            return !_failed;
+        }
+
         /// <summary>For a function generic code calls (<see cref="Bridge" />), what arrives as a type parameter's value.</summary>
         internal Bridge? Bridged { get; init; }
 

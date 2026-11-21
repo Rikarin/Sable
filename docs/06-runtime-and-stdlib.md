@@ -467,6 +467,17 @@ of a type parameter's type, or captures `self`, or is inside another,
 keeps its function specialised, as does a function that returns a closure
 over its type parameters.
 
+**Existential witnesses.** A slot of an existential's witness table whose
+witness is generic code compiled once — a method of a generic type boxed as
+`any P` (`Tag<Int>`), a protocol extension's default for the boxed type, an
+optional's member — calls that code, with the boxed type's metadata and
+tables, rather than an instance made for the slot alone. The thunk opens
+the box and makes the call as code that knows the type makes it (its
+arguments stored where unspecialised code takes them, its result taken out
+of a slot); it is lowered once everything pending has been, since the call
+may ask for the very table the thunk is in. Which way a slot goes depends
+on its witness alone, so every unit's copy of a table is the same.
+
 What unspecialised code cannot serve yet — an optional chain through a
 `T?`, a structural union of `T`, a method of a generic class
 a subclass may override or whose fields hold `T` by value, a field of a

@@ -1233,4 +1233,73 @@ public sealed class UnspecialisedGenericTests {
         Assert.Contains(functions, static f => f.StartsWith("Test.Grid.subscript", StringComparison.Ordinal) && f.EndsWith(".set$generic", StringComparison.Ordinal));
         Assert.Contains(functions, static f => f.StartsWith("Sable.Core.Dictionary.subscript", StringComparison.Ordinal) && f.EndsWith(".get$generic", StringComparison.Ordinal));
     }
+
+    const string Initialisers = """
+        import Sable.Collections
+
+        struct Box<T> {
+            var items: T[>..]
+            var label: String = "box"
+
+            init() {
+                items = []
+            }
+
+            init(one: T) {
+                items = [one]
+            }
+        }
+
+        fn make<T>(_ x: T) -> Box<T> {
+            var box = Box<T>()
+            box.items.append(x)
+            return box
+        }
+
+        fn distinct<T: Hashable>(_ xs: T[>..]) -> Int {
+            var seen = Set<T>()
+            for x in xs {
+                seen.insert(x)
+            }
+            return seen.count
+        }
+
+        fn tally<K: Hashable>(_ keys: K[>..]) -> [K: Int] {
+            var counts: [K: Int] = [:]
+            for key in keys {
+                counts[key] = (counts[key] ?? 0) + 1
+            }
+            return counts
+        }
+        """;
+
+    /// <summary>
+    ///     A generic struct's own initialiser is compiled once, its fields'
+    ///     initial values with it — a set's, a dictionary's, its literal's —
+    ///     borrowing what it is given as every function compiled once does.
+    /// </summary>
+    [Fact]
+    public void InitialisersOfGenericStructsAreCompiledOnce() {
+        Prints(
+            "[\"a\"] box\n[3]\n2\n2\n2\n1\n",
+            Initialisers,
+            """
+                let made = make("a")
+                print("\(made.items) \(made.label)")
+                print(Box<Int>(one: 3).items)
+                print(distinct([1, 2, 1]))
+                print(distinct(["x", "y"]))
+                let counts = tally(["a", "b", "a"])
+                print(counts["a"] ?? 0)
+                print(counts["b"] ?? 0)
+            """);
+        var functions = Unspecialised(Initialisers, """
+                print(make(1).items)
+                print(distinct([1]))
+                print(tally([1])[1] ?? 0)
+            """);
+        foreach (var name in new[] { "Test.make", "Test.distinct", "Test.tally", "Test.Box.init", "Sable.Collections.Set.init" }) {
+            Assert.Contains($"{name}$generic", functions);
+        }
+    }
 }

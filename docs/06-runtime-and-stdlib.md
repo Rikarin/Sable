@@ -470,7 +470,7 @@ over its type parameters.
 What unspecialised code cannot serve yet — an optional chain through a
 `T?`, a structural union of `T`, a method of a generic class
 a subclass may override or whose fields hold `T` by value, a field of a
-function type in a generic type, a property's setter, an initialiser, `"\(x:?)"`, an async function or a
+function type in a generic type, a property's setter, a class's initialiser or a struct's that holds `T` by value, `"\(x:?)"`, an async function or a
 generator — is still specialised for its type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
 says, for each generic function, which way it went and why. A specialised

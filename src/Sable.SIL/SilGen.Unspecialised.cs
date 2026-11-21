@@ -36,10 +36,10 @@ public enum GenericsMode {
 ///         of a type parameter is one it can serve (<see cref="ShapeChecker" />):
 ///         values of the type parameter itself, passed, stored, returned,
 ///         compared by metatype, written out, given to a requirement of its
-///         protocols or to another such function. Anything else — a
-///         <c>T[]</c>, a <c>T?</c>, a closure over a <c>T</c>, a method of a
-///         generic type — is still specialised for its type arguments, so a
-///         program builds either way.
+///         protocols or to another such function, a closure over them among
+///         them. Anything else — a slice of <c>T</c>, a method of a generic
+///         class, an async function — is still specialised for its type
+///         arguments, so a program builds either way.
 ///     </para>
 ///     <para>
 ///         Where the types are known, a call stores each argument of a type
@@ -409,6 +409,21 @@ public sealed partial class SilGen {
         };
 
     /// <summary>
+    ///     True for a function type of values unspecialised code over
+    ///     <paramref name="parameters" /> holds — <c>(T) -> U</c>,
+    ///     <c>(Element, Element) -> Bool</c>, <c>(inout Value) -> Void</c> —
+    ///     called in the generic convention: each parameter of a type held
+    ///     indirectly borrowed where its caller has it, a result of one
+    ///     written where its caller says. A closure of a type known where it
+    ///     is made is given to such code through a thunk that converts.
+    /// </summary>
+    internal static bool IsGenericFunction(TypeSymbol type, IReadOnlyCollection<TypeParameterSymbol> parameters) =>
+        type is FunctionTypeSymbol { IsRethrows: false, IsAsync: false } function && Mentions(function, parameters)
+        && function.ParameterTypes.All(p => !Mentions(p, parameters) || IsHeld(p, parameters) && p is not MetatypeTypeSymbol)
+        && (!Mentions(function.ReturnType, parameters) || IsHeld(function.ReturnType, parameters) && function.ReturnType is not MetatypeTypeSymbol)
+        && (function.ThrownType is not { } thrown || !Mentions(thrown, parameters));
+
+    /// <summary>
     ///     A generic struct or union whose instance unspecialised code can lay
     ///     out at run time as TypeLayout lays out one it knows: its fields or
     ///     cases one after another — no deinit's live byte, no packing or
@@ -543,7 +558,6 @@ public sealed partial class SilGen {
 
         refused = _localGenerics.ContainsKey(symbol) ? "a local generic function"
             : symbol.IsPolymorphic ? "polymorphic recursion"
-            : symbol.IsRethrows ? "rethrows"
             : symbol.IsAsync ? "async"
             : symbol.FunctionKind != FunctionKind.Ordinary && !IsGetter(symbol) ? $"{(symbol.FunctionKind.ToString()[0] is 'A' or 'E' or 'I' or 'O' or 'U' ? "an" : "a")} {symbol.FunctionKind.ToString().ToLowerInvariant()}"
             : symbol.ForeignName is not null ? "foreign"
@@ -644,7 +658,7 @@ public sealed partial class SilGen {
             !Mentions(type, own) || IsHeld(type, own);
 
         foreach (var parameter in symbol.Parameters) {
-            if (!Passable(parameter.Type)
+            if (!Passable(parameter.Type) && !IsGenericFunction(parameter.Type, own)
                 || Mentions(parameter.Type, own) && (parameter.IsVariadic || parameter.IsByReference || parameter.Modifier is not (ParameterModifier.None or ParameterModifier.In))) {
                 refused = $"the parameter '{parameter.Name}: {parameter.Type.ToDisplayString()}'";
                 return null;
@@ -759,7 +773,7 @@ public sealed partial class SilGen {
         bool HeldThrough(TypeSymbol declared, NamedTypeSymbol protocol, TypeSymbol on) => Simple(Canonical(Through(declared, protocol, on)));
 
         /// <summary>A type a value may have here: a type parameter, its metatype, or one that mentions none.</summary>
-        bool Simple(TypeSymbol type) => !Mentions(type) || IsHeld(type, _own);
+        bool Simple(TypeSymbol type) => !Mentions(type) || IsHeld(type, _own) || IsGenericFunction(type, _own);
 
         bool IsOwnArray(TypeSymbol type) => IsArrayOf(type, _own);
 
@@ -775,7 +789,46 @@ public sealed partial class SilGen {
             return allowed;
         }
 
+        /// <summary>How many closures compiled with the function the node being checked is inside.</summary>
+        int _closureDepth;
+
+        /// <summary>Whether the code being checked may change the function's own self: not inside a closure, which has a copy.</summary>
+        bool OwnMutating => checkedSymbol.IsMutating && _closureDepth == 0;
+
+        /// <summary>
+        ///     Whether a closure can be compiled with this function, in the
+        ///     generic convention, over its metadata and tables (#297): one
+        ///     that captures what it captures of a type parameter's type by
+        ///     value — a 'let', a parameter, not a 'var' it shares, nor self —
+        ///     and is not inside another.
+        /// </summary>
+        bool ClosureAllowed(BoundClosure closure) {
+            if (_closureDepth > 0 || closure.IsAutoclosure || generator._compilation.GetGenerator(closure.Symbol) is not null
+                || Mentions(closure.Type) && !IsGenericFunction(closure.Type, _own)) {
+                return false;
+            }
+
+            // What it captures by value is what lowering finds held by value, its type parameters opaque.
+            List<Capture> captures;
+            using (generator.Opaque(shape))
+            using (generator.AssociatedContext(checkedSymbol)) {
+                captures = generator.CapturesOf(closure);
+            }
+
+            return captures.All(c => !Mentions(c.Type) || c is { Boxed: false, Kind: CaptureKind.Default or CaptureKind.ByValue, Key: LocalSymbol or ParameterSymbol }
+                && (IsHeld(c.Type, _own) && c.Type is not MetatypeTypeSymbol || IsGenericFunction(c.Type, _own)));
+        }
+
         bool AllowsHere(BoundNode node, bool inClosure) {
+            if (node is BoundClosure compiled && !inClosure && ClosureAllowed(compiled)) {
+                _closureDepth++;
+                try {
+                    return compiled.Children.All(child => Allows(child, false));
+                } finally {
+                    _closureDepth--;
+                }
+            }
+
             if (node is BoundClosure or BoundLocalFunction or BoundUnboundClosure) {
                 inClosure = true;
             }
@@ -838,7 +891,15 @@ public sealed partial class SilGen {
                 return true;
             }
 
-            return _handlers == 0 && checkedSymbol.ThrownType is { } own && Canonical(own).Equals(Canonical(thrown));
+            if (_handlers > 0 || _closureDepth > 0 || checkedSymbol.ThrownType is not { } own) {
+                return false;
+            }
+
+            // Thrown on as it is, written where this function's caller says;
+            // or, of a type parameter's or an associated type's, boxed as the
+            // 'any Error' this function throws, by its type's eraser.
+            return Canonical(own).Equals(Canonical(thrown))
+                   || IsOwn(Canonical(thrown)) && own is ExistentialTypeSymbol { Constraint: var constraint } && constraint.Equals(generator.Core.Error);
         }
 
         static IEnumerable<BoundNode> Descendants(BoundNode node) {
@@ -856,6 +917,8 @@ public sealed partial class SilGen {
                 // A 'for' loop's iterator, named with the type it has.
                 BoundLocalAccess local => local.Type.Equals(local.Local.Type),
                 BoundCall or BoundMetatype or BoundTypeExpression or BoundConditional or BoundAssignment or BoundTry => true,
+                // A call of a function of them, in the generic convention.
+                BoundIndirectCall { Callee.Type: var calleeType } => IsGenericFunction(calleeType, _own),
                 BoundBinaryOperator { Method: not null } or BoundUnaryOperator { Method: not null } => true,
                 BoundFieldAccess access => PropertyAllowed(access),
                 BoundConversion { ConversionKind: ConversionKind.Identity } conversion => conversion.Type.Equals(conversion.Operand.Type),
@@ -879,10 +942,11 @@ public sealed partial class SilGen {
                                               || assignment.Target is BoundLocalAccess or BoundParameterAccess && ReferenceEquals(child, assignment.Target)
                                               || assignment.Target is BoundFieldAccess { Receiver: BoundSelfAccess or BoundLocalAccess { Local.IsMutable: true } } stored
                                               && ReferenceEquals(child, assignment.Target) && PropertyAllowed(stored)
-                                              || assignment.Target is BoundSelfAccess && checkedSymbol.IsMutating && ReferenceEquals(child, assignment.Target)
+                                              || assignment.Target is BoundSelfAccess && OwnMutating && ReferenceEquals(child, assignment.Target)
                                               || assignment.Target is BoundIndexAccess { Subscript: null, Indices: [_], Receiver: var array } && IsOwnArray(array.Type) && ReferenceEquals(child, assignment.Target)
-                                              && (array is BoundLocalAccess { Local.IsMutable: true } || array is BoundFieldAccess { Receiver: BoundSelfAccess } && checkedSymbol.IsMutating),
+                                              && (array is BoundLocalAccess { Local.IsMutable: true } || array is BoundFieldAccess { Receiver: BoundSelfAccess } && OwnMutating),
                 BoundCall or BoundBinaryOperator or BoundUnaryOperator or BoundTry => true,
+                BoundIndirectCall indirect => IsGenericFunction(indirect.Callee.Type, _own) && (ReferenceEquals(child, indirect.Callee) ? indirect.Callee is BoundParameterAccess or BoundLocalAccess : true),
                 BoundFieldAccess access => ReferenceEquals(child, access.Receiver) && PropertyAllowed(access),
                 BoundConditional conditional => !ReferenceEquals(child, conditional.Condition),
                 BoundConversion { ConversionKind: ConversionKind.Identity } => true,
@@ -921,7 +985,7 @@ public sealed partial class SilGen {
             // An array's own builtins, on an array of a type parameter's values held in a local.
             if (callee.Builtin is "array_append" or "array_remove_last" && call.Receiver is { } array && IsOwnArray(array.Type)) {
                 return (call.Receiver is BoundLocalAccess { Local.IsMutable: true }
-                        || call.Receiver is BoundFieldAccess { Receiver: BoundSelfAccess } stored && checkedSymbol.IsMutating && PropertyAllowed(stored))
+                        || call.Receiver is BoundFieldAccess { Receiver: BoundSelfAccess } stored && OwnMutating && PropertyAllowed(stored))
                        && call.Arguments.All(a => Simple(a.Type));
             }
 
@@ -953,7 +1017,7 @@ public sealed partial class SilGen {
 
             // One that changes self changes a local, or this function's own self.
             if (calleeSelf is not null && callee.IsMutating && receiverType is not null && IsOwn(receiverType)
-                && call.Receiver is not (BoundLocalAccess { Local.IsMutable: true } or null or BoundSelfAccess) || callee.IsMutating && call.Receiver is null or BoundSelfAccess && !checkedSymbol.IsMutating) {
+                && call.Receiver is not (BoundLocalAccess { Local.IsMutable: true } or null or BoundSelfAccess) || callee.IsMutating && call.Receiver is null or BoundSelfAccess && !OwnMutating) {
                 return false;
             }
 
@@ -1024,8 +1088,8 @@ public sealed partial class SilGen {
             // protocol extension's own self, when it may change it.
             // Or a stored field of the self of a method that may change it: 'base.next()'.
             if (callee.IsMutating && call.Receiver is not BoundLocalAccess { Local.IsMutable: true }
-                && !(call.Receiver is null or BoundSelfAccess && checkedSymbol.IsMutating)
-                && !(call.Receiver is BoundFieldAccess { Receiver: BoundSelfAccess, Field: { IsComputed: false, IsStatic: false } } stored && checkedSymbol.IsMutating && PropertyAllowed(stored))) {
+                && !(call.Receiver is null or BoundSelfAccess && OwnMutating)
+                && !(call.Receiver is BoundFieldAccess { Receiver: BoundSelfAccess, Field: { IsComputed: false, IsStatic: false } } stored && OwnMutating && PropertyAllowed(stored))) {
                 return false;
             }
 
@@ -1325,6 +1389,11 @@ public sealed partial class SilGen {
             GenericEntries(table, concrete, value, each, at);
         }
 
+        // An error of the type, which unspecialised code may throw on as 'any Error'.
+        if (_generics == GenericsMode.Unspecialised && closure.Exists(p => ReferenceEquals(p, Core.Error.OriginalDefinition))) {
+            ErrorEraser(value);
+        }
+
         // Unspecialised code reads the conformer's associated types through
         // the table, and finds what they conform to in the registry: those
         // tables are made too.
@@ -1580,6 +1649,163 @@ public sealed partial class SilGen {
     }
 
     // -----------------------------------------------------------------------
+    // Reabstraction: a closure given where the generic convention is wanted
+    // -----------------------------------------------------------------------
+
+    readonly Dictionary<string, (string Thunk, ClassType Context)?> _reabstractions = new(StringComparer.Ordinal);
+
+    /// <summary>
+    ///     A thunk that calls a closure of one convention as one of another
+    ///     wants to be called (#297): a function of a type parameter's
+    ///     values, called in the generic convention — each such value the
+    ///     address of its caller's storage, a result of one written where the
+    ///     caller says — over a closure of the types the code that made it
+    ///     knows, <c>(Int) -> Int</c>, or of another function's type parameters.
+    ///     Its context holds the closure. Null for a pair it cannot convert.
+    /// </summary>
+    internal (string Thunk, ClassType Context)? Reabstraction(ThickFunctionType source, ThickFunctionType target) {
+        var key = $"{source} as {target}";
+        if (_reabstractions.TryGetValue(key, out var known)) {
+            return known;
+        }
+
+        // Named for the pair, so that every unit that makes one makes the same.
+        var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key)))[..16];
+        var made = MakeReabstraction(source.Signature, target.Signature, $"$reabstract${hash}", source);
+        _reabstractions[key] = made;
+        return made;
+    }
+
+    (string Thunk, ClassType Context)? MakeReabstraction(FunctionType source, FunctionType target, string name, ThickFunctionType closure) {
+        var outResult = target.Result == SilType.Unit && target.Parameters.Length == source.Parameters.Length + 1
+                        && target.Parameters[^1] is AddressType { Pointee: var resultPointee } && SilType.IsIndirect(resultPointee);
+        if (target.Parameters.Length != source.Parameters.Length + (outResult ? 1 : 0) || target.IsAsync != source.IsAsync
+            || source.Thrown is not null && source.Thrown != target.Thrown) {
+            return null;
+        }
+
+        var context = new ClassType($"{name}$context");
+        context.Fields.Add(("function", closure));
+        var thunk = new SilFunction(name, new ThickFunctionType(target).Implementation);
+        var entry = thunk.AddBlock();
+        var given = target.Parameters.Select(p => (SilValue)entry.AddArgument(p)).ToList();
+        var contextArgument = entry.AddArgument(SilType.Object);
+        var holder = entry.Append(new UncheckedRefCastInst(contextArgument, context));
+        var function = entry.Append(new LoadBorrowInst(entry.Append(new RefElementAddrInst(holder, 0))));
+
+        // Each argument as the closure takes it: where the caller holds it, seen as the type it is.
+        var arguments = new List<SilValue>();
+        var ends = new List<SilValue>();
+        for (var i = 0; i < source.Parameters.Length; i++) {
+            var (wanted, value) = (source.Parameters[i], given[i]);
+            if (wanted == value.Type) {
+                arguments.Add(value);
+            } else if (value.Type is AddressType && wanted is AddressType && (SilType.MentionsOpaque(value.Type) || SilType.MentionsOpaque(wanted))) {
+                arguments.Add(entry.Append(new BuiltinInst("opaque_cast", wanted, value)));
+            } else if (SilType.SameErasingOpaque(value.Type, wanted) || SilType.IsIndirect(value.Type) && SilType.IsIndirect(wanted)) {
+                arguments.Add(entry.Append(new BuiltinInst("opaque_borrow_as", wanted, value)));
+            } else if (SilType.IsIndirect(value.Type) && wanted is not AddressType and not ThickFunctionType) {
+                var address = entry.Append(new BuiltinInst("opaque_address", SilType.Address(wanted), value));
+                if (wanted.IsTrivial) {
+                    arguments.Add(entry.Append(new LoadInst(address, LoadKind.Trivial)));
+                } else {
+                    var borrowed = entry.Append(new LoadBorrowInst(address));
+                    arguments.Add(borrowed);
+                    ends.Add(borrowed);
+                }
+            } else {
+                return null;
+            }
+        }
+
+        var resultType = source.Result;
+        void Finish(SilBlock block, SilValue? result) {
+            for (var i = ends.Count - 1; i >= 0; i--) {
+                block.Append(new EndBorrowInst(ends[i]));
+            }
+
+            block.Append(new EndBorrowInst(function));
+            if (outResult && result is not null && resultType != SilType.Unit) {
+                var into = given[^1];
+                SilValue at = ((AddressType)into.Type).Pointee == resultType ? into : block.Append(new BuiltinInst("opaque_cast", SilType.Address(resultType), into));
+                block.Append(new StoreInst(result, at, StoreKind.Init));
+                result = null;
+            }
+
+            if (!outResult && result is not null && result.Type != target.Result) {
+                result = block.Append(new BuiltinInst("opaque_take_as", target.Result, result));
+            }
+
+            block.Append(new ReturnInst(outResult || target.Result == SilType.Unit ? null : result));
+        }
+
+        if (!outResult && resultType != target.Result && !SilType.SameErasingOpaque(resultType, target.Result)) {
+            return null;
+        }
+
+        if (outResult && SilType.IsIndirect(resultType)) {
+            return null;
+        }
+
+        if (source.Thrown is null) {
+            var result = entry.Append(new ApplyInst(function, resultType, [..arguments]));
+            Finish(entry, resultType == SilType.Unit ? null : result);
+        } else {
+            var normal = thunk.AddBlock();
+            var result = resultType == SilType.Unit ? null : normal.AddArgument(resultType);
+            var failed = thunk.AddBlock();
+            var error = failed.AddArgument(source.Thrown);
+            entry.Append(new TryApplyInst(function, resultType, [..arguments], normal, failed));
+            Finish(normal, result);
+            for (var i = ends.Count - 1; i >= 0; i--) {
+                failed.Append(new EndBorrowInst(ends[i]));
+            }
+
+            failed.Append(new EndBorrowInst(function));
+            failed.Append(new ThrowInst(error));
+        }
+
+        _module.AddType(context);
+        _module.Add(thunk);
+        return (name, context);
+    }
+
+    // -----------------------------------------------------------------------
+    // Error erasers: an error unspecialised code knows by its metadata, as 'any Error'
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    ///     Boxes an error of a type unspecialised code is given as
+    ///     <c>any Error</c>, as code that knows the type does
+    ///     (<c>opaque_erase_error</c>): a function given where the value is
+    ///     and its metadata, which copies it into its type's box. Made where
+    ///     the type is known, with the type's table of its conformance to Error.
+    /// </summary>
+    internal void ErrorEraser(SilType value) {
+        if (SilType.MentionsOpaque(value) || _module.ErrorErasers.ContainsKey(value.ToString())) {
+            return;
+        }
+
+        var anyError = AnyErrorType();
+        var name = $"$erase${Sanitise(value.ToString())}";
+        var opaque = new OpaqueType("E");
+        var function = new SilFunction(name, new FunctionType([opaque, SilType.Metadata], anyError));
+        function.ParameterNames.AddRange(["$error", "$metadata.E"]);
+        var block = function.AddBlock();
+        var given = block.AddArgument(opaque);
+        block.AddArgument(SilType.Metadata);
+        var address = block.Append(new BuiltinInst("opaque_address", SilType.Address(value), given));
+        var copy = block.Append(new LoadInst(address, value.IsTrivial ? LoadKind.Trivial : LoadKind.Copy));
+        if (ConvertError(function, ref block, copy, anyError) is not { } boxed) {
+            return;
+        }
+
+        block.Append(new ReturnInst(boxed));
+        _module.Add(function);
+        _module.ErrorErasers[value.ToString()] = (value, name);
+    }
+
+    // -----------------------------------------------------------------------
     // Describers: what '"\(x)"' writes for a value of a type parameter's type
     // -----------------------------------------------------------------------
 
@@ -1674,7 +1900,18 @@ public sealed partial class SilGen {
             }
 
             if (IsOpaqueHere(canonical) || LowerType(canonical) is { } held && SilType.IsIndirect(held)) {
-                return _errorOut is { } own ? (own.Type == expected ? own : Emit(new BuiltinInst("opaque_cast", expected, own)), null, false) : null;
+                if (_errorOut is { } own) {
+                    return (own.Type == expected ? own : Emit(new BuiltinInst("opaque_cast", expected, own)), null, false);
+                }
+
+                // Thrown on as 'any Error': a slot of its own, the error taken
+                // from there and boxed by its type's eraser where it goes.
+                if (LowerType(canonical) is OpaqueType opaque) {
+                    var errorSlot = NewSlot(opaque);
+                    return (Emit(new BuiltinInst("opaque_cast", expected, errorSlot)), errorSlot, false);
+                }
+
+                return null;
             }
 
             if (LowerType(canonical) is not { } type) {
@@ -2157,6 +2394,200 @@ public sealed partial class SilGen {
                 }
             }));
             return borrowed;
+        }
+
+        /// <summary>True when a closure in unspecialised code has a type parameter's values in its type, its captures or its body.</summary>
+        bool MentionsOpaqueHere(BoundClosure closureExpression) {
+            IReadOnlyCollection<TypeParameterSymbol> own = [.._genericMetadata.Keys];
+            return Mentions(closureExpression.Type, own) || generator.CapturesOf(closureExpression).Any(c => Mentions(c.Type, own))
+                   || Descendants(closureExpression.Body).Any(n => n is BoundExpression { Type: var type } && Mentions(type, own)
+                                                                  || n is BoundLocalDeclaration { Local.Type: var local } && Mentions(local, own));
+        }
+
+        /// <summary>
+        ///     A closure over a type parameter's values in unspecialised code
+        ///     (#297): its code an unspecialised function of its own, given the
+        ///     metadata and tables this function is, called by a thunk — the
+        ///     closure's code — that finds them in the context. The context
+        ///     holds them after what the closure captures, and each value it
+        ///     captures of a type held indirectly in an array of one, which
+        ///     sizes it at run time and destroys it through its witnesses.
+        /// </summary>
+        SilValue? GenericClosure(BoundClosure closureExpression, ThickFunctionType thick, List<Capture> captures, string name) {
+            var (enclosing, shape) = generator._unspecialised[function.Name];
+            if (ContextType(closureExpression, captures, name) is not { } contextType) {
+                return null;
+            }
+
+            var indirect = new List<(Capture Capture, SilType Type)>();
+            foreach (var capture in captures) {
+                var (fieldName, fieldType) = contextType.Fields[capture.Field];
+                if (SilType.IsIndirect(fieldType)) {
+                    contextType.Fields[capture.Field] = (fieldName, new ArrayType(fieldType));
+                    indirect.Add((capture, fieldType));
+                }
+            }
+
+            var hiddenAt = contextType.Fields.Count;
+            foreach (var parameter in shape.Parameters) {
+                contextType.Fields.Add(($"$metadata.{parameter.Name}", SilType.Metadata));
+            }
+
+            foreach (var (parameter, protocol) in shape.Requirements) {
+                contextType.Fields.Add(($"$witnesses.{parameter.Name}.{protocol.Name}", SilType.WitnessTable));
+            }
+
+            // The code, generic as this function is.
+            var line = source.GetLinePosition(closureExpression.Syntax.Span.Start).Line;
+            var hidden = contextType.Fields.Skip(hiddenAt).Select(static f => f.Type).ToList();
+            var bodyType = new FunctionType([..thick.Signature.Parameters, ..hidden, SilType.Object], thick.Signature.Result, thick.Signature.Thrown);
+            var bodyName = $"{name}$generic";
+            generator._unspecialised[bodyName] = (enclosing, shape);
+            var code = new SilFunction(bodyName, bodyType) { SourceFile = function.SourceFile, Line = line };
+            code.ParameterNames.AddRange(closureExpression.Symbol.Parameters.Select(static p => p.Name));
+            var info = new ClosureInfo(contextType, captures.Where(c => !indirect.Exists(i => ReferenceEquals(i.Capture, c))).ToDictionary(static c => c.Key, static c => c)) {
+                Indirect = indirect,
+            };
+            var lowering = new FunctionLowering(generator, closureExpression.Symbol, code, source, substitution, info);
+            lowering.Lower(closureExpression.Body);
+            if (lowering.Failed) {
+                _failed = true;
+                return null;
+            }
+
+            code.RemoveUnreachableBlocks();
+            generator._module.Add(code);
+            generator.AssociatedRecipes(code, enclosing, shape);
+            MoveChecker.Check(code, source, generator._diagnostics);
+
+            // The closure's code: the generic one, given what the context holds.
+            var thunk = new SilFunction(name, thick.Implementation) { SourceFile = function.SourceFile, Line = line };
+            var entry = thunk.AddBlock();
+            var given = thick.Signature.Parameters.Select(p => (SilValue)entry.AddArgument(p)).ToList();
+            var contextArgument = entry.AddArgument(SilType.Object);
+            var holder = entry.Append(new UncheckedRefCastInst(contextArgument, contextType));
+            for (var i = hiddenAt; i < contextType.Fields.Count; i++) {
+                given.Add(entry.Append(new LoadInst(entry.Append(new RefElementAddrInst(holder, i)), LoadKind.Trivial)));
+            }
+
+            given.Add(contextArgument);
+            var reference = entry.Append(new FunctionRefInst(bodyName, bodyType));
+            if (bodyType.Thrown is null) {
+                var result = entry.Append(new ApplyInst(reference, bodyType.Result, [..given]));
+                entry.Append(new ReturnInst(bodyType.Result == SilType.Unit ? null : result));
+            } else {
+                var normal = thunk.AddBlock();
+                var result = bodyType.Result == SilType.Unit ? null : normal.AddArgument(bodyType.Result);
+                var failed = thunk.AddBlock();
+                var error = failed.AddArgument(bodyType.Thrown);
+                entry.Append(new TryApplyInst(reference, bodyType.Result, [..given], normal, failed));
+                normal.Append(new ReturnInst(result));
+                failed.Append(new ThrowInst(error));
+            }
+
+            generator._module.Add(thunk);
+
+            // The context: what it captures, then the metadata and the tables.
+            Locate(closureExpression.Syntax);
+            var context = Hold(Emit(new AllocRefInst(contextType)));
+            foreach (var capture in captures) {
+                if (CapturedValue(capture, closureExpression) is not { } value) {
+                    return null;
+                }
+
+                var field = Emit(new RefElementAddrInst(context, capture.Field));
+                switch (((AddressType)field.Type).Pointee) {
+                    case ArrayType array when indirect.Exists(i => ReferenceEquals(i.Capture, capture)):
+                        Emit(new StoreInst(Emit(new BuiltinInst("array_literal", array, Owned(value))), field, StoreKind.Init));
+                        break;
+
+                    case WeakStorageType:
+                        Emit(new StoreWeakInst(value, field));
+                        Destroy(value);
+                        break;
+
+                    case UnownedStorageType:
+                        Emit(new StoreUnownedInst(value, field));
+                        Destroy(value);
+                        break;
+
+                    default:
+                        Emit(new StoreInst(Owned(value), field, StoreKind.Assign));
+                        break;
+                }
+            }
+
+            var at = hiddenAt;
+            foreach (var parameter in shape.Parameters) {
+                Emit(new StoreInst(_genericMetadata[parameter], Emit(new RefElementAddrInst(context, at++)), StoreKind.Init));
+            }
+
+            foreach (var (parameter, protocol) in shape.Requirements) {
+                Emit(new StoreInst(_genericTables[(parameter, protocol)], Emit(new RefElementAddrInst(context, at++)), StoreKind.Init));
+            }
+
+            return Emit(new PartialApplyInst(Emit(new FunctionRefInst(name, thick.Implementation)), Unhold(context), thick));
+        }
+
+        /// <summary>
+        ///     In a closure compiled with unspecialised code, what it captured
+        ///     of a type parameter's type, out of the array of one its context
+        ///     holds it in, into a slot of its own: a local's, a parameter's,
+        ///     read as any other.
+        /// </summary>
+        void UnpackIndirectCaptures() {
+            if (closure is not { Indirect.Count: > 0 } || _context is null) {
+                return;
+            }
+
+            foreach (var (capture, type) in closure.Indirect) {
+                var array = Emit(new LoadInst(Emit(new RefElementAddrInst(_context, capture.Field))));
+                var element = Emit(new BuiltinInst("array_get", type, array, Emit(new IntegerLiteralInst(SilType.Int, 0))));
+                Emit(new DestroyValueInst(array));
+                var name = capture.Key is Symbol { Name: { Length: > 0 } named } ? named : null;
+                var slot = NewSlot(type, name);
+                Emit(new StoreInst(element, slot, StoreKind.Init));
+                switch (capture.Key) {
+                    case LocalSymbol local:
+                        _slots[local] = slot;
+                        break;
+                    case ParameterSymbol parameter:
+                        _spilled[parameter] = slot;
+                        break;
+                }
+            }
+        }
+
+        /// <summary>
+        ///     A function for a parameter of a function type of the callee's
+        ///     type parameters' values, which it calls in the generic
+        ///     convention: a closure already of that convention as it is, and
+        ///     any other given through a thunk that converts, over a copy of
+        ///     it, until the call is done.
+        /// </summary>
+        SilValue? GenericFunctionArgument(BoundExpression argument, ThickFunctionType expected, List<SilValue> borrows) {
+            if (Borrow(argument) is not { } value) {
+                return null;
+            }
+
+            borrows.Add(value);
+            if (value.Type == expected) {
+                return value;
+            }
+
+            if (value.Type is ThickFunctionType given && SilType.SameErasingOpaque(given, expected)) {
+                return Emit(new BuiltinInst("opaque_borrow_as", expected, value));
+            }
+
+            if (value.Type is not ThickFunctionType source || generator.Reabstraction(source, expected) is not var (thunk, context)) {
+                return Missing(argument, $"a function of type '{value.Type}' where unspecialised code takes '{expected}'");
+            }
+
+            var holder = Emit(new AllocRefInst(context));
+            Emit(new StoreInst(Emit(new CopyValueInst(value)), Emit(new RefElementAddrInst(holder, 0)), StoreKind.Init));
+            var made = Hold(Emit(new PartialApplyInst(Emit(new FunctionRefInst(thunk, expected.Implementation)), holder, expected)));
+            borrows.Add(made);
+            return made;
         }
 
         /// <summary>

@@ -143,6 +143,10 @@ public sealed partial class LlvmEmitter {
             constructors.Add(describers);
         }
 
+        if (ErrorEraserRegistration(module) is { } erasers) {
+            constructors.Add(erasers);
+        }
+
         if (module.IsLibrary) {
             functions.Append(LibraryLifetime(module));
             constructors.Add("@\"sable.library.start\"");

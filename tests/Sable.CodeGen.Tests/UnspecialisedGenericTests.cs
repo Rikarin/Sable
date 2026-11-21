@@ -880,4 +880,136 @@ public sealed class UnspecialisedGenericTests {
                 }
             """);
     }
+
+    [Fact]
+    public void ClosuresOverATypeParametersValuesAreCalledInTheGenericConvention() {
+        const string declarations = """
+            enum Oops: Error {
+                Bad
+            }
+
+            fn count<T>(_ items: T[], _ test: (T) -> Bool) -> Int {
+                var n = 0
+                for item in items {
+                    if test(item) {
+                        n += 1
+                    }
+                }
+                return n
+            }
+
+            fn occurrences<T: Equatable>(_ items: T[], _ wanted: T) -> Int {
+                return count(items, { $0 == wanted })
+            }
+
+            fn mapped<T, U>(_ items: T[], _ transform: (T) -> U) -> U[>..] {
+                var result: U[>..] = []
+                for item in items {
+                    result.append(transform(item))
+                }
+                return result
+            }
+
+            fn pairs<T, U>(_ items: T[], _ other: U) -> (T, U)[>..] {
+                let kept = other
+                return mapped(items, { x in (x, kept) })
+            }
+
+            fn update<T>(_ value: T, _ change: (inout T) -> Void) -> T {
+                var copy = value
+                change(&copy)
+                return copy
+            }
+
+            fn firstWhere<T>(_ items: T[], _ test: (T) throws -> Bool) rethrows -> T? {
+                for item in items {
+                    if try test(item) {
+                        return item
+                    }
+                }
+                return none
+            }
+
+            fn through<A, B>(_ x: A, _ f: (A) -> B) -> B {
+                return f(x)
+            }
+
+            fn lengths<T>(_ items: T[], _ f: (T) -> Int) -> Int {
+                return through(items, { all in
+                    var total = 0
+                    for item in all {
+                        total += f(item)
+                    }
+                    return total
+                })
+            }
+            """;
+        Prints(
+            "2\n2\n[\"1!\", \"2!\", \"3!\"]\n2 y 7\n7\nabc\nbb\ncaught\n6\nhey!\n-1\n",
+            declarations,
+            """
+                print(occurrences([1, 2, 1, 3], 1))
+                print(occurrences(["a", "b", "b"], "b"))
+                print(mapped([1, 2, 3], { "\($0)!" }))
+                let p = pairs(["x", "y"], 7)
+                print("\(p.count) \(p[1].0) \(p[1].1)")
+                print(update(3, { $0 += 4 }))
+                print(update("ab", { s in s = s + "c" }))
+                print(firstWhere(["a", "bb", "ccc"], { $0.count == 2 }) ?? "none")
+                do {
+                    let found = try firstWhere([1, 2, 3], { x in
+                        if x == 2 {
+                            throw Oops.Bad
+                        }
+                        return false
+                    })
+                    print(found ?? 0)
+                } catch {
+                    print("caught")
+                }
+                print(lengths(["a", "bb", "ccc"], { $0.count }))
+                let s: String? = "hey"
+                print(s.map({ $0 + "!" }) ?? "")
+                let n: Int? = none
+                print(n.map({ $0 * 2 }) ?? -1)
+            """);
+        var compiled = Unspecialised(declarations, """
+                print(occurrences([1], 1))
+                print(pairs([1], "a").count)
+                print(lengths(["a"], { $0.count }))
+                print(update(1, { $0 += 1 }))
+            """);
+        Assert.Contains("Test.occurrences$generic", compiled);
+        Assert.Contains("Test.pairs$generic", compiled);
+        Assert.Contains("Test.lengths$generic", compiled);
+        Assert.Contains("Test.update$generic", compiled);
+        Assert.Contains(compiled, static f => f.StartsWith("Test.occurrences$generic$closure", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AnErrorOfAnAssociatedTypeIsThrownOnAsAnyError() {
+        Prints(
+            "[1]\n[30, 20, 10]\n[3, 1]\n6\nstopped: Early\nstopped: Early\n",
+            Sequences,
+            """
+                print(collect(Countdown(from: 1)))
+                print(Countdown(from: 3).map({ $0 * 10 }))
+                print(Countdown(from: 3).filter({ $0 != 2 }))
+                print(Countdown(from: 3).reduce(0, { $0 + $1 }))
+                do {
+                    let got = try Failing(after: 2).map({ $0 + "!" })
+                    print(got)
+                } catch {
+                    print("stopped: \(error)")
+                }
+                do {
+                    let got = try Failing(after: 1).filter({ $0.count > 0 })
+                    print(got)
+                } catch {
+                    print("stopped: \(error)")
+                }
+            """);
+        var compiled = Unspecialised(Sequences, "print(Countdown(from: 1).map({ $0 }))");
+        Assert.Contains("Sable.Core.Sequence.map$generic", compiled);
+    }
 }

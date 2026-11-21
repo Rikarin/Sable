@@ -409,14 +409,44 @@ where a result goes, and the function throws that address. A caller that
 knows the type passes a slot of it and takes the error from there; one
 whose error is `Never` passes a slot never written; unspecialised code
 that throws the same passes its own caller's place, and so throws on what
-it is thrown untouched. An error of one caught inside unspecialised code
-(`do`/`catch`, `try?`) keeps the function specialised.
+it is thrown untouched. One that throws `any Error` — a `rethrows`
+function, `rethrows(Failure)` among them, throws that — takes such an
+error in a slot of its own and boxes it as `any Error` with the type's
+**eraser** (`opaque_erase_error`, `sable_opaque_erase_error`): a function
+made where the type is known, with its table of the conformance to
+Error, and registered with the runtime as a describer is. So `map`,
+`filter`, `reduce` over any sequence are one function each. An error of
+one caught inside unspecialised code (`do`/`catch`, `try?`) keeps the
+function specialised.
+
+**Closures.** A function type of a type parameter's values, `(T) -> U`,
+`(Element, Element) -> Bool`, `(inout Value) -> Void`, takes the generic
+convention: each value of a type held indirectly is the address of the
+caller's storage, borrowed, and a result of one is written where the
+caller says, after the parameters (`@thick (@opaque(T), *@opaque(U)) ->
+()`). A `rethrows` function's closures throw `any Error`, so one copy
+serves closures that throw and those that do not, as specialised. A
+closure made where the types are known, `{ $0 * 2 }` as an `(Int) -> Int`,
+is given to such code through a **reabstraction thunk** (`$reabstract$…`)
+that converts: it loads each argument as the type it is, calls the
+closure, kept in its context, and stores the result where it was told. A
+closure made in unspecialised code, `firstIndex(where: { $0 == element })`,
+is compiled with it: its code is an unspecialised function of its own
+(`…$closure0$generic`), given the metadata and tables the function it is
+in was given, and called by a thunk — the closure's code — that reads them
+from its context, after what it captures. A value of a type held
+indirectly that it captures is kept in an array of one in the context,
+which sizes it at run time and destroys it through its witnesses, and is
+copied into a slot of its own where the closure's code starts. Such a
+closure captures by value (a `let`, a parameter); one that shares a `var`
+of a type parameter's type, or captures `self`, or is inside another,
+keeps its function specialised, as does a function that returns a closure
+over its type parameters.
 
 What unspecialised code cannot serve yet — an optional chain through a
-`T?`, a structural union of `T`, a slice of them, a closure over one, a
-member of a generic class, an accessor or initialiser,
-`"\(x:?)"`, an async function or a generator — is still specialised for its
-type arguments in
+`T?`, a structural union of `T`, a slice of them, a member of a generic
+class, an accessor or initialiser, `"\(x:?)"`, an async function or a
+generator — is still specialised for its type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
 says, for each generic function, which way it went and why. A specialised
 build (the default) makes neither the generic entries nor the describers.

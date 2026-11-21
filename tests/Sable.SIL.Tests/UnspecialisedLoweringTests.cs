@@ -192,26 +192,65 @@ public sealed class UnspecialisedLoweringTests {
 
     /// <summary>
     ///     A function whose type parameter is used in a way unspecialised
-    ///     code cannot serve yet — given to a closure — is still specialised, for
-    ///     each type it is used with, in a program that is otherwise unspecialised.
+    ///     code cannot serve yet — a closure over one returned — is still
+    ///     specialised, for each type it is used with, in a program that is
+    ///     otherwise unspecialised.
     /// </summary>
     [Fact]
     public void WhatUnspecialisedCodeCannotServeIsStillSpecialised() {
         var module = Lower("""
-                           fn first<T>(_ value: T, _ change: (T) -> T) -> T { return change(value) }
+                           fn first<T>(_ value: T) -> () -> T { return { value } }
 
                            fn pass<T>(_ value: T) -> T { return value }
 
                            fn main() {
-                               print(first(1) { x in x })
-                               print(first("a") { x in x })
-                               print(pass(first(3) { x in x }))
+                               print(first(1)())
+                               print(first("a")())
+                               print(pass(first(3)()))
                            }
                            """);
         Assert.NotNull(module.Find("M.pass$generic"));
         Assert.Null(module.Find("M.first$generic"));
-        Assert.Equal(2, module.Functions.Count(static f => f.Name.StartsWith("M.first$of$", StringComparison.Ordinal)));
+        Assert.Equal(2, module.Functions.Count(static f => f.Name.StartsWith("M.first$of$", StringComparison.Ordinal) && !f.Name.Contains("$closure", StringComparison.Ordinal)));
         Assert.Equal("1\na\n3\n", Run(module));
+    }
+
+    /// <summary>
+    ///     A closure over a type parameter's values is called in the generic
+    ///     convention: its value of the type parameter's borrowed where the
+    ///     caller holds it, its result written where the caller says. One
+    ///     made where the types are known is given through a thunk that
+    ///     converts; one made in unspecialised code is compiled with it, and
+    ///     finds its metadata, its tables and what it captures in its context.
+    /// </summary>
+    const string Closures = """
+                            fn apply<T, U>(_ value: T, _ change: (T) -> U) -> U { return change(value) }
+
+                            fn same<T: Equatable>(_ items: T[], _ wanted: T) -> Bool[>..] {
+                                var result: Bool[>..] = []
+                                for item in items {
+                                    result.append(apply(item, { $0 == wanted }))
+                                }
+                                return result
+                            }
+
+                            fn main() {
+                                print(apply(1, { x in x * 2 }))
+                                print(apply("a", { x in x + "b" }))
+                                print(same(["a", "b", "a"], "a"))
+                            }
+                            """;
+
+    [Fact]
+    public void ClosuresOverATypeParametersValuesTakeTheGenericConvention() {
+        var module = Lower(Closures);
+        Assert.Equal("(@opaque(T), @thick (@opaque(T), *@opaque(U)) -> (), *@opaque(U), Metadata, Metadata) -> ()", module.Find("M.apply$generic")!.Type.ToString());
+        Assert.Contains(module.Functions, static f => f.Name.StartsWith("$reabstract$", StringComparison.Ordinal));
+        Assert.Contains(module.Functions, static f => f.Name.StartsWith("M.same$generic$closure", StringComparison.Ordinal) && f.IsUnspecialised);
+        const string expected = "2\nab\n[true, false, true]\n";
+        Assert.Equal(expected, Run(module));
+        Assert.Equal(expected, Run(Lower(Closures, GenericsMode.Specialised)));
+        Assert.Equal(expected, Run(SilParser.Parse(SilPrinter.Print(module))));
     }
 
     /// <summary>

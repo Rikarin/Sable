@@ -1019,11 +1019,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     case LoadInst load: {
                         var address = (IReference)Get(load.Address)!;
 
-                        // Empty storage for an array is the empty array.
+                        // Empty storage for an array is the empty array — and so for
+                        // a type parameter's value, which may be one (#297).
                         // A struct with no fields is whole before anything is stored: an initialiser's self.
                         var loaded = load.Type is StructType { Fields.Count: 0 }
                             ? address.Peek() ?? Array.Empty<object?>()
-                            : load.Type is ArrayType || address is Field { Instance.Type.IsCoroutineFrame: true } ? address.Peek() : address.Get();
+                            : load.Type is ArrayType or OpaqueType || address is Field { Instance.Type.IsCoroutineFrame: true } ? address.Peek() : address.Get();
                         switch (load.Kind) {
                             case LoadKind.Copy:
                                 Retain(load.Type, loaded);
@@ -1147,7 +1148,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     // Borrowed: no count changes; the storage keeps it alive.
                     case LoadBorrowInst borrow: {
                         var address = (IReference)Get(borrow.Address)!;
-                        values[borrow] = borrow.Type is StructType { Fields.Count: 0 } ? address.Peek() ?? Array.Empty<object?>() : borrow.Type is ArrayType ? address.Peek() : address.Get();
+                        values[borrow] = borrow.Type is StructType { Fields.Count: 0 } ? address.Peek() ?? Array.Empty<object?>() : borrow.Type is ArrayType or OpaqueType ? address.Peek() : address.Get();
                         break;
                     }
 

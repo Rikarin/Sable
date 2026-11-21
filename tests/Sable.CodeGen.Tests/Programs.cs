@@ -37,13 +37,8 @@ internal static class Programs {
                 start.ArgumentList.Add(argument);
             }
 
-            using var process = Process.Start(start)!;
-            process.StandardInput.Write(input);
-            process.StandardInput.Close();
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEnd();
-            process.WaitForExit();
-            return new(stdout.Result, stderr, process.ExitCode);
+            var run = ChildProcess.Run(start, ChildProcess.ProgramLimit, input);
+            return new(run.Stdout, run.Stderr, run.ExitCode);
         } finally {
             Platform.DeleteExecutable(executable);
         }

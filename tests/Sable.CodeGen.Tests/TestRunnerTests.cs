@@ -381,7 +381,9 @@ public sealed class TestRunnerTests {
         Assert.Empty(Directory.GetFiles(Path.Combine(Root, "tests/lib"), "*.sb"));
         foreach (var module in modules) {
             var files = Directory.GetFiles(module, "*.sb", SearchOption.AllDirectories).Order(StringComparer.Ordinal).ToList();
-            var run = Native([..files.Select(f => new SourceText(File.ReadAllText(f), Path.GetRelativePath(Root, f).Replace('\\', '/')))]);
+            // Each test in a process of its own, as 'sable test' runs them:
+            // one that hangs fails by its name rather than holding this one.
+            var run = NativeEach([..files.Select(f => new SourceText(File.ReadAllText(f), Path.GetRelativePath(Root, f).Replace('\\', '/')))], TimeSpan.FromSeconds(60));
             Assert.True(run.ExitCode == 0, module + "\n" + run.Stdout + run.Stderr);
             Assert.Matches(@"test result: ok\. \d+ passed; 0 failed; 0 filtered out", run.Stdout);
             Assert.Equal("", run.Stderr);

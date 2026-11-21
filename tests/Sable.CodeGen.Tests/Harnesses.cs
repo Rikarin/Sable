@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Sable.Driver;
 using Sable.Symbols;
 
 namespace Sable.CodeGen.Tests;
@@ -39,11 +40,32 @@ internal static class Harnesses {
                 start.ArgumentList.Add(argument);
             }
 
-            using var process = Process.Start(start)!;
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEnd();
-            process.WaitForExit();
-            return new(stdout.Result, stderr, process.ExitCode);
+            var run = ChildProcess.Run(start, ChildProcess.ProgramLimit);
+            return new(run.Stdout, run.Stderr, run.ExitCode);
+        } finally {
+            Platform.DeleteExecutable(executable);
+        }
+    }
+
+    /// <summary>
+    ///     Builds the harness natively and runs its tests as <c>sable test</c>
+    ///     does (TestRunner): each in a process of its own, several at once,
+    ///     each stopped and failed by name past the time limit, leak-checked.
+    /// </summary>
+    public static Run NativeEach(IReadOnlyList<SourceText> sources, TimeSpan limit) {
+        var result = Compile(sources);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+
+        var executable = Platform.Executable(Path.Combine(Path.GetTempPath(), $"sable-harness-{Guid.NewGuid():N}"));
+        try {
+            var build = NativeBuild.Build(result.LlvmIr!, executable, false);
+            Assert.True(build.Succeeded, build.Output);
+
+            var output = new StringWriter();
+            var errors = new StringWriter();
+            var status = TestRunner.Run(executable, [], Environment.ProcessorCount, limit, output, errors,
+                new Dictionary<string, string> { ["SABLE_CHECK_LEAKS"] = "1" });
+            return new(output.ToString(), errors.ToString(), status);
         } finally {
             Platform.DeleteExecutable(executable);
         }

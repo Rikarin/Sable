@@ -27,13 +27,8 @@ internal static class SableProcess {
             }
         }
 
-        using var process = Process.Start(start)!;
-        process.StandardInput.Write(input);
-        process.StandardInput.Close();
-        var output = process.StandardOutput.ReadToEndAsync();
-        var errors = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        return new(output.Result, errors, process.ExitCode);
+        var run = ChildProcess.Run(start, ChildProcess.CommandLimit, input);
+        return new(run.Stdout, run.Stderr, run.ExitCode);
     }
 
     public static Result Run(string directory, string home, params string[] arguments) => Run(directory, home, null, arguments);

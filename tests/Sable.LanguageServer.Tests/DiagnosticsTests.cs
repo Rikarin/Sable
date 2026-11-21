@@ -115,6 +115,54 @@ public sealed class DiagnosticsTests : IDisposable {
         Assert.Equal((uri, 8, "'h' is moved here"), Related(used));
     }
 
+    /// <summary>
+    ///     The SIL checks of a small file leave the standard library alone
+    ///     once it is known to check cleanly (#182): they bind none of its
+    ///     bodies, lower only what the file reaches, and still find the
+    ///     file's own problems. Until it is known, they check it whole, and
+    ///     say so when nothing was found — what the next server reads.
+    /// </summary>
+    [Fact]
+    public async Task TheChecksLeaveALibraryKnownToBeCleanAlone() {
+        var passed = 0;
+        var asked = new List<IReadOnlyCollection<Sable.Syntax.SyntaxTree>>();
+        LibraryKnowledge? Unknown(Sable.Symbols.Compilation compilation, IReadOnlyCollection<Sable.Syntax.SyntaxTree> own) {
+            lock (asked) {
+                asked.Add(own);
+            }
+
+            return new(null, () => Interlocked.Increment(ref passed));
+        }
+
+        await using (var client = new TestClient(libraryCheck: Unknown)) {
+            await client.InitializeAsync();
+            const string uri = "file:///tmp/clean-library.sb";
+            await client.OpenAsync(uri, "module App\n\nfn f() -> Int {\n    return [1, 2].count\n}\n");
+            await client.DiagnosticsAsync(uri, static d => d.GetArrayLength() == 0);
+            await WaitUntil(() => Volatile.Read(ref passed) == 1, client);
+
+            // Asked with the program's own files: the document, not the library's.
+            var own = Assert.Single(asked[0]);
+            Assert.EndsWith("clean-library.sb", own.Text.FileName, StringComparison.Ordinal);
+        }
+
+        await using (var client = new TestClient(libraryCheck: (compilation, own) => new(t => !own.Contains(t), static () => throw new InvalidOperationException("nothing was checked whole")))) {
+            await client.InitializeAsync();
+            const string uri = "file:///tmp/moved-known.sb";
+            await client.OpenAsync(uri, Moved);
+            await client.DiagnosticsAsync(uri, static d => Has(d, "S3057"));
+            Assert.Contains("the library known to check cleanly", client.Logged, StringComparison.Ordinal);
+        }
+    }
+
+    static async Task WaitUntil(Func<bool> condition, TestClient client) {
+        for (var i = 0; i < 600 && !condition(); i++) {
+            await Task.Delay(50);
+        }
+
+        Assert.True(condition(), client.Logged);
+    }
+
     [Fact]
     public async Task AnOverlappingAccessPointsAtBothArguments() {
         const string Text = "module App\n\nfn swap(_ a: inout Int, _ b: inout Int) { }\n\nfn f() {\n    var x = 1\n    swap(&x, &x)\n}\n";

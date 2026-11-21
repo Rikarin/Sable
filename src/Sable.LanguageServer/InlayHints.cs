@@ -63,14 +63,23 @@ internal sealed class RootSummaries(
     ///     server's own is not held while it does — and keeps the summaries
     ///     root inference recorded on its functions.
     /// </summary>
-    public static RootSummaries Compute(Analysis analysis, Action<string> log) {
+    /// <param name="libraryCheck">What is known of the standard library (<see cref="LanguageServerOptions.LibraryCheck" />).</param>
+    public static RootSummaries Compute(Analysis analysis, Func<Compilation, IReadOnlyCollection<SyntaxTree>, LibraryKnowledge?> libraryCheck, Action<string> log) {
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var name = analysis.Key.Length == 0 ? "the loose files" : analysis.Key;
         var functions = new Dictionary<string, (IReadOnlyList<int>, IReadOnlyList<string>)>(StringComparer.Ordinal);
         var checks = new Dictionary<SyntaxTree, IReadOnlyList<Diagnostic>>(ReferenceEqualityComparer.Instance);
+        var known = false;
         try {
             var compilation = Compilation.Create(analysis.Compilation.SyntaxTrees);
-            var (module, lowering) = SilGen.LowerByFile(compilation);
+
+            // The standard library, once it is known to check cleanly with a
+            // program like this one, is lowered only where the program
+            // reaches, and its bodies are not checked again.
+            var library = libraryCheck(compilation, [..compilation.SyntaxTrees.Where(t => !analysis.IsLibrary(t))]);
+            var clean = library?.Clean;
+            known = clean is not null;
+            var (module, lowering) = SilGen.LowerByFile(compilation, onDemand: clean);
             foreach (var function in module.Functions) {
                 if (function.ResultRoots is { } roots) {
                     functions[function.Name] = (roots, [..function.ParameterNames]);
@@ -79,9 +88,17 @@ internal sealed class RootSummaries(
 
             // The SIL checks are only the program's problems once its types
             // are right: a broken tree lowers to whatever it can.
-            if (!compilation.GetAllDiagnosticsByFile().Any(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error)) {
+            var diagnostics = clean is null ? compilation.GetAllDiagnosticsByFile() : compilation.GetAllDiagnosticsByFile(t => !clean(t));
+            if (!diagnostics.Any(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error)) {
                 foreach (var group in lowering.Where(static d => d.Diagnostic.Code != ErrorCode.ERR_NotLoweredYet && d.Tree is not null).GroupBy(static d => d.Tree!)) {
                     checks[group.Key] = [..group.Select(static d => d.Diagnostic)];
+                }
+
+                // Checked and lowered whole, with nothing to say: what the
+                // next compilation — this server's, a build's — need not
+                // learn again.
+                if (clean is null && lowering.Count == 0) {
+                    library?.Passed();
                 }
             }
         } catch (Exception e) when (e is not OutOfMemoryException) {
@@ -91,7 +108,7 @@ internal sealed class RootSummaries(
 
         // Its time is in the log, as a compilation's is: the checks are what
         // a report waits for last, so a slow one is why a report is late.
-        log($"lowered {name} for its checks in {watch.ElapsedMilliseconds} ms");
+        log($"lowered {name} for its checks in {watch.ElapsedMilliseconds} ms{(known ? ", the library known to check cleanly" : "")}");
         return new(analysis.Snapshot.Generation, analysis.Key, functions, checks);
     }
 }
@@ -116,7 +133,7 @@ public sealed partial class LanguageServer {
             // still waiting when the server stops is not started: it would
             // take seconds of CPU for an answer nobody reads.
             Interlocked.Increment(ref _loweringsStarted);
-            var task = _lowering.ContinueWith(_ => RootSummaries.Compute(analysis, Log), _stopping.Token, TaskContinuationOptions.None, TaskScheduler.Default);
+            var task = _lowering.ContinueWith(_ => RootSummaries.Compute(analysis, _options.LibraryCheck, Log), _stopping.Token, TaskContinuationOptions.None, TaskScheduler.Default);
             _lowering = task;
             _roots[analysis.Key] = (analysis, task);
             return task;

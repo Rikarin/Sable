@@ -294,14 +294,17 @@ public static partial class Pipeline {
     ///     a build, reports them.
     /// </summary>
     static List<string> Errors(Compilation compilation, IReadOnlyList<SyntaxTree> program) {
-        var errors = Formatted(compilation.GetAllDiagnosticsByFile(), program);
+        // A library known to check cleanly with such a program (LibraryCheck)
+        // is not checked again, and lowered only where the program reaches.
+        var standard = Library.CheckFor(compilation, program)?.Skipped;
+        var errors = Formatted(standard is null ? compilation.GetAllDiagnosticsByFile() : compilation.GetAllDiagnosticsByFile(t => !standard(t)), program);
         if (errors.Count > 0) {
             return errors;
         }
 
         IReadOnlyList<(Diagnostic, SyntaxTree?)> checks;
         try {
-            checks = SilGen.Check(compilation);
+            checks = SilGen.Check(compilation, standard);
         } catch (Exception e) when (e is not OutOfMemoryException) {
             // Lowering's own failure is the build's to report, as an internal error.
             return errors;

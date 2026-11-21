@@ -844,6 +844,33 @@ prebuilt and never written (`tools/release/package.sh`), so a first build
 on a fresh machine compiles only the program. Another target's entries are
 made in the user's cache on first use.
 
+**The library, known to check cleanly.** A standard library unit in the
+cache with its `.sbi`, made for a program that extends nothing, is proof
+that the library's files — Sable.Core and the modules imported, for that
+target and profile — bind and lower without a word: the build that finds or
+writes it (and `sable cache warm`) records them in
+`$SABLE_HOME/cache/library-checked`, under the compiler's identity
+(`Library.MarkChecked`), as a build that checked the library whole does
+(`LibraryCheck.Passed`). A fresh process then checks none of it again for a
+program that cannot change how it binds or lowers
+(`Compilation.ReachesIntoLibrary`): a build of one file and `sable check`
+bind only the program's bodies, and lower only the library functions it
+reaches. So does the **language server**: its SIL checks — use after move,
+overlapping accesses, roots — lower the package with the library on demand
+(`LanguageServerOptions.LibraryCheck`), and a server that checked the
+library whole with nothing to say records it for the next. Its compilation
+still declares the library from its source, so go-to-definition and hover
+land in the library's files as before. The editor's files are parsed with
+neither `DEBUG` nor `RELEASE`, so they are recorded apart from a build's.
+Measured on a small file (`"a,b".split(",")` and an interpolation), a fresh
+`sable lsp` built Release, on a loaded machine: the first diagnostics (the
+type errors) come 0.7 s after the file is opened, before and after; the
+complete ones, with the SIL checks, 5.3–5.6 s after with the library
+checked whole (lowering 4.6–4.9 s), 2.6–2.9 s once it is known (lowering
+1.9–2.1 s). A dependency's files are still checked with the package: the
+server compiles them from the workspace's view of their source, which it
+does not yet match to their cache entries.
+
 Measured (#182), `sable` built Release, on a machine under a load average
 of 10–35, so the times are rough:
 
@@ -952,7 +979,8 @@ and would read `parse`, `declarations` and `check` from the engine, sharing
 them with `sable build` in one process. Until binding is incremental, the
 server would gain only `parse` (already reused per document) and the
 interface trees of dependencies, which it cannot use while it navigates
-into their bodies.
+into their bodies; what it takes from the cache today is that the library
+checks cleanly (§5.4, "The build cache").
 
 ---
 

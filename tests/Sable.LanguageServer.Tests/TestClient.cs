@@ -63,7 +63,12 @@ internal sealed class TestClient : IAsyncDisposable {
     internal LanguageServer Server { get; }
 
     /// <param name="projects">How the server finds the packages under its folder; none, by default.</param>
-    public TestClient(TimeSpan? diagnosticsDelay = null, Func<string, IReadOnlyList<LanguageProject>>? projects = null) {
+    /// <param name="libraryCheck">What the server knows of the standard library; nothing, by default, so that it checks it whole.</param>
+    public TestClient(
+        TimeSpan? diagnosticsDelay = null,
+        Func<string, IReadOnlyList<LanguageProject>>? projects = null,
+        Func<Sable.Symbols.Compilation, IReadOnlyCollection<Sable.Syntax.SyntaxTree>, LibraryKnowledge?>? libraryCheck = null
+    ) {
         _log = TextWriter.Synchronized(_logged);
         _toServer = _toServerPipe.Writer.AsStream();
         _serverInput = _toServerPipe.Reader.AsStream();
@@ -73,6 +78,7 @@ internal sealed class TestClient : IAsyncDisposable {
             LibraryFor = Library.For,
             LibraryModules = Library.ModuleNames,
             ProjectsFor = projects ?? (static _ => []),
+            LibraryCheck = libraryCheck ?? (static (_, _) => null),
             DiagnosticsDelay = diagnosticsDelay ?? TimeSpan.FromMilliseconds(30),
             LibraryCacheDirectory = Path.Combine(Path.GetTempPath(), "sable-lsp-tests", Guid.NewGuid().ToString("N")),
             ExplainLink = DiagnosticDocs.Link,

@@ -5,6 +5,20 @@ using Sable.Syntax;
 
 namespace Sable.LanguageServer;
 
+/// <summary>
+///     Whether a program's standard library is known to check cleanly with
+///     it — learnt by a build, by an earlier server, or from the library's
+///     <c>.sbi</c> in the build cache, and kept in
+///     <c>$SABLE_HOME/cache/library-checked</c> (docs/05 §5.4). When it is,
+///     the SIL checks neither bind its bodies nor lower more of it than the
+///     program reaches, so a small file does not check all of Sable.Core;
+///     its declarations are still bound from its source, which
+///     go-to-definition and hover read.
+/// </summary>
+/// <param name="Clean">The library's files, whose bodies are left alone; null when it is not known yet.</param>
+/// <param name="Passed">Says the library was checked whole with the program, and nothing was found.</param>
+public sealed record LibraryKnowledge(Func<SyntaxTree, bool>? Clean, Action Passed);
+
 /// <summary>What the server is told about the world it runs in.</summary>
 public sealed class LanguageServerOptions {
     /// <summary>
@@ -13,6 +27,13 @@ public sealed class LanguageServerOptions {
     ///     not among them.
     /// </summary>
     public Func<SyntaxTree, IReadOnlyList<SyntaxTree>> LibraryFor { get; init; } = static _ => [];
+
+    /// <summary>
+    ///     What is known of a compilation's standard library, given the
+    ///     program's own files (the driver's <c>Library.CheckFor</c>); null
+    ///     for a program that could change how the library binds or lowers.
+    /// </summary>
+    public Func<Symbols.Compilation, IReadOnlyCollection<SyntaxTree>, LibraryKnowledge?> LibraryCheck { get; init; } = static (_, _) => null;
 
     /// <summary>The library modules there are, offered after <c>import</c>.</summary>
     public IReadOnlyCollection<string> LibraryModules { get; init; } = [];

@@ -29,6 +29,7 @@ public sealed class LspCommand : Command {
             new LanguageServerOptions {
                 LibraryFor = Library.For,
                 LibraryModules = Library.ModuleNames,
+                LibraryCheck = static (compilation, own) => Library.CheckFor(compilation, own) is { } check ? new(check.Skipped, () => check.Passed()) : null,
                 // Standard output is the protocol's: whatever resolving prints
                 // (a download, say) goes to standard error with the rest.
                 ProjectsFor = root => LanguageProjects.For(root, PackageEnvironment.FromProcess() with { Out = Console.Error }, Console.Error),

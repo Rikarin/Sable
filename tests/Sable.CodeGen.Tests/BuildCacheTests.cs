@@ -219,6 +219,11 @@ public sealed class BuildCacheTests {
         Assert.Equal(["Sable.Core", "Sable.Text"], face.Modules);
         Assert.Equal(face.Modules, face.ReadSymbols().Select(static m => m.Name));
         Assert.NotEmpty(face.ReadSil().Functions);
+
+        // And that the library checks cleanly is recorded beside it: a fresh
+        // process — a build of one file, 'sable check', the language
+        // server — checks none of it again (LibraryCheck).
+        Assert.Single(Directory.GetFiles(Path.Combine(fixture.Environment.CacheDirectory, Library.CheckedDirectory)));
     }
 
     /// <summary>

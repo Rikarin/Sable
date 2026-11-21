@@ -700,6 +700,13 @@ public static class IncrementalBuild {
         using (BuildTimings.Of(timings, "cache upkeep")) {
             Collect(objects, units);
             CollectInterfaces(interfaces, interfaceFiles);
+
+            // The standard library's entry, with its interface, for a
+            // program that extends nothing: proof that the library checks
+            // cleanly, which a fresh process then need not learn again.
+            if (ownExtensions == "none" && File.Exists(standard.Library!.Interface)) {
+                Library.MarkChecked(standard.Trees, program[0].Options, cache.Root);
+            }
         }
 
         return new(true, [], "incremental", stale.Count, units.Count - stale.Count) { Warnings = warnings };
@@ -862,7 +869,12 @@ public static class IncrementalBuild {
         var face = InterfaceOf(compilation, "std", trees, lowered, settings, program.Options);
         var written = unit.Write(lowered.Abi, temporary => NativeObjects.CompileIr(lowered.Ir!, temporary, settings.Native), target,
             face is null ? null : path => File.WriteAllBytes(path, face));
-        return written.Succeeded ? new(true, [], "warm", 1, 1) : BuildOutcome.Failed([$"internal error: compiling the standard library failed:\n{written.Output}"]);
+        if (!written.Succeeded) {
+            return BuildOutcome.Failed([$"internal error: compiling the standard library failed:\n{written.Output}"]);
+        }
+
+        Library.MarkChecked(trees, program.Options, cache.Root);
+        return new(true, [], "warm", 1, 1);
     }
 
     /// <summary>

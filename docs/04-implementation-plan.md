@@ -985,7 +985,10 @@ shared build cache, an archive and its interface (`.sbi`, #182; docs/05
 A program compiled against Sable.Core's interface (`Pipeline.CompileAgainst`)
 does not bind or check the core's bodies or lower its code again — 1.8 s of
 the 2.0 s a fresh process spends on a small program; it still declares the core from
-its source, which holds the generic bodies the program instantiates.
+its source, which holds the generic bodies the program instantiates. A
+library whose unit is in the cache is known to check cleanly, so a fresh
+process — a build, `sable check`, the language server's SIL checks — binds
+none of its bodies and lowers only what the program reaches.
 
 ### The library, as begun
 

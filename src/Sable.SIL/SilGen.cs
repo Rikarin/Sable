@@ -130,8 +130,9 @@ public sealed partial class SilGen {
     ///     Lowering is only asked of a program that type-checks: a bound tree
     ///     with errors in it is not one it can take.
     /// </remarks>
-    public static IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Check(Compilation compilation) {
-        var generator = new SilGen(compilation);
+    /// <param name="onDemand">The files whose functions are lowered only where reached (<see cref="LowerByFile" />): a library known to check cleanly.</param>
+    public static IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Check(Compilation compilation, Func<SyntaxTree, bool>? onDemand = null) {
+        var generator = new SilGen(compilation) { _onDemand = onDemand };
         generator.LowerAll();
         return [..generator.PlacedDiagnostics.Where(static d => d.Diagnostic.Code != ErrorCode.ERR_NotLoweredYet)];
     }

@@ -48,13 +48,13 @@ public static class SilPrinter {
                         builder.Append(" deinit @").Append(structDeinit);
                     }
 
-                    builder.Append('\n');
+                    builder.Append(Described(structType)).Append('\n');
                     break;
 
                 case EnumType enumType:
                     builder.Append("sil_enum ").Append(enumType.Name).Append(enumType.IsNoncopyable ? " @noncopy" : "").Append(" { ")
                         .Append(string.Join(", ", enumType.Cases.Select(static c => c.Payload is null ? c.Name : $"{c.Name}(${c.Payload})")))
-                        .Append(" }\n");
+                        .Append(" }").Append(Described(enumType)).Append('\n');
                     break;
 
                 case ClassType classType:
@@ -80,7 +80,7 @@ public static class SilPrinter {
                         builder.Append(" empty_from ").Append(emptyFrom);
                     }
 
-                    builder.Append('\n');
+                    builder.Append(Described(classType)).Append('\n');
                     break;
             }
         }
@@ -538,6 +538,28 @@ public static class SilPrinter {
     }
 
     /// <summary>A string as SIL text writes it: quoted, with escapes for what cannot appear bare.</summary>
+    /// <summary>
+    ///     What a nominal type's declaration says after its body: a generic
+    ///     instance's type arguments and its name as Sable writes it, and the
+    ///     protocols its metadata's conformance records name.
+    /// </summary>
+    static string Described(NominalType type) {
+        var text = new StringBuilder();
+        if (!type.TypeArguments.IsDefaultOrEmpty) {
+            text.Append(" type_arguments(").Append(string.Join(", ", type.TypeArguments.Select(static a => $"${a}"))).Append(')');
+        }
+
+        if (type.DisplayName is { } display) {
+            text.Append(" display ").Append(Quote(display));
+        }
+
+        if (type.Conformances.Count > 0) {
+            text.Append(" conforms(").Append(string.Join(", ", type.Conformances.Select(Quote))).Append(')');
+        }
+
+        return text.ToString();
+    }
+
     public static string Quote(string value) {
         var builder = new StringBuilder("\"");
         foreach (var rune in value.EnumerateRunes()) {

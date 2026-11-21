@@ -434,6 +434,42 @@ public sealed class SilParser {
         if (Accept("deinit")) {
             type.Deinit = Expect(TokenKind.Global, "the deinit function").Text;
         }
+
+        ParseDescribed(type);
+    }
+
+    /// <summary>
+    ///     What may follow a nominal type's body: <c>type_arguments($Int)</c>,
+    ///     <c>display "M.Box&lt;Int&gt;"</c> and <c>conforms("M.P")</c>.
+    /// </summary>
+    void ParseDescribed(NominalType type) {
+        if (Accept("type_arguments")) {
+            Expect("(");
+            var arguments = ImmutableArray.CreateBuilder<SilType>();
+            if (!At(")")) {
+                do {
+                    arguments.Add(ParseType());
+                } while (Accept(","));
+            }
+
+            Expect(")");
+            type.TypeArguments = arguments.ToImmutable();
+        }
+
+        if (Accept("display")) {
+            type.DisplayName = Expect(TokenKind.String, "a type's name as Sable writes it").Text;
+        }
+
+        if (Accept("conforms")) {
+            Expect("(");
+            if (!At(")")) {
+                do {
+                    type.Conformances.Add(Expect(TokenKind.String, "a protocol's name").Text);
+                } while (Accept(","));
+            }
+
+            Expect(")");
+        }
     }
 
     void ParseClass() {
@@ -473,6 +509,8 @@ public sealed class SilParser {
         if (Accept("empty_from")) {
             type.EmptyFrom = Count("the first field that may start empty");
         }
+
+        ParseDescribed(type);
     }
 
     void ParseEnum() {
@@ -493,6 +531,7 @@ public sealed class SilParser {
         }
 
         Expect("}");
+        ParseDescribed(type);
     }
 
     SilFunction ParseFunction() {

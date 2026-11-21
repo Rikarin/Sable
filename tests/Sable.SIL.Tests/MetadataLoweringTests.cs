@@ -261,4 +261,49 @@ public sealed class MetadataLoweringTests {
         Assert.Equal("M.Dog\nM.Dog\nM.Point\ntrue\ntrue\n", interpreter.Output.ToString());
         Assert.Equal(0, interpreter.LiveObjects);
     }
+
+    /// <summary>
+    ///     A generic instance's type arguments and Sable name, and the
+    ///     protocols a type's records name, are in its declaration in SIL
+    ///     text, so that what metadata says of it is the same once read back.
+    /// </summary>
+    [Fact]
+    public void TypeArgumentsAndConformancesRoundTripThroughText() {
+        var module = Lower("""
+                           protocol Named {
+                               fn name() -> String
+                           }
+
+                           class Holder<T>: Named {
+                               var item: T
+                               init(item: T) { self.item = item }
+                               fn name() -> String => "holder"
+                           }
+
+                           struct Pair<A, B>: Named {
+                               var a: A
+                               var b: B
+                               fn name() -> String => "pair"
+                           }
+
+                           fn main() {
+                               let h: any Named = Holder<Int>(item: 1)
+                               let p: any Named = Pair<Int, String> { a: 1, b: "b" }
+                               print(h.name() + p.name())
+                           }
+                           """);
+        var text = SilPrinter.Print(module);
+        Assert.Contains("type_arguments($Int)", text, StringComparison.Ordinal);
+        Assert.Contains("type_arguments($Int, $String)", text, StringComparison.Ordinal);
+        Assert.Contains("conforms(\"M.Named\")", text, StringComparison.Ordinal);
+        var parsed = SilParser.Parse(text);
+        Assert.Equal(text, SilPrinter.Print(parsed));
+        foreach (var type in module.Types.OfType<NominalType>()) {
+            var read = (NominalType)parsed.FindType(type.Name)!;
+            Assert.Equal(type.TypeArguments.Select(static a => a.ToString()), read.TypeArguments.Select(static a => a.ToString()));
+            Assert.Equal(type.Conformances, read.Conformances);
+            Assert.Equal(type.DisplayName, read.DisplayName);
+            Assert.Equal(TypeMetadata.Of(type).Name, TypeMetadata.Of(read).Name);
+        }
+    }
 }

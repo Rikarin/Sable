@@ -640,6 +640,9 @@ public sealed partial class SilGen {
                 && unit.Owns(declared.Model.SyntaxTree) && _module.Find(name) is { } function) {
                 info.Owned.Add(name);
                 info.Generics[baseName] = DescribesValues(symbol);
+                if (DebugDescribesValues(symbol)) {
+                    info.DebugDescribing.Add(baseName);
+                }
                 if (IsInlinable(symbol, function)) {
                     info.Inlinable.Add(baseName);
                 }

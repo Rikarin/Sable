@@ -61,7 +61,8 @@ public sealed record SilUnit(Func<SyntaxTree, bool> Owns) {
 ///     Those whose bodies other units may copy for the types they know: the
 ///     interface's SIL has them (<see cref="SilUnitInfo.Inlinable" />).
 /// </param>
-public sealed record CompiledGenerics(Func<SyntaxTree, bool> Covers, IReadOnlyDictionary<string, bool> Functions, IReadOnlySet<string> Inlinable);
+/// <param name="DebugDescribing">Of <paramref name="Functions" />, those that write a value of a type they are given out with <c>?</c> (<see cref="SilUnitInfo.DebugDescribing" />).</param>
+public sealed record CompiledGenerics(Func<SyntaxTree, bool> Covers, IReadOnlyDictionary<string, bool> Functions, IReadOnlySet<string> Inlinable, IReadOnlySet<string>? DebugDescribing = null);
 
 /// <summary>What separate lowering tells the code generator about a unit's module.</summary>
 public sealed class SilUnitInfo {
@@ -97,6 +98,13 @@ public sealed class SilUnitInfo {
     ///     (<see cref="SilGen.InlinableSize" />).
     /// </summary>
     public SortedSet<string> Inlinable { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    ///     Of <see cref="Generics" />, those that write a value of a type they
+    ///     are given out with <c>?</c>: a caller makes that type's debug
+    ///     describer, which it makes for no other.
+    /// </summary>
+    public SortedSet<string> DebugDescribing { get; } = new(StringComparer.Ordinal);
 }
 
 /// <summary>

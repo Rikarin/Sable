@@ -60,7 +60,8 @@ public sealed class LibraryInterface {
         byte[] symbols,
         string sil,
         IReadOnlyDictionary<string, bool> generics,
-        IReadOnlySet<string> inlinable
+        IReadOnlySet<string> inlinable,
+        IReadOnlySet<string>? debugDescribing = null
     ) {
         Unit = unit;
         Compiler = compiler;
@@ -72,6 +73,7 @@ public sealed class LibraryInterface {
         SilText = sil;
         Generics = generics;
         Inlinable = inlinable;
+        DebugDescribing = debugDescribing ?? new SortedSet<string>(StringComparer.Ordinal);
     }
 
     /// <summary>The unit's name: <c>Sable.Core</c>, a package's library.</summary>
@@ -116,8 +118,11 @@ public sealed class LibraryInterface {
     /// <summary>Of <see cref="Generics" />, those other units may copy to specialise, whose code <see cref="SilText" /> holds.</summary>
     public IReadOnlySet<string> Inlinable { get; }
 
+    /// <summary>Of <see cref="Generics" />, those that write a value out with <c>?</c> (<see cref="SilUnitInfo.DebugDescribing" />).</summary>
+    public IReadOnlySet<string> DebugDescribing { get; }
+
     /// <summary>What a unit lowered against this library is told of the generic code its archive holds.</summary>
-    public CompiledGenerics CompiledGenerics() => new(Covers, Generics, Inlinable);
+    public CompiledGenerics CompiledGenerics() => new(Covers, Generics, Inlinable, DebugDescribing);
 
     /// <summary>
     ///     The identity of a compiler made of these assemblies: the SHA-256 of
@@ -196,7 +201,8 @@ public sealed class LibraryInterface {
             SymbolInterface.Write(modules, compilation.Modules),
             sil,
             lowered?.Generics ?? new SortedDictionary<string, bool>(StringComparer.Ordinal),
-            lowered?.Inlinable ?? new SortedSet<string>(StringComparer.Ordinal)
+            lowered?.Inlinable ?? new SortedSet<string>(StringComparer.Ordinal),
+            lowered?.DebugDescribing
         );
     }
 
@@ -596,7 +602,7 @@ public sealed class LibraryInterface {
             writer.Write(Generics.Count);
             foreach (var (name, describes) in Generics.OrderBy(static g => g.Key, StringComparer.Ordinal)) {
                 writer.Write(name);
-                writer.Write((byte)((describes ? 1 : 0) | (Inlinable.Contains(name) ? 2 : 0)));
+                writer.Write((byte)((describes ? 1 : 0) | (Inlinable.Contains(name) ? 2 : 0) | (DebugDescribing.Contains(name) ? 4 : 0)));
             }
         }
 
@@ -654,15 +660,20 @@ public sealed class LibraryInterface {
             var sil = reader.ReadBytes(Count(reader, body.Length));
             var generics = new SortedDictionary<string, bool>(StringComparer.Ordinal);
             var inlinable = new SortedSet<string>(StringComparer.Ordinal);
+            var debugDescribing = new SortedSet<string>(StringComparer.Ordinal);
             for (var left = Count(reader, body.Length); left > 0; left--) {
                 var name = reader.ReadString();
                 var flags = reader.ReadByte();
-                if (flags > 3 || !generics.TryAdd(name, (flags & 1) != 0)) {
+                if (flags > 7 || !generics.TryAdd(name, (flags & 1) != 0)) {
                     return null;
                 }
 
                 if ((flags & 2) != 0) {
                     inlinable.Add(name);
+                }
+
+                if ((flags & 4) != 0) {
+                    debugDescribing.Add(name);
                 }
             }
 
@@ -670,7 +681,7 @@ public sealed class LibraryInterface {
                 return null;
             }
 
-            return new(unit, compiler, settings, sources, modules, extensions, symbols, Encoding.UTF8.GetString(Decompress(sil)), generics, inlinable);
+            return new(unit, compiler, settings, sources, modules, extensions, symbols, Encoding.UTF8.GetString(Decompress(sil)), generics, inlinable, debugDescribing);
         } catch (Exception failure) when (failure is EndOfStreamException or IOException or InvalidDataException or ArgumentException
                                               or DecoderFallbackException or OverflowException) {
             return null;

@@ -20,7 +20,8 @@ namespace Sable.Fuzz;
 ///     it replaces, and whether it ends a message. The ParserTarget edits by
 ///     offset; this one by the protocol's positions, through
 ///     <see cref="LineIndex" />, which has its own ways to go wrong: CRLF and a
-///     lone CR, a column past a line's end, a line past the last.
+///     lone CR, a column past a line's end, a line past the last. The edits
+///     past a budget of <see cref="Work" /> are not made.
 /// </remarks>
 public sealed class EditorTarget : Target {
     public override string Name => "editor";
@@ -28,6 +29,18 @@ public sealed class EditorTarget : Target {
     public override TimeSpan Limit => TimeSpan.FromSeconds(10);
 
     const string Uri = "file:///fuzz/editor.sb";
+
+    /// <summary>
+    ///     How much text an input's edits may have the editor and the check go
+    ///     through: the sum, over the edits, of the document's length. An edit
+    ///     costs in proportion to the document — the line index, the
+    ///     incremental parse, and the full parse and the walk of both trees
+    ///     that check it — while it costs the input as little as a NUL, so
+    ///     the bytes libFuzzer caps do not cap the work: a 16 KB document and
+    ///     16 K empty edits are a quarter of a billion characters. This is a
+    ///     hundred-odd edits of a 16 KB document, thousands of a small one.
+    /// </summary>
+    const long Work = 2_000_000;
 
     public override void Run(ReadOnlySpan<byte> data) {
         var parts = Text(data).Split('\0');
@@ -48,7 +61,15 @@ public sealed class EditorTarget : Target {
             Check(workspace, expected, version);
         }
 
+        var work = 0L;
         foreach (var replacement in parts.Skip(1)) {
+            // The edits past the budget are left out, as libFuzzer's -max_len
+            // leaves out the bytes past it.
+            work += expected.Length + replacement.Length + 1;
+            if (work > Work) {
+                break;
+            }
+
             var hash = Hash(replacement);
             if (hash % 17 == 0) {
                 // The whole text, as a client that does not send ranges does.

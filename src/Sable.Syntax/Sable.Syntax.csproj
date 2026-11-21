@@ -3,4 +3,8 @@
     <RootNamespace>Sable.Syntax</RootNamespace>
     <AssemblyName>Sable.Syntax</AssemblyName>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- tools/fuzz/Sable.Fuzz: the parser and editor targets compare green trees. -->
+    <InternalsVisibleTo Include="Sable.Fuzz" />
+  </ItemGroup>
 </Project>

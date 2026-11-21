@@ -4,6 +4,7 @@ using Sable.CodeGen.Tests;
 using Sable.Driver.Packages;
 using Sable.SIL.Tests;
 using Sable.Syntax;
+using Sable.Syntax.Green;
 
 namespace Sable.Fuzz;
 
@@ -177,34 +178,77 @@ public sealed class ParserTarget : Target {
     ///     an input cost. Of one text, a token with the same place, the same
     ///     text and the same place for it has the same trivia too.
     /// </summary>
-    internal static bool SameTree(SyntaxNode left, SyntaxNode right) {
-        if (left.Kind != right.Kind || left.FullSpan != right.FullSpan) {
+    internal static bool SameTree(SyntaxNode left, SyntaxNode right) =>
+        left.Position == right.Position && SameTree(left.Green, right.Green);
+
+    /// <summary>
+    ///     The comparison on the green trees, which the red ones are made
+    ///     from on demand: walking the red ones made a node, and an iterator,
+    ///     for every node of both, and cost as much as the parse it checked.
+    ///     The children are the red tree's: a list's elements in its place,
+    ///     an absent slot none. Two nodes at one place with the same widths
+    ///     before them are at one place, so a width stands for a span.
+    /// </summary>
+    static bool SameTree(GreenNode left, GreenNode right) {
+        if (ReferenceEquals(left, right)) {
+            return true;
+        }
+
+        if (left.Kind != right.Kind || left.FullWidth != right.FullWidth) {
             return false;
         }
 
-        using var lefts = left.ChildNodesAndTokens().GetEnumerator();
-        using var rights = right.ChildNodesAndTokens().GetEnumerator();
+        if (left is GreenToken leftToken) {
+            return right is GreenToken rightToken
+                && leftToken.LeadingTriviaWidth == rightToken.LeadingTriviaWidth
+                && leftToken.Text == rightToken.Text;
+        }
+
+        if (right is GreenToken) {
+            return false;
+        }
+
+        var lefts = new Children(left);
+        var rights = new Children(right);
         while (true) {
-            var more = lefts.MoveNext();
-            if (more != rights.MoveNext()) {
+            var (a, b) = (lefts.Next(), rights.Next());
+            if (a is null || b is null) {
+                return a is null && b is null;
+            }
+
+            if (!SameTree(a, b)) {
                 return false;
             }
+        }
+    }
 
-            if (!more) {
-                return true;
-            }
+    /// <summary>A green node's children as <see cref="SyntaxNode.ChildNodesAndTokens" /> gives them.</summary>
+    struct Children(GreenNode node) {
+        int _slot = -1;
+        GreenList? _list;
+        int _element;
 
-            var (a, b) = (lefts.Current, rights.Current);
-            if (a.AsNode() is { } leftNode) {
-                if (b.AsNode() is not { } rightNode || !SameTree(leftNode, rightNode)) {
-                    return false;
+        public GreenNode? Next() {
+            while (true) {
+                if (_list is not null) {
+                    if (_element < _list.Children.Length) {
+                        return _list.Children[_element++];
+                    }
+
+                    _list = null;
                 }
-            } else if (b.IsNode
-                || a.Kind != b.Kind
-                || a.FullSpan != b.FullSpan
-                || a.Span != b.Span
-                || a.AsToken().Text != b.AsToken().Text) {
-                return false;
+
+                if (++_slot >= node.SlotCount) {
+                    return null;
+                }
+
+                switch (node.GetSlot(_slot)) {
+                    case GreenList list:
+                        (_list, _element) = (list, 0);
+                        break;
+                    case { } slot:
+                        return slot;
+                }
             }
         }
     }

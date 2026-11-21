@@ -502,7 +502,11 @@ public sealed class PanicTests {
         Assert.Contains($"  2  {prefix}Test.outer at test.sb:10{(OperatingSystem.IsWindows() ? "" : ":12")}\n", debug.Stderr, StringComparison.Ordinal);
         Assert.Contains($"  3  {prefix}Test.main at test.sb:21{(OperatingSystem.IsWindows() ? "" : ":11")}\n", debug.Stderr, StringComparison.Ordinal);
         Assert.Contains("precondition", debug.Stderr, StringComparison.Ordinal);
-        Assert.Contains(" at lib/Sable.Core/Assertions.sb:", debug.Stderr.Replace('\\', '/'), StringComparison.Ordinal);
+        // CodeView has no field for embedded source, so Windows names no
+        // library file in the trace (#183).
+        if (!OperatingSystem.IsWindows()) {
+            Assert.Contains(" at lib/Sable.Core/Assertions.sb:", debug.Stderr.Replace('\\', '/'), StringComparison.Ordinal);
+        }
 
         var plain = BuildAndRun(source, optimise: false, environment: trace);
         Assert.Contains("sable.Test.inner + ", plain.Stderr, StringComparison.Ordinal);

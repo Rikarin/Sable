@@ -353,6 +353,33 @@ The interpreter runs the same SIL: an opaque value is held as a value of the
 type it is, and copied and destroyed as the metadata the running function
 was given says.
 
+**A library's generic code, compiled once into its archive** (#297 stage
+7). Built unspecialised, the standard library's unit — and a registry or git
+dependency's — compiles every generic function of its files that can be
+compiled once, whether or not its own code calls it, defines each for every
+unit linked with it, and records them in its interface (`.sbi`): each
+function's name, and whether it writes out a value of a type it is given
+(which tells a caller to register the type's describer). A unit compiled
+against the library — the program's, a dependency's after the library — takes
+that record as the library's decision: it calls those functions in the
+archive, binding and lowering none of their bodies, and lowers again only
+the generic functions the library left to be specialised
+(`SilUnit.Libraries`, `CompiledGenerics`). The interface's SIL is the
+library's code other units may copy: its **inlinable** generic functions —
+marked `@inlinable` or `@inline(always)`, or of at most
+`SilGen.InlinableSize` (120) SIL instructions and not `@inline(never)` —
+with the closures, thunks and instances they refer to, and the code of the
+classes they name. An optimised build copies the ones it calls into its
+unit (`LibraryInterface.LinkInlinable`) before the specialisation pass,
+which makes its copies of them for the unit's types, as it does of the
+unit's own generic code; a larger one is called in the archive, generic,
+as Swift calls a library's code that is not `@inlinable`. An optimised
+single-file build is compiled whole, the library with it, and specialises
+everything. The build cache keys a library's entry, a project's objects and
+the record that the library checks cleanly by the generics mode, and an
+interface records it, so a specialised build never links an unspecialised
+archive.
+
 A protocol extension's member is generic over `Self`: it takes `Self`'s
 metadata and the protocol's table, and `self` where its caller holds it.
 A `some P` parameter is an anonymous type parameter, after the named ones

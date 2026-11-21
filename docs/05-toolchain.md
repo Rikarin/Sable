@@ -671,14 +671,18 @@ with no syntax that write back to the same bytes, and describe every
 declaration of Sable.Core as the bound ones do (`LibraryInterfaceTests`).
 Default arguments, initial values and accessors are not in the symbols:
 they are expressions and functions, in the SIL or the source. The SIL is
+`SilPrinter`'s text, Brotli-compressed: `Pipeline.CoreInterface`'s holds
 every function of the unit's files lowered as a unit of a program compiled
-separately — what is not generic, with the instances it uses itself — as
-`SilPrinter`'s text, Brotli-compressed. The file is binary: `SBIL`, the
-format's version, then the compiler's identity, the settings (target os and
-arch, profile, `--deny-reflection`), the unit's name, each of its files'
-name and SHA-256, its modules, what other units' extensions add to its types
-in the compilation it was lowered in, the two sections, and the payload's
-SHA-256. One of another version, another compiler, cut short or corrupt is
+separately, what `CompileAgainst` links in; a build's (`std.sbi`, a
+dependency's) only the code other units may copy (#297 stage 7, below).
+After it comes the table of the unit's generic functions compiled once
+into its archive, each with whether it writes out a value of a type it is
+given and whether it is inlinable. The file is binary: `SBIL`, the
+format's version (2), then the compiler's identity, the settings (target os
+and arch, profile, `--deny-reflection`, unspecialised generics), the unit's
+name, each of its files' name and SHA-256, its modules, what other units'
+extensions add to its types in the compilation it was lowered in, the
+sections, and the payload's SHA-256. One of another version, another compiler, cut short or corrupt is
 not read (`LibraryInterface.Read` gives null); the `interface` fuzz target
 holds the symbol reader to refusing what it cannot read and to writing what
 it reads back the same. The compiler's identity
@@ -793,18 +797,54 @@ and finding generators from 38 ms to 3 ms. Of the rest: binding 0.41 s
 (declaring the program from source 0.12 s, its signatures 0.08 s, the
 unit's bodies 0.22 s), clang 0.30 s, link 0.05 s.
 
-*Why a build does not compile against the standard library's `.sbi`.*
-`Pipeline.CompileAgainst` saves a whole-program compilation from lowering
-the library: it links the interface's SIL in. A separately compiled build
-already has none of the library to lower — its code is the archive — and
-what the unit lowers of it is the instances of its generics, which the
-`.sbi` cannot carry: of the 70 `examples/ssg` uses, the library's own unit
-had made none (it instantiates 13 generics, all different). Declaring the
-library from the `.sbi`'s symbols would save `Compilation.Create`'s 0.12 s
-and part of the signatures' 0.08 s, but the instances' bodies are bound
-from the library's source against its declarations, so the library would
-have to be declared from source anyway; that waits for generics compiled
-once (#297), after which the `.sbi` holds what a program needs of them.
+*A library's generic code, compiled once* (#297 stage 7). Built specialised
+(the default), what a unit lowers of the library is the instances of its
+generics, which no `.sbi` can carry: of the 70 `examples/ssg` uses, the
+library's own unit had made none. Built unspecialised (`-generics=unspecialised`),
+the library's unit compiles every generic function of its files that can be
+compiled once into its archive and records them in its `.sbi`
+(`LibraryInterface.Generics`, docs/06 §6.2); the build lowers the library
+units first, and every unit after calls that code in the archive, neither
+binding nor lowering its bodies. Only the generic functions the library
+left specialised are still instantiated from its source. The `.sbi`'s SIL
+is the inlinable part of that code, which an optimised unit copies in for
+the specialisation pass (`LibraryInterface.LinkInlinable`). On macOS a
+program is linked with `-dead_strip`, since the library's archive is one
+object, which Apple's linker otherwise takes whole.
+
+Measured with `sable` built Release, a package's dev build (debug
+information, units) on an M1 Max under a load average of 10–30; "before"
+is master just before this, cold is an empty `$SABLE_HOME` and `target/`,
+warm a warm cache and an empty `target/`, edit one body changed after a
+warm build; sizes are the executable's:
+
+| Build | Before, specialised | Before, unspecialised | After, specialised | After, unspecialised |
+|---|---:|---:|---:|---:|
+| three-line, cold | 2.7–3.0 s | 2.8–2.9 s | 2.7–2.8 s | 3.55 s |
+| three-line, warm / edit | 0.85–0.88 s | 0.85–0.87 s | 0.86–0.89 s | 0.86–0.90 s |
+| three-line, size | 195 KB | 195 KB | 94 KB | 94 KB |
+| `examples/ssg`, cold | 3.75–3.77 s | 4.0 s | 3.6 s | 4.68 s |
+| `examples/ssg`, warm / edit | 1.69–1.72 s | 1.93–1.95 s | 1.69–1.70 s | 1.54–1.57 s |
+| `examples/ssg`, lowering (warm) | 0.38–0.39 s | 0.54 s | 0.38–0.39 s | 0.25 s |
+| `examples/ssg`, size | 1.45 MB | 1.62 MB | 0.82 MB | 1.21 MB |
+
+An unspecialised one-body edit of `examples/ssg` is now 9% quicker than a
+specialised one and 20% quicker than before; its first build, which
+compiles the library's every generic function into the cache, is 17%
+slower, once per target and profile. The binary is half again a
+specialised one's. The benchmarks, each built as a package in the release
+profile (ThinLTO, units), run as before in both modes (within the 2–3 ms
+the runs vary by), and
+`words`, whose dictionary code is copied from the interface, as fast as
+specialised; an unspecialised one is up to 3.1× the size (`words`, 279 KB
+against 90 KB).
+
+What is still not met of #182: a warm three-line build binds for 0.2 s,
+much of it declaring Sable.Core from its source (`Compilation.Create`).
+Declaring it from the `.sbi`'s symbols would need every body a unit may
+lower of the library — the generic functions still specialised, `@inline`
+bodies, default arguments, `const fn`s, constants, initial values — in a
+form other than source.
 
 ### The build cache
 

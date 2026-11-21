@@ -1,3 +1,5 @@
+using Sable.CodeGen;
+
 namespace Sable.Driver.Packages;
 
 /// <summary>
@@ -23,6 +25,13 @@ public sealed record PackageEnvironment(string RegistryDirectory, string CacheDi
 
     /// <summary><c>$SABLE_HOME</c>: the directory the cache, the key and the credentials are in.</summary>
     public string Home => Path.GetDirectoryName(CacheDirectory)!;
+
+    /// <summary>
+    ///     The build cache in the same directory as the fetched packages: the
+    ///     runtime's and the standard library's archives every project shares,
+    ///     with those a release carries beside the compiler.
+    /// </summary>
+    public BuildCache BuildCache => new(CacheDirectory, prebuilt: BuildCache.Default.Prebuilt);
 
     /// <summary>The user's directory for Sable: <c>SABLE_HOME</c>, else <c>~/.sable</c>.</summary>
     public static string HomeFromProcess =>

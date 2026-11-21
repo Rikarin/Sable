@@ -7,6 +7,7 @@ namespace Sable.CodeGen.Tests;
 ///     frame, a field, a tuple, an object, an array and an optional, and what
 ///     the native code computes through it agreeing with the interpreter.
 /// </summary>
+[Native]
 public sealed class LayoutTests {
     const string Declarations = """
         @packed

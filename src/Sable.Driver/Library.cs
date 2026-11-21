@@ -1,4 +1,6 @@
 using System.Reflection;
+using Sable.Driver.Build;
+using Sable.SIL;
 using Sable.Symbols;
 using Sable.Syntax;
 
@@ -119,6 +121,87 @@ public static class Library {
         );
     }
 
+    // =======================================================================
+    // The library, checked once
+    // =======================================================================
+
+    /// <summary>
+    ///     What is known of the standard library's files of <paramref name="compilation" />
+    ///     for a program that cannot change how they bind or lower
+    ///     (<see cref="Compilation.ReachesIntoLibrary" />); null for any other
+    ///     program, whose compilation checks and lowers the library whole.
+    /// </summary>
+    public static LibraryCheck? CheckFor(Compilation compilation, IReadOnlyCollection<SyntaxTree> own) {
+        if (own.Count == 0 || Environment.GetEnvironmentVariable("SABLE_CHECK_LIBRARY") is { Length: > 0 }) {
+            return null;
+        }
+
+        var ownSet = own.ToHashSet();
+        var options = own.First().Options;
+        var modules = ModulesFor(options);
+        var library = compilation.SyntaxTrees.Where(t => !ownSet.Contains(t)).ToList();
+        if (library.Count == 0 || !library.All(t => IsEmbedded(t, modules)) || compilation.ReachesIntoLibrary(ownSet)) {
+            return null;
+        }
+
+        // In the process, by the trees themselves, parsed once and kept; on
+        // disk, by what they are parsed from: their names and the target and
+        // profile, under the compiler's own hash, whose assemblies carry them.
+        var key = $"{string.Join(",", library.Select(IdOf).Order())}|{compilation.BindOptions}";
+        return new(library, key, LastingKey(library, options, compilation.BindOptions));
+    }
+
+    /// <summary>
+    ///     What <c>$SABLE_HOME/cache/library-checked</c> records a library as:
+    ///     what its files are parsed from — their names, the target and
+    ///     profile — and the binding options, under the compiler's identity
+    ///     (<see cref="CodeGen.CompilerIdentity" />), whose assemblies carry the
+    ///     files: a single-file build of the compiler has one too.
+    /// </summary>
+    static string LastingKey(IEnumerable<SyntaxTree> library, ParseOptions options, BindOptions bindOptions) =>
+        IncrementalBuild.Hash($"sable-library-checked-2\n{CodeGen.CompilerIdentity.Current}\n{options.TargetOs}\n{options.TargetArch}\n{CoreLibrary.ProfileOf(options)}\n{string.Join("\n", library.Select(static t => t.Text.FileName).Order(StringComparer.Ordinal))}\n{bindOptions}");
+
+    /// <summary>
+    ///     Records that the standard library's <paramref name="library" /> —
+    ///     Sable.Core and the modules a program imported, parsed for
+    ///     <paramref name="options" /> — checks cleanly, learnt otherwise than
+    ///     by <see cref="LibraryCheck.Passed" />: its unit is in the build
+    ///     cache, its <c>.sbi</c> beside the archive, compiled with a program
+    ///     that extends nothing — an entry written only once every body of it
+    ///     bound and lowered without a word. A fresh process — <c>sable
+    ///     check</c>, a build of one file, the language server — then checks
+    ///     none of it again. Only embedded files are recorded: a program
+    ///     bringing its own copy of one has changed the library.
+    /// </summary>
+    /// <param name="cache">The build cache the entry is in, beside which the record goes: <c>$SABLE_HOME/cache</c>'s, unless a test's.</param>
+    public static void MarkChecked(IReadOnlyList<SyntaxTree> library, ParseOptions options, string cache) {
+        if (library.Count == 0 || Environment.GetEnvironmentVariable("SABLE_CHECK_LIBRARY") is { Length: > 0 }) {
+            return;
+        }
+
+        var modules = ModulesFor(options);
+        if (!library.All(t => IsEmbedded(t, modules))) {
+            return;
+        }
+
+        new LibraryCheck(library, $"{string.Join(",", library.Select(IdOf).Order())}|{BindOptions.Default}", LastingKey(library, options, BindOptions.Default)).Passed(Path.Combine(cache, CheckedDirectory));
+    }
+
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> CheckedTrees = new(StringComparer.Ordinal);
+
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SyntaxTree, object> Ids = new();
+
+    static long _lastId;
+
+    /// <summary>A number for a tree, its own for as long as the tree lives: the library's are parsed once and kept.</summary>
+    static long IdOf(SyntaxTree tree) => (long)Ids.GetValue(tree, static _ => Interlocked.Increment(ref _lastId));
+
+    /// <summary>Where it is written down that a library was checked, under <c>$SABLE_HOME</c>.</summary>
+    internal static string CheckedPath => Path.Combine(CodeGen.NativeBuild.SableHome, "cache", CheckedDirectory);
+
+    /// <summary>The directory of the build cache the records are in.</summary>
+    public const string CheckedDirectory = "library-checked";
+
     static bool IsEmbedded(SyntaxTree tree, IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> modules) =>
         CoreLibrary.Contains(tree) || CoreLibrary.ModuleOf(tree) is { } module && modules.TryGetValue(module, out var files) && files.Contains(tree);
 
@@ -127,3 +210,67 @@ public static class Library {
 
     static string NameOf(SyntaxNode name) => name.ToString().Trim();
 }
+
+/// <summary>
+///     Whether a program's standard library was found to check cleanly —
+///     its every body bound, and every function lowered and verified,
+///     without a word — with a program that could not change any of it
+///     (<see cref="Compilation.ReachesIntoLibrary" />), so with any other
+///     such program too. Once it is known, a build checks
+///     only the program's own bodies, and lowers only the library functions
+///     it reaches (<see cref="SilGen.LowerByFile" />'s <c>onDemand</c>): a
+///     small program binds a few of the library's files, not every one.
+/// </summary>
+/// <remarks>
+///     It is learnt from a build that checked the library whole, or that
+///     compiled the library's unit into the build cache, its <c>.sbi</c>
+///     beside its archive (<see cref="Library.MarkChecked" />), and kept for
+///     the process — by the library's trees, which are parsed once and never
+///     change — and in <c>$SABLE_HOME/cache/library-checked</c>, under the
+///     compiler's identity, so that the next process need not learn it again:
+///     <c>sable check</c> and the language server read it too.
+///     With <c>SABLE_CHECK_LIBRARY</c> set, nothing is known, and every
+///     program has the library checked with it, as it was before: what a
+///     suspected difference is compared against.
+/// </remarks>
+public sealed class LibraryCheck {
+    readonly HashSet<SyntaxTree> _library;
+    readonly string _key;
+    readonly string _lasting;
+
+    internal LibraryCheck(IEnumerable<SyntaxTree> library, string key, string lasting) {
+        _library = [..library];
+        _key = key;
+        _lasting = lasting;
+    }
+
+    /// <summary>The library's trees, whose bodies are left alone, when it is known to check cleanly; null when it is not known yet.</summary>
+    public Func<SyntaxTree, bool>? Skipped => IsKnown() ? _library.Contains : null;
+
+    bool IsKnown() {
+        if (Library.CheckedTrees.TryGetValue(_key, out var known)) {
+            return known;
+        }
+
+        if (File.Exists(Path.Combine(Library.CheckedPath, _lasting))) {
+            Library.CheckedTrees[_key] = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>A build that checked and lowered the library whole with the program succeeded: so the library checks cleanly.</summary>
+    /// <param name="directory">Where the record goes: <see cref="Library.CheckedPath" /> unless said.</param>
+    public void Passed(string? directory = null) {
+        Library.CheckedTrees[_key] = true;
+        directory ??= Library.CheckedPath;
+        try {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, _lasting), "");
+        } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+            // Kept for the process only: the next one learns it again.
+        }
+    }
+}
+

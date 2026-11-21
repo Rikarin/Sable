@@ -9,6 +9,7 @@ namespace Sable.CodeGen.Tests;
 ///     width, native and interpreted, held to the same answers; and natively
 ///     the LLVM intrinsic each is.
 /// </summary>
+[Native]
 public sealed class NumericIntrinsicTests {
     [Fact]
     public void BitCountsSeeEveryWidth() =>

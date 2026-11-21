@@ -7,6 +7,7 @@ namespace Sable.CodeGen.Tests;
 ///     copied; their deinit runs exactly once; and a use after a move is an
 ///     error that names the move.
 /// </summary>
+[Native]
 public sealed class MoveTests {
     const string Handle = """
                           @noncopy struct Handle {

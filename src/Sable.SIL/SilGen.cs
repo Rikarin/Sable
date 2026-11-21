@@ -102,8 +102,16 @@ public sealed partial class SilGen {
     ///     files can say where.
     /// </summary>
     /// <param name="denyReflection">Built with <c>--deny-reflection</c>: <c>Mirror</c> and <c>TypeInfo</c> are refused (S3450).</param>
-    public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerByFile(Compilation compilation, bool denyReflection = false) {
-        var generator = new SilGen(compilation) { _denyReflection = denyReflection };
+    /// <param name="onDemand">
+    ///     The files whose functions are lowered only once something lowered
+    ///     calls them — the standard library's, once it is known to check
+    ///     cleanly with the program (<see cref="Compilation.ReachesIntoLibrary" />):
+    ///     a small program then binds and lowers a few of its files, not all
+    ///     of them. Everything else is lowered, reached or not, so that what
+    ///     lowering says of the program's own code is said. Null for none.
+    /// </param>
+    public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerByFile(Compilation compilation, bool denyReflection = false, Func<SyntaxTree, bool>? onDemand = null) {
+        var generator = new SilGen(compilation) { _denyReflection = denyReflection, _onDemand = onDemand };
         generator._module.DenyReflection = denyReflection;
         generator.LowerAll();
         return (generator._module, generator.PlacedDiagnostics);
@@ -122,8 +130,9 @@ public sealed partial class SilGen {
     ///     Lowering is only asked of a program that type-checks: a bound tree
     ///     with errors in it is not one it can take.
     /// </remarks>
-    public static IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Check(Compilation compilation) {
-        var generator = new SilGen(compilation);
+    /// <param name="onDemand">The files whose functions are lowered only where reached (<see cref="LowerByFile" />): a library known to check cleanly.</param>
+    public static IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Check(Compilation compilation, Func<SyntaxTree, bool>? onDemand = null) {
+        var generator = new SilGen(compilation) { _onDemand = onDemand };
         generator.LowerAll();
         return [..generator.PlacedDiagnostics.Where(static d => d.Diagnostic.Code != ErrorCode.ERR_NotLoweredYet)];
     }
@@ -134,8 +143,9 @@ public sealed partial class SilGen {
     ///     harness is the entry point of a program that may have its own.
     /// </summary>
     /// <param name="markDecisions">Marks the source's decisions and their outcomes, for branch coverage (<see cref="SilDecision" />).</param>
-    public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) Lower(Compilation compilation, FunctionSymbol entryPoint, bool markDecisions = false) {
-        var generator = new SilGen(compilation) { _entryOverride = entryPoint, _markDecisions = markDecisions };
+    /// <param name="onDemand">The files whose functions are lowered only where reached (<see cref="LowerByFile" />).</param>
+    public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) Lower(Compilation compilation, FunctionSymbol entryPoint, bool markDecisions = false, Func<SyntaxTree, bool>? onDemand = null) {
+        var generator = new SilGen(compilation) { _entryOverride = entryPoint, _markDecisions = markDecisions, _onDemand = onDemand };
         generator.LowerAll();
         return (generator._module, generator.Diagnostics);
     }
@@ -213,8 +223,97 @@ public sealed partial class SilGen {
         return (generator._module, generator.Diagnostics);
     }
 
+    /// <summary>
+    ///     <see cref="LowerUnit" />, with the file each diagnostic is in where
+    ///     lowering knows it, as <see cref="LowerByFile" /> gives them: what a
+    ///     program compiled against its libraries' interfaces reports.
+    /// </summary>
+    public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerUnitByFile(
+        Compilation compilation,
+        SilUnit unit,
+        SilProgram? program = null,
+        bool denyReflection = false
+    ) {
+        var generator = new SilGen(compilation) { _unit = unit, _program = program, _denyReflection = denyReflection };
+        generator._module.Unit = new();
+        generator._module.DenyReflection = denyReflection;
+        generator.LowerAll();
+        return (generator._module, generator.PlacedDiagnostics);
+    }
+
     SilUnit? _unit;
     SilProgram? _program;
+
+    /// <summary>The files whose functions are lowered only where reached (<see cref="LowerByFile" />); null for none.</summary>
+    Func<SyntaxTree, bool>? _onDemand;
+
+    /// <summary>The functions of <see cref="_onDemand" />'s files not reached yet, by name.</summary>
+    readonly Dictionary<string, (FunctionSymbol Symbol, SyntaxNode Syntax, SemanticModel Model, FunctionType Type)> _deferred = new(StringComparer.Ordinal);
+
+    /// <summary>
+    ///     Whether a file's bodies are bound to lower it: a unit's own, and
+    ///     not one lowered on demand, whose accessors are named from their
+    ///     declarations alone (binding later gives the same symbols).
+    /// </summary>
+    bool Binds(SyntaxTree tree) => (_unit is null || _unit.Owns(tree)) && _onDemand?.Invoke(tree) != true;
+
+    /// <summary>
+    ///     A method of a class or an actor, or of an extension of one: its
+    ///     vtable is built from the methods lowered by then, so these are
+    ///     never left for later.
+    /// </summary>
+    static bool DispatchesFrom(FunctionSymbol function) {
+        for (var symbol = function.ContainingSymbol; symbol is not null; symbol = symbol.ContainingSymbol) {
+            switch (symbol) {
+                case ExtensionSymbol extension:
+                    return extension.ExtendedType.TypeKind is TypeKind.Class or TypeKind.Actor;
+                case NamedTypeSymbol type:
+                    return type.TypeKind is TypeKind.Class or TypeKind.Actor;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    ///     The instances of generic functions asked for, and the functions
+    ///     left for later (<see cref="_onDemand" />) that what is lowered
+    ///     reaches — through a reference, or as the deinit of a type it
+    ///     uses — until nothing more is reached. What the code generator
+    ///     and the interpreter can reach (<see cref="SilPassManager.Reachable" />)
+    ///     is then all there.
+    /// </summary>
+    void LowerReached() {
+        LowerPendingInstances();
+        while (_deferred.Count > 0) {
+            var reached = new List<string>();
+            foreach (var function in _module.Functions) {
+                foreach (var instruction in function.Blocks.SelectMany(static b => b.Instructions)) {
+                    if (instruction is FunctionRefInst reference && _deferred.ContainsKey(reference.Function)) {
+                        reached.Add(reference.Function);
+                    }
+                }
+            }
+
+            foreach (var type in _module.Types) {
+                if (type switch { StructType s => s.Deinit, ClassType c => c.Deinit, _ => null } is { } deinit && _deferred.ContainsKey(deinit)) {
+                    reached.Add(deinit);
+                }
+            }
+
+            if (reached.Count == 0) {
+                return;
+            }
+
+            foreach (var name in reached) {
+                if (_deferred.Remove(name, out var function)) {
+                    LowerBody(function.Symbol, function.Syntax, function.Model, name, function.Type, TypeSubstitution.Empty);
+                }
+            }
+
+            LowerPendingInstances();
+        }
+    }
 
     /// <summary>A file's declarations that lowering looks at — and perhaps other nodes, which each use filters out.</summary>
     IEnumerable<SyntaxNode> Declarations(SyntaxTree tree) => _program?.Declarations(tree, _unit is null || _unit.Owns(tree)) ?? tree.Root.DescendantNodes();
@@ -254,7 +353,7 @@ public sealed partial class SilGen {
             // which the setter the compiler writes for it calls.
             foreach (var accessor in Declarations(tree).OfType<AccessorSyntax>()) {
                 if (accessor.Keyword.Kind is not (SyntaxKind.GetKeyword or SyntaxKind.SetKeyword or SyntaxKind.WillSetKeyword or SyntaxKind.DidSetKeyword)
-                    || (_unit is null || _unit.Owns(tree) ? model.GetAccessorSymbol(accessor) : model.GetAccessorDeclaration(accessor))
+                    || (Binds(tree) ? model.GetAccessorSymbol(accessor) : model.GetAccessorDeclaration(accessor))
                         is not { ContainingSymbol: FieldSymbol field } function
                     || !IsLowerable(function)) {
                     continue;
@@ -286,7 +385,7 @@ public sealed partial class SilGen {
 
                 foreach (var accessor in declaration.Accessors?.Accessors ?? []) {
                     if (accessor.Keyword.Kind is not (SyntaxKind.GetKeyword or SyntaxKind.SetKeyword)
-                        || (_unit is null || _unit.Owns(tree) ? model.GetAccessorSymbol(accessor) : model.GetAccessorDeclaration(accessor))
+                        || (Binds(tree) ? model.GetAccessorSymbol(accessor) : model.GetAccessorDeclaration(accessor))
                             is not { } function) {
                         continue;
                     }
@@ -354,8 +453,7 @@ public sealed partial class SilGen {
         // called main does. A library starts nowhere: a 'main' in it is an
         // ordinary function.
         var entry = _library ? null : _entryOverride ?? functions.FirstOrDefault(static f =>
-                f.Syntax is FunctionDeclarationSyntax declaration
-                && declaration.Attributes.Any(static a => a.Name.ToString().Trim() == "main")
+                f.Symbol.FunctionKind == FunctionKind.Ordinary && f.Symbol.GetAttribute("main") is { FromExtension: false }
             ).Symbol
             ?? functions.FirstOrDefault(static f => f.Symbol is { Name: "main", ContainingSymbol: ModuleSymbol }).Symbol;
 
@@ -414,6 +512,12 @@ public sealed partial class SilGen {
                 _module.Exports[_names[symbol]] = export;
             }
 
+            // Lowered when something reaches it, if ever.
+            if (_onDemand is not null && _onDemand(model.SyntaxTree) && !ReferenceEquals(symbol, entry) && symbol.ExportName is null && !DispatchesFrom(symbol)) {
+                _deferred[_names[symbol]] = (symbol, syntax, model, type);
+                continue;
+            }
+
             var before = _module.Functions.Count;
             LowerBody(symbol, syntax, model, _names[symbol], type, TypeSubstitution.Empty);
             if (_module.Unit is { } info) {
@@ -429,13 +533,13 @@ public sealed partial class SilGen {
             }
         }
 
-        LowerPendingInstances();
+        LowerReached();
 
         // Separately, the globals are set up by the unit the program starts
         // in. Their initial values may ask for instances nothing else did.
         if (_unit is null || _module.EntryPoint is not null || _library) {
             LowerGlobalLifetimes();
-            LowerPendingInstances();
+            LowerReached();
         }
 
         BuildVTables();
@@ -478,15 +582,7 @@ public sealed partial class SilGen {
     /// </summary>
     void DeclareExternal(FunctionSymbol symbol, SyntaxNode syntax, string name) {
         // LowerBody makes nothing of a declaration without a body.
-        var hasBody = syntax switch {
-            FunctionDeclarationSyntax f => f.Body is not null || f.ExpressionBody is not null,
-            InitDeclarationSyntax i => i.Body is not null,
-            DeinitDeclarationSyntax => true,
-            OperatorDeclarationSyntax o => o.Body is not null || o.ExpressionBody is not null,
-            AccessorSyntax a => a.Body is not null || a.ExpressionBody is not null,
-            _ => false,
-        };
-        if (!hasBody && _compilation.GetDerivedBody(symbol) is null && _compilation.GetLazyBody(symbol) is null
+        if (!symbol.HasBody && _compilation.GetDerivedBody(symbol) is null && _compilation.GetLazyBody(symbol) is null
             && _compilation.GetInheritedInitializerBody(symbol) is null) {
             return;
         }
@@ -844,16 +940,13 @@ public sealed partial class SilGen {
 
     /// <summary>What the declaration's <c>@inline(always)</c> or <c>@inline(never)</c> asks, if it has one.</summary>
     static SilInline InlineOf(FunctionSymbol symbol) {
-        foreach (var syntax in symbol.DeclaringSyntax) {
-            foreach (var attribute in syntax.ChildNodes().OfType<AttributeSyntax>()) {
-                if (attribute.Name.ToString().Trim() == "inline"
-                    && attribute.ArgumentList?.Arguments.ToList() is [{ Expression: IdentifierNameSyntax { Identifier.Text: var how } }]) {
-                    return how switch {
-                        "always" => SilInline.Always,
-                        "never" => SilInline.Never,
-                        _ => SilInline.Default,
-                    };
-                }
+        foreach (var attribute in symbol.Attributes) {
+            if (attribute is { Name: "inline", FromExtension: false } && attribute.Arguments is [var how]) {
+                return how switch {
+                    "always" => SilInline.Always,
+                    "never" => SilInline.Never,
+                    _ => SilInline.Default,
+                };
             }
         }
 
@@ -3935,9 +4028,7 @@ public sealed partial class SilGen {
     internal bool IsIndirect(EnumType type, int index) => _indirect.TryGetValue(type, out var boxed) && boxed.Contains(index);
 
     static bool IsMarkedIndirect(NamedTypeSymbol union, string caseName) =>
-        union.Members.OfType<UnionCaseSymbol>().FirstOrDefault(c => c.Name == caseName)?.DeclaringSyntax.FirstOrDefault()
-            is UnionCaseDeclarationSyntax declaration
-        && declaration.Attributes.Any(static a => a.Name.ToString().Trim() == "indirect");
+        union.Members.OfType<UnionCaseSymbol>().FirstOrDefault(c => c.Name == caseName)?.HasAttribute("indirect") == true;
 
     /// <summary>True when a value of one type holds a value of another by value — through no reference.</summary>
     static bool Holds(SilType part, NominalType type) {
@@ -4305,7 +4396,7 @@ public sealed partial class SilGen {
                 // for it, which gives the superclass's fields their values.
                 if (owner.BaseTypes.OfType<NamedTypeSymbol>().FirstOrDefault(static b => b.TypeKind == TypeKind.Class) is { } superclass
                     && superclass.OriginalDefinition.GetMembers("init").OfType<FunctionSymbol>()
-                        .FirstOrDefault(i => i is { DeclaringSyntax.IsEmpty: true, Parameters.IsEmpty: true } && !generator._compilation.InheritedInitializers.ContainsKey(i)) is { } implicitInit
+                        .FirstOrDefault(i => i is { IsSynthesized: true, Parameters.IsEmpty: true } && !generator._compilation.InheritedInitializers.ContainsKey(i)) is { } implicitInit
                     && !Descendants(body).Any(static n => n is BoundCall { Function.FunctionKind: FunctionKind.Initializer, Receiver: BoundSuperAccess })) {
                     var call = new BoundCall(body.Syntax, new BoundSuperAccess(body.Syntax, superclass), implicitInit, [], Core.Void) { Substitution = TypeSubstitution.For(superclass) };
                     Statement(new BoundExpressionStatement(body.Syntax, call));
@@ -9850,7 +9941,7 @@ public sealed partial class SilGen {
 
             // 'flags.contains(.Write)', on a '@flags' enum: every flag of the
             // argument set in the receiver.
-            if (callee is { Name: "contains", DeclaringSyntax.IsEmpty: true, ContainingSymbol: NamedTypeSymbol { IsFlags: true } flagsType }) {
+            if (callee is { Name: "contains", IsSynthesized: true, ContainingSymbol: NamedTypeSymbol { IsFlags: true } flagsType }) {
                 return FlagsContains(call, flagsType);
             }
 
@@ -9874,13 +9965,13 @@ public sealed partial class SilGen {
             // 'super.init()' where the superclass has only the implicit
             // initialiser: its fields' initial values, stored into this object.
             var inheritedInit = generator._compilation.InheritedInitializers.ContainsKey(callee);
-            if (callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true, Parameters.IsEmpty: true }
+            if (callee is { FunctionKind: FunctionKind.Initializer, IsSynthesized: true, Parameters.IsEmpty: true }
                 && !inheritedInit && call.Receiver is BoundSuperAccess super) {
                 return SuperImplicitInit(call, super);
             }
 
             // A class or actor's implicit 'init()'.
-            if (!inheritedInit && callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true, Parameters.IsEmpty: true }
+            if (!inheritedInit && callee is { FunctionKind: FunctionKind.Initializer, IsSynthesized: true, Parameters.IsEmpty: true }
                 && LowerType(call.Type) is ClassType implicitClass) {
                 return ImplicitInit(call, implicitClass);
             }
@@ -9892,7 +9983,7 @@ public sealed partial class SilGen {
             }
 
             // A synthesised memberwise initialiser is the struct, built from its fields.
-            if (!inheritedInit && callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true }) {
+            if (!inheritedInit && callee is { FunctionKind: FunctionKind.Initializer, IsSynthesized: true }) {
                 if (LowerType(call.Type) is not StructType structType) {
                     return Missing(call, $"initialising '{Sub(call.Type).ToDisplayString()}'");
                 }

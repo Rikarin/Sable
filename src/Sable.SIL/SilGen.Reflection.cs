@@ -37,8 +37,7 @@ public sealed partial class SilGen {
 
     /// <summary>True for a member <c>Sable.Core</c> declares <c>@intrinsic</c>: its body is the compiler's to give.</summary>
     internal static bool IsIntrinsic(FunctionSymbol function) {
-        if (function.DeclaringSyntax.FirstOrDefault() is not FunctionDeclarationSyntax declaration
-            || !declaration.Attributes.Any(static a => a.Name.ToString().Trim() == "intrinsic")) {
+        if (function.FunctionKind is FunctionKind.Accessor || function.GetAttribute("intrinsic") is not { FromExtension: false }) {
             return false;
         }
 
@@ -691,8 +690,7 @@ public sealed partial class SilGen {
             .Where(static b => b.TypeKind == TypeKind.Protocol)
             .Select(b => members.Apply(b).ToDisplayString()));
 
-        values["attributeNames"] = s.Strings(type.OriginalDefinition.DeclaringSyntax.FirstOrDefault()?.ChildNodes().OfType<AttributeSyntax>()
-            .Select(static a => a.Name.ToString().Trim() + (a.ArgumentList?.ToString().Trim() ?? "")) ?? []);
+        values["attributeNames"] = s.Strings(type.OriginalDefinition.Attributes.Where(static a => !a.FromExtension).Select(static a => a.Written));
 
         var valuesIndex = info.FieldIndex("attributeValues");
         if (valuesIndex >= 0) {

@@ -7,6 +7,7 @@ namespace Sable.CodeGen.Tests;
 ///     read-only memory, not built by appends; copy on write copies it before
 ///     a change. Native and interpreted agree, leak-checked.
 /// </summary>
+[Native]
 public sealed class ConstantArrayTests {
     [Fact]
     public void ConstantArraysReadAndCopyBeforeAChange() =>

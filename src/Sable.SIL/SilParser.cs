@@ -481,6 +481,18 @@ public sealed class SilParser {
             _function.ResultRoots = roots;
         }
 
+        // The function's own order of its blocks, when it is not the one they are written in.
+        List<int>? ownOrder = null;
+        if (Accept("blocks")) {
+            Expect("(");
+            ownOrder = [];
+            do {
+                ownOrder.Add(Count("a block's index"));
+            } while (Accept(","));
+
+            Expect(")");
+        }
+
         if (Accept("inline")) {
             Expect("(");
             _function.Inline = Accept("always") ? SilInline.Always
@@ -531,6 +543,15 @@ public sealed class SilParser {
         var order = _blocks.Values.ToDictionary(static b => b, b => _blockOrder[b]);
         _function.Blocks.Sort((a, b) => order[a].CompareTo(order[b]));
         _blockOrder.Clear();
+        if (ownOrder is not null) {
+            if (ownOrder.Count != _function.Blocks.Count || ownOrder.Distinct().Count() != ownOrder.Count || ownOrder.Any(i => i >= _function.Blocks.Count)) {
+                throw Error($"blocks(...) of @{name} does not order its {_function.Blocks.Count} blocks");
+            }
+
+            var written = _function.Blocks.ToList();
+            _function.Blocks.Clear();
+            _function.Blocks.AddRange(ownOrder.Select(i => written[i]));
+        }
 
         return _function;
     }

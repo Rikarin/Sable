@@ -73,8 +73,127 @@ public abstract class Symbol {
 
     public virtual Accessibility DeclaredAccessibility => Accessibility.Internal;
 
-    /// <summary>True for symbols the compiler created rather than the source.</summary>
-    public virtual bool IsSynthesized => DeclaringSyntax.IsEmpty;
+    bool? _synthesized;
+
+    /// <summary>
+    ///     True for symbols the compiler created rather than the source: an
+    ///     implicit initialiser, a flags type's <c>contains</c>. A symbol read
+    ///     from a library's interface (<c>.sbi</c>) has no syntax and says so
+    ///     itself; one bound from source is synthesised when nothing declares it.
+    /// </summary>
+    public bool IsSynthesized {
+        get => _synthesized ?? DeclaringSyntax.IsEmpty;
+        internal set => _synthesized = value;
+    }
+
+    ImmutableArray<SymbolAttribute> _attributes;
+
+    /// <summary>
+    ///     The attributes written on the declaration — and on the extension
+    ///     it is declared in — in source order: <c>@inline(always)</c>,
+    ///     <c>@main</c>, <c>@MainActor</c>. What lowering and binding read of
+    ///     another unit's declarations is read here rather than from its
+    ///     syntax, so that a symbol read from an interface answers the same.
+    /// </summary>
+    public ImmutableArray<SymbolAttribute> Attributes {
+        get {
+            if (_attributes.IsDefault) {
+                ImmutableInterlocked.InterlockedInitialize(ref _attributes, SymbolAttribute.Of(DeclaringSyntax));
+            }
+
+            return _attributes;
+        }
+        internal set => _attributes = value;
+    }
+
+    bool? _nonisolated;
+
+    /// <summary>
+    ///     Declared <c>nonisolated</c> — a function or a property, or an
+    ///     accessor of one: reached on an actor from anywhere, without a hop.
+    /// </summary>
+    public bool IsNonisolated {
+        get => _nonisolated ?? DeclaredNonisolated(DeclaringSyntax);
+        internal set => _nonisolated = value;
+    }
+
+    static bool DeclaredNonisolated(ImmutableArray<SyntaxNode> declarations) {
+        foreach (var syntax in declarations) {
+            for (var node = syntax; node is not null; node = node.Parent) {
+                if (node is FunctionDeclarationSyntax function) {
+                    if (function.Modifiers.Any(static m => m.Kind == SyntaxKind.NonisolatedKeyword)) {
+                        return true;
+                    }
+
+                    break;
+                }
+
+                if (node is FieldDeclarationSyntax field) {
+                    if (field.Modifiers.Any(static m => m.Kind == SyntaxKind.NonisolatedKeyword)) {
+                        return true;
+                    }
+
+                    break;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    ///     Declared <c>@MainActor</c>, or inside a declaration that is — a
+    ///     member of such a type or extension, a closure in such a function.
+    /// </summary>
+    public bool IsOnMainActor {
+        get {
+            for (var at = this; at is not null and not ModuleSymbol; at = at.ContainingSymbol) {
+                if (at.HasAttribute("MainActor")) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    ///     The program's entry point — a function of a module marked
+    ///     <c>@main</c> or named <c>main</c> — or code inside it.
+    /// </summary>
+    public bool IsInEntryPoint {
+        get {
+            for (var at = this; at is not null and not ModuleSymbol; at = at.ContainingSymbol) {
+                if (at is FunctionSymbol { ContainingSymbol: ModuleSymbol } function && (function.Name == "main" || function.HasAttribute("main"))) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>Whether the declaration has the attribute of this name, as <see cref="Attributes" /> has it.</summary>
+    public bool HasAttribute(string name) {
+        foreach (var attribute in Attributes) {
+            if (attribute.Name == name) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The first attribute of this name, if the declaration has one.</summary>
+    public SymbolAttribute? GetAttribute(string name) {
+        foreach (var attribute in Attributes) {
+            if (attribute.Name == name) {
+                return attribute;
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>The module this symbol ultimately belongs to.</summary>
     public ModuleSymbol? ContainingModule {
@@ -115,4 +234,104 @@ public abstract class Symbol {
     }
 
     public override string ToString() => QualifiedName;
+}
+
+/// <summary>
+///     An attribute as a symbol holds it: its name, <c>inline</c> for
+///     <c>@inline(always)</c>, and its argument list as written —
+///     <c>(always)</c>, or <c>("c", "abs")</c>, null when there is none —
+///     with each argument's text, trimmed. Arguments are kept as written
+///     rather than evaluated, since what they mean is the attribute's
+///     business; a label stays on its argument (<c>since: 2</c>).
+/// </summary>
+/// <param name="FromExtension">
+///     Written on the extension the declaration is in rather than on the
+///     declaration: <c>@MainActor extension Model { … }</c> isolates its
+///     members, but a type's reflected attributes are its own.
+/// </param>
+public sealed record SymbolAttribute(string Name, string? ArgumentList, bool FromExtension = false) {
+    /// <summary>Each argument's text, trimmed, in order; empty when there is no argument list.</summary>
+    public ImmutableArray<string> Arguments => ArgumentList is null ? [] : SplitArguments(ArgumentList);
+
+    /// <summary>The attributes of declarations, in order, with those of the extension each is in after its own.</summary>
+    internal static ImmutableArray<SymbolAttribute> Of(ImmutableArray<SyntaxNode> declarations) {
+        if (declarations.IsEmpty) {
+            return [];
+        }
+
+        var found = ImmutableArray.CreateBuilder<SymbolAttribute>();
+        foreach (var declaration in declarations) {
+            Add(declaration, found, false);
+            for (var parent = declaration.Parent; parent is not null; parent = parent.Parent) {
+                if (parent is ExtensionDeclarationSyntax extension) {
+                    Add(extension, found, true);
+                    break;
+                }
+
+                if (parent is DeclarationSyntax) {
+                    break;
+                }
+            }
+        }
+
+        return found.ToImmutable();
+    }
+
+    static void Add(SyntaxNode declaration, ImmutableArray<SymbolAttribute>.Builder found, bool fromExtension) {
+        foreach (var attribute in declaration.ChildNodes().OfType<AttributeSyntax>()) {
+            found.Add(From(attribute) with { FromExtension = fromExtension });
+        }
+    }
+
+    /// <summary>The attribute an <c>@name(arguments)</c> is.</summary>
+    public static SymbolAttribute From(AttributeSyntax attribute) =>
+        new(attribute.Name.ToString().Trim(), attribute.ArgumentList?.ToString().Trim());
+
+    /// <summary>The top-level arguments of <c>(a, (b, c), "d,e")</c>: split at commas outside brackets and strings.</summary>
+    static ImmutableArray<string> SplitArguments(string list) {
+        var inner = list.Length >= 2 && list[0] == '(' && list[^1] == ')' ? list[1..^1] : list;
+        var arguments = ImmutableArray.CreateBuilder<string>();
+        var depth = 0;
+        var start = 0;
+        var quoted = false;
+        for (var i = 0; i < inner.Length; i++) {
+            var c = inner[i];
+            if (quoted) {
+                if (c == '\\') {
+                    i++;
+                } else if (c == '"') {
+                    quoted = false;
+                }
+
+                continue;
+            }
+
+            switch (c) {
+                case '"':
+                    quoted = true;
+                    break;
+                case '(' or '[' or '{':
+                    depth++;
+                    break;
+                case ')' or ']' or '}':
+                    depth--;
+                    break;
+                case ',' when depth == 0:
+                    arguments.Add(inner[start..i].Trim());
+                    start = i + 1;
+                    break;
+            }
+        }
+
+        if (inner[start..].Trim() is { Length: > 0 } last) {
+            arguments.Add(last);
+        }
+
+        return arguments.ToImmutable();
+    }
+
+    /// <summary>The attribute as written: <c>inline(always)</c>, without the <c>@</c>.</summary>
+    public string Written => Name + ArgumentList;
+
+    public override string ToString() => "@" + Written;
 }

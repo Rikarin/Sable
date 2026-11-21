@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Sable.Symbols;
 using Sable.Syntax;
 
 namespace Sable.SIL;
@@ -49,14 +50,26 @@ public sealed class SilUnitInfo {
 }
 
 /// <summary>
-///     What lowering finds by walking every file of the program — the
-///     declarations it lowers, declares or checks — gathered once, so that
-///     each of many units' lowerings does not walk the whole program again.
+///     The declarations lowering lowers, declares or checks, gathered once
+///     from the compilation's symbols, so that each of many units' lowerings
+///     does not look through the whole program again.
 /// </summary>
 /// <remarks>
-///     A unit needs every declaration of the files it owns, but of the other
-///     files only those another unit can see: the ones outside function
-///     bodies. Those are found without visiting a body, which is most of a file.
+///     <para>
+///         A unit needs every declaration of the files it owns — those in
+///         bodies too, a local function or class, which only its own syntax
+///         holds — but of the other files only those another unit can see:
+///         the declarations of their modules' and types' symbols, extensions'
+///         members among them, and properties' accessors. Those are read from
+///         the symbols the compilation declared rather than by walking the
+///         other files' syntax (docs/05 §5.4), which is what lets a unit be
+///         lowered against another unit's symbols alone.
+///     </para>
+///     <para>
+///         Each file's declarations are in document order, as a walk of its
+///         syntax would give them, so that what lowering names and makes does
+///         not depend on how they were found.
+///     </para>
 /// </remarks>
 public sealed class SilProgram {
     readonly Dictionary<SyntaxTree, IReadOnlyList<SyntaxNode>> _outline;
@@ -66,48 +79,93 @@ public sealed class SilProgram {
         _outline = outline;
     }
 
-    /// <summary>The program's files' declarations outside bodies, of the kinds lowering looks at, each file's in document order.</summary>
-    public static SilProgram Index(IEnumerable<SyntaxTree> trees) {
-        var all = trees.Distinct().ToList();
-        var found = new IReadOnlyList<SyntaxNode>[all.Count];
-        Parallel.For(0, all.Count, i => {
-            var declarations = new List<SyntaxNode>();
-            Outline(all[i].Root, declarations);
-            found[i] = declarations;
-        });
+    /// <summary>The declarations of the compilation's symbols that lowering looks at, each file's in document order.</summary>
+    public static SilProgram Index(Compilation compilation) {
+        var trees = new Dictionary<SyntaxNode, SyntaxTree>(ReferenceEqualityComparer.Instance);
+        var found = new Dictionary<SyntaxTree, List<SyntaxNode>>();
+        foreach (var tree in compilation.SyntaxTrees) {
+            trees.TryAdd(tree.Root, tree);
+            found.TryAdd(tree, []);
+        }
+
+        var seen = new HashSet<SyntaxNode>(ReferenceEqualityComparer.Instance);
+        var visited = new HashSet<Symbol>(ReferenceEqualityComparer.Instance);
+        foreach (var module in compilation.Modules) {
+            foreach (var member in module.Members) {
+                Visit(member);
+            }
+        }
+
+        foreach (var carrier in compilation.ArrayCarriers) {
+            Visit(carrier);
+        }
+
         var outline = new Dictionary<SyntaxTree, IReadOnlyList<SyntaxNode>>();
-        for (var i = 0; i < all.Count; i++) {
-            outline[all[i]] = found[i];
+        foreach (var (tree, declarations) in found) {
+            declarations.Sort(static (a, b) => a.Span.Start.CompareTo(b.Span.Start));
+            outline[tree] = declarations;
         }
 
         return new(outline);
+
+        void Visit(Symbol symbol) {
+            if (!visited.Add(symbol)) {
+                return;
+            }
+
+            foreach (var syntax in symbol.DeclaringSyntax) {
+                Add(syntax);
+            }
+
+            if (symbol is NamedTypeSymbol type) {
+                foreach (var member in type.OriginalDefinition.Members) {
+                    Visit(member);
+                }
+            }
+        }
+
+        void Add(SyntaxNode syntax) {
+            if (IsDeclaration(syntax) && seen.Add(syntax) && !InBody(syntax) && TreeOf(syntax) is { } tree) {
+                found[tree].Add(syntax);
+            }
+
+            // A property's or a subscript's accessors are its own declaration's.
+            var accessors = syntax switch {
+                FieldDeclarationSyntax { Accessors: { } list } => list.Accessors,
+                SubscriptDeclarationSyntax { Accessors: { } list } => list.Accessors,
+                _ => default(SyntaxList<AccessorSyntax>?),
+            };
+            foreach (var accessor in accessors ?? []) {
+                Add(accessor);
+            }
+        }
+
+        SyntaxTree? TreeOf(SyntaxNode node) {
+            var root = node;
+            while (root.Parent is { } parent) {
+                root = parent;
+            }
+
+            return trees.GetValueOrDefault(root);
+        }
     }
 
     /// <summary>
-    ///     The declarations of a file another unit can see — members of the
-    ///     file and of its types, and properties' accessors — in document order.
+    ///     Whether a declaration is inside a body — a function's, an
+    ///     initialiser's, an accessor's, a closure's — where only its own
+    ///     file's syntax reaches it.
     /// </summary>
-    static void Outline(SyntaxNode node, List<SyntaxNode> declarations) {
-        IEnumerable<SyntaxNode> members = node switch {
-            CompilationUnitSyntax unit => unit.Members,
-            StructDeclarationSyntax s => s.Members,
-            ClassDeclarationSyntax c => c.Members,
-            ActorDeclarationSyntax a => a.Members,
-            ProtocolDeclarationSyntax p => p.Members,
-            UnionDeclarationSyntax u => u.Members,
-            EnumDeclarationSyntax e => e.Members,
-            ExtensionDeclarationSyntax x => x.Members,
-            FieldDeclarationSyntax { Accessors: { } accessors } => accessors.Accessors,
-            SubscriptDeclarationSyntax { Accessors: { } accessors } => accessors.Accessors,
-            _ => [],
-        };
-        foreach (var member in members) {
-            if (IsDeclaration(member)) {
-                declarations.Add(member);
+    static bool InBody(SyntaxNode node) {
+        for (var at = node.Parent; at is not null; at = at.Parent) {
+            switch (at) {
+                case CompilationUnitSyntax:
+                    return false;
+                case BlockSyntax or ExpressionSyntax:
+                    return true;
             }
-
-            Outline(member, declarations);
         }
+
+        return false;
     }
 
     /// <summary>The nodes beneath one, in the order <see cref="SyntaxNode.DescendantNodes" /> gives — a level at a time, not through nested iterators.</summary>
@@ -141,4 +199,7 @@ public sealed class SilProgram {
             })
             : outline;
     }
+
+    /// <summary>A file's outline: the declarations of its symbols another unit can see, in document order.</summary>
+    public IReadOnlyList<SyntaxNode> Outline(SyntaxTree tree) => _outline.TryGetValue(tree, out var outline) ? outline : [];
 }

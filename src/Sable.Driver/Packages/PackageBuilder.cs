@@ -189,12 +189,26 @@ public static class PackageBuilder {
     public static IReadOnlyList<UnitPlan> Units(PackageGraph graph, string member, BinTarget bin, GeneratedSources? generated = null) {
         var own = graph.Packages[member];
         var units = new List<UnitPlan> { new($"bin {member}/{bin.Name}", [..WithGenerated(graph, own, bin.Path, generated)]) };
-        foreach (var package in graph.Closure(member)) {
-            units.Add(new($"lib {package.Name}-{package.Version}", [..graph.LibrarySources(package).SelectMany(file => WithGenerated(graph, package, file, generated))]));
-        }
-
+        units.AddRange(graph.Closure(member).Select(package => UnitOf(graph, package, generated)));
         return units;
     }
+
+    /// <summary>
+    ///     A package's library as a unit: a registry or git dependency's —
+    ///     when all it depends on is too — kept in the shared build cache
+    ///     (<see cref="UnitPlan.Package" />), built once for every project
+    ///     that uses it; a workspace package's, in the workspace's <c>target/</c>.
+    /// </summary>
+    static UnitPlan UnitOf(PackageGraph graph, ResolvedPackage package, GeneratedSources? generated) {
+        var closure = graph.Closure(package.Name);
+        return new UnitPlan(UnitName(package), [..graph.LibrarySources(package).SelectMany(file => WithGenerated(graph, package, file, generated))]) {
+            Package = closure.All(static p => !p.IsLocal)
+                ? new(package.Name, package.Version.ToString(), [..closure.Skip(1).Select(UnitName)])
+                : null,
+        };
+    }
+
+    static string UnitName(ResolvedPackage package) => $"lib {package.Name}-{package.Version}";
 
     /// <summary>
     ///     Runs the generators for a member's target and says what they
@@ -426,7 +440,7 @@ public static class PackageBuilder {
                 Directory.CreateDirectory(output);
                 var executable = Path.Combine(output, bin.Name + (request.Target ?? NativeTarget.Host).ExecutableSuffix);
                 var buildSettings = SettingsFor(graph, member.Name, profile, request, profile.Debug ? workspace.Root : null);
-                var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin, generated), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);
+                var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin, generated), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error, environment.BuildCache);
                 Report(environment, outcome.Warnings);
                 if (!outcome.Succeeded) {
                     Report(environment, outcome.Errors);
@@ -482,7 +496,7 @@ public static class PackageBuilder {
         var path = Path.Combine(output, NativeBuild.LibraryFileName(member.Name.Replace('-', '_'), kind, request.Target ?? NativeTarget.Host));
         var settings = SettingsFor(graph, member.Name, profile, request, profile.Debug ? member.Directory : null);
         settings = settings with { Library = kind, Native = settings.Native with { PositionIndependent = true } };
-        var outcome = IncrementalBuild.Build(LibraryUnits(graph, member.Name, generated), settings, path, Path.Combine(output, "cache"), timings, environment.Error);
+        var outcome = IncrementalBuild.Build(LibraryUnits(graph, member.Name, generated), settings, path, Path.Combine(output, "cache"), timings, environment.Error, environment.BuildCache);
         Report(environment, outcome.Warnings);
         if (!outcome.Succeeded) {
             Report(environment, outcome.Errors);
@@ -498,8 +512,7 @@ public static class PackageBuilder {
 
     /// <summary>A library's units (<see cref="Units" />): the member's own library first, which leads it, then each dependency's.</summary>
     public static IReadOnlyList<UnitPlan> LibraryUnits(PackageGraph graph, string member, GeneratedSources? generated = null) => [
-        ..graph.Closure(member).Select(package =>
-            new UnitPlan($"lib {package.Name}-{package.Version}", [..graph.LibrarySources(package).SelectMany(file => WithGenerated(graph, package, file, generated))])),
+        ..graph.Closure(member).Select(package => UnitOf(graph, package, generated)),
     ];
 
     /// <summary>What a member's targets are built with under <paramref name="profile" />: its settings, and what the build scripts found for the link.</summary>

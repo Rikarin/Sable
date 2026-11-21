@@ -13,7 +13,17 @@ namespace Sable.SIL;
 ///     gives the same text, which the tests hold.
 /// </remarks>
 public static class SilPrinter {
-    public static string Print(SilModule module) {
+    public static string Print(SilModule module) => Print(module, keepBlockOrder: false);
+
+    /// <summary>
+    ///     The module as SIL text; with <paramref name="keepBlockOrder" />, a
+    ///     function whose blocks are printed in another order than its own —
+    ///     a block before one that dominates it — says its own after its type,
+    ///     <c>blocks(2, 0, 1)</c>, and reads back with its blocks in that order:
+    ///     what a library's interface keeps, so that the passes see its
+    ///     functions as lowering made them (<see cref="LibraryInterface" />).
+    /// </summary>
+    public static string Print(SilModule module, bool keepBlockOrder) {
         var builder = new StringBuilder();
 
         // Types first, each after the types it holds, so that the parser
@@ -108,7 +118,7 @@ public static class SilPrinter {
                 builder.Append('\n');
             }
 
-            Print(module.Functions[i], builder);
+            Print(module.Functions[i], builder, keepBlockOrder);
         }
 
         return builder.ToString();
@@ -216,7 +226,7 @@ public static class SilPrinter {
         return ordered;
     }
 
-    static void Print(SilFunction function, StringBuilder builder) {
+    static void Print(SilFunction function, StringBuilder builder, bool keepBlockOrder = false) {
         var names = new Dictionary<SilValue, string>();
         var blocks = new Dictionary<SilBlock, string>();
         var ordered = InPrintOrder(function);
@@ -250,6 +260,10 @@ public static class SilPrinter {
         builder.Append("sil @").Append(function.Name).Append(" : $").Append(function.Type);
         if (function.ResultRoots is { } roots) {
             builder.Append(" roots(").Append(string.Join(", ", roots)).Append(')');
+        }
+
+        if (keepBlockOrder && !ordered.SequenceEqual(function.Blocks)) {
+            builder.Append(" blocks(").Append(string.Join(", ", function.Blocks.Select(b => blocks.TryGetValue(b, out var label) ? label[2..] : "0"))).Append(')');
         }
 
         if (function.Inline != SilInline.Default) {

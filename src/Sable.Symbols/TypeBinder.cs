@@ -898,8 +898,8 @@ internal sealed class TypeBinder(Compilation compilation) {
                         $"a const-generic predicate is made of the value generic parameters ({string.Join(", ", valueParameters.Order(StringComparer.Ordinal))}), "
                         + $"whole numbers, 'true', 'false' and operators, and '{part.ToString().Trim()}' is none of those"
                     );
-                } else {
-                    declaring.ValuePredicates = declaring.ValuePredicates.Add(predicate.Expression);
+                } else if (ValuePredicate.Bind(predicate.Expression) is { } bound) {
+                    declaring.ValuePredicates = declaring.ValuePredicates.Add(bound);
                 }
 
                 continue;
@@ -1062,7 +1062,7 @@ internal sealed class TypeBinder(Compilation compilation) {
 
             if (values.Count == definition.TypeParameters.Count(IsValueParameter)) {
                 foreach (var predicate in definition.ValuePredicates) {
-                    var holds = EvaluatePredicate(predicate, values);
+                    var holds = predicate.Evaluate(values);
                     if (holds is true) {
                         continue;
                     }
@@ -1072,8 +1072,8 @@ internal sealed class TypeBinder(Compilation compilation) {
                         ErrorCode.ERR_ConstGenericPredicateFails,
                         span,
                         holds is false
-                            ? $"'{definition.Name}' requires '{predicate.ToString().Trim()}', which is false for {given}"
-                            : $"'{definition.Name}' requires '{predicate.ToString().Trim()}', which has no value for {given}: it divides by zero, overflows, or is not true or false"
+                            ? $"'{definition.Name}' requires '{predicate.Text}', which is false for {given}"
+                            : $"'{definition.Name}' requires '{predicate.Text}', which has no value for {given}: it divides by zero, overflows, or is not true or false"
                     );
                 }
             }
@@ -1917,62 +1917,6 @@ internal sealed class TypeBinder(Compilation compilation) {
         SyntaxKind.EqualsEqualsToken, SyntaxKind.BangEqualsToken, SyntaxKind.LessToken, SyntaxKind.LessEqualsToken,
         SyntaxKind.GreaterToken, SyntaxKind.GreaterEqualsToken, SyntaxKind.AmpersandAmpersandToken, SyntaxKind.PipePipeToken,
     ];
-
-    /// <summary>
-    ///     A const-generic predicate's value for the numbers its value
-    ///     parameters are given: true or false, or null when it has none —
-    ///     a division by zero, an overflow, or a number where a truth is wanted.
-    /// </summary>
-    internal static bool? EvaluatePredicate(ExpressionSyntax predicate, IReadOnlyDictionary<string, long> values) =>
-        Evaluate(predicate, values) as bool?;
-
-    static object? Evaluate(ExpressionSyntax expression, IReadOnlyDictionary<string, long> values) {
-        try {
-            checked {
-                switch (expression) {
-                    case LiteralExpressionSyntax { Token.Kind: SyntaxKind.TrueKeyword }:
-                        return true;
-                    case LiteralExpressionSyntax { Token.Kind: SyntaxKind.FalseKeyword }:
-                        return false;
-                    case LiteralExpressionSyntax literal:
-                        return long.TryParse(literal.Token.Text.Replace("_", ""), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var number) ? number : null;
-                    case IdentifierNameSyntax name:
-                        return values.TryGetValue(name.Identifier.Text, out var value) ? value : null;
-                    case ParenthesizedExpressionSyntax parenthesized:
-                        return Evaluate(parenthesized.Expression, values);
-                    case PrefixUnaryExpressionSyntax unary:
-                        return (unary.OperatorToken.Kind, Evaluate(unary.Operand, values)) switch {
-                            (SyntaxKind.MinusToken, long operand) => -operand,
-                            (SyntaxKind.BangToken, bool operand) => !operand,
-                            _ => null,
-                        };
-                    case BinaryExpressionSyntax binary:
-                        return (binary.OperatorToken.Kind, Evaluate(binary.Left, values), Evaluate(binary.Right, values)) switch {
-                            (SyntaxKind.PlusToken, long l, long r) => l + r,
-                            (SyntaxKind.MinusToken, long l, long r) => l - r,
-                            (SyntaxKind.StarToken, long l, long r) => l * r,
-                            (SyntaxKind.SlashToken, long l, long r) when r != 0 => l / r,
-                            (SyntaxKind.PercentToken, long l, long r) when r != 0 => l % r,
-                            (SyntaxKind.EqualsEqualsToken, long l, long r) => l == r,
-                            (SyntaxKind.EqualsEqualsToken, bool l, bool r) => l == r,
-                            (SyntaxKind.BangEqualsToken, long l, long r) => l != r,
-                            (SyntaxKind.BangEqualsToken, bool l, bool r) => l != r,
-                            (SyntaxKind.LessToken, long l, long r) => l < r,
-                            (SyntaxKind.LessEqualsToken, long l, long r) => l <= r,
-                            (SyntaxKind.GreaterToken, long l, long r) => l > r,
-                            (SyntaxKind.GreaterEqualsToken, long l, long r) => l >= r,
-                            (SyntaxKind.AmpersandAmpersandToken, bool l, bool r) => l && r,
-                            (SyntaxKind.PipePipeToken, bool l, bool r) => l || r,
-                            _ => null,
-                        };
-                    default:
-                        return null;
-                }
-            }
-        } catch (OverflowException) {
-            return null;
-        }
-    }
 
     /// <summary>The <c>N</c> of <c>T[N]</c>: a generic parameter of the declaration, which stands for a value.</summary>
     TypeParameterSymbol? CapacityParameterOf(ExpressionSyntax? size, Symbol context, FileScope? scope) =>

@@ -211,7 +211,7 @@ public sealed class TargetTests {
         var sysroot = Directory.CreateTempSubdirectory("sable-sysroot-");
         var cache = Directory.CreateTempSubdirectory("sable-runtime-");
         try {
-            var build = NativeBuild.Build("", Path.Combine(sysroot.FullName, "never"), NativeOptions.Of(true, false) with { Target = target, Sysroot = sysroot.FullName }, cache.FullName);
+            var build = NativeBuild.Build("", Path.Combine(sysroot.FullName, "never"), NativeOptions.Of(true, false) with { Target = target, Sysroot = sysroot.FullName }, new BuildCache(cache.FullName));
             Assert.False(build.Succeeded);
             Assert.True(build.Setup, build.Output);
             Assert.StartsWith($"the C library for {triple} is not in the sysroot {sysroot.FullName}", build.Report, StringComparison.Ordinal);

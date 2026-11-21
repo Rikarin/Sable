@@ -12,6 +12,7 @@ namespace Sable.CodeGen.Tests;
 ///     runs on the blocking pool (Task.blocking). The interpreter agrees,
 ///     through Socket.Select.
 /// </summary>
+[Native]
 public sealed class ReactorTests {
     static string AsyncProgram(string declarations, string body) =>
         $"module Test\nimport Sable.IO\nimport Sable.Time\n{declarations}\n@main\nfn main() async throws {{\n{body}\n}}\n";

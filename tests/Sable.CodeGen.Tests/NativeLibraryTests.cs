@@ -229,7 +229,7 @@ public sealed class NativeLibraryTests {
         var directory = Directory.CreateTempSubdirectory("sable-native-library-");
         try {
             var library = Path.Combine(directory.FullName, NativeBuild.LibraryFileName("counter", kind, NativeTarget.Host));
-            var built = NativeBuild.BuildLibrary(compiled.LlvmIr!, library, kind, NativeOptions.Of(optimise: true, debug: false), Path.Combine(directory.FullName, "runtime"));
+            var built = NativeBuild.BuildLibrary(compiled.LlvmIr!, library, kind, NativeOptions.Of(optimise: true, debug: false), new BuildCache(Path.Combine(directory.FullName, "runtime")));
             Assert.True(built.Succeeded, built.Output);
             return LinkAndRun(library, kind);
         } finally {

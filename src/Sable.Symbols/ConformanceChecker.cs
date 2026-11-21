@@ -981,19 +981,7 @@ internal static class ConformanceChecker {
         );
     }
 
-    static bool DeclaredNonisolated(Symbol member) =>
-        member.DeclaringSyntax.Any(static syntax => {
-            for (SyntaxNode? node = syntax; node is not null; node = node.Parent) {
-                switch (node) {
-                    case FunctionDeclarationSyntax function:
-                        return function.Modifiers.Any(static m => m.Kind == SyntaxKind.NonisolatedKeyword);
-                    case FieldDeclarationSyntax field:
-                        return field.Modifiers.Any(static m => m.Kind == SyntaxKind.NonisolatedKeyword);
-                }
-            }
-
-            return false;
-        });
+    static bool DeclaredNonisolated(Symbol member) => member.IsNonisolated;
 
     static bool Matches(
         FunctionSymbol requirement,

@@ -199,7 +199,7 @@ public sealed class IncrementalTests {
             try {
                 var executable = Platform.Executable(Path.Combine(directory, "app"));
                 var settings = new BuildSettings(profile.Name, profile.Optimise, profile.Debug ? workspace.Root : null, profile.Exclusivity) { Whole = true };
-                var outcome = IncrementalBuild.Build(PackageBuilder.Units(graph, member.Name, member.Bins[0]), settings, executable, Path.Combine(directory, "cache"));
+                var outcome = IncrementalBuild.Build(PackageBuilder.Units(graph, member.Name, member.Bins[0]), settings, executable, Path.Combine(directory, "cache"), cache: new BuildCache(Path.Combine(directory, "shared")));
                 Assert.True(outcome.Succeeded, string.Join("\n", outcome.Errors));
                 Assert.Equal("whole", outcome.Kind);
                 var (output, exitCode) = PackageFixture.Execute(executable);
@@ -675,7 +675,7 @@ public sealed class IncrementalTests {
             UnitPlan Unit(string name) => new(name, [new SourceFile(Path.Combine(directory, name + ".sb"), name + ".sb", [])]);
             var log = new StringWriter();
             var executable = Platform.Executable(Path.Combine(directory, "program"));
-            var outcome = IncrementalBuild.Build([Unit("main"), Unit("base")], new BuildSettings("dev", false, directory, true), executable, Path.Combine(directory, "cache"), null, log);
+            var outcome = IncrementalBuild.Build([Unit("main"), Unit("base")], new BuildSettings("dev", false, directory, true), executable, Path.Combine(directory, "cache"), null, log, new BuildCache(Path.Combine(directory, "shared")));
             Assert.True(outcome.Succeeded, string.Join("\n", outcome.Errors));
             return (outcome, log.ToString(), PackageFixture.Execute(executable).Output);
         } finally {
@@ -748,7 +748,7 @@ public sealed class IncrementalTests {
             var trees = files.Select((text, i) => SyntaxTree.Parse(new SourceText(text, $"f{i}.sb"))).ToList();
             var compilation = Compilation.Create(trees);
             Assert.DoesNotContain(compilation.GetDiagnostics(), static d => d.Severity == DiagnosticSeverity.Error);
-            var (module, diagnostics) = SilGen.LowerUnit(compilation, new SilUnit(t => t == trees[0]), SilProgram.Index([..trees, ..CoreLibrary.TreesFor(trees[0].Options)]));
+            var (module, diagnostics) = SilGen.LowerUnit(compilation, new SilUnit(t => t == trees[0]), SilProgram.Index(compilation));
             Assert.Empty(diagnostics);
             return SilPrinter.Print(module);
         }
@@ -883,10 +883,10 @@ public sealed class IncrementalTests {
             var settings = release
                 ? new BuildSettings("release", true, null, false) { Native = new NativeOptions { OptLevel = "3", Lto = LtoMode.Thin } }
                 : new BuildSettings("dev", false, directory, true);
-            var separate = IncrementalBuild.Build(units, settings, Path.Combine(directory, "separate"), Path.Combine(directory, "cache"));
+            var separate = IncrementalBuild.Build(units, settings, Path.Combine(directory, "separate"), Path.Combine(directory, "cache"), cache: new BuildCache(Path.Combine(directory, "shared")));
             Assert.True(separate.Succeeded, string.Join("\n", separate.Errors));
             Assert.Equal(("incremental", units.Count + 1), (separate.Kind, separate.Compiled));
-            var whole = IncrementalBuild.Build(units, settings with { Whole = true }, Path.Combine(directory, "whole"), Path.Combine(directory, "cache"));
+            var whole = IncrementalBuild.Build(units, settings with { Whole = true }, Path.Combine(directory, "whole"), Path.Combine(directory, "cache"), cache: new BuildCache(Path.Combine(directory, "shared")));
             Assert.True(whole.Succeeded, string.Join("\n", whole.Errors));
             Assert.Equal(PackageFixture.Execute(Path.Combine(directory, "whole")), PackageFixture.Execute(Path.Combine(directory, "separate")));
 
@@ -895,7 +895,7 @@ public sealed class IncrementalTests {
             for (var i = units.Count - 1; i >= 0; i--) {
                 File.AppendAllText(units[i].Files[0].Path, "\n// changed\n");
                 var timings = new BuildTimings();
-                var again = IncrementalBuild.Build(units, settings, Path.Combine(directory, "separate"), Path.Combine(directory, "cache"), timings);
+                var again = IncrementalBuild.Build(units, settings, Path.Combine(directory, "separate"), Path.Combine(directory, "cache"), timings, cache: new BuildCache(Path.Combine(directory, "shared")));
                 Assert.True(again.Succeeded, string.Join("\n", again.Errors));
                 Assert.Equal(("incremental", 1), (again.Kind, again.Compiled));
                 Assert.Equal(units.Count - 1, timings.CountOf("files parsed from interfaces"));

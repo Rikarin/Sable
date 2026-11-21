@@ -258,7 +258,7 @@ public sealed partial class Binder {
         }
 
         var implicitInit = superclass?.OriginalDefinition.GetMembers("init").OfType<FunctionSymbol>()
-            .Any(i => i is { DeclaringSyntax.IsEmpty: true, Parameters.IsEmpty: true } && !_compilation.InheritedInitializers.ContainsKey(i))
+            .Any(i => i is { IsSynthesized: true, Parameters.IsEmpty: true } && !_compilation.InheritedInitializers.ContainsKey(i))
             ?? false;
         return new InitializedSelf(type, fields, superclass, implicitInit);
     }
@@ -416,7 +416,7 @@ public sealed partial class Binder {
         }
 
         var arguments = syntaxes.Select(e => BindExpression(e)).ToImmutableArray();
-        var initializers = type.GetMembers("init").OfType<FunctionSymbol>().Where(i => i.DeclaringSyntax.IsEmpty || IsAccessible(i)).ToImmutableArray();
+        var initializers = type.GetMembers("init").OfType<FunctionSymbol>().Where(i => i.IsSynthesized || IsAccessible(i)).ToImmutableArray();
         BoundExpression bound;
         if (initializers.IsEmpty) {
             _diagnostics.Error(
@@ -3084,23 +3084,7 @@ public sealed partial class Binder {
         return true;
     }
 
-    /// <summary>
-    ///     Declared '@MainActor', or inside a declaration that is — a member
-    ///     of such a type, a closure in such a function.
-    /// </summary>
-    static bool OnMainActor(Symbol symbol) {
-        for (var at = symbol; at is not null and not ModuleSymbol; at = at.ContainingSymbol) {
-            foreach (var syntax in at.DeclaringSyntax) {
-                for (SyntaxNode? node = syntax; node is not null; node = node.Parent) {
-                    if (node is DeclarationSyntax && node.ChildNodes().OfType<AttributeSyntax>().Any(static a => a.Name.ToString().Trim() == "MainActor")) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        return false;
-    }
+    static bool OnMainActor(Symbol symbol) => symbol.IsOnMainActor;
 
     /// <summary>What a member is isolated to, as a diagnostic says it.</summary>
     static string Isolation(Symbol member) =>
@@ -3109,31 +3093,9 @@ public sealed partial class Binder {
             : $"the actor '{(member.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : member.ContainingSymbol)?.Name}'";
 
     /// <summary>The program's entry point, or code inside it: it runs on the main executor.</summary>
-    static bool IsEntryPoint(Symbol symbol) {
-        for (var at = symbol; at is not null and not ModuleSymbol; at = at.ContainingSymbol) {
-            if (at is FunctionSymbol { ContainingSymbol: ModuleSymbol } function
-                && (function.Name == "main" || function.DeclaringSyntax.Any(static s => s is FunctionDeclarationSyntax declaration
-                    && declaration.Attributes.Any(static a => a.Name.ToString().Trim() == "main")))) {
-                return true;
-            }
-        }
+    static bool IsEntryPoint(Symbol symbol) => symbol.IsInEntryPoint;
 
-        return false;
-    }
-
-    static bool IsNonisolated(Symbol member) =>
-        member.DeclaringSyntax.Any(static syntax => {
-            for (SyntaxNode? node = syntax; node is not null; node = node.Parent) {
-                switch (node) {
-                    case FunctionDeclarationSyntax function:
-                        return function.Modifiers.Any(static m => m.Kind == SyntaxKind.NonisolatedKeyword);
-                    case FieldDeclarationSyntax field:
-                        return field.Modifiers.Any(static m => m.Kind == SyntaxKind.NonisolatedKeyword);
-                }
-            }
-
-            return false;
-        });
+    static bool IsNonisolated(Symbol member) => member.IsNonisolated;
 
     /// <summary>
     ///     An actor's stored property reached from outside it (SYNTAX.md §19):
@@ -4764,7 +4726,7 @@ public sealed partial class Binder {
 
                 // An initialiser written 'private' makes the type's values its
                 // own to make: 'Task' is made by 'spawn' alone.
-                var accessible = initializers.Where(i => i.DeclaringSyntax.IsEmpty || IsAccessible(i)).ToImmutableArray();
+                var accessible = initializers.Where(i => i.IsSynthesized || IsAccessible(i)).ToImmutableArray();
                 if (accessible.IsEmpty) {
                     CheckAccessible(initializers[0], syntax.Expression);
                     return new BoundError(syntax, arguments.ToArray());
@@ -5614,7 +5576,7 @@ public sealed partial class Binder {
     ///     for, when that field has an initial value to default to.
     /// </summary>
     static FieldSymbol? MemberwiseField(ParameterSymbol parameter) =>
-        parameter is { HasDefaultValue: true, DeclaringSyntax.IsEmpty: true, ContainingSymbol: FunctionSymbol { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true, ContainingSymbol: NamedTypeSymbol type } }
+        parameter is { HasDefaultValue: true, IsSynthesized: true, ContainingSymbol: FunctionSymbol { FunctionKind: FunctionKind.Initializer, IsSynthesized: true, ContainingSymbol: NamedTypeSymbol type } }
             ? type.GetMembers(parameter.Name).OfType<FieldSymbol>().FirstOrDefault(static f => f.HasInitializer)
             : null;
 

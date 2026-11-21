@@ -7,6 +7,7 @@ namespace Sable.CodeGen.Tests;
 ///     Nothing observable changes — the deinit runs at the last release, in
 ///     order, and nothing leaks — only where the memory came from.
 /// </summary>
+[Native]
 public sealed class StackPromotionTests {
     [Fact]
     public void APromotedObjectIsDeinitedWhereItWouldHaveBeen() =>

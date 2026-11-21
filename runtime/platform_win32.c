@@ -375,8 +375,34 @@ static bool reactor_notify(PlatformSocket socket, void *key, UINT8 operation) {
            && registration.registrationResult == ERROR_SUCCESS;
 }
 
+// What reactor_add posts for a socket ready as it is added, told from the
+// notifications ProcessSocketNotifications posts by this OVERLAPPED: its
+// events are REACTOR_*, in the bytes transferred.
+static OVERLAPPED reactor_already_ready;
+
+// epoll and kqueue report a socket that is ready already as it is added;
+// an edge-triggered registration here is not documented to, and reports
+// the socket's changes from when it is made. A connection to loopback is
+// made before connect's caller has registered the socket, so its task —
+// waiting to be told it is writable, with no call of its own to try first —
+// would wait for an edge that has been and gone. So it is asked here, after
+// the registration, what the socket is ready for already; an edge between
+// the two is reported twice, which costs a call that finds it would block.
 static bool reactor_add(PlatformSocket socket, void *key) {
-    return reactor_notify(socket, key, SOCK_NOTIFY_OP_ENABLE);
+    if (!reactor_notify(socket, key, SOCK_NOTIFY_OP_ENABLE)) {
+        return false;
+    }
+
+    WSAPOLLFD now = { .fd = (SOCKET)socket, .events = POLLRDNORM | POLLWRNORM };
+    if (WSAPoll(&now, 1, 0) == 1) {
+        DWORD events = (now.revents & (POLLRDNORM | POLLHUP | POLLERR) ? REACTOR_READABLE : 0)
+                       | (now.revents & (POLLWRNORM | POLLHUP | POLLERR) ? REACTOR_WRITABLE : 0);
+        if (events != 0) {
+            PostQueuedCompletionStatus(reactor_port, events, (ULONG_PTR)key, &reactor_already_ready);
+        }
+    }
+
+    return true;
 }
 
 static void reactor_remove(PlatformSocket socket) {
@@ -403,6 +429,13 @@ static int reactor_wait(ReactorEvent *events, int capacity, int64_t until) {
     int n = 0;
     for (ULONG i = 0; i < count; i++) {
         if (ready[i].lpCompletionKey == 0) {
+            continue;
+        }
+
+        if (ready[i].lpOverlapped == &reactor_already_ready) {
+            events[n].key = (void *)ready[i].lpCompletionKey;
+            events[n].events = (int)ready[i].dwNumberOfBytesTransferred;
+            n++;
             continue;
         }
 

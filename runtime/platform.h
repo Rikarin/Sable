@@ -144,7 +144,8 @@ static void thread_yield(void);
 // by ProcessSocketNotifications, and none on WASI, where reactor_open
 // fails — the same shape on every system: a socket is added once, with a
 // key, and is reported, edge-triggered, as it becomes readable or
-// writable, until it is removed.
+// writable, until it is removed — and as it is added, for what it is ready
+// for already.
 //
 // A socket is a file descriptor, or Windows' SOCKET.
 typedef intptr_t PlatformSocket;

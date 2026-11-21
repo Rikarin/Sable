@@ -31,6 +31,10 @@ public sealed partial class LlvmEmitter {
             }
         }
 
+        // The Windows C runtime exports hypotf only as '_hypotf': its
+        // 'hypotf' is an inline function in math.h, which IR cannot call.
+        text.Append("declare float @_hypotf(float, float) nounwind willreturn memory(none)\n");
+
         // An integer's bytes reversed, 'byte_swap_', is declared with the
         // numeric protocols' other intrinsics (IntrinsicDeclarations).
         return text.ToString();
@@ -41,9 +45,13 @@ public sealed partial class LlvmEmitter {
     static string IntrinsicSuffix(SilType type) => type == SilType.F32 ? "f32" : "f64";
 
     /// <summary>The call that computes the function of these operands.</summary>
-    static string MathCall(FloatFunctions.Function function, SilType type, IEnumerable<string> operands) {
+    static string MathCall(FloatFunctions.Function function, SilType type, IEnumerable<string> operands, bool windows) {
         var t = FloatType(type);
-        var callee = function.Intrinsic is { } intrinsic ? $"llvm.{intrinsic}.{IntrinsicSuffix(type)}" : FloatFunctions.CName(function, type);
+        var callee = function.Intrinsic is { } intrinsic ? $"llvm.{intrinsic}.{IntrinsicSuffix(type)}" : CFunction(function, type, windows);
         return $"call {t} @{callee}({string.Join(", ", operands.Select(o => $"{t} {o}"))})";
     }
+
+    /// <summary>The C function to call for a function of a type on the target: libm's name, except where Windows exports it under another.</summary>
+    static string CFunction(FloatFunctions.Function function, SilType type, bool windows) =>
+        windows && type == SilType.F32 && function.C == "hypot" ? "_hypotf" : FloatFunctions.CName(function, type);
 }

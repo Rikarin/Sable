@@ -3094,7 +3094,7 @@ public sealed partial class LlvmEmitter {
             }
 
             if (FloatFunctions.Find(builtin.Name) is var (elementary, floatType)) {
-                Line($"{Result()} = {MathCall(elementary, floatType, operands)}");
+                Line($"{Result()} = {MathCall(elementary, floatType, operands, module._windows)}");
                 return;
             }
 

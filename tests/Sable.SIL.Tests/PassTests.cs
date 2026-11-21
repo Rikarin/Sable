@@ -78,6 +78,8 @@ public sealed class PassTests {
 
     [Fact]
     public void ALoopsLocalsBecomeBlockArguments() {
+        // Of specialised code (#297): each instance its own.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var module = Lowered(
             """
             fn gcd(_ a: Int, _ b: Int) -> Int {
@@ -712,6 +714,8 @@ public sealed class PassTests {
     /// </summary>
     [Fact]
     public void AReleaseAssertLeavesNoClosureBehind() {
+        // Of specialised code (#297): each instance its own.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var module = LoweredForRelease(
             """
             fn counted(_ value: Bool) -> Bool {

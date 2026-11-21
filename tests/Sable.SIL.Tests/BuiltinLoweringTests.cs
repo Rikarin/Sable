@@ -86,6 +86,8 @@ public sealed class BuiltinLoweringTests {
     /// </summary>
     [Fact]
     public void AFamilysMemberIsTheBuiltinOfTheTypeSelfStandsFor() {
+        // Of specialised code (#297): each instance its own.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var (module, diagnostics) = Lower(
             """
             module M
@@ -108,6 +110,8 @@ public sealed class BuiltinLoweringTests {
     /// </summary>
     [Fact]
     public void GenericArithmeticIsTheInstructionOnceMonomorphised() {
+        // Of specialised code (#297): each instance its own.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var (module, diagnostics) = Lower(
             """
             module M
@@ -136,6 +140,8 @@ public sealed class BuiltinLoweringTests {
     /// </summary>
     [Fact]
     public void AStaticBuiltinWitnessIsTheBuiltinOnceMonomorphised() {
+        // Of specialised code (#297): each instance its own.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var (module, diagnostics) = Lower(
             """
             module Sable.Probe

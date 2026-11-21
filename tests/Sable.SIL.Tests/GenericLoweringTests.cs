@@ -176,6 +176,8 @@ public sealed class GenericLoweringTests {
 
     [Fact]
     public void AGenericFunctionIsLoweredOncePerTypeArgument() {
+        // Of specialised code (#297): each instance its own.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var module = Lower(
             """
             fn identity<T>(_ value: T) -> T {
@@ -405,6 +407,8 @@ public sealed class GenericLoweringTests {
         """
     )]
     public void PolymorphicRecursionIsCompiledOnceForEveryType(string source) {
+        // Of specialised code (#297): each instance its own.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         // The copies for Int and for (Int, Int) are made as usual; the one
         // that would ask for an endless series instead calls the instance
         // that serves every type, which then calls itself.
@@ -441,6 +445,8 @@ public sealed class GenericLoweringTests {
         """
     )]
     public void PolymorphicRecursionThatCannotBeBoxedIsReportedNotInstantiatedForever(string source) {
+        // Of specialised code (#297): each instance its own.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var errors = LoweringErrors(source);
         Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_EndlessInstantiation);
     }

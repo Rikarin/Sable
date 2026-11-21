@@ -200,6 +200,8 @@ public sealed class MetadataLoweringTests {
     /// </summary>
     [Fact]
     public void StaticMetatypeCodeHasNoRuntimeCost() {
+        // Of specialised code (#297): each instance its own.
+        using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var module = Lower(Static);
         var instructions = module.Functions.Where(static f => f.Name.Contains("make", StringComparison.Ordinal) || f.Name.Contains("isInt", StringComparison.Ordinal))
             .SelectMany(static f => f.Blocks).SelectMany(static b => b.Instructions).ToList();

@@ -92,7 +92,8 @@ public sealed class GeneratorTests : IDisposable {
         await client.InitializeAsync(Root);
         await client.NotifyAsync("initialized", new { });
         await client.OpenAsync(uri, Main);
-        Assert.Equal(0, (await client.DiagnosticsAsync(uri)).GetArrayLength());
+        var opened = await client.DiagnosticsAsync(uri);
+        Assert.True(opened.GetArrayLength() == 0, opened.ToString());
 
         // A struct becomes a union: the generator says so, at the attribute.
         var start = Main.IndexOf("struct Person {", StringComparison.Ordinal);

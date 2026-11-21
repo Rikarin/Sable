@@ -750,8 +750,7 @@ public sealed partial class DebuggerFormatterTests {
             // range resolved by the linker to address 0 (GNU ld writes 0
             // where lld writes a tombstone), so dead ranges overlap at 0.
             // That is the linker's, not the DWARF's: every other error fails.
-            var real = text.Split('\n').Where(static l => l.Contains("error:", StringComparison.Ordinal)
-                && !DeadRangesAtZero().IsMatch(l)).ToList();
+            var real = ErrorBlock().Split(text).Where(static b => b.TrimStart().StartsWith("error:", StringComparison.Ordinal) && !IsDeadAtZero(b)).ToList();
             Assert.True(real.Count == 0, text + errors);
             if (process.ExitCode != 0) {
                 Assert.True(OperatingSystem.IsLinux(), text + errors);
@@ -773,7 +772,35 @@ public sealed partial class DebuggerFormatterTests {
         }
     }
 
-    /// <summary>A verifier error about ranges that both start at address 0: those of functions the linker dropped.</summary>
-    [GeneratedRegex(@"overlapping ranges in DW_AT_ranges attribute: \[0x0+, 0x[0-9a-f]+\) and \[0x0+, 0x[0-9a-f]+\)")]
-    private static partial Regex DeadRangesAtZero();
+    /// <summary>
+    ///     Whether a verifier error is one about overlapping ranges every one
+    ///     of which starts at address 0: functions the linker dropped. The
+    ///     error's lines name the ranges ("[0x0, 0x8)") or the entries'
+    ///     low_pc ("address = 0x0000000000000000").
+    /// </summary>
+    static bool IsDeadAtZero(string block) {
+        if (!block.Contains("overlapping", StringComparison.Ordinal)) {
+            return false;
+        }
+
+        // The ranges the error names on its own line, if it names any (the
+        // entry it prints after them may list all its unit's ranges); else
+        // the low_pc of the entries it prints.
+        var first = block.TrimStart().Split('\n')[0];
+        var named = RangeStart().Matches(first).Select(static m => m.Groups["start"].Value).ToList();
+        var starts = named.Count > 0 ? named : LowPc().Matches(block).Select(static m => m.Groups["start"].Value).ToList();
+        return starts.Count > 0 && starts.All(static s => s.Trim('0').Length == 0);
+    }
+
+    /// <summary>Where each of the verifier's errors starts.</summary>
+    [GeneratedRegex(@"(?=^\s*error:)", RegexOptions.Multiline)]
+    private static partial Regex ErrorBlock();
+
+    /// <summary>A range's start: "[0x0000000000000000, ".</summary>
+    [GeneratedRegex(@"\[0x(?<start>[0-9a-f]+),")]
+    private static partial Regex RangeStart();
+
+    /// <summary>An entry's low_pc, as the verifier prints it.</summary>
+    [GeneratedRegex(@"DW_AT_low_pc[^\n]*address = 0x(?<start>[0-9a-f]+)")]
+    private static partial Regex LowPc();
 }

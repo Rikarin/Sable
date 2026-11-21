@@ -214,8 +214,8 @@ public sealed class SpecialiseTests {
     /// <summary>
     ///     A static requirement, an operator of Self's and its result
     ///     returned; a comparison of metadata decided as the copy is made; a
-    ///     value's type a constant for a struct. A value written out by its
-    ///     type's describer, which needs it boxed, stays generic and runs.
+    ///     value's type a constant for a struct; a value written out by its
+    ///     type's describer, the describer's copy for the type, called directly.
     /// </summary>
     [Fact]
     public void RequirementsMetatypesAndComparisonsOfTypesAreSpecialised() {
@@ -226,7 +226,10 @@ public sealed class SpecialiseTests {
         Assert.Contains(Instructions(isInt), static i => i is IntegerLiteralInst { Value: 1 } literal && literal.Type == SilType.Bool);
         Assert.Contains(Instructions(module.Find("M.isInt$specialised$String")!), static i => i is IntegerLiteralInst { Value: 0 } literal && literal.Type == SilType.Bool);
         Assert.Contains(Instructions(module.Find("M.kind$specialised$M.Meters")!), static i => i is MetadataInst { Described: StructType { Name: "M.Meters" } });
-        Assert.NotNull(module.Find("M.show$generic"));
+        var show = module.Find("M.show$specialised$M.Meters")!;
+        AssertNothingGeneric(show);
+        Assert.Contains(Instructions(show), static i => i is FunctionRefInst { Function: var f } && f.StartsWith("$describe$M.Meters$specialised", StringComparison.Ordinal));
+        Assert.Null(module.Find("M.show$generic"));
 
         const string expected = "0\n5\ntrue\nfalse\nM.Meters\n<7><seven><Meters(value: 7)>\n";
         Assert.Equal(expected, Run(module));
@@ -273,6 +276,40 @@ public sealed class SpecialiseTests {
         Assert.Equal(expected, Run(Lower(Dictionaries, GenericsMode.Specialised)));
         Assert.Equal(expected, Run(module));
         Assert.Equal(expected, Run(Optimised(Dictionaries)));
+    }
+
+    const string Lazy = """
+                        fn main() {
+                            var values: Int[>..] = []
+                            for i in 0..<20 {
+                                values.append(i)
+                            }
+                            let modulus = 3
+                            print(values.lazy.filter { $0 % modulus != 0 }.map { $0 * 2 }.reduce(0) { $0 + $1 })
+                        }
+                        """;
+
+    /// <summary>
+    ///     A closure given to generic code is reabstracted to its convention
+    ///     where it is made; given to a copy, the reabstraction is copied for
+    ///     the types too, so the copy calls a closure taking the values as
+    ///     they are. A requirement whose error type is Never boxes no error.
+    /// </summary>
+    [Fact]
+    public void AClosureGivenToGenericCodeIsReabstractedForTheCopy() {
+        var module = Specialised(Lazy);
+        var reduce = module.Functions.Single(static f => f.Name.StartsWith("Sable.Core.Sequence.reduce", StringComparison.Ordinal) && f.Name.Contains("$specialised$", StringComparison.Ordinal));
+        AssertNothingGeneric(reduce);
+        Assert.Contains(reduce.Type.Parameters, static p => p is ThickFunctionType { Signature.Parameters: [var a, var b, AddressType] } && a == SilType.Int && b == SilType.Int);
+        var main = Instructions(module.Find("M.main")!);
+        Assert.DoesNotContain(main, static i => i is FunctionRefInst { Type: var type } && SilType.MentionsOpaque(type));
+        Assert.Contains(main, static i => i is FunctionRefInst { Function: var f } && f.StartsWith("$reabstract$", StringComparison.Ordinal) && f.Contains("$specialised$", StringComparison.Ordinal));
+        Assert.DoesNotContain(module.Functions, static f => f.Name.StartsWith("Sable.Core.Sequence.reduce", StringComparison.Ordinal) && f.IsUnspecialised);
+
+        const string expected = "254\n";
+        Assert.Equal(expected, Run(Lower(Lazy, GenericsMode.Specialised)));
+        Assert.Equal(expected, Run(module));
+        Assert.Equal(expected, Run(Optimised(Lazy)));
     }
 
     /// <summary>A module lowered specialised has nothing for the pass to do.</summary>

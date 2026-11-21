@@ -38,7 +38,9 @@ public static class SilPassManager {
 
     /// <summary>The passes an optimised build runs, in order.</summary>
     /// <remarks>
-    ///     Calls the vtable can only answer one way are made direct, and
+    ///     Unspecialised generic code is first specialised where its types are
+    ///     known (<see cref="Specialise" />), so that what follows sees it as
+    ///     the specialised lowering writes it. Calls the vtable can only answer one way are made direct, and
     ///     those it answers with one of a few small overrides test for each
     ///     first; loads only borrowed for a call are borrowed before the call
     ///     is inlined, as afterwards the borrow would span the callee's
@@ -67,7 +69,8 @@ public static class SilPassManager {
     ///         <item><c>2</c> and <c>3</c>: <see cref="Optimising" />. What <c>3</c> adds is LLVM's.</item>
     ///         <item>
     ///             <c>s</c>: <see cref="Optimising" /> without loop versioning, which copies a loop for its fast
-    ///             path, or speculative devirtualisation, which copies a call for each guess.
+    ///             path, or speculative devirtualisation, which copies a call for each guess; generic code is
+    ///             specialised only where it is small or called in a loop.
     ///         </item>
     ///         <item><c>z</c>: without the inliner too, which copies callees into every caller.</item>
     ///     </list>

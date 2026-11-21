@@ -20,8 +20,13 @@ namespace Sable.SIL;
 ///         (<c>witness_generic:i</c>) is the conformance's witness, called
 ///         directly and itself specialised for its <c>Self</c>; associated
 ///         types are the types the conformances bind; a value witness is
-///         the type's own copy, move or destroy; and a result written
-///         where the caller said is returned. What is left is code as the
+///         the type's own copy, move or destroy; a value written out or
+///         boxed as an error, the describer's or eraser's copy for the type;
+///         and a result written where the caller said is returned. A closure
+///         the caller reabstracted to the generic convention is given with
+///         its reabstraction copied for the types, and a slot the caller
+///         copied a value into for the call is the value, borrowed. What is
+///         left is code as the
 ///         specialised lowering writes it, which the inliner and the passes
 ///         after it treat as any other.
 ///     </para>
@@ -120,9 +125,6 @@ sealed class Specialiser(SilModule module, bool forSize) {
                 roles[i] = Role.Metadata;
             } else if (name.StartsWith("$witnesses.", StringComparison.Ordinal)) {
                 roles[i] = Role.Table;
-            } else if (name == "$error") {
-                // An error of a type parameter's type, thrown where the caller said.
-                return null;
             } else if (name == "$out" && function.Type is { Result: var result, Thrown: null } && result == SilType.Unit && parameters[i] is AddressType) {
                 roles[i] = Role.Out;
             } else {
@@ -248,6 +250,61 @@ sealed class Specialiser(SilModule module, bool forSize) {
         }
     }
 
+    /// <summary>
+    ///     A copy of a function that is not generic but takes values of
+    ///     opaque types — a closure's reabstraction to the generic convention,
+    ///     made where the types are known — for the closure type the copy
+    ///     that is given it takes: its opaque types the types they are there.
+    /// </summary>
+    internal SilFunction? ThunkFor(string name, ThickFunctionType wanted) {
+        if (module.Find(name) is not { IsUnspecialised: false } thunk || Roles(thunk) is not { } roles || roles.Any(static r => r != Role.Value)) {
+            return null;
+        }
+
+        var types = new Dictionary<string, SilType>(StringComparer.Ordinal);
+        if (!Unify(thunk.Type, wanted.Implementation, types)) {
+            return null;
+        }
+
+        var key = $"{name}<{string.Join(",", types.OrderBy(static p => p.Key, StringComparer.Ordinal).Select(static p => $"{p.Key}={p.Value}"))}>";
+        var copy = CopyFor(new(thunk, roles, types, [], key), hot: true);
+        return copy?.Type.ToString() == wanted.Implementation.ToString() ? copy : null;
+    }
+
+    /// <summary>Binds each opaque type in a type to what is in its place in another; false where the two differ otherwise.</summary>
+    static bool Unify(SilType generic, SilType known, Dictionary<string, SilType> types) {
+        if (!SilType.MentionsOpaque(generic)) {
+            return generic == known;
+        }
+
+        switch (generic, known) {
+            case (OpaqueType opaque, _):
+                if (types.TryGetValue(opaque.Name, out var bound)) {
+                    return bound == known;
+                }
+
+                types[opaque.Name] = known;
+                return !SilType.MentionsOpaque(known);
+            case (ArrayType a, ArrayType b):
+                return Unify(a.Element, b.Element, types);
+            case (SliceType a, SliceType b):
+                return Unify(a.Element, b.Element, types);
+            case (AddressType a, AddressType b):
+                return Unify(a.Pointee, b.Pointee, types);
+            case (TupleType a, TupleType b):
+                return a.Elements.Length == b.Elements.Length && a.Elements.Zip(b.Elements).All(p => Unify(p.First, p.Second, types));
+            case (ThickFunctionType a, ThickFunctionType b):
+                return Unify(a.Signature, b.Signature, types);
+            case (FunctionType a, FunctionType b):
+                return a.Parameters.Length == b.Parameters.Length && a.IsAsync == b.IsAsync && a.Owned.SequenceEqual(b.Owned)
+                       && a.Parameters.Zip(b.Parameters).All(p => Unify(p.First, p.Second, types)) && Unify(a.Result, b.Result, types)
+                       && (a.Thrown is null ? b.Thrown is null : b.Thrown is not null && Unify(a.Thrown, b.Thrown, types));
+            default:
+                // A generic type of opaque types, by name: the copy checks the name it has once they are bound.
+                return generic is NominalType && known is NominalType;
+        }
+    }
+
     // ---- Calls from code that knows the types --------------------------------
 
     /// <summary>Makes each call of a generic function in the function whose types it knows a call of the copy for them.</summary>
@@ -275,6 +332,80 @@ sealed class Specialiser(SilModule module, bool forSize) {
 
         if (changed) {
             RemoveDeadViews(function);
+            ForwardCopiedSlots(function);
+        }
+    }
+
+    /// <summary>
+    ///     A slot a call of generic code was given a copy of a value in —
+    ///     <c>store (copy_value x) to [init] s</c>, or a <c>load [copy]</c> of
+    ///     a local's slot stored there — borrowed from within the block, then
+    ///     destroyed, which the copy it now calls borrows as it is: each
+    ///     borrow from the slot is a borrow of the value, which outlives them,
+    ///     or of the local, which nothing changes meanwhile; and the copy and
+    ///     the slot go.
+    /// </summary>
+    internal static void ForwardCopiedSlots(SilFunction function) {
+        var uses = new Uses(function);
+        foreach (var block in function.Blocks) {
+            foreach (var slot in block.Instructions.OfType<AllocStackInst>().Where(static s => !s.Unmanaged && !s.ElementType.IsTrivial).ToList()) {
+                var users = uses.Of(slot);
+                if (users.Count(static u => u is StoreInst) != 1 || users.First(static u => u is StoreInst) is not StoreInst { Kind: StoreKind.Init } store
+                    || !ReferenceEquals(store.Address, slot) || store.Value is not (CopyValueInst or LoadInst { Kind: LoadKind.Copy, Address: AllocStackInst }) || uses.Of(store.Value).Count != 1
+                    || users.Any(static u => u is not (StoreInst or LoadBorrowInst or DestroyAddrInst or DeallocStackInst))) {
+                    continue;
+                }
+
+                var at = store.Block;
+                var borrows = users.OfType<LoadBorrowInst>().ToList();
+                var ends = borrows.SelectMany(b => uses.Of(b)).OfType<EndBorrowInst>().ToList<SilInstruction>();
+                int Position(SilInstruction i) => at.Instructions.IndexOf(i);
+                if (borrows.Count == 0 || ends.Count == 0 || borrows.Any(b => b.Block != at || Position(b) < Position(store)) || ends.Any(e => e.Block != at)
+                    || borrows.SelectMany(b => uses.Of(b)).Any(u => u.Block != at || Position(u) > ends.Max(Position))) {
+                    continue;
+                }
+
+                var last = ends.Max(Position);
+                var copied = (SilInstruction)store.Value;
+                SilValue value;
+                if (copied is CopyValueInst { Value: var original }) {
+                    // The value must be borrowed for longer: a parameter, borrowed for the whole call,
+                    // a borrow in this block ended after them, or a copy destroyed here after them and taken by nothing else.
+                    var outlives = original switch {
+                        SilArgument argument => argument.Block == function.Entry,
+                        LoadBorrowInst outer => uses.Of(outer).OfType<EndBorrowInst>().ToList() is { Count: > 0 } outerEnds && outerEnds.All(e => e.Block == at && Position(e) > last),
+                        LoadInst { Kind: LoadKind.Copy } owned => uses.Of(owned).Where(u => Uses.Consumes(u, owned)).ToList() is [DestroyValueInst destroy] && destroy.Block == at && Position(destroy) > last,
+                        _ => false,
+                    };
+                    if (!outlives) {
+                        continue;
+                    }
+
+                    value = original;
+                } else {
+                    // A local's slot nothing names from the copy until the last borrow ends: borrowed there instead.
+                    var local = ((LoadInst)copied).Address;
+                    if (copied.Block != at || at.Instructions.Skip(Position(copied) + 1).Take(last - Position(copied)).Any(i => i.Operands.Contains(local))) {
+                        continue;
+                    }
+
+                    var borrowed = new LoadBorrowInst(local) { Block = at, Location = copied.Location };
+                    at.Instructions.Insert(Position(copied), borrowed);
+                    at.Instructions.Insert(last + 2, new EndBorrowInst(borrowed) { Block = at, Location = at.Instructions[last + 1].Location });
+                    value = borrowed;
+                }
+
+                foreach (var borrow in borrows) {
+                    Uses.Replace(function, borrow, value);
+                }
+
+                var gone = new HashSet<SilInstruction>([..borrows, ..ends, store, copied, slot, ..users.Where(static u => u is DestroyAddrInst or DeallocStackInst)]);
+                foreach (var each in function.Blocks) {
+                    each.Instructions.RemoveAll(gone.Contains);
+                }
+
+                uses = new Uses(function);
+            }
         }
     }
 
@@ -312,7 +443,7 @@ sealed class Specialiser(SilModule module, bool forSize) {
         for (var i = 0; i < arguments.Count; i++) {
             switch (plan.Roles[i]) {
                 case Role.Value:
-                    if (Convert(arguments[i], parameters[p], copy.Type.IsOwned(p), call) is not { } conversion) {
+                    if (Convert(function, arguments[i], parameters[p], copy.Type.IsOwned(p), call) is not { } conversion) {
                         return false;
                     }
 
@@ -320,7 +451,7 @@ sealed class Specialiser(SilModule module, bool forSize) {
                     p++;
                     break;
                 case Role.Out:
-                    if (Convert(arguments[i], SilType.Address(copy.Type.Result), false, call) is not { } address) {
+                    if (Convert(function, arguments[i], SilType.Address(copy.Type.Result), false, call) is not { } address) {
                         return false;
                     }
 
@@ -412,7 +543,7 @@ sealed class Specialiser(SilModule module, bool forSize) {
     ///     is; the storage a view of it was made from; or a view made at the
     ///     call. Null when it cannot be.
     /// </summary>
-    Conversion? Convert(SilValue argument, SilType target, bool owned, SilInstruction call) {
+    Conversion? Convert(SilFunction function, SilValue argument, SilType target, bool owned, SilInstruction call) {
         if (argument.Type == target) {
             return new(_ => argument);
         }
@@ -441,6 +572,19 @@ sealed class Specialiser(SilModule module, bool forSize) {
                 }
 
                 return again;
+            });
+        }
+
+        // A closure made here in the generic convention, by a reabstraction of one that knows the types:
+        // the same closure, its reabstraction specialised — when nothing but the call and its destruction uses it.
+        if (target is ThickFunctionType thick && argument is PartialApplyInst { Function: FunctionRefInst { Function: var thunk } } closure
+            && UsersOf(function, closure).All(u => u == call || u is DestroyValueInst) && ThunkFor(thunk, thick) is { } specialisedThunk) {
+            return new(_ => {
+                var reference = InsertAfter(closure, new FunctionRefInst(specialisedThunk.Name, specialisedThunk.Type) { Location = closure.Location });
+                var made = InsertAfter(reference, new PartialApplyInst(reference, closure.Context, thick) { Location = closure.Location });
+                Uses.Replace(function, closure, made);
+                closure.Block.Instructions.Remove(closure);
+                return made;
             });
         }
 
@@ -478,6 +622,9 @@ sealed class Specialiser(SilModule module, bool forSize) {
 
         return null;
     }
+
+    static IEnumerable<SilInstruction> UsersOf(SilFunction function, SilValue value) =>
+        function.Blocks.SelectMany(static b => b.Instructions).Where(i => i.Operands.Any(o => ReferenceEquals(o, value)));
 
     static T InsertAfter<T>(SilInstruction after, T instruction) where T : SilInstruction {
         instruction.Block = after.Block;
@@ -518,7 +665,11 @@ sealed class Specialiser(SilModule module, bool forSize) {
 ///     One specialised copy of a generic function (<see cref="Specialise" />):
 ///     its signature for the types, then its body, instruction by instruction.
 /// </summary>
-sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
+sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
+    /// <summary>An opaque type named in a type's name, as <see cref="SilGen.Sanitise" /> writes <c>@opaque(T.Element)</c>: <c>$opaque$T.Element$</c>.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"\$opaque\$([A-Za-z0-9_.]+)\$")]
+    private static partial System.Text.RegularExpressions.Regex OpaqueInName();
+
     sealed class Refused(string why) : Exception(why);
 
     /// <summary>A function value of a generic function or a witness, called only once its types are known.</summary>
@@ -542,6 +693,9 @@ sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
     readonly Dictionary<string, SilType> _substituted = new(StringComparer.Ordinal);
     SilFunction _copy = null!;
     AllocStackInst? _out;
+
+    /// <summary>Set where the rest of the block being copied is not reached.</summary>
+    bool _unreached;
     SilBlock? _into;
 
     /// <summary>The copy's signature, its body yet to come; null when the types do not make one.</summary>
@@ -556,7 +710,7 @@ sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
                     }
 
                     if (_module.FindWitnessTable(baseType, associated.Protocol) is not { } table || associated.Index >= table.AssociatedTypes.Count) {
-                        return null;
+                        throw new Refused($"no table of {baseType}: {associated.Protocol} for {associated.Name}");
                     }
 
                     _types[associated.Name] = table.AssociatedTypes[associated.Index].Type;
@@ -581,8 +735,10 @@ sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
 
             var type = new FunctionType(parameters.ToImmutable(), result, _generic.Type.Thrown is { } thrown ? Substitute(thrown) : null, owned.ToImmutable(), _generic.Type.IsAsync);
             var baseName = _generic.Name.EndsWith("$generic", StringComparison.Ordinal) ? _generic.Name[..^"$generic".Length] : _generic.Name;
-            var types = string.Join("$", plan.Roles.Select((r, i) => (r, i)).Where(static p => p.r == Specialiser.Role.Metadata)
-                .Select(p => SilGen.Sanitise(_types[_generic.ParameterNames[p.i]["$metadata.".Length..]].ToString())));
+            var types = plan.Roles.Contains(Specialiser.Role.Metadata)
+                ? string.Join("$", plan.Roles.Select((r, i) => (r, i)).Where(static p => p.r == Specialiser.Role.Metadata)
+                    .Select(p => SilGen.Sanitise(_types[_generic.ParameterNames[p.i]["$metadata.".Length..]].ToString())))
+                : string.Join("$", plan.Types.Values.Select(static t => SilGen.Sanitise(t.ToString())));
             _copy = new SilFunction(specialiser.FreshName($"{baseName}$specialised${types}"), type) {
                 DisplayName = _generic.DisplayName,
                 SourceFile = _generic.SourceFile,
@@ -603,7 +759,8 @@ sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
             }
 
             return _copy;
-        } catch (Refused) {
+        } catch (Refused why) {
+            Trace(why.Message);
             return null;
         }
     }
@@ -613,13 +770,18 @@ sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
         try {
             Body();
             Specialiser.RemoveDeadViews(_copy);
+            Specialiser.ForwardCopiedSlots(_copy);
             return true;
         } catch (Refused why) {
-            if (Environment.GetEnvironmentVariable("SABLE_SPECIALISE_TRACE") is not null) {
-                Console.Error.WriteLine($"not specialised {_generic.Name} for {plan.Key}: {why.Message}");
-            }
-
+            Trace(why.Message);
             return false;
+        }
+    }
+
+    /// <summary>With <c>SABLE_SPECIALISE_TRACE</c> set, why a copy was not made.</summary>
+    void Trace(string why) {
+        if (Environment.GetEnvironmentVariable("SABLE_SPECIALISE_TRACE") is not null) {
+            Console.Error.WriteLine($"not specialised {plan.Key}: {why}");
         }
     }
 
@@ -664,10 +826,17 @@ sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
 
         foreach (var block in order) {
             _into = _blocks[block];
+            _unreached = false;
             foreach (var instruction in block.Instructions) {
+                if (_unreached) {
+                    break;
+                }
+
                 Copy(instruction);
             }
         }
+
+        _copy.RemoveUnreachableBlocks();
     }
 
     T Emit<T>(T instruction, SilInstruction? original) where T : SilInstruction {
@@ -676,8 +845,12 @@ sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
             instruction.InlinedSite = original.InlinedSite;
         }
 
-        return _into!.Append(instruction);
+        return Checked(_into!.Append(instruction));
     }
+
+    /// <summary>The instruction, unless what it makes is still of an opaque type — a closure's context, a function taking one — which the copy cannot have.</summary>
+    static T Checked<T>(T instruction) where T : SilInstruction =>
+        instruction.HasResult && SilType.MentionsOpaque(instruction.Type) ? throw new Refused($"{instruction.Opcode} of {instruction.Type}") : instruction;
 
     /// <summary>The copy's value for one of the generic body's; a function value of a generic function or a value's storage only where <see cref="Copy" /> takes one.</summary>
     SilValue Value(SilValue value) {
@@ -702,7 +875,7 @@ sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
                 return;
 
             case FunctionRefInst reference:
-                Map(instruction, _module.Find(reference.Function) is { IsUnspecialised: true }
+                Map(instruction, _module.Find(reference.Function) is { IsUnspecialised: true } || SilType.MentionsOpaque(reference.Type)
                     ? new GenericReference(reference.Function)
                     : Emit(new FunctionRefInst(reference.Function, (FunctionType)Substitute(reference.Type)), instruction));
                 return;
@@ -792,10 +965,14 @@ sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
                 Map(instruction, Emit(new AllocRefInst(AsClass(Substitute(alloc.ClassType))) { OnStack = alloc.OnStack }, instruction));
                 return;
 
-            case PartialApplyInst partial:
-                Map(instruction, Emit(new PartialApplyInst(Value(partial.Function), partial.Context is { } context ? Value(context) : null,
-                    Substitute(partial.ThickType) as ThickFunctionType ?? throw new Refused("a closure that is not one")), instruction));
+            case PartialApplyInst partial: {
+                var thick = Substitute(partial.ThickType) as ThickFunctionType ?? throw new Refused("a closure that is not one");
+                var function = Raw(partial.Function) is GenericReference { Function: var thunk }
+                    ? Emit(new FunctionRefInst(specialiser.ThunkFor(thunk, thick)?.Name ?? throw new Refused($"{thunk} is not specialised for {thick}"), thick.Implementation), instruction)
+                    : Value(partial.Function);
+                Map(instruction, Emit(new PartialApplyInst(function, partial.Context is { } context ? Value(context) : null, thick), instruction));
                 return;
+            }
 
             case UncheckedRefCastInst cast:
                 Map(instruction, Emit(new UncheckedRefCastInst(Value(cast.Value), AsClass(Substitute(cast.Type))), instruction));
@@ -822,7 +999,7 @@ sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
             default:
                 var cloned = instruction.Clone(Value, Block);
                 cloned.InlinedSite = instruction.InlinedSite;
-                Map(instruction, _into!.Append(cloned));
+                Map(instruction, Checked(_into!.Append(cloned)));
                 return;
         }
     }
@@ -839,31 +1016,7 @@ sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
             return;
         }
 
-        // A generic function or a witness, called with types now known: the copy for them.
-        if (_module.Find(generic.Function) is not { } function || specialiser.PlanCall(function, arguments) is not { } calleePlan) {
-            throw new Refused($"a call of {generic.Function} whose types are not known");
-        }
-
-        if (call is TryApplyInst && calleePlan.Roles.Contains(Specialiser.Role.Out)) {
-            throw new Refused($"a throwing call of {generic.Function} with an indirect result");
-        }
-
-        var copy = specialiser.CopyFor(calleePlan, hot: true) ?? throw new Refused($"{generic.Function} is not specialised for {calleePlan.Key}");
-        var passed = new List<SilValue>();
-        SilValue? outAddress = null;
-        var p = 0;
-        for (var i = 0; i < arguments.Count; i++) {
-            switch (calleePlan.Roles[i]) {
-                case Specialiser.Role.Value:
-                    passed.Add(arguments[i].Type == copy.Type.Parameters[p] ? arguments[i] : throw new Refused($"{arguments[i].Type} passed as {copy.Type.Parameters[p]}"));
-                    p++;
-                    break;
-                case Specialiser.Role.Out:
-                    outAddress = arguments[i].Type == SilType.Address(copy.Type.Result) ? arguments[i] : throw new Refused($"a result of {copy.Type.Result} written to {arguments[i].Type}");
-                    break;
-            }
-        }
-
+        var copy = CopyOf(generic.Function, arguments, call is TryApplyInst, out var passed, out var outAddress);
         var reference = Emit(new FunctionRefInst(copy.Name, copy.Type), call);
         switch (call) {
             case TryApplyInst tryApply:
@@ -886,10 +1039,65 @@ sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
         }
     }
 
+    /// <summary>
+    ///     The copy a call of a generic function or a witness, with types now
+    ///     known, calls instead; what it is passed of the arguments, and
+    ///     where the call was to write a result the copy returns.
+    /// </summary>
+    SilFunction CopyOf(string name, List<SilValue> arguments, bool throwing, out List<SilValue> passed, out SilValue? outAddress) {
+        if (_module.Find(name) is not { } function || specialiser.PlanCall(function, arguments) is not { } calleePlan) {
+            throw new Refused($"a call of {name} whose types are not known");
+        }
+
+        if (throwing && calleePlan.Roles.Contains(Specialiser.Role.Out)) {
+            throw new Refused($"a throwing call of {name} with an indirect result");
+        }
+
+        var copy = specialiser.CopyFor(calleePlan, hot: true) ?? throw new Refused($"{name} is not specialised for {calleePlan.Key}");
+        passed = [];
+        outAddress = null;
+        var p = 0;
+        for (var i = 0; i < arguments.Count; i++) {
+            switch (calleePlan.Roles[i]) {
+                case Specialiser.Role.Value:
+                    passed.Add(arguments[i].Type == copy.Type.Parameters[p] ? arguments[i] : throw new Refused($"{arguments[i].Type} passed as {copy.Type.Parameters[p]}"));
+                    p++;
+                    break;
+                case Specialiser.Role.Out:
+                    outAddress = arguments[i].Type == SilType.Address(copy.Type.Result) ? arguments[i] : throw new Refused($"a result of {copy.Type.Result} written to {arguments[i].Type}");
+                    break;
+            }
+        }
+
+        return copy;
+    }
+
+    /// <summary>
+    ///     A value written out, or boxed as <c>any Error</c>, by the function
+    ///     made for its type to do it given the value's storage
+    ///     (<see cref="SilModule.Describers" />, <see cref="SilModule.ErrorErasers" />):
+    ///     that function's copy for the type, called with the value. Boxing
+    ///     takes the value; the function copies it.
+    /// </summary>
+    void Boxing(BuiltinInst builtin, Dictionary<string, (SilType Type, string Function)> made, bool takes) {
+        var value = Value(builtin.Operands[0]);
+        if (!made.TryGetValue(value.Type.ToString(), out var helper)) {
+            throw new Refused($"{builtin.Name} of {value.Type}, which has no function to do it");
+        }
+
+        var copy = CopyOf(helper.Function, [value, Emit(new MetadataInst(value.Type), builtin)], false, out var passed, out _);
+        var apply = Emit(new ApplyInst(Emit(new FunctionRefInst(copy.Name, copy.Type), builtin), copy.Type.Result, [..passed]), builtin);
+        if (takes && !value.Type.IsTrivial) {
+            Emit(new DestroyValueInst(value), builtin);
+        }
+
+        Map(builtin, apply);
+    }
+
     void Builtin(BuiltinInst builtin) {
         var name = builtin.Name;
         if (name.StartsWith("opaque_metadata:", StringComparison.Ordinal)) {
-            Map(builtin, Emit(new MetadataInst(_types.GetValueOrDefault(name["opaque_metadata:".Length..]) ?? throw new Refused($"no type for {name}")), builtin));
+            Map(builtin, Emit(new MetadataInst(Associated(name["opaque_metadata:".Length..]) ?? throw new Refused($"no type for {name}")), builtin));
             return;
         }
 
@@ -968,7 +1176,21 @@ sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
                 return;
             }
 
-            case "generic_describe" or "opaque_erase_error" or "opaque_type":
+            case "generic_describe":
+                Boxing(builtin, _module.Describers, takes: false);
+                return;
+
+            // An error of a type with no values — Never, laid out as nothing — is never thrown: the code that boxes one is not reached.
+            case "opaque_erase_error" when Value(builtin.Operands[0]).Type == SilType.Unit:
+                Emit(new UnreachableInst(), builtin);
+                _unreached = true;
+                return;
+
+            case "opaque_erase_error":
+                Boxing(builtin, _module.ErrorErasers, takes: true);
+                return;
+
+            case "opaque_type":
                 throw new Refused($"{name}, which needs the value boxed");
         }
 
@@ -988,7 +1210,7 @@ sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
         }
 
         return type switch {
-            OpaqueType opaque => _types.TryGetValue(opaque.Name, out var known) ? known : throw new Refused($"no type for {opaque}"),
+            OpaqueType opaque => Associated(opaque.Name) ?? throw new Refused($"no type for {opaque}"),
             ArrayType array => new ArrayType(Substitute(array.Element)),
             SliceType slice => new SliceType(Substitute(slice.Element)),
             AddressType address => SilType.Address(Substitute(address.Pointee)),
@@ -1005,27 +1227,47 @@ sealed class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan plan) {
     }
 
     /// <summary>
+    ///     The type an opaque type's name stands for: a type parameter's, or
+    ///     an associated type read through one, <c>Self.Iter</c>, as a
+    ///     conformance of the type it is read through binds it — where the
+    ///     function, a witness, does not say which conformance, the one of
+    ///     the type's that has an associated type of that name.
+    /// </summary>
+    SilType? Associated(string name) {
+        if (_types.TryGetValue(name, out var known)) {
+            return known;
+        }
+
+        var dot = name.LastIndexOf('.');
+        if (dot < 0 || Associated(name[..dot]) is not { } baseType) {
+            return null;
+        }
+
+        var member = name[(dot + 1)..];
+        var bound = _module.WitnessTables.Where(t => t.Conformer == baseType).SelectMany(static t => t.AssociatedTypes).Where(a => a.Name == member)
+            .Select(static a => a.Type).Distinct().ToList();
+        return bound is [var type] ? _types[name] = type : null;
+    }
+
+    /// <summary>
     ///     A generic type of opaque types — an optional, a generic struct or
     ///     enum, named for them (<c>Optional$$opaque$T$</c>) — as the same type
     ///     of the types they are: the one the module has by that name, or,
     ///     for an enum or a struct with no deinit, one made like it.
     /// </summary>
     SilType SubstituteNominal(NominalType nominal) {
-        var name = nominal.Name;
-        foreach (var (opaque, type) in _types.OrderByDescending(static p => p.Key.Length)) {
-            name = name.Replace(SilGen.Sanitise($"@opaque({opaque})"), SilGen.Sanitise(type.ToString()), StringComparison.Ordinal);
-        }
-
+        var name = OpaqueInName().Replace(nominal.Name,
+            match => Associated(match.Groups[1].Value) is { } type ? SilGen.Sanitise(type.ToString()) : throw new Refused($"no type for {match.Value} in {nominal}"));
         if (_substituted.TryGetValue(name, out var made)) {
             return made;
         }
 
-        if (_module.FindType(name) is { } existing) {
-            return existing.GetType() == nominal.GetType() ? existing : throw new Refused($"{name} is not a {nominal.GetType().Name}");
-        }
-
         if (SilType.MentionsOpaque(new ScalarType(name))) {
             throw new Refused($"no type for {nominal}");
+        }
+
+        if (_module.FindType(name) is { } existing) {
+            return existing.GetType() == nominal.GetType() ? existing : throw new Refused($"{name} is not a {nominal.GetType().Name}");
         }
 
         switch (nominal) {

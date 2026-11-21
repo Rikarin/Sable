@@ -808,9 +808,24 @@ units first, and every unit after calls that code in the archive, neither
 binding nor lowering its bodies. Only the generic functions the library
 left specialised are still instantiated from its source. The `.sbi`'s SIL
 is the inlinable part of that code, which an optimised unit copies in for
-the specialisation pass (`LibraryInterface.LinkInlinable`). On macOS a
-program is linked with `-dead_strip`, since the library's archive is one
-object, which Apple's linker otherwise takes whole.
+the specialisation pass (`LibraryInterface.LinkInlinable`). The library's
+archive is one object, which a linker otherwise takes whole: on macOS a
+program is linked with `-dead_strip`; on Linux and Windows every unit and
+the runtime are compiled with a section per function and datum
+(`-ffunction-sections -fdata-sections`) and linked with `--gc-sections` and
+`/OPT:REF` (not `/OPT:ICF`, which could fold two types' metadata or witness
+tables into one address); wasm-ld leaves out what nothing reaches unasked.
+What the units' constructors register (witness tables, describers, error
+erasers) stays, as `.init_array` and `.CRT$XCU` are roots, and so does the
+debugger's table of classes (`llvm.used`, `SHF_GNU_RETAIN`). Linux programs
+no longer link `-rdynamic`, whose exported symbols would all be roots; a
+trap's backtrace names their frames from `.symtab`. Reckoned from the
+`examples/ssg` dev build's objects for x86_64 Linux and Windows (cross-
+compiled, reachability over their relocations as the linkers walk it), the
+code and data the link takes fall from 1.92 MB to 1.07 MB on Linux and
+1.97 MB to 0.85 MB on Windows unspecialised, and from 1.13 MB to 0.79 MB
+and 1.14 MB to 0.65 MB specialised; the standard library's share from
+1.57 MB to 0.71 MB (Linux, unspecialised).
 
 Measured with `sable` built Release, a package's dev build (debug
 information, units) on an M1 Max under a load average of 10–30; "before"

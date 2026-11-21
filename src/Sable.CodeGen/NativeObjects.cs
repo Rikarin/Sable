@@ -36,7 +36,7 @@ public static class NativeObjects {
     ///     optimises across units (ThinLTO, or the whole program at once).
     /// </summary>
     public static IReadOnlyList<string> Flags(NativeOptions options) =>
-        options.DebugInfo && !options.Optimise ? ["-g", "-O0"]
+        options.DebugInfo && !options.Optimise ? ["-g", "-O0", ..NativeBuild.SectionFlags(options.TargetOrHost)]
         : [..NativeBuild.CompileFlags(options), ..Bitcode(options)];
 
     /// <summary>Link-time optimisation's flags for the options' target, without the linker's: what makes an object bitcode.</summary>

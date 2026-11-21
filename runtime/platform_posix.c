@@ -53,6 +53,10 @@ __attribute__((noinline)) static int capture_frames(void **frames, int capacity)
     return count > 0 ? count - 1 : 0;
 }
 
+#if defined(__linux__)
+static bool program_symbol(const void *at, const char **symbol, const void **start, const void **image);
+#endif
+
 // A frame as 'sable.Module.function at file:line:column' where the line
 // table places it (a debug build's), 'sable.Module.function + offset' where
 // only the symbol is known, its address otherwise. The return address is
@@ -63,11 +67,27 @@ static void name_frame(void *frame, char *text, size_t size) {
     const char *at = (const char *)frame - 1;
     Dl_info info;
     char place[300];
-    if (dladdr(at, &info) != 0 && info.dli_sname != NULL) {
-        if (frame_place(at, info.dli_fbase, place, sizeof place)) {
-            snprintf(text, size, "%s at %s", info.dli_sname, place);
+    const char *symbol = NULL;
+    const void *start = NULL, *image = NULL;
+    if (dladdr(at, &info) != 0) {
+        symbol = info.dli_sname;
+        start = info.dli_saddr;
+        image = info.dli_fbase;
+    }
+
+#if defined(__linux__)
+    // dladdr sees only the dynamic symbol table, which a program not linked
+    // -rdynamic gives none of its own functions (NativeBuild's link flags).
+    if (symbol == NULL) {
+        program_symbol(at, &symbol, &start, &image);
+    }
+#endif
+
+    if (symbol != NULL) {
+        if (frame_place(at, image, place, sizeof place)) {
+            snprintf(text, size, "%s at %s", symbol, place);
         } else {
-            snprintf(text, size, "%s + %ld", info.dli_sname, (long)(at + 1 - (const char *)info.dli_saddr));
+            snprintf(text, size, "%s + %ld", symbol, (long)(at + 1 - (const char *)start));
         }
     } else {
         snprintf(text, size, "%p", frame);
@@ -250,6 +270,116 @@ static bool line_sections(LineSections *sections) {
 
     dl_iterate_phdr(find_program_image, sections);
     return sections->line != NULL && sections->image != NULL;
+}
+
+// The program's own symbol table, .symtab in its ELF file: every function
+// of it, where the dynamic one dladdr reads has only what the program
+// exports. Found once, by whichever thread first asks, as the line table
+// is: 0 not yet looked for, 1 being looked for, 2 found, 3 there is none (a
+// program stripped of its symbols).
+static int symbols_state;
+static struct {
+    const Elf64_Sym *symbols;
+    size_t count;
+    const uint8_t *names;
+    size_t names_size;
+    LineSections image; // the program's load bias and start, as find_program_image gives them
+    uintptr_t end;      // the end of its highest segment, in memory
+} program_symbols;
+
+static int find_program_end(struct dl_phdr_info *info, size_t size, void *data) {
+    (void)size;
+    uintptr_t highest = 0;
+    for (int i = 0; i < info->dlpi_phnum; i++) {
+        if (info->dlpi_phdr[i].p_type == PT_LOAD && info->dlpi_phdr[i].p_vaddr + info->dlpi_phdr[i].p_memsz > highest) {
+            highest = info->dlpi_phdr[i].p_vaddr + info->dlpi_phdr[i].p_memsz;
+        }
+    }
+
+    *(uintptr_t *)data = info->dlpi_addr + highest;
+    return 1;
+}
+
+static bool find_program_symbols(void) {
+    size_t size = 0;
+    const uint8_t *file = map_whole_file("/proc/self/exe", &size);
+    if (file == NULL) {
+        return false;
+    }
+
+    const Elf64_Ehdr *header = (const Elf64_Ehdr *)file;
+    if (size < sizeof *header || memcmp(header->e_ident, ELFMAG, SELFMAG) != 0 || header->e_ident[EI_CLASS] != ELFCLASS64
+        || header->e_shentsize != sizeof(Elf64_Shdr) || header->e_shoff > size
+        || (uint64_t)header->e_shnum * sizeof(Elf64_Shdr) > size - header->e_shoff) {
+        return false;
+    }
+
+    const Elf64_Shdr *table = (const Elf64_Shdr *)(file + header->e_shoff);
+    for (int i = 0; i < header->e_shnum; i++) {
+        if (table[i].sh_type != SHT_SYMTAB || table[i].sh_entsize != sizeof(Elf64_Sym) || table[i].sh_link >= header->e_shnum) {
+            continue;
+        }
+
+        const uint8_t *symbols;
+        size_t symbols_size;
+        const Elf64_Shdr *names = &table[table[i].sh_link];
+        if (!section_in(file, size, table[i].sh_offset, table[i].sh_size, &symbols, &symbols_size)
+            || !section_in(file, size, names->sh_offset, names->sh_size, &program_symbols.names, &program_symbols.names_size)) {
+            return false;
+        }
+
+        program_symbols.symbols = (const Elf64_Sym *)symbols;
+        program_symbols.count = symbols_size / sizeof(Elf64_Sym);
+        dl_iterate_phdr(find_program_image, &program_symbols.image);
+        dl_iterate_phdr(find_program_end, &program_symbols.end);
+        return program_symbols.image.image != NULL;
+    }
+
+    return false;
+}
+
+// The function of the program itself that 'at' is in, from its .symtab:
+// its name and start, and where the program starts, as dladdr would give
+// them; false where the address is not the program's, or it has no
+// symbol table.
+static bool program_symbol(const void *at, const char **symbol, const void **start, const void **image) {
+    int state = __atomic_load_n(&symbols_state, __ATOMIC_ACQUIRE);
+    if (state == 0) {
+        int expected = 0;
+        if (__atomic_compare_exchange_n(&symbols_state, &expected, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            state = find_program_symbols() ? 2 : 3;
+            __atomic_store_n(&symbols_state, state, __ATOMIC_RELEASE);
+        }
+    }
+
+    while ((state = __atomic_load_n(&symbols_state, __ATOMIC_ACQUIRE)) == 1) {
+        thread_yield();
+    }
+
+    if (state != 2 || (uintptr_t)at < (uintptr_t)program_symbols.image.image || (uintptr_t)at >= program_symbols.end) {
+        return false;
+    }
+
+    uint64_t address = (uint64_t)((uintptr_t)at - (uintptr_t)program_symbols.image.slide);
+    for (size_t i = 0; i < program_symbols.count; i++) {
+        const Elf64_Sym *entry = &program_symbols.symbols[i];
+        if (ELF64_ST_TYPE(entry->st_info) != STT_FUNC || entry->st_shndx == SHN_UNDEF || address < entry->st_value
+            || address - entry->st_value >= entry->st_size) {
+            continue;
+        }
+
+        const char *name = line_string_at(program_symbols.names, program_symbols.names_size, entry->st_name);
+        if (name == NULL || name[0] == '\0') {
+            continue;
+        }
+
+        *symbol = name;
+        *start = (const void *)(uintptr_t)(entry->st_value + (uint64_t)program_symbols.image.slide);
+        *image = program_symbols.image.image;
+        return true;
+    }
+
+    return false;
 }
 
 #endif

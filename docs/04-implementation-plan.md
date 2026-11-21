@@ -821,8 +821,9 @@ allocator (a size-class allocator — mimalloc is the reference to copy or embed
 
 As implemented so far: with `SABLE_BACKTRACE` set (to anything but `0`), a
 trap prints a backtrace after its message, one frame per line, named through
-`dladdr` (on Linux the program links with `-rdynamic` so its functions can
-be named). `1` starts from the program's frame that trapped; `full` shows the
+`dladdr`, and on Linux, where the program's own functions are not in the
+dynamic symbol table (it links with `--gc-sections`, not `-rdynamic`, which
+would keep every symbol), from the program's `.symtab`. `1` starts from the program's frame that trapped; `full` shows the
 runtime's own frames above it as well. `Backtrace.capture()`
 (Sable.Diagnostics) gives the same frames as a value; the interpreter has
 none to give. Each frame is looked up one byte before its return address,

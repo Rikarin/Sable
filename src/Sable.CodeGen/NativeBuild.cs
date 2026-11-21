@@ -611,7 +611,7 @@ public static class NativeBuild {
     public static IReadOnlyList<string> RuntimeFlags(NativeOptions options, IReadOnlyList<string> lto) {
         var level = options.DebugInfo && !options.Optimise ? "-O2" : $"-O{options.OptLevel}";
         return [
-            ..options.TargetOrHost.ClangFlags, ..SysrootFlags(options), "-c", level, ..PositionIndependentFlags(options),
+            ..options.TargetOrHost.ClangFlags, ..SysrootFlags(options), "-c", level, ..SectionFlags(options.TargetOrHost), ..PositionIndependentFlags(options),
             ..lto.Where(static f => f.StartsWith("-flto", StringComparison.Ordinal)),
         ];
     }
@@ -636,9 +636,28 @@ public static class NativeBuild {
     public static string WithPicLevel(string llvmIr) =>
         llvmIr + "\n!llvm.module.flags = !{!4000000000}\n!4000000000 = !{i32 8, !\"PIC Level\", i32 2}\n";
 
-    /// <summary>The flags the program's IR is compiled with: its optimisation level, and <c>-g</c> for debug information.</summary>
+    /// <summary>
+    ///     The flags the program's IR is compiled with: its optimisation
+    ///     level, <c>-g</c> for debug information, and a section per function
+    ///     and datum where the target's linker needs that to leave any out
+    ///     (<see cref="SectionFlags" />).
+    /// </summary>
     public static IReadOnlyList<string> CompileFlags(NativeOptions options) =>
-        options.DebugInfo ? ["-g", $"-O{options.OptLevel}"] : [$"-O{options.OptLevel}"];
+        [..options.DebugInfo ? ["-g", $"-O{options.OptLevel}"] : new[] { $"-O{options.OptLevel}" }, ..SectionFlags(options.TargetOrHost)];
+
+    /// <summary>
+    ///     A section per function and per datum, on ELF and COFF: their
+    ///     linkers leave out only whole sections that nothing reaches
+    ///     (<c>--gc-sections</c>, <c>/OPT:REF</c>: <see cref="PlatformLinkFlags" />),
+    ///     so an object whose code is all one <c>.text</c> — the standard
+    ///     library's, which holds every generic function of it compiled once
+    ///     (#297 stage 7) — is otherwise taken whole. Apple's linker strips
+    ///     by symbol already, and LLVM gives WebAssembly a section per
+    ///     function and datum always. (Link-time optimisation's code lld
+    ///     generates, a section each as well.)
+    /// </summary>
+    public static IReadOnlyList<string> SectionFlags(NativeTarget target) =>
+        target.Platform is NativePlatform.Linux or NativePlatform.Windows ? ["-ffunction-sections", "-fdata-sections"] : [];
 
     /// <summary>
     ///     Link-time optimisation's flags, which let LLVM inline the runtime's
@@ -711,25 +730,38 @@ public static class NativeBuild {
     ///     drift apart.
     /// </summary>
     public static IReadOnlyList<string> PlatformLinkFlags(NativePlatform platform) => platform switch {
-        // A trap's backtrace names frames through dladdr, which on Linux
-        // sees only the dynamic symbol table: the program's functions go
-        // there too. And 'frem' becomes a call to fmod, which glibc keeps
-        // in libm, not libc. The executor's pool is threads: pthread, which
-        // older glibc keeps apart.
-        NativePlatform.Linux => ["-rdynamic", "-lm", "-pthread"],
+        // The sections nothing reaches left out: the standard library's
+        // archive is one object, which holds every generic function of the
+        // library compiled once (#297 stage 7), each in a section of its
+        // own (SectionFlags). What a constructor reaches stays (.init_array
+        // is a root): the witness tables, describers and error erasers a
+        // unit registers. So does what llvm.used marks, SHF_GNU_RETAIN: the
+        // debugger's table of classes. Not -rdynamic, whose every exported
+        // symbol would be a root too: a trap's backtrace names the
+        // program's frames from its .symtab where dladdr cannot. And 'frem'
+        // becomes a call to fmod, which glibc keeps in libm, not libc. The
+        // executor's pool is threads: pthread, which older glibc keeps apart.
+        NativePlatform.Linux => ["-Wl,--gc-sections", "-lm", "-pthread"],
 
         // lld, which takes LLVM bitcode as Microsoft's linker does not; the
         // main thread's stack the size a POSIX one's is, 8 MiB, not 1; a
         // PDB, with the program's symbols at least, from which a trap's
         // backtrace names frames; and compiler-rt's builtins, which LLVM
         // calls for what the machine has no instruction for (F16, 128-bit
-        // division) and which Microsoft's C runtime does not have.
-        NativePlatform.Windows => ["-fuse-ld=lld", "-Wl,/STACK:8388608", "-Wl,/DEBUG", ..CompilerRtBuiltins.Value is { } builtins ? [builtins] : Array.Empty<string>()],
+        // division) and which Microsoft's C runtime does not have. And the
+        // sections nothing reaches left out, as on Linux, which /DEBUG
+        // keeps unless asked (/OPT:REF): a constructor's .CRT$XCU entry is
+        // in no COMDAT, so it and what it registers stay. Not /OPT:ICF,
+        // which would fold identical read-only data — two witness tables, or
+        // two types' metadata, whose address is the type's identity — and
+        // identical functions, which a backtrace would name as one.
+        NativePlatform.Windows => ["-fuse-ld=lld", "-Wl,/STACK:8388608", "-Wl,/DEBUG", "-Wl,/OPT:REF", ..CompilerRtBuiltins.Value is { } builtins ? [builtins] : Array.Empty<string>()],
 
         // wasm-ld gives the stack 64 KiB unless asked: 8 MiB, as POSIX's
         // main thread has. And the stack first in linear memory, below the
         // data, so that running off its end is an access below address 0,
         // which the engine traps, not a write over the program's globals.
+        // (What nothing reaches wasm-ld leaves out unless asked not to.)
         NativePlatform.Wasi => ["-Wl,-z,stack-size=8388608", "-Wl,--stack-first"],
 
         // Apple's linker takes an archive's object whole: the standard

@@ -1004,15 +1004,16 @@ public sealed class IncrementalTests {
 
     /// <summary>
     ///     A separate build's link takes what the whole program's build does on
-    ///     each platform: on Linux, <c>-rdynamic</c> for a trap's backtrace,
-    ///     libm for the <c>fmod</c> a float's remainder calls, and
-    ///     <c>-pthread</c> for the task pool's threads; on macOS,
-    ///     <c>-dead_strip</c>, which leaves out what of the standard library's
-    ///     one object nothing reaches. Checked by its
-    ///     arguments, as this may not run where Linux does.
+    ///     each platform: on Linux, <c>--gc-sections</c>, libm for the
+    ///     <c>fmod</c> a float's remainder calls, and <c>-pthread</c> for the
+    ///     task pool's threads; on macOS <c>-dead_strip</c>, and on Linux
+    ///     <c>--gc-sections</c> and on Windows <c>/OPT:REF</c>, which leave
+    ///     out what of the standard library's one object nothing reaches —
+    ///     and on Linux not <c>-rdynamic</c>, which would keep every symbol.
+    ///     Checked by its arguments, as this may not run where Linux does.
     /// </summary>
     [Theory]
-    [InlineData(NativePlatform.Linux, new[] { "-rdynamic", "-lm", "-pthread" })]
+    [InlineData(NativePlatform.Linux, new[] { "-Wl,--gc-sections", "-lm", "-pthread" })]
     [InlineData(NativePlatform.MacOS, new[] { "-Wl,-dead_strip" })]
     public void ASeparateLinkTakesThePlatformsLibraries(NativePlatform platform, string[] flags) {
         Assert.Equal(flags, NativeBuild.PlatformLinkFlags(platform));
@@ -1029,9 +1030,10 @@ public sealed class IncrementalTests {
     /// </summary>
     [Fact]
     public void AProfilesSettingsAreClangsFlags() {
-        Assert.Equal(["-Os"], NativeBuild.CompileFlags(new NativeOptions { OptLevel = "s" }));
-        Assert.Equal(["-g", "-O3"], NativeBuild.CompileFlags(new NativeOptions { OptLevel = "3", DebugInfo = true }));
-        Assert.Equal(["-g", "-O0"], NativeBuild.CompileFlags(NativeOptions.Of(optimise: true, debug: true)));
+        var mac = NativeTarget.Of("arm64-apple-macosx14.0");
+        Assert.Equal(["-Os"], NativeBuild.CompileFlags(new NativeOptions { OptLevel = "s", Target = mac }));
+        Assert.Equal(["-g", "-O3"], NativeBuild.CompileFlags(new NativeOptions { OptLevel = "3", DebugInfo = true, Target = mac }));
+        Assert.Equal(["-g", "-O0"], NativeBuild.CompileFlags(NativeOptions.Of(optimise: true, debug: true) with { Target = mac }));
 
         var release = new NativeOptions { OptLevel = "3" };
         Assert.Equal(["-flto"], NativeBuild.LtoFlags(release, NativePlatform.MacOS, linksBitcode: true));
@@ -1040,10 +1042,37 @@ public sealed class IncrementalTests {
         Assert.Empty(NativeBuild.LtoFlags(release with { Lto = LtoMode.Off }, NativePlatform.MacOS, linksBitcode: true));
         Assert.Empty(NativeBuild.LtoFlags(release with { OptLevel = "0" }, NativePlatform.MacOS, linksBitcode: true));
 
-        Assert.Equal(["-rdynamic", "-lm", "-pthread", "-Wl,--strip-all", "-Wl,-rpath,$ORIGIN"],
+        Assert.Equal(["-Wl,--gc-sections", "-lm", "-pthread", "-Wl,--strip-all", "-Wl,-rpath,$ORIGIN"],
             NativeBuild.LinkFlags(release with { Strip = StripMode.Symbols, Rpath = true }, NativePlatform.Linux));
         Assert.Equal(["-Wl,-dead_strip", "-Wl,-S"], NativeBuild.LinkFlags(release with { Strip = StripMode.DebugInfo }, NativePlatform.MacOS));
-        Assert.Equal(["a.o", "-o", "program", "-rdynamic", "-lm", "-pthread", "-Wl,--strip-debug"],
+        Assert.Equal(["a.o", "-o", "program", "-Wl,--gc-sections", "-lm", "-pthread", "-Wl,--strip-debug"],
             NativeObjects.LinkArguments(["a.o"], "program", NativePlatform.Linux, release with { Strip = StripMode.DebugInfo }));
+        Assert.Contains("-Wl,/OPT:REF", NativeBuild.PlatformLinkFlags(NativePlatform.Windows));
+        Assert.DoesNotContain(NativeBuild.PlatformLinkFlags(NativePlatform.Windows), static f => f.StartsWith("-Wl,/OPT:ICF", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    ///     On Linux and Windows every function and datum of a unit, the
+    ///     runtime's too, is compiled into a section of its own, which the
+    ///     link leaves out when nothing reaches it (<c>--gc-sections</c>,
+    ///     <c>/OPT:REF</c>); on macOS, whose linker strips by symbol, and
+    ///     WebAssembly, whose objects LLVM always gives them, it is not asked for.
+    /// </summary>
+    [Theory]
+    [InlineData("x86_64-unknown-linux-gnu", true)]
+    [InlineData("aarch64-unknown-linux-gnu", true)]
+    [InlineData("x86_64-pc-windows-msvc", true)]
+    [InlineData("arm64-apple-macosx14.0", false)]
+    [InlineData("wasm32-wasip1", false)]
+    public void EachFunctionHasItsOwnSectionWhereTheLinkerNeedsIt(string triple, bool sections) {
+        string[] expected = sections ? ["-ffunction-sections", "-fdata-sections"] : [];
+        var target = NativeTarget.Of(triple);
+        Assert.Equal(expected, NativeBuild.SectionFlags(target));
+        foreach (var options in new[] { NativeOptions.Of(false, true), NativeOptions.Of(true, false), new NativeOptions { OptLevel = "2", DebugInfo = true } }) {
+            var targeted = options with { Target = target, Lto = LtoMode.Off };
+            Assert.Equal(sections, NativeObjects.Flags(targeted).Contains("-ffunction-sections"));
+            Assert.Equal(sections, NativeBuild.CompileFlags(targeted).Contains("-fdata-sections"));
+            Assert.Equal(sections, NativeBuild.RuntimeFlags(targeted, []).Contains("-ffunction-sections"));
+        }
     }
 }

@@ -187,6 +187,7 @@ public sealed partial class LlvmEmitter {
         var parts = type switch {
             EnumType enumType => enumType.Cases.Select(static c => c.Name).ToList(),
             StructType structType => structType.Fields.Select(static f => f.Name).ToList(),
+            ClassType classType => classType.Fields.Select(static f => f.Name).ToList(),
             _ => throw new NotSupportedException($"no shape for {type}"),
         };
         var names = $"@\"sable.shape.parts.{Mangled(type)}\"";
@@ -271,6 +272,31 @@ public sealed partial class LlvmEmitter {
 
         _helpers.Append(body.Append("  ret void\n}\n\n"));
         return "@\"sable.erasers.register\"";
+    }
+
+    /// <summary>The generic classes whose metadata the module wrote, in a build that compiles generic code once.</summary>
+    readonly List<ClassType> _genericClasses = [];
+
+    /// <summary>
+    ///     In a build that compiles generic code once, a constructor that hands
+    ///     the runtime each generic class's metadata the module wrote, with
+    ///     its shape (<c>sable_register_generic_class</c>): what
+    ///     <c>sable_class_type</c> gives for the same type arguments, so that
+    ///     an object unspecialised code makes is of the same class as one
+    ///     code that knows its types makes. Null for none.
+    /// </summary>
+    string? GenericClassRegistration(SilModule module) {
+        if (!module.UnspecialisedGenerics || _genericClasses.Count == 0) {
+            return null;
+        }
+
+        var body = new StringBuilder("define internal void @\"sable.classes.register\"() {\nentry:\n");
+        foreach (var type in _genericClasses.ToList()) {
+            body.Append($"  call void @sable_register_generic_class(ptr {AggregateShape(type)}, ptr {TypeMetadataGlobal(type)})\n");
+        }
+
+        _helpers.Append(body.Append("  ret void\n}\n\n"));
+        return "@\"sable.classes.register\"";
     }
 
     string? WitnessRegistration(SilModule module) {
@@ -385,6 +411,9 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_slice_type(ptr, ptr)
                                         declare ptr @sable_aggregate_type(ptr, ptr, ptr)
                                         declare ptr @sable_tuple_type(ptr, i64, ptr)
+                                        declare ptr @sable_class_type(ptr, ptr, ptr)
+                                        declare void @sable_register_generic_class(ptr, ptr)
+                                        declare void @sable_opaque_share(ptr, ptr)
                                         declare i64 @sable_enum_tag(ptr, ptr)
                                         declare void @sable_enum_inject(ptr, i64, ptr)
                                         declare ptr @sable_enum_payload(ptr, ptr)

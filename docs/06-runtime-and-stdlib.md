@@ -453,21 +453,33 @@ the fields' or cases' names, the name, and the type arguments' count) as
 (`T[]`) has the layout it has whatever `T` is, and is passed as it is. Such a
 type is a type argument and a type's name as Sable writes it
 (`M.Pair<String, Int>`) as one made where its arguments are known. A type
-with a deinit, packed or aligned, move-only, a union with a boxed case, a
-class with a field of `T` by value, and an extension with `where T == X` are still specialised.
+with a deinit, packed or aligned, move-only, a union with a boxed case, and
+an extension with `where T == X` are still specialised.
 
-A **generic class** whose stored fields hold its type parameters' values
-only behind references — arrays and slices of them, plain generic structs
-that do (`[Key: Int]`), other such classes — and which has no superclass is
-laid out alike whatever its arguments, so its methods and getters are
-compiled once as a struct's are, the reference passed as it is
-(`Stack`, `Queue`, `Deque`, `OrderedDictionary`); any method may change
-self's fields. One that a subclass may override is still specialised, as
-its vtable holds an instance for each class's arguments; so is an
-initialiser, which makes the object and so needs its class's metadata for
-the arguments, not made at run time yet. A **subscript**'s getter and
-setter, of a generic struct, union or class, are compiled once as methods
-are (a dictionary's `d[key]` and `d[key] = v`).
+A **generic class** with no superclass is compiled once as a struct is, the
+reference passed as it is; any method may change self's fields. One whose
+stored fields hold its type parameters' values only behind references —
+arrays and slices of them, plain generic structs that do (`[Key: Int]`),
+other such classes — is laid out alike whatever its arguments (`Stack`,
+`Queue`, `Deque`, `OrderedDictionary`). One with no deinit may hold them by
+value too, laid out as an optional's or a tuple's fields are: its fields are
+where the class's metadata says (`sable_field_address`). That metadata is
+made at run time from the fields' and the type arguments' metadata
+(`sable_class_type`, from the class's shape) and kept for each set of
+arguments — its object metadata sized for them, with a destroy and a visitor
+that go through each field's value witnesses — and its **initialisers** are
+compiled once with it: the allocating half makes the object from that
+metadata, and is called, never made where it is called. So that an object
+unspecialised code makes is of the same class as one made where its types
+are known, a program built unspecialised registers each generic class's
+metadata it writes as it starts (`sable_register_generic_class`), and the
+runtime gives that record for those arguments: a class's metadata is its
+identity to `is` and `as?`. A class that a subclass may override is still
+specialised, as its vtable holds an instance for each class's arguments, and
+so is the initialiser of one with a deinit, which the metadata made at run
+time does not run. A **subscript**'s getter and setter, of a generic struct,
+union or class, are compiled once as methods are (a dictionary's `d[key]` and
+`d[key] = v`).
 
 **Associated types.** An associated type read through a type parameter —
 `S.Element`, `C.Index`, `S.Iter`, `S.Iter.Element`, and inside a protocol
@@ -558,8 +570,8 @@ on its witness alone, so every unit's copy of a table is the same.
 
 What unspecialised code cannot serve yet — an optional chain through a
 `T?`, a structural union of `T`, a method of a generic class
-a subclass may override or whose fields hold `T` by value, a field of a
-function type in a generic type, a class's initialiser or a struct's that holds `T` by value, `"\(x:?)"`, an async closure's
+a subclass may override, a field of a function type in a generic type, the
+initialiser of a class with a deinit or of a struct that holds `T` by value, `"\(x:?)"`, an async closure's
 parameter, or a generator — is still specialised for its type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
 says, for each generic function, which way it went and why. A specialised

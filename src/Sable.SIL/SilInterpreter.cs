@@ -1193,7 +1193,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         break;
 
                     case AllocRefInst alloc:
-                        values[alloc] = alloc.ClassType.IsCoroutineFrame ? PushFrame(alloc.ClassType) : Allocate(new HeapObject(alloc.ClassType), alloc.OnStack);
+                        // A generic class of types only metadata knows (#297): the class it is for the types the function was given.
+                        values[alloc] = alloc.ClassType.IsCoroutineFrame ? PushFrame(alloc.ClassType)
+                            : Allocate(new HeapObject(alloc.ClassType.IsGenericInstance && SilType.MentionsOpaque(alloc.ClassType) ? (ClassType)Concrete(alloc.ClassType) : alloc.ClassType), alloc.OnStack);
                         break;
 
                     case RefElementAddrInst element:

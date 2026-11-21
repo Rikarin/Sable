@@ -63,6 +63,7 @@ public sealed partial class SilGen {
 
     SilGen(Compilation compilation) {
         _compilation = compilation;
+        _module.UnspecialisedGenerics = _generics == GenericsMode.Unspecialised;
 
         // What the built-in types declare they conform to: their metadata's
         // conformance records, the same in every unit of a program.
@@ -881,6 +882,11 @@ public sealed partial class SilGen {
                         LowerBody(symbol, syntax, model, name, type, substitution);
                         if (generic.Shape is { } shape && _module.Find(name) is { } unspecialised) {
                             AssociatedRecipes(unspecialised, symbol, shape);
+
+                            // A class's initialiser's other half, which initialises the object.
+                            if (_module.Find(InitializerName(name)) is { } initialize) {
+                                AssociatedRecipes(initialize, symbol, shape);
+                            }
                         }
                     }
 
@@ -1108,10 +1114,20 @@ public sealed partial class SilGen {
             };
             initialize.ParameterNames.Add("self");
             initialize.ParameterNames.AddRange(function.ParameterNames);
+
+            // Compiled once (#297): both take the class's arguments' metadata, after the initialiser's own parameters.
+            if (_unspecialised.TryGetValue(name, out var generic)) {
+                _unspecialised[initialize.Name] = generic;
+            }
+
             new FunctionLowering(this, symbol, initialize, source, substitution).Lower(body);
             initialize.RemoveUnreachableBlocks();
             _module.Add(initialize);
-            _module.Add(Allocator(function, classType, initialize));
+            var allocator = _module.Add(Allocator(function, classType, initialize));
+            if (initialize.IsUnspecialised) {
+                allocator.ParameterNames.Clear();
+                allocator.ParameterNames.AddRange(initialize.ParameterNames.Skip(1));
+            }
 
             // Its body is checked as any other is: 'self.h = h' moves a
             // @noncopy parameter into the object, and is not a copy of it.

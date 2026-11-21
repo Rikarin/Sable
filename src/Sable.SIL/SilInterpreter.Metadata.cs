@@ -137,6 +137,15 @@ public sealed partial class SilInterpreter {
                 return concrete;
             }
 
+            // A class laid out for its arguments, none of whose code runs as it dies: it has no deinit, no superclass, no vtable.
+            case ClassType { IsGenericInstance: true } classType: {
+                var concrete = new ClassType(name) { DisplayName = display, TypeArguments = [..arguments] };
+                _concreteGenerics[name] = concrete;
+                concrete.Fields.AddRange(classType.Fields.Select(f => (f.Name, Concrete(f.Type))));
+                concrete.Conformances.AddRange(classType.Conformances);
+                return concrete;
+            }
+
             default:
                 return generic;
         }

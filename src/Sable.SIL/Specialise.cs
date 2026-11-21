@@ -1576,6 +1576,24 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                 return _module.AddType(copy);
             }
 
+            // A generic class compiled once, laid out for its arguments: no
+            // superclass, no vtable, no deinit, so its fields are all of it.
+            case ClassType { Superclass: null, VTable.Count: 0, Deinit: null, IsCoroutineFrame: false } classType: {
+                var arguments = classType.TypeArguments.Select(Substitute).ToList();
+                var display = classType.DisplayName is { } written && written.IndexOf('<') is > 0 and var open
+                    ? $"{written[..open]}<{string.Join(", ", arguments.Select(TypeMetadata.DisplayName))}>"
+                    : classType.DisplayName;
+                var copy = new ClassType(name) { DisplayName = display };
+                _substituted[name] = copy;
+                copy.Conformances.AddRange(classType.Conformances);
+                copy.TypeArguments = [..arguments];
+                foreach (var (fieldName, fieldType) in classType.Fields) {
+                    copy.Fields.Add((fieldName, Substitute(fieldType)));
+                }
+
+                return _module.AddType(copy);
+            }
+
             default:
                 throw new Refused($"no type {name} for {nominal}");
         }

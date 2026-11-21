@@ -840,3 +840,195 @@ const SableTypeMetadata *sable_aggregate_type(void **cache, const SableAggregate
 const SableTypeMetadata *sable_tuple_type(void **cache, int64_t count, const SableTypeMetadata *const *elements) {
     return aggregate_instance(cache, NULL, count, elements);
 }
+
+// ---- Generic classes of a type known only at run time ---------------------
+
+// A generic class whose code is compiled once (#297): its metadata — the
+// class's type metadata and its object metadata — made at run time from its
+// fields' and its type arguments' metadata, laid out as the compiler lays out
+// an object where it knows the types (TypeLayout.Object): the header, then
+// each field at the next offset its alignment allows. Such a class is never
+// inherited from and has no deinit, so its object metadata has no vtable and
+// its destroy only destroys its fields, through their value witnesses.
+//
+// An instance the program's own code made where it knew the types — a static
+// 'Sable.Collections.Deque<Int>' — is registered as the image starts, and is
+// what the runtime gives for those arguments: a class's metadata is its
+// identity to 'is' and 'as?', so there is one per set of arguments.
+typedef struct SableClassInstance {
+    SableTypeMetadata type; // first: what the object metadata's 'type' points to
+    SableMetadata object;
+    const SableAggregateShape *shape;
+    const SableTypeMetadata **parts; // each field's, then each type argument's
+    SableField *fields;
+    struct SableClassInstance *next;
+} SableClassInstance;
+
+static SableClassInstance *class_instances;
+
+static struct {
+    const SableAggregateShape *shape;
+    const SableTypeMetadata *type;
+} *registered_classes;
+static int64_t registered_class_count, registered_class_capacity;
+
+void sable_register_generic_class(const SableAggregateShape *shape, const SableTypeMetadata *type) {
+    if (registered_class_count == registered_class_capacity) {
+        registered_class_capacity = registered_class_capacity == 0 ? 32 : registered_class_capacity * 2;
+        registered_classes = realloc(registered_classes, (size_t)registered_class_capacity * sizeof *registered_classes);
+        if (registered_classes == NULL) {
+            sable_trap("out of memory");
+        }
+    }
+
+    registered_classes[registered_class_count].shape = shape;
+    registered_classes[registered_class_count].type = type;
+    registered_class_count++;
+}
+
+static bool same_shape(const SableAggregateShape *a, const SableAggregateShape *b) {
+    return a == b || (a->name != NULL && b->name != NULL && strcmp(a->name, b->name) == 0 && a->argument_count == b->argument_count);
+}
+
+// Whether the class's metadata has these type arguments: the same records,
+// or, for one made elsewhere, records of the same types.
+static bool class_arguments_are(const SableTypeMetadata *type, int64_t count, const SableTypeMetadata *const *arguments, bool exactly) {
+    if (type->argument_count != count) {
+        return false;
+    }
+
+    for (int64_t i = 0; i < count; i++) {
+        if (type->arguments[i] != arguments[i] && (exactly || !sable_metadata_equal(type->arguments[i], arguments[i]))) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static const SableClassInstance *class_instance_of(const void *object) {
+    return (const SableClassInstance *)(const void *)(*(const SableMetadata *const *)object)->type;
+}
+
+// Destroys an object's fields, last first, as a class's compiled destroy does.
+static void class_destroy(void *object) {
+    const SableClassInstance *instance = class_instance_of(object);
+    for (int64_t i = instance->shape->part_count - 1; i >= 0; i--) {
+        const SableTypeMetadata *part = instance->parts[i];
+        part->witnesses->destroy((char *)object + instance->fields[i].offset, part);
+    }
+}
+
+static void class_visit(void *object) {
+    const SableClassInstance *instance = class_instance_of(object);
+    for (int64_t i = 0; i < instance->shape->part_count; i++) {
+        const SableTypeMetadata *part = instance->parts[i];
+        part->witnesses->visit((char *)object + instance->fields[i].offset, part);
+    }
+}
+
+static SableClassInstance *class_make(const SableAggregateShape *shape, const SableTypeMetadata *const *parts) {
+    int64_t field_count = shape->part_count, count = field_count + shape->argument_count;
+    SableClassInstance *made = calloc(1, sizeof *made);
+    const SableTypeMetadata **kept = calloc((size_t)(count > 0 ? count : 1), sizeof *kept);
+    SableField *fields = calloc((size_t)(field_count > 0 ? field_count : 1), sizeof *fields);
+    if (made == NULL || kept == NULL || fields == NULL) {
+        sable_trap("out of memory");
+    }
+
+    memcpy(kept, parts, (size_t)count * sizeof *kept);
+    made->shape = shape;
+    made->parts = kept;
+    made->fields = fields;
+
+    // The header — its type, its strong count, its weak count and flags — then the fields.
+    int64_t end = (int64_t)(sizeof(void *) + 2 * sizeof(uint32_t)), align = (int64_t)sizeof(void *);
+    for (int64_t i = 0; i < field_count; i++) {
+        const SableTypeMetadata *part = kept[i];
+        int64_t part_align = part->alignment < 1 ? 1 : part->alignment;
+        int64_t at = round_up(end, part_align);
+        fields[i].name = shape->part_names[i];
+        fields[i].type_name = name_of(part);
+        fields[i].offset = at;
+        fields[i].kind = (part->flags & SABLE_TYPE_TRIVIAL) != 0 ? SABLE_FIELD_DATA
+                         : part->kind == SABLE_KIND_CLASS ? SABLE_FIELD_STRONG
+                         : SABLE_FIELD_AGGREGATE;
+        fields[i].type = part;
+        end = at + part->size;
+        align = part_align > align ? part_align : align;
+    }
+
+    SableTypeMetadata *type = &made->type;
+    type->kind = SABLE_KIND_CLASS;
+    type->field_count = field_count;
+    type->fields = fields;
+    type->size = type->alignment = type->stride = (int64_t)sizeof(void *);
+    type->flags = SABLE_TYPE_NULLABLE | SABLE_TYPE_FIELDS | SABLE_TYPE_FIELD_TYPES;
+    type->witnesses = &sable_reference_witnesses;
+    type->argument_count = shape->argument_count;
+    type->arguments = kept + field_count;
+    type->object = &made->object;
+
+    size_t base = strlen(shape->name);
+    char *before = malloc(base + 2);
+    if (before == NULL) {
+        sable_trap("out of memory");
+    }
+
+    memcpy(before, shape->name, base);
+    before[base] = '<';
+    before[base + 1] = 0;
+    type->name = shape->argument_count == 0 ? shape->name : joined_name(before, shape->argument_count, type->arguments, ">");
+    free(before);
+
+    SableMetadata *object = &made->object;
+    object->destroy = class_destroy;
+    object->name = type->name;
+    object->size = round_up(end, align);
+    object->alignment = align;
+    object->visit = class_visit;
+    object->type = type;
+    return made;
+}
+
+// A generic class's metadata for these fields' and type arguments' metadata
+// (the fields' first): the program's own, registered as it started, or one
+// made the first time it is asked for and kept for the program's life — and
+// at the call that asked, for the next time.
+const SableTypeMetadata *sable_class_type(void **cache, const SableAggregateShape *shape, const SableTypeMetadata *const *parts) {
+    const SableTypeMetadata *const *arguments = parts + shape->part_count;
+    const SableTypeMetadata *known = __atomic_load_n((const SableTypeMetadata **)cache, __ATOMIC_ACQUIRE);
+    if (known != NULL && class_arguments_are(known, shape->argument_count, arguments, true)) {
+        return known;
+    }
+
+    const SableTypeMetadata *found = NULL;
+    for (int64_t i = 0; i < registered_class_count && found == NULL; i++) {
+        if (same_shape(registered_classes[i].shape, shape) && class_arguments_are(registered_classes[i].type, shape->argument_count, arguments, false)) {
+            found = registered_classes[i].type;
+        }
+    }
+
+    for (SableClassInstance *at = __atomic_load_n(&class_instances, __ATOMIC_ACQUIRE); at != NULL && found == NULL; at = at->next) {
+        if (same_shape(at->shape, shape) && class_arguments_are(&at->type, shape->argument_count, arguments, false)) {
+            found = &at->type;
+        }
+    }
+
+    if (found == NULL) {
+        SableClassInstance *made = class_make(shape, parts);
+
+        // Another thread may have made one meanwhile: either serves, and both are kept.
+        made->next = __atomic_load_n(&class_instances, __ATOMIC_ACQUIRE);
+        while (!__atomic_compare_exchange_n(&class_instances, &made->next, made, true, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+        }
+
+        found = &made->type;
+    }
+
+    if (known == NULL) {
+        __atomic_store_n((const SableTypeMetadata **)cache, found, __ATOMIC_RELEASE);
+    }
+
+    return found;
+}

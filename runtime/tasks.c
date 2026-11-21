@@ -231,6 +231,23 @@ void sable_share(void *pointer) {
     visit_hook = saved;
 }
 
+static void share_one(void *pointer) {
+    sable_share(pointer);
+}
+
+// Shares each object a value of a type known only by its metadata holds
+// (#297): what its visit witness hands sable_heap_visit.
+void sable_opaque_share(void *value, const SableTypeMetadata *type) {
+    if ((type->flags & SABLE_TYPE_TRIVIAL) != 0) {
+        return;
+    }
+
+    void (*saved)(void *) = visit_hook;
+    visit_hook = share_one;
+    type->witnesses->visit(value, type);
+    visit_hook = saved;
+}
+
 // ---- Run queues: Chase–Lev deques ---------------------------------------------
 
 // A worker's queue for one band: it pushes at the bottom; every worker,

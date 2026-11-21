@@ -549,7 +549,21 @@ public sealed partial class SilGen {
         && !definition.TypeParameters.Any(static p => p.IsValue || p.AllowsNoncopyable)
         && definition.BaseTypes.OfType<NamedTypeSymbol>().All(static b => b.TypeKind != TypeKind.Class)
         && StoredFields(definition).All(f => f.ReferenceKind == default && !MentionsDefinition(f.Type, definition)
-                                             && (!Mentions(f.Type, definition.TypeParameters) || ByReference(f.Type, definition.TypeParameters)));
+                                             && (!Mentions(f.Type, definition.TypeParameters) || ByReference(f.Type, definition.TypeParameters)
+                                                 // One held by value: the object laid out at run time, from its arguments' metadata, which has no deinit to run.
+                                                 || !HasDeinit(definition) && IsHeld(f.Type, definition.TypeParameters) && f.Type is not MetatypeTypeSymbol));
+
+    static bool HasDeinit(NamedTypeSymbol definition) => definition.Members.OfType<FunctionSymbol>().Any(static f => f.FunctionKind == FunctionKind.Deinitializer);
+
+    /// <summary>
+    ///     A generic class's own initialiser, compiled once: its object made
+    ///     from its class's metadata for the arguments, made at run time
+    ///     (<c>sable_class_type</c>), as a class that has no deinit needs
+    ///     nothing else of them.
+    /// </summary>
+    static bool IsClassInitializer(FunctionSymbol symbol) =>
+        symbol is { FunctionKind: FunctionKind.Initializer, IsSynthesized: false } && Owner(symbol)?.OriginalDefinition is { TypeKind: TypeKind.Class } owner
+        && IsPlainGenericClass(owner) && !HasDeinit(owner);
 
     /// <summary>A type that mentions type parameters only behind a reference: an array or a slice of held values, or a plain generic class of them.</summary>
     static bool ByReference(TypeSymbol type, IReadOnlyCollection<TypeParameterSymbol> parameters) =>
@@ -672,7 +686,7 @@ public sealed partial class SilGen {
 
         refused = _localGenerics.ContainsKey(symbol) ? "a local generic function"
             : symbol.IsPolymorphic ? "polymorphic recursion"
-            : symbol.FunctionKind != FunctionKind.Ordinary && !IsGetter(symbol) && !IsSubscriptAccessor(symbol) && !IsValueInitializer(symbol) ? $"{(symbol.FunctionKind.ToString()[0] is 'A' or 'E' or 'I' or 'O' or 'U' ? "an" : "a")} {symbol.FunctionKind.ToString().ToLowerInvariant()}"
+            : symbol.FunctionKind != FunctionKind.Ordinary && !IsGetter(symbol) && !IsSubscriptAccessor(symbol) && !IsValueInitializer(symbol) && !IsClassInitializer(symbol) ? $"{(symbol.FunctionKind.ToString()[0] is 'A' or 'E' or 'I' or 'O' or 'U' ? "an" : "a")} {symbol.FunctionKind.ToString().ToLowerInvariant()}"
             : symbol.ForeignName is not null ? "foreign"
             : symbol.OpaqueTypeParameters.Any(static p => !p.OpaqueParameter!.Arguments.IsEmpty) ? "a 'some P<…>' parameter"
             : _compilation.GetGenerator(symbol) is not null ? "a generator"
@@ -881,7 +895,7 @@ public sealed partial class SilGen {
         }
 
         var checker = new ShapeChecker(this, shape, symbol);
-        var initialValues = IsValueInitializer(symbol) && Owner(symbol) is { } built
+        var initialValues = (IsValueInitializer(symbol) || IsClassInitializer(symbol)) && Owner(symbol) is { } built
             ? built.OriginalDefinition.Members.OfType<FieldSymbol>().Where(static f => f is { IsStatic: false, IsComputed: false, HasInitializer: true })
                 .Select(FieldInitializer).OfType<BoundExpression>().ToList()
             : [];
@@ -1497,7 +1511,7 @@ public sealed partial class SilGen {
 
         // An initialiser borrows what it is given, as any function compiled
         // once does: its callers pass values of a type parameter where they are.
-        var owned = signature.Owned.IsEmpty || IsValueInitializer(symbol) ? default : signature.Owned.Concat(hidden.Select(static _ => false)).ToImmutableArray();
+        var owned = signature.Owned.IsEmpty || IsValueInitializer(symbol) || IsClassInitializer(symbol) ? default : signature.Owned.Concat(hidden.Select(static _ => false)).ToImmutableArray();
         var type = new FunctionType([..signature.Parameters, ..hidden], result, thrown, owned, signature.IsAsync);
         _instances[name] = type;
         _instanceOrigins[name] = (symbol, OpaqueParametersAsThemselves(symbol), _loweringInstance);

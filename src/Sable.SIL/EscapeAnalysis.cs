@@ -58,7 +58,7 @@ public sealed class PromoteToStack : ISilPass {
             var inLoop = InLoop(block);
             foreach (var instruction in block.Instructions) {
                 switch (instruction) {
-                    case AllocRefInst { OnStack: false, ClassType.IsCoroutineFrame: false } alloc when Promotable(alloc, inLoop, uses, summaries, Dominators, out var holders):
+                    case AllocRefInst { OnStack: false, ClassType.IsCoroutineFrame: false } alloc when !(alloc.ClassType.IsGenericInstance && SilType.MentionsOpaque(alloc.ClassType)) && Promotable(alloc, inLoop, uses, summaries, Dominators, out var holders):
                         alloc.OnStack = true;
                         promoted.Add((alloc, holders));
                         break;
@@ -326,7 +326,9 @@ public sealed class PromoteToStack : ISilPass {
             || body.Instructions is not [AllocRefInst alloc, FunctionRefInst initialize, ApplyInst call, ReturnInst returned]
             || !ReferenceEquals(call.Callee, initialize)
             || !ReferenceEquals(returned.Value, alloc)
-            || initialize.Type is not FunctionType initializeType) {
+            || initialize.Type is not FunctionType initializeType
+            // One compiled once makes its object from metadata it is given (#297): it stays a call.
+            || callee.IsUnspecialised) {
             return null;
         }
 

@@ -902,6 +902,7 @@ typedef struct SableClassInstance {
 } SableClassInstance;
 
 static SableClassInstance *class_instances;
+static SpinLock class_lock;
 
 static struct {
     const SableAggregateShape *shape;
@@ -910,6 +911,7 @@ static struct {
 static int64_t registered_class_count, registered_class_capacity;
 
 void sable_register_generic_class(const SableAggregateShape *shape, const SableTypeMetadata *type) {
+    spin_lock(&class_lock);
     if (registered_class_count == registered_class_capacity) {
         registered_class_capacity = registered_class_capacity == 0 ? 32 : registered_class_capacity * 2;
         registered_classes = realloc(registered_classes, (size_t)registered_class_capacity * sizeof *registered_classes);
@@ -921,6 +923,7 @@ void sable_register_generic_class(const SableAggregateShape *shape, const SableT
     registered_classes[registered_class_count].shape = shape;
     registered_classes[registered_class_count].type = type;
     registered_class_count++;
+    spin_unlock(&class_lock);
 }
 
 static bool same_shape(const SableAggregateShape *a, const SableAggregateShape *b) {
@@ -1039,14 +1042,17 @@ const SableTypeMetadata *sable_class_type(void **cache, const SableAggregateShap
         return known;
     }
 
+    // Found or made under a lock: two threads asking at once for the same
+    // arguments must get the one record, the class's identity.
     const SableTypeMetadata *found = NULL;
+    spin_lock(&class_lock);
     for (int64_t i = 0; i < registered_class_count && found == NULL; i++) {
         if (same_shape(registered_classes[i].shape, shape) && class_arguments_are(registered_classes[i].type, shape->argument_count, arguments, false)) {
             found = registered_classes[i].type;
         }
     }
 
-    for (SableClassInstance *at = __atomic_load_n(&class_instances, __ATOMIC_ACQUIRE); at != NULL && found == NULL; at = at->next) {
+    for (SableClassInstance *at = class_instances; at != NULL && found == NULL; at = at->next) {
         if (same_shape(at->shape, shape) && class_arguments_are(&at->type, shape->argument_count, arguments, false)) {
             found = &at->type;
         }
@@ -1054,14 +1060,12 @@ const SableTypeMetadata *sable_class_type(void **cache, const SableAggregateShap
 
     if (found == NULL) {
         SableClassInstance *made = class_make(shape, parts);
-
-        // Another thread may have made one meanwhile: either serves, and both are kept.
-        made->next = __atomic_load_n(&class_instances, __ATOMIC_ACQUIRE);
-        while (!__atomic_compare_exchange_n(&class_instances, &made->next, made, true, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
-        }
-
+        made->next = class_instances;
+        class_instances = made;
         found = &made->type;
     }
+
+    spin_unlock(&class_lock);
 
     if (known == NULL) {
         __atomic_store_n((const SableTypeMetadata **)cache, found, __ATOMIC_RELEASE);

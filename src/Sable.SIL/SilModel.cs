@@ -144,6 +144,8 @@ public abstract class SilType : IEquatable<SilType> {
         (a, b) switch {
             _ when a == b => true,
             (OpaqueType, _) or (_, OpaqueType) => opaqueOnly,
+            // A function's convention differs where a value is indirect: only another opaque type's name may.
+            (ThickFunctionType, ThickFunctionType) => ErasedOpaque(a.ToString()) == ErasedOpaque(b.ToString()),
             (ArrayType x, ArrayType y) => SameErasingOpaque(x.Element, y.Element, opaqueOnly),
             (AddressType x, AddressType y) => SameErasingOpaque(x.Pointee, y.Pointee, opaqueOnly),
             (StructType x, StructType y) => x.Fields.Count == y.Fields.Count && (MentionsOpaque(x) || MentionsOpaque(y)) && GenericBase(x.Name) == GenericBase(y.Name)
@@ -1695,6 +1697,15 @@ public sealed class SilModule {
     public Dictionary<string, (SilType Type, string Function)> Describers { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
+    ///     For each error type unspecialised code may throw on as
+    ///     <c>any Error</c>, by the type's name: the function that boxes such
+    ///     a value as one, given where it is and its metadata
+    ///     (<c>opaque_erase_error</c>, #297) — made where the type is known,
+    ///     and registered with the runtime as describers are.
+    /// </summary>
+    public Dictionary<string, (SilType Type, string Function)> ErrorErasers { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
     ///     A type's conformance records, by protocol name: one per protocol
     ///     the type declares it conforms to (a class's own; its superclass's
     ///     are its superclass's), each with the conformance's witness table
@@ -2218,6 +2229,9 @@ public static class SilBuiltins {
                 return new([value, metadata], metadata);
             case "generic_describe" when operands is [OpaqueType described, var m] && m == metadata:
                 return new([described, metadata], SilType.String);
+            // An error of one, boxed as 'any Error' by its type's eraser: taken.
+            case "opaque_erase_error" when operands is [OpaqueType erased] && result is ClassType:
+                return new([erased], result) { Consumed = [0] };
         }
 
         // A requirement's witness in the generic calling convention, and an associated type's metadata.

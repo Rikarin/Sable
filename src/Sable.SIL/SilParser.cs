@@ -326,6 +326,13 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_error_eraser")) {
+                var erased = ParseType();
+                Expect("=");
+                module.ErrorErasers[erased.ToString()] = (erased, Expect(TokenKind.Global, "an eraser's name").Text);
+                continue;
+            }
+
             if (Accept("sil_describer")) {
                 var described = ParseType();
                 Expect("=");

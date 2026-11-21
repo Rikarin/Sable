@@ -2137,6 +2137,18 @@ public sealed partial class SilGen {
                     return null;
                 }
 
+                // In unspecialised code, a function of a type parameter's
+                // values takes the generic convention (#297): a result of one
+                // is written where the caller says, after the parameters.
+                if (SilType.IsIndirect(result)) {
+                    parameters.Add(SilType.Address(result));
+                    result = SilType.Unit;
+                }
+
+                if (thrown is not null && SilType.IsIndirect(thrown)) {
+                    return null;
+                }
+
                 return new ThickFunctionType(new FunctionType(parameters.ToImmutable(), result, thrown, isAsync: functionType.IsAsync));
             }
 
@@ -2702,6 +2714,15 @@ public sealed partial class SilGen {
         }
 
         var anyError = AnyErrorType();
+
+        // One unspecialised code knows only by its metadata: boxed by its
+        // type's eraser, made where the type is known (#297).
+        if (to == anyError && from is OpaqueType) {
+            // One that is an 'any Error' already is itself.
+            ErrorEraser(anyError);
+            return block.Append(new BuiltinInst("opaque_erase_error", anyError, error));
+        }
+
         if (to == anyError) {
             var box = ErrorBox(from);
             var boxed = block.Append(new AllocRefInst(box));
@@ -3619,7 +3640,9 @@ public sealed partial class SilGen {
     ///     met that way yet.
     /// </summary>
     internal (string Name, FunctionType Type)? WitnessThunk(NamedTypeSymbol concrete, SilType value, ClassType box, string slot, Symbol requirement, ThickFunctionType signature, SyntaxNode at) {
-        var name = $"$witness${Sanitise(value.ToString())}${slot}";
+        // An existential's is given its box; an 'any Error''s slot, the error object, and is another function.
+        var parameters = signature.Signature.Parameters;
+        var name = $"$witness${Sanitise(value.ToString())}${slot}{(parameters[^1] is ClassType { Name: "any$Error" } ? "$of$error" : "")}";
         var code = signature.Implementation;
         if (_module.Find(name) is not null) {
             return (name, code);
@@ -3627,7 +3650,6 @@ public sealed partial class SilGen {
 
         var thunk = new SilFunction(name, code);
         var entry = thunk.AddBlock();
-        var parameters = signature.Signature.Parameters;
         var arguments = parameters.Take(parameters.Length - 1).Select(p => (SilValue)entry.AddArgument(p)).ToList();
         var given = entry.AddArgument(parameters[^1]);
         entry.AddArgument(SilType.Object);
@@ -4346,7 +4368,15 @@ public sealed partial class SilGen {
     // =======================================================================
 
     /// <summary>What a closure's code knows of its context: its class, and where each capture is in it.</summary>
-    internal sealed record ClosureInfo(ClassType? Context, Dictionary<object, Capture> Captures);
+    internal sealed record ClosureInfo(ClassType? Context, Dictionary<object, Capture> Captures) {
+        /// <summary>
+        ///     In a closure compiled with unspecialised code (#297), what it
+        ///     captured of a type parameter's type: each in an array of one in
+        ///     its context, sized at run time, and copied where its code starts
+        ///     into a slot of its own, which reads of it find.
+        /// </summary>
+        public List<(Capture Capture, SilType Type)> Indirect { get; init; } = [];
+    }
 
     sealed partial class FunctionLowering(
         SilGen generator,
@@ -4528,6 +4558,8 @@ public sealed partial class SilGen {
                 if (closure.Context is { } contextType) {
                     _context = context.Type == contextType ? context : Emit(new UncheckedRefCastInst(context, contextType));
                 }
+
+                UnpackIndirectCaptures();
             }
 
             // A struct's initialiser builds 'self' in a slot of its own, field
@@ -10395,6 +10427,19 @@ public sealed partial class SilGen {
                     continue;
                 }
 
+                // A function of them, in the generic convention: the closure
+                // as it is, or a thunk over it that converts (#297).
+                if (genericShape is not null && i < callee.Parameters.Length && callee.Parameters[i] is { IsByReference: false, Modifier: ParameterModifier.None or ParameterModifier.In }
+                    && !type.IsOwned(arguments.Count) && type.Parameters[arguments.Count] is ThickFunctionType genericFunction && SilType.MentionsOpaque(genericFunction)) {
+                    if (GenericFunctionArgument(call.Arguments[i], genericFunction, borrows) is not { } function) {
+                        EndAll(borrows);
+                        return null;
+                    }
+
+                    arguments.Add(function);
+                    continue;
+                }
+
                 // An array of them, or a generic struct holding them by reference: the same bits, seen as the callee's.
                 if (genericShape is not null && i < callee.Parameters.Length && callee.Parameters[i] is { IsByReference: false, Modifier: ParameterModifier.None or ParameterModifier.In }
                     && !type.IsOwned(arguments.Count) && type.Parameters[arguments.Count] is var arrayParameter && SilType.MentionsOpaque(arrayParameter) && arrayParameter is not AddressType) {
@@ -10506,7 +10551,7 @@ public sealed partial class SilGen {
                     arguments.Add(place.Passed);
                 }
 
-                if (GenericHiddenArguments(genericShape, bound, call.Syntax) is not { } hidden) {
+                if (GenericHiddenArguments(genericShape, bound, call.Syntax, callee) is not { } hidden) {
                     EndAll(borrows);
                     return null;
                 }
@@ -11012,6 +11057,11 @@ public sealed partial class SilGen {
                 return Missing(closureExpression, $"a closure of type '{closureExpression.Type.ToDisplayString()}'");
             }
 
+            // In unspecialised code, one over a type parameter's values is compiled with it (#297).
+            if (_genericMetadata.Count > 0 && generator._unspecialised.ContainsKey(function.Name) && MentionsOpaqueHere(closureExpression)) {
+                return GenericClosure(closureExpression, thick, generator.CapturesOf(closureExpression), generator.ClosureName(function.Name));
+            }
+
             return ClosureOf(closureExpression, closureExpression.Symbol, closureExpression.Body, thick,
                 generator.CapturesOf(closureExpression), generator.ClosureName(function.Name));
         }
@@ -11387,6 +11437,14 @@ public sealed partial class SilGen {
 
                 arguments.Add(value);
                 borrows.Add(value);
+            }
+
+            // A function of a type parameter's values, in the generic
+            // convention: its result written where this call says (#297).
+            if (arguments.Count == thick.Signature.Parameters.Length - 1 && thick.Signature.Result == SilType.Unit
+                && GenericOut(thick.Signature.Parameters[^1], Sub(call.Type)) is { } into) {
+                arguments.Add(into.Passed);
+                return TakeOut(Invoke(callee, thick.Signature, arguments, borrows, call.Syntax), into.Slot);
             }
 
             return Invoke(callee, thick.Signature, arguments, borrows, call.Syntax);

@@ -305,6 +305,55 @@ SableString *sable_opaque_describe(void *value, const SableTypeMetadata *type) {
     sable_trap("a value with no description");
 }
 
+// What boxes an error of each type unspecialised code may throw on as
+// 'any Error' (#297): registered by each image as it starts, as describers
+// are. The eraser copies the value into a box of its type; the value, which
+// the call takes, is then destroyed.
+typedef void *(*SableErrorEraser)(void *value, const SableTypeMetadata *type);
+
+static struct {
+    const SableTypeMetadata *type;
+    SableErrorEraser erase;
+} *erasers;
+static int64_t eraser_count, eraser_capacity;
+
+void sable_register_error_eraser(const SableTypeMetadata *type, SableErrorEraser erase) {
+    if (eraser_count == eraser_capacity) {
+        eraser_capacity = eraser_capacity == 0 ? 16 : eraser_capacity * 2;
+        erasers = realloc(erasers, (size_t)eraser_capacity * sizeof *erasers);
+        if (erasers == NULL) {
+            sable_trap("out of memory");
+        }
+    }
+
+    erasers[eraser_count].type = type;
+    erasers[eraser_count].erase = erase;
+    eraser_count++;
+}
+
+void *sable_opaque_erase_error(void *value, const SableTypeMetadata *type) {
+    SableErrorEraser erase = NULL;
+    for (int64_t i = 0; i < eraser_count && erase == NULL; i++) {
+        if (erasers[i].type == type) {
+            erase = erasers[i].erase;
+        }
+    }
+
+    for (int64_t i = 0; i < eraser_count && erase == NULL; i++) {
+        if (sable_metadata_equal(erasers[i].type, type)) {
+            erase = erasers[i].erase;
+        }
+    }
+
+    if (erase == NULL) {
+        sable_trap("an error with no way to box it as 'any Error'");
+    }
+
+    void *boxed = erase(value, type);
+    type->witnesses->destroy(value, type);
+    return boxed;
+}
+
 // A call's cache of the registry's answer for the type it was first asked
 // about (#297): the first table found is kept, once, and read without a
 // lock; a call asked about another type asks the registry. Null is not kept,

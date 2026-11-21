@@ -252,6 +252,27 @@ public sealed partial class LlvmEmitter {
         return "@\"sable.describers.register\"";
     }
 
+    /// <summary>
+    ///     A constructor that hands the runtime each error eraser the module
+    ///     made, with its type's metadata (<c>sable_register_error_eraser</c>):
+    ///     what <c>sable_opaque_erase_error</c> boxes an error of a type
+    ///     unspecialised code knows only by its metadata with. Null for none reached.
+    /// </summary>
+    string? ErrorEraserRegistration(SilModule module) {
+        var erasers = module.ErrorErasers.Values.Where(d => _reachable?.Contains(d.Function) != false && module.Find(d.Function) is not null).ToList();
+        if (erasers.Count == 0) {
+            return null;
+        }
+
+        var body = new StringBuilder("define internal void @\"sable.erasers.register\"() {\nentry:\n");
+        foreach (var (type, function) in erasers) {
+            body.Append($"  call void @sable_register_error_eraser(ptr {TypeMetadataGlobal(type)}, ptr @{Global(function)})\n");
+        }
+
+        _helpers.Append(body.Append("  ret void\n}\n\n"));
+        return "@\"sable.erasers.register\"";
+    }
+
     string? WitnessRegistration(SilModule module) {
         if (module.Unit is null || module.WitnessTables.Count == 0) {
             return null;
@@ -370,6 +391,8 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_opaque_type(ptr, ptr)
                                         declare ptr @sable_opaque_describe(ptr, ptr)
                                         declare void @sable_register_describer(ptr, ptr)
+                                        declare ptr @sable_opaque_erase_error(ptr, ptr)
+                                        declare void @sable_register_error_eraser(ptr, ptr)
                                         declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
                                         declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
 
@@ -537,6 +560,10 @@ public sealed partial class LlvmEmitter {
                     return true;
                 case "opaque_type":
                     Line($"{Result()} = call ptr @sable_opaque_type(ptr {operands[0]}, ptr {operands[1]})");
+                    return true;
+                // An error of one, boxed as 'any Error' by its type's eraser, which the runtime finds.
+                case "opaque_erase_error":
+                    Line($"{Result()} = call ptr @sable_opaque_erase_error(ptr {operands[0]}, ptr {OpaqueMetadata(builtin.Operands[0].Type)})");
                     return true;
                 case "generic_describe":
                     SiteForRuntime();

@@ -380,6 +380,17 @@ public sealed partial class SilInterpreter {
                 result = Call(describe, [operands[0], type], depth + 1);
                 return true;
             }
+            // An error of one, boxed as 'any Error' by its type's eraser; the value, taken, let go.
+            case "opaque_erase_error": {
+                var type = OpaqueModel(((OpaqueType)builtin.Operands[0].Type).Name);
+                if (!module.ErrorErasers.TryGetValue(type.Type.ToString(), out var eraser) || module.Find(eraser.Function) is not { } erase) {
+                    throw new SilTrap($"an error of '{type.Type}' with no way to box it as 'any Error'");
+                }
+
+                result = Call(erase, [operands[0], type], depth + 1);
+                Release(type.Type, operands[0], depth);
+                return true;
+            }
             case "opaque_type": {
                 var type = (MetadataModel)operands[1]!;
                 result = type.Type is ClassType && operands[0] is HeapObject held ? MetadataOf(Alive(held).Type) : type;

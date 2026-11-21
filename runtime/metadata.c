@@ -147,6 +147,10 @@ const SableTypeMetadata *sable_metadata_argument(const SableTypeMetadata *type, 
 // argument, and the value as its one field.
 const SableTypeMetadata *sable_box_value_metadata(const void *box) {
     const SableTypeMetadata *box_type = (*(const SableMetadata *const *)box)->type;
+    if (box_type->argument_count == 0) {
+        return box_type;
+    }
+
     const SableTypeMetadata *held = box_type->arguments[0];
     if (held->kind == SABLE_KIND_CLASS) {
         const void *object = *(const void *const *)((const char *)box + box_type->fields[0].offset);
@@ -154,4 +158,89 @@ const SableTypeMetadata *sable_box_value_metadata(const void *box) {
     }
 
     return held;
+}
+
+// ---- Types as values --------------------------------------------------------
+
+// Whether two records describe one type (docs/06 §6.2): within an image the
+// linker keeps one record per type, so its address is the type; a Sable
+// shared library and the program that loads it each have their own, so
+// across them a type is its kind, its size and its name.
+bool sable_metadata_equal(const SableTypeMetadata *a, const SableTypeMetadata *b) {
+    if (a == b) {
+        return true;
+    }
+
+    return a != NULL && b != NULL && a->kind == b->kind && a->size == b->size && a->name != NULL && b->name != NULL
+           && strcmp(a->name, b->name) == 0;
+}
+
+// A hash of the type that agrees with sable_metadata_equal: FNV-1a over its
+// name, as the interpreter computes it.
+uint64_t sable_metadata_hash(const SableTypeMetadata *type) {
+    uint64_t hash = 14695981039346656037ULL;
+    for (const unsigned char *at = (const unsigned char *)(type->name == NULL ? "" : type->name); *at != 0; at++) {
+        hash = (hash ^ *at) * 1099511628211ULL;
+    }
+
+    return hash;
+}
+
+// Whether the type, or a superclass, conforms to the protocol named by the
+// text's first length bytes.
+static bool conforms_by_name(const SableTypeMetadata *type, const char *name, size_t length) {
+    char buffer[256];
+    if (length >= sizeof buffer) {
+        return false;
+    }
+
+    memcpy(buffer, name, length);
+    buffer[length] = 0;
+    SableProtocol protocol = {buffer};
+    return sable_type_conformance(type, &protocol) != NULL;
+}
+
+// Whether a value of the first type is one of the second — 't.isInstance(x)'
+// with t known only at run time: the same type; a subclass of a class, by its
+// superclass chain; a type that conforms to each protocol an existential
+// names ('any M.Shape & M.Named', read from its name, as protocols are known
+// across images; every type is an 'any Any'). An instance of a generic
+// protocol is not known to the registry by name, so only its own type is one.
+bool sable_metadata_is_subtype(const SableTypeMetadata *type, const SableTypeMetadata *of) {
+    if (sable_metadata_equal(type, of)) {
+        return true;
+    }
+
+    if (of->kind == SABLE_KIND_EXISTENTIAL && of->name != NULL && strncmp(of->name, "any ", 4) == 0) {
+        const char *parts = of->name + 4;
+        if (strcmp(parts, "Any") == 0) {
+            return true;
+        }
+
+        if (strchr(parts, '<') != NULL || strchr(parts, '$') != NULL) {
+            return false;
+        }
+
+        for (;;) {
+            const char *end = strstr(parts, " & ");
+            size_t length = end == NULL ? strlen(parts) : (size_t)(end - parts);
+            if (!conforms_by_name(type, parts, length)) {
+                return false;
+            }
+
+            if (end == NULL) {
+                return true;
+            }
+
+            parts = end + 3;
+        }
+    }
+
+    for (const SableTypeMetadata *at = superclass_of(type); at != NULL; at = superclass_of(at)) {
+        if (sable_metadata_equal(at, of)) {
+            return true;
+        }
+    }
+
+    return false;
 }

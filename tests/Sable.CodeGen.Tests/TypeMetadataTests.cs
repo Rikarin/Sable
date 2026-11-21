@@ -7,7 +7,7 @@ namespace Sable.CodeGen.Tests;
 ///     A class's type metadata (docs/06 §6.2): field descriptors,
 ///     conformance records and the registry's lookup, and what
 ///     <c>--deny-reflection</c> leaves out (#218). Every other kind's metadata
-///     is <see cref="TypeMetadataKindTests" />'s.
+///     is <see cref="TypeKindTests" />'s.
 /// </summary>
 [Native]
 public sealed class TypeMetadataTests {

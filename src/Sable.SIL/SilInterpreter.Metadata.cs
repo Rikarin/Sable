@@ -43,6 +43,65 @@ public sealed partial class SilInterpreter {
         return null;
     }
 
+    /// <summary>
+    ///     Whether a value of the first type is one of the second, as
+    ///     <c>sable_metadata_is_subtype</c> answers: the same type; a subclass
+    ///     of a class; a type that conforms to each protocol of an existential
+    ///     (every type is an <c>any Any</c>).
+    /// </summary>
+    bool IsSubtype(MetadataModel type, MetadataModel of) {
+        if (ReferenceEquals(type, of)) {
+            return true;
+        }
+
+        if (of.Described.Kind == MetadataKind.Existential && ExistentialProtocolNames(of.Described.Name) is { } protocols) {
+            return protocols.All(p => ConformsTo(type.Type, p));
+        }
+
+        for (var at = (type.Type as ClassType)?.Superclass; at is not null; at = at.Superclass) {
+            if (at.Equals(of.Type)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool ConformsTo(SilType type, string protocol) {
+        for (var at = type; at is not null; at = (at as ClassType)?.Superclass) {
+            if (module.ConformancesOf(at).Exists(c => c.Protocol == protocol)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    ///     The protocols an existential's metadata names, as the runtime reads
+    ///     them from its name: <c>any M.Shape &amp; M.Named</c>; none for
+    ///     <c>any Any</c>. Null when one is an instance of a generic protocol,
+    ///     which the registry does not know by name.
+    /// </summary>
+    internal static string[]? ExistentialProtocolNames(string name) {
+        if (!name.StartsWith("any ", StringComparison.Ordinal)) {
+            return null;
+        }
+
+        var parts = name["any ".Length..].Split(" & ");
+        return parts is ["Any"] ? [] : parts.Any(static p => p.Contains('$', StringComparison.Ordinal) || p.Contains('<', StringComparison.Ordinal)) ? null : parts;
+    }
+
+    /// <summary>FNV-1a over a type's name's UTF-8 bytes, as <c>sable_metadata_hash</c> computes it: equal types, by name, hash alike.</summary>
+    internal static ulong NameHash(string name) {
+        var hash = 14695981039346656037UL;
+        foreach (var b in System.Text.Encoding.UTF8.GetBytes(name)) {
+            hash = unchecked((hash ^ b) * 1099511628211UL);
+        }
+
+        return hash;
+    }
+
     static MetadataField FieldOf(MetadataModel metadata, object? index) {
         var at = (long)index!;
         return at < 0 || at >= metadata.Fields.Count ? throw new SilTrap("field index out of range") : metadata.Fields[(int)at];
@@ -97,8 +156,20 @@ public sealed partial class SilInterpreter {
                     : MetadataOf(metadata.Described.Arguments[(int)at]);
                 return true;
             }
+            // One model per type, as natively one record per type in an image.
             case "metadata_equal":
                 result = ReferenceEquals(operands[0], operands[1]);
+                return true;
+            case "metadata_hash":
+                result = NameHash(((MetadataModel)operands[0]!).Described.Name);
+                return true;
+            case "metadata_is_subtype":
+                result = IsSubtype((MetadataModel)operands[0]!, (MetadataModel)operands[1]!);
+                return true;
+
+            // An object's own class, from its header.
+            case "object_metadata":
+                result = MetadataOf(Alive((HeapObject)operands[0]!).Type);
                 return true;
 
             // The value witnesses: what copying, moving, assigning and destroying a value of the type does.
@@ -125,7 +196,12 @@ public sealed partial class SilInterpreter {
             // What an existential's box holds: the type its class was made for, or an object's own class.
             case "box_metadata": {
                 var box = Alive((HeapObject)operands[0]!);
-                var held = box.Type.TypeArguments is [var argument] ? argument : box.Type.Fields[0].Type;
+                var held = box.Type.TypeArguments is [var argument] ? argument : box.Type.Fields.Count > 0 ? box.Type.Fields[0].Type : null;
+                if (held is null) {
+                    result = MetadataOf(box.Type);
+                    return true;
+                }
+
                 result = held is ClassType && box.Fields[0] is HeapObject inner ? MetadataOf(Alive(inner).Type) : MetadataOf(held);
                 return true;
             }

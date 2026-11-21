@@ -536,13 +536,13 @@ public sealed class IncrementalTests {
 
             public fn labelled(_ shape: Shape) -> any Labelled => shape
 
-            public fn pointMetadata() -> TypeMetadata => TypeMetadata.of(Point.self)
+            public fn pointMetadata() -> Type => Point.self
 
             /// How many shapes have been made.
             """);
         scenario.Edit("app/src/main.sb", "print(survey(shapes))", """
             print(survey(shapes))
-                print(pointMetadata() == TypeMetadata.of(Point.self))
+                print(pointMetadata() == Point.self)
                 if let sized = labelled(Square(side: 5)) as? any Sized {
                     print(sized.area())
                 }

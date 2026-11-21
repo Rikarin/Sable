@@ -1,8 +1,8 @@
 module Sable.Core
 
-/// What kind of type a `TypeMetadata` describes: the runtime's
+/// What kind of type a `Type` is: the runtime's
 /// `SABLE_KIND_*` (docs/06 §6.2).
-public enum TypeMetadataKind {
+public enum TypeKind {
     /// A class (or an actor): a value of it is a reference to an object.
     Class
 
@@ -33,7 +33,7 @@ public enum TypeMetadataKind {
     /// An existential, `any P`.
     Existential
 
-    /// A type's metadata as a value: `TypeMetadata`.
+    /// A type as a value: `Type`, `T.Type`.
     Metatype
 
     /// A number, `Bool`, `Char`, `()`.

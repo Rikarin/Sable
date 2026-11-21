@@ -1,0 +1,181 @@
+module Sable.Core
+
+// A type as a value (SYNTAX.md "Metatypes", docs/06 §6.2): the existential
+// metatype. Every 'T.Type' converts to it, and 'type(of: x)' gives one: a
+// pointer at the type's metadata, the record the runtime keeps of each type
+// — its kind, its layout, how its values are copied and destroyed (its
+// value witnesses), its fields, its type arguments and its name. Natively a
+// constant record, one per type in the program; the interpreter models the
+// same. Generic code compiled once for every type (#297) is given it in
+// place of the type.
+
+/// The dynamic type of a value: an object's own class, which may be a
+/// subclass of the one its variable is declared with; the type of what an
+/// existential holds; for any other value, its static type.
+///
+/// ```sable
+/// let n: any Equatable = 42
+/// assert(type(of: n) == Int.self)
+/// assert(type(of: "text").name == "String")
+/// ```
+@intrinsic
+public fn type<T: ~Copyable>(of value: T) -> Type
+
+extension Type: Hashable, Formattable, Debug {
+    /// The type's name, as Sable writes it: `Int?`, `[String]`, `M.Box<Int>`.
+    ///
+    /// ```sable
+    /// assert(Int?.self.name == "Int?")
+    /// ```
+    @builtin("metadata_name")
+    public var name: String { get }
+
+    /// The bytes a value of the type takes.
+    ///
+    /// ```sable
+    /// let t: Type = Int.self
+    /// assert(t.size == 8 && t.alignment == 8 && t.stride == 8)
+    /// ```
+    @builtin("metadata_size")
+    public var size: Int { get }
+
+    /// What a value of the type's address is a multiple of.
+    @builtin("metadata_alignment")
+    public var alignment: Int { get }
+
+    /// The bytes from one value of the type to the next in an array: its
+    /// size rounded up to its alignment.
+    @builtin("metadata_stride")
+    public var stride: Int { get }
+
+    @builtin("metadata_kind")
+    var kindCode: Int { get }
+
+    @builtin("metadata_flags")
+    var flags: Int { get }
+
+    @builtin("metadata_hash")
+    var nameHash: U64 { get }
+
+    /// What kind of type it is.
+    public var kind: TypeKind {
+        get {
+            let kinds: TypeKind[] = [
+                .Class, .Struct, .Enum, .Union, .Optional, .Tuple, .Function, .Array, .Slice, .Existential, .Metatype, .Scalar, .String,
+                .Reference, .Opaque,
+            ]
+            return kinds[kindCode - 1]
+        }
+    }
+
+    /// Whether a value of the type is copied by copying its bits, and
+    /// destroyed by doing nothing: it holds no reference.
+    public var isTrivial: Bool => flags % 2 == 1
+
+    /// Whether a value of the type is never copied, only moved.
+    public var isNoncopyable: Bool => flags / 2 % 2 == 1
+
+    /// How many fields the type has: a struct's or a class's stored
+    /// fields (a superclass's first), a tuple's elements, an enum's or a
+    /// union's cases. A program that asks has every type's metadata carry
+    /// its fields.
+    @builtin("metadata_field_count")
+    public var fieldCount: Int { get }
+
+    /// A field's name: a tuple's element's index, a case's name.
+    @builtin("metadata_field_name")
+    public fn fieldName(at index: Int) -> String
+
+    /// Where a field is from the start of a value — of the object, for a
+    /// class; where a case's payload is, for an enum.
+    @builtin("metadata_field_offset")
+    public fn fieldOffset(at index: Int) -> Int
+
+    /// A field's type: a case's payload's (traps for a case with none).
+    @builtin("metadata_field_type")
+    public fn fieldType(at index: Int) -> Type
+
+    /// How many type arguments the type has: a generic type's, an
+    /// optional's wrapped type, an array's element, a tuple's elements, a
+    /// function's parameters and then its result.
+    @builtin("metadata_argument_count")
+    public var argumentCount: Int { get }
+
+    /// A type argument.
+    @builtin("metadata_argument")
+    public fn argument(at index: Int) -> Type
+
+    @builtin("metadata_equal")
+    fn isSame(as other: Type) -> Bool
+
+    /// Whether the two are the one type. Within a program a type has one
+    /// record, so this compares two addresses; a type from a Sable shared
+    /// library is the program's own type of its kind, size and name.
+    ///
+    /// ```sable
+    /// let t: Type = Int.self
+    /// assert(t == Int.self && t != String.self)
+    /// ```
+    public operator == (lhs: Type, rhs: Type) -> Bool { return lhs.isSame(as: rhs) }
+
+    /// Feeds the type to the hasher, by its name: equal types hash alike.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.write(nameHash)
+    }
+
+    /// Whether a value of this type is one of the other: the same type, a
+    /// subclass of a class, or a type that conforms to each protocol of an
+    /// existential (every type is an `any Any`). An existential of an
+    /// instance of a generic protocol is only its own subtype.
+    ///
+    /// ```sable
+    /// assert(Int.self.isSubtype(of: (any Equatable).self))
+    /// assert(!Int.self.isSubtype(of: String.self))
+    /// ```
+    @builtin("metadata_is_subtype")
+    public fn isSubtype(of other: Type) -> Bool
+
+    /// Whether the value is one of this type — `x is T` with the type known
+    /// only at run time: the value's dynamic type (`type(of:)`) is this one,
+    /// a subclass of it, or conforms to each of its protocols.
+    ///
+    /// ```sable
+    /// let wanted: Type = (any Equatable).self
+    /// assert(wanted.isInstance(3) && !String.self.isInstance(3))
+    /// ```
+    public fn isInstance<T: ~Copyable>(_ value: T) -> Bool {
+        return type(of: value).isSubtype(of: self)
+    }
+
+    /// The type's name, padded to the spec's width as text is.
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(name)
+    }
+
+    /// The type's name.
+    public fn debugDescription() -> String { return name }
+
+    /// A copy of the value, made by the type's value witnesses (its
+    /// initializeWithCopy) as code that knows the type only by its metadata
+    /// copies one. Traps unless this is the value's type.
+    @intrinsic
+    public fn copy<T>(_ value: T) -> T
+
+    /// A copy of the value, moved into place by the type's value witnesses
+    /// (initializeWithCopy, then initializeWithTake). Traps unless this is
+    /// the value's type.
+    @intrinsic
+    public fn move<T>(_ value: T) -> T
+
+    /// A copy of the value put in place of the target's, by the type's
+    /// value witnesses (assignWithCopy, which destroys what was there).
+    /// Traps unless this is the value's type.
+    @intrinsic
+    public fn assign<T>(_ value: T, to target: inout T)
+
+    /// A copy of the value made and destroyed by the type's value witnesses
+    /// (initializeWithCopy, then destroy). Traps unless this is the value's
+    /// type.
+    @intrinsic
+    public fn destroyCopy<T>(of value: T)
+}

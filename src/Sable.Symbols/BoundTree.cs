@@ -399,6 +399,13 @@ public enum ConversionKind {
     ///     <see cref="Identity" />, since every kind is stored alike.
     /// </summary>
     ArrayView,
+
+    /// <summary>
+    ///     <c>T.Type</c> to <c>Type</c>: the type, as the metadata both hold
+    ///     (SYNTAX.md "Metatypes"). It ranks overloads; the bound tree records
+    ///     it as <see cref="Identity" />.
+    /// </summary>
+    MetatypeErasure,
 }
 
 public sealed class BoundConversion(

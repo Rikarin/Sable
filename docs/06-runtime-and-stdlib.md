@@ -91,7 +91,7 @@ its type's metadata, `SableTypeMetadata`, which arrays and the runtime's own
 objects leave null. Every other type has one too — a struct, an enum, a
 union, an optional, a tuple, a function, an array, a slice, an existential,
 a scalar, a string, a metatype — written by the compiler for the types a
-program asks about (`TypeMetadata.of(T.self)`, the SIL instruction
+program asks about (`T.self`, a `Type`, the SIL instruction
 `metadata $T`), the classes it makes, the types its existentials box, and
 what those reach. Both formats only grow, at the end of each record.
 
@@ -144,7 +144,7 @@ typedef struct SableTypeMetadata {
   holds, and its type's metadata. A class's are always there, without the
   field types: the leak report names fields by them. Everything else's, and
   the field types, are emitted only in a program that reads them
-  (`TypeMetadata.fieldCount` and the like; `SilModule.FieldDescriptors`),
+  (`Type.fieldCount` and the like; `SilModule.FieldDescriptors`),
   the switch unspecialised generic code will also turn on where it reads a
   generic type's field offsets. A program that never asks pays for none.
 - **Type arguments**: a generic type's instance lists its arguments'
@@ -152,8 +152,11 @@ typedef struct SableTypeMetadata {
   6); until then each instance a program uses is emitted statically.
 - **Linkage**: every record is `linkonce_odr` (in a COMDAT on Windows) when
   the program is built in units, as a box's class is, so the linker keeps
-  one of each and its address is the type's identity — `TypeMetadata`'s `==`
-  is a pointer comparison.
+  one of each and its address is the type's identity — `Type`'s `==` is a
+  pointer comparison. A Sable shared library and the program that loads it
+  each have their own records, so `sable_metadata_equal` falls back to the
+  kind, the size and the name, and `sable_metadata_hash` hashes the name
+  (FNV-1a), which the interpreter computes alike.
 - **Conformance records**: one per protocol the type declares — where it is
   declared, in an extension that holds for every instance, and every
   protocol those refine — by a protocol descriptor, `@"sable.protocol.M.P"`,
@@ -175,12 +178,24 @@ typedef struct SableTypeMetadata {
   (S3450). Printing values is not reflection and still works. A type's
   metadata keeps its name: a trap message has it anyway.
 
-`TypeMetadata` (lib/Sable.Core/TypeMetadata.sb) is a type's metadata as a
-value of the language: `TypeMetadata.of(T.self)`, its `kind`, `name`,
-`size`, `alignment`, `stride`, fields and type arguments, and its value
-witnesses applied to a value (`copy`, `move`, `assign`, `destroyCopy`), as
-code that knows a type only by its metadata applies them. `T.Type` still
-holds nothing at run time; making it a metadata pointer is #297's stage 3.
+`Type` (lib/Sable.Core/Type.sb) is a type as a value of the language, the
+existential metatype (SYNTAX.md "Metatypes"): a pointer at the type's
+metadata. `T.self` is one — `metadata $T`, a constant, as each instance of
+generic code is compiled for its types — and every `T.Type` lowers to the
+same pointer, so it converts to a `Type` as it is. `type(of: x)` reads a
+value's dynamic type: an object's own class from its header (its object
+metadata's `type`, the builtin `object_metadata`), what an existential's box
+holds (`sable_box_value_metadata`, which an `any Error`'s box answers too,
+its class having the error's type as its argument), and any other value's
+static type, a constant. A `Type` has its metadata's `kind`, `name`, `size`,
+`alignment`, `stride`, fields and type arguments, and its value witnesses
+applied to a value (`copy`, `move`, `assign`, `destroyCopy`), as code that
+knows a type only by its metadata applies them; it is Equatable, Hashable
+and Formattable (its name). `t.isInstance(x)` and `t.isSubtype(of: u)` test
+against a type known only at run time (`sable_metadata_is_subtype`): the
+same type, a superclass by the chain `superclass_of` walks, or each protocol
+an existential's metadata names — read from its name, `any M.A & M.B`, as
+protocols are known by name across images — by `sable_type_conformance`.
 The interpreter models the same records (src/Sable.SIL/TypeMetadata.cs), so
 a program interpreted answers as the native one does.
 

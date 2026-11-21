@@ -9,12 +9,12 @@ namespace Sable.CodeGen.Tests;
 ///     numbers are LLVM's own, and in the interpreter from its model, which
 ///     must agree. The value witnesses copy, move, assign and destroy, leak-checked.
 /// </summary>
-public sealed class TypeMetadataKindTests {
+public sealed class TypeKindTests {
     static void Prints(string expected, string declarations, string body) =>
         Assert.Equal(expected, AssertAgree(Program(declarations, body)).Stdout);
 
     const string Show = """
-        fn show(_ m: TypeMetadata) {
+        fn show(_ m: Type) {
             print("\(m.name): \(m.kind) \(m.size)/\(m.alignment)/\(m.stride)\(m.isTrivial ? " trivial" : "")\(m.isNoncopyable ? " noncopyable" : "")")
         }
         """;
@@ -32,21 +32,21 @@ public sealed class TypeMetadataKindTests {
             Bool: Scalar 1/1/1 trivial
             Char: Scalar 4/4/4 trivial
             String: String 8/8/8
-            TypeMetadata: Metatype 8/8/8 trivial
+            Type: Metatype 8/8/8 trivial
 
             """,
             Show,
             """
-                show(TypeMetadata.of(Int.self))
-                show(TypeMetadata.of(I8.self))
-                show(TypeMetadata.of(U16.self))
-                show(TypeMetadata.of(I128.self))
-                show(TypeMetadata.of(F32.self))
-                show(TypeMetadata.of(F64.self))
-                show(TypeMetadata.of(Bool.self))
-                show(TypeMetadata.of(Char.self))
-                show(TypeMetadata.of(String.self))
-                show(TypeMetadata.of(TypeMetadata.self))
+                show(Int.self)
+                show(I8.self)
+                show(U16.self)
+                show(I128.self)
+                show(F32.self)
+                show(F64.self)
+                show(Bool.self)
+                show(Char.self)
+                show(String.self)
+                show(Type.self)
             """
         );
 
@@ -110,7 +110,7 @@ public sealed class TypeMetadataKindTests {
 
             struct Empty {}
 
-            fn fields(_ m: TypeMetadata) {
+            fn fields(_ m: Type) {
                 show(m)
                 var i = 0
                 while i < m.fieldCount {
@@ -120,12 +120,12 @@ public sealed class TypeMetadataKindTests {
             }
             """,
             """
-                fields(TypeMetadata.of(Point.self))
-                fields(TypeMetadata.of(Header.self))
-                fields(TypeMetadata.of(Vec.self))
-                fields(TypeMetadata.of(Animal.self))
-                fields(TypeMetadata.of(Dog.self))
-                fields(TypeMetadata.of(Empty.self))
+                fields(Point.self)
+                fields(Header.self)
+                fields(Vec.self)
+                fields(Animal.self)
+                fields(Dog.self)
+                fields(Empty.self)
             """
         );
 
@@ -166,7 +166,7 @@ public sealed class TypeMetadataKindTests {
                 var next: Node? = none
             }
 
-            fn cases(_ m: TypeMetadata) {
+            fn cases(_ m: Type) {
                 show(m)
                 var i = 0
                 while i < m.fieldCount {
@@ -177,14 +177,14 @@ public sealed class TypeMetadataKindTests {
             }
             """,
             """
-                cases(TypeMetadata.of(Shape.self))
-                cases(TypeMetadata.of(Colour.self))
-                show(TypeMetadata.of(Int?.self))
-                show(TypeMetadata.of(Bool?.self))
-                show(TypeMetadata.of(Char?.self))
-                show(TypeMetadata.of(String?.self))
-                show(TypeMetadata.of(Node?.self))
-                let optional = TypeMetadata.of(Int?.self)
+                cases(Shape.self)
+                cases(Colour.self)
+                show(Int?.self)
+                show(Bool?.self)
+                show(Char?.self)
+                show(String?.self)
+                show(Node?.self)
+                let optional: Type = Int?.self
                 print("\(optional.name): \(optional.argument(at: 0).name)")
             """
         );
@@ -222,7 +222,7 @@ public sealed class TypeMetadataKindTests {
                 var second: B
             }
 
-            fn arguments(_ m: TypeMetadata) {
+            fn arguments(_ m: Type) {
                 show(m)
                 var names = ""
                 var i = 0
@@ -233,23 +233,23 @@ public sealed class TypeMetadataKindTests {
                 print("  arguments:\(names)")
             }
 
-            fn same<T>(_ value: T) -> TypeMetadata => TypeMetadata.of(T.self)
+            fn same<T>(_ value: T) -> Type => T.self
             """,
             """
-                let tuple = TypeMetadata.of((Int, Bool, String).self)
+                let tuple: Type = (Int, Bool, String).self
                 show(tuple)
                 var i = 0
                 while i < tuple.fieldCount {
                     print("  \(tuple.fieldName(at: i)) @\(tuple.fieldOffset(at: i)): \(tuple.fieldType(at: i).name)")
                     i += 1
                 }
-                arguments(TypeMetadata.of(((Int) -> Bool).self))
-                arguments(TypeMetadata.of(String[>..].self))
-                arguments(TypeMetadata.of(Int[:].self))
-                show(TypeMetadata.of((any Named).self))
-                arguments(TypeMetadata.of(Pair<Int, String>.self))
+                arguments(((Int) -> Bool).self)
+                arguments(String[>..].self)
+                arguments(Int[:].self)
+                show((any Named).self)
+                arguments(Pair<Int, String>.self)
                 print(same(Pair { first: 1, second: "s" }).name)
-                print("\(same(1) == TypeMetadata.of(Int.self)) \(same(1) == TypeMetadata.of(I64.self))")
+                print("\(same(1) == Int.self) \(same(1) == I64.self)")
             """
         );
 
@@ -313,7 +313,7 @@ public sealed class TypeMetadataKindTests {
             }
 
             fn exercise<T>(_ value: T, _ other: T) -> T {
-                let m = TypeMetadata.of(T.self)
+                let m: Type = T.self
                 let copied = m.copy(value)
                 let moved = m.move(copied)
                 m.destroyCopy(of: value)
@@ -325,11 +325,11 @@ public sealed class TypeMetadataKindTests {
             """
                 let b = Box(7)
                 let b2 = exercise(b, Box(8))
-                print("object \(b.value) \(b2.value) \(TypeMetadata.of(Box.self).copy(b).value)")
+                print("object \(b.value) \(b2.value) \(Box.self.copy(b).value)")
                 let n = Named { name: "a" + "b", box: Box(1) }
                 let n2 = exercise(n, Named { name: "c" + "d", box: Box(2) })
                 var n3 = n
-                TypeMetadata.of(Named.self).assign(Named { name: "c" + "d", box: Box(3) }, to: &n3)
+                Named.self.assign(Named { name: "c" + "d", box: Box(3) }, to: &n3)
                 print("struct \(n.name) \(n2.name) \(n3.name)")
                 let t = Tag.Label("x" + "")
                 print("union \(describe(exercise(t, .Count(1)))) \(describe(t))")
@@ -346,7 +346,7 @@ public sealed class TypeMetadataKindTests {
                 let e: any P = Q { s: "n" + "" }
                 print("existential \(exercise(e, Q { s: "m" }).get())")
                 print("string \(exercise("hel" + "lo", "x"))")
-                print("noncopyable \(TypeMetadata.of(Unique.self).isNoncopyable)")
+                print("noncopyable \(Unique.self.isNoncopyable)")
             """
         );
 
@@ -354,7 +354,7 @@ public sealed class TypeMetadataKindTests {
     [Fact]
     public void AWitnessOfAnotherTypeTraps() {
         var run = AssertAgree(Program("", """
-                let m = TypeMetadata.of(String.self)
+                let m: Type = String.self
                 print(m.copy(1))
             """));
         Assert.NotEqual(0, run.ExitCode);

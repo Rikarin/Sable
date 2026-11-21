@@ -16,7 +16,7 @@ public enum MetadataKind {
     Slice = 9,
     Existential = 10,
 
-    /// <summary>A type's metadata as a value (<c>TypeMetadata</c>; what <c>T.Type</c> will be, #297 stage 3).</summary>
+    /// <summary>A type as a value: <c>Type</c>, and every <c>T.Type</c>.</summary>
     Metatype = 11,
 
     /// <summary>A number, a Bool, a Char, <c>()</c>.</summary>
@@ -284,7 +284,7 @@ public sealed class TypeMetadata {
             WeakStorageType weak => "weak " + DisplayName(weak.Optional),
             UnownedStorageType unowned => "unowned " + DisplayName(unowned.Referent),
             NominalType { DisplayName: { } written } => written,
-            _ when type == SilType.Metadata => "TypeMetadata",
+            _ when type == SilType.Metadata => "Type",
             _ => type.ToString(),
         };
 

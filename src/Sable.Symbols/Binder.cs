@@ -3680,9 +3680,15 @@ public sealed partial class Binder {
         // does: 't.zero()' with 't: T.Type'. Its one value is the type, so
         // reading it has nothing to keep but what evaluating it does, which
         // a name or 'X.self' does not.
-        if (receiver is BoundMetatype or BoundLocalAccess or BoundParameterAccess
-            && receiver.Type is MetatypeTypeSymbol { InstanceType: var instanceType } && name != "self") {
-            receiver = new BoundTypeExpression(syntax.Expression, instanceType);
+        // A name the type has no static member of, but a 'Type' has, is the
+        // Type's: 'Int.self.name', 'T.self.size' (SYNTAX.md "Metatypes").
+        if (receiver.Type is MetatypeTypeSymbol { InstanceType: var instanceType } && name != "self") {
+            var isStatic = LookupMemberOfKind(instanceType, name, instance: false) is { } statics && statics.Members.Any(IsStaticMember);
+            if (!isStatic && LookupMember(Core.Type, name, static m => !IsStaticMember(m)) is not null) {
+                receiver = Convert(receiver, Core.Type, syntax.Expression);
+            } else if (receiver is BoundMetatype or BoundLocalAccess or BoundParameterAccess) {
+                receiver = new BoundTypeExpression(syntax.Expression, instanceType);
+            }
         }
 
         // 'T.self' is the type itself, as a value of type 'T.Type'.
@@ -3810,10 +3816,15 @@ public sealed partial class Binder {
                 return new BoundError(syntax, receiver);
             }
 
+            // A Type is known only at run time, so it reaches none of its
+            // type's static members, as a 'T.Type' does.
+            var throughType = receiverType.Equals(Core.Type)
+                ? "; a 'Type' is known only at run time, so it reaches no static member of the type it holds: pass a 'T.Type' to reach them"
+                : "";
             _diagnostics.Error(
                 ErrorCode.ERR_NameNotFound,
                 syntax.Name.Span,
-                $"'{receiverType.ToDisplayString()}' has no member named '{name}'"
+                $"'{receiverType.ToDisplayString()}' has no member named '{name}'{throughType}"
             );
             return new BoundError(syntax, receiver);
         }
@@ -7371,7 +7382,9 @@ public sealed partial class Binder {
     }
 
     BoundExpression BindCast(CastExpressionSyntax syntax) {
-        var target = _compilation.TypeBinder.BindType(syntax.Type, _containingSymbol, _scope);
+        if (BindCastTarget(syntax.Type, syntax.Expression) is not { } target) {
+            return new BoundError(syntax, BindExpression(syntax.Expression));
+        }
 
         // A plain 'as' says what type a value is to have, so the operand is
         // bound expecting it: 'none as Int?' is that type's none, and
@@ -7669,8 +7682,36 @@ public sealed partial class Binder {
 
     BoundExpression BindTypeTest(TypeTestExpressionSyntax syntax) {
         var operand = BindExpression(syntax.Expression);
-        var target = _compilation.TypeBinder.BindType(syntax.Type, _containingSymbol, _scope);
-        return new BoundTypeTest(syntax, Core.Bool, operand, target);
+        var target = BindCastTarget(syntax.Type, syntax.Expression);
+        return target is null ? new BoundError(syntax, operand) : new BoundTypeTest(syntax, Core.Bool, operand, target);
+    }
+
+    /// <summary>
+    ///     The type of <c>x is T</c> or <c>x as? T</c>. One that names a value
+    ///     holding a type — a <c>Type</c>, or a <c>T.Type</c> — rather than a
+    ///     type is S3098: a cast is to a type written out, and a type known
+    ///     only at run time tests a value with <c>t.isInstance(x)</c>. Null
+    ///     then, so that the cast is an error and no more is said of it.
+    /// </summary>
+    TypeSymbol? BindCastTarget(TypeSyntax syntax, ExpressionSyntax operand) {
+        if (syntax is SimpleNameTypeSyntax { TypeArgumentList: null, Identifier.Text: var name }
+            && LookupLocal(name) switch {
+                LocalSymbol local => local.Type,
+                ParameterSymbol parameter => parameter.Type,
+                _ => null,
+            } is { } held
+            && (held is MetatypeTypeSymbol || held.Equals(Core.Type))
+            && _compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span, report: false) is null) {
+            _diagnostics.Error(
+                ErrorCode.ERR_RuntimeTypeInCast,
+                syntax.Span,
+                $"'{name}' is a value of type '{held.ToDisplayString()}', not a type: a cast needs its type written out, "
+                + $"and '{name}.isInstance({operand})' tests the value against a type known only at run time"
+            );
+            return null;
+        }
+
+        return _compilation.TypeBinder.BindType(syntax, _containingSymbol, _scope);
     }
 
     /// <summary>
@@ -8869,8 +8910,8 @@ public sealed partial class Binder {
             return expression;
         }
 
-        // An array as a slice of it: the same value, with the slice's type.
-        if (conversion == ConversionKind.ArrayView) {
+        // An array as a slice of it, a metatype as a Type: the same value, with the wanted type.
+        if (conversion is ConversionKind.ArrayView or ConversionKind.MetatypeErasure) {
             var viewed = new BoundConversion(syntax, target, expression, ConversionKind.Identity);
             if (syntax == expression.Syntax) {
                 _bound[syntax] = viewed;

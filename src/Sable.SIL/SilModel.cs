@@ -2074,6 +2074,8 @@ public static class SilBuiltins {
                 return new([metadata, value], SilType.Unit) { Consumed = [1] };
             case "box_metadata" when operands is [ClassType box]:
                 return new([box], metadata);
+            case "object_metadata" when operands is [ClassType type]:
+                return new([type], metadata);
             case "witness_table_exists" when operands is [var table] && table == SilType.WitnessTable:
                 return new([SilType.WitnessTable], SilType.Bool);
         }
@@ -2409,6 +2411,8 @@ public static class SilBuiltins {
         Add("metadata_field_type", SilType.Metadata, SilType.Metadata, SilType.Int);
         Add("metadata_argument", SilType.Metadata, SilType.Metadata, SilType.Int);
         Add("metadata_equal", SilType.Bool, SilType.Metadata, SilType.Metadata);
+        Add("metadata_hash", SilType.U64, SilType.Metadata);
+        Add("metadata_is_subtype", SilType.Bool, SilType.Metadata, SilType.Metadata);
 
         Add("region_create", SilType.Region);
 

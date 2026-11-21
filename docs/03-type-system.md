@@ -49,7 +49,7 @@ A **witness table** is a static, read-only record:
 
 ```
 struct WitnessTable {
-    metadata:    *TypeMetadata       // the conforming type
+    metadata:    *TypeMetadata       // the conforming type: what a Type points at
     protocol:    *ProtocolDescriptor
     witnesses:   [*fn]               // one slot per protocol requirement
     assoc_types: [*TypeMetadata]     // one per associated type
@@ -216,6 +216,32 @@ instance written with them is given, and a false one is S3421.
 struct Box<T: ~Copyable> { private var value: T }
 ```
 
+### Types as values
+
+`T.self` is the type `T` as a value, of the metatype `T.Type`, whose one
+value is `T` (SYNTAX.md "Metatypes"). Each instance of generic code is
+compiled for its types, so a metatype is a constant there: its static
+members are called directly, and `T.self == Int.self` is decided where the
+instance is made. At run time the value is the type's metadata (docs/06
+§6.2).
+
+`Type` is the existential metatype — any type, known only at run time, as
+`any P` is any value of a type that conforms to P. A `T.Type` converts to
+it as a value converts to `any P`; nothing converts back, as a `Type` says
+nothing to the compiler of which type it holds. `type(of: x)` is the dynamic
+type of a value: an object's own class, what an existential holds, any
+other value's static type. A `Type` is Equatable by the type's identity,
+Hashable, so `[Type: V]` is a dictionary keyed by types, and Formattable as
+its name.
+
+Since a `Type`'s type is not known where the code is compiled, it reaches
+no static member, and a cast is never to one (S3098): a value is tested
+against it at run time, `t.isInstance(x)`, by the rule of subtyping below —
+the type itself, a subclass of a class, a type that conforms to each of an
+existential's protocols. Calling a generic function with a `Type` — opening
+it, as Swift opens an existential metatype — is #297's stage 6: the `Type`
+is the metadata unspecialised generic code is given in place of `T`.
+
 ### Variance
 
 Generic *types* are invariant. `List<Dog>` is not a `List<Animal>` — this is
@@ -335,6 +361,7 @@ The subtyping relation is deliberately small:
   T            <: T?                      (optional promotion)
   Derived      <: Base                    (class inheritance)
   T            <: any P        when T: P  (existential erasure, boxes)
+  T.Type       <: Type                    (metatype erasure)
   T            <: A | B        when T ∈ {A, B}   (union injection)
   Never        <: T                       (bottom)
   (A) -> B     <: (A') -> B'   when A' <: A and B <: B'   (function variance)

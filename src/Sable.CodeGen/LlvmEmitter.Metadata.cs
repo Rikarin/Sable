@@ -32,6 +32,11 @@ public sealed partial class LlvmEmitter {
     internal const int MetadataKindField = 0, MetadataFieldCountField = 1, MetadataNameField = 5, MetadataSizeField = 6, MetadataAlignmentField = 7,
         MetadataStrideField = 8, MetadataFlagsField = 9, MetadataWitnessesField = 10, MetadataArgumentCountField = 11;
 
+    /// <summary>The runtime's <c>SableMetadata</c> up to its vtable, and where its type's metadata is in it.</summary>
+    const string ObjectMetadataHead = "{ ptr, ptr, i64, ptr, ptr, i64, i64, ptr, ptr }";
+
+    const int ObjectMetadataTypeField = 8;
+
     /// <summary>Where each witness is in a value-witness table, <c>SableValueWitnesses</c>.</summary>
     internal const int CopyWitness = 0, TakeWitness = 1, AssignWitness = 2, DestroyWitness = 4;
 
@@ -269,6 +274,9 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_metadata_field_type(ptr, i64)
                                         declare ptr @sable_metadata_argument(ptr, i64)
                                         declare ptr @sable_box_value_metadata(ptr)
+                                        declare i1 @sable_metadata_equal(ptr, ptr)
+                                        declare i64 @sable_metadata_hash(ptr)
+                                        declare i1 @sable_metadata_is_subtype(ptr, ptr)
                                         declare ptr @sable_witness_table(ptr, ptr)
                                         declare void @sable_register_witness_table(ptr, ptr)
 
@@ -350,9 +358,29 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call ptr @sable_metadata_argument(ptr {operands[0]}, i64 {operands[1]})");
                     return true;
 
+                // One record per type in an image, so equal addresses are one type; across
+                // images (a Sable shared library and the program) the runtime compares names.
                 case "metadata_equal":
-                    Line($"{Result()} = icmp eq ptr {operands[0]}, {operands[1]}");
+                    Line($"{Result()} = call i1 @sable_metadata_equal(ptr {operands[0]}, ptr {operands[1]})");
                     return true;
+
+                case "metadata_hash":
+                    Line($"{Result()} = call i64 @sable_metadata_hash(ptr {operands[0]})");
+                    return true;
+
+                case "metadata_is_subtype":
+                    Line($"{Result()} = call i1 @sable_metadata_is_subtype(ptr {operands[0]}, ptr {operands[1]})");
+                    return true;
+
+                // An object's own class: its header's object metadata's type metadata.
+                case "object_metadata": {
+                    var header = Fresh();
+                    Line($"{header} = load ptr, ptr {operands[0]}");
+                    var at = Fresh();
+                    Line($"{at} = getelementptr inbounds {ObjectMetadataHead}, ptr {header}, i32 0, i32 {ObjectMetadataTypeField}");
+                    Line($"{Result()} = load ptr, ptr {at}");
+                    return true;
+                }
 
                 // A copy of the value, made by the metadata's initializeWithCopy (or moved by its initializeWithTake).
                 case "value_witness_copy" or "value_witness_take": {

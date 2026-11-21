@@ -6,10 +6,11 @@ namespace Sable.SIL;
 /// <summary>
 ///     Type metadata and witness tables (docs/06 §6.2, #297): the witness
 ///     tables of the conformances existentials need, which the conformance
-///     registry finds a cast's witnesses in; and <c>TypeMetadata</c>'s
-///     <c>@intrinsic</c> members (lib/Sable.Core/TypeMetadata.sb) — a type's
-///     metadata, <c>metadata $T</c>, and its value witnesses applied to a
-///     value, as code that knows a type only by its metadata applies them.
+///     registry finds a cast's witnesses in; a type as a value,
+///     <c>metadata $T</c>, and a value's dynamic type, <c>type(of:)</c>; and
+///     <c>Type</c>'s <c>@intrinsic</c> members (lib/Sable.Core/Type.sb) — its
+///     value witnesses applied to a value, as code that knows a type only by
+///     its metadata applies them.
 /// </summary>
 public sealed partial class SilGen {
 
@@ -193,21 +194,54 @@ public sealed partial class SilGen {
     }
 
     sealed partial class FunctionLowering {
-        SilValue? MetadataIntrinsic(BoundCall call) {
-            // 'TypeMetadata.of(T.self)': T's metadata.
-            if (call.Function.Name == "of") {
-                if (call.Arguments is not [var argument]
-                    || Sub(argument.Type) is not MetatypeTypeSymbol { InstanceType: var instance }
-                    || LowerType(instance) is not { } described) {
-                    return Missing(call, "the metadata of a type");
-                }
+        /// <summary>
+        ///     <c>Int.self</c>, <c>T.self</c>: the type's metadata, a constant —
+        ///     in generic code too, as each instance is generated for its types.
+        ///     A type that has no values to describe (a protocol named alone)
+        ///     has the metadata of <c>()</c>'s.
+        /// </summary>
+        SilValue MetatypeValue(BoundMetatype metatype) =>
+            Emit(new MetadataInst(LowerType(Sub(metatype.InstanceType)) ?? SilType.Unit));
 
-                Discard(argument);
-                return Emit(new MetadataInst(described));
+        /// <summary>
+        ///     <c>type(of: x)</c>: the metadata of the value's dynamic type — an
+        ///     object's own class, read from its header, which may be a
+        ///     subclass of the static type; what an existential's box holds;
+        ///     and for any other value its static type's, a constant.
+        /// </summary>
+        SilValue? DynamicType(BoundCall call) {
+            if (call.Arguments is not [var argument]) {
+                return Missing(call, "'type(of:)' without a value");
             }
 
+            var type = Sub(argument.Type);
+            if (LowerType(type) is not { } lowered) {
+                return Missing(call, $"the type of a '{type.ToDisplayString()}'");
+            }
+
+            var dynamic = lowered is ClassType || generator.IsExistentialLayout(lowered);
+            if (!dynamic) {
+                Discard(argument);
+                return Emit(new MetadataInst(lowered));
+            }
+
+            if (Borrow(argument) is not { } value) {
+                return null;
+            }
+
+            SilValue metadata = lowered switch {
+                // 'any Error' is a box class of its own, holding the error.
+                ClassType { Name: "any$Error" } => Emit(new BuiltinInst("box_metadata", SilType.Metadata, value)),
+                ClassType => Emit(new BuiltinInst("object_metadata", SilType.Metadata, value)),
+                _ => Emit(new BuiltinInst("box_metadata", SilType.Metadata, Emit(new StructExtractInst(value, 0)))),
+            };
+            End(value);
+            return metadata;
+        }
+
+        SilValue? MetadataIntrinsic(BoundCall call) {
             if (call.Receiver is not { } receiver) {
-                return Missing(call, $"'TypeMetadata.{call.Function.Name}' without its metadata");
+                return Missing(call, $"'Type.{call.Function.Name}' without its metadata");
             }
 
             if (call.Function.Name == "assign") {
@@ -215,7 +249,7 @@ public sealed partial class SilGen {
             }
 
             if (call.Arguments is not [var operand] || call.Function.Name is not ("copy" or "move" or "destroyCopy")) {
-                return Missing(call, $"the intrinsic 'TypeMetadata.{call.Function.Name}'");
+                return Missing(call, $"the intrinsic 'Type.{call.Function.Name}'");
             }
 
             if (Borrow(receiver) is not { } metadata) {
@@ -248,7 +282,7 @@ public sealed partial class SilGen {
         /// <summary><c>m.assign(value, to: &amp;target)</c>: the value copied over the target by the metadata's assignWithCopy.</summary>
         SilValue? Assign(BoundCall call, BoundExpression receiver) {
             if (call.Arguments is not [var operand, var target]) {
-                return Missing(call, "'TypeMetadata.assign' without a value and a target");
+                return Missing(call, "'Type.assign' without a value and a target");
             }
 
             if (Borrow(receiver) is not { } metadata) {

@@ -1966,7 +1966,7 @@ public sealed partial class SilGen {
             return SilType.Region;
         }
 
-        if (type.Equals(Core.TypeMetadata)) {
+        if (type.Equals(Core.Type)) {
             return SilType.Metadata;
         }
 
@@ -2017,12 +2017,12 @@ public sealed partial class SilGen {
             case ExistentialTypeSymbol { Constraint: var constraint } when ExistentialProtocols(constraint) is { } protocols:
                 return ExistentialLayout(protocols);
 
-            // 'T.Type': its one value is the type, which each instance of the
-            // code is generated for, so it holds nothing. SIL has no value of
-            // type (), so it is a Bool that is always false: a byte, and free
-            // to copy.
+            // 'T.Type': its one value is the type, as its metadata — what a
+            // 'Type' holds too, so a metatype converts to one as it is. Each
+            // instance of generic code is generated for its types, so there
+            // the value is a constant, 'metadata $T'.
             case MetatypeTypeSymbol:
-                return SilType.Bool;
+                return SilType.Metadata;
 
             // A reference to an inline value, absolute or relative: a view of its bytes.
             case ReferenceTypeSymbol reference when Lower(reference.ReferencedType) is StructType { IsInline: true } inline:
@@ -2323,7 +2323,9 @@ public sealed partial class SilGen {
         }
 
         var anyError = AnyErrorType();
-        var box = _module.AddType(new ClassType(name) { Superclass = anyError });
+        // The error's type is the box's type argument, as an existential's
+        // box's is: what 'type(of: error)' reads (sable_box_value_metadata).
+        var box = _module.AddType(new ClassType(name) { Superclass = anyError, TypeArguments = [error] });
         box.Fields.Add(("value", error));
         box.VTable.Add((ErrorDescribeSlot, ErrorDescriber(anyError, box, error)));
 
@@ -6827,9 +6829,9 @@ public sealed partial class SilGen {
                 case BoundFunctionReference reference:
                     return FunctionValue(reference);
 
-                // 'Int.self': the type is known here, so the value holds nothing.
-                case BoundMetatype:
-                    return Emit(new IntegerLiteralInst(SilType.Bool, 0));
+                // 'Int.self': the type is known here, so its metadata is a constant.
+                case BoundMetatype metatype:
+                    return MetatypeValue(metatype);
 
                 case BoundIndirectCall indirect:
                     return IndirectCall(indirect);
@@ -7933,6 +7935,7 @@ public sealed partial class SilGen {
         ///     is <see cref="FormattedHole" />'s.
         /// </summary>
         SilValue? Hole(BoundExpression part, BoundFormatSpec? format) {
+            part = AsTypeValue(part);
             if (format is not null) {
                 return FormattedHole(part, format);
             }
@@ -7960,6 +7963,13 @@ public sealed partial class SilGen {
 
             return DebugText(part);
         }
+
+        /// <summary>
+        ///     A metatype written out — <c>"\(T.self)"</c>, <c>print(Int.self)</c>
+        ///     — is the <c>Type</c> it converts to, which writes its name.
+        /// </summary>
+        BoundExpression AsTypeValue(BoundExpression part) =>
+            Sub(part.Type) is MetatypeTypeSymbol ? new BoundConversion(part.Syntax, Core.Type, part, ConversionKind.Identity) : part;
 
         /// <summary><c>Formattable</c> and its <c>format</c>, when Sable.Core has them.</summary>
         (NamedTypeSymbol, FunctionSymbol)? FormatRequirement() =>
@@ -7994,6 +8004,7 @@ public sealed partial class SilGen {
         ///     asks for.
         /// </summary>
         SilValue? DebugText(BoundExpression part) {
+            part = AsTypeValue(part);
             if (LowerType(part.Type) is not { } lowered) {
                 return Missing(part, $"interpolating a value of type '{part.Type.ToDisplayString()}'");
             }
@@ -9094,13 +9105,14 @@ public sealed partial class SilGen {
         }
 
         SilValue? Binary(BoundBinaryOperator binary) {
-            // 'T.self == Int.self': a metatype holds nothing, as its value is
-            // its type, so in this instance of the code the two are equal or
-            // not already. The operands are still evaluated, for what they do.
+            // 'T.self == Int.self': a metatype's one value is its type, so in
+            // this instance of the code the two are equal or not already. An
+            // operand other than 'X.self' is still evaluated, for what it does.
             if (binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
                 && Sub(binary.Left.Type) is MetatypeTypeSymbol leftMetatype
                 && Sub(binary.Right.Type) is MetatypeTypeSymbol rightMetatype) {
-                if (Expression(binary.Left) is null || Expression(binary.Right) is null) {
+                // 'T.self' does nothing, and its metadata is not wanted.
+                if (binary.Left is not BoundMetatype && Expression(binary.Left) is null || binary.Right is not BoundMetatype && Expression(binary.Right) is null) {
                     return null;
                 }
 
@@ -10003,8 +10015,13 @@ public sealed partial class SilGen {
                 }
 
                 // A type's metadata, and its value witnesses (SilGen.Metadata.cs).
-                if (owner is not null && owner.Equals(Core.TypeMetadata)) {
+                if (owner is not null && owner.Equals(Core.Type)) {
                     return MetadataIntrinsic(call);
+                }
+
+                // 'type(of: x)': the dynamic type of the value (SilGen.Metadata.cs).
+                if (callee is { Name: "type", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } }) {
+                    return DynamicType(call);
                 }
 
                 // Reflection (SilGen.Reflection.cs).

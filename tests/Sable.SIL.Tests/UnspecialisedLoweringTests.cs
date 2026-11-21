@@ -2,7 +2,7 @@ namespace Sable.SIL.Tests;
 
 /// <summary>
 ///     Unspecialised generic code (#297): a generic function compiled once,
-///     taking boxes, metadata and witness tables, as lowering writes it, as
+///     taking its values by address, metadata and witness tables, as lowering writes it, as
 ///     SIL text reads it back, and as the interpreter runs it — with the same
 ///     answers as the specialised program.
 /// </summary>
@@ -78,18 +78,20 @@ public sealed class UnspecialisedLoweringTests {
     }
 
     /// <summary>
-    ///     The calling convention: a value of a type parameter's type is a
-    ///     box, and after the function's own parameters come each type
-    ///     parameter's metadata and its witness tables. A requirement is
-    ///     called through the table's generic entry, given the box and Self's
-    ///     metadata; a call from code that knows the type boxes the value and
-    ///     passes the constant metadata and the registry's table.
+    ///     The calling convention: a value of a type parameter's type is
+    ///     opaque, borrowed where its caller holds it, and after the
+    ///     function's own parameters come each type parameter's metadata and
+    ///     its witness tables. A requirement is called through the table's
+    ///     generic entry, given the value and Self's metadata; a call from
+    ///     code that knows the type passes the address of a slot holding the
+    ///     value — no allocation — the constant metadata and the table made
+    ///     for the type, referred to as a constant.
     /// </summary>
     [Fact]
-    public void TheGenericCallingConventionTakesBoxesMetadataAndWitnessTables() {
+    public void TheGenericCallingConventionTakesValuesByAddressMetadataAndWitnessTables() {
         var module = Lower(Shapes);
         var describe = module.Find("M.describe$generic")!;
-        Assert.Equal("(Box, Metadata, WitnessTable) -> String", describe.Type.ToString());
+        Assert.Equal("(@opaque(S), Metadata, WitnessTable) -> String", describe.Type.ToString());
         var body = Instructions(describe);
         Assert.Contains(body, static i => i is BuiltinInst { Name: "witness_generic:0" });
         Assert.Contains(body, static i => i is BuiltinInst { Name: "witness_generic:1" });
@@ -101,14 +103,15 @@ public sealed class UnspecialisedLoweringTests {
         Assert.All(call.Arguments, static a => Assert.IsType<SilArgument>(a));
 
         var main = Instructions(module.Find("M.main")!);
-        Assert.Contains(main, static i => i is BuiltinInst { Name: "generic_box_alloc" });
+        Assert.DoesNotContain(main, static i => i is AllocRefInst);
+        Assert.Contains(main, static i => i is BuiltinInst { Name: "opaque_cast", Operands: [AllocStackInst { ElementType: StructType { Name: "M.Square" } }] });
         Assert.Contains(main, static i => i is MetadataInst { Described: StructType { Name: "M.Square" } });
-        Assert.Contains(main, static i => i is BuiltinInst { Name: "witness_table:M.Shape" });
+        Assert.Contains(main, static i => i is BuiltinInst { Name: "witness_table_known:M.Shape" });
 
         // Each conformance's table has the protocol's requirements in the generic convention, in order.
         var table = module.FindWitnessTable(module.FindType("M.Square")!, "M.Shape")!;
         Assert.Equal(["area", "name"], table.GenericEntries.Select(static e => e.Requirement));
-        Assert.Equal("(Box, Metadata) -> Int", table.GenericEntries[0].Type!.ToString());
+        Assert.Equal("(@opaque(Self), Metadata) -> Int", table.GenericEntries[0].Type!.ToString());
         Assert.NotNull(module.Find(table.GenericEntries[1].Function!));
     }
 
@@ -158,28 +161,28 @@ public sealed class UnspecialisedLoweringTests {
 
     /// <summary>
     ///     A static requirement through a <c>T.Type</c> takes the metatype's
-    ///     value as Self's metadata; a result of <c>Self</c> comes back
-    ///     boxed; <c>T.self == Int.self</c> is asked of the metadata at run
-    ///     time; <c>type(of:)</c> reads the box; a boxed value is written out
-    ///     by its type's describer.
+    ///     value as Self's metadata; a result of <c>Self</c> is written where
+    ///     the caller says; <c>T.self == Int.self</c> is asked of the metadata
+    ///     at run time; <c>type(of:)</c> asks the metadata, or an object; a
+    ///     value is written out by its type's describer.
     /// </summary>
     [Fact]
     public void StaticRequirementsMetatypesAndDescriptionsAreAskedAtRunTime() {
         var module = Lower(Metatypes);
         var make = module.Find("M.make$generic")!;
-        Assert.Equal("(Metadata, Metadata, WitnessTable) -> Box", make.Type.ToString());
+        Assert.Equal("(Metadata, *@opaque(T), Metadata, WitnessTable) -> ()", make.Type.ToString());
         var zero = Instructions(make).OfType<ApplyInst>().Single();
-        Assert.Same(make.Entry.Arguments[1], zero.Arguments.Last());
+        Assert.Same(make.Entry.Arguments[2], zero.Arguments.Last());
 
         Assert.NotNull(module.Find("M.sum$generic"));
         Assert.Contains(Instructions(module.Find("M.isInt$generic")!), static i => i is BuiltinInst { Name: "metadata_equal" });
-        Assert.Contains(Instructions(module.Find("M.kind$generic")!), static i => i is BuiltinInst { Name: "generic_box_type" });
+        Assert.Contains(Instructions(module.Find("M.kind$generic")!), static i => i is BuiltinInst { Name: "opaque_type" });
         Assert.Contains(Instructions(module.Find("M.show$generic")!), static i => i is BuiltinInst { Name: "generic_describe" });
         Assert.Contains("M.Meters", module.Describers.Keys);
 
         var table = module.FindWitnessTable(module.FindType("M.Meters")!, "M.Zero")!;
-        Assert.Equal("(Metadata) -> Box", table.GenericEntries[0].Type!.ToString());
-        Assert.Equal("(Box, Box, Metadata) -> Box", table.GenericEntries[1].Type!.ToString());
+        Assert.Equal("(*@opaque(Self), Metadata) -> ()", table.GenericEntries[0].Type!.ToString());
+        Assert.Equal("(@opaque(Self), @opaque(Self), *@opaque(Self), Metadata) -> ()", table.GenericEntries[1].Type!.ToString());
 
         const string expected = "0\n5\ntrue\nfalse\nM.Meters\n<7><seven><Meters(value: 7)>\n";
         Assert.Equal(expected, Run(module));
@@ -188,12 +191,12 @@ public sealed class UnspecialisedLoweringTests {
     }
 
     /// <summary>
-    ///     A function whose type parameter is used in a way boxes cannot
-    ///     serve yet — in an array — is still specialised, for each type it
-    ///     is used with, in a program that is otherwise unspecialised.
+    ///     A function whose type parameter is used in a way unspecialised
+    ///     code cannot serve yet — in an array — is still specialised, for
+    ///     each type it is used with, in a program that is otherwise unspecialised.
     /// </summary>
     [Fact]
-    public void WhatBoxesCannotServeIsStillSpecialised() {
+    public void WhatUnspecialisedCodeCannotServeIsStillSpecialised() {
         var module = Lower("""
                            fn first<T>(_ items: T[]) -> T { return items[0] }
 
@@ -212,12 +215,12 @@ public sealed class UnspecialisedLoweringTests {
     }
 
     /// <summary>
-    ///     A requirement that changes its value is given the slot holding the
-    ///     box, which it makes its own first: the caller's value, which shares
-    ///     the box until then, is left as it was.
+    ///     A requirement that changes its value is given the address of the
+    ///     generic code's own copy, which it changes where it is: the
+    ///     caller's value is left as it was.
     /// </summary>
     [Fact]
-    public void ARequirementThatChangesItsValueChangesTheBoxItIsGiven() {
+    public void ARequirementThatChangesItsValueChangesItWhereItIs() {
         var module = Lower("""
                            protocol Counter {
                                mutating fn bump()
@@ -245,7 +248,9 @@ public sealed class UnspecialisedLoweringTests {
                            }
                            """);
         Assert.NotNull(module.Find("M.bumped$generic"));
-        Assert.Contains(module.Functions.SelectMany(Instructions), static i => i is BuiltinInst { Name: "generic_box_make_unique" });
+        var table = module.FindWitnessTable(module.FindType("M.Clicks")!, "M.Counter")!;
+        Assert.Equal("(*@opaque(Self), Metadata) -> ()", table.GenericEntries[0].Type!.ToString());
+        Assert.Contains(Instructions(module.Find(table.GenericEntries[0].Function!)!), static i => i is BuiltinInst { Name: "opaque_cast" });
         Assert.Equal("1\n3\n", Run(module));
     }
 

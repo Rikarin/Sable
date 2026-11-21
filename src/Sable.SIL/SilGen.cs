@@ -1810,9 +1810,9 @@ public sealed partial class SilGen {
     ///     every type begun while lowering it is taken back with it.
     /// </remarks>
     internal SilType? Lower(TypeSymbol type) {
-        // In unspecialised code, a value of a type parameter's type is a box (#297).
+        // In unspecialised code, a value of a type parameter's type is held indirectly (#297).
         if (IsOpaque(type)) {
-            return SilType.Box;
+            return new OpaqueType(((TypeParameterSymbol)type).Name);
         }
 
         if (_types.TryGetValue(type, out var cached)) {
@@ -4389,7 +4389,7 @@ public sealed partial class SilGen {
 
             if (HasSelf(symbol) || _initializing) {
                 var self = _entry.AddArgument(parameterTypes[next++]);
-                if (Bridged is { BoxesSelf: true }) {
+                if (Bridged is { OpaqueSelfValue: true }) {
                     _bridgeSelf = self;
                 } else if (self.Type is AddressType) {
                     _selfAddress = self;
@@ -4400,7 +4400,7 @@ public sealed partial class SilGen {
 
             foreach (var parameter in Bridged is { TakesNoParameters: true } ? [] : symbol.Parameters) {
                 _parameters[parameter] = _entry.AddArgument(parameterTypes[next++]);
-                if (Bridged is { } bridged && bridged.Boxed.Contains(parameter)) {
+                if (Bridged is { } bridged && bridged.OpaqueParameters.Contains(parameter)) {
                     _bridgeParameters.Add((parameter, (SilArgument)_parameters[parameter]));
                 }
             }
@@ -4521,7 +4521,6 @@ public sealed partial class SilGen {
                 WriteBackInoutParameters();
                 DestroyOwnedParameters();
                 Deallocate();
-                ReleaseBridged();
                 // The program ends once every task has, and then its globals go.
                 if (ReferenceEquals(symbol, generator._entrySymbol) && !IsGlobalInit(function.Name)) {
                     Emit(new BuiltinInst("task_drain", SilType.Unit));
@@ -4545,7 +4544,6 @@ public sealed partial class SilGen {
                 WriteBackInoutParameters();
                 DestroyOwnedParameters();
                 Deallocate();
-                ReleaseBridged();
                 if (Generator is not null) {
                     StoreState(GeneratorDone);
                 }
@@ -5243,7 +5241,7 @@ public sealed partial class SilGen {
         SilBlock? _returnBlock;
 
         void Return(SilValue? value) {
-            value = BridgeResult(value);
+            value = IndirectResult(value);
 
             // A return from inside an expression leaves its temporaries behind.
             DestroyTemporaries(0);
@@ -7973,14 +7971,14 @@ public sealed partial class SilGen {
         /// </summary>
         SilValue? Hole(BoundExpression part, BoundFormatSpec? format) {
             part = AsTypeValue(part);
-            if (format is null && IsOpaqueHere(Sub(part.Type))) {
-                if (Borrow(part) is not { } box) {
+            if (format is null && IsOpaqueHere(Sub(part.Type)) && Sub(part.Type) is TypeParameterSymbol described) {
+                if (Borrow(part) is not { } value) {
                     return null;
                 }
 
-                var described = Emit(new BuiltinInst("generic_describe", SilType.String, box));
-                End(box);
-                return described;
+                var text = Emit(new BuiltinInst("generic_describe", SilType.String, value, _genericMetadata[described]));
+                End(value);
+                return text;
             }
 
             if (format is not null) {
@@ -10297,18 +10295,14 @@ public sealed partial class SilGen {
             }
 
             for (var i = 0; i < passed; i++) {
-                // A value of a type parameter's type, to unspecialised code: in a box.
+                // A value of a type parameter's type, to unspecialised code: borrowed where it is.
                 if (genericShape is not null && i < callee.Parameters.Length && callee.Parameters[i].Type is TypeParameterSymbol typeParameter
                     && bound.Lookup(typeParameter) is { } given) {
-                    if (GenericArgument(call.Arguments[i], given, type.IsOwned(arguments.Count), borrows) is not { } boxedArgument) {
+                    if (GenericArgument(call.Arguments[i], given, type.Parameters[arguments.Count], borrows) is not { } genericArgument) {
                         return null;
                     }
 
-                    arguments.Add(boxedArgument);
-                    if (type.IsOwned(arguments.Count - 1)) {
-                        owned.Add(boxedArgument);
-                    }
-
+                    arguments.Add(genericArgument);
                     continue;
                 }
 
@@ -10389,9 +10383,16 @@ public sealed partial class SilGen {
                 }
             }
 
-            // Unspecialised code's metadata and witness tables, after the rest.
+            // Unspecialised code's metadata and witness tables, after the rest,
+            // and before them where a result of a type parameter's type goes.
+            (SilValue Passed, AllocStackInst Slot)? genericOut = null;
             if (genericShape is not null) {
-                if (GenericHiddenArguments(genericShape, bound) is not { } hidden) {
+                if (callee.ReturnType is TypeParameterSymbol returned && bound.Lookup(returned) is { } returnedAs
+                    && (genericOut = GenericOut(type.Parameters[arguments.Count], returnedAs)) is { } into) {
+                    arguments.Add(into.Passed);
+                }
+
+                if (GenericHiddenArguments(genericShape, bound, call.Syntax) is not { } hidden) {
                     EndAll(borrows);
                     return null;
                 }
@@ -10428,7 +10429,7 @@ public sealed partial class SilGen {
                 cannotThrow: callee.IsRethrows && RethrownBy(call) is null
                              && (callee.RethrownAlso is not { } also || ThrowsNothing(Sub(call.Substitution.Apply(also)))),
                 hopBack: back);
-            return genericShape is null ? invoked : GenericResult(invoked, callee, bound);
+            return genericOut is { } written ? TakeOut(invoked, written.Slot) : invoked;
         }
 
         /// <summary>

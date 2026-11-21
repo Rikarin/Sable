@@ -20,20 +20,20 @@ public enum GenericsMode {
 /// <summary>
 ///     Unspecialised generic code (#297, docs/06 §6.2): a generic function
 ///     compiled once for every type, as Swift compiles one. A value of a type
-///     parameter's type is a <see cref="SilType.Box" /> — the runtime's box,
-///     sized by the type's metadata — which is shared when copied and changed
-///     in place only once it is its holder's own; the function takes each
-///     type parameter's metadata, and a witness table for each protocol it
-///     is constrained to, after its own parameters. A requirement is called
-///     through the table's entries in the generic calling convention
-///     (<see cref="SilWitnessTable.GenericEntries" />), which take the value's
-///     box and Self's metadata.
+///     parameter's type is an <see cref="OpaqueType" />, held indirectly in
+///     storage the type's metadata sizes at run time: a parameter is borrowed
+///     where its caller holds it, a result written where its caller says;
+///     the function takes each type parameter's metadata, and a witness table
+///     for each protocol it is constrained to, after its own parameters. A
+///     requirement is called through the table's entries in the generic
+///     calling convention (<see cref="SilWitnessTable.GenericEntries" />),
+///     which take the value where it is and Self's metadata.
 /// </summary>
 /// <remarks>
 ///     <para>
 ///         A function is compiled this way when the build asks for it
 ///         (<see cref="GenericsMode.Unspecialised" />) and every use it makes
-///         of a type parameter is one boxes can serve (<see cref="ShapeChecker" />):
+///         of a type parameter is one it can serve (<see cref="ShapeChecker" />):
 ///         values of the type parameter itself, passed, stored, returned,
 ///         compared by metatype, written out, given to a requirement of its
 ///         protocols or to another such function. Anything else — a
@@ -42,9 +42,10 @@ public enum GenericsMode {
 ///         program builds either way.
 ///     </para>
 ///     <para>
-///         Where the types are known, a call boxes each argument of a type
-///         parameter's type and takes the result back out of its box; inside
-///         unspecialised code, the boxes are passed on as they are.
+///         Where the types are known, a call stores each argument of a type
+///         parameter's type in a slot of its frame and passes its address,
+///         and gives a slot for the result; inside unspecialised code, values
+///         are passed on where they are.
 ///     </para>
 /// </remarks>
 public sealed partial class SilGen {
@@ -81,7 +82,7 @@ public sealed partial class SilGen {
 
     readonly GenericsMode _generics = Generics;
 
-    /// <summary>The type parameters of the unspecialised code being lowered: each lowers to a <see cref="SilType.Box" />.</summary>
+    /// <summary>The type parameters of the unspecialised code being lowered: each lowers to an <see cref="OpaqueType" />.</summary>
     readonly List<TypeParameterSymbol> _opaque = [];
 
     IDisposable Opaque(GenericShape shape) {
@@ -116,8 +117,8 @@ public sealed partial class SilGen {
     /// <summary>
     ///     What a generic function takes compiled once for every type, or null
     ///     when it is specialised: when lowering is not unspecialised, or when
-    ///     its signature or its body uses a type parameter in a way boxes
-    ///     cannot serve yet.
+    ///     its signature or its body uses a type parameter in a way
+    ///     unspecialised code cannot serve yet.
     /// </summary>
     internal GenericShape? UnspecialisedShape(FunctionSymbol symbol) {
         if (_generics != GenericsMode.Unspecialised) {
@@ -279,7 +280,7 @@ public sealed partial class SilGen {
     }
 
     /// <summary>
-    ///     Whether a body uses its type parameters only as boxes can serve:
+    ///     Whether a body uses its type parameters only as unspecialised code can serve:
     ///     each expression of a type parameter's type (or its metatype's) is
     ///     a parameter, a local, a call, a metatype or a choice between two;
     ///     and what takes one is a declaration, an assignment to a local, a
@@ -388,7 +389,7 @@ public sealed partial class SilGen {
         bool CallAllowed(BoundCall call) {
             var callee = call.Function;
 
-            // 'type(of: x)': what the box holds.
+            // 'type(of: x)': the metadata, or an object's own class.
             if (callee is { Name: "type", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } }) {
                 return call.Arguments is [var argument] && IsOwn(argument.Type);
             }
@@ -498,7 +499,7 @@ public sealed partial class SilGen {
 
     /// <summary>
     ///     The instance of a generic function that serves every type: its
-    ///     own parameters, a type parameter's as a box, then each type
+    ///     own parameters, a type parameter's opaque, then where a result of one goes, each type
     ///     parameter's metadata and each of their witness tables.
     /// </summary>
     internal (string Name, FunctionType Type)? UnspecialisedInstance(FunctionSymbol symbol, GenericShape shape, SyntaxNode at) {
@@ -516,9 +517,16 @@ public sealed partial class SilGen {
             return null;
         }
 
+        // A result of a type parameter's type is written where the caller says, before the hidden parameters.
         var hidden = Enumerable.Repeat(SilType.Metadata, shape.Parameters.Length).Concat(Enumerable.Repeat(SilType.WitnessTable, shape.Requirements.Length)).ToList();
+        var result = signature.Result;
+        if (result is OpaqueType) {
+            hidden.Insert(0, SilType.Address(result));
+            result = SilType.Unit;
+        }
+
         var owned = signature.Owned.IsEmpty ? default : signature.Owned.Concat(hidden.Select(static _ => false)).ToImmutableArray();
-        var type = new FunctionType([..signature.Parameters, ..hidden], signature.Result, signature.Thrown, owned, signature.IsAsync);
+        var type = new FunctionType([..signature.Parameters, ..hidden], result, signature.Thrown, owned, signature.IsAsync);
         _instances[name] = type;
         _instanceOrigins[name] = (symbol, TypeSubstitution.Empty, _loweringInstance);
         _unspecialised[name] = (symbol, shape);
@@ -564,9 +572,9 @@ public sealed partial class SilGen {
 
     /// <summary>
     ///     A requirement's witness's type in the generic calling convention:
-    ///     <c>self</c>'s box first (its slot's address, for one that changes
+    ///     <c>self</c> first (its storage's address, for one that changes
     ///     it) unless it is static, then its parameters, a value of
-    ///     <c>Self</c> as a box, then Self's metadata. Null for a requirement
+    ///     <c>Self</c> opaque, where a result of Self goes, then Self's metadata. Null for a requirement
     ///     the convention cannot pass yet: one generic itself, or with
     ///     <c>Self</c> or an associated type inside another type.
     /// </summary>
@@ -577,30 +585,42 @@ public sealed partial class SilGen {
             _ => null,
         };
 
-    /// <summary>A property's getter in the generic calling convention: <c>self</c>'s box unless it is static, then Self's metadata.</summary>
+    /// <summary>A property's getter in the generic calling convention: <c>self</c> unless it is static, where a result of Self goes, then Self's metadata.</summary>
     FunctionType? GenericGetterType(NamedTypeSymbol protocol, FieldSymbol field) {
         protocol = protocol.OriginalDefinition;
         if (protocol.SelfTypeParameter is not { } self) {
             return null;
         }
 
-        var result = field.Type.Equals(self) ? SilType.Box : Mentions(field.Type, [self, ..protocol.AssociatedTypes]) ? null : Lower(field.Type);
-        return result is null ? null : new FunctionType(field.IsStatic ? [SilType.Metadata] : [SilType.Box, SilType.Metadata], result, isAsync: field.IsAsyncGetter);
+        if (field.IsAsyncGetter) {
+            return null;
+        }
+
+        var opaque = new OpaqueType(self.Name);
+        ImmutableArray<SilType> taken = field.IsStatic ? [] : [opaque];
+        if (field.Type.Equals(self)) {
+            return new FunctionType([..taken, SilType.Address(opaque), SilType.Metadata], SilType.Unit);
+        }
+
+        return Mentions(field.Type, [self, ..protocol.AssociatedTypes]) || Lower(field.Type) is not { } result ? null : new FunctionType([..taken, SilType.Metadata], result);
     }
 
     internal FunctionType? GenericEntryType(NamedTypeSymbol protocol, FunctionSymbol requirement) {
         protocol = protocol.OriginalDefinition;
-        if (protocol.SelfTypeParameter is not { } self || !requirement.TypeParameters.IsEmpty || requirement.IsRethrows || !requirement.OpaqueTypeParameters.IsEmpty) {
+        // An async one would keep the caller's storage across a suspension: not yet.
+        if (protocol.SelfTypeParameter is not { } self || !requirement.TypeParameters.IsEmpty || requirement.IsRethrows || !requirement.OpaqueTypeParameters.IsEmpty
+            || requirement.IsAsync) {
             return null;
         }
 
         var own = new List<TypeParameterSymbol>([self, ..protocol.AssociatedTypes]);
+        var opaque = new OpaqueType(self.Name);
         SilType? Slot(TypeSymbol type) =>
-            type.Equals(self) ? SilType.Box : Mentions(type, own) ? null : Lower(type);
+            type.Equals(self) ? opaque : Mentions(type, own) ? null : Lower(type);
 
         var parameters = ImmutableArray.CreateBuilder<SilType>();
         if (HasSelf(requirement)) {
-            parameters.Add(requirement.IsMutating ? SilType.Address(SilType.Box) : SilType.Box);
+            parameters.Add(requirement.IsMutating ? SilType.Address(opaque) : opaque);
         }
 
         foreach (var parameter in requirement.Parameters) {
@@ -612,7 +632,7 @@ public sealed partial class SilGen {
                 case ParameterModifier.None or ParameterModifier.In:
                     parameters.Add(type);
                     break;
-                case ParameterModifier.InOut when type != SilType.Box:
+                case ParameterModifier.InOut when type is not OpaqueType:
                     parameters.Add(SilType.Address(type));
                     break;
                 default:
@@ -620,17 +640,24 @@ public sealed partial class SilGen {
             }
         }
 
-        parameters.Add(SilType.Metadata);
         if (Slot(requirement.ReturnType) is not { } result) {
             return null;
         }
 
+        // A result of Self is written where the caller says.
+        if (result is OpaqueType) {
+            parameters.Add(SilType.Address(result));
+            result = SilType.Unit;
+        }
+
+        parameters.Add(SilType.Metadata);
+
         SilType? thrown = null;
-        if (requirement.ThrownType is { } thrownType && !thrownType.Equals(Core.Never) && (thrown = Slot(thrownType)) is null) {
+        if (requirement.ThrownType is { } thrownType && !thrownType.Equals(Core.Never) && (thrown = Slot(thrownType)) is null or OpaqueType) {
             return null;
         }
 
-        return new FunctionType(parameters.ToImmutable(), result, thrown, isAsync: requirement.IsAsync);
+        return new FunctionType(parameters.ToImmutable(), result, thrown);
     }
 
     /// <summary>The generic entries made so far, by table.</summary>
@@ -686,6 +713,10 @@ public sealed partial class SilGen {
             return;
         }
 
+        foreach (var refined in Bases(protocol.OriginalDefinition)) {
+            table.Bases.Add(QualifiedName(refined.OriginalDefinition));
+        }
+
         foreach (var (key, member) in GenericRequirements(protocol)) {
             string? witness = null;
             var type = GenericEntryType(protocol, member);
@@ -729,8 +760,8 @@ public sealed partial class SilGen {
     ///     convention: the requirement lowered as if its body called itself
     ///     on the type — so it is met as code that knows the type meets it,
     ///     the type's own member, a default, a builtin — with what arrives
-    ///     boxed taken out of its box first, and a result of <c>Self</c> put
-    ///     in one. Null when it cannot be made.
+    ///     opaque copied out of its caller's storage first, and a result of
+    ///     <c>Self</c> written where the caller says. Null when it cannot be made.
     /// </summary>
     string? GenericWitness(NamedTypeSymbol concrete, SilType value, NamedTypeSymbol protocol, string key, Symbol member, FunctionType type, SyntaxNode at) {
         if (member is FieldSymbol field) {
@@ -782,7 +813,7 @@ public sealed partial class SilGen {
     ///     A property requirement's getter for a type in the generic calling
     ///     convention: lowered as <c>print</c>'s instance would be if its body
     ///     read the property of its one parameter — the value, taken out of
-    ///     the box it is given — or, for a static one, of the type.
+    ///     the value it is given — or, for a static one, of the type.
     /// </summary>
     string? GenericGetter(NamedTypeSymbol concrete, SilType value, NamedTypeSymbol protocol, FieldSymbol field, FunctionType type, SyntaxNode at) {
         var index = GenericRequirements(protocol).FindIndex(r => ReferenceEquals(r.Member, field));
@@ -818,7 +849,7 @@ public sealed partial class SilGen {
         return name;
     }
 
-    /// <summary>Sable.Core's <c>print&lt;T&gt;(_ value: T)</c>: what bridged functions of one boxed value are lowered as.</summary>
+    /// <summary>Sable.Core's <c>print&lt;T&gt;(_ value: T)</c>: what bridged functions of one opaque value are lowered as.</summary>
     FunctionSymbol? PrintSymbol() =>
         Core.Module.GetMembers("print").OfType<FunctionSymbol>().FirstOrDefault(static f => f is { TypeParameters.Length: 1, Parameters.Length: 1 });
 
@@ -838,30 +869,32 @@ public sealed partial class SilGen {
 
     /// <summary>
     ///     How a function generic code calls is given what it gets: <c>self</c>
-    ///     boxed, the parameters given boxed, the result to be boxed; for a
+    ///     opaque, the parameters given opaque, the result written where the caller says; for a
     ///     describer, the one parameter to write out as a string; for a
     ///     getter, the expression it returns, and whether it takes its
     ///     symbol's parameters at all.
     /// </summary>
-    internal sealed record Bridge(bool BoxesSelf, ImmutableHashSet<ParameterSymbol> Boxed, bool BoxesResult, SyntaxNode? Describes = null) {
+    internal sealed record Bridge(bool OpaqueSelfValue, ImmutableHashSet<ParameterSymbol> OpaqueParameters, bool OpaqueResult, SyntaxNode? Describes = null) {
         public BoundExpression? Returns { get; init; }
         public bool TakesNoParameters { get; init; }
 
-        /// <summary>The type the function is for: what a boxed result of Self holds.</summary>
+        /// <summary>The type the function is for: what Self is.</summary>
         public TypeSymbol? Self { get; init; }
     }
 
     // -----------------------------------------------------------------------
-    // Describers: what '"\(x)"' writes for a boxed value
+    // Describers: what '"\(x)"' writes for a value of a type parameter's type
     // -----------------------------------------------------------------------
 
-    /// <summary>The types boxed so far whose describer has been asked for.</summary>
+    /// <summary>The types whose describer has been asked for.</summary>
     readonly HashSet<SilType> _described = [];
 
     /// <summary>
-    ///     Writes out a value of each type put in a box, as an interpolation
-    ///     in code that knows the type would (<c>generic_describe</c>):
-    ///     a function given the box. Made the first time a type is boxed.
+    ///     Writes out a value of a type unspecialised code is given, as an
+    ///     interpolation in code that knows the type would
+    ///     (<c>generic_describe</c>): a function given the value and its
+    ///     metadata. Made the first time code that knows the type hands its
+    ///     metadata to unspecialised code.
     /// </summary>
     internal void Describer(TypeSymbol type, SilType value, SyntaxNode at) {
         if (!_described.Add(value)) {
@@ -873,7 +906,7 @@ public sealed partial class SilGen {
         }
 
         var name = $"$describe${Sanitise(value.ToString())}";
-        var function = new SilFunction(name, new FunctionType([SilType.Box], SilType.String)) {
+        var function = new SilFunction(name, new FunctionType([new OpaqueType(print.TypeParameters[0].Name), SilType.Metadata], SilType.String)) {
             SourceFile = source.FileName,
             Line = source.GetLinePosition(syntax.Span.Start).Line,
         };
@@ -893,7 +926,7 @@ public sealed partial class SilGen {
     }
 
     sealed partial class FunctionLowering {
-        /// <summary>For a function generic code calls (<see cref="Bridge" />), what arrives boxed.</summary>
+        /// <summary>For a function generic code calls (<see cref="Bridge" />), what arrives as a type parameter's value.</summary>
         internal Bridge? Bridged { get; init; }
 
         /// <summary>True when the body could not be lowered: the function is a stub.</summary>
@@ -905,80 +938,98 @@ public sealed partial class SilGen {
         /// <summary>In unspecialised code, the witness tables it is given, by type parameter and protocol.</summary>
         readonly Dictionary<(TypeParameterSymbol, NamedTypeSymbol), SilValue> _genericTables = [];
 
-        /// <summary>Self's metadata, in a bridged function.</summary>
-        SilValue? _bridgeMetadata;
+        /// <summary>Where a function whose result is a type parameter's value writes it: the address its caller passes.</summary>
+        SilArgument? _indirectResult;
 
-        /// <summary>What a bridged function arrived with, waiting for the entry block: self, and the boxed parameters.</summary>
+        /// <summary>What a bridged function arrived with, waiting for the entry block: self, and the parameters of Self's type.</summary>
         SilArgument? _bridgeSelf;
 
-        readonly List<(ParameterSymbol Parameter, SilArgument Box)> _bridgeParameters = [];
-
-        /// <summary>The boxes a bridged function holds while it changes what they hold, let go of on the way out.</summary>
-        readonly List<SilValue> _bridgeHeld = [];
+        readonly List<(ParameterSymbol Parameter, SilArgument Value)> _bridgeParameters = [];
 
         /// <summary>True for a type parameter of this unspecialised function.</summary>
         bool IsOpaqueHere(TypeSymbol type) => type is TypeParameterSymbol parameter && _genericMetadata.ContainsKey(parameter);
 
-        /// <summary>Takes the hidden parameters of an unspecialised function, after its own.</summary>
+        /// <summary>Names the entry block's newest argument, for the debugger and for finding a type parameter's metadata (<c>$metadata.T</c>).</summary>
+        void NameArgument(string name) {
+            while (function.ParameterNames.Count < _entry.Arguments.Count - 1) {
+                function.ParameterNames.Add($"$argument{function.ParameterNames.Count}");
+            }
+
+            function.ParameterNames.Add(name);
+        }
+
+        /// <summary>
+        ///     Takes the hidden parameters of an unspecialised function, after
+        ///     its own: where its result goes, when it is a type parameter's,
+        ///     then the metadata and the witness tables; a bridged function's
+        ///     result's address and Self's metadata.
+        /// </summary>
         void GenericParameters(ImmutableArray<SilType> parameterTypes, ref int next) {
             if (generator._unspecialised.TryGetValue(function.Name, out var generic)) {
+                if (function.Type.Result == SilType.Unit && next < parameterTypes.Length && parameterTypes[next] is AddressType { Pointee: OpaqueType }
+                    && generator.IsOpaque(symbol.ReturnType)) {
+                    _indirectResult = _entry.AddArgument(parameterTypes[next++]);
+                    NameArgument("$out");
+                }
+
                 foreach (var parameter in generic.Shape.Parameters) {
                     _genericMetadata[parameter] = _entry.AddArgument(parameterTypes[next++]);
-                    function.ParameterNames.Add($"$metadata.{parameter.Name}");
+                    NameArgument($"$metadata.{parameter.Name}");
                 }
 
                 foreach (var (parameter, protocol) in generic.Shape.Requirements) {
                     _genericTables[(parameter, protocol)] = _entry.AddArgument(parameterTypes[next++]);
-                    function.ParameterNames.Add($"$witnesses.{parameter.Name}.{protocol.Name}");
+                    NameArgument($"$witnesses.{parameter.Name}.{protocol.Name}");
                 }
             }
 
-            if (Bridged is not null && next < parameterTypes.Length && parameterTypes[next] == SilType.Metadata) {
-                _bridgeMetadata = _entry.AddArgument(parameterTypes[next++]);
+            if (Bridged is null) {
+                return;
+            }
+
+            if (Bridged.OpaqueResult && next < parameterTypes.Length && parameterTypes[next] is AddressType { Pointee: OpaqueType }) {
+                _indirectResult = _entry.AddArgument(parameterTypes[next++]);
+                NameArgument("$out");
+            }
+
+            if (next < parameterTypes.Length && parameterTypes[next] == SilType.Metadata) {
+                var opaque = parameterTypes.Select(static p => p is AddressType address ? address.Pointee : p).OfType<OpaqueType>().FirstOrDefault();
+                _entry.AddArgument(parameterTypes[next++]);
+                NameArgument($"$metadata.{opaque?.Name ?? "Self"}");
             }
         }
 
         /// <summary>
-        ///     In a bridged function, what arrived boxed is taken out of its
-        ///     box: a copy into a slot of its own for a parameter or a
-        ///     <c>self</c> only read, and for a <c>self</c> to change, the box
-        ///     made its slot's own and changed where it is.
+        ///     In a bridged function, what arrived as a type parameter's value
+        ///     is seen as the type it is: a parameter, or a <c>self</c> only
+        ///     read, copied out of the caller's storage into a slot of its own;
+        ///     a <c>self</c> to change, changed where the caller has it.
         /// </summary>
         void BridgeArguments() {
             if (Bridged is null) {
                 return;
             }
 
-            if (_bridgeSelf is { } boxed && LowerType(SelfType(symbol, substitution)) is { } self) {
-                if (boxed.Type is AddressType) {
-                    Emit(new BuiltinInst("generic_box_make_unique", SilType.Unit, boxed));
-                    var box = Emit(new LoadInst(boxed));
-                    _bridgeHeld.Add(box);
-                    var at = Emit(new BuiltinInst("generic_box_project", SilType.Address(self), box));
-                    if (self is ClassType) {
-                        var slot = NewSlot(self, "self");
-                        Emit(new StoreInst(Emit(new LoadInst(at)), slot, StoreKind.Init));
-                        _selfAddress = slot;
-                    } else {
-                        _selfAddress = at;
-                    }
+            if (_bridgeSelf is { } given && LowerType(SelfType(symbol, substitution)) is { } self) {
+                if (given.Type is AddressType) {
+                    _selfAddress = Emit(new BuiltinInst("opaque_cast", SilType.Address(self), given));
                 } else {
                     var slot = NewSlot(self, "self");
-                    Emit(new StoreInst(Emit(new LoadInst(Emit(new BuiltinInst("generic_box_project", SilType.Address(self), boxed)))), slot, StoreKind.Init));
+                    Emit(new StoreInst(Emit(new LoadInst(Emit(new BuiltinInst("opaque_address", SilType.Address(self), given)))), slot, StoreKind.Init));
                     _selfAddress = slot;
                 }
             }
 
-            foreach (var (parameter, box) in _bridgeParameters) {
+            foreach (var (parameter, value) in _bridgeParameters) {
                 if (LowerType(parameter.Type) is not { } type) {
                     _failed = true;
                     continue;
                 }
 
                 var slot = NewSlot(type, parameter.Name);
-                Emit(new StoreInst(Emit(new LoadInst(Emit(new BuiltinInst("generic_box_project", SilType.Address(type), box)))), slot, StoreKind.Init));
+                Emit(new StoreInst(Emit(new LoadInst(Emit(new BuiltinInst("opaque_address", SilType.Address(type), value)))), slot, StoreKind.Init));
                 _spilled[parameter] = slot;
-                _spilledArguments.Add(box);
+                _spilledArguments.Add(value);
                 _parameters.Remove(parameter);
             }
         }
@@ -1004,47 +1055,58 @@ public sealed partial class SilGen {
             return true;
         }
 
-        /// <summary>What a bridged function returns: a result of Self put in a box made with Self's metadata.</summary>
-        SilValue? BridgeResult(SilValue? value) {
-            if (Bridged is not { BoxesResult: true } || value is null or UnitValue || value.Type == SilType.Box || _bridgeMetadata is not { } metadata) {
+        /// <summary>
+        ///     A returned value, when the function writes its result where its
+        ///     caller says: stored there — a type parameter's value as it is, or
+        ///     in a bridged function the value of the type it is, through the
+        ///     address seen as that type — and nothing left to return.
+        /// </summary>
+        SilValue? IndirectResult(SilValue? value) {
+            if (_indirectResult is not { } result || value is null or UnitValue || _current is null) {
                 return value;
             }
 
-            return BoxUp(Owned(value), metadata, Bridged.Self ?? Sub(SelfType(symbol, substitution)));
+            var owned = Owned(value);
+            SilValue into = value.Type is OpaqueType ? result : Emit(new BuiltinInst("opaque_cast", SilType.Address(value.Type), result));
+            Emit(new StoreInst(owned, into, StoreKind.Init));
+            return null;
         }
 
-        /// <summary>The boxes a bridged function held to change what they hold, let go of as it leaves.</summary>
-        void ReleaseBridged() {
-            foreach (var box in _bridgeHeld) {
-                Emit(new DestroyValueInst(box));
-            }
-        }
-
-        /// <summary>An owned value in a new box of the type the metadata describes; the type's describer is made with it.</summary>
-        SilValue BoxUp(SilValue value, SilValue metadata, TypeSymbol type) {
-            var box = Emit(new BuiltinInst("generic_box_alloc", SilType.Box, metadata));
-            var at = Emit(new BuiltinInst("generic_box_project", SilType.Address(value.Type), box));
-            Emit(new StoreInst(value, at, StoreKind.Init));
-            generator.Describer(type, value.Type, (SyntaxNode?)_body?.Syntax ?? symbol.DeclaringSyntax.FirstOrDefault()!);
-            return box;
-        }
-
-        /// <summary>The value a box holds, as an owned copy of the type it is; the box let go of.</summary>
-        SilValue Unbox(SilValue box, SilType type) {
-            var at = Emit(new BuiltinInst("generic_box_project", SilType.Address(type), box));
-            var value = Emit(new LoadInst(at));
-            Destroy(box);
-            return value;
-        }
-
-        /// <summary>A type parameter's witness table for a protocol: the one given, or for a protocol one given refines, the registry's.</summary>
+        /// <summary>A type parameter's witness table for a protocol: the one given, the one a given one's refines through its bases, or the registry's.</summary>
         SilValue TableFor(TypeParameterSymbol parameter, NamedTypeSymbol protocol) {
             protocol = protocol.OriginalDefinition;
             if (_genericTables.TryGetValue((parameter, protocol), out var table)) {
                 return table;
             }
 
+            foreach (var ((given, held), value) in _genericTables) {
+                if (ReferenceEquals(given, parameter) && BasePath(held, protocol) is { } path) {
+                    var at = value;
+                    foreach (var index in path) {
+                        at = Emit(new BuiltinInst($"witness_base:{index}", SilType.WitnessTable, at));
+                    }
+
+                    return at;
+                }
+            }
+
             return Emit(new BuiltinInst($"witness_table:{QualifiedName(protocol)}", SilType.WitnessTable, _genericMetadata[parameter]));
+        }
+
+        /// <summary>The indices of the bases to follow from one protocol's table to one it refines; null when it does not.</summary>
+        static List<int>? BasePath(NamedTypeSymbol from, NamedTypeSymbol to) {
+            if (ReferenceEquals(from, to)) {
+                return [];
+            }
+
+            var bases = Bases(from).Select(static b => b.OriginalDefinition).ToList();
+            for (var i = 0; i < bases.Count; i++) {
+                if (BasePath(bases[i], to) is { } rest) {
+                    return [i, ..rest];
+                }
+            }
+
+            return null;
         }
 
         /// <summary>A type's metadata here: a type parameter's as given, any other's a constant.</summary>
@@ -1074,9 +1136,28 @@ public sealed partial class SilGen {
         }
 
         /// <summary>
+        ///     Where a call writes a result of a type parameter's type: a slot
+        ///     of the type it is here, which the call is given the address of —
+        ///     seen as the callee's type parameter, when the type is known here.
+        ///     Null when the result is not one.
+        /// </summary>
+        (SilValue Passed, AllocStackInst Slot)? GenericOut(SilType expected, TypeSymbol given) {
+            if (expected is not AddressType { Pointee: OpaqueType } || LowerType(given) is not { } type) {
+                return null;
+            }
+
+            var slot = NewSlot(type);
+            return (type is OpaqueType ? slot : (SilValue)Emit(new BuiltinInst("opaque_cast", expected, slot)), slot);
+        }
+
+        /// <summary>The result a call wrote where it was told: taken out of the slot.</summary>
+        SilValue? TakeOut(SilValue? invoked, AllocStackInst slot) =>
+            invoked is null || _current is null ? invoked : Emit(new LoadInst(slot, slot.ElementType.IsTrivial ? LoadKind.Trivial : LoadKind.Take));
+
+        /// <summary>
         ///     A requirement called on a type parameter in unspecialised code:
-        ///     its witness, from the type parameter's table, given the value's
-        ///     box and the type's metadata.
+        ///     its witness, from the type parameter's table, given the value
+        ///     and the type's metadata, and for a result of Self, where to put it.
         /// </summary>
         SilValue? GenericRequirementCall(BoundCall call, TypeParameterSymbol parameter) {
             var callee = call.Function;
@@ -1126,8 +1207,14 @@ public sealed partial class SilGen {
                 return null;
             }
 
+            var result = GenericOut(type.Parameters[arguments.Count], parameter);
+            if (result is { } into) {
+                arguments.Add(into.Passed);
+            }
+
             arguments.Add(metadata);
-            return Invoke(code, type, arguments, borrows, call.Syntax);
+            var invoked = Invoke(code, type, arguments, borrows, call.Syntax);
+            return result is { } written ? TakeOut(invoked, written.Slot) : invoked;
         }
 
         /// <summary>The type parameter of this function a property requirement is read on, or null for any other read.</summary>
@@ -1145,7 +1232,7 @@ public sealed partial class SilGen {
             return on is TypeParameterSymbol parameter && _genericMetadata.ContainsKey(parameter) ? parameter : null;
         }
 
-        /// <summary>A property requirement read on a type parameter: its getter, from the table, given the box and the metadata.</summary>
+        /// <summary>A property requirement read on a type parameter: its getter, from the table, given the value and the metadata.</summary>
         SilValue? GenericPropertyRead(BoundFieldAccess access, TypeParameterSymbol parameter) {
             var field = access.Field;
             var protocol = ((NamedTypeSymbol)field.ContainingSymbol!).OriginalDefinition;
@@ -1166,8 +1253,14 @@ public sealed partial class SilGen {
                 borrows.Add(self);
             }
 
+            var result = GenericOut(type.Parameters[arguments.Count], parameter);
+            if (result is { } into) {
+                arguments.Add(into.Passed);
+            }
+
             arguments.Add(_genericMetadata[parameter]);
-            return Invoke(code, type, arguments, borrows, access.Syntax);
+            var invoked = Invoke(code, type, arguments, borrows, access.Syntax);
+            return result is { } written ? TakeOut(invoked, written.Slot) : invoked;
         }
 
         /// <summary>
@@ -1209,41 +1302,53 @@ public sealed partial class SilGen {
 
         /// <summary>
         ///     An argument for a parameter of a type parameter's type, to an
-        ///     unspecialised callee: a box here passed as it is, and any other
-        ///     value put in a box of its own, held until the call is done.
+        ///     unspecialised callee, which borrows it where it is: a value of a
+        ///     type parameter here as it is, and any other in a slot of its
+        ///     own, seen as the callee's type parameter, until the call is done.
         /// </summary>
-        SilValue? GenericArgument(BoundExpression argument, TypeSymbol given, bool owned, List<SilValue> borrows) {
+        SilValue? GenericArgument(BoundExpression argument, TypeSymbol given, SilType expected, List<SilValue> borrows) {
             if (IsOpaqueHere(given)) {
-                if (owned) {
-                    return Expression(argument) is { } handed ? Hold(Owned(handed)) : null;
-                }
-
-                if (Borrow(argument) is not { } box) {
+                if (Borrow(argument) is not { } value) {
                     return null;
                 }
 
-                borrows.Add(box);
-                return box;
+                borrows.Add(value);
+                return value;
             }
 
-            if (MetadataOf(given) is not { } metadata || Expression(argument) is not { } value) {
+            if (LowerType(given) is not { } type || Expression(argument) is not { } evaluated) {
                 return null;
             }
 
-            var boxed = Hold(BoxUp(Owned(value), metadata, given));
-            if (!owned) {
-                borrows.Add(boxed);
-            }
-
-            return boxed;
+            var slot = NewSlot(type);
+            Emit(new StoreInst(Owned(evaluated), slot, StoreKind.Init));
+            var borrowed = Emit(new LoadBorrowInst(Emit(new BuiltinInst("opaque_cast", SilType.Address(expected), slot))));
+            borrows.Add(new WriteBack(() => {
+                Emit(new EndBorrowInst(borrowed));
+                if (!type.IsTrivial) {
+                    Emit(new DestroyAddrInst(slot));
+                }
+            }));
+            return borrowed;
         }
 
-        /// <summary>The metadata and witness tables an unspecialised callee takes after its own parameters.</summary>
-        IEnumerable<SilValue>? GenericHiddenArguments(GenericShape shape, TypeSubstitution bound) {
+        /// <summary>
+        ///     The metadata and witness tables an unspecialised callee takes
+        ///     after its own parameters: a type parameter's here as given, and
+        ///     where the type is known, its constant metadata and the tables
+        ///     made for it, referred to as they are — and its describer made,
+        ///     for the callee to write one of its values out with.
+        /// </summary>
+        IEnumerable<SilValue>? GenericHiddenArguments(GenericShape shape, TypeSubstitution bound, SyntaxNode at) {
             var hidden = new List<SilValue>();
             foreach (var parameter in shape.Parameters) {
-                if (MetadataOf(bound.Lookup(parameter)!) is not { } metadata) {
+                var given = bound.Lookup(parameter)!;
+                if (MetadataOf(given) is not { } metadata) {
                     return null;
+                }
+
+                if (!IsOpaqueHere(given) && LowerType(given) is { } lowered) {
+                    generator.Describer(given, lowered, at);
                 }
 
                 hidden.Add(metadata);
@@ -1253,19 +1358,10 @@ public sealed partial class SilGen {
                 var given = bound.Lookup(parameter)!;
                 hidden.Add(IsOpaqueHere(given)
                     ? TableFor((TypeParameterSymbol)given, protocol)
-                    : Emit(new BuiltinInst($"witness_table:{QualifiedName(protocol)}", SilType.WitnessTable, MetadataOf(given)!)));
+                    : Emit(new BuiltinInst($"witness_table_known:{QualifiedName(protocol)}", SilType.WitnessTable, MetadataOf(given)!)));
             }
 
             return hidden;
-        }
-
-        /// <summary>An unspecialised callee's result of a type parameter's type, taken out of its box where the type is known.</summary>
-        SilValue? GenericResult(SilValue? result, FunctionSymbol callee, TypeSubstitution bound) {
-            if (result is null or UnitValue || callee.ReturnType is not TypeParameterSymbol returned || bound.Lookup(returned) is not { } given || IsOpaqueHere(given)) {
-                return result;
-            }
-
-            return LowerType(given) is { } type ? Unbox(result, type) : result;
         }
     }
 }

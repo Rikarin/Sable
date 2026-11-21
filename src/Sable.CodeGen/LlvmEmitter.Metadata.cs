@@ -38,13 +38,13 @@ public sealed partial class LlvmEmitter {
     const int ObjectMetadataTypeField = 8;
 
     /// <summary>Where each witness is in a value-witness table, <c>SableValueWitnesses</c>.</summary>
-    internal const int CopyWitness = 0, TakeWitness = 1, AssignWitness = 2, DestroyWitness = 4;
+    internal const int CopyWitness = 0, TakeWitness = 1, AssignWitness = 2, AssignWithTakeWitness = 3, DestroyWitness = 4;
 
     /// <summary>The runtime's <c>SableField</c>: name, type name, offset, kind, type.</summary>
     const string FieldDescriptorType = "{ ptr, ptr, i64, i64, ptr }";
 
     /// <summary>The runtime's <c>SableWitnessTable</c>.</summary>
-    const string WitnessTableRecord = "{ ptr, i64, ptr, i64, ptr, i64, ptr, i64, ptr }";
+    const string WitnessTableRecord = "{ ptr, i64, ptr, i64, ptr, i64, ptr, i64, ptr, i64, ptr }";
 
     /// <summary>
     ///     A type's metadata, <c>@"sable.type.T"</c>: its kind, its fields, its
@@ -171,6 +171,15 @@ public sealed partial class LlvmEmitter {
         return name;
     }
 
+    int _witnessCaches;
+
+    /// <summary>A new call's cache of the registry's answer (<c>sable_witness_table_cached</c>): one word, empty at first.</summary>
+    internal string WitnessCache() {
+        var name = $"@\"sable.witness_cache.{_witnessCaches++}\"";
+        _globals.Append($"{name} = internal global ptr null\n");
+        return name;
+    }
+
     /// <summary>The name of a conformance's witness table.</summary>
     static string WitnessTableName(SilType conformer, string protocol) =>
         $"@\"sable.witnesses.{Mangled(conformer)}.{protocol.Replace("\"", "", StringComparison.Ordinal)}\"";
@@ -195,7 +204,7 @@ public sealed partial class LlvmEmitter {
     /// <summary>
     ///     A constructor that hands the runtime each describer the module made,
     ///     with its type's metadata (<c>sable_register_describer</c>): what
-    ///     <c>sable_box_describe</c> finds a boxed value's in. Null for none reached.
+    ///     <c>sable_opaque_describe</c> finds a value's in. Null for none reached.
     /// </summary>
     string? DescriberRegistration(SilModule module) {
         var describers = module.Describers.Values.Where(d => _reachable?.Contains(d.Function) != false && module.Find(d.Function) is not null).ToList();
@@ -232,7 +241,7 @@ public sealed partial class LlvmEmitter {
     ///     types' metadata and what each must conform to. A witness no
     ///     reachable code can need was not built: its slot is empty.
     /// </summary>
-    string WitnessTableGlobal(SilWitnessTable table) {
+    internal string WitnessTableGlobal(SilWitnessTable table) {
         var name = WitnessTableName(table.Conformer, table.Protocol);
         if (!_emitted.Add(name)) {
             return name;
@@ -270,9 +279,17 @@ public sealed partial class LlvmEmitter {
             _globals.Append($"{generic} = {SharedLinkage} constant [{table.GenericEntries.Count} x ptr] [{string.Join(", ", entries)}]{Comdat(generic, SharedLinkage)}\n");
         }
 
+        // The conformer's tables of the protocols this one refines, for unspecialised code to reach them by.
+        var bases = "null";
+        if (table.Bases.Count > 0) {
+            var refined = table.Bases.Select(b => _module?.FindWitnessTable(table.Conformer, b) is { } baseTable ? $"ptr {WitnessTableGlobal(baseTable)}" : "ptr null").ToList();
+            bases = name[..^1] + ".bases\"";
+            _globals.Append($"{bases} = {SharedLinkage} constant [{refined.Count} x ptr] [{string.Join(", ", refined)}]{Comdat(bases, SharedLinkage)}\n");
+        }
+
         _globals.Append($"{name} = {SharedLinkage} constant {WitnessTableRecord} {{ ptr {protocol}, i64 {table.Entries.Count}, ptr {requirements}, ")
             .Append($"i64 {table.AssociatedTypes.Count}, ptr {associatedTypes}, i64 {table.AssociatedConformances.Count}, ptr {associatedConformances}, ")
-            .Append($"i64 {table.GenericEntries.Count}, ptr {generic} }}{Comdat(name, SharedLinkage)}\n");
+            .Append($"i64 {table.GenericEntries.Count}, ptr {generic}, i64 {table.Bases.Count}, ptr {bases} }}{Comdat(name, SharedLinkage)}\n");
         return name;
     }
 
@@ -310,12 +327,12 @@ public sealed partial class LlvmEmitter {
                                         declare i1 @sable_metadata_is_subtype(ptr, ptr)
                                         declare ptr @sable_witness_table(ptr, ptr)
                                         declare void @sable_register_witness_table(ptr, ptr)
-                                        declare ptr @sable_box_alloc(ptr)
-                                        declare ptr @sable_box_project(ptr)
-                                        declare ptr @sable_box_type(ptr)
-                                        declare void @sable_box_make_unique(ptr)
-                                        declare ptr @sable_box_describe(ptr)
+                                        declare ptr @sable_witness_table_cached(ptr, ptr, ptr)
+                                        declare ptr @sable_opaque_type(ptr, ptr)
+                                        declare ptr @sable_opaque_describe(ptr, ptr)
                                         declare void @sable_register_describer(ptr, ptr)
+                                        declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
+                                        declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
 
                                         """;
 
@@ -467,22 +484,41 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = icmp ne ptr {operands[0]}, null");
                     return true;
 
-                // Generic boxes (#297), the runtime's: sized by the metadata at run time.
-                case "generic_box_alloc":
-                    Line($"{Result()} = call ptr @sable_box_alloc(ptr {operands[0]})");
+                // Unspecialised code's values (#297): an address seen as another
+                // type is the same address, and a value is the address of its buffer.
+                case "opaque_cast" or "opaque_address":
+                    _names[builtin] = operands[0];
                     return true;
-                case "generic_box_project":
-                    Line($"{Result()} = call ptr @sable_box_project(ptr {operands[0]})");
-                    return true;
-                case "generic_box_type":
-                    Line($"{Result()} = call ptr @sable_box_type(ptr {operands[0]})");
-                    return true;
-                case "generic_box_make_unique":
-                    Line($"call void @sable_box_make_unique(ptr {operands[0]})");
+                case "opaque_type":
+                    Line($"{Result()} = call ptr @sable_opaque_type(ptr {operands[0]}, ptr {operands[1]})");
                     return true;
                 case "generic_describe":
-                    Line($"{Result()} = call ptr @sable_box_describe(ptr {operands[0]})");
+                    SiteForRuntime();
+                    Line($"{Result()} = call ptr @sable_opaque_describe(ptr {operands[0]}, ptr {operands[1]})");
                     return true;
+            }
+
+            // The table of a protocol the table's protocol refines.
+            if (builtin.Name.StartsWith("witness_base:", StringComparison.Ordinal)) {
+                var index = int.Parse(builtin.Name["witness_base:".Length..], CultureInfo.InvariantCulture);
+                Line($"{Result()} = {TableEntry(operands[0], 10, index)}");
+                return true;
+            }
+
+            // A table code that knows the type refers to: the constant this
+            // module made for it; else the registry's answer, kept at the call
+            // the first time it is found.
+            if (builtin.Name.StartsWith("witness_table_known:", StringComparison.Ordinal)) {
+                var protocol = builtin.Name["witness_table_known:".Length..];
+                if (builtin.Operands[0] is MetadataInst { Described: var described } && module._module?.FindWitnessTable(described, protocol) is { } known
+                    && module._module?.Unit is null) {
+                    _names[builtin] = module.WitnessTableGlobal(known);
+                    return true;
+                }
+
+                var cache = module.WitnessCache();
+                Line($"{Result()} = call ptr @sable_witness_table_cached(ptr {cache}, ptr {operands[0]}, ptr {module.ProtocolDescriptor(protocol)})");
+                return true;
             }
 
             // A requirement's witness in the generic calling convention.

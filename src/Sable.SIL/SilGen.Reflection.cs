@@ -58,7 +58,8 @@ public sealed partial class SilGen {
     /// <summary>How a value of the type is taken apart; <see cref="Shape.Opaque" /> for what is only named.</summary>
     Shape ShapeOf(TypeSymbol type, SilType lowered) =>
         (type, lowered) switch {
-            (_, ScalarType scalar) when scalar == SilType.Region || scalar == SilType.Object || scalar == SilType.Box => Shape.Opaque,
+            (_, ScalarType scalar) when scalar == SilType.Region || scalar == SilType.Object => Shape.Opaque,
+            (_, OpaqueType) => Shape.Opaque,
             (_, ScalarType) => Shape.Scalar,
             (OptionalTypeSymbol, EnumType) => Shape.Optional,
             (TupleTypeSymbol, TupleType) => Shape.Tuple,

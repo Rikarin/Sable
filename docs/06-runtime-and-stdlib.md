@@ -264,46 +264,71 @@ A table's first entries are what an existential can call — requirements
 that mention `Self` have no slot — each taking the existential's box. Then
 come its **generic entries** (`generic_requirements`): every method,
 operator and property getter the protocol itself declares, in declaration
-order, in the convention unspecialised code calls them in — `self`'s box
-(its slot's address, for a `mutating` one) unless the requirement is
-static, its parameters, and `Self`'s metadata last; a value of `Self` is a
-box. A requirement that convention cannot pass yet (generic itself, an
-initialiser, or `Self` or an associated type inside another type) has an
-empty entry. Each witness is the requirement lowered as if its body called
-itself on the conforming type, so it is met as specialised code meets it:
-the type's member, a default, a builtin. A program built unspecialised
-fills both halves of every table it makes, so that every unit's copy of a
-table is the same.
+order, in the convention unspecialised code calls them in — `self` (the
+address of its storage, for a `mutating` one) unless the requirement is
+static, its parameters, the address a result of `Self` is written to, and
+`Self`'s metadata last; a value of `Self` is passed by the address of its
+caller's storage. A requirement that convention cannot pass yet (generic
+itself, async, an initialiser, or `Self` or an associated type inside
+another type) has an empty entry. Each witness is the requirement lowered
+as if its body called itself on the conforming type, so it is met as
+specialised code meets it: the type's member, a default, a builtin. Last
+come its **bases** (`bases`): the conformer's tables of the protocols this
+one refines directly, in the order it names them, so that unspecialised
+code given a `Greeter`'s table reaches its `Named` one with a load, not a
+lookup. A program built unspecialised fills every part of every table it
+makes, so that every unit's copy of a table is the same.
 
 **Unspecialised generic code** (#297 stage 4). With `-generics=unspecialised`
 (or `SABLE_GENERICS=unspecialised`), a generic function whose body uses its
-type parameters only as boxes can serve is compiled once for every type.
-A value of a type parameter's type is a **generic box**: a counted object
-holding the type's metadata and then the value, at its alignment, in a
-buffer sized by the metadata at run time (`sable_box_alloc`,
-`sable_box_project`). Copying the value shares the box; it is changed in
-place only once it is its holder's own (`sable_box_make_unique` copies it
-with the type's `initialize_with_copy` otherwise), and the last release
-destroys it with the type's `destroy` witness. After its own parameters the
-function takes each type parameter's metadata and then a witness table for
-each protocol one is constrained to, in that order: `T.self` is that
-metadata, `T.self == Int.self` asks `metadata_equal`, `type(of: x)` asks the
-box (`sable_box_type`, an object's own class for an object), a requirement
-is called through the table's generic entry, and a requirement of a protocol
-one given refines is called through the table the registry finds from the
-metadata. `"\(x)"` asks the runtime for the **describer** of the type in the
-box (`sable_box_describe`): a function, made for each type the program puts
-in a box and registered as the image starts, that writes the value out as
-an interpolation in code that knows its type does. Where the types are
-known, a call puts each argument of a type parameter's type in a box, and
-takes a result of one out of its box.
+type parameters only in the ways below is compiled once for every type, as
+Swift compiles generic code. A value of a type parameter's type is
+**opaque** (SIL's `@opaque(T)`): its size is known only from the metadata,
+so it is held indirectly, and nothing is allocated on the heap for it.
 
-What boxes cannot serve yet — a `T[]`, a `T?`, a tuple of `T`, a closure
-over one, an associated type, a method of a generic type, an async function
-or a generator — is still specialised for its type arguments in the same
-program, so a program builds either way; `SABLE_GENERICS_TRACE=1` says,
-for each generic function, which way it went and why. A specialised build
-(the default) makes neither the boxes nor the generic entries.
+- A parameter of a type parameter's type is the address of the caller's
+  storage, borrowed for the call; a result of one is written to an address
+  the caller passes, before the hidden parameters (`$*@opaque(T)`). After
+  its own parameters the function takes each type parameter's metadata and
+  then a witness table for each protocol one is constrained to, in that
+  order.
+- Inside, each value of one is a buffer of the metadata's size in the
+  function's frame: one per value, made where the function starts, so that
+  a loop reuses it and the frame does not grow as it runs. A local is such
+  a buffer, empty (all zeros) until stored. Copying one calls the type's
+  `initialize_with_copy` witness, assigning `assign_with_take`, destroying
+  `destroy`; a move is a copy of its bits, as every type's take is.
+- `T.self` is the metadata, `T.self == Int.self` asks `metadata_equal`,
+  `type(of: x)` the metadata or an object's own class (`sable_opaque_type`).
+  A requirement is called through the table's generic entry; one of a
+  protocol a given one refines, through the table's bases.
+- `"\(x)"` asks the runtime for the **describer** of the type
+  (`sable_opaque_describe`): a function, made for each type whose metadata
+  code that knows the type hands to unspecialised code and registered as
+  the image starts, that writes the value out as an interpolation in code
+  that knows its type does.
+- Where the types are known, a call stores each argument of a type
+  parameter's type in a slot of its frame and passes the slot's address,
+  passes a slot for the result and loads it after, and passes the constant
+  metadata and the table made for the type, referred to as the constant it
+  is — not looked up. Where the table is not one the module made (a
+  subclass inheriting a conformance), the registry's answer is kept at the
+  call the first time it is found (`sable_witness_table_cached`).
+- The SIL inliner leaves unspecialised code alone: its opaque values are
+  sized by its own metadata parameters. (LLVM, which sees the constant
+  metadata and tables, may still inline and fold a call from code that
+  knows the types.)
+
+The interpreter runs the same SIL: an opaque value is held as a value of the
+type it is, and copied and destroyed as the metadata the running function
+was given says.
+
+What unspecialised code cannot serve yet — a `T[]`, a `T?`, a tuple of `T`,
+a closure over one, an associated type, a method of a generic type, an
+async function or a generator — is still specialised for its type arguments
+in the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
+says, for each generic function, which way it went and why. A specialised
+build (the default) makes neither the generic entries nor the describers.
 
 Field descriptors were meant to be emitted always, for every type; as built
 they are a class's always and every other type's only in a program that

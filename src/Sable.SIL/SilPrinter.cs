@@ -127,6 +127,10 @@ public static class SilPrinter {
                 builder.Append("  conforms ").Append(associated).Append(": ").Append(Quote(protocol)).Append('\n');
             }
 
+            foreach (var refined in table.Bases) {
+                builder.Append("  base ").Append(Quote(refined)).Append('\n');
+            }
+
             foreach (var (requirement, function, type) in table.GenericEntries) {
                 builder.Append("  generic ").Append(Quote(requirement)).Append(": ");
                 builder.Append(function is null || type is null ? "none" : $"@{function} : ${type}").Append('\n');

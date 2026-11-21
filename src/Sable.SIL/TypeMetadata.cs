@@ -178,7 +178,8 @@ public sealed class TypeMetadata {
         type switch {
             _ when type == SilType.String => MetadataKind.String,
             _ when type == SilType.Metadata => MetadataKind.Metatype,
-            _ when type == SilType.Object || type == SilType.Region || type == SilType.WitnessTable || type == SilType.Box => MetadataKind.Opaque,
+            _ when type == SilType.Object || type == SilType.Region || type == SilType.WitnessTable => MetadataKind.Opaque,
+            OpaqueType => MetadataKind.Opaque,
             ScalarType => MetadataKind.Scalar,
             ClassType => MetadataKind.Class,
             StructType when IsExistential(type) => MetadataKind.Existential,
@@ -331,13 +332,23 @@ public sealed class SilWitnessTable(SilType conformer, string protocol) {
     /// <summary>
     ///     Each requirement the protocol itself declares, in declaration order,
     ///     with its witness in the generic calling convention (#297): what
-    ///     unspecialised code calls — its parameters, then <c>self</c>'s box
-    ///     (its slot's address, for one that changes it) unless it is static,
-    ///     then <c>Self</c>'s metadata. A value of <c>Self</c> or of an
-    ///     associated type is a <see cref="SilType.Box" />. Null where no
-    ///     witness is made: a requirement that convention cannot pass.
+    ///     unspecialised code calls — <c>self</c> (its storage's address, for
+    ///     one that changes it) unless it is static, its parameters, where a
+    ///     result of <c>Self</c> goes, then <c>Self</c>'s metadata. A value of
+    ///     <c>Self</c> is an <see cref="OpaqueType" />, borrowed where its
+    ///     caller holds it. Null where no witness is made: a requirement
+    ///     that convention cannot pass.
     /// </summary>
     public List<(string Requirement, string? Function, FunctionType? Type)> GenericEntries { get; } = [];
+
+    /// <summary>
+    ///     The protocols the protocol refines directly, in the order it names
+    ///     them (#297): natively the conformer's table for each follows, so
+    ///     that unspecialised code given this table reaches a refined
+    ///     protocol's (<c>witness_base:i</c>) without asking the registry.
+    ///     Made in an unspecialised build.
+    /// </summary>
+    public List<string> Bases { get; } = [];
 
     /// <summary>Each associated type the protocol has, by name, as the conformance binds it.</summary>
     public List<(string Name, SilType Type)> AssociatedTypes { get; } = [];

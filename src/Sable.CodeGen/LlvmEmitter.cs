@@ -762,7 +762,8 @@ public sealed partial class LlvmEmitter {
             _ when type == SilType.Unit => "void",
             AddressType or FunctionType or ClassType or ArrayType => "ptr",
             StructType { IsInline: true } or InlinePointerType => "ptr",
-            _ when type == SilType.Object || type == SilType.Region || type == SilType.Box => "ptr",
+            _ when type == SilType.Object || type == SilType.Region => "ptr",
+            OpaqueType => "ptr",
             _ when type == SilType.Metadata || type == SilType.WitnessTable => "ptr",
             ThickFunctionType => "{ ptr, ptr }",
             WeakStorageType or UnownedStorageType => "ptr",
@@ -1520,6 +1521,59 @@ public sealed partial class LlvmEmitter {
         /// <summary>Scratch slots, allocated once in the entry block so that a loop does not grow the stack.</summary>
         readonly StringBuilder _entryAllocas = new();
 
+        /// <summary>Each type parameter's metadata, by name (<c>$metadata.T</c>), in unspecialised code.</summary>
+        readonly Dictionary<string, string> _opaqueMetadata = new(StringComparer.Ordinal);
+
+        readonly Dictionary<string, string> _opaqueSizes = new(StringComparer.Ordinal);
+
+        string OpaqueMetadata(OpaqueType type) =>
+            _opaqueMetadata.TryGetValue(type.Name, out var metadata)
+                ? metadata
+                : throw new NotSupportedException($"{function.Name} has no metadata for {type}\n{SilPrinter.Print(function)}");
+
+        /// <summary>The size of an opaque type's values, read from its metadata where the function starts.</summary>
+        string OpaqueSize(OpaqueType type) {
+            if (!_opaqueSizes.TryGetValue(type.Name, out var size)) {
+                var at = Fresh();
+                size = Fresh();
+                _entryAllocas.Append($"  {at} = getelementptr inbounds %SableTypeMetadata, ptr {OpaqueMetadata(type)}, i32 0, i32 {MetadataSizeField}\n")
+                    .Append($"  {size} = load i64, ptr {at}\n");
+                _opaqueSizes[type.Name] = size;
+            }
+
+            return size;
+        }
+
+        /// <summary>
+        ///     A buffer for an opaque value, of its metadata's size, made where
+        ///     the function starts — one for each value, which a loop reuses,
+        ///     so the frame does not grow as it runs.
+        /// </summary>
+        string OpaqueBuffer(OpaqueType type) {
+            var size = OpaqueSize(type);
+            var buffer = Fresh();
+            _entryAllocas.Append($"  {buffer} = alloca i8, i64 {size}, align 16\n");
+            return buffer;
+        }
+
+        /// <summary>An opaque value moved from one place to another: its bits, as every type's take is.</summary>
+        void OpaqueMove(OpaqueType type, string destination, string source) =>
+            Line($"call void @llvm.memmove.p0.p0.i64(ptr {destination}, ptr {source}, i64 {OpaqueSize(type)}, i1 false)");
+
+        /// <summary>One of an opaque type's value witnesses, called on its values' addresses and its metadata.</summary>
+        void OpaqueWitness(OpaqueType type, int witness, params string[] addresses) {
+            var metadata = OpaqueMetadata(type);
+            var field = Fresh();
+            var table = Fresh();
+            var at = Fresh();
+            var code = Fresh();
+            Line($"{field} = getelementptr inbounds %SableTypeMetadata, ptr {metadata}, i32 0, i32 {MetadataWitnessesField}");
+            Line($"{table} = load ptr, ptr {field}");
+            Line($"{at} = getelementptr inbounds %SableValueWitnesses, ptr {table}, i32 0, i32 {witness}");
+            Line($"{code} = load ptr, ptr {at}");
+            Line($"call void {code}({string.Join(", ", addresses.Select(static a => $"ptr {a}"))}, ptr {metadata})");
+        }
+
         string Scratch(string type, int align = 0) {
             var name = Fresh();
             _entryAllocas.Append("  ").Append(name).Append(" = alloca ").Append(type).Append(align > 0 ? $", align {align}" : "").Append('\n');
@@ -1585,8 +1639,21 @@ public sealed partial class LlvmEmitter {
                 parameters.Add(argument.Type is AddressType ? $"ptr noalias %p{i}" : $"{Type(argument.Type)} %p{i}");
             }
 
+            // Unspecialised code's metadata (#297): what its opaque values are sized and copied by.
+            for (var i = 0; i < function.ParameterNames.Count && i < function.Entry.Arguments.Count; i++) {
+                if (function.ParameterNames[i].StartsWith("$metadata.", StringComparison.Ordinal)) {
+                    _opaqueMetadata[function.ParameterNames[i]["$metadata.".Length..]] = $"%p{i}";
+                }
+            }
+
             foreach (var block in function.Blocks.Skip(1)) {
                 foreach (var argument in block.Arguments) {
+                    // A block's opaque argument is a buffer of its own, which each edge moves the value into.
+                    if (argument.Type is OpaqueType opaqueArgument) {
+                        _names[argument] = OpaqueBuffer(opaqueArgument);
+                        continue;
+                    }
+
                     _names[argument] = Fresh();
                     _incoming[argument] = [];
                 }
@@ -1899,6 +1966,14 @@ public sealed partial class LlvmEmitter {
                     Builtin(builtin);
                     return;
 
+                // Storage for an opaque value: a buffer of its metadata's size, empty.
+                case AllocStackInst { ElementType: OpaqueType opaqueSlot } alloc: {
+                    var buffer = OpaqueBuffer(opaqueSlot);
+                    _names[alloc] = buffer;
+                    Line($"call void @llvm.memset.p0.i64(ptr align 16 {buffer}, i8 0, i64 {OpaqueSize(opaqueSlot)}, i1 false)");
+                    return;
+                }
+
                 case AllocStackInst alloc: {
                     var name = Fresh();
                     _names[alloc] = name;
@@ -1961,6 +2036,31 @@ public sealed partial class LlvmEmitter {
 
                 case StoreInst unitStore when unitStore.Value.Type == SilType.Unit:
                     return;
+
+                // An opaque value read: copied by its value witness into a buffer
+                // of its own, or moved there, leaving the storage empty.
+                case LoadInst { Type: OpaqueType opaqueLoad } load: {
+                    var buffer = OpaqueBuffer(opaqueLoad);
+                    _names[load] = buffer;
+                    if (load.Kind == LoadKind.Take) {
+                        OpaqueMove(opaqueLoad, buffer, Name(load.Address));
+                        Line($"call void @llvm.memset.p0.i64(ptr {Name(load.Address)}, i8 0, i64 {OpaqueSize(opaqueLoad)}, i1 false)");
+                    } else {
+                        OpaqueWitness(opaqueLoad, CopyWitness, buffer, Name(load.Address));
+                    }
+
+                    return;
+                }
+
+                case StoreInst { Value.Type: OpaqueType opaqueStore } store: {
+                    if (store.Kind == StoreKind.Assign && store.Address is not AllocStackInst { Unmanaged: true }) {
+                        OpaqueWitness(opaqueStore, AssignWithTakeWitness, Name(store.Address), Name(store.Value));
+                    } else {
+                        OpaqueMove(opaqueStore, Name(store.Address), Name(store.Value));
+                    }
+
+                    return;
+                }
 
                 case LoadInst load: {
                     var name = Fresh();
@@ -2061,6 +2161,11 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
+                // Borrowed where it is: the storage is the value's buffer.
+                case LoadBorrowInst { Type: OpaqueType } opaqueBorrow:
+                    _names[opaqueBorrow] = Name(opaqueBorrow.Address);
+                    return;
+
                 case LoadBorrowInst borrow: {
                     var name = Fresh();
                     _names[borrow] = name;
@@ -2069,6 +2174,22 @@ public sealed partial class LlvmEmitter {
                 }
 
                 case EndBorrowInst:
+                    return;
+
+                case CopyValueInst { Type: OpaqueType opaqueCopy } copy: {
+                    var buffer = OpaqueBuffer(opaqueCopy);
+                    _names[copy] = buffer;
+                    OpaqueWitness(opaqueCopy, CopyWitness, buffer, Name(copy.Value));
+                    return;
+                }
+
+                case DestroyValueInst { Value.Type: OpaqueType opaqueDestroy } destroy:
+                    OpaqueWitness(opaqueDestroy, DestroyWitness, Name(destroy.Value));
+                    return;
+
+                case DestroyAddrInst { Address.Type: AddressType { Pointee: OpaqueType opaqueDestroyed } } destroy when destroy.Address is not AllocStackInst { Unmanaged: true }:
+                    OpaqueWitness(opaqueDestroyed, DestroyWitness, Name(destroy.Address));
+                    Line($"call void @llvm.memset.p0.i64(ptr {Name(destroy.Address)}, i8 0, i64 {OpaqueSize(opaqueDestroyed)}, i1 false)");
                     return;
 
                 case CopyValueInst copy:
@@ -2171,6 +2292,10 @@ public sealed partial class LlvmEmitter {
                     Line($"{name} = load ptr, ptr {slot}");
                     return;
                 }
+
+                case ApplyInst { Type: OpaqueType }:
+                case ReturnInst { Value.Type: OpaqueType }:
+                    throw new NotSupportedException("an opaque value is returned through an address its caller passes");
 
                 case ApplyInst apply: {
                     var (target, arguments) = Callee(apply.Callee, apply.Arguments);
@@ -2341,13 +2466,45 @@ public sealed partial class LlvmEmitter {
             var from = _currentLabel;
             var label = _labels[target];
 
+            // An opaque argument is moved into the target's buffer for it, on
+            // the edge: through a buffer of each first when there are several,
+            // which may be one another's.
+            var moves = new StringBuilder();
+            var opaque = Enumerable.Range(0, arguments.Count).Where(i => target.Arguments[i].Type is OpaqueType).ToList();
+            if (opaque.Count > 0) {
+                var output = _out;
+                _out = moves;
+                var sources = opaque.Select(i => Name(arguments[i])).ToList();
+                if (opaque.Count > 1) {
+                    for (var j = 0; j < opaque.Count; j++) {
+                        var staged = OpaqueBuffer((OpaqueType)target.Arguments[opaque[j]].Type);
+                        OpaqueMove((OpaqueType)target.Arguments[opaque[j]].Type, staged, sources[j]);
+                        sources[j] = staged;
+                    }
+                }
+
+                for (var j = 0; j < opaque.Count; j++) {
+                    if (sources[j] != Name(target.Arguments[opaque[j]])) {
+                        OpaqueMove((OpaqueType)target.Arguments[opaque[j]].Type, Name(target.Arguments[opaque[j]]), sources[j]);
+                    }
+                }
+
+                _out = output;
+            }
+
             if (split) {
                 var edge = NewLabel("edge");
-                _extra.Append(edge).Append(":\n  br label %").Append(label).Append('\n');
+                _extra.Append(edge).Append(":\n").Append(moves).Append("  br label %").Append(label).Append('\n');
                 from = edge;
+            } else {
+                _out.Append(moves);
             }
 
             for (var i = 0; i < arguments.Count; i++) {
+                if (target.Arguments[i].Type is OpaqueType) {
+                    continue;
+                }
+
                 _incoming[target.Arguments[i]].Add((Name(arguments[i]), from));
             }
 
@@ -2547,7 +2704,7 @@ public sealed partial class LlvmEmitter {
         ///     so it is copied to a slot that is, and back after the call.
         /// </summary>
         string Aligned(SilValue argument) {
-            if (argument.Type is not AddressType { Pointee: var pointee } || AddressAlign(argument) >= Align(pointee)) {
+            if (argument.Type is not AddressType { Pointee: var pointee } || pointee is OpaqueType || AddressAlign(argument) >= Align(pointee)) {
                 return Name(argument);
             }
 

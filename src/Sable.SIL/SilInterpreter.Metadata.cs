@@ -18,17 +18,39 @@ public sealed partial class SilInterpreter {
 
     readonly Dictionary<SilType, MetadataModel> _metadata = [];
 
-    /// <summary>A generic box (<see cref="SilType.Box" />): a value of the type its metadata describes, counted as an object is.</summary>
-    sealed class GenericBox(MetadataModel type) : Counted {
-        public MetadataModel Type { get; } = type;
-        public object? Value;
+    /// <summary>
+    ///     The metadata of each type parameter the function running now is
+    ///     given (<c>$metadata.T</c>), by name: what copies and destroys a
+    ///     value of an <see cref="OpaqueType" />, which the interpreter holds as
+    ///     it holds a value of the type it is, as native code does through
+    ///     its value witnesses.
+    /// </summary>
+    Dictionary<string, MetadataModel>? _opaqueTypes;
+
+    readonly Dictionary<SilFunction, (int Index, string Name)[]> _opaqueParameters = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>The metadata parameters of a function, by where they are among its arguments and the type parameter each is.</summary>
+    (int Index, string Name)[] OpaqueParametersOf(SilFunction function) {
+        if (!_opaqueParameters.TryGetValue(function, out var found)) {
+            found = [..function.ParameterNames.Select((name, i) => (i, name)).Where(static p => p.name.StartsWith("$metadata.", StringComparison.Ordinal))
+                .Select(static p => (p.i, p.name["$metadata.".Length..]))];
+            _opaqueParameters[function] = found;
+        }
+
+        return found;
     }
 
-    /// <summary>The value a generic box holds, where it is.</summary>
-    sealed class BoxedValue(GenericBox box) : IReference {
-        public object? Get() => Peek() ?? throw new SilTrap("load from uninitialised storage");
-        public object? Peek() => Alive(box).Value;
-        public void Set(object? value) => Alive(box).Value = value;
+    /// <summary>The type an opaque type is in the function running now.</summary>
+    SilType OpaqueTypeOf(OpaqueType opaque) =>
+        _opaqueTypes is not null && _opaqueTypes.TryGetValue(opaque.Name, out var model)
+            ? model.Type
+            : throw new SilTrap($"no metadata for {opaque} here");
+
+    /// <summary>A value's storage seen as itself: what <c>opaque_address</c> gives, read-only.</summary>
+    sealed class Held(object? value) : IReference {
+        public object? Get() => value ?? throw new SilTrap("load from uninitialised storage");
+        public object? Peek() => value;
+        public void Set(object? replaced) => throw new SilTrap("a borrowed value was written");
     }
 
     MetadataModel MetadataOf(SilType type) {
@@ -222,41 +244,38 @@ public sealed partial class SilInterpreter {
                 result = operands[0] is not null;
                 return true;
 
-            case "generic_box_alloc":
-                result = Allocate(new GenericBox((MetadataModel)operands[0]!));
+            // A type parameter's value is held as the value of the type it
+            // is: an address seen as another type is the same storage, and a
+            // value's own storage is the value.
+            case "opaque_cast":
+                result = operands[0];
                 return true;
-            case "generic_box_project":
-                result = new BoxedValue(Alive((GenericBox)operands[0]!));
+            case "opaque_address":
+                result = new Held(operands[0]);
                 return true;
-            // A boxed value written out, by its type's describer.
+            // Written out by its type's describer.
             case "generic_describe": {
-                var box = Alive((GenericBox)operands[0]!);
-                if (!module.Describers.TryGetValue(box.Type.Type.ToString(), out var describer) || module.Find(describer.Function) is not { } describe) {
-                    throw new SilTrap($"a '{box.Type.Described.Name}' with no description");
+                var type = (MetadataModel)operands[1]!;
+                if (!module.Describers.TryGetValue(type.Type.ToString(), out var describer) || module.Find(describer.Function) is not { } describe) {
+                    throw new SilTrap($"a '{type.Described.Name}' with no description");
                 }
 
-                result = Call(describe, [box], depth + 1);
+                result = Call(describe, [operands[0], type], depth + 1);
                 return true;
             }
-            case "generic_box_type": {
-                var box = Alive((GenericBox)operands[0]!);
-                result = box.Type.Type is ClassType && box.Value is HeapObject held ? MetadataOf(Alive(held).Type) : box.Type;
+            case "opaque_type": {
+                var type = (MetadataModel)operands[1]!;
+                result = type.Type is ClassType && operands[0] is HeapObject held ? MetadataOf(Alive(held).Type) : type;
                 return true;
             }
-            case "generic_box_make_unique": {
-                var slot = (IReference)operands[0]!;
-                var box = Alive((GenericBox)slot.Get()!);
-                if (box is { Strong: 1, Immortal: false }) {
-                    return true;
-                }
+        }
 
-                var copy = Allocate(new GenericBox(box.Type));
-                Retain(box.Type.Type, box.Value);
-                copy.Value = box.Value;
-                slot.Set(copy);
-                Release(SilType.Box, box, depth);
-                return true;
-            }
+        // The table of a protocol the table's refines: as the registry finds it for the conformer.
+        if (builtin.Name.StartsWith("witness_base:", StringComparison.Ordinal)) {
+            var table = (SilWitnessTable)operands[0]!;
+            var index = int.Parse(builtin.Name["witness_base:".Length..], System.Globalization.CultureInfo.InvariantCulture);
+            result = module.FindWitnessTable(table.Conformer, table.Bases[index]) ?? WitnessTableOf(table.Conformer, table.Bases[index]);
+            return true;
         }
 
         if (builtin.Name.StartsWith("witness_generic:", StringComparison.Ordinal)) {
@@ -275,6 +294,14 @@ public sealed partial class SilInterpreter {
 
         if (builtin.Name.StartsWith("witness_table:", StringComparison.Ordinal)) {
             result = WitnessTableOf(((MetadataModel)operands[0]!).Type, builtin.Name["witness_table:".Length..]);
+            return true;
+        }
+
+        // A table code that knows the type refers to: the one made for it, else the registry's.
+        if (builtin.Name.StartsWith("witness_table_known:", StringComparison.Ordinal)) {
+            var type = ((MetadataModel)operands[0]!).Type;
+            var protocol = builtin.Name["witness_table_known:".Length..];
+            result = module.FindWitnessTable(type, protocol) ?? WitnessTableOf(type, protocol);
             return true;
         }
 

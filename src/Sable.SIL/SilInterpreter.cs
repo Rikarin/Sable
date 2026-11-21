@@ -429,6 +429,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         }
 
         switch (type, value) {
+            case (OpaqueType opaque, _):
+                Retain(OpaqueTypeOf(opaque), value);
+                return;
+
             case (WeakStorageType, WeakEntry entry):
                 entry.Count++;
                 return;
@@ -518,6 +522,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         }
 
         switch (type, value) {
+            case (OpaqueType opaque, _):
+                Release(OpaqueTypeOf(opaque), value, depth, uncounted);
+                return;
+
             case (ThickFunctionType, ClosureValue closure):
                 Release(SilType.Object, closure.Context, depth);
                 return;
@@ -631,11 +639,6 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     Release(array.Type.Element, element, depth);
                 }
 
-                break;
-
-            // A generic box destroys its value by its type's value witness.
-            case GenericBox box:
-                Release(box.Type.Type, box.Value, depth);
                 break;
 
             // A region destroys what was allocated in it, last first.
@@ -912,6 +915,18 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         }
 
         SilInstruction? current = null;
+
+        // Unspecialised code's values are copied and destroyed as the metadata it is given says.
+        var outer = _opaqueTypes;
+        if (OpaqueParametersOf(function) is { Length: > 0 } opaque) {
+            _opaqueTypes = [];
+            foreach (var (index, name) in opaque) {
+                if (index < arguments.Count && arguments[index] is MetadataModel model) {
+                    _opaqueTypes[name] = model;
+                }
+            }
+        }
+
         try {
             return Run(function, arguments, depth, ref current);
         } catch (SilTrap trap) when (trap is { Site: null, Located: true }) {
@@ -920,6 +935,8 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             trap.Site = current?.TrapSite(function);
 
             throw;
+        } finally {
+            _opaqueTypes = outer;
         }
     }
 

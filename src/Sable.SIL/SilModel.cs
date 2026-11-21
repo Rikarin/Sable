@@ -105,15 +105,6 @@ public abstract class SilType : IEquatable<SilType> {
     /// </summary>
     public static readonly SilType WitnessTable = new ScalarType("WitnessTable");
 
-    /// <summary>
-    ///     A value of a type unspecialised generic code knows only by its
-    ///     metadata (#297): a counted box holding the metadata and the value,
-    ///     sized at run time. Copying the value shares the box; the value's
-    ///     own value witnesses copy it when it must be changed and the box is
-    ///     shared, and destroy it with the last reference.
-    /// </summary>
-    public static readonly SilType Box = new ScalarType("Box", trivial: false);
-
     /// <summary><c>()</c>: no value. What a function that returns nothing returns.</summary>
     public static readonly SilType Unit = new ScalarType("()");
 
@@ -135,7 +126,43 @@ public abstract class SilType : IEquatable<SilType> {
     public override int GetHashCode() => ToString().GetHashCode(StringComparison.Ordinal);
 
     public static bool operator ==(SilType? a, SilType? b) => a?.Equals(b) ?? b is null;
+
+    /// <summary>
+    ///     Whether two types are the same but for which type parameter each
+    ///     <see cref="OpaqueType" /> in them names: how a call's arguments
+    ///     match a callee's parameters, whose opaque types are its own.
+    /// </summary>
+    public static bool SameErasingOpaque(SilType a, SilType b) =>
+        a == b || ErasedOpaque(a.ToString()) == ErasedOpaque(b.ToString());
+
+    static string ErasedOpaque(string text) =>
+        text.Contains("@opaque(", StringComparison.Ordinal) ? System.Text.RegularExpressions.Regex.Replace(text, @"@opaque\([^)]*\)", "@opaque") : text;
+
+    /// <summary>True when the type is, or holds, an <see cref="OpaqueType" />.</summary>
+    public static bool MentionsOpaque(SilType type) => type.ToString().Contains("@opaque(", StringComparison.Ordinal);
     public static bool operator !=(SilType? a, SilType? b) => !(a == b);
+}
+
+/// <summary>
+///     <c>@opaque(T)</c>: a value of a type unspecialised generic code knows
+///     only by its metadata (#297, docs/06 §6.2) — the metadata the function
+///     it is in is given as its parameter <c>$metadata.T</c>. Its size is
+///     known only at run time, so it is held indirectly: natively a value
+///     of it is the address of a buffer of the metadata's size in the
+///     caller's or the function's frame, and copying, moving and destroying
+///     one go through the metadata's value witnesses. A parameter of it is
+///     borrowed, the caller's storage; a result of it is written to an
+///     address the caller passes (<c>$*@opaque(T)</c>).
+/// </summary>
+/// <remarks>
+///     Its name says only where its metadata is in the function at hand: at
+///     a call, a callee's <c>@opaque(T)</c> takes a caller's <c>@opaque(U)</c>,
+///     as <see cref="SilType.SameErasingOpaque" /> compares them.
+/// </remarks>
+public sealed class OpaqueType(string name) : SilType {
+    public string Name { get; } = name;
+    public override bool IsTrivial => false;
+    public override string ToString() => $"@opaque({Name})";
 }
 
 public sealed class ScalarType(string name, bool trivial = true) : SilType {
@@ -1435,6 +1462,13 @@ public sealed class SilFunction(string name, FunctionType type) {
     public List<string> ParameterNames { get; } = [];
 
     /// <summary>
+    ///     True for code that takes a type parameter's metadata
+    ///     (<c>$metadata.T</c>, #297): its <see cref="OpaqueType" />s are sized
+    ///     and copied by it, so its body means nothing inlined into another.
+    /// </summary>
+    public bool IsUnspecialised => ParameterNames.Exists(static n => n.StartsWith("$metadata.", StringComparison.Ordinal));
+
+    /// <summary>
     ///     The blocks within the function's body that a debugger tells apart,
     ///     so that a name shadowed in one shows only there; scope <c>n</c> of
     ///     a <see cref="SilLocation" /> is the <c>n</c>-th.
@@ -2097,19 +2131,18 @@ public static class SilBuiltins {
             case "witness_table_exists" when operands is [var table] && table == SilType.WitnessTable:
                 return new([SilType.WitnessTable], SilType.Bool);
 
-            // Generic boxes (#297): a new one for a value of the type, the
-            // address of the value it holds, the type it holds, and the box
-            // in a slot made the slot's own before its value is changed.
-            case "generic_box_alloc" when operands is [var m] && m == metadata:
-                return new([metadata], SilType.Box);
-            case "generic_box_project" when operands is [var box] && box == SilType.Box && result is AddressType:
-                return new([SilType.Box], result);
-            case "generic_box_type" when operands is [var box] && box == SilType.Box:
-                return new([SilType.Box], metadata);
-            case "generic_box_make_unique" when operands is [AddressType { Pointee: var held } slot] && held == SilType.Box:
-                return new([slot], SilType.Unit);
-            case "generic_describe" when operands is [var described] && described == SilType.Box:
-                return new([SilType.Box], SilType.String);
+            // Unspecialised code's values (#297): an address seen as holding
+            // a type parameter's value or the type it is; a borrowed value's
+            // own storage, seen as the type it is; its dynamic type, given its
+            // metadata; and it written out, by its type's describer.
+            case "opaque_cast" when operands is [AddressType from] && result is AddressType to && (SilType.MentionsOpaque(from) || SilType.MentionsOpaque(to)):
+                return new([from], to);
+            case "opaque_address" when operands is [OpaqueType value] && result is AddressType:
+                return new([value], result);
+            case "opaque_type" when operands is [OpaqueType value, var m] && m == metadata:
+                return new([value, metadata], metadata);
+            case "generic_describe" when operands is [OpaqueType described, var m] && m == metadata:
+                return new([described, metadata], SilType.String);
         }
 
         // A requirement's witness in the generic calling convention, and an associated type's metadata.
@@ -2121,8 +2154,13 @@ public static class SilBuiltins {
             return operands is [var table] && table == SilType.WitnessTable ? new([SilType.WitnessTable], metadata) : null;
         }
 
-        if (name.StartsWith("witness_table:", StringComparison.Ordinal)) {
+        if (name.StartsWith("witness_table:", StringComparison.Ordinal) || name.StartsWith("witness_table_known:", StringComparison.Ordinal)) {
             return operands is [var m] && m == metadata ? new([metadata], SilType.WitnessTable) : null;
+        }
+
+        // The table of a protocol a table's protocol refines, the index-th it names.
+        if (name.StartsWith("witness_base:", StringComparison.Ordinal)) {
+            return operands is [var table] && table == SilType.WitnessTable ? new([SilType.WitnessTable], SilType.WitnessTable) : null;
         }
 
         if (name.StartsWith("witness_entry:", StringComparison.Ordinal)) {

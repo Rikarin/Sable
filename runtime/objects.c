@@ -82,9 +82,14 @@ typedef struct SableWitnessTable {
     const SableAssociatedConformance *associated_conformances;
     // The requirements the protocol itself declares, in declaration order,
     // in the generic calling convention unspecialised code calls them in
-    // (#297): each given the arguments, the value's box, and Self's metadata.
+    // (#297): each given self and the arguments where the caller holds them,
+    // where a result of Self goes, and Self's metadata.
     int64_t generic_count;
     void *const *generic_requirements;
+    // The conformer's tables of the protocols this one refines directly, in
+    // the order it names them: how unspecialised code reaches them.
+    int64_t base_count;
+    const struct SableWitnessTable *const *bases;
 } SableWitnessTable;
 
 // That a type conforms to a protocol: the record a dynamic cast looks up,

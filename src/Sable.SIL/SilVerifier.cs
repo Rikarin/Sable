@@ -202,6 +202,13 @@ public static partial class SilVerifier {
         return errors;
     }
 
+    /// <summary>A call's arguments against its callee's parameters: a callee's opaque types are its own (<see cref="OpaqueType" />).</summary>
+    sealed class OpaqueErased : IEqualityComparer<SilType> {
+        public static readonly OpaqueErased Instance = new();
+        public bool Equals(SilType? x, SilType? y) => x is not null && y is not null && SilType.SameErasingOpaque(x, y);
+        public int GetHashCode(SilType obj) => 0;
+    }
+
     static string? TypeError(SilInstruction instruction, SilFunction function, SilModule? module) {
         static string Types(IEnumerable<SilValue> values) => string.Join(", ", values.Select(static v => v.Type));
 
@@ -415,7 +422,7 @@ public static partial class SilVerifier {
                     return "try_apply needs a throwing function; call others with apply";
                 }
 
-                if (!tryApply.Arguments.Select(static a => a.Type).SequenceEqual(callee.Parameters)) {
+                if (!tryApply.Arguments.Select(static a => a.Type).SequenceEqual(callee.Parameters, OpaqueErased.Instance)) {
                     return $"try_apply passes ({Types(tryApply.Arguments)}) to {callee}";
                 }
 
@@ -446,7 +453,7 @@ public static partial class SilVerifier {
                     return "apply of a throwing function; it needs try_apply";
                 }
 
-                if (!apply.Arguments.Select(static a => a.Type).SequenceEqual(callee.Parameters)) {
+                if (!apply.Arguments.Select(static a => a.Type).SequenceEqual(callee.Parameters, OpaqueErased.Instance)) {
                     return $"apply passes ({Types(apply.Arguments)}) to {callee}";
                 }
 

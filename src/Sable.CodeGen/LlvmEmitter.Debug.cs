@@ -363,7 +363,7 @@ public sealed partial class LlvmEmitter {
                     return Typedef("String", Pointer(body));
                 }
 
-                case var _ when type == SilType.Object || type == SilType.Region || type == SilType.Metadata || type == SilType.WitnessTable || type == SilType.Box:
+                case var _ when type == SilType.Object || type == SilType.Region || type == SilType.Metadata || type == SilType.WitnessTable || type is OpaqueType:
                     return Typedef(type.ToString(), Pointer(ObjectHeader));
 
                 case AddressType address:

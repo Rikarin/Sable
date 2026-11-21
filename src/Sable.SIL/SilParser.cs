@@ -270,7 +270,7 @@ public sealed class SilParser {
                 }
 
                 var name = (at == i + 2 ? "$" : "") + _tokens[at].Text;
-                if (module.FindType(name) is not null || name is "Int" or "Bool" or "F64" or "String" or "Char" or "Object" or "Region" or "Box") {
+                if (module.FindType(name) is not null || name is "Int" or "Bool" or "F64" or "String" or "Char" or "Object" or "Region") {
                     throw new SilParseException($"the type {name} is declared twice", _tokens[at].Line);
                 }
 
@@ -366,6 +366,8 @@ public sealed class SilParser {
                 var index = Count("an associated type's index");
                 Expect(":");
                 table.AssociatedConformances.Add((index, Expect(TokenKind.String, "a protocol's name").Text));
+            } else if (Accept("base")) {
+                table.Bases.Add(Expect(TokenKind.String, "a protocol's name").Text);
             } else if (Accept("generic")) {
                 var requirement = Expect(TokenKind.String, "a requirement's name").Text;
                 Expect(":");
@@ -725,6 +727,16 @@ public sealed class SilParser {
                 : throw Error("@sil_unowned needs a class");
         }
 
+        // '@opaque(T)': a value of the type parameter whose metadata is '$metadata.T'.
+        if (Current is { Kind: TokenKind.Global, Text: "opaque" }) {
+            Next();
+            Expect("(");
+            var parameter = Current.Text;
+            Next();
+            Expect(")");
+            return new OpaqueType(parameter);
+        }
+
         if (Current is { Kind: TokenKind.Global, Text: "thick" }) {
             Next();
             return ParseTypeBody() is FunctionType signature
@@ -815,7 +827,6 @@ public sealed class SilParser {
             "Region" => SilType.Region,
             "Metadata" => SilType.Metadata,
             "WitnessTable" => SilType.WitnessTable,
-            "Box" => SilType.Box,
             _ when SilType.Numbers.FirstOrDefault(n => n.ToString() == name) is { } number => number,
             _ => _module.FindType(name) ?? throw Error($"unknown type '{name}'"),
         };

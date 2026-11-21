@@ -221,14 +221,14 @@ public sealed partial class SilGen {
 
             var type = Sub(argument.Type);
 
-            // A box: the type it holds.
-            if (IsOpaqueHere(type)) {
-                if (Borrow(argument) is not { } box) {
+            // A type parameter's value: its metadata, or for an object, its own class's.
+            if (IsOpaqueHere(type) && type is TypeParameterSymbol parameter) {
+                if (Borrow(argument) is not { } given) {
                     return null;
                 }
 
-                var held = Emit(new BuiltinInst("generic_box_type", SilType.Metadata, box));
-                End(box);
+                var held = Emit(new BuiltinInst("opaque_type", SilType.Metadata, given, _genericMetadata[parameter]));
+                End(given);
                 return held;
             }
 

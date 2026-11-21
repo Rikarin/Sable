@@ -1180,7 +1180,8 @@ print(t)                               // Zoo.Dog
 
 A `Type` reaches no static member of the type it holds, and does not
 convert back to a `T.Type`: what it holds is not known where the code is
-compiled. For the same reason a cast is never to one — `x is t` with `t` a
+compiled — but it can be given to a generic function's `T.Type`, which
+opens it ("Opening a type", below). For the same reason a cast is never to one — `x is t` with `t` a
 value is S3098. A value is tested against a type known at run time with
 `t.isInstance(x)`, and two types with `t.isSubtype(of: u)`: true for the
 same type, a subclass of a class (by its chain of superclasses), and a type
@@ -1193,6 +1194,71 @@ let wanted: Type = (any Named).self
 let named = wanted.isInstance(animal)  // whether Dog conforms to Named
 let sub = Dog.self.isSubtype(of: Animal.self)
 ```
+
+### Opening a type
+
+A `Type` given where a generic function takes `T.Type` **opens** it, as
+Swift opens an existential metatype (SE-0352): `T` is the type the value
+holds when the program runs. Nothing is written at the call — the opening
+is implicit, and happens only when no other argument says what `T` is.
+
+```sable
+protocol Zero { static fn zero() -> Self }
+fn make<T: Zero>(_ type: T.Type) -> T { return T.zero() }
+fn name<T>(_ type: T.Type) -> String { return "\(T.self)" }
+
+let types: [String: Type] = ["meters": Meters.self, "label": Label.self]
+let made = make(types["meters"]!)    // an 'any Zero', holding a Meters
+let n = name(type(of: animal))       // "Zoo.Dog"
+```
+
+The callee runs compiled once for every type (docs/06 §6.2), given the
+value's metadata as `T`'s, in a specialised build as in an unspecialised
+one; the opening argument is evaluated before the others. For each protocol
+`T` must conform to, the conformance registry is asked for the type's
+witness table: a type that does not conform is a **trap**, naming the type
+and the protocol (`'Zoo.Rock' does not conform to 'Zoo.Zero'`), as `as!`
+is. Test it first with `isSubtype(of:)` to choose another way:
+
+```sable
+if t.isSubtype(of: (any Zero).self) {
+    let made = make(t)
+} else {
+    print("\(t) has no zero")
+}
+```
+
+What the call gives back is what code that does not know `T` can hold: a
+result of `T` is erased to the existential of `T`'s protocols (`any Zero`,
+`any Zero & Named`); a result of `T.Type` is a `Type`; one that does not
+mention `T` is as it is. So that the call is sound:
+
+- `T` may be constrained only to protocols that are not generic — not to a
+  class, nor to `Producer<Int>` (S3162);
+- no other parameter may be of `T` or a type made of it, since nothing at
+  the call has a value of a type known only at run time, nor may a `where`
+  clause make `T` another type (S3162);
+- a result or an error that mentions `T` in any other way (`T?`, `T[]`,
+  `Box<T>`, `throws(T)`), or a `T` with no protocol to erase it to, is
+  S3163;
+- a callee that is copied for each type rather than compiled once (S3164,
+  which says what in its body keeps it so) cannot be opened.
+
+Inside, `T` is a type like any other: `T[].self`, `T?.self` and
+`Box<T>.self` are types made at run time from the one opened, equal to
+the same types written out (`Label[].self`), and `T[>..]` an array of its
+values. That is how a generic type is made for a type known only at run
+time:
+
+```sable
+fn arrayOf<T>(_ type: T.Type) -> Type { return T[].self }
+let rows = arrayOf(t)                // [Zoo.Row] when t holds Zoo.Row
+```
+
+The registry knows the conformances of the types a program declares; a
+call that opens a Type makes their tables, and how to box them, for every
+such type that conforms to `T`'s protocols. A generic type made only at
+run time is not among them, and opening it as a constrained `T` traps.
 
 ### Member access and optionals
 

@@ -432,6 +432,14 @@ public sealed class TypeParameterSymbol(
     /// </summary>
     public OpaqueTypeSymbol? OpaqueParameter { get; init; }
 
+    /// <summary>
+    ///     For the type a call opens a <c>Type</c> as (SYNTAX.md "Opening a
+    ///     type", #297): the callee's type parameter it is bound to, whose
+    ///     constraints it has. It stands for the one type the value holds at
+    ///     run time, known to the call alone. Null for any other parameter.
+    /// </summary>
+    public TypeParameterSymbol? OpenedFrom { get; init; }
+
     /// <summary>Variance, from <c>out T</c> or <c>in T</c>.</summary>
     public VarianceKind Variance { get; internal set; } = VarianceKind.None;
 

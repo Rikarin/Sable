@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using Sable.Driver.Commands;
 
 namespace Sable.CodeGen.Tests;
@@ -15,7 +16,7 @@ namespace Sable.CodeGen.Tests;
 ///     an x64 container emulated on arm64, where nothing can be traced.
 ///     Without them every test passes vacuously.
 /// </remarks>
-public sealed class DebuggerFormatterTests {
+public sealed partial class DebuggerFormatterTests {
     const string Values = """
                           module Values
                           import Sable.Collections
@@ -744,8 +745,19 @@ public sealed class DebuggerFormatterTests {
             var errors = await process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
             var text = await output;
-            Assert.True(process.ExitCode == 0, text + errors);
-            Assert.Contains("No errors.", text, StringComparison.Ordinal);
+
+            // A function --gc-sections dropped keeps its debug entry, its
+            // range resolved by the linker to address 0 (GNU ld writes 0
+            // where lld writes a tombstone), so dead ranges overlap at 0.
+            // That is the linker's, not the DWARF's: every other error fails.
+            var real = text.Split('\n').Where(static l => l.Contains("error:", StringComparison.Ordinal)
+                && !DeadRangesAtZero().IsMatch(l)).ToList();
+            Assert.True(real.Count == 0, text + errors);
+            if (process.ExitCode != 0) {
+                Assert.True(OperatingSystem.IsLinux(), text + errors);
+            } else {
+                Assert.Contains("No errors.", text, StringComparison.Ordinal);
+            }
         } finally {
             directory.Delete(true);
         }
@@ -760,4 +772,8 @@ public sealed class DebuggerFormatterTests {
             }
         }
     }
+
+    /// <summary>A verifier error about ranges that both start at address 0: those of functions the linker dropped.</summary>
+    [GeneratedRegex(@"overlapping ranges in DW_AT_ranges attribute: \[0x0+, 0x[0-9a-f]+\) and \[0x0+, 0x[0-9a-f]+\)")]
+    private static partial Regex DeadRangesAtZero();
 }

@@ -183,3 +183,66 @@ fn theValueWitnessesCopyMoveAssignAndDestroy() {
     m.destroyCopy(of: p)
     assertEqual(p.name, "ab")
 }
+
+// Opening a Type (spec/SYNTAX.md "Opening a type"): a Type given for a
+// generic function's 'T.Type' binds T to the type it holds at run time.
+
+protocol Unit {
+    static fn unit() -> Self
+    fn label() -> String
+}
+
+struct Metre: Unit {
+    var count: Int
+    static fn unit() -> Metre { return Metre { count: 1 } }
+    fn label() -> String { return "\(count) m" }
+}
+
+struct Second: Unit {
+    var count: Int
+    static fn unit() -> Second { return Second { count: 1 } }
+    fn label() -> String { return "\(count) s" }
+}
+
+struct Holder<T> {
+    var item: T
+}
+
+fn unitOf<T: Unit>(_ type: T.Type) -> T {
+    return T.unit()
+}
+
+fn nameOf<T>(_ type: T.Type) -> String {
+    return "\(T.self)"
+}
+
+fn arrayTypeOf<T>(_ type: T.Type) -> Type {
+    return T[].self
+}
+
+fn holderTypeOf<T>(_ type: T.Type) -> Type {
+    return Holder<T>.self
+}
+
+@test
+fn aTypeFromADictionaryOpensAGenericFunction() {
+    let units: [String: Type] = ["length": Metre.self, "time": Second.self]
+    assertEqual(unitOf(units["length"]!).label(), "1 m")
+    assertEqual(unitOf(units["time"]!).label(), "1 s")
+}
+
+@test
+fn anExistentialsDynamicTypeOpensAsItsOwnType() {
+    let held: any Unit = Second { count: 5 }
+    let made = unitOf(type(of: held))
+    assert(type(of: made) == Second.self)
+    assertEqual(nameOf(type(of: held)), "TypeTests.Second")
+}
+
+@test
+fn aGenericTypeIsMadeForATypeKnownAtRunTime() {
+    let t: Type = Metre.self
+    assert(arrayTypeOf(t) == Metre[].self)
+    assert(holderTypeOf(t) == Holder<Metre>.self)
+    assertEqual(holderTypeOf(t).name, "TypeTests.Holder<TypeTests.Metre>")
+}

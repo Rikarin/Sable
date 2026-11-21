@@ -304,6 +304,27 @@ public sealed partial class LlvmEmitter {
         return "@\"sable.classes.register\"";
     }
 
+    /// <summary>
+    ///     A constructor that hands the runtime each boxer the module made,
+    ///     with its type's metadata (<c>sable_register_boxer</c>): what
+    ///     <c>sable_opaque_box</c> boxes a result of a type a call opened a
+    ///     Type as with (#297 stage 6). Null for none reached.
+    /// </summary>
+    string? BoxerRegistration(SilModule module) {
+        var boxers = module.Boxers.Values.Where(d => _reachable?.Contains(d.Function) != false && module.Find(d.Function) is not null).ToList();
+        if (boxers.Count == 0) {
+            return null;
+        }
+
+        var body = new StringBuilder("define internal void @\"sable.boxers.register\"() {\nentry:\n");
+        foreach (var (type, function) in boxers) {
+            body.Append($"  call void @sable_register_boxer(ptr {TypeMetadataGlobal(type)}, ptr @{Global(function)})\n");
+        }
+
+        _helpers.Append(body.Append("  ret void\n}\n\n"));
+        return "@\"sable.boxers.register\"";
+    }
+
     string? WitnessRegistration(SilModule module) {
         if (module.Unit is null || module.WitnessTables.Count == 0) {
             return null;
@@ -430,6 +451,11 @@ public sealed partial class LlvmEmitter {
                                         declare void @sable_register_debug_describer(ptr, ptr)
                                         declare ptr @sable_opaque_erase_error(ptr, ptr)
                                         declare void @sable_register_error_eraser(ptr, ptr)
+                                        declare ptr @sable_opaque_alloc(ptr)
+                                        declare ptr @sable_opaque_box(ptr, ptr)
+                                        declare void @sable_opaque_free(ptr)
+                                        declare void @sable_register_boxer(ptr, ptr)
+                                        declare ptr @sable_witness_table_required(ptr, ptr)
                                         declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
                                         declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
 
@@ -635,6 +661,17 @@ public sealed partial class LlvmEmitter {
                 case "opaque_erase_error":
                     Line($"{Result()} = call ptr @sable_opaque_erase_error(ptr {operands[0]}, ptr {OpaqueMetadata(builtin.Operands[0].Type)})");
                     return true;
+                // A call that opens a Type: a result's buffer, its box, and the buffer let go.
+                case "opaque_alloc":
+                    Line($"{Result()} = call ptr @sable_opaque_alloc(ptr {operands[0]})");
+                    return true;
+                case "opaque_box":
+                    SiteForRuntime();
+                    Line($"{Result()} = call ptr @sable_opaque_box(ptr {operands[0]}, ptr {operands[1]})");
+                    return true;
+                case "opaque_free":
+                    Line($"call void @sable_opaque_free(ptr {operands[0]})");
+                    return true;
                 case "generic_describe":
                     SiteForRuntime();
                     Line($"{Result()} = call ptr @sable_opaque_describe(ptr {operands[0]}, ptr {operands[1]})");
@@ -699,6 +736,13 @@ public sealed partial class LlvmEmitter {
             if (builtin.Name.StartsWith("witness_associated:", StringComparison.Ordinal)) {
                 var index = int.Parse(builtin.Name["witness_associated:".Length..], CultureInfo.InvariantCulture);
                 Line($"{Result()} = {TableEntry(operands[0], 4, index)}");
+                return true;
+            }
+
+            // The registry's table of a type a call opened a Type as: a trap when it does not conform.
+            if (builtin.Name.StartsWith("witness_table_required:", StringComparison.Ordinal)) {
+                SiteForRuntime();
+                Line($"{Result()} = call ptr @sable_witness_table_required(ptr {operands[0]}, ptr {module.ProtocolDescriptor(builtin.Name["witness_table_required:".Length..])})");
                 return true;
             }
 

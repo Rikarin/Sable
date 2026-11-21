@@ -166,6 +166,7 @@ public static class SilPassManager {
         var describing = new HashSet<bool>();
         var debugDescribing = new HashSet<bool>();
         var erasing = new HashSet<bool>();
+        var boxing = new HashSet<bool>();
         while (pending.Count > 0) {
             var name = pending.Pop();
             if (!reached.Add(name) || module.Find(name) is not { } function) {
@@ -221,6 +222,13 @@ public static class SilPassManager {
                     case BuiltinInst { Name: "opaque_erase_error" } when erasing.Add(true):
                         foreach (var (_, (_, eraser)) in module.ErrorErasers) {
                             pending.Push(eraser);
+                        }
+
+                        break;
+
+                    case BuiltinInst { Name: "opaque_box" } when boxing.Add(true):
+                        foreach (var (_, (_, boxer)) in module.Boxers) {
+                            pending.Push(boxer);
                         }
 
                         break;

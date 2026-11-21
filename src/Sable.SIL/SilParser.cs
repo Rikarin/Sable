@@ -333,6 +333,13 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_boxer")) {
+                var boxed = ParseType();
+                Expect("=");
+                module.Boxers[boxed.ToString()] = (boxed, Expect(TokenKind.Global, "a boxer's name").Text);
+                continue;
+            }
+
             if (Accept("sil_describer")) {
                 var described = ParseType();
                 Expect("=");

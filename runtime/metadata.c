@@ -395,6 +395,92 @@ void *sable_opaque_erase_error(void *value, const SableTypeMetadata *type) {
     return boxed;
 }
 
+// ---- Opening a Type (#297 stage 6) -------------------------------------------
+
+// A call that opens a Type runs generic code compiled once with the type's
+// metadata, and asks the registry for the tables of its conformances: a
+// type that does not conform is a trap, naming both.
+const SableWitnessTable *sable_witness_table_required(const SableTypeMetadata *type, const SableProtocol *protocol) {
+    const SableWitnessTable *table = sable_witness_table(type, protocol);
+    if (table == NULL) {
+        char message[512];
+        snprintf(message, sizeof message, "'%s' does not conform to '%s'", type->name == NULL ? "?" : type->name,
+                 protocol->name == NULL ? "?" : protocol->name);
+        trap_here(message);
+    }
+
+    return table;
+}
+
+// Where such a call's result of the opened type is written: a buffer the
+// metadata sizes, all zeros, let go by sable_opaque_box or, when the call
+// throws, sable_opaque_free.
+void *sable_opaque_alloc(const SableTypeMetadata *type) {
+    void *buffer = calloc(1, type->size > 0 ? (size_t)type->size : 1);
+    if (buffer == NULL) {
+        sable_trap("out of memory");
+    }
+
+    return buffer;
+}
+
+void sable_opaque_free(void *buffer) {
+    free(buffer);
+}
+
+// What boxes a value of each type such a call may erase a result of as an
+// existential: registered by each image as it starts, as describers are. The
+// boxer copies the value into the box an existential keeps a value of its
+// type in; the value, which the call takes, is then destroyed, and its
+// buffer let go.
+typedef void *(*SableBoxer)(void *value, const SableTypeMetadata *type);
+
+static struct {
+    const SableTypeMetadata *type;
+    SableBoxer box;
+} *boxers;
+static int64_t boxer_count, boxer_capacity;
+
+void sable_register_boxer(const SableTypeMetadata *type, SableBoxer box) {
+    if (boxer_count == boxer_capacity) {
+        boxer_capacity = boxer_capacity == 0 ? 16 : boxer_capacity * 2;
+        boxers = realloc(boxers, (size_t)boxer_capacity * sizeof *boxers);
+        if (boxers == NULL) {
+            sable_trap("out of memory");
+        }
+    }
+
+    boxers[boxer_count].type = type;
+    boxers[boxer_count].box = box;
+    boxer_count++;
+}
+
+void *sable_opaque_box(void *buffer, const SableTypeMetadata *type) {
+    SableBoxer box = NULL;
+    for (int64_t i = 0; i < boxer_count && box == NULL; i++) {
+        if (boxers[i].type == type) {
+            box = boxers[i].box;
+        }
+    }
+
+    for (int64_t i = 0; i < boxer_count && box == NULL; i++) {
+        if (sable_metadata_equal(boxers[i].type, type)) {
+            box = boxers[i].box;
+        }
+    }
+
+    if (box == NULL) {
+        char message[512];
+        snprintf(message, sizeof message, "a '%s' with no way to box it as an existential", type->name == NULL ? "?" : type->name);
+        trap_here(message);
+    }
+
+    void *boxed = box(buffer, type);
+    type->witnesses->destroy(buffer, type);
+    free(buffer);
+    return boxed;
+}
+
 // A call's cache of the registry's answer for the type it was first asked
 // about (#297): the first table found is kept, once, and read without a
 // lock; a call asked about another type asks the registry. Null is not kept,

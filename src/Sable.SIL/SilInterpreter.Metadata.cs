@@ -417,6 +417,24 @@ public sealed partial class SilInterpreter {
                 Release(type.Type, operands[0], depth);
                 return true;
             }
+            // A call that opens a Type: a result's buffer, the result boxed by
+            // its type's boxer (taken, the buffer let go), and the buffer let go.
+            case "opaque_alloc":
+                result = new Slot();
+                return true;
+            case "opaque_box": {
+                var type = (MetadataModel)operands[1]!;
+                if (!module.Boxers.TryGetValue(type.Type.ToString(), out var boxer) || module.Find(boxer.Function) is not { } box) {
+                    throw new SilTrap($"a '{type.Described.Name}' with no way to box it as an existential");
+                }
+
+                var value = ((IReference)operands[0]!).Get();
+                result = Call(box, [value, type], depth + 1);
+                Release(type.Type, value, depth);
+                return true;
+            }
+            case "opaque_free":
+                return true;
             case "opaque_type": {
                 var type = (MetadataModel)operands[1]!;
                 result = type.Type is ClassType && operands[0] is HeapObject held ? MetadataOf(Alive(held).Type) : type;
@@ -453,6 +471,14 @@ public sealed partial class SilInterpreter {
 
         if (builtin.Name.StartsWith("witness_table:", StringComparison.Ordinal)) {
             result = WitnessTableOf(((MetadataModel)operands[0]!).Type, builtin.Name["witness_table:".Length..]);
+            return true;
+        }
+
+        // A type a call opened a Type as: the registry's table, or a trap naming both.
+        if (builtin.Name.StartsWith("witness_table_required:", StringComparison.Ordinal)) {
+            var type = (MetadataModel)operands[0]!;
+            var protocol = builtin.Name["witness_table_required:".Length..];
+            result = WitnessTableOf(type.Type, protocol) ?? throw new SilTrap($"'{type.Described.Name}' does not conform to '{protocol}'");
             return true;
         }
 

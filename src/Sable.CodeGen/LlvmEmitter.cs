@@ -115,6 +115,9 @@ public sealed partial class LlvmEmitter {
     string EmitModule(SilModule module) {
         AsyncLowering.Run(module);
         _module = module;
+
+        // A specialised build that opens a Type has code compiled once too, which may make a generic class's object.
+        module.UnspecialisedGenerics |= module.Functions.Exists(static f => f.IsUnspecialised);
         _inherited = null;
         TypeLayout.PointerBytes = _arch == "wasm32" ? 4 : 8;
         _checkExclusivity = module.CheckExclusivity;
@@ -149,6 +152,10 @@ public sealed partial class LlvmEmitter {
 
         if (GenericClassRegistration(module) is { } classes) {
             constructors.Add(classes);
+        }
+
+        if (BoxerRegistration(module) is { } boxers) {
+            constructors.Add(boxers);
         }
 
         if (module.IsLibrary) {

@@ -80,7 +80,24 @@ public sealed class Specialise(bool forSize = false) : ISilPass {
         // call of which was specialised. Only those, and only from a whole
         // program, whose callers are all here.
         if (module.Unit is null && SilPassManager.Reachable(module) is { } reached) {
-            module.RemoveAll(f => f.IsUnspecialised && !reached.Contains(f.Name));
+            // Whatever is kept keeps what it names: the pass leaves every
+            // other function, a witness thunk the walk did not reach among
+            // them, and such a thunk may call a generic function.
+            var kept = new HashSet<string>(module.Functions.Where(f => !f.IsUnspecialised || reached.Contains(f.Name)).Select(static f => f.Name), StringComparer.Ordinal);
+            var pending = new Stack<string>(kept);
+            while (pending.TryPop(out var name)) {
+                if (module.Find(name) is not { } function) {
+                    continue;
+                }
+
+                foreach (var reference in function.Blocks.SelectMany(static b => b.Instructions).OfType<FunctionRefInst>()) {
+                    if (kept.Add(reference.Function)) {
+                        pending.Push(reference.Function);
+                    }
+                }
+            }
+
+            module.RemoveAll(f => !kept.Contains(f.Name));
         }
     }
 }

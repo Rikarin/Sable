@@ -338,6 +338,7 @@ public sealed class BuildCacheTests {
         fixture.Errors.GetStringBuilder().Clear();
         var binaries = PackageBuilder.Build(fixture.Load(directory), fixture.Environment, new() { Timings = true });
         Assert.True(binaries is [_], fixture.Errors.ToString());
+        Assert.False(fixture.Errors.ToString().Contains("compiling the program whole", StringComparison.Ordinal), fixture.Errors.ToString());
         var report = Regex.Match(fixture.Errors.ToString(), @"Built \w+: (\w+), (\d+) unit\(s\) compiled, (\d+) reused");
         Assert.True(report.Success, fixture.Errors.ToString());
         var (output, exitCode) = PackageFixture.Execute(binaries[0].Path);

@@ -280,7 +280,7 @@ public class BuildCommand : Command {
 
         var cache = Directory.CreateTempSubdirectory("sable-file-");
         try {
-            var outcome = IncrementalBuild.Build([new UnitPlan("main", [new SourceFile(input, Path.GetFileName(options.Input), [])])], settings, Path.GetFullPath(executable), cache.FullName);
+            var outcome = IncrementalBuild.Build([new UnitPlan("main", [new SourceFile(input, Path.GetFileName(options.Input), [])])], settings, Path.GetFullPath(executable), cache.FullName, log: Console.Error);
             Report(outcome.Warnings);
             if (!outcome.Succeeded) {
                 Report(outcome.Errors);

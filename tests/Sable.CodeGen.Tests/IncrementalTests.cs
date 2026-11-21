@@ -164,17 +164,19 @@ public sealed class IncrementalTests {
         ///     whole build of the same sources prints the same; and says what
         ///     the incremental build did.
         /// </summary>
-        public Built Check(BuildRequest? request = null) {
+        /// <param name="fallsBack">The build is meant to give up on its units and compile the program whole; otherwise doing so fails the test, saying why it did.</param>
+        public Built Check(BuildRequest? request = null, bool fallsBack = false) {
             request ??= new();
-            var built = Build(request);
+            var built = Build(request, fallsBack);
             Assert.Equal(Clean(request), built.Output);
             return built;
         }
 
-        public Built Build(BuildRequest request) {
+        public Built Build(BuildRequest request, bool fallsBack = false) {
             Fixture.Errors.GetStringBuilder().Clear();
             var binaries = PackageBuilder.Build(Fixture.Load("app"), Fixture.Environment, request with { Timings = true });
             Assert.True(binaries is [_], Fixture.Errors.ToString());
+            Assert.True(fallsBack || !Fixture.Errors.ToString().Contains("compiling the program whole", StringComparison.Ordinal), Fixture.Errors.ToString());
             var report = Regex.Match(Fixture.Errors.ToString(), @"Built app: (\w+), (\d+) unit\(s\) compiled, (\d+) reused");
             Assert.True(report.Success, Fixture.Errors.ToString());
             var (output, exitCode) = PackageFixture.Execute(binaries[0].Path);
@@ -689,7 +691,7 @@ public sealed class IncrementalTests {
         }
 
         scenario.Edit("app/src/main.sb", "print(survey(shapes))", "print(\"surveyed: \" + survey(shapes))");
-        var built = scenario.Check();
+        var built = scenario.Check(fallsBack: true);
         Assert.Contains("surveyed: areas 3, largest 12", built.Output);
         Assert.Equal("whole", built.Kind);
     }
@@ -786,6 +788,7 @@ public sealed class IncrementalTests {
         var (outcome, log, output) = BuildBaseAndLocal("");
         Assert.Equal("whole", outcome.Kind);
         Assert.Contains("disagree about class T.Base", log);
+        Assert.Equal("the units disagree about class T.Base", outcome.FellBack);
         Assert.Equal("local\nbase\n", output);
     }
 
@@ -802,6 +805,7 @@ public sealed class IncrementalTests {
         }
 
         var (outcome, log, output) = BuildBaseAndLocal("open ");
+        Assert.True(outcome.FellBack is null, outcome.FellBack);
         Assert.Equal(("incremental", 3), (outcome.Kind, outcome.Compiled));
         Assert.DoesNotContain("disagree", log);
         Assert.Equal("local\nbase\n", output);
@@ -975,6 +979,7 @@ public sealed class IncrementalTests {
                 : new BuildSettings("dev", false, directory, true);
             var separate = IncrementalBuild.Build(units, settings, Path.Combine(directory, "separate"), Path.Combine(directory, "cache"), cache: new BuildCache(Path.Combine(directory, "shared")));
             Assert.True(separate.Succeeded, string.Join("\n", separate.Errors));
+            Assert.True(separate.FellBack is null, separate.FellBack);
             Assert.Equal(("incremental", units.Count + 1), (separate.Kind, separate.Compiled));
             var whole = IncrementalBuild.Build(units, settings with { Whole = true }, Path.Combine(directory, "whole"), Path.Combine(directory, "cache"), cache: new BuildCache(Path.Combine(directory, "shared")));
             Assert.True(whole.Succeeded, string.Join("\n", whole.Errors));
@@ -987,6 +992,7 @@ public sealed class IncrementalTests {
                 var timings = new BuildTimings();
                 var again = IncrementalBuild.Build(units, settings, Path.Combine(directory, "separate"), Path.Combine(directory, "cache"), timings, cache: new BuildCache(Path.Combine(directory, "shared")));
                 Assert.True(again.Succeeded, string.Join("\n", again.Errors));
+                Assert.True(again.FellBack is null, again.FellBack);
                 Assert.Equal(("incremental", 1), (again.Kind, again.Compiled));
                 Assert.Equal(units.Count - 1, timings.CountOf("files parsed from interfaces"));
                 Assert.Equal(PackageFixture.Execute(Path.Combine(directory, "whole")), PackageFixture.Execute(Path.Combine(directory, "separate")));

@@ -148,8 +148,10 @@ typedef struct SableTypeMetadata {
   the switch unspecialised generic code will also turn on where it reads a
   generic type's field offsets. A program that never asks pays for none.
 - **Type arguments**: a generic type's instance lists its arguments'
-  metadata — what metadata made at run time will be cached by (#297 stage
-  6); until then each instance a program uses is emitted statically.
+  metadata — what metadata made at run time is cached by (#297 stage 6):
+  an instance code compiled once makes for a type known only at run time
+  is made then, once, and equal to the one emitted statically for the same
+  arguments.
 - **Linkage**: every record is `linkonce_odr` (in a COMDAT on Windows) when
   the program is built in units, as a box's class is, so the linker keeps
   one of each and its address is the type's identity — `Type`'s `==` is a
@@ -555,6 +557,45 @@ arguments stored where unspecialised code takes them, its result taken out
 of a slot); it is lowered once everything pending has been, since the call
 may ask for the very table the thunk is in. Which way a slot goes depends
 on its witness alone, so every unit's copy of a table is the same.
+
+**Opening a Type** (#297 stage 6; SYNTAX.md "Opening a type"). A call
+that gives a `Type` for a generic function's `T.Type` runs the function
+compiled once, the value's metadata as `$metadata.T`. Its tables are the
+registry's: `witness_table_required:M.P` asks `sable_witness_table` for
+each protocol `T` must conform to, and traps with the type's and the
+protocol's names (`sable_witness_table_required`, at the call) when there is
+none. A result of `T` is written to a buffer its metadata sizes, all zeros
+(`opaque_alloc`, `sable_opaque_alloc`), and boxed as the existential of
+`T`'s protocols by the type's **boxer** (`opaque_box`,
+`sable_opaque_box`): a function made where the type is known that copies
+the value into the box an existential keeps one of its type in
+(`any$box$of$T`, so `as? Meters` finds it), registered with the runtime as
+the image starts, as describers and error erasers are; the value in the
+buffer is then destroyed and the buffer freed, or, when the call throws,
+only freed. The existential's slots are the tables' witnesses
+(`witness_entry`), as `as? any Q` makes them. The registry finds only the
+tables a program makes, so a call that opens a Type makes, for every type
+of the program that conforms to `T`'s protocols, its table with its generic
+entries, its boxer when the result is erased, and its describer when the
+callee writes a value out; a type that conforms only by a generic type's
+instance made at run time has none, and traps.
+
+A specialised build compiles generic code once too, from the first call
+that opens a Type: such a call, and the code compiled once it reaches,
+call the callee's `$generic` instance — made from the body in this unit,
+since a specialised library archive has none — while code that knows its
+types still calls the copies made for them. Its tables made from then on
+have their generic entries. A function that only forwards to a requirement,
+otherwise left specialised, is compiled once when a call opens a Type for
+it; one that cannot be is S3164, with what in its body keeps it copied.
+
+Inside such code, a type made of a type parameter as a value — `T[].self`,
+`T?.self`, `(T, Int).self`, `Box<T>.self` — is its metadata made at run
+time from `T`'s (`sable_array_type`, `sable_enum_type`, `sable_tuple_type`,
+`sable_aggregate_type`), cached by its parts, so a generic type is made
+for a type known only at run time. Its name is its parts' names, as the
+metadata of the same type written out has it (`M.Box<M.Label>`, its
+arguments qualified), and `==` holds the two to be one type.
 
 What unspecialised code cannot serve yet — an optional chain through a
 `T?`, a structural union of `T`, a method of a generic class

@@ -238,9 +238,24 @@ Since a `Type`'s type is not known where the code is compiled, it reaches
 no static member, and a cast is never to one (S3098): a value is tested
 against it at run time, `t.isInstance(x)`, by the rule of subtyping below —
 the type itself, a subclass of a class, a type that conforms to each of an
-existential's protocols. Calling a generic function with a `Type` — opening
-it, as Swift opens an existential metatype — is #297's stage 6: the `Type`
-is the metadata unspecialised generic code is given in place of `T`.
+existential's protocols.
+
+A `Type` given for a generic function's `T.Type` **opens** it, as Swift
+opens an existential metatype (SE-0352; SYNTAX.md "Opening a type"): the
+binder binds `T` to an *opened type*, a type parameter of the call's own
+with `T`'s constraints, standing for whatever the value holds when the
+call runs. It is checked as any type parameter is — it conforms to `T`'s
+protocols, and to nothing else — and it may appear nowhere but in the
+opening argument and the result: no other parameter may be of it, a
+`where` clause may not make it another type, and `T`'s constraints must be
+protocols that are not generic (S3162). The result is erased as an
+existential is: `T` to `any P & Q` for `T: P & Q`, `T.Type` to `Type`;
+anything else that mentions `T` is S3163. The call runs the callee
+compiled once, the `Type` its metadata in place of `T`'s, and the
+registry's tables of its conformances, a trap where it does not conform
+(docs/06 §6.2). Swift's explicit spelling of the same, `_openExistential`,
+is not needed: the opening is chosen only where nothing else settles `T`,
+so a call that compiled before means what it meant.
 
 ### Variance
 

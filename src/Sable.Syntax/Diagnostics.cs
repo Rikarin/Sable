@@ -159,6 +159,7 @@ public enum ErrorCode {
     WRN_Deprecated = 3095,
     ERR_NotAvailable = 3096,
     ERR_NotDeeplyImmutable = 3097,
+    ERR_RuntimeTypeInCast = 3098,
     ERR_NotSupportedYet = 3099,
 
     // '@test', '@bench' and '@fuzz' (docs/05 §5.1): what the harness can call.

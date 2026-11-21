@@ -130,7 +130,28 @@ public static class SilPassManager {
             }
         }
 
+        // A witness table's witnesses are reached with its conformer's
+        // metadata: a type made, boxed in an existential, or asked about.
+        var tables = module.WitnessTables.ToLookup(static t => t.Conformer.ToString(), StringComparer.Ordinal);
+        var tabled = new HashSet<string>(StringComparer.Ordinal);
+        void Witnesses(SilType? type) {
+            for (; type is not null && tabled.Add(type.ToString()); type = (type as ClassType)?.Superclass) {
+                foreach (var table in tables[type.ToString()]) {
+                    foreach (var entry in table.Entries) {
+                        pending.Push(entry.Function);
+                    }
+
+                    foreach (var entry in table.GenericEntries) {
+                        if (entry.Function is { } witness) {
+                            pending.Push(witness);
+                        }
+                    }
+                }
+            }
+        }
+
         var made = new HashSet<ClassType>();
+        var describing = new HashSet<bool>();
         while (pending.Count > 0) {
             var name = pending.Pop();
             if (!reached.Add(name) || module.Find(name) is not { } function) {
@@ -155,6 +176,23 @@ public static class SilPassManager {
 
                         foreach (var (_, method) in alloc.ClassType.VTable) {
                             pending.Push(method);
+                        }
+
+                        Witnesses(alloc.ClassType);
+                        if (alloc.ClassType.TypeArguments is [var held] && alloc.ClassType.Name.StartsWith("any$box$of$", StringComparison.Ordinal)) {
+                            Witnesses(held);
+                        }
+
+                        break;
+
+                    case MetadataInst metadata:
+                        Witnesses(metadata.Described);
+                        break;
+
+                    // A boxed value written out: whatever type it is, its describer.
+                    case BuiltinInst { Name: "generic_describe" } when describing.Add(true):
+                        foreach (var (_, (_, describer)) in module.Describers) {
+                            pending.Push(describer);
                         }
 
                         break;

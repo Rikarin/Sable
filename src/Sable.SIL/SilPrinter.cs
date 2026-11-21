@@ -48,13 +48,13 @@ public static class SilPrinter {
                         builder.Append(" deinit @").Append(structDeinit);
                     }
 
-                    builder.Append('\n');
+                    builder.Append(Described(structType)).Append('\n');
                     break;
 
                 case EnumType enumType:
                     builder.Append("sil_enum ").Append(enumType.Name).Append(enumType.IsNoncopyable ? " @noncopy" : "").Append(" { ")
                         .Append(string.Join(", ", enumType.Cases.Select(static c => c.Payload is null ? c.Name : $"{c.Name}(${c.Payload})")))
-                        .Append(" }\n");
+                        .Append(" }").Append(Described(enumType)).Append('\n');
                     break;
 
                 case ClassType classType:
@@ -80,7 +80,7 @@ public static class SilPrinter {
                         builder.Append(" empty_from ").Append(emptyFrom);
                     }
 
-                    builder.Append('\n');
+                    builder.Append(Described(classType)).Append('\n');
                     break;
             }
         }
@@ -109,7 +109,34 @@ public static class SilPrinter {
             builder.Append("sil_export @").Append(name).Append(" = ").Append(Quote(symbol)).Append('\n');
         }
 
-        if ((module.Types.Count > 0 || module.Globals.Count > 0 || module.Foreign.Count > 0 || module.Exports.Count > 0) && module.Functions.Count > 0) {
+        foreach (var (_, (type, function)) in module.Describers.OrderBy(static d => d.Key, StringComparer.Ordinal)) {
+            builder.Append("sil_describer $").Append(type).Append(" = @").Append(function).Append('\n');
+        }
+
+        foreach (var table in module.WitnessTables) {
+            builder.Append("sil_witness_table $").Append(table.Conformer).Append(" : ").Append(Quote(table.Protocol)).Append(" {\n");
+            foreach (var (requirement, function, type) in table.Entries) {
+                builder.Append("  ").Append(Quote(requirement)).Append(": @").Append(function).Append(" : $").Append(type).Append('\n');
+            }
+
+            foreach (var (name, type) in table.AssociatedTypes) {
+                builder.Append("  associated ").Append(Quote(name)).Append(": $").Append(type).Append('\n');
+            }
+
+            foreach (var (associated, protocol) in table.AssociatedConformances) {
+                builder.Append("  conforms ").Append(associated).Append(": ").Append(Quote(protocol)).Append('\n');
+            }
+
+            foreach (var (requirement, function, type) in table.GenericEntries) {
+                builder.Append("  generic ").Append(Quote(requirement)).Append(": ");
+                builder.Append(function is null || type is null ? "none" : $"@{function} : ${type}").Append('\n');
+            }
+
+            builder.Append("}\n");
+        }
+
+        if ((module.Types.Count > 0 || module.Globals.Count > 0 || module.Foreign.Count > 0 || module.Exports.Count > 0 || module.WitnessTables.Count > 0 || module.Describers.Count > 0)
+            && module.Functions.Count > 0) {
             builder.Append('\n');
         }
 
@@ -307,6 +334,10 @@ public static class SilPrinter {
 
                     case StringLiteralInst literal:
                         builder.Append(' ').Append(Quote(literal.Value));
+                        break;
+
+                    case MetadataInst metadata:
+                        builder.Append(" $").Append(metadata.Described);
                         break;
 
                     case FloatLiteralInst literal:
@@ -516,6 +547,28 @@ public static class SilPrinter {
     }
 
     /// <summary>A string as SIL text writes it: quoted, with escapes for what cannot appear bare.</summary>
+    /// <summary>
+    ///     What a nominal type's declaration says after its body: a generic
+    ///     instance's type arguments and its name as Sable writes it, and the
+    ///     protocols its metadata's conformance records name.
+    /// </summary>
+    static string Described(NominalType type) {
+        var text = new StringBuilder();
+        if (!type.TypeArguments.IsDefaultOrEmpty) {
+            text.Append(" type_arguments(").Append(string.Join(", ", type.TypeArguments.Select(static a => $"${a}"))).Append(')');
+        }
+
+        if (type.DisplayName is { } display) {
+            text.Append(" display ").Append(Quote(display));
+        }
+
+        if (type.Conformances.Count > 0) {
+            text.Append(" conforms(").Append(string.Join(", ", type.Conformances.Select(Quote))).Append(')');
+        }
+
+        return text.ToString();
+    }
+
     public static string Quote(string value) {
         var builder = new StringBuilder("\"");
         foreach (var rune in value.EnumerateRunes()) {

@@ -950,14 +950,14 @@ internal sealed class Parser {
 
         using (_diagnostics.Suppress()) {
             try {
-                // A called type must be one as written: '[missing] (x: Int) => x'
-                // is a capture list, read as a type only by error recovery.
+                // A type must be one as written: '[missing] (x: Int) => x' is a
+                // capture list, and '[Dog.self, Cat.self]' an array literal,
+                // read as a type only by error recovery.
                 var errors = _diagnostics.SuppressedErrors;
                 var type = ParseType();
-                return At(SyntaxKind.DotToken) && Peek(1).Kind == SyntaxKind.SelfKeyword
-                    || At(SyntaxKind.OpenParenToken)
-                    && type.Kind is SyntaxKind.DictionaryType or SyntaxKind.GrowArrayType
-                    && _diagnostics.SuppressedErrors == errors;
+                return _diagnostics.SuppressedErrors == errors
+                       && (At(SyntaxKind.DotToken) && Peek(1).Kind == SyntaxKind.SelfKeyword
+                           || At(SyntaxKind.OpenParenToken) && type.Kind is SyntaxKind.DictionaryType or SyntaxKind.GrowArrayType);
             } finally {
                 _index = index;
                 _tokenPosition = tokenPosition;

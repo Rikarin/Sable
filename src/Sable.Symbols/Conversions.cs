@@ -58,6 +58,13 @@ internal sealed class Conversions(CoreTypes core) {
             return ConversionKind.ArrayView;
         }
 
+        // 'Int.self' where a 'Type' is wanted: the one value of 'Int.Type' is
+        // Int, as its metadata, which is what a Type holds (SYNTAX.md
+        // "Metatypes"). The other way needs the type known statically.
+        if (source is MetatypeTypeSymbol && target.Equals(core.Type)) {
+            return ConversionKind.MetatypeErasure;
+        }
+
         // 'Never' is the bottom type: an expression that does not return fits
         // anywhere.
         if (source.Equals(core.Never)) {
@@ -355,6 +362,7 @@ internal sealed class Conversions(CoreTypes core) {
             ConversionKind.Identity => 0,
             ConversionKind.LiteralTyping => 1,
             ConversionKind.ArrayView => 1,
+            ConversionKind.MetatypeErasure => 2,
             ConversionKind.Upcast => 2,
             ConversionKind.OptionalWrap => 3,
             ConversionKind.UnionInjection => 4,

@@ -261,28 +261,10 @@ public sealed partial class LlvmEmitter {
         }
 
         /// <summary>The name Sable gives the type, for a debugger to show.</summary>
-        public static string DisplayName(SilType type) =>
-            type switch {
-                ArrayType array => $"[{DisplayName(array.Element)}]",
-                SliceType slice => $"[{DisplayName(slice.Element)}:]",
-                EnumType enumType when OptionalPayload(enumType) is { } payload => DisplayName(payload) + "?",
-                StructType { Name: var name } when name.StartsWith("any$", StringComparison.Ordinal) => "any " + name[4..].Replace("$and$", " & ", StringComparison.Ordinal),
-                TupleType tuple => $"({string.Join(", ", tuple.Elements.Select(DisplayName))})",
-                ThickFunctionType thick => FunctionName(thick.Signature),
-                FunctionType function => FunctionName(function),
-                AddressType address => "inout " + DisplayName(address.Pointee),
-                WeakStorageType weak => "weak " + DisplayName(weak.Optional),
-                UnownedStorageType unowned => "unowned " + DisplayName(unowned.Referent),
-                NominalType { DisplayName: { } written } => written,
-                _ => type.ToString(),
-            };
-
-        static string FunctionName(FunctionType function) =>
-            $"({string.Join(", ", function.Parameters.Select(DisplayName))}){(function.Thrown is { } thrown ? $" throws({DisplayName(thrown)})" : "")} -> {DisplayName(function.Result)}";
+        public static string DisplayName(SilType type) => TypeMetadata.DisplayName(type);
 
         /// <summary>The wrapped type, for an optional.</summary>
-        static SilType? OptionalPayload(EnumType type) =>
-            type.Name.StartsWith("Optional$", StringComparison.Ordinal) && type.Cases is [("Some", { } payload), ("None", null)] ? payload : null;
+        static SilType? OptionalPayload(EnumType type) => TypeMetadata.OptionalPayload(type);
 
         /// <summary>The DWARF type for a SIL type; null for one with no values, the empty tuple.</summary>
         public string? Type(SilType type) {
@@ -381,7 +363,7 @@ public sealed partial class LlvmEmitter {
                     return Typedef("String", Pointer(body));
                 }
 
-                case var _ when type == SilType.Object || type == SilType.Region:
+                case var _ when type == SilType.Object || type == SilType.Region || type == SilType.Metadata || type == SilType.WitnessTable || type == SilType.Box:
                     return Typedef(type.ToString(), Pointer(ObjectHeader));
 
                 case AddressType address:

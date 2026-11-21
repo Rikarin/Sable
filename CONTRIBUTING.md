@@ -108,6 +108,13 @@ and run it, natively and in the interpreter. What keeps it quicker:
   A new test class about native code gets `[Native]`; `--filter
   Category=Native` runs the marked ones. Tests that only build natively
   (`Programs.BuildAndRun`, `Harnesses.Native`) always do.
+- **Both ways of compiling generics.** `SABLE_GENERICS=unspecialised` (or
+  `specialised`) builds every program of the run with its generic functions
+  compiled once for every type, or specialised for each, whatever the build
+  would otherwise do (docs/06 §6.2); a test that is about one of the two
+  says so with `SilGen.UseGenerics`. `SABLE_GENERICS_TRACE=1` prints, for
+  each generic function, whether it was compiled once and, if not, the
+  expression that kept it specialised.
 - **Shards in CI.** CI runs the project in four jobs per OS, split by test
   class ([tools/ci/codegen-shard.sh](tools/ci/codegen-shard.sh)).
   `ShardTests` fails if a class with tests is in no shard — which is what a

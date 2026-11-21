@@ -37,6 +37,7 @@
 #include "hashing.c"
 #include "arrays.c"
 #include "leaks.c"
+#include "metadata.c"
 #include "inline_layout.c"
 #include "validation.c"
 #include "frames.c"

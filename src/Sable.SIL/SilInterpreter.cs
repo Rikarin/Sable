@@ -633,6 +633,11 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
                 break;
 
+            // A generic box destroys its value by its type's value witness.
+            case GenericBox box:
+                Release(box.Type.Type, box.Value, depth);
+                break;
+
             // A region destroys what was allocated in it, last first.
             case RegionObject region:
                 for (var i = region.Cells.Count - 1; i >= 0; i--) {
@@ -956,6 +961,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         values[literal] = literal.Type == SilType.F32 ? (float)literal.Value
                             : literal.Type == SilType.F16 ? (Half)literal.Value
                             : (object)literal.Value;
+                        break;
+
+                    case MetadataInst metadata:
+                        values[metadata] = MetadataOf(metadata.Described);
                         break;
 
                     case StringLiteralInst literal:
@@ -2120,6 +2129,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
         if (builtin.Name.StartsWith("net_", StringComparison.Ordinal)) {
             return Net(builtin.Name, operands);
+        }
+
+        if (MetadataBuiltin(builtin, operands, depth, out var answer)) {
+            return answer;
         }
 
         if (builtin.Name.StartsWith("class_conforms:", StringComparison.Ordinal)) {

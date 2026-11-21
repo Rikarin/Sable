@@ -46,6 +46,12 @@ public sealed class CoreTypes {
         // A bump-allocated arena (docs/02 §2.1, Tier 1): what 'region arena { }'
         // makes and an 'in r: region' parameter borrows.
         Region = Primitive("Region");
+
+        // A type as a value (SYNTAX.md "Metatypes", docs/06 §6.2): what every
+        // 'T.Type' converts to, and what 'type(of: x)' gives — a pointer at
+        // the type's metadata, which says its kind, layout, value witnesses,
+        // fields and conformances.
+        Type = Primitive("Type");
         Void = Primitive("Void");
         Never = Primitive("Never");
 
@@ -118,6 +124,8 @@ public sealed class CoreTypes {
     public NamedTypeSymbol Char { get; }
     public NamedTypeSymbol String { get; }
     public NamedTypeSymbol Region { get; }
+    /// <summary><c>Type</c>: the existential metatype, a type known only at run time, as its metadata.</summary>
+    public NamedTypeSymbol Type { get; }
     public NamedTypeSymbol Void { get; }
     public NamedTypeSymbol Never { get; }
     public NamedTypeSymbol Sendable { get; }

@@ -1,0 +1,44 @@
+module Negative.RuntimeTypes
+
+// Types as values (spec/SYNTAX.md "Metatypes"): a 'Type' is known only at
+// run time, so a cast is never to one, and it reaches no static member.
+
+protocol Zero {
+    static fn zero() -> Self
+}
+
+struct Meters: Zero {
+    var value: Int
+    static fn zero() -> Meters { return Meters { value: 0 } }
+}
+
+fn make<T: Zero>(_ type: T.Type) -> T { return type.zero() }
+
+fn isTested(_ value: Int, _ wanted: Type) -> Bool {
+    return value is wanted //! S3098 'wanted' is a value of type 'Type', not a type
+}
+
+fn isCast(_ value: Int, _ wanted: Type) -> Int? {
+    return value as? wanted //! S3098 'wanted.isInstance(value)' tests the value
+}
+
+fn isCastToAMetatype(_ value: Int) -> Bool {
+    let wanted = Int.self
+    return value is wanted //! S3098 'wanted' is a value of type 'Int.Type', not a type
+}
+
+fn reachesNoStatic(_ t: Type) {
+    let m = t.zero() //! S2002 a 'Type' is known only at run time, so it reaches no static member
+}
+
+fn opensNoType(_ t: Type) -> Meters {
+    return make(t) //! S3007 argument 1 is 'Type', and 'type' takes 'T.Type'
+}
+
+fn narrowsNoType(_ t: Type) {
+    let back: Meters.Type = t //! S3004 expected 'Meters.Type' but found 'Type'
+}
+
+fn testsAtRunTime(_ value: Int, _ wanted: Type) -> Bool {
+    return wanted.isInstance(value)
+}

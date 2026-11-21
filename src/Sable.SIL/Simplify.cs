@@ -16,7 +16,8 @@ namespace Sable.SIL;
 ///         Folding is of <c>Int</c> and <c>Bool</c> arithmetic, logic, shifts
 ///         and comparison whose operands are literals; arithmetic that would
 ///         overflow, divide by zero or shift out of range is left to trap as
-///         the program runs. A trivial field extracted from a struct or tuple
+///         the program runs; two types' metadata, known here, are compared.
+///         A trivial field extracted from a struct or tuple
 ///         made in the function is the value it was made from. A
 ///         <c>cond_br</c> on a literal becomes a <c>br</c>, and a
 ///         <c>switch_enum</c> of an enum made in the function a <c>br</c> to
@@ -181,6 +182,11 @@ public sealed class Simplify : ISilPass {
 
     /// <summary>The value of a builtin whose operands are literals, when it can be worked out and does not trap.</summary>
     static long? Fold(BuiltinInst builtin) {
+        // Two types known here: 'T.self == Int.self' in an instance of generic code.
+        if (builtin is { Name: "metadata_equal", Operands: [MetadataInst left, MetadataInst right] }) {
+            return left.Described.Equals(right.Described) ? 1 : 0;
+        }
+
         if (builtin.Operands.Count is 0 or > 2 || builtin.Operands.Any(static o => o is not IntegerLiteralInst)) {
             return null;
         }
@@ -723,5 +729,5 @@ public sealed class Simplify : ISilPass {
             or "string_count" or "string_compare" or "string_hash" or "hash_seed" or "string_contains" or "string_index_of" or "string_find"
             or "string_utf8_count" or "string_utf8_find" or "string_utf8_find_last" or "utf8_validate"
             or "string_count_range" or "string_compare_range" or "string_utf8_find_range" or "string_utf8_find_last_range"
-            or "string_hash_range";
+            or "string_hash_range" or "metadata_equal" or "metadata_hash" or "metadata_is_subtype";
 }

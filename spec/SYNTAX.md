@@ -1145,16 +1145,53 @@ array's, when it is called: `[String: Int]()`, `Int[>..]()` and
 
 The type of `T.self` is the metatype `T.Type` (written after a type's name,
 unless the type has a nested type called `Type`). Its one value is the type,
-so it holds nothing at run time. `Int?.Type` and `Int[>..].Type` are the
-metatypes of compound types. Two metatypes compare with `==` and `!=`:
-equal when they are the type of the same type, which in generic code is
-decided for each instance. A `T.Type` parameter infers `T`, and a metatype
-value reaches the type's static members:
+known where the code is compiled — in generic code, in each instance —
+so it costs nothing: at run time it is the type's metadata, a constant.
+`Int?.Type` and `Int[>..].Type` are the metatypes of compound types. Two
+metatypes compare with `==` and `!=`: equal when they are the type of the
+same type, which in generic code is decided for each instance. A `T.Type`
+parameter infers `T`, and a metatype value reaches the type's static
+members:
 
 ```sable
 fn make<T: Zero>(_ type: T.Type) -> T { return type.zero() }
 let m = make(Meters.self)              // T is Meters
 let info = TypeInfo.of(Point.self)     // of<T: Reflectable>(_ type: T.Type)
+```
+
+`Type` is the existential metatype: any type, known only at run time, as a
+value. Every `T.Type` converts to it, and `type(of: x)` gives the type of a
+value as one — its dynamic type: an object's own class (which may be a
+subclass of its variable's), the type of what an existential holds, and
+for any other value its static type. A `Type` is Equatable (the one type),
+Hashable, so it can key a dictionary, and written as its name; it says what
+the runtime's metadata does (docs/06 §6.2): `name`, `kind`, `size`,
+`alignment`, `stride`, its fields and its type arguments. A name a type has
+no static member of reaches the `Type`'s, so `Int?.self.name` is `"Int?"`.
+
+```sable
+let animal: Animal = Dog()
+let t: Type = type(of: animal)         // Dog's, not Animal's
+var made: [Type: String] = [:]
+made[t] = "dog"
+made[Int.self] = "int"
+print(t)                               // Zoo.Dog
+```
+
+A `Type` reaches no static member of the type it holds, and does not
+convert back to a `T.Type`: what it holds is not known where the code is
+compiled. For the same reason a cast is never to one — `x is t` with `t` a
+value is S3098. A value is tested against a type known at run time with
+`t.isInstance(x)`, and two types with `t.isSubtype(of: u)`: true for the
+same type, a subclass of a class (by its chain of superclasses), and a type
+that conforms to each protocol of an existential (`(any Named & Sized).self`;
+every type is an `any Any`), found in the conformance registry. An
+existential of an instance of a generic protocol is only its own subtype.
+
+```sable
+let wanted: Type = (any Named).self
+let named = wanted.isInstance(animal)  // whether Dog conforms to Named
+let sub = Dog.self.isSubtype(of: Animal.self)
 ```
 
 ### Member access and optionals

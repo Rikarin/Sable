@@ -94,6 +94,57 @@ public sealed class MetatypeTests {
         Assert.Equal("Meters", compilation.GetSemanticModel(tree).GetTypeOf(initializer)!.ToDisplayString());
     }
 
+    /// <summary>
+    ///     A metatype converts to a <c>Type</c>, the type known only at run
+    ///     time, and not back; <c>type(of:)</c> gives one.
+    /// </summary>
+    [Fact]
+    public void AMetatypeConvertsToATypeAndNotBack() {
+        Assert.Empty(Errors($$"""
+                              {{Preamble}}
+                              fn probe(_ p: Point) -> Bool {
+                                  let t: Type = Point.self
+                                  let u: Type? = Int.self
+                                  let keys: [Type: Int] = [Point.self: 1, type(of: p): 2]
+                                  return t == type(of: p) && u != none && keys.count == 1
+                              }
+                              """));
+
+        var narrowing = Errors($$"""
+                                 {{Preamble}}
+                                 fn probe(_ t: Type) { let p: Point.Type = t }
+                                 """);
+        Assert.Contains(narrowing, static d => d.Code == ErrorCode.ERR_TypeMismatch);
+    }
+
+    /// <summary>
+    ///     A member the type has no static member of is the <c>Type</c>'s:
+    ///     <c>Point.self.name</c>. A static member of the type stays first.
+    /// </summary>
+    [Fact]
+    public void AMetatypeReachesTypesMembersWhereItsTypeHasNoStaticOne() {
+        Assert.Empty(Errors($$"""
+                              {{Preamble}}
+                              struct Named2 { static var name: Int => 1 }
+                              fn probe() -> Bool {
+                                  let n: String = Point.self.name
+                                  let s: Int = Point?.self.size
+                                  let own: Int = Named2.self.name
+                                  return n.count == s + own
+                              }
+                              """));
+    }
+
+    /// <summary>A cast is to a type written out; a value holding one is S3098.</summary>
+    [Fact]
+    public void ACastToATypeHeldInAValueIsAnError() {
+        var errors = Errors($$"""
+                              {{Preamble}}
+                              fn probe(_ x: Int, _ t: Type) -> Bool { return x is t }
+                              """);
+        Assert.Equal(ErrorCode.ERR_RuntimeTypeInCast, Assert.Single(errors).Code);
+    }
+
     /// <summary>A type with a nested type named 'Type' keeps it.</summary>
     [Fact]
     public void ANestedTypeNamedTypeIsStillReached() =>

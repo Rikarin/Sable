@@ -270,7 +270,7 @@ public sealed class SilParser {
                 }
 
                 var name = (at == i + 2 ? "$" : "") + _tokens[at].Text;
-                if (module.FindType(name) is not null || name is "Int" or "Bool" or "F64" or "String" or "Char" or "Object" or "Region") {
+                if (module.FindType(name) is not null || name is "Int" or "Bool" or "F64" or "String" or "Char" or "Object" or "Region" or "Box") {
                     throw new SilParseException($"the type {name} is declared twice", _tokens[at].Line);
                 }
 
@@ -321,6 +321,18 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_witness_table")) {
+                ParseWitnessTable();
+                continue;
+            }
+
+            if (Accept("sil_describer")) {
+                var described = ParseType();
+                Expect("=");
+                module.Describers[described.ToString()] = (described, Expect(TokenKind.Global, "a describer's name").Text);
+                continue;
+            }
+
             if (Accept("sil_global")) {
                 var global = Expect(TokenKind.Global, "a global's name").Text;
                 Expect(":");
@@ -337,6 +349,47 @@ public sealed class SilParser {
         }
 
         return module;
+    }
+
+    /// <summary><c>sil_witness_table $T : "M.P" { "slot": @f : $type … associated "A": $T … conforms 0: "M.Q" … generic "m": @g : $type … }</c>.</summary>
+    void ParseWitnessTable() {
+        var conformer = ParseType();
+        Expect(":");
+        var table = new SilWitnessTable(conformer, Expect(TokenKind.String, "a protocol's name").Text);
+        Expect("{");
+        while (!Accept("}")) {
+            if (Accept("associated")) {
+                var name = Expect(TokenKind.String, "an associated type's name").Text;
+                Expect(":");
+                table.AssociatedTypes.Add((name, ParseType()));
+            } else if (Accept("conforms")) {
+                var index = Count("an associated type's index");
+                Expect(":");
+                table.AssociatedConformances.Add((index, Expect(TokenKind.String, "a protocol's name").Text));
+            } else if (Accept("generic")) {
+                var requirement = Expect(TokenKind.String, "a requirement's name").Text;
+                Expect(":");
+                if (Accept("none")) {
+                    table.GenericEntries.Add((requirement, null, null));
+                } else {
+                    var function = Expect(TokenKind.Global, "a witness's name").Text;
+                    Expect(":");
+                    table.GenericEntries.Add((requirement, function, ParseType() as FunctionType ?? throw Error("a witness's type is a function type")));
+                }
+            } else {
+                var requirement = Expect(TokenKind.String, "a requirement's slot").Text;
+                Expect(":");
+                var function = Expect(TokenKind.Global, "a witness's name").Text;
+                Expect(":");
+                table.Entries.Add((requirement, function, ParseType() as FunctionType ?? throw Error("a witness's type is a function type")));
+            }
+        }
+
+        if (_module.FindWitnessTable(table.Conformer, table.Protocol) is not null) {
+            throw Error($"the witness table of {table.Conformer} for {table.Protocol} is declared twice");
+        }
+
+        _module.AddWitnessTable(table);
     }
 
     // Per function: names to values, names to blocks, and uses waiting for a definition.
@@ -398,6 +451,42 @@ public sealed class SilParser {
         if (Accept("deinit")) {
             type.Deinit = Expect(TokenKind.Global, "the deinit function").Text;
         }
+
+        ParseDescribed(type);
+    }
+
+    /// <summary>
+    ///     What may follow a nominal type's body: <c>type_arguments($Int)</c>,
+    ///     <c>display "M.Box&lt;Int&gt;"</c> and <c>conforms("M.P")</c>.
+    /// </summary>
+    void ParseDescribed(NominalType type) {
+        if (Accept("type_arguments")) {
+            Expect("(");
+            var arguments = ImmutableArray.CreateBuilder<SilType>();
+            if (!At(")")) {
+                do {
+                    arguments.Add(ParseType());
+                } while (Accept(","));
+            }
+
+            Expect(")");
+            type.TypeArguments = arguments.ToImmutable();
+        }
+
+        if (Accept("display")) {
+            type.DisplayName = Expect(TokenKind.String, "a type's name as Sable writes it").Text;
+        }
+
+        if (Accept("conforms")) {
+            Expect("(");
+            if (!At(")")) {
+                do {
+                    type.Conformances.Add(Expect(TokenKind.String, "a protocol's name").Text);
+                } while (Accept(","));
+            }
+
+            Expect(")");
+        }
     }
 
     void ParseClass() {
@@ -437,6 +526,8 @@ public sealed class SilParser {
         if (Accept("empty_from")) {
             type.EmptyFrom = Count("the first field that may start empty");
         }
+
+        ParseDescribed(type);
     }
 
     void ParseEnum() {
@@ -457,6 +548,7 @@ public sealed class SilParser {
         }
 
         Expect("}");
+        ParseDescribed(type);
     }
 
     SilFunction ParseFunction() {
@@ -721,6 +813,9 @@ public sealed class SilParser {
             "Char" => SilType.Char,
             "Object" => SilType.Object,
             "Region" => SilType.Region,
+            "Metadata" => SilType.Metadata,
+            "WitnessTable" => SilType.WitnessTable,
+            "Box" => SilType.Box,
             _ when SilType.Numbers.FirstOrDefault(n => n.ToString() == name) is { } number => number,
             _ => _module.FindType(name) ?? throw Error($"unknown type '{name}'"),
         };
@@ -796,6 +891,10 @@ public sealed class SilParser {
 
             case "string_literal":
                 instruction = new StringLiteralInst(Expect(TokenKind.String, "a string").Text);
+                break;
+
+            case "metadata":
+                instruction = new MetadataInst(ParseType());
                 break;
 
             case "builtin": {

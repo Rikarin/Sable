@@ -87,54 +87,119 @@ immortal objects with the same visitors before it counts what is left, so
 what remains is reported as before. The interpreter keeps the same rule.
 
 A class's metadata has one more field before its vtable (which is field 9):
-its type information, `SableTypeInfo`, which arrays and the runtime's own
-objects leave null. This is the format code casting to a protocol builds
-on; it only grows, at the end of each record.
+its type's metadata, `SableTypeMetadata`, which arrays and the runtime's own
+objects leave null. Every other type has one too — a struct, an enum, a
+union, an optional, a tuple, a function, an array, a slice, an existential,
+a scalar, a string, a metatype — written by the compiler for the types a
+program asks about (`T.self`, a `Type`, the SIL instruction
+`metadata $T`), the classes it makes, the types its existentials box, and
+what those reach. Both formats only grow, at the end of each record.
 
 ```c
-typedef struct { const char *name; const char *type_name;
-                 int64_t offset; int64_t kind; } SableField;      // kind: 0 data, 1 strong, 2 aggregate, 3 weak/unowned
+typedef struct { const char *name; const char *type_name; int64_t offset;
+                 int64_t kind;                                    // 0 data, 1 strong, 2 aggregate, 3 weak/unowned
+                 const SableTypeMetadata *type; } SableField;     // null unless SABLE_TYPE_FIELD_TYPES
 typedef struct { const char *name; } SableProtocol;               // "Module.Protocol"
 typedef struct { const SableProtocol *protocol;
-                 const void *witnesses; } SableConformance;       // witnesses: null for now
-typedef struct { int64_t kind;                                    // 1: a class
-                 int64_t field_count; const SableField *fields;   // the superclass's first
-                 int64_t conformance_count;
-                 const SableConformance *conformances; } SableTypeInfo;
+                 const SableWitnessTable *witnesses; } SableConformance;
+typedef struct {                                                  // a value's copy, move and destruction in memory
+    void (*initialize_with_copy)(void *dest, void *src, const SableTypeMetadata *);
+    void (*initialize_with_take)(void *dest, void *src, const SableTypeMetadata *);
+    void (*assign_with_copy)(void *dest, void *src, const SableTypeMetadata *);
+    void (*assign_with_take)(void *dest, void *src, const SableTypeMetadata *);
+    void (*destroy)(void *value, const SableTypeMetadata *);
+    void (*visit)(void *value, const SableTypeMetadata *);       // each strong reference, to sable_heap_visit
+} SableValueWitnesses;
+typedef struct SableTypeMetadata {
+    int64_t kind;                                                 // SABLE_KIND_*: 1 class, 2 struct, 3 enum, 4 union, ...
+    int64_t field_count; const SableField *fields;                // a class's always; others' with SABLE_TYPE_FIELDS
+    int64_t conformance_count; const SableConformance *conformances;
+    const char *name;                                             // 'Zoo.Animal?', 'Sable.Collections.Deque<String>'
+    int64_t size, alignment, stride, flags;                       // SABLE_TYPE_TRIVIAL, _NONCOPYABLE, _HAS_DEINIT, ...
+    const SableValueWitnesses *witnesses;
+    int64_t argument_count;
+    const SableTypeMetadata *const *arguments;                    // type arguments; an optional's, array's, tuple's parts
+    const SableMetadata *object;                                  // a class's object metadata: vtable, superclass
+} SableTypeMetadata;
 ```
 
-- **Field descriptors**: every stored field — the superclass's first, at
-  the same offsets — with its name, its type's name as Sable writes it
-  (`Zoo.Animal?`, `Sable.Collections.Deque<String>`), its offset from
-  the start of the object, and what it holds. The leak report reads them.
-- **Conformance records**: one per protocol the class declares — where it
-  is declared, in an extension that holds for every instance, and every
+- **Layout**: size, alignment and stride as the value is stored —
+  natively LLVM's own numbers for the type the code uses, in the
+  interpreter `TypeLayout`'s (src/Sable.SIL/TypeLayout.cs), which the code
+  generator lays values out by; a test holds the two to agree for every kind.
+  A class's are a reference's; its instance's are its object metadata's.
+- **Value witnesses**: copy, take (a move: every Sable value moves by its
+  bits), assign with copy or take, destroy, and visit, each on memory and
+  given the metadata — what generic code compiled once for every type will
+  call (#297). A trivial type shares the runtime's `sable_bits_witnesses`
+  and a single counted reference (a class, a string, an array, an optional
+  reference) `sable_reference_witnesses`; any other type has a table of its
+  own, `@"sable.vwt.T"`, whose copy, destroy and visit wrap the value witness
+  functions compiled code already calls directly, with the runtime's take
+  and assignments. A move-only type's copy witnesses are null.
+- **Field descriptors**: a struct's or class's stored fields — a class's
+  superclass's first, at the same offsets from the start of the object — a
+  tuple's elements, an enum's or union's cases with where their payload is;
+  each with its name, its type's name as Sable writes it, its offset, what it
+  holds, and its type's metadata. A class's are always there, without the
+  field types: the leak report names fields by them. Everything else's, and
+  the field types, are emitted only in a program that reads them
+  (`Type.fieldCount` and the like; `SilModule.FieldDescriptors`),
+  the switch unspecialised generic code will also turn on where it reads a
+  generic type's field offsets. A program that never asks pays for none.
+- **Type arguments**: a generic type's instance lists its arguments'
+  metadata — what metadata made at run time will be cached by (#297 stage
+  6); until then each instance a program uses is emitted statically.
+- **Linkage**: every record is `linkonce_odr` (in a COMDAT on Windows) when
+  the program is built in units, as a box's class is, so the linker keeps
+  one of each and its address is the type's identity — `Type`'s `==` is a
+  pointer comparison. A Sable shared library and the program that loads it
+  each have their own records, so `sable_metadata_equal` falls back to the
+  kind, the size and the name, and `sable_metadata_hash` hashes the name
+  (FNV-1a), which the interpreter computes alike.
+- **Conformance records**: one per protocol the type declares — where it is
+  declared, in an extension that holds for every instance, and every
   protocol those refine — by a protocol descriptor, `@"sable.protocol.M.P"`,
   which each unit makes and the linker keeps one of. A superclass's
-  conformances are in the superclass's records. `witnesses` is reserved for
-  what a cast to `any P` builds the existential from; the compiler leaves it
-  null until such casts lower through the registry.
-- **The registry** is the records themselves, found from an object's
-  metadata, with nothing built as the program starts:
-  `sable_conformance(metadata, protocol)` returns the record of the class's
-  or a superclass's conformance, or null; `sable_conforms(object, protocol)`
-  answers `x is P`. A protocol is matched by its descriptor's address or,
-  across images (a Sable shared library and the program), by its name.
-  Compiled code asks it for `animal is Named` (and `is A & B`, each part)
-  on any object: the builtin `class_conforms:M.Named`, a call of
-  `sable_conforms` with the descriptor. `animal as? any Named` puts the
-  object in the box of its static class and asks the existential cast
-  below, which already asks a box holding an object about the object's
-  own class.
+  conformances are in the superclass's records.
+- **The registry** is the records themselves, found from a value's
+  metadata, with nothing built as the program starts (but the tables of a program built in units, below):
+  `sable_type_conformance(type, protocol)` returns the record of the type's
+  (or a superclass's) conformance, or null, and `sable_conformance` the same
+  from an object's metadata; `sable_conforms(object, protocol)` answers
+  `x is P`. A protocol is matched by its descriptor's address or, across
+  images (a Sable shared library and the program), by its name. Compiled
+  code asks it for `animal is Named` (and `is A & B`, each part) on any
+  object: the builtin `class_conforms:M.Named`, a call of `sable_conforms`
+  with the descriptor.
 - **`--deny-reflection`** (`sable build`/`run`, for a file or a package; or
   `[targets.<triple>] reflection = false` in a manifest): the field descriptors carry
   no names, and `Mirror`, `TypeInfo` and the `Reflect` questions are refused
-  (S3450). Printing values is not reflection and still works.
+  (S3450). Printing values is not reflection and still works. A type's
+  metadata keeps its name: a trap message has it anyway.
 
-Not yet: a kind and type information for structs, unions and other
-non-class types (their value witnesses are functions the compiler calls
-directly, with no table the runtime can reach); the witness tables
-conformance records will point at; and the profiles (`minimal`, `standard`, `full`), which need the runtime split
+`Type` (lib/Sable.Core/Type.sb) is a type as a value of the language, the
+existential metatype (SYNTAX.md "Metatypes"): a pointer at the type's
+metadata. `T.self` is one — `metadata $T`, a constant, as each instance of
+generic code is compiled for its types — and every `T.Type` lowers to the
+same pointer, so it converts to a `Type` as it is. `type(of: x)` reads a
+value's dynamic type: an object's own class from its header (its object
+metadata's `type`, the builtin `object_metadata`), what an existential's box
+holds (`sable_box_value_metadata`, which an `any Error`'s box answers too,
+its class having the error's type as its argument), and any other value's
+static type, a constant. A `Type` has its metadata's `kind`, `name`, `size`,
+`alignment`, `stride`, fields and type arguments, and its value witnesses
+applied to a value (`copy`, `move`, `assign`, `destroyCopy`), as code that
+knows a type only by its metadata applies them; it is Equatable, Hashable
+and Formattable (its name). `t.isInstance(x)` and `t.isSubtype(of: u)` test
+against a type known only at run time (`sable_metadata_is_subtype`): the
+same type, a superclass by the chain `superclass_of` walks, or each protocol
+an existential's metadata names — read from its name, `any M.A & M.B`, as
+protocols are known by name across images — by `sable_type_conformance`.
+The interpreter models the same records (src/Sable.SIL/TypeMetadata.cs), so
+a program interpreted answers as the native one does.
+
+Not yet: the profiles (`minimal`, `standard`, `full`), which need the runtime split
 into parts a link can leave out. The allocator's size classes reach 1 KB;
 each class has 64 KiB slabs of its own, mapped from the system aligned to
 their size, which count the blocks they have out and are unmapped when that
@@ -145,33 +210,110 @@ that hold one another strongly: the type-level strong-reference graph's
 cycles through two or more classes, broken by a `weak` or `unowned` field.
 
 An existential, `any P`, is its box — an object of a class for the value's
-type, `any$box$of$T`, each a subclass of one root class — and P's witness
-table for that type, laid out inline after it: a function per requirement
-that takes the box. Copying an existential shares the box; a witness that
-changes the value (a setter, a mutating method) is given the box where the
-existential keeps it and first copies it if another existential shares it.
-A dynamic cast or test, `e as? Square`, `e is any Named`, asks the box's class:
-to a concrete type, whether it is that type's box; to another protocol,
-whether it is the box of any type of the program that conforms to it, in a
-table the compiler writes out for each protocol cast to — the conformance
-lookup, done without the registry above. The two answer different
-questions and are kept apart for now: the registry's records hang off a
-class's metadata, so it answers for objects alone, while an existential's
-box is an object of the compiler's own class whatever the value's type,
-struct or union as much as class, and has no records of its own. A cast of
-an existential to a protocol therefore asks which box class it is, and
-builds the existential from witnesses the compiler emitted for each
-conforming type. Once conformance records carry their witness tables (the
-`witnesses` field above) and non-class types have type information, a box
-can point at its value's metadata and the cast can become a registry lookup
-— a cast table for a library's types that the program does not see whole
-would need that.
+type, `any$box$of$T`, each a subclass of one root class, whose metadata has
+T as its one type argument — and P's witnesses for that type, laid out
+inline after it: a function per requirement that takes the box. Copying an
+existential shares the box; a witness that changes the value (a setter, a
+mutating method) is given the box where the existential keeps it and first
+copies it if another existential shares it.
 
-`FieldDescriptor` (name, type, offset) is **always** emitted, for every type.
-It costs a few bytes per field and it buys: debugger formatters, `Mirror`,
-structural equality/hashing derivation, and the zero-copy validator. `FullTypeInfo`
-— methods, parameter names, attribute payloads, dynamic-invoke thunks — is
-emitted only for `@reflectable` types.
+**Witness tables.** The same functions are the conformance's witness
+table, `SableWitnessTable`, which T's metadata's conformance record for P
+points at: P's requirements in the order of its existential's slots, then
+T's associated types' metadata and what each must conform to (by index and
+protocol, found in the registry from that metadata).
+
+```c
+typedef struct { const SableProtocol *protocol;
+                 int64_t requirement_count; void *const *requirements;
+                 int64_t associated_type_count; const SableTypeMetadata *const *associated_types;
+                 int64_t associated_conformance_count;
+                 const SableAssociatedConformance *associated_conformances; } SableWitnessTable;
+```
+
+A table is made for each conformance an existential needs: a type put in
+an existential of P, and every type conforming to a protocol cast to — the
+program's non-generic conformers and each type boxed anywhere, whichever the
+program lowers first. Its witnesses are kept while its conformer can be made,
+boxed or asked about, and are dropped with it. An existential built where the
+type is known copies them into its slots, so a call through it costs what it
+did: there is no load from the table, and the inline slots are the table's
+contents cached in the value. Which records a type has follows from its
+declarations alone (a built-in type's from Sable.Core's extensions); which
+tables a unit makes depends on what its own code boxes and casts. So in a
+program built in units a record's `witnesses` is null, every unit's copy of
+it the same as `linkonce_odr` requires, and each unit's constructor hands
+the runtime the tables it made (`sable_register_witness_table`), which the
+lookup consults after the records; a program compiled whole points its
+records at its tables and registers nothing. (Swift keeps such records in a
+section the linker gathers; a constructor works on every target Sable has.)
+
+**Casts.** `e as? Square` asks the box's class whether it is that type's
+box (or, for an object, a superclass's box, and then the object). `e as?
+any Q` and `e is any Q` are registry lookups: the metadata of what the box
+holds — an object's own class, which may be a subclass of the one boxed
+(`sable_box_value_metadata`) — is asked for Q's witness table
+(`sable_witness_table`, each part's for `any A & B`), and the existential is
+the same box, shared, with the table's witnesses. `animal as? any Named`
+boxes the object as its static class and asks the same. An instance of a
+generic protocol, `any Producer<Animal>`, whose slots a conformer to
+`Producer<Dog>` may fill by variance, is still cast by trying each conforming
+type of the program in turn, from witnesses the compiler picks for each.
+
+A table's first entries are what an existential can call — requirements
+that mention `Self` have no slot — each taking the existential's box. Then
+come its **generic entries** (`generic_requirements`): every method,
+operator and property getter the protocol itself declares, in declaration
+order, in the convention unspecialised code calls them in — `self`'s box
+(its slot's address, for a `mutating` one) unless the requirement is
+static, its parameters, and `Self`'s metadata last; a value of `Self` is a
+box. A requirement that convention cannot pass yet (generic itself, an
+initialiser, or `Self` or an associated type inside another type) has an
+empty entry. Each witness is the requirement lowered as if its body called
+itself on the conforming type, so it is met as specialised code meets it:
+the type's member, a default, a builtin. A program built unspecialised
+fills both halves of every table it makes, so that every unit's copy of a
+table is the same.
+
+**Unspecialised generic code** (#297 stage 4). With `-generics=unspecialised`
+(or `SABLE_GENERICS=unspecialised`), a generic function whose body uses its
+type parameters only as boxes can serve is compiled once for every type.
+A value of a type parameter's type is a **generic box**: a counted object
+holding the type's metadata and then the value, at its alignment, in a
+buffer sized by the metadata at run time (`sable_box_alloc`,
+`sable_box_project`). Copying the value shares the box; it is changed in
+place only once it is its holder's own (`sable_box_make_unique` copies it
+with the type's `initialize_with_copy` otherwise), and the last release
+destroys it with the type's `destroy` witness. After its own parameters the
+function takes each type parameter's metadata and then a witness table for
+each protocol one is constrained to, in that order: `T.self` is that
+metadata, `T.self == Int.self` asks `metadata_equal`, `type(of: x)` asks the
+box (`sable_box_type`, an object's own class for an object), a requirement
+is called through the table's generic entry, and a requirement of a protocol
+one given refines is called through the table the registry finds from the
+metadata. `"\(x)"` asks the runtime for the **describer** of the type in the
+box (`sable_box_describe`): a function, made for each type the program puts
+in a box and registered as the image starts, that writes the value out as
+an interpolation in code that knows its type does. Where the types are
+known, a call puts each argument of a type parameter's type in a box, and
+takes a result of one out of its box.
+
+What boxes cannot serve yet — a `T[]`, a `T?`, a tuple of `T`, a closure
+over one, an associated type, a method of a generic type, an async function
+or a generator — is still specialised for its type arguments in the same
+program, so a program builds either way; `SABLE_GENERICS_TRACE=1` says,
+for each generic function, which way it went and why. A specialised build
+(the default) makes neither the boxes nor the generic entries.
+
+Field descriptors were meant to be emitted always, for every type; as built
+they are a class's always and every other type's only in a program that
+reads them (above), so that hello world stays its size. Reflection
+(`Mirror`, `Reflect`, `TypeInfo`, below) is not read from them yet: it is
+SIL the compiler writes for each type reflected on, which runs the same in
+the interpreter. What it shares with the metadata is the type's name as
+Sable writes it (one function, the debugger's too) and `--deny-reflection`.
+`FullTypeInfo` — methods, parameter names, attribute payloads, dynamic-invoke
+thunks — is emitted only for `@reflectable` types.
 
 ## 6.3 Reflection API
 

@@ -1066,9 +1066,10 @@ public sealed class OpaqueTypeSymbol(
 
 /// <summary>
 ///     <c>T.Type</c>: the type of <c>T.self</c>, a type used as a value
-///     (SYNTAX.md §16). It has one value, the type itself, so it holds nothing
-///     at run time: code is generated for each type it is used with, and the
-///     value says nothing the type does not.
+///     (SYNTAX.md "Metatypes"). It has one value, the type itself, so the
+///     value says nothing the type does not: code is generated for each type
+///     it is used with, and at run time it is the type's metadata, a
+///     constant. It converts to <c>Type</c>, the existential metatype.
 /// </summary>
 public sealed class MetatypeTypeSymbol(TypeSymbol instanceType) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.MetatypeType;

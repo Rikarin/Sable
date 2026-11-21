@@ -293,6 +293,17 @@ public sealed partial class SilGen {
     }
 
     readonly Dictionary<FunctionSymbol, GenericShape?> _shapes = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>For each unspecialised function, whether it, or unspecialised code it calls, writes a value of a type it is given out.</summary>
+    readonly Dictionary<FunctionSymbol, bool> _describes = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    ///     Whether an unspecialised callee may write out a value of a type it
+    ///     is given (<c>generic_describe</c>), and so needs that type's
+    ///     describer: as its body says, or, for one still being decided — a
+    ///     recursion — yes.
+    /// </summary>
+    internal bool DescribesValues(FunctionSymbol callee) => _describes.GetValueOrDefault(callee, true);
     readonly List<FunctionSymbol> _shapeOrder = [];
     readonly HashSet<FunctionSymbol> _shaping = new(ReferenceEqualityComparer.Instance);
 
@@ -722,6 +733,7 @@ public sealed partial class SilGen {
 
         var checker = new ShapeChecker(this, shape, symbol);
         if (checker.Allows(body, false)) {
+            _describes[symbol] = checker.Describes;
             if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
                 Console.Error.WriteLine($"unspecialised {TraceName(symbol)}");
             }
@@ -779,6 +791,9 @@ public sealed partial class SilGen {
 
         /// <summary>The innermost node that kept the body from being unspecialised, for SABLE_GENERICS_TRACE.</summary>
         public BoundNode? Refused { get; private set; }
+
+        /// <summary>Whether the body, or unspecialised code it calls, writes a value of a type parameter's type out: its callers make describers.</summary>
+        public bool Describes { get; private set; }
 
         public bool Allows(BoundNode node, bool inClosure) {
             var allowed = AllowsHere(node, inClosure);
@@ -960,7 +975,7 @@ public sealed partial class SilGen {
                 BoundForEach loop => ReferenceEquals(child, loop.Sequence),
                 // Not inside a protocol's own 'debugDescription' (Error's
                 // '"\(self)"'): a describer would call it back.
-                BoundInterpolatedString interpolated => interpolated.Parts.IndexOf(child) is var at and >= 0 && interpolated.Formats[at] is null && !DescribesSelf,
+                BoundInterpolatedString interpolated => interpolated.Parts.IndexOf(child) is var at and >= 0 && interpolated.Formats[at] is null && !DescribesSelf && (Describes = true),
                 _ => false,
             };
 
@@ -992,6 +1007,8 @@ public sealed partial class SilGen {
             if (!IsGeneric(callee) || generator.UnspecialisedShape(callee) is not { } calleeShape) {
                 return false;
             }
+
+            Describes |= generator.DescribesValues(callee);
 
             // A protocol extension's member: on a value of a type parameter of
             // this function, or on self, its Self that type parameter.
@@ -1351,7 +1368,7 @@ public sealed partial class SilGen {
     ///     which finds the refined ones in the registry. False when the type
     ///     does not declare each conformance itself, or it cannot be lowered.
     /// </summary>
-    internal bool GenericTable(TypeSymbol concrete, NamedTypeSymbol protocol, SyntaxNode at) {
+    internal bool GenericTable(TypeSymbol concrete, NamedTypeSymbol protocol, SyntaxNode at, bool describe = true) {
         if (Lower(concrete) is not { } value || concrete is not (NamedTypeSymbol or ArrayTypeSymbol)) {
             return false;
         }
@@ -1397,11 +1414,14 @@ public sealed partial class SilGen {
         // Unspecialised code reads the conformer's associated types through
         // the table, and finds what they conform to in the registry: those
         // tables are made too.
-        if (_generics == GenericsMode.Unspecialised && _associatedTabled.Add((concrete, protocol.OriginalDefinition))) {
+        // Written out by its describer, as a type parameter's value is — for
+        // code that may write one out.
+        var tabled = _associatedTabled.Add((concrete, protocol.OriginalDefinition));
+        var described = describe && _associatedDescribed.Add((concrete, protocol.OriginalDefinition));
+        if (_generics == GenericsMode.Unspecialised && (tabled || described)) {
             foreach (var each in closure) {
                 foreach (var associated in each.AssociatedTypes) {
-                    // Written out by its describer, as a type parameter's value is.
-                    if (AssociatedBinding(concrete, associated) is { } read && Lower(read) is { } lowered && !SilType.MentionsOpaque(lowered)) {
+                    if (described && AssociatedBinding(concrete, associated) is { } read && Lower(read) is { } lowered && !SilType.MentionsOpaque(lowered)) {
                         Describer(read, lowered, at);
                     }
 
@@ -1411,7 +1431,7 @@ public sealed partial class SilGen {
 
                     foreach (var constraint in associated.Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c)).OfType<NamedTypeSymbol>()) {
                         if (constraint.TypeKind == TypeKind.Protocol && IsTabledProtocol(constraint) && bound.Satisfies(constraint)) {
-                            GenericTable(bound, constraint.OriginalDefinition, at);
+                            GenericTable(bound, constraint.OriginalDefinition, at, describe);
                         }
                     }
                 }
@@ -1422,6 +1442,9 @@ public sealed partial class SilGen {
     }
 
     readonly HashSet<(TypeSymbol, NamedTypeSymbol)> _associatedTabled = [];
+
+    /// <summary>The conformances whose associated types have describers made, for code that may write their values out.</summary>
+    readonly HashSet<(TypeSymbol, NamedTypeSymbol)> _associatedDescribed = [];
 
     /// <summary>What a conformer binds an associated type to, read with the conformer's own type arguments; null when it does not, or binds it to Never.</summary>
     TypeSymbol? AssociatedBinding(TypeSymbol concrete, TypeParameterSymbol associated) {
@@ -1823,6 +1846,7 @@ public sealed partial class SilGen {
         if (!_described.Add(value)) {
             return;
         }
+
 
         if (PrintSymbol() is not { } print || print.DeclaringSyntax.FirstOrDefault() is not { } syntax || SourceOf(syntax) is not { } source) {
             return;
@@ -2337,7 +2361,7 @@ public sealed partial class SilGen {
                 }
 
                 foreach (var protocol in found.ProtocolsOf(parameter)) {
-                    if (!generator.GenericTable(given, protocol, at)) {
+                    if (!generator.GenericTable(given, protocol, at, generator.DescribesValues(callee))) {
                         return false;
                     }
                 }
@@ -2354,7 +2378,7 @@ public sealed partial class SilGen {
                 }
 
                 foreach (var protocol in CompositionTypeSymbol.PartsOf(constraint).OfType<NamedTypeSymbol>()) {
-                    if (!generator.GenericTable(named, protocol.OriginalDefinition, at)) {
+                    if (!generator.GenericTable(named, protocol.OriginalDefinition, at, generator.DescribesValues(callee))) {
                         return false;
                     }
                 }
@@ -2641,7 +2665,7 @@ public sealed partial class SilGen {
         ///     made for it, referred to as they are — and its describer made,
         ///     for the callee to write one of its values out with.
         /// </summary>
-        IEnumerable<SilValue>? GenericHiddenArguments(GenericShape shape, TypeSubstitution bound, SyntaxNode at) {
+        IEnumerable<SilValue>? GenericHiddenArguments(GenericShape shape, TypeSubstitution bound, SyntaxNode at, FunctionSymbol? callee = null) {
             var hidden = new List<SilValue>();
             foreach (var parameter in shape.Parameters) {
                 var given = bound.Lookup(parameter)!;
@@ -2649,7 +2673,7 @@ public sealed partial class SilGen {
                     return null;
                 }
 
-                if (!IsOpaqueHere(given) && LowerType(given) is { } lowered && !SilType.MentionsOpaque(lowered)) {
+                if (!IsOpaqueHere(given) && LowerType(given) is { } lowered && !SilType.MentionsOpaque(lowered) && (callee is null || generator.DescribesValues(callee))) {
                     generator.Describer(given, lowered, at);
                 }
 

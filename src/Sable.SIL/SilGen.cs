@@ -10551,7 +10551,7 @@ public sealed partial class SilGen {
                     arguments.Add(place.Passed);
                 }
 
-                if (GenericHiddenArguments(genericShape, bound, call.Syntax) is not { } hidden) {
+                if (GenericHiddenArguments(genericShape, bound, call.Syntax, callee) is not { } hidden) {
                     EndAll(borrows);
                     return null;
                 }

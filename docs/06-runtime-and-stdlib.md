@@ -312,13 +312,20 @@ so it is held indirectly, and nothing is allocated on the heap for it.
   code that knows the type hands to unspecialised code and registered as
   the image starts, that writes the value out as an interpolation in code
   that knows its type does.
-- Where the types are known, a call stores each argument of a type
-  parameter's type in a slot of its frame and passes the slot's address,
-  passes a slot for the result and loads it after, and passes the constant
-  metadata and the table made for the type, referred to as the constant it
-  is — not looked up. Where the table is not one the module made (a
-  subclass inheriting a conformance), the registry's answer is kept at the
-  call the first time it is found (`sable_witness_table_cached`).
+- Where the types are known, a call passes each argument of a type
+  parameter's type by address, copying nothing: a local, or a stored field
+  of one, where it is, when nothing the call evaluates or passes can change
+  it (no inout or out parameter, no mutating receiver, its arguments only
+  literals and variables); anything else the call borrows, in a slot of its
+  frame that holds it unowned (`alloc_stack [unmanaged]`, stored without a
+  retain and never destroyed). It passes a slot for the result and loads it
+  after, and passes the constant metadata and the table made for the type —
+  by the whole program, or by the unit, whose copy is the one the linker
+  keeps — referred to as the constant it is, not looked up. Where the table
+  is not one the module made (a subclass inheriting a conformance), the
+  registry's answer is found once where the function starts and kept for
+  the next call (`sable_witness_table_cached`), as the metadata of an array
+  of a type parameter's values is (`sable_array_type`).
 - The SIL inliner leaves unspecialised code alone: its opaque values are
   sized by its own metadata parameters. But an optimised build (`-O2`,
   `-O3`, `-Os`) first specialises it where the types are known (#297

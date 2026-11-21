@@ -79,8 +79,18 @@ public sealed class Specialise(bool forSize = false) : ISilPass {
         // What no longer has a caller goes: the generic functions every
         // call of which was specialised. Only those, and only from a whole
         // program, whose callers are all here.
+        // One a function that stays still names — a witness of a type
+        // nothing makes any more, which the passes after drop — stays too.
         if (module.Unit is null && SilPassManager.Reachable(module) is { } reached) {
-            module.RemoveAll(f => f.IsUnspecialised && !reached.Contains(f.Name));
+            var gone = module.Functions.Where(f => f.IsUnspecialised && !reached.Contains(f.Name)).Select(static f => f.Name).ToHashSet(StringComparer.Ordinal);
+            for (var kept = true; kept;) {
+                var named = module.Functions.Where(f => !gone.Contains(f.Name)).SelectMany(static f => f.Blocks.SelectMany(static b => b.Instructions))
+                    .OfType<FunctionRefInst>().Select(static r => r.Function).Where(gone.Contains).ToList();
+                gone.ExceptWith(named);
+                kept = named.Count > 0;
+            }
+
+            module.RemoveAll(f => gone.Contains(f.Name));
         }
     }
 }

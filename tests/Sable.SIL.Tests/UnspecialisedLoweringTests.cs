@@ -493,4 +493,84 @@ public sealed class UnspecialisedLoweringTests {
         Assert.Equal(text, SilPrinter.Print(parsed));
         Assert.Equal(expected, Run(parsed));
     }
+
+    const string Lending = """
+                           struct Pair {
+                               var left: String
+                               var right: String
+
+                               mutating fn swapIn(_ other: String) -> String {
+                                   let was = left
+                                   left = other
+                                   return was
+                               }
+                           }
+
+                           fn same<T: Equatable>(_ a: T, _ b: T) -> Bool {
+                               return a == b
+                           }
+
+                           fn keep<T>(_ value: T, _ also: T) -> T {
+                               return value
+                           }
+
+                           fn touch(_ text: inout String) -> String {
+                               text = text + "!"
+                               return text
+                           }
+
+                           fn lend(_ given: String) -> String {
+                               var local = "a" + given
+                               let pair = Pair { left: local, right: given }
+                               var result = "\(same(local, given)) \(same(pair.left, pair.right)) \(given.hasPrefix("b"))"
+                               // Arguments that change the local are evaluated first: the call sees each as it was.
+                               result += " " + keep(local, touch(&local)) + " " + local
+                               var changed = pair
+                               result += " " + keep(changed.swapIn(changed.right), changed.left)
+                               return result
+                           }
+
+                           fn main() {
+                               print(lend("b"))
+                           }
+                           """;
+
+    /// <summary>
+    ///     A call from code that knows the type lends an unspecialised callee
+    ///     its arguments without a copy: a local, or a stored field of one,
+    ///     where it is, when nothing the call evaluates or passes can change
+    ///     it; a parameter, or anything else borrowed, from a slot that holds
+    ///     it unowned (<c>alloc_stack [unmanaged]</c>), never destroyed. An
+    ///     argument evaluated after one that could change it is passed as it
+    ///     was when it was evaluated, as the specialised program passes it.
+    /// </summary>
+    [Fact]
+    public void ArgumentsAreLentToUnspecialisedCodeWithoutACopy() {
+        var module = Lower(Lending);
+        var lend = Instructions(module.Find("M.lend")!);
+        var calls = lend.OfType<ApplyInst>().Where(static a => a.Callee is FunctionRefInst { Function: "M.same$generic" }).ToList();
+        Assert.Equal(2, calls.Count);
+
+        // 'same(local, given)': the local in its own slot, the parameter in an unmanaged one.
+        Assert.Collection(calls[0].Arguments.Take(2),
+            static a => Assert.True(a is LoadBorrowInst { Address: BuiltinInst { Name: "opaque_cast", Operands: [AllocStackInst { VariableName: "local", Unmanaged: false }] } }),
+            static a => Assert.True(a is LoadBorrowInst { Address: BuiltinInst { Name: "opaque_cast", Operands: [AllocStackInst { VariableName: null, Unmanaged: true }] } }));
+
+        // 'same(pair.left, pair.right)': each field where it is.
+        Assert.All(calls[1].Arguments.Take(2), static a => Assert.True(a is LoadBorrowInst { Address: BuiltinInst { Name: "opaque_cast", Operands: [StructElementAddrInst] } }));
+
+        // The receiver of 'given.hasPrefix(...)' is not copied — the one copy is the pair's — nor is anything lent destroyed from its slot.
+        var hasPrefix = lend.OfType<ApplyInst>().Single(static a => a.Callee is FunctionRefInst { Function: var f } && f.StartsWith("Sable.Core.StringProtocol.hasPrefix", StringComparison.Ordinal));
+        Assert.True(hasPrefix.Arguments.First() is LoadBorrowInst { Address: BuiltinInst { Operands: [AllocStackInst { Unmanaged: true }] } });
+        Assert.Single(lend, static i => i is CopyValueInst { Value: SilArgument });
+        Assert.DoesNotContain(lend, static i => i is DestroyAddrInst { Address: AllocStackInst { Unmanaged: true } });
+
+        const string expected = "false false true ab ab! ab\n";
+        Assert.Equal(expected, Run(module));
+        Assert.Equal(expected, Run(Lower(Lending, GenericsMode.Specialised)));
+        var text = SilPrinter.Print(module);
+        var parsed = SilParser.Parse(text);
+        Assert.Equal(text, SilPrinter.Print(parsed));
+        Assert.Equal(expected, Run(parsed));
+    }
 }

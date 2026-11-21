@@ -69,7 +69,13 @@ public sealed class RegionTests {
 
     [Fact]
     public void AReferenceIntoAParameterRegionIsRootedThere() {
-        var result = Pipeline.Compile(new SourceText(Program(Declarations, ""), "test.sb"));
+        // The program reaches 'build', or the passes drop it.
+        var body = """
+                       region arena {
+                           print(total(in: arena, 3))
+                       }
+                   """;
+        var result = Pipeline.Compile(new SourceText(Program(Declarations, body), "test.sb"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
         Assert.Equal([0], result.Sil!.Find("Test.build")!.ResultRoots);
     }

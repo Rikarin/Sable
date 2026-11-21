@@ -1531,6 +1531,17 @@ public sealed class SilModule {
     /// </summary>
     public bool AsyncLowered { get; set; }
 
+    /// <summary>Removes the functions that match, from the list and from <see cref="Find" /> both.</summary>
+    public int RemoveAll(Predicate<SilFunction> match) {
+        foreach (var function in Functions) {
+            if (match(function) && _byName.TryGetValue(function.Name, out var named) && ReferenceEquals(named, function)) {
+                _byName.Remove(function.Name);
+            }
+        }
+
+        return Functions.RemoveAll(match);
+    }
+
     public SilFunction Add(SilFunction function) {
         Functions.Add(function);
         _byName[function.Name] = function;

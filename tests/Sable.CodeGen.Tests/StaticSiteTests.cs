@@ -55,8 +55,8 @@ public sealed class StaticSiteTests {
                 interpreted.Keys.Order(StringComparer.Ordinal)
             );
 
-            if (CanBuild) {
-                var native = written["native"];
+            // Natively too, where this run built it (SABLE_TEST_NATIVE=all, as CI sets).
+            if (written.TryGetValue("native", out var native)) {
                 Assert.Equal(interpreted.Keys.Order(StringComparer.Ordinal), native.Keys.Order(StringComparer.Ordinal));
                 foreach (var (name, text) in interpreted) {
                     Assert.Equal(text, native[name]);

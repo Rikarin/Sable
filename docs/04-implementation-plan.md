@@ -2694,8 +2694,11 @@ than "every unit" when an interface changes (today a signature change
 anywhere is a ~6 s rebuild here); keeping parsed trees and bound
 declarations in a long-lived process (a build daemon, or the LSP server)
 so a warm build re-parses only what changed; and early cut-off when a
-change's result is unchanged. (Since done: invalidation by dependency,
-and a binary `.sbi` that units whose objects are kept are parsed and bound
+change's result is unchanged. (Since done: invalidation by dependency, then
+by the declarations a unit may use — a new public function in the package
+every other uses compiles 2 units of the 110k-line workspace rather than
+101, 2.2 s rather than 13–14 s (#182 stage 9, docs/05 §5.4, "Dependencies
+by name") — and a binary `.sbi` that units whose objects are kept are parsed and bound
 from — docs/05 §5.4, "As built". Declarations are still bound from source
 text, the interfaces', on each build; docs/05 §5.4 measures what symbols in
 the `.sbi` would save (at most about 0.25 s of a 2.8 s body edit of

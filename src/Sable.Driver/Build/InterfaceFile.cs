@@ -6,7 +6,9 @@ namespace Sable.Driver.Build;
 /// <summary>
 ///     A unit's <c>.sbi</c> file (docs/05 §5.4): what other units bind and
 ///     lower against — for each file its interface fingerprint, its
-///     extensions' fingerprint, the dotted names it writes, and its source
+///     extensions' fingerprint, the dotted names it writes, each top-level
+///     declaration's fingerprint and the names it mentions, the names the
+///     file writes, and its source
 ///     with every body that is not interface blanked — written when the
 ///     unit's interface is first worked out, and read back by later builds:
 ///     an unchanged unit's interface is not worked out again, and a unit
@@ -35,7 +37,7 @@ namespace Sable.Driver.Build;
 /// </remarks>
 public sealed record InterfaceFile(string Unit, IReadOnlyList<string> Assumed, IReadOnlyList<(string File, FileInterface Interface)> Files) {
     /// <summary>The format's version: bump when what is written, or what it means, changes.</summary>
-    public const int Version = 3;
+    public const int Version = 4;
 
     static ReadOnlySpan<byte> Magic => "SBI"u8;
 
@@ -54,6 +56,14 @@ public sealed record InterfaceFile(string Unit, IReadOnlyList<string> Assumed, I
                 writer.Write(face.Fingerprint);
                 writer.Write(face.Extensions);
                 WriteList(writer, face.References);
+                writer.Write(face.Declarations.Count);
+                foreach (var declaration in face.Declarations) {
+                    writer.Write(declaration.Name);
+                    writer.Write(declaration.Fingerprint);
+                    WriteList(writer, declaration.Mentions);
+                }
+
+                WriteList(writer, face.Uses);
                 WriteSource(writer, face.Source);
             }
         }
@@ -144,7 +154,14 @@ public sealed record InterfaceFile(string Unit, IReadOnlyList<string> Assumed, I
                 var fingerprint = reader.ReadString();
                 var extensions = reader.ReadString();
                 var references = ReadList(reader);
-                read.Add((file, new FileInterface(fingerprint, ReadSource(reader), extensions, references)));
+                var count = reader.ReadInt32();
+                var declarations = new List<DeclarationPrint>(Math.Min(count, 4096));
+                for (var i = 0; i < count; i++) {
+                    declarations.Add(new(reader.ReadString(), reader.ReadString(), ReadList(reader)));
+                }
+
+                var uses = ReadList(reader);
+                read.Add((file, new FileInterface(fingerprint, ReadSource(reader), extensions, references, declarations, uses)));
             }
 
             return new(unit, assumed, read);

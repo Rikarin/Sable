@@ -950,7 +950,78 @@ Of a body edit, parsing fell from 0.37–0.59 s to 0.15–0.30 s (496 of the
 501 files are parsed from interfaces) and binding from 1.1–2.3 s to
 0.5–0.9 s. `IncrementalTests` counts the units each kind of edit compiles.
 
-### The query engine: design (not built)
+### Dependencies by name (#182, stage 9)
+
+Keying a unit by the whole interfaces of the units it depends on compiles
+again every dependent of a package when anything another unit could see of
+it changes — a new public function in the package every other uses compiled
+101 of the 110k-line workspace's 102 units. A unit is now keyed by what of
+its dependencies it may use, declaration by declaration: the fine-grained
+dependency tracking of a query engine, recorded where the interface is
+worked out rather than by a long-lived process.
+
+*What is recorded.* With each file's interface (`FileInterface`, kept in
+the unit's `.sbi`, format 4), `InterfaceFingerprint.Interface` writes:
+
+- for each top-level declaration other than an extension, a
+  `DeclarationPrint`: the name it declares, the fingerprint of its own part
+  of the interface (its signature, its members, and the bodies other units
+  lower — generic, `const`, kept by an attribute — with the positions the
+  file's fingerprint has), and the names that part mentions. A declaration
+  that may matter to a unit that never writes its name — an operator, a
+  global or constant (whose initial value the entry unit runs), `fn
+  Type.method`, anything not recognised — is named `*`;
+- the file's *uses*: every identifier it writes, bodies included.
+
+*The key.* `IncrementalBuild.DependencyKey` takes, for unit *u* and each
+unit *d* it depends on (`UnitGraph`, as before):
+
+- *d*'s whole interface when *u* holds the entry point (it sets up every
+  global and so reads every unit) or shares a module with *d* (what one
+  declares there the other sees as its own);
+- otherwise *d*'s modules and the fingerprints of the declarations *u* may
+  use: those named `*`, those whose name *u* uses, and, closed over, those
+  whose name a selected declaration mentions — a function's result type, the
+  class a subclass names, a generic body's callees — across all of *u*'s
+  dependencies, until nothing new is named.
+
+Names are compared as written, without modules: a name *u* writes that is
+some other declaration's too only costs a compilation that was not needed.
+A declaration added, removed or changed in *d* changes *u*'s key exactly
+when its name is among those, so an addition that could change *u*'s
+overload resolution or name lookup (it has a name *u* writes) compiles *u*
+again, and one *u* cannot see does not. What is not by name stays as it
+was: every unit is keyed by every extension's fingerprint, and the
+units' ABI records are compared before the link, which compiles the program
+whole if two units laid a type out differently.
+
+*Why not a query engine with red-green marking.* The work a red-green
+engine saves over these keys is recomputing fingerprints that did not
+change; here that is the interface phase and the key computation, 45 ms and
+33 ms of a 2 s build on the 110k-line workspace. What it decides — which
+units' code is stale — is what the keys decide, now at the granularity of
+declarations. A long-lived engine pays off once binding is incremental
+(below); until then the build's time is binding and lowering the units the
+keys say are stale.
+
+Measured on `tools/incremental/genworkspace.py`'s workspace (100
+packages, 110k lines, 102 units), dev profile, `sable` built Release, load
+average 7–9; before is keying by dependencies' whole interfaces (this
+series' items 1–3 in both):
+
+| Edit | Units before | Units after | Before | After |
+|---|---:|---:|---:|---:|
+| A function body (pkg50 / pkg0 / pkg99) | 1 | 1 | 2.0 / 2.0 / — s | 1.9 / 2.1 / 2.2 s |
+| A new public function in a leaf (pkg99) | 2 | 2 | 2.1 s | 2.1 s |
+| … in a package half the others use (pkg50) | 51 | 2 | 8.4 s | 2.1 s |
+| … in the package every other uses (pkg0) | 101 | 2 | 13.2–14.2 s | 2.2 s |
+| A used function's signature (pkg0's `run0_0`, called by 6 units) | 101 | 8 | — | 3.3 s |
+
+The key computation (`unit graph`) takes 33 ms against 28 ms before.
+`IncrementalTests.AnInterfaceChangeRecompilesOnlyTheUnitsThatUseWhatChanged`
+holds the counts.
+
+### The query engine: what is left
 
 The cache above is a query engine with its memo tables on disk and its
 dependency edges hashed into keys: each cached thing's key is the

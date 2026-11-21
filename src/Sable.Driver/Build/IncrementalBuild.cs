@@ -551,10 +551,25 @@ public static class IncrementalBuild {
                     [standardEntry.Hash, ..package.Dependencies.Select(d => own[byName[d]].Entry!.Hash)]);
             }
 
+            // Every unit's declarations by the name each declares, once.
+            var declared = new Dictionary<string, List<(int Unit, DeclarationPrint Print)>>(StringComparer.Ordinal);
+            for (var d = 0; d < own.Count; d++) {
+                foreach (var print in faces[d].SelectMany(static f => f.Declarations)) {
+                    if (!declared.TryGetValue(print.Name, out var list)) {
+                        declared[print.Name] = list = [];
+                    }
+
+                    list.Add((d, print));
+                }
+            }
+
+            var used = 0;
             for (var i = 0; i < own.Count; i++) {
-                var seen = string.Join("\n", dependencies[i].Select(d => $"{own[d].Name}:{unitInterfaces[d]}"));
+                var seen = DependencyKey(i, dependencies[i], own, facts, faces, unitInterfaces, declared, ref used);
                 own[i].Key = Hash($"{settingsKey}\nunit {own[i].Name}\n{own[i].ContentHash}\n{extensions}\n{standard.ContentHash}\n{seen}");
             }
+
+            timings?.Count("declarations keyed by name", used);
         }
 
         foreach (var unit in units) {
@@ -710,6 +725,79 @@ public static class IncrementalBuild {
         }
 
         return new(true, [], "incremental", stale.Count, units.Count - stale.Count) { Warnings = warnings };
+    }
+
+    /// <summary>
+    ///     What of its dependencies a unit's key covers (docs/05 §5.4,
+    ///     "Dependencies by name"). The unit holding the entry point sets up
+    ///     every global, and a unit sharing a module with another sees all of
+    ///     it as its own: those take a dependency's whole interface. Any other
+    ///     takes, of each dependency, its modules and the fingerprints of the
+    ///     top-level declarations it may use — those named as the unit writes
+    ///     a name anywhere in its files, those every unit may use (an
+    ///     operator, a global), and, closed over, those named in the
+    ///     interfaces of what it uses (a function's result type, a generic
+    ///     body's callees). So a declaration added, changed or removed in a
+    ///     package compiles again only the units that write its name or reach
+    ///     it, rather than every unit depending on the package.
+    /// </summary>
+    /// <param name="used">Counts the declarations keyed by name, for the timings.</param>
+    static string DependencyKey(
+        int unit, IReadOnlyList<int> dependencies, IReadOnlyList<Unit> units, IReadOnlyList<UnitFacts> facts, IReadOnlyList<FileInterface[]> faces,
+        IReadOnlyList<string> interfaces, IReadOnlyDictionary<string, List<(int Unit, DeclarationPrint Print)>> declared, ref int used
+    ) {
+        var whole = new List<int>();
+        var byName = new List<int>();
+        foreach (var d in dependencies) {
+            (unit == 0 || facts[unit].Modules.Overlaps(facts[d].Modules) ? whole : byName).Add(d);
+        }
+
+        var parts = whole.Select(d => $"{units[d].Name}:{interfaces[d]}").ToList();
+        if (byName.Count == 0) {
+            return string.Join("\n", parts);
+        }
+
+        // What the unit writes, and what that reaches of the dependencies
+        // keyed by name, until nothing more is named.
+        var needed = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Queue<string>();
+        void Need(string name) {
+            if (needed.Add(name)) {
+                pending.Enqueue(name);
+            }
+        }
+
+        Need(DeclarationPrint.Everyone);
+        foreach (var name in faces[unit].SelectMany(static f => f.Uses)) {
+            Need(name);
+        }
+
+        var selected = byName.ToDictionary(static d => d, static _ => new List<DeclarationPrint>());
+        while (pending.TryDequeue(out var name)) {
+            if (!declared.TryGetValue(name, out var prints)) {
+                continue;
+            }
+
+            foreach (var (d, print) in prints) {
+                if (!selected.TryGetValue(d, out var chosen)) {
+                    continue;
+                }
+
+                chosen.Add(print);
+                foreach (var mention in print.Mentions) {
+                    Need(mention);
+                }
+            }
+        }
+
+        foreach (var d in byName) {
+            var prints = selected[d];
+            used += prints.Count;
+            parts.Add($"{units[d].Name}:modules={string.Join(",", facts[d].Modules.Order(StringComparer.Ordinal))}:"
+                + string.Join(",", prints.Select(static p => $"{p.Name}={p.Fingerprint}").Order(StringComparer.Ordinal)));
+        }
+
+        return string.Join("\n", parts);
     }
 
     /// <summary>What lowering one unit came to: its IR and its record of the types it laid out, or why not.</summary>

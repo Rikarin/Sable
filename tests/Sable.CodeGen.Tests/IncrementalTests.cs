@@ -341,6 +341,12 @@ public sealed class IncrementalTests {
         // The dotted names it writes, from which what depends on what is found.
         Assert.Contains("xs.count", shapes.References);
 
+        // Each declaration's own fingerprint and what it mentions, and the
+        // names the file writes, by which other units depend on it.
+        Assert.Contains(shapes.Declarations, static d => d is { Name: "largest" } && d.Mentions.Contains("Comparable"));
+        Assert.Contains(shapes.Declarations, static d => d.Name == DeclarationPrint.Everyone);
+        Assert.Contains("scale", shapes.Uses);
+
         // A body change writes the changed unit's interface beside the old
         // one, and the units kept are bound from theirs.
         scenario.Edit("shapes/src/lib.sb", "    return x\n", "    return x + 1\n");
@@ -372,7 +378,11 @@ public sealed class IncrementalTests {
             var rebuilt = scenario.Check();
             Assert.Equal(Expected.Replace("12", "13", StringComparison.Ordinal), rebuilt.Output);
             Assert.Equal(0, rebuilt.Compiled);
-            Assert.Equal(face, Read("lib geometry-0.1.0", "../geometry/src/lib.sb").Files[0].Interface with { References = face.References });
+            var again = Read("lib geometry-0.1.0", "../geometry/src/lib.sb").Files[0].Interface;
+            Assert.Equal(face, again with { References = face.References, Declarations = face.Declarations, Uses = face.Uses });
+            Assert.Equal(face.References, again.References);
+            Assert.Equal(face.Uses, again.Uses);
+            Assert.Equal(face.Declarations.Select(static d => (d.Name, d.Fingerprint, string.Join(",", d.Mentions))), again.Declarations.Select(static d => (d.Name, d.Fingerprint, string.Join(",", d.Mentions))));
         }
     }
 
@@ -395,8 +405,10 @@ public sealed class IncrementalTests {
         scenario.Edit("shapes/src/lib.sb", "public fn flourish() -> String {\n    return \"~fancy~\"", "public fn flourish(_ times: Int = 2) -> String {\n    return \"~fancy~ x\\(times)\"");
         var built = scenario.Check();
         Assert.Contains("7 3 plain x2", built.Output);
-        // Shapes and what depends on it; the standard library does not.
-        Assert.Equal(Units - 1, built.Compiled);
+        // Shapes and the app, which calls it; not geometry, which does not
+        // name it (AnInterfaceChangeRecompilesOnlyTheUnitsThatUseWhatChanged),
+        // nor the standard library.
+        Assert.Equal(Units - 2, built.Compiled);
 
         // So is a global's initial value, set up where the program starts.
         scenario.Edit("shapes/src/lib.sb", "public var created = 0", "public var created = 10");
@@ -434,6 +446,40 @@ public sealed class IncrementalTests {
         var layout = scenario.Check();
         Assert.Contains("circle of area 12", layout.Output);
         Assert.Equal(Units - 1, layout.Compiled);
+    }
+
+    /// <summary>
+    ///     A unit depends on the declarations of another that it may use, by
+    ///     name (#182, docs/05 §5.4): a new public function in shapes, which
+    ///     geometry depends on but does not name, compiles again shapes' unit
+    ///     and the app's — which sets up every global, and takes every unit's
+    ///     whole interface — not geometry's. One named as geometry writes a
+    ///     name (an overload of 'largest' it calls) compiles geometry's too,
+    ///     and so does a change to what geometry reaches through what it
+    ///     names: the class it subclasses.
+    /// </summary>
+    [Fact]
+    public void AnInterfaceChangeRecompilesOnlyTheUnitsThatUseWhatChanged() {
+        if (!CanBuild) {
+            return;
+        }
+
+        using var scenario = new Scenario();
+        scenario.Check();
+        scenario.Edit("shapes/src/lib.sb", "public struct Point {", "public fn corners() -> Int {\n    return 4\n}\n\npublic struct Point {");
+        var unused = scenario.Check();
+        Assert.Equal(Expected, unused.Output);
+        Assert.Equal(("incremental", 2, Units - 2), (unused.Kind, unused.Compiled, unused.Reused));
+
+        scenario.Edit("shapes/src/lib.sb", "public struct Point {", "public fn largest(_ xs: String[>..], or fallback: String) -> String {\n    return fallback\n}\n\npublic struct Point {");
+        var named = scenario.Check();
+        Assert.Equal(Expected, named.Output);
+        Assert.Equal(Units - 1, named.Compiled);
+
+        scenario.Edit("shapes/src/lib.sb", "public fn describe() -> String {", "public fn kind() -> Int {\n        return 1\n    }\n\n    public fn describe() -> String {");
+        var reached = scenario.Check();
+        Assert.Equal(Expected, reached.Output);
+        Assert.Equal(Units - 1, reached.Compiled);
     }
 
     /// <summary>

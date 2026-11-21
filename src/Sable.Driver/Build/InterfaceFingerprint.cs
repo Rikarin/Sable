@@ -12,7 +12,28 @@ namespace Sable.Driver.Build;
 ///     reach every unit; and the dotted names it writes
 ///     (<see cref="References" />), from which the units it depends on are found.
 /// </summary>
-public sealed record FileInterface(string Fingerprint, string Source, string Extensions, IReadOnlyList<string> References);
+/// <param name="Declarations">Each of its top-level declarations' own part of the interface (<see cref="DeclarationPrint" />), in order.</param>
+/// <param name="Uses">The names its files write anywhere, bodies included: what of other units' declarations it may use.</param>
+public sealed record FileInterface(
+    string Fingerprint, string Source, string Extensions, IReadOnlyList<string> References,
+    IReadOnlyList<DeclarationPrint> Declarations, IReadOnlyList<string> Uses);
+
+/// <summary>
+///     One top-level declaration's part of a file's interface — what a unit
+///     using it can depend on (docs/05 §5.4, "Dependencies by name"): the name
+///     it declares, the fingerprint of its interface (its members, signatures
+///     and the bodies other units lower among it), and the names that
+///     interface mentions, which a unit using it depends on in turn.
+/// </summary>
+/// <param name="Name">
+///     The name declared; <see cref="Everyone" /> for a declaration that may
+///     matter to a unit that never writes its name — an operator, a global,
+///     a method declared on another type, anything not recognised.
+/// </param>
+public sealed record DeclarationPrint(string Name, string Fingerprint, IReadOnlyList<string> Mentions) {
+    /// <summary>The name of a declaration every dependent unit depends on.</summary>
+    public const string Everyone = "*";
+}
 
 /// <summary>
 ///     A file's interface, as a fingerprint: everything in it that another
@@ -176,8 +197,45 @@ public static partial class InterfaceFingerprint {
         }
 
         var references = DottedName().Matches(text).Select(static m => m.Value).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
-        return new(Hash(writer.Text.ToString()), source.ToString(), Hash(writer.Extensions.ToString()), references);
+
+        // Each declaration on its own, for the units that use it by name;
+        // extensions reach every unit through the extensions' fingerprint.
+        var declarations = new List<DeclarationPrint>();
+        if (tree.Root is CompilationUnitSyntax unit) {
+            foreach (var member in unit.Members) {
+                if (member is ExtensionDeclarationSyntax) {
+                    continue;
+                }
+
+                var one = new Writer(tree, concreteTypes);
+                one.Node(member, positional: false);
+                declarations.Add(new(DeclaredName(member), Hash(one.Text.ToString()), [..one.Mentions.Order(StringComparer.Ordinal)]));
+            }
+        }
+
+        var uses = tree.Root.DescendantTokens().Where(static t => t.Kind == SyntaxKind.IdentifierToken).Select(static t => t.Text)
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+        return new(Hash(writer.Text.ToString()), source.ToString(), Hash(writer.Extensions.ToString()), references, declarations, uses);
     }
+
+    /// <summary>
+    ///     The name a top-level declaration gives what it declares, by which
+    ///     a unit using it is found; <see cref="DeclarationPrint.Everyone" />
+    ///     for one that matters to units that do not write a name of it.
+    /// </summary>
+    static string DeclaredName(SyntaxNode member) =>
+        member switch {
+            // 'fn Type.method' adds to a type, as an extension does.
+            FunctionDeclarationSyntax f when f.DotToken.IsNone && f.Identifier.Kind == SyntaxKind.IdentifierToken => f.Identifier.Text,
+            StructDeclarationSyntax s => s.Identifier.Text,
+            ClassDeclarationSyntax c => c.Identifier.Text,
+            UnionDeclarationSyntax u => u.Identifier.Text,
+            EnumDeclarationSyntax e => e.Identifier.Text,
+            ActorDeclarationSyntax a => a.Identifier.Text,
+            ProtocolDeclarationSyntax p => p.Identifier.Text,
+            AliasDeclarationSyntax alias => alias.Identifier.Text,
+            _ => DeclarationPrint.Everyone,
+        };
 
     /// <summary>
     ///     A body left out of a file's source as other units see it: a block
@@ -206,6 +264,9 @@ public static partial class InterfaceFingerprint {
 
     sealed class Writer(SyntaxTree tree, IReadOnlySet<string> concreteTypes) {
         public StringBuilder Text { get; } = new();
+
+        /// <summary>The names the interface written mentions.</summary>
+        public HashSet<string> Mentions { get; } = new(StringComparer.Ordinal);
 
         /// <summary>The spans of the bodies left out, in document order.</summary>
         public List<TextSpan> Elided { get; } = [];
@@ -270,6 +331,10 @@ public static partial class InterfaceFingerprint {
         }
 
         void Token(SyntaxToken token, bool positional) {
+            if (token.Kind == SyntaxKind.IdentifierToken) {
+                Mentions.Add(token.Text);
+            }
+
             Text.Append((int)token.Kind).Append(' ').Append(token.Text);
             if (positional) {
                 var position = tree.Text.GetLinePosition(token.SpanStart);

@@ -610,6 +610,7 @@ public sealed class UnspecialisedLoweringTests {
         Assert.Equal(expected, Run(module));
         Assert.Equal(expected, Run(Lower(Relative, GenericsMode.Specialised)));
         Assert.Equal("cast to 'C.Index' failed", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.wrong")).Message);
+    }
 
     /// <summary>
     ///     An async function compiled once is split as any is: its resume and

@@ -868,9 +868,10 @@ program whole, as with any unit.
 
 `sable cache list` shows the entries with the fetched packages; `sable cache
 prune [--max-age <days>]` removes the entries another build of the compiler
-wrote, and the entries, packages and evaluated manifests no build has used
-in that many days (default 30), and what an interrupted build left half-made;
-`sable cache clean` removes everything. `sable cache warm [--target <triple>]
+wrote, and its records that a library checks cleanly (below), the entries,
+packages and evaluated manifests no build has used in that many days
+(default 30), and what an interrupted build left half-made; `sable cache
+clean` removes everything, the records too. `sable cache warm [--target <triple>]
 [--profile dev|release]` makes the entries a build for that target and
 profile needs now: the runtime, and the standard library alone and with each
 module a program may import (`--import <Module>` for one set). With
@@ -885,7 +886,7 @@ cache with its `.sbi`, made for a program that extends nothing, is proof
 that the library's files — Sable.Core and the modules imported, for that
 target and profile — bind and lower without a word: the build that finds or
 writes it (and `sable cache warm`) records them in
-`$SABLE_HOME/cache/library-checked`, under the compiler's identity
+`$SABLE_HOME/cache/library-checked/<compiler identity>/`
 (`Library.MarkChecked`), as a build that checked the library whole does
 (`LibraryCheck.Passed`). A fresh process then checks none of it again for a
 program that cannot change how it binds or lowers

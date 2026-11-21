@@ -23,10 +23,11 @@ public sealed class CacheCommand : PackageCommand {
           list       the fetched packages and the build cache's entries — the runtime's and the
                      standard library's archives for each target and profile — with their sizes
                      and when a build last used them
-          prune      remove the build cache's entries another build of the compiler wrote, and
-                     the packages, entries and evaluated manifests no build has used in
-                     --max-age days (default 30); a build makes them again if it needs them
-          clean      remove the whole cache
+          prune      remove the build cache's entries and records that the standard library
+                     checks cleanly another build of the compiler wrote, and the packages,
+                     entries and evaluated manifests no build has used in --max-age days
+                     (default 30); a build makes them again if it needs them
+          clean      remove the whole cache, the records that the library checks cleanly too
           warm       build the runtime and the standard library for a target and profile now,
                      rather than in the first build that needs them: the library alone, and
                      with each module (or each --import) a program may import
@@ -72,17 +73,19 @@ public sealed class CacheCommand : PackageCommand {
                     var environment = Environment;
                     var (entries, entryBytes) = environment.BuildCache.Prune(TimeSpan.FromDays(days));
                     var (packages, packageBytes) = PackageCache.Collect(environment, TimeSpan.FromDays(days));
-                    foreach (var path in entries.Concat(packages)) {
+                    var records = Library.PruneChecked(environment.BuildCache.Root);
+                    foreach (var path in entries.Concat(packages).Concat(records)) {
                         environment.Status.WriteLine($"    Removing {path}");
                     }
 
-                    environment.Status.WriteLine($"     Removed {entries.Count + packages.Count} item(s), {PackageCache.Describe(entryBytes + packageBytes)}");
+                    environment.Status.WriteLine($"     Removed {entries.Count + packages.Count + records.Count} item(s), {PackageCache.Describe(entryBytes + packageBytes)}");
                     return 0;
                 });
             case ["clean"]:
                 return Guard(() => {
                     var environment = Environment;
                     var bytes = environment.BuildCache.Clean() + PackageCache.Clear(environment);
+                    Library.CleanChecked(environment.BuildCache.Root);
                     environment.Status.WriteLine($"     Removed the cache, {PackageCache.Describe(bytes)}");
                     return 0;
                 });

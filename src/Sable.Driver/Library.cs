@@ -202,6 +202,56 @@ public static class Library {
     /// <summary>The directory of the build cache the records are in.</summary>
     public const string CheckedDirectory = "library-checked";
 
+    /// <summary>
+    ///     Where this compiler's records are among <paramref name="directory" />'s:
+    ///     a directory of its identity's, so that <c>sable cache prune</c>
+    ///     can tell another compiler's records from its own.
+    /// </summary>
+    public static string RecordsOf(string directory) => Path.Combine(directory, CodeGen.CompilerIdentity.Current);
+
+    /// <summary>
+    ///     <c>sable cache clean</c>: removes every record that a library
+    ///     checks cleanly, in the cache at <paramref name="cache" />.
+    ///     Returns the paths removed.
+    /// </summary>
+    public static IReadOnlyList<string> CleanChecked(string cache) => RemoveChecked(cache, static _ => true);
+
+    /// <summary>
+    ///     <c>sable cache prune</c>: removes the records another build of the
+    ///     compiler wrote, which this one never reads. Returns the paths removed.
+    /// </summary>
+    public static IReadOnlyList<string> PruneChecked(string cache) =>
+        RemoveChecked(cache, static path => Path.GetFileName(path) != CodeGen.CompilerIdentity.Current);
+
+    static IReadOnlyList<string> RemoveChecked(string cache, Func<string, bool> removes) {
+        var directory = Path.Combine(cache, CheckedDirectory);
+        if (!Directory.Exists(directory)) {
+            return [];
+        }
+
+        // Each compiler's directory, and what an earlier layout left at the top.
+        var removed = new List<string>();
+        foreach (var path in Directory.GetFileSystemEntries(directory).Where(removes)) {
+            try {
+                if (Directory.Exists(path)) {
+                    Directory.Delete(path, recursive: true);
+                } else {
+                    File.Delete(path);
+                }
+
+                removed.Add(path);
+            } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+                // In use, or gone already: the next prune tries again.
+            }
+        }
+
+        if (removed.Count > 0 && Directory.GetFileSystemEntries(directory).Length == 0) {
+            Directory.Delete(directory);
+        }
+
+        return removed;
+    }
+
     static bool IsEmbedded(SyntaxTree tree, IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> modules) =>
         CoreLibrary.Contains(tree) || CoreLibrary.ModuleOf(tree) is { } module && modules.TryGetValue(module, out var files) && files.Contains(tree);
 
@@ -252,7 +302,7 @@ public sealed class LibraryCheck {
             return known;
         }
 
-        if (File.Exists(Path.Combine(Library.CheckedPath, _lasting))) {
+        if (File.Exists(Path.Combine(Library.RecordsOf(Library.CheckedPath), _lasting))) {
             Library.CheckedTrees[_key] = true;
             return true;
         }
@@ -264,7 +314,7 @@ public sealed class LibraryCheck {
     /// <param name="directory">Where the record goes: <see cref="Library.CheckedPath" /> unless said.</param>
     public void Passed(string? directory = null) {
         Library.CheckedTrees[_key] = true;
-        directory ??= Library.CheckedPath;
+        directory = Library.RecordsOf(directory ?? Library.CheckedPath);
         try {
             Directory.CreateDirectory(directory);
             File.WriteAllText(Path.Combine(directory, _lasting), "");

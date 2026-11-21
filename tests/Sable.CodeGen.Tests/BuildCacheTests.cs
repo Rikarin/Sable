@@ -167,6 +167,36 @@ public sealed class BuildCacheTests {
         }
     }
 
+    /// <summary>
+    ///     The records that the standard library checks cleanly
+    ///     (<c>library-checked</c>) are kept per compiler: <c>prune</c> drops
+    ///     another build's, and what an earlier layout left at the top, and
+    ///     keeps this compiler's; <c>clean</c> drops every one.
+    /// </summary>
+    [Fact]
+    public void PruneDropsAnotherCompilersLibraryCheckedRecordsAndCleanDropsAll() {
+        var root = Directory.CreateTempSubdirectory("sable-build-cache-");
+        try {
+            var records = Path.Combine(root.FullName, Library.CheckedDirectory);
+            var own = Library.RecordsOf(records);
+            var other = Path.Combine(records, new string('0', 64));
+            var legacy = Path.Combine(records, "0123abcd");
+            Directory.CreateDirectory(own);
+            Directory.CreateDirectory(other);
+            File.WriteAllText(Path.Combine(own, "a"), "");
+            File.WriteAllText(Path.Combine(other, "a"), "");
+            File.WriteAllText(legacy, "");
+
+            Assert.Equal(new[] { other, legacy }.Order(StringComparer.Ordinal), Library.PruneChecked(root.FullName).Order(StringComparer.Ordinal));
+            Assert.True(File.Exists(Path.Combine(own, "a")));
+
+            Assert.Equal([own], Library.CleanChecked(root.FullName));
+            Assert.False(Directory.Exists(records));
+        } finally {
+            root.Delete(true);
+        }
+    }
+
     /// <summary>A release's prebuilt entries, beside the compiler, are used as they are and never written.</summary>
     [Fact]
     public void APrebuiltEntryIsReadAndNeverWritten() {
@@ -223,7 +253,7 @@ public sealed class BuildCacheTests {
         // And that the library checks cleanly is recorded beside it: a fresh
         // process — a build of one file, 'sable check', the language
         // server — checks none of it again (LibraryCheck).
-        Assert.Single(Directory.GetFiles(Path.Combine(fixture.Environment.CacheDirectory, Library.CheckedDirectory)));
+        Assert.Single(Directory.GetFiles(Library.RecordsOf(Path.Combine(fixture.Environment.CacheDirectory, Library.CheckedDirectory))));
     }
 
     /// <summary>
@@ -295,8 +325,10 @@ public sealed class BuildCacheTests {
 
         Assert.Equal(("a,b\n", 1, 1), Build(fixture, "app"));
 
+        Assert.True(Directory.Exists(Path.Combine(fixture.Environment.CacheDirectory, Library.CheckedDirectory)));
         Assert.Equal(0, SableProcess.Run(fixture.Root, fixture.Home, "cache", "clean").ExitCode);
         Assert.Empty(fixture.Environment.BuildCache.Entries());
+        Assert.False(Directory.Exists(Path.Combine(fixture.Environment.CacheDirectory, Library.CheckedDirectory)));
 
         Assert.NotEqual(0, SableProcess.Run(fixture.Root, fixture.Home, "cache", "warm", "--import", "Sable.Nothing").ExitCode);
     }

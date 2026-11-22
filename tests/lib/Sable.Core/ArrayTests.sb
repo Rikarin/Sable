@@ -137,3 +137,25 @@ fn removeLastOfAnEmptyArrayTraps() {
     var xs: Int[>..] = []
     let _ = xs.removeLast()
 }
+
+@test
+fn elementsAreRemovedKeepingTheBuffer() {
+    var xs: String[>..] = []
+    xs.reserveCapacity(64)
+    xs.append(contentsOf: ["a", "b", "c", "d"])
+    xs.removeLast(3)
+    assert(xs == ["a"])
+    assert(xs.capacity >= 64)
+    xs.removeLast(0)
+    assert(xs == ["a"])
+    xs.append("e")
+    xs.removeAll(keepingCapacity: true)
+    assert(xs.isEmpty)
+    assert(xs.capacity >= 64)
+    xs.append("f")
+    xs.removeAll()
+    assert(xs.isEmpty)
+    var ys: Int[>..<] = [1, 2, 3]
+    ys.removeLast(2)
+    assert(ys == [1])
+}

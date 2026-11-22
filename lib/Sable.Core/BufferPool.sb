@@ -1,0 +1,120 @@
+module Sable.Core
+
+/// Byte buffers kept for reuse: .NET's ArrayPool<byte>. A buffer rented is
+/// an empty U8[>..] with room for at least what was asked; given back, it is
+/// emptied and kept, its room intact, for the next rent of that size. Code
+/// that reads or writes many short-lived buffers — a socket's reads, a
+/// codec's blocks — allocates once instead of each time.
+///
+/// A buffer is given back with 'move', so that the pool holds the only
+/// reference to it. Arrays are values, so a pool cannot be wrong, only less
+/// useful: a buffer given back while a copy of it is still held is not
+/// shared by the next renter — emptying it copies it, without its room. Room comes in powers of
+/// two from 256 bytes; a buffer bigger than the largest kept is let go.
+///
+/// A pool is a class, and not Sendable: each task keeps its own, or reaches
+/// a shared one through an actor.
+///
+/// ```sable
+/// let pool = BufferPool()
+/// var bytes = pool.rent(minimumCapacity: 1000)
+/// assert(bytes.isEmpty && bytes.capacity >= 1000)
+/// bytes.append(42)
+/// pool.giveBack(move bytes)
+/// assert(pool.count == 1)
+/// assert(pool.rent(minimumCapacity: 1000).capacity >= 1000)
+/// assert(pool.count == 0)
+/// ```
+public final class BufferPool {
+    // buckets[k] holds buffers with room for at least 256 << k bytes.
+    var buckets: U8[>..][>..][>..]
+
+    /// The most buffers kept of each size.
+    public let maximumPerSize: Int
+
+    /// The largest buffer kept: one with more room is let go when given back.
+    public let maximumCapacity: Int
+
+    /// An empty pool that keeps up to 'maximumPerSize' buffers of each size,
+    /// none bigger than 'maximumCapacity' bytes.
+    public init(maximumPerSize: Int = 16, maximumCapacity: Int = 1 << 24) {
+        precondition(maximumPerSize >= 0 && maximumCapacity >= 0, "a pool's limits cannot be negative")
+        self.maximumPerSize = maximumPerSize
+        self.maximumCapacity = maximumCapacity
+        buckets = []
+        var size = BufferPool.smallest
+        while size <= maximumCapacity {
+            buckets.append([])
+            size = size << 1
+        }
+    }
+
+    static var smallest: Int => 256
+
+    /// How many buffers the pool holds.
+    public var count: Int {
+        get {
+            var total = 0
+            for bucket in buckets {
+                total += bucket.count
+            }
+            return total
+        }
+    }
+
+    /// An empty buffer with room for at least 'minimumCapacity' bytes: one
+    /// the pool kept, or a new one, its room rounded up to a power of two.
+    public fn rent(minimumCapacity: Int) -> U8[>..] {
+        precondition(minimumCapacity >= 0, "cannot rent \(minimumCapacity) bytes")
+        let index = BufferPool.bucket(forAtLeast: minimumCapacity)
+        if index < buckets.count && !buckets[index].isEmpty {
+            return buckets[index].removeLast()
+        }
+
+        var fresh: U8[>..] = []
+        fresh.reserveCapacity(index < buckets.count ? BufferPool.smallest << index : minimumCapacity)
+        return fresh
+    }
+
+    /// The buffer kept for a later rent, emptied, its room intact; let go
+    /// when it is too small, too big, or the pool has enough of its size.
+    public fn giveBack(_ buffer: consuming U8[>..]) {
+        let room = buffer.capacity
+        if room < BufferPool.smallest || room > maximumCapacity {
+            return
+        }
+
+        // The size every rent from this bucket can be given: the largest
+        // power of two the room covers.
+        var index = 0
+        while index + 1 < buckets.count && BufferPool.smallest << (index + 1) <= room {
+            index += 1
+        }
+
+        if buckets[index].count >= maximumPerSize {
+            return
+        }
+
+        var kept = move buffer
+        kept.removeAll(keepingCapacity: true)
+        buckets[index].append(kept)
+    }
+
+    /// Every buffer let go.
+    public fn trim() {
+        var index = 0
+        while index < buckets.count {
+            buckets[index] = []
+            index += 1
+        }
+    }
+
+    // The bucket whose buffers have room for 'count' bytes.
+    static fn bucket(forAtLeast count: Int) -> Int {
+        var index = 0
+        while BufferPool.smallest << index < count {
+            index += 1
+        }
+        return index
+    }
+}

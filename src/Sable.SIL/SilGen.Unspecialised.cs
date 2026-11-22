@@ -1353,7 +1353,7 @@ public sealed partial class SilGen {
                 return call.Arguments.All(a => !Mentions(a.Type));
             }
 
-            if (callee.Builtin is "array_append" or "array_remove_last" or "array_rotate" or "array_reserve" or "array_clear" && call.Receiver is { } array && IsOwnArray(array.Type)) {
+            if (callee.Builtin is "array_append" or "array_remove_last" or "array_rotate" or "array_reserve" or "array_clear" or "array_truncate" && call.Receiver is { } array && IsOwnArray(array.Type)) {
                 return (call.Receiver is BoundLocalAccess { Local.IsMutable: true }
                         || call.Receiver is BoundSelfAccess && OwnMutating
                         || call.Receiver is BoundFieldAccess { Receiver: BoundSelfAccess } stored && FieldsMutable && PropertyAllowed(stored)

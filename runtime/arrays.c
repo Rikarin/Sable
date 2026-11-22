@@ -322,6 +322,29 @@ void sable_array_reserve(SableArray **slot, const SableMetadata *type, int64_t m
     }
 }
 
+// The first 'count' elements kept and the rest destroyed, the buffer and its
+// room kept, so the array can be filled again without growing: what a
+// pooled buffer is emptied with. The array made the only reference to it.
+void sable_array_truncate(SableArray **slot, const SableMetadata *type, int64_t count) {
+    if (*slot == NULL) {
+        if (count != 0) {
+            trap_here("array index out of range");
+        }
+        return;
+    }
+    if (count < 0 || count > (*slot)->count) {
+        trap_here("array index out of range");
+    }
+
+    SableArray *array = unique(slot, type, 0);
+    if (type->destroy_element != NULL) {
+        for (int64_t i = count; i < array->count; i++) {
+            element_destroy(type, array->elements + i * type->element_size);
+        }
+    }
+    array->count = count;
+}
+
 // The 'length' elements at 'base' rotated left by 'by' (0 < by < length):
 // the shorter side kept aside, the longer moved over in one go, and the
 // shorter put back after it. A permutation of the bytes, so no element is

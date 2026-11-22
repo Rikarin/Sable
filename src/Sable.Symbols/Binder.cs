@@ -5171,6 +5171,14 @@ public sealed partial class Binder {
                 CheckArgumentMarker(syntaxes[i], parameter.Modifier, $"'{parameter.Name}'");
             }
 
+            // 'f(move x)': the parser reads 'move' as the argument's marker, as
+            // it does '&'; the argument is the variable's value taken, as
+            // 'let y = move x' takes it, not a copy of it.
+            if (i < syntaxes.Length && syntaxes[i].Parent is ArgumentSyntax { ModifierToken.Kind: SyntaxKind.MoveKeyword }
+                && arguments[i] is BoundLocalAccess or BoundParameterAccess) {
+                arguments = arguments.SetItem(i, new BoundUnaryOperator(arguments[i].Syntax, arguments[i].Type, UnaryOperatorKind.Move, arguments[i]));
+            }
+
             // A parameter type inference could not settle is reported below,
             // once, rather than again as every argument that does not fit it.
             if (ContainsUninferred(wanted, resolved)) {

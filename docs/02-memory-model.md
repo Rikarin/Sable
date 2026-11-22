@@ -345,6 +345,15 @@ match Order.fromBytes(buf) {
 before returning. Corrupt or hostile input returns `.Invalid`, never a bad
 reference. This is a validate-once-then-use model, not a trust-the-bytes model.
 
+There is no cast of a slice of bytes to a slice of inline values
+(`U8[:].cast<T>() -> T[:]`, `MemoryMarshal.Cast`): a value `fromBytes` gives
+is a block of its own, made as the bytes are validated, and a view of
+arbitrary bytes as `T`s would be the trust-the-bytes model this rules out.
+Code that does trust the bytes reads them as it likes in an `unsafe` block,
+through `RawPtr.load(as:byteOffset:)` (SYNTAX.md §23); bytes read and written
+value by value are `ByteBuffer`'s and `ByteReader`'s, and buffers kept for
+reuse are `BufferPool`'s.
+
 `@inline_layout` is a conformance as well as a layout: every such struct
 conforms to `Sable.Core`'s `InlineLayout`, whose one requirement is
 `static fn fromBytes(_ bytes: U8[>..]) -> Decoded<Self>`, and the compiler

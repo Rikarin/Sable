@@ -4713,14 +4713,17 @@ public sealed partial class SilGen {
             BridgeArguments();
 
             // A move-only parameter the function owns lives in a slot, like a
-            // local, so that moving it out is checked as a local's move is.
+            // local, so that moving it out is checked as a local's move is; so
+            // does a 'consuming' one the body moves, so that 'move' hands on
+            // the caller's value rather than a copy of it.
             for (var i = 0; i < symbol.Parameters.Length; i++) {
                 if (!_parameters.TryGetValue(symbol.Parameters[i], out var parameterValue)) {
                     continue;
                 }
 
                 var argument = (SilArgument)parameterValue;
-                if (function.Type.IsOwned(_entry.Arguments.IndexOf(argument)) && argument.Type is NominalType { IsNoncopyable: true }) {
+                if (function.Type.IsOwned(_entry.Arguments.IndexOf(argument))
+                    && (argument.Type is NominalType { IsNoncopyable: true } || !argument.Type.IsTrivial && MovesParameter(body, symbol.Parameters[i]))) {
                     var slot = NewSlot(argument.Type, symbol.Parameters[i].Name);
                     Emit(new StoreInst(argument, slot, StoreKind.Assign));
                     _spilled[symbol.Parameters[i]] = slot;
@@ -6403,6 +6406,11 @@ public sealed partial class SilGen {
             _current = after;
             Emit(new StoreInst(Emit(new BuiltinInst("array_empty", sequenceType)), array, StoreKind.Assign));
         }
+
+        /// <summary>True when the code moves the parameter's value out: 'move p'.</summary>
+        static bool MovesParameter(BoundNode node, ParameterSymbol parameter) =>
+            node is BoundUnaryOperator { OperatorKind: UnaryOperatorKind.Move, Operand: BoundParameterAccess moved } && moved.Parameter == parameter
+            || node.Children.Any(child => MovesParameter(child, parameter));
 
         /// <summary>True when the code moves the local's value out: 'move x'.</summary>
         static bool Moves(BoundNode node, LocalSymbol local) =>

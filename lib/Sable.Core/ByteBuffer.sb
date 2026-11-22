@@ -27,9 +27,74 @@ public struct ByteBuffer {
         self.endian = endian
     }
 
+    /// An empty buffer that writes into the bytes' buffer, its room kept —
+    /// one a BufferPool rented, say: what they held is dropped.
+    ///
+    /// ```sable
+    /// let pool = BufferPool()
+    /// var buffer = ByteBuffer(reusing: pool.rent(minimumCapacity: 256))
+    /// buffer.writeU32(7)
+    /// pool.giveBack(buffer.takeBytes())
+    /// ```
+    public init(reusing bytes: consuming U8[>..], endian: Endian = .Little) {
+        storage = move bytes
+        storage.removeAll(keepingCapacity: true)
+        self.endian = endian
+    }
+
     /// The bytes written so far: the buffer's own, shared until either
     /// changes.
     public var bytes: U8[>..] => storage
+
+    /// The bytes written, taken out: the buffer is left empty, without a
+    /// buffer of its own, so they can be handed on — to a BufferPool —
+    /// without a copy.
+    public mutating fn takeBytes() -> U8[>..] {
+        let taken = storage
+        storage = []
+        return taken
+    }
+
+    /// How many bytes the buffer has room for before it must grow.
+    public var capacity: Int => storage.capacity
+
+    /// Room for at least 'count' more bytes, so that writing that many
+    /// grows nothing.
+    public mutating fn reserveCapacity(_ count: Int) {
+        storage.reserveCapacity(storage.count + count)
+    }
+
+    /// Bytes written in place, by whoever has them: .NET's IBufferWriter
+    /// (GetSpan, then Advance), Rust's BufMut. 'count' bytes are reserved
+    /// at the end, zeroed, and 'fill' is given the buffer's bytes and where
+    /// the reserved ones start; it writes into them and says how many it
+    /// used. Those are kept and the rest given back. The bytes are the
+    /// buffer's own, so nothing is copied.
+    ///
+    /// ```sable
+    /// var buffer = ByteBuffer()
+    /// buffer.writeU8(0xFF)
+    /// buffer.write(reserving: 8) { bytes, start in
+    ///     bytes[start] = 1
+    ///     bytes[start + 1] = 2
+    ///     return 2
+    /// }
+    /// assert(buffer.count == 3 && buffer.bytes[2] == 2)
+    /// ```
+    public mutating fn write(reserving count: Int, _ fill: (inout U8[>..], Int) -> Int) {
+        precondition(count >= 0, "cannot reserve \(count) bytes")
+        let start = storage.count
+        storage.reserveCapacity(start + count)
+        var i = 0
+        while i < count {
+            storage.append(0)
+            i += 1
+        }
+        let used = fill(&storage, start)
+        precondition(used >= 0 && used <= count && storage.count == start + count,
+            "a fill of \(count) reserved bytes used \(used), and must leave the buffer's length alone")
+        storage.removeLast(count - used)
+    }
 
     /// How many bytes have been written.
     public var count: Int => storage.count
@@ -163,9 +228,9 @@ public struct ByteBuffer {
         storage.writeU64(value, at: offset, endian: endian)
     }
 
-    /// Empties the buffer.
+    /// Empties the buffer, keeping its room.
     public mutating fn clear() {
-        storage.clear()
+        storage.removeAll(keepingCapacity: true)
     }
 
     // The low 'width' bytes of the value, in the buffer's order.

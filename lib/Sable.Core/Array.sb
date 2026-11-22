@@ -97,6 +97,41 @@ extension<Element> Element[>..] {
     /// Every element, taken out.
     @builtin("array_clear")
     public mutating fn clear()
+
+    /// Every element taken out, as 'clear()' does; with 'keepingCapacity',
+    /// the buffer is kept, so the array fills again without growing.
+    ///
+    /// ```sable
+    /// var xs: U8[>..] = []
+    /// xs.reserveCapacity(64)
+    /// xs.append(1)
+    /// xs.removeAll(keepingCapacity: true)
+    /// assert(xs.isEmpty && xs.capacity >= 64)
+    /// ```
+    public mutating fn removeAll(keepingCapacity: Bool = false) {
+        if keepingCapacity {
+            self.truncate(0)
+        } else {
+            self.clear()
+        }
+    }
+
+    /// The last 'count' elements taken out, the buffer kept; more than the
+    /// array has traps.
+    ///
+    /// ```sable
+    /// var xs = [1, 2, 3, 4]
+    /// xs.removeLast(2)
+    /// assert(xs == [1, 2])
+    /// ```
+    public mutating fn removeLast(_ count: Int) {
+        precondition(count >= 0 && count <= self.count, "cannot remove \(count) of \(self.count) elements")
+        self.truncate(self.count - count)
+    }
+
+    // The first 'count' elements kept, the rest destroyed, the buffer kept.
+    @builtin("array_truncate")
+    mutating fn truncate(_ count: Int)
 }
 
 extension<Element> Element[>..<] {
@@ -128,6 +163,41 @@ extension<Element> Element[>..<] {
     /// Every element, taken out.
     @builtin("array_clear")
     public mutating fn clear()
+
+    /// Every element taken out, as 'clear()' does; with 'keepingCapacity',
+    /// the buffer is kept, so the array fills again without growing.
+    ///
+    /// ```sable
+    /// var xs: U8[>..] = []
+    /// xs.reserveCapacity(64)
+    /// xs.append(1)
+    /// xs.removeAll(keepingCapacity: true)
+    /// assert(xs.isEmpty && xs.capacity >= 64)
+    /// ```
+    public mutating fn removeAll(keepingCapacity: Bool = false) {
+        if keepingCapacity {
+            self.truncate(0)
+        } else {
+            self.clear()
+        }
+    }
+
+    /// The last 'count' elements taken out, the buffer kept; more than the
+    /// array has traps.
+    ///
+    /// ```sable
+    /// var xs = [1, 2, 3, 4]
+    /// xs.removeLast(2)
+    /// assert(xs == [1, 2])
+    /// ```
+    public mutating fn removeLast(_ count: Int) {
+        precondition(count >= 0 && count <= self.count, "cannot remove \(count) of \(self.count) elements")
+        self.truncate(self.count - count)
+    }
+
+    // The first 'count' elements kept, the rest destroyed, the buffer kept.
+    @builtin("array_truncate")
+    mutating fn truncate(_ count: Int)
 }
 
 // An inline array grows within its capacity. Its members are lowered where

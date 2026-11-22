@@ -512,7 +512,7 @@ public sealed class PromoteToStack : ISilPass {
     static bool ChangesArrayInPlace(SilInstruction instruction, SilValue value) =>
         instruction is BuiltinInst
         {
-            Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_reserve"
+            Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_truncate" or "array_reserve"
                 or "array_rotate",
         } builtin
         && value is AllocStackInst

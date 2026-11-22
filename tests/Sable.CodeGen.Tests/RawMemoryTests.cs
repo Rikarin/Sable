@@ -89,6 +89,37 @@ public sealed class RawMemoryTests {
         Assert.Equal(Expected, AssertAgree(Pointers).Stdout);
     }
 
+    /// <summary>
+    ///     'f(move x)' hands the callee the caller's value, not a copy, and a
+    ///     'consuming' parameter moved on hands it on again: the array's
+    ///     buffer is the only reference to it all the way, so emptying it
+    ///     keeps its room — what a BufferPool depends on.
+    /// </summary>
+    [Fact]
+    public void AMoveIntoACallHandsOnTheValue() =>
+        Assert.Equal("100\n1024\n1\n1024\n", AssertAgree("""
+            module P
+            fn keep(_ a: consuming U8[>..]) -> Int {
+                var kept = move a
+                kept.removeAll(keepingCapacity: true)
+                return kept.capacity
+            }
+            @main
+            fn main() {
+                var bytes: U8[>..] = []
+                bytes.reserveCapacity(100)
+                bytes.append(1)
+                print(keep(move bytes))
+                let pool = BufferPool()
+                var rented = pool.rent(minimumCapacity: 1000)
+                rented.append(contentsOf: [1, 2, 3])
+                print(rented.capacity)
+                pool.giveBack(move rented)
+                print(pool.count)
+                print(pool.rent(minimumCapacity: 600).capacity)
+            }
+            """).Stdout);
+
     [Theory]
     [InlineData("let p = RawPtr<Int>.allocate(count: 1)\np.deallocate()\np.deallocate()", "freeing 0x")]
     [InlineData("let p = RawPtr<Int>.allocate(count: 1)\np.deallocate()\np.initialize(to: 1)", "used after it was freed")]

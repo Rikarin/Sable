@@ -148,3 +148,45 @@ fn writeAThousandMixedValues() {
     }
     assert(buffer.count > 12_000)
 }
+
+@test
+fn reservedBytesAreWrittenInPlaceAndTheUnusedGivenBack() {
+    var buffer = ByteBuffer()
+    buffer.writeU8(0xFF)
+    buffer.write(reserving: 8) { bytes, start in
+        bytes[start] = 1
+        bytes[start + 1] = 2
+        bytes[start + 2] = 3
+        return 3
+    }
+    assertEqual(buffer.count, 4)
+    assert(buffer.bytes == [0xFF, 1, 2, 3])
+    buffer.write(reserving: 4) { bytes, start in
+        return 0
+    }
+    assertEqual(buffer.count, 4)
+    buffer.write(reserving: 2) { bytes, start in
+        bytes[start + 1] = 9
+        return 2
+    }
+    assert(buffer.bytes == [0xFF, 1, 2, 3, 0, 9])
+}
+
+@test
+fn aBufferKeepsItsRoom() {
+    var buffer = ByteBuffer()
+    buffer.reserveCapacity(1000)
+    assert(buffer.capacity >= 1000)
+    buffer.writeU64(1)
+    buffer.clear()
+    assert(buffer.isEmpty)
+    assert(buffer.capacity >= 1000)
+    buffer.writeU8(7)
+    let taken = buffer.takeBytes()
+    assert(taken == [7])
+    assert(buffer.isEmpty)
+    var reused = ByteBuffer(reusing: taken)
+    assert(reused.isEmpty)
+    reused.writeU8(8)
+    assert(reused.bytes == [8])
+}

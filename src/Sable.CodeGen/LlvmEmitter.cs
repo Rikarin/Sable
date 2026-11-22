@@ -526,6 +526,7 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_array_remove_last(ptr nocapture, ptr)
                                 declare i64 @sable_array_capacity(ptr)
                                 declare void @sable_array_reserve(ptr nocapture, ptr, i64)
+                                declare void @sable_array_truncate(ptr nocapture, ptr, i64)
                                 declare void @sable_array_rotate(ptr nocapture, ptr, i64, i64, i64)
                                 declare void @sable_slice_rotate(ptr nocapture, ptr, i64, i64, i64)
                                 declare ptr @sable_slice_mutable_element(ptr nocapture, ptr, i64)
@@ -4374,6 +4375,12 @@ public sealed partial class LlvmEmitter {
                     var function = pointee is SliceType ? "sable_slice_rotate" : "sable_array_rotate";
                     SiteForRuntime();
                     Line($"call void @{function}(ptr {operands[0]}, ptr {ArrayMetadataOf(new ArrayType(element))}, i64 {operands[1]}, i64 {operands[2]}, i64 {operands[3]})");
+                    return;
+                }
+
+                case "array_truncate": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    Line($"call void @sable_array_truncate(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, i64 {operands[1]})");
                     return;
                 }
 

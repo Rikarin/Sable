@@ -2148,6 +2148,26 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return null;
             }
 
+            case "array_truncate": {
+                var count = (long)operands[1]!;
+                var address = (IReference)operands[0]!;
+                if (address.Peek() is null) {
+                    return count == 0 ? null : throw new SilTrap("array index out of range");
+                }
+
+                var array = Unique(builtin.Operands[0], address);
+                if (count < 0 || count > array.Elements.Count) {
+                    throw new SilTrap("array index out of range");
+                }
+
+                for (var i = array.Elements.Count - 1; i >= count; i--) {
+                    Release(array.Type.Element, array.Elements[i], depth);
+                }
+
+                array.Elements.RemoveRange((int)count, array.Elements.Count - (int)count);
+                return null;
+            }
+
             case "array_clear": {
                 var address = (IReference)operands[0]!;
                 var old = address.Peek();

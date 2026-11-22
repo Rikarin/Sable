@@ -1291,7 +1291,7 @@ public static class SharedStorage {
             LoadUnownedInst unowned => (unowned.Address, false),
             StoreUnownedInst unowned => (unowned.Address, true),
             // An array changed where it is: its count, its buffer, an element.
-            BuiltinInst { Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_reserve" or "array_rotate" or "array_element_addr" } array
+            BuiltinInst { Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_truncate" or "array_reserve" or "array_rotate" or "array_element_addr" } array
                 => (array.Operands[0], true),
             _ => null,
         };
@@ -1943,7 +1943,7 @@ public static class SilBuiltins {
     ///     count work on an array alone.
     /// </summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_slice", "slice_of", "array_of_slice", "array_capacity", "array_reserve", "array_rotate", "region_alloc"];
+        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "array_of_slice", "array_capacity", "array_reserve", "array_rotate", "region_alloc"];
 
     /// <summary>
     ///     The prefix of the wrapping forms of integer arithmetic
@@ -2151,6 +2151,11 @@ public static class SilBuiltins {
             // Room for at least so many elements in all, the array made the
             // only reference to its buffer.
             case "array_reserve" when Element(0, true, arrayOnly: true) is not null:
+                return new([operands[0], SilType.Int], SilType.Unit);
+
+            // The first so many elements kept and the rest destroyed, the
+            // buffer and its room kept: the array made the only reference to it.
+            case "array_truncate" when Element(0, true, arrayOnly: true) is not null:
                 return new([operands[0], SilType.Int], SilType.Unit);
 
             // The elements [from, to) of an array or a slice rotated left by

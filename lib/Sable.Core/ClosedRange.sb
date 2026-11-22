@@ -18,7 +18,64 @@ public struct ClosedRange<Bound: Comparable> {
     }
 }
 
-extension ClosedRange where Bound == Int {
-    /// How many values the range has: none when the bounds are the wrong way round.
-    public var count: Int => isEmpty ? 0 : upperBound - lowerBound + 1
+extension ClosedRange {
+    /// Whether the two ranges have a value in common: never when either is
+    /// empty.
+    ///
+    /// ```sable
+    /// assert((0...5).overlaps(5...9))
+    /// assert(!(0...4).overlaps(5...9))
+    /// ```
+    public fn overlaps(_ other: ClosedRange<Bound>) -> Bool {
+        return !isEmpty && !other.isEmpty && !(other.upperBound < lowerBound) && !(upperBound < other.lowerBound)
+    }
+
+    /// Whether the closed range and the range have a value in common.
+    ///
+    /// ```sable
+    /// assert((4...9).overlaps(0..<5))
+    /// assert(!(5...9).overlaps(0..<5))
+    /// ```
+    public fn overlaps(_ other: Range<Bound>) -> Bool {
+        return other.overlaps(self)
+    }
+
+    /// The range cut down to fit within 'limits': each bound moved inside
+    /// them where it is outside. A range that misses 'limits' altogether
+    /// becomes the one value of their bound nearer to it.
+    ///
+    /// ```sable
+    /// assert((0...10).clamped(to: 3...7) == 3...7)
+    /// assert((0...5).clamped(to: 3...7) == 3...5)
+    /// assert((8...9).clamped(to: 3...7) == 7...7)
+    /// ```
+    public fn clamped(to limits: ClosedRange<Bound>) -> ClosedRange<Bound> {
+        let lower = lowerBound < limits.lowerBound ? limits.lowerBound : limits.upperBound < lowerBound ? limits.upperBound : lowerBound
+        let upper = limits.upperBound < upperBound ? limits.upperBound : upperBound < limits.lowerBound ? limits.lowerBound : upperBound
+        return ClosedRange<Bound>(lowerBound: lower, upperBound: upper)
+    }
+
+    /// Whether every value of the range is in 'other': true of an empty
+    /// range, which has none to be outside.
+    ///
+    /// ```sable
+    /// assert((2...4).isSubrange(of: 0...10))
+    /// assert(!(2...11).isSubrange(of: 0...10))
+    /// ```
+    public fn isSubrange(of other: ClosedRange<Bound>) -> Bool {
+        return isEmpty || !(lowerBound < other.lowerBound) && !(other.upperBound < upperBound)
+    }
+}
+
+extension ClosedRange: Equatable {
+    public operator == (lhs: ClosedRange<Bound>, rhs: ClosedRange<Bound>) -> Bool {
+        return lhs.lowerBound == rhs.lowerBound && lhs.upperBound == rhs.upperBound
+    }
+}
+
+extension ClosedRange: Debug where Bound: Debug {
+    /// The range as source writes it: "2...5".
+    public fn debugDescription() -> String {
+        return "\(lowerBound.debugDescription())...\(upperBound.debugDescription())"
+    }
 }

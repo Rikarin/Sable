@@ -185,6 +185,31 @@ public sealed class CoreTypes {
     NamedTypeSymbol? _range, _closedRange, _upTo, _through, _from;
 
     /// <summary>
+    ///     <c>StrideTo</c> and <c>StrideThrough</c>, what <c>stride(from:to:by:)</c>
+    ///     and <c>stride(from:through:by:)</c> make: declared in
+    ///     <c>lib/Sable.Core/Stride.sb</c> as structs of Int fields <c>start</c>,
+    ///     <c>end</c> and <c>step</c>. A <c>for</c> over one counts, as over a
+    ///     range; null where Sable.Core declares them of some other shape.
+    /// </summary>
+    public NamedTypeSymbol? StrideTo => _strideTo ??= DeclaredStride("StrideTo");
+
+    /// <inheritdoc cref="StrideTo" />
+    public NamedTypeSymbol? StrideThrough => _strideThrough ??= DeclaredStride("StrideThrough");
+
+    NamedTypeSymbol? _strideTo, _strideThrough;
+
+    NamedTypeSymbol? DeclaredStride(string name) =>
+        DeclaredStruct(name) is { TypeParameters.IsEmpty: true } type
+        && ((string[])["start", "end", "step"]).All(field => type.Members.OfType<FieldSymbol>().Any(f => f.Name == field && !f.IsStatic && f.Type.Equals(Int)))
+            ? type
+            : null;
+
+    /// <summary>True for a <c>StrideTo</c> or a <c>StrideThrough</c>.</summary>
+    public bool IsStride(TypeSymbol type) =>
+        type is NamedTypeSymbol { TypeArguments.IsEmpty: true } named
+        && (named.Equals(StrideTo) || named.Equals(StrideThrough));
+
+    /// <summary>
     ///     <c>FromEnd</c>, what <c>^n</c> makes: a position counted back from
     ///     a collection's end, declared in <c>lib/Sable.Core/FromEnd.sb</c>.
     ///     Null only in a compilation that brings a Sable.Core of its own

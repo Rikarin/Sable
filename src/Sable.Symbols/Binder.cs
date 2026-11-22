@@ -2259,11 +2259,11 @@ public sealed partial class Binder {
 
     /// <summary>
     ///     A type 'for' goes through directly, with no iterator: an array, a
-    ///     range — and an error, already reported. A dictionary is a
-    ///     Sequence of its entries, like any other.
+    ///     range, a stride — and an error, already reported. A dictionary is
+    ///     a Sequence of its entries, like any other.
     /// </summary>
     bool IsKnownSequence(TypeSymbol type) =>
-        type.IsError || type is ArrayTypeSymbol
+        type.IsError || type is ArrayTypeSymbol || Core.IsStride(type)
         || type is NamedTypeSymbol named && Core.IsAnyRange(named);
 
     /// <summary>How a loop goes through a sequence by its iterator.</summary>
@@ -2418,6 +2418,10 @@ public sealed partial class Binder {
 
         if (sequence is ArrayTypeSymbol array) {
             return array.ElementType;
+        }
+
+        if (Core.IsStride(sequence)) {
+            return Core.Int;
         }
 
         if (sequence is NamedTypeSymbol named && Core.IsAnyRange(named)) {

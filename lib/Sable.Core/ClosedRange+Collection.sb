@@ -1,0 +1,95 @@
+module Sable.Core
+
+// A closed range of integers, of any width, is a collection of them. A 'for'
+// over one counts and makes no iterator; this is what generic code sees of
+// it. Its positions are offsets from the lower bound, not its values: the
+// position past the last value of '0...255 as U8' is 256, which no U8 holds.
+
+/// Gives a closed range's integers, from its lower bound up to and
+/// including its upper. It stops before stepping past the upper bound, so a
+/// range up to the type's greatest value does not overflow.
+public struct ClosedRangeIterator<Bound: FixedWidthInteger>: Iterator {
+    var upcoming: Bound
+    let last: Bound
+    var done: Bool
+
+    /// The next integer, or none once the upper bound has been given.
+    public mutating fn next() -> Bound? {
+        if done || last < upcoming {
+            return none
+        }
+        let value = upcoming
+        if value == last {
+            done = true
+        } else {
+            upcoming = value &+ Bound.truncating(1)
+        }
+        return value
+    }
+}
+
+extension ClosedRange where Bound: FixedWidthInteger {
+    /// How many values the range has: none when the bounds are the wrong
+    /// way round.
+    ///
+    /// ```sable
+    /// assert((1...3).count == 3)
+    /// assert((0 as U8...255).count == 256)
+    /// ```
+    public var count: Int => isEmpty ? 0 : Int.truncating(upperBound.wideBitPattern &- lowerBound.wideBitPattern) + 1
+}
+
+extension ClosedRange where Bound == Int {
+    /// Every 'step'-th value, from the lower bound, the upper bound included
+    /// when a step lands on it: Rust's 'step_by'. A step that is not
+    /// positive gives nothing.
+    ///
+    /// ```sable
+    /// var values: Int[>..] = []
+    /// for i in (0...9).step(by: 3) {
+    ///     values.append(i)
+    /// }
+    /// assert(values == [0, 3, 6, 9])
+    /// ```
+    public fn step(by step: Int) -> StrideThrough {
+        return stride(from: lowerBound, through: upperBound, by: step > 0 ? step : 0)
+    }
+}
+
+extension ClosedRange: RandomAccessCollection where Bound: FixedWidthInteger {
+    /// An iterator from the lower bound.
+    public fn makeIterator() -> ClosedRangeIterator<Bound> {
+        return ClosedRangeIterator<Bound> { upcoming: lowerBound, last: upperBound, done: false }
+    }
+
+    /// The first value's position: 0.
+    public var startIndex: Int => 0
+
+    /// The position past the last value: the range's count.
+    public var endIndex: Int => count
+
+    /// The next position.
+    public fn index(after position: Int) -> Int => position + 1
+
+    /// The position before.
+    public fn index(before position: Int) -> Int => position - 1
+
+    /// The position 'distance' on, which may be back.
+    public fn index(_ position: Int, offsetBy distance: Int) -> Int => position + distance
+
+    /// How far on 'end' is from 'start'.
+    public fn distance(from start: Int, to end: Int) -> Int => end - start
+
+    /// The value 'position' on from the lower bound, which traps outside
+    /// the range.
+    ///
+    /// ```sable
+    /// assert((5...8)[2] == 7)
+    /// ```
+    public subscript(position: Int) -> Bound {
+        get {
+            precondition(position >= 0 && position < count, "position \(position) is out of range for count \(count)")
+            return Bound.fromWideBitPattern(lowerBound.wideBitPattern &+ U128.truncating(position))
+        }
+    }
+}

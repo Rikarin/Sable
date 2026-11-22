@@ -5912,6 +5912,10 @@ public sealed partial class SilGen {
                     ForRangeValue(loop);
                     return;
 
+                case BoundForEach loop when Core.IsStride(Sub(loop.Sequence.Type)):
+                    ForStride(loop);
+                    return;
+
                 case BoundForEach { Sequence.Type: ArrayTypeSymbol } loop when IsInlineArray(loop.Sequence):
                     ForInline(loop);
                     return;
@@ -6211,6 +6215,118 @@ public sealed partial class SilGen {
                 Emit(new StoreInst(Emit(new IntegerLiteralInst(SilType.Int, 0xE000)), counter, StoreKind.Assign));
             }
 
+            Branch(header);
+
+            _current = after;
+        }
+
+        /// <summary>
+        ///     <c>for i in stride(from: a, to: b, by: s)</c>, and through: a
+        ///     counting loop that steps by <c>s</c>, as <c>StrideIterator</c>
+        ///     does, with no iterator made. Written in the loop, the call to
+        ///     <c>stride</c> is not made either: its arguments are the bounds.
+        /// </summary>
+        /// <remarks>
+        ///     The step's sign is known only as the program runs, so each test
+        ///     asks it; a step of zero gives nothing. A step that would pass
+        ///     Int's bounds ends the loop instead, so a stride up to
+        ///     <c>Int.max</c> does not overflow.
+        /// </remarks>
+        void ForStride(BoundForEach loop) {
+            if (loop.Element is null || SlotFor(loop.Element, loop.Syntax) is null) {
+                Fail(loop.Syntax, "a 'for' over a stride");
+                return;
+            }
+
+            var through = Sub(loop.Sequence.Type).Equals(Core.StrideThrough);
+            SilValue? start, end, stride;
+            if (loop.Sequence is BoundCall { Receiver: null, Arguments.Length: 3 } call
+                && call.Function.Name == "stride" && ReferenceEquals(call.Function.ContainingSymbol, Core.Module)) {
+                if ((start = Expression(call.Arguments[0])) is null || (end = Expression(call.Arguments[1])) is null
+                    || (stride = Expression(call.Arguments[2])) is null) {
+                    return;
+                }
+            } else {
+                if (Expression(loop.Sequence) is not { Type: StructType structType } value) {
+                    return;
+                }
+
+                start = Emit(new StructExtractInst(value, structType.FieldIndex("start")));
+                end = Emit(new StructExtractInst(value, structType.FieldIndex("end")));
+                stride = Emit(new StructExtractInst(value, structType.FieldIndex("step")));
+                Destroy(value);
+            }
+
+            var type = SilType.Int;
+            var counter = NewSlot(type);
+            Emit(new StoreInst(start, counter, StoreKind.Init));
+
+            // In a generator the body may pause, and only what is in a slot
+            // is there when it resumes: the end and the step too.
+            AllocStackInst? endSlot = null, stepSlot = null;
+            if (Generator is not null) {
+                endSlot = NewSlot(type);
+                Emit(new StoreInst(end, endSlot, StoreKind.Init));
+                stepSlot = NewSlot(type);
+                Emit(new StoreInst(stride, stepSlot, StoreKind.Init));
+            }
+
+            SilValue End() => endSlot is null ? end : Emit(new LoadInst(endSlot));
+            SilValue Step() => stepSlot is null ? stride : Emit(new LoadInst(stepSlot));
+            SilValue Literal(long value) => Emit(new IntegerLiteralInst(type, value));
+            SilValue Compare(string how, SilValue left, SilValue right) => Emit(new BuiltinInst($"cmp_{how}_Int", SilType.Bool, left, right));
+
+            var header = function.AddBlock();
+            var up = function.AddBlock();
+            var down = function.AddBlock();
+            var body = function.AddBlock();
+            var step = function.AddBlock();
+            var stepUp = function.AddBlock();
+            var stepDown = function.AddBlock();
+            var more = function.AddBlock();
+            var after = function.AddBlock();
+
+            // A step of zero never gets anywhere.
+            Jump(new CondBranchInst(Compare("eq", Step(), Literal(0)), after, [], header, []));
+
+            _current = header;
+            Jump(new CondBranchInst(Compare("gt", Step(), Literal(0)), up, [], down, []));
+
+            _current = up;
+            Jump(new CondBranchInst(Compare(through ? "le" : "lt", Emit(new LoadInst(counter)), End()), body, [], after, []));
+
+            _current = down;
+            Jump(new CondBranchInst(Compare(through ? "ge" : "gt", Emit(new LoadInst(counter)), End()), body, [], after, []));
+
+            _current = body;
+            BindLocal(loop.Element, Emit(new LoadInst(counter)), loop.Syntax);
+            if (loop.Filter is { } filter) {
+                var filtered = function.AddBlock();
+                Condition(filter, filtered, step);
+                _current = filtered;
+            }
+
+            InLoop(loop, after, step, () => Statement(loop.Body));
+            if (_current is not null) {
+                Branch(step);
+            }
+
+            // The next value is past the end when it is past Int's bounds:
+            // asked without the addition that would overflow.
+            _current = step;
+            Jump(new CondBranchInst(Compare("gt", Step(), Literal(0)), stepUp, [], stepDown, []));
+
+            _current = stepUp;
+            var highest = Emit(new BuiltinInst("sub_Int", type, Literal(long.MaxValue), Step()));
+            Jump(new CondBranchInst(Compare("le", Emit(new LoadInst(counter)), highest), more, [], after, []));
+
+            _current = stepDown;
+            var lowest = Emit(new BuiltinInst("sub_Int", type, Literal(long.MinValue), Step()));
+            Jump(new CondBranchInst(Compare("ge", Emit(new LoadInst(counter)), lowest), more, [], after, []));
+
+            _current = more;
+            var stepped = Emit(new BuiltinInst("add_Int", type, Emit(new LoadInst(counter)), Step()));
+            Emit(new StoreInst(stepped, counter, StoreKind.Assign));
             Branch(header);
 
             _current = after;

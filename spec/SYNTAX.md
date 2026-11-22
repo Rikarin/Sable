@@ -559,12 +559,11 @@ public protocol Sequence {
 ### Conformance
 
 ```sable
-struct Range: Collection {
-    alias Element = Int
-    alias Index = Int
-    var count: Int { get => upper - lower }
-    subscript(i: Int) -> Int { get => lower + i }
-    fn makeIterator() -> some Iterator<Int> => RangeIterator(self)
+extension Range: RandomAccessCollection where Bound: FixedWidthInteger {
+    var startIndex: Bound => lowerBound
+    var endIndex: Bound => isEmpty ? lowerBound : upperBound
+    subscript(position: Bound) -> Bound { get => position }
+    fn makeIterator() -> RangeIterator<Bound> => RangeIterator<Bound> { upcoming: lowerBound, end: upperBound }
 }
 ```
 
@@ -1363,6 +1362,19 @@ fill, an alignment, a width or `?` for a type that is not `Formattable`
 ..<10         // partial, from the start
 5...          // partial, to the end
 ```
+
+A range of integers of any width (`Range` and `ClosedRange` whose bound is a
+`FixedWidthInteger`) is a random-access collection of them, so
+`(0..<n).reversed()` is Rust's `(0..n).rev()`; a `Range`'s positions are its
+values, a `ClosedRange`'s offsets from its lower bound, since the position past
+`0...255 as U8` is no U8. Every range of `Comparable` bounds answers `contains`,
+`overlaps`, `clamped(to:)` and `isSubrange(of:)`. A `for` over a range, written
+in place or held, counts, as one over `stride(from:to:by:)` or
+`stride(from:through:by:)` does; `(0..<n).step(by: k)` is a stride.
+
+There is no unbounded range (Swift's `xs[...]`, Rust's `xs[..]`): `..` already
+marks an inline capacity in a type (`T[..]`), and the whole of a collection is
+`xs` itself, or `xs[..<^0]` as a slice of any collection.
 
 ### Indexing from the end
 

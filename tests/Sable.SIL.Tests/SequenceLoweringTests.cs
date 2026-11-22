@@ -71,6 +71,16 @@ public sealed class SequenceLoweringTests {
                           fn counted(_ n: Int) -> Int {
                               return overArray(upTo(n)) + overRange(n)
                           }
+                          fn overStride(_ n: Int) -> Int {
+                              var sum = 0
+                              for i in stride(from: 0, to: n, by: 2) {
+                                  sum += i
+                              }
+                              for i in stride(from: n, through: 0, by: -3) {
+                                  sum += i
+                              }
+                              return sum
+                          }
                           """;
 
     [Fact]
@@ -84,6 +94,18 @@ public sealed class SequenceLoweringTests {
         }
 
         Assert.Equal(15L + 10L, new SilInterpreter(module).Run("M.counted", 5L));
+    }
+
+    [Fact]
+    public void AForOverAStrideWrittenInTheLoopIsACountedLoop() {
+        var module = Lower(Source);
+        var instructions = Instructions(module, "M.overStride");
+        Assert.Empty(instructions.OfType<ApplyInst>());
+        Assert.Empty(instructions.OfType<AllocRefInst>());
+        Assert.Empty(instructions.OfType<PartialApplyInst>());
+
+        // 0 + 2 + 4 + 6 + 8, then 10 + 7 + 4 + 1.
+        Assert.Equal(20L + 22L, new SilInterpreter(module).Run("M.overStride", 10L));
     }
 
     [Fact]

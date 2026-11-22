@@ -165,16 +165,16 @@ public sealed class RangeTests {
         Assert.Equal(ErrorCode.ERR_HalfOpenRangeWithoutEnd, error.Code);
     }
 
-    /// <summary>'count' is declared 'where Bound == Int', so a range of anything else has none.</summary>
+    /// <summary>'count' is declared 'where Bound: FixedWidthInteger', so a range of anything else has none.</summary>
     [Fact]
-    public void ARangeOfIntsCountsItsValues() {
+    public void ARangeOfIntegersCountsItsValues() {
         AssertClean("""
-                    fn f(_ r: Range<Int>, _ c: ClosedRange<Int>) -> Int { return r.count + c.count + (0..<5).count }
+                    fn f(_ r: Range<Int>, _ c: ClosedRange<U8>) -> Int { return r.count + c.count + (0..<5).count }
                     """);
 
         var error = Assert.Single(ErrorsIn("fn f(_ r: Range<F64>) -> Int { return r.count }"));
         Assert.Equal(ErrorCode.ERR_DoesNotConform, error.Code);
-        Assert.Contains("'Range<F64>' has 'count' only where 'Bound == Int'", error.Message, StringComparison.Ordinal);
+        Assert.Contains("'Range<F64>' has 'count' only where 'Bound: FixedWidthInteger'", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -1,0 +1,110 @@
+module StrideTests
+
+// stride(from:to:by:) and stride(from:through:by:) (Sable.Core): a 'for'
+// over one counts, as over a range; generic code goes through its iterator.
+// The two must agree.
+
+import Sable.Testing
+
+fn looped(_ s: StrideTo) -> Int[>..] {
+    var values: Int[>..] = []
+    for i in s {
+        values.append(i)
+    }
+    return values
+}
+
+fn looped(_ s: StrideThrough) -> Int[>..] {
+    var values: Int[>..] = []
+    for i in s {
+        values.append(i)
+    }
+    return values
+}
+
+fn iterated<S: Sequence>(_ s: S) -> Int[>..] where S.Element == Int, S.Failure == Never {
+    var values: Int[>..] = []
+    var iterator = s.makeIterator()
+    while let value = iterator.next() {
+        values.append(value)
+    }
+    return values
+}
+
+@test
+fn aStrideToLeavesItsEndOut() {
+    var values: Int[>..] = []
+    for i in stride(from: 0, to: 10, by: 3) {
+        values.append(i)
+    }
+    assert(values == [0, 3, 6, 9])
+    assert(looped(stride(from: 0, to: 9, by: 3)) == [0, 3, 6])
+    assert(iterated(stride(from: 0, to: 9, by: 3)) == [0, 3, 6])
+}
+
+@test
+fn aStrideThroughIncludesAnEndItLandsOn() {
+    var values: Int[>..] = []
+    for i in stride(from: 0, through: 9, by: 3) {
+        values.append(i)
+    }
+    assert(values == [0, 3, 6, 9])
+    assert(looped(stride(from: 0, through: 10, by: 3)) == [0, 3, 6, 9])
+}
+
+@test
+fn aNegativeStepCountsDown() {
+    var values: Int[>..] = []
+    for i in stride(from: 10, to: 0, by: -4) {
+        values.append(i)
+    }
+    assert(values == [10, 6, 2])
+    assert(looped(stride(from: 10, through: 2, by: -4)) == [10, 6, 2])
+    assert(iterated(stride(from: 10, through: 2, by: -4)) == [10, 6, 2])
+}
+
+@test
+fn aStrideThatGetsNowhereGivesNothing() {
+    assert(looped(stride(from: 0, to: 10, by: 0)) == [] as Int[>..])
+    assert(looped(stride(from: 0, through: 0, by: 0)) == [] as Int[>..])
+    assert(looped(stride(from: 0, to: 10, by: -1)) == [] as Int[>..])
+    assert(looped(stride(from: 10, to: 0, by: 1)) == [] as Int[>..])
+    assert(looped(stride(from: 3, to: 3, by: 1)) == [] as Int[>..])
+    assert(looped(stride(from: 3, through: 3, by: 1)) == [3])
+}
+
+@test
+fn aStrideStopsAtIntsBounds() {
+    let top = 9223372036854775807
+    let bottom = -9223372036854775807 - 1
+    assert(looped(stride(from: top - 5, through: top, by: 4)) == [top - 5, top - 1])
+    assert(looped(stride(from: top - 2, to: top, by: 1)) == [top - 2, top - 1])
+    assert(looped(stride(from: bottom + 5, through: bottom, by: -4)) == [bottom + 5, bottom + 1])
+    assert(iterated(stride(from: top - 5, through: top, by: 4)) == [top - 5, top - 1])
+}
+
+@test
+fn aStrideLoopBreaksContinuesAndFilters() {
+    var values: Int[>..] = []
+    for i in stride(from: 0, to: 100, by: 5) where i % 2 == 0 {
+        if i == 10 {
+            continue
+        }
+        if i > 30 {
+            break
+        }
+        values.append(i)
+    }
+    assert(values == [0, 20, 30])
+}
+
+@test
+fn aStrideHeldInAVariableIsGoneThroughTheSame() {
+    let s = stride(from: 1, to: 8, by: 2)
+    var total = 0
+    for i in s {
+        total += i
+    }
+    assertEqual(total, 16)
+    assertEqual(stride(from: 1, to: 8, by: 2).reduce(0) { $0 + $1 }, 16)
+}

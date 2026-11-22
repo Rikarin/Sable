@@ -150,6 +150,31 @@ public sealed record BuildSettings(string Profile, bool Optimise, string? DebugD
     ///     options do not say, and <c>0</c> for an unoptimised one.
     /// </summary>
     public string SilLevel => !Optimise ? "0" : Native.Optimise ? Native.OptLevel : "2";
+
+    /// <summary>
+    ///     The settings a library's unit — the standard library's, and a
+    ///     registry or git dependency's — is compiled with (docs/05 §5.4,
+    ///     "Libraries compiled optimised"): optimised in every profile, as
+    ///     Swift ships its standard library. An optimised build's are its
+    ///     own. An unoptimised one's are <see cref="LibraryOptLevel" />'s
+    ///     SIL passes and clang's, to a plain object (no link-time
+    ///     optimisation, which an unoptimised link does not do), with the
+    ///     debug information the build has. Every check the program's units
+    ///     are built with stays as the profile says: exclusivity, overflow,
+    ///     ARC, and <c>DEBUG</c>, and with it <c>assert</c>.
+    /// </summary>
+    public BuildSettings ForLibrary => Optimise ? this : this with {
+        Optimise = true,
+        DebugAssertions = DebugAssertions,
+        Native = Native with { OptLevel = LibraryOptLevel, Lto = LtoMode.Off },
+    };
+
+    /// <summary>
+    ///     The opt-level a library's unit is compiled at in an unoptimised
+    ///     build: <c>s</c>, which was as fast as <c>2</c> and smaller
+    ///     (docs/05 §5.4).
+    /// </summary>
+    public const string LibraryOptLevel = "s";
 }
 
 /// <summary>What a build did.</summary>
@@ -543,7 +568,7 @@ public static class IncrementalBuild {
             var extensions = Hash(string.Join("\n", faces.SelectMany(static f => f).Select(static f => f.Extensions)));
             standard.Key = Hash($"{settingsKey}\nunit {standard.Name}\n{standard.ContentHash}\n{extensions}");
             ownExtensions = OwnExtensions(faces);
-            standardEntry = StandardLibraryKey(cache, settings, standard.Trees, ownExtensions);
+            standardEntry = StandardLibraryKey(cache, settings.ForLibrary, standard.Trees, ownExtensions);
             standard.Entry = standardEntry;
 
             // A dependency's entry: its source, and the entries it was
@@ -557,7 +582,7 @@ public static class IncrementalBuild {
 
                 var features = plans[i].Files.SelectMany(static f => f.Features).Distinct(StringComparer.Ordinal).ToList();
                 own[i].Entry = cache.Key("library", package.Name, package.Version, own[i].ContentHash, settings.Native.TargetOrHost.Triple,
-                    [..settings.CodeOptions, $"extensions={ownExtensions}"], features,
+                    [..settings.ForLibrary.CodeOptions, $"extensions={ownExtensions}"], features,
                     [standardEntry.Hash, ..package.Dependencies.Select(d => own[byName[d]].Entry!.Hash)]);
             }
 
@@ -663,7 +688,7 @@ public static class IncrementalBuild {
             foreach (var unit in stale) {
                 var leads = settings.Library is not null && ReferenceEquals(unit, own[0]);
                 IReadOnlyList<LibraryInterface> before = [..compiled.Where(c => !ReferenceEquals(c.Key, unit)).Select(static c => c.Value)];
-                var lowered = Lower(compilation, index, unit.Trees, unit.IsLibrary, leads, settings, embedded, timings, before);
+                var lowered = Lower(compilation, index, unit.Trees, unit.IsLibrary, leads, unit.IsLibrary ? settings.ForLibrary : settings, embedded, timings, before);
 
                 if (lowered.Alone) {
                     // A unit sees less than the whole program: what it reports,
@@ -688,7 +713,7 @@ public static class IncrementalBuild {
                         var started = System.Diagnostics.Stopwatch.GetTimestamp();
                         NativeBuildResult result;
                         if (unit.Library is { } library) {
-                            result = library.Write(abi, temporary => NativeObjects.CompileIr(ir, temporary, settings.Native), settings.Native.TargetOrHost,
+                            result = library.Write(abi, temporary => NativeObjects.CompileIr(ir, temporary, settings.ForLibrary.Native), settings.Native.TargetOrHost,
                                 face is null ? null : path => File.WriteAllBytes(path, face));
                         } else {
                             File.WriteAllText(unit.AbiPath, abi);
@@ -1010,7 +1035,7 @@ public static class IncrementalBuild {
         // As a program's build has it (Separately): the program, with the
         // library's modules, and the core every compilation has.
         List<SyntaxTree> trees = [..library, ..CoreLibrary.TreesFor(program.Options)];
-        var unit = LibraryUnit.In(cache, StandardLibraryKey(cache, settings, trees, "none"), settings.Profile, "std", target);
+        var unit = LibraryUnit.In(cache, StandardLibraryKey(cache, settings.ForLibrary, trees, "none"), settings.Profile, "std", target);
         var runtime = NativeBuild.Runtime(settings.Native, NativeBuild.LtoFlags(settings.Native, target.Platform, NativeBuild.LinksBitcodeFor(target)), cache, settings.Profile);
         if (!runtime.Result.Succeeded) {
             return BuildOutcome.Failed([NativeBuild.Explained(runtime.Result, settings.Native).Report]);
@@ -1026,13 +1051,13 @@ public static class IncrementalBuild {
             return BuildOutcome.Failed(errors);
         }
 
-        var lowered = Lower(compilation, SilProgram.Index(compilation), trees, library: true, leads: false, settings, Pipeline.EmbeddedSources(trees, [program]), null);
+        var lowered = Lower(compilation, SilProgram.Index(compilation), trees, library: true, leads: false, settings.ForLibrary, Pipeline.EmbeddedSources(trees, [program]), null);
         if (lowered.Errors.Count > 0) {
             return BuildOutcome.Failed(lowered.Errors);
         }
 
         var face = InterfaceOf(compilation, "std", trees, lowered, settings, program.Options)?.Write();
-        var written = unit.Write(lowered.Abi, temporary => NativeObjects.CompileIr(lowered.Ir!, temporary, settings.Native), target,
+        var written = unit.Write(lowered.Abi, temporary => NativeObjects.CompileIr(lowered.Ir!, temporary, settings.ForLibrary.Native), target,
             face is null ? null : path => File.WriteAllBytes(path, face));
         if (!written.Succeeded) {
             return BuildOutcome.Failed([$"internal error: compiling the standard library failed:\n{written.Output}"]);

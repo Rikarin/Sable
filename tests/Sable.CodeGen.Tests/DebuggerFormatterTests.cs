@@ -186,18 +186,31 @@ public sealed partial class DebuggerFormatterTests {
     }
 
     /// <summary>Builds the program with debug information and runs lldb on it, with the plugin loaded; returns what it printed.</summary>
-    static async Task<string> Run(string lldb, string source, string fileName, IReadOnlyList<string> commands) {
+    /// <param name="separately">
+    ///     Built as a package's dev build is (<see cref="Sable.Driver.Build.IncrementalBuild" />):
+    ///     the program's unit unoptimised, linked with the standard library's
+    ///     archive, compiled optimised (#298). Otherwise the program is
+    ///     compiled whole, the library's code with it, unoptimised.
+    /// </param>
+    static async Task<string> Run(string lldb, string source, string fileName, IReadOnlyList<string> commands, bool separately = false) {
         var directory = Directory.CreateTempSubdirectory("sable-formatters-");
         try {
             var sourcePath = Path.Combine(directory.FullName, fileName);
             File.WriteAllText(sourcePath, source);
 
-            var result = Pipeline.Compile(new SourceText(source, fileName), directory.FullName);
-            Assert.True(result.Succeeded, string.Join("\n", result.Errors));
-
             var executable = Path.Combine(directory.FullName, Path.GetFileNameWithoutExtension(fileName));
-            var build = NativeBuild.Build(result.LlvmIr!, executable, debug: true);
-            Assert.True(build.Succeeded, build.Output);
+            if (separately) {
+                var outcome = Sable.Driver.Build.IncrementalBuild.Build([new(Path.GetFileNameWithoutExtension(fileName), [new(sourcePath, fileName, [])])],
+                    new("dev", false, directory.FullName, true), executable, Path.Combine(directory.FullName, "cache"), cache: new BuildCache(Path.Combine(directory.FullName, "shared")));
+                Assert.True(outcome.Succeeded, string.Join("\n", outcome.Errors));
+                Assert.Null(outcome.FellBack);
+            } else {
+                var result = Pipeline.Compile(new SourceText(source, fileName), directory.FullName);
+                Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+
+                var build = NativeBuild.Build(result.LlvmIr!, executable, debug: true);
+                Assert.True(build.Succeeded, build.Output);
+            }
 
             var plugin = Path.Combine(directory.FullName, "sable_lldb.py");
             File.WriteAllText(plugin, NativeBuild.LldbPluginSource);
@@ -346,6 +359,37 @@ public sealed partial class DebuggerFormatterTests {
     /// <summary>That the session shows the text, and the whole session when it does not: a debugger's output says why.</summary>
     static void Expect(string output, string expected) =>
         Assert.True(output.Contains(expected, StringComparison.Ordinal), $"lldb did not show: {expected}\n--- the session ---\n{output}");
+
+    /// <summary>
+    ///     A dev build links the standard library's archive compiled optimised
+    ///     (#298), with its line tables: a breakpoint in the library's code
+    ///     stops there, the backtrace names its frame and the program's, and
+    ///     the program's frame shows its values through the formatters.
+    /// </summary>
+    [PosixFact(NeedsLldb)]
+    public async Task ADevBuildStopsInTheOptimisedLibraryAndShowsTheProgramsValues() {
+        if (Lldb.Value is not { } lldb) {
+            return;
+        }
+
+        const string source = """
+                              module Library
+                              import Sable.IO
+
+                              fn main() {
+                                  let words: String[>..] = ["pear", "fig"]
+                                  let loud = "sable".uppercased()
+                                  print("\(loud) \(words.count)")
+                              }
+                              """;
+        var output = await Run(lldb, source, "library.sb", ["br set -r mappingCase", "run", "bt", "up", "frame variable words", "kill"], separately: true);
+
+        Expect(output, "stop reason = breakpoint");
+        Expect(output, "at String+Case.sb:");
+        Expect(output, "[opt]");
+        Expect(output, "Library.main at library.sb:6");
+        Expect(output, "[0] = \"pear\"");
+    }
 
     [PosixFact(NeedsLldb)]
     public async Task StepGoesThroughAnExistentialIntoTheMethod() {

@@ -480,6 +480,13 @@ alone. A dev build with debug information, compiled so, runs
 none. A single file's `sable build` takes the same levels as `-O0` to
 `-O3`, `-Os` and `-Oz` (`-O2` by default), and `-g` alone builds at `-O0`.
 
+The opt-level is the program's own units'. The libraries it links — the
+standard library's unit and each registry or git dependency's — are
+compiled optimised whatever it says: an unoptimised build compiles them at
+`s` (the SIL passes and clang's `-Os`), with the build's debug information
+and every check its profile asks for (§5.4, "Libraries compiled
+optimised").
+
 ### Deliberate departures from Cargo
 
 - **No `reflect:`.** What a program reflects on is said in its code:
@@ -861,6 +868,130 @@ lower of the library — the generic functions still specialised, `@inline`
 bodies, default arguments, `const fn`s, constants, initial values — in a
 form other than source.
 
+*Libraries compiled optimised* (#298). A library's unit — the standard
+library's, and each registry or git dependency's — is compiled optimised
+in every profile, as Swift ships its standard library: a dev build calls
+optimised library code, and only the program's own units are unoptimised
+and fully debuggable. An optimised build compiles its libraries with its
+own settings, as before. An unoptimised one compiles them with
+`BuildSettings.ForLibrary`: the SIL passes of opt-level `s` (the
+specialisation pass for size, devirtualisation, borrowing, the inliner,
+closures, simplification and the ARC passes) and clang's `-Os`, to a plain
+object (no bitcode: an unoptimised link does no link-time optimisation),
+with the build's debug information. Its cache entry is keyed by those
+settings (`option optimise=True`, `option sil=s`, `option clang=-g -Os …`),
+not by the program's, nor by the profile's name; two unoptimised profiles
+with the same checks and debug information share one entry. (The release
+profile's library — `-O3`, ThinLTO bitcode, no debug information, no
+`DEBUG` — is compiled differently, so has its own.)
+
+*What a dev program gets from it.* Every check the profile asks for: the
+library is parsed with the program's `DEBUG`/`RELEASE` and lowered from the
+same compilation, so `assert`, `assertionFailure` and `#if DEBUG` in it
+hold in a dev build as in the program's own code, and its exclusivity
+checks, overflow traps and ARC checks are as the profile says.
+`precondition` holds in every build. This differs from Swift, whose
+library is built once, in release mode, and so keeps only its
+preconditions: Sable compiles the library for the build's settings anyway,
+so a dev program loses no trap by its library being optimised
+(`IncrementalTests.ADevBuildLinksTheStandardLibraryOptimisedWithTheProfilesChecks`).
+
+*Debugging.* The archive keeps its line tables and debug information, its
+compile unit marked optimised: lldb shows its frames with `[opt]` and says
+once that the program "was compiled with optimization". A breakpoint in
+the library's code stops there, the backtrace names its frames and the
+program's, and the formatters show the program's values; in a library
+frame some variables may be unavailable, and stepping inside it is coarse
+(`DebuggerFormatterTests.ADevBuildStopsInTheOptimisedLibraryAndShowsTheProgramsValues`).
+
+*Why `-Os`, and why all three optimisers.* Measured with the library at
+each level (the three-line program's cold build, its library's `__text`,
+and `words`, the benchmark that runs the most library code, at `-O0`,
+unspecialised):
+
+| Library built with | Cold build | Library `__text` | `words` |
+|---|---:|---:|---:|
+| `-O0`, no SIL passes (before) | 3.55 s | 1074 KB | 333 ms |
+| clang `-O2`, no SIL passes | 6.30 s | 649 KB | 278 ms |
+| SIL `2` without the specialisation pass, clang `-O2` | 7.07 s | 520 KB | — |
+| SIL `2`, clang `-O2` | 6.92 s | 527 KB | 176 ms |
+| SIL `s`, clang `-Os` | 6.61 s | 477 KB | 174 ms |
+
+The SIL passes are what make the library's generic code fast (LLVM alone
+cannot see through value witnesses and metadata); the specialisation pass
+costs nothing measurable and makes the instances the library's own code
+needs; `-Os` ran as fast as `-O2` on every benchmark and is 9% smaller.
+
+*The cost: a library's first build.* The library's passes and clang's
+`-Os` take longer than its `-O0`: an empty cache's three-line build goes
+from 3.55 s to 6.6 s unspecialised and from 2.6 s to 4.0 s specialised. It
+is paid once per compiler, target and settings — a release of the compiler
+carries the dev and release entries prebuilt (`sable cache warm --into`),
+so a user's first build does not pay it — and every later build links the
+entry. To keep it down, a release build of the compiler verifies SIL once
+after the passes rather than after each (docs/04 §2.1): verifying after
+every pass was 2.4 s of the 3.6 s the standard library's passes took.
+
+*Why a cold unspecialised `-O0` build was 1 s slower than specialised.*
+Not stage 6 (run-time class metadata): stage 7 (#297, a library's generic
+code compiled once into its archive) is where the gap grew, from 0.3 s to
+1.1 s on `examples/ssg` (the stage-7 table above: 4.0 s to 4.68 s). Before
+it, the standard library's unit compiled none of its generic functions;
+since, it compiles every one that can be compiled once — 767 of them, 624
+KB of the unit's 1074 KB of `-O0` code — on its first build. On the
+three-line program the difference is all in that unit: SIL lowering +290
+ms, verifying +65 ms, emitting +110 ms and clang +475 ms. That is the work
+stage 7 moves into the cache, not a regression in any one step, and later
+builds do not repeat it.
+
+*Before and after*, measured with `sable` built Release on an M1 Max
+(load average 5–8), each a package's dev build: cold is an empty
+`$SABLE_HOME` and `target/`, warm a warm cache (as a release's prebuilt
+one is) and an empty `target/`, edit one body changed after a build; sizes
+are the executable's:
+
+| Build | Before, specialised | Before, unspecialised | After, specialised | After, unspecialised |
+|---|---:|---:|---:|---:|
+| three-line, cold | 2.61–2.65 s | 3.54–3.56 s | 4.04 s | 6.57–6.60 s |
+| three-line, warm / edit | 0.83–0.85 s | 0.83–0.85 s | 0.83–0.84 s | 0.83–0.87 s |
+| three-line, size | 94 KB | 94 KB | 94 KB | 94 KB |
+| `examples/ssg`, cold | 3.50–3.61 s | 4.56–4.60 s | 5.08–5.35 s | 7.99–8.06 s |
+| `examples/ssg`, warm | 1.64–1.68 s | 1.51–1.52 s | 1.64–1.65 s | 1.57–1.58 s |
+| `examples/ssg`, edit | 1.65–1.69 s | 1.50 s | 1.63 s | 1.50–1.51 s |
+| `examples/ssg`, size | 818 KB | 1214 KB | 677 KB | 943 KB |
+
+The benchmarks, each a single file's `sable build -O0 -g` (the program's
+unit unoptimised, the library's archive from the cache), fastest of three
+runs in ms, and the executable's size:
+
+| Benchmark | Before, specialised | Before, unspecialised | After, specialised | After, unspecialised |
+|---|---:|---:|---:|---:|
+| binary-trees | 767 | 765 | 770 | 766 |
+| nbody | 246 | 246 | 245 | 245 |
+| orders | 424 | 425 | 423 | 424 |
+| shapes | 19 | 18 | 19 | 19 |
+| sort | 117 | 176 | 117 | 177 |
+| words | 142 | 333 (601 KB) | 118 | 174 (451 KB) |
+| json | 17 (531 KB) | 17 (932 KB) | 17 (515 KB) | 19 (812 KB) |
+
+Most benchmarks spend their time in their own `-O0` code, which is as it
+was; `words`, which runs dictionary and string code of the library's, is
+17% faster specialised and 48% faster unspecialised. At `-O2` (compiled
+whole) nothing changed: every benchmark within a millisecond or two of
+before, in both modes, at the same sizes.
+
+*Unspecialised as the debug default (#297), revisited.* With the library
+optimised, unspecialised generics in a dev build give an edit of
+`examples/ssg` 8% quicker than specialised (1.50 s against 1.63 s) and a
+warm first build about as quick, but an executable 39% larger (943 KB
+against 677 KB; it was 48%), and the program's own generic code at `-O0`
+is still 1.5× slower (`sort`, `words`); a cold build without a prebuilt
+cache is 2.9 s slower, once. Debugging the program's own generic frames
+(stage 9) is not done either: they show opaque values. So debug builds stay
+specialised for now: the edit gain is small next to the size and
+`-O0` run time, and the choice is to be made again once the binary-size
+follow-ups (#299, #300) and stage 9 land.
+
 ### The build cache
 
 What a build makes that does not depend on the program — the C runtime's
@@ -901,12 +1032,14 @@ The key is a SHA-256 over:
   compiler rebuilt with any change, even under the same version number, finds
   none of the entries an earlier build of it wrote;
 - the target triple;
-- the profile, as the settings of it that change code: the opt-level and the
-  SIL passes it picks, debug information, link-time optimisation (bitcode or
-  not), exclusivity, overflow and ARC checks, `debug-assertions`, reflection,
+- the settings the library is compiled with (`BuildSettings.ForLibrary`),
+  which are not the program's in an unoptimised build: the opt-level and
+  the SIL passes it picks (`s` for every unoptimised profile), debug
+  information, link-time optimisation (bitcode or not), exclusivity,
+  overflow and ARC checks, `debug-assertions`, reflection,
   position-independence, and the C compiler's identity. The profile's name
-  is recorded, not keyed, so two profiles that compile code the same way
-  share entries;
+  is recorded, not keyed, so two profiles that compile the library the same
+  way share its entries;
 - the enabled features, and the keys of the entries it was compiled
   against: a dependency's, the standard library's and those of its own
   dependencies (the standard library depends on nothing kept);

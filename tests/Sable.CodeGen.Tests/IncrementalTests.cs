@@ -775,6 +775,74 @@ public sealed class IncrementalTests {
         }
     }
 
+    /// <summary>
+    ///     A dev build compiles the program's unit unoptimised and the
+    ///     standard library's optimised (#298), its cache entry keyed by the
+    ///     library's flags, with the checks the profile asks for: the
+    ///     library's <c>assert</c>, parsed with <c>DEBUG</c> as the program
+    ///     is, and its arithmetic's overflow traps.
+    /// </summary>
+    [Fact]
+    public void ADevBuildLinksTheStandardLibraryOptimisedWithTheProfilesChecks() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("sable-library-optimised-").FullName;
+        try {
+            File.WriteAllText(Path.Combine(directory, "main.sb"), """
+                module T
+
+                import Sable.IO
+
+                fn main() {
+                    let arguments = Environment.arguments()
+                    if arguments.count == 0 {
+                        print("ran")
+                        return
+                    }
+                    if arguments[0] == "assert" {
+                        assert(arguments.count == 0, "kept")
+                    }
+                    let big: Int[>..] = [Int.max, arguments.count]
+                    print(big.sum())
+                }
+                """);
+            var executable = Platform.Executable(Path.Combine(directory, "program"));
+            var cache = new BuildCache(Path.Combine(directory, "shared"));
+            var outcome = IncrementalBuild.Build([new UnitPlan("main", [new SourceFile(Path.Combine(directory, "main.sb"), "main.sb", [])])],
+                new BuildSettings("dev", false, directory, true), executable, Path.Combine(directory, "cache"), cache: cache);
+            Assert.True(outcome.Succeeded, string.Join("\n", outcome.Errors));
+            Assert.Null(outcome.FellBack);
+
+            var std = Assert.Single(cache.Entries(), static e => e.Package == "sable-std");
+            var key = File.ReadAllLines(Path.Combine(std.Directory, BuildCache.EntryFile));
+            Assert.Contains("option optimise=True", key);
+            Assert.Contains($"option sil={BuildSettings.LibraryOptLevel}", key);
+            Assert.Contains("option debug=True", key);
+            Assert.Contains("option debug-assertions=True", key);
+            Assert.Contains("option exclusivity=True", key);
+            Assert.Contains("option overflow=True", key);
+            Assert.Contains(key, static l => l.StartsWith("option clang=-g -Os", StringComparison.Ordinal));
+
+            Assert.Equal(("ran\n", 0), PackageFixture.Execute(executable));
+            Assert.Contains("assertion failed: kept", Trapped(executable, "assert"));
+            Assert.Contains("integer overflow", Trapped(executable, "overflow"));
+        } finally {
+            Directory.Delete(directory, true);
+        }
+
+        static string Trapped(string executable, string argument) {
+            var start = new System.Diagnostics.ProcessStartInfo(executable, [argument]) { RedirectStandardOutput = true, RedirectStandardError = true };
+            using var process = System.Diagnostics.Process.Start(start)!;
+            process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            Assert.NotEqual(0, process.ExitCode);
+            return error;
+        }
+    }
+
     [Fact]
     public void UnitsThatDisagreeAboutAClassAreNotLinked() {
         if (!CanBuild) {

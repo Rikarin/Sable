@@ -454,7 +454,7 @@ public sealed class DeclarationParserTests {
             public actor Cache<Key: Hashable & Sendable, Value: Sendable> {
                 private var entries: [Key: Value] = [:]
                 public fn get(_ key: Key) -> Value? { return entries[key] }
-                nonisolated let id: Uuid
+                nonisolated let id: UUID
             }
             """
         );

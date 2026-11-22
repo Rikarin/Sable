@@ -1641,7 +1641,7 @@ async fn work() {
 actor Counter {
     private var value = 0
     fn increment() { value += 1 }          // isolated: callers must await
-    nonisolated let id: Uuid               // immutable, freely readable
+    nonisolated let id: UUID               // immutable, freely readable
 }
 
 let c = Counter()

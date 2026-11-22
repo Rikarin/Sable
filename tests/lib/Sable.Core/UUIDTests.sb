@@ -1,0 +1,120 @@
+module UUIDTests
+
+// UUID (Sable.Core), against RFC 9562's test vectors.
+
+import Sable.Testing
+
+/// Gives the words it was given, in order: the bits a vector was made from.
+struct Scripted: RandomNumberGenerator {
+    var words: U64[>..]
+    var next = 0
+
+    mutating fn next() -> U64 {
+        let word = words[next]
+        next += 1
+        return word
+    }
+}
+
+fn parseError(_ text: String) -> ParseError? {
+    do {
+        let _ = try UUID.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn version4IsRfc9562sExample() {
+    // RFC 9562, Appendix A.3: random bits 0x919108f752d1?320, 0x?bacf847db4148a8.
+    let words: U64[>..] = [0x919108F752D1F320, 0x1BACF847DB4148A8]
+    var bits = Scripted(words: words)
+    let id = UUID.random(using: &bits)
+    assertEqual(id.toString(), "919108f7-52d1-4320-9bac-f847db4148a8")
+    assertEqual(id.version, 4)
+    assertEqual(id.variant, 2)
+    assert(id.timestamp == none)
+}
+
+@test
+fn version7IsRfc9562sExample() {
+    // RFC 9562, Appendix A.6: 2022-02-22T19:22:22Z, rand_a 0xCC3, rand_b 0x18C4DC0C0C07398F.
+    let words: U64[>..] = [0xCC3, 0x18C4DC0C0C07398F]
+    var bits = Scripted(words: words)
+    let id = UUID.timeOrdered(milliseconds: 0x017F22E279B0, using: &bits)
+    assertEqual(id.toString(), "017f22e2-79b0-7cc3-98c4-dc0c0c07398f")
+    assertEqual(id.version, 7)
+    assertEqual(id.variant, 2)
+    assertEqual(id.timestamp, 1645557742000)
+}
+
+@test
+fn theExamplesOfOtherVersionsParse() {
+    // RFC 9562, Appendix A: versions 1, 3, 5 and 6, and the DNS namespace.
+    assertEqual((try! UUID.parse("c232ab00-9414-11ec-b3c8-9f6bdeced846")).version, 1)
+    assertEqual((try! UUID.parse("5df41881-3aed-3515-88a7-2f4a814cf09e")).version, 3)
+    assertEqual((try! UUID.parse("2ed6657d-e927-568b-95e1-2665a8aea6a2")).version, 5)
+    assertEqual((try! UUID.parse("1ec9414c-232a-6b00-b3c8-9f6bdeced846")).version, 6)
+    assertEqual((try! UUID.parse("6ba7b810-9dad-11d1-80b4-00c04fd430c8")).variant, 2)
+    assertEqual(UUID.nil.toString(), "00000000-0000-0000-0000-000000000000")
+    assertEqual(UUID.max.toString(), "ffffffff-ffff-ffff-ffff-ffffffffffff")
+}
+
+@test
+fn everyFormParses() {
+    let id = try! UUID.parse("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+    assertEqual(try! UUID.parse("6BA7B810-9DAD-11D1-80B4-00C04FD430C8"), id)
+    assertEqual(try! UUID.parse("{6ba7b810-9dad-11d1-80b4-00c04fd430c8}"), id)
+    assertEqual(try! UUID.parse("6ba7b8109dad11d180b400c04fd430c8"), id)
+    assertEqual(try! UUID.parse("urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8"), id)
+    assertEqual(try! UUID.parse(id.compactString()), id)
+    assertEqual(try! UUID.parse(id.bracedString()), id)
+    assertEqual(id.compactString(), "6ba7b8109dad11d180b400c04fd430c8")
+    assertEqual("\(id:X)", "6BA7B810-9DAD-11D1-80B4-00C04FD430C8")
+    assertEqual("\(id:?)", "6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+}
+
+@test
+fn aMalformedOneSaysWhere() {
+    assertEqual(parseError(""), .Empty)
+    assertEqual(parseError("6ba7b810-9dad-11d1-80b4"), .Invalid(at: 0))
+    assertEqual(parseError("6ba7b810x9dad-11d1-80b4-00c04fd430c8"), .Invalid(at: 8))
+    assertEqual(parseError("6ba7b810-9dad-11d1-80b4-00c04fd430cg"), .InvalidDigit(at: 35))
+    assertEqual(parseError("[6ba7b810-9dad-11d1-80b4-00c04fd430c8}"), .Invalid(at: 0))
+}
+
+@test
+fn bytesGoInOrder() {
+    let id = try! UUID.parse("00112233-4455-6677-8899-aabbccddeeff")
+    let bytes = id.bytes
+    assertEqual(bytes[0], 0x00)
+    assertEqual(bytes[3], 0x33)
+    assertEqual(bytes[15], 0xFF)
+    assertEqual(UUID(bytes: bytes), id)
+    let slice: U8[>..] = [0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]
+    assertEqual(UUID.fromBytes(slice), id)
+    let short: U8[>..] = [1, 2]
+    assert(UUID.fromBytes(short) == none)
+}
+
+@test
+fn randomOnesDifferAndTimeOrderedOnesSort() {
+    var seen: [UUID: Bool] = [:]
+    var i = 0
+    while i < 1000 {
+        let id = UUID.random()
+        assertEqual(id.version, 4)
+        assertEqual(id.variant, 2)
+        assert(seen[id] == none)
+        seen[id] = true
+        i += 1
+    }
+    var generator = SeededRandomNumberGenerator(seed: 9)
+    let earlier = UUID.timeOrdered(milliseconds: 1000, using: &generator)
+    let later = UUID.timeOrdered(milliseconds: 1001, using: &generator)
+    assert(earlier < later)
+    assert(UUID.nil < earlier && later < UUID.max)
+    let now = UUID.timeOrdered()
+    assert(now.timestamp! > 1700000000000)
+}

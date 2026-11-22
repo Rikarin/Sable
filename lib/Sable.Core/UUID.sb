@@ -1,0 +1,275 @@
+module Sable.Core
+
+/// A universally unique identifier, RFC 9562: 128 bits, written as 32
+/// hexadecimal digits in groups of 8-4-4-4-12. .NET's Guid, Swift's UUID.
+/// `random()` makes a version 4 one, from the system's cryptographically
+/// secure random source; `timeOrdered()` a version 7 one, whose first 48
+/// bits are the Unix time in milliseconds, so that ones made later sort
+/// later — what a database's index wants.
+///
+/// Held as two words, the first eight bytes and the last eight, each read
+/// big-endian: so comparing two is comparing their bytes, and hashing one is
+/// hashing two words.
+///
+/// ```sable
+/// let id = try! UUID.parse("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+/// assert(id.version == 1)
+/// assert("\(id)" == "6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+/// assert(UUID.random() != UUID.random())
+/// assert(UUID.timeOrdered().version == 7)
+/// ```
+public struct UUID {
+    /// The first eight bytes, big-endian.
+    public let high: U64
+
+    /// The last eight bytes, big-endian.
+    public let low: U64
+
+    /// The UUID whose bytes, big-endian, are the two words.
+    public init(high: U64, low: U64) {
+        self.high = high
+        self.low = low
+    }
+
+    /// The UUID of the sixteen bytes, in order.
+    ///
+    /// ```sable
+    /// let bytes: U8[16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+    /// assert(UUID(bytes: bytes).low == 1)
+    /// ```
+    public init(bytes: U8[16]) {
+        var high: U64 = 0
+        var low: U64 = 0
+        var i = 0
+        while i < 8 {
+            high = high << 8 | U64(bytes[i])
+            low = low << 8 | U64(bytes[i + 8])
+            i += 1
+        }
+        self.high = high
+        self.low = low
+    }
+
+    /// The UUID of sixteen bytes in order, or none for any other count.
+    public static fn fromBytes(_ bytes: U8[:]) -> UUID? {
+        if bytes.count != 16 {
+            return none
+        }
+        var high: U64 = 0
+        var low: U64 = 0
+        var i = 0
+        while i < 8 {
+            high = high << 8 | U64(bytes[i])
+            low = low << 8 | U64(bytes[i + 8])
+            i += 1
+        }
+        return UUID(high: high, low: low)
+    }
+
+    /// The sixteen bytes, in order: the first word's, then the second's.
+    public var bytes: U8[16] {
+        get {
+            var bytes: U8[16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            var i = 0
+            while i < 8 {
+                bytes[i] = (high >> U64(56 - 8 * i)) unchecked as U8
+                bytes[i + 8] = (low >> U64(56 - 8 * i)) unchecked as U8
+                i += 1
+            }
+            return bytes
+        }
+    }
+
+    /// The nil UUID, every bit zero: what stands for none.
+    public static var nil: UUID => UUID(high: 0, low: 0)
+
+    /// The max UUID, every bit one (RFC 9562 §5.10).
+    public static var max: UUID => UUID(high: U64.max, low: U64.max)
+
+    /// A version 4 UUID: 122 random bits from the system's
+    /// cryptographically secure source, and the version and variant.
+    public static fn random() -> UUID {
+        var system = SystemRandomNumberGenerator()
+        return UUID.random(using: &system)
+    }
+
+    /// A version 4 UUID from the generator's bits: as random as it is.
+    public static fn random<G: RandomNumberGenerator>(using generator: inout G) -> UUID {
+        let high = generator.next() & 0xFFFF_FFFF_FFFF_0FFF | 0x4000
+        let low = generator.next() & 0x3FFF_FFFF_FFFF_FFFF | 0x8000_0000_0000_0000
+        return UUID(high: high, low: low)
+    }
+
+    /// A version 7 UUID: the Unix time now in milliseconds in its first 48
+    /// bits, then 74 random bits from the system's secure source. One made
+    /// in a later millisecond sorts after one made in an earlier; two in
+    /// the same millisecond, in no particular order.
+    public static fn timeOrdered() -> UUID {
+        var system = SystemRandomNumberGenerator()
+        return UUID.timeOrdered(milliseconds: Runtime.wallClockNanoseconds() / 1000000, using: &system)
+    }
+
+    /// A version 7 UUID of the Unix time given, in milliseconds (its low 48
+    /// bits), and the generator's bits: the 12 bits after the version from
+    /// its first draw, the 62 after the variant from its second.
+    ///
+    /// ```sable
+    /// var seeded = SeededRandomNumberGenerator(seed: 1)
+    /// let id = UUID.timeOrdered(milliseconds: 1645557742000, using: &seeded)
+    /// assert(id.timestamp == 1645557742000)
+    /// ```
+    public static fn timeOrdered<G: RandomNumberGenerator>(milliseconds: Int, using generator: inout G) -> UUID {
+        let time = (milliseconds unchecked as U64) & 0xFFFF_FFFF_FFFF
+        let high = time << 16 | 0x7000 | generator.next() & 0x0FFF
+        let low = generator.next() & 0x3FFF_FFFF_FFFF_FFFF | 0x8000_0000_0000_0000
+        return UUID(high: high, low: low)
+    }
+
+    /// The version, from the four bits RFC 9562 keeps for it: 4 for a
+    /// random one, 7 for a time-ordered one, 1 for a time-and-node one.
+    public var version: Int => Int((high >> 12) & 0xF)
+
+    /// The variant, from the top bits of the ninth byte: 2 (bits 10) for
+    /// RFC 9562's own, 0 for the NCS's, 6 for Microsoft's, 7 reserved.
+    public var variant: Int {
+        get {
+            let top = Int(low >> 61)
+            return top < 4 ? 0 : top < 6 ? 2 : top
+        }
+    }
+
+    /// A version 7 UUID's Unix time in milliseconds; none for any other.
+    public var timestamp: Int? => version == 7 ? Int(high >> 16) : none
+
+    /// The 32 hexadecimal digits without the hyphens: .NET's "N".
+    ///
+    /// ```sable
+    /// assert(UUID.max.compactString() == "ffffffffffffffffffffffffffffffff")
+    /// ```
+    public fn compactString() -> String {
+        return hexDigits(high, 16) + hexDigits(low, 16)
+    }
+
+    /// The canonical form in braces, as Microsoft writes it: .NET's "B".
+    public fn bracedString() -> String {
+        return "{" + self.toString() + "}"
+    }
+
+    /// The canonical form: 8-4-4-4-12 lower-case hexadecimal digits.
+    public fn toString() -> String {
+        return hexDigits(high >> 32, 8) + "-" + hexDigits(high >> 16 & 0xFFFF, 4) + "-" + hexDigits(high & 0xFFFF, 4) + "-"
+            + hexDigits(low >> 48, 4) + "-" + hexDigits(low & 0xFFFF_FFFF_FFFF, 12)
+    }
+}
+
+/// The word's low 'count' hexadecimal digits, lower-case, zeros kept.
+fn hexDigits(_ word: U64, _ count: Int) -> String {
+    let digits: Char[16] = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f']
+    var scalars: Char[>..] = []
+    scalars.reserveCapacity(count)
+    var shift = 4 * (count - 1)
+    while shift >= 0 {
+        scalars.append(digits[Int(word >> U64(shift) & 0xF)])
+        shift -= 4
+    }
+    return String(scalars)
+}
+
+extension UUID: Hashable, Comparable {
+    public operator == (lhs: UUID, rhs: UUID) -> Bool {
+        return lhs.high == rhs.high && lhs.low == rhs.low
+    }
+
+    /// In the order of their bytes: a version 7 one by its time first.
+    public operator < (lhs: UUID, rhs: UUID) -> Bool {
+        return lhs.high < rhs.high || lhs.high == rhs.high && lhs.low < rhs.low
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.write(high)
+        hasher.write(low)
+    }
+}
+
+extension UUID: Debug {
+    /// The canonical form.
+    public fn debugDescription() -> String {
+        return self.toString()
+    }
+}
+
+extension UUID: Formattable {
+    /// The canonical form, in upper case with `X`, padded as the spec says.
+    ///
+    /// ```sable
+    /// assert("\(UUID.nil:X)" == "00000000-0000-0000-0000-000000000000")
+    /// assert("\(UUID.max:X)" == "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String {
+        let text = self.toString()
+        return spec.padded(spec.kind == .UpperHex ? text.uppercased() : text)
+    }
+}
+
+extension UUID: Parsable {
+    /// The UUID the text writes, in any case: canonical, 8-4-4-4-12 digits;
+    /// braced, `{…}`; compact, 32 digits; or as a URN, `urn:uuid:…`.
+    ///
+    /// ```sable
+    /// let id = try! UUID.parse("{6BA7B810-9DAD-11D1-80B4-00C04FD430C8}")
+    /// assert(id == (try! UUID.parse("6ba7b8109dad11d180b400c04fd430c8")))
+    /// assert(id == (try! UUID.parse("urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8")))
+    /// ```
+    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> UUID {
+        let scalars = source.toString().toArray()
+        var start = 0
+        var end = scalars.count
+        if end == 0 {
+            throw .Empty
+        }
+        if end == 45 && String(scalars[0..<9]).lowercased() == "urn:uuid:" {
+            start = 9
+        } else if end == 38 {
+            if scalars[0] != '{' {
+                throw .Invalid(at: 0)
+            }
+            if scalars[37] != '}' {
+                throw .Invalid(at: 37)
+            }
+            start = 1
+            end = 37
+        }
+        let hyphenated = end - start == 36
+        if !hyphenated && end - start != 32 {
+            throw .Invalid(at: start)
+        }
+        var high: U64 = 0
+        var low: U64 = 0
+        var digits = 0
+        var i = start
+        while i < end {
+            let c = scalars[i]
+            let offset = i - start
+            if hyphenated && (offset == 8 || offset == 13 || offset == 18 || offset == 23) {
+                if c != '-' {
+                    throw .Invalid(at: i)
+                }
+                i += 1
+                continue
+            }
+            let code = c.codePoint
+            let value = code >= 48 && code <= 57 ? code - 48 : code >= 97 && code <= 102 ? code - 87 : code >= 65 && code <= 70 ? code - 55 : 16
+            if value == 16 {
+                throw .InvalidDigit(at: i)
+            }
+            if digits < 16 {
+                high = high << 4 | U64(value)
+            } else {
+                low = low << 4 | U64(value)
+            }
+            digits += 1
+            i += 1
+        }
+        return UUID(high: high, low: low)
+    }
+}

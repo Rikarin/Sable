@@ -2106,9 +2106,13 @@ public sealed partial class SilGen {
             }
         }
 
-        // What it declares it conforms to: its metadata's conformance records.
+        // What it declares it conforms to: its metadata's conformance records;
+        // and where its arguments are known, those of its conditional
+        // conformances they meet.
         if (symbol is NamedTypeSymbol named) {
             type.Conformances.AddRange(DeclaredProtocols(named.OriginalDefinition));
+            type.ConditionalConformances.AddRange(ConditionalProtocols(named.OriginalDefinition).Where(c => !type.Conformances.Contains(c.Protocol)));
+            _module.MeetConditionalConformances(type);
         }
 
         return _module.AddType(type);
@@ -4459,11 +4463,14 @@ public sealed partial class SilGen {
 
     /// <summary>
     ///     The protocols a type declares it conforms to — where it is declared
-    ///     and in its extensions that hold for every instance — with those
-    ///     they refine, by qualified name: <c>M.Named</c>.
+    ///     and in its extensions that hold for every instance, or with
+    ///     <paramref name="conditional" /> in its constrained ones too — with
+    ///     those they refine, by qualified name: <c>M.Named</c>.
     /// </summary>
-    static IEnumerable<string> DeclaredProtocols(NamedTypeSymbol type) {
-        var pending = new Queue<TypeSymbol>(type.BaseTypes);
+    static IEnumerable<string> DeclaredProtocols(NamedTypeSymbol type, bool conditional = false) {
+        // Its base types have each extension's conformances too: a constrained one's are left out.
+        var constrained = conditional ? [] : type.Extensions.Where(static e => e.IsConstrained).SelectMany(static e => e.Conformances).ToHashSet();
+        var pending = new Queue<TypeSymbol>(type.BaseTypes.Where(b => !constrained.Contains(b)));
         foreach (var extension in type.Extensions.Where(static e => !e.IsConstrained)) {
             foreach (var conformance in extension.Conformances) {
                 pending.Enqueue(conformance);
@@ -4484,6 +4491,46 @@ public sealed partial class SilGen {
             yield return name;
             foreach (var refined in protocol.BaseTypes) {
                 pending.Enqueue(refined);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     The protocols a generic type's constrained extensions conform it to
+    ///     (<c>extension Box: P where T: P</c>), with those they refine, each
+    ///     with what its type arguments must conform to, by index. One whose
+    ///     requirements are not all a type parameter's conformance to a
+    ///     protocol (<c>where T == Int</c>) is left out: no record says so.
+    /// </summary>
+    static IEnumerable<(string Protocol, ImmutableArray<(int Argument, string Protocol)> Requirements)> ConditionalProtocols(NamedTypeSymbol type) {
+        var parameters = type.TypeParameters;
+        foreach (var extension in type.Extensions.Where(static e => e.IsConstrained && e.SameTypeRequirements.IsEmpty)) {
+            ImmutableArray<(int, string)>.Builder? requirements = ImmutableArray.CreateBuilder<(int, string)>();
+            foreach (var requirement in extension.ConformanceRequirements) {
+                var index = requirement.Subject is TypeParameterSymbol parameter ? parameters.IndexOf(parameter) : -1;
+                if (index < 0 || requirement.Constraint is not NamedTypeSymbol { TypeKind: TypeKind.Protocol, TypeParameters.IsEmpty: true } protocol) {
+                    requirements = null;
+                    break;
+                }
+
+                requirements.Add((index, QualifiedName(protocol)));
+            }
+
+            if (requirements is null) {
+                continue;
+            }
+
+            var pending = new Queue<TypeSymbol>(extension.Conformances);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            while (pending.Count > 0) {
+                if (pending.Dequeue() is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol || !seen.Add(QualifiedName(protocol))) {
+                    continue;
+                }
+
+                yield return (QualifiedName(protocol), requirements!.ToImmutable());
+                foreach (var refined in protocol.BaseTypes) {
+                    pending.Enqueue(refined);
+                }
             }
         }
     }

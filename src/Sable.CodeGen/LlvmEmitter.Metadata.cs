@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
 using Sable.SIL;
@@ -176,7 +177,9 @@ public sealed partial class LlvmEmitter {
     ///     metadata from, besides its parts' and its type arguments'
     ///     (<c>SableAggregateShape</c>, #297): its kind, its cases' or fields'
     ///     count and names, its name without its type arguments, and how many
-    ///     of those there are.
+    ///     of those there are; and the conformances its declaration has, each
+    ///     with what its arguments must conform to for it to hold (none for
+    ///     one that always does): an instance made at run time's records.
     /// </summary>
     internal string AggregateShape(NominalType type) {
         var name = $"@\"sable.shape.{Mangled(type)}\"";
@@ -195,8 +198,30 @@ public sealed partial class LlvmEmitter {
         var display = TypeMetadata.DisplayName(type);
         var written = TrapMessage(type.TypeArguments.IsEmpty || display.IndexOf('<') is not (> 0 and var open) ? display : display[..open]);
         _globals.Append($"{names} = {SharedLinkage} constant [{parts.Count} x ptr] [{listed}]{Comdat(names, SharedLinkage)}\n");
-        _globals.Append($"{name} = {SharedLinkage} constant {{ i64, i64, ptr, ptr, i64 }} {{ i64 {(int)TypeMetadata.KindOf(type)}, i64 {parts.Count}, ptr {names}, ")
-            .Append($"ptr {written}, i64 {type.TypeArguments.Length} }}{Comdat(name, SharedLinkage)}\n");
+
+        // Those that always hold, then the conditional ones.
+        var conditional = type.ConditionalConformances;
+        var always = type.Conformances.Where(p => !conditional.Exists(c => c.Protocol == p)).Select(p => (Protocol: p, Requirements: ImmutableArray<(int Argument, string Protocol)>.Empty));
+        var records = new List<string>();
+        foreach (var (protocol, requirements) in always.Concat(conditional)) {
+            var required = "null";
+            if (requirements.Length > 0) {
+                required = $"@\"sable.shape.requires.{Mangled(type)}.{records.Count}\"";
+                var each = string.Join(", ", requirements.Select(r => $"{{ i64, ptr }} {{ i64 {r.Argument}, ptr {ProtocolDescriptor(r.Protocol)} }}"));
+                _globals.Append($"{required} = {SharedLinkage} constant [{requirements.Length} x {{ i64, ptr }}] [{each}]{Comdat(required, SharedLinkage)}\n");
+            }
+
+            records.Add($"{{ ptr, i64, ptr }} {{ ptr {ProtocolDescriptor(protocol)}, i64 {requirements.Length}, ptr {required} }}");
+        }
+
+        var conformances = "null";
+        if (records.Count > 0) {
+            conformances = $"@\"sable.shape.conformances.{Mangled(type)}\"";
+            _globals.Append($"{conformances} = {SharedLinkage} constant [{records.Count} x {{ ptr, i64, ptr }}] [{string.Join(", ", records)}]{Comdat(conformances, SharedLinkage)}\n");
+        }
+
+        _globals.Append($"{name} = {SharedLinkage} constant {{ i64, i64, ptr, ptr, i64, i64, ptr }} {{ i64 {(int)TypeMetadata.KindOf(type)}, i64 {parts.Count}, ptr {names}, ")
+            .Append($"ptr {written}, i64 {type.TypeArguments.Length}, i64 {records.Count}, ptr {conformances} }}{Comdat(name, SharedLinkage)}\n");
         return name;
     }
 

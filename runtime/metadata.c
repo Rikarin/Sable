@@ -536,13 +536,67 @@ const SableWitnessTable *sable_witness_table_cached(SableWitnessCacheEntry **cac
 //   allows, as C lays a struct out.
 //
 // Its copy and destroy go to the active case's payload or each field.
+// What a type argument must conform to for a conditional conformance to
+// hold: 'extension Box: P where T: P' requires argument 0 conform to P.
+typedef struct SableShapeRequirement {
+    int64_t argument;
+    const SableProtocol *protocol;
+} SableShapeRequirement;
+
+// A conformance a generic type's declaration has: one that always holds
+// (no requirements), or one that holds where its arguments meet them.
+typedef struct SableShapeConformance {
+    const SableProtocol *protocol;
+    int64_t requirement_count;
+    const SableShapeRequirement *requirements;
+} SableShapeConformance;
+
 typedef struct SableAggregateShape {
     int64_t kind;                  // SABLE_KIND_OPTIONAL, _ENUM, _UNION or _STRUCT
     int64_t part_count;            // its cases or fields
     const char *const *part_names; // each case's or field's name
     const char *name;              // a generic type's, without its arguments: 'Sable.Core.Outcome'
     int64_t argument_count;        // its type arguments, whose metadata follows the parts'
+    int64_t conformance_count;     // what its declaration conforms it to
+    const SableShapeConformance *conformances;
 } SableAggregateShape;
+
+// The conformance records of an instance of a generic type made at run time
+// (#297): each its declaration has that holds for these arguments — a
+// conditional one where each argument it constrains conforms — as the
+// compiler gives an instance it knows the arguments of. No witness table is
+// made for them, so a cast that needs one finds none; 'is' and
+// 'isSubtype(of:)' answer by them.
+static void instance_conformances(SableTypeMetadata *type, const SableAggregateShape *shape) {
+    if (shape == NULL || shape->conformance_count == 0) {
+        return;
+    }
+
+    SableConformance *records = calloc((size_t)shape->conformance_count, sizeof *records);
+    if (records == NULL) {
+        sable_trap("out of memory");
+    }
+
+    int64_t count = 0;
+    for (int64_t i = 0; i < shape->conformance_count; i++) {
+        const SableShapeConformance *conformance = &shape->conformances[i];
+        bool holds = true;
+        for (int64_t j = 0; j < conformance->requirement_count && holds; j++) {
+            const SableShapeRequirement *requirement = &conformance->requirements[j];
+            holds = requirement->argument < type->argument_count
+                    && sable_type_conformance(type->arguments[requirement->argument], requirement->protocol) != NULL;
+        }
+
+        if (holds) {
+            records[count].protocol = conformance->protocol;
+            records[count].witnesses = NULL;
+            count++;
+        }
+    }
+
+    type->conformance_count = count;
+    type->conformances = records;
+}
 
 enum { LAYOUT_TAGGED = 0, LAYOUT_NULLABLE = 1, LAYOUT_BOOL = 2, LAYOUT_CHAR = 3, LAYOUT_FIELDS = 4 };
 
@@ -899,6 +953,7 @@ static SableAggregateInstance *aggregate_make(const SableAggregateShape *shape, 
     made->type.argument_count = optional ? 1 : shape == NULL ? part_count : shape->argument_count;
     made->type.arguments = optional ? &kept[made->some] : shape == NULL ? kept : kept + part_count;
     made->type.stride = round_up(made->type.size, made->type.alignment);
+    instance_conformances(&made->type, optional ? NULL : shape);
     for (int64_t i = 0; i < part_count; i++) {
         fields[i].type = parts[i];
         fields[i].type_name = name_of(parts[i]);
@@ -1094,6 +1149,7 @@ static SableClassInstance *class_make(const SableAggregateShape *shape, const Sa
     type->argument_count = shape->argument_count;
     type->arguments = kept + field_count;
     type->object = &made->object;
+    instance_conformances(type, shape);
 
     size_t base = strlen(shape->name);
     char *before = malloc(base + 2);

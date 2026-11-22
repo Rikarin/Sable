@@ -1899,7 +1899,7 @@ public sealed partial class SilGen {
         // An array conforms by its extensions, which say so for every array of its kind.
         var closure = ProtocolClosure([protocol]);
         if (concrete is NamedTypeSymbol named) {
-            var declared = DeclaredProtocols(named.OriginalDefinition).ToHashSet(StringComparer.Ordinal);
+            var declared = DeclaredProtocols(named.OriginalDefinition, conditional: true).ToHashSet(StringComparer.Ordinal);
             if (value is not NominalType) {
                 declared.UnionWith(_module.PrimitiveConformances.GetValueOrDefault(value.ToString()) ?? []);
             }

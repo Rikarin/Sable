@@ -609,6 +609,11 @@ public static class SilPrinter {
             text.Append(" conforms(").Append(string.Join(", ", type.Conformances.Select(Quote))).Append(')');
         }
 
+        if (type.ConditionalConformances.Count > 0) {
+            var each = type.ConditionalConformances.Select(c => $"{Quote(c.Protocol)} where({string.Join(", ", c.Requirements.Select(r => $"{r.Argument} {Quote(r.Protocol)}"))})");
+            text.Append(" conforms_where(").Append(string.Join(", ", each)).Append(')');
+        }
+
         return text.ToString();
     }
 

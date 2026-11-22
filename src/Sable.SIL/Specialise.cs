@@ -1556,7 +1556,9 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                 var copy = new EnumType(name) { DisplayName = enumType.DisplayName, IsNoncopyable = enumType.IsNoncopyable, IsUnion = enumType.IsUnion };
                 _substituted[name] = copy;
                 copy.Conformances.AddRange(enumType.Conformances);
+                copy.ConditionalConformances.AddRange(enumType.ConditionalConformances);
                 copy.TypeArguments = [..enumType.TypeArguments.Select(Substitute)];
+                _module.MeetConditionalConformances(copy);
                 foreach (var (caseName, payload) in enumType.Cases) {
                     copy.Cases.Add((caseName, payload is null ? null : Substitute(payload)));
                 }
@@ -1572,7 +1574,9 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                 var copy = new StructType(name) { DisplayName = structType.DisplayName, IsNoncopyable = structType.IsNoncopyable, IsPacked = structType.IsPacked, Alignment = structType.Alignment };
                 _substituted[name] = copy;
                 copy.Conformances.AddRange(structType.Conformances);
+                copy.ConditionalConformances.AddRange(structType.ConditionalConformances);
                 copy.TypeArguments = [..structType.TypeArguments.Select(Substitute)];
+                _module.MeetConditionalConformances(copy);
                 foreach (var (fieldName, fieldType) in structType.Fields) {
                     copy.Fields.Add((fieldName, Substitute(fieldType)));
                 }
@@ -1590,7 +1594,9 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                 var copy = new ClassType(name) { DisplayName = display };
                 _substituted[name] = copy;
                 copy.Conformances.AddRange(classType.Conformances);
+                copy.ConditionalConformances.AddRange(classType.ConditionalConformances);
                 copy.TypeArguments = [..arguments];
+                _module.MeetConditionalConformances(copy);
                 foreach (var (fieldName, fieldType) in classType.Fields) {
                     copy.Fields.Add((fieldName, Substitute(fieldType)));
                 }

@@ -122,6 +122,8 @@ public sealed partial class SilInterpreter {
                 _concreteGenerics[name] = concrete;
                 concrete.Fields.AddRange(structType.Fields.Select(f => (f.Name, Concrete(f.Type))));
                 concrete.Conformances.AddRange(structType.Conformances);
+                concrete.ConditionalConformances.AddRange(structType.ConditionalConformances);
+                module.MeetConditionalConformances(concrete);
                 return concrete;
             }
 
@@ -134,6 +136,8 @@ public sealed partial class SilInterpreter {
                 }
 
                 concrete.Conformances.AddRange(enumType.Conformances);
+                concrete.ConditionalConformances.AddRange(enumType.ConditionalConformances);
+                module.MeetConditionalConformances(concrete);
                 return concrete;
             }
 
@@ -143,6 +147,8 @@ public sealed partial class SilInterpreter {
                 _concreteGenerics[name] = concrete;
                 concrete.Fields.AddRange(classType.Fields.Select(f => (f.Name, Concrete(f.Type))));
                 concrete.Conformances.AddRange(classType.Conformances);
+                concrete.ConditionalConformances.AddRange(classType.ConditionalConformances);
+                module.MeetConditionalConformances(concrete);
                 return concrete;
             }
 

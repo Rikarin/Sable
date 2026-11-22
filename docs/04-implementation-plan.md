@@ -334,6 +334,10 @@ Key properties:
   once on every path. This single invariant catches most ARC codegen bugs
   before they reach LLVM.
 - **A SIL verifier runs after every pass in debug builds.** Non-negotiable.
+  A debug build of the compiler, and every test run whatever the compiler's
+  build (the suites set `SABLE_VERIFY_PASSES=1`); a release build of it
+  verifies once, after the passes, where verifying after each was two thirds
+  of an optimised standard library's pass time (docs/05 §5.4).
 - **SIL is textually printable and parseable.** Tests are `.sil` files. This is
   the difference between a debuggable compiler and a mystery.
 

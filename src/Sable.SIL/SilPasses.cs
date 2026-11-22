@@ -248,6 +248,23 @@ public static class SilPassManager {
         return reached;
     }
 
+    /// <summary>
+    ///     Whether the verifier runs after every pass rather than once after
+    ///     them all (docs/04 §2.1): in a debug build of the compiler, and
+    ///     with <c>SABLE_VERIFY_PASSES=1</c>, which the test suites set for
+    ///     every compilation they make, in process or not. Otherwise the
+    ///     passes' result is verified once — after every pass, the verifier
+    ///     was two thirds of the time an optimised standard library's passes
+    ///     took (docs/05 §5.4) — and a failure names no pass: built again
+    ///     with the variable set, it does.
+    /// </summary>
+    public static bool VerifiesEachPass =>
+#if DEBUG
+        true;
+#else
+        Environment.GetEnvironmentVariable("SABLE_VERIFY_PASSES") is "1" or "true" or "yes";
+#endif
+
     public static void Run(SilModule module, IEnumerable<ISilPass> passes) {
         // A build without dynamic exclusivity checks loses them before the
         // passes, which then see the code as it runs.
@@ -255,21 +272,29 @@ public static class SilPassManager {
             SharedStorage.DropChecks(module);
         }
 
+        var each = VerifiesEachPass;
         foreach (var pass in passes) {
             pass.Run(module);
-
-            var problems = SilVerifier.Verify(module);
-            if (problems.Count > 0) {
-                // With SABLE_PASS_DUMP set, the functions the problems name, as the pass left them.
-                var dump = Environment.GetEnvironmentVariable("SABLE_PASS_DUMP") is null
-                    ? ""
-                    : "\n\n" + string.Join("\n", module.Functions
-                        .Where(f => problems.Any(p => p.StartsWith("@" + f.Name + " ", StringComparison.Ordinal)))
-                        .Select(SilPrinter.Print));
-                throw new SilPassException(
-                    $"SIL failed verification after the '{pass.Name}' pass:\n{string.Join("\n", problems)}{dump}"
-                );
+            if (each) {
+                Verify(module, $"the '{pass.Name}' pass");
             }
+        }
+
+        if (!each) {
+            Verify(module, "the passes (SABLE_VERIFY_PASSES=1 names the one)");
+        }
+    }
+
+    static void Verify(SilModule module, string after) {
+        var problems = SilVerifier.Verify(module);
+        if (problems.Count > 0) {
+            // With SABLE_PASS_DUMP set, the functions the problems name, as the pass left them.
+            var dump = Environment.GetEnvironmentVariable("SABLE_PASS_DUMP") is null
+                ? ""
+                : "\n\n" + string.Join("\n", module.Functions
+                    .Where(f => problems.Any(p => p.StartsWith("@" + f.Name + " ", StringComparison.Ordinal)))
+                    .Select(SilPrinter.Print));
+            throw new SilPassException($"SIL failed verification after {after}:\n{string.Join("\n", problems)}{dump}");
         }
     }
 }

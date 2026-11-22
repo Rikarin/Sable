@@ -152,6 +152,81 @@ public sealed partial class SilInterpreter {
         return null;
     }
 
+    /// <summary>
+    ///     An atomic operation on the value at an address: one thread runs
+    ///     every task here, so each is the plain read, write or both it is
+    ///     made of, and every ordering is as strong as sequential consistency.
+    ///     Arithmetic wraps, as LLVM's atomicrmw does.
+    /// </summary>
+    object? AtomicBuiltin(BuiltinInst builtin, object?[] operands) {
+        if (builtin.Name == "atomic_fence") {
+            return null;
+        }
+
+        var separator = builtin.Name.LastIndexOf('_');
+        var op = builtin.Name["atomic_".Length..separator];
+        var type = SilType.AtomicTypes.First(t => t.ToString() == builtin.Name[(separator + 1)..]);
+        var size = TypeLayout.Size(type);
+        var address = (long)operands[0]!;
+        var (block, at) = RawAccess(address, type, size, aligned: true);
+        object Read() {
+            if (!block.Written.AsSpan(at, size).ToArray().All(static w => w)) {
+                throw new SilTrap($"an atomic {type} at 0x{address:x}, where nothing was written");
+            }
+
+            return Decode(type, block.Bytes.AsSpan(at, size));
+        }
+
+        void Write(object? value) {
+            Encode(type, value)!.CopyTo(block.Bytes, at);
+            Array.Fill(block.Written, true, at, size);
+        }
+
+        switch (op) {
+            case "load":
+                return Read();
+            case "store":
+                Write(operands[1]);
+                return null;
+            case "exchange": {
+                var old = Read();
+                Write(operands[1]);
+                return old;
+            }
+            case "compare_exchange" or "compare_exchange_weak": {
+                var old = Read();
+                var equal = type == SilType.Bool ? (bool)old == (bool)operands[1]! : Big(old) == Big(operands[1]);
+                if (equal) {
+                    Write(operands[2]);
+                }
+
+                return new object?[] { old, equal };
+            }
+        }
+
+        var found = Read();
+        if (type == SilType.Bool) {
+            var (a, b) = ((bool)found, (bool)operands[1]!);
+            Write(op switch { "and" => a && b, "or" => a || b, _ => a ^ b });
+            return found;
+        }
+
+        var (bits, signed) = SilType.IntegerInfo(type)!.Value;
+        var (x, y) = (Big(found), Big(operands[1]));
+        var mask = (BigInteger.One << bits) - 1;
+        var result = op switch {
+            "add" => x + y,
+            "sub" => x - y,
+            "and" => (x & mask) & (y & mask),
+            "or" => (x & mask) | (y & mask),
+            "xor" => (x & mask) ^ (y & mask),
+            "min" => BigInteger.Min(x, y),
+            _ => BigInteger.Max(x, y),
+        };
+        Write(NarrowBig(Wrapped(result, bits, signed), type));
+        return found;
+    }
+
     /// <summary>The block a run of bytes is in, and where in it the run starts: trapping where the run is not all in one live block.</summary>
     (RawBlock Block, int At) RawRange(long address, long count) {
         var index = BlockAt(address);

@@ -44,6 +44,9 @@ public abstract class SilType : IEquatable<SilType> {
     /// <summary>The floating-point types, widest first.</summary>
     public static readonly ImmutableArray<SilType> Floats = [F64, F32, F16, BF16];
 
+    /// <summary>What an atomic operation works on: every integer up to 64 bits, and Bool.</summary>
+    public static readonly ImmutableArray<SilType> AtomicTypes = [Int, I8, I16, I32, I64, U8, U16, U32, U64, UInt, Bool];
+
     /// <summary>The integer and floating-point types.</summary>
     public static readonly ImmutableArray<SilType> Numbers = [..Integers, ..Floats];
 
@@ -2727,6 +2730,26 @@ public static class SilBuiltins {
         Add("raw_free", SilType.Unit, SilType.Int);
         Add("raw_copy", SilType.Unit, SilType.Int, SilType.Int, SilType.Int);
         Add("raw_fill", SilType.Unit, SilType.Int, SilType.U8, SilType.Int);
+
+        // Atomics (Atomic<Value>): each on the value at a raw address, with
+        // a memory ordering as an Int — 0 relaxed, 1 acquire, 2 release, 3
+        // acquire-release, 4 sequentially consistent — which code generation
+        // switches on, and which is folded once it is a constant. Every
+        // integer up to 64 bits, and Bool; a read-modify-write gives the
+        // value it found, and a compare-exchange that and whether it stored.
+        foreach (var atomic in SilType.AtomicTypes) {
+            Add($"atomic_load_{atomic}", atomic, SilType.Int, SilType.Int);
+            Add($"atomic_store_{atomic}", SilType.Unit, SilType.Int, atomic, SilType.Int);
+            Add($"atomic_exchange_{atomic}", atomic, SilType.Int, atomic, SilType.Int);
+            Add($"atomic_compare_exchange_{atomic}", SilType.Tuple([atomic, SilType.Bool]), SilType.Int, atomic, atomic, SilType.Int);
+            Add($"atomic_compare_exchange_weak_{atomic}", SilType.Tuple([atomic, SilType.Bool]), SilType.Int, atomic, atomic, SilType.Int);
+            var operations = atomic == SilType.Bool ? new[] { "and", "or", "xor" } : new[] { "add", "sub", "and", "or", "xor", "min", "max" };
+            foreach (var op in operations) {
+                Add($"atomic_{op}_{atomic}", atomic, SilType.Int, atomic, SilType.Int);
+            }
+        }
+
+        Add("atomic_fence", SilType.Unit, SilType.Int);
 
         // Emptying a region, all of it or back to a mark: what a 'region frame = pool' block took.
         Add("region_reset", SilType.Unit, SilType.Region);

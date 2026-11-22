@@ -1,0 +1,108 @@
+module AtomicTests
+
+// Atomic, MemoryOrdering and OnceCell (Sable.Core).
+
+import Sable.Testing
+
+@test
+fn anAtomicIntegerIsChangedWhole() {
+    let n = Atomic<Int>(0)
+    assertEqual(n.add(5), 0)
+    assertEqual(n.subtract(2), 5)
+    assertEqual(n.load(), 3)
+    assertEqual(n.exchange(10), 3)
+    let failed = n.compareExchange(expected: 3, desired: 99)
+    assert(!failed.exchanged && failed.original == 10)
+    let swapped = n.compareExchange(expected: 10, desired: 12)
+    assert(swapped.exchanged && swapped.original == 10)
+    assertEqual(n.bitwiseAnd(0b1010), 12)
+    assertEqual(n.bitwiseOr(0b0101), 8)
+    assertEqual(n.bitwiseXor(0b1111), 13)
+    assertEqual(n.load(ordering: .Relaxed), 2)
+    assertEqual(n.max(40), 2)
+    assertEqual(n.min(7), 40)
+    assertEqual(n.load(ordering: .Acquire), 7)
+    n.store(-3, ordering: .Release)
+    assertEqual(n.update { $0 * $0 }, -3)
+    assertEqual(n.load(), 9)
+}
+
+@test
+fn everyWidthWrapsAsItsType() {
+    let byte = Atomic<U8>(250)
+    assertEqual(byte.add(10), 250)
+    assertEqual(byte.load(), 4)
+    let signed = Atomic<I8>(-128)
+    assertEqual(signed.subtract(1), -128)
+    assertEqual(signed.load(), 127)
+    assertEqual(signed.min(-5), 127)
+    assertEqual(signed.load(), -5)
+    let unsigned = Atomic<U32>(5)
+    assertEqual(unsigned.max(4000000000), 5)
+    assertEqual(unsigned.load(), 4000000000)
+    let wide = Atomic<U64>(U64.max)
+    assertEqual(wide.add(1), U64.max)
+    assertEqual(wide.load(), 0)
+    let half = Atomic<I16>(0)
+    assertEqual(half.compareExchangeWeak(expected: 0, desired: 1).original, 0)
+}
+
+@test
+fn anAtomicFlagIsSetAndCleared() {
+    let flag = Atomic<Bool>(false)
+    assert(!flag.logicalOr(true))
+    assert(flag.load())
+    assert(flag.logicalXor(true))
+    assert(!flag.load())
+    assert(!flag.logicalAnd(true))
+    assert(flag.compareExchange(expected: false, desired: true).exchanged)
+    assert(flag.exchange(false))
+    atomicFence()
+    atomicFence(.Acquire)
+}
+
+@test
+fn aOnceCellIsMadeOnce() {
+    let cell = OnceCell<String>()
+    assert(cell.get() == none)
+    var made = 0
+    assertEqual(cell.getOrInit {
+        made += 1
+        return "first"
+    }, "first")
+    assertEqual(cell.getOrInit {
+        made += 1
+        return "second"
+    }, "first")
+    assertEqual(made, 1)
+    assertEqual(cell.get(), "first")
+}
+
+@test
+fn manyTasksCountTogether() async {
+    let counter = Atomic<Int>(0)
+    let cell = OnceCell<Int>()
+    let made = Atomic<Int>(0)
+    await withTaskGroup(of: Int.self) { group in
+        var task = 0
+        while task < 8 {
+            group.spawn {
+                var i = 0
+                while i < 20000 {
+                    counter.add(1, ordering: .Relaxed)
+                    i += 1
+                }
+                return cell.getOrInit {
+                    made.add(1)
+                    return 42
+                }
+            }
+            task += 1
+        }
+        for await value in group {
+            assertEqual(value, 42)
+        }
+    }
+    assertEqual(counter.load(), 160000)
+    assertEqual(made.load(), 1)
+}

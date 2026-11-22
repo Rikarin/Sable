@@ -1,0 +1,348 @@
+module Sable.Core
+
+// Atomics (Rust's std::sync::atomic, Swift's Synchronization, .NET's
+// Interlocked and Volatile): a value many tasks read and change at once
+// without a lock, each change whole, in the order the memory ordering
+// asks. An Atomic owns a cell of raw memory, so that every task holding it
+// reaches the one value; the operations are builtins on that address,
+// lowered to LLVM's atomic load, store, atomicrmw and cmpxchg.
+
+/// How an atomic operation orders the memory operations around it, as C++
+/// and Rust name them. From weakest to strongest:
+///
+/// - `Relaxed`: the operation is atomic, and orders nothing else.
+/// - `Acquire`: a load; nothing after it moves before it. Pairs with a
+///   release store: what was written before that is seen after this.
+/// - `Release`: a store; nothing before it moves after it.
+/// - `AcquireRelease`: a read-modify-write that is both.
+/// - `SequentiallyConsistent`: all of the above, and every such operation
+///   in one order every task agrees on. The default.
+///
+/// A load cannot release, and a store cannot acquire: asking either traps.
+@derive(Equatable, Debug)
+public enum MemoryOrdering {
+    Relaxed
+    Acquire
+    Release
+    AcquireRelease
+    SequentiallyConsistent
+
+    // What the builtins take: 0 to 4.
+    var code: Int {
+        get {
+            return match self {
+                case .Relaxed                => 0
+                case .Acquire                => 1
+                case .Release                => 2
+                case .AcquireRelease         => 3
+                case .SequentiallyConsistent => 4
+            }
+        }
+    }
+}
+
+/// A fence: memory operations are not moved across it, as the ordering
+/// says. C++'s atomic_thread_fence, Rust's fence, .NET's MemoryBarrier
+/// (sequentially consistent).
+@builtin("atomic_fence")
+fn fence(_ ordering: Int)
+
+public fn atomicFence(_ ordering: MemoryOrdering = .SequentiallyConsistent) {
+    fence(ordering.code)
+}
+
+/// What an Atomic can hold: a value the machine changes in one instruction
+/// — every integer up to 64 bits, and Bool. Each operation is on the value
+/// at an address, with a memory ordering's code; the built-in types' are
+/// builtins.
+public protocol AtomicRepresentable {
+    static fn atomicLoad(_ address: Int, _ ordering: Int) -> Self
+    static fn atomicStore(_ address: Int, _ value: Self, _ ordering: Int)
+    static fn atomicExchange(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+    static fn atomicCompareExchange(_ address: Int, _ expected: Self, _ desired: Self, _ ordering: Int) -> (Self, Bool)
+    static fn atomicCompareExchangeWeak(_ address: Int, _ expected: Self, _ desired: Self, _ ordering: Int) -> (Self, Bool)
+}
+
+extension AtomicRepresentable {
+    @builtin("atomic_load_Self")
+    public static fn atomicLoad(_ address: Int, _ ordering: Int) -> Self
+
+    @builtin("atomic_store_Self")
+    public static fn atomicStore(_ address: Int, _ value: Self, _ ordering: Int)
+
+    @builtin("atomic_exchange_Self")
+    public static fn atomicExchange(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+
+    @builtin("atomic_compare_exchange_Self")
+    public static fn atomicCompareExchange(_ address: Int, _ expected: Self, _ desired: Self, _ ordering: Int) -> (Self, Bool)
+
+    @builtin("atomic_compare_exchange_weak_Self")
+    public static fn atomicCompareExchangeWeak(_ address: Int, _ expected: Self, _ desired: Self, _ ordering: Int) -> (Self, Bool)
+}
+
+/// An integer an Atomic adds to, masks and compares in one instruction.
+public protocol AtomicInteger: AtomicRepresentable, FixedWidthInteger {
+    static fn atomicAdd(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+    static fn atomicSub(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+    static fn atomicAnd(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+    static fn atomicOr(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+    static fn atomicXor(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+    static fn atomicMin(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+    static fn atomicMax(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+}
+
+extension AtomicInteger {
+    @builtin("atomic_add_Self")
+    public static fn atomicAdd(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+
+    @builtin("atomic_sub_Self")
+    public static fn atomicSub(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+
+    @builtin("atomic_and_Self")
+    public static fn atomicAnd(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+
+    @builtin("atomic_or_Self")
+    public static fn atomicOr(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+
+    @builtin("atomic_xor_Self")
+    public static fn atomicXor(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+
+    @builtin("atomic_min_Self")
+    public static fn atomicMin(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+
+    @builtin("atomic_max_Self")
+    public static fn atomicMax(_ address: Int, _ value: Self, _ ordering: Int) -> Self
+}
+
+extension Int: AtomicInteger { }
+extension I8: AtomicInteger { }
+extension I16: AtomicInteger { }
+extension I32: AtomicInteger { }
+extension I64: AtomicInteger { }
+extension U8: AtomicInteger { }
+extension U16: AtomicInteger { }
+extension U32: AtomicInteger { }
+extension U64: AtomicInteger { }
+extension UInt: AtomicInteger { }
+
+extension Bool: AtomicRepresentable {
+    @builtin("atomic_and_Bool")
+    static fn atomicAnd(_ address: Int, _ value: Bool, _ ordering: Int) -> Bool
+
+    @builtin("atomic_or_Bool")
+    static fn atomicOr(_ address: Int, _ value: Bool, _ ordering: Int) -> Bool
+
+    @builtin("atomic_xor_Bool")
+    static fn atomicXor(_ address: Int, _ value: Bool, _ ordering: Int) -> Bool
+}
+
+/// A value many tasks read and change at once, without a lock: Rust's
+/// `Arc<AtomicU64>`, Swift's `Atomic`, .NET's `Interlocked` on a field. A
+/// class, so that every task given it reaches the one value; Sendable, as
+/// what it holds changes only atomically.
+///
+/// ```sable
+/// let hits = Atomic<Int>(0)
+/// hits.add(1)
+/// assert(hits.load() == 1)
+/// assert(hits.compareExchange(expected: 1, desired: 5).exchanged)
+/// assert(hits.exchange(7) == 5)
+/// ```
+@immutable
+public final class Atomic<Value: AtomicRepresentable> {
+    // The value's cell: raw memory of its own, aligned for it.
+    let cell: Int
+
+    /// An atomic holding the value.
+    public init(_ value: Value) {
+        let type: Type = Value.self
+        unsafe {
+            cell = RawMemory.allocate(type.size, type.alignment)
+        }
+        Value.atomicStore(cell, value, 0)
+    }
+
+    deinit {
+        unsafe {
+            RawMemory.free(cell)
+        }
+    }
+
+    /// The value. A load cannot release.
+    public fn load(ordering: MemoryOrdering = .SequentiallyConsistent) -> Value {
+        precondition(ordering != .Release && ordering != .AcquireRelease, "a load cannot release")
+        return Value.atomicLoad(cell, ordering.code)
+    }
+
+    /// The value replaced. A store cannot acquire.
+    public fn store(_ value: Value, ordering: MemoryOrdering = .SequentiallyConsistent) {
+        precondition(ordering != .Acquire && ordering != .AcquireRelease, "a store cannot acquire")
+        Value.atomicStore(cell, value, ordering.code)
+    }
+
+    /// The value replaced, and the one it was.
+    public fn exchange(_ value: Value, ordering: MemoryOrdering = .SequentiallyConsistent) -> Value {
+        return Value.atomicExchange(cell, value, ordering.code)
+    }
+
+    /// The value replaced by 'desired' if it is 'expected': whether it was,
+    /// and the value it found. Where it fails, it orders as a load of the
+    /// same strength would.
+    public fn compareExchange(expected: Value, desired: Value, ordering: MemoryOrdering = .SequentiallyConsistent) -> (exchanged: Bool, original: Value) {
+        let (found, exchanged) = Value.atomicCompareExchange(cell, expected, desired, ordering.code)
+        return (exchanged: exchanged, original: found)
+    }
+
+    /// As 'compareExchange', but it may fail though the value is 'expected':
+    /// cheaper where the machine's instruction can, and what a loop that
+    /// tries again wants.
+    public fn compareExchangeWeak(expected: Value, desired: Value, ordering: MemoryOrdering = .SequentiallyConsistent) -> (exchanged: Bool, original: Value) {
+        let (found, exchanged) = Value.atomicCompareExchangeWeak(cell, expected, desired, ordering.code)
+        return (exchanged: exchanged, original: found)
+    }
+
+    /// The value replaced by what 'change' makes of it, tried again until
+    /// no other task changed it in between: the value it was. Rust's
+    /// 'fetch_update'.
+    ///
+    /// ```sable
+    /// let n = Atomic<Int>(5)
+    /// assert(n.update { $0 * 2 } == 5)
+    /// assert(n.load() == 10)
+    /// ```
+    public fn update(_ change: (Value) -> Value) -> Value {
+        return update(ordering: .SequentiallyConsistent, change)
+    }
+
+    /// As 'update', each try ordered as said.
+    public fn update(ordering: MemoryOrdering, _ change: (Value) -> Value) -> Value {
+        var current = Value.atomicLoad(cell, 0)
+        while true {
+            let (found, exchanged) = Value.atomicCompareExchangeWeak(cell, current, change(current), ordering.code)
+            if exchanged {
+                return found
+            }
+            current = found
+        }
+    }
+}
+
+extension Atomic where Value: AtomicInteger {
+    /// Adds, wrapping: the value it was.
+    public fn add(_ amount: Value, ordering: MemoryOrdering = .SequentiallyConsistent) -> Value {
+        return Value.atomicAdd(cell, amount, ordering.code)
+    }
+
+    /// Subtracts, wrapping: the value it was.
+    public fn subtract(_ amount: Value, ordering: MemoryOrdering = .SequentiallyConsistent) -> Value {
+        return Value.atomicSub(cell, amount, ordering.code)
+    }
+
+    /// Masks with 'and': the value it was.
+    public fn bitwiseAnd(_ mask: Value, ordering: MemoryOrdering = .SequentiallyConsistent) -> Value {
+        return Value.atomicAnd(cell, mask, ordering.code)
+    }
+
+    /// Sets bits with 'or': the value it was.
+    public fn bitwiseOr(_ mask: Value, ordering: MemoryOrdering = .SequentiallyConsistent) -> Value {
+        return Value.atomicOr(cell, mask, ordering.code)
+    }
+
+    /// Flips bits with 'xor': the value it was.
+    public fn bitwiseXor(_ mask: Value, ordering: MemoryOrdering = .SequentiallyConsistent) -> Value {
+        return Value.atomicXor(cell, mask, ordering.code)
+    }
+
+    /// Keeps the lesser of it and the value: the value it was.
+    public fn min(_ value: Value, ordering: MemoryOrdering = .SequentiallyConsistent) -> Value {
+        return Value.atomicMin(cell, value, ordering.code)
+    }
+
+    /// Keeps the greater of it and the value: the value it was.
+    public fn max(_ value: Value, ordering: MemoryOrdering = .SequentiallyConsistent) -> Value {
+        return Value.atomicMax(cell, value, ordering.code)
+    }
+}
+
+extension Atomic where Value == Bool {
+    /// Ands the flag: the value it was.
+    public fn logicalAnd(_ value: Bool, ordering: MemoryOrdering = .SequentiallyConsistent) -> Bool {
+        return Bool.atomicAnd(cell, value, ordering.code)
+    }
+
+    /// Ors the flag: the value it was.
+    public fn logicalOr(_ value: Bool, ordering: MemoryOrdering = .SequentiallyConsistent) -> Bool {
+        return Bool.atomicOr(cell, value, ordering.code)
+    }
+
+    /// Xors the flag: the value it was.
+    public fn logicalXor(_ value: Bool, ordering: MemoryOrdering = .SequentiallyConsistent) -> Bool {
+        return Bool.atomicXor(cell, value, ordering.code)
+    }
+}
+
+/// A value made once, the first time any task asks for it, and the same
+/// one for every task after: Rust's OnceLock, Swift's AtomicLazyReference,
+/// .NET's LazyInitializer. Lock-free: one task makes it, and any other that
+/// asks meanwhile waits, a microsecond's sleep at a time, until it is there.
+/// A 'make' that asks the same cell waits for itself forever.
+///
+/// ```sable
+/// let config = OnceCell<String>()
+/// assert(config.get() == none)
+/// assert(config.getOrInit { "made" } == "made")
+/// assert(config.getOrInit { "again" } == "made")
+/// ```
+@immutable
+public final class OnceCell<Value> {
+    // 0 nothing yet, 1 being made, 2 made.
+    let state: Atomic<Int>
+    let cell: Int
+
+    public init() {
+        state = Atomic<Int>(0)
+        let type: Type = Value.self
+        unsafe {
+            cell = RawMemory.allocate(type.size, type.alignment)
+        }
+    }
+
+    deinit {
+        unsafe {
+            if state.load(ordering: .Acquire) == 2 {
+                let _: Value = RawMemory.take(cell)
+            }
+            RawMemory.free(cell)
+        }
+    }
+
+    /// The value, once it has been made; none before.
+    public fn get() -> Value? {
+        if state.load(ordering: .Acquire) != 2 {
+            return none
+        }
+        unsafe {
+            let value: Value = RawMemory.load(cell)
+            return value
+        }
+    }
+
+    /// The value: made by 'make' if no task has made it yet, which this one
+    /// then does, and every other waits for.
+    public fn getOrInit(_ make: () -> Value) -> Value {
+        if state.compareExchange(expected: 0, desired: 1, ordering: .Acquire).exchanged {
+            let value = make()
+            unsafe {
+                RawMemory.initialize(cell, value)
+            }
+            state.store(2, ordering: .Release)
+            return value
+        }
+        while state.load(ordering: .Acquire) != 2 {
+            Runtime.sleep(nanoseconds: 1000)
+        }
+        unsafe {
+            return RawMemory.load(cell)
+        }
+    }
+}

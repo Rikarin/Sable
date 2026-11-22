@@ -1902,6 +1902,141 @@ public sealed partial class LlvmEmitter {
             return false;
         }
 
+        /// <summary>
+        ///     An atomic operation on the value at a raw address. Its memory
+        ///     ordering is an Int, 0 relaxed to 4 sequentially consistent, and
+        ///     a branch for each is emitted, joined after: LLVM folds them to
+        ///     the one a constant names, as every call through Atomic's members
+        ///     has once they are inlined. An ordering an instruction cannot
+        ///     take is the nearest one it can (the library refuses such a one
+        ///     before it gets here). A Bool is a byte in memory.
+        /// </summary>
+        void Atomic(BuiltinInst builtin, string[] operands, Func<string> result) {
+            string[] names = ["monotonic", "acquire", "release", "acq_rel", "seq_cst"];
+            if (builtin.Name == "atomic_fence") {
+                // A relaxed fence orders nothing: it is no instruction at all.
+                Ordered(operands[0], null, ordering => {
+                    if (ordering != 0) {
+                        Line($"fence {names[ordering]}");
+                    }
+
+                    return null;
+                });
+                return;
+            }
+
+            var separator = builtin.Name.LastIndexOf('_');
+            var op = builtin.Name["atomic_".Length..separator];
+            var type = SilType.AtomicTypes.First(t => t.ToString() == builtin.Name[(separator + 1)..]);
+            var isBool = type == SilType.Bool;
+            var stored = isBool ? "i8" : Type(type);
+            var align = TypeLayout.Size(type);
+            var signed = SilType.IntegerInfo(type) is (_, true);
+            var at = RawAddress(operands[0]);
+
+            string Widened(string value) {
+                if (!isBool) {
+                    return value;
+                }
+
+                var wide = Fresh();
+                Line($"{wide} = zext i1 {value} to i8");
+                return wide;
+            }
+
+            string Narrowed(string value) {
+                if (!isBool) {
+                    return value;
+                }
+
+                var narrow = Fresh();
+                Line($"{narrow} = icmp ne i8 {value}, 0");
+                return narrow;
+            }
+
+            switch (op) {
+                case "load":
+                    Ordered(operands[1], Type(type), ordering => {
+                        var loaded = Fresh();
+                        Line($"{loaded} = load atomic {stored}, ptr {at} {names[ordering switch { 2 => 0, 3 => 1, _ => ordering }]}, align {align}");
+                        return Narrowed(loaded);
+                    }, result);
+                    return;
+
+                case "store": {
+                    var value = Widened(operands[1]);
+                    Ordered(operands[2], null, ordering => {
+                        Line($"store atomic {stored} {value}, ptr {at} {names[ordering switch { 1 => 0, 3 => 2, _ => ordering }]}, align {align}");
+                        return null;
+                    });
+                    return;
+                }
+
+                case "compare_exchange" or "compare_exchange_weak": {
+                    var expected = Widened(operands[1]);
+                    var desired = Widened(operands[2]);
+                    var tupleType = Type(builtin.Type);
+                    Ordered(operands[3], tupleType, ordering => {
+                        var failure = ordering switch { 2 => 0, 3 => 1, _ => ordering };
+                        var pair = Fresh();
+                        var old = Fresh();
+                        var swapped = Fresh();
+                        var first = Fresh();
+                        var both = Fresh();
+                        Line($"{pair} = cmpxchg {(op == "compare_exchange_weak" ? "weak " : "")}ptr {at}, {stored} {expected}, {stored} {desired} {names[ordering]} {names[failure]}, align {align}");
+                        Line($"{old} = extractvalue {{ {stored}, i1 }} {pair}, 0");
+                        Line($"{swapped} = extractvalue {{ {stored}, i1 }} {pair}, 1");
+                        Line($"{first} = insertvalue {tupleType} undef, {Type(type)} {Narrowed(old)}, 0");
+                        Line($"{both} = insertvalue {tupleType} {first}, i1 {swapped}, 1");
+                        return both;
+                    }, result);
+                    return;
+                }
+
+                default: {
+                    var rmw = op switch {
+                        "exchange" => "xchg",
+                        "min" => signed ? "min" : "umin",
+                        "max" => signed ? "max" : "umax",
+                        _ => op,
+                    };
+                    var operand = Widened(operands[1]);
+                    Ordered(operands[2], Type(type), ordering => {
+                        var found = Fresh();
+                        Line($"{found} = atomicrmw {rmw} ptr {at}, {stored} {operand} {names[ordering]}, align {align}");
+                        return Narrowed(found);
+                    }, result);
+                    return;
+                }
+            }
+        }
+
+        /// <summary>
+        ///     A branch for each memory ordering, 0 to 4, of the Int given —
+        ///     anything else taken as 4 — each emitted by 'body', and their
+        ///     values, of the type given, joined in the result.
+        /// </summary>
+        void Ordered(string ordering, string? type, Func<int, string?> body, Func<string>? result = null) {
+            var join = NewLabel("ordered");
+            var labels = Enumerable.Range(0, 5).Select(i => NewLabel($"ordering{i}")).ToArray();
+            Line($"switch i64 {ordering}, label %{labels[4]} [ i64 0, label %{labels[0]} i64 1, label %{labels[1]} i64 2, label %{labels[2]} i64 3, label %{labels[3]} ]");
+            var incoming = new List<(string Value, string Label)>();
+            for (var i = 0; i < 5; i++) {
+                Continue(labels[i]);
+                var value = body(i);
+                if (value is not null) {
+                    incoming.Add((value, _currentLabel));
+                }
+
+                Line($"br label %{join}");
+            }
+
+            Continue(join);
+            if (type is not null && result is not null) {
+                Line($"{result()} = phi {type} {string.Join(", ", incoming.Select(static v => $"[ {v.Value}, %{v.Label} ]"))}");
+            }
+        }
+
         /// <summary>A raw address, an Int, as a pointer.</summary>
         string RawAddress(string address) {
             var pointer = Fresh();
@@ -3378,6 +3513,11 @@ public sealed partial class LlvmEmitter {
                 var name = Fresh();
                 _names[builtin] = name;
                 return name;
+            }
+
+            if (builtin.Name.StartsWith("atomic_", StringComparison.Ordinal)) {
+                Atomic(builtin, operands, Result);
+                return;
             }
 
             if (FloatFunctions.Find(builtin.Name) is var (elementary, floatType)) {

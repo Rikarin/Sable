@@ -385,8 +385,16 @@ public sealed partial class DebuggerFormatterTests {
         var output = await Run(lldb, source, "library.sb", ["br set -r mappingCase", "run", "bt", "up", "frame variable words", "kill"], separately: true);
 
         Expect(output, "stop reason = breakpoint");
-        Expect(output, "at String+Case.sb:");
-        Expect(output, "[opt]");
+        // lldb shows the file by name, or (a newer lldb, which writes the
+        // source the line table carries to a file of its own) as
+        // '-23b16d.String+Case.sb'.
+        Expect(output, "String+Case.sb:");
+
+        // The mark comes from DW_AT_APPLE_optimized, which LLVM writes for
+        // Apple's targets only.
+        if (OperatingSystem.IsMacOS()) {
+            Expect(output, "[opt]");
+        }
         Expect(output, "Library.main at library.sb:6");
         Expect(output, "[0] = \"pear\"");
     }

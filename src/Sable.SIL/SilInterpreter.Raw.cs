@@ -208,7 +208,7 @@ public sealed partial class SilInterpreter {
 
     static bool IsRawScalar(SilType type) =>
         SilType.IntegerInfo(type) is not null || type == SilType.F64 || type == SilType.F32 || type == SilType.F16
-        || type == SilType.Bool || type == SilType.Char;
+        || type == SilType.BF16 || type == SilType.Bool || type == SilType.Char;
 
     /// <summary>A scalar's bytes, little endian, as natively; null for any other value.</summary>
     static byte[]? Encode(SilType type, object? value) {
@@ -226,6 +226,7 @@ public sealed partial class SilInterpreter {
             double real when type == SilType.F64 => BitConverter.GetBytes(BitConverter.DoubleToUInt64Bits(real)),
             float real when type == SilType.F32 => BitConverter.GetBytes(BitConverter.SingleToUInt32Bits(real)),
             Half real when type == SilType.F16 => BitConverter.GetBytes(BitConverter.HalfToUInt16Bits(real)),
+            BFloat16 real when type == SilType.BF16 => BitConverter.GetBytes(real.Bits),
             bool flag when type == SilType.Bool => [flag ? (byte)1 : (byte)0],
             Rune character when type == SilType.Char => BitConverter.GetBytes(character.Value),
             _ => null,
@@ -249,6 +250,10 @@ public sealed partial class SilInterpreter {
 
         if (type == SilType.F16) {
             return BitConverter.UInt16BitsToHalf(BitConverter.ToUInt16(bytes));
+        }
+
+        if (type == SilType.BF16) {
+            return new BFloat16(BitConverter.ToUInt16(bytes));
         }
 
         if (type == SilType.Bool) {

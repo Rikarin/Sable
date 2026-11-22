@@ -1196,3 +1196,47 @@ void sable_print_f64(double value) {
 void sable_print_bool(bool value) {
     fputs(value ? "true\n" : "false\n", stdout);
 }
+
+// BF16: a float's top sixteen bits, rounded to nearest, ties to even, as
+// LLVM narrows a float to a bfloat; a NaN stays one.
+static float round_to_bf16(float value) {
+    if (isnan(value)) {
+        return value;
+    }
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof bits);
+    bits = (bits + 0x7fffu + ((bits >> 16) & 1u)) & 0xffff0000u;
+    float rounded;
+    memcpy(&rounded, &bits, sizeof rounded);
+    return rounded;
+}
+
+// BF16 the way F16 is written: the fewest digits that round back to it as a
+// bfloat, which four always are. It comes as the float it widens to exactly.
+static void format_bf16(float value, char *text, size_t size) {
+    if (format_special(value, text, size)) {
+        return;
+    }
+
+    char scientific[40];
+    for (int precision = 1; precision <= 4; precision++) {
+        snprintf(scientific, sizeof scientific, "%.*e", precision - 1, (double)value);
+        if (precision == 4 || round_to_bf16(strtof(scientific, NULL)) == value) {
+            break;
+        }
+    }
+
+    layout_float(scientific, text, size);
+}
+
+SableString *sable_string_from_bf16(float value) {
+    char text[40];
+    format_bf16(value, text, sizeof text);
+    return make_cstring(text);
+}
+
+void sable_print_bf16(float value) {
+    char text[40];
+    format_bf16(value, text, sizeof text);
+    puts(text);
+}

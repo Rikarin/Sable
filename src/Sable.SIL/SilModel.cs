@@ -22,6 +22,9 @@ public abstract class SilType : IEquatable<SilType> {
     public static readonly SilType F32 = new ScalarType("F32");
     public static readonly SilType F16 = new ScalarType("F16");
 
+    /// <summary>bfloat16: an F32's 8 exponent bits with 7 of its fraction's, what machine learning stores.</summary>
+    public static readonly SilType BF16 = new ScalarType("BF16");
+
     // The sized integers (docs/03 §3.1): the widths inline layout stores.
     public static readonly SilType I8 = new ScalarType("I8");
     public static readonly SilType I16 = new ScalarType("I16");
@@ -39,7 +42,7 @@ public abstract class SilType : IEquatable<SilType> {
     public static readonly ImmutableArray<SilType> Integers = [Int, I8, I16, I32, I64, U8, U16, U32, U64, UInt, I128, U128];
 
     /// <summary>The floating-point types, widest first.</summary>
-    public static readonly ImmutableArray<SilType> Floats = [F64, F32, F16];
+    public static readonly ImmutableArray<SilType> Floats = [F64, F32, F16, BF16];
 
     /// <summary>The integer and floating-point types.</summary>
     public static readonly ImmutableArray<SilType> Numbers = [..Integers, ..Floats];
@@ -61,11 +64,11 @@ public abstract class SilType : IEquatable<SilType> {
         };
 
     public static bool IsInteger(SilType type) => IntegerInfo(type) is not null;
-    public static bool IsFloat(SilType type) => type == F64 || type == F32 || type == F16;
+    public static bool IsFloat(SilType type) => type == F64 || type == F32 || type == F16 || type == BF16;
 
     /// <summary>A floating-point type's width in bits; null for anything else.</summary>
     public static int? FloatBits(SilType type) =>
-        type == F64 ? 64 : type == F32 ? 32 : type == F16 ? 16 : null;
+        type == F64 ? 64 : type == F32 ? 32 : type == F16 || type == BF16 ? 16 : null;
 
     /// <summary>One Unicode scalar value.</summary>
     public static readonly SilType Char = new ScalarType("Char");
@@ -579,7 +582,7 @@ public sealed class InlineLayout {
         : type == SilType.Char ? (CharKind, 4)
         : type == SilType.F64 ? (ScalarKind, 8)
         : type == SilType.F32 ? (ScalarKind, 4)
-        : type == SilType.F16 ? (ScalarKind, 2)
+        : type == SilType.F16 || type == SilType.BF16 ? (ScalarKind, 2)
         : SilType.IntegerInfo(type) is var (bits, _) ? (ScalarKind, bits / 8)
         : null;
 
@@ -2751,7 +2754,7 @@ public static class SilBuiltins {
 
         // A float's bits as the unsigned integer of its width, and back: the
         // same bits, not the same number (a NaN's payload is kept).
-        foreach (var (real, bits) in new[] { (SilType.F64, SilType.U64), (SilType.F32, SilType.U32), (SilType.F16, SilType.U16) }) {
+        foreach (var (real, bits) in new[] { (SilType.F64, SilType.U64), (SilType.F32, SilType.U32), (SilType.F16, SilType.U16), (SilType.BF16, SilType.U16) }) {
             Add($"bitcast_{real}_{bits}", bits, real);
             Add($"bitcast_{bits}_{real}", real, bits);
         }

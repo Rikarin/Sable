@@ -37,6 +37,7 @@ public sealed class CoreTypes {
         UInt = Primitive("UInt");
 
         F16 = Primitive("F16");
+        BF16 = Primitive("BF16");
         F32 = Primitive("F32");
         F64 = Primitive("F64");
 
@@ -71,7 +72,7 @@ public sealed class CoreTypes {
         Optional.ExtendedOptional = new OptionalTypeSymbol(Optional.TypeParameters[0]);
 
         Integers = [I8, I16, I32, I64, I128, Int, U8, U16, U32, U64, U128, UInt];
-        Floats = [F16, F32, F64];
+        Floats = [F16, BF16, F32, F64];
         Numerics = [..Integers, ..Floats];
     }
 
@@ -119,6 +120,7 @@ public sealed class CoreTypes {
     public NamedTypeSymbol U128 { get; }
     public NamedTypeSymbol UInt { get; }
     public NamedTypeSymbol F16 { get; }
+    public NamedTypeSymbol BF16 { get; }
     public NamedTypeSymbol F32 { get; }
     public NamedTypeSymbol F64 { get; }
     public NamedTypeSymbol Char { get; }

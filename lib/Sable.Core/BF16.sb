@@ -1,0 +1,162 @@
+module Sable.Core
+
+/// bfloat16, "brain floating point": an F32's sign and 8 exponent bits with
+/// 7 of its 23 fraction bits — an F32's range at about two and a half
+/// decimal digits, what machine learning stores weights in, .NET 11's
+/// BFloat16. Its arithmetic is the F32's, rounded to the nearest BF16, ties
+/// to even; FloatingPoint gives it the rest of the standard's operations.
+///
+/// ```sable
+/// let x: BF16 = 1.0
+/// assert(x + BF16.epsilon > x && x + BF16.epsilon / 2.0 == x)
+/// assert(BF16(F32(3.14159)) == BF16.pi)
+/// assert(BF16.greatestFiniteMagnitude > 3e38)
+/// ```
+extension BF16: BinaryFloatingPoint {
+    /// 0.
+    public static var zero: BF16 => 0.0
+
+    /// 1.
+    public static var one: BF16 => 1.0
+
+    /// A quiet NaN. Bits 0x7FC0.
+    public static var nan: BF16 => BF16.fromBits(0x7FC0)
+
+    /// Positive infinity. Bits 0x7F80.
+    public static var infinity: BF16 => BF16.fromBits(0x7F80)
+
+    /// The greatest finite BF16, about 3.39e38. Bits 0x7F7F.
+    public static var greatestFiniteMagnitude: BF16 => BF16.fromBits(0x7F7F)
+
+    /// The least positive normal BF16, an F32's: 2^-126. Bits 0x0080.
+    public static var leastNormalMagnitude: BF16 => BF16.fromBits(0x0080)
+
+    /// The least positive BF16, a subnormal: 2^-133. Bits 0x0001.
+    public static var leastNonzeroMagnitude: BF16 => BF16.fromBits(0x0001)
+
+    /// The distance from 1 to the next BF16 up: 2^-7. Bits 0x3C00.
+    public static var epsilon: BF16 => BF16.fromBits(0x3C00)
+
+    /// π, rounded to a BF16: 3.140625. Bits 0x4049.
+    public static var pi: BF16 => BF16.fromBits(0x4049)
+
+    /// e, rounded to a BF16. Bits 0x402E.
+    public static var e: BF16 => BF16.fromBits(0x402E)
+
+    /// The natural logarithm of 2, rounded to a BF16. Bits 0x3F31.
+    public static var ln2: BF16 => BF16.fromBits(0x3F31)
+
+    /// The natural logarithm of 10, rounded to a BF16. Bits 0x4013.
+    public static var ln10: BF16 => BF16.fromBits(0x4013)
+
+    /// The square root of 2, rounded to a BF16. Bits 0x3FB5.
+    public static var sqrt2: BF16 => BF16.fromBits(0x3FB5)
+
+    /// 7: the bits of the significand after its leading one.
+    public static var significandBitCount: Int => 7
+
+    /// 8: the bits of the exponent, as many as an F32's.
+    public static var exponentBitCount: Int => 8
+
+    /// The number in decimal: the fewest digits that read back as the same
+    /// value.
+    @builtin("string_from_BF16")
+    public fn toString() -> String
+}
+
+extension BF16 {
+    /// The float's bits: an F32's top sixteen.
+    @builtin("bitcast_BF16_U16")
+    public var bits: U16 { get }
+
+    /// The float whose bits these are.
+    @builtin("bitcast_U16_BF16")
+    public static fn fromBits(_ bits: U16) -> BF16
+}
+
+extension BF16: Comparable, Hashable {
+    public operator == (lhs: BF16, rhs: BF16) -> Bool { return lhs == rhs }
+    public operator < (lhs: BF16, rhs: BF16) -> Bool { return lhs < rhs }
+
+    /// Every BF16 is an F64 exactly, so it hashes as one: equal values hash equal.
+    public fn hash(into hasher: inout Hasher) { F64(self).hash(into: &hasher) }
+}
+
+extension BF16: Debug {
+    public fn debugDescription() -> String { return floatDebugText("\(self)") }
+}
+
+extension BF16: Formattable {
+    /// The number as the spec says. Without a precision, in the shortest
+    /// digits that read back as the same BF16; with one, its exact value
+    /// rounded to that many places. `f` is plain notation, `e` scientific,
+    /// `g` whichever suits, `%` a percentage.
+    ///
+    /// ```sable
+    /// let x: BF16 = 0.5
+    /// assert(x.format(try! FormatSpec.parse(".3")) == "0.500")
+    /// assert("\(BF16(0.1))" == "0.1")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String {
+        if spec.kind == .Debug {
+            return spec.aligned(self.debugDescription(), numeric: true)
+        }
+        return formatFloat(F64(self), "\(self)", spec)
+    }
+}
+
+extension BF16: Parsable {
+    /// The number the text writes, rounded once to the nearest BF16, ties
+    /// to even; `inf`, `infinity` or `nan` in any case. A sign is allowed.
+    ///
+    /// ```sable
+    /// assert(try! BF16.parse("3.14159") == BF16.pi)
+    /// assert(try! BF16.parse("1e39") == BF16.infinity)
+    /// ```
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> BF16 {
+        return try BF16.parse(text, styles: .Sign)
+    }
+
+    /// The number the text writes, with what else the styles allow; or, with
+    /// `.HexFloat`, a hexadecimal float.
+    public static fn parse<S: StringProtocol>(_ text: S, styles: NumberStyles) throws(ParseError) -> BF16 {
+        if styles.contains(.HexFloat) {
+            return try hexFloat(text.asSubstring, styles)
+        }
+        let plain = try plainFloat(text.asSubstring, styles)
+        if let special = specialFloat(plain) {
+            return BF16(special)
+        }
+        let (parsed, wide) = plain.base.parseF64(plain.start, plain.end)
+        if !parsed {
+            return BF16(overflowedFloat(plain))
+        }
+        return nearestBFloat(plain, wide)
+    }
+}
+
+/// The BF16 nearest the decimal text, from the F64 nearest it: the F64's
+/// own rounding is right unless the F64 lies exactly halfway between two
+/// BF16s, where the text decides which side it is on.
+fn nearestBFloat(_ plain: Substring, _ wide: F64) -> BF16 {
+    let rounded = BF16(wide)
+    let back = F64(rounded)
+    let greatest = 3.3895313892515355e38
+    // Past the greatest BF16 'back' is an infinity; the other BF16 the F64
+    // may lie halfway to is then the greatest, halfway being 1.99609375 × 2^127.
+    let finite = back - back == 0.0
+    let other = finite ? 2.0 * wide - back : wide > 0.0 ? greatest : 0.0 - greatest
+    let halfway = finite ? other != back && F64(BF16(other)) == other : wide == 3.3961775292304602e38 || wide == -3.3961775292304602e38
+    if !halfway {
+        return rounded
+    }
+    let magnitude = wide < 0.0 ? 0.0 - wide : wide
+    let order = compareDecimals(decimalOf(plain), exactDecimal(magnitude))
+    if order == 0 {
+        return rounded
+    }
+    let otherMagnitude = other < 0.0 ? 0.0 - other : other
+    let outer = magnitude < otherMagnitude ? BF16(other) : rounded
+    let inner = magnitude < otherMagnitude ? rounded : BF16(other)
+    return order > 0 ? outer : inner
+}

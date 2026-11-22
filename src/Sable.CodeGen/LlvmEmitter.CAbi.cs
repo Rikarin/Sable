@@ -370,7 +370,7 @@ public sealed partial class LlvmEmitter {
             return $"i32 {promoted}";
         }
 
-        if (type == SilType.F32 || type == SilType.F16) {
+        if (type == SilType.F32 || type == SilType.F16 || type == SilType.BF16) {
             text.Append($"  {promoted} = fpext {Type(type)} {value} to double\n");
             return $"double {promoted}";
         }

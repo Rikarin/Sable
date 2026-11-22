@@ -677,10 +677,12 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_print_i128(i64, i64)
                                 declare void @sable_print_u128(i64, i64)
                                 declare void @sable_print_f16(float)
+                                declare void @sable_print_bf16(float)
                                 declare void @sable_print_char(i32)
                                 declare ptr @sable_string_from_i128(i64, i64)
                                 declare ptr @sable_string_from_u128(i64, i64)
                                 declare ptr @sable_string_from_f16(float)
+                                declare ptr @sable_string_from_bf16(float)
                                 declare i64 @sable_string_cursor_end(ptr)
                                 declare i32 @sable_string_cursor_scalar(ptr, i64)
                                 declare i64 @sable_string_cursor_next(ptr, i64)
@@ -781,6 +783,7 @@ public sealed partial class LlvmEmitter {
             _ when type == SilType.F64 => "double",
             _ when type == SilType.F32 => "float",
             _ when type == SilType.F16 => "half",
+            _ when type == SilType.BF16 => "bfloat",
             _ when SilType.IntegerInfo(type) is var (bits, _) => $"i{bits}",
             _ when type == SilType.Char => "i32",
             _ when type == SilType.String => "ptr",
@@ -1772,6 +1775,133 @@ public sealed partial class LlvmEmitter {
             }
         }
 
+        /// <summary>
+        ///     A BF16's intrinsic: on the double it widens to exactly, then
+        ///     narrowed once — as the interpreter computes it, and with nothing
+        ///     asked of the machine's bfloat support but the two conversions.
+        ///     Its next value up, and its exponent, from its bits and the float
+        ///     it widens to.
+        /// </summary>
+        bool Bf16Intrinsic(string op, BuiltinInst builtin, string[] operands) {
+            string Widened(int index) {
+                if (builtin.Operands[index].Type != SilType.BF16) {
+                    return operands[index];
+                }
+
+                var wide = Fresh();
+                Line($"{wide} = fpext bfloat {operands[index]} to double");
+                return wide;
+            }
+
+            string Narrowed(string wide) {
+                var name = Fresh();
+                _names[builtin] = name;
+                Line($"{name} = fptrunc double {wide} to bfloat");
+                return name;
+            }
+
+            switch (op) {
+                case "sqrt" or "floor" or "ceil" or "trunc" or "round" or "round_even": {
+                    var x = Widened(0);
+                    var computed = Fresh();
+                    Line($"{computed} = call double @llvm.{(op == "round_even" ? "nearbyint" : op)}.f64(double {x})");
+                    Narrowed(computed);
+                    return true;
+                }
+
+                case "copysign" or "minimum" or "maximum": {
+                    var (x, y) = (Widened(0), Widened(1));
+                    var computed = Fresh();
+                    Line($"{computed} = call double @llvm.{op}.f64(double {x}, double {y})");
+                    Narrowed(computed);
+                    return true;
+                }
+
+                case "remainder": {
+                    var (x, y) = (Widened(0), Widened(1));
+                    var computed = Fresh();
+                    Line($"{computed} = call double @remainder(double {x}, double {y})");
+                    Narrowed(computed);
+                    return true;
+                }
+
+                case "fma": {
+                    var (x, y, z) = (Widened(0), Widened(1), Widened(2));
+                    var computed = Fresh();
+                    Line($"{computed} = call double @llvm.fma.f64(double {x}, double {y}, double {z})");
+                    Narrowed(computed);
+                    return true;
+                }
+
+                case "scale": {
+                    var x = Widened(0);
+                    var low = Fresh();
+                    var clamped = Fresh();
+                    var power = Fresh();
+                    var computed = Fresh();
+                    Line($"{low} = call i64 @llvm.smax.i64(i64 {operands[1]}, i64 -100000)");
+                    Line($"{clamped} = call i64 @llvm.smin.i64(i64 {low}, i64 100000)");
+                    Line($"{power} = trunc i64 {clamped} to i32");
+                    Line($"{computed} = call double @llvm.ldexp.f64.i32(double {x}, i32 {power})");
+                    Narrowed(computed);
+                    return true;
+                }
+
+                case "exponent": {
+                    var x = Widened(0);
+                    var parts = Fresh();
+                    var exponent = Fresh();
+                    var less = Fresh();
+                    var wide = Fresh();
+                    var magnitude = Fresh();
+                    var finite = Fresh();
+                    var isZero = Fresh();
+                    var unlessZero = Fresh();
+                    Line($"{parts} = call {{ double, i32 }} @llvm.frexp.f64.i32(double {x})");
+                    Line($"{exponent} = extractvalue {{ double, i32 }} {parts}, 1");
+                    Line($"{less} = sub i32 {exponent}, 1");
+                    Line($"{wide} = sext i32 {less} to i64");
+                    Line($"{magnitude} = call double @llvm.fabs.f64(double {x})");
+                    Line($"{finite} = fcmp olt double {magnitude}, {FloatInfinity}");
+                    Line($"{isZero} = fcmp oeq double {magnitude}, {FloatZero}");
+                    Line($"{unlessZero} = select i1 {finite}, i64 {wide}, i64 {long.MaxValue}");
+                    var result = Fresh();
+                    _names[builtin] = result;
+                    Line($"{result} = select i1 {isZero}, i64 {long.MinValue}, i64 {unlessZero}");
+                    return true;
+                }
+
+                // As any float's: the bits one away from zero, or toward it.
+                case "next_up": {
+                    var x = Widened(0);
+                    var bits = Fresh();
+                    var up = Fresh();
+                    var down = Fresh();
+                    var positive = Fresh();
+                    var stepped = Fresh();
+                    var isZero = Fresh();
+                    var fromZero = Fresh();
+                    var isStuck = Fresh();
+                    var value = Fresh();
+                    Line($"{bits} = bitcast bfloat {operands[0]} to i16");
+                    Line($"{up} = add i16 {bits}, 1");
+                    Line($"{down} = sub i16 {bits}, 1");
+                    Line($"{positive} = fcmp ogt double {x}, {FloatZero}");
+                    Line($"{stepped} = select i1 {positive}, i16 {up}, i16 {down}");
+                    Line($"{isZero} = fcmp oeq double {x}, {FloatZero}");
+                    Line($"{fromZero} = select i1 {isZero}, i16 1, i16 {stepped}");
+                    Line($"{value} = bitcast i16 {fromZero} to bfloat");
+                    Line($"{isStuck} = fcmp ueq double {x}, {FloatInfinity}");
+                    var result = Fresh();
+                    _names[builtin] = result;
+                    Line($"{result} = select i1 {isStuck}, bfloat {operands[0]}, bfloat {value}");
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         /// <summary>A raw address, an Int, as a pointer.</summary>
         string RawAddress(string address) {
             var pointer = Fresh();
@@ -2176,6 +2306,11 @@ public sealed partial class LlvmEmitter {
                     _names[literal] = literal.Type == SilType.Bool
                         ? literal.Value != 0 ? "true" : "false"
                         : literal.WideValue.ToString(CultureInfo.InvariantCulture);
+                    return;
+
+                // A BF16's is its own bits: LLVM writes a bfloat only as '0xR'.
+                case FloatLiteralInst { Type: var bfloat } literal when bfloat == SilType.BF16:
+                    _names[literal] = "0xR" + Sable.SIL.BFloat16.FromDouble(literal.Value).Bits.ToString("X4", CultureInfo.InvariantCulture);
                     return;
 
                 case FloatLiteralInst literal:
@@ -4807,6 +4942,10 @@ public sealed partial class LlvmEmitter {
             var type = SilType.Numbers.First(n => n.ToString() == name[(separator + 1)..]);
             var t = Type(type);
 
+            if (type == SilType.BF16) {
+                return Bf16Intrinsic(op, builtin, operands);
+            }
+
             if (SilType.FloatBits(type) is { } floatBits) {
                 var suffix = $"f{floatBits}";
                 var bitsType = $"i{floatBits}";
@@ -5092,6 +5231,55 @@ public sealed partial class LlvmEmitter {
 
             var t = Type(type);
             var result = Result();
+
+            // A BF16 is computed as the float it widens to exactly and
+            // narrowed back, as the interpreter computes it: a float has room
+            // enough that the two roundings never disagree.
+            if (type == SilType.BF16) {
+                string Wide(string operand) {
+                    var wide = Fresh();
+                    Line($"{wide} = fpext bfloat {operand} to float");
+                    return wide;
+                }
+
+                switch (op) {
+                    case "add" or "sub" or "mul" or "div" or "rem" or "min" or "max": {
+                        var (a, b) = (Wide(operands[0]), Wide(operands[1]));
+                        var computed = Fresh();
+                        Line(op is "min" or "max"
+                            ? $"{computed} = call float @llvm.{(op == "min" ? "minnum" : "maxnum")}.f32(float {a}, float {b})"
+                            : $"{computed} = f{op} float {a}, {b}");
+                        Line($"{result} = fptrunc float {computed} to bfloat");
+                        return true;
+                    }
+
+                    case "neg" or "abs": {
+                        var a = Wide(operands[0]);
+                        var computed = Fresh();
+                        Line(op == "neg" ? $"{computed} = fneg float {a}" : $"{computed} = call float @llvm.fabs.f32(float {a})");
+                        Line($"{result} = fptrunc float {computed} to bfloat");
+                        return true;
+                    }
+
+                    case "print" or "string_from": {
+                        var a = Wide(operands[0]);
+                        Line(op == "print"
+                            ? $"call void @sable_print_bf16(float {a})"
+                            : $"{result} = call ptr @sable_string_from_bf16(float {a})");
+                        return true;
+                    }
+                }
+
+                if (op.StartsWith("cmp_", StringComparison.Ordinal)) {
+                    var (a, b) = (Wide(operands[0]), Wide(operands[1]));
+                    var predicate = op[4..] switch { "eq" => "oeq", "ne" => "une", "lt" => "olt", "le" => "ole", "gt" => "ogt", _ => "oge" };
+                    Line($"{result} = fcmp {predicate} float {a}, {b}");
+                    return true;
+                }
+
+                return false;
+            }
+
             if (SilType.FloatBits(type) is { } floatBits) {
                 var suffix = $"f{floatBits}";
                 switch (op) {
@@ -5276,6 +5464,33 @@ public sealed partial class LlvmEmitter {
             var fromInteger = SilType.IntegerInfo(from);
             var toInteger = SilType.IntegerInfo(to);
 
+            // A BF16 is converted as the double it widens to exactly, and
+            // to one through a double, rounded once from there (an integer
+            // past a double's 53 bits rounded twice, as the interpreter does):
+            // nothing is asked of the machine's bfloat but the conversions.
+            if (from == SilType.BF16 && to != SilType.BF16) {
+                if (to == SilType.F64) {
+                    Line($"{result} = fpext bfloat {value} to double");
+                    return;
+                }
+
+                var wide = Fresh();
+                Line($"{wide} = fpext bfloat {value} to double");
+                Convert(SilType.F64, to, wide, result);
+                return;
+            }
+
+            if (to == SilType.BF16 && from != SilType.BF16) {
+                var wide = value;
+                if (from != SilType.F64) {
+                    wide = Fresh();
+                    Convert(from, SilType.F64, value, wide);
+                }
+
+                Line($"{result} = fptrunc double {wide} to bfloat");
+                return;
+            }
+
             if (fromInteger is var (fromBits, fromSigned) && toInteger is var (toBits, toSigned)) {
                 // Through i129, which holds every value of every type here,
                 // a U128's as well as an I128's.
@@ -5359,6 +5574,33 @@ public sealed partial class LlvmEmitter {
             var toType = Type(to);
             var fromInteger = SilType.IntegerInfo(from);
             var toInteger = SilType.IntegerInfo(to);
+
+            // A BF16 is converted as the double it widens to exactly, and
+            // to one through a double, rounded once from there (an integer
+            // past a double's 53 bits rounded twice, as the interpreter does):
+            // nothing is asked of the machine's bfloat but the conversions.
+            if (from == SilType.BF16 && to != SilType.BF16) {
+                if (to == SilType.F64) {
+                    Line($"{result} = fpext bfloat {value} to double");
+                    return;
+                }
+
+                var wide = Fresh();
+                Line($"{wide} = fpext bfloat {value} to double");
+                Wrap(SilType.F64, to, wide, result);
+                return;
+            }
+
+            if (to == SilType.BF16 && from != SilType.BF16) {
+                var wide = value;
+                if (from != SilType.F64) {
+                    wide = Fresh();
+                    Wrap(from, SilType.F64, value, wide);
+                }
+
+                Line($"{result} = fptrunc double {wide} to bfloat");
+                return;
+            }
 
             if (fromInteger is var (fromBits, fromSigned) && toInteger is var (toBits, _)) {
                 var op = toBits < fromBits ? "trunc" : toBits > fromBits ? (fromSigned ? "sext" : "zext") : "bitcast";

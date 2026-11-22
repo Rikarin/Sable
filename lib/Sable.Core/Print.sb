@@ -36,6 +36,8 @@ public fn print(_ value: I128)
 public fn print(_ value: U128)
 @builtin("print_F16")
 public fn print(_ value: F16)
+@builtin("print_BF16")
+public fn print(_ value: BF16)
 @builtin("print_Char")
 public fn print(_ value: Char)
 

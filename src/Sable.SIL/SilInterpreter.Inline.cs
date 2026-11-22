@@ -275,6 +275,10 @@ public sealed partial class SilInterpreter {
             return BitConverter.Int16BitsToHalf((short)raw);
         }
 
+        if (type == SilType.BF16) {
+            return new BFloat16((ushort)raw);
+        }
+
         var (bits, signed) = SilType.IntegerInfo(type)!.Value;
         if (!signed) {
             return type == SilType.U64 || type == SilType.UInt ? raw : (object)(long)raw;
@@ -292,6 +296,7 @@ public sealed partial class SilInterpreter {
             double d => (ulong)BitConverter.DoubleToInt64Bits(d),
             float f => (uint)BitConverter.SingleToInt32Bits(f),
             Half h => (ushort)BitConverter.HalfToInt16Bits(h),
+            BFloat16 b => b.Bits,
             long l => unchecked((ulong)l),
             ulong u => u,
             Int128 i => unchecked((UInt128)i),

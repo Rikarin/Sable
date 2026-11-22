@@ -1,0 +1,89 @@
+module BF16Tests
+
+// BF16 (Sable.Core): bfloat16, an F32's range at seven fraction bits.
+
+import Sable.Testing
+
+@test
+fn arithmeticRoundsToTheNearestBFloat() {
+    let x: BF16 = 1.5
+    let y: BF16 = 3.0078125
+    // 3.0078125 is halfway between 3.0 and 3.015625: to even, 3.0.
+    assertEqual(y, 3.0)
+    assertEqual(x + y, 4.5)
+    assertEqual(x * x, 2.25)
+    assertEqual(BF16(1.0) / BF16(3.0), BF16(0.333984375))
+    assertEqual(BF16(1.0) + BF16.epsilon / 2.0, 1.0)
+    assert(BF16(1.0) + BF16.epsilon > 1.0)
+    assertEqual((BF16(4.5) as BF16).squareRoot(), BF16(2.125))
+    assertEqual(-x, -1.5)
+    assertEqual(BF16(7.0).truncatingRemainder(dividingBy: 2.0), 1.0)
+}
+
+@test
+fn itHasAnF32sRange() {
+    assertEqual(F32(BF16.greatestFiniteMagnitude), 3.3895314e38)
+    assertEqual(BF16.greatestFiniteMagnitude * 2.0, BF16.infinity)
+    assertEqual(F32(BF16.leastNormalMagnitude), 1.1754944e-38)
+    assert(BF16.leastNonzeroMagnitude > 0.0)
+    assertEqual(BF16.leastNonzeroMagnitude / 2.0, 0.0)
+    assert(BF16.nan.isNaN && BF16.nan != BF16.nan)
+    assertEqual(BF16.significandBitCount, 7)
+    assertEqual(BF16.exponentBitCount, 8)
+}
+
+@test
+fn conversionsRoundOnce() {
+    assertEqual(BF16(257), 256.0)
+    assertEqual(BF16(259), 260.0)
+    assertEqual(Int(BF16(1000.7)), 1000)
+    assertEqual(BF16(F32(3.14159)), BF16.pi)
+    assertEqual(F64(BF16.pi), 3.140625)
+    assertEqual(BF16(F16(0.5)), 0.5)
+    assertEqual(F16(BF16(65536.0)), F16.infinity)
+    assertEqual(BF16(1e39), BF16.infinity)
+    assertEqual(BF16(0.1).bits, 0x3DCD)
+    assertEqual(BF16.fromBits(0x3F80), 1.0)
+    assertEqual(BF16(I128.max), BF16(1.7014118e38))
+    assertEqual(BF16(U8.max), 255.0)
+    assertEqual(BF16(U16(511)), 512.0)
+}
+
+@test
+fn itIsWrittenInItsShortestDigits() {
+    assertEqual("\(BF16(0.1))", "0.1")
+    assertEqual("\(BF16.pi)", "3.14")
+    assertEqual(BF16(257).toString(), "256.0")
+    assertEqual("\(BF16(0.5):.3)", "0.500")
+    assertEqual("\(BF16.infinity)", "inf")
+    assertEqual("\(BF16(1.5):?)", "1.5")
+}
+
+@test
+fn itIsParsedToTheNearest() {
+    assertEqual(try! BF16.parse("3.14159"), BF16.pi)
+    assertEqual(try! BF16.parse("1e39"), BF16.infinity)
+    assertEqual(try! BF16.parse("-0.1"), -BF16(0.1))
+    // 3.0078125 is a tie, to even; a hair above it rounds up.
+    assertEqual(try! BF16.parse("3.0078125"), 3.0)
+    assertEqual(try! BF16.parse("3.00781250001"), 3.015625)
+    assertEqual(try! BF16.parse("0x1.8p1", styles: .HexFloat), 3.0)
+    var n = 0
+    while n < 400 {
+        let value = BF16.fromBits(U16(n * 97 % 0x7F80))
+        assertEqual(try! BF16.parse(value.toString()), value)
+        n += 1
+    }
+}
+
+@test
+fn itComparesHashesAndSorts() {
+    var values: BF16[>..] = [3.0, -1.0, 0.5]
+    values.sort()
+    assert(values == [-1.0, 0.5, 3.0])
+    assertEqual(BF16(0.5).hashValue, BF16(0.5).hashValue)
+    assertEqual(BF16(2.5).rounded(), 3.0)
+    assertEqual(BF16(1.0).nextUp, BF16(1.0078125))
+    assertEqual(BF16.leastNormalMagnitude.exponent, -126)
+    assertEqual(BF16(3.0).totalCompare(BF16.nan), .Less)
+}

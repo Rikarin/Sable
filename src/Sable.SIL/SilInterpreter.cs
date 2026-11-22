@@ -993,6 +993,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     case FloatLiteralInst literal:
                         values[literal] = literal.Type == SilType.F32 ? (float)literal.Value
                             : literal.Type == SilType.F16 ? (Half)literal.Value
+                            : literal.Type == SilType.BF16 ? BFloat16.FromDouble(literal.Value)
                             : (object)literal.Value;
                         break;
 
@@ -2381,6 +2382,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "next_up":
                 return operands[0] switch {
                     Half h => Half.BitIncrement(h),
+                    BFloat16 b => b.IsNaN || b.Bits == 0x7F80 ? b
+                        : b.Bits == 0x8000 ? new BFloat16(0x0001)
+                        : (b.Bits & 0x8000) != 0 ? new BFloat16((ushort)(b.Bits - 1)) : new BFloat16((ushort)(b.Bits + 1)),
                     float f => MathF.BitIncrement(f),
                     _ => Math.BitIncrement(x),
                 };
@@ -2404,6 +2408,8 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             ("bitcast_U32_F32", [long x]) => BitConverter.UInt32BitsToSingle((uint)x),
             ("bitcast_F16_U16", [Half x]) => (long)BitConverter.HalfToUInt16Bits(x),
             ("bitcast_U16_F16", [long x]) => BitConverter.UInt16BitsToHalf((ushort)x),
+            ("bitcast_BF16_U16", [BFloat16 x]) => (long)x.Bits,
+            ("bitcast_U16_BF16", [long x]) => new BFloat16((ushort)x),
             _ => null,
         };
 
@@ -2441,14 +2447,14 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         }
 
         var op = name[..separator];
-        if (type == SilType.F32 || type == SilType.F16) {
-            // An F16 is computed as a float and rounded back, which gives
-            // the half each operation would: a float has room enough that
-            // the two roundings never disagree.
-            var isHalf = type == SilType.F16;
-            var a = isHalf ? (float)(Half)operands[0]! : (float)operands[0]!;
-            var b = operands.Length > 1 ? isHalf ? (float)(Half)operands[1]! : (float)operands[1]! : 0f;
-            object? Real(float value) => isHalf ? (Half)value : value;
+        if (type == SilType.F32 || type == SilType.F16 || type == SilType.BF16) {
+            // An F16 or a BF16 is computed as a float and rounded back, which
+            // gives the value each operation would: a float has room enough
+            // that the two roundings never disagree.
+            static float Single(object? value) => value switch { Half h => (float)h, BFloat16 b => b.ToSingle(), _ => (float)value! };
+            var a = Single(operands[0]);
+            var b = operands.Length > 1 ? Single(operands[1]) : 0f;
+            object? Real(float value) => type == SilType.F16 ? (Half)value : type == SilType.BF16 ? BFloat16.FromSingle(value) : value;
             return op switch {
                 "add" => Real(a + b),
                 "sub" => Real(a - b),
@@ -2604,6 +2610,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         value switch {
             float f => f,
             Half h => (double)h,
+            BFloat16 b => b.ToDouble(),
             _ => (double)value!,
         };
 
@@ -2611,6 +2618,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     static object RealOf(double value, SilType type) =>
         type == SilType.F32 ? (float)value
         : type == SilType.F16 ? (Half)value
+        : type == SilType.BF16 ? BFloat16.FromDouble(value)
         : value;
 
     static bool InRange(Int128 value, int bits, bool signed) =>
@@ -2991,6 +2999,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             UInt128 n => n.ToString(CultureInfo.InvariantCulture),
             float f => FormatFloat(f),
             Half h => FormatHalf(h),
+            BFloat16 b => FormatBFloat16(b),
             bool b => b ? "true" : "false",
             double d => FormatDouble(d),
             string s => s,
@@ -3029,6 +3038,23 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         for (var precision = 1; precision <= 5; precision++) {
             scientific = ((double)value).ToString("E" + (precision - 1), CultureInfo.InvariantCulture);
             if ((Half)float.Parse(scientific, NumberStyles.Float, CultureInfo.InvariantCulture) == value) {
+                break;
+            }
+        }
+
+        return Layout(scientific);
+    }
+
+    /// <summary>A BF16 the same way, against a bfloat16, as the runtime reads the digits back: through a float.</summary>
+    static string FormatBFloat16(BFloat16 value) {
+        if (Special(value.ToDouble()) is { } special) {
+            return special;
+        }
+
+        var scientific = "";
+        for (var precision = 1; precision <= 4; precision++) {
+            scientific = value.ToDouble().ToString("E" + (precision - 1), CultureInfo.InvariantCulture);
+            if (BFloat16.FromSingle(float.Parse(scientific, NumberStyles.Float, CultureInfo.InvariantCulture)) == value) {
                 break;
             }
         }

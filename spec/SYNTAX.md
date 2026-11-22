@@ -117,7 +117,7 @@ Shadowing in a nested scope is allowed; shadowing in the same scope is an error.
 Bool
 I8 I16 I32 I64 I128    U8 U16 U32 U64 U128
 Int UInt               // platform word size; Int is the default integer literal type
-F16 F32 F64
+F16 F32 F64 BF16        // IEEE 754 binary16, 32, 64; BF16 is bfloat16, an F32's range at 8 bits
 Char                   // one Unicode scalar value
 String                 // UTF-8, growable; a range of one, text[a..<b], is a Substring
 Void                   // the unit type; written () in type position

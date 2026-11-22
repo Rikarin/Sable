@@ -373,4 +373,81 @@ public sealed class OpenedTypeTests {
             }
             """
         );
+    /// <summary>
+    ///     A generic struct and a generic class made only at run time, for a
+    ///     type opened from a dictionary, have the conformance records their
+    ///     declarations give them: the class's always, the struct's
+    ///     conditional one where its argument conforms — an argument made at
+    ///     run time too among them — as an instance the program names has.
+    /// </summary>
+    [Fact]
+    public void AGenericTypeMadeAtRunTimeHasItsDeclarationsConformances() =>
+        Prints(
+            """
+            Test.Box<Test.Meters> true true
+            Test.Box<Test.Box<Test.Meters>> true true
+            Test.Cell<Test.Meters> true false
+            Test.Box<Test.Plain> false true
+            Test.Box<Test.Box<Test.Plain>> false true
+            Test.Cell<Test.Plain> true false
+            true false
+
+            """,
+            """
+            protocol Zero {
+                static fn zero() -> Self
+            }
+
+            protocol P {
+                fn tag() -> String
+            }
+
+            struct Meters: Zero, P {
+                var value: Int
+                static fn zero() -> Meters => Meters { value: 0 }
+                fn tag() -> String => "m\(value)"
+            }
+
+            struct Plain: Zero {
+                static fn zero() -> Plain => Plain {}
+            }
+
+            struct Box<T> {
+                var item: T
+            }
+
+            extension Box: Zero where T: Zero {
+                static fn zero() -> Box<T> => Box { item: T.zero() }
+            }
+
+            extension Box: P where T: P {
+                fn tag() -> String => "box(\(item.tag()))"
+            }
+
+            final class Cell<T>: P {
+                var item: T
+                init(item: T) {
+                    self.item = item
+                }
+
+                fn tag() -> String => "cell"
+            }
+
+            fn boxOf<T>(_ type: T.Type) -> Type => Box<T>.self
+
+            fn cellOf<T>(_ type: T.Type) -> Type => Cell<T>.self
+            """,
+            """
+            let types: [String: Type] = ["meters": Meters.self, "plain": Plain.self]
+            for key in ["meters", "plain"] {
+                let t = types[key]!
+                for made in [boxOf(t), boxOf(boxOf(t)), cellOf(t)] {
+                    print("\(made) \(made.isSubtype(of: (any P).self)) \(made.isSubtype(of: (any Zero).self))")
+                }
+            }
+
+            let named: Type[] = [Box<Meters>.self, Box<Plain>.self]
+            print("\(named[0].isSubtype(of: (any P).self)) \(named[1].isSubtype(of: (any P).self))")
+            """
+        );
 }

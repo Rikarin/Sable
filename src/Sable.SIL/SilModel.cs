@@ -378,6 +378,15 @@ public abstract class NominalType(string name) : SilType {
     public List<string> Conformances { get; } = [];
 
     /// <summary>
+    ///     A generic type's conformances that hold only where its type
+    ///     arguments conform to protocols (<c>extension Box: P where T: P</c>),
+    ///     each with what they must conform to, by argument index: what an
+    ///     instance made at run time is given records by (#297). An instance
+    ///     whose arguments are known has those that hold among <see cref="Conformances" />.
+    /// </summary>
+    public List<(string Protocol, ImmutableArray<(int Argument, string Protocol)> Requirements)> ConditionalConformances { get; } = [];
+
+    /// <summary>
     ///     A generic type's instance: its type arguments, as its metadata
     ///     lists them — what metadata made at run time will be cached by
     ///     (#297); empty for any other type.
@@ -1772,6 +1781,37 @@ public sealed class SilModule {
     public List<(string Protocol, SilWitnessTable? Witnesses)> ConformancesOf(SilType type) {
         var declared = type is NominalType nominal ? nominal.Conformances : PrimitiveConformances.GetValueOrDefault(type.ToString()) ?? [];
         return [..declared.Distinct(StringComparer.Ordinal).Select(p => (p, FindWitnessTable(type, p)))];
+    }
+
+    /// <summary>Whether the type, or a superclass, has a record of its conformance to the protocol.</summary>
+    public bool HasConformance(SilType type, string protocol) {
+        for (var at = type; at is not null; at = (at as ClassType)?.Superclass) {
+            if (ConformancesOf(at).Exists(c => c.Protocol == protocol)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    ///     Gives an instance of a generic type whose type arguments are known
+    ///     the records of the conditional conformances it has from its
+    ///     declaration (<see cref="NominalType.ConditionalConformances" />)
+    ///     whose requirements its arguments meet.
+    /// </summary>
+    public void MeetConditionalConformances(NominalType instance) {
+        var arguments = instance.TypeArguments;
+        if (arguments.IsDefaultOrEmpty || arguments.Any(SilType.MentionsOpaque)) {
+            return;
+        }
+
+        foreach (var (protocol, requirements) in instance.ConditionalConformances) {
+            if (!instance.Conformances.Contains(protocol)
+                && requirements.All(r => r.Argument < arguments.Length && HasConformance(arguments[r.Argument], r.Protocol))) {
+                instance.Conformances.Add(protocol);
+            }
+        }
     }
 
     public T AddType<T>(T type) where T : NominalType {

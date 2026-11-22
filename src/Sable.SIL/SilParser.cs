@@ -510,6 +510,26 @@ public sealed class SilParser {
 
             Expect(")");
         }
+
+        // 'conforms_where("M.P" where(0 "M.P"))': a conformance that holds where argument 0 conforms to M.P.
+        if (Accept("conforms_where")) {
+            Expect("(");
+            do {
+                var protocol = Expect(TokenKind.String, "a protocol's name").Text;
+                Expect("where");
+                Expect("(");
+                var requirements = ImmutableArray.CreateBuilder<(int, string)>();
+                do {
+                    var argument = Count("a type argument's index");
+                    requirements.Add((argument, Expect(TokenKind.String, "a protocol's name").Text));
+                } while (Accept(","));
+
+                Expect(")");
+                type.ConditionalConformances.Add((protocol, requirements.ToImmutable()));
+            } while (Accept(","));
+
+            Expect(")");
+        }
     }
 
     void ParseClass() {

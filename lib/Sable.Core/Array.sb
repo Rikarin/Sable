@@ -120,7 +120,7 @@ extension<Element> Element[>..] {
     /// array has traps.
     ///
     /// ```sable
-    /// var xs = [1, 2, 3, 4]
+    /// var xs: Int[>..] = [1, 2, 3, 4]
     /// xs.removeLast(2)
     /// assert(xs == [1, 2])
     /// ```
@@ -186,7 +186,7 @@ extension<Element> Element[>..<] {
     /// array has traps.
     ///
     /// ```sable
-    /// var xs = [1, 2, 3, 4]
+    /// var xs: Int[>..] = [1, 2, 3, 4]
     /// xs.removeLast(2)
     /// assert(xs == [1, 2])
     /// ```

@@ -219,3 +219,12 @@ fn aSetIsMadeFromAnySequenceAndThrowsWhatItThrows() {
         assertEqual(at, 2)
     }
 }
+
+@test
+fn aSetValueIsUpdated() {
+    var numbers = Set<Int>([1, 2])
+    assertEqual(numbers.update(with: 2), 2)
+    assert(numbers.update(with: 3) == none)
+    assertEqual(numbers.count, 3)
+    assert(numbers.contains(3))
+}

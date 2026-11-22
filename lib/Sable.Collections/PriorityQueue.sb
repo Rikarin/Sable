@@ -14,13 +14,21 @@ public class PriorityQueue<Element: Comparable> {
         before = (a: Element, b: Element) => a < b
     }
 
-    /// The sequence's values, smallest first. What going through them
-    /// throws, it throws.
+    /// The sequence's values, smallest first, made a heap at once — in
+    /// O(n), not a push at a time. What going through them throws, it
+    /// throws.
     public init<S: Sequence>(_ values: S) throws(S.Failure) where S.Element == Element {
         before = (a: Element, b: Element) => a < b
-        for try value in values {
-            push(value)
-        }
+        items = try values.toArray()
+        heapify()
+    }
+
+    /// The sequence's values, first whatever the comparator puts first,
+    /// made a heap at once.
+    public init<S: Sequence>(_ values: S, using comparator: Comparator<Element>) throws(S.Failure) where S.Element == Element {
+        before = (a: Element, b: Element) => comparator.areInIncreasingOrder(a, b)
+        items = try values.toArray()
+        heapify()
     }
 
     /// First whatever 'before' puts ahead: '(a, b) => a > b' for largest first.
@@ -54,16 +62,7 @@ public class PriorityQueue<Element: Comparable> {
     /// Adds the value: at the end, then up past every parent it goes ahead of.
     public fn push(_ value: Element) {
         items.append(value)
-        var child = items.count - 1
-        while child > 0 {
-            let parent = (child - 1) / 2
-            if !before(value, items[parent]) {
-                break
-            }
-            items[child] = items[parent]
-            child = parent
-        }
-        items[child] = value
+        siftUp(items.count - 1)
     }
 
     /// Removes the element that goes first and gives it back; none when
@@ -77,8 +76,133 @@ public class PriorityQueue<Element: Comparable> {
             return last
         }
         let first = items[0]
+        items[0] = last
+        siftDown(0)
+        return first
+    }
+
+    /// The value pushed and then the first popped, in one step: the value
+    /// itself, untouched, when it would go first anyway. Rust's
+    /// 'BinaryHeap::push_pop', .NET's 'EnqueueDequeue'.
+    ///
+    /// ```sable
+    /// let queue = PriorityQueue<Int>([3, 5])
+    /// assert(queue.pushPop(1) == 1)
+    /// assert(queue.pushPop(4) == 3)
+    /// assert(queue.sortedElements() == [4, 5])
+    /// ```
+    public fn pushPop(_ value: Element) -> Element {
+        if items.count == 0 || !before(items[0], value) {
+            return value
+        }
+        let first = items[0]
+        items[0] = value
+        siftDown(0)
+        return first
+    }
+
+    /// The first element popped and the value pushed, in one step: the
+    /// element popped, or none when it was empty. .NET's 'DequeueEnqueue'.
+    ///
+    /// ```sable
+    /// let queue = PriorityQueue<Int>([3, 5])
+    /// assert(queue.replaceTop(9) == 3)
+    /// assert(queue.sortedElements() == [5, 9])
+    /// ```
+    public fn replaceTop(_ value: Element) -> Element? {
+        if items.count == 0 {
+            push(value)
+            return none
+        }
+        let first = items[0]
+        items[0] = value
+        siftDown(0)
+        return first
+    }
+
+    /// The first element, in no particular order, that the test is true of,
+    /// taken out; none when it is true of none. .NET 9's 'Remove'.
+    ///
+    /// ```sable
+    /// let queue = PriorityQueue<Int>([1, 4, 7])
+    /// assert(queue.remove(where: { $0 > 3 }) != none)
+    /// assert(queue.count == 2)
+    /// ```
+    public fn remove(where test: (Element) -> Bool) -> Element? {
+        guard let at = items.firstIndex(where: test) else {
+            return none
+        }
+        let removed = items[at]
+        let last = items.removeLast()
+        if at < items.count {
+            items[at] = last
+            reposition(at)
+        }
+        return removed
+    }
+
+    /// The first element the test is true of replaced by the value, which
+    /// then goes where its order puts it: how an element's priority changes.
+    /// Whether one was.
+    ///
+    /// ```sable
+    /// let queue = PriorityQueue<Int>([5, 7, 9])
+    /// assert(queue.update(where: { $0 == 9 }, to: 1))
+    /// assert(queue.peek() == 1)
+    /// ```
+    public fn update(where test: (Element) -> Bool, to value: Element) -> Bool {
+        guard let at = items.firstIndex(where: test) else {
+            return false
+        }
+        items[at] = value
+        reposition(at)
+        return true
+    }
+
+    /// Every element taken out, in the order they would be popped.
+    ///
+    /// ```sable
+    /// let queue = PriorityQueue<Int>([3, 1, 2])
+    /// assert(queue.drainSorted() == [1, 2, 3])
+    /// assert(queue.isEmpty)
+    /// ```
+    public fn drainSorted() -> Element[>..] {
+        var drained: Element[>..] = []
+        drained.reserveCapacity(items.count)
+        while let next = pop() {
+            drained.append(next)
+        }
+        return drained
+    }
+
+    // The heap's order made where it was broken at one place: the element
+    // there moved toward the root, or toward the leaves.
+    fn reposition(_ at: Int) {
+        if at > 0 && before(items[at], items[(at - 1) / 2]) {
+            siftUp(at)
+        } else {
+            siftDown(at)
+        }
+    }
+
+    fn siftUp(_ start: Int) {
+        let value = items[start]
+        var child = start
+        while child > 0 {
+            let parent = (child - 1) / 2
+            if !before(value, items[parent]) {
+                break
+            }
+            items[child] = items[parent]
+            child = parent
+        }
+        items[child] = value
+    }
+
+    fn siftDown(_ start: Int) {
+        let value = items[start]
         let n = items.count
-        var parent = 0
+        var parent = start
         while true {
             var child = parent * 2 + 1
             if child >= n {
@@ -87,14 +211,22 @@ public class PriorityQueue<Element: Comparable> {
             if child + 1 < n && before(items[child + 1], items[child]) {
                 child = child + 1
             }
-            if !before(items[child], last) {
+            if !before(items[child], value) {
                 break
             }
             items[parent] = items[child]
             parent = child
         }
-        items[parent] = last
-        return first
+        items[parent] = value
+    }
+
+    // Floyd's: each parent sifted down, the last first.
+    fn heapify() {
+        var at = items.count / 2 - 1
+        while at >= 0 {
+            siftDown(at)
+            at -= 1
+        }
     }
 
     /// Removes every element.

@@ -1,51 +1,63 @@
 module Sable.Collections
 
-/// First in, first out: two stacks, the second refilled from the first
-/// when it runs dry, so each element moves once.
+/// First in, first out: what goes in at the back comes out at the front. A
+/// Deque used at one end each, with the names a queue's use has.
+///
+/// ```sable
+/// let queue = Queue<String>()
+/// queue.enqueue("a")
+/// queue.enqueue("b")
+/// assert(queue.dequeue() == "a" && queue.peek() == "b")
+/// ```
 public class Queue<Element> {
-    var incoming: Element[>..] = []
-    var outgoing: Element[>..] = []
+    let items: Deque<Element>
 
     /// An empty queue.
-    public init() { }
+    public init() {
+        items = Deque<Element>()
+    }
 
-    /// The sequence's elements, enqueued in order: the first is at the
-    /// front. What going through them throws, it throws.
+    /// The sequence's elements, the first of them first out. What going
+    /// through them throws, it throws.
     public init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element {
-        for try element in elements {
-            incoming.append(element)
-        }
+        items = try Deque<Element>(elements)
     }
 
     /// How many elements it holds.
-    public var count: Int => incoming.count + outgoing.count
+    public var count: Int => items.count
 
-    /// Whether it holds no elements.
-    public var isEmpty: Bool => incoming.count + outgoing.count == 0
+    /// Whether it holds none.
+    public var isEmpty: Bool => items.isEmpty
 
     /// Adds the element at the back.
     public fn enqueue(_ item: Element) {
-        incoming.append(item)
+        items.append(item)
     }
 
-    /// Takes the front element out and gives it back, or none when empty.
+    /// The element at the front, taken out; none when it is empty.
     public fn dequeue() -> Element? {
-        if outgoing.count == 0 {
-            while incoming.count > 0 {
-                outgoing.append(incoming.removeLast())
-            }
-        }
-        if outgoing.count == 0 {
-            return none
-        }
-        return outgoing.removeLast()
+        return items.removeFirst()
+    }
+
+    /// The element at the front, left where it is; none when it is empty.
+    public fn peek() -> Element? {
+        return items.first
+    }
+
+    /// Every element taken out.
+    public fn removeAll() {
+        items.removeAll()
+    }
+
+    /// Room for at least so many elements.
+    public fn reserveCapacity(_ minimumCapacity: Int) {
+        items.reserveCapacity(minimumCapacity)
     }
 }
 
 extension Queue: Sequence, FromSequence<Element> {
-    /// An iterator over the elements from the front to the back: the order
-    /// 'dequeue' would give them, leaving the queue as it is.
-    public fn makeIterator() -> ChainIterator<ReversedIterator<Element[>..]>, ArrayIterator<Element>> {
-        return outgoing.reversed().chained(with: incoming).makeIterator()
+    /// The elements, the next out first.
+    public fn makeIterator() -> DequeIterator<Element> {
+        return items.makeIterator()
     }
 }

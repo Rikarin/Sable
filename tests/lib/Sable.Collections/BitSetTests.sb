@@ -97,3 +97,38 @@ fn aBitSetIsMadeFromAnySequenceOfInts() {
     assertEqual(collected.count, 2)
     assert(collected.contains(64))
 }
+
+@test
+fn bitSetsCombineAndCompare() {
+    let a = BitSet([1, 2, 3, 100])
+    let b = BitSet([3, 4, 100])
+    assert(a.symmetricDifference(b).toArray() == [1, 2, 4])
+    assert(BitSet([1, 2]).isDisjoint(with: BitSet([3, 64])))
+    assert(!a.isDisjoint(with: b))
+    assert(a.isSuperset(of: BitSet([1, 100])))
+    assert(BitSet([1]).isStrictSubset(of: a))
+    assert(!a.isStrictSubset(of: a))
+    assert(a.isStrictSuperset(of: BitSet([2])))
+    let c = BitSet([1, 2])
+    c.formUnion(BitSet([200]))
+    assert(c.toArray() == [1, 2, 200])
+    c.formIntersection(BitSet([2, 200, 300]))
+    assert(c.toArray() == [2, 200])
+    c.subtract(BitSet([2]))
+    assert(c.toArray() == [200])
+    c.formSymmetricDifference(BitSet([200, 7]))
+    assert(c.toArray() == [7])
+    assertEqual(c.count, 1)
+}
+
+@test
+fn aBitSetKnowsItsLeastGreatestAndARange() {
+    let bits = BitSet([70, 3, 9, 128])
+    assertEqual(bits.min, 3)
+    assertEqual(bits.max, 128)
+    assert(BitSet().min == none && BitSet().max == none)
+    assert(bits.members(in: 4..<129) == [9, 70, 128])
+    assert(bits.members(in: 0..<3) == [] as Int[>..])
+    assert(bits.members(in: -5..<1000) == [3, 9, 70, 128])
+    assert(bits.members(in: 64..<128) == [70])
+}

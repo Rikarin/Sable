@@ -94,6 +94,32 @@ public struct Set<Element: Hashable> {
         map.retain(where: (member: Element, kept: Bool) => shouldKeep(member))
     }
 
+    /// The value put in, in place of one equal to it if there is one: the
+    /// one it replaced, or none when there was none and it was added.
+    /// (Equal values can differ in what equality does not look at.) The
+    /// value goes at the end of the order, as one newly added does.
+    ///
+    /// ```sable
+    /// var numbers = Set<Int>([1, 2])
+    /// assert(numbers.update(with: 2) == 2)
+    /// assert(numbers.update(with: 3) == none)
+    /// assert(numbers.count == 3)
+    /// ```
+    public mutating fn update(with value: Element) -> Element? {
+        var replaced: Element? = none
+        for (member, _) in map {
+            if member == value {
+                replaced = member
+                break
+            }
+        }
+        if replaced != none {
+            map.remove(value)
+        }
+        map.insert(true, forKey: value)
+        return replaced
+    }
+
     /// The values that pass the test, as a set of their own.
     public fn filter(_ isIncluded: (Element) -> Bool) -> Set<Element> {
         var kept = Set<Element>()

@@ -60,3 +60,14 @@ fn aQueueIsMadeFromAnySequenceFirstAtTheFront() {
     let collected: Queue<String> = ["x", "y"].collect()
     assertEqual(collected.dequeue(), "x")
 }
+
+@test
+fn aQueuePeeksAndKeepsRoom() {
+    let queue = Queue<Int>([1, 2])
+    assertEqual(queue.peek(), 1)
+    queue.reserveCapacity(100)
+    queue.enqueue(3)
+    assert(queue.toArray() == [1, 2, 3])
+    queue.removeAll()
+    assert(queue.isEmpty && queue.peek() == none)
+}

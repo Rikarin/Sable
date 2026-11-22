@@ -91,3 +91,62 @@ fn aComparatorSaysWhatGoesFirst() {
     assertEqual(words.pop(), "fig")
     assert(words.pop() == none)
 }
+
+@test
+fn aPriorityQueueIsMadeAtOnceAndChangedInPlace() {
+    let queue = PriorityQueue<Int>([9, 4, 7, 1, 8, 2])
+    assertEqual(queue.peek(), 1)
+    assertEqual(queue.pushPop(0), 0)
+    assertEqual(queue.pushPop(5), 1)
+    assertEqual(queue.replaceTop(10), 2)
+    assert(queue.remove(where: { $0 == 8 }) == 8)
+    assert(queue.remove(where: { $0 == 99 }) == none)
+    assert(queue.update(where: { $0 == 10 }, to: 3))
+    assert(!queue.update(where: { $0 == 99 }, to: 3))
+    assert(queue.drainSorted() == [3, 4, 5, 7, 9])
+    assert(queue.isEmpty)
+    let largest = PriorityQueue<Int>([1, 5, 3], using: Comparator<Int>.natural().reversed())
+    assertEqual(largest.pop(), 5)
+}
+
+@test
+fn aPriorityQueueAgreesWithSortingUnderRandomChanges() {
+    let queue = PriorityQueue<Int>()
+    var model = List<Int>()
+    var seed = 99
+    var step = 0
+    while step < 1500 {
+        seed = (seed * 1103515245 + 12345) % 2147483648
+        let value = seed / 16 % 1000
+        let choice = seed % 5
+        if choice <= 1 {
+            queue.push(value)
+            model.append(value)
+        } else if choice == 2 && !model.isEmpty {
+            model.sort()
+            assertEqual(queue.pop(), model.remove(at: 0))
+        } else if choice == 3 {
+            let top = queue.pushPop(value)
+            model.append(value)
+            model.sort()
+            assertEqual(top, model.remove(at: 0))
+        } else if !model.isEmpty {
+            let target = model[seed / 3 % model.count]
+            assert(queue.update(where: { $0 == target }, to: value))
+            model[model.firstIndex(of: target)!] = value
+        }
+        step += 1
+    }
+    model.sort()
+    assert(queue.drainSorted() == model.toArray())
+}
+
+@test
+fn anElementGoesByItsPriority() {
+    let jobs = PriorityQueue<Prioritized<String, Int>>()
+    jobs.push(Prioritized("write", priority: 2))
+    jobs.push(Prioritized("ship", priority: 1))
+    jobs.push(Prioritized("plan", priority: 3))
+    assertEqual(jobs.pop()!.element, "ship")
+    assertEqual(jobs.pop()!.priority, 2)
+}

@@ -197,3 +197,74 @@ fn aDequeIsMadeFromAnySequence() {
     let collected: Deque<String> = ["a", "b"].collect()
     assertEqual(collected[0], "a")
 }
+
+@test
+fn aDequeInsertsRemovesAndRotates() {
+    let deque = Deque<Int>([1, 3])
+    deque.insert(2, at: 1)
+    deque.insert(0, at: 0)
+    deque.insert(4, at: 4)
+    assert(deque.toArray() == [0, 1, 2, 3, 4])
+    assertEqual(deque.remove(at: 1), 1)
+    assertEqual(deque.remove(at: 3), 4)
+    assert(deque.toArray() == [0, 2, 3])
+    deque.rotate(by: 1)
+    assert(deque.toArray() == [2, 3, 0])
+    deque.rotate(by: -1)
+    assert(deque.toArray() == [0, 2, 3])
+    deque.rotate(by: 7)
+    assert(deque.toArray() == [2, 3, 0])
+}
+
+@test
+fn aDequeAgreesWithAnArrayUnderRandomChanges() {
+    let deque = Deque<Int>()
+    var model = List<Int>()
+    var seed = 12345
+    var step = 0
+    while step < 2000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648
+        let choice = seed % 6
+        let at = model.isEmpty ? 0 : seed / 7 % (model.count + 1)
+        if choice == 0 {
+            deque.append(step)
+            model.append(step)
+        } else if choice == 1 {
+            deque.prepend(step)
+            model.insert(step, at: 0)
+        } else if choice == 2 {
+            deque.insert(step, at: at)
+            model.insert(step, at: at)
+        } else if choice == 3 && !model.isEmpty {
+            let position = at % model.count
+            assertEqual(deque.remove(at: position), model.remove(at: position))
+        } else if choice == 4 && !model.isEmpty {
+            assertEqual(deque.removeFirst(), model.remove(at: 0))
+        } else {
+            deque.rotate(by: seed % 5 - 2)
+            if !model.isEmpty {
+                var left = (seed % 5 - 2) % model.count
+                if left < 0 {
+                    left += model.count
+                }
+                var i = 0
+                while i < left {
+                    model.append(model.removeFirst())
+                    i += 1
+                }
+            }
+        }
+        step += 1
+    }
+    let expected = model.toArray()
+    assert(deque.toArray() == expected)
+    var (front, back) = deque.asSlices()
+    front.append(contentsOf: back)
+    assert(front == expected)
+    deque.makeContiguous()
+    let (whole, rest) = deque.asSlices()
+    assert(whole == expected && rest.isEmpty)
+    deque.reserveCapacity(5000)
+    assert(deque.capacity >= 5000)
+    assert(deque.toArray() == expected)
+}

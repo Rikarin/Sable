@@ -1,0 +1,229 @@
+module Sable.Collections
+
+/// The least and the greatest element, each in constant time to read and
+/// logarithmic time to take out: a min-max heap, swift-collections' Heap.
+/// Its levels alternate: each element on an even level (the root's) is the
+/// least of those below it, each on an odd level the greatest. Elements that
+/// tie come out in no particular order.
+///
+/// ```sable
+/// let heap = Heap<Int>([5, 1, 9, 3])
+/// assert(heap.min == 1 && heap.max == 9)
+/// assert(heap.popMax() == 9 && heap.popMin() == 1)
+/// assert(heap.count == 2)
+/// ```
+public class Heap<Element: Comparable> {
+    var items: Element[>..] = []
+
+    /// An empty heap.
+    public init() { }
+
+    /// The sequence's values. What going through them throws, it throws.
+    public init<S: Sequence>(_ values: S) throws(S.Failure) where S.Element == Element {
+        for try value in values {
+            insert(value)
+        }
+    }
+
+    /// How many elements it holds.
+    public var count: Int => items.count
+
+    /// Whether it holds none.
+    public var isEmpty: Bool => items.count == 0
+
+    /// The least element, or none.
+    public var min: Element? => items.count == 0 ? none : items[0]
+
+    /// The greatest element, or none.
+    public var max: Element? {
+        get {
+            if items.count == 0 {
+                return none
+            }
+            return items[maxIndex()]
+        }
+    }
+
+    /// Adds the value.
+    public fn insert(_ value: Element) {
+        items.append(value)
+        bubbleUp(items.count - 1)
+    }
+
+    /// The least element, taken out; none when it is empty.
+    public fn popMin() -> Element? {
+        if items.count == 0 {
+            return none
+        }
+        let least = items[0]
+        let last = items.removeLast()
+        if items.count > 0 {
+            items[0] = last
+            trickleDown(0)
+        }
+        return least
+    }
+
+    /// The greatest element, taken out; none when it is empty.
+    public fn popMax() -> Element? {
+        if items.count == 0 {
+            return none
+        }
+        let at = maxIndex()
+        let greatest = items[at]
+        let last = items.removeLast()
+        if at < items.count {
+            items[at] = last
+            trickleDown(at)
+        }
+        return greatest
+    }
+
+    /// Every element taken out.
+    public fn removeAll() {
+        items = []
+    }
+
+    // Where the greatest is: the root alone, or the larger of its children.
+    fn maxIndex() -> Int {
+        if items.count == 1 {
+            return 0
+        }
+        if items.count == 2 {
+            return 1
+        }
+        return items[2] < items[1] ? 1 : 2
+    }
+
+    // Whether the position is on a level of least elements: an even one.
+    static fn onMinLevel(_ at: Int) -> Bool {
+        return (63 - (at + 1).leadingZeroCount) % 2 == 0
+    }
+
+    fn swap(_ a: Int, _ b: Int) {
+        let held = items[a]
+        items[a] = items[b]
+        items[b] = held
+    }
+
+    fn bubbleUp(_ start: Int) {
+        if start == 0 {
+            return
+        }
+        let parent = (start - 1) / 2
+        if Heap.onMinLevel(start) {
+            if items[parent] < items[start] {
+                swap(start, parent)
+                bubbleUpGrand(parent, greatest: true)
+            } else {
+                bubbleUpGrand(start, greatest: false)
+            }
+        } else {
+            if items[start] < items[parent] {
+                swap(start, parent)
+                bubbleUpGrand(parent, greatest: false)
+            } else {
+                bubbleUpGrand(start, greatest: true)
+            }
+        }
+    }
+
+    // Up by grandparents, while the element is beyond the one above it.
+    fn bubbleUpGrand(_ start: Int, greatest: Bool) {
+        var at = start
+        while at > 2 {
+            let grand = ((at - 1) / 2 - 1) / 2
+            let beyond = greatest ? items[grand] < items[at] : items[at] < items[grand]
+            if !beyond {
+                break
+            }
+            swap(at, grand)
+            at = grand
+        }
+    }
+
+    fn trickleDown(_ start: Int) {
+        let greatest = !Heap.onMinLevel(start)
+        var at = start
+        while true {
+            let firstChild = at * 2 + 1
+            if firstChild >= items.count {
+                return
+            }
+            // The most extreme of the children and grandchildren.
+            // The second child, then the four grandchildren: firstChild's
+            // two at 2c+1 and 2c+2, the second child's at 2c+3 and 2c+4.
+            var best = firstChild
+            var candidate = firstChild + 1
+            while candidate <= firstChild * 2 + 4 && candidate < items.count {
+                if greatest ? items[best] < items[candidate] : items[candidate] < items[best] {
+                    best = candidate
+                }
+                candidate = candidate == firstChild + 1 ? firstChild * 2 + 1 : candidate + 1
+            }
+            let beyond = greatest ? items[at] < items[best] : items[best] < items[at]
+            if !beyond {
+                return
+            }
+            swap(at, best)
+            if best <= firstChild + 1 {
+                return
+            }
+            // A grandchild: it may now be on the wrong side of its parent.
+            let parent = (best - 1) / 2
+            let wrong = greatest ? items[best] < items[parent] : items[parent] < items[best]
+            if wrong {
+                swap(best, parent)
+            }
+            at = best
+        }
+    }
+}
+
+extension Heap: Sequence {
+    /// The elements in no particular order.
+    public fn makeIterator() -> ArrayIterator<Element> {
+        return items.makeIterator()
+    }
+}
+
+extension Heap: Debug where Element: Debug {
+    /// `Heap([1, 3, 5])`, least first.
+    public fn debugDescription() -> String {
+        var sorted = items
+        sorted.sort()
+        return described("Heap", descriptions(sorted))
+    }
+}
+
+/// An element with the priority it goes by: what a PriorityQueue or a Heap
+/// of things that are not Comparable themselves holds — .NET's
+/// PriorityQueue<TElement, TPriority>. Ordered, and equal, by the priority
+/// alone.
+///
+/// ```sable
+/// let jobs = PriorityQueue<Prioritized<String, Int>>()
+/// jobs.push(Prioritized("write", priority: 2))
+/// jobs.push(Prioritized("ship", priority: 1))
+/// assert(jobs.pop()!.element == "ship")
+/// ```
+public struct Prioritized<Element, Priority: Comparable>: Comparable {
+    /// The element.
+    public let element: Element
+
+    /// What it goes by.
+    public let priority: Priority
+
+    public init(_ element: Element, priority: Priority) {
+        self.element = element
+        self.priority = priority
+    }
+
+    public operator < (lhs: Prioritized<Element, Priority>, rhs: Prioritized<Element, Priority>) -> Bool {
+        return lhs.priority < rhs.priority
+    }
+
+    public operator == (lhs: Prioritized<Element, Priority>, rhs: Prioritized<Element, Priority>) -> Bool {
+        return lhs.priority == rhs.priority
+    }
+}

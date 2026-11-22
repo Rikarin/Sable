@@ -96,6 +96,113 @@ public class OrderedDictionary<Key: Hashable, Value> {
         orderedValues = []
         positions.removeAll()
     }
+
+    /// The key and its value put at the position, those from there on
+    /// moved one along: whether it was, as a key already there is left
+    /// where it is, its value too.
+    ///
+    /// ```sable
+    /// let ordered = OrderedDictionary<String, Int>([("a", 1), ("c", 3)])
+    /// assert(ordered.insert(2, forKey: "b", at: 1))
+    /// assert(ordered.keys == ["a", "b", "c"])
+    /// ```
+    public fn insert(_ value: Value, forKey key: Key, at position: Int) -> Bool {
+        if positions.contains(key) {
+            return false
+        }
+        if position < 0 || position > orderedKeys.count {
+            let nothing: Int[>..] = []
+            let _ = nothing[position]
+        }
+        orderedKeys.append(key)
+        orderedValues.append(value)
+        var i = orderedKeys.count - 1
+        while i > position {
+            orderedKeys[i] = orderedKeys[i - 1]
+            orderedValues[i] = orderedValues[i - 1]
+            i -= 1
+        }
+        orderedKeys[position] = key
+        orderedValues[position] = value
+        reindex(from: position)
+        return true
+    }
+
+    /// The entry at the position, taken out, those after it moved up.
+    ///
+    /// ```sable
+    /// let ordered = OrderedDictionary<String, Int>([("a", 1), ("b", 2)])
+    /// let (key, value) = ordered.remove(at: 0)
+    /// assert(key == "a" && value == 1 && ordered.keys == ["b"])
+    /// ```
+    public fn remove(at position: Int) -> (Key, Value) {
+        let key = orderedKeys[position]
+        let value = remove(key)!
+        return (key, value)
+    }
+
+    /// The entries at the two positions exchanged.
+    public fn swapAt(_ i: Int, _ j: Int) {
+        if i == j {
+            return
+        }
+        let key = orderedKeys[i]
+        let value = orderedValues[i]
+        orderedKeys[i] = orderedKeys[j]
+        orderedValues[i] = orderedValues[j]
+        orderedKeys[j] = key
+        orderedValues[j] = value
+        positions[orderedKeys[i]] = i
+        positions[orderedKeys[j]] = j
+    }
+
+    /// The entries put in the order the closure says ('a' before 'b' when it
+    /// is true): stable.
+    ///
+    /// ```sable
+    /// let ordered = OrderedDictionary<String, Int>([("b", 1), ("a", 2)])
+    /// ordered.sort(by: { $0.0 < $1.0 })
+    /// assert(ordered.keys == ["a", "b"])
+    /// ```
+    public fn sort(by before: ((Key, Value), (Key, Value)) -> Bool) {
+        var order = (0..<orderedKeys.count).toArray()
+        let keys = orderedKeys
+        let values = orderedValues
+        order.sort(by: (a: Int, b: Int) => before((keys[a], values[a]), (keys[b], values[b])))
+        var sortedKeys: Key[>..] = []
+        var sortedValues: Value[>..] = []
+        sortedKeys.reserveCapacity(order.count)
+        sortedValues.reserveCapacity(order.count)
+        for at in order {
+            sortedKeys.append(keys[at])
+            sortedValues.append(values[at])
+        }
+        orderedKeys = sortedKeys
+        orderedValues = sortedValues
+        reindex(from: 0)
+    }
+
+    /// The keys, in order.
+    public var keys: Key[>..] => orderedKeys
+
+    /// The values, in their keys' order.
+    public var values: Value[>..] => orderedValues
+
+    // Each key's position, from the one given on, as the arrays now say.
+    fn reindex(from start: Int) {
+        var i = start
+        while i < orderedKeys.count {
+            positions[orderedKeys[i]] = i
+            i += 1
+        }
+    }
+}
+
+extension OrderedDictionary where Key: Comparable {
+    /// The entries put in their keys' order.
+    public fn sortByKeys() {
+        sort(by: { $0.0 < $1.0 })
+    }
 }
 
 // An ordered dictionary is a random-access collection of its entries,

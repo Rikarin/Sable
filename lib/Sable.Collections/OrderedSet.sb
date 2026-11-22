@@ -1,0 +1,180 @@
+module Sable.Collections
+
+/// Distinct values in the order they were added — an order that can be
+/// read and changed by position: swift-collections' OrderedSet. The values
+/// are an array in that order, with a dictionary from each to its
+/// position: finding and adding are constant time, inserting and removing
+/// linear, as later positions move.
+///
+/// ```sable
+/// let seen = OrderedSet<String>(["b", "a", "b"])
+/// assert(seen.toArray() == ["b", "a"])
+/// assert(seen.append("c") && !seen.append("a"))
+/// assert(seen.index(of: "c") == 2)
+/// ```
+public class OrderedSet<Element: Hashable> {
+    var elements: List<Element> = List<Element>()
+    var positions: [Element: Int] = [:]
+
+    /// An empty set.
+    public init() { }
+
+    /// The sequence's values, each the first time it comes. What going
+    /// through them throws, it throws.
+    public init<S: Sequence>(_ values: S) throws(S.Failure) where S.Element == Element {
+        for try value in values {
+            let _ = append(value)
+        }
+    }
+
+    /// How many values it holds.
+    public var count: Int => elements.count
+
+    /// Whether it holds none.
+    public var isEmpty: Bool => elements.count == 0
+
+    /// Whether the value is one of them.
+    public fn contains(_ value: Element) -> Bool {
+        return positions.contains(value)
+    }
+
+    /// The value's position, or none.
+    public fn index(of value: Element) -> Int? {
+        return positions[value]
+    }
+
+    /// Adds the value at the end, unless it is there: whether it was added.
+    public fn append(_ value: Element) -> Bool {
+        if positions.contains(value) {
+            return false
+        }
+        positions[value] = elements.count
+        elements.append(value)
+        return true
+    }
+
+    /// Puts the value at the position, those from there on moved one along,
+    /// unless it is there already: whether it was.
+    public fn insert(_ value: Element, at position: Int) -> Bool {
+        if positions.contains(value) {
+            return false
+        }
+        elements.insert(value, at: position)
+        reindex(from: position)
+        return true
+    }
+
+    /// Takes the value out, those after it moved up: whether it was there.
+    public fn remove(_ value: Element) -> Bool {
+        guard let position = positions[value] else {
+            return false
+        }
+        let _ = remove(at: position)
+        return true
+    }
+
+    /// The value at the position, taken out.
+    public fn remove(at position: Int) -> Element {
+        let value = elements.remove(at: position)
+        positions.remove(value)
+        reindex(from: position)
+        return value
+    }
+
+    /// Every value taken out.
+    public fn removeAll() {
+        elements.removeAll()
+        positions.removeAll()
+    }
+
+    /// The values at the two positions exchanged.
+    public fn swapAt(_ i: Int, _ j: Int) {
+        elements.swapAt(i, j)
+        positions[elements[i]] = i
+        positions[elements[j]] = j
+    }
+
+    /// The values put in the order the closure says: stable.
+    public fn sort(by before: (Element, Element) -> Bool) {
+        var sorted = elements.toArray()
+        sorted.sort(by: before)
+        elements = List<Element>(sorted)
+        reindex(from: 0)
+    }
+
+    /// The values put in the comparator's order: stable.
+    public fn sort(using comparator: Comparator<Element>) {
+        var sorted = elements.toArray()
+        sorted.sort(using: comparator)
+        elements = List<Element>(sorted)
+        reindex(from: 0)
+    }
+
+    /// This set's values, then the other's not among them, in order.
+    public fn union(_ other: OrderedSet<Element>) -> OrderedSet<Element> {
+        let result = OrderedSet<Element>(elements.toArray())
+        for value in other.elements {
+            let _ = result.append(value)
+        }
+        return result
+    }
+
+    /// This set's values the other has too, in this set's order.
+    public fn intersection(_ other: OrderedSet<Element>) -> OrderedSet<Element> {
+        return OrderedSet<Element>(elements.toArray().filter { other.contains($0) })
+    }
+
+    /// This set's values the other does not have, in order.
+    public fn subtracting(_ other: OrderedSet<Element>) -> OrderedSet<Element> {
+        return OrderedSet<Element>(elements.toArray().filter { !other.contains($0) })
+    }
+
+    /// Whether every value is one of the other's.
+    public fn isSubset(of other: OrderedSet<Element>) -> Bool {
+        return elements.allSatisfy { other.contains($0) }
+    }
+
+    /// The values, in order.
+    public fn toArray() -> Element[>..] {
+        return elements.toArray()
+    }
+
+    // Each value's position, from the one given on.
+    fn reindex(from start: Int) {
+        var i = start
+        while i < elements.count {
+            positions[elements[i]] = i
+            i += 1
+        }
+    }
+}
+
+extension OrderedSet: RandomAccessCollection, FromSequence<Element> {
+    public fn makeIterator() -> ListIterator<Element> {
+        return elements.makeIterator()
+    }
+
+    /// The value at the position.
+    public subscript(position: Int) -> Element {
+        get => elements[position]
+    }
+
+    public var startIndex: Int => 0
+
+    public var endIndex: Int => elements.count
+
+    public fn index(after position: Int) -> Int => position + 1
+
+    public fn index(before position: Int) -> Int => position - 1
+
+    public fn index(_ position: Int, offsetBy distance: Int) -> Int => position + distance
+
+    public fn distance(from start: Int, to end: Int) -> Int => end - start
+}
+
+extension OrderedSet: Debug where Element: Debug {
+    /// `OrderedSet(["b", "a"])`, in order.
+    public fn debugDescription() -> String {
+        return described("OrderedSet", descriptions(elements.toArray()))
+    }
+}

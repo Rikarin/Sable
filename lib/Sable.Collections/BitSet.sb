@@ -121,13 +121,168 @@ public class BitSet {
     static fn population(_ words: U64[>..]) -> Int {
         var total = 0
         for word in words {
-            var bits = word
-            while bits != 0 {
-                bits = bits & (bits - 1)
-                total = total + 1
-            }
+            total += word.popCount
         }
         return total
+    }
+
+    /// The members in one set or the other, not both.
+    ///
+    /// ```sable
+    /// let a = BitSet([1, 2, 3])
+    /// assert(a.symmetricDifference(BitSet([3, 4])).toArray() == [1, 2, 4])
+    /// ```
+    public fn symmetricDifference(_ other: BitSet) -> BitSet {
+        let result = BitSet()
+        var i = 0
+        while i < words.count || i < other.words.count {
+            let mine: U64 = i < words.count ? words[i] : 0
+            let theirs: U64 = i < other.words.count ? other.words[i] : 0
+            result.words.append(mine ^ theirs)
+            i = i + 1
+        }
+        result.members = BitSet.population(result.words)
+        return result
+    }
+
+    /// Adds the other's members.
+    public fn formUnion(_ other: BitSet) {
+        while words.count < other.words.count {
+            words.append(0)
+        }
+        var i = 0
+        while i < other.words.count {
+            words[i] = words[i] | other.words[i]
+            i += 1
+        }
+        members = BitSet.population(words)
+    }
+
+    /// Keeps only the members the other has too.
+    public fn formIntersection(_ other: BitSet) {
+        var i = 0
+        while i < words.count {
+            words[i] = i < other.words.count ? words[i] & other.words[i] : 0
+            i += 1
+        }
+        members = BitSet.population(words)
+    }
+
+    /// Removes the other's members.
+    public fn subtract(_ other: BitSet) {
+        var i = 0
+        while i < words.count && i < other.words.count {
+            words[i] = words[i] & ~other.words[i]
+            i += 1
+        }
+        members = BitSet.population(words)
+    }
+
+    /// Keeps the members in one set or the other, not both.
+    public fn formSymmetricDifference(_ other: BitSet) {
+        while words.count < other.words.count {
+            words.append(0)
+        }
+        var i = 0
+        while i < other.words.count {
+            words[i] = words[i] ^ other.words[i]
+            i += 1
+        }
+        members = BitSet.population(words)
+    }
+
+    /// Whether every member of the other is one of this set's.
+    public fn isSuperset(of other: BitSet) -> Bool {
+        return other.isSubset(of: self)
+    }
+
+    /// Whether this set is a subset of the other, and smaller.
+    public fn isStrictSubset(of other: BitSet) -> Bool {
+        return members < other.members && isSubset(of: other)
+    }
+
+    /// Whether this set is a superset of the other, and larger.
+    public fn isStrictSuperset(of other: BitSet) -> Bool {
+        return other.isStrictSubset(of: self)
+    }
+
+    /// Whether the two sets have no member in common.
+    ///
+    /// ```sable
+    /// assert(BitSet([1, 2]).isDisjoint(with: BitSet([3, 64])))
+    /// ```
+    public fn isDisjoint(with other: BitSet) -> Bool {
+        var i = 0
+        while i < words.count && i < other.words.count {
+            if (words[i] & other.words[i]) != 0 {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+
+    /// The least member, or none when there are none: a word's trailing
+    /// zeros, not a bit at a time.
+    ///
+    /// ```sable
+    /// assert(BitSet([70, 3, 9]).min == 3)
+    /// assert(BitSet().min == none)
+    /// ```
+    public var min: Int? {
+        get {
+            var i = 0
+            while i < words.count {
+                if words[i] != 0 {
+                    return i * 64 + words[i].trailingZeroCount
+                }
+                i += 1
+            }
+            return none
+        }
+    }
+
+    /// The greatest member, or none when there are none.
+    ///
+    /// ```sable
+    /// assert(BitSet([70, 3, 9]).max == 70)
+    /// ```
+    public var max: Int? {
+        get {
+            var i = words.count - 1
+            while i >= 0 {
+                if words[i] != 0 {
+                    return i * 64 + 63 - words[i].leadingZeroCount
+                }
+                i -= 1
+            }
+            return none
+        }
+    }
+
+    /// The members within the range, ascending, a word at a time: those of
+    /// `lowerBound` and above, below `upperBound`.
+    ///
+    /// ```sable
+    /// let bits = BitSet([1, 5, 64, 100, 130])
+    /// assert(bits.members(in: 5..<101) == [5, 64, 100])
+    /// ```
+    public fn members(in range: Range<Int>) -> Int[>..] {
+        var found: Int[>..] = []
+        var value = range.lowerBound < 0 ? 0 : range.lowerBound
+        while value < range.upperBound && value >> 6 < words.count {
+            var bits = words[value >> 6] >> U64(value & 63)
+            if bits == 0 {
+                value = ((value >> 6) + 1) << 6
+                continue
+            }
+            value += bits.trailingZeroCount
+            if value < range.upperBound {
+                found.append(value)
+            }
+            value += 1
+        }
+        return found
     }
 }
 
@@ -157,10 +312,7 @@ public struct BitSetIterator: Iterator {
             bits = words[word]
         }
 
-        var at = 0
-        while ((bits >> U64(at)) & 1) == 0 {
-            at += 1
-        }
+        let at = bits.trailingZeroCount
         bits = bits & (bits - 1)
         return word * 64 + at
     }

@@ -160,3 +160,25 @@ fn anOrderedDictionaryIsMadeFromAnySequenceOfPairs() {
     let collected: OrderedDictionary<Int, Int> = (1...3).map { ($0, $0 * 10) }.collect()
     assertEqual(collected.value(at: 2), 30)
 }
+
+@test
+fn anOrderedDictionaryChangesByPosition() {
+    let ordered = OrderedDictionary<String, Int>([("a", 1), ("c", 3)])
+    assert(ordered.insert(2, forKey: "b", at: 1))
+    assert(!ordered.insert(9, forKey: "a", at: 0))
+    assert(ordered.keys == ["a", "b", "c"])
+    assert(ordered.values == [1, 2, 3])
+    assertEqual(ordered.index(of: "c"), 2)
+    ordered.swapAt(0, 2)
+    assert(ordered.keys == ["c", "b", "a"])
+    assertEqual(ordered.index(of: "a"), 2)
+    let (key, value) = ordered.remove(at: 1)
+    assert(key == "b" && value == 2)
+    assert(ordered.keys == ["c", "a"])
+    assertEqual(ordered.index(of: "a"), 1)
+    ordered.sortByKeys()
+    assert(ordered.keys == ["a", "c"])
+    ordered.sort(by: { $0.1 > $1.1 })
+    assert(ordered.keys == ["c", "a"])
+    assertEqual(ordered.get("a"), 1)
+}

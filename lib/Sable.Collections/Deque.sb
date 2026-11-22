@@ -175,6 +175,179 @@ public class Deque<Element> {
         head = 0
         used = 0
     }
+
+    /// How many elements it has room for before it must grow.
+    public var capacity: Int => slots.count
+
+    /// Room for at least so many elements, so that adding up to that many
+    /// grows nothing.
+    public fn reserveCapacity(_ minimumCapacity: Int) {
+        if minimumCapacity > slots.count {
+            resize(minimumCapacity)
+        }
+    }
+
+    /// The elements moved to the front of the storage, in order, with room
+    /// for 'size' in all.
+    fn resize(_ size: Int) {
+        var moved: Element?[>..] = []
+        moved.reserveCapacity(size)
+        var i = 0
+        while i < used {
+            moved.append(slots[slot(i)])
+            i += 1
+        }
+        while i < size {
+            moved.append(none)
+            i += 1
+        }
+        slots = moved
+        head = 0
+    }
+
+    /// The elements laid out in one run from the start of the storage, as
+    /// Rust's 'make_contiguous': what 'asSlices' then gives as one.
+    public fn makeContiguous() {
+        if head + used > slots.count {
+            resize(slots.count)
+        }
+    }
+
+    /// The elements as the two runs they lie in: from the front to the end
+    /// of the storage, then what wrapped round to its start — the second
+    /// empty when they lie in one. Copies of them, in order.
+    ///
+    /// ```sable
+    /// let deque = Deque<Int>([1, 2, 3])
+    /// deque.prepend(0)
+    /// var (front, back) = deque.asSlices()
+    /// front.append(contentsOf: back)
+    /// assert(front == [0, 1, 2, 3])
+    /// ```
+    public fn asSlices() -> (Element[>..], Element[>..]) {
+        var front: Element[>..] = []
+        var back: Element[>..] = []
+        var i = 0
+        while i < used {
+            let at = head + i
+            if at < slots.count {
+                front.append(slots[at]!)
+            } else {
+                back.append(slots[at - slots.count]!)
+            }
+            i += 1
+        }
+        return (front, back)
+    }
+
+    /// The value put at the position, the elements from there on moved one
+    /// along — those on the shorter side, so at most half of them. A
+    /// position of 'count' adds it at the back.
+    ///
+    /// ```sable
+    /// let deque = Deque<Int>([1, 3])
+    /// deque.insert(2, at: 1)
+    /// assert(deque.toArray() == [1, 2, 3])
+    /// ```
+    public fn insert(_ value: Element, at position: Int) {
+        if position < 0 || position > used {
+            let nothing: Int[>..] = []
+            let _ = nothing[position]
+        }
+        if position == used {
+            append(value)
+            return
+        }
+        if position == 0 {
+            prepend(value)
+            return
+        }
+        if used == slots.count {
+            grow()
+        }
+        if position < used - position {
+            // The front moves back a place.
+            head = head == 0 ? slots.count - 1 : head - 1
+            var i = 0
+            while i < position {
+                slots[slot(i)] = slots[slot(i + 1)]
+                i += 1
+            }
+        } else {
+            var i = used
+            while i > position {
+                slots[slot(i)] = slots[slot(i - 1)]
+                i -= 1
+            }
+        }
+        slots[slot(position)] = value
+        used += 1
+    }
+
+    /// The element at the position, taken out, those on the shorter side
+    /// moved to close the gap.
+    ///
+    /// ```sable
+    /// let deque = Deque<Int>([1, 2, 3])
+    /// assert(deque.remove(at: 1) == 2)
+    /// assert(deque.toArray() == [1, 3])
+    /// ```
+    public fn remove(at position: Int) -> Element {
+        let removed = slots[checked(position)]!
+        if position < used - 1 - position {
+            var i = position
+            while i > 0 {
+                slots[slot(i)] = slots[slot(i - 1)]
+                i -= 1
+            }
+            slots[head] = none
+            head = head + 1 == slots.count ? 0 : head + 1
+        } else {
+            var i = position
+            while i < used - 1 {
+                slots[slot(i)] = slots[slot(i + 1)]
+                i += 1
+            }
+            slots[slot(used - 1)] = none
+        }
+        used -= 1
+        return removed
+    }
+
+    /// The elements turned round by so many places: a positive count moves
+    /// that many from the front to the back, as Rust's 'rotate_left'; a
+    /// negative one from the back to the front. The shorter way round is
+    /// taken.
+    ///
+    /// ```sable
+    /// let deque = Deque<Int>([1, 2, 3, 4])
+    /// deque.rotate(by: 1)
+    /// assert(deque.toArray() == [2, 3, 4, 1])
+    /// deque.rotate(by: -2)
+    /// assert(deque.toArray() == [4, 1, 2, 3])
+    /// ```
+    public fn rotate(by places: Int) {
+        if used < 2 {
+            return
+        }
+        var left = places % used
+        if left < 0 {
+            left += used
+        }
+        if left <= used - left {
+            var i = 0
+            while i < left {
+                append(removeFirst()!)
+                i += 1
+            }
+        } else {
+            var i = 0
+            while i < used - left {
+                prepend(removeLast()!)
+                i += 1
+            }
+        }
+    }
 }
 
 // A deque is a random-access collection whose elements can be replaced

@@ -1,0 +1,205 @@
+module Sable.Collections
+
+// Tables whose keys are told apart by a Hashing rather than by their own
+// Hashable: each key kept with the Hashing's hash and equality, in a box
+// they share, as a Hashable key of a `[HashedKey<Key>: Value]`. Separate
+// types from Dictionary and Set, so that those, and the generic code over
+// them that is compiled once for every key type, carry nothing of it.
+
+/// Keys to values, told apart by a Hashing: keys equal by it are one key,
+/// and the first one added is the one kept. As a `[Key: Value]`, the keys
+/// are gone through in the order they were first added, and a key is
+/// added, found and removed in constant time on average. The keys need not
+/// be Hashable.
+///
+/// ```sable
+/// var seen = HashingDictionary<String, Int>(hashing: .by { $0.lowercased() })
+/// seen["Apple", default: 0] += 1
+/// seen["APPLE", default: 0] += 1
+/// assert(seen["apple"] == 2 && seen.count == 1)
+/// assert(seen.keys == ["Apple"])
+/// ```
+public struct HashingDictionary<Key, Value>: Sequence {
+    let box: HashingBox<Key>
+    var storage: [HashedKey<Key>: Value]
+
+    /// An empty dictionary that tells its keys apart by the hashing, with
+    /// room for so many keys before it grows.
+    public init(hashing: Hashing<Key>, minimumCapacity: Int = 0) {
+        box = HashingBox<Key>(hashing)
+        storage = [:]
+        storage.reserveCapacity(minimumCapacity)
+    }
+
+    /// The hashing it tells its keys apart by.
+    public var hashing: Hashing<Key> => box.hashing
+
+    /// How many keys it holds.
+    public var count: Int => storage.count
+
+    /// Whether it holds no keys.
+    public var isEmpty: Bool => storage.count == 0
+
+    /// The keys, in the order they were first added.
+    public var keys: Key[>..] {
+        get {
+            var keys: Key[>..] = []
+            for (hashed, _) in storage {
+                keys.append(hashed.key)
+            }
+            return keys
+        }
+    }
+
+    /// The values, in their keys' order.
+    public var values: Value[>..] {
+        get {
+            var values: Value[>..] = []
+            for (_, value) in storage {
+                values.append(value)
+            }
+            return values
+        }
+    }
+
+    /// The value for the key, or none; set to none, the key is removed.
+    public subscript(key: Key) -> Value? {
+        get => storage[self.hashed(key)]
+        set {
+            storage[self.hashed(key)] = newValue
+        }
+    }
+
+    /// The value for the key, or the default when there is none; changing
+    /// it adds the key.
+    public subscript(key: Key, default fallback: Value) -> Value {
+        get => storage[self.hashed(key)] ?? fallback
+        set {
+            storage[self.hashed(key)] = newValue
+        }
+    }
+
+    /// Whether the dictionary holds the key.
+    public fn contains(_ key: Key) -> Bool {
+        return storage.contains(self.hashed(key))
+    }
+
+    /// The value set for the key, and the one it replaced, or none.
+    public mutating fn updateValue(_ value: Value, forKey key: Key) -> Value? {
+        return storage.updateValue(value, forKey: self.hashed(key))
+    }
+
+    /// The key taken out, and its value, or none when it was not there.
+    public mutating fn remove(_ key: Key) -> Value? {
+        return storage.remove(self.hashed(key))
+    }
+
+    /// Every key taken out.
+    public mutating fn removeAll() {
+        storage.removeAll()
+    }
+
+    /// Each key with its value, in the order the keys were first added.
+    public fn makeIterator() -> HashingDictionaryIterator<Key, Value> {
+        return HashingDictionaryIterator<Key, Value> { entries: storage.makeIterator() }
+    }
+
+    // The key as the table holds it: with the hashing it is told apart by.
+    fn hashed(_ key: Key) -> HashedKey<Key> {
+        return HashedKey<Key> { key: key, box: box }
+    }
+}
+
+/// Gives a HashingDictionary's keys with their values, in order.
+public struct HashingDictionaryIterator<Key, Value>: Iterator {
+    var entries: DictionaryIterator<HashedKey<Key>, Value>
+
+    public mutating fn next() -> (Key, Value)? {
+        guard let (hashed, value) = entries.next() else {
+            return none
+        }
+        return (hashed.key, value)
+    }
+}
+
+/// Distinct values, told apart by a Hashing: values equal by it are one,
+/// and the first one added is the one kept, in the order they were added.
+/// The values need not be Hashable.
+///
+/// ```sable
+/// var tags = HashingSet<String>(hashing: .by { $0.lowercased() })
+/// assert(tags.insert("Swift"))
+/// assert(!tags.insert("SWIFT"))
+/// assert(tags.count == 1 && tags.contains("swift"))
+/// ```
+public struct HashingSet<Element>: Sequence {
+    var members: HashingDictionary<Element, Bool>
+
+    /// An empty set that tells its values apart by the hashing.
+    public init(hashing: Hashing<Element>, minimumCapacity: Int = 0) {
+        members = HashingDictionary<Element, Bool>(hashing: hashing, minimumCapacity: minimumCapacity)
+    }
+
+    /// The hashing it tells its values apart by.
+    public var hashing: Hashing<Element> => members.hashing
+
+    /// How many values it holds.
+    public var count: Int => members.count
+
+    /// Whether it holds no values.
+    public var isEmpty: Bool => members.isEmpty
+
+    /// Adds the value unless one equal to it is there: whether it was added.
+    public mutating fn insert(_ value: Element) -> Bool {
+        if members.contains(value) {
+            return false
+        }
+        members[value] = true
+        return true
+    }
+
+    /// Whether the set holds a value equal to this one.
+    public fn contains(_ value: Element) -> Bool {
+        return members.contains(value)
+    }
+
+    /// Takes out the value equal to this one: whether there was one.
+    public mutating fn remove(_ value: Element) -> Bool {
+        return members.remove(value) != none
+    }
+
+    /// Every value taken out.
+    public mutating fn removeAll() {
+        members.removeAll()
+    }
+
+    /// The values, in the order they were added.
+    public fn makeIterator() -> ArrayIterator<Element> {
+        return members.keys.makeIterator()
+    }
+}
+
+/// A key with the hashing it is told apart by: Hashable by that hashing.
+struct HashedKey<Key>: Hashable {
+    let key: Key
+    let box: HashingBox<Key>
+
+    fn hash(into hasher: inout Hasher) {
+        let hash = box.hashing.hash
+        hasher.write(U64.truncating(hash(key)))
+    }
+
+    operator == (lhs: HashedKey<Key>, rhs: HashedKey<Key>) -> Bool {
+        let equal = lhs.box.hashing.equal
+        return equal(lhs.key, rhs.key)
+    }
+}
+
+/// A table's Hashing, shared by reference with every key it holds.
+final class HashingBox<Key> {
+    let hashing: Hashing<Key>
+
+    init(_ hashing: Hashing<Key>) {
+        self.hashing = hashing
+    }
+}

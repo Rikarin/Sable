@@ -1,0 +1,86 @@
+module Sable.Collections
+
+/// How keys are told apart, other than by their own Hashable: a hash and
+/// an equality that agrees with it — two keys equal must hash the same.
+/// .NET's IEqualityComparer, Rust's BuildHasher. A HashingDictionary or a
+/// HashingSet is made with one, and uses it for every key it sees; the keys
+/// need not be Hashable at all. (A `[Key: Value]` and a Set use the keys' own
+/// 'hash(into:)' and '==', under this run's seed.)
+///
+/// ```sable
+/// var ports = HashingDictionary<String, Int>(hashing: .by { $0.lowercased() })
+/// ports["HTTP"] = 80
+/// assert(ports["http"] == 80)
+/// assert(ports.count == 1)
+/// ```
+public struct Hashing<T> {
+    let hash: (T) -> Int
+    let equal: (T, T) -> Bool
+
+    /// The hash and the equality given, which must agree: values the
+    /// equality says are the same hash the same.
+    public init(hash: @escaping (T) -> Int, equal: @escaping (T, T) -> Bool) {
+        self.hash = hash
+        self.equal = equal
+    }
+
+    /// Keys told apart by the key each gives, under this run's seed: two
+    /// are the same where their keys are equal — strings ignoring case by
+    /// '.by { $0.lowercased() }', records by an id field.
+    public static fn by<K: Hashable>(_ key: @escaping (T) -> K) -> Hashing<T> {
+        return Hashing<T>(
+            hash: (value: T) => {
+                var hasher = Hasher()
+                key(value).hash(into: &hasher)
+                return hasher.finalize()
+            },
+            equal: (a: T, b: T) => key(a) == key(b)
+        )
+    }
+
+    /// The hash of a value, as a table using this hashing places it.
+    public fn hashValue(of value: T) -> Int {
+        return hash(value)
+    }
+
+    /// Whether two values are the same key, as a table using this hashing
+    /// tells.
+    public fn areSame(_ a: T, _ b: T) -> Bool {
+        return equal(a, b)
+    }
+}
+
+extension Hashing where T: Hashable {
+    /// The keys' own hashing, under this run's seed: what a table does
+    /// without a Hashing.
+    public static fn standard() -> Hashing<T> {
+        return Hashing<T>.by { $0 }
+    }
+
+    /// The keys' own hashing under the seed given, rather than this run's:
+    /// the same keys hash the same in every run, whatever
+    /// SABLE_DETERMINISTIC_HASHING says. A table's order does not depend on
+    /// it — a Dictionary keeps its keys in the order they were added — so
+    /// this is for hashes that are kept or sent elsewhere.
+    public static fn seeded(_ seed: U64) -> Hashing<T> {
+        return Hashing<T>(
+            hash: (value: T) => {
+                var hasher = Hasher(seed: seed)
+                value.hash(into: &hasher)
+                return hasher.finalize()
+            },
+            equal: (a: T, b: T) => a == b
+        )
+    }
+}
+
+extension Hashing where T: FixedWidthInteger {
+    /// An integer key as its own hash, not mixed at all: for keys that are
+    /// well spread already — hashes, random ids — where mixing costs time
+    /// and buys nothing. Rust's identity hashers. Keys that share their low
+    /// bits (multiples of 1024, say) all start their search at one slot, so
+    /// for anything else the standard hashing is the one to use.
+    public static fn identity() -> Hashing<T> {
+        return Hashing<T>(hash: (value: T) => Int.truncating(value), equal: (a: T, b: T) => a == b)
+    }
+}

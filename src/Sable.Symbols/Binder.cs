@@ -4482,7 +4482,15 @@ public sealed partial class Binder {
         if (wanted is NamedTypeSymbol named) {
             var members = named.GetMembers(name).ToList();
             if (members.Count > 0) {
-                return BindMemberGroup(syntax, null, members, named);
+                return BindMemberGroup(syntax, null, members, named, TypeSubstitution.For(named));
+            }
+
+            // A static member an extension gives, as 'Hashing<String>.standard()'
+            // would find it: '.standard()' where a Hashing<String> is wanted.
+            if (LookupMemberOfKind(named, name, instance: false) is { } onType && onType.Members.Where(IsStaticMember).ToList() is { Count: > 0 } statics) {
+                return CheckAccessible(statics[0], syntax.Name)
+                    ? BindMemberGroup(syntax, null, statics, onType.Owner, onType.Substitution)
+                    : new BoundError(syntax);
             }
 
             // The context does name a type; it just has no such member.

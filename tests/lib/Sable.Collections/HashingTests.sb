@@ -1,0 +1,119 @@
+module HashingTests
+
+// Hashing, HashingDictionary and HashingSet (Sable.Collections): keys told
+// apart by a hash and an equality of the program's own, rather than by
+// their Hashable — which they need not have.
+
+import Sable.Collections
+import Sable.Testing
+
+struct User {
+    let id: Int
+    let name: String
+}
+
+@test
+fn keysAreToldApartByTheKeyTheyGive() {
+    var ports = HashingDictionary<String, Int>(hashing: .by { $0.lowercased() })
+    ports["HTTP"] = 80
+    ports["https"] = 443
+    assertEqual(ports["http"], 80)
+    assertEqual(ports["HTTPS"], 443)
+    ports["Http"] = 8080
+    assertEqual(ports.count, 2)
+    assert(ports.keys == ["HTTP", "https"])
+    assert(ports.values == [8080, 443])
+    assertEqual(ports["HTTP"], 8080)
+    assert(ports.remove("hTtP") == 8080)
+    assertEqual(ports.count, 1)
+    assert(ports.contains("HTTPS"))
+    ports["x"] = none
+    assertEqual(ports.count, 1)
+}
+
+@test
+fn keysThatAreNotHashableAreKeyedByAField() {
+    var names = HashingDictionary<User, String>(hashing: .by { $0.id })
+    names[User(id: 1, name: "ann")] = "first"
+    names[User(id: 1, name: "ANN")] = "again"
+    names[User(id: 2, name: "bob")] = "other"
+    assertEqual(names.count, 2)
+    assertEqual(names[User(id: 1, name: "")], "again")
+    assertEqual(names.keys[0].name, "ann")
+    var total = 0
+    for (user, _) in names {
+        total += user.id
+    }
+    assertEqual(total, 3)
+}
+
+@test
+fn aDefaultIsCountedUp() {
+    var seen = HashingDictionary<String, Int>(hashing: .by { $0.lowercased() })
+    seen["Apple", default: 0] += 1
+    seen["APPLE", default: 0] += 1
+    seen["pear", default: 0] += 1
+    assertEqual(seen["apple"], 2)
+    assertEqual(seen.count, 2)
+    assert(seen.updateValue(5, forKey: "PEAR") == 1)
+    assertEqual(seen["pear"], 5)
+    seen.removeAll()
+    assert(seen.isEmpty)
+}
+
+@test
+fn aSeededHashingHashesAlikeInEveryRun() {
+    let seeded = Hashing<String>.seeded(42)
+    assertEqual(seeded.hashValue(of: "x"), Hashing<String>.seeded(42).hashValue(of: "x"))
+    assert(seeded.hashValue(of: "x") != Hashing<String>.seeded(43).hashValue(of: "x"))
+    var table = HashingDictionary<String, Int>(hashing: .seeded(42))
+    table["x"] = 1
+    assertEqual(table["x"], 1)
+    assert(Hashing<String>.standard().areSame("a", "a"))
+    assert(!Hashing<String>.standard().areSame("a", "A"))
+}
+
+@test
+fn integersCanBeTheirOwnHash() {
+    let identity = Hashing<Int>.identity()
+    assertEqual(identity.hashValue(of: 12345), 12345)
+    var table = HashingDictionary<Int, Int>(hashing: .identity(), minimumCapacity: 100)
+    var i = 0
+    while i < 1000 {
+        table[i * 7919] = i
+        i += 1
+    }
+    assertEqual(table.count, 1000)
+    assertEqual(table[500 * 7919], 500)
+    assert(table[3] == none)
+}
+
+@test
+fn aHashingIsMadeFromItsParts() {
+    let parity = Hashing<Int>(hash: { $0 % 2 }, equal: { $0 % 2 == $1 % 2 })
+    var classes = HashingDictionary<Int, String>(hashing: parity)
+    classes[1] = "odd"
+    classes[2] = "even"
+    classes[7] = "still odd"
+    assertEqual(classes.count, 2)
+    assertEqual(classes[3], "still odd")
+    assertEqual(classes.hashing.hashValue(of: 9), 1)
+}
+
+@test
+fn aSetKeepsTheFirstOfValuesItsHashingCallsEqual() {
+    var tags = HashingSet<String>(hashing: .by { $0.lowercased() })
+    assert(tags.insert("Swift"))
+    assert(!tags.insert("SWIFT"))
+    assert(tags.insert("Rust"))
+    assertEqual(tags.count, 2)
+    assert(tags.contains("swift"))
+    assert(tags.toArray() == ["Swift", "Rust"])
+    assert(tags.remove("RUST"))
+    assert(!tags.remove("rust"))
+    assertEqual(tags.count, 1)
+    var users = HashingSet<User>(hashing: .by { $0.id })
+    users.insert(User(id: 1, name: "a"))
+    users.insert(User(id: 1, name: "b"))
+    assertEqual(users.count, 1)
+}

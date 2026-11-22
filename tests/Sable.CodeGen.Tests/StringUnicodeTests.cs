@@ -51,7 +51,7 @@ public sealed class StringUnicodeTests {
     [Fact]
     public void SearchingAndCaseAgree() =>
         Assert.Equal(
-            "a|b||c\nab-c\nkey value=more\nSTRASSE οδος\n-1 0\n4 10\n",
+            "a|b||c\nab-c\nkey value=more\nSTRASSE οδος\nLess Equal\n4 10\n",
             Run("""
                 print("a,b,,c".split(",").joined(separator: "|"))
                 print("a-b-c".replacing("-", with: "", maxCount: 1))

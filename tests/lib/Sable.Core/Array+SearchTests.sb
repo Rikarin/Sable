@@ -75,9 +75,9 @@ fn binarySearchForAValueFindsItOrWhereItWouldGo() {
 @test
 fn binarySearchByAComparisonUsesItsSign() {
     let words: String[>..] = ["a", "bee", "cats", "dingo"]
-    assert(words.binarySearch(by: (w: String) => w.count - 3) == .Ok(1))
-    assert(words.binarySearch(by: (w: String) => w.count - 2) == .Err(1))
-    assert(words.binarySearch(by: (w: String) => w < "cow" ? -1 : (w == "cow" ? 0 : 1)) == .Err(3))
+    assert(words.binarySearch(by: (w: String) => w.count.compare(3)) == .Ok(1))
+    assert(words.binarySearch(by: (w: String) => w.count.compare(2)) == .Err(1))
+    assert(words.binarySearch(by: (w: String) => w.compare("cow")) == .Err(3))
 }
 
 @test

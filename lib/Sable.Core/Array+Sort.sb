@@ -23,6 +23,19 @@ extension<Element> Element[:] {
     /// words.sort(by: (a: String, b: String) => a.count < b.count)
     /// assert(words == ["fig", "pear", "banana"])
     /// ```
+    /// Sorts in place in the comparator's order: stable.
+    ///
+    /// ```sable
+    /// var words: String[>..] = ["pear", "fig", "banana"]
+    /// words.sort(using: Comparator<String>.by { $0.count }.reversed())
+    /// assert(words == ["banana", "pear", "fig"])
+    /// ```
+    public mutating fn sort(using comparator: Comparator<Element>) {
+        self.sort(by: (a: Element, b: Element) => comparator.areInIncreasingOrder(a, b))
+    }
+
+    /// Sorts in place in the order the closure says ('a' before 'b' when it
+    /// is true): stable, O(n log n) comparisons.
     public mutating fn sort(by before: (Element, Element) throws -> Bool) rethrows {
         let n = self.count
         if n < 2 {

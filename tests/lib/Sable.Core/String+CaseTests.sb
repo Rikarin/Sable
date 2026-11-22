@@ -66,31 +66,31 @@ fn equalityIgnoringCase() {
 
 @test
 fn comparingWithNoOptionsIsByScalar() {
-    assert("abc".compare("abd", options: []) < 0, "c before d")
-    assert("b".compare("abc", options: []) > 0, "b after a")
-    assertEqual("same".compare("same", options: []), 0)
+    assert("abc".compare("abd", options: []) == .Less, "c before d")
+    assert("b".compare("abc", options: []) == .Greater, "b after a")
+    assertEqual("same".compare("same", options: []), .Equal)
 }
 
 @test
 fn comparingIgnoringCase() {
-    assert("ABC".compare("abd", options: .IgnoringCase) < 0, "c before d")
-    assertEqual("ABC".compare("abc", options: .IgnoringCase), 0)
-    assert("abc".compare("AB", options: .IgnoringCase) > 0, "longer after")
-    assert("ab".compare("ABC", options: .IgnoringCase) < 0, "shorter before")
+    assert("ABC".compare("abd", options: .IgnoringCase) == .Less, "c before d")
+    assertEqual("ABC".compare("abc", options: .IgnoringCase), .Equal)
+    assert("abc".compare("AB", options: .IgnoringCase) == .Greater, "longer after")
+    assert("ab".compare("ABC", options: .IgnoringCase) == .Less, "shorter before")
 }
 
 @test
 fn comparingNumerically() {
-    assert("file9".compare("file10", options: .Numeric) < 0, "9 before 10")
-    assert("file9".compare("file10", options: []) > 0, "but '9' after '1'")
-    assertEqual("file007".compare("file7", options: .Numeric), 0)
-    assert("file10b".compare("file10a", options: .Numeric) > 0, "the rest decides")
-    assert("v2.10".compare("v2.9", options: .Numeric) > 0, "each run of digits")
-    assert("12".compare("13", options: .Numeric) < 0, "equal lengths, digit by digit")
-    assert("0".compare("00", options: .Numeric) == 0, "zeros are zero")
+    assert("file9".compare("file10", options: .Numeric) == .Less, "9 before 10")
+    assert("file9".compare("file10", options: []) == .Greater, "but '9' after '1'")
+    assertEqual("file007".compare("file7", options: .Numeric), .Equal)
+    assert("file10b".compare("file10a", options: .Numeric) == .Greater, "the rest decides")
+    assert("v2.10".compare("v2.9", options: .Numeric) == .Greater, "each run of digits")
+    assert("12".compare("13", options: .Numeric) == .Less, "equal lengths, digit by digit")
+    assert("0".compare("00", options: .Numeric) == .Equal, "zeros are zero")
 }
 
 @test
 fn comparingNumericallyAndIgnoringCase() {
-    assert("FILE9".compare("file10", options: [.Numeric, .IgnoringCase]) < 0, "both at once")
+    assert("FILE9".compare("file10", options: [.Numeric, .IgnoringCase]) == .Less, "both at once")
 }

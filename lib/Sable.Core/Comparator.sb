@@ -1,0 +1,120 @@
+module Sable.Core
+
+/// An ordering of values, as a value: .NET's IComparer and its ThenBy,
+/// Swift's SortComparator, Rust's 'cmp' closures with 'then_with'. Made from
+/// a key, or a closure, and combined — a tie broken by another, the order
+/// turned round — then given to whatever orders: 'sort(using:)',
+/// 'sorted(using:)', 'min(using:)', 'max(using:)', 'binarySearch(for:using:)'
+/// and PriorityQueue's 'init(using:)'.
+///
+/// ```sable
+/// let byLength = Comparator<String>.by { $0.count }
+/// let order = byLength.reversed().then(Comparator<String>.natural())
+/// assert(["fig", "apple", "kiwi", "plum"].sorted(using: order) == ["apple", "kiwi", "plum", "fig"])
+/// ```
+public struct Comparator<T> {
+    let order: (T, T) -> Ordering
+
+    /// The ordering the closure gives.
+    public init(_ compare: @escaping (T, T) -> Ordering) {
+        order = compare
+    }
+
+    /// The values ordered by the key each gives, smallest first.
+    public static fn by<K: Comparable>(_ key: @escaping (T) -> K) -> Comparator<T> {
+        return Comparator<T>((a: T, b: T) => key(a).compare(key(b)))
+    }
+
+    /// How 'a' stands to 'b'.
+    public fn compare(_ a: T, _ b: T) -> Ordering {
+        return order(a, b)
+    }
+
+    /// Whether 'a' goes before 'b': what a 'by:' closure says.
+    public fn areInIncreasingOrder(_ a: T, _ b: T) -> Bool {
+        return order(a, b) == .Less
+    }
+
+    /// The order turned round: largest first where it was smallest.
+    public fn reversed() -> Comparator<T> {
+        let order = self.order
+        return Comparator<T>((a: T, b: T) => order(b, a))
+    }
+
+    /// This order, with its ties broken by the next.
+    public fn then(_ next: Comparator<T>) -> Comparator<T> {
+        let first = self.order
+        let second = next.order
+        return Comparator<T>((a: T, b: T) => {
+            let order = first(a, b)
+            return order == .Equal ? second(a, b) : order
+        })
+    }
+
+    /// This order, with its ties broken by the key each value gives.
+    public fn then<K: Comparable>(by key: @escaping (T) -> K) -> Comparator<T> {
+        return self.then(Comparator<T>.by(key))
+    }
+}
+
+extension Comparator where T: Comparable {
+    /// The values' own order: their '<'.
+    public static fn natural() -> Comparator<T> {
+        return Comparator<T>((a: T, b: T) => a.compare(b))
+    }
+}
+
+/// A value whose order is turned round: Rust's 'Reverse'. Sorting by it,
+/// or keeping it in a PriorityQueue, puts the largest first.
+///
+/// ```sable
+/// assert(Reverse(3) < Reverse(1))
+/// assert([1, 3, 2].sorted(byKey: { Reverse($0) }) == [3, 2, 1])
+/// ```
+@derive(Equatable, Hashable, Debug)
+public struct Reverse<Value: Comparable>: Comparable {
+    /// The value, in its own order.
+    public let value: Value
+
+    public init(_ value: Value) {
+        self.value = value
+    }
+
+    public operator < (lhs: Reverse<Value>, rhs: Reverse<Value>) -> Bool {
+        return rhs.value < lhs.value
+    }
+}
+
+extension FloatingPoint {
+    /// How this value stands to the other in IEEE 754's total order, in
+    /// which every value has a place: -NaN, -infinity, the negatives, -0,
+    /// +0, the positives, +infinity, +NaN. Rust's 'total_cmp'; what sorting
+    /// floats that may be NaN wants.
+    ///
+    /// ```sable
+    /// assert((-0.0).totalCompare(0.0) == .Less)
+    /// assert(F64.nan.totalCompare(F64.infinity) == .Greater)
+    /// assert(1.5.totalCompare(1.5) == .Equal)
+    /// ```
+    public fn totalCompare(_ other: Self) -> Ordering {
+        let below = self.isTotallyOrdered(belowOrEqualTo: other)
+        let above = other.isTotallyOrdered(belowOrEqualTo: self)
+        return below && above ? .Equal : below ? .Less : .Greater
+    }
+
+    /// How this value stands to the other, or none where either is NaN,
+    /// which is neither below, level with nor above anything: Rust's
+    /// 'partial_cmp'. ('compare', from '<' and '==', cannot place a NaN: it
+    /// says .Greater whichever side the NaN is on.)
+    ///
+    /// ```sable
+    /// assert(1.0.partialCompare(2.0) == .Less)
+    /// assert(F64.nan.partialCompare(1.0) == none)
+    /// ```
+    public fn partialCompare(_ other: Self) -> Ordering? {
+        if self.isNaN || other.isNaN {
+            return none
+        }
+        return self < other ? .Less : self == other ? .Equal : .Greater
+    }
+}

@@ -85,19 +85,24 @@ extension String {
         if !ignoringCase {
             return self == other
         }
-        return self.compare(other, options: .IgnoringCase) == 0
+        return self.compare(other, options: .IgnoringCase) == .Equal
     }
 
-    /// Negative, zero or positive as the string orders before, with or after
-    /// the other: scalar by scalar, as `<` does, unless the options say to
-    /// ignore case or to compare runs of digits as numbers.
+    /// How the string orders against the other: scalar by scalar, as `<`
+    /// does, unless the options say to ignore case or to compare runs of
+    /// digits as numbers.
     ///
     /// ```sable
-    /// assert("file9".compare("file10", options: .Numeric) < 0)
-    /// assert("file9".compare("file10", options: []) > 0)
-    /// assert("ABC".compare("abd", options: .IgnoringCase) < 0)
+    /// assert("file9".compare("file10", options: .Numeric) == .Less)
+    /// assert("file9".compare("file10", options: []) == .Greater)
+    /// assert("ABC".compare("abd", options: .IgnoringCase) == .Less)
     /// ```
-    public fn compare(_ other: String, options: String.CompareOptions) -> Int {
+    public fn compare(_ other: String, options: String.CompareOptions) -> Ordering {
+        return Ordering.of(sign: self.compareSign(other, options))
+    }
+
+    // Negative, zero or positive as the string orders before, with or after the other.
+    fn compareSign(_ other: String, _ options: String.CompareOptions) -> Int {
         let ignoringCase = options.contains(.IgnoringCase)
         let numeric = options.contains(.Numeric)
         if !ignoringCase && !numeric {

@@ -47,27 +47,27 @@ extension<Element> Element[:] {
 
     /// Where an element is in a sorted array, found by halving, in
     /// O(log n) comparisons: '.Ok' with the place of one that 'compare'
-    /// says is the one wanted (gives 0), or '.Err' with the place it could
-    /// go to keep the array sorted. 'compare' says whether an element is
-    /// before what is wanted (less than 0), it (0), or after it (greater).
+    /// says is the one wanted (.Equal), or '.Err' with the place it could
+    /// go to keep the array sorted. 'compare' says how an element stands to
+    /// what is wanted: before it (.Less), it, or after it (.Greater).
     /// Rust's `binary_search_by`; .NET's `BinarySearch`, which gives the
     /// complement of the place instead.
     ///
     /// ```sable
     /// let xs: Int[>..] = [1, 3, 5, 7]
-    /// assert(xs.binarySearch(by: (x: Int) => x - 5) == .Ok(2))
-    /// assert(xs.binarySearch(by: (x: Int) => x - 4) == .Err(2))
+    /// assert(xs.binarySearch(by: (x: Int) => x.compare(5)) == .Ok(2))
+    /// assert(xs.binarySearch(by: (x: Int) => x.compare(4)) == .Err(2))
     /// ```
-    public fn binarySearch(by compare: (Element) -> Int) -> Outcome<Int, Int> {
+    public fn binarySearch(by compare: (Element) -> Ordering) -> Outcome<Int, Int> {
         var low = 0
         var high = self.count
         while low < high {
             let middle = low + (high - low) / 2
             let order = compare(self[middle])
-            if order == 0 {
+            if order == .Equal {
                 return .Ok(middle)
             }
-            if order < 0 {
+            if order == .Less {
                 low = middle + 1
             } else {
                 high = middle
@@ -76,13 +76,21 @@ extension<Element> Element[:] {
         return .Err(low)
     }
 
+    /// Where the value is in an array sorted in the comparator's order: as
+    /// 'binarySearch(for:)' does in the elements' own.
+    ///
+    /// ```sable
+    /// let xs: Int[>..] = [7, 5, 3, 1]
+    /// assert(xs.binarySearch(for: 3, using: Comparator<Int>.natural().reversed()) == .Ok(2))
+    /// ```
+    public fn binarySearch(for value: Element, using comparator: Comparator<Element>) -> Outcome<Int, Int> {
+        return self.binarySearch(by: (element: Element) => comparator.compare(element, value))
+    }
+
     /// Where an element with this key is, in an array sorted by the key
     /// each element gives: as 'binarySearch(for:)' does by the element.
     public fn binarySearch<K: Comparable>(forKey key: K, by keyOf: (Element) -> K) -> Outcome<Int, Int> {
-        return self.binarySearch(by: (element: Element) => {
-            let k = keyOf(element)
-            return k < key ? -1 : (key < k ? 1 : 0)
-        })
+        return self.binarySearch(by: (element: Element) => keyOf(element).compare(key))
     }
 }
 
@@ -170,6 +178,6 @@ extension<Element: Comparable> Element[:] {
     /// assert(xs.binarySearch(for: 9) == .Err(4))
     /// ```
     public fn binarySearch(for value: Element) -> Outcome<Int, Int> {
-        return self.binarySearch(by: (element: Element) => element < value ? -1 : (value < element ? 1 : 0))
+        return self.binarySearch(by: (element: Element) => element.compare(value))
     }
 }

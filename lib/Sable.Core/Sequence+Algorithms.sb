@@ -138,6 +138,29 @@ extension Sequence {
         return count
     }
 
+    /// The least element in the comparator's order, or none when there are
+    /// none; the first of equals.
+    public fn min(using comparator: Comparator<Element>) throws(Failure) -> Element? {
+        return try self.min(by: { comparator.areInIncreasingOrder($0, $1) })
+    }
+
+    /// The greatest element in the comparator's order, or none when there
+    /// are none; the last of equals.
+    public fn max(using comparator: Comparator<Element>) throws(Failure) -> Element? {
+        return try self.max(by: { comparator.areInIncreasingOrder($0, $1) })
+    }
+
+    /// The elements in the comparator's order; stable.
+    ///
+    /// ```sable
+    /// let words = ["kiwi", "fig", "apple", "pear"]
+    /// let order = Comparator<String>.by { $0.count }.reversed().then(by: { $0 })
+    /// assert(words.sorted(using: order) == ["apple", "kiwi", "pear", "fig"])
+    /// ```
+    public fn sorted(using comparator: Comparator<Element>) throws(Failure) -> Element[>..] {
+        return try self.sorted(by: { comparator.areInIncreasingOrder($0, $1) })
+    }
+
     /// The least element, as the closure orders them ('a' before 'b' when it
     /// is true), or none when there are none; the first of equals.
     public fn min(by areInIncreasingOrder: (Element, Element) throws -> Bool) rethrows(Failure) -> Element? {

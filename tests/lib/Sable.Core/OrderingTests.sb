@@ -1,0 +1,84 @@
+module OrderingTests
+
+// Ordering and Comparable's compare (Sable.Core): how values stand to each
+// other, and how orderings combine.
+
+import Sable.Testing
+
+@derive(Equatable, Comparable, Debug)
+struct Version {
+    let major: Int
+    let minor: Int
+}
+
+@test
+fn comparableValuesCompare() {
+    assertEqual(1.compare(2), .Less)
+    assertEqual(2.compare(2), .Equal)
+    assertEqual(3.compare(2), .Greater)
+    assertEqual("b".compare("a"), .Greater)
+    assertEqual('a'.compare('b'), .Less)
+    assertEqual(Version(major: 1, minor: 9).compare(Version(major: 2, minor: 0)), .Less)
+    assertEqual(Version(major: 2, minor: 1).compare(Version(major: 2, minor: 0)), .Greater)
+}
+
+@test
+fn anOrderingIsReversedAndTiesAreBroken() {
+    assertEqual(Ordering.Less.reversed, .Greater)
+    assertEqual(Ordering.Equal.reversed, .Equal)
+    assertEqual(Ordering.Equal.then(.Less), .Less)
+    assertEqual(Ordering.Greater.then(.Less), .Greater)
+    var asked = 0
+    fn second() -> Ordering {
+        asked += 1
+        return .Greater
+    }
+    assertEqual(Ordering.Less.then(second()), .Less)
+    assertEqual(asked, 0)
+    assertEqual(Ordering.Equal.then(second()), .Greater)
+    assertEqual(asked, 1)
+}
+
+@test
+fn anOrderingAnswersQuestionsAndHasASign() {
+    assert(Ordering.Less.isLess && Ordering.Less.isLessOrEqual && !Ordering.Less.isGreaterOrEqual)
+    assert(Ordering.Equal.isEqual && Ordering.Equal.isLessOrEqual && Ordering.Equal.isGreaterOrEqual)
+    assert(Ordering.Greater.isGreater && !Ordering.Greater.isLessOrEqual)
+    assertEqual(Ordering.Less.sign, -1)
+    assertEqual(Ordering.Greater.sign, 1)
+    assertEqual(Ordering.of(sign: -42), .Less)
+    assertEqual(Ordering.of(sign: 0), .Equal)
+    assertEqual(Ordering.of(sign: 7), .Greater)
+}
+
+@test
+fn aValueIsClampedToABound() {
+    assertEqual(15.clamped(to: 0...10), 10)
+    assertEqual((-3).clamped(to: 0...10), 0)
+    assertEqual(4.clamped(to: 0...10), 4)
+    assertEqual("m".clamped(to: "a"..."f"), "f")
+}
+
+@test
+fn floatsCompareTotallyOrPartially() {
+    assertEqual((-0.0).totalCompare(0.0), .Less)
+    assertEqual(F64.nan.totalCompare(F64.infinity), .Greater)
+    assertEqual((-F64.nan).totalCompare(-F64.infinity), .Less)
+    assertEqual(1.5.totalCompare(1.5), .Equal)
+    assertEqual(1.0.partialCompare(2.0), .Less)
+    assert(F64.nan.partialCompare(1.0) == none)
+    assert(1.0.partialCompare(F64.nan) == none)
+    let sorted = [3.0, F64.nan, -1.0, -0.0, 0.0].sorted(using: Comparator<F64>((a: F64, b: F64) => a.totalCompare(b)))
+    assertEqual(sorted[0], -1.0)
+    assert(sorted[1] == 0.0 && sorted[1].isSignMinus)
+    assert(sorted[4].isNaN)
+}
+
+@test
+fn reverseTurnsTheOrderRound() {
+    assert(Reverse(3) < Reverse(1))
+    assert(!(Reverse(1) < Reverse(1)))
+    assertEqual(Reverse("a").compare(Reverse("b")), .Greater)
+    assert([1, 3, 2].sorted(byKey: { Reverse($0) }) == [3, 2, 1])
+    assertEqual(Reverse(5).value, 5)
+}

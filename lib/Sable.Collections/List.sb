@@ -276,6 +276,11 @@ public struct List<Element> {
         storage.reverse()
     }
 
+    /// Sorts the elements in place in the comparator's order: stable.
+    public mutating fn sort(using comparator: Comparator<Element>) {
+        storage.sort(using: comparator)
+    }
+
     /// Sorts the elements in place by 'before': a stable merge sort.
     public mutating fn sort(by before: (Element, Element) -> Bool) {
         storage.sort(by: before)

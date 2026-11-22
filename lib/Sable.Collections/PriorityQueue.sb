@@ -28,6 +28,18 @@ public class PriorityQueue<Element: Comparable> {
         self.before = before
     }
 
+    /// First whatever the comparator puts first.
+    ///
+    /// ```sable
+    /// let words = PriorityQueue<String>(using: Comparator<String>.by { $0.count }.reversed())
+    /// words.push("fig")
+    /// words.push("banana")
+    /// assert(words.pop() == "banana")
+    /// ```
+    public init(using comparator: Comparator<Element>) {
+        before = (a: Element, b: Element) => comparator.areInIncreasingOrder(a, b)
+    }
+
     public var count: Int => items.count
     public var isEmpty: Bool => items.count == 0
 

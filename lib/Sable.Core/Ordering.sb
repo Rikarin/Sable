@@ -1,0 +1,85 @@
+module Sable.Core
+
+// What a comparison of two values says (Rust's Ordering, .NET's sign of
+// CompareTo, Swift's ComparisonResult), and the ways orderings combine: a
+// tie broken by another key, an order turned round.
+
+/// How one value stands to another: before it, level with it, or after it.
+///
+/// ```sable
+/// assert(3.compare(5) == .Less)
+/// assert("b".compare("a") == .Greater)
+/// // Ordered by length, then alphabetically.
+/// let order = "pear".count.compare("plum".count).then("pear".compare("plum"))
+/// assert(order == .Less)
+/// ```
+@derive(Equatable, Hashable, Debug)
+public enum Ordering {
+    Less
+    Equal
+    Greater
+
+    /// The ordering the other way round: Less and Greater exchanged.
+    public var reversed: Ordering {
+        get {
+            return match self {
+                case .Less    => .Greater
+                case .Equal   => .Equal
+                case .Greater => .Less
+            }
+        }
+    }
+
+    /// This ordering, or, where it is a tie, the next one: how a second key
+    /// breaks a first key's ties. The next is worked out only for a tie
+    /// (Rust's 'then_with' as well as 'then').
+    public fn then(_ next: @autoclosure () -> Ordering) -> Ordering {
+        return self == .Equal ? next() : self
+    }
+
+    public var isLess: Bool => self == .Less
+    public var isEqual: Bool => self == .Equal
+    public var isGreater: Bool => self == .Greater
+    public var isLessOrEqual: Bool => self != .Greater
+    public var isGreaterOrEqual: Bool => self != .Less
+
+    /// -1, 0 or 1: what .NET's CompareTo and C's comparators give.
+    public var sign: Int {
+        get {
+            return match self {
+                case .Less    => -1
+                case .Equal   => 0
+                case .Greater => 1
+            }
+        }
+    }
+
+    /// The ordering an integer's sign says: negative, zero or positive, as
+    /// a C comparator or 'String.compare(_:options:)' gives one.
+    public static fn of(sign value: Int) -> Ordering {
+        return value < 0 ? .Less : value > 0 ? .Greater : .Equal
+    }
+}
+
+extension Comparable {
+    /// How this value stands to the other: from '<' and '=='.
+    ///
+    /// ```sable
+    /// assert(1.compare(2) == .Less)
+    /// assert(2.compare(2) == .Equal)
+    /// ```
+    public fn compare(_ other: Self) -> Ordering {
+        return self < other ? .Less : self == other ? .Equal : .Greater
+    }
+
+    /// The value moved inside the bounds: the lower where it is below it,
+    /// the upper where above.
+    ///
+    /// ```sable
+    /// assert(15.clamped(to: 0...10) == 10)
+    /// assert("m".clamped(to: "a"..."f") == "f")
+    /// ```
+    public fn clamped(to limits: ClosedRange<Self>) -> Self {
+        return self < limits.lowerBound ? limits.lowerBound : limits.upperBound < self ? limits.upperBound : self
+    }
+}

@@ -115,3 +115,115 @@ fn decimal(_ n: Int, _ unit: Int) -> String {
     }
     return whole.toString() + "." + fraction
 }
+
+extension Duration: Parsable {
+    /// The duration a text writes as `toString()` writes one — `1.500s`,
+    /// `12.000ms`, `3.250µs`, `17ns`, `1h 2m 3.000s` — or any sum of parts
+    /// like them, each a number, a fraction if it likes, and a unit: `h`,
+    /// `m`, `s`, `ms`, `µs` (or `us`) or `ns`, with or without spaces
+    /// between, a `-` before them all. Exact to the nanosecond; past an
+    /// Int's nanoseconds, `.Overflow`.
+    ///
+    /// ```sable
+    /// assert(try! Duration.parse("1.5s") == Duration.milliseconds(1500))
+    /// assert(try! Duration.parse("1h 2m 3.000s") == Duration.seconds(3723))
+    /// assert(try! Duration.parse("-250us") == Duration.microseconds(-250))
+    /// assert(try! Duration.parse(Duration.milliseconds(12).toString()) == Duration.milliseconds(12))
+    /// ```
+    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> Duration {
+        let text = source.toString().trimmed()
+        let scalars = text.toArray()
+        let count = scalars.count
+        if count == 0 {
+            throw .Empty
+        }
+        var i = 0
+        var negative = false
+        if scalars[0] == '-' || scalars[0] == '+' {
+            negative = scalars[0] == '-'
+            i = 1
+        }
+        var total = 0
+        var parts = 0
+        while i < count {
+            while i < count && scalars[i] == ' ' {
+                i += 1
+            }
+            if i == count {
+                break
+            }
+            // The number: whole digits, then a fraction's, kept to nine places.
+            var whole = 0
+            var fraction = 0
+            var places = 0
+            let started = i
+            while i < count && scalars[i].isDigit {
+                let digit = scalars[i].codePoint - 48
+                if whole > (9223372036854775807 - digit) / 10 {
+                    throw .Overflow
+                }
+                whole = whole * 10 + digit
+                i += 1
+            }
+            if i < count && scalars[i] == '.' {
+                i += 1
+                while i < count && scalars[i].isDigit {
+                    if places < 9 {
+                        fraction = fraction * 10 + (scalars[i].codePoint - 48)
+                        places += 1
+                    }
+                    i += 1
+                }
+            }
+            if i == started || i == started + 1 && scalars[started] == '.' {
+                throw .InvalidDigit(at: started)
+            }
+            // The unit, its letters up to the next digit or space.
+            let unitStart = i
+            var unit = ""
+            while i < count && !scalars[i].isDigit && scalars[i] != ' ' && scalars[i] != '.' {
+                unit = unit + String.fromChar(scalars[i])
+                i += 1
+            }
+            let nanoseconds = match unit {
+                case "h"        => 3600000000000
+                case "m"        => 60000000000
+                case "s"        => 1000000000
+                case "ms"       => 1000000
+                case "µs", "us" => 1000
+                case "ns"       => 1
+                case _          => 0
+            }
+            if nanoseconds == 0 {
+                throw .Invalid(at: unitStart)
+            }
+            // The fraction in the unit's nanoseconds: whole ones only, so
+            // that '1.5ns' is 1ns, as a duration holds no less.
+            var scale = 1
+            var p = 0
+            while p < places {
+                scale *= 10
+                p += 1
+            }
+            let (wholePart, wholeOverflow) = whole.overflowingMul(nanoseconds)
+            let (part, partOverflow) = wholePart.overflowingAdd(fraction * (nanoseconds / scale) + fraction * (nanoseconds % scale) / scale)
+            let (sum, sumOverflow) = total.overflowingAdd(part)
+            if wholeOverflow || partOverflow || sumOverflow {
+                throw .Overflow
+            }
+            total = sum
+            parts += 1
+        }
+        if parts == 0 {
+            throw .Empty
+        }
+        return Duration.nanoseconds(negative ? 0 - total : total)
+    }
+}
+
+extension Duration: Debug {
+    /// The nanoseconds, exactly: `Duration.nanoseconds(1500000000)`.
+    public fn debugDescription() -> String {
+        return "Duration.nanoseconds(\(totalNanoseconds))"
+    }
+}

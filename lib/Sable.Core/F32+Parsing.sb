@@ -17,6 +17,9 @@ extension F32: Parsable {
     /// The number the text writes, with what else the styles allow: white
     /// space, a sign, separators.
     public static fn parse<S: StringProtocol>(_ text: S, styles: NumberStyles) throws(ParseError) -> F32 {
+        if styles.contains(.HexFloat) {
+            return try hexFloat(text.asSubstring, styles)
+        }
         let plain = try plainFloat(text.asSubstring, styles)
         if let special = specialFloat(plain) {
             return F32(special)

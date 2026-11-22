@@ -27,35 +27,6 @@ public struct DateTime: Comparable, Hashable {
         return DateTime { secondsSinceEpoch: days * 86400 + hour * 3600 + minute * 60 + second, nanosecond: 0 }
     }
 
-    /// "YYYY-MM-DDTHH:MM:SSZ", or with a date alone, midnight.
-    public static fn parse(_ text: String) -> DateTime? {
-        if text.count != 10 && text.count != 20 {
-            return none
-        }
-        if text.at(4) != '-' || text.at(7) != '-' {
-            return none
-        }
-        let year = number(text, 0, 4) ?? -1
-        let month = number(text, 5, 7) ?? -1
-        let day = number(text, 8, 10) ?? -1
-        if year < 0 || month < 0 || day < 0 {
-            return none
-        }
-        if text.count == 10 {
-            return DateTime.of(year: year, month: month, day: day, hour: 0, minute: 0, second: 0)
-        }
-        if text.at(10) != 'T' || text.at(13) != ':' || text.at(16) != ':' || text.at(19) != 'Z' {
-            return none
-        }
-        let hour = number(text, 11, 13) ?? -1
-        let minute = number(text, 14, 16) ?? -1
-        let second = number(text, 17, 19) ?? -1
-        if hour < 0 || minute < 0 || second < 0 {
-            return none
-        }
-        return DateTime.of(year: year, month: month, day: day, hour: hour, minute: minute, second: second)
-    }
-
     var days: Int => floorDivide(secondsSinceEpoch, 86400)
     var secondOfDay: Int => floorModulo(secondsSinceEpoch, 86400)
 
@@ -210,17 +181,143 @@ fn two(_ n: Int) -> String {
     return n.toString()
 }
 
-/// The digits between the two offsets as a number; none for anything but digits.
-fn number(_ text: String, _ from: Int, _ to: Int) -> Int? {
+extension DateTime: Parsable {
+    /// The moment an ISO 8601 text names, as `iso8601()` and `isoDate()`
+    /// write it: a date, `2026-11-17`, midnight UTC; or a date and a time,
+    /// `2026-11-17T09:05:03`, with a fraction of a second if it likes
+    /// (`.250`, to the nanosecond), and `Z` or an offset from UTC
+    /// (`+02:00`, `-0530`) after — none at all is taken as UTC. A field out
+    /// of range, a 30th of February, is `.Invalid` where it is.
+    ///
+    /// ```sable
+    /// let moment = try! DateTime.parse("2024-02-29T23:59:59.5+01:00")
+    /// assert(moment.iso8601() == "2024-02-29T22:59:59Z" && moment.nanosecond == 500000000)
+    /// assert(try! DateTime.parse("2026-11-17").isoDate() == "2026-11-17")
+    /// assert((try? DateTime.parse("2023-02-29")) == none)
+    /// ```
+    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> DateTime {
+        let text = source.toString()
+        let count = text.count
+        if count == 0 {
+            throw .Empty
+        }
+        let year = try field(text, 0, 4)
+        try expect(text, 4, '-')
+        let month = try field(text, 5, 7)
+        try expect(text, 7, '-')
+        let day = try field(text, 8, 10)
+        if month < 1 || month > 12 {
+            throw .Invalid(at: 5)
+        }
+        if day < 1 || day > daysInMonth(year, month) {
+            throw .Invalid(at: 8)
+        }
+        let date = daysFromCivil(year, month, day) * 86400
+        if count == 10 {
+            return DateTime { secondsSinceEpoch: date, nanosecond: 0 }
+        }
+        if text.at(10) != 'T' && text.at(10) != 't' && text.at(10) != ' ' {
+            throw .Invalid(at: 10)
+        }
+        let hour = try field(text, 11, 13)
+        try expect(text, 13, ':')
+        let minute = try field(text, 14, 16)
+        try expect(text, 16, ':')
+        let second = try field(text, 17, 19)
+        if hour > 23 {
+            throw .Invalid(at: 11)
+        }
+        if minute > 59 {
+            throw .Invalid(at: 14)
+        }
+        if second > 59 {
+            throw .Invalid(at: 17)
+        }
+        var i = 19
+        var nanosecond = 0
+        if i < count && (text.at(i) == '.' || text.at(i) == ',') {
+            i += 1
+            var digits = 0
+            while i < count && text.at(i).isDigit {
+                if digits < 9 {
+                    nanosecond = nanosecond * 10 + (text.at(i).codePoint - 48)
+                    digits += 1
+                }
+                i += 1
+            }
+            if digits == 0 {
+                throw .InvalidDigit(at: i)
+            }
+            while digits < 9 {
+                nanosecond *= 10
+                digits += 1
+            }
+        }
+        var offset = 0
+        if i < count {
+            let mark = text.at(i)
+            if mark == 'Z' || mark == 'z' {
+                i += 1
+            } else if mark == '+' || mark == '-' {
+                let hours = try field(text, i + 1, i + 3)
+                var after = i + 3
+                if after < count && text.at(after) == ':' {
+                    after += 1
+                }
+                let minutes = try field(text, after, after + 2)
+                if hours > 23 || minutes > 59 {
+                    throw .Invalid(at: i + 1)
+                }
+                offset = (hours * 3600 + minutes * 60) * (mark == '-' ? -1 : 1)
+                i = after + 2
+            } else {
+                throw .Invalid(at: i)
+            }
+        }
+        if i != count {
+            throw .Invalid(at: i)
+        }
+        let seconds = date + hour * 3600 + minute * 60 + second - offset
+        return DateTime { secondsSinceEpoch: seconds, nanosecond: nanosecond }
+    }
+}
+
+/// The two- or four-digit field between the scalar positions.
+fn field(_ text: String, _ from: Int, _ to: Int) throws(ParseError) -> Int {
+    if to > text.count {
+        throw from >= text.count ? ParseError.Invalid(at: text.count) : ParseError.InvalidDigit(at: text.count)
+    }
     var value = 0
     var i = from
     while i < to {
         let c = text.at(i)
         if !c.isDigit {
-            return none
+            throw .InvalidDigit(at: i)
         }
         value = value * 10 + (c.codePoint - 48)
         i += 1
     }
     return value
+}
+
+/// The separator the format puts at the position.
+fn expect(_ text: String, _ at: Int, _ separator: Char) throws(ParseError) {
+    if at >= text.count || text.at(at) != separator {
+        throw .Invalid(at: at)
+    }
+}
+
+extension DateTime: Debug {
+    /// The moment as ISO 8601 writes it, to the nanosecond where it has
+    /// any: `2026-11-17T09:05:03Z`, `2026-11-17T09:05:03.250000000Z`.
+    public fn debugDescription() -> String {
+        if nanosecond == 0 {
+            return iso8601()
+        }
+        var digits = nanosecond.toString()
+        while digits.count < 9 {
+            digits = "0" + digits
+        }
+        return isoDate() + "T" + two(hour) + ":" + two(minute) + ":" + two(second) + "." + digits + "Z"
+    }
 }

@@ -15,12 +15,17 @@ extension F64: Parsable {
     }
 
     /// The number the text writes, with what else the styles allow: white
-    /// space, a sign, separators. A prefix means nothing to a float.
+    /// space, a sign, separators; or, with `.HexFloat`, a hexadecimal float.
+    /// A prefix means nothing to a decimal float.
     ///
     /// ```sable
     /// assert(try! F64.parse(" 1_000.5 ", styles: .Any) == 1000.5)
+    /// assert(try! F64.parse("0x1.8p1", styles: .HexFloat) == 3.0)
     /// ```
     public static fn parse<S: StringProtocol>(_ text: S, styles: NumberStyles) throws(ParseError) -> F64 {
+        if styles.contains(.HexFloat) {
+            return try hexFloat(text.asSubstring, styles)
+        }
         let plain = try plainFloat(text.asSubstring, styles)
         if let special = specialFloat(plain) {
             return special

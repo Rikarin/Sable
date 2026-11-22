@@ -392,13 +392,13 @@ fn main() {
                     print(t.dayOfYear)
                     print(DateTime.fromUnix(-1).iso8601())
                     print(DateTime.fromUnix(951782400).iso8601())
-                    if let leap = DateTime.parse("2024-02-29T23:59:59Z") {
+                    if let leap = try? DateTime.parse("2024-02-29T23:59:59Z") {
                         print(leap.secondsSinceEpoch)
                         print(leap.adding(Duration.seconds(1)).iso8601())
                         print(leap.weekday)
                     }
-                    print(DateTime.parse("2023-02-29") == none)
-                    print(DateTime.parse("1600-03-01")?.isoDate() ?? "-")
+                    print((try? DateTime.parse("2023-02-29")) == none)
+                    print((try? DateTime.parse("1600-03-01"))?.isoDate() ?? "-")
                     let a = DateTime.of(year: 2000, month: 1, day: 1, hour: 0, minute: 0, second: 0) ?? epoch
                     let b = DateTime.of(year: 2026, month: 11, day: 17, hour: 12, minute: 30, second: 0) ?? epoch
                     print(b.durationSince(a).toString())

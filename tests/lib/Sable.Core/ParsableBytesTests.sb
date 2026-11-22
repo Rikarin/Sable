@@ -1,0 +1,90 @@
+module ParsableBytesTests
+
+// Parsing from UTF-8 bytes, and hexadecimal floats through parse
+// (Sable.Core).
+
+import Sable.Testing
+import Sable.Text
+
+fn bytes(_ text: String) -> U8[>..] {
+    return text.utf8Bytes()
+}
+
+fn intError(_ text: String, radix: Int, styles: NumberStyles = .Sign) -> ParseError? {
+    do {
+        let _ = try Int.parse(utf8: bytes(text), radix: radix, styles: styles)
+        return none
+    } catch {
+        return error
+    }
+}
+
+fn floatError(_ text: String, styles: NumberStyles) -> ParseError? {
+    do {
+        let _ = try F64.parse(text, styles: styles)
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn integersAreReadFromTheirBytes() {
+    assertEqual(try! Int.parse(utf8: bytes("-42"), radix: 10), -42)
+    assertEqual(try! U8.parse(utf8: bytes("0xff"), radix: 16, styles: [.Sign, .Prefix]), 255)
+    assertEqual(try! I16.parse(utf8: bytes(" 1_000 "), radix: 10, styles: .Any), 1000)
+    assertEqual(try! U64.parse(utf8: bytes("18446744073709551615"), radix: 10), 18446744073709551615)
+    assertEqual(try! I8.parse(utf8: bytes("-128"), radix: 10), -128)
+    assertEqual(try! I128.parse(utf8: bytes("-170141183460469231731687303715884105728"), radix: 10), I128.min)
+    assertEqual(try! Int.parse(utf8: bytes("zz"), radix: 36), 1295)
+}
+
+@test
+fn aByteThatIsNotADigitIsReportedWhereItIs() {
+    assertEqual(intError("", radix: 10), .Empty)
+    assertEqual(intError("12a", radix: 10), .InvalidDigit(at: 2))
+    assertEqual(intError("é1", radix: 10), .InvalidDigit(at: 0))
+    assertEqual(intError("1_", radix: 10, styles: .Any), .InvalidDigit(at: 1))
+    assertEqual(intError("+5", radix: 10, styles: .None), .InvalidDigit(at: 0))
+    assertEqual(intError("9223372036854775808", radix: 10), .Overflow)
+    assertEqual(intError("-9223372036854775809", radix: 10), .Underflow)
+}
+
+@test
+fn anUnsignedIntegerRefusesANegative() {
+    do {
+        let _ = try U8.parse(utf8: bytes("-1"), radix: 10)
+        fail("parsed -1 as a U8")
+    } catch {
+        assertEqual(error, .Underflow)
+    }
+    assertEqual(try! U8.parse(utf8: bytes("-0"), radix: 10), 0)
+}
+
+@test
+fn anyParsableIsReadFromItsBytes() {
+    assert(try! Bool.parse(utf8: bytes("true")))
+    assertEqual(try! F64.parse(utf8: bytes("1.5")), 1.5)
+    assertEqual(try! Int.parse(utf8: bytes("7")), 7)
+    assertEqual(try! String.parse(utf8: bytes("héllo")), "héllo")
+    let invalid: U8[>..] = [0xFF, 0x31]
+    do {
+        let _ = try Int.parse(utf8: invalid)
+        fail("parsed bytes that are not UTF-8")
+    } catch {
+        assertEqual(error, .Invalid(at: 0))
+    }
+}
+
+@test
+fn aHexadecimalFloatIsParsed() {
+    assertEqual(try! F64.parse("0x1.8p1", styles: .HexFloat), 3.0)
+    assertEqual(try! F64.parse("0x1p-1074", styles: .HexFloat), 4.9e-324)
+    assertEqual(try! F32.parse(" -0x.8 ", styles: [.HexFloat, .Whitespace, .Sign]), -0.5)
+    assertEqual(try! F16.parse("0x1p4", styles: .HexFloat), 16.0)
+    assertEqual(floatError("1.5", styles: .HexFloat), .Invalid(at: 0))
+    assertEqual(floatError("-0x1p0", styles: .HexFloat), .InvalidDigit(at: 0))
+    assertEqual(floatError(" ", styles: [.HexFloat, .Whitespace]), .Empty)
+    let value = 0.1
+    assertEqual(try! F64.parse(value.toHexString(), styles: [.HexFloat, .Sign]), value)
+}

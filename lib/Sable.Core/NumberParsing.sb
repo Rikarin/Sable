@@ -335,3 +335,17 @@ fn compareDecimals(_ left: (String, Int), _ right: (String, Int)) -> Int {
     let order = Runtime.compareStrings(a, b)
     return order < 0 ? -1 : order > 0 ? 1 : 0
 }
+
+/// A hexadecimal float, `-0x1.8p1`, read by fromHexString once white space
+/// the styles allow is trimmed: `.Invalid(at: 0)` where it is not one.
+fn hexFloat<T: FloatingPoint>(_ text: Substring, _ styles: NumberStyles) throws(ParseError) -> T {
+    let (start, end) = try numberBounds(text, styles)
+    let trimmed = text.base[String.Index(utf8Offset: start)..<String.Index(utf8Offset: end)].toString()
+    if (trimmed.hasPrefix("-") || trimmed.hasPrefix("+")) && !styles.contains(.Sign) {
+        throw .InvalidDigit(at: scalarPosition(text, start))
+    }
+    guard let value = T.fromHexString(trimmed) else {
+        throw .Invalid(at: scalarPosition(text, start))
+    }
+    return value
+}

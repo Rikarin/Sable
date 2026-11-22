@@ -25,6 +25,9 @@ public enum NumberStyles {
     Separators = 16
     /// A `,` between two digits of a number's whole part: `1,000,000`.
     Thousands = 32
+    /// The text a hexadecimal float, `0x1.8p1`, as C's `%a` writes one and
+    /// `fromHexString` reads it: for a float only, and not one of `.Any`'s.
+    HexFloat = 64
     /// White space on either side.
     Whitespace = LeadingWhite | TrailingWhite
     /// Everything.

@@ -1,0 +1,97 @@
+module TimeParsingTests
+
+// DateTime and Duration are Parsable (Sable.Time): what their formatters
+// write reads back as the same value.
+
+import Sable.Testing
+import Sable.Time
+
+fn dateError(_ text: String) -> ParseError? {
+    do {
+        let _ = try DateTime.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+fn durationError(_ text: String) -> ParseError? {
+    do {
+        let _ = try Duration.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn aDateTimeReadsWhatISO8601Writes() {
+    let moment = try! DateTime.parse("2024-02-29T23:59:59Z")
+    assertEqual(moment.iso8601(), "2024-02-29T23:59:59Z")
+    assertEqual(moment.nanosecond, 0)
+    assertEqual(try! DateTime.parse("1970-01-01").secondsSinceEpoch, 0)
+    assertEqual(try! DateTime.parse("1970-01-01T00:00:01").secondsSinceEpoch, 1)
+    let fractional = try! DateTime.parse("2026-11-17T09:05:03.25Z")
+    assertEqual(fractional.nanosecond, 250000000)
+    assertEqual(try! DateTime.parse("2026-11-17T09:05:03.123456789123Z").nanosecond, 123456789)
+}
+
+@test
+fn anOffsetIsTakenOff() {
+    assertEqual(try! DateTime.parse("2026-11-17T10:00:00+01:00").iso8601(), "2026-11-17T09:00:00Z")
+    assertEqual(try! DateTime.parse("2026-11-17T03:30:00-0530").iso8601(), "2026-11-17T09:00:00Z")
+    assertEqual(try! DateTime.parse("2026-01-01T00:30:00+01:00").iso8601(), "2025-12-31T23:30:00Z")
+}
+
+@test
+fn aDateTimeOutOfRangeSaysWhere() {
+    assert((try? DateTime.parse("2023-02-29")) == none)
+    assertEqual(dateError(""), ParseError.Empty)
+    assertEqual(dateError("2026-13-01"), ParseError.Invalid(at: 5))
+    assertEqual(dateError("2026-01-01T24:00:00Z"), ParseError.Invalid(at: 11))
+    assertEqual(dateError("20x6-01-01"), ParseError.InvalidDigit(at: 2))
+    assertEqual(dateError("2026/01/01"), ParseError.Invalid(at: 4))
+    assertEqual(dateError("2026-01-01T00:00:00Q"), ParseError.Invalid(at: 19))
+}
+
+@test
+fn aDateTimeRoundTrips() {
+    var seconds = -5000000000
+    while seconds < 5000000000 {
+        let moment = DateTime.fromUnix(seconds)
+        assertEqual(try! DateTime.parse(moment.iso8601()), moment)
+        seconds += 123456789
+    }
+}
+
+@test
+fn aDurationReadsWhatToStringWrites() {
+    assertEqual(try! Duration.parse("1.5s"), Duration.milliseconds(1500))
+    assertEqual(try! Duration.parse("1h 2m 3.000s"), Duration.seconds(3723))
+    assertEqual(try! Duration.parse("-250us"), Duration.microseconds(-250))
+    assertEqual(try! Duration.parse("3.250µs"), Duration.nanoseconds(3250))
+    assertEqual(try! Duration.parse("17ns"), Duration.nanoseconds(17))
+    assertEqual(try! Duration.parse("2h30m"), Duration.minutes(150))
+    assertEqual(try! Duration.parse(" 90s "), Duration.seconds(90))
+}
+
+@test
+fn aDurationRoundTrips() {
+    var n = -7000000000000
+    while n < 7000000000000 {
+        let duration = Duration.nanoseconds(n)
+        let back = try! Duration.parse(duration.toString())
+        // toString keeps three decimals of its unit, and no more.
+        assert((back - duration).totalNanoseconds.abs() < 1000000, "\(duration.toString()) read back as \(back.toString())")
+        n += 123456789123
+    }
+    assertEqual(try! Duration.parse(Duration.nanoseconds(999).toString()), Duration.nanoseconds(999))
+}
+
+@test
+fn aDurationThatIsNotOneSaysWhere() {
+    assertEqual(durationError("  "), ParseError.Empty)
+    assertEqual(durationError("5x"), ParseError.Invalid(at: 1))
+    assertEqual(durationError("s"), ParseError.InvalidDigit(at: 0))
+    assertEqual(durationError("999999999999h"), ParseError.Overflow)
+}

@@ -1,0 +1,113 @@
+module Sable.Core
+
+// Parsing from UTF-8 bytes — a buffer read from a file or a socket — rather
+// than from a String: an integer read where its bytes lie, allocating
+// nothing; any other value from the text the bytes are, made once.
+
+extension Parsable {
+    /// The value the bytes write, as UTF-8 text: `.Invalid(at: 0)` where
+    /// they are not UTF-8.
+    ///
+    /// ```sable
+    /// let bytes: U8[>..] = [116, 114, 117, 101]
+    /// assert(try! Bool.parse(utf8: bytes))
+    /// ```
+    public static fn parse(utf8 bytes: U8[:]) throws(ParseError) -> Self {
+        guard let text = Runtime.decodeUtf8(bytes: bytes) else {
+            throw .Invalid(at: 0)
+        }
+        return try Self.parse(text)
+    }
+}
+
+extension FixedWidthInteger {
+    /// The integer the ASCII bytes write in the radix, with what else the
+    /// styles allow, read where the bytes lie: nothing is allocated, so a
+    /// protocol's numbers come straight out of the buffer they arrived in.
+    /// What an error says is where, in bytes from the start. (Without a
+    /// radix, `parse(utf8:)` reads the bytes as a String, as for any value.)
+    ///
+    /// ```sable
+    /// let bytes: U8[>..] = [45, 52, 50]
+    /// assert(try! Int.parse(utf8: bytes, radix: 10) == -42)
+    /// let hex: U8[>..] = [48, 120, 102, 102]
+    /// assert(try! U8.parse(utf8: hex, radix: 16, styles: [.Sign, .Prefix]) == 255)
+    /// ```
+    public static fn parse(utf8 bytes: U8[:], radix: Int, styles: NumberStyles = .Sign) throws(ParseError) -> Self {
+        let (negative, magnitude) = try parseIntegerBytes(bytes, radix, styles)
+        if Self.isSigned {
+            return Self.truncating(try signedValue(negative, magnitude, U128.truncating(Self.max)))
+        }
+        return Self.truncating(try unsignedValue(negative, magnitude, U128.truncating(Self.max)))
+    }
+}
+
+fn isAsciiWhite(_ byte: U8) -> Bool {
+    return byte == 32 || byte >= 9 && byte <= 13
+}
+
+/// parseInteger, over bytes: ASCII alone, anything else refused where it is.
+fn parseIntegerBytes(_ bytes: U8[:], _ radix: Int, _ styles: NumberStyles) throws(ParseError) -> (Bool, U128) {
+    if radix < 2 || radix > 36 {
+        preconditionFailure("a radix must be 2 to 36, not \(radix)")
+    }
+    var start = 0
+    var end = bytes.count
+    if styles.contains(.LeadingWhite) {
+        while start < end && isAsciiWhite(bytes[start]) {
+            start += 1
+        }
+    }
+    if styles.contains(.TrailingWhite) {
+        while end > start && isAsciiWhite(bytes[end - 1]) {
+            end -= 1
+        }
+    }
+    if start == end {
+        throw .Empty
+    }
+    var i = start
+    var negative = false
+    let first = bytes[i]
+    if (first == 43 || first == 45) && styles.contains(.Sign) {
+        negative = first == 45
+        i += 1
+    }
+    if styles.contains(.Prefix) && i + 1 < end && bytes[i] == 48 {
+        let mark = bytes[i + 1] | 32
+        if radix == 16 && mark == 120 || radix == 8 && mark == 111 || radix == 2 && mark == 98 {
+            i += 2
+        }
+    }
+    let base = U128(radix)
+    let greatest: U128 = 340282366920938463463374607431768211455
+    let cutoff = greatest / base
+    var magnitude: U128 = 0
+    var overflowed = false
+    var wanted = true
+    while i < end {
+        let c = bytes[i]
+        let digit = c >= 48 && c <= 57 ? Int(c) - 48 : c >= 97 && c <= 122 ? Int(c) - 87 : c >= 65 && c <= 90 ? Int(c) - 55 : 99
+        if digit < radix {
+            let value = U128(digit)
+            if overflowed || magnitude > cutoff || magnitude * base > greatest - value {
+                overflowed = true
+            } else {
+                magnitude = magnitude * base + value
+            }
+            wanted = false
+        } else if !wanted && i + 1 < end && (c == 95 && styles.contains(.Separators) || c == 44 && styles.contains(.Thousands)) {
+            wanted = true
+        } else {
+            throw .InvalidDigit(at: i)
+        }
+        i += 1
+    }
+    if wanted {
+        throw .InvalidDigit(at: i)
+    }
+    if overflowed {
+        throw negative ? ParseError.Underflow : ParseError.Overflow
+    }
+    return (negative, magnitude)
+}

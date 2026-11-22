@@ -1,0 +1,152 @@
+module RawPtrTests
+
+// RawPtr (Sable.Core): memory allocated, values put in it, read, moved,
+// replaced and destroyed, and the memory given back.
+
+import Sable.Testing
+
+@derive(Equatable, Debug)
+struct Point {
+    let x: Int
+    let y: Int
+}
+
+final class Counter {
+    var count = 0
+}
+
+@test
+fn valuesAreReadWhereTheyWerePut() {
+    unsafe {
+        let p = RawPtr<Int>.allocate(count: 3)
+        defer {
+            p.deallocate()
+        }
+        p.initialize(to: 10, at: 0)
+        p.initialize(to: 20, at: 1)
+        p.initialize(to: 30, at: 2)
+        assertEqual(p.load(), 10)
+        assertEqual(p.load(at: 2), 30)
+        assertEqual((p + 1).load(), 20)
+        assertEqual((p + 2 - 1).load(), 20)
+        p.store(25, at: 1)
+        assertEqual(p.load(at: 1), 25)
+    }
+}
+
+@test
+fn aPointerStepsByItsPointeesStride() {
+    let p = RawPtr<I32>(address: 1024)
+    assertEqual(p.advanced(by: 3).address, 1036)
+    assertEqual(p.advanced(by: -1).address, 1020)
+    assertEqual(p.distance(to: p + 5), 5)
+    assertEqual(p.cast(to: U8.self).advanced(by: 3).address, 1027)
+    assert(p < p + 1)
+    assert(p == RawPtr<I32>(address: 1024))
+    assert(RawPtr<I32>.null.isNull)
+    assert(!p.isNull)
+    assertEqual(p.debugDescription(), "0x400")
+    assertEqual(RawPtr<I32>.null.debugDescription(), "null")
+}
+
+@test
+fn structsAndStringsLiveInRawMemory() {
+    unsafe {
+        let points = RawPtr<Point>.allocate(count: 2)
+        defer {
+            points.deallocate()
+        }
+        points.initialize(to: Point(x: 1, y: 2))
+        points.initialize(to: Point(x: 3, y: 4), at: 1)
+        assertEqual(points.load(at: 1), Point(x: 3, y: 4))
+
+        let words = RawPtr<String>.allocate(count: 2)
+        defer {
+            words.deallocate()
+        }
+        words.initialize(repeating: "hi", count: 2)
+        words.store("there", at: 1)
+        assertEqual(words.load() + " " + words.load(at: 1), "hi there")
+        assertEqual(words.move(at: 1), "there")
+        words.deinitialize(count: 1)
+    }
+}
+
+@test
+fn anObjectInRawMemoryIsKeptAliveUntilDeinitialised() {
+    unsafe {
+        let p = RawPtr<Counter>.allocate(count: 1)
+        defer {
+            p.deallocate()
+        }
+        p.initialize(to: Counter())
+        p.load().count += 1
+        p.load().count += 1
+        assertEqual(p.load().count, 2)
+        let counter = p.move()
+        assertEqual(counter.count, 2)
+    }
+}
+
+@test
+fn valuesAreMovedAsBits() {
+    unsafe {
+        let p = RawPtr<String>.allocate(count: 4)
+        defer {
+            p.deallocate()
+        }
+        p.initialize(to: "a")
+        p.initialize(to: "b", at: 1)
+        (p + 2).moveInitialize(from: p, count: 2)
+        assertEqual(p.load(at: 2) + p.load(at: 3), "ab")
+        (p + 2).deinitialize(count: 2)
+    }
+}
+
+@test
+fn bytesAreReadAsAnyType() {
+    unsafe {
+        let p = RawPtr<U8>.allocate(count: 8)
+        defer {
+            p.deallocate()
+        }
+        p.storeBytes(of: 0x0102_0304 as U32, byteOffset: 1)
+        assertEqual(p.load(at: 1), 4)
+        assertEqual(p.load(at: 4), 1)
+        assertEqual(p.load(as: U32.self, byteOffset: 1), 0x0102_0304)
+        assertEqual(p.load(as: U16.self, byteOffset: 2), 0x0203)
+        p.storeBytes(of: 1.5, byteOffset: 0)
+        assertEqual(p.load(as: F64.self), 1.5)
+        assertEqual(p.load(as: U64.self), 0x3FF8_0000_0000_0000)
+    }
+}
+
+fn sum<T: AdditiveArithmetic>(_ start: RawPtr<T>, count: Int) -> T {
+    var total = T.zero
+    var index = 0
+    while index < count {
+        unsafe {
+            total = total + start.load(at: index)
+        }
+        index += 1
+    }
+    return total
+}
+
+@test
+fn genericCodeReadsThroughAPointer() {
+    unsafe {
+        let p = RawPtr<F64>.allocate(count: 3)
+        defer {
+            p.deallocate()
+        }
+        p.initialize(repeating: 1.25, count: 3)
+        assertEqual(sum(p, count: 3), 3.75)
+        let q = RawPtr<I16>.allocate(count: 2)
+        defer {
+            q.deallocate()
+        }
+        q.initialize(repeating: 300, count: 2)
+        assertEqual(sum(q, count: 2), 600 as I16)
+    }
+}

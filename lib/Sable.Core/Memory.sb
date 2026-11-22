@@ -1,0 +1,38 @@
+module Sable.Core
+
+/// Values moved between places: Rust's 'mem::swap', 'mem::replace' and
+/// 'mem::take'. Safe, and generally useful: what each does could be written
+/// with a temporary, and this says it in one call.
+///
+/// ```sable
+/// var a = "left"
+/// var b = "right"
+/// Memory.swap(&a, &b)
+/// assert(a == "right" && b == "left")
+/// let old = Memory.replace(&a, with: "new")
+/// assert(old == "right" && a == "new")
+/// var held: String? = "taken"
+/// assert(Memory.take(&held) == "taken" && held == none)
+/// ```
+public struct Memory {
+    /// The two values exchanged.
+    public static fn swap<T>(_ a: inout T, _ b: inout T) {
+        let held = a
+        a = b
+        b = held
+    }
+
+    /// The value put in the place, and the one that was there given back.
+    public static fn replace<T>(_ target: inout T, with value: T) -> T {
+        let old = target
+        target = value
+        return old
+    }
+
+    /// The value taken out of the place, which is left none.
+    public static fn take<T>(_ target: inout T?) -> T? {
+        let old = target
+        target = none
+        return old
+    }
+}

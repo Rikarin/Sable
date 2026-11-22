@@ -2041,6 +2041,21 @@ public static class SilBuiltins {
             return operands is [ClassType] ? new([operands[0]], SilType.Unit) : null;
         }
 
+        // A value at a raw address: copied out (raw_load, its alignment the
+        // type's; raw_load_unaligned, any), moved out, leaving the memory
+        // uninitialised (raw_take), or moved in, to memory that holds none
+        // (raw_init). What type is the declaration's: the result, or the
+        // value given.
+        if (name is "raw_load" or "raw_load_unaligned" or "raw_take") {
+            return operands is [var address] && address == SilType.Int && result is not null && result != SilType.Unit
+                ? new([SilType.Int], result)
+                : null;
+        }
+
+        if (name is "raw_init" or "raw_init_unaligned") {
+            return operands is [var address, var value] && address == SilType.Int ? new([SilType.Int, value], SilType.Unit) { Consumed = [1] } : null;
+        }
+
         // An address, as an integer: an actor's executor, as a hop names it.
         if (name == "address_to_int") {
             return operands is [AddressType] ? new([operands[0]], SilType.Int) : null;
@@ -2695,6 +2710,15 @@ public static class SilBuiltins {
         Add("metadata_is_subtype", SilType.Bool, SilType.Metadata, SilType.Metadata);
 
         Add("region_create", SilType.Region);
+
+        // Raw memory (RawPtr, NativeMemory): addresses as Ints. Room of so
+        // many bytes at an alignment, freed again; bytes moved, as memmove
+        // does, and filled with one byte. What a value of a type does at an
+        // address is the generic raw_load, raw_take and raw_init's (Resolve).
+        Add("raw_alloc", SilType.Int, SilType.Int, SilType.Int);
+        Add("raw_free", SilType.Unit, SilType.Int);
+        Add("raw_copy", SilType.Unit, SilType.Int, SilType.Int, SilType.Int);
+        Add("raw_fill", SilType.Unit, SilType.Int, SilType.U8, SilType.Int);
 
         // Emptying a region, all of it or back to a mark: what a 'region frame = pool' block took.
         Add("region_reset", SilType.Unit, SilType.Region);

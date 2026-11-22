@@ -1,0 +1,20 @@
+module Negative.RawPointers
+
+// What is done through a raw pointer is 'unsafe'; making one, stepping it
+// and comparing it are not. An UnsafeBuffer is made unsafely, then read
+// and written as any collection is. RawMemory is Sable.Core's own.
+
+fn outside(_ p: RawPtr<Int>) -> Int {
+    let q = RawPtr<Int>.allocate(count: 1) //! S3470 'allocate' is an 'unsafe fn'
+    q.initialize(to: 1) //! S3470 'initialize' is an 'unsafe fn'
+    q.deallocate() //! S3470 'deallocate' is an 'unsafe fn'
+    let view = UnsafeBuffer<Int>.viewing(p, count: 1) //! S3470 'viewing' is an 'unsafe fn'
+    let bytes = NativeMemory.allocate(byteCount: 8) //! S3470 'allocate' is an 'unsafe fn'
+    let _ = RawMemory.load(0) //! S3040 'load' is internal to 'Sable.Core'
+    return p.load() + view[0] //! S3470 'load' is an 'unsafe fn'
+}
+
+fn safe(_ p: RawPtr<Int>, _ buffer: UnsafeBuffer<Int>) -> Bool {
+    let q = RawPtr<Int>(address: 64) + 2
+    return q.distance(to: p) > 0 && !p.isNull && buffer.count == buffer.reduce(0) { $0 + $1 } && q < p
+}

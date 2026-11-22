@@ -1,0 +1,6 @@
+module Sable.Core
+
+/// What a pointer points at when it is not said: C's 'void', as in
+/// 'RawPtr<Opaque>' for a 'void *'. It has no values, so nothing is ever
+/// read through such a pointer; it is cast to a type first.
+public enum Opaque { }

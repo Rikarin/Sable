@@ -3597,7 +3597,9 @@ public sealed partial class Binder {
 
                 CheckIsolatedField(syntax, field);
 
-                return new BoundFieldAccess(syntax, receiver, field, substitution.Apply(field.Type));
+                return new BoundFieldAccess(syntax, receiver, field, substitution.Apply(field.Type)) {
+                    Substitution = receiver is null && field.IsStatic ? substitution : TypeSubstitution.Empty,
+                };
 
             case NamedTypeSymbol type:
                 return new BoundTypeExpression(syntax, type);
@@ -8508,7 +8510,7 @@ public sealed partial class Binder {
         if (!IsBuiltinOperand(left.Type) || !IsBuiltinOperand(right.Type) || stringOrdering) {
             if (FindUserOperator(symbol, left.Type, right.Type) is { } own) {
                 (left, right) = UserOperands(own, left, right);
-                return new BoundBinaryOperator(syntax, UserResultType(own.Method, left.Type), BinaryOperatorKind.UserDefined, left, right, own.Method);
+                return new BoundBinaryOperator(syntax, UserResultType(own.Method, left.Type, own.Owner), BinaryOperatorKind.UserDefined, left, right, own.Method);
             }
 
             var derivedFrom = kind switch {
@@ -8564,7 +8566,7 @@ public sealed partial class Binder {
             (left, right) = UserOperands(method, left, right);
             return new BoundBinaryOperator(
                 syntax,
-                UserResultType(method.Method, left.Type),
+                UserResultType(method.Method, left.Type, method.Owner),
                 BinaryOperatorKind.UserDefined,
                 left,
                 right,
@@ -8804,8 +8806,10 @@ public sealed partial class Binder {
         || type is OptionalTypeSymbol || type.IsError;
 
     /// <summary>What a user operator gives: 'Self' in a protocol's requirement is the operand's type.</summary>
-    static TypeSymbol UserResultType(FunctionSymbol method, TypeSymbol operand) =>
-        method.ReturnType is TypeParameterSymbol { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } ? operand : method.ReturnType;
+    static TypeSymbol UserResultType(FunctionSymbol method, TypeSymbol operand, TypeSubstitution? owner = null) =>
+        method.ReturnType is TypeParameterSymbol { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } ? operand
+        : owner is { IsEmpty: false } ? owner.Apply(method.ReturnType)
+        : method.ReturnType;
 
     /// <summary>
     ///     The protocols a type parameter, or an associated type read through
@@ -8837,7 +8841,8 @@ public sealed partial class Binder {
     ///     type each operand is passed as — its parameter's, seen through the
     ///     operand's type arguments — or null where it is passed as it is.
     /// </summary>
-    readonly record struct UserOperator(FunctionSymbol Method, TypeSymbol? LeftParameter, TypeSymbol? RightParameter);
+    /// <param name="Owner">What the type parameters of the generic type declaring it stand for: 'p + 2' on a RawPtr&lt;Int&gt; gives a RawPtr&lt;Int&gt;.</param>
+    readonly record struct UserOperator(FunctionSymbol Method, TypeSymbol? LeftParameter, TypeSymbol? RightParameter, TypeSubstitution? Owner = null);
 
     /// <summary>
     ///     The operands of a user operator, each converted to the parameter
@@ -8908,7 +8913,7 @@ public sealed partial class Binder {
                 if (_conversions.HasImplicitConversion(left, leftParameter)
                     && _conversions.HasImplicitConversion(right, rightParameter)
                     && (_compilation.GetDerivation(function) is not { } derivation || Conversions.Satisfies(named, derivation.Protocol))) {
-                    return new UserOperator(function, leftParameter, rightParameter);
+                    return new UserOperator(function, leftParameter, rightParameter, members);
                 }
             }
         }

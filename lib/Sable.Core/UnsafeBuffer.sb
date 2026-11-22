@@ -1,0 +1,111 @@
+module Sable.Core
+
+/// A run of 'count' initialised values in raw memory: Swift's
+/// UnsafeMutableBufferPointer, Rust's 'slice::from_raw_parts_mut'. Making
+/// one is 'unsafe' — the caller vouches that the memory is live and holds
+/// that many values for as long as the buffer is used — and once made it is
+/// a random-access, mutable collection whose every position is checked, so
+/// reading and writing it is not. It owns nothing: the memory is freed by
+/// whoever allocated it.
+///
+/// ```sable
+/// unsafe {
+///     let buffer = UnsafeBuffer<Int>.allocate(count: 4)
+///     defer { buffer.deallocate() }
+///     buffer.initialize(repeating: 0)
+///     var view = buffer
+///     view[2] = 7
+///     assert(view.reduce(0) { $0 + $1 } == 7)
+/// }
+/// ```
+public struct UnsafeBuffer<Element>: RandomAccessCollection, MutableCollection {
+    // Not public, so none is made but by 'viewing' or 'allocate'.
+    let first: RawPtr<Element>
+    let length: Int
+
+    /// The buffer of the 'count' values from 'start' on, which must be
+    /// initialised and stay live while the buffer is used.
+    public unsafe static fn viewing(_ start: RawPtr<Element>, count: Int) -> UnsafeBuffer<Element> {
+        precondition(count >= 0, "a buffer of \(count) values")
+        return UnsafeBuffer<Element> { first: start, length: count }
+    }
+
+    /// Room for 'count' values, none initialised yet: each is initialised
+    /// before the buffer is read, and the room is given back with
+    /// 'deallocate()'.
+    public unsafe static fn allocate(count: Int) -> UnsafeBuffer<Element> {
+        return UnsafeBuffer<Element> { first: RawPtr<Element>.allocate(count: count), length: count }
+    }
+
+    /// The room 'allocate' gave, given back. The values in it are not
+    /// destroyed: 'deinitialize()' does that.
+    public unsafe fn deallocate() {
+        first.deallocate()
+    }
+
+    /// Every place given a copy of the value, over whatever was there.
+    public unsafe fn initialize(repeating value: Element) {
+        first.initialize(repeating: value, count: length)
+    }
+
+    /// Every value destroyed: the memory holds none after.
+    public unsafe fn deinitialize() {
+        first.deinitialize(count: length)
+    }
+
+    /// Where the buffer starts.
+    public var start: RawPtr<Element> => first
+
+    /// How many values the buffer has.
+    public var count: Int => length
+
+    /// An iterator from the first value.
+    public fn makeIterator() -> UnsafeBufferIterator<Element> {
+        return UnsafeBufferIterator<Element> { buffer: self, position: 0 }
+    }
+
+    public var startIndex: Int => 0
+
+    public var endIndex: Int => length
+
+    public fn index(after position: Int) -> Int => position + 1
+
+    public fn index(before position: Int) -> Int => position - 1
+
+    public fn index(_ position: Int, offsetBy distance: Int) -> Int => position + distance
+
+    public fn distance(from start: Int, to end: Int) -> Int => end - start
+
+    /// The value at a position, checked against the count: read as a copy,
+    /// written in place of the one there.
+    public subscript(position: Int) -> Element {
+        get {
+            precondition(position >= 0 && position < length, "index \(position) is out of range for count \(length)")
+            unsafe {
+                return first.load(at: position)
+            }
+        }
+        set {
+            precondition(position >= 0 && position < length, "index \(position) is out of range for count \(length)")
+            unsafe {
+                first.store(newValue, at: position)
+            }
+        }
+    }
+}
+
+/// Gives a buffer's values, from the first.
+public struct UnsafeBufferIterator<Element>: Iterator {
+    let buffer: UnsafeBuffer<Element>
+    var position: Int
+
+    /// The next value, or none at the end.
+    public mutating fn next() -> Element? {
+        if position >= buffer.count {
+            return none
+        }
+        let value = buffer[position]
+        position += 1
+        return value
+    }
+}

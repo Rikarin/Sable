@@ -483,6 +483,8 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_witness_table_required(ptr, ptr)
                                         declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
                                         declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
+                                        declare ptr @sable_raw_alloc(i64, i64)
+                                        declare void @sable_raw_free(ptr)
 
                                         """;
 

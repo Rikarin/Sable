@@ -2195,6 +2195,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return Alive((HeapObject)operands[0]!).Type.IsSubclassOf(target);
         }
 
+        if (builtin.Name.StartsWith("raw_", StringComparison.Ordinal)) {
+            return RawBuiltin(builtin, operands);
+        }
+
         if (builtin.Name.StartsWith("access_", StringComparison.Ordinal)) {
             Access(builtin.Name, (IReference)operands[0]!);
             return null;

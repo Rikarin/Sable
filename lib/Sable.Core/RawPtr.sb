@@ -1,0 +1,166 @@
+module Sable.Core
+
+// Raw pointers (SYNTAX.md §23): an address, and the type of what is there.
+// Making one, comparing, and stepping it are safe, as an Int's arithmetic
+// is; what is done through one — allocating, reading, writing, freeing — is
+// 'unsafe', its promise the caller's: the memory is the program's, live, and
+// holds a value of the type where one is read. Nothing counts what a pointer
+// points at, or frees it: memory allocated is freed with 'deallocate()'.
+
+/// The address of memory that holds, or has room for, values of 'Pointee':
+/// Swift's UnsafeMutablePointer, Rust's '*mut T', C's 'T *'. It may be null.
+///
+/// ```sable
+/// unsafe {
+///     let p = RawPtr<Int>.allocate(count: 3)
+///     defer { p.deallocate() }
+///     p.initialize(to: 10, at: 0)
+///     p.initialize(to: 20, at: 1)
+///     p.initialize(to: 30, at: 2)
+///     assert(p.load(at: 1) == 20)
+///     assert(p.advanced(by: 2).load() == 30)
+/// }
+/// ```
+public struct RawPtr<Pointee>: Hashable, Comparable, Debug {
+    /// Where the memory is, as an integer: 0 for the null pointer.
+    public let address: Int
+
+    /// The pointer at an address. Making one is safe; using it is not.
+    public init(address: Int) {
+        self.address = address
+    }
+
+    /// The pointer at nothing: C's NULL.
+    public static var null: RawPtr<Pointee> => RawPtr<Pointee>(address: 0)
+
+    /// Whether this is the null pointer.
+    public var isNull: Bool => address == 0
+
+    /// Room for 'count' values, aligned for them, holding none yet: each is
+    /// initialised before it is read, and the room given back with
+    /// 'deallocate()'. Traps when there is no room.
+    public unsafe static fn allocate(count: Int) -> RawPtr<Pointee> {
+        precondition(count >= 0, "cannot allocate \(count) values")
+        let bytes = count * (Pointee.self as Type).stride
+        return RawPtr<Pointee>(address: RawMemory.allocate(bytes, (Pointee.self as Type).alignment))
+    }
+
+    /// The room 'allocate' gave, given back: what it holds should be
+    /// deinitialised first, or it is never destroyed.
+    public unsafe fn deallocate() {
+        RawMemory.free(address)
+    }
+
+    /// The pointer 'count' values on (or back, for a negative count).
+    public fn advanced(by count: Int) -> RawPtr<Pointee> {
+        return RawPtr<Pointee>(address: address + count * (Pointee.self as Type).stride)
+    }
+
+    /// How many values on 'other' is from this pointer.
+    public fn distance(to other: RawPtr<Pointee>) -> Int {
+        return (other.address - address) / (Pointee.self as Type).stride
+    }
+
+    /// The same address, as a pointer to another type.
+    public fn cast<U>(to type: U.Type) -> RawPtr<U> {
+        return RawPtr<U>(address: address)
+    }
+
+    /// A copy of the value 'index' places on, which must be initialised.
+    public unsafe fn load(at index: Int = 0) -> Pointee {
+        return RawMemory.load(advanced(by: index).address)
+    }
+
+    /// The value put 'index' places on, where there is none yet: nothing
+    /// there is destroyed.
+    public unsafe fn initialize(to value: Pointee, at index: Int = 0) {
+        RawMemory.initialize(advanced(by: index).address, value)
+    }
+
+    /// The first 'count' places each given a copy of the value.
+    public unsafe fn initialize(repeating value: Pointee, count: Int) {
+        var index = 0
+        while index < count {
+            RawMemory.initialize(advanced(by: index).address, value)
+            index += 1
+        }
+    }
+
+    /// The value 'index' places on replaced: the one there, which must be
+    /// initialised, is destroyed.
+    public unsafe fn store(_ value: Pointee, at index: Int = 0) {
+        let at = advanced(by: index).address
+        let _: Pointee = RawMemory.take(at)
+        RawMemory.initialize(at, value)
+    }
+
+    /// The value 'index' places on, moved out: the place holds none after.
+    public unsafe fn move(at index: Int = 0) -> Pointee {
+        return RawMemory.take(advanced(by: index).address)
+    }
+
+    /// The first 'count' values destroyed: the places hold none after.
+    public unsafe fn deinitialize(count: Int = 1) {
+        var index = 0
+        while index < count {
+            let _: Pointee = RawMemory.take(advanced(by: index).address)
+            index += 1
+        }
+    }
+
+    /// The first 'count' places given the values from 'source', moved: the
+    /// source's places hold none after. The two runs may overlap.
+    public unsafe fn moveInitialize(from source: RawPtr<Pointee>, count: Int) {
+        precondition(count >= 0, "cannot move \(count) values")
+        RawMemory.copy(to: address, from: source.address, count * (Pointee.self as Type).stride)
+    }
+
+    /// A value of another type read from the bytes 'byteOffset' on, aligned
+    /// or not: its bits, as they lie.
+    ///
+    /// ```sable
+    /// unsafe {
+    ///     let p = RawPtr<U8>.allocate(count: 8)
+    ///     defer { p.deallocate() }
+    ///     p.storeBytes(of: 0x0102_0304 as U32, byteOffset: 1)
+    ///     assert(p.load(at: 1) == 4)
+    ///     assert(p.load(as: U32.self, byteOffset: 1) == 0x0102_0304)
+    /// }
+    /// ```
+    public unsafe fn load<U>(as type: U.Type, byteOffset: Int = 0) -> U {
+        return RawMemory.loadUnaligned(address + byteOffset)
+    }
+
+    /// A value of another type written as its bits to the bytes
+    /// 'byteOffset' on, aligned or not, over whatever they held.
+    public unsafe fn storeBytes<U>(of value: U, byteOffset: Int = 0) {
+        RawMemory.initializeUnaligned(address + byteOffset, value)
+    }
+
+    /// The pointer 'count' values on.
+    public operator + (pointer: RawPtr<Pointee>, count: Int) -> RawPtr<Pointee> {
+        return pointer.advanced(by: count)
+    }
+
+    /// The pointer 'count' values back.
+    public operator - (pointer: RawPtr<Pointee>, count: Int) -> RawPtr<Pointee> {
+        return pointer.advanced(by: -count)
+    }
+
+    public operator == (lhs: RawPtr<Pointee>, rhs: RawPtr<Pointee>) -> Bool {
+        return lhs.address == rhs.address
+    }
+
+    public operator < (lhs: RawPtr<Pointee>, rhs: RawPtr<Pointee>) -> Bool {
+        return lhs.address < rhs.address
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(address)
+    }
+
+    /// The address in hexadecimal: "0x7f0012a0", or "null".
+    public fn debugDescription() -> String {
+        return isNull ? "null" : "0x\(address:x)"
+    }
+}

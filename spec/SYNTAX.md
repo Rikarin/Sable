@@ -1839,12 +1839,23 @@ matched from another module needs `default` unless it is `@frozen` (docs/03
 unsafe {
     let p = RawPtr<U8>.allocate(count: 1024)
     defer { p.deallocate() }
-    p.store(0xFF, at: 0)
-    let v = p.load(U32.self, at: 4)
+    p.initialize(to: 0xFF, at: 0)
+    let v = p.load(as: U32.self, byteOffset: 4)
+    let buf = UnsafeBuffer<F32>.viewing(ptr, count: n)
 }
-
-let buf = UnsafeBuffer<F32>(start: ptr, count: n)
 ```
+
+Sable.Core's raw memory: `RawPtr<T>`, an address and the type of what is
+there (`RawPtr<Opaque>` for C's `void *`), and `NonNull<T>`, one that is not
+null; `UnsafeBuffer<T>`, a run of values that, once made, is a checked
+random-access collection; `NativeMemory`, bytes at any alignment;
+`MemoryLayout<T>`'s `size`, `stride` and `alignment`; and `Memory.swap`,
+`replace` and `take`, which are safe. Making a pointer, stepping it and
+comparing it are safe; allocating, reading, writing and freeing through one
+are `unsafe fn`s. Nothing counts what a pointer points at: a value put in raw
+memory is kept until it is moved out or deinitialised. There is no
+`Uninitialized<T>` (Rust's `MaybeUninit`): memory from `allocate` holds no
+value until one is put there, which serves the same end.
 
 `unsafe` blocks are required for raw pointers, unchecked casts between
 incompatible layouts, and FFI with non-`@safe`-annotated signatures. Inside an

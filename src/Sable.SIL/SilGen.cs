@@ -7358,8 +7358,12 @@ public sealed partial class SilGen {
                     return StaticPropertyWitness(access, on);
 
                 // 'F64.pi': a static property's getter, called with nothing.
+                // On a generic type named with its arguments, 'MemoryLayout<Int>.size',
+                // the getter is the instance for them.
                 case BoundFieldAccess { Field: { IsComputed: true, IsStatic: true } } access when generator.GetterOf(access.Field) is { } staticGetter:
-                    return Expression(new BoundCall(access.Syntax, null, staticGetter, [], access.Type));
+                    return Expression(new BoundCall(access.Syntax, null, staticGetter, [], access.Type) {
+                        Substitution = access.Substitution,
+                    });
 
                 case BoundFieldAccess { Receiver: { } receiver, Field.IsComputed: true } access:
                     return ComputedProperty(access, receiver);
@@ -10517,6 +10521,12 @@ public sealed partial class SilGen {
                     return UnitValue.Instance;
                 }
 
+                // A value at a raw address (RawMemory.sb): the type is the
+                // call's, as specialised here — the result, or the value given.
+                if (owner is { Name: "RawMemory", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } }) {
+                    return RawMemoryIntrinsic(call, callee.Name);
+                }
+
                 // An inline-layout value's bytes (SilGen.Inline.cs).
                 if (owner is not null && ReferenceEquals(owner, Core.Bytes)) {
                     return BytesOf(call);
@@ -11848,6 +11858,42 @@ public sealed partial class SilGen {
             Emit(new StoreInst(Owned(allocated), room, StoreKind.Init));
             End(region);
             return room;
+        }
+
+        /// <summary>
+        ///     <c>RawMemory.load(address)</c> and the rest, Sable.Core's
+        ///     <c>@intrinsic</c>s under <c>RawPtr</c>: a value of the call's
+        ///     type copied out of the memory at an address, moved out of it,
+        ///     or moved into it — the builtins <c>raw_load</c>, <c>raw_take</c>
+        ///     and <c>raw_init</c>, of that type.
+        /// </summary>
+        SilValue? RawMemoryIntrinsic(BoundCall call, string name) {
+            var builtin = name switch {
+                "load" => "raw_load",
+                "loadUnaligned" => "raw_load_unaligned",
+                "take" => "raw_take",
+                "initialize" => "raw_init",
+                "initializeUnaligned" => "raw_init_unaligned",
+                _ => null,
+            };
+            if (builtin is null || call.Arguments.Length != (builtin.StartsWith("raw_init", StringComparison.Ordinal) ? 2 : 1)) {
+                return Missing(call, $"the intrinsic 'RawMemory.{name}'");
+            }
+
+            if (Expression(call.Arguments[0]) is not { } address) {
+                return null;
+            }
+
+            if (call.Arguments.Length == 1) {
+                return LowerType(call.Type) is { } type ? Emit(new BuiltinInst(builtin, type, address)) : Missing(call, $"the type '{call.Type.ToDisplayString()}' in raw memory");
+            }
+
+            if (Expression(call.Arguments[1]) is not { } value) {
+                return null;
+            }
+
+            Emit(new BuiltinInst(builtin, SilType.Unit, address, Owned(value)));
+            return UnitValue.Instance;
         }
 
         /// <summary>

@@ -1,0 +1,53 @@
+module UnsafeBufferTests
+
+// UnsafeBuffer (Sable.Core): a run of values in raw memory, a mutable
+// random-access collection once made.
+
+import Sable.Testing
+
+@test
+fn aBufferIsACollectionOfItsValues() {
+    unsafe {
+        let buffer = UnsafeBuffer<Int>.allocate(count: 4)
+        defer {
+            buffer.deallocate()
+        }
+        buffer.initialize(repeating: 0)
+        var view = buffer
+        view[0] = 3
+        view[2] = 7
+        assertEqual(view.count, 4)
+        assert(view.toArray() == [3, 0, 7, 0])
+        assertEqual(view.reduce(0) { $0 + $1 }, 10)
+        assert(view.reversed().toArray() == [0, 7, 0, 3])
+        assertEqual(view.firstIndex(of: 7), 2)
+        view.swapAt(0, 3)
+        assert(buffer.toArray() == [0, 0, 7, 3])
+    }
+}
+
+@test
+fn aBufferViewsMemoryItDoesNotOwn() {
+    unsafe {
+        let start = RawPtr<String>.allocate(count: 3)
+        defer {
+            start.deallocate()
+        }
+        start.initialize(to: "x")
+        start.initialize(to: "y", at: 1)
+        start.initialize(to: "z", at: 2)
+        let view = UnsafeBuffer<String>.viewing(start + 1, count: 2)
+        assert(view.toArray() == ["y", "z"])
+        assertEqual(view.start, start + 1)
+        start.deinitialize(count: 3)
+    }
+}
+
+@test
+fn anEmptyBufferHasNothing() {
+    unsafe {
+        let view = UnsafeBuffer<Int>.viewing(RawPtr<Int>.null, count: 0)
+        assert(view.isEmpty)
+        assert(view.toArray() == [] as Int[>..])
+    }
+}

@@ -524,3 +524,40 @@ void sable_release_last(void *pointer) {
         object_free(object);
     }
 }
+
+// ---- Raw memory ----------------------------------------------------------
+
+// RawPtr's and NativeMemory's (lib/Sable.Core/RawPtr.sb): room of any size
+// at any power-of-two alignment, from malloc, with the block malloc gave
+// recorded just before the room so that it can be given back. Not an object:
+// counted by no one, and freed only when the program says so.
+
+void *sable_raw_alloc(int64_t size, int64_t alignment) {
+    if (size < 0) {
+        sable_trap("cannot allocate a negative number of bytes");
+    }
+    if (alignment <= 0 || (alignment & (alignment - 1)) != 0) {
+        sable_trap("an allocation's alignment must be a power of two");
+    }
+    if (alignment < (int64_t)sizeof(void *)) {
+        alignment = (int64_t)sizeof(void *);
+    }
+    if (size > INT64_MAX - alignment - (int64_t)sizeof(void *)) {
+        sable_trap("out of memory");
+    }
+
+    char *block = malloc((size_t)(size + alignment + (int64_t)sizeof(void *)));
+    if (block == NULL) {
+        sable_trap("out of memory");
+    }
+
+    uintptr_t room = ((uintptr_t)block + sizeof(void *) + (uintptr_t)alignment - 1) & ~((uintptr_t)alignment - 1);
+    ((void **)room)[-1] = block;
+    return (void *)room;
+}
+
+void sable_raw_free(void *room) {
+    if (room != NULL) {
+        free(((void **)room)[-1]);
+    }
+}

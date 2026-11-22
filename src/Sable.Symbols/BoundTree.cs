@@ -126,6 +126,13 @@ public sealed class BoundFieldAccess(
     public FieldSymbol Field { get; } = field;
 
     /// <summary>
+    ///     What the type parameters of the type a static property is read on
+    ///     stand for: 'MemoryLayout&lt;Int&gt;.size' reads Int's. Empty for any
+    ///     other access, whose receiver's type says.
+    /// </summary>
+    public TypeSubstitution Substitution { get; init; } = TypeSubstitution.Empty;
+
+    /// <summary>
     ///     '?.' to a field that is optional itself: the chain's result is the
     ///     field's value, not that value wrapped again — 'user?.address' of
     ///     an 'Address?' field is an 'Address?', as 'Address??' would be

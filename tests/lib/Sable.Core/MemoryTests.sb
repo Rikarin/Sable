@@ -1,0 +1,63 @@
+module MemoryTests
+
+// MemoryLayout, Memory, NativeMemory and NonNull (Sable.Core).
+
+import Sable.Testing
+
+struct Pair {
+    let a: I32
+    let b: U8
+}
+
+@test
+fn aTypesLayoutIsItsSizeStrideAndAlignment() {
+    assertEqual(MemoryLayout<Int>.size, 8)
+    assertEqual(MemoryLayout<Int>.alignment, 8)
+    assertEqual(MemoryLayout<U8>.size, 1)
+    assertEqual(MemoryLayout<U16>.stride, 2)
+    assertEqual(MemoryLayout<Pair>.size, 8)
+    assertEqual(MemoryLayout<Pair>.stride, 8)
+    assertEqual(MemoryLayout<Pair>.alignment, 4)
+    assertEqual(MemoryLayout<F64>.stride, 8)
+}
+
+@test
+fn valuesAreSwappedReplacedAndTaken() {
+    var a = "left"
+    var b = "right"
+    Memory.swap(&a, &b)
+    assertEqual(a, "right")
+    assertEqual(b, "left")
+    let old = Memory.replace(&a, with: "new")
+    assertEqual(old, "right")
+    assertEqual(a, "new")
+    var held: String? = "taken"
+    assertEqual(Memory.take(&held), "taken")
+    assert(held == none)
+    assert(Memory.take(&held) == none)
+}
+
+@test
+fn nativeMemoryIsAllocatedAlignedAndZeroed() {
+    unsafe {
+        let bytes = NativeMemory.allocate(byteCount: 64, alignment: 64, zeroed: true)
+        defer {
+            NativeMemory.deallocate(bytes)
+        }
+        assertEqual(bytes.address % 64, 0)
+        assertEqual(bytes.load(at: 63), 0)
+        NativeMemory.fill(bytes, with: 0xAB, byteCount: 4)
+        assertEqual(bytes.load(as: U32.self), 0xABAB_ABAB)
+        NativeMemory.copy(from: bytes, to: bytes + 8, byteCount: 4)
+        assertEqual(bytes.load(as: U32.self, byteOffset: 8), 0xABAB_ABAB)
+        NativeMemory.deallocate(RawPtr<U8>.null)
+    }
+}
+
+@test
+fn aNonNullPointerIsNeverNull() {
+    assert(NonNull<Int>.from(RawPtr<Int>.null) == none)
+    let found = NonNull<Int>.from(RawPtr<Int>(address: 64))
+    assertEqual(found!.pointer.address, 64)
+    assertEqual(found!.debugDescription(), "0x40")
+}

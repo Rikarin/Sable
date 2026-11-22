@@ -1,0 +1,45 @@
+module Sable.Core
+
+/// Memory by the byte, from the system: .NET's NativeMemory, C's
+/// 'aligned_alloc' and 'free'. Every member is 'unsafe': nothing frees what
+/// is allocated but 'deallocate', and nothing checks that what is freed was
+/// allocated, or is not used after.
+///
+/// ```sable
+/// unsafe {
+///     let bytes = NativeMemory.allocate(byteCount: 16, alignment: 16, zeroed: true)
+///     defer { NativeMemory.deallocate(bytes) }
+///     assert(bytes.address % 16 == 0)
+///     assert(bytes.load(at: 15) == 0)
+/// }
+/// ```
+public struct NativeMemory {
+    /// Room for 'byteCount' bytes at an address that is a multiple of
+    /// 'alignment', a power of two; its bytes zero when 'zeroed', otherwise
+    /// as they come. Traps when there is no room.
+    public unsafe static fn allocate(byteCount: Int, alignment: Int = 16, zeroed: Bool = false) -> RawPtr<U8> {
+        let address = RawMemory.allocate(byteCount, alignment)
+        if zeroed {
+            RawMemory.fill(address, 0, byteCount)
+        }
+        return RawPtr<U8>(address: address)
+    }
+
+    /// The room 'allocate' gave, given back. Freeing null does nothing.
+    public unsafe static fn deallocate<T>(_ pointer: RawPtr<T>) {
+        RawMemory.free(pointer.address)
+    }
+
+    /// 'byteCount' bytes copied from 'source' to 'target', as their bits:
+    /// C's 'memmove', so the runs may overlap.
+    public unsafe static fn copy<T, U>(from source: RawPtr<T>, to target: RawPtr<U>, byteCount: Int) {
+        precondition(byteCount >= 0, "copying \(byteCount) bytes")
+        RawMemory.copy(to: target.address, from: source.address, byteCount)
+    }
+
+    /// 'byteCount' bytes from 'target' on, each set to the byte: C's 'memset'.
+    public unsafe static fn fill<T>(_ target: RawPtr<T>, with byte: U8, byteCount: Int) {
+        precondition(byteCount >= 0, "filling \(byteCount) bytes")
+        RawMemory.fill(target.address, byte, byteCount)
+    }
+}

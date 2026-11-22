@@ -1,0 +1,36 @@
+module Sable.Core
+
+/// A pointer that is not null: Rust's 'NonNull'. Made from a RawPtr only
+/// where it is not null, so code given one need not ask again.
+///
+/// ```sable
+/// assert(NonNull<Int>.from(RawPtr<Int>.null) == none)
+/// assert(NonNull<Int>.from(RawPtr<Int>(address: 64))!.pointer.address == 64)
+/// ```
+public struct NonNull<Pointee>: Hashable, Debug {
+    /// The pointer, which is not null.
+    public let pointer: RawPtr<Pointee>
+
+    // Made only by 'from', which checks.
+    init(pointer: RawPtr<Pointee>) {
+        self.pointer = pointer
+    }
+
+    /// The pointer, or none where it is null.
+    public static fn from(_ pointer: RawPtr<Pointee>) -> NonNull<Pointee>? {
+        return pointer.isNull ? none : NonNull<Pointee>(pointer: pointer)
+    }
+
+    public operator == (lhs: NonNull<Pointee>, rhs: NonNull<Pointee>) -> Bool {
+        return lhs.pointer == rhs.pointer
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(pointer)
+    }
+
+    /// The address in hexadecimal.
+    public fn debugDescription() -> String {
+        return pointer.debugDescription()
+    }
+}

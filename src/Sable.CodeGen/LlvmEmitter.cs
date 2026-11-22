@@ -1771,6 +1771,13 @@ public sealed partial class LlvmEmitter {
             }
         }
 
+        /// <summary>A raw address, an Int, as a pointer.</summary>
+        string RawAddress(string address) {
+            var pointer = Fresh();
+            Line($"{pointer} = inttoptr i64 {address} to ptr");
+            return pointer;
+        }
+
         /// <summary>An opaque value moved from one place to another: its bits, as every type's take is.</summary>
         void OpaqueMove(SilType type, string destination, string source) =>
             Line($"call void @llvm.memmove.p0.p0.i64(ptr {destination}, ptr {source}, i64 {OpaqueSize(type)}, i1 false)");
@@ -3424,6 +3431,68 @@ public sealed partial class LlvmEmitter {
                     Share(builtin.Operands[1].Type, operands[1]);
                     Line($"br label %{after}");
                     Continue(after);
+                    return;
+                }
+
+                // Raw memory (RawPtr, NativeMemory): addresses as Ints. The
+                // runtime allocates at any alignment; bytes are moved and
+                // filled by LLVM's own memmove and memset.
+                case "raw_alloc": {
+                    var room = Fresh();
+                    Line($"{room} = call ptr @sable_raw_alloc(i64 {operands[0]}, i64 {operands[1]})");
+                    Line($"{Result()} = ptrtoint ptr {room} to i64");
+                    return;
+                }
+
+                case "raw_free":
+                    Line($"call void @sable_raw_free(ptr {RawAddress(operands[0])})");
+                    return;
+
+                case "raw_copy":
+                    Line($"call void @llvm.memmove.p0.p0.i64(ptr {RawAddress(operands[0])}, ptr {RawAddress(operands[1])}, i64 {operands[2]}, i1 false)");
+                    return;
+
+                case "raw_fill":
+                    Line($"call void @llvm.memset.p0.i64(ptr {RawAddress(operands[0])}, i8 {operands[1]}, i64 {operands[2]}, i1 false)");
+                    return;
+
+                // A value at an address: copied out (retained), moved out (as
+                // it is), or moved in. An opaque one through its buffer, by its
+                // value witnesses. Aligned as its type is, or to a byte.
+                case "raw_load" or "raw_load_unaligned" or "raw_take": {
+                    var at = RawAddress(operands[0]);
+                    if (SilType.IsIndirect(builtin.Type)) {
+                        var buffer = OpaqueBuffer(builtin.Type);
+                        _names[builtin] = buffer;
+                        if (builtin.Name == "raw_take") {
+                            OpaqueMove(builtin.Type, buffer, at);
+                        } else {
+                            OpaqueWitness(builtin.Type, CopyWitness, buffer, at);
+                        }
+
+                        return;
+                    }
+
+                    var align = builtin.Name == "raw_load_unaligned" ? 1 : Math.Max(TypeLayout.Align(builtin.Type), 1);
+                    var value = Result();
+                    Line($"{value} = load {Type(builtin.Type)}, ptr {at}, align {align}");
+                    if (builtin.Name != "raw_take") {
+                        Own(true, builtin.Type, value);
+                    }
+
+                    return;
+                }
+
+                case "raw_init" or "raw_init_unaligned": {
+                    var at = RawAddress(operands[0]);
+                    var type = builtin.Operands[1].Type;
+                    if (SilType.IsIndirect(type)) {
+                        OpaqueMove(type, at, operands[1]);
+                        return;
+                    }
+
+                    var align = builtin.Name == "raw_init_unaligned" ? 1 : Math.Max(TypeLayout.Align(type), 1);
+                    Line($"store {Type(type)} {operands[1]}, ptr {at}, align {align}");
                     return;
                 }
 

@@ -1,0 +1,23 @@
+module Sable.Core
+
+/// How a type's values lie in memory: Swift's MemoryLayout, Rust's
+/// 'size_of' and 'align_of'. Read from the type's metadata, which natively
+/// is a constant, so each is a constant once the type is known.
+///
+/// ```sable
+/// assert(MemoryLayout<Int>.size == 8)
+/// assert(MemoryLayout<U8>.alignment == 1)
+/// assert(MemoryLayout<I32?>.stride == 8)
+/// ```
+public struct MemoryLayout<T> {
+    /// The bytes a value takes up, its padding included: a struct's is
+    /// rounded up to its alignment, as C's is.
+    public static var size: Int => (T.self as Type).size
+
+    /// The bytes from one value to the next in memory: the size rounded up
+    /// to the alignment. What an array of them takes per element.
+    public static var stride: Int => (T.self as Type).stride
+
+    /// What a value's address must be a multiple of.
+    public static var alignment: Int => (T.self as Type).alignment
+}

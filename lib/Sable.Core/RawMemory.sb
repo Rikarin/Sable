@@ -1,0 +1,48 @@
+module Sable.Core
+
+// What RawPtr, UnsafeBuffer and NativeMemory are made of: memory as the
+// program asks for it, named by its address as an Int. The compiler writes
+// the generic members for the type each call is of (raw_load, raw_take,
+// raw_init); the rest are builtins of fixed signature. Not public: a program
+// reaches raw memory through RawPtr, in an 'unsafe' block.
+
+struct RawMemory {
+    /// Room for 'byteCount' bytes, its address a multiple of 'alignment' (a
+    /// power of two), holding nothing yet. Traps when there is no room.
+    @builtin("raw_alloc")
+    unsafe static fn allocate(_ byteCount: Int, _ alignment: Int) -> Int
+
+    /// The room given back. Freeing 0 does nothing.
+    @builtin("raw_free")
+    unsafe static fn free(_ address: Int)
+
+    /// 'byteCount' bytes copied from one address to another, as their bits:
+    /// the runs may overlap.
+    @builtin("raw_copy")
+    unsafe static fn copy(to target: Int, from source: Int, _ byteCount: Int)
+
+    /// 'byteCount' bytes, each set to the byte.
+    @builtin("raw_fill")
+    unsafe static fn fill(_ target: Int, _ byte: U8, _ byteCount: Int)
+
+    /// A copy of the value at the address, which is aligned for it.
+    @intrinsic
+    unsafe static fn load<T>(_ address: Int) -> T
+
+    /// A copy of the value at the address, aligned or not.
+    @intrinsic
+    unsafe static fn loadUnaligned<T>(_ address: Int) -> T
+
+    /// The value at the address, moved out: the memory holds none after.
+    @intrinsic
+    unsafe static fn take<T>(_ address: Int) -> T
+
+    /// The value moved to the address, which holds none: nothing there is
+    /// destroyed.
+    @intrinsic
+    unsafe static fn initialize<T>(_ address: Int, _ value: T)
+
+    /// The value moved to the address, aligned or not, which holds none.
+    @intrinsic
+    unsafe static fn initializeUnaligned<T>(_ address: Int, _ value: T)
+}

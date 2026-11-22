@@ -57,9 +57,9 @@ public sealed partial class Binder {
                 Report(ErrorCode.ERR_FormatOptionNotForType, "'?' writes the value as Debug describes it: a sign, '#', '0' or a separator means nothing to it");
             } else if (integer && spec.Precision is not null) {
                 Report(ErrorCode.ERR_FormatOptionNotForType, $"a precision means nothing to '{name}', an integer: it has no digits after a point");
-            } else if (integer && spec.Alternate && spec.Kind is not ("Hex" or "UpperHex" or "Octal" or "Binary")) {
+            } else if (integer && spec.Alternate && !spec.IsPrettyDebug && spec.Kind is not ("Hex" or "UpperHex" or "Octal" or "Binary")) {
                 Report(ErrorCode.ERR_FormatOptionNotForType, "'#' writes a radix's prefix, '0x', '0o' or '0b', so it goes with x, X, o or b");
-            } else if (!integer && spec.Alternate && spec.Kind is not ("General" or "UpperGeneral")) {
+            } else if (!integer && spec.Alternate && !spec.IsPrettyDebug && spec.Kind is not ("General" or "UpperGeneral")) {
                 Report(ErrorCode.ERR_FormatOptionNotForType, "'#' keeps the trailing zeros 'g' and 'G' drop, so it goes with g or G");
             }
 

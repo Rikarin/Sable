@@ -1,0 +1,49 @@
+module DebugTests
+
+// Debug for the collections (Sable.Collections): each as its name and its
+// elements.
+
+import Sable.Collections
+import Sable.Testing
+
+@derive(Debug)
+struct Inventory {
+    let names: List<String>
+    let ids: Set<Int>
+}
+
+@test
+fn eachCollectionDescribesItsElements() {
+    var list = List<String>()
+    list.append("a")
+    assertEqual("\(list)", "List([\"a\"])")
+    assertEqual("\(Set<Int>([3, 1]))", "Set([3, 1])")
+    let queue = PriorityQueue<Int>()
+    queue.push(5)
+    queue.push(2)
+    assertEqual("\(queue)", "PriorityQueue([2, 5])")
+    let bits = BitSet()
+    bits.insert(5)
+    bits.insert(1)
+    assertEqual("\(bits)", "BitSet([1, 5])")
+    let ordered = OrderedDictionary<String, Int>()
+    assertEqual("\(ordered)", "OrderedDictionary([:])")
+    ordered.set("x", 1)
+    assertEqual("\(ordered)", "OrderedDictionary([\"x\": 1])")
+    let deque = Deque<Int>()
+    deque.append(1)
+    deque.prepend(0)
+    assertEqual("\(deque)", "Deque([0, 1])")
+    var tags = HashingSet<String>(hashing: .by { $0.lowercased() })
+    tags.insert("A")
+    assertEqual("\(tags)", "HashingSet([\"A\"])")
+}
+
+@test
+fn aStructOfCollectionsDerivesDebugAndIsLaidOut() {
+    var names = List<String>()
+    names.append("pen")
+    let inventory = Inventory(names: names, ids: Set<Int>([7]))
+    assertEqual("\(inventory)", "Inventory(names: List([\"pen\"]), ids: Set([7]))")
+    assertEqual("\(inventory:#?)", "Inventory(\n    names: List([\n        \"pen\",\n    ]),\n    ids: Set([\n        7,\n    ]),\n)")
+}

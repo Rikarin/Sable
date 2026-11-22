@@ -1,0 +1,95 @@
+module DebugCollectionsTests
+
+// Debug for arrays and dictionaries, Formattable for optionals, '#?' laid
+// out over lines, and interpolations written into a TextWriter in pieces
+// (Sable.Core).
+
+import Sable.Testing
+
+@derive(Debug)
+struct Order {
+    let id: Int
+    let items: String[>..]
+    let prices: [String: F64]
+    let note: String?
+}
+
+fn described<T: Debug>(_ value: T) -> String {
+    return value.debugDescription()
+}
+
+struct Pieces: TextWriter {
+    var count = 0
+    var text = ""
+
+    mutating fn write(_ piece: String) {
+        count += 1
+        text = text + piece
+    }
+}
+
+fn writeTotal<W: TextWriter>(_ writer: inout W, _ n: Int) {
+    writer.write("n=\(n:04) [\(n:x)]")
+}
+
+@test
+fn arraysAndDictionariesDescribeTheirValues() {
+    assertEqual(described([1, 2]), "[1, 2]")
+    assertEqual(described(["a", "b\n"]), "[\"a\", \"b\\n\"]")
+    assertEqual(described([[1], []] as Int[>..][>..]), "[[1], []]")
+    assertEqual(described(["k": [1.5]]), "[\"k\": [1.5]]")
+    assertEqual(described([:] as [Int: Int]), "[:]")
+    let three: Int? = 3
+    let missing: Int? = none
+    assertEqual(described([three, missing]), "[3, none]")
+}
+
+@test
+fn aStructWithCollectionsDerivesDebug() {
+    let order = Order(id: 7, items: ["pen"], prices: ["pen": 1.25], note: none)
+    assertEqual("\(order)", "Order(id: 7, items: [\"pen\"], prices: [\"pen\": 1.25], note: none)")
+    assertEqual("\(order:#?)", "Order(\n    id: 7,\n    items: [\n        \"pen\",\n    ],\n    prices: [\n        \"pen\": 1.25,\n    ],\n    note: none,\n)")
+}
+
+@test
+fn prettyDebugLaysTextOutOverLines() {
+    assertEqual(FormatSpec.prettyDebug("[1, 2]"), "[\n    1,\n    2,\n]")
+    assertEqual(FormatSpec.prettyDebug("[]"), "[]")
+    assertEqual(FormatSpec.prettyDebug("[:]"), "[:]")
+    assertEqual(FormatSpec.prettyDebug("P()"), "P()")
+    assertEqual(FormatSpec.prettyDebug("[\"a, (b\"]"), "[\n    \"a, (b\",\n]")
+    assertEqual(FormatSpec.prettyDebug("['(', '\\'']"), "[\n    '(',\n    '\\'',\n]")
+    assertEqual(FormatSpec.prettyDebug("List([1])"), "List([\n    1,\n])")
+    assertEqual(FormatSpec.prettyDebug("Box(List([1]))"), "Box(\n    List([\n        1,\n    ]),\n)")
+    assertEqual(FormatSpec.prettyDebug("42"), "42")
+    assertEqual("\(5:#?)", "5")
+    assertEqual("[\([1]:#?)]", "[[\n    1,\n]]")
+}
+
+@test
+fn anOptionalIsFormattable() {
+    let value: Int? = 255
+    let nothing: Int? = none
+    assertEqual("\(value:x)", "ff")
+    assertEqual("\(value:>5)", "  255")
+    assertEqual("\(nothing:>5)", " none")
+    let price: F64? = 0.256
+    assertEqual("\(price:.1%)", "25.6%")
+}
+
+@test
+fn anInterpolationIsWrittenInPieces() {
+    var writer = Pieces()
+    let n = 42
+    writer.write("total: \(n) items, \(n:>5)!")
+    assertEqual(writer.count, 5)
+    assertEqual(writer.text, "total: 42 items,    42!")
+    writeTotal(&writer, 255)
+    assertEqual(writer.count, 10)
+    assert(writer.text.hasSuffix("n=0255 [ff]"))
+    var text = ""
+    text.write("a\(1)b\(true)")
+    assertEqual(text, "a1btrue")
+    writer.write("plain")
+    assertEqual(writer.count, 11)
+}

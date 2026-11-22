@@ -5819,6 +5819,13 @@ public sealed partial class SilGen {
                     return;
                 }
 
+                // 'writer.write("total: \(n)")' into a TextWriter: each piece
+                // written as it is made, with no string of them all.
+                case BoundExpressionStatement { Expression: BoundCall { Arguments: [BoundInterpolatedString interpolated] } call }
+                    when WritesInPieces(call, interpolated):
+                    WriteInPieces(call, interpolated);
+                    return;
+
                 case BoundExpressionStatement expression:
                     // An assignment on its own: its value, which nothing reads, is not made.
                     if ((expression.Expression is BoundAssignment assignment ? OnActorFor(assignment, () => Assignment(assignment)) : Expression(expression.Expression)) is { } discarded) {
@@ -7064,6 +7071,9 @@ public sealed partial class SilGen {
 
                 case BoundHoleText text:
                     return text.Debug ? DebugText(text.Value) : Hole(text.Value, null);
+
+                case BoundInterpolationHole hole:
+                    return Hole(hole.Value, hole.Format);
 
                 case BoundFormatSpec spec:
                     return Expression(spec.Value);
@@ -8360,6 +8370,50 @@ public sealed partial class SilGen {
         ///     <c>"x = \(x)"</c>: the text and the holes, each as a string,
         ///     joined left to right.
         /// </summary>
+        /// <summary>
+        ///     True for a TextWriter's <c>write(_:)</c> given an interpolation,
+        ///     on a writer named by a variable, a parameter or self — read
+        ///     again for each piece with nothing else done on the way. A
+        ///     TextWriter's contract is that writing text in pieces writes it
+        ///     as writing it whole would.
+        /// </summary>
+        bool WritesInPieces(BoundCall call, BoundInterpolatedString interpolated) =>
+            interpolated.Syntax is InterpolatedStringExpressionSyntax
+            && call is { Function: { Name: "write", Parameters: [{ Label: null or "_", Type: var parameterType }] }, Receiver: BoundLocalAccess or BoundParameterAccess or BoundSelfAccess }
+            && parameterType.Equals(Core.String)
+            && Core.Module.GetType("TextWriter") is { TypeKind: TypeKind.Protocol } writer
+            && Sub(call.Receiver!.Type).Satisfies(writer);
+
+        void WriteInPieces(BoundCall call, BoundInterpolatedString interpolated) {
+            var syntax = (InterpolatedStringExpressionSyntax)interpolated.Syntax;
+            var hole = 0;
+            foreach (var content in syntax.Contents) {
+                BoundExpression piece;
+                if (content is InterpolatedTextSyntax text) {
+                    var value = text.TextToken.Value as string ?? "";
+                    if (value.Length == 0) {
+                        continue;
+                    }
+
+                    piece = new BoundLiteral(content, Core.String, value);
+                } else {
+                    if (hole >= interpolated.Parts.Length) {
+                        return;
+                    }
+
+                    piece = new BoundInterpolationHole(content, Core.String, interpolated.Parts[hole], interpolated.Formats[hole]);
+                    hole++;
+                }
+
+                Statement(new BoundExpressionStatement(call.Syntax, new BoundCall(call.Syntax, call.Receiver, call.Function, [piece], call.Type) {
+                    Substitution = call.Substitution,
+                }));
+                if (_current is null) {
+                    return;
+                }
+            }
+        }
+
         SilValue? Interpolation(BoundInterpolatedString interpolated) {
             if (interpolated.Syntax is not InterpolatedStringExpressionSyntax syntax) {
                 return Missing(interpolated, "this interpolated string");
@@ -8496,7 +8550,13 @@ public sealed partial class SilGen {
                 return Missing(part, "a format spec without 'FormatSpec.padded'");
             }
 
-            var text = new BoundHoleText(part.Syntax, Core.String, part, format.Specifier.Kind == "Debug");
+            BoundExpression text = new BoundHoleText(part.Syntax, Core.String, part, format.Specifier.Kind == "Debug");
+
+            // '#?': the description laid out over lines, as FormatSpec.prettyDebug lays it.
+            if (format.Specifier.IsPrettyDebug && Core.FormatSpec?.GetMembers("prettyDebug").OfType<FunctionSymbol>().FirstOrDefault() is { } pretty) {
+                text = new BoundCall(part.Syntax, null, pretty, [text], Core.String);
+            }
+
             return Expression(new BoundCall(part.Syntax, format.Value, padded, [text], Core.String));
         }
 

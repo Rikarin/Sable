@@ -80,6 +80,18 @@ public sealed class BoundFormatSpec(SyntaxNode syntax, BoundExpression value, Fo
 ///     a width to pad it to: what the lowering pads, for a type that is not
 ///     <c>Formattable</c>. Made by the lowering, never by the binder.
 /// </summary>
+/// <summary>
+///     One hole of an interpolation, as the text it writes, with its spec:
+///     what the lowering makes of each hole when it writes an interpolation
+///     into a TextWriter a piece at a time. Made by the lowering only.
+/// </summary>
+public sealed class BoundInterpolationHole(SyntaxNode syntax, TypeSymbol type, BoundExpression value, BoundFormatSpec? format)
+    : BoundExpression(syntax, type) {
+    public BoundExpression Value { get; } = value;
+    public BoundFormatSpec? Format { get; } = format;
+    public override IEnumerable<BoundNode> Children => [Value];
+}
+
 public sealed class BoundHoleText(SyntaxNode syntax, TypeSymbol type, BoundExpression value, bool debug)
     : BoundExpression(syntax, type) {
     public BoundExpression Value { get; } = value;

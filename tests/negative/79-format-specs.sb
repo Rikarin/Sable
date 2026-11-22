@@ -34,10 +34,12 @@ fn optionsANumberHasNot(_ n: Int, _ x: F64, _ c: Char, _ s: String) {
 
 fn notFormattable<T>(_ p: Plain, _ t: T) {
     print("\(p:x)") //! S3663 'Plain' is not Formattable
+    print("\(p:+#?)") //! S3663 'Plain' is not Formattable
     print("\(t:.2)") //! S3663 'T' is not Formattable
 }
 
 // What every type takes, and what a type that writes itself decides.
 fn allowed<T: Formattable>(_ p: Plain, _ t: T, _ c: Custom, _ s: String, _ x: F32) {
+    print("\(p:#?) \(s:#?) \(x:#?) \(t:#?)")
     print("\(p:*^20) \(p:?) \(t:x) \(c:+#012.3e) \(s:.3) \(s:?) \(x:#.3g) \(x:,.2%)")
 }

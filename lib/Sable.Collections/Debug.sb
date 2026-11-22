@@ -1,0 +1,109 @@
+module Sable.Collections
+
+// Debug for the collections: each as its name and its elements, as source
+// would make it — `List([1, 2])`, `Set(["a"])`, `OrderedDictionary(["a": 1])`
+// — each element as its own Debug says. What interpolating one writes, and
+// what lets a struct holding one '@derive(Debug)'.
+
+/// The name, and the descriptions in brackets: `Name([a, b])`.
+fn described(_ name: String, _ parts: String[>..]) -> String {
+    return name + "([" + Runtime.joinStrings(parts, ", ") + "])"
+}
+
+/// Each element's description, in the sequence's order.
+fn descriptions<S: Sequence>(_ elements: S) -> String[>..] where S.Element: Debug, S.Failure == Never {
+    var parts: String[>..] = []
+    for element in elements {
+        parts.append(element.debugDescription())
+    }
+    return parts
+}
+
+extension List: Debug where Element: Debug {
+    /// `List([1, 2])`.
+    public fn debugDescription() -> String {
+        return described("List", descriptions(self))
+    }
+}
+
+extension Deque: Debug where Element: Debug {
+    /// `Deque([1, 2])`, front first.
+    public fn debugDescription() -> String {
+        return described("Deque", descriptions(self))
+    }
+}
+
+extension Queue: Debug where Element: Debug {
+    /// `Queue([1, 2])`, the next out first.
+    public fn debugDescription() -> String {
+        return described("Queue", descriptions(self))
+    }
+}
+
+extension Stack: Debug where Element: Debug {
+    /// `Stack([1, 2])`, as the stack goes through them.
+    public fn debugDescription() -> String {
+        return described("Stack", descriptions(self))
+    }
+}
+
+extension Set: Debug where Element: Debug {
+    /// `Set([1, 2])`, in the order the values were added.
+    ///
+    /// ```sable
+    /// assert(Set<Int>([3, 1]).debugDescription() == "Set([3, 1])")
+    /// ```
+    public fn debugDescription() -> String {
+        return described("Set", descriptions(self))
+    }
+}
+
+extension PriorityQueue: Debug where Element: Debug {
+    /// `PriorityQueue([1, 2])`, in the order they would come out.
+    public fn debugDescription() -> String {
+        return described("PriorityQueue", descriptions(self.sortedElements()))
+    }
+}
+
+extension SmallVec: Debug where Element: Debug {
+    /// `SmallVec([1, 2])`.
+    public fn debugDescription() -> String {
+        return described("SmallVec", descriptions(self))
+    }
+}
+
+extension BitSet: Debug {
+    /// `BitSet([1, 5])`, the members smallest first.
+    public fn debugDescription() -> String {
+        return described("BitSet", descriptions(self))
+    }
+}
+
+extension OrderedDictionary: Debug where Key: Debug, Value: Debug {
+    /// `OrderedDictionary(["a": 1])`, in order.
+    public fn debugDescription() -> String {
+        var parts: String[>..] = []
+        for (key, value) in self {
+            parts.append(key.debugDescription() + ": " + value.debugDescription())
+        }
+        return parts.isEmpty ? "OrderedDictionary([:])" : described("OrderedDictionary", parts)
+    }
+}
+
+extension HashingDictionary: Debug where Key: Debug, Value: Debug {
+    /// `HashingDictionary(["a": 1])`, in the order the keys were added.
+    public fn debugDescription() -> String {
+        var parts: String[>..] = []
+        for (key, value) in self {
+            parts.append(key.debugDescription() + ": " + value.debugDescription())
+        }
+        return parts.isEmpty ? "HashingDictionary([:])" : described("HashingDictionary", parts)
+    }
+}
+
+extension HashingSet: Debug where Element: Debug {
+    /// `HashingSet(["a"])`, in the order the values were added.
+    public fn debugDescription() -> String {
+        return described("HashingSet", descriptions(self))
+    }
+}

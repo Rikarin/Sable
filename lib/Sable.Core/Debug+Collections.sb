@@ -1,0 +1,61 @@
+module Sable.Core
+
+// Debug for what holds values: an array, a dictionary, written as source
+// writes them, each value as its own Debug says — what interpolating one
+// writes, so that a struct holding one can '@derive(Debug)', and generic
+// code over 'T: Debug' takes one. They are not Formattable: an array of
+// strings is written with its strings quoted, as Debug writes them.
+
+extension<Element: Debug> Element[:]: Debug {
+    /// The elements in brackets, as source writes them: `[1, 2]`, `["a"]`.
+    ///
+    /// ```sable
+    /// assert([1, 2].debugDescription() == "[1, 2]")
+    /// assert(["a", "b"].debugDescription() == "[\"a\", \"b\"]")
+    /// assert(([] as Int[>..]).debugDescription() == "[]")
+    /// ```
+    public fn debugDescription() -> String {
+        var parts: String[>..] = []
+        parts.reserveCapacity(self.count)
+        for element in self {
+            parts.append(element.debugDescription())
+        }
+        return "[" + Runtime.joinStrings(parts, ", ") + "]"
+    }
+}
+
+extension Dictionary: Debug where Key: Debug, Value: Debug {
+    /// The entries in brackets, in the order their keys were added, as
+    /// source writes a dictionary: `["a": 1, "b": 2]`, or `[:]`.
+    ///
+    /// ```sable
+    /// assert(["a": 1].debugDescription() == "[\"a\": 1]")
+    /// assert(([:] as [String: Int]).debugDescription() == "[:]")
+    /// ```
+    public fn debugDescription() -> String {
+        if self.count == 0 {
+            return "[:]"
+        }
+        var parts: String[>..] = []
+        for (key, value) in self {
+            parts.append(key.debugDescription() + ": " + value.debugDescription())
+        }
+        return "[" + Runtime.joinStrings(parts, ", ") + "]"
+    }
+}
+
+extension Optional: Formattable where Wrapped: Formattable {
+    /// What it holds, as the spec asks, or "none", padded as text is.
+    ///
+    /// ```sable
+    /// let some: Int? = 255
+    /// let nothing: Int? = none
+    /// assert("\(some:x) \(nothing:>5)" == "ff  none")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String {
+        if let value = self {
+            return value.format(spec)
+        }
+        return spec.padded("none")
+    }
+}

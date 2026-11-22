@@ -247,3 +247,124 @@ fn specNumber(_ text: String, _ start: Int) throws(ParseError) -> (Int?, Int) {
     }
     return (value, i)
 }
+
+extension FormatSpec {
+    /// A Debug description laid out over lines: what `"\(value:#?)"` writes.
+    /// Each bracketed list with something in it — a struct's fields, an
+    /// array's elements, a dictionary's entries, a tuple — has one part to a
+    /// line, indented four spaces deeper than its brackets, each followed by
+    /// a comma; text in quotes is left as it is. Rust's `{:#?}`.
+    ///
+    /// ```sable
+    /// assert(FormatSpec.prettyDebug("P(x: 1, tags: [\"a\"])") == "P(\n    x: 1,\n    tags: [\n        \"a\",\n    ],\n)")
+    /// assert(FormatSpec.prettyDebug("[]") == "[]")
+    /// assert(FormatSpec.prettyDebug("[:]") == "[:]")
+    /// assert(FormatSpec.prettyDebug("List([1, 2])") == "List([\n    1,\n    2,\n])")
+    /// ```
+    public static fn prettyDebug(_ text: String) -> String {
+        let scalars = text.toArray()
+        var written = TextPieces()
+        // For each bracket open, whether it was '([' opened as one, as a
+        // collection's 'List([1, 2])' is: it closes as one, '])'.
+        var opens: Bool[>..] = []
+        var quote: Char? = none
+        var i = 0
+        let n = scalars.count
+        while i < n {
+            let c = scalars[i]
+            if let q = quote {
+                written.add(c)
+                if c == '\\' && i + 1 < n {
+                    written.add(scalars[i + 1])
+                    i += 2
+                    continue
+                }
+                if c == q {
+                    quote = none
+                }
+                i += 1
+                continue
+            }
+            if c == '"' || c == '\'' {
+                quote = c
+                written.add(c)
+                i += 1
+                continue
+            }
+            if c == '(' || c == '[' || c == '{' {
+                let close: Char = c == '(' ? ')' : c == '[' ? ']' : '}'
+                // Nothing inside, or a dictionary's '[:]': kept as it is.
+                if i + 1 < n && scalars[i + 1] == close {
+                    written.add(c)
+                    written.add(close)
+                    i += 2
+                    continue
+                }
+                if c == '[' && i + 2 < n && scalars[i + 1] == ':' && scalars[i + 2] == ']' {
+                    written.add(c)
+                    written.add(':')
+                    written.add(']')
+                    i += 3
+                    continue
+                }
+                let joined = c == '(' && i + 1 < n && scalars[i + 1] == '['
+                    && !(i + 2 < n && (scalars[i + 2] == ']' || scalars[i + 2] == ':'))
+                opens.append(joined)
+                written.add(c)
+                if joined {
+                    written.add('[')
+                    i += 1
+                }
+                written.newLine(opens.count)
+                i += 1
+                continue
+            }
+            if (c == ')' || c == ']' || c == '}') && !opens.isEmpty {
+                let joined = opens.removeLast()
+                written.add(',')
+                written.newLine(opens.count)
+                written.add(c)
+                if joined && i + 1 < n && scalars[i + 1] == ')' {
+                    written.add(')')
+                    i += 1
+                }
+                i += 1
+                continue
+            }
+            if c == ',' && !opens.isEmpty {
+                written.add(',')
+                written.newLine(opens.count)
+                i += 1
+                while i < n && scalars[i] == ' ' {
+                    i += 1
+                }
+                continue
+            }
+            written.add(c)
+            i += 1
+        }
+        return written.joined()
+    }
+}
+
+/// Scalars and indented line breaks, gathered and joined once.
+struct TextPieces {
+    var chars: Char[>..] = []
+
+    mutating fn add(_ c: Char) {
+        chars.append(c)
+    }
+
+    mutating fn newLine(_ depth: Int) {
+        chars.append('\n')
+        var i = 0
+        while i < depth * 4 {
+            chars.append(' ')
+            i += 1
+        }
+    }
+
+    fn joined() -> String {
+        return String(chars)
+    }
+}

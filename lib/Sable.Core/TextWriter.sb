@@ -7,7 +7,9 @@ module Sable.Core
 /// into. Swift's `TextOutputStream`; Rust's `fmt::Write`.
 ///
 /// A type conforms by writing a piece of text; writing values, and lines,
-/// comes with it.
+/// comes with it. Writing text in pieces must come to the same as writing it
+/// whole: `w.write("total: \(n)")` is written a piece at a time — "total: ",
+/// then the number — with no string of the two made on the way.
 ///
 /// ```sable
 /// struct Counter: TextWriter {

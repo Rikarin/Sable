@@ -35,8 +35,15 @@ public sealed record FormatSpecifier {
     /// <summary>The letter that named the kind, as written; none for <c>Automatic</c>.</summary>
     public char? KindLetter { get; init; }
 
-    /// <summary>True when the spec writes a sign, <c>#</c>, <c>0</c> or a separator: what only a number has.</summary>
-    public bool HasNumberOptions => Sign != "Negative" || Alternate || ZeroPadded || Separator is not null;
+    /// <summary>
+    ///     True when the spec writes a sign, <c>#</c>, <c>0</c> or a separator:
+    ///     what only a number has. <c>#?</c> is not one of them: it writes
+    ///     any value's Debug description laid out over lines.
+    /// </summary>
+    public bool HasNumberOptions => Sign != "Negative" || Alternate && !IsPrettyDebug || ZeroPadded || Separator is not null;
+
+    /// <summary><c>#?</c>: the value as Debug describes it, laid out over lines, nested parts indented.</summary>
+    public bool IsPrettyDebug => Kind == "Debug" && Alternate;
 
     static readonly Dictionary<char, string> Kinds = new() {
         ['d'] = "Decimal", ['x'] = "Hex", ['X'] = "UpperHex", ['o'] = "Octal", ['b'] = "Binary",

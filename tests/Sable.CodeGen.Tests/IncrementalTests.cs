@@ -1115,6 +1115,10 @@ public sealed class IncrementalTests {
         Assert.Equal(["-Wl,-dead_strip", "-Wl,-S"], NativeBuild.LinkFlags(release with { Strip = StripMode.DebugInfo }, NativePlatform.MacOS));
         Assert.Equal(["a.o", "-o", "program", "-Wl,--gc-sections", "-lm", "-pthread", "-Wl,--strip-debug"],
             NativeObjects.LinkArguments(["a.o"], "program", NativePlatform.Linux, release with { Strip = StripMode.DebugInfo }));
+        Assert.Equal(["-Wl,--gc-sections", "-lm", "-pthread", "-Wl,--no-gc-sections"],
+            NativeBuild.LinkFlags(NativeOptions.Of(optimise: false, debug: true), NativePlatform.Linux));
+        Assert.Equal(["-Wno-override-module", "-fno-global-isel"], mac.IrFlags);
+        Assert.Equal(["-Wno-override-module"], NativeTarget.Of("aarch64-unknown-linux-gnu").IrFlags);
         Assert.Contains("-Wl,/OPT:REF", NativeBuild.PlatformLinkFlags(NativePlatform.Windows));
         Assert.DoesNotContain(NativeBuild.PlatformLinkFlags(NativePlatform.Windows), static f => f.StartsWith("-Wl,/OPT:ICF", StringComparison.Ordinal));
     }

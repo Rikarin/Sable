@@ -280,7 +280,7 @@ public static class NativeBuild {
                 arguments.Add("-Wl,-object_path_lto," + kept);
             }
 
-            arguments.AddRange(["-Wno-override-module", irPath, runtime.Archive, "-o", outputPath, ..LinkFlags(options, target.Platform), ..CrossLinkFlags(target)]);
+            arguments.AddRange([..target.IrFlags, irPath, runtime.Archive, "-o", outputPath, ..LinkFlags(options, target.Platform), ..CrossLinkFlags(target)]);
 
             var (exitCode, output) = Run(CompilerPath, arguments);
             if (exitCode == 0 && options.DebugInfo) {
@@ -397,7 +397,7 @@ public static class NativeBuild {
             File.WriteAllText(irPath, ForTarget(llvmIr, target));
             var (exitCode, output) = Run(
                 CompilerPath,
-                [..target.ClangFlags, ..SysrootFlags(options), $"-O{options.OptLevel}", "-fno-color-diagnostics", ..flags, "-Wno-override-module", "-c", irPath, "-o", Path.Combine(directory.FullName, "program.o")]
+                [..target.ClangFlags, ..SysrootFlags(options), $"-O{options.OptLevel}", "-fno-color-diagnostics", ..flags, ..target.IrFlags, "-c", irPath, "-o", Path.Combine(directory.FullName, "program.o")]
             );
             return new(exitCode == 0, output);
         } finally {
@@ -676,6 +676,13 @@ public static class NativeBuild {
     /// </summary>
     public static IReadOnlyList<string> LinkFlags(NativeOptions options, NativePlatform platform) {
         List<string> flags = [..PlatformLinkFlags(platform)];
+
+        // GNU ld leaves the debug information of a function it drops, its
+        // addresses from 0: lldb takes whatever of the program lies there,
+        // from just past 0, for that function. A debug build keeps them all.
+        if (options.DebugInfo && platform == NativePlatform.Linux) {
+            flags.Add("-Wl,--no-gc-sections");
+        }
 
         // GNU ld's and lld's -S and -s; Apple's linker has -S for the debug
         // map, and -x for local symbols — a program's exported ones it keeps.

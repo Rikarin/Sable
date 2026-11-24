@@ -113,6 +113,21 @@ public sealed record NativeTarget {
     };
 
     /// <summary>
+    ///     What clang is told when it compiles our IR: not to warn that the
+    ///     IR names its own target, and, for Apple's arm64, not to use
+    ///     GlobalISel, which it does at -O0 alone. A small struct passed on
+    ///     the stack, <c>{ i8 }</c>, takes a byte there as GlobalISel has it
+    ///     and four as SelectionDAG has it, which compiles the functions
+    ///     GlobalISel gives up on and everything optimised: a caller and a
+    ///     callee would find its arguments in different places. C's calls are
+    ///     clang's to lay out, and are not affected.
+    /// </summary>
+    public IReadOnlyList<string> IrFlags => [
+        "-Wno-override-module",
+        ..Platform == NativePlatform.MacOS && Arch == "arm64" ? new[] { "-fno-global-isel" } : [],
+    ];
+
+    /// <summary>
     ///     What clang is told so that it builds for this target: its triple,
     ///     but for the host. On Windows, the C runtime is the DLL, as
     ///     Microsoft's compiler links it by default: the Universal C Runtime

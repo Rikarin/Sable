@@ -819,7 +819,8 @@ the specialisation pass (`LibraryInterface.LinkInlinable`). The library's
 archive is one object, which a linker otherwise takes whole: on macOS a
 program is linked with `-dead_strip`; on Linux and Windows every unit and
 the runtime are compiled with a section per function and datum
-(`-ffunction-sections -fdata-sections`) and linked with `--gc-sections` and
+(`-ffunction-sections -fdata-sections`) and linked with `--gc-sections` (but
+not a debug build, whose debug information GNU ld would leave at address 0) and
 `/OPT:REF` (not `/OPT:ICF`, which could fold two types' metadata or witness
 tables into one address); wasm-ld leaves out what nothing reaches unasked.
 What the units' constructors register (witness tables, describers, error

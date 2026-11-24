@@ -6487,7 +6487,6 @@ public sealed partial class Binder {
             // a closure one that takes a function, '.Fast' one of a type
             // that could have such a member, which a function's does not.
             if (arguments[i] is BoundUnboundClosure { Syntax: ExpressionSyntax unbound }
-                && !parameter.IsAutoclosure
                 && ShapeMismatch(unbound, wanted) is { } mismatch) {
                 return Reject($"argument {i + 1} is {mismatch}, and '{parameter.Name}' takes '{wanted.ToDisplayString()}'");
             }

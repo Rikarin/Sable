@@ -119,6 +119,8 @@ typedef pthread_cond_t PlatformCondition;
 static void mutex_init(PlatformMutex *mutex);
 static void mutex_lock(PlatformMutex *mutex);
 static void mutex_unlock(PlatformMutex *mutex);
+// Takes the mutex if no one holds it: whether it did.
+static bool mutex_try_lock(PlatformMutex *mutex);
 static void condition_init(PlatformCondition *condition);
 // Waits, the mutex held, until signalled — or, given a time in
 // nanoseconds of sable_time_monotonic, until then at the latest (a

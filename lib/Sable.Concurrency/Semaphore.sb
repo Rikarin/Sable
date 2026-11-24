@@ -1,0 +1,81 @@
+module Sable.Concurrency
+
+/// So many permits, each held by one thread at a time: .NET's
+/// `SemaphoreSlim`, Java's `Semaphore`. `acquire` waits for one, blocking
+/// the thread; Sable.Concurrency's AsyncSemaphore suspends a task instead.
+///
+/// ```sable
+/// let slots = Semaphore(permits: 2)
+/// slots.acquire()
+/// assert(slots.tryAcquire() && !slots.tryAcquire())
+/// slots.release(count: 2)
+/// assert(slots.availablePermits == 2)
+/// ```
+@immutable
+public final class Semaphore {
+    let lock: Int
+    let released: Condition
+    let permits: Atomic<Int>
+
+    /// A semaphore with so many permits free.
+    public init(permits: Int) {
+        precondition(permits >= 0, "a semaphore cannot have \(permits) permits")
+        lock = Runtime.lockNew()
+        released = Condition()
+        self.permits = Atomic<Int>(permits)
+    }
+
+    deinit {
+        Runtime.lockFree(lock)
+    }
+
+    /// How many permits are free now.
+    public var availablePermits: Int => permits.load()
+
+    /// Takes a permit, waiting for one to be released if none is free.
+    public fn acquire() {
+        Runtime.lockAcquire(lock)
+        while permits.load(ordering: .Relaxed) == 0 {
+            Runtime.conditionWait(released.handle, lock, until: -1)
+        }
+        permits.subtract(1, ordering: .Relaxed)
+        Runtime.lockRelease(lock)
+    }
+
+    /// Takes a permit if one is free now: whether it did.
+    public fn tryAcquire() -> Bool {
+        Runtime.lockAcquire(lock)
+        let free = permits.load(ordering: .Relaxed) > 0
+        if free {
+            permits.subtract(1, ordering: .Relaxed)
+        }
+        Runtime.lockRelease(lock)
+        return free
+    }
+
+    /// Takes a permit, waiting no longer than so many nanoseconds: whether
+    /// it did.
+    public fn acquire(within nanoseconds: Int) -> Bool {
+        let deadline = Runtime.monotonicNanoseconds() + nanoseconds
+        Runtime.lockAcquire(lock)
+        while permits.load(ordering: .Relaxed) == 0 {
+            if Runtime.monotonicNanoseconds() >= deadline {
+                Runtime.lockRelease(lock)
+                return false
+            }
+            Runtime.conditionWait(released.handle, lock, until: deadline)
+        }
+        permits.subtract(1, ordering: .Relaxed)
+        Runtime.lockRelease(lock)
+        return true
+    }
+
+    /// Gives back so many permits, waking threads waiting for them.
+    public fn release(count: Int = 1) {
+        precondition(count > 0, "cannot release \(count) permits")
+        Runtime.lockAcquire(lock)
+        permits.add(count, ordering: .Relaxed)
+        released.notifyAll()
+        Runtime.lockRelease(lock)
+    }
+}

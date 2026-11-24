@@ -1,0 +1,28 @@
+module Sable.Concurrency
+
+/// What threads holding a Mutex wait on for its value to change: notified
+/// by whoever changes it. Rust's `Condvar`, .NET's `Monitor.Pulse`. A wait
+/// may also end for no reason, so a waiter asks again what it waits for —
+/// as `Mutex.withLock(when:)` does.
+@immutable
+public final class Condition {
+    let handle: Int
+
+    public init() {
+        handle = Runtime.conditionNew()
+    }
+
+    deinit {
+        Runtime.conditionFree(handle)
+    }
+
+    /// Wakes one thread waiting, if any.
+    public fn notifyOne() {
+        Runtime.conditionSignal(handle)
+    }
+
+    /// Wakes every thread waiting.
+    public fn notifyAll() {
+        Runtime.conditionBroadcast(handle)
+    }
+}

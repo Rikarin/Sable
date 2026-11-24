@@ -1,0 +1,32 @@
+module OnceTests
+
+// Once (Sable.Concurrency).
+
+import Sable.Concurrency
+import Sable.Testing
+
+@test
+fn onceAndLazyMakeTheirValueOnce() async {
+    let setup = Once()
+    let runs = Atomic<Int>(0)
+    let table: Lazy<Int[>..]> = Lazy {
+        runs.add(1)
+        return [1, 2, 3]
+    }
+    assert(!table.isMade && !setup.hasRun)
+    await withTaskGroup(of: Int.self) { group in
+        var task = 0
+        while task < 8 {
+            group.spawn {
+                setup.run { runs.add(100) }
+                return table.value.count
+            }
+            task += 1
+        }
+        for await count in group {
+            assertEqual(count, 3)
+        }
+    }
+    assertEqual(runs.load(), 101)
+    assert(table.isMade && setup.hasRun)
+}

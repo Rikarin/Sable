@@ -1,0 +1,54 @@
+module Sable.Concurrency
+
+// Waits that suspend a task rather than block its thread: what a task on
+// the shared pool takes instead of Mutex and Semaphore, whose waits block
+// the worker. An actor, so its state is changed by one call at a time; a
+// task that must wait parks in its WaitList and looks again when woken.
+
+/// So many permits, each held by one task at a time: .NET's `SemaphoreSlim`
+/// with `WaitAsync`. A task waiting for a permit is suspended, not blocked.
+///
+/// ```sable
+/// let slots = AsyncSemaphore(permits: 1)
+/// await slots.acquire()
+/// assert(!(await slots.tryAcquire()))
+/// await slots.release()
+/// assert(await slots.availablePermits == 1)
+/// ```
+public actor AsyncSemaphore {
+    var permits: Int
+    let released: WaitList = WaitList()
+
+    /// A semaphore with so many permits free.
+    public init(permits: Int) {
+        precondition(permits >= 0, "a semaphore cannot have \(permits) permits")
+        self.permits = permits
+    }
+
+    /// How many permits are free now.
+    public var availablePermits: Int => permits
+
+    /// Takes a permit, suspending until one is released if none is free.
+    public fn acquire() async {
+        while permits == 0 {
+            await released.park()
+        }
+        permits -= 1
+    }
+
+    /// Takes a permit if one is free now: whether it did.
+    public fn tryAcquire() -> Bool {
+        if permits == 0 {
+            return false
+        }
+        permits -= 1
+        return true
+    }
+
+    /// Gives back so many permits, waking the tasks waiting for them.
+    public fn release(count: Int = 1) {
+        precondition(count > 0, "cannot release \(count) permits")
+        permits += count
+        released.wakeAll()
+    }
+}

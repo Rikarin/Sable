@@ -227,6 +227,69 @@ public sealed partial class SilInterpreter {
         return found;
     }
 
+    /// <summary>The locks made, by handle: whether each is held.</summary>
+    readonly Dictionary<long, bool> _locks = [];
+
+    long _nextLock = 1;
+
+    /// <summary>
+    ///     A lock or a condition, interpreted: one thread runs every task
+    ///     here, so a lock already held would never be released, and a wait
+    ///     without a time would never be signalled — each a trap that says
+    ///     so, as a deadlock natively would hang. A wait with a time is a
+    ///     sleep until then.
+    /// </summary>
+    object? LockBuiltin(BuiltinInst builtin, object?[] operands) {
+        switch (builtin.Name) {
+            case "lock_new":
+            case "condition_new": {
+                var handle = _nextLock++;
+                _locks[handle] = false;
+                return handle;
+            }
+
+            case "lock_free" or "condition_free":
+                _locks.Remove((long)operands[0]!);
+                return null;
+
+            case "lock_acquire": {
+                var handle = (long)operands[0]!;
+                if (_locks[handle]) {
+                    throw new SilTrap("a lock is taken that is held already: with one thread running every task, it would never be released");
+                }
+
+                _locks[handle] = true;
+                return null;
+            }
+
+            case "lock_try_acquire": {
+                var handle = (long)operands[0]!;
+                if (_locks[handle]) {
+                    return false;
+                }
+
+                _locks[handle] = true;
+                return true;
+            }
+
+            case "lock_release":
+                _locks[(long)operands[0]!] = false;
+                return null;
+
+            case "condition_wait": {
+                var until = (long)operands[2]!;
+                if (until < 0) {
+                    throw new SilTrap("a condition is waited on with no time to stop at: with one thread running every task, no other would signal it");
+                }
+
+                return null;
+            }
+
+            default:
+                return null;
+        }
+    }
+
     /// <summary>The block a run of bytes is in, and where in it the run starts: trapping where the run is not all in one live block.</summary>
     (RawBlock Block, int At) RawRange(long address, long count) {
         var index = BlockAt(address);

@@ -1,0 +1,119 @@
+module Sable.Concurrency
+
+/// A value many threads read at once, or one writes alone: Rust's
+/// `RwLock<T>`, .NET's `ReaderWriterLockSlim`. A writer waiting goes before
+/// readers that come after it, so a stream of readers does not starve it.
+///
+/// ```sable
+/// let settings = RwLock<String>("dark")
+/// assert(settings.read { $0 } == "dark")
+/// settings.write { $0 = "light" }
+/// assert(settings.read { $0.count } == 5)
+/// ```
+@immutable
+public final class RwLock<Value> {
+    let lock: Int
+    let changed: Condition
+    let cell: RawPtr<Value>
+    // Under the lock: readers reading, whether one writes, writers waiting.
+    let readers: Atomic<Int>
+    let writing: Atomic<Bool>
+    let writersWaiting: Atomic<Int>
+
+    public init(_ value: Value) {
+        lock = Runtime.lockNew()
+        changed = Condition()
+        readers = Atomic<Int>(0)
+        writing = Atomic<Bool>(false)
+        writersWaiting = Atomic<Int>(0)
+        Runtime.share(value)
+        unsafe {
+            cell = RawPtr<Value>.allocate(count: 1)
+            cell.initialize(to: value)
+        }
+    }
+
+    deinit {
+        unsafe {
+            cell.deinitialize()
+            cell.deallocate()
+        }
+        Runtime.lockFree(lock)
+    }
+
+    /// What the closure makes of the value, read alongside any other
+    /// readers, while no one writes.
+    public fn read<R, E: Error>(_ body: (Value) throws(E) -> R) throws(E) -> R {
+        Runtime.lockAcquire(lock)
+        while writing.load(ordering: .Relaxed) || writersWaiting.load(ordering: .Relaxed) > 0 {
+            Runtime.conditionWait(changed.handle, lock, until: -1)
+        }
+        readers.add(1, ordering: .Relaxed)
+        Runtime.lockRelease(lock)
+        do {
+            let result = try body(peek())
+            doneReading()
+            return result
+        } catch {
+            doneReading()
+            throw error
+        }
+    }
+
+    /// What the closure makes of the value, read and changed alone: no one
+    /// else reads or writes until it is done.
+    public fn write<R, E: Error>(_ body: (inout Value) throws(E) -> R) throws(E) -> R {
+        Runtime.lockAcquire(lock)
+        writersWaiting.add(1, ordering: .Relaxed)
+        while writing.load(ordering: .Relaxed) || readers.load(ordering: .Relaxed) > 0 {
+            Runtime.conditionWait(changed.handle, lock, until: -1)
+        }
+        writersWaiting.subtract(1, ordering: .Relaxed)
+        writing.store(true, ordering: .Relaxed)
+        Runtime.lockRelease(lock)
+        var value = take()
+        do {
+            let result = try body(&value)
+            doneWriting(value)
+            return result
+        } catch {
+            doneWriting(value)
+            throw error
+        }
+    }
+
+    // A reader gone: the last wakes a writer waiting.
+    fn doneReading() {
+        Runtime.lockAcquire(lock)
+        if readers.subtract(1, ordering: .Relaxed) == 1 {
+            changed.notifyAll()
+        }
+        Runtime.lockRelease(lock)
+    }
+
+    // The writer's value put back, and the readers and writers waiting woken.
+    fn doneWriting(_ value: Value) {
+        Runtime.share(value)
+        unsafe {
+            cell.initialize(to: value)
+        }
+        Runtime.lockAcquire(lock)
+        writing.store(false, ordering: .Relaxed)
+        changed.notifyAll()
+        Runtime.lockRelease(lock)
+    }
+}
+
+extension RwLock {
+    fn peek() -> Value {
+        unsafe {
+            return cell.load()
+        }
+    }
+
+    fn take() -> Value {
+        unsafe {
+            return cell.move()
+        }
+    }
+}

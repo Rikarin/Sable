@@ -45,6 +45,7 @@
 #include "net.c"
 #include "io.c"
 #include "process.c"
+#include "locks.c"
 
 // ---- Start-up --------------------------------------------------------------
 

@@ -10589,6 +10589,11 @@ public sealed partial class SilGen {
                     return UnitValue.Instance;
                 }
 
+                // 'Runtime.share(value)': its objects counted atomically from now on.
+                if (owner is { Name: "Runtime", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } } && callee.Name == "share") {
+                    return RawMemoryIntrinsic(call, "share");
+                }
+
                 // A value at a raw address (RawMemory.sb): the type is the
                 // call's, as specialised here — the result, or the value given.
                 if (owner is { Name: "RawMemory", ContainingSymbol: ModuleSymbol { Name: "Sable.Core" } }) {
@@ -11936,6 +11941,18 @@ public sealed partial class SilGen {
         ///     and <c>raw_init</c>, of that type.
         /// </summary>
         SilValue? RawMemoryIntrinsic(BoundCall call, string name) {
+            // A value many tasks will reach, every object it holds made to be
+            // counted atomically from now on, as one crossing to a task is.
+            if (name == "share" && call.Arguments is [var shared]) {
+                if (Borrow(shared) is not { } sharedValue) {
+                    return null;
+                }
+
+                Emit(new BuiltinInst("share", SilType.Unit, sharedValue));
+                End(sharedValue);
+                return UnitValue.Instance;
+            }
+
             var builtin = name switch {
                 "load" => "raw_load",
                 "loadUnaligned" => "raw_load_unaligned",

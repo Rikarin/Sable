@@ -116,6 +116,14 @@ static void mutex_unlock(PlatformMutex *mutex) {
     mutex->held = 0;
 }
 
+static bool mutex_try_lock(PlatformMutex *mutex) {
+    if (mutex->held) {
+        return false;
+    }
+    mutex->held = 1;
+    return true;
+}
+
 static void condition_init(PlatformCondition *condition) {
     condition->signalled = 0;
 }

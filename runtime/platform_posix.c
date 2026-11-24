@@ -606,6 +606,10 @@ static void mutex_unlock(PlatformMutex *mutex) {
     pthread_mutex_unlock(mutex);
 }
 
+static bool mutex_try_lock(PlatformMutex *mutex) {
+    return pthread_mutex_trylock(mutex) == 0;
+}
+
 // A timed wait counts on the monotonic clock: macOS waits for a relative
 // time, and elsewhere the condition is made to use that clock.
 static void condition_init(PlatformCondition *condition) {

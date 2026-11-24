@@ -1,0 +1,30 @@
+module ConditionTests
+
+// Condition (Sable.Concurrency).
+
+import Sable.Concurrency
+import Sable.Testing
+
+@test
+fn aConditionWakesAWaiterWhenTheValueIsReady() async {
+    let queue: Mutex<Int[>..]> = Mutex([])
+    let filled = Condition()
+    let consumer = Task.spawn {
+        var sum = 0
+        var taken = 0
+        while taken < 100 {
+            sum += queue.withLock(when: filled, { !$0.isEmpty }) { $0.removeLast() }
+            taken += 1
+        }
+        return sum
+    }
+    var i = 1
+    while i <= 100 {
+        queue.withLock { $0.append(i) }
+        filled.notifyAll()
+        i += 1
+    }
+    assertEqual(await consumer.value, 5050)
+    let empty: Mutex<Int[>..]> = Mutex([])
+    assert(empty.withLock(when: filled, within: 1000000, { !$0.isEmpty }) { $0.count } == none)
+}

@@ -1,0 +1,52 @@
+module Sable.Concurrency
+
+/// A count that threads take down and others wait to see reach zero:
+/// .NET's `CountdownEvent`, Java's `CountDownLatch`. Once at zero it stays
+/// there.
+///
+/// ```sable
+/// let done = CountdownLatch(count: 2)
+/// done.countDown()
+/// done.countDown()
+/// done.wait()
+/// assert(done.count == 0)
+/// ```
+@immutable
+public final class CountdownLatch {
+    let lock: Int
+    let reachedZero: Condition
+    let remaining: Atomic<Int>
+
+    public init(count: Int) {
+        precondition(count >= 0, "a latch cannot count down from \(count)")
+        lock = Runtime.lockNew()
+        reachedZero = Condition()
+        remaining = Atomic<Int>(count)
+    }
+
+    deinit {
+        Runtime.lockFree(lock)
+    }
+
+    /// How many counts are left.
+    public var count: Int => remaining.load()
+
+    /// Takes the count down by one, waking every waiter at zero; at zero
+    /// already, it stays there.
+    public fn countDown() {
+        Runtime.lockAcquire(lock)
+        if remaining.load(ordering: .Relaxed) > 0 && remaining.subtract(1, ordering: .Relaxed) == 1 {
+            reachedZero.notifyAll()
+        }
+        Runtime.lockRelease(lock)
+    }
+
+    /// Waits until the count reaches zero.
+    public fn wait() {
+        Runtime.lockAcquire(lock)
+        while remaining.load(ordering: .Relaxed) > 0 {
+            Runtime.conditionWait(reachedZero.handle, lock, until: -1)
+        }
+        Runtime.lockRelease(lock)
+    }
+}

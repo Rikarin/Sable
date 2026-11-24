@@ -100,6 +100,50 @@ public struct Runtime {
     @builtin("time_sleep")
     public static fn sleep(nanoseconds: Int)
 
+    /// The value made shareable between tasks: every object it holds
+    /// counted atomically from now on, as one crossing to another task is.
+    /// What a lock's value is given as it goes in, many tasks reaching it
+    /// through memory the compiler does not see them share.
+    @intrinsic
+    public static fn share<T>(_ value: T)
+
+    // ---- Locks ------------------------------------------------------------
+    // The system's mutex and condition variable, by handle, for
+    // Sable.Concurrency's Mutex, RwLock, Condition, Semaphore, Barrier and
+    // CountdownLatch. A thread that waits on one blocks. A condition's wait
+    // takes its mutex held, and a time of the monotonic clock to stop at,
+    // or a negative one for none; it may wake for no reason.
+
+    @builtin("lock_new")
+    public static fn lockNew() -> Int
+
+    @builtin("lock_free")
+    public static fn lockFree(_ lock: Int)
+
+    @builtin("lock_acquire")
+    public static fn lockAcquire(_ lock: Int)
+
+    @builtin("lock_try_acquire")
+    public static fn lockTryAcquire(_ lock: Int) -> Bool
+
+    @builtin("lock_release")
+    public static fn lockRelease(_ lock: Int)
+
+    @builtin("condition_new")
+    public static fn conditionNew() -> Int
+
+    @builtin("condition_free")
+    public static fn conditionFree(_ condition: Int)
+
+    @builtin("condition_wait")
+    public static fn conditionWait(_ condition: Int, _ lock: Int, until: Int)
+
+    @builtin("condition_signal")
+    public static fn conditionSignal(_ condition: Int)
+
+    @builtin("condition_broadcast")
+    public static fn conditionBroadcast(_ condition: Int)
+
     // ---- Sockets -----------------------------------------------------------
     // TCP, by handle (0: none), every socket nonblocking and watched by the
     // runtime's I/O reactor: kqueue, epoll or an I/O completion port. A call

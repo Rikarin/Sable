@@ -590,6 +590,16 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_actor_hop(ptr)
                                 declare ptr @sable_actor_current()
                                 declare ptr @sable_waitlist_new()
+                                declare ptr @sable_lock_new()
+                                declare void @sable_lock_free(ptr)
+                                declare void @sable_lock_acquire(ptr)
+                                declare zeroext i1 @sable_lock_try_acquire(ptr)
+                                declare void @sable_lock_release(ptr)
+                                declare ptr @sable_condition_new()
+                                declare void @sable_condition_free(ptr)
+                                declare void @sable_condition_wait(ptr, ptr, i64)
+                                declare void @sable_condition_signal(ptr)
+                                declare void @sable_condition_broadcast(ptr)
                                 declare void @sable_waitlist_free(ptr)
                                 declare void @sable_waitlist_wake(ptr)
                                 declare zeroext i1 @sable_task_park(ptr)
@@ -3792,6 +3802,26 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call zeroext i1 @sable_actor_hop(ptr {actor})");
                     return;
                 }
+
+                // Locks and conditions, by handle (runtime/locks.c).
+                case "lock_new" or "condition_new": {
+                    var made = Fresh();
+                    Line($"{made} = call ptr @sable_{builtin.Name}()");
+                    Line($"{Result()} = ptrtoint ptr {made} to i64");
+                    return;
+                }
+
+                case "lock_free" or "lock_acquire" or "lock_release" or "condition_free" or "condition_signal" or "condition_broadcast":
+                    Line($"call void @sable_{builtin.Name}(ptr {RawAddress(operands[0])})");
+                    return;
+
+                case "lock_try_acquire":
+                    Line($"{Result()} = call zeroext i1 @sable_lock_try_acquire(ptr {RawAddress(operands[0])})");
+                    return;
+
+                case "condition_wait":
+                    Line($"call void @sable_condition_wait(ptr {RawAddress(operands[0])}, ptr {RawAddress(operands[1])}, i64 {operands[2]})");
+                    return;
 
                 // Wait lists, by handle: what a channel's receivers park in.
                 case "task_waitlist_new": {

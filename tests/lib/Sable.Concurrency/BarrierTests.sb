@@ -1,0 +1,33 @@
+module BarrierTests
+
+// Barrier (Sable.Concurrency).
+
+import Sable.Concurrency
+import Sable.Testing
+
+@test
+fn aLatchAndABarrierLetThreadsGoTogether() async {
+    let latch = CountdownLatch(count: 3)
+    let barrier = Barrier(count: 2)
+    let leaders = Atomic<Int>(0)
+    await withTaskGroup(of: Int.self) { group in
+        var task = 0
+        while task < 2 {
+            group.spawn {
+                if barrier.wait() {
+                    leaders.add(1)
+                }
+                latch.countDown()
+                return 0
+            }
+            task += 1
+        }
+        latch.countDown()
+        await group.waitForAll()
+    }
+    latch.wait()
+    assertEqual(latch.count, 0)
+    latch.countDown()
+    assertEqual(latch.count, 0)
+    assertEqual(leaders.load(), 1)
+}

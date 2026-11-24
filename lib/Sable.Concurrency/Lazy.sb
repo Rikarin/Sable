@@ -1,0 +1,26 @@
+module Sable.Concurrency
+
+/// A value made the first time it is asked for, and the same one every
+/// time after, whichever thread asks: .NET's `Lazy<T>`, Rust's `LazyLock`.
+///
+/// ```sable
+/// let table: Lazy<Int[>..]> = Lazy { [1, 2, 3] }
+/// assert(table.value.count == 3)
+/// ```
+@immutable
+public final class Lazy<Value> {
+    let cell: OnceCell<Value>
+    let make: () -> Value
+
+    /// A value 'make' makes, when it is first asked for.
+    public init(_ make: @escaping () -> Value) {
+        cell = OnceCell<Value>()
+        self.make = make
+    }
+
+    /// The value, made now if this is the first time.
+    public var value: Value => cell.getOrInit(make)
+
+    /// Whether it has been made.
+    public var isMade: Bool => cell.get() != none
+}

@@ -1,0 +1,48 @@
+module RwLockTests
+
+// RwLock (Sable.Concurrency).
+
+import Sable.Concurrency
+import Sable.Testing
+
+@test
+fn readersShareAndAWriterIsAlone() async {
+    let table = RwLock<Int>(0)
+    let inside = Atomic<Int>(0)
+    let mostReaders = Atomic<Int>(0)
+    let writersAlone = Atomic<Bool>(true)
+    await withTaskGroup(of: Int.self) { group in
+        var task = 0
+        while task < 6 {
+            let writer = task % 3 == 0
+            group.spawn {
+                var i = 0
+                while i < 300 {
+                    if writer {
+                        table.write { value in
+                            if inside.add(1) != 0 {
+                                writersAlone.store(false)
+                            }
+                            value += 1
+                            inside.subtract(1)
+                        }
+                    } else {
+                        let _ = table.read { value in
+                            let now = inside.add(1) + 1
+                            mostReaders.max(now)
+                            inside.subtract(1)
+                            return value
+                        }
+                    }
+                    i += 1
+                }
+                return 0
+            }
+            task += 1
+        }
+        await group.waitForAll()
+    }
+    assert(writersAlone.load())
+    assertEqual(table.read { $0 }, 600)
+    assert(mostReaders.load() >= 1)
+}

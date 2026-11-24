@@ -1,0 +1,135 @@
+module Sable.Concurrency
+
+// A lock that guards a value owns it, in raw memory of its own, and hands
+// it out only while held: there is no way to the value without the lock.
+// The value is made shareable as it goes in (Runtime.share), its objects
+// counted atomically, since every thread holding the lock reaches them.
+// A thread that waits blocks, as .NET's Monitor and Rust's Mutex do; a
+// task that must not hold a worker meanwhile takes AsyncMutex.
+
+/// A value only one thread at a time reaches: Rust's `Mutex<T>`, Swift's
+/// `Mutex<Value>`, what C#'s `lock` statement guards. `withLock` holds the
+/// lock for its closure, which is given the value to read and change.
+/// Sendable, whatever it holds, as only the holder reaches the value.
+///
+/// ```sable
+/// let total = Mutex<Int>(0)
+/// total.withLock { $0 += 5 }
+/// assert(total.withLock { $0 } == 5)
+/// ```
+@immutable
+public final class Mutex<Value> {
+    let lock: Int
+    let cell: RawPtr<Value>
+
+    /// A mutex holding the value.
+    public init(_ value: Value) {
+        lock = Runtime.lockNew()
+        Runtime.share(value)
+        unsafe {
+            cell = RawPtr<Value>.allocate(count: 1)
+            cell.initialize(to: value)
+        }
+    }
+
+    deinit {
+        unsafe {
+            cell.deinitialize()
+            cell.deallocate()
+        }
+        Runtime.lockFree(lock)
+    }
+
+    /// What the closure makes of the value, the lock held while it runs:
+    /// waits for any other holder first. What the closure leaves in the
+    /// value is kept, whether it returns or throws.
+    public fn withLock<R, E: Error>(_ body: (inout Value) throws(E) -> R) throws(E) -> R {
+        Runtime.lockAcquire(lock)
+        return try held(body)
+    }
+
+    /// As 'withLock', if no one holds the lock now; none, without waiting,
+    /// if someone does.
+    ///
+    /// ```sable
+    /// let n = Mutex<Int>(1)
+    /// assert(n.withLockIfAvailable { $0 } == 1)
+    /// ```
+    public fn withLockIfAvailable<R, E: Error>(_ body: (inout Value) throws(E) -> R) throws(E) -> R? {
+        if !Runtime.lockTryAcquire(lock) {
+            return none
+        }
+        return try held(body)
+    }
+
+    /// As 'withLock', once the value is ready: until 'isReady' says so, the
+    /// lock is let go and the thread waits for the condition to be
+    /// notified, then takes the lock and asks again — Rust's
+    /// `Condvar::wait_while`, .NET's `Monitor.Wait` in a loop. Whoever makes
+    /// the value ready notifies the condition.
+    ///
+    /// ```sable
+    /// let queue: Mutex<Int[>..]> = Mutex([])
+    /// let filled = Condition()
+    /// queue.withLock { $0.append(1) }
+    /// filled.notifyAll()
+    /// assert(queue.withLock(when: filled, { !$0.isEmpty }) { $0.removeLast() } == 1)
+    /// ```
+    public fn withLock<R, E: Error>(when condition: Condition, _ isReady: (Value) -> Bool, _ body: (inout Value) throws(E) -> R) throws(E) -> R {
+        Runtime.lockAcquire(lock)
+        while !isReady(peek()) {
+            Runtime.conditionWait(condition.handle, lock, until: -1)
+        }
+        return try held(body)
+    }
+
+    /// As 'withLock(when:)', waiting no longer than so many nanoseconds:
+    /// none if the value is still not ready by then.
+    public fn withLock<R, E: Error>(when condition: Condition, within nanoseconds: Int, _ isReady: (Value) -> Bool, _ body: (inout Value) throws(E) -> R) throws(E) -> R? {
+        let deadline = Runtime.monotonicNanoseconds() + nanoseconds
+        Runtime.lockAcquire(lock)
+        while !isReady(peek()) {
+            if Runtime.monotonicNanoseconds() >= deadline {
+                Runtime.lockRelease(lock)
+                return none
+            }
+            Runtime.conditionWait(condition.handle, lock, until: deadline)
+        }
+        return try held(body)
+    }
+
+    // The closure run on the value, the lock held already; the value put
+    // back and the lock let go after, whether it returns or throws.
+    fn held<R, E: Error>(_ body: (inout Value) throws(E) -> R) throws(E) -> R {
+        var value = take()
+        do {
+            let result = try body(&value)
+            put(value)
+            Runtime.lockRelease(lock)
+            return result
+        } catch {
+            put(value)
+            Runtime.lockRelease(lock)
+            throw error
+        }
+    }
+
+    fn take() -> Value {
+        unsafe {
+            return cell.move()
+        }
+    }
+
+    fn put(_ value: Value) {
+        Runtime.share(value)
+        unsafe {
+            cell.initialize(to: value)
+        }
+    }
+
+    fn peek() -> Value {
+        unsafe {
+            return cell.load()
+        }
+    }
+}

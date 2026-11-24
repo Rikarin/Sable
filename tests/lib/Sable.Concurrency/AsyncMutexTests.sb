@@ -1,0 +1,39 @@
+module AsyncMutexTests
+
+// AsyncMutex (Sable.Concurrency): a wait that suspends a task rather than block its thread.
+
+import Sable.Concurrency
+import Sable.Testing
+
+@test
+fn anAsyncMutexIsHeldAcrossSuspensions() async {
+    let gate = AsyncMutex()
+    let inside = Atomic<Int>(0)
+    let overlapped = Atomic<Bool>(false)
+    await withTaskGroup(of: Int.self) { group in
+        var task = 0
+        while task < 20 {
+            group.spawn {
+                return await gate.withLock {
+                    if inside.add(1) != 0 {
+                        overlapped.store(true)
+                    }
+                    await Task.yield()
+                    inside.subtract(1)
+                    return 1
+                }
+            }
+            task += 1
+        }
+        var total = 0
+        for await one in group {
+            total += one
+        }
+        assertEqual(total, 20)
+    }
+    assert(!overlapped.load())
+    assert(!(await gate.isLocked))
+    assert(await gate.tryLock())
+    assert(!(await gate.tryLock()))
+    await gate.unlock()
+}

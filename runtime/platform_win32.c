@@ -267,6 +267,10 @@ static void mutex_unlock(PlatformMutex *mutex) {
     ReleaseSRWLockExclusive(mutex);
 }
 
+static bool mutex_try_lock(PlatformMutex *mutex) {
+    return TryAcquireSRWLockExclusive(mutex) != 0;
+}
+
 static void condition_init(PlatformCondition *condition) {
     InitializeConditionVariable(condition);
 }

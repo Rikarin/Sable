@@ -1,0 +1,38 @@
+module SemaphoreTests
+
+// Semaphore (Sable.Concurrency).
+
+import Sable.Concurrency
+import Sable.Testing
+
+@test
+fn aSemaphoreLetsSoManyInAtOnce() async {
+    let slots = Semaphore(permits: 2)
+    let inside = Atomic<Int>(0)
+    let most = Atomic<Int>(0)
+    await withTaskGroup(of: Int.self) { group in
+        var task = 0
+        while task < 6 {
+            group.spawn {
+                var i = 0
+                while i < 200 {
+                    slots.acquire()
+                    most.max(inside.add(1) + 1)
+                    inside.subtract(1)
+                    slots.release()
+                    i += 1
+                }
+                return 0
+            }
+            task += 1
+        }
+        await group.waitForAll()
+    }
+    assert(most.load() <= 2)
+    assertEqual(slots.availablePermits, 2)
+    let one = Semaphore(permits: 1)
+    assert(one.tryAcquire())
+    assert(!one.acquire(within: 1000000))
+    one.release()
+    assert(one.acquire(within: 1000000))
+}

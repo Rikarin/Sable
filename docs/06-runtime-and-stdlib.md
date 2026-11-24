@@ -740,7 +740,9 @@ Sable.IO            File Directory Path Stream MemoryMappedFile stdio
 Sable.Serialize     Encoder/Decoder protocols, conformance synthesis via
                     @derive(Serializable), JSON, TOML, MessagePack, and the
                     zero-copy @inline_layout path
-Sable.Concurrency   Actor Channel Mutex RwLock AsyncStream
+Sable.Concurrency   Channel, Mutex RwLock Condition Semaphore Barrier
+                    CountdownLatch Once Lazy, AsyncMutex AsyncSemaphore,
+                    AsyncStream
                     (Task, TaskGroup, AsyncSequence, Atomic<T> and OnceCell
                     are Sable.Core's: an Atomic's cell is Core's raw memory)
 Sable.Time          Instant Duration Clock Calendar TimeZone

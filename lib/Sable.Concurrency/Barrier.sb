@@ -1,0 +1,51 @@
+module Sable.Concurrency
+
+/// Where so many threads wait for each other: each that arrives waits until
+/// the last does, then all go on, and the barrier is ready for the next
+/// round. .NET's `Barrier`, Rust's `std::sync::Barrier`.
+///
+/// ```sable
+/// let one = Barrier(count: 1)
+/// assert(one.wait())
+/// ```
+@immutable
+public final class Barrier {
+    let lock: Int
+    let passed: Condition
+    let count: Int
+    let arrived: Atomic<Int>
+    let round: Atomic<Int>
+
+    /// A barrier for so many threads.
+    public init(count: Int) {
+        precondition(count > 0, "a barrier for \(count) threads")
+        lock = Runtime.lockNew()
+        passed = Condition()
+        self.count = count
+        arrived = Atomic<Int>(0)
+        round = Atomic<Int>(0)
+    }
+
+    deinit {
+        Runtime.lockFree(lock)
+    }
+
+    /// Waits for the rest to arrive: true for the one that arrived last,
+    /// which lets the others go — Rust's 'is_leader'.
+    public fn wait() -> Bool {
+        Runtime.lockAcquire(lock)
+        let mine = round.load(ordering: .Relaxed)
+        if arrived.add(1, ordering: .Relaxed) + 1 == count {
+            arrived.store(0, ordering: .Relaxed)
+            round.add(1, ordering: .Relaxed)
+            passed.notifyAll()
+            Runtime.lockRelease(lock)
+            return true
+        }
+        while round.load(ordering: .Relaxed) == mine {
+            Runtime.conditionWait(passed.handle, lock, until: -1)
+        }
+        Runtime.lockRelease(lock)
+        return false
+    }
+}

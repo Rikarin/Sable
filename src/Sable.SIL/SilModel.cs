@@ -2751,6 +2751,21 @@ public static class SilBuiltins {
 
         Add("atomic_fence", SilType.Unit, SilType.Int);
 
+        // Locks (Mutex, Condition and what is built on them): the system's
+        // mutex and condition variable, by handle. A thread that waits
+        // blocks. A condition's wait takes the mutex held, and a time of the
+        // monotonic clock to stop at, or a negative one for none.
+        Add("lock_new", SilType.Int);
+        Add("lock_free", SilType.Unit, SilType.Int);
+        Add("lock_acquire", SilType.Unit, SilType.Int);
+        Add("lock_try_acquire", SilType.Bool, SilType.Int);
+        Add("lock_release", SilType.Unit, SilType.Int);
+        Add("condition_new", SilType.Int);
+        Add("condition_free", SilType.Unit, SilType.Int);
+        Add("condition_wait", SilType.Unit, SilType.Int, SilType.Int, SilType.Int);
+        Add("condition_signal", SilType.Unit, SilType.Int);
+        Add("condition_broadcast", SilType.Unit, SilType.Int);
+
         // Emptying a region, all of it or back to a mark: what a 'region frame = pool' block took.
         Add("region_reset", SilType.Unit, SilType.Region);
         Add("region_push", SilType.Unit, SilType.Region);

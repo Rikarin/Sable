@@ -295,11 +295,6 @@ public sealed partial class SilGen {
                 progress = true;
             }
 
-            if (_pendingThunks.TryDequeue(out var thunk)) {
-                thunk();
-                progress = true;
-            }
-
             var wanted = new List<string>();
             foreach (var function in _module.Functions.ToList()) {
                 foreach (var block in function.Blocks) {

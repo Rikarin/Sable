@@ -28,93 +28,109 @@ public sealed partial class SilGen {
     readonly List<NamedTypeSymbol> _castTargets = [];
 
     /// <summary>
-    ///     The protocols of a layout whose conformances have witness tables:
-    ///     every protocol of <c>any P</c> or <c>any A &amp; B</c>, when none is
-    ///     an instance of a generic protocol — whose existentials are built,
-    ///     and cast to, from witnesses the compiler picks for each type, with
-    ///     the variance their slots allow. Null for such a layout.
+    ///     The protocols of a layout the conformance registry is asked about
+    ///     in a cast: every protocol of <c>any P</c> or <c>any A &amp; B</c>,
+    ///     when none is an instance of a generic protocol — whose existential
+    ///     a conformer to another instance may fill by variance, so a cast to
+    ///     it tries each type of the program instead. Null for such a layout.
     /// </summary>
     internal List<NamedTypeSymbol>? TabledProtocols(StructType layout) =>
         _layoutProtocols.TryGetValue(layout, out var protocols) && protocols.TrueForAll(static p => !p.IsConstructed) ? protocols : null;
 
     /// <summary>
-    ///     For each slot of a layout, the witness table it is read from in a
-    ///     cast — the first of the layout's protocols that has the slot — and
-    ///     where in that table it is.
+    ///     The witness table of a type's conformance to a protocol (#299),
+    ///     made the first time anything needs it: an existential, a cast, a
+    ///     call of generic code. Its entries are the protocol's requirements
+    ///     in the generic calling convention, each met as code that knows the
+    ///     type meets it; then the tables of the protocols it refines, and
+    ///     the type's associated types, with what each must conform to. For
+    ///     an instance of a generic protocol, the table is of the conformer's
+    ///     own instance (<c>Producer&lt;Dog&gt;</c>, for an
+    ///     <c>any Producer&lt;Animal&gt;</c>), whose entries take and give what
+    ///     the existential's do, as a class's upcast is the same reference.
+    ///     Null when the type does not conform.
     /// </summary>
-    internal List<(NamedTypeSymbol Protocol, int Entry)>? SlotTables(StructType layout) {
-        if (TabledProtocols(layout) is not { } protocols) {
+    internal SilWitnessTable? WitnessTable(TypeSymbol concrete, SilType value, NamedTypeSymbol protocol, SyntaxNode at) {
+        var name = QualifiedName(protocol);
+        if (_module.FindWitnessTable(value, name) is { } existing) {
+            return existing;
+        }
+
+        var conformance = (protocol.OriginalDefinition.TypeParameters.IsEmpty ? null : concrete.SupertypeOf(protocol)) ?? protocol.OriginalDefinition;
+        var table = new SilWitnessTable(value, name);
+        AssociatedTypes(table, concrete, conformance);
+        foreach (var refined in Bases(conformance.OriginalDefinition)) {
+            table.Bases.Add(QualifiedName(refined));
+        }
+
+        // Added first: a witness may box a value of the type, and so ask for this very table.
+        _module.AddWitnessTable(table);
+        var through = TypeSubstitution.For(conformance);
+        foreach (var refined in Bases(conformance.OriginalDefinition)) {
+            WitnessTable(concrete, value, (NamedTypeSymbol)through.Apply(refined), at);
+        }
+
+        _filling.Add(table);
+        foreach (var (key, member) in GenericRequirements(conformance)) {
+            string? witness = null;
+            var type = GenericEntryType(conformance, member);
+            if (type is not null) {
+                using (_diagnostics.Suppress()) {
+                    witness = GenericWitness(concrete, value, conformance, key, member, type, at);
+                }
+            }
+
+            table.Entries.Add((key, witness, witness is null ? null : type));
+        }
+
+        _filling.Remove(table);
+        return table;
+    }
+
+    /// <summary>The tables whose entries are being made: one asked for again meanwhile is taken as it will be.</summary>
+    readonly HashSet<SilWitnessTable> _filling = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    ///     The first requirement of a table a call through an existential can
+    ///     reach but that has no witness — one the type cannot meet that way
+    ///     yet — or null when every one has. A table being made is taken to
+    ///     have them all.
+    /// </summary>
+    internal string? MissingWitness(SilWitnessTable table, NamedTypeSymbol protocol) {
+        if (_filling.Contains(table)) {
             return null;
         }
 
-        var singles = protocols.Select(p => ExistentialSlots(ExistentialLayout([p])!).Select(static s => s.Slot).ToList()).ToList();
-        var found = new List<(NamedTypeSymbol, int)>();
-        foreach (var (slot, _) in ExistentialSlots(layout)) {
-            var at = singles.FindIndex(s => s.Contains(slot));
-            if (at < 0) {
-                return null;
+        var requirements = GenericRequirements(protocol);
+        for (var i = 0; i < table.Entries.Count && i < requirements.Count; i++) {
+            if (table.Entries[i] is { Function: null } && GenericEntryType(protocol, requirements[i].Member) is { } type && ReachableThroughExistential(requirements[i].Member, type)) {
+                return table.Entries[i].Requirement;
             }
-
-            found.Add((protocols[at], singles[at].IndexOf(slot)));
         }
 
-        return found;
+        foreach (var refined in Bases(protocol.OriginalDefinition)) {
+            var instance = (NamedTypeSymbol)TypeSubstitution.For(protocol).Apply(refined);
+            if (_module.FindWitnessTable(table.Conformer, QualifiedName(refined)) is { } baseTable && MissingWitness(baseTable, instance) is { } missing) {
+                return missing;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
-    ///     The witness table of a type's conformance to a protocol, made the
-    ///     first time an existential needs it: the witnesses of the protocol's
-    ///     existential's slots, in their order — the functions an existential
-    ///     of the type holds — and the type's associated types, with what each
-    ///     must conform to. False when a witness cannot be made: the type is
-    ///     then not found to conform by a cast.
+    ///     A requirement a call through an existential can reach: an instance
+    ///     member whose entry takes the value and nothing else of Self's or
+    ///     an associated type's, and gives none back.
     /// </summary>
-    internal bool WitnessTable(NamedTypeSymbol concrete, SilType value, NamedTypeSymbol protocol, SyntaxNode at) {
-        var name = QualifiedName(protocol);
-        if (_module.FindWitnessTable(value, name) is { } existing) {
-            return existing.HasEntries;
+    internal static bool ReachableThroughExistential(Symbol member, FunctionType type) =>
+        member switch {
+            FunctionSymbol function => !function.IsStatic && function.FunctionKind != FunctionKind.Operator,
+            FieldSymbol field => !field.IsStatic,
+            _ => false,
         }
-
-        if (ExistentialLayout([protocol]) is not { } single) {
-            return false;
-        }
-
-        var box = ExistentialBox(value);
-        var slots = ExistentialSlots(single);
-        var table = new SilWitnessTable(value, name);
-        using (_diagnostics.Suppress()) {
-            for (var i = 0; i < slots.Count; i++) {
-                var thick = (ThickFunctionType)single.Fields[i + 1].Type;
-                if (WitnessThunk(concrete, value, box, slots[i].Slot, slots[i].Member, thick, at) is not { } thunk) {
-                    return false;
-                }
-
-                table.Entries.Add((slots[i].Slot, thunk.Name, thunk.Type));
-            }
-        }
-
-        // The associated types, as the conformance binds them, and the protocols each must conform to.
-        foreach (var associated in protocol.OriginalDefinition.AssociatedTypes) {
-            // Each in its place, which unspecialised code reads it from: one
-            // the conformance does not bind, or binds to Never, as '()'.
-            var lowered = AssociatedBinding(concrete, associated) is { } bound ? Lower(bound) : null;
-            var index = table.AssociatedTypes.Count;
-            table.AssociatedTypes.Add((associated.Name, lowered ?? SilType.Unit));
-            if (lowered is null) {
-                continue;
-            }
-
-            foreach (var constraint in associated.Constraints.OfType<NamedTypeSymbol>().Where(static c => c.TypeKind == TypeKind.Protocol)) {
-                table.AssociatedConformances.Add((index, QualifiedName(constraint)));
-            }
-        }
-
-        _module.AddWitnessTable(table);
-
-        // Unspecialised code's entries too, so that every unit's copy of the table is the same.
-        GenericEntries(table, concrete, value, protocol, at);
-        return true;
-    }
+        && type.Parameters.Length >= 2 && !type.Parameters.Skip(1).Any(SilType.MentionsOpaque) && !SilType.MentionsOpaque(type.Result)
+        && type.Thrown is not AddressType;
 
     /// <summary>
     ///     A type put in an existential: its witness tables for the
@@ -122,18 +138,14 @@ public sealed partial class SilGen {
     ///     that it conforms to — so a cast finds them in the registry,
     ///     whichever of the two the program lowered first.
     /// </summary>
-    internal void Boxed(NamedTypeSymbol concrete, SilType value, StructType layout, SyntaxNode at) {
-        if (TabledProtocols(layout) is not { } protocols) {
-            return;
-        }
-
-        foreach (var protocol in protocols) {
+    internal void Boxed(TypeSymbol concrete, SilType value, StructType layout, SyntaxNode at) {
+        foreach (var protocol in LayoutProtocols(layout)) {
             WitnessTable(concrete, value, protocol, at);
         }
 
-        if (_boxed.TryAdd(value, concrete)) {
-            foreach (var target in _castTargets.Where(concrete.Satisfies)) {
-                WitnessTable(concrete, value, target, at);
+        if (concrete is NamedTypeSymbol named && _boxed.TryAdd(value, named)) {
+            foreach (var target in _castTargets.Where(named.Satisfies)) {
+                WitnessTable(named, value, target, at);
             }
         }
     }
@@ -166,7 +178,7 @@ public sealed partial class SilGen {
     ///     registry asked, from the metadata of what the box holds — an
     ///     object's own class, for an object — for Q's witness table (each
     ///     protocol's, for <c>any A &amp; B</c>); the existential is the box,
-    ///     shared, with the tables' witnesses. None when a table is missing.
+    ///     shared, with that metadata and the tables. None when a table is missing.
     /// </summary>
     void RegistryCast(SilFunction cast, SilBlock entry, SilValue box, SilBlock joined, EnumType optional, StructType layout, List<NamedTypeSymbol> protocols,
         SyntaxNode at) {
@@ -178,24 +190,16 @@ public sealed partial class SilGen {
         none.Append(new BranchInst(joined, [none.Append(new EnumInst(optional, optional.CaseIndex("None"), null))]));
         var metadata = entry.Append(new BuiltinInst("box_metadata", SilType.Metadata, box));
         var block = entry;
-        var tables = new Dictionary<NamedTypeSymbol, SilValue>();
+        var tables = new List<SilValue>();
         foreach (var protocol in protocols) {
             var table = block.Append(new BuiltinInst($"witness_table:{QualifiedName(protocol)}", SilType.WitnessTable, metadata));
             var found = cast.AddBlock();
             block.Append(new CondBranchInst(block.Append(new BuiltinInst("witness_table_exists", SilType.Bool, table)), found, [], none, []));
-            tables[protocol] = table;
+            tables.Add(table);
             block = found;
         }
 
-        var fields = new List<SilValue> { block.Append(new CopyValueInst(box)) };
-        var slots = SlotTables(layout)!;
-        for (var i = 0; i < slots.Count; i++) {
-            var thick = (ThickFunctionType)layout.Fields[i + 1].Type;
-            var witness = block.Append(new BuiltinInst($"witness_entry:{slots[i].Entry}", thick.Implementation, tables[slots[i].Protocol]));
-            fields.Add(block.Append(new PartialApplyInst(witness, null, thick)));
-        }
-
-        var existential = block.Append(new StructInst(layout, [..fields]));
+        var existential = block.Append(new StructInst(layout, [block.Append(new CopyValueInst(box)), metadata, ..tables]));
         block.Append(new BranchInst(joined, [block.Append(new EnumInst(optional, optional.CaseIndex("Some"), existential))]));
     }
 

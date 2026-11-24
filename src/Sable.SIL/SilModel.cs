@@ -2335,6 +2335,15 @@ public static class SilBuiltins {
             case "witness_table_exists" when operands is [var table] && table == SilType.WitnessTable:
                 return new([SilType.WitnessTable], SilType.Bool);
 
+            // What an existential's box holds, where it holds it (#299): the
+            // value, borrowed, as the opaque value a witness is given; and,
+            // for a witness that changes it, its address, the box first made
+            // the existential's own — copied, if another existential shares it.
+            case "box_project" when operands is [ClassType box, var m] && m == metadata && result is OpaqueType:
+                return new([box, metadata], result);
+            case "box_project_unique" when operands is [AddressType { Pointee: ClassType } slot, var m] && m == metadata && result is AddressType { Pointee: OpaqueType }:
+                return new([slot, metadata], result);
+
             // Unspecialised code's values (#297): an address seen as holding
             // a type parameter's value or the type it is; a borrowed value's
             // own storage, seen as the type it is; its dynamic type, given its
@@ -2392,10 +2401,6 @@ public static class SilBuiltins {
         // The table of a protocol a table's protocol refines, the index-th it names.
         if (name.StartsWith("witness_base:", StringComparison.Ordinal)) {
             return operands is [var table] && table == SilType.WitnessTable ? new([SilType.WitnessTable], SilType.WitnessTable) : null;
-        }
-
-        if (name.StartsWith("witness_entry:", StringComparison.Ordinal)) {
-            return operands is [var table] && table == SilType.WitnessTable && result is FunctionType ? new([SilType.WitnessTable], result) : null;
         }
 
         return null;

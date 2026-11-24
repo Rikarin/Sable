@@ -404,7 +404,7 @@ internal sealed class Conversions(CoreTypes core) {
     ///     <c>Rep&lt;Int&gt;</c> declared <c>Rep&lt;E&gt;: Source&lt;E&gt;</c> is a
     ///     <c>Source&lt;Int&gt;</c>.
     /// </summary>
-    static IEnumerable<TypeSymbol> Supertypes(TypeSymbol source) {
+    public static IEnumerable<TypeSymbol> Supertypes(TypeSymbol source) {
         if (source is not NamedTypeSymbol named) {
             yield break;
         }

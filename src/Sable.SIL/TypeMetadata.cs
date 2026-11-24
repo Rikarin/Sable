@@ -183,7 +183,7 @@ public sealed class TypeMetadata {
         return false;
     }
 
-    /// <summary>True for what <c>any P</c> lowers to: the box, and a slot per requirement.</summary>
+    /// <summary>True for what <c>any P</c> lowers to: the box, the metadata, and a witness table per protocol.</summary>
     public static bool IsExistential(SilType type) => type is StructType { Name: var name } && name.StartsWith("any$", StringComparison.Ordinal);
 
     /// <summary>True for an optional: <c>Optional$…</c>, some and none.</summary>
@@ -314,19 +314,19 @@ public sealed class TypeMetadata {
 }
 
 /// <summary>
-///     A conformance's witness table (docs/06 §6.2): the protocol's
-///     requirements in a fixed order — the order of the slots of the
-///     protocol's existential, <c>any P</c> — each the function that does it
-///     for the conforming type, given the box an existential keeps the value
-///     in; then the type's associated types and what they conform to.
+///     A conformance's witness table (docs/06 §6.2, #299): one entry per
+///     requirement the protocol itself declares, in declaration order, each
+///     the function that meets it for the conforming type in the generic
+///     calling convention — what unspecialised code and a call through an
+///     existential both call; then the tables of the protocols it refines,
+///     and the type's associated types with what each must conform to.
 /// </summary>
 /// <remarks>
 ///     Natively a constant the conformer's metadata's conformance record
 ///     points at, so that <c>sable_conformance</c> finds it from any value's
 ///     metadata: <c>e as? any Q</c> and <c>e is any Q</c> are lookups in that
-///     registry. An existential of P built where the type is known copies the
-///     same functions into its slots, so a call through it costs no load from
-///     the table.
+///     registry. An existential holds a pointer to it for each of its
+///     protocols.
 /// </remarks>
 public sealed class SilWitnessTable(SilType conformer, string protocol) {
     /// <summary>The conforming type.</summary>
@@ -335,27 +335,16 @@ public sealed class SilWitnessTable(SilType conformer, string protocol) {
     /// <summary>The protocol, by the name its descriptor has: <c>M.Shape</c>.</summary>
     public string Protocol { get; } = protocol;
 
-    /// <summary>Each requirement's slot, and the function that witnesses it.</summary>
-    public List<(string Requirement, string Function, FunctionType Type)> Entries { get; } = [];
-
-    /// <summary>
-    ///     Whether <see cref="Entries" /> are made: a table made first for
-    ///     generic code has its existential slots filled when an existential
-    ///     or a cast first needs them.
-    /// </summary>
-    public bool HasEntries { get; set; } = true;
-
     /// <summary>
     ///     Each requirement the protocol itself declares, in declaration order,
-    ///     with its witness in the generic calling convention (#297): what
-    ///     unspecialised code calls — <c>self</c> (its storage's address, for
-    ///     one that changes it) unless it is static, its parameters, where a
-    ///     result of <c>Self</c> goes, then <c>Self</c>'s metadata. A value of
-    ///     <c>Self</c> is an <see cref="OpaqueType" />, borrowed where its
-    ///     caller holds it. Null where no witness is made: a requirement
-    ///     that convention cannot pass.
+    ///     with its witness in the generic calling convention (#297, #299):
+    ///     <c>self</c> (its storage's address, for one that changes it) unless
+    ///     it is static, its parameters, where a result of <c>Self</c> goes,
+    ///     then <c>Self</c>'s metadata. A value of <c>Self</c> is an
+    ///     <see cref="OpaqueType" />, borrowed where its caller holds it. Null
+    ///     where no witness is made: a requirement that convention cannot pass.
     /// </summary>
-    public List<(string Requirement, string? Function, FunctionType? Type)> GenericEntries { get; } = [];
+    public List<(string Requirement, string? Function, FunctionType? Type)> Entries { get; } = [];
 
     /// <summary>
     ///     The protocols the protocol refines directly, in the order it names

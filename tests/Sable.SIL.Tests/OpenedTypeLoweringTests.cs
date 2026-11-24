@@ -69,7 +69,7 @@ public sealed class OpenedTypeLoweringTests {
         // Each conformer can be boxed, and its table has the entries generic code calls.
         Assert.Contains("M.Meters", module.Boxers.Keys);
         Assert.Contains("M.Label", module.Boxers.Keys);
-        Assert.NotEmpty(module.FindWitnessTable(module.FindType("M.Label")!, "M.Zero")!.GenericEntries);
+        Assert.NotEmpty(module.FindWitnessTable(module.FindType("M.Label")!, "M.Zero")!.Entries);
     }
 
     /// <summary>A specialised build calls the function compiled once only where a call opens a Type: where the type is known, the copy for it.</summary>

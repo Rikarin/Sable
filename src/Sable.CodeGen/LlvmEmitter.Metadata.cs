@@ -44,8 +44,17 @@ public sealed partial class LlvmEmitter {
     /// <summary>The runtime's <c>SableField</c>: name, type name, offset, kind, type.</summary>
     const string FieldDescriptorType = "{ ptr, ptr, i64, i64, ptr }";
 
-    /// <summary>The runtime's <c>SableWitnessTable</c>.</summary>
-    const string WitnessTableRecord = "{ ptr, i64, ptr, i64, ptr, i64, ptr, i64, ptr, i64, ptr }";
+    /// <summary>
+    ///     The runtime's <c>SableWitnessTable</c>, but for its requirements,
+    ///     which follow inline (<see cref="WitnessTableEntries" /> bytes on).
+    /// </summary>
+    const string WitnessTableRecord = "{ ptr, i64, ptr, i64, ptr, i64, ptr, i64 }";
+
+    /// <summary>Where a witness table's requirements start, in bytes.</summary>
+    internal const int WitnessTableEntries = 64;
+
+    /// <summary>The fields of <see cref="WitnessTableRecord" /> that point at its associated types' metadata and its bases' tables.</summary>
+    internal const int WitnessTableAssociated = 2, WitnessTableBases = 6;
 
     /// <summary>
     ///     A type's metadata, <c>@"sable.type.T"</c>: its kind, its fields, its
@@ -377,13 +386,6 @@ public sealed partial class LlvmEmitter {
         }
 
         var protocol = ProtocolDescriptor(table.Protocol);
-        var requirements = "null";
-        if (table.Entries.Count > 0) {
-            requirements = name[..^1] + ".requirements\"";
-            var entries = table.Entries.Select(e => _reachable?.Contains(e.Function) == false || _module?.Find(e.Function) is null && _module?.Unit is null ? "ptr null" : $"ptr @{Global(e.Function)}");
-            _globals.Append($"{requirements} = {SharedLinkage} constant [{table.Entries.Count} x ptr] [{string.Join(", ", entries)}]{Comdat(requirements, SharedLinkage)}\n");
-        }
-
         var associatedTypes = "null";
         if (table.AssociatedTypes.Count > 0) {
             associatedTypes = name[..^1] + ".associated\"";
@@ -398,16 +400,6 @@ public sealed partial class LlvmEmitter {
             _globals.Append($"{associatedConformances} = {SharedLinkage} constant [{records.Count} x {{ i64, ptr }}] [{string.Join(", ", records)}]{Comdat(associatedConformances, SharedLinkage)}\n");
         }
 
-        // The requirements in the generic calling convention (#297), for unspecialised code.
-        var generic = "null";
-        if (table.GenericEntries.Count > 0) {
-            generic = name[..^1] + ".generic\"";
-            var entries = table.GenericEntries.Select(e => e.Function is not { } witness || _reachable?.Contains(witness) == false || _module?.Find(witness) is null && _module?.Unit is null
-                ? "ptr null"
-                : $"ptr @{Global(witness)}");
-            _globals.Append($"{generic} = {SharedLinkage} constant [{table.GenericEntries.Count} x ptr] [{string.Join(", ", entries)}]{Comdat(generic, SharedLinkage)}\n");
-        }
-
         // The conformer's tables of the protocols this one refines, for unspecialised code to reach them by.
         var bases = "null";
         if (table.Bases.Count > 0) {
@@ -416,9 +408,15 @@ public sealed partial class LlvmEmitter {
             _globals.Append($"{bases} = {SharedLinkage} constant [{refined.Count} x ptr] [{string.Join(", ", refined)}]{Comdat(bases, SharedLinkage)}\n");
         }
 
-        _globals.Append($"{name} = {SharedLinkage} constant {WitnessTableRecord} {{ ptr {protocol}, i64 {table.Entries.Count}, ptr {requirements}, ")
+        // Its requirements, inline: each the witness in the one calling
+        // convention, or null where none is made or none can be reached.
+        var entries = table.Entries.Select(e => e.Function is not { } witness || _reachable?.Contains(witness) == false || _module?.Find(witness) is null && _module?.Unit is null
+            ? "ptr null"
+            : $"ptr @{Global(witness)}").ToList();
+        var record = $"{{ ptr, i64, ptr, i64, ptr, i64, ptr, i64, [{entries.Count} x ptr] }}";
+        _globals.Append($"{name} = {SharedLinkage} constant {record} {{ ptr {protocol}, ")
             .Append($"i64 {table.AssociatedTypes.Count}, ptr {associatedTypes}, i64 {table.AssociatedConformances.Count}, ptr {associatedConformances}, ")
-            .Append($"i64 {table.GenericEntries.Count}, ptr {generic}, i64 {table.Bases.Count}, ptr {bases} }}{Comdat(name, SharedLinkage)}\n");
+            .Append($"i64 {table.Bases.Count}, ptr {bases}, i64 {entries.Count}, [{entries.Count} x ptr] [{string.Join(", ", entries)}] }}{Comdat(name, SharedLinkage)}\n");
         return name;
     }
 
@@ -478,6 +476,7 @@ public sealed partial class LlvmEmitter {
                                         declare void @sable_register_error_eraser(ptr, ptr)
                                         declare ptr @sable_opaque_alloc(ptr)
                                         declare ptr @sable_opaque_box(ptr, ptr)
+                                        declare ptr @sable_box_unique(ptr, ptr)
                                         declare void @sable_opaque_free(ptr)
                                         declare void @sable_register_boxer(ptr, ptr)
                                         declare ptr @sable_witness_table_required(ptr, ptr)
@@ -649,6 +648,25 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call ptr @sable_box_value_metadata(ptr {operands[0]})");
                     return true;
 
+                // An existential's value, where its box holds it (#299): past
+                // the header, aligned as the value's type is.
+                case "box_project": {
+                    var alignment = Fresh();
+                    var offset = Fresh();
+                    Line($"{alignment} = load i64, ptr {Field(operands[1], MetadataAlignmentField)}");
+                    var wider = Fresh();
+                    Line($"{wider} = icmp ugt i64 {alignment}, {ObjectHeaderSize}");
+                    Line($"{offset} = select i1 {wider}, i64 {alignment}, i64 {ObjectHeaderSize}");
+                    Line($"{Result()} = getelementptr inbounds i8, ptr {operands[0]}, i64 {offset}");
+                    return true;
+                }
+
+                // Its address, the box first made the existential's own.
+                case "box_project_unique":
+                    SiteForRuntime();
+                    Line($"{Result()} = call ptr @sable_box_unique(ptr {operands[0]}, ptr {operands[1]})");
+                    return true;
+
                 case "witness_table_exists":
                     Line($"{Result()} = icmp ne ptr {operands[0]}, null");
                     return true;
@@ -712,7 +730,7 @@ public sealed partial class LlvmEmitter {
             // The table of a protocol the table's protocol refines.
             if (builtin.Name.StartsWith("witness_base:", StringComparison.Ordinal)) {
                 var index = int.Parse(builtin.Name["witness_base:".Length..], CultureInfo.InvariantCulture);
-                Line($"{Result()} = {TableEntry(operands[0], 10, index)}");
+                Line($"{Result()} = {TableEntry(operands[0], WitnessTableBases, index)}");
                 return true;
             }
 
@@ -749,7 +767,9 @@ public sealed partial class LlvmEmitter {
             // A requirement's witness in the generic calling convention.
             if (builtin.Name.StartsWith("witness_generic:", StringComparison.Ordinal)) {
                 var index = int.Parse(builtin.Name["witness_generic:".Length..], CultureInfo.InvariantCulture);
-                Line($"{Result()} = {TableEntry(operands[0], 8, index)}");
+                var slot = Fresh();
+                Line($"{slot} = getelementptr inbounds i8, ptr {operands[0]}, i64 {WitnessTableEntries + 8 * index}");
+                Line($"{Result()} = load ptr, ptr {slot}");
                 return true;
             }
 
@@ -762,7 +782,7 @@ public sealed partial class LlvmEmitter {
             // An associated type's metadata, as the conformance binds it.
             if (builtin.Name.StartsWith("witness_associated:", StringComparison.Ordinal)) {
                 var index = int.Parse(builtin.Name["witness_associated:".Length..], CultureInfo.InvariantCulture);
-                Line($"{Result()} = {TableEntry(operands[0], 4, index)}");
+                Line($"{Result()} = {TableEntry(operands[0], WitnessTableAssociated, index)}");
                 return true;
             }
 
@@ -776,19 +796,6 @@ public sealed partial class LlvmEmitter {
             // The registry: the witness table of the type's conformance to the protocol, or null.
             if (builtin.Name.StartsWith("witness_table:", StringComparison.Ordinal)) {
                 Line($"{Result()} = call ptr @sable_witness_table(ptr {operands[0]}, ptr {module.ProtocolDescriptor(builtin.Name["witness_table:".Length..])})");
-                return true;
-            }
-
-            // A requirement's witness, from a witness table.
-            if (builtin.Name.StartsWith("witness_entry:", StringComparison.Ordinal)) {
-                var index = int.Parse(builtin.Name["witness_entry:".Length..], CultureInfo.InvariantCulture);
-                var at = Fresh();
-                Line($"{at} = getelementptr inbounds {WitnessTableRecord}, ptr {operands[0]}, i32 0, i32 2");
-                var requirements = Fresh();
-                Line($"{requirements} = load ptr, ptr {at}");
-                var slot = Fresh();
-                Line($"{slot} = getelementptr inbounds ptr, ptr {requirements}, i64 {index}");
-                Line($"{Result()} = load ptr, ptr {slot}");
                 return true;
             }
 

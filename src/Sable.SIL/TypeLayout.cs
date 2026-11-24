@@ -71,7 +71,7 @@ public static class TypeLayout {
             _ when type == SilType.F16 || type == SilType.BF16 => 2,
             _ when SilType.IntegerInfo(type) is var (bits, _) => bits / 8,
             _ when type == SilType.Char => 4,
-            _ when type == SilType.String || type == SilType.Metadata => PointerBytes,
+            _ when type == SilType.String || type == SilType.Metadata || type == SilType.WitnessTable => PointerBytes,
             AddressType or FunctionType or ClassType or ArrayType => PointerBytes,
             StructType { IsInline: true } or InlinePointerType => PointerBytes,
             _ when type == SilType.Object || type == SilType.Region => PointerBytes,

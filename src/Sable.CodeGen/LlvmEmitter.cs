@@ -1649,14 +1649,14 @@ public sealed partial class LlvmEmitter {
             if (associated.Table is { } given && Hidden(given) is { } passed) {
                 table = passed;
                 foreach (var step in associated.Path) {
-                    table = EntryTableEntry(table, 10, step);
+                    table = EntryTableEntry(table, WitnessTableBases, step);
                 }
             } else {
                 table = Fresh();
                 _entryAllocas.Append($"  {table} = call ptr @sable_witness_table_cached(ptr {module.WitnessCache()}, ptr {baseMetadata}, ptr {module.ProtocolDescriptor(associated.Protocol)})\n");
             }
 
-            var made = EntryTableEntry(table, 4, associated.Index);
+            var made = EntryTableEntry(table, WitnessTableAssociated, associated.Index);
             _opaqueMetadata[associated.Name] = made;
             return made;
         }

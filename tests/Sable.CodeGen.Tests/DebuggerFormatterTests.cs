@@ -409,7 +409,7 @@ public sealed partial class DebuggerFormatterTests {
 
         // The compiler's thunk between them is in the backtrace, but is not stopped in.
         Expect(output, "Calls.Dog.name(self=(breed = \"collie\")) at calls.sb:10");
-        Expect(output, "$witness$Calls.Dog$name");
+        Expect(output, "$generic$witness$Calls.Dog$Calls.Named$0$name");
         Expect(output, "Return value: (String) $0 = \"collie\"");
     }
 
@@ -443,7 +443,7 @@ public sealed partial class DebuggerFormatterTests {
     }
 
     /// <summary>
-    ///     A witness thunk is a trampoline to the method, in a file of its
+    ///     A witness (one entry of a witness table, #299) is a trampoline to the method, in a file of its
     ///     own; and, for an LLVM that would write its whole body as one
     ///     line-0 row, its prologue has a line — what lldb 18 needs to step
     ///     on through it rather than out of it.
@@ -455,7 +455,7 @@ public sealed partial class DebuggerFormatterTests {
             var result = Pipeline.Compile(new SourceText(Calls, "calls.sb"), directory.FullName);
             Assert.True(result.Succeeded, string.Join("\n", result.Errors));
             var ir = result.LlvmIr!;
-            var subprogram = ir.Split('\n').Single(static l => l.Contains("!DISubprogram(name: \"$witness$Calls.Dog$name\"", StringComparison.Ordinal));
+            var subprogram = ir.Split('\n').Single(static l => l.Contains("!DISubprogram(name: \"$generic$witness$Calls.Dog$Calls.Named$0$name\"", StringComparison.Ordinal));
             Assert.Contains("targetFuncName: \"Calls.Dog.name\"", subprogram, StringComparison.Ordinal);
             Assert.Contains("DIFlagArtificial", subprogram, StringComparison.Ordinal);
             var file = System.Text.RegularExpressions.Regex.Match(subprogram, @"file: (![0-9]+)").Groups[1].Value;

@@ -35,6 +35,15 @@ public abstract class TypeSymbol : Symbol, IEquatable<TypeSymbol> {
     /// <summary>True when this type meets a constraint: conforms to a protocol, or is or inherits from a class.</summary>
     public bool Satisfies(TypeSymbol constraint) => Conversions.Satisfies(this, constraint);
 
+    /// <summary>
+    ///     The instance of a generic protocol (or class) this type inherits
+    ///     from or conforms to, its arguments as this type gives them: a
+    ///     <c>Rep&lt;Int&gt;</c> declared <c>Rep&lt;E&gt;: Source&lt;E&gt;</c> is a
+    ///     <c>Source&lt;Int&gt;</c>. Null when it has none of that definition.
+    /// </summary>
+    public NamedTypeSymbol? SupertypeOf(NamedTypeSymbol definition) =>
+        Conversions.Supertypes(this).OfType<NamedTypeSymbol>().FirstOrDefault(t => ReferenceEquals(t.OriginalDefinition, definition.OriginalDefinition));
+
     public override string ToString() => ToDisplayString();
 
     public virtual bool Equals(TypeSymbol? other) => ReferenceEquals(this, other);
@@ -439,6 +448,15 @@ public sealed class TypeParameterSymbol(
     ///     run time, known to the call alone. Null for any other parameter.
     /// </summary>
     public TypeParameterSymbol? OpenedFrom { get; init; }
+
+    /// <summary>
+    ///     The type an existential is opened as (#299) to call code generic
+    ///     over a protocol's <c>Self</c> on its value: standing for the one
+    ///     type the value has at run time, conforming to the existential's
+    ///     protocols.
+    /// </summary>
+    public static TypeParameterSymbol OpenedExistential(TypeParameterSymbol self, ImmutableArray<TypeSymbol> protocols) =>
+        new(self.Name, self.ContainingSymbol!, null, self.Ordinal) { OpenedFrom = self, Constraints = protocols };
 
     /// <summary>Variance, from <c>out T</c> or <c>in T</c>.</summary>
     public VarianceKind Variance { get; internal set; } = VarianceKind.None;

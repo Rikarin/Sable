@@ -392,6 +392,11 @@ public sealed class ParameterSymbol(
     public int Ordinal { get; } = ordinal;
 
     public bool HasDefaultValue { get; internal set; }
+
+    /// <summary>A parameter no source declares, of a given type: what lowering binds a value it made to, to lower code that reads it.</summary>
+    public static ParameterSymbol Synthetic(string name, Symbol container, TypeSymbol type, ParameterModifier modifier = ParameterModifier.None) =>
+        new(name, null, container, null, 0) { TypeResolver = () => type, Modifier = modifier };
+
     public bool IsVariadic { get; internal set; }
     public ParameterModifier Modifier { get; internal set; } = ParameterModifier.None;
 

@@ -136,16 +136,13 @@ public static class SilPassManager {
         // A witness table's witnesses are reached with its conformer's
         // metadata: a type made, boxed in an existential, or asked about.
         var tables = module.WitnessTables.ToLookup(static t => t.Conformer.ToString(), StringComparer.Ordinal);
-        var unspecialised = module.Functions.Any(static f => f.IsUnspecialised);
+        // (A table's own witnesses take Self's metadata too, but know the type.)
+        var unspecialised = module.Functions.Any(static f => f.IsUnspecialised && !f.Name.StartsWith("$generic$witness$", StringComparison.Ordinal));
         var tabled = new HashSet<string>(StringComparer.Ordinal);
         void Witnesses(SilType? type) {
             for (; type is not null && tabled.Add(type.ToString()); type = (type as ClassType)?.Superclass) {
                 foreach (var table in tables[type.ToString()]) {
                     foreach (var entry in table.Entries) {
-                        pending.Push(entry.Function);
-                    }
-
-                    foreach (var entry in table.GenericEntries) {
                         if (entry.Function is { } witness) {
                             pending.Push(witness);
                         }

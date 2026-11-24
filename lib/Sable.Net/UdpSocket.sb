@@ -63,37 +63,30 @@ public final class UdpSocket {
     /// more than one holds (65,507 bytes at most over IPv4, and fewer where
     /// a network's links are asked not to break them up).
     public fn send(_ bytes: U8[:], to address: SocketAddress) async throws(IoError) {
-        var times = 0
-        while true {
-            let _ = Runtime.sendDatagram(handle, bytes, address.familyNumber, address.highBits, address.lowBits, address.scopeNumber, address.port, "")
-            if Runtime.socketStatus() == 0 {
-                return
-            }
-            try await waitToSend("\(address)", times)
-            times += 1
-        }
+        try await send(bytes, "\(address)", address.familyNumber, address)
     }
 
     /// The bytes sent to the address it is connected to, as one datagram.
     public fn send(_ bytes: U8[:]) async throws(IoError) {
+        try await send(bytes, "the socket", 0, localAddress)
+    }
+
+    // Of family 0, the address is no matter.
+    fn send(_ bytes: U8[:], _ name: String, _ family: Int, _ address: SocketAddress) async throws(IoError) {
         var times = 0
         while true {
-            let _ = Runtime.sendDatagram(handle, bytes, 0, 0, 0, 0, 0, "")
+            let _ = Runtime.sendDatagram(handle, bytes, family, address.highBits, address.lowBits, address.scopeNumber, address.port, "")
             if Runtime.socketStatus() == 0 {
                 return
             }
-            try await waitToSend("the socket", times)
-            times += 1
-        }
-    }
-
-    fn waitToSend(_ address: String, _ times: Int) async throws(IoError) {
-        if isOutOfRoom() && times < 100 {
-            try await waitForRoom(times < 4 ? times : 4)
-        } else if Runtime.socketStatus() == 2 {
-            throw socketError(address)
-        } else {
-            try await waitForSocket(handle, writable: true)
+            if isOutOfRoom() && times < 100 {
+                try await waitForRoom(times < 4 ? times : 4)
+                times += 1
+            } else if Runtime.socketStatus() == 2 {
+                throw socketError(name)
+            } else {
+                try await waitForSocket(handle, writable: true)
+            }
         }
     }
 

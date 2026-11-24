@@ -251,3 +251,41 @@ fn anIpv6GroupsDatagramsReachThoseInIt() async {
         assert(false, error.description())
     }
 }
+
+@test
+fn aClosedSocketsCallsThrow() async {
+    do {
+        let a = try loopback()
+        let b = try loopback()
+        a.close()
+        let closed = "the connection failed or was closed"
+        assertEqual(await thrown {
+            let _ = try a.hopLimit()
+        }, closed)
+        assertEqual(await thrown {
+            let _ = try a.broadcast()
+        }, closed)
+        assertEqual(await thrown {
+            let _ = try a.multicastLoop()
+        }, closed)
+        assertEqual(await thrown {
+            let _ = try a.multicastHopLimit()
+        }, closed)
+        assertEqual(await thrown {
+            let _ = try a.receiveBufferSize()
+        }, closed)
+        assertEqual(await thrown {
+            let _ = try a.sendBufferSize()
+        }, closed)
+        assertEqual(await thrown { try a.setMulticastInterface(0) }, closed)
+        assertEqual(await thrown { try a.connect(to: b.localAddress) }, closed)
+        assertEqual(await thrown { try await a.send([1]) }, closed)
+        assertEqual(await thrown { try a.join(group: try! IpAddress.parse("ff01::1")) }, closed)
+        assertEqual(await thrown { try a.leave(group: try! IpAddress.parse("ff01::1")) }, closed)
+        // The other is as it was.
+        try await b.send([1], to: b.localAddress)
+        assertEqual((try await b.receive()).bytes, [1])
+    } catch {
+        assert(false, error.description())
+    }
+}

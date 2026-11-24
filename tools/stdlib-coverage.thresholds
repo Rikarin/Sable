@@ -57,3 +57,4 @@ lib/Sable.Testing/Bencher.sb                       0   0   # raise me: no tests 
 lib/Sable.Testing/TestCase.sb                     45  40   # raise me
 
 # Under the default for a reason the tests cannot change.
+lib/Sable.Net/UnixStream.sb                       75  30   # only Linux has a full queue to be tried again

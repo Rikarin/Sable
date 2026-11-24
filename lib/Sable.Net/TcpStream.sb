@@ -137,9 +137,14 @@ public final class TcpStream: AsyncReader, AsyncWriter {
         )
     }
 
-    /// Has a silent other end asked whether it is there, or not.
+    /// Has a silent other end asked whether it is there, or not: InvalidInput
+    /// for a time or a count of none.
     public fn setKeepAlive(_ keepAlive: KeepAlive?) throws(IoError) {
         if let keepAlive {
+            let least = wholeSeconds(keepAlive.idle).min(wholeSeconds(keepAlive.interval)).min(keepAlive.count)
+            if least < 1 {
+                throw IoError.InvalidInput(path: "a keep-alive")
+            }
             try setOption(handle, 3, wholeSeconds(keepAlive.idle))
             try setOption(handle, 4, wholeSeconds(keepAlive.interval))
             try setOption(handle, 5, keepAlive.count)

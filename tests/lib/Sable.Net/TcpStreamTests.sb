@@ -417,6 +417,8 @@ fn aConnectionsOptionsAreWhatTheyWereSetTo() async {
         assertEqual(keepAlive.idle, Duration.seconds(60))
         assertEqual(keepAlive.interval, Duration.seconds(10))
         assertEqual(keepAlive.count, 4)
+        let never = KeepAlive(idle: Duration.seconds(1), interval: Duration.seconds(1), count: 0)
+        assertEqual(await thrown { try client.setKeepAlive(never) }, "'a keep-alive' was given something the system does not take")
         try client.setKeepAlive(none)
         assert((try client.keepAlive()) == none)
         try client.setReceiveBufferSize(100_000)

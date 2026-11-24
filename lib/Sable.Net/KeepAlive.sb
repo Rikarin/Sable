@@ -15,7 +15,6 @@ public struct KeepAlive {
     public var count: Int
 
     public init(idle: Duration, interval: Duration, count: Int) {
-        precondition(wholeSeconds(idle) > 0 && wholeSeconds(interval) > 0 && count > 0, "a keep-alive's times and count are more than none")
         self.idle = idle
         self.interval = interval
         self.count = count

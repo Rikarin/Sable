@@ -1,0 +1,57 @@
+module Sable.Time
+
+/// The offsets a time zone has for a local date and time: one, or none (a
+/// gap, its clocks skipping the time), or two (a fold, its clocks showing
+/// it twice). `TimeZone.offsets(for:)` gives it; `LocalDateTime.zoned`
+/// picks a moment from it by a policy. jiff's AmbiguousOffset.
+///
+/// ```sable
+/// let prague = try! TimeZone.find("Europe/Prague")
+/// let twice = LocalDateTime.of(year: 2026, month: 10, day: 25, hour: 2, minute: 30)!
+/// match prague.offsets(for: twice) {
+///     case .Fold(let before, let after) => assert(before.toString() == "+02:00" && after.toString() == "+01:00")
+///     case _                            => assert(false)
+/// }
+/// ```
+public union AmbiguousOffset {
+    /// The time is one moment, at the offset.
+    Unambiguous(offset: UtcOffset)
+    /// The zone's clocks skip the time: they went from the offset before
+    /// to the greater one after.
+    Gap(before: UtcOffset, after: UtcOffset)
+    /// The zone's clocks show the time twice: first at the offset before,
+    /// then at the lesser one after.
+    Fold(before: UtcOffset, after: UtcOffset)
+
+    /// The one offset, or none in a gap or a fold.
+    public var unambiguous: UtcOffset? {
+        get {
+            return match self {
+                case .Unambiguous(let offset) => offset
+                case _                        => none
+            }
+        }
+    }
+}
+
+extension AmbiguousOffset: Equatable {
+    public operator == (lhs: AmbiguousOffset, rhs: AmbiguousOffset) -> Bool {
+        return match (lhs, rhs) {
+            case (.Unambiguous(let a), .Unambiguous(let b)) => a == b
+            case (.Gap(let a, let b), .Gap(let c, let d))   => a == c && b == d
+            case (.Fold(let a, let b), .Fold(let c, let d)) => a == c && b == d
+            case _                                          => false
+        }
+    }
+}
+
+extension AmbiguousOffset: Debug {
+    /// The case as source writes it: `AmbiguousOffset.Gap(before: -05:00, after: -04:00)`.
+    public fn debugDescription() -> String {
+        return match self {
+            case .Unambiguous(let offset)     => "AmbiguousOffset.Unambiguous(offset: \(offset.toString()))"
+            case .Gap(let before, let after)  => "AmbiguousOffset.Gap(before: \(before.toString()), after: \(after.toString()))"
+            case .Fold(let before, let after) => "AmbiguousOffset.Fold(before: \(before.toString()), after: \(after.toString()))"
+        }
+    }
+}

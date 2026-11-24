@@ -1,0 +1,57 @@
+module Sable.Time
+
+/// Why there is no time zone of an id, or no one moment of a local time in
+/// one.
+///
+/// ```sable
+/// do {
+///     let _ = try TimeZone.find("Mars/Olympus_Mons")
+/// } catch {
+///     assert(error == .NotFound(id: "Mars/Olympus_Mons"))
+/// }
+/// ```
+public union TimeZoneError: Error {
+    /// The system's time zone database has no zone of the id.
+    NotFound(id: String)
+    /// The zone's data is not TZif (RFC 8536), or its rule not a POSIX TZ
+    /// string.
+    Malformed(id: String)
+    /// The zone's clocks skip the local time.
+    Skipped(LocalDateTime)
+    /// The zone's clocks show the local time twice.
+    Ambiguous(LocalDateTime)
+
+    /// What is wrong.
+    public fn description() -> String {
+        return match self {
+            case .NotFound(let id)     => "no time zone '\(id)'"
+            case .Malformed(let id)    => "the time zone '\(id)' is malformed"
+            case .Skipped(let local)   => "\(local.toString()) is skipped by the time zone's clocks"
+            case .Ambiguous(let local) => "\(local.toString()) is shown twice by the time zone's clocks"
+        }
+    }
+}
+
+extension TimeZoneError: Equatable {
+    public operator == (lhs: TimeZoneError, rhs: TimeZoneError) -> Bool {
+        return match (lhs, rhs) {
+            case (.NotFound(let a), .NotFound(let b))   => a == b
+            case (.Malformed(let a), .Malformed(let b)) => a == b
+            case (.Skipped(let a), .Skipped(let b))     => a == b
+            case (.Ambiguous(let a), .Ambiguous(let b)) => a == b
+            case _                                      => false
+        }
+    }
+}
+
+extension TimeZoneError: Debug {
+    /// The case as source writes it.
+    public fn debugDescription() -> String {
+        return match self {
+            case .NotFound(let id)     => "TimeZoneError.NotFound(id: \"\(id)\")"
+            case .Malformed(let id)    => "TimeZoneError.Malformed(id: \"\(id)\")"
+            case .Skipped(let local)   => "TimeZoneError.Skipped(\(local.toString()))"
+            case .Ambiguous(let local) => "TimeZoneError.Ambiguous(\(local.toString()))"
+        }
+    }
+}

@@ -1,0 +1,14 @@
+module TimeInstantTests
+
+import Sable.Testing
+import Sable.Time
+
+@test
+fn instantsMeasureTheMonotonicClock() {
+    let start = Instant.now()
+    let later = start.adding(Duration.milliseconds(5))
+    assertEqual(later.durationSince(start), Duration.milliseconds(5))
+    assert(start < later)
+    assert(start == start)
+    assert(start.elapsed >= Duration.zero())
+}

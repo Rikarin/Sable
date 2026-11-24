@@ -1,0 +1,41 @@
+module TimeWeekdayTests
+
+import Sable.Testing
+import Sable.Time
+
+@test
+fn weekdaysAreNumberedFromMonday() {
+    assertEqual(Weekday.Monday.number, 1)
+    assertEqual(Weekday.Sunday.number, 7)
+    assertEqual(Weekday.Sunday.numberFromSunday, 0)
+    assertEqual(Weekday.Saturday.numberFromSunday, 6)
+    var n = 1
+    while n <= 7 {
+        assertEqual(Weekday.of(n)!.number, n)
+        n += 1
+    }
+    assert(Weekday.of(0) == none)
+    assert(Weekday.of(8) == none)
+}
+
+@test
+fn weekdaysGoRoundTheWeek() {
+    assertEqual(Weekday.Sunday.next, Weekday.Monday)
+    assertEqual(Weekday.Monday.previous, Weekday.Sunday)
+    assertEqual(Weekday.Wednesday.adding(-10), Weekday.Sunday)
+    assertEqual(Weekday.Wednesday.adding(14), Weekday.Wednesday)
+    assertEqual(Weekday.Tuesday.daysUntil(.Tuesday), 0)
+    assertEqual(Weekday.Sunday.daysUntil(.Monday), 1)
+    assertEqual(Weekday.Monday.daysUntil(.Sunday), 6)
+}
+
+@test
+fn weekdaysHaveEnglishNames() {
+    assertEqual(Weekday.Thursday.name, "Thursday")
+    assertEqual(Weekday.Thursday.shortName, "Thu")
+    assertEqual(Weekday.Monday.name, "Monday")
+    assertEqual(Weekday.Tuesday.shortName, "Tue")
+    assertEqual(Weekday.Friday.name, "Friday")
+    assertEqual(Weekday.Saturday.name, "Saturday")
+    assertEqual(Weekday.Sunday.shortName, "Sun")
+}

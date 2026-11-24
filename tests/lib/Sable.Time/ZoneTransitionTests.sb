@@ -1,0 +1,22 @@
+module TimeZoneTransitionTests
+
+import Sable.Testing
+import Sable.Time
+
+@test
+fn transitionsAreEqualInEveryPart() {
+    let zone = try! TimeZone.posix("CET-1CEST,M3.5.0,M10.5.0/3")
+    let start = UtcDateTime.of(year: 2040, month: 1, day: 1, hour: 0, minute: 0, second: 0)!
+    let spring = zone.nextTransition(after: start)!
+    let autumn = zone.nextTransition(after: spring.instant)!
+    assertEqual(zone.nextTransition(after: start)!, spring)
+    assert(spring != autumn)
+    let other = try! TimeZone.posix("XYZ-1CEST,M3.5.0,M10.5.0/3")
+    assert(other.nextTransition(after: start)! == spring)
+    let renamed = try! TimeZone.posix("CET-1CET,M3.5.0,M10.5.0/3")
+    assert(renamed.nextTransition(after: start)! != spring)
+    let shifted = try! TimeZone.posix("CET-1CEST-3,M3.5.0,M10.5.0/3")
+    assert(shifted.nextTransition(after: start)! != spring)
+    let standard = ZoneTransition { instant: spring.instant, offset: spring.offset, abbreviation: spring.abbreviation, isDaylightSaving: false }
+    assert(standard != spring)
+}

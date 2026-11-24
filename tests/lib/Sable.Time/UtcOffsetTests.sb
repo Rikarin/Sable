@@ -1,0 +1,61 @@
+module TimeUtcOffsetTests
+
+import Sable.Testing
+import Sable.Time
+
+fn offsetError(_ text: String) -> ParseError? {
+    do {
+        let _ = try UtcOffset.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn anOffsetIsAtMostADayAndTwoHours() {
+    assertEqual(UtcOffset.of(seconds: 93599)!.toString(), "+25:59:59")
+    assert(UtcOffset.of(seconds: 93600) == none)
+    assert(UtcOffset.of(seconds: -93600) == none)
+    assert(UtcOffset.of(hours: 26) == none)
+    assert(UtcOffset.of(hours: 1, minutes: 60) == none)
+    assert(UtcOffset.of(hours: 1, seconds: -60) == none)
+    assertEqual(UtcOffset.hours(30), UtcOffset.hours(25))
+    assertEqual(UtcOffset.hours(-30), UtcOffset.hours(-25))
+}
+
+@test
+fn anOffsetHasPartsWithItsSign() {
+    let offset = UtcOffset.of(hours: -3, minutes: -30, seconds: -15)!
+    assertEqual(offset.totalSeconds, -12615)
+    assertEqual(offset.hours, -3)
+    assertEqual(offset.minutes, -30)
+    assertEqual(offset.seconds, -15)
+    assertEqual(offset.toString(), "-03:30:15")
+    assertEqual(offset.negated().toString(), "+03:30:15")
+    assertEqual(offset.duration, Duration.seconds(-12615))
+    assertEqual(UtcOffset.utc.toString(), "+00:00")
+    assert(offset < UtcOffset.utc)
+    assertEqual(offset.hashValue, UtcOffset.of(seconds: -12615)!.hashValue)
+    assertEqual(UtcOffset.hours(5).debugDescription(), "+05:00")
+}
+
+@test
+fn offsetsReadEveryISO8601Form() {
+    assertEqual(try! UtcOffset.parse("Z"), UtcOffset.utc)
+    assertEqual(try! UtcOffset.parse("+05:30"), UtcOffset.of(hours: 5, minutes: 30)!)
+    assertEqual(try! UtcOffset.parse("-0400"), UtcOffset.hours(-4))
+    assertEqual(try! UtcOffset.parse("+01"), UtcOffset.hours(1))
+    assertEqual(try! UtcOffset.parse("+00:19:32"), UtcOffset.of(seconds: 1172)!)
+    assertEqual(try! UtcOffset.parse("−02:00"), UtcOffset.hours(-2))
+}
+
+@test
+fn anOffsetThatIsNotOneSaysWhere() {
+    assertEqual(offsetError(""), ParseError.Empty)
+    assertEqual(offsetError("05:00"), ParseError.Invalid(at: 0))
+    assertEqual(offsetError("+26:00"), ParseError.Invalid(at: 1))
+    assertEqual(offsetError("+05:60"), ParseError.Invalid(at: 1))
+    assertEqual(offsetError("+5"), ParseError.InvalidDigit(at: 2))
+    assertEqual(offsetError("+05:00x"), ParseError.Invalid(at: 6))
+}

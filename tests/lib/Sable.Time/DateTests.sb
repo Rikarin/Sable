@@ -1,0 +1,205 @@
+module TimeDateTests
+
+import Sable.Testing
+import Sable.Time
+
+fn date(_ year: Int, _ month: Int, _ day: Int) -> Date {
+    return Date.of(year: year, month: month, day: day)!
+}
+
+fn dateError(_ text: String) -> ParseError? {
+    do {
+        let _ = try Date.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+fn patternError(_ text: String, _ pattern: String) -> ParseError? {
+    do {
+        let _ = try Date.parse(text, pattern: pattern)
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn aDateIsOnlyOneThatExists() {
+    assert(Date.of(year: 2023, month: 2, day: 29) == none)
+    assert(Date.of(year: 2024, month: 13, day: 1) == none)
+    assert(Date.of(year: 2024, month: 4, day: 31) == none)
+    assert(Date.of(year: 2024, month: 1, day: 0) == none)
+    assert(Date.of(year: 2024, dayOfYear: 367) == none)
+    assert(Date.of(year: 2023, dayOfYear: 366) == none)
+    assertEqual(Date.of(year: 2023, dayOfYear: 365)!, date(2023, 12, 31))
+    assertEqual(Date.unixEpoch, date(1970, 1, 1))
+}
+
+@test
+fn aDateCountsDaysFromTheEpoch() {
+    assertEqual(date(1970, 1, 1).daysSinceEpoch, 0)
+    assertEqual(date(1969, 12, 31).daysSinceEpoch, -1)
+    assertEqual(date(2000, 3, 1).daysSinceEpoch, 11017)
+    var days = -800000
+    while days < 800000 {
+        assertEqual(Date.fromDaysSinceEpoch(days).daysSinceEpoch, days)
+        days += 9973
+    }
+    assertEqual(Date.fromDaysSinceEpoch(-719528), date(0, 1, 1))
+}
+
+@test
+fn aDateKnowsItsPlaceInTheYear() {
+    let leap = date(2024, 12, 31)
+    assertEqual(leap.dayOfYear, 366)
+    assert(leap.isInLeapYear)
+    assertEqual(leap.daysInYear, 366)
+    assertEqual(date(2026, 2, 10).daysInMonth, 28)
+    assertEqual(date(2026, 11, 17).weekday, Weekday.Tuesday)
+    assertEqual(date(1970, 1, 1).weekday, Weekday.Thursday)
+    assertEqual(date(2026, 11, 17).monthOfYear, Month.November)
+    assertEqual(date(2026, 11, 17).firstDayOfMonth, date(2026, 11, 1))
+    assertEqual(date(2024, 2, 17).lastDayOfMonth, date(2024, 2, 29))
+    assertEqual(date(2026, 11, 17).firstDayOfYear, date(2026, 1, 1))
+    assertEqual(date(2026, 11, 17).lastDayOfYear, date(2026, 12, 31))
+}
+
+@test
+fn isoWeeksStartOnTheWeekOfTheFirstThursday() {
+    // .NET's ISOWeek.GetWeekOfYear and GetYear.
+    assertEqual(date(2026, 1, 1).isoWeek, 1)
+    assertEqual(date(2021, 1, 3).isoWeek, 53)
+    assertEqual(date(2021, 1, 3).isoWeekYear, 2020)
+    assertEqual(date(2024, 12, 30).isoWeekYear, 2025)
+    assertEqual(date(2024, 12, 30).isoWeek, 1)
+    assertEqual(date(2026, 12, 31).isoWeek, 53)
+    assertEqual(date(2027, 1, 3).isoWeek, 53)
+    assertEqual(date(2027, 1, 4).isoWeek, 1)
+    assertEqual(Date.of(isoWeekYear: 2020, week: 53, weekday: .Sunday)!, date(2021, 1, 3))
+    assert(Date.of(isoWeekYear: 2021, week: 53, weekday: .Monday) == none)
+    assert(Date.of(isoWeekYear: 2021, week: 0, weekday: .Monday) == none)
+    // Every day's week reads back as the day.
+    var day = date(1999, 12, 1)
+    while day < date(2030, 2, 1) {
+        assertEqual(Date.of(isoWeekYear: day.isoWeekYear, week: day.isoWeek, weekday: day.weekday)!, day)
+        day = day.adding(days: 37)
+    }
+}
+
+@test
+fn addingMonthsClampsTheDay() {
+    assertEqual(date(2024, 1, 31).adding(months: 1), date(2024, 2, 29))
+    assertEqual(date(2023, 1, 31).adding(months: 1), date(2023, 2, 28))
+    assertEqual(date(2024, 3, 31).adding(months: -1), date(2024, 2, 29))
+    assertEqual(date(2024, 1, 15).adding(months: -13), date(2022, 12, 15))
+    assertEqual(date(2024, 1, 15).adding(months: 0), date(2024, 1, 15))
+    assertEqual(date(2024, 2, 29).adding(years: 1), date(2025, 2, 28))
+    assertEqual(date(2024, 2, 29).adding(years: 4), date(2028, 2, 29))
+    assertEqual(date(2024, 12, 31).adding(days: 1), date(2025, 1, 1))
+    assertEqual(date(2024, 12, 31).adding(days: 0), date(2024, 12, 31))
+    assertEqual(date(2024, 1, 31).adding(Period.of(months: 1, days: 1)), date(2024, 3, 1))
+    assertEqual(date(2024, 3, 1).subtracting(Period.of(months: 1, days: 1)), date(2024, 1, 31))
+}
+
+@test
+fn periodUntilAddsBackToTheOther() {
+    assertEqual(date(2024, 1, 31).periodUntil(date(2024, 2, 29)), Period.of(days: 29))
+    assertEqual(date(2024, 1, 31).periodUntil(date(2024, 3, 1)), Period.of(months: 1, days: 1))
+    assertEqual(date(2020, 5, 5).periodUntil(date(2020, 5, 5)), Period.zero)
+    var start = date(2019, 11, 30)
+    var step = 0
+    while step < 60 {
+        let end = start.adding(days: step * 47 % 900 - 300)
+        let period = start.periodUntil(end)
+        assertEqual(start.adding(period), end)
+        assertEqual(start.daysUntil(end), end.daysSinceEpoch - start.daysSinceEpoch)
+        // Every part has the whole's sign.
+        let sign = end < start ? -1 : 1
+        assert(period.years * sign >= 0 && period.months * sign >= 0 && period.days * sign >= 0)
+        start = start.adding(days: 11)
+        step += 1
+    }
+}
+
+@test
+fn nextAndPreviousFindTheWeekday() {
+    let friday = date(2026, 11, 20)
+    assertEqual(friday.next(.Saturday), date(2026, 11, 21))
+    assertEqual(friday.next(.Friday), date(2026, 11, 27))
+    assertEqual(friday.previous(.Thursday), date(2026, 11, 19))
+    assertEqual(friday.previous(.Friday), date(2026, 11, 13))
+    assertEqual(friday.previous(.Saturday), date(2026, 11, 14))
+}
+
+@test
+fn aDateMeetsATime() {
+    let day = date(2026, 11, 17)
+    assertEqual(day.at(TimeOfDay.noon).toString(), "2026-11-17T12:00:00")
+    assertEqual(day.atMidnight.toString(), "2026-11-17T00:00:00")
+    assertEqual(day.startOfDay(in: TimeZone.fixed(UtcOffset.hours(3))).instant.toString(), "2026-11-16T21:00:00Z")
+}
+
+@test
+fn datesAreOrdered() {
+    assert(date(2025, 12, 31) < date(2026, 1, 1))
+    assert(date(2026, 1, 31) < date(2026, 2, 1))
+    assert(date(2026, 2, 1) < date(2026, 2, 2))
+    assert(!(date(2026, 2, 2) < date(2026, 2, 2)))
+    assertEqual(date(2026, 2, 2).hashValue, date(2026, 2, 2).hashValue)
+}
+
+@test
+fn datesWriteAsISO8601() {
+    assertEqual(date(2026, 1, 5).toString(), "2026-01-05")
+    assertEqual(date(987, 7, 4).toString(), "0987-07-04")
+    assertEqual(date(10000, 1, 1).toString(), "+10000-01-01")
+    assertEqual(date(-1, 12, 31).toString(), "-0001-12-31")
+    assertEqual(date(2026, 1, 5).debugDescription(), "2026-01-05")
+}
+
+@test
+fn datesReadEveryISO8601Form() {
+    assertEqual(try! Date.parse("2026-11-17"), date(2026, 11, 17))
+    assertEqual(try! Date.parse("20261117"), date(2026, 11, 17))
+    assertEqual(try! Date.parse("2026-321"), date(2026, 11, 17))
+    assertEqual(try! Date.parse("2026321"), date(2026, 11, 17))
+    assertEqual(try! Date.parse("2026-W47-2"), date(2026, 11, 17))
+    assertEqual(try! Date.parse("2026W472"), date(2026, 11, 17))
+    assertEqual(try! Date.parse("2026-W47"), date(2026, 11, 16))
+    assertEqual(try! Date.parse("+10000-01-01"), date(10000, 1, 1))
+    assertEqual(try! Date.parse("-0001-12-31"), date(-1, 12, 31))
+    assertEqual(try! Date.parse(date(-1, 12, 31).toString()), date(-1, 12, 31))
+}
+
+@test
+fn aDateThatIsNotOneSaysWhere() {
+    assertEqual(dateError(""), ParseError.Empty)
+    assertEqual(dateError("2026-13-01"), ParseError.Invalid(at: 5))
+    assertEqual(dateError("2026-02-30"), ParseError.Invalid(at: 8))
+    assertEqual(dateError("2026-366"), ParseError.Invalid(at: 5))
+    assertEqual(dateError("2026-W54"), ParseError.Invalid(at: 6))
+    assertEqual(dateError("2026-W47-8"), ParseError.Invalid(at: 9))
+    assertEqual(dateError("202611"), ParseError.InvalidDigit(at: 6))
+    assertEqual(dateError("2026/11/17"), ParseError.Invalid(at: 4))
+    assertEqual(dateError("2026-11-17T"), ParseError.Invalid(at: 10))
+    assertEqual(dateError("2026-11"), ParseError.Invalid(at: 7))
+    assertEqual(dateError("+100-01-01"), ParseError.InvalidDigit(at: 4))
+}
+
+@test
+fn datesWriteAndReadPatterns() {
+    let day = date(2026, 11, 17)
+    assertEqual(day.format(pattern: "dddd, d MMMM yyyy"), "Tuesday, 17 November 2026")
+    assertEqual(day.format(pattern: "D"), "Tuesday, 17 November 2026")
+    assertEqual(day.format(pattern: "HH:mm"), "00:00")
+    assertEqual(try! Date.parse("Tuesday, 17 November 2026", pattern: "dddd, d MMMM yyyy"), day)
+    assertEqual(try! Date.parse("17/11/26", pattern: "dd/MM/yy"), day)
+    assertEqual(try! Date.parse("1/2/99", pattern: "d/M/yy"), date(1999, 2, 1))
+    assertEqual(try! Date.parse("11/17/2026", pattern: "d"), day)
+    assertEqual(patternError("Monday, 17 November 2026", "dddd, d MMMM yyyy"), ParseError.Invalid(at: 0))
+    assertEqual(patternError("30/02/2026", "dd/MM/yyyy"), ParseError.Invalid(at: 0))
+    assertEqual(patternError("17/13/2026", "dd/MM/yyyy"), ParseError.Invalid(at: 3))
+    assertEqual(patternError("", "dd/MM/yyyy"), ParseError.Empty)
+}

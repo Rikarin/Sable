@@ -1,0 +1,362 @@
+module Sable.Time
+
+// The system's time zone database: TZif files (RFC 8536) under a zoneinfo
+// directory, one per IANA id, as every Unix system keeps them. Windows
+// keeps its zones in the registry, by its own names and rules, and has no
+// TZif files: there the directories are TZDIR's and a 'zoneinfo' folder
+// beside the executable, which a program that wants IANA zones ships
+// (docs/06 says why this rather than the registry or ICU).
+
+extension TimeZone {
+    /// The zone of the IANA id, read from the system's database; "UTC" (and
+    /// "Etc/UTC", "GMT", "Z") is UTC wherever there is no database.
+    /// `.NotFound` when there is no zone of the id, `.Malformed` when its
+    /// file is not TZif.
+    ///
+    /// ```sable
+    /// let kolkata = try! TimeZone.find("Asia/Kolkata")
+    /// assert(kolkata.id == "Asia/Kolkata" && kolkata.isFixed == false)
+    /// assert((try? TimeZone.find("Nowhere/Special")) == none)
+    /// ```
+    public static fn find(_ id: String) throws(TimeZoneError) -> TimeZone {
+        if isPlausibleZoneId(id) {
+            for directory in zoneinfoDirectories() {
+                if let bytes = readWholeFile(directory + "/" + id) {
+                    return try TimeZone.fromTZif(id: id, bytes: bytes)
+                }
+            }
+        }
+        if id == "UTC" || id == "Etc/UTC" || id == "GMT" || id == "Etc/GMT" || id == "Z" {
+            return TimeZone.utc
+        }
+        throw .NotFound(id: id)
+    }
+
+    /// The zone of a TZif file's bytes (RFC 8536, versions 1 to 4), by the
+    /// id given: its changes, and the POSIX rule of its footer for the time
+    /// after the last.
+    public static fn fromTZif(id: String, bytes: U8[:]) throws(TimeZoneError) -> TimeZone {
+        if let zone = parseTZif(id, bytes) {
+            return zone
+        }
+        throw .Malformed(id: id)
+    }
+
+    /// The zone the system is set to: the `TZ` variable's (an id, a path
+    /// to a TZif file, or a POSIX rule), else on Unix the zone
+    /// `/etc/localtime` is, or `/etc/timezone` names; UTC where there is
+    /// none of those, as on Windows without `TZ`.
+    public static fn system() -> TimeZone {
+        if let tz = Runtime.environment(name: "TZ") {
+            var name = tz
+            if name.hasPrefix(":") {
+                name = name.slice(from: 1, to: name.count)
+            }
+            if !name.isEmpty {
+                if let zone = zoneOfFile(name) {
+                    return zone
+                }
+                if let zone = try? TimeZone.find(name) {
+                    return zone
+                }
+                if let zone = try? TimeZone.posix(name) {
+                    return zone
+                }
+            }
+            return TimeZone.utc
+        }
+        if Platform.operatingSystem == .Windows {
+            return TimeZone.utc
+        }
+        let linked = Runtime.fileCanonical("/etc/localtime")
+        if let id = zoneIdOfPath(linked) {
+            if let zone = try? TimeZone.find(id) {
+                return zone
+            }
+        }
+        if let named = Runtime.readFile(path: "/etc/timezone") {
+            if let zone = try? TimeZone.find(named.trimmed()) {
+                return zone
+            }
+        }
+        if let bytes = readWholeFile("/etc/localtime") {
+            if let zone = try? TimeZone.fromTZif(id: "localtime", bytes: bytes) {
+                return zone
+            }
+        }
+        return TimeZone.utc
+    }
+
+    /// Every id of the system's database, in order: "Africa/Abidjan" to
+    /// "Zulu". Empty where there is none.
+    public static fn identifiers() -> String[>..] {
+        var ids: String[>..] = []
+        for directory in zoneinfoDirectories() {
+            collectZoneIds(directory, "", &ids)
+            if !ids.isEmpty {
+                break
+            }
+        }
+        ids.sort()
+        return ids
+    }
+}
+
+/// The directories the database may be in, the first that has a zone
+/// winning.
+fn zoneinfoDirectories() -> String[>..] {
+    var directories: String[>..] = []
+    if let tzdir = Runtime.environment(name: "TZDIR") {
+        if !tzdir.isEmpty {
+            directories.append(tzdir)
+        }
+    }
+    if Platform.operatingSystem == .Windows {
+        let executable = Runtime.executablePath()
+        var i = executable.count - 1
+        while i >= 0 && executable.at(i) != '\\' && executable.at(i) != '/' {
+            i -= 1
+        }
+        if i > 0 {
+            directories.append(executable.slice(from: 0, to: i) + "\\zoneinfo")
+        }
+        return directories
+    }
+    directories.append("/usr/share/zoneinfo")
+    directories.append("/usr/lib/zoneinfo")
+    directories.append("/usr/share/lib/zoneinfo")
+    directories.append("/etc/zoneinfo")
+    return directories
+}
+
+/// An id that names a file under the database's directory and nothing
+/// outside it: no empty or '..' component, no leading '/'.
+fn isPlausibleZoneId(_ id: String) -> Bool {
+    if id.isEmpty || id.hasPrefix("/") || id.hasPrefix("\\") {
+        return false
+    }
+    for part in id.split(separator: '/') {
+        if part.isEmpty || part == "." || part == ".." || part.contains(character: '\\') {
+            return false
+        }
+    }
+    return true
+}
+
+/// The id of a path into a zoneinfo directory: what follows the last
+/// "zoneinfo/" in it.
+fn zoneIdOfPath(_ path: String) -> String? {
+    let chars = path.toArray()
+    let marker = "zoneinfo/".toArray()
+    var i = chars.count - marker.count
+    while i >= 0 {
+        var j = 0
+        while j < marker.count && chars[i + j] == marker[j] {
+            j += 1
+        }
+        if j == marker.count {
+            let id = path.slice(from: i + marker.count, to: chars.count)
+            return id.isEmpty ? none : id
+        }
+        i -= 1
+    }
+    return none
+}
+
+/// The zone of the TZif file at an absolute path, as `TZ` may name one,
+/// by the id its path into a zoneinfo directory gives.
+fn zoneOfFile(_ path: String) -> TimeZone? {
+    if !path.hasPrefix("/") {
+        return none
+    }
+    if let bytes = readWholeFile(path) {
+        let id = zoneIdOfPath(path) ?? path
+        return try? TimeZone.fromTZif(id: id, bytes: bytes)
+    }
+    return none
+}
+
+/// The bytes of the file, or none when it is not a file that can be read.
+fn readWholeFile(_ path: String) -> U8[>..]? {
+    let handle = Runtime.fileOpen(path, 1, 0)
+    if handle < 0 {
+        return none
+    }
+    if Runtime.fileMetadata(handle, 2) != 0 {
+        Runtime.fileClose(handle)
+        return none
+    }
+    var bytes: U8[>..] = []
+    var offset = 0
+    while true {
+        let chunk = Runtime.fileRead(handle, 65536, offset)
+        if chunk.isEmpty {
+            break
+        }
+        bytes.append(contentsOf: chunk)
+        offset += chunk.count
+    }
+    Runtime.fileClose(handle)
+    return bytes
+}
+
+/// The ids under the directory, its subdirectories' as "Sub/Name": every
+/// file that starts as TZif does, but for the "posix" and "right" copies.
+fn collectZoneIds(_ directory: String, _ under: String, _ ids: inout String[>..]) {
+    if let names = Runtime.listDirectory(path: directory) {
+        for name in names {
+            let path = directory + "/" + name
+            if Runtime.isDirectory(path: path) {
+                if name != "posix" && name != "right" && !name.hasPrefix(".") {
+                    collectZoneIds(path, under + name + "/", &ids)
+                }
+            } else if name != "posixrules" && name != "localtime" && name != "Factory" && isTZifFile(path) {
+                ids.append(under + name)
+            }
+        }
+    }
+}
+
+fn isTZifFile(_ path: String) -> Bool {
+    let handle = Runtime.fileOpen(path, 1, 0)
+    if handle < 0 {
+        return false
+    }
+    let magic = Runtime.fileRead(handle, 4, 0)
+    Runtime.fileClose(handle)
+    return magic.count == 4 && magic[0] == 0x54 && magic[1] == 0x5A && magic[2] == 0x69 && magic[3] == 0x66
+}
+
+/// A TZif file's zone: its version 2+ data where it has them (64-bit
+/// times, and the footer's rule), else its version 1 data.
+fn parseTZif(_ id: String, _ bytes: U8[:]) -> TimeZone? {
+    if let first = TZifHeader.read(bytes, 0) {
+        if first.version < 2 {
+            return parseTZifData(id, bytes, first, 44, 4, none)
+        }
+        let second = first.dataEnd(44, 4)
+        if let header = TZifHeader.read(bytes, second) {
+            let start = second + 44
+            let end = header.dataEnd(start, 8)
+            if end >= bytes.count || bytes[end] != 0x0A {
+                return none
+            }
+            var close = end + 1
+            while close < bytes.count && bytes[close] != 0x0A {
+                close += 1
+            }
+            if close >= bytes.count {
+                return none
+            }
+            var footer = ""
+            if close > end + 1 {
+                if let text = Runtime.decodeUtf8(bytes: bytes[end + 1..<close]) {
+                    footer = text
+                } else {
+                    return none
+                }
+            }
+            return parseTZifData(id, bytes, header, start, 8, footer)
+        }
+    }
+    return none
+}
+
+/// The counts of a TZif header.
+struct TZifHeader {
+    let version: Int
+    let utIndicators: Int
+    let standardIndicators: Int
+    let leapCount: Int
+    let timeCount: Int
+    let typeCount: Int
+    let charCount: Int
+
+    static fn read(_ bytes: U8[:], _ at: Int) -> TZifHeader? {
+        if at + 44 > bytes.count || bytes[at] != 0x54 || bytes[at + 1] != 0x5A || bytes[at + 2] != 0x69 || bytes[at + 3] != 0x66 {
+            return none
+        }
+        let version = bytes[at + 4] == 0 ? 1 : Int(bytes[at + 4]) - 48
+        let header = TZifHeader {
+            version: version,
+            utIndicators: count(bytes, at + 20),
+            standardIndicators: count(bytes, at + 24),
+            leapCount: count(bytes, at + 28),
+            timeCount: count(bytes, at + 32),
+            typeCount: count(bytes, at + 36),
+            charCount: count(bytes, at + 40),
+        }
+        if header.version < 1 || header.typeCount == 0 || header.charCount == 0 || header.timeCount < 0 || header.leapCount < 0 {
+            return none
+        }
+        if header.utIndicators < 0 || header.standardIndicators < 0 {
+            return none
+        }
+        return header
+    }
+
+    static fn count(_ bytes: U8[:], _ at: Int) -> Int {
+        return Int(bytes.readI32(at: at, endian: .Big))
+    }
+
+    /// Where the data block from 'start' ends, with times of 'size' bytes.
+    fn dataEnd(_ start: Int, _ size: Int) -> Int {
+        return start + timeCount * size + timeCount + typeCount * 6 + charCount + leapCount * (size + 4)
+            + standardIndicators + utIndicators
+    }
+}
+
+fn parseTZifData(_ id: String, _ bytes: U8[:], _ header: TZifHeader, _ start: Int, _ size: Int, _ footer: String?) -> TimeZone? {
+    if header.dataEnd(start, size) > bytes.count {
+        return none
+    }
+    var times: Int[>..] = []
+    var indices: Int[>..] = []
+    var at = start
+    var i = 0
+    while i < header.timeCount {
+        times.append(size == 8 ? Int(bytes.readI64(at: at, endian: .Big)) : Int(bytes.readI32(at: at, endian: .Big)))
+        at += size
+        i += 1
+    }
+    i = 0
+    while i < header.timeCount {
+        let index = Int(bytes[at])
+        if index >= header.typeCount {
+            return none
+        }
+        indices.append(index)
+        at += 1
+        i += 1
+    }
+    let abbreviations = at + header.typeCount * 6
+    var types: LocalTimeType[>..] = []
+    i = 0
+    while i < header.typeCount {
+        let offset = Int(bytes.readI32(at: at, endian: .Big))
+        let isDaylightSaving = bytes[at + 4] != 0
+        let index = Int(bytes[at + 5])
+        if index >= header.charCount {
+            return none
+        }
+        var end = abbreviations + index
+        while end < abbreviations + header.charCount && bytes[end] != 0 {
+            end += 1
+        }
+        let abbreviation = Runtime.decodeUtf8(bytes: bytes[abbreviations + index..<end]) ?? ""
+        types.append(LocalTimeType { offset: offset, isDaylightSaving: isDaylightSaving, abbreviation: abbreviation })
+        at += 6
+        i += 1
+    }
+    var rule: PosixRule? = none
+    if let text = footer {
+        if !text.isEmpty {
+            if let parsed = PosixRule.parse(text) {
+                rule = parsed
+            } else {
+                return none
+            }
+        }
+    }
+    return TimeZone(id: id, times: times, indices: indices, types: types, rule: rule)
+}

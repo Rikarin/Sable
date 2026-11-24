@@ -1,0 +1,45 @@
+module TimeMonthTests
+
+import Sable.Testing
+import Sable.Time
+
+@test
+fn monthsAreNumberedFromJanuary() {
+    var n = 1
+    while n <= 12 {
+        assertEqual(Month.of(n)!.number, n)
+        n += 1
+    }
+    assert(Month.of(0) == none)
+    assert(Month.of(13) == none)
+}
+
+@test
+fn monthsGoRoundTheYear() {
+    assertEqual(Month.December.adding(1), Month.January)
+    assertEqual(Month.January.adding(-1), Month.December)
+    assertEqual(Month.March.adding(25), Month.April)
+}
+
+@test
+fn monthsKnowTheirDays() {
+    assertEqual(Month.February.days(in: 2024), 29)
+    assertEqual(Month.February.days(in: 2100), 28)
+    assertEqual(Month.April.days(in: 2026), 30)
+    assertEqual(Month.July.days(in: 2026), 31)
+    assertEqual(daysInYear(2000), 366)
+    assertEqual(daysInYear(1900), 365)
+}
+
+@test
+fn monthsHaveEnglishNames() {
+    var names = ""
+    var n = 1
+    while n <= 12 {
+        names += Month.of(n)!.shortName + " "
+        n += 1
+    }
+    assertEqual(names, "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec ")
+    assertEqual(Month.May.name, "May")
+    assertEqual(Month.December.name, "December")
+}

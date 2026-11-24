@@ -1,0 +1,25 @@
+module Sable.Time
+
+/// Which moment a local date and time is in a time zone where the zone's
+/// clocks skip it (a gap, as they go forward) or show it twice (a fold, as
+/// they go back): jiff's and Temporal's Disambiguation. A time that is
+/// neither is the one moment whatever the policy.
+///
+/// ```sable
+/// let newYork = try! TimeZone.find("America/New_York")
+/// let skipped = LocalDateTime.of(year: 2026, month: 3, day: 8, hour: 2, minute: 30)!
+/// assert(skipped.zoned(in: newYork, .Earlier).local.toString() == "2026-03-08T01:30:00")
+/// assert(skipped.zoned(in: newYork, .Later).local.toString() == "2026-03-08T03:30:00")
+/// ```
+@derive(Equatable, Hashable, Debug)
+public enum Disambiguation {
+    /// A skipped time moved on by the length of the gap, the first of two:
+    /// what RFC 5545, Temporal, jiff and java.time do, and the default.
+    Compatible
+    /// The earlier moment: a skipped time read at the offset after the
+    /// gap, which puts it before the gap; the first of two.
+    Earlier
+    /// The later moment: a skipped time read at the offset before the gap,
+    /// which puts it after the gap; the second of two.
+    Later
+}

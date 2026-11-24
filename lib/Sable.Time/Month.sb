@@ -1,0 +1,91 @@
+module Sable.Time
+
+/// A month of the Gregorian year.
+///
+/// ```sable
+/// assert(Month.February.days(in: 2024) == 29)
+/// assert(Month.of(12) == .December && Month.December.adding(1) == .January)
+/// assert(Month.September.name == "September" && Month.September.shortName == "Sep")
+/// ```
+@derive(Equatable, Hashable, Debug)
+public enum Month {
+    January
+    February
+    March
+    April
+    May
+    June
+    July
+    August
+    September
+    October
+    November
+    December
+
+    /// The month of the number, 1 for January through 12; none for any
+    /// other number.
+    public static fn of(_ number: Int) -> Month? {
+        if number < 1 || number > 12 {
+            return none
+        }
+        return Month.ofChecked(number)
+    }
+
+    static fn ofChecked(_ number: Int) -> Month {
+        return match number {
+            case 1  => .January
+            case 2  => .February
+            case 3  => .March
+            case 4  => .April
+            case 5  => .May
+            case 6  => .June
+            case 7  => .July
+            case 8  => .August
+            case 9  => .September
+            case 10 => .October
+            case 11 => .November
+            case _  => .December
+        }
+    }
+
+    /// 1 for January through 12 for December.
+    public var number: Int {
+        get {
+            return match self {
+                case .January   => 1
+                case .February  => 2
+                case .March     => 3
+                case .April     => 4
+                case .May       => 5
+                case .June      => 6
+                case .July      => 7
+                case .August    => 8
+                case .September => 9
+                case .October   => 10
+                case .November  => 11
+                case .December  => 12
+            }
+        }
+    }
+
+    /// The days the month has in the year.
+    public fn days(in year: Int) -> Int {
+        return daysInMonth(year, number)
+    }
+
+    /// The month so many months on, round the year (back, for a negative
+    /// count).
+    public fn adding(_ months: Int) -> Month {
+        return Month.ofChecked(floorModulo(number - 1 + months, 12) + 1)
+    }
+
+    /// The English name: "January".
+    public var name: String => Month.names[number - 1]
+
+    /// The English name's first three letters: "Jan".
+    public var shortName: String => Month.names[number - 1].slice(from: 0, to: 3)
+
+    static let names: String[12] = [
+        "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December",
+    ]
+}

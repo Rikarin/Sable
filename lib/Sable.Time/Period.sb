@@ -1,0 +1,190 @@
+module Sable.Time
+
+/// An amount of calendar time: years, months and days, each kept apart,
+/// since none is a fixed length — a month is 28 to 31 days, and a day in a
+/// time zone 23 to 25 hours across a change of its clocks. `Duration` is
+/// the exact kind, in nanoseconds. Java's Period; jiff's Span with only
+/// calendar units.
+///
+/// A date adds the years and months first, a day past the end of the month
+/// clamped to its last, then the days: a month after the 31st of January
+/// is the 28th or 29th of February.
+///
+/// ```sable
+/// let start = Date.of(year: 2024, month: 1, day: 31)!
+/// assert(start.adding(Period.of(months: 1, days: 1)) == Date.of(year: 2024, month: 3, day: 1)!)
+/// assert(Period.of(years: 1, months: 2, days: 3).toString() == "P1Y2M3D")
+/// assert(try! Period.parse("P2W") == Period.days(14))
+/// ```
+public struct Period: Hashable {
+    public var years: Int
+    public var months: Int
+    public var days: Int
+
+    /// The period of so many of each.
+    public static fn of(years: Int = 0, months: Int = 0, days: Int = 0) -> Period {
+        return Period { years: years, months: months, days: days }
+    }
+
+    public static fn years(_ count: Int) -> Period {
+        return Period { years: count, months: 0, days: 0 }
+    }
+
+    public static fn months(_ count: Int) -> Period {
+        return Period { years: 0, months: count, days: 0 }
+    }
+
+    public static fn weeks(_ count: Int) -> Period {
+        return Period { years: 0, months: 0, days: count * 7 }
+    }
+
+    public static fn days(_ count: Int) -> Period {
+        return Period { years: 0, months: 0, days: count }
+    }
+
+    /// No time at all.
+    public static var zero: Period => Period { years: 0, months: 0, days: 0 }
+
+    /// Whether every part is zero.
+    public var isZero: Bool => years == 0 && months == 0 && days == 0
+
+    /// Years and months together, as months.
+    public var totalMonths: Int => years * 12 + months
+
+    /// Each part negated.
+    public fn negated() -> Period {
+        return Period { years: 0 - years, months: 0 - months, days: 0 - days }
+    }
+
+    /// The months made years where there are twelve: 14 months is a year
+    /// and 2 months. The days are left as they are, as no month has a
+    /// fixed number of them.
+    public fn normalized() -> Period {
+        let total = totalMonths
+        return Period { years: total / 12, months: total % 12, days: days }
+    }
+
+    public operator + (a: Period, b: Period) -> Period {
+        return Period { years: a.years + b.years, months: a.months + b.months, days: a.days + b.days }
+    }
+
+    public operator - (a: Period, b: Period) -> Period {
+        return Period { years: a.years - b.years, months: a.months - b.months, days: a.days - b.days }
+    }
+
+    public operator == (a: Period, b: Period) -> Bool {
+        return a.years == b.years && a.months == b.months && a.days == b.days
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(years)
+        hasher.combine(months)
+        hasher.combine(days)
+    }
+
+    /// ISO 8601's duration as it writes a period: "P1Y2M3D", the parts that
+    /// are zero left out, "P0D" for none; a part may be negative, "P-1M".
+    public fn toString() -> String {
+        if isZero {
+            return "P0D"
+        }
+        var text = "P"
+        if years != 0 {
+            text += years.toString() + "Y"
+        }
+        if months != 0 {
+            text += months.toString() + "M"
+        }
+        if days != 0 {
+            text += days.toString() + "D"
+        }
+        return text
+    }
+}
+
+extension Period: Parsable {
+    /// The period ISO 8601 writes as a duration of years, months, weeks and
+    /// days: `P1Y2M3D`, `P2W`, `-P1M` (each part negated), any part signed
+    /// on its own (`P-1M`), as `toString()` writes it. A time part (`T1H`)
+    /// is not a period's, and is `.Invalid` where it is.
+    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> Period {
+        let scalars = source.toString().toArray()
+        let count = scalars.count
+        if count == 0 {
+            throw .Empty
+        }
+        var i = 0
+        var negative = false
+        if scalars[0] == '-' || scalars[0] == '+' {
+            negative = scalars[0] == '-'
+            i = 1
+        }
+        if i >= count || scalars[i] != 'P' && scalars[i] != 'p' {
+            throw .Invalid(at: i)
+        }
+        i += 1
+        var period = Period.zero
+        var parts = 0
+        var last = 0
+        while i < count {
+            let started = i
+            var sign = 1
+            if scalars[i] == '-' || scalars[i] == '+' {
+                sign = scalars[i] == '-' ? -1 : 1
+                i += 1
+            }
+            var value = 0
+            var digits = 0
+            while i < count && scalars[i].isDigit {
+                let digit = scalars[i].codePoint - 48
+                if value > (9223372036854775807 - digit) / 10 {
+                    throw .Overflow
+                }
+                value = value * 10 + digit
+                digits += 1
+                i += 1
+            }
+            if digits == 0 {
+                throw .InvalidDigit(at: i)
+            }
+            if i == count {
+                throw .Invalid(at: i)
+            }
+            let unit = scalars[i].uppercased()
+            let rank = match unit {
+                case "Y" => 1
+                case "M" => 2
+                case "W" => 3
+                case "D" => 4
+                case _   => 0
+            }
+            if rank <= last {
+                throw .Invalid(at: rank == 0 ? i : started)
+            }
+            last = rank
+            value *= sign
+            if rank == 1 {
+                period.years = value
+            } else if rank == 2 {
+                period.months = value
+            } else if rank == 3 {
+                period.days += value * 7
+            } else {
+                period.days += value
+            }
+            parts += 1
+            i += 1
+        }
+        if parts == 0 {
+            throw .Invalid(at: count)
+        }
+        return negative ? period.negated() : period
+    }
+}
+
+extension Period: Debug {
+    /// As ISO 8601 writes it: `P1Y2M3D`.
+    public fn debugDescription() -> String {
+        return toString()
+    }
+}

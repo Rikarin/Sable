@@ -1,8 +1,8 @@
 module Sable.Time
 
-// Durations, monotonic instants and UTC dates (docs/04 §4.3), written in
-// Sable over the runtime's clocks (Sable.Core's Runtime). Calendar arithmetic
-// is proleptic Gregorian, in UTC: time zones are not here yet.
+// Durations, monotonic instants, civil dates and times, offsets and time
+// zones (docs/04 §4.3), written in Sable over the runtime's clocks and the
+// system's time zone database. Calendar arithmetic is proleptic Gregorian.
 
 /// A span of time, to the nanosecond; negative when it runs backwards.
 public struct Duration: Comparable, Hashable {

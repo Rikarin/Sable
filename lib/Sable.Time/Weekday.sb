@@ -1,0 +1,88 @@
+module Sable.Time
+
+/// A day of the week, Monday first as ISO 8601 counts them: .NET's
+/// DayOfWeek (which counts from Sunday), jiff's Weekday.
+///
+/// ```sable
+/// let day = Weekday.Saturday
+/// assert(day.number == 6 && day.adding(2) == .Monday)
+/// assert(Weekday.of(7) == .Sunday && day.name == "Saturday")
+/// ```
+@derive(Equatable, Hashable, Debug)
+public enum Weekday {
+    Monday
+    Tuesday
+    Wednesday
+    Thursday
+    Friday
+    Saturday
+    Sunday
+
+    /// The day of the number: 1 for Monday through 7 for Sunday; none for
+    /// any other number.
+    public static fn of(_ number: Int) -> Weekday? {
+        if number < 1 || number > 7 {
+            return none
+        }
+        return Weekday.ofChecked(number)
+    }
+
+    static fn ofChecked(_ number: Int) -> Weekday {
+        return match number {
+            case 1 => .Monday
+            case 2 => .Tuesday
+            case 3 => .Wednesday
+            case 4 => .Thursday
+            case 5 => .Friday
+            case 6 => .Saturday
+            case _ => .Sunday
+        }
+    }
+
+    /// ISO 8601's number: 1 for Monday through 7 for Sunday.
+    public var number: Int {
+        get {
+            return match self {
+                case .Monday    => 1
+                case .Tuesday   => 2
+                case .Wednesday => 3
+                case .Thursday  => 4
+                case .Friday    => 5
+                case .Saturday  => 6
+                case .Sunday    => 7
+            }
+        }
+    }
+
+    /// The number counting from Sunday, 0, to Saturday, 6: C's, .NET's and
+    /// POSIX's.
+    public var numberFromSunday: Int => number % 7
+
+    /// The day so many days on (back, for a negative count).
+    public fn adding(_ days: Int) -> Weekday {
+        return Weekday.ofChecked(floorModulo(number - 1 + days, 7) + 1)
+    }
+
+    /// The day after.
+    public var next: Weekday => adding(1)
+
+    /// The day before.
+    public var previous: Weekday => adding(-1)
+
+    /// How many days on this one the other next comes: 0 to 6.
+    ///
+    /// ```sable
+    /// assert(Weekday.Friday.daysUntil(.Monday) == 3)
+    /// ```
+    public fn daysUntil(_ other: Weekday) -> Int {
+        return floorModulo(other.number - number, 7)
+    }
+
+    /// The English name: "Monday".
+    public var name: String => Weekday.names[number - 1]
+
+    /// The English name's first three letters: "Mon".
+    public var shortName: String => Weekday.names[number - 1].slice(from: 0, to: 3)
+
+    static let names: String[7] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+}

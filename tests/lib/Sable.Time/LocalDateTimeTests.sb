@@ -1,0 +1,133 @@
+module TimeLocalDateTimeTests
+
+import Sable.Testing
+import Sable.Time
+
+fn local(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int, _ second: Int = 0) -> LocalDateTime {
+    return LocalDateTime.of(year: year, month: month, day: day, hour: hour, minute: minute, second: second)!
+}
+
+fn localError(_ text: String) -> ParseError? {
+    do {
+        let _ = try LocalDateTime.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+fn patternError(_ text: String, _ pattern: String) -> ParseError? {
+    do {
+        let _ = try LocalDateTime.parse(text, pattern: pattern)
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn aLocalDateTimeIsADateAndATime() {
+    let at = LocalDateTime.of(year: 2026, month: 11, day: 17, hour: 9, minute: 5, second: 3, nanosecond: 7)!
+    assertEqual(at.year, 2026)
+    assertEqual(at.month, 11)
+    assertEqual(at.day, 17)
+    assertEqual(at.hour, 9)
+    assertEqual(at.minute, 5)
+    assertEqual(at.second, 3)
+    assertEqual(at.nanosecond, 7)
+    assertEqual(at.weekday, Weekday.Tuesday)
+    assertEqual(at.dayOfYear, 321)
+    assert(LocalDateTime.of(year: 2026, month: 2, day: 29) == none)
+    assert(LocalDateTime.of(year: 2026, month: 2, day: 28, hour: 24) == none)
+    assertEqual(at.with(time: TimeOfDay.noon).toString(), "2026-11-17T12:00:00")
+    assertEqual(at.assumingUtc().toString(), "2026-11-17T09:05:03.000000007Z")
+}
+
+@test
+fn aLocalDateTimeMovesByTheClockAndTheCalendar() {
+    let at = local(2024, 2, 28, 23, 30)
+    assertEqual(at.adding(Duration.hours(1)), local(2024, 2, 29, 0, 30))
+    assertEqual(at.adding(Duration.hours(-48)), local(2024, 2, 26, 23, 30))
+    assertEqual(at.adding(Duration.nanoseconds(-1)).toString(), "2024-02-28T23:29:59.999999999")
+    assertEqual(at.adding(days: 2), local(2024, 3, 1, 23, 30))
+    assertEqual(at.adding(months: 12), local(2025, 2, 28, 23, 30))
+    assertEqual(at.adding(years: -1), local(2023, 2, 28, 23, 30))
+    assertEqual(at.adding(Period.of(months: 1, days: 1)), local(2024, 3, 29, 23, 30))
+    assertEqual(at.durationUntil(local(2024, 2, 29, 0, 0)), Duration.minutes(30))
+    assertEqual(local(2024, 2, 29, 0, 0).durationUntil(at), Duration.minutes(-30))
+}
+
+@test
+fn localDateTimesAreOrdered() {
+    assert(local(2026, 1, 1, 0, 0) < local(2026, 1, 1, 0, 1))
+    assert(local(2025, 12, 31, 23, 59) < local(2026, 1, 1, 0, 0))
+    assert(!(local(2026, 1, 1, 0, 0) < local(2026, 1, 1, 0, 0)))
+    assertEqual(local(2026, 1, 1, 0, 0).hashValue, local(2026, 1, 1, 0, 0).hashValue)
+}
+
+@test
+fn aLocalDateTimeAtAnOffsetIsAMoment() {
+    let at = local(2026, 11, 17, 9, 5)
+    assertEqual(at.withOffset(UtcOffset.hours(1)).instant.toString(), "2026-11-17T08:05:00Z")
+    assertEqual(at.zoned(in: TimeZone.fixed(UtcOffset.hours(-2))).instant.toString(), "2026-11-17T11:05:00Z")
+    assertEqual(try! at.zonedStrictly(in: TimeZone.utc).instant.toString(), "2026-11-17T09:05:00Z")
+}
+
+@test
+fn localDateTimesReadISO8601() {
+    assertEqual(try! LocalDateTime.parse("2026-11-17T09:05:03"), local(2026, 11, 17, 9, 5, 3))
+    assertEqual(try! LocalDateTime.parse("2026-11-17 09:05"), local(2026, 11, 17, 9, 5))
+    assertEqual(try! LocalDateTime.parse("20261117T0905"), local(2026, 11, 17, 9, 5))
+    assertEqual(try! LocalDateTime.parse("2026-11-17"), local(2026, 11, 17, 0, 0))
+    assertEqual(try! LocalDateTime.parse("2026-12-31T24:00"), local(2027, 1, 1, 0, 0))
+    assertEqual(try! LocalDateTime.parse("2026-W47-2T10"), local(2026, 11, 17, 10, 0))
+    let at = LocalDateTime.of(year: 2026, month: 11, day: 17, hour: 9, minute: 5, second: 3, nanosecond: 120000000)!
+    assertEqual(try! LocalDateTime.parse(at.toString()), at)
+    assertEqual(at.debugDescription(), "2026-11-17T09:05:03.12")
+}
+
+@test
+fn aLocalDateTimeThatIsNotOneSaysWhere() {
+    assertEqual(localError("2026-11-17T09:05:03Z"), ParseError.Invalid(at: 19))
+    assertEqual(localError("2026-11-17X09:05"), ParseError.Invalid(at: 10))
+    assertEqual(localError("2026-11-17T24:00:01"), ParseError.Invalid(at: 11))
+}
+
+@test
+fn localDateTimesWriteAndReadPatterns() {
+    let at = LocalDateTime.of(year: 2026, month: 1, day: 5, hour: 14, minute: 7, second: 9, nanosecond: 500000000)!
+    assertEqual(at.format(pattern: "yyyy-MM-ddTHH:mm:ss.FFFK"), "2026-01-05T14:07:09.5")
+    assertEqual(at.format(pattern: "zzz|K|z"), "||")
+    assertEqual(at.format(pattern: "o"), "2026-01-05T14:07:09.5000000")
+    assertEqual(at.format(pattern: "r"), "Mon, 05 Jan 2026 14:07:09 GMT")
+    assertEqual(at.format(pattern: "fffffffff"), "500000000")
+    assertEqual(at.format(pattern: "%"), "")
+    assertEqual(at.format(pattern: "%%d"), "5")
+    assertEqual(at.format(pattern: "%:"), ":")
+    assertEqual(at.format(pattern: "'open"), "open")
+    assertEqual(at.format(pattern: "x\\"), "x")
+    assertEqual(try! LocalDateTime.parse("05/01/2026 14:07", pattern: "dd/MM/yyyy HH:mm"), local(2026, 1, 5, 14, 7))
+    assertEqual(try! LocalDateTime.parse("Jan 5, 2026 2:07:09 PM", pattern: "MMM d, yyyy h:mm:ss tt"), local(2026, 1, 5, 14, 7, 9))
+    assertEqual(try! LocalDateTime.parse("2026-01-05T14:07:09.5000000", pattern: "o"), at)
+    assertEqual(try! LocalDateTime.parse("A.D. 2026 January 5", pattern: "g yyyy MMMM d"), local(2026, 1, 5, 0, 0))
+    assertEqual(try! LocalDateTime.parse("14:07", pattern: "HH:mm"), local(1, 1, 1, 14, 7))
+    assertEqual(try! LocalDateTime.parse("2026-01-05 14:07 +01:00", pattern: "yyyy-MM-dd HH:mm zzz"), local(2026, 1, 5, 14, 7))
+}
+
+@test
+fn aPatternThatDoesNotFitSaysWhere() {
+    assertEqual(patternError("2026-01-05", "yyyy/MM/dd"), ParseError.Invalid(at: 4))
+    assertEqual(patternError("2026-01-05 extra", "yyyy-MM-dd"), ParseError.Invalid(at: 10))
+    assertEqual(patternError("26-01-05", "yyyy-MM-dd"), ParseError.InvalidDigit(at: 2))
+    assertEqual(patternError("2026-01-05 25:00", "yyyy-MM-dd HH:mm"), ParseError.Invalid(at: 11))
+    assertEqual(patternError("2026-01-05 13:00", "yyyy-MM-dd hh:mm"), ParseError.Invalid(at: 11))
+    assertEqual(patternError("2026-01-05 10:60", "yyyy-MM-dd HH:mm"), ParseError.Invalid(at: 14))
+    assertEqual(patternError("2026-01-05 10:00:60", "yyyy-MM-dd HH:mm:ss"), ParseError.Invalid(at: 17))
+    assertEqual(patternError("2026-01-05 13:00 AM", "yyyy-MM-dd HH:mm tt"), ParseError.Invalid(at: 11))
+    assertEqual(patternError("2026-01-05 10:00 XM", "yyyy-MM-dd HH:mm tt"), ParseError.Invalid(at: 17))
+    assertEqual(patternError("2026-Foo-05", "yyyy-MMM-dd"), ParseError.Invalid(at: 5))
+    assertEqual(patternError("2026-01-05 10:00 1", "yyyy-MM-dd HH:mm z"), ParseError.Invalid(at: 17))
+    assertEqual(patternError("2026-01-05 10:00 +15", "yyyy-MM-dd HH:mm zz"), ParseError.Invalid(at: 17))
+    assertEqual(patternError("2026-01-05 10:00 +01-00", "yyyy-MM-dd HH:mm zzz"), ParseError.Invalid(at: 20))
+    assertEqual(patternError("10:00:00.1", "HH:mm:ss.ff"), ParseError.InvalidDigit(at: 10))
+}

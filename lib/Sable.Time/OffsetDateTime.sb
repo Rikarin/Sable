@@ -1,0 +1,197 @@
+module Sable.Time
+
+/// A date and time at a fixed offset from UTC: a moment, and what clocks
+/// at that offset showed — what RFC 3339 and RFC 2822 write. .NET's
+/// DateTimeOffset, java.time's OffsetDateTime. It knows nothing of a time
+/// zone's rules, so adding a period keeps the offset; `ZonedDateTime`
+/// follows a zone's.
+///
+/// Two are equal when both the moment and the offset are; they are
+/// ordered by moment.
+///
+/// ```sable
+/// let at = try! OffsetDateTime.parse("2026-11-17T09:05:03.5+01:00")
+/// assert(at.instant.toString() == "2026-11-17T08:05:03.5Z")
+/// assert(at.rfc2822() == "Tue, 17 Nov 2026 09:05:03 +0100")
+/// assert(at.toOffset(UtcOffset.hours(-5)).toString() == "2026-11-17T03:05:03.5-05:00")
+/// ```
+public struct OffsetDateTime: Comparable, Hashable {
+    /// What clocks at the offset show.
+    public let local: LocalDateTime
+    public let offset: UtcOffset
+
+    public init(local: LocalDateTime, offset: UtcOffset) {
+        self.local = local
+        self.offset = offset
+    }
+
+    /// The date and time the fields name at the offset; none when one is
+    /// out of range.
+    public static fn of(year: Int, month: Int, day: Int, hour: Int = 0, minute: Int = 0, second: Int = 0, nanosecond: Int = 0, offset: UtcOffset) -> OffsetDateTime? {
+        if let local = LocalDateTime.of(year: year, month: month, day: day, hour: hour, minute: minute, second: second, nanosecond: nanosecond) {
+            return OffsetDateTime(local: local, offset: offset)
+        }
+        return none
+    }
+
+    /// Now, at the system's time zone's offset now.
+    public static fn now() -> OffsetDateTime {
+        return ZonedDateTime.now(in: TimeZone.system()).offsetDateTime
+    }
+
+    /// The moment.
+    public var instant: UtcDateTime {
+        get {
+            return UtcDateTime { secondsSinceEpoch: local.localSeconds - offset.totalSeconds, nanosecond: local.nanosecond }
+        }
+    }
+
+    public var date: Date => local.date
+    public var time: TimeOfDay => local.time
+    public var year: Int => local.year
+    public var month: Int => local.month
+    public var day: Int => local.day
+    public var hour: Int => local.hour
+    public var minute: Int => local.minute
+    public var second: Int => local.second
+    public var nanosecond: Int => local.nanosecond
+    public var weekday: Weekday => local.weekday
+
+    /// The same moment at another offset.
+    public fn toOffset(_ other: UtcOffset) -> OffsetDateTime {
+        return OffsetDateTime(local: local.adding(Duration.seconds(other.totalSeconds - offset.totalSeconds)), offset: other)
+    }
+
+    /// The same moment in the zone.
+    public fn zoned(in zone: TimeZone) -> ZonedDateTime {
+        return zone.at(instant)
+    }
+
+    /// The moment so long after (before, for a negative duration), at the
+    /// same offset.
+    public fn adding(_ duration: Duration) -> OffsetDateTime {
+        return OffsetDateTime(local: local.adding(duration), offset: offset)
+    }
+
+    /// The date moved by the period, as `Date.adding` moves it; the time
+    /// and the offset kept.
+    public fn adding(_ period: Period) -> OffsetDateTime {
+        return OffsetDateTime(local: local.adding(period), offset: offset)
+    }
+
+    /// How long after the other moment this one is.
+    public fn durationSince(_ earlier: OffsetDateTime) -> Duration {
+        return instant.durationSince(earlier.instant)
+    }
+
+    /// ISO 8601's and RFC 3339's form: "2026-11-17T09:05:03+01:00", with the
+    /// fraction of the second where there is one.
+    public fn toString() -> String {
+        return local.toString() + offset.toString()
+    }
+
+    /// RFC 3339's form: as `toString()`, but an offset with seconds rounded
+    /// to the minute, as RFC 3339 has none.
+    public fn rfc3339() -> String {
+        return formatRfc3339(local, offset, false)
+    }
+
+    /// RFC 2822's form, as mail and HTTP headers write it: "Tue, 17 Nov 2026
+    /// 09:05:03 +0100".
+    public fn rfc2822() -> String {
+        return formatRfc2822(local, offset)
+    }
+
+    /// The moment as the pattern writes it: .NET's custom and standard
+    /// format strings, as DateTimeOffset.ToString writes them (see
+    /// `LocalDateTime.format(pattern:)`); `K` and `zzz` write the offset.
+    ///
+    /// ```sable
+    /// let at = OffsetDateTime.of(year: 2026, month: 11, day: 17, hour: 9, minute: 5, offset: UtcOffset.hours(1))!
+    /// assert(at.format(pattern: "yyyy-MM-dd HH:mm zzz") == "2026-11-17 09:05 +01:00")
+    /// assert(at.format(pattern: "r") == "Tue, 17 Nov 2026 08:05:00 GMT")
+    /// ```
+    public fn format(pattern: String) -> String {
+        return formatPattern(pattern, local.date, local.time, offset, false)
+    }
+
+    /// The moment a text writes in the pattern, as .NET's
+    /// DateTimeOffset.ParseExact reads it; a pattern that reads no offset
+    /// (no `z` or `K`), or a text whose `K` is empty, is UTC.
+    ///
+    /// ```sable
+    /// let at = try! OffsetDateTime.parse("17.11.2026 09:05 +01:00", pattern: "dd.MM.yyyy HH:mm zzz")
+    /// assert(at.toString() == "2026-11-17T09:05:00+01:00")
+    /// ```
+    public static fn parse(_ text: String, pattern: String) throws(ParseError) -> OffsetDateTime {
+        let fields = try parsePattern(text, pattern)
+        return OffsetDateTime(local: LocalDateTime(date: fields.date, time: fields.time), offset: fields.offset ?? UtcOffset.utc)
+    }
+
+    /// The moment RFC 3339 writes: a full date, `T` (or `t` or a space), a
+    /// full time with seconds and a fraction if it likes, and `Z` or an
+    /// offset `+hh:mm`. Nothing else, as ISO 8601 would take, is.
+    ///
+    /// ```sable
+    /// let at = try! OffsetDateTime.parseRfc3339("1985-04-12T23:20:50.52Z")
+    /// assert(at.nanosecond == 520000000)
+    /// assert((try? OffsetDateTime.parseRfc3339("1985-04-12T23:20Z")) == none)
+    /// ```
+    public static fn parseRfc3339(_ text: String) throws(ParseError) -> OffsetDateTime {
+        return try readRfc3339(text)
+    }
+
+    /// The moment RFC 2822 (RFC 5322) writes, as mail headers do: "Tue, 17
+    /// Nov 2026 09:05:03 +0100". The weekday is optional and checked, the
+    /// seconds optional; the obsolete syntax's two-digit years, zone names
+    /// ("GMT", "EST", ...) and comments are read too.
+    ///
+    /// ```sable
+    /// let at = try! OffsetDateTime.parseRfc2822("Fri, 21 Nov 1997 09:55:06 -0600")
+    /// assert(at.toString() == "1997-11-21T09:55:06-06:00")
+    /// assert(try! OffsetDateTime.parseRfc2822("21 Nov 97 09:55 EST").offset == UtcOffset.hours(-5))
+    /// ```
+    public static fn parseRfc2822(_ text: String) throws(ParseError) -> OffsetDateTime {
+        return try readRfc2822(text)
+    }
+
+    public operator == (a: OffsetDateTime, b: OffsetDateTime) -> Bool {
+        return a.local == b.local && a.offset == b.offset
+    }
+
+    public operator < (a: OffsetDateTime, b: OffsetDateTime) -> Bool {
+        let x = a.instant
+        let y = b.instant
+        if x != y {
+            return x < y
+        }
+        return a.offset > b.offset
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        local.hash(into: &hasher)
+        offset.hash(into: &hasher)
+    }
+}
+
+extension OffsetDateTime: Parsable {
+    /// The moment an ISO 8601 text writes with its offset: a date and time
+    /// as `LocalDateTime.parse` reads them, then `Z` or an offset, which
+    /// must be there.
+    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> OffsetDateTime {
+        var scanner = IsoScanner(source.toString())
+        let parsed = try scanner.dateTime()
+        try scanner.end()
+        if let offset = parsed.offset {
+            return OffsetDateTime(local: parsed.local, offset: offset)
+        }
+        throw .Invalid(at: parsed.offsetAt)
+    }
+}
+
+extension OffsetDateTime: Debug {
+    /// As `toString()` writes it.
+    public fn debugDescription() -> String {
+        return toString()
+    }
+}

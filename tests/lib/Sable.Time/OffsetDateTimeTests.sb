@@ -1,0 +1,140 @@
+module TimeOffsetDateTimeTests
+
+import Sable.Testing
+import Sable.Time
+
+fn rfc3339Error(_ text: String) -> ParseError? {
+    do {
+        let _ = try OffsetDateTime.parseRfc3339(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+fn rfc2822Error(_ text: String) -> ParseError? {
+    do {
+        let _ = try OffsetDateTime.parseRfc2822(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+fn isoError(_ text: String) -> ParseError? {
+    do {
+        let _ = try OffsetDateTime.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn anOffsetDateTimeIsAMomentAndItsClock() {
+    let at = OffsetDateTime.of(year: 2026, month: 11, day: 17, hour: 1, minute: 5, second: 3, nanosecond: 4, offset: UtcOffset.hours(5))!
+    assertEqual(at.instant.toString(), "2026-11-16T20:05:03.000000004Z")
+    assertEqual(at.year, 2026)
+    assertEqual(at.month, 11)
+    assertEqual(at.day, 17)
+    assertEqual(at.hour, 1)
+    assertEqual(at.minute, 5)
+    assertEqual(at.second, 3)
+    assertEqual(at.nanosecond, 4)
+    assertEqual(at.weekday, Weekday.Tuesday)
+    assertEqual(at.date, Date.of(year: 2026, month: 11, day: 17)!)
+    assertEqual(at.time, TimeOfDay.of(hour: 1, minute: 5, second: 3, nanosecond: 4)!)
+    assert(OffsetDateTime.of(year: 2026, month: 2, day: 30, offset: UtcOffset.utc) == none)
+}
+
+@test
+fn offsetDateTimesConvertAndMove() {
+    let at = OffsetDateTime.of(year: 2026, month: 1, day: 31, hour: 23, offset: UtcOffset.hours(1))!
+    let elsewhere = at.toOffset(UtcOffset.hours(-5))
+    assertEqual(elsewhere.toString(), "2026-01-31T17:00:00-05:00")
+    assertEqual(elsewhere.instant, at.instant)
+    assert(elsewhere != at)
+    assertEqual(at.adding(Duration.hours(2)).toString(), "2026-02-01T01:00:00+01:00")
+    assertEqual(at.adding(Period.months(1)).toString(), "2026-02-28T23:00:00+01:00")
+    assertEqual(at.adding(Duration.hours(2)).durationSince(at), Duration.hours(2))
+    assertEqual(at.zoned(in: TimeZone.fixed(UtcOffset.hours(9))).toString(), "2026-02-01T07:00:00+09:00[+09:00]")
+    // Ordered by moment; at one moment, the greater offset first.
+    assert(at < elsewhere)
+    assert(at.adding(Duration.seconds(-1)) < elsewhere)
+    assert(!(at < at))
+    assertEqual(at.hashValue, OffsetDateTime.of(year: 2026, month: 1, day: 31, hour: 23, offset: UtcOffset.hours(1))!.hashValue)
+}
+
+@test
+fn offsetDateTimesWriteRfc3339AndRfc2822() {
+    let at = OffsetDateTime.of(year: 2026, month: 11, day: 7, hour: 9, minute: 5, second: 3, nanosecond: 120000000, offset: UtcOffset.of(hours: -3, minutes: -30)!)!
+    assertEqual(at.toString(), "2026-11-07T09:05:03.12-03:30")
+    assertEqual(at.rfc3339(), "2026-11-07T09:05:03.12-03:30")
+    assertEqual(at.rfc2822(), "Sat, 7 Nov 2026 09:05:03 -0330")
+    assertEqual(at.debugDescription(), "2026-11-07T09:05:03.12-03:30")
+    let odd = OffsetDateTime.of(year: 1900, month: 1, day: 1, offset: UtcOffset.of(seconds: 1172)!)!
+    assertEqual(odd.toString(), "1900-01-01T00:00:00+00:19:32")
+    assertEqual(odd.rfc3339(), "1900-01-01T00:00:00+00:20")
+    assertEqual(odd.rfc2822(), "Mon, 1 Jan 1900 00:00:00 +0020")
+}
+
+@test
+fn rfc3339IsReadStrictly() {
+    assertEqual(try! OffsetDateTime.parseRfc3339("1985-04-12T23:20:50.52Z").toString(), "1985-04-12T23:20:50.52+00:00")
+    assertEqual(try! OffsetDateTime.parseRfc3339("1996-12-19t16:39:57-08:00").instant.toString(), "1996-12-20T00:39:57Z")
+    assertEqual(try! OffsetDateTime.parseRfc3339("1996-12-19 16:39:57+00:00").hour, 16)
+    assertEqual(rfc3339Error("1985-04-12T23:20Z"), ParseError.Invalid(at: 11))
+    assertEqual(rfc3339Error("1985-04-12T23:20:50"), ParseError.Invalid(at: 19))
+    assertEqual(rfc3339Error("1985-04-12T23:20:50+0100"), ParseError.Invalid(at: 19))
+    assertEqual(rfc3339Error("19850412T232050Z"), ParseError.Invalid(at: 4))
+    assertEqual(rfc3339Error("1985-04-12_23:20:50Z"), ParseError.Invalid(at: 10))
+    assertEqual(rfc3339Error("1985-04-12T23:20:50Zx"), ParseError.Invalid(at: 20))
+    assertEqual(rfc3339Error("1985-04-12T232050Z"), ParseError.Invalid(at: 11))
+}
+
+@test
+fn rfc2822IsReadWithItsObsoleteSyntax() {
+    assertEqual(try! OffsetDateTime.parseRfc2822("Fri, 21 Nov 1997 09:55:06 -0600").toString(), "1997-11-21T09:55:06-06:00")
+    assertEqual(try! OffsetDateTime.parseRfc2822("21 Nov 97 09:55 EST").toString(), "1997-11-21T09:55:00-05:00")
+    assertEqual(try! OffsetDateTime.parseRfc2822("1 Jan 03 00:00:00 GMT").year, 2003)
+    assertEqual(try! OffsetDateTime.parseRfc2822("1 Jan 103 00:00:00 UT").year, 2003)
+    assertEqual(try! OffsetDateTime.parseRfc2822("Thu,\r\n 13 Feb 1969 23:32 (a comment) -0330 (Newfoundland Time)").toString(), "1969-02-13T23:32:00-03:30")
+    assertEqual(try! OffsetDateTime.parseRfc2822("Tue, 1 Jul 2003 10:52:37 +0200").rfc2822(), "Tue, 1 Jul 2003 10:52:37 +0200")
+    assertEqual(try! OffsetDateTime.parseRfc2822("1 Jul 2003 10:52:37 PDT").offset, UtcOffset.hours(-7))
+    assertEqual(try! OffsetDateTime.parseRfc2822("1 Jul 2003 10:52:37 PST").offset, UtcOffset.hours(-8))
+    assertEqual(try! OffsetDateTime.parseRfc2822("1 Jul 2003 10:52:37 MDT").offset, UtcOffset.hours(-6))
+    assertEqual(try! OffsetDateTime.parseRfc2822("1 Jul 2003 10:52:37 EDT").offset, UtcOffset.hours(-4))
+    assertEqual(try! OffsetDateTime.parseRfc2822("1 Jul 2003 10:52:37 A").offset, UtcOffset.utc)
+    assertEqual(try! OffsetDateTime.parseRfc2822("31 Dec 2016 23:59:60 +0000").second, 59)
+    assertEqual(rfc2822Error(""), ParseError.Empty)
+    assertEqual(rfc2822Error("Mon, 21 Nov 1997 09:55:06 -0600"), ParseError.Invalid(at: 0))
+    assertEqual(rfc2822Error("Fri 21 Nov 1997 09:55:06 -0600"), ParseError.Invalid(at: 4))
+    assertEqual(rfc2822Error("21Nov 1997 09:55:06 -0600"), ParseError.Invalid(at: 2))
+    assertEqual(rfc2822Error("21 Nox 1997 09:55:06 -0600"), ParseError.Invalid(at: 3))
+    assertEqual(rfc2822Error("21 Nov 1997 09.55 -0600"), ParseError.Invalid(at: 14))
+    assertEqual(rfc2822Error("21 Nov 1997 09:55 -0660"), ParseError.Invalid(at: 18))
+    assertEqual(rfc2822Error("21 Nov 1997 09:55 XYZ"), ParseError.Invalid(at: 18))
+    assertEqual(rfc2822Error("21 Nov 1997 09:55 +0000 x"), ParseError.Invalid(at: 24))
+    assertEqual(rfc2822Error("21 Nov 1997 24:55 +0000"), ParseError.Invalid(at: 12))
+    assertEqual(rfc2822Error("31 Nov 1997 09:55 +0000"), ParseError.Invalid(at: 0))
+}
+
+@test
+fn offsetDateTimesReadISO8601WithTheirOffset() {
+    assertEqual(try! OffsetDateTime.parse("2026-11-17T09:05:03.5+01:00").toString(), "2026-11-17T09:05:03.5+01:00")
+    assertEqual(try! OffsetDateTime.parse("20261117T090503Z").offset, UtcOffset.utc)
+    assertEqual(isoError("2026-11-17T09:05:03"), ParseError.Invalid(at: 19))
+    assertEqual(isoError("2026-11-17"), ParseError.Invalid(at: 10))
+}
+
+@test
+fn offsetDateTimesWriteAndReadPatterns() {
+    let at = OffsetDateTime.of(year: 2026, month: 11, day: 17, hour: 9, minute: 5, offset: UtcOffset.hours(1))!
+    assertEqual(at.format(pattern: "u"), "2026-11-17 08:05:00Z")
+    assertEqual(at.format(pattern: "U"), "Tuesday, 17 November 2026 08:05:00")
+    assertEqual(try! OffsetDateTime.parse("17.11.2026 09:05 +01:00", pattern: "dd.MM.yyyy HH:mm zzz"), at)
+    assertEqual(try! OffsetDateTime.parse("2026-11-17T09:05:00.0000000+01:00", pattern: "o"), at)
+    assertEqual(try! OffsetDateTime.parse("2026-11-17T08:05:00.0000000Z", pattern: "o").instant, at.instant)
+    assertEqual(try! OffsetDateTime.parse("2026-11-17 09:05 +1", pattern: "yyyy-MM-dd HH:mm z").offset, UtcOffset.hours(1))
+    assertEqual(try! OffsetDateTime.parse("2026-11-17 09:05", pattern: "yyyy-MM-dd HH:mm").offset, UtcOffset.utc)
+}

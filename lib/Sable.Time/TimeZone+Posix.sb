@@ -1,0 +1,313 @@
+module Sable.Time
+
+// POSIX TZ rules (POSIX.1-2017 §8.3, with RFC 8536's extensions): what a
+// TZif file's footer says the clocks do after its last change, and what
+// the TZ variable may say. "CET-1CEST,M3.5.0,M10.5.0/3" is an hour ahead
+// of UTC, "CET", and two in daylight saving time, "CEST", from 02:00 on
+// the last Sunday of March to 03:00 on the last Sunday of October.
+
+/// A POSIX TZ rule.
+struct PosixRule {
+    let standard: LocalTimeType
+    /// None for a zone with no daylight saving.
+    let daylight: LocalTimeType?
+    /// When daylight saving begins: the day, and the seconds after its
+    /// local (standard) midnight.
+    let start: PosixDate
+    let startTime: Int
+    /// When it ends: the day, and the seconds after its local (daylight)
+    /// midnight.
+    let end: PosixDate
+    let endTime: Int
+
+    /// The rule the text writes, or none.
+    static fn parse(_ text: String) -> PosixRule? {
+        var scanner = PosixScanner { chars: text.toArray(), at: 0 }
+        if let rule = scanner.rule() {
+            if scanner.at == scanner.chars.count {
+                return rule
+            }
+        }
+        return none
+    }
+
+    /// The type at seconds since the epoch.
+    fn typeAt(_ seconds: Int) -> LocalTimeType {
+        if let daylight = self.daylight {
+            let year = civilFromDays(floorDivide(seconds + standard.offset, 86400)).y
+            let begins = startOf(year, daylight)
+            let ends = endOf(year, daylight)
+            if begins < ends {
+                return begins <= seconds && seconds < ends ? daylight : standard
+            }
+            return ends <= seconds && seconds < begins ? standard : daylight
+        }
+        return standard
+    }
+
+    /// When daylight saving begins in the year, in seconds since the epoch.
+    fn startOf(_ year: Int, _ daylight: LocalTimeType) -> Int {
+        return start.day(in: year) * 86400 + startTime - standard.offset
+    }
+
+    /// When daylight saving ends in the year, in seconds since the epoch.
+    fn endOf(_ year: Int, _ daylight: LocalTimeType) -> Int {
+        return end.day(in: year) * 86400 + endTime - daylight.offset
+    }
+
+    /// The first change after seconds since the epoch.
+    fn nextChange(after seconds: Int) -> ZoneChange? {
+        if let daylight = self.daylight {
+            let year = civilFromDays(floorDivide(seconds, 86400)).y
+            var found = false
+            var bestAt = 0
+            var bestType = standard
+            var y = year - 1
+            while y <= year + 1 {
+                let begins = startOf(y, daylight)
+                let ends = endOf(y, daylight)
+                if begins > seconds && (!found || begins < bestAt) {
+                    found = true
+                    bestAt = begins
+                    bestType = daylight
+                }
+                if ends > seconds && (!found || ends < bestAt) {
+                    found = true
+                    bestAt = ends
+                    bestType = standard
+                }
+                y += 1
+            }
+            return found ? ZoneChange { at: bestAt, type: bestType } : none
+        }
+        return none
+    }
+
+    /// The last change before seconds since the epoch.
+    fn previousChange(before seconds: Int) -> ZoneChange? {
+        if let daylight = self.daylight {
+            let year = civilFromDays(floorDivide(seconds, 86400)).y
+            var found = false
+            var bestAt = 0
+            var bestType = standard
+            var y = year - 1
+            while y <= year + 1 {
+                let begins = startOf(y, daylight)
+                let ends = endOf(y, daylight)
+                if begins < seconds && (!found || begins > bestAt) {
+                    found = true
+                    bestAt = begins
+                    bestType = daylight
+                }
+                if ends < seconds && (!found || ends > bestAt) {
+                    found = true
+                    bestAt = ends
+                    bestType = standard
+                }
+                y += 1
+            }
+            return found ? ZoneChange { at: bestAt, type: bestType } : none
+        }
+        return none
+    }
+}
+
+/// A day of the year in a POSIX rule: `Jn`, the nth day counting 1 to 365
+/// with no 29th of February; `n`, counting 0 to 365 with it; `Mm.w.d`, the
+/// dth day of the week (0 Sunday) of the wth week (5 the last) of month m.
+struct PosixDate {
+    /// 0 for `Jn`, 1 for `n`, 2 for `Mm.w.d`.
+    let kind: Int
+    let month: Int
+    let week: Int
+    /// The day of the year for `Jn` and `n`; the weekday for `Mm.w.d`.
+    let day: Int
+
+    /// The day in the year, in days since the epoch.
+    fn day(in year: Int) -> Int {
+        let january1 = daysFromCivil(year, 1, 1)
+        if kind == 0 {
+            return january1 + day - 1 + (isLeapYear(year) && day >= 60 ? 1 : 0)
+        }
+        if kind == 1 {
+            return january1 + day
+        }
+        let first = daysFromCivil(year, month, 1)
+        // Sunday is 0, as the rule counts.
+        let firstWeekday = weekdayNumber(first) % 7
+        var dayOfMonth = 1 + floorModulo(day - firstWeekday, 7) + (week - 1) * 7
+        while dayOfMonth > daysInMonth(year, month) {
+            dayOfMonth -= 7
+        }
+        return first + dayOfMonth - 1
+    }
+}
+
+struct PosixScanner {
+    var chars: Char[>..]
+    var at: Int
+
+    var current: Char? => at < chars.count ? chars[at] : none
+
+    mutating fn rule() -> PosixRule? {
+        if let name = self.name() {
+            if let offset = self.time() {
+                let standard = LocalTimeType { offset: 0 - offset, isDaylightSaving: false, abbreviation: name }
+                if at == chars.count {
+                    return PosixRule { standard: standard, daylight: none, start: PosixDate { kind: 0, month: 0, week: 0, day: 1 }, startTime: 0, end: PosixDate { kind: 0, month: 0, week: 0, day: 1 }, endTime: 0 }
+                }
+                if let daylightName = self.name() {
+                    var daylightOffset = standard.offset + 3600
+                    if current != ',' && at < chars.count {
+                        if let given = self.time() {
+                            daylightOffset = 0 - given
+                        } else {
+                            return none
+                        }
+                    }
+                    let daylight = LocalTimeType { offset: daylightOffset, isDaylightSaving: true, abbreviation: daylightName }
+                    if at == chars.count {
+                        // No rule: the United States' since 2007, as POSIX leaves it to the system.
+                        return PosixRule {
+                            standard: standard, daylight: daylight,
+                            start: PosixDate { kind: 2, month: 3, week: 2, day: 0 }, startTime: 7200,
+                            end: PosixDate { kind: 2, month: 11, week: 1, day: 0 }, endTime: 7200,
+                        }
+                    }
+                    if current != ',' {
+                        return none
+                    }
+                    at += 1
+                    if let start = self.date() {
+                        let startTime = self.transitionTime()
+                        if current == ',' {
+                            at += 1
+                            if let end = self.date() {
+                                let endTime = self.transitionTime()
+                                if let begins = startTime {
+                                    if let ends = endTime {
+                                        return PosixRule { standard: standard, daylight: daylight, start: start, startTime: begins, end: end, endTime: ends }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return none
+    }
+
+    /// An abbreviation: three or more letters, or anything but '>' in
+    /// angle brackets, "<+0530>".
+    mutating fn name() -> String? {
+        var name = ""
+        if current == '<' {
+            at += 1
+            while at < chars.count && chars[at] != '>' {
+                name += String.fromChar(chars[at])
+                at += 1
+            }
+            if at == chars.count {
+                return none
+            }
+            at += 1
+        } else {
+            while at < chars.count && chars[at].isAsciiLetter {
+                name += String.fromChar(chars[at])
+                at += 1
+            }
+        }
+        return name.count >= 3 ? name : none
+    }
+
+    /// '/' and a time, or 02:00 where there is none.
+    mutating fn transitionTime() -> Int? {
+        if current == '/' {
+            at += 1
+            return self.time()
+        }
+        return 7200
+    }
+
+    /// `[+-]hh[:mm[:ss]]`, in seconds: hours up to 167, as RFC 8536 allows.
+    mutating fn time() -> Int? {
+        var sign = 1
+        if current == '+' || current == '-' {
+            sign = current == '-' ? -1 : 1
+            at += 1
+        }
+        if let hours = self.number() {
+            if hours > 167 {
+                return none
+            }
+            var seconds = hours * 3600
+            if current == ':' {
+                at += 1
+                if let minutes = self.number() {
+                    seconds += minutes * 60
+                } else {
+                    return none
+                }
+                if current == ':' {
+                    at += 1
+                    if let rest = self.number() {
+                        seconds += rest
+                    } else {
+                        return none
+                    }
+                }
+            }
+            return sign * seconds
+        }
+        return none
+    }
+
+    mutating fn date() -> PosixDate? {
+        if current == 'J' {
+            at += 1
+            if let day = self.number() {
+                if day >= 1 && day <= 365 {
+                    return PosixDate { kind: 0, month: 0, week: 0, day: day }
+                }
+            }
+            return none
+        }
+        if current == 'M' {
+            at += 1
+            if let month = self.number() {
+                if current == '.' {
+                    at += 1
+                    if let week = self.number() {
+                        if current == '.' {
+                            at += 1
+                            if let day = self.number() {
+                                if month >= 1 && month <= 12 && week >= 1 && week <= 5 && day <= 6 {
+                                    return PosixDate { kind: 2, month: month, week: week, day: day }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return none
+        }
+        if let day = self.number() {
+            if day <= 365 {
+                return PosixDate { kind: 1, month: 0, week: 0, day: day }
+            }
+        }
+        return none
+    }
+
+    mutating fn number() -> Int? {
+        var value = 0
+        var digits = 0
+        while at < chars.count && chars[at].isDigit && digits < 4 {
+            value = value * 10 + (chars[at].codePoint - 48)
+            digits += 1
+            at += 1
+        }
+        return digits > 0 ? value : none
+    }
+}

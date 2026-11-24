@@ -1,0 +1,387 @@
+module Sable.Net
+
+import Sable.Text
+
+/// Internationalised domain names, by UTS #46 (Unicode IDNA Compatibility
+/// Processing): a domain mapped, normalized and checked, and its labels
+/// turned into Punycode ("xn--…") or back — what a URL's host goes through.
+///
+/// ```sable
+/// assert(Idna.toAscii("Bücher.Example")! == "xn--bcher-kva.example")
+/// assert(Idna.toUnicode("xn--bcher-kva.example").text == "bücher.example")
+/// assert(Idna.toAscii("a\u{FFFD}b") == none)
+/// ```
+public struct Idna {
+    /// The domain as ASCII, each label that is not made Punycode; none when
+    /// processing found an error.
+    public static fn toAscii(_ domain: String, options: IdnaOptions = IdnaOptions()) -> String? {
+        let processed = Idna.process(domain, options)
+        if processed.failed {
+            return none
+        }
+        var parts: String[>..] = []
+        var total = 0
+        var i = 0
+        for label in processed.labels {
+            var ascii = true
+            for code in label {
+                if code >= 0x80 {
+                    ascii = false
+                }
+            }
+            var text = stringOf(label)
+            if !ascii {
+                guard let encoded = Punycode.encode(label) else {
+                    return none
+                }
+                text = "xn--" + encoded
+            }
+            if options.verifyDnsLength {
+                // Every label 1 to 63: an empty one — a root label's after a
+                // trailing dot among them — is an error (A4_2).
+                if text.utf8Count < 1 || text.utf8Count > 63 {
+                    return none
+                }
+                total += text.utf8Count + (i > 0 ? 1 : 0)
+            }
+            parts.append(text)
+            i += 1
+        }
+        if options.verifyDnsLength && (total < 1 || total > 253) {
+            return none
+        }
+        return parts.joined(separator: ".")
+    }
+
+    /// The domain with its Punycode labels as Unicode, and whether
+    /// processing found an error — the text is given either way.
+    public static fn toUnicode(_ domain: String, options: IdnaOptions = IdnaOptions()) -> IdnaResult {
+        let processed = Idna.process(domain, options)
+        var parts: String[>..] = []
+        var empty = false
+        var i = 0
+        for label in processed.labels {
+            parts.append(stringOf(label))
+            // With the DNS lengths verified, an empty label is an error here
+            // too (X4_2) — but for the root's after a trailing dot, which
+            // toUnicode allows, though not a domain that is nothing at all.
+            let isRoot = i == processed.labels.count - 1 && i > 0
+            empty = empty || label.isEmpty && !isRoot
+            i += 1
+        }
+        let failed = processed.failed || options.verifyDnsLength && empty
+        return IdnaResult { text: parts.joined(separator: "."), failed: failed }
+    }
+
+    // ---- Processing (UTS #46 §4) ---------------------------------------------
+
+    static fn process(_ domain: String, _ options: IdnaOptions) -> Processed {
+        var failed = false
+        // 1. Map.
+        var mapped: Int[>..] = []
+        for c in domain {
+            let code = c.codePoint
+            let status = idnaStatus(code)
+            if status == 0 {
+                mapped.append(code)
+            } else if status == 1 {
+                // Ignored.
+            } else if status == 2 {
+                idnaMapping(code, &mapped)
+            } else if status == 3 {
+                if options.transitional {
+                    idnaDeviation(code, &mapped)
+                } else {
+                    mapped.append(code)
+                }
+            } else {
+                failed = true
+                mapped.append(code)
+            }
+        }
+        // 2. Normalize.
+        let normalized = stringOf(mapped).normalized(.NFC)
+        // 3. Break.
+        var labels: Int[>..][>..] = []
+        var current: Int[>..] = []
+        for c in normalized {
+            if c == '.' {
+                labels.append(current)
+                current = []
+            } else {
+                current.append(c.codePoint)
+            }
+        }
+        labels.append(current)
+        // 4. Convert and validate.
+        var converted: Int[>..][>..] = []
+        for label in labels {
+            var codes = label
+            var fromPunycode = false
+            if Idna.startsWithAce(label) {
+                var asciiOnly = true
+                for code in label {
+                    if code >= 0x80 {
+                        asciiOnly = false
+                    }
+                }
+                if !asciiOnly {
+                    failed = true
+                    converted.append(label)
+                    continue
+                }
+                var rest: Int[>..] = []
+                var k = 4
+                while k < label.count {
+                    rest.append(label[k])
+                    k += 1
+                }
+                guard let decoded = Punycode.decode(stringOf(rest)) else {
+                    failed = true
+                    converted.append(label)
+                    continue
+                }
+                var hasNonAscii = false
+                for code in decoded {
+                    if code >= 0x80 {
+                        hasNonAscii = true
+                    }
+                }
+                if decoded.isEmpty || !hasNonAscii {
+                    failed = true
+                }
+                codes = decoded
+                fromPunycode = true
+            }
+            if !Idna.isValidLabel(codes, options, fromPunycode) {
+                failed = true
+            }
+            converted.append(codes)
+        }
+        if options.checkBidi && !failed && Idna.isBidiDomain(converted) {
+            for label in converted {
+                if !label.isEmpty && !Idna.satisfiesBidiRule(label) {
+                    failed = true
+                }
+            }
+        }
+        return Processed { labels: converted, failed: failed }
+    }
+
+    static fn startsWithAce(_ label: Int[:]) -> Bool {
+        return label.count >= 4 && (label[0] == 0x78 || label[0] == 0x58) && (label[1] == 0x6E || label[1] == 0x4E)
+            && label[2] == 0x2D && label[3] == 0x2D
+    }
+
+    // The validity criteria (UTS #46 §4.1).
+    static fn isValidLabel(_ label: Int[:], _ options: IdnaOptions, _ fromPunycode: Bool) -> Bool {
+        if label.isEmpty {
+            return true
+        }
+        let text = stringOf(label)
+        // 1. NFC (a Punycode label's decoding need not be).
+        if fromPunycode && !text.isNormalized(.NFC) {
+            return false
+        }
+        if options.checkHyphens {
+            // 2. No "--" third and fourth; 3. no '-' first or last.
+            if label.count >= 4 && label[2] == 0x2D && label[3] == 0x2D {
+                return false
+            }
+            if label[0] == 0x2D || label[label.count - 1] == 0x2D {
+                return false
+            }
+        } else if Idna.startsWithAce(label) {
+            // Without the hyphen checks, still no label that would look like
+            // Punycode again.
+            return false
+        }
+        // 5. No combining mark first.
+        if isMark(label[0]) {
+            return false
+        }
+        var i = 0
+        while i < label.count {
+            let code = label[i]
+            // 4. No '.'; 6. valid status (or deviation, nontransitionally).
+            if code == 0x2E {
+                return false
+            }
+            let status = idnaStatus(code)
+            if !(status == 0 || status == 3 && !options.transitional) {
+                return false
+            }
+            if options.useStd3AsciiRules && code < 0x80 {
+                let allowed = code >= 0x61 && code <= 0x7A || code >= 0x30 && code <= 0x39 || code == 0x2D
+                if !allowed {
+                    return false
+                }
+            }
+            // 7. CONTEXTJ (RFC 5892 A.1, A.2).
+            if options.checkJoiners && (code == 0x200C || code == 0x200D) {
+                let afterVirama = i > 0 && isVirama(label[i - 1])
+                if !afterVirama {
+                    // ZWNJ is allowed also between joining letters, by their
+                    // Joining_Type, which these tables do not have: refused.
+                    return false
+                }
+            }
+            i += 1
+        }
+        return true
+    }
+
+    // Whether any label has a right-to-left character (R, AL or AN): only
+    // then are the Bidi rules asked of every label.
+    static fn isBidiDomain(_ labels: Int[>..][>..]) -> Bool {
+        for label in labels {
+            for code in label {
+                let klass = bidiClass(code)
+                if klass == bidiR || klass == bidiAL || klass == bidiAN {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    // RFC 5893 §2's six rules.
+    static fn satisfiesBidiRule(_ label: Int[:]) -> Bool {
+        let first = bidiClass(label[0])
+        if first != bidiL && first != bidiR && first != bidiAL {
+            return false
+        }
+        // The last class that is not NSM.
+        var end = label.count - 1
+        while end > 0 && bidiClass(label[end]) == bidiNSM {
+            end -= 1
+        }
+        let last = bidiClass(label[end])
+        if first == bidiR || first == bidiAL {
+            var hasEN = false
+            var hasAN = false
+            for code in label {
+                let klass = bidiClass(code)
+                let allowed = klass == bidiR || klass == bidiAL || klass == bidiAN || klass == bidiEN || klass == bidiES
+                    || klass == bidiCS || klass == bidiET || klass == bidiON || klass == bidiBN || klass == bidiNSM
+                if !allowed {
+                    return false
+                }
+                hasEN = hasEN || klass == bidiEN
+                hasAN = hasAN || klass == bidiAN
+            }
+            if !(last == bidiR || last == bidiAL || last == bidiEN || last == bidiAN) {
+                return false
+            }
+            return !(hasEN && hasAN)
+        }
+        for code in label {
+            let klass = bidiClass(code)
+            let allowed = klass == bidiL || klass == bidiEN || klass == bidiES || klass == bidiCS || klass == bidiET
+                || klass == bidiON || klass == bidiBN || klass == bidiNSM
+            if !allowed {
+                return false
+            }
+        }
+        return last == bidiL || last == bidiEN
+    }
+}
+
+/// What `Idna.toUnicode` gives: the text, and whether there were errors.
+public struct IdnaResult {
+    public let text: String
+    public let failed: Bool
+}
+
+struct Processed {
+    let labels: Int[>..][>..]
+    let failed: Bool
+}
+
+// ---- The tables (IdnaTables.sb) --------------------------------------------------
+
+fn idnaNumber(_ table: String, _ at: Int, _ width: Int) -> Int {
+    let bytes = table.utf8
+    var value = 0
+    var i = 0
+    while i < width {
+        value = value * 32 + Int(bytes[at + i]) - 48
+        i += 1
+    }
+    return value
+}
+
+fn idnaRecord(_ record: Int, _ width: Int) -> Int {
+    return record * width + record / idnaRecordsPerLine
+}
+
+// The last record whose first 'keyWidth' digits are at or below the key: a
+// run's start; -1 when none is.
+fn idnaRunAt(_ table: String, _ count: Int, _ width: Int, _ keyWidth: Int, _ key: Int) -> Int {
+    var low = 0
+    var high = count
+    while low < high {
+        let middle = (low + high) / 2
+        if idnaNumber(table, idnaRecord(middle, width), keyWidth) <= key {
+            low = middle + 1
+        } else {
+            high = middle
+        }
+    }
+    return low - 1
+}
+
+fn idnaStatus(_ code: Int) -> Int {
+    let run = idnaRunAt(idnaStatusTable, idnaStatusTableCount, 6, 5, code)
+    return idnaNumber(idnaStatusTable, idnaRecord(run, 6) + 5, 1)
+}
+
+fn idnaMapping(_ code: Int, _ into: inout Int[>..]) {
+    let at = idnaRunAt(idnaMappingTable, idnaMappingTableCount, 10, 5, code)
+    let start = idnaRecord(at, 10)
+    let from = idnaNumber(idnaMappingTable, start + 5, 4)
+    let length = idnaNumber(idnaMappingTable, start + 9, 1)
+    var i = 0
+    while i < length {
+        into.append(idnaNumber(idnaMappingPool, idnaRecord(from + i, 5), 5))
+        i += 1
+    }
+}
+
+// Transitional processing's mappings of the four deviation characters.
+fn idnaDeviation(_ code: Int, _ into: inout Int[>..]) {
+    if code == 0xDF {
+        into.append(0x73)
+        into.append(0x73)
+    } else if code == 0x3C2 {
+        into.append(0x3C3)
+    }
+    // ZWJ and ZWNJ are mapped to nothing.
+}
+
+fn isVirama(_ code: Int) -> Bool {
+    let at = idnaRunAt(viramaTable, viramaTableCount, 5, 5, code)
+    return at >= 0 && idnaNumber(viramaTable, idnaRecord(at, 5), 5) == code
+}
+
+fn isMark(_ code: Int) -> Bool {
+    return (idnaRunAt(markTable, markTableCount, 5, 5, code) + 1) % 2 == 1
+}
+
+fn bidiClass(_ code: Int) -> Int {
+    let run = idnaRunAt(bidiClassTable, bidiClassTableCount, 6, 5, code)
+    return run < 0 ? bidiL : idnaNumber(bidiClassTable, idnaRecord(run, 6) + 5, 1)
+}
+
+// tools/idna-tables.py's BIDI_CLASSES.
+const bidiL = 0
+const bidiR = 1
+const bidiAL = 2
+const bidiEN = 3
+const bidiES = 4
+const bidiET = 5
+const bidiAN = 6
+const bidiCS = 7
+const bidiNSM = 8
+const bidiBN = 9
+const bidiON = 13

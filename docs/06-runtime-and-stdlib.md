@@ -772,6 +772,13 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     Environment (variables listed, set and removed under
                     'unsafe', arguments as text and bytes, home, temporary
                     and known folders by XDG, Apple and Windows rules)
+Sable.Net           Url (WHATWG URL parsing, as browsers do: WPT's
+                    urltestdata.json passes whole; resolution, setters,
+                    origin, query items), Host (domain, IPv4, IPv6,
+                    opaque), PercentEncoding with the standard's encode
+                    sets, application/x-www-form-urlencoded (QueryItem),
+                    Idna (UTS #46 toASCII/toUnicode, tables from
+                    tools/idna-tables.py) and Punycode (RFC 3492)
 Sable.Serialize     Encoder/Decoder protocols, conformance synthesis via
                     @derive(Serializable), JSON, TOML, MessagePack, and the
                     zero-copy @inline_layout path

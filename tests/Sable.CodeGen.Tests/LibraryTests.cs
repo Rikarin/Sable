@@ -263,6 +263,38 @@ fn main() {
     }
 
     /// <summary>
+    ///     URLs parsed, resolved and set, and an internationalised host
+    ///     through IDNA and Punycode: the same natively and interpreted.
+    /// </summary>
+    [Fact]
+    public void UrlsAgreeBothWays() {
+        var run = AssertAgree(
+            """
+            module P
+            import Sable.Net
+
+            @main
+            fn main() {
+                let base = try! Url.parse("HTTP://user:pa ss@Bücher.Example:80/a/b/../c?q=1 2#f")
+                print(base.href)
+                print(try! base.resolve("../d?x#y").href)
+                print(try! Url.parse("http://[::FFFF:192.168.0.1]:8080/").hostAndPort)
+                print(try! Url.parse("http://0x7f.1/").hostname)
+                print(Url.canParse("http://exa mple.com"))
+                var url = try! Url.parse("https://example.com/")
+                url.setQueryItems([QueryItem("k", "v w")])
+                print(url.href)
+                print(Idna.toUnicode("xn--bcher-kva.example").text)
+            }
+            """
+        );
+        Assert.Equal(
+            "http://user:pa%20ss@xn--bcher-kva.example/a/c?q=1%202#f\nhttp://user:pa%20ss@xn--bcher-kva.example/d?x#y\n[::ffff:c0a8:1]:8080\n127.0.0.1\nfalse\nhttps://example.com/?k=v+w\nbücher.example\n",
+            run.Stdout
+        );
+    }
+
+    /// <summary>
     ///     A promise, a continuation, a timeout, a race, a token and the
     ///     tasks waited for as they finish: the same natively and
     ///     interpreted, actors and detached tasks between them.

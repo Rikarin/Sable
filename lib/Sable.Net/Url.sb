@@ -1,0 +1,352 @@
+module Sable.Net
+
+import Sable.Text
+
+/// A URL, parsed as the WHATWG URL standard says and browsers do (Rust's
+/// `url` crate, .NET's `Uri`, Swift's `URL` with `URLComponents`): its
+/// scheme, credentials, host, port, path, query and fragment, each kept as
+/// it is written in the URL — percent-encoded where it must be — and the
+/// URL written back whole by `href`.
+///
+/// ```sable
+/// let url = try! Url.parse("HTTPS://user@Example.COM:443/a/./b/../c?q=1#top")
+/// assert(url.href == "https://user@example.com/a/c?q=1#top")
+/// assert(url.hostname == "example.com" && url.port == none && url.path == "/a/c")
+/// let next = try! Url.parse("../d?x", relativeTo: url)
+/// assert(next.href == "https://user@example.com/d?x")
+/// assert(url.origin == "https://example.com")
+/// ```
+public struct Url {
+    /// The scheme, lower-cased, without its ':'.
+    public internal(set) var scheme: String
+    public internal(set) var username: String = ""
+    public internal(set) var password: String = ""
+    /// The host: none for a URL without one ("mailto:a@b").
+    public internal(set) var host: Host? = none
+    /// The port: none when it is the scheme's own (80 for http).
+    public internal(set) var port: Int? = none
+    // The path: its segments; or, for a URL whose path is opaque
+    // ("mailto:a@b"), that text alone.
+    var segments: String[>..] = []
+    var opaquePath: String? = none
+    /// The query, without its '?': none when there is no '?'.
+    public internal(set) var query: String? = none
+    /// The fragment, without its '#': none when there is no '#'.
+    public internal(set) var fragment: String? = none
+
+    init(scheme: String) {
+        self.scheme = scheme
+    }
+
+    // ---- Parsing -------------------------------------------------------------
+
+    /// The URL the text writes, resolved against the base if it is
+    /// relative; UrlError when it is not one.
+    public static fn parse(_ input: String, relativeTo base: Url? = none) throws(UrlError) -> Url {
+        var parser = UrlParser(input, base)
+        if let url = parser.run() {
+            return url
+        }
+        throw UrlError.Invalid(input: input, reason: parser.failure)
+    }
+
+    /// Whether the text is a URL (relative to the base, if given).
+    public static fn canParse(_ input: String, relativeTo base: Url? = none) -> Bool {
+        var parser = UrlParser(input, base)
+        return parser.run() != none
+    }
+
+    /// The URL the reference resolves to against this one: RFC 3986's
+    /// reference resolution, as browsers do it.
+    public fn resolve(_ reference: String) throws(UrlError) -> Url {
+        return try Url.parse(reference, relativeTo: self)
+    }
+
+    // ---- The parts as the URL writes them ------------------------------------
+
+    /// Whether the scheme is one of the special ones (ftp, file, http,
+    /// https, ws, wss), whose URLs have hosts and hierarchical paths.
+    public var isSpecial: Bool => Url.isSpecialScheme(scheme)
+
+    /// Whether the path is opaque: a string, not segments ("mailto:a@b").
+    public var hasOpaquePath: Bool => opaquePath != none
+
+    /// The path as the URL writes it.
+    public var path: String {
+        get {
+            if let opaque = opaquePath {
+                return opaque
+            }
+            var written = ""
+            for segment in segments {
+                written = written + "/" + segment
+            }
+            return written
+        }
+    }
+
+    /// The path's segments; none for an opaque path.
+    public var pathSegments: String[>..]? => if opaquePath != none { none } else { segments }
+
+    /// The whole URL, written as the standard serializes it.
+    public var href: String => serialize(excludingFragment: false)
+
+    /// The scheme and ':', as a browser's `protocol`.
+    public var protocolText: String => scheme + ":"
+
+    /// The host as the URL writes it, or "".
+    public var hostname: String => if let host = host { host.description() } else { "" }
+
+    /// The host and port, as a browser's `host`: "example.com:8080".
+    public var hostAndPort: String {
+        get {
+            guard let host = host else {
+                return ""
+            }
+            if let port = port {
+                return host.description() + ":\(port)"
+            }
+            return host.description()
+        }
+    }
+
+    /// The port as text, or "" for the scheme's own.
+    public var portText: String => if let port = port { "\(port)" } else { "" }
+
+    /// '?' and the query, or "" for none or an empty one, as a browser's
+    /// `search`.
+    public var search: String => if let query = query { query.isEmpty ? "" : "?" + query } else { "" }
+
+    /// '#' and the fragment, or "" for none or an empty one, as a
+    /// browser's `hash`.
+    public var hashText: String => if let fragment = fragment { fragment.isEmpty ? "" : "#" + fragment } else { "" }
+
+    /// The port in use: the URL's, or its scheme's own (80, 443, 21); none
+    /// for a scheme without one.
+    public var effectivePort: Int? {
+        get {
+            if let given = port {
+                return given
+            }
+            return Url.defaultPort(scheme)
+        }
+    }
+
+    /// The origin, as a browser writes it: "https://example.com:8080" for
+    /// http(s), ws(s) and ftp; a blob URL's inner URL's; "null" otherwise.
+    public var origin: String {
+        get {
+            if scheme == "blob" {
+                if let inner = try? Url.parse(path) {
+                    if inner.scheme == "http" || inner.scheme == "https" {
+                        return inner.origin
+                    }
+                }
+                return "null"
+            }
+            if scheme == "http" || scheme == "https" || scheme == "ws" || scheme == "wss" || scheme == "ftp" {
+                return scheme + "://" + hostAndPort
+            }
+            return "null"
+        }
+    }
+
+    /// The query's name-value pairs, as application/x-www-form-urlencoded
+    /// reads them.
+    public var queryItems: QueryItem[>..] => QueryItem.parse(query ?? "")
+
+    fn serialize(excludingFragment: Bool) -> String {
+        var written = scheme + ":"
+        if let host = host {
+            written = written + "//"
+            if !username.isEmpty || !password.isEmpty {
+                written = written + username
+                if !password.isEmpty {
+                    written = written + ":" + password
+                }
+                written = written + "@"
+            }
+            written = written + host.description()
+            if let port = port {
+                written = written + ":\(port)"
+            }
+        }
+        if host == none && opaquePath == none && segments.count > 1 && segments[0].isEmpty {
+            written = written + "/."
+        }
+        written = written + path
+        if let query = query {
+            written = written + "?" + query
+        }
+        if !excludingFragment {
+            if let fragment = fragment {
+                written = written + "#" + fragment
+            }
+        }
+        return written
+    }
+
+    // ---- Changing it (the standard's setters) -----------------------------------
+
+    /// The scheme changed, where the standard allows: not between special
+    /// and not, nor to file with credentials or a port. Whether it changed.
+    public mutating fn setScheme(_ value: String) -> Bool {
+        var parser = UrlParser(value + ":", none)
+        return parser.override(&self, .SchemeStart)
+    }
+
+    /// The username, percent-encoded as the userinfo set says; not for a
+    /// URL without a host, or a file URL.
+    public mutating fn setUsername(_ value: String) -> Bool {
+        if host == none || host == .Empty || scheme == "file" {
+            return false
+        }
+        username = PercentEncoding.encode(value, .Userinfo)
+        return true
+    }
+
+    /// The password, as the username is set.
+    public mutating fn setPassword(_ value: String) -> Bool {
+        if host == none || host == .Empty || scheme == "file" {
+            return false
+        }
+        password = PercentEncoding.encode(value, .Userinfo)
+        return true
+    }
+
+    /// The host, and the port if one follows ("example.com:81"); not for an
+    /// opaque path.
+    public mutating fn setHost(_ value: String) -> Bool {
+        if opaquePath != none {
+            return false
+        }
+        var parser = UrlParser(value, none)
+        return parser.override(&self, .Host)
+    }
+
+    /// The host alone, a port after it ignored.
+    public mutating fn setHostname(_ value: String) -> Bool {
+        if opaquePath != none {
+            return false
+        }
+        var parser = UrlParser(value, none)
+        return parser.override(&self, .Hostname)
+    }
+
+    /// The port, from the digits the text starts with; "" for the scheme's
+    /// own. Not for a URL without a host, or a file URL.
+    public mutating fn setPort(_ value: String) -> Bool {
+        if host == none || host == .Empty || scheme == "file" {
+            return false
+        }
+        if value.isEmpty {
+            port = none
+            return true
+        }
+        var parser = UrlParser(value, none)
+        return parser.override(&self, .Port)
+    }
+
+    /// The path, parsed as the URL's own is; not for an opaque path.
+    public mutating fn setPath(_ value: String) -> Bool {
+        if opaquePath != none {
+            return false
+        }
+        segments = []
+        var parser = UrlParser(value, none)
+        return parser.override(&self, .PathStart)
+    }
+
+    /// The query, from text with or without its '?'; none or "" removes it.
+    public mutating fn setQuery(_ value: String?) {
+        guard let text = value else {
+            query = none
+            return
+        }
+        if text.isEmpty {
+            query = none
+            return
+        }
+        let input = text.hasPrefix("?") ? text[text.index(after: text.startIndex)...].toString() : text
+        query = ""
+        var parser = UrlParser(input, none)
+        let _ = parser.override(&self, .Query)
+    }
+
+    /// The query made of the items, as a form would write them; none
+    /// removes it.
+    public mutating fn setQueryItems(_ items: QueryItem[:]) {
+        query = items.isEmpty ? none : QueryItem.serialize(items)
+    }
+
+    /// The fragment, from text with or without its '#'; none or "" removes it.
+    public mutating fn setFragment(_ value: String?) {
+        guard let text = value else {
+            fragment = none
+            return
+        }
+        if text.isEmpty {
+            fragment = none
+            return
+        }
+        let input = text.hasPrefix("#") ? text[text.index(after: text.startIndex)...].toString() : text
+        fragment = ""
+        var parser = UrlParser(input, none)
+        let _ = parser.override(&self, .Fragment)
+    }
+
+    // ---- Schemes -------------------------------------------------------------
+
+    static fn isSpecialScheme(_ scheme: String) -> Bool {
+        return scheme == "http" || scheme == "https" || scheme == "ws" || scheme == "wss" || scheme == "ftp" || scheme == "file"
+    }
+
+    /// The scheme's own port: 80 for http and ws, 443 for https and wss,
+    /// 21 for ftp; none for any other.
+    public static fn defaultPort(_ scheme: String) -> Int? {
+        return match scheme {
+            case "http"  => 80
+            case "https" => 443
+            case "ws"    => 80
+            case "wss"   => 443
+            case "ftp"   => 21
+            case _       => none
+        }
+    }
+}
+
+extension Url: Hashable {
+    /// The same URL written: equality as the standard defines it, by
+    /// serialization.
+    public operator == (lhs: Url, rhs: Url) -> Bool {
+        return lhs.href == rhs.href
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(href)
+    }
+}
+
+extension Url: Parsable {
+    /// The URL the whole text writes, as `Url.parse` reads it.
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> Url {
+        do {
+            return try Url.parse(text.toString(), relativeTo: none)
+        } catch {
+            throw ParseError.Invalid(at: 0)
+        }
+    }
+}
+
+extension Url: Formattable {
+    /// The URL, written whole.
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(href)
+    }
+}
+
+extension Url: Debug {
+    public fn debugDescription() -> String {
+        return "Url(\"" + href + "\")"
+    }
+}

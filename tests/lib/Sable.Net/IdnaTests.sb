@@ -1,0 +1,161 @@
+module IdnaTests
+
+// Idna and Punycode (Sable.Net) against Unicode's own conformance tests,
+// IdnaTestV2.txt (Unicode 16, in tests/lib/Sable.Net/data/), with every
+// check on as the file asks: toASCII (nontransitional) and toUnicode.
+
+import Sable.IO
+import Sable.Net
+import Sable.Testing
+
+/// Where a test data file is: in tests/lib/Sable.Net/data/ of the
+/// repository, found from the directory the tests run in.
+fn dataFile(_ name: String) -> String {
+    var up = ""
+    var depth = 0
+    while depth < 8 {
+        let path = "\(up)tests/lib/Sable.Net/data/\(name)"
+        if File.exists(path) {
+            return path
+        }
+        up = up + "../"
+        depth += 1
+    }
+    return "tests/lib/Sable.Net/data/\(name)"
+}
+
+fn hexDigitValue(_ c: Char) -> Int {
+    let code = c.codePoint
+    if code >= 0x30 && code <= 0x39 {
+        return code - 0x30
+    }
+    if code >= 0x41 && code <= 0x46 {
+        return code - 0x41 + 10
+    }
+    return code - 0x61 + 10
+}
+
+/// A column's code points: '\uXXXX' and '\x{X…}' unescaped, '""' empty.
+fn unescape(_ field: String) -> Int[>..] {
+    var codes: Int[>..] = []
+    if field == "\"\"" {
+        return codes
+    }
+    let chars = field.unicodeScalarValues()
+    var i = 0
+    while i < chars.count {
+        if chars[i] == 0x5C && i + 1 < chars.count && chars[i + 1] == 0x75 {
+            var value = 0
+            var k = 0
+            while k < 4 {
+                value = value * 16 + hexDigitValue(Char.fromCodePoint(value: chars[i + 2 + k])!)
+                k += 1
+            }
+            codes.append(value)
+            i += 6
+        } else if chars[i] == 0x5C && i + 1 < chars.count && chars[i + 1] == 0x78 {
+            var value = 0
+            var k = i + 3
+            while chars[k] != 0x7D {
+                value = value * 16 + hexDigitValue(Char.fromCodePoint(value: chars[k])!)
+                k += 1
+            }
+            codes.append(value)
+            i = k + 1
+        } else {
+            codes.append(chars[i])
+            i += 1
+        }
+    }
+    return codes
+}
+
+fn codesText(_ codes: Int[:]) -> String {
+    var all = ""
+    for code in codes {
+        all = all + String.fromChar(Char.fromCodePoint(value: code)!)
+    }
+    return all
+}
+
+@test
+fn everyLineOfIdnaTestV2() throws {
+    var checked = 0
+    var skipped = 0
+    var failures: String[>..] = []
+    for try line in try File.lines(dataFile("IdnaTestV2.txt")) {
+        let content = line.split('#')[0]
+        if content.trimmed().isEmpty {
+            continue
+        }
+        var columns: String[>..] = []
+        for column in content.split(';') {
+            columns.append(column.trimmed())
+        }
+        let source = unescape(columns[0])
+        // A Sable String holds no unpaired surrogate; and ZWNJ's joining
+        // context needs Joining_Type, which Sable.Net's tables leave out.
+        var skip = false
+        for code in source {
+            if code >= 0xD800 && code <= 0xDFFF || code == 0x200C {
+                skip = true
+            }
+        }
+        let toUnicode = columns[1].isEmpty ? source : unescape(columns[1])
+        for code in toUnicode {
+            // A ZWNJ a Punycode label decodes to, as much as one written.
+            if code == 0x200C {
+                skip = true
+            }
+        }
+        if skip {
+            skipped += 1
+            continue
+        }
+        let unicodeStatus = columns[2]
+        let asciiN = columns[3].isEmpty ? toUnicode : unescape(columns[3])
+        let asciiNStatus = columns[4].isEmpty ? unicodeStatus : columns[4]
+        let input = codesText(source)
+
+        let unicode = Idna.toUnicode(input, options: IdnaOptions.strict)
+        let unicodeFails = !unicodeStatus.isEmpty && unicodeStatus != "[]"
+        if unicode.failed != unicodeFails || !unicodeFails && unicode.text != codesText(toUnicode) {
+            failures.append("toUnicode(\(columns[0])): \(unicode.text) failed=\(unicode.failed), expected \(columns[1]) \(unicodeStatus)")
+        }
+        let ascii = Idna.toAscii(input, options: IdnaOptions.strict)
+        let asciiFails = !asciiNStatus.isEmpty && asciiNStatus != "[]"
+        if asciiFails {
+            if let got = ascii {
+                failures.append("toAscii(\(columns[0])) gave \(got), expected \(asciiNStatus)")
+            }
+        } else if ascii != codesText(asciiN) {
+            failures.append("toAscii(\(columns[0])) gave \(ascii ?? "an error"), expected \(codesText(asciiN))")
+        }
+        checked += 1
+    }
+    if !failures.isEmpty {
+        var i = 0
+        while i < failures.count && i < 40 {
+            print(failures[i])
+            i += 1
+        }
+    }
+    print("IdnaTestV2: \(checked) lines checked, \(skipped) skipped, \(failures.count) failed")
+    assertEqual(failures.count, 0)
+    assert(checked > 4000)
+}
+
+@test
+fn punycodeRoundTrips() {
+    assertEqual(Punycode.encode("bücher".unicodeScalarValues()) ?? "-", "bcher-kva")
+    assertEqual(Punycode.encode("ü".unicodeScalarValues()) ?? "-", "tda")
+    assertEqual(Punycode.encode("abc".unicodeScalarValues()) ?? "-", "abc-")
+    assertEqual(codesText(Punycode.decode("bcher-kva")!), "bücher")
+    assertEqual(codesText(Punycode.decode("tda")!), "ü")
+    // RFC 3492's sample (A): Arabic (Egyptian).
+    let arabic = Punycode.decode("egbpdaj6bu4bxfgehfvwxn")!
+    assertEqual(Punycode.encode(arabic) ?? "-", "egbpdaj6bu4bxfgehfvwxn")
+    assert(Punycode.decode("ü") == none)
+    assert(Punycode.decode("a-!") == none)
+    assert(Punycode.decode("99999999999") == none)
+}

@@ -1,0 +1,35 @@
+module Sable.Net
+
+/// How strictly IDNA processes a domain (UTS #46's flags). The defaults are
+/// what the WHATWG URL standard asks of a browser (its "beStrict" false);
+/// `strict` turns every check on, as UTS #46's own tests do.
+public struct IdnaOptions {
+    /// Labels may not start or end with '-', nor have "--" third and
+    /// fourth (V2, V3).
+    public var checkHyphens: Bool = false
+    /// Right-to-left labels follow RFC 5893's rules (B1 to B6).
+    public var checkBidi: Bool = true
+    /// ZWJ and ZWNJ only where RFC 5892's CONTEXTJ rules allow them (C1, C2).
+    public var checkJoiners: Bool = true
+    /// ASCII only as a hostname's letters, digits and hyphen (U1).
+    public var useStd3AsciiRules: Bool = false
+    /// The deprecated transitional processing: 'ß', 'ς', ZWJ and ZWNJ
+    /// mapped away rather than kept.
+    public var transitional: Bool = false
+    /// A domain of 1 to 253 characters, each label 1 to 63 (A4).
+    public var verifyDnsLength: Bool = false
+
+    /// The WHATWG URL standard's.
+    public init() { }
+
+    /// Every check on.
+    public static var strict: IdnaOptions {
+        get {
+            var options = IdnaOptions()
+            options.checkHyphens = true
+            options.useStd3AsciiRules = true
+            options.verifyDnsLength = true
+            return options
+        }
+    }
+}

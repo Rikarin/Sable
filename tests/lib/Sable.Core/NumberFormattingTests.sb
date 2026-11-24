@@ -284,6 +284,48 @@ fn anF16IsWrittenInItsOwnShortestDigits() {
     assertEqual("\(whole:,.1f)", "2,048.0")
 }
 
+// ---- Decimals ------------------------------------------------------------------
+
+/// The decimal of the coefficient's digits and scale, under the spec.
+fn decimal(_ digits: String, _ scale: Int, _ text: String) -> String {
+    return spec(text).formatDecimal(negative: false, digits: digits, scale: scale)
+}
+
+@test
+fn aDecimalKeepsEveryPlaceOfItsScale() {
+    assertEqual(FormatSpec().formatDecimal(negative: false, digits: "360", scale: 2), "3.60")
+    assertEqual(FormatSpec().formatDecimal(negative: true, digits: "5", scale: 3), "-0.005")
+    assertEqual(FormatSpec().formatDecimal(negative: false, digits: "0", scale: 2), "0.00")
+    assertEqual(decimal("1200", 0, ""), "1200")
+    assertEqual(decimal("1200", 0, "f"), "1200")
+    assertEqual(decimal("1234567", 2, ","), "12,345.67")
+    assertEqual(decimal("15", 1, "+08"), "+00001.5")
+}
+
+@test
+fn aDecimalIsRoundedToAPrecisionWithTiesToEven() {
+    assertEqual(decimal("125", 2, ".1"), "1.2")
+    assertEqual(decimal("135", 2, ".1"), "1.4")
+    assertEqual(decimal("5", 0, ".2"), "5.00")
+    assertEqual(decimal("12345", 3, ".2e"), "1.23e+01")
+    assertEqual(decimal("12345", 3, ".3g"), "12.3")
+    assertEqual(decimal("12345", 3, ".3G"), "12.3")
+    assertEqual(decimal("12345", 0, ".2g"), "1.2e+04")
+    assertEqual(decimal("12345", 5, ".1%"), "12.3%")
+}
+
+@test
+fn aDecimalTakesEachNotation() {
+    assertEqual(decimal("1200", 2, "e"), "1.2e+01")
+    assertEqual(decimal("1200", 2, "E"), "1.2E+01")
+    assertEqual(decimal("0", 0, "e"), "0e+00")
+    assertEqual(decimal("1500", 3, "g"), "1.5")
+    assertEqual(decimal("1500", 3, "G"), "1.5")
+    assertEqual(decimal("125", 3, "%"), "12.5%")
+    assertEqual(decimal("2", 0, "%"), "200%")
+    assertEqual(decimal("42", 1, "?"), "4.2")
+}
+
 // ---- Benchmarks ----------------------------------------------------------------
 
 @bench

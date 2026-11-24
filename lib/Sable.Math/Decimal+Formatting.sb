@@ -1,0 +1,27 @@
+module Sable.Math
+
+extension Decimal: Formattable {
+    /// The number in plain notation with every place its scale has, as
+    /// .NET writes a decimal: "3.60", "-0.005", "100". A precision rounds
+    /// it to that many places, to nearest with ties to even, and pads it
+    /// with zeros; `e`, `g` and `%` write it as they write a float.
+    ///
+    /// ```sable
+    /// let x = Decimal(12345, scale: 3)
+    /// assert("\(x)" == "12.345")
+    /// assert("\(x:.2)" == "12.34")
+    /// assert("\(x:.5)" == "12.34500")
+    /// assert("\(x:e)" == "1.2345e+01")
+    /// assert("\(Decimal(1234567):,)" == "1,234,567")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.formatDecimal(negative: self.isNegative, digits: "\(self.magnitude)", scale: self.scale)
+    }
+}
+
+extension Decimal: Debug {
+    /// The number as it writes itself: "3.60".
+    public fn debugDescription() -> String {
+        return self.format(FormatSpec())
+    }
+}

@@ -2759,7 +2759,7 @@ public sealed partial class Binder {
                 BindImplicitMemberAccess(implicitMember, expectedType),
             InvocationExpressionSyntax invocation => AfterCall(BindInvocation(invocation, expectedType)),
             ElementAccessExpressionSyntax element => BindElementAccess(element),
-            BinaryExpressionSyntax binary => BindBinary(binary),
+            BinaryExpressionSyntax binary => BindBinary(binary, expectedType),
             PrefixUnaryExpressionSyntax unary => BindPrefixUnary(unary, expectedType),
             PostfixUnaryExpressionSyntax unary => BindPostfixUnary(unary),
             AssignmentExpressionSyntax assignment => BindAssignment(assignment),
@@ -8384,8 +8384,21 @@ public sealed partial class Binder {
         return new BoundError(syntax, operand);
     }
 
-    BoundExpression BindBinary(BinaryExpressionSyntax syntax) {
-        var left = BindExpression(syntax.Left);
+    BoundExpression BindBinary(BinaryExpressionSyntax syntax, TypeSymbol? expectedType) {
+        // An operator whose result has its left operand's type passes the
+        // type the context asks for to it, so a literal there takes it:
+        // 'let x: U128 = 1 << 127' shifts a U128, and the right side then
+        // follows the left, as it always does.
+        var operandExpected = syntax.OperatorToken.Kind switch {
+            SyntaxKind.PlusToken or SyntaxKind.MinusToken or SyntaxKind.StarToken
+                or SyntaxKind.SlashToken or SyntaxKind.PercentToken
+                or SyntaxKind.AmpersandToken or SyntaxKind.PipeToken or SyntaxKind.CaretToken
+                or SyntaxKind.LessLessToken or SyntaxKind.GreaterGreaterToken
+                or SyntaxKind.AmpersandPlusToken or SyntaxKind.AmpersandMinusToken
+                or SyntaxKind.AmpersandStarToken => expectedType,
+            _ => null,
+        };
+        var left = BindExpression(syntax.Left, operandExpected);
 
         // The right side of '??' is typed by the left's unwrapped type.
         TypeSymbol? expected = syntax.OperatorToken.Kind == SyntaxKind.QuestionQuestionToken

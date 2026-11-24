@@ -1,0 +1,104 @@
+module Sable.Math
+
+extension Decimal: Parsable {
+    /// The number the text writes: digits with a point if it likes, `12.30`,
+    /// `.5`, `5.`, then an exponent if it likes, `1.2e3`, `5E-7`, with a
+    /// sign before either. The scale is the places the text writes, less
+    /// its exponent: "12.30" is 12.30 and "1.2e3" is 1200. Digits past 28
+    /// places or 96 bits are rounded off, to nearest with ties to even.
+    /// `.Overflow` past `Decimal.max` and `.Underflow` past `Decimal.min`.
+    ///
+    /// ```sable
+    /// assert("\(try! Decimal.parse("12.30"))" == "12.30")
+    /// assert("\(try! Decimal.parse("-1.5e-3"))" == "-0.0015")
+    /// assert("\(try! Decimal.parse("0.12345678901234567890123456789"))" == "0.1234567890123456789012345679")
+    /// assert((try? Decimal.parse("1e29")) == none)
+    /// ```
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> Decimal {
+        // The first thirty significant digits, which hold any coefficient
+        // with the digit after it; past them, how many and whether any was
+        // not zero.
+        var coefficient: U128 = 0
+        var significant = 0
+        var beyond = 0
+        var sticky = false
+        var digits = 0
+        var places = 0
+        var point = false
+        var negative = false
+        // The exponent: 0 while the mantissa is read, 1 just after its 'e',
+        // 2 once a sign or digit of it has been.
+        var exponentPart = 0
+        var exponent = 0
+        var exponentNegative = false
+        var exponentDigits = 0
+        var position = 0
+        for c in text {
+            let code = c.codePoint
+            if code >= 48 && code <= 57 {
+                let digit = code - 48
+                if exponentPart == 0 {
+                    digits += 1
+                    if point {
+                        places += 1
+                    }
+                    if significant == 0 && digit == 0 {
+                        // A leading zero.
+                    } else if significant < 30 {
+                        coefficient = coefficient * 10 + U128(digit)
+                        significant += 1
+                    } else {
+                        beyond += 1
+                        sticky = sticky || digit != 0
+                    }
+                } else {
+                    exponentPart = 2
+                    exponentDigits += 1
+                    // Far past any scale, it stops mattering how far.
+                    if exponent < 1_000_000 {
+                        exponent = exponent * 10 + digit
+                    }
+                }
+            } else if position == 0 && (c == '+' || c == '-') {
+                negative = c == '-'
+            } else if exponentPart == 0 && c == '.' && !point {
+                point = true
+            } else if exponentPart == 0 && digits > 0 && (c == 'e' || c == 'E') {
+                exponentPart = 1
+            } else if exponentPart == 1 && (c == '+' || c == '-') {
+                exponentPart = 2
+                exponentNegative = c == '-'
+            } else {
+                throw .InvalidDigit(at: position)
+            }
+            position += 1
+        }
+        if position == 0 {
+            throw .Empty
+        }
+        if digits == 0 || exponentPart != 0 && exponentDigits == 0 {
+            throw .InvalidDigit(at: position)
+        }
+
+        // The coefficient's scale: the places written, less the exponent,
+        // less the digits past the thirtieth that it is short of.
+        let scale = places - (exponentNegative ? 0 - exponent : exponent) - beyond
+        if coefficient == 0 {
+            return Decimal.make(0, scale < 0 ? 0 : scale > 28 ? 28 : scale, false)
+        }
+        if scale < 0 {
+            // Zeros to come after the coefficient's digits: 10^28 or more
+            // with 30 digits or more in all, past 2^96.
+            let zeros = 0 - scale
+            if significant + zeros <= 29 {
+                let whole = coefficient * powerOfTen(zeros)
+                if whole <= Decimal.limit {
+                    return Decimal.make(whole, 0, negative)
+                }
+            }
+        } else if let value = fitting(coefficient, scale, negative, .ToNearestOrEven, sticky) {
+            return value
+        }
+        throw negative ? .Underflow : .Overflow
+    }
+}

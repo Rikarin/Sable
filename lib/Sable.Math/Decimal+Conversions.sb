@@ -1,0 +1,182 @@
+module Sable.Math
+
+// Decimal to and from the other numbers, named as Sable.Core's conversions
+// are: 'exactly' gives none where the value would change, 'converting' the
+// nearest, 'clamping' the integer part held to the type's bounds.
+
+extension Decimal {
+    /// The integer as a decimal, at scale 0, or none where its distance
+    /// from zero is past 2^96 - 1.
+    ///
+    /// ```sable
+    /// assert(Decimal.exactly(-7) == Decimal(-7))
+    /// assert(Decimal.exactly(U128.max) == none)
+    /// ```
+    public static fn exactly<T: BinaryInteger>(_ value: T) -> Decimal? {
+        let bits = value.wideBitPattern
+        let negative = T.isSigned && bits >> 127 == 1
+        let magnitude = negative ? ~bits + 1 : bits
+        if magnitude > Decimal.limit {
+            return none
+        }
+        return Decimal.make(magnitude, 0, negative)
+    }
+
+    /// The float's exact value, or none where it is not finite or needs
+    /// more than 28 places or 96 bits. 0.5 is one, and 0.1 — which is
+    /// 0.1000000000000000055511151231257827… as a float — is not.
+    ///
+    /// ```sable
+    /// assert(Decimal.exactly(0.375) == Decimal(375, scale: 3))
+    /// assert(Decimal.exactly(0.1) == none)
+    /// ```
+    public static fn exactly<T: BinaryFloatingPoint>(_ value: T) -> Decimal? {
+        // value = m × 2^e, from the F64 that holds every float exactly.
+        let bits = value.wideValue.bits
+        let exponentBits = Int((bits >> 52) & 0x7FF)
+        if exponentBits == 0x7FF {
+            return none
+        }
+        let negative = bits >> 63 == 1
+        var m = bits & 0xF_FFFF_FFFF_FFFF
+        var e = -1074
+        if exponentBits != 0 {
+            m = m | 0x10_0000_0000_0000
+            e = exponentBits - 1075
+        }
+        if m == 0 {
+            return Decimal.zero
+        }
+        while (m & 1) == 0 && e < 0 {
+            m = m >> 1
+            e += 1
+        }
+        let significand = U128(m)
+        if e >= 0 {
+            // m below 2^53 and shifted e places: within 96 bits, or not.
+            if e > 95 || 64 - m.leadingZeroCount + e > 96 {
+                return none
+            }
+            return Decimal.make(significand << U128(e), 0, negative)
+        }
+        // m / 2^-e is m × 5^-e over 10^-e.
+        let scale = 0 - e
+        if scale > 28 {
+            return none
+        }
+        let coefficient = significand * (powerOfTen(scale) >> U128(scale))
+        if coefficient > Decimal.limit {
+            return none
+        }
+        return Decimal.make(coefficient, 0 - e, negative)
+    }
+
+    /// The decimal with the fewest digits that is the F64 again — what the
+    /// F64 writes itself as, so 0.1 is 0.1 — rounded to 28 places. A value
+    /// that is not finite traps, and so does one past `Decimal.max`.
+    ///
+    /// ```sable
+    /// assert(Decimal.converting(0.1) == Decimal(1, scale: 1))
+    /// assert(Decimal.converting(-2.5e-3) == Decimal(-25, scale: 4))
+    /// ```
+    public static fn converting(_ value: F64) -> Decimal {
+        if !value.isFinite {
+            preconditionFailure("\(value) is not a decimal")
+        }
+        return decimalOfText("\(value)")
+    }
+
+    /// The decimal with the fewest digits that is the F32 again: 0.1 as an
+    /// F32 is 0.1, not the 0.10000000149011612 its F64 is.
+    ///
+    /// ```sable
+    /// let x: F32 = 0.1
+    /// assert(Decimal.converting(x) == Decimal(1, scale: 1))
+    /// ```
+    public static fn converting(_ value: F32) -> Decimal {
+        if !value.isFinite {
+            preconditionFailure("\(value) is not a decimal")
+        }
+        return decimalOfText("\(value)")
+    }
+}
+
+/// The decimal a float's text is, which only its size keeps from being one.
+fn decimalOfText(_ text: String) -> Decimal {
+    do {
+        return try Decimal.parse(text)
+    } catch {
+        preconditionFailure("decimal overflow")
+    }
+}
+
+extension FixedWidthInteger {
+    /// The integer the decimal is, or none where it has a fraction or does
+    /// not fit the type.
+    ///
+    /// ```sable
+    /// assert(Int.exactly(Decimal(4200, scale: 2)) == 42)
+    /// assert(Int.exactly(Decimal(4250, scale: 2)) == none)
+    /// assert(U8.exactly(Decimal(-1)) == none)
+    /// ```
+    public static fn exactly(_ value: Decimal) -> Self? {
+        if !value.isInteger {
+            return none
+        }
+        return Self.exactly(wholePart(value))
+    }
+
+    /// The decimal's integer part, toward zero, or the bound it is past.
+    ///
+    /// ```sable
+    /// assert(Int.clamping(Decimal(-29, scale: 1)) == -2)
+    /// assert(U8.clamping(Decimal(300)) == 255)
+    /// ```
+    public static fn clamping(_ value: Decimal) -> Self {
+        return Self.clamping(wholePart(value))
+    }
+}
+
+/// The decimal's integer part, toward zero.
+fn wholePart(_ value: Decimal) -> I128 {
+    let whole = I128(value.magnitude / powerOfTen(value.scale))
+    return value.isNegative ? -whole : whole
+}
+
+extension F64 {
+    /// The F64 nearest the decimal, ties to even.
+    ///
+    /// ```sable
+    /// assert(F64.converting(Decimal(125, scale: 2)) == 1.25)
+    /// assert(F64.converting(Decimal(1, scale: 1)) == 0.1)
+    /// ```
+    public static fn converting(_ value: Decimal) -> F64 {
+        let magnitude = value.magnitude
+        let scale = value.scale
+        // Both exact as F64s, so the one division rounds once, correctly.
+        if magnitude >> 53 == 0 && scale <= 22 {
+            let quotient = F64.converting(magnitude) / F64.converting(powerOfTen(scale))
+            return value.isNegative ? -quotient : quotient
+        }
+        return try! F64.parse("\(value)")
+    }
+}
+
+extension F32 {
+    /// The F32 nearest the decimal, ties to even: rounded once, from the
+    /// decimal's own digits.
+    ///
+    /// ```sable
+    /// let x: F32 = 0.1
+    /// assert(F32.converting(Decimal(1, scale: 1)) == x)
+    /// ```
+    public static fn converting(_ value: Decimal) -> F32 {
+        let magnitude = value.magnitude
+        let scale = value.scale
+        if magnitude >> 24 == 0 && scale <= 10 {
+            let quotient = F32.converting(magnitude) / F32.converting(powerOfTen(scale))
+            return value.isNegative ? -quotient : quotient
+        }
+        return try! F32.parse("\(value)")
+    }
+}

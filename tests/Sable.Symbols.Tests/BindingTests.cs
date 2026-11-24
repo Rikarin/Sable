@@ -106,6 +106,19 @@ public sealed class BindingTests {
     [Fact]
     public void ALiteralTakesTheOtherOperandsType() => Assert.Equal("U8", TypeOfLast("let a: U8 = 1\nlet v = a + 2"));
 
+    [Theory]
+    [InlineData("let v: U128 = 1 << 127", "U128")]
+    [InlineData("let v: U64 = 1 + 2 * 3", "U64")]
+    [InlineData("let v: F64 = 1 / 4", "F64")]
+    [InlineData("let v: I8? = 3 & 5", "I8?")]
+    [InlineData("let c = true\nlet v: U128 = c ? 1 << 100 : 0", "U128")]
+    public void LiteralOperandsTakeTheTypeTheContextAsks(string body, string expected) =>
+        Assert.Equal(expected, TypeOfLast(body));
+
+    [Fact]
+    public void AComparisonsOperandsDoNotTakeItsContextsType() =>
+        Assert.Equal("Bool", TypeOfLast("let v: Bool = 1 < 2"));
+
     [Fact]
     public void MixingNumericTypesIsReported() =>
         Assert.Contains(

@@ -1,0 +1,741 @@
+module Sable.Math
+
+// Decimal (docs/06 §6.4): .NET's 'decimal', bit for bit — a 96-bit
+// coefficient, a scale of 0 to 28 and a sign in one U128 — rather than
+// IEEE 754-2008's decimal128. Money and quantities are what a base-10 type
+// is for, and there .NET's layout is the one data comes in (.NET's own,
+// and rust_decimal's), with no NaN or infinity to check for:
+// every value is a number, ordered and hashed as one. Arithmetic is the
+// coefficients' as U128s, 192 bits wide only when a product or a scale
+// raised that far needs it, so the common case is an integer instruction or
+// two. decimal128's 34 digits and exponents to ±6144 are a scientific
+// type's; F64 and BigInt are there for those.
+//
+// What does not fit is rounded as .NET rounds it: to 28 places and 96 bits,
+// to nearest with ties to even. A result past 2^96 - 1 in its whole digits
+// traps, as an integer's overflow does.
+
+/// A base-10 number: an integer coefficient of up to 96 bits (28 or 29
+/// digits, to 79228162514264337593543950335) over 10 to a scale of 0 to
+/// 28, with a sign. 0.1 is exactly 0.1, and sums of money come out to the
+/// cent. .NET's `decimal`, with the same layout (`bits`), range and
+/// rounding; Swift's Foundation `Decimal` and Rust's `rust_decimal` fill
+/// the same role. Not IEEE 754-2008's decimal128: its 34 digits and vast
+/// exponents are a scientific type's, and its NaNs, infinities, signed
+/// zeros and many encodings of one value would be cases for every caller,
+/// where here every value is a number (docs/06 §6.4 has the reasons).
+///
+/// A value keeps the scale it was made with, so 1.20 and 1.2 are equal but
+/// write themselves differently. A sum has the larger scale of the two, a
+/// product the sum of the scales, and a quotient as many places as its
+/// exact value needs, or every one that fits when it has no end. What does
+/// not fit is rounded to nearest with ties to even; `rounded(scale:_:)`
+/// rounds by any rule. A result too large for 96 bits traps; the checked
+/// forms (`checkedAdd` and the rest) give none instead. Zero has no sign.
+///
+/// ```sable
+/// let price = Decimal(1999, scale: 2)
+/// let total = price * Decimal(3)
+/// assert("\(total)" == "59.97")
+/// assert("\(try! Decimal.parse("0.1") + try! Decimal.parse("0.2"))" == "0.3")
+/// assert("\(Decimal(1) / Decimal(3))" == "0.3333333333333333333333333333")
+/// assert("\(Decimal(2675, scale: 3).rounded(scale: 2, .ToNearestOrAwayFromZero))" == "2.68")
+/// ```
+public struct Decimal: SignedNumeric, Comparable, Hashable {
+    /// .NET's four words as one: the coefficient in bits 0–95, the scale
+    /// in bits 112–119 and the sign in bit 127; the rest zero.
+    var storage: U128
+
+    /// The value 'coefficient' × 10^-scale, of a coefficient and a scale
+    /// that fit; a zero's sign is dropped.
+    static fn make(_ coefficient: U128, _ scale: Int, _ negative: Bool) -> Decimal {
+        let sign: U128 = negative && coefficient != 0 ? 1 << 127 : 0
+        return Decimal { storage: coefficient | U128(scale) << 112 | sign }
+    }
+
+    /// The greatest coefficient: 2^96 - 1.
+    static var limit: U128 => 79228162514264337593543950335
+
+    /// The coefficient's distance from zero.
+    var magnitude: U128 => self.storage & 79228162514264337593543950335
+
+    /// The value of the integer over 10 to the scale: `Decimal(125, scale:
+    /// 2)` is 1.25. A scale outside 0 through 28 traps, and so does an
+    /// integer whose distance from zero is past 2^96 - 1.
+    ///
+    /// ```sable
+    /// assert("\(Decimal(-125, scale: 2))" == "-1.25")
+    /// assert("\(Decimal(500, scale: 2))" == "5.00")
+    /// ```
+    public init<T: BinaryInteger>(_ coefficient: T, scale: Int) {
+        if scale < 0 || scale > 28 {
+            preconditionFailure("a decimal's scale must be from 0 to 28, not \(scale)")
+        }
+        if let whole = Decimal.exactly(coefficient) {
+            self.storage = Decimal.make(whole.magnitude, scale, whole.isNegative).storage
+        } else {
+            preconditionFailure("decimal overflow")
+        }
+    }
+
+    /// The integer as a decimal, at scale 0. One whose distance from zero
+    /// is past 2^96 - 1 traps; `Decimal.exactly` gives none for it.
+    ///
+    /// ```sable
+    /// assert(Decimal(42) == Decimal(4200, scale: 2))
+    /// ```
+    public init<T: BinaryInteger>(_ value: T) {
+        if let whole = Decimal.exactly(value) {
+            self.storage = whole.storage
+        } else {
+            preconditionFailure("decimal overflow")
+        }
+    }
+
+    /// The decimal .NET's `decimal.GetBits` describes, as one U128 — its
+    /// four words least significant first: the coefficient in the low 96
+    /// bits, the scale in bits 112–119, the sign in bit 127 — or none
+    /// where a scale past 28 or a bit .NET keeps zero says it is none.
+    ///
+    /// ```sable
+    /// let bits: U128 = (2 << 112) | 125
+    /// assert(Decimal.fromBits(bits) == Decimal(125, scale: 2))
+    /// assert(Decimal.fromBits((29 as U128) << 112) == none)
+    /// ```
+    public static fn fromBits(_ bits: U128) -> Decimal? {
+        let reserved: U128 = (0x7F00_FFFF as U128) << 96
+        if (bits & reserved) != 0 || ((bits >> 112) & 0xFF) > 28 {
+            return none
+        }
+        let coefficient = bits & Decimal.limit
+        return Decimal.make(coefficient, Int((bits >> 112) & 0xFF), bits >> 127 == 1)
+    }
+
+    /// The value in .NET's layout: what `fromBits` reads.
+    ///
+    /// ```sable
+    /// let bits: U128 = (1 << 127) | 1
+    /// assert(Decimal(-1).bits == bits)
+    /// ```
+    public var bits: U128 => self.storage
+
+    /// 0, at scale 0.
+    public static var zero: Decimal => Decimal { storage: 0 }
+
+    /// 1, at scale 0.
+    public static var one: Decimal => Decimal { storage: 1 }
+
+    /// The greatest decimal: 79228162514264337593543950335, 2^96 - 1.
+    public static var max: Decimal => Decimal { storage: Decimal.limit }
+
+    /// The least decimal: -79228162514264337593543950335.
+    public static var min: Decimal => Decimal.make(Decimal.limit, 0, true)
+
+    /// The most places a decimal has: 28.
+    public static var maxScale: Int => 28
+
+    /// How many of the coefficient's digits are after the point: 0 to 28.
+    ///
+    /// ```sable
+    /// assert(Decimal(360, scale: 2).scale == 2)
+    /// ```
+    public var scale: Int => Int((self.storage >> 112) & 0xFF)
+
+    /// The integer the value is over 10 to its scale, with its sign:
+    /// `Decimal(c.coefficient, scale: c.scale)` is `c` again.
+    ///
+    /// ```sable
+    /// assert(Decimal(-360, scale: 2).coefficient == -360)
+    /// ```
+    public var coefficient: I128 {
+        get {
+            let whole = I128(self.magnitude)
+            return self.isNegative ? -whole : whole
+        }
+    }
+
+    /// Whether the value is less than zero. A zero never is.
+    public var isNegative: Bool => self.storage >> 127 == 1
+
+    /// Whether the value is zero, at any scale.
+    public var isZero: Bool => self.magnitude == 0
+
+    /// Whether the value has no fraction: 2.00 has none.
+    ///
+    /// ```sable
+    /// assert(Decimal(200, scale: 2).isInteger)
+    /// assert(!Decimal(201, scale: 2).isInteger)
+    /// ```
+    public var isInteger: Bool => self.magnitude % powerOfTen(self.scale) == 0
+
+    /// The value's distance from zero, at its scale.
+    ///
+    /// ```sable
+    /// assert(Decimal(-15, scale: 1).abs() == Decimal(15, scale: 1))
+    /// ```
+    public fn abs() -> Decimal {
+        return Decimal { storage: self.storage & ~((1 as U128) << 127) }
+    }
+
+    // ---- Arithmetic --------------------------------------------------------
+
+    /// The sum, at the larger of the two scales — rounded to fit when that
+    /// takes more than 96 bits — or none where it is too large.
+    ///
+    /// ```sable
+    /// assert(Decimal.max.checkedAdd(Decimal(1)) == none)
+    /// ```
+    public fn checkedAdd(_ other: Decimal) -> Decimal? {
+        return Decimal.sum(self, other.magnitude, other.scale, other.isNegative)
+    }
+
+    /// The difference, as `checkedAdd` makes a sum, or none.
+    public fn checkedSub(_ other: Decimal) -> Decimal? {
+        return Decimal.sum(self, other.magnitude, other.scale, !other.isNegative)
+    }
+
+    /// The product, at the sum of the scales where that fits, or none where
+    /// it is too large.
+    ///
+    /// ```sable
+    /// assert(Decimal.max.checkedMul(Decimal(2)) == none)
+    /// ```
+    public fn checkedMul(_ other: Decimal) -> Decimal? {
+        return Decimal.product(self, other)
+    }
+
+    /// The quotient, or none where it is too large or the divisor is zero.
+    ///
+    /// ```sable
+    /// assert(Decimal(1).checkedDiv(Decimal.zero) == none)
+    /// ```
+    public fn checkedDiv(_ divisor: Decimal) -> Decimal? {
+        if divisor.isZero {
+            return none
+        }
+        return Decimal.quotient(self, divisor)
+    }
+
+    /// The remainder of dividing by the divisor toward zero, or none where
+    /// the divisor is zero.
+    public fn checkedRem(_ divisor: Decimal) -> Decimal? {
+        if divisor.isZero {
+            return none
+        }
+        return Decimal.remainder(self, divisor)
+    }
+
+    /// The sum: at the larger of the two scales, rounded to fit where that
+    /// takes more than 96 bits. Traps where it is too large.
+    public operator + (lhs: Decimal, rhs: Decimal) -> Decimal {
+        if let result = Decimal.sum(lhs, rhs.magnitude, rhs.scale, rhs.isNegative) {
+            return result
+        }
+        preconditionFailure("decimal overflow")
+    }
+
+    /// The difference, as '+' makes a sum.
+    public operator - (lhs: Decimal, rhs: Decimal) -> Decimal {
+        if let result = Decimal.sum(lhs, rhs.magnitude, rhs.scale, !rhs.isNegative) {
+            return result
+        }
+        preconditionFailure("decimal overflow")
+    }
+
+    /// The product, at the sum of the scales — rounded to 28 places and 96
+    /// bits where it does not fit them. Traps where it is too large.
+    ///
+    /// ```sable
+    /// assert("\(Decimal(120, scale: 2) * Decimal(3))" == "3.60")
+    /// ```
+    public operator * (lhs: Decimal, rhs: Decimal) -> Decimal {
+        if let result = Decimal.product(lhs, rhs) {
+            return result
+        }
+        preconditionFailure("decimal overflow")
+    }
+
+    /// The quotient. An exact one has the dividend's scale less the
+    /// divisor's, or as few places more as it needs; one with no end has as
+    /// many places as fit, the last rounded. A zero divisor traps, and so
+    /// does a quotient too large.
+    ///
+    /// ```sable
+    /// assert("\(Decimal(240, scale: 2) / Decimal(2))" == "1.20")
+    /// assert("\(Decimal(1) / Decimal(8))" == "0.125")
+    /// assert("\(Decimal(2) / Decimal(3))" == "0.6666666666666666666666666667")
+    /// ```
+    public operator / (lhs: Decimal, rhs: Decimal) -> Decimal {
+        if rhs.isZero {
+            preconditionFailure("division by zero")
+        }
+        if let result = Decimal.quotient(lhs, rhs) {
+            return result
+        }
+        preconditionFailure("decimal overflow")
+    }
+
+    /// The remainder of dividing toward zero: the dividend's sign, at the
+    /// larger of the two scales. A zero divisor traps.
+    ///
+    /// ```sable
+    /// assert("\(Decimal(36, scale: 1) % Decimal(13, scale: 1))" == "1.0")
+    /// assert("\(Decimal(-10) % Decimal(3))" == "-1")
+    /// ```
+    public operator % (lhs: Decimal, rhs: Decimal) -> Decimal {
+        if rhs.isZero {
+            preconditionFailure("division by zero")
+        }
+        return Decimal.remainder(lhs, rhs)
+    }
+
+    /// The value with its sign turned over, at its scale.
+    public prefix operator - (operand: Decimal) -> Decimal {
+        return Decimal.make(operand.magnitude, operand.scale, !operand.isNegative)
+    }
+
+    /// Whether the two are the same number, whatever their scales: 1.20 is
+    /// 1.2.
+    public operator == (lhs: Decimal, rhs: Decimal) -> Bool {
+        return lhs.storage == rhs.storage || Decimal.compare(lhs, rhs) == 0
+    }
+
+    /// Whether the left is the smaller number.
+    public operator < (lhs: Decimal, rhs: Decimal) -> Bool {
+        return Decimal.compare(lhs, rhs) < 0
+    }
+
+    /// Feeds the number to the hasher with its trailing zeros dropped, so
+    /// that 1.20 hashes as 1.2, which it equals.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(self.normalized().storage)
+    }
+
+    // ---- Rounding ----------------------------------------------------------
+
+    /// The value rounded to an integer by the rule, at scale 0: to nearest
+    /// with ties to even when none is said, as .NET's `Math.Round` does.
+    ///
+    /// ```sable
+    /// assert(Decimal(25, scale: 1).rounded() == Decimal(2))
+    /// assert(Decimal(-25, scale: 1).rounded(.ToNearestOrAwayFromZero) == Decimal(-3))
+    /// assert(Decimal(-21, scale: 1).rounded(.Down) == Decimal(-3))
+    /// ```
+    public fn rounded(_ rule: RoundingRule = .ToNearestOrEven) -> Decimal {
+        return self.rounded(scale: 0, rule)
+    }
+
+    /// The value rounded to at most 'places' after the point by the rule
+    /// (to nearest with ties to even when none is said); one with fewer
+    /// places already is itself, its scale kept. A negative count traps.
+    /// .NET's `Math.Round(d, places, mode)`.
+    ///
+    /// ```sable
+    /// let x = Decimal(12345, scale: 3)
+    /// assert("\(x.rounded(scale: 2))" == "12.34")
+    /// assert("\(x.rounded(scale: 2, .ToNearestOrAwayFromZero))" == "12.35")
+    /// assert("\(x.rounded(scale: 5))" == "12.345")
+    /// ```
+    public fn rounded(scale places: Int, _ rule: RoundingRule = .ToNearestOrEven) -> Decimal {
+        if places < 0 {
+            preconditionFailure("a decimal's scale must be from 0 to 28, not \(places)")
+        }
+        let scale = self.scale
+        if places >= scale {
+            return self
+        }
+        let negative = self.isNegative
+        return Decimal.make(dropDigits(self.magnitude, scale - places, rule, negative, false), places, negative)
+    }
+
+    /// The value at exactly 'places' after the point: rounded by the rule
+    /// where it has more, zeros added where it has fewer. General Decimal
+    /// Arithmetic's `quantize`, to a scale. A scale outside 0 through 28
+    /// traps, and so do zeros that take the coefficient past 96 bits.
+    ///
+    /// ```sable
+    /// assert("\(Decimal(217, scale: 2).quantized(scale: 3))" == "2.170")
+    /// assert("\(Decimal(217, scale: 2).quantized(scale: 1))" == "2.2")
+    /// ```
+    public fn quantized(scale places: Int, _ rule: RoundingRule = .ToNearestOrEven) -> Decimal {
+        if places < 0 || places > 28 {
+            preconditionFailure("a decimal's scale must be from 0 to 28, not \(places)")
+        }
+        let scale = self.scale
+        if places <= scale {
+            return self.rounded(scale: places, rule)
+        }
+        let factor = powerOfTen(places - scale)
+        let magnitude = self.magnitude
+        if magnitude > Decimal.limit / factor {
+            preconditionFailure("decimal overflow")
+        }
+        return Decimal.make(magnitude * factor, places, self.isNegative)
+    }
+
+    /// The same number with no trailing zeros after the point: General
+    /// Decimal Arithmetic's `reduce`. 1.200 is 1.2, and 0.00 is 0.
+    ///
+    /// ```sable
+    /// assert("\(Decimal(1200, scale: 3).normalized())" == "1.2")
+    /// ```
+    public fn normalized() -> Decimal {
+        var magnitude = self.magnitude
+        var scale = self.scale
+        if magnitude == 0 {
+            return Decimal.zero
+        }
+        while scale > 0 {
+            let (tenth, digit) = divRem(magnitude, 10)
+            if digit != 0 {
+                break
+            }
+            magnitude = tenth
+            scale -= 1
+        }
+        return Decimal.make(magnitude, scale, self.isNegative)
+    }
+
+    // ---- The operations ----------------------------------------------------
+
+    /// a plus the number of the magnitude, scale and sign given: -b is a's
+    /// sum with b's magnitude and the other sign.
+    static fn sum(_ a: Decimal, _ y: U128, _ yScale: Int, _ yNegative: Bool) -> Decimal? {
+        let x = a.magnitude
+        let xScale = a.scale
+        let xNegative = a.isNegative
+        if xScale == yScale {
+            return combined(x, xNegative, y, yNegative, xScale)
+        }
+        // The one with fewer places raised to the other's scale: in a U128
+        // for up to nine places (2^96 × 10^9 < 2^126), 192 bits beyond.
+        let raiseX = xScale < yScale
+        let low = raiseX ? x : y
+        let high = raiseX ? y : x
+        let lowNegative = raiseX ? xNegative : yNegative
+        let highNegative = raiseX ? yNegative : xNegative
+        let scale = raiseX ? yScale : xScale
+        let places = scale - (raiseX ? xScale : yScale)
+        if places <= 9 {
+            return combined(low * powerOfTen(places), lowNegative, high, highNegative, scale)
+        }
+        let (hi, lo) = low.multipliedFullWidth(by: powerOfTen(places))
+        if lowNegative == highNegative {
+            let (total, carry) = lo.overflowingAdd(high)
+            return fittingWide(carry ? hi + 1 : hi, total, scale, lowNegative)
+        }
+        if hi == 0 && lo < high {
+            return fitting(high - lo, scale, highNegative, .ToNearestOrEven, false)
+        }
+        let (difference, borrow) = lo.overflowingSub(high)
+        return fittingWide(borrow ? hi - 1 : hi, difference, scale, lowNegative)
+    }
+
+    /// x + y, of two magnitudes with their signs at one scale, each below
+    /// 2^127.
+    static fn combined(_ x: U128, _ xNegative: Bool, _ y: U128, _ yNegative: Bool, _ scale: Int) -> Decimal? {
+        if xNegative == yNegative {
+            return fitting(x + y, scale, xNegative, .ToNearestOrEven, false)
+        }
+        if x >= y {
+            return fitting(x - y, scale, xNegative, .ToNearestOrEven, false)
+        }
+        return fitting(y - x, scale, yNegative, .ToNearestOrEven, false)
+    }
+
+    static fn product(_ a: Decimal, _ b: Decimal) -> Decimal? {
+        let negative = a.isNegative != b.isNegative
+        let scale = a.scale + b.scale
+        let x = a.magnitude
+        let y = b.magnitude
+        if x >> 64 == 0 && y >> 64 == 0 {
+            return fitting(x * y, scale, negative, .ToNearestOrEven, false)
+        }
+        let (hi, lo) = x.multipliedFullWidth(by: y)
+        return fittingWide(hi, lo, scale, negative)
+    }
+
+    /// a / b, b not zero: the quotient's digits a few at a time, each step
+    /// a U128 division, until it is exact or no more fit.
+    static fn quotient(_ a: Decimal, _ b: Decimal) -> Decimal? {
+        let negative = a.isNegative != b.isNegative
+        let x = a.magnitude
+        let y = b.magnitude
+        let ideal = a.scale - b.scale
+        var (quotient, rest) = divRem(x, y)
+        var scale = ideal
+        // A negative scale is the dividend's zeros still to come: the whole
+        // part, which must fit.
+        while scale < 0 {
+            let places = 0 - scale < 9 ? 0 - scale : 9
+            let factor = powerOfTen(places)
+            if quotient > Decimal.limit {
+                return none
+            }
+            let (digits, left) = divRem(rest * factor, y)
+            quotient = quotient * factor + digits
+            rest = left
+            scale += places
+        }
+        if quotient > Decimal.limit {
+            return none
+        }
+        // Places after the point while there is a remainder and they fit:
+        // as many at once as keep the quotient within 96 bits whatever the
+        // digits are, nine at most, to 28.
+        while rest != 0 && scale < 28 {
+            var places = 28 - scale < 9 ? 28 - scale : 9
+            while places > 0 && (quotient + 1) * powerOfTen(places) > Decimal.limit + 1 {
+                places -= 1
+            }
+            if places == 0 {
+                break
+            }
+            let factor = powerOfTen(places)
+            let (digits, left) = divRem(rest * factor, y)
+            quotient = quotient * factor + digits
+            rest = left
+            scale += places
+        }
+        if rest == 0 {
+            // Exact: the zeros added past the ideal scale come off again.
+            let least = ideal < 0 ? 0 : ideal
+            while scale > least {
+                let (tenth, digit) = divRem(quotient, 10)
+                if digit != 0 {
+                    break
+                }
+                quotient = tenth
+                scale -= 1
+            }
+            return Decimal.make(quotient, scale, negative)
+        }
+        let twice = rest * 2
+        if twice > y || twice == y && (quotient & 1) == 1 {
+            quotient += 1
+        }
+        // Places taken after the point leave the quotient short of 2^96 - 1
+        // by more than one, and a quotient with none is at most the
+        // dividend: only a whole quotient rounds up past the greatest.
+        if quotient > Decimal.limit {
+            return none
+        }
+        return Decimal.make(quotient, scale, negative)
+    }
+
+    /// a - b × trunc(a / b), b not zero, at the larger scale.
+    static fn remainder(_ a: Decimal, _ b: Decimal) -> Decimal {
+        let x = a.magnitude
+        let y = b.magnitude
+        let xScale = a.scale
+        let yScale = b.scale
+        if xScale >= yScale {
+            // The divisor at the dividend's scale; past 2^128 it is past
+            // any coefficient, and the dividend is its own remainder.
+            let (hi, lo) = y.multipliedFullWidth(by: powerOfTen(xScale - yScale))
+            return Decimal.make(hi != 0 ? x : divRem(x, lo).1, xScale, a.isNegative)
+        }
+        // x × 10^places mod y, nine places at a time.
+        var rest = divRem(x, y).1
+        var places = yScale - xScale
+        while places > 0 {
+            let step = places < 9 ? places : 9
+            rest = divRem(rest * powerOfTen(step), y).1
+            places -= step
+        }
+        return Decimal.make(rest, yScale, a.isNegative)
+    }
+
+    /// -1, 0 or 1 as a is less than, equal to or greater than b.
+    static fn compare(_ a: Decimal, _ b: Decimal) -> Int {
+        let aNegative = a.isNegative
+        if aNegative != b.isNegative {
+            return aNegative ? -1 : 1
+        }
+        let order = compareMagnitudes(a.magnitude, a.scale, b.magnitude, b.scale)
+        return aNegative ? 0 - order : order
+    }
+
+    static fn compareMagnitudes(_ x: U128, _ xScale: Int, _ y: U128, _ yScale: Int) -> Int {
+        if xScale == yScale {
+            return x < y ? -1 : x > y ? 1 : 0
+        }
+        if xScale < yScale {
+            let (hi, lo) = x.multipliedFullWidth(by: powerOfTen(yScale - xScale))
+            return hi != 0 || lo > y ? 1 : lo < y ? -1 : 0
+        }
+        let (hi, lo) = y.multipliedFullWidth(by: powerOfTen(xScale - yScale))
+        return hi != 0 || lo > x ? -1 : lo < x ? 1 : 0
+    }
+}
+
+// ---- Fitting a result ---------------------------------------------------------
+
+/// The decimal of the magnitude value × 10^-scale, with as many digits cut
+/// off as it takes to bring the scale to 28 and the coefficient within 96
+/// bits, rounded by the rule ('sticky': digits cut before were not all
+/// zero); none where it takes cutting into the whole part.
+fn fitting(_ value: U128, _ scale: Int, _ negative: Bool, _ rule: RoundingRule, _ sticky: Bool) -> Decimal? {
+    if value <= Decimal.limit && scale <= 28 && !sticky {
+        return Decimal.make(value, scale, negative)
+    }
+    var digits = scale > 28 ? scale - 28 : 0
+    // A U128 is within 96 bits ten digits down, so this ends by then; past
+    // 10^38, powerOfTen's last answer does as well as any.
+    while value / powerOfTen(digits) > Decimal.limit {
+        if digits >= scale {
+            return none
+        }
+        digits += 1
+    }
+    var coefficient = dropDigits(value, digits, rule, negative, sticky)
+    var places = scale - digits
+    if coefficient > Decimal.limit {
+        // Rounded up to 2^96: one digit more, which rounds the same way.
+        if places == 0 {
+            return none
+        }
+        coefficient = dropDigits(coefficient, 1, rule, negative, false)
+        places -= 1
+    }
+    return Decimal.make(coefficient, places, negative)
+}
+
+/// 'fitting' of a magnitude 192 bits wide, hi:lo, rounded to nearest with
+/// ties to even.
+fn fittingWide(_ hi: U128, _ lo: U128, _ scale: Int, _ negative: Bool) -> Decimal? {
+    var high = hi
+    var low = lo
+    var places = scale
+    var sticky = false
+    while high != 0 {
+        // At least 2^128: nine digits off leave more than 96 bits, so nine
+        // go whatever else does, and at least ten must.
+        if places < 10 {
+            return none
+        }
+        let (quotientHigh, quotientLow, rest) = dividedWide(high, low, 1_000_000_000)
+        sticky = sticky || rest != 0
+        high = quotientHigh
+        low = quotientLow
+        places -= 9
+    }
+    return fitting(low, places, negative, .ToNearestOrEven, sticky)
+}
+
+/// hi:lo divided by a divisor below 2^64: the quotient's two halves and the
+/// remainder, a 64-bit limb at a time.
+fn dividedWide(_ hi: U128, _ lo: U128, _ divisor: U128) -> (U128, U128, U128) {
+    let mask: U128 = 0xFFFF_FFFF_FFFF_FFFF
+    var rest: U128 = 0
+    var current = hi >> 64
+    let q3 = current / divisor
+    rest = current % divisor
+    current = rest << 64 | hi & mask
+    let q2 = current / divisor
+    rest = current % divisor
+    current = rest << 64 | lo >> 64
+    let q1 = current / divisor
+    rest = current % divisor
+    current = rest << 64 | lo & mask
+    let q0 = current / divisor
+    rest = current % divisor
+    return (q3 << 64 | q2, q1 << 64 | q0, rest)
+}
+
+/// a / b and a % b, b not zero: a 64-bit division where a fits 64 bits,
+/// which most coefficients do, and a 128-bit one otherwise.
+fn divRem(_ a: U128, _ b: U128) -> (U128, U128) {
+    if (a >> 64) == 0 {
+        if (b >> 64) != 0 {
+            return (0, a)
+        }
+        let x = a unchecked as U64
+        let y = b unchecked as U64
+        let q = x / y
+        return (U128(q), U128(x - q * y))
+    }
+    let q = a / b
+    return (q, a - q * b)
+}
+
+/// The value with its last 'digits' decimal digits cut off, rounded by the
+/// rule ('sticky': digits cut before these were not all zero).
+fn dropDigits(_ value: U128, _ digits: Int, _ rule: RoundingRule, _ negative: Bool, _ sticky: Bool) -> U128 {
+    if digits > 38 {
+        // Every U128 is less than half of 10^39.
+        return roundsAway(rule, negative, false, -1, value != 0 || sticky) ? 1 : 0
+    }
+    let divisor = powerOfTen(digits)
+    let (kept, cut) = divRem(value, divisor)
+    // cut < 10^38, so twice it fits.
+    let twice = cut * 2
+    var half = twice < divisor ? -1 : twice > divisor ? 1 : 0
+    if half == 0 && sticky {
+        half = 1
+    }
+    return roundsAway(rule, negative, (kept & 1) == 1, half, cut != 0 || sticky) ? kept + 1 : kept
+}
+
+/// Whether a result cut short goes one up in its last kept digit, away from
+/// zero: by the rule, the sign, whether that digit is odd, and how what was
+/// cut compares with half of one there (-1, 0 or 1). Nothing cut, nothing
+/// changes.
+fn roundsAway(_ rule: RoundingRule, _ negative: Bool, _ odd: Bool, _ half: Int, _ inexact: Bool) -> Bool {
+    if !inexact {
+        return false
+    }
+    return match rule {
+        case .ToNearestOrEven         => half > 0 || half == 0 && odd
+        case .ToNearestOrAwayFromZero => half >= 0
+        case .Up                      => !negative
+        case .Down                    => negative
+        case .TowardZero              => false
+        case .AwayFromZero            => true
+    }
+}
+
+/// 10 to the n, n from 0 to 38: every one a U128 holds; 10^38 past that.
+fn powerOfTen(_ n: Int) -> U128 {
+    return match n {
+        case 0  => 1
+        case 1  => 10
+        case 2  => 100
+        case 3  => 1000
+        case 4  => 10000
+        case 5  => 100000
+        case 6  => 1000000
+        case 7  => 10000000
+        case 8  => 100000000
+        case 9  => 1000000000
+        case 10 => 10000000000
+        case 11 => 100000000000
+        case 12 => 1000000000000
+        case 13 => 10000000000000
+        case 14 => 100000000000000
+        case 15 => 1000000000000000
+        case 16 => 10000000000000000
+        case 17 => 100000000000000000
+        case 18 => 1000000000000000000
+        case 19 => 10000000000000000000
+        case 20 => 100000000000000000000
+        case 21 => 1000000000000000000000
+        case 22 => 10000000000000000000000
+        case 23 => 100000000000000000000000
+        case 24 => 1000000000000000000000000
+        case 25 => 10000000000000000000000000
+        case 26 => 100000000000000000000000000
+        case 27 => 1000000000000000000000000000
+        case 28 => 10000000000000000000000000000
+        case 29 => 100000000000000000000000000000
+        case 30 => 1000000000000000000000000000000
+        case 31 => 10000000000000000000000000000000
+        case 32 => 100000000000000000000000000000000
+        case 33 => 1000000000000000000000000000000000
+        case 34 => 10000000000000000000000000000000000
+        case 35 => 100000000000000000000000000000000000
+        case 36 => 1000000000000000000000000000000000000
+        case 37 => 10000000000000000000000000000000000000
+        case _  => 100000000000000000000000000000000000000
+    }
+}

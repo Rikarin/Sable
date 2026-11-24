@@ -208,12 +208,75 @@ fn floatParts(_ magnitude: F64, _ shortest: String, _ spec: FormatSpec) -> (Stri
 /// scientific otherwise, and the fraction's trailing zeros dropped unless '#'.
 fn generalParts(_ magnitude: F64, _ precision: Int, _ alternate: Bool, _ exponentMark: String) -> (String, String) {
     let (exact, point) = exactDecimal(magnitude)
+    return generalDigitParts(exact, point, precision, alternate, exponentMark)
+}
+
+/// 'g' with a precision, of exact digits and their point.
+fn generalDigitParts(_ exact: String, _ point: Int, _ precision: Int, _ alternate: Bool, _ exponentMark: String) -> (String, String) {
     let (digits, at) = roundedDecimal(exact, point, precision - point)
     let exponent = digits.count == 0 ? 0 : at - 1
     let (whole, rest) = exponent < -4 || exponent >= precision
         ? scientificParts(digits, at, precision - 1, exponentMark)
         : fixedParts(digits, at, precision - 1 - exponent)
     return (whole, alternate ? rest : withoutTrailingZeros(rest))
+}
+
+// ---- Decimals ---------------------------------------------------------------
+
+extension FormatSpec {
+    /// A decimal number under the spec, from its sign and its coefficient's
+    /// decimal digits, 'scale' of them after the point: how a base-10 type
+    /// such as Sable.Math's `Decimal` writes itself. With no precision,
+    /// every digit the scale keeps, trailing zeros too ("3.60"); with one,
+    /// rounded there, to nearest with ties to even, as a float is. `e`,
+    /// `g` and `%` are as a float's; `?` and the integer kinds write it as
+    /// nothing said would.
+    ///
+    /// ```sable
+    /// let spec = FormatSpec()
+    /// assert(spec.formatDecimal(negative: false, digits: "360", scale: 2) == "3.60")
+    /// assert(spec.formatDecimal(negative: true, digits: "5", scale: 3) == "-0.005")
+    /// assert(try! FormatSpec.parse(".1").formatDecimal(negative: false, digits: "125", scale: 2) == "1.2")
+    /// assert(try! FormatSpec.parse("e").formatDecimal(negative: false, digits: "1200", scale: 0) == "1.2e+03")
+    /// ```
+    public fn formatDecimal(negative: Bool, digits: String, scale: Int) -> String {
+        let (whole, rest) = decimalParts(digits, scale, self)
+        return laidOut(negative, "", whole, rest, 3, self)
+    }
+}
+
+/// A decimal's text under the spec, as its whole digits and what follows
+/// them: floatParts, from digits that are exact already.
+fn decimalParts(_ coefficient: String, _ scale: Int, _ spec: FormatSpec) -> (String, String) {
+    let kind = spec.kind
+    let exponentMark = kind == .UpperExponent || kind == .UpperGeneral ? "E" : "e"
+    let (digits, point) = normalizedDecimal(coefficient, coefficient.count - scale)
+    if let precision = spec.precision {
+        if kind == .Exponent || kind == .UpperExponent {
+            let (rounded, at) = roundedDecimal(digits, point, precision + 1 - point)
+            return scientificParts(rounded, at, precision, exponentMark)
+        }
+        if kind == .General || kind == .UpperGeneral {
+            return generalDigitParts(digits, point, precision < 1 ? 1 : precision, spec.alternate, exponentMark)
+        }
+        if kind == .Percent {
+            let (rounded, at) = roundedDecimal(digits, point + 2, precision)
+            return withPercent(fixedParts(rounded, at, precision))
+        }
+        let (rounded, at) = roundedDecimal(digits, point, precision)
+        return fixedParts(rounded, at, precision)
+    }
+    if kind == .Exponent || kind == .UpperExponent {
+        return scientificParts(digits, point, digits.count < 1 ? 0 : digits.count - 1, exponentMark)
+    }
+    if kind == .General || kind == .UpperGeneral {
+        let (whole, rest) = fixedParts(digits, point, scale)
+        return (whole, withoutTrailingZeros(rest))
+    }
+    if kind == .Percent {
+        return withPercent(fixedParts(digits, point + 2, scale < 2 ? 0 : scale - 2))
+    }
+    return fixedParts(digits, point, scale)
 }
 
 /// The parts with '%' after them.

@@ -750,7 +750,8 @@ Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, validated
                     StringBuilder)
 Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     generic over ElementaryFunctions; integer math;
-                    BigInt, Decimal, SIMD<T, N>, Matrix, Quaternion,
+                    Decimal (.NET's layout and rounding, below), BigInt,
+                    SIMD<T, N>, Matrix, Quaternion,
                     statistics generic over every number type (mean,
                     median, mode, quantiles, variance, covariance,
                     correlation, histogram; compensated and two-pass;
@@ -869,6 +870,47 @@ built-in types' default: a type of the program's own conforming to the
 protocol meets the requirement itself. Each type's own file
 (`Int.sb`, `U8.sb`, `F64.sb`, …) says only what differs: its limits and
 constants.
+
+### Decimal
+
+`Sable.Math.Decimal` is exact base-10 arithmetic for money and quantities,
+and it takes .NET's `decimal` layout rather than IEEE 754-2008's
+`decimal128`: a 96-bit coefficient, a scale of 0 to 28 and a sign, in one
+`U128` laid out as `decimal.GetBits` gives it (`bits`, `fromBits`). Why:
+
+- **The data it meets.** Base-10 numbers come from accounts, prices and
+  databases, and there the layout is .NET's — `System.Decimal`, and
+  `rust_decimal`'s, which copied it. Reading one is a copy, and every
+  value of one is a value of the other; `decimal128`'s 34 digits and its
+  exponents to ±6144 are a scientific type's, and F64 and BigInt are there
+  for science.
+- **Every value a number.** `decimal128` has NaNs (quiet and signalling),
+  infinities, a signed zero and many encodings of one value (cohorts);
+  each is a case for comparison, hashing and every caller. A Decimal has
+  none of them, so it is `Comparable` and `Hashable` without asterisks and
+  overflow traps as an integer's does. Its zero has no sign.
+- **Cost.** A coefficient is a U128, so a sum or product at one scale is
+  an integer instruction or two; 192 bits are used only for a product, or
+  a scale raised more than nine places, that needs them, and a division
+  is U64 steps wherever the coefficient fits 64 bits. BID's decimal128
+  needs 113-bit coefficients unpacked and a 34-digit product's 226 bits
+  at every multiplication. Against .NET's `decimal` on the same work
+  (`benchmarks/versus-dotnet/decimal.sb`: a million invoice lines
+  multiplied, rounded to the cent, summed and divided three ways) it is
+  1.26 times .NET's time — most of the difference the 128-bit divisions of
+  long quotients, which compiler-rt does in software.
+
+Rounding is .NET's too: what does not fit 28 places or 96 bits is rounded
+to nearest with ties to even, quotients with no end take every place that
+fits, and `rounded(scale:_:)` takes any `RoundingRule` (to nearest with ties
+to even by default, as `Math.Round`). A value keeps its scale — 1.20 and
+1.2 are equal and hash equal, but write themselves differently — and
+`quantized(scale:_:)` and `normalized()` are the General Decimal Arithmetic
+specification's `quantize` and `reduce`. Parsing reads digits, a point and
+an exponent and rounds what does not fit; formatting writes every place of
+the scale, plainly, and takes a format spec as a float does (Sable.Core's
+`FormatSpec.formatDecimal`). Its tests run cases of the specification's
+examples and decTest files, at a decimal's precision.
 
 ### Source layout
 

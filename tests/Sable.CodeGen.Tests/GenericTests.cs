@@ -865,4 +865,44 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    [Fact]
+    [Native]
+    public void ADefaultNamesTheGenericParametersItsCallGives() =>
+        Assert.Equal(
+            "0\n4\n1\n0\n2\n",
+            AssertAgree(
+                Program(
+                    """
+                    struct Q<E> {
+                        var items: E[>..] = []
+                        init() { }
+                    }
+
+                    struct S<E, N: Int> {
+                        var q: Q<E> = Q<E>()
+                        var size: Int = N
+                        var n: Int = 0
+                    }
+
+                    fn count<E>(_ x: E, _ q: Q<E> = Q<E>()) -> Int { return q.items.count }
+
+                    fn wrapped<T>(_ x: T) -> Int {
+                        var s = S<T, 2>()
+                        s.q.items.append(x)
+                        s.q.items.append(x)
+                        return s.q.items.count
+                    }
+                    """,
+                    """
+                        let s = S<String, 4>(n: 1)
+                        print(s.q.items.count)
+                        print(s.size)
+                        print(s.n)
+                        print(count(1.5))
+                        print(wrapped("a"))
+                    """
+                )
+            ).Stdout
+        );
 }

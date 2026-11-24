@@ -1602,7 +1602,7 @@ public sealed partial class Binder {
         }
 
         TypeSymbol? declaredType = declarator.TypeAnnotation is { } annotation
-            ? _compilation.TypeBinder.BindType(annotation.Type, _containingSymbol, _scope)
+            ? Sub(_compilation.TypeBinder.BindType(annotation.Type, _containingSymbol, _scope))
             : null;
 
         // 'async let x = f()': the initial value is a child task's work, which
@@ -1694,7 +1694,7 @@ public sealed partial class Binder {
         bool isMutable
     ) {
         TypeSymbol? declaredType = declarator.TypeAnnotation is { } annotation
-            ? _compilation.TypeBinder.BindType(annotation.Type, _containingSymbol, _scope)
+            ? Sub(_compilation.TypeBinder.BindType(annotation.Type, _containingSymbol, _scope))
             : null;
 
         BoundExpression initializer;
@@ -2806,7 +2806,7 @@ public sealed partial class Binder {
                 written,
                 new BoundTypeExpression(
                     written,
-                    _compilation.TypeBinder.BindType(written.Type, _containingSymbol, _scope)
+                    Sub(_compilation.TypeBinder.BindType(written.Type, _containingSymbol, _scope))
                 )
             ),
 
@@ -3033,7 +3033,7 @@ public sealed partial class Binder {
         if (LookupLocal(name) is null
             && _compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span, report: false)
                 is NamedTypeSymbol or AliasSymbol) {
-            var type = _compilation.TypeBinder.BindGenericName(syntax, _containingSymbol, _scope);
+            var type = Sub(_compilation.TypeBinder.BindGenericName(syntax, _containingSymbol, _scope));
             return type.IsError
                 ? new BoundError(syntax)
                 : new BoundTypeExpression(syntax, type);
@@ -3441,6 +3441,14 @@ public sealed partial class Binder {
         // what it is constrained to: 'T.decode(from: reader)'.
         if (_compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span, report: false)
             is TypeParameterSymbol named) {
+            // In a default put into a call, the parameter is what the call gave it.
+            switch (Sub(named)) {
+                case ValueTypeArgumentSymbol given when named.ValueType is { } givenType:
+                    return new BoundLiteral(syntax, givenType, given.Value);
+                case var given when !ReferenceEquals(given, named):
+                    return new BoundTypeExpression(syntax, given);
+            }
+
             // A value generic parameter, 'N: Int', is the number it stands for.
             return named.ValueType is { } valueType
                 ? new BoundValueParameter(syntax, named, valueType)
@@ -3538,7 +3546,7 @@ public sealed partial class Binder {
 
         // 'Sable.Collections.Deque<Int>' names the type with its arguments.
         if (syntax.Name is GenericNameSyntax generic && members[0] is NamedTypeSymbol or AliasSymbol) {
-            var type = _compilation.TypeBinder.BindGenericName(members[0], generic, _containingSymbol, _scope);
+            var type = Sub(_compilation.TypeBinder.BindGenericName(members[0], generic, _containingSymbol, _scope));
             return type.IsError ? new BoundError(syntax) : new BoundTypeExpression(syntax, type);
         }
 
@@ -5511,7 +5519,7 @@ public sealed partial class Binder {
     /// </remarks>
     BoundExpression? DefaultArgument(SyntaxNode call, ParameterSymbol parameter, TypeSubstitution substitution) {
         if (MemberwiseField(parameter) is { } field) {
-            return FieldDefault(call, field, substitution.Apply(parameter.Type));
+            return FieldDefault(call, field, substitution.Apply(parameter.Type), substitution);
         }
 
         if (parameter.DeclaringSyntax is not [ParameterSyntax { DefaultValue: { } clause } syntax]
@@ -5529,7 +5537,7 @@ public sealed partial class Binder {
             return new BoundError(call);
         }
 
-        return Within(new Binder(_compilation, scope, container), call, syntax, parameter.Name).BindDefaultValue(clause.Value, parameter, substitution.Apply(parameter.Type));
+        return Within(new Binder(_compilation, scope, container), call, syntax, parameter.Name, substitution).BindDefaultValue(clause.Value, parameter, substitution.Apply(parameter.Type));
     }
 
     /// <summary>
@@ -5672,11 +5680,23 @@ public sealed partial class Binder {
     }
 
     /// <summary>A binder for the default declared at <paramref name="key" />, put in at <paramref name="call" />: it knows every default being put in around it.</summary>
-    Binder Within(Binder inner, SyntaxNode call, SyntaxNode key, string name) {
+    Binder Within(Binder inner, SyntaxNode call, SyntaxNode key, string name, TypeSubstitution? typeArguments = null) {
         inner._defaultsBeingBound = _defaultsBeingBound.Add((key, name));
         inner._defaultOrigin = _defaultOrigin ?? (this, call);
+        inner._typeArguments = typeArguments is { IsEmpty: false } ? typeArguments : null;
         return inner;
     }
+
+    /// <summary>
+    ///     What the declaration's generic parameters are in the call a
+    ///     default is put into: <c>var q: Q&lt;E&gt; = Q&lt;E&gt;()</c>, left off
+    ///     an <c>S&lt;Int&gt;</c>'s initialiser, makes a <c>Q&lt;Int&gt;</c>. Every
+    ///     type the default names is read through it.
+    /// </summary>
+    TypeSubstitution? _typeArguments;
+
+    /// <summary>A type written in the code being bound, as <see cref="_typeArguments" /> has it.</summary>
+    TypeSymbol Sub(TypeSymbol type) => _typeArguments is { } arguments ? arguments.Apply(type) : type;
 
     /// <summary>
     ///     The field a synthesised memberwise initialiser's parameter stands
@@ -5692,7 +5712,7 @@ public sealed partial class Binder {
     ///     bound afresh in the file that declares the field, as a parameter's
     ///     default is. A lazy property's storage starts as none.
     /// </summary>
-    BoundExpression? FieldDefault(SyntaxNode call, FieldSymbol field, TypeSymbol type) {
+    BoundExpression? FieldDefault(SyntaxNode call, FieldSymbol field, TypeSymbol type, TypeSubstitution? typeArguments = null) {
         if (field.DeclaringSyntax is not [FieldDeclarationSyntax declaration]
             || _compilation.FileScopeOf(declaration) is not { } scope) {
             return null;
@@ -5708,7 +5728,7 @@ public sealed partial class Binder {
 
         return AlreadyDefaulting(call, field.Name, declaration)
             ? new BoundError(call)
-            : Within(new Binder(_compilation, scope, field), call, declaration, field.Name).BindInitializer(initializer.Value, type);
+            : Within(new Binder(_compilation, scope, field), call, declaration, field.Name, typeArguments).BindInitializer(initializer.Value, type);
     }
 
     /// <summary>
@@ -7032,7 +7052,7 @@ public sealed partial class Binder {
 
             TypeSymbol parameterType;
             if (parameterSyntax.Type is { } annotation) {
-                parameterType = _compilation.TypeBinder.BindType(annotation, symbol, _scope);
+                parameterType = Sub(_compilation.TypeBinder.BindType(annotation, symbol, _scope));
             } else if (expected is not null
                        && i < expected.ParameterTypes.Length
                        && !IsOpen(expected.ParameterTypes[i])) {
@@ -7071,7 +7091,7 @@ public sealed partial class Binder {
 
         var returnType =
             returnTypeSyntax is { } declaredReturn
-                ? _compilation.TypeBinder.BindType(declaredReturn, symbol, _scope)
+                ? Sub(_compilation.TypeBinder.BindType(declaredReturn, symbol, _scope))
                 : expected is not null && !MentionsOpen(expected.ReturnType)
                     ? expected.ReturnType
                     : null;
@@ -7113,7 +7133,7 @@ public sealed partial class Binder {
         }
 
         return spec.ErrorType is { } errorType
-            ? _compilation.TypeBinder.BindType(errorType, closure, _scope)
+            ? Sub(_compilation.TypeBinder.BindType(errorType, closure, _scope))
             : Core.AnyError;
     }
 
@@ -7602,7 +7622,7 @@ public sealed partial class Binder {
         // arguments, which the field values settle — so the name is resolved
         // first and the arguments inferred, rather than demanded up front.
         var type = InferredRecordType(syntax)
-            ?? _compilation.TypeBinder.BindType(syntax.Type, _containingSymbol, _scope);
+            ?? Sub(_compilation.TypeBinder.BindType(syntax.Type, _containingSymbol, _scope));
 
         if (type is not NamedTypeSymbol named) {
             if (!type.IsError) {
@@ -8056,7 +8076,7 @@ public sealed partial class Binder {
             return null;
         }
 
-        return _compilation.TypeBinder.BindType(syntax, _containingSymbol, _scope);
+        return Sub(_compilation.TypeBinder.BindType(syntax, _containingSymbol, _scope));
     }
 
     /// <summary>
@@ -9613,12 +9633,12 @@ public sealed partial class Binder {
                 return BindArrayPattern(array, inputType);
 
             case TypeTestPatternSyntax test: {
-                var tested = _compilation.TypeBinder.BindType(test.Type, _containingSymbol, _scope);
+                var tested = Sub(_compilation.TypeBinder.BindType(test.Type, _containingSymbol, _scope));
                 return new BoundTypeTestPattern(test, inputType, tested, null);
             }
 
             case BindingTypeTestPatternSyntax test: {
-                var tested = _compilation.TypeBinder.BindType(test.Type, _containingSymbol, _scope);
+                var tested = Sub(_compilation.TypeBinder.BindType(test.Type, _containingSymbol, _scope));
 
                 var local = new LocalSymbol(
                     test.Identifier.Text,
@@ -9747,7 +9767,7 @@ public sealed partial class Binder {
 
         // A qualifier names the union explicitly; otherwise the input type does.
         var owner = pattern.Qualifier is { } qualifier
-            ? _compilation.TypeBinder.BindType(qualifier, _containingSymbol, _scope)
+            ? Sub(_compilation.TypeBinder.BindType(qualifier, _containingSymbol, _scope))
             : inputType;
 
         // An optional is 'union { Some(T), None }' (SYNTAX.md §4), so its two
@@ -9897,7 +9917,7 @@ public sealed partial class Binder {
 
     BoundPattern BindRecordPattern(RecordPatternSyntax pattern, TypeSymbol inputType) {
         var owner = pattern.Type is { } typeSyntax
-            ? _compilation.TypeBinder.BindType(typeSyntax, _containingSymbol, _scope)
+            ? Sub(_compilation.TypeBinder.BindType(typeSyntax, _containingSymbol, _scope))
             : inputType;
 
         var fields = ImmutableArray.CreateBuilder<(FieldSymbol, BoundPattern)>();

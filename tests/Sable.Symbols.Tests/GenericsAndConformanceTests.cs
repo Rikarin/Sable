@@ -1137,4 +1137,70 @@ public sealed class GenericsAndConformanceTests {
     [Fact]
     public void AStaticPropertyOfAnotherTypeIsNotTakenFromTheContext() =>
         Assert.NotEmpty(Errors(Cx + "struct Other<T> { static var count: Int => 1 }\nfn probe() {\n    let v: Cx<F64> = Other.count\n}"));
+
+    // ---- Defaults that name the declaration's generic parameters --------------------
+
+    /// <summary>The call in 'probe', with the defaults it was given, and that none of them is an error.</summary>
+    static BoundCall ProbeCall(string source, string callee) {
+        var compilation = Compile(source);
+        var errors = compilation.GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error).ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => e.Message)));
+
+        var tree = compilation.SyntaxTrees[0];
+        var probe = tree.Root.DescendantNodes().OfType<FunctionDeclarationSyntax>().Single(f => f.Identifier.Text == "probe");
+        var body = compilation.GetSemanticModel(tree).GetBoundBody(probe)!;
+        var call = Descendants(body).OfType<BoundCall>().First(c => c.Function.ContainingSymbol?.Name == callee || c.Function.Name == callee);
+        Assert.DoesNotContain(call.Arguments, static a => a.HasError);
+        return call;
+
+        static IEnumerable<BoundNode> Descendants(BoundNode node) {
+            foreach (var child in node.Children) {
+                yield return child;
+                foreach (var nested in Descendants(child)) {
+                    yield return nested;
+                }
+            }
+        }
+    }
+
+    const string Queue = """
+                         struct Q<E> {
+                             var items: E[>..] = []
+                             init() { }
+                         }
+
+                         """;
+
+    [Fact]
+    public void AFieldsDefaultNamesTheTypesParametersAsTheInitialiserIsGivenThem() {
+        var call = ProbeCall(
+            Queue + """
+                    struct S<E, N: Int> {
+                        var q: Q<E> = Q<E>()
+                        var size: Int = N
+                        var n: Int = 0
+                    }
+                    fn probe() {
+                        let s = S<String, 4>(n: 1)
+                    }
+                    """,
+            "S"
+        );
+        Assert.Equal("Q<String>", call.Arguments[0].Type.ToDisplayString());
+        Assert.Equal(4L, Assert.IsType<BoundLiteral>(call.Arguments[1]).Value);
+    }
+
+    [Fact]
+    public void AParametersDefaultNamesTheFunctionsParametersAsTheCallInfersThem() {
+        var call = ProbeCall(
+            Queue + """
+                    fn count<E>(_ x: E, _ q: Q<E> = Q<E>()) -> Int { return q.items.count }
+                    fn probe() {
+                        let n = count(1.5)
+                    }
+                    """,
+            "count"
+        );
+        Assert.Equal("Q<F64>", call.Arguments[1].Type.ToDisplayString());
+    }
 }

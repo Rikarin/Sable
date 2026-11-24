@@ -233,6 +233,13 @@ fn tryParse(_ s: String, out value: Int) -> Bool { }   // 'out' = must assign
 fn scale(v: inout Vec3, by f: F32) { v.x *= f; v.y *= f; v.z *= f }
 ```
 
+A default is worked out at each call that leaves it off, in the place it is
+written, so the names it uses are the declaration's; its generic parameters
+are what that call gives them. `fn count<E>(_ q: Queue<E> = Queue<E>())`
+called as `count()` on F64s makes a `Queue<F64>`, as does a stored field's
+initial value, `var q: Queue<E> = Queue<E>()`, left off an `S<F64>`'s
+memberwise initialiser.
+
 ### Ownership modifiers
 
 An ownership modifier may be written before the parameter name or after the

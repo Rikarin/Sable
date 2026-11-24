@@ -72,6 +72,9 @@ internal sealed class TypeBinder(Compilation compilation) {
 
     internal void Defer(Action force) => _forcers.Add(force);
 
+    /// <summary>A node of the file the work running now was deferred from, where it is known.</summary>
+    internal SyntaxNode? Anchor => _diagnostics.Anchor;
+
     /// <summary>
     ///     A generic type as its own declaration sees it: given its own
     ///     parameters, <c>Nest&lt;T&gt;</c>, which is what its members write. Any
@@ -84,11 +87,13 @@ internal sealed class TypeBinder(Compilation compilation) {
 
     /// <summary>Defers work that must see every signature, not just this one's.</summary>
     /// <remarks>
-    ///     It runs with the anchor it was deferred under, so what it reports
-    ///     is placed in the file that asked for it.
+    ///     It runs with the anchor it was deferred under — or, with none, the
+    ///     file being declared then — so what it reports, here or through
+    ///     <c>Compilation.ReportDeclaration</c>, is placed in the file that
+    ///     asked for it.
     /// </remarks>
     internal void DeferLate(Action force) {
-        var anchor = _diagnostics.Anchor;
+        var anchor = _diagnostics.Anchor ?? compilation.CurrentScope?.Tree.Root;
         _late.Add(() => {
                 using var _ = _diagnostics.AnchoredAt(anchor);
                 force();
@@ -995,11 +1000,14 @@ internal sealed class TypeBinder(Compilation compilation) {
         NamedTypeSymbol definition,
         ImmutableArray<TypeSymbol> arguments,
         TextSpan span,
-        Symbol? context = null
+        Symbol? context = null,
+        SyntaxNode? at = null
     ) {
         if (arguments.Any(TypeSubstitution.ContainsError)) {
             return;
         }
+
+        using var _ = _diagnostics.AnchoredAt(at);
 
         var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
         for (var i = 0; i < arguments.Length && i < definition.TypeParameters.Length; i++) {

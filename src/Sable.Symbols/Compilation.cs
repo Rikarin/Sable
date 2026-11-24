@@ -350,10 +350,16 @@ public sealed partial class Compilation {
 
     internal void ReportDeclaration(ErrorCode code, TextSpan span, string message, DiagnosticLocation? related = null) {
         var diagnostic = Diagnostic.Error(code, span, message).WithRelated(related);
+
+        // A check run later, with no file being declared, is in the file it
+        // was deferred from.
+        if (CurrentScope is null) {
+            diagnostic = diagnostic.AnchoredAt(TypeBinder.Anchor);
+        }
+
         _declarationDiagnostics.Add(diagnostic);
 
-        // The file being declared is the one the span is in. A check run
-        // later, with none being declared, leaves its diagnostic unplaced.
+        // The file being declared is the one the span is in.
         if (CurrentScope is { Tree: var tree } && span.End <= tree.Text.Length) {
             lock (_files) {
                 _files[diagnostic] = tree;
@@ -426,10 +432,14 @@ public sealed partial class Compilation {
             // (spec/SYNTAX.md §1). An empty file is let be; one that declares
             // something has to say where it belongs.
             if (unit.Module is null && unit.Members.Count > 0 && !IsManifestFile(tree)) {
+                // The scope is still the file before's: this one's needs its module.
                 ReportDeclaration(
-                    ErrorCode.ERR_NoModuleDeclaration,
-                    new(unit.Members[0].Span.Start, 0),
-                    "a file that declares anything needs a 'module' declaration first"
+                    Diagnostic.Error(
+                        ErrorCode.ERR_NoModuleDeclaration,
+                        new(unit.Members[0].Span.Start, 0),
+                        "a file that declares anything needs a 'module' declaration first"
+                    ),
+                    tree
                 );
             }
 
@@ -473,9 +483,11 @@ public sealed partial class Compilation {
                 continue;
             }
 
-            ResolveImports(unit, _fileScopes[tree]);
+            CurrentScope = _fileScopes[tree];
+            ResolveImports(unit, CurrentScope);
         }
 
+        CurrentScope = null;
         AttachExtensions();
         DeclareInlineLayouts();
         DeclareDerivations();
@@ -1015,10 +1027,13 @@ public sealed partial class Compilation {
     ) {
         if (declaration is ExtensionDeclarationSyntax extension) {
             ReportDeclaration(
-                ErrorCode.ERR_NotAllowedInBody,
-                extension.Keyword.Span,
-                "an extension adds to a type everywhere, so it is declared at "
-                + "file scope, not inside a body"
+                Diagnostic.Error(
+                    ErrorCode.ERR_NotAllowedInBody,
+                    extension.Keyword.Span,
+                    "an extension adds to a type everywhere, so it is declared at "
+                    + "file scope, not inside a body"
+                ),
+                scope.Tree
             );
             return null;
         }

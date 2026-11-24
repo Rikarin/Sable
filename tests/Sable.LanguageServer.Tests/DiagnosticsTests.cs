@@ -59,6 +59,30 @@ public sealed class DiagnosticsTests : IDisposable {
         return (location.GetString("uri")!, location.Get("range")!.Value.Get("start")!.Value.GetInt("line")!.Value, related.GetString("message")!);
     }
 
+    /// <summary>
+    ///     A check run once every signature is bound reports in its own
+    ///     file, not in another with a token at the same offset whose text
+    ///     has the name its message quotes.
+    /// </summary>
+    [Fact]
+    public async Task ALateCheckReportsInItsOwnFile() {
+        const string Wrong = "module App\n\nfn hold(@escaping _ n: Int) -> Int {\n    return n\n}\n";
+        var offset = Wrong.IndexOf("@escaping", StringComparison.Ordinal);
+        const string Right = "module App\n\nfn sums(nnnnnnnnnnnn: Int) -> Int {\n    return nnnnnnnnnnnn\n}\n";
+        Assert.Equal(offset, Right.IndexOf("nnnn", StringComparison.Ordinal));
+        var wrongUri = Write("wrong.sb", Wrong);
+        var rightUri = Write("right.sb", Right);
+        await using var client = new TestClient();
+        await client.InitializeAsync(_root);
+        await client.NotifyAsync("initialized", new { });
+        await client.OpenAsync(wrongUri, Wrong);
+        await client.OpenAsync(rightUri, Right);
+
+        var reported = await client.DiagnosticsAsync(wrongUri, static d => Has(d, "S3093"));
+        Assert.Single(reported.EnumerateArray());
+        Assert.Empty((await client.DiagnosticsAsync(rightUri)).EnumerateArray());
+    }
+
     [Fact]
     public async Task ADuplicatePointsAtTheDeclarationItClashesWith() {
         const string First = "module App\n\nstruct Point { var x: Int }\n";

@@ -4854,7 +4854,7 @@ public sealed partial class Binder {
                                 namedType,
                                 constructed.TypeArguments,
                                 syntax.Span,
-                                _containingSymbol
+                                _containingSymbol, syntax
                             );
                         }
                     }
@@ -5415,7 +5415,7 @@ public sealed partial class Binder {
             // 'Groups(grouping: xs, by: f)': they meet the type's
             // constraints as ones inferred before the call do.
             if (!_ownerTypeParameters.IsEmpty) {
-                _compilation.TypeBinder.CheckTypeArguments(definition, ((NamedTypeSymbol)result).TypeArguments, syntax.Span, _containingSymbol);
+                _compilation.TypeBinder.CheckTypeArguments(definition, ((NamedTypeSymbol)result).TypeArguments, syntax.Span, _containingSymbol, syntax);
             }
         }
 
@@ -7470,7 +7470,7 @@ public sealed partial class Binder {
         // Its key must be Hashable, as '[Key: Value]' written out asks: a
         // key type the context gave was checked where it was written.
         if (expectedKey is null) {
-            _compilation.TypeBinder.CheckTypeArguments(dictionary, [keyType, valueType], syntax.Span, _containingSymbol);
+            _compilation.TypeBinder.CheckTypeArguments(dictionary, [keyType, valueType], syntax.Span, _containingSymbol, syntax);
         }
         return Record(
             syntax,

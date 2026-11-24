@@ -108,6 +108,22 @@ public sealed class NegativeCorpusTests {
         );
     }
 
+    /// <summary>
+    ///     Every diagnostic knows its file: one that does not is shown by
+    ///     the editor in whichever file its span happens to fit.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Files))]
+    public void EachDiagnosticKnowsItsFile(string fileName) {
+        var compilation = Compilation.Create(File.ReadAllText(Path.Combine(Directory, fileName)));
+        var tree = compilation.SyntaxTrees[0];
+        var lost = compilation.GetAllDiagnosticsByFile()
+            .Where(d => !ReferenceEquals(d.Tree, tree))
+            .Select(static d => $"  {d.Diagnostic.Id} at {d.Diagnostic.Span.Start}: {d.Diagnostic.Message} ({d.Tree?.Text.FileName ?? "no file"})")
+            .ToList();
+        Assert.True(lost.Count == 0, $"{fileName}\n{string.Join("\n", lost)}");
+    }
+
     /// <summary>Reads the <c>//!</c> claims out of a file.</summary>
     static List<Expectation> Parse(string text) {
         var expectations = new List<Expectation>();

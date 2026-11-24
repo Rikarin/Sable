@@ -422,9 +422,8 @@ internal sealed partial class Analysis {
 
         var quoted = QuotedName().Match(diagnostic.Message);
         if (quoted.Success && span.Length > 0) {
-            var text = tree.Text.ToString(span);
-            var name = quoted.Groups[1].Value;
-            return text.Contains(name, StringComparison.Ordinal) || name.Contains(text, StringComparison.Ordinal);
+            // The whole name: 'n' is not under '@escaping'.
+            return Regex.IsMatch(tree.Text.ToString(span), $@"\b{quoted.Groups[1].Value}\b");
         }
 
         return true;

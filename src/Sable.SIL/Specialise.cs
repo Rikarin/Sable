@@ -1394,6 +1394,12 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
         switch (name) {
             case "opaque_cast" or "opaque_borrow_as" or "opaque_take_as": {
                 var viewed = Value(builtin.Operands[0]);
+
+                // A function a generic type keeps in its own convention, seen as this code's: the copy would call it in another.
+                if (builtin.Operands[0].Type is ThickFunctionType kept && IsStored(kept) != IsStored(builtin.Type)) {
+                    throw new Refused($"{name} of a function kept in a generic type");
+                }
+
                 var target = Substitute(builtin.Type);
                 if (viewed.Type == target) {
                     Map(builtin, viewed);
@@ -1480,6 +1486,10 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
 
     // ---- Types --------------------------------------------------------------
 
+    /// <summary>A function type of a generic type's own convention (SilGen.StoredFunctionType), the same in every copy.</summary>
+    static bool IsStored(SilType type) => type is ThickFunctionType && (type.ToString().Contains($"@opaque({Symbols.TypeParameterSymbol.StoredPrefix}", StringComparison.Ordinal)
+                                                                        || type.ToString().Contains($"$opaque${Symbols.TypeParameterSymbol.StoredPrefix}", StringComparison.Ordinal));
+
     static StructType AsStruct(SilType type) => type as StructType ?? throw new Refused($"{type} is not a struct");
     static EnumType AsEnum(SilType type) => type as EnumType ?? throw new Refused($"{type} is not an enum");
     static ClassType AsClass(SilType type) => type as ClassType ?? throw new Refused($"{type} is not a class");
@@ -1500,6 +1510,7 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
             VectorType vector => vector,
             FunctionType function => new FunctionType([..function.Parameters.Select(Substitute)], Substitute(function.Result), function.Thrown is { } thrown ? Substitute(thrown) : null,
                 function.Owned.IsEmpty ? default : function.Owned, function.IsAsync),
+            ThickFunctionType when IsStored(type) => type,
             ThickFunctionType thick => new ThickFunctionType((FunctionType)Substitute(thick.Signature)),
             TupleType tuple => SilType.Tuple([..tuple.Elements.Select(Substitute)]),
             WeakStorageType weak => new WeakStorageType(AsEnum(Substitute(weak.Optional))),
@@ -1592,7 +1603,7 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                 var display = classType.DisplayName is { } written && written.IndexOf('<') is > 0 and var open
                     ? $"{written[..open]}<{string.Join(", ", arguments.Select(TypeMetadata.DisplayName))}>"
                     : classType.DisplayName;
-                var copy = new ClassType(name) { DisplayName = display };
+                var copy = new ClassType(name) { DisplayName = display, Deinit = display is null ? null : _module.GenericDeinits.GetValueOrDefault(display.IndexOf('<') is > 0 and var end ? display[..end] : display) };
                 _substituted[name] = copy;
                 copy.Conformances.AddRange(classType.Conformances);
                 copy.ConditionalConformances.AddRange(classType.ConditionalConformances);

@@ -146,6 +146,10 @@ public sealed partial class LlvmEmitter {
             constructors.Add(templates);
         }
 
+        if (GenericDeinitRegistration(module) is { } genericDeinits) {
+            constructors.Add(genericDeinits);
+        }
+
         if (DescriberRegistration(module) is { } describers) {
             constructors.Add(describers);
         }
@@ -1759,6 +1763,11 @@ public sealed partial class LlvmEmitter {
                 var made = Fresh();
                 _entryAllocas.Append($"  {made} = call ptr @sable_{(part is SliceType ? "slice" : "array")}_type(ptr {module.RuntimeCache()}, ptr {of})\n");
                 return made;
+            }
+
+            // A function, of any type: two words, the second counted.
+            if (part is ThickFunctionType) {
+                return module.TypeMetadataGlobal(new ThickFunctionType(new FunctionType([], SilType.Unit)));
             }
 
             return OpaqueMetadata(part);

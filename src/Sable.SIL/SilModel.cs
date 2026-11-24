@@ -1799,6 +1799,14 @@ public sealed class SilModule {
     public Dictionary<string, (SilType Type, string Function)> Boxers { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
+    ///     For each generic class with a deinit whose initialiser is compiled
+    ///     once, by its name: the function that runs the deinit of an object
+    ///     whose class the runtime made, registered with it
+    ///     (<c>sable_register_generic_deinit</c>, #297).
+    /// </summary>
+    public Dictionary<string, string> GenericDeinits { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
     ///     A type's conformance records, by protocol name: one per protocol
     ///     the type declares it conforms to (a class's own; its superclass's
     ///     are its superclass's), each with the conformance's witness table

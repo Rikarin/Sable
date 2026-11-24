@@ -338,6 +338,13 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_generic_deinit")) {
+                var generic = Expect(TokenKind.String, "a class's name").Text;
+                Expect("=");
+                module.GenericDeinits[generic] = Expect(TokenKind.Global, "a deinit's name").Text;
+                continue;
+            }
+
             if (Accept("sil_boxer")) {
                 var boxed = ParseType();
                 Expect("=");

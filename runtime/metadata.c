@@ -1041,8 +1041,10 @@ const SableTypeMetadata *sable_tuple_type(void **cache, int64_t count, const Sab
 // fields' and its type arguments' metadata, laid out as the compiler lays out
 // an object where it knows the types (TypeLayout.Object): the header, then
 // each field at the next offset its alignment allows. Such a class is never
-// inherited from and has no deinit, so its object metadata has no vtable and
-// its destroy only destroys its fields, through their value witnesses.
+// inherited from, so its object metadata has no vtable, and its destroy runs
+// its deinit, when it has one — compiled once for every instance, and
+// registered by its generic class's name as an image starts — and then
+// destroys its fields, through their value witnesses.
 //
 // An instance the program's own code made where it knew the types — a static
 // 'Sable.Collections.Deque<Int>' — is registered as the image starts, and is
@@ -1054,11 +1056,32 @@ typedef struct SableClassInstance {
     const SableAggregateShape *shape;
     const SableTypeMetadata **parts; // each field's, then each type argument's
     SableField *fields;
+    void (*deinit)(void *object); // null: it has none
     struct SableClassInstance *next;
 } SableClassInstance;
 
 static SableClassInstance *class_instances;
 static SpinLock class_lock;
+
+static struct {
+    const char *name; // 'M.Cell'
+    void (*deinit)(void *object);
+} *generic_deinits;
+static int64_t generic_deinit_count, generic_deinit_capacity;
+
+void sable_register_generic_deinit(const char *name, void (*deinit)(void *object)) {
+    if (generic_deinit_count == generic_deinit_capacity) {
+        generic_deinit_capacity = generic_deinit_capacity == 0 ? 8 : generic_deinit_capacity * 2;
+        generic_deinits = realloc(generic_deinits, (size_t)generic_deinit_capacity * sizeof *generic_deinits);
+        if (generic_deinits == NULL) {
+            sable_trap("out of memory");
+        }
+    }
+
+    generic_deinits[generic_deinit_count].name = name;
+    generic_deinits[generic_deinit_count].deinit = deinit;
+    generic_deinit_count++;
+}
 
 static struct {
     const SableAggregateShape *shape;
@@ -1106,9 +1129,14 @@ static const SableClassInstance *class_instance_of(const void *object) {
     return (const SableClassInstance *)(const void *)(*(const SableMetadata *const *)object)->type;
 }
 
-// Destroys an object's fields, last first, as a class's compiled destroy does.
+// Runs an object's deinit, unless its initialiser threw, and destroys its
+// fields, last first, as a class's compiled destroy does.
 static void class_destroy(void *object) {
     const SableClassInstance *instance = class_instance_of(object);
+    if (instance->deinit != NULL && (__atomic_load_n(&((SableObject *)object)->flags, __ATOMIC_RELAXED) & SABLE_UNMADE) == 0) {
+        instance->deinit(object);
+    }
+
     for (int64_t i = instance->shape->part_count - 1; i >= 0; i--) {
         const SableTypeMetadata *part = instance->parts[i];
         part->witnesses->destroy((char *)object + instance->fields[i].offset, part);
@@ -1136,6 +1164,11 @@ static SableClassInstance *class_make(const SableAggregateShape *shape, const Sa
     made->shape = shape;
     made->parts = kept;
     made->fields = fields;
+    for (int64_t i = 0; i < generic_deinit_count && made->deinit == NULL; i++) {
+        if (strcmp(generic_deinits[i].name, shape->name) == 0) {
+            made->deinit = generic_deinits[i].deinit;
+        }
+    }
 
     // The header — its type, its strong count, its weak count and flags — then the fields.
     int64_t end = (int64_t)(sizeof(void *) + 2 * sizeof(uint32_t)), align = (int64_t)sizeof(void *);

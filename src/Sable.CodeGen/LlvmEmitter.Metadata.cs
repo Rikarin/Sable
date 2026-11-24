@@ -390,6 +390,26 @@ public sealed partial class LlvmEmitter {
         return "@\"sable.templates.register\"";
     }
 
+    /// <summary>
+    ///     A constructor that hands the runtime what runs the deinit of each
+    ///     generic class whose objects code compiled once makes, by the
+    ///     class's name (<c>sable_register_generic_deinit</c>). Null for none.
+    /// </summary>
+    string? GenericDeinitRegistration(SilModule module) {
+        var deinits = module.GenericDeinits.Where(d => module.Find(d.Value) is not null).ToList();
+        if (deinits.Count == 0) {
+            return null;
+        }
+
+        var body = new StringBuilder("define internal void @\"sable.deinits.register\"() {\nentry:\n");
+        foreach (var (type, function) in deinits) {
+            body.Append($"  call void @sable_register_generic_deinit(ptr {TrapMessage(type)}, ptr @{Global(function)})\n");
+        }
+
+        _helpers.Append(body.Append("  ret void\n}\n\n"));
+        return "@\"sable.deinits.register\"";
+    }
+
     /// <summary>Whether a template's protocol, or one it refines, has associated types: an instance then has a table of its own.</summary>
     bool HasAssociated(SilWitnessTable table) =>
         table.AssociatedTypes.Count > 0 || table.Bases.Exists(b => _module?.FindWitnessTable(table.Conformer, b) is { } refined && HasAssociated(refined));
@@ -490,6 +510,7 @@ public sealed partial class LlvmEmitter {
                                         declare ptr @sable_witness_table(ptr, ptr)
                                         declare void @sable_register_witness_table(ptr, ptr)
                                         declare void @sable_register_template(ptr, ptr, ptr)
+                                        declare void @sable_register_generic_deinit(ptr, ptr)
                                         declare ptr @sable_witness_table_cached(ptr, ptr, ptr)
                                         declare ptr @sable_array_metadata(ptr, ptr)
                                         declare ptr @sable_array_type(ptr, ptr)

@@ -458,6 +458,17 @@ public sealed class TypeParameterSymbol(
     public static TypeParameterSymbol OpenedExistential(TypeParameterSymbol self, ImmutableArray<TypeSymbol> protocols) =>
         new(self.Name, self.ContainingSymbol!, null, self.Ordinal) { OpenedFrom = self, Constraints = protocols };
 
+    /// <summary>
+    ///     A generic type's type parameter as a function the type stores is
+    ///     written over (#297): one convention for every instance, whatever
+    ///     the instance's arguments, named apart from any function's own.
+    /// </summary>
+    public static TypeParameterSymbol Stored(TypeParameterSymbol parameter) =>
+        new(StoredPrefix + parameter.Name, parameter.ContainingSymbol!, null, parameter.Ordinal) { Constraints = parameter.Constraints };
+
+    /// <summary>What <see cref="Stored" /> begins a name with.</summary>
+    public const string StoredPrefix = "__";
+
     /// <summary>Variance, from <c>out T</c> or <c>in T</c>.</summary>
     public VarianceKind Variance { get; internal set; } = VarianceKind.None;
 

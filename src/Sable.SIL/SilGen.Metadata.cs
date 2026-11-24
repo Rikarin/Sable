@@ -80,6 +80,10 @@ public sealed partial class SilGen {
                 }
             }
 
+            if (witness is null && type is not null && member is FunctionSymbol { TypeParameters.IsEmpty: false }) {
+                witness = TrapWitness(table, key, type);
+            }
+
             table.Entries.Add((key, witness, witness is null ? null : type));
         }
 

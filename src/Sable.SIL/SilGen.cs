@@ -1142,7 +1142,7 @@ public sealed partial class SilGen {
         function.RemoveUnreachableBlocks();
         _module.Add(function);
 
-        if (symbol.FunctionKind == FunctionKind.Deinitializer) {
+        if (symbol.FunctionKind == FunctionKind.Deinitializer && !_unspecialised.ContainsKey(name)) {
             switch (Lower(SelfType(symbol, substitution))) {
                 case ClassType owner:
                     owner.Deinit = function.Name;
@@ -2318,7 +2318,7 @@ public sealed partial class SilGen {
                 });
                 var members = TypeSubstitution.For(named);
                 foreach (var field in StoredFields(named.OriginalDefinition)) {
-                    if (Lower(members.Apply(field.Type)) is not { } fieldType) {
+                    if ((StoredFunctionType(field) ?? Lower(members.Apply(field.Type))) is not { } fieldType) {
                         return null;
                     }
 
@@ -2360,7 +2360,7 @@ public sealed partial class SilGen {
 
                 var members = TypeSubstitution.For(named);
                 foreach (var field in StoredFields(named.OriginalDefinition)) {
-                    if (Lower(members.Apply(field.Type)) is not { } fieldType) {
+                    if ((StoredFunctionType(field) ?? Lower(members.Apply(field.Type))) is not { } fieldType) {
                         return null;
                     }
 
@@ -5035,6 +5035,10 @@ public sealed partial class SilGen {
                     // A weak or unowned field is read as the object, held as any owned value borrowed is.
                     var extracted = Emit(new StructExtractInst(value, index));
                     var read = OutOfField(extracted, Emit);
+                    if (AsRead(read, (BoundFieldAccess)expression) is { } seen && !ReferenceEquals(seen, read)) {
+                        return Hold(seen);
+                    }
+
                     return ReferenceEquals(read, extracted) ? read : Hold(read);
                 }
 
@@ -7133,7 +7137,7 @@ public sealed partial class SilGen {
                     return InlineRead(access);
 
                 case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field } access:
-                    return FieldAccess(access, receiver, field);
+                    return AsRead(FieldAccess(access, receiver, field), access);
 
                 case BoundTupleElementAccess element: {
                     if (Sub(element.Receiver.Type) is TupleTypeSymbol && !IsTrivialType(element.Receiver.Type) && Place(element) is { } place) {
@@ -7573,8 +7577,8 @@ public sealed partial class SilGen {
                     Destroy(value);
                     break;
 
-                default:
-                    Emit(new StoreInst(value, address, StoreKind.Assign));
+                case var pointee:
+                    Emit(new StoreInst(AsFunction(value, pointee), address, StoreKind.Assign));
                     break;
             }
 
@@ -9015,7 +9019,7 @@ public sealed partial class SilGen {
                 return Missing(record, "a record that leaves a field to its default");
             }
 
-            return Emit(new StructInst(structType, [..fields!.Select((f, i) => IntoField(structType.Fields[i].Type, f!, Emit))]));
+            return Emit(new StructInst(structType, [..fields!.Select((f, i) => IntoField(structType.Fields[i].Type, AsFunction(f!, structType.Fields[i].Type), Emit))]));
         }
 
         SilValue? UnionCase(TypeSymbol unionType, string name, IReadOnlyList<BoundExpression> arguments, BoundNode at) {
@@ -10489,7 +10493,7 @@ public sealed partial class SilGen {
                     return Missing(call, "a memberwise initialiser that leaves a field to its default");
                 }
 
-                return Emit(new StructInst(structType, [..fields.Select((f, i) => IntoField(structType.Fields[i].Type, f, Emit))]));
+                return Emit(new StructInst(structType, [..fields.Select((f, i) => IntoField(structType.Fields[i].Type, AsFunction(f, structType.Fields[i].Type), Emit))]));
             }
 
             // A requirement of Error's, called on 'any Error': through the

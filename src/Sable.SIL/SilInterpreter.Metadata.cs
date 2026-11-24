@@ -141,9 +141,13 @@ public sealed partial class SilInterpreter {
                 return concrete;
             }
 
-            // A class laid out for its arguments, none of whose code runs as it dies: it has no deinit, no superclass, no vtable.
+            // A class laid out for its arguments: it has no superclass and no vtable, and its deinit is its generic class's.
             case ClassType { IsGenericInstance: true } classType: {
-                var concrete = new ClassType(name) { DisplayName = display, TypeArguments = [..arguments] };
+                var concrete = new ClassType(name) {
+                    DisplayName = display,
+                    TypeArguments = [..arguments],
+                    Deinit = display is null ? null : module.GenericDeinits.GetValueOrDefault(display[..display.IndexOf('<')]),
+                };
                 _concreteGenerics[name] = concrete;
                 concrete.Fields.AddRange(classType.Fields.Select(f => (f.Name, Concrete(f.Type))));
                 concrete.Conformances.AddRange(classType.Conformances);

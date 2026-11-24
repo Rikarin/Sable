@@ -1,0 +1,19 @@
+module Sable.Hosting
+
+/// Why a text is not a cron expression.
+public struct CronError: Error {
+    /// The text.
+    public let text: String
+    /// What is wrong with it.
+    public let reason: String
+
+    init(_ text: String, _ reason: String) {
+        self.text = text
+        self.reason = reason
+    }
+
+    /// The text and what is wrong with it.
+    public fn description() -> String {
+        return "'\(text)' is not a cron expression: \(reason)"
+    }
+}

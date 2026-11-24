@@ -1874,6 +1874,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "process_current_directory":
                 return Allocate(new HeapString(Sandbox?.CurrentDirectory ?? Directory.GetCurrentDirectory()));
 
+            case "process_notify":
+                return Sandbox is null ? Notify(Text(operands[0]).Value, Text(operands[1]).Value) : 1L;
+
             case "process_change_directory":
                 try {
                     // A sandboxed program's working directory is its own: the

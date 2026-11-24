@@ -1,0 +1,238 @@
+module HostingSupport
+
+// Sable.Hosting, tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Hosting
+
+import Sable.Concurrency
+import Sable.Hosting
+import Sable.Testing
+import Sable.Time
+
+/// A clock a test sets: no time passes but what it says does.
+@immutable
+public final class TestClock: HostClock {
+    let state: Mutex<TestClockState>
+    let changed: WaitList
+
+    public init(_ start: UtcDateTime) {
+        state = Mutex(TestClockState { now: start })
+        changed = WaitList()
+    }
+
+    public init() {
+        state = Mutex(TestClockState { now: UtcDateTime.of(year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0)! })
+        changed = WaitList()
+    }
+
+    public var now: UtcDateTime => state.withLock { (s: inout TestClockState) -> UtcDateTime in s.now }
+
+    public fn advance(_ duration: Duration) {
+        state.withLock { (s: inout TestClockState) -> Void in s.now = s.now.adding(duration) }
+        changed.wakeAll()
+    }
+
+    /// The clock set back, and whoever sleeps woken all the same, as they
+    /// are once as long has passed as they meant to sleep.
+    public fn setBack(_ duration: Duration) {
+        state.withLock { (s: inout TestClockState) -> Void in
+            s.now = s.now.adding(Duration.zero() - duration)
+            s.early += 1
+        }
+        changed.wakeAll()
+    }
+
+    public fn sleep(until time: UtcDateTime) async throws(CancellationError) {
+        let early = state.withLock { (s: inout TestClockState) -> Int in
+            s.sleepers.append(time)
+            return s.early
+        }
+        changed.wakeAll()
+        while true {
+            let ticket = changed.ticket
+            let woken = state.withLock { (s: inout TestClockState) -> Bool in s.early != early }
+            if now >= time || woken || Task.isCancelled {
+                break
+            }
+            await changed.parkCancellably(since: ticket)
+        }
+        state.withLock { (s: inout TestClockState) -> Void in
+            var kept: UtcDateTime[>..] = []
+            var gone = false
+            for each in s.sleepers {
+                if !gone && each == time {
+                    gone = true
+                } else {
+                    kept.append(each)
+                }
+            }
+            s.sleepers = kept
+        }
+        if Task.isCancelled {
+            throw CancellationError()
+        }
+    }
+
+    /// Waits until something sleeps until this long from now.
+    public fn awaitSleep(_ duration: Duration) async {
+        let time = now.adding(duration)
+        while true {
+            let ticket = changed.ticket
+            let there = state.withLock { (s: inout TestClockState) -> Bool in s.sleepers.contains(time) }
+            if there {
+                return
+            }
+            await changed.parkCancellably(since: ticket)
+        }
+    }
+
+    /// Passes the time once something sleeps until then.
+    public fn pass(_ duration: Duration) async {
+        await awaitSleep(duration)
+        advance(duration)
+    }
+}
+
+struct TestClockState {
+    var now: UtcDateTime
+    var sleepers: UtcDateTime[>..] = []
+    var early: Int = 0
+}
+
+/// What happened, in order.
+@immutable
+public final class Record {
+    let lines: Mutex<String[>..]>
+    let changed: WaitList
+
+    public init() {
+        let empty: String[>..] = []
+        lines = Mutex(empty)
+        changed = WaitList()
+    }
+
+    public fn add(_ line: String) {
+        lines.withLock { (all: inout String[>..]) -> Void in all.append(line) }
+        changed.wakeAll()
+    }
+
+    public var all: String => lines.withLock { (all: inout String[>..]) -> String in all.joined(separator: " ") }
+
+    public fn count(_ line: String) -> Int {
+        return lines.withLock { (all: inout String[>..]) -> Int in
+            var n = 0
+            for each in all {
+                if each == line {
+                    n += 1
+                }
+            }
+            return n
+        }
+    }
+
+    /// Waits until the line has come this many times.
+    public fn awaitLine(_ line: String, _ times: Int = 1) async {
+        while true {
+            let ticket = changed.ticket
+            if count(line) >= times {
+                return
+            }
+            await changed.parkCancellably(since: ticket)
+        }
+    }
+}
+
+public struct TestError: Error {
+    public let text: String
+
+    public init(_ text: String) {
+        self.text = text
+    }
+
+    public fn description() -> String {
+        return text
+    }
+}
+
+/// A service that records what it is told, and does as asked.
+@immutable
+public final class Recorded: HostedService {
+    let name: String
+    let record: Record
+    let failing: String
+
+    public init(_ name: String, _ record: Record, failing: String = "") {
+        self.name = name
+        self.record = record
+        self.failing = failing
+    }
+
+    public fn start(cancellation: CancellationToken) async throws {
+        record.add("start-\(name)")
+        if failing == "start" {
+            throw TestError("no start")
+        }
+        if failing == "slow start" {
+            let _ = await cancellation.cancellationRequested()
+            throw CancellationError()
+        }
+        if failing == "stuck start" {
+            await forever()
+        }
+    }
+
+    public fn run(cancellation: CancellationToken) async throws {
+        record.add("run-\(name)")
+        if failing == "run" {
+            throw TestError("no run")
+        }
+        if failing == "run stuck" {
+            await forever()
+        }
+        let _ = await cancellation.cancellationRequested()
+        record.add("end-\(name)")
+        if failing == "end" {
+            throw TestError("no end")
+        }
+        if failing == "cancelled" {
+            throw CancellationError()
+        }
+    }
+
+    public fn stop(cancellation: CancellationToken) async throws {
+        record.add("stop-\(name)")
+        if failing == "stop" {
+            throw TestError("no stop")
+        }
+        if failing == "stop waits" {
+            let _ = await cancellation.cancellationRequested()
+            record.add("hurried-\(name)")
+        }
+    }
+}
+
+/// Deaf to every token: ends only once its task is cancelled.
+public fn forever() async {
+    let list = WaitList()
+    while !Task.isCancelled {
+        await list.parkCancellably()
+    }
+}
+
+/// A builder that says nothing and hears no signal, on a test's clock.
+public fn quietBuilder(_ clock: TestClock) -> ApplicationBuilder {
+    let builder = ApplicationBuilder()
+    builder.logging.minimumLevel = none
+    builder.options.handleSignals = false
+    builder.clock = clock
+    return builder
+}
+
+/// What the host's run throws, in words; "" for nothing.
+public fn outcome(_ host: Host) async -> String {
+    do {
+        try await host.run()
+        return ""
+    } catch {
+        return error.description()
+    }
+}

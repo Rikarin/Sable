@@ -1,0 +1,27 @@
+module Sable.Hosting
+
+import Sable.Time
+
+/// How a host starts, stops and answers signals.
+public struct HostOptions: Sendable {
+    /// How long stopping may take, all of it: past it, the host waits no
+    /// more for a service that has not ended. .NET's 30 seconds, if not set.
+    public var shutdownTimeout: Duration
+    /// How long each service's `start` may take; without end for none.
+    public var startupTimeout: Duration?
+    /// What is done about a service that fails, unless it says otherwise.
+    public var onServiceFailure: ServiceFailurePolicy
+    /// Whether the host listens for SIGTERM, SIGINT and SIGHUP.
+    public var handleSignals: Bool
+    /// What a SIGHUP does.
+    public var onHangup: HangupPolicy
+
+    /// The usual ones.
+    public init() {
+        shutdownTimeout = Duration.seconds(30)
+        startupTimeout = none
+        onServiceFailure = ServiceFailurePolicy.StopHost
+        handleSignals = true
+        onHangup = HangupPolicy.Reload
+    }
+}

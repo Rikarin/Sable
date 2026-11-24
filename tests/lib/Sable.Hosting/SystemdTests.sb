@@ -1,0 +1,57 @@
+module SystemdTests
+
+// Sable.Hosting, tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Hosting
+
+import Sable.Hosting
+import Sable.IO
+import Sable.Process
+import Sable.Testing
+import Sable.Time
+
+@test
+fn withNoSocketNoOneIsTold() {
+    unsafe {
+        Environment.remove("NOTIFY_SOCKET")
+    }
+    assert(!Systemd.isActive)
+    assert(!Systemd.notify("READY=1"))
+}
+
+@test
+fn aSocketThatIsNotThereIsNotTold() {
+    assert(!Systemd.notify("READY=1", socket: "/nowhere/to/be/found"))
+    assert(!Systemd.notify("READY=1", socket: "vsock:2:1234"))
+    assert(!Systemd.notify("READY=1", socket: ""))
+    assert(!Systemd.notify("READY=1", socket: "@sable-nowhere-to-be-found"))
+    assert(!Systemd.notify("READY=1", socket: "/" + "x".repeated(200)))
+}
+
+@test
+fn theWatchdogIsThisProcesss() {
+    unsafe {
+        Environment.remove("WATCHDOG_PID")
+        Environment.remove("WATCHDOG_USEC")
+    }
+    assert(Systemd.watchdogInterval == none)
+    unsafe {
+        Environment.set("WATCHDOG_USEC", "30000000")
+    }
+    assert(Systemd.watchdogInterval! == Duration.seconds(30))
+    unsafe {
+        Environment.set("WATCHDOG_PID", "1")
+    }
+    assert(Systemd.watchdogInterval == none)
+    unsafe {
+        Environment.set("WATCHDOG_PID", Process.id().toString())
+    }
+    assert(Systemd.watchdogInterval! == Duration.seconds(30))
+    unsafe {
+        Environment.set("WATCHDOG_USEC", "soon")
+    }
+    assert(Systemd.watchdogInterval == none)
+    unsafe {
+        Environment.set("WATCHDOG_USEC", "0")
+    }
+    assert(Systemd.watchdogInterval == none)
+}

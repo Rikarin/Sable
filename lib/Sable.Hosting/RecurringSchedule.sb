@@ -1,0 +1,42 @@
+module Sable.Hosting
+
+import Sable.Time
+
+/// When a recurring job is run.
+public union RecurringSchedule: Sendable {
+    /// When the expression says.
+    Cron(expression: CronExpression)
+    /// Each time this long has passed since the host started.
+    Every(interval: Duration)
+
+    var isCron: Bool {
+        get {
+            if case .Cron(_) = self {
+                return true
+            }
+            return false
+        }
+    }
+
+    // When it is next due: after 'last', when it was last or the host
+    // started, and after now, so that what was missed — the machine asleep,
+    // the clock set on — is not made up for. A clock set far back starts it
+    // anew, rather than have it wait for the time to come again.
+    fn next(after last: UtcDateTime, now: UtcDateTime, zone: TimeZone) -> UtcDateTime? {
+        match self {
+            case .Cron(let expression) => {
+                let setBack = last > now && last.durationSince(now) > Duration.hours(1)
+                return expression.next(after: last > now && !setBack ? last : now, in: zone)
+            }
+            case .Every(let interval) => {
+                let past = now.durationSince(last).totalNanoseconds
+                let step = interval.totalNanoseconds
+                if past < 0 - step {
+                    return now.adding(interval)
+                }
+                let passed = past < 0 ? 0 : past / step
+                return last.adding(interval.times(passed + 1))
+            }
+        }
+    }
+}

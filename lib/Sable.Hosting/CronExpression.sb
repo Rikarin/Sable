@@ -1,0 +1,313 @@
+module Sable.Hosting
+
+import Sable.Time
+
+/// When, as cron writes it: five fields — minute, hour, day of the month,
+/// month, day of the week — each `*`, a number, a range `1-5`, either with a
+/// step `/2` (`5/15` is from 5 on), or a list of them; months and weekdays by
+/// their first three letters too, in any case, and Sunday both 0 and 7. Or
+/// one of `@yearly` (`@annually`), `@monthly`, `@weekly`, `@daily`
+/// (`@midnight`) and `@hourly`.
+///
+/// As Vixie cron has it: a day that both its fields restrict — neither
+/// beginning with `*` — matches when either does. And where a zone's clocks
+/// change, a time fixed in minute and hour (neither beginning with `*`) comes
+/// once a day: skipped, it comes as the clocks have gone on; shown twice, it
+/// comes the first time. Any other follows the clock as it goes: what it
+/// skips does not come, what it shows twice comes twice.
+///
+/// ```sable
+/// let mornings = try! CronExpression.parse("30 8 * * mon-fri")
+/// let friday = UtcDateTime.of(year: 2026, month: 11, day: 20, hour: 9, minute: 0, second: 0)!
+/// assert(mornings.next(after: friday, in: TimeZone.utc)!.toString() == "2026-11-23T08:30:00Z")
+/// ```
+public struct CronExpression: Sendable {
+    /// The text it was read from.
+    public let text: String
+    // A bit a value each matches.
+    let minutes: Int
+    let hours: Int
+    let days: Int
+    let months: Int
+    let weekdays: Int
+    let anyDay: Bool
+    let anyWeekday: Bool
+    let followsClock: Bool
+
+    /// The expression the text writes.
+    public static fn parse(_ text: String) throws(CronError) -> CronExpression {
+        let plain = CronExpression.expanded(text.trimmed())
+        var fields: String[>..] = []
+        for part in plain.split(where: { $0 == ' ' || $0 == '\t' }) {
+            if !part.isEmpty {
+                fields.append(part.toString())
+            }
+        }
+        if fields.count != 5 {
+            throw CronError(text, "it has \(fields.count) fields, not 5")
+        }
+        let minutes = try CronField(text: text, name: "minute", least: 0, most: 59, names: []).parse(fields[0])
+        let hours = try CronField(text: text, name: "hour", least: 0, most: 23, names: []).parse(fields[1])
+        let days = try CronField(text: text, name: "day of the month", least: 1, most: 31, names: []).parse(fields[2])
+        let months = try CronField(text: text, name: "month", least: 1, most: 12, names: ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]).parse(fields[3])
+        var weekdays = try CronField(text: text, name: "day of the week", least: 0, most: 7, names: ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]).parse(fields[4])
+        if (weekdays & 128) != 0 {
+            weekdays = (weekdays & 127) | 1
+        }
+        let anyDay = fields[2].hasPrefix("*")
+        let anyWeekday = fields[4].hasPrefix("*")
+        let expression = CronExpression {
+            text: text, minutes: minutes, hours: hours, days: days, months: months, weekdays: weekdays,
+            anyDay: anyDay, anyWeekday: anyWeekday,
+            followsClock: fields[0].hasPrefix("*") || fields[1].hasPrefix("*")
+        }
+        // A day no month it names has: the 30th of February.
+        if anyDay || anyWeekday {
+            var possible = false
+            var month = 1
+            while month <= 12 {
+                let length = month == 2 ? 29 : month == 4 || month == 6 || month == 9 || month == 11 ? 30 : 31
+                if (months & (1 << month)) != 0 && (days & ((1 << (length + 1)) - 1)) != 0 {
+                    possible = true
+                }
+                month += 1
+            }
+            if !possible {
+                throw CronError(text, "no month it names has such a day")
+            }
+        }
+        return expression
+    }
+
+    static fn expanded(_ text: String) -> String {
+        return match text.lowercased() {
+            case "@yearly"   => "0 0 1 1 *"
+            case "@annually" => "0 0 1 1 *"
+            case "@monthly"  => "0 0 1 * *"
+            case "@weekly"   => "0 0 * * 0"
+            case "@daily"    => "0 0 * * *"
+            case "@midnight" => "0 0 * * *"
+            case "@hourly"   => "0 * * * *"
+            case _           => text
+        }
+    }
+
+    /// The first moment after this one it matches on the zone's clocks;
+    /// none if there is none in fifty years.
+    ///
+    /// ```sable
+    /// // The clocks of New York skip 2:30 on the 8th of March, 2026.
+    /// let nightly = try! CronExpression.parse("30 2 * * *")
+    /// let newYork = try! TimeZone.posix("EST5EDT,M3.2.0,M11.1.0")
+    /// let before = UtcDateTime.of(year: 2026, month: 3, day: 8, hour: 5, minute: 0, second: 0)!
+    /// assert(nightly.next(after: before, in: newYork)!.toString() == "2026-03-08T07:00:00Z")   // 3:00 there
+    /// ```
+    public fn next(after moment: UtcDateTime, in zone: TimeZone) -> UtcDateTime? {
+        // Seconds as the zone's clocks show them, from each of its changes
+        // to the next: within one, the clocks go on as the time does.
+        var from = moment.secondsSinceEpoch
+        var offset = zone.offset(at: moment).totalSeconds
+        var local = CronExpression.floorToMinute(from + offset) + 60
+        // In what the clocks show a second time, a time that comes once
+        // has come.
+        if !followsClock {
+            if let change = zone.previousTransition(before: UtcDateTime.fromUnix(from + 1)) {
+                let at = change.instant.secondsSinceEpoch
+                let shown = at + zone.offset(at: UtcDateTime.fromUnix(at - 1)).totalSeconds
+                if local < shown {
+                    local = CronExpression.ceilToMinute(shown)
+                }
+            }
+        }
+        let last = from + 50 * 366 * 86400
+        while from < last {
+            let change = zone.nextTransition(after: UtcDateTime.fromUnix(from))
+            let found = nextLocal(from: local, before: last)
+            guard let next = change else {
+                return found.map { UtcDateTime.fromUnix($0 - offset) }
+            }
+            let at = next.instant.secondsSinceEpoch
+            if let time = found {
+                if time - offset < at {
+                    return UtcDateTime.fromUnix(time - offset)
+                }
+            }
+            let after = next.offset.totalSeconds
+            let showed = at + offset
+            let shows = at + after
+            if !followsClock {
+                // Skipped: as soon as it has been.
+                if let time = nextLocal(from: CronExpression.ceilToMinute(showed), before: shows) {
+                    if time < shows {
+                        return next.instant
+                    }
+                }
+            }
+            local = CronExpression.ceilToMinute(!followsClock && showed > shows ? showed : shows)
+            from = at
+            offset = after
+        }
+        return none
+    }
+
+    static fn floorToMinute(_ seconds: Int) -> Int {
+        return seconds - CronExpression.modulo(seconds, 60)
+    }
+
+    static fn ceilToMinute(_ seconds: Int) -> Int {
+        return CronExpression.floorToMinute(seconds + 59)
+    }
+
+    static fn modulo(_ a: Int, _ b: Int) -> Int {
+        let rest = a % b
+        return rest < 0 ? rest + b : rest
+    }
+
+    // The first minute from this one on it matches, in seconds as a clock
+    // shows them; none when there is none before the other.
+    fn nextLocal(from start: Int, before end: Int) -> Int? {
+        var second = CronExpression.modulo(start, 86400)
+        var day = (start - second) / 86400
+        let lastDay = (end - CronExpression.modulo(end, 86400)) / 86400
+        while day <= lastDay {
+            let date = Date.fromDaysSinceEpoch(day)
+            if (months & (1 << date.month)) == 0 {
+                day += date.daysInMonth - date.day + 1
+                second = 0
+                continue
+            }
+            if matches(date) {
+                if let time = nextTime(from: second) {
+                    return day * 86400 + time
+                }
+            }
+            day += 1
+            second = 0
+        }
+        return none
+    }
+
+    fn matches(_ date: Date) -> Bool {
+        let day = (days & (1 << date.day)) != 0
+        let weekday = (weekdays & (1 << date.weekday.numberFromSunday)) != 0
+        return anyDay || anyWeekday ? day && weekday : day || weekday
+    }
+
+    // The second of the day of the first minute it matches, from this one on.
+    fn nextTime(from second: Int) -> Int? {
+        var hour = second / 3600
+        var minute = second / 60 % 60
+        while hour < 24 {
+            if (hours & (1 << hour)) != 0 {
+                while minute < 60 {
+                    if (minutes & (1 << minute)) != 0 {
+                        return hour * 3600 + minute * 60
+                    }
+                    minute += 1
+                }
+            }
+            hour += 1
+            minute = 0
+        }
+        return none
+    }
+}
+
+extension CronExpression: Equatable {
+    /// Whether they match the same times.
+    public operator == (a: CronExpression, b: CronExpression) -> Bool {
+        return a.minutes == b.minutes && a.hours == b.hours && a.days == b.days && a.months == b.months
+            && a.weekdays == b.weekdays && a.anyDay == b.anyDay && a.anyWeekday == b.anyWeekday && a.followsClock == b.followsClock
+    }
+}
+
+// One field of an expression: the values it may hold, and their names.
+struct CronField {
+    let text: String
+    let name: String
+    let least: Int
+    let most: Int
+    let names: String[>..]
+
+    // A bit for each value it matches.
+    fn parse(_ field: String) throws(CronError) -> Int {
+        var bits = 0
+        for item in field.split(',') {
+            bits = bits | try parseItem(item.toString())
+        }
+        return bits
+    }
+
+    fn parseItem(_ item: String) throws(CronError) -> Int {
+        var range = item
+        var step = 1
+        var stepped = false
+        if let slash = item.firstIndex(of: '/') {
+            range = item[..<slash].toString()
+            step = try number(item[item.index(after: slash)...].toString())
+            stepped = true
+            if step < 1 {
+                throw CronError(text, "a step of 0 in the \(name)")
+            }
+        }
+        var first = least
+        var end = most
+        if range == "*" {
+            // Sunday once.
+            end = most == 7 ? 6 : most
+        } else if let dash = range.firstIndex(of: '-') {
+            first = try value(range[..<dash].toString())
+            let word = range[range.index(after: dash)...].toString()
+            end = try value(word)
+            // The week's end: sat-sun.
+            if end < first && word.lowercased() == "sun" {
+                end = 7
+            }
+            if end < first {
+                throw CronError(text, "'\(range)' goes backwards in the \(name)")
+            }
+        } else {
+            first = try value(range)
+            end = stepped ? (most == 7 ? 6 : most) : first
+        }
+        var bits = 0
+        var at = first
+        while at <= end {
+            bits = bits | (1 << at)
+            at += step
+        }
+        return bits
+    }
+
+    fn value(_ word: String) throws(CronError) -> Int {
+        let lower = word.lowercased()
+        var i = 0
+        while i < names.count {
+            if names[i] == lower {
+                return least == 0 ? i : i + 1
+            }
+            i += 1
+        }
+        let given = try number(word)
+        if given < least || given > most {
+            throw CronError(text, "\(given) is out of range for the \(name): \(least) to \(most)")
+        }
+        return given
+    }
+
+    // Digits alone, and few.
+    fn number(_ word: String) throws(CronError) -> Int {
+        var digits = !word.isEmpty && word.count <= 4
+        for c in word {
+            if c < '0' || c > '9' {
+                digits = false
+            }
+        }
+        if digits {
+            if let value = try? Int.parse(word) {
+                return value
+            }
+        }
+        throw CronError(text, "'\(word)' in the \(name)")
+    }
+}

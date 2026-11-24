@@ -1,0 +1,61 @@
+module Sable.Hosting
+
+import Sable.Concurrency
+
+/// Something the host runs for as long as it does: .NET's `IHostedService`
+/// and `BackgroundService` in one.
+///
+/// ```sable
+/// @immutable
+/// final class Ticker: HostedService {
+///     async fn run(cancellation: CancellationToken) throws {
+///         while !cancellation.isCancellationRequested {
+///             await Task.yield()
+///         }
+///     }
+/// }
+///
+/// let builder = ApplicationBuilder()
+/// builder.options.handleSignals = false
+/// builder.services.add("ticker", Ticker())
+/// let host = try! builder.build()
+/// let _ = host.lifetime.started.register { host.lifetime.requestStop() }
+/// try! await host.run()
+/// ```
+public protocol HostedService: Sendable {
+    /// Makes ready, before any service added after it starts, and before
+    /// its own `run`; the host starts only if it does not throw. The token
+    /// is cancelled when the host is asked to stop meanwhile. By default,
+    /// nothing.
+    async fn start(cancellation: CancellationToken) throws
+
+    /// The work, beside every other service's, until the token is
+    /// cancelled. It may return before; what it throws is a failure, which
+    /// the host's `ServiceFailurePolicy` is for.
+    async fn run(cancellation: CancellationToken) throws
+
+    /// Clears up, once `run` has ended, and before any service added before
+    /// it is stopped. The token is cancelled when the host's shutdown
+    /// timeout runs out. By default, nothing.
+    async fn stop(cancellation: CancellationToken) throws
+}
+
+extension HostedService {
+    public async fn start(cancellation: CancellationToken) throws { }
+
+    public async fn stop(cancellation: CancellationToken) throws { }
+}
+
+// A service that is its `run`, as a closure.
+@immutable
+final class ClosureService: HostedService {
+    let body: async (CancellationToken) throws -> Void
+
+    init(_ body: @escaping @Sendable async (CancellationToken) throws -> Void) {
+        self.body = body
+    }
+
+    async fn run(cancellation: CancellationToken) throws {
+        try await body(cancellation)
+    }
+}

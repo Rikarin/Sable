@@ -196,6 +196,10 @@ static int64_t socket_write(PlatformSocket socket, const void *bytes, int64_t si
 static void socket_shutdown_write(PlatformSocket socket);
 static void socket_close(PlatformSocket socket);
 
+// One datagram sent to a Unix socket, by its path, or (Linux) by its abstract
+// name, '@' first: 0 sent, 1 the system has none such, 2 it could not be sent.
+static int unix_datagram_send(const char *name, size_t name_length, const void *bytes, size_t length);
+
 // ---- Arguments, files and the environment -------------------------------
 
 // The program's arguments, from what main() was given; how many in 'count'.

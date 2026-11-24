@@ -242,6 +242,11 @@ static void socket_close(PlatformSocket socket) {
     close((int)socket);
 }
 
+static int unix_datagram_send(const char *name, size_t name_length, const void *bytes, size_t length) {
+    (void)name, (void)name_length, (void)bytes, (void)length;
+    return 1;
+}
+
 // ---- Arguments, files and the environment ----------------------------------
 
 // The engine gives the module only the directories it is told to

@@ -1,0 +1,368 @@
+module HostTests
+
+// Sable.Hosting, tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Hosting
+
+import Sable.Concurrency
+import Sable.Hosting
+import Sable.IO
+import Sable.Process
+import Sable.Testing
+import Sable.Time
+
+import HostingSupport
+
+fn stopWhenStarted(_ host: Host) {
+    let lifetime = host.lifetime
+    let _ = lifetime.started.register { lifetime.requestStop() }
+}
+
+@test
+fn servicesStartInOrderAndStopInReverse() async {
+    let record = Record()
+    let builder = quietBuilder(TestClock())
+    builder.services.add("a", Recorded("a", record))
+    builder.services.add("b", Recorded("b", record))
+    builder.services.add("c", Recorded("c", record))
+    let host = try! builder.build()
+    let lifetime = host.lifetime
+    let running = Task.spawn { await outcome(host) }
+    let _ = await lifetime.started.cancellationRequested()
+    await record.awaitLine("run-a")
+    await record.awaitLine("run-b")
+    await record.awaitLine("run-c")
+    lifetime.requestStop()
+    assertEqual(await running.value, "")
+    let all = record.all
+    assert(all.hasSuffix("end-c stop-c end-b stop-b end-a stop-a"), all)
+    // Started in order; each one's run begins some time after.
+    let order = all.split(' ').filter { $0.hasPrefix("start") }.map { $0.toString() }.toArray()
+    assert(order == ["start-a", "start-b", "start-c"], all)
+}
+
+@test
+fn theEventsComeInOrder() async {
+    let record = Record()
+    let builder = quietBuilder(TestClock())
+    builder.services.add("a", Recorded("a", record))
+    let host = try! builder.build()
+    let _ = host.lifetime.started.register { record.add("started") }
+    let _ = host.lifetime.stopping.register { record.add("stopping") }
+    let _ = host.lifetime.stopped.register { record.add("stopped") }
+    let running = Task.spawn { await outcome(host) }
+    await record.awaitLine("started")
+    await record.awaitLine("run-a")
+    host.lifetime.requestStop()
+    host.lifetime.requestStop()
+    assertEqual(await running.value, "")
+    let all = record.all
+    assert(all.hasSuffix("stopping end-a stop-a stopped"), all)
+}
+
+@test
+fn aHostWithNoServicesRunsUntilItIsAsked() async {
+    let host = try! quietBuilder(TestClock()).build()
+    stopWhenStarted(host)
+    assertEqual(await outcome(host), "")
+    assert(host.lifetime.stopped.isCancellationRequested)
+}
+
+@test
+fn aServiceThatFailsStopsTheHost() async {
+    let record = Record()
+    let builder = quietBuilder(TestClock())
+    builder.services.add("a", Recorded("a", record))
+    builder.services.add("bad", Recorded("bad", record, failing: "run"))
+    let host = try! builder.build()
+    assertEqual(await outcome(host), "the service 'bad' failed: no run")
+    let all = record.all
+    assert(all.hasSuffix("stop-bad end-a stop-a"), all)
+}
+
+@test
+fn aServiceThatFailsMayBeIgnored() async {
+    let record = Record()
+    let builder = quietBuilder(TestClock())
+    builder.options.onServiceFailure = ServiceFailurePolicy.Ignore
+    builder.services.add("bad", Recorded("bad", record, failing: "run"))
+    builder.services.add("good", Recorded("good", record))
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await record.awaitLine("run-bad")
+    await record.awaitLine("run-good")
+    assert(!host.lifetime.stopping.isCancellationRequested)
+    host.lifetime.requestStop()
+    assertEqual(await running.value, "")
+    assert(record.all.hasSuffix("end-good stop-good stop-bad"), record.all)
+}
+
+@test
+fn aServicesOwnPolicyIsItsOwn() async {
+    let record = Record()
+    let builder = quietBuilder(TestClock())
+    builder.options.onServiceFailure = ServiceFailurePolicy.Ignore
+    builder.services.add("bad", Recorded("bad", record, failing: "run"), onFailure: ServiceFailurePolicy.StopHost)
+    assertEqual(await outcome(try! builder.build()), "the service 'bad' failed: no run")
+}
+
+@test
+fn aServiceThatFailsAsItStopsIsAFailure() async {
+    let record = Record()
+    let builder = quietBuilder(TestClock())
+    builder.services.add("bad", Recorded("bad", record, failing: "end"))
+    let host = try! builder.build()
+    stopWhenStarted(host)
+    assertEqual(await outcome(host), "the service 'bad' failed: no end")
+}
+
+@test
+fn aServiceEndedByItsCancellationHasNotFailed() async {
+    let record = Record()
+    let builder = quietBuilder(TestClock())
+    builder.services.add("a", Recorded("a", record, failing: "cancelled"))
+    let host = try! builder.build()
+    stopWhenStarted(host)
+    assertEqual(await outcome(host), "")
+}
+
+@test
+fn aStartThatFailsStopsThoseBeforeIt() async {
+    let record = Record()
+    let builder = quietBuilder(TestClock())
+    builder.services.add("a", Recorded("a", record))
+    builder.services.add("bad", Recorded("bad", record, failing: "start"))
+    builder.services.add("c", Recorded("c", record))
+    let host = try! builder.build()
+    assertEqual(await outcome(host), "the service 'bad' did not start: no start")
+    let all = record.all
+    assert(all.hasSuffix("end-a stop-a"), all)
+    assert(!all.contains("start-c") && !all.contains("stop-bad"), all)
+    assert(!host.lifetime.started.isCancellationRequested && host.lifetime.stopped.isCancellationRequested)
+}
+
+@test
+fn aStartIsTimed() async {
+    let record = Record()
+    let clock = TestClock()
+    let builder = quietBuilder(clock)
+    builder.options.startupTimeout = Duration.seconds(5)
+    builder.services.add("quick", Recorded("quick", record))
+    builder.services.add("slow", Recorded("slow", record, failing: "stuck start"))
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await record.awaitLine("start-slow")
+    await clock.pass(Duration.seconds(5))
+    assertEqual(await running.value, "the service 'slow' did not start in time")
+}
+
+@test
+fn aStopAskedForWhileStartingEndsTheStart() async {
+    let record = Record()
+    let builder = quietBuilder(TestClock())
+    builder.services.add("a", Recorded("a", record))
+    builder.services.add("slow", Recorded("slow", record, failing: "slow start"))
+    builder.services.add("c", Recorded("c", record))
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await record.awaitLine("start-slow")
+    host.lifetime.requestStop()
+    assertEqual(await running.value, "")
+    assert(!record.all.contains("start-c") && record.all.hasSuffix("end-a stop-a"), record.all)
+    assert(!host.lifetime.started.isCancellationRequested)
+}
+
+@test
+fn aStuckStartIsWaitedForNoLongerThanTheShutdownTimeout() async {
+    let record = Record()
+    let clock = TestClock()
+    let builder = quietBuilder(clock)
+    builder.services.add("stuck", Recorded("stuck", record, failing: "stuck start"))
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await record.awaitLine("start-stuck")
+    host.lifetime.requestStop()
+    await clock.pass(Duration.seconds(30))
+    assertEqual(await running.value, "not stopped in time: stuck")
+}
+
+@test
+fn aServiceThatIgnoresItsCancellationIsWaitedForNoLongerThanTheTimeout() async {
+    let record = Record()
+    let clock = TestClock()
+    let builder = quietBuilder(clock)
+    builder.options.shutdownTimeout = Duration.seconds(10)
+    builder.services.add("a", Recorded("a", record))
+    builder.services.add("stuck", Recorded("stuck", record, failing: "run stuck"))
+    builder.services.add("c", Recorded("c", record))
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await record.awaitLine("run-a")
+    await record.awaitLine("run-stuck")
+    await record.awaitLine("run-c")
+    host.lifetime.requestStop()
+    await record.awaitLine("stop-c")
+    await clock.awaitSleep(Duration.seconds(10))
+    clock.advance(Duration.milliseconds(9_999))
+    assert(!host.lifetime.stopped.isCancellationRequested)
+    clock.advance(Duration.milliseconds(1))
+    // What could not be told in time has not stopped in time either.
+    assertEqual(await running.value, "not stopped in time: stuck, a")
+    assert(host.lifetime.stopped.isCancellationRequested)
+    // Told all the same.
+    await record.awaitLine("end-a")
+    assert(!record.all.contains("stop-a"))
+}
+
+@test
+fn aServiceThatHadEndedIsNotLate() async {
+    let record = Record()
+    let clock = TestClock()
+    let builder = quietBuilder(clock)
+    builder.services.addWorker("brief") { _context, _cancellation in record.add("brief") }
+    builder.services.add("stuck", Recorded("stuck", record, failing: "run stuck"))
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await record.awaitLine("brief")
+    await record.awaitLine("run-stuck")
+    // Its step's end is told of a moment after.
+    try? await Task.sleep(for: Duration.milliseconds(20))
+    host.lifetime.requestStop()
+    await clock.pass(Duration.seconds(30))
+    assertEqual(await running.value, "not stopped in time: stuck")
+}
+
+@test
+fn aStopPastTheTimeoutIsHurried() async {
+    let record = Record()
+    let clock = TestClock()
+    let builder = quietBuilder(clock)
+    builder.services.add("a", Recorded("a", record, failing: "stop waits"))
+    let host = try! builder.build()
+    stopWhenStarted(host)
+    let running = Task.spawn { await outcome(host) }
+    await record.awaitLine("stop-a")
+    await clock.pass(Duration.seconds(30))
+    assertEqual(await running.value, "not stopped in time: a")
+    await record.awaitLine("hurried-a")
+}
+
+@test
+fn aStopThatFailsIsThrownAndTheRestStop() async {
+    let record = Record()
+    let builder = quietBuilder(TestClock())
+    builder.services.add("a", Recorded("a", record))
+    builder.services.add("bad", Recorded("bad", record, failing: "stop"))
+    let host = try! builder.build()
+    stopWhenStarted(host)
+    assertEqual(await outcome(host), "the service 'bad' did not stop cleanly: no stop")
+    assert(record.all.hasSuffix("stop-bad end-a stop-a"), record.all)
+}
+
+@test
+fn cancellingTheTaskThatRunsItStopsTheHost() async {
+    let record = Record()
+    let builder = quietBuilder(TestClock())
+    builder.services.add("a", Recorded("a", record))
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await record.awaitLine("run-a")
+    running.cancel()
+    assertEqual(await running.value, "")
+    assert(record.all.hasSuffix("end-a stop-a"), record.all)
+}
+
+@test
+fn aTermSignalStopsTheHost() async {
+    let record = Record()
+    let builder = quietBuilder(TestClock())
+    builder.options.handleSignals = true
+    builder.services.add("a", Recorded("a", record))
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await record.awaitLine("run-a")
+    Signals.raise(.Terminate)
+    assertEqual(await running.value, "")
+    assert(record.all.hasSuffix("end-a stop-a"), record.all)
+}
+
+@test
+fn aHangupReloads() async {
+    let record = Record()
+    let builder = quietBuilder(TestClock())
+    builder.options.handleSignals = true
+    builder.configuration = Reloaded { record: record, failing: false }
+    builder.services.add("a", Recorded("a", record))
+    let host = try! builder.build()
+    host.lifetime.onReload { record.add("handler") }
+    let running = Task.spawn { await outcome(host) }
+    await record.awaitLine("run-a")
+    Signals.raise(.Hangup)
+    await record.awaitLine("handler")
+    assert(record.all.contains("reload handler"), record.all)
+    Signals.raise(.Interrupt)
+    assertEqual(await running.value, "")
+}
+
+@test
+fn aHangupMayStop() async {
+    let record = Record()
+    let builder = quietBuilder(TestClock())
+    builder.options.handleSignals = true
+    builder.options.onHangup = HangupPolicy.Stop
+    let host = try! builder.build()
+    let _ = host.lifetime.started.register { Signals.raise(.Hangup) }
+    assertEqual(await outcome(host), "")
+}
+
+@test
+fn aReloadThatFailsStillRunsTheHandlers() async {
+    let record = Record()
+    let builder = quietBuilder(TestClock())
+    builder.configuration = Reloaded { record: record, failing: true }
+    let host = try! builder.build()
+    host.lifetime.onReload { record.add("handler") }
+    host.reload()
+    await record.awaitLine("handler")
+    assertEqual(record.all, "reload handler")
+}
+
+struct Reloaded: HostConfiguration {
+    let record: Record
+    let failing: Bool
+
+    fn value(_ key: String) -> String? => none
+
+    fn reload() async throws {
+        record.add("reload")
+        if failing {
+            throw TestError("no reload")
+        }
+    }
+}
+
+@test
+fn systemdThatIsNotThereDoesNotStopTheHost() async {
+    unsafe {
+        Environment.set("NOTIFY_SOCKET", "/nowhere/to/be/found")
+        Environment.set("WATCHDOG_USEC", "2000000")
+    }
+    let clock = TestClock()
+    let builder = quietBuilder(clock)
+    builder.useSystemd()
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await clock.pass(Duration.seconds(1))
+    await clock.awaitSleep(Duration.seconds(1))
+    host.lifetime.requestStop()
+    assertEqual(await running.value, "")
+}
+
+@test
+fn whatTheHostWasBuiltWithIsThere() {
+    let builder = quietBuilder(TestClock())
+    builder.environment.name = "Staging"
+    let host = try! builder.build()
+    assert(host.environment.isStaging)
+    assert(host.logging.minimumLevel == none)
+    assert(host.configuration.value("Sable:No:Such:Key") == none)
+}

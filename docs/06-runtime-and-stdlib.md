@@ -894,6 +894,11 @@ Sable.Process       Command (arguments, environment, directory, streams;
                     spawn, output, status), Child (piped streams, wait,
                     tryWait, kill, kill(tree:), signal), ExitStatus, Signal,
                     Signals (on, handle, raise), Process (run, exit, abort)
+Sable.Hosting       ApplicationBuilder and Host (services started in order,
+                    run side by side and stopped in reverse within a
+                    timeout; signals; failure policies), HostedService,
+                    ApplicationLifetime, recurring jobs (CronExpression,
+                    intervals, overlap policies), Systemd (sd_notify)
 Sable.Diagnostics   Logger (structured), tracing spans, metrics, Backtrace
 Sable.Testing       @test @bench, assertions, snapshot testing, property testing
 Sable.Interop       C FFI helpers, CString, CVarArg, callback shims
@@ -1150,6 +1155,63 @@ place.
   a program going once main has returned, as one waiting for a socket does.
 - **Cancellation.** `wait` throws `Cancelled`, and the child runs on:
   `withTimeout` limits a wait. `output` and `status` kill theirs.
+
+### Hosting
+
+`Sable.Hosting` is .NET's generic host over what the library has, with
+swift-service-lifecycle's ordering: `ApplicationBuilder` (`services`,
+`configuration`, `logging`, `environment`, `options`) builds a `Host`, whose
+`run` lasts as long as the program does.
+
+- **No container.** `services` is the list of services to run, each made by
+  a typed closure from a `HostContext` as the host is built; what two share
+  is made before them and captured by both. Dependency injection is #81's
+  (`Sable.DependencyInjection`), whose `@container` is checked when it is
+  compiled: a container resolved at run time here would be a second, weaker
+  one. A container plugs in as any value does, by being captured by the
+  closures that make services.
+- **Seams.** `configuration` is any `HostConfiguration` — a key's text, and
+  `reload` — with the environment's variables for the one there is: #80's
+  library is to conform to it. `logging` is the settings (`HostLogging`)
+  each task makes its own `Logger` from, as a Logger is mutable and not
+  Sendable; providers are #83's. All the host knows of time is `HostClock`
+  — now, and sleep until — which tests replace, and #61's Clock is to.
+- **Starting and stopping.** A service's `start` is awaited before the next
+  service's begins, and its `run` is started as it ends. Stopping goes the
+  other way: the last service's token is cancelled, its `run` waited for,
+  its `stop` run, and only then the one before told. Its token is a request;
+  its task is cancelled only when the timeout runs out, so that work under
+  way may finish, its waits and sleeps with it (`HostContext.sleep` is one
+  the token ends).
+- **The timeout.** A child task cannot be let go: its parent waits for it
+  (§6.7). So each step of a service is a detached task whose end is a
+  promise the host waits for, and which the deadline completes in its
+  place; on every other path the host waits for them all, as a group would.
+  A service given up on runs on, and a program's end waits for its tasks:
+  `runToExit` ends the process all the same, and is how a daemon's main
+  ends.
+- **Signals.** SIGTERM and SIGINT stop the host, SIGHUP reloads it (or stops
+  it, by option; on Windows, where it is the console closing, always). A
+  SIGINT while stopping ends the program with status 130 — by the process's
+  exit, since what it would otherwise wait for is what is stuck.
+- **Failure.** A service whose `run` throws stops the host, which then
+  throws it, or is logged and left (`ServiceFailurePolicy`); one that
+  returns has ended, and stops nothing.
+- **Cron.** Five fields, as Vixie cron reads them, and Vixie's rule where
+  clocks change: a job whose minute and hour are both fixed runs once a
+  day, as soon as a gap that skipped it is over and the first time in a
+  fold; any other follows the clock as it goes. It is computed from the
+  zone's transitions, between which local time and elapsed time go together,
+  not by trying times. Missed times are not made up for, and a clock set
+  back does not hold a job up. A run that falls due during another is
+  skipped, queued or run beside it (`OverlapPolicy`).
+- **Service managers.** `Systemd.notify` sends a datagram to NOTIFY_SOCKET
+  (`process_notify`; a path, or an abstract name on Linux; not vsock), and
+  `useSystemd` sends READY, RELOADING, STOPPING and the watchdog's. launchd
+  needs nothing but the foreground and SIGTERM. A Windows service is not
+  built: its control dispatcher takes over a thread for the service's life
+  and its stop request comes to a handler there, which is a runtime layer
+  that could not be tested here.
 
 ### Source layout
 

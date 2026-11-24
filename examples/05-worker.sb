@@ -1,0 +1,105 @@
+module Examples.Worker
+
+import Sable.Concurrency
+import Sable.Diagnostics
+import Sable.Hosting
+import Sable.Time
+
+// ---------------------------------------------------------------------------
+// A worker: services the host starts in order, runs side by side, and stops
+// in reverse, each once those that use it have stopped.
+// ---------------------------------------------------------------------------
+
+public struct Order: Sendable {
+    public let id: Int
+    public let item: String
+}
+
+/// Takes in orders, until there are no more: a daemon's would come from a
+/// socket, and it would stop at a SIGTERM rather than ask to.
+@immutable
+final class Intake: HostedService {
+    let orders: Channel<Order>
+    let lifetime: ApplicationLifetime
+
+    init(orders: Channel<Order>, lifetime: ApplicationLifetime) {
+        self.orders = orders
+        self.lifetime = lifetime
+    }
+
+    async fn start(cancellation: CancellationToken) throws {
+        print("intake: open")
+    }
+
+    async fn run(cancellation: CancellationToken) throws {
+        // Once every service is there.
+        let _ = await lifetime.started.cancellationRequested()
+        let items: String[>..] = ["tea", "cups", "a kettle"]
+        var id = 1
+        for item in items {
+            if cancellation.isCancellationRequested {
+                return
+            }
+            await orders.send(Order { id: id, item: item })
+            id += 1
+        }
+        lifetime.requestStop()
+    }
+
+    async fn stop(cancellation: CancellationToken) throws {
+        // Nothing more comes in: what the shipper has left is all there is.
+        print("intake: closed")
+        await orders.close()
+    }
+}
+
+/// Ships what comes in. Told to stop, it finishes what it was given: it is
+/// the orders' end that ends it, or the host's shutdown timeout, if that is
+/// too long coming.
+@immutable
+final class Shipper: HostedService {
+    let orders: Channel<Order>
+
+    init(orders: Channel<Order>) {
+        self.orders = orders
+    }
+
+    async fn run(cancellation: CancellationToken) throws {
+        while let order = await orders.receive() {
+            print("shipped \(order.id): \(order.item)")
+        }
+    }
+
+    async fn stop(cancellation: CancellationToken) throws {
+        print("shipper: done")
+    }
+}
+
+@main
+async fn main() {
+    let builder = ApplicationBuilder()
+    builder.logging.minimumLevel = Level.Warning
+    builder.options.shutdownTimeout = Duration.seconds(10)
+    // With Type=notify in its unit; nothing, where systemd did not start it.
+    builder.useSystemd()
+
+    // What two services share is made before either.
+    let orders = Channel<Order>()
+    builder.services.add("shipper", Shipper(orders: orders))
+    builder.services.add("intake", make: { context in Intake(orders: orders, lifetime: context.lifetime) })
+
+    // Every weekday morning, on Prague's clocks, whatever they do in March.
+    let prague = (try? TimeZone.find("Europe/Prague")) ?? TimeZone.utc
+    do {
+        try builder.services.addRecurring("30 8 * * mon-fri", name: "report", options: RecurringOptions(zone: prague)) { _cancellation in
+            print("good morning")
+        }
+        let host = try builder.build()
+        host.lifetime.onReload { print("reloaded") }
+        // A daemon's main ends with 'runToExit', which waits for no service
+        // the host gave up on.
+        try await host.run()
+    } catch {
+        print("\(error)")
+    }
+}

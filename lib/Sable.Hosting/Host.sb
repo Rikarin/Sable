@@ -1,0 +1,382 @@
+module Sable.Hosting
+
+import Sable.Concurrency
+import Sable.Diagnostics
+import Sable.Process
+import Sable.Time
+
+/// A program's services, run until it is asked to stop: .NET's `IHost`,
+/// swift-service-lifecycle's `ServiceGroup`. Built by `ApplicationBuilder`.
+///
+/// Services start one by one in the order added, each one's `run` begun as
+/// soon as its `start` is done. They stop in the reverse order, each ended
+/// before the next is told: what a service uses outlasts it. All of stopping
+/// is given `HostOptions.shutdownTimeout`: when that runs out, every service
+/// left is told, its task cancelled, and waited for no more.
+///
+/// It stops when SIGTERM or SIGINT comes, a service fails whose policy that
+/// is, `ApplicationLifetime.requestStop` is called, or the task that runs it
+/// is cancelled. A SIGINT that comes while it is stopping ends the program
+/// there, with status 130.
+///
+/// ```sable
+/// let builder = ApplicationBuilder()
+/// builder.options.handleSignals = false
+/// builder.services.addWorker("work") { _context, cancellation in
+///     let _ = await cancellation.cancellationRequested()
+/// }
+/// let host = try! builder.build()
+/// let _ = host.lifetime.started.register { host.lifetime.requestStop() }
+/// try! await host.run()
+/// ```
+@immutable
+public final class Host {
+    let context: HostContext
+    let options: HostOptions
+    let runs: ServiceRun[>..]
+    let systemd: Bool
+    let begun: Atomic<Bool>
+
+    init(context: HostContext, options: HostOptions, runs: ServiceRun[>..], systemd: Bool) {
+        self.context = context
+        self.options = options
+        self.runs = runs
+        self.systemd = systemd
+        begun = Atomic(false)
+    }
+
+    /// When it starts and stops, and how to ask it to.
+    public var lifetime: ApplicationLifetime => context.lifetime
+    /// Where it runs.
+    public var environment: HostEnvironment => context.environment
+    /// What it is configured by.
+    public var configuration: any HostConfiguration => context.configuration
+    /// How it logs.
+    public var logging: HostLogging => context.logging
+
+    /// Runs the host until it has stopped, throwing what went wrong first,
+    /// if anything did. A host is run once: a second time traps.
+    ///
+    /// A service the host gave up waiting for is a task that runs on, and a
+    /// program does not end before its tasks have: after ShutdownTimedOut,
+    /// end it (`Process.exit`), as `runToExit` does.
+    public fn run() async throws(HostError) {
+        precondition(!begun.exchange(true), "a host is run once")
+        // A task of its own: cancelling the one that called stops the host,
+        // which takes time of its own to stop.
+        let serving = Task.detached { await self.serve() }
+        let lifetime = self.lifetime
+        let failure = await withTaskCancellationHandler(operation: { await serving.value }, onCancel: { lifetime.requestStop() })
+        if let error = failure {
+            throw error
+        }
+    }
+
+    /// Runs the host until it has stopped, then ends the program, whatever
+    /// its tasks are at: status 0, or 1 and what went wrong on standard error.
+    public fn runToExit() async -> Never {
+        do {
+            try await run()
+        } catch {
+            Runtime.writeError(error.description() + "\n")
+            Process.exit(1)
+        }
+        Process.exit(0)
+    }
+
+    // The host's life, and what went wrong in it.
+    fn serve() async -> HostError? {
+        let signals = listen()
+        return await withTaskGroup(of: Void.self) { group in
+            if let heard = signals {
+                group.spawn { await self.answer(heard) }
+            }
+            if self.systemd {
+                group.spawn { await self.keepAlive() }
+            }
+            let failure = await self.startAndStop()
+            group.cancelAll()
+            return failure
+        }
+    }
+
+    fn startAndStop() async -> HostError? {
+        let failure = FirstFailure()
+        // Asked to stop, the host has so long: told of at once, as a start
+        // may be what it waits for.
+        let stopping = lifetime.stopping
+        let current = CurrentStep()
+        let deadline = CancellationTokenSource()
+        let timer = Task.detached {
+            if await stopping.cancellationRequested() {
+                try? await self.context.clock.sleep(until: self.context.clock.now.adding(self.options.shutdownTimeout))
+                if !Task.isCancelled {
+                    deadline.cancel()
+                    current.abandon()
+                }
+            }
+        }
+
+        var started = 0
+        while started < runs.count && !stopping.isCancellationRequested {
+            if !(await start(runs[started], current, failure)) {
+                break
+            }
+            started += 1
+        }
+        if started == runs.count && !stopping.isCancellationRequested {
+            log(Level.Info, "started", [field("environment", environment.name)])
+            await notify(Systemd.ready)
+            lifetime.startedSource.cancel()
+            let _ = await stopping.cancellationRequested()
+        }
+        lifetime.requestStop()
+        log(Level.Info, "stopping", [])
+        await notify(Systemd.stopping)
+
+        let late = await stop(started, current, deadline, failure)
+        timer.cancel()
+        let _ = await timer.value
+        if !late.isEmpty {
+            failure.set(HostError.ShutdownTimedOut(services: late))
+            log(Level.Error, "not stopped in time", [field("services", late.joined(separator: ", "))])
+        }
+        log(Level.Info, "stopped", [])
+        lifetime.stoppedSource.cancel()
+        return failure.value
+    }
+
+    // Whether the service started, its run then begun.
+    fn start(_ one: ServiceRun, _ current: CurrentStep, _ failure: FirstFailure) async -> Bool {
+        let service = one.service
+        let stopping = lifetime.stopping
+        let step = ServiceStep()
+        current.set(step)
+        step.begin { try await service.start(cancellation: stopping) }
+        let timedOut = Atomic(false)
+        var limit: Task<Void>? = none
+        if let most = options.startupTimeout {
+            let clock = context.clock
+            limit = Task.detached {
+                try? await clock.sleep(until: clock.now.adding(most))
+                if !Task.isCancelled {
+                    timedOut.store(true)
+                    step.abandon()
+                }
+            }
+        }
+        let end = await step.end()
+        limit?.cancel()
+        current.set(none)
+        match end {
+            case .Done => { }
+            case .Failed(let error) => {
+                if !(stopping.isCancellationRequested && error is CancellationError) {
+                    failure.set(HostError.StartFailed(service: one.name, error: error))
+                    log(Level.Error, "a service did not start", [field("service", one.name), field("error", error.description())])
+                }
+                return false
+            }
+            case .Abandoned => {
+                if timedOut.load() {
+                    failure.set(HostError.StartTimedOut(service: one.name))
+                    log(Level.Error, "a service did not start in time", [field("service", one.name)])
+                } else {
+                    failure.set(HostError.ShutdownTimedOut(services: [one.name]))
+                }
+                return false
+            }
+        }
+
+        let token = one.source.token
+        let lifetime = self.lifetime
+        one.run.begin {
+            do {
+                try await service.run(cancellation: token)
+            } catch {
+                if token.isCancellationRequested && error is CancellationError {
+                    return
+                }
+                self.log(Level.Error, "a service failed", [field("service", one.name), field("error", error.description())])
+                if one.onFailure == ServiceFailurePolicy.StopHost {
+                    failure.set(HostError.ServiceFailed(service: one.name, error: error))
+                    lifetime.requestStop()
+                }
+            }
+        }
+        return true
+    }
+
+    // The services that started stopped, the last first; those that did not
+    // end before the deadline.
+    fn stop(_ started: Int, _ current: CurrentStep, _ deadline: CancellationTokenSource, _ failure: FirstFailure) async -> String[>..] {
+        var late: String[>..] = []
+        var i = started - 1
+        while i >= 0 {
+            let one = runs[i]
+            i -= 1
+            one.source.cancel()
+            var ended = await finish(one.run, current, deadline)
+            // Nothing is begun past the deadline.
+            if ended && !deadline.isCancellationRequested {
+                let service = one.service
+                let step = ServiceStep()
+                step.begin { try await service.stop(cancellation: deadline.token) }
+                ended = await finish(step, current, deadline)
+                if ended {
+                    if case .Failed(let error) = await step.end() {
+                        failure.set(HostError.StopFailed(service: one.name, error: error))
+                        log(Level.Error, "a service did not stop cleanly", [field("service", one.name), field("error", error.description())])
+                    }
+                }
+            }
+            if !ended {
+                late.append(one.name)
+            }
+        }
+        return late
+    }
+
+    // Waits for the step to end: false when the deadline came first.
+    fn finish(_ step: ServiceStep, _ current: CurrentStep, _ deadline: CancellationTokenSource) async -> Bool {
+        current.set(step)
+        // The deadline may have come before it was the one to abandon.
+        if deadline.isCancellationRequested {
+            step.abandon()
+        }
+        let end = await step.end()
+        current.set(none)
+        if case .Abandoned = end {
+            return false
+        }
+        return true
+    }
+
+    // ---- Signals -----------------------------------------------------------
+
+    fn listen() -> SignalSequence? {
+        if !options.handleSignals {
+            return none
+        }
+        do {
+            #if os(windows)
+            return try Signals.on([.Terminate, .Interrupt, .Hangup, .Quit])
+            #else
+            return try Signals.on([.Terminate, .Interrupt, .Hangup])
+            #endif
+        } catch {
+            log(Level.Warning, "signals are not heard", [field("error", error.description())])
+            return none
+        }
+    }
+
+    fn answer(_ signals: SignalSequence) async {
+        for await signal in signals {
+            if signal == Signal.Hangup && reloadsOnHangup {
+                self.reload()
+                continue
+            }
+            if signal == Signal.Interrupt && lifetime.stopping.isCancellationRequested {
+                log(Level.Warning, "interrupted while stopping: ending at once", [])
+                Process.exit(130)
+            }
+            log(Level.Info, "asked to stop", [field("signal", signal.name)])
+            lifetime.requestStop()
+        }
+    }
+
+    var reloadsOnHangup: Bool {
+        get {
+            #if os(windows)
+            return false
+            #else
+            return options.onHangup == HangupPolicy.Reload
+            #endif
+        }
+    }
+
+    /// Reloads the configuration, then runs `ApplicationLifetime.onReload`'s
+    /// handlers, in a task of its own: what a SIGHUP does.
+    public fn reload() {
+        let _ = Task.detached {
+            await self.lifetime.reload {
+                self.log(Level.Info, "reloading", [])
+                await self.notify(Systemd.reloading)
+                do {
+                    try await self.configuration.reload()
+                } catch {
+                    self.log(Level.Error, "the configuration was not reloaded", [field("error", error.description())])
+                }
+            }
+            await self.notify(Systemd.ready)
+        }
+    }
+
+    // ---- systemd -----------------------------------------------------------
+
+    fn notify(_ state: String) async {
+        if !systemd {
+            return
+        }
+        let text = state == Systemd.reloading ? Systemd.reloadingNow() : state
+        if !(await Task.blocking { Systemd.notify(text) }) {
+            log(Level.Warning, "systemd was not told", [field("state", state)])
+        }
+    }
+
+    // Told twice in each of the watchdog's intervals.
+    fn keepAlive() async {
+        guard let interval = Systemd.watchdogInterval else { return }
+        while true {
+            do {
+                try await context.clock.sleep(until: context.clock.now.adding(interval.dividedBy(2)))
+            } catch {
+                return
+            }
+            await notify(Systemd.watchdog)
+        }
+    }
+
+    fn log(_ level: Level, _ message: String, _ fields: Field[>..]) {
+        logging.write(level, message, fields)
+    }
+}
+
+// What went wrong first.
+@immutable
+final class FirstFailure {
+    let held: Mutex<HostError?>
+
+    init() {
+        held = Mutex(none)
+    }
+
+    var value: HostError? => held.withLock { (error: inout HostError?) -> HostError? in error }
+
+    fn set(_ error: HostError) {
+        held.withLock { (first: inout HostError?) -> Void in
+            if first == none {
+                first = error
+            }
+        }
+    }
+}
+
+// The step the host waits for, for the deadline to abandon.
+@immutable
+final class CurrentStep {
+    let held: Mutex<ServiceStep?>
+
+    init() {
+        held = Mutex(none)
+    }
+
+    fn set(_ step: ServiceStep?) {
+        held.withLock { (current: inout ServiceStep?) -> Void in current = step }
+    }
+
+    fn abandon() {
+        let current = held.withLock { (current: inout ServiceStep?) -> ServiceStep? in current }
+        current?.abandon()
+    }
+}

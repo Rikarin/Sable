@@ -81,6 +81,21 @@ public sealed class ExampleProgramTests {
             Run("04-async-service.sb", OneThread)
         );
 
+    [Fact]
+    public void TheWorkerStartsShipsAndStops() =>
+        Assert.Equal(
+            """
+            intake: open
+            shipped 1: tea
+            shipped 2: cups
+            shipped 3: a kettle
+            intake: closed
+            shipper: done
+
+            """,
+            Run("05-worker.sb", OneThread)
+        );
+
     /// <summary>Run with no pool, for the service: which of its workers serves which request depends on how they interleave.</summary>
     static string Run(string example, IReadOnlyDictionary<string, string>? environment = null) =>
         AssertAgree(File.ReadAllText(Path.Combine(Root, "examples", example)), stepLimit: 50_000_000, environment: environment).Stdout;

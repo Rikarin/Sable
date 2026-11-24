@@ -1,0 +1,12 @@
+module Sable.Hosting
+
+/// What the host does on a SIGHUP. (On Windows, where it is the console's
+/// window being closed, it always stops.)
+@derive(Equatable, Debug)
+public enum HangupPolicy {
+    /// It reloads: the configuration, then `ApplicationLifetime.onReload`'s
+    /// handlers.
+    Reload
+    /// It stops, as at a SIGTERM.
+    Stop
+}

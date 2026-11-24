@@ -6499,13 +6499,6 @@ public sealed partial class Binder {
         };
 
     /// <summary>
-    ///     True for an expression whose type the context may still decide.
-    /// </summary>
-    /// <remarks>
-    ///     A numeric literal has no type until something asks for one, and an
-    ///     array literal has no storage kind; both bend to fit.
-    /// </remarks>
-    /// <summary>
     ///     An expression of literals alone — <c>29 &lt;&lt; 112</c>, <c>-(1 + 2)</c> —
     ///     which, like a literal, has the type its context asks for.
     /// </summary>
@@ -6553,6 +6546,13 @@ public sealed partial class Binder {
         return ContainsUninferred(type, function) ? null : type;
     }
 
+    /// <summary>
+    ///     True for an expression whose type the context may still decide.
+    /// </summary>
+    /// <remarks>
+    ///     A numeric literal has no type until something asks for one, and an
+    ///     array literal has no storage kind; both bend to fit.
+    /// </remarks>
     static bool IsLiteral(BoundExpression expression) =>
         expression is BoundLiteral or BoundArray or BoundDictionary
         || expression is BoundRange range && (range.Lower is null or BoundLiteral) && (range.Upper is null or BoundLiteral);

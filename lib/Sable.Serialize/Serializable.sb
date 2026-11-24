@@ -1,0 +1,27 @@
+module Sable.Serialize
+
+/// A value that can be written to an Encoder and read back from a Decoder,
+/// in any format they speak (JSON today): Swift's `Codable`, Rust's serde.
+/// `@derive(Serializable)` writes both for a struct, an enum or a union,
+/// field by field, at compile time — no reflection at run time — with
+/// `@serialize(…)` to rename, skip or default a field (`rename:`, `skip`,
+/// `defaulted`), rename them all, and
+/// choose how a union's case is tagged.
+///
+/// ```sable
+/// @derive(Serializable)
+/// struct Point {
+///     var x: Int
+///     var y: Int
+/// }
+/// let text = try! Json.encode(Point { x: 1, y: 2 })
+/// assert(text == "{\"x\":1,\"y\":2}")
+/// assert(try! Json.decode(Point.self, from: text).y == 2)
+/// ```
+public protocol Serializable {
+    /// The value written to the encoder.
+    fn encode(to encoder: Encoder) throws(SerializeError)
+
+    /// The value the decoder holds, or why it holds none.
+    static fn decode(from decoder: Decoder) throws(SerializeError) -> Self
+}

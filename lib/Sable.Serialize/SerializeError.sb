@@ -1,0 +1,29 @@
+module Sable.Serialize
+
+/// Why a value could not be encoded, or text not decoded into a type: each
+/// with where, as a JSONPath from the document's root — `$.items[3].name`.
+@derive(Equatable, Debug)
+public union SerializeError: Error {
+    /// A field the type needs is not there.
+    MissingField(path: String)
+    /// A value of another kind than the type takes: what it wanted, and
+    /// what it found ("an object", "a string", …).
+    TypeMismatch(path: String, expected: String, found: String)
+    /// A value of the right kind that the type does not take: a number out
+    /// of range, a NaN to write as JSON, a malformed UUID.
+    InvalidValue(path: String, reason: String)
+    /// A union's or an enum's case that it does not have.
+    UnknownCase(path: String, name: String)
+    /// The text is not well-formed: what the parser found.
+    Syntax(reason: String)
+
+    public fn description() -> String {
+        return match self {
+            case .MissingField(let path)                          => "\(path): missing"
+            case .TypeMismatch(let path, let expected, let found) => "\(path): expected \(expected), found \(found)"
+            case .InvalidValue(let path, let reason)              => "\(path): \(reason)"
+            case .UnknownCase(let path, let name)                 => "\(path): no case '\(name)'"
+            case .Syntax(let reason)                              => "not JSON: \(reason)"
+        }
+    }
+}

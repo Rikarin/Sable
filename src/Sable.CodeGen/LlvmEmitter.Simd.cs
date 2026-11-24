@@ -196,20 +196,14 @@ public sealed partial class LlvmEmitter {
             if (element == SilType.BF16) {
                 var arithmetic = op is "add" or "sub" or "mul" or "div" or "rem" or "neg" or "abs" or "min" or "max" || op.StartsWith("cmp_", StringComparison.Ordinal);
                 var wide = new VectorType(arithmetic ? SilType.F32 : SilType.F64, vector.Count);
-                var widened = operands.Select(o => {
-                    var w = Fresh();
-                    Line($"{w} = fpext {t} {o} to {Type(wide)}");
-                    return w;
-                }).ToArray();
+                var widened = operands.Select(o => arithmetic ? Bf16LanesToFloat(vector.Count, o) : Bf16LanesToDouble(vector.Count, o)).ToArray();
 
                 var computed = LaneWise(op, wide, widened);
                 if (op.StartsWith("cmp_", StringComparison.Ordinal)) {
                     return computed;
                 }
 
-                var narrowed = Fresh();
-                Line($"{narrowed} = fptrunc {Type(wide)} {computed} to {t}");
-                return narrowed;
+                return arithmetic ? FloatLanesToBf16(vector.Count, computed) : DoubleLanesToBf16(vector.Count, computed);
             }
 
             var result = Fresh();
@@ -410,11 +404,14 @@ public sealed partial class LlvmEmitter {
             var result = Fresh();
             var wide = new VectorType(SilType.F64, from.Count);
             if (a == SilType.BF16) {
-                Line($"{result} = fpext {Type(from)} {value} to {Type(wide)}");
-                return ConvertLanes(wide, to, result);
+                return ConvertLanes(wide, to, Bf16LanesToDouble(from.Count, value));
             }
 
-            if (b == SilType.BF16 || b == SilType.F16 && SilType.IsInteger(a)) {
+            if (b == SilType.BF16) {
+                return DoubleLanesToBf16(to.Count, a == SilType.F64 ? value : ConvertLanes(from, wide, value));
+            }
+
+            if (b == SilType.F16 && SilType.IsInteger(a)) {
                 var asDouble = a == SilType.F64 ? value : ConvertLanes(from, wide, value);
                 Line($"{result} = fptrunc {Type(wide)} {asDouble} to {Type(to)}");
                 return result;
@@ -450,6 +447,78 @@ public sealed partial class LlvmEmitter {
             var fromWidth = SilType.FloatBits(a)!.Value;
             var toWidth = SilType.FloatBits(b)!.Value;
             Line($"{result} = {(toWidth > fromWidth ? "fpext" : "fptrunc")} {Type(from)} {value} to {Type(to)}");
+            return result;
+        }
+            // A BF16 lane is its bits, an i16, as a scalar BF16 is (LlvmEmitter's
+        // Bf16ToFloat says why): these are the scalar's widening and
+        // narrowing, lane by lane, so a lane rounds as the scalar does.
+
+        /// <summary>A constant vector of one i32 in every lane.</summary>
+        static string I32Lanes(int count, string value) => Constant(new VectorType(SilType.I32, count), value);
+
+        /// <summary>The floats BF16 lanes widen to exactly: each one's bits, the float's top sixteen.</summary>
+        string Bf16LanesToFloat(int count, string value) {
+            var (wide, shifted, result) = (Fresh(), Fresh(), Fresh());
+            Line($"{wide} = zext <{count} x i16> {value} to <{count} x i32>");
+            Line($"{shifted} = shl <{count} x i32> {wide}, {I32Lanes(count, "16")}");
+            Line($"{result} = bitcast <{count} x i32> {shifted} to <{count} x float>");
+            return result;
+        }
+
+        /// <summary>The doubles BF16 lanes widen to exactly.</summary>
+        string Bf16LanesToDouble(int count, string value) {
+            var result = Fresh();
+            Line($"{result} = fpext <{count} x float> {Bf16LanesToFloat(count, value)} to <{count} x double>");
+            return result;
+        }
+
+        /// <summary>Each float rounded to the nearest BF16, ties to even; a NaN stays one, made quiet.</summary>
+        string FloatLanesToBf16(int count, string value) {
+            var i = $"<{count} x i32>";
+            var (bits, high, odd, bias, rounded, roundedHigh, quiet, isNaN, chosen, result) =
+                (Fresh(), Fresh(), Fresh(), Fresh(), Fresh(), Fresh(), Fresh(), Fresh(), Fresh(), Fresh());
+            Line($"{bits} = bitcast <{count} x float> {value} to {i}");
+            Line($"{high} = lshr {i} {bits}, {I32Lanes(count, "16")}");
+            Line($"{odd} = and {i} {high}, {I32Lanes(count, "1")}");
+            Line($"{bias} = add {i} {odd}, {I32Lanes(count, "32767")}");
+            Line($"{rounded} = add {i} {bits}, {bias}");
+            Line($"{roundedHigh} = lshr {i} {rounded}, {I32Lanes(count, "16")}");
+            Line($"{quiet} = or {i} {high}, {I32Lanes(count, "64")}");
+            Line($"{isNaN} = fcmp uno <{count} x float> {value}, {value}");
+            Line($"{chosen} = select <{count} x i1> {isNaN}, {i} {quiet}, {i} {roundedHigh}");
+            Line($"{result} = trunc {i} {chosen} to <{count} x i16>");
+            return result;
+        }
+
+        /// <summary>
+        ///     Each double rounded once to the nearest BF16: through a float
+        ///     rounded to odd, as the scalar's DoubleToBf16, so the second
+        ///     rounding never lands on a tie the first made. A NaN is the quiet one.
+        /// </summary>
+        string DoubleLanesToBf16(int count, string value) {
+            var (f, d, i) = ($"<{count} x float>", $"<{count} x double>", $"<{count} x i32>");
+            var (single, back, inexact, magnitude, finite, adjust, bits) = (Fresh(), Fresh(), Fresh(), Fresh(), Fresh(), Fresh(), Fresh());
+            var (backMagnitude, valueMagnitude, away, down, towardZero, odd, adjusted, oddSingle, isNaN, result) =
+                (Fresh(), Fresh(), Fresh(), Fresh(), Fresh(), Fresh(), Fresh(), Fresh(), Fresh(), Fresh());
+            var infinity = Constant(new VectorType(SilType.F32, count), "0x7FF0000000000000");
+            Line($"{single} = fptrunc {d} {value} to {f}");
+            Line($"{back} = fpext {f} {single} to {d}");
+            Line($"{inexact} = fcmp one {d} {back}, {value}");
+            Line($"{magnitude} = call {f} {Intrinsic($"llvm.fabs.v{count}f32", f, f)}({f} {single})");
+            Line($"{finite} = fcmp one {f} {magnitude}, {infinity}");
+            Line($"{adjust} = and <{count} x i1> {inexact}, {finite}");
+            Line($"{bits} = bitcast {f} {single} to {i}");
+            Line($"{backMagnitude} = call {d} {Intrinsic($"llvm.fabs.v{count}f64", d, d)}({d} {back})");
+            Line($"{valueMagnitude} = call {d} {Intrinsic($"llvm.fabs.v{count}f64", d, d)}({d} {value})");
+            Line($"{away} = fcmp ogt {d} {backMagnitude}, {valueMagnitude}");
+            Line($"{down} = sub {i} {bits}, {I32Lanes(count, "1")}");
+            Line($"{towardZero} = select <{count} x i1> {away}, {i} {down}, {i} {bits}");
+            Line($"{odd} = or {i} {towardZero}, {I32Lanes(count, "1")}");
+            Line($"{adjusted} = select <{count} x i1> {adjust}, {i} {odd}, {i} {bits}");
+            Line($"{oddSingle} = bitcast {i} {adjusted} to {f}");
+            var narrowed = FloatLanesToBf16(count, oddSingle);
+            Line($"{isNaN} = fcmp uno {d} {value}, {value}");
+            Line($"{result} = select <{count} x i1> {isNaN}, <{count} x i16> {Constant(new VectorType(SilType.BF16, count), "32704")}, <{count} x i16> {narrowed}");
             return result;
         }
     }

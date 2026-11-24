@@ -39,9 +39,19 @@ public sealed partial class SilGen {
             : null;
     }
 
-    /// <summary>Whether code in <paramref name="here" /> is inside the actor's own declaration or extensions.</summary>
+    /// <summary>
+    ///     Whether code in <paramref name="here" /> runs on the actor: inside
+    ///     its own declaration or extensions, and not in a 'nonisolated'
+    ///     member of it (or a function inside one), which runs wherever its
+    ///     caller does and so reaches the actor's isolated members as code
+    ///     outside it does, by a hop.
+    /// </summary>
     static bool Inside(Symbol here, NamedTypeSymbol actor) {
         for (Symbol? at = here; at is not null; at = at.ContainingSymbol) {
+            if (at is FunctionSymbol && IsNonisolated(at)) {
+                return false;
+            }
+
             if (ReferenceEquals(at, actor) || at is ExtensionSymbol { ExtendedType: var extended } && ReferenceEquals(extended.OriginalDefinition, actor)) {
                 return true;
             }

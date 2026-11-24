@@ -269,6 +269,44 @@ public sealed class AsyncLoweringTests {
     }
 
     /// <summary>
+    ///     A 'nonisolated' member of an actor runs wherever its caller does,
+    ///     so its calls of the actor's isolated members hop as calls from
+    ///     outside do (AsyncMutex.withLock: without the hop, tasks ran 'lock'
+    ///     and 'unlock' at once, two holding the lock and wake-ups lost).
+    /// </summary>
+    [Fact]
+    public void ANonisolatedMemberHopsIntoItsOwnActor() {
+        var module = Lower("""
+                           module M
+                           actor Gate {
+                               var locked = false
+                               fn lock() { locked = true }
+                               fn unlock() { locked = false }
+                           }
+
+                           extension Gate {
+                               nonisolated fn around(_ body: async () -> Int) async -> Int {
+                                   await self.lock()
+                                   let result = await body()
+                                   await self.unlock()
+                                   return result
+                               }
+                           }
+
+                           @main
+                           fn main() async {
+                               let gate = Gate()
+                               print(await gate.around { 1 })
+                           }
+                           """);
+
+        var around = module.Functions.Where(static f => f.Name.Contains("Gate.around", StringComparison.Ordinal)).ToList();
+        Assert.NotEmpty(around);
+        Assert.True(around.Sum(static f => f.Blocks.SelectMany(static b => b.Instructions).Count(static i => i is BuiltinInst { Name: "task_hop" })) >= 4);
+        Assert.Equal("1\n", Run(module).Output);
+    }
+
+    /// <summary>
     ///     A call into an actor from outside it hops onto the actor and back
     ///     (SilGen.Actors.cs), and so does a read of its state; a call the
     ///     actor makes to itself, or to what is 'nonisolated', does not.

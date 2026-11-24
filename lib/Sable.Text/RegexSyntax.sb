@@ -1,0 +1,1007 @@
+module Sable.Text
+
+// Reading a pattern: the syntax of Rust's regex and RE2, with .NET's and
+// Perl's backtracking constructs besides, into a tree the compiler
+// (RegexProgram.sb) turns into instructions.
+//
+//   a  \.  \n  \x41  \x{1F600}  é      a character
+//   .  [a-z]  [^\d\s]  [\w&&[^_]]  [[:alpha:]]  \d \w \s  \p{Lu} \PL      classes
+//   ^  $  \A  \z  \b  \B                                    assertions
+//   (a)  (?<name>a)  (?P<name>a)  (?:a)  (?i)  (?i-s:a)     groups and flags
+//   a*  a+  a?  a{2}  a{2,}  a{2,5}  a{,5}, each lazy with ?   repetition
+//   a|b                                                     alternation
+//   \1  \k<name>  (?=a) (?!a) (?<=a) (?<!a)  (?>a)  a*+      backtracking only
+//
+// Classes are Unicode's: \d is any decimal digit, \w any word character,
+// \s any white space, \b a boundary between a word character and another.
+
+// What an assertion asserts about its place in the text.
+const lookStartText = 0
+const lookEndText = 1
+const lookStartLine = 2
+const lookEndLine = 3
+const lookWordBoundary = 4
+const lookNotWordBoundary = 5
+
+/// A pattern, as a tree.
+union RegexNode {
+    /// Matches the empty string.
+    Empty
+    /// One character.
+    Literal(code: Int)
+    /// One character of a class: an index into the parser's classes.
+    Set(index: Int)
+    /// Any character.
+    AnyChar
+    /// Any character but a line feed.
+    AnyButNewline
+    Look(kind: Int)
+    /// A capturing group, numbered from 1.
+    Group(node: RegexNode, index: Int)
+    Concat(items: RegexNode[>..])
+    /// Branches, the first that matches preferred.
+    Alternate(items: RegexNode[>..])
+    /// At least min and at most max (-1: no most) of the node.
+    Repeat(node: RegexNode, min: Int, max: Int, greedy: Bool)
+    /// The node's first match, never backtracked into.
+    Atomic(node: RegexNode)
+    LookAround(node: RegexNode, behind: Bool, negated: Bool)
+    /// What a group matched, by number, or by name when the number is -1.
+    Backref(group: Int, name: String, ignoreCase: Bool, offset: Int)
+}
+
+/// The most groups deep a pattern may nest: the parser and the compiler
+/// recurse once a level.
+const regexNestingLimit = 200
+
+/// Reads a pattern into a tree, with its classes and its groups' names.
+final class RegexParser {
+    // The pattern's scalars, and the UTF-8 offset of each; offsets has one
+    // more, the pattern's length.
+    var codes: Int[>..] = []
+    var offsets: Int[>..] = []
+    var at: Int = 0
+    var ignoreCase: Bool
+    var multiline: Bool
+    var dotAll: Bool
+    var extended: Bool
+    var swapGreed: Bool = false
+    let backtracking: Bool
+    var initialFlags: Int
+    var depth: Int = 0
+    var classes: RegexCharClass[>..] = []
+    var groupCount: Int = 0
+    // Each group's name by its number, "" for none; the whole match is 0.
+    var names: String[>..] = [""]
+
+    init(_ options: RegexOptions) {
+        ignoreCase = options.contains(.IgnoreCase)
+        multiline = options.contains(.Multiline)
+        dotAll = options.contains(.DotAll)
+        extended = options.contains(.Extended)
+        backtracking = options.contains(.Backtracking)
+        initialFlags = 0
+        initialFlags = flags()
+    }
+
+    /// The pattern to read next, under the options' flags, with groups
+    /// numbered afresh; classes are kept from one pattern to the next.
+    fn load(_ pattern: String) {
+        setFlags(initialFlags)
+        codes.clear()
+        offsets.clear()
+        at = 0
+        depth = 0
+        groupCount = 0
+        names = [""]
+        codes.reserveCapacity(pattern.utf8Count)
+        var index = pattern.startIndex
+        while index.utf8Offset < pattern.utf8Count {
+            codes.append(pattern[index].codePoint)
+            offsets.append(index.utf8Offset)
+            index = pattern.index(after: index)
+        }
+        offsets.append(pattern.utf8Count)
+    }
+
+    fn error(_ kind: RegexErrorKind, _ position: Int, _ message: String) -> RegexError {
+        return RegexError(kind, at: offsets[position], message)
+    }
+
+    fn peek(_ ahead: Int) -> Int {
+        return at + ahead < codes.count ? codes[at + ahead] : -1
+    }
+
+    fn atEnd() -> Bool {
+        return at >= codes.count
+    }
+
+    /// The whole pattern.
+    fn parse() throws(RegexError) -> RegexNode {
+        let node = try parseAlternation()
+        if !atEnd() {
+            throw error(.UnopenedGroup, at, "unopened group")
+        }
+        return node
+    }
+
+    fn parseAlternation() throws(RegexError) -> RegexNode {
+        var branches: RegexNode[>..] = []
+        branches.append(try parseConcat())
+        while peek(0) == '|'.codePoint {
+            at += 1
+            branches.append(try parseConcat())
+        }
+        if branches.count == 1 {
+            return branches[0]
+        }
+        return .Alternate(items: branches)
+    }
+
+    fn parseConcat() throws(RegexError) -> RegexNode {
+        var items: RegexNode[>..] = []
+        while true {
+            skipExtended()
+            if atEnd() {
+                break
+            }
+            let c = codes[at]
+            if c == '|'.codePoint || c == ')'.codePoint {
+                break
+            }
+            if let atom = try parseAtom() {
+                items.append(try parseQuantifiers(atom))
+            }
+        }
+        if items.count == 0 {
+            return .Empty
+        }
+        if items.count == 1 {
+            return items[0]
+        }
+        return .Concat(items: items)
+    }
+
+    /// The atom with the quantifier after it applied, if there is one.
+    fn parseQuantifiers(_ atom: RegexNode) throws(RegexError) -> RegexNode {
+        skipExtended()
+        let start = at
+        var min = -1
+        var max = -1
+        let c = peek(0)
+        if c == '*'.codePoint {
+            min = 0
+            at += 1
+        } else if c == '+'.codePoint {
+            min = 1
+            at += 1
+        } else if c == '?'.codePoint {
+            min = 0
+            max = 1
+            at += 1
+        } else if c == '{'.codePoint && looksLikeCount() {
+            let counts = try parseCount()
+            min = counts.0
+            max = counts.1
+        } else {
+            return atom
+        }
+        var greedy = true
+        var possessive = false
+        if peek(0) == '?'.codePoint {
+            greedy = false
+            at += 1
+        } else if peek(0) == '+'.codePoint {
+            possessive = true
+            at += 1
+        }
+        if swapGreed {
+            greedy = !greedy
+        }
+        var node = RegexNode.Repeat(node: atom, min: min, max: max, greedy: greedy)
+        if possessive {
+            try requireBacktracking(start, "a possessive quantifier")
+            node = .Atomic(node: node)
+        }
+        skipExtended()
+        let after = peek(0)
+        if after == '*'.codePoint || after == '+'.codePoint || after == '?'.codePoint || (after == '{'.codePoint && looksLikeCount()) {
+            throw error(.NothingToRepeat, at, "a quantifier cannot follow another")
+        }
+        return node
+    }
+
+    /// Whether the '{' here starts a count: a digit, or a comma and a
+    /// digit, after it. Any other '{' is itself.
+    fn looksLikeCount() -> Bool {
+        let first = peek(1)
+        if isDigit(first) {
+            return true
+        }
+        return first == ','.codePoint && isDigit(peek(2))
+    }
+
+    /// {n}, {n,}, {n,m} or {,m}: the least and the most, -1 for none.
+    fn parseCount() throws(RegexError) -> (Int, Int) {
+        let opening = at
+        at += 1
+        var min = 0
+        if isDigit(peek(0)) {
+            min = try parseNumber(opening)
+        }
+        var max = min
+        if peek(0) == ','.codePoint {
+            at += 1
+            max = isDigit(peek(0)) ? try parseNumber(opening) : -1
+        }
+        if peek(0) != '}'.codePoint {
+            throw error(.InvalidRepetition, opening, "unclosed counted repetition")
+        }
+        at += 1
+        if max >= 0 && min > max {
+            throw error(.InvalidRepetition, opening, "repetition count out of order")
+        }
+        return (min, max)
+    }
+
+    fn parseNumber(_ start: Int) throws(RegexError) -> Int {
+        var value = 0
+        while isDigit(peek(0)) {
+            value = value * 10 + codes[at] - '0'.codePoint
+            if value > 100000 {
+                throw error(.InvalidRepetition, start, "repetition count too large")
+            }
+            at += 1
+        }
+        return value
+    }
+
+    fn requireBacktracking(_ start: Int, _ what: String) throws(RegexError) {
+        if !backtracking {
+            throw error(.NeedsBacktracking, start, "\(what) needs the Backtracking option")
+        }
+    }
+
+    /// One atom, or none for what matches nothing and cannot be repeated:
+    /// a group of flags, a comment.
+    fn parseAtom() throws(RegexError) -> RegexNode? {
+        let c = codes[at]
+        if c == '('.codePoint {
+            return try parseGroup()
+        }
+        if c == '['.codePoint {
+            let chars = try parseClass()
+            return .Set(index: addClass(chars))
+        }
+        if c == '.'.codePoint {
+            at += 1
+            return dotAll ? .AnyChar : .AnyButNewline
+        }
+        if c == '^'.codePoint {
+            at += 1
+            return .Look(kind: multiline ? lookStartLine : lookStartText)
+        }
+        if c == '$'.codePoint {
+            at += 1
+            return .Look(kind: multiline ? lookEndLine : lookEndText)
+        }
+        if c == '\\'.codePoint {
+            return try parseEscape()
+        }
+        if c == '*'.codePoint || c == '+'.codePoint || c == '?'.codePoint || (c == '{'.codePoint && looksLikeCount()) {
+            throw error(.NothingToRepeat, at, "nothing to repeat")
+        }
+        at += 1
+        return literal(c)
+    }
+
+    fn addClass(_ chars: RegexCharClass) -> Int {
+        classes.append(chars)
+        return classes.count - 1
+    }
+
+    /// A character, or the class of its cases when ignoring case.
+    fn literal(_ code: Int) -> RegexNode {
+        if ignoreCase && hasOtherCases(code) {
+            return .Set(index: addClass(RegexCharClass(single: code, ignoreCase: true)))
+        }
+        return .Literal(code: code)
+    }
+
+    fn parseGroup() throws(RegexError) -> RegexNode? {
+        let opening = at
+        at += 1
+        if depth >= regexNestingLimit {
+            throw error(.TooLarge, opening, "groups nested too deeply")
+        }
+        let saved = flags()
+        if peek(0) != '?'.codePoint {
+            groupCount += 1
+            let index = groupCount
+            names.append("")
+            let body = try parseGroupBody(opening)
+            return .Group(node: body, index: index)
+        }
+        at += 1
+        let c = peek(0)
+        if c == ':'.codePoint {
+            at += 1
+            return try parseGroupBody(opening)
+        }
+        if c == '='.codePoint || c == '!'.codePoint {
+            try requireBacktracking(opening, "lookahead")
+            at += 1
+            let body = try parseGroupBody(opening)
+            return .LookAround(node: body, behind: false, negated: c == '!'.codePoint)
+        }
+        if c == '<'.codePoint && (peek(1) == '='.codePoint || peek(1) == '!'.codePoint) {
+            try requireBacktracking(opening, "lookbehind")
+            let negated = peek(1) == '!'.codePoint
+            at += 2
+            let body = try parseGroupBody(opening)
+            return .LookAround(node: body, behind: true, negated: negated)
+        }
+        if c == '>'.codePoint {
+            try requireBacktracking(opening, "an atomic group")
+            at += 1
+            return .Atomic(node: try parseGroupBody(opening))
+        }
+        if c == '#'.codePoint {
+            while !atEnd() && codes[at] != ')'.codePoint {
+                at += 1
+            }
+            if atEnd() {
+                throw error(.UnclosedGroup, opening, "unclosed comment")
+            }
+            at += 1
+            return none
+        }
+        if c == '<'.codePoint || c == '\''.codePoint || (c == 'P'.codePoint && peek(1) == '<'.codePoint) {
+            at += c == 'P'.codePoint ? 2 : 1
+            let name = try parseName(c == '\''.codePoint ? '\''.codePoint : '>'.codePoint, opening)
+            if names.contains(name) {
+                throw error(.InvalidGroupName, opening, "duplicate group name '\(name)'")
+            }
+            groupCount += 1
+            let index = groupCount
+            names.append(name)
+            let body = try parseGroupBody(opening)
+            return .Group(node: body, index: index)
+        }
+        // Flags: (?imsxU-imsxU) for the rest of the group, or (?flags:…) for a part.
+        var on = true
+        var sawFlag = false
+        while !atEnd() {
+            let flag = codes[at]
+            if flag == ')'.codePoint {
+                if !on && !sawFlag {
+                    throw error(.InvalidFlag, at, "expected a flag after '-'")
+                }
+                at += 1
+                return none
+            }
+            if flag == ':'.codePoint {
+                at += 1
+                let body = try parseGroupBody(opening)
+                setFlags(saved)
+                return body
+            }
+            if flag == '-'.codePoint {
+                if !on {
+                    throw error(.InvalidFlag, at, "a second '-' in flags")
+                }
+                on = false
+                sawFlag = false
+            } else if flag == 'i'.codePoint {
+                ignoreCase = on
+                sawFlag = true
+            } else if flag == 'm'.codePoint {
+                multiline = on
+                sawFlag = true
+            } else if flag == 's'.codePoint {
+                dotAll = on
+                sawFlag = true
+            } else if flag == 'x'.codePoint {
+                extended = on
+                sawFlag = true
+            } else if flag == 'U'.codePoint {
+                swapGreed = on
+                sawFlag = true
+            } else {
+                throw error(.InvalidFlag, at, "unknown flag")
+            }
+            at += 1
+        }
+        throw error(.UnclosedGroup, opening, "unclosed group")
+    }
+
+    /// What a group holds, to its ')', under the flags in force where it
+    /// opened, which are in force again after it.
+    fn parseGroupBody(_ opening: Int) throws(RegexError) -> RegexNode {
+        let saved = flags()
+        depth += 1
+        let body = try parseAlternation()
+        depth -= 1
+        if peek(0) != ')'.codePoint {
+            throw error(.UnclosedGroup, opening, "unclosed group")
+        }
+        at += 1
+        setFlags(saved)
+        return body
+    }
+
+    /// A group's name, up to the closing character.
+    fn parseName(_ close: Int, _ opening: Int) throws(RegexError) -> String {
+        let start = at
+        while !atEnd() && codes[at] != close {
+            let c = codes[at]
+            let letter = (c >= 'a'.codePoint && c <= 'z'.codePoint) || (c >= 'A'.codePoint && c <= 'Z'.codePoint) || c == '_'.codePoint
+            if !letter && !(at > start && isDigit(c)) {
+                throw error(.InvalidGroupName, at, "invalid character in a group name")
+            }
+            at += 1
+        }
+        if atEnd() {
+            throw error(.InvalidGroupName, opening, "unclosed group name")
+        }
+        if at == start {
+            throw error(.InvalidGroupName, at, "empty group name")
+        }
+        let name = stringOfScalars(codes[start..<at])
+        at += 1
+        return name
+    }
+
+    fn parseEscape() throws(RegexError) -> RegexNode {
+        let start = at
+        at += 1
+        if atEnd() {
+            throw error(.InvalidEscape, start, "a pattern cannot end in '\\'")
+        }
+        let c = codes[at]
+        if c >= '1'.codePoint && c <= '9'.codePoint {
+            try requireBacktracking(start, "a back reference")
+            var group = 0
+            while isDigit(peek(0)) && group < 100000 {
+                group = group * 10 + codes[at] - '0'.codePoint
+                at += 1
+            }
+            return .Backref(group: group, name: "", ignoreCase: ignoreCase, offset: offsets[start])
+        }
+        if c == 'k'.codePoint {
+            try requireBacktracking(start, "a back reference")
+            let opening = peek(1)
+            var close = -1
+            if opening == '<'.codePoint {
+                close = '>'.codePoint
+            } else if opening == '\''.codePoint {
+                close = '\''.codePoint
+            } else if opening == '{'.codePoint {
+                close = '}'.codePoint
+            } else {
+                throw error(.InvalidEscape, start, "expected a group name after \\k")
+            }
+            at += 2
+            let name = try parseName(close, start)
+            return .Backref(group: -1, name: name, ignoreCase: ignoreCase, offset: offsets[start])
+        }
+        if c == 'b'.codePoint || c == 'B'.codePoint || c == 'A'.codePoint || c == 'z'.codePoint {
+            at += 1
+            if c == 'b'.codePoint {
+                return .Look(kind: lookWordBoundary)
+            }
+            if c == 'B'.codePoint {
+                return .Look(kind: lookNotWordBoundary)
+            }
+            return .Look(kind: c == 'A'.codePoint ? lookStartText : lookEndText)
+        }
+        if let chars = try parseClassEscape() {
+            return .Set(index: addClass(chars))
+        }
+        return literal(try parseEscapedCharacter(start))
+    }
+
+    /// \d \D \w \W \s \S \p{…} \P{…}, with 'at' at the letter; none for
+    /// any other escape, with 'at' left there.
+    fn parseClassEscape() throws(RegexError) -> RegexCharClass? {
+        let start = at - 1
+        let c = codes[at]
+        let chars = RegexCharClass()
+        chars.ignoreCase = ignoreCase
+        let lower = c | 0x20
+        if lower == 'd'.codePoint {
+            chars.categories = 1 << Int(GeneralCategory.DecimalNumber as U8)
+        } else if lower == 'w'.codePoint {
+            chars.properties = propertyWord
+        } else if lower == 's'.codePoint {
+            chars.properties = propertyWhiteSpace
+        } else if lower == 'p'.codePoint {
+            at += 1
+            var name = ""
+            var negated = c == 'P'.codePoint
+            if peek(0) == '{'.codePoint {
+                let opening = at
+                at += 1
+                if peek(0) == '^'.codePoint {
+                    negated = !negated
+                    at += 1
+                }
+                let first = at
+                while !atEnd() && codes[at] != '}'.codePoint {
+                    at += 1
+                }
+                if atEnd() {
+                    throw error(.UnknownProperty, opening, "unclosed Unicode property")
+                }
+                name = stringOfScalars(codes[first..<at])
+            } else if !atEnd() {
+                name = stringOfScalars(codes[at..<at + 1])
+            } else {
+                throw error(.UnknownProperty, start, "expected a Unicode property after \\p")
+            }
+            at += 1
+            guard let property = unicodeProperty(name) else {
+                throw error(.UnknownProperty, start, "unknown Unicode property '\(name)'")
+            }
+            chars.categories = property.0
+            chars.properties = property.1
+            chars.negated = negated
+            chars.finish()
+            return chars
+        } else {
+            return none
+        }
+        at += 1
+        chars.negated = c != lower
+        chars.finish()
+        return chars
+    }
+
+    /// The character an escape that is not a class or an assertion
+    /// stands for, with 'at' at the character after the '\'.
+    fn parseEscapedCharacter(_ start: Int) throws(RegexError) -> Int {
+        let c = codes[at]
+        at += 1
+        if c == 'n'.codePoint {
+            return 0x0A
+        }
+        if c == 't'.codePoint {
+            return 0x09
+        }
+        if c == 'r'.codePoint {
+            return 0x0D
+        }
+        if c == 'f'.codePoint {
+            return 0x0C
+        }
+        if c == 'v'.codePoint {
+            return 0x0B
+        }
+        if c == 'a'.codePoint {
+            return 0x07
+        }
+        if c == 'e'.codePoint {
+            return 0x1B
+        }
+        if c == '0'.codePoint {
+            return 0
+        }
+        if c == 'x'.codePoint {
+            return try parseHex(start, 2)
+        }
+        if c == 'u'.codePoint {
+            return try parseHex(start, 4)
+        }
+        if c == 'U'.codePoint {
+            return try parseHex(start, 8)
+        }
+        if c < 128 && !isAsciiAlphanumeric(c) {
+            return c
+        }
+        throw error(.InvalidEscape, start, "unrecognised escape")
+    }
+
+    /// The hexadecimal digits after \x, \u or \U: so many of them, or any
+    /// number in braces.
+    fn parseHex(_ start: Int, _ digits: Int) throws(RegexError) -> Int {
+        var value = 0
+        if peek(0) == '{'.codePoint {
+            at += 1
+            var count = 0
+            while !atEnd() && codes[at] != '}'.codePoint {
+                let digit = hexValue(codes[at])
+                if digit < 0 || count >= 8 {
+                    throw error(.InvalidEscape, start, "invalid hexadecimal escape")
+                }
+                value = value * 16 + digit
+                count += 1
+                at += 1
+            }
+            if atEnd() || count == 0 {
+                throw error(.InvalidEscape, start, "invalid hexadecimal escape")
+            }
+            at += 1
+        } else {
+            var count = 0
+            while count < digits {
+                let digit = atEnd() ? -1 : hexValue(codes[at])
+                if digit < 0 {
+                    throw error(.InvalidEscape, start, "expected \(digits) hexadecimal digits")
+                }
+                value = value * 16 + digit
+                count += 1
+                at += 1
+            }
+        }
+        if value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF) {
+            throw error(.InvalidEscape, start, "not a Unicode scalar value")
+        }
+        return value
+    }
+
+    /// Skips white space and comments, in extended mode.
+    fn skipExtended() {
+        if !extended {
+            return
+        }
+        while !atEnd() {
+            let c = codes[at]
+            if c == '#'.codePoint {
+                while !atEnd() && codes[at] != 0x0A {
+                    at += 1
+                }
+            } else if c == 0x20 || (c >= 0x09 && c <= 0x0D) {
+                at += 1
+            } else {
+                return
+            }
+        }
+    }
+
+    // ---- Classes ----------------------------------------------------------
+
+    /// A bracketed class, with 'at' at its '['.
+    fn parseClass() throws(RegexError) -> RegexCharClass {
+        let opening = at
+        at += 1
+        if depth >= regexNestingLimit {
+            throw error(.TooLarge, opening, "classes nested too deeply")
+        }
+        depth += 1
+        var negated = false
+        if peek(0) == '^'.codePoint {
+            negated = true
+            at += 1
+        }
+        var result = try parseClassUnion(opening, first: true)
+        while true {
+            skipExtended()
+            if atEnd() {
+                throw error(.UnclosedClass, opening, "unclosed character class")
+            }
+            if codes[at] == ']'.codePoint {
+                at += 1
+                break
+            }
+            // parseClassUnion stops at ']' or at one of these.
+            let c = codes[at]
+            let operation = c == '&'.codePoint ? classIntersection : c == '-'.codePoint ? classDifference : classSymmetricDifference
+            at += 2
+            result.finish()
+            let right = try parseClassUnion(opening, first: false)
+            right.finish()
+            result = RegexCharClass(operation, result, right)
+            result.ignoreCase = ignoreCase
+        }
+        depth -= 1
+        result.negated = negated
+        result.finish()
+        return result
+    }
+
+    /// The items of a class up to its ']' or an operator, '&&', '--' or
+    /// '~~', as a union, not finished.
+    fn parseClassUnion(_ opening: Int, first: Bool) throws(RegexError) -> RegexCharClass {
+        let chars = RegexCharClass()
+        chars.ignoreCase = ignoreCase
+        var leading = first
+        while true {
+            skipExtended()
+            if atEnd() {
+                throw error(.UnclosedClass, opening, "unclosed character class")
+            }
+            let c = codes[at]
+            if c == ']'.codePoint && !leading {
+                return chars
+            }
+            let next = peek(1)
+            if !leading && next == c && (c == '&'.codePoint || c == '-'.codePoint || c == '~'.codePoint) {
+                return chars
+            }
+            leading = false
+            let itemStart = at
+            if c == '['.codePoint && next == ':'.codePoint {
+                if let posix = try parsePosixClass() {
+                    if posix.isPlainRanges {
+                        chars.ranges.append(contentsOf: posix.ranges)
+                    } else {
+                        chars.parts.append(posix)
+                    }
+                    continue
+                }
+            }
+            if c == '['.codePoint {
+                chars.parts.append(try parseClass())
+                continue
+            }
+            var low = c
+            if c == '\\'.codePoint {
+                at += 1
+                if atEnd() {
+                    throw error(.UnclosedClass, opening, "unclosed character class")
+                }
+                if let escaped = try parseClassEscape() {
+                    if peek(0) == '-'.codePoint && peek(1) >= 0 && peek(1) != ']'.codePoint && peek(1) != '-'.codePoint {
+                        throw error(.InvalidRange, itemStart, "a range cannot start with a class")
+                    }
+                    if escaped.negated {
+                        chars.parts.append(escaped)
+                    } else {
+                        chars.categories = chars.categories | escaped.categories
+                        chars.properties = chars.properties | escaped.properties
+                    }
+                    continue
+                }
+                low = try parseEscapedCharacter(itemStart)
+            } else {
+                at += 1
+            }
+            // A range, unless the '-' is last, or doubled as an operator.
+            if peek(0) == '-'.codePoint && peek(1) != ']'.codePoint && peek(1) != '-'.codePoint && peek(1) >= 0 {
+                at += 1
+                var high = codes[at]
+                if high == '\\'.codePoint {
+                    let escapeStart = at
+                    at += 1
+                    if atEnd() {
+                        throw error(.UnclosedClass, opening, "unclosed character class")
+                    }
+                    if let _ = try parseClassEscape() {
+                        throw error(.InvalidRange, itemStart, "a range cannot end in a class")
+                    }
+                    high = try parseEscapedCharacter(escapeStart)
+                } else if high == '['.codePoint {
+                    throw error(.InvalidRange, itemStart, "a range cannot end in a class")
+                } else {
+                    at += 1
+                }
+                if high < low {
+                    throw error(.InvalidRange, itemStart, "range out of order")
+                }
+                chars.addRange(low, high)
+            } else {
+                chars.add(low)
+            }
+        }
+        return chars
+    }
+
+    /// [:alpha:] or [:^alpha:], ASCII's classes; none, with 'at' left at
+    /// the '[', when it is not one.
+    fn parsePosixClass() throws(RegexError) -> RegexCharClass? {
+        let start = at
+        var end = at + 2
+        while end + 1 < codes.count && !(codes[end] == ':'.codePoint && codes[end + 1] == ']'.codePoint) {
+            if codes[end] == ']'.codePoint {
+                return none
+            }
+            end += 1
+        }
+        if end + 1 >= codes.count {
+            return none
+        }
+        var first = at + 2
+        let negated = codes[first] == '^'.codePoint
+        if negated {
+            first += 1
+        }
+        let name = stringOfScalars(codes[first..<end])
+        let chars = RegexCharClass()
+        chars.ignoreCase = ignoreCase
+        if !addPosixRanges(chars, name) {
+            throw error(.UnknownProperty, start, "unknown POSIX class '\(name)'")
+        }
+        chars.negated = negated
+        chars.finish()
+        at = end + 2
+        return chars
+    }
+
+    /// The flags in force, as bits, to be put back with setFlags.
+    fn flags() -> Int {
+        return (ignoreCase ? 1 : 0) | (multiline ? 2 : 0) | (dotAll ? 4 : 0) | (extended ? 8 : 0) | (swapGreed ? 16 : 0)
+    }
+
+    fn setFlags(_ bits: Int) {
+        ignoreCase = (bits & 1) != 0
+        multiline = (bits & 2) != 0
+        dotAll = (bits & 4) != 0
+        extended = (bits & 8) != 0
+        swapGreed = (bits & 16) != 0
+    }
+}
+
+/// The ASCII ranges of a POSIX class, added to the set; false when there
+/// is no such class.
+fn addPosixRanges(_ chars: RegexCharClass, _ name: String) -> Bool {
+    if name == "alnum" {
+        chars.addRange(0x30, 0x39)
+        chars.addRange(0x41, 0x5A)
+        chars.addRange(0x61, 0x7A)
+    } else if name == "alpha" {
+        chars.addRange(0x41, 0x5A)
+        chars.addRange(0x61, 0x7A)
+    } else if name == "ascii" {
+        chars.addRange(0, 0x7F)
+    } else if name == "blank" {
+        chars.add(0x09)
+        chars.add(0x20)
+    } else if name == "cntrl" {
+        chars.addRange(0, 0x1F)
+        chars.add(0x7F)
+    } else if name == "digit" {
+        chars.addRange(0x30, 0x39)
+    } else if name == "graph" {
+        chars.addRange(0x21, 0x7E)
+    } else if name == "lower" {
+        chars.addRange(0x61, 0x7A)
+    } else if name == "print" {
+        chars.addRange(0x20, 0x7E)
+    } else if name == "punct" {
+        chars.addRange(0x21, 0x2F)
+        chars.addRange(0x3A, 0x40)
+        chars.addRange(0x5B, 0x60)
+        chars.addRange(0x7B, 0x7E)
+    } else if name == "space" {
+        chars.addRange(0x09, 0x0D)
+        chars.add(0x20)
+    } else if name == "upper" {
+        chars.addRange(0x41, 0x5A)
+    } else if name == "word" {
+        chars.addRange(0x30, 0x39)
+        chars.addRange(0x41, 0x5A)
+        chars.addRange(0x61, 0x7A)
+        chars.add(0x5F)
+    } else if name == "xdigit" {
+        chars.addRange(0x30, 0x39)
+        chars.addRange(0x41, 0x46)
+        chars.addRange(0x61, 0x66)
+    } else {
+        return false
+    }
+    return true
+}
+
+/// The general categories and properties a \p{…} names — a category by
+/// its abbreviation or its long name ("Lu", "Uppercase_Letter"), a group
+/// of them ("L", "Letter"), or a binary property ("Alphabetic",
+/// "White_Space") — matched loosely, as UAX #44 allows: case, spaces,
+/// '_' and '-' ignored. None when it names nothing known.
+fn unicodeProperty(_ raw: String) -> (Int, Int)? {
+    var name = ""
+    for c in raw {
+        let code = c.codePoint
+        if code == 0x20 || code == '_'.codePoint || code == '-'.codePoint {
+            continue
+        }
+        name = name + String.fromChar(c.asciiLowercased())
+    }
+    if name.hasPrefix("gc=") {
+        name = name.trimmingPrefix("gc=")
+    } else if name.hasPrefix("generalcategory=") {
+        name = name.trimmingPrefix("generalcategory=")
+    }
+    // Groups of categories, by their first letter.
+    let letters = 0b11111
+    if name == "l" || name == "letter" {
+        return (letters, 0)
+    }
+    if name == "lc" || name == "l&" || name == "casedletter" {
+        return (0b111, 0)
+    }
+    if name == "m" || name == "mark" || name == "combiningmark" {
+        return (0b111 << 5, 0)
+    }
+    if name == "n" || name == "number" {
+        return (0b111 << 8, 0)
+    }
+    if name == "p" || name == "punctuation" || name == "punct" {
+        return (0b1111111 << 11, 0)
+    }
+    if name == "s" || name == "symbol" {
+        return (0b1111 << 18, 0)
+    }
+    if name == "z" || name == "separator" {
+        return (0b111 << 22, 0)
+    }
+    if name == "c" || name == "other" {
+        return (0b11111 << 25, 0)
+    }
+    if name == "digit" {
+        return (1 << 8, 0)
+    }
+    if name == "cntrl" {
+        return (1 << 25, 0)
+    }
+    var raw = 0
+    while raw < 30 {
+        let category = U8(raw) as GeneralCategory
+        let long = "\(category)"
+        var lowered = ""
+        for c in long {
+            lowered = lowered + String.fromChar(c.asciiLowercased())
+        }
+        var abbreviation = ""
+        for c in category.abbreviation {
+            abbreviation = abbreviation + String.fromChar(c.asciiLowercased())
+        }
+        if name == lowered || name == abbreviation {
+            return (1 << raw, 0)
+        }
+        raw += 1
+    }
+    if name == "any" {
+        return (0, propertyAny)
+    }
+    if name == "ascii" {
+        return (0, propertyAscii)
+    }
+    if name == "assigned" {
+        return (0, propertyAssigned)
+    }
+    if name == "alphabetic" || name == "alpha" {
+        return (0, propertyAlphabetic)
+    }
+    if name == "whitespace" || name == "wspace" || name == "space" {
+        return (0, propertyWhiteSpace)
+    }
+    if name == "uppercase" || name == "upper" {
+        return (0, propertyUppercase)
+    }
+    if name == "lowercase" || name == "lower" {
+        return (0, propertyLowercase)
+    }
+    return none
+}
+
+fn isDigit(_ code: Int) -> Bool {
+    return code >= '0'.codePoint && code <= '9'.codePoint
+}
+
+fn isAsciiAlphanumeric(_ code: Int) -> Bool {
+    return isDigit(code) || (code >= 'a'.codePoint && code <= 'z'.codePoint) || (code >= 'A'.codePoint && code <= 'Z'.codePoint)
+}
+
+fn hexValue(_ code: Int) -> Int {
+    if isDigit(code) {
+        return code - '0'.codePoint
+    }
+    if code >= 'a'.codePoint && code <= 'f'.codePoint {
+        return code - 'a'.codePoint + 10
+    }
+    if code >= 'A'.codePoint && code <= 'F'.codePoint {
+        return code - 'A'.codePoint + 10
+    }
+    return -1
+}
+
+/// Whether the character has another case, or is another's.
+fn hasOtherCases(_ code: Int) -> Bool {
+    if code < 128 {
+        return (code >= 'a'.codePoint && code <= 'z'.codePoint) || (code >= 'A'.codePoint && code <= 'Z'.codePoint)
+    }
+    if let character = Char.fromCodePoint(code) {
+        return character.simpleLowercase.codePoint != code || character.simpleUppercase.codePoint != code || character.caseFolded.codePoint != code
+    }
+    return false
+}

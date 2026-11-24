@@ -1,0 +1,45 @@
+module Sable.Text
+
+/// Why a pattern is not a regular expression, and where: what `Regex(_:)`
+/// and `RegexSet(_:)` throw. The offset is in UTF-8 bytes from the start
+/// of the pattern, at the place the parser stopped: the start of the
+/// group, class or escape that is wrong.
+///
+/// ```sable
+/// do {
+///     let _ = try Regex("ab(c")
+/// } catch {
+///     assert(error.kind == .UnclosedGroup && error.offset == 2)
+///     assert(error.description() == "regex error at 2: unclosed group")
+/// }
+/// ```
+public struct RegexError: Equatable, Error {
+    /// What kind of mistake it is.
+    public let kind: RegexErrorKind
+
+    /// Where it is: a UTF-8 byte offset into the pattern.
+    public let offset: Int
+
+    /// What is wrong, in a few words.
+    public let message: String
+
+    public init(_ kind: RegexErrorKind, at offset: Int, _ message: String) {
+        self.kind = kind
+        self.offset = offset
+        self.message = message
+    }
+
+    public operator == (lhs: RegexError, rhs: RegexError) -> Bool {
+        return lhs.kind == rhs.kind && lhs.offset == rhs.offset && lhs.message == rhs.message
+    }
+
+    /// What is wrong and where, as Debug writes it.
+    public fn description() -> String {
+        return debugDescription()
+    }
+
+    /// "regex error at 2: unclosed group".
+    public fn debugDescription() -> String {
+        return "regex error at \(offset): \(message)"
+    }
+}

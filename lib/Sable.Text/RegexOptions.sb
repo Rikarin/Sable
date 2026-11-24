@@ -1,0 +1,34 @@
+module Sable.Text
+
+/// How a `Regex` reads its pattern and matches: .NET's `RegexOptions`.
+/// Each is a flag, and `[.IgnoreCase, .Multiline]` sets both. The first
+/// four may also be set, or cleared, inside the pattern: `(?i)`, `(?m)`,
+/// `(?s)`, `(?x)`, and `(?-i)` or `(?i:…)` for a part of it.
+///
+/// ```sable
+/// let regex = try! Regex("^hello$", options: [.IgnoreCase, .Multiline])
+/// assert(regex.isMatch("one\nHELLO\nthree"))
+/// ```
+@flags
+public enum RegexOptions {
+    /// The pattern as written: case matters, `^` and `$` match at the ends
+    /// of the text only, `.` matches anything but a line feed.
+    None = 0
+    /// Letters match whatever their case, by Unicode's simple case folding:
+    /// `k` matches `K` and U+212A KELVIN SIGN.
+    IgnoreCase = 1
+    /// `^` and `$` match at the start and end of each line, as well as of
+    /// the text.
+    Multiline = 2
+    /// `.` matches a line feed too.
+    DotAll = 4
+    /// White space in the pattern is ignored, and `#` starts a comment to
+    /// the end of the line; `\ ` and `\#` match themselves.
+    Extended = 8
+    /// Matches with a backtracking engine, which allows back references,
+    /// lookaround, atomic groups and possessive quantifiers, as .NET's and
+    /// Perl's do — and, like theirs, can take time exponential in the
+    /// text's length on some patterns. Without it a regex runs in time
+    /// linear in the text, whatever the pattern.
+    Backtracking = 16
+}

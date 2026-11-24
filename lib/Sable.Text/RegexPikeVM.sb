@@ -1,0 +1,197 @@
+module Sable.Text
+
+// The PikeVM: the program's threads run in lockstep over the text, one
+// character at a time, at most one thread to an instruction, in the order
+// of their priority — so it finds the leftmost-first match, with each
+// group's captures, in time proportional to the text's length times the
+// program's. The lazy DFA finds where matches are faster; this finds what
+// their groups matched, and stands in for the DFA when its cache thrashes.
+
+// Reading the text: a scalar and its UTF-8 length packed in one number,
+// the length from bit 21.
+
+/// The scalar that starts at the offset, packed with its length.
+fn scalarAt(_ text: String, _ offset: Int) -> Int {
+    let bytes = text.utf8
+    let first = Int(bytes[offset])
+    if first < 0x80 {
+        return first | (1 << 21)
+    }
+    if first < 0xE0 {
+        return (((first & 0x1F) << 6) | (Int(bytes[offset + 1]) & 0x3F)) | (2 << 21)
+    }
+    if first < 0xF0 {
+        return (((first & 0x0F) << 12) | ((Int(bytes[offset + 1]) & 0x3F) << 6) | (Int(bytes[offset + 2]) & 0x3F)) | (3 << 21)
+    }
+    return (((first & 0x07) << 18) | ((Int(bytes[offset + 1]) & 0x3F) << 12) | ((Int(bytes[offset + 2]) & 0x3F) << 6) | (Int(bytes[offset + 3]) & 0x3F)) | (4 << 21)
+}
+
+/// The scalar that ends at the offset, packed with its length.
+fn scalarBefore(_ text: String, _ offset: Int) -> Int {
+    let bytes = text.utf8
+    var start = offset - 1
+    while (Int(bytes[start]) & 0xC0) == 0x80 {
+        start -= 1
+    }
+    return scalarAt(text, start)
+}
+
+final class RegexPikeVM {
+    let program: RegexProgram
+    let size: Int
+    let width: Int
+    // Two lists of threads, the current and the next, each a sparse set of
+    // instructions over its half of these, with each thread's slots.
+    var dense: Int[>..] = []
+    var sparse: Int[>..] = []
+    var sizes: Int[>..] = [0, 0]
+    var slots: Int[>..] = []
+    var stack: Int[>..] = []
+    var scratch: Int[>..] = []
+    // The characters on either side of the position being followed from.
+    var before: Int = -1
+    var after: Int = -1
+
+    init(_ program: RegexProgram) {
+        self.program = program
+        size = program.count
+        width = program.slotCount
+        dense = filled(0, 2 * size)
+        sparse = filled(0, 2 * size)
+        slots = filled(-1, 2 * size * width)
+        scratch = filled(-1, width)
+    }
+
+    fn contains(_ list: Int, _ pc: Int) -> Bool {
+        let i = sparse[list * size + pc]
+        return i < sizes[list] && dense[list * size + i] == pc
+    }
+
+    /// Adds the threads the empty transitions from the instruction reach at
+    /// the position, with the scratch slots as theirs.
+    fn follow(_ list: Int, _ from: Int, _ position: Int) {
+        stack.append(from)
+        while stack.count > 0 {
+            var pc = stack.removeLast()
+            if pc < 0 {
+                scratch[-pc - 1] = stack.removeLast()
+                continue
+            }
+            while !contains(list, pc) {
+                let n = sizes[list]
+                dense[list * size + n] = pc
+                sparse[list * size + pc] = n
+                sizes[list] = n + 1
+                let op = program.ops[pc]
+                if op == opSplit {
+                    stack.append(program.ys[pc])
+                    pc = program.xs[pc]
+                } else if op == opJump {
+                    pc = program.xs[pc]
+                } else if op == opSave {
+                    let slot = program.xs[pc]
+                    stack.append(scratch[slot])
+                    stack.append(-slot - 1)
+                    scratch[slot] = position
+                    pc = program.ys[pc]
+                } else if op == opLook {
+                    if !lookHolds(program.xs[pc], before, after) {
+                        break
+                    }
+                    pc = program.ys[pc]
+                } else if op == opMark || op == opCheck {
+                    pc = program.ys[pc]
+                } else {
+                    // Waits for a character, or matches: it keeps the slots.
+                    let base = (list * size + pc) * width
+                    var k = 0
+                    while k < width {
+                        slots[base + k] = scratch[k]
+                        k += 1
+                    }
+                    break
+                }
+            }
+        }
+    }
+
+    /// The leftmost-first match in the text from 'start' to 'end' that
+    /// starts at or after 'from' — at 'from' when anchored — with its
+    /// slots written to 'found'; false when there is none.
+    fn search(_ text: String, _ start: Int, _ end: Int, _ from: Int, anchored: Bool, _ found: inout Int[>..]) -> Bool {
+        var current = 0
+        sizes[0] = 0
+        sizes[1] = 0
+        var matched = false
+        var position = from
+        before = from > start ? scalarBefore(text, from) & 0x1FFFFF : -1
+        var here = from < end ? scalarAt(text, from) : -1
+        after = here < 0 ? -1 : here & 0x1FFFFF
+        while true {
+            if !matched && (!anchored || position == from) {
+                var k = 0
+                while k < width {
+                    scratch[k] = -1
+                    k += 1
+                }
+                follow(current, regexAnchoredStart, position)
+            }
+            if sizes[current] == 0 && (matched || anchored || position >= end) {
+                break
+            }
+            let code = after
+            let length = here < 0 ? 0 : here >> 21
+            let next = 1 - current
+            sizes[next] = 0
+            // The next position's surroundings, for the threads that reach it.
+            let ahead = position + length < end && here >= 0 ? scalarAt(text, position + length) : -1
+            before = code
+            after = ahead < 0 ? -1 : ahead & 0x1FFFFF
+            var i = 0
+            while i < sizes[current] {
+                let pc = dense[current * size + i]
+                let op = program.ops[pc]
+                if op == opMatch {
+                    let base = (current * size + pc) * width
+                    var k = 0
+                    while k < width {
+                        found[k] = slots[base + k]
+                        k += 1
+                    }
+                    matched = true
+                    // Every thread after this one is of lower priority.
+                    break
+                }
+                if op <= opAnyButNewline && code >= 0 && program.takes(pc, code) {
+                    let base = (current * size + pc) * width
+                    var k = 0
+                    while k < width {
+                        scratch[k] = slots[base + k]
+                        k += 1
+                    }
+                    follow(next, program.ys[pc], position + length)
+                }
+                i += 1
+            }
+            if position >= end {
+                break
+            }
+            current = next
+            position += length
+            here = ahead
+        }
+        return matched
+    }
+}
+
+/// An array of so many of the number.
+fn filled(_ value: Int, _ count: Int) -> Int[>..] {
+    var array: Int[>..] = []
+    array.reserveCapacity(count)
+    var i = 0
+    while i < count {
+        array.append(value)
+        i += 1
+    }
+    return array
+}

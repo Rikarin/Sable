@@ -1,0 +1,194 @@
+module Sable.Text
+
+/// A match of a regex with what each of its groups matched: group 0 is the
+/// whole match, and the others are numbered by their '(' from the left. A
+/// group that took no part in the match, as one in a branch not taken, is
+/// none. `Regex.captures(in:)` and `Regex.allCaptures(in:)` give them.
+///
+/// ```sable
+/// let regex = try! Regex(#"(?<key>\w+)(=(?<value>\w+))?"#)
+/// let found = regex.captures(in: "flag")!
+/// assert(found["key"]! == "flag" && found["value"] == none)
+/// assert(found.count == 4)
+/// assert(found.expand("[$key]") == "[flag]")
+/// ```
+public struct RegexCaptures {
+    /// The whole text the match was found in.
+    public let base: String
+    // The start and end of each group, -1 for one that matched nothing.
+    let slots: Int[>..]
+    let names: String[>..]
+
+    init(base: String, slots: Int[>..], names: String[>..]) {
+        self.base = base
+        self.slots = slots
+        self.names = names
+    }
+
+    /// How many groups there are, the whole match among them.
+    public var count: Int => slots.count / 2
+
+    /// Where the whole match is in the text.
+    public var range: Range<String.Index> => String.Index(utf8Offset: slots[0])..<String.Index(utf8Offset: slots[1])
+
+    /// What the whole match matched.
+    public var text: Substring => base[range]
+
+    /// Where the group is in the text, or none when it matched nothing or
+    /// there is no such group.
+    public fn range(at group: Int) -> Range<String.Index>? {
+        if group < 0 || group >= count || slots[2 * group] < 0 || slots[2 * group + 1] < 0 {
+            return none
+        }
+        return String.Index(utf8Offset: slots[2 * group])..<String.Index(utf8Offset: slots[2 * group + 1])
+    }
+
+    /// Where the group of the name is in the text, or none.
+    public fn range(named name: String) -> Range<String.Index>? {
+        if name.isEmpty {
+            return none
+        }
+        if let group = names.firstIndex(of: name) {
+            return range(at: group)
+        }
+        return none
+    }
+
+    /// What the group matched, or none.
+    public subscript(group: Int) -> Substring? {
+        get {
+            if let found = range(at: group) {
+                return base[found]
+            }
+            return none
+        }
+    }
+
+    /// What the group of the name matched, or none.
+    public subscript(name: String) -> Substring? {
+        get {
+            if let found = range(named: name) {
+                return base[found]
+            }
+            return none
+        }
+    }
+
+    /// The template with what the groups matched put in: `$1` or `${1}` is
+    /// group 1, `$name` or `${name}` the group of that name — a name is the
+    /// longest run of letters, digits and '_' after the `$` — and `$$` is
+    /// a `$`. A group that matched nothing, or that there is not, is the
+    /// empty string. What `replacing(_:with:)` replaces each match with.
+    public fn expand(_ template: String) -> String {
+        var pieces: String[>..] = []
+        expand(template, into: &pieces)
+        return Runtime.joinStrings(pieces, "")
+    }
+
+    fn expand(_ template: String, into pieces: inout String[>..]) {
+        let bytes = template.utf8
+        let length = template.utf8Count
+        var literalFrom = 0
+        var i = 0
+        while i < length {
+            if bytes[i] != 0x24 {
+                i += 1
+                continue
+            }
+            // A '$': what is before it is copied as it is.
+            if i > literalFrom {
+                pieces.append(template[String.Index(utf8Offset: literalFrom)..<String.Index(utf8Offset: i)].toString())
+            }
+            var j = i + 1
+            if j < length && bytes[j] == 0x24 {
+                pieces.append("$")
+                i = j + 1
+                literalFrom = i
+                continue
+            }
+            var nameFrom = j
+            var nameTo = j
+            if j < length && bytes[j] == 0x7B {
+                nameFrom = j + 1
+                nameTo = nameFrom
+                while nameTo < length && bytes[nameTo] != 0x7D {
+                    nameTo += 1
+                }
+                if nameTo >= length {
+                    // No '}': the '$' is itself.
+                    pieces.append("$")
+                    i = j
+                    literalFrom = i
+                    continue
+                }
+                j = nameTo + 1
+            } else {
+                while nameTo < length && isNameByte(Int(bytes[nameTo])) {
+                    nameTo += 1
+                }
+                j = nameTo
+            }
+            if nameTo == nameFrom {
+                pieces.append("$")
+                i = j
+                literalFrom = i
+                continue
+            }
+            let name = template[String.Index(utf8Offset: nameFrom)..<String.Index(utf8Offset: nameTo)]
+            var group = 0
+            var k = nameFrom
+            while k < nameTo && isDigit(Int(bytes[k])) && group < 100000 {
+                group = group * 10 + Int(bytes[k]) - 0x30
+                k += 1
+            }
+            if k < nameTo {
+                group = names.firstIndex(of: name.toString()) ?? -1
+            }
+            if let found = range(at: group) {
+                pieces.append(base[found].toString())
+            }
+            i = j
+            literalFrom = i
+        }
+        if literalFrom < length {
+            pieces.append(template[String.Index(utf8Offset: literalFrom)..<String.Index(utf8Offset: length)].toString())
+        }
+    }
+}
+
+fn isNameByte(_ byte: Int) -> Bool {
+    return isAsciiAlphanumeric(byte) || byte == 0x5F
+}
+
+/// Every match of a regex in a text with its groups, found as it is gone
+/// through: `Regex.allCaptures(in:)`.
+public struct RegexCapturesSequence: Sequence {
+    public alias Element = RegexCaptures
+    public alias Iter = RegexCapturesIterator
+
+    let regex: Regex
+    let base: String
+    let start: Int
+    let end: Int
+
+    public fn makeIterator() -> RegexCapturesIterator {
+        return RegexCapturesIterator { regex: regex, base: base, start: start, end: end, at: start, lastEnd: -1 }
+    }
+}
+
+/// Finds a regex's matches in a text one by one, with their groups.
+public struct RegexCapturesIterator: Iterator {
+    let regex: Regex
+    let base: String
+    let start: Int
+    let end: Int
+    var at: Int
+    var lastEnd: Int
+
+    public mutating fn next() -> RegexCaptures? {
+        if let span = regex.nextSpan(base, start, end, &at, &lastEnd) {
+            return regex.capturesOf(base, start, end, span)
+        }
+        return none
+    }
+}

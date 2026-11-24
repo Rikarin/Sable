@@ -1,0 +1,79 @@
+module Sable.Text
+
+/// Where a regex matched: a range of the text it searched, which it holds
+/// — a String is shared, not copied — so that the match reads as a
+/// Substring. `Regex.firstMatch(in:)` and `Regex.matches(in:)` give them.
+///
+/// ```sable
+/// let found = (try! Regex("b+")).firstMatch(in: "abbbc")!
+/// assert(found.text == "bbb")
+/// assert(found.range.lowerBound.utf8Offset == 1 && found.range.upperBound.utf8Offset == 4)
+/// ```
+public struct RegexMatch: Equatable, Debug {
+    /// The whole text the match was found in.
+    public let base: String
+    let start: Int
+    let end: Int
+
+    init(base: String, start: Int, end: Int) {
+        self.base = base
+        self.start = start
+        self.end = end
+    }
+
+    /// Where it is in the text.
+    public var range: Range<String.Index> => String.Index(utf8Offset: start)..<String.Index(utf8Offset: end)
+
+    /// What it matched.
+    public var text: Substring => base[range]
+
+    /// Whether it matched the empty string.
+    public var isEmpty: Bool => start == end
+
+    /// What it matched, copied out as a String.
+    public fn toString() -> String {
+        return text.toString()
+    }
+
+    public operator == (lhs: RegexMatch, rhs: RegexMatch) -> Bool {
+        return lhs.start == rhs.start && lhs.end == rhs.end && lhs.base == rhs.base
+    }
+
+    /// Where it is and what it matched: `4..<7 "123"`.
+    public fn debugDescription() -> String {
+        return "\(start)..<\(end) \(text.toString():?)"
+    }
+}
+
+/// Every match of a regex in a text, found as it is gone through:
+/// `Regex.matches(in:)`.
+public struct RegexMatches: Sequence {
+    public alias Element = RegexMatch
+    public alias Iter = RegexMatchIterator
+
+    let regex: Regex
+    let base: String
+    let start: Int
+    let end: Int
+
+    public fn makeIterator() -> RegexMatchIterator {
+        return RegexMatchIterator { regex: regex, base: base, start: start, end: end, at: start, lastEnd: -1 }
+    }
+}
+
+/// Finds a regex's matches in a text one by one, left to right.
+public struct RegexMatchIterator: Iterator {
+    let regex: Regex
+    let base: String
+    let start: Int
+    let end: Int
+    var at: Int
+    var lastEnd: Int
+
+    public mutating fn next() -> RegexMatch? {
+        if let span = regex.nextSpan(base, start, end, &at, &lastEnd) {
+            return RegexMatch(base: base, start: span.0, end: span.1)
+        }
+        return none
+    }
+}

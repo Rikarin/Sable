@@ -1,0 +1,71 @@
+module Sable.Text
+
+// Replacing a regex's matches, with a template that names its groups or
+// with what a closure makes of each: String's and Substring's own
+// `replacing(_:with:)` takes a Regex as any Pattern, and replaces each
+// match with the text as it is; these, chosen for a Regex, read '$' in it.
+
+extension StringProtocol {
+    /// The text with the regex's matches replaced, left to right, at most
+    /// 'maxCount' of them, each by the template with its groups put in as
+    /// `RegexCaptures.expand` puts them: `$1`, `${name}`, `$$` for a `$`.
+    ///
+    /// ```sable
+    /// let swap = try! Regex(#"(\w+) (\w+)"#)
+    /// assert("hello world".replacing(swap, with: "$2 $1") == "world hello")
+    /// let digits = try! Regex(#"\d"#)
+    /// assert("a1b2c3".replacing(digits, with: "#", maxCount: 2) == "a#b#c3")
+    /// ```
+    public fn replacing(_ regex: Regex, with template: String, maxCount: Int = 9223372036854775807) -> String {
+        let plain = !template.utf8.contains(0x24)
+        return replacingMatches(self.asSubstring, regex, maxCount) { (found: RegexCaptures, pieces: inout String[>..]) in
+            if plain {
+                pieces.append(template)
+            } else {
+                found.expand(template, into: &pieces)
+            }
+        }
+    }
+
+    /// The text with each of the regex's matches replaced, left to right,
+    /// at most 'maxCount' of them, by what the closure makes of it.
+    ///
+    /// ```sable
+    /// let numbers = try! Regex(#"\d+"#)
+    /// let doubled = "3 apples and 12 pears".replacing(numbers, with: { found in
+    ///     return "\(try! Int.parse(found.text) * 2)"
+    /// })
+    /// assert(doubled == "6 apples and 24 pears")
+    /// ```
+    public fn replacing(_ regex: Regex, maxCount: Int = 9223372036854775807, with replacement: (RegexCaptures) -> String) -> String {
+        return replacingMatches(self.asSubstring, regex, maxCount) { (found: RegexCaptures, pieces: inout String[>..]) in
+            pieces.append(replacement(found))
+        }
+    }
+}
+
+/// The text with each match replaced by what 'add' adds to the pieces.
+fn replacingMatches(_ text: Substring, _ regex: Regex, _ maxCount: Int, _ add: (RegexCaptures, inout String[>..]) -> ()) -> String {
+    let base = text.base
+    let start = text.startIndex.utf8Offset
+    let end = text.endIndex.utf8Offset
+    var pieces: String[>..] = []
+    var copied = start
+    var iterator = regex.allCaptures(in: text).makeIterator()
+    var replaced = 0
+    while replaced < maxCount {
+        guard let found = iterator.next() else {
+            break
+        }
+        let range = found.range
+        pieces.append(base[String.Index(utf8Offset: copied)..<range.lowerBound].toString())
+        add(found, &pieces)
+        copied = range.upperBound.utf8Offset
+        replaced += 1
+    }
+    if replaced == 0 {
+        return text.toString()
+    }
+    pieces.append(base[String.Index(utf8Offset: copied)..<String.Index(utf8Offset: end)].toString())
+    return Runtime.joinStrings(pieces, "")
+}

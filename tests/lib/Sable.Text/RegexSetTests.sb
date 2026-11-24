@@ -1,0 +1,77 @@
+module RegexSetTests
+
+// RegexSet (Sable.Text): which of several patterns match, in one pass;
+// ported in part from Rust regex's set tests.
+
+import Sable.Text
+import Sable.Testing
+
+@test
+fn eachMatchingPatternIsReported() {
+    let patternSet = try! RegexSet([#"\w+"#, #"\d+"#, #"\pL+"#, "foo", "bar", "barfoo", "foobar"])
+    assert(patternSet.matches("foobar") == [0, 2, 3, 4, 6])
+    assert(patternSet.matches("42") == [0, 1])
+    assert(patternSet.matches("") == [])
+    assertEqual(patternSet.count, 7)
+    assertEqual(patternSet.patterns[3], "foo")
+}
+
+@test
+fn anyMatchStopsEarly() {
+    let patternSet = try! RegexSet(["a", "b"])
+    assert(patternSet.isMatch("xxb"))
+    assert(!patternSet.isMatch("xxx"))
+    assert(!patternSet.isMatch(""))
+    let empty = try! RegexSet([])
+    assert(!empty.isMatch("a"))
+    assert(empty.matches("a") == [])
+}
+
+@test
+fn assertionsAndOptionsApplyToEachPattern() {
+    let patternSet = try! RegexSet(["^a", "a$", #"\bb\b"#, "(?m)^c$", "(?s)d.e"], options: .IgnoreCase)
+    assert(patternSet.matches("A b") == [0, 2])
+    assert(patternSet.matches("ba") == [1])
+    assert(patternSet.matches("x\nC\n") == [3])
+    assert(patternSet.matches("D\nE") == [4])
+    let empty = try! RegexSet(["", "x*", "^$"])
+    assert(empty.matches("") == [0, 1, 2])
+    assert(empty.matches("y") == [0, 1])
+    // A piece of a text is a text of its own: the "b" of "ab" is a word.
+    let text = "ab"
+    assert(patternSet.matches(text[text.index(after: text.startIndex)..<text.endIndex]) == [2])
+}
+
+@test
+fn aMistakeSaysWhichPattern() {
+    do {
+        let _ = try RegexSet(["a", "b(", "c"])
+        fail("unclosed group")
+    } catch {
+        assert(error.kind == .UnclosedGroup && error.offset == 1)
+        assertEqual(error.message, "pattern 1: unclosed group")
+    }
+    do {
+        let _ = try RegexSet([#"(a)\1"#], options: .Backtracking)
+        fail("a set cannot backtrack")
+    } catch {
+        assert(error.kind == .NeedsBacktracking)
+    }
+}
+
+@test
+fn aSetMatchesWhatEachRegexMatches() {
+    let patterns: String[>..] = ["a+b", "[^a]c", "é|ö", #"\d{2,}"#, "(?i)xy", "z?q"]
+    let patternSet = try! RegexSet(patterns)
+    for text in ["aab", "bc ac", "schön", "1 22", "XY", "q", "nothing", "aéc12xYq"] {
+        var expected: Int[>..] = []
+        var i = 0
+        while i < patterns.count {
+            if (try! Regex(patterns[i])).isMatch(text) {
+                expected.append(i)
+            }
+            i += 1
+        }
+        assert(patternSet.matches(text) == expected, "\(text)")
+    }
+}

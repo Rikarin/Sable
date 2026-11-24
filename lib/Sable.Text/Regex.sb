@@ -1,0 +1,458 @@
+module Sable.Text
+
+/// A regular expression: .NET's `Regex`, Rust's `regex::Regex`. The pattern
+/// is compiled once, when the regex is made, and a mistake in it is a
+/// `RegexError` saying what and where.
+///
+/// Matching runs in time linear in the text, whatever the pattern — no
+/// pattern can make it take exponential time, as Rust's regex and RE2
+/// promise, and as .NET's `NonBacktracking` does. A lazy DFA finds where
+/// each match ends and, run backwards, where it starts; a PikeVM finds
+/// what each group matched, when that is asked for. A pattern that starts
+/// with a literal is searched for by that literal first, sixteen bytes at a
+/// time, and one that is nothing but a literal is only that.
+///
+/// The syntax is Rust's (RegexSyntax.sb lists it): Unicode classes —
+/// `\d`, `\w`, `\s`, `\b` and `.` are Unicode's, `\p{Lu}` a general
+/// category — named groups `(?<name>…)`, lazy quantifiers, flags `(?imsxU)`.
+/// Back references, lookaround, atomic groups and possessive quantifiers
+/// need `.Backtracking`, which matches as .NET's default engine does, one
+/// path at a time, and so can take exponential time.
+///
+/// When more than one match could start at the same place, the first
+/// alternative written wins (leftmost-first), as in Perl, .NET and Rust:
+/// `a|ab` matches the "a" of "ab". The two ways of matching agree on every
+/// pattern but one that repeats without bound something that can match
+/// nothing, as `(a*?)+`: there the automata choose as RE2 and Rust do, and
+/// the backtracker as Perl and .NET do.
+///
+/// A Regex is a `Pattern`, so String's and Substring's searches take one:
+/// `firstIndex(of:)`, `contains`, `split`, `replacing` (whose templates
+/// may name groups, `$1` or `${name}`), `trimmingPrefix`.
+///
+/// ```sable
+/// let date = try! Regex(#"(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})"#)
+/// let text = "from 2024-03-15 to 2024-04-01"
+/// assert(date.isMatch(text))
+/// let first = date.captures(in: text)!
+/// assert(first["year"]! == "2024" && first[2]! == "03")
+/// assert(date.count(in: text) == 2)
+/// assert(text.replacing(date, with: "$day/$month/$year") == "from 15/03/2024 to 01/04/2024")
+/// assert(text.split(try! Regex(#"\s+"#)) == ["from", "2024-03-15", "to", "2024-04-01"])
+/// ```
+public class Regex: Pattern {
+    /// The pattern, as written.
+    public let pattern: String
+
+    /// The options it was made with.
+    public let options: RegexOptions
+
+    let root: RegexNode
+    let classes: RegexCharClass[>..]
+    let program: RegexProgram
+    let names: String[>..]
+    let backtracking: Bool
+    // Every match starts at the start of the text.
+    let anchoredStart: Bool
+    // What every match starts with, exactly; and whether it is the whole pattern.
+    let leading: String
+    let literal: Bool
+
+    // The engines, made when first needed.
+    var forwardEngine: RegexDfa? = none
+    var reverseEngine: RegexDfa? = none
+    var pikeEngine: RegexPikeVM? = none
+    var backtrackEngine: RegexBacktracker? = none
+    var wholeEngine: RegexPikeVM? = none
+    var wholeBacktracker: RegexBacktracker? = none
+    var slots: Int[>..] = []
+
+    /// The regex of the pattern, read with the options; a mistake in it
+    /// is a `RegexError`.
+    ///
+    /// ```sable
+    /// let words = try! Regex(#"\w+"#)
+    /// assert(words.count(in: "two words") == 2)
+    /// let error = try? Regex("a{3,1}")
+    /// assert(error == none)
+    /// ```
+    public init(_ pattern: String, options: RegexOptions = .None) throws(RegexError) {
+        let parser = RegexParser(options)
+        parser.load(pattern)
+        let root = try parser.parse()
+        self.pattern = pattern
+        self.options = options
+        self.root = root
+        classes = parser.classes
+        names = parser.names
+        backtracking = options.contains(.Backtracking)
+        program = try RegexProgram.compile(root, classes: parser.classes, groupCount: parser.groupCount, names: parser.names, reverse: false)
+        anchoredStart = anchoredAtStart(root)
+        var codes: Int[>..] = []
+        literal = literalPrefix(root, into: &codes) && parser.groupCount == 0 && codes.count > 0
+        leading = stringOfScalars(codes)
+        slots = filled(-1, program.slotCount)
+    }
+
+    /// The pattern's text with every character that means something in a
+    /// pattern escaped, so that the regex of it matches the text itself.
+    ///
+    /// ```sable
+    /// let price = try! Regex(Regex.escape("$1.50 (each)"))
+    /// assert(price.isMatch("costs $1.50 (each)"))
+    /// assert(!price.isMatch("costs $1350 (each)"))
+    /// ```
+    public static fn escape(_ text: String) -> String {
+        var bytes: U8[>..] = []
+        bytes.reserveCapacity(text.utf8Count)
+        for character in text {
+            let code = character.codePoint
+            if code < 128 && "\\.+*?()|[]{}^$#&-~".contains(character) {
+                bytes.append(0x5C)
+            }
+            character.encodeUtf8(into: &bytes)
+        }
+        unsafe {
+            return String.fromUtf8Unchecked(bytes)
+        }
+    }
+
+    // ---- Groups ------------------------------------------------------------
+
+    /// How many capturing groups the pattern has, not counting the whole
+    /// match.
+    public var groupCount: Int => program.groupCount
+
+    /// The number of the group of the name, or none.
+    ///
+    /// ```sable
+    /// let regex = try! Regex("(a)(?<second>b)")
+    /// assert(regex.groupIndex(named: "second") == 2)
+    /// ```
+    public fn groupIndex(named name: String) -> Int? {
+        if name.isEmpty {
+            return none
+        }
+        return names.firstIndex(of: name)
+    }
+
+    /// The name of each group by its number, "" for a group with none; the
+    /// whole match, 0, has none.
+    public var groupNames: String[>..] => names
+
+    // ---- Searching -----------------------------------------------------------
+
+    /// Whether the regex matches anywhere in the text. Stops at the first
+    /// match it sees, not finding where it starts.
+    ///
+    /// ```sable
+    /// let regex = try! Regex(#"\bcat\b"#)
+    /// assert(regex.isMatch("a cat sat"))
+    /// assert(!regex.isMatch("concatenate"))
+    /// ```
+    public fn isMatch(_ text: some StringProtocol) -> Bool {
+        let piece = text.asSubstring
+        let start = piece.startIndex.utf8Offset
+        let end = piece.endIndex.utf8Offset
+        if literal || backtracking {
+            return find(piece.base, start, end, start, anchored: false) != none
+        }
+        if anchoredStart {
+            return forward().findEnd(piece.base, start, end, start, anchored: true, earliest: true, leading: "") >= 0
+        }
+        return forward().findEnd(piece.base, start, end, start, anchored: false, earliest: true, leading: leading) >= 0
+    }
+
+    /// The first match in the text, leftmost-first, or none.
+    ///
+    /// ```sable
+    /// let regex = try! Regex("[0-9]+")
+    /// let found = regex.firstMatch(in: "abc 123 456")!
+    /// assert(found.text == "123" && found.range.lowerBound.utf8Offset == 4)
+    /// ```
+    public fn firstMatch(in text: some StringProtocol) -> RegexMatch? {
+        let piece = text.asSubstring
+        let start = piece.startIndex.utf8Offset
+        if let span = find(piece.base, start, piece.endIndex.utf8Offset, start, anchored: false) {
+            return RegexMatch(base: piece.base, start: span.0, end: span.1)
+        }
+        return none
+    }
+
+    /// Every match in the text, left to right, none overlapping, found as
+    /// the sequence is gone through: none is found before it is asked for,
+    /// and finding one allocates nothing. An empty match right after
+    /// another match is not one.
+    ///
+    /// ```sable
+    /// let regex = try! Regex(#"\d+"#)
+    /// var found: String[>..] = []
+    /// for number in regex.matches(in: "1, 22 and 333") {
+    ///     found.append(number.toString())
+    /// }
+    /// assert(found == ["1", "22", "333"])
+    /// ```
+    public fn matches(in text: some StringProtocol) -> RegexMatches {
+        let piece = text.asSubstring
+        return RegexMatches { regex: self, base: piece.base, start: piece.startIndex.utf8Offset, end: piece.endIndex.utf8Offset }
+    }
+
+    /// How many matches there are in the text, as `matches(in:)` finds them.
+    public fn count(in text: some StringProtocol) -> Int {
+        var count = 0
+        for _ in matches(in: text) {
+            count += 1
+        }
+        return count
+    }
+
+    /// The first match in the text with what each group matched, or none.
+    ///
+    /// ```sable
+    /// let regex = try! Regex(#"(\w+)@(?<host>[\w.]+)"#)
+    /// let found = regex.captures(in: "mail ada@example.org today")!
+    /// assert(found[0]! == "ada@example.org")
+    /// assert(found[1]! == "ada" && found["host"]! == "example.org")
+    /// ```
+    public fn captures(in text: some StringProtocol) -> RegexCaptures? {
+        let piece = text.asSubstring
+        let start = piece.startIndex.utf8Offset
+        if let span = find(piece.base, start, piece.endIndex.utf8Offset, start, anchored: false) {
+            return capturesOf(piece.base, start, piece.endIndex.utf8Offset, span)
+        }
+        return none
+    }
+
+    /// Every match in the text with what each group matched, as
+    /// `matches(in:)` finds them.
+    ///
+    /// ```sable
+    /// let pairs = try! Regex(#"(\w+)=(\w+)"#)
+    /// var keys: String[>..] = []
+    /// for pair in pairs.allCaptures(in: "a=1 b=2") {
+    ///     keys.append(pair[1]!.toString())
+    /// }
+    /// assert(keys == ["a", "b"])
+    /// ```
+    public fn allCaptures(in text: some StringProtocol) -> RegexCapturesSequence {
+        let piece = text.asSubstring
+        return RegexCapturesSequence { regex: self, base: piece.base, start: piece.startIndex.utf8Offset, end: piece.endIndex.utf8Offset }
+    }
+
+    /// The match of the whole text, with what each group matched, or none
+    /// when the regex does not match all of it: as if the pattern were
+    /// `\A(?:…)\z`.
+    ///
+    /// ```sable
+    /// let regex = try! Regex("a|ab")
+    /// assert(regex.wholeMatch("ab") != none)
+    /// assert(regex.wholeMatch("abc") == none)
+    /// ```
+    public fn wholeMatch(_ text: some StringProtocol) -> RegexCaptures? {
+        let piece = text.asSubstring
+        let base = piece.base
+        let start = piece.startIndex.utf8Offset
+        let end = piece.endIndex.utf8Offset
+        var found = filled(-1, program.slotCount)
+        if backtracking {
+            if wholeBacktracker == none {
+                wholeBacktracker = RegexBacktracker(program)
+            }
+            if !wholeBacktracker!.search(base, start, end, start, anchored: true, requiredEnd: end, leading: "", &found) {
+                return none
+            }
+        } else {
+            if wholeEngine == none {
+                let whole = RegexNode.Concat(items: [.Look(kind: lookStartText), root, .Look(kind: lookEndText)])
+                wholeEngine = RegexPikeVM(try! RegexProgram.compile(whole, classes: classes, groupCount: program.groupCount, names: names, reverse: false))
+            }
+            if !wholeEngine!.search(base, start, end, start, anchored: true, &found) {
+                return none
+            }
+        }
+        return RegexCaptures(base: base, slots: found, names: names)
+    }
+
+    // ---- Pattern -------------------------------------------------------------
+
+    public fn firstMatch(in text: Substring, from start: String.Index) -> Range<String.Index>? {
+        let low = text.startIndex.utf8Offset
+        let from = start.utf8Offset < low ? low : start.utf8Offset
+        if let span = find(text.base, low, text.endIndex.utf8Offset, from, anchored: false) {
+            return String.Index(utf8Offset: span.0)..<String.Index(utf8Offset: span.1)
+        }
+        return none
+    }
+
+    public fn lastMatch(in text: Substring, before end: String.Index) -> Range<String.Index>? {
+        var last: Range<String.Index>? = none
+        var iterator = matches(in: text).makeIterator()
+        while let found = iterator.next() {
+            if found.end > end.utf8Offset {
+                break
+            }
+            last = found.range
+        }
+        return last
+    }
+
+    public fn matchEnd(in text: Substring, startingAt start: String.Index) -> String.Index? {
+        let low = text.startIndex.utf8Offset
+        let high = text.endIndex.utf8Offset
+        if start.utf8Offset < low || start.utf8Offset > high {
+            return none
+        }
+        if let span = find(text.base, low, high, start.utf8Offset, anchored: true) {
+            return String.Index(utf8Offset: span.1)
+        }
+        return none
+    }
+
+    public fn matchStart(in text: Substring, endingAt end: String.Index) -> String.Index? {
+        let low = text.startIndex.utf8Offset
+        let high = text.endIndex.utf8Offset
+        let at = end.utf8Offset
+        if at < low || at > high {
+            return none
+        }
+        if literal {
+            let from = at - leading.utf8Count
+            if from >= low && Runtime.findUtf8(text.base, from, at, leading, 0, leading.utf8Count) == from {
+                return String.Index(utf8Offset: from)
+            }
+            return none
+        }
+        if backtracking {
+            var from = low
+            while from <= at {
+                if backtracker().search(text.base, low, high, from, anchored: true, requiredEnd: at, leading: "", &slots) {
+                    return String.Index(utf8Offset: from)
+                }
+                if from == at {
+                    break
+                }
+                from += scalarAt(text.base, from) >> 21
+            }
+            return none
+        }
+        let from = reverse().findStart(text.base, low, high, at, limit: low)
+        return from < 0 ? none : String.Index(utf8Offset: from)
+    }
+
+    // ---- The engines -----------------------------------------------------------
+
+    fn forward() -> RegexDfa {
+        if let engine = forwardEngine {
+            return engine
+        }
+        let engine = RegexDfa(program, longest: false)
+        forwardEngine = engine
+        return engine
+    }
+
+    fn reverse() -> RegexDfa {
+        if let engine = reverseEngine {
+            return engine
+        }
+        let reversed = try! RegexProgram.compile(root, classes: classes, groupCount: program.groupCount, names: names, reverse: true)
+        let engine = RegexDfa(reversed, longest: true)
+        reverseEngine = engine
+        return engine
+    }
+
+    fn pike() -> RegexPikeVM {
+        if let engine = pikeEngine {
+            return engine
+        }
+        let engine = RegexPikeVM(program)
+        pikeEngine = engine
+        return engine
+    }
+
+    fn backtracker() -> RegexBacktracker {
+        if let engine = backtrackEngine {
+            return engine
+        }
+        let engine = RegexBacktracker(program)
+        backtrackEngine = engine
+        return engine
+    }
+
+    /// The leftmost-first match in the text from 'start' to 'end' that
+    /// starts at or after 'from' — at 'from', when anchored: its start
+    /// and end offsets.
+    fn find(_ text: String, _ start: Int, _ end: Int, _ from: Int, anchored: Bool) -> (Int, Int)? {
+        if from > end {
+            return none
+        }
+        var anchoredHere = anchored
+        if anchoredStart {
+            if from > start {
+                return none
+            }
+            anchoredHere = true
+        }
+        if literal {
+            let length = leading.utf8Count
+            if anchoredHere {
+                if from + length <= end && Runtime.findUtf8(text, from, from + length, leading, 0, length) == from {
+                    return (from, from + length)
+                }
+                return none
+            }
+            let at = Runtime.findUtf8(text, from, end, leading, 0, length)
+            return at < 0 ? none : (at, at + length)
+        }
+        if backtracking {
+            if backtracker().search(text, start, end, from, anchored: anchoredHere, requiredEnd: -1, leading: leading, &slots) {
+                return (slots[0], slots[1])
+            }
+            return none
+        }
+        let matchEnd = forward().findEnd(text, start, end, from, anchored: anchoredHere, earliest: false, leading: anchoredHere ? "" : leading)
+        if matchEnd < 0 {
+            return none
+        }
+        if anchoredHere {
+            return (from, matchEnd)
+        }
+        return (reverse().findStart(text, start, end, matchEnd, limit: from), matchEnd)
+    }
+
+    /// The match's groups, found by matching again from its start.
+    fn capturesOf(_ text: String, _ start: Int, _ end: Int, _ span: (Int, Int)) -> RegexCaptures {
+        var found = filled(-1, program.slotCount)
+        if program.groupCount == 0 {
+            found[0] = span.0
+            found[1] = span.1
+        } else if backtracking {
+            let _ = backtracker().search(text, start, end, span.0, anchored: true, requiredEnd: -1, leading: "", &found)
+        } else {
+            let _ = pike().search(text, start, end, span.0, anchored: true, &found)
+        }
+        return RegexCaptures(base: text, slots: found, names: names)
+    }
+
+    /// The next match for an iteration over the text, from 'at', which it
+    /// moves past the match; 'lastEnd' is where the match before ended.
+    fn nextSpan(_ text: String, _ start: Int, _ end: Int, _ at: inout Int, _ lastEnd: inout Int) -> (Int, Int)? {
+        while at <= end {
+            guard let span = find(text, start, end, at, anchored: false) else {
+                at = end + 1
+                return none
+            }
+            if span.1 > span.0 {
+                at = span.1
+            } else {
+                at = span.1 < end ? span.1 + (scalarAt(text, span.1) >> 21) : end + 1
+                if span.1 == lastEnd {
+                    // An empty match right after another match is not one.
+                    continue
+                }
+            }
+            lastEnd = span.1
+            return span
+        }
+        return none
+    }
+}

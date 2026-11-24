@@ -1,0 +1,764 @@
+module RegexTests
+
+// Regex (Sable.Text): searches ported from RE2's and Rust regex's test
+// suites (re2/testing/search_test.cc, regex's testdata), each run by the
+// linear engines and by the backtracker, which must agree; Unicode classes
+// and case folding; the iteration's handling of empty matches; the
+// String searches that take a Pattern; the linear-time guarantee on
+// patterns that make backtrackers take exponential time; and a random
+// comparison of the engines.
+
+import Sable.Text
+import Sable.Testing
+
+/// What a regex finds in a text, as text: each group's start and end
+/// offsets, "-" for one that matched nothing; "none" for no match.
+fn spans(_ regex: Regex, _ text: String) -> String {
+    guard let found = regex.captures(in: text) else {
+        return "none"
+    }
+    var parts: String[>..] = []
+    var i = 0
+    while i < found.count {
+        if let range = found.range(at: i) {
+            parts.append("\(range.lowerBound.utf8Offset)-\(range.upperBound.utf8Offset)")
+        } else {
+            parts.append("-")
+        }
+        i += 1
+    }
+    return parts.joined(separator: " ")
+}
+
+/// Checks the cases, three strings each: the pattern, the text, and what
+/// `spans` gives. Each is run by the automata and by the backtracker.
+fn checkCases(_ cases: String[>..], options: RegexOptions = .None, linear: Bool = true) {
+    var i = 0
+    while i < cases.count {
+        let pattern = cases[i]
+        let text = cases[i + 1]
+        let expected = cases[i + 2]
+        if linear {
+            guard let regex = try? Regex(pattern, options: options) else {
+                fail("/\(pattern)/ does not compile")
+                i += 3
+                continue
+            }
+            let found = spans(regex, text)
+            if found != expected {
+                fail("/\(pattern)/ on \"\(text)\": expected \(expected), found \(found)")
+            }
+            assertEqual(regex.isMatch(text), expected != "none")
+            if let first = regex.firstMatch(in: text) {
+                assertEqual("\(first.range.lowerBound.utf8Offset)-\(first.range.upperBound.utf8Offset)", expected.split(" ")[0])
+            } else {
+                assertEqual(expected, "none")
+            }
+        }
+        let backtracking = try! Regex(pattern, options: options | .Backtracking)
+        let backtracked = spans(backtracking, text)
+        if backtracked != expected {
+            fail("backtracking /\(pattern)/ on \"\(text)\": expected \(expected), found \(backtracked)")
+        }
+        assertEqual(backtracking.isMatch(text), expected != "none")
+        i += 3
+    }
+}
+
+@test
+fn basicSearchesFromRe2() {
+    checkCases([
+        "a", "a", "0-1",
+        "a", "b", "none",
+        "abc", "xabcy", "1-4",
+        "ab*c", "abc", "0-3",
+        "ab*bc", "abbbbc", "0-6",
+        "ab+bc", "abbc", "0-4",
+        "ab+bc", "abc", "none",
+        "ab?bc", "abc", "0-3",
+        "ab?c", "abc", "0-3",
+        "^abc$", "abc", "0-3",
+        "^abc$", "abcc", "none",
+        "^abc", "abcc", "0-3",
+        "abc$", "aabc", "1-4",
+        "^", "abc", "0-0",
+        "$", "abc", "3-3",
+        "a.c", "axc", "0-3",
+        "a.*c", "axyzc", "0-5",
+        "a.*c", "axyzd", "none",
+        "a[bc]d", "abd", "0-3",
+        "a[b-d]e", "ace", "0-3",
+        "a[-b]", "a-", "0-2",
+        "a]", "a]", "0-2",
+        "a[]]b", "a]b", "0-3",
+        "a[^bc]d", "aed", "0-3",
+        "a[^bc]d", "abd", "none",
+        "a[^-b]c", "adc", "0-3",
+        "ab|cd", "abcd", "0-2",
+        "()ef", "def", "1-3 1-1",
+        "$b", "b", "none",
+        #"a\(b"#, "a(b", "0-3",
+        #"a\\b"#, #"a\b"#, "0-3",
+        "((a))", "abc", "0-1 0-1 0-1",
+        "(a)b(c)", "abc", "0-3 0-1 2-3",
+        "a+b+c", "aabbabc", "4-7",
+        "(a+|b)*", "ab", "0-2 1-2",
+        "(a+|b)+", "ab", "0-2 1-2",
+        "(a+|b)?", "ab", "0-1 0-1",
+        "[^ab]*", "cde", "0-3",
+        "a*", "", "0-0",
+        "([abc])*d", "abbbcd", "0-6 4-5",
+        "([abc])*bcd", "abcd", "0-4 0-1",
+        "a|b|c|d|e", "e", "0-1",
+        "(a|b|c|d|e)f", "ef", "0-2 0-1",
+        "abcd*efg", "abcdefg", "0-7",
+        "ab*", "xabyabbbz", "1-3",
+        "ab*", "xayabbbz", "1-2",
+        "(ab|cd)e", "abcde", "2-5 2-4",
+        "[abhgefdc]ij", "hij", "0-3",
+        "(abc|)ef", "abcdef", "4-6 4-4",
+        "(a|b)c*d", "abcd", "1-4 1-2",
+        "(ab|ab*)bc", "abc", "0-3 0-1",
+        "a([bc]*)c*", "abc", "0-3 1-3",
+        "a([bc]*)(c*d)", "abcd", "0-4 1-3 3-4",
+        "a([bc]+)(c*d)", "abcd", "0-4 1-3 3-4",
+        "a([bc]*)(c+d)", "abcd", "0-4 1-2 2-4",
+        "a[bcd]*dcdcde", "adcdcde", "0-7",
+        "a[bcd]+dcdcde", "adcdcde", "none",
+        "(ab|a)b*c", "abc", "0-3 0-2",
+        "((a)(b)c)(d)", "abcd", "0-4 0-3 0-1 1-2 3-4",
+        "[a-zA-Z_][a-zA-Z0-9_]*", "alpha", "0-5",
+        "^a(bc+|b[eh])g|.h$", "abh", "1-3 -",
+        "(bc+d$|ef*g.|h?i(j|k))", "effgz", "0-5 0-5 -",
+        "(bc+d$|ef*g.|h?i(j|k))", "ij", "0-2 0-2 1-2",
+        "(bc+d$|ef*g.|h?i(j|k))", "effg", "none",
+        "(bc+d$|ef*g.|h?i(j|k))", "reffgz", "1-6 1-6 -",
+        "(((((((((a)))))))))", "a", "0-1 0-1 0-1 0-1 0-1 0-1 0-1 0-1 0-1 0-1",
+        "multiple words of text", "uh-uh", "none",
+        "multiple words", "multiple words, yeah", "0-14",
+        "(.*)c(.*)", "abcde", "0-5 0-2 3-5",
+        #"\((.*), (.*)\)"#, "(a, b)", "0-6 1-2 4-5",
+        "a(bc)d", "abcd", "0-4 1-3",
+        "a[-]?c", "ac", "0-2",
+        "", "abc", "0-0",
+        "(|a)", "a", "0-0 0-0",
+        "(a|)", "a", "0-1 0-1",
+        "(a*)*", "b", "0-0 -",
+        "(a*)+", "b", "0-0 0-0",
+        "(a*|b)*", "ab", "0-2 1-2",
+    ])
+}
+
+@test
+fn alternationPrefersTheFirstBranchThatMatches() {
+    checkCases([
+        "a|ab", "ab", "0-1",
+        "ab|a", "ab", "0-2",
+        "(a|ab)(c|bcd)", "abcd", "0-4 0-1 1-4",
+        "samwise|sam", "samwise", "0-7",
+        "sam|samwise", "samwise", "0-3",
+        "Sherlock|Holmes|Watson", "Dr Watson met Holmes", "3-9",
+        "foo|foobar|bar", "xfoobar", "1-4",
+    ])
+}
+
+@test
+fn quantifiersAreGreedyUnlessLazy() {
+    checkCases([
+        "a*?", "aaa", "0-0",
+        "a+?", "aaa", "0-1",
+        "a??b", "ab", "0-2",
+        "a{2,3}?", "aaaa", "0-2",
+        "(a+?)(b*)", "aabb", "0-1 0-1 1-1",
+        "<.+?>", "<a><b>", "0-3",
+        "<.+>", "<a><b>", "0-6",
+        "a{3}", "aaaa", "0-3",
+        "a{2,}", "aaaa", "0-4",
+        "a{1,2}", "aaaa", "0-2",
+        "a{,2}", "aaaa", "0-2",
+        "x{0}y", "xy", "1-2",
+        "(ab){2}", "ababab", "0-4 2-4",
+        "(ab){2,}", "abababx", "0-6 4-6",
+        "a{", "a{", "0-2",
+        "a{x}", "a{x}", "0-4",
+        "a{,", "a{,", "0-3",
+        "(?U)a+", "aaa", "0-1",
+        "(?U)a+?", "aaa", "0-3",
+        "(?U)(a|b)*?c", "abc", "0-3 1-2",
+    ])
+}
+
+@test
+fn assertionsMatchBetweenCharacters() {
+    checkCases([
+        #"\bx\b"#, "x", "0-1",
+        #"\bx\b"#, "axb", "none",
+        #"\Bx\B"#, "axb", "1-2",
+        #"\b"#, "", "none",
+        #"\B"#, "", "0-0",
+        #"\b"#, " ab", "1-1",
+        "^$", "", "0-0",
+        "^a$", "a\n", "none",
+        "(?m)^a$", "a\nb", "0-1",
+        "(?m)^b$", "a\nb", "2-3",
+        "(?m)^$", "a\n", "2-2",
+        "(?m)$", "a\nb", "1-1",
+        #"\Aa"#, "ba", "none",
+        #"a\z"#, "ab", "none",
+        #"a\z"#, "ba", "1-2",
+        #"(?m)\Ab"#, "a\nb", "none",
+        #"\bé\b"#, "café é", "6-8",
+        #"\w+\b"#, "naïve!", "0-6",
+        #"x\b"#, "xé", "none",
+        #"^\w+"#, "hello world", "0-5",
+        #"\w+$"#, "hello world", "6-11",
+        #"(?m)^\w+$"#, "a!\nbcd\n", "3-6",
+    ])
+}
+
+@test
+fn classesAndUnicode() {
+    checkCases([
+        ".", "\n", "none",
+        "(?s).", "\n", "0-1",
+        ".", "é", "0-2",
+        "a.b", "a😀b", "0-6",
+        "[[:alpha:]]+", "ab12", "0-2",
+        "[[:^digit:]]+", "12ab34", "2-4",
+        "[[:word:][:space:]]+", "!a b_!", "1-5",
+        "[a-c&&b-d]+", "abcd", "1-3",
+        "[a-z--aeiou]+", "aebcd", "2-5",
+        #"[\w&&[^\d]]+"#, "12ab34", "2-4",
+        "[a-c~~b-d]+", "abcd", "0-1",
+        "[a[bc]]+", "xcbad", "1-4",
+        #"[\d\s]+"#, "a1 2b", "1-4",
+        #"[^\D]+"#, "a12b", "1-3",
+        #"\p{Lu}"#, "aB", "1-2",
+        #"\pL+"#, "12abc", "2-5",
+        #"\P{L}+"#, "ab12", "2-4",
+        #"\p{^L}+"#, "ab12", "2-4",
+        #"\p{Uppercase_Letter}+"#, "aBCd", "1-3",
+        #"\p{gc=Nd}+"#, "x42", "1-3",
+        #"\d+"#, "x١٢٣", "1-7",
+        #"\w+"#, "żółw!", "0-7",
+        #"\s+"#, "a\u{3000}b", "1-4",
+        #"[\p{Lu}\d]+"#, "aB1c", "1-3",
+        #"\p{Alphabetic}+"#, "1ab2", "1-3",
+        #"\p{White_Space}"#, "a b", "1-2",
+        #"\p{Any}"#, "😀", "0-4",
+        #"[\p{L}&&\p{ASCII}]+"#, "éab", "2-4",
+        #"\x41\x{1F600}é"#, "A😀é", "0-7",
+        #"\t\n\r\f\v\a\e\0"#, "\t\n\r\u{C}\u{B}\u{7}\u{1B}\u{0}", "0-8",
+        #"\.\*\+\?\(\)\[\]\{\}\|\^\$\\\#\-\&\~"#, #".*+?()[]{}|^$\#-&~"#, "0-18",
+        #"[\-\]]+"#, "a-]b", "1-3",
+        #"[\x{100}-\x{17F}]+"#, "aĀſz", "1-5",
+    ])
+}
+
+@test
+fn ignoringCaseFoldsUnicodeSimpleCases() {
+    checkCases([
+        "(?i)abc", "ABC", "0-3",
+        "(?i)a[b-d]e", "ACE", "0-3",
+        "(?i)k", "\u{212A}", "0-3",
+        "(?i)\u{212A}", "k", "0-1",
+        "(?i)[k]", "\u{212A}", "0-3",
+        "(?i)[\u{212A}]", "K", "0-1",
+        "(?i)σ", "Σ", "0-2",
+        "(?i)ς", "Σ", "0-2",
+        "(?i)[ς]", "σ", "0-2",
+        "(?i)[^k]", "K", "none",
+        "(?i)[^k]", "\u{212A}", "none",
+        #"(?i)\p{Lu}"#, "a", "0-1",
+        "(?i)straße", "STRASSE", "none",
+        "(?i)ǆ", "ǅ", "0-2",
+        "a(?i)b", "aB", "0-2",
+        "a(?i:b)c", "aBc", "0-3",
+        "a(?i:b)c", "aBC", "none",
+        "(?i)a(?-i)b", "Ab", "0-2",
+        "(?i)a(?-i)b", "AB", "none",
+        "(?i)[a-f]+", "xDeAdBeEFx", "1-9",
+        "(?i)é", "É", "0-2",
+    ])
+    checkCases(["abc", "aBc", "0-3"], options: .IgnoreCase)
+}
+
+@test
+fn flagsAndOptions() {
+    checkCases([
+        "(?x) a b # a comment\n c", "abc", "0-3",
+        #"(?x)a\ b"#, "a b", "0-3",
+        #"(?x)a\#b"#, "a#b", "0-3",
+        "(?x)[a b]+", "a b", "0-1",
+        "(?x) a (?-x) b", "a b", "0-3",
+        "(?s:.).", "\n\n", "none",
+        "(?sm)^.$", "\n", "0-1",
+        "(?#a comment)a", "a", "0-1",
+        "(?i-i:a)A", "aA", "0-2",
+    ])
+    checkCases(["^b$", "a\nb\nc", "2-3"], options: .Multiline)
+    checkCases(["a.c", "a\nc", "0-3"], options: .DotAll)
+    checkCases(["a b # c", "ab", "0-2"], options: .Extended)
+    checkCases(["(?-m)^b", "a\nb", "none"], options: .Multiline)
+}
+
+@test
+fn namedGroupsAreNumberedWithTheOthers() {
+    checkCases([
+        #"(?<year>\d+)-(?P<month>\d+)-(?'day'\d+)"#, "2024-03-15", "0-10 0-4 5-7 8-10",
+        "(a)(?<b>b)(c)", "abc", "0-3 0-1 1-2 2-3",
+    ])
+    let regex = try! Regex(#"(?<year>\d+)-(?P<month>\d+)"#)
+    assertEqual(regex.groupCount, 2)
+    assertEqual(regex.groupIndex(named: "month"), 2)
+    assertEqual(regex.groupIndex(named: "day"), none)
+    assertEqual(regex.groupIndex(named: ""), none)
+    assert(regex.groupNames == ["", "year", "month"])
+    let found = regex.captures(in: "on 1999-12")!
+    assertEqual(found["year"]!.toString(), "1999")
+    assertEqual(found["month"]!.toString(), "12")
+    assert(found["day"] == none)
+    assert(found[3] == none && found[-1] == none)
+    assertEqual(found.range(named: "year")!.lowerBound.utf8Offset, 3)
+    assert(found.range(named: "") == none && found.range(named: "nope") == none)
+    assertEqual(found.text.toString(), "1999-12")
+    assertEqual(found.range.upperBound.utf8Offset, 10)
+}
+
+@test
+fn backtrackingAddsBackReferencesAndLookaround() {
+    checkCases([
+        #"(a)\1"#, "aa", "0-2 0-1",
+        #"(a)\1"#, "ab", "none",
+        #"(?i)(a)\1"#, "aA", "0-2 0-1",
+        #"(?i)(é)\1"#, "éÉ", "0-4 0-2",
+        #"(?<x>ab)\k<x>"#, "abab", "0-4 0-2",
+        #"(?<x>ab)\k'x'\k{x}"#, "ababab", "0-6 0-2",
+        #"(\w+) \1"#, "hello hello world", "0-11 0-5",
+        #"(a)|\1b"#, "b", "none",
+        "foo(?=bar)", "foobar", "0-3",
+        "foo(?!bar)", "foobar", "none",
+        "foo(?!bar)", "foobaz", "0-3",
+        #"(?<=\$)\d+"#, "cost $42", "6-8",
+        #"(?<!\$)\b\d+"#, "$1 2", "3-4",
+        "(?<=ab|b)c", "abc", "2-3",
+        "(?<=é)x", "éx", "2-3",
+        "(?=(a+))a*b", "aaab", "0-4 0-3",
+        "(?!(a))b", "b", "0-1 -",
+        "(?>a+)b", "aaab", "0-4",
+        "(?>a+)ab", "aaab", "none",
+        "(?>(a+))b", "aab", "0-3 0-2",
+        "a++b", "aab", "0-3",
+        "a++a", "aaa", "none",
+        "a?+a", "a", "none",
+        "(x)*+y", "xxy", "0-3 1-2",
+        "(a*)*b", "aab", "0-3 0-2",
+    ], linear: false)
+}
+
+@test
+fn errorsSayWhatAndWhere() {
+    let cases: (String, RegexErrorKind, Int)[>..] = [
+        ("(", .UnclosedGroup, 0),
+        ("a(b|c", .UnclosedGroup, 1),
+        ("(?i", .UnclosedGroup, 0),
+        ("(?#abc", .UnclosedGroup, 0),
+        ("a)", .UnopenedGroup, 1),
+        ("[a", .UnclosedClass, 0),
+        ("[a\\", .UnclosedClass, 0),
+        ("[a-\\", .UnclosedClass, 0),
+        ("[z-a]", .InvalidRange, 1),
+        ("[a-\\d]", .InvalidRange, 1),
+        ("[\\d-z]", .InvalidRange, 1),
+        ("[a-[b]]", .InvalidRange, 1),
+        ("\\", .InvalidEscape, 0),
+        ("ab\\q", .InvalidEscape, 2),
+        ("\\x{110000}", .InvalidEscape, 0),
+        ("\\x{D800}", .InvalidEscape, 0),
+        ("\\xZZ", .InvalidEscape, 0),
+        ("\\x{}", .InvalidEscape, 0),
+        ("\\x{12", .InvalidEscape, 0),
+        ("\\é", .InvalidEscape, 0),
+        ("*a", .NothingToRepeat, 0),
+        ("a**", .NothingToRepeat, 2),
+        ("x{2}{3}", .NothingToRepeat, 4),
+        ("a|?", .NothingToRepeat, 2),
+        ("a{3,2}", .InvalidRepetition, 1),
+        ("a{2", .InvalidRepetition, 1),
+        ("a{100001}", .InvalidRepetition, 1),
+        ("\\p{Greek}", .UnknownProperty, 0),
+        ("\\p{L", .UnknownProperty, 2),
+        ("\\p", .UnknownProperty, 0),
+        ("[[:nope:]]", .UnknownProperty, 1),
+        ("(?<1a>x)", .InvalidGroupName, 3),
+        ("(?<>x)", .InvalidGroupName, 3),
+        ("(?<a", .InvalidGroupName, 0),
+        ("(?<a>x)(?<a>y)", .InvalidGroupName, 7),
+        ("(?z)", .InvalidFlag, 2),
+        ("(?i-)", .InvalidFlag, 4),
+        ("(?i--m)", .InvalidFlag, 4),
+        ("(a)\\1", .NeedsBacktracking, 3),
+        ("\\k<a>", .NeedsBacktracking, 0),
+        ("(?=a)", .NeedsBacktracking, 0),
+        ("(?<!a)", .NeedsBacktracking, 0),
+        ("(?>a)", .NeedsBacktracking, 0),
+        ("a*+", .NeedsBacktracking, 1),
+        ("(a{1000}){1000}", .TooLarge, 0),
+    ]
+    for (pattern, kind, offset) in cases {
+        do {
+            let _ = try Regex(pattern)
+            fail("/\(pattern)/ should not compile")
+        } catch {
+            if error.kind != kind || error.offset != offset {
+                fail("/\(pattern)/: expected \(kind) at \(offset), found \(error.kind) at \(error.offset): \(error.message)")
+            }
+        }
+    }
+    let backtrackingCases: (String, RegexErrorKind, Int)[>..] = [
+        ("(a)\\2", .UnknownGroup, 3),
+        ("\\k<nope>", .UnknownGroup, 0),
+        ("\\kx", .InvalidEscape, 0),
+    ]
+    for (pattern, kind, offset) in backtrackingCases {
+        do {
+            let _ = try Regex(pattern, options: .Backtracking)
+            fail("/\(pattern)/ should not compile")
+        } catch {
+            if error.kind != kind || error.offset != offset {
+                fail("/\(pattern)/: expected \(kind) at \(offset), found \(error.kind) at \(error.offset): \(error.message)")
+            }
+        }
+    }
+}
+
+@test
+fn anErrorDescribesItself() {
+    do {
+        let _ = try Regex("ab[c")
+        fail("unclosed class")
+    } catch {
+        assertEqual(error.description(), "regex error at 2: unclosed character class")
+        assertEqual(error, RegexError(.UnclosedClass, at: 2, "unclosed character class"))
+        assertNotEqual(error, RegexError(.UnclosedGroup, at: 2, "unclosed character class"))
+        assertNotEqual(error, RegexError(.UnclosedClass, at: 3, "unclosed character class"))
+        assertNotEqual(error, RegexError(.UnclosedClass, at: 2, "unclosed class"))
+        assertEqual("\(error:?)", "regex error at 2: unclosed character class")
+    }
+    // Offsets count UTF-8 bytes.
+    do {
+        let _ = try Regex("é(")
+        fail("unclosed group")
+    } catch {
+        assertEqual(error.offset, 2)
+    }
+}
+
+/// The spans of every match, as text.
+fn allSpans(_ regex: Regex, _ text: String) -> String {
+    var parts: String[>..] = []
+    for found in regex.matches(in: text) {
+        parts.append("\(found.range.lowerBound.utf8Offset)-\(found.range.upperBound.utf8Offset)")
+    }
+    return parts.joined(separator: " ")
+}
+
+@test
+fn matchesSkipAnEmptyMatchRightAfterAnother() {
+    for options in [RegexOptions.None, RegexOptions.Backtracking] {
+        assertEqual(allSpans(try! Regex("a*", options: options), "baaab"), "0-0 1-4 5-5")
+        assertEqual(allSpans(try! Regex("", options: options), "aé"), "0-0 1-1 3-3")
+        assertEqual(allSpans(try! Regex(#"\d+"#, options: options), "1 22 333"), "0-1 2-4 5-8")
+        assertEqual(allSpans(try! Regex("a|", options: options), "aba"), "0-1 2-3")
+        assertEqual(allSpans(try! Regex(#"\b"#, options: options), "ab cd"), "0-0 2-2 3-3 5-5")
+        assertEqual(allSpans(try! Regex("^", options: options), "abc"), "0-0")
+        assertEqual(allSpans(try! Regex("(?m)^", options: options), "a\nb\n"), "0-0 2-2 4-4")
+    }
+    let words = try! Regex(#"\w+"#)
+    assertEqual(words.count(in: "the quick brown fox"), 4)
+    assertEqual(words.count(in: ""), 0)
+    var texts: String[>..] = []
+    for found in words.matches(in: "one two") {
+        texts.append(found.toString())
+        assert(!found.isEmpty)
+        assertEqual(found.base, "one two")
+    }
+    assert(texts == ["one", "two"])
+    let first = words.firstMatch(in: "one two")!
+    assertEqual(first, words.firstMatch(in: "one two")!)
+    assertEqual("\(first:?)", #"0..<3 "one""#)
+    assertNotEqual(first, words.firstMatch(in: "one, two")!)
+    assertNotEqual(first, words.firstMatch(in: " one two")!)
+    assertNotEqual(first, words.firstMatch(in: "o two")!)
+    var keys: String[>..] = []
+    for pair in (try! Regex(#"(\w)=(\d)"#)).allCaptures(in: "a=1, b=2, c=x") {
+        keys.append(pair[1]!.toString() + pair[2]!.toString())
+    }
+    assert(keys == ["a1", "b2"])
+}
+
+@test
+fn literalsAreSearchedForDirectly() {
+    let regex = try! Regex("needle")
+    let text = "hay hay hay needle hay needle"
+    assertEqual(allSpans(regex, text), "12-18 23-29")
+    assert(regex.isMatch(text))
+    assert(!regex.isMatch("haystack"))
+    assertEqual(spans(regex, text), "12-18")
+    assertEqual(text.firstIndex(of: regex)!.utf8Offset, 12)
+    assertEqual(text.trimmingSuffix(regex), "hay hay hay needle hay ")
+    assertEqual("needles".trimmingPrefix(regex), "s")
+    assertEqual("xneedles".trimmingPrefix(regex), "xneedles")
+    assertEqual("ne".trimmingSuffix(regex), "ne")
+    // A literal prefix narrows where the automaton starts.
+    let prefixed = try! Regex(#"needle\d+"#)
+    assertEqual(allSpans(prefixed, "needle needle12 needle3x"), "7-15 16-23")
+    assertEqual(allSpans(try! Regex(#"needle\d+"#, options: .Backtracking), "needle needle12 needle3x"), "7-15 16-23")
+}
+
+@test
+fn aSubstringIsSearchedAsATextOfItsOwn() {
+    let text = "ab cd ef"
+    let middle = text[text.index(text.startIndex, offsetBy: 3)..<text.index(text.startIndex, offsetBy: 5)]
+    for options in [RegexOptions.None, RegexOptions.Backtracking] {
+        let regex = try! Regex(#"^\w+$"#, options: options)
+        let found = regex.firstMatch(in: middle)!
+        assertEqual(found.range.lowerBound.utf8Offset, 3)
+        assertEqual(found.text.toString(), "cd")
+        assert(regex.isMatch(middle))
+        assert(!regex.isMatch(text))
+        assertEqual(regex.captures(in: middle)!.range.upperBound.utf8Offset, 5)
+        assertEqual(regex.count(in: middle), 1)
+    }
+}
+
+@test
+fn stringSearchesTakeARegex() {
+    let digits = try! Regex(#"\d+"#)
+    let spaces = try! Regex(#"\s+"#)
+    let text = "a1 b22  c333"
+    assertEqual(text.firstIndex(of: digits)!.utf8Offset, 1)
+    assertEqual(text.lastIndex(of: digits)!.utf8Offset, 9)
+    assertEqual(text.lastRange(of: digits)!.upperBound.utf8Offset, 12)
+    assertEqual(text.ranges(of: digits).count, 3)
+    assertEqual(text.count(of: digits), 3)
+    assert(text.contains(digits))
+    assert(!"abc".contains(digits))
+    assert(text.split(spaces) == ["a1", "b22", "c333"])
+    assert(text.split(digits, omittingEmpty: true) == ["a", " b", "  c"])
+    assertEqual("  x  ".trimmingPrefix(spaces), "x  ")
+    assertEqual("x123".trimmingSuffix(digits), "x")
+    assertEqual("123".trimmingSuffix(digits), "")
+    assert("123abc".hasPrefix(digits) && !"abc123".hasPrefix(digits))
+    assert("abc123".hasSuffix(digits) && !"123abc".hasSuffix(digits))
+    assertEqual(text.replacing(digits, with: "#"), "a# b#  c#")
+    assertEqual(text.replacing(digits, with: "<$0>", maxCount: 2), "a<1> b<22>  c333")
+    assertEqual("abc".replacing(digits, with: "#"), "abc")
+    let piece = Substring("x=1;y=22")
+    assertEqual(piece.split(try! Regex("[;=]")).count, 4)
+    // The automata's matchStart is a reverse search from the end; the
+    // backtracker's tries each start.
+    let backtracking = try! Regex(#"(\d)\1"#, options: .Backtracking)
+    assertEqual("ab11".trimmingSuffix(backtracking), "ab")
+    assertEqual("ab12".trimmingSuffix(backtracking), "ab12")
+    assertEqual("11ab".trimmingPrefix(backtracking), "ab")
+    let boundary = try! Regex(#"\b\w"#)
+    assertEqual("ab cd".trimmingSuffix(boundary), "ab cd")
+    assertEqual("ab c".trimmingSuffix(boundary), "ab ")
+}
+
+@test
+fn templatesNameGroups() {
+    let swap = try! Regex(#"(?<first>\w+) (?<second>\w+)"#)
+    assertEqual("hello world".replacing(swap, with: "$2 $1"), "world hello")
+    assertEqual("hello world".replacing(swap, with: "${second}_${first}"), "world_hello")
+    assertEqual("hello world".replacing(swap, with: "$second$$"), "world$")
+    assertEqual("hello world".replacing(swap, with: "[$3][$nope]"), "[][]")
+    assertEqual("hello world".replacing(swap, with: "$ ${ $"), "$ ${ $")
+    assertEqual("hello world".replacing(swap, with: "${}x"), "$x")
+    assertEqual("hello world".replacing(swap, with: "${1}0"), "hello0")
+    let found = swap.captures(in: "a b")!
+    assertEqual(found.expand("$first-$second"), "a-b")
+    let doubled = "3 apples and 12 pears".replacing(try! Regex(#"\d+"#), with: { found in
+        return "\(try! Int.parse(found.text) * 2)"
+    })
+    assertEqual(doubled, "6 apples and 24 pears")
+    let once = "a1b2".replacing(try! Regex(#"\d"#), maxCount: 1, with: { (unused: RegexCaptures) in
+        return "!"
+    })
+    assertEqual(once, "a!b2")
+}
+
+@test
+fn wholeMatchMatchesTheWholeText() {
+    for options in [RegexOptions.None, RegexOptions.Backtracking] {
+        let regex = try! Regex("a|ab", options: options)
+        assertEqual(regex.wholeMatch("ab")!.range.upperBound.utf8Offset, 2)
+        assert(regex.wholeMatch("abc") == none)
+        assert(regex.wholeMatch("xab") == none)
+        let groups = try! Regex(#"(\d+)-(\d+)"#, options: options)
+        let found = groups.wholeMatch("12-345")!
+        assertEqual(found[2]!.toString(), "345")
+    }
+}
+
+@test
+fn escapeMakesAPatternOfAText() {
+    let text = #"a.b*c+d?e(f)g[h]i{j}k|l^m$n\o#p-q&r~s t"#
+    let regex = try! Regex(Regex.escape(text))
+    assert(regex.wholeMatch(text) != none)
+    assertEqual(Regex.escape("é1"), "é1")
+    assertEqual(Regex.escape("1.5"), #"1\.5"#)
+}
+
+@test
+fn optionsAndPatternAreKept() {
+    let regex = try! Regex("a", options: [.IgnoreCase, .Multiline])
+    assertEqual(regex.pattern, "a")
+    assert(regex.options.contains(.IgnoreCase) && !regex.options.contains(.DotAll))
+}
+
+@test
+fn matchesAllocateNothingOnceTheCacheIsWarm() {
+    let words = try! Regex(#"\w+"#)
+    let text = "the quick brown fox jumps over the lazy dog"
+    assertEqual(words.count(in: text), 9)
+    var total = 0
+    assertNoAllocations {
+        for found in words.matches(in: text) {
+            total += found.range.upperBound.utf8Offset
+        }
+    }
+    assert(total > 0)
+    assertNoAllocations {
+        assert(words.isMatch(text))
+    }
+}
+
+// ---- The linear-time guarantee --------------------------------------------
+
+fn repeated(_ piece: String, _ times: Int) -> String {
+    var parts: String[>..] = []
+    var i = 0
+    while i < times {
+        parts.append(piece)
+        i += 1
+    }
+    return parts.joined()
+}
+
+@test
+fn pathologicalPatternsTakeLinearTime() {
+    // Each of these takes a backtracker time exponential in the text.
+    let manyA = repeated("a", 20000)
+    assert(!(try! Regex("(a*)*b")).isMatch(manyA))
+    assert(!(try! Regex("(a|aa)+b")).isMatch(manyA))
+    assert(!(try! Regex("(a|a)*c")).isMatch(manyA))
+    assert((try! Regex("(a|aa)+$")).isMatch(manyA))
+    assertEqual((try! Regex("(x+x+)+y")).count(in: repeated("x", 20000)), 0)
+    let words = repeated("word ", 4000) + "!"
+    assert((try! Regex(#"^(\w+\s?)*$"#)).firstMatch(in: words) == none)
+    // The PikeVM, which finds the groups, is linear too.
+    assert((try! Regex("(a|aa)*c")).wholeMatch(repeated("a", 3000)) == none)
+    let nested = try! Regex("((a+)+)+b")
+    assert(nested.captures(in: repeated("a", 3000) + "b") != none)
+    // A DFA that needs more states than its cache holds clears it and goes on.
+    var letters = ""
+    var state: U64 = 0x9E3779B97F4A7C15
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < 60000 {
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        bytes.append(U8(97 + Int(state % 26)))
+        i += 1
+    }
+    letters = try! String.fromUtf8(bytes)
+    let wide = try! Regex("[a-y]*a[a-y]{12}z")
+    let backtracking = try! Regex("[a-y]*a[a-y]{12}z", options: .Backtracking)
+    assertEqual(allSpans(wide, letters), allSpans(backtracking, letters))
+}
+
+// ---- The engines against each other --------------------------------------
+
+/// A random walk of numbers: xorshift.
+struct Walk {
+    var state: U64
+
+    mutating fn next(_ below: Int) -> Int {
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        return Int(state % U64(below))
+    }
+}
+
+/// A random pattern, and whether it can match the empty string. A loop of
+/// such a pattern, as (a*?)+, is left out: where its iterations could match
+/// nothing, the automata choose as RE2 and Rust do, and the backtracker as
+/// Perl and .NET do, which are not always the same.
+fn randomPattern(_ walk: inout Walk, _ depth: Int) -> (String, Bool) {
+    let choice = walk.next(depth > 3 ? 6 : 14)
+    if choice < 3 {
+        return (["a", "b", "c"][choice], false)
+    }
+    if choice == 3 {
+        return (["[ab]", ".", "[^a]", #"\w"#, "é"][walk.next(5)], false)
+    }
+    if choice == 4 {
+        return (["^", "$", #"\b"#, #"\B"#, "(?m)^", "(?m)$", ""][walk.next(7)], true)
+    }
+    if choice == 5 {
+        return ("(?i)" + ["a", "B", "é"][walk.next(3)], false)
+    }
+    let (first, firstEmpty) = randomPattern(&walk, depth + 1)
+    if choice < 9 {
+        let (second, secondEmpty) = randomPattern(&walk, depth + 1)
+        return (first + second, firstEmpty && secondEmpty)
+    }
+    if choice < 11 {
+        let (second, secondEmpty) = randomPattern(&walk, depth + 1)
+        return ("(" + first + "|" + second + ")", firstEmpty || secondEmpty)
+    }
+    if choice < 13 {
+        let quantifiers: String[>..] = firstEmpty ? ["?", "{1,2}", "??", "{2}"] : ["*", "+", "?", "{1,2}", "*?", "+?", "??", "{2}"]
+        let quantifier = quantifiers[walk.next(quantifiers.count)]
+        let empty = firstEmpty || quantifier.hasPrefix("*") || quantifier.hasPrefix("?")
+        return ("(?:" + first + ")" + quantifier, empty)
+    }
+    return ("(" + first + ")", firstEmpty)
+}
+
+@test
+fn theAutomataAndTheBacktrackerAgreeOnRandomPatterns() {
+    var walk = Walk { state: 0x2545F4914F6CDD1D }
+    let alphabet: String[>..] = ["a", "b", "c", "A", "é", " ", "\n"]
+    var round = 0
+    while round < 400 {
+        let (pattern, _) = randomPattern(&walk, 0)
+        var text = ""
+        let length = walk.next(12)
+        var i = 0
+        while i < length {
+            text = text + alphabet[walk.next(alphabet.count)]
+            i += 1
+        }
+        let linear = try! Regex(pattern)
+        let backtracking = try! Regex(pattern, options: .Backtracking)
+        let expected = allSpans(backtracking, text)
+        let found = allSpans(linear, text)
+        if found != expected {
+            fail("/\(pattern)/ on \"\(text)\": backtracking \(expected), automata \(found)")
+        }
+        let first = linear.captures(in: text)
+        let other = backtracking.captures(in: text)
+        assertEqual(first == none, other == none)
+        if let a = first, let b = other {
+            assertEqual(a.range, b.range)
+        }
+        assertEqual(linear.isMatch(text), backtracking.isMatch(text))
+        assertEqual(text.trimmingSuffix(linear), text.trimmingSuffix(backtracking))
+        round += 1
+    }
+}

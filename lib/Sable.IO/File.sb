@@ -25,6 +25,17 @@ public struct File {
         return FileHandle(handle: handle, path: path, owned: true)
     }
 
+    /// The file at the path opened as the options say, the path's bytes
+    /// given to the system as they are, UTF-8 or not.
+    public static fn open(_ path: FilePath, options: OpenOptions = .reading) throws(IoError) -> FileHandle {
+        let text = "\(path)"
+        let handle = Runtime.fileOpen(path.systemString, options.flags, options.permissions)
+        if handle == -1 {
+            throw IoError.lastFileError(text)
+        }
+        return FileHandle(handle: handle, path: text, owned: true)
+    }
+
     /// Every byte of the file.
     public static fn readBytes(_ path: String) throws(IoError) -> U8[>..] {
         let file = try File.open(path)

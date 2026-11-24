@@ -283,6 +283,10 @@ static bool file_close(PlatformFile file, FileError *error);
 static PlatformFile file_standard(int which);
 // The whole file copied, at the system's fastest, a file at 'to' replaced.
 static bool file_copy(const char *from, const char *to, FileError *error);
+// The path made absolute, every link and '.' and '..' resolved: realpath,
+// or the final path of a handle on Windows. NULL, with why, when it is not
+// there; the caller frees it.
+static char *file_canonical(const char *name, FileError *error);
 
 // ---- Processes -----------------------------------------------------------
 

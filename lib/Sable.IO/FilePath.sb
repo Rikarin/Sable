@@ -1,0 +1,674 @@
+module Sable.IO
+
+import Sable.Text
+
+// FilePath (Rust's Path/PathBuf, Swift's FilePath, .NET's Path): a path as
+// the system's bytes, read by POSIX or Windows rules. Everything here is
+// lexical — it looks at the bytes, never at the disk — but absolute() (the
+// working directory) and canonical() (links resolved).
+
+/// A path to a file or directory, kept as the bytes the system has for it —
+/// UTF-8 where it is text, though a POSIX path need not be — and read by a
+/// style's rules: POSIX's, or Windows' drive letters, UNC shares and
+/// verbatim prefixes.
+///
+/// Paths are equal by their components, as Rust's are: `a//b/` is `a/b`,
+/// but `a/./b` is `a/b` too while `./a` is not `a`.
+///
+/// ```sable
+/// let path = FilePath("/home/ana/notes.tar.gz")
+/// assert(path.fileName == "notes.tar.gz")
+/// assert(path.stem == "notes.tar")
+/// assert(path.pathExtension == "gz")
+/// assert(path.parent! == FilePath("/home/ana"))
+/// assert(FilePath("a/b/../c/./d").lexicallyNormalized() == FilePath("a/c/d"))
+/// assert(FilePath("/a/b/c").relative(to: FilePath("/a/x"))! == FilePath("../b/c"))
+/// let windows = FilePath("C:\\Users\\ana", style: .Windows)
+/// assert(windows.isAbsolute && windows.prefixKind == .Disk)
+/// ```
+public struct FilePath {
+    /// The path's bytes as the system has them.
+    public let bytes: U8[>..]
+    /// Whose rules the path is read by.
+    public let style: PathStyle
+
+    /// The text's path, read by the style's rules.
+    public init(_ text: String, style: PathStyle = .native) {
+        self.bytes = text.utf8Bytes()
+        self.style = style
+    }
+
+    /// The bytes' path, UTF-8 or not, read by the style's rules.
+    public init(bytes: U8[:], style: PathStyle = .native) {
+        self.bytes = bytes.toArray()
+        self.style = style
+    }
+
+    /// The path as text, when its bytes are UTF-8.
+    public var string: String? {
+        get {
+            return try? String.fromUtf8(bytes)
+        }
+    }
+
+    /// Whether the path is empty: no bytes at all.
+    public var isEmpty: Bool {
+        get {
+            return bytes.isEmpty
+        }
+    }
+
+    /// What separates parts the style writes: '/' on POSIX, '\' on Windows.
+    public var separator: Char {
+        get {
+            return style == .Windows ? '\\' : '/'
+        }
+    }
+
+    // ---- Parsing -----------------------------------------------------------
+
+    fn parse() -> ParsedPath {
+        let n = bytes.count
+        var leading: PathPrefixKind? = none
+        var end = 0
+        if style == .Windows {
+            if n >= 4 && bytes[0] == pathBackslash && bytes[1] == pathBackslash && bytes[2] == pathQuestion && bytes[3] == pathBackslash {
+                if n >= 8 && bytes[4] == 0x55 && bytes[5] == 0x4E && bytes[6] == 0x43 && bytes[7] == pathBackslash {
+                    // \\?\UNC\server\share
+                    let server = nextSeparator(8, verbatim: true)
+                    leading = .VerbatimUnc
+                    end = server < n ? nextSeparator(server + 1, verbatim: true) : n
+                } else if n >= 6 && isDriveLetter(bytes[4]) && bytes[5] == pathColon && (n == 6 || bytes[6] == pathBackslash) {
+                    leading = .VerbatimDisk
+                    end = 6
+                } else {
+                    leading = .Verbatim
+                    end = nextSeparator(4, verbatim: true)
+                }
+            } else if n >= 4 && isSeparator(bytes[0], verbatim: false) && isSeparator(bytes[1], verbatim: false)
+                && bytes[2] == pathDot && isSeparator(bytes[3], verbatim: false) {
+                leading = .DeviceNamespace
+                end = nextSeparator(4, verbatim: false)
+            } else if n >= 2 && isSeparator(bytes[0], verbatim: false) && isSeparator(bytes[1], verbatim: false) {
+                let server = nextSeparator(2, verbatim: false)
+                leading = .Unc
+                end = server < n ? nextSeparator(server + 1, verbatim: false) : n
+            } else if n >= 2 && isDriveLetter(bytes[0]) && bytes[1] == pathColon {
+                leading = .Disk
+                end = 2
+            }
+        }
+        let verbatim = leading == .Verbatim || leading == .VerbatimUnc || leading == .VerbatimDisk
+        let physicalRoot = end < n && isSeparator(bytes[end], verbatim: verbatim)
+        let rootEnd = physicalRoot ? end + 1 : end
+        // A UNC share or a device is rooted without a separator after it.
+        let impliedRoot = leading == .Unc || leading == .DeviceNamespace
+        let rooted = physicalRoot || leading != none && leading != .Disk
+
+        var spans: PathSpan[>..] = []
+        if leading != none {
+            spans.append(PathSpan { kind: .Prefix, start: 0, end: end })
+        }
+        if physicalRoot || impliedRoot {
+            spans.append(PathSpan { kind: .Root, start: end, end: rootEnd })
+        }
+        var i = rootEnd
+        while i < n {
+            if isSeparator(bytes[i], verbatim: verbatim) {
+                i += 1
+                continue
+            }
+            let start = i
+            let stop = nextSeparator(i, verbatim: verbatim)
+            let length = stop - start
+            if length == 1 && bytes[start] == pathDot {
+                // "." is kept only where it starts a path with no root.
+                if verbatim || !rooted && start == rootEnd {
+                    spans.append(PathSpan { kind: .CurrentDirectory, start: start, end: stop })
+                }
+            } else if length == 2 && bytes[start] == pathDot && bytes[start + 1] == pathDot {
+                spans.append(PathSpan { kind: .ParentDirectory, start: start, end: stop })
+            } else {
+                spans.append(PathSpan { kind: .Normal, start: start, end: stop })
+            }
+            i = stop
+        }
+        return ParsedPath { leading: leading, prefixEnd: end, physicalRoot: physicalRoot, rootEnd: rootEnd, rooted: rooted, verbatim: verbatim, spans: spans }
+    }
+
+    fn isSeparator(_ byte: U8, verbatim: Bool) -> Bool {
+        return byte == pathSlash && !(style == .Windows && verbatim) || byte == pathBackslash && style == .Windows
+    }
+
+    fn nextSeparator(_ from: Int, verbatim: Bool) -> Int {
+        var i = from
+        while i < bytes.count && !isSeparator(bytes[i], verbatim: verbatim) {
+            i += 1
+        }
+        return i
+    }
+
+    fn piece(_ start: Int, _ end: Int) -> FilePath {
+        return FilePath(bytes: bytes[start..<end], style: style)
+    }
+
+    fn separatorByte() -> U8 {
+        return style == .Windows ? pathBackslash : pathSlash
+    }
+
+    // ---- Parts -------------------------------------------------------------
+
+    /// The path's parts in order: a prefix, the root, then `.`, `..` and
+    /// names. Repeated separators, a separator at the end and `.` anywhere
+    /// but the start are not parts.
+    ///
+    /// ```sable
+    /// var kinds: PathComponentKind[>..] = []
+    /// for part in FilePath("/a//./b/").components {
+    ///     kinds.append(part.kind)
+    /// }
+    /// assert(kinds.count == 3 && kinds[0] == .Root && kinds[2] == .Normal)
+    /// ```
+    public var components: PathComponent[>..] {
+        get {
+            var parts: PathComponent[>..] = []
+            for span in parse().spans {
+                parts.append(PathComponent { kind: span.kind, bytes: bytes[span.start..<span.end].toArray() })
+            }
+            return parts
+        }
+    }
+
+    /// The Windows prefix the path starts with, if any.
+    public var prefixKind: PathPrefixKind? {
+        get {
+            return parse().leading
+        }
+    }
+
+    /// Whether the path starts at a root: a separator, or a UNC share or a
+    /// verbatim prefix, which are rooted by themselves.
+    public var hasRoot: Bool {
+        get {
+            return parse().rooted
+        }
+    }
+
+    /// Whether the path names one place whatever the working directory: on
+    /// POSIX one with a root, on Windows one with a prefix as well
+    /// (`C:\a`, `\\server\share`; not `\a` or `C:a`).
+    public var isAbsolute: Bool {
+        get {
+            let parsed = parse()
+            return parsed.rooted && (style == .Posix || parsed.leading != none)
+        }
+    }
+
+    /// The prefix and root: `/`, `C:\`, `C:`, `\\server\share\`; none for a
+    /// path with neither.
+    public var root: FilePath? {
+        get {
+            let parsed = parse()
+            return parsed.rootEnd > 0 ? piece(0, parsed.rootEnd) : none
+        }
+    }
+
+    /// The path without its last part, separators before it dropped: none
+    /// for a path with no parts but its root, `` for a lone name.
+    ///
+    /// ```sable
+    /// assert(FilePath("/a/b/").parent! == FilePath("/a"))
+    /// assert(FilePath("/a").parent! == FilePath("/"))
+    /// assert(FilePath("a").parent!.isEmpty)
+    /// assert(FilePath("/").parent == none)
+    /// ```
+    public var parent: FilePath? {
+        get {
+            let parsed = parse()
+            let spans = parsed.spans
+            let count = spans.count
+            if count == 0 || spans[count - 1].kind == .Root || spans[count - 1].kind == .Prefix {
+                return none
+            }
+            if count == 1 {
+                return piece(0, 0)
+            }
+            let before = spans[count - 2]
+            let rootOnly = before.kind == .Root || before.kind == .Prefix
+            return piece(0, rootOnly ? parsed.rootEnd : before.end)
+        }
+    }
+
+    /// The path without its last part: its parent, or the path itself when
+    /// it is only a root (Swift's `removingLastComponent`).
+    public fn removingLastComponent() -> FilePath {
+        return parent ?? self
+    }
+
+    /// The last part, of any kind.
+    public var lastComponent: PathComponent? {
+        get {
+            let parts = components
+            return parts.isEmpty ? none : parts[parts.count - 1]
+        }
+    }
+
+    /// The last part when it is a name; none after `..`, at a root or for
+    /// an empty path.
+    public var fileName: String? {
+        get {
+            if let span = nameSpan() {
+                return String.fromUtf8Lossy(bytes[span.start..<span.end])
+            }
+            return none
+        }
+    }
+
+    fn nameSpan() -> PathSpan? {
+        let spans = parse().spans
+        if spans.isEmpty || spans[spans.count - 1].kind != .Normal {
+            return none
+        }
+        return spans[spans.count - 1]
+    }
+
+    // Where the name's extension dot is, from the name's start: -1 for none,
+    // a dot that starts the name being none.
+    fn extensionDot(_ span: PathSpan) -> Int {
+        var i = span.end - 1
+        while i > span.start {
+            if bytes[i] == pathDot {
+                return i - span.start
+            }
+            i -= 1
+        }
+        return -1
+    }
+
+    /// The name without its extension: `notes.tar` of `notes.tar.gz`,
+    /// `.profile` of `.profile`.
+    public var stem: String? {
+        get {
+            if let span = nameSpan() {
+                let at = extensionDot(span)
+                return String.fromUtf8Lossy(bytes[span.start..<(at < 0 ? span.end : span.start + at)])
+            }
+            return none
+        }
+    }
+
+    /// What follows the name's last '.', when there is one not at its start:
+    /// `gz` of `notes.tar.gz`, `` of `notes.`, none for `.profile`.
+    public var pathExtension: String? {
+        get {
+            if let span = nameSpan() {
+                let at = extensionDot(span)
+                return at < 0 ? none : String.fromUtf8Lossy(bytes[(span.start + at + 1)..<span.end])
+            }
+            return none
+        }
+    }
+
+    // ---- Making paths ------------------------------------------------------
+
+    /// The other path inside this one: `a` and `b` make `a/b`. A path that
+    /// stands alone replaces this one — an absolute one, or on Windows one
+    /// with a prefix; one with a root but no prefix (`\b`) keeps this
+    /// one's prefix.
+    ///
+    /// ```sable
+    /// assert(FilePath("/a").appending("b") == FilePath("/a/b"))
+    /// assert(FilePath("/a").appending("/b") == FilePath("/b"))
+    /// assert(FilePath("C:\\a", style: .Windows).appending("\\b").string! == "C:\\b")
+    /// assert(FilePath("C:", style: .Windows).appending("b").string! == "C:b")
+    /// ```
+    public fn appending(_ other: FilePath) -> FilePath {
+        let mine = parse()
+        let theirs = other.parse()
+        if theirs.leading != none || style == .Posix && theirs.rooted {
+            return other
+        }
+        var joined: U8[>..] = []
+        if theirs.rooted {
+            joined.append(contentsOf: bytes[0..<mine.prefixEnd])
+        } else {
+            joined = bytes
+            let n = bytes.count
+            let needsSeparator = n > 0 && !isSeparator(bytes[n - 1], verbatim: mine.verbatim)
+                && !(mine.leading == .Disk && n == mine.prefixEnd)
+            if needsSeparator {
+                joined.append(separatorByte())
+            }
+        }
+        joined.append(contentsOf: other.bytes)
+        return FilePath(bytes: joined, style: style)
+    }
+
+    /// The text's path inside this one, as `appending(FilePath(_:))`.
+    public fn appending(_ other: String) -> FilePath {
+        return appending(FilePath(other, style: style))
+    }
+
+    /// The path with its name's extension replaced, or taken off for an
+    /// empty one; the path as it is when it has no name.
+    ///
+    /// ```sable
+    /// assert(FilePath("a/b.txt").withExtension("md").string! == "a/b.md")
+    /// assert(FilePath("a/b.tar.gz").withExtension("").string! == "a/b.tar")
+    /// ```
+    public fn withExtension(_ newExtension: String) -> FilePath {
+        if let span = nameSpan() {
+            let at = extensionDot(span)
+            var result = bytes[0..<(at < 0 ? span.end : span.start + at)].toArray()
+            if !newExtension.isEmpty {
+                result.append(pathDot)
+                result.append(contentsOf: newExtension.utf8Bytes())
+            }
+            return FilePath(bytes: result, style: style)
+        }
+        return self
+    }
+
+    /// The path with its name replaced; the name added when it has none.
+    public fn withFileName(_ name: String) -> FilePath {
+        if nameSpan() != none {
+            return parent!.appending(name)
+        }
+        return appending(name)
+    }
+
+    /// The path with `.` taken out and each `..` taken out with the name
+    /// before it, the style's separator between the parts — by the bytes
+    /// alone, so `a/link/..` is `a` even where `link` is a link elsewhere.
+    /// A `..` at the root is dropped; one a relative path starts with is
+    /// kept. A path that comes to nothing is `.`. A verbatim path is the
+    /// system's as it is, and is given back unchanged.
+    public fn lexicallyNormalized() -> FilePath {
+        let parsed = parse()
+        if parsed.verbatim {
+            return self
+        }
+        var kept: PathSpan[>..] = []
+        for span in parsed.spans {
+            if span.kind == .ParentDirectory {
+                if !kept.isEmpty && kept[kept.count - 1].kind == .Normal {
+                    kept.removeLast()
+                } else if !parsed.rooted {
+                    kept.append(span)
+                }
+            } else if span.kind == .Normal {
+                kept.append(span)
+            }
+        }
+        var result = bytes[0..<parsed.prefixEnd].toArray()
+        if parsed.physicalRoot {
+            result.append(separatorByte())
+        }
+        var first = true
+        for span in kept {
+            if !first {
+                result.append(separatorByte())
+            }
+            result.append(contentsOf: bytes[span.start..<span.end])
+            first = false
+        }
+        if result.isEmpty {
+            result.append(pathDot)
+        }
+        return FilePath(bytes: result, style: style)
+    }
+
+    // ---- Comparing paths ---------------------------------------------------
+
+    /// Whether the other path's components start this one's: `/etc` starts
+    /// `/etc/passwd`, `/et` does not.
+    public fn starts(with other: FilePath) -> Bool {
+        let mine = components
+        let theirs = other.components
+        if theirs.count > mine.count {
+            return false
+        }
+        var i = 0
+        while i < theirs.count {
+            if mine[i] != theirs[i] {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+
+    /// Whether the other path's components end this one's.
+    public fn ends(with other: FilePath) -> Bool {
+        let mine = components
+        let theirs = other.components
+        if theirs.count > mine.count {
+            return false
+        }
+        var i = 0
+        while i < theirs.count {
+            if mine[mine.count - theirs.count + i] != theirs[i] {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+
+    /// The rest of the path after the other one's components, when they
+    /// start it: `haha/foo.txt` of `/test/haha/foo.txt` after `/test/`.
+    public fn strippingPrefix(_ other: FilePath) -> FilePath? {
+        if !starts(with: other) {
+            return none
+        }
+        let spans = parse().spans
+        let skip = other.parse().spans.count
+        if skip == spans.count {
+            return FilePath(bytes: [], style: style)
+        }
+        return piece(spans[skip].start, spans[spans.count - 1].end)
+    }
+
+    /// The path from the base to this one, by the bytes alone (.NET's
+    /// `GetRelativePath`): `../b/c` from `/a/x` to `/a/b/c`, `.` from a
+    /// path to itself. Both are normalized first; none when they have
+    /// different roots or prefixes, or when the base climbs past where
+    /// they part with a `..` that cannot be undone.
+    public fn relative(to base: FilePath) -> FilePath? {
+        let mine = lexicallyNormalized().namedComponents()
+        let theirs = base.lexicallyNormalized().namedComponents()
+        var common = 0
+        while common < mine.count && common < theirs.count && mine[common] == theirs[common] {
+            common += 1
+        }
+        // The roots and prefixes must all be shared.
+        var i = common
+        while i < mine.count || i < theirs.count {
+            if i < mine.count && (mine[i].kind == .Prefix || mine[i].kind == .Root)
+                || i < theirs.count && (theirs[i].kind == .Prefix || theirs[i].kind == .Root) {
+                return none
+            }
+            i += 1
+        }
+        var result: U8[>..] = []
+        i = common
+        while i < theirs.count {
+            if theirs[i].kind == .ParentDirectory {
+                return none
+            }
+            if !result.isEmpty {
+                result.append(separatorByte())
+            }
+            result.append(pathDot)
+            result.append(pathDot)
+            i += 1
+        }
+        i = common
+        while i < mine.count {
+            if !result.isEmpty {
+                result.append(separatorByte())
+            }
+            result.append(contentsOf: mine[i].bytes)
+            i += 1
+        }
+        if result.isEmpty {
+            result.append(pathDot)
+        }
+        return FilePath(bytes: result, style: style)
+    }
+
+    // The components but a "." a relative path starts with.
+    fn namedComponents() -> PathComponent[>..] {
+        var parts: PathComponent[>..] = []
+        for part in components {
+            if part.kind != .CurrentDirectory {
+                parts.append(part)
+            }
+        }
+        return parts
+    }
+
+    // ---- The file system ---------------------------------------------------
+
+    /// The path from the root: as it is when absolute, else inside the
+    /// working directory, lexically — `..` and links are left as they are.
+    public fn absolute() -> FilePath {
+        if isAbsolute {
+            return self
+        }
+        return FilePath(Runtime.currentDirectory(), style: style).appending(self)
+    }
+
+    /// The path as the system resolves it: absolute, with every link and
+    /// every `.` and `..` resolved (realpath, or a handle's final path on
+    /// Windows). It must be there.
+    ///
+    /// ```sable
+    /// let here = try! FilePath(".").canonical()
+    /// assert(here.isAbsolute)
+    /// ```
+    public fn canonical() throws(IoError) -> FilePath {
+        let resolved = Runtime.fileCanonical(systemString)
+        if resolved.isEmpty {
+            throw IoError.lastFileError(String.fromUtf8Lossy(bytes))
+        }
+        return FilePath(resolved, style: style)
+    }
+
+    // The bytes as the String the runtime's calls take, UTF-8 or not: the
+    // runtime hands its bytes to the system as they are.
+    var systemString: String {
+        get {
+            unsafe {
+                return String.fromUtf8Unchecked(bytes)
+            }
+        }
+    }
+}
+
+extension FilePath: Equatable {
+    /// The same style and components.
+    public operator == (lhs: FilePath, rhs: FilePath) -> Bool {
+        if lhs.style != rhs.style {
+            return false
+        }
+        let left = lhs.components
+        let right = rhs.components
+        if left.count != right.count {
+            return false
+        }
+        var i = 0
+        while i < left.count {
+            if left[i] != right[i] {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+}
+
+extension FilePath: Comparable {
+    /// Component by component: by kind, then by bytes; a path before every
+    /// longer one it starts.
+    public operator < (lhs: FilePath, rhs: FilePath) -> Bool {
+        let left = lhs.components
+        let right = rhs.components
+        var i = 0
+        while i < left.count && i < right.count {
+            let a = left[i]
+            let b = right[i]
+            if a.kind != b.kind {
+                return a.kind.rank < b.kind.rank
+            }
+            if a.kind != .Root {
+                let order = compareBytes(a.bytes, b.bytes)
+                if order != 0 {
+                    return order < 0
+                }
+            }
+            i += 1
+        }
+        if left.count != right.count {
+            return left.count < right.count
+        }
+        return lhs.style == .Posix && rhs.style == .Windows
+    }
+}
+
+extension FilePath: Hashable {
+    /// The style and the components, as '==' compares them.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(style)
+        for part in components {
+            hasher.write(U64(part.kind.rank))
+            if part.kind != .Root {
+                hasher.write(part.bytes)
+            }
+        }
+    }
+}
+
+extension FilePath: Formattable {
+    /// The path as text, each ill-formed sequence made U+FFFD.
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(String.fromUtf8Lossy(bytes))
+    }
+}
+
+extension FilePath: Debug {
+    public fn debugDescription() -> String {
+        return "FilePath(\"" + String.fromUtf8Lossy(bytes) + "\")"
+    }
+}
+
+// A part of a path, by where its bytes are.
+struct PathSpan {
+    let kind: PathComponentKind
+    let start: Int
+    let end: Int
+}
+
+// What FilePath.parse finds: the prefix, the root and the parts.
+struct ParsedPath {
+    let leading: PathPrefixKind?
+    // Where the prefix ends, and the root after it, if it has one.
+    let prefixEnd: Int
+    let physicalRoot: Bool
+    let rootEnd: Int
+    // Whether it is rooted, by a separator or by its prefix.
+    let rooted: Bool
+    let verbatim: Bool
+    // Every component, the prefix and root among them.
+    let spans: PathSpan[>..]
+}
+
+const pathSlash: U8 = 0x2F
+const pathBackslash: U8 = 0x5C
+const pathDot: U8 = 0x2E
+const pathColon: U8 = 0x3A
+const pathQuestion: U8 = 0x3F
+
+fn isDriveLetter(_ byte: U8) -> Bool {
+    return byte >= 0x41 && byte <= 0x5A || byte >= 0x61 && byte <= 0x7A
+}

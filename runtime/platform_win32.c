@@ -1234,3 +1234,29 @@ static bool file_copy(const char *from, const char *to, FileError *error) {
     free(target);
     return copied != 0;
 }
+
+static char *file_canonical(const char *name, FileError *error) {
+    wchar_t *wide = to_wide(name);
+    // Opened for nothing but its name, a directory too (backup semantics).
+    HANDLE handle = CreateFileW(wide, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                                OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    free(wide);
+    if (handle == INVALID_HANDLE_VALUE) {
+        file_failed(error);
+        return NULL;
+    }
+
+    DWORD length = GetFinalPathNameByHandleW(handle, NULL, 0, FILE_NAME_NORMALIZED);
+    wchar_t *path = length == 0 ? NULL : malloc(((size_t)length + 1) * sizeof(wchar_t));
+    if (path == NULL || GetFinalPathNameByHandleW(handle, path, length + 1, FILE_NAME_NORMALIZED) == 0) {
+        file_failed(error);
+        free(path);
+        CloseHandle(handle);
+        return NULL;
+    }
+
+    CloseHandle(handle);
+    char *result = from_wide(path);
+    free(path);
+    return result;
+}

@@ -1,0 +1,29 @@
+module Sable.IO
+
+/// What a part of a path is: Rust's `Component`, Swift's `Component.Kind`.
+/// Paths order their components by kind first, in this order.
+@derive(Equatable, Hashable, Debug)
+public enum PathComponentKind {
+    /// A Windows prefix: `C:`, `\\server\share`, `\\?\…`.
+    Prefix
+    /// The root: the separator a path from the root starts with.
+    Root
+    /// `.`, kept at the start of a relative path and nowhere else.
+    CurrentDirectory
+    /// `..`.
+    ParentDirectory
+    /// A name.
+    Normal
+
+    var rank: Int {
+        get {
+            return match self {
+                case .Prefix           => 0
+                case .Root             => 1
+                case .CurrentDirectory => 2
+                case .ParentDirectory  => 3
+                case .Normal           => 4
+            }
+        }
+    }
+}

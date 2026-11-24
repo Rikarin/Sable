@@ -263,6 +263,46 @@ fn main() {
     }
 
     /// <summary>
+    ///     A path resolved by the system — through a link to a directory —
+    ///     the same natively (realpath) and interpreted, and a missing one
+    ///     an error both ways.
+    /// </summary>
+    [PosixFact("a link to a directory needs no privilege on POSIX, but on Windows does")]
+    public void ACanonicalPathResolvesLinksBothWays() {
+        var root = Directory.CreateTempSubdirectory("sable-canonical-").FullName;
+        try {
+            Directory.CreateDirectory(Path.Combine(root, "real"));
+            File.WriteAllText(Path.Combine(root, "real", "f.txt"), "x");
+            Directory.CreateSymbolicLink(Path.Combine(root, "link"), Path.Combine(root, "real"));
+            var run = AssertAgree(
+                $$"""
+                module P
+                import Sable.IO
+
+                @main
+                fn main() {
+                    let resolved = try! FilePath("{{Platform.Literal(root)}}/link/./f.txt").canonical()
+                    let real = try! FilePath("{{Platform.Literal(root)}}/real").canonical()
+                    print(resolved.parent! == real)
+                    print(resolved.fileName ?? "-")
+                    print(resolved.isAbsolute)
+                    do {
+                        let _ = try FilePath("{{Platform.Literal(root)}}/missing").canonical()
+                    } catch .NotFound(_) {
+                        print("not found")
+                    } catch {
+                        print("other")
+                    }
+                }
+                """
+            );
+            Assert.Equal("true\nf.txt\ntrue\nnot found\n", run.Stdout);
+        } finally {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
     ///     A file's bytes need not be UTF-8, but a String's are: each
     ///     ill-formed sequence (its longest start that could have been well
     ///     formed, as Unicode recommends) reads as U+FFFD, and a byte-order mark is just

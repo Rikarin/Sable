@@ -33,9 +33,10 @@ public sealed partial class SilInterpreter {
         try {
             return FileCall(name, operands);
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or ObjectDisposedException) {
-            Failed(e, name is "file_open" or "file_copy" ? PathFor(operands[0], SilAccess.Read) : null);
+            Failed(e, name is "file_open" or "file_copy" or "file_canonical" ? PathFor(operands[0], SilAccess.Read) : null);
             return name switch {
                 "file_read" => null,
+                "file_canonical" => Allocate(new HeapString("")),
                 "file_sync" or "file_set_length" or "file_close" or "file_copy" => false,
                 _ => -1L,
             };
@@ -164,6 +165,15 @@ public sealed partial class SilInterpreter {
                 return false;
             }
 
+            case "file_canonical": {
+                var path = PathFor(operands[0], SilAccess.Read);
+                if (!File.Exists(path) && !Directory.Exists(path)) {
+                    throw new FileNotFoundException(path);
+                }
+
+                return Allocate(new HeapString(Canonical(Path.GetFullPath(path))));
+            }
+
             case "file_standard":
                 return operands[0];
 
@@ -181,6 +191,20 @@ public sealed partial class SilInterpreter {
 
     readonly Dictionary<long, bool> _appending = [];
 
+    // The full path with every link on it resolved, a component at a time:
+    // realpath, which .NET has no call for.
+    static string Canonical(string full) {
+        var root = Path.GetPathRoot(full)!;
+        var resolved = root;
+        foreach (var part in full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)) {
+            var next = Path.Combine(resolved, part);
+            FileSystemInfo info = Directory.Exists(next) ? new DirectoryInfo(next) : new FileInfo(next);
+            // A link's target may itself go through links: resolved again.
+            resolved = info.LinkTarget is null ? next : Canonical(info.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? next);
+        }
+
+        return resolved;
+    }
 
     FileStream FileOf(long handle) =>
         _files.TryGetValue(handle, out var stream) ? stream : throw new ObjectDisposedException($"file handle {handle}");

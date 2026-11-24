@@ -1,99 +1,57 @@
 module Sable.IO
 
-/// Paths as text, with '/' between their parts — on Windows, '\' too.
+/// Paths as text: FilePath's calls for a String, read by the system's own
+/// rules ('/' between the parts, and on Windows '\' as well).
 public struct Path {
-    /// The two paths, one inside the other; an absolute second one stands alone.
+    /// The two paths, one inside the other; one that stands alone (an
+    /// absolute one) replaces the first.
     public static fn join(_ first: String, _ second: String) -> String {
-        if first.count == 0 || isAbsolute(second) {
-            return second
-        }
-        if isSeparator(first.at(first.count - 1)) {
-            return first + second
-        }
-        return first + "/" + second
+        return text(FilePath(first).appending(second))
     }
 
-    /// The last part: what follows the last '/'.
+    /// The last part when it is a name; "" when there is none.
     public static fn fileName(_ path: String) -> String {
-        let slash = lastSeparator(path)
-        if slash < 0 {
-            return path
-        }
-        return path.slice(slash + 1, path.count)
+        return FilePath(path).fileName ?? ""
     }
 
-    /// Everything before the last part; "." for a bare name, "/" at the root.
+    /// Everything before the last part; "." for a bare name, the root
+    /// itself at the root.
     public static fn directory(_ path: String) -> String {
-        let slash = lastSeparator(path)
-        if slash < 0 {
-            return "."
+        if let parent = FilePath(path).parent {
+            return parent.isEmpty ? "." : text(parent)
         }
-        if slash == 0 {
-            return "/"
-        }
-        return path.slice(0, slash)
+        return FilePath(path).isEmpty ? "." : path
     }
 
-    /// What follows the last part's last '.', when it has one not at its start.
+    /// What follows the name's last '.', when it has one not at its start.
     public static fn extension(_ path: String) -> String? {
-        let name = Path.fileName(path)
-        let dot = lastIndex(name, '.')
-        if dot <= 0 {
-            return none
-        }
-        return name.slice(dot + 1, name.count)
+        return FilePath(path).pathExtension
     }
 
-    /// The path without its extension.
+    /// The path without its name's extension.
     public static fn withoutExtension(_ path: String) -> String {
-        let name = Path.fileName(path)
-        let dot = lastIndex(name, '.')
-        if dot <= 0 {
-            return path
+        return text(FilePath(path).withExtension(""))
+    }
+
+    /// The path with '.' and each '..' with the name before it taken out.
+    public static fn normalized(_ path: String) -> String {
+        return text(FilePath(path).lexicallyNormalized())
+    }
+
+    /// The path from the base to the path, or none when there is none.
+    public static fn relative(_ path: String, to base: String) -> String? {
+        if let relative = FilePath(path).relative(to: FilePath(base)) {
+            return text(relative)
         }
-        return path.slice(0, path.count - (name.count - dot))
+        return none
     }
-}
 
-/// What separates a path's parts: '/', and on Windows '\' as well.
-fn isSeparator(_ c: Char) -> Bool {
-    #if os(windows)
-    return c == '/' || c == '\\'
-    #else
-    return c == '/'
-    #endif
-}
-
-/// A path from the root: '/…', and on Windows 'C:…' or '\…' as well.
-fn isAbsolute(_ path: String) -> Bool {
-    if path.count == 0 {
-        return false
+    /// Whether the path names one place whatever the working directory.
+    public static fn isAbsolute(_ path: String) -> Bool {
+        return FilePath(path).isAbsolute
     }
-    #if os(windows)
-    return isSeparator(path.at(0)) || path.count > 1 && path.at(1) == ':'
-    #else
-    return path.at(0) == '/'
-    #endif
-}
 
-fn lastSeparator(_ text: String) -> Int {
-    var i = text.count - 1
-    while i >= 0 {
-        if isSeparator(text.at(i)) {
-            return i
-        }
-        i -= 1
+    static fn text(_ path: FilePath) -> String {
+        return "\(path)"
     }
-    return -1
-}
-
-fn lastIndex(_ text: String, _ wanted: Char) -> Int {
-    var i = text.count - 1
-    while i >= 0 {
-        if text.at(i) == wanted {
-            return i
-        }
-        i -= 1
-    }
-    return -1
 }

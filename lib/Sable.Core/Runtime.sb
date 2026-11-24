@@ -162,6 +162,11 @@ public struct Runtime {
     @builtin("file_copy")
     public static fn fileCopy(_ source: String, _ target: String) -> Bool
 
+    /// The path made absolute, every link resolved; empty when nothing is
+    /// there, fileError then saying why.
+    @builtin("file_canonical")
+    public static fn fileCanonical(_ path: String) -> String
+
     @builtin("lock_new")
     public static fn lockNew() -> Int
 

@@ -1,0 +1,18 @@
+module Sable.IO
+
+/// What a Windows path starts with before its root: Rust's `Prefix`.
+@derive(Equatable, Hashable, Debug)
+public enum PathPrefixKind {
+    /// `\\?\name`: a verbatim path, given to the system as it is.
+    Verbatim
+    /// `\\?\UNC\server\share`.
+    VerbatimUnc
+    /// `\\?\C:`.
+    VerbatimDisk
+    /// `\\.\device`: the device namespace.
+    DeviceNamespace
+    /// `\\server\share`.
+    Unc
+    /// `C:`: a drive letter.
+    Disk
+}

@@ -489,6 +489,7 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_file_close(i64)
                                 declare i64 @sable_file_standard(i64)
                                 declare zeroext i1 @sable_file_copy(ptr, ptr)
+                                declare ptr @sable_file_canonical(ptr)
                                 declare zeroext i1 @sable_io_file_exists(ptr)
                                 declare zeroext i1 @sable_io_is_directory(ptr)
                                 declare zeroext i1 @sable_io_remove_file(ptr)
@@ -4450,6 +4451,10 @@ public sealed partial class LlvmEmitter {
 
                 case "file_standard":
                     Line($"{Result()} = call i64 @sable_file_standard(i64 {operands[0]})");
+                    return;
+
+                case "file_canonical":
+                    Line($"{Result()} = call ptr @sable_file_canonical(ptr {operands[0]})");
                     return;
 
                 case "file_copy":

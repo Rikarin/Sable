@@ -1,0 +1,280 @@
+module FilePathTests
+
+// FilePath and Path (Sable.IO): a table of POSIX and Windows paths, after
+// Rust's std::path tests, read by both styles' rules wherever the tests run;
+// then joining, normalizing, relating, comparing and the file system.
+
+import Sable.Collections
+import Sable.IO
+import Sable.Testing
+
+fn posix(_ text: String) -> FilePath {
+    return FilePath(text, style: .Posix)
+}
+
+fn windows(_ text: String) -> FilePath {
+    return FilePath(text, style: .Windows)
+}
+
+fn parts(_ path: FilePath) -> String {
+    var shown: String[>..] = []
+    for part in path.components {
+        shown.append("\(part)")
+    }
+    return shown.joined(separator: ",")
+}
+
+fn shown(_ path: FilePath?) -> String {
+    if let path = path {
+        return "\(path)"
+    }
+    return "none"
+}
+
+/// One row of the table: the path's parts, parent, name, stem and
+/// extension, and whether it is rooted and absolute.
+fn row(_ path: FilePath, _ components: String, parent: String, name: String, stem: String, ext: String, root: Bool, absolute: Bool) {
+    let got = "\(parts(path)) | \(shown(path.parent)) | \(path.fileName ?? "none") | \(path.stem ?? "none") | \(path.pathExtension ?? "none") | \(path.hasRoot) | \(path.isAbsolute)"
+    let wanted = "\(components) | \(parent) | \(name) | \(stem) | \(ext) | \(root) | \(absolute)"
+    assert(got == wanted, "\(path): \(got), not \(wanted)")
+}
+
+@test
+fn posixPathsAsRustReadsThem() {
+    row(posix(""), "", parent: "none", name: "none", stem: "none", ext: "none", root: false, absolute: false)
+    row(posix("foo"), "foo", parent: "", name: "foo", stem: "foo", ext: "none", root: false, absolute: false)
+    row(posix("/"), "/", parent: "none", name: "none", stem: "none", ext: "none", root: true, absolute: true)
+    row(posix("/foo"), "/,foo", parent: "/", name: "foo", stem: "foo", ext: "none", root: true, absolute: true)
+    row(posix("foo/"), "foo", parent: "", name: "foo", stem: "foo", ext: "none", root: false, absolute: false)
+    row(posix("/foo/"), "/,foo", parent: "/", name: "foo", stem: "foo", ext: "none", root: true, absolute: true)
+    row(posix("foo/bar"), "foo,bar", parent: "foo", name: "bar", stem: "bar", ext: "none", root: false, absolute: false)
+    row(posix("/foo/bar"), "/,foo,bar", parent: "/foo", name: "bar", stem: "bar", ext: "none", root: true, absolute: true)
+    row(posix("///foo///"), "/,foo", parent: "/", name: "foo", stem: "foo", ext: "none", root: true, absolute: true)
+    row(posix("///foo///bar"), "/,foo,bar", parent: "///foo", name: "bar", stem: "bar", ext: "none", root: true, absolute: true)
+    row(posix("./."), ".", parent: "", name: "none", stem: "none", ext: "none", root: false, absolute: false)
+    row(posix("/.."), "/,..", parent: "/", name: "none", stem: "none", ext: "none", root: true, absolute: true)
+    row(posix("../"), "..", parent: "", name: "none", stem: "none", ext: "none", root: false, absolute: false)
+    row(posix("foo/."), "foo", parent: "", name: "foo", stem: "foo", ext: "none", root: false, absolute: false)
+    row(posix("foo/.."), "foo,..", parent: "foo", name: "none", stem: "none", ext: "none", root: false, absolute: false)
+    row(posix("foo/./bar"), "foo,bar", parent: "foo", name: "bar", stem: "bar", ext: "none", root: false, absolute: false)
+    row(posix("foo/../bar"), "foo,..,bar", parent: "foo/..", name: "bar", stem: "bar", ext: "none", root: false, absolute: false)
+    row(posix("./a"), ".,a", parent: ".", name: "a", stem: "a", ext: "none", root: false, absolute: false)
+    row(posix("a//b"), "a,b", parent: "a", name: "b", stem: "b", ext: "none", root: false, absolute: false)
+    row(posix(".foo"), ".foo", parent: "", name: ".foo", stem: ".foo", ext: "none", root: false, absolute: false)
+    row(posix("foo."), "foo.", parent: "", name: "foo.", stem: "foo", ext: "", root: false, absolute: false)
+    row(posix(".foo.rs"), ".foo.rs", parent: "", name: ".foo.rs", stem: ".foo", ext: "rs", root: false, absolute: false)
+    row(posix("a/notes.tar.gz"), "a,notes.tar.gz", parent: "a", name: "notes.tar.gz", stem: "notes.tar", ext: "gz", root: false, absolute: false)
+    row(posix("..."), "...", parent: "", name: "...", stem: "..", ext: "", root: false, absolute: false)
+    // A backslash is a name's on POSIX.
+    row(posix("a\\b"), "a\\b", parent: "", name: "a\\b", stem: "a\\b", ext: "none", root: false, absolute: false)
+    row(posix("C:/x"), "C:,x", parent: "C:", name: "x", stem: "x", ext: "none", root: false, absolute: false)
+}
+
+@test
+fn windowsPathsAsRustReadsThem() {
+    row(windows("c:"), "c:", parent: "none", name: "none", stem: "none", ext: "none", root: false, absolute: false)
+    row(windows("c:\\"), "c:,\\", parent: "none", name: "none", stem: "none", ext: "none", root: true, absolute: true)
+    row(windows("c:/"), "c:,/", parent: "none", name: "none", stem: "none", ext: "none", root: true, absolute: true)
+    row(windows("c:foo"), "c:,foo", parent: "c:", name: "foo", stem: "foo", ext: "none", root: false, absolute: false)
+    row(windows("c:\\foo"), "c:,\\,foo", parent: "c:\\", name: "foo", stem: "foo", ext: "none", root: true, absolute: true)
+    row(windows("c:\\foo\\bar.txt"), "c:,\\,foo,bar.txt", parent: "c:\\foo", name: "bar.txt", stem: "bar", ext: "txt", root: true, absolute: true)
+    row(windows("c:/foo/bar"), "c:,/,foo,bar", parent: "c:/foo", name: "bar", stem: "bar", ext: "none", root: true, absolute: true)
+    row(windows("\\foo"), "\\,foo", parent: "\\", name: "foo", stem: "foo", ext: "none", root: true, absolute: false)
+    row(windows("foo\\bar/baz"), "foo,bar,baz", parent: "foo\\bar", name: "baz", stem: "baz", ext: "none", root: false, absolute: false)
+    row(windows("\\\\server\\share"), "\\\\server\\share,", parent: "none", name: "none", stem: "none", ext: "none", root: true, absolute: true)
+    row(windows("\\\\server\\share\\a"), "\\\\server\\share,\\,a", parent: "\\\\server\\share\\", name: "a", stem: "a", ext: "none", root: true, absolute: true)
+    row(windows("//server/share/a/b"), "//server/share,/,a,b", parent: "//server/share/a", name: "b", stem: "b", ext: "none", root: true, absolute: true)
+    row(windows("\\\\server"), "\\\\server,", parent: "none", name: "none", stem: "none", ext: "none", root: true, absolute: true)
+    row(windows("\\\\?\\a\\b"), "\\\\?\\a,\\,b", parent: "\\\\?\\a\\", name: "b", stem: "b", ext: "none", root: true, absolute: true)
+    // A verbatim path is the system's as it is: '/' is a name's, '.' a part.
+    row(windows("\\\\?\\a/b"), "\\\\?\\a/b", parent: "none", name: "none", stem: "none", ext: "none", root: true, absolute: true)
+    row(windows("\\\\?\\a\\.\\b"), "\\\\?\\a,\\,.,b", parent: "\\\\?\\a\\.", name: "b", stem: "b", ext: "none", root: true, absolute: true)
+    row(windows("\\\\?\\C:\\foo"), "\\\\?\\C:,\\,foo", parent: "\\\\?\\C:\\", name: "foo", stem: "foo", ext: "none", root: true, absolute: true)
+    row(windows("\\\\?\\C:"), "\\\\?\\C:", parent: "none", name: "none", stem: "none", ext: "none", root: true, absolute: true)
+    row(windows("\\\\?\\UNC\\server\\share\\x"), "\\\\?\\UNC\\server\\share,\\,x", parent: "\\\\?\\UNC\\server\\share\\", name: "x", stem: "x", ext: "none", root: true, absolute: true)
+    row(windows("\\\\.\\COM1"), "\\\\.\\COM1,", parent: "none", name: "none", stem: "none", ext: "none", root: true, absolute: true)
+    row(windows("\\\\.\\pipe\\x"), "\\\\.\\pipe,\\,x", parent: "\\\\.\\pipe\\", name: "x", stem: "x", ext: "none", root: true, absolute: true)
+
+    assert(windows("c:\\x").prefixKind == .Disk)
+    assert(windows("\\\\?\\x").prefixKind == .Verbatim)
+    assert(windows("\\\\?\\C:\\").prefixKind == .VerbatimDisk)
+    assert(windows("\\\\?\\UNC\\s\\h").prefixKind == .VerbatimUnc)
+    assert(windows("\\\\.\\x").prefixKind == .DeviceNamespace)
+    assert(windows("\\\\s\\h").prefixKind == .Unc)
+    assert(windows("x").prefixKind == none)
+    assert(posix("//s/h").prefixKind == none)
+    assertEqual(shown(windows("c:\\a").root), "c:\\")
+    assertEqual(shown(windows("c:a").root), "c:")
+    assertEqual(shown(posix("/a").root), "/")
+    assertEqual(shown(posix("a").root), "none")
+    assertEqual("\(windows("x").separator)", "\\")
+    assertEqual("\(posix("x").separator)", "/")
+}
+
+@test
+fn appendingJoinsAsRustsPushDoes() {
+    assertEqual(shown(posix("a").appending("b")), "a/b")
+    assertEqual(shown(posix("a/").appending("b")), "a/b")
+    assertEqual(shown(posix("").appending("b")), "b")
+    assertEqual(shown(posix("/a").appending("/b")), "/b")
+    assertEqual(shown(posix("a").appending("")), "a/")
+    assertEqual(shown(windows("a").appending("b")), "a\\b")
+    assertEqual(shown(windows("c:").appending("b")), "c:b")
+    assertEqual(shown(windows("c:\\a").appending("\\b")), "c:\\b")
+    assertEqual(shown(windows("c:\\a").appending("d:b")), "d:b")
+    assertEqual(shown(windows("c:\\a").appending("\\\\s\\h")), "\\\\s\\h")
+    assertEqual(shown(windows("\\\\?\\a").appending("b")), "\\\\?\\a\\b")
+    assertEqual(shown(windows("a/").appending("b")), "a/b")
+    assertEqual(shown(windows("a").appending(windows("b"))), "a\\b")
+}
+
+@test
+fn namesAndExtensionsAreReplaced() {
+    assertEqual(shown(posix("a/b.txt").withExtension("md")), "a/b.md")
+    assertEqual(shown(posix("a/b.tar.gz").withExtension("")), "a/b.tar")
+    assertEqual(shown(posix("a/b").withExtension("c")), "a/b.c")
+    assertEqual(shown(posix("a/.profile").withExtension("bak")), "a/.profile.bak")
+    assertEqual(shown(posix("a/..").withExtension("c")), "a/..")
+    assertEqual(shown(posix("a/b.txt/").withExtension("md")), "a/b.md")
+    assertEqual(shown(posix("a/b.txt").withFileName("c")), "a/c")
+    assertEqual(shown(posix("b.txt").withFileName("c")), "c")
+    assertEqual(shown(posix("/").withFileName("c")), "/c")
+    assertEqual(shown(posix("a/..").withFileName("c")), "a/../c")
+    assertEqual(shown(posix("/a").removingLastComponent()), "/")
+    assertEqual(shown(posix("/").removingLastComponent()), "/")
+    assertEqual("\(posix("a/b").lastComponent!)", "b")
+    assert(posix("").lastComponent == none)
+    assert(posix("a/..").lastComponent!.kind == .ParentDirectory)
+}
+
+@test
+fn normalizingIsByTheBytesAlone() {
+    assertEqual(shown(posix("a/b/../c/./d").lexicallyNormalized()), "a/c/d")
+    assertEqual(shown(posix("/../a/..").lexicallyNormalized()), "/")
+    assertEqual(shown(posix("../../a").lexicallyNormalized()), "../../a")
+    assertEqual(shown(posix("a/../..").lexicallyNormalized()), "..")
+    assertEqual(shown(posix("a/..").lexicallyNormalized()), ".")
+    assertEqual(shown(posix("./").lexicallyNormalized()), ".")
+    assertEqual(shown(posix("//a//b//").lexicallyNormalized()), "/a/b")
+    assertEqual(shown(windows("c:/a/./b/../c").lexicallyNormalized()), "c:\\a\\c")
+    assertEqual(shown(windows("c:a\\..\\..").lexicallyNormalized()), "c:..")
+    assertEqual(shown(windows("\\\\s\\h\\..\\x").lexicallyNormalized()), "\\\\s\\h\\x")
+    assertEqual(shown(windows("\\\\?\\a\\..\\b").lexicallyNormalized()), "\\\\?\\a\\..\\b")
+}
+
+@test
+fn prefixesSuffixesAndRelativePaths() {
+    assert(posix("/etc/passwd").starts(with: posix("/etc")))
+    assert(posix("/etc/passwd").starts(with: posix("/etc/")))
+    assert(!posix("/etc/passwd").starts(with: posix("/et")))
+    assert(!posix("/etc").starts(with: posix("/etc/passwd")))
+    assert(!posix("etc/passwd").starts(with: posix("/etc")))
+    assert(posix("/etc/passwd").ends(with: posix("passwd")))
+    assert(posix("/etc/passwd").ends(with: posix("etc/passwd")))
+    assert(!posix("/etc/passwd").ends(with: posix("/passwd")))
+    assert(!posix("a").ends(with: posix("b/a")))
+    assert(windows("c:\\a\\b").starts(with: windows("c:/a")))
+
+    assertEqual(shown(posix("/test/haha/foo.txt").strippingPrefix(posix("/test/"))), "haha/foo.txt")
+    assertEqual(shown(posix("/test/haha/foo.txt").strippingPrefix(posix("/test/haha/foo.txt"))), "")
+    assertEqual(shown(posix("/test/haha").strippingPrefix(posix("/te"))), "none")
+    assertEqual(shown(windows("c:\\a").strippingPrefix(windows("c:"))), "\\a")
+
+    assertEqual(shown(posix("/a/b/c").relative(to: posix("/a/x"))), "../b/c")
+    assertEqual(shown(posix("/a/b").relative(to: posix("/a/b/"))), ".")
+    assertEqual(shown(posix("/a/b").relative(to: posix("/a/b/c/d"))), "../..")
+    assertEqual(shown(posix("a/b").relative(to: posix("./a"))), "b")
+    assertEqual(shown(posix("a").relative(to: posix("../x"))), "none")
+    assertEqual(shown(posix("../a").relative(to: posix(".."))), "a")
+    assertEqual(shown(posix("/a").relative(to: posix("a"))), "none")
+    assertEqual(shown(posix("a").relative(to: posix("/a"))), "none")
+    assertEqual(shown(windows("c:\\a\\b").relative(to: windows("c:\\c"))), "..\\a\\b")
+    assertEqual(shown(windows("c:\\a").relative(to: windows("d:\\a"))), "none")
+}
+
+@test
+fn pathsCompareByTheirComponents() {
+    assert(posix("a//b/") == posix("a/b"))
+    assert(posix("a/./b") == posix("a/b"))
+    assert(posix("./a") != posix("a"))
+    assert(posix("/a") != posix("a"))
+    assert(posix("a") != windows("a"))
+    assert(windows("c:/a") == windows("c:\\a"))
+    assertEqual(posix("a//b/").hashValue, posix("a/b").hashValue)
+    assertEqual(windows("c:/a").hashValue, windows("c:\\a").hashValue)
+
+    assert(posix("a") < posix("b"))
+    assert(posix("a") < posix("a/b"))
+    assert(!(posix("a/b") < posix("a")))
+    assert(posix("/z") < posix("a"))
+    assert(posix("a/b") < posix("a/c"))
+    assert(posix("ab") > posix("a"))
+    assert(posix("..") < posix("a"))
+    assert(posix("x") < windows("x"))
+    assert(!(posix("x") < posix("x")))
+
+    var seen = Set<FilePath>()
+    let _ = seen.insert(posix("a/b"))
+    let _ = seen.insert(posix("a//b"))
+    let _ = seen.insert(posix("a/c"))
+    assertEqual(seen.count, 2)
+    assertEqual(posix("/a b").debugDescription(), "FilePath(\"/a b\")")
+    assertEqual("[\(posix("ab"):>4)]", "[  ab]")
+}
+
+@test
+fn bytesThatAreNotUtf8ArePathsToo() {
+    // Latin-1 "café" as a POSIX file name may have it.
+    let path = FilePath(bytes: [0x2F, 0x74, 0x2F, 0x63, 0x61, 0x66, 0xE9, 0x2E, 0x74, 0x78, 0x74], style: .Posix)
+    assert(path.string == none)
+    assertEqual("\(path)", "/t/caf\u{FFFD}.txt")
+    assertEqual(path.pathExtension ?? "-", "txt")
+    assertEqual(path.components.count, 3)
+    assert(path.components[2].string == none)
+    assertEqual(path.components[2].bytes.count, 8)
+    assert(path.parent! == posix("/t"))
+    assertEqual(path.withExtension("md").bytes[6], 0xE9)
+    assert(posix("ok").string! == "ok")
+    assert(posix("ok").components[0].string! == "ok")
+}
+
+@test
+fn theFileSystemResolvesWhatTheBytesCannot() throws {
+    let here = try FilePath(".").canonical()
+    assert(here.isAbsolute)
+    assert(FilePath(".").absolute().isAbsolute)
+    assert(here.absolute() == here)
+    let name = "sable-test-path-canonical.txt"
+    try File.write(name, "x")
+    let file = try FilePath("./" + name).canonical()
+    assertEqual(file.fileName ?? "-", name)
+    assert(file.parent! == here)
+    let opened = try File.open(FilePath(name))
+    assertEqual(try opened.read(upTo: 5).count, 1)
+    opened.close()
+    try File.remove(name)
+    do {
+        let _ = try FilePath("sable-test-no-such-path").canonical()
+        fail("a missing path resolved")
+    } catch IoError.NotFound(_) { }
+}
+
+@test
+fn pathsAsTextGoThroughFilePath() {
+    assertEqual(Path.join("a", "b"), "a/b")
+    assertEqual(Path.join("", "b"), "b")
+    assertEqual(Path.join("/a", "/b"), "/b")
+    assertEqual(Path.fileName("a/b.txt"), "b.txt")
+    assertEqual(Path.fileName("a/.."), "")
+    assertEqual(Path.directory("x/y/report.md"), "x/y")
+    assertEqual(Path.directory("report.md"), ".")
+    assertEqual(Path.directory("/"), "/")
+    assertEqual(Path.directory(""), ".")
+    assertEqual(Path.extension("a/b.tar.gz") ?? "-", "gz")
+    assert(Path.extension(".hidden") == none)
+    assertEqual(Path.withoutExtension("x/y/report.md"), "x/y/report")
+    assertEqual(Path.normalized("a/./b/../c"), "a/c")
+    assertEqual(Path.relative("/a/b", to: "/a") ?? "-", "b")
+    assert(Path.relative("a", to: "/a") == none)
+    assert(Path.isAbsolute("/a") && !Path.isAbsolute("a"))
+}

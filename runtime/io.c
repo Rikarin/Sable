@@ -461,6 +461,21 @@ bool sable_file_copy(const SableString *from, const SableString *to) {
     return copied;
 }
 
+// The path made absolute with every link resolved; empty when it is not
+// there, sable_file_error then saying why.
+SableString *sable_file_canonical(const SableString *path) {
+    char *name = c_string(path);
+    char *resolved = file_canonical(name, file_error_cleared());
+    free(name);
+    if (resolved == NULL) {
+        return make_string("", 0);
+    }
+
+    SableString *result = make_ctext(resolved);
+    free(resolved);
+    return result;
+}
+
 // What stdio holds back for the stream (1 output, 2 error), written now.
 void sable_file_flush_standard(int64_t which) {
     fflush(which == 2 ? stderr : stdout);

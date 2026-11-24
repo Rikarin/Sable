@@ -1,0 +1,62 @@
+module Sable.IO
+
+import Sable.Text
+
+/// A part of a FilePath: its kind and its bytes as the path has them.
+public struct PathComponent {
+    /// What the part is.
+    public let kind: PathComponentKind
+    /// The part's bytes; a root's is its separator, or none for the root a
+    /// UNC share has without one.
+    public let bytes: U8[>..]
+
+    /// The part as text, when its bytes are UTF-8.
+    public var string: String? {
+        get {
+            return try? String.fromUtf8(bytes)
+        }
+    }
+}
+
+extension PathComponent: Equatable {
+    /// The same kind and bytes; roots are equal whichever separator they are.
+    public operator == (lhs: PathComponent, rhs: PathComponent) -> Bool {
+        if lhs.kind != rhs.kind {
+            return false
+        }
+        return lhs.kind == .Root || sameBytes(lhs.bytes, rhs.bytes)
+    }
+}
+
+extension PathComponent: Formattable {
+    /// The part as text, each ill-formed sequence made U+FFFD.
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(String.fromUtf8Lossy(bytes))
+    }
+}
+
+fn sameBytes(_ a: U8[:], _ b: U8[:]) -> Bool {
+    if a.count != b.count {
+        return false
+    }
+    var i = 0
+    while i < a.count {
+        if a[i] != b[i] {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+// -1, 0 or 1 as the first bytes sort before, with or after the second.
+fn compareBytes(_ a: U8[:], _ b: U8[:]) -> Int {
+    var i = 0
+    while i < a.count && i < b.count {
+        if a[i] != b[i] {
+            return a[i] < b[i] ? -1 : 1
+        }
+        i += 1
+    }
+    return a.count == b.count ? 0 : a.count < b.count ? -1 : 1
+}

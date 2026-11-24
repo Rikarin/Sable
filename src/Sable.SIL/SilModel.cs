@@ -2668,6 +2668,7 @@ public static class SilBuiltins {
         Add("file_close", SilType.Bool, SilType.Int);
         Add("file_standard", SilType.Int, SilType.Int);
         Add("file_copy", SilType.Bool, SilType.String, SilType.String);
+        Add("file_canonical", SilType.String, SilType.String);
         Add("time_monotonic", SilType.Int);
         Add("time_wall_clock", SilType.Int);
         Add("time_sleep", SilType.Unit, SilType.Int);

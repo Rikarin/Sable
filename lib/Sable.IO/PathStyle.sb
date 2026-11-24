@@ -1,0 +1,24 @@
+module Sable.IO
+
+/// Whose rules a path is read by: what separates its parts, and what
+/// roots it. A FilePath carries its style, so either can be read anywhere —
+/// a Windows path on Linux, say, from a file that came from one.
+@derive(Equatable, Hashable, Debug)
+public enum PathStyle {
+    /// '/' separates the parts; a path from '/' is absolute.
+    Posix
+    /// '\' and '/' separate the parts ('\' alone in a verbatim path), with
+    /// drive letters, UNC shares and '\\?\' and '\\.\' prefixes.
+    Windows
+
+    /// The rules of the system the program runs on.
+    public static var native: PathStyle {
+        get {
+            #if os(windows)
+            return .Windows
+            #else
+            return .Posix
+            #endif
+        }
+    }
+}

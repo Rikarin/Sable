@@ -254,3 +254,30 @@ static bool file_copy(const char *from, const char *to, FileError *error) {
     return copied;
 #endif
 }
+
+static char *file_canonical(const char *name, FileError *error) {
+#if defined(__wasi__)
+    // WASI has no links to resolve past what the host hands it: the path
+    // as given, if something is there.
+    struct stat status;
+    if (stat(name, &status) != 0) {
+        file_failed(error);
+        return NULL;
+    }
+    size_t length = strlen(name);
+    char *copy = malloc(length + 1);
+    if (copy == NULL) {
+        error->kind = FILE_ERROR_OTHER;
+        error->code = ENOMEM;
+        return NULL;
+    }
+    memcpy(copy, name, length + 1);
+    return copy;
+#else
+    char *resolved = realpath(name, NULL);
+    if (resolved == NULL) {
+        file_failed(error);
+    }
+    return resolved;
+#endif
+}

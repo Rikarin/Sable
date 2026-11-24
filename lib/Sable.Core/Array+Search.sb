@@ -119,15 +119,7 @@ extension<Element: Equatable> Element[:] {
         if suffix.count > self.count {
             return false
         }
-        let offset = self.count - suffix.count
-        var i = 0
-        while i < suffix.count {
-            if self[offset + i] != suffix[i] {
-                return false
-            }
-            i = i + 1
-        }
-        return true
+        return self.slice(from: self.count - suffix.count, to: self.count).commonPrefixLength(with: suffix) == suffix.count
     }
 
     /// How many elements are equal to this one. Its 'count' is how many
@@ -151,6 +143,12 @@ extension<Element: Equatable> Element[:] {
     /// How many elements, from the start, the two arrays have equal.
     public fn commonPrefixLength(with other: Element[:]) -> Int {
         let shorter = self.count < other.count ? self.count : other.count
+        if shorter >= comparedByBits {
+            let at = self.mismatch(other)
+            if at >= 0 {
+                return at
+            }
+        }
         var i = 0
         while i < shorter && self[i] == other[i] {
             i = i + 1

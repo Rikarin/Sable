@@ -37,7 +37,7 @@ extension U8[:] {
     /// assert(csv.firstIndex(ofAny: [0x0A, 0x2C]) == 2)
     /// ```
     public fn firstIndex(ofAny candidates: U8[:]) -> Int? {
-        let at = Runtime.findAnyByte(self, candidates)
+        let at = candidates.count <= 5 && self.count >= 16 ? firstEqualToAny(self, candidates) : Runtime.findAnyByte(self, candidates)
         return at < 0 ? none : at
     }
 

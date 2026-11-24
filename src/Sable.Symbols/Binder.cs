@@ -4086,6 +4086,18 @@ public sealed partial class Binder {
             if (aGeneric != bGeneric) {
                 return aGeneric ? second : first;
             }
+
+            // And of two for any element, the one that asks more of it:
+            // 'extension<Element: SIMDScalar> Element[:]' over
+            // 'extension<Element: Equatable> Element[:]', as SIMDScalar
+            // refines Comparable and so Equatable.
+            if (aGeneric) {
+                var elementA = (TypeParameterSymbol)arrayA.ElementType;
+                var elementB = (TypeParameterSymbol)arrayB.ElementType;
+                var aImplies = Implies(elementA, elementB);
+                var bImplies = Implies(elementB, elementA);
+                return aImplies == bImplies ? null : aImplies ? first : second;
+            }
         }
 
         var aIsProtocol = a.TypeKind == TypeKind.Protocol;
@@ -4102,6 +4114,15 @@ public sealed partial class Binder {
 
         static bool Refines(NamedTypeSymbol protocol, NamedTypeSymbol other) =>
             AssociatedTypes.RefinedProtocols(protocol).Any(p => ReferenceEquals(p, other));
+
+        // Whether whatever meets the one parameter's constraints meets the other's.
+        static bool Implies(TypeParameterSymbol one, TypeParameterSymbol other) {
+            var met = Parts(one).OfType<NamedTypeSymbol>().ToList();
+            return Parts(other).All(wanted => met.Any(has => has.Equals(wanted) || wanted is NamedTypeSymbol named && Refines(has, named)));
+
+            static IEnumerable<TypeSymbol> Parts(TypeParameterSymbol parameter) =>
+                parameter.Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c));
+        }
     }
 
     /// <summary>What an overload is resolved for: a call, or a subscript read or stored through.</summary>
@@ -6339,6 +6360,7 @@ public sealed partial class Binder {
     ) {
         FunctionSymbol? best = null;
         var bestCost = int.MaxValue;
+        var bestViews = 0;
         var ambiguous = false;
         var rejected = new List<(FunctionSymbol Candidate, string Reason)>();
         var tied = new List<FunctionSymbol>();
@@ -6357,15 +6379,31 @@ public sealed partial class Binder {
                 cost += ReadOnlySubscriptCost;
             }
 
-            if (cost < bestCost) {
+            // An array passed to an array's own member as the slice it takes
+            // costs nothing beside a protocol's extension that takes it as any
+            // sequence: 'xs.append(contentsOf: ys)' is the array's, which
+            // copies its elements at once.
+            var views = _arrayViews;
+            var against = bestCost;
+            var own = cost.Value;
+            if (best is not null) {
+                if (IsArraysOwn(candidate) && IsProtocols(best)) {
+                    own -= views;
+                } else if (IsArraysOwn(best) && IsProtocols(candidate)) {
+                    against -= bestViews;
+                }
+            }
+
+            if (own < against) {
                 best = candidate;
                 bestCost = cost.Value;
+                bestViews = views;
                 ambiguous = false;
                 tied.Clear();
                 continue;
             }
 
-            if (cost != bestCost || best is null) {
+            if (own != against || best is null) {
                 continue;
             }
 
@@ -6373,6 +6411,8 @@ public sealed partial class Binder {
             // 'both(aPoint)' means the one written for Point.
             if (candidate.TypeParameters.Length < best.TypeParameters.Length) {
                 best = candidate;
+                bestCost = cost.Value;
+                bestViews = views;
                 ambiguous = false;
                 tied.Clear();
                 continue;
@@ -6394,6 +6434,11 @@ public sealed partial class Binder {
             // every conformer, and a more refined protocol's beats the one
             // it refines: an array's 'contains(element:)' is the one for it.
             if (MoreSpecific(best, candidate) is { } specific) {
+                if (ReferenceEquals(specific, candidate)) {
+                    bestCost = cost.Value;
+                    bestViews = views;
+                }
+
                 best = specific;
                 continue;
             }
@@ -6455,6 +6500,17 @@ public sealed partial class Binder {
         return best;
     }
 
+    /// <summary>How many arguments the last candidate <see cref="Score" /> looked at takes as a view of the array they are, its whole cost if it has no other.</summary>
+    int _arrayViews;
+
+    /// <summary>A member an extension of an array declares.</summary>
+    static bool IsArraysOwn(FunctionSymbol function) =>
+        function.ContainingSymbol is ExtensionSymbol { ExtendedType.OriginalDefinition.ExtendedArray: not null };
+
+    /// <summary>A member an extension of a protocol gives every type that conforms to it.</summary>
+    static bool IsProtocols(FunctionSymbol function) =>
+        function.ContainingSymbol is ExtensionSymbol { ExtendedType.TypeKind: TypeKind.Protocol };
+
     /// <summary>Why the last candidate <see cref="Score" /> looked at was rejected.</summary>
     string? _rejection;
 
@@ -6503,6 +6559,7 @@ public sealed partial class Binder {
         }
 
         var cost = 0;
+        _arrayViews = 0;
         for (var i = 0; i < arguments.Length; i++) {
             // Everything from a variadic parameter on is one of its elements.
             var parameter = slots[i] < parameters.Length
@@ -6579,6 +6636,10 @@ public sealed partial class Binder {
                 && arguments[i].Type is ArrayTypeSymbol { ElementType: var written } && wanted is ArrayTypeSymbol { ElementType: var given }
                 && !written.Equals(given)) {
                 cost++;
+            }
+
+            if (conversion.Value == ConversionKind.ArrayView) {
+                _arrayViews++;
             }
 
             if (arguments[i] is BoundUnboundClosure waiting && IsMisshapen(waiting.Syntax as ExpressionSyntax, wanted)) {

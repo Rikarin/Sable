@@ -408,6 +408,17 @@ public sealed partial class LlvmEmitter {
                 case var _ when type == SilType.Unit:
                     return null;
 
+                // A SIMD vector, as C's vector types are: LLVM's DWARF writer
+                // needs the type of a variable in registers of several parts.
+                // A mask's lane is shown as a byte.
+                case VectorType vector: {
+                    var bits = vector.Element == SilType.Bool ? 8 : SimdBuiltins.LaneBits(vector.Element);
+                    return Node(
+                        $"!DICompositeType(tag: DW_TAG_array_type, baseType: {Type(vector.Element)}, size: {bits * vector.Count}, flags: DIFlagVector, "
+                        + $"elements: !{{{Node($"!DISubrange(count: {vector.Count})")}}})"
+                    );
+                }
+
                 case var _ when type == SilType.String: {
                     var bytes = Node($"!DICompositeType(tag: DW_TAG_array_type, baseType: {Basic("char", 8, "DW_ATE_signed_char")}, elements: !{{{Node("!DISubrange(count: -1)")}}})");
                     var body = Structure("SableString", 32, [

@@ -55,6 +55,25 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
+                // The only reference to its buffer already: the last element's
+                // index checked, and no call but the trap.
+                case "store_unique": {
+                    var vector = (VectorType)builtin.Operands[1].Type;
+                    NegativeOffsetTraps(operands[2]);
+                    var lastIndex = Fresh();
+                    Line($"{lastIndex} = add i64 {operands[2]}, {vector.Count - 1}");
+                    var stored = ((AddressType)builtin.Operands[0].Type).Pointee;
+                    var held = Fresh();
+                    Line($"{held} = load {Type(stored)}, ptr {operands[0]}");
+                    var last = stored is SliceType slice
+                        ? SliceElement(held, lastIndex, slice)
+                        : InlineElement(held, lastIndex, ((ArrayType)stored).Element);
+                    var start = Fresh();
+                    Line($"{start} = getelementptr inbounds {Type(vector.Element)}, ptr {last}, i64 {1 - vector.Count}");
+                    Line($"store {Type(vector)} {operands[1]}, ptr {start}, align {TypeLayout.Align(vector.Element)}");
+                    return;
+                }
+
                 case "extract":
                     LaneIndexTraps(operands[1], first!.Count);
                     Line($"{Result()} = extractelement {Type(first)} {operands[0]}, i64 {operands[1]}");
@@ -84,10 +103,26 @@ public sealed partial class LlvmEmitter {
                     for (var i = 0; i < result.Count; i++) {
                         var (index, lane) = (Fresh(), Fresh());
                         Line($"{index} = extractelement {Type(indices)} {operands[1]}, i64 {i}");
-                        Line($"{lane} = extractelement {Type(first)} {operands[0]}, i64 {index}");
+                        Line($"{lane} = extractelement {Type(first)} {operands[0]}, {Type(indices.Element)} {index}");
                         var next = i == result.Count - 1 ? Result() : Fresh();
                         Line($"{next} = insertelement {Type(result)} {built}, {Type(result.Element)} {lane}, i64 {i}");
                         built = next;
+                    }
+
+                    return;
+                }
+
+                case "lookup":
+                    _names[builtin] = Lookup(first!, (VectorType)builtin.Type, operands[0], operands[1]);
+                    return;
+
+                // A bit a lane: the first lane's the lowest, as every target
+                // here is little-endian (x86's movemask, WebAssembly's bitmask).
+                case "mask_bits": {
+                    var bits = first!.Count == 64 ? Result() : Fresh();
+                    Line($"{bits} = bitcast {Type(first)} {operands[0]} to i{first.Count}");
+                    if (first.Count < 64) {
+                        Line($"{Result()} = zext i{first.Count} {bits} to i64");
                     }
 
                     return;
@@ -115,6 +150,17 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
+                // One instruction's worth of bits seen as other lanes; a
+                // BF16's lane is its bits already.
+                case "reinterpret":
+                    if (Type(first!) == Type(builtin.Type)) {
+                        _names[builtin] = operands[0];
+                    } else {
+                        Line($"{Result()} = bitcast {Type(first!)} {operands[0]} to {Type(builtin.Type)}");
+                    }
+
+                    return;
+
                 case "convert":
                     _names[builtin] = ConvertLanes(first!, (VectorType)builtin.Type, operands[0]);
                     return;
@@ -126,6 +172,63 @@ public sealed partial class LlvmEmitter {
             }
 
             _names[builtin] = LaneWise(op, first!, operands);
+        }
+
+        /// <summary>
+        ///     Each byte replaced by the table's entry it numbers, or zero where
+        ///     the table has none: NEON's tbl of up to four registers, and
+        ///     elsewhere — SSE2 has no such shuffle — a lane at a time.
+        /// </summary>
+        string Lookup(VectorType table, VectorType result, string entries, string indices) {
+            var block = new VectorType(SilType.U8, 16);
+            if (module._arch == "arm64" && table.Count is 16 or 32 or 64 && result.Count is 16 or 32 or 64) {
+                if (result.Count > 16) {
+                    // A wider vector of indices by halves.
+                    var half = new VectorType(SilType.U8, result.Count / 2);
+                    var parts = new string[2];
+                    for (var i = 0; i < 2; i++) {
+                        var part = Fresh();
+                        Line($"{part} = {Shuffle(result, indices, "poison", Enumerable.Range(i * half.Count, half.Count))}");
+                        parts[i] = Lookup(table, half, entries, part);
+                    }
+
+                    var whole = Fresh();
+                    Line($"{whole} = {Shuffle(half, parts[0], parts[1], Enumerable.Range(0, result.Count))}");
+                    return whole;
+                }
+
+                var blocks = new List<string>();
+                for (var i = 0; i < table.Count / 16; i++) {
+                    var part = entries;
+                    if (table.Count > 16) {
+                        part = Fresh();
+                        Line($"{part} = {Shuffle(table, entries, "poison", Enumerable.Range(i * 16, 16))}");
+                    }
+
+                    blocks.Add(part);
+                }
+
+                var t = Type(block);
+                var found = Fresh();
+                var callee = Intrinsic($"llvm.aarch64.neon.tbl{blocks.Count}.v16i8", t, [..blocks.Select(_ => t), t]);
+                Line($"{found} = call {t} {callee}({string.Join(", ", blocks.Select(b => $"{t} {b}"))}, {t} {indices})");
+                return found;
+            }
+
+            var (masked, inside, kept) = (Fresh(), Fresh(), Fresh());
+            Line($"{masked} = and {Type(result)} {indices}, {Constant(result, (table.Count - 1).ToString())}");
+            var built = "poison";
+            for (var i = 0; i < result.Count; i++) {
+                var (index, lane, next) = (Fresh(), Fresh(), Fresh());
+                Line($"{index} = extractelement {Type(result)} {masked}, i64 {i}");
+                Line($"{lane} = extractelement {Type(table)} {entries}, i8 {index}");
+                Line($"{next} = insertelement {Type(result)} {built}, i8 {lane}, i64 {i}");
+                built = next;
+            }
+
+            Line($"{inside} = icmp ult {Type(result)} {indices}, {Constant(result, table.Count.ToString())}");
+            Line($"{kept} = select <{result.Count} x i1> {inside}, {Type(result)} {built}, {Type(result)} zeroinitializer");
+            return kept;
         }
 
         /// <summary>A lane's index outside 0..<count traps.</summary>

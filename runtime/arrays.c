@@ -74,11 +74,13 @@ static void element_copy(const SableMetadata *type, void *destination, const voi
     }
 }
 
-// A run of elements copied to room that holds none: at once where they are
-// plain bytes.
+// A run of elements copied to where none are yet: at once where each is
+// copied by its bits, whether the array's type says so or its element's does.
 static void elements_copy(const SableMetadata *type, char *destination, const char *source, int64_t count) {
     int64_t size = type->element_size;
-    if (type->copy_element == NULL) {
+    bool bits = type->copy_element == NULL
+                || (type->copy_element == witnessed_element_copy && (witnessed_element(type)->flags & SABLE_TYPE_TRIVIAL) != 0);
+    if (bits) {
         if (count > 0 && size > 0) {
             memcpy(destination, source, (size_t)(count * size));
         }
@@ -310,6 +312,7 @@ static SableArray *unique(SableArray **slot, const SableMetadata *type, int64_t 
         copy->capacity = array->count + room;
         copy->elements = buffer_alloc(copy->capacity * size);
         elements_copy(type, copy->elements, array->elements, array->count);
+
         copy->count = array->count;
         sable_release(array);
     }
@@ -417,6 +420,38 @@ void sable_array_append_utf8(SableArray **slot, const SableMetadata *type, const
     array->count += length;
 }
 
+// The array at '*slot', made the only reference to its buffer, with room for
+// 'count' more elements at its end: grown by half as much again at least,
+// so that adding a few at a time copies each a bounded number of times.
+static SableArray *with_room(SableArray **slot, const SableMetadata *type, int64_t count) {
+    int64_t size = type->element_size;
+    SableArray *array = unique(slot, type, count);
+    if (array->count + count > array->capacity) {
+        int64_t old = array->capacity;
+        int64_t wanted = array->capacity + array->capacity / 2;
+        wanted = wanted < array->count + count ? array->count + count : wanted;
+        wanted = wanted < 4 ? 4 : wanted;
+        array->capacity = wanted;
+        array->elements = resize_elements(array, old * size, wanted * size);
+    }
+
+    return array;
+}
+
+// The elements of a run of another array added at the end, each copied: the
+// buffer it is in is held by the slice that views it, so an array's own run
+// is added to a copy of the array.
+void sable_array_append_all(SableArray **slot, const SableMetadata *type, const SableArray *buffer, int64_t start, int64_t count) {
+    if (count == 0) {
+        return;
+    }
+
+    const char *source = buffer->elements + start * type->element_size;
+    SableArray *array = with_room(slot, type, count);
+    elements_copy(type, array->elements + array->count * type->element_size, source, count);
+    array->count += count;
+}
+
 // 'count' copies of the element at 'value' added at the end at once: the
 // array made the only reference to its buffer, grown as appending them one
 // at a time grows it. A trivial element is copied as bytes — by memset when
@@ -438,15 +473,7 @@ void sable_array_append_repeating(SableArray **slot, const SableMetadata *type, 
         trap_here("cannot append so many elements");
     }
 
-    SableArray *array = unique(slot, type, count);
-    if (array->count + count > array->capacity) {
-        int64_t old = array->capacity;
-        int64_t wanted = array->capacity + array->capacity / 2;
-        wanted = wanted < array->count + count ? array->count + count : wanted;
-        wanted = wanted < 4 ? 4 : wanted;
-        array->capacity = wanted;
-        array->elements = resize_elements(array, old * size, wanted * size);
-    }
+    SableArray *array = with_room(slot, type, count);
 
     char *start = array->elements + array->count * size;
     if (type->copy_element != NULL) {
@@ -603,6 +630,7 @@ void sable_slice_make_unique(SableSlice *slice, const SableMetadata *type) {
     copy->count = slice->count;
     copy->elements = buffer_alloc(copy->capacity * size);
     elements_copy(type, copy->elements, buffer->elements + slice->start * size, copy->count);
+
     sable_release(buffer);
     slice->buffer = copy;
     slice->start = 0;
@@ -627,6 +655,7 @@ SableArray *sable_array_of_slice(SableArray *buffer, int64_t start, int64_t coun
     copy->count = count;
     copy->elements = buffer_alloc(count * size);
     elements_copy(type, copy->elements, buffer->elements + start * size, count);
+
     return copy;
 }
 
@@ -731,6 +760,77 @@ static const uint8_t *slice_bytes(const SableArray *buffer, int64_t start) {
 
 int64_t sable_utf8_validate(const SableArray *buffer, int64_t start, int64_t count) {
     return count == 0 ? -1 : first_invalid_utf8(slice_bytes(buffer, start), count);
+}
+
+// ---- Comparing elements by their bits
+
+// Where the two runs of bytes first differ, or their length: sixty-four and
+// then sixteen at a time, the last sixteen over again in place of a scalar
+// tail, so that only a run of fewer is walked by eight and by one.
+static int64_t first_difference(const uint8_t *a, const uint8_t *b, int64_t length) {
+    int64_t i = 0;
+    while (i + 64 <= length) {
+        const char *x = (const char *)a + i, *y = (const char *)b + i;
+        if (any16((sable_mask16)((load16(x) ^ load16(y)) | (load16(x + 16) ^ load16(y + 16)) | (load16(x + 32) ^ load16(y + 32)) | (load16(x + 48) ^ load16(y + 48))))) {
+            break;
+        }
+
+        i += 64;
+    }
+
+    while (i + 16 <= length) {
+        sable_mask16 differs = (sable_mask16)(load16((const char *)a + i) != load16((const char *)b + i));
+        if (any16(differs)) {
+            return i + (int64_t)(__builtin_ctzll(mask16_bits(differs)) / MASK16_LANE_BITS);
+        }
+
+        i += 16;
+    }
+
+    if (i < length && length >= 16) {
+        i = length - 16;
+        sable_mask16 differs = (sable_mask16)(load16((const char *)a + i) != load16((const char *)b + i));
+        return any16(differs) ? i + (int64_t)(__builtin_ctzll(mask16_bits(differs)) / MASK16_LANE_BITS) : length;
+    }
+
+    while (i + 8 <= length) {
+        uint64_t x, y;
+        memcpy(&x, a + i, 8);
+        memcpy(&y, b + i, 8);
+        if (x != y) {
+            return i + __builtin_ctzll(x ^ y) / 8;
+        }
+
+        i += 8;
+    }
+
+    while (i < length && a[i] == b[i]) {
+        i++;
+    }
+
+    return i;
+}
+
+// Where two slices of elements of 'size' bytes, compared as bytes, first
+// differ, or the shorter's count.
+int64_t sable_array_mismatch(const SableArray *a, int64_t aStart, int64_t aCount, const SableArray *b, int64_t bStart, int64_t bCount, int64_t size) {
+    int64_t shorter = aCount < bCount ? aCount : bCount;
+    if (shorter == 0) {
+        return 0;
+    }
+
+    return first_difference((const uint8_t *)a->elements + aStart * size, (const uint8_t *)b->elements + bStart * size, shorter * size) / size;
+}
+
+// The same of a type known only by its metadata: -1 unless it is one whose
+// '==' compares its bits, which of the scalars all but the floats ('F16' …
+// 'F64', 'BF16') are.
+int64_t sable_opaque_mismatch(const SableArray *a, int64_t aStart, int64_t aCount, const SableArray *b, int64_t bStart, int64_t bCount, const SableTypeMetadata *type) {
+    if (type->kind != SABLE_KIND_SCALAR || type->name == NULL || type->name[0] == 'F' || (type->name[0] == 'B' && type->name[1] == 'F')) {
+        return -1;
+    }
+
+    return sable_array_mismatch(a, aStart, aCount, b, bStart, bCount, type->size);
 }
 
 // ---- Searching bytes (U8[:]'s own contains, firstIndex and count)

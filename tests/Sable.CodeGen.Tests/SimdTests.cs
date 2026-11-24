@@ -430,6 +430,198 @@ public sealed class SimdTests {
         );
 
     [Fact]
+    public void AMasksBitsAreItsLanes() =>
+        Assert.Equal(
+            "5 2 0 2\n4 3\n9223372036854775809 2 0 63\n4294967295 32 0 31\n0 0 64 -1\n0b1010101010101010\n",
+            AssertAgree(
+                Program(
+                    """
+                    fn show<N: Int>(_ m: SIMDMask<N>) {
+                        print("\(m.bits) \(m.trueCount) \(m.firstTrue) \(m.lastTrue)")
+                    }
+                    """,
+                    """
+                        show(SIMDMask<3>([true, false, true]))
+                        let two = SIMDMask<4>([false, false, true, true])
+                        print("\(two.bits >> 2 << 2 & 7) \(two.lastTrue)")
+                        var wide = SIMDMask<64>()
+                        wide[0] = true
+                        wide[63] = true
+                        show(wide)
+                        show(SIMDMask<32>(repeating: true))
+                        show(SIMDMask<16>())
+                        let odd = SIMD<U8, 16>.sequence(start: 0, step: 1) & SIMD<U8, 16>(repeating: 1)
+                        print("\(odd.lanesEqual(SIMD<U8, 16>(repeating: 1)).bits:#b)")
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void ByteIndicesPickLanes() =>
+        Assert.Equal(
+            "<30, 10, 30, 20>\n<13, 14, 15, 16, 1, 2, 3, 4>\n",
+            AssertAgree(
+                Program(
+                    "",
+                    """
+                        print(SIMD<I32, 4>([10, 20, 30, 40]).swizzled(SIMD<U8, 4>([2, 0, 2, 1])))
+                        print(SIMD<U8, 16>.sequence(start: 1, step: 1).swizzled(SIMD<U8, 8>([12, 13, 14, 15, 0, 1, 2, 3])))
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void BytesAreLookedUpAndLanesReinterpreted() =>
+        AssertAgree(
+            Program(
+                """
+                fn look<N: Int>(_ table: SIMD<U8, N>) {
+                    for start in [0, 7, 16, 40, 60, 120, 240] as Int[>..] {
+                        print(table.lookup(SIMD<U8, 16>.sequence(start: U8(start), step: 1)))
+                    }
+                    print(table.lookup(SIMD<U8, 32>.sequence(start: 3, step: 2)))
+                    print(table.lookup(SIMD<U8, 4>([0, 1, 200, 2])))
+                }
+                """,
+                """
+                    look(SIMD<U8, 4>([9, 8, 7, 6]))
+                    look(SIMD<U8, 16>.sequence(start: 100, step: 3))
+                    look(SIMD<U8, 32>.sequence(start: 100, step: 3))
+                    look(SIMD<U8, 64>.sequence(start: 100, step: 2))
+                    let bytes = SIMD<U8, 16>([1, 2, 3, 4, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0x80, 0x3F, 0, 0, 0x20, 0xC1])
+                    print(SIMD<I32, 4>.reinterpreting(bytes))
+                    print(SIMD<F32, 4>.reinterpreting(bytes)[2])
+                    print(SIMD<F16, 8>.reinterpreting(bytes)[5])
+                    print(SIMD<BF16, 8>.reinterpreting(bytes)[7])
+                    print(SIMD<U64, 2>.reinterpreting(bytes))
+                    print(SIMD<U8, 16>.reinterpreting(SIMD<F64, 2>([1.5, -0.0])))
+                    print(SIMD<I8, 4>.reinterpreting(SIMD<I16, 2>([-2, 300])))
+                    print(SIMD<U16, 2>.reinterpreting(SIMD<BF16, 2>([1.0, -2.0])))
+                """
+            )
+        );
+
+    /// <summary>A loop of stores makes the array the only reference to its buffer once, and a shared one is still left as it was.</summary>
+    [Fact]
+    public void ALoopOfStoresLeavesASharedArrayAsItWas() =>
+        Assert.Equal(
+            "[1, 1, 1, 1, 1, 1, 1, 1, 1]\n[2, 2, 2, 2, 2, 2, 2, 2, 1]\n[3, 3, 3, 3, 3, 3, 3, 3, 1]\n[1, 1, 1, 1, 1, 1, 1, 1, 1]\n",
+            AssertAgree(
+                Program(
+                    """
+                    fn fillUp(_ xs: inout I32[>..], _ value: I32) {
+                        var i = 0
+                        while i + 4 <= xs.count {
+                            xs.store(SIMD<I32, 4>(repeating: value), at: i)
+                            i += 4
+                        }
+                    }
+                    extension I32[:] {
+                        mutating fn addOne() {
+                            var i = 0
+                            while i + 4 <= self.count {
+                                self.store(SIMD<I32, 4>.load(from: self, at: i) &+ SIMD<I32, 4>(repeating: 1), at: i)
+                                i += 4
+                            }
+                        }
+                    }
+                    """,
+                    """
+                        var a = I32[>..](repeating: 1, count: 9)
+                        let held = a
+                        fillUp(&a, 2)
+                        print(held)
+                        print(a)
+                        let shared = a
+                        a.addOne()
+                        print(a)
+                        let _ = shared
+                        print(held)
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>An array's sum traps where one along the way does not fit, though the whole would: as its loop does.</summary>
+    [Theory]
+    [InlineData("Int", "9223372036854775807", "-1")]
+    [InlineData("I64", "-9223372036854775808", "1")]
+    [InlineData("I32", "2147483647", "-1")]
+    [InlineData("U64", "18446744073709551615", "0")]
+    [InlineData("U32", "4294967295", "0")]
+    public void AnArraysSumTrapsWhereALoopsWould(string type, string extreme, string after) {
+        // Zeros, then the bound, then as much as undoes it: fits, the one
+        // before the other; the other way about, one more than fits.
+        string Sum(string last) =>
+            Program(
+                "",
+                $$"""
+                    var xs = {{type}}[>..](repeating: 0, count: 70)
+                    xs[20] = {{extreme}}
+                    xs[21] = {{after}}
+                    xs[60] = {{last}}
+                    print(xs.sum())
+                """
+            );
+
+        Assert.Equal(0, AssertAgree(Sum("0")).ExitCode);
+        var trapped = AssertAgree(
+            Program(
+                "",
+                $$"""
+                    var xs = {{type}}[>..](repeating: 0, count: 70)
+                    xs[20] = {{extreme}}
+                    xs[33] = {{(extreme.StartsWith('-') ? "-1" : "1")}}
+                    xs[34] = {{(type.StartsWith('U') ? "0" : extreme.StartsWith('-') ? "1" : "-1")}}
+                    print(xs.sum())
+                """
+            )
+        );
+        Assert.NotEqual(0, trapped.ExitCode);
+        Assert.Contains("overflow", trapped.Stderr);
+    }
+
+    [Fact]
+    public void AByteIndexOutsideTheVectorTraps() {
+        var trapped = AssertAgree(Program("", "print(SIMD<I32, 4>([1, 2, 3, 4]).swizzled(SIMD<U8, 2>([0, 4])))"));
+        Assert.NotEqual(0, trapped.ExitCode);
+        Assert.Contains("SIMD lane index out of range", trapped.Stderr);
+    }
+
+    /// <summary>Array+VectorSearch.sb's searches and the comparison by bits: at lengths about a step's, a match at each end and in the middle.</summary>
+    [Fact]
+    public void TheArraySearchesAgree() =>
+        AssertAgree(
+            Program(
+                """
+                fn probe<T: SIMDScalar>(_ other: T, _ wanted: T) {
+                    for n in [0, 1, 7, 8, 9, 31, 32, 33, 70] as Int[>..] {
+                        var xs = T[>..](repeating: other, count: n)
+                        let all = xs
+                        for at in [0, n / 2, n - 1] as Int[>..] {
+                            if at < 0 || at >= n {
+                                continue
+                            }
+                            xs[at] = wanted
+                            print("\(n) \(at): \(xs.firstIndex(of: wanted) ?? -1) \(xs.lastIndex(of: wanted) ?? -1) \(xs.count(of: wanted)) \(xs.contains(wanted)) \(xs.firstIndex(ofAny: [wanted, wanted]) ?? -1) \(xs == all) \(xs < all) \(xs.commonPrefixLength(with: all))")
+                        }
+                        print("\(n): \(all.contains(wanted)) \(all.lastIndex(of: wanted) ?? -1) \(all == all[..<n])")
+                    }
+                }
+                """,
+                """
+                    probe(U8(1), U8(200))
+                    probe(I16(1), I16(-2))
+                    probe(I32(1), I32(-2))
+                    probe(1, 2)
+                    probe(1.0, 0.5)
+                """
+            )
+        );
+
+    [Fact]
     public void TheKernelLoopAgrees() =>
         Assert.Equal(
             "[3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0]\n10.0\n",

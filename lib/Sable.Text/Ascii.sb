@@ -25,40 +25,20 @@ public struct Ascii {
 
     /// Whether the bytes are the same but for the case of ASCII letters.
     public static fn equalsIgnoringCase(_ a: U8[:], _ b: U8[:]) -> Bool {
-        if a.count != b.count {
-            return false
-        }
-        var i = 0
-        while i < a.count {
-            if Ascii.lowered(a[i]) != Ascii.lowered(b[i]) {
-                return false
-            }
-            i = i + 1
-        }
-        return true
+        return a.equalsIgnoringAsciiCase(b)
     }
 
     /// The bytes with each ASCII lower-case letter made upper case.
     public static fn uppercased(_ bytes: U8[:]) -> U8[>..] {
-        var result: U8[>..] = []
-        result.reserveCapacity(bytes.count)
-        for byte in bytes {
-            result.append(byte >= 0x61 && byte <= 0x7A ? byte - 32 : byte)
-        }
+        var result = bytes.toArray()
+        result.shiftAsciiLetters(from: 0x61, by: 0xE0)
         return result
     }
 
     /// The bytes with each ASCII upper-case letter made lower case.
     public static fn lowercased(_ bytes: U8[:]) -> U8[>..] {
-        var result: U8[>..] = []
-        result.reserveCapacity(bytes.count)
-        for byte in bytes {
-            result.append(Ascii.lowered(byte))
-        }
+        var result = bytes.toArray()
+        result.shiftAsciiLetters(from: 0x41, by: 0x20)
         return result
-    }
-
-    static fn lowered(_ byte: U8) -> U8 {
-        return byte >= 0x41 && byte <= 0x5A ? byte + 32 : byte
     }
 }

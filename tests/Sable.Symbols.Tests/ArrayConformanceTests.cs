@@ -217,6 +217,54 @@ public sealed class ArrayConformanceTests {
         );
 
     [Fact]
+    public void AnArrayMemberThatAsksMoreOfItsElementBeatsOneThatAsksLess() =>
+        // SIMDScalar refines Comparable, and so Equatable: its member is
+        // chosen for an Int's array, a refinement's over both, the generic
+        // one where the element is only Equatable.
+        AssertClean(
+            """
+            protocol Marked: SIMDScalar { }
+            extension I8: Marked { }
+            extension<Element: Equatable> Element[:] {
+                fn probe(_ value: Element) -> Int { return 1 }
+            }
+            extension<Element: SIMDScalar> Element[:] {
+                fn probe(_ value: Element) -> Bool { return true }
+            }
+            extension<Element: Marked> Element[:] {
+                fn probe(_ value: Element) -> String { return "marked" }
+            }
+            fn words(_ values: String[>..]) -> Int { return values.probe("a") }
+            fn numbers(_ values: Int[>..]) -> Bool { return values.probe(2) }
+            fn marked(_ values: I8[>..]) -> String { return values.probe(2) }
+            fn anything<T: Equatable>(_ values: T[:], _ value: T) -> Int { return values.probe(value) }
+            fn anyLanes<T: SIMDScalar>(_ values: T[:], _ value: T) -> Bool { return values.probe(value) }
+            """
+        );
+
+    [Fact]
+    public void AnArraysOwnMemberThatTakesASliceBeatsAProtocolsThatTakesAnySequence() =>
+        // Viewing the argument as a slice is no reason to take it as any
+        // sequence: the array's own copies its elements at once. What is not
+        // an array still goes to the protocol's.
+        AssertClean(
+            """
+            extension<Element> Element[>..] {
+                fn taking(_ other: Element[:]) -> Int { return 1 }
+            }
+            extension RangeReplaceableCollection {
+                fn taking<S: Sequence>(_ other: S) -> Bool where S.Element == Element { return true }
+            }
+            fn grown(_ xs: Int[>..], _ ys: Int[>..]) -> Int { return xs.taking(ys) }
+            fn literal(_ xs: Int[>..]) -> Int { return xs.taking([1, 2]) }
+            fn bytes(_ xs: U8[>..]) -> Int { return xs.taking([1, 2]) }
+            fn empty(_ xs: Int[>..]) -> Int { return xs.taking([]) }
+            fn slice(_ xs: Int[>..], _ ys: Int[:]) -> Int { return xs.taking(ys) }
+            fn range(_ xs: Int[>..]) -> Bool { return xs.taking(0..<3) }
+            """
+        );
+
+    [Fact]
     public void OverloadsFromSeveralProtocolsAreOneSet() =>
         AssertClean(
             """

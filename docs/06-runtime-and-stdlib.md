@@ -967,8 +967,8 @@ keeps `N` elements inline in a `T[..N]` before it moves to the heap.
   left by a removal (-2), or the entry's position with the top 31 bits of its
   hash above it. A probe starts where the hash's bottom bits say and moves
   one slot at a time, comparing the stored hash bits before any key —
-  SwissTable's metadata filter, without its SIMD groups, which Sable has no
-  primitive for. Growing drops removed entries and rebuilds the index from
+  SwissTable's metadata filter, without its SIMD groups: at most half full,
+  a probe looks at a slot and a half on average. Growing drops removed entries and rebuilds the index from
   the stored hashes; no key is hashed twice.
 - **Order.** Iteration is in insertion order, and the language guarantees
   it: removing a key keeps the others' order, setting an existing key keeps
@@ -1033,8 +1033,10 @@ up to 64 bits or a float (F16 and BF16 included; `SIMDScalar` says which),
 N being 2, 3, 4, 8, 16, 32 or 64 (a `where` the type checks, S3421). The
 compiler knows it by name, as it knows `Dictionary`: it lowers to SIL's
 `@simd(T, N)` and to LLVM's `<N x T>`, a value held in vector registers —
-16 bytes of them on every target Sable has (SSE2, NEON, simd128:
-`Platform.vectorBytes`, and `T.preferredVectorWidth` lanes of each type);
+16 bytes of them on every target Sable has (SSE2, NEON;
+`Platform.vectorBytes`, and `T.preferredVectorWidth` lanes of each type —
+WebAssembly is compiled without simd128, so there LLVM splits a vector into
+its lanes);
 a wider vector is split across several. `SIMDMask<N>` is N Bools,
 `<N x i1>`, what comparisons give and `select` chooses by.
 
@@ -1051,6 +1053,11 @@ trap; the interpreter computes each lane with the scalar builtin, so the
 two agree by construction. The rest move lanes (`swizzled`, `concat`,
 `lowHalf`, .NET 11's `zip` and `unzip`), load and store them from arrays
 (one unaligned vector load or store, the index checked as an element's),
+give a mask as bits (`mask.bits`, x86's movemask, with `firstTrue`,
+`lastTrue` and `trueCount` over them),
+look bytes up in a table of them (`table.lookup(indices)`, NEON's tbl;
+where `Platform.hasByteLookup` is false, a lane at a time),
+see their bits as other lanes (`reinterpreting`),
 convert them as `unchecked as` does (never trapping: wrapped, saturated,
 rounded), and reduce them: an integer's sum wraps, and a float's is added
 pairwise — lane i with lane i + N/2, down to one — in that order natively
@@ -1062,7 +1069,8 @@ written once over `SIMD<T, N>` and a scalar tail — `sum`, `dot`, `norm`,
 `subtract`, `multiply` and `divide` into a destination — and given 64
 bytes a step for F32 and F64 (16 and 8 lanes: four registers, four sums
 in flight). A store into an array reaches it inline when the array is its
-buffer's only reference, as an element's write does. Measured on an Apple
+buffer's only reference, as an element's write does, and a loop of stores
+makes it so once, before the loop (`HoistUniqueness`). Measured on an Apple
 M-series machine (arm64, NEON): a dot product, a sum and a multiply over
 4096 F32s, 50,000 times, take 0.05 s against 0.41 s as plain loops
 (`benchmarks/programs/kernels`); the six kernels of
@@ -1071,6 +1079,39 @@ time, start-up included, against 87 ms for .NET 11 with
 System.Numerics.Tensors 9.0's TensorPrimitives, steady state. F16 and BF16
 kernels, and an exponential of vectors for softmax (it calls libm's for
 each element), are still to come.
+
+**The library's own hot paths** (#229) are loops over `SIMD` too, each with
+its scalar loop for what is left — the last step taken over the last
+elements again where that is as good — and for saying where bad input is,
+and each held to that loop by tests of every length from 0 to 130, from
+several starts, at every position:
+
+- arrays of integers and floats: `contains`, `firstIndex(of:)`,
+  `firstIndex(ofAny:)`, `lastIndex(of:)`, `count(of:)`
+  (`Array+VectorSearch.sb`), `reverse`, and the integers' `sum`, `min` and
+  `max` (`Array+Aggregates.sb`); `==`, `<`, `commonPrefixLength`,
+  `starts(with:)` and `ends(with:)` of any elements that are equal when
+  their bits are, which the runtime compares as bytes (`array_mismatch`: an
+  element's type is known as it is compiled, or by its metadata);
+- `Hex`, `Base64` and Base64Url both ways, ASCII case mapping and
+  comparison, UTF-8 to and from UTF-16;
+- in the runtime's C: substring search, UTF-8 validation, counting a
+  string's scalars, and a byte's search and count.
+
+There is no dispatch on what the processor has beyond its baseline (SSE2,
+NEON): nothing is compiled for AVX2 or above. Against .NET 11 on an Apple
+M1 Max (`tools/bench/compare.py`, processor time, the median of 7 runs on a
+busy machine, Sable's over .NET's; "before" is the same without these):
+
+| benchmark | before | now |
+|:--|--:|--:|
+| array-search | 6.02 | 0.99 |
+| array-aggregates | 5.27 | 0.54 |
+| byte-search | 1.05 | 1.06 |
+| hex | 2.78 | 0.72 |
+| base64 | 4.25 | 1.22 |
+| utf16 | 2.76 | 1.32 |
+| utf8-validate (as it was) | — | 0.30 |
 
 ### Decimal
 

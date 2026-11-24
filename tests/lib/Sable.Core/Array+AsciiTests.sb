@@ -1,0 +1,92 @@
+module ArrayAsciiTests
+
+// ASCII letters among bytes (Sable.Core, Array+Ascii.sb), held to the
+// definition a byte at a time. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn plainShifted(_ byte: U8, _ first: U8, _ shift: U8) -> U8 {
+    return Int(byte) >= Int(first) && Int(byte) < Int(first) + 26 ? byte &+ shift : byte
+}
+
+fn plainLowered(_ byte: U8) -> U8 => plainShifted(byte, 0x41, 0x20)
+
+@test
+fn lettersOfEitherCaseMoveInPlace() {
+    for start in 0..<3 {
+        for n in 0...130 {
+            for (first, shift) in [(0x41, 0x20), (0x61, 0xE0)] as (U8, U8)[>..] {
+                var all: U8[>..] = []
+                for i in 0..<(start + n + 2) {
+                    all.append(U8((i * 11 + n) % 256))
+                }
+                let original = all
+                var moved = false
+                let changed = all[start..<(start + n)].shiftAsciiLetters(from: first, by: shift)
+                for i in 0..<all.count {
+                    let inside = i >= start && i < start + n
+                    let expected = inside ? plainShifted(original[i], first, shift) : original[i]
+                    moved = moved || expected != original[i]
+                    assertEqual(all[i], expected)
+                }
+                assertEqual(changed, moved)
+            }
+        }
+    }
+}
+
+@test
+fn everyByteMovesOrStays() {
+    for value in 0..<256 {
+        var many = U8[>..](repeating: U8(value), count: 40)
+        let shared = many
+        assertEqual(many.shiftAsciiLetters(from: 0x41, by: 0x20), value >= 0x41 && value <= 0x5A)
+        assertEqual(many, U8[>..](repeating: plainLowered(U8(value)), count: 40))
+        assertEqual(shared[39], U8(value))
+    }
+}
+
+@test
+fn equalityIgnoresTheCaseOfLettersAlone() {
+    for n in [0, 1, 7, 15, 16, 17, 31, 32, 33, 130] as Int[>..] {
+        var a = U8[>..](repeating: 0x78, count: n)
+        var b = U8[>..](repeating: 0x58, count: n)
+        assert(a.equalsIgnoringAsciiCase(b))
+        assert(!a.equalsIgnoringAsciiCase(U8[>..](repeating: 0x58, count: n + 1)))
+        for at in 0..<n {
+            for x in [0x40, 0x41, 0x5A, 0x5B, 0x60, 0x61, 0x7A, 0x7B, 0x80, 0xC1, 0xE1, 0xFF] as U8[>..] {
+                for y in [0x40, 0x41, 0x5A, 0x5B, 0x60, 0x61, 0x7A, 0x7B, 0x80, 0xC1, 0xE1, 0xFF] as U8[>..] {
+                    a[at] = x
+                    b[at] = y
+                    assertEqual(a.equalsIgnoringAsciiCase(b), plainLowered(x) == plainLowered(y))
+                }
+            }
+            a[at] = 0x78
+            b[at] = 0x58
+        }
+    }
+}
+
+@test
+fn asciiStringsOfEveryLengthChangeCase() {
+    for n in 0...130 {
+        var text = ""
+        for i in 0..<n {
+            text += String.fromChar(Char.fromCodePoint(0x20 + (i * 7 + n) % 0x5F)!)
+        }
+        var upper = ""
+        var lower = ""
+        for c in text {
+            upper += String.fromChar(c.asciiUppercased())
+            lower += String.fromChar(c.asciiLowercased())
+        }
+        assertEqual(text.uppercased(), upper)
+        assertEqual(text.lowercased(), lower)
+        assertEqual(text.asciiUppercased(), upper)
+        assertEqual((text + "é").asciiUppercased(), upper + "é")
+        assert(upper.equals(lower, ignoringCase: true))
+        assertEqual((upper + "É").equals(lower + "é", ignoringCase: true), true)
+        assertEqual((upper + "A").compare(lower + "b", options: .IgnoringCase), .Less)
+    }
+}

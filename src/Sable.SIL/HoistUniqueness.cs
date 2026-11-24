@@ -9,7 +9,8 @@ namespace Sable.SIL;
 ///     shared, on every write. In a loop whose only uses of the array's
 ///     variable are reading it and writing its elements, nothing in the loop
 ///     can share the buffer again: so it is made unique once, before the
-///     loop, and every write inside stores in place (<c>array_set_unique</c>),
+///     loop, and every write inside stores in place (<c>array_set_unique</c>,
+///     and <c>simd_store_unique</c> for a vector's),
 ///     with no call that could change the variable — which lets LLVM keep the
 ///     buffer and its count in registers. The variable is a local slot or an
 ///     inout parameter, which exclusivity keeps unshared for the call.
@@ -89,10 +90,10 @@ public sealed class HoistUniqueness : ISilPass {
     }
 
     /// <summary>A write that first makes its array the only reference to its buffer: an element, or an integer as bytes.</summary>
-    static bool IsCheckedWrite(string name) => name == "array_set" || name.StartsWith("bytes_store_U", StringComparison.Ordinal);
+    static bool IsCheckedWrite(string name) => name is "array_set" or "simd_store" || name.StartsWith("bytes_store_U", StringComparison.Ordinal);
 
     /// <summary>The same write, of an array known to be that.</summary>
-    static string InPlace(string name) => name == "array_set" ? "array_set_unique" : "bytes_store_unique_" + name["bytes_store_".Length..];
+    static string InPlace(string name) => name is "array_set" or "simd_store" ? name + "_unique" : "bytes_store_unique_" + name["bytes_store_".Length..];
 
     /// <summary>
     ///     An array's place viewed whole for a mutating member of
@@ -124,14 +125,14 @@ public sealed class HoistUniqueness : ISilPass {
                     made = true;
                     break;
 
-                case BuiltinInst { Name: var name } write when (name.StartsWith("bytes_store_", StringComparison.Ordinal) || name is "array_set" or "array_set_unique")
+                case BuiltinInst { Name: var name } write when (name.StartsWith("bytes_store_", StringComparison.Ordinal) || name is "array_set" or "array_set_unique" or "simd_store" or "simd_store_unique")
                     && ReferenceEquals(write.Operands[0], slot) && !write.Operands.Skip(1).Any(o => ReferenceEquals(o, slot)):
                     break;
 
                 case LoadBorrowInst borrowed:
                     foreach (var reader in uses.Of(borrowed)) {
                         var reads = reader is EndBorrowInst
-                            || reader is BuiltinInst { Name: var read } && (read is "array_get" or "array_get_borrowed" or "array_count" || read.StartsWith("bytes_load_", StringComparison.Ordinal));
+                            || reader is BuiltinInst { Name: var read } && (read is "array_get" or "array_get_borrowed" or "array_count" or "simd_load" || read.StartsWith("bytes_load_", StringComparison.Ordinal));
                         if (!reads) {
                             return false;
                         }
@@ -170,14 +171,14 @@ public sealed class HoistUniqueness : ISilPass {
             }
 
             switch (user) {
-                case BuiltinInst write when (IsCheckedWrite(write.Name) || write.Name is "array_set_unique" || write.Name.StartsWith("bytes_store_unique_", StringComparison.Ordinal))
+                case BuiltinInst write when (IsCheckedWrite(write.Name) || write.Name is "array_set_unique" or "simd_store_unique" || write.Name.StartsWith("bytes_store_unique_", StringComparison.Ordinal))
                     && ReferenceEquals(write.Operands[0], address)
                     && !write.Operands.Skip(1).Any(o => ReferenceEquals(o, address)):
                     break;
 
                 case LoadBorrowInst borrowed:
                     foreach (var reader in uses.Of(borrowed)) {
-                        if (reader is not (EndBorrowInst or BuiltinInst { Name: "array_get" or "array_get_borrowed" or "array_count" })
+                        if (reader is not (EndBorrowInst or BuiltinInst { Name: "array_get" or "array_get_borrowed" or "array_count" or "simd_load" })
                             && !(reader is BuiltinInst read && read.Name.StartsWith("bytes_load_", StringComparison.Ordinal))) {
                             return false;
                         }

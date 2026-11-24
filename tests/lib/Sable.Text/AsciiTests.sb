@@ -31,3 +31,87 @@ fn changingCase() {
     assert(Ascii.uppercased(bytes("abz-AZé")) == bytes("ABZ-AZé"), "upper")
     assert(Ascii.lowercased(bytes("ABZ-azÉ")) == bytes("abz-azÉ"), "lower")
 }
+
+fn plainLowered(_ byte: U8) -> U8 {
+    return byte >= 0x41 && byte <= 0x5A ? byte + 32 : byte
+}
+
+fn plainUppered(_ byte: U8) -> U8 {
+    return byte >= 0x61 && byte <= 0x7A ? byte - 32 : byte
+}
+
+@test
+fn everyByteAtEveryPositionOfEveryLength() {
+    for start in 0..<3 {
+        for n in 0...130 {
+            var all: U8[>..] = []
+            for i in 0..<(start + n + 2) {
+                all.append(U8(i * 7 % 256))
+            }
+            for value in [0x40, 0x41, 0x5A, 0x5B, 0x60, 0x61, 0x7A, 0x7B, 0x7F, 0x80, 0xC1, 0xE1, 0xFF] as U8[>..] {
+                for at in 0..<n {
+                    let held = all[start + at]
+                    all[start + at] = value
+                    let bytes = all[start..<(start + n)]
+                    var lower: U8[>..] = []
+                    var upper: U8[>..] = []
+                    var valid = true
+                    for byte in bytes {
+                        lower.append(plainLowered(byte))
+                        upper.append(plainUppered(byte))
+                        valid = valid && byte < 0x80
+                    }
+                    if at % 3 == 0 || n < 40 {
+                        assert(Ascii.lowercased(bytes) == lower)
+                        assert(Ascii.uppercased(bytes) == upper)
+                        assertEqual(Ascii.isValid(bytes), valid)
+                    }
+                    all[start + at] = held
+                }
+            }
+        }
+    }
+}
+
+@test
+fn everyPairOfBytesComparesAsTheyAreLowered() {
+    for n in [1, 15, 16, 17, 31, 33] as Int[>..] {
+        var a = U8[>..](repeating: 0x78, count: n)
+        var b = U8[>..](repeating: 0x58, count: n)
+        for at in [0, n / 2, n - 1] as Int[>..] {
+            for x in 0..<256 {
+                a[at] = U8(x)
+                for y in 0..<256 {
+                    b[at] = U8(y)
+                    assertEqual(Ascii.equalsIgnoringCase(a, b), plainLowered(U8(x)) == plainLowered(U8(y)))
+                }
+            }
+            a[at] = 0x78
+            b[at] = 0x58
+        }
+    }
+}
+
+@test
+fn comparingLooksNoFurtherThanTheSlices() {
+    for n in 0...130 {
+        var a = U8[>..](repeating: 0x61, count: n + 4)
+        var b = U8[>..](repeating: 0x41, count: n + 4)
+        a[0] = 0x31
+        b[n + 3] = 0x32
+        assert(Ascii.equalsIgnoringCase(a[2..<(n + 2)], b[2..<(n + 2)]))
+        for at in 0..<n {
+            b[2 + at] = 0x42
+            assert(!Ascii.equalsIgnoringCase(a[2..<(n + 2)], b[2..<(n + 2)]))
+            b[2 + at] = 0x41
+        }
+    }
+}
+
+@test
+fn changingCaseLeavesTheOriginal() {
+    let original = U8[>..](repeating: 0x61, count: 50)
+    let upper = Ascii.uppercased(original)
+    assert(original == U8[>..](repeating: 0x61, count: 50))
+    assert(upper == U8[>..](repeating: 0x41, count: 50))
+}

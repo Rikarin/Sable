@@ -229,3 +229,78 @@ fn reorderingARangePastTheEndTraps() {
     var values: Int[>..] = [1, 2, 3]
     values[1..<5].reverse()
 }
+
+// Every length, and slices that are not the whole of their array: what is
+// on each side of one stays where it is.
+fn reversesAsALoopDoes<T: SIMDScalar>(_ make: (Int) -> T) {
+    for start in 0..<3 {
+        for n in 0...130 {
+            var all: T[>..] = []
+            for i in 0..<(start + n + 2) {
+                all.append(make(i))
+            }
+            let original = all
+            all[start..<(start + n)].reverse()
+            for i in 0..<all.count {
+                let inside = i >= start && i < start + n
+                assert(all[i] == original[inside ? start + start + n - 1 - i : i])
+            }
+            var whole = original
+            whole.reverse()
+            for i in 0..<whole.count {
+                assert(whole[i] == original[original.count - 1 - i])
+            }
+        }
+    }
+}
+
+@test
+fn everyLengthOfEveryLaneReverses() {
+    reversesAsALoopDoes { U8($0) }
+    reversesAsALoopDoes { I16($0) }
+    reversesAsALoopDoes { I32($0) }
+    reversesAsALoopDoes { F32($0) }
+    reversesAsALoopDoes { $0 }
+    reversesAsALoopDoes { F64($0) }
+    reversesAsALoopDoes { F16($0) }
+}
+
+@test
+fn reversingLeavesACopyAsItWas() {
+    var xs: U8[>..] = []
+    for i in 0..<100 {
+        xs.append(U8(i))
+    }
+    let held = xs
+    xs.reverse()
+    assertEqual(held[0], 0)
+    assertEqual(xs[0], 99)
+}
+
+@test
+fn copyingIntoArraysOfEveryLength() {
+    for n in 0...130 {
+        var words: String[>..] = []
+        var numbers: Int[>..] = []
+        for i in 0..<n {
+            words.append("w\(i)")
+            numbers.append(i)
+        }
+        var otherWords = String[>..](repeating: "none", count: n)
+        var otherNumbers = Int[>..](repeating: -1, count: n)
+        let heldWords = otherWords
+        otherWords.copy(from: words)
+        otherNumbers.copy(from: numbers)
+        assertEqual(otherWords, words)
+        assertEqual(otherNumbers, numbers)
+        if n > 0 {
+            assertEqual(heldWords[n - 1], "none")
+        }
+        // Onto itself, moved along by one.
+        if n > 1 {
+            numbers[1...].copy(from: numbers[..<(n - 1)])
+            assertEqual(numbers[0], 0)
+            assertEqual(numbers[n - 1], n - 2)
+        }
+    }
+}

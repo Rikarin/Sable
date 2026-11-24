@@ -1,0 +1,89 @@
+module Sable.Core
+
+// ASCII letters among bytes, sixteen bytes at a time: what a String's case
+// mapping (String+Case.sb) and Sable.Text's Ascii are written over. A byte
+// is a letter of the run of twenty-six from 'first' when it is less than
+// twenty-six past it, which one unsigned comparison tells, wrapping.
+
+extension U8[:] {
+    /// The bytes with each ASCII letter of one case — the twenty-six from
+    /// `first` — moved by `shift`, in place: whether there were any.
+    ///
+    /// ```sable
+    /// var bytes: U8[>..] = [0x41, 0x62, 0x5B]
+    /// assert(bytes.shiftAsciiLetters(from: 0x41, by: 32))
+    /// assert(bytes == [0x61, 0x62, 0x5B])
+    /// ```
+    public mutating fn shiftAsciiLetters(from first: U8, by shift: U8) -> Bool {
+        let count = self.count
+        var changed = false
+        var i = 0
+        if count >= 16 {
+            let shifts = SIMD<U8, 16>(repeating: shift)
+            let run = SIMD<U8, 16>(repeating: 26)
+            let firsts = SIMD<U8, 16>(repeating: first)
+            var moved = SIMD<U8, 16>()
+            while count - i >= 16 {
+                let v = SIMD<U8, 16>.load(from: self, at: i)
+                let gap = SIMD<U8, 16>.select((v &- firsts).lanesLess(than: run), shifts, SIMD<U8, 16>())
+                moved = moved | gap
+                self.store(v &+ gap, at: i)
+                i += 16
+            }
+            changed = moved.reduceOr() != 0
+        }
+        while i < count {
+            let byte = self[i]
+            if byte &- first < 26 {
+                self[i] = byte &+ shift
+                changed = true
+            }
+            i += 1
+        }
+        return changed
+    }
+
+    /// Whether the two are the same bytes but for the case of ASCII letters.
+    ///
+    /// ```sable
+    /// let a: U8[>..] = [0x41, 0x5B]
+    /// let b: U8[>..] = [0x61, 0x5B]
+    /// assert(a.equalsIgnoringAsciiCase(b))
+    /// ```
+    public fn equalsIgnoringAsciiCase(_ other: U8[:]) -> Bool {
+        let count = self.count
+        if other.count != count {
+            return false
+        }
+        var i = 0
+        if count >= 16 {
+            let last = count - 16
+            while true {
+                let a = SIMD<U8, 16>.load(from: self, at: i)
+                let b = SIMD<U8, 16>.load(from: other, at: i)
+                if !asciiLowered(a).lanesEqual(asciiLowered(b)).allTrue {
+                    return false
+                }
+                if i == last {
+                    return true
+                }
+                i = last - i < 16 ? last : i + 16
+            }
+        }
+        while i < count {
+            let a = self[i]
+            let b = other[i]
+            if a != b && ((a | 0x20) != (b | 0x20) || (a | 0x20) &- 0x61 >= 26) {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+}
+
+@inline(always)
+fn asciiLowered(_ v: SIMD<U8, 16>) -> SIMD<U8, 16> {
+    let isUpper = (v &- SIMD<U8, 16>(repeating: 0x41)).lanesLess(than: SIMD<U8, 16>(repeating: 26))
+    return v | SIMD<U8, 16>.select(isUpper, SIMD<U8, 16>(repeating: 0x20), SIMD<U8, 16>())
+}

@@ -1,0 +1,170 @@
+module ArrayAggregatesTests
+
+// The sums, leasts and greatests of integer arrays (Sable.Core,
+// Array+Aggregates.sb), held to the loops they stand in for. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+const longest = 130
+
+// The sum an element at a time, or none where one along the way does not fit.
+fn scalarSum<T: FixedWidthInteger>(_ xs: T[:]) -> T? {
+    var total = T.zero
+    for x in xs {
+        let (sum, overflow) = total.overflowingAdd(x)
+        if overflow {
+            return none
+        }
+        total = sum
+    }
+    return total
+}
+
+fn scalarLeast<T: Comparable>(_ xs: T[:]) -> T? {
+    var least: T? = none
+    for x in xs {
+        if least == none || x < least {
+            least = x
+        }
+    }
+    return least
+}
+
+fn scalarGreatest<T: Comparable>(_ xs: T[:]) -> T? {
+    var greatest: T? = none
+    for x in xs {
+        if greatest == none || x > greatest {
+            greatest = x
+        }
+    }
+    return greatest
+}
+
+// The extremes at every position, with greater and lesser elements outside the slice.
+fn extremesAgree<T: SIMDScalar & FixedWidthInteger>(_ middle: T) {
+    for start in 0..<3 {
+        for n in 0...longest {
+            var all = T[>..](repeating: middle, count: start + n + 1)
+            all[start + n] = T.min
+            if start > 0 {
+                all[start - 1] = T.max
+            }
+            let same = all[start..<(start + n)]
+            assert(same.min() == scalarLeast(same))
+            assert(same.max() == scalarGreatest(same))
+            for at in 0..<n {
+                all[start + at] = T.min
+                assert(all[start..<(start + n)].min() == T.min)
+                assert(all[start..<(start + n)].max() == (n == 1 ? T.min : middle))
+                all[start + at] = T.max
+                assert(all[start..<(start + n)].max() == T.max)
+                assert(all[start..<(start + n)].min() == (n == 1 ? T.max : middle))
+                all[start + at] = middle
+            }
+        }
+    }
+}
+
+@test
+fn theExtremesAreFoundAtEveryPosition() {
+    extremesAgree(I8(3))
+    extremesAgree(U8(3))
+    extremesAgree(I16(-3))
+    extremesAgree(U16(3))
+    extremesAgree(I32(-3))
+    extremesAgree(U32(3))
+    extremesAgree(-3)
+    extremesAgree(I64(3))
+    extremesAgree(U64(3))
+    extremesAgree(UInt(3))
+}
+
+@test
+fn floatsKeepTheSequencesOwn() {
+    let xs: F64[>..] = [2.0, 1.5, 7.0]
+    assert(xs.min() == 1.5 && xs.max() == 7.0)
+    assertEqual(xs.sum(), 10.5)
+    let words: String[>..] = ["b", "a"]
+    assert(words.min() == "a")
+}
+
+@test
+fn sumsOfEveryLengthAgree() {
+    var random = SeededRandomNumberGenerator(seed: 229)
+    for start in 0..<3 {
+        for n in 0...longest {
+            var words: I32[>..] = []
+            var unsigned: U32[>..] = []
+            var longs: Int[>..] = []
+            var wide: U64[>..] = []
+            for _ in 0..<(start + n + 1) {
+                words.append(I32.random(in: -1_000_000...1_000_000, using: &random))
+                unsigned.append(U32.random(in: 0...1_000_000, using: &random))
+                longs.append(Int.random(in: -1_000_000_000_000...1_000_000_000_000, using: &random))
+                wide.append(U64.random(in: 0...1_000_000_000_000, using: &random))
+            }
+            let end = start + n
+            assertEqual(words[start..<end].sum(), scalarSum(words[start..<end])!)
+            assertEqual(unsigned[start..<end].sum(), scalarSum(unsigned[start..<end])!)
+            assertEqual(longs[start..<end].sum(), scalarSum(longs[start..<end])!)
+            assertEqual(wide[start..<end].sum(), scalarSum(wide[start..<end])!)
+            var sixtyFours: I64[>..] = []
+            var uints: UInt[>..] = []
+            for i in start..<end {
+                sixtyFours.append(I64(longs[i]))
+                uints.append(UInt(wide[i]))
+            }
+            assertEqual(Int(sixtyFours.sum()), longs[start..<end].sum())
+            assertEqual(U64(uints.sum()), wide[start..<end].sum())
+        }
+    }
+}
+
+@test
+fn sumsThatReachTheBoundsAgree() {
+    // Large elements whose sums along the way fit, by a little: alternating
+    // signs, at every offset of a block.
+    for n in [15, 16, 17, 64, 255, 256, 257, 300, 520] as Int[>..] {
+        for lead in 0..<9 {
+            var longs = Int[>..](repeating: 1, count: lead)
+            var words = I32[>..](repeating: 1, count: lead)
+            for i in 0..<n {
+                longs.append(i % 2 == 0 ? Int.max - 100 : -(Int.max - 100))
+                words.append(i % 2 == 0 ? I32.max - 100 : -(I32.max - 100))
+            }
+            assertEqual(longs.sum(), scalarSum(longs)!)
+            assertEqual(words.sum(), scalarSum(words)!)
+        }
+    }
+    // Exactly the bounds.
+    var longs = Int[>..](repeating: 0, count: 300)
+    longs[299] = Int.max
+    assertEqual(longs.sum(), Int.max)
+    longs[17] = Int.min
+    assertEqual(longs.sum(), -1)
+    var unsigned = U64[>..](repeating: 1, count: 300)
+    unsigned[40] = U64.max - 299
+    assertEqual(unsigned.sum(), U64.max)
+    var words = U32[>..](repeating: 1, count: 300)
+    words[40] = U32.max - 299
+    assertEqual(words.sum(), U32.max)
+    var negative = I32[>..](repeating: -1, count: 300)
+    negative[0] = I32.min + 299
+    assertEqual(negative.sum(), I32.min)
+}
+
+@test
+fn blocksOfALongArrayAddUp() {
+    var random = SeededRandomNumberGenerator(seed: 11)
+    var longs: Int[>..] = []
+    var words: I32[>..] = []
+    for _ in 0..<9001 {
+        longs.append(Int.random(in: -0x3F_FFFF_FFFF_FFFF...0x3F_FFFF_FFFF_FFFF, using: &random) / 8)
+        words.append(I32.random(in: -200_000...200_000, using: &random))
+    }
+    if let sum = scalarSum(longs) {
+        assertEqual(longs.sum(), sum)
+    }
+    assertEqual(words.sum(), scalarSum(words)!)
+}

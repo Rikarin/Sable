@@ -161,3 +161,145 @@ fn transcodingByExample() {
     assert(decoder.sawInvalid)
     assertEqual(decoder.finish(), "")
 }
+
+// ---- Against the definition, a scalar at a time --------------------------
+// Texts of 0 to 130 scalars, each of them ASCII but for one, at every
+// position, and random ones: every way the runs of sixteen can be broken.
+
+fn utf16Of(_ scalars: Char[:]) -> U16[>..] {
+    var units: U16[>..] = []
+    for scalar in scalars {
+        scalar.encodeUtf16(into: &units)
+    }
+    return units
+}
+
+fn utf8Of(_ scalars: Char[:]) -> U8[>..] {
+    var bytes: U8[>..] = []
+    for scalar in scalars {
+        scalar.encodeUtf8(into: &bytes)
+    }
+    return bytes
+}
+
+fn assertConverts(_ scalars: Char[:]) {
+    let bytes = utf8Of(scalars)
+    let units = utf16Of(scalars)
+    // What is there already stays, and slices of longer arrays are read only where they are.
+    var padded: U8[>..] = [0xC3]
+    padded.append(contentsOf: bytes)
+    padded.append(0xF0)
+    var gotUnits: U16[>..] = [7]
+    let toUnits = Utf8.toUtf16(padded[1..<(bytes.count + 1)], into: &gotUnits)
+    assert(toUnits.status == .Done && toUnits.read == bytes.count)
+    assert(gotUnits[1...] == units && gotUnits[0] == 7)
+
+    var paddedUnits: U16[>..] = [0xD800]
+    paddedUnits.append(contentsOf: units)
+    paddedUnits.append(0xDC00)
+    var gotBytes: U8[>..] = [9]
+    let toBytes = Utf8.fromUtf16(paddedUnits[1..<(units.count + 1)], into: &gotBytes)
+    assert(toBytes.status == .Done && toBytes.read == units.count)
+    assert(gotBytes[1...] == bytes && gotBytes[0] == 9)
+
+    let text = try! String.fromUtf8(bytes)
+    assert(text.utf16Units() == units)
+    assertEqual(text.utf16Count, units.count)
+    assertEqual(text.utf32Units().count, scalars.count)
+    assert(try! String.fromUtf16(units) == text)
+    assert(String.fromUtf16Lossy(units) == text)
+    assert(Utf16.isValid(units))
+    var latin = true
+    for scalar in scalars {
+        latin = latin && scalar.codePoint < 0x100
+    }
+    let latinBytes = text.latin1Bytes()
+    assertEqual(latinBytes != none, latin)
+    if latin {
+        assert(String.fromLatin1(latinBytes!) == text)
+    }
+}
+
+@test
+fn oneScalarOfEachWidthAtEveryPosition() {
+    let ascii = Char[>..](repeating: 'x', count: 130)
+    for n in 0...130 {
+        assertConverts(ascii[..<n])
+    }
+    for n in [1, 15, 16, 17, 31, 33, 64, 130] as Int[>..] {
+        var scalars = Char[>..](repeating: 'x', count: n)
+        for at in 0..<n {
+            for scalar in ['é', '\u{7FF}', '\u{800}', '世', '\u{D7FF}', '\u{E000}', '\u{FFFF}', '😀', '\u{10FFFF}'] as Char[>..] {
+                scalars[at] = scalar
+                assertConverts(scalars)
+            }
+            scalars[at] = 'x'
+        }
+    }
+}
+
+@test
+fn randomTexts() {
+    var random = SeededRandomNumberGenerator(seed: 229)
+    for n in 0...130 {
+        for _ in 0..<6 {
+            var scalars: Char[>..] = []
+            let most = [0x80, 0x100, 0x800, 0x10000, 0x110000, 0x90][Int.random(in: 0..<6, using: &random)]
+            while scalars.count < n {
+                if let scalar = Char.fromCodePoint(Int.random(in: 0..<most, using: &random)) {
+                    scalars.append(scalar)
+                }
+            }
+            assertConverts(scalars)
+        }
+    }
+}
+
+@test
+fn aLongTextCrossesTheBlocksRoomIsMadeBy() {
+    var scalars: Char[>..] = []
+    for i in 0..<9000 {
+        scalars.append(i % 3 == 0 ? '世' : i % 4095 == 1 ? '😀' : 'a')
+    }
+    assertConverts(scalars)
+    let wide = Char[>..](repeating: '世', count: 5000)
+    assertConverts(wide)
+    let pairs = Char[>..](repeating: '😀', count: 5000)
+    assertConverts(pairs)
+}
+
+@test
+fn aLoneSurrogateAtEveryPosition() {
+    for n in [1, 15, 16, 17, 32, 33, 50] as Int[>..] {
+        for at in 0..<n {
+            for surrogate in [0xD800, 0xDBFF, 0xDC00, 0xDFFF] as U16[>..] {
+                var units = U16[>..](repeating: 0x61, count: n)
+                units[at] = surrogate
+                assertEqual(Utf16.validate(units) ?? -1, at)
+                var stopped: U8[>..] = []
+                let strict = Utf8.fromUtf16(units, into: &stopped, replacingInvalid: false)
+                assert(strict.status == .InvalidData)
+                assertEqual(strict.read, at)
+                assertEqual(stopped.count, at)
+                var replaced: U8[>..] = []
+                let lossy = Utf8.fromUtf16(units, into: &replaced)
+                assert(lossy.status == .Done)
+                assertEqual(replaced.count, n + 2)
+                assertEqual(replaced[at], 0xEF)
+                var partial: U8[>..] = []
+                let more = Utf8.fromUtf16(units, into: &partial, replacingInvalid: false, isFinalBlock: false)
+                let needsMore = at == n - 1 && surrogate < 0xDC00
+                assert(more.status == (needsMore ? .NeedMoreData : .InvalidData))
+                assertEqual(more.read, at)
+            }
+            // A pair that the block's end cuts, or a run of sixteen does.
+            if at + 1 < n {
+                var units = U16[>..](repeating: 0x61, count: n)
+                units[at] = 0xD83D
+                units[at + 1] = 0xDE00
+                assert(Utf16.validate(units) == none)
+                assertEqual(String.fromUtf16Lossy(units).count, n - 1)
+            }
+        }
+    }
+}

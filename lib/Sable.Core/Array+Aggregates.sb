@@ -1,0 +1,198 @@
+module Sable.Core
+
+// The least, the greatest and the sum of arrays of integers, a vector at a
+// time: every sequence has these (Sequence+Algorithms.sb), and an array of
+// integers its own. A float's stay the sequence's, whose order says what a
+// NaN and a sum's rounding are.
+
+extension<Element: SIMDScalar & FixedWidthInteger> Element[:] {
+    /// The least element, or none when there are none.
+    ///
+    /// ```sable
+    /// let xs: I32[>..] = [4, -7, 9]
+    /// assert(xs.min() == -7)
+    /// ```
+    public fn min() -> Element? => extreme(self, least: true)
+
+    /// The greatest element, or none when there are none.
+    ///
+    /// ```sable
+    /// let xs: U8[>..] = [4, 200, 9]
+    /// assert(xs.max() == 200)
+    /// ```
+    public fn max() -> Element? => extreme(self, least: false)
+}
+
+extension Int[:] {
+    /// The elements added up: zero for none. Traps where a sum along the
+    /// way, from the first on, does not fit.
+    ///
+    /// ```sable
+    /// let xs: Int[>..] = [1, 2, 3]
+    /// assert(xs.sum() == 6)
+    /// ```
+    public fn sum() -> Int => wideSum(self, signs: 63, from: -0x4000_0000_0000_0000, to: 0x4000_0000_0000_0000)
+}
+
+extension I64[:] {
+    /// The elements added up: zero for none. Traps where a sum along the
+    /// way, from the first on, does not fit.
+    public fn sum() -> I64 => wideSum(self, signs: 63, from: -0x4000_0000_0000_0000, to: 0x4000_0000_0000_0000)
+}
+
+extension UInt[:] {
+    /// The elements added up: zero for none. Traps where it does not fit.
+    public fn sum() -> UInt => wideSum(self, signs: 63, from: 0, to: 0x4000_0000_0000_0000)
+}
+
+extension U64[:] {
+    /// The elements added up: zero for none. Traps where it does not fit.
+    public fn sum() -> U64 => wideSum(self, signs: 63, from: 0, to: 0x4000_0000_0000_0000)
+}
+
+extension I32[:] {
+    /// The elements added up: zero for none. Traps where a sum along the
+    /// way, from the first on, does not fit.
+    public fn sum() -> I32 {
+        let count = self.count
+        var total: I32 = 0
+        var i = 0
+        while count - i >= 16 {
+            let end = count - i > 4096 ? i + 4096 : count - (count - i) % 8
+            var above = SIMD<Int, 8>()
+            var below = SIMD<Int, 8>()
+            var j = i
+            while j < end {
+                let v = SIMD<I32, 8>.load(from: self, at: j)
+                above = above &+ SIMD<Int, 8>.converting(v.max(SIMD<I32, 8>()))
+                below = below &+ SIMD<Int, 8>.converting(v.min(SIMD<I32, 8>()))
+                j += 8
+            }
+            // Where the total with the block's positive elements fits, and
+            // with its negative ones, so does every sum along the way.
+            let most = Int(total) + above.reduceAdd()
+            let least = Int(total) + below.reduceAdd()
+            if most <= 0x7FFF_FFFF && least >= -0x8000_0000 {
+                total = I32(most + least - Int(total))
+            } else {
+                total = checkedSum(self, from: i, to: end, total)
+            }
+            i = end
+        }
+        return checkedSum(self, from: i, to: count, total)
+    }
+}
+
+extension U32[:] {
+    /// The elements added up: zero for none. Traps where it does not fit.
+    public fn sum() -> U32 {
+        let count = self.count
+        var total: U32 = 0
+        var i = 0
+        while count - i >= 16 {
+            let end = count - i > 4096 ? i + 4096 : count - (count - i) % 8
+            var lanes = SIMD<U64, 8>()
+            var j = i
+            while j < end {
+                lanes = lanes &+ SIMD<U64, 8>.converting(SIMD<U32, 8>.load(from: self, at: j))
+                j += 8
+            }
+            let sum = U64(total) + lanes.reduceAdd()
+            total = sum <= 0xFFFF_FFFF ? U32(sum) : checkedSum(self, from: i, to: end, total)
+            i = end
+        }
+        return checkedSum(self, from: i, to: count, total)
+    }
+}
+
+fn extreme<T: SIMDScalar & FixedWidthInteger>(_ xs: T[:], least: Bool) -> T? {
+    if xs.count == 0 {
+        return none
+    }
+    let width = T.preferredVectorWidth
+    if width == 16 {
+        return extreme(xs, least: least, SIMD<T, 32>())
+    }
+    if width == 8 {
+        return extreme(xs, least: least, SIMD<T, 16>())
+    }
+    if width == 4 {
+        return extreme(xs, least: least, SIMD<T, 8>())
+    }
+    return extreme(xs, least: least, SIMD<T, 4>())
+}
+
+// Of at least one element: the last step over the last elements again.
+fn extreme<T: SIMDScalar & FixedWidthInteger, N: Int>(_ xs: T[:], least: Bool, _ zero: SIMD<T, N>) -> T {
+    let count = xs.count
+    if count < N {
+        var found = xs[0]
+        var i = 1
+        while i < count {
+            let x = xs[i]
+            found = least ? found < x ? found : x : found > x ? found : x
+            i += 1
+        }
+        return found
+    }
+    let last = count - N
+    var lanes = SIMD<T, N>.load(from: xs, at: 0)
+    if least {
+        var i = N
+        while i < last {
+            lanes = lanes.min(SIMD<T, N>.load(from: xs, at: i))
+            i += N
+        }
+        return lanes.min(SIMD<T, N>.load(from: xs, at: last)).reduceMin()
+    }
+    var i = N
+    while i < last {
+        lanes = lanes.max(SIMD<T, N>.load(from: xs, at: i))
+        i += N
+    }
+    return lanes.max(SIMD<T, N>.load(from: xs, at: last)).reduceMax()
+}
+
+// The elements from 'from' up to 'to' added to the total one at a time,
+// trapping where a sum does not fit: what the loops below are when one might not.
+fn checkedSum<T: FixedWidthInteger>(_ xs: T[:], from: Int, to: Int, _ total: T) -> T {
+    var sum = total
+    var i = from
+    while i < to {
+        sum = sum + xs[i]
+        i += 1
+    }
+    return sum
+}
+
+// A sum of sixty-four-bit elements. 256 of them of at most 54 bits of
+// magnitude add up, in any order and as far as any of them, to less than
+// 2^62; with a total from 'least' to 'most', no further than that from
+// zero, the sums all fit, and the lanes are added with no check. The
+// magnitudes of a block's elements are looked at by the bits any of them
+// has, a negative's flipped ('signs' is 63).
+fn wideSum<T: SIMDScalar & FixedWidthInteger>(_ xs: T[:], signs: T, from least: T, to most: T) -> T {
+    let count = xs.count
+    var total = T.zero
+    var i = 0
+    while count - i >= 16 {
+        let end = count - i > 256 ? i + 256 : count - (count - i) % 8
+        let sign = SIMD<T, 8>(repeating: signs)
+        var lanes = SIMD<T, 8>()
+        var bits = SIMD<T, 8>()
+        var j = i
+        while j < end {
+            let v = SIMD<T, 8>.load(from: xs, at: j)
+            lanes = lanes &+ v
+            bits = bits | (v ^ (v >> sign))
+            j += 8
+        }
+        if bits.reduceOr().leadingZeroCount >= 10 && total >= least && total <= most {
+            total = total &+ lanes.reduceAdd()
+        } else {
+            total = checkedSum(xs, from: i, to: end, total)
+        }
+        i = end
+    }
+    return checkedSum(xs, from: i, to: count, total)
+}

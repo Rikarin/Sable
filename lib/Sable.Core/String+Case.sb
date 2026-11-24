@@ -44,13 +44,13 @@ extension String {
     /// The string with its ASCII letters in upper case, and every other
     /// scalar as it is: for protocols and file formats, which mean ASCII.
     public fn asciiUppercased() -> String {
-        return self.shiftingAscii(low: 0x61, high: 0x7A, by: -32)
+        return self.shiftingAscii(from: 0x61, by: 0xE0)
     }
 
     /// The string with its ASCII letters in lower case, and every other
     /// scalar as it is.
     public fn asciiLowercased() -> String {
-        return self.shiftingAscii(low: 0x41, high: 0x5A, by: 32)
+        return self.shiftingAscii(from: 0x41, by: 0x20)
     }
 
     /// The string case-folded in full (Unicode's CaseFolding.txt, statuses
@@ -129,6 +129,23 @@ extension String {
         var right = 0
         let leftEnd = self.utf8Count
         let rightEnd = other.utf8Count
+        // As far as both are ASCII: a byte is a scalar, and folds as one.
+        while ignoringCase && !numeric && left < leftEnd && left < rightEnd {
+            let a = self.utf8Byte(left)
+            let b = other.utf8Byte(left)
+            if (a | b) >= 0x80 {
+                break
+            }
+            if a != b {
+                let x = a &- 0x41 < 26 ? a + 32 : a
+                let y = b &- 0x41 < 26 ? b + 32 : b
+                if x != y {
+                    return x < y ? -1 : 1
+                }
+            }
+            left = left + 1
+        }
+        right = left
         while left < leftEnd && right < rightEnd {
             var a = self.scalar(at: left)
             var b = other.scalar(at: right)
@@ -160,6 +177,9 @@ extension String {
 
     /// The string in upper or lower case, each scalar by its full mapping.
     fn mappingCase(upper: Bool) -> String {
+        if self.isAscii {
+            return upper ? self.asciiUppercased() : self.asciiLowercased()
+        }
         var pieces: String[>..] = []
         var start = 0
         var offset = 0
@@ -230,23 +250,18 @@ extension String {
         return Runtime.joinStrings(all, "")
     }
 
-    /// The string with each byte from 'low' to 'high' moved by 'shift' —
-    /// ASCII letters, which are their own bytes.
-    fn shiftingAscii(low: Int, high: Int, by shift: Int) -> String {
-        var pieces: String[>..] = []
-        var start = 0
-        var offset = 0
-        let end = self.utf8Count
-        while offset < end {
-            let byte = Int(self.utf8Byte(offset))
-            if byte >= low && byte <= high {
-                pieces.append(self.utf8Slice(start, offset))
-                pieces.append(String.fromChar(Char.fromCodePoint(byte + shift)!))
-                start = offset + 1
-            }
-            offset = offset + 1
+    /// The string with its ASCII letters of one case, the twenty-six from
+    /// 'first', moved by 'shift' — they are their own bytes.
+    fn shiftingAscii(from first: U8, by shift: U8) -> String {
+        var bytes: U8[>..] = []
+        bytes.append(utf8: self)
+        if !bytes.shiftAsciiLetters(from: first, by: shift) {
+            return self
         }
-        return self.joiningChanged(pieces, from: start)
+        // Still well-formed: no byte of a longer sequence is a letter.
+        unsafe {
+            return Runtime.stringFromValidUtf8(bytes)
+        }
     }
 
     /// Where the run of ASCII digits from the offset ends.

@@ -1,0 +1,289 @@
+module ArrayVectorSearchTests
+
+// The searches and comparisons that take a vector of elements at a time
+// (Sable.Core, Array+VectorSearch.sb and Array+Comparison.sb), held to the
+// loops they stand in for: every length from 0 to 130, from several starts
+// in a longer array whose elements outside the slice would be found by a
+// read past either end, and a match at every position. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+const longest = 130
+
+// ---- The loops ----------------------------------------------------------
+
+fn scalarFirst<T: Equatable>(_ xs: T[:], _ value: T) -> Int {
+    for i in 0..<xs.count {
+        if xs[i] == value {
+            return i
+        }
+    }
+    return -1
+}
+
+fn scalarLast<T: Equatable>(_ xs: T[:], _ value: T) -> Int {
+    var i = xs.count - 1
+    while i >= 0 && xs[i] != value {
+        i -= 1
+    }
+    return i
+}
+
+fn scalarCount<T: Equatable>(_ xs: T[:], _ value: T) -> Int {
+    var n = 0
+    for x in xs {
+        n += x == value ? 1 : 0
+    }
+    return n
+}
+
+fn scalarFirstAny<T: Equatable>(_ xs: T[:], _ values: T[:]) -> Int {
+    for i in 0..<xs.count {
+        if scalarFirst(values, xs[i]) >= 0 {
+            return i
+        }
+    }
+    return -1
+}
+
+fn scalarPrefix<T: Equatable>(_ xs: T[:], _ ys: T[:]) -> Int {
+    var i = 0
+    while i < xs.count && i < ys.count && xs[i] == ys[i] {
+        i += 1
+    }
+    return i
+}
+
+// ---- The properties -----------------------------------------------------
+
+// The value at one position of the slice, or at two, or nowhere in it, and
+// always on each side of it.
+fn searchesAgree<T: SIMDScalar>(_ other: T, _ wanted: T) {
+    for start in 0..<3 {
+        for n in 0...longest {
+            var all = T[>..](repeating: other, count: start + n + 1)
+            all[start + n] = wanted
+            if start > 0 {
+                all[start - 1] = wanted
+            }
+            for at in 0...n {
+                if at < n {
+                    all[start + at] = wanted
+                }
+                let xs = all[start..<(start + n)]
+                let first = scalarFirst(xs, wanted)
+                assertEqual(xs.firstIndex(of: wanted) ?? -1, first)
+                assertEqual(xs.lastIndex(of: wanted) ?? -1, scalarLast(xs, wanted))
+                assertEqual(xs.contains(wanted), first >= 0)
+                assertEqual(xs.count(of: wanted), scalarCount(xs, wanted))
+                assertEqual(xs.firstIndex(ofAny: [wanted]) ?? -1, first)
+                assertEqual(xs.firstIndex(ofAny: [wanted, wanted + wanted]) ?? -1, first)
+                // One match at a time, but for every seventh, left for the next.
+                if at < n && at % 7 != 0 {
+                    all[start + at] = other
+                }
+            }
+        }
+    }
+}
+
+// One element differing, at every position, in slices with different starts.
+fn comparisonsAgree<T: SIMDScalar>(_ other: T, _ changed: T) {
+    for n in 0...longest {
+        let xs = T[>..](repeating: other, count: n + 3)
+        var ys = T[>..](repeating: other, count: n + 5)
+        for at in 0...n {
+            if at < n {
+                ys[2 + at] = changed
+            }
+            let a = xs[1..<(n + 1)]
+            let b = ys[2..<(n + 2)]
+            let common = scalarPrefix(a, b)
+            assertEqual(a == b, common == n)
+            assertEqual(b == a, common == n)
+            assertEqual(a.commonPrefixLength(with: b), common)
+            assertEqual(a < b, common < n && a[common] < b[common])
+            assertEqual(b < a, common < n && b[common] < a[common])
+            assertEqual(a.starts(with: b[..<common]), true)
+            assertEqual(a.starts(with: b), common == n)
+            assertEqual(a.ends(with: b[common...]), common == n)
+            assertEqual(a < xs[1..<(n + 2)], true)
+            if at < n {
+                ys[2 + at] = other
+            }
+        }
+        // Differing past the end of both: not looked at.
+        ys[2 + n] = changed
+        ys[1] = changed
+        assert(xs[1..<(n + 1)] == ys[2..<(n + 2)])
+    }
+}
+
+@test
+fn bytesAreSearchedAsTheLoopsDo() {
+    searchesAgree(U8(3), U8(100))
+    searchesAgree(I8(-3), I8(50))
+}
+
+@test
+fn sixteenBitLanesAreSearchedAsTheLoopsDo() {
+    searchesAgree(U16(3), U16(0x4003))
+    searchesAgree(I16(-1), I16(0x00FF))
+    searchesAgree(F16(1.0), F16(1.5))
+    searchesAgree(BF16(1.0), BF16(1.5))
+}
+
+@test
+fn thirtyTwoBitLanesAreSearchedAsTheLoopsDo() {
+    searchesAgree(U32(3), U32(0x1000_0003))
+    searchesAgree(I32(-1), I32(0xFFFF))
+    searchesAgree(F32(1.0), F32(1.25))
+}
+
+@test
+fn sixtyFourBitLanesAreSearchedAsTheLoopsDo() {
+    searchesAgree(3, 0x1000_0000_0000_0003)
+    searchesAgree(I64(-1), I64(0xFFFF_FFFF))
+    searchesAgree(U64(3), U64(0x1000_0000_0000_0003))
+    searchesAgree(UInt(3), UInt(0x1000_0000_0000_0003))
+    searchesAgree(1.0, 1.25)
+}
+
+@test
+fn comparisonsAgreeWithTheLoops() {
+    comparisonsAgree(U8(3), U8(100))
+    comparisonsAgree(I8(3), I8(-100))
+    comparisonsAgree(U16(3), U16(0x4003))
+    comparisonsAgree(I32(3), I32(0x7000_0003))
+    comparisonsAgree(3, -5)
+    comparisonsAgree(1.0, 1.25)
+    comparisonsAgree(F32(1.0), F32(0.5))
+}
+
+@test
+fn orderIsTheElementsAndNotTheBytes() {
+    // 0x0100 is after 0x00FF, though its first byte in memory is the lesser;
+    // a negative is before a positive, though its bits are the greater.
+    let big = U16[>..](repeating: 0x0100, count: 20)
+    let small = U16[>..](repeating: 0x00FF, count: 20)
+    assert(small < big && !(big < small))
+    let minus = Int[>..](repeating: -1, count: 20)
+    let plus = Int[>..](repeating: 1, count: 20)
+    assert(minus < plus && !(plus < minus))
+}
+
+@test
+fn aFloatIsComparedByItsValue() {
+    let nan = F64.nan
+    var xs = F64[>..](repeating: 0.0, count: 40)
+    let minusZeros = F64[>..](repeating: -0.0, count: 40)
+    assert(xs == minusZeros)
+    assertEqual(xs.firstIndex(of: -0.0) ?? -1, 0)
+    assertEqual(xs.count(of: -0.0), 40)
+    xs[21] = nan
+    assert(xs != xs)
+    assert(!xs.contains(nan))
+    assertEqual(xs.count(of: nan), 0)
+    assert(xs.firstIndex(ofAny: [nan, nan]) == none)
+}
+
+@test
+fn boolsAndCharsAreComparedAtOnce() {
+    for n in 0...longest {
+        let xs = Bool[>..](repeating: true, count: n)
+        var ys = xs
+        assert(xs == ys)
+        if n > 0 {
+            ys[n - 1] = false
+            assert(xs != ys)
+            assertEqual(xs.commonPrefixLength(with: ys), n - 1)
+        }
+        let cs = Char[>..](repeating: 'é', count: n)
+        var ds = cs
+        assert(cs == ds)
+        if n > 0 {
+            ds[n / 2] = 'e'
+            assert(cs != ds && ds < cs)
+        }
+    }
+}
+
+// Inside generic code, what the elements are is known only as it runs when
+// it is compiled once for every type.
+fn same<T: Comparable>(_ xs: T[:], _ ys: T[:]) -> (Bool, Bool, Int) {
+    return (xs == ys, xs < ys, xs.commonPrefixLength(with: ys))
+}
+
+@test
+fn genericCodeComparesAsTheElementDoes() {
+    let words = String[>..](repeating: "a", count: 20)
+    var others = words
+    others[15] = "b"
+    let (equal, less, common) = same(words, others)
+    assert(!equal && less)
+    assertEqual(common, 15)
+    let ones = I32[>..](repeating: 1, count: 20)
+    var twos = ones
+    twos[19] = -2
+    let (sameInts, lessInts, commonInts) = same(ones, twos)
+    assert(!sameInts && !lessInts)
+    assertEqual(commonInts, 19)
+    let zeros = F32[>..](repeating: 0.0, count: 20)
+    let negatives = F32[>..](repeating: -0.0, count: 20)
+    let (sameZeros, _, commonZeros) = same(zeros, negatives)
+    assert(sameZeros)
+    assertEqual(commonZeros, 20)
+}
+
+@test
+fn anyOfUpToFiveCandidatesAndMore() {
+    var random = SeededRandomNumberGenerator(seed: 229)
+    for n in 0...longest {
+        for many in 0...7 {
+            var xs: U8[>..] = []
+            var ws: I32[>..] = []
+            for _ in 0..<n {
+                let v = Int.random(in: 0..<200, using: &random)
+                xs.append(U8(v))
+                ws.append(I32(v))
+            }
+            var candidates: U8[>..] = []
+            var wide: I32[>..] = []
+            for _ in 0..<many {
+                let v = Int.random(in: 0..<256, using: &random)
+                candidates.append(U8(v))
+                wide.append(I32(v))
+            }
+            assertEqual(xs.firstIndex(ofAny: candidates) ?? -1, scalarFirstAny(xs, candidates))
+            assertEqual(ws.firstIndex(ofAny: wide) ?? -1, scalarFirstAny(ws, wide))
+        }
+    }
+}
+
+@test
+fn aCountPastWhatALaneHolds() {
+    // 255 steps of 32 I8s is 8160: each lane is gathered before it overflows.
+    for n in [8159, 8160, 8161, 20000] as Int[>..] {
+        let xs = I8[>..](repeating: -7, count: n)
+        assertEqual(xs.count(of: -7), n)
+    }
+}
+
+@test
+fn randomArraysAreSearchedAsTheLoopsDo() {
+    var random = SeededRandomNumberGenerator(seed: 7)
+    for _ in 0..<2000 {
+        let n = Int.random(in: 0...longest, using: &random)
+        var xs: U16[>..] = []
+        for _ in 0..<n {
+            xs.append(U16(Int.random(in: 0..<40, using: &random)))
+        }
+        let from = n == 0 ? 0 : Int.random(in: 0..<n, using: &random)
+        let slice = xs[from...]
+        let value = U16(Int.random(in: 0..<40, using: &random))
+        assertEqual(slice.firstIndex(of: value) ?? -1, scalarFirst(slice, value))
+        assertEqual(slice.lastIndex(of: value) ?? -1, scalarLast(slice, value))
+        assertEqual(slice.count(of: value), scalarCount(slice, value))
+    }
+}

@@ -1304,7 +1304,7 @@ public static class SharedStorage {
             LoadUnownedInst unowned => (unowned.Address, false),
             StoreUnownedInst unowned => (unowned.Address, true),
             // An array changed where it is: its count, its buffer, an element.
-            BuiltinInst { Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_truncate" or "array_reserve" or "array_rotate" or "array_store_slice" or "array_append_utf8" or "array_append_repeating" or "array_element_addr" } array
+            BuiltinInst { Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_truncate" or "array_reserve" or "array_rotate" or "array_store_slice" or "array_append_utf8" or "array_append_repeating" or "array_append_all" or "array_element_addr" } array
                 => (array.Operands[0], true),
             _ => null,
         };
@@ -1970,13 +1970,17 @@ public static class SilBuiltins {
     ///     count work on an array alone.
     /// </summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "array_of_slice", "slice_of_take", "array_of_slice_take", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_append_utf8", "array_append_repeating", "region_alloc"];
+        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "array_of_slice", "slice_of_take", "array_of_slice_take", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_append_utf8", "array_append_repeating", "array_append_all", "array_mismatch", "region_alloc"];
 
     /// <summary>
     ///     The prefix of the wrapping forms of integer arithmetic
     ///     (<c>wrapping_add_Int</c>), which never trap: see <see cref="WrappingArithmetic" />.
     /// </summary>
     public const string WrappingPrefix = "wrapping_";
+
+    /// <summary>Whether two values of the type are equal exactly when their bits are: no float is (NaN, and zero's two signs).</summary>
+    public static bool ComparesByBits(SilType type) =>
+        SilType.IntegerInfo(type) is not null || type == SilType.Bool || type == SilType.Char;
 
     /// <summary>What <c>blackBox(value)</c> lowers to: an address the optimiser knows nothing of the use of (SilGen's <c>BlackBox</c>).</summary>
     public const string BlackBox = "black_box";
@@ -2196,9 +2200,20 @@ public static class SilBuiltins {
             case "array_append_repeating" when Element(0, true, arrayOnly: true) is { } repeated:
                 return new([operands[0], repeated, SilType.Int], SilType.Unit);
 
+            // A slice's elements copied to the end at once.
+            case "array_append_all" when Element(0, true, arrayOnly: true) is { } appended:
+                return new([operands[0], new SliceType(appended)], SilType.Unit);
+
             // A string's UTF-8 bytes added at the end of a byte array at once.
             case "array_append_utf8" when Element(0, true, arrayOnly: true) == SilType.U8 && operands is [_, var text, _, _] && text == SilType.String:
                 return new([operands[0], SilType.String, SilType.Int, SilType.Int], SilType.Unit);
+
+            // Where two arrays, or slices, first differ, or the shorter's count where
+            // they do not, when the element's '==' compares its bits (an
+            // integer's, a Bool's, a Char's): the bytes compared, a vector
+            // at a time. -1 for any other element, which only its '==' compares.
+            case "array_mismatch" when Element(0, false) is { } compared && operands.Count == 2 && Element(1, false) == compared:
+                return new([operands[0], operands[1]], SilType.Int);
 
             // The elements [from, to) of an array or a slice rotated left by
             // the third operand, in place: moved, not copied, so no element

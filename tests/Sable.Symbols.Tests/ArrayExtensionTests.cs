@@ -45,10 +45,10 @@ public sealed class ArrayExtensionTests {
             }
         }
 
-        // 'append(element:)' is the builtin; 'append(contentsOf:)' is Sable over it.
+        // 'append' is three builtins; 'contains' is Sable.
         Assert.Equal("array_count", members.OfType<FieldSymbol>().Single(m => m.Name == "count").Builtin);
-        Assert.Equal([null, "array_append", "array_append_repeating"], members.Where(m => m.Name == "append").Select(static m => ((FunctionSymbol)m).Builtin).Order());
-        Assert.Null(Assert.IsType<FunctionSymbol>(members.Single(m => m.Name == "contains")).Builtin);
+        Assert.Equal(["array_append", "array_append_all", "array_append_repeating"], members.Where(m => m.Name == "append").Select(static m => ((FunctionSymbol)m).Builtin).Order());
+        Assert.All(members.Where(static m => m.Name == "contains"), static m => Assert.Null(Assert.IsType<FunctionSymbol>(m).Builtin));
     }
 
     [Fact]

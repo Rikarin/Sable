@@ -1,0 +1,57 @@
+module ExponentialDistributionTests
+
+// ExponentialDistribution (Sable.Math). The pinned draws are those of an
+// independent implementation, in Python with its own exp.
+
+import Sable.Math
+import Sable.Testing
+import DistributionAssertions
+
+@test
+fn aSeedGivesTheSameDrawsEverywhere() {
+    var generator = SeededRandomNumberGenerator(seed: 77)
+    let draws = ExponentialDistribution().samples(count: 200000, using: &generator)
+    assertEqual(draws[0], 1.874600171120601)
+    assertEqual(draws[1], 0.7532310339715574)
+    assertEqual(draws[2], 1.8222489598318623)
+    assertEqual(draws[3], 3.036187386388376)
+    assertEqual(draws[4], 0.3909480775788058)
+    assert(folded(draws) == 0xCAB97C168E4D587F)
+}
+
+@test
+fn drawsFollowTheDistribution() {
+    var xoshiro = SeededRandomNumberGenerator(seed: 1)
+    assertFollows(ExponentialDistribution().samples(count: 100000, using: &xoshiro), { -expm1(-$0) })
+    var pcg = Pcg64(seed: 2)
+    assertFollows(ExponentialDistribution(rate: 4.0).samples(count: 100000, using: &pcg), { -expm1(-4.0 * $0) })
+}
+
+@test
+fn theTailFollowsTheDistribution() {
+    var generator = SeededRandomNumberGenerator(seed: 3)
+    let edge = 7.69711747013105
+    let exponential = ExponentialDistribution()
+    var beyond: F64[>..] = []
+    for _ in 0..<1000000 {
+        let x = exponential.sample(using: &generator)
+        assert(x >= 0.0)
+        if x > edge {
+            beyond.append(x - edge)
+        }
+    }
+    // 454 of them expected.
+    let expected = 1000000.0 * exp(-edge)
+    assert((F64(beyond.count) - expected).abs() < 5.0 * expected.squareRoot())
+    assertFollows(beyond, { -expm1(-$0) })
+}
+
+@test(traps: "the rate must be positive and finite")
+fn aRateOfZeroTraps() {
+    let _ = ExponentialDistribution(rate: 0.0)
+}
+
+@test(traps: "the rate must be positive and finite")
+fn aRateThatIsNoNumberTraps() {
+    let _ = ExponentialDistribution(rate: F64.nan)
+}

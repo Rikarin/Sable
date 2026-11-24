@@ -1,0 +1,37 @@
+module Sable.Math
+
+/// Values of a range, each as likely as every other: an integer's every
+/// value, a float's evenly spaced ones, as 'T.random(in:using:)' draws them.
+///
+/// ```sable
+/// var generator = SeededRandomNumberGenerator(seed: 6)
+/// let die = UniformDistribution(in: 1...6)
+/// let angle = UniformDistribution(in: -F64.pi..<F64.pi)
+/// assert(die.sample(using: &generator) <= 6)
+/// assert(angle.sample(using: &generator).abs() <= F64.pi)
+/// ```
+public struct UniformDistribution<T: UniformRandom>: Distribution {
+    let lower: T
+    let upper: T
+    let closed: Bool
+
+    /// The values of a range without its upper bound. An empty range traps
+    /// as a value is drawn.
+    public init(in range: Range<T>) {
+        lower = range.lowerBound
+        upper = range.upperBound
+        closed = false
+    }
+
+    /// The values of a range, both ends included.
+    public init(in range: ClosedRange<T>) {
+        lower = range.lowerBound
+        upper = range.upperBound
+        closed = true
+    }
+
+    /// A value drawn from the range.
+    public fn sample<G: RandomNumberGenerator>(using generator: inout G) -> T {
+        return closed ? T.random(in: lower...upper, using: &generator) : T.random(in: lower..<upper, using: &generator)
+    }
+}

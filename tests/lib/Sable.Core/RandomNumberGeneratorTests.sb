@@ -4,6 +4,7 @@ module RandomNumberGeneratorTests
 // and what every generator gets from the protocol.
 
 import Sable.Testing
+import RandomStatistics
 
 // Counts up: predictable, so what is built on it can be checked exactly.
 struct Counting: RandomNumberGenerator {
@@ -15,24 +16,23 @@ struct Counting: RandomNumberGenerator {
     }
 }
 
-// Gives zero first, then counts from two: the first draw falls in the
-// zone a bound of three leaves at the bottom, which would favour zero.
-struct LowThenCounting: RandomNumberGenerator {
+// Gives zero first, whose product with any bound falls in the zone at the
+// bottom that favours a value, where there is one, then the greatest.
+struct ZeroThenMax: RandomNumberGenerator {
     var drawn: Int
 
     mutating fn next() -> U64 {
         drawn += 1
-        return drawn == 1 ? 0 : U64(drawn)
+        return drawn == 1 ? 0 : U64.max
     }
 }
 
 @test
 fn aGeneratorOfTheProgramsOwnMeetsTheProtocol() {
-    // A power of two divides 2^64: no draw is thrown away.
-    var counting = Counting { value: 0 }
-    assert(counting.next(upperBound: 16) == 1)
-    assert(counting.next(upperBound: 16) == 2)
-    assert(Int.random(in: 0..<16, using: &counting) == 3)
+    // The value is the draw's high half with the bound: of 2^60 draws each.
+    var counting = Counting { value: (U64(5) << 60) - 1 }
+    assert(counting.next(upperBound: 16) == 5)
+    assert(Int.random(in: 10..<26, using: &counting) == 15)
 }
 
 @test
@@ -52,17 +52,117 @@ fn nextBelowABoundStaysBelowIt() {
 @test
 fn aDrawInTheBiasedZoneIsDrawnAgain() {
     // 2^64 % 3 == 1: a draw of 0 would make 0 a little likelier, so it
-    // is thrown away, and the next, 2, is taken.
-    var generator = LowThenCounting { drawn: 0 }
+    // is thrown away, and the next is taken.
+    var generator = ZeroThenMax { drawn: 0 }
     assert(generator.next(upperBound: 3 as U64) == 2)
     assertEqual(generator.drawn, 2)
+
+    // A power of two divides 2^64: no draw is thrown away.
+    var other = ZeroThenMax { drawn: 0 }
+    assert(other.next(upperBound: 4 as U64) == 0)
+    assertEqual(other.drawn, 1)
+}
+
+@test
+fn aBoundNearlyAll64BitsThrowsAwayHalf() {
+    // 2^63 + 1: a draw is kept when it is the first of its value, so
+    // a little over half are, and the values are spread over the range.
+    var generator = SeededRandomNumberGenerator(seed: 5)
+    let bound: U64 = (U64(1) << 63) + 1
+    var counts = zeroCounts(64)
+    for _ in 0..<20000 {
+        let n = generator.next(upperBound: bound)
+        assert(n < bound)
+        counts[Int(n >> 57) & 63] += 1
+    }
+    assertEven(counts)
 }
 
 @test
 fn nextBelowA128BitBoundTakesTwoDraws() {
     var counting = Counting { value: 0 }
-    let n = counting.next(upperBound: U128.max)
-    assert(n == ((U128(1) << 64) | U128(2)))
+    // (2^64 + 2) times a bound of 2^127, over 2^128.
+    let n = counting.next(upperBound: U128(1) << 127)
+    assert(n == (U128(1) << 63) + 1)
+    assert(counting.value == 2)
+}
+
+@test
+fn aSmallBoundOfAWideTypeTakesOneDraw() {
+    var counting = Counting { value: 0 }
+    assert(counting.next(upperBound: 10 as U128) == 0)
+    assert(counting.value == 1)
+}
+
+@test
+fn a128BitDrawInTheBiasedZoneIsDrawnAgain() {
+    // Zero, zero, then all ones: the bound does not divide 2^128.
+    var generator = ScriptedBits { values: [0, 0, U64.max, U64.max], drawn: 0 }
+    let bound = (U128(1) << 127) + 1
+    assert(generator.next(upperBound: bound) == bound - 1)
+    assertEqual(generator.drawn, 4)
+}
+
+// Gives its values in turn.
+struct ScriptedBits: RandomNumberGenerator {
+    var values: U64[>..]
+    var drawn: Int
+
+    mutating fn next() -> U64 {
+        drawn += 1
+        return values[drawn - 1]
+    }
+}
+
+@test
+fn everyValueBelowABoundIsAsLikely() {
+    // 3, 5, 6 and 7 bits' bounds, whose draws cannot be divided evenly.
+    var generator = SeededRandomNumberGenerator(seed: 6)
+    let bounds: Int[>..] = [3, 7, 10, 52, 100]
+    for bound in bounds {
+        var counts = zeroCounts(bound)
+        for _ in 0..<(1000 * bound) {
+            counts[generator.next(upperBound: bound)] += 1
+        }
+        assertEven(counts)
+    }
+}
+
+@test
+fn fillTakesEightBytesADrawLowestFirst() {
+    var scripted = ScriptedBits { values: [0x0807060504030201, 0x1817161514131211], drawn: 0 }
+    var bytes: U8[>..] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    scripted.fill(bytes: &bytes)
+    assert(bytes == [1, 2, 3, 4, 5, 6, 7, 8, 0x11, 0x12, 0x13])
+    assertEqual(scripted.drawn, 2)
+}
+
+@test
+fn fillOfASliceChangesThatRangeAlone() {
+    var scripted = ScriptedBits { values: [0x0807060504030201], drawn: 0 }
+    var bytes: U8[6] = [9, 9, 9, 9, 9, 9]
+    scripted.fill(bytes: &bytes[2..<4])
+    assert(bytes == [9, 9, 1, 2, 9, 9])
+}
+
+@test
+fn fillOfNothingDrawsNothing() {
+    var scripted = ScriptedBits { values: [], drawn: 0 }
+    var nothing: U8[>..] = []
+    scripted.fill(bytes: &nothing)
+    assertEqual(scripted.drawn, 0)
+}
+
+@test
+fn filledBytesAreEven() {
+    var generator = SeededRandomNumberGenerator(seed: 7)
+    var bytes: U8[>..] = U8[>..](repeating: 0, count: 65537)
+    generator.fill(bytes: &bytes)
+    var counts = zeroCounts(256)
+    for byte in bytes {
+        counts[Int(byte)] += 1
+    }
+    assertEven(counts)
 }
 
 @test

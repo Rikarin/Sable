@@ -1,0 +1,52 @@
+module Sable.Math
+
+/// A probability distribution: a way of making values from random bits.
+/// What a seeded generator's bits become is the same on every platform.
+///
+/// A distribution is a value; drawing from it changes the generator alone.
+///
+/// ```sable
+/// var generator = SeededRandomNumberGenerator(seed: 1)
+/// let heights = NormalDistribution(mean: 175.0, standardDeviation: 7.0)
+/// let people = heights.samples(count: 1000, using: &generator)
+/// assert((mean(people) - 175.0).abs() < 1.0)
+/// ```
+public protocol Distribution {
+    /// What is drawn.
+    associatedtype Value
+
+    /// A value drawn from the distribution, its random bits from the
+    /// generator.
+    fn sample<G: RandomNumberGenerator>(using generator: inout G) -> Value
+}
+
+extension Distribution {
+    /// A value drawn from the distribution, its random bits from the
+    /// system's generator.
+    ///
+    /// ```sable
+    /// let roll = UniformDistribution(in: 1...6).sample()
+    /// assert(roll >= 1 && roll <= 6)
+    /// ```
+    public fn sample() -> Value {
+        var system = SystemRandomNumberGenerator()
+        return self.sample(using: &system)
+    }
+
+    /// As many values as 'count', each drawn independently of the others.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(seed: 1)
+    /// let rolls = UniformDistribution(in: 1...6).samples(count: 3, using: &generator)
+    /// assert(rolls.count == 3)
+    /// ```
+    public fn samples<G: RandomNumberGenerator>(count: Int, using generator: inout G) -> Value[>..] {
+        precondition(nonNegative: count, "count")
+        var values: Value[>..] = []
+        values.reserveCapacity(count)
+        while values.count < count {
+            values.append(self.sample(using: &generator))
+        }
+        return values
+    }
+}

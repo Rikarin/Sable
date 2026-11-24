@@ -1,0 +1,71 @@
+module Pcg64Tests
+
+// Pcg64 (Sable.Core): the reference library's demonstration outputs, and
+// NumPy's PCG64 given the same state, increment and distance.
+
+import Sable.Testing
+
+@test
+fn theReferenceSeedingGivesTheReferenceSequence() {
+    var generator = Pcg64(state: 42, stream: 54)
+    let expected: U64[>..] = [
+        0x86B1DA1D72062B68, 0x1304AA46C9853D39, 0xA3670E9E0DD50358, 0xF9090E529A7DAE00, 0xC85B9FD837996F2C, 0x606121F8E3919196
+    ]
+    for value in expected {
+        assertEqual(generator.next(), value)
+    }
+}
+
+@test
+fn aSeedIsSpreadOverTheStateAndTheStream() {
+    var generator = Pcg64(seed: 2024, stream: 7)
+    let expected: U64[>..] = [8692224219604682678, 12297169389127040451, 15552973567798586876]
+    for value in expected {
+        assertEqual(generator.next(), value)
+    }
+}
+
+@test
+fn advancingIsAsManyDraws() {
+    var stepped = Pcg64(seed: 3)
+    var advanced = stepped
+    for _ in 0..<1000 {
+        let _ = stepped.next()
+    }
+    advanced.advance(by: 1000)
+    assertEqual(advanced.next(), stepped.next())
+}
+
+@test
+fn advancingFarIsNumPys() {
+    var generator = Pcg64(state: 42, stream: 54)
+    generator.advance(by: (U128(1) << 100) | 12345)
+    assert(generator.next() == 0x56CCA40530C8A48A)
+    assert(generator.next() == 0x2EC3BEFA63172395)
+}
+
+@test
+fn advancingByAWrappedDistanceGoesBack() {
+    var generator = Pcg64(seed: 9)
+    let first = generator.next()
+    for _ in 0..<9 {
+        let _ = generator.next()
+    }
+    generator.advance(by: U128.zero.wrappingSub(10))
+    assertEqual(generator.next(), first)
+    generator.advance(by: U128.zero)
+    generator.advance(by: U128.max)
+    assertEqual(generator.next(), first)
+}
+
+@test
+fn streamsOfOneSeedDiffer() {
+    var first = Pcg64(seed: 1, stream: 0)
+    var second = Pcg64(seed: 1, stream: 1)
+    var differences = 0
+    for _ in 0..<64 {
+        differences += (first.next() ^ second.next()).popCount
+    }
+    // Half of 4096 bits, within 6 of their 32 standard deviations.
+    assert(differences > 1856 && differences < 2240)
+}

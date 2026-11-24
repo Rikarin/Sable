@@ -1,0 +1,82 @@
+module Sable.Math
+
+/// An index of an array of weights, each as likely as its weight is of their
+/// sum; one of weight zero never. A draw takes one number from the generator
+/// and a binary search of the sums.
+///
+/// ```sable
+/// var generator = SeededRandomNumberGenerator(seed: 4)
+/// let prizes: String[>..] = ["car", "book", "nothing"]
+/// let odds = WeightedIndexDistribution(weights: [1, 9, 90])
+/// let prize = prizes[odds.sample(using: &generator)]
+/// assert(prizes.contains(element: prize))
+/// ```
+public struct WeightedIndexDistribution: Distribution {
+    // Each index's weight and those before it, added: an index's share of
+    // the draws below the last sum is those from the sum before up to its own.
+    let sums: U64[>..]
+
+    /// The indices of whole weights, each exactly as likely as its share.
+    /// No weights, a negative one, weights that are all zero, or ones whose
+    /// sum a U64 does not hold, trap.
+    public init(weights: Int[:]) {
+        var sums: U64[>..] = []
+        sums.reserveCapacity(weights.count)
+        var sum: U64 = 0
+        for weight in weights {
+            precondition(nonNegative: weight, "a weight")
+            sum += U64.truncating(weight)
+            sums.append(sum)
+        }
+        precondition(sum > 0, "a weight must be positive")
+        self.sums = sums
+    }
+
+    /// The indices of weights that need not be whole, nor sum to 1. Each is
+    /// rounded to a whole number of units, the greatest weight at least
+    /// 2^61 of them divided by the count of weights, so that a share is
+    /// within a unit of exact; a weight above zero is at least one unit. No
+    /// weights, one that is negative, infinite or NaN, or weights that are
+    /// all zero, trap.
+    public init(weights: F64[:]) {
+        var greatest = 0.0
+        for weight in weights {
+            precondition(weight >= 0.0 && weight.isFinite, "a weight must be finite and not negative")
+            greatest = weight > greatest ? weight : greatest
+        }
+        precondition(greatest > 0.0, "a weight must be positive")
+
+        // The greatest in [2^bits, 2^(bits + 1)), and all of them together
+        // under 2^63.
+        let countBits = 64 - U64.truncating(weights.count).leadingZeroCount
+        let power = 62 - countBits - greatest.exponent
+        var sums: U64[>..] = []
+        sums.reserveCapacity(weights.count)
+        var sum: U64 = 0
+        for weight in weights {
+            let units = U64.fromWideValue(weight.scaled(byPowerOfTwo: power).roundedToNearestOrEven())
+            sum += units == 0 && weight > 0.0 ? 1 : units
+            sums.append(sum)
+        }
+        self.sums = sums
+    }
+
+    /// An index of the weights.
+    public fn sample<G: RandomNumberGenerator>(using generator: inout G) -> Int {
+        let draw = generator.next(upperBound: sums[sums.count - 1])
+
+        // The first index whose sum is above the draw: one of no weight has
+        // the sum of the index before, and is never the first.
+        var low = 0
+        var high = sums.count - 1
+        while low < high {
+            let middle = (low + high) / 2
+            if sums[middle] > draw {
+                high = middle
+            } else {
+                low = middle + 1
+            }
+        }
+        return low
+    }
+}

@@ -1,0 +1,30 @@
+module Sable.Core
+
+/// SplitMix64 (Steele, Lea and Flood; Vigna's constants): a counter whose
+/// every step is mixed into 64 bits. One word of state and any seed at all
+/// will do, zero too, which is what makes it the way to spread a small seed
+/// over a larger generator's state, as SeededRandomNumberGenerator, Pcg64
+/// and ChaCha do. It gives each 64-bit value exactly once in 2^64 draws.
+/// To draw many numbers, prefer SeededRandomNumberGenerator.
+///
+/// ```sable
+/// var mixer = SplitMix64(seed: 1234567)
+/// assert(mixer.next() == 6457827717110365317)
+/// ```
+public struct SplitMix64: RandomNumberGenerator {
+    var state: U64
+
+    /// A generator whose sequence is the seed's.
+    public init(seed: U64) {
+        state = seed
+    }
+
+    /// The next 64 bits of the sequence.
+    public mutating fn next() -> U64 {
+        state = state &+ 0x9E3779B97F4A7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+        z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+        return z ^ (z >> 31)
+    }
+}

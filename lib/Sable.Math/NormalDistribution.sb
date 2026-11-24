@@ -1,0 +1,33 @@
+module Sable.Math
+
+/// The normal (Gaussian) distribution, drawn by the ziggurat method: one
+/// draw from the generator for all but about one value in a hundred.
+///
+/// ```sable
+/// var generator = SeededRandomNumberGenerator(seed: 12)
+/// let noise = NormalDistribution(mean: 0.0, standardDeviation: 0.1)
+/// let reading = 20.0 + noise.sample(using: &generator)
+/// assert((reading - 20.0).abs() < 1.0)
+/// ```
+public struct NormalDistribution: Distribution {
+    /// The mean.
+    public let mean: F64
+
+    /// The standard deviation.
+    public let standardDeviation: F64
+
+    /// The normal distribution of a mean and a standard deviation, the
+    /// standard one's unless given. One that is not finite, or a negative
+    /// deviation, traps; with a deviation of zero every value is the mean.
+    public init(mean: F64 = 0.0, standardDeviation: F64 = 1.0) {
+        precondition(mean.isFinite, "the mean must be finite")
+        precondition(standardDeviation >= 0.0 && standardDeviation.isFinite, "the standard deviation must be finite and not negative")
+        self.mean = mean
+        self.standardDeviation = standardDeviation
+    }
+
+    /// A value drawn from the distribution.
+    public fn sample<G: RandomNumberGenerator>(using generator: inout G) -> F64 {
+        return mean + standardDeviation * standardNormal(&generator)
+    }
+}

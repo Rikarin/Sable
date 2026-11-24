@@ -24,11 +24,27 @@ public struct SeededRandomNumberGenerator: RandomNumberGenerator {
 
     /// A generator whose sequence is the seed's.
     public init(seed: U64) {
-        var mixer = seed
-        s0 = SeededRandomNumberGenerator.splitMix(&mixer)
-        s1 = SeededRandomNumberGenerator.splitMix(&mixer)
-        s2 = SeededRandomNumberGenerator.splitMix(&mixer)
-        s3 = SeededRandomNumberGenerator.splitMix(&mixer)
+        var mixer = SplitMix64(seed: seed)
+        s0 = mixer.next()
+        s1 = mixer.next()
+        s2 = mixer.next()
+        s3 = mixer.next()
+    }
+
+    /// A generator in the state whose four words are given, as the reference
+    /// implementation holds it. All four zero is the one state
+    /// xoshiro256** never leaves, and traps.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(state: [1, 2, 3, 4])
+    /// assert(generator.next() == 11520)
+    /// ```
+    public init(state: U64[4]) {
+        precondition((state[0] | state[1] | state[2] | state[3]) != 0, "the state must not be all zeros")
+        s0 = state[0]
+        s1 = state[1]
+        s2 = state[2]
+        s3 = state[3]
     }
 
     /// The next 64 bits of the sequence.
@@ -44,13 +60,49 @@ public struct SeededRandomNumberGenerator: RandomNumberGenerator {
         return result
     }
 
-    /// SplitMix64's next output, the state moved on: what spreads one
-    /// seed's bits over the whole state.
-    static fn splitMix(_ state: inout U64) -> U64 {
-        state = state.wrappingAdd(0x9E3779B97F4A7C15)
-        var z = state
-        z = (z ^ (z >> 30)).wrappingMul(0xBF58476D1CE4E5B9)
-        z = (z ^ (z >> 27)).wrappingMul(0x94D049BB133111EB)
-        return z ^ (z >> 31)
+    /// Moves on 2^128 draws: a copy made before, and the generator after,
+    /// are two sequences that do not meet, and so are those of as many as
+    /// 2^128 tasks, each jumped once more than the one before.
+    ///
+    /// ```sable
+    /// var generator = SeededRandomNumberGenerator(seed: 7)
+    /// var first = generator
+    /// generator.jump()
+    /// assert(first.next() != generator.next())
+    /// ```
+    public mutating fn jump() {
+        self.jump(by: [0x180EC6D33CFD0ABA, 0xD5A61266F0C9392C, 0xA9582618E03FC9AA, 0x39ABDC4529B1661C])
+    }
+
+    /// Moves on 2^192 draws, 2^64 jumps: for a machine's own start, each of
+    /// whose tasks then jumps from there.
+    public mutating fn longJump() {
+        self.jump(by: [0x76E15D3EFEFDCBBF, 0xC5004E441C522FB3, 0x77710069854EE241, 0x39109BB02ACBE635])
+    }
+
+    // Moves on by the draws whose power of the step's matrix, as a
+    // polynomial in it over GF(2), has these coefficients.
+    mutating fn jump(by polynomial: U64[4]) {
+        var t0: U64 = 0
+        var t1: U64 = 0
+        var t2: U64 = 0
+        var t3: U64 = 0
+        for word in polynomial {
+            var bit: U64 = 0
+            while bit < 64 {
+                if ((word >> bit) & 1) == 1 {
+                    t0 = t0 ^ s0
+                    t1 = t1 ^ s1
+                    t2 = t2 ^ s2
+                    t3 = t3 ^ s3
+                }
+                let _ = next()
+                bit += 1
+            }
+        }
+        s0 = t0
+        s1 = t1
+        s2 = t2
+        s3 = t3
     }
 }

@@ -1,0 +1,82 @@
+module Sable.Core
+
+/// O'Neill's PCG with 128 bits of state and 64 of output: the variant
+/// XSL RR 128/64 with a stream (`pcg64` of the reference library, NumPy's
+/// `PCG64`, Rust's `Pcg64`). The same seed gives the same numbers in every
+/// run, on every machine. It is fast and statistically strong, its period
+/// 2^128, and it can move any number of draws forwards or back at once
+/// ('advance'); it is not for secrets, as one who sees its output can
+/// predict the rest.
+///
+/// A stream is a sequence of its own, 2^127 of them. Streams whose numbers
+/// differ in few bits, begun from one state by 'init(state:stream:)', are
+/// known to be correlated; 'init(seed:stream:)' mixes both first. For
+/// parallel work use streams by seed, or one sequence cut up by 'advance'.
+///
+/// ```sable
+/// var a = Pcg64(seed: 2024)
+/// var b = a
+/// let _ = a.next()
+/// let _ = a.next()
+/// b.advance(by: 2)
+/// assert(a.next() == b.next())
+/// ```
+public struct Pcg64: RandomNumberGenerator {
+    var state: U128
+    var increment: U128
+
+    static const multiplier: U128 = 0x2360ED051FC65DA44385DF649FCCF645
+
+    /// A generator whose sequence is the seed's, and the stream's: each is
+    /// spread over 128 bits by SplitMix64.
+    public init(seed: U64, stream: U64 = 0) {
+        var states = SplitMix64(seed: seed)
+        var streams = SplitMix64(seed: stream)
+        self = Pcg64(state: states.nextWide(), stream: streams.nextWide())
+    }
+
+    /// The generator the reference library's `pcg64_srandom_r` makes of the
+    /// two: for matching another implementation's sequence. The stream's
+    /// top bit is not used.
+    public init(state seed: U128, stream: U128) {
+        let odd = (stream << 1) | 1
+        increment = odd
+        state = (odd &+ seed) &* Pcg64.multiplier &+ odd
+    }
+
+    /// The next 64 bits of the sequence.
+    public mutating fn next() -> U64 {
+        state = state &* Pcg64.multiplier &+ increment
+        let mixed = U64.truncating(state >> 64) ^ U64.truncating(state)
+        return mixed.rotatedRight(by: Int(U64.truncating(state >> 122)))
+    }
+
+    /// Moves on as many draws as 'distance', at once: its time grows with
+    /// the distance's bits, not the distance. The sequence repeats after
+    /// 2^128, so a distance taken from zero, wrapping, moves back.
+    ///
+    /// ```sable
+    /// var generator = Pcg64(seed: 1)
+    /// let first = generator.next()
+    /// generator.advance(by: U128.max)
+    /// assert(generator.next() == first)
+    /// ```
+    public mutating fn advance(by distance: U128) {
+        // The step x -> m x + c, composed with itself by squaring.
+        var multiplier = Pcg64.multiplier
+        var addend = increment
+        var totalMultiplier: U128 = 1
+        var totalAddend: U128 = 0
+        var left = distance
+        while left != 0 {
+            if (left & 1) == 1 {
+                totalMultiplier = totalMultiplier &* multiplier
+                totalAddend = totalAddend &* multiplier &+ addend
+            }
+            addend = (multiplier &+ 1) &* addend
+            multiplier = multiplier &* multiplier
+            left = left >> 1
+        }
+        state = totalMultiplier &* state &+ totalAddend
+    }
+}

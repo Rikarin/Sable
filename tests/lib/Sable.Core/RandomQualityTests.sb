@@ -1,0 +1,117 @@
+module RandomQualityTests
+
+// The seeded generators' output: every byte as common as every other, each
+// bit set half the time, and no draw telling of the next. Smoke tests of the
+// implementation; the algorithms' own quality is their authors' to show.
+
+import Sable.Testing
+import RandomStatistics
+
+// Each byte position's values counted over the draws.
+fn assertBytesEven<G: RandomNumberGenerator>(_ generator: inout G) {
+    var counts = zeroCounts(8 * 256)
+    for _ in 0..<20000 {
+        var bits = generator.next()
+        var position = 0
+        while position < 8 {
+            counts[position * 256 + Int(U8.truncating(bits))] += 1
+            bits = bits >> 8
+            position += 1
+        }
+    }
+    var position = 0
+    while position < 8 {
+        assertEven(counts[position * 256..<(position + 1) * 256])
+        position += 1
+    }
+}
+
+// The serial test: the low, then the high six bits of a draw with those of the next.
+fn assertPairsEven<G: RandomNumberGenerator>(_ generator: inout G) {
+    var low = zeroCounts(4096)
+    var high = zeroCounts(4096)
+    var last = generator.next()
+    for _ in 0..<100000 {
+        let next = generator.next()
+        low[Int((last & 63) << 6 | (next & 63))] += 1
+        high[Int((last >> 58) << 6 | (next >> 58))] += 1
+        last = next
+    }
+    assertEven(low)
+    assertEven(high)
+}
+
+// Each bit set, and each bit the same as in the draw before, half the time.
+fn assertBitsFair<G: RandomNumberGenerator>(_ generator: inout G) {
+    var ones = zeroCounts(64)
+    var same = zeroCounts(64)
+    var last = generator.next()
+    let draws = 10000
+    for _ in 0..<draws {
+        let next = generator.next()
+        let alike = ~(last ^ next)
+        var bit = 0
+        while bit < 64 {
+            ones[bit] += Int((next >> U64(bit)) & 1)
+            same[bit] += Int((alike >> U64(bit)) & 1)
+            bit += 1
+        }
+        last = next
+    }
+    // Within 6 of their standard deviation, 50.
+    var bit = 0
+    while bit < 64 {
+        assert((ones[bit] - draws / 2).abs() < 300)
+        assert((same[bit] - draws / 2).abs() < 300)
+        bit += 1
+    }
+}
+
+fn assertFair<G: RandomNumberGenerator>(_ generator: inout G) {
+    assertBytesEven(&generator)
+    assertPairsEven(&generator)
+    assertBitsFair(&generator)
+}
+
+@test
+fn xoshiroIsFair() {
+    var generator = SeededRandomNumberGenerator(seed: 101)
+    assertFair(&generator)
+    generator.jump()
+    assertFair(&generator)
+}
+
+@test
+fn pcgIsFair() {
+    var generator = Pcg64(seed: 102)
+    assertFair(&generator)
+}
+
+@test
+fn chaChaIsFair() {
+    var generator = ChaCha(seed: 103)
+    assertFair(&generator)
+}
+
+@test
+fn splitMixIsFair() {
+    var generator = SplitMix64(seed: 104)
+    assertFair(&generator)
+}
+
+// What the tests themselves would say of a source that is not fair.
+struct Biased: RandomNumberGenerator {
+    var source: SeededRandomNumberGenerator
+
+    // The lowest byte is zero one time in sixteen more than it should be.
+    mutating fn next() -> U64 {
+        let bits = source.next()
+        return bits >> 60 == 0 ? (bits >> 8) << 8 : bits
+    }
+}
+
+@test(traps: "deviations off")
+fn aBiasedSourceIsFound() {
+    var generator = Biased { source: SeededRandomNumberGenerator(seed: 105) }
+    assertBytesEven(&generator)
+}

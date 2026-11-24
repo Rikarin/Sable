@@ -1,0 +1,100 @@
+module ChaChaTests
+
+// ChaCha (Sable.Core): RFC 8439's block function (2.3.2, A.1), and OpenSSL's
+// chacha20 keystream for the same key, counter and nonce.
+
+import Sable.Testing
+
+fn countingKey() -> U8[32] {
+    var key: U8[32] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    var i = 0
+    while i < 32 {
+        key[i] = U8(i)
+        i += 1
+    }
+    return key
+}
+
+@test
+fn aBlockIsTheRfcs() {
+    // Counter 1, nonce 00000009 0000004a 00000000: four words, held here as
+    // a 64-bit counter and a 64-bit stream.
+    var generator = ChaCha(key: countingKey(), stream: 0x4A000000)
+    generator.seek(toBlock: 0x0900000000000001)
+    let expected: U64[>..] = [
+        0x15593BD1E4E7F110, 0xC47120A31FDD0F50, 0x0368C033C7F4D1C7, 0x4E6CD4C39AAA2204, 0x09AA9F07466482D2, 0xA2028BD905D7C214,
+        0xB94E16DED19C12B5, 0x4E3C50A2E883D0CB
+    ]
+    for value in expected {
+        assertEqual(generator.next(), value)
+    }
+}
+
+@test
+fn bytesAreTheKeystreamInOrder() {
+    var generator = ChaCha(key: countingKey(), stream: 0x4A000000)
+    generator.seek(toBlock: 0x0900000000000001)
+    var bytes: U8[12] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    generator.fill(bytes: &bytes)
+    assert(bytes == [0x10, 0xF1, 0xE7, 0xE4, 0xD1, 0x3B, 0x59, 0x15, 0x50, 0x0F, 0xDD, 0x1F])
+}
+
+@test
+fn theZeroKeysFirstBlockIsTheRfcs() {
+    var zeros: U8[32] = countingKey()
+    var i = 0
+    while i < 32 {
+        zeros[i] = 0
+        i += 1
+    }
+    var generator = ChaCha(key: zeros)
+    let expected: U64[>..] = [
+        0x903DF1A0ADE0B876, 0x28BD8653E56A5D40, 0x1AED8DA0B819D2BD, 0xC70D778BCCEF36A8, 0x8D4857517C5941DA, 0x374AD8B83FE02477,
+        0x1CA11815F4B8436A, 0x8665EEB269B687C3, 0x7A385155BEE7079F
+    ]
+    for value in expected {
+        assertEqual(generator.next(), value)
+    }
+}
+
+@test
+fn theCounterCarriesPast32Bits() {
+    var generator = ChaCha(key: countingKey(), stream: 5)
+    generator.seek(toBlock: 0xFFFFFFFF)
+    for _ in 0..<7 {
+        let _ = generator.next()
+    }
+    assert(generator.next() == 0xA602E8EB78214425)
+    assert(generator.next() == 0x5BA94553A0D82E2B)
+}
+
+@test
+fn aSeedIsSpreadOverTheKey() {
+    var generator = ChaCha(seed: 2024, stream: 3)
+    assert(generator.next() == 4054602380095964324)
+    assert(generator.next() == 16580289796138612556)
+    assert(generator.next() == 13656703944853745973)
+}
+
+@test
+fn seekingGoesForwardsAndBack() {
+    var generator = ChaCha(seed: 1)
+    let first = generator.next()
+    var ahead = generator
+    ahead.seek(toBlock: 3)
+    for _ in 0..<23 {
+        let _ = generator.next()
+    }
+    assertEqual(ahead.next(), generator.next())
+    generator.seek(toBlock: 0)
+    assertEqual(generator.next(), first)
+}
+
+@test
+fn aCopyGoesOnByItself() {
+    var generator = ChaCha(seed: 4)
+    let _ = generator.next()
+    var copy = generator
+    let a = generator.next()
+    assertEqual(copy.next(), a)
+}

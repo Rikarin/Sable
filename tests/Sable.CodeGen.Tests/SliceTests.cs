@@ -601,6 +601,25 @@ public sealed class SliceTests {
             """
         );
 
+    /// <summary>An array literal of integers is of Int before another type, as a bare literal is.</summary>
+    [Fact]
+    public void AnArrayLiteralChoosesTheOverloadOfItsOwnElements() =>
+        Prints(
+            "ints 3\nfloats 2\nints 2\nbytes 1\n",
+            """
+                    fn took(_ xs: Int[:]) { print("ints \(xs.count)") }
+                    fn took(_ xs: F64[:]) { print("floats \(xs.count)") }
+                    fn narrow(_ xs: U8[:]) { print("bytes \(xs.count)") }
+                    fn narrow(_ xs: String[:]) { print("texts \(xs.count)") }
+                    """,
+            """
+                took([1, 9, 90])
+                took([1.5, 2.0])
+                took([Int.max, 2])
+                narrow([7])
+            """
+        );
+
     /// <summary>
     ///     A whole array, of any kind, passed as an inout slice is its range
     ///     from end to end: changed where it is, a copy of it untouched.

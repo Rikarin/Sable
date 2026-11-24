@@ -1,12 +1,21 @@
 module Sable.Core
 
-// Random floating-point values in a range, spread evenly over it: a random
-// fraction with as many bits as the type's significand holds, scaled to
-// the range.
+// Random floating-point values in a range, spread evenly over it: multiples
+// of one step, counted from the bound further from zero, each as likely as
+// every other (Goualard, "Drawing random floating-point numbers from an
+// interval", 2022). The step is the widest gap between neighbouring values
+// in the range, so every multiple is a value of the type and nothing is
+// rounded; scaling a fraction to the range instead would round, and so leave
+// some values likelier than their neighbours, and an end out or in.
 
 extension BinaryFloatingPoint {
-    /// A random value from the range, spread evenly over it, drawn from the
-    /// generator. A range that is empty, or not finite, traps.
+    /// A random value from the range, its lower bound included and its upper
+    /// one not, drawn from the generator. The values are evenly spaced, as
+    /// close as the type's are just inside the bound further from zero, and
+    /// each as likely: in 0.0..<1.0, an F64's are the multiples of 2^-53. A
+    /// bound nearer zero that is not a multiple of the spacing is closer
+    /// than that to the value next to it. A range that is empty, or has a
+    /// bound that is not finite, traps.
     ///
     /// ```sable
     /// var generator = SeededRandomNumberGenerator(seed: 3)
@@ -14,22 +23,27 @@ extension BinaryFloatingPoint {
     /// assert(x >= -1.0 && x < 1.0)
     /// ```
     public static fn random<G: RandomNumberGenerator>(in range: Range<Self>, using generator: inout G) -> Self {
-        precondition(range.lowerBound < range.upperBound, "a random value of an empty range")
-        let width = range.upperBound - range.lowerBound
-        precondition(width.isFinite, "a random value of a range that is not finite")
-        while true {
-            // Rounding can carry a value just under the upper bound up to
-            // it, which the range leaves out: then another is drawn.
-            let value = range.lowerBound + Self.fraction(&generator, inclusive: false) * width
-            if value < range.upperBound {
-                return value
-            }
+        let lower = range.lowerBound
+        let upper = range.upperBound
+        precondition(lower < upper, "a random value of an empty range")
+        precondition(lower.isFinite && upper.isFinite, "a random value of a range that is not finite")
+        let step = Self.randomStep(lower, upper)
+        let steps = Self.randomStepCount(lower.wideValue, upper.wideValue, step)
+        let k = generator.next(upperBound: steps)
+        if lower.abs() > upper.abs() {
+            return Self.rounding(wideValue: Self.moved(lower.wideValue, k, by: step))
         }
+        // Downwards from the upper bound, which is left out.
+        if k + 1 == steps {
+            return lower
+        }
+        return Self.rounding(wideValue: Self.moved(upper.wideValue, k + 1, by: -step))
     }
 
-    /// A random value from the range, both ends included, spread evenly
-    /// over it, drawn from the generator. A range whose upper bound is
-    /// below its lower one, or that is not finite, traps.
+    /// A random value from the range, both ends included, drawn from the
+    /// generator. The values are evenly spaced, and each as likely, as they
+    /// are of a half-open range. A range whose upper bound is below its
+    /// lower one, or that has a bound that is not finite, traps.
     ///
     /// ```sable
     /// var generator = SeededRandomNumberGenerator(seed: 3)
@@ -37,11 +51,20 @@ extension BinaryFloatingPoint {
     /// assert(p >= 0.0 && p <= 1.0)
     /// ```
     public static fn random<G: RandomNumberGenerator>(in range: ClosedRange<Self>, using generator: inout G) -> Self {
-        precondition(range.lowerBound <= range.upperBound, "a random value of an empty range")
-        let width = range.upperBound - range.lowerBound
-        precondition(width.isFinite, "a random value of a range that is not finite")
-        let value = range.lowerBound + Self.fraction(&generator, inclusive: true) * width
-        return value > range.upperBound ? range.upperBound : value
+        let lower = range.lowerBound
+        let upper = range.upperBound
+        precondition(lower <= upper, "a random value of an empty range")
+        precondition(lower.isFinite && upper.isFinite, "a random value of a range that is not finite")
+        if lower == upper {
+            return lower
+        }
+        let step = Self.randomStep(lower, upper)
+        let steps = Self.randomStepCount(lower.wideValue, upper.wideValue, step)
+        let k = generator.next(upperBound: steps + 1)
+        if lower.abs() > upper.abs() {
+            return k == steps ? upper : Self.rounding(wideValue: Self.moved(lower.wideValue, k, by: step))
+        }
+        return k == steps ? lower : Self.rounding(wideValue: Self.moved(upper.wideValue, k, by: -step))
     }
 
     /// A random value from the range, drawn from the system's generator.
@@ -62,13 +85,34 @@ extension BinaryFloatingPoint {
         return Self.random(in: range, using: &system)
     }
 
-    /// A random fraction k / 2^p, p the significand's bits: in [0, 1), or
-    /// in [0, 1] when 'inclusive', each of the 2^p (or 2^p + 1) values as
-    /// likely. Each is exact in the type.
-    static fn fraction<G: RandomNumberGenerator>(_ generator: inout G, inclusive: Bool) -> Self {
-        let bits = Self.significandBitCount + 1
-        let steps = U64(1) << U64(bits)
-        let k = inclusive ? generator.next(upperBound: steps + 1) : generator.next() >> U64(64 - bits)
-        return Self.rounding(wideMagnitude: U128(k)).scaled(byPowerOfTwo: -bits)
+    /// The widest gap between neighbouring values of the range, which is at
+    /// one of its ends, the one further from zero: a power of two, of which
+    /// that end is a multiple. Every F16, BF16 and F32 is an F64, so the
+    /// arithmetic is done as one.
+    static fn randomStep(_ lower: Self, _ upper: Self) -> F64 {
+        let first = lower.nextUp.wideValue - lower.wideValue
+        let last = upper.wideValue - upper.nextDown.wideValue
+        return first > last ? first : last
+    }
+
+    /// The distance between the bounds in steps, rounded up: at most 2^54.
+    static fn randomStepCount(_ lower: F64, _ upper: F64, _ step: F64) -> U64 {
+        let from = lower / step
+        let to = upper / step
+        let distance = to - from
+        let whole = distance.ceiling()
+        // What the subtraction rounded away may be what takes it past a
+        // whole number.
+        let lost = lower.abs() <= upper.abs() ? -from - (distance - to) : to - (distance + from)
+        let count = U64.fromWideValue(whole)
+        return whole == distance && lost > 0.0 ? count + 1 : count
+    }
+
+    /// The value a number of steps from another. They are taken in two
+    /// halves, each of which an F64 holds exactly and neither of which
+    /// overflows, as all of them may.
+    static fn moved(_ from: F64, _ steps: U64, by step: F64) -> F64 {
+        let half = steps >> 1
+        return from + F64.converting(half) * step + F64.converting(steps - half) * step
     }
 }

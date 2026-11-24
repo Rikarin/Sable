@@ -1,0 +1,59 @@
+module UniformDistributionTests
+
+// UniformDistribution (Sable.Math), and what every Distribution has.
+
+import Sable.Math
+import Sable.Testing
+import DistributionAssertions
+
+@test
+fn integersAreAsLikelyAsEachOther() {
+    var generator = SeededRandomNumberGenerator(seed: 1)
+    var counts: Int[>..] = [0, 0, 0, 0, 0, 0]
+    let die = UniformDistribution(in: 1...6)
+    for roll in die.samples(count: 60000, using: &generator) {
+        counts[roll - 1] += 1
+    }
+    assertShares(counts, [1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+}
+
+@test
+fn aHalfOpenRangeLeavesOutItsUpperBound() {
+    var generator = SeededRandomNumberGenerator(seed: 2)
+    let coin = UniformDistribution(in: (0 as U8)..<2)
+    assert(coin.samples(count: 1000, using: &generator).allSatisfy({ $0 < 2 }))
+}
+
+@test
+fn floatsFollowTheRange() {
+    var generator = SeededRandomNumberGenerator(seed: 3)
+    let uniform = UniformDistribution(in: -2.0..<3.0)
+    assertFollows(uniform.samples(count: 50000, using: &generator), { ($0 + 2.0) / 5.0 })
+    let closed = UniformDistribution(in: 0.0...1.0)
+    assertFollows(closed.samples(count: 50000, using: &generator), { $0 })
+}
+
+@test
+fn itDrawsWhatTheTypesRandomDoes() {
+    var a = Pcg64(seed: 4)
+    var b = Pcg64(seed: 4)
+    let uniform = UniformDistribution(in: 10..<1000)
+    assertEqual(uniform.sample(using: &a), Int.random(in: 10..<1000, using: &b))
+}
+
+@test
+fn theSystemsGeneratorIsTheDefault() {
+    let x = UniformDistribution(in: 5...6).sample()
+    assert(x == 5 || x == 6)
+}
+
+@test
+fn noSamplesAreNone() {
+    var generator = SeededRandomNumberGenerator(seed: 5)
+    assert(UniformDistribution(in: 1...6).samples(count: 0, using: &generator).isEmpty)
+}
+
+@test(traps: "a random value of an empty range")
+fn anEmptyRangeTraps() {
+    let _ = UniformDistribution(in: 3..<3).sample()
+}

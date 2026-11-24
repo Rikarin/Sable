@@ -37,7 +37,7 @@ extension FixedWidthInteger {
         // bits will do.
         let whole = Self.bitWidth == 128 ? U128.max : (U128(1) << U128(Self.bitWidth)) - 1
         if span == whole {
-            return Self.fromWideBitPattern(generator.nextWide())
+            return Self.fromWideBitPattern(Self.bitWidth <= 64 ? U128(generator.next()) : generator.nextWide())
         }
         return Self.offset(range.lowerBound, by: Self.below(span + 1, &generator))
     }
@@ -61,7 +61,7 @@ extension FixedWidthInteger {
     }
 
     /// A random offset below the width, which is below 2^bitWidth: drawn
-    /// as a U64 where that holds it, so a narrow type takes one draw.
+    /// as a U64 where that holds it, so it takes one draw whatever the type.
     static fn below<G: RandomNumberGenerator>(_ width: U128, _ generator: inout G) -> U128 {
         if Self.bitWidth <= 64 {
             return U128(generator.next(upperBound: U64.truncating(width)))

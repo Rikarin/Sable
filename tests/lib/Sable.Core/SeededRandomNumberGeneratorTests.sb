@@ -45,3 +45,39 @@ fn aCopyGoesOnFromWhereItWasCopied() {
     var copy = original
     assert(copy.next() == original.next())
 }
+
+@test
+fn aStateGivesTheReferenceSequence() {
+    var generator = SeededRandomNumberGenerator(state: [1, 2, 3, 4])
+    let expected: U64[>..] = [
+        11520, 0, 1509978240, 1215971899390074240, 1216172134540287360, 607988272756665600, 16172922978634559625, 8476171486693032832,
+        10595114339597558777, 2904607092377533576
+    ]
+    for value in expected {
+        assertEqual(generator.next(), value)
+    }
+}
+
+// The expected outputs are of the step's matrix raised to the power.
+@test
+fn aJumpIsTwoToThe128Draws() {
+    var generator = SeededRandomNumberGenerator(state: [1, 2, 3, 4])
+    generator.jump()
+    assert(generator.next() == 13534147089533256664)
+    assert(generator.next() == 7126240192422241655)
+    assert(generator.next() == 3805973808039778091)
+}
+
+@test
+fn aLongJumpIsTwoToThe192Draws() {
+    var generator = SeededRandomNumberGenerator(state: [1, 2, 3, 4])
+    generator.longJump()
+    assert(generator.next() == 5942309088398569549)
+    assert(generator.next() == 15625447729937358436)
+    assert(generator.next() == 6925613901769781251)
+}
+
+@test(traps: "the state must not be all zeros")
+fn aStateOfZerosTraps() {
+    let _ = SeededRandomNumberGenerator(state: [0, 0, 0, 0])
+}

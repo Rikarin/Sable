@@ -1,0 +1,73 @@
+module DistributionAssertions
+
+// What the distributions' tests ask: that draws follow a distribution
+// function (Kolmogorov and Smirnov's test), and that counts follow shares
+// (Pearson's). The seeds are fixed, so a test gives the same answer every
+// time; the thresholds are ones a right distribution is past once in many
+// thousands of seeds.
+
+import Sable.Math
+import Sable.Testing
+
+/// The furthest the draws' own distribution is from the function, times the
+/// square root of how many there are: Kolmogorov's statistic, over 2.2 once
+/// in 10,000 draws of the function's distribution.
+public fn kolmogorovSmirnov(_ draws: F64[:], _ cumulative: (F64) -> F64) -> F64 {
+    let sorted = draws.sorted()
+    let count = F64(sorted.count)
+    var furthest = 0.0
+    var i = 0
+    while i < sorted.count {
+        let p = cumulative(sorted[i])
+        furthest = max(furthest, max(p - F64(i) / count, F64(i + 1) / count - p))
+        i += 1
+    }
+    return furthest * count.squareRoot()
+}
+
+/// Fails unless the draws are of the distribution with the function.
+public fn assertFollows(_ draws: F64[:], _ cumulative: (F64) -> F64) {
+    let statistic = kolmogorovSmirnov(draws, cumulative)
+    assert(statistic < 2.2, "Kolmogorov and Smirnov's statistic is \(statistic)")
+}
+
+/// Fails unless the counts are in proportion to the shares, by chi-squared;
+/// a share of zero must have a count of zero.
+public fn assertShares(_ counts: Int[:], _ shares: F64[:]) {
+    var total = 0
+    var whole = 0.0
+    for count in counts {
+        total += count
+    }
+    for share in shares {
+        whole += share
+    }
+    var statistic = 0.0
+    var degrees = -1.0
+    var i = 0
+    while i < counts.count {
+        let expected = F64(total) * shares[i] / whole
+        if shares[i] == 0.0 {
+            assertEqual(counts[i], 0)
+        } else {
+            let off = F64(counts[i]) - expected
+            statistic += off * off / expected
+            degrees += 1.0
+        }
+        i += 1
+    }
+    let deviation = (statistic - degrees) / (2.0 * degrees).squareRoot()
+    assert(deviation < 6.0, "chi-squared is \(deviation) deviations off")
+}
+
+/// The normal distribution's function, of mean 0 and deviation 1.
+public fn normalCumulative(_ x: F64) -> F64 => 0.5 * erfc(-x / 2.0.squareRoot())
+
+/// The draws' bits folded into one word, each turning the last.
+public fn folded(_ draws: F64[:]) -> U64 {
+    var all: U64 = 0
+    for draw in draws {
+        all = (all ^ draw.bits).rotatedLeft(by: 1)
+    }
+    return all
+}

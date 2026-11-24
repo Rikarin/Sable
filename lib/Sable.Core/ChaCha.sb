@@ -1,0 +1,199 @@
+module Sable.Core
+
+/// Bernstein's ChaCha with 20 rounds, as a generator: the keystream of
+/// ChaCha20, with the original layout of a 64-bit block counter and a 64-bit
+/// stream (nonce), eight bytes at a time, little-endian. The block function
+/// is RFC 8439's, whose 32-bit counter and 96-bit nonce are the same four
+/// words divided elsewhere. The same seed gives the same numbers in every
+/// run, on every machine; with a secret 32-byte key, the output cannot be
+/// told from random bits, nor the rest of it predicted.
+///
+/// Slower than SeededRandomNumberGenerator and Pcg64, and not a replacement
+/// for SystemRandomNumberGenerator where keys and tokens are made: it holds
+/// its key in memory, and whoever reads that has what it gave before too.
+///
+/// Each of a key's 2^64 streams is a sequence of its own, unrelated to the
+/// others, and 'seek(toBlock:)' goes to any point of one at once. A stream
+/// repeats after 2^64 blocks of 8 draws.
+///
+/// ```sable
+/// var a = ChaCha(seed: 2024)
+/// var b = ChaCha(seed: 2024)
+/// assert(a.next() == b.next())
+/// var other = ChaCha(seed: 2024, stream: 1)
+/// assert(other.next() != b.next())
+/// ```
+public struct ChaCha: RandomNumberGenerator {
+    let key: U32[8]
+    let stream: U64
+
+    // The next block to make, the words of the one made last, and how many
+    // of them have been given.
+    var block: U64
+    var words: U64[8]
+    var used: Int
+
+    /// A generator whose sequence is the seed's and the stream's: the key
+    /// is the seed spread by SplitMix64, so it is no more secret than 64
+    /// bits are.
+    public init(seed: U64, stream: U64 = 0) {
+        var mixer = SplitMix64(seed: seed)
+        var bytes: U8[32] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        mixer.fill(bytes: &bytes)
+        self = ChaCha(key: bytes, stream: stream)
+    }
+
+    /// A generator of a 32-byte key and a stream.
+    ///
+    /// ```sable
+    /// var key: U8[32] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    /// var system = SystemRandomNumberGenerator()
+    /// system.fill(bytes: &key)
+    /// var generator = ChaCha(key: key)
+    /// let roll = Int.random(in: 1...6, using: &generator)
+    /// assert(roll >= 1 && roll <= 6)
+    /// ```
+    public init(key bytes: U8[32], stream: U64 = 0) {
+        var key: U32[8] = [0, 0, 0, 0, 0, 0, 0, 0]
+        var i = 0
+        while i < 8 {
+            let low = U32(bytes[4 * i]) | U32(bytes[4 * i + 1]) << 8
+            let high = U32(bytes[4 * i + 2]) | U32(bytes[4 * i + 3]) << 8
+            key[i] = low | high << 16
+            i += 1
+        }
+        self.key = key
+        self.stream = stream
+        block = 0
+        words = [0, 0, 0, 0, 0, 0, 0, 0]
+        used = 8
+    }
+
+    /// The next 64 bits of the sequence.
+    public mutating fn next() -> U64 {
+        if used == 8 {
+            makeBlock()
+        }
+        let word = words[used]
+        used += 1
+        return word
+    }
+
+    /// Goes to the first draw of a block, 64 bytes or 8 draws each, counted
+    /// from zero: forwards or back, at once.
+    ///
+    /// ```sable
+    /// var a = ChaCha(seed: 5)
+    /// var b = a
+    /// for _ in 0..<16 {
+    ///     let _ = a.next()
+    /// }
+    /// b.seek(toBlock: 2)
+    /// assert(a.next() == b.next())
+    /// ```
+    public mutating fn seek(toBlock block: U64) {
+        self.block = block
+        used = 8
+    }
+
+    // Makes the next block's eight words: the key, the counter and the
+    // stream, put through ten double rounds and added to what came out.
+    mutating fn makeBlock() {
+        var x0: U32 = 0x61707865
+        var x1: U32 = 0x3320646E
+        var x2: U32 = 0x79622D32
+        var x3: U32 = 0x6B206574
+        var x4: U32 = key[0]
+        var x5: U32 = key[1]
+        var x6: U32 = key[2]
+        var x7: U32 = key[3]
+        var x8: U32 = key[4]
+        var x9: U32 = key[5]
+        var x10: U32 = key[6]
+        var x11: U32 = key[7]
+        var x12: U32 = U32.truncating(block)
+        var x13: U32 = U32.truncating(block >> 32)
+        var x14: U32 = U32.truncating(stream)
+        var x15: U32 = U32.truncating(stream >> 32)
+        var round = 0
+        while round < 10 {
+            x0 = x0 &+ x4
+            x12 = (x12 ^ x0).rotatedLeft(by: 16)
+            x8 = x8 &+ x12
+            x4 = (x4 ^ x8).rotatedLeft(by: 12)
+            x0 = x0 &+ x4
+            x12 = (x12 ^ x0).rotatedLeft(by: 8)
+            x8 = x8 &+ x12
+            x4 = (x4 ^ x8).rotatedLeft(by: 7)
+            x1 = x1 &+ x5
+            x13 = (x13 ^ x1).rotatedLeft(by: 16)
+            x9 = x9 &+ x13
+            x5 = (x5 ^ x9).rotatedLeft(by: 12)
+            x1 = x1 &+ x5
+            x13 = (x13 ^ x1).rotatedLeft(by: 8)
+            x9 = x9 &+ x13
+            x5 = (x5 ^ x9).rotatedLeft(by: 7)
+            x2 = x2 &+ x6
+            x14 = (x14 ^ x2).rotatedLeft(by: 16)
+            x10 = x10 &+ x14
+            x6 = (x6 ^ x10).rotatedLeft(by: 12)
+            x2 = x2 &+ x6
+            x14 = (x14 ^ x2).rotatedLeft(by: 8)
+            x10 = x10 &+ x14
+            x6 = (x6 ^ x10).rotatedLeft(by: 7)
+            x3 = x3 &+ x7
+            x15 = (x15 ^ x3).rotatedLeft(by: 16)
+            x11 = x11 &+ x15
+            x7 = (x7 ^ x11).rotatedLeft(by: 12)
+            x3 = x3 &+ x7
+            x15 = (x15 ^ x3).rotatedLeft(by: 8)
+            x11 = x11 &+ x15
+            x7 = (x7 ^ x11).rotatedLeft(by: 7)
+            x0 = x0 &+ x5
+            x15 = (x15 ^ x0).rotatedLeft(by: 16)
+            x10 = x10 &+ x15
+            x5 = (x5 ^ x10).rotatedLeft(by: 12)
+            x0 = x0 &+ x5
+            x15 = (x15 ^ x0).rotatedLeft(by: 8)
+            x10 = x10 &+ x15
+            x5 = (x5 ^ x10).rotatedLeft(by: 7)
+            x1 = x1 &+ x6
+            x12 = (x12 ^ x1).rotatedLeft(by: 16)
+            x11 = x11 &+ x12
+            x6 = (x6 ^ x11).rotatedLeft(by: 12)
+            x1 = x1 &+ x6
+            x12 = (x12 ^ x1).rotatedLeft(by: 8)
+            x11 = x11 &+ x12
+            x6 = (x6 ^ x11).rotatedLeft(by: 7)
+            x2 = x2 &+ x7
+            x13 = (x13 ^ x2).rotatedLeft(by: 16)
+            x8 = x8 &+ x13
+            x7 = (x7 ^ x8).rotatedLeft(by: 12)
+            x2 = x2 &+ x7
+            x13 = (x13 ^ x2).rotatedLeft(by: 8)
+            x8 = x8 &+ x13
+            x7 = (x7 ^ x8).rotatedLeft(by: 7)
+            x3 = x3 &+ x4
+            x14 = (x14 ^ x3).rotatedLeft(by: 16)
+            x9 = x9 &+ x14
+            x4 = (x4 ^ x9).rotatedLeft(by: 12)
+            x3 = x3 &+ x4
+            x14 = (x14 ^ x3).rotatedLeft(by: 8)
+            x9 = x9 &+ x14
+            x4 = (x4 ^ x9).rotatedLeft(by: 7)
+            round += 1
+        }
+        words[0] = ChaCha.joined(x0 &+ 0x61707865, x1 &+ 0x3320646E)
+        words[1] = ChaCha.joined(x2 &+ 0x79622D32, x3 &+ 0x6B206574)
+        words[2] = ChaCha.joined(x4 &+ key[0], x5 &+ key[1])
+        words[3] = ChaCha.joined(x6 &+ key[2], x7 &+ key[3])
+        words[4] = ChaCha.joined(x8 &+ key[4], x9 &+ key[5])
+        words[5] = ChaCha.joined(x10 &+ key[6], x11 &+ key[7])
+        words[6] = ChaCha.joined(x12 &+ U32.truncating(block), x13 &+ U32.truncating(block >> 32))
+        words[7] = ChaCha.joined(x14 &+ U32.truncating(stream), x15 &+ U32.truncating(stream >> 32))
+        used = 0
+        block = block &+ 1
+    }
+
+    static fn joined(_ low: U32, _ high: U32) -> U64 => U64(low) | U64(high) << 32
+}

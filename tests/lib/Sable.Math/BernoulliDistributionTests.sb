@@ -1,0 +1,75 @@
+module BernoulliDistributionTests
+
+// BernoulliDistribution (Sable.Math).
+
+import Sable.Math
+import Sable.Testing
+import DistributionAssertions
+
+// How many of so many draws are true.
+fn trues(_ distribution: BernoulliDistribution, _ count: Int, seed: U64) -> Int {
+    var generator = SeededRandomNumberGenerator(seed: seed)
+    return distribution.samples(count: count, using: &generator).filter({ $0 }).count
+}
+
+@test
+fn aProbabilityIsTheShareOfTrue() {
+    let probabilities: F64[>..] = [0.01, 0.25, 0.5, 0.9]
+    for probability in probabilities {
+        let count = trues(BernoulliDistribution(probability: probability), 50000, seed: 1)
+        assertShares([count, 50000 - count], [probability, 1.0 - probability])
+    }
+}
+
+@test
+fn aRatioIsTheShareOfTrue() {
+    let count = trues(BernoulliDistribution(times: 1, outOf: 3), 60000, seed: 2)
+    assertShares([count, 60000 - count], [1.0, 2.0])
+}
+
+@test
+fn zeroIsNeverAndOneAlways() {
+    assertEqual(trues(BernoulliDistribution(probability: 0.0), 1000, seed: 3), 0)
+    assertEqual(trues(BernoulliDistribution(probability: 1.0), 1000, seed: 3), 1000)
+    assertEqual(trues(BernoulliDistribution(times: 0, outOf: 5), 1000, seed: 3), 0)
+    assertEqual(trues(BernoulliDistribution(times: 5, outOf: 5), 1000, seed: 3), 1000)
+    assertEqual(trues(BernoulliDistribution(probability: 1.0.nextDown), 1000, seed: 3), 1000)
+}
+
+// Gives the same bits for ever.
+struct Constant: RandomNumberGenerator {
+    var bits: U64
+
+    mutating fn next() -> U64 {
+        return bits
+    }
+}
+
+@test
+fn aHalfIsExactlyHalfTheDraws() {
+    let half = BernoulliDistribution(probability: 0.5)
+    var below = Constant { bits: (U64(1) << 63) - 1 }
+    var at = Constant { bits: U64(1) << 63 }
+    assert(half.sample(using: &below))
+    assert(!half.sample(using: &at))
+}
+
+@test(traps: "a probability must be from 0 to 1")
+fn aProbabilityOverOneTraps() {
+    let _ = BernoulliDistribution(probability: 1.5)
+}
+
+@test(traps: "a probability must be from 0 to 1")
+fn aNegativeProbabilityTraps() {
+    let _ = BernoulliDistribution(probability: -0.1)
+}
+
+@test(traps: "a probability must be from 0 to 1")
+fn aProbabilityThatIsNoNumberTraps() {
+    let _ = BernoulliDistribution(probability: F64.nan)
+}
+
+@test(traps: "a probability must be from 0 to 1")
+fn moreTimesThanThereAreTraps() {
+    let _ = BernoulliDistribution(times: 3, outOf: 2)
+}

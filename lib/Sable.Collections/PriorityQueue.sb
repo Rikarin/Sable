@@ -237,7 +237,7 @@ public class PriorityQueue<Element: Comparable> {
     /// The elements in the order they would come out, leaving the queue as it is.
     public fn sortedElements() -> Element[>..] {
         var result = items
-        sort(&result, by: before)
+        result.sort(by: before)
         return result
     }
 }

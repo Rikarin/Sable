@@ -1641,6 +1641,15 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return to - part.Length < 0 ? -1L : part.Length == 0 ? to : (long)text.AsSpan(0, (int)to).LastIndexOf(part);
             }
 
+            case "bytes_find":
+                return (long)BytesOf(operands[0]).AsSpan().IndexOf((byte)operands[1]!);
+
+            case "bytes_find_any":
+                return (long)BytesOf(operands[0]).AsSpan().IndexOfAny(BytesOf(operands[1]));
+
+            case "bytes_count":
+                return (long)BytesOf(operands[0]).AsSpan().Count((byte)operands[1]!);
+
             case "utf8_validate": {
                 var bytes = BytesOf(operands[0]);
                 var valid = Utf8.IsValid(bytes);

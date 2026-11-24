@@ -533,7 +533,7 @@ fn build(_ root: String, _ output: String) throws(IoError) -> Int {
             all.append(readPage(name, try File.read(Path.join(source, name))))
         }
     }
-    let ordered = sorted(all, by: (a: Page, b: Page) => before(a, b))
+    let ordered = all.sorted(by: (a: Page, b: Page) => before(a, b))
 
     // Each page, with links to its neighbours in the index's order.
     var totalWords = 0
@@ -591,7 +591,7 @@ fn build(_ root: String, _ output: String) throws(IoError) -> Int {
         }
     }
     let tagsHtml = TextBuilder()
-    for tag in sorted(byTag.map({ entry in entry.0 })) {
+    for tag in byTag.map({ entry in entry.0 }).sorted() {
         let links = byTag[tag] ?? []
         let escaped = escapedHtml(tag)
         tagsHtml.appendLine("<h2 id=\"\(escaped)\">\(escaped) (\(links.count))</h2>")

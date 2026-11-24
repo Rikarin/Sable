@@ -550,6 +550,74 @@ int64_t sable_utf8_validate(const SableArray *buffer, int64_t start, int64_t cou
     return count == 0 ? -1 : first_invalid_utf8(slice_bytes(buffer, start), count);
 }
 
+// ---- Searching bytes (U8[:]'s own contains, firstIndex and count)
+
+// Where the byte first is in the slice, or -1: memchr, which the C library
+// vectorises.
+int64_t sable_bytes_find(const SableArray *buffer, int64_t start, int64_t count, uint8_t byte) {
+    if (count == 0) {
+        return -1;
+    }
+
+    const uint8_t *bytes = slice_bytes(buffer, start);
+    const uint8_t *found = memchr(bytes, byte, (size_t)count);
+    return found == NULL ? -1 : found - bytes;
+}
+
+// Where the first byte of the set is in the slice, or -1 (.NET's
+// IndexOfAny): memchr for a set of one, a table of the set's bytes
+// otherwise.
+int64_t sable_bytes_find_any(const SableArray *buffer, int64_t start, int64_t count, const SableArray *setBuffer, int64_t setStart, int64_t setCount) {
+    if (count == 0 || setCount == 0) {
+        return -1;
+    }
+
+    const uint8_t *set = slice_bytes(setBuffer, setStart);
+    if (setCount == 1) {
+        return sable_bytes_find(buffer, start, count, set[0]);
+    }
+
+    bool member[256] = { false };
+    for (int64_t i = 0; i < setCount; i++) {
+        member[set[i]] = true;
+    }
+
+    const uint8_t *bytes = slice_bytes(buffer, start);
+    for (int64_t i = 0; i < count; i++) {
+        if (member[bytes[i]]) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+// How many times the byte is in the slice: sixteen bytes compared a step,
+// the matches added up in byte lanes and gathered before they can overflow.
+int64_t sable_bytes_count(const SableArray *buffer, int64_t start, int64_t count, uint8_t byte) {
+    const uint8_t *bytes = slice_bytes(buffer, start);
+    sable_bytes16 wanted = (sable_bytes16){ 0 } + byte;
+    int64_t total = 0, i = 0;
+    while (i + 16 <= count) {
+        sable_bytes16 lanes = { 0 };
+        // Each lane counts up to 255 before it is gathered.
+        int64_t end = i + 16 * 255 < count ? i + 16 * 255 : count;
+        for (; i + 16 <= end; i += 16) {
+            lanes -= (sable_bytes16)(load16((const char *)bytes + i) == wanted);
+        }
+
+        for (int k = 0; k < 16; k++) {
+            total += lanes[k];
+        }
+    }
+
+    for (; i < count; i++) {
+        total += bytes[i] == byte;
+    }
+
+    return total;
+}
+
 // Bytes already known to be well-formed UTF-8, as a string: what
 // String.fromUtf8 makes once it has validated them.
 SableString *sable_string_from_utf8_unchecked(const SableArray *buffer, int64_t start, int64_t count) {

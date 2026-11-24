@@ -129,6 +129,150 @@ extension<Element> Element[:] {
             low = high
         }
     }
+
+    /// Sorts in place in the order the closure says, not keeping equal
+    /// elements in their order: an introsort, O(n log n) comparisons at
+    /// most, and no scratch array, where the stable 'sort(by:)' takes one
+    /// the array's size. .NET's Sort and Rust's sort_unstable_by.
+    ///
+    /// ```sable
+    /// var xs: Int[>..] = [5, 1, 4, 2, 3]
+    /// xs.sortUnstable(by: (a: Int, b: Int) => a > b)
+    /// assert(xs == [5, 4, 3, 2, 1])
+    /// ```
+    public mutating fn sortUnstable(by before: (Element, Element) throws -> Bool) rethrows {
+        try self.introsortUnstable(0, self.count, sortDepth(self.count), by: before)
+    }
+
+    // [low, high) by quicksort, the smaller part first and the larger
+    // in the loop, so the stack is O(log n) deep; past 'depth' levels a
+    // part is heapsorted, so that no input takes O(n^2); a short part is
+    // sorted by insertion.
+    mutating fn introsortUnstable(_ low: Int, _ high: Int, _ depth: Int, by before: (Element, Element) throws -> Bool) rethrows {
+        var lo = low
+        var hi = high
+        var levels = depth
+        while hi - lo > 16 {
+            if levels == 0 {
+                try self.heapsortUnstable(lo, hi, by: before)
+                return
+            }
+            levels = levels - 1
+            let split = try self.partitionUnstable(lo, hi, by: before)
+            if split - lo < hi - split {
+                try self.introsortUnstable(lo, split, levels, by: before)
+                lo = split
+            } else {
+                try self.introsortUnstable(split, hi, levels, by: before)
+                hi = split
+            }
+        }
+        var i = lo + 1
+        while i < hi {
+            let held = self[i]
+            var j = i
+            while j > lo && (try before(held, self[j - 1])) {
+                self[j] = self[j - 1]
+                j = j - 1
+            }
+            if j != i {
+                self[j] = held
+            }
+            i = i + 1
+        }
+    }
+
+    // Hoare's partition of [low, high) about the median of its first,
+    // middle and last elements: every element of [low, split) is not
+    // after any of [split, high), and neither part is empty.
+    mutating fn partitionUnstable(_ low: Int, _ high: Int, by before: (Element, Element) throws -> Bool) rethrows -> Int {
+        // The median of the first, middle and last as the pivot, put last.
+        let middle = low + (high - low) / 2
+        let last = high - 1
+        if try before(self[middle], self[low]) {
+            let swapped = self[middle]
+            self[middle] = self[low]
+            self[low] = swapped
+        }
+        if try before(self[last], self[middle]) {
+            let swapped = self[last]
+            self[last] = self[middle]
+            self[middle] = swapped
+            if try before(self[middle], self[low]) {
+                let moved = self[middle]
+                self[middle] = self[low]
+                self[low] = moved
+            }
+        }
+        let pivotHeld = self[middle]
+        self[middle] = self[last]
+        self[last] = pivotHeld
+        let pivot = self[last]
+        // Lomuto's scheme without a branch on the comparison: each element
+        // is swapped to the store position, which moves on only when it is
+        // below the pivot, so a random order costs no mispredicted branch.
+        var store = low
+        var k = low
+        while k < last {
+            let value = self[k]
+            let below = try before(value, pivot)
+            self[k] = self[store]
+            self[store] = value
+            store = store + (below ? 1 : 0)
+            k = k + 1
+        }
+        let placed = self[store]
+        self[store] = self[last]
+        self[last] = placed
+        // Elements equal to the pivot after it are passed over, so that an
+        // array of few distinct values splits evenly rather than one by one.
+        var split = store + 1
+        while split < high - 1 && !(try before(pivot, self[split])) && split - store < (high - low) / 2 {
+            split = split + 1
+        }
+        return split
+    }
+
+    // [low, high) by heapsort: a max-heap made, then its top taken to the
+    // end again and again.
+    mutating fn heapsortUnstable(_ low: Int, _ high: Int, by before: (Element, Element) throws -> Bool) rethrows {
+        let n = high - low
+        var start = n / 2
+        while start > 0 {
+            start = start - 1
+            try self.siftDownUnstable(low, start, n, by: before)
+        }
+        var end = n
+        while end > 1 {
+            end = end - 1
+            let swapped = self[low]
+            self[low] = self[low + end]
+            self[low + end] = swapped
+            try self.siftDownUnstable(low, 0, end, by: before)
+        }
+    }
+
+    // The heap of 'count' elements from 'base' put right again from
+    // 'root' down.
+    mutating fn siftDownUnstable(_ base: Int, _ root: Int, _ count: Int, by before: (Element, Element) throws -> Bool) rethrows {
+        var parent = root
+        while true {
+            var child = 2 * parent + 1
+            if child >= count {
+                return
+            }
+            if child + 1 < count && (try before(self[base + child], self[base + child + 1])) {
+                child = child + 1
+            }
+            if !(try before(self[base + parent], self[base + child])) {
+                return
+            }
+            let swapped = self[base + parent]
+            self[base + parent] = self[base + child]
+            self[base + child] = swapped
+            parent = child
+        }
+    }
 }
 
 extension<Element: Comparable> Element[:] {
@@ -225,4 +369,159 @@ extension<Element: Comparable> Element[:] {
             low = high
         }
     }
+
+    /// Sorts the elements in place, ascending, not keeping equal ones in
+    /// their order: an introsort with no scratch array (Rust's
+    /// sort_unstable, what .NET's Sort is).
+    ///
+    /// ```sable
+    /// var xs: Int[>..] = [3, 1, 2, 1]
+    /// xs.sortUnstable()
+    /// assert(xs == [1, 1, 2, 3])
+    /// ```
+    public mutating fn sortUnstable() {
+        self.introsortUnstableAscending(0, self.count, sortDepth(self.count))
+    }
+
+    // [low, high) by quicksort, the smaller part first and the larger
+    // in the loop, so the stack is O(log n) deep; past 'depth' levels a
+    // part is heapsorted, so that no input takes O(n^2); a short part is
+    // sorted by insertion.
+    mutating fn introsortUnstableAscending(_ low: Int, _ high: Int, _ depth: Int) {
+        var lo = low
+        var hi = high
+        var levels = depth
+        while hi - lo > 16 {
+            if levels == 0 {
+                self.heapsortUnstableAscending(lo, hi)
+                return
+            }
+            levels = levels - 1
+            let split = self.partitionUnstableAscending(lo, hi)
+            if split - lo < hi - split {
+                self.introsortUnstableAscending(lo, split, levels)
+                lo = split
+            } else {
+                self.introsortUnstableAscending(split, hi, levels)
+                hi = split
+            }
+        }
+        var i = lo + 1
+        while i < hi {
+            let held = self[i]
+            var j = i
+            while j > lo && (held < self[j - 1]) {
+                self[j] = self[j - 1]
+                j = j - 1
+            }
+            if j != i {
+                self[j] = held
+            }
+            i = i + 1
+        }
+    }
+
+    // Hoare's partition of [low, high) about the median of its first,
+    // middle and last elements: every element of [low, split) is not
+    // after any of [split, high), and neither part is empty.
+    mutating fn partitionUnstableAscending(_ low: Int, _ high: Int) -> Int {
+        // The median of the first, middle and last as the pivot, put last.
+        let middle = low + (high - low) / 2
+        let last = high - 1
+        if self[middle] < self[low] {
+            let swapped = self[middle]
+            self[middle] = self[low]
+            self[low] = swapped
+        }
+        if self[last] < self[middle] {
+            let swapped = self[last]
+            self[last] = self[middle]
+            self[middle] = swapped
+            if self[middle] < self[low] {
+                let moved = self[middle]
+                self[middle] = self[low]
+                self[low] = moved
+            }
+        }
+        let pivotHeld = self[middle]
+        self[middle] = self[last]
+        self[last] = pivotHeld
+        let pivot = self[last]
+        // Lomuto's scheme without a branch on the comparison: each element
+        // is swapped to the store position, which moves on only when it is
+        // below the pivot, so a random order costs no mispredicted branch.
+        var store = low
+        var k = low
+        while k < last {
+            let value = self[k]
+            let below = value < pivot
+            self[k] = self[store]
+            self[store] = value
+            store = store + (below ? 1 : 0)
+            k = k + 1
+        }
+        let placed = self[store]
+        self[store] = self[last]
+        self[last] = placed
+        // Elements equal to the pivot after it are passed over, so that an
+        // array of few distinct values splits evenly rather than one by one.
+        var split = store + 1
+        while split < high - 1 && !(pivot < self[split]) && split - store < (high - low) / 2 {
+            split = split + 1
+        }
+        return split
+    }
+
+    // [low, high) by heapsort: a max-heap made, then its top taken to the
+    // end again and again.
+    mutating fn heapsortUnstableAscending(_ low: Int, _ high: Int) {
+        let n = high - low
+        var start = n / 2
+        while start > 0 {
+            start = start - 1
+            self.siftDownUnstableAscending(low, start, n)
+        }
+        var end = n
+        while end > 1 {
+            end = end - 1
+            let swapped = self[low]
+            self[low] = self[low + end]
+            self[low + end] = swapped
+            self.siftDownUnstableAscending(low, 0, end)
+        }
+    }
+
+    // The heap of 'count' elements from 'base' put right again from
+    // 'root' down.
+    mutating fn siftDownUnstableAscending(_ base: Int, _ root: Int, _ count: Int) {
+        var parent = root
+        while true {
+            var child = 2 * parent + 1
+            if child >= count {
+                return
+            }
+            if child + 1 < count && (self[base + child] < self[base + child + 1]) {
+                child = child + 1
+            }
+            if !(self[base + parent] < self[base + child]) {
+                return
+            }
+            let swapped = self[base + parent]
+            self[base + parent] = self[base + child]
+            self[base + child] = swapped
+            parent = child
+        }
+    }
+}
+
+/// How deep an introsort of n elements may go before it heapsorts a part:
+/// twice log2 n.
+fn sortDepth(_ n: Int) -> Int {
+    var depth = 0
+    var m = n
+    while m > 1 {
+        depth = depth + 2
+        m = m / 2
+    }
+    return depth
 }

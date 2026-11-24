@@ -66,7 +66,7 @@ public sealed class DeriveTests {
                     var scores: [Point: Int] = [:]
                     scores[Point(x: 4, y: 4)] = 7
                     print(scores[Point(x: 4, y: 4)] ?? 0)
-                    for p in sorted([Point(x: 1, y: 3), Point(x: 1, y: 2), Point(x: 0, y: 9)]) {
+                    for p in [Point(x: 1, y: 3), Point(x: 1, y: 2), Point(x: 0, y: 9)].sorted() {
                         print(p.debugDescription())
                     }
                 }
@@ -107,7 +107,7 @@ public sealed class DeriveTests {
                     print(m[Pair(first: 1, second: "a")] ?? 0)
                     let nested = Pair(first: Pair(first: 1, second: "x"), second: 'c')
                     print(nested.debugDescription())
-                    for p in sorted([Pair(first: 2, second: "a"), Pair(first: 1, second: "b")]) {
+                    for p in [Pair(first: 2, second: "a"), Pair(first: 1, second: "b")].sorted() {
                         print(p.debugDescription())
                     }
                 }
@@ -142,7 +142,7 @@ public sealed class DeriveTests {
                     print(Shape.Circle(radius: 1.5).debugDescription())
                     print(Shape.Empty.debugDescription())
                     let shapes: Shape[>..] = [Shape.Empty, Shape.Rect(w: 2, h: 3), Shape.Circle(radius: 4.0), Shape.Rect(w: 1, h: 9), Shape.Circle(radius: 1.5)]
-                    for shape in sorted(shapes) {
+                    for shape in shapes.sorted() {
                         print(shape.debugDescription())
                     }
                     var seen = Set<Shape>()
@@ -183,7 +183,7 @@ public sealed class DeriveTests {
                 @main
                 fn main() {
                     let xs: Outcome<Int, String>[>..] = [Outcome.Err("b"), Outcome.Ok(9), Outcome.Err("a"), Outcome.Ok(1)]
-                    for x in sorted(xs) {
+                    for x in xs.sorted() {
                         print(x.debugDescription())
                     }
                     let bad: Outcome<Int, String> = Outcome.Err("bad")

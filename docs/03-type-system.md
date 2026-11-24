@@ -398,10 +398,17 @@ members, not conformances — SYNTAX.md §11):
   `starts(with:)`, `partitionPoint(where:)`, `min()`, `split(where:)`,
   `chunks(of:)`, `windows(of:)`, `toArray()` — and reordered in place, as
   nothing in that changes the count: `swapAt`, `reverse()`, `rotate(left:)`,
-  `fill`, `copy(from:)`, `partition(by:)`, `selectNth`, `sort()`. A
+  `fill`, `copy(from:)`, `partition(by:)`, `selectNth`, `sort()` (stable,
+  a merge sort) and `sortUnstable()` (in place, an introsort). A
   `mutating` member of `T[:]` called on an array changes the array where it
   is (docs/02 §2.5). The non-mutating pairs (`reversed()`, `sorted()`) give
-  a `T[>..]`.
+  a `T[>..]`. Sorting is the arrays' own: there are no free `sort` and
+  `sorted` functions.
+- **An array of one element type** may have members of its own that a
+  generic one has too, and they are chosen over the generic ones where both
+  fit: `U8[:]`'s `contains`, `firstIndex(of:)`, `firstIndex(ofAny:)` and
+  `count(of:)` are the runtime's vectorised byte search. Generic code over
+  `T[:]` calls the generic member.
 - **`T[>..]` grows at its end and nowhere else**: `append`,
   `append(contentsOf:)`, `reserveCapacity`, `capacity`, and, at the end,
   `removeLast` and `clear`. It does not insert or remove in the middle:

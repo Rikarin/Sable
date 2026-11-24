@@ -3989,6 +3989,18 @@ public sealed partial class Binder {
             return null;
         }
 
+        // Of two array extensions of the same kind, the one for an element
+        // type of its own over the one for any: 'extension U8[:]' over
+        // 'extension<Element> Element[:]', as a byte array's own search
+        // is faster than the generic one.
+        if (a.ExtendedArray is { } arrayA && b.ExtendedArray is { } arrayB && arrayA.ArrayKind == arrayB.ArrayKind) {
+            var aGeneric = arrayA.ElementType is TypeParameterSymbol;
+            var bGeneric = arrayB.ElementType is TypeParameterSymbol;
+            if (aGeneric != bGeneric) {
+                return aGeneric ? second : first;
+            }
+        }
+
         var aIsProtocol = a.TypeKind == TypeKind.Protocol;
         var bIsProtocol = b.TypeKind == TypeKind.Protocol;
         if (aIsProtocol != bIsProtocol) {

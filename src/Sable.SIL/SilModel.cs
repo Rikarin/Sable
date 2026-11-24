@@ -2590,6 +2590,9 @@ public static class SilBuiltins {
         // Bytes as text: where the first ill-formed UTF-8 starts (-1 for
         // none), and bytes known to be well-formed made a string.
         Add("utf8_validate", SilType.Int, new SliceType(SilType.U8));
+        Add("bytes_find", SilType.Int, new SliceType(SilType.U8), SilType.U8);
+        Add("bytes_find_any", SilType.Int, new SliceType(SilType.U8), new SliceType(SilType.U8));
+        Add("bytes_count", SilType.Int, new SliceType(SilType.U8), SilType.U8);
         Add("string_from_utf8_unchecked", SilType.String, new SliceType(SilType.U8));
         Add("string_trimmed", SilType.String, SilType.String);
         Add("string_split", new ArrayType(SilType.String), SilType.String, SilType.Char);

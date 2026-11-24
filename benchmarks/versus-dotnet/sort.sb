@@ -3,8 +3,6 @@ module Sort
 // Sorting against .NET's List.Sort: a million pseudo-random Ints, then
 // 200,000 Strings, each sorted and checked.
 
-import Sable.Collections
-
 @main
 fn main() {
     var numbers: Int[>..] = []
@@ -24,8 +22,8 @@ fn main() {
         i = i + 1
     }
 
-    let a = sorted(numbers)
-    let b = sorted(words)
+    let a = numbers.sorted()
+    let b = words.sorted()
     var ordered = true
     i = 1
     while i < a.count {

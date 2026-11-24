@@ -704,6 +704,9 @@ public sealed partial class LlvmEmitter {
                                 declare i64 @sable_string_utf8_find(ptr, ptr, i64)
                                 declare i64 @sable_string_utf8_find_last(ptr, ptr, i64)
                                 declare i64 @sable_utf8_validate(ptr, i64, i64)
+                                declare i64 @sable_bytes_find(ptr, i64, i64, i8)
+                                declare i64 @sable_bytes_find_any(ptr, i64, i64, ptr, i64, i64)
+                                declare i64 @sable_bytes_count(ptr, i64, i64, i8)
                                 declare ptr @sable_string_from_utf8_unchecked(ptr, i64, i64)
                                 declare void @llvm.dbg.declare(metadata, metadata, metadata)
                                 declare void @llvm.dbg.value(metadata, metadata, metadata)
@@ -4279,6 +4282,29 @@ public sealed partial class LlvmEmitter {
                 case "string_utf8_find" or "string_utf8_find_last":
                     Line($"{Result()} = call i64 @sable_{builtin.Name}(ptr {operands[0]}, ptr {operands[1]}, i64 {operands[2]})");
                     return;
+
+                // A byte searched for in a slice of bytes, or counted.
+                case "bytes_find" or "bytes_count": {
+                    var type = (SliceType)builtin.Operands[0].Type;
+                    var buffer = SlicePart(operands[0], type, 0);
+                    var start = SlicePart(operands[0], type, 1);
+                    var count = SlicePart(operands[0], type, 2);
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}(ptr {buffer}, i64 {start}, i64 {count}, i8 {operands[1]})");
+                    return;
+                }
+
+                case "bytes_find_any": {
+                    var type = (SliceType)builtin.Operands[0].Type;
+                    var buffer = SlicePart(operands[0], type, 0);
+                    var start = SlicePart(operands[0], type, 1);
+                    var count = SlicePart(operands[0], type, 2);
+                    var setType = (SliceType)builtin.Operands[1].Type;
+                    var setBuffer = SlicePart(operands[1], setType, 0);
+                    var setStart = SlicePart(operands[1], setType, 1);
+                    var setCount = SlicePart(operands[1], setType, 2);
+                    Line($"{Result()} = call i64 @sable_bytes_find_any(ptr {buffer}, i64 {start}, i64 {count}, ptr {setBuffer}, i64 {setStart}, i64 {setCount})");
+                    return;
+                }
 
                 // A slice of bytes, to the runtime as its buffer, start and count.
                 case "utf8_validate" or "string_from_utf8_unchecked": {

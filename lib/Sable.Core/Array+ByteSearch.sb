@@ -1,0 +1,53 @@
+module Sable.Core
+
+// Searching bytes. Every array has contains, firstIndex(of:),
+// firstIndex(ofAny:) and count(of:), comparing an element at a time; an
+// array of bytes has its own, the runtime's (Runtime.findByte and the rest):
+// the C library's memchr, vectorised, and a count sixteen bytes a step. A
+// call on a byte array chooses these over the generic ones, as a member of
+// an array of one element type is chosen over one of any.
+
+extension U8[:] {
+    /// Whether the byte is in the array.
+    ///
+    /// ```sable
+    /// let header: U8[>..] = [0x47, 0x49, 0x46]
+    /// assert(header.contains(element: 0x49))
+    /// ```
+    public fn contains(element: U8) -> Bool {
+        return Runtime.findByte(self, element) >= 0
+    }
+
+    /// Where the byte first is, or none.
+    ///
+    /// ```sable
+    /// let line: U8[>..] = [0x61, 0x0A, 0x62, 0x0A]
+    /// assert(line.firstIndex(of: 0x0A) == 1)
+    /// ```
+    public fn firstIndex(of element: U8) -> Int? {
+        let at = Runtime.findByte(self, element)
+        return at < 0 ? none : at
+    }
+
+    /// Where the first byte that is any of the candidates is, or none
+    /// (.NET's IndexOfAny).
+    ///
+    /// ```sable
+    /// let csv: U8[>..] = [0x61, 0x62, 0x2C, 0x0A]
+    /// assert(csv.firstIndex(ofAny: [0x0A, 0x2C]) == 2)
+    /// ```
+    public fn firstIndex(ofAny candidates: U8[:]) -> Int? {
+        let at = Runtime.findAnyByte(self, candidates)
+        return at < 0 ? none : at
+    }
+
+    /// How many times the byte is in the array.
+    ///
+    /// ```sable
+    /// let text: U8[>..] = [0x0A, 0x61, 0x0A]
+    /// assert(text.count(of: 0x0A) == 2)
+    /// ```
+    public fn count(of element: U8) -> Int {
+        return Runtime.countByte(self, element)
+    }
+}

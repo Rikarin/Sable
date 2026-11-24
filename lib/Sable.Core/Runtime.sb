@@ -309,6 +309,19 @@ public struct Runtime {
     @builtin("utf8_validate")
     public static fn validateUtf8(bytes: U8[:]) -> Int
 
+    // A byte in a slice of bytes, natively searched with the C library's
+    // vectorised memchr, or counted sixteen bytes at a time: what U8[:]'s
+    // own contains, firstIndex(of:), firstIndex(ofAny:) and count(of:) are.
+
+    @builtin("bytes_find")
+    public static fn findByte(_ bytes: U8[:], _ byte: U8) -> Int
+
+    @builtin("bytes_find_any")
+    public static fn findAnyByte(_ bytes: U8[:], _ candidates: U8[:]) -> Int
+
+    @builtin("bytes_count")
+    public static fn countByte(_ bytes: U8[:], _ byte: U8) -> Int
+
     /// The bytes as a string when they are well-formed UTF-8 — checked, then
     /// copied, in two passes over them — or none.
     public static fn decodeUtf8(bytes: U8[:]) -> String? {

@@ -147,9 +147,9 @@ fn main() {
     print(keys)
     var unique = Set<Int>()
     print("\(unique.insert(3)) \(unique.insert(3)) \(unique.insert(5)) \(unique.count)")
-    let ordered = sorted([5, 3, 9, 1])
+    let ordered = [5, 3, 9, 1].sorted()
     print("\(ordered[0]) \(ordered[3])")
-    let byLength = sorted(["ccc", "a", "bb"], by: (a: String, b: String) => a.count < b.count)
+    let byLength = ["ccc", "a", "bb"].sorted(by: (a: String, b: String) => a.count < b.count)
     print(byLength[0] + byLength[2])
 }
 """).Stdout

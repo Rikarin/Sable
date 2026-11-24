@@ -153,7 +153,7 @@ public sealed class CollectionLibraryTests {
                         all.append(x % 1000)
                         i = i + 1
                     }
-                    let expected = sorted(all, by: (a: Int, b: Int) => a > b)
+                    let expected = all.sorted(by: (a: Int, b: Int) => a > b)
                     var same = true
                     i = 0
                     while let v = q.pop() {
@@ -230,11 +230,11 @@ public sealed class CollectionLibraryTests {
                 @main
                 fn main() {
                     var xs: Int[>..] = [5, 3, 9, 1, 3, 8, 2, 7, 6, 4, 0, 11, 15, 13, 12, 14, 10, 19, 18, 17, 16]
-                    sort(&xs)
+                    xs.sort()
                     var line = ""
                     for x in xs { line = line + "\(x) " }
                     print(line)
-                    let words = sorted(["pear", "apple", "fig", "kiwi", "banana", "cherry", "date", "elder", "grape", "honeydew", "lime", "mango", "nectarine", "orange", "papaya", "quince", "raspberry"], by: (a: String, b: String) => a.count < b.count)
+                    let words = ["pear", "apple", "fig", "kiwi", "banana", "cherry", "date", "elder", "grape", "honeydew", "lime", "mango", "nectarine", "orange", "papaya", "quince", "raspberry"].sorted(by: (a: String, b: String) => a.count < b.count)
                     line = ""
                     for w in words { line = line + w + " " }
                     print(line)
@@ -248,7 +248,7 @@ public sealed class CollectionLibraryTests {
                         many.append(x % 100)
                         i = i + 1
                     }
-                    let ordered = sorted(many)
+                    let ordered = many.sorted()
                     var ascending = true
                     var sumBefore = 0
                     var sumAfter = 0
@@ -290,7 +290,7 @@ public sealed class CollectionLibraryTests {
                         i = i + 1
                     }
 
-                    sort(&keyed, by: (a: Int, b: Int) => a / 10000 < b / 10000)
+                    keyed.sort(by: (a: Int, b: Int) => a / 10000 < b / 10000)
                     var ordered = true
                     var stable = true
                     i = 1
@@ -302,7 +302,7 @@ public sealed class CollectionLibraryTests {
                     print("\(ordered) \(stable) \(keyed.count)")
 
                     // The key is the first digit; the four after it, the first index.
-                    let byKey = sorted(tagged, by: (a: String, b: String) => a.slice(from: 0, to: 1) < b.slice(from: 0, to: 1))
+                    let byKey = tagged.sorted(by: (a: String, b: String) => a.slice(from: 0, to: 1) < b.slice(from: 0, to: 1))
                     ordered = true
                     stable = true
                     i = 1

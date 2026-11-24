@@ -192,6 +192,31 @@ public sealed class ArrayConformanceTests {
     }
 
     [Fact]
+    public void AnArrayOfOneElementTypesOwnMemberBeatsTheGenericOne() =>
+        // 'extension U8[:]' over 'extension<Element> Element[:]': a byte
+        // array's own search is chosen where both fit, with nothing ambiguous;
+        // generic code, knowing only Element, still calls the generic one.
+        AssertClean(
+            """
+            extension<Element: Equatable> Element[:] {
+                fn probe(_ value: Element) -> Int { return 1 }
+            }
+            extension U8[:] {
+                fn probe(_ value: U8) -> Bool { return true }
+            }
+            fn bytes(_ values: U8[>..]) -> Bool {
+                return values.probe(2)
+            }
+            fn numbers(_ values: Int[>..]) -> Int {
+                return values.probe(2)
+            }
+            fn anything<T: Equatable>(_ values: T[:], _ value: T) -> Int {
+                return values.probe(value)
+            }
+            """
+        );
+
+    [Fact]
     public void OverloadsFromSeveralProtocolsAreOneSet() =>
         AssertClean(
             """

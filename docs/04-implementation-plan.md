@@ -1036,7 +1036,9 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   dictionary; removal closes the order up), `BitSet` (64 to a word, with
   union, intersection, subtraction and subset), and a stable merge sort —
   `sort(&values)` in place, `sorted(values)` a copy, either by `<` or by a
-  predicate (`tests/Sable.CodeGen.Tests/CollectionLibraryTests.cs`).
+  predicate (`tests/Sable.CodeGen.Tests/CollectionLibraryTests.cs`). (Since
+  #12 the sort is the arrays' own, `values.sort()` and `values.sorted()`,
+  and the free functions are gone.)
 - `Sable.IO`: `File` (read, readLines, write, append, exists, remove),
   `Directory` (exists, create, list — sorted byte by byte so every platform
   agrees — and remove), `Path` (join, fileName, directory, extension,

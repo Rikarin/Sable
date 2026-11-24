@@ -1,0 +1,36 @@
+module Sable.Core
+
+/// An async sequence's elements in arrays of so many, the last holding
+/// what is left: what 'chunked' on an AsyncSequence makes.
+public struct AsyncChunkedSequence<Base: AsyncSequence>: AsyncSequence {
+    let base: Base
+    let count: Int
+
+    /// An iterator from the first chunk.
+    public fn makeAsyncIterator() -> AsyncChunkedIterator<Base.Iter> {
+        return AsyncChunkedIterator<Base.Iter> { base: base.makeAsyncIterator(), count: count, done: false }
+    }
+}
+
+/// Gives an async iterator's elements in arrays of so many.
+public struct AsyncChunkedIterator<Base: AsyncIterator>: AsyncIterator {
+    var base: Base
+    let count: Int
+    var done: Bool
+
+    /// The next chunk: so many elements, fewer for the last, none past it.
+    public mutating fn next() async throws(Base.Failure) -> Base.Element[>..]? {
+        if done {
+            return none
+        }
+        var chunk: Base.Element[>..] = []
+        while chunk.count < count {
+            guard let element = try await base.next() else {
+                done = true
+                break
+            }
+            chunk.append(element)
+        }
+        return chunk.isEmpty ? none : chunk
+    }
+}

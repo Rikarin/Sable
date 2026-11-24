@@ -1,0 +1,339 @@
+module Sable.Concurrency
+
+// Streams fed from any code: a continuation yields values — from a task,
+// a callback on a thread of its own, a synchronous function — and the
+// stream's iterator waits for them. What they share is guarded by a lock
+// rather than an actor, so that yielding never waits; a consumer with
+// nothing to take parks in a wait list after taking its ticket, which a
+// yield between its look and its park makes it see (WaitList's
+// 'parkCancellably(since:)').
+
+/// An AsyncStream that cannot fail: an AsyncThrowingStream whose Failure
+/// is Never.
+///
+/// ```sable
+/// let (stream, continuation) = AsyncStream<Int>.make()
+/// let producer = Task.spawn {
+///     for i in 1...3 {
+///         continuation.yield(i)
+///     }
+///     continuation.finish()
+/// }
+/// var total = 0
+/// for await value in stream {
+///     total += value
+/// }
+/// await producer.value
+/// assert(total == 6)
+/// ```
+public alias AsyncStream<Element: Sendable> = AsyncThrowingStream<Element, Never>
+
+/// Values yielded through a continuation, as an async sequence: Swift's
+/// `AsyncStream` and `AsyncThrowingStream`, the bridge from callbacks and
+/// other code that does not wait to 'for await'. The continuation yields,
+/// and finishes the stream — with an error, for a throwing stream; values
+/// yielded faster than they are taken are held as the buffering policy
+/// says. The stream has one consumer at a time; its task's cancellation,
+/// while it waits for a value, ends the stream, and the continuation
+/// hears of it. A continuation let go without finishing finishes it.
+///
+/// ```sable
+/// enum Lost: Error {
+///     Connection
+/// }
+/// let (stream, continuation) = AsyncThrowingStream<Int, Lost>.make(bufferingPolicy: .BufferingNewest(2))
+/// for i in 1...5 {
+///     continuation.yield(i)
+/// }
+/// continuation.finish(throwing: .Connection)
+/// var kept: Int[>..] = []
+/// do {
+///     for try await value in stream {
+///         kept.append(value)
+///     }
+/// } catch {
+///     assert(error == .Connection)
+/// }
+/// assert(kept == [4, 5])
+/// ```
+@immutable
+public final class AsyncThrowingStream<Element: Sendable, Failure: Error>: AsyncSequence {
+    public alias Iter = StreamIterator<Element, Failure>
+
+    let core: StreamCore<Element, Failure>
+
+    init(_ core: StreamCore<Element, Failure>) {
+        self.core = core
+    }
+
+    /// A stream and the continuation that feeds it.
+    public static fn make(bufferingPolicy: StreamBufferingPolicy = .Unbounded) -> (AsyncThrowingStream<Element, Failure>, StreamContinuation<Element, Failure>) {
+        let core = StreamCore<Element, Failure>(bufferingPolicy)
+        return (AsyncThrowingStream<Element, Failure>(core), StreamContinuation<Element, Failure>(core))
+    }
+
+    /// A stream whose continuation is handed to the closure, now, to keep
+    /// for whatever feeds it.
+    ///
+    /// ```sable
+    /// let ticks = AsyncStream<Int>(bufferingPolicy: .Unbounded) { continuation in
+    ///     continuation.yield(1)
+    ///     continuation.finish()
+    /// }
+    /// ```
+    public init(bufferingPolicy: StreamBufferingPolicy = .Unbounded, _ build: (StreamContinuation<Element, Failure>) -> Void) {
+        core = StreamCore<Element, Failure>(bufferingPolicy)
+        build(StreamContinuation<Element, Failure>(core))
+    }
+
+    /// Its values as they are yielded, for 'for await'.
+    public fn makeAsyncIterator() -> StreamIterator<Element, Failure> {
+        return StreamIterator<Element, Failure> { core: core, done: false }
+    }
+}
+
+/// Feeds an AsyncStream: yields its values and finishes it, from any code
+/// and any thread. Sendable, so it may be handed to a callback or a task.
+@immutable
+public final class StreamContinuation<Element: Sendable, Failure: Error> {
+    let core: StreamCore<Element, Failure>
+
+    init(_ core: StreamCore<Element, Failure>) {
+        self.core = core
+    }
+
+    deinit {
+        core.end(.Finished, none)
+    }
+
+    /// Hands the value to the stream, without waiting: what became of it.
+    @discardable
+    public fn yield(_ value: Element) -> YieldResult<Element> {
+        return core.yield(value)
+    }
+
+    /// Ends the stream: its consumer has the values yielded so far, then
+    /// none. Values yielded after are not taken.
+    public fn finish() {
+        core.end(.Finished, none)
+    }
+
+    /// Ends the stream with an error, which its consumer throws once it has
+    /// the values yielded so far.
+    public fn finish(throwing error: Failure) {
+        core.end(.Finished, error)
+    }
+
+    /// The handler run once as the stream ends: finished, or cancelled by
+    /// its consumer's task. One set after the end runs at once.
+    public fn onTermination(_ onEnd: @escaping @Sendable (StreamTermination) -> Void) {
+        core.setOnTermination(onEnd)
+    }
+
+    /// Whether the stream has ended: it takes nothing more.
+    public var isTerminated: Bool => core.isTerminated
+}
+
+/// Takes an AsyncStream's values, waiting for each: what 'for await' goes
+/// through.
+public struct StreamIterator<Value: Sendable, Failure: Error>: AsyncIterator {
+    public alias Element = Value
+
+    let core: StreamCore<Value, Failure>
+    var done: Bool
+
+    /// The next value yielded; none once the stream is finished and its
+    /// values taken, or if the task is cancelled while it waits — which
+    /// ends the stream. A stream finished with an error throws it, once.
+    public mutating fn next() async throws(Failure) -> Value? {
+        if done {
+            return none
+        }
+        while true {
+            let ticket = core.arrived.ticket
+            match core.poll() {
+                case .Value(let value) => {
+                    return value
+                }
+                case .Ended => {
+                    done = true
+                    return none
+                }
+                case .Failed(let error) => {
+                    done = true
+                    throw error
+                }
+                case .Empty => { }
+            }
+            if Task.isCancelled {
+                done = true
+                core.end(.Cancelled, none)
+                return none
+            }
+            await core.arrived.parkCancellably(since: ticket)
+        }
+    }
+}
+
+/// What became of a value yielded to an AsyncStream.
+public union YieldResult<Element> {
+    /// It is held for the consumer, with room for so many more before the
+    /// buffering policy drops one (Int.max for an unbounded stream).
+    Enqueued(Int)
+    /// The stream was full and dropped this value: the one yielded, or the
+    /// oldest it held.
+    Dropped(Element)
+    /// The stream has ended, and takes nothing more.
+    Terminated
+}
+
+/// How an AsyncStream holds values yielded before its consumer takes them.
+public union StreamBufferingPolicy {
+    /// All of them.
+    Unbounded
+    /// At most so many: the first yielded, dropping those yielded after.
+    BufferingOldest(Int)
+    /// At most so many: the last yielded, dropping the oldest to make room.
+    BufferingNewest(Int)
+}
+
+/// Why an AsyncStream ended.
+@derive(Equatable, Hashable, Debug)
+public enum StreamTermination {
+    /// Its continuation finished it, with or without an error.
+    Finished
+    /// Its consumer's task was cancelled while it waited.
+    Cancelled
+}
+
+// What a look at a stream finds.
+union StreamPoll<Element, Failure> {
+    Value(Element)
+    Ended
+    Failed(Failure)
+    Empty
+}
+
+// What a stream's ends share: the values and how it ended, under a lock.
+struct StreamState<Element, Failure: Error> {
+    var queue: ValueQueue<Element> = ValueQueue<Element>()
+    var ended: Bool = false
+    var failure: Failure? = none
+    var endedBy: StreamTermination? = none
+    var onTermination: ((StreamTermination) -> Void)? = none
+
+    init() { }
+}
+
+@immutable
+final class StreamCore<Element: Sendable, Failure: Error> {
+    let state: Mutex<StreamState<Element, Failure>>
+    let arrived: WaitList
+    let limit: Int
+    let keepsNewest: Bool
+
+    init(_ policy: StreamBufferingPolicy) {
+        state = Mutex(StreamState<Element, Failure>())
+        arrived = WaitList()
+        match policy {
+            case .Unbounded => {
+                limit = Int.max
+                keepsNewest = false
+            }
+            case .BufferingOldest(let count) => {
+                precondition(count >= 0, "a stream cannot buffer \(count) values")
+                limit = count
+                keepsNewest = false
+            }
+            case .BufferingNewest(let count) => {
+                precondition(count >= 0, "a stream cannot buffer \(count) values")
+                limit = count
+                keepsNewest = true
+            }
+        }
+    }
+
+    fn yield(_ value: Element) -> YieldResult<Element> {
+        Runtime.share(value)
+        let limit = self.limit
+        let keepsNewest = self.keepsNewest
+        let result = state.withLock { (state: inout StreamState<Element, Failure>) -> YieldResult<Element> in
+            if state.ended {
+                return .Terminated
+            }
+            if state.queue.count < limit {
+                state.queue.append(value)
+                return .Enqueued(limit == Int.max ? Int.max : limit - state.queue.count)
+            }
+            if !keepsNewest || limit == 0 {
+                return .Dropped(value)
+            }
+            let oldest = state.queue.removeFirst()
+            state.queue.append(value)
+            return .Dropped(oldest)
+        }
+        match result {
+            case .Enqueued(_) => {
+                arrived.wakeAll()
+            }
+            case _ => { }
+        }
+        return result
+    }
+
+    fn poll() -> StreamPoll<Element, Failure> {
+        return state.withLock { (state: inout StreamState<Element, Failure>) -> StreamPoll<Element, Failure> in
+            if !state.queue.isEmpty {
+                return .Value(state.queue.removeFirst())
+            }
+            if !state.ended {
+                return .Empty
+            }
+            if let failure = state.failure {
+                // Thrown once; after that, the stream has simply ended.
+                state.failure = none
+                return .Failed(failure)
+            }
+            return .Ended
+        }
+    }
+
+    // Ended — finished, with or without an error, or cancelled — once; its
+    // handler run, outside the lock, and its consumer woken. A cancelled
+    // stream drops what it holds.
+    fn end(_ reason: StreamTermination, _ error: Failure?) {
+        let toRun = state.withLock { (state: inout StreamState<Element, Failure>) -> ((StreamTermination) -> Void)? in
+            if state.ended {
+                return none
+            }
+            state.ended = true
+            state.failure = error
+            if reason == .Cancelled {
+                state.queue.removeAll()
+            }
+            state.endedBy = reason
+            let onEnd = state.onTermination
+            state.onTermination = none
+            return onEnd
+        }
+        arrived.wakeAll()
+        if let onEnd = toRun {
+            onEnd(reason)
+        }
+    }
+
+    fn setOnTermination(_ onEnd: @escaping @Sendable (StreamTermination) -> Void) {
+        let late = state.withLock { (state: inout StreamState<Element, Failure>) -> StreamTermination? in
+            if let reason = state.endedBy {
+                return reason
+            }
+            state.onTermination = onEnd
+            return none
+        }
+        if let reason = late {
+            onEnd(reason)
+        }
+    }
+
+    var isTerminated: Bool => state.withLock { $0.ended }
+}

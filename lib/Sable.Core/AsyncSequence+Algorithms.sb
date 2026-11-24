@@ -1,0 +1,106 @@
+module Sable.Core
+
+// What every async sequence can do: views that transform it as it is gone
+// through ('map', 'filter', ...: each an AsyncSequence generic over the one
+// it views, made without waiting), and the waits that go through it to an
+// answer ('reduce', 'first(where:)', 'collect()'). Each answer is the
+// sequence's failure thrown, if it has one; the closures may await.
+
+extension AsyncSequence {
+    /// The elements, each transformed as it comes.
+    ///
+    /// ```sable
+    /// let doubled = await [1, 2, 3].async.map { $0 * 2 }.collect()
+    /// assert(doubled == [2, 4, 6])
+    /// ```
+    public fn map<T>(_ transform: @escaping async (Element) -> T) -> AsyncMapSequence<Self, T> {
+        return AsyncMapSequence<Self, T> { base: self, transform: transform }
+    }
+
+    /// The elements for which the closure is true, each tested as it comes.
+    public fn filter(_ isIncluded: @escaping async (Element) -> Bool) -> AsyncFilterSequence<Self> {
+        return AsyncFilterSequence<Self> { base: self, isIncluded: isIncluded }
+    }
+
+    /// The transformed elements that are not none.
+    public fn compactMap<T>(_ transform: @escaping async (Element) -> T?) -> AsyncCompactMapSequence<Self, T> {
+        return AsyncCompactMapSequence<Self, T> { base: self, transform: transform }
+    }
+
+    /// At most the first so many elements: once it has them it asks for no
+    /// more, so it ends an endless sequence.
+    public fn prefix(_ count: Int) -> AsyncPrefixSequence<Self> {
+        precondition(count >= 0, "a prefix of \(count) elements")
+        return AsyncPrefixSequence<Self> { base: self, count: count }
+    }
+
+    /// The elements up to the first for which the closure is false.
+    public fn prefix(while predicate: @escaping async (Element) -> Bool) -> AsyncPrefixWhileSequence<Self> {
+        return AsyncPrefixWhileSequence<Self> { base: self, predicate: predicate }
+    }
+
+    /// The elements in arrays of so many, the last holding what is left.
+    ///
+    /// ```sable
+    /// let sizes = await (1...5).async.chunked(2).map { $0.count }.collect()
+    /// assert(sizes == [2, 2, 1])
+    /// ```
+    public fn chunked(_ count: Int) -> AsyncChunkedSequence<Self> {
+        precondition(count > 0, "chunks of \(count) elements")
+        return AsyncChunkedSequence<Self> { base: self, count: count }
+    }
+
+    /// The closure applied to a running result and each element in turn,
+    /// starting from 'initial', once the sequence has ended.
+    public fn reduce<R>(_ initial: R, _ next: async (R, Element) -> R) async throws(Failure) -> R {
+        var result = initial
+        var iterator = makeAsyncIterator()
+        while let element = try await iterator.next() {
+            result = await next(result, element)
+        }
+        return result
+    }
+
+    /// The closure applied to a result it changes in place, and each
+    /// element in turn, starting from 'initial'.
+    public fn reduce<R>(into initial: R, _ update: async (inout R, Element) -> Void) async throws(Failure) -> R {
+        var result = initial
+        var iterator = makeAsyncIterator()
+        while let element = try await iterator.next() {
+            await update(&result, element)
+        }
+        return result
+    }
+
+    /// The first element for which the closure is true, or none if the
+    /// sequence ends first; it asks for no more after that one.
+    ///
+    /// ```sable
+    /// let big = await [3, 8, 12].async.first(where: { $0 > 5 })
+    /// assert(big == 8)
+    /// ```
+    public fn first(where predicate: async (Element) -> Bool) async throws(Failure) -> Element? {
+        var iterator = makeAsyncIterator()
+        while let element = try await iterator.next() {
+            if await predicate(element) {
+                return element
+            }
+        }
+        return none
+    }
+
+    /// Whether the closure is true for some element, asking for none after it.
+    public fn contains(where predicate: async (Element) -> Bool) async throws(Failure) -> Bool {
+        return try await first(where: predicate) != none
+    }
+
+    /// Every element, in an array, once the sequence has ended.
+    public fn collect() async throws(Failure) -> Element[>..] {
+        var elements: Element[>..] = []
+        var iterator = makeAsyncIterator()
+        while let element = try await iterator.next() {
+            elements.append(element)
+        }
+        return elements
+    }
+}

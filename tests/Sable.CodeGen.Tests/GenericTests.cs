@@ -819,4 +819,40 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    /// <summary>
+    ///     A generic function's closure that captures an object of a generic
+    ///     class with a deinit, over its type parameter's associated types —
+    ///     'Box<S.Element>' — whose deinit instance is the one for the
+    ///     function's instance, once S is known.
+    /// </summary>
+    [Fact]
+    public void AClosureCapturesAGenericObjectOverAnAssociatedType() {
+        var run = AssertAgree(Program(
+            """
+            final class Box<T> {
+                let value: T
+
+                init(_ value: T) {
+                    self.value = value
+                }
+
+                deinit {
+                    print("box gone")
+                }
+            }
+
+            fn firstBoxed<S: Sequence>(_ values: S) -> () -> Int where S.Failure == Never, S.Element == Int {
+                var iterator = values.makeIterator()
+                let box = Box<S.Element>(iterator.next() ?? 0)
+                return { box.value }
+            }
+            """,
+            """
+                let first = firstBoxed([7, 8])
+                print(first())
+            """
+        ));
+        Assert.Equal("7\nbox gone\n", run.Stdout);
+    }
 }

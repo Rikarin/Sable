@@ -1,0 +1,159 @@
+module BroadcastTests
+
+// Broadcast and BroadcastReceiver (Sable.Concurrency), tested with '@test':
+// run with
+//     tools/stdlib-coverage.sh Sable.Concurrency
+
+import Sable.Concurrency
+import Sable.Testing
+
+fn settle() async {
+    for _ in 0..<20 {
+        await Task.yield()
+    }
+}
+
+@test
+fn everyReceiverGetsEveryValue() async {
+    let broadcast = Broadcast<Int>(capacity: 16)
+    var readers: Task<Int[>..]>[>..] = []
+    for _ in 0..<3 {
+        let receiver = broadcast.subscribe()
+        readers.append(Task.spawn {
+            var got: Int[>..] = []
+            for await value in receiver {
+                got.append(value)
+            }
+            return got
+        })
+    }
+    for i in 1...10 {
+        broadcast.send(i)
+        if i % 3 == 0 {
+            await settle()
+        }
+    }
+    broadcast.close()
+    for reader in readers {
+        assert(await reader.value == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    }
+}
+
+@test
+fn aReceiverGetsOnlyWhatIsSentAfterItSubscribed() async {
+    let broadcast = Broadcast<Int>(capacity: 4)
+    broadcast.send(1)
+    var receiver = broadcast.subscribe()
+    broadcast.send(2)
+    assert(await receiver.receive() == 2)
+    assert(receiver.tryReceive() == none)
+}
+
+@test
+fn aReceiverWaitsForAValue() async {
+    let broadcast = Broadcast<String>(capacity: 2)
+    let receiver = broadcast.subscribe()
+    let reader = Task.spawn {
+        var mine = receiver
+        return await mine.receive()
+    }
+    await settle()
+    broadcast.send("now")
+    assert(await reader.value == "now")
+}
+
+@test
+fn aReceiverTooFarBehindMissesTheOldest() async {
+    let broadcast = Broadcast<Int>(capacity: 3)
+    assertEqual(broadcast.capacity, 3)
+    var receiver = broadcast.subscribe()
+    for i in 1...7 {
+        broadcast.send(i)
+    }
+    assert(await receiver.receive() == 5)
+    assertEqual(receiver.missed, 4)
+    assert(receiver.tryReceive() == 6)
+    assert(receiver.tryReceive() == 7)
+    assertEqual(receiver.missed, 4)
+}
+
+@test
+fn closingDeliversWhatIsLeftThenNone() async {
+    let broadcast = Broadcast<Int>(capacity: 4)
+    var receiver = broadcast.subscribe()
+    broadcast.send(1)
+    broadcast.close()
+    assert(broadcast.isClosed)
+    assert(!broadcast.send(2))
+    assert(await receiver.receive() == 1)
+    assert(await receiver.receive() == none)
+    assert(receiver.tryReceive() == none)
+}
+
+@test
+fn closingWakesAWaitingReceiver() async {
+    let broadcast = Broadcast<Int>(capacity: 1)
+    let receiver = broadcast.subscribe()
+    let reader = Task.spawn {
+        var mine = receiver
+        return await mine.receive()
+    }
+    await settle()
+    broadcast.close()
+    assert(await reader.value == none)
+}
+
+@test
+fn aWaitingReceiveIsCancelled() async {
+    let broadcast = Broadcast<Int>(capacity: 1)
+    let receiver = broadcast.subscribe()
+    let reader = Task.spawn {
+        var mine = receiver
+        return await mine.receive()
+    }
+    await settle()
+    reader.cancel()
+    assert(await reader.value == none)
+}
+
+@test
+fn receiversGoAtTheirOwnPace() async {
+    let broadcast = Broadcast<Int>(capacity: 8)
+    var fast = broadcast.subscribe()
+    var slow = broadcast.subscribe()
+    broadcast.send(1)
+    broadcast.send(2)
+    assert(await fast.receive() == 1)
+    assert(await fast.receive() == 2)
+    assert(await slow.receive() == 1)
+    broadcast.send(3)
+    assert(await slow.receive() == 2)
+    assert(await slow.receive() == 3)
+    assert(await fast.receive() == 3)
+}
+
+@test
+fn valuesSentFromManyThreadsReachEveryone() async {
+    let broadcast = Broadcast<Int>(capacity: 512)
+    let receiver = broadcast.subscribe()
+    let reader = Task.spawn {
+        var total = 0
+        for await value in receiver {
+            total += value
+        }
+        return total
+    }
+    var senders: Task<Void>[>..] = []
+    for s in 0..<4 {
+        senders.append(Task.detached {
+            for i in 0..<50 {
+                broadcast.send(s * 50 + i)
+            }
+        })
+    }
+    for sender in senders {
+        await sender.value
+    }
+    broadcast.close()
+    assertEqual(await reader.value, 19900)
+}

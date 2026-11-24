@@ -348,6 +348,97 @@ fn main() {
     }
 
     /// <summary>
+    ///     Channels bounded and not, their full modes, a blocked send and a
+    ///     blocked receive cancelled (the runtime's cancellable park), a
+    ///     channel closed with an error, a stream fed through its
+    ///     continuation, a broadcast, a watch, a oneshot and the async
+    ///     sequence operators: the same natively and interpreted, and
+    ///     leak-checked, the tasks the operators start among it.
+    /// </summary>
+    [Fact, Native]
+    public void ChannelsStreamsAndOperatorsAgreeBothWays() {
+        var run = AssertAgree(
+            """
+            module P
+            import Sable.Concurrency
+            import Sable.Time
+
+            enum Lost: Error {
+                Connection
+            }
+
+            fn settle() async {
+                for _ in 0..<50 {
+                    await Task.yield()
+                }
+            }
+
+            @main
+            fn main() async {
+                let bounded = Channel<Int>(capacity: 1)
+                print(await bounded.send(1) == .Sent)
+                let sender = Task.spawn { await bounded.send(2) }
+                await settle()
+                sender.cancel()
+                print(await sender.value == .Cancelled)
+                let empty = Channel<Int>()
+                let receiver = Task.spawn { await empty.receive() }
+                await settle()
+                receiver.cancel()
+                print(await receiver.value == none)
+                let dropping = Channel<Int>(capacity: 2, fullMode: .DropOldest)
+                for i in 1...4 {
+                    await dropping.send(i)
+                }
+                await dropping.close()
+                print(await dropping.collect())
+                let failing = ThrowingChannel<Int, Lost>()
+                await failing.send(7)
+                await failing.close(error: .Connection)
+                do {
+                    for try await value in failing {
+                        print(value)
+                    }
+                } catch {
+                    print("lost")
+                }
+                let (stream, continuation) = AsyncStream<Int>.make(bufferingPolicy: .BufferingNewest(2))
+                for i in 1...3 {
+                    continuation.yield(i)
+                }
+                continuation.finish()
+                print(await stream.collect())
+                let news = Broadcast<String>(capacity: 4)
+                var first = news.subscribe()
+                var second = news.subscribe()
+                news.send("hi")
+                news.close()
+                print(await first.receive() ?? "-")
+                print(await second.receive() ?? "-")
+                let watch = Watch<Int>(0)
+                var watcher = watch.subscribe()
+                watch.send(1)
+                watch.send(2)
+                print(await watcher.changed() ?? -1)
+                let reply = Oneshot<Int>()
+                print(reply.send(5))
+                print(await reply.receive() ?? -1)
+                print(await merge([1, 2].async, [3].async).reduce(0) { $0 + $1 })
+                print(await (1...5).async.filter { $0 % 2 == 1 }.map { $0 * 10 }.chunked(2).collect().count)
+                let input = Channel<Int>()
+                for i in 1...3 {
+                    await input.send(i)
+                }
+                await input.close()
+                print(await input.debounce(for: Duration.seconds(60)).collect())
+                print(await input.throttle(for: Duration.seconds(60)).collect())
+            }
+            """
+        );
+        Assert.Equal("true\ntrue\ntrue\n[3, 4]\n7\nlost\n[2, 3]\nhi\nhi\n2\ntrue\n5\n6\n2\n[3]\n[]\n", run.Stdout);
+    }
+
+    /// <summary>
     ///     The environment written and read back, the known folders by each
     ///     system's rules, and the platform as the program and the compiler
     ///     name it: the same natively and interpreted, where set and remove

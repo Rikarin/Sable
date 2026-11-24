@@ -1,0 +1,131 @@
+module AsyncMerge2SequenceTests
+
+// merge(_:_:) and AsyncMerge2Sequence (Sable.Concurrency), tested with
+// '@test': run with
+//     tools/stdlib-coverage.sh Sable.Concurrency
+
+import Sable.Concurrency
+import Sable.Testing
+
+enum Broken: Error {
+    Down
+}
+
+fn settle() async {
+    for _ in 0..<20 {
+        await Task.yield()
+    }
+}
+
+// Waits, a millisecond at a time, until the condition holds: for what other
+// tasks, on other threads, are to have done (gives up after five seconds).
+fn until(_ condition: () -> Bool) async {
+    var waited = 0
+    while !condition() && waited < 5000 {
+        try? await Task.sleep(nanoseconds: 1_000_000)
+        waited += 1
+    }
+}
+
+@test
+fn mergeGivesEveryElementOfBoth() async {
+    let first = Channel<Int>()
+    let second = Channel<Int>()
+    for i in 0..<5 {
+        await first.send(i)
+        await second.send(100 + i)
+    }
+    await first.close()
+    await second.close()
+    var got = await merge(first, second).collect()
+    got.sort()
+    assert(got == [0, 1, 2, 3, 4, 100, 101, 102, 103, 104])
+}
+
+@test
+fn mergeKeepsEachSequencesOrder() async {
+    let first = Channel<Int>()
+    let second = Channel<Int>()
+    let producer = Task.spawn {
+        for i in 0..<20 {
+            await first.send(i)
+            await second.send(1000 + i)
+        }
+        await first.close()
+        await second.close()
+    }
+    var lastFirst = -1
+    var lastSecond = 999
+    var count = 0
+    for await value in merge(first, second) {
+        if value < 1000 {
+            assert(value > lastFirst)
+            lastFirst = value
+        } else {
+            assert(value > lastSecond)
+            lastSecond = value
+        }
+        count += 1
+    }
+    await producer.value
+    assertEqual(count, 40)
+}
+
+@test
+fn mergeGivesElementsAsTheyCome() async {
+    let first = Channel<Int>()
+    let second = Channel<Int>()
+    var iterator = merge(first, second).makeAsyncIterator()
+    await second.send(2)
+    assert(await iterator.next() == 2)
+    await first.send(1)
+    assert(await iterator.next() == 1)
+    await first.close()
+    await second.send(3)
+    assert(await iterator.next() == 3)
+    await second.close()
+    assert(await iterator.next() == none)
+}
+
+@test
+fn mergeEndsWithTheFirstError() async {
+    let first = ThrowingChannel<Int, Broken>()
+    let second = ThrowingChannel<Int, Broken>()
+    await first.close(error: .Down)
+    var iterator = merge(first, second).makeAsyncIterator()
+    do {
+        let _ = try await iterator.next()
+        assert(false)
+    } catch {
+        assert(error == .Down)
+    }
+    await second.close()
+}
+
+@test
+fn mergeOfArraysGivesThemAll() async {
+    let total = await merge([1, 2, 3].async, [10, 20].async).reduce(0) { $0 + $1 }
+    assertEqual(total, 36)
+}
+
+@test
+fn aCancelledConsumerStopsWaiting() async {
+    let first = Channel<Int>()
+    let second = Channel<Int>()
+    let seen = Atomic(0)
+    let consumer = Task.spawn {
+        for await _ in merge(first, second) {
+            seen.store(seen.load() + 1)
+        }
+        return seen.load()
+    }
+    await first.send(1)
+    await until { seen.load() == 1 }
+    consumer.cancel()
+    assertEqual(await consumer.value, 1)
+    // The merge's tasks were cancelled with the iterator: they take no more.
+    try? await Task.sleep(nanoseconds: 20_000_000)
+    await first.send(2)
+    try? await Task.sleep(nanoseconds: 20_000_000)
+    assertEqual(await first.count, 1)
+}

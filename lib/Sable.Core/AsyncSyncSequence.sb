@@ -1,0 +1,32 @@
+module Sable.Core
+
+/// A sequence's elements as an async sequence, each there at once: what
+/// '.async' makes, to hand an array to what takes an AsyncSequence.
+///
+/// ```sable
+/// let total = await [1, 2, 3].async.reduce(0) { $0 + $1 }
+/// assert(total == 6)
+/// ```
+public struct AsyncSyncSequence<Base: Sequence>: AsyncSequence {
+    let base: Base
+
+    /// An iterator from the first element.
+    public fn makeAsyncIterator() -> AsyncSyncIterator<Base.Iter> {
+        return AsyncSyncIterator<Base.Iter> { base: base.makeIterator() }
+    }
+}
+
+/// Gives an iterator's elements, awaited without waiting.
+public struct AsyncSyncIterator<Base: Iterator>: AsyncIterator {
+    var base: Base
+
+    /// The next element, or none past the last.
+    public mutating fn next() async throws(Base.Failure) -> Base.Element? {
+        return try base.next()
+    }
+}
+
+extension Sequence {
+    /// The elements as an async sequence, each there at once.
+    public var `async`: AsyncSyncSequence<Self> => AsyncSyncSequence<Self> { base: self }
+}

@@ -254,8 +254,12 @@ internal sealed class Conversions(CoreTypes core) {
         }
 
         // Sendable is met by what a type is made of, not by declaring it.
+        // A type parameter is Sendable too where the code around requires it
+        // to be: 'extension AsyncSequence where Self: Sendable'.
         if (Sendability.IsSendableProtocol(constraint)) {
-            return Sendability.IsSendable(source);
+            return Sendability.IsSendable(source)
+                || source is TypeParameterSymbol or DependentMemberTypeSymbol
+                && AssociatedTypes.ConstraintsOf(source, context).Any(c => Satisfies(c, constraint, context));
         }
 
         // A type parameter satisfies only what it was constrained to: an

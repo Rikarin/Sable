@@ -1,0 +1,164 @@
+module Sable.Concurrency
+
+/// A value that changes, and the tasks that watch it: Rust's
+/// `tokio::sync::watch`. It holds its latest value alone; a receiver waits
+/// for one newer than the last it saw and gets the newest, so a slow
+/// receiver skips the values between, never falls behind. Sending never
+/// waits, from any code. Closed, it takes no more, and a receiver that has
+/// seen the last value gets none.
+///
+/// ```sable
+/// let config = Watch<Int>(1)
+/// var watcher = config.subscribe()
+/// config.send(2)
+/// config.send(3)
+/// assert(await watcher.changed() == 3)   // the newest: 2 is skipped
+/// assert(config.value == 3)
+/// ```
+@immutable
+public final class Watch<T: Sendable>: AsyncSequence {
+    public alias Iter = WatchReceiver<T>
+
+    let state: Mutex<WatchState<T>>
+    let changes: WaitList
+
+    /// One holding the value, as its first version.
+    public init(_ initial: T) {
+        state = Mutex(WatchState<T>(initial))
+        changes = WaitList()
+    }
+
+    /// The latest value.
+    public var value: T => state.withLock { $0.value }
+
+    /// How many times it has changed: 0 for the value it was made with.
+    public var version: Int => state.withLock { $0.version }
+
+    /// Whether it has been closed.
+    public var isClosed: Bool => state.withLock { $0.closed }
+
+    /// The value replaced, and its receivers woken: whether it was taken,
+    /// false once closed.
+    @discardable
+    public fn send(_ value: T) -> Bool {
+        Runtime.share(value)
+        let taken = state.withLock { (state: inout WatchState<T>) -> Bool in
+            if state.closed {
+                return false
+            }
+            state.value = value
+            state.version += 1
+            return true
+        }
+        if taken {
+            changes.wakeAll()
+        }
+        return taken
+    }
+
+    /// The value changed in place by the closure, as one send.
+    ///
+    /// ```sable
+    /// let count = Watch<Int>(0)
+    /// count.update { $0 += 5 }
+    /// assert(count.value == 5 && count.version == 1)
+    /// ```
+    @discardable
+    public fn update(_ change: (inout T) -> Void) -> Bool {
+        let taken = state.withLock { (state: inout WatchState<T>) -> Bool in
+            if state.closed {
+                return false
+            }
+            change(&state.value)
+            state.version += 1
+            return true
+        }
+        if taken {
+            changes.wakeAll()
+        }
+        return taken
+    }
+
+    /// No more values will come: receivers that have seen the latest get
+    /// none from now on.
+    public fn close() {
+        state.withLock { $0.closed = true }
+        changes.wakeAll()
+    }
+
+    /// A receiver of the changes from now on: the value now counts as seen.
+    public fn subscribe() -> WatchReceiver<T> {
+        return WatchReceiver<T> { watch: self, seen: version }
+    }
+
+    /// A receiver that gives the value now, then each change, for 'for await'.
+    public fn makeAsyncIterator() -> WatchReceiver<T> {
+        return WatchReceiver<T> { watch: self, seen: -1 }
+    }
+}
+
+/// Watches a Watch: the version it saw last, and the newer ones as they
+/// come. Sendable: made in one task, it may be handed to another.
+public struct WatchReceiver<T: Sendable>: AsyncIterator, AsyncSequence {
+    public alias Element = T
+    public alias Iter = WatchReceiver<T>
+
+    let watch: Watch<T>
+    var seen: Int
+
+    /// Whether the watch holds a value newer than the last seen.
+    public var hasChanged: Bool => watch.version > seen
+
+    /// The latest value, which now counts as seen.
+    public mutating fn borrowAndMarkSeen() -> T {
+        let (value, version) = watch.state.withLock { ($0.value, $0.version) }
+        seen = version
+        return value
+    }
+
+    /// A value newer than the last seen — the newest — waiting for one;
+    /// none once the watch is closed and its last value seen, or if the
+    /// task is cancelled while it waits.
+    public mutating fn changed() async -> T? {
+        while true {
+            let ticket = watch.changes.ticket
+            let seen = self.seen
+            let (value, version, closed) = watch.state.withLock { (state: inout WatchState<T>) -> (T?, Int, Bool) in
+                if state.version > seen {
+                    return (state.value, state.version, state.closed)
+                }
+                return (none, state.version, state.closed)
+            }
+            if let value = value {
+                self.seen = version
+                return value
+            }
+            if closed || Task.isCancelled {
+                return none
+            }
+            await watch.changes.parkCancellably(since: ticket)
+        }
+    }
+
+    /// As 'changed()': what 'for await' goes through.
+    public mutating fn next() async -> T? {
+        return await changed()
+    }
+
+    /// Itself, from the version it saw last.
+    public fn makeAsyncIterator() -> WatchReceiver<T> {
+        return self
+    }
+}
+
+struct WatchState<T> {
+    var value: T
+    var version: Int
+    var closed: Bool
+
+    init(_ value: T) {
+        self.value = value
+        version = 0
+        closed = false
+    }
+}

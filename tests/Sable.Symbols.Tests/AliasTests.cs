@@ -126,4 +126,41 @@ public sealed class AliasTests {
     [InlineData("fn take(_ b: Box<Int>) { }\nfn use() { take(.Full(value: 1)) }")]
     [InlineData("fn make() -> Result<Int> { return Result<Int>.Failed(error: .Broken) }")]
     public void AGenericUnionCaseTakesItsArgumentsFromTheContext(string source) => AssertClean(Box + "\n" + source);
+
+    // ---- A generic alias's constraints ----------------------------------
+
+    /// <summary>
+    ///     'alias Channel<T: Sendable> = Queue<T, Never>': the constraint
+    ///     written on the alias's parameter holds in what it names, which
+    ///     requires it — and a use with a type that does not meet it is
+    ///     refused, as a use of the named type would be.
+    /// </summary>
+    [Fact]
+    public void AGenericAliasParametersConstraintHoldsInWhatItNames() {
+        const string declarations = """
+                                    final class Queue<T: Sendable, E: Error> { init() { } }
+                                    alias Channel<T: Sendable> = Queue<T, Never>
+                                    """;
+        AssertClean(declarations + "\nfn make() -> Channel<Int> { return Channel<Int>() }");
+        Assert.Contains(
+            ErrorsIn(declarations + "\nclass Shared { var n = 0 }\nfn make() -> Channel<Shared> { return Channel<Shared>() }"),
+            static e => e.Message.Contains("Sendable")
+        );
+    }
+
+    /// <summary>
+    ///     An extension's 'where Self: Sendable, Element: Sendable' makes a
+    ///     protocol's Self and its associated types Sendable in its members,
+    ///     as a type parameter's own constraint would.
+    /// </summary>
+    [Fact]
+    public void AnExtensionsWhereClauseMakesItsTypesSendable() =>
+        AssertClean(
+            """
+            struct Pump<S: Sequence> where S: Sendable, S.Element: Sendable { let base: S }
+            extension Sequence where Self: Sendable, Element: Sendable {
+                fn pumped() -> Pump<Self> { return Pump<Self> { base: self } }
+            }
+            """
+        );
 }

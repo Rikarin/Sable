@@ -1,0 +1,18 @@
+module Sable.Concurrency
+
+import Sable.Time
+
+/// What 'throttle(for:latest:)' makes: at most one element per interval.
+public struct AsyncThrottleSequence<Base: AsyncSequence>: AsyncSequence where Base: Sendable, Base.Element: Sendable {
+    let base: Base
+    let interval: Duration
+    let latest: Bool
+
+    /// An iterator of the elements from now on: the task that goes through
+    /// the sequence is started.
+    public fn makeAsyncIterator() -> AsyncTimedIterator<Base.Element, Base.Failure> {
+        let (stream, continuation) = AsyncThrowingStream<Base.Element, Base.Failure>.make()
+        let gate = TimedGate<Base.Element, Base.Failure>(continuation, interval, debounce: false, latest: latest)
+        return startTimed(base, gate, stream, continuation)
+    }
+}

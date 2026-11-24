@@ -1,10 +1,33 @@
 module ChannelTests
 
-// Channel and ChannelIterator (Sable.Concurrency), tested with '@test': run with
+// Channel, ThrowingChannel and ChannelIterator (Sable.Concurrency), tested
+// with '@test': run with
 //     tools/stdlib-coverage.sh Sable.Concurrency
 
 import Sable.Concurrency
 import Sable.Testing
+
+enum Broken: Error {
+    Down
+}
+
+// Lets every task queued run, a few times over, so that those that can
+// get as far as they can go.
+fn settle() async {
+    for _ in 0..<20 {
+        await Task.yield()
+    }
+}
+
+// Waits, a millisecond at a time, until the condition holds: for what other
+// tasks, on other threads, are to have done (gives up after five seconds).
+fn until(_ condition: () -> Bool) async {
+    var waited = 0
+    while !condition() && waited < 5000 {
+        try? await Task.sleep(nanoseconds: 1_000_000)
+        waited += 1
+    }
+}
 
 @test
 fn valuesComeInTheOrderSent() async {
@@ -39,12 +62,26 @@ fn aClosedEmptyChannelGivesNone() async {
 }
 
 @test
-fn aValueSentAfterClosingIsDropped() async {
+fn aValueSentAfterClosingIsRefused() async {
     let channel = Channel<Int>()
     await channel.close()
-    await channel.send(1)
-    assertEqual(await channel.pending, 0)
+    assert(await channel.send(1) == .Closed)
+    assert(await channel.trySend(1) == .Closed)
+    assertEqual(await channel.count, 0)
     assert(await channel.tryReceive() == none)
+}
+
+@test
+fn closingKeepsWhatIsQueuedForReceivers() async {
+    let channel = Channel<Int>(capacity: 4)
+    await channel.send(1)
+    await channel.send(2)
+    await channel.close()
+    await channel.close()
+    assertEqual(await channel.receive() ?? 0, 1)
+    assertEqual(await channel.receive() ?? 0, 2)
+    assert(await channel.receive() == none)
+    assert(await channel.receive() == none)
 }
 
 @test
@@ -53,15 +90,293 @@ fn tryReceiveTakesWhatIsThere() async {
     assert(await channel.tryReceive() == none)
     await channel.send(7)
     await channel.send(8)
-    assertEqual(await channel.pending, 2)
+    assertEqual(await channel.count, 2)
+    assert(!(await channel.isEmpty))
     assertEqual(await channel.tryReceive() ?? 0, 7)
     assertEqual(await channel.receive() ?? 0, 8)
-    assertEqual(await channel.pending, 0)
+    assertEqual(await channel.count, 0)
+    assert(await channel.isEmpty)
+}
+
+@test
+fn anUnboundedChannelHasNoCapacity() {
+    let channel = Channel<Int>()
+    assert(channel.capacity == none)
+    assert(channel.fullMode == .Wait)
+    let bounded = Channel<Int>(capacity: 3, fullMode: .DropOldest)
+    assert(bounded.capacity == 3)
+    assert(bounded.fullMode == .DropOldest)
+}
+
+@test
+fn aFullChannelMakesItsSenderWait() async {
+    let channel = Channel<Int>(capacity: 2)
+    assert(await channel.send(1) == .Sent)
+    assert(await channel.send(2) == .Sent)
+    let sent = Atomic(0)
+    let sender = Task.spawn {
+        let result = await channel.send(3)
+        sent.store(1)
+        return result
+    }
+    await settle()
+    assertEqual(sent.load(), 0)
+    assertEqual(await channel.count, 2)
+    assertEqual(await channel.receive() ?? 0, 1)
+    assert(await sender.value == .Sent)
+    assertEqual(sent.load(), 1)
+    assertEqual(await channel.receive() ?? 0, 2)
+    assertEqual(await channel.receive() ?? 0, 3)
+}
+
+@test
+fn trySendOnAFullWaitingChannelIsFull() async {
+    let channel = Channel<Int>(capacity: 1)
+    assert(await channel.trySend(1) == .Sent)
+    assert(await channel.trySend(2) == .Full)
+    assertEqual(await channel.count, 1)
+}
+
+@test
+fn backpressureKeepsTheProducerWithinTheCapacity() async {
+    let channel = Channel<Int>(capacity: 3)
+    let produced = Atomic(0)
+    let producer = Task.spawn {
+        for i in 0..<20 {
+            await channel.send(i)
+            produced.store(i + 1)
+        }
+        await channel.close()
+    }
+    var received = 0
+    var most = 0
+    while let value = await channel.receive() {
+        assertEqual(value, received)
+        received += 1
+        // Sent but not received: never more than the channel holds and the
+        // one a sender may be about to report.
+        let ahead = produced.load() - received
+        if ahead > most {
+            most = ahead
+        }
+        await settle()
+    }
+    await producer.value
+    assertEqual(received, 20)
+    assert(most <= 3, "the producer ran \(most) ahead")
+}
+
+@test
+fn dropOldestMakesRoomByDroppingTheOldest() async {
+    let channel = Channel<Int>(capacity: 2, fullMode: .DropOldest)
+    for i in 1...5 {
+        assert(await channel.send(i) == .Sent)
+    }
+    await channel.close()
+    assert(await channel.collect() == [4, 5])
+}
+
+@test
+fn dropNewestMakesRoomByDroppingTheNewestWaiting() async {
+    let channel = Channel<Int>(capacity: 2, fullMode: .DropNewest)
+    for i in 1...5 {
+        assert(await channel.send(i) == .Sent)
+    }
+    await channel.close()
+    assert(await channel.collect() == [1, 5])
+}
+
+@test
+fn dropWriteDropsTheValueSent() async {
+    let channel = Channel<Int>(capacity: 2, fullMode: .DropWrite)
+    assert(await channel.send(1) == .Sent)
+    assert(await channel.send(2) == .Sent)
+    assert(await channel.send(3) == .Dropped)
+    assert(await channel.trySend(4) == .Dropped)
+    await channel.close()
+    assert(await channel.collect() == [1, 2])
+}
+
+@test
+fn aBlockedSendIsCancelled() async {
+    let channel = Channel<Int>(capacity: 1)
+    await channel.send(1)
+    let sender = Task.spawn { await channel.send(2) }
+    await settle()
+    sender.cancel()
+    assert(await sender.value == .Cancelled)
+    // Nothing was sent, and the channel goes on.
+    assertEqual(await channel.count, 1)
+    assertEqual(await channel.receive() ?? 0, 1)
+    assert(await channel.send(3) == .Sent)
+    assertEqual(await channel.receive() ?? 0, 3)
+}
+
+@test
+fn aBlockedReceiveIsCancelled() async {
+    let channel = Channel<Int>()
+    let receiver = Task.spawn { await channel.receive() }
+    await settle()
+    receiver.cancel()
+    assert(await receiver.value == none)
+    // The value sent after is not lost to the cancelled receiver.
+    await channel.send(9)
+    assertEqual(await channel.receive() ?? 0, 9)
+}
+
+@test
+fn aCancelledTaskDoesNotWaitAtAll() async {
+    let channel = Channel<Int>(capacity: 1)
+    await channel.send(1)
+    let task = Task.spawn {
+        while !Task.isCancelled {
+            await Task.yield()
+        }
+        let sent = await channel.send(2)
+        let empty = Channel<Int>()
+        let received = await empty.receive()
+        return sent == .Cancelled && received == none
+    }
+    task.cancel()
+    assert(await task.value)
+}
+
+@test
+fn aForAwaitLoopEndsWhenItsTaskIsCancelled() async {
+    let channel = Channel<Int>()
+    let seen = Atomic(0)
+    let consumer = Task.spawn {
+        for await _ in channel {
+            seen.store(seen.load() + 1)
+        }
+        return seen.load()
+    }
+    await channel.send(1)
+    await until { seen.load() == 1 }
+    consumer.cancel()
+    assertEqual(await consumer.value, 1)
+}
+
+@test
+fn closingWakesWaitingSendersAndReceivers() async {
+    let full = Channel<Int>(capacity: 1)
+    await full.send(1)
+    let sender = Task.spawn { await full.send(2) }
+    let empty = Channel<Int>()
+    let receiver = Task.spawn { await empty.receive() }
+    await settle()
+    await full.close()
+    await empty.close()
+    assert(await sender.value == .Closed)
+    assert(await receiver.value == none)
+    assertEqual(await full.receive() ?? 0, 1)
+}
+
+@test
+fn closingWithAnErrorThrowsItOnceDrained() async {
+    let channel = ThrowingChannel<Int, Broken>()
+    await channel.send(1)
+    await channel.close(error: .Down)
+    await channel.close()
+    assert(await channel.isClosed)
+    assertEqual(try! await channel.receive() ?? 0, 1)
+    var threw = 0
+    for _ in 0..<2 {
+        do {
+            let _ = try await channel.receive()
+        } catch {
+            assert(error == .Down)
+            threw += 1
+        }
+    }
+    assertEqual(threw, 2)
+}
+
+@test
+fn aWaitingReceiverGetsTheError() async {
+    let channel = ThrowingChannel<Int, Broken>()
+    let receiver = Task.spawn {
+        do {
+            let _ = try await channel.receive()
+            return false
+        } catch {
+            return true
+        }
+    }
+    await settle()
+    await channel.close(error: .Down)
+    assert(await receiver.value)
+}
+
+@test
+fn aForTryAwaitLoopThrowsTheErrorAfterTheValues() async {
+    let channel = ThrowingChannel<Int, Broken>(capacity: 4)
+    await channel.send(1)
+    await channel.send(2)
+    await channel.close(error: .Down)
+    var got: Int[>..] = []
+    var iterator = channel.makeAsyncIterator()
+    do {
+        while let value = try await iterator.next() {
+            got.append(value)
+        }
+        assert(false)
+    } catch {
+        assert(error == .Down)
+    }
+    assert(got == [1, 2])
+    // Once it has thrown, none.
+    assert(try! await iterator.next() == none)
+}
+
+@test
+fn closingWithoutAnErrorEndsAThrowingChannelQuietly() async throws {
+    let channel = ThrowingChannel<Int, Broken>()
+    await channel.send(1)
+    await channel.close()
+    await channel.close(error: .Down)
+    var got: Int[>..] = []
+    for try await value in channel {
+        got.append(value)
+    }
+    assert(got == [1])
+}
+
+@test
+fn eachValueGoesToOneOfManyReceivers() async {
+    let channel = Channel<Int>(capacity: 4)
+    var receivers: Task<Int[>..]>[>..] = []
+    for _ in 0..<3 {
+        receivers.append(Task.spawn {
+            var mine: Int[>..] = []
+            for await value in channel {
+                mine.append(value)
+            }
+            return mine
+        })
+    }
+    for i in 0..<60 {
+        await channel.send(i)
+    }
+    await channel.close()
+    var seen: Bool[>..] = []
+    for _ in 0..<60 {
+        seen.append(false)
+    }
+    var total = 0
+    for receiver in receivers {
+        for value in await receiver.value {
+            assert(!seen[value], "\(value) received twice")
+            seen[value] = true
+            total += 1
+        }
+    }
+    assertEqual(total, 60)
 }
 
 @test
 fn manySendersAndReceiversLoseNothing() async {
-    let channel = Channel<Int>()
+    let channel = Channel<Int>(capacity: 8)
     var receivers: Task<Int>[>..] = []
     for _ in 0..<3 {
         receivers.append(Task.spawn {
@@ -90,4 +405,24 @@ fn manySendersAndReceiversLoseNothing() async {
         total += await receiver.value
     }
     assertEqual(total, 44850)
+}
+
+@test
+fn aLongLivedChannelKeepsItsOrder() async {
+    let channel = Channel<Int>()
+    var next = 0
+    for round in 0..<10 {
+        for i in 0..<50 {
+            await channel.send(round * 50 + i)
+        }
+        for _ in 0..<40 {
+            assertEqual(await channel.receive() ?? -1, next)
+            next += 1
+        }
+    }
+    while let value = await channel.tryReceive() {
+        assertEqual(value, next)
+        next += 1
+    }
+    assertEqual(next, 500)
 }

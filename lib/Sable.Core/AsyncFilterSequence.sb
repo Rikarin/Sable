@@ -1,0 +1,29 @@
+module Sable.Core
+
+/// An async sequence's elements for which a closure is true, each tested
+/// as it comes: what 'filter' on an AsyncSequence makes.
+public struct AsyncFilterSequence<Base: AsyncSequence>: AsyncSequence {
+    let base: Base
+    let isIncluded: async (Base.Element) -> Bool
+
+    /// An iterator from the first element that passes.
+    public fn makeAsyncIterator() -> AsyncFilterIterator<Base.Iter> {
+        return AsyncFilterIterator<Base.Iter> { base: base.makeAsyncIterator(), isIncluded: isIncluded }
+    }
+}
+
+/// Gives an async iterator's elements for which a closure is true.
+public struct AsyncFilterIterator<Base: AsyncIterator>: AsyncIterator {
+    var base: Base
+    let isIncluded: async (Base.Element) -> Bool
+
+    /// The next element that passes, or none past the last.
+    public mutating fn next() async throws(Base.Failure) -> Base.Element? {
+        while let element = try await base.next() {
+            if await isIncluded(element) {
+                return element
+            }
+        }
+        return none
+    }
+}

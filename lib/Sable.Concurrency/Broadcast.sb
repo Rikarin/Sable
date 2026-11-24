@@ -1,0 +1,163 @@
+module Sable.Concurrency
+
+/// Values sent to every receiver: Rust's `tokio::sync::broadcast`. Each
+/// receiver gets every value sent after it subscribed, in order. The
+/// broadcast keeps the last so many values for the receivers behind; one
+/// that falls further behind loses the oldest it had not received, which
+/// it counts as missed, and goes on from the oldest kept. Sending never
+/// waits, from any code. Closed, it takes no more, and each receiver gets
+/// what it has not yet received, then none.
+///
+/// ```sable
+/// let news = Broadcast<String>(capacity: 8)
+/// var first = news.subscribe()
+/// var second = news.subscribe()
+/// news.send("hello")
+/// news.close()
+/// assert(await first.receive() == "hello")
+/// assert(await second.receive() == "hello")
+/// assert(await first.receive() == none)
+/// ```
+@immutable
+public final class Broadcast<T: Sendable> {
+    let state: Mutex<BroadcastState<T>>
+    let arrived: WaitList
+
+    /// How many values it keeps for receivers behind.
+    public let capacity: Int
+
+    /// One keeping at most so many values for receivers behind.
+    public init(capacity: Int) {
+        precondition(capacity > 0, "a broadcast cannot keep \(capacity) values")
+        self.capacity = capacity
+        state = Mutex(BroadcastState<T>())
+        arrived = WaitList()
+    }
+
+    /// The value sent to every receiver: whether it was, false once closed.
+    @discardable
+    public fn send(_ value: T) -> Bool {
+        Runtime.share(value)
+        let capacity = self.capacity
+        let taken = state.withLock { (state: inout BroadcastState<T>) -> Bool in
+            if state.closed {
+                return false
+            }
+            if state.kept.count == capacity {
+                let _ = state.kept.removeFirst()
+                state.first += 1
+            }
+            state.kept.append(value)
+            return true
+        }
+        if taken {
+            arrived.wakeAll()
+        }
+        return taken
+    }
+
+    /// No more values will come: receivers get what they have not yet
+    /// received, then none.
+    public fn close() {
+        state.withLock { $0.closed = true }
+        arrived.wakeAll()
+    }
+
+    /// Whether it has been closed.
+    public var isClosed: Bool => state.withLock { $0.closed }
+
+    /// A receiver of every value sent from now on.
+    public fn subscribe() -> BroadcastReceiver<T> {
+        let next = state.withLock { $0.first + $0.kept.count }
+        return BroadcastReceiver<T> { broadcast: self, next: next, missed: 0 }
+    }
+}
+
+/// Receives a Broadcast's values, each once, in order: what it subscribed
+/// to. Sendable: made in one task, it may be handed to another.
+public struct BroadcastReceiver<T: Sendable>: AsyncIterator, AsyncSequence {
+    public alias Element = T
+    public alias Iter = BroadcastReceiver<T>
+
+    let broadcast: Broadcast<T>
+    var next: Int
+
+    /// How many values it lost by falling more than the broadcast's
+    /// capacity behind.
+    public private(set) var missed: Int
+
+    /// The next value, waiting for it: none once the broadcast is closed
+    /// and every value received, or if the task is cancelled while it waits.
+    public mutating fn receive() async -> T? {
+        while true {
+            let ticket = broadcast.arrived.ticket
+            match take() {
+                case .Value(let value) => {
+                    return value
+                }
+                case .Empty => { }
+                case _ => {
+                    return none
+                }
+            }
+            if Task.isCancelled {
+                return none
+            }
+            await broadcast.arrived.parkCancellably(since: ticket)
+        }
+    }
+
+    /// The next value if it has been sent; none otherwise, without waiting.
+    public mutating fn tryReceive() -> T? {
+        return match take() {
+            case .Value(let value) => value
+            case _                 => none
+        }
+    }
+
+    // The next value, counting what was lost; or that there is none now,
+    // or none for ever.
+    mutating fn take() -> StreamPoll<T, Never> {
+        let next = self.next
+        let (poll, first) = broadcast.state.withLock { (state: inout BroadcastState<T>) -> (StreamPoll<T, Never>, Int) in
+            let at = next < state.first ? state.first : next
+            if at < state.first + state.kept.count {
+                return (.Value(state.kept.at(at - state.first)), state.first)
+            }
+            return (state.closed ? .Ended : .Empty, state.first)
+        }
+        if next < first {
+            missed += first - next
+            self.next = first
+        }
+        match poll {
+            case .Value(_) => {
+                self.next += 1
+            }
+            case _ => { }
+        }
+        return poll
+    }
+
+    /// As 'receive()': what 'for await' goes through.
+    public mutating fn next() async -> T? {
+        return await receive()
+    }
+
+    /// Itself, from the value it would receive next.
+    public fn makeAsyncIterator() -> BroadcastReceiver<T> {
+        return self
+    }
+}
+
+struct BroadcastState<T> {
+    var kept: ValueQueue<T>
+    var first: Int
+    var closed: Bool
+
+    init() {
+        kept = ValueQueue<T>()
+        first = 0
+        closed = false
+    }
+}

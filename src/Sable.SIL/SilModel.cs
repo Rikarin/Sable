@@ -2727,6 +2727,12 @@ public static class SilBuiltins {
         Add("task_waitlist_free", SilType.Unit, SilType.Int);
         Add("task_waitlist_wake", SilType.Unit, SilType.Int);
         Add("task_park", SilType.Unit, SilType.Int);
+
+        // A wait list's ticket — how many times it has been woken — and a
+        // park that a wake since the ticket (-1: none), or the running
+        // task's cancellation, ends or prevents (WaitList.parkCancellably).
+        Add("task_waitlist_ticket", SilType.Int, SilType.Int);
+        Add("task_park_cancellable", SilType.Unit, SilType.Int, SilType.Int);
         Add("task_group_new", SilType.Int);
         Add("task_group_add", SilType.Unit, SilType.Int, SilType.Int);
         Add("task_group_wait", SilType.Unit, SilType.Int);

@@ -70,3 +70,96 @@ fn wakingAListNoTaskIsParkedInDoesNothing() async {
     await gate.openUp()
     assertEqual(await gate.pass(), 1)
 }
+
+actor Mailbox {
+    var letters: Int[>..] = []
+    let arrived = WaitList()
+
+    fn take() async -> Int? {
+        while letters.isEmpty {
+            if Task.isCancelled {
+                return none
+            }
+            await arrived.parkCancellably()
+        }
+        return letters.removeLast()
+    }
+
+    fn post(_ letter: Int) {
+        letters.append(letter)
+        arrived.wakeAll()
+    }
+}
+
+@test
+fn aCancellableParkEndsWithAWake() async {
+    let mailbox = Mailbox()
+    let reader = Task.spawn { await mailbox.take() }
+    await Task.yield()
+    await mailbox.post(3)
+    assert(await reader.value == 3)
+}
+
+@test
+fn aCancellableParkEndsWithTheTasksCancellation() async {
+    let mailbox = Mailbox()
+    let reader = Task.spawn { await mailbox.take() }
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+    reader.cancel()
+    assert(await reader.value == none)
+}
+
+@test
+fn aCancelledTaskDoesNotParkCancellably() async {
+    let list = WaitList()
+    let task = Task.spawn {
+        while !Task.isCancelled {
+            await Task.yield()
+        }
+        await list.parkCancellably()
+        await list.parkCancellably(since: list.ticket)
+        return true
+    }
+    task.cancel()
+    assert(await task.value)
+}
+
+@test
+fn eachWakeMovesTheTicketOn() {
+    let list = WaitList()
+    let first = list.ticket
+    list.wakeAll()
+    assertEqual(list.ticket, first + 1)
+    list.wakeAll()
+    assertEqual(list.ticket, first + 2)
+}
+
+@test
+fn aParkSinceAnOldTicketGoesOnAtOnce() async {
+    let list = WaitList()
+    let ticket = list.ticket
+    list.wakeAll()
+    // Woken since the ticket: no park, so nothing need wake it.
+    await list.parkCancellably(since: ticket)
+}
+
+@test
+fn aParkSinceTheCurrentTicketWaitsForTheNextWake() async {
+    let list = WaitList()
+    let woken = Atomic(false)
+    let ticket = list.ticket
+    let waiter = Task.spawn {
+        await list.parkCancellably(since: ticket)
+        woken.store(true)
+    }
+    for _ in 0..<10 {
+        await Task.yield()
+    }
+    // One wake is enough: the waiter may not have parked yet, and a wake
+    // before its park is one it sees by its ticket.
+    list.wakeAll()
+    await waiter.value
+    assert(woken.load())
+}

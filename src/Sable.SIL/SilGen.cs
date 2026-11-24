@@ -1807,8 +1807,12 @@ public sealed partial class SilGen {
 
     /// <summary>True for a method that takes <c>self</c>, as opposed to a static one or an initialiser.</summary>
     // An operator is a static function of its type: both operands are arguments.
+    // A closure takes no 'self', whatever it is written in — a stored
+    // property's initial value among them, whose closure the property
+    // contains, as an accessor is contained: what it uses of 'self' it captures.
     static bool HasSelf(FunctionSymbol symbol) =>
-        Owner(symbol) is not null && !symbol.IsStatic && symbol.FunctionKind is not (FunctionKind.Initializer or FunctionKind.Operator);
+        Owner(symbol) is not null && !symbol.IsStatic && symbol.FunctionKind is not (FunctionKind.Initializer or FunctionKind.Operator)
+        && symbol is not { Name.Length: 0, ContainingSymbol: FieldSymbol, DeclaringSyntax: [ClosureExpressionSyntax or BraceClosureExpressionSyntax] };
 
     FunctionType? SignatureOf(FunctionSymbol symbol, SyntaxNode at, TypeSubstitution substitution) {
         SilType? Lower(TypeSymbol type) => this.Lower(Substitute(substitution, type));
@@ -2080,10 +2084,17 @@ public sealed partial class SilGen {
     ///     its type arguments, as nothing calls it by name, and named now so
     ///     that what destroys a value of the type runs it.
     /// </summary>
+    // A type whose arguments are not all known — 'Box<S.Element>', lowered
+    // to ask of a generic function's local whether it is move-only, before
+    // any instance of the function says what S is — has no deinit instance
+    // to name: none is made, and none is asked for.
     string? GenericDeinit(NamedTypeSymbol named) =>
         named.OriginalDefinition.Members.OfType<FunctionSymbol>().FirstOrDefault(static f => f.FunctionKind == FunctionKind.Deinitializer) is { } deinit
         && IsGeneric(deinit) && deinit.DeclaringSyntax.FirstOrDefault() is { } at
-            ? Instance(deinit, TypeSubstitution.For(named), at)?.Name
+        && TypeSubstitution.For(named) is var substitution
+        && substitution.Parameters.All(p => substitution.Lookup(p) is { } argument
+            && (argument.Equals(Core.Never) || argument is ValueTypeArgumentSymbol || Lower(argument) is not null))
+            ? Instance(deinit, substitution, at)?.Name
             : null;
 
     T Begin<T>(TypeSymbol symbol, T type) where T : NominalType {
@@ -5431,8 +5442,21 @@ public sealed partial class SilGen {
             return values;
         }
 
-        /// <summary>A payload argument for a <c>switch_enum</c> case block: borrowed from the enum.</summary>
-        static SilArgument Payload(SilBlock block, SilType type) => block.AddArgument(type, !type.IsTrivial);
+        /// <summary>
+        ///     What a <c>Some</c> carries: nothing for a value of no bytes —
+        ///     Void, or Never, which a generic <c>T</c> may be — since the
+        ///     optional of one has a <c>Some</c> with no payload.
+        /// </summary>
+        static SilValue? Carried(SilValue value) => value is UnitValue || value.Type == SilType.Unit ? null : value;
+
+        /// <summary>
+        ///     A payload argument for a <c>switch_enum</c> case block: borrowed
+        ///     from the enum. A case with nothing to carry — the <c>Some</c> of
+        ///     <c>Never?</c> or <c>Void?</c>, which a generic <c>T?</c> may be
+        ///     — has no argument, and its payload is the unit value.
+        /// </summary>
+        static SilValue Payload(SilBlock block, SilType? type) =>
+            type is null ? UnitValue.Instance : block.AddArgument(type, !type.IsTrivial);
 
         /// <summary>A block that destroys a value and goes on to another; or the other itself, when there is nothing to destroy.</summary>
         SilBlock Destroying(SilValue value, SilBlock target) {
@@ -6701,7 +6725,7 @@ public sealed partial class SilGen {
 
                     var decision = Decide(binding.Syntax.Span.Start, "let", "some", "none");
                     var bound = Mark(function.AddBlock(), decision, 0);
-                    var payload = Payload(bound, optionalType.Cases[some].Payload!);
+                    var payload = Payload(bound, optionalType.Cases[some].Payload);
                     Jump(new SwitchEnumInst(optional, [(some, bound)], Destroying(optional, Land(whenFalse, decision, 1))));
                     _current = bound;
                     BindLocal(local, payload, binding.Syntax);
@@ -6869,7 +6893,7 @@ public sealed partial class SilGen {
                 // '.Some(p)' and 'p?': the payload, if there is one, against p.
                 case BoundSomePattern some when value.Type is EnumType optional && optional.CaseIndex("Some") is var index and >= 0: {
                     var target = function.AddBlock();
-                    var payload = Payload(target, optional.Cases[index].Payload!);
+                    var payload = Payload(target, optional.Cases[index].Payload);
                     Jump(new SwitchEnumInst(value, [(index, target)], failed));
                     _current = target;
                     Pattern(some.Payload, payload, matched, failed);
@@ -6936,7 +6960,7 @@ public sealed partial class SilGen {
                     var cast = Emit(new ApplyInst(Emit(new FunctionRefInst(name, type)), result, [Emit(new StructExtractInst(value, 0))]));
                     var some = result.CaseIndex("Some");
                     var bound = function.AddBlock();
-                    var payload = Payload(bound, result.Cases[some].Payload!);
+                    var payload = Payload(bound, result.Cases[some].Payload);
                     Jump(new SwitchEnumInst(cast, [(some, bound)], Destroying(cast, failed)));
                     _current = bound;
                     if (test.Local is { } local) {
@@ -8641,7 +8665,7 @@ public sealed partial class SilGen {
                 ? Literal(literal, ((OptionalTypeSymbol)conversion.Type).UnderlyingType)
                 : Expression(conversion.Operand);
 
-            return inner is null ? null : Emit(new EnumInst(optional, optional.CaseIndex("Some"), inner is UnitValue ? null : inner));
+            return inner is null ? null : Emit(new EnumInst(optional, optional.CaseIndex("Some"), Carried(inner)));
         }
 
         SilValue? Unwrap(BoundConversion conversion) {
@@ -8651,7 +8675,7 @@ public sealed partial class SilGen {
 
             var some = optional.CaseIndex("Some");
             var present = function.AddBlock();
-            var payload = Payload(present, optional.Cases[some].Payload!);
+            var payload = Payload(present, optional.Cases[some].Payload);
             var absent = function.AddBlock();
             Jump(new SwitchEnumInst(value, [(some, present)], absent));
 
@@ -8798,7 +8822,7 @@ public sealed partial class SilGen {
 
             var some = result.CaseIndex("Some");
             var present = function.AddBlock();
-            var payload = Payload(present, result.Cases[some].Payload!);
+            var payload = Payload(present, result.Cases[some].Payload);
             var absent = function.AddBlock();
             Jump(new SwitchEnumInst(cast, [(some, present)], absent));
 
@@ -8862,7 +8886,7 @@ public sealed partial class SilGen {
             Destroy(existential);
             var some = result.CaseIndex("Some");
             var present = function.AddBlock();
-            var payload = Payload(present, result.Cases[some].Payload!);
+            var payload = Payload(present, result.Cases[some].Payload);
             var absent = function.AddBlock();
             Jump(new SwitchEnumInst(cast, [(some, present)], absent));
 
@@ -8884,7 +8908,7 @@ public sealed partial class SilGen {
 
             var some = result.CaseIndex("Some");
             var present = function.AddBlock();
-            Payload(present, result.Cases[some].Payload!);
+            Payload(present, result.Cases[some].Payload);
             var absent = function.AddBlock();
             var after = function.AddBlock();
             var answer = after.AddArgument(SilType.Bool);
@@ -8994,7 +9018,7 @@ public sealed partial class SilGen {
             if (optional) {
                 var result = (EnumType)resultType;
                 if (same) {
-                    return Emit(new EnumInst(result, result.CaseIndex("Some"), Owned(value) is var owned && owned is UnitValue ? null : owned));
+                    return Emit(new EnumInst(result, result.CaseIndex("Some"), Carried(Owned(value))));
                 }
 
                 Destroy(value);
@@ -9513,7 +9537,7 @@ public sealed partial class SilGen {
 
             var some = optional.CaseIndex("Some");
             var present = function.AddBlock();
-            var payload = Payload(present, optional.Cases[some].Payload!);
+            var payload = Payload(present, optional.Cases[some].Payload);
             var absent = function.AddBlock();
             var after = function.AddBlock();
             var result = after.AddArgument(resultType);
@@ -9578,7 +9602,7 @@ public sealed partial class SilGen {
 
             var some = optional.CaseIndex("Some");
             var present = function.AddBlock();
-            var payload = Payload(present, optional.Cases[some].Payload!);
+            var payload = Payload(present, optional.Cases[some].Payload);
             var absent = function.AddBlock();
             var after = function.AddBlock();
             var result = resultType is null ? null : after.AddArgument(resultType);
@@ -9631,7 +9655,7 @@ public sealed partial class SilGen {
             var some = optional.CaseIndex("Some");
             var decision = coalesce.Syntax is BinaryExpressionSyntax written ? Decide(written.OperatorToken.SpanStart, "??", "value", "fallback") : null;
             var present = Mark(function.AddBlock(), decision, 0);
-            var payload = Payload(present, optional.Cases[some].Payload!);
+            var payload = Payload(present, optional.Cases[some].Payload);
             var absent = Mark(function.AddBlock(), decision, 1);
             var after = function.AddBlock();
             var result = after.AddArgument(type);
@@ -10322,7 +10346,7 @@ public sealed partial class SilGen {
                     return Missing(tryExpression, $"a 'try' of type '{tryExpression.Type.ToDisplayString()}'");
                 }
 
-                return Emit(new EnumInst(wrapped, wrapped.CaseIndex("Some"), plain is UnitValue ? null : plain));
+                return Emit(new EnumInst(wrapped, wrapped.CaseIndex("Some"), Carried(plain)));
             }
 
             // What the catch's 'error' is, when it names it; otherwise
@@ -10359,7 +10383,7 @@ public sealed partial class SilGen {
                 Enter(decision, 0);
                 if (tryExpression.TryKind == TryKind.Optional) {
                     var optional = (EnumType)resultType;
-                    Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("Some"), value is UnitValue ? null : value)));
+                    Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("Some"), Carried(value))));
                 } else if (result is null) {
                     Branch(after);
                 } else {
@@ -10576,6 +10600,15 @@ public sealed partial class SilGen {
                         }
 
                         Emit(new BuiltinInst("task_park", SilType.Unit, list));
+                        return UnitValue.Instance;
+                    }
+
+                    if (callee.Name == "parkCancellably") {
+                        if (Expression(call.Arguments[0]) is not { } list || Expression(call.Arguments[1]) is not { } ticket) {
+                            return null;
+                        }
+
+                        Emit(new BuiltinInst("task_park_cancellable", SilType.Unit, list, ticket));
                         return UnitValue.Instance;
                     }
 

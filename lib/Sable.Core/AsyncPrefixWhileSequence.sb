@@ -1,0 +1,34 @@
+module Sable.Core
+
+/// An async sequence's elements up to the first for which a closure is
+/// false: what 'prefix(while:)' on an AsyncSequence makes.
+public struct AsyncPrefixWhileSequence<Base: AsyncSequence>: AsyncSequence {
+    let base: Base
+    let predicate: async (Base.Element) -> Bool
+
+    /// An iterator from the first element.
+    public fn makeAsyncIterator() -> AsyncPrefixWhileIterator<Base.Iter> {
+        return AsyncPrefixWhileIterator<Base.Iter> { base: base.makeAsyncIterator(), predicate: predicate, done: false }
+    }
+}
+
+/// Gives an async iterator's elements until a closure is false for one.
+public struct AsyncPrefixWhileIterator<Base: AsyncIterator>: AsyncIterator {
+    var base: Base
+    let predicate: async (Base.Element) -> Bool
+    var done: Bool
+
+    /// The next element, or none from the first the closure is false for.
+    public mutating fn next() async throws(Base.Failure) -> Base.Element? {
+        if done {
+            return none
+        }
+        if let element = try await base.next() {
+            if await predicate(element) {
+                return element
+            }
+        }
+        done = true
+        return none
+    }
+}

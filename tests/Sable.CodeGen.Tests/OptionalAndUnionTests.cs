@@ -489,4 +489,87 @@ public sealed class OptionalAndUnionTests {
         Assert.Contains("@\"sable.Test.small\"({ i8, [1 x i8] } %p0)", ir, StringComparison.Ordinal);
         Assert.Contains("{ i8, i32, ptr, { i8 } }", ir, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    ///     Generic code instantiated with Never — a sequence's Failure that
+    ///     cannot fail — has optionals and union cases of it, which carry
+    ///     nothing: an 'if let' on a 'Never?', a union case of Never made and
+    ///     matched, a Never value wrapped in an optional, and a function
+    ///     taking one, called from a catch that cannot be reached.
+    /// </summary>
+    [Fact, Native]
+    public void GenericCodeOverNeverCarriesNothing() =>
+        Prints(
+            "empty\nnone\nfailed\ntook\n",
+            """
+            union Poll<E, F> {
+                Value(E)
+                Failed(F)
+                Empty
+            }
+
+            enum Broken: Error {
+                Down
+            }
+
+            struct Holder<F: Error> {
+                var failure: F? = none
+
+                init() { }
+
+                mutating fn poll() -> Poll<Int, F> {
+                    if let failure = failure {
+                        self.failure = none
+                        return .Failed(failure)
+                    }
+                    return .Empty
+                }
+            }
+
+            final class Sink<E: Error> {
+                var last: E? = none
+
+                init() { }
+
+                fn take(_ error: E) {
+                    last = error
+                    print("took")
+                }
+            }
+
+            fn drain<S: Sequence>(_ values: S, _ sink: Sink<S.Failure>) {
+                do {
+                    for try _ in values { }
+                } catch {
+                    sink.take(error)
+                }
+            }
+
+            fn describe<F: Error>(_ poll: Poll<Int, F>) -> String {
+                return match poll {
+                    case .Value(let v) => "\(v)"
+                    case .Failed(_) => "failed"
+                    case .Empty => "empty"
+                }
+            }
+
+            fn pass<E: Error>(_ sink: Sink<E>, _ error: E?) {
+                if let error = error {
+                    sink.take(error)
+                } else {
+                    print("none")
+                }
+            }
+            """,
+            """
+                var never = Holder<Never>()
+                print(describe(never.poll()))
+                pass(Sink<Never>(), none)
+                var broken = Holder<Broken>()
+                broken.failure = .Down
+                print(describe(broken.poll()))
+                drain([1, 2], Sink<Never>())
+                pass(Sink<Broken>(), .Down)
+            """
+        );
 }

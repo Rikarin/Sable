@@ -5199,6 +5199,10 @@ public sealed partial class Binder {
             ArrayExpressionSyntax array => array.Elements.Any(IsClosure),
 
             ParenthesizedExpressionSyntax parenthesized => IsClosure(parenthesized.Expression),
+
+            // 'draw(bold ? .Thick : .Thin)': with a type in neither branch,
+            // both take the parameter's.
+            ConditionalExpressionSyntax conditional => IsClosure(conditional.WhenTrue) && IsClosure(conditional.WhenFalse),
             _ => false,
         };
 
@@ -8553,7 +8557,11 @@ public sealed partial class Binder {
         // 'c ? 5 : none' is an Int?: 'none' is no particular optional until
         // the other branch, or the context, says which.
         BoundExpression whenTrue, whenFalse;
-        if (IsNoneLiteral(syntax.WhenTrue) && !IsNoneLiteral(syntax.WhenFalse)) {
+        if (expectedType is null && IsImplicitMember(syntax.WhenTrue) && !IsClosure(syntax.WhenFalse)) {
+            // 'c ? .Red : colour': the leading dot's owner is the other branch's type.
+            whenFalse = BindExpression(syntax.WhenFalse);
+            whenTrue = BindExpression(syntax.WhenTrue, whenFalse.Type);
+        } else if (IsNoneLiteral(syntax.WhenTrue) && !IsNoneLiteral(syntax.WhenFalse)) {
             whenFalse = BindExpression(syntax.WhenFalse, expectedType);
             whenTrue = BindExpression(syntax.WhenTrue, expectedType ?? Optional(whenFalse.Type));
         } else {
@@ -8584,6 +8592,9 @@ public sealed partial class Binder {
 
         return new BoundConditional(syntax, type, condition, whenTrue, whenFalse);
     }
+
+    static bool IsImplicitMember(ExpressionSyntax expression) =>
+        Unparenthesised(expression) is ImplicitMemberAccessExpressionSyntax or InvocationExpressionSyntax { Expression: ImplicitMemberAccessExpressionSyntax };
 
     static bool IsNoneLiteral(ExpressionSyntax expression) =>
         expression switch {

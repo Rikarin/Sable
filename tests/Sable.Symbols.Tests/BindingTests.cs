@@ -516,6 +516,44 @@ public sealed class BindingTests {
     }
 
     [Fact]
+    public void ImplicitMembersOfBothBranchesTakeTheParametersType() {
+        var compilation = Compilation.Create(
+            """
+            module M
+            enum Colour {
+                Red
+                Green
+            }
+            struct Pen {
+                var colour: Colour
+                init(_ width: Int, colour: Colour = .Red) {
+                    self.colour = colour
+                }
+            }
+            fn draw(_ colour: Colour) { }
+            fn draw(_ width: Int) { }
+            fn pick<T>(_ value: T) -> T { return value }
+            fn probe(b: Bool, other: Colour) {
+                draw(b ? .Red : .Green)
+                draw(b ? (.Red) : b ? .Green : .Red)
+                draw(b ? .Red : other)
+                draw(b ? other : .Red)
+                let _ = Pen(1, colour: b ? .Red : .Green)
+                let _: Colour = pick(b ? .Red : other)
+                let chosen = b ? .Red : other
+                draw(chosen)
+            }
+            """
+        );
+
+        var errors = compilation.GetAllDiagnostics()
+            .Where(static d => d.Severity == DiagnosticSeverity.Error)
+            .ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => e.Message)));
+        Assert.Contains(ErrorsIn("let v = true ? .Red : .Green"), static e => e.Code == ErrorCode.ERR_NoContextualType);
+    }
+
+    [Fact]
     public void SelfOutsideATypeIsReported() =>
         Assert.Contains(ErrorsIn("let v = self"), static e => e.Code == ErrorCode.ERR_SelfOutsideType);
 

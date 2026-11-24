@@ -105,7 +105,7 @@ public struct Runtime {
 
     /// A text about the system (Platform, Environment): 0 the host's name,
     /// 1 the user's, 2 the home directory, 3 the temporary one, 4 the OS
-    /// version; empty where it gives none.
+    /// version, 5 the user's locale; empty where it gives none.
     @builtin("system_text")
     public static fn systemText(_ which: Int) -> String
 

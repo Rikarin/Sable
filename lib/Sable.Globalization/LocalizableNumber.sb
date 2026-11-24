@@ -1,0 +1,209 @@
+module Sable.Globalization
+
+import Sable.Math
+
+/// Numbers that can be written and read as a locale does: every integer and
+/// float, `Decimal` and `BigInt`. A locale changes what the digits look like
+/// and what is put around them; the digits themselves are the library's own
+/// formatting's, and what is read is read by the type's own `Parsable`.
+///
+/// ```sable
+/// let german = Locale.of("de")!
+/// assert(1234.5.format(.decimal, locale: german) == "1.234,5")
+/// assert(try! F64.parse("1.234,5", locale: german) == 1234.5)
+/// ```
+public protocol LocalizableNumber: Formattable, Parsable {
+    /// The number as plain digits, "-1234.5", with a '.' where it has a
+    /// fraction: to that many places, rounded to nearest with ties to even,
+    /// or all it has for none; times a hundred for a percentage. "inf",
+    /// "-inf" or "nan" for what is not finite.
+    fn plainDigits(places: Int?, percent: Bool) -> String
+}
+
+extension LocalizableNumber {
+    /// The number as the locale writes it.
+    ///
+    /// ```sable
+    /// assert(1234.5.format(.currency("EUR"), locale: Locale.of("de")!) == "1.234,50\u{A0}€")
+    /// assert(0.25.format(.percent, locale: Locale.of("tr")!) == "%25")
+    /// assert(1234567.format(.decimal, locale: Locale.of("en-IN")!) == "12,34,567")
+    /// ```
+    public fn format(_ format: NumberFormat, locale: Locale) -> String {
+        return NumberFormatter(format, locale: locale).format(self)
+    }
+
+    /// The number under a format spec, as the locale writes it: its digits,
+    /// its separators where the spec asks for one, its point and its signs.
+    /// A spec of a radix or a description means what it always does, and the
+    /// invariant locale writes as `format(_:)` does.
+    ///
+    /// ```sable
+    /// let spec = try! FormatSpec.parse(">12,.2f")
+    /// assert(1234.5.format(spec, locale: Locale.of("fr")!) == "    1\u{202F}234,50")
+    /// assert(255.format(try! FormatSpec.parse("x"), locale: Locale.of("fr")!) == "ff")
+    /// ```
+    public fn format(_ spec: FormatSpec, locale: Locale) -> String {
+        let kind = spec.kind
+        if locale.data.tag == "und" || kind == .Hex || kind == .UpperHex || kind == .Octal || kind == .Binary || kind == .Debug {
+            return self.format(spec)
+        }
+        var bare = spec
+        bare.width = 0
+        bare.separator = none
+        bare.sign = .Negative
+        bare.zeroPadded = false
+        var text = self.format(bare)
+        var format = NumberFormat(kind == .Percent ? NumberKind.Percent : NumberKind.Decimal)
+        format.grouping = spec.separator == none ? NumberGrouping.Never : NumberGrouping.Automatic
+        format.sign = spec.sign
+        if kind == .Percent && text.hasSuffix("%") {
+            text = text.slice(from: 0, to: text.count - 1)
+        }
+        var written = NumberFormatter(format, locale: locale).localized(text)
+        while spec.zeroPadded && written.count < spec.width && NumberParts(text).isFinite {
+            // Zeros after the sign, up to the width.
+            format.minimumIntegerDigits += 1
+            written = NumberFormatter(format, locale: locale).localized(text)
+        }
+        var padding = FormatSpec()
+        padding.width = spec.width
+        padding.fill = spec.fill
+        padding.alignment = spec.alignment == .Automatic ? FormatAlignment.Right : spec.alignment
+        return padding.padded(written)
+    }
+
+    /// The number the text writes as the locale does, its whole: the
+    /// locale's digits or ASCII ones, its point, its signs, and its
+    /// separators where they belong — a separator anywhere else is refused,
+    /// so "1.5" in German is an error rather than 15. A percentage is read
+    /// as the number it is of one; a currency's symbol, code or neither may
+    /// be there. White space of any kind may stand for a space of the
+    /// locale's. What the text is not is thrown as `parse(_:)` throws it.
+    ///
+    /// ```sable
+    /// let french = Locale.of("fr")!
+    /// assert(try! Int.parse("1 234 567", locale: french) == 1234567)
+    /// assert(try! F64.parse("12,5 %", format: .percent, locale: french) == 0.125)
+    /// assert((try? F64.parse("1.5", locale: Locale.of("de")!)) == none)
+    /// assert(try! Int.parse("١٢٣", locale: Locale.of("ar-EG")!) == 123)
+    /// ```
+    public static fn parse(_ text: String, format: NumberFormat = .decimal, locale: Locale) throws(ParseError) -> Self {
+        return try NumberFormatter(format, locale: locale).parse(text)
+    }
+}
+
+/// An integer's plain digits.
+fn integerDigits(_ text: String, _ percent: Bool) -> String {
+    return percent && text != "0" ? text + "00" : text
+}
+
+/// A base-ten or base-two number's plain digits.
+fn fractionDigits<T: Formattable>(_ value: T, _ places: Int?, _ percent: Bool) -> String {
+    var spec = FormatSpec()
+    spec.kind = percent ? .Percent : .Fixed
+    spec.precision = places
+    let text = value.format(spec)
+    return percent && text.hasSuffix("%") ? text.slice(from: 0, to: text.count - 1) : text
+}
+
+extension Int: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return integerDigits("\(self)", percent)
+    }
+}
+
+extension I8: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return integerDigits("\(self)", percent)
+    }
+}
+
+extension I16: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return integerDigits("\(self)", percent)
+    }
+}
+
+extension I32: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return integerDigits("\(self)", percent)
+    }
+}
+
+extension I64: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return integerDigits("\(self)", percent)
+    }
+}
+
+extension I128: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return integerDigits("\(self)", percent)
+    }
+}
+
+extension UInt: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return integerDigits("\(self)", percent)
+    }
+}
+
+extension U8: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return integerDigits("\(self)", percent)
+    }
+}
+
+extension U16: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return integerDigits("\(self)", percent)
+    }
+}
+
+extension U32: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return integerDigits("\(self)", percent)
+    }
+}
+
+extension U64: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return integerDigits("\(self)", percent)
+    }
+}
+
+extension U128: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return integerDigits("\(self)", percent)
+    }
+}
+
+extension BigInt: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return integerDigits("\(self)", percent)
+    }
+}
+
+extension F16: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return fractionDigits(self, places, percent)
+    }
+}
+
+extension F32: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return fractionDigits(self, places, percent)
+    }
+}
+
+extension F64: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return fractionDigits(self, places, percent)
+    }
+}
+
+extension Decimal: LocalizableNumber {
+    public fn plainDigits(places: Int?, percent: Bool) -> String {
+        return fractionDigits(self, places, percent)
+    }
+}

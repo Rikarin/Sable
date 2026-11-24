@@ -1,0 +1,254 @@
+module Sable.Globalization
+
+// Reading a BCP 47 language tag (RFC 5646 §2.1) and the 'u' extension in it
+// (RFC 6067, UTS #35), into canonical form (RFC 5646 §4.5, UTS #35 §3.2.1).
+
+/// Tags whole that RFC 5646 keeps from before it, and what each is now.
+const grandfatheredTags = """
+    art-lojban=jbo
+    cel-gaulish=xtg
+    en-gb-oed=en-GB-oxendict
+    i-ami=ami
+    i-bnn=bnn
+    i-default=en-x-i-default
+    i-enochian=und-x-i-enochian
+    i-hak=hak
+    i-klingon=tlh
+    i-lux=lb
+    i-mingo=see-x-i-mingo
+    i-navajo=nv
+    i-pwn=pwn
+    i-tao=tao
+    i-tay=tay
+    i-tsu=tsu
+    no-bok=nb
+    no-nyn=nn
+    sgn-be-fr=sfb
+    sgn-be-nl=vgt
+    sgn-ch-de=sgg
+    zh-guoyu=zh
+    zh-hakka=hak
+    zh-min=nan
+    zh-min-nan=nan
+    zh-xiang=hsn
+    """
+
+/// Languages and regions by codes since replaced.
+const replacedSubtags = """
+    iw=he
+    in=id
+    ji=yi
+    jw=jv
+    mo=ro
+    tl=fil
+    sh=sr-Latn
+    BU=MM
+    DD=DE
+    FX=FR
+    TP=TL
+    YD=YE
+    ZR=CD
+    UK=GB
+    """
+
+/// A tag's parts.
+struct LocaleTag {
+    var language: String
+    var script: String? = none
+    var territory: String? = none
+    var variants: String[>..] = []
+    /// Each extension but 'u', whole: "t-…".
+    var extensions: String[>..] = []
+    var attributes: String[>..] = []
+    var keywords: [String: String] = [:]
+    var privateUse: String = ""
+
+    init(language: String) {
+        self.language = language
+    }
+
+    /// The whole tag.
+    var canonical: String {
+        get {
+            var text = language
+            if let s = script {
+                text += "-" + s
+            }
+            if let r = territory {
+                text += "-" + r
+            }
+            for v in variants.sorted() {
+                text += "-" + v
+            }
+            var all = extensions
+            if !attributes.isEmpty || keywords.count > 0 {
+                var u = "u"
+                for a in attributes.sorted() {
+                    u += "-" + a
+                }
+                var keys: String[>..] = []
+                for (key, _) in keywords {
+                    keys.append(key)
+                }
+                for key in keys.sorted() {
+                    u += "-" + key
+                    let value = keywords[key]!
+                    if !value.isEmpty {
+                        u += "-" + value
+                    }
+                }
+                all.append(u)
+            }
+            for e in all.sorted() {
+                text += "-" + e
+            }
+            if !privateUse.isEmpty {
+                text += "-" + privateUse
+            }
+            return text
+        }
+    }
+
+    static fn parse(_ text: String) throws(ParseError) -> LocaleTag {
+        if text.isEmpty {
+            throw .Empty
+        }
+        let lower = text.asciiLowercased()
+        if let now = listed(grandfatheredTags, lower) {
+            return try LocaleTag.parse(now)
+        }
+        let parts: String[>..] = lower.split('-')
+        // Where each subtag is.
+        var starts: Int[>..] = []
+        var at = 0
+        for part in parts {
+            starts.append(at)
+            if part.isEmpty || part.count > 8 || !isAlphanumeric(part) {
+                throw .Invalid(at: at)
+            }
+            at += part.count + 1
+        }
+        if parts[0] == "x" {
+            // Private use alone names no language.
+            if parts.count < 2 {
+                throw .Invalid(at: text.count)
+            }
+            var tag = LocaleTag(language: "und")
+            tag.privateUse = parts.joined(separator: "-")
+            return tag
+        }
+        if !isAlpha(parts[0]) || parts[0].count < 2 || parts[0].count == 4 {
+            throw .Invalid(at: 0)
+        }
+        var tag = LocaleTag(language: parts[0])
+        var i = 1
+        // An extended language is the language itself.
+        if parts[0].count <= 3 && i < parts.count && parts[i].count == 3 && isAlpha(parts[i]) {
+            tag.language = parts[i]
+            i += 1
+        }
+        if i < parts.count && parts[i].count == 4 && isAlpha(parts[i]) {
+            tag.script = parts[i].slice(from: 0, to: 1).asciiUppercased() + parts[i].slice(from: 1, to: 4)
+            i += 1
+        }
+        if i < parts.count && (parts[i].count == 2 && isAlpha(parts[i]) || parts[i].count == 3 && isDigits(parts[i])) {
+            let named = parts[i].asciiUppercased()
+            tag.territory = listed(replacedSubtags, named) ?? named
+            i += 1
+        }
+        if let now = listed(replacedSubtags, tag.language) {
+            if now == "sr-Latn" {
+                tag.language = "sr"
+                tag.script = tag.script ?? "Latn"
+            } else {
+                tag.language = now
+            }
+        }
+        while i < parts.count && (parts[i].count >= 5 || parts[i].count == 4 && parts[i].at(0).isDigit) {
+            if tag.variants.contains(parts[i]) {
+                throw .Invalid(at: starts[i])
+            }
+            tag.variants.append(parts[i])
+            i += 1
+        }
+        var seen: String[>..] = []
+        while i < parts.count {
+            let singleton = parts[i]
+            if singleton.count != 1 || seen.contains(singleton) {
+                throw .Invalid(at: starts[i])
+            }
+            seen.append(singleton)
+            let first = i + 1
+            i += 1
+            if singleton == "x" {
+                i = parts.count
+            }
+            while i < parts.count && parts[i].count > 1 {
+                i += 1
+            }
+            if i == first {
+                throw .Invalid(at: i < parts.count ? starts[i] : text.count)
+            }
+            if singleton == "x" {
+                tag.privateUse = parts[first - 1..<i].joined(separator: "-")
+            } else if singleton == "u" {
+                tag.readKeywords(parts, first, i)
+            } else {
+                tag.extensions.append(parts[first - 1..<i].joined(separator: "-"))
+            }
+        }
+        return tag
+    }
+
+    /// The 'u' extension's attributes, then its keywords: the first of each
+    /// key is the one that counts.
+    mutating fn readKeywords(_ parts: String[>..], _ first: Int, _ end: Int) {
+        var i = first
+        while i < end && parts[i].count > 2 {
+            if !attributes.contains(parts[i]) {
+                attributes.append(parts[i])
+            }
+            i += 1
+        }
+        while i < end {
+            let key = parts[i]
+            i += 1
+            let valueAt = i
+            while i < end && parts[i].count > 2 {
+                i += 1
+            }
+            let value = parts[valueAt..<i].joined(separator: "-")
+            if keywords[key] == none {
+                // "true" is what a key says by itself.
+                keywords[key] = value == "true" ? "" : value
+            }
+        }
+    }
+}
+
+fn isAlpha(_ text: String) -> Bool {
+    for c in text {
+        if c < 'a' || c > 'z' {
+            return false
+        }
+    }
+    return true
+}
+
+fn isDigits(_ text: String) -> Bool {
+    for c in text {
+        if c < '0' || c > '9' {
+            return false
+        }
+    }
+    return true
+}
+
+fn isAlphanumeric(_ text: String) -> Bool {
+    for c in text {
+        if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+            return false
+        }
+    }
+    return true
+}

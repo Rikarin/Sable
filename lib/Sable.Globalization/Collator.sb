@@ -1,0 +1,445 @@
+module Sable.Globalization
+
+import Sable.Text
+
+/// The order a language's speakers put words in: the Unicode Collation
+/// Algorithm (UTS #10) with the CLDR's order and its changes for the locale.
+/// "ä" is an "a" with an accent in German, a letter after "z" in Swedish;
+/// "ch" is a letter of Czech. .NET's CompareInfo, ECMA-402's Intl.Collator.
+///
+/// `String`'s own `<` and `compare` are by scalars and stay so: an order by
+/// language is asked for. The invariant locale's is the CLDR's root.
+///
+/// The locale's 'u' extension may say which of its orders ("co": German's
+/// phonebook, Spanish's traditional), and "kn", "kf", "ks" and "ka" what the
+/// initialiser's arguments do; an argument says over it.
+///
+/// Chinese, Japanese and Korean characters are in the order of their code
+/// points, by blocks: there are no tables of pinyin, strokes or readings.
+///
+/// ```sable
+/// let swedish = Collator(Locale.of("sv")!)
+/// assert(["zon", "ärm", "arm", "ål"].sorted(by: swedish.areInIncreasingOrder) == ["arm", "zon", "ål", "ärm"])
+/// let german = Collator(Locale.of("de")!)
+/// assert(["zon", "ärm", "arm", "ål"].sorted(by: german.areInIncreasingOrder) == ["ål", "arm", "ärm", "zon"])
+///
+/// let loose = Collator(.invariant, strength: .Primary)
+/// assert(loose.compare("Rôle", "role") == .Equal)
+/// let natural = Collator(.invariant, numeric: true)
+/// assert(natural.compare("file 10", "file 9") == .Greater)
+/// ```
+public struct Collator {
+    /// Whose order it is.
+    public let locale: Locale
+    /// How small a difference tells two texts apart.
+    public let strength: CollationStrength
+    /// Whether runs of digits are compared as the numbers they are.
+    public let numeric: Bool
+    /// Which case comes first.
+    public let caseFirst: CollationCaseFirst
+    /// Whether white space and punctuation are passed over.
+    public let ignorePunctuation: Bool
+    /// Whether accents are compared from a text's end: Canadian French.
+    let backwards: Bool
+    let tailored: [Int: CollationString[>..]]
+    let moves: CollationMove[>..]
+    /// The element of each ASCII character that begins no longer string, or
+    /// -1; and the strings each begins, the collation's own and the root's.
+    let ascii: Int[>..]
+    let asciiStrings: CollationString[>..][>..]
+
+    /// The locale's order. What is not said is the locale's, or tertiary,
+    /// not numeric, and punctuation counted.
+    public init(_ locale: Locale, strength: CollationStrength? = none, numeric: Bool? = none, caseFirst: CollationCaseFirst? = none, ignorePunctuation: Bool? = none) {
+        let name = collationName(locale)
+        let settings = collationSettings(name) ?? ""
+        let asked: CollationStrength = match locale.keyword("ks") ?? "" {
+            case "level1"  => .Primary
+            case "level2"  => .Secondary
+            case "identic" => .Identical
+            case _         => .Tertiary
+        }
+        let first: CollationCaseFirst = match locale.keyword("kf") ?? "" {
+            case "upper" => .Upper
+            case "lower" => .Lower
+            case "false" => .Off
+            case _       => settings.contains("upper") ? .Upper : .Off
+        }
+        let alternate = locale.keyword("ka") ?? ""
+        let tailored = tailoredStrings(collationTailoring(name) ?? "")
+        self.locale = locale
+        self.strength = strength ?? asked
+        self.numeric = numeric ?? (locale.keyword("kn") == none ? false : locale.keyword("kn")! != "false")
+        self.caseFirst = caseFirst ?? first
+        self.ignorePunctuation = ignorePunctuation ?? (alternate == "shifted" || alternate != "noignore" && settings.contains("shifted"))
+        self.backwards = settings.contains("backwards")
+        self.tailored = tailored
+        self.moves = collationMoves(collationReorder(name) ?? "")
+        var ascii: Int[>..] = []
+        var asciiStrings: CollationString[>..][>..] = []
+        var code = 0
+        while code < 128 {
+            var elements: Int[>..] = []
+            var strings: CollationString[>..] = tailored[code] ?? []
+            for s in rootContractions(code) {
+                strings.append(s)
+            }
+            if strings.isEmpty {
+                addRootElements(code, into: &elements)
+            }
+            ascii.append(elements.count == 1 ? elements[0] : -1)
+            asciiStrings.append(strings)
+            code += 1
+        }
+        self.ascii = ascii
+        self.asciiStrings = asciiStrings
+    }
+
+    /// Which of the texts comes first.
+    ///
+    /// ```sable
+    /// let czech = Collator(Locale.of("cs")!)
+    /// assert(czech.compare("chata", "dům") == .Greater)
+    /// assert(czech.compare("chata", "hora") == .Greater && czech.compare("chata", "jih") == .Less)
+    /// ```
+    public fn compare(_ a: String, _ b: String) -> Ordering {
+        if a == b {
+            return .Equal
+        }
+        let left = elements(a)
+        let right = elements(b)
+        var order = compareLevel(left, right, { $0 >> 20 }, false)
+        if order == .Equal && strength != .Primary {
+            order = compareLevel(left, right, { $0 >> 10 & 1023 }, backwards)
+            if order == .Equal && strength != .Secondary {
+                order = compareLevel(left, right, { self.tertiary($0) }, false)
+                if order == .Equal && strength == .Identical {
+                    return a.normalized(.NFD).compare(b.normalized(.NFD))
+                }
+            }
+        }
+        return order
+    }
+
+    /// Whether the first text comes before the second: what `sorted(by:)`
+    /// takes.
+    public fn areInIncreasingOrder(_ a: String, _ b: String) -> Bool {
+        return compare(a, b) == .Less
+    }
+
+    /// The order as a `Comparator`, to go with others.
+    public var comparator: Comparator<String> {
+        get {
+            return Comparator<String>({ (a: String, b: String) in self.compare(a, b) })
+        }
+    }
+
+    /// The text's place in the order, as bytes to be compared with others'.
+    ///
+    /// ```sable
+    /// let polish = Collator(Locale.of("pl")!)
+    /// assert(polish.sortKey("łąka") > polish.sortKey("lato"))
+    /// assert(polish.sortKey("łąka") < polish.sortKey("mak"))
+    /// ```
+    public fn sortKey(_ text: String) -> SortKey {
+        let all = elements(text)
+        var bytes: U8[>..] = []
+        for e in all {
+            addWeight(e >> 20, into: &bytes)
+        }
+        if strength != .Primary {
+            bytes.append(0)
+            var i = 0
+            while i < all.count {
+                let e = backwards ? all[all.count - 1 - i] : all[i]
+                addWeight(e >> 10 & 1023, into: &bytes)
+                i += 1
+            }
+            if strength != .Secondary {
+                bytes.append(0)
+                for e in all {
+                    addWeight(tertiary(e), into: &bytes)
+                }
+                if strength == .Identical {
+                    bytes.append(0)
+                    for b in text.normalized(.NFD).utf8 {
+                        bytes.append(b)
+                    }
+                }
+            }
+        }
+        return SortKey(bytes)
+    }
+
+    /// What is compared of an element's tertiary.
+    fn tertiary(_ element: Int) -> Int {
+        let both = element & 1023
+        let rank = both >> 2
+        if caseFirst == .Off || rank == 0 {
+            return rank
+        }
+        if element >> 10 == 0 {
+            // A variant alone is greater than any a letter has.
+            return 256 + rank
+        }
+        let letterCase = both & 3
+        return (caseFirst == .Upper ? 2 - letterCase : letterCase) * 80 + rank
+    }
+
+    /// The weights of a level that are not zero, compared in order, the
+    /// shorter before the longer.
+    fn compareLevel(_ a: Int[>..], _ b: Int[>..], _ weight: (Int) -> Int, _ fromEnd: Bool) -> Ordering {
+        var i = 0
+        var j = 0
+        while true {
+            var left = 0
+            while left == 0 && i < a.count {
+                left = weight(fromEnd ? a[a.count - 1 - i] : a[i])
+                i += 1
+            }
+            var right = 0
+            while right == 0 && j < b.count {
+                right = weight(fromEnd ? b[b.count - 1 - j] : b[j])
+                j += 1
+            }
+            if left != right {
+                return left < right ? .Less : .Greater
+            }
+            if left == 0 {
+                return .Equal
+            }
+        }
+    }
+
+    /// The text's collation elements, in order (UTS #10, S2).
+    fn elements(_ text: String) -> Int[>..] {
+        var codes: Int[>..<] = []
+        for c in text.normalized(.NFD) {
+            codes.append(c.codePoint)
+        }
+        var all: Int[>..] = []
+        all.reserveCapacity(codes.count)
+        var i = 0
+        while i < codes.count {
+            let code = codes[i]
+            if numeric && isNumber(code) {
+                i = addNumber(codes, i, into: &all)
+            } else if code < 128 && ascii[code] >= 0 {
+                all.append(ascii[code])
+                i += 1
+            } else {
+                i = addLongest(&codes, i, into: &all)
+            }
+        }
+        if ignorePunctuation || !moves.isEmpty {
+            all = adjusted(all)
+        }
+        return all
+    }
+
+    /// The elements of the longest string from the place on; where the next
+    /// begins. Marks a longer string takes from further on are taken out.
+    fn addLongest(_ codes: inout Int[>..<], _ start: Int, into all: inout Int[>..]) -> Int {
+        let strings = stringsFrom(codes[start])
+        if strings.isEmpty {
+            addRootElements(codes[start], into: &all)
+            return start + 1
+        }
+        // The code points matched so far, and the string they are.
+        var matched: Int[>..] = []
+        var best: CollationString? = none
+        for s in strings {
+            if s.codes.count > matched.count && startsAt(codes, start, s.codes) {
+                matched = s.codes
+                best = s
+            }
+        }
+        if best == none {
+            matched = [codes[start]]
+        }
+        let end = start + matched.count
+        // Marks after it, each not blocked by one of as high a class before
+        // it (S2.1.1 to S2.1.3).
+        var at = end
+        var lastClass = 0
+        while at < codes.count {
+            let mark = Char.fromCodePoint(codes[at])!.canonicalCombiningClass
+            if mark == 0 {
+                break
+            }
+            if lastClass < mark {
+                var longer = matched
+                longer.append(codes[at])
+                if let found = known(longer, strings) {
+                    matched = longer
+                    best = found
+                    codes[at..<at + 1] = []
+                    continue
+                }
+            }
+            lastClass = mark
+            at += 1
+        }
+        if let found = best {
+            for e in found.elements {
+                all.append(e)
+            }
+        } else {
+            addRootElements(codes[start], into: &all)
+        }
+        return end
+    }
+
+    /// The strings that begin with the code point, the collation's own
+    /// before the root's.
+    fn stringsFrom(_ code: Int) -> CollationString[>..] {
+        if code < 128 {
+            return asciiStrings[code]
+        }
+        var strings: CollationString[>..] = tailored[code] ?? []
+        for s in rootContractions(code) {
+            strings.append(s)
+        }
+        return strings
+    }
+
+    /// The string of exactly the code points.
+    fn known(_ codes: Int[>..], _ strings: CollationString[>..]) -> CollationString? {
+        for s in strings {
+            if s.codes == codes {
+                return s
+            }
+        }
+        return none
+    }
+
+    fn startsAt(_ codes: Int[>..<], _ start: Int, _ wanted: Int[>..]) -> Bool {
+        if start + wanted.count > codes.count {
+            return false
+        }
+        var i = 0
+        while i < wanted.count {
+            if codes[start + i] != wanted[i] {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+
+    /// Whether the code point is a decimal digit of any script.
+    fn isNumber(_ code: Int) -> Bool {
+        return code >= 48 && code <= 57 || code > 127 && Char.fromCodePoint(code)!.generalCategory == .DecimalNumber
+    }
+
+    /// A run of digits as a number: how many there are after the zeros at
+    /// its start, then each. Where the run ends.
+    fn addNumber(_ codes: Int[>..<], _ start: Int, into all: inout Int[>..]) -> Int {
+        var values: Int[>..] = []
+        var i = start
+        while i < codes.count && isNumber(codes[i]) {
+            var element: Int[>..] = []
+            addRootElements(codes[i], into: &element)
+            let value = (element[0] >> 20) - collationZero
+            if value != 0 || !values.isEmpty {
+                values.append(value)
+            }
+            i += 1
+        }
+        all.append(elementOf(collationZero, collationCommonSecondary, collationCommonTertiary * 4))
+        all.append(elementOf(values.count + 2, 0, 0))
+        for value in values {
+            all.append(elementOf(value + 2, 0, 0))
+        }
+        return i
+    }
+
+    /// The elements with punctuation left out, if it is, and the scripts in
+    /// the locale's order.
+    fn adjusted(_ elements: Int[>..]) -> Int[>..] {
+        var all: Int[>..] = []
+        var afterVariable = false
+        for e in elements {
+            let primary = e >> 20
+            if ignorePunctuation {
+                if primary > 1 && primary <= collationVariableTop && (e >> 10 & 1023) != 0 {
+                    afterVariable = true
+                    continue
+                }
+                if primary == 0 && afterVariable {
+                    continue
+                }
+                afterVariable = false
+            }
+            all.append(elementOf(moved(primary, e), e >> 10 & 1023, e & 1023))
+        }
+        return all
+    }
+
+    /// Where the locale's order of scripts puts the primary.
+    fn moved(_ primary: Int, _ element: Int) -> Int {
+        // A number's own digits have no secondary, and are in no script.
+        if (element >> 10 & 1023) == 0 {
+            return primary
+        }
+        for run in moves {
+            if primary >= run.start && primary < run.end {
+                return run.target + primary - run.start
+            }
+        }
+        return primary
+    }
+}
+
+/// The collation whose tables the locale's order is in.
+fn collationName(_ locale: Locale) -> String {
+    let language = locale.language == "no" ? "nb" : locale.language
+    if let kind = locale.keyword("co") {
+        let name = "\(language)-u-co-\(kind)"
+        if collationTailoring(name) != none {
+            return name
+        }
+    }
+    // Serbian in Latin letters is ordered as Croatian.
+    if language == "sr" && (locale.script ?? "Cyrl") == "Latn" {
+        return "hr"
+    }
+    if let territory = locale.region {
+        let name = "\(language)-\(territory)"
+        if collationTailoring(name) != none {
+            return name
+        }
+    }
+    return language
+}
+
+/// A weight in bytes that order as the weights do, none of them a zero that
+/// could end a level first: one byte below 0xC0, two or three above.
+fn addWeight(_ weight: Int, into bytes: inout U8[>..]) {
+    if weight == 0 {
+        return
+    }
+    if weight < 0xC0 {
+        bytes.append(U8(weight))
+    } else if weight < 0x2000 {
+        bytes.append(U8(0xC0 + (weight >> 8)))
+        bytes.append(U8(weight & 255))
+    } else {
+        bytes.append(U8(0xE0 + (weight >> 16)))
+        bytes.append(U8(weight >> 8 & 255))
+        bytes.append(U8(weight & 255))
+    }
+}
+
+extension String {
+    /// Which of the texts comes first in the locale's order, as
+    /// `Collator.compare` says; a collator made once is quicker for many.
+    ///
+    /// ```sable
+    /// assert("ärm".compare("zon", locale: Locale.of("sv")!) == .Greater)
+    /// assert("ärm".compare("zon", locale: Locale.of("de")!) == .Less)
+    /// ```
+    public fn compare(_ other: String, locale: Locale) -> Ordering {
+        return Collator(locale).compare(self, other)
+    }
+}

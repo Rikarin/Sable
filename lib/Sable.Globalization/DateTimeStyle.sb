@@ -1,0 +1,26 @@
+module Sable.Globalization
+
+/// How long a date or a time is written, from the locale's longest form to
+/// its shortest.
+public enum DateTimeStyle {
+    /// "Tuesday, November 17, 2026"; "9:05:03 AM GMT+01:00".
+    Full
+    /// "November 17, 2026"; "9:05:03 AM GMT+1".
+    Long
+    /// "Nov 17, 2026"; "9:05:03 AM".
+    Medium
+    /// "11/17/26"; "9:05 AM".
+    Short
+
+    /// Its place in a record's patterns.
+    var index: Int {
+        get {
+            return match self {
+                case .Full   => 0
+                case .Long   => 1
+                case .Medium => 2
+                case .Short  => 3
+            }
+        }
+    }
+}

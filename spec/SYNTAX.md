@@ -1615,6 +1615,8 @@ An argument whose type its parameter decides, a closure or an implicit member,
 fits only a parameter of its shape when overloads are chosen: `pick(.Fast)`
 is `pick(_: Mode)` and `pick { .Fast }` is `pick(_: () -> Mode)`, since a
 function type has no members to name with a dot, and a closure is no enum.
+Of overloads whose types could, an implicit member means the one whose type
+has a member of its name.
 
 ### Braces: record literal, trailing closure, or body
 

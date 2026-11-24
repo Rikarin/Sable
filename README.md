@@ -221,6 +221,7 @@ and Sublime Text, and any other editor with LSP support can run `sable lsp`.
 | [docs/05-toolchain.md](docs/05-toolchain.md) | The `sable` command, manifests, packages and builds |
 | [docs/06-runtime-and-stdlib.md](docs/06-runtime-and-stdlib.md) | The runtime, reflection and the standard library |
 | [docs/08-source-generators.md](docs/08-source-generators.md) | Source generators |
+| [docs/09-globalization.md](docs/09-globalization.md) | Locales: what `Sable.Globalization` is built on, and why |
 | [docs/diagnostics/](docs/diagnostics/) | What every compiler diagnostic means — the pages `sable explain` prints |
 
 ## Status

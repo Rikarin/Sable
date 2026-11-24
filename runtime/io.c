@@ -578,13 +578,15 @@ SableArray *sable_env_all(void) {
 }
 
 // A text about the system (0 the host's name, 1 the user's, 2 the home
-// directory, 3 the temporary one, 4 the OS version): empty where it gives none.
+// directory, 3 the temporary one, 4 the OS version, 5 the user's locale): empty where it
+// gives none.
 SableString *sable_system_text(int64_t which) {
     char *text = which == 0 ? host_name()
         : which == 1        ? user_name()
         : which == 2        ? home_directory()
         : which == 3        ? temporary_directory()
         : which == 4        ? os_version()
+        : which == 5        ? user_locale()
                             : NULL;
     if (text == NULL) {
         return make_string("", 0);

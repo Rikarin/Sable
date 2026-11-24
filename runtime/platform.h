@@ -355,6 +355,10 @@ static char *temporary_directory(void);
 // ("15.2"), Linux's kernel release ("6.8.0-45-generic"), Windows's
 // "major.minor.build" ("10.0.22631").
 static char *os_version(void);
+// The locale the system is set to, as it writes it ("en_US", "cs-CZ"): macOS's
+// and Windows's region setting. NULL on other systems, where the environment
+// alone (LC_ALL, LANG) says.
+static char *user_locale(void);
 static int64_t page_size(void);
 // The machine's physical memory in bytes; 0 when it is not known.
 static int64_t physical_memory(void);

@@ -1605,6 +1605,11 @@ static char *user_name(void) {
     return GetUserNameW(name, &size) ? from_wide(name) : NULL;
 }
 
+static char *user_locale(void) {
+    wchar_t name[LOCALE_NAME_MAX_LENGTH];
+    return GetUserDefaultLocaleName(name, LOCALE_NAME_MAX_LENGTH) > 0 ? from_wide(name) : NULL;
+}
+
 static char *home_directory(void) {
     return environment_variable("USERPROFILE");
 }

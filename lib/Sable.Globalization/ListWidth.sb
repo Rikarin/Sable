@@ -1,0 +1,11 @@
+module Sable.Globalization
+
+/// How long a list's joining words are.
+public enum ListWidth {
+    /// Whole words: "a, b, and c".
+    Wide
+    /// Shorter: "a, b, & c".
+    Short
+    /// As short as can be: "a, b, c".
+    Narrow
+}

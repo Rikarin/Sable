@@ -1,0 +1,12 @@
+module Sable.Globalization
+
+/// How an amount's currency is written.
+public enum CurrencyDisplay {
+    /// By the symbol that tells it from others in the locale: "CA$" for the
+    /// Canadian dollar in the United States, "$" in Canada.
+    Symbol
+    /// By the symbol its own country uses, whatever else has it: "$".
+    Narrow
+    /// By its ISO 4217 code: "CAD".
+    Code
+}

@@ -1,0 +1,97 @@
+module Sable.Globalization
+
+import Sable.Time
+
+// Sable.Time's dates and times, written and read by a locale.
+
+extension Date {
+    /// The date as the locale writes it.
+    ///
+    /// ```sable
+    /// let date = Date.of(year: 2026, month: 11, day: 17)!
+    /// assert(date.format(.Long, locale: Locale.of("en")!) == "November 17, 2026")
+    /// assert(date.format(.Full, locale: Locale.of("ja")!) == "2026年11月17日火曜日")
+    /// assert(date.format(.Short, locale: .invariant) == "2026-11-17")
+    /// ```
+    public fn format(_ style: DateTimeStyle, locale: Locale) -> String {
+        return DateTimeFormatter(date: style, locale: locale).format(self)
+    }
+
+    /// The date the text writes as the locale writes one of the style.
+    ///
+    /// ```sable
+    /// let read = try! Date.parse("17. 11. 2026", .Medium, locale: Locale.of("cs")!)
+    /// assert(read == Date.of(year: 2026, month: 11, day: 17)!)
+    /// ```
+    public static fn parse(_ text: String, _ style: DateTimeStyle, locale: Locale) throws(ParseError) -> Date {
+        return try DateTimeFormatter(date: style, locale: locale).parseDate(text)
+    }
+}
+
+extension TimeOfDay {
+    /// The time as the locale writes it.
+    ///
+    /// ```sable
+    /// let time = TimeOfDay.of(hour: 21, minute: 5)!
+    /// assert(time.format(.Short, locale: Locale.of("en")!) == "9:05\u{202F}PM")
+    /// assert(time.format(.Short, locale: Locale.of("de")!) == "21:05")
+    /// ```
+    public fn format(_ style: DateTimeStyle, locale: Locale) -> String {
+        return DateTimeFormatter(time: style, locale: locale).format(self)
+    }
+
+    /// The time the text writes as the locale writes one of the style.
+    ///
+    /// ```sable
+    /// assert(try! TimeOfDay.parse("9:05 PM", .Short, locale: Locale.of("en")!) == TimeOfDay.of(hour: 21, minute: 5)!)
+    /// ```
+    public static fn parse(_ text: String, _ style: DateTimeStyle, locale: Locale) throws(ParseError) -> TimeOfDay {
+        return try DateTimeFormatter(time: style, locale: locale).parseTime(text)
+    }
+}
+
+extension LocalDateTime {
+    /// The date and time as the locale writes them.
+    ///
+    /// ```sable
+    /// let moment = LocalDateTime.of(year: 2026, month: 11, day: 17, hour: 9, minute: 5)!
+    /// assert(moment.format(date: .Medium, time: .Short, locale: Locale.of("sv")!) == "17 nov. 2026 09:05")
+    /// ```
+    public fn format(date: DateTimeStyle, time: DateTimeStyle, locale: Locale) -> String {
+        return DateTimeFormatter(date: date, time: time, locale: locale).format(self)
+    }
+
+    /// The date and time the text writes as the locale writes them.
+    ///
+    /// ```sable
+    /// let read = try! LocalDateTime.parse("17.11.26, 09:05", date: .Short, time: .Short, locale: Locale.of("de")!)
+    /// assert(read == LocalDateTime.of(year: 2026, month: 11, day: 17, hour: 9, minute: 5)!)
+    /// ```
+    public static fn parse(_ text: String, date: DateTimeStyle, time: DateTimeStyle, locale: Locale) throws(ParseError) -> LocalDateTime {
+        return try DateTimeFormatter(date: date, time: time, locale: locale).parseDateTime(text)
+    }
+}
+
+extension OffsetDateTime {
+    /// The moment as the locale writes it, at its offset.
+    ///
+    /// ```sable
+    /// let moment = try! OffsetDateTime.parse("2026-11-17T09:05:03+01:00")
+    /// assert(moment.format(date: .Short, time: .Long, locale: Locale.of("fr")!) == "17/11/2026 09:05:03 UTC+1")
+    /// ```
+    public fn format(date: DateTimeStyle, time: DateTimeStyle, locale: Locale) -> String {
+        return DateTimeFormatter(date: date, time: time, locale: locale).format(self)
+    }
+}
+
+extension ZonedDateTime {
+    /// The moment as the locale writes it, as its zone's clocks show it.
+    ///
+    /// ```sable
+    /// let moment = try! ZonedDateTime.parse("2026-07-01T12:00:00+00:00[UTC]")
+    /// assert(moment.format(date: .Long, time: .Short, locale: Locale.of("en-GB")!) == "1 July 2026 at 12:00")
+    /// ```
+    public fn format(date: DateTimeStyle, time: DateTimeStyle, locale: Locale) -> String {
+        return DateTimeFormatter(date: date, time: time, locale: locale).format(self)
+    }
+}

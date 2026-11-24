@@ -1,0 +1,187 @@
+module Sable.Globalization
+
+// The Unicode Collation Algorithm (UTS #10) over the CLDR's root collation
+// and its tailorings, from the tables of CollationTables.sb that
+// tools/locale-tables.py generates and describes. A text is put in NFD, and
+// what is left to right its longest strings the tables know become
+// collation elements.
+//
+// An element is an Int: the primary weight from bit 20 on, the secondary
+// (10 bits) and the tertiary (10 bits: its rank times four, and the case).
+
+const ideographBase = 0x10000
+const unassignedBase = 0x40000
+
+fn elementOf(_ primary: Int, _ secondary: Int, _ tertiary: Int) -> Int {
+    return primary << 20 | secondary << 10 | tertiary
+}
+
+/// The number the digits from byte 'at' of the table write.
+fn collationNumber(_ table: String, _ at: Int, _ width: Int) -> Int {
+    let bytes = table.utf8
+    var value = 0
+    var i = 0
+    while i < width {
+        value = value * 32 + Int(bytes[at + i]) - 48
+        i += 1
+    }
+    return value
+}
+
+/// Where record r of a table of records 'width' digits wide starts.
+fn collationRecord(_ record: Int, _ width: Int) -> Int {
+    return record * width + record / collationRecordsPerLine
+}
+
+/// The element written at byte 'at' of the table.
+fn elementAt(_ table: String, _ at: Int) -> Int {
+    return elementOf(collationNumber(table, at, 4), collationNumber(table, at + 4, 2), collationNumber(table, at + 6, 2))
+}
+
+/// So many elements of the pool, from one on.
+fn addPooled(_ first: Int, _ count: Int, into elements: inout Int[>..]) {
+    var i = 0
+    while i < count {
+        elements.append(elementAt(collationPool, collationRecord(first + i, 8)))
+        i += 1
+    }
+}
+
+/// The elements the root collation gives the code point alone.
+fn addRootElements(_ code: Int, into elements: inout Int[>..]) {
+    var low = collationNumber(collationIndex, collationRecord(code >> 8, 3), 3)
+    var high = code >> 8 == 0x10FF ? collationRunCount : collationNumber(collationIndex, collationRecord((code >> 8) + 1, 3), 3) + 1
+    if high > collationRunCount {
+        high = collationRunCount
+    }
+    while low < high {
+        let middle = (low + high) / 2
+        let at = collationRecord(middle, 15)
+        let first = collationNumber(collationRuns, at, 4)
+        if code < first {
+            high = middle
+        } else if code >= first + collationNumber(collationRuns, at + 4, 3) {
+            low = middle + 1
+        } else {
+            if collationNumber(collationRuns, at + 13, 2) == 1023 {
+                addPooled(collationNumber(collationRuns, at + 7, 4), collationNumber(collationRuns, at + 11, 2), into: &elements)
+            } else {
+                elements.append(elementAt(collationRuns, at + 7) + ((code - first) << 20))
+            }
+            return
+        }
+    }
+    elements.append(elementOf(implicitPrimary(code), collationCommonSecondary, collationCommonTertiary * 4))
+}
+
+/// The primary of a code point the tables say nothing of: an ideograph's,
+/// by where it is, in UTS #10's implicit order; U+FFFE before everything,
+/// U+FFFD and U+FFFF after it; and the unassigned after all that are.
+fn implicitPrimary(_ code: Int) -> Int {
+    if code >= 0x4E00 && code <= 0x9FFF {
+        return ideographBase + code - 0x4E00
+    }
+    if code >= 0xFA0E && code <= 0xFA29 {
+        return ideographBase + 0x5200 + code - 0xFA0E
+    }
+    if code >= 0x3400 && code <= 0x4DBF {
+        return ideographBase + 0x5300 + code - 0x3400
+    }
+    if code >= 0x20000 && code <= 0x323AF {
+        return ideographBase + 0x7000 + code - 0x20000
+    }
+    if code == 0xFFFE {
+        return 1
+    }
+    if code == 0xFFFD || code == 0xFFFF {
+        return unassignedBase + 0x110000 + code
+    }
+    return unassignedBase + code
+}
+
+/// A string a collation has elements for of its own.
+struct CollationString {
+    let codes: Int[>..]
+    let elements: Int[>..]
+}
+
+/// The root's contractions that start with the code point.
+fn rootContractions(_ code: Int) -> CollationString[>..] {
+    var found: CollationString[>..] = []
+    var low = 0
+    var high = collationContractionCount
+    while low < high {
+        let middle = (low + high) / 2
+        if collationNumber(collationContractions, collationRecord(middle, 18), 4) < code {
+            low = middle + 1
+        } else {
+            high = middle
+        }
+    }
+    while low < collationContractionCount {
+        let at = collationRecord(low, 18)
+        if collationNumber(collationContractions, at, 4) != code {
+            break
+        }
+        var codes: Int[>..] = [code, collationNumber(collationContractions, at + 4, 4)]
+        let third = collationNumber(collationContractions, at + 8, 4)
+        if third != 0 {
+            codes.append(third)
+        }
+        var elements: Int[>..] = []
+        addPooled(collationNumber(collationContractions, at + 12, 4), collationNumber(collationContractions, at + 16, 2), into: &elements)
+        found.append(CollationString { codes: codes, elements: elements })
+        low += 1
+    }
+    return found
+}
+
+/// A collation's own strings, by their first code points.
+fn tailoredStrings(_ table: String) -> [Int: CollationString[>..]] {
+    var all: [Int: CollationString[>..]] = [:]
+    for line in table.split('\n') {
+        if line.isEmpty {
+            continue
+        }
+        let length = collationNumber(line, 0, 1)
+        var codes: Int[>..] = []
+        var at = 1
+        while codes.count < length {
+            codes.append(collationNumber(line, at, 4))
+            at += 4
+        }
+        var elements: Int[>..] = []
+        while at < line.utf8Count {
+            elements.append(elementAt(line, at))
+            at += 8
+        }
+        var same: CollationString[>..] = all[codes[0]] ?? []
+        same.append(CollationString { codes: codes, elements: elements })
+        all[codes[0]] = same
+    }
+    return all
+}
+
+/// A run of primaries a locale moves: from where, how many, to where.
+struct CollationMove {
+    let start: Int
+    let end: Int
+    let target: Int
+}
+
+/// The runs of the primaries in a locale's order of scripts.
+fn collationMoves(_ table: String) -> CollationMove[>..] {
+    var moves: CollationMove[>..] = []
+    var target = 2
+    for line in table.split('\n') {
+        var at = 0
+        while at < line.utf8Count {
+            let start = collationNumber(line, at, 4)
+            let end = collationNumber(line, at + 4, 4)
+            moves.append(CollationMove { start: start, end: end, target: target })
+            target += end - start
+            at += 8
+        }
+    }
+    return moves
+}

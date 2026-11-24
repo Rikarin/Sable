@@ -1,0 +1,271 @@
+module Sable.Globalization
+
+import Sable.Time
+
+/// A locale's way of writing dates and times, made once to write many: what
+/// their `format(_:locale:)` makes for each. ECMA-402's Intl.DateTimeFormat.
+///
+/// Dates are the Gregorian calendar's, in every locale. A full or long time
+/// ends with the offset from UTC, where there is one to write, as the locale
+/// writes it ("GMT+1"): the tables have no names of time zones.
+///
+/// A pattern is the CLDR's (UTS #35 part 4), not .NET's, which is
+/// `format(pattern:)`'s: `y` the year, `M` the month (`MMM`, `MMMM` its
+/// name; `L` as it stands alone), `d` the day, `E` the weekday's short name
+/// (`EEEE` its name, `c` as it stands alone), `G` the era, `h` and `a` the
+/// hour of twelve and its half of the day (`B` its part, where the locale
+/// speaks of those), `H` of twenty-four (`K` and `k`
+/// count them from 0 and 1), `m`, `s`, `S` the fraction, `z`, `O`, `x` and
+/// `X` the offset; a letter twice pads with a zero, and text in '…' is
+/// written as it is. Another letter traps.
+///
+/// ```sable
+/// let formatter = DateTimeFormatter(date: .Long, time: .Short, locale: Locale.of("pt")!)
+/// let moment = LocalDateTime.of(year: 2026, month: 11, day: 17, hour: 9, minute: 5)!
+/// assert(formatter.format(moment) == "17 de novembro de 2026 às 09:05")
+/// assert(DateTimeFormatter(pattern: "EEE d. MMM", locale: Locale.of("de")!).format(moment) == "Di. 17. Nov.")
+/// ```
+public struct DateTimeFormatter {
+    /// Whose way they are written in.
+    public let locale: Locale
+    /// The CLDR pattern they are written by.
+    public let pattern: String
+    let tokens: DateToken[>..]
+    let digits: Char[>..]
+
+    /// The locale's way of writing a date and a time, one or both, each in
+    /// its style.
+    public init(date: DateTimeStyle? = none, time: DateTimeStyle? = none, locale: Locale) {
+        let data = locale.data
+        var pattern = ""
+        if let d = date {
+            pattern = data.items("dates")[d.index]
+            if let t = time {
+                pattern = filled(data.items("joins")[d.index], data.items("times")[t.index], pattern)
+            }
+        } else if let t = time {
+            pattern = data.items("times")[t.index]
+        }
+        self.init(pattern: pattern, locale: locale)
+    }
+
+    /// The locale's words and digits, in the pattern.
+    public init(pattern: String, locale: Locale) {
+        self.locale = locale
+        self.pattern = pattern
+        self.tokens = dateTokens(pattern)
+        self.digits = (listed(numberingSystems, locale.numberingSystem) ?? "0123456789").toArray()
+    }
+
+    /// The date as the locale writes it. A pattern with a time in it traps.
+    public fn format(_ date: Date) -> String {
+        return write(date, none, none)
+    }
+
+    /// The time as the locale writes it. A pattern with a date in it traps.
+    public fn format(_ time: TimeOfDay) -> String {
+        return write(none, time, none)
+    }
+
+    /// The date and time as the locale writes them, without an offset.
+    public fn format(_ moment: LocalDateTime) -> String {
+        return write(moment.date, moment.time, none)
+    }
+
+    /// The moment as the locale writes it, at its offset.
+    public fn format(_ moment: OffsetDateTime) -> String {
+        return write(moment.date, moment.time, moment.offset)
+    }
+
+    /// The moment as the locale writes it, as its zone's clocks show it.
+    public fn format(_ moment: ZonedDateTime) -> String {
+        return write(moment.date, moment.time, moment.offset)
+    }
+
+    fn write(_ date: Date?, _ time: TimeOfDay?, _ offset: UtcOffset?) -> String {
+        let data = locale.data
+        var text = ""
+        // Whether an offset was left out just before: the bracket and the
+        // space it had go with it.
+        var skipped = false
+        for token in tokens {
+            let n = token.count
+            var piece = ""
+            match token.letter {
+                case ' ' => {
+                    piece = token.text
+                    if skipped && piece.hasPrefix(")") {
+                        piece = piece.slice(from: 1, to: piece.count)
+                    }
+                    if skipped && text.isEmpty {
+                        piece = piece.trimmedStart()
+                    }
+                }
+                case 'G', 'y', 'u', 'M', 'L', 'E', 'e', 'c', 'd', 'D' => {
+                    guard let d = date else {
+                        preconditionFailure("the pattern '\(pattern)' writes a date, and a time has none")
+                    }
+                    piece = dateField(token, d, data)
+                }
+                case 'z', 'Z', 'O', 'x', 'X', 'v', 'V' => {
+                    if let o = offset {
+                        piece = offsetField(token, o, data)
+                    } else {
+                        skipped = true
+                        text = text.trimmedEnd().trimmingSuffix("(").trimmedEnd().trimmingSuffix(",")
+                        continue
+                    }
+                }
+                case _ => {
+                    guard let t = time else {
+                        preconditionFailure("the pattern '\(pattern)' writes a time, and a date has none")
+                    }
+                    piece = timeField(token, t, data)
+                }
+            }
+            skipped = false
+            text += piece
+        }
+        return text
+    }
+
+    fn number(_ value: Int, _ width: Int) -> String {
+        return localDigits("\(value)".paddedStart(toWidth: width, with: '0'), digits)
+    }
+
+    fn dateField(_ token: DateToken, _ date: Date, _ data: LocaleData) -> String {
+        let n = token.count
+        // The year of its era: 1 BC is the year 0.
+        let year = date.year > 0 ? date.year : 1 - date.year
+        return match token.letter {
+            case 'G' => data.items("era")[date.year > 0 ? 1 : 0]
+            case 'y' => n == 2 ? number(year % 100, 2) : number(year, n)
+            case 'u' => (date.year < 0 ? "-" : "") + number(date.year < 0 ? 0 - date.year : date.year, n)
+            case 'M' => n < 3 ? number(date.month, n) : data.items(monthKey(n, alone: false))[date.month - 1]
+            case 'L' => n < 3 ? number(date.month, n) : data.items(monthKey(n, alone: true))[date.month - 1]
+            case 'd' => number(date.day, n)
+            case 'D' => number(date.dayOfYear, n)
+            case 'E' => data.items(dayKey(n, alone: false))[date.weekday.number - 1]
+            case _   => data.items(dayKey(n, alone: true))[date.weekday.number - 1]
+        }
+    }
+
+    fn timeField(_ token: DateToken, _ time: TimeOfDay, _ data: LocaleData) -> String {
+        let n = token.count
+        return match token.letter {
+            case 'B'      => data.fields["parts"] == none ? data.items("ampm")[time.hour < 12 ? 0 : 1] : data.items("parts")[time.hour]
+            case 'a', 'b' => data.items("ampm")[time.hour < 12 ? 0 : 1]
+            case 'h'      => number(time.hour % 12 == 0 ? 12 : time.hour % 12, n)
+            case 'H'      => number(time.hour, n)
+            case 'K'      => number(time.hour % 12, n)
+            case 'k'      => number(time.hour == 0 ? 24 : time.hour, n)
+            case 'm'      => number(time.minute, n)
+            case 's'      => number(time.second, n)
+            case _        => localDigits("\(time.nanosecond)".paddedStart(toWidth: 9, with: '0').paddedEnd(toWidth: n, with: '0').slice(from: 0, to: n), digits)
+        }
+    }
+
+    fn offsetField(_ token: DateToken, _ offset: UtcOffset, _ data: LocaleData) -> String {
+        let n = token.count
+        let seconds = offset.totalSeconds
+        let magnitude = seconds < 0 ? 0 - seconds : seconds
+        let hours = magnitude / 3600
+        let minutes = magnitude / 60 % 60
+        let letter = token.letter
+        if letter == 'X' && seconds == 0 {
+            return "Z"
+        }
+        if letter == 'x' || letter == 'X' || letter == 'Z' && n < 4 {
+            // ISO 8601's: "+01", "+0100" and "+01:00".
+            let sign = seconds < 0 ? "-" : "+"
+            let hh = "\(hours)".paddedStart(toWidth: 2, with: '0')
+            let mm = "\(minutes)".paddedStart(toWidth: 2, with: '0')
+            if n == 1 && letter != 'Z' {
+                return sign + hh + (minutes == 0 ? "" : mm)
+            }
+            return sign + hh + (n == 2 || n == 4 || letter == 'Z' ? "" : ":") + mm
+        }
+        // The locale's: "GMT+1", or "GMT+01:00" at length.
+        let formats = data.items("gmt")
+        if seconds == 0 {
+            return formats[1]
+        }
+        let signs: String[>..] = formats[2].split(';')
+        var pattern = seconds < 0 ? signs[1] : signs[0]
+        if n >= 4 {
+            pattern = pattern.replacing("HH", with: number(hours, 2)).replacing("H", with: number(hours, 1)).replacing("mm", with: number(minutes, 2))
+        } else {
+            let at = pattern.indexOf('m') ?? pattern.count
+            let lead = pattern.slice(from: 0, to: at - 1).replacing("HH", with: number(hours, 1)).replacing("H", with: number(hours, 1))
+            pattern = minutes == 0 ? lead : lead + pattern.slice(from: at - 1, to: pattern.count).replacing("mm", with: number(minutes, 2))
+        }
+        return formats[0].replacing("{0}", with: pattern)
+    }
+}
+
+/// A piece of a pattern: a letter repeated, or (letter ' ') text.
+struct DateToken {
+    let letter: Char
+    let count: Int
+    let text: String
+}
+
+/// The pattern's pieces.
+fn dateTokens(_ pattern: String) -> DateToken[>..] {
+    let chars = pattern.toArray()
+    var tokens: DateToken[>..] = []
+    var literal = ""
+    var i = 0
+    while i < chars.count {
+        let c = chars[i]
+        if c == '\'' {
+            if i + 1 < chars.count && chars[i + 1] == '\'' {
+                literal += "'"
+                i += 2
+                continue
+            }
+            i += 1
+            while i < chars.count {
+                if chars[i] == '\'' {
+                    if i + 1 < chars.count && chars[i + 1] == '\'' {
+                        i += 1
+                    } else {
+                        break
+                    }
+                }
+                literal += String.fromChar(chars[i])
+                i += 1
+            }
+            i += 1
+        } else if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' {
+            if !literal.isEmpty {
+                tokens.append(DateToken { letter: ' ', count: 0, text: literal })
+                literal = ""
+            }
+            precondition("GyuMLEecdDabBhHKkmsSzZOxXvV".contains(c), "the pattern '\(pattern)' has a field '\(c)' that is not written")
+            var count = 1
+            while i + count < chars.count && chars[i + count] == c {
+                count += 1
+            }
+            tokens.append(DateToken { letter: c, count: count, text: "" })
+            i += count
+        } else {
+            literal += String.fromChar(c)
+            i += 1
+        }
+    }
+    if !literal.isEmpty {
+        tokens.append(DateToken { letter: ' ', count: 0, text: literal })
+    }
+    return tokens
+}
+
+/// The field of a record the month's names are in.
+fn monthKey(_ count: Int, alone: Bool) -> String {
+    return count == 5 ? "months.narrow" : (alone ? "months.alone" : "months") + (count == 3 ? ".short" : "")
+}
+
+/// The field of a record the weekday's names are in.
+fn dayKey(_ count: Int, alone: Bool) -> String {
+    return count == 5 ? "days.narrow" : (alone ? "days.alone" : "days") + (count == 4 ? "" : ".short")
+}

@@ -1,0 +1,207 @@
+module GlobalizationIcuTests
+
+// Sable.Globalization held to what ICU writes and orders: the cases
+// tools/locale-tests.mjs writes to data/ from Node's Intl. Each file's
+// first line says where it is from; the rest are tab-separated.
+
+import Sable.Globalization
+import Sable.IO
+import Sable.Testing
+import Sable.Time
+
+fn cases(_ name: String) -> String[>..][>..] {
+    var up = ""
+    var depth = 0
+    while depth < 8 && !File.exists("\(up)tests/lib/Sable.Globalization/data/\(name)") {
+        up = up + "../"
+        depth += 1
+    }
+    var all: String[>..][>..] = []
+    for line in try! File.readLines("\(up)tests/lib/Sable.Globalization/data/\(name)") {
+        if !line.hasPrefix("#") {
+            all.append(line.split('\t'))
+        }
+    }
+    assert(all.count > 50)
+    return all
+}
+
+/// Locales, each made once.
+struct Locales {
+    var made: [String: Locale] = [:]
+
+    mutating fn of(_ tag: String) -> Locale {
+        if let known = made[tag] {
+            return known
+        }
+        let locale = Locale.of(tag)!
+        made[tag] = locale
+        return locale
+    }
+}
+
+/// What is wrong, some of it, and how much there is.
+struct Mismatches {
+    var shown: String[>..] = []
+    var count = 0
+
+    mutating fn check(_ what: String, _ actual: String, _ expected: String) {
+        if actual != expected {
+            count += 1
+            if shown.count < 40 {
+                shown.append("\(what): \(actual:?) is not \(expected:?)")
+            }
+        }
+    }
+
+    fn report() {
+        assert(count == 0, "\(count) differ:\n" + shown.joined(separator: "\n"))
+    }
+}
+
+fn numberFormat(_ text: String) -> NumberFormat {
+    if let (kind, code) = text.splitOnce(':') {
+        var money = NumberFormat.currency(code)
+        money.accounting = kind == "accounting"
+        money.currencyDisplay = kind == "code" ? CurrencyDisplay.Code : kind == "narrow" ? CurrencyDisplay.Narrow : CurrencyDisplay.Symbol
+        return money
+    }
+    if text == "percent" {
+        var percent = NumberFormat.percent
+        percent.maximumFractionDigits = 1
+        return percent
+    }
+    if text == "signed" {
+        var signed = NumberFormat.decimal
+        signed.sign = .Always
+        signed.maximumFractionDigits = 2
+        return signed
+    }
+    return text == "scientific" ? NumberFormat.scientific : NumberFormat.decimal
+}
+
+@test
+fn numbersAreWrittenAsIcuWritesThem() {
+    var locales = Locales()
+    var wrong = Mismatches()
+    for c in cases("numbers.txt") {
+        let written = (try! F64.parse(c[2])).format(numberFormat(c[1]), locale: locales.of(c[0]))
+        wrong.check("\(c[0]) \(c[1]) \(c[2])", written, c[3])
+    }
+    wrong.report()
+}
+
+@test
+fn numbersWrittenAreReadBack() {
+    var locales = Locales()
+    var wrong = Mismatches()
+    for c in cases("numbers.txt") {
+        if c[1] == "scientific" || c[1] == "percent" || c[2] == "1234567890123" || c[2] == "99.995" || c[1] == "signed" {
+            continue
+        }
+        let format = numberFormat(c[1])
+        let read: F64? = try? F64.parse(c[3], format: format, locale: locales.of(c[0]))
+        let again = read == none ? "nothing" : read!.format(format, locale: locales.of(c[0]))
+        wrong.check("\(c[0]) \(c[1]) \(c[2])", again, c[3])
+    }
+    wrong.report()
+}
+
+@test
+fn pluralsAreAsIcus() {
+    var wrong = Mismatches()
+    for c in cases("plurals.txt") {
+        let rules = PluralRules(Locale.of(c[0])!, ordinal: c[1] == "ordinal")
+        for pair in c[2...] {
+            let (number, category) = pair.splitOnce('=')!
+            let found = number.contains('.') ? rules.category(try! F64.parse(number)) : rules.category(try! Int.parse(number))
+            wrong.check("\(c[0]) \(c[1]) \(number)", found.name, category)
+        }
+    }
+    wrong.report()
+}
+
+@test
+fn listsAreAsIcus() {
+    var wrong = Mismatches()
+    for c in cases("lists.txt") {
+        let kind: ListKind = match c[1] {
+            case "conjunction" => .And
+            case "disjunction" => .Or
+            case _             => .Unit
+        }
+        let width: ListWidth = match c[2] {
+            case "long"  => .Wide
+            case "short" => .Short
+            case _       => .Narrow
+        }
+        let items: String[>..] = c[3].split('|')
+        wrong.check("\(c[0]) \(c[1]) \(c[2]) \(c[3])", ListFormatter(Locale.of(c[0])!, kind: kind, width: width).format(items), c[4])
+    }
+    wrong.report()
+}
+
+fn style(_ text: String) -> DateTimeStyle? {
+    return match text {
+        case "full"   => DateTimeStyle.Full
+        case "long"   => DateTimeStyle.Long
+        case "medium" => DateTimeStyle.Medium
+        case "short"  => DateTimeStyle.Short
+        case _        => none
+    }
+}
+
+@test
+fn datesAreWrittenAsIcuWritesThemAndReadBack() {
+    var locales = Locales()
+    var wrong = Mismatches()
+    for c in cases("dates.txt") {
+        let moment = try! LocalDateTime.parse(c[3])
+        let formatter = DateTimeFormatter(date: style(c[1]), time: style(c[2]), locale: locales.of(c[0]))
+        let what = "\(c[0]) \(c[1]) \(c[2]) \(c[3])"
+        // V8 writes ICU's narrow spaces as plain ones.
+        wrong.check(what, formatter.format(moment).replacing("\u{202F}", with: " "), c[4].replacing("\u{202F}", with: " "))
+        if c[1] != "-" {
+            let read = try? formatter.parseDate(c[4])
+            wrong.check("\(what) read", read == none ? "nothing" : read!.toString(), moment.date.toString())
+        }
+        if c[2] == "medium" {
+            let read = try? formatter.parseTime(c[4])
+            wrong.check("\(what) read", read == none ? "nothing" : read!.toString(), moment.time.toString())
+        }
+    }
+    wrong.report()
+}
+
+fn collator(_ tag: String, _ option: String) -> Collator {
+    let locale = Locale.of(tag)!
+    return match option {
+        case "base"    => Collator(locale, strength: .Primary)
+        case "accent"  => Collator(locale, strength: .Secondary)
+        case "numeric" => Collator(locale, numeric: true)
+        case "upper"   => Collator(locale, caseFirst: .Upper)
+        case "lower"   => Collator(locale, caseFirst: .Lower)
+        case "ignore"  => Collator(locale, ignorePunctuation: true)
+        case _         => Collator(locale)
+    }
+}
+
+@test
+fn textsAreOrderedAsIcuOrdersThem() {
+    var wrong = Mismatches()
+    for c in cases("collation.txt") {
+        let order = collator(c[0], c[1])
+        var last = c[2]
+        var lastKey = order.sortKey(last)
+        for entry in c[3...] {
+            let text = entry.slice(from: 1, to: entry.count)
+            let key = order.sortKey(text)
+            let wanted = entry.hasPrefix("<") ? "Less" : "Equal"
+            wrong.check("\(c[0]) \(c[1]) \(last:?) \(text:?)", "\(order.compare(last, text))", wanted)
+            wrong.check("\(c[0]) \(c[1]) \(last:?) \(text:?) by key", "\(lastKey.compare(key))", wanted)
+            last = text
+            lastKey = key
+        }
+    }
+    wrong.report()
+}

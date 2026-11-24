@@ -1985,6 +1985,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     2 => VariableOf(OperatingSystem.IsWindows() ? "USERPROFILE" : "HOME") ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                     3 => Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar) is { Length: > 0 } temporary ? temporary : Path.GetTempPath(),
                     4 => Environment.OSVersion.Version.ToString(),
+                    5 => UserLocale.Find(),
                     _ => "",
                 }));
 

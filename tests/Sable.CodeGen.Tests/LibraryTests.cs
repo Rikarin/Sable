@@ -921,6 +921,52 @@ fn main() {
         );
     }
 
+    /// <summary>
+    ///     A protocol's extensions' overloads of the same labels do not hide one another, beside a
+    ///     conformer's own method of the name; and an implicit member is of the one whose type has it.
+    /// </summary>
+    [Fact]
+    public void AnExtensionsOverloadsOfTheSameLabelsAreAllThere() =>
+        Assert.Equal(
+            "fast\nsmall\nsmall 3\n1\n",
+            AssertAgree("""
+                module P
+
+                struct Speed {
+                    let name: String
+                    static var fast: Speed => Speed { name: "fast" }
+                }
+
+                struct Size {
+                    let name: String
+                    static var small: Size => Size { name: "small" }
+                    static fn small(_ n: Int) -> Size { return Size { name: "small \(n)" } }
+                }
+
+                protocol Moves {
+                    fn go(_ n: Int) -> String
+                }
+
+                extension Moves {
+                    fn go(_ speed: Speed, times: Int) -> String { return speed.name }
+                    fn go(_ size: Size, times: Int) -> String { return size.name }
+                }
+
+                struct Cart: Moves {
+                    fn go(_ n: Int) -> String { return "\(n)" }
+                }
+
+                @main
+                fn main() {
+                    let cart = Cart { }
+                    print(cart.go(.fast, times: 1))
+                    print(cart.go(.small, times: 1))
+                    print(cart.go(.small(3), times: 1))
+                    print(cart.go(1))
+                }
+                """).Stdout
+        );
+
     /// <summary>'[]' as an argument takes its type from the parameter, overloaded or not.</summary>
     [Fact]
     public void AnEmptyArrayArgumentTakesTheParametersType() =>

@@ -1,0 +1,47 @@
+module Sable.Globalization
+
+/// Plain digits, "-1234.5e+03", taken apart.
+struct NumberParts {
+    var negative: Bool
+    var whole: String
+    var fraction: String
+    var power: Int?
+
+    init(_ text: String) {
+        var rest = text.hasPrefix("-") ? text.slice(from: 1, to: text.count) : text
+        var power: Int? = none
+        var fraction = ""
+        if rest.hasSuffix(where: { $0.isDigit }) {
+            if let (mantissa, exponent) = rest.asciiLowercased().splitOnce('e') {
+                power = exponent.trimmingPrefix("+").toInt()
+                rest = mantissa
+            }
+            if let (before, after) = rest.splitOnce('.') {
+                rest = before
+                fraction = after
+            }
+        }
+        self.negative = text.hasPrefix("-")
+        self.whole = rest.asciiLowercased()
+        self.fraction = fraction
+        self.power = power
+    }
+
+    var isNaN: Bool => whole == "nan"
+
+    var isFinite: Bool => whole != "nan" && whole != "inf"
+
+    /// The parts together again.
+    var text: String {
+        get {
+            var all = (negative ? "-" : "") + whole
+            if !fraction.isEmpty {
+                all += "." + fraction
+            }
+            if let p = power {
+                all += "e\(p)"
+            }
+            return all
+        }
+    }
+}

@@ -815,6 +815,12 @@ Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, validated
                     or not, streamed by Base64Encoder/Base64Decoder),
                     Base32 (and base32hex) and Hex, RFC 4648, strict, a
                     DecodeError naming the offset, encoded in place
+Sable.Globalization Locale (BCP 47; current, invariant), numbers, money,
+                    dates and times written and read by one, PluralRules,
+                    ListFormatter, Collator (UCA, the CLDR's root and
+                    tailorings, sort keys), from CLDR tables that
+                    tools/locale-tables.py generates: the same everywhere.
+                    No locale unless one is given (docs/09)
 Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     generic over ElementaryFunctions; Complex<T> with
                     them all (Kahan's branch cuts, signed zeros, one point

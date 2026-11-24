@@ -1,0 +1,279 @@
+module Sable.Globalization
+
+// Reading numbers as a locale writes them. What is read is turned into plain
+// digits, which the type's own 'parse' then reads: a locale's reading is
+// never another's rounding or range.
+
+/// A character of the text and where it was.
+struct ReadChar {
+    let char: Char
+    let at: Int
+}
+
+/// The text's characters to be compared: white space as a space, the minus
+/// signs and apostrophes of any kind as one, and the marks that only say
+/// which way text runs left out.
+fn readable(_ text: String) -> ReadChar[>..] {
+    var read: ReadChar[>..] = []
+    var i = 0
+    for c in text {
+        let code = c.codePoint
+        if code == 0x200E || code == 0x200F || code == 0x61C || code >= 0x202A && code <= 0x202E || code >= 0x2066 && code <= 0x2069 {
+            i += 1
+            continue
+        }
+        let plain: Char = match c {
+            case '\u{2212}', '\u{2010}', '\u{2011}', '\u{2012}', '\u{2013}', '\u{FE63}', '\u{FF0D}' => '-'
+            case '\u{FF0B}'                                                                         => '+'
+            case '\u{2019}', '\u{2018}', '\u{2BC}'                                                  => '\''
+            case _                                                                                  => c.isWhitespace ? ' ' : c
+        }
+        read.append(ReadChar { char: plain, at: i })
+        i += 1
+    }
+    return read
+}
+
+/// Whether the text has the other at the place.
+fn hasRead(_ text: ReadChar[>..], _ at: Int, _ other: ReadChar[>..]) -> Bool {
+    if other.isEmpty || at < 0 || at + other.count > text.count {
+        return false
+    }
+    var i = 0
+    while i < other.count {
+        if text[at + i].char != other[i].char {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+/// The text without the white space around it.
+fn trimmedRead(_ text: ReadChar[>..]) -> ReadChar[>..] {
+    var start = 0
+    var end = text.count
+    while start < end && text[start].char == ' ' {
+        start += 1
+    }
+    while end > start && text[end - 1].char == ' ' {
+        end -= 1
+    }
+    var kept: ReadChar[>..] = []
+    while start < end {
+        kept.append(text[start])
+        start += 1
+    }
+    return kept
+}
+
+extension NumberFormatter {
+    /// The number the text writes as the locale does, its whole, as
+    /// `LocalizableNumber.parse(_:format:locale:)` reads it.
+    public fn parse<T: LocalizableNumber>(_ text: String) throws(ParseError) -> T {
+        let read = trimmedRead(readable(text))
+        if read.isEmpty {
+            throw .Empty
+        }
+        for negative in [false, true] {
+            for (leading, trailing) in parseAffixes(negative) {
+                let before = trimmedRead(readable(leading))
+                let after = trimmedRead(readable(trailing))
+                let end = read.count - after.count
+                if (before.isEmpty || hasRead(read, 0, before)) && (after.isEmpty || hasRead(read, end, after)) && end > before.count {
+                    var body: ReadChar[>..] = []
+                    var i = before.count
+                    while i < end {
+                        body.append(read[i])
+                        i += 1
+                    }
+                    body = trimmedRead(body)
+                    if let plain = try? plainBody(body) {
+                        return try T.parse(scaled(negative ? "-" + plain : plain))
+                    }
+                }
+            }
+        }
+        // Nothing fits: what is wrong is where its digits stop being a number.
+        throw readError(read)
+    }
+
+    /// The affixes a number of the sign may have, the fullest first.
+    fn parseAffixes(_ negative: Bool) -> (String, String)[>..] {
+        var all: (String, String)[>..] = []
+        var parts = NumberParts(negative ? "-1" : "1")
+        var names: String[>..] = [currency]
+        if !currencyCode.isEmpty {
+            names.append(currencyText(currencyCode, .Narrow, locale.data))
+            names.append(currencyCode)
+            names.append("")
+        }
+        for name in names {
+            var (before, after) = affixes(parts)
+            if !currency.isEmpty {
+                before = before.replacing(currency, with: name)
+                after = after.replacing(currency, with: name)
+            }
+            all.append((before, after))
+            if negative {
+                // A minus at the very front, whatever the pattern's place.
+                parts.negative = false
+                let (plainBefore, plainAfter) = affixes(parts)
+                parts.negative = true
+                if currency.isEmpty {
+                    all.append(("-" + plainBefore, plainAfter))
+                } else {
+                    all.append(("-" + plainBefore.replacing(currency, with: name), plainAfter.replacing(currency, with: name)))
+                }
+            } else {
+                all.append(("+" + before, after))
+            }
+        }
+        return all
+    }
+
+    /// A percentage's digits as the number of one they are.
+    fn scaled(_ text: String) -> String {
+        if numberFormat.kind != .Percent {
+            return text
+        }
+        var parts = NumberParts(text)
+        if !parts.isFinite {
+            return text
+        }
+        let whole = parts.whole.paddedStart(toWidth: 3, with: '0')
+        let cut = whole.count - 2
+        parts.fraction = (whole.slice(from: cut, to: whole.count) + parts.fraction).trimmedEnd(where: { $0 == '0' })
+        parts.whole = whole.slice(from: 0, to: cut)
+        return parts.text
+    }
+
+    /// A number without its sign and affixes, as plain digits.
+    fn plainBody(_ body: ReadChar[>..]) throws(ParseError) -> String {
+        if body.isEmpty {
+            throw .Empty
+        }
+        let point = readable(decimal)
+        let mark = readable(group)
+        if sameRead(body, readable(infinity)) {
+            return "inf"
+        }
+        if sameRead(body, readable(notANumber)) {
+            return "nan"
+        }
+        var plain = ""
+        // The whole part's digits since its last separator, and the digits
+        // in each group before that.
+        var since = 0
+        var groups: Int[>..] = []
+        var fraction = -1
+        var hasDigit = false
+        var i = 0
+        while i < body.count {
+            let c = body[i].char
+            if let digit = digitOf(c) {
+                hasDigit = true
+                plain += "\(digit)"
+                if fraction >= 0 {
+                    fraction += 1
+                } else {
+                    since += 1
+                }
+                i += 1
+            } else if fraction < 0 && hasRead(body, i, point) {
+                if plain.isEmpty {
+                    plain = "0"
+                }
+                plain += "."
+                fraction = 0
+                i += point.count
+            } else if fraction < 0 && since > 0 && pattern.primaryGroup > 0 && numberFormat.grouping != .Never && hasRead(body, i, mark) {
+                groups.append(since)
+                since = 0
+                i += mark.count
+            } else if numberFormat.kind == .Scientific && !plain.isEmpty && hasExponent(body, i) {
+                i += exponentCount(body, i)
+                var power = ""
+                if i < body.count && (body[i].char == '-' || body[i].char == '+') {
+                    power = body[i].char == '-' ? "-" : ""
+                    i += 1
+                }
+                let first = i
+                while i < body.count {
+                    guard let digit = digitOf(body[i].char) else {
+                        throw .InvalidDigit(at: body[i].at)
+                    }
+                    power += "\(digit)"
+                    i += 1
+                }
+                if i == first {
+                    throw .InvalidDigit(at: body[i - 1].at + 1)
+                }
+                plain += (fraction == 0 ? "0" : "") + "e" + power
+            } else {
+                throw .InvalidDigit(at: body[i].at)
+            }
+        }
+        if plain.isEmpty || plain == "0." && !hasDigit {
+            throw .InvalidDigit(at: body[body.count - 1].at + 1)
+        }
+        if !groups.isEmpty {
+            // Separators are where the locale puts them or the text is
+            // another number than it seems.
+            var right = since == pattern.primaryGroup && groups[0] <= pattern.secondaryGroup
+            var g = 1
+            while g < groups.count {
+                right = right && groups[g] == pattern.secondaryGroup
+                g += 1
+            }
+            if !right {
+                throw .Invalid(at: body[0].at)
+            }
+        }
+        return plain.hasSuffix(".") ? plain.slice(from: 0, to: plain.count - 1) : plain
+    }
+
+    /// The digit the character is, the locale's or ASCII's.
+    fn digitOf(_ c: Char) -> Int? {
+        if c >= '0' && c <= '9' {
+            return c.codePoint - 48
+        }
+        return digits.firstIndex(of: c)
+    }
+
+    fn hasExponent(_ body: ReadChar[>..], _ at: Int) -> Bool {
+        return exponentCount(body, at) > 0
+    }
+
+    /// How long the exponent's mark is there: the locale's, or 'e'.
+    fn exponentCount(_ body: ReadChar[>..], _ at: Int) -> Int {
+        let mark = readable(exponent)
+        if hasRead(body, at, mark) {
+            return mark.count
+        }
+        return body[at].char == 'e' || body[at].char == 'E' ? 1 : 0
+    }
+
+    /// Why the text is no number: where it stops being one.
+    fn readError(_ read: ReadChar[>..]) -> ParseError {
+        var body = read
+        if body.count > 1 && (body[0].char == '-' || body[0].char == '+') {
+            body = []
+            var i = 1
+            while i < read.count {
+                body.append(read[i])
+                i += 1
+            }
+        }
+        do {
+            let _ = try plainBody(body)
+            return .Invalid(at: body[0].at)
+        } catch {
+            return error
+        }
+    }
+}
+
+fn sameRead(_ a: ReadChar[>..], _ b: ReadChar[>..]) -> Bool {
+    return a.count == b.count && hasRead(a, 0, b)
+}

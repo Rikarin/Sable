@@ -1,0 +1,22 @@
+module FormatLocaleBench
+
+import Sable.Globalization
+
+// Numbers written and read by a locale.
+
+@main
+fn main() {
+    var format = NumberFormat.decimal
+    format.minimumFractionDigits = 2
+    format.maximumFractionDigits = 2
+    let german = NumberFormatter(format, locale: Locale.of("de")!)
+    var total = 0
+    var sum = 0.0
+    for i in 0..<20000 {
+        let text = german.format(F64(i) * 98.25)
+        total += text.count
+        let read: F64 = try! german.parse(text)
+        sum += read
+    }
+    print("\(total) \(sum)")
+}

@@ -728,7 +728,8 @@ Sable.Core          ── always linked, no dependencies
   (xoshiro256**), behind 'random(in:)', 'randomElement' and 'shuffle'
 
 Sable.Collections   List Dictionary Set Deque OrderedDictionary
-                    PriorityQueue BitSet InlineArray SmallVec
+                    PriorityQueue BitSet InlineArray SmallVec,
+                    SortedDictionary SortedSet (B-trees, range queries)
 Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs; normalisation
                     (NFC, NFD, NFKC, NFKD); grapheme clusters, words and
                     sentences (UAX #29) and line breaks (UAX #14), each

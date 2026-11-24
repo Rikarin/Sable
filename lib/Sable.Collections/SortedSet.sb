@@ -1,0 +1,438 @@
+module Sable.Collections
+
+// A set in the order of its elements: .NET's SortedSet, Rust's BTreeSet.
+// A B-tree (BTree.sb) of its elements, each with a value of no use, so
+// that it shares SortedDictionary's tree. Union, intersection and the rest
+// walk both sets in order at once, in linear time, and make the result's
+// tree from its elements in order, in linear time too.
+
+/// A set whose elements are in order: .NET's `SortedSet`, Rust's
+/// `BTreeSet`. Adding, removing and finding an element take O(log n); so do
+/// `first`, `last`, `floor` and `ceiling`, and reaching an element by its
+/// position. Set algebra takes time linear in both sets.
+///
+/// ```sable
+/// var primes = SortedSet<Int>([7, 2, 5, 3])
+/// primes.insert(11)
+/// assert(primes.toArray() == [2, 3, 5, 7, 11])
+/// assert(primes.floor(6) == 5)
+/// assert(primes.intersection(SortedSet<Int>([1, 2, 3])).toArray() == [2, 3])
+/// ```
+public struct SortedSet<Element: Comparable>: Sequence {
+    public alias Iter = SortedSetIterator<Element>
+
+    var tree: BTree<Element, Bool>
+
+    /// An empty set.
+    public init() {
+        tree = BTree<Element, Bool>()
+    }
+
+    /// The set of the elements, each once. Elements already in order are
+    /// made into the tree in linear time.
+    public init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element {
+        var all: Element[>..] = []
+        var ordered = true
+        for try element in elements {
+            if !all.isEmpty && !(all[all.count - 1] < element) {
+                ordered = false
+            }
+            all.append(element)
+        }
+        if !ordered {
+            all.sort()
+            all = SortedSet.unique(all)
+        }
+        tree = SortedSet.treeOf(all)
+    }
+
+    /// Each element once, from elements in order.
+    static fn unique(_ sorted: Element[>..]) -> Element[>..] {
+        var kept: Element[>..] = []
+        for element in sorted {
+            if kept.isEmpty || kept[kept.count - 1] < element {
+                kept.append(element)
+            }
+        }
+        return kept
+    }
+
+    /// The tree of elements in order, each once.
+    static fn treeOf(_ elements: Element[:]) -> BTree<Element, Bool> {
+        var marks: Bool[>..] = []
+        marks.reserveCapacity(elements.count)
+        var i = 0
+        while i < elements.count {
+            marks.append(true)
+            i = i + 1
+        }
+        return BTree<Element, Bool>.build(elements, marks)
+    }
+
+    /// How many elements there are.
+    public var count: Int => tree.count
+
+    /// Whether there are none.
+    public var isEmpty: Bool => tree.count == 0
+
+    /// Whether the element is in the set.
+    public fn contains(_ element: Element) -> Bool {
+        return tree.contains(element)
+    }
+
+    /// Adds the element: true if it was not there already.
+    @discardable
+    public mutating fn insert(_ element: Element) -> Bool {
+        return tree.insert(element, true) == none
+    }
+
+    /// Removes the element: true if it was there.
+    @discardable
+    public mutating fn remove(_ element: Element) -> Bool {
+        return tree.remove(element) != none
+    }
+
+    /// Removes every element.
+    public mutating fn removeAll() {
+        tree = BTree<Element, Bool>()
+    }
+
+    /// The least element, or none.
+    public var first: Element? => tree.count == 0 ? none : tree.entry(rank: 0).0
+
+    /// The greatest element, or none.
+    public var last: Element? => tree.count == 0 ? none : tree.entry(rank: tree.count - 1).0
+
+    /// The least element, taken out; none when there is none.
+    @discardable
+    public mutating fn popFirst() -> Element? {
+        if let entry = tree.removeExtreme(greatest: false) {
+            return entry.0
+        }
+        return none
+    }
+
+    /// The greatest element, taken out; none when there is none.
+    @discardable
+    public mutating fn popLast() -> Element? {
+        if let entry = tree.removeExtreme(greatest: true) {
+            return entry.0
+        }
+        return none
+    }
+
+    /// The greatest element not above the value, or none.
+    public fn floor(_ value: Element) -> Element? {
+        let rank = tree.rank(of: value, orEqual: true)
+        return rank == 0 ? none : tree.entry(rank: rank - 1).0
+    }
+
+    /// The least element not below the value, or none.
+    public fn ceiling(_ value: Element) -> Element? {
+        let rank = tree.rank(of: value, orEqual: false)
+        return rank == tree.count ? none : tree.entry(rank: rank).0
+    }
+
+    /// The elements in the range, in order (.NET's `GetViewBetween`).
+    ///
+    /// ```sable
+    /// let s = SortedSet<Int>([1, 3, 5, 7, 9])
+    /// var found: Int[>..] = []
+    /// for x in s.range(3...7) {
+    ///     found.append(x)
+    /// }
+    /// assert(found == [3, 5, 7])
+    /// ```
+    public fn range(_ values: Range<Element>) -> SortedSetRange<Element> {
+        return SortedSetRange { tree: tree, lower: values.lowerBound, lowerIncluded: true, upper: values.upperBound, upperIncluded: false }
+    }
+
+    /// The elements in the range, both ends included.
+    public fn range(_ values: ClosedRange<Element>) -> SortedSetRange<Element> {
+        return SortedSetRange { tree: tree, lower: values.lowerBound, lowerIncluded: true, upper: values.upperBound, upperIncluded: true }
+    }
+
+    /// The elements not below the bound.
+    public fn range(_ values: PartialRangeFrom<Element>) -> SortedSetRange<Element> {
+        return SortedSetRange { tree: tree, lower: values.lowerBound, lowerIncluded: true, upper: none, upperIncluded: false }
+    }
+
+    /// The elements below the bound.
+    public fn range(_ values: PartialRangeUpTo<Element>) -> SortedSetRange<Element> {
+        return SortedSetRange { tree: tree, lower: none, lowerIncluded: true, upper: values.upperBound, upperIncluded: false }
+    }
+
+    /// The elements not above the bound.
+    public fn range(_ values: PartialRangeThrough<Element>) -> SortedSetRange<Element> {
+        return SortedSetRange { tree: tree, lower: none, lowerIncluded: true, upper: values.upperBound, upperIncluded: true }
+    }
+
+    /// The elements from the value on taken out, as a set of their own:
+    /// this one keeps those below it.
+    public mutating fn split(at value: Element) -> SortedSet<Element> {
+        var low: Element[>..] = []
+        var high: Element[>..] = []
+        for element in self {
+            if element < value {
+                low.append(element)
+            } else {
+                high.append(element)
+            }
+        }
+        tree = SortedSet.treeOf(low)
+        var other = SortedSet<Element>()
+        other.tree = SortedSet.treeOf(high)
+        return other
+    }
+
+    /// Adds each element. Elements in order that all come after the
+    /// greatest here are added in linear time.
+    public mutating fn append<S: Sequence>(contentsOf elements: S) throws(S.Failure) where S.Element == Element {
+        var added: Element[>..] = []
+        var ordered = true
+        for try element in elements {
+            if !added.isEmpty && !(added[added.count - 1] < element) {
+                ordered = false
+            }
+            added.append(element)
+        }
+        if added.isEmpty {
+            return
+        }
+        if ordered && (tree.count == 0 || last! < added[0]) && added.count >= tree.count {
+            var all = self.toArray()
+            for element in added {
+                all.append(element)
+            }
+            tree = SortedSet.treeOf(all)
+            return
+        }
+        for element in added {
+            tree.insert(element, true)
+        }
+    }
+
+    /// The elements in order, as an array.
+    public fn toArray() -> Element[>..] {
+        var all: Element[>..] = []
+        all.reserveCapacity(count)
+        for element in self {
+            all.append(element)
+        }
+        return all
+    }
+
+    // ---- Set algebra ----------------------------------------------------
+
+    /// The elements of both walked in order together: those of each that
+    /// 'keep' says to keep, by whether they are in this set, the other, or
+    /// both.
+    fn merged(_ other: SortedSet<Element>, onlyHere: Bool, both: Bool, onlyThere: Bool) -> SortedSet<Element> {
+        var result: Element[>..] = []
+        var mine = self.makeIterator()
+        var theirs = other.makeIterator()
+        var a = mine.next()
+        var b = theirs.next()
+        while true {
+            if let x = a {
+                if let y = b {
+                    if x < y {
+                        if onlyHere {
+                            result.append(x)
+                        }
+                        a = mine.next()
+                    } else if y < x {
+                        if onlyThere {
+                            result.append(y)
+                        }
+                        b = theirs.next()
+                    } else {
+                        if both {
+                            result.append(x)
+                        }
+                        a = mine.next()
+                        b = theirs.next()
+                    }
+                } else {
+                    if onlyHere {
+                        result.append(x)
+                    }
+                    a = mine.next()
+                }
+            } else if let y = b {
+                if onlyThere {
+                    result.append(y)
+                }
+                b = theirs.next()
+            } else {
+                break
+            }
+        }
+        var made = SortedSet<Element>()
+        made.tree = SortedSet.treeOf(result)
+        return made
+    }
+
+    /// The elements of either.
+    public fn union(_ other: SortedSet<Element>) -> SortedSet<Element> {
+        return merged(other, onlyHere: true, both: true, onlyThere: true)
+    }
+
+    /// The elements of both.
+    public fn intersection(_ other: SortedSet<Element>) -> SortedSet<Element> {
+        return merged(other, onlyHere: false, both: true, onlyThere: false)
+    }
+
+    /// The elements of this set not in the other.
+    public fn subtracting(_ other: SortedSet<Element>) -> SortedSet<Element> {
+        return merged(other, onlyHere: true, both: false, onlyThere: false)
+    }
+
+    /// The elements of one of the two, not both.
+    public fn symmetricDifference(_ other: SortedSet<Element>) -> SortedSet<Element> {
+        return merged(other, onlyHere: true, both: false, onlyThere: true)
+    }
+
+    public mutating fn formUnion(_ other: SortedSet<Element>) {
+        self = self.union(other)
+    }
+
+    public mutating fn formIntersection(_ other: SortedSet<Element>) {
+        self = self.intersection(other)
+    }
+
+    public mutating fn subtract(_ other: SortedSet<Element>) {
+        self = self.subtracting(other)
+    }
+
+    public mutating fn formSymmetricDifference(_ other: SortedSet<Element>) {
+        self = self.symmetricDifference(other)
+    }
+
+    /// Whether every element is in the other.
+    public fn isSubset(of other: SortedSet<Element>) -> Bool {
+        if count > other.count {
+            return false
+        }
+        for element in self {
+            if !other.contains(element) {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Whether every element of the other is in this one.
+    public fn isSuperset(of other: SortedSet<Element>) -> Bool {
+        return other.isSubset(of: self)
+    }
+
+    /// A subset with fewer elements.
+    public fn isStrictSubset(of other: SortedSet<Element>) -> Bool {
+        return count < other.count && isSubset(of: other)
+    }
+
+    /// A superset with more elements.
+    public fn isStrictSuperset(of other: SortedSet<Element>) -> Bool {
+        return other.isStrictSubset(of: self)
+    }
+
+    /// Whether no element is in both.
+    public fn isDisjoint(with other: SortedSet<Element>) -> Bool {
+        return intersection(other).isEmpty
+    }
+
+    /// The elements in order.
+    public fn makeIterator() -> SortedSetIterator<Element> {
+        return SortedSetIterator { cursor: BTreeCursor(tree, from: none, included: true, to: none, included: false) }
+    }
+}
+
+extension SortedSet: BidirectionalCollection {
+    public alias Index = SortedIndex
+
+    public var startIndex: SortedIndex => SortedIndex { rank: 0 }
+
+    public var endIndex: SortedIndex => SortedIndex { rank: tree.count }
+
+    /// The element at a position, found in O(log n); one not an element's
+    /// traps.
+    public subscript(position: SortedIndex) -> Element {
+        get {
+            precondition(position.rank >= 0 && position.rank < tree.count, "index out of range")
+            return tree.entry(rank: position.rank).0
+        }
+    }
+
+    public fn index(after position: SortedIndex) -> SortedIndex {
+        return SortedIndex { rank: position.rank + 1 }
+    }
+
+    public fn index(before position: SortedIndex) -> SortedIndex {
+        return SortedIndex { rank: position.rank - 1 }
+    }
+
+    public fn index(_ position: SortedIndex, offsetBy distance: Int) -> SortedIndex {
+        return SortedIndex { rank: position.rank + distance }
+    }
+
+    /// The position of the element, or none.
+    public fn index(of element: Element) -> SortedIndex? {
+        return tree.contains(element) ? SortedIndex { rank: tree.rank(of: element, orEqual: false) } : none
+    }
+}
+
+extension SortedSet: Equatable {
+    /// The same elements.
+    public operator == (lhs: SortedSet<Element>, rhs: SortedSet<Element>) -> Bool {
+        if lhs.count != rhs.count {
+            return false
+        }
+        var left = lhs.makeIterator()
+        var right = rhs.makeIterator()
+        while let a = left.next() {
+            let b = right.next()!
+            if a < b || b < a {
+                return false
+            }
+        }
+        return true
+    }
+}
+
+extension SortedSet: Debug where Element: Debug {
+    public fn debugDescription() -> String {
+        var parts: String[>..] = []
+        for element in self {
+            parts.append(element.debugDescription())
+        }
+        return "SortedSet([" + parts.joined(separator: ", ") + "])"
+    }
+}
+
+/// Gives a SortedSet's elements in order.
+public struct SortedSetIterator<Element: Comparable>: Iterator {
+    var cursor: BTreeCursor<Element, Bool>
+
+    public mutating fn next() -> Element? {
+        if let entry = cursor.next() {
+            return entry.0
+        }
+        return none
+    }
+}
+
+/// The elements of a SortedSet in a range, in order: what `range(_:)` gives.
+public struct SortedSetRange<Element: Comparable>: Sequence {
+    public alias Iter = SortedSetIterator<Element>
+
+    let tree: BTree<Element, Bool>
+    let lower: Element?
+    let lowerIncluded: Bool
+    let upper: Element?
+    let upperIncluded: Bool
+
+    public fn makeIterator() -> SortedSetIterator<Element> {
+        return SortedSetIterator { cursor: BTreeCursor(tree, from: lower, included: lowerIncluded, to: upper, included: upperIncluded) }
+    }
+}

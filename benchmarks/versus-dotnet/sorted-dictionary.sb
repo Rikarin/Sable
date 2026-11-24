@@ -1,0 +1,63 @@
+module SortedDictionaryBench
+
+import Sable.Collections
+
+// SortedDictionary<Int, Int> against .NET 11's (a red-black tree): 200,000
+// pseudo-random keys inserted, each looked up, a third removed, then the
+// rest gone through in order and the keys of a range counted.
+// ../dotnet/Program.cs does the same, and prints the same line.
+
+@main
+fn main() {
+    let n = 200000
+    var keys: Int[>..] = []
+    var x = 12345
+    var i = 0
+    while i < n {
+        x = (x * 1103515245 + 12345) % 2147483648
+        keys.append(x)
+        i = i + 1
+    }
+
+    var d = SortedDictionary<Int, Int>()
+    i = 0
+    while i < n {
+        d[keys[i]] = i
+        i = i + 1
+    }
+
+    var found = 0
+    i = 0
+    while i < n {
+        if let value = d[keys[i]] {
+            found = found + value % 7
+        }
+        i = i + 1
+    }
+
+    i = 0
+    while i < n {
+        if i % 3 == 0 {
+            d.remove(keys[i])
+        }
+        i = i + 1
+    }
+
+    var total = 0
+    var previous = -1
+    var ordered = true
+    for entry in d {
+        if entry.key <= previous {
+            ordered = false
+        }
+        previous = entry.key
+        total = (total + entry.value) % 1000000007
+    }
+
+    var inRange = 0
+    for _ in d.range(500000000..<1000000000) {
+        inRange = inRange + 1
+    }
+
+    print("\(d.count) \(found) \(total) \(inRange) \(ordered)")
+}

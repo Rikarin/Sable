@@ -1,0 +1,231 @@
+module SortedDictionaryTests
+
+// SortedDictionary (Sable.Collections): against a model — a Dictionary for
+// the entries, and its keys sorted for the order — under random inserts,
+// removals and queries, and by example.
+
+import Sable.Collections
+import Sable.Testing
+
+/// Arrays compared by what they print, as assertEqual needs Equatable.
+fn assertSame(_ got: Int[>..], _ expected: Int[>..]) {
+    assertEqual("\(got)", "\(expected)")
+}
+
+/// A random walk of numbers: xorshift.
+struct Walk {
+    var state: U64
+
+    mutating fn next(_ below: Int) -> Int {
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        return Int(state % U64(below))
+    }
+}
+
+fn keysOf<S: Sequence>(_ entries: S) -> Int[>..] where S.Element == (key: Int, value: Int), S.Failure == Never {
+    var keys: Int[>..] = []
+    for entry in entries {
+        keys.append(entry.key)
+    }
+    return keys
+}
+
+fn sortedKeys(_ model: [Int: Int]) -> Int[>..] {
+    var keys: Int[>..] = []
+    for (key, _) in model {
+        keys.append(key)
+    }
+    keys.sort()
+    return keys
+}
+
+@test
+fn eachOperationByExample() {
+    var d = SortedDictionary<String, Int>()
+    assert(d.isEmpty)
+    assert(d.first == none && d.last == none)
+    d["m"] = 1
+    d["c"] = 2
+    d["x"] = 3
+    assert(d.updateValue(20, forKey: "c") == 2)
+    assertEqual(d.count, 3)
+    assertEqual(d["c"] ?? 0, 20)
+    assert(d.contains("x") && !d.contains("a"))
+    assertEqual(d.keys.joined(separator: ","), "c,m,x")
+    assertEqual(d.values.count, 3)
+    assertEqual(d.first!.key, "c")
+    assertEqual(d.last!.key, "x")
+    assertEqual(d.floor("n")!.key, "m")
+    assertEqual(d.floor("m")!.key, "m")
+    assert(d.floor("a") == none)
+    assertEqual(d.ceiling("d")!.key, "m")
+    assert(d.ceiling("y") == none)
+    d["m"] = none
+    assert(!d.contains("m"))
+    assert(d.remove("zz") == none)
+    assertEqual(d.popFirst()!.key, "c")
+    assertEqual(d.popLast()!.key, "x")
+    assert(d.popFirst() == none)
+    d.removeAll()
+    assert(d.isEmpty)
+}
+
+@test
+fn literalsCopiesAndEquality() {
+    let a = SortedDictionary<Int, String>([(3, "c"), (1, "a"), (2, "b")])
+    var b = a
+    b[4] = "d"
+    assertEqual(a.count, 3)
+    assertEqual(b.count, 4)
+    assert(a != b)
+    b[4] = none
+    assert(a == b)
+    assertEqual(a.debugDescription(), "[1: \"a\", 2: \"b\", 3: \"c\"]")
+    assertEqual(SortedDictionary<Int, Int>().debugDescription(), "[:]")
+}
+
+@test
+fn positionsAreRanks() {
+    var d = SortedDictionary<Int, Int>()
+    var i = 0
+    while i < 100 {
+        d[i * 3] = i
+        i += 1
+    }
+    assertEqual(d[d.startIndex].key, 0)
+    assertEqual(d[d.index(before: d.endIndex)].key, 297)
+    assertEqual(d[d.index(d.startIndex, offsetBy: 50)].key, 150)
+    assertEqual(d.index(forKey: 30)!.rank, 10)
+    assert(d.index(forKey: 31) == none)
+    assertEqual(d[d.index(after: d.startIndex)].key, 3)
+    var walked = 0
+    var at = d.startIndex
+    while at != d.endIndex {
+        walked += 1
+        at = d.index(after: at)
+    }
+    assertEqual(walked, 100)
+}
+
+@test
+fn rangesOfKeys() {
+    var pairs: (Int, Int)[>..] = []
+    var i = 0
+    while i < 50 {
+        pairs.append((i * 2, i))
+        i += 1
+    }
+    let d = SortedDictionary<Int, Int>(pairs)
+    assertEqual(keysOf(d.range(10..<16)).count, 3)
+    assertEqual(keysOf(d.range(10...16)).count, 4)
+    assertEqual(keysOf(d.range(11...15)).count, 2)
+    assertEqual(keysOf(d.range(90...)).count, 5)
+    assertEqual(keysOf(d.range(..<4)).count, 2)
+    assertEqual(keysOf(d.range(...4)).count, 3)
+    assertEqual(keysOf(d.range(200...)).count, 0)
+    assertEqual(keysOf(d.range(5..<5)).count, 0)
+    assertEqual(keysOf(d.range(-10...0))[0], 0)
+}
+
+@test
+fn splitAndAppend() {
+    var low = SortedDictionary<Int, Int>()
+    var i = 0
+    while i < 1000 {
+        low[i] = i * i
+        i += 1
+    }
+    let high = low.split(at: 600)
+    assertEqual(low.count, 600)
+    assertEqual(high.count, 400)
+    assertEqual(low.last!.key, 599)
+    assertEqual(high.first!.key, 600)
+    var more: (Int, Int)[>..] = []
+    i = 600
+    while i < 2000 {
+        more.append((i, i))
+        i += 1
+    }
+    low.append(contentsOf: more)
+    assertEqual(low.count, 2000)
+    assertEqual(low[1500] ?? 0, 1500)
+    // Out of order, or overlapping: added one by one.
+    low.append(contentsOf: [(5, -5), (3000, 1), (2, -2)])
+    assertEqual(low.count, 2001)
+    assertEqual(low[5] ?? 0, -5)
+    let unordered = SortedDictionary<Int, Int>([(3, 1), (1, 2), (3, 9)])
+    assertEqual(unordered.count, 2)
+    assertEqual(unordered[3] ?? 0, 9)
+}
+
+@test
+fn randomOperationsAgreeWithAModel() {
+    var d = SortedDictionary<Int, Int>()
+    var model: [Int: Int] = [:]
+    var walk = Walk { state: 0x9E3779B97F4A7C15 }
+    var step = 0
+    while step < 30000 {
+        let key = walk.next(800)
+        let op = walk.next(10)
+        if op < 4 {
+            assert(d.updateValue(step, forKey: key) == model.updateValue(step, forKey: key), "insert")
+        } else if op < 7 {
+            assert(d.remove(key) == model.remove(key), "remove")
+        } else if op == 7 {
+            // floor and ceiling against the sorted keys.
+            let keys = sortedKeys(model)
+            var below: Int? = none
+            var above: Int? = none
+            for k in keys {
+                if k <= key {
+                    below = k
+                }
+                if above == none && k >= key {
+                    above = k
+                }
+            }
+            assert(d.floor(key)?.key == below, "floor")
+            assert(d.ceiling(key)?.key == above, "ceiling")
+        } else if op == 8 {
+            let upper = key + walk.next(100)
+            var expected = 0
+            for (k, _) in model {
+                if k >= key && k < upper {
+                    expected += 1
+                }
+            }
+            assertEqual(keysOf(d.range(key..<upper)).count, expected)
+        } else {
+            if walk.next(2) == 0 {
+                let first = d.popFirst()
+                let keys = sortedKeys(model)
+                if keys.isEmpty {
+                    assert(first == none)
+                } else {
+                    assertEqual(first!.key, keys[0])
+                    model.remove(keys[0])
+                }
+            } else {
+                let last = d.popLast()
+                let keys = sortedKeys(model)
+                if keys.isEmpty {
+                    assert(last == none)
+                } else {
+                    assertEqual(last!.key, keys[keys.count - 1])
+                    model.remove(keys[keys.count - 1])
+                }
+            }
+        }
+        assertEqual(d.count, model.count)
+        step += 1
+    }
+    let keys = sortedKeys(model)
+    assertSame(keysOf(d), keys)
+    var rank = 0
+    while rank < keys.count {
+        assertEqual(d[SortedIndex { rank: rank }].key, keys[rank])
+        rank += 37
+    }
+}

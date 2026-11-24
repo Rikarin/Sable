@@ -1,0 +1,406 @@
+module Sable.Collections
+
+// A dictionary in the order of its keys: .NET's SortedDictionary, Rust's
+// BTreeMap. Each operation on a key is O(log n), and so is reaching an
+// entry by its place in the order; going through the entries, or the
+// entries of a range of keys, is in order. It is a B-tree (BTree.sb), a
+// value like every Sable collection: a copy shares its nodes until either
+// changes.
+
+/// A position in a SortedDictionary or a SortedSet: the rank of its key in
+/// the order, 0 the least. A key added or removed before it moves the key
+/// at the position.
+public struct SortedIndex: Comparable {
+    /// How many keys come before this position's.
+    public let rank: Int
+
+    public operator == (lhs: SortedIndex, rhs: SortedIndex) -> Bool {
+        return lhs.rank == rhs.rank
+    }
+
+    public operator < (lhs: SortedIndex, rhs: SortedIndex) -> Bool {
+        return lhs.rank < rhs.rank
+    }
+}
+
+/// A dictionary whose entries are in the order of their keys: .NET's
+/// `SortedDictionary`, Rust's `BTreeMap`. Each operation on a key takes
+/// O(log n); so do `first`, `last`, `floor` and `ceiling`, and reaching an
+/// entry by its position.
+///
+/// ```sable
+/// var scores = SortedDictionary<String, Int>()
+/// scores["carol"] = 7
+/// scores["alice"] = 9
+/// scores["bob"] = 4
+/// var names: String[>..] = []
+/// for entry in scores {
+///     names.append(entry.key)
+/// }
+/// assert(names == ["alice", "bob", "carol"])
+/// assert(scores.first!.key == "alice")
+/// assert(scores.ceiling("b")!.key == "bob")
+/// ```
+public struct SortedDictionary<Key: Comparable, Value>: Sequence {
+    public alias Element = (key: Key, value: Value)
+    public alias Iter = SortedDictionaryIterator<Key, Value>
+
+    var tree: BTree<Key, Value>
+
+    /// An empty dictionary.
+    public init() {
+        tree = BTree<Key, Value>()
+    }
+
+    /// The dictionary of the pairs, each key with its value; a key given
+    /// twice keeps the last. Pairs already in order of their keys are made
+    /// into the tree in linear time.
+    public init<S: Sequence>(_ pairs: S) throws(S.Failure) where S.Element == (Key, Value) {
+        var keys: Key[>..] = []
+        var values: Value[>..] = []
+        var ordered = true
+        for try (key, value) in pairs {
+            if !keys.isEmpty && !(keys[keys.count - 1] < key) {
+                ordered = false
+            }
+            keys.append(key)
+            values.append(value)
+        }
+        if ordered {
+            tree = BTree<Key, Value>.build(keys, values)
+        } else {
+            tree = BTree<Key, Value>()
+            var i = 0
+            while i < keys.count {
+                tree.insert(keys[i], values[i])
+                i = i + 1
+            }
+        }
+    }
+
+    /// How many entries there are.
+    public var count: Int => tree.count
+
+    /// Whether there are none.
+    public var isEmpty: Bool => tree.count == 0
+
+    /// The key's value, or none; set to none, the key is removed.
+    public subscript(key: Key) -> Value? {
+        get => tree.value(key)
+        set {
+            if let value = newValue {
+                tree.insert(key, value)
+            } else {
+                tree.remove(key)
+            }
+        }
+    }
+
+    /// Whether the key has a value.
+    public fn contains(_ key: Key) -> Bool {
+        return tree.contains(key)
+    }
+
+    /// Sets the key's value, and gives the one it replaced, if any.
+    @discardable
+    public mutating fn updateValue(_ value: Value, forKey key: Key) -> Value? {
+        return tree.insert(key, value)
+    }
+
+    /// Removes the key, and gives the value it had, if any.
+    @discardable
+    public mutating fn remove(_ key: Key) -> Value? {
+        return tree.remove(key)
+    }
+
+    /// Removes every entry.
+    public mutating fn removeAll() {
+        tree = BTree<Key, Value>()
+    }
+
+    /// The entry of the least key, or none.
+    public var first: (key: Key, value: Value)? {
+        get {
+            if tree.count == 0 {
+                return none
+            }
+            let (key, value) = tree.entry(rank: 0)
+            return (key: key, value: value)
+        }
+    }
+
+    /// The entry of the greatest key, or none.
+    public var last: (key: Key, value: Value)? {
+        get {
+            if tree.count == 0 {
+                return none
+            }
+            let (key, value) = tree.entry(rank: tree.count - 1)
+            return (key: key, value: value)
+        }
+    }
+
+    /// The entry of the least key, taken out; none when there is none.
+    @discardable
+    public mutating fn popFirst() -> (key: Key, value: Value)? {
+        if let (key, value) = tree.removeExtreme(greatest: false) {
+            return (key: key, value: value)
+        }
+        return none
+    }
+
+    /// The entry of the greatest key, taken out; none when there is none.
+    @discardable
+    public mutating fn popLast() -> (key: Key, value: Value)? {
+        if let (key, value) = tree.removeExtreme(greatest: true) {
+            return (key: key, value: value)
+        }
+        return none
+    }
+
+    /// The entry of the greatest key not above the key: the key's own
+    /// entry, or the one before where it would be; none when every key is
+    /// above it.
+    public fn floor(_ key: Key) -> (key: Key, value: Value)? {
+        let rank = tree.rank(of: key, orEqual: true)
+        if rank == 0 {
+            return none
+        }
+        let (found, value) = tree.entry(rank: rank - 1)
+        return (key: found, value: value)
+    }
+
+    /// The entry of the least key not below the key; none when every key
+    /// is below it.
+    public fn ceiling(_ key: Key) -> (key: Key, value: Value)? {
+        let rank = tree.rank(of: key, orEqual: false)
+        if rank == tree.count {
+            return none
+        }
+        let (found, value) = tree.entry(rank: rank)
+        return (key: found, value: value)
+    }
+
+    /// The entries whose keys are in the range, in order.
+    ///
+    /// ```sable
+    /// let d = SortedDictionary<Int, String>([(1, "a"), (3, "c"), (5, "e"), (7, "g")])
+    /// var keys: Int[>..] = []
+    /// for entry in d.range(3..<7) {
+    ///     keys.append(entry.key)
+    /// }
+    /// assert(keys == [3, 5])
+    /// ```
+    public fn range(_ keys: Range<Key>) -> SortedDictionaryRange<Key, Value> {
+        return SortedDictionaryRange { tree: tree, lower: keys.lowerBound, lowerIncluded: true, upper: keys.upperBound, upperIncluded: false }
+    }
+
+    /// The entries whose keys are in the range, both ends included.
+    public fn range(_ keys: ClosedRange<Key>) -> SortedDictionaryRange<Key, Value> {
+        return SortedDictionaryRange { tree: tree, lower: keys.lowerBound, lowerIncluded: true, upper: keys.upperBound, upperIncluded: true }
+    }
+
+    /// The entries whose keys are not below the bound.
+    public fn range(_ keys: PartialRangeFrom<Key>) -> SortedDictionaryRange<Key, Value> {
+        return SortedDictionaryRange { tree: tree, lower: keys.lowerBound, lowerIncluded: true, upper: none, upperIncluded: false }
+    }
+
+    /// The entries whose keys are below the bound.
+    public fn range(_ keys: PartialRangeUpTo<Key>) -> SortedDictionaryRange<Key, Value> {
+        return SortedDictionaryRange { tree: tree, lower: none, lowerIncluded: true, upper: keys.upperBound, upperIncluded: false }
+    }
+
+    /// The entries whose keys are not above the bound.
+    public fn range(_ keys: PartialRangeThrough<Key>) -> SortedDictionaryRange<Key, Value> {
+        return SortedDictionaryRange { tree: tree, lower: none, lowerIncluded: true, upper: keys.upperBound, upperIncluded: true }
+    }
+
+    /// The entries from the key on taken out, as a dictionary of their own
+    /// (Rust's `split_off`): this one keeps those below it.
+    ///
+    /// ```sable
+    /// var low = SortedDictionary<Int, Int>([(1, 1), (2, 4), (3, 9)])
+    /// let high = low.split(at: 2)
+    /// assert(low.count == 1 && high.count == 2)
+    /// ```
+    public mutating fn split(at key: Key) -> SortedDictionary<Key, Value> {
+        var lowKeys: Key[>..] = []
+        var lowValues: Value[>..] = []
+        var highKeys: Key[>..] = []
+        var highValues: Value[>..] = []
+        for entry in self {
+            if entry.key < key {
+                lowKeys.append(entry.key)
+                lowValues.append(entry.value)
+            } else {
+                highKeys.append(entry.key)
+                highValues.append(entry.value)
+            }
+        }
+        tree = BTree<Key, Value>.build(lowKeys, lowValues)
+        var high = SortedDictionary<Key, Value>()
+        high.tree = BTree<Key, Value>.build(highKeys, highValues)
+        return high
+    }
+
+    /// Adds each pair, a key already here given the new value. Pairs in
+    /// order whose keys all come after the last one here are added in
+    /// linear time, the tree made again with them.
+    public mutating fn append<S: Sequence>(contentsOf pairs: S) throws(S.Failure) where S.Element == (Key, Value) {
+        var keys: Key[>..] = []
+        var values: Value[>..] = []
+        var ordered = true
+        for try (key, value) in pairs {
+            if !keys.isEmpty && !(keys[keys.count - 1] < key) {
+                ordered = false
+            }
+            keys.append(key)
+            values.append(value)
+        }
+        if keys.isEmpty {
+            return
+        }
+        if ordered && (tree.count == 0 || last!.key < keys[0]) && keys.count >= tree.count {
+            var allKeys: Key[>..] = []
+            var allValues: Value[>..] = []
+            for entry in self {
+                allKeys.append(entry.key)
+                allValues.append(entry.value)
+            }
+            var i = 0
+            while i < keys.count {
+                allKeys.append(keys[i])
+                allValues.append(values[i])
+                i = i + 1
+            }
+            tree = BTree<Key, Value>.build(allKeys, allValues)
+            return
+        }
+        var i = 0
+        while i < keys.count {
+            tree.insert(keys[i], values[i])
+            i = i + 1
+        }
+    }
+
+    /// The keys, in order.
+    public var keys: Key[>..] {
+        get {
+            var all: Key[>..] = []
+            for entry in self {
+                all.append(entry.key)
+            }
+            return all
+        }
+    }
+
+    /// The values, in the order of their keys.
+    public var values: Value[>..] {
+        get {
+            var all: Value[>..] = []
+            for entry in self {
+                all.append(entry.value)
+            }
+            return all
+        }
+    }
+
+    /// The entries in the order of their keys.
+    public fn makeIterator() -> SortedDictionaryIterator<Key, Value> {
+        return SortedDictionaryIterator { cursor: BTreeCursor(tree, from: none, included: true, to: none, included: false) }
+    }
+}
+
+extension SortedDictionary: BidirectionalCollection {
+    public alias Index = SortedIndex
+
+    public var startIndex: SortedIndex => SortedIndex { rank: 0 }
+
+    public var endIndex: SortedIndex => SortedIndex { rank: tree.count }
+
+    /// The entry at a position, found in O(log n); one not an entry's traps.
+    public subscript(position: SortedIndex) -> (key: Key, value: Value) {
+        get {
+            precondition(position.rank >= 0 && position.rank < tree.count, "index out of range")
+            let (key, value) = tree.entry(rank: position.rank)
+            return (key: key, value: value)
+        }
+    }
+
+    public fn index(after position: SortedIndex) -> SortedIndex {
+        return SortedIndex { rank: position.rank + 1 }
+    }
+
+    public fn index(before position: SortedIndex) -> SortedIndex {
+        return SortedIndex { rank: position.rank - 1 }
+    }
+
+    public fn index(_ position: SortedIndex, offsetBy distance: Int) -> SortedIndex {
+        return SortedIndex { rank: position.rank + distance }
+    }
+
+    /// The position of the key's entry, or none.
+    public fn index(forKey key: Key) -> SortedIndex? {
+        return tree.contains(key) ? SortedIndex { rank: tree.rank(of: key, orEqual: false) } : none
+    }
+}
+
+extension SortedDictionary: Equatable where Value: Equatable {
+    /// The same keys with equal values.
+    public operator == (lhs: SortedDictionary<Key, Value>, rhs: SortedDictionary<Key, Value>) -> Bool {
+        if lhs.count != rhs.count {
+            return false
+        }
+        var left = lhs.makeIterator()
+        var right = rhs.makeIterator()
+        while let a = left.next() {
+            let b = right.next()!
+            if a.key < b.key || b.key < a.key || a.value != b.value {
+                return false
+            }
+        }
+        return true
+    }
+}
+
+extension SortedDictionary: Debug where Key: Debug, Value: Debug {
+    public fn debugDescription() -> String {
+        if isEmpty {
+            return "[:]"
+        }
+        var parts: String[>..] = []
+        for entry in self {
+            parts.append("\(entry.key.debugDescription()): \(entry.value.debugDescription())")
+        }
+        return "[" + parts.joined(separator: ", ") + "]"
+    }
+}
+
+/// Gives a SortedDictionary's entries in the order of their keys.
+public struct SortedDictionaryIterator<Key: Comparable, Value>: Iterator {
+    var cursor: BTreeCursor<Key, Value>
+
+    public mutating fn next() -> (key: Key, value: Value)? {
+        if let (key, value) = cursor.next() {
+            return (key: key, value: value)
+        }
+        return none
+    }
+}
+
+/// The entries of a SortedDictionary whose keys are in a range, in order:
+/// what `range(_:)` gives.
+public struct SortedDictionaryRange<Key: Comparable, Value>: Sequence {
+    public alias Element = (key: Key, value: Value)
+    public alias Iter = SortedDictionaryIterator<Key, Value>
+
+    let tree: BTree<Key, Value>
+    let lower: Key?
+    let lowerIncluded: Bool
+    let upper: Key?
+    let upperIncluded: Bool
+
+    public fn makeIterator() -> SortedDictionaryIterator<Key, Value> {
+        return SortedDictionaryIterator { cursor: BTreeCursor(tree, from: lower, included: lowerIncluded, to: upper, included: upperIncluded) }
+    }
+}

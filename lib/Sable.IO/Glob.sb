@@ -1,0 +1,398 @@
+module Sable.IO
+
+/// A pattern of paths, as shells have them:
+///
+/// - `*` any run of characters in a name, `?` any one;
+/// - `[abc]`, `[a-z]` one of those, `[!a-z]` one that is not;
+/// - `{md,txt}` either, and one may be inside another;
+/// - `**`, as a whole part, any number of directories, none too; at the
+///   end, everything inside;
+/// - `\` before a character, the character itself.
+///
+/// The parts are separated by '/' on every system. A name that starts with
+/// '.' is as any other. A pattern that starts with '/' matches paths from a
+/// root, any other those that are not.
+///
+/// ```sable
+/// let sources = try! Glob("src/**/*.{sb,c}")
+/// assert(sources.matches("src/main.sb") && sources.matches("src/a/b/x.c"))
+/// assert(!sources.matches("src/notes.md") && !sources.matches("main.sb"))
+/// ```
+public struct Glob {
+    /// The pattern as it was written.
+    public let pattern: String
+    let caseSensitive: Bool
+    let alternatives: GlobAlternative[>..]
+
+    /// The pattern; an error for a '[' or '{' that is not closed, and for
+    /// more than 1000 ways through its braces.
+    public init(_ pattern: String, caseSensitive: Bool = true) throws(IoError) {
+        self.pattern = pattern
+        self.caseSensitive = caseSensitive
+        var read: GlobAlternative[>..] = []
+        for text in try expandBraces(pattern) {
+            read.append(try GlobAlternative(caseSensitive ? text : text.lowercased(), of: pattern))
+        }
+        alternatives = read
+    }
+
+    /// Whether the path's parts match: by its text alone, whatever is there.
+    public fn matches(_ path: some PathLike) -> Bool {
+        let file = path.filePath
+        var names: String[>..] = []
+        for part in file.components {
+            match part.kind {
+                case .Normal => {
+                    names.append(String.fromUtf8Lossy(part.bytes))
+                }
+                case .ParentDirectory => {
+                    names.append("..")
+                }
+                case _ => { }
+            }
+        }
+        return run(names, rooted: file.hasRoot, inside: false)
+    }
+
+    // Whether the names, from the directory globbed, match.
+    fn matches(names: String[>..]) -> Bool {
+        return run(names, rooted: false, inside: false)
+    }
+
+    // Whether something in the directory of those names could match.
+    fn mayMatch(inside names: String[>..]) -> Bool {
+        return run(names, rooted: false, inside: true)
+    }
+
+    fn run(_ names: String[>..], rooted: Bool, inside: Bool) -> Bool {
+        var texts: Char[>..][>..] = []
+        for name in names {
+            texts.append((caseSensitive ? name : name.lowercased()).toArray())
+        }
+        for alternative in alternatives {
+            if alternative.rooted == rooted && alternative.matches(texts, inside: inside) {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+// The pattern once for every way through its braces.
+fn expandBraces(_ pattern: String) throws(IoError) -> String[>..] {
+    var done: String[>..] = []
+    var left: String[>..] = [pattern]
+    while !left.isEmpty {
+        let text = left.removeLast()
+        let chars = text.toArray()
+        if let (first, commas, last) = try outerBraces(chars, pattern) {
+            var starts: Int[>..] = [first]
+            starts.append(contentsOf: commas)
+            var ends = commas
+            ends.append(last)
+            let before = globText(chars[..<first])
+            let after = globText(chars[(last + 1)...])
+            // Last first, so that the first is taken next.
+            var i = starts.count - 1
+            while i >= 0 {
+                left.append(before + globText(chars[(starts[i] + 1)..<ends[i]]) + after)
+                i -= 1
+            }
+            if left.count + done.count > 1000 {
+                throw IoError.InvalidInput(path: pattern)
+            }
+        } else {
+            done.append(text)
+        }
+    }
+    return done
+}
+
+fn globText(_ chars: Char[:]) -> String {
+    var text = ""
+    for c in chars {
+        text = text + "\(c)"
+    }
+    return text
+}
+
+// Where the text's first '{' is, the commas that part what is in it, and
+// its '}'.
+fn outerBraces(_ chars: Char[>..], _ pattern: String) throws(IoError) -> (Int, Int[>..], Int)? {
+    var first = -1
+    var depth = 0
+    var commas: Int[>..] = []
+    var i = 0
+    while i < chars.count {
+        match chars[i] {
+            case '\\' => {
+                i += 1
+            }
+            case '[' => {
+                i = try classEnd(chars, i, pattern)
+            }
+            case '{' => {
+                if depth == 0 {
+                    first = i
+                }
+                depth += 1
+            }
+            case ',' => {
+                if depth == 1 {
+                    commas.append(i)
+                }
+            }
+            case '}' => {
+                if depth == 1 {
+                    return (first, commas, i)
+                }
+                if depth > 0 {
+                    depth -= 1
+                }
+            }
+            case _ => { }
+        }
+        i += 1
+    }
+    if depth > 0 {
+        throw IoError.InvalidInput(path: pattern)
+    }
+    return none
+}
+
+// The ']' that closes the class: one that comes first is in it.
+fn classEnd(_ chars: Char[>..], _ start: Int, _ pattern: String) throws(IoError) -> Int {
+    var i = start + 1
+    if i < chars.count && (chars[i] == '!' || chars[i] == '^') {
+        i += 1
+    }
+    if i < chars.count && chars[i] == ']' {
+        i += 1
+    }
+    while i < chars.count && chars[i] != ']' {
+        i += chars[i] == '\\' ? 2 : 1
+    }
+    if i >= chars.count {
+        throw IoError.InvalidInput(path: pattern)
+    }
+    return i
+}
+
+// A pattern with no braces: its parts, each a name's tokens, none for '**'.
+struct GlobAlternative {
+    let rooted: Bool
+    let parts: GlobPart[>..]
+
+    init(_ text: String, of pattern: String) throws(IoError) {
+        let chars = text.toArray()
+        rooted = !chars.isEmpty && chars[0] == '/'
+        var read: GlobPart[>..] = []
+        var from = 0
+        var i = 0
+        while i <= chars.count {
+            if i < chars.count && chars[i] == '\\' && i + 1 < chars.count {
+                i += 2
+                continue
+            }
+            if i < chars.count && chars[i] == '[' {
+                i = (try classEnd(chars, i, pattern)) + 1
+                continue
+            }
+            if i == chars.count || chars[i] == '/' {
+                let part = chars[from..<i].toArray()
+                if !part.isEmpty && part != ['.'] {
+                    let deep = part == ['*', '*']
+                    if !(deep && !read.isEmpty && read[read.count - 1].anyDepth) {
+                        read.append(GlobPart { anyDepth: deep, tokens: deep ? [] : globTokens(part) })
+                    }
+                }
+                from = i + 1
+            }
+            i += 1
+        }
+        // '**' at the end is what is inside, and not the directory itself.
+        if !read.isEmpty && read[read.count - 1].anyDepth {
+            read.append(GlobPart { anyDepth: false, tokens: [.AnyRun] })
+        }
+        parts = read
+    }
+
+    // The parts the names before may have been matched up to, as each name
+    // comes: at the end, all of them, or — 'inside' — not all.
+    fn matches(_ names: Char[>..][>..], inside: Bool) -> Bool {
+        var at: Bool[>..] = Bool[>..](repeating: false, count: parts.count + 1)
+        at[0] = true
+        passDirectories(&at)
+        for name in names {
+            var after: Bool[>..] = Bool[>..](repeating: false, count: parts.count + 1)
+            var i = 0
+            while i < parts.count {
+                if at[i] {
+                    if parts[i].anyDepth {
+                        after[i] = true
+                    } else if globMatches(parts[i].tokens, name) {
+                        after[i + 1] = true
+                    }
+                }
+                i += 1
+            }
+            passDirectories(&after)
+            at = after
+        }
+        if !inside {
+            return at[parts.count]
+        }
+        var i = 0
+        while i < parts.count {
+            if at[i] {
+                return true
+            }
+            i += 1
+        }
+        return false
+    }
+
+    // A '**' may be no directories.
+    fn passDirectories(_ at: inout Bool[>..]) {
+        var i = 0
+        while i < parts.count {
+            if at[i] && parts[i].anyDepth {
+                at[i + 1] = true
+            }
+            i += 1
+        }
+    }
+}
+
+struct GlobPart {
+    let anyDepth: Bool
+    let tokens: GlobToken[>..]
+}
+
+union GlobToken {
+    One(Char)
+    AnyOne
+    AnyRun
+    Class(ranges: ClosedRange<Char>[>..], negated: Bool)
+}
+
+fn globTokens(_ chars: Char[>..]) -> GlobToken[>..] {
+    var tokens: GlobToken[>..] = []
+    var i = 0
+    while i < chars.count {
+        match chars[i] {
+            case '*' => {
+                // '**' inside a name is '*'.
+                while i + 1 < chars.count && chars[i + 1] == '*' {
+                    i += 1
+                }
+                tokens.append(.AnyRun)
+            }
+            case '?' => {
+                tokens.append(.AnyOne)
+            }
+            case '[' => {
+                var j = i + 1
+                let negated = chars[j] == '!' || chars[j] == '^'
+                if negated {
+                    j += 1
+                }
+                var ranges: ClosedRange<Char>[>..] = []
+                let first = j
+                while chars[j] != ']' || j == first {
+                    if chars[j] == '\\' {
+                        j += 1
+                    }
+                    let low = chars[j]
+                    var high = low
+                    if chars[j + 1] == '-' && chars[j + 2] != ']' {
+                        j += 2
+                        if chars[j] == '\\' {
+                            j += 1
+                        }
+                        high = chars[j]
+                    }
+                    if low <= high {
+                        ranges.append(low...high)
+                    }
+                    j += 1
+                }
+                tokens.append(.Class(ranges: ranges, negated: negated))
+                i = j
+            }
+            case '\\' => {
+                if i + 1 < chars.count {
+                    i += 1
+                }
+                tokens.append(.One(chars[i]))
+            }
+            case _ => {
+                tokens.append(.One(chars[i]))
+            }
+        }
+        i += 1
+    }
+    return tokens
+}
+
+fn globHas(_ ranges: ClosedRange<Char>[>..], _ c: Char) -> Bool {
+    for range in ranges {
+        if range.contains(c) {
+            return true
+        }
+    }
+    return false
+}
+
+// Whether the tokens match the whole name: a '*' takes as little as it can,
+// and, when what follows fails, one more, so only the last is tried again.
+fn globMatches(_ tokens: GlobToken[>..], _ name: Char[>..]) -> Bool {
+    var t = 0
+    var n = 0
+    var star = -1
+    var taken = 0
+    while n < name.count {
+        if t < tokens.count {
+            var step = false
+            match tokens[t] {
+                case .AnyRun => {
+                    star = t
+                    taken = n
+                    t += 1
+                    continue
+                }
+                case .AnyOne => {
+                    step = true
+                }
+                case .One(let c) => {
+                    step = c == name[n]
+                }
+                case .Class(let ranges, let negated) => {
+                    step = globHas(ranges, name[n]) != negated
+                }
+            }
+            if step {
+                t += 1
+                n += 1
+                continue
+            }
+        }
+        if star < 0 {
+            return false
+        }
+        t = star + 1
+        taken += 1
+        n = taken
+    }
+    while t < tokens.count {
+        match tokens[t] {
+            case .AnyRun => {
+                t += 1
+            }
+            case _ => {
+                return false
+            }
+        }
+    }
+    return true
+}

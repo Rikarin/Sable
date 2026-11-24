@@ -1,0 +1,26 @@
+module Sable.IO
+
+/// What something in the file system is.
+@derive(Equatable, Hashable, Debug)
+public enum FileKind {
+    /// An ordinary file.
+    File
+    Directory
+    /// A symbolic link; on Windows, a junction as well.
+    SymbolicLink
+    /// A named pipe.
+    Fifo
+    /// A socket with a name.
+    Socket
+    CharacterDevice
+    BlockDevice
+    /// Anything else the system has.
+    Other
+
+    // By the runtime's number (platform.h's FILE_KIND_).
+    static fn of(_ number: Int) -> FileKind {
+        return fileKinds[number]
+    }
+}
+
+let fileKinds: FileKind[>..] = [.File, .Directory, .SymbolicLink, .Fifo, .Socket, .CharacterDevice, .BlockDevice, .Other]

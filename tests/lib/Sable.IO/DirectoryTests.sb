@@ -1,0 +1,480 @@
+module DirectoryTests
+
+// Directory (Sable.IO): made, listed, walked, copied and removed, all of it
+// in directories the tests make. DirEntry, DirectoryWalk and WalkOptions
+// with it.
+
+import Sable.IO
+import Sable.Testing
+
+fn make(_ root: FilePath, _ files: String[>..]) throws {
+    for file in files {
+        let path = root.appending(file)
+        if let parent = path.parent {
+            try Directory.create(parent, recursive: true)
+        }
+        try File.write(path, file)
+    }
+}
+
+// The walk's paths from the root, with '/' between the names.
+fn walked(_ walk: DirectoryWalk, _ root: FilePath) throws -> String[>..] {
+    var found: String[>..] = []
+    for try entry in walk {
+        var names: String[>..] = []
+        for part in entry.path.relative(to: root)!.components {
+            names.append("\(part)")
+        }
+        found.append(names.joined(separator: "/"))
+    }
+    return found
+}
+
+fn sorted() -> WalkOptions {
+    var options = WalkOptions()
+    options.sorted = true
+    return options
+}
+
+fn linked(_ link: FilePath, _ target: FilePath) -> Bool {
+    return (try? File.createSymlink(at: link, to: target)) != none
+}
+
+@test
+fn aDirectoryIsMadeWithItsParents() throws {
+    let temp = try Temp.directory()
+    let path = temp.path.appending("a/b/c")
+    do {
+        try Directory.create(path)
+        fail("its parent is not there")
+    } catch IoError.NotFound(_) { }
+    try Directory.create(path, recursive: true)
+    assert(Directory.exists(path))
+    // Again, with all of it there; and alone.
+    try Directory.create(path, recursive: true)
+    do {
+        try Directory.create(path)
+        fail("it is there already")
+    } catch IoError.AlreadyExists(_) { }
+    try File.write(temp.path.appending("file"), "x")
+    do {
+        try Directory.create(temp.path.appending("file"), recursive: true)
+        fail("a file is there")
+    } catch IoError.AlreadyExists(_) { }
+    do {
+        try Directory.create("", recursive: true)
+        fail("no directory has no name")
+    } catch { }
+    assert(!Directory.exists(temp.path.appending("file")))
+    assert(!File.exists(path))
+}
+
+@test
+fn entriesAreReadOneAtATime() throws {
+    let temp = try Temp.directory()
+    try make(temp.path, ["a", "b", "d/inside"])
+    var names: String[>..] = []
+    for try entry in try Directory.entries(temp.path) {
+        names.append("\(entry.name) \(entry.kind.debugDescription())")
+        assertEqual(entry.depth, 1)
+        assert(entry.isDirectory == (entry.name == "d") && entry.isFile != entry.isDirectory && !entry.isSymlink)
+        if entry.name == "a" {
+            assertEqual((try entry.metadata()).size, 1)
+        }
+    }
+    names.sort()
+    assertEqual(names.count, 3)
+    assert(names[2].hasPrefix("d ") && names[2].hasSuffix("Directory"))
+    assert(try Directory.list(temp.path) == ["a", "b", "d"])
+
+    // Gone through once, and as far as is wanted.
+    let entries = try Directory.entries(temp.path)
+    for try _ in entries {
+        break
+    }
+    var left = 0
+    for try _ in entries {
+        left += 1
+    }
+    assertEqual(left, 2)
+    var ended = entries.makeIterator()
+    assert(try ended.next() == none)
+    do {
+        let _ = try Directory.entries(temp.path.appending("missing"))
+        fail("it is not there")
+    } catch IoError.NotFound(_) { }
+    do {
+        let _ = try Directory.list(temp.path.appending("a"))
+        fail("it is a file")
+    } catch IoError.NotADirectory(_) { }
+}
+
+@test
+fn aWalkFindsEverythingBelow() throws {
+    let temp = try Temp.directory()
+    try make(temp.path, ["a/b/c", "a/d", "e", "z/.hidden"])
+    assert(try walked(try Directory.walk(temp.path, options: sorted()), temp.path) == ["a", "a/b", "a/b/c", "a/d", "e", "z", "z/.hidden"])
+    var options = sorted()
+    options.maxDepth = 2
+    assert(try walked(try Directory.walk(temp.path, options: options), temp.path) == ["a", "a/b", "a/d", "e", "z", "z/.hidden"])
+    options.maxDepth = 1
+    assert(try walked(try Directory.walk(temp.path, options: options), temp.path) == ["a", "e", "z"])
+    var depths: Int[>..] = []
+    for try entry in try Directory.walk(temp.path, options: sorted()) {
+        depths.append(entry.depth)
+    }
+    assert(depths == [1, 2, 3, 2, 1, 1, 2])
+    var all = 0
+    for try _ in try Directory.walk(temp.path) {
+        all += 1
+    }
+    assertEqual(all, 7)
+
+    var iterator = (try Directory.walk(temp.path, options: sorted())).makeIterator()
+    assertEqual((try iterator.next())!.name, "a")
+    iterator.skipDescendants()
+    assertEqual((try iterator.next())!.name, "e")
+    do {
+        let _ = try Directory.walk(temp.path.appending("e"))
+        fail("a file was walked")
+    } catch IoError.NotADirectory(_) { }
+    do {
+        let _ = try Directory.walk(temp.path.appending("missing"))
+        fail("nothing was walked")
+    } catch IoError.NotFound(_) { }
+}
+
+@test
+fn whatGoesBeforeItIsReachedIsPassedOver() throws {
+    let temp = try Temp.directory()
+    try make(temp.path, ["a/one", "b/two", "c"])
+    var found: String[>..] = []
+    for try entry in try Directory.walk(temp.path, options: sorted()) {
+        found.append(entry.name)
+        if entry.name == "a" {
+            try Directory.remove(entry.path, recursive: true)
+            try File.remove(temp.path.appending("c"))
+        }
+        if entry.name == "b" {
+            // A file where the directory was.
+            try Directory.remove(entry.path, recursive: true)
+            try File.write(entry.path, "b")
+        }
+    }
+    assert(found == ["a", "b", "c"])
+}
+
+@test
+fn aWalkThatFollowsLinksEnds() throws {
+    let temp = try Temp.directory()
+    try make(temp.path, ["a/b/c", "other/x"])
+    // Back to the root, to where it is, to itself and to nothing.
+    if !linked(temp.path.appending("a/b/up"), temp.path) {
+        return
+    }
+    assert(linked(temp.path.appending("a/self"), temp.path.appending("a")))
+    assert(linked(temp.path.appending("a/loop"), FilePath("loop")))
+    assert(linked(temp.path.appending("a/nowhere"), FilePath("nowhere")))
+    assert(linked(temp.path.appending("a/across"), temp.path.appending("other")))
+    let unfollowed = try walked(try Directory.walk(temp.path, options: sorted()), temp.path)
+    assert(unfollowed == ["a", "a/across", "a/b", "a/b/c", "a/b/up", "a/loop", "a/nowhere", "a/self", "other", "other/x"])
+    var options = sorted()
+    options.followLinks = true
+    let followed = try walked(try Directory.walk(temp.path, options: options), temp.path)
+    assert(followed == ["a", "a/across", "a/across/x", "a/b", "a/b/c", "a/b/up", "a/loop", "a/nowhere", "a/self", "other", "other/x"])
+
+    // Two that lead to each other, from inside one of them.
+    try make(temp.path, ["p/f", "q/g"])
+    assert(linked(temp.path.appending("p/q"), temp.path.appending("q")))
+    assert(linked(temp.path.appending("q/p"), temp.path.appending("p")))
+    let pairs = try walked(try Directory.walk(temp.path.appending("p"), options: options), temp.path.appending("p"))
+    assert(pairs == ["f", "q", "q/g", "q/p"])
+    // A link that leads above where the walk began.
+    let below = try walked(try Directory.walk(temp.path.appending("a/b"), options: options), temp.path.appending("a/b"))
+    assert(below.contains("up/a") && below.contains("up/other/x") && !below.contains("up/a/b/c"))
+    // The directory walked is a link itself.
+    let through = try walked(try Directory.walk(temp.path.appending("a/across")), temp.path.appending("a/across"))
+    assert(through == ["x"])
+}
+
+@test
+fn aGlobFindsWhatItMatches() throws {
+    let temp = try Temp.directory()
+    try make(temp.path, ["a.sb", "a.txt", "src/b.sb", "src/deep/c.sb", "tests/d.sb", "tests/e.md"])
+    let root = temp.path
+    assert(try walked(try Directory.glob(root, "**/*.sb", options: sorted()), root) == ["a.sb", "src/b.sb", "src/deep/c.sb", "tests/d.sb"])
+    assert(try walked(try Directory.glob(root, "src/**", options: sorted()), root) == ["src/b.sb", "src/deep", "src/deep/c.sb"])
+    assert(try walked(try Directory.glob(root, "{src,tests}/*.{sb,md}", options: sorted()), root) == ["src/b.sb", "tests/d.sb", "tests/e.md"])
+    assert(try walked(try Directory.glob(root, "*", options: sorted()), root) == ["a.sb", "a.txt", "src", "tests"])
+    var options = sorted()
+    options.maxDepth = 1
+    assert(try walked(try Directory.glob(root, "**/*.sb", options: options), root) == ["a.sb"])
+    do {
+        let _ = try Directory.glob(root, "[a")
+        fail("it is no pattern")
+    } catch IoError.InvalidInput(_) { }
+}
+
+@test
+fn aTreeIsCopied() throws {
+    let temp = try Temp.directory()
+    let from = temp.path.appending("from")
+    let to = temp.path.appending("to")
+    try make(from, ["a/b/c", "d"])
+    let links = linked(from.appending("link"), FilePath("d"))
+    try File.setPermissions(from.appending("d"), FilePermissions(mode: 0o444))
+    try Directory.copy(from: from, to: to)
+    assertEqual(try File.read(to.appending("a/b/c")), "a/b/c")
+    assert((try File.metadata(to.appending("d"))).permissions.isReadOnly)
+    if links {
+        assert(try File.readLink(to.appending("link")) == FilePath("d"))
+    }
+    do {
+        try Directory.copy(from: from, to: to)
+        fail("it is there already")
+    } catch IoError.AlreadyExists(_) { }
+    do {
+        try Directory.copy(from: from, to: from.appending("a/inside"))
+        fail("it was copied into itself")
+    } catch IoError.InvalidInput(_) { }
+    assert(!Directory.exists(from.appending("a/inside")))
+    do {
+        try Directory.copy(from: from.appending("d"), to: temp.path.appending("other"))
+        fail("a file was copied as a directory")
+    } catch IoError.NotADirectory(_) { }
+}
+
+// ---- Removing ------------------------------------------------------------------
+
+@test
+fn onlyAnEmptyDirectoryIsRemovedAlone() throws {
+    let temp = try Temp.directory()
+    let path = temp.path.appending("d")
+    try make(path, ["file"])
+    do {
+        try Directory.remove(path)
+        fail("it is not empty")
+    } catch IoError.DirectoryNotEmpty(_) { }
+    do {
+        try Directory.remove(path.appending("file"))
+        fail("it is a file")
+    } catch IoError.NotADirectory(_) { }
+    try File.remove(path.appending("file"))
+    try Directory.remove(path)
+    assert(!Directory.exists(path))
+    do {
+        try Directory.remove(path)
+        fail("it is gone")
+    } catch IoError.NotFound(_) { }
+}
+
+@test
+fn aTreeIsRemovedWhole() throws {
+    let temp = try Temp.directory()
+    let path = temp.path.appending("tree")
+    var files: String[>..] = []
+    var i = 0
+    while i < 60 {
+        files.append("d\(i)/f")
+        files.append("d\(i)/e/\(i)")
+        files.append("f\(i)")
+        i += 1
+    }
+    try make(path, files)
+    try Directory.create(path.appending("empty/empty"), recursive: true)
+    try File.setPermissions(path.appending("f3"), FilePermissions(mode: 0o444))
+    try Directory.remove(path, recursive: true)
+    assert(!Directory.exists(path))
+    assert(Directory.exists(temp.path))
+    // An empty one; and separators at the end.
+    try Directory.create(path)
+    try Directory.remove("\(path)//", recursive: true)
+    assert(!Directory.exists(path))
+    do {
+        try Directory.remove(path, recursive: true)
+        fail("it is gone")
+    } catch IoError.NotFound(_) { }
+}
+
+@test
+fn aDeepTreeIsRemoved() throws {
+    let temp = try Temp.directory()
+    var path = temp.path.appending("tree")
+    try Directory.create(path)
+    var i = 0
+    #if os(windows)
+    let depth = 50
+    #else
+    // More than a process may have open files, on most systems.
+    let depth = 300
+    #endif
+    while i < depth {
+        path = path.appending("d")
+        try Directory.create(path)
+        i += 1
+    }
+    try File.write(path.appending("f"), "f")
+    try Directory.remove(temp.path.appending("tree"), recursive: true)
+    assert(!Directory.exists(temp.path.appending("tree")))
+}
+
+@test
+fn linksAreRemovedAndNotFollowed() throws {
+    let temp = try Temp.directory()
+    let outside = temp.path.appending("outside")
+    try make(outside, ["kept", "deep/kept"])
+    let tree = temp.path.appending("tree")
+    try make(tree, ["a/f"])
+    if !linked(tree.appending("to-directory"), outside) {
+        return
+    }
+    assert(linked(tree.appending("a/to-file"), outside.appending("kept")))
+    assert(linked(tree.appending("a/up"), FilePath("..").appending("..").appending("outside")))
+    assert(linked(tree.appending("a/above"), temp.path))
+    assert(linked(tree.appending("a/root"), FilePath("/")))
+    assert(linked(tree.appending("nowhere"), FilePath("nowhere")))
+    try Directory.remove(tree, recursive: true)
+    assert(!Directory.exists(tree))
+    assertEqual(try File.read(outside.appending("kept")), "kept")
+    assertEqual(try File.read(outside.appending("deep/kept")), "deep/kept")
+
+    // A link named itself is not followed either, whatever is after it.
+    let link = temp.path.appending("link")
+    assert(linked(link, outside))
+    for path in ["\(link)", "\(link)/", "\(link)//"] {
+        do {
+            try Directory.remove(path, recursive: true)
+            fail("'\(path)' was removed")
+        } catch IoError.NotADirectory(_) { }
+        do {
+            try Directory.remove(path)
+            fail("'\(path)' was removed")
+        } catch IoError.NotADirectory(_) { }
+    }
+    assertEqual(try File.read(link.appending("deep/kept")), "deep/kept")
+    // One on the way there is.
+    try Directory.remove(link.appending("deep"), recursive: true)
+    assert(!Directory.exists(outside.appending("deep")))
+    assertEqual(try File.read(outside.appending("kept")), "kept")
+}
+
+@test
+fn whatNamesNoDirectoryIsRefused() throws {
+    let temp = try Temp.directory()
+    let directory = temp.path.appending("d")
+    try make(directory, ["kept"])
+    var paths: String[>..] = ["", "/", "//", "/.", "/..", ".", "..", "./", "../", "./.", "a/.."]
+    paths.append("\(directory)/.")
+    paths.append("\(directory)/..")
+    paths.append("\(directory)/./")
+    paths.append("\(directory)/../")
+    paths.append("\(directory)\0")
+    paths.append("\(directory)/\0/x")
+    #if os(windows)
+    paths.append("C:")
+    paths.append("C:\\")
+    paths.append("\\\\?\\C:\\")
+    paths.append("\\\\server\\share")
+    paths.append("\(directory)\\...")
+    paths.append("\(directory)\\. .")
+    paths.append("\(directory)\\ ")
+    #endif
+    for path in paths {
+        do {
+            try Directory.remove(path, recursive: true)
+            fail("'\(path)' was removed")
+        } catch IoError.InvalidInput(_) { }
+        do {
+            try Directory.remove(path)
+            fail("'\(path)' was removed")
+        } catch IoError.InvalidInput(_) { }
+    }
+    assertEqual(try File.read(directory.appending("kept")), "kept")
+    do {
+        try Directory.remove(directory.appending("kept"), recursive: true)
+        fail("a file was removed as a directory")
+    } catch IoError.NotADirectory(_) { }
+    assertEqual(try File.read(directory.appending("kept")), "kept")
+}
+
+// By Windows' rules, on every system: refused before the system is asked.
+@test
+fn whatWindowsReadsAsARootIsRefused() throws {
+    for path in ["", "C:", "C:\\", "C:/", "\\", "/", "C:\\.", "C:\\d\\..", "\\\\?\\C:\\", "\\\\?\\C:", "\\\\server\\share", "\\\\server\\share\\", "\\\\.\\C:", "C:\\d\\...", "C:\\d\\. .", "C:\\d\\ ", "C:\\d.", "C:\\d\\.\\"] {
+        do {
+            try Directory.remove(FilePath(path, style: .Windows), recursive: true)
+            fail("'\(path)' was removed")
+        } catch IoError.InvalidInput(_) { }
+    }
+}
+
+// Another task swaps a directory of the tree for a link to what is outside
+// it, over and over, as the tree is removed.
+@test
+fn aDirectorySwappedForALinkIsNotFollowed() async throws {
+    let temp = try Temp.directory()
+    let outside = temp.path.appending("outside")
+    try make(outside, ["a", "b", "c/d"])
+    if !linked(temp.path.appending("may-link"), outside) {
+        return
+    }
+    let tree = temp.path.appending("tree")
+    let spare = temp.path.appending("spare")
+    var round = 0
+    while round < 40 {
+        try make(tree, ["x/one", "x/two", "x/y/three", "x/a", "x/b", "x/c/d"])
+        let swapping = Task.detached {
+            var i = 0
+            while i < 20 {
+                let _ = try? File.rename(from: tree.appending("x"), to: spare)
+                let _ = try? File.createSymlink(at: tree.appending("x"), to: outside)
+                let _ = try? File.remove(tree.appending("x"))
+                let _ = try? File.rename(from: spare, to: tree.appending("x"))
+                i += 1
+            }
+        }
+        // It may fail, as what it removes is moved; it must not go outside.
+        while Directory.exists(tree) {
+            do {
+                try Directory.remove(tree, recursive: true)
+            } catch { }
+            await Task.yield()
+        }
+        await swapping.value
+        for path in [tree, spare] {
+            if Directory.exists(path) {
+                try Directory.remove(path, recursive: true)
+            }
+        }
+        assert(try walked(try Directory.walk(outside, options: sorted()), outside) == ["a", "b", "c", "c/d"])
+        round += 1
+    }
+}
+
+// Another task makes files in the tree as it is removed.
+@test
+fn aTreeWrittenToAsItIsRemovedIsRemovedOrSaidNotToBe() async throws {
+    let temp = try Temp.directory()
+    let tree = temp.path.appending("tree")
+    try make(tree, ["a/b", "c"])
+    let writing = Task.detached {
+        var i = 0
+        while i < 300 {
+            let _ = try? File.write(tree.appending("a").appending("n\(i)"), "n")
+            let _ = try? Directory.create(tree.appending("e\(i)"))
+            i += 1
+        }
+    }
+    var i = 0
+    while i < 5 {
+        do {
+            try Directory.remove(tree, recursive: true)
+        } catch { }
+        i += 1
+    }
+    await writing.value
+    if Directory.exists(tree) {
+        try Directory.remove(tree, recursive: true)
+    }
+    assert(!Directory.exists(tree))
+}

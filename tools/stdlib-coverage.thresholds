@@ -40,7 +40,6 @@ lib/Sable.Generators/Package.sb                    0   0   # raise me: no tests 
 lib/Sable.Generators/Parameter.sb                  0   0   # raise me: no tests yet
 lib/Sable.Generators/TypeRef.sb                    0   0   # raise me: no tests yet
 lib/Sable.IO/Console.sb                            0   0   # raise me: no tests yet
-lib/Sable.IO/Directory.sb                          0   0   # raise me: no tests yet
 lib/Sable.Serialize/Difference.sb                  0   0   # raise me: no tests yet
 lib/Sable.Serialize/JsonValue.sb                   0   0   # raise me: no tests yet
 lib/Sable.Serialize/MergePatch.sb                  0   0   # raise me: no tests yet
@@ -57,3 +56,4 @@ lib/Sable.Testing/Bencher.sb                       0   0   # raise me: no tests 
 lib/Sable.Testing/TestCase.sb                     45  40   # raise me
 
 # Under the default for a reason the tests cannot change.
+lib/Sable.IO/File.sb                              80  70   # a move between file systems needs two of them, as macOS has not

@@ -488,10 +488,26 @@ public sealed partial class LlvmEmitter {
                                 declare i64 @sable_file_seek(i64, i64, i64)
                                 declare zeroext i1 @sable_file_sync(i64)
                                 declare zeroext i1 @sable_file_set_length(i64, i64)
-                                declare i64 @sable_file_metadata(i64, i64)
+                                declare ptr @sable_file_metadata(i64, ptr)
                                 declare zeroext i1 @sable_file_close(i64)
                                 declare i64 @sable_file_standard(i64)
-                                declare zeroext i1 @sable_file_copy(ptr, ptr)
+                                declare zeroext i1 @sable_file_copy(ptr, ptr, i1 zeroext)
+                                declare ptr @sable_fs_metadata(ptr, i1 zeroext, ptr)
+                                declare zeroext i1 @sable_fs_set_permissions(ptr, i64)
+                                declare zeroext i1 @sable_fs_set_time(ptr, i64, i64, i64)
+                                declare zeroext i1 @sable_fs_make_directory(ptr, i64)
+                                declare zeroext i1 @sable_fs_remove(ptr, i1 zeroext)
+                                declare zeroext i1 @sable_fs_remove_tree(ptr)
+                                declare zeroext i1 @sable_fs_rename(ptr, ptr, i1 zeroext)
+                                declare zeroext i1 @sable_fs_link(ptr, ptr, i64)
+                                declare ptr @sable_fs_read_link(ptr, ptr)
+                                declare i64 @sable_fs_open_directory(ptr)
+                                declare ptr @sable_fs_next_entry(i64, ptr)
+                                declare void @sable_fs_close_directory(i64)
+                                declare i64 @sable_fs_watch(ptr, i1 zeroext)
+                                declare i64 @sable_fs_watch_event(i64)
+                                declare ptr @sable_fs_watch_take(i64, ptr)
+                                declare void @sable_fs_unwatch(i64)
                                 declare ptr @sable_file_canonical(ptr)
                                 declare ptr @sable_file_map(i64, i64, i64)
                                 declare zeroext i1 @sable_file_map_store(ptr, i64, ptr, i64, i64)
@@ -4626,7 +4642,7 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 case "file_metadata":
-                    Line($"{Result()} = call i64 @sable_file_metadata(i64 {operands[0]}, i64 {operands[1]})");
+                    Line($"{Result()} = call ptr @sable_file_metadata(i64 {operands[0]}, ptr {module.ArrayMetadata(new ArrayType(SilType.Int))})");
                     return;
 
                 case "file_standard":
@@ -4659,7 +4675,60 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 case "file_copy":
-                    Line($"{Result()} = call zeroext i1 @sable_file_copy(ptr {operands[0]}, ptr {operands[1]})");
+                    Line($"{Result()} = call zeroext i1 @sable_file_copy(ptr {operands[0]}, ptr {operands[1]}, i1 zeroext {operands[2]})");
+                    return;
+
+                // The file system by path (runtime/fs.c), and watching it (runtime/watch.c).
+                case "fs_metadata":
+                    Line($"{Result()} = call ptr @sable_fs_metadata(ptr {operands[0]}, i1 zeroext {operands[1]}, ptr {module.ArrayMetadata(new ArrayType(SilType.Int))})");
+                    return;
+
+                case "fs_set_permissions" or "fs_make_directory":
+                    Line($"{Result()} = call zeroext i1 @sable_{builtin.Name}(ptr {operands[0]}, i64 {operands[1]})");
+                    return;
+
+                case "fs_set_time":
+                    Line($"{Result()} = call zeroext i1 @sable_fs_set_time(ptr {operands[0]}, i64 {operands[1]}, i64 {operands[2]}, i64 {operands[3]})");
+                    return;
+
+                case "fs_remove":
+                    Line($"{Result()} = call zeroext i1 @sable_fs_remove(ptr {operands[0]}, i1 zeroext {operands[1]})");
+                    return;
+
+                case "fs_remove_tree":
+                    Line($"{Result()} = call zeroext i1 @sable_fs_remove_tree(ptr {operands[0]})");
+                    return;
+
+                case "fs_rename":
+                    Line($"{Result()} = call zeroext i1 @sable_fs_rename(ptr {operands[0]}, ptr {operands[1]}, i1 zeroext {operands[2]})");
+                    return;
+
+                case "fs_link":
+                    Line($"{Result()} = call zeroext i1 @sable_fs_link(ptr {operands[0]}, ptr {operands[1]}, i64 {operands[2]})");
+                    return;
+
+                case "fs_read_link":
+                    Line($"{Result()} = call ptr @sable_fs_read_link(ptr {operands[0]}, ptr {module.ArrayMetadata(new ArrayType(SilType.U8))})");
+                    return;
+
+                case "fs_open_directory":
+                    Line($"{Result()} = call i64 @sable_fs_open_directory(ptr {operands[0]})");
+                    return;
+
+                case "fs_watch":
+                    Line($"{Result()} = call i64 @sable_fs_watch(ptr {operands[0]}, i1 zeroext {operands[1]})");
+                    return;
+
+                case "fs_watch_event":
+                    Line($"{Result()} = call i64 @sable_fs_watch_event(i64 {operands[0]})");
+                    return;
+
+                case "fs_next_entry" or "fs_watch_take":
+                    Line($"{Result()} = call ptr @sable_{builtin.Name}(i64 {operands[0]}, ptr {module.ArrayMetadata(new ArrayType(SilType.U8))})");
+                    return;
+
+                case "fs_close_directory" or "fs_unwatch":
+                    Line($"call void @sable_{builtin.Name}(i64 {operands[0]})");
                     return;
 
                 case "time_monotonic" or "time_wall_clock":

@@ -44,6 +44,8 @@
 #include "tasks.c"
 #include "net.c"
 #include "io.c"
+#include "fs.c"
+#include "watch.c"
 #include "process.c"
 #include "locks.c"
 

@@ -273,6 +273,10 @@ enum {
     FILE_ERROR_INTERRUPTED = 5,
     FILE_ERROR_INVALID = 6,
     FILE_ERROR_OTHER = 7,
+    FILE_ERROR_NOT_EMPTY = 8,
+    FILE_ERROR_NOT_DIRECTORY = 9,
+    FILE_ERROR_CROSSES = 10,
+    FILE_ERROR_UNSUPPORTED = 11,
 };
 
 typedef struct FileError {
@@ -280,12 +284,30 @@ typedef struct FileError {
     int64_t code;
 } FileError;
 
+// What something is: Sable.IO's FileKind, by number.
+enum {
+    FILE_KIND_FILE = 0,
+    FILE_KIND_DIRECTORY = 1,
+    FILE_KIND_LINK = 2,
+    FILE_KIND_FIFO = 3,
+    FILE_KIND_SOCKET = 4,
+    FILE_KIND_CHARACTER = 5,
+    FILE_KIND_BLOCK = 6,
+    FILE_KIND_OTHER = 7,
+};
+
+// Given to the library as it is, an array of ten integers (Sable.IO's
+// FileMetadata reads it). A time is seconds since 1970, UTC, and the
+// nanoseconds into that second.
 typedef struct FileMetadata {
     int64_t size;
-    // Nanoseconds since 1970, UTC.
-    int64_t modified;
-    // 0 a file, 1 a directory, 2 anything else.
-    int kind;
+    int64_t kind;
+    // POSIX's mode bits; on Windows, what a read-only attribute leaves.
+    int64_t permissions;
+    int64_t modified[2];
+    int64_t accessed[2];
+    int64_t created[2];
+    int64_t has_created;
 } FileMetadata;
 
 // Opened as the flags say, a file made with the permissions (POSIX's mode
@@ -307,12 +329,69 @@ static bool file_metadata(PlatformFile file, FileMetadata *metadata, FileError *
 static bool file_close(PlatformFile file, FileError *error);
 // Standard input (0), output (1) or error (2), as a file.
 static PlatformFile file_standard(int which);
-// The whole file copied, at the system's fastest, a file at 'to' replaced.
-static bool file_copy(const char *from, const char *to, FileError *error);
+// The whole file copied, its permissions with it, at the system's fastest;
+// a file at 'to' written over, or an error. One copied to itself is an error.
+static bool file_copy(const char *from, const char *to, bool replace, FileError *error);
 // The path made absolute, every link and '.' and '..' resolved: realpath,
 // or the final path of a handle on Windows. NULL, with why, when it is not
 // there; the caller frees it.
 static char *file_canonical(const char *name, FileError *error);
+
+// ---- The file system ---------------------------------------------------------
+//
+// By path (Sable.IO's File, Directory, Temp): each call that fails says why
+// as a file handle's does.
+
+enum { FILE_TIME_MODIFIED = 0, FILE_TIME_ACCESSED = 1 };
+// A hard link; or a symbolic one, to a file or to a directory, which
+// Windows tells apart.
+enum { FILE_LINK_HARD = 0, FILE_LINK_FILE = 1, FILE_LINK_DIRECTORY = 2 };
+
+// What is at the path, or what a link there leads to.
+static bool fs_metadata(const char *name, bool follow, FileMetadata *metadata, FileError *error);
+// The mode bits; on Windows a file no one may write is made read-only.
+static bool fs_set_permissions(const char *name, int permissions, FileError *error);
+static bool fs_set_time(const char *name, int which, int64_t seconds, int64_t nanoseconds, FileError *error);
+// Made, with the mode bits less the umask; an error if anything is there.
+static bool fs_make_directory(const char *name, int permissions, FileError *error);
+// A file or a link itself, or an empty directory.
+static bool fs_remove(const char *name, bool directory, FileError *error);
+// The directory and all in it. Nothing outside it is ever removed: no link
+// in it is followed, whatever another program puts there meanwhile. A path
+// whose last part is no name ('', '/', '.', '..') and a root are refused.
+static bool fs_remove_tree(const char *name, FileError *error);
+// Renamed in one step, what is at 'to' replaced, or an error.
+static bool fs_rename(const char *from, const char *to, bool replace, FileError *error);
+static bool fs_link(const char *target, const char *name, int kind, FileError *error);
+// Where the symbolic link leads, as it says it; the caller frees it.
+static char *fs_read_link(const char *name, FileError *error);
+
+// A directory's entries, one at a time and in no order, '.' and '..' left
+// out: the next one's name, which the caller frees, and its kind, -1 where
+// the directory does not say; NULL at the end, or with why.
+static void *directory_open(const char *name, FileError *error);
+static char *directory_next(void *directory, int *kind, FileError *error);
+static void directory_close(void *directory);
+
+// ---- Watching ----------------------------------------------------------------
+
+// What happened to a path being watched: Sable.IO's FileEvent, by number.
+enum { WATCH_CREATED = 1, WATCH_MODIFIED = 2, WATCH_REMOVED = 3, WATCH_RESCAN = 4 };
+
+// Told by the platform of what happened, the path inside the one watched
+// ("" for it itself): watch.c gives it, any thread calls it.
+static void watch_report(void *watch, int kind, const char *path, size_t length);
+
+// The path watched, what happens there reported to 'watch' (FSEvents on
+// macOS, inotify on Linux, ReadDirectoryChangesW on Windows) until it is
+// closed, after which nothing more is. NULL with why.
+static void *watch_open(void *watch, const char *name, bool recursive, FileError *error);
+// What the reactor is to watch, for watch_read to have more (inotify), or
+// -1 where it is reported as it happens.
+static PlatformSocket watch_descriptor(void *state);
+// What has happened, reported; false when there is no more now.
+static bool watch_read(void *state);
+static void watch_close(void *state);
 
 // ---- Mapped files ----------------------------------------------------------
 

@@ -1,0 +1,173 @@
+module Sable.IO
+
+/// What is in a directory and the directories in it, found as it is gone
+/// through, each directory before what is in it: `Directory.walk` and
+/// `Directory.glob`. The first directory itself does not come. A
+/// directory's entries are read at once as it is reached, so what comes may
+/// be changed or removed; one that goes before it is reached is passed over.
+public struct DirectoryWalk: Sequence {
+    public alias Element = DirEntry
+    public alias Failure = IoError
+    public alias Iter = DirectoryWalkIterator
+
+    let root: FilePath
+    let options: WalkOptions
+    let glob: Glob?
+
+    public fn makeIterator() -> DirectoryWalkIterator {
+        return DirectoryWalkIterator(root: root, options: options, glob: glob)
+    }
+}
+
+// A directory to go into: its path; the names that lead to it from the
+// first; and, where links are followed, what it really is.
+struct WalkDirectory {
+    let path: FilePath
+    let names: String[>..]
+    let canonical: FilePath?
+    let isLink: Bool
+}
+
+// A directory being gone through.
+struct WalkLevel {
+    let directory: WalkDirectory
+    let entries: DirEntry[>..]
+    var next: Int
+}
+
+/// Goes through a directory and the directories in it.
+public struct DirectoryWalkIterator: Iterator {
+    public alias Element = DirEntry
+    public alias Failure = IoError
+
+    let options: WalkOptions
+    let glob: Glob?
+    var levels: WalkLevel[>..]
+    // The directory the last entry was, gone into before the next.
+    var pending: WalkDirectory?
+
+    init(root: FilePath, options: WalkOptions, glob: Glob?) {
+        self.options = options
+        self.glob = glob
+        levels = []
+        pending = WalkDirectory { path: root, names: [], canonical: none, isLink: false }
+    }
+
+    /// The next entry; none after the last. After it throws, going on
+    /// passes over the directory that could not be read.
+    public mutating fn next() throws(IoError) -> DirEntry? {
+        while true {
+            if let directory = pending {
+                pending = none
+                try enter(directory)
+            }
+            if levels.isEmpty {
+                return none
+            }
+            let top = levels.count - 1
+            if levels[top].next == levels[top].entries.count {
+                levels.removeLast()
+                continue
+            }
+            let entry = levels[top].entries[levels[top].next]
+            levels[top].next += 1
+            if isWanted(entry, in: levels[top].directory) {
+                return entry
+            }
+        }
+    }
+
+    /// Nothing in the directory that came last is gone through.
+    public mutating fn skipDescendants() {
+        pending = none
+    }
+
+    // Whether the entry is to come; a directory noted to be gone into.
+    mutating fn isWanted(_ entry: DirEntry, in directory: WalkDirectory) -> Bool {
+        var names = directory.names
+        if glob != none {
+            names.append(entry.name)
+        }
+        if isDirectory(entry) && entry.depth < (options.maxDepth ?? Int.max) {
+            let may = glob == none || glob!.mayMatch(inside: names)
+            if may {
+                var canonical: FilePath? = none
+                if !entry.isSymlink {
+                    if let above = directory.canonical {
+                        canonical = above.inside(entry.path.lastComponent!.bytes)
+                    }
+                }
+                pending = WalkDirectory { path: entry.path, names: names, canonical: canonical, isLink: entry.isSymlink }
+            }
+        }
+        if let glob = glob {
+            return glob.matches(names: names)
+        }
+        return true
+    }
+
+    fn isDirectory(_ entry: DirEntry) -> Bool {
+        if entry.isSymlink && options.followLinks {
+            if let metadata = try? entry.metadata(followLinks: true) {
+                return metadata.isDirectory
+            }
+            return false
+        }
+        return entry.isDirectory
+    }
+
+    mutating fn enter(_ wanted: WalkDirectory) throws(IoError) {
+        let first = levels.isEmpty
+        var directory = wanted
+        var entries: DirEntry[>..] = []
+        do {
+            if options.followLinks && (first || wanted.isLink) {
+                directory = WalkDirectory { path: wanted.path, names: wanted.names, canonical: try wanted.path.canonical(), isLink: wanted.isLink }
+            }
+            if leadsBack(directory) {
+                return
+            }
+            for try entry in try DirectoryEntries(directory.path, depth: levels.count + 1) {
+                entries.append(entry)
+            }
+        } catch {
+            if first {
+                throw error
+            }
+            match error {
+                // Gone, or no directory any more, since it was found.
+                case .NotFound(_) => {
+                    return
+                }
+                case .NotADirectory(_) => {
+                    return
+                }
+                case _ => {
+                    if options.skipUnreadable {
+                        return
+                    }
+                    throw error
+                }
+            }
+        }
+        if options.sorted {
+            entries.sort(by: { compareBytes($0.path.bytes, $1.path.bytes) < 0 })
+        }
+        levels.append(WalkLevel { directory: directory, entries: entries, next: 0 })
+    }
+
+    // Whether the directory, or one it was reached through, is being gone
+    // through already: a link has led back.
+    fn leadsBack(_ directory: WalkDirectory) -> Bool {
+        if let canonical = directory.canonical {
+            for level in levels {
+                if let other = level.directory.canonical {
+                    if other == canonical {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+}

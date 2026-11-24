@@ -86,18 +86,6 @@ public struct OpenOptions {
     }
 }
 
-/// What a file is, when it was written, and how long it is.
-public struct FileMetadata {
-    /// Its length in bytes.
-    public let size: Int
-    /// When it was last written: nanoseconds since 1970, UTC.
-    public let modifiedNanoseconds: Int
-    /// Whether it is a directory.
-    public let isDirectory: Bool
-    /// Whether it is an ordinary file.
-    public let isFile: Bool
-}
-
 /// An open file, read and written at its position or at any offset: Rust's
 /// `File`, .NET's `FileStream` and `RandomAccess` together. Closed as it
 /// goes, or by `close()`. Unbuffered: each read and write is a call to the
@@ -227,16 +215,13 @@ public final class FileHandle: Reader, Writer, Seekable {
         }
     }
 
-    /// What it is, its length and when it was written.
+    /// What it is, its length, its times and its permissions.
     public fn metadata() throws(IoError) -> FileMetadata {
-        let handle = try live()
-        let size = Runtime.fileMetadata(handle, 0)
-        let modified = Runtime.fileMetadata(handle, 1)
-        let kind = Runtime.fileMetadata(handle, 2)
-        if size < 0 || kind < 0 {
+        let parts = Runtime.fileMetadata(try live())
+        if parts.isEmpty {
             throw IoError.lastFileError(path)
         }
-        return FileMetadata { size: size, modifiedNanoseconds: modified, isDirectory: kind == 1, isFile: kind == 0 }
+        return FileMetadata(parts: parts)
     }
 
     /// Closed now: reading or writing it after throws `.InvalidInput`.

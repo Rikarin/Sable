@@ -2351,6 +2351,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return Signals(builtin.Name, operands);
         }
 
+        if (builtin.Name.StartsWith("fs_", StringComparison.Ordinal)) {
+            return FileSystem(builtin.Name, operands);
+        }
+
         if (builtin.Name.StartsWith("file_", StringComparison.Ordinal)) {
             return Files(builtin.Name, operands);
         }

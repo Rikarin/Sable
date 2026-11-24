@@ -48,5 +48,9 @@ fn eachIoErrorSaysWhatWentWrong() {
     assertEqual(IoError.Interrupted.description(), "the call was interrupted")
     assertEqual(IoError.UnexpectedEof.description(), "the stream ended before what was needed")
     assertEqual(IoError.InvalidInput(path: "a").description(), "'a' was given something the system does not take")
+    assertEqual(IoError.DirectoryNotEmpty(path: "a").description(), "'a' is not empty")
+    assertEqual(IoError.NotADirectory(path: "a").description(), "'a' is not a directory")
+    assertEqual(IoError.CrossesFileSystems(path: "a").description(), "'a' is on another file system")
+    assertEqual(IoError.Unsupported(path: "a").description(), "what was asked of 'a' is not to be had here")
     assertEqual(IoError.Os(path: "a", code: 5).description(), "'a' failed with the system's error 5")
 }

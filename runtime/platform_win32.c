@@ -797,10 +797,13 @@ static int file_error_of(DWORD code) {
         case ERROR_FILE_NOT_FOUND:
         case ERROR_PATH_NOT_FOUND:
         case ERROR_INVALID_NAME:
+        case ERROR_BAD_NETPATH:
+        case ERROR_BAD_NET_NAME:
             return FILE_ERROR_NOT_FOUND;
         case ERROR_ACCESS_DENIED:
         case ERROR_SHARING_VIOLATION:
         case ERROR_LOCK_VIOLATION:
+        case ERROR_PRIVILEGE_NOT_HELD:
             return FILE_ERROR_PERMISSION;
         case ERROR_FILE_EXISTS:
         case ERROR_ALREADY_EXISTS:
@@ -811,7 +814,15 @@ static int file_error_of(DWORD code) {
             return FILE_ERROR_INTERRUPTED;
         case ERROR_INVALID_PARAMETER:
         case ERROR_INVALID_HANDLE:
+        case ERROR_FILENAME_EXCED_RANGE:
             return FILE_ERROR_INVALID;
+        case ERROR_DIR_NOT_EMPTY:
+            return FILE_ERROR_NOT_EMPTY;
+        case ERROR_NOT_SAME_DEVICE:
+            return FILE_ERROR_CROSSES;
+        case ERROR_NOT_SUPPORTED:
+        case ERROR_INVALID_FUNCTION:
+            return FILE_ERROR_UNSUPPORTED;
         default:
             return FILE_ERROR_OTHER;
     }
@@ -942,20 +953,6 @@ static bool file_set_length(PlatformFile file, int64_t length, FileError *error)
     return true;
 }
 
-static bool file_metadata(PlatformFile file, FileMetadata *metadata, FileError *error) {
-    BY_HANDLE_FILE_INFORMATION info;
-    if (!GetFileInformationByHandle(handle_of(file), &info)) {
-        file_failed(error);
-        return false;
-    }
-
-    metadata->size = (int64_t)(((uint64_t)info.nFileSizeHigh << 32) | info.nFileSizeLow);
-    int64_t ticks = (int64_t)(((uint64_t)info.ftLastWriteTime.dwHighDateTime << 32) | info.ftLastWriteTime.dwLowDateTime);
-    metadata->modified = (ticks - 116444736000000000LL) * 100;
-    metadata->kind = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
-    return true;
-}
-
 static bool file_close(PlatformFile file, FileError *error) {
     if (!CloseHandle(handle_of(file))) {
         file_failed(error);
@@ -968,21 +965,6 @@ static bool file_close(PlatformFile file, FileError *error) {
 static PlatformFile file_standard(int which) {
     DWORD id = which == 0 ? STD_INPUT_HANDLE : which == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE;
     return (PlatformFile)(intptr_t)GetStdHandle(id);
-}
-
-// The whole file copied by the system: CopyFileW, which copies the data and
-// the attributes, replacing a file there.
-static bool file_copy(const char *from, const char *to, FileError *error) {
-    wchar_t *source = to_wide(from);
-    wchar_t *target = to_wide(to);
-    BOOL copied = CopyFileW(source, target, FALSE);
-    if (!copied) {
-        file_failed(error);
-    }
-
-    free(source);
-    free(target);
-    return copied != 0;
 }
 
 static char *file_canonical(const char *name, FileError *error) {
@@ -1010,6 +992,10 @@ static char *file_canonical(const char *name, FileError *error) {
     free(path);
     return result;
 }
+
+// ---- The file system, and watching it ------------------------------------------
+
+#include "platform_fs_win32.c"
 
 // ---- Mapped files ----------------------------------------------------------
 

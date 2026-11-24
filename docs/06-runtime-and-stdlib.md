@@ -833,8 +833,12 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     OpenOptions (positional reads and writes, metadata,
                     setLength, sync), BufferedReader BufferedWriter
                     MemoryStream TextReader TextWriter, File (bytes, text,
-                    lazy lines, copy at the system's fastest), Directory,
-                    FilePath (platform bytes, POSIX and Windows rules:
+                    lazy lines, copied, renamed, moved, linked, metadata,
+                    permissions and times), Directory (create, list, lazy
+                    entries, walk, glob, copy, remove, recursively too),
+                    Glob, Temp (files and directories removed as they are
+                    let go), FileWatcher (below), PathLike (a String or a
+                    FilePath), FilePath (platform bytes, POSIX and Windows rules:
                     drives, UNC, verbatim; components, lexical
                     normalization, relative paths, canonical) and Path
                     over it, MappedFile (read-only, read-write and
@@ -1112,6 +1116,43 @@ seven. `parse(_:pattern:)` reads what the pattern writes, as ParseExact.
 Every type is `Parsable` as ISO 8601 (calendar, ordinal and week dates,
 basic and extended, reduced times with a fraction on the last part,
 24:00), and `ZonedDateTime` as RFC 9557 (`...+01:00[Europe/Prague]`).
+
+### The file system
+
+`Sable.IO`'s `File`, `Directory` and `Temp` go through the runtime's `fs_`
+calls (`runtime/fs.c`, over `platform_fs_posix.c` and `platform_fs_win32.c`).
+Times are `Sable.Time`'s `UtcDateTime`: `Sable.IO` imports `Sable.Time`, which
+imports nothing and reads its zones through `Sable.Core`'s `Runtime`.
+
+- **Removing a tree** goes by what it has opened, never by a path looked up
+  again. On POSIX each directory is opened in its parent's descriptor, with
+  `O_NOFOLLOW`, and its entries unlinked in its own; the way up is `..`,
+  checked to be the directory come from, so few descriptors are held at any
+  depth. On Windows each is opened as a reparse point and deleted by its
+  handle, and a directory is held, not shared to be deleted, while what is in
+  it goes. A link or junction is removed and not followed, whatever another
+  program swaps in meanwhile; what goes or comes meanwhile is looked at
+  again, so many times. A path that is empty or a root, that ends in `.` or
+  `..` (or what Windows reads as one, `...`), has a NUL or is itself a link
+  is refused, by the library and the runtime both. WASI's descriptors have
+  no `..`: there it is `.Unsupported`.
+- **Copying** clones (`fclonefileat`; `copy_file_range` where the file system
+  can), else has the system copy (`fcopyfile`, `copy_file_range`,
+  `CopyFileExW`), permissions too. A file there is written over in place; one
+  copied to itself is refused before it is emptied.
+- **Walking** reads a directory at a time and takes each entry's kind from
+  the directory, so nothing is asked of the system but the names. Following
+  links, each directory's canonical path is known, and one that is being
+  gone through already is not gone into again.
+- **Watching** (`FileWatcher`, `runtime/watch.c`) is FSEvents on macOS, which
+  is loaded when first used, inotify on Linux, its descriptor an I/O source
+  of the reactor's (§6.7), and `ReadDirectoryChangesW` on Windows, heard by
+  the thread pool. FSEvents says only where something happened, so the paths
+  there are remembered to say what. A task waiting does not keep a program
+  going once main has returned.
+- **The interpreter** makes the same calls on POSIX, through the C library;
+  on Windows it makes .NET's, whose recursive removal follows no reparse
+  point but is by path.
 
 ### Processes and signals
 

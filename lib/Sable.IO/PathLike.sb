@@ -1,0 +1,81 @@
+module Sable.IO
+
+/// What names a place in the file system: a String or a FilePath, either
+/// of which File, Directory and the rest take wherever they take a path.
+/// Rust's `AsRef<Path>`.
+///
+/// ```sable
+/// assert(!File.exists("sable-no-such-file"))
+/// assert(!File.exists(FilePath("sable-no-such-file")))
+/// ```
+public protocol PathLike {
+    /// The path it is.
+    var filePath: FilePath { get }
+}
+
+extension String: PathLike {
+    /// The text as a path, by the system's rules.
+    public var filePath: FilePath {
+        get {
+            return FilePath(self)
+        }
+    }
+}
+
+extension FilePath: PathLike {
+    /// The path itself.
+    public var filePath: FilePath {
+        get {
+            return self
+        }
+    }
+
+    // The path as the runtime's calls take it. One with a NUL in it, which
+    // the system would cut short, names nothing.
+    fn given() throws(IoError) -> String {
+        if bytes.contains(0) {
+            throw IoError.InvalidInput(path: Path.text(self))
+        }
+        return systemString
+    }
+
+    // The path of something to be made, replaced or removed, which must
+    // name it: not be empty, a root, or end in '.' or '..'. Separators at
+    // the end are dropped, as a link with one after it is followed.
+    fn named() throws(IoError) -> String {
+        let text = try given()
+        let parsed = parse()
+        let spans = parsed.spans
+        if spans.isEmpty || spans[spans.count - 1].kind != .Normal {
+            throw IoError.InvalidInput(path: Path.text(self))
+        }
+        let last = spans[spans.count - 1]
+        // Parsed, a '.' at the end is no part: it is not a name either.
+        var end = last.end
+        while end < bytes.count {
+            if !isSeparator(bytes[end], verbatim: parsed.verbatim) {
+                throw IoError.InvalidInput(path: Path.text(self))
+            }
+            end += 1
+        }
+        // Windows drops the dots and spaces a name ends with, so that '...'
+        // is the directory it is in.
+        let lastByte = bytes[last.end - 1]
+        if style == .Windows && !parsed.verbatim && (lastByte == pathDot || lastByte == 0x20) {
+            throw IoError.InvalidInput(path: Path.text(self))
+        }
+        return last.end == bytes.count ? text : piece(0, last.end).systemString
+    }
+
+    // A name in this directory, by its bytes as the system gave them.
+    fn inside(_ name: U8[:]) -> FilePath {
+        var joined = bytes
+        let n = joined.count
+        let parsed = parse()
+        if n > 0 && !isSeparator(joined[n - 1], verbatim: parsed.verbatim) && !(parsed.leading == .Disk && n == parsed.prefixEnd) {
+            joined.append(separatorByte())
+        }
+        joined.append(contentsOf: name)
+        return FilePath(bytes: joined, style: style)
+    }
+}

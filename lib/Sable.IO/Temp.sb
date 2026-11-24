@@ -1,0 +1,64 @@
+module Sable.IO
+
+/// Files and directories that are there only as long as they are held:
+/// Rust's `tempfile`, .NET's `Directory.CreateTempSubdirectory`.
+///
+/// ```sable
+/// let directory = try! Temp.directory()
+/// let path = directory.path.appending("notes.txt")
+/// try! File.write(path, "kept for now")
+/// assert(File.exists(path))
+/// try! directory.remove()
+/// assert(!File.exists(path))
+/// ```
+public struct Temp {
+    /// A new empty file, open to be read and written, that on POSIX no other
+    /// user may read: in the system's directory for such files, or in the
+    /// one given. Its name is the start, letters no one guesses, and the end.
+    public static fn file(startingWith start: String = "sable-", endingWith end: String = "", in directory: FilePath? = none) throws(IoError) -> TempFile {
+        var options = OpenOptions()
+        options.read = true
+        options.write = true
+        options.createNew = true
+        options.permissions = 0o600
+        var tries = 1
+        while true {
+            let path = Temp.path(start, end, directory)
+            do {
+                return TempFile(path: path, file: try File.open(path, options: options))
+            } catch IoError.AlreadyExists(_) where tries < 100 {
+                tries += 1
+            }
+        }
+    }
+
+    /// A new empty directory that on POSIX no other user may read or change.
+    public static fn directory(startingWith start: String = "sable-", in directory: FilePath? = none) throws(IoError) -> TempDirectory {
+        var tries = 1
+        while true {
+            let path = Temp.path(start, "", directory)
+            do {
+                try Directory.create(path, permissions: FilePermissions(mode: 0o700))
+                return TempDirectory(path: path)
+            } catch IoError.AlreadyExists(_) where tries < 100 {
+                tries += 1
+            }
+        }
+    }
+
+    // A path that is most likely no one's: 60 bits from the system. Absolute,
+    // so that it is the same whatever the working directory becomes.
+    static fn path(_ start: String, _ end: String, _ directory: FilePath?) -> FilePath {
+        var name = start
+        var bits = U64.random(in: U64.min...U64.max)
+        var i = 0
+        while i < 12 {
+            name = name + "\(tempLetters[Int(bits & 31)])"
+            bits = bits >> 5
+            i += 1
+        }
+        return (directory ?? Environment.temporaryDirectory).absolute().appending(name + end)
+    }
+}
+
+let tempLetters: Char[>..] = "abcdefghijklmnopqrstuvwxyz234567".toArray()

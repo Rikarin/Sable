@@ -1128,6 +1128,8 @@ static bool random_bytes(void *buffer, size_t length) {
 // ---- File handles ---------------------------------------------------------
 
 #include "platform_files_posix.c"
+#include "platform_fs_posix.c"
+#include "platform_watch_posix.c"
 
 // ---- Starting programs, and signals ---------------------------------------
 

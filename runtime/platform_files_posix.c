@@ -6,6 +6,7 @@
 
 #if defined(__APPLE__)
 #include <copyfile.h>
+#include <sys/clonefile.h>
 #include <sys/sysctl.h>
 #endif
 #if !defined(__wasi__)
@@ -32,7 +33,15 @@ static int file_error_of(int code) {
             return FILE_ERROR_INTERRUPTED;
         case EINVAL:
         case EBADF:
+        case ENAMETOOLONG:
             return FILE_ERROR_INVALID;
+        case ENOTEMPTY:
+            return FILE_ERROR_NOT_EMPTY;
+        case EXDEV:
+            return FILE_ERROR_CROSSES;
+        case ENOSYS:
+        case ENOTSUP:
+            return FILE_ERROR_UNSUPPORTED;
         default:
             return FILE_ERROR_OTHER;
     }
@@ -133,23 +142,6 @@ static bool file_set_length(PlatformFile file, int64_t length, FileError *error)
     return true;
 }
 
-static bool file_metadata(PlatformFile file, FileMetadata *metadata, FileError *error) {
-    struct stat info;
-    if (fstat((int)file, &info) != 0) {
-        file_failed(error);
-        return false;
-    }
-
-    metadata->size = info.st_size;
-#if defined(__APPLE__)
-    metadata->modified = (int64_t)info.st_mtimespec.tv_sec * 1000000000 + info.st_mtimespec.tv_nsec;
-#else
-    metadata->modified = (int64_t)info.st_mtim.tv_sec * 1000000000 + info.st_mtim.tv_nsec;
-#endif
-    metadata->kind = S_ISDIR(info.st_mode) ? 1 : S_ISREG(info.st_mode) ? 0 : 2;
-    return true;
-}
-
 static bool file_close(PlatformFile file, FileError *error) {
     if (close((int)file) != 0 && errno != EINTR) {
         file_failed(error);
@@ -161,107 +153,6 @@ static bool file_close(PlatformFile file, FileError *error) {
 
 static PlatformFile file_standard(int which) {
     return which;
-}
-
-// What is left of a copy the system's own call did not do: read and
-// written a megabyte at a time.
-static bool copy_by_reading(int from, int to, FileError *error) {
-    enum { CHUNK = 1 << 20 };
-    char *buffer = malloc(CHUNK);
-    if (buffer == NULL) {
-        error->kind = FILE_ERROR_OTHER;
-        error->code = ENOMEM;
-        return false;
-    }
-
-    bool copied = true;
-    for (;;) {
-        int64_t got = file_read(from, buffer, CHUNK, -1, error);
-        if (got <= 0) {
-            copied = got == 0;
-            break;
-        }
-
-        for (int64_t done = 0; done < got;) {
-            int64_t put = file_write(to, buffer + done, got - done, -1, error);
-            if (put <= 0) {
-                copied = false;
-                break;
-            }
-
-            done += put;
-        }
-
-        if (!copied) {
-            break;
-        }
-    }
-
-    free(buffer);
-    return copied;
-}
-
-// The whole file copied to a new one, or one there replaced, at the
-// system's fastest: a clone where the file system can (APFS), the kernel's
-// copy_file_range on Linux, and bytes read and written otherwise.
-static bool file_copy(const char *from, const char *to, FileError *error) {
-#if defined(__APPLE__)
-    // A clone, where APFS can make one, of everything; a file at 'to'
-    // removed first, as a clone is only made where nothing is.
-    if (copyfile(from, to, NULL, COPYFILE_ALL | COPYFILE_CLONE | COPYFILE_UNLINK) != 0) {
-        file_failed(error);
-        return false;
-    }
-
-    return true;
-#else
-    int source = (int)file_open(from, FILE_READ, 0, error);
-    if (source < 0) {
-        return false;
-    }
-
-    struct stat info;
-    mode_t mode = fstat(source, &info) == 0 ? info.st_mode & 0777 : 0644;
-    int target = (int)file_open(to, FILE_WRITE | FILE_CREATE | FILE_TRUNCATE, (int)mode, error);
-    if (target < 0) {
-        close(source);
-        return false;
-    }
-
-    bool copied = false;
-#if defined(__linux__)
-    for (;;) {
-        ssize_t moved = copy_file_range(source, NULL, target, NULL, (size_t)1 << 30, 0);
-        if (moved == 0) {
-            copied = true;
-            break;
-        }
-        if (moved < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            // Across file systems, or a kernel without it: the bytes read
-            // and written from where it got to.
-            if (errno == EXDEV || errno == ENOSYS || errno == EOPNOTSUPP || errno == EINVAL) {
-                copied = copy_by_reading(source, target, error);
-            } else {
-                file_failed(error);
-            }
-            break;
-        }
-    }
-#else
-    copied = copy_by_reading(source, target, error);
-#endif
-
-    close(source);
-    if (close(target) != 0 && copied) {
-        file_failed(error);
-        copied = false;
-    }
-
-    return copied;
-#endif
 }
 
 static char *file_canonical(const char *name, FileError *error) {

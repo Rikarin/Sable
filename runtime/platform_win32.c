@@ -14,6 +14,7 @@
 #include <shellapi.h>
 #include <psapi.h>
 
+#pragma comment(lib, "advapi32")
 #pragma comment(lib, "bcrypt")
 #pragma comment(lib, "dbghelp")
 #pragma comment(lib, "shell32")
@@ -1308,4 +1309,105 @@ static void file_map_advise(void *base, int64_t length, int advice) {
     (void)length;
     (void)advice;
 #endif
+}
+
+// ---- The environment, written ------------------------------------------------
+
+static bool set_environment_variable(const char *name, const char *value) {
+    wchar_t *wide_name = to_wide(name);
+    wchar_t *wide_value = value == NULL ? NULL : to_wide(value);
+    BOOL set = SetEnvironmentVariableW(wide_name, wide_value);
+    free(wide_name);
+    free(wide_value);
+    // Removing one that is not there is no failure.
+    return set || (value == NULL && GetLastError() == ERROR_ENVVAR_NOT_FOUND);
+}
+
+static char **environment_entries(size_t *count) {
+    wchar_t *block = GetEnvironmentStringsW();
+    size_t n = 0;
+    for (wchar_t *at = block; at != NULL && *at != 0; at += wcslen(at) + 1) {
+        n++;
+    }
+
+    char **entries = malloc((n > 0 ? n : 1) * sizeof(char *));
+    if (entries == NULL) {
+        sable_trap("out of memory");
+    }
+
+    size_t kept = 0;
+    for (wchar_t *at = block; at != NULL && *at != 0; at += wcslen(at) + 1) {
+        // "=C:=C:\\work" and the like: the shell's per-drive directories,
+        // which are not variables.
+        if (*at != L'=') {
+            entries[kept++] = from_wide(at);
+        }
+    }
+
+    if (block != NULL) {
+        FreeEnvironmentStringsW(block);
+    }
+
+    *count = kept;
+    return entries;
+}
+
+// ---- The system ----------------------------------------------------------
+
+static char *host_name(void) {
+    wchar_t name[256];
+    DWORD size = 256;
+    return GetComputerNameExW(ComputerNameDnsHostname, name, &size) ? from_wide(name) : NULL;
+}
+
+static char *user_name(void) {
+    wchar_t name[257];
+    DWORD size = 257;
+    return GetUserNameW(name, &size) ? from_wide(name) : NULL;
+}
+
+static char *home_directory(void) {
+    return environment_variable("USERPROFILE");
+}
+
+static char *temporary_directory(void) {
+    wchar_t path[MAX_PATH + 2];
+    DWORD length = GetTempPathW(MAX_PATH + 1, path);
+    if (length == 0 || length > MAX_PATH + 1) {
+        return NULL;
+    }
+
+    // It ends in '\\': the directory, without it.
+    if (length > 3 && path[length - 1] == L'\\') {
+        path[length - 1] = 0;
+    }
+
+    return from_wide(path);
+}
+
+typedef LONG(WINAPI *RtlGetVersionCall)(PRTL_OSVERSIONINFOW);
+
+static char *os_version(void) {
+    // RtlGetVersion, which is not capped at the version the program's
+    // manifest declares, as GetVersionEx is.
+    RTL_OSVERSIONINFOW info = { sizeof info };
+    RtlGetVersionCall call = (RtlGetVersionCall)(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion");
+    if (call == NULL || call(&info) != 0) {
+        return NULL;
+    }
+
+    char text[64];
+    snprintf(text, sizeof text, "%lu.%lu.%lu", info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber);
+    return strdup(text);
+}
+
+static int64_t page_size(void) {
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    return info.dwPageSize;
+}
+
+static int64_t physical_memory(void) {
+    MEMORYSTATUSEX status = { sizeof status };
+    return GlobalMemoryStatusEx(&status) ? (int64_t)status.ullTotalPhys : 0;
 }

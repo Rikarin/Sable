@@ -30,6 +30,9 @@ public abstract class SilSandbox {
     /// <summary>An environment variable as the program sees it; null when it has none of that name.</summary>
     public abstract string? Environment(string name);
 
+    /// <summary>The names of the variables the program may see, for a list of them all; none by default.</summary>
+    public virtual IEnumerable<string> EnvironmentNames => [];
+
     /// <summary>The environment a program it runs is started with, over the process's own.</summary>
     public abstract IReadOnlyDictionary<string, string> ProgramEnvironment { get; }
 }

@@ -12,3 +12,12 @@ public fn sleep(_ duration: Duration) async throws(CancellationError) {
 public fn yieldNow() async {
     await Task.yield()
 }
+
+extension Task {
+    /// Waits at least this long, off the run queue: Swift's
+    /// `Task.sleep(for:)`. A task cancelled before or while it sleeps wakes
+    /// at once, and the sleep throws CancellationError.
+    public static fn sleep(for duration: Duration) async throws(CancellationError) {
+        try await Task.sleep(nanoseconds: duration.totalNanoseconds)
+    }
+}

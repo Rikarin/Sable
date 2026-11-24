@@ -538,3 +538,106 @@ void sable_file_map_advise(SableArray *mapped, int64_t advice) {
         file_map_advise(mapped->elements, mapped->capacity, (int)advice);
     }
 }
+
+// ---- The environment and the system ----------------------------------------
+
+// The variable set; false when the system refused the name.
+bool sable_env_set(const SableString *name, const SableString *value) {
+    char *key = c_string(name);
+    char *text = c_string(value);
+    bool set = set_environment_variable(key, text);
+    free(key);
+    free(text);
+    return set;
+}
+
+// The variable removed; false when the system refused the name.
+bool sable_env_remove(const SableString *name) {
+    char *key = c_string(name);
+    bool removed = set_environment_variable(key, NULL);
+    free(key);
+    return removed;
+}
+
+// Every variable, as "NAME=value".
+SableArray *sable_env_all(void) {
+    size_t count = 0;
+    char **entries = environment_entries(&count);
+    SableArray *all = NULL;
+    for (size_t i = 0; i < count; i++) {
+        *(SableString **)sable_array_append_slot(&all, &string_array_metadata) = make_ctext(entries[i]);
+        free(entries[i]);
+    }
+
+    free(entries);
+    return all;
+}
+
+// A text about the system (0 the host's name, 1 the user's, 2 the home
+// directory, 3 the temporary one, 4 the OS version): empty where it gives none.
+SableString *sable_system_text(int64_t which) {
+    char *text = which == 0 ? host_name()
+        : which == 1        ? user_name()
+        : which == 2        ? home_directory()
+        : which == 3        ? temporary_directory()
+        : which == 4        ? os_version()
+                            : NULL;
+    if (text == NULL) {
+        return make_string("", 0);
+    }
+
+    SableString *result = make_ctext(text);
+    free(text);
+    return result;
+}
+
+// A number about the system: 0 its processors, 1 its page size, 2 its
+// physical memory in bytes.
+int64_t sable_system_number(int64_t which) {
+    return which == 0 ? processor_count() : which == 1 ? page_size() : which == 2 ? physical_memory() : 0;
+}
+
+// The argument's bytes as the system gave them (UTF-8 of its UTF-16 on
+// Windows), whatever they are: what a String of them would replace.
+SableArray *sable_io_argument_bytes(int64_t index, const SableMetadata *type) {
+    if (index < 0 || index >= sable_io_argument_count()) {
+        trap_here("argument index out of range");
+    }
+
+    const char *text = saved_argv[index + 1];
+    size_t length = strlen(text);
+    if (length == 0) {
+        return NULL;
+    }
+
+    SableArray *bytes = sable_alloc(type, (int64_t)sizeof(SableArray));
+    bytes->elements = buffer_alloc((int64_t)length);
+    memcpy(bytes->elements, text, length);
+    bytes->capacity = (int64_t)length;
+    bytes->count = (int64_t)length;
+    return bytes;
+}
+
+// The memory manager's counts (0 objects allocated by every thread, 1 alive
+// now, 2 retains and 3 releases — counted only under SABLE_STATS — 4 slabs
+// held, 5 the most held at once, 6 given back to the system).
+int64_t sable_memory_statistic(int64_t which) {
+    switch (which) {
+        case 0:
+            return thread_sum(offsetof(SableThread, allocations));
+        case 1:
+            return live_object_count();
+        case 2:
+            return __atomic_load_n(&sable_retains, __ATOMIC_RELAXED);
+        case 3:
+            return __atomic_load_n(&sable_releases, __ATOMIC_RELAXED);
+        case 4:
+            return __atomic_load_n(&slabs_held, __ATOMIC_RELAXED);
+        case 5:
+            return __atomic_load_n(&slabs_most, __ATOMIC_RELAXED);
+        case 6:
+            return __atomic_load_n(&slabs_returned, __ATOMIC_RELAXED);
+        default:
+            return 0;
+    }
+}

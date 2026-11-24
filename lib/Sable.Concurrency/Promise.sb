@@ -1,0 +1,83 @@
+module Sable.Concurrency
+
+/// A value that will be given later, by whoever has it, to every task that
+/// waits for it: .NET's `TaskCompletionSource<T>`, a one-shot channel. It
+/// is completed once — with a value, or with an error — from any code, a
+/// callback on another thread among it; a second completion is refused.
+/// Any number of tasks may wait, before or after.
+///
+/// ```sable
+/// let answer = Promise<Int, Never>()
+/// let waiting = Task.spawn { await answer.value() }
+/// assert(answer.succeed(42))
+/// assert(!answer.succeed(7))
+/// assert(await waiting.value == 42)
+/// ```
+@immutable
+public final class Promise<T: Sendable, E: Error> {
+    let state: PromiseState<T, E>
+    let completed: Atomic<Bool>
+
+    /// One not yet completed.
+    public init() {
+        state = PromiseState<T, E>()
+        completed = Atomic(false)
+    }
+
+    /// Whether it has been completed: its waiters then have, or will soon
+    /// have, what it was completed with.
+    public var isCompleted: Bool => completed.load()
+
+    /// Completed with the value: whether this was the completion, false
+    /// when it had been completed already.
+    public fn succeed(_ value: T) -> Bool {
+        return complete(with: .Ok(value))
+    }
+
+    /// Completed with the error, which its waiters throw.
+    public fn fail(_ error: E) -> Bool {
+        return complete(with: .Err(error))
+    }
+
+    /// Completed with the outcome: whether this was the completion.
+    public fn complete(with outcome: Outcome<T, E>) -> Bool {
+        if completed.exchange(true) {
+            return false
+        }
+        // Handed to the state from a task of its own, so that any code may
+        // complete a promise, synchronous or not, on any thread.
+        let state = self.state
+        let _ = Task.detached {
+            await state.deliver(outcome)
+        }
+        return true
+    }
+
+    /// The value it is completed with, waiting for it; the error, thrown.
+    public fn value() async throws(E) -> T {
+        return try await state.wait().get()
+    }
+}
+
+// A promise's outcome, and the tasks waiting for it: an actor, so that a
+// waiter's look at it and its park are one step to whoever delivers.
+actor PromiseState<T: Sendable, E: Error> {
+    var outcome: Outcome<T, E>? = none
+    let waiters: WaitList = WaitList()
+
+    init() { }
+
+    fn deliver(_ given: Outcome<T, E>) {
+        outcome = given
+        waiters.wakeAll()
+    }
+
+    fn wait() async -> Outcome<T, E> {
+        while true {
+            if let given = outcome {
+                return given
+            }
+            await waiters.park()
+        }
+    }
+}

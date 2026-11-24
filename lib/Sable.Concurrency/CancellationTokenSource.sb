@@ -1,0 +1,129 @@
+module Sable.Concurrency
+
+import Sable.Time
+
+/// What cancels a CancellationToken: .NET's `CancellationTokenSource`, for
+/// code that is not a child of the task that would cancel it — a request
+/// that any of several things may end, a callback, an object that lives
+/// longer than a task. (Structured code asks `Task.isCancelled`, and a
+/// task group cancels its children.)
+///
+/// Cancelling runs every handler registered on its tokens, once, in the
+/// order registered, on the thread that cancels; a handler registered after
+/// runs at once.
+///
+/// ```sable
+/// let source = CancellationTokenSource()
+/// let token = source.token
+/// let stopped = Atomic(false)
+/// let _ = token.register { stopped.store(true) }
+/// source.cancel()
+/// assert(token.isCancellationRequested && stopped.load())
+/// ```
+@immutable
+public final class CancellationTokenSource {
+    let cancelled: Atomic<Bool>
+    let handlers: Mutex<CancellationHandlers>
+
+    /// A source not yet cancelled.
+    public init() {
+        cancelled = Atomic(false)
+        handlers = Mutex(CancellationHandlers())
+    }
+
+    /// The token it cancels: as many copies as there are listeners.
+    public var token: CancellationToken => CancellationToken(source: self)
+
+    /// Whether it has been cancelled.
+    public var isCancellationRequested: Bool => cancelled.load()
+
+    /// Cancels its tokens: their handlers run, now, here. Cancelling again
+    /// does nothing.
+    public fn cancel() {
+        if cancelled.exchange(true) {
+            return
+        }
+        let toRun = handlers.withLock { (list: inout CancellationHandlers) -> CancellationHandler[>..] in
+            list.closed = true
+            let all = list.entries
+            list.entries = []
+            return all
+        }
+        for handler in toRun {
+            handler.run()
+        }
+    }
+
+    /// Cancels its tokens once the duration has passed, from a task of its
+    /// own; at once for none.
+    public fn cancel(after duration: Duration) {
+        if duration.totalNanoseconds <= 0 {
+            cancel()
+            return
+        }
+        let _ = Task.detached {
+            try? await Task.sleep(for: duration)
+            self.cancel()
+        }
+    }
+
+    /// A source cancelled when any of the tokens is, or when it is
+    /// cancelled itself: .NET's `CreateLinkedTokenSource`.
+    public static fn linked(_ tokens: CancellationToken[>..]) -> CancellationTokenSource {
+        let source = CancellationTokenSource()
+        for token in tokens {
+            let _ = token.register { source.cancel() }
+        }
+        return source
+    }
+
+    fn register(_ handler: @escaping @Sendable () -> Void) -> CancellationRegistration {
+        let id = handlers.withLock { (list: inout CancellationHandlers) -> Int in
+            if list.closed {
+                return -1
+            }
+            list.next += 1
+            list.entries.append(CancellationHandler { id: list.next, run: handler })
+            return list.next
+        }
+        if id < 0 {
+            handler()
+        }
+        return CancellationRegistration { source: id < 0 ? none : self, id: id }
+    }
+
+    fn unregister(_ id: Int) -> Bool {
+        return handlers.withLock { (list: inout CancellationHandlers) -> Bool in
+            var i = 0
+            while i < list.entries.count {
+                if list.entries[i].id == id {
+                    var kept: CancellationHandler[>..] = []
+                    var j = 0
+                    while j < list.entries.count {
+                        if j != i {
+                            kept.append(list.entries[j])
+                        }
+                        j += 1
+                    }
+                    list.entries = kept
+                    return true
+                }
+                i += 1
+            }
+            return false
+        }
+    }
+}
+
+// The handlers waiting for a cancellation, under the source's lock; closed
+// once it has cancelled, when a handler registered runs at once.
+struct CancellationHandlers {
+    var entries: CancellationHandler[>..] = []
+    var next: Int = 0
+    var closed: Bool = false
+}
+
+struct CancellationHandler {
+    let id: Int
+    let run: () -> Void
+}

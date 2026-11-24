@@ -1,0 +1,59 @@
+module Sable.Net
+
+import Sable.Text
+
+/// A name and its value in a query: what a URL's `queryItems` are, and
+/// what application/x-www-form-urlencoded text is a list of.
+@derive(Equatable, Hashable, Debug)
+public struct QueryItem {
+    public var name: String
+    public var value: String
+
+    public init(_ name: String, _ value: String) {
+        self.name = name
+        self.value = value
+    }
+
+    /// The items application/x-www-form-urlencoded text holds: split at
+    /// '&', each at its first '=', '+' a space and %XX a byte.
+    ///
+    /// ```sable
+    /// let items = QueryItem.parse("a=1&b=x+y&c&d=%C3%BC")
+    /// assert(items.count == 4 && items[1].value == "x y" && items[2].value == "" && items[3].value == "ü")
+    /// ```
+    public static fn parse(_ text: String) -> QueryItem[>..] {
+        var items: QueryItem[>..] = []
+        for sequence in text.split('&') {
+            if sequence.isEmpty {
+                continue
+            }
+            var name = sequence
+            var value = ""
+            if let equals = sequence.firstIndex(of: '=') {
+                name = sequence[..<equals].toString()
+                value = sequence[sequence.index(after: equals)...].toString()
+            }
+            items.append(QueryItem(QueryItem.decode(name), QueryItem.decode(value)))
+        }
+        return items
+    }
+
+    static fn decode(_ part: String) -> String {
+        return PercentEncoding.decodeText(part.replacing('+', with: " "))
+    }
+
+    /// The items as application/x-www-form-urlencoded text: each name and
+    /// value encoded, a space as '+', joined with '=' and '&'.
+    ///
+    /// ```sable
+    /// let text = QueryItem.serialize([QueryItem("q", "a b&c"), QueryItem("ü", "")])
+    /// assert(text == "q=a+b%26c&%C3%BC=")
+    /// ```
+    public static fn serialize(_ items: QueryItem[:]) -> String {
+        var parts: String[>..] = []
+        for item in items {
+            parts.append(PercentEncoding.encode(item.name, .FormUrlencoded, spaceAsPlus: true) + "=" + PercentEncoding.encode(item.value, .FormUrlencoded, spaceAsPlus: true))
+        }
+        return parts.joined(separator: "&")
+    }
+}

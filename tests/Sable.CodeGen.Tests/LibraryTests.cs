@@ -263,6 +263,131 @@ fn main() {
     }
 
     /// <summary>
+    ///     URLs parsed, resolved and set, and an internationalised host
+    ///     through IDNA and Punycode: the same natively and interpreted.
+    /// </summary>
+    [Fact]
+    public void UrlsAgreeBothWays() {
+        var run = AssertAgree(
+            """
+            module P
+            import Sable.Net
+
+            @main
+            fn main() {
+                let base = try! Url.parse("HTTP://user:pa ss@Bücher.Example:80/a/b/../c?q=1 2#f")
+                print(base.href)
+                print(try! base.resolve("../d?x#y").href)
+                print(try! Url.parse("http://[::FFFF:192.168.0.1]:8080/").hostAndPort)
+                print(try! Url.parse("http://0x7f.1/").hostname)
+                print(Url.canParse("http://exa mple.com"))
+                var url = try! Url.parse("https://example.com/")
+                url.setQueryItems([QueryItem("k", "v w")])
+                print(url.href)
+                print(Idna.toUnicode("xn--bcher-kva.example").text)
+            }
+            """
+        );
+        Assert.Equal(
+            "http://user:pa%20ss@xn--bcher-kva.example/a/c?q=1%202#f\nhttp://user:pa%20ss@xn--bcher-kva.example/d?x#y\n[::ffff:c0a8:1]:8080\n127.0.0.1\nfalse\nhttps://example.com/?k=v+w\nbücher.example\n",
+            run.Stdout
+        );
+    }
+
+    /// <summary>
+    ///     A promise, a continuation, a timeout, a race, a token and the
+    ///     tasks waited for as they finish: the same natively and
+    ///     interpreted, actors and detached tasks between them.
+    /// </summary>
+    [Fact]
+    public void CancellationAndCombinatorsAgreeBothWays() {
+        var run = AssertAgree(
+            """
+            module P
+            import Sable.Concurrency
+            import Sable.Time
+
+            @main
+            fn main() async {
+                let promise = Promise<Int, Never>()
+                let waiter = Task.spawn { await promise.value() }
+                print(promise.succeed(5))
+                print(await waiter.value)
+                let resumed = await withContinuation(returning: String.self) { continuation in
+                    let _ = Task.detached { continuation.resume(returning: "back") }
+                }
+                print(resumed)
+                do {
+                    let _ = try await withTimeout(Duration.milliseconds(5)) {
+                        try await Task.sleep(for: Duration.seconds(60))
+                        return 0
+                    }
+                } catch let error as TimeoutError {
+                    print("timed out")
+                } catch {
+                    print("other")
+                }
+                print(try! await race({ "first" }, {
+                    try await Task.sleep(for: Duration.seconds(60))
+                    return "second"
+                }))
+                let source = CancellationTokenSource()
+                let _ = source.token.register { print("cancelled") }
+                source.cancel()
+                let a = Task.spawn { 1 }
+                let b = Task.spawn { 2 }
+                var total = 0
+                for await done in whenEach([a, b]) {
+                    total += done.value
+                }
+                print(total)
+            }
+            """
+        );
+        Assert.Equal("true\n5\nback\ntimed out\nfirst\ncancelled\n3\n", run.Stdout);
+    }
+
+    /// <summary>
+    ///     The environment written and read back, the known folders by each
+    ///     system's rules, and the platform as the program and the compiler
+    ///     name it: the same natively and interpreted, where set and remove
+    ///     write the program's own variables, never the compiler's.
+    /// </summary>
+    [Fact]
+    public void TheEnvironmentAndPlatformAgreeBothWays() {
+        var run = AssertAgree(
+            """
+            module P
+            import Sable.IO
+
+            @main
+            fn main() {
+                unsafe {
+                    Environment.set("SABLE_AGREE_VALUE", "a=b")
+                }
+                print(Environment.variable("SABLE_AGREE_VALUE") ?? "-")
+                print(Environment.variables()["SABLE_AGREE_VALUE"] ?? "-")
+                unsafe {
+                    Environment.remove("SABLE_AGREE_VALUE")
+                }
+                print(Environment.variable("SABLE_AGREE_VALUE") ?? "unset")
+                var variables = Dictionary<String, String>()
+                variables["XDG_DATA_HOME"] = "/data"
+                let home = FilePath("/home/x", style: .Posix)
+                print(Environment.knownFolder(.Data, on: .Linux, home: home, variables: variables)!)
+                print(Environment.knownFolder(.Cache, on: .MacOS, home: home, variables: variables)!)
+                print(Platform.operatingSystem.name == Platform.os && Platform.architecture.name == Platform.arch)
+                print(Platform.processorCount > 0 && Platform.pageSize > 0 && !Platform.userName.isEmpty)
+                print(Environment.temporaryDirectory.isAbsolute && Environment.currentDirectory.isAbsolute)
+                print(OperatingSystemVersion.parse("10.0.22631").patch)
+            }
+            """
+        );
+        Assert.Equal("a=b\na=b\nunset\n/data\n/home/x/Library/Caches\ntrue\ntrue\ntrue\n22631\n", run.Stdout);
+        Assert.Null(Environment.GetEnvironmentVariable("SABLE_AGREE_VALUE"));
+    }
+
+    /// <summary>
     ///     TextBuilder's appends — text, characters and integers into its
     ///     byte buffer — and its edits in the middle, and a byte array's
     ///     append(utf8:): the same natively and interpreted.

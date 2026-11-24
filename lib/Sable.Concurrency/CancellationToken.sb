@@ -1,0 +1,101 @@
+module Sable.Concurrency
+
+/// Whether something has been asked to stop, and how to hear it: .NET's
+/// `CancellationToken`, handed to code that should stop when its
+/// CancellationTokenSource is cancelled. `CancellationToken.never` (.NET's
+/// `None`) is never cancelled.
+public struct CancellationToken: Sendable {
+    let source: CancellationTokenSource?
+
+    /// A token that is never cancelled.
+    public static var never: CancellationToken => CancellationToken(source: none)
+
+    /// Whether its source has been cancelled.
+    public var isCancellationRequested: Bool => if let source = source { source.isCancellationRequested } else { false }
+
+    /// Whether it can ever be cancelled: false for `never`.
+    public var canBeCancelled: Bool => source != none
+
+    /// Throws CancellationError if its source has been cancelled.
+    public fn throwIfCancellationRequested() throws(CancellationError) {
+        if isCancellationRequested {
+            throw CancellationError()
+        }
+    }
+
+    /// The handler run when its source is cancelled — at once, here, if it
+    /// is already — until the registration is undone.
+    public fn register(_ handler: @escaping @Sendable () -> Void) -> CancellationRegistration {
+        if let source = source {
+            return source.register(handler)
+        }
+        return CancellationRegistration { source: none, id: -1 }
+    }
+
+    /// Waits until its source is cancelled, or the running task is:
+    /// whether it was the token. For `never`, until the task is cancelled.
+    public fn cancellationRequested() async -> Bool {
+        let heard = Promise<Bool, Never>()
+        let registration = register {
+            let _ = heard.succeed(true)
+        }
+        let byToken = await withTaskCancellationHandler(operation: { await heard.value() }, onCancel: {
+            let _ = heard.succeed(false)
+        })
+        let _ = registration.unregister()
+        return byToken
+    }
+}
+
+/// A handler registered on a CancellationToken, to undo before the token
+/// is cancelled.
+public struct CancellationRegistration: Sendable {
+    let source: CancellationTokenSource?
+    let id: Int
+
+    /// The handler taken off, so a cancellation does not run it: whether it
+    /// was still there to take.
+    public fn unregister() -> Bool {
+        if let source = source {
+            return source.unregister(id)
+        }
+        return false
+    }
+}
+
+/// Runs the body as a child task that the token's cancellation cancels,
+/// as a task group's cancellation would: the bridge from a token to
+/// structured cancellation. What the body gives, this gives; what it
+/// throws, CancellationError among it, this throws.
+///
+/// ```sable
+/// let source = CancellationTokenSource()
+/// source.cancel()
+/// do {
+///     try await withCancellation(source.token) {
+///         try await Task.sleep(nanoseconds: 1_000_000_000)
+///     }
+///     assert(false)
+/// } catch { }
+/// ```
+public fn withCancellation<T: Sendable>(_ token: CancellationToken, _ body: @Sendable async () throws -> T) async throws -> T {
+    // The body against a child that waits for the token: the first to
+    // finish wins, and the other is cancelled — the waiter by its task's
+    // cancellation, which ends its wait.
+    let raced = try await withThrowingTaskGroup(of: Raced<T>.self) { group in
+        group.spawn { Raced<T>.Finished(try await body()) }
+        group.spawn {
+            let _ = await token.cancellationRequested()
+            return Raced<T>.Stopped
+        }
+        let first = try await group.next()!
+        group.cancelAll()
+        return first
+    }
+    return match raced {
+        case .Finished(let value) => value
+        case .Stopped => {
+            throw CancellationError()
+        }
+    }
+}

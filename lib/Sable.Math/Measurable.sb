@@ -1,8 +1,9 @@
 module Sable.Math
 
-/// A number statistics are taken of: any built-in float or integer, as an
-/// F64 to compute with. A float's is exact (an F64 holds every F16, BF16
-/// and F32); an integer's is the nearest F64, exact up to 2^53.
+/// A number statistics are taken of: any built-in float or integer, or a
+/// Decimal, as an F64 to compute with. A float's is exact (an F64 holds
+/// every F16, BF16 and F32); an integer's is the nearest F64, exact up to
+/// 2^53, and a decimal's the nearest F64.
 public protocol Measurable: Comparable {
     /// The value as an F64.
     var measure: F64 { get }
@@ -69,5 +70,9 @@ extension U64: Measurable {
 }
 
 extension U128: Measurable {
+    public var measure: F64 => F64.converting(self)
+}
+
+extension Decimal: Measurable {
     public var measure: F64 => F64.converting(self)
 }

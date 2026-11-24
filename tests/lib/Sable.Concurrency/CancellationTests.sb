@@ -1,0 +1,382 @@
+module CancellationTests
+
+// Cancellation, timeouts and waiting on several things (Sable.Concurrency):
+// cancellation carried to children and grandchildren, timeouts that stop
+// their body, tokens and their handlers, promises, continuations — a
+// leaked one caught in a debug build — races, and whenAll/Any/Each.
+
+import Sable.Concurrency
+import Sable.Time
+import Sable.Testing
+
+/// Sleeps far longer than any test runs, and says whether it was cancelled.
+fn sleepsUntilCancelled() async -> Bool {
+    do {
+        try await Task.sleep(for: Duration.seconds(60))
+        return false
+    } catch {
+        return true
+    }
+}
+
+// ---- Propagation ---------------------------------------------------------------
+
+@test
+fn cancellingAGroupReachesItsGrandchildren() async {
+    let reached = Atomic<Int>(0)
+    await withTaskGroup(of: Void.self) { group in
+        var i = 0
+        while i < 3 {
+            group.spawn {
+                // A child with a group of its own: its children are cancelled too.
+                await withTaskGroup(of: Void.self) { inner in
+                    inner.spawn {
+                        if await sleepsUntilCancelled() {
+                            let _ = reached.update { $0 + 1 }
+                        }
+                    }
+                }
+            }
+            i += 1
+        }
+        await Task.yield()
+        group.cancelAll()
+    }
+    assertEqual(reached.load(), 3)
+}
+
+@test
+fn aTimeoutCancelsTheBodysChildren() async {
+    let stopped = Atomic<Bool>(false)
+    do {
+        let _ = try await withTimeout(Duration.milliseconds(20)) {
+            await withTaskGroup(of: Void.self) { group in
+                group.spawn {
+                    if await sleepsUntilCancelled() {
+                        stopped.store(true)
+                    }
+                }
+            }
+        }
+    } catch { }
+    assert(stopped.load())
+}
+
+// ---- Timeouts ------------------------------------------------------------------
+
+@test
+fn aBodyInTimeGivesItsValue() async {
+    do {
+        let value = try await withTimeout(Duration.seconds(30)) { 6 * 7 }
+        assertEqual(value, 42)
+        let later = try await withTimeout(Duration.seconds(30)) {
+            try await Task.sleep(for: Duration.milliseconds(1))
+            return "slept"
+        }
+        assertEqual(later, "slept")
+    } catch {
+        fail("timed out: \(error)")
+    }
+}
+
+@test
+fn aBodyTooSlowTimesOutPromptly() async {
+    let started = Instant.now()
+    do {
+        let _ = try await withTimeout(Duration.milliseconds(20)) {
+            try await Task.sleep(for: Duration.seconds(60))
+            return 1
+        }
+        fail("did not time out")
+    } catch let error as TimeoutError {
+        assert(error.duration == Duration.milliseconds(20))
+        assertEqual(error.description(), "timed out after \(Duration.milliseconds(20).toString())")
+    } catch {
+        fail("threw \(error)")
+    }
+    // Promptly: the body's sleep ends at its cancellation, not its minute.
+    assert(started.elapsed.totalMilliseconds < 10_000)
+}
+
+struct Broken: Error {
+    fn description() -> String {
+        return "broken"
+    }
+}
+
+@test
+fn aBodysOwnErrorPassesThrough() async {
+    do {
+        let _ = try await withTimeout(Duration.seconds(30)) { () throws -> Int in
+            throw Broken()
+        }
+        fail("did not throw")
+    } catch {
+        assertEqual("\(error)", "Broken()")
+    }
+}
+
+@test
+fn timeoutsNest() async {
+    do {
+        let _ = try await withTimeout(Duration.seconds(30)) {
+            try await withTimeout(Duration.milliseconds(10)) {
+                try await Task.sleep(for: Duration.seconds(60))
+                return 0
+            }
+        }
+        fail("the inner one did not time out")
+    } catch let error as TimeoutError {
+        assert(error.duration == Duration.milliseconds(10))
+    } catch {
+        fail("threw \(error)")
+    }
+}
+
+@test
+fn aCancelledTasksTimeoutThrowsCancellation() async {
+    let task = Task.spawn { () -> String in
+        do {
+            let _ = try await withTimeout(Duration.seconds(30)) {
+                try await Task.sleep(for: Duration.seconds(60))
+                return 0
+            }
+            return "finished"
+        } catch let error as TimeoutError {
+            return "timed out"
+        } catch {
+            return "cancelled"
+        }
+    }
+    await Task.yield()
+    task.cancel()
+    assertEqual(await task.value, "cancelled")
+}
+
+// ---- Tokens --------------------------------------------------------------------
+
+@test
+fn handlersRunOnceInOrderAndLateOnesAtOnce() {
+    let source = CancellationTokenSource()
+    let token = source.token
+    let log = Mutex<String>("")
+    let _ = token.register { log.withLock { $0 += "a" } }
+    let undone = token.register { log.withLock { $0 += "x" } }
+    let _ = token.register { log.withLock { $0 += "b" } }
+    assert(undone.unregister())
+    assert(!undone.unregister())
+    assert(!token.isCancellationRequested && !source.isCancellationRequested)
+    source.cancel()
+    source.cancel()
+    assert(token.isCancellationRequested)
+    assertEqual(log.withLock { $0 }, "ab")
+    let _ = token.register { log.withLock { $0 += "c" } }
+    assertEqual(log.withLock { $0 }, "abc")
+    do {
+        try token.throwIfCancellationRequested()
+        fail("did not throw")
+    } catch { }
+}
+
+@test
+fn theNeverTokenNeverIs() {
+    let never = CancellationToken.never
+    assert(!never.canBeCancelled && !never.isCancellationRequested)
+    assert(CancellationTokenSource().token.canBeCancelled)
+    let registration = never.register { fail("ran") }
+    assert(!registration.unregister())
+    do {
+        try never.throwIfCancellationRequested()
+    } catch {
+        fail("threw")
+    }
+}
+
+@test
+fn linkedSourcesFollowAnyOfTheirs() {
+    let a = CancellationTokenSource()
+    let b = CancellationTokenSource()
+    let linked = CancellationTokenSource.linked([a.token, b.token])
+    assert(!linked.isCancellationRequested)
+    b.cancel()
+    assert(linked.isCancellationRequested && !a.isCancellationRequested)
+    let own = CancellationTokenSource.linked([CancellationTokenSource().token])
+    own.cancel()
+    assert(own.isCancellationRequested)
+}
+
+@test
+fn aSourceCancelsAfterADelay() async {
+    let source = CancellationTokenSource()
+    source.cancel(after: Duration.milliseconds(10))
+    assert(await source.token.cancellationRequested())
+    let now = CancellationTokenSource()
+    now.cancel(after: Duration.milliseconds(0))
+    assert(now.isCancellationRequested)
+}
+
+@test
+fn aTokenStopsStructuredWork() async {
+    let source = CancellationTokenSource()
+    source.cancel(after: Duration.milliseconds(10))
+    do {
+        let _ = try await withCancellation(source.token) {
+            try await Task.sleep(for: Duration.seconds(60))
+            return 1
+        }
+        fail("did not stop")
+    } catch let error as CancellationError {
+    } catch {
+        fail("threw \(error)")
+    }
+    // A body that finishes first gives its value, the token never firing.
+    do {
+        let value = try await withCancellation(CancellationTokenSource().token) { 7 }
+        assertEqual(value, 7)
+    } catch {
+        fail("threw \(error)")
+    }
+}
+
+@test
+fn waitingForATokenEndsWithTheTask() async {
+    let task = Task.spawn { await CancellationToken.never.cancellationRequested() }
+    await Task.yield()
+    task.cancel()
+    assert(!(await task.value))
+}
+
+// ---- Promises and continuations ------------------------------------------------
+
+@test
+fn aPromiseCompletesOnceForEveryWaiter() async {
+    let promise = Promise<String, Never>()
+    assert(!promise.isCompleted)
+    let first = Task.spawn { await promise.value() }
+    let second = Task.spawn { await promise.value() }
+    await Task.yield()
+    assert(promise.succeed("done"))
+    assert(promise.isCompleted)
+    assert(!promise.succeed("again"))
+    assertEqual(await first.value, "done")
+    assertEqual(await second.value, "done")
+    // A waiter after the completion has it at once.
+    assertEqual(await promise.value(), "done")
+}
+
+@test
+fn aPromiseCarriesAnError() async {
+    let promise = Promise<Int, Broken>()
+    assert(promise.fail(Broken()))
+    assert(!promise.complete(with: .Ok(1)))
+    do {
+        let _ = try await promise.value()
+        fail("did not throw")
+    } catch {
+        assertEqual("\(error)", "Broken()")
+    }
+}
+
+@test
+fn aContinuationIsResumedFromElsewhere() async {
+    let value = await withContinuation(returning: Int.self) { continuation in
+        let _ = Task.detached {
+            try? await Task.sleep(for: Duration.milliseconds(5))
+            continuation.resume(returning: 42)
+        }
+    }
+    assertEqual(value, 42)
+    do {
+        let _ = try await withContinuation(returning: Int.self, throwing: Broken.self) { continuation in
+            continuation.resume(throwing: Broken())
+        }
+        fail("did not throw")
+    } catch {
+        assertEqual("\(error)", "Broken()")
+    }
+    let given = await withContinuation(returning: String.self) { continuation in
+        continuation.resume(with: .Ok("outcome"))
+    }
+    assertEqual(given, "outcome")
+}
+
+@test(traps: "a continuation resumed twice")
+fn resumingTwiceTraps() async {
+    let _ = await withContinuation(returning: Int.self) { continuation in
+        continuation.resume(returning: 1)
+        continuation.resume(returning: 2)
+    }
+}
+
+@test(traps: "a continuation was let go without being resumed: its task would wait for ever")
+fn aLeakedContinuationTrapsInADebugBuild() async {
+    let _ = await withContinuation(returning: Int.self) { continuation in
+    }
+}
+
+// ---- Races and waiting on tasks ------------------------------------------------
+
+@test
+fn theFirstToFinishWinsAndTheRestAreCancelled() async {
+    let loserStopped = Atomic<Bool>(false)
+    do {
+        let winner = try await race({ "fast" }, {
+            if await sleepsUntilCancelled() {
+                loserStopped.store(true)
+            }
+            return "slow"
+        })
+        assertEqual(winner, "fast")
+        assert(loserStopped.load())
+        let three = try await race({
+            try await Task.sleep(for: Duration.seconds(60))
+            return 1
+        }, { 2 }, {
+            try await Task.sleep(for: Duration.seconds(60))
+            return 3
+        })
+        assertEqual(three, 2)
+    } catch {
+        fail("threw \(error)")
+    }
+    do {
+        let _ = try await race({ () throws -> Int in throw Broken() }, {
+            try await Task.sleep(for: Duration.seconds(60))
+            return 0
+        })
+        fail("did not throw")
+    } catch {
+        assertEqual("\(error)", "Broken()")
+    }
+}
+
+@test
+fn tasksAreWaitedForAllAnyOrEach() async {
+    let slow = Task.spawn { () -> Int in
+        try? await Task.sleep(for: Duration.milliseconds(30))
+        return 1
+    }
+    let fast = Task.spawn { 2 }
+    let middle = Task.spawn { () -> Int in
+        try? await Task.sleep(for: Duration.milliseconds(10))
+        return 3
+    }
+    let firstDone = await whenAny([slow, fast, middle])
+    assertEqual(firstDone.index, 1)
+    assertEqual(firstDone.value, 2)
+    var order: Int[>..] = []
+    var indices: Int[>..] = []
+    for await done in whenEach([slow, fast, middle]) {
+        order.append(done.value)
+        indices.append(done.index)
+    }
+    assertEqual("\(order)", "[2, 3, 1]")
+    assertEqual("\(indices)", "[1, 2, 0]")
+    assertEqual("\(await whenAll([slow, fast, middle]))", "[1, 2, 3]")
+    let noTasks: Task<Int>[>..] = []
+    var count = 0
+    for await _ in whenEach(noTasks) {
+        count += 1
+    }
+    assertEqual(count, 0)
+}

@@ -1,0 +1,29 @@
+module DecimalBench
+
+// Decimal against .NET's decimal: a million invoice lines — a price in
+// cents times a quantity, a discount rate taken off and rounded to the
+// cent, the line added to a total — and each line split three ways, a
+// quotient with no end, rounded to four places.
+
+import Sable.Math
+
+@main
+fn main() {
+    var total = Decimal.zero
+    var shares = Decimal.zero
+    let three = Decimal(3)
+    var x = 42
+    var i = 0
+    while i < 1000000 {
+        x = (x * 1103515245 + 12345) % 2147483648
+        let price = Decimal(x % 100000, scale: 2)
+        let quantity = Decimal(x % 7 + 1)
+        let rate = Decimal(x % 250, scale: 3)
+        let line = price * quantity
+        let net = line - (line * rate).rounded(scale: 2)
+        total = total + net
+        shares = shares + (net / three).rounded(scale: 4)
+        i = i + 1
+    }
+    print("\(total) \(shares)")
+}

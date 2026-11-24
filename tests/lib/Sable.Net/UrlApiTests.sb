@@ -1,0 +1,201 @@
+module UrlApiTests
+
+// Url's API (Sable.Net) beyond parsing: the parts, resolution, the
+// setters, query items, percent-encoding, equality and the protocols.
+
+import Sable.Net
+import Sable.Testing
+
+@test
+fn thePartsOfAUrl() throws {
+    let url = try Url.parse("https://ana:s%20cret@Example.COM:8443/a/b%2Fc/?q=1&r=x+y#frag")
+    assertEqual(url.scheme, "https")
+    assertEqual(url.username, "ana")
+    assertEqual(url.password, "s%20cret")
+    assertEqual(url.hostname, "example.com")
+    assertEqual(url.hostAndPort, "example.com:8443")
+    assert(url.port == 8443 && url.effectivePort == 8443)
+    assertEqual(url.portText, "8443")
+    assertEqual(url.path, "/a/b%2Fc/")
+    assertEqual("\(url.pathSegments!)", "[\"a\", \"b%2Fc\", \"\"]")
+    assertEqual(url.search, "?q=1&r=x+y")
+    assertEqual(url.hashText, "#frag")
+    assertEqual(url.protocolText, "https:")
+    assertEqual(url.origin, "https://example.com:8443")
+    assert(url.isSpecial && !url.hasOpaquePath)
+    let items = url.queryItems
+    assertEqual(items.count, 2)
+    assertEqual(items[1].value, "x y")
+
+    let mail = try Url.parse("mailto:Ana@Example.com?subject=hi")
+    assert(mail.hasOpaquePath && !mail.isSpecial && mail.host == none)
+    assertEqual(mail.path, "Ana@Example.com")
+    assert(mail.pathSegments == none)
+    assertEqual(mail.origin, "null")
+    assertEqual(mail.hostname, "")
+    assertEqual(mail.hostAndPort, "")
+    assert(mail.effectivePort == none)
+    let plain = try Url.parse("http://example.com")
+    assert(plain.port == none && plain.effectivePort == 80)
+    assertEqual(plain.search, "")
+    assertEqual(plain.hashText, "")
+    let emptyQuery = try Url.parse("http://example.com/?#")
+    assertEqual(emptyQuery.search, "")
+    assertEqual(emptyQuery.hashText, "")
+    assertEqual(emptyQuery.href, "http://example.com/?#")
+    assertEqual(try Url.parse("blob:https://a.example/uuid").origin, "https://a.example")
+    assertEqual(try Url.parse("blob:ftp://a.example/uuid").origin, "null")
+    assertEqual(try Url.parse("blob:not a url").origin, "null")
+    assertEqual(try Url.parse("file:///tmp/x").origin, "null")
+    assert(Url.defaultPort("wss") == 443 && Url.defaultPort("ftp") == 21 && Url.defaultPort("ws") == 80 && Url.defaultPort("gopher") == none)
+}
+
+@test
+fn referencesResolveAgainstABase() throws {
+    let base = try Url.parse("http://a/b/c/d;p?q")
+    // RFC 3986 §5.4.1's normal examples.
+    let pairs: String[>..][>..] = [
+        ["g", "http://a/b/c/g"], ["./g", "http://a/b/c/g"], ["g/", "http://a/b/c/g/"], ["/g", "http://a/g"],
+        ["//g", "http://g/"], ["?y", "http://a/b/c/d;p?y"], ["g?y", "http://a/b/c/g?y"], ["#s", "http://a/b/c/d;p?q#s"],
+        ["g#s", "http://a/b/c/g#s"], [";x", "http://a/b/c/;x"], ["", "http://a/b/c/d;p?q"], [".", "http://a/b/c/"],
+        ["..", "http://a/b/"], ["../g", "http://a/b/g"], ["../..", "http://a/"], ["../../g", "http://a/g"],
+    ]
+    for pair in pairs {
+        assertEqual(try base.resolve(pair[0]).href, pair[1])
+    }
+    assert(Url.canParse("g", relativeTo: base))
+    assert(!Url.canParse("g"))
+    do {
+        let _ = try Url.parse("g")
+        fail("a relative URL parsed with no base")
+    } catch {
+        assertEqual(error.description(), "'g' is not a URL: a relative URL with no base")
+    }
+    do {
+        let _ = try Url.parse("http://exa mple.com")
+        fail("a space in a host parsed")
+    } catch .Invalid(let input, let reason) {
+        assertEqual(input, "http://exa mple.com")
+        assertEqual(reason, "an invalid host")
+    }
+    let error = UrlError.Invalid(input: "x", reason: "y")
+    assert(error == UrlError.Invalid(input: "x", reason: "y") && error != UrlError.Invalid(input: "x", reason: "z"))
+    assert(error.debugDescription().hasPrefix("UrlError"))
+}
+
+@test
+fn theSettersFollowTheStandard() throws {
+    var url = try Url.parse("http://example.com/path?q#f")
+    assert(url.setScheme("https"))
+    assertEqual(url.href, "https://example.com/path?q#f")
+    assert(!url.setScheme("mailto"))
+    assert(!url.setScheme("1x"))
+    assert(url.setUsername("ana b"))
+    assert(url.setPassword("p@ss"))
+    assertEqual(url.href, "https://ana%20b:p%40ss@example.com/path?q#f")
+    assert(url.setHost("other.example:8080"))
+    assertEqual(url.hostAndPort, "other.example:8080")
+    // A hostname given a port is refused whole, as the standard says.
+    assert(!url.setHostname("third.example:9"))
+    assert(url.setHostname("third.example"))
+    assertEqual(url.hostAndPort, "third.example:8080")
+    assert(!url.setHost("bad host"))
+    assert(url.setPort("443"))
+    assert(url.port == none)
+    assert(url.setPort("81abc"))
+    assert(url.port == 81)
+    assert(url.setPort(""))
+    assert(url.port == none)
+    assert(!url.setPort("99999"))
+    assert(url.setPath("/a b/../c"))
+    assertEqual(url.path, "/c")
+    url.setQuery("?x=1 2")
+    assertEqual(url.search, "?x=1%202")
+    url.setQueryItems([QueryItem("k", "v w"), QueryItem("é", "&")])
+    assertEqual(url.search, "?k=v+w&%C3%A9=%26")
+    url.setQueryItems([])
+    assert(url.query == none)
+    url.setQuery("plain")
+    url.setQuery("")
+    assert(url.query == none)
+    url.setQuery("again")
+    url.setQuery(none)
+    assert(url.query == none)
+    url.setFragment("#a b")
+    assertEqual(url.hashText, "#a%20b")
+    url.setFragment("")
+    assert(url.fragment == none)
+    url.setFragment("x")
+    url.setFragment(none)
+    assert(url.fragment == none)
+
+    var mail = try Url.parse("mailto:x@y")
+    assert(!mail.setHost("example.com") && !mail.setHostname("example.com") && !mail.setPath("/z"))
+    assert(!mail.setUsername("u") && !mail.setPassword("p") && !mail.setPort("1"))
+    var file = try Url.parse("file:///c:/x")
+    assert(file.setHost("server"))
+    assertEqual(file.href, "file://server/c:/x")
+    assert(file.setHost("localhost"))
+    assertEqual(file.href, "file:///c:/x")
+    assert(!file.setScheme("http"))
+    var nonSpecial = try Url.parse("foo://h/p")
+    assert(nonSpecial.setScheme("bar"))
+    assert(nonSpecial.setPath(""))
+    assertEqual(nonSpecial.href, "bar://h")
+}
+
+@test
+fn percentEncodingAndForms() {
+    assertEqual(PercentEncoding.encode("a b\"<>`#?{}/:@[]|$&+,!'()~", .Fragment), "a%20b%22%3C%3E%60#?{}/:@[]|$&+,!'()~")
+    assertEqual(PercentEncoding.encode("a b\"#<>'", .Query), "a%20b%22%23%3C%3E'")
+    assertEqual(PercentEncoding.encode("'", .SpecialQuery), "%27")
+    assertEqual(PercentEncoding.encode("?^`{}", .Path), "%3F%5E%60%7B%7D")
+    assertEqual(PercentEncoding.encode("/:;=@[\\]^|", .Userinfo), "%2F%3A%3B%3D%40%5B%5C%5D%5E%7C")
+    assertEqual(PercentEncoding.encode("$%&+,", .Component), "%24%25%26%2B%2C")
+    assertEqual(PercentEncoding.encode("!'()~ ", .FormUrlencoded, spaceAsPlus: true), "%21%27%28%29%7E+")
+    assertEqual(PercentEncoding.encode("\u{7F}é", .C0Control), "%7F%C3%A9")
+    assertEqual(PercentEncoding.encode("az09", .FormUrlencoded), "az09")
+    assertEqual("\(PercentEncoding.decode("%41%zz%4"))", "[65, 37, 122, 122, 37, 52]")
+    assertEqual(PercentEncoding.decodeText("%E2%82%AC%FF"), "€\u{FFFD}")
+    assert(PercentEncodeSet.Path != PercentEncodeSet.Query)
+    let items = QueryItem.parse("&a=1&&b==2&c")
+    assertEqual(items.count, 3)
+    assertEqual(items[1].value, "=2")
+    assertEqual(QueryItem.serialize(items), "a=1&b=%3D2&c=")
+    assert(QueryItem("a", "b") == QueryItem("a", "b"))
+    assertEqual(QueryItem("a", "b").hashValue, QueryItem("a", "b").hashValue)
+}
+
+@test
+fn urlsAreValues() throws {
+    let a = try Url.parse("HTTP://Example.com:80/")
+    let b = try Url.parse("http://example.com/")
+    assert(a == b)
+    assertEqual(a.hashValue, b.hashValue)
+    assert(a != (try Url.parse("http://example.com/x")))
+    assertEqual("[\(a)]", "[http://example.com/]")
+    assertEqual(a.debugDescription(), "Url(\"http://example.com/\")")
+    let parsed: Url = try Url.parse("https://x.example")
+    assertEqual(parsed.href, "https://x.example/")
+    // Parsable, from any StringProtocol: a Substring of a larger text.
+    let bad = "<not a url>"
+    do {
+        let _ = try Url.parse(bad[bad.index(after: bad.startIndex)..<bad.index(before: bad.endIndex)])
+        fail("parsed")
+    } catch { }
+    let good = "<http://x.example/>"
+    assertEqual((try Url.parse(good[good.index(after: good.startIndex)..<good.index(before: good.endIndex)])).href, "http://x.example/")
+    let hosts: Host[>..] = [.Domain("a"), .Ipv4(1), .Ipv6([0, 0, 0, 0, 0, 0, 0, 1]), .Opaque("o"), .Empty]
+    var seen: Int[>..] = []
+    for host in hosts {
+        seen.append(host.hashValue)
+        assertEqual(host, host)
+    }
+    assertEqual(seen.count, 5)
+    assertEqual(Host.Ipv6([0, 0, 0, 0, 0, 0, 0, 1]).description(), "[::1]")
+    assertEqual(Host.Ipv6([1, 0, 0, 2, 0, 0, 0, 3]).description(), "[1:0:0:2::3]")
+    assertEqual(Host.Ipv6([1, 2, 3, 4, 5, 6, 7, 8]).description(), "[1:2:3:4:5:6:7:8]")
+    assertEqual(Host.Empty.description(), "")
+    assertEqual(Host.parse("op aque", special: false), none)
+    assertEqual(Host.parse("op%20aque", special: false)!.description(), "op%20aque")
+}

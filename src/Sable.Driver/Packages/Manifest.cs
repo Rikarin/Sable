@@ -82,7 +82,7 @@ public static class DependencyCondition {
 
         var (kind, value) = (text[..open], text[(open + 1)..^1]);
         return (kind, value) switch {
-            ("os", "macos" or "linux" or "windows") or ("arch", "arm64" or "x64") => (kind, value),
+            ("os", "macos" or "linux" or "windows" or "wasi") or ("arch", "arm64" or "x64" or "wasm32") => (kind, value),
             _ => null,
         };
     }
@@ -858,7 +858,7 @@ public sealed partial class Manifest {
 
                         var when = String(detail, "when", $"{path}.when");
                         if (when is not null && !DependencyCondition.IsValid(when)) {
-                            Error(detail, "when", $"{path}.when", $"'{when}' is not a condition: os(macos), os(linux), os(windows), arch(arm64) or arch(x64)");
+                            Error(detail, "when", $"{path}.when", $"'{when}' is not a condition: os(macos), os(linux), os(windows), os(wasi), arch(arm64), arch(x64) or arch(wasm32)");
                         }
 
                         result.Add(new(
@@ -909,7 +909,7 @@ public sealed partial class Manifest {
                 : null;
             var when = String(detail, "when", $"{path}.when") ?? shared.When;
             if (when is not null && !DependencyCondition.IsValid(when)) {
-                Error(detail, "when", $"{path}.when", $"'{when}' is not a condition: os(macos), os(linux), os(windows), arch(arm64) or arch(x64)");
+                Error(detail, "when", $"{path}.when", $"'{when}' is not a condition: os(macos), os(linux), os(windows), os(wasi), arch(arm64), arch(x64) or arch(wasm32)");
             }
 
             return shared with {

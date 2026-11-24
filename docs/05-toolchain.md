@@ -178,7 +178,7 @@ let manifest = Package {
         .path("platform", "../platform"),
         .git("shader-tool", "https://example.com/st", tag: "v2.1.0"),
         .registry("vulkan-sys", "1.3", optional: true),
-        .registry("metal-sys", "0.9", optional: true, when: .os(.macOS)),
+        .registry("metal-sys", "0.9", optional: true, when: .os(.MacOS)),
     ],
     devDependencies: [.registry("bench-harness", "0.3")],
 
@@ -317,7 +317,7 @@ surprise later:
 - **No host conditions.** `#if os()` and `#if arch()` are rejected in a
   manifest, because a manifest that branched on the machine evaluating it
   would give a different lock file on each one. Platform-specific choices are
-  data that the resolver applies per target: `when: .os(.macOS)`,
+  data that the resolver applies per target: `when: .os(.MacOS)`,
   `when: .target("wasm32-unknown-unknown")`, `when: .feature("metal")`.
 - **Bounded.** A step and memory limit, as the compile-time evaluator has.
   A manifest that loops forever stops with an error naming the line it was
@@ -338,7 +338,7 @@ error: package.sb:2: import: a manifest cannot import 'Sable.IO': it imports
        only Sable.Build, and may not read or write anything (docs/05 §5.2.4)
 error: package.sb:3: #if: a manifest has no conditional compilation: what
        depends on the platform is data the build applies, such as
-       `when: .os(.linux)` on a dependency (docs/05 §5.2.4)
+       `when: .os(.Linux)` on a dependency (docs/05 §5.2.4)
 error: package.sb:2: effect: a manifest cannot use 'Runtime': it may not read,
        write or wait, so that it means the same on every machine
 error: package.sb:11: manifest: evaluating it took more than 20,000,000 steps:

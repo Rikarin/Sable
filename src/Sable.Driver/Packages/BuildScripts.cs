@@ -325,6 +325,8 @@ sealed class BuildSandbox : SilSandbox {
 
     public override string? Environment(string name) => _variables.GetValueOrDefault(name);
 
+    public override IEnumerable<string> EnvironmentNames => _variables.Keys;
+
     public override string Check(string path, SilAccess access) {
         var full = RealPath(Path.GetFullPath(path, CurrentDirectory));
         var roots = access == SilAccess.Write ? _writable : _readable;

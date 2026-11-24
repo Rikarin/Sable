@@ -1,0 +1,763 @@
+module DecimalTests
+
+// Decimal (Sable.Math): the arithmetic against cases of the General Decimal
+// Arithmetic specification (speleotrove.com/decimal) — its examples and the
+// first cases of its decTest files — then rounding, conversions, text and
+// the paths a coefficient past 128 bits takes. Run with
+//     tools/stdlib-coverage.sh Sable.Math
+//
+// The specification's cases are worked at a precision of nine digits and
+// write results in scientific notation; a decimal keeps up to 28 places and
+// 96 bits and writes itself plainly, and its zero has no sign. A case is
+// kept as the specification gives it where that is a decimal's answer too,
+// and otherwise with the answer a decimal gives, the specification's after
+// it in a comment.
+
+import Sable.Math
+import Sable.Testing
+
+fn d(_ text: String) -> Decimal {
+    return try! Decimal.parse(text)
+}
+
+/// Each case's two operands, given as text, and the text the operation
+/// writes its result as.
+fn check(_ cases: (String, String, String)[:], _ operation: (Decimal, Decimal) -> Decimal) {
+    for (left, right, expected) in cases {
+        let result = operation(d(left), d(right))
+        assertEqualText("\(left), \(right) -> \(result)", "\(left), \(right) -> \(expected)")
+    }
+}
+
+/// Each case's operand and the text the operation writes its result as.
+fn checkOne(_ cases: (String, String)[:], _ operation: (Decimal) -> Decimal) {
+    for (operand, expected) in cases {
+        assertEqualText("\(operand) -> \(operation(d(operand)))", "\(operand) -> \(expected)")
+    }
+}
+
+// ---- General Decimal Arithmetic -----------------------------------------------
+
+@test
+fn addMatchesTheSpecification() {
+    check([
+        // add.decTest addx001–addx010
+        ("1", "1", "2"),
+        ("2", "3", "5"),
+        ("5.75", "3.3", "9.05"),
+        ("5", "-3", "2"),
+        ("-5", "-3", "-8"),
+        ("-7", "2.5", "-4.5"),
+        ("0.7", "0.3", "1.0"),
+        ("1.25", "1.25", "2.50"),
+        ("1.23456789", "1.00000000", "2.23456789"),
+        ("1.23456789", "1.00000011", "2.23456800"),
+        // The specification's examples.
+        ("12", "7.00", "19.00"),
+        ("1E+2", "1E+4", "10100"), // 1.01E+4
+        // Inexact at nine digits (1.00000000), exact in 28 places.
+        ("0.4444444444", "0.5555555555", "0.9999999999"),
+        ("0.44444444449", "0", "0.44444444449"),
+    ], { (a, b) in a + b })
+}
+
+@test
+fn subtractMatchesTheSpecification() {
+    check([
+        // subtract.decTest subx001–subx007, subx011, subx030
+        ("0", "0", "0"),
+        ("1", "1", "0"),
+        ("1", "2", "-1"),
+        ("2", "1", "1"),
+        ("2", "2", "0"),
+        ("3", "2", "1"),
+        ("2", "3", "-1"),
+        ("-0", "0", "0"), // -0
+        ("11", "1", "10"),
+        ("1.000000000", "1", "0.000000000"), // 0E-9
+        // The specification's examples.
+        ("1.3", "1.07", "0.23"),
+        ("1.3", "1.30", "0.00"),
+        ("1.3", "2.07", "-0.77"),
+    ], { (a, b) in a - b })
+}
+
+@test
+fn multiplyMatchesTheSpecification() {
+    check([
+        // multiply.decTest mulx000–mulx012
+        ("2", "2", "4"),
+        ("2", "3", "6"),
+        ("5", "1", "5"),
+        ("5", "2", "10"),
+        ("1.20", "2", "2.40"),
+        ("1.20", "0", "0.00"),
+        ("1.20", "-2", "-2.40"),
+        ("-1.20", "2", "-2.40"),
+        ("-1.20", "0", "0.00"), // -0.00
+        ("-1.20", "-2", "2.40"),
+        ("5.09", "7.1", "36.139"),
+        ("2.5", "4", "10.0"),
+        ("2.50", "4", "10.00"),
+        // Rounded to nine digits there (1.23456789, 100.000000), exact here.
+        ("1.23456789", "1.00000000", "1.2345678900000000"),
+        ("9.999999999", "9.999999999", "99.999999980000000001"),
+        // The specification's examples.
+        ("1.20", "3", "3.60"),
+        ("7", "3", "21"),
+        ("0.9", "0.8", "0.72"),
+        ("0.9", "-0", "0.0"), // -0.0
+        ("654321", "654321", "428135971041"), // 4.28135971E+11
+    ], { (a, b) in a * b })
+}
+
+@test
+fn divideMatchesTheSpecification() {
+    check([
+        // divide.decTest divx001–divx041, where nine digits are exact
+        ("1", "1", "1"),
+        ("2", "1", "2"),
+        ("1", "2", "0.5"),
+        ("2", "2", "1"),
+        ("0", "1", "0"),
+        ("0", "2", "0"),
+        ("1", "3", "0.3333333333333333333333333333"), // 0.333333333
+        ("2", "3", "0.6666666666666666666666666667"), // 0.666666667
+        ("3", "3", "1"),
+        ("2.4", "1", "2.4"),
+        ("2.4", "-1", "-2.4"),
+        ("-2.4", "1", "-2.4"),
+        ("-2.4", "-1", "2.4"),
+        ("2.40", "1", "2.40"),
+        ("2.400", "1", "2.400"),
+        ("2.4", "2", "1.2"),
+        ("2.400", "2", "1.200"),
+        ("2.", "2", "1"),
+        ("20", "20", "1"),
+        ("187", "187", "1"),
+        ("5", "2", "2.5"),
+        ("50", "20", "2.5"),
+        ("500", "200", "2.5"),
+        ("50.0", "20.0", "2.5"),
+        ("5.00", "2.00", "2.5"),
+        ("5", "2.0", "2.5"),
+        ("5", "2.000", "2.5"),
+        ("5", "0.20", "25"),
+        ("5", "0.200", "25"),
+        ("10", "1", "10"),
+        ("100", "1", "100"),
+        ("1000", "1", "1000"),
+        ("1000", "100", "10"),
+        ("1", "4", "0.25"),
+        ("1", "8", "0.125"),
+        ("1", "16", "0.0625"),
+        ("1", "32", "0.03125"),
+        ("1", "64", "0.015625"),
+        ("1", "-2", "-0.5"),
+        // The specification's examples.
+        ("1", "10", "0.1"),
+        ("12", "12", "1"),
+        ("8.00", "2", "4.00"),
+        ("2.400", "2.0", "1.20"),
+        ("2.40E+6", "2", "1200000"), // 1.20E+6
+    ], { (a, b) in a / b })
+}
+
+@test
+fn divideIntegerMatchesTheSpecification() {
+    // divide-integer is the quotient rounded toward zero.
+    check([
+        ("2", "3", "0"),
+        ("10", "3", "3"),
+        ("1", "0.3", "3"),
+    ], { (a, b) in (a / b).rounded(.TowardZero) })
+}
+
+@test
+fn remainderMatchesTheSpecification() {
+    check([
+        ("2.1", "3", "2.1"),
+        ("10", "3", "1"),
+        ("-10", "3", "-1"),
+        ("10.2", "1", "0.2"),
+        ("10", "0.3", "0.1"),
+        ("3.6", "1.3", "1.0"),
+    ], { (a, b) in a % b })
+}
+
+@test
+fn absAndMinusMatchTheSpecification() {
+    checkOne([("2.1", "2.1"), ("-100", "100"), ("101.5", "101.5"), ("-101.5", "101.5")], { (x) in x.abs() })
+    checkOne([("1.3", "-1.3"), ("-1.3", "1.3"), ("0", "0")], { (x) in -x })
+}
+
+@test
+fn compareMatchesTheSpecification() {
+    let cases: (String, String, Int)[>..] = [
+        ("2.1", "3", -1),
+        ("2.1", "2.1", 0),
+        ("2.1", "2.10", 0),
+        ("3", "2.1", 1),
+        ("2.1", "-3", 1),
+        ("-3", "2.1", -1),
+    ]
+    for (left, right, expected) in cases {
+        let a = d(left)
+        let b = d(right)
+        assertEqual(a < b ? -1 : a == b ? 0 : 1, expected)
+    }
+}
+
+@test
+fn quantizeMatchesTheSpecification() {
+    let cases: (String, Int, String)[>..] = [
+        ("2.17", 3, "2.170"),
+        ("2.17", 2, "2.17"),
+        ("2.17", 1, "2.2"),
+        ("2.17", 0, "2"),
+        ("-0.1", 0, "0"), // -0
+        ("217", 1, "217.0"),
+        ("217", 0, "217"),
+        // NaN at nine digits; a decimal has room.
+        ("35236450.6", 2, "35236450.60"),
+        ("-35236450.6", 2, "-35236450.60"),
+    ]
+    for (operand, scale, expected) in cases {
+        assertEqualText("\(d(operand).quantized(scale: scale))", expected)
+    }
+}
+
+@test
+fn reduceMatchesTheSpecification() {
+    checkOne([
+        ("2.1", "2.1"),
+        ("-2.0", "-2"),
+        ("1.200", "1.2"),
+        ("-120", "-120"), // -1.2E+2
+        ("120.00", "120"), // 1.2E+2
+        ("0.00", "0"),
+    ], { (x) in x.normalized() })
+}
+
+@test
+fn roundToIntegralValueMatchesTheSpecification() {
+    checkOne([
+        ("2.1", "2"),
+        ("100", "100"),
+        ("100.0", "100"),
+        ("101.5", "102"),
+        ("-101.5", "-102"),
+        ("10E+5", "1000000"), // 1.0E+6
+    ], { (x) in x.rounded() })
+}
+
+@test
+fn toNumberMatchesTheSpecification() {
+    let cases: (String, String)[>..] = [
+        ("123", "123"),
+        ("-123", "-123"),
+        ("1.23E3", "1230"), // 1.23E+3
+        ("1.23E+5", "123000"), // 1.23E+5
+        ("12.3", "12.3"),
+        ("0.00123", "0.00123"),
+        ("1.23E-8", "0.0000000123"), // 1.23E-8
+        ("-1.23E-10", "-0.000000000123"), // -1.23E-10
+        ("0", "0"),
+        ("0.00", "0.00"),
+        ("0E2", "0"), // 0E+2
+        ("-0", "0"), // -0
+        ("5E-6", "0.000005"),
+        ("50E-7", "0.0000050"),
+        ("5E-7", "0.0000005"), // 5E-7
+    ]
+    for (text, expected) in cases {
+        assertEqualText("\(d(text))", expected)
+    }
+}
+
+// ---- Rounding -------------------------------------------------------------------
+
+@test
+fn eachRuleRoundsToTwoPlaces() {
+    let values = ["12.345", "12.355", "12.3449", "12.3451", "-12.345", "-12.355", "12.340"]
+    let expected: (RoundingRule, String)[>..] = [
+        (.ToNearestOrEven, "12.34 12.36 12.34 12.35 -12.34 -12.36 12.34"),
+        (.ToNearestOrAwayFromZero, "12.35 12.36 12.34 12.35 -12.35 -12.36 12.34"),
+        (.Up, "12.35 12.36 12.35 12.35 -12.34 -12.35 12.34"),
+        (.Down, "12.34 12.35 12.34 12.34 -12.35 -12.36 12.34"),
+        (.TowardZero, "12.34 12.35 12.34 12.34 -12.34 -12.35 12.34"),
+        (.AwayFromZero, "12.35 12.36 12.35 12.35 -12.35 -12.36 12.34"),
+    ]
+    for (rule, text) in expected {
+        var written: String[>..] = []
+        for value in values {
+            written.append("\(d(value).rounded(scale: 2, rule))")
+        }
+        assertEqualText(written.joined(separator: " "), text)
+    }
+}
+
+@test
+fn roundingToMorePlacesThanAValueHasChangesNothing() {
+    assertEqualText("\(d("1.5").rounded(scale: 3))", "1.5")
+    assertEqualText("\(d("9.99").rounded(scale: 1))", "10.0")
+    assertEqualText("\(d("-0.004").rounded(scale: 2))", "0.00")
+}
+
+@test(traps: "a decimal's scale must be from 0 to 28, not -1")
+fn roundingToANegativeScaleTraps() {
+    let _ = d("1.5").rounded(scale: -1)
+}
+
+@test(traps: "a decimal's scale must be from 0 to 28, not 29")
+fn quantizingPastTwentyEightPlacesTraps() {
+    let _ = d("1.5").quantized(scale: 29)
+}
+
+@test(traps: "decimal overflow")
+fn quantizingPastNinetySixBitsTraps() {
+    let _ = Decimal.max.quantized(scale: 1)
+}
+
+@test
+fn arithmeticRoundsToNearestWithTiesToEven() {
+    // Past 96 bits or 28 places, as .NET's decimal rounds.
+    assertEqualText("\(Decimal.max * d("0.5"))", "39614081257132168796771975168")
+    assertEqualText("\(d("79228162514264337593543950335") - d("0.5"))", "79228162514264337593543950334")
+    assertEqualText("\(d("0.0000000000000000000000000001") * d("0.5"))", "0.0000000000000000000000000000")
+    assertEqualText("\(d("0.0000000000000000000000000003") * d("0.5"))", "0.0000000000000000000000000002")
+    assertEqualText("\(d("1") / d("7"))", "0.1428571428571428571428571429")
+    assertEqualText("\(d("10") / d("3"))", "3.3333333333333333333333333333")
+    assertEqualText("\(d("0.0000000000000000000000000001") / d("2"))", "0.0000000000000000000000000000")
+    assertEqualText("\(d("0.0000000000000000000000000003") / d("2"))", "0.0000000000000000000000000002")
+}
+
+// ---- Values and properties ----------------------------------------------------
+
+@test
+fn aDecimalIsMadeFromACoefficientAndAScale() {
+    let x = Decimal(-125, scale: 2)
+    assertEqualText("\(x)", "-1.25")
+    assertEqual(x.scale, 2)
+    assertEqual(x.coefficient, -125)
+    assert(x.isNegative)
+    assert(!x.isZero)
+    assertEqual(Decimal(x.coefficient, scale: x.scale), x)
+    assertEqualText("\(Decimal(7 as U8))", "7")
+    assertEqualText("\(Decimal(0, scale: 3))", "0.000")
+    assert(Decimal(0, scale: 3).isZero)
+}
+
+@test(traps: "a decimal's scale must be from 0 to 28, not 29")
+fn aScalePastTwentyEightTraps() {
+    let _ = Decimal(1, scale: 29)
+}
+
+@test(traps: "decimal overflow")
+fn aCoefficientPastNinetySixBitsTraps() {
+    let _ = Decimal(U128.max, scale: 0)
+}
+
+@test(traps: "decimal overflow")
+fn anIntegerPastNinetySixBitsTraps() {
+    let _ = Decimal(I128.min)
+}
+
+@test
+fn theBoundsAreNinetySixBitsEitherWay() {
+    assertEqualText("\(Decimal.max)", "79228162514264337593543950335")
+    assertEqualText("\(Decimal.min)", "-79228162514264337593543950335")
+    assertEqual(Decimal.maxScale, 28)
+    assertEqual(Decimal.zero, Decimal(0))
+    assertEqual(Decimal.one, Decimal(1))
+}
+
+@test
+fn aZeroHasNoSign() {
+    assert(!(-Decimal.zero).isNegative)
+    assert(!(d("-1.5") + d("1.5")).isNegative)
+    assertEqualText("\(-Decimal(0, scale: 2))", "0.00")
+}
+
+@test
+fn isIntegerLooksAtTheFraction() {
+    assert(d("2.00").isInteger)
+    assert(d("-7").isInteger)
+    assert(!d("2.01").isInteger)
+    assert(!d("-0.5").isInteger)
+}
+
+@test
+fn theBitsAreDotNetsLayout() {
+    // decimal.GetBits(-1.25m) is { 125, 0, 0, 0x80020000 }.
+    let bits: U128 = (0x8002_0000 as U128) << 96 | 125
+    assertEqual(Decimal(-125, scale: 2).bits, bits)
+    assertEqual(Decimal.fromBits(bits), Decimal(-125, scale: 2))
+    assertEqual(Decimal.fromBits(Decimal.max.bits), Decimal.max)
+    // A scale past 28, and bits .NET keeps zero.
+    assert(Decimal.fromBits((29 as U128) << 112) == none)
+    assert(Decimal.fromBits((1 as U128) << 96) == none)
+    assert(Decimal.fromBits((1 as U128) << 120) == none)
+    // A negative zero's sign is dropped.
+    assertEqual(Decimal.fromBits((1 as U128) << 127)!.bits, 0)
+}
+
+@test
+fn equalNumbersAreEqualAtAnyScale() {
+    assertEqual(d("1.20"), d("1.2"))
+    assertEqual(d("0.000"), d("0"))
+    assertNotEqual(d("1.21"), d("1.2"))
+    assertNotEqual(d("-1"), d("1"))
+    assertNotEqual(Decimal.max, d("0.0000000000000000000000000001"))
+}
+
+@test
+fn equalNumbersHashEqual() {
+    assertEqual(d("1.20").hashValue, d("1.2").hashValue)
+    assertEqual(d("0.00").hashValue, Decimal.zero.hashValue)
+    var prices: [Decimal: String] = [:]
+    prices[d("2.50")] = "tea"
+    assertEqual(prices[d("2.5")] ?? "", "tea")
+}
+
+@test
+fn decimalsAreOrderedByValue() {
+    let values = [d("2.10"), d("-3"), d("0.0000000000000000000000000001"), Decimal.max, d("2.1"), Decimal.min, d("0")]
+    let sorted = values.sorted()
+    var written: String[>..] = []
+    for value in sorted {
+        written.append("\(value)")
+    }
+    assertEqualText(
+        written.joined(separator: " "),
+        "-79228162514264337593543950335 -3 0 0.0000000000000000000000000001 2.10 2.1 79228162514264337593543950335"
+    )
+    assert(d("0.0000000000000000000000000001") < Decimal.max)
+    assert(Decimal.max > d("0.0000000000000000000000000001"))
+    assert(d("-0.0000000000000000000000000001") > Decimal.min)
+    assert(d("1.5") <= d("1.50"))
+}
+
+// ---- Arithmetic --------------------------------------------------------------------
+
+/// The sum of the values, as any Numeric's.
+fn total<T: Numeric>(_ values: T[:]) -> T {
+    var sum = T.zero
+    for value in values {
+        sum += value * T.one
+    }
+    return sum
+}
+
+@test
+fn aDecimalIsSignedNumeric() {
+    assertEqualText("\(total([d("0.1"), d("0.2"), d("0.3")]))", "0.6")
+    var x = d("10.00")
+    x -= d("0.01")
+    x *= d("2")
+    x /= d("4")
+    assertEqualText("\(x)", "4.995")
+}
+
+@test
+fn sumsOfMoneyComeOutToTheCent() {
+    var sum = Decimal.zero
+    var i = 0
+    while i < 1000 {
+        sum = sum + d("0.10")
+        i += 1
+    }
+    assertEqualText("\(sum)", "100.00")
+}
+
+@test
+fn aSumAcrossManyPlacesRoundsInTheWideFraction() {
+    // The one with fewer places raised past ten digits: 192 bits.
+    assertEqualText("\(d("1") + d("0.0000000000000000000000000001"))", "1.0000000000000000000000000001")
+    assertEqualText("\(Decimal.max + d("0.0000000000000000000000000001"))", "79228162514264337593543950335")
+    assertEqualText("\(Decimal.max - d("0.0000000000000000000000000001"))", "79228162514264337593543950335")
+    assertEqualText("\(d("1") - d("1.0000000000000000000000000001"))", "-0.0000000000000000000000000001")
+    assertEqualText("\(d("0.0000000000000000000000000001") - d("1"))", "-0.9999999999999999999999999999")
+    assertEqualText("\(d("12345678901234567890") + d("0.12345678"))", "12345678901234567890.12345678")
+    assertEqualText("\(d("7922816251426433759354395033") - d("0.00000000001"))", "7922816251426433759354395033.0")
+}
+
+@test
+fn aProductPast128BitsIsRoundedToFit() {
+    assertEqualText("\(Decimal.max * d("0.5000000000000000000000000000"))", "39614081257132168796771975168")
+    assertEqualText("\(d("7922816251426433759354395033.5") * d("2"))", "15845632502852867518708790067")
+    assertEqualText("\(d("1.0000000000000000000000000001") * d("1.0000000000000000000000000001"))", "1.0000000000000000000000000002")
+}
+
+@test
+fn aQuotientTakesAsManyPlacesAsFit() {
+    assertEqualText("\(d("100000000000000000000") / d("3"))", "33333333333333333333.333333333")
+    assertEqualText("\(d("1000000000000000000000") / d("3"))", "333333333333333333333.33333333")
+    assertEqualText("\(Decimal.max / d("3"))", "26409387504754779197847983445")
+    // 2^96 - 1 and five sevenths, which rounds past the greatest.
+    assert(d("55459713759985036315480765235").checkedDiv(d("0.7")) == none)
+    assert(Decimal.max.checkedDiv(d("0.000000000000000001")) == none)
+}
+
+@test
+fn aCoefficientRoundedUpToTwoToTheNinetySixLosesAPlace() {
+    assertEqualText("\(d("7922816251426433759354395033.55"))", "7922816251426433759354395034")
+    assertEqualText("\(d("7922816251426433759354395033.5") * d("1.0"))", "7922816251426433759354395033.5")
+}
+
+@test
+fn aQuotientRaisedPastNinePlacesStaysExact() {
+    assertEqualText("\(d("1") / d("0.0000000000000000000000000001"))", "10000000000000000000000000000")
+    assertEqualText("\(d("-6") / d("0.0000000000000000000000000002"))", "-30000000000000000000000000000")
+}
+
+@test
+fn aRemainderAcrossManyPlacesIsExact() {
+    assertEqualText("\(d("0.0000000000000000000000000001") % Decimal.max)", "0.0000000000000000000000000001")
+    assertEqualText("\(d("1") % d("0.0000000000000000000000000003"))", "0.0000000000000000000000000001")
+    assertEqualText("\(d("-7.5") % d("2"))", "-1.5")
+    assertEqualText("\(d("1") % Decimal.max)", "1")
+    assertEqualText("\(Decimal.max % d("1000000000000000000000"))", "514264337593543950335")
+}
+
+@test
+fn theCheckedFormsGiveNoneForWhatTraps() {
+    assert(Decimal.max.checkedAdd(d("1")) == none)
+    assert(Decimal.min.checkedSub(d("1")) == none)
+    assert(Decimal.max.checkedMul(d("2")) == none)
+    assert(Decimal.max.checkedMul(Decimal.max) == none)
+    assert(Decimal.max.checkedMul(d("2.0000000000000000000")) == none)
+    assert(Decimal.max.checkedDiv(d("0.5")) == none)
+    assert(d("1000").checkedDiv(d("0.0000000000000000000000000001")) == none)
+    assert(d("1").checkedDiv(Decimal.zero) == none)
+    assert(d("1").checkedRem(Decimal.zero) == none)
+    assertEqual(d("1.5").checkedAdd(d("1")), d("2.5"))
+    assertEqual(d("1.5").checkedSub(d("1")), d("0.5"))
+    assertEqual(d("1.5").checkedMul(d("2")), d("3"))
+    assertEqual(d("1.5").checkedDiv(d("2")), d("0.75"))
+    assertEqual(d("1.5").checkedRem(d("1")), d("0.5"))
+}
+
+@test(traps: "decimal overflow")
+fn aSumPastTheGreatestTraps() {
+    let _ = Decimal.max + d("1")
+}
+
+@test(traps: "decimal overflow")
+fn aDifferencePastTheLeastTraps() {
+    let _ = Decimal.min - d("1")
+}
+
+@test(traps: "decimal overflow")
+fn aProductPastTheGreatestTraps() {
+    let _ = Decimal.max * d("1.5")
+}
+
+@test(traps: "decimal overflow")
+fn aQuotientPastTheGreatestTraps() {
+    let _ = Decimal.max / d("0.1")
+}
+
+@test(traps: "division by zero")
+fn dividingByZeroTraps() {
+    let _ = d("1") / d("0.00")
+}
+
+@test(traps: "division by zero")
+fn aRemainderByZeroTraps() {
+    let _ = d("1") % Decimal.zero
+}
+
+// ---- Text ----------------------------------------------------------------------------
+
+@test
+fn aDecimalWritesEveryPlaceOfItsScale() {
+    let x = d("12.345")
+    assertEqualText("\(x)", "12.345")
+    assertEqualText("\(d("3.60"))", "3.60")
+    assertEqualText("\(d("-0.005"))", "-0.005")
+    assertEqualText(x.debugDescription(), "12.345")
+    assertEqualText("\(x:?)", "12.345")
+}
+
+@test
+fn aFormatSpecIsHonoured() {
+    let x = d("1234.5678")
+    assertEqualText("\(x:.2)", "1234.57")
+    assertEqualText("\(d("0.125"):.2)", "0.12")
+    assertEqualText("\(x:.6)", "1234.567800")
+    assertEqualText("\(x:.0)", "1235")
+    assertEqualText("\(x:,.2)", "1,234.57")
+    assertEqualText("\(x:+)", "+1234.5678")
+    assertEqualText("\(x:>12)", "   1234.5678")
+    assertEqualText("\(d("-1.5"):08.2)", "-0001.50")
+    assertEqualText("\(x:e)", "1.2345678e+03")
+    assertEqualText("\(x:.2E)", "1.23E+03")
+    assertEqualText("\(d("1.500"):g)", "1.5")
+    assertEqualText("\(x:.3g)", "1.23e+03")
+    assertEqualText("\(d("0.125"):%)", "12.5%")
+    assertEqualText("\(d("0.12345"):.1%)", "12.3%")
+    assertEqualText("\(d("2"):%)", "200%")
+    assertEqualText("\(Decimal.zero:e)", "0e+00")
+}
+
+@test
+fn parsingReadsSignsPointsAndExponents() {
+    assertEqualText("\(d("+5"))", "5")
+    assertEqualText("\(d(".5"))", "0.5")
+    assertEqualText("\(d("5."))", "5")
+    assertEqualText("\(d("-1.5e-3"))", "-0.0015")
+    assertEqualText("\(d("2E+2"))", "200")
+    assertEqualText("\(d("1E+28"))", "10000000000000000000000000000")
+    assertEqualText("\(d("0E-40"))", "0.0000000000000000000000000000")
+    assertEqualText("\(d("007.50"))", "7.50")
+    let line = "price=19.99"
+    assertEqualText("\(try! Decimal.parse(line[line.index(atScalar: 6)...]))", "19.99")
+}
+
+@test
+fn parsingRoundsWhatDoesNotFit() {
+    assertEqualText("\(d("0.12345678901234567890123456789"))", "0.1234567890123456789012345679")
+    assertEqualText("\(d("0.000000000000000000000000000000001"))", "0.0000000000000000000000000000")
+    assertEqualText("\(d("0.00000000000000000000000000005"))", "0.0000000000000000000000000000")
+    assertEqualText("\(d("0.00000000000000000000000000015"))", "0.0000000000000000000000000002")
+    // Past thirty digits, what is left decides a tie.
+    assertEqualText("\(d("1.00000000000000000000000000005"))", "1.0000000000000000000000000000")
+    assertEqualText("\(d("1.00000000000000000000000000005000000001"))", "1.0000000000000000000000000001")
+    assertEqualText("\(d("79228162514264337593543950335.4"))", "79228162514264337593543950335")
+    assertEqualText("\(d("1e-100"))", "0.0000000000000000000000000000")
+}
+
+/// The error parsing the text throws, or none.
+fn parseError(_ text: String) -> ParseError? {
+    do {
+        let _ = try Decimal.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn parsingSaysWhatIsWrong() {
+    assertEqual(parseError(""), .Empty)
+    assertEqual(parseError("abc"), .InvalidDigit(at: 0))
+    assertEqual(parseError("1.2.3"), .InvalidDigit(at: 3))
+    assertEqual(parseError("-"), .InvalidDigit(at: 1))
+    assertEqual(parseError("."), .InvalidDigit(at: 1))
+    assertEqual(parseError("e5"), .InvalidDigit(at: 0))
+    assertEqual(parseError("1e"), .InvalidDigit(at: 2))
+    assertEqual(parseError("1e+"), .InvalidDigit(at: 3))
+    assertEqual(parseError("1e+-5"), .InvalidDigit(at: 3))
+    assertEqual(parseError("1 "), .InvalidDigit(at: 1))
+    assertEqual(parseError("79228162514264337593543950336"), .Overflow)
+    assertEqual(parseError("-79228162514264337593543950336"), .Underflow)
+    assertEqual(parseError("79228162514264337593543950335.5"), .Overflow)
+    assertEqual(parseError("1e29"), .Overflow)
+    assertEqual(parseError("8E+28"), .Overflow)
+    assertEqual(parseError("123456789012345678901234567890123"), .Overflow)
+    assertEqual(parseError("1e99999999"), .Overflow)
+}
+
+@test
+fn whatADecimalWritesParsesBack() {
+    for text in ["0", "-1.5", "0.0000000000000000000000000001", "79228162514264337593543950335", "3.60", "-123456789.987654321"] {
+        let value = d(text)
+        assertEqualText("\(d("\(value)"))", text)
+        assertEqual(d("\(value)").scale, value.scale)
+    }
+}
+
+// ---- Conversions -------------------------------------------------------------------
+
+@test
+fn integersConvertExactlyOrNotAtAll() {
+    assertEqual(Decimal.exactly(-7), Decimal(-7))
+    assertEqual(Decimal.exactly(255 as U8), Decimal(255))
+    assertEqual(Decimal.exactly(79228162514264337593543950335 as U128), Decimal.max)
+    assert(Decimal.exactly(79228162514264337593543950336 as U128) == none)
+    assert(Decimal.exactly(U128.max) == none)
+    assert(Decimal.exactly(I128.min) == none)
+    assertEqual(Decimal.exactly(-79228162514264337593543950335 as I128), Decimal.min)
+}
+
+@test
+fn aDecimalConvertsToEachIntegerType() {
+    assertEqual(Int.exactly(d("42.00")), 42)
+    assert(Int.exactly(d("42.5")) == none)
+    assert(U8.exactly(d("-1")) == none)
+    assert(I8.exactly(d("128")) == none)
+    assertEqual(I128.exactly(Decimal.min), -79228162514264337593543950335)
+    assertEqual(Int.clamping(d("-2.9")), -2)
+    assertEqual(U8.clamping(d("300")), 255)
+    assertEqual(I8.clamping(d("-300.5")), -128)
+    assertEqual(U64.clamping(d("0.999")), 0)
+}
+
+@test
+fn aFloatConvertsExactlyWhereItsBinaryValueFits() {
+    assertEqual(Decimal.exactly(0.375), d("0.375"))
+    assertEqual(Decimal.exactly(-2.5), d("-2.5"))
+    assertEqual(Decimal.exactly(1152921504606846976.0), d("1152921504606846976"))
+    assertEqual(Decimal.exactly(1e28), d("9999999999999999583119736832"))
+    assertEqual(Decimal.exactly(-0.0), Decimal.zero)
+    assertEqual(Decimal.exactly(0.5 as F32), d("0.5"))
+    assertEqual(Decimal.exactly(0.0009765625), d("0.0009765625"))
+    // 0.1's binary value has 55 places; 1e30 is past 96 bits.
+    assert(Decimal.exactly(0.1) == none)
+    assert(Decimal.exactly(1e30) == none)
+    assert(Decimal.exactly(F64.nan) == none)
+    assert(Decimal.exactly(F64.infinity) == none)
+    assert(Decimal.exactly(5e-324) == none)
+    // 28 places, but a coefficient past 96 bits.
+    assert(Decimal.exactly(F64.converting(9007199254740991) / 268435456.0) == none)
+}
+
+@test
+fn aFloatConvertsToItsShortestDecimal() {
+    assertEqual(Decimal.converting(0.1), d("0.1"))
+    assertEqual(Decimal.converting(-2.5e-3), d("-0.0025"))
+    assertEqual(Decimal.converting(1e20), d("100000000000000000000"))
+    assertEqual(Decimal.converting(1.5e-7), d("0.00000015"))
+    assertEqual(Decimal.converting(1e-30), Decimal.zero)
+    assertEqual(Decimal.converting(0.1 as F32), d("0.1"))
+    assertEqual(Decimal.converting(-3.25 as F32), d("-3.25"))
+}
+
+@test(traps: "nan is not a decimal")
+fn aNaNIsNoDecimal() {
+    let _ = Decimal.converting(F64.nan)
+}
+
+@test(traps: "inf is not a decimal")
+fn anInfiniteF32IsNoDecimal() {
+    let _ = Decimal.converting(F32.infinity)
+}
+
+@test(traps: "decimal overflow")
+fn aFloatPastTheGreatestTraps() {
+    let _ = Decimal.converting(1e30)
+}
+
+@test
+fn aDecimalConvertsToTheNearestFloat() {
+    assertEqual(F64.converting(d("1.25")), 1.25)
+    assertEqual(F64.converting(d("0.1")), 0.1)
+    assertEqual(F64.converting(d("-0.1")), -0.1)
+    assertEqual(F64.converting(Decimal.max), 79228162514264337593543950335.0)
+    assertEqual(F64.converting(d("0.1000000000000000000000000001")), 0.1)
+    assertEqual(F64.converting(d("-123456789012345678.9")), -123456789012345678.9)
+    let tenth: F32 = 0.1
+    assertEqual(F32.converting(d("0.1")), tenth)
+    assertEqual(F32.converting(d("-0.1")), -tenth)
+    let third: F32 = 0.33333334
+    assertEqual(F32.converting(d("1") / d("3")), third)
+}
+
+@test
+fn aDecimalIsMeasurable() {
+    assertEqual(d("2.5").measure, 2.5)
+    var statistics = RunningStatistics()
+    statistics.add(contentsOf: [d("1.5"), d("2.5"), d("3.5")])
+    assertEqual(statistics.mean, 2.5)
+}

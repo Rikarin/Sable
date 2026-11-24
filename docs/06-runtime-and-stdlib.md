@@ -753,6 +753,9 @@ Sable.Core          ── always linked, no dependencies
   RandomNumberGenerator with the system's generator and a seeded one
   (xoshiro256**), behind 'random(in:)', 'randomElement' and 'shuffle';
   portable SIMD: SIMD<T, N> and SIMDMask<N>, LLVM's vectors
+  Platform (the target's constants, and at run time the operating system
+  and architecture, OS version and isAtLeast, processors, page size,
+  memory, host and user names, newline) and MemoryStatistics
 
 Sable.Collections   List Dictionary Set Deque OrderedDictionary
                     PriorityQueue BitSet InlineArray SmallVec ArrayVec,
@@ -776,7 +779,8 @@ Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     generic over ElementaryFunctions; integer math; the
                     vector kernels over F32[:] and F64[:] (sum, dot,
                     cosineSimilarity, softmax, …: TensorPrimitives');
-                    BigInt, Decimal, Matrix, Quaternion,
+                    Decimal (.NET's layout and rounding, below), BigInt,
+                    Matrix, Quaternion,
                     statistics generic over every number type (mean,
                     median, mode, quantiles, variance, covariance,
                     correlation, histogram; compensated and two-pass;
@@ -793,14 +797,29 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     copy-on-write mappings as a U8 array, flush, advise,
                     resize), Pipe with PipeReader PipeWriter (pooled
                     segments, ByteSequence views, consumed/examined,
-                    backpressure), the standard streams as handles, TCP
+                    backpressure), the standard streams as handles, TCP,
+                    Environment (variables listed, set and removed under
+                    'unsafe', arguments as text and bytes, home, temporary
+                    and known folders by XDG, Apple and Windows rules)
+Sable.Net           Url (WHATWG URL parsing, as browsers do: WPT's
+                    urltestdata.json passes whole; resolution, setters,
+                    origin, query items), Host (domain, IPv4, IPv6,
+                    opaque), PercentEncoding with the standard's encode
+                    sets, application/x-www-form-urlencoded (QueryItem),
+                    Idna (UTS #46 toASCII/toUnicode, tables from
+                    tools/idna-tables.py) and Punycode (RFC 3492)
 Sable.Serialize     Encoder/Decoder protocols, conformance synthesis via
                     @derive(Serializable), JSON, TOML, MessagePack, and the
                     zero-copy @inline_layout path
 Sable.Concurrency   Channel, Mutex RwLock Condition Semaphore Barrier
                     CountdownLatch Once Lazy, AsyncMutex AsyncSemaphore,
                     AsyncStream, ConcurrentDictionary (sharded)
-                    ConcurrentQueue (two-lock) ConcurrentStack
+                    ConcurrentQueue (two-lock) ConcurrentStack,
+                    CancellationTokenSource/CancellationToken (handlers,
+                    linked, cancel(after:), withCancellation), Promise,
+                    Continuation (checked; a leak traps in debug),
+                    withTimeout, race, whenAll/whenAny/whenEach,
+                    Task.sleep(for:)
                     (Task, TaskGroup, AsyncSequence, Atomic<T> and OnceCell
                     are Sable.Core's: an Atomic's cell is Core's raw memory)
 Sable.Time          Instant Duration Clock Calendar TimeZone
@@ -933,6 +952,47 @@ time, start-up included, against 87 ms for .NET 11 with
 System.Numerics.Tensors 9.0's TensorPrimitives, steady state. F16 and BF16
 kernels, and an exponential of vectors for softmax (it calls libm's for
 each element), are still to come.
+
+### Decimal
+
+`Sable.Math.Decimal` is exact base-10 arithmetic for money and quantities,
+and it takes .NET's `decimal` layout rather than IEEE 754-2008's
+`decimal128`: a 96-bit coefficient, a scale of 0 to 28 and a sign, in one
+`U128` laid out as `decimal.GetBits` gives it (`bits`, `fromBits`). Why:
+
+- **The data it meets.** Base-10 numbers come from accounts, prices and
+  databases, and there the layout is .NET's — `System.Decimal`, and
+  `rust_decimal`'s, which copied it. Reading one is a copy, and every
+  value of one is a value of the other; `decimal128`'s 34 digits and its
+  exponents to ±6144 are a scientific type's, and F64 and BigInt are there
+  for science.
+- **Every value a number.** `decimal128` has NaNs (quiet and signalling),
+  infinities, a signed zero and many encodings of one value (cohorts);
+  each is a case for comparison, hashing and every caller. A Decimal has
+  none of them, so it is `Comparable` and `Hashable` without asterisks and
+  overflow traps as an integer's does. Its zero has no sign.
+- **Cost.** A coefficient is a U128, so a sum or product at one scale is
+  an integer instruction or two; 192 bits are used only for a product, or
+  a scale raised more than nine places, that needs them, and a division
+  is U64 steps wherever the coefficient fits 64 bits. BID's decimal128
+  needs 113-bit coefficients unpacked and a 34-digit product's 226 bits
+  at every multiplication. Against .NET's `decimal` on the same work
+  (`benchmarks/versus-dotnet/decimal.sb`: a million invoice lines
+  multiplied, rounded to the cent, summed and divided three ways) it is
+  1.26 times .NET's time — most of the difference the 128-bit divisions of
+  long quotients, which compiler-rt does in software.
+
+Rounding is .NET's too: what does not fit 28 places or 96 bits is rounded
+to nearest with ties to even, quotients with no end take every place that
+fits, and `rounded(scale:_:)` takes any `RoundingRule` (to nearest with ties
+to even by default, as `Math.Round`). A value keeps its scale — 1.20 and
+1.2 are equal and hash equal, but write themselves differently — and
+`quantized(scale:_:)` and `normalized()` are the General Decimal Arithmetic
+specification's `quantize` and `reduce`. Parsing reads digits, a point and
+an exponent and rounds what does not fit; formatting writes every place of
+the scale, plainly, and takes a format spec as a float does (Sable.Core's
+`FormatSpec.formatDecimal`). Its tests run cases of the specification's
+examples and decTest files, at a decimal's precision.
 
 ### Source layout
 

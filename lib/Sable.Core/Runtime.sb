@@ -87,6 +87,37 @@ public struct Runtime {
     @builtin("io_argument")
     public static fn argument(index: Int) -> String
 
+    /// The argument's bytes as the system gave them, UTF-8 or not.
+    @builtin("io_argument_bytes")
+    public static fn argumentBytes(index: Int) -> U8[>..]
+
+    /// The variable set (Environment.set): false when the system refused.
+    @builtin("env_set")
+    public unsafe static fn setEnvironment(_ name: String, _ value: String) -> Bool
+
+    /// The variable removed (Environment.remove): false when refused.
+    @builtin("env_remove")
+    public unsafe static fn removeEnvironment(_ name: String) -> Bool
+
+    /// Every variable, as "NAME=value".
+    @builtin("env_all")
+    public static fn environmentEntries() -> String[>..]
+
+    /// A text about the system (Platform, Environment): 0 the host's name,
+    /// 1 the user's, 2 the home directory, 3 the temporary one, 4 the OS
+    /// version; empty where it gives none.
+    @builtin("system_text")
+    public static fn systemText(_ which: Int) -> String
+
+    /// A number about the system (Platform): 0 processors, 1 the page
+    /// size, 2 physical memory in bytes.
+    @builtin("system_number")
+    public static fn systemNumber(_ which: Int) -> Int
+
+    /// A count of the memory manager's (MemoryStatistics).
+    @builtin("memory_statistic")
+    public static fn memoryStatistic(_ which: Int) -> Int
+
     // ---- Time ------------------------------------------------------------
     // A monotonic clock for measuring, the wall clock for dates, both in
     // nanoseconds; and sleeping, for at least as long as asked.

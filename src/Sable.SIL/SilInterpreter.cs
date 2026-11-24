@@ -294,6 +294,16 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     /// <summary>What ARC did, counted as the runtime counts it: only what touches a count.</summary>
     public int Allocations { get; private set; }
 
+    // What the program set and removed in its environment (a removal is
+    // null): over the process's, or its sandbox's, never written to them.
+    readonly Dictionary<string, string?> _environment = new(StringComparer.Ordinal);
+
+    // An environment variable as the program sees it: its own writes first.
+    string? VariableOf(string name) =>
+        _environment.TryGetValue(name, out var own) ? own
+        : Sandbox is { } sandbox ? sandbox.Environment(name)
+        : Environment.GetEnvironmentVariable(name);
+
     public int Retains { get; private set; }
 
     /// <summary>How many times each coverage counter ran (<see cref="Coverage" />), as the native runtime writes them.</summary>
@@ -1843,7 +1853,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             case "io_environment": {
                 var name = Text(operands[0]).Value;
-                var value = Sandbox is { } sandbox ? sandbox.Environment(name) : Environment.GetEnvironmentVariable(name);
+                var value = VariableOf(name);
                 _ioFailed = value is null;
                 return Allocate(new HeapString(value ?? ""));
             }
@@ -1861,6 +1871,16 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 if (Sandbox is { } confined) {
                     start.WorkingDirectory = confined.CurrentDirectory;
                     foreach (var (variable, setting) in confined.ProgramEnvironment) {
+                        start.Environment[variable] = setting;
+                    }
+                }
+
+                // What the program set in its own environment, as a child of
+                // a native one would inherit it.
+                foreach (var (variable, setting) in _environment) {
+                    if (setting is null) {
+                        start.Environment.Remove(variable);
+                    } else {
                         start.Environment[variable] = setting;
                     }
                 }
@@ -1958,6 +1978,78 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             case "io_argument_count":
                 return (long)Arguments.Count;
+
+            case "io_argument_bytes": {
+                var index = (long)operands[0]!;
+                if (index < 0 || index >= Arguments.Count) {
+                    throw new SilTrap("argument index out of range");
+                }
+
+                return Allocate(new HeapArray(new ArrayType(SilType.U8), [..Encoding.UTF8.GetBytes(Arguments[(int)index]).Select(static b => (object?)(long)b)]));
+            }
+
+            case "env_set" or "env_remove": {
+                // The program's own: written over what it reads, and what the
+                // programs it runs are given, never the process's, which may
+                // be the compiler's.
+                var name = Text(operands[0]).Value;
+                if (name.Length == 0 || name.Contains('=') || name.Contains('\0')) {
+                    return false;
+                }
+
+                _environment[name] = builtin.Name == "env_set" ? Text(operands[1]).Value : null;
+                return true;
+            }
+
+            case "env_all": {
+                var all = new SortedDictionary<string, string>(StringComparer.Ordinal);
+                if (Sandbox is { } within) {
+                    foreach (var name in within.EnvironmentNames) {
+                        if (within.Environment(name) is { } value) {
+                            all[name] = value;
+                        }
+                    }
+                } else {
+                    foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables()) {
+                        all[(string)entry.Key] = (string?)entry.Value ?? "";
+                    }
+                }
+
+                foreach (var (name, value) in _environment) {
+                    if (value is null) {
+                        all.Remove(name);
+                    } else {
+                        all[name] = value;
+                    }
+                }
+
+                return Allocate(new HeapArray(new ArrayType(SilType.String), [..all.Select(e => (object?)Allocate(new HeapString(e.Key + "=" + e.Value)))]));
+            }
+
+            case "system_text":
+                return Allocate(new HeapString((long)operands[0]! switch {
+                    0 => Environment.MachineName,
+                    1 => Environment.UserName,
+                    2 => VariableOf(OperatingSystem.IsWindows() ? "USERPROFILE" : "HOME") ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    3 => Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar) is { Length: > 0 } temporary ? temporary : Path.GetTempPath(),
+                    4 => Environment.OSVersion.Version.ToString(),
+                    _ => "",
+                }));
+
+            case "system_number":
+                return (long)operands[0]! switch {
+                    0 => Environment.ProcessorCount,
+                    1 => Environment.SystemPageSize,
+                    2 => GC.GetGCMemoryInfo().TotalAvailableMemoryBytes,
+                    _ => 0L,
+                };
+
+            case "memory_statistic":
+                return (long)operands[0]! switch {
+                    0 => Allocations,
+                    1 => _live.Count(static c => !c.Freed),
+                    _ => 0L,
+                };
 
             case "io_argument": {
                 var index = (long)operands[0]!;

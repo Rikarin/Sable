@@ -409,7 +409,7 @@ fn aTableKeepsItsOrder() {
     other["d"] = .Bool(value: true)
     assert(table != other)
     assertEqual(table.debugDescription(), "{ a = true, c = \"x\" }")
-    assertEqual(table.entries[1].key, "c")
+    assertEqual(table.entries[1], TomlEntry { key: "c", value: .Text(value: "x") })
 }
 
 @test

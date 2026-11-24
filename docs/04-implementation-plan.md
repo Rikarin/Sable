@@ -2053,8 +2053,10 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
 
 - **Manifest.** A TOML 1.0 reader (tables, arrays of tables, inline tables,
   dotted and quoted keys, every string and integer form, floats, booleans,
-  arrays, comments; dates kept as text) whose errors carry file, line and
-  column. `sable.toml` (written by hand, or what a `package.sb` evaluates
+  arrays, comments; dates checked and kept as text) whose errors carry file,
+  line and column, held to the library's parser (Sable.Serialize's Toml) by
+  `TomlAgreementTests`: the driver reads its manifests before it can compile
+  a library to read them with. `sable.toml` (written by hand, or what a `package.sb` evaluates
   to) is read into a `Manifest` — `[package]`, `[lib]`,
   `[[bin]]`, the three dependency tables, `[features]`, `[profile.dev]` and
   `[profile.release]`, `[workspace]`, `[build]`, `[registry] path` — and

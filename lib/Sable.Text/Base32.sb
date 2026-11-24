@@ -1,0 +1,276 @@
+module Sable.Text
+
+/// Base32, RFC 4648 §6 and §7: bytes as text, five bytes to eight digits
+/// of an alphabet with no lower-case letters and no symbols, which survives
+/// being read aloud, typed in, or used as a file name on a system that
+/// ignores case — TOTP's shared secrets (RFC 6238) are written in it.
+///
+/// Two alphabets: `.Standard`, A–Z then 2–7, and `.Hex` ("base32hex"),
+/// 0–9 then A–V, whose text sorts as its bytes do. A last group of fewer
+/// than five bytes is padded to eight digits with '=' unless `padding` is
+/// false. Encoding writes upper case; decoding takes either case, and
+/// otherwise is as strict as Base64's: no white space, padding only at the
+/// end, no bits set that the bytes do not use.
+///
+/// ```sable
+/// let bytes: U8[>..] = [0x66, 0x6F, 0x6F]
+/// assert(Base32.encode(bytes) == "MZXW6===")
+/// assert(Base32.encode(bytes, alphabet: .Hex, padding: false) == "CPNMU")
+/// assert(try! Base32.decode("mzxw6") == [0x66, 0x6F, 0x6F])
+/// ```
+public struct Base32 {
+    private init() { }
+
+    /// Which 32 digits a Base32 text is written in.
+    @derive(Equatable, Debug)
+    public enum Alphabet {
+        /// RFC 4648 §6: A–Z, then 2–7.
+        Standard
+
+        /// RFC 4648 §7, base32hex: 0–9, then A–V. Text in it sorts in the
+        /// order its bytes do.
+        Hex
+    }
+
+    // ---- Lengths ---------------------------------------------------------
+
+    /// How many digits 'count' bytes encode to: eight for every five, and
+    /// for the last one to four, eight with padding, or two, four, five or
+    /// seven without.
+    ///
+    /// ```sable
+    /// assert(Base32.encodedLength(3) == 8)
+    /// assert(Base32.encodedLength(3, padding: false) == 5)
+    /// ```
+    public static fn encodedLength(_ count: Int, padding: Bool = true) -> Int {
+        precondition(count >= 0, "cannot encode \(count) bytes")
+        let rest = count % 5
+        if rest == 0 || padding {
+            return (count + 4) / 5 * 8
+        }
+        return count / 5 * 8 + (rest * 8 + 4) / 5
+    }
+
+    /// The most bytes 'count' digits can decode to: exact for text without
+    /// padding, and for padded text up to four more than it decodes to, as
+    /// the padding is counted as digits.
+    ///
+    /// ```sable
+    /// assert(Base32.decodedLength(5) == 3)
+    /// assert(Base32.decodedLength(16) == 10)
+    /// ```
+    public static fn decodedLength(_ count: Int) -> Int {
+        precondition(count >= 0, "cannot decode \(count) digits")
+        return count / 8 * 5 + count % 8 * 5 / 8
+    }
+
+    // ---- Encoding --------------------------------------------------------
+
+    /// The bytes as Base32 text, in upper case.
+    ///
+    /// ```sable
+    /// let bytes: U8[>..] = [0x66, 0x6F]
+    /// assert(Base32.encode(bytes) == "MZXQ====")
+    /// assert(Base32.encode(bytes, alphabet: .Hex) == "CPNG====")
+    /// ```
+    public static fn encode(_ bytes: U8[:], alphabet: Alphabet = .Standard, padding: Bool = true) -> String {
+        var text: U8[>..] = []
+        Base32.appendEncoded(bytes, to: &text, digits: Base32.digits(alphabet), padding: padding)
+        return asciiText(text)
+    }
+
+    /// The bytes' Base32 digits written at the end of the buffer, as ASCII
+    /// bytes, with no String made.
+    ///
+    /// ```sable
+    /// var buffer = ByteBuffer()
+    /// let bytes: U8[>..] = [0x66]
+    /// Base32.encode(bytes, into: &buffer, padding: false)
+    /// assert(buffer.bytes == [0x4D, 0x59])
+    /// ```
+    public static fn encode(_ bytes: U8[:], into buffer: inout ByteBuffer, alphabet: Alphabet = .Standard, padding: Bool = true) {
+        let length = Base32.encodedLength(bytes.count, padding: padding)
+        let digits = Base32.digits(alphabet)
+        buffer.write(reserving: length) { text, start in
+            Base32.writeEncoded(bytes, to: &text, at: start, digits: digits, padding: padding)
+            return length
+        }
+    }
+
+    // ---- Decoding --------------------------------------------------------
+
+    /// The bytes the Base32 text encodes, its letters in either case;
+    /// DecodeError, saying where, when it is not Base32 of that alphabet
+    /// under that padding rule.
+    ///
+    /// ```sable
+    /// assert(try! Base32.decode("MZXQ====") == [0x66, 0x6F])
+    /// assert(try! Base32.decode("cpng", alphabet: .Hex) == [0x66, 0x6F])
+    /// assert((try? Base32.decode("MZXQ", padding: .Required)) == none)
+    /// ```
+    public static fn decode<S: StringProtocol>(_ text: S, alphabet: Alphabet = .Standard, padding: Padding = .Either) throws(DecodeError) -> U8[>..] {
+        return try Base32.decode(bytes: textBytes(text), alphabet: alphabet, padding: padding)
+    }
+
+    /// The bytes that Base32 digits, as ASCII bytes, encode.
+    ///
+    /// ```sable
+    /// let digits: U8[>..] = [0x4D, 0x59]
+    /// assert(try! Base32.decode(bytes: digits) == [0x66])
+    /// ```
+    public static fn decode(bytes: U8[:], alphabet: Alphabet = .Standard, padding: Padding = .Either) throws(DecodeError) -> U8[>..] {
+        var decoded: U8[>..] = []
+        let most = Base32.decodedLength(bytes.count)
+        decoded.append(repeating: 0, count: most)
+        let end = try Base32.writeDecoded(bytes, to: &decoded, values: Base32.values(alphabet), padding: padding)
+        decoded.removeLast(most - end)
+        return decoded
+    }
+
+    // ---- The work --------------------------------------------------------
+
+    static fn digits(_ alphabet: Alphabet) -> U8[:] {
+        return alphabet == .Standard ? base32StandardDigits : base32HexDigits
+    }
+
+    static fn values(_ alphabet: Alphabet) -> U8[:] {
+        return alphabet == .Standard ? base32StandardValues : base32HexValues
+    }
+
+    // The bytes' digits appended.
+    static fn appendEncoded(_ bytes: U8[:], to text: inout U8[>..], digits: U8[:], padding: Bool) {
+        let start = text.count
+        text.append(repeating: 0, count: Base32.encodedLength(bytes.count, padding: padding))
+        Base32.writeEncoded(bytes, to: &text, at: start, digits: digits, padding: padding)
+    }
+
+    // The bytes' digits written in place from 'start', where there is room
+    // for `encodedLength` of them: five bytes at a time, from one 64-bit
+    // load while eight are left to load, then the last one to four,
+    // padded or not.
+    static fn writeEncoded(_ bytes: U8[:], to text: inout U8[>..], at start: Int, digits: U8[:], padding: Bool) {
+        let count = bytes.count
+        var i = 0
+        var j = start
+        while i + 8 <= count {
+            Base32.writeGroup(bytes.readU64(at: i, endian: .Big), digits: 8, to: &text, at: j, from: digits)
+            i += 5
+            j += 8
+        }
+        while i + 5 <= count {
+            Base32.writeGroup(Base32.load(bytes, i, 5), digits: 8, to: &text, at: j, from: digits)
+            i += 5
+            j += 8
+        }
+        let rest = count - i
+        if rest == 0 {
+            return
+        }
+        let used = (rest * 8 + 4) / 5
+        Base32.writeGroup(Base32.load(bytes, i, rest), digits: used, to: &text, at: j, from: digits)
+        if padding {
+            var pad = used
+            while pad < 8 {
+                text[j + pad] = paddingByte
+                pad += 1
+            }
+        }
+    }
+
+    // 'count' bytes from 'at', at the top of a U64, zeros after.
+    static fn load(_ bytes: U8[:], _ at: Int, _ count: Int) -> U64 {
+        var word: U64 = 0
+        var k = 0
+        while k < count {
+            word = word | U64(bytes[at + k]) << U64(56 - k * 8)
+            k += 1
+        }
+        return word
+    }
+
+    // The first 'count' five-bit digits from the top of the word, written
+    // from 'at'.
+    @inline(always)
+    static fn writeGroup(_ word: U64, digits count: Int, to text: inout U8[>..], at: Int, from digits: U8[:]) {
+        var shift: U64 = 59
+        var k = 0
+        while k < count {
+            text[at + k] = digits[(word >> shift & 0x1F) unchecked as Int]
+            shift -= 5
+            k += 1
+        }
+    }
+
+    // The bytes the digits encode written in place, where there is room
+    // for `decodedLength` of them; where they end.
+    static fn writeDecoded(_ text: U8[:], to bytes: inout U8[>..], values: U8[:], padding: Padding) throws(DecodeError) -> Int {
+        var end = text.count
+        var padded = 0
+        while padded < 6 && end > 0 && text[end - 1] == paddingByte {
+            end -= 1
+            padded += 1
+        }
+        let rest = end % 8
+        let whole = end - rest
+        var i = 0
+        var j = 0
+        while i < whole {
+            var word: U64 = 0
+            var seen: U8 = 0
+            var k = 0
+            while k < 8 {
+                let value = values[Int(text[i + k])]
+                seen = seen | value
+                word = word << 5 | U64(value)
+                k += 1
+            }
+            if seen >= 0x20 {
+                throw firstNotADigit(text, values, from: i, count: 8)
+            }
+            bytes[j] = (word >> 32) unchecked as U8
+            bytes[j + 1] = (word >> 24) unchecked as U8
+            bytes[j + 2] = (word >> 16) unchecked as U8
+            bytes[j + 3] = (word >> 8) unchecked as U8
+            bytes[j + 4] = word unchecked as U8
+            i += 8
+            j += 5
+        }
+        if rest > 0 {
+            var word: U64 = 0
+            var k = 0
+            while k < rest {
+                let value = values[Int(text[whole + k])]
+                if value == notADigit {
+                    throw notADigitError(text, whole + k)
+                }
+                word = word << 5 | U64(value)
+                k += 1
+            }
+            // A last group of one, three or six digits holds no whole byte
+            // more than one of two, four or five less would.
+            if rest == 1 || rest == 3 || rest == 6 {
+                throw DecodeError.InvalidLength(at: whole)
+            }
+            let count = rest * 5 / 8
+            let unused = U64(rest * 5 - count * 8)
+            if (word & ((1 << unused) - 1)) != 0 {
+                throw DecodeError.TrailingBits(at: end - 1)
+            }
+            word = word >> unused
+            var b = 0
+            while b < count {
+                bytes[j] = (word >> U64((count - 1 - b) * 8)) unchecked as U8
+                j += 1
+                b += 1
+            }
+        }
+        if padded > 0 {
+            if padding == .Forbidden || rest + padded != 8 {
+                throw DecodeError.InvalidPadding(at: end)
+            }
+        } else if rest > 0 && padding == .Required {
+            throw DecodeError.InvalidPadding(at: end)
+        }
+        return j
+    }
+}

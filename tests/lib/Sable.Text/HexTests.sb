@@ -1,0 +1,83 @@
+module HexTests
+
+// Hex (Sable.Text), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Text
+
+import Sable.Testing
+import Sable.Text
+
+// The bytes are the ones expected; when not, both are shown in hexadecimal.
+fn assertBytes(_ actual: U8[:], _ expected: U8[:]) {
+    assert(actual == expected, "\(Hex.encode(actual)) is not \(Hex.encode(expected))")
+}
+
+fn decodeError(_ text: String) -> DecodeError? {
+    do {
+        let _ = try Hex.decode(text)
+    } catch {
+        return error
+    }
+    return none
+}
+
+@test
+fn theRfc4648Base16TestVectors() {
+    assertEqual(Hex.encode("".utf8Bytes(), uppercase: true), "")
+    assertEqual(Hex.encode("f".utf8Bytes(), uppercase: true), "66")
+    assertEqual(Hex.encode("fo".utf8Bytes(), uppercase: true), "666F")
+    assertEqual(Hex.encode("foo".utf8Bytes(), uppercase: true), "666F6F")
+    assertEqual(Hex.encode("foob".utf8Bytes(), uppercase: true), "666F6F62")
+    assertEqual(Hex.encode("fooba".utf8Bytes(), uppercase: true), "666F6F6261")
+    assertEqual(Hex.encode("foobar".utf8Bytes(), uppercase: true), "666F6F626172")
+    assertBytes(try! Hex.decode("666F6F626172"), "foobar".utf8Bytes())
+    assertBytes(try! Hex.decode(""), [])
+}
+
+@test
+fn everyByteValueRoundTripsInEitherCase() {
+    var bytes: U8[>..] = []
+    var value = 0
+    while value < 256 {
+        bytes.append(U8(value))
+        value += 1
+    }
+    let lower = Hex.encode(bytes)
+    let upper = Hex.encode(bytes, uppercase: true)
+    assertEqual(lower.utf8Count, 512)
+    assert(lower.hasPrefix("000102") && lower.hasSuffix("fdfeff"), "two lower-case digits a byte, high first")
+    assertEqual(upper, lower.uppercased())
+    assertBytes(try! Hex.decode(lower), bytes)
+    assertBytes(try! Hex.decode(upper), bytes)
+}
+
+@test
+fn encodingIntoABufferAppendsTheDigits() {
+    var buffer = ByteBuffer()
+    let bytes: U8[>..] = [0x0A, 0xBC]
+    Hex.encode(bytes, into: &buffer)
+    Hex.encode(bytes, into: &buffer, uppercase: true)
+    assertBytes(buffer.bytes, "0abc0ABC".utf8Bytes())
+}
+
+@test
+fn decodingBytesAndSubstrings() {
+    assertBytes(try! Hex.decode(bytes: "c0ffee".utf8Bytes()), [0xC0, 0xFF, 0xEE])
+    let text = "0x7f"
+    assertBytes(try! Hex.decode(text[text.index(text.startIndex, offsetBy: 2)...]), [0x7F])
+}
+
+@test
+fn aNonDigitIsNamedWithItsOffset() {
+    assertEqual(decodeError("0g"), .InvalidCharacter(at: 1, byte: 0x67))
+    assertEqual(decodeError("g0"), .InvalidCharacter(at: 0, byte: 0x67))
+    assertEqual(decodeError("0x7f"), .InvalidCharacter(at: 1, byte: 0x78))
+    assertEqual(decodeError("00 11"), .InvalidCharacter(at: 2, byte: 0x20))
+    assertEqual(decodeError("00="), .InvalidCharacter(at: 2, byte: 0x3D))
+    assertEqual(decodeError("0="), .InvalidCharacter(at: 1, byte: 0x3D))
+}
+
+@test
+fn anOddNumberOfDigitsIsTheWrongLength() {
+    assertEqual(decodeError("a"), .InvalidLength(at: 0))
+    assertEqual(decodeError("abc"), .InvalidLength(at: 2))
+}

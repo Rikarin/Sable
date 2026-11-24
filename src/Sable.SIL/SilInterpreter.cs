@@ -2310,6 +2310,20 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return null;
             }
 
+            case "array_append_repeating": {
+                var count = (long)operands[2]!;
+                if (count < 0) {
+                    throw new SilTrap("cannot append a negative number of bytes");
+                }
+
+                if (count > 0) {
+                    var array = Unique(builtin.Operands[0], (IReference)operands[0]!);
+                    array.Elements.AddRange(Enumerable.Repeat((object?)operands[1], (int)count));
+                }
+
+                return null;
+            }
+
             case "array_truncate": {
                 var count = (long)operands[1]!;
                 var address = (IReference)operands[0]!;

@@ -1,0 +1,309 @@
+module Sable.Text
+
+/// Base64, RFC 4648 §4 and §5: bytes as text, three bytes to four ASCII
+/// digits, for putting binary data where only text goes — JSON, e-mail,
+/// URLs, data: URIs. .NET's `Convert.ToBase64String` and
+/// `System.Buffers.Text.Base64`/`Base64Url`, Rust's `base64` crate.
+///
+/// Two alphabets: `.Standard`, whose last two digits are '+' and '/', and
+/// `.UrlSafe` (Base64Url), whose are '-' and '_', which need no escaping in
+/// a URL or a file name. A last group of fewer than three bytes is padded
+/// to four digits with '=' unless `padding` is false.
+///
+/// Decoding is strict: every byte must be a digit of the alphabet — no
+/// white space — padding may only end the text, and the last digit may not
+/// have bits set that the bytes do not use; what is wrong throws a
+/// DecodeError saying where. Whether padding must be there is the
+/// `padding` rule's to say, and by default it may or may not be.
+/// `Base64Encoder` and `Base64Decoder` do the same a chunk at a time.
+///
+/// ```sable
+/// let bytes: U8[>..] = [0x48, 0x65, 0x6C, 0x6C, 0x6F, 0xFF]
+/// assert(Base64.encode(bytes) == "SGVsbG//")
+/// assert(Base64.encode(bytes, alphabet: .UrlSafe) == "SGVsbG__")
+/// assert(Base64.encode(bytes[..<4], padding: false) == "SGVsbA")
+/// assert(try! Base64.decode("SGVsbA==") == [0x48, 0x65, 0x6C, 0x6C])
+/// ```
+public struct Base64 {
+    private init() { }
+
+    /// Which 64 digits a Base64 text is written in.
+    @derive(Equatable, Debug)
+    public enum Alphabet {
+        /// RFC 4648 §4: A–Z, a–z, 0–9, '+' and '/'.
+        Standard
+
+        /// RFC 4648 §5, Base64Url: A–Z, a–z, 0–9, '-' and '_', safe in
+        /// URLs and file names.
+        UrlSafe
+    }
+
+    // ---- Lengths ---------------------------------------------------------
+
+    /// How many digits 'count' bytes encode to: four for every three, and
+    /// for the last one or two, four with padding or two or three without.
+    ///
+    /// ```sable
+    /// assert(Base64.encodedLength(5) == 8)
+    /// assert(Base64.encodedLength(5, padding: false) == 7)
+    /// ```
+    public static fn encodedLength(_ count: Int, padding: Bool = true) -> Int {
+        precondition(count >= 0, "cannot encode \(count) bytes")
+        let rest = count % 3
+        if rest == 0 || padding {
+            return (count + 2) / 3 * 4
+        }
+        return count / 3 * 4 + rest + 1
+    }
+
+    /// The most bytes 'count' digits can decode to: exact for text without
+    /// padding, and for padded text up to two more than it decodes to, as
+    /// the padding is counted as digits.
+    ///
+    /// ```sable
+    /// assert(Base64.decodedLength(7) == 5)
+    /// assert(Base64.decodedLength(8) == 6)
+    /// ```
+    public static fn decodedLength(_ count: Int) -> Int {
+        precondition(count >= 0, "cannot decode \(count) digits")
+        let rest = count % 4
+        return count / 4 * 3 + (rest == 0 ? 0 : rest - 1)
+    }
+
+    // ---- Encoding --------------------------------------------------------
+
+    /// The bytes as Base64 text.
+    ///
+    /// ```sable
+    /// let bytes: U8[>..] = [0xFB, 0xFF]
+    /// assert(Base64.encode(bytes) == "+/8=")
+    /// assert(Base64.encode(bytes, alphabet: .UrlSafe, padding: false) == "-_8")
+    /// ```
+    public static fn encode(_ bytes: U8[:], alphabet: Alphabet = .Standard, padding: Bool = true) -> String {
+        var text: U8[>..] = []
+        Base64.appendEncoded(bytes, to: &text, digits: Base64.digits(alphabet), padding: padding)
+        return asciiText(text)
+    }
+
+    /// The bytes' Base64 digits written at the end of the buffer, as ASCII
+    /// bytes, with no String made: `System.Buffers.Text.Base64`'s
+    /// `EncodeToUtf8`.
+    ///
+    /// ```sable
+    /// var buffer = ByteBuffer()
+    /// let bytes: U8[>..] = [0x4D, 0x61]
+    /// Base64.encode(bytes, into: &buffer)
+    /// assert(buffer.bytes == [0x54, 0x57, 0x45, 0x3D])
+    /// ```
+    public static fn encode(_ bytes: U8[:], into buffer: inout ByteBuffer, alphabet: Alphabet = .Standard, padding: Bool = true) {
+        let length = Base64.encodedLength(bytes.count, padding: padding)
+        let digits = Base64.digits(alphabet)
+        buffer.write(reserving: length) { text, start in
+            Base64.writeEncoded(bytes, to: &text, at: start, digits: digits, padding: padding)
+            return length
+        }
+    }
+
+    // ---- Decoding --------------------------------------------------------
+
+    /// The bytes the Base64 text encodes; DecodeError, saying where, when it
+    /// is not Base64 of that alphabet under that padding rule. Its offsets
+    /// are UTF-8 byte offsets, which for ASCII text are positions.
+    ///
+    /// ```sable
+    /// assert(try! Base64.decode("+/8=") == [0xFB, 0xFF])
+    /// assert(try! Base64.decode("-_8", alphabet: .UrlSafe) == [0xFB, 0xFF])
+    /// do {
+    ///     let _ = try Base64.decode("-_8=")
+    /// } catch {
+    ///     assert(error == .InvalidCharacter(at: 0, byte: 0x2D))
+    /// }
+    /// ```
+    public static fn decode<S: StringProtocol>(_ text: S, alphabet: Alphabet = .Standard, padding: Padding = .Either) throws(DecodeError) -> U8[>..] {
+        return try Base64.decode(bytes: textBytes(text), alphabet: alphabet, padding: padding)
+    }
+
+    /// The bytes that Base64 digits, as ASCII bytes, encode:
+    /// `System.Buffers.Text.Base64`'s `DecodeFromUtf8`.
+    ///
+    /// ```sable
+    /// let digits: U8[>..] = [0x54, 0x57, 0x45, 0x3D]
+    /// assert(try! Base64.decode(bytes: digits) == [0x4D, 0x61])
+    /// ```
+    public static fn decode(bytes: U8[:], alphabet: Alphabet = .Standard, padding: Padding = .Either) throws(DecodeError) -> U8[>..] {
+        var decoded: U8[>..] = []
+        try Base64.appendDecoded(bytes, to: &decoded, values: Base64.values(alphabet), padding: padding)
+        return decoded
+    }
+
+    // ---- The work --------------------------------------------------------
+
+    static fn digits(_ alphabet: Alphabet) -> U8[:] {
+        return alphabet == .Standard ? base64StandardDigits : base64UrlSafeDigits
+    }
+
+    static fn values(_ alphabet: Alphabet) -> U8[:] {
+        return alphabet == .Standard ? base64StandardValues : base64UrlSafeValues
+    }
+
+    // The bytes' digits appended.
+    static fn appendEncoded(_ bytes: U8[:], to text: inout U8[>..], digits: U8[:], padding: Bool) {
+        let start = text.count
+        text.append(repeating: 0, count: Base64.encodedLength(bytes.count, padding: padding))
+        Base64.writeEncoded(bytes, to: &text, at: start, digits: digits, padding: padding)
+    }
+
+    // The bytes' digits written in place from 'start', where there is room
+    // for `encodedLength` of them: six bytes at a time from one 64-bit
+    // load while eight are left to load, their eight digits written from
+    // the last, so that one check of the index covers them all; then three
+    // at a time, then the last one or two, padded or not.
+    static fn writeEncoded(_ bytes: U8[:], to text: inout U8[>..], at start: Int, digits: U8[:], padding: Bool) {
+        let count = bytes.count
+        var i = 0
+        var j = start
+        while i + 8 <= count {
+            let word = bytes.readU64(at: i, endian: .Big)
+            text[j + 7] = digits[(word >> 16 & 0x3F) unchecked as Int]
+            text[j + 6] = digits[(word >> 22 & 0x3F) unchecked as Int]
+            text[j + 5] = digits[(word >> 28 & 0x3F) unchecked as Int]
+            text[j + 4] = digits[(word >> 34 & 0x3F) unchecked as Int]
+            text[j + 3] = digits[(word >> 40 & 0x3F) unchecked as Int]
+            text[j + 2] = digits[(word >> 46 & 0x3F) unchecked as Int]
+            text[j + 1] = digits[(word >> 52 & 0x3F) unchecked as Int]
+            text[j] = digits[(word >> 58) unchecked as Int]
+            i += 6
+            j += 8
+        }
+        while i + 3 <= count {
+            let group = Int(bytes[i]) << 16 | Int(bytes[i + 1]) << 8 | Int(bytes[i + 2])
+            text[j] = digits[group >> 18]
+            text[j + 1] = digits[group >> 12 & 0x3F]
+            text[j + 2] = digits[group >> 6 & 0x3F]
+            text[j + 3] = digits[group & 0x3F]
+            i += 3
+            j += 4
+        }
+        let rest = count - i
+        if rest == 0 {
+            return
+        }
+        let first = Int(bytes[i])
+        let second = rest == 2 ? Int(bytes[i + 1]) : 0
+        text[j] = digits[first >> 2]
+        text[j + 1] = digits[(first & 0x03) << 4 | second >> 4]
+        if rest == 2 {
+            text[j + 2] = digits[(second & 0x0F) << 2]
+        }
+        if padding {
+            text[j + 3] = paddingByte
+            if rest == 1 {
+                text[j + 2] = paddingByte
+            }
+        }
+    }
+
+    // The bytes the digits encode, appended. With 'last' false they are
+    // from the middle of a stream: whole groups, with no padding.
+    static fn appendDecoded(_ text: U8[:], to bytes: inout U8[>..], values: U8[:], padding: Padding, last: Bool = true) throws(DecodeError) {
+        let start = bytes.count
+        let most = Base64.decodedLength(text.count)
+        bytes.append(repeating: 0, count: most)
+        let end = try Base64.writeDecoded(text, to: &bytes, at: start, values: values, padding: padding, last: last)
+        bytes.removeLast(start + most - end)
+    }
+
+    // The bytes the digits encode written in place from 'start', where
+    // there is room for `decodedLength` of them; where they end.
+    static fn writeDecoded(_ text: U8[:], to bytes: inout U8[>..], at start: Int, values: U8[:], padding: Padding, last: Bool) throws(DecodeError) -> Int {
+        var end = text.count
+        var padded = 0
+        if last {
+            while padded < 2 && end > 0 && text[end - 1] == paddingByte {
+                end -= 1
+                padded += 1
+            }
+        }
+        let rest = end % 4
+        let whole = end - rest
+        var i = 0
+        var j = start
+        // Eight digits from one 64-bit load, their six bytes written from
+        // the last, so that one check of the index covers them all.
+        while i + 8 <= whole {
+            let word = text.readU64(at: i, endian: .Big)
+            let a = values[(word >> 56) unchecked as Int]
+            let b = values[(word >> 48 & 0xFF) unchecked as Int]
+            let c = values[(word >> 40 & 0xFF) unchecked as Int]
+            let d = values[(word >> 32 & 0xFF) unchecked as Int]
+            let e = values[(word >> 24 & 0xFF) unchecked as Int]
+            let f = values[(word >> 16 & 0xFF) unchecked as Int]
+            let g = values[(word >> 8 & 0xFF) unchecked as Int]
+            let h = values[(word & 0xFF) unchecked as Int]
+            if (a | b | c | d | e | f | g | h) >= 0x40 {
+                throw firstNotADigit(text, values, from: i, count: 8)
+            }
+            let six = U64(a) << 58 | U64(b) << 52 | U64(c) << 46 | U64(d) << 40 | U64(e) << 34 | U64(f) << 28 | U64(g) << 22 | U64(h) << 16
+            bytes[j + 5] = (six >> 16) unchecked as U8
+            bytes[j + 4] = (six >> 24) unchecked as U8
+            bytes[j + 3] = (six >> 32) unchecked as U8
+            bytes[j + 2] = (six >> 40) unchecked as U8
+            bytes[j + 1] = (six >> 48) unchecked as U8
+            bytes[j] = (six >> 56) unchecked as U8
+            i += 8
+            j += 6
+        }
+        while i < whole {
+            let a = values[Int(text[i])]
+            let b = values[Int(text[i + 1])]
+            let c = values[Int(text[i + 2])]
+            let d = values[Int(text[i + 3])]
+            if (a | b | c | d) >= 0x40 {
+                throw firstNotADigit(text, values, from: i, count: 4)
+            }
+            bytes[j] = a << 2 | b >> 4
+            bytes[j + 1] = b << 4 | c >> 2
+            bytes[j + 2] = c << 6 | d
+            i += 4
+            j += 3
+        }
+        if rest > 0 {
+            let a = values[Int(text[whole])]
+            if a == notADigit {
+                throw notADigitError(text, whole)
+            }
+            if rest == 1 {
+                throw DecodeError.InvalidLength(at: whole)
+            }
+            let b = values[Int(text[whole + 1])]
+            if b == notADigit {
+                throw notADigitError(text, whole + 1)
+            }
+            bytes[j] = a << 2 | b >> 4
+            j += 1
+            if rest == 2 {
+                if (b & 0x0F) != 0 {
+                    throw DecodeError.TrailingBits(at: whole + 1)
+                }
+            } else {
+                let c = values[Int(text[whole + 2])]
+                if c == notADigit {
+                    throw notADigitError(text, whole + 2)
+                }
+                if (c & 0x03) != 0 {
+                    throw DecodeError.TrailingBits(at: whole + 2)
+                }
+                bytes[j] = b << 4 | c >> 2
+                j += 1
+            }
+        }
+        if padded > 0 {
+            if padding == .Forbidden || rest + padded != 4 {
+                throw DecodeError.InvalidPadding(at: end)
+            }
+        } else if rest > 0 && padding == .Required {
+            throw DecodeError.InvalidPadding(at: end)
+        }
+        return j
+    }
+}

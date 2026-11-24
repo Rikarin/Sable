@@ -1,0 +1,89 @@
+module Sable.Text
+
+/// Why text is not Base64, Base32 or hexadecimal, and where: what their
+/// `decode` throws. Each case names the offset of the byte that is wrong —
+/// in a String, a UTF-8 byte offset, which for ASCII text is the
+/// character's position — counted from the start of everything a streaming
+/// decoder has been given.
+///
+/// ```sable
+/// do {
+///     let _ = try Base64.decode("SGV*bG8=")
+/// } catch {
+///     assert(error == .InvalidCharacter(at: 3, byte: 0x2A))
+///     assert(error.offset == 3)
+/// }
+/// ```
+public union DecodeError: Error {
+    /// A byte that is not a digit of the alphabet, nor padding where
+    /// padding may be.
+    InvalidCharacter(at: Int, byte: U8)
+
+    /// The text ends partway through a group: the last group, from `at`,
+    /// has a number of digits no group of the encoding can end with — one
+    /// Base64 digit, an odd number of hexadecimal ones.
+    InvalidLength(at: Int)
+
+    /// Padding where the rule forbids it, missing where it requires it, the
+    /// wrong amount of it, or something after it: `at` is where it starts,
+    /// or where it should have.
+    InvalidPadding(at: Int)
+
+    /// The last digit, at `at`, has bits set that the bytes do not use, so
+    /// the text is not the encoding of any bytes (RFC 4648 §3.5): "QR=="
+    /// for "QQ==".
+    TrailingBits(at: Int)
+
+    /// The offset of the byte that is wrong.
+    public var offset: Int => match self {
+        case .InvalidCharacter(let at, _) => at
+        case .InvalidLength(let at)       => at
+        case .InvalidPadding(let at)      => at
+        case .TrailingBits(let at)        => at
+    }
+
+    /// The same error, its offset moved on by that many bytes: where it is
+    /// in a stream that had already given them.
+    fn shifted(by count: Int) -> DecodeError {
+        return match self {
+            case .InvalidCharacter(let at, let byte) => .InvalidCharacter(at: at + count, byte: byte)
+            case .InvalidLength(let at)              => .InvalidLength(at: at + count)
+            case .InvalidPadding(let at)             => .InvalidPadding(at: at + count)
+            case .TrailingBits(let at)               => .TrailingBits(at: at + count)
+        }
+    }
+
+    /// What is wrong with the text, and where.
+    public fn description() -> String {
+        return match self {
+            case .InvalidCharacter(let at, let byte) => "invalid character 0x\(byte:02X) at \(at)"
+            case .InvalidLength(let at)              => "the text ends partway through the group at \(at)"
+            case .InvalidPadding(let at)             => "invalid padding at \(at)"
+            case .TrailingBits(let at)               => "the digit at \(at) has bits the bytes do not use"
+        }
+    }
+}
+
+extension DecodeError: Equatable {
+    public operator == (lhs: DecodeError, rhs: DecodeError) -> Bool {
+        return match (lhs, rhs) {
+            case (.InvalidCharacter(let a, let x), .InvalidCharacter(let b, let y)) => a == b && x == y
+            case (.InvalidLength(let a), .InvalidLength(let b))                     => a == b
+            case (.InvalidPadding(let a), .InvalidPadding(let b))                   => a == b
+            case (.TrailingBits(let a), .TrailingBits(let b))                       => a == b
+            case _                                                                  => false
+        }
+    }
+}
+
+extension DecodeError: Debug {
+    /// The case as source writes it: `DecodeError.InvalidLength(at: 5)`.
+    public fn debugDescription() -> String {
+        return match self {
+            case .InvalidCharacter(let at, let byte) => "DecodeError.InvalidCharacter(at: \(at), byte: \(byte))"
+            case .InvalidLength(let at)              => "DecodeError.InvalidLength(at: \(at))"
+            case .InvalidPadding(let at)             => "DecodeError.InvalidPadding(at: \(at))"
+            case .TrailingBits(let at)               => "DecodeError.TrailingBits(at: \(at))"
+        }
+    }
+}

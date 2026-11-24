@@ -809,7 +809,10 @@ Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, validated
                     TextBuilder (a UTF-8 buffer and chunks: characters and
                     integers encoded in place, edits that cut one chunk,
                     replace in one vectorised pass; at parity with .NET's
-                    StringBuilder)
+                    StringBuilder); Base64 (standard and URL-safe, padded
+                    or not, streamed by Base64Encoder/Base64Decoder),
+                    Base32 (and base32hex) and Hex, RFC 4648, strict, a
+                    DecodeError naming the offset, encoded in place
 Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     generic over ElementaryFunctions; integer math; the
                     vector kernels over F32[:] and F64[:] (sum, dot,

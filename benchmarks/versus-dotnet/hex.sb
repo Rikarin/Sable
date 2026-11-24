@@ -1,0 +1,31 @@
+module HexBench
+
+// Hexadecimal against .NET's Convert.ToHexString and FromHexString: a
+// megabyte of bytes encoded to a String and decoded back, forty times.
+
+import Sable.Text
+
+@main
+fn main() {
+    var bytes: U8[>..] = []
+    var state = 1
+    var i = 0
+    while i < 1_048_576 {
+        state = (state * 75 + 74) % 65537
+        bytes.append(U8(state & 0xFF))
+        i = i + 1
+    }
+
+    var digits = 0
+    var check = 0
+    var round = 0
+    while round < 40 {
+        let text = Hex.encode(bytes, uppercase: true)
+        digits = digits + text.utf8Count
+        let decoded = try! Hex.decode(text)
+        check = check + Int(decoded[round * 7919 % decoded.count])
+        round = round + 1
+    }
+
+    print("\(digits) \(check)")
+}

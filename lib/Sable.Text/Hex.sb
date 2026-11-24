@@ -1,0 +1,154 @@
+module Sable.Text
+
+/// Hexadecimal, RFC 4648 §8's Base16: each byte as two digits, its high
+/// four bits first — hashes, keys and bytes in logs. .NET's
+/// `Convert.ToHexString`/`ToHexStringLower`/`FromHexString`, Rust's `hex`
+/// crate. Encoding writes lower case unless told; decoding takes either,
+/// and nothing else: no "0x", no separators, no white space.
+///
+/// ```sable
+/// let bytes: U8[>..] = [0xDE, 0xAD, 0xBE, 0xEF]
+/// assert(Hex.encode(bytes) == "deadbeef")
+/// assert(Hex.encode(bytes, uppercase: true) == "DEADBEEF")
+/// assert(try! Hex.decode("DeadBeef") == bytes)
+/// ```
+public struct Hex {
+    private init() { }
+
+    /// The bytes as hexadecimal digits, two a byte.
+    ///
+    /// ```sable
+    /// let bytes: U8[>..] = [0x00, 0x7F, 0xA0]
+    /// assert(Hex.encode(bytes) == "007fa0")
+    /// ```
+    public static fn encode(_ bytes: U8[:], uppercase: Bool = false) -> String {
+        var text: U8[>..] = []
+        text.append(repeating: 0, count: bytes.count * 2)
+        Hex.writeEncoded(bytes, to: &text, at: 0, uppercase: uppercase)
+        return asciiText(text)
+    }
+
+    /// The bytes' hexadecimal digits written at the end of the buffer, as
+    /// ASCII bytes, with no String made.
+    ///
+    /// ```sable
+    /// var buffer = ByteBuffer()
+    /// let bytes: U8[>..] = [0xAB]
+    /// Hex.encode(bytes, into: &buffer, uppercase: true)
+    /// assert(buffer.bytes == [0x41, 0x42])
+    /// ```
+    public static fn encode(_ bytes: U8[:], into buffer: inout ByteBuffer, uppercase: Bool = false) {
+        buffer.write(reserving: bytes.count * 2) { text, start in
+            Hex.writeEncoded(bytes, to: &text, at: start, uppercase: uppercase)
+            return bytes.count * 2
+        }
+    }
+
+    /// The bytes the hexadecimal digits encode, in either case;
+    /// DecodeError, saying where, at the first byte that is not a digit, or
+    /// when there is an odd number of them.
+    ///
+    /// ```sable
+    /// assert(try! Hex.decode("00ff") == [0x00, 0xFF])
+    /// do {
+    ///     let _ = try Hex.decode("abc")
+    /// } catch {
+    ///     assert(error == .InvalidLength(at: 2))
+    /// }
+    /// ```
+    public static fn decode<S: StringProtocol>(_ text: S) throws(DecodeError) -> U8[>..] {
+        return try Hex.decode(bytes: textBytes(text))
+    }
+
+    /// The bytes that hexadecimal digits, as ASCII bytes, encode.
+    ///
+    /// ```sable
+    /// let digits: U8[>..] = [0x34, 0x31]
+    /// assert(try! Hex.decode(bytes: digits) == [0x41])
+    /// ```
+    public static fn decode(bytes text: U8[:]) throws(DecodeError) -> U8[>..] {
+        let whole = text.count & ~1
+        var bytes: U8[>..] = []
+        bytes.append(repeating: 0, count: whole / 2)
+        var i = 0
+        // Eight digits from one 64-bit load, their four bytes stored from
+        // the last, so that one check of the index covers them all.
+        while i + 8 <= whole {
+            let word = text.readU64(at: i, endian: .Big)
+            let a = hexValues[(word >> 56) unchecked as Int]
+            let b = hexValues[(word >> 48 & 0xFF) unchecked as Int]
+            let c = hexValues[(word >> 40 & 0xFF) unchecked as Int]
+            let d = hexValues[(word >> 32 & 0xFF) unchecked as Int]
+            let e = hexValues[(word >> 24 & 0xFF) unchecked as Int]
+            let f = hexValues[(word >> 16 & 0xFF) unchecked as Int]
+            let g = hexValues[(word >> 8 & 0xFF) unchecked as Int]
+            let h = hexValues[(word & 0xFF) unchecked as Int]
+            if (a | b | c | d | e | f | g | h) >= 0x10 {
+                throw firstNotADigit(text, hexValues, from: i, count: 8, padded: false)
+            }
+            let four = U32(a) << 28 | U32(b) << 24 | U32(c) << 20 | U32(d) << 16 | U32(e) << 12 | U32(f) << 8 | U32(g) << 4 | U32(h)
+            let j = i / 2
+            bytes[j + 3] = four unchecked as U8
+            bytes[j + 2] = (four >> 8) unchecked as U8
+            bytes[j + 1] = (four >> 16) unchecked as U8
+            bytes[j] = (four >> 24) unchecked as U8
+            i += 8
+        }
+        while i < whole {
+            let high = hexValues[Int(text[i])]
+            let low = hexValues[Int(text[i + 1])]
+            if (high | low) >= 0x10 {
+                throw firstNotADigit(text, hexValues, from: i, count: 2, padded: false)
+            }
+            bytes[i / 2] = high << 4 | low
+            i += 2
+        }
+        if whole < text.count {
+            if hexValues[Int(text[whole])] == notADigit {
+                throw notADigitError(text, whole, padded: false)
+            }
+            throw DecodeError.InvalidLength(at: whole)
+        }
+        return bytes
+    }
+
+    // The digits written in place from 'start', where there is room for
+    // two a byte: four bytes at a time from one 32-bit load, each nibble
+    // spread to a byte of its own and made a digit by arithmetic on all
+    // eight at once, stored from the last so that one check of the index
+    // covers them all; then the rest a byte at a time.
+    static fn writeEncoded(_ bytes: U8[:], to text: inout U8[>..], at start: Int, uppercase: Bool) {
+        // What a nibble of ten or more adds past '9' + 1 to reach its letter.
+        let letters: U64 = uppercase ? 0x07 : 0x27
+        let count = bytes.count
+        var i = 0
+        var j = start
+        while i + 4 <= count {
+            var nibbles = U64(bytes.readU32(at: i, endian: .Big))
+            nibbles = (nibbles | nibbles << 16) & 0x0000_FFFF_0000_FFFF
+            nibbles = (nibbles | nibbles << 8) & 0x00FF_00FF_00FF_00FF
+            nibbles = (nibbles | nibbles << 4) & 0x0F0F_0F0F_0F0F_0F0F
+            // A byte of one where the nibble is ten or more.
+            let tens = (nibbles + 0x0606_0606_0606_0606) >> 4 & 0x0101_0101_0101_0101
+            let eight = nibbles + 0x3030_3030_3030_3030 + tens * letters
+            text[j + 7] = eight unchecked as U8
+            text[j + 6] = (eight >> 8) unchecked as U8
+            text[j + 5] = (eight >> 16) unchecked as U8
+            text[j + 4] = (eight >> 24) unchecked as U8
+            text[j + 3] = (eight >> 32) unchecked as U8
+            text[j + 2] = (eight >> 40) unchecked as U8
+            text[j + 1] = (eight >> 48) unchecked as U8
+            text[j] = (eight >> 56) unchecked as U8
+            i += 4
+            j += 8
+        }
+        let digits: U8[:] = uppercase ? hexUpperDigits : hexLowerDigits
+        while i < count {
+            let byte = bytes[i]
+            text[j] = digits[Int(byte >> 4)]
+            text[j + 1] = digits[Int(byte & 0x0F)]
+            i += 1
+            j += 2
+        }
+    }
+}

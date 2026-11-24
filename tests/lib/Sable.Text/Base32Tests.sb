@@ -1,0 +1,171 @@
+module Base32Tests
+
+// Base32 (Sable.Text), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Text
+
+import Sable.Testing
+import Sable.Text
+
+// The bytes are the ones expected; when not, both are shown in hexadecimal.
+fn assertBytes(_ actual: U8[:], _ expected: U8[:]) {
+    assert(actual == expected, "\(Hex.encode(actual)) is not \(Hex.encode(expected))")
+}
+
+fn sample(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var state = 0x1D2B
+    var i = 0
+    while i < count {
+        state = (state * 75 + 74) % 65537
+        bytes.append(U8(state & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+fn decodeError(_ text: String, alphabet: Base32.Alphabet = .Standard, padding: Padding = .Either) -> DecodeError? {
+    do {
+        let _ = try Base32.decode(text, alphabet: alphabet, padding: padding)
+    } catch {
+        return error
+    }
+    return none
+}
+
+@test
+fn theRfc4648TestVectorsEncode() {
+    assertEqual(Base32.encode("".utf8Bytes()), "")
+    assertEqual(Base32.encode("f".utf8Bytes()), "MY======")
+    assertEqual(Base32.encode("fo".utf8Bytes()), "MZXQ====")
+    assertEqual(Base32.encode("foo".utf8Bytes()), "MZXW6===")
+    assertEqual(Base32.encode("foob".utf8Bytes()), "MZXW6YQ=")
+    assertEqual(Base32.encode("fooba".utf8Bytes()), "MZXW6YTB")
+    assertEqual(Base32.encode("foobar".utf8Bytes()), "MZXW6YTBOI======")
+}
+
+@test
+fn theRfc4648HexTestVectorsEncode() {
+    assertEqual(Base32.encode("".utf8Bytes(), alphabet: .Hex), "")
+    assertEqual(Base32.encode("f".utf8Bytes(), alphabet: .Hex), "CO======")
+    assertEqual(Base32.encode("fo".utf8Bytes(), alphabet: .Hex), "CPNG====")
+    assertEqual(Base32.encode("foo".utf8Bytes(), alphabet: .Hex), "CPNMU===")
+    assertEqual(Base32.encode("foob".utf8Bytes(), alphabet: .Hex), "CPNMUOG=")
+    assertEqual(Base32.encode("fooba".utf8Bytes(), alphabet: .Hex), "CPNMUOJ1")
+    assertEqual(Base32.encode("foobar".utf8Bytes(), alphabet: .Hex), "CPNMUOJ1E8======")
+}
+
+@test
+fn theRfc4648TestVectorsDecode() {
+    assertBytes(try! Base32.decode(""), "".utf8Bytes())
+    assertBytes(try! Base32.decode("MY======"), "f".utf8Bytes())
+    assertBytes(try! Base32.decode("MZXQ===="), "fo".utf8Bytes())
+    assertBytes(try! Base32.decode("MZXW6==="), "foo".utf8Bytes())
+    assertBytes(try! Base32.decode("MZXW6YQ="), "foob".utf8Bytes())
+    assertBytes(try! Base32.decode("MZXW6YTB"), "fooba".utf8Bytes())
+    assertBytes(try! Base32.decode("MZXW6YTBOI======"), "foobar".utf8Bytes())
+    assertBytes(try! Base32.decode("CO======", alphabet: .Hex), "f".utf8Bytes())
+    assertBytes(try! Base32.decode("CPNMUOJ1E8======", alphabet: .Hex), "foobar".utf8Bytes())
+}
+
+@test
+fn lettersDecodeInEitherCase() {
+    assertBytes(try! Base32.decode("mzxw6ytboi"), "foobar".utf8Bytes())
+    assertBytes(try! Base32.decode("MzXw6YtBoI======"), "foobar".utf8Bytes())
+    assertBytes(try! Base32.decode("cpnmuoj1e8", alphabet: .Hex), "foobar".utf8Bytes())
+}
+
+@test
+fn aTotpSecretDecodes() {
+    // RFC 6238's SHA-1 test key, "12345678901234567890", as authenticator
+    // apps are given it.
+    assertBytes(try! Base32.decode("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"), "12345678901234567890".utf8Bytes())
+}
+
+@test
+fn everyLengthRoundTripsUnderEveryAlphabetAndPadding() {
+    let alphabets: Base32.Alphabet[>..] = [.Standard, .Hex]
+    for alphabet in alphabets {
+        var count = 0
+        while count <= 50 {
+            let bytes = sample(count)
+            let padded = Base32.encode(bytes, alphabet: alphabet)
+            let bare = Base32.encode(bytes, alphabet: alphabet, padding: false)
+            assertEqual(padded.utf8Count, Base32.encodedLength(count))
+            assertEqual(bare.utf8Count, Base32.encodedLength(count, padding: false))
+            assertEqual(padded.utf8Count % 8, 0)
+            assert(!bare.contains("="), "no padding when told")
+            assertBytes(try! Base32.decode(padded, alphabet: alphabet), bytes)
+            assertBytes(try! Base32.decode(bare, alphabet: alphabet), bytes)
+            assertBytes(try! Base32.decode(padded, alphabet: alphabet, padding: .Required), bytes)
+            assertBytes(try! Base32.decode(bare, alphabet: alphabet, padding: .Forbidden), bytes)
+            assertEqual(Base32.decodedLength(bare.utf8Count), count)
+            assert(Base32.decodedLength(padded.utf8Count) >= count, "an upper bound for padded text")
+            count += 1
+        }
+    }
+}
+
+@test
+fn theHexAlphabetSortsAsItsBytesDo() {
+    let low: U8[>..] = [0x10, 0xFF]
+    let high: U8[>..] = [0x11, 0x00]
+    assert(Base32.encode(low, alphabet: .Hex) < Base32.encode(high, alphabet: .Hex), "base32hex keeps the order")
+}
+
+@test
+fn encodingIntoABufferAppendsTheDigits() {
+    var buffer = ByteBuffer()
+    Base32.encode("foo".utf8Bytes(), into: &buffer)
+    Base32.encode("f".utf8Bytes(), into: &buffer, alphabet: .Hex, padding: false)
+    assertBytes(buffer.bytes, "MZXW6===CO".utf8Bytes())
+}
+
+@test
+fn decodingBytesIsDecodingTheirText() {
+    assertBytes(try! Base32.decode(bytes: "MZXW6YQ=".utf8Bytes()), "foob".utf8Bytes())
+}
+
+@test
+fn aCharacterOutsideTheAlphabetIsNamedWithItsOffset() {
+    assertEqual(decodeError("MZXW1YTB"), .InvalidCharacter(at: 4, byte: 0x31))
+    assertEqual(decodeError("MZXW6YTBO8"), .InvalidCharacter(at: 9, byte: 0x38))
+    assertEqual(decodeError("CPNMW===", alphabet: .Hex), .InvalidCharacter(at: 4, byte: 0x57))
+    assertEqual(decodeError("MZX*"), .InvalidCharacter(at: 3, byte: 0x2A))
+}
+
+@test
+fn aLastGroupNoBytesCanEndWithIsTheWrongLength() {
+    assertEqual(decodeError("M"), .InvalidLength(at: 0))
+    assertEqual(decodeError("MZX"), .InvalidLength(at: 0))
+    assertEqual(decodeError("MZXW6YTBMZXW6Y"), .InvalidLength(at: 8))
+}
+
+@test
+fn paddingIsCheckedAgainstTheRule() {
+    assertEqual(decodeError("MY", padding: .Required), .InvalidPadding(at: 2))
+    assertEqual(decodeError("MY======", padding: .Forbidden), .InvalidPadding(at: 2))
+    assertEqual(decodeError("MY====="), .InvalidPadding(at: 2))
+    assertEqual(decodeError("MZXW6YTB="), .InvalidPadding(at: 8))
+    assertEqual(decodeError("MY======MY======"), .InvalidPadding(at: 2))
+    assertEqual(decodeError("MY======="), .InvalidPadding(at: 2))
+    assertEqual(decodeError("M======="), .InvalidPadding(at: 1))
+}
+
+@test
+fn bitsTheBytesDoNotUseAreRejected() {
+    assertEqual(decodeError("MZ======"), .TrailingBits(at: 1))
+    assertEqual(decodeError("MZXR===="), .TrailingBits(at: 3))
+    assertEqual(decodeError("MZXW7==="), .TrailingBits(at: 4))
+    assertEqual(decodeError("MZXW6YR="), .TrailingBits(at: 6))
+}
+
+@test
+fn lengthsCountGroupsAndTheirRemainder() {
+    assertEqual(Base32.encodedLength(0), 0)
+    assertEqual(Base32.encodedLength(1, padding: false), 2)
+    assertEqual(Base32.encodedLength(2, padding: false), 4)
+    assertEqual(Base32.encodedLength(4, padding: false), 7)
+    assertEqual(Base32.encodedLength(6), 16)
+    assertEqual(Base32.decodedLength(7), 4)
+    assertEqual(Base32.decodedLength(8), 5)
+}

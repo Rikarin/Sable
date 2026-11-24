@@ -1,0 +1,102 @@
+module Sable.Text
+
+/// Base64 decoded a chunk at a time, as text comes from a file or a socket:
+/// a group split across two chunks waits for the next to complete it, and
+/// the last group is held until `finish()`, where padding is allowed, so
+/// the bytes are what decoding all the text at once would give. A
+/// DecodeError's offset counts from the start of the first chunk.
+///
+/// ```sable
+/// var decoder = Base64Decoder()
+/// var bytes = try! decoder.decode("SGVs")
+/// bytes.append(contentsOf: try! decoder.decode("bG8"))
+/// bytes.append(contentsOf: try! decoder.decode("="))
+/// bytes.append(contentsOf: try! decoder.finish())
+/// assert(bytes == [0x48, 0x65, 0x6C, 0x6C, 0x6F])
+/// ```
+public struct Base64Decoder {
+    // The digits held back: of a group a chunk ended partway through, or
+    // the last whole group, which may be padded if it is the end.
+    var pending: U8[>..]
+    // How many digits came before the pending ones.
+    var consumed: Int
+    let values: U8[:]
+
+    /// Whether the text must end with padding, may, or must not.
+    public let padding: Padding
+
+    /// A decoder of that alphabet, under that padding rule.
+    public init(alphabet: Base64.Alphabet = .Standard, padding: Padding = .Either) {
+        self.pending = []
+        self.consumed = 0
+        self.values = Base64.values(alphabet)
+        self.padding = padding
+    }
+
+    /// The bytes of the whole groups the chunk completes but the last,
+    /// which is held back in case it is the end.
+    public mutating fn decode<S: StringProtocol>(_ chunk: S) throws(DecodeError) -> U8[>..] {
+        return try self.decode(bytes: textBytes(chunk))
+    }
+
+    /// The bytes of the whole groups the chunk of ASCII digits completes
+    /// but the last, which is held back in case it is the end.
+    ///
+    /// ```sable
+    /// var decoder = Base64Decoder(padding: .Required)
+    /// let digits: U8[>..] = [0x54, 0x57, 0x45]
+    /// assert(try! decoder.decode(bytes: digits).count == 0)
+    /// do {
+    ///     let _ = try decoder.finish()
+    /// } catch {
+    ///     assert(error == .InvalidPadding(at: 3))
+    /// }
+    /// ```
+    public mutating fn decode(bytes chunk: U8[:]) throws(DecodeError) -> U8[>..] {
+        var decoded: U8[>..] = []
+        let total = pending.count + chunk.count
+        if total <= 4 {
+            pending.append(contentsOf: chunk)
+            return decoded
+        }
+        // Everything but the last one to four digits is decoded now.
+        let keep = total % 4 == 0 ? 4 : total % 4
+        decoded.reserveCapacity(Base64.decodedLength(total - keep))
+        var start = 0
+        if pending.count > 0 {
+            start = 4 - pending.count
+            pending.append(contentsOf: chunk[..<start])
+            try self.decodeMiddle(pending, to: &decoded)
+            pending.removeAll(keepingCapacity: true)
+        }
+        let end = chunk.count - keep
+        try self.decodeMiddle(chunk[start..<end], to: &decoded)
+        pending.append(contentsOf: chunk[end...])
+        return decoded
+    }
+
+    /// The end of the text: the bytes of the group held back, its padding
+    /// checked. The decoder is then empty, to begin again.
+    public mutating fn finish() throws(DecodeError) -> U8[>..] {
+        var decoded: U8[>..] = []
+        let last = pending
+        let at = consumed
+        pending = []
+        consumed = 0
+        do {
+            try Base64.appendDecoded(last, to: &decoded, values: values, padding: padding)
+        } catch {
+            throw error.shifted(by: at)
+        }
+        return decoded
+    }
+
+    mutating fn decodeMiddle(_ digits: U8[:], to decoded: inout U8[>..]) throws(DecodeError) {
+        do {
+            try Base64.appendDecoded(digits, to: &decoded, values: values, padding: .Forbidden, last: false)
+        } catch {
+            throw error.shifted(by: consumed)
+        }
+        consumed += digits.count
+    }
+}

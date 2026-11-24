@@ -122,7 +122,9 @@ public struct SIMD<Scalar: SIMDScalar, N: Int> where N >= 2 && (N == 2 || N == 3
     /// assert(v[1] == 2.5)
     /// ```
     public init(_ lanes: Scalar[:]) {
-        precondition(lanes.count == N, "a SIMD vector of \(N) lanes made from \(lanes.count)")
+        if lanes.count != N {
+            preconditionFailure("a SIMD vector of \(N) lanes made from \(lanes.count)")
+        }
         self = SIMD<Scalar, N>.load(from: lanes, at: 0)
     }
 

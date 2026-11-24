@@ -60,6 +60,8 @@ public static class SimdBuiltins {
     /// <summary>The reductions: every lane combined into one value.</summary>
     public static readonly ImmutableHashSet<string> Reductions = ["reduce_add", "reduce_min", "reduce_max", "reduce_and", "reduce_or", "reduce_xor"];
 
+    static SilType ElementOf(SilType array) => array is SliceType slice ? slice.Element : ((ArrayType)array).Element;
+
     /// <summary>The operation of a <c>simd_</c> builtin: <c>add</c> of <c>simd_add</c>.</summary>
     public static string Op(string name) => name[Prefix.Length..];
 
@@ -102,10 +104,11 @@ public static class SimdBuiltins {
                              && slice.Element != SilType.Bool:
                 return new([slice, SilType.Int], vector);
 
-            // The lanes written over N elements from the index on, the slice
-            // made the only reference to its elements first; traps unless all are in it.
-            case "store" when operands is [AddressType { Pointee: SliceType slice } address, VectorType vector, var at]
-                                && at == SilType.Int && vector.Element == slice.Element && slice.Element != SilType.Bool:
+            // The lanes written over N elements from the index on, of an
+            // array or a slice where it is, made the only reference to its
+            // elements first; traps unless all are in it.
+            case "store" when operands is [AddressType { Pointee: SliceType or ArrayType } address, VectorType vector, var at]
+                                && at == SilType.Int && vector.Element == ElementOf(address.Pointee) && vector.Element != SilType.Bool:
                 return new([address, vector, SilType.Int], SilType.Unit);
 
             // One lane, read or replaced; an index outside 0..<N traps.

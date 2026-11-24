@@ -30,7 +30,9 @@ public struct SIMDMask<N: Int> where N >= 2 && (N == 2 || N == 3 || N == 4 || N 
     /// assert(mask[0] && !mask[1])
     /// ```
     public init(_ lanes: Bool[:]) {
-        precondition(lanes.count == N, "a SIMD mask of \(N) lanes made from \(lanes.count)")
+        if lanes.count != N {
+            preconditionFailure("a SIMD mask of \(N) lanes made from \(lanes.count)")
+        }
         self = SIMDMask<N>()
         for i in 0..<N {
             self[i] = lanes[i]

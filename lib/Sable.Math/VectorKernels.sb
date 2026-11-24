@@ -1,0 +1,312 @@
+module Sable.Math
+
+// Kernels over arrays of floats, a vector at a time (.NET's
+// TensorPrimitives): sums, products, norms, softmax and elementwise
+// arithmetic over F32[:] and F64[:], written once over SIMD<T, N> and a
+// scalar tail. Each type takes 64 bytes a step — four of the target's
+// 16-byte vector registers (Platform.vectorBytes), 16 F32s or 8 F64s —
+// so that four independent additions are in flight at once; the bodies
+// are generic over the width and the lanes, and the overloads for each
+// type pick them.
+//
+// A float sum is added in lanes and then pairwise (SIMD's reduceAdd), so
+// it is not the left-to-right sum of a loop: it rounds differently, as
+// .NET's does, and is usually closer. Inputs that should be the same
+// length are checked to be, and the destination to have room.
+
+/// The sum of the elements: 0 for none.
+///
+/// ```sable
+/// assert(sum([1.0, 2.0, 3.0, 4.0, 5.0] as F64[:]) == 15.0)
+/// ```
+public fn sum(_ x: F32[:]) -> F32 => sumOf(x, SIMD<F32, 16>())
+
+/// The sum of the elements: 0 for none.
+public fn sum(_ x: F64[:]) -> F64 => sumOf(x, SIMD<F64, 8>())
+
+/// The dot product: the sum of the products of the elements at each
+/// index. Traps unless the two are the same length.
+///
+/// ```sable
+/// let x: F32[>..] = [1, 2, 3]
+/// let y: F32[>..] = [4, 5, 6]
+/// assert(dot(x, y) == 32)
+/// ```
+public fn dot(_ x: F32[:], _ y: F32[:]) -> F32 => dotOf(x, y, SIMD<F32, 16>())
+
+/// The dot product: the sum of the products of the elements at each
+/// index. Traps unless the two are the same length.
+public fn dot(_ x: F64[:], _ y: F64[:]) -> F64 => dotOf(x, y, SIMD<F64, 8>())
+
+/// The Euclidean norm, √(Σ xᵢ²): the length of the vector the elements are.
+///
+/// ```sable
+/// assert(norm([3.0, 4.0] as F64[:]) == 5.0)
+/// ```
+public fn norm(_ x: F32[:]) -> F32 => dotOf(x, x, SIMD<F32, 16>()).squareRoot()
+
+/// The Euclidean norm, √(Σ xᵢ²): the length of the vector the elements are.
+public fn norm(_ x: F64[:]) -> F64 => dotOf(x, x, SIMD<F64, 8>()).squareRoot()
+
+/// The cosine of the angle between two vectors, x·y / (|x| |y|): 1 for
+/// the same direction, 0 at right angles, -1 opposite; NaN if either is
+/// all zeros. Traps unless the two are the same length.
+///
+/// ```sable
+/// let x: F64[>..] = [1, 0]
+/// let y: F64[>..] = [0, 2]
+/// assert(cosineSimilarity(x, y) == 0.0)
+/// assert(cosineSimilarity(x, x) == 1.0)
+/// ```
+public fn cosineSimilarity(_ x: F32[:], _ y: F32[:]) -> F32 => cosineOf(x, y, SIMD<F32, 16>())
+
+/// The cosine of the angle between two vectors, x·y / (|x| |y|). Traps
+/// unless the two are the same length.
+public fn cosineSimilarity(_ x: F64[:], _ y: F64[:]) -> F64 => cosineOf(x, y, SIMD<F64, 8>())
+
+/// The least element: lane-wise minimums, then the least of those. A NaN
+/// is passed over (as 'min' passes it over) unless every element is one.
+/// Traps on none.
+///
+/// ```sable
+/// assert(min([3.0, -1.0, 2.0] as F64[:]) == -1.0)
+/// ```
+public fn min(_ x: F32[:]) -> F32 => extremeOf(x, SIMD<F32, 16>(), least: true)
+
+/// The least element. Traps on none.
+public fn min(_ x: F64[:]) -> F64 => extremeOf(x, SIMD<F64, 8>(), least: true)
+
+/// The greatest element. A NaN is passed over unless every element is
+/// one. Traps on none.
+public fn max(_ x: F32[:]) -> F32 => extremeOf(x, SIMD<F32, 16>(), least: false)
+
+/// The greatest element. Traps on none.
+public fn max(_ x: F64[:]) -> F64 => extremeOf(x, SIMD<F64, 8>(), least: false)
+
+/// Writes each 'x[i] + y[i]' to 'destination[i]'. Traps unless x and y
+/// are the same length and the destination at least as long.
+///
+/// ```sable
+/// var result: F32[>..] = [0, 0, 0]
+/// add([1, 2, 3], [10, 20, 30], into: &result)
+/// assert(result == [11, 22, 33])
+/// ```
+public fn add(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
+    elementwise(x, y, &destination, SIMD<F32, 16>(), .Add)
+}
+
+/// Writes each 'x[i] + y[i]' to 'destination[i]'.
+public fn add(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
+    elementwise(x, y, &destination, SIMD<F64, 8>(), .Add)
+}
+
+/// Writes each 'x[i] - y[i]' to 'destination[i]'. Traps unless x and y
+/// are the same length and the destination at least as long.
+public fn subtract(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
+    elementwise(x, y, &destination, SIMD<F32, 16>(), .Subtract)
+}
+
+/// Writes each 'x[i] - y[i]' to 'destination[i]'.
+public fn subtract(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
+    elementwise(x, y, &destination, SIMD<F64, 8>(), .Subtract)
+}
+
+/// Writes each 'x[i] × y[i]' to 'destination[i]'. Traps unless x and y
+/// are the same length and the destination at least as long.
+public fn multiply(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
+    elementwise(x, y, &destination, SIMD<F32, 16>(), .Multiply)
+}
+
+/// Writes each 'x[i] × y[i]' to 'destination[i]'.
+public fn multiply(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
+    elementwise(x, y, &destination, SIMD<F64, 8>(), .Multiply)
+}
+
+/// Writes each 'x[i] / y[i]' to 'destination[i]'. Traps unless x and y
+/// are the same length and the destination at least as long.
+public fn divide(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
+    elementwise(x, y, &destination, SIMD<F32, 16>(), .Divide)
+}
+
+/// Writes each 'x[i] / y[i]' to 'destination[i]'.
+public fn divide(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
+    elementwise(x, y, &destination, SIMD<F64, 8>(), .Divide)
+}
+
+/// Writes the softmax of x to the destination: each 'exp(x[i] - m) / Σ
+/// exp(x[j] - m)', m the greatest element (which keeps every exponential
+/// at most 1, so none overflows). The results are positive and sum to 1.
+/// Traps on no elements, or a destination shorter than x.
+///
+/// ```sable
+/// var result: F64[>..] = [0, 0]
+/// softmax([0.0, 0.0], into: &result)
+/// assert(result == [0.5, 0.5])
+/// ```
+public fn softmax(_ x: F32[:], into destination: inout F32[>..]) {
+    softmaxOf(x, &destination, SIMD<F32, 16>())
+}
+
+/// Writes the softmax of x to the destination. Traps on no elements, or a
+/// destination shorter than x.
+public fn softmax(_ x: F64[:], into destination: inout F64[>..]) {
+    softmaxOf(x, &destination, SIMD<F64, 8>())
+}
+
+// ---- The kernels, generic over the lanes and the width ----
+
+fn sumOf<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ x: T[:], _ zero: SIMD<T, N>) -> T {
+    let count = x.count
+    var lanes = zero
+    var i = 0
+    while i + N <= count {
+        lanes = lanes + SIMD<T, N>.load(from: x, at: i)
+        i += N
+    }
+
+    var total = lanes.reduceAdd()
+    while i < count {
+        total = total + x[i]
+        i += 1
+    }
+    return total
+}
+
+fn dotOf<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ x: T[:], _ y: T[:], _ zero: SIMD<T, N>) -> T {
+    if x.count != y.count {
+        preconditionFailure("dot of \(x.count) elements and \(y.count)")
+    }
+    let count = x.count
+    var lanes = zero
+    var i = 0
+    while i + N <= count {
+        lanes = lanes + SIMD<T, N>.load(from: x, at: i) * SIMD<T, N>.load(from: y, at: i)
+        i += N
+    }
+
+    var total = lanes.reduceAdd()
+    while i < count {
+        total = total + x[i] * y[i]
+        i += 1
+    }
+    return total
+}
+
+fn cosineOf<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ x: T[:], _ y: T[:], _ zero: SIMD<T, N>) -> T {
+    if x.count != y.count {
+        preconditionFailure("cosine similarity of \(x.count) elements and \(y.count)")
+    }
+    let count = x.count
+    var (products, xx, yy) = (zero, zero, zero)
+    var i = 0
+    while i + N <= count {
+        let a = SIMD<T, N>.load(from: x, at: i)
+        let b = SIMD<T, N>.load(from: y, at: i)
+        products = products + a * b
+        xx = xx + a * a
+        yy = yy + b * b
+        i += N
+    }
+
+    var (dot, xSquared, ySquared) = (products.reduceAdd(), xx.reduceAdd(), yy.reduceAdd())
+    while i < count {
+        dot = dot + x[i] * y[i]
+        xSquared = xSquared + x[i] * x[i]
+        ySquared = ySquared + y[i] * y[i]
+        i += 1
+    }
+    return dot / (xSquared.squareRoot() * ySquared.squareRoot())
+}
+
+fn extremeOf<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ x: T[:], _ zero: SIMD<T, N>, least: Bool) -> T {
+    if x.count == 0 {
+        preconditionFailure("the extreme of no elements")
+    }
+    let count = x.count
+    var i = 0
+    var best = x[0]
+    if count >= N {
+        var lanes = SIMD<T, N>.load(from: x, at: 0)
+        i = N
+        while i + N <= count {
+            let next = SIMD<T, N>.load(from: x, at: i)
+            lanes = least ? lanes.min(next) : lanes.max(next)
+            i += N
+        }
+        best = least ? lanes.reduceMin() : lanes.reduceMax()
+    }
+
+    while i < count {
+        best = least ? best.minimumNumber(x[i]) : best.maximumNumber(x[i])
+        i += 1
+    }
+    return best
+}
+
+/// What an elementwise kernel does to each pair.
+enum Elementwise {
+    Add
+    Subtract
+    Multiply
+    Divide
+}
+
+fn elementwise<T: SIMDScalar & BinaryFloatingPoint, N: Int>(_ x: T[:], _ y: T[:], _ destination: inout T[>..], _ zero: SIMD<T, N>, _ op: Elementwise) {
+    let count = x.count
+    let room = destination.count
+    if count != y.count {
+        preconditionFailure("an elementwise operation on \(count) elements and \(y.count)")
+    }
+    if room < count {
+        preconditionFailure("a destination of \(room) elements for \(count)")
+    }
+    var i = 0
+    while i + N <= count {
+        let a = SIMD<T, N>.load(from: x, at: i)
+        let b = SIMD<T, N>.load(from: y, at: i)
+        switch op {
+            case .Add: destination.store(a + b, at: i)
+            case .Subtract: destination.store(a - b, at: i)
+            case .Multiply: destination.store(a * b, at: i)
+            case .Divide: destination.store(a / b, at: i)
+        }
+        i += N
+    }
+
+    while i < count {
+        switch op {
+            case .Add: destination[i] = x[i] + y[i]
+            case .Subtract: destination[i] = x[i] - y[i]
+            case .Multiply: destination[i] = x[i] * y[i]
+            case .Divide: destination[i] = x[i] / y[i]
+        }
+        i += 1
+    }
+}
+
+fn softmaxOf<T: SIMDScalar & BinaryFloatingPoint & ElementaryFunctions, N: Int>(_ x: T[:], _ destination: inout T[>..], _ zero: SIMD<T, N>) {
+    let room = destination.count
+    if room < x.count {
+        preconditionFailure("a destination of \(room) elements for \(x.count)")
+    }
+    let greatest = extremeOf(x, zero, least: false)
+    let count = x.count
+    var total = T.zero
+    for i in 0..<count {
+        let e = T.exp(x[i] - greatest)
+        destination[i] = e
+        total = total + e
+    }
+
+    let scale = SIMD<T, N>(repeating: total)
+    var i = 0
+    while i + N <= count {
+        destination.store(SIMD<T, N>.load(from: destination, at: i) / scale, at: i)
+        i += N
+    }
+
+    while i < count {
+        destination[i] = destination[i] / total
+        i += 1
+    }
+}

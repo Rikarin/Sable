@@ -382,6 +382,53 @@ public sealed class SimdTests {
         Assert.Contains("store <4 x float>", optimised, StringComparison.Ordinal);
     }
 
+    /// <summary>Sable.Math's kernels, at lengths with a vector body and a scalar tail, and with a tail alone.</summary>
+    [Fact]
+    public void TheVectorKernelsAgree() =>
+        Assert.Equal(
+            "703.0 15466.0 1.00 0.0 36.0\n36.0 -36.0 12.0 0.25 1.00\n5.0 650.0 78.0 3.0\n",
+            AssertAgree(
+                Program(
+                    """
+                    import Sable.Math
+                    fn ramp(_ count: Int) -> F32[>..] {
+                        var values: F32[>..] = []
+                        for i in 0..<count {
+                            values.append(F32(i))
+                        }
+                        return values
+                    }
+                    fn rampWide(_ count: Int) -> F64[>..] {
+                        var values: F64[>..] = []
+                        for i in 0..<count {
+                            values.append(F64(i))
+                        }
+                        return values
+                    }
+                    """,
+                    """
+                        let x = ramp(38)
+                        let y = ramp(38)
+                        print("\(sum(x)) \(dot(x, y) - dot(ramp(19), ramp(19))) \(cosineSimilarity(x, ramp(38)):.2f) \(min(x)) \(max(ramp(37)))")
+                        var result = ramp(38)
+                        add(x, y, into: &result)
+                        let a = result[18]
+                        subtract(x, y, into: &result)
+                        let b = result[18] - a
+                        multiply(ramp(4), ramp(4), into: &result)
+                        let c = result[2] + result[3] - 1
+                        divide(ramp(38), y, into: &result)
+                        var probabilities = ramp(20)
+                        softmax(ramp(20), into: &probabilities)
+                        print("\(a) \(b) \(c) \(result[2] / 4) \(F64(sum(probabilities)):.2f)")
+                        let wide = rampWide(13)
+                        let side: F64[>..] = [3, 4]
+                        print("\(norm(side)) \(dot(wide, wide)) \(sum(wide)) \(max(rampWide(4)))")
+                    """
+                )
+            ).Stdout
+        );
+
     [Fact]
     public void TheKernelLoopAgrees() =>
         Assert.Equal(

@@ -14,12 +14,8 @@ extension<Element: SIMDScalar> Element[:] {
     /// values.store(SIMD<F32, 4>([1, 2, 3, 4]), at: 1)
     /// assert(values == [0, 1, 2, 3, 4])
     /// ```
-    public mutating fn store<N: Int>(_ vector: SIMD<Element, N>, at offset: Int) {
-        self.storeLanes(vector, at: offset)
-    }
-
     @builtin("simd_store")
-    mutating fn storeLanes<N: Int>(_ vector: SIMD<Element, N>, at offset: Int)
+    public mutating fn store<N: Int>(_ vector: SIMD<Element, N>, at offset: Int)
 
     /// Writes each lane of the vector to the element its index says: lane
     /// i to 'self[indices[i]]', in lane order, so that of two lanes with one

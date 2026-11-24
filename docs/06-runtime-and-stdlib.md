@@ -879,6 +879,22 @@ rounded), and reduce them: an integer's sum wraps, and a float's is added
 pairwise — lane i with lane i + N/2, down to one — in that order natively
 and in the interpreter alike, so that a sum is the same number either way.
 
+`Sable.Math`'s kernels (`VectorKernels.sb`, .NET's TensorPrimitives) are
+written once over `SIMD<T, N>` and a scalar tail — `sum`, `dot`, `norm`,
+`cosineSimilarity`, `min`, `max`, `softmax` and the elementwise `add`,
+`subtract`, `multiply` and `divide` into a destination — and given 64
+bytes a step for F32 and F64 (16 and 8 lanes: four registers, four sums
+in flight). A store into an array reaches it inline when the array is its
+buffer's only reference, as an element's write does. Measured on an Apple
+M-series machine (arm64, NEON): a dot product, a sum and a multiply over
+4096 F32s, 50,000 times, take 0.05 s against 0.41 s as plain loops
+(`benchmarks/kernels.sb`); the six kernels of
+`benchmarks/versus-dotnet/tensor-primitives.sb` take 0.06 s of processor
+time, start-up included, against 87 ms for .NET 11 with
+System.Numerics.Tensors 9.0's TensorPrimitives, steady state. F16 and BF16
+kernels, and an exponential of vectors for softmax (it calls libm's for
+each element), are still to come.
+
 ### Source layout
 
 Each module is a directory of `lib/` (`lib/Sable.Collections/`), its files

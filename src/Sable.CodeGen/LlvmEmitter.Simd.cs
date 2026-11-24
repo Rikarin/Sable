@@ -44,7 +44,11 @@ public sealed partial class LlvmEmitter {
                     NegativeOffsetTraps(operands[2]);
                     var lastIndex = Fresh();
                     Line($"{lastIndex} = add i64 {operands[2]}, {vector.Count - 1}");
-                    var last = SliceMutableElement(operands[0], lastIndex, (SliceType)((AddressType)builtin.Operands[0].Type).Pointee);
+                    // An array's element is reached inline when the array is
+                    // its buffer's only reference; a slice's through the runtime.
+                    var last = ((AddressType)builtin.Operands[0].Type).Pointee is ArrayType array
+                        ? MutableElement(operands[0], lastIndex, array)
+                        : SliceMutableElement(operands[0], lastIndex, (SliceType)((AddressType)builtin.Operands[0].Type).Pointee);
                     var start = Fresh();
                     Line($"{start} = getelementptr inbounds {Type(vector.Element)}, ptr {last}, i64 {1 - vector.Count}");
                     Line($"store {Type(vector)} {operands[1]}, ptr {start}, align {TypeLayout.Align(vector.Element)}");

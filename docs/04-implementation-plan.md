@@ -1337,6 +1337,31 @@ the entry or its key to compare it (see "The SIL optimiser" below). `Sable.Text`
 `joined` (and so `TextBuilder.build`) was quadratic, `result = result + part`;
 it is now one runtime call (`Runtime.joinStrings`) that sizes the result once.
 
+`Regex` (#31) against .NET 11's `System.Text.RegularExpressions`, rebar-style:
+the `regex-*` benchmarks count matches ten times over in a megabyte of
+generated text (`regex-pathological`: `(?m)^(a|aa)+$` on a hundred lines of
+twenty 'a's and a '!'), and .NET runs each with `RegexOptions.Compiled` and
+with `NonBacktracking` (`<name>/nonbacktracking`). Processor time, fastest
+of five, the Sable process whole (about 6 ms of it making the text), Apple
+M1 Max on a busy machine (load average 13–50), 24 Nov 2026:
+
+| benchmark          | Compiled ms | NonBacktracking ms | Sable ms |
+|--------------------|------------:|-------------------:|---------:|
+| regex-literal      |         3.8 |                7.7 |      6.3 |
+| regex-alternation  |         6.0 |               24.6 |     16.0 |
+| regex-words        |        67.1 |               93.0 |    109.3 |
+| regex-email        |         5.2 |               20.3 |     27.0 |
+| regex-pathological |       301.7 |                0.4 |      2.3 |
+
+Sable's engine is the linear-time kind, and stands with .NET's: faster
+than `NonBacktracking` on the literal and the alternation, within 1.35
+times of it on the rest, and linear where `Compiled` backtracks
+exponentially. `Compiled` is ahead where it searches for a literal the
+pattern needs before trying it — the '@' of an e-mail address, the first
+letters of an alternation — which Sable does only for a literal prefix and,
+less well, for a small set of first bytes; and on `\w+`, where each of the
+150,000 matches a round costs Sable a reverse scan for its start.
+
 ### The SIL optimiser, as implemented
 
 What runs at each opt-level is docs/05 §5.2.11's table. At `-O2` and `-O3`,

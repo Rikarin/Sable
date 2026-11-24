@@ -1,0 +1,60 @@
+module RegexAlternation
+
+// Regex against .NET 11's System.Text.RegularExpressions, rebar-style:
+// an alternation of five names, counted in a megabyte of text ten times over. .NET runs it with
+// RegexOptions.Compiled (regex-alternation) and NonBacktracking
+// (regex-alternation/nonbacktracking).
+
+import Sable.Text
+
+/// The text the regex benchmarks search, as RegexText in ../dotnet makes
+/// it: about a megabyte of words chosen by xorshift, with names and e-mail
+/// addresses among them, in lines of a dozen words or so, a few of the
+/// words not ASCII.
+fn regexText() -> String {
+    let words: String[>..] = [
+        "the", "of", "and", "to", "in", "was", "he", "it", "that", "his", "with", "had", "as", "for",
+        "you", "at", "which", "on", "but", "be", "not", "by", "from", "my", "have", "there", "one",
+        "been", "all", "naïve", "café", "so", "door", "room", "said", "upon", "little", "man", "matter", "case",
+    ]
+    let names: String[>..] = ["Sherlock Holmes", "Holmes", "Watson", "Irene Adler", "Lestrade", "Mrs. Hudson"]
+    let emails: String[>..] = ["sherlock.holmes@baker-street.co.uk", "j.watson+notes@example.com", "irene@adler.org"]
+    var state: U64 = 0x9E3779B97F4A7C15
+    var parts: String[>..] = []
+    var i = 0
+    while i < 150000 {
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        let choice = Int(state % 100)
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        if choice < 3 {
+            parts.append(names[Int(state % U64(names.count))])
+        } else if choice < 4 {
+            parts.append(emails[Int(state % U64(emails.count))])
+        } else {
+            parts.append(words[Int(state % U64(words.count))])
+        }
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        parts.append(state % 12 == 0 ? ".\n" : " ")
+        i = i + 1
+    }
+    return parts.joined()
+}
+
+@main
+fn main() {
+    let text = regexText()
+    let regex = try! Regex(#"Sherlock|Holmes|Watson|Irene|Adler"#)
+    var count = 0
+    var round = 0
+    while round < 10 {
+        count = count + regex.count(in: text)
+        round = round + 1
+    }
+    print("\(count) \(text.utf8Count)")
+}

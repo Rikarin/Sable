@@ -743,7 +743,13 @@ Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, validated
                     sentences (UAX #29) and line breaks (UAX #14), each
                     passing the UCD's conformance tests, from tables
                     tools/unicode-tables.py generates (Unicode 16);
-                    formatting, Regex (a compiled NFA/DFA hybrid),
+                    formatting, Regex (Rust's and RE2's syntax, Unicode
+                    classes and case folding, compiled to an NFA: a lazy
+                    DFA forwards for a match's end and backwards for its
+                    start, a PikeVM for its groups — linear in the text;
+                    a backtracker on request, for back references and
+                    lookaround; a Pattern, so String's searches take one;
+                    RegexSet),
                     TextBuilder (a UTF-8 buffer and chunks: characters and
                     integers encoded in place, edits that cut one chunk,
                     replace in one vectorised pass; at parity with .NET's

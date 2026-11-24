@@ -154,4 +154,56 @@ public sealed class BinaryDataTests {
         Assert.Matches(@"store i64 %\S+, ptr %\S+, align 1", ir);
         Assert.Contains("@llvm.bswap.i32(", ir, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    ///     A grow-only array passed to a mutating member of <c>U8[:]</c> is
+    ///     viewed in place: made the only reference to its buffer once, with
+    ///     the call to copy it only when it is shared, then moved into the
+    ///     view and back. A write is one store — no retain, no
+    ///     copy-on-write call per write, no array made back of the slice.
+    /// </summary>
+    [Fact]
+    public void AWriteToAGrowOnlyArrayIsOneStoreInPlace() {
+        var result = Pipeline.Compile(
+            new SourceText(
+                Program(
+                    """
+                    @inline(never)
+                    fn put(_ bytes: inout U8[>..], _ value: U64, _ other: U32) {
+                        bytes.writeU64(value, at: 0, endian: .Little)
+                        bytes.writeU32(other, at: 8, endian: .Big)
+                    }
+                    """,
+                    """
+                        var bytes: U8[>..] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+                        let shared = bytes
+                        put(&bytes, 9, 7)
+                        print("\(bytes.readU16(at: 0, endian: .Little)) \(bytes[11]) \(shared[0])")
+                    """
+                ),
+                "test.sb"
+            ),
+            optimised: true
+        );
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        var put = System.Text.RegularExpressions.Regex.Match(result.LlvmIr!, @"define [^\n]*\.put""\([^\n]*\{\n(.*?)\n\}", System.Text.RegularExpressions.RegexOptions.Singleline).Groups[1].Value;
+        Assert.NotEmpty(put);
+        Assert.Matches(@"store i64 %\S+, ptr %\S+, align 1", put);
+        Assert.Matches(@"store i32 %\S+, ptr %\S+, align 1", put);
+        Assert.DoesNotContain("@sable_retain(", put, StringComparison.Ordinal);
+        Assert.DoesNotContain("@sable_slice_mutable_element(", put, StringComparison.Ordinal);
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(put, "@sable_array_make_unique\\(").Count);
+        Assert.Equal("9 7 1\n", AssertAgree(Program("""
+                                                     @inline(never)
+                                                     fn put(_ bytes: inout U8[>..], _ value: U64, _ other: U32) {
+                                                         bytes.writeU64(value, at: 0, endian: .Little)
+                                                         bytes.writeU32(other, at: 8, endian: .Big)
+                                                     }
+                                                     """, """
+                                                              var bytes: U8[>..] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+                                                              let shared = bytes
+                                                              put(&bytes, 9, 7)
+                                                              print("\(bytes.readU16(at: 0, endian: .Little)) \(bytes[11]) \(shared[0])")
+                                                          """)).Stdout);
+    }
 }

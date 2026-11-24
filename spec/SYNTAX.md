@@ -838,11 +838,17 @@ extension U8[:] { fn toString() -> String { } }
 - Each parameter must appear in the array type.
 - An extension of every growable array of a kind, `T[>..]` or `T[>..<]`, may
   declare initialisers, as such an array always has a value to begin from:
-  `self` starts as `[]`. `Int[>..](repeating: 0, times: 3)` calls one. An
+  `self` starts as `[]`. `Int[>..](repeating: 0, count: 3)` calls one. An
   `init()` requirement is met by `[]` unless the extension declares one.
 - Its members are generic over the parameters and monomorphised per element
   type, like any generic. `Sable.Core` declares the array family's own members
   (`count`, `append`, `contains`, …) this way.
+- It may conform the arrays to protocols, `extension<Element: Debug>
+  Element[:]: Debug`, and conforms them where its element meets its
+  constraints. So every kind of array, and a slice, is Equatable, Hashable and
+  Comparable (in lexicographic order) when its element is, as in Swift:
+  `assertEqual(words, ["a", "b"])`, `xs < ys`, an array as a dictionary's key.
+  An operator such a conformance declares on `T[:]` takes arrays of any kind.
 
 ---
 
@@ -885,7 +891,7 @@ let p: any Producer<Animal> = DogProducer()     // legal: T is 'out'
 ### Conditional conformance
 
 ```sable
-extension Array<T>: Equatable where T: Equatable { }
+extension<T: Equatable> T[:]: Equatable { … }      // Sable.Core's, for every array
 extension Optional<T>: Serializable where T: Serializable { }
 ```
 
@@ -1636,7 +1642,17 @@ unowned capture is the object itself, and reading it once the object is gone
 traps. `[weak x = expression]` captures what the expression gives.
 
 An escaping closure must be declared `@escaping` on the parameter; non-escaping
-closures are stack-allocated and cost nothing. An `@autoclosure` argument
+closures are stack-allocated and cost nothing.
+
+Inside a `mutating` member, a closure that does not escape may change `self`,
+as the member may: `each(n) { i in total += i; log.append(i) }`. It runs
+during the member's call if at all, so it changes the caller's value; for
+the call, `self` is shared with such closures as a captured `inout`
+parameter is, and written back to the caller however the call ends. A
+closure that may escape may read `self` but not change it (S3205). The
+closure's accesses to `self` are made during the call, so a call that changes
+what the closure uses overlaps it (S3062): `inner.with { inner.x = 1 }` is
+refused, and `inner.with { count += 1 }`, another field, is not. An `@autoclosure` argument
 (§5) is a closure of this kind, written as the expression it returns.
 
 ---

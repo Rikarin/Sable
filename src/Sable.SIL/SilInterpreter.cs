@@ -1395,6 +1395,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return Allocate(new HeapArray((ArrayType)Concrete(builtin.Type), new List<object?>(operands)));
 
             // The whole of an array, viewed: the buffer shared, not copied.
+            // The array moved into the view, which holds its buffer, empty or not.
+            case "slice_of_take":
+                return operands[0] is HeapArray wholeArray ? new SliceValue(Alive(wholeArray), 0, wholeArray.Elements.Count) : SliceValue.Empty;
+
             case "slice_of": {
                 if (operands[0] is not HeapArray array || Alive(array).Elements.Count == 0) {
                     return SliceValue.Empty;
@@ -2191,6 +2195,27 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             // A slice as an array again: the buffer itself when the slice is
             // the whole of it, else a copy of its run.
+            // The view moved back into the array: its buffer as it is when it
+            // is the whole of it, else a copy of its run, the view let go.
+            case "array_of_slice_take": {
+                var (buffer, start, count) = ElementsOf(operands[0]);
+                if (buffer is null) {
+                    return null;
+                }
+
+                if (start == 0 && count == buffer.Elements.Count) {
+                    return buffer;
+                }
+
+                var copy = count == 0 ? null : Allocate(new HeapArray(buffer.Type, [..buffer.Elements.Skip(start).Take(count)]));
+                foreach (var element in copy?.Elements ?? []) {
+                    Retain(buffer.Type.Element, element);
+                }
+
+                Release(builtin.Operands[0].Type, operands[0], depth);
+                return copy;
+            }
+
             case "array_of_slice": {
                 var (buffer, start, count) = ElementsOf(operands[0]);
                 if (buffer is null || count == 0) {
@@ -2293,6 +2318,29 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return null;
             }
 
+            case "array_append_repeating": {
+                var count = (long)operands[2]!;
+                if (count < 0) {
+                    throw new SilTrap("cannot append a negative number of elements");
+                }
+
+                if (count > int.MaxValue) {
+                    throw new SilTrap("cannot append so many elements");
+                }
+
+                if (count > 0) {
+                    var array = Unique(builtin.Operands[0], (IReference)operands[0]!);
+                    var element = builtin.Operands[1].Type;
+                    array.Elements.EnsureCapacity(array.Elements.Count + (int)count);
+                    for (var i = 0; i < count; i++) {
+                        Retain(element, operands[1]);
+                        array.Elements.Add(operands[1]);
+                    }
+                }
+
+                return null;
+            }
+
             case "array_append_utf8": {
                 var all = System.Text.Encoding.UTF8.GetBytes(Text(operands[1]).Value);
                 var from = (long)operands[2]!;
@@ -2305,20 +2353,6 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 if (bytes.Length > 0) {
                     var array = Unique(builtin.Operands[0], (IReference)operands[0]!);
                     array.Elements.AddRange(bytes.Select(static b => (object?)(long)b));
-                }
-
-                return null;
-            }
-
-            case "array_append_repeating": {
-                var count = (long)operands[2]!;
-                if (count < 0) {
-                    throw new SilTrap("cannot append a negative number of bytes");
-                }
-
-                if (count > 0) {
-                    var array = Unique(builtin.Operands[0], (IReference)operands[0]!);
-                    array.Elements.AddRange(Enumerable.Repeat((object?)operands[1], (int)count));
                 }
 
                 return null;

@@ -6,10 +6,6 @@ module StringSearchTests
 
 import Sable.Testing
 
-fn assertParts(_ actual: String[>..], _ expected: String[>..]) {
-    assertEqual("\(actual.count): " + actual.joined(separator: "|"), "\(expected.count): " + expected.joined(separator: "|"))
-}
-
 fn offset(_ index: String.Index?) -> Int {
     if let found = index {
         return found.utf8Offset
@@ -83,7 +79,7 @@ fn anEmptyPatternMatchesBetweenEveryTwoScalars() {
     assertEqual("aé".ranges(of: "").count, 3)
     assertEqual("aé".count(of: ""), 3)
     assertEqual("aé".replacing("", with: "-"), "-a-é-")
-    assertParts("ab".split(""), ["", "a", "b", ""])
+    assertEqual("ab".split(""), ["", "a", "b", ""])
 }
 
 @test
@@ -116,32 +112,32 @@ fn replacingAtMostSoMany() {
 
 @test
 fn splittingKeepsEmptyRunsUnlessAskedNot() {
-    assertParts("a,b,,c".split(","), ["a", "b", "", "c"])
-    assertParts(",a,".split(','), ["", "a", ""])
-    assertParts("a,b,,c".split(",", omittingEmpty: true), ["a", "b", "c"])
+    assertEqual("a,b,,c".split(","), ["a", "b", "", "c"])
+    assertEqual(",a,".split(','), ["", "a", ""])
+    assertEqual("a,b,,c".split(",", omittingEmpty: true), ["a", "b", "c"])
     assertEqual(",,".split(",", omittingEmpty: true).count, 0)
     assertEqual("".split(",").count, 1)
     assertEqual("".split(",", omittingEmpty: true).count, 0)
-    assertParts("a::b".split("::"), ["a", "b"])
+    assertEqual("a::b".split("::"), ["a", "b"])
 }
 
 @test
 fn splittingAtMostSoManyTimes() {
-    assertParts("k=v=w".split('=', maxSplits: 1), ["k", "v=w"])
-    assertParts("k=v=w".split('=', maxSplits: 0), ["k=v=w"])
-    assertParts("==k=v".split('=', maxSplits: 1, omittingEmpty: true), ["k", "v"])
+    assertEqual("k=v=w".split('=', maxSplits: 1), ["k", "v=w"])
+    assertEqual("k=v=w".split('=', maxSplits: 0), ["k=v=w"])
+    assertEqual("==k=v".split('=', maxSplits: 1, omittingEmpty: true), ["k", "v"])
 }
 
 @test
 fn splittingWhereATestAccepts() {
-    assertParts("a1b22c".split(where: { c in c.isDigit }), ["a", "b", "", "c"])
-    assertParts("a1b22c".split(omittingEmpty: true, where: { c in c.isDigit }), ["a", "b", "c"])
-    assertParts("a1b22c".split(maxSplits: 1, where: { c in c.isDigit }), ["a", "b22c"])
+    assertEqual("a1b22c".split(where: { c in c.isDigit }), ["a", "b", "", "c"])
+    assertEqual("a1b22c".split(omittingEmpty: true, where: { c in c.isDigit }), ["a", "b", "c"])
+    assertEqual("a1b22c".split(maxSplits: 1, where: { c in c.isDigit }), ["a", "b22c"])
 }
 
 @test
 fn splittingAtWhiteSpace() {
-    assertParts("  the\tquick\u{3000}brown \n fox ".splitWhitespace(), ["the", "quick", "brown", "fox"])
+    assertEqual("  the\tquick\u{3000}brown \n fox ".splitWhitespace(), ["the", "quick", "brown", "fox"])
     assertEqual("   ".splitWhitespace().count, 0)
 }
 
@@ -159,11 +155,11 @@ fn splittingOnce() {
 
 @test
 fn linesDropTheirEndings() {
-    assertParts("one\r\ntwo\n\nthree\n".lines(), ["one", "two", "", "three"])
-    assertParts("one".lines(), ["one"])
-    assertParts("\n".lines(), [""])
+    assertEqual("one\r\ntwo\n\nthree\n".lines(), ["one", "two", "", "three"])
+    assertEqual("one".lines(), ["one"])
+    assertEqual("\n".lines(), [""])
     assertEqual("".lines().count, 0)
-    assertParts("a\r".lines(), ["a"])
+    assertEqual("a\r".lines(), ["a"])
 }
 
 @test

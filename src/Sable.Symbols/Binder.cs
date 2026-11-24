@@ -640,25 +640,39 @@ public sealed partial class Binder {
     /// <remarks>
     ///     A class or actor is a reference, so self is always writable through.
     ///     A struct is a value, so only a <c>mutating</c> member — or an
-    ///     initialiser, which is building it — may change it.
+    ///     initialiser, which is building it — may change it. A closure inside
+    ///     a <c>mutating</c> member may change it too, as Swift's may, when the
+    ///     closure does not escape: it runs during the member's call, if at
+    ///     all, and reaches the same self (one that may escape is refused by
+    ///     <see cref="EscapeChecker" />).
     /// </remarks>
     bool SelfIsMutable(NamedTypeSymbol type) {
         if (type.IsReferenceType) {
             return true;
         }
 
+        var throughClosure = false;
         for (var symbol = _containingSymbol; symbol is not null; symbol = symbol.ContainingSymbol) {
             if (symbol is not FunctionSymbol function) {
                 continue;
             }
 
+            if (IsClosureSymbol(function)) {
+                throughClosure = true;
+                continue;
+            }
+
             return function.IsMutating
-                || function.FunctionKind
+                || !throughClosure && function.FunctionKind
                     is FunctionKind.Initializer or FunctionKind.Deinitializer;
         }
 
         return false;
     }
+
+    /// <summary>A closure's own symbol: it has no name, as a local function has.</summary>
+    internal static bool IsClosureSymbol(FunctionSymbol function) =>
+        function.Name.Length == 0 && function.FunctionKind == FunctionKind.Ordinary && function.ContainingSymbol is FunctionSymbol;
 
     /// <summary>What <c>self</c> is in a member of the type: the type, or the array an array extension extends.</summary>
     /// <summary>
@@ -9374,6 +9388,31 @@ public sealed partial class Binder {
                     && _conversions.HasImplicitConversion(right, rightParameter, rightLiteral)
                     && (_compilation.GetDerivation(function) is not { } derivation || Conversions.Satisfies(named, derivation.Protocol))) {
                     return new UserOperator(function, leftParameter, rightParameter, members);
+                }
+            }
+        }
+
+        // An operator an array extension declares: 'xs < ys' on two arrays
+        // of Comparable elements, in lexicographic order. ('==' on two
+        // arrays is compared where it is written, element by element.)
+        if (symbol != "==") {
+            foreach (var owner in new[] { left, right }) {
+                if (owner is not ArrayTypeSymbol array || _compilation.LookupArrayMember(array, symbol, _conversions.Equivalence) is not { Owner: not null } found) {
+                    continue;
+                }
+
+                foreach (var function in found.Members.OfType<FunctionSymbol>()) {
+                    if (function is not { FunctionKind: FunctionKind.Operator, Fixity: OperatorFixity.Infix, Parameters.Length: 2 }) {
+                        continue;
+                    }
+
+                    var first = found.Substitution.Apply(function.Parameters[0].Type);
+                    var second = found.Substitution.Apply(function.Parameters[1].Type);
+                    var (leftParameter, rightParameter) = swapped ? (second, first) : (first, second);
+                    if (_conversions.HasImplicitConversion(left, leftParameter, leftLiteral)
+                        && _conversions.HasImplicitConversion(right, rightParameter, rightLiteral)) {
+                        return new UserOperator(function, leftParameter, rightParameter, found.Substitution);
+                    }
                 }
             }
         }

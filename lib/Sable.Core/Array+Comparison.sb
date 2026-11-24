@@ -1,0 +1,75 @@
+module Sable.Core
+
+// Arrays compare as what they hold does, as Swift's do: every kind of array,
+// and a slice, is Equatable when its elements are, Hashable when they are,
+// and Comparable — in lexicographic order — when they are. So an array is
+// a dictionary's key, a set's element, and what 'assertEqual' compares.
+
+extension<Element: Equatable> Element[:]: Equatable {
+    /// Whether the two hold equal elements in the same order: as long as
+    /// each other, and equal element by element.
+    ///
+    /// ```sable
+    /// let words: String[>..] = ["a", "b"]
+    /// assert(words == ["a", "b"])
+    /// assert(words[0..<1] != words[1...])
+    /// ```
+    public operator == (lhs: Element[:], rhs: Element[:]) -> Bool {
+        if lhs.count != rhs.count {
+            return false
+        }
+        var i = 0
+        while i < lhs.count {
+            if !(lhs[i] == rhs[i]) {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+}
+
+extension<Element: Hashable> Element[:]: Hashable {
+    /// Feeds the count and then each element to the hasher, so arrays
+    /// equal by '==' hash equal, and `[[1], []]` hashes apart from
+    /// `[[], [1]]`.
+    ///
+    /// ```sable
+    /// let a: Int[>..] = [1, 2]
+    /// let b: Int[] = [1, 2]
+    /// assert(a.hashValue == b.hashValue)
+    /// ```
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(self.count)
+        for element in self {
+            element.hash(into: &hasher)
+        }
+    }
+}
+
+extension<Element: Comparable> Element[:]: Comparable {
+    /// Whether the left comes first in lexicographic order: at the first
+    /// index where the two differ, the left's element is the smaller; or,
+    /// equal as far as the shorter goes, the left is the shorter.
+    ///
+    /// ```sable
+    /// let xs: Int[>..] = [1, 2]
+    /// assert(xs < [1, 3])
+    /// assert(xs < [1, 2, 0])
+    /// assert(!(xs < xs))
+    /// ```
+    public operator < (lhs: Element[:], rhs: Element[:]) -> Bool {
+        let shorter = lhs.count < rhs.count ? lhs.count : rhs.count
+        var i = 0
+        while i < shorter {
+            if lhs[i] < rhs[i] {
+                return true
+            }
+            if rhs[i] < lhs[i] {
+                return false
+            }
+            i += 1
+        }
+        return lhs.count < rhs.count
+    }
+}

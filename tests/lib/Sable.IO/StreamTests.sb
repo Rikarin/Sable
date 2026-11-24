@@ -43,10 +43,6 @@ fn trickle(_ bytes: U8[>..], seed: U64) -> Trickle {
     return Trickle { bytes: bytes, position: 0, walk: Walk { state: seed } }
 }
 
-fn shown(_ bytes: U8[:]) -> String {
-    return "\(bytes.toArray())"
-}
-
 @test
 fn bufferedLinesAgreeWithSplittingTheText() throws {
     var walk = Walk { state: 0x9E3779B97F4A7C15 }
@@ -81,7 +77,7 @@ fn bufferedLinesAgreeWithSplittingTheText() throws {
         while let line = try reader.readLine() {
             got.append(line)
         }
-        assertEqual(got.joined(separator: "|"), expected.joined(separator: "|"))
+        assertEqual(got, expected)
         round += 1
     }
 }
@@ -102,17 +98,17 @@ fn bufferedReadsAndRunsGiveEveryByteInOrder() throws {
         }
         got.append(contentsOf: chunk)
     }
-    assertEqual(shown(got), shown(bytes))
+    assertEqual(got, bytes)
 
     var runs = BufferedReader(MemoryStream([1, 0, 2, 3, 0, 4]), capacity: 2)
-    assertEqual(shown(try runs.readUntil(0)), "[1, 0]")
-    assertEqual(shown(try runs.readUntil(0)), "[2, 3, 0]")
-    assertEqual(shown(try runs.readUntil(0)), "[4]")
+    assertEqual(try runs.readUntil(0), [1, 0])
+    assertEqual(try runs.readUntil(0), [2, 3, 0])
+    assertEqual(try runs.readUntil(0), [4])
     assert(try runs.readUntil(0).isEmpty)
     assert(try runs.readLine() == none)
 
     var whole = trickle(bytes, seed: 11)
-    assertEqual(shown(try whole.readToEnd()), shown(bytes))
+    assertEqual(try whole.readToEnd(), bytes)
     var exact = trickle(bytes, seed: 13)
     assertEqual(try exact.readExactly(1000).count, 1000)
     do {
@@ -147,27 +143,27 @@ fn aBufferedWriterWritesEverythingInOrder() throws {
         i += 1
     }
     try writer.flush()
-    assertEqual(shown(writer.inner.bytes), shown(expected))
+    assertEqual(writer.inner.bytes, expected)
 }
 
 @test
 fn aMemoryStreamReadsWritesAndSeeks() throws {
     var stream = MemoryStream([1, 2, 3])
-    assertEqual(shown(try stream.read(upTo: 2)), "[1, 2]")
+    assertEqual(try stream.read(upTo: 2), [1, 2])
     try stream.write([9, 9])
-    assertEqual(shown(stream.bytes), "[1, 2, 9, 9]")
+    assertEqual(stream.bytes, [1, 2, 9, 9])
     try stream.seek(6, from: .Start)
     try stream.write([7])
-    assertEqual(shown(stream.bytes), "[1, 2, 9, 9, 0, 0, 7]")
+    assertEqual(stream.bytes, [1, 2, 9, 9, 0, 0, 7])
     assertEqual(try stream.seek(-1, from: .End), 6)
     assertEqual(try stream.seek(-6, from: .Current), 0)
     do {
         try stream.seek(-1, from: .Start)
         fail("seeked before the start")
-    } catch IoError.InvalidInput(_) { }
+    } catch IoError .InvalidInput(_) { }
     assert(try stream.read(upTo: 0).isEmpty)
     try stream.flush()
-    assertEqual(shown(try stream.readExactly(3)), "[1, 2, 9]")
+    assertEqual(try stream.readExactly(3), [1, 2, 9])
     do {
         let _ = try stream.readExactly(10)
         fail("read past the end")
@@ -176,7 +172,7 @@ fn aMemoryStreamReadsWritesAndSeeks() throws {
     var source = MemoryStream([5, 6, 7])
     var target = MemoryStream()
     assertEqual(try copy(from: &source, to: &target), 3)
-    assertEqual(shown(target.bytes), "[5, 6, 7]")
+    assertEqual(target.bytes, [5, 6, 7])
 }
 
 @test
@@ -199,7 +195,7 @@ fn textRoundTripsThroughEveryEncoding() throws {
 
     var latin = TextWriter(MemoryStream(), encoding: .Latin1)
     try latin.write("café 😀")
-    assertEqual(shown(latin.inner.bytes), "[99, 97, 102, 233, 32, 63]")
+    assertEqual(latin.inner.bytes, [99, 97, 102, 233, 32, 63])
     var back = TextReader(MemoryStream(latin.inner.bytes), encoding: .Latin1)
     assertEqual(try back.readToEnd(), "café ?")
 

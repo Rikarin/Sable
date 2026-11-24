@@ -75,18 +75,4 @@ extension U8[>..] {
     /// ```
     @builtin("array_append_utf8")
     public mutating fn append(utf8 text: String, from start: Int, to end: Int)
-
-    /// So many copies of the byte added at the end at once, as memset
-    /// writes them, rather than one at a time: room made to be written in
-    /// place by index, which an encoder whose output length is known does
-    /// faster than appending. A negative count traps.
-    ///
-    /// ```sable
-    /// var bytes: U8[>..] = [0x41]
-    /// bytes.append(repeating: 0, count: 3)
-    /// bytes[2] = 0x42
-    /// assert(bytes == [0x41, 0, 0x42, 0])
-    /// ```
-    @builtin("array_append_repeating")
-    public mutating fn append(repeating byte: U8, count: Int)
 }

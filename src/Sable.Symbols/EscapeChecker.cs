@@ -67,8 +67,17 @@ internal static class EscapeChecker {
         public void Visit(BoundNode node) {
             switch (node) {
                 case BoundCall call:
+                    // A mutating method called on self, or on a part of it.
+                    if (call.Function.IsMutating && (call.Receiver is null ? IsInstanceMemberOfSelf(call.Function) : ChangesSelf(call.Receiver))) {
+                        SelfChanged(call);
+                    }
+
                     for (var i = 0; i < call.Arguments.Length && i < call.Function.Parameters.Length; i++) {
                         var parameter = call.Function.Parameters[i];
+                        if (parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out) {
+                            SelfWritten(call.Arguments[i]);
+                        }
+
                         if (parameter.IsVariadic || parameter.IsEscaping || parameter.Type is not FunctionTypeSymbol || parameter.DeclaringSyntax.IsEmpty) {
                             continue;
                         }
@@ -85,8 +94,19 @@ internal static class EscapeChecker {
 
                     break;
 
-                case BoundIndirectCall { Callee: var callee }:
+                case BoundIndirectCall { Callee: var callee } indirect:
                     _allowed.Add(Unwrapped(callee));
+                    for (var i = 0; i < indirect.Arguments.Length; i++) {
+                        if (callee.Type is FunctionTypeSymbol called && called.IsInOut(i)) {
+                            SelfWritten(indirect.Arguments[i]);
+                        }
+                    }
+
+                    break;
+
+                // A lazy property's first read stores it.
+                case BoundFieldAccess { Field.IsLazy: true } lazy when ChangesSelf(lazy):
+                    SelfChanged(lazy);
                     break;
 
                 case BoundLocalDeclaration { Local: { IsMutable: false, IsAsyncLet: false }, Initializer: { } initializer } declaration
@@ -114,6 +134,14 @@ internal static class EscapeChecker {
                 case BoundParameterAccess or BoundLocalAccess when NonEscaping((BoundExpression)node) is { } symbol:
                     Use((BoundExpression)node, symbol);
                     break;
+
+                // A mutating member's self, changed from a closure inside it:
+                // only one that does not escape, which runs during the call
+                // if it runs at all, reaches the caller's value.
+                case BoundAssignment { Target: var target } when ChangesSelf(target):
+                    SelfChanged(target);
+                    break;
+
             }
 
             foreach (var child in node.Children) {
@@ -123,6 +151,10 @@ internal static class EscapeChecker {
 
         void Nested(BoundNode node, Symbol owner, bool escapes) {
             Frames.Add((owner, escapes));
+            if (owner is FunctionSymbol function && !Frames.Skip(1).Any(static f => f.Escapes)) {
+                function.IsContainedClosure = true;
+            }
+
             foreach (var child in node.Children) {
                 Visit(child);
             }
@@ -169,6 +201,72 @@ internal static class EscapeChecker {
                 + $"copy it into a local for the closure, and assign the local back to '{parameter.Name}' after if the closure changes it"
             );
         }
+
+        /// <summary>True for a place inside a value's self that a mutating member may change, inside a closure.</summary>
+        bool ChangesSelf(BoundExpression place) {
+            if (Frames.Count < 2) {
+                return false;
+            }
+
+            while (true) {
+                switch (place) {
+                    case BoundConversion conversion:
+                        place = conversion.Operand;
+                        continue;
+                    case BoundFieldAccess { Receiver: { } receiver, Field.IsStatic: false }:
+                        if (receiver.Type.IsReferenceType) {
+                            return false;
+                        }
+
+                        place = receiver;
+                        continue;
+                    case BoundTupleElementAccess { Receiver: var receiver }:
+                        place = receiver;
+                        continue;
+                    case BoundIndexAccess { Receiver: var receiver }:
+                        if (receiver.Type.IsReferenceType) {
+                            return false;
+                        }
+
+                        place = receiver;
+                        continue;
+                    case BoundSelfAccess { IsMutable: true } self:
+                        return !self.Type.IsReferenceType;
+                    default:
+                        return false;
+                }
+            }
+        }
+
+        /// <summary>An argument a call may write: 'bump(&amp;n)'.</summary>
+        void SelfWritten(BoundExpression argument) {
+            var place = argument is BoundUnaryOperator { OperatorKind: UnaryOperatorKind.AddressOf, Operand: var operand } ? operand : argument;
+            if (ChangesSelf(place)) {
+                SelfChanged(place);
+            }
+        }
+
+        /// <summary>A mutating method called with no receiver written, on the value self is.</summary>
+        bool IsInstanceMemberOfSelf(FunctionSymbol function) =>
+            Frames.Count >= 2
+            && !function.IsStatic
+            && function.ContainingSymbol is NamedTypeSymbol or ExtensionSymbol
+            && Frames[0].Owner is FunctionSymbol { IsMutating: true };
+
+        void SelfChanged(BoundNode at) {
+            if (Frames[0].Owner is FunctionSymbol { IsMutating: true } owner && !Frames.Skip(1).Any(static f => f.Escapes)) {
+                owner.SelfChangedInClosure = true;
+            } else if (_reportedSelf.Add(Frames[^1].Owner)) {
+                diagnostics.Error(
+                    ErrorCode.ERR_Escapes,
+                    at.Syntax.Span,
+                    "a closure that may outlive the call cannot change 'self': the mutating member's 'self' is the caller's value only for the "
+                    + "length of the call; pass the closure straight to a parameter that is not '@escaping', or change a copy of 'self' and assign it back"
+                );
+            }
+        }
+
+        readonly HashSet<Symbol> _reportedSelf = new(ReferenceEqualityComparer.Instance);
 
         void Use(BoundExpression access, Symbol symbol) {
             var owner = OwnerOf(symbol);

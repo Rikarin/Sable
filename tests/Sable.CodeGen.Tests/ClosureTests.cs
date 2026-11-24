@@ -388,4 +388,183 @@ public sealed class ClosureTests {
                 hooks.onValue(5)
             """
         );
+
+    /// <summary>
+    ///     A closure that does not escape, inside a mutating method, changes
+    ///     self as Swift's does: by assignment, through a mutating method of
+    ///     self or of a part of it, nested, and with the method leaving early
+    ///     or throwing — the change reaches the caller's value however the
+    ///     call ends.
+    /// </summary>
+    [Fact]
+    public void ANonEscapingClosureInAMutatingMethodChangesSelf() =>
+        Prints(
+            "10 4 xxxx\n13\n3\n7 [\"a\", \"b\"]\n5\n",
+            """
+            fn each(_ n: Int, _ body: (Int) -> Void) {
+                for i in 0..<n {
+                    body(i)
+                }
+            }
+
+            fn attempt(_ body: () throws(String) -> Void) throws(String) {
+                try body()
+            }
+
+            struct Counter {
+                var n: Int
+                var log: String[>..]
+
+                mutating fn bump(by k: Int) {
+                    n += k
+                }
+
+                mutating fn run() {
+                    each(4) { i in
+                        bump(by: i)
+                        n += 1
+                        self.log.append("x")
+                    }
+                }
+
+                mutating fn nested() -> Int {
+                    each(1) { i in
+                        each(3) { j in n += 1 }
+                    }
+                    return n
+                }
+
+                mutating fn failing() throws(String) {
+                    try attempt {
+                        n = 3
+                        throw "stop"
+                    }
+                }
+            }
+
+            struct Box<T> {
+                var items: T[>..]
+                var count: Int
+
+                mutating fn add(_ xs: T[>..]) {
+                    each(xs.count) { i in
+                        items.append(xs[i])
+                        count += 1
+                    }
+                }
+            }
+            """,
+            """
+                var c = Counter { n: 0, log: [] }
+                c.run()
+                print("\(c.n) \(c.log.count) \(c.log[0])\(c.log[1])\(c.log[2])\(c.log[3])")
+                print(c.nested())
+                do {
+                    try c.failing()
+                } catch {
+                    print(c.n)
+                }
+                var b = Box<String> { items: [], count: 5 }
+                b.add(["a", "b"])
+                print("\(b.count) \(b.items)")
+                var d = Counter { n: 0, log: [] }
+                each(5) { i in d.bump(by: 1) }
+                print(d.n)
+            """);
+
+    /// <summary>
+    ///     Through an inout argument, an element and self itself; while self
+    ///     is being walked; of a move-only self; and beside an escaping
+    ///     closure, which holds a copy of self rather than the shared one.
+    ///     Self is moved in and out, so its arrays keep their buffers.
+    /// </summary>
+    [Fact]
+    public void AClosuresChangesToSelfTakeEveryForm() =>
+        Prints(
+            "6\n[\"e\", \"two2\"]\n11 [\"z7\"]\n[\"qz7\"]\n99 [\"w\"]\ntrue\nn1! n1!\ngone 4\n",
+            """
+            fn each(_ n: Int, _ body: (Int) -> Void) {
+                for i in 0..<n { body(i) }
+            }
+            fn inc(_ x: inout Int) { x += 1 }
+
+            struct S {
+                var n: Int
+                var items: String[>..]
+
+                mutating fn viaInout() {
+                    each(3) { i in inc(&n) }
+                }
+                mutating fn viaInoutSelf() {
+                    each(3) { i in inc(&self.n) }
+                }
+                mutating fn replaceWhileWalking() {
+                    items.forEach { s in
+                        items = ["z\(n)"]
+                        n += s.count
+                    }
+                }
+                fn walk(_ f: (String) -> Void) {
+                    for s in items { f(s) }
+                }
+                mutating fn replaceInWalk() {
+                    walk { s in items = ["q\(s)"] }
+                }
+                mutating fn whole() {
+                    each(1) { i in self = S { n: 99, items: ["w"] } }
+                }
+                mutating fn element() {
+                    each(1) { i in items[0] = "e" }
+                }
+                mutating fn many() {
+                    each(1) { i in items.append("a") }
+                }
+            }
+
+            @noncopy
+            struct R {
+                var n: Int
+                deinit { print("gone \(n)") }
+                mutating fn run() { each(3) { i in n += 1 } }
+            }
+
+            struct Reader {
+                var name: String
+                mutating fn both() -> () -> String {
+                    each(1) { i in name = name + "!" }
+                    return () => name
+                }
+            }
+
+            struct Waiter {
+                var names: String[>..]
+                mutating fn go() async {
+                    each(2) { i in names.append("w\(i)") }
+                    await Task.yield()
+                    each(1) { i in names.append("end") }
+                }
+            }
+            """,
+            """
+                var s = S { n: 0, items: ["one\(1)", "two\(2)"] }
+                s.viaInout()
+                s.viaInoutSelf()
+                print(s.n)
+                s.element()
+                print(s.items)
+                s.replaceWhileWalking()
+                print("\(s.n) \(s.items)")
+                s.replaceInWalk()
+                print(s.items)
+                s.whole()
+                print("\(s.n) \(s.items)")
+                s.items.reserveCapacity(64)
+                s.many()
+                print(s.items.capacity >= 64)
+                var r = R { n: 1 }
+                r.run()
+                var reader = Reader { name: "n\(1)" }
+                let later = reader.both()
+                print("\(later()) \(reader.name)")
+            """);
 }

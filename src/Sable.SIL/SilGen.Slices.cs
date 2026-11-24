@@ -102,15 +102,18 @@ public sealed partial class SilGen {
             // call alone, as it would the array passed inout.
             // A member compiled once for every element type (#297) is given
             // the slot of the array's own slice, seen as its own.
+            // The array is made the only reference to its buffer first, once,
+            // and moved into the view and back, the buffer neither retained
+            // nor released: a write through the view changes the buffer in
+            // place with no check of its own once nothing else can share it
+            // (HoistUniqueness, 'bytes_store_unique_').
             var view = NewSlot(new SliceType(arrayType.Element));
-            borrows.Add(new DeferredStep(() =>
-                Emit(new StoreInst(WholeSlice(Emit(new LoadInst(place, LoadKind.Take))), view, StoreKind.Init))));
-            borrows.Add(new WriteBack(() => {
-                var slice = Emit(new LoadInst(view, LoadKind.Take));
-                var array = Builtin("array_of_slice", arrayType, slice);
-                Destroy(slice);
-                Emit(new StoreInst(array, place, StoreKind.Init));
+            borrows.Add(new DeferredStep(() => {
+                Emit(new BuiltinInst("array_make_unique", SilType.Unit, place));
+                Emit(new StoreInst(Builtin("slice_of_take", new SliceType(arrayType.Element), Emit(new LoadInst(place, LoadKind.Take))), view, StoreKind.Init));
             }));
+            borrows.Add(new WriteBack(() =>
+                Emit(new StoreInst(Builtin("array_of_slice_take", arrayType, Emit(new LoadInst(view, LoadKind.Take))), place, StoreKind.Init))));
             BeginAccess(place, modify: true, borrows);
             return view.Type == wanted ? view : Emit(new BuiltinInst("opaque_cast", wanted, view));
         }

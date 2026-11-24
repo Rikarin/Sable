@@ -314,9 +314,11 @@ public sealed class SliceLoweringTests {
 
     /// <summary>
     ///     A mutating member of <c>Element[:]</c> called on an array is given
-    ///     the array viewed whole, in a slot of its own, and the array is put
-    ///     back from it after the call with <c>array_of_slice</c>: the buffer
-    ///     itself, changed in place, with nothing copied.
+    ///     the array, made the only reference to its buffer, moved into a
+    ///     view of the whole of it in a slot of its own (<c>slice_of_take</c>),
+    ///     and the array is moved back after the call
+    ///     (<c>array_of_slice_take</c>): the buffer itself, changed in place,
+    ///     neither retained nor released, with nothing copied.
     /// </summary>
     [Fact]
     public void AMutatingSliceMemberViewsTheArrayAndPutsItBack() {
@@ -342,12 +344,66 @@ public sealed class SliceLoweringTests {
             """
         );
 
-        var text = SilPrinter.Print(module);
-        Assert.Contains("builtin \"array_of_slice\"", text, StringComparison.Ordinal);
+        var text = SilPrinter.Print(module.Functions.Single(static f => f.Name == "M.swapped"));
+        Assert.Contains("builtin \"array_make_unique\"", text, StringComparison.Ordinal);
+        Assert.Contains("builtin \"slice_of_take\"", text, StringComparison.Ordinal);
+        Assert.Contains("builtin \"array_of_slice_take\"", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("builtin \"array_of_slice\"", text, StringComparison.Ordinal);
 
         var interpreter = new SilInterpreter(module);
         Assert.Equal(301L, interpreter.Run("M.swapped"));
         Assert.Equal(1, interpreter.Allocations);
+        Assert.Equal(0, interpreter.LiveObjects);
+    }
+
+    /// <summary>
+    ///     The member inlined, a write through the view of an array made
+    ///     unique and moved into it stores in place, with no check of its own
+    ///     (<c>bytes_store_unique_</c>, <c>array_set_unique</c>); a view that
+    ///     is copied, which shares the buffer, keeps its checks.
+    /// </summary>
+    [Fact]
+    public void WritesThroughAnInlinedViewOfAUniqueArrayStoreInPlace() {
+        var compilation = Compilation.Create(
+            """
+            module M
+
+            fn put(_ bytes: inout U8[>..], _ value: U64) {
+                bytes.writeU64(value, at: 0, endian: .Little)
+                bytes.swapAt(0, 1)
+            }
+
+            fn kept(_ bytes: inout U8[>..]) -> U8[:] {
+                return bytes.keep()
+            }
+
+            extension U8[:] {
+                mutating fn keep() -> U8[:] {
+                    self[0] = 7
+                    return self
+                }
+            }
+
+            fn wrote() -> Int {
+                var bytes: U8[>..] = [1, 2, 3, 4, 5, 6, 7, 8]
+                let before = bytes
+                put(&bytes, 0x0102)
+                let view = kept(&bytes)
+                return Int(bytes[0]) * 1000 + Int(bytes[1]) * 100 + Int(before[0]) * 10 + Int(view[0])
+            }
+            """
+        );
+        var (module, diagnostics) = SilGen.Lower(compilation);
+        Assert.True(diagnostics.Count == 0, string.Join("\n", diagnostics.Select(static d => $"{d.Id}: {d.Message}")));
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        Assert.Empty(SilVerifier.Verify(module));
+
+        var put = SilPrinter.Print(module.Functions.Single(static f => f.Name == "M.put"));
+        Assert.Contains("builtin \"bytes_store_unique_U64\"", put, StringComparison.Ordinal);
+        Assert.DoesNotContain("builtin \"bytes_store_U64\"", put, StringComparison.Ordinal);
+
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(7217L, interpreter.Run("M.wrote"));
         Assert.Equal(0, interpreter.LiveObjects);
     }
 }

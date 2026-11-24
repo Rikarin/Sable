@@ -47,7 +47,7 @@ public sealed class ArrayExtensionTests {
 
         // 'append(element:)' is the builtin; 'append(contentsOf:)' is Sable over it.
         Assert.Equal("array_count", members.OfType<FieldSymbol>().Single(m => m.Name == "count").Builtin);
-        Assert.Equal([null, "array_append"], members.Where(m => m.Name == "append").Select(static m => ((FunctionSymbol)m).Builtin).Order());
+        Assert.Equal([null, "array_append", "array_append_repeating"], members.Where(m => m.Name == "append").Select(static m => ((FunctionSymbol)m).Builtin).Order());
         Assert.Null(Assert.IsType<FunctionSymbol>(members.Single(m => m.Name == "contains")).Builtin);
     }
 
@@ -71,7 +71,7 @@ public sealed class ArrayExtensionTests {
         Assert.Equal(everyArray, Names(ArrayKind.Fixed));
         Assert.Equal(Names(ArrayKind.Grow), Names(ArrayKind.GrowShrink));
         Assert.Equal(
-            ["append", "append", "capacity", "clear", "init", "removeAll", "removeLast", "removeLast", "reserveCapacity", "truncate"],
+            ["append", "append", "append", "capacity", "clear", "init", "init", "removeAll", "removeLast", "removeLast", "reserveCapacity", "truncate"],
             Names(ArrayKind.Grow).Where(n => !everyArray.Contains(n))
         );
         foreach (var name in (string[])["append", "clear", "removeLast"]) {

@@ -101,11 +101,7 @@ fn appendChunk(_ value: U64, _ width: Int, _ radix: Int, _ uppercase: Bool, _ bu
         }
     }
     let start = buffer.count
-    var i = 0
-    while i < count {
-        buffer.append(48)
-        i = i + 1
-    }
+    buffer.append(repeating: 48, count: count)
     var rest = value
     var at = start + count - 1
     while rest != 0 {

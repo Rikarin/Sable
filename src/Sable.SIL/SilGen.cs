@@ -3374,13 +3374,25 @@ public sealed partial class SilGen {
                     Add(access.Parameter, access.Parameter.Type, access.Parameter.Modifier == ParameterModifier.InOut, null);
                     break;
 
+                // A mutating member's self, which some closure changes, is
+                // shared in a box with those that cannot outlive the call;
+                // any other closure, which only reads it, holds a copy.
                 case BoundSelfAccess self:
-                    Add(SelfKey, self.Type, false, null);
+                    Add(SelfKey, self.Type, symbol.IsContainedClosure && self is { IsMutable: true, Type.IsReferenceType: false } && OutermostFunction(symbol) is { SelfChangedInClosure: true }, null);
                     break;
             }
         }
 
         return captures;
+    }
+
+    /// <summary>The function a closure or local function is written in, through any around it.</summary>
+    static FunctionSymbol OutermostFunction(FunctionSymbol function) {
+        while (function.ContainingSymbol is FunctionSymbol outer) {
+            function = outer;
+        }
+
+        return function;
     }
 
     /// <summary>
@@ -3655,8 +3667,9 @@ public sealed partial class SilGen {
             return requirement;
         }
 
+        // An operator is static wherever it is written; a requirement's says nothing.
         var own = _compilation.ArrayMembersNamed(array, requirement.Name).OfType<FunctionSymbol>()
-            .FirstOrDefault(f => f.IsStatic == requirement.IsStatic && SameLabels(f, requirement));
+            .FirstOrDefault(f => (f.IsStatic == requirement.IsStatic || requirement.FunctionKind == FunctionKind.Operator) && SameLabels(f, requirement));
         if (own is not null) {
             return own;
         }
@@ -4430,6 +4443,24 @@ public sealed partial class SilGen {
                 }
 
                 UnpackIndirectCaptures();
+
+                // A mutating member's self, shared in a box: the closure
+                // reads and changes it there, holding the box for its call.
+                if (_context is not null && closure.Captures.TryGetValue(SelfKey, out var capturedSelf) && capturedSelf.Boxed) {
+                    _selfBox = Emit(new LoadInst(Emit(new RefElementAddrInst(_context, capturedSelf.Field))));
+                    _selfAddress = Emit(new RefElementAddrInst(_selfBox, 0));
+                }
+            } else if (symbol.SelfChangedInClosure && _selfAddress is { Type: AddressType { Pointee: var boxedSelf } } selfAddress) {
+                // A closure inside changes self: for the call, self is a box
+                // the closures share, moved in now and back out to the
+                // caller's storage at every exit: moved, not copied, so that
+                // what it holds has no second reference a change would have
+                // to copy for, and a move-only self may be.
+                var box = Emit(new AllocRefInst(generator.BoxType(boxedSelf)));
+                Emit(new StoreInst(Emit(new LoadInst(selfAddress, boxedSelf.IsTrivial ? null : LoadKind.Take)), Emit(new RefElementAddrInst(box, 0)), StoreKind.Assign));
+                _selfBox = box;
+                _selfOriginal = selfAddress;
+                _selfAddress = Emit(new RefElementAddrInst(box, 0));
             }
 
             // A struct's initialiser builds 'self' in a slot of its own, field
@@ -4741,7 +4772,26 @@ public sealed partial class SilGen {
                 Emit(new StoreInst(Emit(new LoadInst(Emit(new RefElementAddrInst(box, 0)))), original, StoreKind.Assign));
                 Emit(new DestroyValueInst(box));
             }
+
+            if (_selfBox is { } selfBox) {
+                if (_selfOriginal is { } original) {
+                    var trivial = ((AddressType)original.Type).Pointee.IsTrivial;
+                    Emit(new StoreInst(Emit(new LoadInst(Emit(new RefElementAddrInst(selfBox, 0)), trivial ? null : LoadKind.Take)), original, trivial ? StoreKind.Assign : StoreKind.Init));
+                }
+
+                Emit(new DestroyValueInst(selfBox));
+            }
         }
+
+        /// <summary>
+        ///     The box a mutating member's self lives in for the call, when a
+        ///     closure inside changes it — the member's own, or, in such a
+        ///     closure, the one its context holds — and the caller's value it
+        ///     is written back to, in the member.
+        /// </summary>
+        SilValue? _selfBox;
+
+        SilValue? _selfOriginal;
 
         void DestroyOwnedParameters() {
             for (var i = 0; i < _entry.Arguments.Count; i++) {
@@ -7747,6 +7797,12 @@ public sealed partial class SilGen {
                 return loaded;
             }
 
+            // A field of a self shared in a box: that field alone, as a call
+            // with another field of it inout may be in progress.
+            if (_selfBox is not null && SelfPart(access) && Place(access) is { } shared) {
+                return ReadField(shared);
+            }
+
             // A field of something in memory, read without copying the whole of it.
             if (!IsTrivialType(receiver.Type) && !IsBorrowable(access) && Place(access) is { } place) {
                 return ReadField(place);
@@ -7778,6 +7834,11 @@ public sealed partial class SilGen {
                 ? Missing(access, $"the member '{field.Name}'")
                 : Emit(new StructExtractInst(value, fieldIndex));
         }
+
+        /// <summary>A stored field of self's value, or of one inside it.</summary>
+        static bool SelfPart(BoundFieldAccess access) =>
+            access.Receiver is BoundSelfAccess { Type.IsReferenceType: false }
+            || access.Receiver is BoundFieldAccess { Type.IsReferenceType: false, Field: { IsComputed: false, IsStatic: false } } outer && SelfPart(outer);
 
         /// <summary>
         ///     The address of a local, of <c>self</c> in memory, or of a field or
@@ -8371,9 +8432,10 @@ public sealed partial class SilGen {
         ///     the operand turned out to be; the operator itself otherwise.
         /// </summary>
         FunctionSymbol? OperatorWitness(FunctionSymbol method, TypeSymbol operand) =>
-            OwnerOf(method) is { TypeKind: TypeKind.Protocol } && Nominal(Sub(operand)) is { } concrete
-                ? Implementation(concrete, method)
-                : method;
+            OwnerOf(method) is not { TypeKind: TypeKind.Protocol } ? method
+            : Sub(operand) is ArrayTypeSymbol array ? generator.ArrayImplementation(array, method)
+            : Nominal(Sub(operand)) is { } concrete ? Implementation(concrete, method)
+            : method;
 
         /// <summary>
         ///     The named type whose members a type has: itself, or for
@@ -8449,6 +8511,19 @@ public sealed partial class SilGen {
             if (OwnerOf(callee) is { IsGenericDefinition: true } definition && !(owner is NamedTypeSymbol mine && mine.OriginalDefinition.Equals(definition))
                 && Sub(second.Type) is NamedTypeSymbol theirs && theirs.OriginalDefinition.Equals(definition)) {
                 owner = theirs;
+            }
+
+            // An array extension's operator: its element is the operands',
+            // which it takes as slices of them, whatever kind they are.
+            if (OwnerOf(callee) is { ExtendedArray: not null } carrier) {
+                var view = Compilation.MatchArray(carrier, owner) ?? TypeSubstitution.Empty;
+                BoundExpression Viewed(BoundExpression operand, int i) =>
+                    view.Apply(callee.Parameters[i].Type) is ArrayTypeSymbol { ArrayKind: ArrayKind.Slice } slice && Sub(operand.Type) is ArrayTypeSymbol { ArrayKind: not ArrayKind.Slice }
+                        ? new BoundConversion(operand.Syntax, slice, operand, ConversionKind.Identity)
+                        : operand;
+                var arrayCall = new BoundCall(binary.Syntax, null, callee, [Viewed(first, 0), Viewed(second, 1)], resultType) { Substitution = view };
+                return Expression(arrayCall) is not { } compared ? null
+                    : negate ? Emit(new BuiltinInst("not_Bool", SilType.Bool, compared)) : compared;
             }
 
             var call = new BoundCall(binary.Syntax, null, callee, [first, second], resultType) {
@@ -11421,6 +11496,9 @@ public sealed partial class SilGen {
 
                 case FunctionSymbol local:
                     return LocalFunctionValue(local, at);
+
+                case SelfKey when capture.Boxed:
+                    return _selfBox is { } selfBox ? Emit(new CopyValueInst(selfBox)) : Missing(at, "capturing 'self' to change");
 
                 case SelfKey:
                     return _selfValue is { } self ? Owned(self)

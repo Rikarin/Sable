@@ -20,10 +20,6 @@ struct Walk {
     }
 }
 
-fn shown(_ bytes: U8[:]) -> String {
-    return "\(bytes.toArray())"
-}
-
 fn nothing(_ result: ReadResult?) -> Bool {
     if let _ = result {
         return false
@@ -37,25 +33,25 @@ fn aByteSequenceReadsAcrossItsSegments() {
     assertEqual(bytes.count, 6)
     assert(!bytes.isEmpty)
     assertEqual(bytes.segmentCount, 3)
-    assertEqual(shown(bytes.segment(1)), "[3, 4, 5]")
+    assertEqual(bytes.segment(1), [3, 4, 5])
     assertEqual(bytes[0], 1)
     assertEqual(bytes[5], 6)
     assertEqual(bytes.firstIndex(of: 4) ?? -1, 3)
     assertEqual(bytes.firstIndex(of: 6) ?? -1, 5)
     assert(bytes.firstIndex(of: 9) == none)
-    assertEqual(shown(bytes.toArray()), "[1, 2, 3, 4, 5, 6]")
+    assertEqual(bytes.toArray(), [1, 2, 3, 4, 5, 6])
 
     // A slice keeps its segments, cut where it starts and ends.
     let middle = bytes.slice(from: 1, count: 4)
     assertEqual(middle.count, 4)
     assertEqual(middle.segmentCount, 2)
-    assertEqual(shown(middle.segment(0)), "[2]")
-    assertEqual(shown(middle.segment(1)), "[3, 4, 5]")
+    assertEqual(middle.segment(0), [2])
+    assertEqual(middle.segment(1), [3, 4, 5])
     assertEqual(middle[1], 3)
     assertEqual(middle.firstIndex(of: 5) ?? -1, 3)
-    assertEqual(shown(middle.slice(from: 1, count: 2).toArray()), "[3, 4]")
-    assertEqual(shown(bytes.slice(from: 2, count: 1).toArray()), "[3]")
-    assertEqual(shown(bytes.slice(from: 5, count: 1).toArray()), "[6]")
+    assertEqual(middle.slice(from: 1, count: 2).toArray(), [3, 4])
+    assertEqual(bytes.slice(from: 2, count: 1).toArray(), [3])
+    assertEqual(bytes.slice(from: 5, count: 1).toArray(), [6])
     let nothingAtAll = bytes.slice(from: 6, count: 0)
     assert(nothingAtAll.isEmpty)
     assertEqual(nothingAtAll.segmentCount, 0)
@@ -64,18 +60,18 @@ fn aByteSequenceReadsAcrossItsSegments() {
 
 /// Lines read through the pipe as a parser would read them: ask, look for
 /// a newline, and if there is none say all was examined and ask again.
-fn readLines(_ reader: PipeReader) async -> String[>..] {
-    var lines: String[>..] = []
+fn readLines(_ reader: PipeReader) async -> U8[>..][>..] {
+    var lines: U8[>..][>..] = []
     while true {
         let result = await reader.read()
         if let end = result.buffer.firstIndex(of: 10) {
-            lines.append(shown(result.buffer.slice(from: 0, count: end).toArray()))
+            lines.append(result.buffer.slice(from: 0, count: end).toArray())
             await reader.advance(consumed: end + 1)
             continue
         }
         if result.isCompleted {
             if !result.buffer.isEmpty {
-                lines.append(shown(result.buffer.toArray()))
+                lines.append(result.buffer.toArray())
             }
             await reader.advance(consumed: result.buffer.count)
             await reader.complete()
@@ -92,7 +88,7 @@ fn linesWrittenInRandomPiecesAreReadWhole() async {
     while round < 20 {
         // Lines of bytes 0...9, the last maybe without its newline.
         var all: U8[>..] = []
-        var expected: String[>..] = []
+        var expected: U8[>..][>..] = []
         let count = 1 + walk.next(30)
         var i = 0
         while i < count {
@@ -101,7 +97,7 @@ fn linesWrittenInRandomPiecesAreReadWhole() async {
             while line.count < length {
                 line.append(U8.truncating(walk.next(10)))
             }
-            expected.append(shown(line))
+            expected.append(line)
             all.append(contentsOf: line)
             if i < count - 1 || walk.next(2) == 0 {
                 all.append(10)
@@ -130,7 +126,7 @@ fn linesWrittenInRandomPiecesAreReadWhole() async {
         }
         let got = await readLines(pipe.reader)
         await writing.value
-        assertEqual(got.joined(separator: "|"), expected.joined(separator: "|"))
+        assertEqual(got, expected)
         round += 1
     }
 }
@@ -194,7 +190,7 @@ fn committedBuffersAndAsyncReadsAndWrites() async {
 
     let result = (await pipe.reader.tryRead())!
     assertEqual(result.buffer.segmentCount, 3)
-    assertEqual(shown(result.buffer.toArray()), "[1, 2, 3, 4, 5, 6]")
+    assertEqual(result.buffer.toArray(), [1, 2, 3, 4, 5, 6])
     assert(!result.isCompleted && !result.isCanceled)
     // Looked at whole and consumed in part: a try waits for more.
     await pipe.reader.advance(consumed: 2, examined: 6)
@@ -203,8 +199,8 @@ fn committedBuffersAndAsyncReadsAndWrites() async {
     // As an AsyncReader and an AsyncWriter.
     do {
         try await pipe.writer.write([7])
-        assertEqual(shown(try await pipe.reader.read(upTo: 3)), "[3, 4, 5]")
-        assertEqual(shown(try await pipe.reader.read(upTo: 10)), "[6, 7]")
+        assertEqual(try await pipe.reader.read(upTo: 3), [3, 4, 5])
+        assertEqual(try await pipe.reader.read(upTo: 10), [6, 7])
         await pipe.writer.complete()
         assert(try await pipe.reader.read(upTo: 10).isEmpty)
     } catch {
@@ -244,8 +240,7 @@ fn readsAndFlushesAreCanceledAndEndsComplete() async {
     do {
         try await pipe.writer.write([1])
         fail("a write reached a completed reader")
-    } catch .Disconnected {
-    } catch {
+    } catch .Disconnected { } catch {
         fail("not Disconnected: \(error.description())")
     }
     await pipe.writer.complete()

@@ -68,7 +68,8 @@ public sealed partial class SilGen {
         }
 
         /// <summary>A storage path: a variable, then the fields and elements inside it.</summary>
-        sealed record AccessPath(Symbol Root, ImmutableArray<string> Steps, string Text) {
+        /// <remarks>A value's own self, in its mutating members and the closures inside them, is the root <see cref="SelfKey" />.</remarks>
+        sealed record AccessPath(object Root, ImmutableArray<string> Steps, string Text) {
             public bool Overlaps(AccessPath other) =>
                 ReferenceEquals(Root, other.Root)
                 && Steps.Zip(other.Steps).All(static pair => pair.First == pair.Second || pair.First == "[]" || pair.Second == "[]");
@@ -87,6 +88,9 @@ public sealed partial class SilGen {
 
                 case BoundParameterAccess parameter:
                     return new(parameter.Parameter, [], parameter.Parameter.Name);
+
+                case BoundSelfAccess { IsMutable: true, Type.IsReferenceType: false }:
+                    return new(SelfKey, [], "self");
 
                 // A field of an object reached through the same variable is the
                 // same storage; through two variables, that is the runtime's to tell.
@@ -140,7 +144,119 @@ public sealed partial class SilGen {
                 }
             }
 
-            static Symbol? Root(BoundExpression target) => PathOf(target)?.Root;
+            static Symbol? Root(BoundExpression target) => PathOf(target)?.Root as Symbol;
+
+            Visit(closure.Body);
+            return found;
+        }
+
+        /// <summary>
+        ///     What a closure inside a mutating member reads and changes of the
+        ///     member's self, each as the path it names: a closure that changes
+        ///     'count' may run while 'items' changes, as in Swift.
+        /// </summary>
+        static List<(AccessPath Path, bool Modify)> SelfAccesses(BoundClosure closure) {
+            var found = new List<(AccessPath, bool)>();
+
+            void Place(BoundExpression place, bool modify) {
+                if (PathOf(place) is { } path) {
+                    if (path.Root is string) {
+                        found.Add((path, modify));
+                    }
+
+                    Indices(place);
+                    return;
+                }
+
+                switch (place) {
+                    case BoundUnaryOperator { OperatorKind: UnaryOperatorKind.AddressOf, Operand: var operand }:
+                        Place(operand, modify);
+                        break;
+                    case BoundConversion conversion:
+                        Place(conversion.Operand, modify);
+                        break;
+                    case BoundFieldAccess { Receiver: { } receiver }:
+                        Place(receiver, modify && !receiver.Type.IsReferenceType);
+                        break;
+                    case BoundTupleElementAccess tuple:
+                        Place(tuple.Receiver, modify);
+                        break;
+                    case BoundIndexAccess index:
+                        Place(index.Receiver, modify && !index.Receiver.Type.IsReferenceType);
+                        foreach (var at in index.Indices) {
+                            Visit(at);
+                        }
+
+                        break;
+                    // A self that cannot change, or a static field: no place of self's.
+                    case BoundSelfAccess or BoundFieldAccess:
+                        break;
+                    default:
+                        Visit(place);
+                        break;
+                }
+            }
+
+            // What the subscripts along a path read: 'items[count]'.
+            void Indices(BoundExpression place) {
+                switch (place) {
+                    case BoundConversion conversion:
+                        Indices(conversion.Operand);
+                        break;
+                    case BoundUnaryOperator unary:
+                        Indices(unary.Operand);
+                        break;
+                    case BoundFieldAccess { Receiver: { } receiver }:
+                        Indices(receiver);
+                        break;
+                    case BoundIndexAccess index:
+                        Indices(index.Receiver);
+                        foreach (var at in index.Indices) {
+                            Visit(at);
+                        }
+
+                        break;
+                }
+            }
+
+            void Visit(BoundNode node) {
+                switch (node) {
+                    case BoundAssignment assignment:
+                        Place(assignment.Target, true);
+                        Visit(assignment.Value);
+                        return;
+
+                    case BoundCall call:
+                        if (call.Receiver is { } receiver) {
+                            Place(receiver, call.Function.IsMutating);
+                        } else if (call.Function is { IsStatic: false, FunctionKind: FunctionKind.Ordinary, ContainingSymbol: NamedTypeSymbol or ExtensionSymbol }) {
+                            found.Add((new AccessPath(SelfKey, [], "self"), call.Function.IsMutating));
+                        }
+
+                        for (var i = 0; i < call.Arguments.Length; i++) {
+                            Place(call.Arguments[i], i < call.Function.Parameters.Length
+                                && call.Function.Parameters[i].Modifier is ParameterModifier.InOut or ParameterModifier.Out);
+                        }
+
+                        return;
+
+                    case BoundIndirectCall indirect:
+                        Visit(indirect.Callee);
+                        for (var i = 0; i < indirect.Arguments.Length; i++) {
+                            Place(indirect.Arguments[i], indirect.Callee.Type is FunctionTypeSymbol type && type.IsInOut(i));
+                        }
+
+                        return;
+
+                    case BoundSelfAccess or BoundFieldAccess or BoundIndexAccess or BoundTupleElementAccess:
+                        Place((BoundExpression)node, node is BoundFieldAccess { Field.IsLazy: true });
+                        return;
+                }
+
+                foreach (var child in node.Children) {
+                    Visit(child);
+                }
+            }
 
             Visit(closure.Body);
             return found;
@@ -151,6 +267,8 @@ public sealed partial class SilGen {
             var accesses = new List<(AccessPath Path, bool Modify, string What, bool InClosure, SyntaxNode? Syntax)>();
             if (mutatingReceiver && call.Receiver is { } receiver && PathOf(receiver) is { } self) {
                 accesses.Add((self, true, $"the call to the mutating '{callee.Name}' changes it", false, receiver.Syntax));
+            } else if (mutatingReceiver && call.Receiver is null && callee is { IsStatic: false } && _selfAddress is not null) {
+                accesses.Add((new AccessPath(SelfKey, [], "self"), true, $"the call to the mutating '{callee.Name}' changes it", false, call.Syntax));
             }
 
             for (var i = 0; i < call.Arguments.Length && i < callee.Parameters.Length; i++) {
@@ -182,6 +300,10 @@ public sealed partial class SilGen {
                         true,
                         closure.Syntax
                     ));
+                }
+
+                foreach (var (path, changes) in SelfAccesses(closure)) {
+                    accesses.Add((path, changes, $"argument {i + 1} is a closure that {(changes ? "changes" : "reads")} it", true, closure.Syntax));
                 }
             }
 

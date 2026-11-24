@@ -188,6 +188,9 @@ public sealed partial class SilGen {
                         }
 
                         break;
+                    // A self that cannot change, or a static field: no place of self's.
+                    case BoundSelfAccess or BoundFieldAccess:
+                        break;
                     default:
                         Visit(place);
                         break;

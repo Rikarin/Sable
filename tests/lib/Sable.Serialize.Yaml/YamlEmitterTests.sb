@@ -1,0 +1,387 @@
+module YamlEmitterTests
+
+import Sable.Serialize.Yaml
+import Sable.Testing
+
+fn wrapped(_ content: YamlEvent[>..]) -> YamlEvent[>..] {
+    var all: YamlEvent[>..] = [YamlEvent.streamStart(), YamlEvent.documentStart()]
+    all.append(contentsOf: content)
+    all.append(YamlEvent.documentEnd())
+    all.append(YamlEvent.streamEnd())
+    return all
+}
+
+// The text a document of the events is, which reads back as them.
+fn written(_ content: YamlEvent[>..], _ options: YamlPrintOptions = YamlPrintOptions()) throws -> String {
+    let text = try Yaml.print(events: wrapped(content), options)
+    assertEqual(text + "\n" + shape(try Yaml.events(text)), text + "\n" + shape(wrapped(content)))
+    return text
+}
+
+// What of the events a reader of the text must have again: not the styles.
+fn shape(_ events: YamlEvent[>..]) -> String {
+    var parts: String[>..] = []
+    for event in events {
+        var plain = event
+        if event.kind == .Scalar {
+            let type = event.style == .Plain && event.tag == none
+            plain.style = type && !event.value.isEmpty ? .Automatic : .DoubleQuoted
+            if event.style != .Plain || event.value.isEmpty {
+                plain.style = .DoubleQuoted
+            }
+            // A plain string and a quoted one are the same.
+            if YamlNode.string("").type == .String && event.style == .Plain && isString(event.value) {
+                plain.style = .DoubleQuoted
+            }
+        }
+        plain.collectionStyle = .Block
+        plain.isExplicit = false
+        parts.append(plain.description())
+    }
+    return parts.joined(separator: " ")
+}
+
+fn isString(_ text: String) -> Bool {
+    if let node = try? Yaml.parse(text) {
+        return node.kind != .Scalar || node.type == .String
+    }
+    return true
+}
+
+fn scalarText(_ value: String, _ style: YamlScalarStyle = .Automatic) throws -> String {
+    return try written([YamlEvent.scalar(value, style: style)])
+}
+
+fn plain(_ value: String) -> YamlEvent {
+    return YamlEvent.scalar(value, style: .Plain)
+}
+
+@test
+fn aStringIsQuotedWhenItWouldReadBackAsAnotherType() throws {
+    for text in ["", "~", "null", "Null", "NULL", "true", "True", "TRUE", "false", "False", "FALSE", "0", "-1", "+12", "007", "0o17", "0x1F", "1.", ".5", "-.5e3", "1e3", "12e03", "-2E+05", ".inf", "-.Inf", "+.INF", ".nan", ".NaN", ".NAN"] {
+        assertEqual(try scalarText(text), "\"" + text + "\"\n")
+        assertEqual(try written([YamlEvent.sequenceStart(style: .Flow), YamlEvent.scalar(text), YamlEvent.sequenceEnd()]), "[\"" + text + "\"]\n")
+        let node = try Yaml.parse(try scalarText(text))
+        assert(node.string == text, text)
+    }
+    // Those of YAML 1.1, so that its readers take them for strings too.
+    for text in ["no", "No", "on", "YES", "off", "<<", "=", "1_000", "12:30:45", "2001-01-01", "0b101", "-0b1", "0x_1", "-0xF"] {
+        assertEqual(try scalarText(text), "\"" + text + "\"\n")
+        assert((try Yaml.parse(text)).type == .String, text)
+    }
+    for text in ["a", "note", "nUll", "tRUE", "1.2.3", "1e", "0o8", "0xg", "0b2", "+", ".", "-.", ".infinity", "e3", "y", "n", "1e+", "10.0.0.1", "é", "~a", "0o", "0x", "v1", "12-30"] {
+        assertEqual(try scalarText(text), text + "\n")
+        assert((try Yaml.parse(text)).type == .String, text)
+    }
+}
+
+@test
+fn aStringIsQuotedWhenItWouldNotBePlain() throws {
+    for text in [" a", "a ", "- a", "-", "?", "? a", ":", ": a", "a: b", "a:", "a #b", "#a", "&a", "*a", "!a", "|", ">", "%a", "@a", "`a", "'a'", "[a]", "{a}", "]", "}", ",a", "---", "--- a", "...", "---a"] {
+        let quoted = try scalarText(text)
+        assertEqual(quoted, "\"" + text + "\"\n")
+    }
+    assertEqual(try scalarText("say \"hi\": 'x'"), "'say \"hi\": ''x'''\n")
+    assertEqual(try scalarText("a\\: b"), "'a\\: b'\n")
+    assertEqual(try scalarText("\"a\""), "'\"a\"'\n")
+    assertEqual(try scalarText("a\tb"), "\"a\\tb\"\n")
+    assertEqual(try scalarText("a\rb\u{0}\u{7}\u{7F}\u{85}\u{A0}\u{2028}\u{2029}\u{FEFF}\u{FFFE}\n"), "\"a\\rb\\0\\x07\\x7F\\N\\_\\L\\P\\uFEFF\\uFFFE\\n\"\n")
+    assertEqual(try scalarText("a:b#c, [d] 😀"), "a:b#c, [d] 😀\n")
+    assertEqual(try written([YamlEvent.sequenceStart(style: .Flow), YamlEvent.scalar("a, b"), YamlEvent.scalar("a:]"), YamlEvent.scalar("-,"), YamlEvent.scalar("a:b"), YamlEvent.sequenceEnd()]), "[\"a, b\", \"a:]\", \"-,\", a:b]\n")
+}
+
+@test
+fn theStylesAskedForAreKeptWhereTheyCanBe() throws {
+    assertEqual(try scalarText("a", .SingleQuoted), "'a'\n")
+    assertEqual(try scalarText("a", .DoubleQuoted), "\"a\"\n")
+    assertEqual(try scalarText("a\nb", .SingleQuoted), "\"a\\nb\"\n")
+    assertEqual(try scalarText("a\nb\n", .Literal), "|\n  a\n  b\n")
+    assertEqual(try scalarText("a\nb\n", .Folded), ">\n  a\n\n  b\n")
+    assertEqual(try scalarText("a\u{7}", .Literal), "\"a\\x07\"\n")
+    assertEqual(try scalarText("a: b", .Plain), "\"a: b\"\n")
+    assertEqual(try scalarText("true", .Plain), "true\n")
+    assertEqual(try scalarText("", .Plain), "---\n")
+    assertEqual(try written([YamlEvent.sequenceStart(style: .Flow), YamlEvent.scalar("a\nb", style: .Literal), YamlEvent.sequenceEnd()]), "[\"a\\nb\"]\n")
+    assertEqual(try scalarText("a\nb"), "|-\n  a\n  b\n")
+    assertEqual(try scalarText("a\nb", .DoubleQuoted), "\"a\\nb\"\n")
+}
+
+@test
+fn blockScalarsHoldAnyLines() throws {
+    let texts = ["a", "a\n", "a\n\n", "a\n\n\n", "\n", "\n\n", "\na", "\n\na\n", " a", " a\n", "\n a\n", "  ", " \n", "\n \n", "a\n b\nc\n", "a\n\n b\n\nc", "a\n\n\nb", "\ta\n", "a\n\tb\nc\n", "a  \n  \nb", "a\n  \n", "# a\n", "- a\n", "---\na\n", "...\n", "a\n\n\n b\n\n\nc\n\n", " \n\na", "%a\n"]
+    for text in texts {
+        for style in [YamlScalarStyle.Literal, YamlScalarStyle.Folded] {
+            let scalar = YamlEvent.scalar(text, style: style)
+            for options in [YamlPrintOptions(), YamlPrintOptions(indent: 1), YamlPrintOptions(indent: 9, indentSequences: false)] {
+                let _ = try written([scalar], options)
+                let _ = try written([YamlEvent.mappingStart(), plain("k"), scalar, plain("l"), scalar, YamlEvent.mappingEnd()], options)
+                let _ = try written([YamlEvent.sequenceStart(), scalar, YamlEvent.sequenceStart(), scalar, scalar, YamlEvent.sequenceEnd(), YamlEvent.sequenceEnd()], options)
+                let _ = try written([YamlEvent.mappingStart(), scalar, scalar, plain("s"), YamlEvent.sequenceStart(), scalar, YamlEvent.sequenceEnd(), YamlEvent.mappingEnd()], options)
+            }
+            let text = try written([scalar])
+            let style = try Yaml.events(text)[2].style
+            assert(style == scalar.style, text)
+        }
+    }
+    assertEqual(try scalarText(" a\n\n", .Literal), "|2+\n   a\n\n")
+    assertEqual(try scalarText("", .Literal), "|-\n")
+}
+
+@test
+fn blockCollections() throws {
+    let start = YamlEvent.mappingStart()
+    let end = YamlEvent.mappingEnd()
+    let list = YamlEvent.sequenceStart()
+    let listEnd = YamlEvent.sequenceEnd()
+    let a = plain("a")
+    let events: YamlEvent[>..] = [start, a, list, a, start, a, a, plain("b"), list, a, listEnd, end, list, list, a, a, listEnd, listEnd, list, listEnd, start, end, plain(""), listEnd, plain("c"), start, a, plain(""), end, plain(""), list, a, listEnd, end]
+    assertEqual(try written(events), "a:\n  - a\n  - a: a\n    b:\n      - a\n  - - - a\n      - a\n  - []\n  - {}\n  -\nc:\n  a:\n?\n:\n  - a\n".replacing("\n:\n  - a", with: "\n: - a"))
+    assertEqual(try written(events, YamlPrintOptions(indent: 4, indentSequences: false)), "a:\n- a\n- a: a\n  b:\n  - a\n- - - a\n    - a\n- []\n- {}\n-\nc:\n    a:\n?\n: - a\n")
+    assertEqual(try Yaml.print(events: wrapped(events), YamlPrintOptions(flow: true)), "{a: [a, {a: a, b: [a]}, [[a, a]], [], {}, null], c: {a:}, ? : [a]}\n")
+}
+
+@test
+fn anchorsTagsAndAliases() throws {
+    let events: YamlEvent[>..] = [
+        YamlEvent.sequenceStart(anchor: "s", tag: "tag:yaml.org,2002:seq"),
+        YamlEvent.scalar("a", anchor: "a", tag: "tag:yaml.org,2002:str"),
+        YamlEvent.aliasOf("a"),
+        YamlEvent.mappingStart(anchor: "m"),
+        YamlEvent.aliasOf("a"), YamlEvent.aliasOf("a"),
+        YamlEvent.scalar("", style: .Plain, anchor: "e"), YamlEvent.scalar("x", tag: "!l"),
+        YamlEvent.sequenceStart(anchor: "q"), plain("y"), YamlEvent.sequenceEnd(), YamlEvent.mappingStart(tag: "!m"), plain("y"), plain("z"), YamlEvent.mappingEnd(),
+        YamlEvent.mappingEnd(),
+        YamlEvent.sequenceStart(style: .Flow, anchor: "f"), YamlEvent.sequenceEnd(),
+        YamlEvent.mappingStart(style: .Flow), YamlEvent.aliasOf("a"), YamlEvent.aliasOf("a"), plain(""), plain(""), YamlEvent.sequenceStart(), plain("k"), YamlEvent.sequenceEnd(), plain("v"), YamlEvent.mappingEnd(),
+        YamlEvent.scalar("t", tag: "!"),
+        YamlEvent.scalar("t", tag: "tag:x.org,2000:a b"),
+        YamlEvent.scalar("t", style: .Literal, anchor: "lit"),
+        YamlEvent.sequenceEnd(),
+    ]
+    let text = try Yaml.print(events: wrapped(events))
+    assertEqual(text, "&s !!seq\n- &a !!str a\n- *a\n- &m\n  *a : *a\n  &e : !l x\n  ? &q\n    - y\n  : !m\n    y: z\n- &f []\n- {*a : *a, ? : , ? [k] : v}\n- ! t\n- !<tag:x.org,2000:a%20b> t\n- &lit |-\n  t\n")
+    let again = shape(try Yaml.events(text))
+    assertEqual(again, shape(wrapped(events)).replacing("a b>", with: "a%20b>"))
+    assertEqual(try written([YamlEvent.scalar("x", tag: "!a!é{")]), "!a%21%C3%A9%7B x\n")
+    assertEqual(try written([YamlEvent.scalar("x", tag: "tag:yaml.org,2002:a%")]), "!!a%25 x\n")
+    assertEqual(try written([YamlEvent.mappingStart(tag: "!x"), plain("a"), plain("b"), YamlEvent.mappingEnd()]), "!x\na: b\n")
+}
+
+@test
+fn longAndManyLinedKeysAreExplicit() throws {
+    let long = "x".repeated(129)
+    assertEqual(try written([YamlEvent.mappingStart(), plain(long), plain("a"), YamlEvent.scalar("a\nb"), plain("c"), YamlEvent.scalar("a\nb\n", style: .Literal), plain("d"), YamlEvent.mappingEnd()]), "? " + long + "\n: a\n\"a\\nb\": c\n? |\n  a\n  b\n: d\n")
+    assertEqual(try written([YamlEvent.mappingStart(style: .Flow), plain(long), plain("a"), YamlEvent.mappingEnd()]), "{? " + long + " : a}\n")
+    assertEqual(try written([YamlEvent.mappingStart(), YamlEvent.mappingStart(), plain("a"), plain("b"), YamlEvent.mappingEnd(), YamlEvent.mappingStart(), plain("c"), plain("d"), YamlEvent.mappingEnd(), YamlEvent.mappingEnd()]), "? a: b\n: c: d\n")
+}
+
+@test
+fn documentsAreKeptApart() throws {
+    let a = plain("a")
+    let start = YamlEvent.documentStart()
+    let end = YamlEvent.documentEnd()
+    let closed = YamlEvent.documentEnd(isExplicit: true)
+    let whole: YamlEvent[>..] = [YamlEvent.streamStart(), start, a, end, start, YamlEvent.sequenceStart(), a, YamlEvent.sequenceEnd(), closed, start, a, end, YamlEvent.documentStart(isExplicit: true), YamlEvent.scalar("b\n\n", style: .Literal), end, start, plain(""), end, YamlEvent.streamEnd()]
+    assertEqual(try Yaml.print(events: whole), "a\n---\n- a\n...\na\n--- |+\n  b\n\n---\n")
+    assertEqual(shape(try Yaml.events(try Yaml.print(events: whole))), shape(whole))
+    assertEqual(try written([a], YamlPrintOptions(explicitStart: true)), "--- a\n")
+    assertEqual(try written([YamlEvent.mappingStart(style: .Flow), a, a, YamlEvent.mappingEnd()], YamlPrintOptions(explicitStart: true)), "--- {a: a}\n")
+    assertEqual(try Yaml.printAll([]), "")
+    assertEqual(YamlPrintOptions(indent: 0).indent, 1)
+    assertEqual(YamlPrintOptions(indent: 10).indent, 9)
+}
+
+fn refused(_ events: YamlEvent[>..]) -> String {
+    do {
+        return try Yaml.print(events: events)
+    } catch {
+        assert(error.kind == .Structure)
+        return error.description()
+    }
+}
+
+@test
+fn eventsThatAreNoStreamAreRefused() {
+    let stream = YamlEvent.streamStart()
+    let start = YamlEvent.documentStart()
+    let a = plain("a")
+    assertEqual(refused([stream, stream]), "a stream starts inside another")
+    assertEqual(refused([YamlEvent.streamEnd()]), "the stream ends inside a document, or twice")
+    assertEqual(refused([start]), "a document starts inside another, or outside a stream")
+    assertEqual(refused([stream, start, YamlEvent.documentEnd()]), "a document ends before its value does")
+    assertEqual(refused([stream, a]), "=VAL :a outside a document's value")
+    assertEqual(refused([stream, start, a, a]), "=VAL :a outside a document's value")
+    assertEqual(refused([stream, start, YamlEvent.sequenceEnd()]), "-SEQ ends no collection")
+    assertEqual(refused([stream, start, YamlEvent.sequenceStart(), a, YamlEvent.mappingEnd()]), "-MAP ends no collection")
+    assertEqual(refused([stream, start, YamlEvent.mappingStart(), a, YamlEvent.mappingEnd()]), "a mapping ends after a key")
+    assertEqual(refused([stream, start, YamlEvent.sequenceStart(), YamlEvent.mappingEnd()]), "-MAP ends no collection")
+    assertEqual(refused([stream, start, YamlEvent.aliasOf("")]), "an anchor with no name")
+    assertEqual(refused([stream, start, YamlEvent.scalar("a", anchor: "a b")]), "'a b' is not an anchor's name")
+}
+
+@test
+fn commentsAreWritten() throws {
+    let emitter = YamlEmitter()
+    for event in [YamlEvent.streamStart(), YamlEvent.documentStart()] {
+        try emitter.emit(event)
+    }
+    try emitter.comment("top\n\n# two")
+    emitter.trailingComment("map")
+    try emitter.emit(YamlEvent.mappingStart())
+    try emitter.emit(plain("a"))
+    emitter.trailingComment("list")
+    try emitter.emit(YamlEvent.sequenceStart())
+    try emitter.comment("first")
+    emitter.trailingComment("one")
+    try emitter.emit(plain("1"))
+    try emitter.emit(YamlEvent.mappingStart())
+    try emitter.comment("in")
+    try emitter.emit(plain("x"))
+    emitter.trailingComment("# y")
+    try emitter.emit(YamlEvent.scalar("y\n", style: .Literal))
+    try emitter.emit(YamlEvent.mappingEnd())
+    emitter.trailingComment("empty")
+    try emitter.emit(YamlEvent.sequenceStart(style: .Flow))
+    try emitter.emit(YamlEvent.sequenceEnd())
+    try emitter.emit(YamlEvent.sequenceStart(style: .Flow))
+    try emitter.comment("left out")
+    emitter.trailingComment("left out")
+    try emitter.emit(plain("z"))
+    try emitter.emit(YamlEvent.sequenceEnd())
+    emitter.trailingComment("null")
+    try emitter.emit(plain(""))
+    try emitter.emit(YamlEvent.sequenceEnd())
+    try emitter.emit(YamlEvent.mappingEnd())
+    try emitter.emit(YamlEvent.documentEnd())
+    try emitter.emit(YamlEvent.streamEnd())
+    assertEqual(emitter.text(), "# top\n#\n# two\na: # list\n  # first\n  - 1 # one\n  - # in\n    x: | # y\n      y\n  - [] # empty\n  - [z]\n  - # null\n")
+    assertEqual(emitter.bytes().count, emitter.text().utf8Count)
+    let _ = try Yaml.parse(emitter.text())
+}
+
+// ---- Properties --------------------------------------------------------------
+
+struct Maker {
+    var random: SeededRandomNumberGenerator
+
+    mutating fn below(_ n: Int) -> Int {
+        return Int.random(in: 0..<n, using: &random)
+    }
+
+    mutating fn text() -> String {
+        let pieces = ["a", "b", " ", "  ", "\n", "\n\n", "\t", ":", ": ", " #", "#", "-", "- ", "?", ",", "[", "]", "{", "}", "'", "\"", "\\", "&", "*", "!", "|", ">", "%", "@", "`", "---", "...", "true", "null", "~", "1", ".5", "é", "😀", "\u{85}", "\u{A0}", "\u{2028}", "\u{FEFF}", "\u{7F}", "\u{0}", "\r", "=", "<<", "no"]
+        var all = ""
+        var n = below(5)
+        while n > 0 {
+            all = all + pieces[below(pieces.count)]
+            n -= 1
+        }
+        return all
+    }
+
+    mutating fn scalar() -> YamlEvent {
+        let styles: YamlScalarStyle[>..] = [.Automatic, .Plain, .SingleQuoted, .DoubleQuoted, .Literal, .Folded]
+        let style = styles[below(styles.count)]
+        if style == .Plain {
+            let plains = ["", "a", "1", "true", "null", "a b", "é", "-1.5", "x:y"]
+            return YamlEvent.scalar(plains[below(plains.count)], style: .Plain, anchor: anchor(), tag: tag())
+        }
+        return YamlEvent.scalar(text(), style: style, anchor: anchor(), tag: tag())
+    }
+
+    mutating fn anchor() -> String? {
+        return below(6) == 0 ? "a\(below(100))" : none
+    }
+
+    mutating fn tag() -> String? {
+        let tags = ["!", "!x", "tag:yaml.org,2002:str", "tag:e.com,2000:t", "!é!"]
+        return below(6) == 0 ? tags[below(tags.count)] : none
+    }
+
+    mutating fn style() -> YamlCollectionStyle {
+        return below(4) == 0 ? .Flow : .Block
+    }
+
+    mutating fn node(_ depth: Int, _ all: inout YamlEvent[>..]) {
+        let choice = below(depth > 4 ? 2 : 8)
+        if choice == 0 {
+            all.append(YamlEvent.aliasOf("a\(below(100))"))
+        } else if choice < 4 {
+            all.append(scalar())
+        } else if choice < 6 {
+            all.append(YamlEvent.sequenceStart(style: style(), anchor: anchor(), tag: tag()))
+            var n = below(4)
+            while n > 0 {
+                node(depth + 1, &all)
+                n -= 1
+            }
+            all.append(YamlEvent.sequenceEnd())
+        } else {
+            all.append(YamlEvent.mappingStart(style: style(), anchor: anchor(), tag: tag()))
+            var n = below(4)
+            while n > 0 {
+                node(depth + 1, &all)
+                node(depth + 1, &all)
+                n -= 1
+            }
+            all.append(YamlEvent.mappingEnd())
+        }
+    }
+}
+
+// What a reader has again of events: an empty plain scalar, where only
+// 'null' can be written, is one.
+fn same(_ written: YamlEvent[>..], _ read: YamlEvent[>..]) -> Bool {
+    if written.count != read.count {
+        return false
+    }
+    var i = 0
+    while i < written.count {
+        let a = written[i]
+        let b = read[i]
+        if a.kind != b.kind || a.anchor != b.anchor || a.tag != b.tag {
+            return false
+        }
+        if a.kind == .Scalar && a.value != b.value && !(a.value.isEmpty && b.value == "null" && a.style == .Plain && b.style == .Plain) {
+            return false
+        }
+        // What is plain, and a type by its text, stays so; what is not does too.
+        if a.kind == .Scalar && a.tag == none {
+            let typed = a.style == .Plain && !isString(a.value) || a.style == .Plain && a.value.isEmpty
+            let again = b.style == .Plain && !isString(b.value) || b.style == .Plain && b.value.isEmpty
+            if typed != again {
+                return false
+            }
+        }
+        i += 1
+    }
+    return true
+}
+
+@test
+fn anyEventsReadBackAsTheyWereWritten() throws {
+    var maker = Maker { random: SeededRandomNumberGenerator(seed: 79) }
+    var i = 0
+    while i < 1500 {
+        var events: YamlEvent[>..] = [YamlEvent.streamStart()]
+        var n = 1 + maker.below(3)
+        while n > 0 {
+            events.append(YamlEvent.documentStart(isExplicit: maker.below(2) == 0))
+            maker.node(0, &events)
+            events.append(YamlEvent.documentEnd(isExplicit: maker.below(2) == 0))
+            n -= 1
+        }
+        events.append(YamlEvent.streamEnd())
+        let options = YamlPrintOptions(indent: 1 + maker.below(9), indentSequences: maker.below(2) == 0, flow: maker.below(5) == 0, explicitStart: maker.below(5) == 0)
+        let text = try Yaml.print(events: events, options)
+        do {
+            let again = try Yaml.events(text)
+            if !same(events, again) {
+                fail("the events\n\(shape(events))\nread back as\n\(shape(again))\nfrom\n\(text)")
+            }
+        } catch {
+            fail("\(error.description())\n\(text)")
+        }
+        i += 1
+    }
+}

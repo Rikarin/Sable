@@ -1,0 +1,131 @@
+module Sable.Serialize.Yaml
+
+// Where the pieces of a block or flow collection are in a document's text.
+class YamlLayout {
+    let parser: YamlParser
+    var origins: YamlOrigin[>..]
+
+    init(_ parser: YamlParser, _ origins: YamlOrigin[>..]) {
+        self.parser = parser
+        self.origins = origins
+    }
+
+    fn origin(_ node: YamlNode) -> YamlOrigin {
+        return origins[node.origin]
+    }
+
+    fn lineStart(_ at: Int) -> Int {
+        var i = at
+        while i > 0 && !parser.isBreak(i - 1) {
+            i -= 1
+        }
+        return i
+    }
+
+    fn lineEnd(_ at: Int) -> Int {
+        var i = at
+        while i < parser.count && !parser.isBreak(i) {
+            i += 1
+        }
+        return i
+    }
+
+    // Whether a node's end is the start of a line: a block scalar's is.
+    fn endsLine(_ at: YamlOrigin) -> Bool {
+        return at.end > at.start && at.end > 0 && parser.isBreak(at.end - 1)
+    }
+
+    // The end of the last line of a node that ends there, its break not in it
+    // unless it is the node's own.
+    fn lastLineEnd(_ at: YamlOrigin) -> Int {
+        return endsLine(at) ? at.end : lineEnd(at.end)
+    }
+
+    // The start of the line after the node's last.
+    fn after(_ at: YamlOrigin) -> Int {
+        if endsLine(at) {
+            return at.end
+        }
+        let end = lineEnd(at.end)
+        return end < parser.count ? parser.afterBreak(end) : end
+    }
+
+    // Over white space, breaks, comments and commas.
+    fn skip(_ from: Int, commas: Bool) -> Int {
+        var i = from
+        while i < parser.count {
+            let b = parser.bytes[i]
+            if b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D || commas && b == 0x2C {
+                i += 1
+            } else if b == 0x23 && (i == 0 || parser.isWhite(i - 1) || parser.isBreak(i - 1)) {
+                i = lineEnd(i)
+            } else {
+                break
+            }
+        }
+        return i
+    }
+
+    // Whether nothing but spaces comes before it on its line.
+    fn isFirst(_ at: Int) -> Bool {
+        var i = at
+        while i > 0 && parser.byte(i - 1) == 0x20 {
+            i -= 1
+        }
+        return i == 0 || parser.isBreak(i - 1)
+    }
+
+    fn column(_ at: Int) -> Int {
+        return at - lineStart(at)
+    }
+
+    // Where the entries of a collection start: their '-', '?' or first
+    // byte. 'kept': the collection as it was read.
+    fn starts(_ kept: YamlOrigin) -> Int[>..] {
+        var all: Int[>..] = []
+        var from = kept.content
+        if kept.collectionStyle == .Flow && (parser.byte(from) == 0x5B || parser.byte(from) == 0x7B) {
+            from += 1
+        }
+        let commas = kept.collectionStyle == .Flow
+        let count = kept.kind == .Sequence ? kept.items.count : kept.entries.count
+        var i = 0
+        while i < count {
+            let first = kept.kind == .Sequence ? kept.items[i] : kept.entries[i].key
+            let start = skip(from, commas: commas)
+            let own = origin(first).start
+            all.append(start < own ? start : own)
+            from = origin(kept.kind == .Sequence ? kept.items[i] : kept.entries[i].value).end
+            i += 1
+        }
+        return all
+    }
+
+    // Where the ':' of an entry is; -1 for one with none.
+    fn colon(_ entry: YamlEntry) -> Int {
+        let key = origin(entry.key)
+        let at = skip(key.end, commas: false)
+        return parser.byte(at) == 0x3A && at <= origin(entry.value).start ? at : -1
+    }
+
+    // The start of the comment lines right above the line, not past the
+    // bound; the line itself when there are none.
+    fn commentStart(_ line: Int, _ bound: Int) -> Int {
+        var top = line
+        while top > bound {
+            var i = lineStart(top - 1)
+            if top >= 2 && parser.bytes[top - 1] == 0x0A && parser.bytes[top - 2] == 0x0D {
+                i = lineStart(top - 2)
+            }
+            let start = i
+            while parser.isWhite(i) {
+                i += 1
+            }
+            if start < bound || parser.byte(i) != 0x23 {
+                break
+            }
+            top = start
+        }
+        return top
+    }
+}

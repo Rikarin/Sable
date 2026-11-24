@@ -1,0 +1,63 @@
+module Sable.Serialize.Yaml
+
+// Nodes to an emitter: their events, with the comments they have.
+final class YamlPrinter {
+    let emitter: YamlEmitter
+    // The anchors written, and whose each is.
+    var anchors: [String: YamlNode] = [:]
+    var names: YamlNode[>..] = []
+
+    init(_ emitter: YamlEmitter) {
+        self.emitter = emitter
+    }
+
+    fn node(_ node: YamlNode) throws(YamlError) {
+        if let comment = node.trailingComment {
+            emitter.trailingComment(comment)
+        }
+        if node.kind == .Alias {
+            guard let target = node.target else {
+                throw emitter.wrong("an alias of nothing")
+            }
+            // A node no longer in the document, or whose name another has
+            // taken since, is written here in the alias's place.
+            if let name = target.anchor {
+                if let named = anchors[name] {
+                    if named === target {
+                        try emitter.emit(YamlEvent.aliasOf(name))
+                        return
+                    }
+                }
+            }
+            try self.node(target)
+            return
+        }
+        if let anchor = node.anchor {
+            anchors[anchor] = node
+        }
+        if node.kind == .Scalar {
+            try emitter.emit(YamlEvent.scalar(node.value, style: node.style, anchor: node.anchor, tag: node.tag))
+            return
+        }
+        if node.kind == .Sequence {
+            try emitter.emit(YamlEvent.sequenceStart(style: node.collectionStyle, anchor: node.anchor, tag: node.tag))
+            for item in node.items {
+                if let comment = item.comment {
+                    try emitter.comment(comment)
+                }
+                try self.node(item)
+            }
+            try emitter.emit(YamlEvent.sequenceEnd())
+            return
+        }
+        try emitter.emit(YamlEvent.mappingStart(style: node.collectionStyle, anchor: node.anchor, tag: node.tag))
+        for entry in node.entries {
+            if let comment = entry.key.comment {
+                try emitter.comment(comment)
+            }
+            try self.node(entry.key)
+            try self.node(entry.value)
+        }
+        try emitter.emit(YamlEvent.mappingEnd())
+    }
+}

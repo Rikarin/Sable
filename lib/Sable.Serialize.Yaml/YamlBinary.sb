@@ -1,0 +1,18 @@
+module Sable.Serialize.Yaml
+
+import Sable.Text
+
+fn yamlBase64(_ bytes: U8[>..]) -> String {
+    return Base64.encode(bytes)
+}
+
+// The bytes of base64, its white space left out; none when it is not.
+fn yamlBytes(_ text: String) -> U8[>..]? {
+    var digits: U8[>..] = []
+    for b in text.utf8 {
+        if b != 0x20 && b != 0x0A && b != 0x09 && b != 0x0D {
+            digits.append(b)
+        }
+    }
+    return try? Base64.decode(bytes: digits)
+}

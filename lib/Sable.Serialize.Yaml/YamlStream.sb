@@ -1,0 +1,81 @@
+module Sable.Serialize.Yaml
+
+/// A YAML text to edit: its documents' nodes are changed, and it is written
+/// back with everything else — comments, blank lines, quoting, indentation —
+/// as it was. Unchanged, it is the same text, byte for byte.
+///
+/// A changed node's entry is written anew, indented as the text is; an entry
+/// added or taken out is a line or lines added or taken out, with the
+/// comment above it. What is written is read back before it is given, and
+/// is the nodes'.
+///
+/// ```sable
+/// let stream = try! YamlStream("# servers\nweb:\n    image: nginx   # pinned\n    ports: [80]\n")
+/// let web = stream.documents[0].root["web"]!
+/// web["image"] = YamlNode.string("caddy")
+/// web["ports"]!.append(YamlNode.int(443))
+/// web["tls"] = YamlNode.bool(true)
+/// assert(try! stream.text() == "# servers\nweb:\n    image: caddy # pinned\n    ports: [80, 443]\n    tls: true\n")
+/// ```
+public final class YamlStream {
+    /// The documents, which may be added to and taken from.
+    public var documents: YamlDocument[>..]
+    // The text after the last one.
+    let tail: String
+
+    /// The text's documents.
+    public init(_ text: String, _ options: YamlOptions = YamlOptions()) throws(YamlError) {
+        let parser = YamlParser(text, options)
+        var all: YamlDocument[>..] = []
+        var start = 0
+        while true {
+            let composer = YamlComposer(parser, editable: true)
+            guard let root = try composer.document() else {
+                break
+            }
+            var end = composer.documentEnd.end
+            if composer.documentEnd.isExplicit {
+                while end < parser.count && !parser.isBreak(end) {
+                    end += 1
+                }
+                if end < parser.count {
+                    end = parser.afterBreak(end)
+                }
+            }
+            all.append(YamlDocument(parser, composer, root, start: start, end: end))
+            start = end
+        }
+        self.documents = all
+        self.tail = parser.text(start, parser.count)
+    }
+
+    /// A stream of no text, to add documents to.
+    public init() {
+        self.documents = []
+        self.tail = ""
+    }
+
+    /// The whole text, as its documents now are.
+    public fn text() throws(YamlError) -> String {
+        var parts: String[>..] = []
+        var previous: YamlDocument? = none
+        for document in documents {
+            let text = try document.text()
+            if let previous = previous {
+                // What separates two documents that were not read together.
+                if !previous.endsLine(parts[parts.count - 1]) {
+                    parts.append("\n")
+                }
+                if document.hasDirectives && !previous.endsExplicitly {
+                    parts.append("...\n")
+                } else if !document.startsExplicitly && !previous.endsExplicitly {
+                    parts.append("---\n")
+                }
+            }
+            parts.append(text)
+            previous = document
+        }
+        parts.append(tail)
+        return parts.joined()
+    }
+}

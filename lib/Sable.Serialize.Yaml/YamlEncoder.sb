@@ -1,0 +1,162 @@
+module Sable.Serialize.Yaml
+
+import Sable.Serialize
+
+/// The Encoder that writes YAML, as it goes: a struct or a map as a mapping,
+/// a sequence as a sequence, bytes as `!!binary`, a case that carries
+/// nothing as its name and one that does as a mapping of one entry, as
+/// JsonEncoder has them. A string that would read back as anything else is
+/// quoted. What `Yaml.encode` uses.
+///
+/// ```sable
+/// let encoder = YamlEncoder()
+/// try! encoder.beginMap(count: 2)
+/// try! encoder.encodeKey("answer")
+/// try! encoder.encodeString("no")
+/// try! encoder.encodeKey("1")
+/// try! encoder.encodeFloat(1.0)
+/// try! encoder.endMap()
+/// assert(try! encoder.text() == "answer: \"no\"\n\"1\": 1.0\n")
+/// ```
+public final class YamlEncoder: Encoder {
+    let emitter: YamlEmitter
+    // Whether the mapping written next is to be part of the one open.
+    var flattening: Bool = false
+    // For each mapping open: whether it is part of the one around it.
+    var flattened: Bool[>..] = []
+    var finished: Bool = false
+
+    public init(_ options: YamlPrintOptions = YamlPrintOptions()) {
+        self.emitter = YamlEmitter(options)
+    }
+
+    /// The YAML written, a document of the one value.
+    public fn text() throws(SerializeError) -> String {
+        if !finished {
+            finished = true
+            try emit(YamlEvent(.DocumentEnd))
+            try emit(YamlEvent(.StreamEnd))
+        }
+        return emitter.text()
+    }
+
+    fn emit(_ event: YamlEvent) throws(SerializeError) {
+        do {
+            if emitter.state == 0 {
+                try emitter.emit(YamlEvent(.StreamStart))
+                try emitter.emit(YamlEvent(.DocumentStart))
+            }
+            try emitter.emit(event)
+        } catch {
+            throw SerializeError.InvalidValue(path: "$", reason: error.description())
+        }
+    }
+
+    fn value(_ event: YamlEvent) throws(SerializeError) {
+        if flattening {
+            throw SerializeError.InvalidValue(path: "$", reason: "only a struct or a map can be flattened")
+        }
+        try emit(event)
+    }
+
+    fn plain(_ text: String) throws(SerializeError) {
+        try value(YamlEvent(.Scalar, value: text))
+    }
+
+    fn beginMapping() throws(SerializeError) {
+        flattened.append(flattening)
+        if flattening {
+            flattening = false
+            return
+        }
+        try emit(YamlEvent(.MappingStart))
+    }
+
+    fn endMapping() throws(SerializeError) {
+        if !flattened.removeLast() {
+            try emit(YamlEvent(.MappingEnd))
+        }
+    }
+
+    public fn encodeNull() throws(SerializeError) {
+        try plain("null")
+    }
+
+    public fn encodeBool(_ value: Bool) throws(SerializeError) {
+        try plain(value ? "true" : "false")
+    }
+
+    public fn encodeInt(_ value: Int) throws(SerializeError) {
+        try plain("\(value)")
+    }
+
+    public fn encodeUInt(_ value: U64) throws(SerializeError) {
+        try plain("\(value)")
+    }
+
+    /// A number, `.nan`, `.inf` or `-.inf`.
+    public fn encodeFloat(_ value: F64) throws(SerializeError) {
+        try plain(yamlFloatText(value))
+    }
+
+    /// A string, in the style that shows it best.
+    public fn encodeString(_ value: String) throws(SerializeError) {
+        try self.value(YamlEvent(.Scalar, value: value, style: .Automatic))
+    }
+
+    /// Bytes, as `!!binary` base64.
+    public fn encodeBytes(_ value: U8[>..]) throws(SerializeError) {
+        try self.value(YamlEvent(.Scalar, tag: yamlBinaryTag, value: yamlBase64(value), style: .Automatic))
+    }
+
+    public fn beginSequence(count: Int?) throws(SerializeError) {
+        try value(YamlEvent(.SequenceStart))
+    }
+
+    public fn endSequence() throws(SerializeError) {
+        try emit(YamlEvent(.SequenceEnd))
+    }
+
+    public fn beginMap(count: Int?) throws(SerializeError) {
+        try beginMapping()
+    }
+
+    public fn encodeKey(_ key: String) throws(SerializeError) {
+        try encodeString(key)
+    }
+
+    public fn endMap() throws(SerializeError) {
+        try endMapping()
+    }
+
+    public fn beginStruct(_ name: String, count: Int?) throws(SerializeError) {
+        try beginMapping()
+    }
+
+    public fn encodeField(_ key: String) throws(SerializeError) {
+        try encodeString(key)
+    }
+
+    public fn endStruct() throws(SerializeError) {
+        try endMapping()
+    }
+
+    public fn flattenNext() throws(SerializeError) {
+        flattening = true
+    }
+
+    /// The case's name, as a string.
+    public fn encodeUnitCase(_ name: String, of type: String) throws(SerializeError) {
+        try encodeString(name)
+    }
+
+    /// A mapping of one entry, from the case's name to its payload.
+    public fn beginCase(_ name: String, of type: String) throws(SerializeError) {
+        try beginMapping()
+        try encodeString(name)
+    }
+
+    public fn endCase() throws(SerializeError) {
+        try endMapping()
+    }
+}

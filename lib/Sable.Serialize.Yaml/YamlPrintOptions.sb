@@ -1,0 +1,30 @@
+module Sable.Serialize.Yaml
+
+/// How YAML is laid out when it is written.
+///
+/// ```sable
+/// let list: Int[>..] = [1, 2]
+/// let node = YamlNode.mapping([YamlEntry(YamlNode.string("a"), try! Yaml.parse("- 1\n- 2"))])
+/// assert(try! Yaml.print(node) == "a:\n  - 1\n  - 2\n")
+/// assert(try! Yaml.print(node, YamlPrintOptions(indentSequences: false)) == "a:\n- 1\n- 2\n")
+/// assert(try! Yaml.encode(list, YamlPrintOptions(flow: true)) == "[1, 2]\n")
+/// ```
+public struct YamlPrintOptions {
+    /// How many spaces a level is indented, from 1 to 9.
+    public var indent: Int
+    /// Whether a sequence in a mapping is indented, or its dashes are under
+    /// the key.
+    public var indentSequences: Bool
+    /// Whether every collection is in the flow style.
+    public var flow: Bool
+    /// Whether every document starts with `---`, and not only those after
+    /// the first.
+    public var explicitStart: Bool
+
+    public init(indent: Int = 2, indentSequences: Bool = true, flow: Bool = false, explicitStart: Bool = false) {
+        self.indent = indent < 1 ? 1 : indent > 9 ? 9 : indent
+        self.indentSequences = indentSequences
+        self.flow = flow
+        self.explicitStart = explicitStart
+    }
+}

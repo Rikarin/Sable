@@ -1,0 +1,202 @@
+module Sable.Serialize.Yaml
+
+// YAML 1.2.2 §10.3, the core schema: what a plain scalar's text is.
+fn yamlTypeOf(_ text: String) -> YamlType {
+    let count = text.utf8Count
+    if count == 0 {
+        return .Null
+    }
+    let bytes = text.utf8
+    let first = bytes[0]
+    // What most text starts with settles it.
+    if first >= 0x30 && first <= 0x39 || first == 0x2B || first == 0x2D || first == 0x2E {
+        return yamlNumberType(text)
+    }
+    if count == 1 {
+        return first == 0x7E ? .Null : .String
+    }
+    if count == 4 {
+        if text == "null" || text == "Null" || text == "NULL" {
+            return .Null
+        }
+        if text == "true" || text == "True" || text == "TRUE" {
+            return .Bool
+        }
+    }
+    if count == 5 && (text == "false" || text == "False" || text == "FALSE") {
+        return .Bool
+    }
+    return .String
+}
+
+fn yamlDigits(_ bytes: Utf8View, _ start: Int) -> Int {
+    var i = start
+    while i < bytes.count && bytes[i] >= 0x30 && bytes[i] <= 0x39 {
+        i += 1
+    }
+    return i
+}
+
+// [-+]?[0-9]+, 0o[0-7]+, 0x[0-9a-fA-F]+, and
+// [-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?, [-+]?\.inf, \.nan.
+fn yamlNumberType(_ text: String) -> YamlType {
+    let bytes = text.utf8
+    let count = bytes.count
+    if count > 2 && bytes[0] == 0x30 && (bytes[1] == 0x6F || bytes[1] == 0x78) {
+        var i = 2
+        while i < count {
+            let digit = yamlHexValue(bytes[i])
+            if digit < 0 || bytes[1] == 0x6F && digit > 7 {
+                return .String
+            }
+            i += 1
+        }
+        return .Int
+    }
+    var i = bytes[0] == 0x2B || bytes[0] == 0x2D ? 1 : 0
+    if text == ".nan" || text == ".NaN" || text == ".NAN" {
+        return .Float
+    }
+    if count == i + 4 && (text.hasSuffix(".inf") || text.hasSuffix(".Inf") || text.hasSuffix(".INF")) {
+        return .Float
+    }
+    let whole = yamlDigits(bytes, i)
+    var digits = whole - i
+    i = whole
+    if i == count {
+        return digits > 0 ? .Int : .String
+    }
+    if bytes[i] == 0x2E {
+        let part = yamlDigits(bytes, i + 1)
+        digits += part - i - 1
+        i = part
+    }
+    if digits == 0 {
+        return .String
+    }
+    if i < count && (bytes[i] == 0x65 || bytes[i] == 0x45) {
+        i += 1
+        if i < count && (bytes[i] == 0x2B || bytes[i] == 0x2D) {
+            i += 1
+        }
+        let end = yamlDigits(bytes, i)
+        if end == i {
+            return .String
+        }
+        i = end
+    }
+    return i == count ? .Float : .String
+}
+
+// An integer's sign and magnitude; none for one past U64.max.
+fn yamlInteger(_ text: String) -> (negative: Bool, magnitude: U64)? {
+    let bytes = text.utf8
+    var i = 0
+    var negative = false
+    var radix: U64 = 10
+    if bytes[0] == 0x2B || bytes[0] == 0x2D {
+        negative = bytes[0] == 0x2D
+        i = 1
+    } else if bytes.count > 2 && bytes[0] == 0x30 && bytes[1] > 0x39 {
+        radix = bytes[1] == 0x78 ? 16 : 8
+        i = 2
+    }
+    var value: U64 = 0
+    while i < bytes.count {
+        let digit = U64(yamlHexValue(bytes[i]))
+        if value > (U64.max - digit) / radix {
+            return none
+        }
+        value = value * radix + digit
+        i += 1
+    }
+    return (negative: negative, magnitude: value)
+}
+
+// A number's nearest F64.
+fn yamlFloat(_ text: String) -> F64? {
+    let bytes = text.utf8
+    let signed = bytes[0] == 0x2B || bytes[0] == 0x2D
+    let negative = bytes[0] == 0x2D
+    let start = signed ? 1 : 0
+    if bytes[start] == 0x2E && bytes.count > start + 1 && bytes[start + 1] > 0x39 {
+        let infinity = 1.0 / 0.0
+        if bytes[start + 1] == 0x6E || bytes[start + 1] == 0x4E {
+            return 0.0 / 0.0
+        }
+        return negative ? -infinity : infinity
+    }
+    if bytes.count > 2 && bytes[0] == 0x30 && bytes[1] > 0x39 && bytes[1] != 0x65 && bytes[1] != 0x45 {
+        if let integer = yamlInteger(text) {
+            return F64(integer.magnitude)
+        }
+        return none
+    }
+    // As every reader of floats has them: digits before and after the point.
+    var written: U8[>..] = []
+    if negative {
+        written.append(0x2D)
+    }
+    var i = yamlDigits(bytes, start)
+    if i == start {
+        written.append(0x30)
+    }
+    written.append(utf8: text, from: start, to: i)
+    if i < bytes.count && bytes[i] == 0x2E {
+        let end = yamlDigits(bytes, i + 1)
+        if end > i + 1 {
+            written.append(utf8: text, from: i, to: end)
+        }
+        i = end
+    }
+    written.append(utf8: text, from: i, to: bytes.count)
+    var normal = ""
+    unsafe {
+        normal = String.fromUtf8Unchecked(written)
+    }
+    return try? F64.parse(normal)
+}
+
+// Whether a reader of YAML 1.1 — there are many — would take the text, a
+// string in 1.2, for something else: 'no', '1_000', '12:30:45', '2001-01-01'.
+fn yamlIsOldType(_ text: String) -> Bool {
+    let count = text.utf8Count
+    if count == 0 {
+        return false
+    }
+    let bytes = text.utf8
+    if count <= 3 {
+        let lower = text.lowercased()
+        if lower == "no" || lower == "on" || lower == "yes" || lower == "off" || text == "<<" || text == "=" {
+            return true
+        }
+    }
+    let first = bytes[0] == 0x2B || bytes[0] == 0x2D ? 1 : 0
+    if first >= count || bytes[first] < 0x30 || bytes[first] > 0x39 {
+        return false
+    }
+    var number = true
+    var i = first
+    while i < count {
+        let b = bytes[i]
+        number = number && (b >= 0x30 && b <= 0x39 || b == 0x5F || b == 0x3A || b == 0x2E)
+        i += 1
+    }
+    if number && (text.contains('_') || text.contains(':')) {
+        return true
+    }
+    if count > first + 2 && bytes[first] == 0x30 && (bytes[first + 1] == 0x62 || bytes[first + 1] == 0x78) {
+        let binary = bytes[first + 1] == 0x62
+        number = true
+        i = first + 2
+        while i < count {
+            number = number && (bytes[i] == 0x5F || yamlHexValue(bytes[i]) >= 0 && !(binary && bytes[i] > 0x31))
+            i += 1
+        }
+        if number {
+            return true
+        }
+    }
+    // A date starts 'dddd-d'.
+    return first == 0 && yamlDigits(bytes, 0) == 4 && count > 5 && bytes[4] == 0x2D && bytes[5] >= 0x30 && bytes[5] <= 0x39
+}

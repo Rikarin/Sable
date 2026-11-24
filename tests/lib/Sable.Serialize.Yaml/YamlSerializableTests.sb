@@ -1,0 +1,203 @@
+module YamlSerializableTests
+
+import Sable.Collections
+import Sable.Serialize
+import Sable.Serialize.Yaml
+import Sable.Testing
+import Sable.Time
+
+@derive(Serializable, Equatable, Debug)
+enum Level {
+    Low
+    High
+}
+
+@derive(Serializable, Equatable, Debug)
+union Shape {
+    Circle(radius: F64)
+    Point(Int, Int)
+    Label(String)
+    Empty
+}
+
+@derive(Serializable, Equatable, Debug)
+@serialize(tag: "type")
+union Event {
+    Key(code: Int)
+    Idle
+}
+
+@derive(Serializable, Equatable, Debug)
+@serialize(untagged)
+union Id {
+    Number(Int)
+    Name(String)
+    Nothing
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Meta {
+    var version: U64
+    var level: Level
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Record {
+    var name: String
+    @serialize(flatten)
+    var meta: Meta
+    var ids: Id[>..]
+    var shapes: Shape[>..]
+    var event: Event
+    var note: String?
+    var ratio: F64
+}
+
+fn record() -> Record {
+    return Record {
+        name: "no",
+        meta: Meta { version: 18446744073709551615, level: .High },
+        ids: [.Number(-1), .Name("1"), .Nothing],
+        shapes: [.Circle(radius: 1.5), .Point(1, 2), .Label("a: b"), .Empty],
+        event: .Key(code: 2),
+        note: "two\nlines\n",
+        ratio: 1.0,
+    }
+}
+
+@test
+fn aDerivedTypeRoundTrips() throws {
+    let text = try Yaml.encode(record())
+    assertEqual(text, "name: \"no\"\nversion: 18446744073709551615\nlevel: High\nids:\n  - -1\n  - \"1\"\n  - null\nshapes:\n  - Circle:\n      radius: 1.5\n  - Point:\n      - 1\n      - 2\n  - Label: \"a: b\"\n  - Empty\nevent:\n  type: Key\n  code: 2\nnote: |\n  two\n  lines\nratio: 1.0\n")
+    assert((try Yaml.decode(Record.self, from: text)) == record())
+    for options in [YamlPrintOptions(flow: true), YamlPrintOptions(indent: 4, indentSequences: false), YamlPrintOptions(explicitStart: true)] {
+        assert((try Yaml.decode(Record.self, from: try Yaml.encode(record(), options))) == record())
+    }
+    // YAML is JSON's superset.
+    assert((try Yaml.decode(Record.self, from: try Json.encode(record()))) == record())
+    let all = try Yaml.encodeAll([1, 2])
+    assertEqual(all, "--- 1\n--- 2\n")
+    assertEqual((try Yaml.decodeAll(Int.self, from: all)).count, 2)
+    assertEqual(try Yaml.encodeAll(["x"]), "x\n")
+}
+
+@test
+fn theLibrarysConformancesRoundTrip() throws {
+    var counts = Dictionary<String, Int>()
+    counts["true"] = 1
+    counts["1"] = 2
+    counts["a b"] = 3
+    let text = try Yaml.encode(counts)
+    assertEqual(text, "\"true\": 1\n\"1\": 2\na b: 3\n")
+    let back = try Yaml.decode(Dictionary<String, Int>.self, from: text)
+    assertEqual(back["1"] ?? 0, 2)
+    assertEqual((try Yaml.decode(Dictionary<String, Int>.self, from: "1: 1\ntrue: 2\n"))["true"] ?? 0, 2)
+    var unique = Set<Int>()
+    let _ = unique.insert(4)
+    assert((try Yaml.decode(Set<Int>.self, from: try Yaml.encode(unique))) == unique)
+    assert((try Yaml.decode(Duration.self, from: try Yaml.encode(Duration.seconds(2)))) == Duration.seconds(2))
+    let moment = UtcDateTime.fromUnix(1700000000)
+    assert((try Yaml.decode(UtcDateTime.self, from: try Yaml.encode(moment))) == moment)
+    let infinity = 1.0 / 0.0
+    assertEqual(try Yaml.decode(F64.self, from: try Yaml.encode(-infinity)), -infinity)
+    assert((try Yaml.decode(F64.self, from: try Yaml.encode(0.0 / 0.0))).isNaN)
+    let value = try Yaml.decode(JsonValue.self, from: "a: [1, yes, ~]\n")
+    assertEqual(try Json.encode(value), "{\"a\":[1.0,\"yes\",null]}")
+    let empty: Int[>..] = []
+    assertEqual(try Yaml.encode(empty), "[]\n")
+    assertEqual(try Yaml.encode(Dictionary<String, Int>()), "{}\n")
+    assertEqual(try Yaml.encode(""), "\"\"\n")
+}
+
+@test
+fn bytesAreBinary() throws {
+    let encoder = YamlEncoder()
+    try encoder.encodeBytes([0, 255, 16])
+    let text = try encoder.text()
+    assertEqual(text, "!!binary AP8Q\n")
+    assertEqual(try encoder.text(), text)
+    let root = try YamlDecoder.parse(text)
+    assert(root.kind == .Bytes && (try root.decodeBytes()) == [0, 255, 16])
+    assert((try YamlDecoder.parse("AP8Q").decodeBytes()) == [0, 255, 16])
+}
+
+fn failure<T: Serializable>(_ type: T.Type, _ text: String) -> String {
+    do {
+        let _ = try Yaml.decode(type, from: text)
+        return "decoded"
+    } catch {
+        return error.description()
+    }
+}
+
+@test
+fn errorsSayWhere() {
+    assertEqual(failure(Meta.self, "version: 1\n"), "$.level: missing")
+    assertEqual(failure(Meta.self, "version: x\nlevel: Low"), "$.version: expected an unsigned integer, found a string")
+    assertEqual(failure(Meta.self, "version: -1\nlevel: Low"), "$.version: -1 is not an unsigned integer")
+    assertEqual(failure(Meta.self, "version: 18446744073709551616\nlevel: Low"), "$.version: 18446744073709551616 does not fit a U64")
+    assertEqual(failure(Meta.self, "version: 1\nlevel: Mid"), "$.level: no case 'Mid'")
+    assertEqual(failure(Meta.self, "[]"), "$: expected a mapping (Meta), found a sequence")
+    assertEqual(failure(Int[>..].self, "- 1\n- 1.0"), "$[1]: expected an integer, found a float")
+    assertEqual(failure(Int[>..].self, "a: 1"), "$: expected a sequence, found a mapping")
+    assertEqual(failure(Int.self, "9223372036854775808"), "$: 9223372036854775808 does not fit an Int")
+    assertEqual(failure(Bool.self, "yes"), "$: expected a Bool, found a string")
+    assertEqual(failure(String.self, "1"), "$: expected a string, found an integer")
+    assertEqual(failure(String.self, "~"), "$: expected a string, found null")
+    assertEqual(failure(String.self, "true"), "$: expected a string, found a Bool")
+    assertEqual(failure(String.self, "!!binary aa=="), "$: expected a string, found bytes")
+    assertEqual(failure(F64.self, "x"), "$: expected a number, found a string")
+    assertEqual(failure(F64.self, "1e999"), "$: 1e999 is out of range")
+    assertEqual(failure(Dictionary<String, Int>.self, "[a]: 1"), "$: a key that is a collection")
+    assertEqual(failure(Shape.self, "{a: 1, b: 2}"), "$: expected a case's name, or a mapping of one entry, found a mapping")
+    assertEqual(failure(Shape.self, "Circle: {}"), "$.Circle.radius: missing")
+    assertEqual(failure(Shape.self, "[]: {}"), "$: expected a case's name, or a mapping of one entry, found a mapping")
+    assertEqual(failure(Int.self, "[1"), "not YAML: line 1, column 3: the text ends inside '[' of line 1, column 1")
+    do {
+        let _ = try Yaml.decodeAll(Int.self, from: "--- 1\n--- [")
+        fail("decoded")
+    } catch {
+        assert(error.description().hasPrefix("not YAML: line 2"))
+    }
+}
+
+@test
+fn theDecoderDirectly() throws {
+    let root = try YamlDecoder.parse("a: &x [1, {b c: ~}]\nd: *x\ne: !!str 1\nf: 0o17\ng: !Own {h: .5}\n")
+    assertEqual(root.field("a").element(1).field("b c").path, "$.a[1]['b c']")
+    assert(root.field("a").element(1).field("b c").isNull)
+    assert(root.field("a").element(9).isMissing && root.element(0).isMissing && root.field("z").isMissing && root.field("z").element(0).isMissing && root.field("z").field("y").isMissing)
+    assertEqual(try root.field("d").element(0).decodeInt(), 1)
+    assertEqual(try root.field("e").decodeString(), "1")
+    assertEqual(try root.field("f").decodeUInt(), 15)
+    assertEqual(try root.field("g").field("h").decodeFloat(), 0.5)
+    assertEqual(try root.field("f").decodeFloat(), 15.0)
+    assert(root.hasField("a") && !root.hasField("q"))
+    let rest = root.excluding(["a"]).excluding(["d", "e"])
+    var keys: String[>..] = []
+    for member in try rest.decodeMap() {
+        keys.append(member.key)
+    }
+    assertEqual(keys.joined(separator: ","), "f,g")
+    assert(rest.field("a").isMissing)
+    assert(root.kind == .Map && root.field("a").kind == .Sequence && root.field("f").kind == .Number && root.field("e").kind == .String && root.field("z").kind == .Missing)
+    assert(root.element(0).kind == .Missing && root.field("z").kindName == "nothing" && root.field("a").element(1).field("b c").kind == .Null)
+    assert((try YamlDecoder.parse("true")).kind == .Bool && (try YamlDecoder.parse("1.5")).kind == .Number)
+    assert((try YamlDecoder.parse("x")).casePayload().isMissing && (try YamlDecoder.parse("Circle: 1")).casePayload().node != none)
+    assertEqual((try YamlDecoder.parse("x")).invalid("no").description(), "$: no")
+    let encoder = YamlEncoder()
+    do {
+        try encoder.beginMap(count: 1)
+        try encoder.flattenNext()
+        try encoder.encodeInt(1)
+        fail("an integer was flattened")
+    } catch {
+        assertEqual(error.description(), "$: only a struct or a map can be flattened")
+    }
+    do {
+        let _ = try YamlEncoder().text()
+        fail("nothing was written")
+    } catch {
+        assertEqual(error.description(), "$: a document ends before its value does")
+    }
+}

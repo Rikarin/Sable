@@ -1,0 +1,544 @@
+module Sable.Serialize.Yaml
+
+/// Writes events as YAML 1.2: what YamlParser reads, the other way. Each
+/// scalar and collection is written in the style its event has where that
+/// style can hold it, and in one that can where it cannot; what is read back
+/// has the same content, tags and anchors.
+///
+/// A scalar whose style is Automatic is a string: it is quoted wherever it
+/// would read back as something else — and where a reader of YAML 1.1 would
+/// take it for something else, as `no` and `12:30`.
+///
+/// ```sable
+/// let emitter = YamlEmitter()
+/// try! emitter.emit(YamlEvent.streamStart())
+/// try! emitter.emit(YamlEvent.documentStart())
+/// try! emitter.emit(YamlEvent.sequenceStart())
+/// try! emitter.emit(YamlEvent.scalar("plain"))
+/// try! emitter.emit(YamlEvent.scalar("true"))
+/// try! emitter.emit(YamlEvent.scalar("true", style: .Plain))
+/// try! emitter.emit(YamlEvent.scalar("two\nlines\n"))
+/// try! emitter.emit(YamlEvent.sequenceEnd())
+/// try! emitter.emit(YamlEvent.documentEnd())
+/// try! emitter.emit(YamlEvent.streamEnd())
+/// assert(emitter.text() == "- plain\n- \"true\"\n- true\n- |\n  two\n  lines\n")
+/// ```
+public final class YamlEmitter {
+    let options: YamlPrintOptions
+    var written: U8[>..] = []
+    var levels: YamlLevel[>..] = []
+    // A collection's start, kept until what follows tells if it is empty.
+    var pending: YamlEvent? = none
+    // 0 before the stream, 1 between documents, 2 before a document's root,
+    // 3 in it, 4 after it, 5 after the stream.
+    var state: Int = 0
+    // Whether the line ends with an indicator that a space must follow.
+    var needsSpace: Bool = false
+    var documents: Int = 0
+    var afterMarker: Bool = false
+    var lastExplicitEnd: Bool = false
+    // The comment to go after the next node, and the one after the
+    // collection whose start is kept.
+    var trailing: String? = none
+    var pendingTrailing: String? = none
+    // Where the child placed last is to go: its collection's column, whether
+    // its first entry goes on this line, its block scalar's column, and the
+    // column that one's indentation is counted from.
+    var childColumn: Int = 0
+    var childCompact: Bool = false
+    var blockColumn: Int = 0
+    var blockParent: Int = 0
+
+    public init(_ options: YamlPrintOptions = YamlPrintOptions()) {
+        self.options = options
+    }
+
+    /// What has been written.
+    public fn text() -> String {
+        unsafe {
+            return String.fromUtf8Unchecked(written)
+        }
+    }
+
+    /// What has been written, as UTF-8.
+    public fn bytes() -> U8[>..] {
+        return written
+    }
+
+    fn wrong(_ reason: String) -> YamlError {
+        return YamlError { kind: .Structure, offset: 0, line: 0, column: 0, reason: reason }
+    }
+
+    // ---- Events --------------------------------------------------------------
+
+    /// Writes the event. Events that make no stream are an error.
+    public fn emit(_ event: YamlEvent) throws(YamlError) {
+        if let start = pending {
+            pending = none
+            if event.kind == .SequenceEnd && start.kind == .SequenceStart || event.kind == .MappingEnd && start.kind == .MappingStart {
+                trailing = pendingTrailing
+                pendingTrailing = none
+                try place(.Simple, start)
+                put(start.kind == .SequenceStart ? "[]" : "{}")
+                putTrailing()
+                done(spaced: false)
+                return
+            }
+            try begin(start)
+        }
+        if event.kind == .StreamStart {
+            if state != 0 {
+                throw wrong("a stream starts inside another")
+            }
+            state = 1
+            return
+        }
+        if event.kind == .StreamEnd {
+            if state != 1 {
+                throw wrong("the stream ends inside a document, or twice")
+            }
+            state = 5
+            return
+        }
+        if event.kind == .DocumentStart {
+            if state != 1 {
+                throw wrong("a document starts inside another, or outside a stream")
+            }
+            state = 2
+            afterMarker = false
+            if event.isExplicit || options.explicitStart || documents > 0 && !lastExplicitEnd {
+                newline()
+                written.append(utf8: "---")
+                afterMarker = true
+                needsSpace = true
+            }
+            documents += 1
+            return
+        }
+        if event.kind == .DocumentEnd {
+            if state != 4 {
+                throw wrong("a document ends before its value does")
+            }
+            state = 1
+            newline()
+            lastExplicitEnd = event.isExplicit
+            if event.isExplicit {
+                written.append(utf8: "...\n")
+            }
+            return
+        }
+        if state != 2 && state != 3 {
+            throw wrong("\(event.description()) outside a document's value")
+        }
+        if event.kind == .SequenceEnd || event.kind == .MappingEnd {
+            try end(event)
+            return
+        }
+        state = 3
+        if event.kind == .SequenceStart || event.kind == .MappingStart {
+            pending = event
+            pendingTrailing = trailing
+            trailing = none
+            return
+        }
+        if event.kind == .Alias {
+            try place(.Simple, YamlEvent(.Scalar))
+            put("*" + (try name(event.anchor ?? "")))
+            putTrailing()
+            done(spaced: true)
+            return
+        }
+        try scalar(event)
+    }
+
+    /// A comment, on lines of its own before the node whose event is next:
+    /// an element of a block sequence or a key of a block mapping, or a
+    /// document's value. Elsewhere it is left out.
+    public fn comment(_ text: String) throws(YamlError) {
+        if let start = pending {
+            pending = none
+            try begin(start)
+        }
+        if levels.isEmpty {
+            if state != 2 {
+                return
+            }
+            newline()
+            putComment(text, 0)
+            return
+        }
+        let level = levels[levels.count - 1]
+        if level.isFlow || level.onValue {
+            return
+        }
+        if level.compact {
+            // The place on the line is the comment's, and the entry's the next.
+            levels[levels.count - 1].compact = false
+            putComment(text, level.column)
+            return
+        }
+        newline()
+        putComment(text, level.column)
+    }
+
+    /// A comment on the line of the node whose event is next, after it: a
+    /// scalar or an alias of a block collection, or an empty one.
+    public fn trailingComment(_ text: String) {
+        trailing = text
+    }
+
+    fn putComment(_ text: String, _ column: Int) {
+        var first = true
+        for line in text.split('\n') {
+            if !first || written.isEmpty || written[written.count - 1] == 0x0A {
+                newline()
+                spaces(column)
+            } else {
+                needsSpace = true
+            }
+            put(line.isEmpty ? "#" : line.hasPrefix("#") ? line : "# " + line)
+            first = false
+        }
+        needsSpace = false
+        written.append(0x0A)
+    }
+
+    fn putTrailing() {
+        if let text = trailing {
+            trailing = none
+            var flow = false
+            if !levels.isEmpty {
+                flow = levels[levels.count - 1].isFlow || levels[levels.count - 1].isMap && !levels[levels.count - 1].onValue
+            }
+            if !flow {
+                needsSpace = true
+                put(text.hasPrefix("#") ? text : "# " + text)
+            }
+        }
+    }
+
+    // ---- Places --------------------------------------------------------------
+
+    fn newline() {
+        needsSpace = false
+        if !written.isEmpty && written[written.count - 1] != 0x0A {
+            written.append(0x0A)
+        }
+    }
+
+    fn spaces(_ count: Int) {
+        written.append(repeating: 0x20, count: count)
+    }
+
+    fn put(_ text: String) {
+        if text.isEmpty {
+            return
+        }
+        if needsSpace {
+            written.append(0x20)
+            needsSpace = false
+        }
+        written.append(utf8: text)
+    }
+
+    fn name(_ anchor: String) throws(YamlError) -> String {
+        if anchor.isEmpty {
+            throw wrong("an anchor with no name")
+        }
+        for c in anchor {
+            if !yamlIsPrintable(c) || c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ',' || c == '[' || c == ']' || c == '{' || c == '}' || c == '\u{FEFF}' {
+                throw wrong("'\(anchor)' is not an anchor's name")
+            }
+        }
+        return anchor
+    }
+
+    // To where the next node goes, and its anchor and tag.
+    fn place(_ shape: YamlShape, _ event: YamlEvent) throws(YamlError) {
+        var properties = ""
+        if let anchor = event.anchor {
+            properties = "&" + (try name(anchor))
+        }
+        if let tag = event.tag {
+            properties = properties + (properties.isEmpty ? "" : " ") + yamlTagText(tag)
+        }
+        let indented = event.kind == .SequenceStart && !options.indentSequences ? 0 : options.indent
+        if levels.isEmpty {
+            if state == 4 {
+                throw wrong("a document with two values")
+            }
+            childColumn = 0
+            childCompact = false
+            blockColumn = options.indent
+            blockParent = 0
+            if shape == .Block && afterMarker && properties.isEmpty {
+                newline()
+            }
+            putProperties(properties, shape)
+            return
+        }
+        let at = levels.count - 1
+        let level = levels[at]
+        if level.isFlow {
+            if level.isMap && level.onValue {
+                needsSpace = level.explicitKey || level.spaced
+                put(":")
+                needsSpace = true
+            } else {
+                if level.count > 0 {
+                    put(",")
+                    needsSpace = true
+                }
+                if level.isMap && shape != .Simple {
+                    put("?")
+                    needsSpace = true
+                    levels[at].explicitKey = true
+                } else {
+                    levels[at].explicitKey = false
+                }
+            }
+            putProperties(properties, .Simple)
+            return
+        }
+        blockParent = level.column
+        if level.isMap && level.onValue && !level.explicitKey {
+            needsSpace = level.spaced
+            put(":")
+            needsSpace = true
+            childColumn = level.column + indented
+            childCompact = false
+            blockColumn = level.column + options.indent
+            putProperties(properties, shape)
+            return
+        }
+        // A line of its own, or the place on this one.
+        if level.compact {
+            levels[at].compact = false
+            if needsSpace {
+                written.append(0x20)
+                needsSpace = false
+            }
+        } else {
+            newline()
+            spaces(level.column)
+        }
+        if level.isMap && !level.onValue && shape == .Simple {
+            levels[at].explicitKey = false
+            putProperties(properties, shape)
+            return
+        }
+        if level.isMap && !level.onValue {
+            levels[at].explicitKey = true
+        }
+        put(!level.isMap ? "-" : level.onValue ? ":" : "?")
+        needsSpace = true
+        childColumn = level.column + 2
+        childCompact = properties.isEmpty
+        blockColumn = level.column + 2
+        putProperties(properties, shape)
+    }
+
+    fn putProperties(_ properties: String, _ shape: YamlShape) {
+        if !properties.isEmpty {
+            put(properties)
+            needsSpace = true
+            if shape == .Block {
+                childCompact = false
+            }
+        }
+    }
+
+    // A node is done: the next is its collection's next, or there is none.
+    fn done(spaced: Bool) {
+        if levels.isEmpty {
+            state = 4
+            return
+        }
+        let at = levels.count - 1
+        if levels[at].isMap && !levels[at].onValue {
+            levels[at].onValue = true
+            levels[at].spaced = spaced
+            return
+        }
+        levels[at].onValue = false
+        levels[at].count += 1
+    }
+
+    // ---- Collections ---------------------------------------------------------
+
+    fn begin(_ event: YamlEvent) throws(YamlError) {
+        var flow = event.collectionStyle == .Flow || options.flow
+        if !levels.isEmpty && levels[levels.count - 1].isFlow {
+            flow = true
+        }
+        let comment = pendingTrailing
+        pendingTrailing = none
+        try place(flow ? .Flow : .Block, event)
+        if flow {
+            put(event.kind == .SequenceStart ? "[" : "{")
+        } else if let comment = comment {
+            // Not after a collection that starts on its line.
+            if !childCompact && !levels.isEmpty {
+                let next = trailing
+                trailing = comment
+                putTrailing()
+                trailing = next
+            }
+        }
+        levels.append(YamlLevel(isMap: event.kind == .MappingStart, isFlow: flow, column: childColumn, compact: childCompact && !flow))
+    }
+
+    fn end(_ event: YamlEvent) throws(YamlError) {
+        if levels.isEmpty || levels[levels.count - 1].isMap != (event.kind == .MappingEnd) {
+            throw wrong("\(event.description()) ends no collection")
+        }
+        let level = levels.removeLast()
+        if level.onValue {
+            throw wrong("a mapping ends after a key")
+        }
+        if level.isFlow {
+            needsSpace = false
+            put(level.isMap ? "}" : "]")
+        }
+        done(spaced: false)
+    }
+
+    // ---- Scalars -------------------------------------------------------------
+
+    fn scalar(_ event: YamlEvent) throws(YamlError) {
+        var flow = options.flow
+        var key = false
+        var element = false
+        if !levels.isEmpty {
+            let level = levels[levels.count - 1]
+            flow = level.isFlow
+            key = level.isMap && !level.onValue
+            element = flow && !level.isMap
+        }
+        let bare = event.anchor == none && event.tag == none
+        let style = yamlStyle(event, flow: flow, key: key)
+        if style == .Plain && event.value.isEmpty {
+            // Nothing, where nothing can be written; a flow sequence, and a
+            // document of nothing else, need something.
+            if bare && element {
+                try place(.Simple, event)
+                put("null")
+                done(spaced: false)
+                return
+            }
+            if bare && levels.isEmpty && !afterMarker {
+                written.append(utf8: "---")
+                needsSpace = true
+            }
+            try place(bare && key ? .Long : .Simple, event)
+            putTrailing()
+            done(spaced: true)
+            return
+        }
+        let block = style == .Literal || style == .Folded
+        try place(block || event.value.utf8Count > 128 ? .Long : .Simple, event)
+        if block {
+            putBlock(event.value, style == .Literal)
+        } else {
+            if style == .Plain {
+                put(event.value)
+            } else if style == .SingleQuoted {
+                put("'" + event.value.replacing("'", with: "''") + "'")
+            } else {
+                put(yamlDoubleQuoted(event.value))
+            }
+            putTrailing()
+        }
+        done(spaced: false)
+    }
+
+    fn putBlock(_ value: String, _ literal: Bool) {
+        let bytes = value.utf8
+        var body = bytes.count
+        while body > 0 && bytes[body - 1] == 0x0A {
+            body -= 1
+        }
+        let breaks = bytes.count - body
+        var header = literal ? "|" : ">"
+        // Where the text's first line starts with a space, or it has none
+        // but spaces and breaks, the indentation is said.
+        var first = 0
+        while first < body && bytes[first] == 0x0A {
+            first += 1
+        }
+        if first < body && bytes[first] == 0x20 {
+            header = header + "\(blockColumn - blockParent)"
+        }
+        if breaks == 0 {
+            header = header + "-"
+        } else if breaks > 1 || body == 0 {
+            header = header + "+"
+        }
+        put(header)
+        putTrailing()
+        newline()
+        var i = 0
+        // Whether the text's last line that is not empty started with white
+        // space, and how many breaks came after it.
+        var white = true
+        var pending = 0
+        while i < body {
+            var end = i
+            while end < body && bytes[end] != 0x0A {
+                end += 1
+            }
+            if end == i {
+                pending += 1
+            } else {
+                let leading = bytes[i] == 0x20 || bytes[i] == 0x09
+                if !literal && !white && !leading && pending > 0 {
+                    pending += 1
+                }
+                written.append(repeating: 0x0A, count: pending)
+                spaces(blockColumn)
+                written.append(utf8: value, from: i, to: end)
+                pending = 1
+                white = leading
+            }
+            i = end + 1
+        }
+        if body > 0 {
+            written.append(0x0A)
+        }
+        written.append(repeating: 0x0A, count: body > 0 ? (breaks > 1 ? breaks - 1 : 0) : breaks)
+    }
+}
+
+// What a node takes of the line it goes on.
+enum YamlShape {
+    // A key as it is: on one line, and short.
+    Simple
+    // On one line or many, and no key without a '?'.
+    Long
+    // A flow collection.
+    Flow
+    // A block collection.
+    Block
+}
+
+// A collection being written.
+struct YamlLevel {
+    let isMap: Bool
+    let isFlow: Bool
+    let column: Int
+    // Whether its next entry goes where the line is.
+    var compact: Bool
+    var count: Int = 0
+    // Whether a key was written and its value is next, after a '?' or a key
+    // that the ':' must be apart from.
+    var onValue: Bool = false
+    var explicitKey: Bool = false
+    var spaced: Bool = false
+
+    init(isMap: Bool, isFlow: Bool, column: Int, compact: Bool) {
+        self.isMap = isMap
+        self.isFlow = isFlow
+        self.column = column
+        self.compact = compact
+    }
+}

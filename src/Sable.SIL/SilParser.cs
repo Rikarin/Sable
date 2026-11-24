@@ -574,6 +574,10 @@ public sealed class SilParser {
             type.Deinit = Expect(TokenKind.Global, "the deinit function").Text;
         }
 
+        if (Accept("generic_deinit")) {
+            type.HasGenericDeinit = true;
+        }
+
         if (Accept("empty_from")) {
             type.EmptyFrom = Count("the first field that may start empty");
         }

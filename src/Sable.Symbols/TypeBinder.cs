@@ -1287,6 +1287,15 @@ internal sealed class TypeBinder(Compilation compilation) {
                     : ErrorTypeSymbol.Instance;
             }
 
+            // 'any Any', a value of any type: no protocol asked of it. 'any Any.Type' is a 'Type'.
+            case ExistentialTypeSyntax { ConstraintType: SimpleNameTypeSyntax { TypeArgumentList: null, Identifier.Text: "Any" } anything }
+                when Lookup("Any", context, scope, anything.Span, report: false) is null:
+                return new ExistentialTypeSymbol(new CompositionTypeSymbol([]));
+
+            case ExistentialTypeSyntax { ConstraintType: QualifiedNameSyntax { Left: SimpleNameTypeSyntax { TypeArgumentList: null, Identifier.Text: "Any" } anything, Right: { Identifier.Text: "Type", TypeArgumentList: null } } }
+                when Lookup("Any", context, scope, anything.Span, report: false) is null:
+                return compilation.Core.Type;
+
             case ExistentialTypeSyntax existential: {
                 var constraint = BindType(existential.ConstraintType, context, scope);
                 return RequireProtocol(constraint, "any", existential.ConstraintType.Span)

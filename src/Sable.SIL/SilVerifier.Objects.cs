@@ -365,7 +365,7 @@ public static partial class SilVerifier {
         void Deinit(NominalType type, string deinit) {
             if (Signature(deinit) is not { } signature) {
                 errors.Add($"{type.Name}: its deinit @{deinit} is not a function the module defines");
-            } else if (signature.Parameters.Length != 1 || signature.Parameters[0] != type || signature.Result != SilType.Unit || signature.Thrown is not null) {
+            } else if (signature.Parameters.Length != 1 || signature.Parameters[0] != type && !SilType.SameErasingOpaque(signature.Parameters[0], type, opaqueOnly: true) || signature.Result != SilType.Unit || signature.Thrown is not null) {
                 errors.Add($"{type.Name}: its deinit @{deinit} is {signature}, not ({type.Name}) -> ()");
             }
         }

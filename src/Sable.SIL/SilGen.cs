@@ -2278,8 +2278,10 @@ public sealed partial class SilGen {
                     result = SilType.Unit;
                 }
 
+                // So is an error of one, thrown as that address.
                 if (thrown is not null && SilType.IsIndirect(thrown)) {
-                    return null;
+                    thrown = SilType.Address(thrown);
+                    parameters.Add(thrown);
                 }
 
                 return new ThickFunctionType(new FunctionType(parameters.ToImmutable(), result, thrown, isAsync: functionType.IsAsync));
@@ -2383,6 +2385,8 @@ public sealed partial class SilGen {
                 // Unspecialised code never makes one of a type only its metadata knows (#297): nothing destroys one as that.
                 if (!SilType.MentionsOpaque(classType)) {
                     classType.Deinit ??= GenericDeinit(named);
+                } else {
+                    classType.HasGenericDeinit = DeinitOf(named.OriginalDefinition) is not null;
                 }
 
                 return classType;
@@ -10507,7 +10511,7 @@ public sealed partial class SilGen {
             // opened as a type known by its metadata.
             if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol } && call.Receiver is { } existentialReceiver
                 && Sub(existentialReceiver.Type) is ExistentialTypeSymbol) {
-                return IsRequirementOf(existentialReceiver, SlotName(callee)) && !OpensForResult(callee, callee.ReturnType, callee.ThrownType)
+                return IsRequirementOf(existentialReceiver, SlotName(callee)) && !OpensForResult(callee, callee.ReturnType, callee.ThrownType) && generator.OwnShape(callee) is null
                     ? ExistentialCall(existentialReceiver, SlotName(callee), call.Arguments, call)
                     : OpenedExistential(existentialReceiver, callee, callee.IsMutating, call,
                         (self, opened) => {
@@ -11733,13 +11737,27 @@ public sealed partial class SilGen {
 
             // A function of a type parameter's values, in the generic
             // convention: its result written where this call says (#297).
-            if (arguments.Count == thick.Signature.Parameters.Length - 1 && thick.Signature.Result == SilType.Unit
-                && GenericOut(thick.Signature.Parameters[^1], Sub(call.Type)) is { } into) {
-                arguments.Add(into.Passed);
-                return TakeOut(Invoke(callee, thick.Signature, arguments, borrows, call.Syntax), into.Slot);
+            var writesError = thick.Signature is { Thrown: AddressType errorAddress, Parameters: [.., var last] } && last == errorAddress;
+            (SilValue Passed, AllocStackInst Slot)? into = null;
+            if (arguments.Count == thick.Signature.Parameters.Length - (writesError ? 2 : 1) && thick.Signature.Result == SilType.Unit
+                && (into = GenericOut(thick.Signature.Parameters[arguments.Count], Sub(call.Type))) is { } result) {
+                arguments.Add(result.Passed);
             }
 
-            return Invoke(callee, thick.Signature, arguments, borrows, call.Syntax);
+            // And an error of one, where it goes.
+            (SilValue Passed, AllocStackInst? Slot, bool CannotThrow)? error = null;
+            if (writesError) {
+                if (functionType?.ThrownType is not { } thrown || GenericErrorOut((AddressType)thick.Signature.Thrown!, thrown) is not { } place) {
+                    EndAll(borrows);
+                    return Missing(call, "where this call's error goes");
+                }
+
+                error = place;
+                arguments.Add(place.Passed);
+            }
+
+            var invoked = Invoke(callee, thick.Signature, arguments, borrows, call.Syntax, cannotThrow: error is { CannotThrow: true }, errorSlot: error?.Slot);
+            return into is { } written ? TakeOut(invoked, written.Slot) : invoked;
         }
 
         /// <summary>

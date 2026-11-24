@@ -83,6 +83,10 @@ public static class SilPrinter {
                         builder.Append(" deinit @").Append(deinit);
                     }
 
+                    if (classType.HasGenericDeinit) {
+                        builder.Append(" generic_deinit");
+                    }
+
                     if (classType.EmptyFrom is { } emptyFrom) {
                         builder.Append(" empty_from ").Append(emptyFrom);
                     }

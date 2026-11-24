@@ -1396,8 +1396,22 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                 var viewed = Value(builtin.Operands[0]);
 
                 // A function a generic type keeps in its own convention, seen as this code's: the copy would call it in another.
-                if (builtin.Operands[0].Type is ThickFunctionType kept && IsStored(kept) != IsStored(builtin.Type)) {
-                    throw new Refused($"{name} of a function kept in a generic type");
+                // One over it that converts, as code that knows the types has.
+                if (builtin.Operands[0].Type is ThickFunctionType && IsStored(builtin.Operands[0].Type) != IsStored(builtin.Type)) {
+                    if (name != "opaque_take_as" || viewed.Type is not ThickFunctionType from || Substitute(builtin.Type) is not ThickFunctionType to
+                        || SilGen.Reabstract(_module, from, to) is not var (thunk, context)) {
+                        throw new Refused($"{name} of a function kept in a generic type");
+                    }
+
+                    if (from == to) {
+                        Map(builtin, viewed);
+                        return;
+                    }
+
+                    var holder = Emit(new AllocRefInst(context), builtin);
+                    Emit(new StoreInst(viewed, Emit(new RefElementAddrInst(holder, 0), builtin), StoreKind.Init), builtin);
+                    Map(builtin, Emit(new PartialApplyInst(Emit(new FunctionRefInst(thunk, to.Implementation), builtin), holder, to), builtin));
+                    return;
                 }
 
                 var target = Substitute(builtin.Type);
@@ -1603,7 +1617,12 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                 var display = classType.DisplayName is { } written && written.IndexOf('<') is > 0 and var open
                     ? $"{written[..open]}<{string.Join(", ", arguments.Select(TypeMetadata.DisplayName))}>"
                     : classType.DisplayName;
-                var copy = new ClassType(name) { DisplayName = display, Deinit = display is null ? null : _module.GenericDeinits.GetValueOrDefault(display.IndexOf('<') is > 0 and var end ? display[..end] : display) };
+                var deinit = display is null ? null : _module.GenericDeinits.GetValueOrDefault(display.IndexOf('<') is > 0 and var end ? display[..end] : display);
+                if (classType.HasGenericDeinit && deinit is null) {
+                    throw new Refused($"{nominal}, whose deinit is another unit's");
+                }
+
+                var copy = new ClassType(name) { DisplayName = display, Deinit = deinit };
                 _substituted[name] = copy;
                 copy.Conformances.AddRange(classType.Conformances);
                 copy.ConditionalConformances.AddRange(classType.ConditionalConformances);

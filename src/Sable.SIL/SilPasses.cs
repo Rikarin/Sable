@@ -150,8 +150,16 @@ public static class SilPassManager {
         // (A table's own witnesses take Self's metadata too, but know the type.)
         var unspecialised = module.Functions.Any(static f => f.IsUnspecialised && !f.Name.StartsWith("$generic$witness$", StringComparison.Ordinal));
         var tabled = new HashSet<string>(StringComparer.Ordinal);
+        // Those of a generic type's arguments are reached by what reads them from its metadata: a template table's entries, a deinit compiled once.
+        var readsArguments = module.GenericDeinits.Count > 0 || module.WitnessTables.Any(static t => t.IsTemplate);
         void Witnesses(SilType? type) {
             for (; type is not null && tabled.Add(type.ToString()); type = (type as ClassType)?.Superclass) {
+                if (readsArguments && type is NominalType { TypeArguments: { IsDefaultOrEmpty: false } arguments }) {
+                    foreach (var argument in arguments) {
+                        Witnesses(argument);
+                    }
+                }
+
                 foreach (var table in tables[type.ToString()]) {
                     foreach (var entry in table.Entries) {
                         if (entry.Function is { } witness) {

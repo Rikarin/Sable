@@ -232,14 +232,15 @@ public sealed partial class SilGen {
         ///     them (#299, SE-0352). A type parameter is opened when it is
         ///     constrained to protocols, bound to <c>any P</c> of protocols that
         ///     are not generic, and exactly one parameter, of exactly that type
-        ///     and taken by value, names it — so several, each from its own
+        ///     and taken by value or <c>inout</c> (changed in the box, first made
+        ///     the existential's own), names it — so several, each from its own
         ///     argument (<c>pair(a, b)</c> for <c>fn pair&lt;A: P, B: Q&gt;(_ a:
         ///     A, _ b: B)</c>) — and the result, if it names it at all, is it
         ///     (boxed again as the existential). Not opened: a type parameter
         ///     two parameters name (the two existentials may hold different
         ///     types), one a parameter names inside another type (<c>T?</c>,
         ///     <c>T[]</c>, <c>(T) -> Int</c>, which would need a value of that
-        ///     type made of the opened one), one taken <c>inout</c>, one a result
+        ///     type made of the opened one), one a result
         ///     or an error names inside another type, which cannot be erased —
         ///     those calls run the callee's instance for the existential, as
         ///     before. The callee is compiled once. Null when none opens.
@@ -265,7 +266,7 @@ public sealed partial class SilGen {
                 var other = false;
                 for (var i = 0; i < callee.Parameters.Length; i++) {
                     var type = callee.Parameters[i].Type;
-                    if (type.Equals(parameter) && callee.Parameters[i].Modifier is ParameterModifier.None or ParameterModifier.In
+                    if (type.Equals(parameter) && callee.Parameters[i].Modifier is ParameterModifier.None or ParameterModifier.In or ParameterModifier.InOut
                         && Sub(call.Arguments[i].Type).Equals(existential)) {
                         taking.Add(i);
                     } else if (Mentions(type, [parameter])) {
@@ -330,6 +331,9 @@ public sealed partial class SilGen {
                 }
             }
 
+            // Those an inout parameter takes: each where the existential is.
+            var changed = new Dictionary<int, SilValue>();
+            var borrows = new List<SilValue>();
             var openedTypes = new List<TypeParameterSymbol>();
             var givens = new List<ParameterSymbol>();
             var arguments = call.Arguments.ToArray();
@@ -359,21 +363,37 @@ public sealed partial class SilGen {
                     }
 
                     var opened = TypeParameterSymbol.OpenedExistential(parameter, [..protocols]);
-                    if (Expression(call.Arguments[index]) is not { } existential) {
-                        EndLent();
-                        return null;
+                    var taken = call.Function.Parameters[index].Modifier == ParameterModifier.InOut;
+                    if (taken) {
+                        if (Address(call.Arguments[index], borrows) is not { } address) {
+                            EndAll(borrows);
+                            EndLent();
+                            return null;
+                        }
+
+                        changed[givens.Count] = address;
+                        held.Add(address);
+                        _genericMetadata[opened] = Emit(new LoadInst(Emit(new StructElementAddrInst(address, 1))));
+                        for (var i = 0; i < protocols.Count; i++) {
+                            _genericTables[(opened, protocols[i].OriginalDefinition)] = Emit(new LoadInst(Emit(new StructElementAddrInst(address, SilGen.ExistentialTables + i))));
+                            requirements.Add((opened, protocols[i].OriginalDefinition));
+                        }
+                    } else {
+                        if (Expression(call.Arguments[index]) is not { } existential) {
+                            EndLent();
+                            return null;
+                        }
+
+                        held.Add(Hold(existential));
+                        lent.Add(existential);
+                        _genericMetadata[opened] = Emit(new StructExtractInst(existential, 1));
+                        for (var i = 0; i < protocols.Count; i++) {
+                            _genericTables[(opened, protocols[i].OriginalDefinition)] = Emit(new StructExtractInst(existential, SilGen.ExistentialTables + i));
+                            requirements.Add((opened, protocols[i].OriginalDefinition));
+                        }
                     }
 
-                    held.Add(Hold(existential));
-                    lent.Add(existential);
-                    var metadata = Emit(new StructExtractInst(existential, 1));
-                    _genericMetadata[opened] = metadata;
-                    for (var i = 0; i < protocols.Count; i++) {
-                        _genericTables[(opened, protocols[i].OriginalDefinition)] = Emit(new StructExtractInst(existential, SilGen.ExistentialTables + i));
-                        requirements.Add((opened, protocols[i].OriginalDefinition));
-                    }
-
-                    var given = ParameterSymbol.Synthetic($"$opened{givens.Count}", symbol, opened);
+                    var given = ParameterSymbol.Synthetic($"$opened{givens.Count}", symbol, opened, taken ? ParameterModifier.InOut : ParameterModifier.None);
                     givens.Add(given);
                     openedTypes.Add(opened);
                     arguments[index] = new BoundParameterAccess(call.Arguments[index].Syntax, given);
@@ -383,7 +403,9 @@ public sealed partial class SilGen {
                 using (generator.Opaque(new GenericShape([..openedTypes], [..requirements]))) {
                     // Each value where its box holds it, of the type it is opened as.
                     for (var i = 0; i < givens.Count; i++) {
-                        _parameters[givens[i]] = Emit(new BuiltinInst("box_project", LowerType(openedTypes[i])!, Emit(new StructExtractInst(held[i], 0)), _genericMetadata[openedTypes[i]]));
+                        _parameters[givens[i]] = changed.TryGetValue(i, out var at)
+                            ? Emit(new BuiltinInst("box_project_unique", SilType.Address(LowerType(openedTypes[i])!), Emit(new StructElementAddrInst(at, 0)), _genericMetadata[openedTypes[i]]))
+                            : Emit(new BuiltinInst("box_project", LowerType(openedTypes[i])!, Emit(new StructExtractInst(held[i], 0)), _genericMetadata[openedTypes[i]]));
                     }
 
                     TypeSymbol? erased = erasedFrom >= 0 ? substitution.Lookup(layouts[erasedFrom].Parameter) : null;
@@ -394,10 +416,12 @@ public sealed partial class SilGen {
                     var result = Call(opening);
                     _openingCall = null;
                     if (result is null || _current is null) {
+                        EndAll(borrows);
                         EndLent();
                         return result;
                     }
 
+                    EndAll(borrows);
                     var value = erased is not null
                         ? Erased(result, erased, new BoundConversion(call.Syntax, layouts[erasedFrom].Type, call, ConversionKind.Existential))
                         : result;

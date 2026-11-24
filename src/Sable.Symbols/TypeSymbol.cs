@@ -1203,7 +1203,7 @@ public sealed class CompositionTypeSymbol : TypeSymbol {
     public static ImmutableArray<TypeSymbol> PartsOf(TypeSymbol constraint) =>
         constraint is CompositionTypeSymbol composition ? composition.Parts : [constraint];
 
-    public override string ToDisplayString() => string.Join(" & ", Parts.Select(static p => p.ToDisplayString()));
+    public override string ToDisplayString() => Parts.IsEmpty ? "Any" : string.Join(" & ", Parts.Select(static p => p.ToDisplayString()));
 
     public override bool Equals(TypeSymbol? other) {
         if (other is not CompositionTypeSymbol composition) {

@@ -63,6 +63,36 @@ public sealed class UnspecialisedLoweringTests {
                           }
                           """;
 
+    /// <summary>
+    ///     A union that holds itself in an array is a cycle of types: looking
+    ///     through a generic function's values for the associated types they
+    ///     name goes round it once, not for ever.
+    /// </summary>
+    [Fact]
+    public void AUnionHoldingAnArrayOfItselfIsLookedThroughOnce() {
+        const string source = """
+                              union Node {
+                                  Leaf(code: Int)
+                                  Many(items: Node[>..])
+                              }
+
+                              fn count<T: Equatable>(_ value: T) -> Int {
+                                  let node = Node.Many(items: [.Leaf(code: 1), .Many(items: [])])
+                                  if case .Many(let items) = node {
+                                      return items.count
+                                  }
+                                  return 0
+                              }
+
+                              fn main() {
+                                  print(count(3))
+                              }
+                              """;
+        var module = Lower(source);
+        Assert.NotNull(module.Find("M.count$generic"));
+        Assert.Equal("2\n", Run(module));
+    }
+
     /// <summary>A generic function used with two types is lowered once, and nothing is specialised for either.</summary>
     [Fact]
     public void AGenericFunctionIsLoweredOnce() {

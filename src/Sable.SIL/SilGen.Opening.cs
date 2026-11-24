@@ -296,8 +296,7 @@ public sealed partial class SilGen {
         ///     metadata the existential holds, conforming by its tables; the
         ///     callee compiled once is called as it is for a Type opened, and a
         ///     result of one of the types erased to its existential again, by
-        ///     the type's boxer. The existentials are evaluated first, in their
-        ///     order, then the other arguments, as the call evaluates them.
+        ///     the type's boxer. The arguments are evaluated in their order.
         /// </summary>
         SilValue? OpenedExistentialCall(BoundCall call, List<(TypeParameterSymbol Parameter, int Argument)> opens) {
             var layouts = new List<(TypeParameterSymbol Parameter, int Argument, ExistentialTypeSymbol Type, List<NamedTypeSymbol> Protocols)>();
@@ -319,20 +318,54 @@ public sealed partial class SilGen {
 
             // Each existential, held for the call, in the order of its argument.
             var held = new List<SilValue>();
+            var lent = new List<SilValue>();
+            var temporaries = new List<ParameterSymbol>();
+
+            // Those still held: the call ends an argument it was lent as it ends any temporary of its own.
+            void EndLent() {
+                foreach (var each in Enumerable.Reverse(lent)) {
+                    if (_temporaries.Contains(each)) {
+                        Destroy(Unhold(each));
+                    }
+                }
+            }
+
             var openedTypes = new List<TypeParameterSymbol>();
             var givens = new List<ParameterSymbol>();
             var arguments = call.Arguments.ToArray();
             var substitution = call.Substitution;
             var requirements = new List<(TypeParameterSymbol, NamedTypeSymbol)>();
             try {
+                var evaluated = 0;
                 foreach (var (parameter, index, _, protocols) in layouts.OrderBy(static l => l.Argument)) {
+                    // The arguments before it are evaluated before it, as the call says, and lent to the call from here.
+                    for (; evaluated < index; evaluated++) {
+                        var before = call.Arguments[evaluated];
+                        if (layouts.Exists(l => l.Argument == evaluated) || call.Function.Parameters[evaluated] is not { Modifier: ParameterModifier.None or ParameterModifier.In, IsVariadic: false }
+                            || before is BoundLiteral or BoundClosure or BoundLocalAccess or BoundParameterAccess) {
+                            continue;
+                        }
+
+                        if (Expression(before) is not { } value) {
+                            EndLent();
+                            return null;
+                        }
+
+                        lent.Add(Hold(value));
+                        var temporary = ParameterSymbol.Synthetic($"$before{evaluated}", symbol, before.Type);
+                        _parameters[temporary] = value;
+                        temporaries.Add(temporary);
+                        arguments[evaluated] = new BoundParameterAccess(before.Syntax, temporary);
+                    }
+
                     var opened = TypeParameterSymbol.OpenedExistential(parameter, [..protocols]);
                     if (Expression(call.Arguments[index]) is not { } existential) {
-                        held.ForEach(e => Destroy(Unhold(e)));
+                        EndLent();
                         return null;
                     }
 
                     held.Add(Hold(existential));
+                    lent.Add(existential);
                     var metadata = Emit(new StructExtractInst(existential, 1));
                     _genericMetadata[opened] = metadata;
                     for (var i = 0; i < protocols.Count; i++) {
@@ -361,19 +394,20 @@ public sealed partial class SilGen {
                     var result = Call(opening);
                     _openingCall = null;
                     if (result is null || _current is null) {
-                        held.ForEach(e => Destroy(Unhold(e)));
+                        EndLent();
                         return result;
                     }
 
                     var value = erased is not null
                         ? Erased(result, erased, new BoundConversion(call.Syntax, layouts[erasedFrom].Type, call, ConversionKind.Existential))
                         : result;
-                    held.ForEach(e => Destroy(Unhold(e)));
+                    EndLent();
                     return value;
                 }
             } finally {
                 _openingCall = null;
                 givens.ForEach(g => _parameters.Remove(g));
+                temporaries.ForEach(t => _parameters.Remove(t));
                 openedTypes.ForEach(o => _genericMetadata.Remove(o));
                 requirements.ForEach(r => _genericTables.Remove(r));
             }

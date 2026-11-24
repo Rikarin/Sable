@@ -1,0 +1,576 @@
+module CborTests
+
+import Sable.Collections
+import Sable.Serialize
+import Sable.Testing
+import Sable.Text
+import Sable.Time
+
+@derive(Serializable, Equatable, Debug)
+union Shape {
+    Circle(radius: F64)
+    Point(Int, Int)
+    Empty
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Meta {
+    var version: U64
+    var rate: F32
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Record {
+    var name: String
+    @serialize(flatten)
+    var meta: Meta
+    var shapes: Shape[>..]
+    var note: String?
+    var when: UtcDateTime
+}
+
+fn bytes(_ hex: String) -> U8[>..] {
+    return try! Hex.decode(hex)
+}
+
+// What an encoder wrote, or the error it threw.
+fn wrote(_ body: (CborEncoder) throws(SerializeError) -> Void) -> String {
+    return wroteAs(false, body)
+}
+
+fn wroteAs(_ deterministic: Bool, _ body: (CborEncoder) throws(SerializeError) -> Void) -> String {
+    let encoder = CborEncoder(deterministic: deterministic)
+    do {
+        try body(encoder)
+        return Hex.encode(try encoder.bytes())
+    } catch {
+        return error.description()
+    }
+}
+
+// The error the bytes do not parse by; "" when they parse.
+fn refusal(_ hex: String, depth: Int = 128, deterministic: Bool = false) -> String {
+    return refusal(of: bytes(hex), depth: depth, deterministic: deterministic)
+}
+
+fn refusal(of bytes: U8[>..], depth: Int = 128, deterministic: Bool = false) -> String {
+    do {
+        let _ = try CborValue.parse(bytes, maximumDepth: depth, deterministic: deterministic)
+        return ""
+    } catch {
+        return error.description()
+    }
+}
+
+// Whether the reader comes to the same end as the parser.
+fn tokens(_ bytes: U8[>..], depth: Int = 128) throws(SerializeError) -> CborToken[>..] {
+    var reader = CborReader(bytes, maximumDepth: depth)
+    var all: CborToken[>..] = []
+    while let token = try reader.next() {
+        all.append(token)
+    }
+    return all
+}
+
+// RFC 8949 Appendix A, the encodings that are preferred ones: what each is
+// in diagnostic notation.
+fn preferredVectors() -> (String, String)[>..] {
+    return [
+        ("0", "00"), ("1", "01"), ("10", "0a"), ("23", "17"), ("24", "1818"), ("25", "1819"), ("100", "1864"),
+        ("1000", "1903e8"), ("1000000", "1a000f4240"), ("1000000000000", "1b000000e8d4a51000"),
+        ("18446744073709551615", "1bffffffffffffffff"), ("2(h'010000000000000000')", "c249010000000000000000"),
+        ("-18446744073709551616", "3bffffffffffffffff"), ("3(h'010000000000000000')", "c349010000000000000000"),
+        ("-1", "20"), ("-10", "29"), ("-100", "3863"), ("-1000", "3903e7"),
+        ("0.0", "f90000"), ("-0.0", "f98000"), ("1.0", "f93c00"), ("1.1", "fb3ff199999999999a"), ("1.5", "f93e00"),
+        ("65504.0", "f97bff"), ("100000.0", "fa47c35000"), ("3.4028234663852886e+38", "fa7f7fffff"),
+        ("1e+300", "fb7e37e43c8800759c"), ("-4.0", "f9c400"), ("-4.1", "fbc010666666666666"),
+        ("Infinity", "f97c00"), ("NaN", "f97e00"), ("-Infinity", "f9fc00"),
+        ("false", "f4"), ("true", "f5"), ("null", "f6"), ("undefined", "f7"), ("simple(16)", "f0"), ("simple(255)", "f8ff"),
+        ("0(\"2013-03-21T20:04:00Z\")", "c074323031332d30332d32315432303a30343a30305a"),
+        ("1(1363896240)", "c11a514b67b0"), ("1(1363896240.5)", "c1fb41d452d9ec200000"),
+        ("23(h'01020304')", "d74401020304"), ("24(h'6449455446')", "d818456449455446"),
+        ("32(\"http://www.example.com\")", "d82076687474703a2f2f7777772e6578616d706c652e636f6d"),
+        ("h''", "40"), ("h'01020304'", "4401020304"), ("\"\"", "60"), ("\"a\"", "6161"), ("\"IETF\"", "6449455446"),
+        ("\"\\\"\\\\\"", "62225c"), ("\"\u{fc}\"", "62c3bc"), ("\"\u{6c34}\"", "63e6b0b4"), ("\"\u{10151}\"", "64f0908591"),
+        ("[]", "80"), ("[1, 2, 3]", "83010203"), ("[1, [2, 3], [4, 5]]", "8301820203820405"),
+        ("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]",
+            "98190102030405060708090a0b0c0d0e0f101112131415161718181819"),
+        ("{}", "a0"), ("{1: 2, 3: 4}", "a201020304"), ("{\"a\": 1, \"b\": [2, 3]}", "a26161016162820203"),
+        ("[\"a\", {\"b\": \"c\"}]", "826161a161626163"),
+        ("{\"a\": \"A\", \"b\": \"B\", \"c\": \"C\", \"d\": \"D\", \"e\": \"E\"}", "a56161614161626142616361436164614461656145"),
+    ]
+}
+
+// The rest of Appendix A: other encodings of the value.
+fn otherVectors() -> (String, String)[>..] {
+    return [
+        ("Infinity", "fa7f800000"), ("NaN", "fa7fc00000"), ("-Infinity", "faff800000"),
+        ("Infinity", "fb7ff0000000000000"), ("NaN", "fb7ff8000000000000"), ("-Infinity", "fbfff0000000000000"),
+        ("h'0102030405'", "5f42010243030405ff"), ("\"streaming\"", "7f657374726561646d696e67ff"),
+        ("[]", "9fff"), ("[1, [2, 3], [4, 5]]", "9f018202039f0405ffff"), ("[1, [2, 3], [4, 5]]", "9f01820203820405ff"),
+        ("[1, [2, 3], [4, 5]]", "83018202039f0405ff"), ("[1, [2, 3], [4, 5]]", "83019f0203ff820405"),
+        ("[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]",
+            "9f0102030405060708090a0b0c0d0e0f101112131415161718181819ff"),
+        ("{\"a\": 1, \"b\": [2, 3]}", "bf61610161629f0203ffff"), ("[\"a\", {\"b\": \"c\"}]", "826161bf61626163ff"),
+        ("{\"Fun\": true, \"Amt\": -2}", "bf6346756ef563416d7421ff"),
+    ]
+}
+
+@test
+fn rfc8949sExamplesAreReadAndWritten() throws {
+    for (diagnostic, hex) in preferredVectors() {
+        let value = try CborValue.parse(bytes(hex))
+        assertEqual(value.diagnostic(), diagnostic)
+        assertEqual(Hex.encode(try value.bytes()), hex)
+        assertEqual(Hex.encode(try value.bytes(deterministic: true)), hex)
+        assertEqual(refusal(hex, deterministic: true), "")
+    }
+    for (diagnostic, hex) in otherVectors() {
+        assertEqual((try CborValue.parse(bytes(hex))).diagnostic(), diagnostic)
+        assert(refusal(hex, deterministic: true).contains("which is not deterministic"))
+    }
+    // The two subnormal and least normal halves, by value.
+    assert(try CborValue.parse(bytes("f90001")) == .Float(value: 5.960464477539063e-8))
+    assert(try CborValue.parse(bytes("f90400")) == .Float(value: 0.00006103515625))
+    assertEqual(Hex.encode(try Cbor.encode(5.960464477539063e-8)), "f90001")
+    assertEqual(Hex.encode(try Cbor.encode(0.00006103515625)), "f90400")
+}
+
+@test
+fn theReaderReadsEveryExampleAsTokens() throws {
+    for (_, hex) in preferredVectors() {
+        // What the tokens say, written again.
+        let encoder = CborEncoder()
+        var inMap: Bool[>..] = []
+        for token in try tokens(bytes(hex)) {
+            match token {
+                case .Unsigned(let value) => try encoder.encodeUInt(value)
+                case .Negative(let n)     => try encoder.encodeNegative(n)
+                case .Bytes(let value)    => try encoder.encodeBytes(value)
+                case .Text(let value)     => try encoder.encodeString(value)
+                case .BeginArray(let count) => {
+                    inMap.append(false)
+                    try encoder.beginSequence(count: count)
+                }
+                case .BeginMap(let count) => {
+                    inMap.append(true)
+                    try encoder.beginMap(count: count)
+                }
+                case .End => {
+                    if inMap.removeLast() {
+                        try encoder.endMap()
+                    } else {
+                        try encoder.endSequence()
+                    }
+                }
+                case .Tag(let number)   => try encoder.encodeTag(number)
+                case .Simple(let value) => try encoder.encodeSimple(value)
+                case .Float(let value)  => try encoder.encodeFloat(value)
+            }
+        }
+        assertEqual(Hex.encode(try encoder.bytes()), hex)
+    }
+    assert(try tokens(bytes("7f61616162ff")) == [.Text(value: "ab")])
+    assert(try tokens(bytes("5f4101ff")) == [.Bytes(value: [1])])
+    assert(try tokens(bytes("bf01c102ff")) == [.BeginMap(count: none), .Unsigned(value: 1), .Tag(number: 1), .Unsigned(value: 2), .End])
+    // A sequence of items (RFC 8742), and a position in it.
+    assert(try tokens(bytes("0180f6")) == [.Unsigned(value: 1), .BeginArray(count: 0), .End, .Simple(value: 22)])
+    var reader = CborReader(bytes("820102"))
+    let _ = try reader.next()
+    let _ = try reader.next()
+    assertEqual(reader.position, 2)
+    assertEqual(reader.depth, 1)
+}
+
+@test
+fn integersTakeTheFewestBytes() throws {
+    let cases: (Int, String)[>..] = [
+        (255, "18ff"), (256, "190100"), (65535, "19ffff"), (65536, "1a00010000"), (4294967295, "1affffffff"),
+        (4294967296, "1b0000000100000000"), (Int.max, "1b7fffffffffffffff"), (-24, "37"), (-25, "3818"),
+        (-256, "38ff"), (-257, "390100"), (-65536, "39ffff"), (-65537, "3a00010000"), (Int.min, "3b7fffffffffffffff"),
+    ]
+    for (value, hex) in cases {
+        assertEqual(Hex.encode(try Cbor.encode(value)), hex)
+        assertEqual(try Cbor.decode(Int.self, from: bytes(hex)), value)
+        assertEqual((try CborValue.parse(bytes(hex))).int!, value)
+        assert(CborValue.integer(value) == (try CborValue.parse(bytes(hex))))
+    }
+    assertEqual(try Cbor.decode(U64.self, from: bytes("1bffffffffffffffff")), U64.max)
+    for hex in ["01", "1801", "190001", "1a00000001", "1b0000000000000001", "c24101", "c24a00000000000000000001"] {
+        assertEqual(try Cbor.decode(Int.self, from: bytes(hex)), 1)
+        assertEqual(try Cbor.decode(U64.self, from: bytes(hex)), 1)
+        assertEqual(try Cbor.decode(F64.self, from: bytes(hex)), 1.0)
+    }
+    assertEqual(try Cbor.decode(Int.self, from: bytes("c34100")), -1)
+    assertEqual(try Cbor.decode(F64.self, from: bytes("c249010000000000000000")), 18446744073709551616.0)
+    assertEqual(try Cbor.decode(F64.self, from: bytes("c34107")), -8.0)
+    assertEqual(try Cbor.decode(F64.self, from: bytes("3863")), -100.0)
+    for hex in ["1bffffffffffffffff", "3bffffffffffffffff", "c249010000000000000000", "f93c00"] {
+        assert((try? Cbor.decode(Int.self, from: bytes(hex))) == none)
+    }
+    for hex in ["20", "c249010000000000000000", "c34100"] {
+        assert((try? Cbor.decode(U64.self, from: bytes(hex))) == none)
+    }
+    assert((CborValue.Unsigned(value: U64.max)).int == none && (CborValue.Negative(n: U64.max)).int == none && CborValue.Null.int == none)
+}
+
+@test
+fn floatsTakeTheFewestBitsThatHoldThem() throws {
+    for value in [0.0, 1.5, 65504.0, 65505.0, 0.1, 1e300, 5e-324, 3.4028234663852886e+38, -2.25, 5.960464477539063e-8, 2.98e-8] {
+        assertEqual(try Cbor.decode(F64.self, from: try Cbor.encode(value)), value)
+    }
+    assertEqual(Hex.encode(try Cbor.encode(65505.0)), "fa477fe100")
+    assertEqual(Hex.encode(try Cbor.encode(F64.fromBits(0x7FF8_0000_0000_1234))), "f97e00")
+    assertEqual(try Cbor.decode(F32.self, from: try Cbor.encode(0.1 as F32)), 0.1 as F32)
+}
+
+@test
+fn aDerivedTypeGoesThereAndBack() throws {
+    let record = Record {
+        name: "r",
+        meta: Meta { version: U64.max, rate: 0.5 },
+        shapes: [.Circle(radius: 0.1), .Point(-1, 2), .Empty],
+        note: none,
+        when: UtcDateTime.fromUnix(1700000000),
+    }
+    for deterministic in [false, true] {
+        let encoded = try Cbor.encode(record, deterministic: deterministic)
+        assertEqual(encoded[0], deterministic ? 0xA6 as U8 : 0xBF as U8)
+        assert(try Cbor.decode(Record.self, from: encoded) == record)
+        assertEqual(refusal(of: encoded, deterministic: true).isEmpty, deterministic)
+    }
+    var counts = Dictionary<String, Int>()
+    counts["one"] = 1
+    assertEqual(Hex.encode(try Cbor.encode(counts)), "a1636f6e6501")
+    assertEqual((try Cbor.decode(Dictionary<String, Int>.self, from: bytes("a1636f6e6501")))["one"] ?? 0, 1)
+    assertEqual(Hex.encode(try Cbor.encode(Shape.Empty)), "65456d707479")
+    assertEqual(Hex.encode(try Cbor.encode(Shape.Point(1, 2))), "a165506f696e74820102")
+    // Indefinite lengths throughout, and tags that are looked through.
+    let shapes = try Cbor.decode(Shape[>..].self, from: bytes("9fd9d9f765456d707479bf7f65506f696e7460ff9f0120ffffff"))
+    assert(shapes == [.Empty, .Point(1, -1)])
+}
+
+@test
+fn theDeterministicEncodingSortsAMapByItsKeysBytes() throws {
+    // RFC 8949 §4.2.1's example: 10, 100, -1, "z", "aa", [100], [-1], false.
+    let hex = wroteAs(true, { (encoder: CborEncoder) throws(SerializeError) in
+        try encoder.beginMap(count: 8)
+        try encoder.encodeBool(false)
+        try encoder.encodeInt(8)
+        try encoder.beginSequence(count: none)
+        try encoder.encodeInt(-1)
+        try encoder.endSequence()
+        try encoder.encodeInt(7)
+        try encoder.beginSequence(count: 1)
+        try encoder.encodeInt(100)
+        try encoder.endSequence()
+        try encoder.encodeInt(6)
+        try encoder.encodeKey("aa")
+        try encoder.encodeInt(5)
+        try encoder.encodeKey("z")
+        try encoder.encodeInt(4)
+        try encoder.encodeInt(-1)
+        try encoder.encodeInt(3)
+        try encoder.encodeInt(100)
+        try encoder.encodeInt(2)
+        try encoder.encodeInt(10)
+        try encoder.encodeInt(1)
+        try encoder.endMap()
+    })
+    assertEqual(hex, "a80a0118640220036 17a0462616105811864068120 07f408".replacing(" ", with: ""))
+    assertEqual(refusal(hex, deterministic: true), "")
+    // Maps in maps, each of a count not known, and a tag on a key.
+    let nested = wroteAs(true, { (encoder: CborEncoder) throws(SerializeError) in
+        try encoder.beginMap(count: none)
+        try encoder.encodeKey("b")
+        try encoder.beginMap(count: none)
+        try encoder.encodeKey("d")
+        try encoder.encodeNull()
+        try encoder.encodeKey("c")
+        try encoder.beginSequence(count: none)
+        try encoder.encodeInt(1)
+        try encoder.endSequence()
+        try encoder.endMap()
+        try encoder.encodeTag(5)
+        try encoder.encodeInt(2)
+        try encoder.encodeString("x")
+        try encoder.encodeKey("a")
+        try encoder.beginMap(count: none)
+        try encoder.endMap()
+        try encoder.endMap()
+    })
+    assertEqual(nested, "a36161a06162a261638101 6164f6c5026178".replacing(" ", with: ""))
+    assertEqual(wroteAs(true, {
+        try $0.beginMap(count: 2);
+        try $0.encodeKey("a");
+        try $0.encodeNull();
+        try $0.encodeKey("a");
+        try $0.encodeNull();
+        try $0.endMap()
+    }), "$: a map has the same key twice")
+}
+
+@test
+fn aDecoderCanAskForTheDeterministicEncoding() {
+    for hex in ["1800", "190001", "1a0000ffff", "1b00000000ffffffff", "5800", "7800", "9800", "b800", "d800f6", "fa3fc00000", "fb3ff8000000000000", "a2616201616100", "a2616100616101", "5f40ff", "a2f4006100"] {
+        if hex != "a2f4006100" {
+            assert(refusal(hex, deterministic: true).contains("not deterministic"))
+        }
+        assertEqual(refusal(hex, deterministic: true).isEmpty, false)
+    }
+    assertEqual(refusal("a3616101616202f400", deterministic: true), "")
+    assertEqual(refusal("a2616201616100", deterministic: true), "not CBOR: a map's keys out of order, which is not deterministic, at byte 4")
+    assert((try? Cbor.decode(Int.self, from: bytes("1800"), deterministic: true)) == none)
+    assert((try? CborDecoder.parse(bytes("1800"), deterministic: true)) == none)
+}
+
+@test
+fn aMomentReadsFromItsTags() throws {
+    let moment = UtcDateTime.fromUnix(1363896240)
+    assert(try Cbor.decode(UtcDateTime.self, from: bytes("c11a514b67b0")) == moment)
+    assert(try Cbor.decode(UtcDateTime.self, from: bytes("c074323031332d30332d32315432303a30343a30305a")) == moment)
+    assert(try CborDecoder.parse(bytes("c074323031332d30332d32315432303a30343a30305a")).decodeTimestamp() == moment)
+    let half = try Cbor.decode(UtcDateTime.self, from: bytes("c1fb41d452d9ec200000"))
+    assertEqual(half.nanosecond, 500000000)
+    let before = try Cbor.decode(UtcDateTime.self, from: bytes("c1f9be00"))
+    assert(before == UtcDateTime { secondsSinceEpoch: -2, nanosecond: 500000000 })
+    for hex in ["c11bffffffffffffffff", "c1fb7e37e43c8800759c", "c1f97e00", "c1f97c00", "c11b7fffffffffffffff", "c1f6", "01"] {
+        assert((try? CborDecoder.parse(bytes(hex)).decodeTimestamp()) == none)
+    }
+}
+
+@test
+fn decodersSayWhereAndWhatIsWrong() throws {
+    let root = try CborDecoder.parse(bytes("a3616182016178 05f5 63622063a1f601".replacing(" ", with: "")))
+    assertEqual(root.path, "$")
+    assertEqual(root.count, 3)
+    assert(root.kind == .Map && !root.isNull && !root.isMissing && root.tags.isEmpty)
+    assertEqual(root.field("a").element(1).path, "$.a[1]")
+    assert(root.field("a").element(2).isMissing && root.field("a").element(-1).isMissing && root.element(0).isMissing)
+    assert(root.hasField("a") && !root.hasField("c") && !root.hasField("5") && !root.field("a").hasField("a"))
+    assert(!root.excluding(["a"]).hasField("a"))
+    assertEqual(try root.excluding(["a"]).excluding(["5"]).decodeMap().count, 1)
+    var messages: String[>..] = []
+    let attempts: (() throws(SerializeError) -> Void)[>..] = [
+        {
+            let _ = try root.field("zz").decodeInt()
+        },
+        {
+            let _ = try root.field("zz").decodeValue()
+        },
+        {
+            let _ = try root.decodeInt()
+        },
+        {
+            let _ = try root.field("a").decodeString()
+        },
+        {
+            let _ = try root.field("a").element(1).decodeBool()
+        },
+        {
+            let _ = try root.field("a").element(0).decodeBytes()
+        },
+        {
+            let _ = try root.field("a").element(0).decodeSequence()
+        },
+        {
+            let _ = try root.field("a").element(1).decodeFloat()
+        },
+        {
+            let _ = try root.field("a").element(1).decodeTimestamp()
+        },
+        {
+            let _ = try root.field("b c").decodeMap()
+        },
+        {
+            let _ = try root.field("a").caseName()
+        },
+        {
+            let _ = try root.field("b c").caseName()
+        },
+        { try root.field("a").beginStruct("T") },
+        {
+            throw root.unknownCase("Z")
+        },
+        {
+            throw root.field("a").invalid("bad")
+        },
+    ]
+    for attempt in attempts {
+        do {
+            try attempt()
+            fail("read")
+        } catch {
+            messages.append(error.description())
+        }
+    }
+    assertEqual(messages.joined(separator: "\n"), """
+        $.zz: missing
+        $.zz: missing
+        $: expected an integer, found a map
+        $.a: expected a string, found an array
+        $.a[1]: expected a Bool, found a string
+        $.a[0]: expected bytes, found an integer
+        $.a[0]: expected an array, found an integer
+        $.a[1]: expected a number, found a string
+        $.a[1]: expected a moment, found a string
+        $['b c']: a key is neither a string nor an integer
+        $.a: expected a case's name, or a map of one entry, found an array
+        $['b c']: expected a case's name, or a map of one entry, found a map
+        $.a: expected a map (T), found an array
+        $: no case 'Z'
+        $.a: bad
+        """)
+    var kinds = ""
+    for hex in ["f6", "f7", "f4", "01", "20", "f90000", "60", "40", "80", "a0", "c24101", "f0", "c1c240", "9fff", "bfff"] {
+        let decoder = try CborDecoder.parse(bytes(hex))
+        kinds += "\(decoder.kind) "
+        assert(!decoder.kindName.isEmpty)
+    }
+    assertEqual(kinds, "Null Null Bool Number Number Number String Bytes Sequence Map Number Number Number Sequence Map ")
+    assertEqual(try CborDecoder.parse(bytes("9f010203ff")).count, 3)
+    assertEqual(try CborDecoder.parse(bytes("bf0102ff")).count, 1)
+    assert(root.field("zz").kind == .Missing && root.field("zz").kindName == "nothing" && root.casePayload().isMissing)
+    assert(try CborDecoder.parse(bytes("d9d9f7c101")).tags == [55799, 1])
+}
+
+@test
+fn theEncoderRefusesWhatWouldNotBeCbor() {
+    assertEqual(wrote({
+        try $0.beginSequence(count: 2);
+        try $0.encodeNull();
+        try $0.endSequence()
+    }), "$: 2 elements were declared and 1 written")
+    assertEqual(wrote({
+        try $0.beginMap(count: 1);
+        try $0.endMap()
+    }), "$: 1 entries were declared and 0 written")
+    assertEqual(wrote({
+        try $0.beginMap(count: none);
+        try $0.encodeKey("a");
+        try $0.endMap()
+    }), "$: a key was written without its value")
+    assertEqual(wrote({
+        try $0.beginMap(count: none);
+        try $0.encodeKey("a");
+        try $0.encodeKey("b")
+    }), "$: the key 'b' is not where a key goes")
+    assertEqual(wrote({ try $0.encodeKey("a") }), "$: the key 'a' is not where a key goes")
+    assertEqual(wrote({ try $0.beginSequence(count: none) }), "$: an array or a map was begun and not ended")
+    assertEqual(wrote({ try $0.endSequence() }), "$: ended what was not begun")
+    assertEqual(wrote({ try $0.endMap() }), "$: ended what was not begun")
+    assertEqual(wrote({ try $0.encodeTag(1) }), "$: a tag was written without its value")
+    assertEqual(wrote({
+        try $0.beginSequence(count: none);
+        try $0.encodeTag(1);
+        try $0.endSequence()
+    }), "$: a tag was written without its value")
+    assertEqual(wrote({ try $0.encodeSimple(24) }), "$: CBOR has no simple value 24")
+    assertEqual(wrote({
+        try $0.flattenNext();
+        try $0.encodeInt(1)
+    }), "$: only a struct or a map can be flattened")
+    assertEqual(wrote({ try $0.beginSequence(count: -1) }), "$: CBOR has no array or map of -1")
+}
+
+@test
+fn aValueOfEveryKindGoesThereAndBack() throws {
+    let value = CborValue.Map(entries: [
+        CborEntry { key: .Text(value: "a"), value: .Array(items: [.Null, .Undefined, .Bool(value: true), .Simple(value: 99)]) },
+        CborEntry { key: .Negative(n: U64.max), value: .Float(value: 2.5) },
+        CborEntry { key: .Unsigned(value: U64.max), value: .Bytes(value: [1, 2]) },
+        CborEntry { key: .Tagged(tag: 70000, value: .Array(items: [])), value: .Tagged(tag: 1, value: .Tagged(tag: 2, value: .Text(value: "x"))) },
+        CborEntry { key: .Null, value: .Map(entries: []) },
+    ])
+    let encoded = try value.bytes()
+    assertEqual(try CborValue.parse(encoded), value)
+    assertEqual(try Cbor.decode(CborValue.self, from: encoded), value)
+    assertEqual(value["a"]!, CborValue.Array(items: [.Null, .Undefined, .Bool(value: true), .Simple(value: 99)]))
+    assert(value["b"] == none && CborValue.Null["a"] == none)
+    assert((try? Json.encode(value)) == none)
+    assert((try? Json.encode(CborValue.Simple(value: 1))) == none)
+}
+
+@test
+fn aValueGoesThroughOtherFormats() throws {
+    let text = "{\"a\":[1,-2,18446744073709551615,0.5,null,true],\"b\":\"x\"}"
+    let value = try Json.decode(CborValue.self, from: text)
+    assertEqual(try Json.encode(value), text)
+    assertEqual(try Json.encode(try CborValue.parse(bytes("a301f7200a3bffffffffffffffffc13bffffffffffffffff"))), "{\"1\":null,\"-1\":10,\"-18446744073709551616\":-1.8446744073709552e+19}")
+    let packed = try MessagePackValue.decode(from: try CborDecoder.parse(bytes("8341ff01f5")))
+    assert(packed == .Array(items: [.Bytes(value: [255]), .Integer(value: 1), .Bool(value: true)]))
+    let back = try CborValue.decode(from: try MessagePackDecoder.parse(try MessagePack.encode(packed)))
+    assertEqual(back.diagnostic(), "[h'ff', 1, true]")
+    assert((try? CborValue.decode(from: try JsonDecoder.parse("{}").field("a"))) == none)
+}
+
+@test
+fn illFormedCborIsRefused() {
+    assertEqual(refusal(""), "not CBOR: no item where one should be at byte 0")
+    assertEqual(refusal("0102"), "not CBOR: more after the item at byte 1")
+    assertEqual(refusal("62c328"), "not CBOR: ill-formed UTF-8 in the string at byte 0")
+    // RFC 8949 Appendix F: an end in a head, a string, an array, a map, a tag
+    // and an indefinite length.
+    for hex in ["18", "19", "1a", "1b", "1901", "1a0102", "1b01020304050607", "38", "58", "78", "98", "9a01ff00", "b8", "d8", "f8", "f900", "fa0000", "fb000000", "41", "61", "5affffffff00", "5bffffffffffffffff010203", "7affffffff00", "7b7fffffffffffffff010203", "81", "818181818181818181", "8200", "a1", "a20102", "a100", "a2000000", "c0", "5f4100", "7f6100", "9f", "9f0102", "bf", "bf01020102", "819f", "9f8000", "9f9f9f9f9fffffffff", "9f819f819f9fffffff"] {
+        assertEqual(refusal(hex).isEmpty, false)
+        assertEqual((try? tokens(bytes(hex))) == none, true)
+    }
+    // Reserved additional information, simple values below 32 in two bytes,
+    // chunks of the wrong kind, breaks where none may be, half an entry.
+    for hex in ["1c", "1d", "1e", "3c", "5c", "7d", "9e", "bc", "dd", "fc", "fd", "fe", "f800", "f801", "f818", "f81f", "5f00ff", "5f21ff", "5f6100ff", "5f80ff", "5fa0ff", "5fc000ff", "5fe0ff", "7f4100ff", "5f5f4100ffff", "7f7f6100ffff", "ff", "81ff", "8200ff", "a1ff", "a1ff00", "a100ff", "a20000ff", "9f81ff", "9f829f819f9fffffffff", "bf00ff", "bf000000ff", "1f", "3f", "df00ff", "c1ff", "9fc1ff"] {
+        assertEqual(refusal(hex).isEmpty, false)
+        assertEqual((try? tokens(bytes(hex))) == none, true)
+    }
+    assertEqual(refusal("7f61c3 61bcff".replacing(" ", with: "")), "not CBOR: ill-formed UTF-8 in the string at byte 1")
+}
+
+@test
+fn everyPrefixOfAValueIsRefused() throws {
+    let record = Record { name: "a name", meta: Meta { version: 70000, rate: 0.5 }, shapes: [.Circle(radius: 0.1)], note: "n", when: UtcDateTime.fromUnix(0) }
+    let encoded = try Cbor.encode(record)
+    for count in 0..<encoded.count {
+        assert(!refusal(of: encoded[0..<count].toArray()).isEmpty)
+    }
+}
+
+@test
+fn declaredLengthsAreCheckedBeforeAnythingIsMade() {
+    for hex in ["5bffffffffffffffff", "7bffffffffffffffff", "9bffffffffffffffff", "bbffffffffffffffff", "9b7fffffffffffffff00", "bb7fffffffffffffff0000", "9a7fffffff00", "5b7fffffffffffffff00"] {
+        assertEqual(refusal(hex).isEmpty, false)
+        assertEqual((try? tokens(bytes(hex))) == none, true)
+    }
+}
+
+@test
+fn nestingIsBounded() {
+    for byte in [0x81, 0x9F, 0xC1, 0xA1] as U8[>..] {
+        var hostile: U8[>..] = []
+        hostile.append(repeating: byte, count: 1000000)
+        assertEqual(refusal(of: hostile), "not CBOR: nested more than 128 deep at byte 128")
+        assert((try? tokens(hostile)) == none)
+    }
+    var deep: U8[>..] = []
+    deep.append(repeating: 0x81, count: 128)
+    deep.append(0xF6)
+    assertEqual(refusal(of: deep), "")
+    assert(!refusal(of: deep, depth: 127).isEmpty)
+    assert((try? tokens(deep, depth: 127)) == none)
+    assert((try? tokens(deep)) != none)
+}
+
+@test
+fn anyBytesAreReadOrRefused() {
+    var random = SeededRandomNumberGenerator(seed: 8949)
+    for _ in 0..<4000 {
+        var made: U8[>..] = []
+        for _ in 0..<Int.random(in: 0..<40, using: &random) {
+            made.append(U8.truncating(Int.random(in: 0..<256, using: &random)))
+        }
+        if let value = try? CborValue.parse(made) {
+            let again = try! value.bytes()
+            assert(try! CborValue.parse(again).bytes() == again)
+            let _ = value.diagnostic()
+            assert((try? tokens(made)) != none)
+        }
+    }
+}

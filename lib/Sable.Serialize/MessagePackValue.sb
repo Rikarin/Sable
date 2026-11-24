@@ -14,6 +14,7 @@ module Sable.Serialize
 /// ]))
 /// assert(try! value.bytes() == [0x82, 0xA1, 0x61, 0x01, 0x02, 0xC3])
 /// ```
+@frozen
 @derive(Equatable, Debug)
 public union MessagePackValue {
     Null

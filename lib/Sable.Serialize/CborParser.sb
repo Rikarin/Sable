@@ -1,0 +1,147 @@
+module Sable.Serialize
+
+// Makes a CborDocument in one pass: no recursion, so nesting costs no stack,
+// and nothing is made of a length before as many bytes are seen to be there.
+struct CborParser {
+    let bytes: U8[>..]
+    let maximumDepth: Int
+    let deterministic: Bool
+    var starts: Int[>..] = []
+    var afters: Int[>..] = []
+    // The arrays, maps and tags open: the node, its major type, how many
+    // more items it holds (-1 for an indefinite length), and how many it has
+    // had.
+    var nodes: Int[>..] = []
+    var majors: Int[>..] = []
+    var left: Int[>..] = []
+    var counts: Int[>..] = []
+    var at: Int = 0
+
+    init(_ bytes: U8[>..], _ maximumDepth: Int, _ deterministic: Bool) {
+        self.bytes = bytes
+        self.maximumDepth = maximumDepth
+        self.deterministic = deterministic
+    }
+
+    static fn parse(_ bytes: U8[>..], _ maximumDepth: Int, _ deterministic: Bool) throws(SerializeError) -> CborDocument {
+        var parser = CborParser(bytes, maximumDepth, deterministic)
+        try parser.item()
+        while !parser.nodes.isEmpty {
+            try parser.item()
+        }
+        if parser.at < bytes.count {
+            throw cborFault("more after the item", parser.at)
+        }
+        return CborDocument(bytes: bytes, starts: parser.starts, afters: parser.afters)
+    }
+
+    // The item at the position, or its head when it holds others, or a break.
+    mutating fn item() throws(SerializeError) {
+        let head = try cborHead(bytes, at)
+        if head.major == 8 {
+            if left.isEmpty || left[left.count - 1] >= 0 {
+                throw cborFault("a break outside an indefinite length", at)
+            }
+            if majors[majors.count - 1] == 5 && counts[counts.count - 1] % 2 != 0 {
+                throw cborFault("a key without its value", at)
+            }
+            at += 1
+            try close()
+            try finished()
+            return
+        }
+        if deterministic {
+            try checkHead(head)
+        }
+        let node = starts.count
+        starts.append(at)
+        afters.append(node + 1)
+        if head.major == 2 || head.major == 3 {
+            at = (try CborString(bytes, at, head)).end
+        } else if head.major >= 4 && head.major <= 6 {
+            var items = -1
+            if head.major == 6 {
+                items = 1
+            } else if !head.isIndefinite {
+                let each = head.major == 5 ? 2 : 1
+                // Each item is a byte at least.
+                if head.argument > U64((bytes.count - at - head.size) / each) {
+                    throw cborFault("more items than there are bytes for", at)
+                }
+                items = Int(head.argument) * each
+            }
+            if nodes.count >= maximumDepth {
+                throw cborFault("nested more than \(maximumDepth) deep", at)
+            }
+            at += head.size
+            if items != 0 {
+                nodes.append(node)
+                majors.append(head.major)
+                left.append(items)
+                counts.append(0)
+                return
+            }
+        } else {
+            at += head.size
+        }
+        try finished()
+    }
+
+    // A whole item has been read: the last one of what is open, perhaps.
+    mutating fn finished() throws(SerializeError) {
+        while !left.isEmpty {
+            let last = left.count - 1
+            counts[last] += 1
+            if left[last] < 0 {
+                return
+            }
+            left[last] -= 1
+            if left[last] > 0 {
+                return
+            }
+            try close()
+        }
+    }
+
+    // Ends the array, map or tag last begun.
+    mutating fn close() throws(SerializeError) {
+        let node = nodes.removeLast()
+        let major = majors.removeLast()
+        let _ = left.removeLast()
+        let _ = counts.removeLast()
+        afters[node] = starts.count
+        if deterministic && major == 5 {
+            try checkOrder(node)
+        }
+    }
+
+    // Whether the item's head is the deterministic encoding's: as short as
+    // it can be, and its length definite.
+    fn checkHead(_ head: CborHead) throws(SerializeError) {
+        if head.isIndefinite {
+            throw cborFault("an indefinite length, which is not deterministic,", at)
+        }
+        var shortest: U8[>..] = []
+        if head.major == 7 && head.info >= 25 {
+            appendCborFloat(&shortest, cborFloat(head))
+        } else {
+            appendCborHead(&shortest, U8(head.major), head.argument)
+        }
+        if shortest.count != head.size {
+            throw cborFault("a head longer than it need be, which is not deterministic,", at)
+        }
+    }
+
+    // Whether the map's keys are in order, each once.
+    fn checkOrder(_ node: Int) throws(SerializeError) {
+        var key = node + 1
+        while key < afters[node] {
+            let value = afters[key]
+            let next = afters[value]
+            if next < afters[node] && compareBytes(bytes, starts[key], starts[value], starts[next], starts[afters[next]]) >= 0 {
+                throw cborFault("a map's keys out of order, which is not deterministic,", starts[next])
+            }
+            key = next
+        }
+    }
+}

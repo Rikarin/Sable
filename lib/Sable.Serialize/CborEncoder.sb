@@ -1,0 +1,364 @@
+module Sable.Serialize
+
+/// The Encoder that writes CBOR (RFC 8949) in its preferred serialization:
+/// each length and integer in as few bytes as hold it, a float in 16, 32 or
+/// 64 bits, whichever loses nothing. A struct or a map is a map, a sequence
+/// an array, a case that carries nothing its name and one that does a map of
+/// one entry; an array or map whose count is not known has an indefinite
+/// length. A map's key may be any value: where a key would be, encode it.
+///
+/// The deterministic encoding (§4.2.1) has no indefinite lengths, and its
+/// maps' entries are in their keys' order, by their bytes; a key that is
+/// there twice is an error. What `Cbor.encode` uses; alone, a writer of any
+/// CBOR.
+///
+/// ```sable
+/// let encoder = CborEncoder(deterministic: true)
+/// try! encoder.beginMap(count: none)
+/// try! encoder.encodeKey("b")
+/// try! encoder.encodeTag(1)
+/// try! encoder.encodeInt(1363896240)
+/// try! encoder.encodeInt(10)
+/// try! encoder.encodeFloat(1.5)
+/// try! encoder.endMap()
+/// assert(try! encoder.bytes() == [0xA2, 0x0A, 0xF9, 0x3E, 0x00, 0x61, 0x62, 0xC1, 0x1A, 0x51, 0x4B, 0x67, 0xB0])
+/// ```
+public final class CborEncoder: Encoder {
+    var written: U8[>..] = []
+    var frames: BinaryFrame[>..] = []
+    // Whether a tag was just written, what it tags next.
+    var afterTag: Bool = false
+    // Whether the map written next is to be part of the one open, and for
+    // each struct, map or case open, whether it is part of the one around it.
+    var flattening: Bool = false
+    var flattened: Bool[>..] = []
+    let deterministic: Bool
+
+    /// An encoder that has written nothing.
+    public init(deterministic: Bool = false) {
+        self.deterministic = deterministic
+    }
+
+    /// The CBOR written: an array or a map still open, or a tag of nothing,
+    /// is an error.
+    public fn bytes() throws(SerializeError) -> U8[>..] {
+        if !frames.isEmpty || !flattened.isEmpty {
+            throw fault("an array or a map was begun and not ended")
+        }
+        if afterTag {
+            throw fault("a tag was written without its value")
+        }
+        return written
+    }
+
+    fn fault(_ reason: String) -> SerializeError {
+        return SerializeError.InvalidValue(path: "$", reason: reason)
+    }
+
+    // Counts the value about to be written in what is open.
+    fn beginItem() throws(SerializeError) {
+        if flattening {
+            throw fault("only a struct or a map can be flattened")
+        }
+        if afterTag {
+            afterTag = false
+            return
+        }
+        if !frames.isEmpty {
+            let last = frames.count - 1
+            frames[last].written += 1
+            if deterministic && frames[last].isMap {
+                frames[last].starts.append(written.count)
+            }
+        }
+    }
+
+    // An item's first bytes: its major type, and its argument in as few
+    // bytes as hold it.
+    fn appendHead(_ major: U8, _ argument: U64) {
+        appendCborHead(&written, major, argument)
+    }
+
+    public fn encodeNull() throws(SerializeError) {
+        try encodeSimple(22)
+    }
+
+    /// CBOR's undefined, which a decoder reads as null.
+    public fn encodeUndefined() throws(SerializeError) {
+        try encodeSimple(23)
+    }
+
+    public fn encodeBool(_ value: Bool) throws(SerializeError) {
+        try encodeSimple(U8(value ? 21 : 20))
+    }
+
+    /// A simple value, 0 to 23 or 32 to 255: false, true, null and undefined
+    /// are 20 to 23.
+    public fn encodeSimple(_ value: U8) throws(SerializeError) {
+        if value >= 24 && value < 32 {
+            throw fault("CBOR has no simple value \(value)")
+        }
+        try beginItem()
+        appendHead(7, U64(value))
+    }
+
+    public fn encodeInt(_ value: Int) throws(SerializeError) {
+        if value < 0 {
+            try encodeNegative(U64(-1 - value))
+        } else {
+            try encodeUInt(U64(value))
+        }
+    }
+
+    public fn encodeUInt(_ value: U64) throws(SerializeError) {
+        try beginItem()
+        appendHead(0, value)
+    }
+
+    /// The negative integer -1 - n, down to -2^64.
+    public fn encodeNegative(_ n: U64) throws(SerializeError) {
+        try beginItem()
+        appendHead(1, n)
+    }
+
+    /// A float, in the fewest bits that hold it exactly; any NaN as the
+    /// 16-bit quiet one.
+    public fn encodeFloat(_ value: F64) throws(SerializeError) {
+        try beginItem()
+        appendCborFloat(&written, value)
+    }
+
+    public fn encodeString(_ value: String) throws(SerializeError) {
+        try beginItem()
+        appendHead(3, U64(value.utf8Count))
+        written.append(utf8: value)
+    }
+
+    public fn encodeBytes(_ value: U8[>..]) throws(SerializeError) {
+        try beginItem()
+        appendHead(2, U64(value.count))
+        written.append(contentsOf: value)
+    }
+
+    /// A tag, whose value is encoded next: 1 and a number is a moment, say,
+    /// and 2 and bytes an integer of any size.
+    public fn encodeTag(_ tag: U64) throws(SerializeError) {
+        try beginItem()
+        appendHead(6, tag)
+        afterTag = true
+    }
+
+    // ---- Arrays and maps -----------------------------------------------------
+
+    fn begin(_ isMap: Bool, _ count: Int?) throws(SerializeError) {
+        try beginItem()
+        if let count = count {
+            if count < 0 {
+                throw fault("CBOR has no array or map of \(count)")
+            }
+            appendHead(U8(isMap ? 5 : 4), U64(count))
+            frames.append(BinaryFrame(start: written.count, isMap: isMap, count: isMap ? count * 2 : count))
+        } else {
+            if !deterministic {
+                written.append(U8(isMap ? 0xBF : 0x9F))
+            }
+            frames.append(BinaryFrame(start: written.count, isMap: isMap, count: none))
+        }
+    }
+
+    fn close(_ isMap: Bool) throws(SerializeError) {
+        if afterTag {
+            throw fault("a tag was written without its value")
+        }
+        if frames.isEmpty || frames[frames.count - 1].isMap != isMap {
+            throw fault("ended what was not begun")
+        }
+        let frame = frames.removeLast()
+        if let reason = frameFault(frame) {
+            throw fault(reason)
+        }
+        if deterministic && isMap {
+            try sortEntries(frame)
+        }
+        if frame.count == none {
+            if deterministic {
+                var head: U8[>..] = []
+                appendCborHead(&head, U8(isMap ? 5 : 4), U64(isMap ? frame.written / 2 : frame.written))
+                insertBytes(&written, head, at: frame.start)
+            } else {
+                written.append(0xFF)
+            }
+        }
+    }
+
+    // Puts the map's entries, the last thing written, in their keys' order.
+    fn sortEntries(_ frame: BinaryFrame) throws(SerializeError) {
+        let starts = frame.starts
+        let bytes = written
+        var order: Int[>..] = []
+        var sorted = true
+        for i in 0..<(starts.count / 2) {
+            order.append(i * 2)
+            if i > 0 {
+                let compared = compareBytes(bytes, starts[i * 2 - 2], starts[i * 2 - 1], starts[i * 2], starts[i * 2 + 1])
+                sorted = sorted && compared < 0
+            }
+        }
+        if sorted {
+            return
+        }
+        order.sort(by: { compareBytes(bytes, starts[$0], starts[$0 + 1], starts[$1], starts[$1 + 1]) < 0 })
+        for i in 1..<order.count {
+            let a = order[i - 1]
+            let b = order[i]
+            if compareBytes(bytes, starts[a], starts[a + 1], starts[b], starts[b + 1]) == 0 {
+                throw fault("a map has the same key twice")
+            }
+        }
+        var rest: U8[>..] = []
+        for entry in order {
+            let end = entry + 2 < starts.count ? starts[entry + 2] : bytes.count
+            rest.append(contentsOf: bytes[starts[entry]..<end])
+        }
+        written.removeLast(bytes.count - frame.start)
+        written.append(contentsOf: rest)
+    }
+
+    fn beginAnyMap(_ count: Int?) throws(SerializeError) {
+        if flattening {
+            flattening = false
+            flattened.append(true)
+            return
+        }
+        try begin(true, count)
+        flattened.append(false)
+    }
+
+    fn closeAnyMap() throws(SerializeError) {
+        if flattened.isEmpty {
+            throw fault("ended what was not begun")
+        }
+        if !flattened.removeLast() {
+            try close(true)
+        }
+    }
+
+    fn key(_ name: String) throws(SerializeError) {
+        if frames.isEmpty || !frames[frames.count - 1].isMap || frames[frames.count - 1].written % 2 != 0 {
+            throw fault("the key '\(name)' is not where a key goes")
+        }
+        try encodeString(name)
+    }
+
+    /// An array; one whose count is not known has an indefinite length.
+    public fn beginSequence(count: Int?) throws(SerializeError) {
+        try begin(false, count)
+    }
+
+    public fn endSequence() throws(SerializeError) {
+        try close(false)
+    }
+
+    /// A map; one whose count is not known has an indefinite length.
+    public fn beginMap(count: Int?) throws(SerializeError) {
+        try beginAnyMap(count)
+    }
+
+    public fn encodeKey(_ key: String) throws(SerializeError) {
+        try self.key(key)
+    }
+
+    public fn endMap() throws(SerializeError) {
+        try closeAnyMap()
+    }
+
+    /// A map, its keys the fields' names.
+    public fn beginStruct(_ name: String, count: Int?) throws(SerializeError) {
+        try beginAnyMap(count)
+    }
+
+    public fn encodeField(_ key: String) throws(SerializeError) {
+        try self.key(key)
+    }
+
+    public fn endStruct() throws(SerializeError) {
+        try closeAnyMap()
+    }
+
+    public fn flattenNext() throws(SerializeError) {
+        flattening = true
+    }
+
+    /// The case's name, as a string.
+    public fn encodeUnitCase(_ name: String, of type: String) throws(SerializeError) {
+        try encodeString(name)
+    }
+
+    /// A map of one entry, the case's name, whose value is the payload.
+    public fn beginCase(_ name: String, of type: String) throws(SerializeError) {
+        try beginAnyMap(1)
+        try key(name)
+    }
+
+    public fn endCase() throws(SerializeError) {
+        try closeAnyMap()
+    }
+}
+
+// The first bytes of an item: its major type, and its argument in as few
+// bytes as hold it.
+fn appendCborHead(_ to: inout U8[>..], _ major: U8, _ argument: U64) {
+    let type = major << 5
+    if argument < 24 {
+        to.append(type | U8.truncating(argument))
+    } else if argument <= 0xFF {
+        to.append(type | 24)
+        appendBigEndian(&to, argument, 1)
+    } else if argument <= 0xFFFF {
+        to.append(type | 25)
+        appendBigEndian(&to, argument, 2)
+    } else if argument <= 0xFFFFFFFF {
+        to.append(type | 26)
+        appendBigEndian(&to, argument, 4)
+    } else {
+        to.append(type | 27)
+        appendBigEndian(&to, argument, 8)
+    }
+}
+
+// The float in the fewest bits that hold it exactly.
+fn appendCborFloat(_ to: inout U8[>..], _ value: F64) {
+    if value != value {
+        to.append(0xF9)
+        appendBigEndian(&to, 0x7E00, 2)
+        return
+    }
+    let half = F16(value)
+    if F64(half) == value {
+        to.append(0xF9)
+        appendBigEndian(&to, U64(half.bits), 2)
+        return
+    }
+    let single = F32(value)
+    if F64(single) == value {
+        to.append(0xFA)
+        appendBigEndian(&to, U64(single.bits), 4)
+        return
+    }
+    to.append(0xFB)
+    appendBigEndian(&to, value.bits, 8)
+}
+
+// The two runs of the bytes, compared byte by byte, a run that begins the
+// other before it: negative, zero or positive.
+fn compareBytes(_ bytes: U8[>..], _ aStart: Int, _ aEnd: Int, _ bStart: Int, _ bEnd: Int) -> Int {
+    var i = 0
+    while aStart + i < aEnd && bStart + i < bEnd {
+        let difference = Int(bytes[aStart + i]) - Int(bytes[bStart + i])
+        if difference != 0 {
+            return difference
+        }
+        i += 1
+    }
+    return (aEnd - aStart) - (bEnd - bStart)
+}

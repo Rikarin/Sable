@@ -1,0 +1,8 @@
+module Sable.Serialize
+
+/// A CBOR map's entry, as `CborValue.Map` holds them.
+@derive(Equatable, Debug)
+public struct CborEntry {
+    public var key: CborValue
+    public var value: CborValue
+}

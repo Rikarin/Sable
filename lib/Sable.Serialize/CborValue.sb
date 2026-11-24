@@ -1,0 +1,285 @@
+module Sable.Serialize
+
+import Sable.Text
+
+/// Any CBOR value (RFC 8949): what a document of no declared type is read
+/// as. How long its heads were, and whether its lengths were indefinite, are
+/// not kept; its tags are. As a Serializable it is the value it holds, in
+/// CBOR; in another format it has no tags, and a map's keys are text or
+/// integers.
+///
+/// ```sable
+/// let value = try! CborValue.parse([0xA2, 0x61, 0x61, 0x20, 0x02, 0xC1, 0x05])
+/// assert(value["a"]! == CborValue.integer(-1))
+/// assert(value.diagnostic() == "{\"a\": -1, 2: 1(5)}")
+/// assert(try! value.bytes(deterministic: true) == [0xA2, 0x02, 0xC1, 0x05, 0x61, 0x61, 0x20])
+/// ```
+@frozen
+@derive(Equatable, Debug)
+public union CborValue {
+    Unsigned(value: U64)
+    /// The negative integer -1 - n.
+    Negative(n: U64)
+    Bytes(value: U8[>..])
+    Text(value: String)
+    Array(items: CborValue[>..])
+    Map(entries: CborEntry[>..])
+    Tagged(tag: U64, value: CborValue)
+    Bool(value: Bool)
+    Null
+    Undefined
+    /// A simple value that is none of those: 0 to 19 or 32 to 255.
+    Simple(value: U8)
+    Float(value: F64)
+
+    /// The integer, as CBOR has it: an Unsigned or a Negative.
+    public static fn integer(_ value: Int) -> CborValue {
+        return value < 0 ? .Negative(n: U64(-1 - value)) : .Unsigned(value: U64(value))
+    }
+
+    /// The one item the bytes are, nested no deeper than that, and in the
+    /// deterministic encoding, if that is asked for.
+    public static fn parse(_ bytes: U8[>..], maximumDepth: Int = 128, deterministic: Bool = false) throws(SerializeError) -> CborValue {
+        return cborValue(try CborParser.parse(bytes, maximumDepth, deterministic), 0)
+    }
+
+    /// The value as CBOR, in its preferred or its deterministic encoding.
+    public fn bytes(deterministic: Bool = false) throws(SerializeError) -> U8[>..] {
+        return try Cbor.encode(self, deterministic: deterministic)
+    }
+
+    /// The integer, if this is one that fits an Int.
+    public var int: Int? {
+        get {
+            return match self {
+                case .Unsigned(let value) => Int.exactly(value)
+                case .Negative(let n)     => negativeInt(n)
+                case _                    => none
+            }
+        }
+    }
+
+    /// The value of the first entry of that key; none when there is none,
+    /// or this is not a map.
+    public subscript(key: String) -> CborValue? {
+        get {
+            if case .Map(let entries) = self {
+                for entry in entries {
+                    if case .Text(let name) = entry.key {
+                        if name == key {
+                            return entry.value
+                        }
+                    }
+                }
+            }
+            return none
+        }
+    }
+
+    /// The value in RFC 8949 §8's diagnostic notation.
+    public fn diagnostic() -> String {
+        return match self {
+            case .Unsigned(let value)        => "\(value)"
+            case .Negative(let n)            => negativeText(n)
+            case .Bytes(let value)           => "h'" + Hex.encode(value) + "'"
+            case .Text(let value)            => quotedText(value)
+            case .Array(let items)           => "[" + items.map({ $0.diagnostic() }).joined(separator: ", ") + "]"
+            case .Map(let entries)           => "{" + entries.map({ $0.key.diagnostic() + ": " + $0.value.diagnostic() }).joined(separator: ", ") + "}"
+            case .Tagged(let tag, let value) => "\(tag)(" + value.diagnostic() + ")"
+            case .Bool(let value)            => value ? "true" : "false"
+            case .Null                       => "null"
+            case .Undefined                  => "undefined"
+            case .Simple(let value)          => "simple(\(value))"
+            case .Float(let value)           => floatText(value)
+        }
+    }
+}
+
+// -1 - n, when an Int holds it.
+fn negativeInt(_ n: U64) -> Int? {
+    if let small = Int.exactly(n) {
+        return -1 - small
+    }
+    return none
+}
+
+fn floatText(_ value: F64) -> String {
+    if value != value {
+        return "NaN"
+    }
+    return value.isFinite ? "\(value)" : value > 0.0 ? "Infinity" : "-Infinity"
+}
+
+// Text as JSON writes it.
+fn quotedText(_ value: String) -> String {
+    let encoder = JsonEncoder()
+    encoder.appendQuoted(value)
+    return encoder.text()
+}
+
+// The node as a value: as deep a recursion as the parser allowed.
+fn cborValue(_ document: CborDocument, _ node: Int) -> CborValue {
+    let kind = document.kind(node)
+    if kind == .Unsigned {
+        return .Unsigned(value: document.head(node).argument)
+    }
+    if kind == .Negative {
+        return .Negative(n: document.head(node).argument)
+    }
+    if kind == .Bytes {
+        return .Bytes(value: document.data(node))
+    }
+    if kind == .Text {
+        return .Text(value: document.string(node))
+    }
+    if kind == .Tag {
+        return .Tagged(tag: document.head(node).argument, value: cborValue(document, node + 1))
+    }
+    if kind == .Bool {
+        return .Bool(value: document.head(node).info == 21)
+    }
+    if kind == .Null {
+        return .Null
+    }
+    if kind == .Undefined {
+        return .Undefined
+    }
+    if kind == .Simple {
+        return .Simple(value: U8(document.head(node).argument))
+    }
+    if kind == .Float {
+        return .Float(value: cborFloat(document.head(node)))
+    }
+    let end = document.afters[node]
+    var child = node + 1
+    if kind == .Array {
+        var items: CborValue[>..] = []
+        while child < end {
+            items.append(cborValue(document, child))
+            child = document.afters[child]
+        }
+        return .Array(items: items)
+    }
+    var entries: CborEntry[>..] = []
+    while child < end {
+        let value = document.afters[child]
+        entries.append(CborEntry { key: cborValue(document, child), value: cborValue(document, value) })
+        child = document.afters[value]
+    }
+    return .Map(entries: entries)
+}
+
+extension CborValue: Serializable {
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        let own = encoder as? CborEncoder
+        match self {
+            case .Unsigned(let value) => try encoder.encodeUInt(value)
+            case .Negative(let n) => {
+                if let own = own {
+                    try own.encodeNegative(n)
+                } else if let value = int {
+                    try encoder.encodeInt(value)
+                } else {
+                    try encoder.encodeFloat(-1.0 - F64(n))
+                }
+            }
+            case .Bytes(let value) => try encoder.encodeBytes(value)
+            case .Text(let value)  => try encoder.encodeString(value)
+            case .Array(let items) => {
+                try encoder.beginSequence(count: items.count)
+                for item in items {
+                    try item.encode(to: encoder)
+                }
+                try encoder.endSequence()
+            }
+            case .Map(let entries) => {
+                try encoder.beginMap(count: entries.count)
+                for entry in entries {
+                    if let own = own {
+                        try entry.key.encode(to: own)
+                    } else {
+                        try encoder.encodeKey(try keyText(entry.key))
+                    }
+                    try entry.value.encode(to: encoder)
+                }
+                try encoder.endMap()
+            }
+            case .Tagged(let tag, let value) => {
+                if let own = own {
+                    try own.encodeTag(tag)
+                }
+                try value.encode(to: encoder)
+            }
+            case .Bool(let value) => try encoder.encodeBool(value)
+            case .Null            => try encoder.encodeNull()
+            case .Undefined => {
+                if let own = own {
+                    try own.encodeUndefined()
+                } else {
+                    try encoder.encodeNull()
+                }
+            }
+            case .Simple(let value) => {
+                guard let own = own else {
+                    throw SerializeError.InvalidValue(path: "$", reason: "only CBOR has a simple value \(value)")
+                }
+                try own.encodeSimple(value)
+            }
+            case .Float(let value) => try encoder.encodeFloat(value)
+        }
+    }
+
+    // A key in a format whose keys are strings.
+    fn keyText(_ key: CborValue) throws(SerializeError) -> String {
+        return match key {
+            case .Text(let value)     => value
+            case .Unsigned(let value) => "\(value)"
+            case .Negative(let n)     => negativeText(n)
+            case _                    => throw SerializeError.InvalidValue(path: "$", reason: "a key is neither a string nor an integer")
+        }
+    }
+
+    /// Whatever value is there, from CBOR or any other format.
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> CborValue {
+        if let decoder = decoder as? CborDecoder {
+            return try decoder.decodeValue()
+        }
+        let kind = decoder.kind
+        if kind == .Missing {
+            throw decoder.mismatch("a value")
+        }
+        if kind == .Null {
+            return .Null
+        }
+        if kind == .Bool {
+            return .Bool(value: try decoder.decodeBool())
+        }
+        if kind == .Number {
+            if let value = try? decoder.decodeInt() {
+                return CborValue.integer(value)
+            }
+            if let value = try? decoder.decodeUInt() {
+                return .Unsigned(value: value)
+            }
+            return .Float(value: try decoder.decodeFloat())
+        }
+        if kind == .String {
+            return .Text(value: try decoder.decodeString())
+        }
+        if kind == .Bytes {
+            return .Bytes(value: try decoder.decodeBytes())
+        }
+        if kind == .Sequence {
+            var items: CborValue[>..] = []
+            for element in try decoder.decodeSequence() {
+                items.append(try CborValue.decode(from: element))
+            }
+            return .Array(items: items)
+        }
+        var entries: CborEntry[>..] = []
+        for member in try decoder.decodeMap() {
+            entries.append(CborEntry { key: .Text(value: member.key), value: try CborValue.decode(from: member.value) })
+        }
+        return .Map(entries: entries)
+    }
+}

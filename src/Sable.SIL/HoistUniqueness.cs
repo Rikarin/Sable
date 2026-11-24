@@ -57,6 +57,7 @@ public sealed class HoistUniqueness : ISilPass {
         }
 
         var uses = new Uses(function);
+        UniqueViews(function, uses);
 
         // Outermost first: a whole nest made unique once, before all of it.
         foreach (var (header, body) in loops.OrderByDescending(static l => l.Value.Count)) {
@@ -85,6 +86,76 @@ public sealed class HoistUniqueness : ISilPass {
                 uses = new Uses(function);
             }
         }
+    }
+
+    /// <summary>
+    ///     An array's place viewed whole for a mutating member of
+    ///     <c>Element[:]</c>, the member inlined: the array was made the only
+    ///     reference to its buffer and moved into the view, so while the view
+    ///     is only read and written in place — never copied, nor handed to a
+    ///     call — every write through it stores in place, with no check.
+    /// </summary>
+    static void UniqueViews(SilFunction function, Uses uses) {
+        foreach (var slot in function.Blocks.SelectMany(static b => b.Instructions).OfType<AllocStackInst>().ToList()) {
+            if (slot.ElementType is not SliceType || !IsUniqueView(slot, uses)) {
+                continue;
+            }
+
+            foreach (var write in uses.Of(slot).OfType<BuiltinInst>().ToList()) {
+                if (write.Name.StartsWith("bytes_store_U", StringComparison.Ordinal)) {
+                    write.Rename("bytes_store_unique_" + write.Name["bytes_store_".Length..]);
+                } else if (write.Name == "array_set") {
+                    write.Rename("array_set_unique");
+                }
+            }
+        }
+    }
+
+    static bool IsUniqueView(AllocStackInst slot, Uses uses) {
+        var made = false;
+        foreach (var user in uses.Of(slot)) {
+            switch (user) {
+                case StoreInst { Kind: StoreKind.Init, Value: BuiltinInst { Name: "slice_of_take", Operands: [LoadInst { Kind: LoadKind.Take } taken] } } store
+                    when !made && ReferenceEquals(store.Address, slot) && MadeUniqueJustBefore(taken):
+                    made = true;
+                    break;
+
+                case BuiltinInst { Name: var name } write when (name.StartsWith("bytes_store_", StringComparison.Ordinal) || name is "array_set" or "array_set_unique")
+                    && ReferenceEquals(write.Operands[0], slot) && !write.Operands.Skip(1).Any(o => ReferenceEquals(o, slot)):
+                    break;
+
+                case LoadBorrowInst borrowed:
+                    foreach (var reader in uses.Of(borrowed)) {
+                        var reads = reader is EndBorrowInst
+                            || reader is BuiltinInst { Name: var read } && (read is "array_get" or "array_get_borrowed" or "array_count" || read.StartsWith("bytes_load_", StringComparison.Ordinal));
+                        if (!reads) {
+                            return false;
+                        }
+                    }
+
+                    break;
+
+                case LoadInst { Kind: LoadKind.Take }:
+                case DestroyAddrInst:
+                case DeallocStackInst:
+                    break;
+
+                case BuiltinInst marker when SharedStorage.IsMarker(marker.Name):
+                    break;
+
+                default:
+                    return false;
+            }
+        }
+
+        return made;
+    }
+
+    /// <summary>The array was taken from its place right after it was made the only reference to its buffer.</summary>
+    static bool MadeUniqueJustBefore(LoadInst taken) {
+        var instructions = taken.Block!.Instructions;
+        var at = instructions.IndexOf(taken);
+        return at > 0 && instructions[at - 1] is BuiltinInst { Name: "array_make_unique" } unique && ReferenceEquals(unique.Operands[0], taken.Address);
     }
 
     /// <summary>True when, inside the loop, the array is only borrowed to be read, and its elements written.</summary>

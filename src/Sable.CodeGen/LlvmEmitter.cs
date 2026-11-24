@@ -3689,7 +3689,18 @@ public sealed partial class LlvmEmitter {
                 NegativeOffsetTraps(operands[1]);
                 var lastIndex = Fresh();
                 Line($"{lastIndex} = add i64 {operands[1]}, {width - 1}");
-                var last = SliceMutableElement(operands[0], lastIndex, (SliceType)((AddressType)builtin.Operands[0].Type).Pointee);
+                var written = (SliceType)((AddressType)builtin.Operands[0].Type).Pointee;
+                string last;
+                if (builtin.Name.StartsWith("bytes_store_unique_", StringComparison.Ordinal)) {
+                    // The only reference to its buffer already (an array's
+                    // place viewed in place): the index checked, and no call.
+                    var slice = Fresh();
+                    Line($"{slice} = load {Type(written)}, ptr {operands[0]}");
+                    last = SliceElement(slice, lastIndex, written);
+                } else {
+                    last = SliceMutableElement(operands[0], lastIndex, written);
+                }
+
                 var first = Fresh();
                 Line($"{first} = getelementptr inbounds i8, ptr {last}, i64 {1 - width}");
                 Line($"store {integer} {operands[2]}, ptr {first}, align 1");
@@ -4876,9 +4887,41 @@ public sealed partial class LlvmEmitter {
                     _names[builtin] = SliceMutableElement(operands[0], operands[1], addressed);
                     return;
 
+                // The check inline — the empty array, or an array of its own
+                // kind whose buffer has one reference, is unique already — and
+                // the call only for the rest: a shared buffer, which it
+                // copies, or a mapped file's bytes, which are never the array's.
                 case "array_make_unique": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
-                    Line($"call void @sable_array_make_unique(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)})");
+                    var metadata = ArrayMetadataOf(arrayType);
+                    var array = Fresh();
+                    var isNull = Fresh();
+                    Line($"{array} = load ptr, ptr {operands[0]}");
+                    Line($"{isNull} = icmp eq ptr {array}, null");
+                    var check = NewLabel("shared");
+                    var copy = NewLabel("copy");
+                    var done = NewLabel("unique");
+                    Line($"br i1 {isNull}, label %{done}, label %{check}");
+                    Continue(check);
+                    var typeField = Fresh();
+                    var type = Fresh();
+                    var strongField = Fresh();
+                    var strong = Fresh();
+                    var own = Fresh();
+                    var one = Fresh();
+                    var unique = Fresh();
+                    Line($"{typeField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 0");
+                    Line($"{type} = load ptr, ptr {typeField}, !tbaa {TbaaHeader}");
+                    Line($"{own} = icmp eq ptr {type}, {metadata}");
+                    Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {array}, i32 0, i32 1");
+                    Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
+                    Line($"{one} = icmp eq i32 {strong}, 1");
+                    Line($"{unique} = and i1 {own}, {one}");
+                    Line($"br i1 {unique}, label %{done}, label %{copy}");
+                    Continue(copy);
+                    Line($"call void @sable_array_make_unique(ptr {operands[0]}, ptr {metadata})");
+                    Line($"br label %{done}");
+                    Continue(done);
                     return;
                 }
 
@@ -5028,6 +5071,40 @@ public sealed partial class LlvmEmitter {
                     Line($"call void @sable_retain(ptr {operands[0]})");
                     _names[builtin] = operands[0];
                     return;
+
+                // The array moved into a view of the whole of it: its buffer
+                // neither retained nor released.
+                case "slice_of_take":
+                    _names[builtin] = MakeSlice((SliceType)builtin.Type, operands[0], "0", Count(operands[0]));
+                    return;
+
+                // The view moved back: its buffer as it is while it is the
+                // whole of it, which it is unless the call replaced it; else
+                // a copy of its run, and the view let go.
+                case "array_of_slice_take": {
+                    var slice = (SliceType)builtin.Operands[0].Type;
+                    var (buffer, start, count) = (SlicePart(operands[0], slice, 0), SlicePart(operands[0], slice, 1), SlicePart(operands[0], slice, 2));
+                    var fromStart = Fresh();
+                    var same = Fresh();
+                    var whole = Fresh();
+                    Line($"{fromStart} = icmp eq i64 {start}, 0");
+                    Line($"{same} = icmp eq i64 {count}, {Count(buffer)}");
+                    Line($"{whole} = and i1 {fromStart}, {same}");
+                    var kept = NewLabel("whole");
+                    var copied = NewLabel("part");
+                    var done = NewLabel("array");
+                    Line($"br i1 {whole}, label %{kept}, label %{copied}");
+                    Continue(kept);
+                    Line($"br label %{done}");
+                    Continue(copied);
+                    var copy = Fresh();
+                    Line($"{copy} = call ptr @sable_array_of_slice(ptr {buffer}, i64 {start}, i64 {count}, ptr {ArrayMetadataOf(new ArrayType(slice.Element))})");
+                    Line($"call void @sable.release(ptr {buffer})");
+                    Line($"br label %{done}");
+                    Continue(done);
+                    Line($"{Result()} = phi ptr [ {buffer}, %{kept} ], [ {copy}, %{copied} ]");
+                    return;
+                }
 
                 case "array_of_slice": {
                     var slice = (SliceType)builtin.Operands[0].Type;

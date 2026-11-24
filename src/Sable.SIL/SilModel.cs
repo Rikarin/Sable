@@ -1949,7 +1949,7 @@ public static class SilBuiltins {
     ///     count work on an array alone.
     /// </summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "array_of_slice", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_append_utf8", "array_append_repeating", "region_alloc"];
+        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_truncate", "array_slice", "slice_of", "array_of_slice", "slice_of_take", "array_of_slice_take", "array_capacity", "array_reserve", "array_rotate", "array_store_slice", "array_append_utf8", "array_append_repeating", "region_alloc"];
 
     /// <summary>
     ///     The prefix of the wrapping forms of integer arithmetic
@@ -2207,6 +2207,17 @@ public static class SilBuiltins {
             // the whole of its buffer.
             case "array_of_slice" when Element(0, false) is { } element:
                 return new([operands[0]], new ArrayType(element));
+
+            // An array, made the only reference to its buffer, moved into a
+            // view of the whole of it, and the view moved back: what an
+            // array's place passed to a mutating member of 'Element[:]' is
+            // for the call, the buffer neither retained nor released. Back,
+            // a view no longer the whole of its buffer is copied out.
+            case "slice_of_take" when Element(0, false, arrayOnly: true) is { } element:
+                return new([operands[0]], new SliceType(element)) { Consumed = [0] };
+
+            case "array_of_slice_take" when operands is [SliceType { Element: var element }]:
+                return new([operands[0]], new ArrayType(element)) { Consumed = [0] };
 
             default:
                 return null;
@@ -2845,6 +2856,7 @@ public static class SilBuiltins {
         foreach (var unsigned in new[] { SilType.U16, SilType.U32, SilType.U64 }) {
             Add($"bytes_load_{unsigned}", unsigned, new SliceType(SilType.U8), SilType.Int);
             Add($"bytes_store_{unsigned}", SilType.Unit, SilType.Address(new SliceType(SilType.U8)), SilType.Int, unsigned);
+            Add($"bytes_store_unique_{unsigned}", SilType.Unit, SilType.Address(new SliceType(SilType.U8)), SilType.Int, unsigned);
         }
 
         // A float's bits as the unsigned integer of its width, and back: the

@@ -781,7 +781,10 @@ whose body branches, and a local function's context, allocate nothing.
       it), array headers and elements carry distinct TBAA tags, array
       count, element access and append are emitted inline, a loop that only
       reads an array and writes its elements makes it unique once before
-      the loop (`HoistUniqueness`), string equality decides by identity and
+      the loop (`HoistUniqueness`), an array passed to a mutating member of
+      `Element[:]` (`bytes.writeU64(…)`) is made unique once, inline, and
+      moved into a view of itself and back with nothing retained, its
+      writes, the member inlined, one store each, string equality decides by identity and
       length inline, inline layouts get walkers generated per layout rather
       than a descriptor walked at run time, and optimised macOS builds link
       the runtime with LTO. Sable is now 1.0× C on n-body, about 1.25× on

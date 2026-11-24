@@ -1395,6 +1395,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return Allocate(new HeapArray((ArrayType)Concrete(builtin.Type), new List<object?>(operands)));
 
             // The whole of an array, viewed: the buffer shared, not copied.
+            // The array moved into the view, which holds its buffer, empty or not.
+            case "slice_of_take":
+                return operands[0] is HeapArray wholeArray ? new SliceValue(Alive(wholeArray), 0, wholeArray.Elements.Count) : SliceValue.Empty;
+
             case "slice_of": {
                 if (operands[0] is not HeapArray array || Alive(array).Elements.Count == 0) {
                     return SliceValue.Empty;
@@ -2191,6 +2195,27 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             // A slice as an array again: the buffer itself when the slice is
             // the whole of it, else a copy of its run.
+            // The view moved back into the array: its buffer as it is when it
+            // is the whole of it, else a copy of its run, the view let go.
+            case "array_of_slice_take": {
+                var (buffer, start, count) = ElementsOf(operands[0]);
+                if (buffer is null) {
+                    return null;
+                }
+
+                if (start == 0 && count == buffer.Elements.Count) {
+                    return buffer;
+                }
+
+                var copy = count == 0 ? null : Allocate(new HeapArray(buffer.Type, [..buffer.Elements.Skip(start).Take(count)]));
+                foreach (var element in copy?.Elements ?? []) {
+                    Retain(buffer.Type.Element, element);
+                }
+
+                Release(builtin.Operands[0].Type, operands[0], depth);
+                return copy;
+            }
+
             case "array_of_slice": {
                 var (buffer, start, count) = ElementsOf(operands[0]);
                 if (buffer is null || count == 0) {

@@ -63,6 +63,18 @@ public sealed class InterfaceCompileTests {
     }
 
     static readonly string[] Sources = [
+        // A constant of the interface's, as a type's value argument.
+        """
+        module M
+
+        const lanes = Platform.vectorBytes / 4
+        fn count<N: Int>(_ v: SIMD<F32, N>) -> Int { return N }
+
+        fn main() {
+            print(count(SIMD<F32, lanes>()))
+            print(count(SIMD<F32, Platform.vectorBytes>()))
+        }
+        """,
         "module M\n\nfn main() {\n    print(\"hi \\(1 + 2)\")\n}\n",
         """
         module M

@@ -4740,7 +4740,7 @@ public sealed partial class Binder {
                 return BindCallToGroup(syntax, group, arguments, labels, syntaxes, expectedType);
 
             case BoundUnionCaseGroup unionCase:
-                return BindUnionCaseConstruction(syntax, unionCase, arguments, labels, expectedType);
+                return BindUnionCaseConstruction(syntax, unionCase, arguments, labels, syntaxes, expectedType);
 
             case BoundExpression value when value.Type is FunctionTypeSymbol functionType:
                 return BindCallToValue(syntax, value, functionType, arguments, syntaxes);
@@ -4931,6 +4931,7 @@ public sealed partial class Binder {
         BoundUnionCaseGroup group,
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<string?> labels,
+        ImmutableArray<ExpressionSyntax> syntaxes,
         TypeSymbol? expectedType = null
     ) {
         var unionCase = group.UnionCase;
@@ -4995,8 +4996,8 @@ public sealed partial class Binder {
 
             // What waited for a context — '[.Circle(radius: 1)]', '.None' —
             // has one now: the payload's type.
-            var argument = arguments[i] is BoundUnboundClosure unbound
-                ? BindExpression((ExpressionSyntax)unbound.Syntax, substitution.Apply(field.Type))
+            var argument = arguments[i] is BoundUnboundClosure || _speculated.Remove(syntaxes[i])
+                ? BindExpression(syntaxes[i], substitution.Apply(field.Type))
                 : arguments[i];
             converted.Add(Convert(argument, substitution.Apply(field.Type), argument.Syntax));
         }
@@ -5076,7 +5077,7 @@ public sealed partial class Binder {
         var bound = arguments.ToBuilder();
         var converted = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
         for (var i = 0; i < arguments.Length; i++) {
-            if (bound[i] is BoundUnboundClosure) {
+            if (bound[i] is BoundUnboundClosure || _speculated.Remove(syntaxes[i])) {
                 bound[i] = BindExpression(syntaxes[i], type.ParameterTypes[i]);
             }
 
@@ -6520,15 +6521,15 @@ public sealed partial class Binder {
     ///     An argument whose type is the parameter's it is passed to, which is
     ///     not known until the overload is: an expression of literals alone
     ///     (a bare literal is typed by the conversion already), or an array
-    ///     literal with one among its elements — <c>[0x54, 0x5A, version]</c>
-    ///     for a <c>U8[:]</c>. It is bound first to choose the overload, then
-    ///     again with the parameter's type.
+    ///     literal with one among its elements — <c>[1 &lt;&lt; 40, 2]</c> for a
+    ///     <c>U64[:]</c>. It is bound first to choose the overload, then again
+    ///     with the parameter's type.
     /// </summary>
     static bool TakesParameterType(ExpressionSyntax syntax) =>
         syntax switch {
             LiteralExpressionSyntax => false,
             ParenthesizedExpressionSyntax parenthesized => TakesParameterType(parenthesized.Expression),
-            ArrayExpressionSyntax array => array.Elements.Any(static e => IsLiteralOnly(e) || TakesParameterType(e)),
+            ArrayExpressionSyntax array => array.Elements.Any(TakesParameterType),
             _ => IsLiteralOnly(syntax),
         };
 
@@ -8645,6 +8646,7 @@ public sealed partial class Binder {
             && SharesOperandType(syntax.OperatorToken.Kind)
             && TakesTypeFromContext(syntax.Left)
             && !TakesTypeFromContext(syntax.Right)
+            && !IsClosure(syntax.Right)
             && BinaryKindOf(syntax.OperatorToken.Kind) is { } early) {
             var first = BindExpression(syntax.Right);
             var then = BindExpression(syntax.Left, first.Type.IsError ? null : first.Type);
@@ -8694,9 +8696,11 @@ public sealed partial class Binder {
 
     /// <summary>
     ///     An operand whose type its context settles, by its form: <c>.zero</c>,
-    ///     <c>.init(…)</c>, a static member of a generic type named bare
-    ///     (<c>Complex.i</c>, <c>Complex.polar(…)</c>), or a call with no
-    ///     arguments to infer from (<c>two()</c>).
+    ///     <c>.init(…)</c>, a static member whose type names the parameters of
+    ///     a generic type named bare from outside it (<c>Complex.i</c>,
+    ///     <c>Complex.polar()</c>), or a call of a generic function with no
+    ///     arguments to infer from (<c>two()</c>). Any other has a type of its
+    ///     own for the right operand to take: <c>f() == none</c>.
     /// </summary>
     bool TakesTypeFromContext(ExpressionSyntax syntax) =>
         syntax switch {
@@ -8705,12 +8709,33 @@ public sealed partial class Binder {
             MemberAccessExpressionSyntax { Expression: IdentifierNameSyntax owner } =>
                 LookupLocal(owner.Identifier.Text) is null
                 && _compilation.TypeBinder.Lookup(owner.Identifier.Text, _containingSymbol, _scope, owner.Span, report: false)
-                    is NamedTypeSymbol { IsConstructed: false, TypeParameters.IsEmpty: false },
-            InvocationExpressionSyntax { Expression: ImplicitMemberAccessExpressionSyntax or MemberAccessExpressionSyntax } call =>
-                TakesTypeFromContext(call.Expression),
-            InvocationExpressionSyntax { Expression: IdentifierNameSyntax, ArgumentList.Arguments.Count: 0, TrailingClosure: null } => true,
+                    is NamedTypeSymbol { IsConstructed: false, TypeParameters.IsEmpty: false } bare
+                && !IsInside(bare)
+                && bare.GetMembers(CalleeName(syntax) ?? string.Empty).ToList() is { Count: > 0 } members
+                && members.All(m => IsStaticMember(m) && bare.TypeParameters.Any(p => m switch {
+                    FunctionSymbol function => TypeSubstitution.Mentions(function.ReturnType, p),
+                    FieldSymbol field => TypeSubstitution.Mentions(field.Type, p),
+                    _ => false,
+                })),
+            InvocationExpressionSyntax { Expression: ImplicitMemberAccessExpressionSyntax } => true,
+            InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax made, ArgumentList.Arguments.Count: 0, TrailingClosure: null } =>
+                TakesTypeFromContext(made),
+            InvocationExpressionSyntax { Expression: IdentifierNameSyntax callee, ArgumentList.Arguments.Count: 0, TrailingClosure: null } =>
+                LookupLocal(callee.Identifier.Text) is null
+                && _compilation.TypeBinder.LookupValue(callee.Identifier.Text, _containingSymbol, _scope)
+                    is FunctionSymbol { TypeParameters.IsEmpty: false, Parameters.IsEmpty: true },
             _ => false,
         };
+
+    bool IsInside(NamedTypeSymbol type) {
+        for (var symbol = _containingSymbol; symbol is not null; symbol = symbol.ContainingSymbol) {
+            if (ReferenceEquals(symbol is ExtensionSymbol extension ? extension.ExtendedType.OriginalDefinition : symbol, type.OriginalDefinition)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     static BinaryOperatorKind? BinaryKindOf(SyntaxKind kind) =>
         kind switch {
@@ -10175,7 +10200,14 @@ public sealed partial class Binder {
             }
         }
 
-        var type = sawValue ? resultType ?? Core.Void : Core.Void;
+        // One whose every arm leaves, '_ => throw e', leaves.
+        var leaves = !sawValue && arms.Any(static a => a.Body is BoundExpression)
+                     && arms.All(a => a.Body switch {
+                         BoundExpression left => left.Type.Equals(Core.Never),
+                         BoundStatement statement => FlowAnalysis.AlwaysExits(statement),
+                         _ => false,
+                     });
+        var type = sawValue ? resultType ?? Core.Void : leaves ? Core.Never : Core.Void;
         var bound = new BoundMatch(syntax, type, subject, arms.ToImmutable());
 
         // When the match is a value, an arm whose body is a block has to

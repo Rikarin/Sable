@@ -617,4 +617,20 @@ public sealed class BindingTests {
     public void NoneTakesItsTypeFromTheContext() {
         Assert.Empty(AllErrorsIn("fn id<T>(_ x: T) -> T { return x }\nfn main() {\n    let w: Int? = id(none)\n    let r: String? = none\n}"));
     }
+
+    const string Givers = """
+                          union Pay { Full(U8) }
+                          fn maybe() -> Int? { return 3 }
+                          fn wideOne() -> U128 { return 7 }
+                          fn bytesOf() -> U8[>..] { return [1, 2] }
+                          """;
+
+    [Theory]
+    [InlineData("let v = maybe() == none", "Bool")]
+    [InlineData("let v = wideOne() & ~(1 << 127)", "U128")]
+    [InlineData("let v = bytesOf() == [1, 2]", "Bool")]
+    [InlineData("let f: (U128) -> U128 = { $0 }\nlet v = f(1 << 100)", "U128")]
+    [InlineData("let v = Pay.Full(1 << 3)", "Pay")]
+    public void ACallsTypeIsItsOwnAndEveryKindOfCallTypesItsLiterals(string body, string expected) =>
+        Assert.Equal(expected, TypeOfLast(body, Givers));
 }

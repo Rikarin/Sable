@@ -544,6 +544,7 @@ internal sealed class TypeBinder(Compilation compilation) {
 
     public void BindConstantType(FieldSymbol field, ConstDeclarationSyntax declaration) {
         var scope = compilation.CurrentScope;
+        field.ValueResolver = () => EvaluateConstant(field, []);
 
         field.TypeResolver = () => {
             if (declaration.TypeAnnotation is { } annotation) {
@@ -649,7 +650,7 @@ internal sealed class TypeBinder(Compilation compilation) {
     ///     is written: a member of an enclosing type, the module's, an
     ///     import's, the core's.
     /// </summary>
-    Symbol? LookupValue(string name, Symbol context, FileScope? scope) {
+    internal Symbol? LookupValue(string name, Symbol context, FileScope? scope) {
         static Symbol? Value(IEnumerable<Symbol> members, bool publicOnly) =>
             members.FirstOrDefault(m => m is FunctionSymbol or FieldSymbol && (!publicOnly || m.DeclaredAccessibility == Accessibility.Public));
 
@@ -1910,8 +1911,8 @@ internal sealed class TypeBinder(Compilation compilation) {
             return BindType(syntax, context, scope);
         }
 
-        return EvaluateConstant(constant, []) is { } value && value >= long.MinValue && value <= long.MaxValue
-            ? new ValueTypeArgumentSymbol((long)value)
+        return constant.IntegerValue is { } value
+            ? new ValueTypeArgumentSymbol(value)
             : Error(
                 ErrorCode.ERR_ValueGenericArgument,
                 syntax.Span,
@@ -1925,14 +1926,15 @@ internal sealed class TypeBinder(Compilation compilation) {
         syntax switch {
             SimpleNameTypeSyntax { TypeArgumentList: null } name
                 when Lookup(name.Identifier.Text, context, scope, name.Span, report: false) is null or not (TypeSymbol or AliasSymbol)
-                => LookupValue(name.Identifier.Text, context, scope) as FieldSymbol is { } field && IsConstant(field) ? field : null,
+                => LookupValue(name.Identifier.Text, context, scope) is FieldSymbol { IsConstant: true } field ? field : null,
             QualifiedNameSyntax { Left: SimpleNameTypeSyntax { TypeArgumentList: null } owner, Right: { TypeArgumentList: null } member }
                 when Lookup(owner.Identifier.Text, context, scope, owner.Span, report: false) is NamedTypeSymbol ownerType
-                => ownerType.GetMembers(member.Identifier.Text).OfType<FieldSymbol>().FirstOrDefault(IsConstant),
+                => ownerType.GetMembers(member.Identifier.Text).OfType<FieldSymbol>()
+                    .FirstOrDefault(f => f.IsConstant && Visibility.IsVisible(f, scope, compilation)),
             _ => null,
         };
 
-    static bool IsConstant(FieldSymbol field) => field.DeclaringSyntax is [ConstDeclarationSyntax];
+    static bool IsConstant(FieldSymbol field) => field.IsConstant;
 
     /// <summary>
     ///     A constant's value as the compiler reads types, before anything
@@ -1942,6 +1944,11 @@ internal sealed class TypeBinder(Compilation compilation) {
     ///     too late for a type.
     /// </summary>
     System.Numerics.BigInteger? EvaluateConstant(FieldSymbol constant, HashSet<FieldSymbol> visiting) {
+        // One read from a unit's interface, which has no syntax, says its value.
+        if (constant.KnownValue is { } known) {
+            return known;
+        }
+
         if (constant.DeclaringSyntax is not [ConstDeclarationSyntax { Initializer.Value: { } value } declaration]
             || !visiting.Add(constant)) {
             return null;

@@ -9863,6 +9863,12 @@ public sealed partial class SilGen {
 
             Jump(new UnreachableInst());
             _current = after;
+
+            // Every arm left: nothing comes here.
+            if (match.Type.Equals(Core.Never)) {
+                Jump(new UnreachableInst());
+            }
+
             return result ?? (SilValue)UnitValue.Instance;
         }
 

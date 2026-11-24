@@ -441,4 +441,22 @@ public sealed class PatternTests {
                 do { print(try need(none)) } catch { print(show(error)) }
             """
         );
+
+    [Fact]
+    public void AMatchOfArmsThatAllThrowAndAThrowInAConditionalLeave() =>
+        Prints(
+            "-1\n1\n-1\n-1\n",
+            """
+            union Failure { A }
+            fn never() throws(Failure) -> Int { return match 1 { case _ => throw Failure.A } }
+            fn pick(_ b: Bool) throws(Failure) -> Int { return b ? 1 : throw Failure.A }
+            fn need<T>(_ o: T?) throws(Failure) -> T { return o ?? throw Failure.A }
+            """,
+            """
+                print(try never() catch { -1 })
+                print(try pick(true) catch { -1 })
+                print(try pick(false) catch { -1 })
+                print(try need(none as Int?) catch { -1 })
+            """
+        );
 }

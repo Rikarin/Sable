@@ -51,8 +51,8 @@ build produces.
 
 `sable test --coverage` counts what of the package's own code (not
 `tests/`, dependencies or the library) the tests run: each line, and each
-outcome of every decision — both ways of an `if`, `guard`, `while` and
-`?:`; each arm of a `match` and case of a `switch` (and none, without a
+outcome of every decision — both ways of an `if`, `guard`, `while` (but a
+literal `while true`, which decides nothing) and `?:`; each arm of a `match` and case of a `switch` (and none, without a
 `default`); the right side of `&&` and `||` run or skipped; an `if let`
 holding a value or not; `??` and `try?` giving the value or the fallback.
 It prints the share of lines and of branches run per file, the lines never

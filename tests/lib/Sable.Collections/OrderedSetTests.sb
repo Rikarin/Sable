@@ -43,3 +43,22 @@ fn orderedSetsCombineInOrder() {
     assert(a.toArray() == [3, 2, 1])
     assert(a.reversed().toArray() == [1, 2, 3])
 }
+
+@test
+fn anOrderedSetIsACollection() {
+    let letters = OrderedSet<String>(["b", "a", "c"])
+    assertEqual(letters.count, 3)
+    assert(!letters.isEmpty)
+    var joined = ""
+    for letter in letters {
+        joined = joined + letter
+    }
+    assertEqual(joined, "bac")
+    assertEqual(letters.index(letters.startIndex, offsetBy: 2), 2)
+    assertEqual(letters.distance(from: 1, to: letters.endIndex), 2)
+    letters.removeAll()
+    assert(letters.isEmpty)
+    assert(!letters.contains("a"))
+    assert(letters.append("a"))
+    assertEqual(letters.index(of: "a"), 0)
+}

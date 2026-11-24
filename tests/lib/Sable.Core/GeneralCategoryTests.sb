@@ -34,3 +34,15 @@ fn categoriesCompareAndDescribeThemselves() {
     assert(GeneralCategory.Control != GeneralCategory.Format, "different cases differ")
     assertEqual("\(GeneralCategory.MathSymbol)", "MathSymbol")
 }
+
+@test
+fn aCategoryIsOutsideEveryOtherMajorClass() {
+    for code in 0...29 {
+        let category = U8(code) as GeneralCategory
+        let classes = [
+            category.isLetter, category.isMark, category.isNumber, category.isPunctuation,
+            category.isSymbol, category.isSeparator, category.isOther,
+        ]
+        assertEqual(classes.filter { $0 }.count, 1)
+    }
+}

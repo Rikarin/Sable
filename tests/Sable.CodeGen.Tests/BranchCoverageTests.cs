@@ -73,6 +73,21 @@ public sealed class BranchCoverageTests {
             return steps
         }
 
+        // A condition that is a literal is no decision: it has one outcome.
+        public fn untilLeft(_ n: Int) -> Int {
+            var i = 0
+            while true {
+                i += 1
+                if i >= n {
+                    break
+                }
+            }
+            repeat {
+                i += 1
+            } while false
+            return i
+        }
+
         public fn area(_ s: Shape) -> Int {
             return match s {
                 case .Circle(let r) => r * 3
@@ -130,6 +145,7 @@ public sealed class BranchCoverageTests {
             assertEqual(unwrap(3), 3)
             assertEqual(guarded(4), 4)
             assertEqual(countDown(2), 2)
+            assertEqual(untilLeft(2), 3)
             assertEqual(area(Shape.Circle(r: 2)), 6)
             assertEqual(area(Shape.Square(w: 3)), 9)
             assertEqual(name(2), "few")
@@ -158,6 +174,7 @@ public sealed class BranchCoverageTests {
         $"{LineOf("guard let y = x")}:5 guard true=1 false=0",
         $"{LineOf("guard let y = x")}:11 let some=1 none=0",
         $"{LineOf("while i > 0")}:5 while true=2 false=1",
+        $"{LineOf("if i >= n")}:9 if true=1 false=1",
         $"{LineOf("return match s")}:12 match .Circle(let r)=1 .Square(let w) where w > 10=0 .Square(let w)=1 .Dot=0",
         $"{LineOf("switch n {\n        case 1:\n            return")}:5 switch case 1=0 case 2, 3=1 default=0",
         $"{LineOf("switch n {\n        case 1:\n            s =")}:5 switch case 1=0 case 2=0 no case=1",

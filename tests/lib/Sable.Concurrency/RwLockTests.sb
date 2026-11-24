@@ -4,6 +4,7 @@ module RwLockTests
 
 import Sable.Concurrency
 import Sable.Testing
+import Sable.Time
 
 @test
 fn readersShareAndAWriterIsAlone() async {
@@ -45,4 +46,91 @@ fn readersShareAndAWriterIsAlone() async {
     assert(writersAlone.load())
     assertEqual(table.read { $0 }, 600)
     assert(mostReaders.load() >= 1)
+}
+
+struct Failure: Error {
+    fn debugDescription() -> String { return "Failure" }
+}
+
+@test
+fn readersAreInsideTogether() {
+    let table = RwLock<String>("a")
+    // Two readers, the first in until the second has gone.
+    assertEqual(table.read { outer in
+        outer + table.read { inner in inner + "!" }
+    }, "aa!")
+    table.write { $0 = "b" }
+    assertEqual(table.read { $0 }, "b")
+}
+
+@test
+fn aThrowingReaderOrWriterLetsTheLockGo() {
+    let n = RwLock<Int>(1)
+    do {
+        try n.read { value in
+            throw Failure()
+        }
+        fail("it did not throw")
+    } catch { }
+    do {
+        try n.write { value in
+            value = 7
+            throw Failure()
+        }
+        fail("it did not throw")
+    } catch { }
+    n.write { $0 += 1 }
+    assertEqual(n.read { $0 }, 8)
+}
+
+@test
+fn aReaderWaitsForTheWriter() async {
+    let table = RwLock<Int>(0)
+    let started = Atomic<Bool>(false)
+    let reader = table.write { value -> Task<Int> in
+        let task = Task.spawn {
+            started.store(true)
+            return table.read { $0 }
+        }
+        while !started.load() { }
+        // Time for the reader to come to the lock, and wait.
+        pause()
+        value = 5
+        return task
+    }
+    assertEqual(await reader.value, 5)
+}
+
+@test
+fn aWriterWaitsForTheReadersAndGoesBeforeLaterOnes() async {
+    let table = RwLock<Int>(0)
+    let writing = Atomic<Bool>(false)
+    let reading = Atomic<Bool>(false)
+    let (writer, reader) = table.read { value -> (Task<Int>, Task<Int>) in
+        let writer = Task.spawn {
+            writing.store(true)
+            return table.write { value -> Int in
+                value += 1
+                return value
+            }
+        }
+        while !writing.load() { }
+        pause()
+        assertEqual(value, 0)
+        let reader = Task.spawn {
+            reading.store(true)
+            return table.read { $0 }
+        }
+        while !reading.load() { }
+        pause()
+        return (writer, reader)
+    }
+    assertEqual(await writer.value, 1)
+    assertEqual(await reader.value, 1)
+}
+
+// Waits, holding what it holds, for other threads to come to a lock.
+fn pause() {
+    let start = Instant.now()
+    while start.elapsed < Duration.milliseconds(50) { }
 }

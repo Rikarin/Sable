@@ -55,3 +55,14 @@ fn manyTasksCountUnderAMutex() async {
     }
     assertEqual(total.withLock { $0 }, 40000)
 }
+
+@test
+fn aHeldMutexIsNotAvailable() {
+    let n = Mutex<Int>(1)
+    let refused = n.withLock { value -> Bool in
+        value += 1
+        return n.withLockIfAvailable { $0 } == none
+    }
+    assert(refused)
+    assertEqual(n.withLockIfAvailable { $0 }, 2)
+}

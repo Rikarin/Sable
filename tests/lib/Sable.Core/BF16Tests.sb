@@ -87,3 +87,52 @@ fn itComparesHashesAndSorts() {
     assertEqual(BF16.leastNormalMagnitude.exponent, -126)
     assertEqual(BF16(3.0).totalCompare(BF16.nan), .Less)
 }
+
+@test
+fn itsConstantsAreRoundedToTheNearest() {
+    assertEqual(BF16.e, BF16(2.718281828459045))
+    assertEqual(BF16.ln2, BF16(0.6931471805599453))
+    assertEqual(BF16.ln10, BF16(2.302585092994046))
+    assertEqual(BF16.sqrt2, BF16(1.4142135623730951))
+    assertEqual(BF16.pi, BF16(3.141592653589793))
+    assertEqual(BF16.zero + BF16.one, 1.0)
+}
+
+@test
+fn itParsesWhatIsNotFinite() {
+    assertEqual(try! BF16.parse("inf"), BF16.infinity)
+    assertEqual(try! BF16.parse("-Infinity"), -BF16.infinity)
+    assert((try! BF16.parse("nan")).isNaN)
+    assertEqual(try! BF16.parse("1e400"), BF16.infinity)
+    assertEqual(try! BF16.parse("-1e400"), -BF16.infinity)
+    assertEqual(try! BF16.parse("1e-400"), 0.0)
+    assert((try? BF16.parse("1.5x")) == none)
+    assert((try? BF16.parse("")) == none)
+}
+
+@test
+fn aTextBesideATieIsRoundedItsOwnWay() {
+    // Nearer to the halfway point than an F64 can tell, on either side of
+    // it. 3.0078125 lies between 3.0, the even one, and 3.015625.
+    assertEqual(try! BF16.parse("3.00781250000000000000001"), 3.015625)
+    assertEqual(try! BF16.parse("3.00781249999999999999999"), 3.0)
+    assertEqual(try! BF16.parse("-3.0078125"), -3.0)
+    assertEqual(try! BF16.parse("-3.00781250000000000000001"), -3.015625)
+    assertEqual(try! BF16.parse("-3.00781249999999999999999"), -3.0)
+    // 3.0234375 lies between 3.015625 and 3.03125, the even one.
+    assertEqual(try! BF16.parse("3.0234375"), 3.03125)
+    assertEqual(try! BF16.parse("3.02343750000000000000001"), 3.03125)
+    assertEqual(try! BF16.parse("3.02343749999999999999999"), 3.015625)
+    assertEqual(try! BF16.parse("-3.02343749999999999999999"), -3.015625)
+}
+
+@test
+fn aTextBesideTheGreatestIsFiniteOrNot() {
+    // 1.99609375 × 2^128 / 2, halfway from the greatest to 2^128: a tie is
+    // to the even one, infinity.
+    assertEqual(try! BF16.parse("339617752923046005526922703901628039168"), BF16.infinity)
+    assertEqual(try! BF16.parse("339617752923046005526922703901628039169"), BF16.infinity)
+    assertEqual(try! BF16.parse("339617752923046005526922703901628039167"), BF16.greatestFiniteMagnitude)
+    assertEqual(try! BF16.parse("-339617752923046005526922703901628039168"), -BF16.infinity)
+    assertEqual(try! BF16.parse("-339617752923046005526922703901628039167"), -BF16.greatestFiniteMagnitude)
+}

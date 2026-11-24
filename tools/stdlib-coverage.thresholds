@@ -19,7 +19,6 @@ lib/Sable.Build/Profile.sb                         0  70   # raise me: no tests 
 lib/Sable.Build/Target.sb                          0  70   # raise me: no tests yet
 lib/Sable.Build/TargetSettings.sb                  0  70   # raise me: no tests yet
 lib/Sable.Concurrency/Sleep.sb                     0  70   # raise me: no tests yet
-lib/Sable.Core/ClosedRange.sb                      0  70   # raise me: no tests yet
 lib/Sable.Core/Debug.sb                            0   0   # raise me: no tests yet
 lib/Sable.Core/Mirror.sb                           0  70   # raise me: no tests yet
 lib/Sable.Core/PartialRangeFrom.sb                 0  70   # raise me: no tests yet

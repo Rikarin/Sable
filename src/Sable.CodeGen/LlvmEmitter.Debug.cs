@@ -16,6 +16,10 @@ public sealed partial class LlvmEmitter {
     /// </summary>
     public static bool ThunkPrologueHasALine((int Major, bool Apple)? compiler) => compiler is { Apple: false, Major: < 20 };
 
+    /// <summary>A type parameter's name, in a type unspecialised code knows by its metadata.</summary>
+    [System.Text.RegularExpressions.GeneratedRegex(@"@opaque\(([^)]*)\)")]
+    private static partial System.Text.RegularExpressions.Regex OpaqueName();
+
     /// <summary>
     ///     The DWARF metadata: one compile unit, a file per source, a
     ///     subprogram per function, a location per instruction, and a variable
@@ -38,6 +42,8 @@ public sealed partial class LlvmEmitter {
     ///         <item><c>T?</c>: <c>T?$optional</c>, laid out as a union; an optional class reference is the reference, null for none.</item>
     ///         <item><c>(A) -&gt; R</c>: <c>(A) -&gt; R$closure</c> — <c>$function</c> and the <c>$context</c> object.</item>
     ///         <item><c>any P</c>: <c>any P$existential</c> — a closure per requirement, all sharing the box that holds the value.</item>
+    ///         <item>A struct of a type parameter's values behind references, in unspecialised code: <c>M.Holder&lt;T&gt;$generic</c>, its fields.</item>
+    ///         <item>A variable whose type is laid out at run time: <c>SableValue$dynamic</c>, where it is and its type's metadata (see <see cref="DynamicVariable" />).</item>
     ///         <item>An <c>@inline_layout</c> struct <c>S</c>: <c>S$inline</c>, holding <c>$block</c>, a pointer to <c>S$block</c> — header, length, capacity, then <c>S$fields</c>, its fixed-size fields.</item>
     ///     </list>
     ///     <para>
@@ -59,7 +65,9 @@ public sealed partial class LlvmEmitter {
         readonly Dictionary<string, string> _unique = new(StringComparer.Ordinal);
         readonly Dictionary<string, string> _files = new(StringComparer.Ordinal);
         readonly Dictionary<SilType, string?> _types = [];
-        readonly List<(string Name, string Node)> _classes = [];
+
+        /// <summary>The types a formatter may look up by name (<see cref="Keep" />), with the names they go by.</summary>
+        readonly Dictionary<string, SilType> _kept = new(StringComparer.Ordinal);
         string? _unit;
         string? _firstFile;
 
@@ -91,15 +99,31 @@ public sealed partial class LlvmEmitter {
         ///     Starts the module: the compile unit, in the entry point's file,
         ///     and every class's type — a formatter finds an object's dynamic
         ///     type by the name its metadata carries, which need not be a type
-        ///     any variable has.
+        ///     any variable has (<see cref="Keep" />).
         /// </summary>
         public void Begin(SilModule module) {
             var entry = module.EntryPoint is { } name ? module.Find(name)?.SourceFile : null;
             File(entry ?? module.Functions.Select(static f => f.SourceFile).FirstOrDefault(static f => f is not null) ?? "<unknown>");
             foreach (var type in module.Types.OfType<ClassType>()) {
-                if (Type(type) is { } node) {
-                    _classes.Add((type.Name, node));
+                _kept.TryAdd(type.Name, type);
+            }
+
+            // A type made at run time is made, in the end, of these.
+            if (module.UnspecialisedGenerics) {
+                foreach (var scalar in (SilType[])[SilType.Int, SilType.Bool, SilType.F64, SilType.F32, SilType.Char, SilType.String, SilType.U8, SilType.U32]) {
+                    Keep(scalar, scalar.ToString());
                 }
+            }
+        }
+
+        /// <summary>
+        ///     Keeps a type's description for a formatter to find by the name
+        ///     its metadata carries: a value unspecialised code holds, or an
+        ///     existential, is of a type no variable need have (#297).
+        /// </summary>
+        public void Keep(SilType type, string name) {
+            if (type != SilType.Unit && !SilType.MentionsOpaque(type)) {
+                _kept.TryAdd(name, type);
             }
         }
 
@@ -213,11 +237,33 @@ public sealed partial class LlvmEmitter {
         public string Location(int line, int column, string scope) =>
             Node($"!DILocation(line: {line}, column: {column}, scope: {scope})");
 
+        /// <summary>
+        ///     A local or a parameter. One the compiler added, whose name
+        ///     starts with a '$' (<c>$metadata.T</c>, where a result goes), is
+        ///     artificial, and no parameter to a debugger: it is found by name,
+        ///     and left out of the variables and a frame's arguments.
+        /// </summary>
         public string Variable(string name, string scope, string file, int line, SilType type, int argument = 0) {
             var typePart = Type(type) is { } typeNode ? $", type: {typeNode}" : "";
-            var argumentPart = argument > 0 ? $", arg: {argument}" : "";
-            return Node($"!DILocalVariable(name: {Quote(name)}{argumentPart}, scope: {scope}, file: {file}, line: {line}{typePart})");
+            var hidden = name.StartsWith('$');
+            var argumentPart = argument > 0 && !hidden ? $", arg: {argument}" : "";
+            return Node($"!DILocalVariable(name: {Quote(name)}{argumentPart}, scope: {scope}, file: {file}, line: {line}{typePart}{(hidden ? ", flags: DIFlagArtificial" : "")})");
         }
+
+        /// <summary>
+        ///     A variable of a type unspecialised code lays out at run time
+        ///     (<see cref="SilType.IsIndirect" />): what its slot holds is
+        ///     where the value is and the metadata of its type, a
+        ///     <c>$dynamic</c>, which a formatter reads the value through.
+        /// </summary>
+        public string DynamicVariable(string name, string scope, string file, int line, SilType type, int argument = 0) =>
+            Node($"!DILocalVariable(name: {Quote(name)}{(argument > 0 ? $", arg: {argument}" : "")}, scope: {scope}, file: {file}, line: {line}, type: {Typedef(DisplayName(type), Dynamic)})");
+
+        /// <summary>Where a value is, and its type's metadata: how a variable whose type only metadata knows is described.</summary>
+        string Dynamic => Structure("SableValue$dynamic", 16, [
+            Member("$address", Pointer(null), 8, 0),
+            Member("$metadata", Pointer(null), 8, 8),
+        ]);
 
         // -------------------------------------------------------------------
         // Types
@@ -260,8 +306,9 @@ public sealed partial class LlvmEmitter {
             }
         }
 
-        /// <summary>The name Sable gives the type, for a debugger to show.</summary>
-        public static string DisplayName(SilType type) => TypeMetadata.DisplayName(type);
+        /// <summary>The name Sable gives the type, for a debugger to show: in unspecialised code, a type parameter's is its own.</summary>
+        public static string DisplayName(SilType type) =>
+            TypeMetadata.DisplayName(type) is var name && name.Contains("@opaque(", StringComparison.Ordinal) ? OpaqueName().Replace(name, "$1") : name;
 
         /// <summary>The wrapped type, for an optional.</summary>
         static SilType? OptionalPayload(EnumType type) => TypeMetadata.OptionalPayload(type);
@@ -291,7 +338,7 @@ public sealed partial class LlvmEmitter {
                     Member("$header", ObjectHeader, 16, 0, artificial: true),
                     Member("count", Int64, 8, 16),
                     Member("capacity", Int64, 8, 24),
-                    Member("elements", Pointer(Type(array.Element)), 8, 32),
+                    Member("elements", Pointer(SilType.IsIndirect(array.Element) ? null : Type(array.Element)), 8, 32),
                 ]);
                 var list = Structure(DisplayName(array) + "$list", 8, [Member("$buffer", Pointer(body), 8, 0)]);
                 Define(reference, $"!DIDerivedType(tag: DW_TAG_typedef, name: {Quote(DisplayName(array))}, baseType: {list})");
@@ -318,7 +365,10 @@ public sealed partial class LlvmEmitter {
             var objectType = Reserve();
             var members = new List<string> { Member("$header", ObjectHeader, ObjectHeaderSize, 0, artificial: true) };
             var end = ObjectHeaderSize;
-            foreach (var (fieldName, fieldType, offset) in ObjectFields(type)) {
+
+            // One whose fields only its metadata places (#297) is its header:
+            // a formatter reads the rest where the metadata says.
+            foreach (var (fieldName, fieldType, offset) in type.IsLaidOutAtRunTime ? [] : ObjectFields(type)) {
                 if (Type(fieldType) is { } fieldNode) {
                     members.Add(Member(fieldName, fieldNode, Size(fieldType), offset));
                 }
@@ -333,6 +383,10 @@ public sealed partial class LlvmEmitter {
 
         string? Describe(SilType type) {
             switch (type) {
+                // Nothing is known of it but its name: a variable of it is a DynamicVariable.
+                case var _ when SilType.IsIndirect(type):
+                    return Typedef(DisplayName(type), Pointer(null));
+
                 // Named as Sable names them, over the machine type a debugger
                 // knows how to print.
                 case var _ when type == SilType.Int:
@@ -365,11 +419,14 @@ public sealed partial class LlvmEmitter {
                     return Typedef("String", Pointer(body));
                 }
 
-                case var _ when type == SilType.Object || type == SilType.Region || type == SilType.Metadata || type == SilType.WitnessTable || SilType.IsIndirect(type):
+                case var _ when type == SilType.Object || type == SilType.Region || type == SilType.WitnessTable:
                     return Typedef(type.ToString(), Pointer(ObjectHeader));
 
+                case var _ when type == SilType.Metadata:
+                    return Typedef(DisplayName(type), Pointer(null));
+
                 case AddressType address:
-                    return Pointer(Type(address.Pointee));
+                    return Pointer(SilType.IsIndirect(address.Pointee) ? null : Type(address.Pointee));
 
                 // The block that holds its bytes (runtime/inline_layout.c),
                 // as '$inline' — which the plugin shows as its fields — the
@@ -425,6 +482,12 @@ public sealed partial class LlvmEmitter {
 
                 case StructType structType when structType.Name.StartsWith("any$", StringComparison.Ordinal):
                     return Typedef(DisplayName(structType), Aggregate(DisplayName(structType) + "$existential", structType.Fields, Size(structType), live: false));
+
+                // Laid out alike whatever its type arguments, but named for type
+                // parameters: '$generic', which the plugin names for the frame's.
+                case StructType generic when SilType.MentionsOpaque(generic):
+                    return Typedef(DisplayName(generic),
+                        Aggregate(DisplayName(generic) + "$generic", generic.Fields, Size(generic), live: generic.Deinit is not null, LayoutOf(generic).Offsets));
 
                 case StructType structType:
                     return Aggregate(DisplayName(structType), structType.Fields, Size(structType), live: structType.Deinit is not null, LayoutOf(structType).Offsets);
@@ -566,8 +629,10 @@ public sealed partial class LlvmEmitter {
         }
 
         /// <summary>
-        ///     The metadata, and the global that keeps the classes' types: one
-        ///     the program never reads, whose type has a member per class. A
+        ///     The metadata, and the global that keeps the types a formatter
+        ///     looks up by name: one the program never reads, whose type has a
+        ///     member per type, a pointer to it — every class, by its object
+        ///     metadata's name, and every type with metadata, by that's. A
         ///     type no variable has is dropped by <c>dsymutil</c>, retained
         ///     type or not; one a global variable has is kept.
         /// </summary>
@@ -576,17 +641,18 @@ public sealed partial class LlvmEmitter {
             var dwarf = Node(codeView ? "!{i32 2, !\"CodeView\", i32 1}" : "!{i32 7, !\"Dwarf Version\", i32 5}");
             var version = Node("!{i32 2, !\"Debug Info Version\", i32 3}");
             var globals = new List<string>(_globals);
-            if (_classes.Count > 0) {
-                var holder = Structure("$SableClasses", 8 * _classes.Count, _classes.Select((c, i) => Member(c.Name, c.Node, 8, 8 * i)));
-                var variable = Node(
-                    $"!DIGlobalVariable(name: \"sable.debug.classes\", scope: {Unit}, file: {_firstFile}, line: 0, type: {holder}, isLocal: true, isDefinition: true)",
-                    distinct: true
-                );
-                var expression = Node($"!DIGlobalVariableExpression(var: {variable}, expr: !DIExpression())");
-                globals.Add(expression);
-                output.Append($"\n@\"sable.debug.classes\" = internal constant [{_classes.Count} x i64] zeroinitializer, !dbg {expression}\n")
-                    .Append("@llvm.used = appending global [1 x ptr] [ptr @\"sable.debug.classes\"], section \"llvm.metadata\"\n");
-            }
+            var holder = Structure("$SableTypes", 8 * (_kept.Count + 1), [
+                Member("$dynamic", Pointer(Dynamic), 8, 0),
+                .._kept.OrderBy(static k => k.Key, StringComparer.Ordinal).Select((k, i) => Member(k.Key, Pointer(Type(k.Value)), 8, 8 * (i + 1))),
+            ]);
+            var variable = Node(
+                $"!DIGlobalVariable(name: \"sable.debug.types\", scope: {Unit}, file: {_firstFile}, line: 0, type: {holder}, isLocal: true, isDefinition: true)",
+                distinct: true
+            );
+            var expression = Node($"!DIGlobalVariableExpression(var: {variable}, expr: !DIExpression())");
+            globals.Add(expression);
+            output.Append($"\n@\"sable.debug.types\" = internal constant [{_kept.Count + 1} x i64] zeroinitializer, !dbg {expression}\n")
+                .Append("@llvm.used = appending global [1 x ptr] [ptr @\"sable.debug.types\"], section \"llvm.metadata\"\n");
 
             Define(Unit,
                 $"distinct !DICompileUnit(language: DW_LANG_C, file: {_firstFile}, producer: \"sable\", isOptimized: {(optimised ? "true" : "false")}, "

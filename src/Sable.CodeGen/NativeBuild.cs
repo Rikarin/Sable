@@ -783,6 +783,28 @@ public static class NativeBuild {
     });
 
     /// <summary>
+    ///     Gathers a macOS executable's debug information, which its link left
+    ///     in the objects it was made from, into its <c>.dSYM</c>, as clang does
+    ///     for a program it compiles and links in one step: for objects that
+    ///     are about to be deleted. Nothing to do for any other target, whose
+    ///     executable holds it.
+    /// </summary>
+    public static void GatherDebugInfo(string executable, NativeTarget target) {
+        if (target.Platform != NativePlatform.MacOS) {
+            return;
+        }
+
+        try {
+            Run("dsymutil", [executable]);
+        } catch (System.ComponentModel.Win32Exception) {
+            // Built elsewhere, without the Xcode tools: no .dSYM, as clang would leave none.
+            return;
+        }
+
+        ShipLldbPlugin(executable);
+    }
+
+    /// <summary>
     ///     Puts the formatter plugin where lldb looks for a program's scripts:
     ///     in its <c>.dSYM</c>, as <c>Contents/Resources/Python/&lt;name&gt;.py</c>,
     ///     the name the executable's with what Python cannot import made <c>_</c>.

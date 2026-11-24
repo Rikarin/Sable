@@ -1,0 +1,435 @@
+module Sable.Net
+
+import Sable.Text
+
+/// A URL's host, as the WHATWG URL standard parses it: a domain (in ASCII,
+/// through IDNA), an IPv4 or IPv6 address, an opaque host (a non-special
+/// URL's, percent-encoded as it was written), or empty (a file URL's).
+///
+/// ```sable
+/// assert(Host.parse("EXAMPLE.com", special: true)!.description() == "example.com")
+/// assert(Host.parse("0x7f.1", special: true)!.description() == "127.0.0.1")
+/// assert(Host.parse("[::FFFF:1.2.3.4]", special: true)!.description() == "[::ffff:102:304]")
+/// assert(Host.parse("exa mple", special: true) == none)
+/// ```
+@derive(Equatable, Debug)
+public union Host {
+    Domain(String)
+    Ipv4(Int)
+    /// The eight 16-bit pieces.
+    Ipv6(Int[>..])
+    Opaque(String)
+    Empty
+
+    /// The host as a URL writes it: an IPv6 address in brackets and
+    /// compressed, an IPv4 one dotted.
+    public fn description() -> String {
+        return match self {
+            case .Domain(let name)  => name
+            case .Ipv4(let address) => Host.dotted(address)
+            case .Ipv6(let pieces)  => "[" + Host.compressed(pieces) + "]"
+            case .Opaque(let name)  => name
+            case .Empty             => ""
+        }
+    }
+
+    static fn dotted(_ address: Int) -> String {
+        return "\(address >> 24 & 255).\(address >> 16 & 255).\(address >> 8 & 255).\(address & 255)"
+    }
+
+    static fn compressed(_ pieces: Int[:]) -> String {
+        // The longest run of two or more zero pieces, the first of equals.
+        var bestStart = -1
+        var bestLength = 1
+        var i = 0
+        while i < 8 {
+            if pieces[i] == 0 {
+                var j = i
+                while j < 8 && pieces[j] == 0 {
+                    j += 1
+                }
+                if j - i > bestLength {
+                    bestStart = i
+                    bestLength = j - i
+                }
+                i = j
+            } else {
+                i += 1
+            }
+        }
+        var written = ""
+        var ignore0 = false
+        i = 0
+        while i < 8 {
+            if ignore0 && pieces[i] == 0 {
+                i += 1
+                continue
+            }
+            ignore0 = false
+            if bestStart == i {
+                written = written + (i == 0 ? "::" : ":")
+                ignore0 = true
+                i += 1
+                continue
+            }
+            written = written + Host.hex(pieces[i])
+            if i != 7 {
+                written = written + ":"
+            }
+            i += 1
+        }
+        return written
+    }
+
+    static fn hex(_ value: Int) -> String {
+        if value == 0 {
+            return "0"
+        }
+        var digits: U8[>..] = []
+        var rest = value
+        while rest > 0 {
+            let d = rest & 15
+            digits.append(U8.truncating(d < 10 ? 0x30 + d : 0x61 + d - 10))
+            rest = rest >> 4
+        }
+        digits.reverse()
+        unsafe {
+            return String.fromUtf8Unchecked(digits)
+        }
+    }
+
+    // ---- Parsing ---------------------------------------------------------------
+
+    /// The host the text writes — a domain, an address or, when the URL is
+    /// not special, an opaque host — or none when it is not one.
+    public static fn parse(_ input: String, special: Bool) -> Host? {
+        let codes = input.unicodeScalarValues()
+        if !codes.isEmpty && codes[0] == 0x5B {
+            if codes[codes.count - 1] != 0x5D {
+                return none
+            }
+            var inner: Int[>..] = []
+            var i = 1
+            while i < codes.count - 1 {
+                inner.append(codes[i])
+                i += 1
+            }
+            if let pieces = Host.parseIpv6(inner) {
+                return .Ipv6(pieces)
+            }
+            return none
+        }
+        if !special {
+            return Host.parseOpaque(codes)
+        }
+        let domain = PercentEncoding.decodeText(input)
+        guard let ascii = Host.domainToAscii(domain) else {
+            return none
+        }
+        if Host.endsInNumber(ascii) {
+            if let address = Host.parseIpv4(ascii) {
+                return .Ipv4(address)
+            }
+            return none
+        }
+        return .Domain(ascii)
+    }
+
+    static fn isForbiddenHost(_ code: Int) -> Bool {
+        return code == 0x00 || code == 0x09 || code == 0x0A || code == 0x0D || code == 0x20 || code == 0x23
+            || code == 0x2F || code == 0x3A || code == 0x3C || code == 0x3E || code == 0x3F || code == 0x40
+            || code == 0x5B || code == 0x5C || code == 0x5D || code == 0x5E || code == 0x7C
+    }
+
+    static fn isForbiddenDomain(_ code: Int) -> Bool {
+        return Host.isForbiddenHost(code) || code <= 0x1F || code == 0x25 || code == 0x7F
+    }
+
+    static fn parseOpaque(_ codes: Int[:]) -> Host? {
+        var written: U8[>..] = []
+        for code in codes {
+            if Host.isForbiddenHost(code) {
+                return none
+            }
+            PercentEncoding.append(code, .C0Control, false, &written)
+        }
+        unsafe {
+            return .Opaque(String.fromUtf8Unchecked(written))
+        }
+    }
+
+    // The WHATWG's "domain to ASCII", beStrict false: a domain that is
+    // ASCII already is lower-cased, its "xn--" labels not decoded to check —
+    // as browsers do, and WPT's "Domain is ASCII, but a label is invalid
+    // IDNA" cases ask; anything else goes through UTS #46.
+    static fn domainToAscii(_ domain: String) -> String? {
+        var ascii = true
+        for c in domain {
+            if c.codePoint >= 0x80 {
+                ascii = false
+            }
+        }
+        var result = ""
+        if ascii {
+            result = domain.lowercased()
+        } else {
+            guard let converted = Idna.toAscii(domain) else {
+                return none
+            }
+            result = converted
+        }
+        if result.isEmpty {
+            return none
+        }
+        for c in result {
+            if Host.isForbiddenDomain(c.codePoint) {
+                return none
+            }
+        }
+        return result
+    }
+
+    static fn endsInNumber(_ text: String) -> Bool {
+        var parts = text.split('.')
+        if parts[parts.count - 1].isEmpty {
+            if parts.count == 1 {
+                return false
+            }
+            parts.removeLast()
+        }
+        let last = parts[parts.count - 1]
+        if !last.isEmpty {
+            var digits = true
+            for c in last {
+                if c < '0' || c > '9' {
+                    digits = false
+                }
+            }
+            if digits {
+                return true
+            }
+        }
+        return Host.parseIpv4Number(last) >= 0
+    }
+
+    // An IPv4 part, decimal, octal (a leading 0) or hexadecimal (0x): -1
+    // when it is not one, a value past 2^32 kept as 2^32 + 1.
+    static fn parseIpv4Number(_ text: String) -> Int {
+        if text.isEmpty {
+            return -1
+        }
+        var codes = text.unicodeScalarValues()
+        var radix = 10
+        var start = 0
+        if codes.count >= 2 && codes[0] == 0x30 && (codes[1] == 0x78 || codes[1] == 0x58) {
+            radix = 16
+            start = 2
+        } else if codes.count >= 2 && codes[0] == 0x30 {
+            radix = 8
+            start = 1
+        }
+        if start == codes.count {
+            return 0
+        }
+        var value = 0
+        var i = start
+        while i < codes.count {
+            let digit = hexValueOf(codes[i])
+            if digit < 0 || digit >= radix {
+                return -1
+            }
+            value = value * radix + digit
+            if value > 1 << 32 {
+                value = (1 << 32) + 1
+            }
+            i += 1
+        }
+        return value
+    }
+
+    static fn parseIpv4(_ text: String) -> Int? {
+        var parts = text.split('.')
+        if parts[parts.count - 1].isEmpty && parts.count > 1 {
+            parts.removeLast()
+        }
+        if parts.count > 4 {
+            return none
+        }
+        var numbers: Int[>..] = []
+        for part in parts {
+            let n = Host.parseIpv4Number(part)
+            if n < 0 {
+                return none
+            }
+            numbers.append(n)
+        }
+        var i = 0
+        while i < numbers.count - 1 {
+            if numbers[i] > 255 {
+                return none
+            }
+            i += 1
+        }
+        let last = numbers[numbers.count - 1]
+        var limit = 1
+        var k = 0
+        while k < 5 - numbers.count {
+            limit = limit * 256
+            k += 1
+        }
+        if last >= limit {
+            return none
+        }
+        var address = last
+        i = 0
+        while i < numbers.count - 1 {
+            var weight = 1
+            var w = 0
+            while w < 3 - i {
+                weight = weight * 256
+                w += 1
+            }
+            address += numbers[i] * weight
+            i += 1
+        }
+        return address
+    }
+
+    static fn parseIpv6(_ input: Int[:]) -> Int[>..]? {
+        var address: Int[>..] = [0, 0, 0, 0, 0, 0, 0, 0]
+        var pieceIndex = 0
+        var compress = -1
+        var p = 0
+        if codeAt(input, p) == 0x3A {
+            if codeAt(input, p + 1) != 0x3A {
+                return none
+            }
+            p += 2
+            pieceIndex += 1
+            compress = pieceIndex
+        }
+        while codeAt(input, p) != -1 {
+            if pieceIndex == 8 {
+                return none
+            }
+            if codeAt(input, p) == 0x3A {
+                if compress != -1 {
+                    return none
+                }
+                p += 1
+                pieceIndex += 1
+                compress = pieceIndex
+                continue
+            }
+            var value = 0
+            var length = 0
+            while length < 4 && hexValueOf(codeAt(input, p)) >= 0 {
+                value = value * 16 + hexValueOf(codeAt(input, p))
+                p += 1
+                length += 1
+            }
+            if codeAt(input, p) == 0x2E {
+                if length == 0 {
+                    return none
+                }
+                p -= length
+                if pieceIndex > 6 {
+                    return none
+                }
+                var numbersSeen = 0
+                while codeAt(input, p) != -1 {
+                    var ipv4Piece = -1
+                    if numbersSeen > 0 {
+                        if codeAt(input, p) == 0x2E && numbersSeen < 4 {
+                            p += 1
+                        } else {
+                            return none
+                        }
+                    }
+                    if codeAt(input, p) < 0x30 || codeAt(input, p) > 0x39 {
+                        return none
+                    }
+                    while codeAt(input, p) >= 0x30 && codeAt(input, p) <= 0x39 {
+                        let number = codeAt(input, p) - 0x30
+                        if ipv4Piece == -1 {
+                            ipv4Piece = number
+                        } else if ipv4Piece == 0 {
+                            return none
+                        } else {
+                            ipv4Piece = ipv4Piece * 10 + number
+                        }
+                        if ipv4Piece > 255 {
+                            return none
+                        }
+                        p += 1
+                    }
+                    address[pieceIndex] = address[pieceIndex] * 256 + ipv4Piece
+                    numbersSeen += 1
+                    if numbersSeen == 2 || numbersSeen == 4 {
+                        pieceIndex += 1
+                    }
+                }
+                if numbersSeen != 4 {
+                    return none
+                }
+                break
+            } else if codeAt(input, p) == 0x3A {
+                p += 1
+                if codeAt(input, p) == -1 {
+                    return none
+                }
+            } else if codeAt(input, p) != -1 {
+                return none
+            }
+            address[pieceIndex] = value
+            pieceIndex += 1
+        }
+        if compress != -1 {
+            var swaps = pieceIndex - compress
+            pieceIndex = 7
+            while pieceIndex != 0 && swaps > 0 {
+                let other = compress + swaps - 1
+                let held = address[pieceIndex]
+                address[pieceIndex] = address[other]
+                address[other] = held
+                pieceIndex -= 1
+                swaps -= 1
+            }
+        } else if pieceIndex != 8 {
+            return none
+        }
+        return address
+    }
+}
+
+// The code point at the position, or -1 past the end: the parsers' c.
+fn codeAt(_ input: Int[:], _ i: Int) -> Int {
+    return i >= 0 && i < input.count ? input[i] : -1
+}
+
+extension Host: Hashable {
+    /// Its kind and what it holds, as '==' compares them.
+    public fn hash(into hasher: inout Hasher) {
+        match self {
+            case .Domain(let name) => {
+                hasher.combine(0)
+                hasher.combine(name)
+            }
+            case .Ipv4(let address) => {
+                hasher.combine(1)
+                hasher.combine(address)
+            }
+            case .Ipv6(let pieces) => {
+                hasher.combine(2)
+                for piece in pieces {
+                    hasher.combine(piece)
+                }
+            }
+            case .Opaque(let name) => {
+                hasher.combine(3)
+                hasher.combine(name)
+            }
+            case .Empty => hasher.combine(4)
+        }
+    }
+}

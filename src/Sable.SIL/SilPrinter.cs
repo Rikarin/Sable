@@ -83,6 +83,10 @@ public static class SilPrinter {
                         builder.Append(" deinit @").Append(deinit);
                     }
 
+                    if (classType.HasGenericDeinit) {
+                        builder.Append(" generic_deinit");
+                    }
+
                     if (classType.EmptyFrom is { } emptyFrom) {
                         builder.Append(" empty_from ").Append(emptyFrom);
                     }
@@ -132,8 +136,12 @@ public static class SilPrinter {
             builder.Append("sil_boxer $").Append(type).Append(" = @").Append(function).Append('\n');
         }
 
+        foreach (var (type, function) in module.GenericDeinits.OrderBy(static d => d.Key, StringComparer.Ordinal)) {
+            builder.Append("sil_generic_deinit ").Append(Quote(type)).Append(" = @").Append(function).Append('\n');
+        }
+
         foreach (var table in module.WitnessTables) {
-            builder.Append("sil_witness_table $").Append(table.Conformer).Append(" : ").Append(Quote(table.Protocol)).Append(" {\n");
+            builder.Append(table.IsTemplate ? "sil_template_table $" : "sil_witness_table $").Append(table.Conformer).Append(" : ").Append(Quote(table.Protocol)).Append(" {\n");
             foreach (var (requirement, function, type) in table.Entries) {
                 builder.Append("  ").Append(Quote(requirement)).Append(": ");
                 builder.Append(function is null || type is null ? "none" : $"@{function} : ${type}").Append('\n');
@@ -141,6 +149,10 @@ public static class SilPrinter {
 
             foreach (var (name, type) in table.AssociatedTypes) {
                 builder.Append("  associated ").Append(Quote(name)).Append(": $").Append(type).Append('\n');
+            }
+
+            foreach (var accessor in table.Accessors) {
+                builder.Append("  accessor @").Append(accessor).Append('\n');
             }
 
             foreach (var (associated, protocol) in table.AssociatedConformances) {
@@ -154,7 +166,7 @@ public static class SilPrinter {
             builder.Append("}\n");
         }
 
-        if ((module.Types.Count > 0 || module.Globals.Count > 0 || module.Foreign.Count > 0 || module.Exports.Count > 0 || module.WitnessTables.Count > 0 || module.Describers.Count > 0 || module.DebugDescribers.Count > 0 || module.ErrorErasers.Count > 0 || module.Boxers.Count > 0)
+        if ((module.Types.Count > 0 || module.Globals.Count > 0 || module.Foreign.Count > 0 || module.Exports.Count > 0 || module.WitnessTables.Count > 0 || module.Describers.Count > 0 || module.DebugDescribers.Count > 0 || module.ErrorErasers.Count > 0 || module.Boxers.Count > 0 || module.GenericDeinits.Count > 0)
             && module.Functions.Exists(f => include?.Invoke(f) != false)) {
             builder.Append('\n');
         }

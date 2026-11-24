@@ -110,6 +110,7 @@ public sealed record BuildSettings(string Profile, bool Optimise, string? DebugD
         $"deny-reflection={DenyReflection}",
         $"debug-assertions={DebugAssertions}",
         $"generics={Sable.SIL.SilGen.Generics}",
+        $"optimised-program={OptimisedProgram}",
         $"clang={string.Join(' ', [..NativeObjects.Flags(Native), ..NativeBuild.PositionIndependentFlags(Native)])}",
         $"cc={CacheKey.Checksum(NativeObjects.CompilerIdentity)}",
     ];
@@ -165,9 +166,18 @@ public sealed record BuildSettings(string Profile, bool Optimise, string? DebugD
     /// </summary>
     public BuildSettings ForLibrary => Optimise ? this : this with {
         Optimise = true,
+        OptimisedProgram = false,
         DebugAssertions = DebugAssertions,
         Native = Native with { OptLevel = LibraryOptLevel, Lto = LtoMode.Off },
     };
+
+    /// <summary>Whether the program is optimised, whatever a library's own unit is (<see cref="Sable.SIL.SilGen.UseOptimised" />): its units agree on it.</summary>
+    public bool OptimisedProgram {
+        get => _optimisedProgram ?? Optimise;
+        init => _optimisedProgram = value;
+    }
+
+    readonly bool? _optimisedProgram;
 
     /// <summary>
     ///     The opt-level a library's unit is compiled at in an unoptimised
@@ -931,6 +941,7 @@ public static class IncrementalBuild {
                 CompilesGenerics = library,
                 Libraries = [..(libraries ?? []).Select(static l => l.CompiledGenerics())],
             };
+            using var optimised = SilGen.UseOptimised(settings.OptimisedProgram);
             (module, lowering) = SilGen.LowerUnit(compilation, unit, index, denyReflection: settings.DenyReflection, library: leads);
             // A library's interface keeps the SIL other units may copy.
             sil = library && lowering.Count == 0 ? LibraryInterface.InlinableSil(module, module.Unit!) : null;

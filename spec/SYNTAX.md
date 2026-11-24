@@ -153,6 +153,7 @@ async (A) -> C      // async function type
 A | B | C           // structural union
 some P              // opaque type conforming to P
 any P               // existential box conforming to P
+any Any             // a value of any type; 'any Any.Type' is a 'Type'
 (any P)[]           // an array of them: 'some' and 'any' take the whole
                     // type after them, so the array suffix needs parentheses
 P & Q               // protocol composition
@@ -1317,17 +1318,17 @@ if t.isSubtype(of: (any Zero).self) {
 
 What the call gives back is what code that does not know `T` can hold: a
 result of `T` is erased to the existential of `T`'s protocols (`any Zero`,
-`any Zero & Named`); a result of `T.Type` is a `Type`; one that does not
-mention `T` is as it is. So that the call is sound:
+`any Zero & Named`, and `any Any` when it has none), a `T?` to an optional of
+it, and an array of `T` to an array of them; a result of `T.Type` is a
+`Type`; one that does not mention `T` is as it is. So that the call is sound:
 
 - `T` may be constrained only to protocols that are not generic — not to a
   class, nor to `Producer<Int>` (S3162);
 - no other parameter may be of `T` or a type made of it, since nothing at
   the call has a value of a type known only at run time, nor may a `where`
   clause make `T` another type (S3162);
-- a result or an error that mentions `T` in any other way (`T?`, `T[]`,
-  `Box<T>`, `throws(T)`), or a `T` with no protocol to erase it to, is
-  S3163;
+- a result or an error that mentions `T` in any other way (`(T, Int)`,
+  `T??`, `Box<T>`, `throws(T)`) is S3163;
 - a callee that is copied for each type rather than compiled once (S3164,
   which says what in its body keeps it so) cannot be opened.
 
@@ -1349,7 +1350,9 @@ An `any P` is opened the same way, implicitly (SE-0352), in two places.
 **A requirement called through it.** The call runs on the value as a type
 known only at run time, and what comes back is erased again: a result of
 `Self` as the existential itself, a result of one of `P`'s associated types
-as the existential of the protocols that associated type is constrained to.
+as the existential of the protocols that associated type is constrained to
+(`any Any` when there are none), and an optional of one or an array of them
+as an optional or an array of that.
 
 ```sable
 protocol Shape {
@@ -1369,10 +1372,12 @@ So are a get-only property of `Self` and a member of an extension of `P`
 that gives `Self` back. A requirement stays out of reach through `any P`
 when a parameter mentions `Self` or an associated type (`fn same(_ other:
 Self)`, since two existentials may hold two types), when its result is made
-of one (`Self?`, `Self[]`, S3161), when an associated type it gives back or
-throws has no existential to be erased to — constrained to no protocol, to a
-generic one, or to `Error` (S3165) — and when it is async and gives back
-`Self` or an associated type (S3161).
+of one in another way (`(Self, Int)`, `Self??`, S3161), when an associated
+type it gives back or throws has no existential to be erased to —
+constrained to a generic protocol, or to `Error` (S3165) — and when it is async and gives back
+`Self` or an associated type (S3161). A requirement generic over type
+parameters of its own, `fn visit<T: Named>(_ item: T)`, is called through
+it as any other.
 
 **Generic code given it.** A call of a generic function that gives an
 existential for a type parameter opens it, and runs the callee compiled
@@ -1380,20 +1385,21 @@ once with the value: `twice(shape)` for `fn twice<T: Shape>(_ x: T)` can
 call requirements that take `Self` on `x`. Each type parameter is opened
 from its own argument — `pair(a, b)` for `fn pair<A: P, B: Q>(_ a: A, _ b:
 B)` opens both — when it is constrained to protocols that are not generic,
-exactly one parameter names it, as exactly `T` and taken by value, and the
+exactly one parameter names it, as exactly `T`, taken by value or `inout`
+(the value is changed in the existential's box, first made its own), and the
 result, if it names it at all, is `T`, which is erased to the existential
 again. Not opened (the callee's copy for the existential runs, so a
 requirement that takes `Self` is unreachable in it): a type parameter two
 parameters name, since the two existentials may hold different types; one
-a parameter names inside another type (`T?`, `T[]`, `(T) -> Int`) or takes
-`inout`; one a result or an error names inside another type (`T?`, `T[]`,
+a parameter names inside another type (`T?`, `T[]`, `(T) -> Int`); one a result or an error names inside another type (`T?`, `T[]`,
 `throws(T)`), which cannot be erased; one a `where` clause ties to another
 type.
 
 The registry knows the conformances of the types a program declares; a
 call that opens a Type makes their tables, and how to box them, for every
-such type that conforms to `T`'s protocols. A generic type made only at
-run time is not among them, and opening it as a constrained `T` traps.
+such type that conforms to `T`'s protocols, and for a generic type made only
+at run time, its declaration's (docs/06 §6.2), where each member that meets
+the protocol is compiled once: opening another as a constrained `T` traps.
 
 ### Member access and optionals
 

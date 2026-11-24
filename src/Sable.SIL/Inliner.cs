@@ -256,6 +256,10 @@ public sealed class Inliner : ISilPass {
             }
         }
 
+        foreach (var deinit in module.GenericDeinits.Values) {
+            Count(deinit);
+        }
+
         Count(module.EntryPoint);
         Count("$globals.init");
         Count("$globals.deinit");

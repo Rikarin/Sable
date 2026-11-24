@@ -1394,6 +1394,26 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
         switch (name) {
             case "opaque_cast" or "opaque_borrow_as" or "opaque_take_as": {
                 var viewed = Value(builtin.Operands[0]);
+
+                // A function a generic type keeps in its own convention, seen as this code's: the copy would call it in another.
+                // One over it that converts, as code that knows the types has.
+                if (builtin.Operands[0].Type is ThickFunctionType && IsStored(builtin.Operands[0].Type) != IsStored(builtin.Type)) {
+                    if (name != "opaque_take_as" || viewed.Type is not ThickFunctionType from || Substitute(builtin.Type) is not ThickFunctionType to
+                        || SilGen.Reabstract(_module, from, to) is not var (thunk, context)) {
+                        throw new Refused($"{name} of a function kept in a generic type");
+                    }
+
+                    if (from == to) {
+                        Map(builtin, viewed);
+                        return;
+                    }
+
+                    var holder = Emit(new AllocRefInst(context), builtin);
+                    Emit(new StoreInst(viewed, Emit(new RefElementAddrInst(holder, 0), builtin), StoreKind.Init), builtin);
+                    Map(builtin, Emit(new PartialApplyInst(Emit(new FunctionRefInst(thunk, to.Implementation), builtin), holder, to), builtin));
+                    return;
+                }
+
                 var target = Substitute(builtin.Type);
                 if (viewed.Type == target) {
                     Map(builtin, viewed);
@@ -1480,6 +1500,10 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
 
     // ---- Types --------------------------------------------------------------
 
+    /// <summary>A function type of a generic type's own convention (SilGen.StoredFunctionType), the same in every copy.</summary>
+    static bool IsStored(SilType type) => type is ThickFunctionType && (type.ToString().Contains($"@opaque({Symbols.TypeParameterSymbol.StoredPrefix}", StringComparison.Ordinal)
+                                                                        || type.ToString().Contains($"$opaque${Symbols.TypeParameterSymbol.StoredPrefix}", StringComparison.Ordinal));
+
     static StructType AsStruct(SilType type) => type as StructType ?? throw new Refused($"{type} is not a struct");
     static EnumType AsEnum(SilType type) => type as EnumType ?? throw new Refused($"{type} is not an enum");
     static ClassType AsClass(SilType type) => type as ClassType ?? throw new Refused($"{type} is not a class");
@@ -1500,6 +1524,7 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
             VectorType vector => vector,
             FunctionType function => new FunctionType([..function.Parameters.Select(Substitute)], Substitute(function.Result), function.Thrown is { } thrown ? Substitute(thrown) : null,
                 function.Owned.IsEmpty ? default : function.Owned, function.IsAsync),
+            ThickFunctionType when IsStored(type) => type,
             ThickFunctionType thick => new ThickFunctionType((FunctionType)Substitute(thick.Signature)),
             TupleType tuple => SilType.Tuple([..tuple.Elements.Select(Substitute)]),
             WeakStorageType weak => new WeakStorageType(AsEnum(Substitute(weak.Optional))),
@@ -1592,7 +1617,12 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
                 var display = classType.DisplayName is { } written && written.IndexOf('<') is > 0 and var open
                     ? $"{written[..open]}<{string.Join(", ", arguments.Select(TypeMetadata.DisplayName))}>"
                     : classType.DisplayName;
-                var copy = new ClassType(name) { DisplayName = display };
+                var deinit = display is null ? null : _module.GenericDeinits.GetValueOrDefault(display.IndexOf('<') is > 0 and var end ? display[..end] : display);
+                if (classType.HasGenericDeinit && deinit is null) {
+                    throw new Refused($"{nominal}, whose deinit is another unit's");
+                }
+
+                var copy = new ClassType(name) { DisplayName = display, Deinit = deinit };
                 _substituted[name] = copy;
                 copy.Conformances.AddRange(classType.Conformances);
                 copy.ConditionalConformances.AddRange(classType.ConditionalConformances);

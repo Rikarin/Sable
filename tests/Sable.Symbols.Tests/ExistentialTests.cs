@@ -64,9 +64,13 @@ public sealed class ExistentialTests {
             """
         );
 
+    /// <summary>An optional of an associated type is erased as one of its existential.</summary>
+    [Fact]
+    public void AnOptionalOfAnAssociatedTypeIsErased() =>
+        AssertClean("fn f(_ b: any Bag) -> Bool { return b.first() == none }");
+
     [Theory]
     [InlineData("fn f(_ a: any Same, _ b: any Same) -> Bool { return a.same(b) }")]
-    [InlineData("fn f(_ b: any Bag) -> Bool { return b.first() == none }")]
     public void ARequirementAboutSelfOrAnAssociatedTypeIsNot(string source) =>
         Assert.Contains(ErrorsIn(source), static e => e.Code == ErrorCode.ERR_SelfRequirementOnExistential);
 
@@ -78,14 +82,21 @@ public sealed class ExistentialTests {
                            protocol Named {
                                fn name() -> String
                            }
+                           protocol Makes<T> {
+                               fn make() -> T
+                           }
                            protocol Grows {
+                               associatedtype Free
                                associatedtype Unit: Named
                                associatedtype Pair: Named & Shape
-                               associatedtype Raw
+                               associatedtype Raw: Makes<Int>
                                fn doubled() -> Self
                                fn unit() -> Unit
                                fn pair() -> Pair
                                fn raw() -> Raw
+                               fn free() -> Free
+                               fn maybe() -> Self?
+                               fn units() -> Unit[]
                                var me: Self { get }
                                var settable: Self { get set }
                                fn more() async -> Self
@@ -103,6 +114,9 @@ public sealed class ExistentialTests {
     [InlineData("g.me", "any Grows")]
     [InlineData("g.doubled().doubled()", "any Grows")]
     [InlineData("g.unit()", "any Named")]
+    [InlineData("g.free()", "any Any")]
+    [InlineData("g.maybe()", "(any Grows)?")]
+    [InlineData("g.units()", "(any Named)[]")]
     [InlineData("g.pair()", "any Named & Shape")]
     [InlineData("both.doubled()", "any Grows & Shape")]
     public void AResultOfSelfOrAnAssociatedTypeIsErasedThroughAnExistential(string expression, string type) {

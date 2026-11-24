@@ -257,7 +257,9 @@ protocols, and to nothing else — and it may appear nowhere but in the
 opening argument and the result: no other parameter may be of it, a
 `where` clause may not make it another type, and `T`'s constraints must be
 protocols that are not generic (S3162). The result is erased as an
-existential is: `T` to `any P & Q` for `T: P & Q`, `T.Type` to `Type`;
+existential is: `T` to `any P & Q` for `T: P & Q`, and `any Any`, the
+existential of no protocols, for an unconstrained `T`; a `T?` and an array of
+`T` to an optional and an array of those; `T.Type` to `Type`;
 anything else that mentions `T` is S3163. The call runs the callee
 compiled once, the `Type` its metadata in place of `T`'s, and the
 registry's tables of its conformances, a trap where it does not conform

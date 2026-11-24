@@ -723,6 +723,13 @@ public sealed class ClassType(string name) : NominalType(name) {
     /// <summary>The function that runs as an object dies, before its fields are destroyed, or null.</summary>
     public string? Deinit { get; set; }
 
+    /// <summary>
+    ///     A generic class, its type arguments known only at run time, whose
+    ///     declaration has a deinit: what makes its objects there finds it by
+    ///     the class's name (<see cref="SilModule.GenericDeinits" />).
+    /// </summary>
+    public bool HasGenericDeinit { get; set; }
+
     /// <summary>True when this class is the given one or inherits from it.</summary>
     public bool IsSubclassOf(ClassType other) {
         for (var type = this; type is not null; type = type.Superclass) {
@@ -1797,6 +1804,14 @@ public sealed class SilModule {
     ///     type is known, and registered with the runtime as describers are.
     /// </summary>
     public Dictionary<string, (SilType Type, string Function)> Boxers { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    ///     For each generic class with a deinit whose initialiser is compiled
+    ///     once, by its name: the function that runs the deinit of an object
+    ///     whose class the runtime made, registered with it
+    ///     (<c>sable_register_generic_deinit</c>, #297).
+    /// </summary>
+    public Dictionary<string, string> GenericDeinits { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
     ///     A type's conformance records, by protocol name: one per protocol

@@ -102,6 +102,7 @@ public static partial class Pipeline {
         bool checkArc = false
     ) {
         var level = optLevel ?? (optimised ? "2" : "0");
+        using var optimisedLowering = SilGen.UseOptimised(level != "0");
         Compilation compilation;
         List<string> errors;
         List<string> warnings;

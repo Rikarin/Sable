@@ -32,6 +32,17 @@ public sealed class OpenedTypeTests {
 
         Assert.Equal(specialised.Stdout, unspecialised.Stdout);
         Assert.Equal(specialised.ExitCode, unspecialised.ExitCode);
+
+        // And compiled in units, each mode: in CI, as building each program twice more is slow.
+        if (CanBuild && NativeMode.All) {
+            foreach (var mode in (GenericsMode[])[GenericsMode.Unspecialised, GenericsMode.Specialised]) {
+                using (SilGen.UseGenerics(mode)) {
+                    var separate = BuildSeparatelyAndRun(program);
+                    Assert.Equal((mode, specialised.Stdout, specialised.ExitCode), (mode, separate.Stdout, separate.ExitCode));
+                }
+            }
+        }
+
         return specialised;
     }
 
@@ -1008,20 +1019,163 @@ public sealed class OpenedTypeTests {
             """
         );
 
+    /// <summary>
+    ///     A conformance with associated types, of an instance made at run
+    ///     time: its table is the instance's own, with the metadata its
+    ///     conformance's template gives for it — the type argument, another
+    ///     instance, an associated type of the argument — and what they
+    ///     conform to is found; through a refined protocol too.
+    /// </summary>
+    [Fact]
+    public void AGenericTypeMadeAtRunTimeHasItsAssociatedTypes() => Prints(
+        "a box: Test.Meters first 7m 2\na box: Test.Label first seven 2\n"
+        + "a box: Test.Box<Test.Meters> first box of 7m 2\n"
+        + "pair of Test.Box<Test.Meters> and Int\n"
+        + "cell Test.Meters\n",
+        """
+        protocol Named {
+            static fn made() -> Self
+            fn name() -> String
+        }
+
+        struct Meters: Named {
+            var value: Int
+            static fn made() -> Meters => Meters { value: 7 }
+            fn name() -> String => "\(value)m"
+        }
+
+        struct Label: Named {
+            var text: String
+            static fn made() -> Label => Label { text: "seven" }
+            fn name() -> String => text
+        }
+
+        protocol Steps {
+            associatedtype Item: Named
+            mutating fn step() -> Item?
+        }
+
+        protocol Countable {
+            static fn count() -> Int
+        }
+
+        protocol Holder: Countable {
+            associatedtype Item: Named
+            associatedtype Walk: Steps where Walk.Item == Item
+            static fn whole() -> Self
+            fn item() -> Item
+            fn walk() -> Walk
+        }
+
+        struct BoxSteps<T: Named>: Steps {
+            alias Item = T
+            var left: T?
+            mutating fn step() -> T? {
+                let given = left
+                left = none
+                return given
+            }
+        }
+
+        struct Box<T: Named> {
+            var value: T
+            var seen: Int
+        }
+
+        extension Box: Countable {
+            static fn count() -> Int => 2
+        }
+
+        extension Box: Holder {
+            alias Item = T
+            alias Walk = BoxSteps<T>
+            static fn whole() -> Box<T> => Box(value: T.made(), seen: 0)
+            fn item() -> T => value
+            fn walk() -> BoxSteps<T> => BoxSteps(left: value)
+        }
+
+        extension Box: Named {
+            static fn made() -> Box<T> => Box(value: T.made(), seen: 1)
+            fn name() -> String => "box of \(value.name())"
+        }
+
+        protocol Paired {
+            associatedtype First
+            associatedtype Second
+        }
+
+        extension Box: Paired {
+            alias First = Box<T>
+            alias Second = Int
+        }
+
+        class Cell<T> {
+            var held: T?
+            init() {
+                held = none
+            }
+        }
+
+        protocol Element {
+            associatedtype Value
+        }
+
+        extension Cell: Element {
+            alias Value = T
+        }
+
+        fn boxOf<T: Named>(_ type: T.Type) -> Type => Box<T>.self
+
+        fn cellOf<T: Named>(_ type: T.Type) -> Type => Cell<T>.self
+
+        fn describe<H: Holder>(_ type: H.Type) -> String {
+            var walk = H.whole().walk()
+            var steps = 0
+            var first = "nothing"
+            while let item = walk.step() {
+                steps = steps + 1
+                first = item.name()
+            }
+
+            let t: Type = H.Item.self
+            return "a box: \(t) first \(first) \(steps + H.count() - 1)"
+        }
+
+        fn parts<P: Paired>(_ type: P.Type) -> String {
+            let a: Type = P.First.self
+            let b: Type = P.Second.self
+            return "pair of \(a) and \(b)"
+        }
+
+        fn value<E: Element>(_ type: E.Type) -> String {
+            let v: Type = E.Value.self
+            return "cell \(v)"
+        }
+        """,
+        """
+            let types: [String: Type] = ["meters": Meters.self, "label": Label.self]
+            print(describe(boxOf(types["meters"]!)))
+            print(describe(boxOf(types["label"]!)))
+            print(describe(boxOf(boxOf(types["meters"]!))))
+            print(parts(boxOf(types["meters"]!)))
+            print(value(cellOf(types["meters"]!)))
+        """
+    );
+
     /// <summary>A conformance a template cannot be made whole for has none: opening the type traps, as one that does not conform does.</summary>
     [Fact]
     public void AGenericTypeMadeAtRunTimeWithNoTableTraps() {
         var execution = Runs(
             """
             protocol Takes {
-                associatedtype Item
+                associatedtype Items: Sequence
                 static fn name() -> String
             }
 
             struct Plain {}
 
             struct Box<T>: Takes {
-                alias Item = T
+                alias Items = T[]
                 var item: T
                 static fn name() -> String => "box"
             }

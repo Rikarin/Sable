@@ -298,6 +298,8 @@ public sealed class SpecialiseTests {
     /// </summary>
     [Fact]
     public void AClosureGivenToGenericCodeIsGivenToTheCopyAsItWasMade() {
+        // As an optimised build lowers it: the lazy views keep the closures as they are made.
+        using var optimised = SilGen.UseOptimised(true);
         var module = Specialised(Lazy);
         var reduce = module.Functions.Single(static f => f.Name.StartsWith("Sable.Core.Sequence.reduce", StringComparison.Ordinal) && f.Name.Contains("$specialised$", StringComparison.Ordinal));
         AssertNothingGeneric(reduce);
@@ -310,6 +312,17 @@ public sealed class SpecialiseTests {
         Assert.Equal(expected, Run(Lower(Lazy, GenericsMode.Specialised)));
         Assert.Equal(expected, Run(module));
         Assert.Equal(expected, Run(Optimised(Lazy)));
+    }
+
+    /// <summary>
+    ///     A closure a lazy view keeps, lowered as an unoptimised build does:
+    ///     in the one convention every instance keeps it in, which the copies
+    ///     for the types convert from.
+    /// </summary>
+    [Fact]
+    public void AClosureAGenericTypeKeepsIsConvertedInTheCopies() {
+        var module = Specialised(Lazy);
+        Assert.Equal("254\n", Run(module));
     }
 
     const string Predicates = """

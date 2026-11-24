@@ -339,9 +339,17 @@ public sealed class SilWitnessTable(SilType conformer, string protocol) {
     ///     A generic type's table for every instance of it made at run time
     ///     (SilGen.Templates.cs): its conformer is the instance with the type's
     ///     own parameters opaque, and its entries read the type arguments from
-    ///     Self's metadata. Pointed at by the type's shape, not registered.
+    ///     Self's metadata. Registered by the type's name.
     /// </summary>
     public bool IsTemplate { get; init; }
+
+    /// <summary>
+    ///     A template's functions that give each associated type's metadata
+    ///     from Self's, in the order of <see cref="AssociatedTypes" />: an
+    ///     instance made at run time has a table of its own, with them asked.
+    ///     Empty when it has no associated type and refines no protocol that has.
+    /// </summary>
+    public List<string> Accessors { get; } = [];
 
     /// <summary>
     ///     Each requirement the protocol itself declares, in declaration order,

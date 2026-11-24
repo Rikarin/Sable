@@ -1142,7 +1142,7 @@ public sealed partial class SilGen {
         function.RemoveUnreachableBlocks();
         _module.Add(function);
 
-        if (symbol.FunctionKind == FunctionKind.Deinitializer) {
+        if (symbol.FunctionKind == FunctionKind.Deinitializer && !_unspecialised.ContainsKey(name)) {
             switch (Lower(SelfType(symbol, substitution))) {
                 case ClassType owner:
                     owner.Deinit = function.Name;
@@ -2125,7 +2125,7 @@ public sealed partial class SilGen {
             _module.MeetConditionalConformances(type);
 
             // Laid out at run time, for arguments known only there: its conformances get template tables (SilGen.Templates.cs).
-            if (named.IsConstructed && type is StructType or ClassType && !type.TypeArguments.IsDefaultOrEmpty && type.TypeArguments.Any(SilType.MentionsOpaque)) {
+            if (named.IsConstructed && type is StructType or ClassType or EnumType && !type.TypeArguments.IsDefaultOrEmpty && type.TypeArguments.Any(SilType.MentionsOpaque)) {
                 _runtimeInstances.Add((named, type));
             }
         }
@@ -2278,8 +2278,10 @@ public sealed partial class SilGen {
                     result = SilType.Unit;
                 }
 
+                // So is an error of one, thrown as that address.
                 if (thrown is not null && SilType.IsIndirect(thrown)) {
-                    return null;
+                    thrown = SilType.Address(thrown);
+                    parameters.Add(thrown);
                 }
 
                 return new ThickFunctionType(new FunctionType(parameters.ToImmutable(), result, thrown, isAsync: functionType.IsAsync));
@@ -2318,7 +2320,7 @@ public sealed partial class SilGen {
                 });
                 var members = TypeSubstitution.For(named);
                 foreach (var field in StoredFields(named.OriginalDefinition)) {
-                    if (Lower(members.Apply(field.Type)) is not { } fieldType) {
+                    if ((StoredFunctionType(field) ?? Lower(members.Apply(field.Type))) is not { } fieldType) {
                         return null;
                     }
 
@@ -2360,7 +2362,7 @@ public sealed partial class SilGen {
 
                 var members = TypeSubstitution.For(named);
                 foreach (var field in StoredFields(named.OriginalDefinition)) {
-                    if (Lower(members.Apply(field.Type)) is not { } fieldType) {
+                    if ((StoredFunctionType(field) ?? Lower(members.Apply(field.Type))) is not { } fieldType) {
                         return null;
                     }
 
@@ -2383,6 +2385,8 @@ public sealed partial class SilGen {
                 // Unspecialised code never makes one of a type only its metadata knows (#297): nothing destroys one as that.
                 if (!SilType.MentionsOpaque(classType)) {
                     classType.Deinit ??= GenericDeinit(named);
+                } else {
+                    classType.HasGenericDeinit = DeinitOf(named.OriginalDefinition) is not null;
                 }
 
                 return classType;
@@ -4415,7 +4419,7 @@ public sealed partial class SilGen {
 
             // Initialising an object: it comes first, already allocated.
             _initializing = symbol.FunctionKind == FunctionKind.Initializer && function.Type.Result == SilType.Unit
-                && parameterTypes.Length > 0 && parameterTypes[0] is ClassType;
+                && parameterTypes.Length > 0 && parameterTypes[0] is ClassType && OwnerOf(symbol) is { TypeKind: TypeKind.Class or TypeKind.Actor };
 
             if (HasSelf(symbol) || _initializing) {
                 var self = _entry.AddArgument(parameterTypes[next++]);
@@ -4511,7 +4515,7 @@ public sealed partial class SilGen {
             // A struct's initialiser builds 'self' in a slot of its own, field
             // by field.
             if (symbol.FunctionKind == FunctionKind.Initializer && !_initializing) {
-                _selfAddress = NewSlot(function.Type.Result, "self");
+                _selfAddress = NewSlot(_indirectResult is { Type: AddressType { Pointee: var made } } ? made : function.Type.Result, "self");
             }
 
             // The entry point first gives every global its initial value.
@@ -5084,6 +5088,10 @@ public sealed partial class SilGen {
                     // A weak or unowned field is read as the object, held as any owned value borrowed is.
                     var extracted = Emit(new StructExtractInst(value, index));
                     var read = OutOfField(extracted, Emit);
+                    if (AsRead(read, (BoundFieldAccess)expression) is { } seen && !ReferenceEquals(seen, read)) {
+                        return Hold(seen);
+                    }
+
                     return ReferenceEquals(read, extracted) ? read : Hold(read);
                 }
 
@@ -5369,7 +5377,11 @@ public sealed partial class SilGen {
 
                 Branch(_returnBlock);
             } else if (value is not null and not UnitValue) {
-                Branch(_returnBlock, Owned(value));
+                // A witness's array of Self's values, as its entry gives it.
+                var owned = Owned(value);
+                Branch(_returnBlock, Bridged is not null && owned.Type is ArrayType && function.Type.Result is ArrayType result && result != owned.Type && SilType.MentionsOpaque(result)
+                    ? Emit(new BuiltinInst("opaque_take_as", result, owned))
+                    : owned);
             }
         }
 
@@ -7186,7 +7198,7 @@ public sealed partial class SilGen {
                     return InlineRead(access);
 
                 case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field } access:
-                    return FieldAccess(access, receiver, field);
+                    return AsRead(FieldAccess(access, receiver, field), access);
 
                 case BoundTupleElementAccess element: {
                     if (Sub(element.Receiver.Type) is TupleTypeSymbol && !IsTrivialType(element.Receiver.Type) && Place(element) is { } place) {
@@ -7715,8 +7727,8 @@ public sealed partial class SilGen {
                     Destroy(value);
                     break;
 
-                default:
-                    Emit(new StoreInst(value, address, StoreKind.Assign));
+                case var pointee:
+                    Emit(new StoreInst(AsFunction(value, pointee), address, StoreKind.Assign));
                     break;
             }
 
@@ -9234,7 +9246,7 @@ public sealed partial class SilGen {
                 return Missing(record, "a record that leaves a field to its default");
             }
 
-            return Emit(new StructInst(structType, [..fields!.Select((f, i) => IntoField(structType.Fields[i].Type, f!, Emit))]));
+            return Emit(new StructInst(structType, [..fields!.Select((f, i) => IntoField(structType.Fields[i].Type, AsFunction(f!, structType.Fields[i].Type), Emit))]));
         }
 
         SilValue? UnionCase(TypeSymbol unionType, string name, IReadOnlyList<BoundExpression> arguments, BoundNode at) {
@@ -10727,7 +10739,7 @@ public sealed partial class SilGen {
                     return Missing(call, "a memberwise initialiser that leaves a field to its default");
                 }
 
-                return Emit(new StructInst(structType, [..fields.Select((f, i) => IntoField(structType.Fields[i].Type, f, Emit))]));
+                return Emit(new StructInst(structType, [..fields.Select((f, i) => IntoField(structType.Fields[i].Type, AsFunction(f, structType.Fields[i].Type), Emit))]));
             }
 
             // A requirement of Error's, called on 'any Error': through the
@@ -10741,7 +10753,7 @@ public sealed partial class SilGen {
             // opened as a type known by its metadata.
             if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol } && call.Receiver is { } existentialReceiver
                 && Sub(existentialReceiver.Type) is ExistentialTypeSymbol) {
-                return IsRequirementOf(existentialReceiver, SlotName(callee)) && !OpensForResult(callee, callee.ReturnType, callee.ThrownType)
+                return IsRequirementOf(existentialReceiver, SlotName(callee)) && !OpensForResult(callee, callee.ReturnType, callee.ThrownType) && generator.OwnShape(callee) is null
                     ? ExistentialCall(existentialReceiver, SlotName(callee), call.Arguments, call)
                     : OpenedExistential(existentialReceiver, callee, callee.IsMutating, call,
                         (self, opened) => {
@@ -11026,9 +11038,9 @@ public sealed partial class SilGen {
             (SilValue Passed, AllocStackInst? Slot, bool CannotThrow)? genericError = null;
             SilValue? openedBuffer = null;
             if (genericShape is not null) {
-                if (type.Result == SilType.Unit && arguments.Count < type.Parameters.Length && !callee.ReturnType.Equals(Core.Void)) {
-                    var returned = Substitute(WithAssociatedTypes(callee, bound), callee.ReturnType);
-                    if (IsOpenedHere(returned) && type.Parameters[arguments.Count] is AddressType && MetadataOf(returned) is { } resultMetadata) {
+                if (type.Result == SilType.Unit && arguments.Count < type.Parameters.Length && ResultOf(callee) is { } calleeResult && !calleeResult.Equals(Core.Void)) {
+                    var returned = Substitute(WithAssociatedTypes(callee, bound), calleeResult);
+                    if (type.Parameters[arguments.Count] is AddressType && OpenedBufferMetadata(returned) is { } resultMetadata) {
                         // Of a type a Type was opened as: a buffer its metadata sizes, let go if the call throws.
                         var buffer = Emit(new BuiltinInst("opaque_alloc", type.Parameters[arguments.Count], resultMetadata));
                         openedBuffer = buffer;
@@ -11096,7 +11108,7 @@ public sealed partial class SilGen {
             }
 
             // A result of an array of them, or of a generic struct holding them by reference, seen as the type it is here.
-            if (genericShape is not null && invoked is { Type: var resultType } arrayResult && SilType.MentionsOpaque(resultType) && !SilType.IsIndirect(resultType)
+            if (genericShape is not null && invoked is { Type: var resultType } arrayResult && !(call.Type is ArrayTypeSymbol { ElementType: var listed } && IsOpenedHere(listed) && resultType is ArrayType) && SilType.MentionsOpaque(resultType) && !SilType.IsIndirect(resultType)
                 && LowerType(call.Type) is { } wanted && wanted != arrayResult.Type) {
                 return Emit(new BuiltinInst("opaque_take_as", wanted, arrayResult));
             }
@@ -11965,13 +11977,27 @@ public sealed partial class SilGen {
 
             // A function of a type parameter's values, in the generic
             // convention: its result written where this call says (#297).
-            if (arguments.Count == thick.Signature.Parameters.Length - 1 && thick.Signature.Result == SilType.Unit
-                && GenericOut(thick.Signature.Parameters[^1], Sub(call.Type)) is { } into) {
-                arguments.Add(into.Passed);
-                return TakeOut(Invoke(callee, thick.Signature, arguments, borrows, call.Syntax), into.Slot);
+            var writesError = thick.Signature is { Thrown: AddressType errorAddress, Parameters: [.., var last] } && last == errorAddress;
+            (SilValue Passed, AllocStackInst Slot)? into = null;
+            if (arguments.Count == thick.Signature.Parameters.Length - (writesError ? 2 : 1) && thick.Signature.Result == SilType.Unit
+                && (into = GenericOut(thick.Signature.Parameters[arguments.Count], Sub(call.Type))) is { } result) {
+                arguments.Add(result.Passed);
             }
 
-            return Invoke(callee, thick.Signature, arguments, borrows, call.Syntax);
+            // And an error of one, where it goes.
+            (SilValue Passed, AllocStackInst? Slot, bool CannotThrow)? error = null;
+            if (writesError) {
+                if (functionType?.ThrownType is not { } thrown || GenericErrorOut((AddressType)thick.Signature.Thrown!, thrown) is not { } place) {
+                    EndAll(borrows);
+                    return Missing(call, "where this call's error goes");
+                }
+
+                error = place;
+                arguments.Add(place.Passed);
+            }
+
+            var invoked = Invoke(callee, thick.Signature, arguments, borrows, call.Syntax, cannotThrow: error is { CannotThrow: true }, errorSlot: error?.Slot);
+            return into is { } written ? TakeOut(invoked, written.Slot) : invoked;
         }
 
         /// <summary>

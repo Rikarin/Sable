@@ -321,6 +321,11 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_template_table")) {
+                ParseWitnessTable(template: true);
+                continue;
+            }
+
             if (Accept("sil_witness_table")) {
                 ParseWitnessTable();
                 continue;
@@ -330,6 +335,13 @@ public sealed class SilParser {
                 var erased = ParseType();
                 Expect("=");
                 module.ErrorErasers[erased.ToString()] = (erased, Expect(TokenKind.Global, "an eraser's name").Text);
+                continue;
+            }
+
+            if (Accept("sil_generic_deinit")) {
+                var generic = Expect(TokenKind.String, "a class's name").Text;
+                Expect("=");
+                module.GenericDeinits[generic] = Expect(TokenKind.Global, "a deinit's name").Text;
                 continue;
             }
 
@@ -373,16 +385,18 @@ public sealed class SilParser {
     }
 
     /// <summary><c>sil_witness_table $T : "M.P" { "m": @f : $type … "n": none … associated "A": $T … conforms 0: "M.Q" … base "M.R" … }</c>.</summary>
-    void ParseWitnessTable() {
+    void ParseWitnessTable(bool template = false) {
         var conformer = ParseType();
         Expect(":");
-        var table = new SilWitnessTable(conformer, Expect(TokenKind.String, "a protocol's name").Text);
+        var table = new SilWitnessTable(conformer, Expect(TokenKind.String, "a protocol's name").Text) { IsTemplate = template };
         Expect("{");
         while (!Accept("}")) {
             if (Accept("associated")) {
                 var name = Expect(TokenKind.String, "an associated type's name").Text;
                 Expect(":");
                 table.AssociatedTypes.Add((name, ParseType()));
+            } else if (Accept("accessor")) {
+                table.Accessors.Add(Expect(TokenKind.Global, "an accessor's name").Text);
             } else if (Accept("conforms")) {
                 var index = Count("an associated type's index");
                 Expect(":");
@@ -558,6 +572,10 @@ public sealed class SilParser {
 
         if (Accept("deinit")) {
             type.Deinit = Expect(TokenKind.Global, "the deinit function").Text;
+        }
+
+        if (Accept("generic_deinit")) {
+            type.HasGenericDeinit = true;
         }
 
         if (Accept("empty_from")) {

@@ -3,7 +3,8 @@ module Negative.OpenedTypes
 // Opening a Type (spec/SYNTAX.md "Opening a type"): a 'Type' given for a
 // generic callee's 'T.Type' binds T to the type it holds at run time. No
 // other parameter may be of T, T may be constrained only to protocols that
-// are not generic, and a result may be T (as 'any P') or T.Type (as a Type).
+// are not generic, and a result may be T (as 'any P'), T?, an array of T, or
+// T.Type (as a Type).
 
 protocol Zero {
     static fn zero() -> Self
@@ -28,11 +29,9 @@ fn produced<T: Producer<Int>>(_ type: T.Type) -> Int { return 0 }
 
 fn animal<T: Animal>(_ type: T.Type) -> Int { return 0 }
 
-fn anything<T>(_ type: T.Type) -> T? { return none }
+fn anything<T>(_ type: T.Type) -> T?? { return none }
 
-fn bare<T>(_ type: T.Type) -> T { fatalError("never") }
-
-fn listed<T: Zero>(_ type: T.Type) -> T[] { return [] }
+fn listed<T: Zero>(_ type: T.Type) -> (T, Int) { return (T.zero(), 0) }
 
 fn failing<T: Zero & Error>(_ type: T.Type) throws(T) -> Int { return 0 }
 
@@ -49,15 +48,11 @@ fn classBound(_ t: Type) {
 }
 
 fn optionalResult(_ t: Type) {
-    let made = anything(t) //! S3163 gives back a 'T?', which mentions 'T', open here
+    let made = anything(t) //! S3163 gives back a 'T??', which mentions 'T', open here
 }
 
-fn arrayResult(_ t: Type) {
-    let made = listed(t) //! S3163 only a 'T' itself (as 'any P') or a 'T.Type' (as a 'Type') can be given back
-}
-
-fn unconstrainedResult(_ t: Type) {
-    let made = bare(t) //! S3163 has no protocol to be erased to as 'any P'
+fn tupleResult(_ t: Type) {
+    let made = listed(t) //! S3163 only a 'T' itself (as 'any P'), a 'T?', an array of 'T' or a 'T.Type' (as a 'Type') can be given back
 }
 
 fn thrownOpened(_ t: Type) {

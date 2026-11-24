@@ -205,8 +205,7 @@ public sealed partial class LlvmEmitter {
         };
         var names = $"@\"sable.shape.parts.{Mangled(type)}\"";
         var listed = string.Join(", ", parts.Select(p => $"ptr {TrapMessage(p)}").ToList());
-        var display = TypeMetadata.DisplayName(type);
-        var written = TrapMessage(type.TypeArguments.IsEmpty || display.IndexOf('<') is not (> 0 and var open) ? display : display[..open]);
+        var written = TrapMessage(DeclaredName(type));
         _globals.Append($"{names} = {SharedLinkage} constant [{parts.Count} x ptr] [{listed}]{Comdat(names, SharedLinkage)}\n");
 
         // Those that always hold, then the conditional ones.
@@ -221,21 +220,24 @@ public sealed partial class LlvmEmitter {
                 _globals.Append($"{required} = {SharedLinkage} constant [{requirements.Length} x {{ i64, ptr }}] [{each}]{Comdat(required, SharedLinkage)}\n");
             }
 
-            // Its template table, whose entries read the arguments from Self's metadata (SilGen.Templates.cs); null for none.
-            // A program built in units leaves it null, so every unit's shape is the same.
-            var template = _module is { Unit: null } && _module.FindWitnessTable(type, protocol) is { IsTemplate: true } table ? WitnessTableGlobal(table) : "null";
-            records.Add($"{{ ptr, i64, ptr, ptr }} {{ ptr {ProtocolDescriptor(protocol)}, i64 {requirements.Length}, ptr {required}, ptr {template} }}");
+            records.Add($"{{ ptr, i64, ptr }} {{ ptr {ProtocolDescriptor(protocol)}, i64 {requirements.Length}, ptr {required} }}");
         }
 
         var conformances = "null";
         if (records.Count > 0) {
             conformances = $"@\"sable.shape.conformances.{Mangled(type)}\"";
-            _globals.Append($"{conformances} = {SharedLinkage} constant [{records.Count} x {{ ptr, i64, ptr, ptr }}] [{string.Join(", ", records)}]{Comdat(conformances, SharedLinkage)}\n");
+            _globals.Append($"{conformances} = {SharedLinkage} constant [{records.Count} x {{ ptr, i64, ptr }}] [{string.Join(", ", records)}]{Comdat(conformances, SharedLinkage)}\n");
         }
 
         _globals.Append($"{name} = {SharedLinkage} constant {{ i64, i64, ptr, ptr, i64, i64, ptr }} {{ i64 {(int)TypeMetadata.KindOf(type)}, i64 {parts.Count}, ptr {names}, ")
             .Append($"ptr {written}, i64 {type.TypeArguments.Length}, i64 {records.Count}, ptr {conformances} }}{Comdat(name, SharedLinkage)}\n");
         return name;
+    }
+
+    /// <summary>A generic type's name without its arguments: <c>Sable.Core.Outcome</c>.</summary>
+    static string DeclaredName(NominalType type) {
+        var display = TypeMetadata.DisplayName(type);
+        return type.TypeArguments.IsEmpty || display.IndexOf('<') is not (> 0 and var open) ? display : display[..open];
     }
 
     int _witnessCaches;
@@ -363,6 +365,56 @@ public sealed partial class LlvmEmitter {
         return "@\"sable.boxers.register\"";
     }
 
+    /// <summary>
+    ///     A constructor that hands the runtime each template table the module
+    ///     made (SilGen.Templates.cs), by its generic type's name, with the
+    ///     functions that make its associated types' metadata from Self's
+    ///     (<c>sable_register_template</c>). Null when there are none.
+    /// </summary>
+    string? TemplateRegistration(SilModule module) {
+        if (!module.WitnessTables.Any(static t => t.IsTemplate)) {
+            return null;
+        }
+
+        var body = new StringBuilder("define internal void @\"sable.templates.register\"() {\nentry:\n");
+        foreach (var table in module.WitnessTables.Where(static t => t is { IsTemplate: true, Conformer: NominalType })) {
+            var associated = "null";
+            if (HasAssociated(table)) {
+                associated = WitnessTableName(table.Conformer, table.Protocol)[..^1] + ".accessors\"";
+                _globals.Append($"{associated} = {SharedLinkage} constant [{table.Accessors.Count} x ptr] [{string.Join(", ", table.Accessors.Select(a => $"ptr @{Global(a)}"))}]{Comdat(associated, SharedLinkage)}\n");
+            }
+
+            body.Append($"  call void @sable_register_template(ptr {TrapMessage(DeclaredName((NominalType)table.Conformer))}, ptr {WitnessTableGlobal(table)}, ptr {associated})\n");
+        }
+
+        _helpers.Append(body.Append("  ret void\n}\n\n"));
+        return "@\"sable.templates.register\"";
+    }
+
+    /// <summary>
+    ///     A constructor that hands the runtime what runs the deinit of each
+    ///     generic class whose objects code compiled once makes, by the
+    ///     class's name (<c>sable_register_generic_deinit</c>). Null for none.
+    /// </summary>
+    string? GenericDeinitRegistration(SilModule module) {
+        var deinits = module.GenericDeinits.Where(d => _reachable?.Contains(d.Value) != false && module.Find(d.Value) is not null).ToList();
+        if (deinits.Count == 0) {
+            return null;
+        }
+
+        var body = new StringBuilder("define internal void @\"sable.deinits.register\"() {\nentry:\n");
+        foreach (var (type, function) in deinits) {
+            body.Append($"  call void @sable_register_generic_deinit(ptr {TrapMessage(type)}, ptr @{Global(function)})\n");
+        }
+
+        _helpers.Append(body.Append("  ret void\n}\n\n"));
+        return "@\"sable.deinits.register\"";
+    }
+
+    /// <summary>Whether a template's protocol, or one it refines, has associated types: an instance then has a table of its own.</summary>
+    bool HasAssociated(SilWitnessTable table) =>
+        table.AssociatedTypes.Count > 0 || table.Bases.Exists(b => _module?.FindWitnessTable(table.Conformer, b) is { } refined && HasAssociated(refined));
+
     string? WitnessRegistration(SilModule module) {
         if (module.Unit is null || module.WitnessTables.Count == 0) {
             return null;
@@ -391,7 +443,7 @@ public sealed partial class LlvmEmitter {
 
         var protocol = ProtocolDescriptor(table.Protocol);
         var associatedTypes = "null";
-        if (table.AssociatedTypes.Count > 0) {
+        if (table is { IsTemplate: false, AssociatedTypes.Count: > 0 }) {
             associatedTypes = name[..^1] + ".associated\"";
             var types = table.AssociatedTypes.Select(a => $"ptr {TypeMetadataGlobal(a.Type)}").ToList();
             _globals.Append($"{associatedTypes} = {SharedLinkage} constant [{types.Count} x ptr] [{string.Join(", ", types)}]{Comdat(associatedTypes, SharedLinkage)}\n");
@@ -458,6 +510,8 @@ public sealed partial class LlvmEmitter {
                                         declare i1 @sable_metadata_is_subtype(ptr, ptr)
                                         declare ptr @sable_witness_table(ptr, ptr)
                                         declare void @sable_register_witness_table(ptr, ptr)
+                                        declare void @sable_register_template(ptr, ptr, ptr)
+                                        declare void @sable_register_generic_deinit(ptr, ptr)
                                         declare ptr @sable_witness_table_cached(ptr, ptr, ptr)
                                         declare ptr @sable_array_metadata(ptr, ptr)
                                         declare ptr @sable_array_type(ptr, ptr)

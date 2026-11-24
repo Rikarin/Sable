@@ -3,8 +3,12 @@ module Negative.OpenedExistentials
 // A requirement called through 'any P' opens the existential (#299,
 // SE-0352): a result of Self comes back as 'any P', one of an associated
 // type as the existential of its protocols. A parameter that mentions Self
-// or an associated type, a result made of one, and an associated type with
-// nothing to be erased to stay out of reach.
+// or an associated type, a result made of one but as an optional or an array,
+// and an associated type with nothing to be erased to stay out of reach.
+
+protocol Maker<T> {
+    fn make() -> T
+}
 
 protocol Named {
     fn name() -> String
@@ -12,14 +16,14 @@ protocol Named {
 
 protocol Shape {
     associatedtype Unit: Named
-    associatedtype Raw
+    associatedtype Raw: Maker<Int>
     associatedtype Failure: Error
     fn doubled() -> Self
     fn unit() -> Unit
     fn raw() -> Raw
     fn same(_ other: Self) -> Bool
-    fn maybe() -> Self?
-    fn all() -> Self[]
+    fn maybe() -> Self??
+    fn all() -> (Self, Int)
     fn check() throws(Failure) -> Int
     var me: Self { get set }
 }

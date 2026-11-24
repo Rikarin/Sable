@@ -681,9 +681,32 @@ public sealed class OpenedTypeTests {
             Test.Box<Test.Box<Test.Plain>> false true
             Test.Cell<Test.Plain> true false
             true false
+            box of meters
+            box of box of meters
+            cell of Test.Meters
+            cell of Test.Plain
+            false
 
             """,
             """
+            protocol Kind {
+                static fn kind() -> String
+            }
+
+            extension Meters: Kind {
+                static fn kind() -> String => "meters"
+            }
+
+            extension Box: Kind where T: Kind {
+                static fn kind() -> String => "box of \(T.kind())"
+            }
+
+            extension Cell: Kind {
+                static fn kind() -> String => "cell of \(T.self)"
+            }
+
+            fn kindOf<T: Kind>(_ type: T.Type) -> String => T.kind()
+
             protocol Zero {
                 static fn zero() -> Self
             }
@@ -738,6 +761,281 @@ public sealed class OpenedTypeTests {
 
             let named: Type[] = [Box<Meters>.self, Box<Plain>.self]
             print("\(named[0].isSubtype(of: (any P).self)) \(named[1].isSubtype(of: (any P).self))")
+
+            // Opened as a constrained T: the registry finds each instance's template table, whose entry reads T from its metadata.
+            let meters = types["meters"]!
+            print(kindOf(boxOf(meters)))
+            print(kindOf(boxOf(boxOf(meters))))
+            print(kindOf(cellOf(meters)))
+            print(kindOf(cellOf(types["plain"]!)))
+            print(boxOf(types["plain"]!).isSubtype(of: (any Kind).self))
             """
         );
+
+    /// <summary>
+    ///     The arguments of a call that opens existentials are evaluated in
+    ///     their order, those between the existentials too, and each is let go
+    ///     when the callee, or a later argument, throws.
+    /// </summary>
+    [Fact]
+    public void AnOpenedCallsArgumentsAreEvaluatedInOrder() =>
+        Prints(
+            """
+            mk a
+            order bx
+            mk c
+            abxc
+            order ok
+            mk long text one
+            mk long text two
+            long text twook
+            long text twook!
+            order bad
+            mk long text one
+            mk long text two
+            caught Bad(why: "long text twobad")
+            mk first long text
+            caught Bad(why: "stop now")
+            mk ext
+            order +
+            ext+
+
+            """,
+            """
+            struct Bad: Error {
+                var why: String
+            }
+
+            protocol P {
+                fn name() -> String
+                fn copy(_ tag: String) throws -> Self
+            }
+
+            struct A: P {
+                var text: String
+                fn name() -> String => text
+                fn copy(_ tag: String) throws -> A {
+                    if tag == "bad" {
+                        throw Bad { why: text + tag }
+                    }
+
+                    return A { text: text + tag }
+                }
+            }
+
+            extension P {
+                fn renamed(_ tag: String) -> String => name() + tag
+                fn itself() throws -> Self => try copy("!")
+            }
+
+            fn mk(_ text: String) -> any P {
+                print("mk \(text)")
+                return A { text: text }
+            }
+
+            fn order(_ text: String) -> String {
+                print("order \(text)")
+                return text
+            }
+
+            fn failing(_ text: String) throws -> String {
+                throw Bad { why: text }
+            }
+
+            fn pair<X: P, Y: P>(_ x: X, _ tag: String, _ y: Y) -> String => x.name() + tag + y.name()
+
+            fn keep<X: P, Y: P>(_ tag: String, _ x: X, _ y: Y) throws -> Y => try y.copy(tag)
+            """,
+            """
+                print(pair(mk("a"), order("b" + "x"), mk("c")))
+                for tag in ["ok", "bad"] {
+                    do {
+                        let kept = try keep(order(tag + ""), mk("long text one"), mk("long text two"))
+                        print(kept.name())
+                        print(try kept.itself().name())
+                    } catch {
+                        print("caught \(error)")
+                    }
+                }
+
+                do {
+                    print(pair(mk("first long text"), try failing("stop now"), mk("never")))
+                } catch {
+                    print("caught \(error)")
+                }
+
+                print(mk("ext").renamed(order("+")))
+            """
+        );
+
+    /// <summary>
+    ///     A value of a generic type made only at run time: its type, opened
+    ///     as a constrained T, makes one through its template table, which
+    ///     reads the arguments from the type's metadata; the result is boxed
+    ///     in a class made for it, is cast to another protocol its
+    ///     declaration conforms it to and to the type itself, copied, and
+    ///     changed on its own.
+    /// </summary>
+    [Fact]
+    public void AValueOfAGenericTypeMadeAtRunTimeIsBoxedAndCast() =>
+        Prints(
+            """
+            box of meters a long label 7 7 tagged box(m7)
+            box of box of meters a long label 7 7 tagged box(box(m7))
+            cell of meters a long label 7 8 tagged cell m7
+            box of plain 0 0 no tag
+            a box of 7
+            caught 7
+
+            """,
+            """
+            struct Bad: Error {
+                var n: Int
+            }
+
+            protocol Zero {
+                static fn zero() -> Self
+                var label: String { get }
+                fn count() -> Int
+                mutating fn bump()
+                fn check() throws -> Self
+            }
+
+            protocol Tagged {
+                fn tag() -> String
+            }
+
+            struct Meters: Zero, Tagged {
+                var value: Int
+                var text: String
+                var label: String { get => "meters \(text)" }
+                static fn zero() -> Meters => Meters { value: 7, text: "a long label" }
+                fn count() -> Int => value
+                mutating fn bump() {
+                    value = value + 1
+                }
+
+                fn check() throws -> Meters {
+                    throw Bad { n: value }
+                }
+
+                fn tag() -> String => "m\(value)"
+            }
+
+            struct Plain: Zero {
+                var label: String { get => "plain" }
+                static fn zero() -> Plain => Plain {}
+                fn count() -> Int => 0
+                mutating fn bump() {}
+                fn check() throws -> Plain => self
+            }
+
+            struct Box<T> {
+                var item: T
+            }
+
+            extension Box: Zero where T: Zero {
+                var label: String { get => "box of \(item.label)" }
+                static fn zero() -> Box<T> => Box { item: T.zero() }
+                fn count() -> Int => item.count()
+                mutating fn bump() {
+                    item.bump()
+                }
+
+                fn check() throws -> Box<T> => Box { item: try item.check() }
+            }
+
+            extension Box: Tagged where T: Tagged {
+                fn tag() -> String => "box(\(item.tag()))"
+            }
+
+            final class Cell<T> {
+                var item: T
+                var bumps = 0
+                init(item: T) {
+                    self.item = item
+                }
+            }
+
+            extension Cell: Zero where T: Zero {
+                var label: String { get => "cell of \(item.label)" }
+                static fn zero() -> Cell<T> => Cell(item: T.zero())
+                fn count() -> Int => item.count() + bumps
+                fn bump() {
+                    bumps = bumps + 1
+                }
+
+                fn check() throws -> Cell<T> => self
+            }
+
+            extension Cell: Tagged where T: Tagged {
+                fn tag() -> String => "cell \(item.tag())"
+            }
+
+            fn boxOf<T>(_ type: T.Type) -> Type => Box<T>.self
+
+            fn cellOf<T>(_ type: T.Type) -> Type => Cell<T>.self
+
+            fn make<T: Zero>(_ type: T.Type) -> T => T.zero()
+            """,
+            """
+                let types: [String: Type] = ["meters": Meters.self, "plain": Plain.self]
+                let meters = types["meters"]!
+                for t in [boxOf(meters), boxOf(boxOf(meters)), cellOf(meters), boxOf(types["plain"]!)] {
+                    let made = make(t)
+                    var copy = made
+                    let before = made.count()
+                    copy.bump()
+                    if let tagged = made as? any Tagged {
+                        print("\(made.label) \(before) \(made.count()) tagged \(tagged.tag())")
+                    } else {
+                        print("\(made.label) \(before) \(made.count()) no tag")
+                    }
+                }
+
+                let made = make(boxOf(meters))
+                if let box = made as? Box<Meters> {
+                    print("a box of \(box.item.value)")
+                }
+
+                do {
+                    let _ = try made.check()
+                } catch let bad as Bad {
+                    print("caught \(bad.n)")
+                } catch {
+                    print("other")
+                }
+            """
+        );
+
+    /// <summary>A conformance a template cannot be made whole for has none: opening the type traps, as one that does not conform does.</summary>
+    [Fact]
+    public void AGenericTypeMadeAtRunTimeWithNoTableTraps() {
+        var execution = Runs(
+            """
+            protocol Takes {
+                associatedtype Item
+                static fn name() -> String
+            }
+
+            struct Plain {}
+
+            struct Box<T>: Takes {
+                alias Item = T
+                var item: T
+                static fn name() -> String => "box"
+            }
+
+            fn boxOf<T>(_ type: T.Type) -> Type => Box<T>.self
+
+            fn name<T: Takes>(_ type: T.Type) -> String => T.name()
+            """,
+            """
+                let t: Type = Plain.self
+                print(name(boxOf(t)))
+            """
+        );
+        Assert.NotEqual(0, execution.ExitCode);
+        Assert.Contains("'Test.Box<Test.Plain>' does not conform to 'Test.Takes'", execution.Stderr, StringComparison.Ordinal);
+    }
 }

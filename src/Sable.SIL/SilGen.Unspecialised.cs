@@ -735,7 +735,10 @@ public sealed partial class SilGen {
         var requirements = new List<(TypeParameterSymbol, NamedTypeSymbol)>();
         var own = new List<TypeParameterSymbol>();
         var owner = Owner(symbol)?.OriginalDefinition;
-        var independent = owner is not null && IsIndependentStatic(symbol, owner);
+        // One whose body names them ('static fn kind() => "box of \(T.kind())"') is generic over them, given their metadata by its callers.
+        var independent = owner is not null && IsIndependentStatic(symbol, owner)
+            && !(_declarations.TryGetValue(symbol, out var declaredStatic) && BodyModel(declaredStatic.Model, declaredStatic.Syntax).GetBoundNode(declaredStatic.Syntax) is BoundBlock staticBody
+                && (NamesOwnerParameters(staticBody, owner) || NamesOwnerParameterAsType(staticBody, owner)));
         if (independent) {
             // A static member of a generic type that names none of its type
             // parameters — 'Task.sleep', 'Task.isCancelled' — is generic over
@@ -878,6 +881,12 @@ public sealed partial class SilGen {
             || node is BoundLocalDeclaration { Local.Type: var local } && Mentions(local, owner.TypeParameters)
             || node.Children.Any(child => NamesOwnerParameters(child, owner)));
 
+    /// <summary>Whether a body names one of its type's type parameters itself as a type — <c>T.kind()</c>, <c>T.self</c> — which only its metadata can answer.</summary>
+    static bool NamesOwnerParameterAsType(BoundNode node, NamedTypeSymbol owner) =>
+        node is BoundTypeExpression { ReferencedType: TypeParameterSymbol parameter } && owner.TypeParameters.Contains(parameter)
+        || node is BoundCall { Receiver: null, Substitution: var substitution } && substitution.Parameters.Any(p => substitution.Apply(p) is TypeParameterSymbol bound && owner.TypeParameters.Contains(bound))
+        || node.Children.Any(child => NamesOwnerParameterAsType(child, owner));
+
     /// <summary>A function as SABLE_GENERICS_TRACE names it: an accessor by its type and property, <c>Sable.Core.FloatingPoint.isNaN.get</c>.</summary>
     string TraceName(FunctionSymbol symbol) =>
         symbol is { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FieldSymbol property } && Owner(symbol) is { } owner
@@ -956,7 +965,7 @@ public sealed partial class SilGen {
         }
 
         // One that names its type's type parameters is given their metadata after all: it stays specialised.
-        if (Owner(symbol)?.OriginalDefinition is { } independentOwner && IsIndependentStatic(symbol, independentOwner) && NamesOwnerParameters(body, independentOwner)) {
+        if (Owner(symbol)?.OriginalDefinition is { } independentOwner && IsIndependentStatic(symbol, independentOwner) && NamesOwnerParameters(body, independentOwner) && !shape.Parameters.Any(p => independentOwner.TypeParameters.Contains(p))) {
             if (Environment.GetEnvironmentVariable("SABLE_GENERICS_TRACE") is { Length: > 0 }) {
                 Console.Error.WriteLine($"specialised {TraceName(symbol)}: a static member naming its type's type parameters");
             }
@@ -1915,15 +1924,20 @@ public sealed partial class SilGen {
     ///     opaque copied out of its caller's storage first, and a result of
     ///     <c>Self</c> written where the caller says. Null when it cannot be made.
     /// </summary>
-    string? GenericWitness(TypeSymbol concrete, SilType value, NamedTypeSymbol protocol, string key, Symbol member, FunctionType type, SyntaxNode at) {
+    string? GenericWitness(TypeSymbol concrete, SilType value, NamedTypeSymbol protocol, string key, Symbol member, FunctionType type, SyntaxNode at, (string Name, GenericShape Shape)? template = null) {
         if (member is FieldSymbol field) {
-            return GenericGetter(concrete, value, protocol, field, type, at);
+            return GenericGetter(concrete, value, protocol, field, type, at, template);
         }
 
         var requirement = (FunctionSymbol)member;
         // By its place in the table: operators sanitise alike (+ and - both to $).
         var index = GenericRequirements(protocol).FindIndex(r => ReferenceEquals(r.Member, requirement));
-        var name = $"$generic$witness${Sanitise(value.ToString())}${Sanitise(QualifiedName(protocol))}${index}${(requirement.Name.All(char.IsLetterOrDigit) ? requirement.Name : "op")}";
+        var name = template?.Name ?? $"$generic$witness${Sanitise(value.ToString())}${Sanitise(QualifiedName(protocol))}${index}${(requirement.Name.All(char.IsLetterOrDigit) ? requirement.Name : "op")}";
+
+        // A template's witness is compiled once for the generic type: given its arguments' metadata and tables, as hidden parameters.
+        if (template is { } compiledOnce && _module.Find(name) is null) {
+            _unspecialised[name] = (requirement, compiledOnce.Shape);
+        }
         if (_module.Find(name) is not null) {
             return name;
         }
@@ -2023,9 +2037,9 @@ public sealed partial class SilGen {
     ///     read the property of its one parameter — the value, taken out of
     ///     the value it is given — or, for a static one, of the type.
     /// </summary>
-    string? GenericGetter(TypeSymbol concrete, SilType value, NamedTypeSymbol protocol, FieldSymbol field, FunctionType type, SyntaxNode at) {
+    string? GenericGetter(TypeSymbol concrete, SilType value, NamedTypeSymbol protocol, FieldSymbol field, FunctionType type, SyntaxNode at, (string Name, GenericShape Shape)? template = null) {
         var index = GenericRequirements(protocol).FindIndex(r => ReferenceEquals(r.Member, field));
-        var name = $"$generic$witness${Sanitise(value.ToString())}${Sanitise(QualifiedName(protocol))}${index}${field.Name}";
+        var name = template?.Name ?? $"$generic$witness${Sanitise(value.ToString())}${Sanitise(QualifiedName(protocol))}${index}${field.Name}";
         if (_module.Find(name) is not null) {
             return name;
         }
@@ -2046,6 +2060,10 @@ public sealed partial class SilGen {
             TakesNoParameters = field.IsStatic,
             Self = concrete,
         };
+        if (template is { } compiledOnce) {
+            _unspecialised[name] = (print, compiledOnce.Shape);
+        }
+
         var lowering = new FunctionLowering(this, print, function, source, substitution) { Bridged = bridge };
         lowering.Lower(new BoundBlock(syntax, [], []));
         if (lowering.Failed) {

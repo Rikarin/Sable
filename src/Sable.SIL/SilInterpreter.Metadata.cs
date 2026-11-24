@@ -105,6 +105,7 @@ public sealed partial class SilInterpreter {
         var arguments = generic.TypeArguments.Select(Concrete).ToList();
         var at = generic.Name.IndexOf("$of$", StringComparison.Ordinal);
         var name = $"{(at < 0 ? generic.Name : generic.Name[..at])}$of${string.Join("$", arguments.Select(static a => SilGen.Sanitise(a.ToString())))}";
+        _templates.TryAdd(name, generic);
         if (module.FindType(name) is { } existing) {
             return existing;
         }
@@ -212,13 +213,20 @@ public sealed partial class SilInterpreter {
         for (var at = type; at is not null; at = (at as ClassType)?.Superclass) {
             foreach (var (name, table) in module.ConformancesOf(at)) {
                 if (name == protocol) {
-                    return table;
+                    // An instance made here, at run time: its generic type's template, as its shape points the native one at.
+                    return table ?? (_templates.TryGetValue(at.ToString(), out var generic) ? module.FindWitnessTable(generic, protocol) is { IsTemplate: true } template ? template : null : null);
                 }
             }
         }
 
         return null;
     }
+
+    /// <summary>The box class made for each type no code boxes, by the type's name.</summary>
+    readonly Dictionary<string, ClassType> _madeBoxes = new(StringComparer.Ordinal);
+
+    /// <summary>Each instance of a generic type made at run time, by name, with the instance its template tables are of.</summary>
+    readonly Dictionary<string, NominalType> _templates = new(StringComparer.Ordinal);
 
     /// <summary>
     ///     Whether a value of the first type is one of the second, as
@@ -452,11 +460,24 @@ public sealed partial class SilInterpreter {
                 return true;
             case "opaque_box": {
                 var type = (MetadataModel)operands[1]!;
+                var value = ((IReference)operands[0]!).Get();
                 if (!module.Boxers.TryGetValue(type.Type.ToString(), out var boxer) || module.Find(boxer.Function) is not { } box) {
-                    throw new SilTrap($"a '{type.Described.Name}' with no way to box it as an existential");
+                    // An instance of a generic type made at run time: its box's class made here, the value moved in.
+                    if (!_madeBoxes.TryGetValue(type.Type.ToString(), out var boxType)) {
+                        boxType = new ClassType($"any$box$of${SilGen.Sanitise(type.Type.ToString())}") {
+                            Superclass = module.FindType("any$box") as ClassType,
+                            TypeArguments = [type.Type],
+                        };
+                        boxType.Fields.Add(("value", type.Type));
+                        _madeBoxes[type.Type.ToString()] = boxType;
+                    }
+
+                    var made = Allocate(new HeapObject(boxType));
+                    made.Fields[0] = value;
+                    result = made;
+                    return true;
                 }
 
-                var value = ((IReference)operands[0]!).Get();
                 result = Call(box, [value, type], depth + 1);
                 Release(type.Type, value, depth);
                 return true;

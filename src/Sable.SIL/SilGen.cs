@@ -611,6 +611,10 @@ public sealed partial class SilGen {
             LowerReached();
         }
 
+        // The tables an instance of a generic type made at run time has: once the instances are all known.
+        TemplateTables();
+        LowerReached();
+
         BuildVTables();
         SharedStorage.InsertChecks(_module);
         RootChecker.Check(_module, _sources, _diagnostics, (before, source) => {
@@ -2107,7 +2111,13 @@ public sealed partial class SilGen {
         if (symbol is NamedTypeSymbol named) {
             type.Conformances.AddRange(DeclaredProtocols(named.OriginalDefinition));
             type.ConditionalConformances.AddRange(ConditionalProtocols(named.OriginalDefinition).Where(c => !type.Conformances.Contains(c.Protocol)));
-            _module.MeetConditionalConformances(type);        }
+            _module.MeetConditionalConformances(type);
+
+            // Laid out at run time, for arguments known only there: its conformances get template tables (SilGen.Templates.cs).
+            if (named.IsConstructed && type is StructType or ClassType && !type.TypeArguments.IsDefaultOrEmpty && type.TypeArguments.Any(SilType.MentionsOpaque)) {
+                _runtimeInstances.Add((named, type));
+            }
+        }
 
         return _module.AddType(type);
     }

@@ -435,6 +435,8 @@ static string Decimals() {
 
         var invariant = System.Globalization.CultureInfo.InvariantCulture;
         return $"{total.ToString(invariant)} {shares.ToString(invariant)}";
+    }
+}
 
 // Two BigIntegers of about 10^5 decimal digits (3^209590 and 7^118330),
 // multiplied ten times over.

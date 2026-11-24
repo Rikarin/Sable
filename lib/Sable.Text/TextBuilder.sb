@@ -1,8 +1,22 @@
 module Sable.Text
 
-/// Collects text piece by piece without rebuilding it each time a piece is
-/// added: the pieces are kept, and joined once. A TextWriter, so 'print'
-/// and a Formattable value can write into it.
+/// Text built up piece by piece: .NET's `StringBuilder`, Rust's `String`
+/// as a builder. Small appends — text, a character, an integer — are copied
+/// into a buffer of UTF-8 bytes at the end, a character or an integer
+/// encoded straight into it with no String made for it; a large text is
+/// kept as it is, shared, not copied. A full buffer becomes a chunk, and
+/// `build()` joins the chunks once, at the end: building a long text costs
+/// what the text does and no more.
+///
+/// `chunks` gives the text in the pieces it is held in, .NET's
+/// `GetChunks()`. Changing the text in the middle — insert, remove,
+/// replace, setting a character — joins it first, and costs what the text
+/// does, as .NET's does.
+///
+/// Positions count characters (Unicode scalars), as a String's do. A
+/// TextWriter, so `print(_:to:)`, `write(describing:)` and an interpolated
+/// `write("…\(x)…")` — written a piece at a time, with no string made of
+/// the whole — go straight in.
 ///
 /// ```sable
 /// let builder = TextBuilder()
@@ -10,32 +24,379 @@ module Sable.Text
 /// builder.appendLine("b")
 /// var writer = builder
 /// print(3, to: &writer)
-/// assert(builder.build() == "ab\n3\n")
+/// builder.insert("[", at: 0)
+/// builder.replace("\n", with: "|")
+/// assert(builder.build() == "[ab|3|")
+/// assert(builder.count == 6)
 /// ```
 public class TextBuilder: TextWriter {
+    // The text: the pieces in order, then the bytes of the tail, which
+    // becomes a piece when it is full.
     var pieces: String[>..] = []
+    var tail: U8[>..] = []
+    var scalars: Int = 0
+    var bytes: Int = 0
 
     /// An empty builder.
     public init() { }
 
-    /// Adds the piece at the end.
-    public fn append(_ piece: String) {
-        pieces.append(piece)
+    /// A builder holding the text.
+    public init(_ text: String) {
+        append(text)
     }
 
-    /// Adds the line, and a newline after it.
+    /// An empty builder with room for that many bytes of text before its
+    /// buffer grows.
+    public init(capacity: Int) {
+        tail.reserveCapacity(capacity)
+    }
+
+    // ---- Size --------------------------------------------------------------
+
+    /// How many characters (Unicode scalars) it holds.
+    public var count: Int => scalars
+
+    /// How many bytes its text takes in UTF-8.
+    public var utf8Count: Int => bytes
+
+    /// Whether it holds no text.
+    public var isEmpty: Bool => scalars == 0
+
+    /// How many bytes of text it has room for before its buffer grows.
+    public var capacity: Int => bytes - tail.count + tail.capacity
+
+    /// Room for at least that many bytes of text in all, so that appending
+    /// up to them does not grow the buffer as it goes.
+    public fn reserveCapacity(_ minimum: Int) {
+        let wanted = minimum - (bytes - tail.count)
+        if wanted > tail.capacity {
+            tail.reserveCapacity(wanted)
+        }
+    }
+
+    // ---- Appending ---------------------------------------------------------
+
+    /// The text added at the end.
+    public fn append(_ text: String) {
+        let length = text.utf8Count
+        if length == 0 {
+            return
+        }
+        scalars += text.count
+        bytes += length
+        if length <= 256 {
+            tail.append(utf8: text)
+            if tail.count >= 65536 {
+                flush()
+            }
+        } else {
+            flush()
+            pieces.append(text)
+        }
+    }
+
+    /// The character added at the end, encoded straight into the buffer.
+    public fn append(_ character: Char) {
+        let before = tail.count
+        character.encodeUtf8(into: &tail)
+        scalars += 1
+        bytes += tail.count - before
+    }
+
+    /// The integer added at the end in decimal, its digits written straight
+    /// into the buffer: .NET's `Append(int)`.
+    public fn append<T: BinaryInteger>(_ value: T) {
+        if let small = Int.exactly(value) {
+            if small != Int.min {
+                appendDigits(small)
+                return
+            }
+        }
+        append("\(value)")
+    }
+
+    fn appendDigits(_ value: Int) {
+        var rest = value
+        let before = tail.count
+        if rest < 0 {
+            tail.append(0x2D)
+            rest = -rest
+        }
+        var digits = 1
+        var scan = rest
+        while scan >= 10 {
+            scan = scan / 10
+            digits += 1
+        }
+        var k = 0
+        while k < digits {
+            tail.append(0x30)
+            k += 1
+        }
+        var at = tail.count - 1
+        while true {
+            tail[at] = U8.truncating(0x30 + rest % 10)
+            rest = rest / 10
+            if rest == 0 {
+                break
+            }
+            at -= 1
+        }
+        scalars += tail.count - before
+        bytes += tail.count - before
+    }
+
+    /// The characters added at the end, in order.
+    public fn append<S: Sequence>(contentsOf characters: S) throws(S.Failure) where S.Element == Char {
+        for try character in characters {
+            append(character)
+        }
+    }
+
+    /// The value written as its format spec says: what `"\(value:spec)"`
+    /// would make, put straight in.
+    public fn append<T: Formattable>(_ value: T, spec: FormatSpec) {
+        append(value.format(spec))
+    }
+
+    /// The value written as an interpolation would write it.
+    public fn append<T>(describing value: T) {
+        append("\(value)")
+    }
+
+    /// The line added, and a newline after it.
     public fn appendLine(_ line: String) {
-        pieces.append(line)
-        pieces.append("\n")
+        append(line)
+        append("\n")
     }
 
-    /// Adds the text at the end: 'append', as a TextWriter writes.
+    /// A newline added.
+    public fn appendLine() {
+        append("\n")
+    }
+
+    /// The texts added with the separator between them: .NET's `AppendJoin`.
+    public fn appendJoined<S: Sequence>(_ texts: S, separator: String) throws(S.Failure) where S.Element == String {
+        var first = true
+        for try text in texts {
+            if !first {
+                append(separator)
+            }
+            append(text)
+            first = false
+        }
+    }
+
+    /// The text added at the end: `append`, as a TextWriter writes.
     public fn write(_ text: String) {
-        pieces.append(text)
+        append(text)
     }
 
-    /// The pieces, joined.
+    // ---- Reading -----------------------------------------------------------
+
+    /// The text built: the pieces joined once, and kept joined.
     public fn build() -> String {
-        return pieces.joined()
+        let text = whole()
+        return text
+    }
+
+    /// The text in the pieces it is held in, in order: none of them copied.
+    public var chunks: String[>..] {
+        get {
+            flush()
+            return pieces
+        }
+    }
+
+    /// The character at the position (0 up to the count): to read or
+    /// replace. Found by walking the pieces, not by joining them.
+    public subscript(position: Int) -> Char {
+        get {
+            precondition(position >= 0 && position < scalars, "character \(position) of \(scalars)")
+            flush()
+            var before = 0
+            var i = 0
+            while position >= before + pieces[i].count {
+                before += pieces[i].count
+                i += 1
+            }
+            return pieces[i].at(index: position - before)
+        }
+        set {
+            precondition(position >= 0 && position < scalars, "character \(position) of \(scalars)")
+            replace(position..<(position + 1), with: String.fromChar(newValue))
+        }
+    }
+
+    // ---- Changing ----------------------------------------------------------
+    //
+    // An edit in the middle cuts only the piece it falls in, as .NET's
+    // chunks are cut: what it costs is one piece's length and the count of
+    // pieces, not the text's.
+
+    /// The text put before the character at the position (0 up to the count).
+    public fn insert(_ text: String, at position: Int) {
+        replace(position..<position, with: text)
+    }
+
+    /// The characters at the positions in the range taken out.
+    public fn remove(_ range: Range<Int>) {
+        replace(range, with: "")
+    }
+
+    /// The characters at the positions in the range replaced by the text.
+    public fn replace(_ range: Range<Int>, with text: String) {
+        precondition(range.lowerBound >= 0 && range.upperBound <= scalars, "characters \(range.lowerBound)..<\(range.upperBound) of \(scalars)")
+        if range.lowerBound == scalars {
+            append(text)
+            return
+        }
+        let first = cut(range.lowerBound)
+        let last = cut(range.upperBound)
+        var kept: String[>..] = []
+        var i = 0
+        while i < first {
+            kept.append(pieces[i])
+            i += 1
+        }
+        while i < last {
+            scalars -= pieces[i].count
+            bytes -= pieces[i].utf8Count
+            i += 1
+        }
+        if !text.isEmpty {
+            kept.append(text)
+            scalars += text.count
+            bytes += text.utf8Count
+        }
+        while i < pieces.count {
+            kept.append(pieces[i])
+            i += 1
+        }
+        pieces = kept
+    }
+
+    /// Every occurrence of the text replaced by another, left to right, in
+    /// one pass of a vectorised search; how many there were.
+    public fn replace(_ target: String, with replacement: String) -> Int {
+        precondition(!target.isEmpty, "replacing an empty text")
+        let whole = whole()
+        var result: U8[>..] = []
+        var found = 0
+        var start = 0
+        while true {
+            let at = Runtime.findUtf8(text: whole, part: target, from: start)
+            if at < 0 {
+                break
+            }
+            if found == 0 {
+                result.reserveCapacity(whole.utf8Count)
+            }
+            result.append(utf8: whole, from: start, to: at)
+            result.append(utf8: replacement)
+            found += 1
+            start = at + target.utf8Count
+        }
+        if found > 0 {
+            result.append(utf8: whole, from: start, to: whole.utf8Count)
+            unsafe {
+                replaceAll(with: [String.fromUtf8Unchecked(result)])
+            }
+        }
+        return found
+    }
+
+    /// Only the first 'count' characters kept: Rust's `truncate`, .NET's
+    /// `Length` set shorter. A count at or past the end changes nothing.
+    public fn truncate(to count: Int) {
+        precondition(count >= 0, "a text truncated to \(count) characters")
+        if count < scalars {
+            replace(count..<scalars, with: "")
+        }
+    }
+
+    /// Every character taken out; the room for pieces kept.
+    public fn clear() {
+        pieces.removeAll(keepingCapacity: true)
+        tail.removeAll(keepingCapacity: true)
+        scalars = 0
+        bytes = 0
+    }
+
+    // ---- Pieces ------------------------------------------------------------
+
+    // The tail made a piece, its room kept for what comes next.
+    fn flush() {
+        if !tail.isEmpty {
+            unsafe {
+                pieces.append(String.fromUtf8Unchecked(tail))
+            }
+            tail.removeAll(keepingCapacity: true)
+        }
+    }
+
+    // A boundary between pieces made at the character position, the piece
+    // it falls in cut in two: the index of the piece that starts there
+    // (the count of pieces at the end).
+    fn cut(_ position: Int) -> Int {
+        flush()
+        var before = 0
+        var i = 0
+        while i < pieces.count {
+            let length = pieces[i].count
+            if position == before {
+                return i
+            }
+            if position < before + length {
+                let piece = pieces[i]
+                var split: String[>..] = []
+                var j = 0
+                while j < pieces.count {
+                    if j == i {
+                        split.append(piece.slice(from: 0, to: position - before))
+                        split.append(piece.slice(from: position - before, to: length))
+                    } else {
+                        split.append(pieces[j])
+                    }
+                    j += 1
+                }
+                pieces = split
+                return i + 1
+            }
+            before += length
+            i += 1
+        }
+        return pieces.count
+    }
+
+    // The whole text as one piece.
+    fn whole() -> String {
+        flush()
+        if pieces.count != 1 {
+            replaceAll(with: [pieces.joined()])
+        }
+        return pieces.isEmpty ? "" : pieces[0]
+    }
+
+    // The text made these pieces, the counts taken again.
+    fn replaceAll(with parts: String[>..]) {
+        pieces.removeAll(keepingCapacity: true)
+        tail.removeAll(keepingCapacity: true)
+        scalars = 0
+        bytes = 0
+        for part in parts {
+            if part.utf8Count > 0 {
+                pieces.append(part)
+                scalars += part.count
+                bytes += part.utf8Count
+            }
+        }
+    }
+}
+
+extension TextBuilder: Formattable {
+    /// The text built, padded as the spec says.
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(build())
     }
 }

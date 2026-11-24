@@ -1,0 +1,34 @@
+module TextBuilding
+
+// Building text against .NET's StringBuilder: a million small appends — a
+// word, a number, a character, now and then a newline — built once; then
+// edits in the middle, a removal at the front and a replacement throughout.
+
+import Sable.Text
+
+@main
+fn main() {
+    let builder = TextBuilder()
+    var i = 0
+    while i < 1000000 {
+        builder.append("item ")
+        builder.append(i)
+        builder.append(';')
+        if i % 10 == 0 {
+            builder.append('\n')
+        }
+        i = i + 1
+    }
+    let built = builder.build()
+
+    var j = 0
+    while j < 20 {
+        builder.insert("<>", at: builder.count / 2)
+        j = j + 1
+    }
+    builder.remove(0..<5)
+    let _ = builder.replace("item", with: "it")
+    let edited = builder.build()
+
+    print("\(built.count) \(edited.count)")
+}

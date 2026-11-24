@@ -263,6 +263,42 @@ fn main() {
     }
 
     /// <summary>
+    ///     TextBuilder's appends — text, characters and integers into its
+    ///     byte buffer — and its edits in the middle, and a byte array's
+    ///     append(utf8:): the same natively and interpreted.
+    /// </summary>
+    [Fact]
+    public void TextBuildingAgreesBothWays() {
+        var run = AssertAgree(
+            """
+            module P
+            import Sable.Text
+
+            @main
+            fn main() {
+                let builder = TextBuilder()
+                builder.append("héllo ")
+                builder.append('ж')
+                builder.append(-42)
+                builder.append(U64.max)
+                builder.insert("<", at: 1)
+                builder.remove(0..<1)
+                builder[0] = 'H'
+                print(builder.replace("l", with: "L"))
+                builder.truncate(to: 12)
+                print(builder.build())
+                print("\(builder.count) \(builder.utf8Count) \(builder[3])")
+                var bytes: U8[>..] = []
+                bytes.append(utf8: "añb", from: 1, to: 3)
+                bytes.append(utf8: "!")
+                print(bytes.count)
+            }
+            """
+        );
+        Assert.Equal("2\nHéLLo ж-4218\n12 14 L\n3\n", run.Stdout);
+    }
+
+    /// <summary>
     ///     A file mapped to read, to write through and to write a private
     ///     copy of, JSON parsed from its bytes, and bytes passed through a
     ///     pipe: the same natively, where the mapping is the system's, and

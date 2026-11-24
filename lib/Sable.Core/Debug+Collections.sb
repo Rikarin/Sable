@@ -48,9 +48,9 @@ extension Optional: Formattable where Wrapped: Formattable {
     /// What it holds, as the spec asks, or "none", padded as text is.
     ///
     /// ```sable
-    /// let some: Int? = 255
+    /// let present: Int? = 255
     /// let nothing: Int? = none
-    /// assert("\(some:x) \(nothing:>5)" == "ff  none")
+    /// assert("\(present:x) \(nothing:>5)" == "ff  none")
     /// ```
     public fn format(_ spec: FormatSpec) -> String {
         if let value = self {

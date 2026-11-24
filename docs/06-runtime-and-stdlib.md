@@ -741,7 +741,10 @@ Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, validated
                     passing the UCD's conformance tests, from tables
                     tools/unicode-tables.py generates (Unicode 16);
                     formatting, Regex (a compiled NFA/DFA hybrid),
-                    TextBuilder
+                    TextBuilder (a UTF-8 buffer and chunks: characters and
+                    integers encoded in place, edits that cut one chunk,
+                    replace in one vectorised pass; at parity with .NET's
+                    StringBuilder)
 Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     generic over ElementaryFunctions; integer math;
                     BigInt, Decimal, SIMD<T, N>, Matrix, Quaternion,

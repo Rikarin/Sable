@@ -544,6 +544,7 @@ public sealed partial class LlvmEmitter {
                                 declare i64 @sable_array_capacity(ptr)
                                 declare void @sable_array_reserve(ptr nocapture, ptr, i64)
                                 declare void @sable_array_truncate(ptr nocapture, ptr, i64)
+                                declare void @sable_array_append_utf8(ptr nocapture, ptr, ptr, i64, i64)
                                 declare void @sable_array_rotate(ptr nocapture, ptr, i64, i64, i64)
                                 declare void @sable_slice_rotate(ptr nocapture, ptr, i64, i64, i64)
                                 declare ptr @sable_slice_mutable_element(ptr nocapture, ptr, i64)
@@ -4893,6 +4894,12 @@ public sealed partial class LlvmEmitter {
                 case "array_truncate": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     Line($"call void @sable_array_truncate(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, i64 {operands[1]})");
+                    return;
+                }
+
+                case "array_append_utf8": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    Line($"call void @sable_array_append_utf8(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, ptr {operands[1]}, i64 {operands[2]}, i64 {operands[3]})");
                     return;
                 }
 

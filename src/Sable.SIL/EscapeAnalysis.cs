@@ -513,7 +513,7 @@ public sealed class PromoteToStack : ISilPass {
         instruction is BuiltinInst
         {
             Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_truncate" or "array_reserve"
-                or "array_rotate",
+                or "array_rotate" or "array_append_utf8",
         } builtin
         && value is AllocStackInst
         && ReferenceEquals(builtin.Operands[0], value)

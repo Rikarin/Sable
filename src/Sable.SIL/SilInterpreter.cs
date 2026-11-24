@@ -2158,6 +2158,23 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return null;
             }
 
+            case "array_append_utf8": {
+                var all = System.Text.Encoding.UTF8.GetBytes(Text(operands[1]).Value);
+                var from = (long)operands[2]!;
+                var to = (long)operands[3]!;
+                if (from < 0 || to < from || to > all.Length) {
+                    throw new SilTrap("UTF-8 offsets out of range");
+                }
+
+                var bytes = all.AsSpan((int)from, (int)(to - from)).ToArray();
+                if (bytes.Length > 0) {
+                    var array = Unique(builtin.Operands[0], (IReference)operands[0]!);
+                    array.Elements.AddRange(bytes.Select(static b => (object?)(long)b));
+                }
+
+                return null;
+            }
+
             case "array_truncate": {
                 var count = (long)operands[1]!;
                 var address = (IReference)operands[0]!;

@@ -28,6 +28,7 @@ var benchmarks = new Dictionary<string, Func<string>> {
     ["concurrent-dictionary"] = ConcurrentDictionaryBench,
     ["concurrent-queue"] = ConcurrentQueueBench,
     ["sorted-dictionary"] = SortedDictionaryBench,
+    ["text-builder"] = TextBuilding,
 };
 
 if (args.Length == 0 || !benchmarks.TryGetValue(args[0], out var run)) {
@@ -403,6 +404,32 @@ static string Sort() {
         }
 
         return $"{(ordered ? "true" : "false")} {a[0]} {a[a.Count / 2]} {b[0]} {b[^1]}";
+    }
+}
+
+// A million small appends to a StringBuilder, built once; then edits in the
+// middle, a removal at the front and a replacement throughout.
+static string TextBuilding() {
+    checked {
+        var builder = new System.Text.StringBuilder();
+        for (var i = 0; i < 1000000; i++) {
+            builder.Append("item ");
+            builder.Append(i);
+            builder.Append(';');
+            if (i % 10 == 0) {
+                builder.Append('\n');
+            }
+        }
+
+        var built = builder.ToString();
+        for (var j = 0; j < 20; j++) {
+            builder.Insert(builder.Length / 2, "<>");
+        }
+
+        builder.Remove(0, 5);
+        builder.Replace("item", "it");
+        var edited = builder.ToString();
+        return $"{built.Length} {edited.Length}";
     }
 }
 

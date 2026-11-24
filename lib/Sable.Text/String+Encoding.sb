@@ -150,10 +150,7 @@ extension String {
     /// The string's UTF-8 encoding: `utf8Count` bytes, no terminator.
     public fn utf8Bytes() -> U8[>..] {
         var bytes: U8[>..] = []
-        bytes.reserveCapacity(self.utf8Count)
-        for scalar in self {
-            scalar.encodeUtf8(into: &bytes)
-        }
+        bytes.append(utf8: self)
         return bytes
     }
 

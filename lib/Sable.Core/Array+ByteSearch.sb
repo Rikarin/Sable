@@ -51,3 +51,28 @@ extension U8[:] {
         return Runtime.countByte(self, element)
     }
 }
+
+extension U8[>..] {
+    /// The string's UTF-8 bytes added at the end, copied at once rather
+    /// than a scalar at a time.
+    ///
+    /// ```sable
+    /// var bytes: U8[>..] = [0x3E]
+    /// bytes.append(utf8: "hé")
+    /// assert(bytes.count == 4 && bytes[1] == 0x68 && bytes[3] == 0xA9)
+    /// ```
+    public mutating fn append(utf8 text: String) {
+        self.append(utf8: text, from: 0, to: text.utf8Count)
+    }
+
+    /// The string's UTF-8 bytes from one byte offset up to another added
+    /// at the end, copied at once; offsets outside the string trap.
+    ///
+    /// ```sable
+    /// var bytes: U8[>..] = []
+    /// bytes.append(utf8: "héllo", from: 1, to: 3)
+    /// assert(bytes.count == 2 && bytes[0] == 0xC3)
+    /// ```
+    @builtin("array_append_utf8")
+    public mutating fn append(utf8 text: String, from start: Int, to end: Int)
+}

@@ -1,10 +1,181 @@
 module TextBuilderTests
 
-// TextBuilder (Sable.Text), tested with '@test': run with
-//     tools/stdlib-coverage.sh Sable.Text
+// TextBuilder (Sable.Text): against a String as a model, with appends,
+// inserts, removals, replacements and truncations at random, in text with
+// characters of every UTF-8 width; and each call on its own.
 
 import Sable.Text
 import Sable.Testing
+
+/// A random walk of numbers: xorshift.
+struct Walk {
+    var state: U64
+
+    mutating fn next(_ below: Int) -> Int {
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        return Int(state % U64(below))
+    }
+}
+
+// Characters of one, two, three and four UTF-8 bytes.
+let alphabet: String[>..] = ["a", "b", "é", "ж", "語", "😀", "\n"]
+
+fn piece(_ walk: inout Walk) -> String {
+    var text = ""
+    let length = walk.next(6)
+    var i = 0
+    while i < length {
+        text = text + alphabet[walk.next(alphabet.count)]
+        i += 1
+    }
+    return text
+}
+
+@test
+fn randomEditsAgreeWithAString() {
+    var walk = Walk { state: 0x9E3779B97F4A7C15 }
+    let builder = TextBuilder()
+    var model = ""
+    var step = 0
+    while step < 3000 {
+        let choice = walk.next(12)
+        if choice < 6 {
+            let text = piece(&walk)
+            builder.append(text)
+            model = model + text
+        } else if choice == 6 {
+            let text = piece(&walk)
+            let at = walk.next(model.count + 1)
+            builder.insert(text, at: at)
+            model = model.slice(from: 0, to: at) + text + model.slice(from: at, to: model.count)
+        } else if choice == 7 && model.count > 0 {
+            let from = walk.next(model.count)
+            let to = from + walk.next(model.count - from + 1)
+            builder.remove(from..<to)
+            model = model.slice(from: 0, to: from) + model.slice(from: to, to: model.count)
+        } else if choice == 8 && model.count > 0 {
+            let from = walk.next(model.count)
+            let to = from + walk.next(model.count - from + 1)
+            let text = piece(&walk)
+            builder.replace(from..<to, with: text)
+            model = model.slice(from: 0, to: from) + text + model.slice(from: to, to: model.count)
+        } else if choice == 9 && model.count > 0 {
+            let at = walk.next(model.count)
+            let character = alphabet[walk.next(alphabet.count)].at(index: 0)
+            assert(builder[at] == model.at(index: at))
+            builder[at] = character
+            model = model.slice(from: 0, to: at) + String.fromChar(character) + model.slice(from: at + 1, to: model.count)
+        } else if choice == 10 && model.count > 200 {
+            let keep = walk.next(model.count)
+            builder.truncate(to: keep)
+            model = model.slice(from: 0, to: keep)
+        } else if choice == 11 {
+            let target = alphabet[walk.next(alphabet.count)]
+            let replacement = piece(&walk)
+            var expected = 0
+            var i = 0
+            while i < model.count {
+                if model.at(index: i) == target.at(index: 0) {
+                    expected += 1
+                }
+                i += 1
+            }
+            assertEqual(builder.replace(target, with: replacement), expected)
+            model = model.replacing(target, with: replacement)
+        }
+        assertEqual(builder.count, model.count)
+        assertEqual(builder.utf8Count, model.utf8Count)
+        if step % 50 == 0 {
+            assertEqualText(builder.build(), model)
+        }
+        step += 1
+    }
+    assertEqualText(builder.build(), model)
+}
+
+@test
+fn manyPiecesAreGatheredIntoFewChunks() {
+    let builder = TextBuilder(capacity: 16)
+    assert(builder.capacity >= 16)
+    var expected = 0
+    var i = 0
+    while i < 10000 {
+        builder.append("piece \(i);")
+        expected += "piece \(i);".count
+        i += 1
+    }
+    assertEqual(builder.count, expected)
+    let chunks = builder.chunks
+    assert(chunks.count < 50, "\(chunks.count) chunks")
+    var joined = 0
+    for chunk in chunks {
+        joined += chunk.count
+    }
+    assertEqual(joined, expected)
+    assert(builder.build().hasPrefix("piece 0;piece 1;"))
+    assert(builder.build().hasSuffix("piece 9999;"))
+    builder.reserveCapacity(100)
+    assert(builder.capacity >= 100)
+}
+
+@test
+fn eachWayOfAppending() {
+    let builder = TextBuilder("start")
+    builder.append(' ')
+    builder.append(contentsOf: ['ж', '😀'])
+    builder.append(contentsOf: "xy")
+    builder.append("")
+    builder.append(3.14159, spec: try! FormatSpec.parse(".2"))
+    builder.append(255, spec: try! FormatSpec.parse("x"))
+    builder.append(describing: [1, 2])
+    builder.append(0)
+    builder.append(-42)
+    builder.append(Int.min)
+    builder.append(U64.max)
+    builder.append(-7 as I8)
+    builder.appendLine()
+    builder.appendLine("next")
+    builder.appendJoined(["a", "b", "c"], separator: ", ")
+    let nothing: String[>..] = []
+    builder.appendJoined(nothing, separator: ", ")
+    var writer = builder
+    print(7, to: &writer)
+    let n = 42
+    writer.write("n=\(n)")
+    assertEqualText(builder.build(), "start ж😀xy3.14ff[1, 2]0-42-922337203685477580818446744073709551615-7\nnext\na, b, c7\nn=42")
+    assertEqual("[\(TextBuilder("hi"):>4)]", "[  hi]")
+}
+
+@test
+fn editsAtTheEdgesAndEmptiness() {
+    let builder = TextBuilder()
+    assert(builder.isEmpty && builder.count == 0 && builder.build() == "")
+    assert(builder.chunks.isEmpty)
+    builder.insert("bc", at: 0)
+    builder.insert("a", at: 0)
+    builder.insert("d", at: 3)
+    assertEqual(builder.build(), "abcd")
+    builder.remove(1..<1)
+    builder.remove(0..<1)
+    assertEqual(builder.build(), "bcd")
+    builder.replace(0..<3, with: "")
+    assert(builder.isEmpty)
+    builder.append("x-y-x")
+    assertEqual(builder.replace("x", with: "zz"), 2)
+    assertEqual(builder.replace("q", with: "zz"), 0)
+    assertEqual(builder.build(), "zz-y-zz")
+    builder.truncate(to: 100)
+    assertEqual(builder.count, 7)
+    builder.truncate(to: 2)
+    assertEqual(builder.build(), "zz")
+    builder[1] = 'é'
+    assertEqual(builder.build(), "zé")
+    assertEqual(builder.utf8Count, 3)
+    builder.clear()
+    assert(builder.isEmpty && builder.utf8Count == 0 && builder.build() == "")
+}
 
 @test
 fn multiLineTextComparesByLine() {
@@ -12,6 +183,17 @@ fn multiLineTextComparesByLine() {
     builder.appendLine("alpha")
     builder.appendLine("beta")
     assertEqualText(builder.build(), "alpha\nbeta\n")
+}
+
+@test
+fn aTextBuilderIsATextWriter() {
+    let builder = TextBuilder()
+    builder.append("a")
+    var writer = builder
+    writer.write("b")
+    print(3, to: &writer)
+    writer.write(describing: [4])
+    assertEqual(builder.build(), "ab3\n[4]")
 }
 
 @bench
@@ -25,15 +207,4 @@ fn buildingText(_ b: Bencher) {
         }
         let built = builder.build()
     })
-}
-
-@test
-fn aTextBuilderIsATextWriter() {
-    let builder = TextBuilder()
-    builder.append("a")
-    var writer = builder
-    writer.write("b")
-    print(3, to: &writer)
-    writer.write(describing: [4])
-    assertEqual(builder.build(), "ab3\n[4]")
 }

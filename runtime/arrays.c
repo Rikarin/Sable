@@ -376,6 +376,33 @@ void sable_array_truncate(SableArray **slot, const SableMetadata *type, int64_t 
     array->count = count;
 }
 
+// The string's UTF-8 bytes [from, to) added at the end of a byte array,
+// copied at once: the array made the only reference to its buffer, grown
+// by half again at least, as appending one at a time grows it.
+void sable_array_append_utf8(SableArray **slot, const SableMetadata *type, const SableString *text, int64_t from, int64_t to) {
+    if (from < 0 || to < from || to > text->length) {
+        trap_here("UTF-8 offsets out of range");
+    }
+
+    int64_t length = to - from;
+    if (length == 0) {
+        return;
+    }
+
+    SableArray *array = unique(slot, type, length);
+    if (array->count + length > array->capacity) {
+        int64_t old = array->capacity;
+        int64_t wanted = array->capacity + array->capacity / 2;
+        wanted = wanted < array->count + length ? array->count + length : wanted;
+        wanted = wanted < 16 ? 16 : wanted;
+        array->capacity = wanted;
+        array->elements = resize_elements(array, old, wanted);
+    }
+
+    memcpy(array->elements + array->count, text->bytes + from, (size_t)length);
+    array->count += length;
+}
+
 // The 'length' elements at 'base' rotated left by 'by' (0 < by < length):
 // the shorter side kept aside, the longer moved over in one go, and the
 // shorter put back after it. A permutation of the bytes, so no element is

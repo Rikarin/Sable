@@ -153,15 +153,56 @@ public struct Base64 {
         Base64.writeEncoded(bytes, to: &text, at: start, digits: digits, padding: padding)
     }
 
+    // As many of the bytes as vectors take, twelve at a time while sixteen
+    // are left to load: how many were encoded. A group's three bytes are
+    // put in a U32 lane, first byte highest, and its four six-bit values
+    // moved to a byte each; a value's digit is then looked up, or is the
+    // value moved by what its run of digits is from it.
+    static fn encodeVectors(_ bytes: U8[:], to text: inout U8[>..], at start: Int, digits: U8[:]) -> Int {
+        let count = bytes.count
+        var i = 0
+        if count < 16 {
+            return 0
+        }
+        let table = SIMD<U8, 64>.load(from: digits, at: 0)
+        let ahead62 = digits[62] &- 62
+        let ahead63 = digits[63] &- 63
+        let order = SIMD<U8, 16>([2, 1, 0, 0, 5, 4, 3, 3, 8, 7, 6, 6, 11, 10, 9, 9])
+        var j = start
+        while count - i >= 16 {
+            let groups = SIMD<U32, 4>.reinterpreting(SIMD<U8, 16>.load(from: bytes, at: i).swizzled(order))
+            let first = groups >> SIMD<U32, 4>(repeating: 18) & SIMD<U32, 4>(repeating: 0x3F)
+            let second = groups >> SIMD<U32, 4>(repeating: 4) & SIMD<U32, 4>(repeating: 0x3F00)
+            let third = groups << SIMD<U32, 4>(repeating: 10) & SIMD<U32, 4>(repeating: 0x3F_0000)
+            let fourth = groups << SIMD<U32, 4>(repeating: 24) & SIMD<U32, 4>(repeating: 0x3F00_0000)
+            let values = SIMD<U8, 16>.reinterpreting(first | second | third | fourth)
+            if Platform.hasByteLookup {
+                text.store(table.lookup(values), at: j)
+            } else {
+                var ahead = SIMD<U8, 16>.select(values.lanesLess(than: SIMD<U8, 16>(repeating: 26)),
+                    SIMD<U8, 16>(repeating: 65), SIMD<U8, 16>(repeating: 71))
+                ahead = ahead.replacing(with: SIMD<U8, 16>(repeating: 252), where: values.lanesGreater(than: SIMD<U8, 16>(repeating: 51)))
+                ahead = ahead.replacing(with: SIMD<U8, 16>(repeating: ahead62), where: values.lanesEqual(SIMD<U8, 16>(repeating: 62)))
+                ahead = ahead.replacing(with: SIMD<U8, 16>(repeating: ahead63), where: values.lanesEqual(SIMD<U8, 16>(repeating: 63)))
+                text.store(values &+ ahead, at: j)
+            }
+            i += 12
+            j += 16
+        }
+        return i
+    }
+
     // The bytes' digits written in place from 'start', where there is room
-    // for `encodedLength` of them: six bytes at a time from one 64-bit
+    // for `encodedLength` of them: twelve bytes at a time as four groups of
+    // twenty-four bits, while sixteen are left to load, as
+    // `encodeVectors` has it; six bytes at a time from one 64-bit
     // load while eight are left to load, their eight digits written from
     // the last, so that one check of the index covers them all; then three
     // at a time, then the last one or two, padded or not.
     static fn writeEncoded(_ bytes: U8[:], to text: inout U8[>..], at start: Int, digits: U8[:], padding: Bool) {
         let count = bytes.count
-        var i = 0
-        var j = start
+        var i = Base64.encodeVectors(bytes, to: &text, at: start, digits: digits)
+        var j = start + i / 3 * 4
         while i + 8 <= count {
             let word = bytes.readU64(at: i, endian: .Big)
             text[j + 7] = digits[(word >> 16 & 0x3F) unchecked as Int]
@@ -203,6 +244,62 @@ public struct Base64 {
         }
     }
 
+    // As many of the first 'whole' digits as vectors take, sixteen at a time
+    // while there is room to store sixteen bytes, of which twelve stay: how
+    // many were decoded. They stop at the first sixteen with a byte that is
+    // no digit, which is left to the loops that say where it is. A digit's
+    // value is looked up, or each run of digits told by how far into it the
+    // byte is, and the four values of a group are put together in a U32 lane.
+    static fn decodeVectors(_ text: U8[:], _ whole: Int, to bytes: inout U8[>..], at start: Int, values: U8[:]) -> Int {
+        var i = 0
+        if whole < 24 {
+            return 0
+        }
+        let (digit62, digit63): (U8, U8) = values[0x2B] == 62 ? (0x2B, 0x2F) : (0x2D, 0x5F)
+        let lowValues = SIMD<U8, 64>.load(from: values, at: 0)
+        let highValues = SIMD<U8, 64>.load(from: values, at: 64)
+        let order = SIMD<U8, 16>([2, 1, 0, 6, 5, 4, 10, 9, 8, 14, 13, 12, 15, 15, 15, 15])
+        var j = start
+        while whole - i >= 16 && bytes.count - j >= 16 {
+            let v = SIMD<U8, 16>.load(from: text, at: i)
+            var six = SIMD<U8, 16>()
+            if Platform.hasByteLookup {
+                // A byte past 0x7F is in neither half, and made too large for a digit.
+                let found = lowValues.lookup(v) | highValues.lookup(v &- SIMD<U8, 16>(repeating: 64))
+                six = found | v & SIMD<U8, 16>(repeating: 0x80)
+                if six.reduceMax() >= 0x40 {
+                    break
+                }
+            } else {
+                let upper = v &- SIMD<U8, 16>(repeating: 0x41)
+                let lower = v &- SIMD<U8, 16>(repeating: 0x61)
+                let decimal = v &- SIMD<U8, 16>(repeating: 0x30)
+                let isUpper = upper.lanesLess(than: SIMD<U8, 16>(repeating: 26))
+                let isLower = lower.lanesLess(than: SIMD<U8, 16>(repeating: 26))
+                let isDecimal = decimal.lanesLess(than: SIMD<U8, 16>(repeating: 10))
+                let is62 = v.lanesEqual(SIMD<U8, 16>(repeating: digit62))
+                let is63 = v.lanesEqual(SIMD<U8, 16>(repeating: digit63))
+                if !(isUpper | isLower | isDecimal | is62 | is63).allTrue {
+                    break
+                }
+                six = SIMD<U8, 16>.select(isUpper, upper, lower &+ SIMD<U8, 16>(repeating: 26))
+                six = six.replacing(with: decimal &+ SIMD<U8, 16>(repeating: 52), where: isDecimal)
+                six = six.replacing(with: SIMD<U8, 16>(repeating: 62), where: is62)
+                six = six.replacing(with: SIMD<U8, 16>(repeating: 63), where: is63)
+            }
+            let lanes = SIMD<U32, 4>.reinterpreting(six)
+            let first = lanes << SIMD<U32, 4>(repeating: 18) & SIMD<U32, 4>(repeating: 0xFC_0000)
+            let second = lanes << SIMD<U32, 4>(repeating: 4) & SIMD<U32, 4>(repeating: 0x3_F000)
+            let third = lanes >> SIMD<U32, 4>(repeating: 10) & SIMD<U32, 4>(repeating: 0xFC0)
+            let fourth = lanes >> SIMD<U32, 4>(repeating: 24)
+            let groups = SIMD<U8, 16>.reinterpreting(first | second | third | fourth)
+            bytes.store(groups.swizzled(order), at: j)
+            i += 16
+            j += 12
+        }
+        return i
+    }
+
     // The bytes the digits encode, appended. With 'last' false they are
     // from the middle of a stream: whole groups, with no padding.
     static fn appendDecoded(_ text: U8[:], to bytes: inout U8[>..], values: U8[:], padding: Padding, last: Bool = true) throws(DecodeError) {
@@ -226,10 +323,11 @@ public struct Base64 {
         }
         let rest = end % 4
         let whole = end - rest
-        var i = 0
-        var j = start
-        // Eight digits from one 64-bit load, their six bytes written from
+        // Digits by the vector, as far as they are all digits, and then
+        // eight from one 64-bit load, their six bytes written from
         // the last, so that one check of the index covers them all.
+        var i = Base64.decodeVectors(text, whole, to: &bytes, at: start, values: values)
+        var j = start + i / 4 * 3
         while i + 8 <= whole {
             let word = text.readU64(at: i, endian: .Big)
             let a = values[(word >> 56) unchecked as Int]

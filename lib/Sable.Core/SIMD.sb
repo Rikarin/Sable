@@ -454,6 +454,17 @@ public struct SIMD<Scalar: SIMDScalar, N: Int> where N >= 2 && (N == 2 || N == 3
     /// ```
     @builtin("simd_convert")
     public static fn converting<Other: SIMDScalar>(_ other: SIMD<Other, N>) -> SIMD<Scalar, N>
+
+    /// The other's bits seen as lanes of this type, the first lane's least
+    /// significant byte first (.NET's 'Vector128.As'): the two are as many
+    /// bits in all. No instruction is made for it.
+    ///
+    /// ```sable
+    /// let bytes = SIMD<U8, 8>([1, 2, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF])
+    /// assert(SIMD<I32, 2>.reinterpreting(bytes) == SIMD<I32, 2>([0x0201, -1]))
+    /// ```
+    @builtin("simd_reinterpret")
+    public static fn reinterpreting<Other: SIMDScalar, M: Int>(_ other: SIMD<Other, M>) -> SIMD<Scalar, N>
 }
 
 extension SIMD: Equatable {
@@ -585,6 +596,20 @@ extension SIMD where Scalar: FixedWidthInteger {
     /// The bits an odd number of lanes have.
     @builtin("simd_reduce_xor")
     public fn reduceXor() -> Scalar
+}
+
+extension SIMD where Scalar == U8 {
+    /// The bytes as a table of N, looked up at once: each lane the entry its
+    /// index numbers, or zero where the index is N or more (NEON's
+    /// tbl). N is a power of two. Where
+    /// 'Platform.hasByteLookup' is false it is done a lane at a time.
+    ///
+    /// ```sable
+    /// let squares = SIMD<U8, 4>([0, 1, 4, 9])
+    /// assert(squares.lookup(SIMD<U8, 4>([3, 0, 4, 2])) == SIMD<U8, 4>([9, 0, 0, 4]))
+    /// ```
+    @builtin("simd_lookup")
+    public fn lookup<M: Int>(_ indices: SIMD<U8, M>) -> SIMD<U8, M>
 }
 
 extension SIMD where Scalar: BinaryFloatingPoint {

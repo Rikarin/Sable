@@ -70,7 +70,19 @@ public struct Hex {
         let whole = text.count & ~1
         var bytes: U8[>..] = []
         bytes.append(repeating: 0, count: whole / 2)
+        // Thirty-two digits at a time, as far as they are digits; the first
+        // thirty-two with one that is not are looked at again below, which
+        // says where it is.
         var i = 0
+        while whole - i >= 32 {
+            let (values, areDigits) = Hex.digitValues(SIMD<U8, 32>.load(from: text, at: i))
+            if !areDigits {
+                break
+            }
+            let (high, low) = SIMD<U8, 16>.unzip(SIMD<U8, 16>.lowHalf(of: values), SIMD<U8, 16>.highHalf(of: values))
+            bytes.store(high << SIMD<U8, 16>(repeating: 4) | low, at: i / 2)
+            i += 32
+        }
         // Eight digits from one 64-bit load, their four bytes stored from
         // the last, so that one check of the index covers them all.
         while i + 8 <= whole {
@@ -112,8 +124,22 @@ public struct Hex {
         return bytes
     }
 
+    // What each digit is worth, and whether every one is a digit: 0 to 9
+    // from '0', and 10 to 15 from 'a', a capital's bit of difference set
+    // first. What is no digit is worth nothing in particular.
+    @inline(always)
+    static fn digitValues(_ digits: SIMD<U8, 32>) -> (SIMD<U8, 32>, Bool) {
+        let decimal = digits &- SIMD<U8, 32>(repeating: 0x30)
+        let letter = (digits | SIMD<U8, 32>(repeating: 0x20)) &- SIMD<U8, 32>(repeating: 0x61)
+        let isDecimal = decimal.lanesLess(than: SIMD<U8, 32>(repeating: 10))
+        let isLetter = letter.lanesLess(than: SIMD<U8, 32>(repeating: 6))
+        let values = SIMD<U8, 32>.select(isDecimal, decimal, letter &+ SIMD<U8, 32>(repeating: 10))
+        return (values, (isDecimal | isLetter).allTrue)
+    }
+
     // The digits written in place from 'start', where there is room for
-    // two a byte: four bytes at a time from one 32-bit load, each nibble
+    // two a byte: sixteen bytes at a time, each one's halves side by side
+    // and made digits all at once; then four bytes at a time from one 32-bit load, each nibble
     // spread to a byte of its own and made a digit by arithmetic on all
     // eight at once, stored from the last so that one check of the index
     // covers them all; then the rest a byte at a time.
@@ -123,6 +149,16 @@ public struct Hex {
         let count = bytes.count
         var i = 0
         var j = start
+        let letterGap = SIMD<U8, 32>(repeating: letters unchecked as U8)
+        while count - i >= 16 {
+            let v = SIMD<U8, 16>.load(from: bytes, at: i)
+            let (low, high) = SIMD<U8, 16>.zip(v >> SIMD<U8, 16>(repeating: 4), v & SIMD<U8, 16>(repeating: 0x0F))
+            let halves = SIMD<U8, 32>.concat(low, high)
+            let gap = SIMD<U8, 32>.select(halves.lanesGreater(than: SIMD<U8, 32>(repeating: 9)), letterGap, SIMD<U8, 32>())
+            text.store(halves &+ SIMD<U8, 32>(repeating: 0x30) &+ gap, at: j)
+            i += 16
+            j += 32
+        }
         while i + 4 <= count {
             var nibbles = U64(bytes.readU32(at: i, endian: .Big))
             nibbles = (nibbles | nibbles << 16) & 0x0000_FFFF_0000_FFFF

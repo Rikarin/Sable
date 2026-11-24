@@ -41,10 +41,21 @@ public struct Platform {
 
     /// How many bytes the target's vector registers hold, as the program
     /// is compiled for it: 16 for SSE2 on x86-64 (the baseline every
-    /// x86-64 has), NEON on arm64 and simd128 on wasm32. 'SIMD' types of
+    /// x86-64 has) and NEON on arm64. (wasm32 is compiled without simd128, and
+    /// works on a vector's lanes one at a time.) 'SIMD' types of
     /// this many bytes fill one register; wider ones are split across
     /// several, and narrower ones fill part of one.
     public const vectorBytes: Int = 16
+
+    /// Whether the target has an instruction that looks sixteen bytes up in
+    /// a table at once, which 'SIMD.lookup' is then: NEON's tbl, but nothing
+    /// of SSE2's (x86's pshufb came later, and the program is compiled for
+    /// every x86-64), nor of WebAssembly's, which is compiled without simd128.
+    #if arch(arm64)
+    public const hasByteLookup: Bool = true
+    #else
+    public const hasByteLookup: Bool = false
+    #endif
 
     // ---- What the program runs on ------------------------------------------
     // Asked of the system when the program runs (the constants above are

@@ -81,21 +81,11 @@ extension String {
     /// made U+FFFD.
     public static fn fromUtf16Lossy(_ units: U16[:]) -> String {
         var bytes: U8[>..] = []
-        bytes.reserveCapacity(units.count)
-        var i = 0
-        while i < units.count {
-            let unit = Int(units[i])
-            var code = unit
-            if Utf16.isLeading(units[i]) && i + 1 < units.count && Utf16.isTrailing(units[i + 1]) {
-                code = 0x10000 + (unit - 0xD800) * 0x400 + (Int(units[i + 1]) - 0xDC00)
-                i = i + 1
-            } else if unit >= 0xD800 && unit <= 0xDFFF {
-                code = 0xFFFD
-            }
-            Char.fromCodePoint(code)!.encodeUtf8(into: &bytes)
-            i = i + 1
+        let _ = Utf8.fromUtf16(units, into: &bytes)
+        // The encoder's own bytes, which need no check.
+        unsafe {
+            return String.fromUtf8Unchecked(bytes)
         }
-        return Runtime.decodeUtf8(bytes)!
     }
 
     /// The text of the code points, as UTF-32 has them; none when one is not
@@ -158,10 +148,7 @@ extension String {
     /// surrogate pair) for one past U+FFFF.
     public fn utf16Units() -> U16[>..] {
         var units: U16[>..] = []
-        units.reserveCapacity(self.count)
-        for scalar in self {
-            scalar.encodeUtf16(into: &units)
-        }
+        appendUtf16(ofValid: self.utf8Bytes(), to: &units)
         return units
     }
 
@@ -169,6 +156,9 @@ extension String {
     /// `Length` count it.
     public var utf16Count: Int {
         get {
+            if self.isAscii {
+                return self.utf8Count
+            }
             var count = 0
             for scalar in self {
                 count = count + scalar.utf16Length
@@ -180,6 +170,20 @@ extension String {
     /// The string's code points, as UTF-32 has them.
     public fn utf32Units() -> U32[>..] {
         var codes: U32[>..] = []
+        if self.isAscii {
+            let bytes = self.utf8Bytes()
+            codes.append(repeating: 0, count: bytes.count)
+            var i = 0
+            while bytes.count - i >= 16 {
+                codes.store(SIMD<U32, 16>.converting(SIMD<U8, 16>.load(from: bytes, at: i)), at: i)
+                i += 16
+            }
+            while i < bytes.count {
+                codes[i] = U32(bytes[i])
+                i += 1
+            }
+            return codes
+        }
         codes.reserveCapacity(self.count)
         for scalar in self {
             codes.append(scalar.code)
@@ -190,6 +194,9 @@ extension String {
     /// The string as Latin-1 bytes, one a scalar; none when a scalar is past
     /// U+00FF, which Latin-1 cannot write.
     public fn latin1Bytes() -> U8[>..]? {
+        if self.isAscii {
+            return self.utf8Bytes()
+        }
         var bytes: U8[>..] = []
         bytes.reserveCapacity(self.count)
         for scalar in self {

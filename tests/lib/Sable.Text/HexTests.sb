@@ -81,3 +81,75 @@ fn anOddNumberOfDigitsIsTheWrongLength() {
     assertEqual(decodeError("a"), .InvalidLength(at: 0))
     assertEqual(decodeError("abc"), .InvalidLength(at: 2))
 }
+
+// ---- Against the definition, a digit at a time ---------------------------
+// Every length from 0 to 130 and from several starts, so that each of the
+// loops that take many at once, and what they leave, is held to it.
+
+fn randomBytes(_ count: Int, _ seed: U64) -> U8[>..] {
+    var random = SeededRandomNumberGenerator(seed: seed)
+    var bytes: U8[>..] = []
+    for _ in 0..<count {
+        bytes.append(U8.random(in: 0...255, using: &random))
+    }
+    return bytes
+}
+
+fn plainHex(_ bytes: U8[:], _ digits: String) -> U8[>..] {
+    let table = digits.utf8Bytes()
+    var text: U8[>..] = []
+    for byte in bytes {
+        text.append(table[Int(byte) / 16])
+        text.append(table[Int(byte) % 16])
+    }
+    return text
+}
+
+@test
+fn everyLengthAndStartEncodesAsEachByteDoes() {
+    let all = randomBytes(140, 229)
+    for start in 0..<4 {
+        for n in 0...130 {
+            let bytes = all[start..<(start + n)]
+            assertBytes(Hex.encode(bytes).utf8Bytes(), plainHex(bytes, "0123456789abcdef"))
+            assertBytes(Hex.encode(bytes, uppercase: true).utf8Bytes(), plainHex(bytes, "0123456789ABCDEF"))
+            // Digits outside the slice are not read: they would be decoded.
+            var text: U8[>..] = [0x30, 0x31, 0x32]
+            text.append(contentsOf: plainHex(bytes, n % 2 == 0 ? "0123456789abcdef" : "0123456789ABCDEF"))
+            let end = text.count
+            text.append(contentsOf: [0x66, 0x67, 0x68])
+            assertBytes(try! Hex.decode(bytes: text[3..<end]), bytes)
+            var buffer = ByteBuffer()
+            buffer.write([0xAA])
+            Hex.encode(bytes, into: &buffer)
+            assertEqual(buffer.count, 2 * n + 1)
+            assertBytes(buffer.bytes[1...], plainHex(bytes, "0123456789abcdef"))
+        }
+    }
+}
+
+@test
+fn everyByteThatIsNoDigitIsFoundAtEveryPosition() {
+    let digits = "0123456789abcdefABCDEF".utf8Bytes()
+    for n in [2, 30, 32, 34, 64, 70, 96] as Int[>..] {
+        var text = plainHex(randomBytes(n / 2, 7), "0123456789abcdef")
+        for at in 0..<n {
+            let held = text[at]
+            for value in 0..<256 {
+                text[at] = U8(value)
+                var thrown: DecodeError? = none
+                do {
+                    let _ = try Hex.decode(bytes: text)
+                } catch {
+                    thrown = error
+                }
+                if digits.contains(U8(value)) {
+                    assert(thrown == none)
+                } else {
+                    assert(thrown == .InvalidCharacter(at: at, byte: U8(value)))
+                }
+            }
+            text[at] = held
+        }
+    }
+}

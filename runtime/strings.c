@@ -62,11 +62,27 @@ static inline uint64_t mask16_bits(sable_mask16 mask) {
 #endif
 
 static int64_t count_scalars(const char *bytes, int64_t length) {
-    int64_t count = 0;
-    for (int64_t i = 0; i < length; i++) {
-        if (((unsigned char)bytes[i] & 0xC0) != 0x80) {
-            count++;
+    // Every byte but a continuation starts a scalar: sixteen a step, each
+    // lane counting up to 255 before they are gathered, as two sums of
+    // eight bytes apiece (a byte pair's sum fits sixteen bits, and so do four).
+    int64_t count = 0, i = 0;
+    while (i + 16 <= length) {
+        sable_bytes16 lanes = { 0 };
+        int64_t end = i + 16 * 255 < length ? i + 16 * 255 : length;
+        for (; i + 16 <= end; i += 16) {
+            lanes -= (sable_bytes16)((sable_mask16)load16(bytes + i) >= (sable_mask16){ 0 } + (int8_t)-64);
         }
+
+        uint64_t halves[2];
+        memcpy(halves, &lanes, sizeof halves);
+        for (int k = 0; k < 2; k++) {
+            uint64_t pairs = (halves[k] & 0x00FF00FF00FF00FFull) + (halves[k] >> 8 & 0x00FF00FF00FF00FFull);
+            count += (int64_t)(pairs * 0x0001000100010001ull >> 48);
+        }
+    }
+
+    for (; i < length; i++) {
+        count += ((unsigned char)bytes[i] & 0xC0) != 0x80;
     }
 
     return count;

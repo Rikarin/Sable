@@ -9,7 +9,8 @@ namespace Sable.SIL;
 ///     shared, on every write. In a loop whose only uses of the array's
 ///     variable are reading it and writing its elements, nothing in the loop
 ///     can share the buffer again: so it is made unique once, before the
-///     loop, and every write inside stores in place (<c>array_set_unique</c>),
+///     loop, and every write inside stores in place (<c>array_set_unique</c>,
+///     and <c>simd_store_unique</c> for a vector's),
 ///     with no call that could change the variable — which lets LLVM keep the
 ///     buffer and its count in registers. The variable is a local slot or an
 ///     inout parameter, which exclusivity keeps unshared for the call.
@@ -63,7 +64,7 @@ public sealed class HoistUniqueness : ISilPass {
         foreach (var (header, body) in loops.OrderByDescending(static l => l.Value.Count)) {
             var addresses = body.SelectMany(static b => b.Instructions)
                 .OfType<BuiltinInst>()
-                .Where(static b => b.Name == "array_set")
+                .Where(static b => b.Name is "array_set" or "simd_store")
                 .Select(static b => b.Operands[0])
                 .Distinct()
                 .ToList();
@@ -79,8 +80,8 @@ public sealed class HoistUniqueness : ISilPass {
                 }
 
                 foreach (var write in body.SelectMany(static b => b.Instructions).OfType<BuiltinInst>()
-                             .Where(b => b.Name == "array_set" && ReferenceEquals(b.Operands[0], address)).ToList()) {
-                    write.Rename("array_set_unique");
+                             .Where(b => b.Name is ("array_set" or "simd_store") && ReferenceEquals(b.Operands[0], address)).ToList()) {
+                    write.Rename(write.Name + "_unique");
                 }
 
                 uses = new Uses(function);
@@ -104,8 +105,8 @@ public sealed class HoistUniqueness : ISilPass {
             foreach (var write in uses.Of(slot).OfType<BuiltinInst>().ToList()) {
                 if (write.Name.StartsWith("bytes_store_U", StringComparison.Ordinal)) {
                     write.Rename("bytes_store_unique_" + write.Name["bytes_store_".Length..]);
-                } else if (write.Name == "array_set") {
-                    write.Rename("array_set_unique");
+                } else if (write.Name is "array_set" or "simd_store") {
+                    write.Rename(write.Name + "_unique");
                 }
             }
         }
@@ -120,14 +121,14 @@ public sealed class HoistUniqueness : ISilPass {
                     made = true;
                     break;
 
-                case BuiltinInst { Name: var name } write when (name.StartsWith("bytes_store_", StringComparison.Ordinal) || name is "array_set" or "array_set_unique")
+                case BuiltinInst { Name: var name } write when (name.StartsWith("bytes_store_", StringComparison.Ordinal) || name is "array_set" or "array_set_unique" or "simd_store" or "simd_store_unique")
                     && ReferenceEquals(write.Operands[0], slot) && !write.Operands.Skip(1).Any(o => ReferenceEquals(o, slot)):
                     break;
 
                 case LoadBorrowInst borrowed:
                     foreach (var reader in uses.Of(borrowed)) {
                         var reads = reader is EndBorrowInst
-                            || reader is BuiltinInst { Name: var read } && (read is "array_get" or "array_get_borrowed" or "array_count" || read.StartsWith("bytes_load_", StringComparison.Ordinal));
+                            || reader is BuiltinInst { Name: var read } && (read is "array_get" or "array_get_borrowed" or "array_count" or "simd_load" || read.StartsWith("bytes_load_", StringComparison.Ordinal));
                         if (!reads) {
                             return false;
                         }
@@ -166,13 +167,13 @@ public sealed class HoistUniqueness : ISilPass {
             }
 
             switch (user) {
-                case BuiltinInst { Name: "array_set" or "array_set_unique" } write when ReferenceEquals(write.Operands[0], address)
+                case BuiltinInst { Name: "array_set" or "array_set_unique" or "simd_store" or "simd_store_unique" } write when ReferenceEquals(write.Operands[0], address)
                     && !write.Operands.Skip(1).Any(o => ReferenceEquals(o, address)):
                     break;
 
                 case LoadBorrowInst borrowed:
                     foreach (var reader in uses.Of(borrowed)) {
-                        if (reader is not (EndBorrowInst or BuiltinInst { Name: "array_get" or "array_get_borrowed" or "array_count" })) {
+                        if (reader is not (EndBorrowInst or BuiltinInst { Name: "array_get" or "array_get_borrowed" or "array_count" or "simd_load" })) {
                             return false;
                         }
                     }

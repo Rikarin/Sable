@@ -574,6 +574,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_array_reserve(ptr nocapture, ptr, i64)
                                 declare void @sable_array_truncate(ptr nocapture, ptr, i64)
                                 declare void @sable_array_append_utf8(ptr nocapture, ptr, ptr, i64, i64)
+                                declare void @sable_array_append_all(ptr nocapture, ptr, ptr, i64, i64)
                                 declare void @sable_array_append_repeating(ptr nocapture, ptr, ptr nocapture readonly, i64)
                                 declare void @sable_array_rotate(ptr nocapture, ptr, i64, i64, i64)
                                 declare void @sable_slice_rotate(ptr nocapture, ptr, i64, i64, i64)
@@ -5105,6 +5106,14 @@ public sealed partial class LlvmEmitter {
 
                 // The element, borrowed, handed over where it is: in a slot
                 // of the frame's own for a value, its buffer for an opaque one.
+                case "array_append_all": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    var source = (SliceType)builtin.Operands[1].Type;
+                    var (buffer, start, count) = (SlicePart(operands[1], source, 0), SlicePart(operands[1], source, 1), SlicePart(operands[1], source, 2));
+                    Line($"call void @sable_array_append_all(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, ptr {buffer}, i64 {start}, i64 {count})");
+                    return;
+                }
+
                 case "array_append_repeating": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     var value = operands[1];
@@ -5164,7 +5173,7 @@ public sealed partial class LlvmEmitter {
                 // The whole of an array, viewed: its buffer retained, from 0 for its count.
                 case "slice_of": {
                     var count = Count(operands[0]);
-                    Line($"call void @sable_retain(ptr {operands[0]})");
+                    RetainBuffer(operands[0]);
                     _names[builtin] = MakeSlice((SliceType)builtin.Type, operands[0], "0", count);
                     return;
                 }
@@ -5172,7 +5181,7 @@ public sealed partial class LlvmEmitter {
                 // A slice as an array again: its buffer, retained, when it is the
                 // whole of it, else a copy of its run (the runtime decides).
                 case "array_of_slice" when builtin.Operands[0].Type is ArrayType:
-                    Line($"call void @sable_retain(ptr {operands[0]})");
+                    RetainBuffer(operands[0]);
                     _names[builtin] = operands[0];
                     return;
 
@@ -5249,7 +5258,7 @@ public sealed partial class LlvmEmitter {
                     Line($"{length} = sub i64 {to}, {from}");
                     Line($"{empty} = icmp eq i64 {length}, 0");
                     Line($"{held} = select i1 {empty}, ptr null, ptr {buffer}");
-                    Line($"call void @sable_retain(ptr {held})");
+                    RetainBuffer(held);
                     Line($"{first} = add i64 {start}, {from}");
                     _names[builtin] = MakeSlice(slice, held, first, length);
                     return;
@@ -6426,6 +6435,13 @@ public sealed partial class LlvmEmitter {
             var element = Fresh();
             Line($"{element} = phi ptr [ {direct}, %{fast} ], [ {called}, %{slow} ]");
             return element;
+        }
+
+        /// <summary>A buffer retained, unless it is an array literal's, which is immortal and is never counted.</summary>
+        void RetainBuffer(string buffer) {
+            if (!buffer.StartsWith("@.array.", StringComparison.Ordinal)) {
+                Line($"call void @sable_retain(ptr {buffer})");
+            }
         }
 
         /// <summary>Part of a slice: 0 its buffer, 1 where its run starts, 2 its count.</summary>

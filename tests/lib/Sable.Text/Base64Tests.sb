@@ -214,3 +214,113 @@ fn bitsTheBytesDoNotUseAreRejected() {
     assertEqual(decodeError("Zm9vZm9"), .TrailingBits(at: 6))
     assertBytes(try! Base64.decode("Zg=="), [0x66])
 }
+
+// ---- Against the definition, a group at a time ---------------------------
+// Every length from 0 to 130 and from several starts, so that each of the
+// loops that take many at once, and what they leave, is held to it.
+
+fn plainDigits(_ alphabet: Base64.Alphabet) -> U8[>..] {
+    let same = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    return (same + (alphabet == .Standard ? "+/" : "-_")).utf8Bytes()
+}
+
+fn plainBase64(_ bytes: U8[:], _ alphabet: Base64.Alphabet, padding: Bool) -> U8[>..] {
+    let digits = plainDigits(alphabet)
+    var text: U8[>..] = []
+    var bits = 0
+    var held = 0
+    for byte in bytes {
+        bits = bits << 8 | Int(byte)
+        held += 8
+        while held >= 6 {
+            held -= 6
+            text.append(digits[bits >> held & 63])
+        }
+        bits = bits & 0xFF
+    }
+    if held > 0 {
+        text.append(digits[bits << (6 - held) & 63])
+    }
+    while padding && text.count % 4 != 0 {
+        text.append(0x3D)
+    }
+    return text
+}
+
+@test
+fn everyLengthAndStartEncodesAndDecodesAsTheDefinition() {
+    var random = SeededRandomNumberGenerator(seed: 229)
+    var all: U8[>..] = []
+    for _ in 0..<140 {
+        all.append(U8.random(in: 0...255, using: &random))
+    }
+    for alphabet in [.Standard, .UrlSafe] as Base64.Alphabet[>..] {
+        for start in 0..<4 {
+            for n in 0...130 {
+                let bytes = all[start..<(start + n)]
+                for padding in [true, false] as Bool[>..] {
+                    let expected = plainBase64(bytes, alphabet, padding: padding)
+                    assertBytes(Base64.encode(bytes, alphabet: alphabet, padding: padding).utf8Bytes(), expected)
+                    // Digits outside the slice are not read: they would be decoded.
+                    var text: U8[>..] = [0x41, 0x42, 0x43]
+                    text.append(contentsOf: expected)
+                    let end = text.count
+                    text.append(contentsOf: [0x44, 0x45, 0x46, 0x47])
+                    assertBytes(try! Base64.decode(bytes: text[3..<end], alphabet: alphabet), bytes)
+                }
+                var buffer = ByteBuffer()
+                buffer.write([0xAA])
+                Base64.encode(bytes, into: &buffer, alphabet: alphabet)
+                assertBytes(buffer.bytes[1...], plainBase64(bytes, alphabet, padding: true))
+            }
+        }
+    }
+}
+
+@test
+fn everyValueOfEverySixBitsAtEveryPosition() {
+    // A group's four digits each take each of their 64 values.
+    for alphabet in [.Standard, .UrlSafe] as Base64.Alphabet[>..] {
+        let digits = plainDigits(alphabet)
+        var text = U8[>..](repeating: 0x41, count: 48)
+        for at in 0..<48 {
+            for value in 0..<64 {
+                text[at] = digits[value]
+                let bytes = try! Base64.decode(bytes: text, alphabet: alphabet)
+                let group = Int(bytes[at / 4 * 3]) << 16 | Int(bytes[at / 4 * 3 + 1]) << 8 | Int(bytes[at / 4 * 3 + 2])
+                assertEqual(group >> (18 - at % 4 * 6), value)
+                assertBytes(Base64.encode(bytes, alphabet: alphabet).utf8Bytes(), text)
+            }
+            text[at] = 0x41
+        }
+    }
+}
+
+@test
+fn everyByteThatIsNoDigitIsFoundAtEveryPositionOfALongText() {
+    for alphabet in [.Standard, .UrlSafe] as Base64.Alphabet[>..] {
+        let digits = plainDigits(alphabet)
+        var text = plainBase64(sample(60), alphabet, padding: true)
+        for at in 0..<(text.count - 1) {
+            let held = text[at]
+            for value in 0..<256 {
+                let byte = U8(value)
+                text[at] = byte
+                var thrown: DecodeError? = none
+                do {
+                    let _ = try Base64.decode(bytes: text, alphabet: alphabet)
+                } catch {
+                    thrown = error
+                }
+                if digits.contains(byte) {
+                    assert(thrown == none)
+                } else if byte == 0x3D {
+                    assert(thrown == .InvalidPadding(at: at))
+                } else {
+                    assert(thrown == .InvalidCharacter(at: at, byte: byte))
+                }
+            }
+            text[at] = held
+        }
+    }
+}

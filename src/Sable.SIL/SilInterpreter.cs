@@ -2274,6 +2274,22 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return null;
             }
 
+            case "array_append_all": {
+                var (source, from, count) = ElementsOf(operands[1]);
+                if (count > 0) {
+                    var element = ((SliceType)builtin.Operands[1].Type).Element;
+                    var added = source!.Elements.GetRange(from, count);
+                    var array = Unique(builtin.Operands[0], (IReference)operands[0]!);
+                    array.Elements.EnsureCapacity(array.Elements.Count + count);
+                    foreach (var value in added) {
+                        Retain(element, value);
+                        array.Elements.Add(value);
+                    }
+                }
+
+                return null;
+            }
+
             case "array_append_repeating": {
                 var count = (long)operands[2]!;
                 if (count < 0) {

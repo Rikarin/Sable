@@ -18,6 +18,14 @@ public struct Utf16 {
     public static fn validate(_ units: U16[:]) -> Int? {
         var i = 0
         while i < units.count {
+            // Sixteen units with no surrogate among them at a time.
+            if units.count - i >= 16 {
+                let v = SIMD<U16, 16>.load(from: units, at: i) &- SIMD<U16, 16>(repeating: 0xD800)
+                if v.reduceMin() >= 0x800 {
+                    i += 16
+                    continue
+                }
+            }
             let unit = units[i]
             if unit >= 0xD800 && unit <= 0xDBFF {
                 if i + 1 >= units.count || !Utf16.isTrailing(units[i + 1]) {

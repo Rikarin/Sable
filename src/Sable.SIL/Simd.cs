@@ -62,6 +62,9 @@ public static class SimdBuiltins {
 
     static SilType ElementOf(SilType array) => array is SliceType slice ? slice.Element : ((ArrayType)array).Element;
 
+    /// <summary>The bits of a lane of a number.</summary>
+    public static int LaneBits(SilType element) => SilType.FloatBits(element) ?? SilType.IntegerInfo(element)!.Value.Bits;
+
     /// <summary>The operation of a <c>simd_</c> builtin: <c>add</c> of <c>simd_add</c>.</summary>
     public static string Op(string name) => name[Prefix.Length..];
 
@@ -74,7 +77,7 @@ public static class SimdBuiltins {
     /// </summary>
     public static bool IsPure(string name, IReadOnlyList<SilType> operands) {
         var op = Op(name);
-        if (op is "splat" or "select" or "concat" or "low_half" or "high_half" or "zip_low" or "zip_high" or "unzip_even" or "unzip_odd" or "convert" or "mask_bits"
+        if (op is "splat" or "select" or "concat" or "low_half" or "high_half" or "zip_low" or "zip_high" or "unzip_even" or "unzip_odd" or "convert" or "reinterpret" or "lookup" or "mask_bits"
             || Reductions.Contains(op)) {
             return true;
         }
@@ -106,8 +109,9 @@ public static class SimdBuiltins {
 
             // The lanes written over N elements from the index on, of an
             // array or a slice where it is, made the only reference to its
-            // elements first; traps unless all are in it.
-            case "store" when operands is [AddressType { Pointee: SliceType or ArrayType } address, VectorType vector, var at]
+            // elements first; traps unless all are in it. A 'store_unique' is of
+            // one already made the only reference (HoistUniqueness).
+            case "store" or "store_unique" when operands is [AddressType { Pointee: SliceType or ArrayType } address, VectorType vector, var at]
                                 && at == SilType.Int && vector.Element == ElementOf(address.Pointee) && vector.Element != SilType.Bool:
                 return new([address, vector, SilType.Int], SilType.Unit);
 
@@ -126,6 +130,11 @@ public static class SimdBuiltins {
             // Lanes picked by index — an Int, or a byte — as many as there are indices: each index outside 0..<N traps.
             case "swizzle" when operands is [VectorType vector, VectorType { Element: var index } indices] && (index == SilType.Int || index == SilType.U8):
                 return new([vector, indices], new VectorType(vector.Element, indices.Count));
+
+            // Bytes looked up in a table of them: a byte outside the table is zero.
+            case "lookup" when operands is [VectorType { Element: var entry } table, VectorType { Element: var byWhich } indices]
+                               && entry == SilType.U8 && byWhich == SilType.U8 && (table.Count & (table.Count - 1)) == 0:
+                return new([table, indices], new VectorType(SilType.U8, indices.Count));
 
             // A mask's lanes as bits, lane i's at bit i, the rest zero.
             case "mask_bits" when operands is [VectorType { Element: var maskLane } mask] && maskLane == SilType.Bool:
@@ -151,6 +160,13 @@ public static class SimdBuiltins {
             case "convert" when operands is [VectorType { Element: var from } source] && result is VectorType { Element: var to } target
                                 && target.Count == source.Count && from != SilType.Bool && to != SilType.Bool:
                 return new([source], target);
+
+            // The same bits as lanes of another type, as many as the bits
+            // make: the first lane's least significant byte the first.
+            case "reinterpret" when operands is [VectorType { Element: var held } whole] && result is VectorType { Element: var seen } view
+                                    && held != SilType.Bool && seen != SilType.Bool
+                                    && whole.Count * LaneBits(held) == view.Count * LaneBits(seen):
+                return new([whole], view);
 
             // An integer's sum wraps; a float's is added in halves, pairwise
             // (lane i with lane i + N/2, and so on down), which natively and

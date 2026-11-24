@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace Sable.SIL;
 
 /// <summary>
@@ -56,7 +58,7 @@ public sealed partial class SilInterpreter {
                 return new SimdValue(lanes);
             }
 
-            case "store": {
+            case "store" or "store_unique": {
                 var lanes = Lanes(operands[1]);
                 var at = (long)operands[2]!;
                 if (at < 0 || at > long.MaxValue - lanes.Length) {
@@ -91,6 +93,11 @@ public sealed partial class SilInterpreter {
             case "swizzle": {
                 var (lanes, indices) = (Lanes(operands[0]), Lanes(operands[1]));
                 return new SimdValue([..indices.Select(index => lanes[(int)LaneIndex(Convert.ToInt64(index), lanes.Length)])]);
+            }
+
+            case "lookup": {
+                var (table, indices) = (Lanes(operands[0]), Lanes(operands[1]));
+                return new SimdValue([..indices.Select(index => (long)index! < table.Length ? table[(long)index!] : 0L)]);
             }
 
             case "mask_bits": {
@@ -142,6 +149,18 @@ public sealed partial class SilInterpreter {
             }
         }
 
+        if (op == "reinterpret") {
+            var (held, seen) = ((VectorType)builtin.Operands[0].Type, (VectorType)builtin.Type);
+            var bits = BigInteger.Zero;
+            var width = SimdBuiltins.LaneBits(held.Element);
+            for (var i = held.Count - 1; i >= 0; i--) {
+                bits = bits << width | BitsOfLane(held.Element, Lanes(operands[0])[i]);
+            }
+
+            var each = SimdBuiltins.LaneBits(seen.Element);
+            return new SimdValue([..Enumerable.Range(0, seen.Count).Select(i => LaneOfBits(seen.Element, (ulong)(bits >> i * each & ulong.MaxValue)))]);
+        }
+
         var element = ((VectorType)builtin.Operands[0].Type).Element;
         if (SimdBuiltins.Reductions.Contains(op)) {
             return Reduce(op, element, Lanes(operands[0]));
@@ -161,6 +180,27 @@ public sealed partial class SilInterpreter {
         }
 
         return new SimdValue(result);
+    }
+
+    /// <summary>A lane's bits, in the low bits of the result.</summary>
+    static ulong BitsOfLane(SilType element, object? lane) {
+        if (SilType.IsFloat(element)) {
+            return BitsOfLane(SilType.U64, ByteOrder($"bitcast_{element}_U{SilType.FloatBits(element)}", [lane]));
+        }
+
+        var mask = ulong.MaxValue >> (64 - SilType.IntegerInfo(element)!.Value.Bits);
+        return (lane is ulong unsigned ? unsigned : unchecked((ulong)(long)lane!)) & mask;
+    }
+
+    /// <summary>The lane of these bits, the low ones of the value, held as the interpreter holds one of its type.</summary>
+    static object? LaneOfBits(SilType element, ulong bits) {
+        if (SilType.IsFloat(element)) {
+            var width = SilType.FloatBits(element)!.Value;
+            var low = bits & ulong.MaxValue >> (64 - width);
+            return ByteOrder($"bitcast_U{width}_{element}", [width == 64 ? low : (object)(long)low]);
+        }
+
+        return WrapNumber(bits, SilType.U64, element);
     }
 
     /// <summary>A lane's index, which traps outside 0..<count.</summary>

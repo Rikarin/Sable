@@ -1,0 +1,439 @@
+module Sable.Math
+
+// BigInt as text and from it, in any radix from 2 to 36. A radix that is a
+// power of two is a matter of bits: each digit is a few of them, read or
+// written in one pass. Any other works in chunks of as many digits as fit
+// a limb (19 decimal ones), and a long number is cut in half by a power of
+// the chunk's base, each half written or read the same way, so that a
+// number of n digits costs a division or a multiplication of n digits a
+// level, and not n² of one-limb steps: 10⁵ digits in milliseconds.
+
+/// Below this many limbs a number is written by dividing buffer a chunk at a
+/// time, and below this many chunks read by multiplying one in at a time.
+let TEXT_BASE_CASE = 20
+
+extension BigInt {
+    /// The number in decimal: what `"\(x)"` writes.
+    ///
+    /// ```sable
+    /// assert(BigInt(-1234).toString() == "-1234")
+    /// ```
+    public fn toString() -> String {
+        return toString(radix: 10)
+    }
+
+    /// The number in the radix, 2 to 36 (another traps), with letters past
+    /// 9, lowercase unless asked otherwise; a '-' before a negative one.
+    ///
+    /// ```sable
+    /// assert(BigInt(255).toString(radix: 16) == "ff")
+    /// assert(BigInt(-255).toString(radix: 16, uppercase: true) == "-FF")
+    /// assert(BigInt(2).pow(64).toString(radix: 36) == "3w5e11264sgsg")
+    /// ```
+    public fn toString(radix: Int, uppercase: Bool = false) -> String {
+        precondition(radix >= 2 && radix <= 36, "a radix must be 2 to 36, not \(radix)")
+        var bytes: U8[>..] = []
+        if negative {
+            bytes.append(45)
+        }
+        magnitude.appendDigits(radix, uppercase, &bytes)
+        unsafe {
+            return Runtime.stringFromValidUtf8(bytes)
+        }
+    }
+
+    /// The digits of the value, which is not negative, in the radix, the
+    /// most significant first, added to the bytes as ASCII.
+    fn appendDigits(_ radix: Int, _ uppercase: Bool, _ buffer: inout U8[>..]) {
+        if large.isEmpty {
+            appendChunk(U64(small), 0, radix, uppercase, &buffer)
+            return
+        }
+        if (radix & (radix - 1)) == 0 {
+            appendBitDigits(large, radix.trailingZeroCount, uppercase, &buffer)
+            return
+        }
+        let (digits, base) = chunkOf(radix)
+        // powers[i] is base^(2^i); the value is less than the last squared.
+        var powers: BigInt[>..] = [BigInt(base)]
+        let bits = bitLength
+        while 2 * (powers[powers.count - 1].bitLength - 1) < bits {
+            let last = powers[powers.count - 1]
+            powers.append(last * last)
+        }
+        appendChunks(self, powers.count, 0, powers, digits, base, radix, uppercase, &buffer)
+    }
+}
+
+/// How many digits of the radix fit a limb, and the base they make: the
+/// greatest power of the radix a U64 holds.
+fn chunkOf(_ radix: Int) -> (Int, U64) {
+    let r = U64(radix)
+    var base: U64 = r
+    var digits = 1
+    while base <= U64.max / r {
+        base = base * r
+        digits = digits + 1
+    }
+    return (digits, base)
+}
+
+/// A digit's ASCII byte.
+fn digitByte(_ digit: U64, _ uppercase: Bool) -> U8 {
+    if digit < 10 {
+        return 48 + (digit unchecked as U8)
+    }
+    let offset: U8 = uppercase ? 55 : 87
+    return offset + (digit unchecked as U8)
+}
+
+/// One chunk's digits added to the bytes: exactly 'width' of them, zeros
+/// first, or as few as it takes (one for zero) with a width of 0.
+fn appendChunk(_ value: U64, _ width: Int, _ radix: Int, _ uppercase: Bool, _ buffer: inout U8[>..]) {
+    let r = U64(radix)
+    var count = width
+    if count == 0 {
+        var rest = value / r
+        count = 1
+        while rest != 0 {
+            rest = rest / r
+            count = count + 1
+        }
+    }
+    let start = buffer.count
+    var i = 0
+    while i < count {
+        buffer.append(48)
+        i = i + 1
+    }
+    var rest = value
+    var at = start + count - 1
+    while rest != 0 {
+        buffer[at] = digitByte(rest % r, uppercase)
+        rest = rest / r
+        at = at - 1
+    }
+}
+
+/// The digits of the value — not negative, less than powers[level - 1]
+/// squared — exactly 'width' of them, or as few as it takes with a width of
+/// 0: cut by powers[level - 1] into a high half and a low one of exactly
+/// half the digits, down to a number short enough to divide a chunk at a
+/// time.
+fn appendChunks(_ value: BigInt, _ level: Int, _ width: Int, _ powers: BigInt[:], _ digits: Int, _ base: U64, _ radix: Int, _ uppercase: Bool, _ buffer: inout U8[>..]) {
+    if level == 0 || value.limbCount <= TEXT_BASE_CASE {
+        var limbs = value.limbView
+        var chunks: U64[>..] = []
+        while limbs.count > 0 {
+            chunks.append(divideSmallInPlace(&limbs, base))
+            while limbs.count > 0 && limbs[limbs.count - 1] == 0 {
+                let _ = limbs.removeLast()
+            }
+        }
+        var top: U64 = 0
+        if chunks.count > 0 {
+            top = chunks.removeLast()
+        }
+        // The top chunk's own digits; the rest's are all there.
+        var topWidth = 0
+        if width > 0 {
+            topWidth = width - chunks.count * digits
+        }
+        appendChunk(top, topWidth, radix, uppercase, &buffer)
+        var i = chunks.count - 1
+        while i >= 0 {
+            appendChunk(chunks[i], digits, radix, uppercase, &buffer)
+            i = i - 1
+        }
+        return
+    }
+    let half = digits << (level - 1)
+    let (high, low) = value.divRem(powers[level - 1])
+    if width == 0 && high.isZero {
+        appendChunks(low, level - 1, 0, powers, digits, base, radix, uppercase, &buffer)
+        return
+    }
+    appendChunks(high, level - 1, width == 0 ? 0 : width - half, powers, digits, base, radix, uppercase, &buffer)
+    appendChunks(low, level - 1, half, powers, digits, base, radix, uppercase, &buffer)
+}
+
+/// The digits of a magnitude in a radix that is two to the 'bits': each
+/// digit those bits of it, the most significant first.
+fn appendBitDigits(_ magnitude: U64[:], _ bits: Int, _ uppercase: Bool, _ buffer: inout U8[>..]) {
+    let total = limbBitLength(of: magnitude)
+    var d = (total + bits - 1) / bits - 1
+    let mask: U64 = (1 << U64(bits)) - 1
+    while d >= 0 {
+        let position = d * bits
+        let limb = position / 64
+        let offset = position % 64
+        var digit = magnitude[limb] >> U64(offset)
+        if offset + bits > 64 && limb + 1 < magnitude.count {
+            digit = digit | (magnitude[limb + 1] << U64(64 - offset))
+        }
+        buffer.append(digitByte(digit & mask, uppercase))
+        d = d - 1
+    }
+}
+
+extension BigInt: Formattable {
+    /// The number as the spec says: in decimal, or in the radix of `x`,
+    /// `X`, `o` or `b` (`#` writes its `0x`); with a sign, separators and
+    /// padding as asked. A float's kind writes it as the nearest F64.
+    ///
+    /// ```sable
+    /// let n = BigInt(2).pow(70)
+    /// assert("\(n:x)" == "400000000000000000")
+    /// assert("\(n:,)" == "1,180,591,620,717,411,303,424")
+    /// assert("\(-BigInt(42):+06)" == "-00042")
+    /// assert("\(BigInt(255):#b)" == "0b11111111")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String {
+        let kind = spec.kind
+        if kind == .Exponent || kind == .UpperExponent || kind == .Fixed || kind == .General || kind == .UpperGeneral || kind == .Percent {
+            return F64.converting(self).format(spec)
+        }
+        var radix = 10
+        var marker = ""
+        if kind == .Hex || kind == .UpperHex {
+            radix = 16
+            marker = "0x"
+        } else if kind == .Octal {
+            radix = 8
+            marker = "0o"
+        } else if kind == .Binary {
+            radix = 2
+            marker = "0b"
+        }
+        let digits = magnitude.toString(radix: radix, uppercase: kind == .UpperHex)
+        if spec.width == 0 && spec.separator == none && spec.sign == .Negative && !spec.alternate {
+            return negative ? "-" + digits : digits
+        }
+        let sign = negative ? "-" : spec.sign == .Always ? "+" : spec.sign == .Space ? " " : ""
+        let lead = sign + (spec.alternate ? marker : "")
+        let size = radix == 10 ? 3 : 4
+        var whole = digits
+        if spec.zeroPadded {
+            // The fewest digits that, grouped, fill the room.
+            let room = spec.width - lead.count
+            var count = digits.count
+            let marks = spec.separator == none ? 0 : 1
+            while count + marks * ((count - 1) / size) < room {
+                count = count + 1
+            }
+            whole = "0".repeated(count - digits.count) + digits
+        }
+        let text = lead + grouped(whole, size, spec.separator)
+        // Padded as a number is: on the left, unless the spec says otherwise.
+        let missing = spec.width - text.count
+        if missing <= 0 {
+            return text
+        }
+        let fill = String.fromChar(spec.fill)
+        return match spec.alignment {
+            case .Left   => text + fill.repeated(missing)
+            case .Center => fill.repeated(missing / 2) + text + fill.repeated(missing - missing / 2)
+            case _       => fill.repeated(missing) + text
+        }
+    }
+}
+
+/// The digits with the separator between each group of 'size', counted
+/// from the right; as they are without one.
+fn grouped(_ digits: String, _ size: Int, _ separator: Char?) -> String {
+    if let mark = separator {
+        if digits.count <= size {
+            return digits
+        }
+        var pieces: String[>..] = []
+        var start = digits.count % size
+        if start == 0 {
+            start = size
+        }
+        pieces.append(digits.slice(from: 0, to: start))
+        while start < digits.count {
+            pieces.append(digits.slice(from: start, to: start + size))
+            start = start + size
+        }
+        return Runtime.joinStrings(pieces, String.fromChar(mark))
+    }
+    return digits
+}
+
+extension BigInt: Debug {
+    /// The number in decimal, as source would write it in `BigInt(...)`'s
+    /// place.
+    public fn debugDescription() -> String {
+        return toString()
+    }
+}
+
+extension BigInt: Parsable {
+    /// The number the text writes in decimal, with a sign if it likes: what
+    /// `format` writes with nothing said. Any number of digits; none is
+    /// `.Empty`, and anything but a digit `.InvalidDigit`.
+    ///
+    /// ```sable
+    /// let n = try! BigInt.parse("-340282366920938463463374607431768211456")
+    /// assert(n == -BigInt(2).pow(128))
+    /// ```
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> BigInt {
+        return try BigInt.parse(text, radix: 10, styles: .Sign)
+    }
+
+    /// The number the text writes in the radix — 2 to 36, with letters of
+    /// either case past 9; another traps — with what else the styles
+    /// allow: white space, a sign, the radix's prefix, separators.
+    ///
+    /// ```sable
+    /// assert(try! BigInt.parse("0xffff_ffff_ffff_ffff_ffff", radix: 16, styles: .Any) == BigInt(2).pow(80) - BigInt(1))
+    /// assert(try! BigInt.parse("zz", radix: 36) == BigInt(1295))
+    /// ```
+    public static fn parse<S: StringProtocol>(_ text: S, radix: Int, styles: NumberStyles = .Sign) throws(ParseError) -> BigInt {
+        precondition(radix >= 2 && radix <= 36, "a radix must be 2 to 36, not \(radix)")
+        var scalars: Char[>..] = []
+        for c in text {
+            scalars.append(c)
+        }
+        var start = 0
+        var end = scalars.count
+        if styles.contains(.LeadingWhite) {
+            while start < end && scalars[start].isWhitespace {
+                start = start + 1
+            }
+        }
+        if styles.contains(.TrailingWhite) {
+            while end > start && scalars[end - 1].isWhitespace {
+                end = end - 1
+            }
+        }
+        if start == end {
+            throw .Empty
+        }
+        var i = start
+        var negative = false
+        let first = scalars[i]
+        if (first == '+' || first == '-') && styles.contains(.Sign) {
+            negative = first == '-'
+            i = i + 1
+        }
+        if styles.contains(.Prefix) && i + 1 < end && scalars[i] == '0' {
+            let mark = scalars[i + 1]
+            if radix == 16 && (mark == 'x' || mark == 'X') || radix == 8 && (mark == 'o' || mark == 'O') || radix == 2 && (mark == 'b' || mark == 'B') {
+                i = i + 2
+            }
+        }
+
+        // The digits' values, the most significant first.
+        var digits: U8[>..] = []
+        digits.reserveCapacity(end - i)
+        var wanted = true
+        while i < end {
+            let c = scalars[i]
+            let digit = digitValue(c)
+            if digit < radix {
+                digits.append(U8(digit))
+                wanted = false
+            } else if !wanted && i + 1 < end && (c == '_' && styles.contains(.Separators) || c == ',' && styles.contains(.Thousands)) {
+                wanted = true
+            } else {
+                throw .InvalidDigit(at: i)
+            }
+            i = i + 1
+        }
+        if wanted {
+            throw .InvalidDigit(at: i)
+        }
+        let magnitude = BigInt.fromDigits(digits, radix)
+        return negative ? -magnitude : magnitude
+    }
+
+    /// The number the digits' values write in the radix, the most
+    /// significant first.
+    static fn fromDigits(_ digits: U8[:], _ radix: Int) -> BigInt {
+        if (radix & (radix - 1)) == 0 {
+            // Each digit its bits, packed from the least significant up.
+            let bits = radix.trailingZeroCount
+            var limbs = zeroLimbs((digits.count * bits + 63) / 64 + 1)
+            var position = 0
+            var d = digits.count - 1
+            while d >= 0 {
+                let value = U64(digits[d])
+                let limb = position / 64
+                let offset = position % 64
+                limbs[limb] = limbs[limb] | (value << U64(offset))
+                if offset + bits > 64 {
+                    limbs[limb + 1] = limbs[limb + 1] | (value >> U64(64 - offset))
+                }
+                position = position + bits
+                d = d - 1
+            }
+            return BigInt.make(false, limbs)
+        }
+        // Chunks of as many digits as fit a limb, the least significant
+        // first; the most significant may be short.
+        let (width, base) = chunkOf(radix)
+        let r = U64(radix)
+        var chunks: U64[>..] = []
+        chunks.reserveCapacity(digits.count / width + 1)
+        var end = digits.count
+        while end > 0 {
+            let start = end > width ? end - width : 0
+            var value: U64 = 0
+            var k = start
+            while k < end {
+                value = value * r + U64(digits[k])
+                k = k + 1
+            }
+            chunks.append(value)
+            end = start
+        }
+        // powers[i] is base^(2^i), as far as the halves need.
+        var powers: BigInt[>..] = [BigInt(base)]
+        while (1 << powers.count) < chunks.count {
+            let last = powers[powers.count - 1]
+            powers.append(last * last)
+        }
+        return BigInt.fromChunks(chunks, 0, chunks.count, powers, base)
+    }
+
+    /// The number chunks 'from' up to 'to' write in the base: the low ones
+    /// a power of two of them, multiplied by base to that many and added to
+    /// the high ones; one at a time below the base case.
+    static fn fromChunks(_ chunks: U64[:], _ from: Int, _ to: Int, _ powers: BigInt[:], _ base: U64) -> BigInt {
+        let count = to - from
+        if count <= TEXT_BASE_CASE {
+            var limbs: U64[>..] = []
+            var i = to - 1
+            while i >= from {
+                limbs = mulAddSmall(trimmed(limbs), base, chunks[i])
+                i = i - 1
+            }
+            return BigInt.make(false, limbs)
+        }
+        var level = 0
+        while (2 << level) < count {
+            level = level + 1
+        }
+        let split = from + (1 << level)
+        let high = BigInt.fromChunks(chunks, split, to, powers, base)
+        let low = BigInt.fromChunks(chunks, from, split, powers, base)
+        return high * powers[level] + low
+    }
+}
+
+/// A scalar's value as a digit, in any radix up to 36 — letters of either
+/// case past 9 — or 99 for one that is no digit at all.
+fn digitValue(_ c: Char) -> Int {
+    let code = c.codePoint
+    if code >= 48 && code <= 57 {
+        return code - 48
+    }
+    if code >= 97 && code <= 122 {
+        return code - 87
+    }
+    if code >= 65 && code <= 90 {
+        return code - 55
+    }
+    return 99
+}

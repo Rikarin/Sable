@@ -53,6 +53,13 @@ public protocol BinaryInteger: Numeric, Comparable, Hashable {
     /// of any width go through it (see 'truncating', 'exactly', 'clamping').
     var wideBitPattern: U128 { get }
 
+    /// Whether 'wideBitPattern' is the whole value — read as an I128 when
+    /// the value is negative, as a U128 when it is not: always for a
+    /// fixed-width integer, and for an integer of any size (Sable.Math's
+    /// BigInt) from -2¹²⁷ up to 2¹²⁸. Conversions that must not lose the
+    /// value ('exactly', 'clamping', a float's 'converting') look at it.
+    var fitsWideBitPattern: Bool { get }
+
     /// The value whose bits are the low ones of the pattern: the other
     /// half of 'wideBitPattern'.
     static fn fromWideBitPattern(_ bits: U128) -> Self
@@ -98,6 +105,9 @@ extension BinaryInteger {
     /// The built-in integers' widening, as 'unchecked as U128' does it.
     @builtin("wrap_Self_U128")
     public var wideBitPattern: U128 { get }
+
+    /// The built-in integers' 128 bits hold every one of their values.
+    public var fitsWideBitPattern: Bool => true
 
     /// The built-in integers' narrowing, as 'unchecked as' does it.
     @builtin("wrap_U128_Self")

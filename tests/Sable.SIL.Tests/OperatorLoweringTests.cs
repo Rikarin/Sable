@@ -167,4 +167,33 @@ public sealed class OperatorLoweringTests {
         Assert.Equal(true, Run(module, "withAValue"));
         Assert.Equal(true, Run(module, "ofTuples"));
     }
+
+    [Theory]
+    [InlineData(GenericsMode.Specialised)]
+    [InlineData(GenericsMode.Unspecialised)]
+    public void AnOperatorOverloadedByItsOperandTypeMeetsTheRequirementWithSelf(GenericsMode mode) {
+        // Two '>>'s with the same labels: the protocol's is met by the one
+        // that takes the type itself, wherever the other is declared.
+        using var _ = SilGen.UseGenerics(mode);
+        var module = Lower(
+            """
+            protocol Halving {
+                operator >> (lhs: Self, rhs: Self) -> Self
+                static var two: Self { get }
+            }
+            struct Count: Halving {
+                var n: Int
+                operator >> (lhs: Count, rhs: Int) -> Count { return Count(n: lhs.n * 1000 + rhs) }
+                operator >> (lhs: Count, rhs: Count) -> Count { return Count(n: lhs.n >> rhs.n) }
+                static var two: Count => Count(n: 1)
+            }
+            fn halve<T: Halving>(_ x: T) -> T { return x >> T.two }
+            fn halved() -> Int { return halve(Count(n: 40)).n }
+            fn direct() -> Int { return (Count(n: 4) >> 5).n }
+            """
+        );
+
+        Assert.Equal(20L, Run(module, "halved"));
+        Assert.Equal(4005L, Run(module, "direct"));
+    }
 }

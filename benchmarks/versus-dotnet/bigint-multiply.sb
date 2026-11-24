@@ -1,0 +1,23 @@
+module BigIntMultiply
+
+// Multiplying BigInts against .NET's BigInteger: two numbers of about 10⁵
+// decimal digits (3^209590 and 7^118330, made by squaring), multiplied ten
+// times over — Toom-3 at the top, Karatsuba and schoolbook below.
+
+import Sable.Math
+
+@main
+fn main() {
+    let a = BigInt(3).pow(209590)
+    let b = BigInt(7).pow(118330)
+    var bits = 0
+    var low: U64 = 0
+    var i = 0
+    while i < 10 {
+        let product = a * (b + BigInt(i))
+        bits = bits + product.bitLength
+        low = low ^ U64.truncating(product)
+        i = i + 1
+    }
+    print("\(bits) \(low)")
+}

@@ -1,0 +1,400 @@
+module Sable.Math
+
+/// A signed integer of any size: .NET's `BigInteger`, Rust's `num-bigint`.
+/// Its arithmetic never overflows; it grows as its values need. It is a
+/// BinaryInteger and SignedNumeric like the built-in integers, so generic
+/// code over them takes it too, and its bit operations act as if on an
+/// infinite two's complement: `-1` has every bit set.
+///
+/// A value that fits an I64 is held in the BigInt itself, with nothing on
+/// the heap; a larger one is a run of 64-bit limbs, shared by copies until
+/// one changes. Multiplication is schoolbook, Karatsuba or Toom-3 as the
+/// numbers grow, and division Burnikel–Ziegler's recursive one, so either
+/// of two 10⁵-digit numbers takes milliseconds.
+///
+/// ```sable
+/// let big = BigInt(2).pow(100)
+/// assert("\(big)" == "1267650600228229401496703205376")
+/// let n = try! BigInt.parse("-123456789012345678901234567890")
+/// assert(n / BigInt(10).pow(20) == BigInt(-1234567890))
+/// assert(n % BigInt(1000) == BigInt(-890))
+/// ```
+public struct BigInt {
+    /// The value, while 'large' is empty; otherwise 1 or -1, its sign.
+    /// Either way, negative exactly when the value is.
+    var small: I64
+
+    /// The magnitude of a value no I64 holds, the least significant limb
+    /// first and the top one not zero; empty for a value an I64 holds.
+    var large: U64[>..]
+
+    /// The integer.
+    ///
+    /// ```sable
+    /// assert(BigInt(42) + BigInt(-50) == BigInt(-8))
+    /// ```
+    public init(_ value: Int) {
+        small = I64(value)
+        large = []
+    }
+
+    /// The integer, of any integer type.
+    ///
+    /// ```sable
+    /// assert(BigInt(U128.max) == BigInt(2).pow(128) - BigInt(1))
+    /// assert(BigInt(-5 as I8) == BigInt(-5))
+    /// ```
+    public init<T: BinaryInteger>(_ value: T) {
+        self = BigInt.converting(value)
+    }
+
+    /// A non-negative value from its limbs, the least significant first;
+    /// zero limbs at the top may be there.
+    init(magnitude: U64[:]) {
+        self = BigInt.make(false, magnitude.toArray())
+    }
+
+    /// The value from a sign and a magnitude, held as an I64 where it fits.
+    static fn make(_ negative: Bool, _ magnitude: U64[>..]) -> BigInt {
+        let n = significantCount(magnitude)
+        if n == 0 {
+            return BigInt.zero
+        }
+        if n == 1 {
+            let x = magnitude[0]
+            if !negative && x <= 9223372036854775807 {
+                return BigInt { small: x unchecked as I64, large: [] }
+            }
+            if negative && x <= 9223372036854775808 {
+                return BigInt { small: 0 &- (x unchecked as I64), large: [] }
+            }
+        }
+        var limbs = magnitude
+        if n < limbs.count {
+            limbs.removeLast(limbs.count - n)
+        }
+        return BigInt { small: negative ? -1 : 1, large: limbs }
+    }
+
+    /// The value of any integer: through its 128 bits where they hold it,
+    /// 64 bits at a time otherwise.
+    static fn converting<T: BinaryInteger>(_ value: T) -> BigInt {
+        if value.fitsWideBitPattern {
+            if value < T.zero {
+                return BigInt.fromWideBitPattern(value.wideBitPattern)
+            }
+            return BigInt.fromMagnitude(value.wideBitPattern)
+        }
+        let negative = value < T.zero
+        var rest = negative ? T.zero - value : value
+        let shift = T.fromWideBitPattern(64)
+        let mask = T.fromWideBitPattern(18446744073709551615)
+        var limbs: U64[>..] = []
+        while rest != T.zero {
+            limbs.append((rest & mask).wideBitPattern unchecked as U64)
+            rest = rest >> shift
+        }
+        return BigInt.make(negative, limbs)
+    }
+
+    /// A non-negative value of up to 128 bits.
+    static fn fromMagnitude(_ bits: U128) -> BigInt {
+        if bits <= 9223372036854775807 {
+            return BigInt { small: bits unchecked as I64, large: [] }
+        }
+        return BigInt.make(false, [bits unchecked as U64, (bits >> 64) unchecked as U64])
+    }
+
+    /// Whether it is less than zero.
+    var negative: Bool => small < 0
+
+    /// Its magnitude's limbs, the least significant first: none for zero.
+    var limbView: U64[>..] {
+        get {
+            if !large.isEmpty {
+                return large
+            }
+            if small == 0 {
+                return []
+            }
+            return [small.magnitude]
+        }
+    }
+
+    /// How many limbs its magnitude takes: 0 for zero.
+    var limbCount: Int => large.isEmpty ? (small == 0 ? 0 : 1) : large.count
+
+    /// The non-negative number in limbs 'from' up to 'to' of its magnitude:
+    /// zero where it has none.
+    fn limbs(from: Int, to: Int) -> BigInt {
+        let all = limbView
+        let end = to < all.count ? to : all.count
+        if from >= end {
+            return BigInt.zero
+        }
+        return BigInt(magnitude: all.slice(from: from, to: end))
+    }
+
+    /// The value times 2^(64·count): its limbs moved up.
+    fn shiftedLimbs(by count: Int) -> BigInt {
+        if count == 0 || (large.isEmpty && small == 0) {
+            return self
+        }
+        return BigInt.make(negative, shiftLimbsLeft(limbView, 0, limbs: count))
+    }
+
+    /// The quotient by a small divisor that divides it with nothing left
+    /// over, which is what Toom-3's interpolation divides by.
+    fn dividedExactly(by divisor: U64) -> BigInt {
+        var limbs = limbView
+        let _ = divideSmallInPlace(&limbs, divisor)
+        return BigInt.make(negative, limbs)
+    }
+
+    /// The sum of two signed magnitudes.
+    static fn signedSum(_ aNegative: Bool, _ a: U64[:], _ bNegative: Bool, _ b: U64[:]) -> BigInt {
+        if aNegative == bNegative {
+            return BigInt.make(aNegative, addLimbs(a, b))
+        }
+        let order = compareLimbs(a, b)
+        if order == 0 {
+            return BigInt.zero
+        }
+        if order > 0 {
+            return BigInt.make(aNegative, subLimbs(a, b))
+        }
+        return BigInt.make(bNegative, subLimbs(b, a))
+    }
+
+    // ---- Signs and magnitudes ------------------------------------------------
+
+    /// The value's distance from zero.
+    ///
+    /// ```sable
+    /// assert(BigInt(-7).magnitude == BigInt(7))
+    /// ```
+    public var magnitude: BigInt => negative ? -self : self
+
+    /// -1, 0 or 1, as the value is negative, zero or positive.
+    public var sign: Int => small < 0 ? -1 : small == 0 ? 0 : 1
+
+    /// Whether the value is 0.
+    public var isZero: Bool => small == 0
+
+    /// Whether the value is odd.
+    public var isOdd: Bool => large.isEmpty ? (small & 1) != 0 : (large[0] & 1) != 0
+
+    /// Whether the value is even.
+    public var isEven: Bool => !isOdd
+}
+
+// ---- Conformances -------------------------------------------------------------
+
+extension BigInt: SignedInteger {
+    /// 0.
+    public static var zero: BigInt => BigInt { small: 0, large: [] }
+
+    /// 1.
+    public static var one: BigInt => BigInt { small: 1, large: [] }
+
+    /// The sum.
+    ///
+    /// ```sable
+    /// let max = BigInt(I64.max)
+    /// assert(max + max == BigInt(18446744073709551614 as U64))
+    /// ```
+    public operator + (lhs: BigInt, rhs: BigInt) -> BigInt {
+        if lhs.large.isEmpty && rhs.large.isEmpty {
+            let (sum, overflowed) = lhs.small.overflowingAdd(rhs.small)
+            if !overflowed {
+                return BigInt { small: sum, large: [] }
+            }
+        }
+        return BigInt.signedSum(lhs.negative, lhs.limbView, rhs.negative, rhs.limbView)
+    }
+
+    /// The difference.
+    public operator - (lhs: BigInt, rhs: BigInt) -> BigInt {
+        if lhs.large.isEmpty && rhs.large.isEmpty {
+            let (difference, overflowed) = lhs.small.overflowingSub(rhs.small)
+            if !overflowed {
+                return BigInt { small: difference, large: [] }
+            }
+        }
+        return BigInt.signedSum(lhs.negative, lhs.limbView, !rhs.negative, rhs.limbView)
+    }
+
+    /// The product.
+    ///
+    /// ```sable
+    /// let n = BigInt(I64.max) * BigInt(I64.max)
+    /// assert("\(n)" == "85070591730234615847396907784232501249")
+    /// ```
+    public operator * (lhs: BigInt, rhs: BigInt) -> BigInt {
+        if lhs.large.isEmpty && rhs.large.isEmpty {
+            let (product, overflowed) = lhs.small.overflowingMul(rhs.small)
+            if !overflowed {
+                return BigInt { small: product, large: [] }
+            }
+        }
+        if lhs.isZero || rhs.isZero {
+            return BigInt.zero
+        }
+        return BigInt.make(lhs.negative != rhs.negative, mulLimbs(lhs.limbView, rhs.limbView))
+    }
+
+    /// The quotient, rounded toward zero. Dividing by zero traps.
+    ///
+    /// ```sable
+    /// assert(BigInt(-7) / BigInt(2) == BigInt(-3))
+    /// ```
+    public operator / (lhs: BigInt, rhs: BigInt) -> BigInt {
+        let (quotient, _) = lhs.divRem(rhs)
+        return quotient
+    }
+
+    /// The remainder of '/', with the dividend's sign. By zero it traps.
+    ///
+    /// ```sable
+    /// assert(BigInt(-7) % BigInt(2) == BigInt(-1))
+    /// ```
+    public operator % (lhs: BigInt, rhs: BigInt) -> BigInt {
+        let (_, remainder) = lhs.divRem(rhs)
+        return remainder
+    }
+
+    /// The quotient and the remainder of '/' and '%', at once: one
+    /// division for both.
+    ///
+    /// ```sable
+    /// let (q, r) = BigInt(10).pow(30).divRem(BigInt(7))
+    /// assert(q * BigInt(7) + r == BigInt(10).pow(30) && r == BigInt(1))
+    /// ```
+    public fn divRem(_ divisor: BigInt) -> (BigInt, BigInt) {
+        if divisor.isZero {
+            preconditionFailure("division by zero")
+        }
+        if large.isEmpty && divisor.large.isEmpty {
+            if small == I64.min && divisor.small == -1 {
+                return (BigInt.make(false, [9223372036854775808]), BigInt.zero)
+            }
+            return (BigInt { small: small / divisor.small, large: [] }, BigInt { small: small % divisor.small, large: [] })
+        }
+        let (quotient, remainder) = divRemLimbs(limbView, divisor.limbView)
+        return (BigInt.make(negative != divisor.negative, quotient), BigInt.make(negative, remainder))
+    }
+
+    /// The value with its sign turned over: never trapping.
+    ///
+    /// ```sable
+    /// assert(-BigInt(I64.min) == BigInt(I64.max) + BigInt(1))
+    /// ```
+    public prefix operator - (operand: BigInt) -> BigInt {
+        if operand.large.isEmpty {
+            if operand.small == I64.min {
+                return BigInt.make(false, [9223372036854775808])
+            }
+            return BigInt { small: 0 - operand.small, large: [] }
+        }
+        return BigInt.make(!operand.negative, operand.large)
+    }
+
+    /// Whether the two are the same number.
+    public operator == (lhs: BigInt, rhs: BigInt) -> Bool {
+        if lhs.small != rhs.small || lhs.large.count != rhs.large.count {
+            return false
+        }
+        return lhs.large.isEmpty || compareLimbs(lhs.large, rhs.large) == 0
+    }
+
+    /// Whether the left is the lesser.
+    public operator < (lhs: BigInt, rhs: BigInt) -> Bool {
+        return BigInt.compare(lhs, rhs) < 0
+    }
+
+    /// -1, 0 or 1 as the left is less than, equal to or greater than the
+    /// right.
+    static fn compare(_ lhs: BigInt, _ rhs: BigInt) -> Int {
+        if lhs.large.isEmpty && rhs.large.isEmpty {
+            return lhs.small < rhs.small ? -1 : lhs.small == rhs.small ? 0 : 1
+        }
+        if lhs.negative != rhs.negative {
+            return lhs.negative ? -1 : 1
+        }
+        // The same sign: the greater magnitude is further from zero.
+        let order = compareLimbs(lhs.limbView, rhs.limbView)
+        return lhs.negative ? 0 - order : order
+    }
+
+    /// Feeds the value to the hasher: equal values hash equal.
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(small)
+        for limb in large {
+            hasher.write(limb)
+        }
+    }
+
+    /// How many zero bits come below the lowest set bit: 0 for zero, which
+    /// has no width to give.
+    ///
+    /// ```sable
+    /// assert(BigInt(2).pow(100).trailingZeroCount == 100)
+    /// assert(BigInt(-8).trailingZeroCount == 3)
+    /// ```
+    public var trailingZeroCount: Int {
+        get {
+            if large.isEmpty {
+                return small == 0 ? 0 : small.trailingZeroCount
+            }
+            var i = 0
+            while large[i] == 0 {
+                i = i + 1
+            }
+            return i * 64 + large[i].trailingZeroCount
+        }
+    }
+
+    /// The low 128 bits of the value's two's complement.
+    public var wideBitPattern: U128 {
+        get {
+            if large.isEmpty {
+                return small.wideBitPattern
+            }
+            var bits = U128(large[0])
+            if large.count > 1 {
+                bits = bits | (U128(large[1]) << 64)
+            }
+            return negative ? 0 &- bits : bits
+        }
+    }
+
+    /// Whether 'wideBitPattern' is the whole value: from -2¹²⁷, I128's
+    /// least, up to 2¹²⁸, past U128's greatest.
+    public var fitsWideBitPattern: Bool {
+        get {
+            if large.count <= 1 {
+                return true
+            }
+            if large.count > 2 {
+                return false
+            }
+            return !negative || large[1] < 9223372036854775808 || large[1] == 9223372036854775808 && large[0] == 0
+        }
+    }
+
+    /// The value the bits are as an I128.
+    public static fn fromWideBitPattern(_ bits: U128) -> BigInt {
+        let value = I128.fromWideBitPattern(bits)
+        if value >= -9223372036854775808 && value <= 9223372036854775807 {
+            return BigInt { small: I64.truncating(value), large: [] }
+        }
+        let negative = value < 0
+        let magnitude = negative ? 0 &- bits : bits
+        return BigInt.make(negative, [magnitude unchecked as U64, (magnitude >> 64) unchecked as U64])
+    }
+}
+
+extension BigInt: Measurable {
+    /// The nearest F64: an infinity past F64's greatest.
+    public var measure: F64 => F64.converting(self)
+}

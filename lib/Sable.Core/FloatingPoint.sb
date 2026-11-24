@@ -168,10 +168,46 @@ extension FloatingPoint {
     /// assert(F16.converting(U64.max) == F16.infinity)
     /// ```
     public static fn converting<Source: BinaryInteger>(_ source: Source) -> Self {
-        if Source.isSigned {
+        if !source.fitsWideBitPattern {
+            return Self.convertingWide(source)
+        }
+        if Source.isSigned && source < Source.zero {
             return Self.rounding(wideInteger: I128.fromWideBitPattern(source.wideBitPattern))
         }
         return Self.rounding(wideMagnitude: source.wideBitPattern)
+    }
+
+    /// The float nearest an integer past 128 bits (Sable.Math's BigInt): its top bits, with the lowest set if any below them are,
+    /// rounded once and scaled by the power of two they were shifted down
+    /// by. With 128 bits kept and the rest folded into that one,
+    /// the rounding is the one the whole value would have had.
+    static fn convertingWide<Source: BinaryInteger>(_ source: Source) -> Self {
+        let negative = source < Source.zero
+        let magnitude = negative ? Source.zero - source : source
+        // The least shift that brings it under 2^128: doubled until one
+        // does, then halved between the two.
+        var low = 0
+        var high = 128
+        while !(magnitude >> Source.fromWideBitPattern(U128(high))).fitsWideBitPattern {
+            low = high
+            high = high * 2
+        }
+        while high - low > 1 {
+            let middle = (low + high) / 2
+            if (magnitude >> Source.fromWideBitPattern(U128(middle))).fitsWideBitPattern {
+                high = middle
+            } else {
+                low = middle
+            }
+        }
+        let shift = Source.fromWideBitPattern(U128(high))
+        let top = magnitude >> shift
+        var bits = top.wideBitPattern
+        if top << shift != magnitude {
+            bits = bits | 1
+        }
+        let value = Self.rounding(wideMagnitude: bits).scaled(byPowerOfTwo: high)
+        return negative ? Self.zero - value : value
     }
 
     /// The float equal to the integer, or none where the type cannot hold

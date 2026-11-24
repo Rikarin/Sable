@@ -6,6 +6,7 @@ module FloatingPointTests
 // has its constants. Run with
 //     tools/stdlib-coverage.sh Sable.Core
 
+import Sable.Math
 import Sable.Testing
 
 /// Generic, so that each requirement is reached through the protocol.
@@ -191,6 +192,20 @@ fn convertingAnIntGivesTheNearestValue() {
     assertEqual(F16.converting(U64.max), F16.infinity)
     assertEqual(F64.converting(U128.max), 3.402823669209385e38)
     assertEqual(F32.converting(I128.min), -1.7014118e38)
+}
+
+@test
+fn convertingAnIntegerOfAnySizeRoundsItOnce() {
+    // Sable.Math's BigInt: up to 2^128 through its 128 bits, past it
+    // through its top 128 with the rest folded into the lowest.
+    let top = (1.0).scaled(byPowerOfTwo: 200)
+    assertEqual(F64.converting(BigInt(2).pow(1000)), (1.0).scaled(byPowerOfTwo: 1000))
+    assertEqual(F64.converting(BigInt(2).pow(200) + BigInt(2).pow(147)), top)
+    assertEqual(F64.converting(-(BigInt(2).pow(200) + BigInt(2).pow(147) + BigInt(1))), -(top + (1.0).scaled(byPowerOfTwo: 148)))
+    assertEqual(F64.converting(BigInt(2).pow(128) - BigInt(1)), (1.0).scaled(byPowerOfTwo: 128))
+    assertEqual(F64.converting(-BigInt(2).pow(127)), -(1.0).scaled(byPowerOfTwo: 127))
+    assertEqual(F32.converting(BigInt(2).pow(128)), F32.infinity)
+    assertEqual(F64.converting(BigInt(2).pow(5000)), F64.infinity)
 }
 
 @test

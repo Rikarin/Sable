@@ -779,7 +779,11 @@ Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     generic over ElementaryFunctions; integer math; the
                     vector kernels over F32[:] and F64[:] (sum, dot,
                     cosineSimilarity, softmax, …: TensorPrimitives');
-                    Decimal (.NET's layout and rounding, below), BigInt,
+                    Decimal (.NET's layout and rounding, below);
+                    BigInt (an I64 inline, limbs past it; schoolbook,
+                    Karatsuba and Toom-3 products, Burnikel–Ziegler
+                    division, text in any radix by halves; pow, powMod,
+                    gcd, isqrt, two's-complement bits, bytes),
                     Matrix, Quaternion,
                     statistics generic over every number type (mean,
                     median, mode, quantiles, variance, covariance,

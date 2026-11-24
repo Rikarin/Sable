@@ -27,6 +27,9 @@ extension FixedWidthInteger {
     /// assert(U8.exactly(-1) == none)
     /// ```
     public static fn exactly<Source: BinaryInteger>(_ source: Source) -> Self? {
+        if !source.fitsWideBitPattern {
+            return none
+        }
         let bits = source.wideBitPattern
         let result = Self.fromWideBitPattern(bits)
         // It fits when nothing was cut off going down and coming back up,

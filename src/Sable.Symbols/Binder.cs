@@ -2861,7 +2861,7 @@ public sealed partial class Binder {
         // '-128' is checked as a whole, where it is negated.
         // An argument with no type asked of it yet is checked against its
         // parameter's, once the call has chosen one (Convert).
-        if (expectedType is null && literal.Parent is ArgumentSyntax) {
+        if (expectedType is null && IsArgumentLiteral(literal)) {
             _uncheckedArguments.Add(bound);
         } else if (literal.Parent is not PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.MinusToken }) {
             CheckIntegerFits(bound, type);
@@ -2869,6 +2869,14 @@ public sealed partial class Binder {
 
         return bound;
     }
+
+    /// <summary>
+    ///     Whether a literal is an argument's, or an element of an array
+    ///     literal that is — '[9223372036854775808]' passed for a 'U64[>..]' —
+    ///     whose type is the parameter's, known once the call has chosen one.
+    /// </summary>
+    static bool IsArgumentLiteral(SyntaxNode literal) =>
+        literal.Parent is ArgumentSyntax || (literal.Parent is ArrayExpressionSyntax { Parent: ArgumentSyntax });
 
     /// <summary>
     ///     Reports an integer literal that its type cannot hold — 'let x: I8 =
@@ -6825,8 +6833,10 @@ public sealed partial class Binder {
             // The first element said what the array holds; the others that
             // differ get there by a conversion — '[j, true]' of a 'Json'
             // puts the Bool in the union — and the array holds what it made.
+            // One already of that type is left as it is: an argument's
+            // literal is checked once the call says what its elements are.
             if (!elementType.IsError) {
-                elements = [..elements.Select(e => Convert(e, elementType, e.Syntax))];
+                elements = [..elements.Select(e => e.Type.Equals(elementType) ? e : Convert(e, elementType, e.Syntax))];
             }
         }
 
@@ -8352,7 +8362,7 @@ public sealed partial class Binder {
                 }
 
                 var negative = new BoundLiteral(syntax, type, negated);
-                if (expectedType is null && syntax.Parent is ArgumentSyntax) {
+                if (expectedType is null && IsArgumentLiteral(syntax)) {
                     _uncheckedArguments.Add(negative);
                 } else {
                     CheckIntegerFits(negative, type);
@@ -9075,6 +9085,18 @@ public sealed partial class Binder {
         if (checkedArgument) {
             var parameterType = target is OptionalTypeSymbol optionalTarget ? optionalTarget.UnderlyingType : target;
             CheckIntegerFits((BoundLiteral)expression, Core.IsNumeric(parameterType) ? parameterType : expression.Type);
+        }
+
+        // An argument's array literal whose elements keep their type: each
+        // literal of it checked against that type, as no conversion below
+        // will check it.
+        if (expression is BoundArray { Type: ArrayTypeSymbol keptArray } argumentArray
+            && (target is not ArrayTypeSymbol targetArray || keptArray.ElementType.Equals(targetArray.ElementType) || !argumentArray.Elements.All(static e => e is BoundLiteral))) {
+            foreach (var element in argumentArray.Elements) {
+                if (element is BoundLiteral kept && _uncheckedArguments.Remove(kept)) {
+                    CheckIntegerFits(kept, kept.Type);
+                }
+            }
         }
 
         // 'Tree.Leaf' carries nothing to infer from, so the context says

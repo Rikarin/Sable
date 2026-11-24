@@ -1,0 +1,150 @@
+module Sable.Math
+
+// Number theory on BigInts: powers, modular powers, greatest common
+// divisors and integer square roots, as methods and as overloads of the
+// module's free functions (IntegerMath.sb, Math.sb), which call them.
+
+extension BigInt {
+    /// The value to the power, by squaring: 1 for an exponent of 0, even
+    /// for 0. A negative exponent traps.
+    ///
+    /// ```sable
+    /// assert(BigInt(3).pow(40) == try! BigInt.parse("12157665459056928801"))
+    /// assert(BigInt(-2).pow(3) == BigInt(-8))
+    /// ```
+    public fn pow(_ exponent: Int) -> BigInt {
+        precondition(nonNegative: exponent, "the exponent")
+        if large.isEmpty && small == 2 {
+            return BigInt.one << exponent
+        }
+        var result = BigInt.one
+        var base = self
+        var e = exponent
+        while e > 0 {
+            if e % 2 == 1 {
+                result = result * base
+            }
+            e = e / 2
+            if e > 0 {
+                base = base * base
+            }
+        }
+        return result
+    }
+
+    /// The value to the power, modulo the modulus: in [0, modulus), with
+    /// every product reduced on the way, by squaring from the exponent's
+    /// top bit down. A negative exponent traps, and so does a modulus that
+    /// is not positive.
+    ///
+    /// ```sable
+    /// let m = BigInt(2).pow(127) - BigInt(1)
+    /// // Fermat: a^(p-1) is 1 modulo a prime p.
+    /// assert(BigInt(3).powMod(m - BigInt(1), m) == BigInt(1))
+    /// assert(BigInt(-2).powMod(BigInt(3), BigInt(5)) == BigInt(2))
+    /// ```
+    public fn powMod(_ exponent: BigInt, _ modulus: BigInt) -> BigInt {
+        precondition(!exponent.negative, "the exponent must not be negative, but is \(exponent)")
+        if modulus.sign <= 0 {
+            preconditionFailure("the modulus must be positive, not \(modulus)")
+        }
+        var base = self % modulus
+        if base.negative {
+            base = base + modulus
+        }
+        var result = BigInt.one % modulus
+        var bit = exponent.bitLength - 1
+        let limbs = exponent.limbView
+        while bit >= 0 {
+            result = result * result % modulus
+            if ((limbs[bit / 64] >> U64(bit % 64)) & 1) != 0 {
+                result = result * base % modulus
+            }
+            bit = bit - 1
+        }
+        return result
+    }
+
+    /// The greatest common divisor, never negative: 0 only for two zeros.
+    ///
+    /// ```sable
+    /// let a = BigInt(2).pow(100) * BigInt(3)
+    /// let b = BigInt(2).pow(80) * BigInt(9)
+    /// assert(a.gcd(b) == BigInt(2).pow(80) * BigInt(3))
+    /// ```
+    public fn gcd(_ other: BigInt) -> BigInt {
+        var x = self.magnitude
+        var y = other.magnitude
+        while !y.isZero {
+            if x.large.isEmpty && y.large.isEmpty {
+                // Both in an I64, and neither I64.min: the rest in U64s.
+                var u = U64(x.small)
+                var v = U64(y.small)
+                while v != 0 {
+                    let t = u % v
+                    u = v
+                    v = t
+                }
+                return BigInt(u)
+            }
+            let t = x % y
+            x = y
+            y = t
+        }
+        return x
+    }
+
+    /// The integer square root: the largest r with r * r <= the value. A
+    /// negative value traps.
+    ///
+    /// ```sable
+    /// assert(BigInt(10).pow(40).isqrt() == BigInt(10).pow(20))
+    /// assert((BigInt(10).pow(40) - BigInt(1)).isqrt() == BigInt(10).pow(20) - BigInt(1))
+    /// ```
+    public fn isqrt() -> BigInt {
+        if negative {
+            preconditionFailure("isqrt's argument must not be negative, but is \(self)")
+        }
+        if large.isEmpty {
+            return BigInt(Int(small.isqrt()))
+        }
+        // Newton's steps from above: from a power of two at least the root,
+        // each step is still at least it, until one fails to go down.
+        var x = BigInt.one << ((bitLength + 1) / 2)
+        while true {
+            let next = (x + self / x) >> 1
+            if next >= x {
+                return x
+            }
+            x = next
+        }
+    }
+}
+
+/// The greatest common divisor of two BigInts, never negative: 'a.gcd(b)'.
+///
+/// ```sable
+/// assert(gcd(BigInt(1071), BigInt(462)) == BigInt(21))
+/// ```
+public fn gcd(_ a: BigInt, _ b: BigInt) -> BigInt {
+    return a.gcd(b)
+}
+
+/// The integer square root of a BigInt: 'n.isqrt()'. A negative n traps.
+///
+/// ```sable
+/// assert(isqrt(BigInt(2).pow(200)) == BigInt(2).pow(100))
+/// ```
+public fn isqrt(_ n: BigInt) -> BigInt {
+    return n.isqrt()
+}
+
+/// base to the power exponent, modulo modulus, of BigInts:
+/// 'base.powMod(exponent, modulus)'.
+///
+/// ```sable
+/// assert(powMod(BigInt(4), BigInt(13), BigInt(497)) == BigInt(445))
+/// ```
+public fn powMod(_ base: BigInt, _ exponent: BigInt, _ modulus: BigInt) -> BigInt {
+    return base.powMod(exponent, modulus)
+}

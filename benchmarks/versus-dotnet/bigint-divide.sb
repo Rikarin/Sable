@@ -1,0 +1,23 @@
+module BigIntDivide
+
+// Dividing BigInts against .NET's BigInteger: a number of 10⁵ decimal digits
+// by one of half as many, ten times over, for the quotient and the
+// remainder at once — Burnikel–Ziegler's recursive division.
+
+import Sable.Math
+
+@main
+fn main() {
+    let a = BigInt(3).pow(209590)
+    let b = BigInt(7).pow(59165)
+    var bits = 0
+    var low: U64 = 0
+    var i = 0
+    while i < 10 {
+        let (quotient, remainder) = (a + BigInt(i)).divRem(b)
+        bits = bits + quotient.bitLength
+        low = low ^ U64.truncating(remainder)
+        i = i + 1
+    }
+    print("\(bits) \(low)")
+}

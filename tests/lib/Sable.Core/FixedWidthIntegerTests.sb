@@ -6,6 +6,7 @@ module FixedWidthIntegerTests
 // these are the operations' behaviour away from and at them. Run with
 //     tools/stdlib-coverage.sh Sable.Core
 
+import Sable.Math
 import Sable.Testing
 
 /// Generic, so that each requirement is reached through the protocol.
@@ -426,6 +427,18 @@ fn exactlyGivesNoneWhereTheValueDoesNotFit() {
     assert(I8.exactly(128 as U8) == none, "128 does not fit an I8")
     assert(U128.exactly(-1 as I128) == none, "-1 does not fit a U128")
     assertEqual(Int.exactly(-5 as I8) ?? 0, -5)
+}
+
+@test
+fn anIntegerOfAnySizeConvertsOnlyWhereItFits() {
+    // Sable.Math's BigInt: its 128 bits hold it from -2^127 up to 2^128.
+    assertEqual(U128.exactly(BigInt(2).pow(128) - BigInt(1)) ?? 0, U128.max)
+    assert(U128.exactly(BigInt(2).pow(128)) == none, "2^128 does not fit a U128")
+    assert(I128.exactly(BigInt(2).pow(127)) == none, "2^127 does not fit an I128")
+    assertEqual(I128.exactly(-BigInt(2).pow(127)) ?? 0, I128.min)
+    assert(Int.exactly(BigInt(2).pow(300) + BigInt(5)) == none, "2^300 + 5 does not fit an Int")
+    assertEqual(Int.clamping(-BigInt(2).pow(300)), Int.min)
+    assertEqual(U8.truncating(BigInt(2).pow(300) + BigInt(5)), 5)
 }
 
 @test

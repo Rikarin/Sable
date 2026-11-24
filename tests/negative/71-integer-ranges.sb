@@ -44,6 +44,20 @@ fn arguments() {
     let o = takeI8(-129)                    //! S3200 '-129' does not fit in 'I8'
 }
 
+// An array literal's elements, passed for an array parameter, take its
+// element type too, and are held to its range.
+fn takeU64s(_ xs: U64[>..]) -> Int => xs.count
+fn takeI8s(_ xs: I8[]) -> Int => xs.count
+fn takeInts(_ xs: Int[>..]) -> Int => xs.count
+
+fn arrayArguments() {
+    let a = takeU64s([9223372036854775808, 18446744073709551615])
+    let b = takeI8s([1, 300])                       //! S3200 '300' does not fit in 'I8'
+    let c = takeI8s([-128, -129])                   //! S3200 '-129' does not fit in 'I8'
+    let d = takeInts([9223372036854775808])         //! S3200 does not fit in 'Int'
+    let e = takeU64s([-1])                          //! S3200 '-1' does not fit in 'U64'
+}
+
 // Past 64 bits, I128 and U128 are held to their ranges too: as arguments,
 // negated, and where a type is given (#260).
 fn takeI128(_ x: I128) -> I128 => x

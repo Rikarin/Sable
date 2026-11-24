@@ -3591,6 +3591,31 @@ public sealed partial class SilGen {
 
     /// <summary>The member of a concrete type that implements a protocol's method: its own, or a superclass's.</summary>
     /// <summary>True when two functions' parameters have the same argument labels.</summary>
+    /// <summary>
+    ///     Whether the candidate takes the type itself wherever the requirement
+    ///     takes <c>Self</c>: of overloads with one name and the same labels —
+    ///     BigInt's <c>&gt;&gt;</c> by a BigInt, which BinaryInteger requires,
+    ///     and by an Int — the one that meets the requirement.
+    /// </summary>
+    static bool SelfParametersMatch(FunctionSymbol candidate, FunctionSymbol requirement, NamedTypeSymbol conformer) {
+        if (Owner(requirement) is not { TypeKind: TypeKind.Protocol } protocol) {
+            return true;
+        }
+
+        for (var i = 0; i < requirement.Parameters.Length; i++) {
+            var wanted = requirement.Parameters[i].Type;
+            if (!wanted.Equals(protocol) && !ReferenceEquals(wanted, protocol.OriginalDefinition.SelfTypeParameter)) {
+                continue;
+            }
+
+            if (candidate.Parameters[i].Type is not NamedTypeSymbol given || !ReferenceEquals(given.OriginalDefinition, conformer.OriginalDefinition)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     static bool SameLabels(FunctionSymbol a, FunctionSymbol b) =>
         a.Parameters.Length == b.Parameters.Length
         && a.Parameters.Zip(b.Parameters).All(static p => (p.First.Label ?? p.First.Name) == (p.Second.Label ?? p.Second.Name));
@@ -3651,6 +3676,7 @@ public sealed partial class SilGen {
                         || ReferenceEquals((f.ExplicitProtocol as NamedTypeSymbol)?.OriginalDefinition, required)))
                 .OrderBy(f => f.ExplicitProtocol is null)
                 .ThenBy(f => !SameLabels(f, requirement))
+                .ThenBy(f => !SelfParametersMatch(f, requirement, type))
                 .FirstOrDefault();
             if (found is not null) {
                 return found;

@@ -781,7 +781,19 @@ static char *executable_path(int argc, char **argv) {
 // ---- Randomness ----------------------------------------------------------
 
 static bool random_bytes(void *buffer, size_t length) {
-    return BCryptGenRandom(NULL, (PUCHAR)buffer, (ULONG)length, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
+    // A call's length is 32 bits.
+    PUCHAR next = buffer;
+    while (length > 0) {
+        ULONG part = length < 0x40000000 ? (ULONG)length : 0x40000000;
+        if (BCryptGenRandom(NULL, next, part, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+            return false;
+        }
+
+        next += part;
+        length -= part;
+    }
+
+    return true;
 }
 
 // ---- File handles ----------------------------------------------------------

@@ -35,6 +35,7 @@
 #include "traps.c"
 #include "strings.c"
 #include "hashing.c"
+#include "random.c"
 #include "arrays.c"
 #include "leaks.c"
 #include "metadata.c"

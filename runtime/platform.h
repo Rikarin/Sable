@@ -435,8 +435,8 @@ static char *executable_path(int argc, char **argv);
 
 // ---- Randomness ----------------------------------------------------------
 
-// 'length' bytes (at most 256) from the system's secure random source, for
-// the hash seed; false when the system gives none.
+// 'length' bytes, however many, from the system's secure random source;
+// false, the buffer's contents then not to be used, when it gives fewer.
 static bool random_bytes(void *buffer, size_t length);
 
 #endif

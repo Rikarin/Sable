@@ -2,8 +2,9 @@ module Sable.Core
 
 /// The operating system's random numbers: each draw is fresh bits from its
 /// cryptographically secure source (getentropy on macOS, Linux and WASI,
-/// rand_s on Windows), so no run repeats another and no output predicts
-/// the next. What every 'random' function uses when not given a
+/// BCryptGenRandom on Windows), so no run repeats another and no output
+/// predicts the next; a program it fails for is stopped, never given other
+/// bits. What every 'random' function uses when not given a
 /// generator. Swift's `SystemRandomNumberGenerator`; Rust's `OsRng`.
 ///
 /// It keeps no state, so one can be made wherever it is needed. Each draw

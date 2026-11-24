@@ -1122,7 +1122,23 @@ static char *executable_path(int argc, char **argv) {
 // ---- Randomness ----------------------------------------------------------
 
 static bool random_bytes(void *buffer, size_t length) {
-    return getentropy(buffer, length) == 0;
+    // getentropy gives at most 256 bytes a call, all of them or none.
+    char *next = buffer;
+    while (length > 0) {
+        size_t part = length < 256 ? length : 256;
+        if (getentropy(next, part) != 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            return false;
+        }
+
+        next += part;
+        length -= part;
+    }
+
+    return true;
 }
 
 // ---- File handles ---------------------------------------------------------

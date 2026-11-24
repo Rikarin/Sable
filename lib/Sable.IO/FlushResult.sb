@@ -1,0 +1,9 @@
+module Sable.IO
+
+/// What a PipeWriter's flush gives.
+public struct FlushResult {
+    /// Whether the reader has completed: what is written goes nowhere.
+    public let isCompleted: Bool
+    /// Whether the flush was cut short by `cancelPendingFlush()`.
+    public let isCanceled: Bool
+}

@@ -1,15 +1,37 @@
 module Sable.Serialize
 
 // The parser is an object: one cursor, shared by every method it calls.
+// It reads UTF-8 bytes, well-formed — a String's, or bytes checked first —
+// decoding a scalar where it looks at one, and taking a string's run of
+// plain bytes whole. Positions count scalars, as a String's indices do.
 public class Parser {
-    var chars: Char[>..]
+    let bytes: U8[>..]
+    // The byte the cursor is at, and how many scalars come before it.
+    var at: Int
     var offset: Int
     var line: Int
     var column: Int
     var options: ParseOptions
 
     init(_ text: String, _ options: ParseOptions) {
-        self.chars = charsOf(text)
+        var bytes: U8[>..] = []
+        bytes.reserveCapacity(text.utf8Count)
+        for byte in text.utf8 {
+            bytes.append(byte)
+        }
+        self.bytes = bytes
+        self.at = 0
+        self.offset = 0
+        self.line = 1
+        self.column = 1
+        self.options = options
+    }
+
+    // The bytes, which must be well-formed UTF-8, taken as they are: an
+    // array is shared, not copied, so a mapped file is parsed where it lies.
+    init(bytes: U8[>..], _ options: ParseOptions) {
+        self.bytes = bytes
+        self.at = 0
         self.offset = 0
         self.line = 1
         self.column = 1
@@ -21,14 +43,39 @@ public class Parser {
     }
 
     fn atEnd() -> Bool {
-        return offset >= chars.count
+        return at >= bytes.count
     }
 
     fn peek() -> Char? {
         if atEnd() {
             return none
         }
-        return chars[offset]
+        return scalar()
+    }
+
+    // The scalar at the cursor, which is not at the end.
+    fn scalar() -> Char {
+        let lead = Int(bytes[at])
+        if lead < 0x80 {
+            return Char.fromCodePoint(lead)!
+        }
+        let count = width(lead)
+        var code = lead & (lead < 0xE0 ? 0x1F : lead < 0xF0 ? 0x0F : 0x07)
+        var i = 1
+        while i < count {
+            code = (code << 6) | (Int(bytes[at + i]) & 0x3F)
+            i += 1
+        }
+        return Char.fromCodePoint(code)!
+    }
+
+    fn width(_ lead: Int) -> Int {
+        return lead < 0x80 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4
+    }
+
+    // Whether the byte at the cursor is an ASCII digit.
+    fn atDigit() -> Bool {
+        return !atEnd() && bytes[at] >= 0x30 && bytes[at] <= 0x39
     }
 
     fn peekIs(_ c: Char) -> Bool {
@@ -36,7 +83,8 @@ public class Parser {
     }
 
     fn advance() -> Char {
-        let c = chars[offset]
+        let c = scalar()
+        at = at + width(Int(bytes[at]))
         offset = offset + 1
         if c == '\n' {
             line = line + 1
@@ -66,7 +114,7 @@ public class Parser {
     // of the line, and '/* ... */'.
     fn skipSpace() throws(ParseError) {
         while !atEnd() {
-            let c = chars[offset]
+            let c = scalar()
             if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
                 advance()
                 continue
@@ -250,6 +298,26 @@ public class Parser {
         var builder = newBuilder()
 
         while true {
+            // A run of bytes that are neither quote, backslash nor control,
+            // taken whole: well-formed, as all the bytes are.
+            let run = self.at
+            while self.at < bytes.count {
+                let byte = bytes[self.at]
+                if byte == 0x22 || byte == 0x5C || byte < 0x20 {
+                    break
+                }
+                if (byte & 0xC0) != 0x80 {
+                    offset = offset + 1
+                    column = column + 1
+                }
+                self.at = self.at + 1
+            }
+            if self.at > run {
+                unsafe {
+                    builder.add(Runtime.stringFromValidUtf8(bytes[run..<self.at]))
+                }
+            }
+
             let at = position()
             let c = try next("the end of the string")
             if c == '"' {
@@ -347,7 +415,7 @@ public class Parser {
                 }
             }
         } else {
-            while !atEnd() && chars[offset].isDigit {
+            while atDigit() {
                 builder.addChar(advance())
             }
         }
@@ -355,7 +423,7 @@ public class Parser {
         if peekIs('.') {
             builder.addChar(advance())
             var fraction = 0
-            while !atEnd() && chars[offset].isDigit {
+            while atDigit() {
                 builder.addChar(advance())
                 fraction = fraction + 1
             }
@@ -370,7 +438,7 @@ public class Parser {
                 builder.addChar(advance())
             }
             var exponent = 0
-            while !atEnd() && chars[offset].isDigit {
+            while atDigit() {
                 builder.addChar(advance())
                 exponent = exponent + 1
             }
@@ -384,6 +452,34 @@ public class Parser {
         }
         return value
     }
+}
+
+/// The JSON the bytes hold, UTF-8, read where they are: an array is shared
+/// with the parser, not copied — a mapped file's bytes are parsed in place.
+/// Ill-formed UTF-8 is an error at its first byte.
+///
+/// ```sable
+/// let bytes: U8[>..] = [0x5B, 0x31, 0x2C, 0x22, 0xC3, 0xA9, 0x22, 0x5D]
+/// let value = try! parse(bytes: bytes)
+/// assert(render(value) == "[1,\"é\"]")
+/// ```
+public fn parse(bytes: U8[>..]) throws(ParseError) -> JsonValue {
+    return try parseWith(bytes: bytes, strict())
+}
+
+/// The JSON the bytes hold, as the options allow.
+public fn parseWith(bytes: U8[>..], _ options: ParseOptions) throws(ParseError) -> JsonValue {
+    let bad = Runtime.validateUtf8(bytes: bytes)
+    if bad >= 0 {
+        // Where it is, by scalars: the well-formed bytes before it.
+        let before = Parser(bytes: bytes, options)
+        while before.at < bad {
+            let _ = before.advance()
+        }
+        throw ParseError.InvalidUnicode(at: before.position(), reason: "ill-formed UTF-8")
+    }
+    let parser = Parser(bytes: bytes, options)
+    return try parser.parseDocument()
 }
 
 public fn parse(_ text: String) throws(ParseError) -> JsonValue {

@@ -222,6 +222,37 @@ static char *resize_elements(SableArray *array, int64_t old, int64_t size) {
     return grown;
 }
 
+// ---- Mapped arrays --------------------------------------------------------
+
+// An array of a file's bytes mapped into memory (MappedFile): its elements
+// are the mapping, and its capacity the mapping's length. Its last release
+// unmaps them. It is never the only reference to its buffer, whatever its
+// count says — the mapping is not the array's to grow or free — so a
+// change to it is made to a copy, as a change to a shared array is: its
+// bytes are written through the runtime's calls alone.
+static void mapped_array_destroy(void *pointer) {
+    SableArray *array = pointer;
+    file_unmap(array->elements, array->capacity);
+}
+
+static const SableMetadata mapped_metadata = {
+    mapped_array_destroy, "[U8]", 1, NULL, NULL, sizeof(SableArray), _Alignof(SableArray), NULL, NULL,
+};
+// One mapped to be written: its bytes may be changed in place by
+// sable_file_map_store.
+static const SableMetadata mapped_writable_metadata = {
+    mapped_array_destroy, "[U8]", 1, NULL, NULL, sizeof(SableArray), _Alignof(SableArray), NULL, NULL,
+};
+
+static bool is_mapped(const SableArray *array) {
+    return array->header.type == &mapped_metadata || array->header.type == &mapped_writable_metadata;
+}
+
+// Whether the array is the only reference to a buffer it may change.
+static bool uniquely_held(const SableArray *array) {
+    return strong_count(&array->header) == 1 && !is_mapped(array);
+}
+
 void sable_array_destroy(void *pointer) {
     SableArray *array = pointer;
     const SableMetadata *type = array->header.type;
@@ -252,7 +283,7 @@ void *sable_array_element(const SableArray *array, int64_t index) {
 // can be changed: a fresh one for the empty array, a copy of a shared one.
 static SableArray *unique(SableArray **slot, const SableMetadata *type, int64_t room) {
     SableArray *array = *slot;
-    if (array != NULL && strong_count(&array->header) == 1) {
+    if (array != NULL && uniquely_held(array)) {
         return array;
     }
 
@@ -276,7 +307,7 @@ static SableArray *unique(SableArray **slot, const SableMetadata *type, int64_t 
 // Made the only reference to its buffer, before a loop that writes it in
 // place: the empty array stays empty, and the loop's index checks trap.
 void sable_array_make_unique(SableArray **slot, const SableMetadata *type) {
-    if (*slot != NULL && strong_count(&(*slot)->header) != 1) {
+    if (*slot != NULL && !uniquely_held(*slot)) {
         unique(slot, type, 0);
     }
 }
@@ -462,7 +493,7 @@ static const SableValueWitnesses slice_witnesses = {
 // alone, as an array's copy is of its own elements.
 void sable_slice_make_unique(SableSlice *slice, const SableMetadata *type) {
     SableArray *buffer = slice->buffer;
-    if (buffer == NULL || strong_count(&buffer->header) == 1) {
+    if (buffer == NULL || uniquely_held(buffer)) {
         return;
     }
 

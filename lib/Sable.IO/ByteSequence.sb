@@ -1,0 +1,150 @@
+module Sable.IO
+
+/// Bytes in a run of segments, read where they are: .NET's
+/// `ReadOnlySequence<byte>`, what a PipeReader's read gives. The segments
+/// are the pipe's own buffers, shared and not copied; `toArray()` copies
+/// them into one. Offsets count from the sequence's first byte.
+///
+/// ```sable
+/// let segments: U8[>..][>..] = [[1, 2], [3, 4, 5]]
+/// let bytes = ByteSequence(segments: segments)
+/// assert(bytes.count == 5 && bytes[3] == 4)
+/// assert(bytes.firstIndex(of: 4) == 3)
+/// let middle = bytes.slice(from: 1, count: 3).toArray()
+/// assert(middle.count == 3 && middle[0] == 2 && middle[2] == 4)
+/// ```
+public struct ByteSequence {
+    // The segments; the first is read from 'start' on, and 'count' bytes
+    // are in it, the last segment cut where they end.
+    let segments: U8[>..][>..]
+    let start: Int
+    /// How many bytes it holds.
+    public let count: Int
+
+    /// The segments' bytes in order: none of them copied.
+    public init(segments: U8[>..][>..]) {
+        var total = 0
+        var kept: U8[>..][>..] = []
+        for segment in segments {
+            if !segment.isEmpty {
+                total += segment.count
+                kept.append(segment)
+            }
+        }
+        self.segments = kept
+        self.start = 0
+        self.count = total
+    }
+
+    init(segments: U8[>..][>..], start: Int, count: Int) {
+        self.segments = segments
+        self.start = start
+        self.count = count
+    }
+
+    /// Whether it holds no bytes.
+    public var isEmpty: Bool {
+        get {
+            return count == 0
+        }
+    }
+
+    /// How many segments the bytes lie in.
+    public var segmentCount: Int {
+        get {
+            var n = 0
+            var left = count
+            var offset = start
+            while left > 0 {
+                left -= segments[n].count - offset < left ? segments[n].count - offset : left
+                offset = 0
+                n += 1
+            }
+            return n
+        }
+    }
+
+    /// The bytes the segment at the index holds of the sequence's, where
+    /// they lie.
+    public fn segment(_ index: Int) -> U8[:] {
+        precondition(index >= 0 && index < segmentCount, "segment \(index) of \(segmentCount)")
+        var left = count
+        var offset = start
+        var n = 0
+        while true {
+            let take = segments[n].count - offset < left ? segments[n].count - offset : left
+            if n == index {
+                return segments[n][offset..<(offset + take)]
+            }
+            left -= take
+            offset = 0
+            n += 1
+        }
+    }
+
+    /// The byte at the offset.
+    public subscript(offset: Int) -> U8 {
+        get {
+            precondition(offset >= 0 && offset < count, "offset \(offset) of \(count) bytes")
+            var at = start + offset
+            var n = 0
+            while at >= segments[n].count {
+                at -= segments[n].count
+                n += 1
+            }
+            return segments[n][at]
+        }
+    }
+
+    /// The offset of the first byte equal to the one given, searched a
+    /// segment at a time (vectorised natively); none if there is none.
+    public fn firstIndex(of byte: U8) -> Int? {
+        var before = 0
+        var i = 0
+        let n = segmentCount
+        while i < n {
+            let part = segment(i)
+            if let found = part.firstIndex(of: byte) {
+                return before + (found - part.startIndex)
+            }
+            before += part.count
+            i += 1
+        }
+        return none
+    }
+
+    /// The run of 'count' bytes from the offset: its segments shared.
+    public fn slice(from offset: Int, count: Int) -> ByteSequence {
+        precondition(offset >= 0 && count >= 0 && offset <= self.count - count, "bytes \(offset)..<\(offset + count) of \(self.count)")
+        if count == 0 {
+            return ByteSequence(segments: [], start: 0, count: 0)
+        }
+        var at = start + offset
+        var n = 0
+        while at >= segments[n].count {
+            at -= segments[n].count
+            n += 1
+        }
+        var kept: U8[>..][>..] = []
+        var left = count + at
+        while left > 0 {
+            kept.append(segments[n])
+            left -= segments[n].count
+            n += 1
+        }
+        return ByteSequence(segments: kept, start: at, count: count)
+    }
+
+    /// Every byte, copied into one array.
+    public fn toArray() -> U8[>..] {
+        var bytes: U8[>..] = []
+        bytes.reserveCapacity(count)
+        var i = 0
+        let n = segmentCount
+        while i < n {
+            bytes.append(contentsOf: segment(i))
+            i += 1
+        }
+        return bytes
+    }
+}

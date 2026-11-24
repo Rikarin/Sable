@@ -1,0 +1,184 @@
+module MappedFileTests
+
+// MappedFile (Sable.IO): reading, writing through and into a copied copy,
+// growing, flushing, advice, and JSON parsed from a mapping where it lies.
+
+import Sable.IO
+import Sable.Serialize
+import Sable.Testing
+
+fn pattern(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8.truncating(i * 7 + i / 256))
+        i += 1
+    }
+    return bytes
+}
+
+fn same(_ a: U8[:], _ b: U8[:]) -> Bool {
+    if a.count != b.count {
+        return false
+    }
+    var i = 0
+    while i < a.count {
+        if a[i] != b[i] {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+@test
+fn aMappingReadsTheWholeFile() throws {
+    let path = "sable-test-mapped-read.bin"
+    let bytes = pattern(200000)
+    try File.writeBytes(path, bytes)
+    let mapped = try MappedFile.open(path)
+    assert(mapped.isOpen)
+    assert(mapped.mode == .ReadOnly)
+    assertEqual(mapped.count, 200000)
+    assert(same(mapped.bytes, bytes))
+    mapped.advise(.Sequential)
+    mapped.advise(.Random)
+    mapped.advise(.WillNeed)
+    mapped.advise(.Normal)
+    mapped.advise(.DontNeed)
+    assert(MapAdvice.WillNeed != MapAdvice.Normal)
+    assertEqual(MapAdvice.Sequential.hashValue, MapAdvice.Sequential.hashValue)
+    assert(MapAdvice.Random.debugDescription().hasSuffix("Random"))
+    assert(same(mapped.bytes[1000..<1010], bytes[1000..<1010]))
+    // Read-only: writing through it is an error, and a flush does nothing.
+    do {
+        try mapped.write([1], at: 0)
+        fail("a read-only mapping was written")
+    } catch IoError.InvalidInput(_) { }
+    try mapped.flush()
+    do {
+        try mapped.resize(to: 10)
+        fail("a read-only mapping grew")
+    } catch IoError.InvalidInput(_) { }
+
+    // Changing the array changes a copy, never the file or the mapping.
+    var copy = mapped.bytes
+    copy[0] = copy[0] &+ 1
+    copy.append(5)
+    assert(copy[0] != mapped.bytes[0])
+    assertEqual(mapped.count, 200000)
+    // An array taken from it keeps its bytes past close.
+    let kept = mapped.bytes
+    mapped.close()
+    assert(!mapped.isOpen)
+    assertEqual(mapped.count, 0)
+    assert(same(kept, bytes))
+    try File.remove(path)
+}
+
+@test
+fn writesReachTheFileOrStayPrivate() throws {
+    let path = "sable-test-mapped-write.bin"
+    try File.writeBytes(path, [0, 1, 2, 3, 4, 5, 6, 7])
+
+    let shared = try MappedFile.open(path, mode: .ReadWrite)
+    let seen = shared.bytes
+    try shared.write([20, 30], at: 2)
+    assert(same(shared.bytes, [0, 1, 20, 30, 4, 5, 6, 7]))
+    // An array taken before the write is the mapping, and sees it.
+    assertEqual(seen[3], 30)
+    try shared.flush()
+    try shared.flush(at: 2, count: 2)
+    try shared.flush(at: 0, count: 0)
+    assert(same(try File.readBytes(path), [0, 1, 20, 30, 4, 5, 6, 7]))
+    do {
+        try shared.write([1, 2], at: 7)
+        fail("a write went past the end")
+    } catch IoError.InvalidInput(_) { }
+    do {
+        try shared.write([1], at: -1)
+        fail("a write went before the start")
+    } catch IoError.InvalidInput(_) { }
+    do {
+        try shared.flush(at: 6, count: 5)
+        fail("a flush went past the end")
+    } catch { }
+
+    // Grown, the file has zeros after; the old array keeps the old mapping.
+    try shared.resize(to: 12)
+    assertEqual(shared.count, 12)
+    assertEqual(seen.count, 8)
+    try shared.write([99], at: 11)
+    try shared.flush()
+    let grown = try File.readBytes(path)
+    assertEqual(grown.count, 12)
+    assertEqual(grown[11], 99)
+    assertEqual(grown[9], 0)
+    try shared.resize(to: 0)
+    assertEqual(shared.count, 0)
+    assert(shared.bytes.isEmpty)
+    try shared.resize(to: 3)
+    assertEqual(shared.count, 3)
+    do {
+        try shared.resize(to: -1)
+        fail("a mapping shrank below nothing")
+    } catch IoError.InvalidInput(_) { }
+    shared.close()
+    do {
+        try shared.write([1], at: 0)
+        fail("a closed mapping was written")
+    } catch IoError.InvalidInput(_) { }
+
+    try File.writeBytes(path, [1, 2, 3])
+    let copied = try MappedFile.open(FilePath(path), mode: .CopyOnWrite)
+    try copied.write([7], at: 1)
+    assert(same(copied.bytes, [1, 7, 3]))
+    try copied.flush()
+    assert(same(try File.readBytes(path), [1, 2, 3]))
+    copied.close()
+    try File.remove(path)
+}
+
+@test
+fn anEmptyOrMissingFileMapsAsItShould() throws {
+    let path = "sable-test-mapped-empty.bin"
+    try File.writeBytes(path, [])
+    let empty = try MappedFile.open(path)
+    assertEqual(empty.count, 0)
+    assert(empty.bytes.isEmpty)
+    empty.close()
+    try File.remove(path)
+    do {
+        let _ = try MappedFile.open("sable-test-mapped-missing.bin")
+        fail("a missing file mapped")
+    } catch IoError.NotFound(_) { }
+}
+
+@test
+fn jsonIsParsedFromAMappingWhereItLies() throws {
+    let path = "sable-test-mapped.json"
+    var text = "{\"name\": \"Grüße\", \"items\": ["
+    var i = 0
+    while i < 1000 {
+        text = text + (i > 0 ? ", " : "") + "\(i)"
+        i += 1
+    }
+    text = text + "]}"
+    try File.write(path, text)
+    let mapped = try MappedFile.open(path)
+    let value = try parse(bytes: mapped.bytes)
+    assertEqual(render(value), render(try parse(text)))
+    mapped.close()
+    try File.remove(path)
+
+    // Ill-formed UTF-8 is an error where it is.
+    do {
+        let _ = try parse(bytes: [0x5B, 0x22, 0xC3, 0xA9, 0xFF, 0x22, 0x5D])
+        fail("ill-formed UTF-8 parsed")
+    } catch ParseError.InvalidUnicode(let at, _) {
+        assertEqual(at.offset, 3)
+        assertEqual(at.column, 4)
+    }
+    let lenient = try parseWith(bytes: [0x5B, 0x31, 0x2C, 0x5D], relaxed())
+    assertEqual(render(lenient), "[1]")
+}

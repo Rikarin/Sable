@@ -2669,6 +2669,10 @@ public static class SilBuiltins {
         Add("file_standard", SilType.Int, SilType.Int);
         Add("file_copy", SilType.Bool, SilType.String, SilType.String);
         Add("file_canonical", SilType.String, SilType.String);
+        Add("file_map", new ArrayType(SilType.U8), SilType.Int, SilType.Int, SilType.Int);
+        Add("file_map_store", SilType.Bool, new ArrayType(SilType.U8), SilType.Int, new SliceType(SilType.U8));
+        Add("file_map_flush", SilType.Bool, new ArrayType(SilType.U8), SilType.Int, SilType.Int);
+        Add("file_map_advise", SilType.Unit, new ArrayType(SilType.U8), SilType.Int);
         Add("time_monotonic", SilType.Int);
         Add("time_wall_clock", SilType.Int);
         Add("time_sleep", SilType.Unit, SilType.Int);

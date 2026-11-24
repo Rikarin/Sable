@@ -263,6 +263,85 @@ fn main() {
     }
 
     /// <summary>
+    ///     A file mapped to read, to write through and to write a private
+    ///     copy of, JSON parsed from its bytes, and bytes passed through a
+    ///     pipe: the same natively, where the mapping is the system's, and
+    ///     interpreted, where a copy stands in for it.
+    /// </summary>
+    [Fact]
+    public void MappedFilesAndPipesAgreeBothWays() {
+        var root = Directory.CreateTempSubdirectory("sable-mapped-").FullName;
+        try {
+            var run = AssertAgree(
+                $$"""
+                module P
+                import Sable.IO
+                import Sable.Serialize
+
+                @main
+                fn main() async {
+                    let path = "{{Platform.Literal(root)}}/m.json"
+                    try! File.write(path, "[1, 2, 3]")
+                    let reading = try! MappedFile.open(path)
+                    print(render(try! parse(bytes: reading.bytes)))
+                    var copy = reading.bytes
+                    copy[0] = 0x7B
+                    print(reading.bytes[0] == 0x5B)
+                    do {
+                        try reading.write([0x20], at: 0)
+                    } catch {
+                        print("read-only")
+                    }
+                    reading.close()
+
+                    let writing = try! MappedFile.open(path, mode: .ReadWrite)
+                    try! writing.write([0x39], at: 1)
+                    try! writing.flush()
+                    try! writing.resize(to: 11)
+                    try! writing.write([0x2C, 0x34], at: 9)
+                    try! writing.write([0x5D], at: 10)
+                    try! writing.write([0x20], at: 8)
+                    try! writing.flush()
+                    writing.close()
+                    print(try! File.read(path))
+
+                    let copied = try! MappedFile.open(path, mode: .CopyOnWrite)
+                    try! copied.write([0x38], at: 1)
+                    print(copied.bytes[1] == 0x38)
+                    copied.close()
+                    print(try! File.read(path))
+
+                    let pipe = Pipe(pauseWriterThreshold: 8, resumeWriterThreshold: 4, segmentSize: 3)
+                    let writer = Task.spawn {
+                        var i = 0
+                        while i < 20 {
+                            try! await pipe.writer.write([U8.truncating(i), 10])
+                            i += 1
+                        }
+                        await pipe.writer.complete()
+                    }
+                    var total = 0
+                    while true {
+                        let bytes = try! await pipe.reader.read(upTo: 5)
+                        if bytes.isEmpty {
+                            break
+                        }
+                        for byte in bytes {
+                            total += Int(byte)
+                        }
+                    }
+                    await writer.value
+                    print(total)
+                }
+                """
+            );
+            Assert.Equal("[1,2,3]\ntrue\nread-only\n[9, 2, 3 ,]\ntrue\n[9, 2, 3 ,]\n390\n", run.Stdout);
+        } finally {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
     ///     A path resolved by the system — through a link to a directory —
     ///     the same natively (realpath) and interpreted, and a missing one
     ///     an error both ways.

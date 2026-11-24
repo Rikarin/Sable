@@ -1,0 +1,252 @@
+module PipeTests
+
+// Pipe, PipeReader, PipeWriter and ByteSequence (Sable.IO): bytes written in
+// random pieces read back whole by a reader that asks for lines, the
+// writer held back while its reader is behind, buffers committed without a
+// copy, and reads and flushes canceled.
+
+import Sable.IO
+import Sable.Testing
+
+/// A random walk of numbers: xorshift.
+struct Walk {
+    var state: U64
+
+    mutating fn next(_ below: Int) -> Int {
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        return Int(state % U64(below))
+    }
+}
+
+fn shown(_ bytes: U8[:]) -> String {
+    return "\(bytes.toArray())"
+}
+
+fn nothing(_ result: ReadResult?) -> Bool {
+    if let _ = result {
+        return false
+    }
+    return true
+}
+
+@test
+fn aByteSequenceReadsAcrossItsSegments() {
+    let bytes = ByteSequence(segments: [[1, 2], [], [3, 4, 5], [6]])
+    assertEqual(bytes.count, 6)
+    assert(!bytes.isEmpty)
+    assertEqual(bytes.segmentCount, 3)
+    assertEqual(shown(bytes.segment(1)), "[3, 4, 5]")
+    assertEqual(bytes[0], 1)
+    assertEqual(bytes[5], 6)
+    assertEqual(bytes.firstIndex(of: 4) ?? -1, 3)
+    assertEqual(bytes.firstIndex(of: 6) ?? -1, 5)
+    assert(bytes.firstIndex(of: 9) == none)
+    assertEqual(shown(bytes.toArray()), "[1, 2, 3, 4, 5, 6]")
+
+    // A slice keeps its segments, cut where it starts and ends.
+    let middle = bytes.slice(from: 1, count: 4)
+    assertEqual(middle.count, 4)
+    assertEqual(middle.segmentCount, 2)
+    assertEqual(shown(middle.segment(0)), "[2]")
+    assertEqual(shown(middle.segment(1)), "[3, 4, 5]")
+    assertEqual(middle[1], 3)
+    assertEqual(middle.firstIndex(of: 5) ?? -1, 3)
+    assertEqual(shown(middle.slice(from: 1, count: 2).toArray()), "[3, 4]")
+    assertEqual(shown(bytes.slice(from: 2, count: 1).toArray()), "[3]")
+    assertEqual(shown(bytes.slice(from: 5, count: 1).toArray()), "[6]")
+    let nothingAtAll = bytes.slice(from: 6, count: 0)
+    assert(nothingAtAll.isEmpty)
+    assertEqual(nothingAtAll.segmentCount, 0)
+    assert(ByteSequence(segments: []).isEmpty)
+}
+
+/// Lines read through the pipe as a parser would read them: ask, look for
+/// a newline, and if there is none say all was examined and ask again.
+fn readLines(_ reader: PipeReader) async -> String[>..] {
+    var lines: String[>..] = []
+    while true {
+        let result = await reader.read()
+        if let end = result.buffer.firstIndex(of: 10) {
+            lines.append(shown(result.buffer.slice(from: 0, count: end).toArray()))
+            await reader.advance(consumed: end + 1)
+            continue
+        }
+        if result.isCompleted {
+            if !result.buffer.isEmpty {
+                lines.append(shown(result.buffer.toArray()))
+            }
+            await reader.advance(consumed: result.buffer.count)
+            await reader.complete()
+            return lines
+        }
+        await reader.advance(consumed: 0, examined: result.buffer.count)
+    }
+}
+
+@test
+fn linesWrittenInRandomPiecesAreReadWhole() async {
+    var walk = Walk { state: 0x9E3779B97F4A7C15 }
+    var round = 0
+    while round < 20 {
+        // Lines of bytes 0...9, the last maybe without its newline.
+        var all: U8[>..] = []
+        var expected: String[>..] = []
+        let count = 1 + walk.next(30)
+        var i = 0
+        while i < count {
+            var line: U8[>..] = []
+            let length = walk.next(40)
+            while line.count < length {
+                line.append(U8.truncating(walk.next(10)))
+            }
+            expected.append(shown(line))
+            all.append(contentsOf: line)
+            if i < count - 1 || walk.next(2) == 0 {
+                all.append(10)
+            } else if line.isEmpty {
+                expected.removeLast()
+            }
+            i += 1
+        }
+        // Both thresholds above the longest line, which the reader must
+        // have whole: a writer held back by a reader waiting for more
+        // than the writer may write waits for ever.
+        let pause = 41 + walk.next(64)
+        let pipe = Pipe(pauseWriterThreshold: pause, resumeWriterThreshold: 40 + walk.next(pause - 40), segmentSize: 1 + walk.next(16))
+        let pieces = all
+        let seed = U64(round + 1)
+        let writing = Task.spawn {
+            var cut = Walk { state: seed }
+            var from = 0
+            while from < pieces.count {
+                let take = 1 + cut.next(50)
+                let end = from + take < pieces.count ? from + take : pieces.count
+                try! await pipe.writer.write(pieces[from..<end])
+                from = end
+            }
+            await pipe.writer.complete()
+        }
+        let got = await readLines(pipe.reader)
+        await writing.value
+        assertEqual(got.joined(separator: "|"), expected.joined(separator: "|"))
+        round += 1
+    }
+}
+
+@test
+fn aWriterWaitsWhileItsReaderIsBehind() async {
+    let pipe = Pipe(pauseWriterThreshold: 100, resumeWriterThreshold: 50, segmentSize: 32)
+    assertEqual(pipe.pauseWriterThreshold, 100)
+    assertEqual(pipe.resumeWriterThreshold, 50)
+    assertEqual(pipe.segmentSize, 32)
+    let writing = Task.spawn {
+        var i = 0
+        while i < 40 {
+            var chunk: U8[>..] = []
+            while chunk.count < 25 {
+                chunk.append(U8.truncating(i))
+            }
+            try! await pipe.writer.write(chunk)
+            i += 1
+        }
+        await pipe.writer.complete()
+    }
+    var total = 0
+    while true {
+        let result = await pipe.reader.read()
+        // A flush waits once 100 are buffered: never more than that and
+        // the one write it held.
+        assert(result.buffer.count <= 125, "\(result.buffer.count) buffered")
+        // The bytes come in order: the 25 of each write equal its number.
+        var j = 0
+        while j < result.buffer.count {
+            assertEqual(Int(result.buffer[j]), (total + j) / 25)
+            j += 1
+        }
+        let take = result.buffer.count < 30 ? result.buffer.count : 30
+        total += take
+        await pipe.reader.advance(consumed: take)
+        if result.isCompleted && take == result.buffer.count {
+            break
+        }
+    }
+    await writing.value
+    assertEqual(total, 1000)
+    assertEqual(await pipe.length, 0)
+}
+
+@test
+fn committedBuffersAndAsyncReadsAndWrites() async {
+    let pipe = Pipe()
+    var buffer = await pipe.writer.rentBuffer(minimumCapacity: 10)
+    assert(buffer.isEmpty && buffer.capacity >= 4096)
+    buffer.append(contentsOf: [1, 2, 3])
+    await pipe.writer.commit(move buffer)
+    await pipe.writer.commit([])
+    await pipe.writer.buffer([4, 5])
+    await pipe.writer.commit([6])
+    assert(nothing(await pipe.reader.tryRead()))
+    let flushed = await pipe.writer.flush()
+    assert(!flushed.isCompleted && !flushed.isCanceled)
+    assertEqual(await pipe.length, 6)
+
+    let result = (await pipe.reader.tryRead())!
+    assertEqual(result.buffer.segmentCount, 3)
+    assertEqual(shown(result.buffer.toArray()), "[1, 2, 3, 4, 5, 6]")
+    assert(!result.isCompleted && !result.isCanceled)
+    // Looked at whole and consumed in part: a try waits for more.
+    await pipe.reader.advance(consumed: 2, examined: 6)
+    assert(nothing(await pipe.reader.tryRead()))
+
+    // As an AsyncReader and an AsyncWriter.
+    do {
+        try await pipe.writer.write([7])
+        assertEqual(shown(try await pipe.reader.read(upTo: 3)), "[3, 4, 5]")
+        assertEqual(shown(try await pipe.reader.read(upTo: 10)), "[6, 7]")
+        await pipe.writer.complete()
+        assert(try await pipe.reader.read(upTo: 10).isEmpty)
+    } catch {
+        fail(error.description())
+    }
+    assert((await pipe.reader.tryRead())!.isCompleted)
+}
+
+@test
+fn readsAndFlushesAreCanceledAndEndsComplete() async {
+    let pipe = Pipe(pauseWriterThreshold: 4, resumeWriterThreshold: 2, segmentSize: 8)
+    // A read canceled before it waits comes back at once, canceled.
+    await pipe.reader.cancelPendingRead()
+    let canceled = await pipe.reader.read()
+    assert(canceled.isCanceled && canceled.buffer.isEmpty)
+
+    // A read canceled while it waits.
+    let reading = Task.spawn { await pipe.reader.read() }
+    await pipe.reader.cancelPendingRead()
+    assert((await reading.value).isCanceled)
+
+    // A flush held back past the threshold, canceled while it waits or
+    // before; the next is not.
+    await pipe.writer.buffer([1, 2, 3, 4, 5])
+    let flushing = Task.spawn { await pipe.writer.flush() }
+    await pipe.writer.cancelPendingFlush()
+    let flushed = await flushing.value
+    assert(flushed.isCanceled && !flushed.isCompleted)
+    await pipe.writer.cancelPendingFlush()
+    assert((await pipe.writer.flush()).isCanceled)
+    await pipe.reader.advance(consumed: 0, examined: 0)
+
+    // The reader gone, writes go nowhere and say so.
+    await pipe.reader.complete()
+    assertEqual(await pipe.length, 0)
+    assert((await pipe.writer.flush()).isCompleted)
+    do {
+        try await pipe.writer.write([1])
+        fail("a write reached a completed reader")
+    } catch .Disconnected {
+    } catch {
+        fail("not Disconnected: \(error.description())")
+    }
+    await pipe.writer.complete()
+}

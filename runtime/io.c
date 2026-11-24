@@ -480,3 +480,61 @@ SableString *sable_file_canonical(const SableString *path) {
 void sable_file_flush_standard(int64_t which) {
     fflush(which == 2 ? stderr : stdout);
 }
+
+// ---- Mapped files ----------------------------------------------------------
+
+// The file's first 'length' bytes mapped as the mode says (platform.h's
+// FILE_MAP_): an array whose elements are the mapping, unmapped at its
+// last release. None for a length of zero, sable_file_error then zero; none
+// with an error when the system will not map it.
+SableArray *sable_file_map(int64_t file, int64_t length, int64_t mode) {
+    FileError *error = file_error_cleared();
+    if (length <= 0) {
+        return NULL;
+    }
+
+    void *base = file_map((PlatformFile)file, length, (int)mode, error);
+    if (base == NULL) {
+        return NULL;
+    }
+
+    const SableMetadata *type = mode == FILE_MAP_READ_ONLY ? &mapped_metadata : &mapped_writable_metadata;
+    SableArray *array = sable_alloc(type, (int64_t)sizeof(SableArray));
+    array->elements = base;
+    array->count = length;
+    array->capacity = length;
+    return array;
+}
+
+// The slice's bytes written into a mapping made to be written, from 'at'
+// on: false, writing nothing, for one made to read or a run past its end.
+bool sable_file_map_store(SableArray *mapped, int64_t at, const SableArray *buffer, int64_t start, int64_t count) {
+    if (mapped == NULL || mapped->header.type != &mapped_writable_metadata || at < 0 || count < 0 || at > mapped->count - count) {
+        return false;
+    }
+
+    if (count > 0) {
+        memmove(mapped->elements + at, slice_bytes(buffer, start), (size_t)count);
+    }
+
+    return true;
+}
+
+// The bytes from 'at' on written to the file now; false, sable_file_error
+// saying why, when they could not be.
+bool sable_file_map_flush(SableArray *mapped, int64_t at, int64_t count) {
+    FileError *error = file_error_cleared();
+    if (mapped == NULL || !is_mapped(mapped) || at < 0 || count < 0 || at > mapped->count - count) {
+        error->kind = FILE_ERROR_INVALID;
+        return false;
+    }
+
+    return count == 0 || file_map_flush(mapped->elements, at, count, error);
+}
+
+// How the mapping will be read, for the system to read ahead or let go.
+void sable_file_map_advise(SableArray *mapped, int64_t advice) {
+    if (mapped != NULL && is_mapped(mapped)) {
+        file_map_advise(mapped->elements, mapped->capacity, (int)advice);
+    }
+}

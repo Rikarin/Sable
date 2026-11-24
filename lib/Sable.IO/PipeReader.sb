@@ -1,0 +1,73 @@
+module Sable.IO
+
+/// A Pipe's reading end: .NET's `PipeReader`. A read gives every byte
+/// written and not yet consumed; `advance` then says how many were
+/// consumed — gone, their buffers given back — and how many were looked at,
+/// so the next read waits for more than those.
+///
+/// ```sable
+/// // A line at a time, however the bytes were cut as they were written.
+/// fn readLine(_ reader: PipeReader) async -> U8[>..]? {
+///     while true {
+///         let result = await reader.read()
+///         if let end = result.buffer.firstIndex(of: 10) {
+///             let line = result.buffer.slice(from: 0, count: end).toArray()
+///             await reader.advance(consumed: end + 1)
+///             return line
+///         }
+///         if result.isCompleted {
+///             await reader.advance(consumed: result.buffer.count)
+///             return none
+///         }
+///         await reader.advance(consumed: 0, examined: result.buffer.count)
+///     }
+/// }
+/// ```
+public struct PipeReader: AsyncReader {
+    let pipe: Pipe
+
+    /// Every byte written and not consumed, waiting until there is one the
+    /// last read's `advance` did not say was examined, or the writer
+    /// completes, or the read is canceled.
+    public fn read() async -> ReadResult {
+        return await pipe.readBuffered()
+    }
+
+    /// What `read()` would give, if it would not wait.
+    public fn tryRead() async -> ReadResult? {
+        return await pipe.tryReadBuffered()
+    }
+
+    /// The first 'consumed' bytes of the last read are done with, and the
+    /// first 'examined' were looked at: the next read waits for more.
+    public fn advance(consumed: Int, examined: Int) async {
+        await pipe.advanceReader(consumed: consumed, examined: examined)
+    }
+
+    /// The first 'consumed' bytes of the last read are done with, and no
+    /// more were looked at.
+    public fn advance(consumed: Int) async {
+        await pipe.advanceReader(consumed: consumed, examined: consumed)
+    }
+
+    /// Up to 'count' bytes, copied out and consumed: empty once the writer
+    /// has completed and every byte is read.
+    public fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
+        let result = await read()
+        let take = result.buffer.count < count ? result.buffer.count : count
+        let bytes = result.buffer.slice(from: 0, count: take).toArray()
+        await advance(consumed: take)
+        return bytes
+    }
+
+    /// No more will be read: the writer's flushes say so, and what is
+    /// buffered is let go.
+    public fn complete() async {
+        await pipe.completeReading()
+    }
+
+    /// The read waiting now, or the next one, comes back at once, canceled.
+    public fn cancelPendingRead() async {
+        await pipe.cancelRead()
+    }
+}

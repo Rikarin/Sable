@@ -1,0 +1,12 @@
+module Sable.IO
+
+/// What a PipeReader's read gives: the bytes written and not yet consumed,
+/// and whether more may come.
+public struct ReadResult {
+    /// The bytes, from the first not consumed: the pipe's buffers, shared.
+    public let buffer: ByteSequence
+    /// Whether the writer has completed: no bytes will come past these.
+    public let isCompleted: Bool
+    /// Whether the read was cut short by `cancelPendingRead()`.
+    public let isCanceled: Bool
+}

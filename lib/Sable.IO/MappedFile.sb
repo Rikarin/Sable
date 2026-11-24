@@ -1,0 +1,145 @@
+module Sable.IO
+
+/// A file's bytes mapped into memory: Rust's memmap2, .NET's
+/// `MemoryMappedFile`. `bytes` is the mapping itself as an array, not a
+/// copy — reading it reads the file, a page at a time as the system brings
+/// them in — so a file of any size is read without being read in first,
+/// and parsed where it lies (`Sable.Serialize.parse(bytes:)`).
+///
+/// The array is a value as any is: changing it (`bytes[0] = 1`, `append`)
+/// changes a copy of it, and never the file. The file is written through
+/// `write(_:at:)`, which a mapping made `.ReadWrite` passes to the file and
+/// `.CopyOnWrite` keeps to itself. Arrays taken from `bytes` see what is
+/// written, as they are the mapping; each keeps it mapped while it is held,
+/// past `close()` and past a `resize`, which maps the file again.
+///
+/// ```sable
+/// let path = "sable-mapped-example.bin"
+/// try! File.writeBytes(path, [1, 2, 3, 4])
+/// let mapped = try! MappedFile.open(path, mode: .ReadWrite)
+/// assert(mapped.count == 4 && mapped.bytes[2] == 3)
+/// try! mapped.write([9], at: 0)
+/// try! mapped.flush()
+/// assert(try! File.readBytes(path)[0] == 9)
+/// mapped.close()
+/// try! File.remove(path)
+/// ```
+public final class MappedFile {
+    let file: FileHandle
+    /// How the file is mapped.
+    public let mode: MapMode
+    var mapped: U8[>..]
+
+    init(file: FileHandle, mode: MapMode) {
+        self.file = file
+        self.mode = mode
+        self.mapped = []
+    }
+
+    /// The file at the path mapped whole, as the mode says. A mapping made
+    /// to be written needs the file opened to write it.
+    public static fn open(_ path: String, mode: MapMode = .ReadOnly) throws(IoError) -> MappedFile {
+        return try MappedFile.open(FilePath(path), mode: mode)
+    }
+
+    /// The file at the path mapped whole, as the mode says.
+    public static fn open(_ path: FilePath, mode: MapMode = .ReadOnly) throws(IoError) -> MappedFile {
+        var options = OpenOptions.reading
+        options.write = mode == .ReadWrite
+        let mapping = MappedFile(file: try File.open(path, options: options), mode: mode)
+        try mapping.map(try mapping.file.metadata().size)
+        return mapping
+    }
+
+    fn map(_ length: Int) throws(IoError) {
+        let code = match mode {
+            case .ReadOnly    => 0
+            case .ReadWrite   => 1
+            case .CopyOnWrite => 2
+        }
+        let bytes = Runtime.fileMap(try file.live(), length, code)
+        if bytes.isEmpty && length > 0 {
+            throw IoError.lastFileError(file.path)
+        }
+        mapped = bytes
+    }
+
+    /// The mapped bytes: the mapping itself, shared and not copied.
+    public var bytes: U8[>..] {
+        get {
+            return mapped
+        }
+    }
+
+    /// How many bytes are mapped: the file's length when it was mapped.
+    public var count: Int {
+        get {
+            return mapped.count
+        }
+    }
+
+    /// Whether it is still mapped: not closed.
+    public var isOpen: Bool {
+        get {
+            return file.isOpen
+        }
+    }
+
+    /// The bytes written over the mapping's from the offset on: into the
+    /// file for `.ReadWrite`, into the private copy for `.CopyOnWrite`. An
+    /// error for `.ReadOnly`, and past the end — a mapping grows by `resize`.
+    public fn write(_ bytes: U8[:], at offset: Int) throws(IoError) {
+        if !file.isOpen || mode == .ReadOnly || !Runtime.fileMapStore(mapped, offset, bytes) {
+            throw IoError.InvalidInput(path: file.path)
+        }
+    }
+
+    /// What was written to the mapping written to the disk now, rather
+    /// than in the system's time: msync, FlushViewOfFile. Nothing to do for
+    /// a mapping made to read or of a private copy.
+    public fn flush() throws(IoError) {
+        try flush(at: 0, count: mapped.count)
+    }
+
+    /// What was written to the run of bytes from the offset written to the
+    /// disk now.
+    public fn flush(at offset: Int, count: Int) throws(IoError) {
+        if mode != .ReadWrite || count == 0 {
+            return
+        }
+        if !Runtime.fileMapFlush(mapped, offset, count) {
+            throw IoError.lastFileError(file.path)
+        }
+    }
+
+    /// How the bytes will be read, for the system to read ahead or let go.
+    public fn advise(_ advice: MapAdvice) {
+        let code = match advice {
+            case .Normal     => 0
+            case .Sequential => 1
+            case .Random     => 2
+            case .WillNeed   => 3
+            case .DontNeed   => 4
+        }
+        Runtime.fileMapAdvise(mapped, code)
+    }
+
+    /// The file made the length, grown with zeros or cut, and mapped
+    /// again: `bytes` is then the new mapping. Arrays taken from the old one
+    /// keep it, as it was. Only a `.ReadWrite` mapping changes its file.
+    public fn resize(to length: Int) throws(IoError) {
+        if mode != .ReadWrite || length < 0 {
+            throw IoError.InvalidInput(path: file.path)
+        }
+        try flush()
+        try file.setLength(length)
+        try map(length)
+    }
+
+    /// The mapping let go, and its file closed. Arrays taken from `bytes`
+    /// keep their bytes mapped until they go.
+    public fn close() {
+        mapped = []
+        file.close()
+    }
+}

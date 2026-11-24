@@ -1,0 +1,61 @@
+module Sable.IO
+
+/// A Pipe's writing end: .NET's `PipeWriter`. Bytes written are buffered
+/// until a flush hands them to the reader, waiting if the reader is too far
+/// behind. A buffer from `rentBuffer`, filled and handed back with
+/// `commit`, goes to the reader without being copied.
+///
+/// ```sable
+/// let pipe = Pipe()
+/// var buffer = await pipe.writer.rentBuffer(minimumCapacity: 100)
+/// buffer.append(42)
+/// await pipe.writer.commit(move buffer)
+/// let _ = await pipe.writer.flush()
+/// assert(await pipe.reader.read().buffer[0] == 42)
+/// ```
+public struct PipeWriter: AsyncWriter {
+    let pipe: Pipe
+
+    /// The bytes copied into the pipe's buffers, for the next flush.
+    public fn buffer(_ bytes: U8[:]) async {
+        await pipe.copyIn(bytes)
+    }
+
+    /// An empty buffer with room for at least that many bytes, from the
+    /// pipe's pool, to fill and `commit`.
+    public fn rentBuffer(minimumCapacity: Int) async -> U8[>..] {
+        return await pipe.rentBuffer(minimumCapacity)
+    }
+
+    /// The filled buffer taken as it is, not copied, for the next flush.
+    public fn commit(_ segment: consuming U8[>..]) async {
+        await pipe.takeIn(move segment)
+    }
+
+    /// What was buffered and committed handed to the reader, waiting while
+    /// the reader is `pauseWriterThreshold` or more behind until it is at or
+    /// under `resumeWriterThreshold`.
+    public fn flush() async -> FlushResult {
+        return await pipe.flushWritten()
+    }
+
+    /// The bytes buffered and flushed; an error, `Disconnected`, once the
+    /// reader has completed.
+    public fn write(_ bytes: U8[:]) async throws(IoError) {
+        await buffer(bytes)
+        if (await flush()).isCompleted {
+            throw IoError.Disconnected
+        }
+    }
+
+    /// No more will be written: what was is flushed, and the reader's
+    /// reads say it is completed once it has read it.
+    public fn complete() async {
+        await pipe.completeWriting()
+    }
+
+    /// The flush waiting now, or the next one, comes back at once, canceled.
+    public fn cancelPendingFlush() async {
+        await pipe.cancelFlush()
+    }
+}

@@ -1,0 +1,14 @@
+module Sable.IO
+
+/// How a MappedFile maps its file.
+@derive(Equatable, Hashable, Debug)
+public enum MapMode {
+    /// To read: writing through the mapping is an error.
+    ReadOnly
+    /// To read and write: writes reach the file, and every other mapping
+    /// of it, flushed to the disk by `flush()` or in the system's time.
+    ReadWrite
+    /// To read and write a private copy: writes reach nothing else, and
+    /// the file is left as it was.
+    CopyOnWrite
+}

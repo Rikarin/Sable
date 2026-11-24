@@ -35,7 +35,8 @@ public sealed partial class SilInterpreter {
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or ObjectDisposedException) {
             Failed(e, name is "file_open" or "file_copy" or "file_canonical" ? PathFor(operands[0], SilAccess.Read) : null);
             return name switch {
-                "file_read" => null,
+                "file_read" or "file_map" or "file_map_advise" => null,
+                "file_map_store" or "file_map_flush" => false,
                 "file_canonical" => Allocate(new HeapString("")),
                 "file_sync" or "file_set_length" or "file_close" or "file_copy" => false,
                 _ => -1L,
@@ -174,6 +175,68 @@ public sealed partial class SilInterpreter {
                 return Allocate(new HeapString(Canonical(Path.GetFullPath(path))));
             }
 
+            case "file_map": {
+                var stream = FileOf((long)operands[0]!);
+                var length = (long)operands[1]!;
+                var mode = (long)operands[2]!;
+                if (length <= 0) {
+                    return null;
+                }
+
+                // A copy of the bytes stands in for the mapping; a mapping to
+                // be written writes through to the file, on a handle of its
+                // own that outlives the one it was made from.
+                var bytes = new byte[length];
+                var got = 0;
+                while (got < length) {
+                    var read = RandomAccess.Read(stream.SafeFileHandle, bytes.AsSpan(got), got);
+                    if (read == 0) {
+                        break;
+                    }
+
+                    got += read;
+                }
+
+                var through = mode == MapReadWrite ? new FileStream(stream.Name, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete) : null;
+                var array = Allocate(new HeapArray(new ArrayType(SilType.U8), [..bytes.Select(static b => (object?)(long)b)]));
+                _mappings.AddOrUpdate(array, new Mapping(through, mode));
+                return array;
+            }
+
+            case "file_map_store": {
+                var at = (long)operands[1]!;
+                var bytes = BytesOf(operands[2]);
+                if (operands[0] is not HeapArray array || !_mappings.TryGetValue(array, out var mapping) || mapping.Mode == MapReadOnly
+                    || at < 0 || at > array.Elements.Count - bytes.Length) {
+                    return false;
+                }
+
+                for (var i = 0; i < bytes.Length; i++) {
+                    array.Elements[(int)at + i] = (long)bytes[i];
+                }
+
+                if (mapping.Through is { } through) {
+                    RandomAccess.Write(through.SafeFileHandle, bytes, at);
+                }
+
+                return true;
+            }
+
+            case "file_map_flush": {
+                var at = (long)operands[1]!;
+                var count = (long)operands[2]!;
+                if (operands[0] is not HeapArray array || !_mappings.TryGetValue(array, out var mapping) || at < 0 || count < 0 || at > array.Elements.Count - count) {
+                    _fileError = 6;
+                    return false;
+                }
+
+                mapping.Through?.Flush(flushToDisk: true);
+                return true;
+            }
+
+            case "file_map_advise":
+                return null;
+
             case "file_standard":
                 return operands[0];
 
@@ -190,6 +253,15 @@ public sealed partial class SilInterpreter {
     }
 
     readonly Dictionary<long, bool> _appending = [];
+
+    // platform.h's FILE_MAP_ modes.
+    const long MapReadOnly = 0, MapReadWrite = 1;
+
+    // What a mapped array was mapped as, and the handle a mapping to be
+    // written writes through.
+    sealed record Mapping(FileStream? Through, long Mode);
+
+    readonly System.Runtime.CompilerServices.ConditionalWeakTable<HeapArray, Mapping> _mappings = new();
 
     // The full path with every link on it resolved, a component at a time:
     // realpath, which .NET has no call for.

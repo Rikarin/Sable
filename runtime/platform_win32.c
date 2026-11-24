@@ -1260,3 +1260,52 @@ static char *file_canonical(const char *name, FileError *error) {
     free(path);
     return result;
 }
+
+// ---- Mapped files ----------------------------------------------------------
+
+static void *file_map(PlatformFile file, int64_t length, int mode, FileError *error) {
+    DWORD protection = mode == FILE_MAP_READ_WRITE ? PAGE_READWRITE : mode == FILE_MAP_COPY_ON_WRITE ? PAGE_WRITECOPY : PAGE_READONLY;
+    DWORD access = mode == FILE_MAP_READ_WRITE ? FILE_MAP_WRITE : mode == FILE_MAP_COPY_ON_WRITE ? FILE_MAP_COPY : FILE_MAP_READ;
+    HANDLE mapping = CreateFileMappingW(handle_of(file), NULL, protection, (DWORD)((uint64_t)length >> 32),
+                                        (DWORD)((uint64_t)length & 0xFFFFFFFF), NULL);
+    if (mapping == NULL) {
+        file_failed(error);
+        return NULL;
+    }
+
+    void *view = MapViewOfFile(mapping, access, 0, 0, (SIZE_T)length);
+    if (view == NULL) {
+        file_failed(error);
+    }
+
+    // The view keeps the mapping open.
+    CloseHandle(mapping);
+    return view;
+}
+
+static void file_unmap(void *base, int64_t length) {
+    (void)length;
+    UnmapViewOfFile(base);
+}
+
+static bool file_map_flush(void *base, int64_t at, int64_t length, FileError *error) {
+    if (!FlushViewOfFile((char *)base + at, (SIZE_T)length)) {
+        file_failed(error);
+        return false;
+    }
+
+    return true;
+}
+
+static void file_map_advise(void *base, int64_t length, int advice) {
+#if _WIN32_WINNT >= 0x0602
+    if (advice == FILE_ADVISE_WILL_NEED) {
+        WIN32_MEMORY_RANGE_ENTRY range = { base, (SIZE_T)length };
+        (void)PrefetchVirtualMemory(GetCurrentProcess(), 1, &range, 0);
+    }
+#else
+    (void)base;
+    (void)length;
+    (void)advice;
+#endif
+}

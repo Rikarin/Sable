@@ -1,0 +1,18 @@
+module Sable.IO
+
+/// How a mapping will be read, for the system to read ahead or let go:
+/// POSIX's madvise. Advice only — a system may ignore it (Windows takes
+/// `WillNeed` alone, as a prefetch).
+@derive(Equatable, Hashable, Debug)
+public enum MapAdvice {
+    /// No particular way.
+    Normal
+    /// From the start to the end: read well ahead, and let go behind.
+    Sequential
+    /// Anywhere: read no further ahead than asked.
+    Random
+    /// Soon: read it in now.
+    WillNeed
+    /// Not again soon: let it go.
+    DontNeed
+}

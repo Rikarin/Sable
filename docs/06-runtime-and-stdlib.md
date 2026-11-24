@@ -752,7 +752,11 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     FilePath (platform bytes, POSIX and Windows rules:
                     drives, UNC, verbatim; components, lexical
                     normalization, relative paths, canonical) and Path
-                    over it, the standard streams as handles, TCP
+                    over it, MappedFile (read-only, read-write and
+                    copy-on-write mappings as a U8 array, flush, advise,
+                    resize), Pipe with PipeReader PipeWriter (pooled
+                    segments, ByteSequence views, consumed/examined,
+                    backpressure), the standard streams as handles, TCP
 Sable.Serialize     Encoder/Decoder protocols, conformance synthesis via
                     @derive(Serializable), JSON, TOML, MessagePack, and the
                     zero-copy @inline_layout path

@@ -87,17 +87,6 @@ fn hexValue(_ c: Char) -> Int? {
     return none
 }
 
-fn charsOf(_ s: String) -> Char[>..] {
-    var result: Char[>..] = []
-    var i = 0
-    let n = s.count
-    while i < n {
-        result.append(s.at(i))
-        i = i + 1
-    }
-    return result
-}
-
 // Orders strings by Unicode scalar, as JSON's sorted-key output wants.
 fn compareText(_ a: String, _ b: String) -> Int {
     let n = a.count.min(b.count)

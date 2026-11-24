@@ -167,6 +167,28 @@ public struct Runtime {
     @builtin("file_canonical")
     public static fn fileCanonical(_ path: String) -> String
 
+    /// The file's first 'length' bytes mapped (0 to read, 1 to read and
+    /// write, 2 to write a private copy): an array whose elements are the
+    /// mapping, which is never changed in place but by fileMapStore — a
+    /// change made any other way is made to a copy. Empty for a length of
+    /// zero; empty with fileError set when the system will not map it.
+    @builtin("file_map")
+    public static fn fileMap(_ file: Int, _ length: Int, _ mode: Int) -> U8[>..]
+
+    /// The bytes written into a mapping made to be written, from 'at' on;
+    /// false, writing nothing, for one made to read or past its end.
+    @builtin("file_map_store")
+    public static fn fileMapStore(_ mapped: U8[>..], _ at: Int, _ bytes: U8[:]) -> Bool
+
+    /// What was written to the mapping's bytes from 'at' on, written to the file.
+    @builtin("file_map_flush")
+    public static fn fileMapFlush(_ mapped: U8[>..], _ at: Int, _ count: Int) -> Bool
+
+    /// How the mapping will be read (0 normal, 1 in order, 2 anywhere,
+    /// 3 soon, 4 not again soon), for the system to read ahead or let go.
+    @builtin("file_map_advise")
+    public static fn fileMapAdvise(_ mapped: U8[>..], _ advice: Int)
+
     @builtin("lock_new")
     public static fn lockNew() -> Int
 

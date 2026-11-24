@@ -288,6 +288,24 @@ static bool file_copy(const char *from, const char *to, FileError *error);
 // there; the caller frees it.
 static char *file_canonical(const char *name, FileError *error);
 
+// ---- Mapped files ----------------------------------------------------------
+
+// How a file is mapped: to read; to read and write it, writes reaching the
+// file; or to read and write a private copy, writes reaching nothing else.
+enum { FILE_MAP_READ_ONLY = 0, FILE_MAP_READ_WRITE = 1, FILE_MAP_COPY_ON_WRITE = 2 };
+// What the program will do with a mapping, for the system to read ahead or
+// let go (madvise): as usual, in order, anywhere, soon, not again soon.
+enum { FILE_ADVISE_NORMAL = 0, FILE_ADVISE_SEQUENTIAL = 1, FILE_ADVISE_RANDOM = 2, FILE_ADVISE_WILL_NEED = 3, FILE_ADVISE_DONT_NEED = 4 };
+
+// The file's first 'length' bytes (more than zero) mapped as the mode says;
+// NULL, with why, when they cannot be. The mapping outlives the file's
+// handle.
+static void *file_map(PlatformFile file, int64_t length, int mode, FileError *error);
+static void file_unmap(void *base, int64_t length);
+// What was written to the bytes from 'at' on, written to the file now.
+static bool file_map_flush(void *base, int64_t at, int64_t length, FileError *error);
+static void file_map_advise(void *base, int64_t length, int advice);
+
 // ---- Processes -----------------------------------------------------------
 
 // Runs argv[0], found on PATH as the system finds a program, with the

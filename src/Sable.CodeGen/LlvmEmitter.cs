@@ -490,6 +490,10 @@ public sealed partial class LlvmEmitter {
                                 declare i64 @sable_file_standard(i64)
                                 declare zeroext i1 @sable_file_copy(ptr, ptr)
                                 declare ptr @sable_file_canonical(ptr)
+                                declare ptr @sable_file_map(i64, i64, i64)
+                                declare zeroext i1 @sable_file_map_store(ptr, i64, ptr, i64, i64)
+                                declare zeroext i1 @sable_file_map_flush(ptr, i64, i64)
+                                declare void @sable_file_map_advise(ptr, i64)
                                 declare zeroext i1 @sable_io_file_exists(ptr)
                                 declare zeroext i1 @sable_io_is_directory(ptr)
                                 declare zeroext i1 @sable_io_remove_file(ptr)
@@ -4544,6 +4548,27 @@ public sealed partial class LlvmEmitter {
 
                 case "file_standard":
                     Line($"{Result()} = call i64 @sable_file_standard(i64 {operands[0]})");
+                    return;
+
+                case "file_map":
+                    Line($"{Result()} = call ptr @sable_file_map(i64 {operands[0]}, i64 {operands[1]}, i64 {operands[2]})");
+                    return;
+
+                case "file_map_store": {
+                    var type = (SliceType)builtin.Operands[2].Type;
+                    var buffer = SlicePart(operands[2], type, 0);
+                    var start = SlicePart(operands[2], type, 1);
+                    var count = SlicePart(operands[2], type, 2);
+                    Line($"{Result()} = call zeroext i1 @sable_file_map_store(ptr {operands[0]}, i64 {operands[1]}, ptr {buffer}, i64 {start}, i64 {count})");
+                    return;
+                }
+
+                case "file_map_flush":
+                    Line($"{Result()} = call zeroext i1 @sable_file_map_flush(ptr {operands[0]}, i64 {operands[1]}, i64 {operands[2]})");
+                    return;
+
+                case "file_map_advise":
+                    Line($"call void @sable_file_map_advise(ptr {operands[0]}, i64 {operands[1]})");
                     return;
 
                 case "file_canonical":

@@ -281,3 +281,79 @@ static char *file_canonical(const char *name, FileError *error) {
     return resolved;
 #endif
 }
+
+// ---- Mapped files ----------------------------------------------------------
+
+#if defined(__wasi__)
+
+// WASI has no mmap: mapping fails, and MappedFile says so.
+static void *file_map(PlatformFile file, int64_t length, int mode, FileError *error) {
+    (void)file;
+    (void)length;
+    (void)mode;
+    error->kind = FILE_ERROR_OTHER;
+    error->code = ENOTSUP;
+    return NULL;
+}
+
+static void file_unmap(void *base, int64_t length) {
+    (void)base;
+    (void)length;
+}
+
+static bool file_map_flush(void *base, int64_t at, int64_t length, FileError *error) {
+    (void)base;
+    (void)at;
+    (void)length;
+    (void)error;
+    return true;
+}
+
+static void file_map_advise(void *base, int64_t length, int advice) {
+    (void)base;
+    (void)length;
+    (void)advice;
+}
+
+#else
+
+static void *file_map(PlatformFile file, int64_t length, int mode, FileError *error) {
+    int protection = mode == FILE_MAP_READ_ONLY ? PROT_READ : PROT_READ | PROT_WRITE;
+    int sharing = mode == FILE_MAP_READ_WRITE ? MAP_SHARED : MAP_PRIVATE;
+    void *mapped = mmap(NULL, (size_t)length, protection, sharing, (int)file, 0);
+    if (mapped == MAP_FAILED) {
+        file_failed(error);
+        return NULL;
+    }
+
+    return mapped;
+}
+
+static void file_unmap(void *base, int64_t length) {
+    munmap(base, (size_t)length);
+}
+
+static bool file_map_flush(void *base, int64_t at, int64_t length, FileError *error) {
+    // msync starts at a page: the one 'at' is in.
+    uintptr_t page = (uintptr_t)sysconf(_SC_PAGESIZE);
+    uintptr_t from = ((uintptr_t)base + (uintptr_t)at) & ~(page - 1);
+    uintptr_t to = (uintptr_t)base + (uintptr_t)(at + length);
+    if (to > from && msync((void *)from, to - from, MS_SYNC) != 0) {
+        file_failed(error);
+        return false;
+    }
+
+    return true;
+}
+
+static void file_map_advise(void *base, int64_t length, int advice) {
+    int how = advice == FILE_ADVISE_SEQUENTIAL ? MADV_SEQUENTIAL
+        : advice == FILE_ADVISE_RANDOM         ? MADV_RANDOM
+        : advice == FILE_ADVISE_WILL_NEED      ? MADV_WILLNEED
+        : advice == FILE_ADVISE_DONT_NEED      ? MADV_DONTNEED
+                                               : MADV_NORMAL;
+    // Advice only: a system that will not take it changes nothing.
+    (void)madvise(base, (size_t)length, how);
+}
+
+#endif

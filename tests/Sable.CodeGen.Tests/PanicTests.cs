@@ -251,6 +251,57 @@ public sealed class PanicTests {
         }
     }
 
+    /// <summary>
+    ///     C's main calls a throwing one by the type it has: on x86-64 the pair
+    ///     it returns comes back through a pointer the caller passes, and a
+    ///     call as 'void' left it to write through whatever was there.
+    /// </summary>
+    [Fact]
+    public void AThrowingMainIsCalledByTheTypeItHas() {
+        var ir = TypeMetadataTests.Ir("""
+                                      module Test
+
+                                      struct Code {
+                                          var value: Int
+                                          var detail: String
+                                      }
+
+                                      fn go(_ n: Int) throws(Code) {
+                                          if n > 3 { throw Code(value: n, detail: "big") }
+                                      }
+
+                                      @main
+                                      fn main() throws(Code) {
+                                          try go(1)
+                                      }
+                                      """);
+        Assert.Matches("""call \{ i1, .* \} @"sable\.Test\.main"\(\)""", ir);
+        Assert.DoesNotMatch("""call void @"sable\.Test\.main"\(\)""", ir);
+    }
+
+    /// <summary>A throwing main's Int is the exit status, as any other's is.</summary>
+    [Fact]
+    public void AThrowingMainsResultIsTheExitStatus() {
+        var ir = TypeMetadataTests.Ir("""
+                                      module Test
+
+                                      struct Code {
+                                          var value: Int
+                                      }
+
+                                      fn go(_ n: Int) throws(Code) -> Int {
+                                          if n > 3 { throw Code(value: n) }
+                                          return n
+                                      }
+
+                                      @main
+                                      fn main() throws(Code) -> Int {
+                                          return try go(1)
+                                      }
+                                      """);
+        Assert.Matches("""%p = call \{ i1, i64, .* \} @"sable\.Test\.main"\(\)\n  %r = extractvalue \{ i1, i64, .* \} %p, 1\n""", ir);
+    }
+
     /// <summary>An error caught in main is not uncaught: only one that would leave it is.</summary>
     [Fact]
     public void AnErrorCaughtInMainIsNotReported() =>

@@ -531,7 +531,6 @@ public sealed class BindingTests {
                 }
             }
             fn draw(_ colour: Colour) { }
-            fn draw(_ width: Int) { }
             fn pick<T>(_ value: T) -> T { return value }
             fn probe(b: Bool, other: Colour) {
                 draw(b ? .Red : .Green)

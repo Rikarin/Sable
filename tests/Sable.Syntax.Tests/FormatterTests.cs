@@ -113,6 +113,8 @@ public sealed class FormatterTests {
     [InlineData("let o:Int?=none", "let o: Int? = none\n")]
     [InlineData("let c=a ? b : d", "let c = a ? b : d\n")]
     [InlineData("let p=Point{x:1,y:2}", "let p = Point { x: 1, y: 2 }\n")]
+    [InlineData("let a = match e {\n    case IoError .NotFound(_) => 1\n    case Box<Int> .Full(.Some(_)) => 2\n    default => 3\n}", "let a = match e {\n    case IoError.NotFound(_)     => 1\n    case Box<Int>.Full(.Some(_)) => 2\n    default                      => 3\n}\n")]
+    [InlineData("fn f() {\n    do {\n        g()\n    } catch IoError.NotFound(_) {\n        h()\n    } catch  .Other {\n    }\n}", "fn f() {\n    do {\n        g()\n    } catch IoError.NotFound(_) {\n        h()\n    } catch .Other { }\n}\n")]
     public void NormalisesSpacing(string source, string expected) => Assert.Equal(expected, Format(source));
 
     // A range with no upper bound ends its operand: the loop's brace, or a

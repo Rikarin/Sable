@@ -847,7 +847,7 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     copy-on-write mappings as a U8 array, flush, advise,
                     resize), Pipe with PipeReader PipeWriter (pooled
                     segments, ByteSequence views, consumed/examined,
-                    backpressure), the standard streams as handles, TCP,
+                    backpressure), the standard streams as handles,
                     Environment (variables listed, set and removed under
                     'unsafe', arguments as text and bytes, home, temporary
                     and known folders by XDG, Apple and Windows rules)
@@ -857,7 +857,13 @@ Sable.Net           Url (WHATWG URL parsing, as browsers do: WPT's
                     opaque), PercentEncoding with the standard's encode
                     sets, application/x-www-form-urlencoded (QueryItem),
                     Idna (UTS #46 toASCII/toUnicode, tables from
-                    tools/idna-tables.py) and Punycode (RFC 3492)
+                    tools/idna-tables.py) and Punycode (RFC 3492);
+                    IpAddress (strict parsing, RFC 5952, scopes, IANA's
+                    special-purpose registries), SocketAddress, IpNetwork;
+                    TcpListener TcpStream, UdpSocket (multicast),
+                    UnixListener UnixStream UnixDatagramSocket; Dns,
+                    HappyEyeballs (RFC 8305), NetworkInterface (below).
+                    Not yet: Tls Http1 Http2
 Sable.Serialize     Serializable (encode(to:), static decode(from:)) for
                     the primitives, UUID, optionals, arrays, Set, String-keyed
                     dictionaries, Duration, UtcDateTime and JsonValue;
@@ -895,7 +901,6 @@ Sable.Time          Instant Duration Clock, UtcDateTime (the moment),
                     ZonedDateTime, Period, Weekday Month, Disambiguation;
                     .NET custom/standard patterns, RFC 3339, RFC 2822,
                     ISO 8601, RFC 9557
-Sable.Net           Socket Tcp Udp Tls Http1 Http2 Uri
 Sable.Process       Command (arguments, environment, directory, streams;
                     spawn, output, status), Child (piped streams, wait,
                     tryWait, kill, kill(tree:), signal), ExitStatus, Signal,
@@ -1264,6 +1269,46 @@ for tests. x86's SHA-512 and SHA-3, and everything else, are portable only.
 
 SHA-256, SHA-512, SHA3-256 and HMAC are timed against .NET by the benchmarks
 of those names. Symmetric ciphers and signatures are not here yet.
+
+**Sockets.** `Sable.Net`'s sockets are nonblocking and handles of the
+runtime's (`runtime/net.c`), read, written, accepted from and connected over
+the reactor; a task that must wait suspends. What each does where systems, or
+other libraries, differ:
+
+- *Nothing listens but where it is told.* `bind` takes a `SocketAddress`, and
+  there is none by default; `.v4Any` and `.v6Any` are every interface, and
+  are written. An IPv6 socket takes IPv6 alone on every system unless it is
+  bound `dualStack`.
+- *A port in use is in use.* POSIX's listeners have SO_REUSEADDR, which there
+  is about TIME_WAIT alone; Windows' have SO_EXCLUSIVEADDRUSE, SO_REUSEADDR
+  there letting any program take the port too. `sharePort` (SO_REUSEPORT) is
+  asked for, and Unsupported on Windows.
+- *Closing* a socket another task reads, writes or accepts from wakes that
+  task, which throws Disconnected. A call on a socket and its close never
+  overlap: a close waits for the calls that are on it (none waits for
+  anything), since the descriptor's number is the next socket's at once. The
+  port is free when `close` returns.
+- *Cancelling* a read, a receive or an accept loses nothing and leaves the
+  socket as it was. A write that throws, cancelled or not, may have sent some
+  of its bytes; a connect that does leaves no socket.
+- *Out of descriptors*, accept waits and asks again, up to a tenth of a
+  second apart, rather than throw or spin: no readiness says there are some.
+  It asks whether there are before it accepts again, since macOS drops the
+  connection an accept has no descriptor for.
+  A connection given up before it was accepted is passed over.
+- *Reading.* Several tasks may wait on one socket the same way (accepting
+  from one listener, say); a readiness wakes them all.
+- *Addresses.* `IpAddress.parse` refuses what programs read differently
+  (`0177.0.0.1`, `127.1`, `0x7f.1`), and `Dns.resolve` does not hand such
+  text to a resolver that would read it so. A v4-mapped IPv6 address is
+  classified as the IPv4 one it goes to, and is in the networks that one is
+  in; NAT64's is global only if its IPv4 one is.
+- *Names* are looked up by getaddrinfo, on threads no task runs on, at most
+  32 at once; one whose task was cancelled or ran out of time is left to end
+  by itself, and the program's end does not wait for it.
+- *SIGPIPE* is never raised and every descriptor is closed on exec.
+
+`IoError` says why, in cases the systems' codes are sorted into.
 
 ### Source layout
 

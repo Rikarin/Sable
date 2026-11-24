@@ -1,0 +1,45 @@
+module SocketAddressTests
+
+// SocketAddress, and Host as an address (Sable.Net): run with
+//     tools/stdlib-coverage.sh Sable.Net
+
+import Sable.Net
+import Sable.Testing
+
+@test
+fn anAddressAndPortAreReadAndWritten() {
+    for text in ["127.0.0.1:0", "192.0.2.1:65535", "[::1]:80", "[2001:db8::1]:443", "[::ffff:192.0.2.1]:8080", "[fe80::1%4]:1"] {
+        assertEqual((try! SocketAddress.parse(text)).toString(), text)
+    }
+    for text in ["", "127.0.0.1", "127.0.0.1:", "127.0.0.1:65536", "127.0.0.1:-1", "127.0.0.1:+1", "127.0.0.1:80 ", "127.1:80", "::1:80", "[::1]", "[::1]80", "[::1]:",
+        "[::1", "[127.0.0.1]:80", "localhost:80", ":80", "[]:80", "127.0.0.1:99999999999999999999"] {
+        assert((try? SocketAddress.parse(text)) == none, text)
+    }
+}
+
+@test
+fn socketAddressesAreOrderedAndHashed() {
+    let a = SocketAddress(.v4Loopback, port: 80)
+    let b = SocketAddress(.v4Loopback, port: 81)
+    let c = SocketAddress(.v6Loopback, port: 1)
+    assert(a < b && b < c && !(c < a) && a != b)
+    var seen: [SocketAddress: Int] = [:]
+    seen[a] = 1
+    seen[try! SocketAddress.parse("127.0.0.1:80")] = 2
+    assertEqual(seen.count, 1)
+    assertEqual(c.debugDescription(), "[::1]:1")
+    assertEqual("\(a:>14)", "  127.0.0.1:80")
+}
+
+@test
+fn aUrlsHostIsAnAddress() {
+    assertEqual((try! Url.parse("http://127.1:80/")).host!.ipAddress, IpAddress.v4Loopback)
+    assertEqual((try! Url.parse("http://[2001:db8::1]/")).host!.ipAddress, try! IpAddress.parse("2001:db8::1"))
+    assert((try! Url.parse("http://[::ffff:7f00:1]/")).host!.ipAddress!.isLoopback)
+    assert((try! Url.parse("http://example.com/")).host!.ipAddress == none)
+    for text in ["192.0.2.1", "2001:db8::1", "::", "::ffff:1.2.3.4"] {
+        let address = try! IpAddress.parse(text)
+        assertEqual(Host.address(address).ipAddress, address)
+    }
+    assertEqual(Host.address(try! IpAddress.parse("fe80::1%2")).description(), "[fe80::1]")
+}

@@ -1,0 +1,123 @@
+module Sable.Net
+
+import Sable.IO
+import Sable.Time
+
+/// Names looked up by the system's resolver: its hosts file, its DNS
+/// servers, and what else it is set up to ask.
+public struct Dns {
+    /// The host's addresses, in the order the system would try them, of one
+    /// family or both, waiting until they are known. A numeric address is
+    /// its own and nothing is asked; text that could be read as one, but is
+    /// not written as one ("127.1", "0x7f000001"), is InvalidInput and not
+    /// handed on to a resolver that might read it so. A name that is not
+    /// ASCII is asked for as IDNA has it.
+    ///
+    /// HostNotFound when there is none, of that family if one is named;
+    /// TimedOut once the timeout has passed (without one, when the system
+    /// gives up). The system cannot be told to stop looking: the lookup is
+    /// done on a thread that no task runs on, and one whose task has been
+    /// cancelled, or has run out of time, is left to end there by itself,
+    /// which neither the task nor the program's end waits for. No more than
+    /// 32 run at once.
+    ///
+    /// ```sable
+    /// fn local() async throws(IoError) -> Bool {
+    ///     let addresses = try await Dns.resolve("localhost")
+    ///     return addresses[0].isLoopback
+    /// }
+    /// ```
+    public static async fn resolve(_ host: String, family: IpFamily? = none, timeout: Duration? = none) throws(IoError) -> IpAddress[>..] {
+        if let literal = try? IpAddress.parse(host) {
+            if family != none && family != literal.family {
+                throw IoError.HostNotFound(host: host)
+            }
+            return [literal]
+        }
+        let name = try Dns.name(host)
+        let lookup = Runtime.beginLookup(name, family == none ? 0 : family == .V4 ? 4 : 6)
+        if lookup == 0 {
+            throw socketError(host)
+        }
+        defer {
+            Runtime.endLookup(lookup)
+        }
+        guard let limit = timeout else {
+            return try await Dns.found(lookup, host, within: none)
+        }
+        // Wakes the wait when the time is up, as closing a socket does.
+        let event = Runtime.lookupEvent(lookup)
+        let timer = Task.spawn { () -> Bool in
+            do {
+                try await Task.sleep(nanoseconds: limit.totalNanoseconds)
+                Runtime.closeSocket(event)
+            } catch { }
+            return true
+        }
+        defer {
+            timer.cancel()
+        }
+        return try await Dns.found(lookup, host, within: limit)
+    }
+
+    static fn found(_ lookup: Int, _ host: String, within limit: Duration?) async throws(IoError) -> IpAddress[>..] {
+        let start = Instant.now()
+        while true {
+            let count = Runtime.lookupCount(lookup)
+            if Runtime.socketStatus() == 0 {
+                var addresses: IpAddress[>..] = []
+                for i in 0..<count {
+                    Runtime.takeLookupAddress(lookup, i)
+                    // The system gives one for each kind of socket, some have.
+                    if let address = SocketAddress.ofLastCall() {
+                        if !addresses.contains(address.ip) {
+                            addresses.append(address.ip)
+                        }
+                    }
+                }
+                if addresses.isEmpty {
+                    throw IoError.HostNotFound(host: host)
+                }
+                return addresses
+            }
+            if Runtime.socketStatus() == 2 {
+                if Runtime.socketError() == 11 {
+                    throw IoError.HostNotFound(host: host)
+                }
+                throw Runtime.socketError() == 7 ? IoError.TimedOut : socketError(host)
+            }
+            if Task.isCancelled {
+                throw IoError.Cancelled
+            }
+            if let limit {
+                if start.elapsed >= limit {
+                    throw IoError.TimedOut
+                }
+            }
+            await Runtime.waitForSocket(Runtime.lookupEvent(lookup), writable: false)
+        }
+    }
+
+    // The name as it is asked for.
+    static fn name(_ host: String) throws(IoError) -> String {
+        var ascii = host
+        for c in host {
+            if c.codePoint >= 0x80 {
+                guard let converted = Idna.toAscii(host) else {
+                    throw IoError.InvalidInput(path: host)
+                }
+                ascii = converted
+                break
+            }
+        }
+        for c in ascii {
+            if Host.isForbiddenDomain(c.codePoint) {
+                throw IoError.InvalidInput(path: host)
+            }
+        }
+        if ascii.isEmpty || Host.endsInNumber(ascii) {
+            throw IoError.InvalidInput(path: host)
+        }
+        return ascii
+    }
+}

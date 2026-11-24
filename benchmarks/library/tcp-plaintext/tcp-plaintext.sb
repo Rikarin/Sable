@@ -1,0 +1,105 @@
+module TcpPlaintextBench
+
+import Sable.IO
+import Sable.Net
+
+// TcpListener and TcpStream over loopback, as TechEmpower's plaintext test
+// uses them: 32 connections, each 100 times over sending 16 requests at once
+// and reading their 16 replies, which the server, a task to a connection,
+// counts the ends of and answers in one write.
+
+let connections = 32
+let rounds = 100
+let pipelined = 16
+
+/// How many requests end in the bytes, 'matched' of an end having come
+/// before: "\r\n\r\n".
+fn ends(_ bytes: U8[:], _ matched: inout Int) -> Int {
+    let end: U8[4] = [13, 10, 13, 10]
+    var count = 0
+    for b in bytes {
+        if b == end[matched] {
+            matched += 1
+            if matched == 4 {
+                count += 1
+                matched = 0
+            }
+        } else {
+            matched = b == 13 ? 1 : 0
+        }
+    }
+    return count
+}
+
+fn answer(_ connection: TcpStream, _ reply: U8[>..]) async {
+    var matched = 0
+    do {
+        while true {
+            let bytes = try await connection.read(upTo: 16384)
+            if bytes.isEmpty {
+                break
+            }
+            let count = ends(bytes, &matched)
+            if count > 0 {
+                var replies: U8[>..] = []
+                replies.reserveCapacity(count * reply.count)
+                for _ in 0..<count {
+                    replies.append(contentsOf: reply)
+                }
+                try await connection.write(replies)
+            }
+        }
+    } catch { }
+    connection.close()
+}
+
+fn serve(_ listener: TcpListener, _ reply: U8[>..]) async {
+    while let connection = try? await listener.accept() {
+        let _ = Task.spawn { await answer(connection, reply) }
+    }
+}
+
+fn ask(_ address: SocketAddress, _ requests: U8[>..], _ expected: Int) async -> Int {
+    var total = 0
+    do {
+        let connection = try await TcpStream.connect(address)
+        for _ in 0..<rounds {
+            try await connection.write(requests)
+            var got = 0
+            while got < expected {
+                let bytes = try await connection.read(upTo: 16384)
+                if bytes.isEmpty {
+                    return total
+                }
+                got += bytes.count
+            }
+            total += got
+        }
+    } catch { }
+    return total
+}
+
+@main
+fn main() async {
+    let request = "GET /plaintext HTTP/1.1\r\nHost: localhost\r\nAccept: text/plain\r\nConnection: keep-alive\r\n\r\n".utf8.toArray()
+    let reply = "HTTP/1.1 200 OK\r\nServer: s\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello, World!".utf8.toArray()
+    var requests: U8[>..] = []
+    for _ in 0..<pipelined {
+        requests.append(contentsOf: request)
+    }
+    let listener = try! TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let address = listener.localAddress
+    let server = Task.spawn { await serve(listener, reply) }
+    let sent = requests
+    var clients: Task<Int>[>..] = []
+    for _ in 0..<connections {
+        clients.append(Task.spawn { await ask(address, sent, pipelined * reply.count) })
+    }
+    var total = 0
+    for client in clients {
+        total += await client.value
+    }
+    listener.close()
+    await server.value
+    print(total)
+}

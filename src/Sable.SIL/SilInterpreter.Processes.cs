@@ -308,7 +308,9 @@ public sealed partial class SilInterpreter {
 
             default:
                 _netStatus = name is "net_shutdown" ? 0 : 2;
-                result = name is "net_accept" or "net_connect" or "net_port" or "net_write" ? 0L : name is "net_connected" ? false : null;
+                result = name is "net_accept" or "net_write" or "net_send" or "net_option" ? 0L
+                    : name is "net_connected" or "net_connect_datagram" or "net_name" or "net_set_option" or "net_membership" ? false
+                    : null;
                 return true;
         }
     }

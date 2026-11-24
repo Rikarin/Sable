@@ -1,0 +1,210 @@
+module Sable.Net
+
+extension IpAddress: Parsable {
+    /// The address the whole text writes: an IPv4 one as four decimal
+    /// numbers; an IPv6 one as RFC 4291 has it, with the scope it has, if
+    /// any, after a `%`, as a number or as the name of one of this machine's
+    /// interfaces.
+    ///
+    /// What two programs could read two ways is neither's: a number with a
+    /// zero before it (octal to some), hexadecimal, or fewer than four
+    /// numbers is refused, and so are brackets and a port (`SocketAddress`
+    /// reads those). A URL's host is read by `Host`, as browsers read it.
+    ///
+    /// ```sable
+    /// assert((try! IpAddress.parse("192.0.2.1")) == IpAddress(192, 0, 2, 1))
+    /// assert((try? IpAddress.parse("192.0.2.01")) == none)
+    /// assert((try? IpAddress.parse("0x7f.0.0.1")) == none)
+    /// assert((try! IpAddress.parse("fe80::1%4")).scope == 4)
+    /// ```
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> IpAddress {
+        let scalars = text.toString().toArray()
+        if scalars.isEmpty {
+            throw .Empty
+        }
+        return try IpAddress.parse(scalars, 0, scalars.count)
+    }
+
+    // The address the scalars from 'start' to 'end' write.
+    static fn parse(_ scalars: Char[>..], _ start: Int, _ end: Int) throws(ParseError) -> IpAddress {
+        for i in start..<end {
+            if scalars[i] == ':' {
+                return try IpAddress.parseV6(scalars, start, end)
+            }
+        }
+        return IpAddress(v4: (try IpAddress.parseV4(scalars, start, end)) unchecked as U32)
+    }
+
+    // Four decimal numbers to 255, none with a zero before it.
+    static fn parseV4(_ scalars: Char[>..], _ start: Int, _ end: Int) throws(ParseError) -> U64 {
+        var bits: U64 = 0
+        var at = start
+        for part in 0..<4 {
+            if part > 0 {
+                if at >= end || scalars[at] != '.' {
+                    throw .Invalid(at: at)
+                }
+                at += 1
+            }
+            let first = at
+            var value: U64 = 0
+            while at < end && at - first < 4 && scalars[at] >= '0' && scalars[at] <= '9' {
+                value = value * 10 + U64(scalars[at].codePoint - 48)
+                at += 1
+            }
+            if at == first {
+                throw .InvalidDigit(at: at)
+            }
+            if at - first > 1 && scalars[first] == '0' {
+                throw .Invalid(at: first)
+            }
+            if value > 255 {
+                throw .Overflow
+            }
+            bits = bits << 8 | value
+        }
+        if at != end {
+            throw .Invalid(at: at)
+        }
+        return bits
+    }
+
+    static fn parseV6(_ scalars: Char[>..], _ start: Int, _ last: Int) throws(ParseError) -> IpAddress {
+        var end = last
+        var scope: U32 = 0
+        for i in start..<last {
+            if scalars[i] == '%' {
+                end = i
+                scope = try IpAddress.parseScope(String(scalars[(i + 1)..<last]), at: i + 1)
+                break
+            }
+        }
+
+        // The sixteen-bit pieces, and how many come before the '::'.
+        var pieces: U64[8] = [0, 0, 0, 0, 0, 0, 0, 0]
+        var count = 0
+        var gap = -1
+        var at = start
+        if end - start >= 2 && scalars[at] == ':' && scalars[at + 1] == ':' {
+            gap = 0
+            at += 2
+        }
+        while at < end {
+            if count == 8 {
+                throw .Invalid(at: at)
+            }
+            let first = at
+            var value: U64 = 0
+            while at < end && at - first < 4 && hexValueOf(scalars[at].codePoint) >= 0 {
+                value = value << 4 | U64(hexValueOf(scalars[at].codePoint))
+                at += 1
+            }
+            if at < end && scalars[at] == '.' {
+                // The last 32 bits, written as an IPv4 address.
+                if count > 6 {
+                    throw .Invalid(at: first)
+                }
+                let v4 = try IpAddress.parseV4(scalars, first, end)
+                pieces[count] = v4 >> 16
+                pieces[count + 1] = v4 & 0xFFFF
+                count += 2
+                at = end
+                break
+            }
+            if at == first {
+                throw .InvalidDigit(at: at)
+            }
+            pieces[count] = value
+            count += 1
+            if at == end {
+                break
+            }
+            if scalars[at] != ':' {
+                throw .Invalid(at: at)
+            }
+            at += 1
+            if at == end {
+                throw .Invalid(at: at - 1)
+            }
+            if scalars[at] == ':' {
+                if gap >= 0 {
+                    throw .Invalid(at: at)
+                }
+                gap = count
+                at += 1
+            }
+        }
+        // '::' is one zero piece at least.
+        if gap < 0 && count != 8 {
+            throw .Invalid(at: end)
+        }
+        if gap >= 0 && count == 8 {
+            throw .Invalid(at: start)
+        }
+        var high: U64 = 0
+        var low: U64 = 0
+        for i in 0..<8 {
+            let piece = gap < 0 || i < gap ? pieces[i] : i >= 8 - (count - gap) ? pieces[i - (8 - count)] : 0
+            if i < 4 {
+                high = high << 16 | piece
+            } else {
+                low = low << 16 | piece
+            }
+        }
+        return IpAddress(high: high, low: low, scope: scope)
+    }
+
+    // A scope as it is written after '%'.
+    static fn parseScope(_ text: String, at: Int) throws(ParseError) -> U32 {
+        if text.isEmpty {
+            throw .Invalid(at: at)
+        }
+        if text.toArray()[0] >= '0' && text.toArray()[0] <= '9' {
+            guard let scope = text.toU32() else {
+                throw .Invalid(at: at)
+            }
+            return scope
+        }
+        let index = Runtime.interfaceIndex(text)
+        if index == 0 {
+            throw .Invalid(at: at)
+        }
+        return U32(index)
+    }
+}
+
+extension IpAddress: Formattable {
+    /// As RFC 5952 has it written: `192.0.2.1`, `2001:db8::1`, and
+    /// `::ffff:192.0.2.1` for a mapped one, its scope as a number.
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(toString())
+    }
+
+    /// As RFC 5952 has it written.
+    public fn toString() -> String {
+        if family == .V4 {
+            return IpAddress.dotted(low)
+        }
+        var written = ""
+        if isV4Mapped {
+            written = "::ffff:" + IpAddress.dotted(low & 0xFFFF_FFFF)
+        } else {
+            var pieces: Int[>..] = []
+            for i in 0..<8 {
+                pieces.append(Int((i < 4 ? high : low) >> U64(48 - 16 * (i % 4)) & 0xFFFF))
+            }
+            written = Host.compressed(pieces)
+        }
+        return scope == 0 ? written : "\(written)%\(scope)"
+    }
+
+    static fn dotted(_ bits: U64) -> String {
+        return Host.dotted(Int(bits))
+    }
+}
+
+extension IpAddress: Debug {
+    public fn debugDescription() -> String {
+        return toString()
+    }
+}

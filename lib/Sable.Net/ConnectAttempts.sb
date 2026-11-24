@@ -1,0 +1,102 @@
+module Sable.Net
+
+import Sable.IO
+
+// Which address is tried next, and when: RFC 8305's order, the families by
+// turns, IPv6 first, each family's addresses as they were found.
+struct ConnectAttempts {
+    let port: Int
+    var v6: IpAddress[>..] = []
+    var v4: IpAddress[>..] = []
+    // How many of each have been tried.
+    var v6Tried: Int = 0
+    var v4Tried: Int = 0
+    var v6Known: Bool = false
+    var v4Known: Bool = false
+    var waited: Bool = false
+
+    // How many have begun, and how many of them have neither succeeded nor
+    // failed.
+    var started: Int = 0
+    var running: Int = 0
+
+    // The next may begin as soon as there is an address for it.
+    var may: Bool = false
+    var lastFamily: IpFamily = .V4
+
+    // Why the last to fail did.
+    var failure: IoError? = none
+
+    init(port: Int) {
+        self.port = port
+    }
+
+    mutating fn found(_ family: IpFamily, _ addresses: IpAddress[:]) {
+        if family == .V6 {
+            v6Known = true
+            v6.append(contentsOf: addresses)
+        } else {
+            v4Known = true
+            v4.append(contentsOf: addresses)
+        }
+        // The first begins once the IPv6 addresses are known.
+        if v6Known && started == 0 {
+            may = true
+        }
+    }
+
+    mutating fn notFound(_ family: IpFamily, _ error: IoError) {
+        // That a host has no address of one family says less than anything
+        // else that went wrong.
+        match error {
+            case .HostNotFound(_) => failure = failure ?? error
+            case _                => failure = error
+        }
+        found(family, [])
+    }
+
+    mutating fn mayStart() {
+        may = true
+    }
+
+    mutating fn failed(_ error: IoError) {
+        running -= 1
+        failure = error
+        may = true
+    }
+
+    // Whether the IPv4 addresses, known first, are to wait for the IPv6 ones:
+    // said once.
+    mutating fn waitsForV6() -> Bool {
+        if waited || v6Known || !v4Known || v4.isEmpty || started > 0 {
+            return false
+        }
+        waited = true
+        return true
+    }
+
+    // The address to try now, if it is time to and there is one.
+    mutating fn next() -> SocketAddress? {
+        let anyV6 = v6Tried < v6.count
+        let anyV4 = v4Tried < v4.count
+        if !may || !anyV6 && !anyV4 {
+            return none
+        }
+        lastFamily = !anyV6 ? IpFamily.V4 : !anyV4 ? IpFamily.V6 : lastFamily == .V6 ? IpFamily.V4 : IpFamily.V6
+        var ip = IpAddress.v6Any
+        if lastFamily == .V6 {
+            ip = v6[v6Tried]
+            v6Tried += 1
+        } else {
+            ip = v4[v4Tried]
+            v4Tried += 1
+        }
+        started += 1
+        running += 1
+        may = false
+        return SocketAddress(ip, port: port)
+    }
+
+    // Nothing is left to try, or to wait for.
+    var isOver: Bool => v6Known && v4Known && v6Tried == v6.count && v4Tried == v4.count && running == 0
+}

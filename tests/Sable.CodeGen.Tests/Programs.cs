@@ -16,7 +16,8 @@ internal static class Programs {
         bool optimise = true,
         string input = "",
         IReadOnlyList<string>? arguments = null,
-        IReadOnlyDictionary<string, string>? environment = null
+        IReadOnlyDictionary<string, string>? environment = null,
+        int? descriptors = null
     ) {
         var result = Pipeline.Compile(new SourceText(source, "test.sb"), optimised: optimise);
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
@@ -27,8 +28,15 @@ internal static class Programs {
             Assert.True(build.Succeeded, build.Output + "\n\n" + result.LlvmIr);
 
             // Every test program is held to freeing what it allocates.
-            var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true }.Utf8();
+            var start = new ProcessStartInfo(descriptors is null ? executable : "/bin/sh") { RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true }.Utf8();
             start.Environment["SABLE_CHECK_LEAKS"] = "1";
+            if (descriptors is not null) {
+                // No more files open than that.
+                start.ArgumentList.Add("-c");
+                start.ArgumentList.Add($"ulimit -n {descriptors}; exec \"$0\" \"$@\"");
+                start.ArgumentList.Add(executable);
+            }
+
             foreach (var (name, value) in environment ?? new Dictionary<string, string>()) {
                 start.Environment[name] = value;
             }

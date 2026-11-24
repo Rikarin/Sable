@@ -288,8 +288,7 @@ A range of an array's elements is a place of type `T[:]`, by any range of
 integers or one counted from the end, of every kind of array and of a slice:
 `sortAll(&xs[1..<4])`, `sortAll(&xs[^3...])`, `sortAll(&model.items[..<2])`,
 `sortAll(&xs[1..<5][1..<3])`, and the receiver of a `mutating` member of
-`T[:]`, `xs[2...].sort()`. A whole array passed where an `inout T[:]` is
-wanted, `sortAll(&xs)`, is its range from end to end, `&xs[0...]`. No slice is stored in the array to change where it
+`T[:]`, `xs[2...].sort()`. No slice is stored in the array to change where it
 is, so the range is read out and written back, as a property with accessors
 is: the callee is given a view of the range sharing the array's buffer, its
 first write copies the run (the array still holds the buffer), and when the

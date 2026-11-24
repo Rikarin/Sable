@@ -1,0 +1,150 @@
+module Sable.Net
+
+import Sable.IO
+import Sable.Time
+
+/// A connection to a host by whichever of its addresses answers: RFC 8305's
+/// "happy eyeballs". Its IPv6 and IPv4 addresses are looked up at once; the
+/// first attempt is to an IPv6 one, once those are known, or, if they are
+/// late, to an IPv4 one soon after; and while an attempt neither succeeds
+/// nor fails, the next, of the other family, begins beside it. The first to
+/// succeed is the connection, and the others are given up.
+///
+/// How names are looked up and connections made is given to `connect`, so
+/// that it connects whatever there is to connect, TLS sessions say, and its
+/// tests need no network.
+///
+/// ```sable
+/// fn connect() async throws(IoError) -> String {
+///     return try await HappyEyeballs().connect(
+///         host: "example",
+///         port: 80,
+///         resolve: { (name: String, family: IpFamily) throws(IoError) -> IpAddress[>..] in
+///             family == .V6 ? [.v6Loopback] : [.v4Loopback]
+///         },
+///         connect: { (address: SocketAddress) throws(IoError) -> String in
+///             if address.ip.isV6 {
+///                 throw IoError.ConnectionRefused(address: "\(address)")
+///             }
+///             return "connected to \(address)"
+///         }
+///     )
+/// }
+/// ```
+public struct HappyEyeballs {
+    /// How long IPv4 addresses, known first, wait for IPv6 ones.
+    public var resolutionDelay: Duration = Duration.milliseconds(50)
+
+    /// How long an attempt is alone before the next begins beside it.
+    public var attemptDelay: Duration = Duration.milliseconds(250)
+
+    public init() { }
+
+    /// The connection to the host — a name, or a numeric address — and port,
+    /// the timeout being for all of it: over what 'resolve' finds, made by
+    /// 'connect'. Both are to stop, by throwing, when their task is
+    /// cancelled, which is waited for. When every attempt fails, what the
+    /// last to fail threw.
+    public fn connect<Connection: Sendable>(
+        host: String,
+        port: Int,
+        timeout: Duration? = none,
+        resolve: @Sendable async (String, IpFamily) throws(IoError) -> IpAddress[>..],
+        connect attempt: @Sendable async (SocketAddress) throws(IoError) -> Connection
+    ) async throws(IoError) -> Connection {
+        if port < 0 || port > 65535 {
+            throw IoError.InvalidInput(path: "\(host):\(port)")
+        }
+        let literal = try? IpAddress.parse(host)
+        let attemptDelay = attemptDelay.totalNanoseconds
+        let resolutionDelay = resolutionDelay.totalNanoseconds
+        let outcome = await withTaskGroup(of: ConnectEvent<Connection>.self) { group in
+            var attempts = ConnectAttempts(port: port)
+            if let literal {
+                attempts.found(IpFamily.V4, literal.isV4 ? [literal] : [])
+                attempts.found(IpFamily.V6, literal.isV6 ? [literal] : [])
+            } else {
+                for family in [IpFamily.V6, IpFamily.V4] {
+                    group.spawn {
+                        do {
+                            return ConnectEvent<Connection>.Found(family, try await resolve(host, family))
+                        } catch {
+                            return ConnectEvent<Connection>.NotFound(family, error)
+                        }
+                    }
+                }
+            }
+            if let timeout {
+                group.spawn {
+                    try? await Task.sleep(nanoseconds: timeout.totalNanoseconds)
+                    return ConnectEvent<Connection>.TimedOut
+                }
+            }
+            while true {
+                var outcome: Outcome<Connection, IoError>? = none
+                if Task.isCancelled {
+                    group.cancelAll()
+                    return Outcome<Connection, IoError>.Err(IoError.Cancelled)
+                }
+                if attempts.waitsForV6() {
+                    group.spawn {
+                        try? await Task.sleep(nanoseconds: resolutionDelay)
+                        return ConnectEvent<Connection>.WaitedForV6
+                    }
+                }
+                if let address = attempts.next() {
+                    let number = attempts.started
+                    group.spawn {
+                        do {
+                            return ConnectEvent<Connection>.Connected(try await attempt(address))
+                        } catch {
+                            return ConnectEvent<Connection>.Failed(error)
+                        }
+                    }
+                    group.spawn {
+                        try? await Task.sleep(nanoseconds: attemptDelay)
+                        return ConnectEvent<Connection>.Waited(number)
+                    }
+                }
+                if attempts.isOver {
+                    group.cancelAll()
+                    return Outcome<Connection, IoError>.Err(attempts.failure ?? IoError.HostNotFound(host: host))
+                }
+                match await group.next()! {
+                    case .Found(let family, let addresses) => attempts.found(family, addresses)
+                    case .NotFound(let family, let error)  => attempts.notFound(family, error)
+                    case .WaitedForV6                      => attempts.mayStart()
+                    case .Waited(let number) => {
+                        if number == attempts.started {
+                            attempts.mayStart()
+                        }
+                    }
+                    case .Failed(let error) => attempts.failed(error)
+                    case .Connected(let connection) => {
+                        outcome = .Ok(connection)
+                    }
+                    case .TimedOut => {
+                        outcome = .Err(Task.isCancelled ? IoError.Cancelled : IoError.TimedOut)
+                    }
+                }
+                if let outcome {
+                    group.cancelAll()
+                    return outcome
+                }
+            }
+        }
+        return try outcome.get()
+    }
+}
+
+// What happens while a connection is being made.
+union ConnectEvent<Connection> {
+    Found(IpFamily, IpAddress[>..])
+    NotFound(IpFamily, IoError)
+    WaitedForV6
+    // So long since that attempt began.
+    Waited(Int)
+    Connected(Connection)
+    Failed(IoError)
+    TimedOut
+}

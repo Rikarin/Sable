@@ -197,45 +197,114 @@ static void reactor_wake(void) {
 
 // WASI preview 1 can only accept on a socket the engine opened for the
 // program; it cannot open one, nor resolve a name.
-static PlatformSocket socket_listen(const char *host, int port, int *bound) {
-    (void)host;
-    (void)port;
-    (void)bound;
+static int socket_unsupported(void) {
+    net_last_failure.kind = NET_ERROR_UNSUPPORTED;
+    net_last_failure.code = 0;
     return IO_FAILED;
 }
 
-static PlatformSocket socket_accept(PlatformSocket listener) {
+static PlatformSocket socket_listen(const PlatformAddress *address, int backlog, int flags) {
+    (void)address;
+    (void)backlog;
+    (void)flags;
+    return socket_unsupported();
+}
+
+static PlatformSocket socket_accept(PlatformSocket listener, PlatformAddress *peer) {
     (void)listener;
-    return IO_FAILED;
+    (void)peer;
+    return socket_unsupported();
 }
 
-static PlatformSocket socket_connect(const char *host, int port) {
-    (void)host;
-    (void)port;
-    return IO_FAILED;
+static PlatformSocket socket_connect(const PlatformAddress *address) {
+    (void)address;
+    return socket_unsupported();
 }
 
 static int socket_connected(PlatformSocket socket) {
     (void)socket;
-    return IO_FAILED;
+    return socket_unsupported();
+}
+
+static PlatformSocket socket_datagram(const PlatformAddress *address, int flags) {
+    (void)address;
+    (void)flags;
+    return socket_unsupported();
+}
+
+static int socket_connect_datagram(PlatformSocket socket, const PlatformAddress *address) {
+    (void)socket;
+    (void)address;
+    return socket_unsupported();
 }
 
 static int64_t socket_read(PlatformSocket socket, void *bytes, int64_t size) {
     (void)socket;
     (void)bytes;
     (void)size;
-    return IO_FAILED;
+    return socket_unsupported();
 }
 
 static int64_t socket_write(PlatformSocket socket, const void *bytes, int64_t size) {
     (void)socket;
     (void)bytes;
     (void)size;
-    return IO_FAILED;
+    return socket_unsupported();
 }
 
-static void socket_shutdown_write(PlatformSocket socket) {
+static int64_t socket_send_to(PlatformSocket socket, const void *bytes, int64_t size, const PlatformAddress *address) {
     (void)socket;
+    (void)bytes;
+    (void)size;
+    (void)address;
+    return socket_unsupported();
+}
+
+static int64_t socket_receive(PlatformSocket socket, void *bytes, int64_t size, PlatformAddress *from, bool *truncated) {
+    (void)socket;
+    (void)bytes;
+    (void)size;
+    (void)from;
+    (void)truncated;
+    return socket_unsupported();
+}
+
+static bool socket_name(PlatformSocket socket, bool peer, PlatformAddress *address) {
+    (void)socket;
+    (void)peer;
+    (void)address;
+    socket_unsupported();
+    return false;
+}
+
+static bool socket_set_option(PlatformSocket socket, int option, int64_t value) {
+    (void)socket;
+    (void)option;
+    (void)value;
+    socket_unsupported();
+    return false;
+}
+
+static bool socket_get_option(PlatformSocket socket, int option, int64_t *value) {
+    (void)socket;
+    (void)option;
+    (void)value;
+    socket_unsupported();
+    return false;
+}
+
+static bool socket_membership(PlatformSocket socket, bool join, const PlatformAddress *group, uint32_t index) {
+    (void)socket;
+    (void)join;
+    (void)group;
+    (void)index;
+    socket_unsupported();
+    return false;
+}
+
+static void socket_shutdown(PlatformSocket socket, bool writing) {
+    (void)socket;
+    (void)writing;
 }
 
 static void socket_close(PlatformSocket socket) {
@@ -245,6 +314,24 @@ static void socket_close(PlatformSocket socket) {
 static int unix_datagram_send(const char *name, size_t name_length, const void *bytes, size_t length) {
     (void)name, (void)name_length, (void)bytes, (void)length;
     return 1;
+}
+
+static int host_resolve(const char *host, int family, PlatformAddress **addresses, int *code) {
+    (void)host;
+    (void)family;
+    *addresses = NULL;
+    *code = NET_ERROR_UNSUPPORTED;
+    return -1;
+}
+
+static int interfaces_list(PlatformInterface **interfaces) {
+    *interfaces = NULL;
+    return socket_unsupported();
+}
+
+static uint32_t interface_index(const char *name) {
+    (void)name;
+    return 0;
 }
 
 // ---- Arguments, files and the environment ----------------------------------

@@ -1,0 +1,60 @@
+module Sable.Net
+
+import Sable.IO
+
+/// A Unix domain socket listening for connections from this machine's
+/// programs, at a path in the file system; Windows has them too. Who may
+/// connect is who may write the path's file, or, on some systems, whoever
+/// can reach it: keep it in a directory that is the program's own.
+///
+/// A path that begins with a zero character is a name in Linux's abstract
+/// space, which no file stands for; elsewhere InvalidInput, as is a path
+/// longer than the system has room for (about 100 bytes).
+///
+/// ```sable
+/// fn serve() async throws(IoError) {
+///     let listener = try UnixListener.bind("/tmp/example.socket")
+///     let connection = try await listener.accept()
+///     try await connection.write([1, 2, 3])
+/// }
+/// ```
+@immutable
+public final class UnixListener {
+    let handle: Int
+
+    /// The path it listens at.
+    public let path: String
+
+    init(handle: Int, path: String) {
+        self.handle = handle
+        self.path = path
+    }
+
+    deinit {
+        Runtime.closeSocket(handle)
+    }
+
+    /// Listens at the path, making its file: AddressInUse when there is one,
+    /// as there is when a program that listened there ended, or closed its
+    /// listener, and did not remove it. With `replacing` a socket's file
+    /// there is removed first, whether or not a program still listens by
+    /// it; a file that is no socket's is left.
+    public static fn bind(_ path: String, backlog: Int = 1024, replacing: Bool = false) throws(IoError) -> UnixListener {
+        let handle = Runtime.listen(1, 0, 0, 0, 0, path, backlog, replacing ? 8 : 0)
+        if handle == 0 {
+            throw socketError(path)
+        }
+        return UnixListener(handle: handle, path: path)
+    }
+
+    /// The next connection, waiting until one comes, as TcpListener's does.
+    public fn accept() async throws(IoError) -> UnixStream {
+        return UnixStream(handle: try await acceptFrom(handle))
+    }
+
+    /// Stops listening: a task waiting in 'accept' wakes and throws. The
+    /// path's file stays, to be removed by whoever made it.
+    public fn close() {
+        Runtime.closeSocket(handle)
+    }
+}

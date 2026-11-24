@@ -1,0 +1,147 @@
+module Sable.Net
+
+/// The addresses that begin with the same bits: CIDR's `10.0.0.0/8`. .NET's
+/// `IPNetwork`.
+///
+/// ```sable
+/// let network = try! IpNetwork.parse("10.0.0.0/8")
+/// assert(network.contains(IpAddress(10, 1, 2, 3)))
+/// assert(network.contains(try! IpAddress.parse("::ffff:10.1.2.3")))
+/// assert(!network.contains(IpAddress(11, 0, 0, 0)))
+/// assert((try? IpNetwork.parse("10.0.0.1/8")) == none)
+/// ```
+public struct IpNetwork {
+    /// Its first address, every bit after the prefix zero.
+    public let address: IpAddress
+
+    /// How many bits its addresses begin with: to 32, or 128.
+    public let prefixLength: Int
+
+    /// The network of that many bits that the address is in, the address's
+    /// bits after them dropped; and its scope.
+    ///
+    /// ```sable
+    /// assert("\(IpNetwork(containing: IpAddress(192, 0, 2, 77), prefixLength: 24))" == "192.0.2.0/24")
+    /// ```
+    public init(containing address: IpAddress, prefixLength: Int) {
+        let most = address.isV4 ? 32 : 128
+        precondition(prefixLength >= 0 && prefixLength <= most, "a prefix of \(address) is from 0 to \(most) bits, and not \(prefixLength)")
+        self.address = IpNetwork.masked(address, prefixLength)
+        self.prefixLength = prefixLength
+    }
+
+    // The word's first 'count' bits kept.
+    static fn kept(_ word: U64, _ count: Int) -> U64 {
+        return count <= 0 ? 0 : count >= 64 ? word : word & ~(U64.max >> U64(count))
+    }
+
+    static fn masked(_ address: IpAddress, _ prefixLength: Int) -> IpAddress {
+        if address.isV4 {
+            return IpAddress(v4: (IpNetwork.kept(address.low << 32, prefixLength) >> 32) unchecked as U32)
+        }
+        return IpAddress(high: IpNetwork.kept(address.high, prefixLength), low: IpNetwork.kept(address.low, prefixLength - 64))
+    }
+
+    /// Its last address, every bit after the prefix one: an IPv4 network's
+    /// broadcast address.
+    public var lastAddress: IpAddress {
+        get {
+            if address.isV4 {
+                return IpAddress(v4: (address.low | ~IpNetwork.kept(U64.max, 32 + prefixLength)) unchecked as U32)
+            }
+            return IpAddress(high: address.high | ~IpNetwork.kept(U64.max, prefixLength), low: address.low | ~IpNetwork.kept(U64.max, prefixLength - 64))
+        }
+    }
+
+    /// Whether the address is in it, whatever scope it has. A v4-mapped one
+    /// is in the IPv4 networks its own IPv4 address is in, as well as in the
+    /// IPv6 ones its bits are.
+    public fn contains(_ other: IpAddress) -> Bool {
+        let candidate = address.isV4 ? other.canonical : other
+        if candidate.family != address.family {
+            return false
+        }
+        let first = IpNetwork.masked(candidate, prefixLength)
+        return first.high == address.high && first.low == address.low
+    }
+
+    /// Whether every address of the other is in it.
+    public fn contains(_ other: IpNetwork) -> Bool {
+        return other.address.family == address.family && other.prefixLength >= prefixLength && contains(other.address)
+    }
+
+    /// Whether some address is in both.
+    public fn overlaps(_ other: IpNetwork) -> Bool {
+        return contains(other) || other.contains(self)
+    }
+}
+
+extension IpNetwork: Hashable {
+    public operator == (lhs: IpNetwork, rhs: IpNetwork) -> Bool {
+        return lhs.address == rhs.address && lhs.prefixLength == rhs.prefixLength
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        address.hash(into: &hasher)
+        hasher.combine(prefixLength)
+    }
+}
+
+extension IpNetwork: Parsable {
+    /// The network the whole text writes: its first address, `/`, and the
+    /// prefix's length. An address that is not its network's first, whose
+    /// writer may have meant another, is refused; so is a scope.
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> IpNetwork {
+        let scalars = text.toString().toArray()
+        if scalars.isEmpty {
+            throw .Empty
+        }
+        var slash = 0
+        while slash < scalars.count && scalars[slash] != '/' {
+            slash += 1
+        }
+        let ip = try IpAddress.parse(scalars, 0, slash)
+        var at = slash + 1
+        if at >= scalars.count {
+            throw .InvalidDigit(at: scalars.count)
+        }
+        if scalars[at] == '0' && scalars.count > at + 1 {
+            throw .Invalid(at: at)
+        }
+        var length = 0
+        while at < scalars.count {
+            let digit = scalars[at].codePoint - 48
+            if digit < 0 || digit > 9 {
+                throw .InvalidDigit(at: at)
+            }
+            length = length * 10 + digit
+            if length > (ip.isV4 ? 32 : 128) {
+                throw .Overflow
+            }
+            at += 1
+        }
+        let network = IpNetwork(containing: ip, prefixLength: length)
+        if network.address != ip {
+            throw .Invalid(at: 0)
+        }
+        return network
+    }
+}
+
+extension IpNetwork: Formattable {
+    /// Its first address, `/`, and the prefix's length.
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(toString())
+    }
+
+    /// Its first address, `/`, and the prefix's length.
+    public fn toString() -> String {
+        return "\(address.toString())/\(prefixLength)"
+    }
+}
+
+extension IpNetwork: Debug {
+    public fn debugDescription() -> String {
+        return toString()
+    }
+}

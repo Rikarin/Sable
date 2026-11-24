@@ -174,31 +174,140 @@ static void reactor_wake(void);
 
 // ---- Sockets -----------------------------------------------------------------
 
-// TCP, nonblocking, for Sable.IO's TcpListener and TcpStream (net.c). A
-// call that would wait gives IO_WOULD_BLOCK, and the caller waits for the
-// reactor to say the socket is ready; one that fails, IO_FAILED.
+// Streams and datagrams over IP and Unix domain sockets, nonblocking, for
+// Sable.Net (net.c). A call that would wait gives IO_WOULD_BLOCK, and the
+// caller waits for the reactor to say the socket is ready; one that fails,
+// IO_FAILED, net_last_failure saying why.
 enum { IO_WOULD_BLOCK = -1, IO_FAILED = -2 };
 
-// Listening on the host's address (a name or a numeric address) and port
-// (0: any free one), the port bound in 'port'; IO_FAILED otherwise.
-static PlatformSocket socket_listen(const char *host, int port, int *bound);
+// How a call failed, as IoError tells failures apart (Sable.Net's
+// SocketError.sb has the same numbers), and the system's own code.
+enum {
+    NET_ERROR_OTHER = 0,
+    NET_ERROR_DISCONNECTED = 1,
+    NET_ERROR_REFUSED = 2,
+    NET_ERROR_TIMED_OUT = 3,
+    NET_ERROR_UNREACHABLE = 4,
+    NET_ERROR_IN_USE = 5,
+    NET_ERROR_PERMISSION = 6,
+    NET_ERROR_TRY_LATER = 7, // out of descriptors, memory or room: no readiness says when there is some
+    NET_ERROR_INVALID = 8,
+    NET_ERROR_TOO_LONG = 9,
+    NET_ERROR_UNSUPPORTED = 10,
+    NET_ERROR_NOT_FOUND = 11,
+    NET_ERROR_CLOSED = 12,
+};
+
+typedef struct NetFailure {
+    int kind;
+    int64_t code;
+} NetFailure;
+
+static _Thread_local NetFailure net_last_failure;
+
+enum { NET_NONE = 0, NET_UNIX = 1, NET_IPV4 = 4, NET_IPV6 = 6 };
+
+// An IP address and port, an IPv4 address the low 32 bits of 'low'; or a
+// Unix domain socket's name, with no byte after it.
+typedef struct PlatformAddress {
+    int family;
+    int port;
+    uint32_t scope;
+    uint64_t high, low;
+    size_t path_length;
+    char path[256];
+} PlatformAddress;
+
+// How a socket is bound. REUSE_ADDRESS is several datagram sockets' on one
+// port, for multicast; a listener can always take a port a connection of an
+// earlier one is still closing on, and never one another listens on.
+// REUSE_PORT has several sockets share a port, which the system divides
+// connections and datagrams among.
+enum { NET_REUSE_ADDRESS = 1, NET_REUSE_PORT = 2, NET_DUAL_STACK = 4, NET_REPLACE = 8 };
+
+static PlatformSocket socket_listen(const PlatformAddress *address, int backlog, int flags);
 // A connection taken from the listener, nonblocking; or IO_WOULD_BLOCK, IO_FAILED.
-static PlatformSocket socket_accept(PlatformSocket listener);
-// A connection begun to the host and port: writable once made, when
-// socket_connected says how it went. IO_FAILED when it cannot begin.
-static PlatformSocket socket_connect(const char *host, int port);
-// 0 once the connection is made, IO_FAILED if it could not be.
+static PlatformSocket socket_accept(PlatformSocket listener, PlatformAddress *peer);
+// A connection begun: writable once made, when socket_connected says how it
+// went. IO_FAILED when it cannot begin.
+static PlatformSocket socket_connect(const PlatformAddress *address);
+// 0 once the connection is made, IO_WOULD_BLOCK before, IO_FAILED if it
+// could not be.
 static int socket_connected(PlatformSocket socket);
+// A datagram socket bound to the address; unbound, for a Unix one with no name.
+static PlatformSocket socket_datagram(const PlatformAddress *address, int flags);
+// It sends to the address, and takes only what is from it.
+static int socket_connect_datagram(PlatformSocket socket, const PlatformAddress *address);
 // Bytes read (0 at the end), or written; or IO_WOULD_BLOCK, IO_FAILED.
 static int64_t socket_read(PlatformSocket socket, void *bytes, int64_t size);
 static int64_t socket_write(PlatformSocket socket, const void *bytes, int64_t size);
-// No more is written: the other end reads to its end.
-static void socket_shutdown_write(PlatformSocket socket);
+// A datagram sent, to the one it is connected to for a family of NET_NONE;
+// or received, no more of it than 'size'.
+static int64_t socket_send_to(PlatformSocket socket, const void *bytes, int64_t size, const PlatformAddress *address);
+static int64_t socket_receive(PlatformSocket socket, void *bytes, int64_t size, PlatformAddress *from, bool *truncated);
+// Its own address, or its peer's.
+static bool socket_name(PlatformSocket socket, bool peer, PlatformAddress *address);
+
+enum {
+    NET_OPTION_NO_DELAY = 1,
+    NET_OPTION_KEEP_ALIVE = 2,
+    NET_OPTION_KEEP_IDLE = 3,     // seconds
+    NET_OPTION_KEEP_INTERVAL = 4, // seconds
+    NET_OPTION_KEEP_COUNT = 5,
+    NET_OPTION_RECEIVE_BUFFER = 6,
+    NET_OPTION_SEND_BUFFER = 7,
+    NET_OPTION_LINGER = 8, // seconds; -1, none
+    NET_OPTION_HOPS = 9,
+    NET_OPTION_BROADCAST = 10,
+    NET_OPTION_MULTICAST_LOOP = 11,
+    NET_OPTION_MULTICAST_HOPS = 12,
+    NET_OPTION_MULTICAST_INTERFACE = 13,
+    NET_OPTION_IPV6_ONLY = 14,
+};
+
+static bool socket_set_option(PlatformSocket socket, int option, int64_t value);
+static bool socket_get_option(PlatformSocket socket, int option, int64_t *value);
+// In the multicast group, on the interface of that index (0: the system's
+// choice), or out of it.
+static bool socket_membership(PlatformSocket socket, bool join, const PlatformAddress *group, uint32_t index);
+// No more is written: the other end reads to its end. Or no more is read.
+static void socket_shutdown(PlatformSocket socket, bool writing);
 static void socket_close(PlatformSocket socket);
 
 // One datagram sent to a Unix socket, by its path, or (Linux) by its abstract
 // name, '@' first: 0 sent, 1 the system has none such, 2 it could not be sent.
 static int unix_datagram_send(const char *name, size_t name_length, const void *bytes, size_t length);
+
+// The host's addresses, in the order the system would try them, of one
+// family or (NET_NONE) any, in memory the caller frees: how many, or -1 with
+// a NET_ERROR_ in 'code'. It may wait, for as long as the system does.
+static int host_resolve(const char *host, int family, PlatformAddress **addresses, int *code);
+
+enum {
+    NET_INTERFACE_UP = 1,
+    NET_INTERFACE_RUNNING = 2,
+    NET_INTERFACE_LOOPBACK = 4,
+    NET_INTERFACE_POINT_TO_POINT = 8,
+    NET_INTERFACE_MULTICAST = 16,
+    NET_INTERFACE_BROADCAST = 32,
+};
+
+// An interface, and one of its addresses, or none.
+typedef struct PlatformInterface {
+    char name[256];
+    uint32_t index;
+    int flags;
+    int64_t mtu;
+    int64_t hardware; // its 48 bits, or -1
+    int prefix;       // the network's, of the address
+    PlatformAddress address;
+} PlatformInterface;
+
+// A row for each interface's address and each interface, in memory the
+// caller frees: how many, or -1.
+static int interfaces_list(PlatformInterface **interfaces);
+// The index of the interface of that name; 0 for none.
+static uint32_t interface_index(const char *name);
 
 // ---- Arguments, files and the environment -------------------------------
 

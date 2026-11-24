@@ -1,6 +1,6 @@
 module Bench
 
-import Sable.IO
+import Sable.Net
 import Sable.Time
 
 // A fan-out HTTP-like workload over loopback: a server task accepts each
@@ -44,7 +44,7 @@ fn ask(_ port: Int) async -> Int {
 fn main() async {
     let clients = 50
     let rounds = 40
-    let bound = try? TcpListener.bind(host: "127.0.0.1", port: 0)
+    let bound = try? TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
     guard let listener = bound else {
         print("cannot listen")
         return

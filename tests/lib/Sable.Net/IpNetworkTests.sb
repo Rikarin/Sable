@@ -1,0 +1,76 @@
+module IpNetworkTests
+
+// IpNetwork (Sable.Net): run with
+//     tools/stdlib-coverage.sh Sable.Net
+
+import Sable.Net
+import Sable.Testing
+
+fn ip(_ text: String) -> IpAddress {
+    return try! IpAddress.parse(text)
+}
+
+fn network(_ text: String) -> IpNetwork {
+    return try! IpNetwork.parse(text)
+}
+
+@test
+fn aNetworkIsItsFirstAddressAndPrefix() {
+    for text in ["0.0.0.0/0", "10.0.0.0/8", "192.0.2.128/25", "192.0.2.1/32", "::/0", "2001:db8::/32", "fe80::/10", "::1/128", "1:2:3:4:8000::/65"] {
+        assertEqual(network(text).toString(), text)
+        assertEqual(network("\(network(text))"), network(text))
+    }
+    for text in ["", "/", "10.0.0.0", "10.0.0.0/", "10.0.0.0/33", "10.0.0.0/08", "10.0.0.0/-1", "10.0.0.0/8 ", "10.0.0.1/8", "010.0.0.0/8", "10/8", "::/129", "::1/64",
+        "fe80::%1/10x", "10.0.0.0/255.0.0.0", "10.0.0.0/99999999999999999999"] {
+        assert((try? IpNetwork.parse(text)) == none, text)
+    }
+}
+
+@test
+fn aNetworkContainsWhatBeginsWithItsBits() {
+    assert(network("0.0.0.0/0").contains(ip("255.255.255.255")))
+    assert(!network("0.0.0.0/0").contains(ip("::1")))
+    assert(network("::/0").contains(ip("::ffff:1.2.3.4")))
+    assert(network("172.16.0.0/12").contains(ip("172.31.255.255")))
+    assert(!network("172.16.0.0/12").contains(ip("172.32.0.0")))
+    assert(network("192.0.2.1/32").contains(ip("192.0.2.1")))
+    assert(!network("192.0.2.1/32").contains(ip("192.0.2.2")))
+    assert(network("2001:db8::/32").contains(ip("2001:db8:ffff::1")))
+    assert(!network("2001:db8::/32").contains(ip("2001:db9::")))
+    assert(network("1:2:3:4:8000::/65").contains(ip("1:2:3:4:ffff::")))
+    assert(!network("1:2:3:4:8000::/65").contains(ip("1:2:3:4:7fff::")))
+    assert(network("fe80::/10").contains(ip("fe80::1%4")))
+    assert(network("10.0.0.0/8").contains(ip("::ffff:10.9.8.7")))
+    assert(network("::ffff:10.0.0.0/104").contains(ip("::ffff:10.9.8.7")))
+    assert(!network("::ffff:10.0.0.0/104").contains(ip("10.9.8.7")))
+}
+
+@test
+fn networksContainAndOverlapOthers() {
+    assert(network("10.0.0.0/8").contains(network("10.1.0.0/16")))
+    assert(!network("10.1.0.0/16").contains(network("10.0.0.0/8")))
+    assert(network("10.1.0.0/16").overlaps(network("10.0.0.0/8")))
+    assert(!network("10.1.0.0/16").overlaps(network("10.2.0.0/16")))
+    assert(!network("::/0").overlaps(network("0.0.0.0/0")))
+}
+
+@test
+fn aNetworkHasALastAddress() {
+    assertEqual(network("192.0.2.0/25").lastAddress, ip("192.0.2.127"))
+    assertEqual(network("0.0.0.0/0").lastAddress, IpAddress.v4Broadcast)
+    assertEqual(network("2001:db8::/32").lastAddress, ip("2001:db8:ffff:ffff:ffff:ffff:ffff:ffff"))
+    assertEqual(network("::/127").lastAddress, ip("::1"))
+    assertEqual(network("::1/128").lastAddress, ip("::1"))
+}
+
+@test
+fn anAddressIsInItsNetwork() {
+    assertEqual(IpNetwork(containing: ip("192.0.2.77"), prefixLength: 24), network("192.0.2.0/24"))
+    assertEqual(IpNetwork(containing: ip("2001:db8:1:2::9"), prefixLength: 48).toString(), "2001:db8:1::/48")
+    assertEqual(IpNetwork(containing: ip("fe80::9%3"), prefixLength: 64).toString(), "fe80::/64")
+    var seen: [IpNetwork: Int] = [:]
+    seen[network("10.0.0.0/8")] = 1
+    seen[network("10.0.0.0/9")] = 2
+    assertEqual(seen.count, 2)
+    assertEqual(network("10.0.0.0/8").debugDescription(), "10.0.0.0/8")
+}

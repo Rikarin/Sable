@@ -1,0 +1,13 @@
+module Sable.Net
+
+/// What a UDP socket received.
+public struct Datagram {
+    /// Its bytes.
+    public let bytes: U8[>..]
+
+    /// Whom it is from, and an answer goes to.
+    public let source: SocketAddress
+
+    /// Whether it was longer than was asked for, and the rest is lost.
+    public let isTruncated: Bool
+}

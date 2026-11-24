@@ -1,0 +1,7 @@
+module Sable.Net
+
+/// Which of the two internet protocols an address is of.
+public enum IpFamily {
+    V4
+    V6
+}

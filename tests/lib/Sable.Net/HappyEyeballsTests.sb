@@ -1,0 +1,276 @@
+module HappyEyeballsTests
+
+// HappyEyeballs (Sable.Net), over a resolver and a connector of the test's
+// own: nothing is looked up, and nothing connected. Run with
+//     tools/stdlib-coverage.sh Sable.Net
+
+import Sable.Concurrency
+import Sable.IO
+import Sable.Net
+import Sable.Testing
+import Sable.Time
+
+/// What is looked up and tried, as it is.
+@immutable
+final class Log {
+    let lines: Mutex<String[>..]> = Mutex([])
+
+    init() { }
+
+    fn add(_ line: String) {
+        lines.withLock { (all: inout String[>..]) in
+            all.append(line)
+        }
+    }
+
+    fn all() -> String {
+        return lines.withLock { (all: inout String[>..]) -> String in
+            var text = ""
+            for line in all {
+                text += line + " "
+            }
+            return text
+        }
+    }
+}
+
+fn sleep(_ milliseconds: Int) async throws(IoError) {
+    do {
+        try await Task.sleep(nanoseconds: milliseconds * 1_000_000)
+    } catch {
+        throw IoError.Cancelled
+    }
+}
+
+/// An address for a name: "6a", "6b", "4a", "4b".
+fn address(_ name: String) -> IpAddress {
+    let n = name.hasSuffix("a") ? 1 : name.hasSuffix("b") ? 2 : 3
+    return name.hasPrefix("6") ? IpAddress(high: 0x2001_0DB8 << 32, low: U64(n)) : IpAddress(192, 0, 2, U8(n))
+}
+
+fn name(_ ip: IpAddress) -> String {
+    return (ip.isV6 ? "6" : "4") + ((ip.low & 0xFF) == 1 ? "a" : (ip.low & 0xFF) == 2 ? "b" : "c")
+}
+
+/// How long a lookup takes and what it finds, and how long each address
+/// takes to answer: negative, to fail.
+struct Plan {
+    var v6After: Int = 0
+    var v6: String[>..] = []
+    var v4After: Int = 0
+    var v4: String[>..] = []
+    var answers: [String: Int] = [:]
+    var attemptDelay: Int = 60
+    var resolutionDelay: Int = 60
+    var timeout: Int? = none
+    var host: String = "host.example"
+
+    fn run(_ log: Log) async -> String {
+        var eyeballs = HappyEyeballs()
+        eyeballs.attemptDelay = Duration.milliseconds(attemptDelay)
+        eyeballs.resolutionDelay = Duration.milliseconds(resolutionDelay)
+        let plan = self
+        do {
+            return try await eyeballs.connect(
+                host: host,
+                port: 80,
+                timeout: timeout.map { Duration.milliseconds($0) },
+                resolve: { (host: String, family: IpFamily) throws(IoError) -> IpAddress[>..] in
+                    try await sleep(family == .V6 ? plan.v6After : plan.v4After)
+                    let names = family == .V6 ? plan.v6 : plan.v4
+                    if names.isEmpty {
+                        throw IoError.HostNotFound(host: host)
+                    }
+                    return names.map { address($0) }
+                },
+                connect: { (at: SocketAddress) throws(IoError) -> String in
+                    let which = name(at.ip)
+                    log.add(which)
+                    let takes = plan.answers[which] ?? 10_000
+                    do {
+                        try await sleep(takes < 0 ? -takes : takes)
+                    } catch {
+                        log.add(which + "-cancelled")
+                        throw error
+                    }
+                    if takes < 0 {
+                        throw IoError.ConnectionRefused(address: which)
+                    }
+                    return which
+                }
+            )
+        } catch {
+            return error.description()
+        }
+    }
+}
+
+@test
+fn anIpv6AddressIsTriedFirst() async {
+    var plan = Plan()
+    plan.v6 = ["6a"]
+    plan.v4 = ["4a"]
+    plan.answers = ["6a": 1, "4a": 1]
+    let log = Log()
+    assertEqual(await plan.run(log), "6a")
+    assertEqual(log.all(), "6a ")
+}
+
+@test
+fn anIpv4AddressIsTriedBesideASlowIpv6One() async {
+    var plan = Plan()
+    plan.v6 = ["6a"]
+    plan.v4 = ["4a"]
+    plan.answers = ["4a": 1]
+    let log = Log()
+    assertEqual(await plan.run(log), "4a")
+    // The attempt given up is over before the call returns.
+    assertEqual(log.all(), "6a 4a 6a-cancelled ")
+}
+
+@test
+fn theFirstAttemptMayStillWin() async {
+    var plan = Plan()
+    plan.v6 = ["6a"]
+    plan.v4 = ["4a"]
+    plan.answers = ["6a": 100]
+    plan.attemptDelay = 20
+    let log = Log()
+    assertEqual(await plan.run(log), "6a")
+    assertEqual(log.all(), "6a 4a 4a-cancelled ")
+}
+
+@test
+fn anAttemptThatFailsIsFollowedAtOnce() async {
+    var plan = Plan()
+    plan.v6 = ["6a"]
+    plan.v4 = ["4a"]
+    plan.answers = ["6a": -1, "4a": 1]
+    plan.attemptDelay = 60_000
+    let log = Log()
+    assertEqual(await plan.run(log), "4a")
+    assertEqual(log.all(), "6a 4a ")
+}
+
+@test
+fn theFamiliesTakeTurns() async {
+    var plan = Plan()
+    plan.v6 = ["6a", "6b", "6c"]
+    plan.v4 = ["4a", "4b"]
+    plan.answers = ["6a": -1, "6b": -1, "6c": -1, "4a": -1, "4b": -1]
+    let log = Log()
+    assertEqual(await plan.run(log), "'6c' refused the connection")
+    assertEqual(log.all(), "6a 4a 6b 4b 6c ")
+}
+
+@test
+fn ipv4AddressesWaitAWhileForIpv6Ones() async {
+    var plan = Plan()
+    plan.v6After = 20
+    plan.v6 = ["6a"]
+    plan.v4 = ["4a"]
+    plan.answers = ["6a": 1, "4a": 1]
+    plan.resolutionDelay = 5_000
+    assertEqual(await plan.run(Log()), "6a")
+}
+
+@test
+fn ipv4AddressesWaitNoLongerThanThat() async {
+    var plan = Plan()
+    plan.v6After = 5_000
+    plan.v6 = ["6a"]
+    plan.v4 = ["4a"]
+    plan.answers = ["6a": 1, "4a": 1]
+    plan.resolutionDelay = 20
+    let log = Log()
+    assertEqual(await plan.run(log), "4a")
+    assertEqual(log.all(), "4a ")
+}
+
+@test
+fn addressesFoundLateAreTriedAfterTheFirst() async {
+    var plan = Plan()
+    plan.v6After = 60
+    plan.v6 = ["6a"]
+    plan.v4 = ["4a"]
+    plan.answers = ["6a": 1, "4a": -1]
+    plan.resolutionDelay = 1
+    let log = Log()
+    assertEqual(await plan.run(log), "6a")
+    assertEqual(log.all(), "4a 6a ")
+}
+
+@test
+fn aHostOfOneFamilyIsTriedInOrder() async {
+    var plan = Plan()
+    plan.v4 = ["4a", "4b"]
+    plan.answers = ["4a": -1, "4b": 1]
+    let log = Log()
+    assertEqual(await plan.run(log), "4b")
+    assertEqual(log.all(), "4a 4b ")
+    plan.v6 = ["6a", "6b"]
+    plan.v4 = []
+    plan.answers = ["6a": -1, "6b": 1]
+    assertEqual(await plan.run(Log()), "6b")
+}
+
+@test
+fn aHostOfNoAddressIsNotFound() async {
+    assertEqual(await Plan().run(Log()), "'host.example' has no address")
+}
+
+@test
+fn aNumericAddressIsNotLookedUp() async {
+    var plan = Plan()
+    plan.host = "192.0.2.2"
+    plan.v4After = 60_000
+    plan.v6After = 60_000
+    plan.answers = ["4b": 1]
+    assertEqual(await plan.run(Log()), "4b")
+    plan.host = "2001:db8::1"
+    plan.answers = ["6a": 1]
+    assertEqual(await plan.run(Log()), "6a")
+}
+
+@test
+fn theTimeoutIsForAllOfIt() async {
+    var plan = Plan()
+    plan.v6 = ["6a"]
+    plan.v4 = ["4a"]
+    plan.timeout = 40
+    plan.attemptDelay = 5
+    let log = Log()
+    assertEqual(await plan.run(log), "it took too long")
+    plan.v4After = 60_000
+    plan.v6After = 60_000
+    assertEqual(await plan.run(Log()), "it took too long")
+}
+
+@test
+fn aCancelledConnectStopsEveryAttempt() async {
+    var plan = Plan()
+    plan.v6 = ["6a"]
+    plan.v4 = ["4a"]
+    plan.attemptDelay = 5
+    plan.timeout = 60_000
+    let log = Log()
+    let held = plan
+    let task = Task.spawn { await held.run(log) }
+    while !log.all().hasPrefix("6a 4a") {
+        await Task.yield()
+    }
+    task.cancel()
+    assertEqual(await task.value, "the task was cancelled while it waited")
+    assert(log.all().contains("6a-cancelled") && log.all().contains("4a-cancelled"), log.all())
+}
+
+@test
+fn aPortThatIsNoneIsRefused() async {
+    var said = ""
+    do {
+        let _ = try await TcpStream.connect(host: "localhost", port: 70_000)
+    } catch {
+        said = error.description()
+    }
+    assertEqual(said, "'localhost:70000' was given something the system does not take")
+}

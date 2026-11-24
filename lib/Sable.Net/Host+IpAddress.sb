@@ -1,0 +1,43 @@
+module Sable.Net
+
+extension Host {
+    /// The address it is, when it is one and not a name.
+    ///
+    /// ```sable
+    /// let url = try! Url.parse("http://[::1]:8080/")
+    /// assert(url.host!.ipAddress == IpAddress.v6Loopback)
+    /// // As a browser reads it: what a URL's host goes to, whatever it looks like.
+    /// assert((try! Url.parse("http://0x7f.1/")).host!.ipAddress == IpAddress.v4Loopback)
+    /// assert((try! Url.parse("http://example.com/")).host!.ipAddress == none)
+    /// ```
+    public var ipAddress: IpAddress? {
+        get {
+            return match self {
+                case .Ipv4(let bits) => IpAddress(v4: bits unchecked as U32)
+                case .Ipv6(let pieces) => {
+                    var high: U64 = 0
+                    var low: U64 = 0
+                    for i in 0..<4 {
+                        high = high << 16 | U64(pieces[i])
+                        low = low << 16 | U64(pieces[4 + i])
+                    }
+                    return IpAddress(high: high, low: low)
+                }
+                case _ => none
+            }
+        }
+    }
+
+    /// The host that is the address, its scope dropped: a URL has no place
+    /// for one.
+    public static fn address(_ ip: IpAddress) -> Host {
+        if ip.isV4 {
+            return .Ipv4(Int(ip.low))
+        }
+        var pieces: Int[>..] = []
+        for i in 0..<8 {
+            pieces.append(Int((i < 4 ? ip.high : ip.low) >> U64(48 - 16 * (i % 4)) & 0xFFFF))
+        }
+        return .Ipv6(pieces)
+    }
+}

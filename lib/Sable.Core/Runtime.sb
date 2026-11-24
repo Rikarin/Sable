@@ -251,29 +251,55 @@ public struct Runtime {
     public static fn conditionBroadcast(_ condition: Int)
 
     // ---- Sockets -----------------------------------------------------------
-    // TCP, by handle (0: none), every socket nonblocking and watched by the
-    // runtime's I/O reactor: kqueue, epoll or an I/O completion port. A call
-    // that would block gives nothing, and 'socketStatus' then says 1 (2: it
-    // failed); the caller waits for the socket with 'waitForSocket' — the
-    // task suspends, its worker runs others — and calls again. What
-    // Sable.IO's TcpListener and TcpStream are written over.
+    // Streams and datagrams, by handle (0: none), every socket nonblocking
+    // and watched by the runtime's I/O reactor: kqueue, epoll or an I/O
+    // completion port. A call that would block gives nothing, and
+    // 'socketStatus' then says 1 (2: it failed, and 'socketError' why); the
+    // caller waits for the socket with 'waitForSocket' — the task suspends,
+    // its worker runs others — and calls again. What Sable.Net's types, and
+    // Sable.Process's pipes, are written over.
+    //
+    // An address is its family (4, 6; 1, a Unix domain socket's), its 128
+    // bits' halves, its scope, its port and its path. One a call gives is
+    // kept for 'socketAddress' and 'socketPath', to be taken before the task
+    // suspends.
 
-    /// A socket listening on the host's address and port (0: any free one).
+    /// What the last socket call did: 0 done, 1 would block, 2 failed.
+    @builtin("net_status")
+    public static fn socketStatus() -> Int
+
+    /// Why it failed, by the numbers platform.h's NET_ERROR_ have.
+    @builtin("net_error")
+    public static fn socketError() -> Int
+
+    /// The system's own code for it.
+    @builtin("net_error_code")
+    public static fn socketErrorCode() -> Int
+
+    /// A part of the address the last call gave: 0 its family, 1 and 2 its
+    /// halves, 3 its scope, 4 its port; 5, whether the datagram that came
+    /// with it was cut short.
+    @builtin("net_address")
+    public static fn socketAddress(_ part: Int) -> Int
+
+    /// And a Unix domain socket's path.
+    @builtin("net_path")
+    public static fn socketPath() -> String
+
+    /// A socket listening on the address. Of 'flags', 1 shares the address,
+    /// 2 the port, 4 has an IPv6 socket take IPv4 too, 8 replaces a Unix
+    /// domain socket's file.
     @builtin("net_listen")
-    public static fn listen(host: String, port: Int) -> Int
+    public static fn listen(_ family: Int, _ high: Int, _ low: Int, _ scope: Int, _ port: Int, _ path: String, _ backlog: Int, _ flags: Int) -> Int
 
-    /// The port a listening socket is bound to.
-    @builtin("net_port")
-    public static fn socketPort(_ socket: Int) -> Int
-
-    /// A connection taken from a listening socket.
+    /// A connection taken from a listening socket, and its peer's address.
     @builtin("net_accept")
     public static fn accept(_ socket: Int) -> Int
 
     /// A connection begun: once the socket is writable, 'socketConnected'
     /// says whether it was made.
     @builtin("net_connect")
-    public static fn connect(host: String, port: Int) -> Int
+    public static fn connect(_ family: Int, _ high: Int, _ low: Int, _ scope: Int, _ port: Int, _ path: String) -> Int
 
     @builtin("net_connected")
     public static fn socketConnected(_ socket: Int) -> Bool
@@ -286,17 +312,85 @@ public struct Runtime {
     @builtin("net_write")
     public static fn writeSocket(_ socket: Int, _ bytes: U8[:]) -> Int
 
-    /// What the last socket call did: 0 done, 1 would block, 2 failed.
-    @builtin("net_status")
-    public static fn socketStatus() -> Int
+    /// A datagram socket bound to the address.
+    @builtin("net_datagram")
+    public static fn datagramSocket(_ family: Int, _ high: Int, _ low: Int, _ scope: Int, _ port: Int, _ path: String, _ flags: Int) -> Int
 
-    /// No more is written: the other end reads to its end.
+    /// The datagram socket sends to the address, and takes only its datagrams.
+    @builtin("net_connect_datagram")
+    public static fn connectDatagramSocket(_ socket: Int, _ family: Int, _ high: Int, _ low: Int, _ scope: Int, _ port: Int, _ path: String) -> Bool
+
+    /// A datagram sent to the address: its family 0, to the one it is
+    /// connected to.
+    @builtin("net_send")
+    public static fn sendDatagram(_ socket: Int, _ bytes: U8[:], _ family: Int, _ high: Int, _ low: Int, _ scope: Int, _ port: Int, _ path: String) -> Int
+
+    /// A datagram received, and whom it is from.
+    @builtin("net_receive")
+    public static fn receiveDatagram(_ socket: Int, _ most: Int) -> U8[>..]
+
+    /// The socket's own address, or its peer's, for 'socketAddress'.
+    @builtin("net_name")
+    public static fn socketName(_ socket: Int, peer: Bool) -> Bool
+
+    /// One of platform.h's NET_OPTION_.
+    @builtin("net_set_option")
+    public static fn setSocketOption(_ socket: Int, _ option: Int, _ value: Int) -> Bool
+
+    @builtin("net_option")
+    public static fn socketOption(_ socket: Int, _ option: Int) -> Int
+
+    /// In a multicast group, or out of it, on the interface of the index.
+    @builtin("net_membership")
+    public static fn socketMembership(_ socket: Int, join: Bool, _ family: Int, _ high: Int, _ low: Int, _ interface: Int) -> Bool
+
+    /// No more is written, and the other end reads to its end; or no more
+    /// is read.
     @builtin("net_shutdown")
-    public static fn shutdownSocket(_ socket: Int)
+    public static fn shutdownSocket(_ socket: Int, writing: Bool)
 
     /// Closed; waiting tasks wake to find it so. Closing twice does nothing.
     @builtin("net_close")
     public static fn closeSocket(_ socket: Int)
+
+    /// The host's addresses, of a family or (0) any, looked up on a thread
+    /// of the runtime's: a lookup, or 0, to be ended with 'endLookup'.
+    @builtin("net_resolve")
+    public static fn beginLookup(_ host: String, _ family: Int) -> Int
+
+    /// What to wait for, for the lookup to be done.
+    @builtin("net_resolve_event")
+    public static fn lookupEvent(_ lookup: Int) -> Int
+
+    /// How many addresses it found, 'socketStatus' saying how it went.
+    @builtin("net_resolved")
+    public static fn lookupCount(_ lookup: Int) -> Int
+
+    /// One of them, for 'socketAddress'.
+    @builtin("net_resolved_take")
+    public static fn takeLookupAddress(_ lookup: Int, _ index: Int)
+
+    /// No longer wanted: what it has yet to find is dropped.
+    @builtin("net_resolve_end")
+    public static fn endLookup(_ lookup: Int)
+
+    /// The machine's interfaces listed, a row for each address: how many
+    /// rows, or -1. With false, what was listed is let go of.
+    @builtin("net_interfaces")
+    public static fn interfaces(list: Bool) -> Int
+
+    @builtin("net_interface_name")
+    public static fn interfaceName(_ row: Int) -> String
+
+    /// A part of a row: 0 the interface's index, 1 its flags, 2 its MTU, 3
+    /// its hardware address or -1, 4 its address's prefix length; 5, its
+    /// address's family, the address kept for 'socketAddress'.
+    @builtin("net_interface")
+    public static fn interfacePart(_ row: Int, _ part: Int) -> Int
+
+    /// The index of the interface of that name, or 0.
+    @builtin("net_interface_index")
+    public static fn interfaceIndex(_ name: String) -> Int
 
     /// Waits until the socket is ready to read, or to write: the running
     /// task suspends until the reactor says so, and its worker runs others.

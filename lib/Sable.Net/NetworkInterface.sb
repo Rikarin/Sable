@@ -1,0 +1,80 @@
+module Sable.Net
+
+import Sable.IO
+
+/// A network interface of this machine's, as it was when asked for.
+///
+/// ```sable
+/// let loopback = (try! NetworkInterface.all()).first(where: { $0.isLoopback })!
+/// assert(loopback.addresses.contains(where: { $0.address.isLoopback }))
+/// ```
+public struct NetworkInterface {
+    /// The name the system has for it: "en0", "eth0".
+    public let name: String
+
+    /// Its index, which a scope and multicast name it by.
+    public let index: Int
+
+    /// Its addresses, each with its network.
+    public internal(set) var addresses: InterfaceAddress[>..] = []
+
+    /// The address of its hardware; none when it has none, or one that is
+    /// not of 48 bits.
+    public internal(set) var hardwareAddress: U8[>..]? = none
+
+    /// How many bytes a packet has at most; none when that is not known.
+    public let mtu: Int?
+
+    let flags: Int
+
+    /// Whether it is on.
+    public var isUp: Bool => (flags & 1) != 0
+
+    /// Whether it is on and has something to talk to.
+    public var isRunning: Bool => (flags & 2) != 0
+
+    /// Whether it is the machine's way to itself.
+    public var isLoopback: Bool => (flags & 4) != 0
+
+    /// Whether it has one other end, as a tunnel has.
+    public var isPointToPoint: Bool => (flags & 8) != 0
+
+    /// Whether it takes multicast.
+    public var supportsMulticast: Bool => (flags & 16) != 0
+
+    /// Every interface, as the system lists them.
+    public static fn all() throws(IoError) -> NetworkInterface[>..] {
+        let rows = Runtime.interfaces(list: true)
+        if rows < 0 {
+            throw socketError("the network interfaces")
+        }
+        defer {
+            let _ = Runtime.interfaces(list: false)
+        }
+        var all: NetworkInterface[>..] = []
+        for row in 0..<rows {
+            let index = Runtime.interfacePart(row, 0)
+            let name = Runtime.interfaceName(row)
+            var at = all.firstIndex(where: { $0.name == name }) ?? -1
+            if at < 0 {
+                let mtu = Runtime.interfacePart(row, 2)
+                at = all.count
+                all.append(NetworkInterface { name: name, index: index, mtu: mtu > 0 ? mtu : none, flags: Runtime.interfacePart(row, 1) })
+            }
+            let hardware = Runtime.interfacePart(row, 3)
+            if hardware >= 0 {
+                var bytes: U8[>..] = []
+                for i in 0..<6 {
+                    bytes.append(U8(hardware >> (40 - 8 * i) & 0xFF))
+                }
+                all[at].hardwareAddress = bytes
+            }
+            if Runtime.interfacePart(row, 5) != 0 {
+                if let address = SocketAddress.ofLastCall() {
+                    all[at].addresses.append(InterfaceAddress { address: address.ip, prefixLength: Runtime.interfacePart(row, 4) })
+                }
+            }
+        }
+        return all
+    }
+}

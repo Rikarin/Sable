@@ -136,6 +136,8 @@ typedef struct SableTask {
     int32_t io_direction;            // PENDING_IO: 0 to read, 1 to write
     bool io_background;              // and what it waits for is a background event
     void *io_source;                 // the socket it waits on, or NULL; under the source's lock
+    int64_t io_handle;               // the handle it named it by, which a close since makes stale
+    struct SableTask *next_io;       // among the tasks waiting on one socket the same way
     void (*blocking_run)(void *context); // PENDING_BLOCKING: the work, and what it is given
     void *blocking_context;
     struct SableTask *next_blocking; // in the blocking pool's queue
@@ -858,11 +860,17 @@ static void wake_sleepers(void) {
 //
 // A source is never given back to the system: closed, it goes to a free
 // list and is used again for another socket, its generation bumped. A
-// handle carries the generation it was made with, so one kept past its
-// close names nothing; and a report the reactor had already gathered for
-// the old socket finds a source that is still memory, where at worst it
-// marks the new socket ready for nothing — whose call then finds it would
-// block, and waits.
+// handle is where the source is in the table of them, and the generation it
+// was made with, so one kept past its close names nothing; and a report the
+// reactor had already gathered for the old socket finds a source that is
+// still memory, where at worst it marks the new socket ready for nothing —
+// whose call then finds it would block, and waits.
+//
+// A call on the socket is one of the source's users from io_begin to
+// io_end, and a close waits for them before the system's own: the number of
+// a socket closed while another thread is about to read it is the next one
+// opened's, and the read would take that one's bytes. No user waits for
+// anything (every socket is nonblocking), so nor, for long, does the close.
 //
 // A source may be a pipe (a child's stream) rather than a socket; or an
 // event, which the reactor does not watch: reactor_ready says when it
@@ -876,30 +884,81 @@ typedef struct IoSource {
     SpinLock lock;
     PlatformSocket socket;      // or the pipe; -1 once closed
     uint8_t kind;               // SOURCE_*
-    int32_t port;               // a listener's, as bound
-    uint16_t generation;
     uint8_t ready;              // REACTOR_* reported and not yet used up
+    int32_t users;              // calls on it now
+    int64_t generation;
+    int64_t index;              // in the table
     uint64_t ticks[2];          // reports, to read and to write
-    SableTask *waiter[2];       // the task waiting to read, to write
+    SableTask *waiter[2];       // the tasks waiting to read, to write, through 'next_io'
     struct IoSource *next_free;
 } IoSource;
 
+// Every source, in chunks made as they are needed and never moved.
+enum { SOURCE_CHUNK = 1024, SOURCE_CHUNKS = 1 << 14, SOURCE_INDEX_BITS = 24 };
+
+static const int64_t SOURCE_GENERATIONS = INT64_C(1) << (62 - SOURCE_INDEX_BITS);
+
 static SpinLock sources_lock;
 static IoSource *free_sources;
+static IoSource *source_chunks[SOURCE_CHUNKS];
+static int64_t source_count;
 
-// A handle: the source's address, its generation in the top 16 bits.
-static int64_t source_handle(IoSource *source) {
-    return (int64_t)(((uint64_t)source->generation << 48) | (uint64_t)(uintptr_t)source);
+// A handle: the source's place, from 1, its generation in the bits above.
+static int64_t source_handle(const IoSource *source) {
+    return (source->generation << SOURCE_INDEX_BITS) | (source->index + 1);
 }
 
 // The source a handle names, or NULL once it is closed.
 static IoSource *source_of(int64_t handle) {
-    IoSource *source = (IoSource *)(uintptr_t)((uint64_t)handle & 0xFFFFFFFFFFFFull);
-    if (source == NULL || (uint16_t)((uint64_t)handle >> 48) != __atomic_load_n(&source->generation, __ATOMIC_ACQUIRE)) {
+    int64_t index = (handle & ((INT64_C(1) << SOURCE_INDEX_BITS) - 1)) - 1;
+    if (handle <= 0 || index < 0 || index / SOURCE_CHUNK >= SOURCE_CHUNKS) {
         return NULL;
     }
 
+    IoSource *chunk = __atomic_load_n(&source_chunks[index / SOURCE_CHUNK], __ATOMIC_ACQUIRE);
+    if (chunk == NULL || handle >> SOURCE_INDEX_BITS != __atomic_load_n(&chunk[index % SOURCE_CHUNK].generation, __ATOMIC_ACQUIRE)) {
+        return NULL;
+    }
+
+    return &chunk[index % SOURCE_CHUNK];
+}
+
+// A source no socket has.
+static IoSource *io_source_take(void) {
+    spin_lock(&sources_lock);
+    IoSource *source = free_sources;
+    if (source != NULL) {
+        free_sources = source->next_free;
+    } else {
+        int64_t index = source_count;
+        if (index / SOURCE_CHUNK >= SOURCE_CHUNKS) {
+            spin_unlock(&sources_lock);
+            sable_trap("too many sockets are open");
+        }
+
+        if (index % SOURCE_CHUNK == 0) {
+            IoSource *chunk = calloc(SOURCE_CHUNK, sizeof(IoSource));
+            if (chunk == NULL) {
+                sable_trap("out of memory");
+            }
+
+            __atomic_store_n(&source_chunks[index / SOURCE_CHUNK], chunk, __ATOMIC_RELEASE);
+        }
+
+        source = &source_chunks[index / SOURCE_CHUNK][index % SOURCE_CHUNK];
+        source->index = index;
+        source->socket = -1;
+        source_count++;
+    }
+
+    spin_unlock(&sources_lock);
     return source;
+}
+
+// Under the source's lock: handles made for it name nothing from now on.
+static void io_source_retire(IoSource *source) {
+    __atomic_store_n(&source->socket, -1, __ATOMIC_RELEASE);
+    __atomic_store_n(&source->generation, (source->generation + 1) % SOURCE_GENERATIONS, __ATOMIC_RELEASE);
 }
 
 // The reactor, opened the first time it is needed.
@@ -943,24 +1002,10 @@ static int64_t io_source_open(PlatformSocket socket, uint8_t kind, uint8_t ready
         return 0;
     }
 
-    spin_lock(&sources_lock);
-    IoSource *source = free_sources;
-    if (source != NULL) {
-        free_sources = source->next_free;
-    }
-
-    spin_unlock(&sources_lock);
-    if (source == NULL) {
-        source = calloc(1, sizeof(IoSource));
-        if (source == NULL) {
-            sable_trap("out of memory");
-        }
-    }
-
+    IoSource *source = io_source_take();
     spin_lock(&source->lock);
     __atomic_store_n(&source->socket, socket, __ATOMIC_RELEASE);
     source->kind = kind;
-    source->port = 0;
     source->ready = ready;
     source->waiter[0] = source->waiter[1] = NULL;
     int64_t handle = source_handle(source);
@@ -968,8 +1013,7 @@ static int64_t io_source_open(PlatformSocket socket, uint8_t kind, uint8_t ready
     bool watched = kind == SOURCE_SOCKET ? reactor_add(socket, source) : kind == SOURCE_PIPE ? pipe_watch(socket, source) : true;
     if (!watched) {
         spin_lock(&source->lock);
-        __atomic_store_n(&source->socket, -1, __ATOMIC_RELEASE);
-        __atomic_store_n(&source->generation, (uint16_t)(source->generation + 1), __ATOMIC_RELEASE);
+        io_source_retire(source);
         spin_unlock(&source->lock);
         source_close(socket, kind);
         io_source_free(source);
@@ -988,15 +1032,68 @@ static void io_resume(SableTask *task) {
     active_done();
 }
 
-// Under the source's lock: the task waiting in that direction, taken, or NULL.
-static SableTask *io_take_waiter(IoSource *source, int direction) {
-    SableTask *task = source->waiter[direction];
-    if (task != NULL) {
-        source->waiter[direction] = NULL;
-        __atomic_store_n(&task->io_source, NULL, __ATOMIC_RELEASE);
+// Under the source's lock: the tasks waiting in that direction, taken.
+static SableTask *io_take_waiters(IoSource *source, int direction) {
+    SableTask *tasks = source->waiter[direction];
+    source->waiter[direction] = NULL;
+    for (SableTask *task = tasks; task != NULL; task = task->next_io) {
+        __atomic_store_n(&task->io_source, NULL, __ATOMIC_SEQ_CST);
     }
 
-    return task;
+    return tasks;
+}
+
+// Under the source's lock: the task no longer waits on it. Whether it did.
+static bool io_remove_waiter(IoSource *source, SableTask *task) {
+    for (int direction = 0; direction < 2; direction++) {
+        for (SableTask **at = &source->waiter[direction]; *at != NULL; at = &(*at)->next_io) {
+            if (*at == task) {
+                *at = task->next_io;
+                __atomic_store_n(&task->io_source, NULL, __ATOMIC_SEQ_CST);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// Tasks taken, queued: each may run, and wait again, as soon as it is.
+static void io_resume_all(SableTask *tasks) {
+    while (tasks != NULL) {
+        SableTask *next = tasks->next_io;
+        io_resume(tasks);
+        tasks = next;
+    }
+}
+
+// A call on the handle's socket begins: its source, whose socket is not
+// closed until io_end; or NULL, the handle naming nothing. The reports in
+// the direction so far, for io_would_block, if the call has one.
+static IoSource *io_begin(int64_t handle, PlatformSocket *socket, int direction, uint64_t *ticks) {
+    IoSource *source = source_of(handle);
+    if (source == NULL) {
+        return NULL;
+    }
+
+    spin_lock(&source->lock);
+    if (source->socket == -1 || source_handle(source) != handle) {
+        spin_unlock(&source->lock);
+        return NULL;
+    }
+
+    __atomic_fetch_add(&source->users, 1, __ATOMIC_RELAXED);
+    *socket = source->socket;
+    if (ticks != NULL) {
+        *ticks = source->ticks[direction];
+    }
+
+    spin_unlock(&source->lock);
+    return source;
+}
+
+static void io_end(IoSource *source) {
+    __atomic_fetch_sub(&source->users, 1, __ATOMIC_RELEASE);
 }
 
 // The socket closed: no longer watched, and whoever waits on it woken, to
@@ -1008,17 +1105,16 @@ static void io_source_close(int64_t handle) {
     }
 
     spin_lock(&source->lock);
-    if (source->generation != (uint16_t)((uint64_t)handle >> 48)) {
+    if (source_handle(source) != handle) {
         spin_unlock(&source->lock);
         return;
     }
 
     PlatformSocket socket = source->socket;
     uint8_t kind = source->kind;
-    __atomic_store_n(&source->socket, -1, __ATOMIC_RELEASE);
-    __atomic_store_n(&source->generation, (uint16_t)(source->generation + 1), __ATOMIC_RELEASE);
-    SableTask *reader = io_take_waiter(source, 0);
-    SableTask *writer = io_take_waiter(source, 1);
+    io_source_retire(source);
+    SableTask *readers = io_take_waiters(source, 0);
+    SableTask *writers = io_take_waiters(source, 1);
     spin_unlock(&source->lock);
     if (kind == SOURCE_SOCKET) {
         reactor_remove(socket);
@@ -1026,25 +1122,16 @@ static void io_source_close(int64_t handle) {
         pipe_unwatch(socket);
     }
 
+    for (int spins = 0; __atomic_load_n(&source->users, __ATOMIC_ACQUIRE) > 0; spins++) {
+        if (spins > 64) {
+            thread_yield();
+        }
+    }
+
     source_close(socket, kind);
-    if (reader != NULL) {
-        io_resume(reader);
-    }
-
-    if (writer != NULL) {
-        io_resume(writer);
-    }
-
+    io_resume_all(readers);
+    io_resume_all(writers);
     io_source_free(source);
-}
-
-// The reports in a direction so far: taken before a call that may find
-// the socket would block.
-static uint64_t io_ticks(IoSource *source, int direction) {
-    spin_lock(&source->lock);
-    uint64_t ticks = source->ticks[direction];
-    spin_unlock(&source->lock);
-    return ticks;
 }
 
 // The call found the socket would block: not ready that way, unless the
@@ -1067,16 +1154,14 @@ static void io_ready(IoSource *source, int events) {
             if (events & (direction == 0 ? REACTOR_READABLE : REACTOR_WRITABLE)) {
                 source->ticks[direction]++;
                 source->ready |= (uint8_t)(direction == 0 ? REACTOR_READABLE : REACTOR_WRITABLE);
-                woken[direction] = io_take_waiter(source, direction);
+                woken[direction] = io_take_waiters(source, direction);
             }
         }
     }
 
     spin_unlock(&source->lock);
     for (int direction = 0; direction < 2; direction++) {
-        if (woken[direction] != NULL) {
-            io_resume(woken[direction]);
-        }
+        io_resume_all(woken[direction]);
     }
 }
 
@@ -1152,7 +1237,7 @@ bool sable_task_io_wait(int64_t handle, bool writable) {
 
     int bit = writable ? REACTOR_WRITABLE : REACTOR_READABLE;
     spin_lock(&source->lock);
-    bool ready = (source->ready & bit) != 0 || source->socket == -1;
+    bool ready = (source->ready & bit) != 0 || source->socket == -1 || source_handle(source) != handle;
     spin_unlock(&source->lock);
     if (ready) {
         return false;
@@ -1160,27 +1245,31 @@ bool sable_task_io_wait(int64_t handle, bool writable) {
 
     current_task->pending = PENDING_IO;
     current_task->pending_on = source;
+    current_task->io_handle = handle;
     current_task->io_direction = writable ? 1 : 0;
     return true;
 }
 
 // The task has suspended to wait on the source: among its waiters, unless
 // the socket became ready, or closed, or the task was cancelled, meanwhile.
+// It is among them before it is asked whether it is cancelled, and a cancel
+// says so before it asks what the task waits on: one of the two sees the
+// other's.
 static void io_wait_after_suspend(SableTask *task, IoSource *source) {
     int direction = task->io_direction;
     spin_lock(&source->lock);
     task->io_background = source->kind == SOURCE_BACKGROUND;
     __atomic_fetch_add(task->io_background ? &background_waiting : &io_waiting, 1, __ATOMIC_SEQ_CST);
     bool go_on = (source->ready & (direction == 0 ? REACTOR_READABLE : REACTOR_WRITABLE)) != 0 || source->socket == -1
-                 || __atomic_load_n(&task->cancelled, __ATOMIC_ACQUIRE);
+                 || source_handle(source) != task->io_handle;
     if (!go_on) {
-        if (source->waiter[direction] != NULL) {
-            spin_unlock(&source->lock);
-            sable_trap("two tasks wait to use one socket the same way at once");
-        }
-
+        task->next_io = source->waiter[direction];
         source->waiter[direction] = task;
-        __atomic_store_n(&task->io_source, source, __ATOMIC_RELEASE);
+        __atomic_store_n(&task->io_source, source, __ATOMIC_SEQ_CST);
+        if (__atomic_load_n(&task->cancelled, __ATOMIC_SEQ_CST)) {
+            io_remove_waiter(source, task);
+            go_on = true;
+        }
     }
 
     spin_unlock(&source->lock);
@@ -1192,20 +1281,13 @@ static void io_wait_after_suspend(SableTask *task, IoSource *source) {
 // A task cancelled, or dropped, while it waits on a socket: woken, or
 // forgotten, now.
 static void io_cancel(SableTask *task, bool resume) {
-    IoSource *source = __atomic_load_n(&task->io_source, __ATOMIC_ACQUIRE);
+    IoSource *source = __atomic_load_n(&task->io_source, __ATOMIC_SEQ_CST);
     if (source == NULL) {
         return;
     }
 
     spin_lock(&source->lock);
-    bool taken = false;
-    for (int direction = 0; direction < 2; direction++) {
-        if (source->waiter[direction] == task) {
-            io_take_waiter(source, direction);
-            taken = true;
-        }
-    }
-
+    bool taken = io_remove_waiter(source, task);
     spin_unlock(&source->lock);
     if (taken && resume) {
         io_resume(task);
@@ -1970,7 +2052,7 @@ static void cancel(SableTask *task, HandlerList *handlers) {
         return;
     }
 
-    __atomic_store_n(&task->cancelled, true, __ATOMIC_RELEASE);
+    __atomic_store_n(&task->cancelled, true, __ATOMIC_SEQ_CST);
     for (SableHandler *handler = task->handlers; handler != NULL; handler = handler->next) {
         if (handlers->count == handlers->capacity) {
             handlers->capacity = handlers->capacity < 8 ? 8 : handlers->capacity * 2;

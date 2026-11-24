@@ -5,6 +5,7 @@ module CommandTests
 
 import Sable.Concurrency
 import Sable.IO
+import Sable.Net
 import Sable.Process
 import Sable.Testing
 import Sable.Time
@@ -106,7 +107,7 @@ fn itHasNoneOfThisProgramsFiles() async {
     let before = try! await Command("ls").argument("/dev/fd").output()
     let path = scratch("open")
     let file = try! File.open(path, options: .writing)
-    let listener = try! TcpListener.bind(host: "127.0.0.1", port: 0)
+    let listener = try! TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
     let other = try! Command("cat").stdin(.Piped).stdout(.Piped).spawn()
     let after = try! await Command("ls").argument("/dev/fd").output()
     other.kill()

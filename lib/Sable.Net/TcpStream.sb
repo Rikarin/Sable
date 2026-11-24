@@ -1,0 +1,199 @@
+module Sable.Net
+
+import Sable.IO
+import Sable.Time
+
+/// A TCP connection: bytes read and written in order. A read or a write
+/// that must wait suspends the task, not its thread — the runtime's I/O
+/// reactor wakes it once the socket is ready — so a server can hold a
+/// connection per task, thousands of them, on a few threads. Deeply
+/// immutable, so Sendable: a connection accepted in one task may be served
+/// in another, and read in one while it is written in another. Two that
+/// read it at once share its bytes out between them, and two that write,
+/// mix them.
+///
+/// Small writes are sent as they are made (TCP_NODELAY is on, as Go has
+/// it): write what belongs together in one.
+///
+/// ```sable
+/// fn fetch(port: Int) async throws(IoError) -> U8[>..] {
+///     let connection = try await TcpStream.connect(SocketAddress(.v4Loopback, port: port))
+///     try await connection.write([0x50, 0x49, 0x4E, 0x47])
+///     connection.finishWriting()
+///     return try await connection.readAll()
+/// }
+/// ```
+@immutable
+public final class TcpStream: AsyncReader, AsyncWriter {
+    let handle: Int
+
+    /// The other end's address; none when it went as it was accepted.
+    public let peerAddress: SocketAddress?
+
+    init(handle: Int, peerAddress: SocketAddress?) {
+        self.handle = handle
+        self.peerAddress = peerAddress
+    }
+
+    deinit {
+        Runtime.closeSocket(handle)
+    }
+
+    /// A connection to the address, waiting until it is made: ConnectionRefused
+    /// where nothing listens, TimedOut once the timeout has passed (without
+    /// one, when the system gives up, which takes it a minute or two). A task
+    /// cancelled meanwhile throws Cancelled, and no connection is left.
+    public static async fn connect(_ address: SocketAddress, timeout: Duration? = none) throws(IoError) -> TcpStream {
+        let handle = Runtime.connect(address.familyNumber, address.highBits, address.lowBits, address.scopeNumber, address.port, "")
+        if handle == 0 {
+            throw socketError("\(address)")
+        }
+        let stream = TcpStream(handle: handle, peerAddress: address)
+        try await waitUntilConnected(handle, "\(address)", timeout: timeout)
+        return stream
+    }
+
+    /// A connection to the host — a name, or a numeric address — and port,
+    /// to whichever of its addresses answers: IPv6 ones are tried first and
+    /// IPv4 ones soon after, at once, as RFC 8305 says (`HappyEyeballs`).
+    /// The timeout is for all of it.
+    public static async fn connect(host: String, port: Int, timeout: Duration? = none) throws(IoError) -> TcpStream {
+        return try await HappyEyeballs().connect(
+            host: host,
+            port: port,
+            timeout: timeout,
+            resolve: { (name: String, family: IpFamily) throws(IoError) -> IpAddress[>..] in try await Dns.resolve(name, family: family) },
+            connect: { (address: SocketAddress) throws(IoError) -> TcpStream in try await TcpStream.connect(address) }
+        )
+    }
+
+    /// This end's address; none once it is closed.
+    public var localAddress: SocketAddress? => SocketAddress.of(handle, peer: false)
+
+    /// Up to 'count' bytes, as soon as any have come; none once the other
+    /// end has finished writing. A task cancelled while it waits throws
+    /// Cancelled, and no byte is lost: the connection may be read on.
+    public fn read(upTo count: Int) async throws(IoError) -> U8[>..] {
+        return try await readFrom(handle, upTo: count)
+    }
+
+    /// Every byte until the other end finishes writing. What has come is
+    /// lost when it throws.
+    public fn readAll() async throws(IoError) -> U8[>..] {
+        return try await readAllFrom(handle)
+    }
+
+    /// Every one of the bytes written, waiting while the other end is slow
+    /// to read them. They are the system's once this returns, which is not
+    /// to say that the other end has them. Of a write that throws, as when
+    /// the task is cancelled while it waits, some bytes may have gone: the
+    /// connection is open, but only closing it is any use.
+    public fn write(_ bytes: U8[:]) async throws(IoError) {
+        try await writeTo(handle, bytes)
+    }
+
+    /// Nothing more is written: the other end reads to its end. Reading
+    /// goes on.
+    public fn finishWriting() {
+        Runtime.shutdownSocket(handle, writing: true)
+    }
+
+    /// Nothing more is read: a read, waiting or not, finds the end. Writing
+    /// goes on.
+    public fn finishReading() {
+        Runtime.shutdownSocket(handle, writing: false)
+    }
+
+    /// Closed, both ways: tasks waiting on it wake and throw Disconnected,
+    /// as every call from now on does. What was written is still sent.
+    /// Dropping the stream closes it too.
+    public fn close() {
+        Runtime.closeSocket(handle)
+    }
+
+    // ---- Options ---------------------------------------------------------------
+
+    /// Whether small writes are sent as they are made, rather than held
+    /// for more to go with them (Nagle's algorithm).
+    public fn noDelay() throws(IoError) -> Bool {
+        return (try option(handle, 1)) != 0
+    }
+
+    /// Has small writes sent as they are made, or held.
+    public fn setNoDelay(_ on: Bool) throws(IoError) {
+        try setOption(handle, 1, on ? 1 : 0)
+    }
+
+    /// How a silent other end is asked whether it is there; none when it
+    /// is not, as it is not to begin with.
+    public fn keepAlive() throws(IoError) -> KeepAlive? {
+        if (try option(handle, 2)) == 0 {
+            return none
+        }
+        return KeepAlive(
+            idle: Duration.seconds(try option(handle, 3)),
+            interval: Duration.seconds(try option(handle, 4)),
+            count: try option(handle, 5)
+        )
+    }
+
+    /// Has a silent other end asked whether it is there, or not: InvalidInput
+    /// for a time or a count of none.
+    public fn setKeepAlive(_ keepAlive: KeepAlive?) throws(IoError) {
+        if let keepAlive {
+            let least = wholeSeconds(keepAlive.idle).min(wholeSeconds(keepAlive.interval)).min(keepAlive.count)
+            if least < 1 {
+                throw IoError.InvalidInput(path: "a keep-alive")
+            }
+            try setOption(handle, 3, wholeSeconds(keepAlive.idle))
+            try setOption(handle, 4, wholeSeconds(keepAlive.interval))
+            try setOption(handle, 5, keepAlive.count)
+        }
+        try setOption(handle, 2, keepAlive == none ? 0 : 1)
+    }
+
+    /// How many bytes that have come wait to be read.
+    public fn receiveBufferSize() throws(IoError) -> Int {
+        return try option(handle, 6)
+    }
+
+    /// Asks for so many, which the system takes as a hint: Linux doubles it.
+    public fn setReceiveBufferSize(_ bytes: Int) throws(IoError) {
+        try setOption(handle, 6, bytes)
+    }
+
+    /// How many bytes written wait to be sent before a write waits.
+    public fn sendBufferSize() throws(IoError) -> Int {
+        return try option(handle, 7)
+    }
+
+    /// Asks for so many, which the system takes as a hint: Linux doubles it.
+    public fn setSendBufferSize(_ bytes: Int) throws(IoError) {
+        try setOption(handle, 7, bytes)
+    }
+
+    /// How long closing waits for what was written to be sent; none when it
+    /// does not wait, and the system sends it meanwhile, as to begin with.
+    public fn linger() throws(IoError) -> Duration? {
+        let seconds = try option(handle, 8)
+        return seconds < 0 ? none : Duration.seconds(seconds)
+    }
+
+    /// Has closing wait, in whole seconds, for what was written to be sent.
+    /// Of no time at all: what was not yet sent is thrown away, and the
+    /// other end finds the connection reset. Of any longer: some systems
+    /// have the thread that closes it wait, which is a worker's.
+    public fn setLinger(_ duration: Duration?) throws(IoError) {
+        try setOption(handle, 8, duration.map { wholeSeconds($0) } ?? -1)
+    }
+
+    /// How many routers a packet passes before it is dropped.
+    public fn hopLimit() throws(IoError) -> Int {
+        return try option(handle, 9)
+    }
+
+    /// Has packets dropped after so many routers: IPv4's time to live.
+    public fn setHopLimit(_ hops: Int) throws(IoError) {
+        try setOption(handle, 9, hops)
+    }
+}

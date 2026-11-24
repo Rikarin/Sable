@@ -1,0 +1,206 @@
+module Sable.Net
+
+import Sable.IO
+
+/// A UDP socket: datagrams sent and received whole, or lost. Waiting for one
+/// suspends the task, not its thread. Deeply immutable, so Sendable, and
+/// tasks may send and receive at once.
+///
+/// ```sable
+/// fn echo() async throws(IoError) {
+///     let socket = try UdpSocket.bind(SocketAddress(.v4Loopback, port: 0))
+///     let datagram = try await socket.receive()
+///     try await socket.send(datagram.bytes, to: datagram.source)
+/// }
+/// ```
+@immutable
+public final class UdpSocket {
+    let handle: Int
+
+    /// Where it is bound, the port the one asked for, or the one the system
+    /// chose when asked for 0.
+    public let localAddress: SocketAddress
+
+    init(handle: Int, localAddress: SocketAddress) {
+        self.handle = handle
+        self.localAddress = localAddress
+    }
+
+    deinit {
+        Runtime.closeSocket(handle)
+    }
+
+    /// Bound to the address; on port 0, to a free one the system chooses.
+    /// `.v4Any` or `.v6Any` and port 0 is a client's, that sends anywhere.
+    ///
+    /// An IPv6 socket takes IPv6 datagrams only, on every system, but with
+    /// `dualStack` IPv4 ones too, from mapped addresses, and sends to them.
+    /// With `shareAddress` several sockets, each saying so, are bound to one
+    /// port, as several that listen to a multicast group are; on Windows
+    /// any program's, so say so for nothing else.
+    public static fn bind(_ address: SocketAddress, dualStack: Bool = false, shareAddress: Bool = false) throws(IoError) -> UdpSocket {
+        let flags = (shareAddress ? 1 : 0) + (dualStack ? 4 : 0)
+        let handle = Runtime.datagramSocket(address.familyNumber, address.highBits, address.lowBits, address.scopeNumber, address.port, "", flags)
+        if handle == 0 {
+            throw socketError("\(address)")
+        }
+        return UdpSocket(handle: handle, localAddress: SocketAddress.of(handle, peer: false) ?? address)
+    }
+
+    /// Has it send to the address, and receive nothing from any other. A
+    /// send or a receive may then throw ConnectionRefused, for a datagram
+    /// sent before that no one was there to take.
+    public fn connect(to address: SocketAddress) throws(IoError) {
+        if !Runtime.connectDatagramSocket(handle, address.familyNumber, address.highBits, address.lowBits, address.scopeNumber, address.port, "") {
+            throw socketError("\(address)")
+        }
+    }
+
+    /// The address it is connected to, or none.
+    public var peerAddress: SocketAddress? => SocketAddress.of(handle, peer: true)
+
+    /// The bytes sent to the address as one datagram: MessageTooLong for
+    /// more than one holds (65,507 bytes at most over IPv4, and fewer where
+    /// a network's links are asked not to break them up).
+    public fn send(_ bytes: U8[:], to address: SocketAddress) async throws(IoError) {
+        try await send(bytes, "\(address)", address.familyNumber, address)
+    }
+
+    /// The bytes sent to the address it is connected to, as one datagram.
+    public fn send(_ bytes: U8[:]) async throws(IoError) {
+        try await send(bytes, "the socket", 0, localAddress)
+    }
+
+    // Of family 0, the address is no matter.
+    fn send(_ bytes: U8[:], _ name: String, _ family: Int, _ address: SocketAddress) async throws(IoError) {
+        var times = 0
+        while true {
+            let _ = Runtime.sendDatagram(handle, bytes, family, address.highBits, address.lowBits, address.scopeNumber, address.port, "")
+            if Runtime.socketStatus() == 0 {
+                return
+            }
+            if isOutOfRoom() && times < 100 {
+                try await waitForRoom(times < 4 ? times : 4)
+                times += 1
+            } else if Runtime.socketStatus() == 2 {
+                throw socketError(name)
+            } else {
+                try await waitForSocket(handle, writable: true)
+            }
+        }
+    }
+
+    /// The next datagram, waiting until one comes: no more of it than
+    /// 'count' bytes, which is as many as one can have. One with no bytes
+    /// is a datagram like any other. A task cancelled while it waits throws
+    /// Cancelled, and no datagram is lost.
+    public fn receive(upTo count: Int = 65535) async throws(IoError) -> Datagram {
+        while true {
+            let bytes = Runtime.receiveDatagram(handle, count)
+            if Runtime.socketStatus() == 0 {
+                let truncated = Runtime.socketAddress(5) != 0
+                return Datagram { bytes: bytes, source: SocketAddress.ofLastCall() ?? localAddress, isTruncated: truncated }
+            }
+            try await waitForSocket(handle, writable: false)
+        }
+    }
+
+    /// Closed: tasks waiting on it wake and throw Disconnected. Dropping the
+    /// socket closes it too.
+    public fn close() {
+        Runtime.closeSocket(handle)
+    }
+
+    // ---- Multicast -------------------------------------------------------------
+
+    /// Has it receive what is sent to the group, coming in by the interface
+    /// of that index (`NetworkInterface`), or by one the system chooses. It
+    /// is bound to the group's port, and to the group or to no one address.
+    public fn join(group: IpAddress, interface index: Int = 0) throws(IoError) {
+        if !Runtime.socketMembership(handle, join: true, group.isV4 ? 4 : 6, group.high unchecked as Int, group.low unchecked as Int, index) {
+            throw socketError("\(group)")
+        }
+    }
+
+    /// Has it receive the group's no more.
+    public fn leave(group: IpAddress, interface index: Int = 0) throws(IoError) {
+        if !Runtime.socketMembership(handle, join: false, group.isV4 ? 4 : 6, group.high unchecked as Int, group.low unchecked as Int, index) {
+            throw socketError("\(group)")
+        }
+    }
+
+    /// Has what it sends to groups go out by the interface of that index.
+    public fn setMulticastInterface(_ index: Int) throws(IoError) {
+        try setOption(handle, 13, index)
+    }
+
+    /// Whether this machine hears what it sends to groups, as it does to
+    /// begin with.
+    public fn multicastLoop() throws(IoError) -> Bool {
+        return (try option(handle, 11)) != 0
+    }
+
+    /// Has this machine hear what it sends to groups, or not.
+    public fn setMulticastLoop(_ on: Bool) throws(IoError) {
+        try setOption(handle, 11, on ? 1 : 0)
+    }
+
+    /// How many routers what it sends to groups passes: 1 to begin with,
+    /// which is none.
+    public fn multicastHopLimit() throws(IoError) -> Int {
+        return try option(handle, 12)
+    }
+
+    /// Has what it sends to groups dropped after so many routers.
+    public fn setMulticastHopLimit(_ hops: Int) throws(IoError) {
+        if hops < 0 || hops > 255 {
+            throw IoError.InvalidInput(path: "a hop limit of \(hops)")
+        }
+        try setOption(handle, 12, hops)
+    }
+
+    // ---- Options ---------------------------------------------------------------
+
+    /// Whether it may send to broadcast addresses, as it may not to begin
+    /// with.
+    public fn broadcast() throws(IoError) -> Bool {
+        return (try option(handle, 10)) != 0
+    }
+
+    /// Lets it send to broadcast addresses, or not.
+    public fn setBroadcast(_ on: Bool) throws(IoError) {
+        try setOption(handle, 10, on ? 1 : 0)
+    }
+
+    /// How many bytes that have come wait to be received, before datagrams
+    /// are lost.
+    public fn receiveBufferSize() throws(IoError) -> Int {
+        return try option(handle, 6)
+    }
+
+    /// Asks for so many, which the system takes as a hint.
+    public fn setReceiveBufferSize(_ bytes: Int) throws(IoError) {
+        try setOption(handle, 6, bytes)
+    }
+
+    /// How many bytes wait to be sent, and the most one datagram has on some
+    /// systems.
+    public fn sendBufferSize() throws(IoError) -> Int {
+        return try option(handle, 7)
+    }
+
+    /// Asks for so many, which the system takes as a hint.
+    public fn setSendBufferSize(_ bytes: Int) throws(IoError) {
+        try setOption(handle, 7, bytes)
+    }
+
+    /// How many routers a datagram passes before it is dropped.
+    public fn hopLimit() throws(IoError) -> Int {
+        return try option(handle, 9)
+    }
+
+    /// Has datagrams dropped after so many routers: IPv4's time to live.
+    public fn setHopLimit(_ hops: Int) throws(IoError) {
+        try setOption(handle, 9, hops)
+    }
+}

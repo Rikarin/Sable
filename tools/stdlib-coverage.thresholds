@@ -59,3 +59,4 @@ lib/Sable.Testing/TestCase.sb                     45  40   # raise me
 lib/Sable.Crypto/Sha256Blocks.sb                   0   0   # run only where the processor has no SHA-256 of its own; CryptoTests runs it everywhere
 lib/Sable.Crypto/Sha512Blocks.sb                   0   0   # run only where the processor has no SHA-512 of its own; CryptoTests runs it everywhere
 lib/Sable.Crypto/KeccakPermutation.sb               0   0   # run only where the processor has no Keccak of its own; CryptoTests runs it everywhere
+lib/Sable.Net/UnixStream.sb                       75  30   # only Linux has a full queue to be tried again

@@ -1,0 +1,83 @@
+module Sable.Net
+
+import Sable.IO
+
+/// A Unix domain socket of datagrams, whole and in order, to programs on
+/// this machine: what systemd is told by that a service is ready. Unsupported
+/// on Windows.
+///
+/// ```sable
+/// fn tell(path: String) async throws(IoError) {
+///     try await UnixDatagramSocket.unbound().send([0x41], to: path)
+/// }
+/// ```
+@immutable
+public final class UnixDatagramSocket {
+    let handle: Int
+
+    init(handle: Int) {
+        self.handle = handle
+    }
+
+    deinit {
+        Runtime.closeSocket(handle)
+    }
+
+    /// At no path: it sends, and can be answered by no one.
+    public static fn unbound() throws(IoError) -> UnixDatagramSocket {
+        return try UnixDatagramSocket.open("", 0)
+    }
+
+    /// At the path, making its file, as `UnixListener.bind` does.
+    public static fn bind(_ path: String, replacing: Bool = false) throws(IoError) -> UnixDatagramSocket {
+        if path.isEmpty {
+            throw IoError.InvalidInput(path: path)
+        }
+        return try UnixDatagramSocket.open(path, replacing ? 8 : 0)
+    }
+
+    static fn open(_ path: String, _ flags: Int) throws(IoError) -> UnixDatagramSocket {
+        let handle = Runtime.datagramSocket(1, 0, 0, 0, 0, path, flags)
+        if handle == 0 {
+            throw socketError(path)
+        }
+        return UnixDatagramSocket(handle: handle)
+    }
+
+    /// The bytes sent to the socket at the path as one datagram, waiting
+    /// while it has as many as it holds.
+    public fn send(_ bytes: U8[:], to path: String) async throws(IoError) {
+        var times = 0
+        while true {
+            let _ = Runtime.sendDatagram(handle, bytes, 1, 0, 0, 0, 0, path)
+            if Runtime.socketStatus() == 0 {
+                return
+            }
+            // macOS says so when the other end is full, and Linux that it
+            // would block, though it is this end that is ready or not.
+            if Runtime.socketStatus() == 1 || isOutOfRoom() {
+                try await waitForRoom(times)
+                times += 1
+            } else {
+                throw socketError(path)
+            }
+        }
+    }
+
+    /// The next datagram's bytes, no more than 'count' of them.
+    public fn receive(upTo count: Int = 65536) async throws(IoError) -> U8[>..] {
+        while true {
+            let bytes = Runtime.receiveDatagram(handle, count)
+            if Runtime.socketStatus() == 0 {
+                return bytes
+            }
+            try await waitForSocket(handle, writable: false)
+        }
+    }
+
+    /// Closed: tasks waiting on it wake and throw Disconnected. The path's
+    /// file stays.
+    public fn close() {
+        Runtime.closeSocket(handle)
+    }
+}

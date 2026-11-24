@@ -662,15 +662,35 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_task_io_wait(i64, i1 zeroext)
                                 declare zeroext i1 @sable_task_blocking(ptr, ptr)
                                 declare i64 @sable_net_status()
-                                declare i64 @sable_net_listen(ptr, i64)
-                                declare i64 @sable_net_port(i64)
+                                declare i64 @sable_net_error()
+                                declare i64 @sable_net_error_code()
+                                declare i64 @sable_net_address(i64)
+                                declare ptr @sable_net_path()
                                 declare i64 @sable_net_accept(i64)
-                                declare i64 @sable_net_connect(ptr, i64)
                                 declare zeroext i1 @sable_net_connected(i64)
                                 declare ptr @sable_net_read(i64, i64, ptr)
                                 declare i64 @sable_net_write(i64, ptr, i64, i64)
-                                declare void @sable_net_shutdown(i64)
+                                declare ptr @sable_net_receive(i64, i64, ptr)
+                                declare zeroext i1 @sable_net_name(i64, i1 zeroext)
+                                declare zeroext i1 @sable_net_set_option(i64, i64, i64)
+                                declare i64 @sable_net_option(i64, i64)
+                                declare zeroext i1 @sable_net_membership(i64, i1 zeroext, i64, i64, i64, i64)
+                                declare void @sable_net_shutdown(i64, i1 zeroext)
                                 declare void @sable_net_close(i64)
+                                declare i64 @sable_net_listen(i64, i64, i64, i64, i64, ptr, i64, i64)
+                                declare i64 @sable_net_connect(i64, i64, i64, i64, i64, ptr)
+                                declare i64 @sable_net_datagram(i64, i64, i64, i64, i64, ptr, i64)
+                                declare zeroext i1 @sable_net_connect_datagram(i64, i64, i64, i64, i64, i64, ptr)
+                                declare i64 @sable_net_send(i64, ptr, i64, i64, i64, i64, i64, i64, i64, ptr)
+                                declare i64 @sable_net_resolve(ptr, i64)
+                                declare i64 @sable_net_resolve_event(i64)
+                                declare i64 @sable_net_resolved(i64)
+                                declare void @sable_net_resolved_take(i64, i64)
+                                declare void @sable_net_resolve_end(i64)
+                                declare i64 @sable_net_interfaces(i1 zeroext)
+                                declare ptr @sable_net_interface_name(i64)
+                                declare i64 @sable_net_interface(i64, i64)
+                                declare i64 @sable_net_interface_index(ptr)
                                 declare void @sable_tasks_drain()
                                 declare void @sable_task_run_until_main()
                                 declare ptr @sable_frame_alloc(i64)
@@ -4033,39 +4053,35 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call zeroext i1 @sable_task_blocking(ptr {operands[0]}, ptr {operands[1]})");
                     return;
 
-                // Sockets (runtime/net.c), by handle.
-                case "net_status":
-                    Line($"{Result()} = call i64 @sable_net_status()");
-                    return;
+                // Sockets (runtime/net.c), by handle: each builtin the runtime's
+                // function of its name, a slice its buffer, start and count,
+                // and an array given the metadata to make it with.
+                case var net when net.StartsWith("net_", StringComparison.Ordinal): {
+                    List<string> passed = [];
+                    for (var i = 0; i < operands.Length; i++) {
+                        var type = builtin.Operands[i].Type;
+                        if (type is SliceType slice) {
+                            passed.Add($"ptr {SlicePart(operands[i], slice, 0)}");
+                            passed.Add($"i64 {SlicePart(operands[i], slice, 1)}");
+                            passed.Add($"i64 {SlicePart(operands[i], slice, 2)}");
+                        } else {
+                            passed.Add((type == SilType.Int ? "i64 " : type == SilType.Bool ? "i1 zeroext " : "ptr ") + operands[i]);
+                        }
+                    }
 
-                case "net_listen" or "net_connect":
-                    Line($"{Result()} = call i64 @sable_{builtin.Name}(ptr {operands[0]}, i64 {operands[1]})");
-                    return;
+                    if (builtin.Type is ArrayType made) {
+                        passed.Add($"ptr {module.ArrayMetadata(made)}");
+                    }
 
-                case "net_port" or "net_accept":
-                    Line($"{Result()} = call i64 @sable_{builtin.Name}(i64 {operands[0]})");
-                    return;
-
-                case "net_connected":
-                    Line($"{Result()} = call zeroext i1 @sable_net_connected(i64 {operands[0]})");
-                    return;
-
-                case "net_read":
-                    Line($"{Result()} = call ptr @sable_net_read(i64 {operands[0]}, i64 {operands[1]}, ptr {module.ArrayMetadata(new ArrayType(SilType.U8))})");
-                    return;
-
-                case "net_write": {
-                    var type = (SliceType)builtin.Operands[1].Type;
-                    var buffer = SlicePart(operands[1], type, 0);
-                    var start = SlicePart(operands[1], type, 1);
-                    var count = SlicePart(operands[1], type, 2);
-                    Line($"{Result()} = call i64 @sable_net_write(i64 {operands[0]}, ptr {buffer}, i64 {start}, i64 {count})");
+                    var call = $"@sable_{net}({string.Join(", ", passed)})";
+                    Line(
+                        builtin.Type == SilType.Unit ? $"call void {call}"
+                        : builtin.Type == SilType.Int ? $"{Result()} = call i64 {call}"
+                        : builtin.Type == SilType.Bool ? $"{Result()} = call zeroext i1 {call}"
+                        : $"{Result()} = call ptr {call}"
+                    );
                     return;
                 }
-
-                case "net_shutdown" or "net_close":
-                    Line($"call void @sable_{builtin.Name}(i64 {operands[0]})");
-                    return;
 
                 case "async_park": {
                     var list = Fresh();

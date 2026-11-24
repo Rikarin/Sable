@@ -992,6 +992,34 @@ specialised for now: the edit gain is small next to the size and
 `-O0` run time, and the choice is to be made again once the binary-size
 follow-ups (#299, #300) and stage 9 land.
 
+*One witness-table convention (#299).* Existentials became Swift's
+layout, always boxed — the box, the value's metadata and a table pointer
+per protocol — and every witness table one inline list of entries in the
+generic calling convention, with the existential-convention slots and every
+thunk between the two conventions deleted (docs/06 §6.2). Measured with
+`sable` built Release on an M1 Max (loaded), each a single file's `sable
+build`, fastest of five runs in ms, before (b801d3c) and after:
+
+| Build | Before, specialised | After, specialised | Before, unspecialised | After, unspecialised |
+|---|---:|---:|---:|---:|
+| `examples/ssg` `-O0`, size | 529,400 B | 529,400 B | 920,584 B | 727,928 B |
+| `examples/ssg` `-O0`, `__LINKEDIT` | 70,648 B | 70,648 B | 314,376 B | 236,408 B |
+| shapes `-O0` / `-O2` | 31 / 28 | 31 / 26 | 29 / 25 | 30 / 24 |
+| 1000 existentials × 20,000 rounds, `-O0` | 410 | 260 | 407 | 264 |
+| the same, `-O2` | 122 | 109 | 121 | 108 |
+
+The other benchmarks (binary-trees, nbody, orders, sort, words, json) are
+within noise at both levels in both modes, with the same allocation counts;
+unspecialised `-O0` executables shrink where they box or call generic code
+(`words` 510 KB to 336 KB, json 821 KB to 668 KB). An unspecialised ssg is
+21% smaller and its `__LINKEDIT` 25%: one entry per requirement, and no
+thunks or bridges to relocate. A specialised ssg makes almost no tables and
+is unchanged. A call through an existential is now two dependent loads (the
+table, then the entry) where it was one, but an existential of one
+protocol is three words, not one plus two per requirement, so copying one
+— what iterating an array of them does — is cheaper, and the existential
+benchmark is faster at both levels.
+
 ### The build cache
 
 What a build makes that does not depend on the program — the C runtime's

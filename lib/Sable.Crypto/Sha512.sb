@@ -1,0 +1,40 @@
+module Sable.Crypto
+
+/// SHA-512, FIPS 180-4: a 64-byte digest, with a state of 64-bit words. Worked
+/// out by the processor's own instructions where it has them.
+///
+/// ```sable
+/// assert("\(Sha512.hash(utf8: "abc"))" == "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f")
+/// var hash = Sha512()
+/// hash.update(utf8: "a")
+/// hash.update(utf8: "bc")
+/// assert(hash.finalize() == Sha512.hash(utf8: "abc"))
+/// ```
+public struct Sha512: HashFunction {
+    var state: BlockState<Sha512Blocks>
+
+    public init() {
+        state = BlockState<Sha512Blocks>(initial: Sha512.initialState)
+    }
+
+    static let initialState: U64[>..] = [
+        0x6A09E667F3BCC908, 0xBB67AE8584CAA73B, 0x3C6EF372FE94F82B, 0xA54FF53A5F1D36F1,
+        0x510E527FADE682D1, 0x9B05688C2B3E6C1F, 0x1F83D9ABFB41BD6B, 0x5BE0CD19137E2179,
+    ]
+
+    public static var digestByteCount: Int => 64
+
+    public static var blockByteCount: Int => 128
+
+    public mutating fn update(_ bytes: U8[:]) {
+        state.update(bytes)
+    }
+
+    public fn finalize() -> Digest {
+        return bigEndianDigest64(state.finish(), count: 64)
+    }
+
+    public static fn iterateHmac(inner: Sha512, outer: Sha512, first: U8[:], iterations: Int) -> U8[>..] {
+        return BlockState<Sha512Blocks>.iterateHmac(inner: inner.state, outer: outer.state, first: first, iterations: iterations)
+    }
+}

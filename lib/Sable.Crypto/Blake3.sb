@@ -1,0 +1,190 @@
+module Sable.Crypto
+
+/// BLAKE3: a 32-byte digest, or output of any length, of a tree of 1 KiB
+/// chunks. Under a key of 32 bytes it is a message authentication code, and
+/// with a context a key derivation function.
+///
+/// ```sable
+/// assert("\(Blake3.hash(utf8: ""))" == "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262")
+/// var hash = Blake3()
+/// hash.update(utf8: "abc")
+/// assert(hash.finalize(count: 64).starts(with: hash.finalize().bytes))
+/// ```
+public struct Blake3: HashFunction, ExtendableOutputFunction {
+    // Where each part is in the memory: the key's words (the initial
+    // state's, when there is none), the chunk's chaining value, the block
+    // being filled, and the chaining values of the subtrees before it.
+    static var chainAt: Int => 32
+    static var blockAt: Int => 64
+    static var stackAt: Int => 128
+
+    var box: SecretBox
+    let flags: U32
+    var buffered: Int
+    // How many blocks of the chunk are compressed, chunks done before it,
+    // and subtrees on the stack.
+    var blocks: Int
+    var chunks: U64
+    var depth: Int
+
+    /// A hash, with no key.
+    public init() {
+        self.init(flags: 0)
+    }
+
+    init(flags: U32) {
+        let memory = SecretMemory(count: 128 + 54 * 32)
+        unsafe {
+            var i = 0
+            while i < 32 {
+                store32(load32(blake3Constants + i), memory.address + i)
+                store32(load32(blake3Constants + i), memory.address + Blake3.chainAt + i)
+                i += 4
+            }
+        }
+        box = SecretBox(memory: memory)
+        self.flags = flags
+        buffered = 0
+        blocks = 0
+        chunks = 0
+        depth = 0
+    }
+
+    init(flags: U32, key: U8[:]) {
+        self.init(flags: flags)
+        unsafe {
+            store(key, at: box.memory.address)
+            store(key, at: box.memory.address + Blake3.chainAt)
+        }
+    }
+
+    /// A message authentication code under a key of 32 bytes.
+    ///
+    /// ```sable
+    /// let key = SymmetricKey.random(byteCount: 32)
+    /// var code = Blake3(key: key)
+    /// code.update(utf8: "message")
+    /// assert(code.finalize() != Blake3.hash(utf8: "message"))
+    /// ```
+    public init(key: SymmetricKey) {
+        precondition(key.byteCount == 32, "a BLAKE3 key has 32 bytes, not \(key.byteCount)")
+        var secret = key.bytes()
+        self.init(flags: BLAKE3_KEYED_HASH, key: secret)
+        secret.zeroSecurely()
+    }
+
+    /// Derives keys for one use: what is hashed is the key material, and
+    /// the output the key. The context says what the key is for; it should
+    /// be text of the program's own, unique to the use, and never input.
+    ///
+    /// ```sable
+    /// var derivation = Blake3(derivingKeyFor: "example.com 2026-11-24 session tokens v1")
+    /// derivation.update(SymmetricKey.random(byteCount: 32).bytes())
+    /// assert(derivation.finalize().count == 32)
+    /// ```
+    public init(derivingKeyFor context: String) {
+        var named = Blake3(flags: BLAKE3_DERIVE_KEY_CONTEXT)
+        named.update(utf8: context)
+        self.init(flags: BLAKE3_DERIVE_KEY_MATERIAL, key: named.finalize().bytes)
+    }
+
+    public static var digestByteCount: Int => 32
+
+    public static var blockByteCount: Int => 64
+
+    public mutating fn update(_ bytes: U8[:]) {
+        if bytes.count == 0 {
+            return
+        }
+        let memory = box.mutableAddress()
+        let chain = memory + Blake3.chainAt
+        let block = memory + Blake3.blockAt
+        var at = 0
+        // A full block waits until there are more bytes: the last of a
+        // chunk, and of the message, is compressed otherwise.
+        while at < bytes.count {
+            if buffered == 64 {
+                if blocks == 15 {
+                    endChunk(memory)
+                } else {
+                    unsafe {
+                        compressBlake3(chain, block, counter: chunks, length: 64, flags: flags | startFlag, to: chain, extended: false)
+                    }
+                    blocks += 1
+                }
+                buffered = 0
+            }
+            let wanted = bytes.count - at
+            let taken = 64 - buffered < wanted ? 64 - buffered : wanted
+            unsafe {
+                store(bytes[at..<at + taken], at: block + buffered)
+            }
+            buffered += taken
+            at += taken
+        }
+    }
+
+    /// The flag of a chunk's first block.
+    var startFlag: U32 => blocks == 0 ? BLAKE3_CHUNK_START : 0
+
+    /// The chunk's last block compressed, and its chaining value merged with
+    /// those of the subtrees it completes: one for each zero at the end of
+    /// the count of chunks, in binary.
+    mutating fn endChunk(_ memory: Int) {
+        let chain = memory + Blake3.chainAt
+        unsafe {
+            compressBlake3(chain, memory + Blake3.blockAt, counter: chunks, length: 64, flags: flags | startFlag | BLAKE3_CHUNK_END, to: chain, extended: false)
+            chunks = chunks &+ 1
+            var complete = chunks
+            while (complete & 1) == 0 {
+                // The subtree's left half is on the stack: with the right
+                // after it, the two are the parent's block.
+                depth -= 1
+                let left = memory + Blake3.stackAt + 32 * depth
+                NativeMemory.copy(from: RawPtr<U8>(address: chain), to: RawPtr<U8>(address: left + 32), byteCount: 32)
+                compressBlake3(memory, left, counter: 0, length: 64, flags: flags | BLAKE3_PARENT, to: chain, extended: false)
+                complete = complete >> 1
+            }
+            let top = memory + Blake3.stackAt + 32 * depth
+            NativeMemory.copy(from: RawPtr<U8>(address: chain), to: RawPtr<U8>(address: top), byteCount: 32)
+            depth += 1
+            NativeMemory.copy(from: RawPtr<U8>(address: memory), to: RawPtr<U8>(address: chain), byteCount: 32)
+        }
+        blocks = 0
+    }
+
+    public fn finalize() -> Digest {
+        var output = self.output()
+        return Digest(output.read(count: 32))
+    }
+
+    public fn reader() -> OutputReader {
+        return self.output()
+    }
+
+    /// The root's block, after the subtrees on the stack are merged.
+    fn output() -> OutputReader {
+        let memory = box.memory.address
+        let root = SecretMemory(count: 160)
+        let chain = root.address
+        let block = root.address + 32
+        var length = buffered unchecked as U32
+        var last = flags | startFlag | BLAKE3_CHUNK_END
+        var counter = chunks
+        unsafe {
+            NativeMemory.copy(from: RawPtr<U8>(address: memory + Blake3.chainAt), to: RawPtr<U8>(address: chain), byteCount: 32)
+            NativeMemory.copy(from: RawPtr<U8>(address: memory + Blake3.blockAt), to: RawPtr<U8>(address: block), byteCount: buffered)
+            var left = depth
+            while left > 0 {
+                left -= 1
+                compressBlake3(chain, block, counter: counter, length: length, flags: last, to: block + 32, extended: false)
+                NativeMemory.copy(from: RawPtr<U8>(address: memory + Blake3.stackAt + 32 * left), to: RawPtr<U8>(address: block), byteCount: 32)
+                NativeMemory.copy(from: RawPtr<U8>(address: memory), to: RawPtr<U8>(address: chain), byteCount: 32)
+                length = 64
+                last = flags | BLAKE3_PARENT
+                counter = 0
+            }
+        }
+        return OutputReader(tree: root, length: length, flags: last | BLAKE3_ROOT)
+    }
+}

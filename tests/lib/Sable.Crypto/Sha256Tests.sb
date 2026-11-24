@@ -1,0 +1,100 @@
+module Sha256Tests
+
+// Sha256 (Sable.Crypto): the standard's messages, every length around
+// the blocks' ends, and every way of cutting a message in two. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+@test
+fn thePublishedMessagesHaveTheirDigests() {
+    assertEqual("\(Sha256.hash(utf8: ""))", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    assertEqual("\(Sha256.hash(utf8: "abc"))", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    assertEqual("\(Sha256.hash(utf8: "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))", "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
+    assertEqual("\(Sha256.hash(U8[>..](repeating: 0x61, count: 1_000_000)))", "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")
+}
+
+// Every length to past three blocks, its digest among those hashed here;
+// the digest of them all from Python's hashlib.
+@test
+fn everyLengthHasItsDigest() {
+    var all = Sha256()
+    var count = 0
+    while count < 194 {
+        all.update(Sha256.hash(message(count)).bytes)
+        count += 1
+    }
+    assertEqual("\(all.finalize())", "0ad70abeaa4ab94984d9d0abe09a85a8ef8ff7510b519be6d6ed754891f49498")
+}
+
+@test
+fn aMessageInTwoPartsIsTheWholeWhereverItIsCut() {
+    let whole = message(133)
+    let expected = Sha256.hash(whole)
+    var cut = 0
+    while cut <= whole.count {
+        var hash = Sha256()
+        hash.update(whole[..<cut])
+        hash.update(whole[cut...])
+        assert(hash.finalize() == expected)
+        cut += 1
+    }
+}
+
+@test
+fn aMessageAByteAtATimeIsTheWhole() {
+    let whole = message(133)
+    var hash = Sha256()
+    for byte in whole {
+        hash.update([byte])
+        hash.update([])
+    }
+    assert(hash.finalize() == Sha256.hash(whole))
+}
+
+@test
+fn finalizingLeavesTheFunctionToGoOn() {
+    let whole = message(73)
+    var hash = Sha256()
+    hash.update(whole[..<64])
+    assert(hash.finalize() == Sha256.hash(whole[..<64]))
+    assert(hash.finalize() == Sha256.hash(whole[..<64]))
+    hash.update(whole[64...])
+    assert(hash.finalize() == Sha256.hash(whole))
+}
+
+@test
+fn aCopyHashesOnByItself() {
+    let whole = message(73)
+    var first = Sha256()
+    first.update(whole[..<7])
+    var second = first
+    first.update(whole[7...])
+    second.update(whole[..<3])
+    assert(first.finalize() == Sha256.hash(whole))
+    assert(second.finalize() == Sha256.hash(joined(message(7), message(3))))
+}
+
+@test
+fn itsSizesAreTheStandards() {
+    assertEqual(Sha256.digestByteCount, 32)
+    assertEqual(Sha256.blockByteCount, 64)
+    assertEqual(Sha256.hash(message(3)).count, 32)
+}
+
+fn joined(_ a: U8[:], _ b: U8[:]) -> U8[>..] {
+    var bytes = a.toArray()
+    bytes.append(contentsOf: b)
+    return bytes
+}

@@ -1,0 +1,15 @@
+module CryptoErrorTests
+
+// CryptoError (Sable.Crypto). Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+@test
+fn anErrorSaysWhatIsWrong() {
+    assertEqual(CryptoError.InvalidParameter(reason: "a").description(), "a")
+    assertEqual(CryptoError.LimitExceeded(reason: "b").description(), "b")
+    assertEqual(CryptoError.InvalidEncoding(reason: "c").description(), "c")
+    assert(CryptoError.InvalidEncoding(reason: "c") != CryptoError.LimitExceeded(reason: "c"))
+}

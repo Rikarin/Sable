@@ -1,0 +1,108 @@
+module Sable.Crypto
+
+/// A sponge over Keccak-f[1600] part way through a message: SHA-3, SHAKE,
+/// cSHAKE and KMAC, which differ in their rate, and in the bits that end
+/// the message.
+struct Sponge: Sendable {
+    // The state's 200 bytes, then a block's room.
+    var box: SecretBox
+    let rate: Int
+    let suffix: U8
+    var buffered: Int
+
+    /// Nothing absorbed yet; blocks of 'rate' bytes, the message ended by
+    /// the bits of 'suffix'.
+    init(rate: Int, suffix: U8) {
+        box = SecretBox(memory: SecretMemory(count: 400))
+        self.rate = rate
+        self.suffix = suffix
+        buffered = 0
+    }
+
+    mutating fn update(_ bytes: U8[:]) {
+        if bytes.count == 0 {
+            return
+        }
+        let state = box.mutableAddress()
+        let block = state + 200
+        var at = 0
+        if buffered > 0 {
+            let taken = rate - buffered < bytes.count ? rate - buffered : bytes.count
+            unsafe {
+                store(bytes[..<taken], at: block + buffered)
+            }
+            buffered += taken
+            at = taken
+            if buffered < rate {
+                return
+            }
+            absorbBlock(state)
+            buffered = 0
+        }
+        let whole = (bytes.count - at) / rate * rate
+        if whole > 0 {
+            unsafe {
+                if !Native.blocks(Native.keccak(rate: rate), state, bytes[at..<at + whole]) {
+                    let end = at + whole
+                    while at < end {
+                        store(bytes[at..<at + rate], at: block)
+                        absorbKeccak(state, rate: rate)
+                        at += rate
+                    }
+                } else {
+                    at += whole
+                }
+            }
+        }
+        if at < bytes.count {
+            unsafe {
+                store(bytes[at...], at: block)
+            }
+            buffered = bytes.count - at
+        }
+    }
+
+    /// Zeros up to the end of the block, when one is begun.
+    mutating fn fillBlock() {
+        if buffered > 0 {
+            let state = box.mutableAddress()
+            unsafe {
+                Native.zero(state + 200 + buffered, rate - buffered)
+            }
+            absorbBlock(state)
+            buffered = 0
+        }
+    }
+
+    /// The message ended: what its output is read from, in memory of its
+    /// own. The block's room is left zero, so absorbing it permutes.
+    fn finish() -> SecretMemory {
+        let end = box.memory.copy()
+        let block = end.address + 200
+        unsafe {
+            Native.zero(block + buffered, rate - buffered)
+            store8(suffix, block + buffered)
+            let last = RawPtr<U8>(address: block).load(at: rate - 1)
+            store8(last | 0x80, block + rate - 1)
+            absorbBlock(end.address)
+            Native.zero(block, rate)
+        }
+        return end
+    }
+
+    /// The first bytes of the output.
+    fn output(count: Int) -> U8[>..] {
+        precondition(count >= 0, "\(count) bytes of output")
+        var reader = OutputReader(sponge: finish(), rate: rate)
+        return reader.read(count: count)
+    }
+
+    /// The block after the state at an address absorbed into it.
+    fn absorbBlock(_ state: Int) {
+        unsafe {
+            if !Native.blocks(Native.keccak(rate: rate), state, at: state + 200, count: rate) {
+                absorbKeccak(state, rate: rate)
+            }
+        }
+    }
+}

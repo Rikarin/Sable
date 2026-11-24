@@ -1,0 +1,100 @@
+module Sha1Tests
+
+// Insecure.Sha1 (Sable.Crypto): the standard's messages, every length around
+// the blocks' ends, and every way of cutting a message in two. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+@test
+fn thePublishedMessagesHaveTheirDigests() {
+    assertEqual("\(Insecure.Sha1.hash(utf8: ""))", "da39a3ee5e6b4b0d3255bfef95601890afd80709")
+    assertEqual("\(Insecure.Sha1.hash(utf8: "abc"))", "a9993e364706816aba3e25717850c26c9cd0d89d")
+    assertEqual("\(Insecure.Sha1.hash(utf8: "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))", "84983e441c3bd26ebaae4aa1f95129e5e54670f1")
+    assertEqual("\(Insecure.Sha1.hash(U8[>..](repeating: 0x61, count: 1_000_000)))", "34aa973cd4c4daa4f61eeb2bdbad27316534016f")
+}
+
+// Every length to past three blocks, its digest among those hashed here;
+// the digest of them all from Python's hashlib.
+@test
+fn everyLengthHasItsDigest() {
+    var all = Insecure.Sha1()
+    var count = 0
+    while count < 194 {
+        all.update(Insecure.Sha1.hash(message(count)).bytes)
+        count += 1
+    }
+    assertEqual("\(all.finalize())", "7fa079a625e774279d5144cbde695348dc3d754b")
+}
+
+@test
+fn aMessageInTwoPartsIsTheWholeWhereverItIsCut() {
+    let whole = message(133)
+    let expected = Insecure.Sha1.hash(whole)
+    var cut = 0
+    while cut <= whole.count {
+        var hash = Insecure.Sha1()
+        hash.update(whole[..<cut])
+        hash.update(whole[cut...])
+        assert(hash.finalize() == expected)
+        cut += 1
+    }
+}
+
+@test
+fn aMessageAByteAtATimeIsTheWhole() {
+    let whole = message(133)
+    var hash = Insecure.Sha1()
+    for byte in whole {
+        hash.update([byte])
+        hash.update([])
+    }
+    assert(hash.finalize() == Insecure.Sha1.hash(whole))
+}
+
+@test
+fn finalizingLeavesTheFunctionToGoOn() {
+    let whole = message(73)
+    var hash = Insecure.Sha1()
+    hash.update(whole[..<64])
+    assert(hash.finalize() == Insecure.Sha1.hash(whole[..<64]))
+    assert(hash.finalize() == Insecure.Sha1.hash(whole[..<64]))
+    hash.update(whole[64...])
+    assert(hash.finalize() == Insecure.Sha1.hash(whole))
+}
+
+@test
+fn aCopyHashesOnByItself() {
+    let whole = message(73)
+    var first = Insecure.Sha1()
+    first.update(whole[..<7])
+    var second = first
+    first.update(whole[7...])
+    second.update(whole[..<3])
+    assert(first.finalize() == Insecure.Sha1.hash(whole))
+    assert(second.finalize() == Insecure.Sha1.hash(joined(message(7), message(3))))
+}
+
+@test
+fn itsSizesAreTheStandards() {
+    assertEqual(Insecure.Sha1.digestByteCount, 20)
+    assertEqual(Insecure.Sha1.blockByteCount, 64)
+    assertEqual(Insecure.Sha1.hash(message(3)).count, 20)
+}
+
+fn joined(_ a: U8[:], _ b: U8[:]) -> U8[>..] {
+    var bytes = a.toArray()
+    bytes.append(contentsOf: b)
+    return bytes
+}

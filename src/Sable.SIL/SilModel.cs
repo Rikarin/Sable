@@ -2055,7 +2055,9 @@ public static class SilBuiltins {
         }
 
         if (name == "ref_is_unique") {
-            return operands is [AddressType { Pointee: ClassType }] ? new([operands[0]], SilType.Bool) : null;
+            // Or of a struct that holds the object and nothing else: a
+            // '@builtin' of the library's, on a value that copies on write.
+            return operands is [AddressType { Pointee: ClassType or StructType { Fields: [(_, ClassType)] } }] ? new([operands[0]], SilType.Bool) : null;
         }
 
         // A value crossing from one task to another — a task's result, an
@@ -2661,6 +2663,17 @@ public static class SilBuiltins {
         Add("hash_seed", SilType.Int);
         // 64 bits from the operating system's random source, fresh at each call.
         Add("random_bits", SilType.Int);
+        // Sable.Crypto's: a slice of bytes, or so many bytes at an address,
+        // filled from that source, or set to zero whether or not anything
+        // reads them after; and whole blocks of a hash (the algorithm, its
+        // state's address, the bytes) worked into its state by the
+        // processor's own instructions, or false when it has none.
+        Add("bytes_random", SilType.Unit, SilType.Address(new SliceType(SilType.U8)));
+        Add("bytes_secure_zero", SilType.Unit, SilType.Address(new SliceType(SilType.U8)));
+        Add("raw_random", SilType.Unit, SilType.Int, SilType.Int);
+        Add("raw_secure_zero", SilType.Unit, SilType.Int, SilType.Int);
+        Add("crypto_blocks", SilType.Bool, SilType.Int, SilType.Int, new SliceType(SilType.U8));
+        Add("crypto_blocks_raw", SilType.Bool, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
         Add("string_join", SilType.String, new ArrayType(SilType.String), SilType.String);
         Add("string_compare", SilType.Int, SilType.String, SilType.String);
         // Where a part next occurs in a text, at or after a scalar position: a scalar index, or -1.

@@ -1,0 +1,51 @@
+module Sable.Crypto
+
+// SP 800-185's encodings, and the sponge both KMACs begin with: cSHAKE under
+// the name "KMAC", then the key, each padded to a block.
+
+/// The number with its length in bytes before it.
+fn kmacLeftEncode(_ value: U64) -> U8[>..] {
+    let digits = kmacDigits(value)
+    var bytes: U8[>..] = [digits.count unchecked as U8]
+    bytes.append(contentsOf: digits)
+    return bytes
+}
+
+/// The number with its length in bytes after it.
+fn kmacRightEncode(_ value: U64) -> U8[>..] {
+    var bytes = kmacDigits(value)
+    bytes.append(bytes.count unchecked as U8)
+    return bytes
+}
+
+/// The number's bytes, the most significant first; one for zero.
+fn kmacDigits(_ value: U64) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var shift: U64 = 56
+    while shift > 0 {
+        if bytes.count > 0 || value >> shift != 0 {
+            bytes.append((value >> shift) unchecked as U8)
+        }
+        shift -= 8
+    }
+    bytes.append(value unchecked as U8)
+    return bytes
+}
+
+fn kmacSponge(rate: Int, key: SymmetricKey, customization: U8[:]) -> Sponge {
+    let name: U8[>..] = [0x4B, 0x4D, 0x41, 0x43]
+    var sponge = Sponge(rate: rate, suffix: 0x04)
+    sponge.update(kmacLeftEncode(rate unchecked as U64))
+    sponge.update(kmacLeftEncode(32))
+    sponge.update(name)
+    sponge.update(kmacLeftEncode((customization.count * 8) unchecked as U64))
+    sponge.update(customization)
+    sponge.fillBlock()
+    sponge.update(kmacLeftEncode(rate unchecked as U64))
+    sponge.update(kmacLeftEncode((key.byteCount * 8) unchecked as U64))
+    var secret = key.bytes()
+    sponge.update(secret)
+    secret.zeroSecurely()
+    sponge.fillBlock()
+    return sponge
+}

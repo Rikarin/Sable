@@ -1,0 +1,40 @@
+module Sable.Crypto
+
+/// SHA-256, FIPS 180-4: a 32-byte digest, with a state of 32-bit words.
+/// Worked out by the processor's own instructions where it has them.
+///
+/// ```sable
+/// assert("\(Sha256.hash(utf8: "abc"))" == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+/// var hash = Sha256()
+/// hash.update(utf8: "a")
+/// hash.update(utf8: "bc")
+/// assert(hash.finalize() == Sha256.hash(utf8: "abc"))
+/// ```
+public struct Sha256: HashFunction {
+    var state: BlockState<Sha256Blocks>
+
+    public init() {
+        state = BlockState<Sha256Blocks>(initial: Sha256.initialState)
+    }
+
+    static let initialState: U32[>..] = [
+        0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
+        0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19,
+    ]
+
+    public static var digestByteCount: Int => 32
+
+    public static var blockByteCount: Int => 64
+
+    public mutating fn update(_ bytes: U8[:]) {
+        state.update(bytes)
+    }
+
+    public fn finalize() -> Digest {
+        return bigEndianDigest32(state.finish(), count: 32)
+    }
+
+    public static fn iterateHmac(inner: Sha256, outer: Sha256, first: U8[:], iterations: Int) -> U8[>..] {
+        return BlockState<Sha256Blocks>.iterateHmac(inner: inner.state, outer: outer.state, first: first, iterations: iterations)
+    }
+}

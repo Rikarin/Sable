@@ -1,0 +1,100 @@
+module Sha384Tests
+
+// Sha384 (Sable.Crypto): the standard's messages, every length around
+// the blocks' ends, and every way of cutting a message in two. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+@test
+fn thePublishedMessagesHaveTheirDigests() {
+    assertEqual("\(Sha384.hash(utf8: ""))", "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b")
+    assertEqual("\(Sha384.hash(utf8: "abc"))", "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7")
+    assertEqual("\(Sha384.hash(utf8: "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"))", "09330c33f71147e83d192fc782cd1b4753111b173b3b05d22fa08086e3b0f712fcc7c71a557e2db966c3e9fa91746039")
+    assertEqual("\(Sha384.hash(U8[>..](repeating: 0x61, count: 1_000_000)))", "9d0e1809716474cb086e834e310a4a1ced149e9c00f248527972cec5704c2a5b07b8b3dc38ecc4ebae97ddd87f3d8985")
+}
+
+// Every length to past three blocks, its digest among those hashed here;
+// the digest of them all from Python's hashlib.
+@test
+fn everyLengthHasItsDigest() {
+    var all = Sha384()
+    var count = 0
+    while count < 386 {
+        all.update(Sha384.hash(message(count)).bytes)
+        count += 1
+    }
+    assertEqual("\(all.finalize())", "79763ae7117e595ae3791747a5da360d2a123b28dfea36e6aede4ab891668a471ed4ce0fc5e7a2161cb8fb72446864cf")
+}
+
+@test
+fn aMessageInTwoPartsIsTheWholeWhereverItIsCut() {
+    let whole = message(261)
+    let expected = Sha384.hash(whole)
+    var cut = 0
+    while cut <= whole.count {
+        var hash = Sha384()
+        hash.update(whole[..<cut])
+        hash.update(whole[cut...])
+        assert(hash.finalize() == expected)
+        cut += 1
+    }
+}
+
+@test
+fn aMessageAByteAtATimeIsTheWhole() {
+    let whole = message(261)
+    var hash = Sha384()
+    for byte in whole {
+        hash.update([byte])
+        hash.update([])
+    }
+    assert(hash.finalize() == Sha384.hash(whole))
+}
+
+@test
+fn finalizingLeavesTheFunctionToGoOn() {
+    let whole = message(137)
+    var hash = Sha384()
+    hash.update(whole[..<128])
+    assert(hash.finalize() == Sha384.hash(whole[..<128]))
+    assert(hash.finalize() == Sha384.hash(whole[..<128]))
+    hash.update(whole[128...])
+    assert(hash.finalize() == Sha384.hash(whole))
+}
+
+@test
+fn aCopyHashesOnByItself() {
+    let whole = message(137)
+    var first = Sha384()
+    first.update(whole[..<7])
+    var second = first
+    first.update(whole[7...])
+    second.update(whole[..<3])
+    assert(first.finalize() == Sha384.hash(whole))
+    assert(second.finalize() == Sha384.hash(joined(message(7), message(3))))
+}
+
+@test
+fn itsSizesAreTheStandards() {
+    assertEqual(Sha384.digestByteCount, 48)
+    assertEqual(Sha384.blockByteCount, 128)
+    assertEqual(Sha384.hash(message(3)).count, 48)
+}
+
+fn joined(_ a: U8[:], _ b: U8[:]) -> U8[>..] {
+    var bytes = a.toArray()
+    bytes.append(contentsOf: b)
+    return bytes
+}

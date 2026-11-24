@@ -1,0 +1,163 @@
+module KmacTests
+
+// Kmac128 and Kmac256 (Sable.Crypto): SP 800-185's samples, and codes of
+// every length against OpenSSL. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+let tag = "My Tagged Application"
+
+fn sampleKey() -> SymmetricKey {
+    var bytes: U8[>..] = []
+    var i = 0x40
+    while i < 0x60 {
+        bytes.append(U8(i))
+        i += 1
+    }
+    return SymmetricKey(bytes)
+}
+
+fn sampleData(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8(i))
+        i += 1
+    }
+    return bytes
+}
+
+fn sampleTag() -> U8[>..] {
+    var bytes: U8[>..] = []
+    bytes.append(utf8: tag)
+    return bytes
+}
+
+// NIST's samples, which OpenSSL gives too.
+@test
+fn theStandardsSamplesOfKmac128HaveTheirCodes() {
+    assertEqual("\(Kmac128.authenticationCode(for: sampleData(4), using: sampleKey(), count: 32, customization: []))", "e5780b0d3ea6f7d3a429c5706aa43a00fadbd7d49628839e3187243f456ee14e")
+    assertEqual("\(Kmac128.authenticationCode(for: sampleData(4), using: sampleKey(), count: 32, customization: sampleTag()))", "3b1fba963cd8b0b59e8c1a6d71888b7143651af8ba0a7070c0979e2811324aa5")
+    assertEqual("\(Kmac128.authenticationCode(for: sampleData(200), using: sampleKey(), count: 32, customization: sampleTag()))", "1f5b4e6cca02209e0dcb5ca635b89a15e271ecc760071dfd805faa38f9729230")
+}
+
+// Keys, messages, customizations and codes of many lengths, hashed
+// together, as OpenSSL gives them.
+@test
+fn everyLengthHasItsCodeOfKmac128() {
+    var all = Sha256()
+    var i = 0
+    while i < 60 {
+        all.update(Kmac128.authenticationCode(for: message(5 * i + 1), using: SymmetricKey(message(4 + i)), count: 16 + i, customization: message(i)).bytes)
+        i += 1
+    }
+    assertEqual("\(all.finalize())", "22e287b0a1be9fedf4aaa9d8ad5b6af2a42c2f3511e9b00146d29bdb38302c0d")
+}
+
+@test
+fn aCodeOfKmac128IsValidForItsBytesKeyAndCustomizationAlone() {
+    let key = SymmetricKey(message(32))
+    let code = Kmac128.authenticationCode(for: message(50), using: key, customization: [1]).bytes
+    assert(Kmac128.isValid(code, for: message(50), using: key, customization: [1]))
+    assert(!Kmac128.isValid(code, for: message(50), using: key))
+    assert(!Kmac128.isValid(code, for: message(51), using: key, customization: [1]))
+    assert(!Kmac128.isValid(code, for: message(50), using: SymmetricKey(message(33)), customization: [1]))
+    assert(!Kmac128.isValid(code[..<20], for: message(50), using: key, customization: [1]))
+    assert(!Kmac128.isValid(code[..<15], for: message(50), using: key, customization: [1]))
+}
+
+@test
+fn aCodeOfKmac128InPartsIsTheWholes() {
+    let key = SymmetricKey(message(32))
+    var code = Kmac128(key: key)
+    code.update(message(400)[..<200])
+    assert(code.finalize() == Kmac128.authenticationCode(for: message(200), using: key))
+    code.update(message(400)[200...])
+    assert(code.finalize() == Kmac128.authenticationCode(for: message(400), using: key))
+    assert(code.finalize(count: 40) == Kmac128.authenticationCode(for: message(400), using: key, count: 40))
+}
+
+@test
+fn outputOfKmac128WithNoFixedLengthBeginsAsAShorterOneDoes() {
+    let code = Kmac128(key: SymmetricKey(message(32)))
+    var short = code.reader()
+    var long = code.reader()
+    assert(long.read(count: 300).starts(with: short.read(count: 20)))
+}
+
+// NIST's samples, which OpenSSL gives too.
+@test
+fn theStandardsSamplesOfKmac256HaveTheirCodes() {
+    assertEqual("\(Kmac256.authenticationCode(for: sampleData(4), using: sampleKey(), count: 64, customization: sampleTag()))", "20c570c31346f703c9ac36c61c03cb64c3970d0cfc787e9b79599d273a68d2f7f69d4cc3de9d104a351689f27cf6f5951f0103f33f4f24871024d9c27773a8dd")
+    assertEqual("\(Kmac256.authenticationCode(for: sampleData(200), using: sampleKey(), count: 64, customization: []))", "75358cf39e41494e949707927cee0af20a3ff553904c86b08f21cc414bcfd691589d27cf5e15369cbbff8b9a4c2eb17800855d0235ff635da82533ec6b759b69")
+    assertEqual("\(Kmac256.authenticationCode(for: sampleData(200), using: sampleKey(), count: 64, customization: sampleTag()))", "b58618f71f92e1d56c1b8c55ddd7cd188b97b4ca4d99831eb2699a837da2e4d970fbacfde50033aea585f1a2708510c32d07880801bd182898fe476876fc8965")
+}
+
+// Keys, messages, customizations and codes of many lengths, hashed
+// together, as OpenSSL gives them.
+@test
+fn everyLengthHasItsCodeOfKmac256() {
+    var all = Sha256()
+    var i = 0
+    while i < 60 {
+        all.update(Kmac256.authenticationCode(for: message(5 * i + 1), using: SymmetricKey(message(4 + i)), count: 16 + i, customization: message(i)).bytes)
+        i += 1
+    }
+    assertEqual("\(all.finalize())", "5b09f99eed7dd358d34b8e5c1734298a6c4b5ae5aef4015fac2dd81a2ed82e04")
+}
+
+@test
+fn aCodeOfKmac256IsValidForItsBytesKeyAndCustomizationAlone() {
+    let key = SymmetricKey(message(32))
+    let code = Kmac256.authenticationCode(for: message(50), using: key, customization: [1]).bytes
+    assert(Kmac256.isValid(code, for: message(50), using: key, customization: [1]))
+    assert(!Kmac256.isValid(code, for: message(50), using: key))
+    assert(!Kmac256.isValid(code, for: message(51), using: key, customization: [1]))
+    assert(!Kmac256.isValid(code, for: message(50), using: SymmetricKey(message(33)), customization: [1]))
+    assert(!Kmac256.isValid(code[..<20], for: message(50), using: key, customization: [1]))
+    assert(!Kmac256.isValid(code[..<15], for: message(50), using: key, customization: [1]))
+}
+
+@test
+fn aCodeOfKmac256InPartsIsTheWholes() {
+    let key = SymmetricKey(message(32))
+    var code = Kmac256(key: key)
+    code.update(message(400)[..<200])
+    assert(code.finalize() == Kmac256.authenticationCode(for: message(200), using: key))
+    code.update(message(400)[200...])
+    assert(code.finalize() == Kmac256.authenticationCode(for: message(400), using: key))
+    assert(code.finalize(count: 40) == Kmac256.authenticationCode(for: message(400), using: key, count: 40))
+}
+
+@test
+fn outputOfKmac256WithNoFixedLengthBeginsAsAShorterOneDoes() {
+    let code = Kmac256(key: SymmetricKey(message(32)))
+    var short = code.reader()
+    var long = code.reader()
+    assert(long.read(count: 300).starts(with: short.read(count: 20)))
+}
+
+// NIST's samples of KMACXOF, which @noble/hashes gives too.
+@test
+fn theStandardsSamplesOfOutputWithNoFixedLengthAreGiven() {
+    var code = Kmac128(key: sampleKey(), customization: sampleTag())
+    code.update(sampleData(4))
+    var reader = code.reader()
+    assertEqual("\(Digest(reader.read(count: 32)))", "31a44527b4ed9f5c6101d11de6d26f0620aa5c341def41299657fe9df1a3b16c")
+    var strong = Kmac256(key: sampleKey(), customization: sampleTag())
+    strong.update(sampleData(4))
+    var strongReader = strong.reader()
+    assertEqual("\(Digest(strongReader.read(count: 64)))", "1755133f1534752aad0748f2c706fb5c784512cab835cd15676b16c0c6647fa96faa7af634a0bf8ff6df39374fa00fad9a39e322a7c92065a64eb1fb0801eb2b")
+}

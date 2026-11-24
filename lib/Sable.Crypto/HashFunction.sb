@@ -1,0 +1,99 @@
+module Sable.Crypto
+
+/// A cryptographic hash: bytes of any length to a digest of a fixed one.
+/// Bytes are given whole to `hash`, or a part at a time to `update`, where
+/// how they are cut into parts changes nothing.
+///
+/// A hash function is a value: a copy hashes on from where the copy was
+/// made. `finalize()` leaves it as it was, so more bytes can follow, and a
+/// later `finalize()` covers them all. What it has been given is kept in
+/// memory zeroed before it is freed.
+///
+/// ```sable
+/// fn fingerprint<H: HashFunction>(_ parts: String[:], by function: H.Type) -> Digest {
+///     var hash = H()
+///     for part in parts {
+///         hash.update(utf8: part)
+///     }
+///     return hash.finalize()
+/// }
+/// let cut = fingerprint(["ab", "c"], by: Sha256.self)
+/// assert(cut == Sha256.hash(utf8: "abc"))
+/// ```
+public protocol HashFunction: Sendable {
+    /// How many bytes a digest has.
+    static var digestByteCount: Int { get }
+
+    /// How many bytes the function works on at a time, which HMAC pads its key to.
+    static var blockByteCount: Int { get }
+
+    /// The function with nothing hashed yet.
+    init()
+
+    /// Hashes the bytes after those already given.
+    mutating fn update(_ bytes: U8[:])
+
+    /// The digest of every byte given so far. The function is left as it
+    /// was: more can be given, and a later `finalize` covers it all.
+    fn finalize() -> Digest
+
+    /// PBKDF2's inner loop: HMAC of the first block, HMAC of that, and so
+    /// on to as many blocks as there are iterations, all combined by
+    /// exclusive or. The functions given have HMAC's two padded keys hashed.
+    /// Every function has this done by its own `update` and `finalize`; the
+    /// library's do it without them.
+    static fn iterateHmac(inner: Self, outer: Self, first: U8[:], iterations: Int) -> U8[>..]
+}
+
+extension HashFunction {
+    public static fn iterateHmac(inner: Self, outer: Self, first: U8[:], iterations: Int) -> U8[>..] {
+        var sum = first.toArray()
+        var block = first.toArray()
+        var done = 1
+        while done < iterations {
+            var hash = inner
+            hash.update(block)
+            var end = outer
+            end.update(hash.finalize().bytes)
+            block = end.finalize().bytes
+            var i = 0
+            while i < sum.count {
+                sum[i] = sum[i] ^ block[i]
+                i += 1
+            }
+            done += 1
+        }
+        block.zeroSecurely()
+        return sum
+    }
+
+    /// Hashes the text's UTF-8 bytes after those already given.
+    public mutating fn update(utf8 text: String) {
+        var bytes: U8[>..] = []
+        bytes.append(utf8: text)
+        self.update(bytes)
+    }
+
+    /// The digest of the bytes, at once.
+    ///
+    /// ```sable
+    /// let bytes: U8[>..] = [0x61, 0x62, 0x63]
+    /// assert(Sha256.hash(bytes) == Sha256.hash(utf8: "abc"))
+    /// ```
+    public static fn hash(_ bytes: U8[:]) -> Digest {
+        var function = Self()
+        function.update(bytes)
+        return function.finalize()
+    }
+
+    /// The digest of the text's UTF-8 bytes.
+    ///
+    /// ```sable
+    /// assert("\(Insecure.Md5.hash(utf8: "abc"))" == "900150983cd24fb0d6963f7d28e17f72")
+    /// ```
+    public static fn hash(utf8 text: String) -> Digest {
+        var function = Self()
+        function.update(utf8: text)
+        return function.finalize()
+    }
+}

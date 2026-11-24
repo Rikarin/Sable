@@ -1,0 +1,281 @@
+module Sable.Crypto
+
+// Argon2's memory and how it is filled (RFC 9106 §3.2 to §3.6). Its blocks
+// are 1024 bytes, 'lanes' rows of them, each row cut into four segments. A
+// segment is filled from the blocks before it, each from its neighbour and
+// from one chosen elsewhere: by the first half of the first pass in an order
+// the password has no part in, and after that by the blocks themselves,
+// which is Argon2id's trade — so which memory is read does then depend on
+// the password, as it must for the work to be worth its memory.
+
+/// Argon2id's memory, while it is filled.
+struct Argon2Memory {
+    let memory: SecretMemory
+    let work: SecretMemory
+    let passes: Int
+    let lanes: Int
+    let columns: Int
+
+    init(memoryKiB: Int, passes: Int, lanes: Int) {
+        columns = memoryKiB / (4 * lanes) * 4
+        self.lanes = lanes
+        self.passes = passes
+        memory = SecretMemory(count: 1024 * columns * lanes)
+        // Two blocks that the compression works in, then, for addresses, a
+        // block of them, the block they come from, and one of zeros.
+        work = SecretMemory(count: 5 * 1024)
+    }
+
+    fn block(_ lane: Int, _ column: Int) -> Int {
+        return memory.address + 1024 * (lane * columns + column)
+    }
+
+    /// Each lane's first two blocks.
+    fn begin(_ seed: U8[:]) {
+        var lane = 0
+        while lane < lanes {
+            var column = 0
+            while column < 2 {
+                let first = argon2Hash([seed.toArray(), argon2Number(column), argon2Number(lane)], byteCount: 1024)
+                unsafe {
+                    NativeMemory.copy(from: RawPtr<U8>(address: first.address), to: RawPtr<U8>(address: block(lane, column)), byteCount: 1024)
+                }
+                column += 1
+            }
+            lane += 1
+        }
+    }
+
+    fn fill() {
+        var pass = 0
+        while pass < passes {
+            var slice = 0
+            while slice < 4 {
+                var lane = 0
+                while lane < lanes {
+                    unsafe {
+                        fillSegment(pass, slice, lane)
+                    }
+                    lane += 1
+                }
+                slice += 1
+            }
+            pass += 1
+        }
+    }
+
+    /// One lane's quarter, in one pass.
+    unsafe fn fillSegment(_ pass: Int, _ slice: Int, _ lane: Int) {
+        let segment = columns / 4
+        let independent = pass == 0 && slice < 2
+        let addresses = work.address + 2048
+        let input = work.address + 3072
+        let zeros = work.address + 4096
+        if independent {
+            Native.zero(input, 1024)
+            store64(pass unchecked as U64, input)
+            store64(lane unchecked as U64, input + 8)
+            store64(slice unchecked as U64, input + 16)
+            store64((columns * lanes) unchecked as U64, input + 24)
+            store64(passes unchecked as U64, input + 32)
+            store64(2, input + 40)
+        }
+        // The first two blocks of all are there already.
+        var index = pass == 0 && slice == 0 ? 2 : 0
+        var made = -1
+        while index < segment {
+            let column = slice * segment + index
+            let target = block(lane, column)
+            let previous = block(lane, column == 0 ? columns - 1 : column - 1)
+            var chosen: U64 = 0
+            if independent {
+                // A block of addresses for each 128.
+                if index >> 7 != made {
+                    made = index >> 7
+                    store64((made + 1) unchecked as U64, input + 48)
+                    argon2Compress(zeros, input, addresses, keeping: false)
+                    argon2Compress(zeros, addresses, addresses, keeping: false)
+                }
+                chosen = load64(addresses + 8 * (index & 127))
+            } else {
+                chosen = load64(previous)
+            }
+            let otherLane = pass == 0 && slice == 0 ? lane : (((chosen >> 32) % (lanes unchecked as U64)) unchecked as Int)
+
+            // Which of the blocks that may be read: those of the last
+            // segments done, and in the same lane those of this one, but
+            // not the neighbour. Squaring makes the later ones likelier.
+            let same = otherLane == lane
+            var count = pass == 0 ? slice * segment : columns - segment
+            count += same ? index - 1 : (index == 0 ? -1 : 0)
+            let low = chosen & 0xFFFF_FFFF
+            let squared = low &* low >> 32
+            let back = ((count unchecked as U64) &* squared >> 32) unchecked as Int
+            let start = pass == 0 || slice == 3 ? 0 : (slice + 1) * segment
+            let reference = block(otherLane, (start + count - 1 - back) % columns)
+            argon2Compress(previous, reference, target, keeping: pass > 0)
+            index += 1
+        }
+    }
+
+    /// The last blocks of the lanes combined, and hashed.
+    fn end(byteCount: Int) -> SecretMemory {
+        let last = block(0, columns - 1)
+        var lane = 1
+        while lane < lanes {
+            let other = block(lane, columns - 1)
+            var i = 0
+            while i < 1024 {
+                unsafe {
+                    store64(load64(last + i) ^ load64(other + i), last + i)
+                }
+                i += 8
+            }
+            lane += 1
+        }
+        var bytes: U8[>..] = []
+        unsafe {
+            appendBytes(to: &bytes, from: last, count: 1024)
+        }
+        let output = argon2Hash([bytes], byteCount: byteCount)
+        bytes.zeroSecurely()
+        return output
+    }
+
+    /// RFC 9106's G: two blocks to one, combined with what is at the target
+    /// when that is kept.
+    unsafe fn argon2Compress(_ x: Int, _ y: Int, _ target: Int, keeping: Bool) {
+        let r = work.address
+        let q = work.address + 1024
+        var i = 0
+        while i < 1024 {
+            let word = load64(x + i) ^ load64(y + i)
+            store64(word, r + i)
+            store64(word, q + i)
+            i += 8
+        }
+        i = 0
+        while i < 8 {
+            argon2Permute(q + 128 * i, 16)
+            i += 1
+        }
+        i = 0
+        while i < 8 {
+            argon2Permute(q + 16 * i, 128)
+            i += 1
+        }
+        i = 0
+        while i < 1024 {
+            let word = load64(r + i) ^ load64(q + i)
+            store64(keeping ? word ^ load64(target + i) : word, target + i)
+            i += 8
+        }
+    }
+}
+
+/// BLAKE2b's addition, with a multiplication in it.
+@inline(always)
+fn argon2Add(_ a: U64, _ b: U64) -> U64 {
+    return a &+ b &+ ((a & 0xFFFF_FFFF) &* (b & 0xFFFF_FFFF) << 1)
+}
+
+/// RFC 9106's P: BLAKE2b's round, with no message, on eight pairs of words
+/// that many bytes apart.
+unsafe fn argon2Permute(_ first: Int, _ step: Int) {
+    var v0 = load64(first)
+    var v1 = load64(first + 8)
+    var v2 = load64(first + step)
+    var v3 = load64(first + step + 8)
+    var v4 = load64(first + 2 * step)
+    var v5 = load64(first + 2 * step + 8)
+    var v6 = load64(first + 3 * step)
+    var v7 = load64(first + 3 * step + 8)
+    var v8 = load64(first + 4 * step)
+    var v9 = load64(first + 4 * step + 8)
+    var v10 = load64(first + 5 * step)
+    var v11 = load64(first + 5 * step + 8)
+    var v12 = load64(first + 6 * step)
+    var v13 = load64(first + 6 * step + 8)
+    var v14 = load64(first + 7 * step)
+    var v15 = load64(first + 7 * step + 8)
+    v0 = argon2Add(v0, v4)
+    v12 = (v12 ^ v0).rotatedRight(by: 32)
+    v8 = argon2Add(v8, v12)
+    v4 = (v4 ^ v8).rotatedRight(by: 24)
+    v0 = argon2Add(v0, v4)
+    v12 = (v12 ^ v0).rotatedRight(by: 16)
+    v8 = argon2Add(v8, v12)
+    v4 = (v4 ^ v8).rotatedRight(by: 63)
+    v1 = argon2Add(v1, v5)
+    v13 = (v13 ^ v1).rotatedRight(by: 32)
+    v9 = argon2Add(v9, v13)
+    v5 = (v5 ^ v9).rotatedRight(by: 24)
+    v1 = argon2Add(v1, v5)
+    v13 = (v13 ^ v1).rotatedRight(by: 16)
+    v9 = argon2Add(v9, v13)
+    v5 = (v5 ^ v9).rotatedRight(by: 63)
+    v2 = argon2Add(v2, v6)
+    v14 = (v14 ^ v2).rotatedRight(by: 32)
+    v10 = argon2Add(v10, v14)
+    v6 = (v6 ^ v10).rotatedRight(by: 24)
+    v2 = argon2Add(v2, v6)
+    v14 = (v14 ^ v2).rotatedRight(by: 16)
+    v10 = argon2Add(v10, v14)
+    v6 = (v6 ^ v10).rotatedRight(by: 63)
+    v3 = argon2Add(v3, v7)
+    v15 = (v15 ^ v3).rotatedRight(by: 32)
+    v11 = argon2Add(v11, v15)
+    v7 = (v7 ^ v11).rotatedRight(by: 24)
+    v3 = argon2Add(v3, v7)
+    v15 = (v15 ^ v3).rotatedRight(by: 16)
+    v11 = argon2Add(v11, v15)
+    v7 = (v7 ^ v11).rotatedRight(by: 63)
+    v0 = argon2Add(v0, v5)
+    v15 = (v15 ^ v0).rotatedRight(by: 32)
+    v10 = argon2Add(v10, v15)
+    v5 = (v5 ^ v10).rotatedRight(by: 24)
+    v0 = argon2Add(v0, v5)
+    v15 = (v15 ^ v0).rotatedRight(by: 16)
+    v10 = argon2Add(v10, v15)
+    v5 = (v5 ^ v10).rotatedRight(by: 63)
+    v1 = argon2Add(v1, v6)
+    v12 = (v12 ^ v1).rotatedRight(by: 32)
+    v11 = argon2Add(v11, v12)
+    v6 = (v6 ^ v11).rotatedRight(by: 24)
+    v1 = argon2Add(v1, v6)
+    v12 = (v12 ^ v1).rotatedRight(by: 16)
+    v11 = argon2Add(v11, v12)
+    v6 = (v6 ^ v11).rotatedRight(by: 63)
+    v2 = argon2Add(v2, v7)
+    v13 = (v13 ^ v2).rotatedRight(by: 32)
+    v8 = argon2Add(v8, v13)
+    v7 = (v7 ^ v8).rotatedRight(by: 24)
+    v2 = argon2Add(v2, v7)
+    v13 = (v13 ^ v2).rotatedRight(by: 16)
+    v8 = argon2Add(v8, v13)
+    v7 = (v7 ^ v8).rotatedRight(by: 63)
+    v3 = argon2Add(v3, v4)
+    v14 = (v14 ^ v3).rotatedRight(by: 32)
+    v9 = argon2Add(v9, v14)
+    v4 = (v4 ^ v9).rotatedRight(by: 24)
+    v3 = argon2Add(v3, v4)
+    v14 = (v14 ^ v3).rotatedRight(by: 16)
+    v9 = argon2Add(v9, v14)
+    v4 = (v4 ^ v9).rotatedRight(by: 63)
+    store64(v0, first)
+    store64(v1, first + 8)
+    store64(v2, first + step)
+    store64(v3, first + step + 8)
+    store64(v4, first + 2 * step)
+    store64(v5, first + 2 * step + 8)
+    store64(v6, first + 3 * step)
+    store64(v7, first + 3 * step + 8)
+    store64(v8, first + 4 * step)
+    store64(v9, first + 4 * step + 8)
+    store64(v10, first + 5 * step)
+    store64(v11, first + 5 * step + 8)
+    store64(v12, first + 6 * step)
+    store64(v13, first + 6 * step + 8)
+    store64(v14, first + 7 * step)
+    store64(v15, first + 7 * step + 8)
+}

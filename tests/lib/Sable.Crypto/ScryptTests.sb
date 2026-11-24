@@ -1,0 +1,76 @@
+module ScryptTests
+
+// Scrypt (Sable.Crypto): RFC 7914's cases, many parameters against OpenSSL's,
+// and those that are refused. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+fn derive(_ password: String, _ salt: String, _ cost: Int, _ blockSize: Int, _ parallelism: Int) -> String {
+    var secret: U8[>..] = []
+    secret.append(utf8: password)
+    var salted: U8[>..] = []
+    salted.append(utf8: salt)
+    let scrypt = try! Scrypt(cost: cost, blockSize: blockSize, parallelism: parallelism)
+    return "\(Digest((try! scrypt.deriveKey(from: SymmetricKey(secret), salt: salted, byteCount: 64)).bytes()))"
+}
+
+// RFC 7914 §12, its first three.
+@test
+fn theStandardsCasesHaveTheirKeys() {
+    assertEqual(derive("", "", 16, 1, 1), "77d6576238657b203b19ca42c18a0497f16b4844e3074ae8dfdffa3fede21442fcd0069ded0948f8326a753a0fc81f17e8d3e0fb2e0d3628cf35e20c38d18906")
+    assertEqual(derive("password", "NaCl", 1024, 8, 16), "fdbabe1c9d3472007856e7190d01e9fe7c6ad7cbc8237830e77376634b3731622eaf30d92e22a3886ff109279d9830dac727afb94a83ee6d8360cbdfa2cc0640")
+    assertEqual(derive("pleaseletmein", "SodiumChloride", 16384, 8, 1), "7023bdcb3afd7348461c06cd81fd38ebfda8fbba904f8e3ea9b543f6545da1f2d5432955613f0fcf62d49705242a9af9e61e85dc0d651e40dfcf017b45575887")
+}
+
+@test
+fn manyParametersHaveTheirKeys() {
+    var all = Sha256()
+    var i = 0
+    while i < 20 {
+        let scrypt = try! Scrypt(cost: 2 << (i % 6), blockSize: 1 + i % 9, parallelism: 1 + i % 3)
+        all.update((try! scrypt.deriveKey(from: SymmetricKey(message(i)), salt: message(i + 3), byteCount: 1 + 7 * i)).bytes())
+        i += 1
+    }
+    assertEqual("\(all.finalize())", "27e5fe62b46c405313538d2dd27746de2fb7df4651959f85819da65536643cd1")
+}
+
+fn refused(_ cost: Int, _ blockSize: Int, _ parallelism: Int, _ maximumMemory: Int = 1_073_741_824) -> Bool {
+    return (try? Scrypt(cost: cost, blockSize: blockSize, parallelism: parallelism, maximumMemory: maximumMemory)) == none
+}
+
+@test
+fn parametersItIsNotDefinedForAreRefused() {
+    assert(refused(0, 8, 1))
+    assert(refused(1, 8, 1))
+    assert(refused(-1024, 8, 1))
+    assert(refused(1000, 8, 1))
+    assert(refused(1024, 0, 1))
+    assert(refused(1024, 8, 0))
+    assert(refused(1024, -8, -1))
+    assert(refused(1024, 0x4000_0000, 1))
+    assert(refused(1024, 0x10000, 0x10000))
+    assert(refused(65536, 1, 1))
+    assert(!refused(32768, 1, 1))
+}
+
+@test
+fn moreMemoryThanTheLimitIsRefused() {
+    assert(refused(Int.max / 2 + 1, 8, 1))
+    assert(refused(1 << 62, 8, 1))
+    assert(refused(1 << 20, 8, 1))
+    assert(refused(1024, 8, 1, 1024 * 1024))
+    assert(!refused(1024, 8, 1, 1028 * 1024))
+    assert(refused(16, 1, 0x3FFF_FFFF))
+}

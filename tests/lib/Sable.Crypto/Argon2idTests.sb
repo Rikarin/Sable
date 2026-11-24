@@ -1,0 +1,97 @@
+module Argon2idTests
+
+// Argon2id (Sable.Crypto): RFC 9106's case, many parameters against OpenSSL's
+// (through Python's cryptography), and those that are refused. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+// RFC 9106 §5.3.
+@test
+fn theStandardsCaseHasItsKey() {
+    let argon2 = try! Argon2id(memoryKiB: 32, iterations: 3, parallelism: 4)
+    let key = try! argon2.deriveKey(
+        from: SymmetricKey(U8[>..](repeating: 1, count: 32)),
+        salt: U8[>..](repeating: 2, count: 16),
+        byteCount: 32,
+        secret: SymmetricKey(U8[>..](repeating: 3, count: 8)),
+        associatedData: U8[>..](repeating: 4, count: 12)
+    )
+    assertEqual("\(Digest(key.bytes()))", "0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659")
+}
+
+@test
+fn manyParametersHaveTheirKeys() {
+    var all = Sha256()
+    var i = 0
+    while i < 24 {
+        let lanes = 1 + i % 4
+        let argon2 = try! Argon2id(memoryKiB: 8 * lanes + 5 * i, iterations: 1 + i % 3, parallelism: lanes)
+        let key = try! argon2.deriveKey(
+            from: SymmetricKey(message(i + 1)),
+            salt: message(8 + i),
+            byteCount: 4 + 9 * i,
+            secret: SymmetricKey(message(2 * i)),
+            associatedData: message(i)
+        )
+        all.update(key.bytes())
+        i += 1
+    }
+    assertEqual("\(all.finalize())", "955b01782a28c56c8015158e3a39f0251ed25fa5396479502d50d269905b6d11")
+}
+
+// A segment of more than 128 blocks takes more than one block of addresses.
+@test
+fn aMebibyteAndMoreHasItsKey() {
+    let argon2 = try! Argon2id(memoryKiB: 1500, iterations: 2, parallelism: 2)
+    let key = try! argon2.deriveKey(from: SymmetricKey(message(9)), salt: message(16), byteCount: 32)
+    assertEqual("\(Digest(key.bytes()))", "16357f7d084d8390193a91120d65f51358f9d7198a0060bccb94940f4b85fd7a")
+}
+
+fn refused(_ memoryKiB: Int, _ iterations: Int, _ parallelism: Int, _ maximumMemory: Int = 4_294_967_296) -> Bool {
+    return (try? Argon2id(memoryKiB: memoryKiB, iterations: iterations, parallelism: parallelism, maximumMemory: maximumMemory)) == none
+}
+
+@test
+fn parametersItIsNotDefinedForAreRefused() {
+    assert(refused(64, 1, 0))
+    assert(refused(64, 1, -1))
+    assert(refused(Int.max, 1, 0x100_0000))
+    assert(refused(64, 0, 1))
+    assert(refused(64, -1, 1))
+    assert(refused(64, 0x1_0000_0000, 1))
+    assert(refused(7, 1, 1))
+    assert(refused(31, 1, 4))
+    assert(refused(-1, 1, 1))
+    assert(!refused(8, 1, 1))
+}
+
+@test
+fn moreMemoryThanTheLimitIsRefused() {
+    assert(refused(Int.max, 1, 1))
+    assert(refused(0x1_0000_0000, 1, 1, Int.max))
+    assert(refused(4_194_305, 1, 1))
+    assert(refused(1025, 1, 1, 1024 * 1024))
+    assert(!refused(1024, 1, 1, 1024 * 1024))
+}
+
+@test
+fn aShortSaltAndAShortKeyAreRefused() {
+    let argon2 = try! Argon2id(memoryKiB: 8, iterations: 1, parallelism: 1)
+    let secret = SymmetricKey([1])
+    assert((try? argon2.deriveKey(from: secret, salt: message(7), byteCount: 32)) == none)
+    assert((try? argon2.deriveKey(from: secret, salt: message(8), byteCount: 3)) == none)
+    assert((try? argon2.deriveKey(from: secret, salt: message(8), byteCount: 0x1_0000_0000)) == none)
+    assertEqual((try! argon2.deriveKey(from: secret, salt: message(8), byteCount: 4)).byteCount, 4)
+}

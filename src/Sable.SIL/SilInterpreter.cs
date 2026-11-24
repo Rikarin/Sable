@@ -1451,7 +1451,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return ReferenceEquals(Alive((HeapObject)operands[0]!), Alive((HeapObject)operands[1]!));
 
             case "ref_is_unique":
-                return ((IReference)operands[0]!).Peek() is Counted { Strong: 1, Immortal: false };
+                return (((IReference)operands[0]!).Peek() is object?[] { Length: 1 } holder ? holder[0] : ((IReference)operands[0]!).Peek()) is Counted { Strong: 1, Immortal: false };
 
             case "make_immortal":
                 MakeImmortal(builtin.Operands[0].Type, operands[0]);
@@ -1519,6 +1519,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             case "hash_seed":
                 return HashSeed;
+
+            // The library's portable code is what the interpreter runs.
+            case "crypto_blocks" or "crypto_blocks_raw":
+                return false;
 
             case "random_bits":
                 return BitConverter.ToInt64(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8));
@@ -2427,6 +2431,23 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             var value = operands[2] is ulong wide ? wide : (ulong)(long)operands[2]!;
             for (var i = 0; i < width; i++) {
                 array.Elements[last - width + 1 + i] = (long)(byte)(value >> (8 * i));
+            }
+
+            return null;
+        }
+
+        if (builtin.Name is "bytes_random" or "bytes_secure_zero") {
+            var (_, _, count) = ElementsOf(((IReference)operands[0]!).Peek());
+            if (count > 0) {
+                var random = new byte[count];
+                if (builtin.Name == "bytes_random") {
+                    System.Security.Cryptography.RandomNumberGenerator.Fill(random);
+                }
+
+                var (array, first) = Writable(builtin.Operands[0], (IReference)operands[0]!, 0);
+                for (var i = 0; i < count; i++) {
+                    array.Elements[first + i] = (long)random[i];
+                }
             }
 
             return null;

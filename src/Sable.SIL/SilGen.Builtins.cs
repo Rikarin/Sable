@@ -156,6 +156,11 @@ public sealed partial class SilGen {
             signature ??= new([], SilType.Unit);
         }
 
+        // The object a struct holds, whatever its class.
+        if (name == "ref_is_unique" && lowered is [{ } held]) {
+            signature = SilBuiltins.Resolve(name, [held]) ?? new([], SilType.Unit);
+        }
+
         if (signature is null) {
             Report(ErrorCode.ERR_UnknownBuiltin, at,
                 $"there is no builtin '{name}' with a fixed signature: '@builtin' names one of SilBuiltins' table");

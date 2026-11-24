@@ -1,0 +1,230 @@
+module Sable.Crypto
+
+/// BLAKE2b, RFC 7693: a digest of 1 to 64 bytes, as strong as SHA-3's and
+/// quicker in software than SHA-512. A key of up to 64 bytes makes it a
+/// message authentication code by itself, with no HMAC around it.
+///
+/// ```sable
+/// assert("\(Blake2b.hash(utf8: "abc"))" == "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923")
+/// var short = Blake2b(digestByteCount: 20)
+/// short.update(utf8: "abc")
+/// assert("\(short.finalize())" == "384264f676f39536840523f284921cdc68b6846b")
+/// ```
+public struct Blake2b: HashFunction {
+    // The state's 64 bytes, then a block's room.
+    var box: SecretBox
+    let size: Int
+    var buffered: Int
+    var compressed: U64
+
+    /// A 64-byte digest, with no key.
+    public init() {
+        self.init(digestByteCount: 64, key: [])
+    }
+
+    /// A digest of that many bytes, 1 to 64, which is part of what is
+    /// hashed: a shorter digest is not the start of a longer one.
+    public init(digestByteCount: Int) {
+        self.init(digestByteCount: digestByteCount, key: [])
+    }
+
+    /// A message authentication code of that many bytes, 1 to 64, under a
+    /// key of up to 64.
+    ///
+    /// ```sable
+    /// let key = SymmetricKey.random(byteCount: 32)
+    /// var code = Blake2b(digestByteCount: 32, key: key)
+    /// code.update(utf8: "message")
+    /// assert(code.finalize().count == 32)
+    /// ```
+    public init(digestByteCount: Int = 64, key: SymmetricKey) {
+        var secret = key.bytes()
+        self.init(digestByteCount: digestByteCount, key: secret)
+        secret.zeroSecurely()
+    }
+
+    init(digestByteCount: Int, key: U8[:]) {
+        precondition(digestByteCount >= 1 && digestByteCount <= 64, "a BLAKE2b digest has 1 to 64 bytes, not \(digestByteCount)")
+        precondition(key.count <= 64, "a BLAKE2b key has at most 64 bytes, not \(key.count)")
+        let memory = SecretMemory(count: 192)
+        size = digestByteCount
+        compressed = 0
+        buffered = key.count > 0 ? 128 : 0
+        box = SecretBox(memory: memory)
+        unsafe {
+            var i = 0
+            while i < 8 {
+                store64(load64(blake2bConstants + 8 * i), memory.address + 8 * i)
+                i += 1
+            }
+            let parameters = 0x0101_0000 | key.count << 8 | digestByteCount
+            store64(load64(memory.address) ^ (parameters unchecked as U64), memory.address)
+            // A key is a block of its own, before the message.
+            store(key, at: memory.address + 64)
+        }
+    }
+
+    public static var digestByteCount: Int => 64
+
+    public static var blockByteCount: Int => 128
+
+    public mutating fn update(_ bytes: U8[:]) {
+        if bytes.count == 0 {
+            return
+        }
+        let state = box.mutableAddress()
+        var at = 0
+        // A full block waits until there are more bytes: the last is
+        // compressed otherwise.
+        while at < bytes.count {
+            if buffered == 128 {
+                compressed = compressed &+ 128
+                unsafe {
+                    compressBlake2b(state, state + 64, compressed, last: false)
+                }
+                buffered = 0
+            }
+            let wanted = bytes.count - at
+            let taken = 128 - buffered < wanted ? 128 - buffered : wanted
+            unsafe {
+                store(bytes[at..<at + taken], at: state + 64 + buffered)
+            }
+            buffered += taken
+            at += taken
+        }
+    }
+
+    public fn finalize() -> Digest {
+        let end = box.memory.copy()
+        unsafe {
+            Native.zero(end.address + 64 + buffered, 128 - buffered)
+            compressBlake2b(end.address, end.address + 64, compressed &+ (buffered unchecked as U64), last: true)
+        }
+        return Digest(end.bytes(from: 0, count: size))
+    }
+}
+
+/// BLAKE2b's compression function: the block at an address, the last of
+/// whose message's 'count' bytes it holds, into the state at another.
+unsafe fn compressBlake2b(_ state: Int, _ block: Int, _ count: U64, last: Bool) {
+    let iv = blake2bConstants
+    var v0 = load64(state)
+    var v1 = load64(state + 8)
+    var v2 = load64(state + 16)
+    var v3 = load64(state + 24)
+    var v4 = load64(state + 32)
+    var v5 = load64(state + 40)
+    var v6 = load64(state + 48)
+    var v7 = load64(state + 56)
+    var v8 = load64(iv)
+    var v9 = load64(iv + 8)
+    var v10 = load64(iv + 16)
+    var v11 = load64(iv + 24)
+    var v12 = load64(iv + 32) ^ count
+    var v13 = load64(iv + 40)
+    var v14 = load64(iv + 48)
+    var v15 = load64(iv + 56)
+    if last {
+        v14 = ~v14
+    }
+    // Where each round's words are in the block.
+    var order = blake2bOrder
+    let end = order + 12 * 16 * 8
+    while order < end {
+        v0 = v0 &+ v4 &+ load64(block &+ (load64(order) unchecked as Int))
+        v12 = (v12 ^ v0).rotatedRight(by: 32)
+        v8 = v8 &+ v12
+        v4 = (v4 ^ v8).rotatedRight(by: 24)
+        v0 = v0 &+ v4 &+ load64(block &+ (load64(order + 8) unchecked as Int))
+        v12 = (v12 ^ v0).rotatedRight(by: 16)
+        v8 = v8 &+ v12
+        v4 = (v4 ^ v8).rotatedRight(by: 63)
+        v1 = v1 &+ v5 &+ load64(block &+ (load64(order + 16) unchecked as Int))
+        v13 = (v13 ^ v1).rotatedRight(by: 32)
+        v9 = v9 &+ v13
+        v5 = (v5 ^ v9).rotatedRight(by: 24)
+        v1 = v1 &+ v5 &+ load64(block &+ (load64(order + 24) unchecked as Int))
+        v13 = (v13 ^ v1).rotatedRight(by: 16)
+        v9 = v9 &+ v13
+        v5 = (v5 ^ v9).rotatedRight(by: 63)
+        v2 = v2 &+ v6 &+ load64(block &+ (load64(order + 32) unchecked as Int))
+        v14 = (v14 ^ v2).rotatedRight(by: 32)
+        v10 = v10 &+ v14
+        v6 = (v6 ^ v10).rotatedRight(by: 24)
+        v2 = v2 &+ v6 &+ load64(block &+ (load64(order + 40) unchecked as Int))
+        v14 = (v14 ^ v2).rotatedRight(by: 16)
+        v10 = v10 &+ v14
+        v6 = (v6 ^ v10).rotatedRight(by: 63)
+        v3 = v3 &+ v7 &+ load64(block &+ (load64(order + 48) unchecked as Int))
+        v15 = (v15 ^ v3).rotatedRight(by: 32)
+        v11 = v11 &+ v15
+        v7 = (v7 ^ v11).rotatedRight(by: 24)
+        v3 = v3 &+ v7 &+ load64(block &+ (load64(order + 56) unchecked as Int))
+        v15 = (v15 ^ v3).rotatedRight(by: 16)
+        v11 = v11 &+ v15
+        v7 = (v7 ^ v11).rotatedRight(by: 63)
+        v0 = v0 &+ v5 &+ load64(block &+ (load64(order + 64) unchecked as Int))
+        v15 = (v15 ^ v0).rotatedRight(by: 32)
+        v10 = v10 &+ v15
+        v5 = (v5 ^ v10).rotatedRight(by: 24)
+        v0 = v0 &+ v5 &+ load64(block &+ (load64(order + 72) unchecked as Int))
+        v15 = (v15 ^ v0).rotatedRight(by: 16)
+        v10 = v10 &+ v15
+        v5 = (v5 ^ v10).rotatedRight(by: 63)
+        v1 = v1 &+ v6 &+ load64(block &+ (load64(order + 80) unchecked as Int))
+        v12 = (v12 ^ v1).rotatedRight(by: 32)
+        v11 = v11 &+ v12
+        v6 = (v6 ^ v11).rotatedRight(by: 24)
+        v1 = v1 &+ v6 &+ load64(block &+ (load64(order + 88) unchecked as Int))
+        v12 = (v12 ^ v1).rotatedRight(by: 16)
+        v11 = v11 &+ v12
+        v6 = (v6 ^ v11).rotatedRight(by: 63)
+        v2 = v2 &+ v7 &+ load64(block &+ (load64(order + 96) unchecked as Int))
+        v13 = (v13 ^ v2).rotatedRight(by: 32)
+        v8 = v8 &+ v13
+        v7 = (v7 ^ v8).rotatedRight(by: 24)
+        v2 = v2 &+ v7 &+ load64(block &+ (load64(order + 104) unchecked as Int))
+        v13 = (v13 ^ v2).rotatedRight(by: 16)
+        v8 = v8 &+ v13
+        v7 = (v7 ^ v8).rotatedRight(by: 63)
+        v3 = v3 &+ v4 &+ load64(block &+ (load64(order + 112) unchecked as Int))
+        v14 = (v14 ^ v3).rotatedRight(by: 32)
+        v9 = v9 &+ v14
+        v4 = (v4 ^ v9).rotatedRight(by: 24)
+        v3 = v3 &+ v4 &+ load64(block &+ (load64(order + 120) unchecked as Int))
+        v14 = (v14 ^ v3).rotatedRight(by: 16)
+        v9 = v9 &+ v14
+        v4 = (v4 ^ v9).rotatedRight(by: 63)
+        order += 128
+    }
+    store64(load64(state) ^ v0 ^ v8, state)
+    store64(load64(state + 8) ^ v1 ^ v9, state + 8)
+    store64(load64(state + 16) ^ v2 ^ v10, state + 16)
+    store64(load64(state + 24) ^ v3 ^ v11, state + 24)
+    store64(load64(state + 32) ^ v4 ^ v12, state + 32)
+    store64(load64(state + 40) ^ v5 ^ v13, state + 40)
+    store64(load64(state + 48) ^ v6 ^ v14, state + 48)
+    store64(load64(state + 56) ^ v7 ^ v15, state + 56)
+}
+
+/// SHA-512's initial state.
+let blake2bConstants: Int = constantTable([
+    0x6A09E667F3BCC908, 0xBB67AE8584CAA73B, 0x3C6EF372FE94F82B, 0xA54FF53A5F1D36F1,
+    0x510E527FADE682D1, 0x9B05688C2B3E6C1F, 0x1F83D9ABFB41BD6B, 0x5BE0CD19137E2179,
+] as U64[>..])
+
+/// The offset in the block of the words each round takes.
+let blake2bOrder: Int = constantTable([
+    0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120,
+    112, 80, 32, 64, 72, 120, 104, 48, 8, 96, 0, 16, 88, 56, 40, 24,
+    88, 64, 96, 0, 40, 16, 120, 104, 80, 112, 24, 48, 56, 8, 72, 32,
+    56, 72, 24, 8, 104, 96, 88, 112, 16, 48, 40, 80, 32, 0, 120, 64,
+    72, 0, 40, 56, 16, 32, 80, 120, 112, 8, 88, 96, 48, 64, 24, 104,
+    16, 96, 48, 80, 0, 88, 64, 24, 32, 104, 56, 40, 120, 112, 8, 72,
+    96, 40, 8, 120, 112, 104, 32, 80, 0, 56, 48, 24, 72, 16, 64, 88,
+    104, 88, 56, 112, 96, 8, 24, 72, 40, 0, 120, 32, 64, 48, 16, 80,
+    48, 120, 112, 72, 88, 24, 0, 64, 96, 16, 104, 56, 8, 32, 80, 40,
+    80, 16, 64, 32, 56, 48, 8, 40, 120, 88, 72, 112, 24, 96, 104, 0,
+    0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120,
+    112, 80, 32, 64, 72, 120, 104, 48, 8, 96, 0, 16, 88, 56, 40, 24,
+] as U64[>..])

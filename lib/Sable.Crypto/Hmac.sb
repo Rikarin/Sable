@@ -1,0 +1,90 @@
+module Sable.Crypto
+
+/// HMAC, RFC 2104: a message authentication code from any hash function and
+/// a key. Only who has the key can make a message's code, or check it.
+///
+/// ```sable
+/// let key = SymmetricKey.random(byteCount: 32)
+/// let message: U8[>..] = [1, 2, 3]
+/// let code = Hmac<Sha256>.authenticationCode(for: message, using: key)
+/// assert(Hmac<Sha256>.isValid(code.bytes, for: message, using: key))
+/// assert(!Hmac<Sha256>.isValid(code.bytes, for: [1, 2, 4], using: key))
+/// ```
+public struct Hmac<H: HashFunction>: Sendable {
+    // Each with its padded key hashed.
+    var inner: H
+    let outer: H
+
+    /// A code begun under the key, of any length; RFC 2104 asks for at least
+    /// a digest's.
+    public init(key: SymmetricKey) {
+        var secret = key.bytes()
+        self.init(secret: secret)
+        secret.zeroSecurely()
+    }
+
+    init(secret: U8[:]) {
+        // A key longer than a block is hashed first.
+        var pad: U8[>..] = secret.count > H.blockByteCount ? H.hash(secret).bytes : secret.toArray()
+        pad.append(repeating: 0, count: H.blockByteCount - pad.count)
+        var i = 0
+        while i < pad.count {
+            pad[i] = pad[i] ^ 0x36
+            i += 1
+        }
+        var inner = H()
+        inner.update(pad)
+        i = 0
+        while i < pad.count {
+            pad[i] = pad[i] ^ 0x36 ^ 0x5C
+            i += 1
+        }
+        var outer = H()
+        outer.update(pad)
+        pad.zeroSecurely()
+        self.inner = inner
+        self.outer = outer
+    }
+
+    /// Authenticates the bytes after those already given.
+    public mutating fn update(_ bytes: U8[:]) {
+        inner.update(bytes)
+    }
+
+    /// Authenticates the text's UTF-8 bytes after those already given.
+    public mutating fn update(utf8 text: String) {
+        inner.update(utf8: text)
+    }
+
+    /// The code of every byte given so far; more can still be given.
+    /// Compare it with another by '==', which takes constant time.
+    public fn finalize() -> Digest {
+        var end = outer
+        end.update(inner.finalize().bytes)
+        return end.finalize()
+    }
+
+    /// The code of the bytes, at once.
+    ///
+    /// ```sable
+    /// let key = SymmetricKey([0x4A, 0x65, 0x66, 0x65])
+    /// let code = Hmac<Sha256>.authenticationCode(for: [0x61], using: key)
+    /// assert("\(code)" == "71fec6c11ce8e5683326c0b3d9a6e45bee113b32abc2b8fb1de8e2c12f607b2c")
+    /// ```
+    public static fn authenticationCode(for bytes: U8[:], using key: SymmetricKey) -> Digest {
+        var code = Hmac<H>(key: key)
+        code.update(bytes)
+        return code.finalize()
+    }
+
+    /// Whether the code is the bytes' under the key, compared in constant
+    /// time. A code that is cut short is not.
+    public static fn isValid(_ code: U8[:], for bytes: U8[:], using key: SymmetricKey) -> Bool {
+        return constantTimeEquals(Hmac<H>.authenticationCode(for: bytes, using: key).bytes, code)
+    }
+
+    /// Whether the code is the bytes' under the key, compared in constant time.
+    public static fn isValid(_ code: Digest, for bytes: U8[:], using key: SymmetricKey) -> Bool {
+        return Hmac<H>.isValid(code.bytes, for: bytes, using: key)
+    }
+}

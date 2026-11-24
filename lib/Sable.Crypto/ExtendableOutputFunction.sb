@@ -1,0 +1,50 @@
+module Sable.Crypto
+
+/// A hash function whose output is as long as is asked for: SHAKE, and
+/// BLAKE3. A longer output begins with a shorter one.
+///
+/// ```sable
+/// let short = Shake128.hash(utf8: "abc", count: 16)
+/// let long = Shake128.hash(utf8: "abc", count: 32)
+/// assert(long.starts(with: short))
+/// ```
+public protocol ExtendableOutputFunction: Sendable {
+    /// The function with nothing hashed yet.
+    init()
+
+    /// Hashes the bytes after those already given.
+    mutating fn update(_ bytes: U8[:])
+
+    /// Reads the output for every byte given so far. The function is left
+    /// as it was: more can be given, and a later reader covers it all.
+    fn reader() -> OutputReader
+}
+
+extension ExtendableOutputFunction {
+    /// Hashes the text's UTF-8 bytes after those already given.
+    public mutating fn update(utf8 text: String) {
+        var bytes: U8[>..] = []
+        bytes.append(utf8: text)
+        self.update(bytes)
+    }
+
+    /// The first so many bytes of the output.
+    public fn finalize(count: Int) -> U8[>..] {
+        var reader = self.reader()
+        return reader.read(count: count)
+    }
+
+    /// The first so many bytes of the bytes' output, at once.
+    public static fn hash(_ bytes: U8[:], count: Int) -> U8[>..] {
+        var function = Self()
+        function.update(bytes)
+        return function.finalize(count: count)
+    }
+
+    /// The first so many bytes of the text's output, hashed as UTF-8.
+    public static fn hash(utf8 text: String, count: Int) -> U8[>..] {
+        var function = Self()
+        function.update(utf8: text)
+        return function.finalize(count: count)
+    }
+}

@@ -1,0 +1,43 @@
+module Sha512Bench
+
+// SHA-512 against .NET's SHA512.HashData: a megabyte, two hundred times, then
+// messages of 64 bytes, two hundred thousand.
+
+import Sable.Crypto
+
+fn sample(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var state = 1
+    var i = 0
+    while i < count {
+        state = (state * 75 + 74) % 65537
+        bytes.append(U8(state & 0xFF))
+        i = i + 1
+    }
+    return bytes
+}
+
+@main
+fn main() {
+    let long = sample(1_048_576)
+    var check = 0
+    var round = 0
+    while round < 200 {
+        check = check + Int(Sha512.hash(long).bytes[round % 32])
+        round = round + 1
+    }
+
+    var short = sample(64)
+    round = 0
+    while round < 200_000 {
+        let digest = Sha512.hash(short).bytes
+        short[round % 64] = digest[round % 32]
+        round = round + 1
+    }
+
+    var total = 0
+    for byte in short {
+        total = total * 31 % 1_000_003 + Int(byte)
+    }
+    print("\(check) \(total)")
+}

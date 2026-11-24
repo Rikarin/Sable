@@ -1,0 +1,54 @@
+module SymmetricKeyTests
+
+// SymmetricKey (Sable.Crypto): equality, and that it does not print its
+// bytes. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+@test
+fn aKeyKeepsItsBytes() {
+    let key = SymmetricKey(message(37))
+    assertEqual(key.byteCount, 37)
+    assert(key.bytes() == message(37))
+    assertEqual(SymmetricKey([]).byteCount, 0)
+    assertEqual(SymmetricKey([]).bytes().count, 0)
+}
+
+@test
+fn keysAreEqualWhenTheirBytesAre() {
+    assert(SymmetricKey(message(20)) == SymmetricKey(message(20)))
+    assert(SymmetricKey(message(20)) != SymmetricKey(message(21)))
+    var i = 0
+    while i < 20 {
+        var other = message(20)
+        other[i] = other[i] ^ 1
+        assert(SymmetricKey(message(20)) != SymmetricKey(other))
+        i += 1
+    }
+}
+
+@test
+fn printingAKeySaysOnlyHowLongItIs() {
+    let key = SymmetricKey([0xDE, 0xAD])
+    assertEqual("\(key)", "SymmetricKey(2 bytes)")
+    assertEqual("\(key:>24)", "   SymmetricKey(2 bytes)")
+    assertEqual(key.debugDescription(), "SymmetricKey(2 bytes)")
+}
+
+@test
+fn randomKeysDiffer() {
+    assert(SymmetricKey.random(byteCount: 32) != SymmetricKey.random(byteCount: 32))
+    assertEqual(SymmetricKey.random(byteCount: 0).byteCount, 0)
+}

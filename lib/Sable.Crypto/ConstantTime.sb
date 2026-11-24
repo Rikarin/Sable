@@ -1,0 +1,52 @@
+module Sable.Crypto
+
+/// Whether the two are the same bytes, in a time that depends only on how
+/// many there are: for a tag, a token or a password's hash, where a
+/// comparison that stops at the first difference would tell an attacker how
+/// much of a guess was right. The counts are not secret: different ones are
+/// unequal at once. .NET's `CryptographicOperations.FixedTimeEquals`.
+///
+/// ```sable
+/// let expected: U8[>..] = [1, 2, 3]
+/// assert(constantTimeEquals(expected, [1, 2, 3]))
+/// assert(!constantTimeEquals(expected, [1, 2, 4]))
+/// assert(!constantTimeEquals(expected, [1, 2]))
+/// ```
+public fn constantTimeEquals(_ a: U8[:], _ b: U8[:]) -> Bool {
+    let count = a.count
+    if count != b.count {
+        return false
+    }
+    // Every difference kept as bits; each step's through 'blackBox', so that
+    // the optimiser cannot know that bits once set decide the result, and
+    // stop at them.
+    var difference: U64 = 0
+    var i = 0
+    while i + 8 <= count {
+        difference = blackBox(difference | (a.readU64(at: i, endian: .native) ^ b.readU64(at: i, endian: .native)))
+        i += 8
+    }
+    while i < count {
+        difference = blackBox(difference | U64(a[i] ^ b[i]))
+        i += 1
+    }
+    return difference == 0
+}
+
+/// Sets every byte to zero, whether or not anything reads them after, which
+/// an ordinary loop of writes just before the bytes are let go of is not
+/// sure to. .NET's `CryptographicOperations.ZeroMemory`.
+///
+/// It zeroes the array it is given. Other copies of the bytes — an array
+/// that shared their memory until this one was written, text they were made
+/// from, what an array held before it grew — are not found. A `SymmetricKey`
+/// keeps a secret in one place, which it zeroes by itself.
+///
+/// ```sable
+/// var password: U8[>..] = [0x68, 0x75, 0x6E, 0x74]
+/// secureZero(&password)
+/// assert(password == [0, 0, 0, 0])
+/// ```
+public fn secureZero(_ bytes: inout U8[:]) {
+    bytes.zeroSecurely()
+}

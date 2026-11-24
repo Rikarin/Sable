@@ -1,0 +1,133 @@
+module Sable.Crypto
+
+/// Argon2id, RFC 9106: a key from a password, or a password's hash, slow
+/// and of as much memory as is asked for, which is what makes guessing
+/// dear. What new programs should store passwords with.
+///
+/// ```sable
+/// let argon2 = try! Argon2id(memoryKiB: 64, iterations: 1, parallelism: 1)
+/// let encoded = argon2.hash(password: "correct horse")
+/// assert(try! PasswordHash.verify(password: "correct horse", against: encoded))
+/// assert(!(try! PasswordHash.verify(password: "battery staple", against: encoded)))
+/// ```
+public struct Argon2id: Sendable {
+    /// How much memory it takes, in KiB.
+    public let memoryKiB: Int
+
+    /// How many times the memory is gone over.
+    public let iterations: Int
+
+    /// How many lanes the memory is in. They are filled one after another
+    /// here, whatever their number: it is part of the result.
+    public let parallelism: Int
+
+    /// The parameters: by default RFC 9106's for when 2 GiB are too much to
+    /// take — 64 MiB, three passes, four lanes. Throws for those Argon2id
+    /// is not defined for, and for those that would take more memory than
+    /// the limit.
+    public init(memoryKiB: Int = 65536, iterations: Int = 3, parallelism: Int = 4, maximumMemory: Int = 4_294_967_296) throws(CryptoError) {
+        if parallelism < 1 || parallelism > 0xFF_FFFF {
+            throw CryptoError.InvalidParameter(reason: "Argon2id has 1 to 16777215 lanes, not \(parallelism)")
+        }
+        if iterations < 1 || iterations > 0xFFFF_FFFF {
+            throw CryptoError.InvalidParameter(reason: "Argon2id has 1 to 4294967295 passes, not \(iterations)")
+        }
+        if memoryKiB < 8 * parallelism {
+            throw CryptoError.InvalidParameter(reason: "Argon2id needs at least 8 KiB of memory for each lane: \(memoryKiB) KiB for \(parallelism)")
+        }
+        if memoryKiB > 0xFFFF_FFFF || memoryKiB > maximumMemory / 1024 {
+            throw CryptoError.LimitExceeded(reason: "Argon2id with \(memoryKiB) KiB takes more than \(maximumMemory) bytes")
+        }
+        self.memoryKiB = memoryKiB
+        self.iterations = iterations
+        self.parallelism = parallelism
+    }
+
+    /// A key of so many bytes, at least 4, under a salt of at least 8. The
+    /// secret — a pepper — is kept apart from the hashes; the associated
+    /// data is only bound to them.
+    ///
+    /// ```sable
+    /// let argon2 = try! Argon2id(memoryKiB: 64, iterations: 1, parallelism: 1)
+    /// let password = SymmetricKey([0x68, 0x75, 0x6E, 0x74])
+    /// let key = try! argon2.deriveKey(from: password, salt: SecureRandom.bytes(16), byteCount: 32)
+    /// assert(key.byteCount == 32)
+    /// ```
+    public fn deriveKey(
+        from password: SymmetricKey,
+        salt: U8[:],
+        byteCount: Int,
+        secret: SymmetricKey? = none,
+        associatedData: U8[:] = []
+    ) throws(CryptoError) -> SymmetricKey {
+        if salt.count < 8 || salt.count > 0xFFFF_FFFF {
+            throw CryptoError.InvalidParameter(reason: "Argon2id's salt has at least 8 bytes, not \(salt.count)")
+        }
+        if byteCount < 4 || byteCount > 0xFFFF_FFFF {
+            throw CryptoError.InvalidParameter(reason: "Argon2id derives at least 4 bytes, not \(byteCount)")
+        }
+        var start = Blake2b()
+        start.update(argon2Number(parallelism))
+        start.update(argon2Number(byteCount))
+        start.update(argon2Number(memoryKiB))
+        start.update(argon2Number(iterations))
+        start.update(argon2Number(0x13))
+        start.update(argon2Number(2))
+        argon2Update(&start, password)
+        start.update(argon2Number(salt.count))
+        start.update(salt)
+        argon2Update(&start, secret ?? SymmetricKey([]))
+        start.update(argon2Number(associatedData.count))
+        start.update(associatedData)
+        var seed = start.finalize().bytes
+
+        let memory = Argon2Memory(memoryKiB: memoryKiB, passes: iterations, lanes: parallelism)
+        memory.begin(seed)
+        seed.zeroSecurely()
+        memory.fill()
+        return SymmetricKey(memory: memory.end(byteCount: byteCount))
+    }
+}
+
+/// A number of 32 bits, least significant byte first.
+fn argon2Number(_ value: Int) -> U8[>..] {
+    var bytes = U8[>..](repeating: 0, count: 4)
+    bytes.writeU32(value unchecked as U32, at: 0, endian: .Little)
+    return bytes
+}
+
+/// A secret hashed, its length before it.
+fn argon2Update(_ hash: inout Blake2b, _ secret: SymmetricKey) {
+    var bytes = secret.bytes()
+    hash.update(argon2Number(bytes.count))
+    hash.update(bytes)
+    bytes.zeroSecurely()
+}
+
+/// RFC 9106's H': BLAKE2b's output of any length.
+fn argon2Hash(_ parts: (U8[>..])[:], byteCount: Int) -> SecretMemory {
+    let output = SecretMemory(count: byteCount)
+    var hash = Blake2b(digestByteCount: byteCount < 64 ? byteCount : 64)
+    hash.update(argon2Number(byteCount))
+    for part in parts {
+        hash.update(part)
+    }
+    var block = hash.finalize().bytes
+    var at = 0
+    // Half of each digest but the last, each the last one's digest.
+    while byteCount - at > 64 {
+        unsafe {
+            store(block[..<32], at: output.address + at)
+        }
+        at += 32
+        var next = Blake2b(digestByteCount: byteCount - at < 64 ? byteCount - at : 64)
+        next.update(block)
+        block.zeroSecurely()
+        block = next.finalize().bytes
+    }
+    unsafe {
+        store(block, at: output.address + at)
+    }
+    block.zeroSecurely()
+    return output
+}

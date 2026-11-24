@@ -1,0 +1,28 @@
+module Sable.Crypto
+
+/// SHA3-256, FIPS 202: a 32-byte digest, of Keccak, which shares nothing
+/// with SHA-2. Worked out by the processor's own instructions where it has
+/// them.
+///
+/// ```sable
+/// assert("\(Sha3_256.hash(utf8: "abc"))" == "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532")
+/// ```
+public struct Sha3_256: HashFunction {
+    var sponge: Sponge
+
+    public init() {
+        sponge = Sponge(rate: 136, suffix: 0x06)
+    }
+
+    public static var digestByteCount: Int => 32
+
+    public static var blockByteCount: Int => 136
+
+    public mutating fn update(_ bytes: U8[:]) {
+        sponge.update(bytes)
+    }
+
+    public fn finalize() -> Digest {
+        return Digest(sponge.output(count: 32))
+    }
+}

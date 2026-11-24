@@ -1,0 +1,54 @@
+module Sable.Crypto
+
+/// PBKDF2, RFC 8018, with HMAC: a key from a password, slow by as many
+/// iterations as are asked for. It takes no memory, so hardware guesses it
+/// cheaply: for what requires it, with Argon2id for what does not. OWASP
+/// asks for 600,000 iterations of SHA-256, or 210,000 of SHA-512.
+///
+/// ```sable
+/// let password = SymmetricKey([0x68, 0x75, 0x6E, 0x74, 0x65, 0x72])
+/// let salt = SecureRandom.bytes(16)
+/// let key = try! Pbkdf2<Sha256>.deriveKey(from: password, salt: salt, iterations: 1000, byteCount: 32)
+/// assert(key.byteCount == 32)
+/// ```
+public struct Pbkdf2<H: HashFunction> {
+    private init() { }
+
+    /// A key of so many bytes.
+    public static fn deriveKey(
+        from password: SymmetricKey,
+        salt: U8[:],
+        iterations: Int,
+        byteCount: Int
+    ) throws(CryptoError) -> SymmetricKey {
+        if iterations < 1 {
+            throw CryptoError.InvalidParameter(reason: "PBKDF2 needs at least one iteration, not \(iterations)")
+        }
+        if byteCount < 1 || byteCount > 0xFFFF_FFFF * H.digestByteCount {
+            throw CryptoError.InvalidParameter(reason: "PBKDF2 derives no key of \(byteCount) bytes")
+        }
+        let keyed = Hmac<H>(key: password)
+        var salted = keyed
+        salted.update(salt)
+        let derived = SecretMemory(count: byteCount)
+        var at = 0
+        var index: U32 = 1
+        while at < byteCount {
+            var code = salted
+            var number = U8[>..](repeating: 0, count: 4)
+            number.writeU32(index, at: 0, endian: .Big)
+            code.update(number)
+            var first = code.finalize().bytes
+            var block = H.iterateHmac(inner: keyed.inner, outer: keyed.outer, first: first, iterations: iterations)
+            let taken = block.count < byteCount - at ? block.count : byteCount - at
+            unsafe {
+                store(block[..<taken], at: derived.address + at)
+            }
+            first.zeroSecurely()
+            block.zeroSecurely()
+            at += taken
+            index = index &+ 1
+        }
+        return SymmetricKey(memory: derived)
+    }
+}

@@ -1,0 +1,219 @@
+module Sable.Crypto
+
+/// A Merkle–Damgård hash's compression function (MD5, SHA-1, SHA-2), which
+/// BlockState feeds a block at a time.
+protocol BlockHash {
+    /// How many bytes a block has: 64 or 128.
+    static var blockBytes: Int { get }
+
+    /// How many bytes the state has.
+    static var stateBytes: Int { get }
+
+    /// How many bytes at a block's end the message's length takes: 8, or 16.
+    static var lengthBytes: Int { get }
+
+    /// Whether the length is written with its most significant byte first.
+    static var bigEndianLength: Bool { get }
+
+    /// The runtime's kernel for it, or 0 for none.
+    static var kernel: Int { get }
+
+    /// The block at an address worked into the state at another, in portable
+    /// code, with another block's room after it to work in.
+    unsafe static fn compress(state: Int, block: Int)
+}
+
+/// A Merkle–Damgård hash part way through a message: its state, and the
+/// bytes after it that do not fill a block.
+struct BlockState<Hash: BlockHash>: Sendable {
+    // The state, then a block's room, then another to work in.
+    var box: SecretBox
+    var buffered: Int
+    var length: U64
+
+    /// Nothing hashed yet, the state as given.
+    init(initial words: U32[:]) {
+        box = SecretBox(memory: SecretMemory(count: Hash.stateBytes + 2 * Hash.blockBytes))
+        buffered = 0
+        length = 0
+        var i = 0
+        while i < words.count {
+            unsafe {
+                store32(words[i], box.memory.address + 4 * i)
+            }
+            i += 1
+        }
+    }
+
+    init(initial words: U64[:]) {
+        box = SecretBox(memory: SecretMemory(count: Hash.stateBytes + 2 * Hash.blockBytes))
+        buffered = 0
+        length = 0
+        var i = 0
+        while i < words.count {
+            unsafe {
+                store64(words[i], box.memory.address + 8 * i)
+            }
+            i += 1
+        }
+    }
+
+    mutating fn update(_ bytes: U8[:]) {
+        if bytes.count == 0 {
+            return
+        }
+        let state = box.mutableAddress()
+        let block = state + Hash.stateBytes
+        length = length &+ (bytes.count unchecked as U64)
+        var at = 0
+        if buffered > 0 {
+            let taken = Hash.blockBytes - buffered < bytes.count ? Hash.blockBytes - buffered : bytes.count
+            unsafe {
+                store(bytes[..<taken], at: block + buffered)
+            }
+            buffered += taken
+            at = taken
+            if buffered < Hash.blockBytes {
+                return
+            }
+            BlockState<Hash>.compressBlock(state)
+            buffered = 0
+        }
+        let whole = (bytes.count - at) / Hash.blockBytes * Hash.blockBytes
+        if whole > 0 {
+            unsafe {
+                if Hash.kernel == 0 || !Native.blocks(Hash.kernel, state, bytes[at..<at + whole]) {
+                    let end = at + whole
+                    while at < end {
+                        store(bytes[at..<at + Hash.blockBytes], at: block)
+                        Hash.compress(state: state, block: block)
+                        at += Hash.blockBytes
+                    }
+                } else {
+                    at += whole
+                }
+            }
+        }
+        if at < bytes.count {
+            unsafe {
+                store(bytes[at...], at: block)
+            }
+            buffered = bytes.count - at
+        }
+    }
+
+    /// The state after the message's padding and its length, in memory of
+    /// its own.
+    fn finish() -> SecretMemory {
+        let end = box.memory.copy()
+        let block = end.address + Hash.stateBytes
+        unsafe {
+            store8(0x80, block + buffered)
+            var used = buffered + 1
+            if used > Hash.blockBytes - Hash.lengthBytes {
+                Native.zero(block + used, Hash.blockBytes - used)
+                BlockState<Hash>.compressBlock(end.address)
+                used = 0
+            }
+            Native.zero(block + used, Hash.blockBytes - used)
+            let bits = length << 3
+            let last = block + Hash.blockBytes
+            if Hash.bigEndianLength {
+                store64(bits.byteSwapped, last - 8)
+                if Hash.lengthBytes == 16 {
+                    store64((length >> 61).byteSwapped, last - 16)
+                }
+            } else {
+                store64(bits, last - 8)
+            }
+            BlockState<Hash>.compressBlock(end.address)
+        }
+        return end
+    }
+
+    /// HashFunction's 'iterateHmac', for a hash whose digest is the start of
+    /// its state's big-endian words: each HMAC is two blocks, a digest and
+    /// its padding, worked into one state in place.
+    static fn iterateHmac(inner: BlockState<Hash>, outer: BlockState<Hash>, first: U8[:], iterations: Int) -> U8[>..] {
+        let size = first.count
+        let work = SecretMemory(count: Hash.stateBytes + 2 * Hash.blockBytes)
+        let sum = SecretMemory(first)
+        let state = work.address
+        let block = state + Hash.stateBytes
+        unsafe {
+            store(first, at: block)
+            store8(0x80, block + size)
+            store64((8 * (Hash.blockBytes + size) unchecked as U64).byteSwapped, block + Hash.blockBytes - 8)
+            var done = 1
+            while done < iterations {
+                BlockState<Hash>.hashBlock(inner.box.memory.address, state, digest: size)
+                BlockState<Hash>.hashBlock(outer.box.memory.address, state, digest: size)
+                var i = 0
+                while i < size {
+                    store32(load32(sum.address + i) ^ load32(block + i), sum.address + i)
+                    i += 4
+                }
+                done += 1
+            }
+        }
+        return sum.bytes(from: 0, count: size)
+    }
+
+    /// The block after a state worked into another one, and the digest
+    /// written over the block's start.
+    unsafe static fn hashBlock(_ from: Int, _ state: Int, digest size: Int) {
+        let block = state + Hash.stateBytes
+        NativeMemory.copy(from: RawPtr<U8>(address: from), to: RawPtr<U8>(address: state), byteCount: Hash.stateBytes)
+        BlockState<Hash>.compressBlock(state)
+        var i = 0
+        if Hash.lengthBytes == 16 {
+            while i < size {
+                store64(load64(state + i).byteSwapped, block + i)
+                i += 8
+            }
+        } else {
+            while i < size {
+                store32(load32(state + i).byteSwapped, block + i)
+                i += 4
+            }
+        }
+    }
+
+    /// The block after the state at an address worked into it.
+    static fn compressBlock(_ state: Int) {
+        unsafe {
+            let block = state + Hash.stateBytes
+            if Hash.kernel == 0 || !Native.blocks(Hash.kernel, state, at: block, count: Hash.blockBytes) {
+                Hash.compress(state: state, block: block)
+            }
+        }
+    }
+}
+
+/// The first bytes of a state of big-endian 32-bit words.
+fn bigEndianDigest32(_ state: SecretMemory, count: Int) -> Digest {
+    var bytes: U8[>..] = []
+    bytes.append(repeating: 0, count: count)
+    var i = 0
+    while i < count {
+        unsafe {
+            bytes.writeU32(load32(state.address + i), at: i, endian: .Big)
+        }
+        i += 4
+    }
+    return Digest(bytes)
+}
+
+/// The first bytes of a state of big-endian 64-bit words.
+fn bigEndianDigest64(_ state: SecretMemory, count: Int) -> Digest {
+    var bytes: U8[>..] = []
+    bytes.append(repeating: 0, count: count)
+    var i = 0
+    while i < count {
+        unsafe {
+            bytes.writeU64(load64(state.address + i), at: i, endian: .Big)
+        }
+        i += 8
+    }
+    return Digest(bytes)
+}

@@ -1,0 +1,37 @@
+module DigestTests
+
+// Digest (Sable.Crypto): its text, equality and hash. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Collections
+import Sable.Crypto
+import Sable.Testing
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+@test
+fn aDigestIsWrittenInHexadecimal() {
+    let digest = Digest([0x00, 0xAB, 0xFF])
+    assertEqual("\(digest)", "00abff")
+    assertEqual("\(digest:X)", "00ABFF")
+    assertEqual("\(digest:>8)", "  00abff")
+    assertEqual(digest.debugDescription(), "Digest(00abff)")
+    assertEqual(digest.count, 3)
+}
+
+@test
+fn digestsAreEqualWhenTheirBytesAre() {
+    assert(Digest(message(32)) == Digest(message(32)))
+    assert(Digest(message(32)) != Digest(message(31)))
+    assertEqual(Digest(message(32)).hashValue, Digest(message(32)).hashValue)
+    let known = Set<Digest>([Digest(message(4)), Digest(message(5)), Digest(message(4))])
+    assertEqual(known.count, 2)
+}

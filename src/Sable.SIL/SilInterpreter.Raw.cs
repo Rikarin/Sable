@@ -108,6 +108,24 @@ public sealed partial class SilInterpreter {
                 return null;
             }
 
+            case "raw_random" or "raw_secure_zero": {
+                var (to, count) = ((long)operands[0]!, (long)operands[1]!);
+                if (count > 0) {
+                    var (block, at) = RawRange(to, count);
+                    Forget(block, at, (int)count);
+                    var bytes = block.Bytes.AsSpan(at, (int)count);
+                    if (builtin.Name == "raw_random") {
+                        System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
+                    } else {
+                        bytes.Clear();
+                    }
+
+                    Array.Fill(block.Written, true, at, (int)count);
+                }
+
+                return null;
+            }
+
             case "raw_init" or "raw_init_unaligned": {
                 var type = builtin.Operands[1].Type;
                 var size = TypeLayout.Size(type);

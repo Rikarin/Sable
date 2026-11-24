@@ -1,0 +1,157 @@
+module Sable.Concurrency
+
+import Sable.Time
+
+// Waiting for one of several things, or all of them, or for a limit:
+// Swift's task groups put to the uses .NET's Task.WhenAny/WhenAll/WhenEach
+// and Rust's select!/join!/timeout are put to.
+
+/// What a race's children give: the body's value, or that the other child
+/// — a timer, a token's waiter — stopped it.
+union Raced<T> {
+    Finished(T)
+    Stopped
+}
+
+/// The body's value if it finishes within the duration; else it is
+/// cancelled, and TimeoutError thrown once it has stopped — it is a child,
+/// so the wait for it to notice is part of the call, as Swift's is. What
+/// the body throws, this throws.
+///
+/// ```sable
+/// let quick = try! await withTimeout(Duration.seconds(5)) { 42 }
+/// assert(quick == 42)
+/// do {
+///     let _ = try await withTimeout(Duration.milliseconds(10)) {
+///         try await Task.sleep(nanoseconds: 10_000_000_000)
+///     }
+///     assert(false)
+/// } catch let error as TimeoutError {
+///     assert(error.duration == Duration.milliseconds(10))
+/// } catch { assert(false) }
+/// ```
+public fn withTimeout<T: Sendable>(_ duration: Duration, _ body: @Sendable async () throws -> T) async throws -> T {
+    let raced = try await withThrowingTaskGroup(of: Raced<T>.self) { group in
+        group.spawn { Raced<T>.Finished(try await body()) }
+        group.spawn {
+            try await Task.sleep(for: duration)
+            return Raced<T>.Stopped
+        }
+        let first = try await group.next()!
+        group.cancelAll()
+        return first
+    }
+    return match raced {
+        case .Finished(let value) => value
+        case .Stopped => {
+            throw TimeoutError(duration)
+        }
+    }
+}
+
+/// The first of the two bodies to finish: its value, or what it threw.
+/// The other is cancelled, and waited for, as a child is: Rust's
+/// `select!`, .NET's `WhenAny` over work started for it.
+///
+/// ```sable
+/// let first = try! await race({ 1 }, {
+///     try await Task.sleep(nanoseconds: 10_000_000_000)
+///     return 2
+/// })
+/// assert(first == 1)
+/// ```
+public fn race<T: Sendable>(_ first: @Sendable async () throws -> T, _ second: @Sendable async () throws -> T) async throws -> T {
+    return try await withThrowingTaskGroup(of: T.self) { group in
+        group.spawn { try await first() }
+        group.spawn { try await second() }
+        let winner = try await group.next()!
+        group.cancelAll()
+        return winner
+    }
+}
+
+/// The first of the three bodies to finish; the others are cancelled.
+public fn race<T: Sendable>(_ first: @Sendable async () throws -> T, _ second: @Sendable async () throws -> T, _ third: @Sendable async () throws -> T) async throws -> T {
+    return try await withThrowingTaskGroup(of: T.self) { group in
+        group.spawn { try await first() }
+        group.spawn { try await second() }
+        group.spawn { try await third() }
+        let winner = try await group.next()!
+        group.cancelAll()
+        return winner
+    }
+}
+
+/// Every task's value, in the order given, once all have finished: .NET's
+/// `Task.WhenAll`.
+public fn whenAll<T: Sendable>(_ tasks: Task<T>[>..]) async -> T[>..] {
+    var values: T[>..] = []
+    for task in tasks {
+        values.append(await task.value)
+    }
+    return values
+}
+
+/// A task that finished and where it was among those given.
+public struct Finished<T: Sendable>: Sendable {
+    /// Its position among the tasks given.
+    public let index: Int
+    /// What it gave.
+    public let value: T
+}
+
+/// The first of the tasks to finish, and which it was: .NET's
+/// `Task.WhenAny`. The others are not cancelled — they are not this call's
+/// children — and run on. No tasks traps.
+public fn whenAny<T: Sendable>(_ tasks: Task<T>[>..]) async -> Finished<T> {
+    precondition(!tasks.isEmpty, "the first of no tasks")
+    let first = Promise<Finished<T>, Never>()
+    var i = 0
+    for task in tasks {
+        let index = i
+        let _ = Task.detached {
+            let value = await task.value
+            let _ = first.succeed(Finished<T> { index: index, value: value })
+        }
+        i += 1
+    }
+    return await first.value()
+}
+
+/// The tasks as they finish, each with its position: .NET 9's
+/// `Task.WhenEach`, for 'for await'.
+///
+/// ```sable
+/// let slow = Task.spawn {
+///     try? await Task.sleep(nanoseconds: 50_000_000)
+///     return 1
+/// }
+/// let fast = Task.spawn { 2 }
+/// var order: Int[>..] = []
+/// for await done in whenEach([slow, fast]) {
+///     order.append(done.value)
+/// }
+/// assert(order.count == 2 && order[0] == 2)
+/// ```
+public fn whenEach<T: Sendable>(_ tasks: Task<T>[>..]) -> Channel<Finished<T>> {
+    let finished = Channel<Finished<T>>()
+    let remaining = Atomic(tasks.count)
+    if tasks.isEmpty {
+        let _ = Task.detached { await finished.close() }
+        return finished
+    }
+    var i = 0
+    for task in tasks {
+        let index = i
+        let _ = Task.detached {
+            let value = await task.value
+            await finished.send(Finished<T> { index: index, value: value })
+            let before = remaining.update { $0 - 1 }
+            if before == 1 {
+                await finished.close()
+            }
+        }
+        i += 1
+    }
+    return finished
+}

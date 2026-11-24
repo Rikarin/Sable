@@ -1,0 +1,69 @@
+module Sable.Concurrency
+
+/// The rest of a waiting task, handed to code that calls back: resuming it
+/// gives the task its value or its error, and the task goes on — how a
+/// callback API is waited for (Swift's `CheckedContinuation`). Made by
+/// `withContinuation`.
+///
+/// It must be resumed exactly once. Resuming it again traps; a debug build
+/// traps too when one is let go without being resumed, which would leave
+/// its task waiting for ever (in a release build, it waits).
+///
+/// ```sable
+/// fn fetch(_ done: @Sendable (Int) -> Void) {
+///     done(42)
+/// }
+/// let value = await withContinuation(returning: Int.self) { continuation in
+///     fetch { value in continuation.resume(returning: value) }
+/// }
+/// assert(value == 42)
+/// ```
+@immutable
+public final class Continuation<T: Sendable, E: Error> {
+    let promise: Promise<T, E>
+    let resumed: Atomic<Bool>
+
+    init(_ promise: Promise<T, E>) {
+        self.promise = promise
+        self.resumed = Atomic(false)
+    }
+
+    /// The task given the value, and on its way.
+    public fn resume(returning value: T) {
+        resume(with: .Ok(value))
+    }
+
+    /// The task given the error to throw, and on its way.
+    public fn resume(throwing error: E) {
+        resume(with: .Err(error))
+    }
+
+    /// The task given the outcome, and on its way.
+    public fn resume(with outcome: Outcome<T, E>) {
+        precondition(!resumed.exchange(true), "a continuation resumed twice")
+        let _ = promise.complete(with: outcome)
+    }
+
+    deinit {
+        #if DEBUG
+        precondition(resumed.load(), "a continuation was let go without being resumed: its task would wait for ever")
+        #endif
+    }
+}
+
+/// Runs the body with a continuation of the running task, and waits until
+/// something resumes it: with a value, which this gives, or an error, which
+/// it throws. The body hands the continuation to whatever calls back.
+public fn withContinuation<T: Sendable, E: Error>(returning type: T.Type, throwing errorType: E.Type, _ body: (Continuation<T, E>) -> Void) async throws(E) -> T {
+    let promise = Promise<T, E>()
+    body(Continuation<T, E>(promise))
+    return try await promise.value()
+}
+
+/// Runs the body with a continuation that cannot be resumed with an error,
+/// and waits for the value it is resumed with.
+public fn withContinuation<T: Sendable>(returning type: T.Type, _ body: (Continuation<T, Never>) -> Void) async -> T {
+    let promise = Promise<T, Never>()
+    body(Continuation<T, Never>(promise))
+    return await promise.value()
+}

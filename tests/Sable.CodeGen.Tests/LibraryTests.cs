@@ -263,6 +263,59 @@ fn main() {
     }
 
     /// <summary>
+    ///     A promise, a continuation, a timeout, a race, a token and the
+    ///     tasks waited for as they finish: the same natively and
+    ///     interpreted, actors and detached tasks between them.
+    /// </summary>
+    [Fact]
+    public void CancellationAndCombinatorsAgreeBothWays() {
+        var run = AssertAgree(
+            """
+            module P
+            import Sable.Concurrency
+            import Sable.Time
+
+            @main
+            fn main() async {
+                let promise = Promise<Int, Never>()
+                let waiter = Task.spawn { await promise.value() }
+                print(promise.succeed(5))
+                print(await waiter.value)
+                let resumed = await withContinuation(returning: String.self) { continuation in
+                    let _ = Task.detached { continuation.resume(returning: "back") }
+                }
+                print(resumed)
+                do {
+                    let _ = try await withTimeout(Duration.milliseconds(5)) {
+                        try await Task.sleep(for: Duration.seconds(60))
+                        return 0
+                    }
+                } catch let error as TimeoutError {
+                    print("timed out")
+                } catch {
+                    print("other")
+                }
+                print(try! await race({ "first" }, {
+                    try await Task.sleep(for: Duration.seconds(60))
+                    return "second"
+                }))
+                let source = CancellationTokenSource()
+                let _ = source.token.register { print("cancelled") }
+                source.cancel()
+                let a = Task.spawn { 1 }
+                let b = Task.spawn { 2 }
+                var total = 0
+                for await done in whenEach([a, b]) {
+                    total += done.value
+                }
+                print(total)
+            }
+            """
+        );
+        Assert.Equal("true\n5\nback\ntimed out\nfirst\ncancelled\n3\n", run.Stdout);
+    }
+
+    /// <summary>
     ///     The environment written and read back, the known folders by each
     ///     system's rules, and the platform as the program and the compiler
     ///     name it: the same natively and interpreted, where set and remove

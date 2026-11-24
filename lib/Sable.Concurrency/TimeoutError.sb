@@ -1,0 +1,17 @@
+module Sable.Concurrency
+
+import Sable.Time
+
+/// What `withTimeout` throws when the body has not finished in time.
+public struct TimeoutError: Error {
+    /// How long the body was given.
+    public let duration: Duration
+
+    public init(_ duration: Duration) {
+        self.duration = duration
+    }
+
+    public fn description() -> String {
+        return "timed out after \(duration.toString())"
+    }
+}

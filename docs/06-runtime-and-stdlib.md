@@ -777,7 +777,12 @@ Sable.Serialize     Encoder/Decoder protocols, conformance synthesis via
 Sable.Concurrency   Channel, Mutex RwLock Condition Semaphore Barrier
                     CountdownLatch Once Lazy, AsyncMutex AsyncSemaphore,
                     AsyncStream, ConcurrentDictionary (sharded)
-                    ConcurrentQueue (two-lock) ConcurrentStack
+                    ConcurrentQueue (two-lock) ConcurrentStack,
+                    CancellationTokenSource/CancellationToken (handlers,
+                    linked, cancel(after:), withCancellation), Promise,
+                    Continuation (checked; a leak traps in debug),
+                    withTimeout, race, whenAll/whenAny/whenEach,
+                    Task.sleep(for:)
                     (Task, TaskGroup, AsyncSequence, Atomic<T> and OnceCell
                     are Sable.Core's: an Atomic's cell is Core's raw memory)
 Sable.Time          Instant Duration Clock Calendar TimeZone

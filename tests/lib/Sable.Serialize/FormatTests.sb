@@ -363,7 +363,7 @@ fn theLibrarysConformancesDoToo() throws {
     assertEqual(try written(unique), "seq 1(int 4)")
     assert((try back(unique)) == unique)
     assert((try back(Duration.seconds(2))) == Duration.seconds(2))
-    let moment = DateTime.fromUnix(1700000000)
+    let moment = UtcDateTime.fromUnix(1700000000)
     assert((try back(moment)) == moment)
     assert(try back(true))
     assert((try back(2.5)) == 2.5)

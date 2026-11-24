@@ -72,7 +72,7 @@ fn aLargeWriteWaitsForItsReader() async {
         stream.finishWriting()
         let reply = try await stream.readAll()
         assertEqual(reply.count, 300_000)
-        assertEqual(reply[299_999], U8(299_999 % 200 + 1))
+        assertEqual(reply[299_999], 200)
         await server.value
     } catch {
         assert(false, error.description())

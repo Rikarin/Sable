@@ -466,18 +466,18 @@ fn aDurationIsItsNanoseconds() throws {
 
 @test
 fn aDateTimeIsIso8601() throws {
-    let whole = DateTime.fromUnix(1700000000)
+    let whole = UtcDateTime.fromUnix(1700000000)
     assertEqual(try Json.encode(whole), "\"2023-11-14T22:13:20Z\"")
     assert((try roundTrip(whole)) == whole)
-    let exact = DateTime { secondsSinceEpoch: 1700000000, nanosecond: 5000100 }
+    let exact = UtcDateTime { secondsSinceEpoch: 1700000000, nanosecond: 5000100 }
     assertEqual(try Json.encode(exact), "\"2023-11-14T22:13:20.0050001Z\"")
     assert((try roundTrip(exact)) == exact)
-    let before = DateTime { secondsSinceEpoch: -1, nanosecond: 1 }
+    let before = UtcDateTime { secondsSinceEpoch: -1, nanosecond: 1 }
     assert((try roundTrip(before)) == before)
-    assert((try Json.decode(DateTime.self, from: "\"2023-11-15T00:13:20+02:00\"")) == whole)
-    assertEqual(failure(DateTime.self, "\"soon\""), "$: 'soon' is not an ISO 8601 date and time")
+    assert((try Json.decode(UtcDateTime.self, from: "\"2023-11-15T00:13:20+02:00\"")) == whole)
+    assertEqual(failure(UtcDateTime.self, "\"soon\""), "$: 'soon' is not an ISO 8601 date and time")
     do {
-        let _ = try Json.encode(DateTime.fromUnix(400000000000))
+        let _ = try Json.encode(UtcDateTime.fromUnix(400000000000))
         fail("a year of five digits was written")
     } catch {
         assert(error.description().hasPrefix("$: ISO 8601 has no year 14"))

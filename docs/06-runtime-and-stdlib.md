@@ -854,7 +854,7 @@ Sable.Net           Url (WHATWG URL parsing, as browsers do: WPT's
                     tools/idna-tables.py) and Punycode (RFC 3492)
 Sable.Serialize     Serializable (encode(to:), static decode(from:)) for
                     the primitives, UUID, optionals, arrays, Set, String-keyed
-                    dictionaries, Duration, DateTime and JsonValue;
+                    dictionaries, Duration, UtcDateTime and JsonValue;
                     @derive(Serializable) with @serialize (§6.5), written
                     against Encoder and Decoder, protocols on serde's data
                     model (null, Bool, integers, floats, strings, bytes,

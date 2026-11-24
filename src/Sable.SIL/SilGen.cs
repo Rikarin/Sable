@@ -7734,6 +7734,33 @@ public sealed partial class SilGen {
 
         /// <summary>'move x': a local's value taken out of its slot; anything else is already a value of its own.</summary>
         SilValue? Move(BoundExpression operand) {
+            // One closures share, in a box: an array's buffer is taken where no
+            // closure holds the box any more — 'assert(xs.isEmpty)' has come
+            // and gone — so that 'move' gives the only reference to it, and
+            // copied where one does, which may read it yet.
+            if (operand is BoundLocalAccess { Local: var shared } && _boxed.Contains(shared)
+                && closure?.Captures.ContainsKey(shared) != true
+                && _slots.TryGetValue(shared, out var boxSlot) && LowerType(shared.Type) is ArrayType array) {
+                var taken = function.AddBlock();
+                var copied = function.AddBlock();
+                var moved = function.AddBlock();
+                Jump(new CondBranchInst(Emit(new BuiltinInst("ref_is_unique", SilType.Bool, boxSlot)), taken, [], copied, []));
+
+                _current = taken;
+                var borrows = new List<SilValue>();
+                var address = LocalAddress(shared, operand.Syntax, borrows)!;
+                var value = Emit(new LoadInst(address, LoadKind.Take));
+                Emit(new StoreInst(Emit(new BuiltinInst("array_empty", array)), address, StoreKind.Init));
+                EndAll(borrows);
+                Branch(moved, value);
+
+                _current = copied;
+                Branch(moved, Owned(Expression(operand)!));
+
+                _current = moved;
+                return moved.AddArgument(array);
+            }
+
             var slot = operand switch {
                 BoundLocalAccess local when _slots.TryGetValue(local.Local, out var found) && !_boxed.Contains(local.Local)
                     && closure?.Captures.ContainsKey(local.Local) != true => found,

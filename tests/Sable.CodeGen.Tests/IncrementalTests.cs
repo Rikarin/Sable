@@ -1087,7 +1087,7 @@ public sealed class IncrementalTests {
         Assert.Equal(flags, NativeBuild.PlatformLinkFlags(platform));
         Assert.Equal(
             ["a.o", "runtime.o", "-o", "program", ..flags],
-            NativeObjects.LinkArguments(["a.o", "runtime.o"], "program", platform)
+            NativeObjects.LinkArguments(["a.o", "runtime.o"], "program", platform, NativeOptions.Of(optimise: false, debug: false))
         );
     }
 

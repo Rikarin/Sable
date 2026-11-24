@@ -567,4 +567,46 @@ public sealed class ClosureTests {
                 let later = reader.both()
                 print("\(later()) \(reader.name)")
             """);
+
+    /// <summary>
+    ///     An array a closure has read and is done with moves as any does:
+    ///     its buffer goes with it. While a closure still holds it, 'move'
+    ///     gives a copy, and the closure sees what it did.
+    /// </summary>
+    [Fact, Native]
+    public void AnArrayAClosureIsDoneWithMovesItsBuffer() =>
+        Prints(
+            "true\n3 2\n1024\n",
+            """
+            fn check(_ ok: () -> Bool) { if !ok() { print("no") } }
+            fn room(_ xs: consuming U8[>..]) -> Int {
+                var mine = move xs
+                mine.removeAll(keepingCapacity: true)
+                return mine.capacity
+            }
+            fn longer(_ xs: consuming Int[>..]) -> Int {
+                var mine = move xs
+                mine.append(9)
+                return mine.count
+            }
+            """,
+            """
+                var bytes: U8[>..] = []
+                bytes.reserveCapacity(1000)
+                check { bytes.isEmpty }
+                bytes.append(1)
+                print(room(move bytes) >= 1000)
+
+                var held: Int[>..] = [1]
+                held.append(2)
+                let later = { held.count }
+                let count = longer(move held)
+                print("\(count) \(later())")
+
+                let pool = BufferPool()
+                var rented = pool.rent(minimumCapacity: 1000)
+                check { rented.capacity >= 1000 }
+                pool.giveBack(move rented)
+                print(pool.rent(minimumCapacity: 1000).capacity)
+            """);
 }

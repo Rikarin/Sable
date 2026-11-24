@@ -1,0 +1,383 @@
+module FormatTests
+
+// A format that is not JSON, through the Encoder and Decoder protocols: a
+// tree of values that keeps what JSON does not — an integer from a float,
+// bytes, a struct's name, a case by itself. What a derived or the library's
+// own conformance writes for it, it reads back.
+
+import Sable.Collections
+import Sable.Serialize
+import Sable.Testing
+import Sable.Time
+
+final class Node {
+    let label: String
+    let text: String
+    var children: Node[>..] = []
+    init(_ label: String, _ text: String = "") {
+        self.label = label
+        self.text = text
+    }
+    // "struct Point(x: int 1, y: int 2)", and so on.
+    fn describe() -> String {
+        var all = label
+        if !text.isEmpty {
+            all = all + " " + text
+        }
+        if !children.isEmpty {
+            all = all + "("
+            var first = true
+            for child in children {
+                all = all + (first ? "" : ", ") + child.describe()
+                first = false
+            }
+            all = all + ")"
+        }
+        return all
+    }
+}
+
+final class TreeEncoder: Encoder {
+    var stack: Node[>..] = [Node("root")]
+    var flattening: Bool = false
+    var flattened: Bool[>..] = []
+    fn add(_ node: Node) throws(SerializeError) {
+        if flattening {
+            throw SerializeError.InvalidValue(path: "", reason: "not a struct")
+        }
+        stack[stack.count - 1].children.append(node)
+    }
+    fn begin(_ node: Node) throws(SerializeError) {
+        flattened.append(flattening)
+        if flattening {
+            flattening = false
+            return
+        }
+        try add(node)
+        stack.append(node)
+    }
+    fn end() {
+        if !flattened.removeLast() {
+            let _ = stack.removeLast()
+        }
+    }
+    fn encodeNull() throws(SerializeError) {
+        try add(Node("null"))
+    }
+    fn encodeBool(_ value: Bool) throws(SerializeError) {
+        try add(Node("bool", "\(value)"))
+    }
+    fn encodeInt(_ value: Int) throws(SerializeError) {
+        try add(Node("int", "\(value)"))
+    }
+    fn encodeUInt(_ value: U64) throws(SerializeError) {
+        try add(Node("uint", "\(value)"))
+    }
+    fn encodeFloat(_ value: F64) throws(SerializeError) {
+        try add(Node("float", "\(value)"))
+    }
+    fn encodeString(_ value: String) throws(SerializeError) {
+        try add(Node("string", value))
+    }
+    fn encodeBytes(_ value: U8[>..]) throws(SerializeError) {
+        let node = Node("bytes")
+        for byte in value {
+            node.children.append(Node("byte", "\(byte)"))
+        }
+        try add(node)
+    }
+    fn beginSequence(count: Int?) throws(SerializeError) {
+        try begin(Node("seq", sized(count)))
+    }
+    fn endSequence() throws(SerializeError) {
+        end()
+    }
+    fn beginMap(count: Int?) throws(SerializeError) {
+        try begin(Node("map", sized(count)))
+    }
+    fn encodeKey(_ key: String) throws(SerializeError) {
+        try add(Node("key", key))
+    }
+    fn endMap() throws(SerializeError) {
+        end()
+    }
+    fn beginStruct(_ name: String, count: Int?) throws(SerializeError) {
+        try begin(Node("struct", name + " " + sized(count)))
+    }
+    fn encodeField(_ key: String) throws(SerializeError) {
+        try add(Node("key", key))
+    }
+    fn endStruct() throws(SerializeError) {
+        end()
+    }
+    fn flattenNext() throws(SerializeError) {
+        flattening = true
+    }
+    fn encodeUnitCase(_ name: String, of type: String) throws(SerializeError) {
+        try add(Node("case", name))
+    }
+    fn beginCase(_ name: String, of type: String) throws(SerializeError) {
+        try begin(Node("case", name))
+    }
+    fn endCase() throws(SerializeError) {
+        end()
+    }
+    var root: Node => stack[0].children[0]
+}
+
+fn sized(_ count: Int?) -> String {
+    if let count = count {
+        return "\(count)"
+    }
+    return "?"
+}
+
+final class TreeDecoder: Decoder {
+    let node: Node?
+    let path: String
+    let excluded: String[>..]
+    init(_ node: Node?, _ path: String, excluded: String[>..] = []) {
+        self.node = node
+        self.path = path
+        self.excluded = excluded
+    }
+    var label: String => node?.label ?? "nothing"
+    var isMissing: Bool => node == none
+    var isNull: Bool => label == "null"
+    var kind: DecodedKind {
+        get {
+            return match label {
+                case "nothing" => .Missing
+                case "null"    => .Null
+                case "bool"    => .Bool
+                case "string"  => .String
+                case "bytes"   => .Bytes
+                case "seq"     => .Sequence
+                case "map"     => .Map
+                case "struct"  => .Map
+                case _         => .Number
+            }
+        }
+    }
+    fn take(_ wanted: String) throws(SerializeError) -> Node {
+        if let node = node {
+            if node.label == wanted {
+                return node
+            }
+        }
+        throw mismatch(wanted)
+    }
+    fn decodeBool() throws(SerializeError) -> Bool {
+        return (try take("bool")).text == "true"
+    }
+    fn decodeInt() throws(SerializeError) -> Int {
+        let taken = try take("int")
+        return try! Int.parse(taken.text)
+    }
+    fn decodeUInt() throws(SerializeError) -> U64 {
+        let taken = try take("uint")
+        return try! U64.parse(taken.text)
+    }
+    fn decodeFloat() throws(SerializeError) -> F64 {
+        if label == "int" {
+            return F64(try decodeInt())
+        }
+        let taken = try take("float")
+        return try! F64.parse(taken.text)
+    }
+    fn decodeString() throws(SerializeError) -> String {
+        return (try take("string")).text
+    }
+    fn decodeBytes() throws(SerializeError) -> U8[>..] {
+        var all: U8[>..] = []
+        for byte in (try take("bytes")).children {
+            all.append(try! U8.parse(byte.text))
+        }
+        return all
+    }
+    fn decodeSequence() throws(SerializeError) -> TreeDecoder[>..] {
+        var all: TreeDecoder[>..] = []
+        for child in (try take("seq")).children {
+            all.append(TreeDecoder(child, path + "/\(all.count)"))
+        }
+        return all
+    }
+    fn element(_ index: Int) -> TreeDecoder {
+        if let node = node {
+            if node.label == "seq" && index < node.children.count {
+                return TreeDecoder(node.children[index], path + "/\(index)")
+            }
+        }
+        return TreeDecoder(none, path + "/\(index)")
+    }
+    fn members() -> DecodedMember<TreeDecoder>[>..] {
+        var all: DecodedMember<TreeDecoder>[>..] = []
+        if let node = node {
+            if node.label == "map" || node.label == "struct" {
+                var i = 0
+                while i < node.children.count {
+                    let key = node.children[i].text
+                    if !excluded.contains(key) {
+                        all.append(DecodedMember(key: key, value: TreeDecoder(node.children[i + 1], path + "/" + key)))
+                    }
+                    i += 2
+                }
+            }
+        }
+        return all
+    }
+    fn decodeMap() throws(SerializeError) -> DecodedMember<TreeDecoder>[>..] {
+        try beginStruct("map")
+        return members()
+    }
+    fn beginStruct(_ name: String) throws(SerializeError) {
+        if label != "map" && label != "struct" {
+            throw mismatch(name)
+        }
+    }
+    fn field(_ key: String) -> TreeDecoder {
+        for member in members() {
+            if member.key == key {
+                return member.value
+            }
+        }
+        return TreeDecoder(none, path + "/" + key)
+    }
+    fn hasField(_ key: String) -> Bool {
+        return !field(key).isMissing
+    }
+    fn excluding(_ keys: String[>..]) -> TreeDecoder {
+        var all = excluded
+        for key in keys {
+            all.append(key)
+        }
+        return TreeDecoder(node, path, excluded: all)
+    }
+    fn caseName() throws(SerializeError) -> String {
+        return (try take("case")).text
+    }
+    fn casePayload() -> TreeDecoder {
+        if let node = node {
+            if node.label == "case" && !node.children.isEmpty {
+                return TreeDecoder(node.children[0], path + "/" + node.text)
+            }
+        }
+        return TreeDecoder(none, path)
+    }
+    fn mismatch(_ expected: String) -> SerializeError {
+        return node == none
+            ? SerializeError.MissingField(path: path)
+            : SerializeError.TypeMismatch(path: path, expected: expected, found: label)
+    }
+    fn invalid(_ reason: String) -> SerializeError {
+        return SerializeError.InvalidValue(path: path, reason: reason)
+    }
+    fn unknownCase(_ name: String) -> SerializeError {
+        return SerializeError.UnknownCase(path: path, name: name)
+    }
+}
+
+fn tree<T: Serializable>(_ value: T) throws(SerializeError) -> Node {
+    let encoder = TreeEncoder()
+    try value.encode(to: encoder)
+    return encoder.root
+}
+
+fn written<T: Serializable>(_ value: T) throws(SerializeError) -> String {
+    return (try tree(value)).describe()
+}
+
+fn back<T: Serializable>(_ value: T) throws(SerializeError) -> T {
+    return try T.decode(from: TreeDecoder(try tree(value), ""))
+}
+
+@derive(Serializable, Equatable, Debug)
+enum Light {
+    Red
+    Green
+}
+
+@derive(Serializable, Equatable, Debug)
+union Shape {
+    Circle(radius: F64)
+    Point(Int, Int)
+    Empty
+}
+
+@derive(Serializable, Equatable, Debug)
+@serialize(tag: "type")
+union Event {
+    Key(code: Int)
+    Idle
+}
+
+@derive(Serializable, Equatable, Debug)
+@serialize(untagged)
+union Id {
+    Number(Int)
+    Name(String)
+    Nothing
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Meta {
+    var version: U64
+    var light: Light
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Record {
+    var name: String
+    @serialize(flatten)
+    var meta: Meta
+    var ids: Id[>..]
+    var shape: Shape
+    var note: String?
+}
+
+@test
+fn aDerivedTypeGoesThroughAnyFormat() throws {
+    let record = Record { name: "r", meta: Meta { version: 3, light: .Green }, ids: [.Number(1), .Name("a"), .Nothing], shape: .Circle(radius: 1.5), note: none }
+    assertEqual(
+        try written(record),
+        "struct Record ?(key name, string r, key version, uint 3, key light, case Green, key ids, seq 3(int 1, string a, null), key shape, case Circle(struct Circle 1(key radius, float 1.5)), key note, null)"
+    )
+    assert((try back(record)) == record)
+    assertEqual(try written(Meta { version: 1, light: .Red }), "struct Meta 2(key version, uint 1, key light, case Red)")
+    assertEqual(try written(Shape.Point(1, 2)), "case Point(seq 2(int 1, int 2))")
+    assertEqual(try written(Event.Key(code: 2)), "struct Event 2(key type, string Key, key code, int 2)")
+    let events: Event[>..] = [.Key(code: 2), .Idle]
+    assert((try back(events)) == events)
+    let shapes: Shape[>..] = [.Point(1, 2), .Empty]
+    assert((try back(shapes)) == shapes)
+}
+
+@test
+fn theLibrarysConformancesDoToo() throws {
+    var counts = Dictionary<String, Int>()
+    counts["one"] = 1
+    assertEqual(try written(counts), "map 1(key one, int 1)")
+    assertEqual((try back(counts))["one"] ?? 0, 1)
+    var unique = Set<Int>()
+    let _ = unique.insert(4)
+    assertEqual(try written(unique), "seq 1(int 4)")
+    assert((try back(unique)) == unique)
+    assert((try back(Duration.seconds(2))) == Duration.seconds(2))
+    let moment = DateTime.fromUnix(1700000000)
+    assert((try back(moment)) == moment)
+    assert(try back(true))
+    assert((try back(2.5)) == 2.5)
+}
+
+@test
+fn aDocumentOfAnyFormatIsAJsonValue() throws {
+    let record = Record { name: "r", meta: Meta { version: 3, light: .Green }, ids: [.Number(1)], shape: .Empty, note: none }
+    let ids = try JsonValue.decode(from: TreeDecoder(try tree(record), "").field("ids"))
+    assertEqual(try Json.encode(ids), "[1.0]")
+    let encoder = TreeEncoder()
+    try encoder.encodeBytes([1, 255])
+    assertEqual(try Json.encode(try JsonValue.decode(from: TreeDecoder(encoder.root, ""))), "[1.0,255.0]")
+    let map = try JsonValue.decode(from: TreeDecoder(try tree(Event.Idle), ""))
+    assertEqual(try Json.encode(map), "{\"type\":\"Idle\"}")
+    assertEqual(try written(map), "map 1(key type, string Idle)")
+}

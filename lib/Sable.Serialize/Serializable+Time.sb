@@ -1,0 +1,50 @@
+module Sable.Serialize
+
+import Sable.Time
+
+// Sable.Time's values: a Duration as its whole number of nanoseconds, exact,
+// as Go writes one; a DateTime as an ISO 8601 string in UTC, with as much of
+// a fraction of a second as it has.
+
+extension Duration: Serializable {
+    /// The duration's nanoseconds, an integer.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.encodeInt(totalNanoseconds)
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Duration {
+        return Duration.nanoseconds(try decoder.decodeInt())
+    }
+}
+
+extension DateTime: Serializable {
+    /// `"2026-11-17T09:05:03Z"`, or `"2026-11-17T09:05:03.25Z"`;
+    /// a year ISO 8601 cannot write in four digits is refused.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        if year < 0 || year > 9999 {
+            throw SerializeError.InvalidValue(path: "$", reason: "ISO 8601 has no year \(year)")
+        }
+        try encoder.encodeString(isoWithFraction(self))
+    }
+    /// Any ISO 8601 text `DateTime.parse` reads.
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> DateTime {
+        let text = try decoder.decodeString()
+        guard let moment = try? DateTime.parse(text) else {
+            throw decoder.invalid("'\(text)' is not an ISO 8601 date and time")
+        }
+        return moment
+    }
+}
+
+// 'iso8601()', which is to the second, with the nanoseconds between the
+// seconds and the 'Z', no trailing zeros.
+fn isoWithFraction(_ moment: DateTime) -> String {
+    let whole = moment.iso8601()
+    if moment.nanosecond == 0 {
+        return whole
+    }
+    var fraction = moment.nanosecond.toString()
+    while fraction.count < 9 {
+        fraction = "0" + fraction
+    }
+    return whole.trimmedEnd(where: { c in c == 'Z' }) + "." + fraction.trimmedEnd(where: { c in c == '0' }) + "Z"
+}

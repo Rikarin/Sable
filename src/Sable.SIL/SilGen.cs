@@ -2355,12 +2355,17 @@ public sealed partial class SilGen {
 
                     classType.Superclass = superType;
                     classType.Fields.AddRange(superType.Fields);
+                    classType.LetFields.UnionWith(superType.LetFields);
                 }
 
                 var members = TypeSubstitution.For(named);
                 foreach (var field in StoredFields(named.OriginalDefinition)) {
                     if (Lower(members.Apply(field.Type)) is not { } fieldType) {
                         return null;
+                    }
+
+                    if (field is { IsMutable: false, IsLazy: false }) {
+                        classType.LetFields.Add(classType.Fields.Count);
                     }
 
                     classType.Fields.Add((field.Name, Stored(field.ReferenceKind, fieldType)));

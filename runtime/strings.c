@@ -1019,13 +1019,81 @@ static bool format_special(double value, char *text, size_t size) {
     return false;
 }
 
+// The shortest decimal that round-trips, as printf's %.Ne would write it,
+// when it has at most 15 digits: an integer n and the fewest decimal places k
+// with n / 10^k the value. Both are exact doubles and division rounds
+// correctly, so the quotient is the double the decimal names. Two decimals of
+// 15 digits are never the same double, so there is one n at most for a k; and
+// the value times 10^k, each rounding a part in 2^53 of it, is within half of
+// that n. False when there is none.
+static bool decimal_f64(double value, char *scientific) {
+    static const double powers[] = {
+        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15,
+        1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
+    };
+
+    double magnitude = fabs(value);
+    for (int places = 0; places <= 22; places++) {
+        double scaled = magnitude * powers[places];
+        if (scaled >= 1e15) {
+            return false;
+        }
+
+        uint64_t n = (uint64_t)(scaled + 0.5);
+        if ((double)n / powers[places] != magnitude) {
+            continue;
+        }
+
+        char digits[20];
+        int count = 0;
+        for (; n != 0; n /= 10) {
+            digits[count++] = (char)('0' + n % 10);
+        }
+
+        char *out = scientific;
+        if (value < 0) {
+            *out++ = '-';
+        }
+
+        for (int i = count - 1; i >= 0; i--) {
+            *out++ = digits[i];
+        }
+
+        int exponent = count - 1 - places;
+        *out++ = 'e';
+        if (exponent < 0) {
+            *out++ = '-';
+            exponent = -exponent;
+        }
+
+        if (exponent >= 10) {
+            *out++ = (char)('0' + exponent / 10);
+        }
+
+        *out++ = (char)('0' + exponent % 10);
+        *out = '\0';
+        return true;
+    }
+
+    return false;
+}
+
 static void format_f64(double value, char *text, size_t size) {
     if (format_special(value, text, size)) {
         return;
     }
 
+    // Between these, every decimal of 15 digits or fewer is one that
+    // decimal_f64 tries: what it does not find has 16 or 17.
     char scientific[40];
-    for (int precision = 1; precision <= 17; precision++) {
+    double magnitude = fabs(value);
+    bool tried = magnitude >= 1e-7 && magnitude < 1e15;
+    if (tried && decimal_f64(value, scientific)) {
+        layout_float(scientific, text, size);
+        return;
+    }
+
+    for (int precision = tried ? 16 : 1; precision <= 17; precision++) {
         snprintf(scientific, sizeof scientific, "%.*e", precision - 1, value);
         if (precision == 17 || strtod(scientific, NULL) == value) {
             break;

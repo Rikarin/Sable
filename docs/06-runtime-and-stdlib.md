@@ -853,14 +853,17 @@ Sable.Net           Url (WHATWG URL parsing, as browsers do: WPT's
                     Idna (UTS #46 toASCII/toUnicode, tables from
                     tools/idna-tables.py) and Punycode (RFC 3492)
 Sable.Serialize     Serializable (encode(to:), static decode(from:)) for
-                    the primitives, UUID, optionals, arrays, String-keyed
-                    dictionaries and JsonValue; @derive(Serializable) with
-                    @serialize (§6.5); Json.encode/decode, an Encoder that
-                    writes JSON as it goes and a Decoder over a one-pass
-                    index of the document, every error at its path
-                    ($.items[3].name); JsonValue. Not yet: format-agnostic
-                    Encoder/Decoder protocols, TOML, MessagePack, and the
-                    zero-copy @inline_layout path
+                    the primitives, UUID, optionals, arrays, Set, String-keyed
+                    dictionaries, Duration, DateTime and JsonValue;
+                    @derive(Serializable) with @serialize (§6.5), written
+                    against Encoder and Decoder, protocols on serde's data
+                    model (null, Bool, integers, floats, strings, bytes,
+                    sequences, maps, structs, union cases) that any format
+                    can conform to; JsonEncoder, which writes JSON as it
+                    goes, and JsonDecoder, over a one-pass index of the
+                    document, every error at its path ($.items[3].name);
+                    Json.encode/decode; JsonValue. Not yet: TOML,
+                    MessagePack, and the zero-copy @inline_layout path
 Sable.Concurrency   Channel and ThrowingChannel (unbounded, or bounded with
                     a full mode: wait — the sender's backpressure — or
                     drop oldest, newest or the write; close(error:);
@@ -1180,6 +1183,10 @@ struct Account {
     var session: String = ""
     @serialize(defaulted)           // its initial value when the key is missing
     var retries: Int = 3
+    @serialize(flatten)             // its members among this struct's own
+    var contact: Contact
+    @serialize(flatten)             // a map: whatever keys are left over
+    var extra: Dictionary<String, Int>
 }
 
 @derive(Serializable)
@@ -1189,10 +1196,31 @@ union Event {
     Idle
 }
 // @serialize(tag: "t", content: "c"): adjacently, {"t": "Text", "c": "hi"}
+
+@derive(Serializable)
+@serialize(untagged)                // the payload alone; read as the first case it decodes as
+union Id {
+    Number(Int)                     // 3
+    Name(String)                    // "x"
+    Unknown                         // null: one case at most carries nothing
+}
 ```
 
-A missing optional reads as none; unknown keys are ignored. Not yet:
-`flatten` and untagged unions.
+A missing optional reads as none; unknown keys are ignored. What is
+flattened is anything written as a struct or a map — a derived struct, an
+internally or adjacently tagged union, a dictionary, a type parameter's value,
+which is asked as it is encoded — and a field of another type, or one that
+would write a key twice, is an error where it is declared (S3071).
+
+A conformance, derived or not, is generic over the format:
+`encode<E: Encoder>(to encoder: E)` and `static decode<D: Decoder>(from
+decoder: D)`. An `Encoder` is told a value's parts in order (`beginStruct`,
+`encodeField`, …, `endStruct`), with counts for formats that write them first;
+a `Decoder` is a value that can be asked for its parts, as decoders, more than
+once, which is what lets an untagged union try its cases. A format conforms
+to both and serves every type. In JSON a struct and a map are objects, bytes a
+base64 string, a `Duration` its whole nanoseconds and a `DateTime` an ISO 8601
+string in UTC.
 
 Conformances defined outside the standard library are written by source
 generators (docs/08). A package declares a `@generator("name")` function, and

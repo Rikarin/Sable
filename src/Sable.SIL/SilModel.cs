@@ -672,6 +672,13 @@ public sealed class ClassType(string name) : NominalType(name) {
     public ClassType? Superclass { get; set; }
 
     /// <summary>
+    ///     The fields declared <c>let</c>, a superclass's among them: written
+    ///     once, by the initialiser, before anything else can read them. Known
+    ///     from lowering alone; SIL read as text says none.
+    /// </summary>
+    public HashSet<int> LetFields { get; } = [];
+
+    /// <summary>
     ///     The first field that may be left empty when the object is made —
     ///     all zeros, holding nothing — or null when every field must be
     ///     stored first: a generator's frame, whose slots fill as its body runs.
@@ -1307,8 +1314,22 @@ public static class SharedStorage {
         AccessOf(instruction) is { } access && Contains(access.Address) ? access : null;
 
     /// <summary>
+    ///     Storage that nothing changes once it can be read — an object's
+    ///     <c>let</c> field, or a part of one — so that no read of it can
+    ///     overlap a change.
+    /// </summary>
+    static bool IsImmutable(SilValue address) =>
+        address switch {
+            RefElementAddrInst { Reference.Type: ClassType type } field => type.LetFields.Contains(field.Field),
+            StructElementAddrInst element => IsImmutable(element.Address),
+            TupleElementAddrInst element => IsImmutable(element.Address),
+            _ => false,
+        };
+
+    /// <summary>
     ///     Puts an <c>access_check_read</c> or <c>access_check_modify</c> before
-    ///     every plain access to shared storage, as lowered. Explicit, the
+    ///     every plain access to shared storage, as lowered, but a read of what
+    ///     never changes: an object's <c>let</c> field. Explicit, the
     ///     checks are what the passes move and copy: inlined, a callee's
     ///     access through an inout parameter becomes one through the caller's
     ///     field, which is the access in progress and must not be checked
@@ -1318,7 +1339,7 @@ public static class SharedStorage {
     public static void InsertChecks(SilModule module) {
         foreach (var block in module.Functions.SelectMany(static f => f.Blocks)) {
             for (var i = 0; i < block.Instructions.Count; i++) {
-                if (CheckedAccessOf(block.Instructions[i]) is not var (address, modify)) {
+                if (CheckedAccessOf(block.Instructions[i]) is not var (address, modify) || !modify && IsImmutable(address)) {
                     continue;
                 }
 

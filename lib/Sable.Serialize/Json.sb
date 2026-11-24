@@ -12,25 +12,25 @@ module Sable.Serialize
 public struct Json {
     /// The value as JSON: compact, or indented by that many spaces.
     public static fn encode<T: Serializable>(_ value: T, indent: Int = 0) throws(SerializeError) -> String {
-        let encoder = Encoder(indent: indent)
+        let encoder = JsonEncoder(indent: indent)
         try value.encode(to: encoder)
         return encoder.text()
     }
 
     /// The value as JSON, UTF-8.
     public static fn encodeBytes<T: Serializable>(_ value: T) throws(SerializeError) -> U8[>..] {
-        let encoder = Encoder()
+        let encoder = JsonEncoder()
         try value.encode(to: encoder)
         return encoder.bytes()
     }
 
     /// The value of the type the JSON text holds.
     public static fn decode<T: Serializable>(_ type: T.Type, from text: String) throws(SerializeError) -> T {
-        return try T.decode(from: try Decoder.json(text))
+        return try T.decode(from: try JsonDecoder.parse(text))
     }
 
     /// The value of the type the JSON's UTF-8 bytes hold.
     public static fn decode<T: Serializable>(_ type: T.Type, fromBytes bytes: U8[>..]) throws(SerializeError) -> T {
-        return try T.decode(from: try Decoder.json(bytes: bytes))
+        return try T.decode(from: try JsonDecoder.parse(bytes: bytes))
     }
 }

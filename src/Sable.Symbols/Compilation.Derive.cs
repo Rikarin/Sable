@@ -308,9 +308,14 @@ public sealed partial class Compilation {
 
         if (member is DerivedMember.Encode or DerivedMember.Decode) {
             var error = SerializeType("SerializeError")!;
+            // 'encode<E: Encoder>(to encoder: E)', 'decode<D: Decoder>(from decoder: D)'.
+            var format = new TypeParameterSymbol(member == DerivedMember.Encode ? "E" : "D", function, null, 0) {
+                Constraints = [SerializeType(member == DerivedMember.Encode ? "Encoder" : "Decoder")!],
+            };
+            function.TypeParameters = [format];
             function.Parameters = member == DerivedMember.Encode
-                ? [new ParameterSymbol("encoder", "to", function, null, 0) { TypeResolver = () => SerializeType("Encoder")! }]
-                : [new ParameterSymbol("decoder", "from", function, null, 0) { TypeResolver = () => SerializeType("Decoder")! }];
+                ? [new ParameterSymbol("encoder", "to", function, null, 0) { TypeResolver = () => format }]
+                : [new ParameterSymbol("decoder", "from", function, null, 0) { TypeResolver = () => format }];
             function.ThrownTypeResolver = () => error;
             function.ReturnTypeResolver = member == DerivedMember.Encode ? () => Core.Void : () => self;
             type.AddMember(function);

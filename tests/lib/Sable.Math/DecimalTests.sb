@@ -395,7 +395,7 @@ fn theBitsAreDotNetsLayout() {
     assertEqual(Decimal.fromBits(bits), Decimal(-125, scale: 2))
     assertEqual(Decimal.fromBits(Decimal.max.bits), Decimal.max)
     // A scale past 28, and bits .NET keeps zero.
-    assert(Decimal.fromBits((29 as U128) << 112) == none)
+    assert(Decimal.fromBits(29 << 112) == none)
     assert(Decimal.fromBits((1 as U128) << 96) == none)
     assert(Decimal.fromBits((1 as U128) << 120) == none)
     // A negative zero's sign is dropped.

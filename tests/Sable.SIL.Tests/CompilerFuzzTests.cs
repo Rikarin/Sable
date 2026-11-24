@@ -39,8 +39,13 @@ namespace Sable.SIL.Tests;
 ///     </para>
 /// </remarks>
 public sealed class CompilerFuzzTests(Xunit.Abstractions.ITestOutputHelper output) {
-    /// <summary>How long one input may take through every stage: a mutant that is slower than this has found a hang, or something close.</summary>
-    static readonly TimeSpan Limit = TimeSpan.FromSeconds(Setting("SABLE_FUZZ_CASE_SECONDS") ?? 20);
+    /// <summary>
+    ///     How long one input may take through every stage: a mutant that is
+    ///     slower than this has found a hang, or something close. An input
+    ///     takes 2–3s warm, but with every test project running at once a
+    ///     seed has gone past 20s, so the limit leaves room for a loaded machine.
+    /// </summary>
+    static readonly TimeSpan Limit = TimeSpan.FromSeconds(Setting("SABLE_FUZZ_CASE_SECONDS") ?? 60);
 
     /// <summary>
     ///     How long the first input may take: it pays for the whole compiler

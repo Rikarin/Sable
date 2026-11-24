@@ -777,8 +777,21 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     Environment (variables listed, set and removed under
                     'unsafe', arguments as text and bytes, home, temporary
                     and known folders by XDG, Apple and Windows rules)
-Sable.Serialize     Encoder/Decoder protocols, conformance synthesis via
-                    @derive(Serializable), JSON, TOML, MessagePack, and the
+Sable.Net           Url (WHATWG URL parsing, as browsers do: WPT's
+                    urltestdata.json passes whole; resolution, setters,
+                    origin, query items), Host (domain, IPv4, IPv6,
+                    opaque), PercentEncoding with the standard's encode
+                    sets, application/x-www-form-urlencoded (QueryItem),
+                    Idna (UTS #46 toASCII/toUnicode, tables from
+                    tools/idna-tables.py) and Punycode (RFC 3492)
+Sable.Serialize     Serializable (encode(to:), static decode(from:)) for
+                    the primitives, UUID, optionals, arrays, String-keyed
+                    dictionaries and JsonValue; @derive(Serializable) with
+                    @serialize (§6.5); Json.encode/decode, an Encoder that
+                    writes JSON as it goes and a Decoder over a one-pass
+                    index of the document, every error at its path
+                    ($.items[3].name); JsonValue. Not yet: format-agnostic
+                    Encoder/Decoder protocols, TOML, MessagePack, and the
                     zero-copy @inline_layout path
 Sable.Concurrency   Channel, Mutex RwLock Condition Semaphore Barrier
                     CountdownLatch Once Lazy, AsyncMutex AsyncSemaphore,
@@ -930,6 +943,38 @@ Derivation is implemented as compiler-known conformance synthesis against the
 always-present `FieldDescriptor` metadata, not as source generation. It
 composes with generics (`@derive(Equatable)` on `Pair<T, U>` yields a
 conditional conformance `where T: Equatable, U: Equatable`).
+
+`Serializable` writes a struct as an object of its fields, an enum as its
+case's name, and a union's case tagged externally (`{"Circle": {"radius":
+1}}`, a case that carries nothing as its bare name) unless the type says
+otherwise; a payload of one unlabelled value is that value, of labelled
+values an object, of several unlabelled ones an array. `@serialize` tunes
+it, every option checked where it is written:
+
+```sable
+@derive(Serializable)
+@serialize(renameAll: .SnakeCase)   // or .CamelCase, .PascalCase, .ScreamingSnakeCase, .KebabCase
+struct Account {
+    var userName: String            // "user_name"
+    @serialize(rename: "id")
+    var accountNumber: Int
+    @serialize(skip)                // never written; its initial value when read
+    var session: String = ""
+    @serialize(defaulted)           // its initial value when the key is missing
+    var retries: Int = 3
+}
+
+@derive(Serializable)
+@serialize(tag: "type")             // internally: {"type": "Click", "x": 1, "y": 2}
+union Event {
+    Click(x: Int, y: Int)
+    Idle
+}
+// @serialize(tag: "t", content: "c"): adjacently, {"t": "Text", "c": "hi"}
+```
+
+A missing optional reads as none; unknown keys are ignored. Not yet:
+`flatten` and untagged unions.
 
 Conformances defined outside the standard library are written by source
 generators (docs/08). A package declares a `@generator("name")` function, and

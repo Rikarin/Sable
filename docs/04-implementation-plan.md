@@ -1248,8 +1248,9 @@ does not conform is an error naming the field that is why. Operators of
 generic types now work generally: the binder finds them through the operand's
 type arguments and SIL lowering instantiates them from the operands. Classes
 and actors are refused: an object has identity, and equality by its fields
-would contradict it. Not yet: `Copy` and `Serializable` (the latter waits for
-reflection), optional and array fields (neither conforms to the protocols
+would contradict it. `Serializable` derives too, with `@serialize` (docs/06
+§6.5), as bound trees calling each field type's own `encode`/`decode`. Not
+yet: `Copy`, optional and array fields (neither conforms to the protocols
 yet), and a directly recursive union, which SIL lowering does not lay out.
 
 ### Against .NET

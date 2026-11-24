@@ -1,0 +1,324 @@
+module SerializableTests
+
+// Serializable, Encoder, Decoder and Json (Sable.Serialize), and what
+// '@derive(Serializable)' writes: round trips of every kind of value,
+// renamed, skipped and defaulted fields, naming policies, generic types,
+// enums, unions tagged each way, and errors that say where.
+
+import Sable.Serialize
+import Sable.Testing
+
+@derive(Serializable, Equatable, Debug)
+struct Everything {
+    var flag: Bool
+    var small: I8
+    var count: Int
+    var big: U64
+    var ratio: F64
+    var single: F32
+    var name: String
+    var letter: Char
+    var nickname: String?
+    var tags: String[>..]
+    var grid: Int[>..][>..]
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Item {
+    var name: String
+    var price: F64
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Order {
+    var id: Int
+    var items: Item[>..]
+    var note: String?
+}
+
+@test
+fn everyKindOfValueRoundTrips() throws {
+    let value = Everything {
+        flag: true, small: -128, count: -9223372036854775807, big: 18446744073709551615, ratio: 0.1,
+        single: 1.5, name: "quote \" slash \\ newline \n tab \t bell \u{7} é 😀", letter: 'ж', nickname: none,
+        tags: ["a", "b"], grid: [[1, 2], [], [3]]
+    }
+    let text = try Json.encode(value)
+    assertEqual(text, "{\"flag\":true,\"small\":-128,\"count\":-9223372036854775807,\"big\":18446744073709551615,\"ratio\":0.1,\"single\":1.5,\"name\":\"quote \\\" slash \\\\ newline \\n tab \\t bell \\u0007 é 😀\",\"letter\":\"ж\",\"nickname\":null,\"tags\":[\"a\",\"b\"],\"grid\":[[1,2],[],[3]]}")
+    let back = try Json.decode(Everything.self, from: text)
+    assert(back == value)
+    let fromBytes = try Json.decode(Everything.self, fromBytes: try Json.encodeBytes(value))
+    assert(fromBytes == value)
+
+    // Optionals: a value, null, or not there at all.
+    var named = value
+    named.nickname = "ana"
+    assertEqual((try Json.decode(Everything.self, from: try Json.encode(named))).nickname ?? "-", "ana")
+    let order = try Json.decode(Order.self, from: "{\"id\": 1, \"items\": [], \"extra\": {\"ignored\": [1, 2]}}")
+    assert(order.note == none && order.items.isEmpty)
+}
+
+@test
+fn indentedOutput() throws {
+    let order = Order { id: 7, items: [Item { name: "a", price: 2.5 }], note: none }
+    assertEqual(try Json.encode(order, indent: 2), "{\n  \"id\": 7,\n  \"items\": [\n    {\n      \"name\": \"a\",\n      \"price\": 2.5\n    }\n  ],\n  \"note\": null\n}")
+    let empty: Int[>..] = []
+    assertEqual(try Json.encode(empty, indent: 4), "[]")
+}
+
+@derive(Serializable, Equatable, Debug)
+@serialize(renameAll: .SnakeCase)
+struct Account {
+    var userName: String
+    @serialize(rename: "id")
+    var accountNumber: Int
+    @serialize(skip)
+    var session: String = "none"
+    @serialize(defaulted)
+    var retries: Int = 3
+    var lastLogin: Int?
+}
+
+@test
+fn fieldsAreRenamedSkippedAndDefaulted() throws {
+    let account = Account { userName: "ana", accountNumber: 42, session: "secret", retries: 5, lastLogin: none }
+    let text = try Json.encode(account)
+    assertEqual(text, "{\"user_name\":\"ana\",\"id\":42,\"retries\":5,\"last_login\":null}")
+    let back = try Json.decode(Account.self, from: "{\"user_name\":\"bo\",\"id\":1}")
+    assertEqual(back.userName, "bo")
+    assertEqual(back.session, "none")
+    assertEqual(back.retries, 3)
+    assert(back.lastLogin == none)
+    assertEqual((try Json.decode(Account.self, from: text)).retries, 5)
+}
+
+@derive(Serializable, Equatable, Debug)
+@serialize(renameAll: .PascalCase)
+struct Pascal {
+    var someValue: Int
+}
+
+@derive(Serializable, Equatable, Debug)
+@serialize(renameAll: .ScreamingSnakeCase)
+struct Screaming {
+    var someValue: Int
+}
+
+@derive(Serializable, Equatable, Debug)
+@serialize(renameAll: .KebabCase)
+struct Kebab {
+    var someValue: Int
+}
+
+@derive(Serializable, Equatable, Debug)
+@serialize(renameAll: .CamelCase)
+struct Camel {
+    var someValue: Int
+}
+
+@test
+fn everyNamingPolicy() throws {
+    assertEqual(try Json.encode(Pascal { someValue: 1 }), "{\"SomeValue\":1}")
+    assertEqual(try Json.encode(Screaming { someValue: 1 }), "{\"SOME_VALUE\":1}")
+    assertEqual(try Json.encode(Kebab { someValue: 1 }), "{\"some-value\":1}")
+    assertEqual(try Json.encode(Camel { someValue: 1 }), "{\"someValue\":1}")
+    assertEqual(NamingPolicy.PascalCase.apply("aB"), "AB")
+    assertEqual(NamingPolicy.CamelCase.apply("SomeName"), "someName")
+    assertEqual(NamingPolicy.ScreamingSnakeCase.apply("a"), "A")
+    assertEqual(NamingPolicy.SnakeCase.apply(""), "")
+    assert(NamingPolicy.SnakeCase != NamingPolicy.KebabCase)
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Pair<A, B> {
+    var first: A
+    var second: B
+}
+
+fn roundTrip<T: Serializable>(_ value: T) throws(SerializeError) -> T {
+    return try Json.decode(T.self, from: try Json.encode(value))
+}
+
+@test
+fn genericTypesDeriveForEachConstruction() throws {
+    let pair: Pair<Int, String[>..]> = Pair(first: 1, second: ["x"])
+    assertEqual(try Json.encode(pair), "{\"first\":1,\"second\":[\"x\"]}")
+    // Compared as their JSON: a derived '==' of a generic type over an array
+    // is not lowered yet, whatever Serializable does.
+    assertEqual(try Json.encode(try roundTrip(pair)), try Json.encode(pair))
+    let inner: Pair<Bool, F64> = Pair(first: false, second: 2.0)
+    let nested: Pair<Pair<Bool, F64>, Item?> = Pair(first: inner, second: Item { name: "n", price: 1.0 })
+    assert((try roundTrip(nested)) == nested)
+    let overflow: Pair<Int, Int> = Pair(first: 0, second: 0)
+    assertEqual(failureLike(overflow, "{\"first\":9223372036854775808,\"second\":0}"), "$.first: 9223372036854775808 does not fit an Int")
+}
+
+fn failureLike<T: Serializable>(_ example: T, _ text: String) -> String {
+    return failure(T.self, text)
+}
+
+@derive(Serializable, Equatable, Debug)
+enum Direction {
+    North
+    South
+}
+
+@derive(Serializable, Equatable, Debug)
+union Shape {
+    Circle(radius: F64)
+    Rectangle(width: F64, height: F64)
+    Label(String)
+    Point(Int, Int)
+    @serialize(rename: "nothing")
+    Empty
+}
+
+@derive(Serializable, Equatable, Debug)
+@serialize(tag: "type")
+union Event {
+    Click(x: Int, y: Int)
+    Key(code: Int)
+    Idle
+}
+
+@derive(Serializable, Equatable, Debug)
+@serialize(tag: "t", content: "c")
+union Message {
+    Text(String)
+    Move(dx: Int, dy: Int)
+    Quit
+}
+
+@test
+fn enumsAndUnionsInEachTagging() throws {
+    assertEqual(try Json.encode(Direction.South), "\"South\"")
+    assert((try Json.decode(Direction.self, from: "\"North\"")) == .North)
+
+    let shapes: Shape[>..] = [.Circle(radius: 1.5), .Rectangle(width: 2.0, height: 3.0), .Label("x"), .Point(1, 2), .Empty]
+    let external = try Json.encode(shapes)
+    assertEqual(external, "[{\"Circle\":{\"radius\":1.5}},{\"Rectangle\":{\"width\":2.0,\"height\":3.0}},{\"Label\":\"x\"},{\"Point\":[1,2]},\"nothing\"]")
+    assert((try Json.decode(Shape[>..].self, from: external)) == shapes)
+
+    let events: Event[>..] = [.Click(x: 1, y: 2), .Key(code: 13), .Idle]
+    let insideTagged = try Json.encode(events)
+    assertEqual(insideTagged, "[{\"type\":\"Click\",\"x\":1,\"y\":2},{\"type\":\"Key\",\"code\":13},{\"type\":\"Idle\"}]")
+    assert((try Json.decode(Event[>..].self, from: insideTagged)) == events)
+
+    let messages: Message[>..] = [.Text("hi"), .Move(dx: -1, dy: 0), .Quit]
+    let adjacent = try Json.encode(messages)
+    assertEqual(adjacent, "[{\"t\":\"Text\",\"c\":\"hi\"},{\"t\":\"Move\",\"c\":{\"dx\":-1,\"dy\":0}},{\"t\":\"Quit\"}]")
+    assert((try Json.decode(Message[>..].self, from: adjacent)) == messages)
+}
+
+fn failure<T: Serializable>(_ type: T.Type, _ text: String) -> String {
+    do {
+        let _ = try Json.decode(type, from: text)
+        return "decoded"
+    } catch {
+        return error.description()
+    }
+}
+
+@test
+fn errorsSayWhere() {
+    assertEqual(failure(Order.self, "{\"id\":1,\"items\":[{\"name\":\"a\",\"price\":1},{\"price\":2}]}"), "$.items[1].name: missing")
+    assertEqual(failure(Order.self, "{\"id\":\"one\",\"items\":[]}"), "$.id: expected an integer, found a string")
+    assertEqual(failure(Order.self, "[]"), "$: expected an object (Order), found an array")
+    assertEqual(failure(Order.self, "{\"id\":1.5,\"items\":[]}"), "$.id: 1.5 is not an integer")
+    assertEqual(failure(Everything.self, "{\"flag\":true,\"small\":200}"), "$.small: out of an I8's range")
+    assertEqual(failure(Direction.self, "\"West\""), "$: no case 'West'")
+    assertEqual(failure(Shape.self, "{\"Hexagon\":{}}"), "$: no case 'Hexagon'")
+    assertEqual(failure(Shape.self, "{\"Circle\":{}}"), "$.Circle.radius: missing")
+    assertEqual(failure(Shape.self, "{\"a\":1,\"b\":2}"), "$: expected a case's name, or an object of one member, found an object")
+    assertEqual(failure(Event.self, "{\"type\":\"Key\"}"), "$.code: missing")
+    assertEqual(failure(Event.self, "{\"kind\":\"Key\"}"), "$.type: missing")
+    assertEqual(failure(Item.self, "{\"name\":\"a\",\"price\":1e999}"), "$.price: 1e999 is out of range")
+    assertEqual(failure(Item.self, "{\"name\":\"a\" \"price\":1}"), "not JSON: no ',' or end between values at byte 12")
+    assertEqual(failure(Item.self, "{\"weird key\":1}"), "$.name: missing")
+    do {
+        let _ = try Json.encode(Item { name: "nan", price: 0.0 / 0.0 })
+        fail("a NaN was written")
+    } catch {
+        assertEqual(error.description(), "$: JSON has no nan")
+    }
+    let error = SerializeError.Syntax(reason: "x")
+    assert(error == SerializeError.Syntax(reason: "x") && error.debugDescription().hasPrefix("SerializeError"))
+}
+
+@test
+fn theDecoderAndJsonValuesDirectly() throws {
+    let root = try Decoder.json("{\"a\":[1,{\"b c\":null}],\"u\":\"\\u00e9\\ud83d\\ude00\\n\",\"lone\":\"\\ud800\",\"n\":-0.5e2,\"t\":true,\"f\":false}")
+    assertEqual(root.count, 6)
+    let a = try root.field("a").elements()
+    assertEqual(a.count, 2)
+    assertEqual(a[1].field("b c").path, "$.a[1]['b c']")
+    assert(a[1].field("b c").isNull && !a[1].field("b c").isMissing)
+    assertEqual(root.field("a").element(1).path, "$.a[1]")
+    assert(root.field("a").element(5).isMissing && root.element(0).isMissing)
+    assertEqual(try root.field("u").decodeString(), "é😀\n")
+    assertEqual(try root.field("lone").decodeString(), "\u{FFFD}")
+    assertEqual(try root.field("n").decodeFloat(), -50.0)
+    assert(try root.field("t").decodeBool() && !(try root.field("f").decodeBool()))
+    assertEqual(root.field("t").kindName, "a Bool")
+    assertEqual(root.field("missing").kindName, "nothing")
+    assertEqual(root.field("n").kindName, "a number")
+    assertEqual(root.field("a").kindName, "an array")
+    assertEqual(root.kindName, "an object")
+    assertEqual(a[0].kindName, "a number")
+    assertEqual(a[1].field("b c").kindName, "null")
+    assert(root.hasField("t") && !root.hasField("x"))
+    var keys: String[>..] = []
+    for member in try root.members() {
+        keys.append(member.key)
+    }
+    assertEqual(keys.joined(separator: ","), "a,u,lone,n,t,f")
+    assert(root.field("n").field("x").isMissing)
+
+    // A document of any shape, as a JsonValue, and back.
+    let value = try Json.decode(JsonValue.self, from: "{\"x\":[1,true,null,\"s\"]}")
+    assertEqual(try Json.encode(value), "{\"x\":[1.0,true,null,\"s\"]}")
+    do {
+        let _ = try JsonValue.decode(from: root.field("absent"))
+        fail("nothing decoded as a value")
+    } catch { }
+
+    var counts = Dictionary<String, Int>()
+    counts["one"] = 1
+    let back = try Json.decode(Dictionary<String, Int>.self, from: try Json.encode(counts))
+    assertEqual(back["one"] ?? 0, 1)
+    let id = UUID.fromBytes([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])!
+    assertEqual(try Json.decode(UUID.self, from: try Json.encode(id)), id)
+    assertEqual(failure(UUID.self, "\"nope\""), "$: 'nope' is not a UUID")
+    assertEqual(failure(Char.self, "\"ab\""), "$: 'ab' is not one character")
+    let numbers: U8[>..] = [0, 255]
+    assertEqual(try Json.encode(numbers), "[0,255]")
+    let ints: I16[>..] = [-32768]
+    assertEqual((try Json.decode(I16[>..].self, from: try Json.encode(ints)))[0], -32768)
+    let wide: I32[>..] = [7]
+    assertEqual((try Json.decode(I32[>..].self, from: try Json.encode(wide)))[0], 7)
+    let longs: I64[>..] = [7]
+    assertEqual((try Json.decode(I64[>..].self, from: try Json.encode(longs)))[0], 7)
+    let halves: U16[>..] = [7]
+    assertEqual((try Json.decode(U16[>..].self, from: try Json.encode(halves)))[0], 7)
+    let words: U32[>..] = [7]
+    assertEqual((try Json.decode(U32[>..].self, from: try Json.encode(words)))[0], 7)
+    let unsigned: UInt[>..] = [7]
+    assertEqual((try Json.decode(UInt[>..].self, from: try Json.encode(unsigned)))[0], 7)
+    assertEqual(failure(U16.self, "70000"), "$: out of a U16's range")
+    assertEqual(failure(U32.self, "-1"), "$: out of a U32's range")
+    assertEqual(failure(I32.self, "3000000000"), "$: out of an I32's range")
+    assertEqual(failure(U8.self, "300"), "$: out of a U8's range")
+    assertEqual(failure(U64.self, "-1"), "$: -1 is not an unsigned integer")
+    assertEqual(failure(U64.self, "18446744073709551616"), "$: 18446744073709551616 does not fit a U64")
+    assertEqual(failure(Bool.self, "1"), "$: expected a Bool, found a number")
+    assertEqual(failure(Int.self, " 1 x"), "not JSON: text after the value at byte 3")
+    assertEqual(failure(Int.self, "tru"), "not JSON: not a value at byte 0")
+    assertEqual(failure(Int.self, "[1,"), "not JSON: the end where a value should be at byte 3")
+    assertEqual(failure(Int.self, "-"), "not JSON: a number with no digits at byte 1")
+    assertEqual(failure(Int.self, "1."), "not JSON: no digits after the point at byte 2")
+    assertEqual(failure(Int.self, "1e"), "not JSON: no digits in the exponent at byte 2")
+    assertEqual(failure(Int.self, "\"abc"), "not JSON: a string with no end at byte 4")
+    assertEqual(failure(Int.self, "\"a\u{1}\""), "not JSON: a control character in a string at byte 2")
+    assertEqual(failure(Int.self, "{1:2}"), "not JSON: not a key at byte 1")
+    assertEqual(failure(Int.self, "{\"a\" 2}"), "not JSON: no ':' after a key at byte 5")
+}

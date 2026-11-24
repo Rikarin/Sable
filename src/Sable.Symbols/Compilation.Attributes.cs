@@ -70,6 +70,7 @@ public sealed partial class Compilation {
         ["MainActor"] = (AttributeTargets.Any & ~AttributeTargets.Module, "a declaration"),
         ["frozen"] = (AttributeTargets.Union, "a union"),
         ["derive"] = (AttributeTargets.Type, "a type"),
+        ["serialize"] = (AttributeTargets.Type | AttributeTargets.Field | AttributeTargets.UnionCase | AttributeTargets.EnumCase, "a type, a property or a case"),
         ["indirect"] = (AttributeTargets.Union | AttributeTargets.UnionCase, "a union or a union case"),
         ["generator"] = (AttributeTargets.Function, "a function in a package's generators/ directory (docs/08)"),
 

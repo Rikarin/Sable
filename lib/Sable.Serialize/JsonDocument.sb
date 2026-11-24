@@ -1,0 +1,137 @@
+module Sable.Serialize
+
+// The kinds of JsonDocument's nodes.
+const jsonNull = 0
+const jsonFalse = 1
+const jsonTrue = 2
+const jsonNumber = 3
+const jsonString = 4
+const jsonArray = 5
+const jsonObject = 6
+
+// A JSON document as an index of its values, made in one pass and kept as
+// arrays, not an object a value: each node's kind, where its text is (a
+// string's between its quotes, unescaped only when read), its first child
+// and next sibling (an object's children are key, value, key, value…), and
+// its count of elements or members.
+final class JsonDocument {
+    let bytes: U8[>..]
+    let kinds: Int[>..]
+    let starts: Int[>..]
+    let ends: Int[>..]
+    let firsts: Int[>..]
+    let nexts: Int[>..]
+    let counts: Int[>..]
+    let escaped: Bool[>..]
+
+    init(bytes: U8[>..], kinds: Int[>..], starts: Int[>..], ends: Int[>..], firsts: Int[>..], nexts: Int[>..], counts: Int[>..], escaped: Bool[>..]) {
+        self.bytes = bytes
+        self.kinds = kinds
+        self.starts = starts
+        self.ends = ends
+        self.firsts = firsts
+        self.nexts = nexts
+        self.counts = counts
+        self.escaped = escaped
+    }
+
+    static fn parse(_ bytes: U8[>..]) throws(SerializeError) -> JsonDocument {
+        return try JsonParser.parse(bytes)
+    }
+
+    fn text(_ node: Int) -> String {
+        unsafe {
+            return String.fromUtf8Unchecked(bytes[starts[node]..<ends[node]])
+        }
+    }
+
+    // Whether the key node is the key, without unescaping one that needs none.
+    fn keyEquals(_ node: Int, _ key: String) -> Bool {
+        if escaped[node] {
+            return string(node) == key
+        }
+        let length = ends[node] - starts[node]
+        if length != key.utf8Count {
+            return false
+        }
+        let keyBytes = key.utf8
+        var i = 0
+        let start = starts[node]
+        while i < length {
+            if bytes[start + i] != keyBytes[i] {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+
+    fn string(_ node: Int) -> String {
+        if !escaped[node] {
+            return text(node)
+        }
+        var written: U8[>..] = []
+        var i = starts[node]
+        let end = ends[node]
+        while i < end {
+            let byte = bytes[i]
+            if byte != 0x5C {
+                written.append(byte)
+                i += 1
+                continue
+            }
+            let kind = bytes[i + 1]
+            i += 2
+            if kind == 0x6E {
+                written.append(0x0A)
+            } else if kind == 0x74 {
+                written.append(0x09)
+            } else if kind == 0x72 {
+                written.append(0x0D)
+            } else if kind == 0x62 {
+                written.append(0x08)
+            } else if kind == 0x66 {
+                written.append(0x0C)
+            } else if kind == 0x75 {
+                var code = hex4(i)
+                i += 4
+                // A surrogate pair, when the low half follows; a lone half
+                // is U+FFFD.
+                if code >= 0xD800 && code <= 0xDBFF && i + 5 < end && bytes[i] == 0x5C && bytes[i + 1] == 0x75 {
+                    let low = hex4(i + 2)
+                    if low >= 0xDC00 && low <= 0xDFFF {
+                        code = 0x10000 + (code - 0xD800) * 1024 + (low - 0xDC00)
+                        i += 6
+                    }
+                }
+                if code >= 0xD800 && code <= 0xDFFF || code < 0 {
+                    code = 0xFFFD
+                }
+                Char.fromCodePoint(value: code)!.encodeUtf8(into: &written)
+            } else {
+                written.append(kind)
+            }
+        }
+        unsafe {
+            return String.fromUtf8Unchecked(written)
+        }
+    }
+
+    fn hex4(_ at: Int) -> Int {
+        var value = 0
+        var i = 0
+        while i < 4 {
+            if at + i >= bytes.count {
+                return -1
+            }
+            let byte = Int(bytes[at + i])
+            let digit = byte >= 0x30 && byte <= 0x39 ? byte - 0x30 : byte >= 0x61 && byte <= 0x66 ? byte - 0x61 + 10 : byte >= 0x41 && byte <= 0x46 ? byte - 0x41 + 10 : -1
+            if digit < 0 {
+                return -1
+            }
+            value = value * 16 + digit
+            i += 1
+        }
+        return value
+    }
+}

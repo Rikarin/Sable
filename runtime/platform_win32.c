@@ -236,6 +236,14 @@ int64_t sable_time_monotonic(void) {
     return seconds * 1000000000 + rest * 1000000000 / frequency.QuadPart;
 }
 
+// Interrupt time without what the machine slept, in 100 ns units: as fine
+// as the system's clock tick (0.5 to 15.6 ms).
+int64_t sable_time_suspending(void) {
+    ULONGLONG ticks = 0;
+    QueryUnbiasedInterruptTime(&ticks);
+    return (int64_t)ticks * 100;
+}
+
 // Windows counts 100 ns intervals from 1601; Unix time is from 1970.
 int64_t sable_time_wall_clock(void) {
     FILETIME now;

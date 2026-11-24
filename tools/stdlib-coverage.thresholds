@@ -18,7 +18,6 @@ lib/Sable.Build/Manifest.sb                        0   0   # raise me: no tests 
 lib/Sable.Build/Profile.sb                         0  70   # raise me: no tests yet
 lib/Sable.Build/Target.sb                          0  70   # raise me: no tests yet
 lib/Sable.Build/TargetSettings.sb                  0  70   # raise me: no tests yet
-lib/Sable.Concurrency/Sleep.sb                     0  70   # raise me: no tests yet
 lib/Sable.Core/Debug.sb                            0   0   # raise me: no tests yet
 lib/Sable.Core/Mirror.sb                           0  70   # raise me: no tests yet
 lib/Sable.Core/PartialRangeFrom.sb                 0  70   # raise me: no tests yet
@@ -60,3 +59,4 @@ lib/Sable.Crypto/Sha512Blocks.sb                   0   0   # run only where the 
 lib/Sable.Crypto/KeccakPermutation.sb               0   0   # run only where the processor has no Keccak of its own; CryptoTests runs it everywhere
 lib/Sable.Net/UnixStream.sb                       75  30   # only Linux has a full queue to be tried again
 lib/Sable.IO/File.sb                              80  70   # a move between file systems needs two of them, as macOS has not
+lib/Sable.Time/SuspendingClock.sb                85  50   # sleeping again takes a machine that slept meanwhile

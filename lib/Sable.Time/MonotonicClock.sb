@@ -1,0 +1,34 @@
+module Sable.Time
+
+/// The clock that never goes back, whatever is done to the date: what
+/// timeouts, timers and stopwatches go by unless given another.
+///
+/// It is `CLOCK_MONOTONIC` on macOS and Linux, `QueryPerformanceCounter`
+/// on Windows and WASI's monotonic clock. Whether it counts while the
+/// machine sleeps is theirs to say: on macOS and Windows it does, on Linux
+/// it does not, and WASI does not say. A sleep waits at least as long as it
+/// is asked to on this clock; one the machine sleeps through may end later
+/// by as long as that.
+///
+/// ```sable
+/// let clock = MonotonicClock()
+/// let deadline = clock.now() + Duration.milliseconds(1)
+/// try! await clock.sleep(until: deadline)
+/// assert(clock.now() >= deadline)
+/// ```
+public struct MonotonicClock: Clock {
+    public init() { }
+
+    public fn now() -> Instant {
+        return Instant.now()
+    }
+
+    public fn sleep(until deadline: Instant) async throws(CancellationError) {
+        let left = deadline.nanoseconds.saturatingSub(Runtime.monotonicNanoseconds())
+        try await Task.sleep(nanoseconds: left)
+    }
+
+    public fn sleep(for duration: Duration) async throws(CancellationError) {
+        try await Task.sleep(nanoseconds: duration.totalNanoseconds)
+    }
+}

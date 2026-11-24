@@ -785,7 +785,7 @@ fn main() {
     [Fact]
     public void TimeIsWrittenInSable() =>
         Assert.Equal(
-            "1m 30.250s\n1.500s\n3.250ms\n17ns\n2h 0m 0.000s\n-12.000ms\ntrue\n90\n1970-01-01T00:00:00Z\n4\n2026-11-18T11:06:40Z\n322\n1969-12-31T23:59:59Z\n2000-02-29T00:00:00Z\n1709251199\n2024-03-01T00:00:00Z\n4\ntrue\n1600-03-01\n235620h 30m 0.000s\ntrue\nfalse\n29\ntrue\ntrue\ntrue\n",
+            "1m 30.25s\n1.5s\n3.25ms\n17ns\n2h\n-12ms\ntrue\n90\n1970-01-01T00:00:00Z\n4\n2026-11-18T11:06:40Z\n322\n1969-12-31T23:59:59Z\n2000-02-29T00:00:00Z\n1709251199\n2024-03-01T00:00:00Z\n4\ntrue\n1600-03-01\n235620h 30m\ntrue\nfalse\n29\ntrue\ntrue\ntrue\n",
             AssertAgree("""
                 module P
                 import Sable.Time
@@ -798,7 +798,7 @@ fn main() {
                     print(Duration.microseconds(3250).toString())
                     print(Duration.nanoseconds(17).toString())
                     print(Duration.hours(2).toString())
-                    print((Duration.zero() - Duration.milliseconds(12)).toString())
+                    print((Duration.zero - Duration.milliseconds(12)).toString())
                     print(d > Duration.minutes(1))
                     print(d.totalSeconds)
                     let epoch = UtcDateTime.fromUnix(0)
@@ -823,9 +823,9 @@ fn main() {
                     print(isLeapYear(1900))
                     print(daysInMonth(2024, 2))
                     let start = Instant.now()
-                    try? await Clock.sleep(Duration.milliseconds(20))
+                    try? await MonotonicClock().sleep(for: Duration.milliseconds(20))
                     print(start.elapsed >= Duration.milliseconds(20))
-                    let took = Clock.measure({ Runtime.sleep(nanoseconds: 5_000_000) })
+                    let took = measure({ Runtime.sleep(nanoseconds: 5_000_000) })
                     print(took >= Duration.milliseconds(5))
                     print(UtcDateTime.now().year >= 2026)
                 }

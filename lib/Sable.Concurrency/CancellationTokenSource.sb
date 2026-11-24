@@ -57,12 +57,17 @@ public final class CancellationTokenSource {
     /// Cancels its tokens once the duration has passed, from a task of its
     /// own; at once for none.
     public fn cancel(after duration: Duration) {
+        cancel(after: duration, clock: MonotonicClock())
+    }
+
+    /// As `cancel(after:)`, the duration measured on the clock.
+    public fn cancel<C: Clock>(after duration: Duration, clock: C) {
         if duration.totalNanoseconds <= 0 {
             cancel()
             return
         }
         let _ = Task.detached {
-            try? await Task.sleep(for: duration)
+            try? await clock.sleep(for: duration)
             self.cancel()
         }
     }

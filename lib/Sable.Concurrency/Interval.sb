@@ -1,0 +1,92 @@
+module Sable.Concurrency
+
+import Sable.Time
+
+/// Ticks a period apart, for ever: .NET's `PeriodicTimer`, Tokio's
+/// `interval`. Each is the instant it was due: the one it began, when its
+/// iterator was made, and so many whole periods. The first is due a period
+/// after the beginning. However late a tick is heard of, the next is not
+/// put off: the deadlines never drift.
+///
+/// Ticks that came due while the loop was busy are, as `MissedTicks` says,
+/// one tick unless the interval is told to give each. It ends when its task
+/// is cancelled.
+///
+/// ```sable
+/// let clock = TestClock()
+/// let ticking = Task.spawn {
+///     var seconds: Int[>..] = []
+///     for await tick in Interval(every: Duration.seconds(2), clock: clock).prefix(3) {
+///         seconds.append((tick - Instant.origin).totalSeconds)
+///     }
+///     return seconds
+/// }
+/// await clock.advance(by: Duration.seconds(6))
+/// assert(await ticking.value == [2, 4, 6])
+/// ```
+public struct Interval<C: Clock>: AsyncSequence {
+    /// The time from one tick to the next.
+    public let period: Duration
+    let clock: C
+    let missed: MissedTicks
+
+    /// Ticks so far apart on the clock. Traps for a period not above zero.
+    public init(every period: Duration, clock: C, missed: MissedTicks = .Skip) {
+        precondition(period > Duration.zero, "an interval's period must be above zero")
+        self.period = period
+        self.clock = clock
+        self.missed = missed
+    }
+
+    /// An iterator of the ticks that begin now.
+    public fn makeAsyncIterator() -> IntervalIterator<C> {
+        return IntervalIterator<C> { clock: clock, period: period, missed: missed, due: clock.now().saturatingAdding(period), ended: false }
+    }
+}
+
+extension Interval where C == MonotonicClock {
+    /// Ticks so far apart on the monotonic clock. Traps for a period not
+    /// above zero.
+    public init(every period: Duration, missed: MissedTicks = .Skip) {
+        self.init(every: period, clock: MonotonicClock(), missed: missed)
+    }
+}
+
+/// Gives an interval's ticks as they come due.
+public struct IntervalIterator<C: Clock>: AsyncIterator {
+    public alias Element = C.Instant
+
+    let clock: C
+    let period: Duration
+    let missed: MissedTicks
+    var due: C.Instant
+    var ended: Bool
+
+    /// The next tick, once it is due; none if the task is cancelled.
+    public mutating fn next() async -> C.Instant? {
+        if ended {
+            return none
+        }
+        let now = clock.now()
+        if now < due {
+            do {
+                try await clock.sleep(until: due)
+            } catch {
+                ended = true
+                return none
+            }
+        } else {
+            if Task.isCancelled {
+                ended = true
+                return none
+            }
+            if missed == .Skip {
+                // The latest due: as many whole periods on as have passed.
+                due = due.adding(period * now.durationSince(due).count(of: period))
+            }
+        }
+        let tick = due
+        due = tick.saturatingAdding(period)
+        return tick
+    }
+}

@@ -1,0 +1,292 @@
+module Sable.Time
+
+// A duration as text: in hours, minutes and the largest unit under them
+// that it has one of, exactly, and read back.
+
+extension Duration: Formattable {
+    /// In the largest unit it has at least one of, exactly — `1.5s`, `12ms`,
+    /// `3.25µs`, `17ns` — and from a minute on as a sum, the parts that are
+    /// zero left out: `1h 2m 3.5s`. `parse` reads it back as the same
+    /// duration.
+    ///
+    /// ```sable
+    /// assert(Duration.milliseconds(3723500).toString() == "1h 2m 3.5s")
+    /// assert(Duration.hours(-2).toString() == "-2h")
+    /// assert(Duration.zero.toString() == "0s")
+    /// ```
+    public fn toString() -> String {
+        return format(FormatSpec())
+    }
+
+    /// As `toString()` writes it, to the spec's precision in decimals when
+    /// it has one — rounded to the nearest, the even one of two as near —
+    /// with its sign and padded to its width as it asks.
+    ///
+    /// ```sable
+    /// assert("\(Duration.microseconds(1234567):.2)" == "1.23s")
+    /// assert("[\(Duration.milliseconds(12):>8)]" == "[    12ms]")
+    /// assert("\(Duration.nanoseconds(999999999):.1)" == "1.0s")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String {
+        var sign = ""
+        if totalNanoseconds < 0 {
+            sign = "-"
+        } else if spec.sign == .Always {
+            sign = "+"
+        } else if spec.sign == .Space {
+            sign = " "
+        }
+        return spec.padded(sign + durationText(totalNanoseconds.magnitude, spec.precision))
+    }
+}
+
+/// The text of so many nanoseconds, to so many decimals if any are said.
+fn durationText(_ exact: UInt, _ precision: Int?) -> String {
+    var n = exact
+    if let decimals = precision {
+        // To a multiple of the last decimal kept; whole nanoseconds at the least.
+        var step: UInt = n < 1000 ? 1 : n < 1000000 ? 1000 : n < 1000000000 ? 1000000 : 1000000000
+        var kept = 0
+        while kept < decimals && step > 1 {
+            step = step / 10
+            kept += 1
+        }
+        let rest = n % step
+        n = n - rest
+        if rest > step - rest || rest == step - rest && n / step % 2 == 1 {
+            n = n + step
+        }
+    }
+    if n == 0 {
+        return "0s"
+    }
+    if n < 1000 {
+        return n.toString() + "ns"
+    }
+    if n < 1000000 {
+        return decimalText(n, 3, precision) + "µs"
+    }
+    if n < 1000000000 {
+        return decimalText(n, 6, precision) + "ms"
+    }
+    if n < 60000000000 {
+        return decimalText(n, 9, precision) + "s"
+    }
+    var text = ""
+    let hours = n / 3600000000000
+    if hours > 0 {
+        text += "\(hours)h"
+    }
+    let minutes = n / 60000000000 % 60
+    if minutes > 0 {
+        text += text.isEmpty ? "\(minutes)m" : " \(minutes)m"
+    }
+    let rest = n % 60000000000
+    if rest > 0 {
+        text += " " + decimalText(rest, 9, precision) + "s"
+    }
+    return text
+}
+
+/// n with its point so many places from the end: every decimal up to the
+/// last that is not zero, or as many as asked for.
+fn decimalText(_ n: UInt, _ places: Int, _ precision: Int?) -> String {
+    var digits = n.toString()
+    while digits.count <= places {
+        digits = "0" + digits
+    }
+    let scalars = digits.toArray()
+    let point = scalars.count - places
+    var last = scalars.count
+    if let decimals = precision {
+        last = point + (decimals < places ? decimals : places)
+    } else {
+        while last > point && scalars[last - 1] == '0' {
+            last -= 1
+        }
+    }
+    var text = ""
+    for i in 0..<last {
+        if i == point {
+            text += "."
+        }
+        text += String.fromChar(scalars[i])
+    }
+    // Decimals past the nanosecond: the point is there, as places is at least 3.
+    if let decimals = precision {
+        var more = places
+        while more < decimals {
+            text += "0"
+            more += 1
+        }
+    }
+    return text
+}
+
+extension Duration: Parsable {
+    /// The duration a text writes as `toString()` writes one — `1.5s`,
+    /// `12ms`, `3.25µs`, `17ns`, `1h 2m 3.5s` — or any sum of parts like
+    /// them, each a number, a fraction if it likes, and a unit: `d` (24
+    /// hours), `h`, `m`, `s`, `ms`, `µs` (or `us`) or `ns`, with or without
+    /// spaces between, a `-` before them all; or as ISO 8601 writes one, as
+    /// `parse(iso8601:)` reads it. To the nearest nanosecond, the even one
+    /// of two as near, once the parts are added; past the greatest
+    /// duration, `.Overflow`, and past the least, `.Underflow`.
+    ///
+    /// ```sable
+    /// assert(try! Duration.parse("1.5s") == Duration.milliseconds(1500))
+    /// assert(try! Duration.parse("1h 2m 3.000s") == Duration.seconds(3723))
+    /// assert(try! Duration.parse("-250us") == Duration.microseconds(-250))
+    /// assert(try! Duration.parse("PT1M") == Duration.minutes(1))
+    /// assert(try! Duration.parse(Duration.max.toString()) == Duration.max)
+    /// ```
+    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> Duration {
+        let text = source.toString().trimmed()
+        let scalars = text.toArray()
+        let count = scalars.count
+        if count == 0 {
+            throw .Empty
+        }
+        var i = 0
+        var total = DurationSum()
+        if scalars[0] == '-' || scalars[0] == '+' {
+            total.negative = scalars[0] == '-'
+            i = 1
+        }
+        if i < count && (scalars[i] == 'P' || scalars[i] == 'p') {
+            return try Duration.parse(iso8601: text)
+        }
+        var parts = 0
+        while i < count {
+            while i < count && scalars[i] == ' ' {
+                i += 1
+            }
+            if i == count {
+                break
+            }
+            let number = try DurationNumber.read(scalars, i)
+            i = number.end
+            // The unit, its letters up to the next digit or space.
+            let unitStart = i
+            var unit = ""
+            while i < count && !isDecimalDigit(scalars[i]) && scalars[i] != ' ' && scalars[i] != '.' {
+                unit = unit + String.fromChar(scalars[i])
+                i += 1
+            }
+            let nanoseconds = match unit {
+                case "d"        => 86400000000000
+                case "h"        => 3600000000000
+                case "m"        => 60000000000
+                case "s"        => 1000000000
+                case "ms"       => 1000000
+                case "µs", "us" => 1000
+                case "ns"       => 1
+                case _          => 0
+            }
+            if nanoseconds == 0 {
+                throw .Invalid(at: unitStart)
+            }
+            try total.add(number, nanoseconds)
+            parts += 1
+        }
+        if parts == 0 {
+            throw .Empty
+        }
+        return try total.duration()
+    }
+}
+
+fn isDecimalDigit(_ c: Char) -> Bool {
+    return c >= '0' && c <= '9'
+}
+
+/// A number of a duration's text: its whole digits, and its fraction's in
+/// so many places. Digits past the 22nd place say only whether there is
+/// anything more.
+struct DurationNumber {
+    var whole: I128 = 0
+    var fraction: I128 = 0
+    var places: Int = 0
+    var more: Bool = false
+    var hasPoint: Bool = false
+    var end: Int = 0
+
+    /// The number at the position, its point a '.' or, if it may be, a ','.
+    static fn read(_ scalars: Char[:], _ start: Int, comma: Bool = false) throws(ParseError) -> DurationNumber {
+        var number = DurationNumber()
+        var i = start
+        while i < scalars.count && isDecimalDigit(scalars[i]) {
+            // More than any duration holds of any unit: that is enough to know.
+            if number.whole < 100000000000000000000 {
+                number.whole = number.whole * 10 + I128(scalars[i].codePoint - 48)
+            }
+            i += 1
+        }
+        let wholeDigits = i - start
+        if i < scalars.count && (scalars[i] == '.' || comma && scalars[i] == ',') {
+            number.hasPoint = true
+            i += 1
+            while i < scalars.count && isDecimalDigit(scalars[i]) {
+                if number.places < 22 {
+                    number.fraction = number.fraction * 10 + I128(scalars[i].codePoint - 48)
+                    number.places += 1
+                } else if scalars[i] != '0' {
+                    number.more = true
+                }
+                i += 1
+            }
+        }
+        if wholeDigits == 0 && number.places == 0 {
+            throw .InvalidDigit(at: start)
+        }
+        number.end = i
+        return number
+    }
+}
+
+/// A duration's parts, added exactly: its nanoseconds, and parts of one in
+/// 10^22nds.
+struct DurationSum {
+    var negative: Bool = false
+    var nanoseconds: I128 = 0
+    var parts: I128 = 0
+    var more: Bool = false
+
+    mutating fn add(_ number: DurationNumber, _ unit: Int) throws(ParseError) {
+        // The whole is at most 10^21 and the unit under 10^15; the fraction
+        // is under the unit, and so under 10^37 in its parts.
+        nanoseconds += number.whole * I128(unit)
+        var fraction = number.fraction * I128(unit)
+        var place = number.places
+        while place < 22 {
+            fraction = fraction * 10
+            place += 1
+        }
+        parts += fraction
+        nanoseconds += parts / 10000000000000000000000
+        parts = parts % 10000000000000000000000
+        more = more || number.more
+        // Past any duration: no more added, so that no sum overflows.
+        if nanoseconds > 0x8000000000000000 {
+            if negative {
+                throw .Underflow
+            }
+            throw .Overflow
+        }
+    }
+
+    fn duration() throws(ParseError) -> Duration {
+        let half: I128 = 5000000000000000000000
+        var total = nanoseconds
+        if parts > half || parts == half && (more || total % 2 == 1) {
+            total += 1
+        }
+        if let exact = signedInt(U128(total), negative) {
+            return Duration.nanoseconds(exact)
+        }
+        if negative {
+            throw .Underflow
+        }
+        throw .Overflow
+    }
+}

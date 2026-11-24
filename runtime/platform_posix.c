@@ -582,6 +582,17 @@ int64_t sable_time_monotonic(void) {
     return (int64_t)now.tv_sec * 1000000000 + now.tv_nsec;
 }
 
+// macOS counts CLOCK_MONOTONIC through a sleep, and CLOCK_UPTIME_RAW not;
+// Linux's CLOCK_MONOTONIC already stops while the machine is suspended (its
+// CLOCK_BOOTTIME is the one that does not).
+int64_t sable_time_suspending(void) {
+#if defined(__APPLE__)
+    return (int64_t)clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#else
+    return sable_time_monotonic();
+#endif
+}
+
 int64_t sable_time_wall_clock(void) {
     struct timespec now;
     clock_gettime(CLOCK_REALTIME, &now);
@@ -641,6 +652,10 @@ static void condition_wait(PlatformCondition *condition, PlatformMutex *mutex, i
     int64_t left = until - sable_time_monotonic();
     if (left <= 0) {
         return;
+    }
+
+    if (left > 86400000000000) {
+        left = 86400000000000; // a day at most: the caller waits again
     }
 
     struct timespec wait = { (time_t)(left / 1000000000), (long)(left % 1000000000) };
@@ -812,6 +827,8 @@ static int reactor_wait(ReactorEvent *events, int capacity, int64_t until) {
         int64_t left = until - sable_time_monotonic();
         if (left < 0) {
             left = 0;
+        } else if (left > 86400000000000) {
+            left = 86400000000000; // a day at most: the caller waits again
         }
 
         timeout.tv_sec = (time_t)(left / 1000000000);

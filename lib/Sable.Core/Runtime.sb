@@ -125,6 +125,10 @@ public struct Runtime {
     @builtin("time_monotonic")
     public static fn monotonicNanoseconds() -> Int
 
+    /// As 'monotonicNanoseconds', but stopped while the machine sleeps.
+    @builtin("time_suspending")
+    public static fn suspendingNanoseconds() -> Int
+
     @builtin("time_wall_clock")
     public static fn wallClockNanoseconds() -> Int
 

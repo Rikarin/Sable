@@ -1,0 +1,361 @@
+module TestClockTests
+
+// TestClock.sb in Sable.Concurrency, and what takes a clock, on one: no
+// test here waits for real.
+
+import Sable.Concurrency
+import Sable.Testing
+import Sable.Time
+
+// What happened, and at which second of the clock.
+@immutable
+final class Log {
+    let lines: Mutex<String[>..]>
+    let clock: TestClock<Instant>
+
+    init(_ clock: TestClock<Instant>) {
+        self.clock = clock
+        lines = Mutex([])
+    }
+
+    fn add(_ what: String) {
+        let at = (clock.now() - Instant.origin).totalSeconds
+        lines.withLock { $0.append("\(what)@\(at)") }
+    }
+
+    var text: String => lines.withLock { $0.joined(separator: " ") }
+}
+
+@test
+fn timePassesOnlyWhenTold() async {
+    let clock = TestClock()
+    assertEqual(clock.now(), Instant.origin)
+    await clock.advance(by: Duration.seconds(5))
+    assertEqual(clock.now() - Instant.origin, Duration.seconds(5))
+    await clock.advance(to: Instant.origin + Duration.seconds(2))
+    assertEqual(clock.now() - Instant.origin, Duration.seconds(5))
+    let copy = clock
+    await copy.advance(by: Duration.zero)
+    await copy.advance(by: Duration.seconds(1))
+    assertEqual(clock.now() - Instant.origin, Duration.seconds(6))
+}
+
+@test
+fn sleepersWakeInTheOrderOfTheirDeadlines() async {
+    let clock = TestClock()
+    let log = Log(clock)
+    for seconds in [5, 1, 4, 2, 3] {
+        let _ = Task.spawn {
+            try! await clock.sleep(for: Duration.seconds(seconds))
+            log.add("woke")
+        }
+    }
+    await clock.advance(by: Duration.seconds(10))
+    assertEqual(log.text, "woke@1 woke@2 woke@3 woke@4 woke@5")
+    assertEqual(clock.now() - Instant.origin, Duration.seconds(10))
+}
+
+@test
+fn sleepersOfOneDeadlineWakeInTheOrderTheyBegan() async {
+    let clock = TestClock()
+    let log = Log(clock)
+    for i in 0..<20 {
+        let _ = Task.spawn {
+            try! await clock.sleep(until: Instant.origin + Duration.seconds(1))
+            log.add("\(i)")
+        }
+        await Task.settle()
+    }
+    assertEqual(clock.sleeperCount, 20)
+    await clock.advance(by: Duration.seconds(1))
+    var wanted: String[>..] = []
+    for i in 0..<20 {
+        wanted.append("\(i)@1")
+    }
+    assertEqual(log.text, wanted.joined(separator: " "))
+}
+
+@test
+fn aSleeperThatSleepsAgainIsWokenAgain() async {
+    let clock = TestClock()
+    let log = Log(clock)
+    let _ = Task.spawn {
+        for i in 1...4 {
+            try! await clock.sleep(for: Duration.seconds(2))
+            log.add("a\(i)")
+        }
+    }
+    let _ = Task.spawn {
+        try! await clock.sleep(for: Duration.seconds(3))
+        log.add("b")
+        let child = Task.spawn {
+            try! await clock.sleep(for: Duration.seconds(2))
+            log.add("c")
+        }
+        await child.value
+        log.add("d")
+    }
+    await clock.advance(by: Duration.seconds(5))
+    assertEqual(log.text, "a1@2 b@3 a2@4 c@5 d@5")
+    assertEqual(clock.sleeperCount, 1)
+    assertEqual(clock.nextDeadline! - Instant.origin, Duration.seconds(6))
+    await clock.advance(by: Duration.seconds(5))
+    assertEqual(log.text, "a1@2 b@3 a2@4 c@5 d@5 a3@6 a4@8")
+    assert(clock.nextDeadline.isNone)
+}
+
+@test
+fn whatAWokenTaskSetsOffHasHappened() async {
+    let clock = TestClock()
+    let channel = Channel<Int>()
+    let total = Atomic(0)
+    let _ = Task.spawn {
+        for await value in channel {
+            for _ in 0..<10 {
+                await Task.yield()
+            }
+            let _ = total.update { $0 + value }
+        }
+    }
+    let _ = Task.spawn {
+        for i in 1...100 {
+            try! await clock.sleep(for: Duration.seconds(1))
+            await channel.send(i)
+        }
+        await channel.close()
+    }
+    await clock.advance(by: Duration.seconds(10))
+    assertEqual(total.load(), 55)
+    await clock.advance(by: Duration.seconds(90))
+    assertEqual(total.load(), 5050)
+}
+
+@test
+fn aCancelledSleeperIsRemoved() async {
+    let clock = TestClock()
+    let sleeper = Task.spawn {
+        do {
+            try await clock.sleep(for: Duration.seconds(1))
+            return false
+        } catch {
+            return true
+        }
+    }
+    try! await clock.waitForSleepers()
+    assertEqual(clock.sleeperCount, 1)
+    sleeper.cancel()
+    assertEqual(clock.sleeperCount, 0)
+    assert(await sleeper.value)
+    await clock.advance(by: Duration.seconds(1))
+}
+
+@test
+fn aTaskCancelledAlreadyDoesNotSleep() async {
+    let clock = TestClock()
+    let sleeper = Task.spawn {
+        while !Task.isCancelled {
+            await Task.yield()
+        }
+        return (try? await clock.sleep(for: Duration.seconds(1))) == none
+    }
+    sleeper.cancel()
+    assert(await sleeper.value)
+    assertEqual(clock.sleeperCount, 0)
+}
+
+@test
+fn aDeadlineThatHasPassedIsNotSleptFor() async {
+    let clock = TestClock()
+    try! await clock.sleep(for: Duration.zero)
+    try! await clock.sleep(until: Instant.origin - Duration.seconds(1))
+    assertEqual(clock.sleeperCount, 0)
+}
+
+@test
+fn sleepersCanBeWaitedFor() async {
+    let clock = TestClock()
+    let _ = Task.spawn {
+        // Work that advancing does not wait for.
+        try! await Task.sleep(nanoseconds: 1_000_000)
+        try! await clock.sleep(for: Duration.seconds(1))
+    }
+    try! await clock.waitForSleepers()
+    assertEqual(clock.sleeperCount, 1)
+    await clock.advance(by: Duration.seconds(1))
+    let waiting = Task.spawn { (try? await clock.waitForSleepers(3)) == none }
+    await Task.settle()
+    waiting.cancel()
+    assert(await waiting.value)
+}
+
+@test
+fn theWallClockCanBeStoodInFor() async {
+    let clock = TestClock(at: UtcDateTime.unixEpoch)
+    let job = Task.spawn {
+        try! await clock.sleep(until: UtcDateTime.fromUnix(86400))
+        return clock.now()
+    }
+    await clock.advance(by: Duration.days(2))
+    assertEqual((await job.value).iso8601(), "1970-01-02T00:00:00Z")
+    assertEqual(clock.now().iso8601(), "1970-01-03T00:00:00Z")
+}
+
+@test
+fn twoCanAdvanceOneClock() async {
+    let clock = TestClock()
+    let log = Log(clock)
+    let _ = Task.spawn {
+        for i in 1...4 {
+            try! await clock.sleep(for: Duration.seconds(1))
+            log.add("\(i)")
+        }
+    }
+    let one = Task.spawn { await clock.advance(to: Instant.origin + Duration.seconds(2)) }
+    let two = Task.spawn { await clock.advance(to: Instant.origin + Duration.seconds(4)) }
+    await one.value
+    await two.value
+    assertEqual(log.text, "1@1 2@2 3@3 4@4")
+    assertEqual(clock.now() - Instant.origin, Duration.seconds(4))
+}
+
+@test(traps: "does not go back")
+fn aClockDoesNotGoBack() async {
+    await TestClock().advance(by: Duration.seconds(-1))
+}
+
+// ---- What takes a clock -----------------------------------------------------
+
+@test
+fn sleepsAndTimersAreOnTheClock() async {
+    let clock = TestClock()
+    let log = Log(clock)
+    let _ = Task.spawn {
+        try! await sleep(Duration.seconds(1), clock: clock)
+        log.add("a")
+        try! await Task.sleep(for: Duration.seconds(1), clock: clock)
+        log.add("b")
+        try! await Task.sleep(until: Instant.origin + Duration.seconds(3), clock: clock)
+        log.add("c")
+        try! await Timer.after(Duration.seconds(1), clock: clock)
+        log.add("d")
+        try! await Timer.at(Instant.origin + Duration.seconds(5), clock: clock)
+        log.add("e")
+    }
+    await clock.advance(by: Duration.seconds(10))
+    assertEqual(log.text, "a@1 b@2 c@3 d@4 e@5")
+}
+
+@test
+fn sleepsAndTimersAreOnTheMonotonicClockUnlessTold() async {
+    let start = Instant.now()
+    try! await sleep(Duration.milliseconds(1))
+    try! await Task.sleep(for: Duration.milliseconds(1))
+    try! await Task.sleep(until: start + Duration.milliseconds(3))
+    try! await Timer.after(Duration.milliseconds(1))
+    try! await Timer.at(start + Duration.milliseconds(5))
+    assert(start.elapsed >= Duration.milliseconds(5))
+    await yieldNow()
+}
+
+@test
+fn timeoutsAreOnTheClock() async {
+    let clock = TestClock()
+    let slow = Task.spawn {
+        do {
+            let _ = try await withTimeout(Duration.minutes(1), clock: clock) {
+                try await clock.sleep(for: Duration.hours(1))
+                return 1
+            }
+            return Duration.zero
+        } catch let error as TimeoutError {
+            return error.duration
+        } catch {
+            return Duration.zero
+        }
+    }
+    let quick = Task.spawn {
+        (try? await withTimeout(Duration.minutes(1), clock: clock) {
+            try await clock.sleep(for: Duration.seconds(59))
+            return 1
+        }) ?? 0
+    }
+    await clock.advance(by: Duration.seconds(59))
+    assertEqual(await quick.value, 1)
+    assertEqual(clock.sleeperCount, 2)
+    await clock.advance(by: Duration.seconds(1))
+    assertEqual(await slow.value, Duration.minutes(1))
+    assertEqual(clock.sleeperCount, 0)
+}
+
+@test
+fn aTimeoutOfTheLongestDurationNeverComes() async {
+    assertEqual(try! await withTimeout(Duration.max) { 7 }, 7)
+    let clock = TestClock()
+    await clock.advance(by: Duration.hours(1))
+    assertEqual(try! await withTimeout(Duration.max, clock: clock) { 7 }, 7)
+}
+
+@test
+fn tokensAreCancelledOnTheClock() async {
+    let clock = TestClock()
+    let source = CancellationTokenSource()
+    source.cancel(after: Duration.seconds(10), clock: clock)
+    await clock.advance(by: Duration.seconds(9))
+    assert(!source.isCancellationRequested)
+    await clock.advance(by: Duration.seconds(1))
+    assert(source.isCancellationRequested)
+}
+
+@test
+fn debouncingIsOnTheClock() async {
+    let clock = TestClock()
+    let log = Log(clock)
+    let input = Channel<Int>()
+    let _ = Task.spawn {
+        for await value in input.debounce(for: Duration.seconds(3), clock: clock) {
+            log.add("\(value)")
+        }
+        log.add("end")
+    }
+    await input.send(1)
+    await clock.advance(by: Duration.seconds(2))
+    await input.send(2)
+    await clock.advance(by: Duration.seconds(10))
+    assertEqual(log.text, "2@5")
+    await input.send(3)
+    await input.close()
+    await Task.settle()
+    assertEqual(log.text, "2@5 3@12 end@12")
+    assertEqual(clock.sleeperCount, 0)
+}
+
+@test
+fn throttlingIsOnTheClock() async {
+    let clock = TestClock()
+    let log = Log(clock)
+    let input = Channel<Int>()
+    let _ = Task.spawn {
+        for await value in input.throttle(for: Duration.seconds(10), clock: clock) {
+            log.add("\(value)")
+        }
+    }
+    for i in 1...25 {
+        await input.send(i)
+        await clock.advance(by: Duration.seconds(1))
+    }
+    // The newest waiting as each interval ends.
+    assertEqual(log.text, "1@0 10@10 20@20")
+    await input.close()
+    await Task.settle()
+    assertEqual(log.text, "1@0 10@10 20@20 25@25")
+}
+
+@test
+fn bodiesAreMeasuredOnTheClock() async {
+    let clock = TestClock()
+    let job = Task.spawn {
+        await measure(clock: clock) { try! await clock.sleep(for: Duration.hours(1)) }
+    }
+    await clock.advance(by: Duration.hours(2))
+    assertEqual(await job.value, Duration.hours(1))
+}

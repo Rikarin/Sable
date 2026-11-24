@@ -1,0 +1,24 @@
+module Sable.Time
+
+/// A point on a `Clock`: one is so long after another, and there is one so
+/// long after it. `Instant` is the monotonic clock's, and `UtcDateTime` the
+/// wall clock's.
+public protocol ClockInstant: Comparable, Sendable {
+    /// So long after this, or before it for a negative duration.
+    fn adding(_ duration: Duration) -> Self
+
+    /// How long after the earlier one this is.
+    fn durationSince(_ earlier: Self) -> Duration
+
+    /// So long after this, or the last instant there is where that is past
+    /// it: `adding`, unless the type says otherwise.
+    fn saturatingAdding(_ duration: Duration) -> Self
+}
+
+extension ClockInstant {
+    public fn saturatingAdding(_ duration: Duration) -> Self {
+        return adding(duration)
+    }
+}
+
+extension UtcDateTime: ClockInstant { }

@@ -1,65 +1,182 @@
 module Sable.Time
 
-// Durations, monotonic instants, civil dates and times, offsets and time
-// zones (docs/04 §4.3), written in Sable over the runtime's clocks and the
-// system's time zone database. Calendar arithmetic is proleptic Gregorian.
+// Durations, clocks and their instants, civil dates and times, offsets and
+// time zones (docs/04 §4.3), written in Sable over the runtime's clocks and
+// the system's time zone database. Calendar arithmetic is proleptic
+// Gregorian.
 
-/// A span of time, to the nanosecond; negative when it runs backwards.
+/// A span of time, to the nanosecond; negative when it runs backwards. A
+/// whole number of nanoseconds in an Int, so 292 years either way.
+///
+/// The operators trap where a result does not fit, as an integer's do;
+/// `checkedAdd` and the like give none there, and `saturatingAdd` and the
+/// like the nearest there is. Amounts by the calendar — years, months, and
+/// days that a change of the clocks makes longer or shorter — are a
+/// `Period`.
+///
+/// ```sable
+/// let timeout = Duration.seconds(90) + .milliseconds(250)
+/// assert(timeout.toString() == "1m 30.25s")
+/// assert(timeout / 2 < Duration.minutes(1) && timeout * 1.5 > Duration.minutes(2))
+/// assert(timeout / Duration.milliseconds(250) == 361.0)
+/// ```
 public struct Duration: Comparable, Hashable {
+    /// The whole of it, in nanoseconds.
     public var totalNanoseconds: Int
 
+    /// No time at all.
+    public static var zero: Duration => Duration { totalNanoseconds: 0 }
+
+    /// The longest there is: 292 years and some.
+    public static var max: Duration => Duration { totalNanoseconds: Int.max }
+
+    /// The longest backwards: a nanosecond longer than `max` is forwards.
+    public static var min: Duration => Duration { totalNanoseconds: Int.min }
+
+    // ---- So many of a unit ---------------------------------------------
+
+    /// So many nanoseconds.
     public static fn nanoseconds(_ count: Int) -> Duration {
         return Duration { totalNanoseconds: count }
     }
 
+    /// So many microseconds. Traps where they do not fit, as the others do.
     public static fn microseconds(_ count: Int) -> Duration {
         return Duration { totalNanoseconds: count * 1000 }
     }
 
+    /// So many milliseconds.
     public static fn milliseconds(_ count: Int) -> Duration {
         return Duration { totalNanoseconds: count * 1000000 }
     }
 
+    /// So many seconds.
     public static fn seconds(_ count: Int) -> Duration {
         return Duration { totalNanoseconds: count * 1000000000 }
     }
 
+    /// So many minutes.
     public static fn minutes(_ count: Int) -> Duration {
         return Duration { totalNanoseconds: count * 60000000000 }
     }
 
+    /// So many hours.
     public static fn hours(_ count: Int) -> Duration {
         return Duration { totalNanoseconds: count * 3600000000000 }
     }
 
-    public static fn zero() -> Duration {
-        return Duration { totalNanoseconds: 0 }
+    /// So many days of exactly 24 hours; a day of the calendar is
+    /// `Period.days(1)`.
+    public static fn days(_ count: Int) -> Duration {
+        return Duration { totalNanoseconds: count * 86400000000000 }
     }
 
-    /// Whole milliseconds, rounded towards zero.
+    // ---- Parts of a unit -----------------------------------------------
+
+    /// So many microseconds and parts of one, to the nearest nanosecond —
+    /// the even one of two as near. Traps where it does not fit, or for
+    /// NaN, as the others do; `checked(_:of:)` gives none there.
+    public static fn microseconds(_ count: F64) -> Duration {
+        return Duration.microseconds(1) * count
+    }
+
+    /// So many milliseconds and parts of one, to the nearest nanosecond.
+    public static fn milliseconds(_ count: F64) -> Duration {
+        return Duration.milliseconds(1) * count
+    }
+
+    /// So many seconds and parts of one, to the nearest nanosecond.
+    ///
+    /// ```sable
+    /// assert(Duration.seconds(0.25) == Duration.milliseconds(250))
+    /// assert(Duration.seconds(0.0000000004) == Duration.zero)
+    /// ```
+    public static fn seconds(_ count: F64) -> Duration {
+        return Duration.seconds(1) * count
+    }
+
+    /// So many minutes and parts of one, to the nearest nanosecond.
+    public static fn minutes(_ count: F64) -> Duration {
+        return Duration.minutes(1) * count
+    }
+
+    /// So many hours and parts of one, to the nearest nanosecond.
+    public static fn hours(_ count: F64) -> Duration {
+        return Duration.hours(1) * count
+    }
+
+    /// So many of the unit, to the nearest nanosecond; none where it does
+    /// not fit, or for NaN.
+    ///
+    /// ```sable
+    /// assert(Duration.checked(1.5, of: .seconds(1)) == Duration.milliseconds(1500))
+    /// assert(Duration.checked(1.0e300, of: .seconds(1)) == none)
+    /// ```
+    public static fn checked(_ count: F64, of unit: Duration) -> Duration? {
+        return unit.checkedMul(count)
+    }
+
+    // ---- In a unit -----------------------------------------------------
+
+    /// Whole microseconds, rounded towards zero, as the others are.
+    public var totalMicroseconds: Int => totalNanoseconds / 1000
+
+    /// Whole milliseconds.
     public var totalMilliseconds: Int => totalNanoseconds / 1000000
 
-    /// Whole seconds, rounded towards zero.
+    /// Whole seconds.
     public var totalSeconds: Int => totalNanoseconds / 1000000000
+
+    /// Whole minutes.
+    public var totalMinutes: Int => totalNanoseconds / 60000000000
+
+    /// Whole hours.
+    public var totalHours: Int => totalNanoseconds / 3600000000000
+
+    /// Whole days of 24 hours.
+    public var totalDays: Int => totalNanoseconds / 86400000000000
+
+    /// Microseconds, with the fraction.
+    public var inMicroseconds: F64 => F64(totalNanoseconds) / 1000.0
+
+    /// Milliseconds, with the fraction.
+    public var inMilliseconds: F64 => F64(totalNanoseconds) / 1000000.0
 
     /// Seconds, with the fraction.
     public var inSeconds: F64 => F64(totalNanoseconds) / 1000000000.0
 
-    public fn times(_ factor: Int) -> Duration {
-        return Duration { totalNanoseconds: totalNanoseconds * factor }
+    /// Minutes, with the fraction.
+    public var inMinutes: F64 => F64(totalNanoseconds) / 60000000000.0
+
+    /// Hours, with the fraction.
+    public var inHours: F64 => F64(totalNanoseconds) / 3600000000000.0
+
+    /// The hours, the minutes and seconds under sixty and the nanoseconds
+    /// under a second that together make it, each of its sign.
+    ///
+    /// ```sable
+    /// let parts = Duration.milliseconds(-3723500).components
+    /// assert(parts.hours == -1 && parts.minutes == -2 && parts.seconds == -3)
+    /// assert(parts.nanoseconds == -500000000)
+    /// ```
+    public var components: (hours: Int, minutes: Int, seconds: Int, nanoseconds: Int) {
+        get {
+            return (
+                hours: totalNanoseconds / 3600000000000,
+                minutes: totalNanoseconds / 60000000000 % 60,
+                seconds: totalNanoseconds / 1000000000 % 60,
+                nanoseconds: totalNanoseconds % 1000000000
+            )
+        }
     }
 
-    public fn dividedBy(_ divisor: Int) -> Duration {
-        return Duration { totalNanoseconds: totalNanoseconds / divisor }
-    }
+    /// Whether it is no time at all.
+    public var isZero: Bool => totalNanoseconds == 0
 
-    public operator + (a: Duration, b: Duration) -> Duration {
-        return Duration { totalNanoseconds: a.totalNanoseconds + b.totalNanoseconds }
-    }
+    /// Whether it runs backwards.
+    public var isNegative: Bool => totalNanoseconds < 0
 
-    public operator - (a: Duration, b: Duration) -> Duration {
-        return Duration { totalNanoseconds: a.totalNanoseconds - b.totalNanoseconds }
-    }
+    // ---- Comparison ----------------------------------------------------
 
     public operator == (a: Duration, b: Duration) -> Bool {
         return a.totalNanoseconds == b.totalNanoseconds
@@ -71,153 +188,6 @@ public struct Duration: Comparable, Hashable {
 
     public fn hash(into hasher: inout Hasher) {
         hasher.combine(totalNanoseconds)
-    }
-
-    /// In the largest unit that keeps it at least one, to three decimals:
-    /// "1.500s", "12.000ms", "3.250µs", "17ns"; minutes and hours as "1h 2m 3.000s".
-    public fn toString() -> String {
-        var n = totalNanoseconds
-        var sign = ""
-        if n < 0 {
-            sign = "-"
-            n = 0 - n
-        }
-        if n < 1000 {
-            return sign + n.toString() + "ns"
-        }
-        if n < 1000000 {
-            return sign + decimal(n, 1000) + "µs"
-        }
-        if n < 1000000000 {
-            return sign + decimal(n, 1000000) + "ms"
-        }
-        if n < 60000000000 {
-            return sign + decimal(n, 1000000000) + "s"
-        }
-        let hours = n / 3600000000000
-        let minutes = n / 60000000000 % 60
-        let rest = n % 60000000000
-        var text = sign
-        if hours > 0 {
-            text = text + hours.toString() + "h "
-        }
-        return text + minutes.toString() + "m " + decimal(rest, 1000000000) + "s"
-    }
-}
-
-/// n / unit to three decimals.
-fn decimal(_ n: Int, _ unit: Int) -> String {
-    let whole = n / unit
-    let thousandths = n % unit / (unit / 1000)
-    var fraction = thousandths.toString()
-    while fraction.count < 3 {
-        fraction = "0" + fraction
-    }
-    return whole.toString() + "." + fraction
-}
-
-extension Duration: Parsable {
-    /// The duration a text writes as `toString()` writes one — `1.500s`,
-    /// `12.000ms`, `3.250µs`, `17ns`, `1h 2m 3.000s` — or any sum of parts
-    /// like them, each a number, a fraction if it likes, and a unit: `h`,
-    /// `m`, `s`, `ms`, `µs` (or `us`) or `ns`, with or without spaces
-    /// between, a `-` before them all. Exact to the nanosecond; past an
-    /// Int's nanoseconds, `.Overflow`.
-    ///
-    /// ```sable
-    /// assert(try! Duration.parse("1.5s") == Duration.milliseconds(1500))
-    /// assert(try! Duration.parse("1h 2m 3.000s") == Duration.seconds(3723))
-    /// assert(try! Duration.parse("-250us") == Duration.microseconds(-250))
-    /// assert(try! Duration.parse(Duration.milliseconds(12).toString()) == Duration.milliseconds(12))
-    /// ```
-    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> Duration {
-        let text = source.toString().trimmed()
-        let scalars = text.toArray()
-        let count = scalars.count
-        if count == 0 {
-            throw .Empty
-        }
-        var i = 0
-        var negative = false
-        if scalars[0] == '-' || scalars[0] == '+' {
-            negative = scalars[0] == '-'
-            i = 1
-        }
-        var total = 0
-        var parts = 0
-        while i < count {
-            while i < count && scalars[i] == ' ' {
-                i += 1
-            }
-            if i == count {
-                break
-            }
-            // The number: whole digits, then a fraction's, kept to nine places.
-            var whole = 0
-            var fraction = 0
-            var places = 0
-            let started = i
-            while i < count && scalars[i].isDigit {
-                let digit = scalars[i].codePoint - 48
-                if whole > (9223372036854775807 - digit) / 10 {
-                    throw .Overflow
-                }
-                whole = whole * 10 + digit
-                i += 1
-            }
-            if i < count && scalars[i] == '.' {
-                i += 1
-                while i < count && scalars[i].isDigit {
-                    if places < 9 {
-                        fraction = fraction * 10 + (scalars[i].codePoint - 48)
-                        places += 1
-                    }
-                    i += 1
-                }
-            }
-            if i == started || i == started + 1 && scalars[started] == '.' {
-                throw .InvalidDigit(at: started)
-            }
-            // The unit, its letters up to the next digit or space.
-            let unitStart = i
-            var unit = ""
-            while i < count && !scalars[i].isDigit && scalars[i] != ' ' && scalars[i] != '.' {
-                unit = unit + String.fromChar(scalars[i])
-                i += 1
-            }
-            let nanoseconds = match unit {
-                case "h"        => 3600000000000
-                case "m"        => 60000000000
-                case "s"        => 1000000000
-                case "ms"       => 1000000
-                case "µs", "us" => 1000
-                case "ns"       => 1
-                case _          => 0
-            }
-            if nanoseconds == 0 {
-                throw .Invalid(at: unitStart)
-            }
-            // The fraction in the unit's nanoseconds: whole ones only, so
-            // that '1.5ns' is 1ns, as a duration holds no less.
-            var scale = 1
-            var p = 0
-            while p < places {
-                scale *= 10
-                p += 1
-            }
-            let (wholePart, wholeOverflow) = whole.overflowingMul(nanoseconds)
-            let (part, partOverflow) = wholePart.overflowingAdd(fraction * (nanoseconds / scale) + fraction * (nanoseconds % scale) / scale)
-            let (sum, sumOverflow) = total.overflowingAdd(part)
-            if wholeOverflow || partOverflow || sumOverflow {
-                throw .Overflow
-            }
-            total = sum
-            parts += 1
-        }
-        if parts == 0 {
-            throw .Empty
-        }
-        return Duration.nanoseconds(negative ? 0 - total : total)
     }
 }
 

@@ -1,17 +1,127 @@
 module TimeClockTests
 
+// Clock and its clocks, Instant, SuspendingInstant and measure, on the
+// system's clocks: the few tests that wait do so for milliseconds, and say
+// nothing of how late they wake. The rest of what clocks do is tested on a
+// TestClock (tests/lib/Sable.Concurrency).
+
 import Sable.Testing
 import Sable.Time
 
-@test
-fn aClockMeasuresWhatItRuns() {
-    let took = Clock.measure({ Runtime.sleep(nanoseconds: 1_000_000) })
-    assert(took >= Duration.milliseconds(1))
+struct Oops: Error { }
+
+// A clock of a program's own: the two methods it needs.
+struct StepClock: Clock {
+    let steps: Atomic<Int>
+
+    fn now() -> Instant {
+        return Instant.origin + Duration.seconds(steps.update { $0 + 1 })
+    }
+
+    fn sleep(until deadline: Instant) async throws(CancellationError) {
+        try Task.checkCancellation()
+        steps.store((deadline - Instant.origin).totalSeconds)
+    }
+}
+
+fn nap<C: Clock>(on clock: C) async -> Duration {
+    let start = clock.now()
+    try! await clock.sleep(for: Duration.milliseconds(2))
+    return clock.now().durationSince(start)
 }
 
 @test
-fn clocksSleepOffTheRunQueue() async {
+fn theSystemsClocksSleepAtLeastAsLong() async {
+    assert(await nap(on: MonotonicClock()) >= Duration.milliseconds(2))
+    assert(await nap(on: SuspendingClock()) >= Duration.milliseconds(2))
+    let moment = SystemClock().now().adding(Duration.milliseconds(2))
+    try! await SystemClock().sleep(until: moment)
+    assert(SystemClock().now() >= moment)
+}
+
+@test
+fn aDeadlineThatHasPassedIsNotWaitedFor() async {
     let start = Instant.now()
-    try? await Clock.sleep(Duration.milliseconds(2))
-    assert(start.elapsed >= Duration.milliseconds(2))
+    try! await MonotonicClock().sleep(until: start - Duration.hours(1))
+    try! await MonotonicClock().sleep(until: Instant.origin - Duration.max)
+    try! await SuspendingClock().sleep(until: SuspendingInstant.now().adding(Duration.hours(-1)))
+    try! await SystemClock().sleep(until: UtcDateTime.unixEpoch)
+    assert(start.elapsed < Duration.minutes(1))
+}
+
+@test
+fn aCancelledSleepThrowsOnEveryClock() async {
+    let sleepers = [
+        Task.spawn { (try? await MonotonicClock().sleep(for: Duration.max)) == none },
+        Task.spawn { (try? await MonotonicClock().sleep(until: Instant.now().saturatingAdding(Duration.max))) == none },
+        Task.spawn { (try? await SuspendingClock().sleep(for: Duration.max)) == none },
+        Task.spawn { (try? await SystemClock().sleep(for: Duration.hours(1))) == none },
+    ]
+    await Task.settle()
+    for sleeper in sleepers {
+        sleeper.cancel()
+    }
+    for sleeper in sleepers {
+        assert(await sleeper.value)
+    }
+}
+
+@test
+fn aClockOfTheProgramsOwnNeedsTwoMethods() async {
+    let clock = StepClock(steps: Atomic(0))
+    try! await clock.sleep(for: Duration.seconds(10))
+    assertEqual(clock.now() - Instant.origin, Duration.seconds(10))
+    let boxed: any Clock = clock
+    try! await boxed.sleep(for: Duration.seconds(10))
+    assertEqual(clock.now() - Instant.origin, Duration.seconds(21))
+}
+
+@test
+fn measuringIsOnTheClock() async {
+    let clock = StepClock(steps: Atomic(0))
+    assertEqual(clock.measure({
+        let _ = 1
+    }), Duration.seconds(1))
+    assertEqual(await clock.measure { await Task.yield() }, Duration.seconds(1))
+    assertEqual(measure(clock: clock, {
+        let _ = 1
+    }), Duration.seconds(1))
+    assertEqual(await measure(clock: clock) { await Task.yield() }, Duration.seconds(1))
+    assert(measure { Runtime.sleep(nanoseconds: 1_000_000) } >= Duration.milliseconds(1))
+    assert(await measure { try! await MonotonicClock().sleep(for: Duration.milliseconds(1)) } >= Duration.milliseconds(1))
+}
+
+@test
+fn measuringThrowsWhatTheBodyThrows() async {
+    do {
+        let _ = try measure { () throws(Oops) -> Void in
+            throw Oops()
+        }
+        assert(false)
+    } catch { }
+    do {
+        let _ = try await measure { () throws(Oops) -> Void in
+            await Task.yield()
+            throw Oops()
+        }
+        assert(false)
+    } catch { }
+}
+
+@test
+fn instantsOfASuspendingClockAreCompared() {
+    let start = SuspendingInstant.now()
+    let later = start.adding(Duration.seconds(1))
+    assert(start < later && start != later)
+    assertEqual(later.durationSince(start), Duration.seconds(1))
+    assertEqual(later.saturatingAdding(Duration.max), start.saturatingAdding(Duration.max))
+    let seen: [SuspendingInstant: Int] = [start: 1]
+    assertEqual(seen[start] ?? 0, 1)
+    assert(start.debugDescription().hasPrefix("SuspendingInstant("))
+}
+
+@test
+fn instantsOfTheWallClockAreCompared() {
+    let moment = UtcDateTime.unixEpoch
+    assertEqual(moment.saturatingAdding(Duration.days(1)).iso8601(), "1970-01-02T00:00:00Z")
 }

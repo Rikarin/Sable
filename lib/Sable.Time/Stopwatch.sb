@@ -1,0 +1,77 @@
+module Sable.Time
+
+/// How long something has taken, stopped and started at will: .NET's
+/// `Stopwatch`, on any clock. A value: a copy goes on alone.
+///
+/// ```sable
+/// var watch = Stopwatch()
+/// watch.stop()
+/// let paused = watch.elapsed
+/// watch.start()
+/// assert(watch.isRunning && watch.elapsed >= paused)
+/// ```
+public struct Stopwatch<C: Clock> {
+    let clock: C
+    // What it measured up to the last stop, and when it was started since.
+    var measured: Duration
+    var started: C.Instant?
+
+    /// One on the clock, running from now unless told not to.
+    public init(clock: C, running: Bool = true) {
+        self.clock = clock
+        measured = Duration.zero
+        started = running ? clock.now() : none
+    }
+
+    /// Whether it is measuring now.
+    public var isRunning: Bool => started.isSome
+
+    /// How long it has measured: all the time it was running.
+    public var elapsed: Duration {
+        get {
+            if let since = started {
+                return measured + clock.now().durationSince(since)
+            }
+            return measured
+        }
+    }
+
+    /// Measures from now on; nothing if it does already.
+    public mutating fn start() {
+        if started.isNone {
+            started = clock.now()
+        }
+    }
+
+    /// Measures no more, until started again; nothing if it does not. How
+    /// long it has measured.
+    @discardable
+    public mutating fn stop() -> Duration {
+        measured = elapsed
+        started = none
+        return measured
+    }
+
+    /// Stopped, with nothing measured.
+    public mutating fn reset() {
+        measured = Duration.zero
+        started = none
+    }
+
+    /// Measures from now, with nothing measured before; how long it had
+    /// measured: a lap.
+    @discardable
+    public mutating fn restart() -> Duration {
+        let lap = elapsed
+        measured = Duration.zero
+        started = clock.now()
+        return lap
+    }
+}
+
+extension Stopwatch where C == MonotonicClock {
+    /// One on the monotonic clock, running from now unless told not to.
+    public init(running: Bool = true) {
+        self.init(clock: MonotonicClock(), running: running)
+    }
+}

@@ -115,6 +115,9 @@ public sealed partial class SilInterpreter {
     /// <summary>The wait lists, by handle: tasks parked until woken, in the order they parked.</summary>
     readonly Dictionary<long, List<InterpretedTask>> _waitLists = [];
 
+    /// <summary>The tasks that wait until no other can go on (Task.settle()), the first to wait first.</summary>
+    readonly Queue<InterpretedTask> _settling = new();
+
     /// <summary>How many times each wait list has been woken: its ticket.</summary>
     readonly Dictionary<long, long> _waitListTickets = [];
 
@@ -207,7 +210,7 @@ public sealed partial class SilInterpreter {
         _sleepers.TryPeek(out _, out var key);
         var left = key.Deadline - Monotonic();
         if (left > 0) {
-            Thread.Sleep(TimeSpan.FromTicks((left + 99) / 100));
+            Thread.Sleep(TimeSpan.FromTicks(Math.Min(left, 1_000_000_000_000_000) / 100 + 1));
         }
 
         WakeSleepers();
@@ -223,6 +226,12 @@ public sealed partial class SilInterpreter {
             PollSockets(0);
             PollSources();
             if (!TryDequeue(out var task)) {
+                // No task can go on: the first that waits for that does.
+                if (_settling.TryDequeue(out var settled)) {
+                    Enqueue(settled);
+                    continue;
+                }
+
                 // A pipe, a child's end or a signal, with whatever else is waited for.
                 if (WaitForSources(draining: until is null)) {
                     continue;
@@ -457,6 +466,11 @@ public sealed partial class SilInterpreter {
                 _waitListTickets.Remove((long)operands[0]!);
                 return null;
 
+            // No list is Task.settle()'s: until no other task can go on.
+            case "async_park" when (long)operands[0]! == 0:
+                _settling.Enqueue(Current);
+                return true;
+
             case "async_park":
                 _waitLists[(long)operands[0]!].Add(Current);
                 return true;
@@ -503,7 +517,8 @@ public sealed partial class SilInterpreter {
                 }
 
                 var self = Current;
-                self.Deadline = Monotonic() + nanoseconds;
+                var now = Monotonic();
+                self.Deadline = nanoseconds > long.MaxValue - now ? long.MaxValue : now + nanoseconds;
                 self.Sleeping = true;
                 self.SleepTicket = ++_nextTicket;
                 _sleepers.Enqueue((self, self.SleepTicket), (self.Deadline, self.SleepTicket));

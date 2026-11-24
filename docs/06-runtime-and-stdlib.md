@@ -908,12 +908,15 @@ Sable.Concurrency   Channel and ThrowingChannel (unbounded, or bounded with
                     linked, cancel(after:), withCancellation), Promise,
                     Continuation (checked; a leak traps in debug),
                     withTimeout, race, whenAll/whenAny/whenEach,
-                    Task.sleep(for:)
+                    Task.sleep(for:), Timer, Interval, TestClock; each, and
+                    debounce, throttle and cancel(after:), on any Clock
                     (Task, TaskGroup, WaitList, AsyncSequence with map,
                     filter, compactMap, prefix, chunked, reduce,
                     first(where:), collect and zip, Atomic<T> and OnceCell
                     are Sable.Core's: an Atomic's cell is Core's raw memory)
-Sable.Time          Instant Duration Clock, UtcDateTime (the moment),
+Sable.Time          Instant Duration (checked, saturating, ISO 8601),
+                    Clock: MonotonicClock SuspendingClock SystemClock;
+                    Stopwatch, measure; UtcDateTime (the moment),
                     Date TimeOfDay LocalDateTime (civil), UtcOffset
                     OffsetDateTime, TimeZone (IANA, TZif, POSIX rules)
                     ZonedDateTime, Period, Weekday Month, Disambiguation;
@@ -1103,6 +1106,43 @@ an exponent and rounds what does not fit; formatting writes every place of
 the scale, plainly, and takes a format spec as a float does (Sable.Core's
 `FormatSpec.formatDecimal`). Its tests run cases of the specification's
 examples and decTest files, at a decimal's precision.
+
+### Clocks and durations
+
+`Clock` (`Sable.Time`) is Swift's: an associated `Instant: ClockInstant`,
+`now()`, `sleep(until:)`, which a cancellation ends, and `sleep(for:)`, with
+a default. Code that waits or measures takes one, generic over it
+(`fn retry<C: Clock>(clock: C)`), and everything in the library that does
+has an overload that takes a clock beside the one that takes none, which is
+the same code with `MonotonicClock()`: a struct with no fields, specialised
+away. The clocks are the systems', which differ in whether they count while
+the machine sleeps:
+
+| Clock | macOS | Linux | Windows | WASI |
+|---|---|---|---|---|
+| `MonotonicClock` | `CLOCK_MONOTONIC`: counts | `CLOCK_MONOTONIC`: does not | `QueryPerformanceCounter`: counts | `CLOCK_MONOTONIC`: not said |
+| `SuspendingClock` | `CLOCK_UPTIME_RAW` | `CLOCK_MONOTONIC` | `QueryUnbiasedInterruptTime`, to the tick | `CLOCK_MONOTONIC` |
+| `SystemClock` | `CLOCK_REALTIME` | `CLOCK_REALTIME` | `GetSystemTimePreciseAsFileTime` | `CLOCK_REALTIME` |
+
+Interpreted programs have one clock for the first two, .NET's `Stopwatch`.
+The runtime's timers are on the monotonic clock; the other two clocks sleep
+on it and look again.
+
+`TestClock` (`Sable.Concurrency`) is advanced by hand. Its determinism on a
+pool of threads rests on `Task.settle()` (`Sable.Core`): the runtime counts
+the tasks queued or running (`active`, tasks.c), and a task that settles
+parks in a list of its own until that count comes to nothing with the main
+thread not running either, which is when nothing can go on. `advance` wakes
+one sleeper, settles, and wakes the next. Tasks waiting for a real sleep, a
+socket or the blocking pool are not waited for (`waitForSleepers` is for
+those).
+
+A `Duration` is an Int of nanoseconds. Its operators trap on overflow, the
+`checked` and `saturating` forms do not; by an `F64` the product is made
+exactly in 128 bits and rounded once, half to even. Its text
+(`1h 2m 3.5s`) is exact and reads back as the same duration; ISO 8601's is
+read with weeks and days of exactly 24 hours, and years and months, which
+have no fixed length, are refused.
 
 ### Dates, times and time zones
 

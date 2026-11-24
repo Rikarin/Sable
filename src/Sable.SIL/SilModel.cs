@@ -2772,6 +2772,7 @@ public static class SilBuiltins {
         Add("fs_watch_take", new ArrayType(SilType.U8), SilType.Int);
         Add("fs_unwatch", SilType.Unit, SilType.Int);
         Add("time_monotonic", SilType.Int);
+        Add("time_suspending", SilType.Int);
         Add("time_wall_clock", SilType.Int);
         Add("time_sleep", SilType.Unit, SilType.Int);
 

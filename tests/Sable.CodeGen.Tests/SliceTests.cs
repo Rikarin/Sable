@@ -602,6 +602,57 @@ public sealed class SliceTests {
         );
 
     /// <summary>
+    ///     A whole array, of any kind, passed as an inout slice is its range
+    ///     from end to end: changed where it is, a copy of it untouched.
+    /// </summary>
+    [Fact]
+    public void AWholeArrayIsPassedAsAnInoutSlice() =>
+        Prints(
+            """
+            0 0 3 / 1 2 3
+            0 0 5 6
+            0 0 8
+            0 0 9
+
+            """,
+            Inout + """
+
+                    fn clear(_ s: inout Int[:]) { s[0..<2] = [0, 0] }
+                    struct Holder { var items: Int[>..] }
+                    """,
+            """
+                var grow: Int[>..] = [1, 2, 3]
+                let kept = grow
+                clear(&grow)
+                print("\(show(grow)) / \(show(kept))")
+                var fixed: Int[4] = [1, 2, 5, 6]
+                clear(&fixed)
+                print(show(fixed))
+                var holder = Holder { items: [6, 7, 8] }
+                clear(&holder.items)
+                print(show(holder.items))
+                var nested: Int[>..][>..] = [[7, 8, 9]]
+                clear(&nested[0])
+                print(show(nested[0]))
+            """
+        );
+
+    /// <summary>A whole array given back with another count traps, as a range of it does.</summary>
+    [Fact]
+    public void AWholeArrayGivenBackWithAnotherCountTraps() {
+        var execution = AssertAgree(
+            Program(
+                Inout + """
+
+                        fn shorten(_ s: inout Int[:]) { s = s[0..<1] }
+                        """,
+                "    var xs: Int[>..] = [1, 2, 3, 4]\n    shorten(&xs)\n    print(\"unreachable\")"
+            )
+        );
+        Assert.StartsWith("fatal error: a slice of count 1 stored over a range of count 4\n", execution.Stderr, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     A callee can give its slice another count only by replacing it
     ///     whole; stored back over the range, that traps, as a store of
     ///     another count to a fixed array's range does.

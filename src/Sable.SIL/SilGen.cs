@@ -3653,6 +3653,25 @@ public sealed partial class SilGen {
         return true;
     }
 
+    /// <summary>
+    ///     Whether the candidate's parameters could be the requirement's, as
+    ///     far as the types both name go: of overloads with one name and the
+    ///     same labels — <c>random(in: Range&lt;Self&gt;)</c> and
+    ///     <c>random(in: ClosedRange&lt;Self&gt;)</c> — the one that meets the
+    ///     requirement. A type parameter, or Self, may be any type.
+    /// </summary>
+    static bool ParametersFit(FunctionSymbol candidate, FunctionSymbol requirement) {
+        static bool Fits(TypeSymbol given, TypeSymbol wanted) =>
+            given is not NamedTypeSymbol { TypeKind: not TypeKind.Protocol } g
+            || wanted is not NamedTypeSymbol { TypeKind: not TypeKind.Protocol } w
+            || ReferenceEquals(g.OriginalDefinition, w.OriginalDefinition)
+            && g.TypeArguments.Length == w.TypeArguments.Length
+            && g.TypeArguments.Zip(w.TypeArguments).All(static pair => Fits(pair.First, pair.Second));
+
+        return candidate.Parameters.Length == requirement.Parameters.Length
+            && candidate.Parameters.Zip(requirement.Parameters).All(static pair => Fits(pair.First.Type, pair.Second.Type));
+    }
+
     static bool SameLabels(FunctionSymbol a, FunctionSymbol b) =>
         a.Parameters.Length == b.Parameters.Length
         && a.Parameters.Zip(b.Parameters).All(static p => (p.First.Label ?? p.First.Name) == (p.Second.Label ?? p.Second.Name));
@@ -3669,17 +3688,22 @@ public sealed partial class SilGen {
 
         // An operator is static wherever it is written; a requirement's says nothing.
         var own = _compilation.ArrayMembersNamed(array, requirement.Name).OfType<FunctionSymbol>()
-            .FirstOrDefault(f => (f.IsStatic == requirement.IsStatic || requirement.FunctionKind == FunctionKind.Operator) && SameLabels(f, requirement));
+            .Where(f => (f.IsStatic == requirement.IsStatic || requirement.FunctionKind == FunctionKind.Operator) && SameLabels(f, requirement))
+            .OrderBy(f => !ParametersFit(f, requirement))
+            .FirstOrDefault();
         if (own is not null) {
             return own;
         }
 
         if (Owner(requirement) is { TypeKind: TypeKind.Protocol } protocol) {
-            return protocol.OriginalDefinition.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
-                f.ContainingSymbol is ExtensionSymbol
-                && f.Name == requirement.Name
-                && f.IsStatic == requirement.IsStatic
-                && f.Parameters.Length == requirement.Parameters.Length);
+            return protocol.OriginalDefinition.Members.OfType<FunctionSymbol>()
+                .Where(f =>
+                    f.ContainingSymbol is ExtensionSymbol
+                    && f.Name == requirement.Name
+                    && f.IsStatic == requirement.IsStatic
+                    && f.Parameters.Length == requirement.Parameters.Length)
+                .OrderBy(f => !ParametersFit(f, requirement))
+                .FirstOrDefault();
         }
 
         return null;
@@ -3715,6 +3739,7 @@ public sealed partial class SilGen {
                 .OrderBy(f => f.ExplicitProtocol is null)
                 .ThenBy(f => !SameLabels(f, requirement))
                 .ThenBy(f => !SelfParametersMatch(f, requirement, type))
+                .ThenBy(f => !ParametersFit(f, requirement))
                 .FirstOrDefault();
             if (found is not null) {
                 return found;
@@ -3734,6 +3759,7 @@ public sealed partial class SilGen {
                         && f.Parameters.Length == requirement.Parameters.Length)
                     .OrderBy(f => !SameLabels(f, requirement))
                     .ThenBy(f => f.TypeParameters.Length != requirement.TypeParameters.Length)
+                    .ThenBy(f => !ParametersFit(f, requirement))
                     .FirstOrDefault()
                 ?? RefinedDefault(concrete, protocol.OriginalDefinition, requirement);
         }
@@ -3817,12 +3843,15 @@ public sealed partial class SilGen {
             }
 
             if (!ReferenceEquals(protocol, required)
-                && protocol.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
-                    f.ContainingSymbol is ExtensionSymbol
-                    && f.Name == requirement.Name
-                    && (f.IsStatic == requirement.IsStatic || requirement.FunctionKind == FunctionKind.Operator)
-                    && f.Parameters.Length == requirement.Parameters.Length
-                    && SameLabels(f, requirement)) is { } found) {
+                && protocol.Members.OfType<FunctionSymbol>()
+                    .Where(f =>
+                        f.ContainingSymbol is ExtensionSymbol
+                        && f.Name == requirement.Name
+                        && (f.IsStatic == requirement.IsStatic || requirement.FunctionKind == FunctionKind.Operator)
+                        && f.Parameters.Length == requirement.Parameters.Length
+                        && SameLabels(f, requirement))
+                    .OrderBy(f => !ParametersFit(f, requirement))
+                    .FirstOrDefault() is { } found) {
                 if (protocol.Satisfies(required)) {
                     return found;
                 }
@@ -4938,6 +4967,10 @@ public sealed partial class SilGen {
         ///     and held as a temporary, to be <see cref="End" />ed after the use.
         /// </summary>
         SilValue? Borrow(BoundExpression expression) {
+            if (_evaluated.Count > 0 && _evaluated.TryGetValue(expression, out var once)) {
+                return once.Type.IsTrivial ? once : Hold(Emit(new CopyValueInst(once)));
+            }
+
             if (UsesLent(expression)) {
                 return null;
             }
@@ -6789,6 +6822,10 @@ public sealed partial class SilGen {
         }
 
         SilValue? ExpressionHere(BoundExpression expression) {
+            if (_evaluated.Count > 0 && _evaluated.TryGetValue(expression, out var once)) {
+                return once.Type.IsTrivial ? once : Emit(new CopyValueInst(once));
+            }
+
             if (UsesLent(expression)) {
                 return null;
             }
@@ -7435,6 +7472,11 @@ public sealed partial class SilGen {
         SilValue? AssignmentValue(BoundAssignment assignment) => OnActorFor(assignment, () => AssignmentValueHere(assignment));
 
         SilValue? AssignmentValueHere(BoundAssignment assignment) {
+            var evaluated = new List<BoundExpression>();
+            return EndEvaluated(evaluated, EvaluateTargetOnce(assignment, evaluated) ? AssignmentValueOf(assignment) : null);
+        }
+
+        SilValue? AssignmentValueOf(BoundAssignment assignment) {
             // 'a.next?.v = 9' stores only when there is a next, evaluating the
             // value only then: its value is optional.
             if (assignment.Target is BoundFieldAccess { Receiver: { } chainedFrom } chainedTarget
@@ -7464,7 +7506,92 @@ public sealed partial class SilGen {
             return Emit(new LoadInst(slot, type.IsTrivial ? LoadKind.Trivial : LoadKind.Take));
         }
 
+        /// <summary>
+        ///     What a compound assignment's target is made of, evaluated once
+        ///     for the read and the store: by the node, which the two share, its
+        ///     value, held.
+        /// </summary>
+        readonly Dictionary<BoundExpression, SilValue> _evaluated = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>
+        ///     <c>xs[next()] += 1</c> reads the target, then stores to it, and
+        ///     evaluates it once: an index that does more than read a variable,
+        ///     or whose variable the right side may change, and an object a
+        ///     call gives (<c>make().count += 1</c>), are evaluated first, and
+        ///     held, and both the read and the store take them from there.
+        ///     False when one could not be.
+        /// </summary>
+        bool EvaluateTargetOnce(BoundAssignment assignment, List<BoundExpression> evaluated) {
+            if (assignment.Syntax is not AssignmentExpressionSyntax { OperatorToken.Kind: not SyntaxKind.EqualsToken }) {
+                return true;
+            }
+
+            bool? changes = null;
+            return Visit(assignment.Target);
+
+            bool Visit(BoundExpression? place) {
+                switch (place) {
+                    case BoundIndexAccess index:
+                        return Visit(index.Receiver) && index.Indices.All(i => IsRead(i) && !(i is not BoundLiteral && RightSideChanges()) || Once(i));
+
+                    case BoundFieldAccess field:
+                        return Visit(field.Receiver);
+
+                    case BoundConversion { ConversionKind: ConversionKind.Identity } conversion:
+                        return Visit(conversion.Operand);
+
+                    case BoundCall or BoundIndirectCall or BoundUnaryOperator { Operand: BoundCall or BoundIndirectCall } when Sub(place.Type).TypeKind is TypeKind.Class or TypeKind.Actor:
+                        return Once(place);
+
+                    default:
+                        return true;
+                }
+            }
+
+            bool Once(BoundExpression node) {
+                if (_evaluated.ContainsKey(node)) {
+                    return true;
+                }
+
+                if (LowerType(Sub(node.Type)) is null || Expression(node) is not { } value) {
+                    return false;
+                }
+
+                _evaluated[node] = Hold(Owned(value));
+                evaluated.Add(node);
+                return true;
+            }
+
+            bool RightSideChanges() => changes ??= !IsRead(assignment.Value);
+
+            // Reading it again gives the same and does nothing.
+            bool IsRead(BoundNode node) =>
+                ReferenceEquals(node, assignment.Target)
+                || node is BoundLiteral or BoundLocalAccess or BoundParameterAccess or BoundSelfAccess or BoundValueParameter or BoundTypeExpression or BoundMetatype
+                    or BoundFieldAccess { Field.IsComputed: false } or BoundUnaryOperator or BoundBinaryOperator or BoundConversion or BoundRange or BoundTuple
+                    or BoundTupleElementAccess or BoundIndexAccess { Subscript: null }
+                && node.Children.All(IsRead);
+        }
+
+        SilValue? EndEvaluated(List<BoundExpression> evaluated, SilValue? result) {
+            foreach (var node in Enumerable.Reverse(evaluated)) {
+                _evaluated.Remove(node, out var value);
+                if (result is null) {
+                    Unhold(value!);
+                } else {
+                    End(value!);
+                }
+            }
+
+            return result;
+        }
+
         SilValue? Assignment(BoundAssignment assignment) {
+            var evaluated = new List<BoundExpression>();
+            return EndEvaluated(evaluated, EvaluateTargetOnce(assignment, evaluated) ? AssignmentHere(assignment) : null);
+        }
+
+        SilValue? AssignmentHere(BoundAssignment assignment) {
             if (assignment.Target is BoundFieldAccess { Receiver: { } chainedFrom } chainedTarget
                 && IsChainedThrough(chainedFrom, chainedTarget.Field)) {
                 return ChainedAssignment(assignment, chainedTarget, chainedFrom);
@@ -7987,6 +8114,10 @@ public sealed partial class SilGen {
                 // 'sortAll(&values[1..<^1])', 'values[2...].sort()'.
                 case BoundIndexAccess sliced when SlicingRange(sliced) is { } rangeIndex && !IsInlineArray(sliced.Receiver):
                     return SliceForWriteBack(sliced, rangeIndex, borrows);
+
+                // The whole of an array, where an inout slice is wanted: 'fill(&values)'.
+                case BoundConversion { ConversionKind: ConversionKind.Identity } view when IsArrayView(view) && !IsInlineArray(view.Operand):
+                    return ArrayForWriteBack(view, borrows);
 
                 // An element of an array, where it is: 'bump(&values[0])'.
                 case BoundIndexAccess { Subscript: null, Indices: [var indexExpression] } element

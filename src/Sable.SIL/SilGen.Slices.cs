@@ -237,10 +237,30 @@ public sealed partial class SilGen {
                 return Missing(sliced, $"'{Describe(sliced.Syntax)}' as a place");
             }
 
-            if (PlaceBounds(place, rangeIndex) is not var (from, to)) {
+            return PlaceBounds(place, rangeIndex) is var (from, to) ? SliceForWriteBack(place, element, from, to, borrows) : null;
+        }
+
+        /// <summary>
+        ///     The whole of an array where an <c>inout T[:]</c> is wanted —
+        ///     <c>generator.fill(bytes: &amp;xs)</c> — as <c>&amp;xs[0...]</c> is.
+        /// </summary>
+        SilValue? ArrayForWriteBack(BoundConversion view, List<SilValue> borrows) {
+            if (Address(view.Operand, borrows) is not { Type: AddressType { Pointee: var pointee } } place) {
                 return null;
             }
 
+            if (ArrayType.ElementOf(pointee) is not { } element) {
+                return Missing(view, $"'{Describe(view.Syntax)}' as a place");
+            }
+
+            var array = Emit(new LoadInst(place));
+            var count = Emit(new BuiltinInst("array_count", SilType.Int, array));
+            Destroy(array);
+            return SliceForWriteBack(place, element, Emit(new IntegerLiteralInst(SilType.Int, 0)), count, borrows);
+        }
+
+        /// <summary>The elements from one position to another, read out as a slice and stored back when <paramref name="borrows" /> end.</summary>
+        SilValue SliceForWriteBack(SilValue place, SilType element, SilValue from, SilValue to, List<SilValue> borrows) {
             var array = Emit(new LoadInst(place));
             var view = Emit(new BuiltinInst("array_slice", new SliceType(element), array, from, to));
             Destroy(array);

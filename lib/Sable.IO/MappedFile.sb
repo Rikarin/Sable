@@ -11,7 +11,9 @@ module Sable.IO
 /// `write(_:at:)`, which a mapping made `.ReadWrite` passes to the file and
 /// `.CopyOnWrite` keeps to itself. Arrays taken from `bytes` see what is
 /// written, as they are the mapping; each keeps it mapped while it is held,
-/// past `close()` and past a `resize`, which maps the file again.
+/// past `close()` and past a `resize`, which maps the file again — but
+/// Windows cuts no file that is mapped, so there a `resize` to a smaller
+/// length throws while such an array is held.
 ///
 /// ```sable
 /// let path = "sable-mapped-example.bin"
@@ -126,13 +128,27 @@ public final class MappedFile {
 
     /// The file made the length, grown with zeros or cut, and mapped
     /// again: `bytes` is then the new mapping. Arrays taken from the old one
-    /// keep it, as it was. Only a `.ReadWrite` mapping changes its file.
+    /// keep it. Only a `.ReadWrite` mapping changes its file.
+    ///
+    /// Let such arrays go before cutting the file. Windows cuts no file any
+    /// mapping of which is left, in this program or another: `resize`
+    /// throws `IoError.Os` with its code 1224, and the mapping is as it
+    /// was. Other systems cut it, and what an old array had past the new
+    /// end is no longer there to be read: the system stops the program.
     public fn resize(to length: Int) throws(IoError) {
-        if mode != .ReadWrite || length < 0 {
+        if mode != .ReadWrite || length < 0 || !file.isOpen {
             throw IoError.InvalidInput(path: file.path)
         }
         try flush()
-        try file.setLength(length)
+        let before = mapped.count
+        // Windows cuts no file that is mapped: this mapping goes first.
+        mapped = []
+        do {
+            try file.setLength(length)
+        } catch {
+            try map(before)
+            throw error
+        }
         try map(length)
     }
 

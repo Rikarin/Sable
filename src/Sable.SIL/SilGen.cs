@@ -5621,8 +5621,8 @@ public sealed partial class SilGen {
                     var after = function.AddBlock();
                     Branch(header);
 
-                    // The loop's 'break' goes to after too.
-                    var decision = loop.Syntax is WhileStatementSyntax written ? Decide(written.WhileKeyword.SpanStart, "while", "true", "false") : null;
+                    // The loop's 'break' goes to after too. 'while true' decides nothing: only a jump leaves it.
+                    var decision = loop is { Syntax: WhileStatementSyntax written, Condition: not BoundLiteral } ? Decide(written.WhileKeyword.SpanStart, "while", "true", "false") : null;
                     _current = header;
                     Condition(loop.Condition, Mark(body, decision, 0), Land(after, decision, 1));
 
@@ -5649,7 +5649,7 @@ public sealed partial class SilGen {
                     }
 
                     // The body is entered first, and the loop's 'break' goes to after.
-                    var decision = loop.Syntax is RepeatStatementSyntax written ? Decide(written.WhileKeyword.SpanStart, "while", "true", "false") : null;
+                    var decision = loop is { Syntax: RepeatStatementSyntax written, Condition: not BoundLiteral } ? Decide(written.WhileKeyword.SpanStart, "while", "true", "false") : null;
                     _current = test;
                     Condition(loop.Condition, Land(body, decision, 0), Land(after, decision, 1));
 

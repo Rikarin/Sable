@@ -3,6 +3,7 @@ module AtomicTests
 // Atomic, MemoryOrdering and OnceCell (Sable.Core).
 
 import Sable.Testing
+import Sable.Time
 
 @test
 fn anAtomicIntegerIsChangedWhole() {
@@ -105,4 +106,113 @@ fn manyTasksCountTogether() async {
     }
     assertEqual(counter.load(), 160000)
     assertEqual(made.load(), 1)
+}
+
+@test
+fn anAtomicTakesEveryOrdering() {
+    let n = Atomic<Int>(1)
+    assertEqual(n.add(1, ordering: .AcquireRelease), 1)
+    assertEqual(n.exchange(5, ordering: .Acquire), 2)
+    assertEqual(n.subtract(1, ordering: .Release), 5)
+    assertEqual(n.update(ordering: .AcquireRelease) { $0 + 6 }, 4)
+    n.store(n.load(ordering: .SequentiallyConsistent) * 2, ordering: .Relaxed)
+    assertEqual(n.load(), 20)
+    atomicFence(.Release)
+    atomicFence(.AcquireRelease)
+    assert(MemoryOrdering.Acquire != MemoryOrdering.Release)
+    assertEqual("\(MemoryOrdering.AcquireRelease)", "AcquireRelease")
+}
+
+@test(traps: "a load cannot release")
+fn aReleaseLoadTraps() {
+    let _ = Atomic<Int>(0).load(ordering: .Release)
+}
+
+@test(traps: "a load cannot release")
+fn anAcquireReleaseLoadTraps() {
+    let _ = Atomic<Int>(0).load(ordering: .AcquireRelease)
+}
+
+@test(traps: "a store cannot acquire")
+fn anAcquireStoreTraps() {
+    Atomic<Int>(0).store(1, ordering: .Acquire)
+}
+
+@test(traps: "a store cannot acquire")
+fn anAcquireReleaseStoreTraps() {
+    Atomic<Int>(0).store(1, ordering: .AcquireRelease)
+}
+
+@test
+fn anUpdateIsTriedAgainWhenTheValueChangedMeanwhile() {
+    let n = Atomic<Int>(1)
+    var tries: Int[>..] = []
+    let before = n.update { value in
+        if tries.isEmpty {
+            // What another task could do between the load and the exchange.
+            n.store(10)
+        }
+        tries.append(value)
+        return value + 1
+    }
+    assertEqual(before, 10)
+    assertEqual(n.load(), 11)
+    // A weak exchange may fail for no reason, so there may be more tries.
+    assertEqual(tries[0], 1)
+    assertEqual(tries[tries.count - 1], 10)
+}
+
+class Counted {
+    let gone: Atomic<Int>
+
+    init(_ gone: Atomic<Int>) {
+        self.gone = gone
+    }
+
+    deinit {
+        gone.add(1)
+    }
+}
+
+@test
+fn aOnceCellLetsItsValueGoIfItMadeOne() {
+    let gone = Atomic<Int>(0)
+    do {
+        let empty = OnceCell<Counted>()
+        assert(empty.get() == none)
+    }
+    assertEqual(gone.load(), 0)
+    do {
+        let cell = OnceCell<Counted>()
+        let _ = cell.getOrInit { Counted(gone) }
+        assertEqual(gone.load(), 0)
+    }
+    assertEqual(gone.load(), 1)
+}
+
+@test
+fn aOnceCellsAskersWaitForTheTaskMakingIt() async {
+    let cell = OnceCell<Int>()
+    let asking = Atomic<Bool>(false)
+    let making = Atomic<Bool>(false)
+    let maker = Task.spawn {
+        return cell.getOrInit {
+            making.store(true)
+            while !asking.load() { }
+            // Time for the asker to find it being made.
+            let start = Instant.now()
+            while start.elapsed < Duration.milliseconds(50) { }
+            return 7
+        }
+    }
+    while !making.load() {
+        await Task.yield()
+    }
+    let asker = Task.spawn {
+        assert(cell.get() == none)
+        asking.store(true)
+        return cell.getOrInit { 8 }
+    }
+    assertEqual(await asker.value, 7)
+    assertEqual(await maker.value, 7)
 }

@@ -51,3 +51,90 @@ fn anEmptyBufferHasNothing() {
         assert(view.toArray() == [] as Int[>..])
     }
 }
+
+class Counted {
+    let gone: Atomic<Int>
+
+    init(_ gone: Atomic<Int>) {
+        self.gone = gone
+    }
+
+    deinit {
+        gone.add(1)
+    }
+}
+
+@test
+fn aBuffersValuesAreDestroyedOnce() {
+    let gone = Atomic<Int>(0)
+    unsafe {
+        let buffer = UnsafeBuffer<Counted>.allocate(count: 3)
+        buffer.initialize(repeating: Counted(gone))
+        assertEqual(gone.load(), 0)
+        var view = buffer
+        view[1] = Counted(gone)
+        buffer.deinitialize()
+        buffer.deallocate()
+    }
+    assertEqual(gone.load(), 2)
+}
+
+fn middle<C: RandomAccessCollection>(_ values: C) -> C.Element {
+    let half = values.distance(from: values.startIndex, to: values.endIndex) / 2
+    return values[values.index(values.startIndex, offsetBy: half)]
+}
+
+@test
+fn aBufferIsReadAtRandom() {
+    unsafe {
+        var buffer = UnsafeBuffer<Int>.allocate(count: 5)
+        defer {
+            buffer.deallocate()
+        }
+        buffer.initialize(repeating: 0)
+        for i in 0..<5 {
+            buffer[i] = i * i
+        }
+        assertEqual(middle(buffer), 4)
+        assertEqual(buffer.index(after: 1), 2)
+        assertEqual(buffer.index(before: 1), 0)
+    }
+}
+
+// Two values, which the tests of what traps ask past.
+fn pair() -> UnsafeBuffer<Int> {
+    unsafe {
+        let buffer = UnsafeBuffer<Int>.allocate(count: 2)
+        buffer.initialize(repeating: 1)
+        return buffer
+    }
+}
+
+@test(traps: "index 2 is out of range for count 2")
+fn readingPastTheBufferTraps() {
+    let _ = pair()[2]
+}
+
+@test(traps: "index -1 is out of range for count 2")
+fn readingBeforeTheBufferTraps() {
+    let _ = pair()[-1]
+}
+
+@test(traps: "index 2 is out of range for count 2")
+fn writingPastTheBufferTraps() {
+    var buffer = pair()
+    buffer[2] = 5
+}
+
+@test(traps: "index -1 is out of range for count 2")
+fn writingBeforeTheBufferTraps() {
+    var buffer = pair()
+    buffer[-1] = 5
+}
+
+@test(traps: "a buffer of -1 values")
+fn aBufferOfANegativeCountTraps() {
+    unsafe {
+        let _ = UnsafeBuffer<Int>.viewing(RawPtr<Int>.null, count: -1)
+    }
+}

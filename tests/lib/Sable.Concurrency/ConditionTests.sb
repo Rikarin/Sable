@@ -28,3 +28,44 @@ fn aConditionWakesAWaiterWhenTheValueIsReady() async {
     let empty: Mutex<Int[>..]> = Mutex([])
     assert(empty.withLock(when: filled, within: 1000000, { !$0.isEmpty }) { $0.count } == none)
 }
+
+@test
+fn notifyOneWakesTheOneWaiting() async {
+    let ready = Mutex<Bool>(false)
+    let changed = Condition()
+    let asked = Atomic<Bool>(false)
+    let waiter = Task.spawn {
+        return ready.withLock(when: changed, { value -> Bool in
+            asked.store(true)
+            return value
+        }) { $0 }
+    }
+    while !asked.load() {
+        await Task.yield()
+    }
+    // The waiter asked holding the lock, so this takes it only once it waits.
+    ready.withLock { $0 = true }
+    changed.notifyOne()
+    assert(await waiter.value)
+}
+
+@test
+fn aWaitWithADeadlineEndsWhenTheValueIsReady() async {
+    let count = Mutex<Int>(0)
+    let changed = Condition()
+    // Ready already: no wait.
+    assertEqual(count.withLock(when: changed, within: 0, { $0 == 0 }) { $0 }, 0)
+    let asked = Atomic<Bool>(false)
+    let waiter = Task.spawn {
+        return count.withLock(when: changed, within: 60000000000, { value -> Bool in
+            asked.store(true)
+            return value > 0
+        }) { $0 * 10 }
+    }
+    while !asked.load() {
+        await Task.yield()
+    }
+    count.withLock { $0 = 4 }
+    changed.notifyAll()
+    assertEqual(await waiter.value, 40)
+}

@@ -47,3 +47,31 @@ fn aStructOfCollectionsDerivesDebugAndIsLaidOut() {
     assertEqual("\(inventory)", "Inventory(names: List([\"pen\"]), ids: Set([7]))")
     assertEqual("\(inventory:#?)", "Inventory(\n    names: List([\n        \"pen\",\n    ]),\n    ids: Set([\n        7,\n    ]),\n)")
 }
+
+@test
+fn theRestDescribeTheirElementsInTheirOwnOrder() {
+    var queue = Queue<Int>()
+    queue.enqueue(1)
+    queue.enqueue(2)
+    assertEqual("\(queue)", "Queue([1, 2])")
+    var stack = Stack<Int>()
+    assertEqual("\(stack)", "Stack([])")
+    stack.push(1)
+    stack.push(2)
+    assertEqual("\(stack)", "Stack([2, 1])")
+    var linked = LinkedList<String>()
+    linked.append("b")
+    linked.prepend("a")
+    assertEqual("\(linked)", "LinkedList([\"a\", \"b\"])")
+    var small = SmallVec<Int, 2>()
+    small.append(1)
+    small.append(2)
+    small.append(3)
+    assertEqual("\(small)", "SmallVec([1, 2, 3])")
+    var byName = HashingDictionary<String, Int>(hashing: .by { $0.lowercased() })
+    assertEqual("\(byName)", "HashingDictionary([:])")
+    byName["A"] = 1
+    byName["a"] = 2
+    byName["b"] = 3
+    assertEqual("\(byName)", "HashingDictionary([\"A\": 2, \"b\": 3])")
+}

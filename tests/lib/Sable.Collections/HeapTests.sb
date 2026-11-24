@@ -32,7 +32,8 @@ fn aHeapAgreesWithASortedArrayUnderRandomChanges() {
     while step < 3000 {
         seed = (seed * 1103515245 + 12345) % 2147483648
         let value = seed / 16 % 500
-        let choice = seed % 4
+        // The high bits: the low ones of such a generator hardly vary.
+        let choice = seed / 65536 % 4
         if choice <= 1 || model.isEmpty {
             heap.insert(value)
             model.append(value)
@@ -50,4 +51,60 @@ fn aHeapAgreesWithASortedArrayUnderRandomChanges() {
         assertEqual(heap.count, model.count)
         step += 1
     }
+}
+
+@test
+fn aHeapOfManyStaysInOrder() {
+    // Descending, so that each insertion moves; then out from either end.
+    let heap = Heap<Int>()
+    for value in (0..<200).reversed() {
+        heap.insert(value)
+    }
+    for i in 0..<100 {
+        assertEqual(heap.popMin(), i)
+        assertEqual(heap.popMax(), 199 - i)
+    }
+    assert(heap.isEmpty)
+    assert(heap.popMax() == none)
+}
+
+@test
+fn aHeapKeepsWhatTies() {
+    let heap = Heap<Int>([4, 2, 4, 2, 4, 2, 4])
+    assertEqual(heap.popMax(), 4)
+    assertEqual(heap.popMin(), 2)
+    assertEqual(heap.popMax(), 4)
+    assertEqual(heap.popMin(), 2)
+    assertEqual(heap.popMax(), 4)
+    assertEqual(heap.popMax(), 4)
+    assertEqual(heap.popMax(), 2)
+    assert(heap.isEmpty)
+}
+
+@test
+fn aHeapIsGoneThroughAndEmptied() {
+    let heap = Heap<Int>([5, 1, 9])
+    assert(!heap.isEmpty)
+    var seen = heap.toArray()
+    seen.sort()
+    assert(seen == [1, 5, 9])
+    heap.removeAll()
+    assert(heap.isEmpty)
+    assertEqual(heap.count, 0)
+    assert(heap.min == none && heap.max == none)
+    heap.insert(3)
+    assertEqual(heap.min, 3)
+    assertEqual(heap.max, 3)
+}
+
+@test
+fn prioritizedElementsGoByTheirPriorityAlone() {
+    let write = Prioritized("write", priority: 2)
+    let ship = Prioritized("ship", priority: 1)
+    assert(ship < write)
+    assert(write == Prioritized("read", priority: 2))
+    assert(write != ship)
+    let heap = Heap<Prioritized<String, Int>>([write, ship])
+    assertEqual(heap.popMin()!.element, "ship")
+    assertEqual(heap.popMax()!.element, "write")
 }

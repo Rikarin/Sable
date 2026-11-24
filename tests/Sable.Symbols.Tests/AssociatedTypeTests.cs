@@ -56,6 +56,41 @@ public sealed class AssociatedTypeTests {
     }
 
     [Fact]
+    public void AClosureParameterIsReadThroughTheConformer() =>
+        AssertClean(
+            """
+            protocol Order {
+                associatedtype Element
+                fn before(_ a: Element, _ b: Element, by closure: (Element, Element) throws -> Bool) rethrows -> Bool
+                fn pick(_ choose: (Element) -> Element?) -> Element?
+            }
+            struct Ascending<Element: Comparable>: Order {
+                fn before(_ a: Element, _ b: Element, by closure: (Element, Element) throws -> Bool) rethrows -> Bool {
+                    return a < b
+                }
+                fn pick(_ choose: (Element) -> Element?) -> Element? { return none }
+            }
+            """
+        );
+
+    [Fact]
+    public void AClosureParameterOfAnotherTypeIsAMismatch() {
+        var errors = ErrorsIn(
+            """
+            protocol Order {
+                associatedtype Element
+                fn before(_ a: Element, _ b: Element, by closure: (Element, Element) -> Bool) -> Bool
+            }
+            struct Wrong: Order {
+                alias Element = Int
+                fn before(_ a: Int, _ b: Int, by closure: (String, String) -> Bool) -> Bool { return a < b }
+            }
+            """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_RequirementSignatureMismatch);
+    }
+
+    [Fact]
     public void NotSayingWhatItIsIsAnError() {
         var errors = ErrorsIn(
             """

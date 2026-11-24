@@ -32,6 +32,35 @@ static inline bool any16(sable_mask16 mask) {
     return (words[0] | words[1]) != 0;
 }
 
+// A mask's lanes as bits, one bit set for each lane set, lane k's at bit
+// k * MASK16_LANE_BITS: on ARM four bits to a lane (the "shift right and
+// narrow" of each half-word), the top one kept; on x86 one (movemask);
+// elsewhere one, gathered lane by lane.
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+enum { MASK16_LANE_BITS = 4 };
+static inline uint64_t mask16_bits(sable_mask16 mask) {
+    return vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_s8((int8x16_t)mask), 4)), 0)
+           & 0x8888888888888888ull;
+}
+#elif defined(__SSE2__)
+#include <emmintrin.h>
+enum { MASK16_LANE_BITS = 1 };
+static inline uint64_t mask16_bits(sable_mask16 mask) {
+    return (uint64_t)(uint32_t)_mm_movemask_epi8((__m128i)mask);
+}
+#else
+enum { MASK16_LANE_BITS = 1 };
+static inline uint64_t mask16_bits(sable_mask16 mask) {
+    uint64_t bits = 0;
+    for (int k = 0; k < 16; k++) {
+        bits |= (uint64_t)(mask[k] != 0) << k;
+    }
+
+    return bits;
+}
+#endif
+
 static int64_t count_scalars(const char *bytes, int64_t length) {
     int64_t count = 0;
     for (int64_t i = 0; i < length; i++) {
@@ -384,12 +413,12 @@ static const char *find_bytes(const char *haystack, int64_t length, const char *
     sable_bytes16 last = (sable_bytes16){ 0 } + (uint8_t)needle[size - 1];
     for (; i + size - 1 + 16 <= length; i += 16) {
         sable_mask16 both = (sable_mask16)((load16(haystack + i) == first) & (load16(haystack + i + size - 1) == last));
-        if (!any16(both)) {
-            continue;
-        }
-
-        for (int k = 0; k < 16; k++) {
-            if (both[k] && memcmp(haystack + i + k + 1, needle + 1, (size_t)(size - 2)) == 0) {
+        // Only the candidates, by their bits: in text where the needle's
+        // first and last bytes often stand that far apart, most blocks
+        // have one or two.
+        for (uint64_t bits = mask16_bits(both); bits != 0; bits &= bits - 1) {
+            int k = __builtin_ctzll(bits) / MASK16_LANE_BITS;
+            if (memcmp(haystack + i + k + 1, needle + 1, (size_t)(size - 2)) == 0) {
                 return haystack + i + k;
             }
         }
@@ -680,8 +709,126 @@ int64_t sable_string_utf8_find_last_range(const SableString *text, int64_t from,
 // is none: no overlong forms, no surrogates, nothing past U+10FFFF, nothing
 // cut short (utf8_sequence, above). Sixteen ASCII bytes are passed over at
 // once, the common run, so ASCII text is checked at memory speed.
+//
+// Where the machine can look sixteen bytes up in a sixteen-entry table at
+// once (NEON's tbl, SSSE3's pshufb, WebAssembly's swizzle), whole blocks of
+// any text are checked first, sixteen bytes a step (lookup16_utf8_fine,
+// below). The first block that is not fine, and what is left at the end, is
+// walked byte by byte from the start of the sequence it is in, which finds
+// the exact place.
+#if defined(__ARM_NEON) || defined(__SSSE3__) || defined(__wasm_simd128__)
+#define SABLE_LOOKUP16 1
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#elif defined(__SSSE3__)
+#include <tmmintrin.h>
+#else
+#include <wasm_simd128.h>
+#endif
+
+// Each byte of 'indices', each under 16, replaced by that entry of 'table'.
+static inline sable_bytes16 lookup16(sable_bytes16 table, sable_bytes16 indices) {
+#if defined(__ARM_NEON)
+    return (sable_bytes16)vqtbl1q_u8((uint8x16_t)table, (uint8x16_t)indices);
+#elif defined(__SSSE3__)
+    return (sable_bytes16)_mm_shuffle_epi8((__m128i)table, (__m128i)indices);
+#else
+    return (sable_bytes16)wasm_i8x16_swizzle((v128_t)table, (v128_t)indices);
+#endif
+}
+
+// The block's bytes moved along by one, two or three, the previous block's
+// last bytes coming in first: each byte beside the one before it.
+#define SABLE_BEHIND(block, previous, n) \
+    __builtin_shufflevector(previous, block, 16 - (n), 17 - (n), 18 - (n), 19 - (n), 20 - (n), 21 - (n), 22 - (n), \
+                            23 - (n), 24 - (n), 25 - (n), 26 - (n), 27 - (n), 28 - (n), 29 - (n), 30 - (n), 31 - (n))
+
+// Whether every sequence that ends in the block, or is cut by its start, is
+// well-formed: Keiser and Lemire's check ("Validating UTF-8 in less than one
+// instruction per byte", 2021). Three tables, looked up by the high and low
+// halves of each byte and by the high half of the byte after it, each give
+// the errors that pair could be; a pair is wrong where all three agree. A
+// third or fourth byte must be a continuation, which the tables leave to the
+// bytes two and three back.
+static inline bool lookup16_utf8_fine(sable_bytes16 block, sable_bytes16 previous) {
+    enum {
+        TOO_SHORT = 1 << 0, TOO_LONG = 1 << 1, OVERLONG_3 = 1 << 2, TOO_LARGE = 1 << 3,
+        SURROGATE = 1 << 4, OVERLONG_2 = 1 << 5, TOO_LARGE_1000 = 1 << 6, OVERLONG_4 = 1 << 6,
+        TWO_CONTS = 1 << 7, CARRY = TOO_SHORT | TOO_LONG | TWO_CONTS,
+    };
+    const sable_bytes16 firstHigh = {
+        TOO_LONG, TOO_LONG, TOO_LONG, TOO_LONG, TOO_LONG, TOO_LONG, TOO_LONG, TOO_LONG,
+        TWO_CONTS, TWO_CONTS, TWO_CONTS, TWO_CONTS,
+        TOO_SHORT | OVERLONG_2,
+        TOO_SHORT,
+        TOO_SHORT | OVERLONG_3 | SURROGATE,
+        TOO_SHORT | TOO_LARGE | TOO_LARGE_1000 | OVERLONG_4,
+    };
+    const sable_bytes16 firstLow = {
+        CARRY | OVERLONG_3 | OVERLONG_2 | OVERLONG_4,
+        CARRY | OVERLONG_2,
+        CARRY,
+        CARRY,
+        CARRY | TOO_LARGE,
+        CARRY | TOO_LARGE | TOO_LARGE_1000,
+        CARRY | TOO_LARGE | TOO_LARGE_1000,
+        CARRY | TOO_LARGE | TOO_LARGE_1000,
+        CARRY | TOO_LARGE | TOO_LARGE_1000,
+        CARRY | TOO_LARGE | TOO_LARGE_1000,
+        CARRY | TOO_LARGE | TOO_LARGE_1000,
+        CARRY | TOO_LARGE | TOO_LARGE_1000,
+        CARRY | TOO_LARGE | TOO_LARGE_1000,
+        CARRY | TOO_LARGE | TOO_LARGE_1000 | SURROGATE,
+        CARRY | TOO_LARGE | TOO_LARGE_1000,
+        CARRY | TOO_LARGE | TOO_LARGE_1000,
+    };
+    const sable_bytes16 secondHigh = {
+        TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT,
+        TOO_LONG | OVERLONG_2 | TWO_CONTS | OVERLONG_3 | TOO_LARGE_1000 | OVERLONG_4,
+        TOO_LONG | OVERLONG_2 | TWO_CONTS | OVERLONG_3 | TOO_LARGE,
+        TOO_LONG | OVERLONG_2 | TWO_CONTS | SURROGATE | TOO_LARGE,
+        TOO_LONG | OVERLONG_2 | TWO_CONTS | SURROGATE | TOO_LARGE,
+        TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT,
+    };
+
+    sable_bytes16 one = SABLE_BEHIND(block, previous, 1);
+    sable_bytes16 special = lookup16(firstHigh, one >> 4) & lookup16(firstLow, one & 0x0F) & lookup16(secondHigh, block >> 4);
+    sable_bytes16 two = SABLE_BEHIND(block, previous, 2);
+    sable_bytes16 three = SABLE_BEHIND(block, previous, 3);
+    sable_bytes16 continuing = (sable_bytes16)((two >= 0xE0) | (three >= 0xF0)) & 0x80;
+    return !any16((sable_mask16)(continuing ^ special));
+}
+#endif
+
 static int64_t first_invalid_utf8(const uint8_t *bytes, int64_t length) {
     int64_t i = 0;
+#ifdef SABLE_LOOKUP16
+    sable_bytes16 previous = { 0 };
+    while (i + 16 <= length) {
+        sable_bytes16 block = load16((const char *)bytes + i);
+        if (!any16((sable_mask16)(block & 0x80))) {
+            // ASCII, the usual block: fine unless the one before ends
+            // in a sequence it cuts short.
+            if (previous[15] >= 0xC0 || previous[14] >= 0xE0 || previous[13] >= 0xF0) {
+                break;
+            }
+        } else if (!lookup16_utf8_fine(block, previous)) {
+            break;
+        }
+
+        previous = block;
+        i += 16;
+    }
+
+    // Everything before 'i' is well-formed but for a sequence the block's
+    // start may cut: back to where that sequence starts.
+    int64_t start = i < 3 ? 0 : i - 3;
+    while (start < i && (bytes[start] & 0xC0) == 0x80) {
+        start++;
+    }
+
+    i = start;
+#endif
     while (i < length) {
         if (i + 16 <= length && !any16((sable_mask16)(load16((const char *)bytes + i) & (uint8_t)0x80))) {
             i += 16;

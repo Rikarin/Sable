@@ -375,10 +375,10 @@ public sealed class HeapTests {
             || c.Contains("Test.Node.next -> Test.Node.children -> [Test.Node]", StringComparison.Ordinal));
     }
 
-    /// <summary>Small blocks freed together give their slabs back to the system, but for one each class keeps.</summary>
+    /// <summary>Small blocks freed together give their slabs back: up to 128 kept as spares for the next round, the rest to the system.</summary>
     [Fact]
     public void FreedSmallBlocksGoBackToTheSystem() {
-        var source = Program(
+        string Rounds(int cells) => Program(
             """
             class Cell {
                 var value: Int
@@ -387,11 +387,11 @@ public sealed class HeapTests {
                 }
             }
             """,
-            """
+            $$"""
                 var total = 0
                 for round in 0..<3 {
                     var cells: Cell[>..] = []
-                    for i in 0..<20_000 {
+                    for i in 0..<{{cells}} {
                         cells.append(Cell(i + round))
                     }
 
@@ -403,20 +403,26 @@ public sealed class HeapTests {
                 print(total)
             """
         );
-        Assert.Equal("600030000\n", AssertAgree(source).Stdout);
+        Assert.Equal("600030000\n", AssertAgree(Rounds(20_000)).Stdout);
         if (!CanBuild) {
             return;
         }
 
-        var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
-        var line = stats.Split('\n').Single(static l => l.StartsWith("sable: slabs ", StringComparison.Ordinal));
+        // Too many for the interpreter: natively only.
+        var source = Rounds(400_000);
+        var run = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" });
+        Assert.Equal("240000600000\n", run.Stdout);
+        var line = run.Stderr.Split('\n').Single(static l => l.StartsWith("sable: slabs ", StringComparison.Ordinal));
         var numbers = line.Split(' ').Select(static w => long.TryParse(w, out var n) ? n : -1).Where(static n => n >= 0).ToList();
         var (held, most, returned) = (numbers[0], numbers[1], numbers[2]);
 
-        // 20,000 cells of 32 bytes are about ten slabs; each round's are
-        // given back as its array goes, and the next round's take new ones.
-        Assert.True(most >= 10, line);
-        Assert.True(returned >= 2 * 9, line);
+        // 400,000 cells of 32 bytes are about 196 slabs. As each round's
+        // array goes, 128 of them are kept and the rest go to the system;
+        // the next round takes the spares before it maps more, so no round
+        // holds more than its own.
+        Assert.True(most >= 190, line);
+        Assert.True(most < 2 * 190, line);
+        Assert.True(returned >= 3 * 60, line);
         Assert.True(held < most, line);
     }
 

@@ -597,7 +597,9 @@ extension Sequence where Element: Comparable {
 
     /// The elements in increasing order; stable.
     public fn sorted() throws(Failure) -> Element[>..] {
-        return try self.sorted(by: { $0 < $1 })
+        var elements = try self.toArray()
+        elements.sort()
+        return elements
     }
 
     /// Whether the sequence comes before the other in dictionary order.

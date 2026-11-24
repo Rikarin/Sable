@@ -33,8 +33,59 @@ typedef struct SableThread {
     struct SableThread *next; // every thread's, the latest first
 } SableThread;
 
-static _Thread_local SableThread *this_thread;
 static SableThread *all_threads;
+
+// Where each thread finds its state. On Apple's systems a _Thread_local is
+// reached through a call (_tlv_get_addr), and every allocation and every
+// free asks: there it is a pthread key's slot instead, read straight from
+// the thread's own table, whose address the machine keeps in a register.
+// That is all pthread_getspecific does (libpthread's
+// _pthread_getspecific_direct), less the call.
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__x86_64__))
+#include <pthread.h>
+
+static pthread_key_t thread_key;
+static bool thread_key_made;
+
+static void make_thread_key(void) {
+    if (pthread_key_create(&thread_key, NULL) != 0) {
+        abort();
+    }
+
+    __atomic_store_n(&thread_key_made, true, __ATOMIC_RELEASE);
+}
+
+static inline SableThread *this_thread_get(void) {
+    if (__builtin_expect(!__atomic_load_n(&thread_key_made, __ATOMIC_ACQUIRE), 0)) {
+        static pthread_once_t once = PTHREAD_ONCE_INIT;
+        pthread_once(&once, make_thread_key);
+    }
+
+#if defined(__aarch64__)
+    uintptr_t base;
+    __asm__("mrs %0, tpidrro_el0" : "=r"(base));
+    return ((SableThread *const *)(base & ~(uintptr_t)7))[thread_key];
+#else
+    SableThread *thread;
+    __asm__("movq %%gs:(,%1,8), %0" : "=r"(thread) : "r"((uintptr_t)thread_key));
+    return thread;
+#endif
+}
+
+static inline void this_thread_set(SableThread *thread) {
+    pthread_setspecific(thread_key, thread);
+}
+#else
+static _Thread_local SableThread *this_thread;
+
+static inline SableThread *this_thread_get(void) {
+    return this_thread;
+}
+
+static inline void this_thread_set(SableThread *thread) {
+    this_thread = thread;
+}
+#endif
 
 // A lock for a few instructions: taken by spinning, then by letting
 // another thread run, since its holder may have been preempted.
@@ -71,13 +122,13 @@ static SableThread *make_thread(void) {
     thread->next = all_threads;
     all_threads = thread;
     spin_unlock(&threads_lock);
-    this_thread = thread;
+    this_thread_set(thread);
     return thread;
 }
 
 // The calling thread's state, made the first time.
 static inline SableThread *current_thread(void) {
-    SableThread *thread = this_thread;
+    SableThread *thread = this_thread_get();
     return thread != NULL ? thread : make_thread();
 }
 

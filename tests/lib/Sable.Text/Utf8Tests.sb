@@ -75,6 +75,44 @@ fn validatingAfterLongAsciiRuns() {
 }
 
 @test
+fn validatingAcrossBlocksOfMixedText() {
+    // Text of two-, three- and four-byte scalars, checked natively sixteen
+    // bytes a block: a stray byte at each place, and a sequence cut short
+    // at each length, is found where it starts.
+    let scalars: Int[>..] = [0x61, 0xC3, 0xA9, 0xE2, 0x82, 0xAC, 0xF0, 0x9F, 0x98, 0x80, 0xED, 0x9F, 0xBF]
+    var text: Int[>..] = []
+    while text.count < 60 {
+        text.append(contentsOf: scalars)
+    }
+    assert(Utf8.isValid(bytes(text)), "well-formed")
+
+    var position = 0
+    while position < 60 {
+        // A continuation byte where a scalar starts, or a lead byte where
+        // a continuation belongs: either way the scalar there is wrong.
+        var values = text
+        values[position] = values[position] >= 0x80 && values[position] < 0xC0 ? 0x41 : 0x80
+        let at = Utf8.validate(bytes(values)) ?? -1
+        var start = position
+        while start > 0 && text[start] >= 0x80 && text[start] < 0xC0 {
+            start = start - 1
+        }
+        assert(at == start || at == position, "a broken scalar at \(position) is found at \(at)")
+
+        // The bytes up to here, which may end inside a scalar.
+        var head: Int[>..] = []
+        var i = 0
+        while i < position {
+            head.append(text[i])
+            i = i + 1
+        }
+        let cut = position < text.count && text[position] >= 0x80 && text[position] < 0xC0
+        assertEqual(Utf8.validate(bytes(head)) ?? -1, cut ? start : -1)
+        position = position + 1
+    }
+}
+
+@test
 fn sequenceLengthsByLeadByte() {
     assertEqual(Utf8.sequenceLength(lead: 0x41) ?? 0, 1)
     assertEqual(Utf8.sequenceLength(lead: 0xC3) ?? 0, 2)

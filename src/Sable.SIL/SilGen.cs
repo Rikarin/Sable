@@ -2905,10 +2905,12 @@ public sealed partial class SilGen {
         var arguments = to.Signature.Parameters.Select((p, i) => (SilValue)entry.AddArgument(p)).ToList();
         var context = entry.AddArgument(SilType.Object);
         var box = BoxType(from);
-        var callee = entry.Append(new LoadInst(entry.Append(new RefElementAddrInst(entry.Append(new UncheckedRefCastInst(context, box)), 0))));
+        // Borrowed from the box, which outlives the call: no retain and
+        // release of the function's own context on every call through it.
+        var callee = entry.Append(new LoadBorrowInst(entry.Append(new RefElementAddrInst(entry.Append(new UncheckedRefCastInst(context, box)), 0))));
         if (source.Thrown is null) {
             var result = entry.Append(new ApplyInst(callee, source.Result, [..arguments]));
-            entry.Append(new DestroyValueInst(callee));
+            entry.Append(new EndBorrowInst(callee));
             entry.Append(new ReturnInst(source.Result == SilType.Unit ? null : result));
         } else {
             var normal = thunk.AddBlock();
@@ -2916,9 +2918,9 @@ public sealed partial class SilGen {
             var failed = thunk.AddBlock();
             var error = failed.AddArgument(source.Thrown);
             entry.Append(new TryApplyInst(callee, source.Result, [..arguments], normal, failed));
-            normal.Append(new DestroyValueInst(callee));
+            normal.Append(new EndBorrowInst(callee));
             normal.Append(new ReturnInst(result));
-            failed.Append(new DestroyValueInst(callee));
+            failed.Append(new EndBorrowInst(callee));
             var current = failed;
             if (ConvertError(thunk, ref current, error, to.Signature.Thrown!) is not { } converted) {
                 return null;

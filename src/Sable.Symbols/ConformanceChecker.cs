@@ -1129,6 +1129,15 @@ internal static class ConformanceChecker {
             TupleTypeSymbol tuple =>
                 new TupleTypeSymbol([..tuple.ElementTypes.Select(e => SubstituteSelf(e, protocol, conformer))], tuple.ElementNames),
 
+            // '(Element, Element) -> Bool': its parameters, result and error.
+            FunctionTypeSymbol function =>
+                new FunctionTypeSymbol(
+                    [..function.ParameterTypes.Select(p => SubstituteSelf(p, protocol, conformer))],
+                    SubstituteSelf(function.ReturnType, protocol, conformer),
+                    function.IsAsync,
+                    function.ThrownType is null ? null : SubstituteSelf(function.ThrownType, protocol, conformer)
+                ) { IsRethrows = function.IsRethrows, InOutParameters = function.InOutParameters },
+
             // 'Decoded<Self>': Self as a type argument, or deeper.
             NamedTypeSymbol { IsConstructed: true } constructed when protocol.SelfTypeParameter is { } selfParameter =>
                 new TypeSubstitution(new() { [selfParameter] = asItself }).Apply(constructed),

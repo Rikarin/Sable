@@ -6,6 +6,11 @@ module Sable.Core
 // before keep their order — and is a merge sort, O(n log n) comparisons,
 // with one scratch array of the array's size. The comparison may throw,
 // and then so does the sort, leaving the elements in some order.
+//
+// The sort of Comparable elements is the same sort written again with '<'
+// for the closure: compiled for each element type, the comparison is then
+// the element's own, inlined, where a closure is called through on every
+// comparison. The two are kept alike.
 
 extension<Element> Element[:] {
     /// Sorts the elements in place by 'before', which says whether its
@@ -135,6 +140,89 @@ extension<Element: Comparable> Element[:] {
     /// assert(xs == [1, 3, 5, 9])
     /// ```
     public mutating fn sort() {
-        self.sort(by: (a: Element, b: Element) => a < b)
+        let n = self.count
+        if n < 2 {
+            return
+        }
+
+        let run = 16
+        var start = 0
+        while start < n {
+            let end = start + run < n ? start + run : n
+            var i = start + 1
+            while i < end {
+                let held = self[i]
+                var j = i
+                while j > start && held < self[j - 1] {
+                    self[j] = self[j - 1]
+                    j = j - 1
+                }
+                if j != i {
+                    self[j] = held
+                }
+                i = i + 1
+            }
+            start = end
+        }
+        if n <= run {
+            return
+        }
+
+        // The scratch array shares the buffer until the first pass writes
+        // to it, which copies it: the one allocation the sort makes.
+        var scratch: Element[:] = self
+        var inScratch = false
+        var width = run
+        while width < n {
+            if inScratch {
+                self.mergeRunsAscending(of: width, from: scratch)
+            } else {
+                scratch.mergeRunsAscending(of: width, from: self)
+            }
+            inScratch = !inScratch
+            width = width * 2
+        }
+        if inScratch {
+            self.copy(from: scratch)
+        }
+    }
+
+    // mergeRuns, comparing with '<'.
+    mutating fn mergeRunsAscending(of width: Int, from source: Element[:]) {
+        let n = source.count
+        var low = 0
+        while low < n {
+            let middle = low + width < n ? low + width : n
+            let high = middle + width < n ? middle + width : n
+            var k = low
+            if middle >= high || !(source[middle] < source[middle - 1]) {
+                while k < high {
+                    self[k] = source[k]
+                    k = k + 1
+                }
+            } else {
+                var x = low
+                var y = middle
+                while x < middle && y < high {
+                    let takeRight = source[y] < source[x]
+                    self[k] = source[takeRight ? y : x]
+                    let step = takeRight ? 1 : 0
+                    y = y + step
+                    x = x + 1 - step
+                    k = k + 1
+                }
+                while x < middle {
+                    self[k] = source[x]
+                    x = x + 1
+                    k = k + 1
+                }
+                while y < high {
+                    self[k] = source[y]
+                    y = y + 1
+                    k = k + 1
+                }
+            }
+            low = high
+        }
     }
 }

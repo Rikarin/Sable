@@ -19,10 +19,12 @@
 // size, so a block's slab is its address with the low bits cleared. A slab
 // carves blocks in order, keeps those given back on a list of its own, and
 // counts the blocks it has out: when that reaches zero the slab is given
-// back to the system, unless it is the only one its class has room in — a
-// program that makes and drops one object at a time would otherwise map
-// and unmap a slab each time. A program that once held a million small
-// objects and dropped them holds their memory no longer.
+// back, unless it is the only one its class has room in — a program that
+// makes and drops one object at a time would otherwise map and unmap a slab
+// each time. A slab given back is kept as a spare for any class, up to
+// SPARE_SLABS of them (8 MiB), and past that goes back to the system: a
+// program that once held a million small objects and dropped them holds
+// their memory no longer.
 //
 // An object records its class in its flags, and an array's elements are
 // freed with their size, which the array knows.
@@ -108,23 +110,61 @@ static void slab_unlist(Slab *slab, unsigned class) {
     slab->listed = false;
 }
 
+// Empty slabs kept for the next burst, of any class, each holding the next:
+// a program that makes and drops many objects a round at a time would
+// otherwise have the system map, and fault in, its slabs afresh each round.
+// Past SPARE_SLABS an empty slab goes back to the system.
+enum { SPARE_SLABS = 128 };
+static Slab *spare_slabs;
+static int64_t spare_count;
+static SpinLock spare_lock;
+
 static Slab *slab_new(unsigned class) {
-    Slab *slab = map_slab(SLAB_SIZE);
+    spin_lock(&spare_lock);
+    Slab *slab = spare_slabs;
+    if (slab != NULL) {
+        spare_slabs = slab->next;
+        spare_count--;
+    }
+
+    spin_unlock(&spare_lock);
     if (slab == NULL) {
-        sable_trap("out of memory");
+        slab = map_slab(SLAB_SIZE);
+        if (slab == NULL) {
+            sable_trap("out of memory");
+        }
+
+        // Counted across the classes, each under its own lock.
+        int64_t held = __atomic_add_fetch(&slabs_held, 1, __ATOMIC_RELAXED);
+        int64_t most = __atomic_load_n(&slabs_most, __ATOMIC_RELAXED);
+        while (held > most && !__atomic_compare_exchange_n(&slabs_most, &most, held, true, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+        }
     }
 
     slab->free = NULL;
     slab->carved = (char *)slab + SLAB_HEADER;
     slab->live = 0;
     slab_list(slab, class);
-    // Counted across the classes, each under its own lock.
-    int64_t held = __atomic_add_fetch(&slabs_held, 1, __ATOMIC_RELAXED);
-    int64_t most = __atomic_load_n(&slabs_most, __ATOMIC_RELAXED);
-    while (held > most && !__atomic_compare_exchange_n(&slabs_most, &most, held, true, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+    return slab;
+}
+
+// An empty slab: kept as a spare, or back to the system when there are
+// spares enough.
+static void slab_retire(Slab *slab) {
+    spin_lock(&spare_lock);
+    bool kept = spare_count < SPARE_SLABS;
+    if (kept) {
+        slab->next = spare_slabs;
+        spare_slabs = slab;
+        spare_count++;
     }
 
-    return slab;
+    spin_unlock(&spare_lock);
+    if (!kept) {
+        unmap_slab(slab, SLAB_SIZE);
+        __atomic_fetch_sub(&slabs_held, 1, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&slabs_returned, 1, __ATOMIC_RELAXED);
+    }
 }
 
 // A block from the class's slabs; its lock held.
@@ -162,9 +202,7 @@ static void slab_give(void *block, unsigned class) {
     } else if (slab->live == 0 && (slab->next != NULL || slab->previous != NULL)) {
         // Empty, and its class has room elsewhere: back to the system.
         slab_unlist(slab, class);
-        unmap_slab(slab, SLAB_SIZE);
-        __atomic_fetch_sub(&slabs_held, 1, __ATOMIC_RELAXED);
-        __atomic_fetch_add(&slabs_returned, 1, __ATOMIC_RELAXED);
+        slab_retire(slab);
     }
 }
 

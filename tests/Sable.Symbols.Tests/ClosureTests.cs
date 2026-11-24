@@ -350,4 +350,25 @@ public sealed class ClosureTests {
     [Fact]
     public void ATrailingClosureWithNoParameterLeftIsReported() =>
         Assert.NotEmpty(ErrorsIn("let v = replacing(3, with: { $0 }) { $0 + 1 }", Labelled));
+
+    // ---- An implicit member or a closure fits a parameter of its shape --------------
+
+    const string Modes = """
+                         enum Mode { Fast, Slow }
+                         fn pick(_ m: Mode) -> String { return "value" }
+                         fn pick(_ m: () -> Mode) -> String { return "closure" }
+                         """;
+
+    [Fact]
+    public void AnImplicitMemberIsNotPassedWhereAFunctionGoes() {
+        var (compilation, tree) = Compile("let v = pick(.Fast)\nlet w = pick { .Slow }\nlet x = pick({ .Fast })", Modes);
+        var errors = compilation.GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error).ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
+
+        var model = compilation.GetSemanticModel(tree);
+        var chosen = tree.Root.DescendantNodes().OfType<InvocationExpressionSyntax>().Where(static c => c.Expression is IdentifierNameSyntax { Identifier.Text: "pick" })
+            .Select(c => ((FunctionSymbol)model.GetSymbolOf(c.Expression)!).Parameters[0].Type.ToDisplayString())
+            .ToList();
+        Assert.Equal(["Mode", "() -> Mode", "() -> Mode"], chosen);
+    }
 }

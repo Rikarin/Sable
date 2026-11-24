@@ -1544,6 +1544,11 @@ one with a default whose type is no function (Swift's forward scan):
 replacement:)`, and `scaled(3) { … }` for `scaled(_ x: Int, scale: Int = 2,
 by f: …)`. In the parentheses an argument still needs its parameter's label.
 
+An argument whose type its parameter decides, a closure or an implicit member,
+fits only a parameter of its shape when overloads are chosen: `pick(.Fast)`
+is `pick(_: Mode)` and `pick { .Fast }` is `pick(_: () -> Mode)`, since a
+function type has no members to name with a dot, and a closure is no enum.
+
 ### Braces: record literal, trailing closure, or body
 
 Three constructs open with `{`, and the rule between them is:

@@ -5012,6 +5012,25 @@ public sealed partial class Binder {
     ///     the parameter they are passed to, so neither can be bound until the
     ///     overload is chosen.
     /// </remarks>
+    /// <summary>
+    ///     What an argument left unbound until its parameter is known is, when
+    ///     its form alone says it cannot be of <paramref name="wanted" />: a
+    ///     closure where no function goes, or an implicit member,
+    ///     <c>.Fast</c>, where a function does. Null when it may fit.
+    /// </summary>
+    static string? ShapeMismatch(ExpressionSyntax argument, TypeSymbol wanted) {
+        var target = wanted is OptionalTypeSymbol optional ? optional.UnderlyingType : wanted;
+        return Unparenthesised(argument) switch {
+            ClosureExpressionSyntax or BraceClosureExpressionSyntax
+                when target is NamedTypeSymbol { TypeKind: not TypeKind.Protocol } or TupleTypeSymbol or ArrayTypeSymbol =>
+                "a closure",
+            ImplicitMemberAccessExpressionSyntax or InvocationExpressionSyntax { Expression: ImplicitMemberAccessExpressionSyntax }
+                when target is FunctionTypeSymbol =>
+                "an implicit member, which no function type has",
+            _ => null,
+        };
+    }
+
     static bool IsClosure(ExpressionSyntax expression) =>
         expression switch {
             ClosureExpressionSyntax or BraceClosureExpressionSyntax => true,
@@ -6309,6 +6328,15 @@ public sealed partial class Binder {
             var wanted = ArgumentTypeFor(parameter, substitution.Apply(parameter.Type), arguments[i]);
             if (parameter.IsVariadic && wanted is ArrayTypeSymbol elements) {
                 wanted = elements.ElementType;
+            }
+
+            // An argument not bound yet fits a parameter of its shape alone:
+            // a closure one that takes a function, '.Fast' one of a type
+            // that could have such a member, which a function's does not.
+            if (arguments[i] is BoundUnboundClosure { Syntax: ExpressionSyntax unbound }
+                && !parameter.IsAutoclosure
+                && ShapeMismatch(unbound, wanted) is { } mismatch) {
+                return Reject($"argument {i + 1} is {mismatch}, and '{parameter.Name}' takes '{wanted.ToDisplayString()}'");
             }
 
             var conversion = _conversions.Classify(arguments[i].Type, wanted, IsLiteral(arguments[i]) || IsLiteralOnly(arguments[i].Syntax));

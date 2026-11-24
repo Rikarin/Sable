@@ -340,14 +340,18 @@ public sealed class ClosureTests {
             """);
 
     [Fact]
-    public void ATrailingClosureFillsALabelledParameter() =>
+    public void ATrailingClosureFillsALabelledParameterAndADotFillsAValue() =>
         Prints(
-            "4\n40\n8\n16\n3\n",
+            "4\n40\n8\n16\n3\nvalue\nclosure\n",
             """
             fn replacing(_ r: Int, with f: (Int) -> Int) -> Int { return f(r) }
             fn both(_ r: Int, then a: (Int) -> Int, finally b: (Int) -> Int) -> Int { return b(a(r)) }
             fn scaled(_ r: Int, scale: Int = 2, by f: (Int) -> Int) -> Int { return f(r) * scale }
             fn maybe(_ r: Int, with f: ((Int) -> Int)? = none) -> Int { return f?(r) ?? r }
+
+            enum Mode { Fast, Slow }
+            fn pick(_ m: Mode) -> String { return "value" }
+            fn pick(_ m: () -> Mode) -> String { return "closure" }
             """,
             """
                 print(replacing(3) { $0 + 1 })
@@ -355,6 +359,8 @@ public sealed class ClosureTests {
                 print(scaled(3) { $0 + 1 })
                 print(scaled(3, scale: 4) { $0 + 1 })
                 print(maybe(3))
+                print(pick(.Fast))
+                print(pick { .Slow })
             """
         );
 }

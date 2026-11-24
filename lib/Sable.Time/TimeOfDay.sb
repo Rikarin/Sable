@@ -1,0 +1,141 @@
+module Sable.Time
+
+/// A time on a clock, midnight to the last nanosecond before the next, with
+/// no date and no time zone: opening hours, an alarm. .NET's TimeOnly,
+/// jiff's civil::Time. Adding a duration goes round the clock.
+///
+/// ```sable
+/// let time = TimeOfDay.of(hour: 23, minute: 30)!
+/// assert(time.adding(Duration.hours(1)).toString() == "00:30:00")
+/// assert(time.format(pattern: "h:mm tt") == "11:30 PM")
+/// assert(try! TimeOfDay.parse("09:05:03.25").nanosecond == 250000000)
+/// ```
+public struct TimeOfDay: Comparable, Hashable {
+    /// Nanoseconds since midnight.
+    let nanos: Int
+
+    init(nanosecondOfDay: Int) {
+        self.nanos = nanosecondOfDay
+    }
+
+    /// The time the fields name; none when one is out of range.
+    public static fn of(hour: Int, minute: Int, second: Int = 0, nanosecond: Int = 0) -> TimeOfDay? {
+        if hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59 {
+            return none
+        }
+        if nanosecond < 0 || nanosecond > 999999999 {
+            return none
+        }
+        return TimeOfDay(nanosecondOfDay: ((hour * 60 + minute) * 60 + second) * 1000000000 + nanosecond)
+    }
+
+    /// The time so many nanoseconds after midnight, round the clock.
+    public static fn fromNanosecondOfDay(_ nanoseconds: Int) -> TimeOfDay {
+        return TimeOfDay(nanosecondOfDay: floorModulo(nanoseconds, nanosecondsPerDay))
+    }
+
+    /// 00:00.
+    public static var midnight: TimeOfDay => TimeOfDay(nanosecondOfDay: 0)
+
+    /// 12:00.
+    public static var noon: TimeOfDay => TimeOfDay(nanosecondOfDay: 43200000000000)
+
+    /// 23:59:59.999999999, the last nanosecond of the day.
+    public static var max: TimeOfDay => TimeOfDay(nanosecondOfDay: nanosecondsPerDay - 1)
+
+    public var hour: Int => nanos / 3600000000000
+    public var minute: Int => nanos / 60000000000 % 60
+    public var second: Int => nanos / 1000000000 % 60
+
+    /// The nanoseconds into the second: 0 to 999999999.
+    public var nanosecond: Int => nanos % 1000000000
+
+    /// The milliseconds into the second, the rest dropped.
+    public var millisecond: Int => nanos % 1000000000 / 1000000
+
+    /// Nanoseconds since midnight.
+    public var nanosecondOfDay: Int => nanos
+
+    /// Whole seconds since midnight.
+    public var secondOfDay: Int => nanos / 1000000000
+
+    /// The time so long on, round the clock (back, for a negative duration).
+    public fn adding(_ duration: Duration) -> TimeOfDay {
+        return TimeOfDay.fromNanosecondOfDay(nanos + floorModulo(duration.totalNanoseconds, nanosecondsPerDay))
+    }
+
+    /// How long from this time to the other the same day: negative when
+    /// the other is earlier.
+    public fn durationUntil(_ other: TimeOfDay) -> Duration {
+        return Duration.nanoseconds(other.nanos - nanos)
+    }
+
+    /// The time on the date.
+    public fn on(_ date: Date) -> LocalDateTime {
+        return LocalDateTime(date: date, time: self)
+    }
+
+    /// "09:05:03", with the fraction of the second where there is one,
+    /// its zeros after the last other digit left off: "09:05:03.25".
+    public fn toString() -> String {
+        let fraction = fractionDigits(nanosecond)
+        let text = two(hour) + ":" + two(minute) + ":" + two(second)
+        return fraction.isEmpty ? text : text + "." + fraction
+    }
+
+    /// The time as the pattern writes it: .NET's custom and standard
+    /// format strings (see `LocalDateTime.format(pattern:)`), on the first
+    /// of January of year 1.
+    public fn format(pattern: String) -> String {
+        return formatPattern(pattern, Date(checkedYear: 1, month: 1, day: 1), self, none, false)
+    }
+
+    /// The time a text writes in the pattern, as .NET's ParseExact reads
+    /// it. A pattern with a date reads it, and it is dropped.
+    ///
+    /// ```sable
+    /// let time = try! TimeOfDay.parse("7:05 pm", pattern: "h:mm tt")
+    /// assert(time == TimeOfDay.of(hour: 19, minute: 5)!)
+    /// ```
+    public static fn parse(_ text: String, pattern: String) throws(ParseError) -> TimeOfDay {
+        return try parsePattern(text, pattern).time
+    }
+
+    public operator == (a: TimeOfDay, b: TimeOfDay) -> Bool {
+        return a.nanos == b.nanos
+    }
+
+    public operator < (a: TimeOfDay, b: TimeOfDay) -> Bool {
+        return a.nanos < b.nanos
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(nanos)
+    }
+}
+
+const nanosecondsPerDay: Int = 86400000000000
+
+extension TimeOfDay: Parsable {
+    /// The time an ISO 8601 text writes: `09:05:03`, `09:05`, `09`,
+    /// `090503`, with a fraction on the last of them (`09:05:03.25`,
+    /// `09:30,5`), a `T` before it if it likes. `24:00:00` is not a time
+    /// of a day.
+    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> TimeOfDay {
+        var scanner = IsoScanner(source.toString())
+        scanner.skip('T')
+        let time = try scanner.time()
+        if time.endOfDay {
+            throw .Invalid(at: 0)
+        }
+        try scanner.end()
+        return time.time
+    }
+}
+
+extension TimeOfDay: Debug {
+    /// As `toString()` writes it.
+    public fn debugDescription() -> String {
+        return toString()
+    }
+}

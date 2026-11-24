@@ -1,0 +1,59 @@
+module TimeUtcDateTimeTests
+
+import Sable.Testing
+import Sable.Time
+
+@test
+fn aUtcDateTimeHasItsCalendarFields() {
+    let moment = UtcDateTime.of(year: 2026, month: 11, day: 17, hour: 9, minute: 5, second: 3, nanosecond: 250000000)!
+    assertEqual(moment.year, 2026)
+    assertEqual(moment.month, 11)
+    assertEqual(moment.day, 17)
+    assertEqual(moment.hour, 9)
+    assertEqual(moment.minute, 5)
+    assertEqual(moment.second, 3)
+    assertEqual(moment.weekday, Weekday.Tuesday)
+    assertEqual(moment.dayOfYear, 321)
+    assertEqual(moment.date, Date.of(year: 2026, month: 11, day: 17)!)
+    assertEqual(moment.timeOfDay, TimeOfDay.of(hour: 9, minute: 5, second: 3, nanosecond: 250000000)!)
+    assertEqual(moment.local.toString(), "2026-11-17T09:05:03.25")
+    assert(UtcDateTime.of(year: 2026, month: 11, day: 31, hour: 0, minute: 0, second: 0) == none)
+    assertEqual(UtcDateTime.unixEpoch, UtcDateTime.fromUnix(0))
+}
+
+@test
+fn aUtcDateTimeCountsMilliseconds() {
+    assertEqual(UtcDateTime.fromUnixMilliseconds(-1).toString(), "1969-12-31T23:59:59.999Z")
+    assertEqual(UtcDateTime.fromUnixMilliseconds(1500).unixMilliseconds, 1500)
+    assertEqual(UtcDateTime.fromUnixMilliseconds(-1).unixMilliseconds, -1)
+}
+
+@test
+fn aUtcDateTimeWritesItsForms() {
+    let moment = UtcDateTime.of(year: 2026, month: 11, day: 7, hour: 9, minute: 5, second: 3)!
+    assertEqual(moment.toString(), "2026-11-07T09:05:03Z")
+    assertEqual(moment.rfc3339(), "2026-11-07T09:05:03Z")
+    assertEqual(moment.rfc2822(), "Sat, 7 Nov 2026 09:05:03 +0000")
+    assertEqual(moment.debugDescription(), "2026-11-07T09:05:03Z")
+    assertEqual(moment.format(pattern: "o"), "2026-11-07T09:05:03.0000000Z")
+    assertEqual(moment.format(pattern: "zzz z"), "+00:00 +0")
+    assertEqual(moment.format(pattern: "r"), "Sat, 07 Nov 2026 09:05:03 GMT")
+    assertEqual(moment.withOffset(UtcOffset.hours(-10)).toString(), "2026-11-06T23:05:03-10:00")
+    assertEqual(moment.zoned(in: TimeZone.utc).toString(), "2026-11-07T09:05:03+00:00[UTC]")
+}
+
+@test
+fn aUtcDateTimeReadsPatternsAndISO8601() {
+    assertEqual(try! UtcDateTime.parse("2026-11-17 10:05 +01:00", pattern: "yyyy-MM-dd HH:mm zzz").toString(), "2026-11-17T09:05:00Z")
+    assertEqual(try! UtcDateTime.parse("2026-321T10:05").toString(), "2026-11-17T10:05:00Z")
+    assertEqual(try! UtcDateTime.parse("2026-11-17T24:00Z").toString(), "2026-11-18T00:00:00Z")
+}
+
+@test
+fn nowIsAfterTheIssueWasWritten() {
+    assert(UtcDateTime.now() > UtcDateTime.of(year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0)!)
+    assert(Date.today().year >= 2026)
+    assert(LocalDateTime.now().year >= 2026)
+    assert(OffsetDateTime.now().year >= 2026)
+    assert(ZonedDateTime.now().year >= 2026)
+}

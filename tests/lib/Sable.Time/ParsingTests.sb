@@ -1,6 +1,6 @@
 module TimeParsingTests
 
-// DateTime and Duration are Parsable (Sable.Time): what their formatters
+// UtcDateTime and Duration are Parsable (Sable.Time): what their formatters
 // write reads back as the same value.
 
 import Sable.Testing
@@ -8,7 +8,7 @@ import Sable.Time
 
 fn dateError(_ text: String) -> ParseError? {
     do {
-        let _ = try DateTime.parse(text)
+        let _ = try UtcDateTime.parse(text)
         return none
     } catch {
         return error
@@ -26,29 +26,29 @@ fn durationError(_ text: String) -> ParseError? {
 
 @test
 fn aDateTimeReadsWhatISO8601Writes() {
-    let moment = try! DateTime.parse("2024-02-29T23:59:59Z")
+    let moment = try! UtcDateTime.parse("2024-02-29T23:59:59Z")
     assertEqual(moment.iso8601(), "2024-02-29T23:59:59Z")
     assertEqual(moment.nanosecond, 0)
-    assertEqual(try! DateTime.parse("1970-01-01").secondsSinceEpoch, 0)
-    assertEqual(try! DateTime.parse("1970-01-01T00:00:01").secondsSinceEpoch, 1)
-    let fractional = try! DateTime.parse("2026-11-17T09:05:03.25Z")
+    assertEqual(try! UtcDateTime.parse("1970-01-01").secondsSinceEpoch, 0)
+    assertEqual(try! UtcDateTime.parse("1970-01-01T00:00:01").secondsSinceEpoch, 1)
+    let fractional = try! UtcDateTime.parse("2026-11-17T09:05:03.25Z")
     assertEqual(fractional.nanosecond, 250000000)
-    assertEqual(try! DateTime.parse("2026-11-17T09:05:03.123456789123Z").nanosecond, 123456789)
+    assertEqual(try! UtcDateTime.parse("2026-11-17T09:05:03.123456789123Z").nanosecond, 123456789)
 }
 
 @test
 fn anOffsetIsTakenOff() {
-    assertEqual(try! DateTime.parse("2026-11-17T10:00:00+01:00").iso8601(), "2026-11-17T09:00:00Z")
-    assertEqual(try! DateTime.parse("2026-11-17T03:30:00-0530").iso8601(), "2026-11-17T09:00:00Z")
-    assertEqual(try! DateTime.parse("2026-01-01T00:30:00+01:00").iso8601(), "2025-12-31T23:30:00Z")
+    assertEqual(try! UtcDateTime.parse("2026-11-17T10:00:00+01:00").iso8601(), "2026-11-17T09:00:00Z")
+    assertEqual(try! UtcDateTime.parse("2026-11-17T03:30:00-0530").iso8601(), "2026-11-17T09:00:00Z")
+    assertEqual(try! UtcDateTime.parse("2026-01-01T00:30:00+01:00").iso8601(), "2025-12-31T23:30:00Z")
 }
 
 @test
 fn aDateTimeOutOfRangeSaysWhere() {
-    assert((try? DateTime.parse("2023-02-29")) == none)
+    assert((try? UtcDateTime.parse("2023-02-29")) == none)
     assertEqual(dateError(""), ParseError.Empty)
     assertEqual(dateError("2026-13-01"), ParseError.Invalid(at: 5))
-    assertEqual(dateError("2026-01-01T24:00:00Z"), ParseError.Invalid(at: 11))
+    assertEqual(dateError("2026-01-01T25:00:00Z"), ParseError.Invalid(at: 11))
     assertEqual(dateError("20x6-01-01"), ParseError.InvalidDigit(at: 2))
     assertEqual(dateError("2026/01/01"), ParseError.Invalid(at: 4))
     assertEqual(dateError("2026-01-01T00:00:00Q"), ParseError.Invalid(at: 19))
@@ -58,8 +58,8 @@ fn aDateTimeOutOfRangeSaysWhere() {
 fn aDateTimeRoundTrips() {
     var seconds = -5000000000
     while seconds < 5000000000 {
-        let moment = DateTime.fromUnix(seconds)
-        assertEqual(try! DateTime.parse(moment.iso8601()), moment)
+        let moment = UtcDateTime.fromUnix(seconds)
+        assertEqual(try! UtcDateTime.parse(moment.iso8601()), moment)
         seconds += 123456789
     }
 }

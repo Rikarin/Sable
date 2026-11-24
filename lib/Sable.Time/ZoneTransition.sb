@@ -1,0 +1,36 @@
+module Sable.Time
+
+/// A moment a time zone's clocks change: to the offset, abbreviation and
+/// daylight saving after it. `TimeZone.nextTransition(after:)` and
+/// `previousTransition(before:)` find them.
+///
+/// ```sable
+/// let prague = try! TimeZone.find("Europe/Prague")
+/// let start = UtcDateTime.of(year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0)!
+/// let spring = prague.nextTransition(after: start)!
+/// assert(spring.instant.toString() == "2026-03-29T01:00:00Z")
+/// assert(spring.offset.toString() == "+02:00" && spring.isDaylightSaving && spring.abbreviation == "CEST")
+/// ```
+public struct ZoneTransition: Equatable {
+    /// When the clocks change.
+    public let instant: UtcDateTime
+    /// The offset from then on.
+    public let offset: UtcOffset
+    /// The abbreviation from then on: "CEST", "EST", "+0530".
+    public let abbreviation: String
+    /// Whether the time from then on is daylight saving time.
+    public let isDaylightSaving: Bool
+
+    public operator == (a: ZoneTransition, b: ZoneTransition) -> Bool {
+        return a.instant == b.instant && a.offset == b.offset && a.abbreviation == b.abbreviation
+            && a.isDaylightSaving == b.isDaylightSaving
+    }
+}
+
+extension ZoneTransition: Debug {
+    /// The moment and what the clocks change to: `2026-03-29T01:00:00Z +02:00 CEST (daylight saving)`.
+    public fn debugDescription() -> String {
+        let text = instant.toString() + " " + offset.toString() + " " + abbreviation
+        return isDaylightSaving ? text + " (daylight saving)" : text
+    }
+}

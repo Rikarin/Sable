@@ -1,0 +1,237 @@
+module Sable.Time
+
+/// A date and a time of day with no time zone: what a wall clock and a
+/// calendar show, not yet a moment — 02:30 on a night a zone's clocks skip
+/// it is no moment there, and 01:30 on a night they go back is two. .NET's
+/// DateTime of Unspecified kind, jiff's civil::DateTime.
+///
+/// `zoned(in:)` makes it a moment in a time zone, with an explicit policy
+/// for those two cases (`Disambiguation`); `withOffset` at a fixed offset.
+///
+/// ```sable
+/// let local = LocalDateTime.of(year: 2026, month: 3, day: 8, hour: 2, minute: 30)!
+/// let newYork = try! TimeZone.find("America/New_York")
+/// // 02:30 is skipped that night: the compatible policy moves it on by the gap.
+/// assert(local.zoned(in: newYork).toString() == "2026-03-08T03:30:00-04:00[America/New_York]")
+/// assert(local.format(pattern: "yyyy-MM-dd HH:mm") == "2026-03-08 02:30")
+/// ```
+public struct LocalDateTime: Comparable, Hashable {
+    public let date: Date
+    public let time: TimeOfDay
+
+    public init(date: Date, time: TimeOfDay) {
+        self.date = date
+        self.time = time
+    }
+
+    /// The date and time the fields name; none when one is out of range.
+    public static fn of(year: Int, month: Int, day: Int, hour: Int = 0, minute: Int = 0, second: Int = 0, nanosecond: Int = 0) -> LocalDateTime? {
+        if let date = Date.of(year: year, month: month, day: day) {
+            if let time = TimeOfDay.of(hour: hour, minute: minute, second: second, nanosecond: nanosecond) {
+                return LocalDateTime(date: date, time: time)
+            }
+        }
+        return none
+    }
+
+    /// What the system's time zone's clocks say now.
+    public static fn now() -> LocalDateTime {
+        return ZonedDateTime.now(in: TimeZone.system()).local
+    }
+
+    /// The date and time of seconds since 1970-01-01T00:00:00, as if in UTC.
+    static fn fromLocalSeconds(_ seconds: Int, _ nanosecond: Int) -> LocalDateTime {
+        let date = Date.fromDaysSinceEpoch(floorDivide(seconds, 86400))
+        return LocalDateTime(date: date, time: TimeOfDay(nanosecondOfDay: floorModulo(seconds, 86400) * 1000000000 + nanosecond))
+    }
+
+    /// Seconds since 1970-01-01T00:00:00, as if in UTC.
+    var localSeconds: Int => date.daysSinceEpoch * 86400 + time.secondOfDay
+
+    public var year: Int => date.year
+    public var month: Int => date.month
+    public var day: Int => date.day
+    public var hour: Int => time.hour
+    public var minute: Int => time.minute
+    public var second: Int => time.second
+    public var nanosecond: Int => time.nanosecond
+    public var weekday: Weekday => date.weekday
+    public var dayOfYear: Int => date.dayOfYear
+
+    /// The date and time so long on, by the clock and calendar alone: no
+    /// zone's clocks change under it.
+    public fn adding(_ duration: Duration) -> LocalDateTime {
+        let total = time.nanosecondOfDay + floorModulo(duration.totalNanoseconds, nanosecondsPerDay)
+        let days = floorDivide(duration.totalNanoseconds, nanosecondsPerDay) + total / nanosecondsPerDay
+        return LocalDateTime(date: date.adding(days: days), time: TimeOfDay(nanosecondOfDay: total % nanosecondsPerDay))
+    }
+
+    /// The date moved by the period, as `Date.adding` moves it; the time
+    /// kept.
+    public fn adding(_ period: Period) -> LocalDateTime {
+        return LocalDateTime(date: date.adding(period), time: time)
+    }
+
+    public fn adding(days: Int) -> LocalDateTime {
+        return LocalDateTime(date: date.adding(days: days), time: time)
+    }
+
+    /// The months on, the day clamped as `Date.adding(months:)` clamps it.
+    public fn adding(months: Int) -> LocalDateTime {
+        return LocalDateTime(date: date.adding(months: months), time: time)
+    }
+
+    public fn adding(years: Int) -> LocalDateTime {
+        return LocalDateTime(date: date.adding(years: years), time: time)
+    }
+
+    /// How long from this to the other by the clock, as if no zone's
+    /// clocks changed between: negative when the other is earlier.
+    public fn durationUntil(_ other: LocalDateTime) -> Duration {
+        return Duration.nanoseconds((other.localSeconds - localSeconds) * 1000000000 + other.nanosecond - nanosecond)
+    }
+
+    /// The same date with another time.
+    public fn with(time: TimeOfDay) -> LocalDateTime {
+        return LocalDateTime(date: date, time: time)
+    }
+
+    /// The moment this is in the zone. Where the zone's clocks skip the
+    /// time or show it twice, the policy picks the moment: `.Compatible`
+    /// (the default; RFC 5545's, Temporal's and jiff's) moves a skipped
+    /// time on by the length of the gap and takes the first of two;
+    /// `.Earlier` and `.Later` take the one before or after.
+    /// `zonedStrictly(in:)` throws instead.
+    ///
+    /// ```sable
+    /// let prague = try! TimeZone.find("Europe/Prague")
+    /// // 02:30 on 2026-10-25 is shown twice, at +02:00 and then +01:00.
+    /// let twice = LocalDateTime.of(year: 2026, month: 10, day: 25, hour: 2, minute: 30)!
+    /// assert(twice.zoned(in: prague).offset.toString() == "+02:00")
+    /// assert(twice.zoned(in: prague, .Later).offset.toString() == "+01:00")
+    /// ```
+    public fn zoned(in zone: TimeZone, _ disambiguation: Disambiguation = .Compatible) -> ZonedDateTime {
+        let offset = match zone.offsets(for: self) {
+            case .Unambiguous(let offset)     => offset
+            case .Gap(let before, let after)  => disambiguation == .Earlier ? after : before
+            case .Fold(let before, let after) => disambiguation == .Later ? after : before
+        }
+        return zone.at(withOffset(offset).instant)
+    }
+
+    /// The moment this is in the zone; `.Skipped` where the zone's clocks
+    /// skip it, `.Ambiguous` where they show it twice.
+    public fn zonedStrictly(in zone: TimeZone) throws(TimeZoneError) -> ZonedDateTime {
+        let offsets = zone.offsets(for: self)
+        if let offset = offsets.unambiguous {
+            return ZonedDateTime(instant: withOffset(offset).instant, zone: zone, offset: offset)
+        }
+        match offsets {
+            case .Gap(_, _) => { throw TimeZoneError.Skipped(self) }
+            case _          => { throw TimeZoneError.Ambiguous(self) }
+        }
+    }
+
+    /// The moment this is at the offset.
+    public fn withOffset(_ offset: UtcOffset) -> OffsetDateTime {
+        return OffsetDateTime(local: self, offset: offset)
+    }
+
+    /// The moment this is taken as UTC.
+    public fn assumingUtc() -> UtcDateTime {
+        return UtcDateTime { secondsSinceEpoch: localSeconds, nanosecond: time.nanosecond }
+    }
+
+    /// ISO 8601's extended form: "2026-11-17T09:05:03", with the fraction
+    /// of the second where there is one.
+    public fn toString() -> String {
+        return date.toString() + "T" + time.toString()
+    }
+
+    /// The date and time as the pattern writes it: .NET's custom date and
+    /// time format strings, in the invariant culture, written as
+    /// DateTime.ToString writes them.
+    ///
+    /// - `d` `dd` the day, `ddd` `dddd` the weekday's name, short or full;
+    ///   `M` `MM` the month, `MMM` `MMMM` its name; `y` `yy` the year's last
+    ///   two digits, `yyy` `yyyy` `yyyyy` the year in at least so many.
+    /// - `H` `HH` the hour of 24, `h` `hh` of 12, `m` `mm` the minute, `s`
+    ///   `ss` the second; `f` to `fffffffff` the fraction of the second in
+    ///   so many digits, `F` to `FFFFFFFFF` the same without the zeros at
+    ///   its end (nothing, and the `.` before it, for none); `t` `tt` "A" or
+    ///   "AM", "P" or "PM"; `g` the era, "A.D.".
+    /// - `z` `zz` `zzz` the offset in hours, two-digit hours, or "+hh:mm";
+    ///   `K` "Z" for UTC, the offset for another moment, nothing for a
+    ///   LocalDateTime, which has no offset (nor does `z` write anything).
+    /// - `:` and `/` the invariant culture's separators; `'text'` and
+    ///   `"text"` as they are, `\c` the character c, `%c` the one specifier
+    ///   c on its own; anything else, as it is.
+    ///
+    /// A pattern of one letter is .NET's standard format of it: `d`
+    /// "MM/dd/yyyy", `D` "dddd, dd MMMM yyyy", `f` `F` `g` `G` those with
+    /// the time, `M` "MMMM dd", `Y` "yyyy MMMM", `t` "HH:mm", `T` "HH:mm:ss",
+    /// `s` "yyyy-MM-ddTHH:mm:ss", `o` the round-trip form with seven digits
+    /// of fraction and `K`, `r` RFC 1123's and `u` the universal sortable,
+    /// both in UTC.
+    ///
+    /// ```sable
+    /// let at = LocalDateTime.of(year: 2026, month: 1, day: 5, hour: 14, minute: 7, second: 9)!
+    /// assert(at.format(pattern: "ddd d MMM yyyy, h:mm:ss tt") == "Mon 5 Jan 2026, 2:07:09 PM")
+    /// assert(at.format(pattern: "'week of' yyyy-MM-dd") == "week of 2026-01-05")
+    /// assert(at.format(pattern: "s") == "2026-01-05T14:07:09")
+    /// ```
+    public fn format(pattern: String) -> String {
+        return formatPattern(pattern, date, time, none, false)
+    }
+
+    /// The date and time a text writes in the pattern, as .NET's
+    /// ParseExact reads it: each specifier of `format(pattern:)` reads what
+    /// it writes (`d` and `M` one or two digits, `MMM` a name in any case,
+    /// `yy` a year from 1950 to 2049), each literal must be there. An
+    /// offset the pattern reads is dropped: `OffsetDateTime.parse` keeps it.
+    ///
+    /// ```sable
+    /// let at = try! LocalDateTime.parse("05/01/2026 14:07", pattern: "dd/MM/yyyy HH:mm")
+    /// assert(at.toString() == "2026-01-05T14:07:00")
+    /// ```
+    public static fn parse(_ text: String, pattern: String) throws(ParseError) -> LocalDateTime {
+        let fields = try parsePattern(text, pattern)
+        return LocalDateTime(date: fields.date, time: fields.time)
+    }
+
+    public operator == (a: LocalDateTime, b: LocalDateTime) -> Bool {
+        return a.date == b.date && a.time == b.time
+    }
+
+    public operator < (a: LocalDateTime, b: LocalDateTime) -> Bool {
+        if a.date != b.date {
+            return a.date < b.date
+        }
+        return a.time < b.time
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        date.hash(into: &hasher)
+        time.hash(into: &hasher)
+    }
+}
+
+extension LocalDateTime: Parsable {
+    /// The date and time an ISO 8601 text writes: a date as `Date.parse`
+    /// reads one, then `T` (or a space) and a time as `TimeOfDay.parse`
+    /// reads one; a date alone is its midnight, and `24:00` the next day's.
+    /// An offset is `.Invalid`: `OffsetDateTime.parse` reads those.
+    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> LocalDateTime {
+        var scanner = IsoScanner(source.toString())
+        let local = try scanner.localDateTime()
+        try scanner.end()
+        return local
+    }
+}
+
+extension LocalDateTime: Debug {
+    /// As `toString()` writes it.
+    public fn debugDescription() -> String {
+        return toString()
+    }
+}

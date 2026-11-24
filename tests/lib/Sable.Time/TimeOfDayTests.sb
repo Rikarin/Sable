@@ -1,0 +1,90 @@
+module TimeTimeOfDayTests
+
+import Sable.Testing
+import Sable.Time
+
+fn timeError(_ text: String) -> ParseError? {
+    do {
+        let _ = try TimeOfDay.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn aTimeIsOnlyOneOnTheClock() {
+    assert(TimeOfDay.of(hour: 24, minute: 0) == none)
+    assert(TimeOfDay.of(hour: 23, minute: 60) == none)
+    assert(TimeOfDay.of(hour: 23, minute: 59, second: 60) == none)
+    assert(TimeOfDay.of(hour: 0, minute: 0, nanosecond: 1000000000) == none)
+    assert(TimeOfDay.of(hour: -1, minute: 0) == none)
+    let time = TimeOfDay.of(hour: 13, minute: 4, second: 5, nanosecond: 6007008)!
+    assertEqual(time.hour, 13)
+    assertEqual(time.minute, 4)
+    assertEqual(time.second, 5)
+    assertEqual(time.nanosecond, 6007008)
+    assertEqual(time.millisecond, 6)
+    assertEqual(time.secondOfDay, 47045)
+    assertEqual(TimeOfDay.fromNanosecondOfDay(time.nanosecondOfDay), time)
+    assertEqual(TimeOfDay.max.toString(), "23:59:59.999999999")
+    assertEqual(TimeOfDay.noon.hour, 12)
+}
+
+@test
+fn aTimeGoesRoundTheClock() {
+    let late = TimeOfDay.of(hour: 23, minute: 30)!
+    assertEqual(late.adding(Duration.hours(1)), TimeOfDay.of(hour: 0, minute: 30)!)
+    assertEqual(late.adding(Duration.hours(-24)), late)
+    assertEqual(TimeOfDay.midnight.adding(Duration.seconds(-1)), TimeOfDay.of(hour: 23, minute: 59, second: 59)!)
+    assertEqual(TimeOfDay.fromNanosecondOfDay(-1), TimeOfDay.max)
+    assertEqual(TimeOfDay.noon.durationUntil(late), Duration.minutes(690))
+    assertEqual(late.on(Date.of(year: 2026, month: 1, day: 1)!).toString(), "2026-01-01T23:30:00")
+    assert(TimeOfDay.noon < late)
+    assertEqual(late.hashValue, TimeOfDay.of(hour: 23, minute: 30)!.hashValue)
+}
+
+@test
+fn timesWriteAsISO8601() {
+    assertEqual(TimeOfDay.of(hour: 9, minute: 5, second: 3)!.toString(), "09:05:03")
+    assertEqual(TimeOfDay.of(hour: 9, minute: 5, second: 3, nanosecond: 250000000)!.toString(), "09:05:03.25")
+    assertEqual(TimeOfDay.of(hour: 9, minute: 5, second: 3, nanosecond: 1)!.debugDescription(), "09:05:03.000000001")
+}
+
+@test
+fn timesReadEveryISO8601Form() {
+    assertEqual(try! TimeOfDay.parse("09:05:03"), TimeOfDay.of(hour: 9, minute: 5, second: 3)!)
+    assertEqual(try! TimeOfDay.parse("T090503"), TimeOfDay.of(hour: 9, minute: 5, second: 3)!)
+    assertEqual(try! TimeOfDay.parse("09:05"), TimeOfDay.of(hour: 9, minute: 5)!)
+    assertEqual(try! TimeOfDay.parse("0905"), TimeOfDay.of(hour: 9, minute: 5)!)
+    assertEqual(try! TimeOfDay.parse("09"), TimeOfDay.of(hour: 9, minute: 0)!)
+    assertEqual(try! TimeOfDay.parse("09.5"), TimeOfDay.of(hour: 9, minute: 30)!)
+    assertEqual(try! TimeOfDay.parse("09:30,25"), TimeOfDay.of(hour: 9, minute: 30, second: 15)!)
+    assertEqual(try! TimeOfDay.parse("09:05:03.123456789987"), TimeOfDay.of(hour: 9, minute: 5, second: 3, nanosecond: 123456789)!)
+    assertEqual(try! TimeOfDay.parse("23:59:59.999999999"), TimeOfDay.max)
+}
+
+@test
+fn aTimeThatIsNotOneSaysWhere() {
+    assertEqual(timeError(""), ParseError.Empty)
+    assertEqual(timeError("24:00"), ParseError.Invalid(at: 0))
+    assertEqual(timeError("25:00"), ParseError.Invalid(at: 0))
+    assertEqual(timeError("12:60"), ParseError.Invalid(at: 3))
+    assertEqual(timeError("12:00:60"), ParseError.Invalid(at: 6))
+    assertEqual(timeError("12:00:00."), ParseError.InvalidDigit(at: 9))
+    assertEqual(timeError("1"), ParseError.InvalidDigit(at: 1))
+    assertEqual(timeError("12:0"), ParseError.InvalidDigit(at: 4))
+    assertEqual(timeError("12h"), ParseError.Invalid(at: 2))
+}
+
+@test
+fn timesWriteAndReadPatterns() {
+    let time = TimeOfDay.of(hour: 19, minute: 5, second: 9, nanosecond: 120000000)!
+    assertEqual(time.format(pattern: "h:mm:ss.FFF tt"), "7:05:09.12 PM")
+    assertEqual(time.format(pattern: "T"), "19:05:09")
+    assertEqual(try! TimeOfDay.parse("7:05 pm", pattern: "h:mm tt"), TimeOfDay.of(hour: 19, minute: 5)!)
+    assertEqual(try! TimeOfDay.parse("12:05 AM", pattern: "hh:mm tt"), TimeOfDay.of(hour: 0, minute: 5)!)
+    assertEqual(try! TimeOfDay.parse("19:05:09.12", pattern: "HH:mm:ss.ff"), time)
+    assertEqual(try! TimeOfDay.parse("19:05:09.1", pattern: "HH:mm:ss.FFF"), TimeOfDay.of(hour: 19, minute: 5, second: 9, nanosecond: 100000000)!)
+    assertEqual(try! TimeOfDay.parse("7:05 P", pattern: "h:mm t"), TimeOfDay.of(hour: 19, minute: 5)!)
+}

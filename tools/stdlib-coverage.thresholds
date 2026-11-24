@@ -57,9 +57,5 @@ lib/Sable.Serialize/Transform.sb                   0   0   # raise me: no tests 
 lib/Sable.Testing/Assertions.sb                    0   0   # raise me: no tests yet
 lib/Sable.Testing/Bencher.sb                       0   0   # raise me: no tests yet
 lib/Sable.Testing/TestCase.sb                     45  40   # raise me
-lib/Sable.Time/Clock.sb                            0  70   # raise me: no tests yet
-lib/Sable.Time/DateTime.sb                         0   0   # raise me: no tests yet
-lib/Sable.Time/Duration.sb                         0   0   # raise me: no tests yet
-lib/Sable.Time/Instant.sb                          0  70   # raise me: no tests yet
 
 # Under the default for a reason the tests cannot change.

@@ -1053,12 +1053,12 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   standard input and compares standard error between the two.
 - `Sable.Time`: `Duration` (to the nanosecond, Comparable and Hashable,
   printed in its largest whole unit), `Instant` on the monotonic clock,
-  `Clock.sleep` and `Clock.measure`, and `DateTime` in UTC — fields,
+  `Clock.sleep` and `Clock.measure`, and `DateTime` (now `UtcDateTime`) in UTC — fields,
   ISO 8601 weekday and day of the year, `iso8601()`, `parse`, arithmetic —
   over proleptic Gregorian 400-year eras, so dates before 1970 work. Over
   three more runtime calls (`time_monotonic`, `time_wall_clock`,
-  `time_sleep`). Not yet: time zones, and a sleep that lets other tasks run
-  (it holds the scheduler's baton).
+  `time_sleep`). Not yet: time zones (since: docs/06's Sable.Time), and a
+  sleep that lets other tasks run (it holds the scheduler's baton).
 - `Sable.Process`: `Process.run` runs a program found on PATH to its end,
   its input written and its output and errors read together through
   `poll` (so neither side blocks on a full pipe), giving `Completed`

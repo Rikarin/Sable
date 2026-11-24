@@ -645,7 +645,7 @@ fn main() {
         Assert.Contains("argument index out of range", run.Stderr, StringComparison.Ordinal);
     }
 
-    /// <summary>Sable.Time: durations, the monotonic clock, sleeping, and UTC dates either side of the epoch.</summary>
+    /// <summary>Sable.Time: durations, the monotonic clock, sleeping, and UTC dates either side of the epoch (UtcDateTime).</summary>
     [Fact]
     public void TimeIsWrittenInSable() =>
         Assert.Equal(
@@ -665,23 +665,23 @@ fn main() {
                     print((Duration.zero() - Duration.milliseconds(12)).toString())
                     print(d > Duration.minutes(1))
                     print(d.totalSeconds)
-                    let epoch = DateTime.fromUnix(0)
+                    let epoch = UtcDateTime.fromUnix(0)
                     print(epoch.iso8601())
-                    print(epoch.weekday)
-                    let t = DateTime.fromUnix(1795000000)
+                    print(epoch.weekday.number)
+                    let t = UtcDateTime.fromUnix(1795000000)
                     print(t.iso8601())
                     print(t.dayOfYear)
-                    print(DateTime.fromUnix(-1).iso8601())
-                    print(DateTime.fromUnix(951782400).iso8601())
-                    if let leap = try? DateTime.parse("2024-02-29T23:59:59Z") {
+                    print(UtcDateTime.fromUnix(-1).iso8601())
+                    print(UtcDateTime.fromUnix(951782400).iso8601())
+                    if let leap = try? UtcDateTime.parse("2024-02-29T23:59:59Z") {
                         print(leap.secondsSinceEpoch)
                         print(leap.adding(Duration.seconds(1)).iso8601())
-                        print(leap.weekday)
+                        print(leap.weekday.number)
                     }
-                    print((try? DateTime.parse("2023-02-29")) == none)
-                    print((try? DateTime.parse("1600-03-01"))?.isoDate() ?? "-")
-                    let a = DateTime.of(year: 2000, month: 1, day: 1, hour: 0, minute: 0, second: 0) ?? epoch
-                    let b = DateTime.of(year: 2026, month: 11, day: 17, hour: 12, minute: 30, second: 0) ?? epoch
+                    print((try? UtcDateTime.parse("2023-02-29")) == none)
+                    print((try? UtcDateTime.parse("1600-03-01"))?.isoDate() ?? "-")
+                    let a = UtcDateTime.of(year: 2000, month: 1, day: 1, hour: 0, minute: 0, second: 0) ?? epoch
+                    let b = UtcDateTime.of(year: 2026, month: 11, day: 17, hour: 12, minute: 30, second: 0) ?? epoch
                     print(b.durationSince(a).toString())
                     print(a < b)
                     print(isLeapYear(1900))
@@ -691,7 +691,7 @@ fn main() {
                     print(start.elapsed >= Duration.milliseconds(20))
                     let took = Clock.measure({ Runtime.sleep(nanoseconds: 5_000_000) })
                     print(took >= Duration.milliseconds(5))
-                    print(DateTime.now().year >= 2026)
+                    print(UtcDateTime.now().year >= 2026)
                 }
                 """).Stdout
         );

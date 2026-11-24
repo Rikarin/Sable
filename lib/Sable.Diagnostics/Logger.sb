@@ -68,7 +68,7 @@ public class Logger {
         }
         var line = ""
         if timestamps {
-            line = DateTime.now().iso8601() + " "
+            line = UtcDateTime.now().iso8601() + " "
         }
         line = line + levelName(level) + " " + name + ": " + message
         for f in context {

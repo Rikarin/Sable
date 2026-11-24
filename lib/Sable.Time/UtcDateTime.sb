@@ -1,0 +1,185 @@
+module Sable.Time
+
+/// A moment, as UTC writes it: seconds since 1970-01-01T00:00:00Z, and the
+/// nanoseconds into that second. jiff's Timestamp, .NET's DateTime of Utc
+/// kind. What a log line, a file's time or a database row holds; `zoned`
+/// shows it in a time zone, `withOffset` at an offset.
+///
+/// ```sable
+/// let moment = UtcDateTime.of(year: 2026, month: 11, day: 17, hour: 9, minute: 5, second: 3)!
+/// assert(moment.toString() == "2026-11-17T09:05:03Z" && moment.weekday == .Tuesday)
+/// let prague = try! TimeZone.find("Europe/Prague")
+/// assert(moment.zoned(in: prague).toString() == "2026-11-17T10:05:03+01:00[Europe/Prague]")
+/// assert(moment.format(pattern: "ddd, dd MMM yyyy HH:mm K") == "Tue, 17 Nov 2026 09:05 Z")
+/// ```
+public struct UtcDateTime: Comparable, Hashable {
+    public var secondsSinceEpoch: Int
+    public var nanosecond: Int
+
+    public static fn now() -> UtcDateTime {
+        let n = Runtime.wallClockNanoseconds()
+        return UtcDateTime { secondsSinceEpoch: floorDivide(n, 1000000000), nanosecond: floorModulo(n, 1000000000) }
+    }
+
+    public static fn fromUnix(_ seconds: Int) -> UtcDateTime {
+        return UtcDateTime { secondsSinceEpoch: seconds, nanosecond: 0 }
+    }
+
+    /// The moment of so many milliseconds since the epoch.
+    public static fn fromUnixMilliseconds(_ milliseconds: Int) -> UtcDateTime {
+        return UtcDateTime { secondsSinceEpoch: floorDivide(milliseconds, 1000), nanosecond: floorModulo(milliseconds, 1000) * 1000000 }
+    }
+
+    /// 1970-01-01T00:00:00Z.
+    public static var unixEpoch: UtcDateTime => UtcDateTime { secondsSinceEpoch: 0, nanosecond: 0 }
+
+    /// The moment the fields name; none when one is out of range (a 30th of February, an hour of 24).
+    public static fn of(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int, nanosecond: Int = 0) -> UtcDateTime? {
+        if let local = LocalDateTime.of(year: year, month: month, day: day, hour: hour, minute: minute, second: second, nanosecond: nanosecond) {
+            return local.assumingUtc()
+        }
+        return none
+    }
+
+    var days: Int => floorDivide(secondsSinceEpoch, 86400)
+    var secondOfDay: Int => floorModulo(secondsSinceEpoch, 86400)
+
+    /// The date and time in UTC.
+    public var local: LocalDateTime => LocalDateTime.fromLocalSeconds(secondsSinceEpoch, nanosecond)
+
+    /// The date in UTC.
+    public var date: Date => Date.fromDaysSinceEpoch(days)
+
+    /// The time of day in UTC.
+    public var timeOfDay: TimeOfDay => TimeOfDay(nanosecondOfDay: secondOfDay * 1000000000 + nanosecond)
+
+    public var year: Int => date.year
+    public var month: Int => date.month
+    public var day: Int => date.day
+    public var hour: Int => secondOfDay / 3600
+    public var minute: Int => secondOfDay / 60 % 60
+    public var second: Int => secondOfDay % 60
+
+    public var weekday: Weekday => Weekday.ofChecked(weekdayNumber(days))
+
+    /// 1 for the first of January.
+    public var dayOfYear: Int => date.dayOfYear
+
+    /// Milliseconds since the epoch, rounded towards minus infinity.
+    public var unixMilliseconds: Int => secondsSinceEpoch * 1000 + nanosecond / 1000000
+
+    public fn adding(_ duration: Duration) -> UtcDateTime {
+        let total = nanosecond + floorModulo(duration.totalNanoseconds, 1000000000)
+        return UtcDateTime {
+            secondsSinceEpoch: secondsSinceEpoch + floorDivide(duration.totalNanoseconds, 1000000000) + total / 1000000000,
+            nanosecond: total % 1000000000,
+        }
+    }
+
+    public fn durationSince(_ earlier: UtcDateTime) -> Duration {
+        return Duration {
+            totalNanoseconds: (secondsSinceEpoch - earlier.secondsSinceEpoch) * 1000000000 + nanosecond - earlier.nanosecond
+        }
+    }
+
+    /// The moment in the zone.
+    public fn zoned(in zone: TimeZone) -> ZonedDateTime {
+        return zone.at(self)
+    }
+
+    /// The moment at the offset.
+    public fn withOffset(_ offset: UtcOffset) -> OffsetDateTime {
+        return OffsetDateTime(local: LocalDateTime.fromLocalSeconds(secondsSinceEpoch + offset.totalSeconds, nanosecond), offset: offset)
+    }
+
+    /// "2026-11-17T09:05:03Z": to the second.
+    public fn iso8601() -> String {
+        return isoDate() + "T" + two(hour) + ":" + two(minute) + ":" + two(second) + "Z"
+    }
+
+    /// "2026-11-17".
+    public fn isoDate() -> String {
+        return date.toString()
+    }
+
+    /// RFC 3339's form, and ISO 8601's: "2026-11-17T09:05:03Z", with the
+    /// fraction of the second where there is one, "2026-11-17T09:05:03.25Z".
+    public fn toString() -> String {
+        return formatRfc3339(local, UtcOffset.utc, true)
+    }
+
+    /// RFC 3339's form: as `toString()`.
+    public fn rfc3339() -> String {
+        return toString()
+    }
+
+    /// RFC 2822's form: "Tue, 17 Nov 2026 09:05:03 +0000".
+    public fn rfc2822() -> String {
+        return formatRfc2822(local, UtcOffset.utc)
+    }
+
+    /// The moment as the pattern writes it, as .NET's DateTime of Utc kind
+    /// writes it (see `LocalDateTime.format(pattern:)`): `K` is "Z".
+    public fn format(pattern: String) -> String {
+        let local = self.local
+        return formatPattern(pattern, local.date, local.time, UtcOffset.utc, true)
+    }
+
+    /// The moment a text writes in the pattern; an offset the pattern
+    /// reads is taken off, and none is UTC.
+    ///
+    /// ```sable
+    /// let moment = try! UtcDateTime.parse("2026-11-17 10:05 +01:00", pattern: "yyyy-MM-dd HH:mm zzz")
+    /// assert(moment.toString() == "2026-11-17T09:05:00Z")
+    /// ```
+    public static fn parse(_ text: String, pattern: String) throws(ParseError) -> UtcDateTime {
+        return try OffsetDateTime.parse(text, pattern: pattern).instant
+    }
+
+    public operator == (a: UtcDateTime, b: UtcDateTime) -> Bool {
+        return a.secondsSinceEpoch == b.secondsSinceEpoch && a.nanosecond == b.nanosecond
+    }
+
+    public operator < (a: UtcDateTime, b: UtcDateTime) -> Bool {
+        if a.secondsSinceEpoch != b.secondsSinceEpoch {
+            return a.secondsSinceEpoch < b.secondsSinceEpoch
+        }
+        return a.nanosecond < b.nanosecond
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(secondsSinceEpoch)
+        hasher.combine(nanosecond)
+    }
+}
+
+extension UtcDateTime: Parsable {
+    /// The moment an ISO 8601 text names, as `toString()` and `isoDate()`
+    /// write it: a date (calendar, ordinal or week, extended or basic),
+    /// midnight UTC; or a date and a time, `2026-11-17T09:05:03`, the time
+    /// perhaps shorter (`09:05`) or with a fraction (`.250`, to the
+    /// nanosecond), and `Z` or an offset from UTC (`+02:00`, `-0530`)
+    /// after — none at all is taken as UTC. A field out of range, a 30th of
+    /// February, is `.Invalid` where it is.
+    ///
+    /// ```sable
+    /// let moment = try! UtcDateTime.parse("2024-02-29T23:59:59.5+01:00")
+    /// assert(moment.iso8601() == "2024-02-29T22:59:59Z" && moment.nanosecond == 500000000)
+    /// assert(try! UtcDateTime.parse("2026-11-17").isoDate() == "2026-11-17")
+    /// assert((try? UtcDateTime.parse("2023-02-29")) == none)
+    /// ```
+    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> UtcDateTime {
+        var scanner = IsoScanner(source.toString())
+        let parsed = try scanner.dateTime()
+        try scanner.end()
+        return parsed.local.withOffset(parsed.offset ?? UtcOffset.utc).instant
+    }
+}
+
+extension UtcDateTime: Debug {
+    /// As `toString()` writes it: `2026-11-17T09:05:03Z`,
+    /// `2026-11-17T09:05:03.25Z`.
+    public fn debugDescription() -> String {
+        return toString()
+    }
+}

@@ -1,0 +1,238 @@
+module TimeZonedDateTimeTests
+
+// Moments in zones across their clocks' changes, from the system's time
+// zone database. Windows has none (TimeZone says why), and there these
+// tests have nothing to test.
+
+import Sable.Testing
+import Sable.Time
+
+fn hasDatabase() -> Bool {
+    return (try? TimeZone.find("Europe/Prague")) != none
+}
+
+fn zone(_ id: String) -> TimeZone {
+    return try! TimeZone.find(id)
+}
+
+fn local(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int) -> LocalDateTime {
+    return LocalDateTime.of(year: year, month: month, day: day, hour: hour, minute: minute)!
+}
+
+fn offset(_ text: String) -> UtcOffset {
+    return try! UtcOffset.parse(text)
+}
+
+fn zonedError(_ text: String) -> ParseError? {
+    do {
+        let _ = try ZonedDateTime.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+fn strictError(_ at: LocalDateTime, _ zone: TimeZone) -> TimeZoneError? {
+    do {
+        let _ = try at.zonedStrictly(in: zone)
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn newYorkSkipsAnHourInMarchAndRepeatsOneInNovember() {
+    if !hasDatabase() {
+        return
+    }
+    let newYork = zone("America/New_York")
+    let skipped = local(2026, 3, 8, 2, 30)
+    assertEqual(newYork.offsets(for: skipped), AmbiguousOffset.Gap(before: offset("-05:00"), after: offset("-04:00")))
+    assertEqual(skipped.zoned(in: newYork).toString(), "2026-03-08T03:30:00-04:00[America/New_York]")
+    assertEqual(skipped.zoned(in: newYork, .Later).toString(), "2026-03-08T03:30:00-04:00[America/New_York]")
+    assertEqual(skipped.zoned(in: newYork, .Earlier).toString(), "2026-03-08T01:30:00-05:00[America/New_York]")
+    assertEqual(strictError(skipped, newYork), TimeZoneError.Skipped(skipped))
+    let twice = local(2026, 11, 1, 1, 30)
+    assertEqual(newYork.offsets(for: twice), AmbiguousOffset.Fold(before: offset("-04:00"), after: offset("-05:00")))
+    assertEqual(twice.zoned(in: newYork).instant.toString(), "2026-11-01T05:30:00Z")
+    assertEqual(twice.zoned(in: newYork, .Earlier).instant.toString(), "2026-11-01T05:30:00Z")
+    assertEqual(twice.zoned(in: newYork, .Later).instant.toString(), "2026-11-01T06:30:00Z")
+    assertEqual(strictError(twice, newYork), TimeZoneError.Ambiguous(twice))
+    assertEqual(newYork.offsets(for: local(2026, 7, 4, 12, 0)), AmbiguousOffset.Unambiguous(offset: offset("-04:00")))
+    assertEqual(newYork.offsets(for: local(2026, 7, 4, 12, 0)).unambiguous!, offset("-04:00"))
+    assert(newYork.offsets(for: twice).unambiguous == none)
+    let summer = twice.zoned(in: newYork, .Earlier)
+    assertEqual(summer.abbreviation, "EDT")
+    assert(summer.isDaylightSaving)
+    assertEqual(summer.adding(Duration.hours(1)).abbreviation, "EST")
+    assert(!summer.adding(Duration.hours(1)).isDaylightSaving)
+}
+
+@test
+fn pragueDaysAreTwentyThreeAndTwentyFiveHoursLong() {
+    if !hasDatabase() {
+        return
+    }
+    let prague = zone("Europe/Prague")
+    let spring = ZonedDateTime.of(year: 2026, month: 3, day: 29, hour: 12, zone: prague)!
+    assertEqual(spring.lengthOfDay, Duration.hours(23))
+    assertEqual(spring.startOfDay().toString(), "2026-03-29T00:00:00+01:00[Europe/Prague]")
+    assertEqual(spring.endOfDay().toString(), "2026-03-29T23:59:59.999999999+02:00[Europe/Prague]")
+    let autumn = ZonedDateTime.of(year: 2026, month: 10, day: 25, hour: 12, zone: prague)!
+    assertEqual(autumn.lengthOfDay, Duration.hours(25))
+    assertEqual(ZonedDateTime.of(year: 2026, month: 10, day: 26, zone: prague)!.lengthOfDay, Duration.hours(24))
+    // A day on is the same time; 24 hours on is not, across a change.
+    let before = ZonedDateTime.of(year: 2026, month: 10, day: 24, hour: 12, zone: prague)!
+    assertEqual(before.adding(days: 1).toString(), "2026-10-25T12:00:00+01:00[Europe/Prague]")
+    assertEqual(before.adding(Duration.hours(24)).toString(), "2026-10-25T11:00:00+01:00[Europe/Prague]")
+    assertEqual(before.adding(days: 1).durationSince(before), Duration.hours(25))
+    assertEqual(before.adding(months: 5).toString(), "2027-03-24T12:00:00+01:00[Europe/Prague]")
+    assertEqual(before.adding(years: 1).toString(), "2027-10-24T12:00:00+02:00[Europe/Prague]")
+    assertEqual(before.adding(Period.zero), before)
+    let skipped = local(2026, 3, 29, 2, 30)
+    assertEqual(prague.offsets(for: skipped), AmbiguousOffset.Gap(before: offset("+01:00"), after: offset("+02:00")))
+    assertEqual(skipped.zoned(in: prague).toString(), "2026-03-29T03:30:00+02:00[Europe/Prague]")
+}
+
+@test
+fn lordHoweMovesItsClocksHalfAnHour() {
+    if !hasDatabase() {
+        return
+    }
+    let lordHowe = zone("Australia/Lord_Howe")
+    // Daylight saving ends on the first Sunday of April, 02:00 back to 01:30.
+    let twice = local(2026, 4, 5, 1, 45)
+    assertEqual(lordHowe.offsets(for: twice), AmbiguousOffset.Fold(before: offset("+11:00"), after: offset("+10:30")))
+    assertEqual(twice.zoned(in: lordHowe, .Later).instant.toString(), "2026-04-04T15:15:00Z")
+    // It begins on the first Sunday of October, 02:00 on to 02:30.
+    let skipped = local(2026, 10, 4, 2, 15)
+    assertEqual(lordHowe.offsets(for: skipped), AmbiguousOffset.Gap(before: offset("+10:30"), after: offset("+11:00")))
+    assertEqual(skipped.zoned(in: lordHowe).toString(), "2026-10-04T02:45:00+11:00[Australia/Lord_Howe]")
+    let sunday = ZonedDateTime.of(year: 2026, month: 10, day: 4, hour: 12, zone: lordHowe)!
+    assertEqual(sunday.lengthOfDay, Duration.minutes(1410))
+    assertEqual(sunday.abbreviation, "+11")
+    // Far past the database's last change, its rule.
+    let far = ZonedDateTime.of(year: 2100, month: 1, day: 15, hour: 12, zone: lordHowe)!
+    assertEqual(far.offset, offset("+11:00"))
+    assertEqual(ZonedDateTime.of(year: 2100, month: 7, day: 15, hour: 12, zone: lordHowe)!.offset, offset("+10:30"))
+    let change = lordHowe.nextTransition(after: far.instant)!
+    assertEqual(change.instant.toString(), "2100-04-03T15:00:00Z")
+    assertEqual(change.offset, offset("+10:30"))
+    assertEqual(lordHowe.previousTransition(before: far.instant)!.instant.toString(), "2099-10-03T15:30:00Z")
+}
+
+@test
+fn kolkataHasKeptOneOffsetSince1945() {
+    if !hasDatabase() {
+        return
+    }
+    let kolkata = zone("Asia/Kolkata")
+    let now = UtcDateTime.of(year: 2026, month: 6, day: 1, hour: 0, minute: 0, second: 0)!
+    assertEqual(kolkata.offset(at: now), offset("+05:30"))
+    assertEqual(kolkata.abbreviation(at: now), "IST")
+    assert(kolkata.nextTransition(after: now) == none)
+    let last = kolkata.previousTransition(before: now)!
+    assertEqual(last.instant.year, 1945)
+    assertEqual(last.offset, offset("+05:30"))
+    let war = UtcDateTime.of(year: 1943, month: 6, day: 1, hour: 0, minute: 0, second: 0)!
+    assertEqual(kolkata.offset(at: war), offset("+06:30"))
+    assertEqual(now.zoned(in: kolkata).toString(), "2026-06-01T05:30:00+05:30[Asia/Kolkata]")
+    assertEqual(kolkata.offsets(for: local(2026, 3, 1, 2, 30)), AmbiguousOffset.Unambiguous(offset: offset("+05:30")))
+}
+
+@test
+fn moscowAndApiaChangedTheirStandardTime() {
+    if !hasDatabase() {
+        return
+    }
+    // Moscow kept summer time all year from 2011, and went back an hour in 2014.
+    let moscow = zone("Europe/Moscow")
+    assertEqual(moscow.offset(at: UtcDateTime.of(year: 2013, month: 1, day: 1, hour: 0, minute: 0, second: 0)!), offset("+04:00"))
+    assertEqual(moscow.offsets(for: local(2014, 10, 26, 1, 30)), AmbiguousOffset.Fold(before: offset("+04:00"), after: offset("+03:00")))
+    assertEqual(moscow.offset(at: UtcDateTime.of(year: 2026, month: 7, day: 1, hour: 0, minute: 0, second: 0)!), offset("+03:00"))
+    assertEqual(moscow.abbreviation(at: UtcDateTime.of(year: 2026, month: 7, day: 1, hour: 0, minute: 0, second: 0)!), "MSK")
+    // Samoa crossed the date line: 2011-12-30 never happened in Apia.
+    let apia = zone("Pacific/Apia")
+    assertEqual(apia.offsets(for: local(2011, 12, 30, 12, 0)), AmbiguousOffset.Gap(before: offset("-10:00"), after: offset("+14:00")))
+    let thursday = ZonedDateTime.of(year: 2011, month: 12, day: 29, hour: 23, zone: apia)!
+    assertEqual(thursday.adding(Duration.hours(1)).toString(), "2011-12-31T00:00:00+14:00[Pacific/Apia]")
+    assertEqual(thursday.adding(days: 1).toString(), "2011-12-31T23:00:00+14:00[Pacific/Apia]")
+    // Prague kept GMT the winter after the war.
+    let prague = zone("Europe/Prague")
+    assertEqual(prague.offset(at: UtcDateTime.of(year: 1946, month: 12, day: 15, hour: 0, minute: 0, second: 0)!), UtcOffset.utc)
+    assertEqual(prague.abbreviation(at: UtcDateTime.of(year: 1946, month: 12, day: 15, hour: 0, minute: 0, second: 0)!), "GMT")
+}
+
+@test
+fn santiagoSkipsMidnight() {
+    if !hasDatabase() {
+        return
+    }
+    let santiago = zone("America/Santiago")
+    let noon = ZonedDateTime.of(year: 2024, month: 9, day: 8, hour: 12, zone: santiago)!
+    assertEqual(noon.startOfDay().toString(), "2024-09-08T01:00:00-03:00[America/Santiago]")
+    assertEqual(noon.lengthOfDay, Duration.hours(23))
+}
+
+@test
+fn aZonedDateTimeHasItsLocalFields() {
+    if !hasDatabase() {
+        return
+    }
+    let prague = zone("Europe/Prague")
+    let at = ZonedDateTime.of(year: 2026, month: 11, day: 17, hour: 9, minute: 5, second: 3, nanosecond: 4, zone: prague)!
+    assertEqual(at.year, 2026)
+    assertEqual(at.month, 11)
+    assertEqual(at.day, 17)
+    assertEqual(at.hour, 9)
+    assertEqual(at.minute, 5)
+    assertEqual(at.second, 3)
+    assertEqual(at.nanosecond, 4)
+    assertEqual(at.weekday, Weekday.Tuesday)
+    assertEqual(at.date, Date.of(year: 2026, month: 11, day: 17)!)
+    assertEqual(at.time, TimeOfDay.of(hour: 9, minute: 5, second: 3, nanosecond: 4)!)
+    assertEqual(at.offsetDateTime.toString(), "2026-11-17T09:05:03.000000004+01:00")
+    assertEqual(at.withZone(zone("America/New_York")).toString(), "2026-11-17T03:05:03.000000004-05:00[America/New_York]")
+    assertEqual(at.with(time: TimeOfDay.noon).toString(), "2026-11-17T12:00:00+01:00[Europe/Prague]")
+    assertEqual(at.format(pattern: "dddd HH:mm zzz"), "Tuesday 09:05 +01:00")
+    assertEqual(at.debugDescription(), at.toString())
+    assert(ZonedDateTime.of(year: 2026, month: 2, day: 30, zone: prague) == none)
+    let sameMoment = at.withZone(zone("Asia/Kolkata"))
+    assert(sameMoment != at)
+    assert(sameMoment < at)
+    assert(at < at.adding(Duration.nanoseconds(1)))
+    assertEqual(at.hashValue, at.withZone(prague).hashValue)
+}
+
+@test
+fn aZonedDateTimeKeepsItsOffsetInAFoldWhereItCan() {
+    if !hasDatabase() {
+        return
+    }
+    let newYork = zone("America/New_York")
+    let second = local(2026, 11, 1, 1, 10).zoned(in: newYork, .Later)
+    assertEqual(second.with(time: TimeOfDay.of(hour: 1, minute: 40)!).toString(), "2026-11-01T01:40:00-05:00[America/New_York]")
+    let first = local(2026, 11, 1, 1, 10).zoned(in: newYork, .Earlier)
+    assertEqual(first.with(time: TimeOfDay.of(hour: 1, minute: 40)!).toString(), "2026-11-01T01:40:00-04:00[America/New_York]")
+    let dayBefore = local(2026, 10, 31, 1, 30).zoned(in: newYork)
+    assertEqual(dayBefore.adding(days: 1).toString(), "2026-11-01T01:30:00-04:00[America/New_York]")
+}
+
+@test
+fn zonedDateTimesReadRfc9557() {
+    if !hasDatabase() {
+        return
+    }
+    assertEqual(try! ZonedDateTime.parse("2026-11-17T09:05:03+01:00[Europe/Prague]").toString(), "2026-11-17T09:05:03+01:00[Europe/Prague]")
+    assertEqual(try! ZonedDateTime.parse("2026-11-17T09:05[Europe/Prague]").instant.toString(), "2026-11-17T08:05:00Z")
+    assertEqual(try! ZonedDateTime.parse("2026-11-01T01:30-05:00[America/New_York]").instant.toString(), "2026-11-01T06:30:00Z")
+    assertEqual(try! ZonedDateTime.parse("2026-11-01T01:30-04:00[America/New_York]").instant.toString(), "2026-11-01T05:30:00Z")
+    assertEqual(try! ZonedDateTime.parse("2026-11-01T01:30[America/New_York]").instant.toString(), "2026-11-01T05:30:00Z")
+    assertEqual(zonedError("2026-11-17T09:05:03+02:00[Europe/Prague]"), ParseError.Invalid(at: 19))
+    assertEqual(zonedError("2026-03-29T02:30+01:00[Europe/Prague]"), ParseError.Invalid(at: 16))
+    assertEqual(zonedError("2026-11-17T09:05:03+01:00"), ParseError.Invalid(at: 25))
+    assertEqual(zonedError("2026-11-17T09:05:03[Europe/Prague"), ParseError.Invalid(at: 33))
+    assertEqual(zonedError("2026-11-17T09:05:03[Europe/Prague]x"), ParseError.Invalid(at: 34))
+    assertEqual(zonedError("2026-11-17T09:05:03[Mars/Base]"), ParseError.Invalid(at: 20))
+}

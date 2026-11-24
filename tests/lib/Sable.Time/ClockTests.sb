@@ -1,0 +1,17 @@
+module TimeClockTests
+
+import Sable.Testing
+import Sable.Time
+
+@test
+fn aClockMeasuresWhatItRuns() {
+    let took = Clock.measure({ Runtime.sleep(nanoseconds: 1_000_000) })
+    assert(took >= Duration.milliseconds(1))
+}
+
+@test
+fn clocksSleepOffTheRunQueue() async {
+    let start = Instant.now()
+    try? await Clock.sleep(Duration.milliseconds(2))
+    assert(start.elapsed >= Duration.milliseconds(2))
+}

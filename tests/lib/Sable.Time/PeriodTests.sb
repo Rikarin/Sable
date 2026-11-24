@@ -1,0 +1,61 @@
+module TimePeriodTests
+
+import Sable.Testing
+import Sable.Time
+
+fn periodError(_ text: String) -> ParseError? {
+    do {
+        let _ = try Period.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn periodsKeepTheirPartsApart() {
+    let period = Period.of(years: 1, months: 14, days: 40)
+    assertEqual(period.years, 1)
+    assertEqual(period.months, 14)
+    assertEqual(period.days, 40)
+    assertEqual(period.totalMonths, 26)
+    assertEqual(period.normalized(), Period.of(years: 2, months: 2, days: 40))
+    assertEqual(Period.weeks(2), Period.days(14))
+    assertEqual(Period.years(1) + Period.months(2) + Period.days(3), Period.of(years: 1, months: 2, days: 3))
+    assertEqual(Period.of(years: 1, months: 2, days: 3) - Period.days(3), Period.of(years: 1, months: 2))
+    assertEqual(Period.of(months: 1, days: -2).negated(), Period.of(months: -1, days: 2))
+    assert(Period.zero.isZero)
+    assert(!Period.days(1).isZero)
+    assertEqual(Period.days(1).hashValue, Period.days(1).hashValue)
+}
+
+@test
+fn periodsWriteAsISO8601() {
+    assertEqual(Period.zero.toString(), "P0D")
+    assertEqual(Period.of(years: 1, months: 2, days: 3).toString(), "P1Y2M3D")
+    assertEqual(Period.months(-1).toString(), "P-1M")
+    assertEqual(Period.days(10).debugDescription(), "P10D")
+}
+
+@test
+fn periodsReadISO8601() {
+    assertEqual(try! Period.parse("P1Y2M3D"), Period.of(years: 1, months: 2, days: 3))
+    assertEqual(try! Period.parse("p2w1d"), Period.days(15))
+    assertEqual(try! Period.parse("-P1M"), Period.months(-1))
+    assertEqual(try! Period.parse("+P1Y"), Period.years(1))
+    assertEqual(try! Period.parse("P-1M+2D"), Period.of(months: -1, days: 2))
+    assertEqual(try! Period.parse(Period.of(years: 7, days: -3).toString()), Period.of(years: 7, days: -3))
+}
+
+@test
+fn aPeriodThatIsNotOneSaysWhere() {
+    assertEqual(periodError(""), ParseError.Empty)
+    assertEqual(periodError("1Y"), ParseError.Invalid(at: 0))
+    assertEqual(periodError("P"), ParseError.Invalid(at: 1))
+    assertEqual(periodError("PY"), ParseError.InvalidDigit(at: 1))
+    assertEqual(periodError("P1"), ParseError.Invalid(at: 2))
+    assertEqual(periodError("P1D1Y"), ParseError.Invalid(at: 3))
+    assertEqual(periodError("PT1H"), ParseError.InvalidDigit(at: 1))
+    assertEqual(periodError("P1X"), ParseError.Invalid(at: 2))
+    assertEqual(periodError("P99999999999999999999Y"), ParseError.Overflow)
+}

@@ -1,0 +1,306 @@
+module Sable.Time
+
+/// A time zone: the offsets from UTC a region's clocks have kept, and the
+/// rule they keep from now on, by the IANA time zone database's id
+/// ("Europe/Prague", "America/New_York"). .NET's TimeZoneInfo, jiff's
+/// TimeZone.
+///
+/// `find` reads a zone from the system's database, as TZif files (RFC
+/// 8536): `TZDIR` if it is set, then `/usr/share/zoneinfo` and the other
+/// places Unix systems keep it. Windows has no TZif database of its own:
+/// there `find` reads `TZDIR`, then a `zoneinfo` folder beside the
+/// executable, and without either only UTC and fixed offsets are there to
+/// be had (see docs/06 for why). `system()` is the zone the system is set
+/// to; `fixed` a zone of one offset; `posix` one of a POSIX TZ rule.
+///
+/// ```sable
+/// let prague = try! TimeZone.find("Europe/Prague")
+/// let summer = UtcDateTime.of(year: 2026, month: 7, day: 1, hour: 12, minute: 0, second: 0)!
+/// assert(prague.offset(at: summer).toString() == "+02:00")
+/// assert(prague.abbreviation(at: summer) == "CEST" && prague.isDaylightSaving(at: summer))
+/// assert(TimeZone.utc.offset(at: summer) == UtcOffset.utc)
+/// ```
+public struct TimeZone: Hashable {
+    /// The IANA id, "Europe/Prague"; for a fixed zone its offset, "+05:30",
+    /// or "UTC"; for a POSIX rule the rule.
+    public let id: String
+    /// When the clocks changed, in seconds since the epoch, in order.
+    let times: Int[>..]
+    /// The local time type each change was to.
+    let indices: Int[>..]
+    /// The local time types; the first is the one before the first change.
+    let types: LocalTimeType[>..]
+    /// The rule after the last change, or none to keep its type.
+    let rule: PosixRule?
+
+    init(id: String, times: Int[>..], indices: Int[>..], types: LocalTimeType[>..], rule: PosixRule?) {
+        self.id = id
+        self.times = times
+        self.indices = indices
+        self.types = types
+        self.rule = rule
+    }
+
+    /// UTC: an offset of zero, always.
+    public static var utc: TimeZone {
+        get {
+            return TimeZone(id: "UTC", times: [], indices: [], types: [LocalTimeType { offset: 0, isDaylightSaving: false, abbreviation: "UTC" }], rule: none)
+        }
+    }
+
+    /// The zone of one offset, always: its id is the offset, "+05:30", or
+    /// "UTC" for none.
+    public static fn fixed(_ offset: UtcOffset) -> TimeZone {
+        if offset.totalSeconds == 0 {
+            return TimeZone.utc
+        }
+        let name = offset.toString()
+        return TimeZone(id: name, times: [], indices: [], types: [LocalTimeType { offset: offset.totalSeconds, isDaylightSaving: false, abbreviation: name }], rule: none)
+    }
+
+    /// The zone a POSIX TZ rule describes, as the `TZ` variable and a TZif
+    /// file's footer write one: "EST5EDT,M3.2.0,M11.1.0" (five hours behind
+    /// UTC, daylight saving from the second Sunday of March to the first of
+    /// November), "<+0530>-5:30". Its id is the rule.
+    ///
+    /// ```sable
+    /// let zone = try! TimeZone.posix("CET-1CEST,M3.5.0,M10.5.0/3")
+    /// let july = UtcDateTime.of(year: 2040, month: 7, day: 1, hour: 0, minute: 0, second: 0)!
+    /// assert(zone.offset(at: july).toString() == "+02:00" && zone.abbreviation(at: july) == "CEST")
+    /// ```
+    public static fn posix(_ rule: String) throws(TimeZoneError) -> TimeZone {
+        if let parsed = PosixRule.parse(rule) {
+            return TimeZone(id: rule, times: [], indices: [], types: [parsed.standard], rule: parsed)
+        }
+        throw .Malformed(id: rule)
+    }
+
+    /// The offset of the zone's clocks at the moment.
+    public fn offset(at instant: UtcDateTime) -> UtcOffset {
+        return UtcOffset(seconds: typeAt(instant.secondsSinceEpoch).offset)
+    }
+
+    /// The abbreviation of the zone's time at the moment: "CET", "EDT",
+    /// "+0530" where the database has none.
+    public fn abbreviation(at instant: UtcDateTime) -> String {
+        return typeAt(instant.secondsSinceEpoch).abbreviation
+    }
+
+    /// Whether the zone keeps daylight saving time at the moment.
+    public fn isDaylightSaving(at instant: UtcDateTime) -> Bool {
+        return typeAt(instant.secondsSinceEpoch).isDaylightSaving
+    }
+
+    /// Whether the zone's offset never changes: UTC, a fixed one, a rule
+    /// with no daylight saving.
+    public var isFixed: Bool {
+        get {
+            if !times.isEmpty {
+                return false
+            }
+            if let rule = self.rule {
+                if let _ = rule.daylight {
+                    return false
+                }
+            }
+            return true
+        }
+    }
+
+    /// The moment the moment is in the zone.
+    public fn at(_ instant: UtcDateTime) -> ZonedDateTime {
+        return ZonedDateTime(instant: instant, zone: self, offset: offset(at: instant))
+    }
+
+    /// The offsets the zone has for the local date and time: one, or a gap
+    /// or a fold where its clocks skip it or show it twice.
+    ///
+    /// ```sable
+    /// let newYork = try! TimeZone.find("America/New_York")
+    /// let skipped = LocalDateTime.of(year: 2026, month: 3, day: 8, hour: 2, minute: 30)!
+    /// assert(newYork.offsets(for: skipped) == .Gap(before: UtcOffset.hours(-5), after: UtcOffset.hours(-4)))
+    /// ```
+    public fn offsets(for local: LocalDateTime) -> AmbiguousOffset {
+        let l = local.localSeconds
+        // Every offset the zone has two days either side, with when it
+        // began; the local time is at one of them where that offset is the
+        // zone's at the moment it makes.
+        var starts: Int[>..] = [l - 172800]
+        var offsets: Int[>..] = [typeAt(l - 172800).offset]
+        var at = l - 172800
+        while let next = nextChange(after: at) {
+            if next.at > l + 172800 {
+                break
+            }
+            starts.append(next.at)
+            offsets.append(next.type.offset)
+            at = next.at
+        }
+        var valid: Int[>..] = []
+        for offset in offsets {
+            if typeAt(l - offset).offset == offset && !valid.contains(offset) {
+                valid.append(offset)
+            }
+        }
+        if valid.count == 1 {
+            return .Unambiguous(offset: UtcOffset(seconds: valid[0]))
+        }
+        if valid.count > 1 {
+            var most = valid[0]
+            var least = valid[0]
+            for offset in valid {
+                most = offset > most ? offset : most
+                least = offset < least ? offset : least
+            }
+            return .Fold(before: UtcOffset(seconds: most), after: UtcOffset(seconds: least))
+        }
+        var i = 1
+        while i < starts.count {
+            if starts[i] + offsets[i - 1] <= l && l < starts[i] + offsets[i] {
+                return .Gap(before: UtcOffset(seconds: offsets[i - 1]), after: UtcOffset(seconds: offsets[i]))
+            }
+            i += 1
+        }
+        // Not reached by a zone whose changes are days apart.
+        return .Unambiguous(offset: UtcOffset(seconds: typeAt(l).offset))
+    }
+
+    /// The first change of the zone's clocks after the moment; none when
+    /// they never change again.
+    public fn nextTransition(after instant: UtcDateTime) -> ZoneTransition? {
+        if let change = nextChange(after: instant.secondsSinceEpoch) {
+            return change.transition()
+        }
+        return none
+    }
+
+    /// The last change of the zone's clocks before the moment; none when
+    /// they never changed before it.
+    ///
+    /// ```sable
+    /// let kolkata = try! TimeZone.find("Asia/Kolkata")
+    /// let now = UtcDateTime.of(year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0)!
+    /// assert(kolkata.nextTransition(after: now) == none)
+    /// assert(kolkata.previousTransition(before: now)!.instant.year == 1945)
+    /// ```
+    public fn previousTransition(before instant: UtcDateTime) -> ZoneTransition? {
+        let seconds = instant.nanosecond > 0 ? instant.secondsSinceEpoch + 1 : instant.secondsSinceEpoch
+        if let change = previousChange(before: seconds) {
+            return change.transition()
+        }
+        return none
+    }
+
+    /// The local time type at seconds since the epoch.
+    fn typeAt(_ seconds: Int) -> LocalTimeType {
+        let n = times.count
+        if let rule = self.rule {
+            if n == 0 || seconds > times[n - 1] {
+                return rule.typeAt(seconds)
+            }
+        }
+        if n == 0 || seconds < times[0] {
+            return types[0]
+        }
+        // The last change at or before the moment.
+        var low = 0
+        var high = n
+        while high - low > 1 {
+            let middle = low + (high - low) / 2
+            if times[middle] <= seconds {
+                low = middle
+            } else {
+                high = middle
+            }
+        }
+        return types[indices[low]]
+    }
+
+    /// The first change after seconds since the epoch.
+    fn nextChange(after seconds: Int) -> ZoneChange? {
+        let n = times.count
+        if n > 0 && seconds < times[n - 1] {
+            // The first change after the moment.
+            var low = 0
+            var high = n - 1
+            while low < high {
+                let middle = low + (high - low) / 2
+                if times[middle] > seconds {
+                    high = middle
+                } else {
+                    low = middle + 1
+                }
+            }
+            return ZoneChange { at: times[low], type: types[indices[low]] }
+        }
+        if let rule = self.rule {
+            return rule.nextChange(after: seconds)
+        }
+        return none
+    }
+
+    /// The last change before seconds since the epoch.
+    fn previousChange(before seconds: Int) -> ZoneChange? {
+        let n = times.count
+        if let rule = self.rule {
+            if let change = rule.previousChange(before: seconds) {
+                if n == 0 || change.at > times[n - 1] {
+                    return change
+                }
+            }
+        }
+        if n == 0 || seconds <= times[0] {
+            return none
+        }
+        // The last change before the moment.
+        var low = 0
+        var high = n
+        while high - low > 1 {
+            let middle = low + (high - low) / 2
+            if times[middle] < seconds {
+                low = middle
+            } else {
+                high = middle
+            }
+        }
+        return ZoneChange { at: times[low], type: types[indices[low]] }
+    }
+
+    public operator == (a: TimeZone, b: TimeZone) -> Bool {
+        return a.id == b.id
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+
+/// What a zone's clocks keep for a while: TZif's ttinfo.
+struct LocalTimeType {
+    /// Seconds ahead of UTC.
+    let offset: Int
+    let isDaylightSaving: Bool
+    let abbreviation: String
+}
+
+/// A change of a zone's clocks, in seconds since the epoch, to the type.
+struct ZoneChange {
+    let at: Int
+    let type: LocalTimeType
+
+    fn transition() -> ZoneTransition {
+        return ZoneTransition {
+            instant: UtcDateTime.fromUnix(at),
+            offset: UtcOffset(seconds: type.offset),
+            abbreviation: type.abbreviation,
+            isDaylightSaving: type.isDaylightSaving,
+        }
+    }
+}
+
+extension TimeZone: Debug {
+    /// The id: `TimeZone(Europe/Prague)`.
+    public fn debugDescription() -> String {
+        return "TimeZone(" + id + ")"
+    }
+}

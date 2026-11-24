@@ -1,0 +1,333 @@
+module Sable.Time
+
+/// A day of the proleptic Gregorian calendar, with no time and no time
+/// zone: a birthday, a due date. .NET's DateOnly, jiff's civil::Date.
+///
+/// Arithmetic is in calendar units: `adding(months:)` keeps the day of the
+/// month, clamped to the last day of a shorter month, and a `Period` adds
+/// its years and months first, then its days. `daysUntil` and
+/// `periodUntil` go the other way.
+///
+/// ```sable
+/// let date = Date.of(year: 2024, month: 1, day: 31)!
+/// assert(date.adding(months: 1).toString() == "2024-02-29")
+/// assert(date.weekday == .Wednesday && date.dayOfYear == 31)
+/// assert(date.daysUntil(Date.of(year: 2025, month: 1, day: 31)!) == 366)
+/// assert(try! Date.parse("2026-W47-2") == Date.of(year: 2026, month: 11, day: 17)!)
+/// ```
+public struct Date: Comparable, Hashable {
+    let y: Int
+    let m: Int
+    let d: Int
+
+    init(checkedYear year: Int, month: Int, day: Int) {
+        self.y = year
+        self.m = month
+        self.d = day
+    }
+
+    /// The date the fields name; none when the month is not 1 to 12 or the
+    /// day not in the month.
+    public static fn of(year: Int, month: Int, day: Int) -> Date? {
+        if month < 1 || month > 12 || day < 1 || day > monthLength(year, month) {
+            return none
+        }
+        return Date(checkedYear: year, month: month, day: day)
+    }
+
+    /// The year's day of the number, 1 for the first of January; none past
+    /// the year's last.
+    ///
+    /// ```sable
+    /// assert(Date.of(year: 2024, dayOfYear: 60)!.toString() == "2024-02-29")
+    /// ```
+    public static fn of(year: Int, dayOfYear: Int) -> Date? {
+        if dayOfYear < 1 || dayOfYear > yearLength(year) {
+            return none
+        }
+        return Date.fromDaysSinceEpoch(daysFromCivil(year, 1, 1) + dayOfYear - 1)
+    }
+
+    /// The day of an ISO 8601 week: the week-numbering year, the week (1 to
+    /// 52, or 53 in a long year) and the weekday. Week 1 is the week with
+    /// the year's first Thursday, so its Monday may be in December.
+    ///
+    /// ```sable
+    /// assert(Date.of(isoWeekYear: 2026, week: 1, weekday: .Monday)!.toString() == "2025-12-29")
+    /// assert(Date.of(isoWeekYear: 2025, week: 53, weekday: .Monday) == none)
+    /// ```
+    public static fn of(isoWeekYear year: Int, week: Int, weekday: Weekday) -> Date? {
+        if week < 1 || week > isoWeeksInYear(year) {
+            return none
+        }
+        let january4 = daysFromCivil(year, 1, 4)
+        let monday = january4 - (weekdayNumber(january4) - 1)
+        return Date.fromDaysSinceEpoch(monday + (week - 1) * 7 + weekday.number - 1)
+    }
+
+    /// The day so many days after 1970-01-01 (before, for a negative count).
+    public static fn fromDaysSinceEpoch(_ days: Int) -> Date {
+        return civilFromDays(days)
+    }
+
+    /// Today, in the system's time zone.
+    public static fn today() -> Date {
+        return ZonedDateTime.now(in: TimeZone.system()).date
+    }
+
+    /// 1970-01-01, which Unix time counts from.
+    public static var unixEpoch: Date => Date(checkedYear: 1970, month: 1, day: 1)
+
+    public var year: Int => y
+    public var month: Int => m
+    public var day: Int => d
+
+    /// The month, as a Month.
+    public var monthOfYear: Month => Month.ofChecked(m)
+
+    /// The days since 1970-01-01, negative before it.
+    public var daysSinceEpoch: Int => daysFromCivil(y, m, d)
+
+    public var weekday: Weekday => Weekday.ofChecked(weekdayNumber(daysSinceEpoch))
+
+    /// 1 for the first of January, to 365 or 366.
+    public var dayOfYear: Int => daysSinceEpoch - daysFromCivil(y, 1, 1) + 1
+
+    public var isInLeapYear: Bool => isLeapYear(y)
+
+    /// The days of the date's month: 28 to 31.
+    public var daysInMonth: Int => monthLength(y, m)
+
+    /// The days of the date's year: 365 or 366.
+    public var daysInYear: Int => yearLength(y)
+
+    /// ISO 8601's week-numbering year: the year of the Thursday of the
+    /// date's week, which is the calendar year but for a few days around
+    /// the new year.
+    ///
+    /// ```sable
+    /// let date = Date.of(year: 2024, month: 12, day: 30)!
+    /// assert(date.isoWeekYear == 2025 && date.isoWeek == 1)
+    /// ```
+    public var isoWeekYear: Int => civilFromDays(thursday).y
+
+    /// ISO 8601's week number, 1 to 53: .NET's ISOWeek.GetWeekOfYear.
+    public var isoWeek: Int {
+        get {
+            let thursday = self.thursday
+            return (thursday - daysFromCivil(civilFromDays(thursday).y, 1, 1)) / 7 + 1
+        }
+    }
+
+    /// The Thursday of the date's ISO week, in days since the epoch.
+    var thursday: Int {
+        get {
+            let days = daysSinceEpoch
+            return days - weekdayNumber(days) + 4
+        }
+    }
+
+    /// The date so many days on (back, for a negative count).
+    public fn adding(days: Int) -> Date {
+        if days == 0 {
+            return self
+        }
+        return Date.fromDaysSinceEpoch(daysSinceEpoch + days)
+    }
+
+    /// The date so many months on, the day kept but clamped to the last of
+    /// a shorter month: a month after the 31st of January is the end of
+    /// February. .NET's AddMonths.
+    ///
+    /// ```sable
+    /// let date = Date.of(year: 2025, month: 3, day: 31)!
+    /// assert(date.adding(months: -1).toString() == "2025-02-28")
+    /// assert(date.adding(months: 11).toString() == "2026-02-28")
+    /// ```
+    public fn adding(months: Int) -> Date {
+        if months == 0 {
+            return self
+        }
+        let total = y * 12 + (m - 1) + months
+        let year = floorDivide(total, 12)
+        let month = floorModulo(total, 12) + 1
+        let last = monthLength(year, month)
+        return Date(checkedYear: year, month: month, day: d > last ? last : d)
+    }
+
+    /// The date so many years on, the 29th of February clamped to the 28th
+    /// in a year with none.
+    public fn adding(years: Int) -> Date {
+        return adding(months: years * 12)
+    }
+
+    /// The date the period on: its years and months first, clamped as
+    /// `adding(months:)` is, then its days.
+    public fn adding(_ period: Period) -> Date {
+        return adding(months: period.totalMonths).adding(days: period.days)
+    }
+
+    /// The date the period back.
+    public fn subtracting(_ period: Period) -> Date {
+        return adding(period.negated())
+    }
+
+    /// The days from this date to the other: negative when the other is
+    /// earlier.
+    public fn daysUntil(_ other: Date) -> Int {
+        return other.daysSinceEpoch - daysSinceEpoch
+    }
+
+    /// The years, months and days from this date to the other: whole
+    /// months while the day of the month allows, then the days left, as
+    /// Java's Period.between counts them forwards. Every part has the sign
+    /// of the whole, and adding the period to this date gives the other.
+    ///
+    /// ```sable
+    /// let start = Date.of(year: 2024, month: 1, day: 31)!
+    /// let end = Date.of(year: 2025, month: 3, day: 1)!
+    /// assert(start.periodUntil(end) == Period.of(years: 1, months: 1, days: 1))
+    /// assert(end.periodUntil(start) == Period.of(years: -1, months: -1, days: -1))
+    /// ```
+    public fn periodUntil(_ other: Date) -> Period {
+        var months = (other.y * 12 + other.m) - (y * 12 + m)
+        // A month counts once its day of the month is reached.
+        if months > 0 && other.d < d {
+            months -= 1
+        } else if months < 0 && other.d > d {
+            months += 1
+        }
+        let days = other.daysSinceEpoch - adding(months: months).daysSinceEpoch
+        return Period { years: months / 12, months: months % 12, days: days }
+    }
+
+    /// The first day of the date's month.
+    public var firstDayOfMonth: Date => Date(checkedYear: y, month: m, day: 1)
+
+    /// The last day of the date's month.
+    public var lastDayOfMonth: Date => Date(checkedYear: y, month: m, day: monthLength(y, m))
+
+    /// The first of January of the date's year.
+    public var firstDayOfYear: Date => Date(checkedYear: y, month: 1, day: 1)
+
+    /// The 31st of December of the date's year.
+    public var lastDayOfYear: Date => Date(checkedYear: y, month: 12, day: 31)
+
+    /// The first day after this one that is the weekday.
+    ///
+    /// ```sable
+    /// let friday = Date.of(year: 2026, month: 11, day: 20)!
+    /// assert(friday.next(.Monday).day == 23 && friday.next(.Friday).day == 27)
+    /// ```
+    public fn next(_ weekday: Weekday) -> Date {
+        let ahead = self.weekday.daysUntil(weekday)
+        return adding(days: ahead == 0 ? 7 : ahead)
+    }
+
+    /// The last day before this one that is the weekday.
+    public fn previous(_ weekday: Weekday) -> Date {
+        let back = weekday.daysUntil(self.weekday)
+        return adding(days: back == 0 ? -7 : 0 - back)
+    }
+
+    /// The date at the time of day.
+    public fn at(_ time: TimeOfDay) -> LocalDateTime {
+        return LocalDateTime(date: self, time: time)
+    }
+
+    /// The date at midnight.
+    public var atMidnight: LocalDateTime => LocalDateTime(date: self, time: TimeOfDay.midnight)
+
+    /// The first moment of the date in the zone: midnight, or where the
+    /// zone's clocks skip midnight, the moment they reach the day.
+    public fn startOfDay(in zone: TimeZone) -> ZonedDateTime {
+        return atMidnight.zoned(in: zone)
+    }
+
+    /// ISO 8601's extended form: "2026-11-17"; a year past 9999 or before
+    /// 0 with its sign, "+10000-01-01", "-0001-01-01".
+    public fn toString() -> String {
+        return isoYear(y) + "-" + two(m) + "-" + two(d)
+    }
+
+    /// The date as the pattern writes it: .NET's custom and standard date
+    /// and time format strings, in the invariant culture (see
+    /// `LocalDateTime.format(pattern:)`). The time is midnight.
+    ///
+    /// ```sable
+    /// let date = Date.of(year: 2026, month: 11, day: 17)!
+    /// assert(date.format(pattern: "dddd, d MMMM yyyy") == "Tuesday, 17 November 2026")
+    /// assert(date.format(pattern: "dd/MM/yy") == "17/11/26")
+    /// ```
+    public fn format(pattern: String) -> String {
+        return formatPattern(pattern, self, TimeOfDay.midnight, none, false)
+    }
+
+    /// The date a text writes in the pattern, as .NET's ParseExact reads it:
+    /// every field the pattern has must be there, as `format(pattern:)`
+    /// writes it. A pattern with a time reads it, and it is dropped.
+    ///
+    /// ```sable
+    /// let date = try! Date.parse("17 Nov 2026", pattern: "d MMM yyyy")
+    /// assert(date == Date.of(year: 2026, month: 11, day: 17)!)
+    /// ```
+    public static fn parse(_ text: String, pattern: String) throws(ParseError) -> Date {
+        return try parsePattern(text, pattern).date
+    }
+
+    public operator == (a: Date, b: Date) -> Bool {
+        return a.y == b.y && a.m == b.m && a.d == b.d
+    }
+
+    public operator < (a: Date, b: Date) -> Bool {
+        if a.y != b.y {
+            return a.y < b.y
+        }
+        if a.m != b.m {
+            return a.m < b.m
+        }
+        return a.d < b.d
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(y)
+        hasher.combine(m)
+        hasher.combine(d)
+    }
+}
+
+/// The weeks of an ISO 8601 week-numbering year: 53 when it starts on a
+/// Thursday, or a Wednesday in a leap year, and 52 otherwise.
+fn isoWeeksInYear(_ year: Int) -> Int {
+    let january1 = weekdayNumber(daysFromCivil(year, 1, 1))
+    return january1 == 4 || january1 == 3 && isLeapYear(year) ? 53 : 52
+}
+
+/// The year as ISO 8601 writes it: four digits, or with a sign outside 0
+/// to 9999.
+fn isoYear(_ year: Int) -> String {
+    if year > 9999 {
+        return "+" + year.toString()
+    }
+    return padded(year, 4)
+}
+
+extension Date: Parsable {
+    /// The date an ISO 8601 text writes: a calendar date, `2026-11-17` or
+    /// `20261117`; an ordinal date, `2026-321`; or a week date,
+    /// `2026-W47-2`, or `2026-W47` for its Monday. A year past four digits
+    /// has its sign, `+10000-01-01`.
+    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> Date {
+        var scanner = IsoScanner(source.toString())
+        let date = try scanner.date()
+        try scanner.end()
+        return date
+    }
+}
+
+extension Date: Debug {
+    /// As ISO 8601 writes it: `2026-11-17`.
+    public fn debugDescription() -> String {
+        return toString()
+    }
+}

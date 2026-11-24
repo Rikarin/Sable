@@ -1,0 +1,206 @@
+module Sable.Time
+
+// Writing dates and times: .NET's custom and standard date and time format
+// strings, in the invariant culture, and RFC 3339's and RFC 2822's forms.
+// Every type's 'format(pattern:)' comes here with its date, time and
+// offset: none for a local one, which has no offset; 'utc' for a
+// UtcDateTime, whose 'K' is "Z".
+
+/// One piece of a pattern: a specifier letter repeated 'count' times, or
+/// (letter ' ') text written as it is.
+struct PatternToken {
+    let letter: Char
+    let count: Int
+    let text: String
+}
+
+/// The custom pattern a one-letter standard pattern stands for, and
+/// whether it writes the moment in UTC; a longer pattern as it is.
+fn expandStandardPattern(_ pattern: String) -> (String, Bool) {
+    if pattern.count != 1 {
+        return (pattern, false)
+    }
+    return match pattern.at(0) {
+        case 'd'      => ("MM/dd/yyyy", false)
+        case 'D'      => ("dddd, dd MMMM yyyy", false)
+        case 'f'      => ("dddd, dd MMMM yyyy HH:mm", false)
+        case 'F'      => ("dddd, dd MMMM yyyy HH:mm:ss", false)
+        case 'g'      => ("MM/dd/yyyy HH:mm", false)
+        case 'G'      => ("MM/dd/yyyy HH:mm:ss", false)
+        case 'm', 'M' => ("MMMM dd", false)
+        case 'o', 'O' => ("yyyy'-'MM'-'dd'T'HH':'mm':'ss'.'fffffffK", false)
+        case 'r', 'R' => ("ddd, dd MMM yyyy HH':'mm':'ss 'GMT'", true)
+        case 's'      => ("yyyy'-'MM'-'dd'T'HH':'mm':'ss", false)
+        case 't'      => ("HH:mm", false)
+        case 'T'      => ("HH:mm:ss", false)
+        case 'u'      => ("yyyy'-'MM'-'dd HH':'mm':'ss'Z'", true)
+        case 'U'      => ("dddd, dd MMMM yyyy HH:mm:ss", true)
+        case 'y', 'Y' => ("yyyy MMMM", false)
+        case _        => (pattern, false)
+    }
+}
+
+/// The pattern's pieces, as .NET's DateTimeFormat reads them.
+fn tokenizePattern(_ pattern: String) -> PatternToken[>..] {
+    let chars = pattern.toArray()
+    var tokens: PatternToken[>..] = []
+    var i = 0
+    while i < chars.count {
+        let c = chars[i]
+        if c == '\'' || c == '"' {
+            // Quoted text, a backslash in it escaping the next character.
+            var text = ""
+            i += 1
+            while i < chars.count && chars[i] != c {
+                if chars[i] == '\\' && i + 1 < chars.count {
+                    i += 1
+                }
+                text += String.fromChar(chars[i])
+                i += 1
+            }
+            i += 1
+            tokens.append(PatternToken { letter: ' ', count: 0, text: text })
+        } else if c == '\\' {
+            if i + 1 < chars.count {
+                tokens.append(PatternToken { letter: ' ', count: 0, text: String.fromChar(chars[i + 1]) })
+            }
+            i += 2
+        } else if c == '%' {
+            // The one specifier after it, on its own.
+            if i + 1 < chars.count && chars[i + 1] != '%' {
+                let letter = chars[i + 1]
+                if isSpecifierLetter(letter) {
+                    tokens.append(PatternToken { letter: letter, count: 1, text: "" })
+                } else {
+                    tokens.append(PatternToken { letter: ' ', count: 0, text: String.fromChar(letter) })
+                }
+            }
+            i += 2
+        } else if isSpecifierLetter(c) {
+            var count = 1
+            while i + count < chars.count && chars[i + count] == c {
+                count += 1
+            }
+            if c == 'K' {
+                count = 1
+            }
+            tokens.append(PatternToken { letter: c, count: count, text: "" })
+            i += count
+        } else {
+            tokens.append(PatternToken { letter: ' ', count: 0, text: String.fromChar(c) })
+            i += 1
+        }
+    }
+    return tokens
+}
+
+fn isSpecifierLetter(_ c: Char) -> Bool {
+    return c == 'd' || c == 'M' || c == 'y' || c == 'h' || c == 'H' || c == 'm' || c == 's' || c == 'f' || c == 'F'
+        || c == 't' || c == 'z' || c == 'K' || c == 'g'
+}
+
+/// The date and time as the pattern writes them. 'offset' is none for a
+/// local date and time; 'utc' says the moment is a UtcDateTime.
+fn formatPattern(_ pattern: String, _ date: Date, _ time: TimeOfDay, _ offset: UtcOffset?, _ utc: Bool) -> String {
+    let (custom, inUtc) = expandStandardPattern(pattern)
+    var date = date
+    var time = time
+    var offset = offset
+    var utc = utc
+    if inUtc {
+        if let moved = offset {
+            let local = LocalDateTime(date: date, time: time).adding(Duration.seconds(0 - moved.totalSeconds))
+            date = local.date
+            time = local.time
+            offset = UtcOffset.utc
+            utc = true
+        }
+    }
+    var text = ""
+    for token in tokenizePattern(custom) {
+        let n = token.count
+        text += match token.letter {
+            case 'd' => n == 1 ? date.day.toString() : n == 2 ? two(date.day) : n == 3 ? date.weekday.shortName : date.weekday.name
+            case 'M' => n == 1 ? date.month.toString() : n == 2 ? two(date.month) : n == 3 ? date.monthOfYear.shortName : date.monthOfYear.name
+            case 'y' => n <= 2 ? padded(floorModulo(date.year, 100), n) : padded(date.year, n)
+            case 'h' => padded(time.hour % 12 == 0 ? 12 : time.hour % 12, n >= 2 ? 2 : 1)
+            case 'H' => padded(time.hour, n >= 2 ? 2 : 1)
+            case 'm' => padded(time.minute, n >= 2 ? 2 : 1)
+            case 's' => padded(time.second, n >= 2 ? 2 : 1)
+            case 'f' => fraction(time.nanosecond, n)
+            case 'F' => trimmedFraction(time.nanosecond, n)
+            case 't' => n == 1 ? (time.hour < 12 ? "A" : "P") : (time.hour < 12 ? "AM" : "PM")
+            case 'g' => "A.D."
+            case 'K' => utc ? "Z" : offset != none ? offset!.toString() : ""
+            case 'z' => offset != none ? offsetInHours(offset!, n) : utc ? offsetInHours(UtcOffset.utc, n) : ""
+            case _   => token.text
+        }
+        if token.letter == 'F' && text.hasSuffix(".") && trimmedFraction(time.nanosecond, n).isEmpty {
+            // .NET's: no fraction, and no point before it either.
+            text = text.slice(from: 0, to: text.count - 1)
+        }
+    }
+    return text
+}
+
+/// The first 'digits' digits of the nanoseconds' nine, up to nine.
+fn fraction(_ nanosecond: Int, _ digits: Int) -> String {
+    let n = digits > 9 ? 9 : digits
+    var scale = 1
+    var i = n
+    while i < 9 {
+        scale *= 10
+        i += 1
+    }
+    return padded(nanosecond / scale, n)
+}
+
+/// Those digits without the zeros at their end.
+fn trimmedFraction(_ nanosecond: Int, _ digits: Int) -> String {
+    let text = fraction(nanosecond, digits)
+    var end = text.count
+    while end > 0 && text.at(end - 1) == '0' {
+        end -= 1
+    }
+    return text.slice(from: 0, to: end)
+}
+
+/// .NET's 'z' (the hours, "+1"), 'zz' ("+01") and 'zzz' ("+01:00").
+fn offsetInHours(_ offset: UtcOffset, _ count: Int) -> String {
+    let magnitude = offset.totalSeconds < 0 ? 0 - offset.totalSeconds : offset.totalSeconds
+    let sign = offset.totalSeconds < 0 ? "-" : "+"
+    if count == 1 {
+        return sign + (magnitude / 3600).toString()
+    }
+    if count == 2 {
+        return sign + two(magnitude / 3600)
+    }
+    return sign + two(magnitude / 3600) + ":" + two(magnitude / 60 % 60)
+}
+
+/// RFC 3339's form: "2026-11-17T09:05:03+01:00", the fraction of the
+/// second where there is one, "Z" for UTC.
+fn formatRfc3339(_ local: LocalDateTime, _ offset: UtcOffset, _ utc: Bool) -> String {
+    let fraction = fractionDigits(local.nanosecond)
+    var text = isoYear(local.year) + "-" + two(local.month) + "-" + two(local.day) + "T" + two(local.hour) + ":" + two(local.minute)
+        + ":" + two(local.second)
+    if !fraction.isEmpty {
+        text += "." + fraction
+    }
+    if utc {
+        return text + "Z"
+    }
+    // RFC 3339 has no seconds in an offset: they are rounded off.
+    let minutes = floorDivide(offset.totalSeconds + 30, 60)
+    return text + UtcOffset(seconds: minutes * 60).toString()
+}
+
+/// RFC 2822's form, as mail headers write it: "Tue, 17 Nov 2026 09:05:03
+/// +0100".
+fn formatRfc2822(_ local: LocalDateTime, _ offset: UtcOffset) -> String {
+    let minutes = floorDivide(offset.totalSeconds + 30, 60)
+    let magnitude = minutes < 0 ? 0 - minutes : minutes
+    return local.weekday.shortName + ", " + local.day.toString() + " " + local.date.monthOfYear.shortName + " " + padded(local.year, 4)
+        + " " + two(local.hour) + ":" + two(local.minute) + ":" + two(local.second) + " " + (minutes < 0 ? "-" : "+")
+        + two(magnitude / 60) + two(magnitude % 60)
+}

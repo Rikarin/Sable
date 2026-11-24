@@ -1,0 +1,107 @@
+module Sable.Time
+
+/// How far a time zone's clocks are ahead of UTC (behind, when negative),
+/// to the second: +01:00 in Prague in winter, -04:00 in New York in summer,
+/// +05:30 in Kolkata. jiff's Offset, .NET's DateTimeOffset.Offset. At most
+/// 25:59:59 either way.
+///
+/// ```sable
+/// let offset = UtcOffset.of(hours: 5, minutes: 30)!
+/// assert(offset.toString() == "+05:30" && offset.totalSeconds == 19800)
+/// assert(try! UtcOffset.parse("-0400") == UtcOffset.hours(-4))
+/// ```
+public struct UtcOffset: Comparable, Hashable {
+    /// Seconds ahead of UTC.
+    public let totalSeconds: Int
+
+    init(seconds: Int) {
+        self.totalSeconds = seconds
+    }
+
+    /// The offset of so many seconds; none past 25:59:59 either way.
+    public static fn of(seconds: Int) -> UtcOffset? {
+        if seconds < 0 - maxOffsetSeconds || seconds > maxOffsetSeconds {
+            return none
+        }
+        return UtcOffset(seconds: seconds)
+    }
+
+    /// The offset of the hours, minutes and seconds, each with the sign of
+    /// the whole: `of(hours: -3, minutes: -30)` is -03:30. None when a part
+    /// is out of range.
+    public static fn of(hours: Int, minutes: Int = 0, seconds: Int = 0) -> UtcOffset? {
+        if hours < -25 || hours > 25 || minutes < -59 || minutes > 59 || seconds < -59 || seconds > 59 {
+            return none
+        }
+        return UtcOffset(seconds: hours * 3600 + minutes * 60 + seconds)
+    }
+
+    /// The offset of whole hours, -25 to 25, clamped.
+    public static fn hours(_ count: Int) -> UtcOffset {
+        let clamped = count < -25 ? -25 : count > 25 ? 25 : count
+        return UtcOffset(seconds: clamped * 3600)
+    }
+
+    /// UTC's own: +00:00.
+    public static var utc: UtcOffset => UtcOffset(seconds: 0)
+
+    /// The whole hours, with the offset's sign.
+    public var hours: Int => totalSeconds / 3600
+
+    /// The minutes past the hours, with the offset's sign.
+    public var minutes: Int => totalSeconds / 60 % 60
+
+    /// The seconds past the minutes, with the offset's sign.
+    public var seconds: Int => totalSeconds % 60
+
+    /// The offset as a duration.
+    public var duration: Duration => Duration.seconds(totalSeconds)
+
+    /// The offset the other way.
+    public fn negated() -> UtcOffset {
+        return UtcOffset(seconds: 0 - totalSeconds)
+    }
+
+    /// "+01:00", "-03:30", "+00:00"; with the seconds where there are any,
+    /// "+00:19:32".
+    public fn toString() -> String {
+        let magnitude = totalSeconds < 0 ? 0 - totalSeconds : totalSeconds
+        let text = (totalSeconds < 0 ? "-" : "+") + two(magnitude / 3600) + ":" + two(magnitude / 60 % 60)
+        return magnitude % 60 == 0 ? text : text + ":" + two(magnitude % 60)
+    }
+
+    public operator == (a: UtcOffset, b: UtcOffset) -> Bool {
+        return a.totalSeconds == b.totalSeconds
+    }
+
+    public operator < (a: UtcOffset, b: UtcOffset) -> Bool {
+        return a.totalSeconds < b.totalSeconds
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(totalSeconds)
+    }
+}
+
+const maxOffsetSeconds: Int = 93599
+
+extension UtcOffset: Parsable {
+    /// The offset ISO 8601 writes: `Z`, `+01:00`, `+0100`, `+01`, or with
+    /// seconds, `+00:19:32`.
+    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> UtcOffset {
+        var scanner = IsoScanner(source.toString())
+        if scanner.atEnd {
+            throw .Empty
+        }
+        let offset = try scanner.offset()
+        try scanner.end()
+        return offset
+    }
+}
+
+extension UtcOffset: Debug {
+    /// As `toString()` writes it.
+    public fn debugDescription() -> String {
+        return toString()
+    }
+}

@@ -1,0 +1,241 @@
+module Sable.Time
+
+/// A moment in a time zone: the moment, the zone, and the offset the
+/// zone's clocks had then — what a calendar event in Prague is. jiff's
+/// Zoned, java.time's ZonedDateTime.
+///
+/// Adding a `Duration` is exact: an hour later is 3600 seconds later,
+/// whatever the clocks do. Adding a `Period` is by the calendar, on the
+/// local date, and the result made a moment again by the compatible
+/// policy (`Disambiguation`): a day after 12:00 the day before the clocks
+/// change is 12:00 the day after, 23 or 25 hours on.
+///
+/// ```sable
+/// let prague = try! TimeZone.find("Europe/Prague")
+/// let before = LocalDateTime.of(year: 2026, month: 3, day: 28, hour: 12)!.zoned(in: prague)
+/// assert(before.adding(Period.days(1)).toString() == "2026-03-29T12:00:00+02:00[Europe/Prague]")
+/// assert(before.adding(Duration.hours(24)).toString() == "2026-03-29T13:00:00+02:00[Europe/Prague]")
+/// assert(before.adding(Period.days(1)).durationSince(before) == Duration.hours(23))
+/// ```
+public struct ZonedDateTime: Comparable, Hashable {
+    public let instant: UtcDateTime
+    public let zone: TimeZone
+    /// The zone's offset at the moment.
+    public let offset: UtcOffset
+
+    init(instant: UtcDateTime, zone: TimeZone, offset: UtcOffset) {
+        self.instant = instant
+        self.zone = zone
+        self.offset = offset
+    }
+
+    /// Now, in the zone.
+    public static fn now(in zone: TimeZone) -> ZonedDateTime {
+        return zone.at(UtcDateTime.now())
+    }
+
+    /// Now, in the system's time zone.
+    public static fn now() -> ZonedDateTime {
+        return ZonedDateTime.now(in: TimeZone.system())
+    }
+
+    /// The date and time the fields name, made a moment in the zone by the
+    /// policy; none when a field is out of range.
+    public static fn of(year: Int, month: Int, day: Int, hour: Int = 0, minute: Int = 0, second: Int = 0, nanosecond: Int = 0, zone: TimeZone, _ disambiguation: Disambiguation = .Compatible) -> ZonedDateTime? {
+        if let local = LocalDateTime.of(year: year, month: month, day: day, hour: hour, minute: minute, second: second, nanosecond: nanosecond) {
+            return local.zoned(in: zone, disambiguation)
+        }
+        return none
+    }
+
+    /// What the zone's clocks show.
+    public var local: LocalDateTime {
+        get {
+            return LocalDateTime.fromLocalSeconds(instant.secondsSinceEpoch + offset.totalSeconds, instant.nanosecond)
+        }
+    }
+
+    /// The moment at the offset, the zone forgotten.
+    public var offsetDateTime: OffsetDateTime => OffsetDateTime(local: local, offset: offset)
+
+    public var date: Date => local.date
+    public var time: TimeOfDay => local.time
+    public var year: Int => local.year
+    public var month: Int => local.month
+    public var day: Int => local.day
+    public var hour: Int => local.hour
+    public var minute: Int => local.minute
+    public var second: Int => local.second
+    public var nanosecond: Int => local.nanosecond
+    public var weekday: Weekday => local.weekday
+
+    /// The zone's abbreviation then: "CET", "EDT".
+    public var abbreviation: String => zone.abbreviation(at: instant)
+
+    /// Whether the zone kept daylight saving time then.
+    public var isDaylightSaving: Bool => zone.isDaylightSaving(at: instant)
+
+    /// The same moment in another zone.
+    public fn withZone(_ other: TimeZone) -> ZonedDateTime {
+        return other.at(instant)
+    }
+
+    /// The moment so long after (before, for a negative duration): exact,
+    /// whatever the zone's clocks do between.
+    public fn adding(_ duration: Duration) -> ZonedDateTime {
+        return zone.at(instant.adding(duration))
+    }
+
+    /// The local date moved by the period, the time of day kept, and made
+    /// a moment in the zone again by the compatible policy. Where the old
+    /// offset is one of the two a fold has, it is kept.
+    public fn adding(_ period: Period) -> ZonedDateTime {
+        if period.isZero {
+            return self
+        }
+        return relocated(local.adding(period))
+    }
+
+    public fn adding(days: Int) -> ZonedDateTime {
+        return adding(Period.days(days))
+    }
+
+    public fn adding(months: Int) -> ZonedDateTime {
+        return adding(Period.months(months))
+    }
+
+    public fn adding(years: Int) -> ZonedDateTime {
+        return adding(Period.years(years))
+    }
+
+    /// The same date at another time of day, by the compatible policy.
+    public fn with(time: TimeOfDay) -> ZonedDateTime {
+        return relocated(local.with(time: time))
+    }
+
+    /// The local date and time as a moment in the zone, the current offset
+    /// kept if a fold allows it.
+    fn relocated(_ target: LocalDateTime) -> ZonedDateTime {
+        match zone.offsets(for: target) {
+            case .Fold(let before, let after) => {
+                if offset == before || offset == after {
+                    return ZonedDateTime(instant: target.withOffset(offset).instant, zone: zone, offset: offset)
+                }
+            }
+            case _ => { }
+        }
+        return target.zoned(in: zone)
+    }
+
+    /// How long after the other moment this one is.
+    public fn durationSince(_ earlier: ZonedDateTime) -> Duration {
+        return instant.durationSince(earlier.instant)
+    }
+
+    /// The first moment of the day in the zone: midnight, or where the
+    /// zone's clocks skip midnight, the first moment they show of the day.
+    ///
+    /// ```sable
+    /// // Santiago's clocks went from 23:59:59 to 01:00 on 2024-09-08.
+    /// let santiago = try! TimeZone.find("America/Santiago")
+    /// let noon = ZonedDateTime.of(year: 2024, month: 9, day: 8, hour: 12, zone: santiago)!
+    /// assert(noon.startOfDay().toString() == "2024-09-08T01:00:00-03:00[America/Santiago]")
+    /// ```
+    public fn startOfDay() -> ZonedDateTime {
+        return date.startOfDay(in: zone)
+    }
+
+    /// The last nanosecond of the day in the zone: a nanosecond before the
+    /// next day's first moment.
+    public fn endOfDay() -> ZonedDateTime {
+        return date.adding(days: 1).startOfDay(in: zone).adding(Duration.nanoseconds(-1))
+    }
+
+    /// How long the day is in the zone: 24 hours, or 23 or 25 on a day its
+    /// clocks change.
+    public var lengthOfDay: Duration => date.adding(days: 1).startOfDay(in: zone).durationSince(startOfDay())
+
+    /// RFC 9557's form, java.time's and jiff's: the moment with its offset,
+    /// then the zone in brackets, "2026-11-17T09:05:03+01:00[Europe/Prague]".
+    public fn toString() -> String {
+        return local.toString() + offset.toString() + "[" + zone.id + "]"
+    }
+
+    /// The moment as the pattern writes it, as `OffsetDateTime.format`
+    /// writes it at the zone's offset.
+    public fn format(pattern: String) -> String {
+        return formatPattern(pattern, local.date, local.time, offset, false)
+    }
+
+    public operator == (a: ZonedDateTime, b: ZonedDateTime) -> Bool {
+        return a.instant == b.instant && a.zone == b.zone
+    }
+
+    public operator < (a: ZonedDateTime, b: ZonedDateTime) -> Bool {
+        if a.instant != b.instant {
+            return a.instant < b.instant
+        }
+        return a.zone.id < b.zone.id
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        instant.hash(into: &hasher)
+        zone.hash(into: &hasher)
+    }
+}
+
+extension ZonedDateTime: Parsable {
+    /// The moment RFC 9557 writes: a date and time as
+    /// `LocalDateTime.parse` reads them, perhaps an offset, then the zone's
+    /// id in brackets, `2026-11-17T09:05:03+01:00[Europe/Prague]`. An offset
+    /// the zone has for the local time picks between the two of a fold;
+    /// one it has not is `.Invalid`. Without one, the compatible policy
+    /// picks. A zone not in the database is `.Invalid` where its id is.
+    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> ZonedDateTime {
+        let text = source.toString()
+        var scanner = IsoScanner(text)
+        let parsed = try scanner.dateTime()
+        if scanner.current != '[' {
+            throw .Invalid(at: scanner.at)
+        }
+        let idAt = scanner.at + 1
+        var close = idAt
+        while close < scanner.chars.count && scanner.chars[close] != ']' {
+            close += 1
+        }
+        if close >= scanner.chars.count {
+            throw .Invalid(at: close)
+        }
+        if close + 1 != scanner.chars.count {
+            throw .Invalid(at: close + 1)
+        }
+        var id = ""
+        var i = idAt
+        while i < close {
+            id += String.fromChar(scanner.chars[i])
+            i += 1
+        }
+        if let zone = try? TimeZone.find(id) {
+            if let offset = parsed.offset {
+                let found = match zone.offsets(for: parsed.local) {
+                    case .Unambiguous(let only)       => only == offset
+                    case .Fold(let before, let after) => offset == before || offset == after
+                    case .Gap(_, _)                   => false
+                }
+                if !found {
+                    throw .Invalid(at: parsed.offsetAt)
+                }
+                return ZonedDateTime(instant: parsed.local.withOffset(offset).instant, zone: zone, offset: offset)
+            }
+            return parsed.local.zoned(in: zone)
+        }
+        throw .Invalid(at: idAt)
+    }
+}
+
+extension ZonedDateTime: Debug {
+    /// As `toString()` writes it.
+    public fn debugDescription() -> String {
+        return toString()
+    }
+}

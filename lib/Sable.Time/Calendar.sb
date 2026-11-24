@@ -1,0 +1,126 @@
+module Sable.Time
+
+// The proleptic Gregorian calendar, as every type of the module counts it:
+// days since 1970-01-01 to a civil date and back (Howard Hinnant's
+// algorithms, over 400-year eras so that every year works), and the
+// integer arithmetic that rounds towards minus infinity that it wants.
+
+/// Whether the year has a 29th of February: every fourth, but not every
+/// hundredth, but every four hundredth.
+///
+/// ```sable
+/// assert(isLeapYear(2024) && isLeapYear(2000) && !isLeapYear(1900))
+/// ```
+public fn isLeapYear(_ year: Int) -> Bool {
+    return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+/// The days in the month (1 to 12) of the year: 28 to 31.
+///
+/// ```sable
+/// assert(daysInMonth(2024, 2) == 29 && daysInMonth(2026, 4) == 30)
+/// ```
+public fn daysInMonth(_ year: Int, _ month: Int) -> Int {
+    if month == 2 {
+        if isLeapYear(year) {
+            return 29
+        }
+        return 28
+    }
+    if month == 4 || month == 6 || month == 9 || month == 11 {
+        return 30
+    }
+    return 31
+}
+
+/// The days in the year: 365, or 366 in a leap year.
+public fn daysInYear(_ year: Int) -> Int {
+    return isLeapYear(year) ? 366 : 365
+}
+
+/// `daysInMonth`, by a name no type's property hides.
+fn monthLength(_ year: Int, _ month: Int) -> Int {
+    return daysInMonth(year, month)
+}
+
+/// `daysInYear`, by a name no type's property hides.
+fn yearLength(_ year: Int) -> Int {
+    return daysInYear(year)
+}
+
+/// Days since 1970-01-01 of the civil date.
+fn daysFromCivil(_ year: Int, _ month: Int, _ day: Int) -> Int {
+    var y = year
+    if month <= 2 {
+        y -= 1
+    }
+    let era = floorDivide(y, 400)
+    let yearOfEra = y - era * 400
+    var shifted = month - 3
+    if month <= 2 {
+        shifted = month + 9
+    }
+    let dayOfYear = (153 * shifted + 2) / 5 + day - 1
+    let dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+    return era * 146097 + dayOfEra - 719468
+}
+
+/// The civil date of the days since 1970-01-01, as a Date.
+fn civilFromDays(_ days: Int) -> Date {
+    let shiftedDays = days + 719468
+    let era = floorDivide(shiftedDays, 146097)
+    let dayOfEra = shiftedDays - era * 146097
+    let yearOfEra = (dayOfEra - dayOfEra / 1460 + dayOfEra / 36524 - dayOfEra / 146096) / 365
+    let dayOfYear = dayOfEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100)
+    let shiftedMonth = (5 * dayOfYear + 2) / 153
+    let day = dayOfYear - (153 * shiftedMonth + 2) / 5 + 1
+    let month = shiftedMonth < 10 ? shiftedMonth + 3 : shiftedMonth - 9
+    let year = yearOfEra + era * 400 + (month <= 2 ? 1 : 0)
+    return Date(checkedYear: year, month: month, day: day)
+}
+
+/// ISO 8601's weekday of the days since 1970-01-01, a Thursday: 1 for
+/// Monday through 7 for Sunday.
+fn weekdayNumber(_ days: Int) -> Int {
+    return floorModulo(days + 3, 7) + 1
+}
+
+fn floorDivide(_ a: Int, _ b: Int) -> Int {
+    let q = a / b
+    if a % b != 0 && (a < 0) != (b < 0) {
+        return q - 1
+    }
+    return q
+}
+
+fn floorModulo(_ a: Int, _ b: Int) -> Int {
+    return a - floorDivide(a, b) * b
+}
+
+/// The number in at least 'width' digits, zeros before it; a minus sign
+/// before them all for a negative one.
+fn padded(_ n: Int, _ width: Int) -> String {
+    var digits = (n < 0 ? 0 - n : n).toString()
+    while digits.count < width {
+        digits = "0" + digits
+    }
+    return n < 0 ? "-" + digits : digits
+}
+
+fn two(_ n: Int) -> String {
+    return padded(n, 2)
+}
+
+/// The nine digits of the nanoseconds, the zeros after the last other
+/// digit left off: "5" for half a second, "" for none.
+fn fractionDigits(_ nanosecond: Int) -> String {
+    if nanosecond == 0 {
+        return ""
+    }
+    var digits = padded(nanosecond, 9)
+    var end = digits.count
+    while digits.at(end - 1) == '0' {
+        end -= 1
+    }
+    return digits.slice(from: 0, to: end)
+}

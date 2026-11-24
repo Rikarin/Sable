@@ -1,0 +1,313 @@
+module TimeTimeZoneTests
+
+// Zones of every kind: UTC, fixed, POSIX rules (anywhere), TZif bytes made
+// here, and the system's database where there is one (not on Windows).
+
+import Sable.Testing
+import Sable.Time
+
+fn hasDatabase() -> Bool {
+    return (try? TimeZone.find("Europe/Prague")) != none
+}
+
+fn moment(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0) -> UtcDateTime {
+    return UtcDateTime.of(year: year, month: month, day: day, hour: hour, minute: minute, second: 0)!
+}
+
+fn findError(_ id: String) -> TimeZoneError? {
+    do {
+        let _ = try TimeZone.find(id)
+        return none
+    } catch {
+        return error
+    }
+}
+
+fn posixError(_ rule: String) -> TimeZoneError? {
+    do {
+        let _ = try TimeZone.posix(rule)
+        return none
+    } catch {
+        return error
+    }
+}
+
+fn tzifError(_ bytes: U8[>..]) -> TimeZoneError? {
+    do {
+        let _ = try TimeZone.fromTZif(id: "Test/Zone", bytes: bytes)
+        return none
+    } catch {
+        return error
+    }
+}
+
+fn int32(_ value: Int, _ bytes: inout U8[>..]) {
+    bytes.append(U8.truncating(value >> 24))
+    bytes.append(U8.truncating(value >> 16))
+    bytes.append(U8.truncating(value >> 8))
+    bytes.append(U8.truncating(value))
+}
+
+fn int64(_ value: Int, _ bytes: inout U8[>..]) {
+    int32(value >> 32, &bytes)
+    int32(value, &bytes)
+}
+
+/// A TZif file: one change, at the moment, from +01:00 "AAA" to +02:00
+/// "BBB" (daylight saving), and the footer.
+fn tzif(version: U8, at change: Int, footer: String) -> U8[>..] {
+    var bytes: U8[>..] = []
+    // Version 1 data: header, then the one change in 32 bits.
+    for block in [4, 8] {
+        if block == 8 && version == 0 {
+            break
+        }
+        bytes.append(contentsOf: [0x54, 0x5A, 0x69, 0x66])
+        bytes.append(version)
+        bytes.append(contentsOf: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        int32(0, &bytes)
+        int32(0, &bytes)
+        int32(0, &bytes)
+        int32(1, &bytes)
+        int32(2, &bytes)
+        int32(8, &bytes)
+        if block == 4 {
+            int32(change, &bytes)
+        } else {
+            int64(change, &bytes)
+        }
+        bytes.append(1)
+        int32(3600, &bytes)
+        bytes.append(contentsOf: [0, 0])
+        int32(7200, &bytes)
+        bytes.append(contentsOf: [1, 4])
+        bytes.append(contentsOf: [0x41, 0x41, 0x41, 0, 0x42, 0x42, 0x42, 0])
+    }
+    if version != 0 {
+        bytes.append(0x0A)
+        for byte in footer.utf8 {
+            bytes.append(byte)
+        }
+        bytes.append(0x0A)
+    }
+    return bytes
+}
+
+@test
+fn utcAndFixedZonesNeverChange() {
+    let utc = TimeZone.utc
+    assertEqual(utc.id, "UTC")
+    assert(utc.isFixed)
+    assertEqual(utc.offset(at: moment(2026, 1, 1, 0)), UtcOffset.utc)
+    assertEqual(utc.abbreviation(at: moment(2026, 1, 1, 0)), "UTC")
+    assert(!utc.isDaylightSaving(at: moment(2026, 1, 1, 0)))
+    assert(utc.nextTransition(after: moment(2026, 1, 1, 0)) == none)
+    assert(utc.previousTransition(before: moment(2026, 1, 1, 0)) == none)
+    let fixed = TimeZone.fixed(UtcOffset.of(hours: 5, minutes: 45)!)
+    assertEqual(fixed.id, "+05:45")
+    assertEqual(fixed.offset(at: moment(1900, 1, 1, 0)).toString(), "+05:45")
+    assertEqual(TimeZone.fixed(UtcOffset.utc), TimeZone.utc)
+    assertEqual(fixed.debugDescription(), "TimeZone(+05:45)")
+    assertEqual(fixed.hashValue, TimeZone.fixed(UtcOffset.of(hours: 5, minutes: 45)!).hashValue)
+    assertEqual(try! TimeZone.find("UTC").offset(at: moment(2026, 1, 1, 0)), UtcOffset.utc)
+}
+
+@test
+fn posixRulesSayWhenDaylightSavingIs() {
+    let zone = try! TimeZone.posix("CET-1CEST,M3.5.0,M10.5.0/3")
+    assertEqual(zone.id, "CET-1CEST,M3.5.0,M10.5.0/3")
+    assert(!zone.isFixed)
+    assertEqual(zone.offset(at: moment(2040, 1, 1, 0)).toString(), "+01:00")
+    assertEqual(zone.offset(at: moment(2040, 7, 1, 0)).toString(), "+02:00")
+    assertEqual(zone.abbreviation(at: moment(2040, 1, 1, 0)), "CET")
+    // The last Sunday of March 2040 is the 25th; 02:00 CET is 01:00 UTC.
+    assertEqual(zone.offset(at: moment(2040, 3, 25, 0, 59)).toString(), "+01:00")
+    assertEqual(zone.offset(at: moment(2040, 3, 25, 1)).toString(), "+02:00")
+    let spring = zone.nextTransition(after: moment(2040, 1, 1, 0))!
+    assertEqual(spring.instant, moment(2040, 3, 25, 1))
+    assertEqual(spring.abbreviation, "CEST")
+    let autumn = zone.nextTransition(after: spring.instant)!
+    assertEqual(autumn.instant, moment(2040, 10, 28, 1))
+    assert(!autumn.isDaylightSaving)
+    assertEqual(zone.previousTransition(before: autumn.instant)!, spring)
+    assertEqual(zone.previousTransition(before: moment(2040, 1, 1, 0))!.instant, moment(2039, 10, 30, 1))
+    assertEqual(autumn.debugDescription(), "2040-10-28T01:00:00Z +01:00 CET")
+    assertEqual(spring.debugDescription(), "2040-03-25T01:00:00Z +02:00 CEST (daylight saving)")
+}
+
+@test
+fn posixRulesHaveEveryForm() {
+    // No rule given: the United States' since 2007.
+    let eastern = try! TimeZone.posix("EST5EDT")
+    assertEqual(eastern.offset(at: moment(2030, 7, 1, 0)).toString(), "-04:00")
+    assertEqual(eastern.nextTransition(after: moment(2030, 1, 1, 0))!.instant, moment(2030, 3, 10, 7))
+    // No daylight saving at all, in angle brackets.
+    let india = try! TimeZone.posix("<+0530>-5:30")
+    assert(india.isFixed)
+    assertEqual(india.abbreviation(at: moment(2030, 1, 1, 0)), "+0530")
+    assertEqual(india.offset(at: moment(2030, 1, 1, 0)).toString(), "+05:30")
+    assert(india.nextTransition(after: moment(2030, 1, 1, 0)) == none)
+    assert(india.previousTransition(before: moment(2030, 1, 1, 0)) == none)
+    // The southern hemisphere, half an hour of daylight saving.
+    let lordHowe = try! TimeZone.posix("<+1030>-10:30<+11>-11,M10.1.0,M4.1.0")
+    assertEqual(lordHowe.offset(at: moment(2030, 1, 1, 0)).toString(), "+11:00")
+    assertEqual(lordHowe.offset(at: moment(2030, 7, 1, 0)).toString(), "+10:30")
+    // Julian days, counted without (J) and with the 29th of February, and times past midnight.
+    let julian = try! TimeZone.posix("XST3XDT,J60/1:30,300/25")
+    assertEqual(julian.nextTransition(after: moment(2032, 1, 1, 0))!.instant.toString(), "2032-03-01T04:30:00Z")
+    assertEqual(julian.nextTransition(after: moment(2032, 6, 1, 0))!.instant.toString(), "2032-10-28T03:00:00Z")
+    // Negative and long times, as RFC 8536 allows.
+    let greenland = try! TimeZone.posix("<-02>2<-01>,M3.5.0/-1,M10.5.0/0")
+    assertEqual(greenland.nextTransition(after: moment(2030, 1, 1, 0))!.instant.toString(), "2030-03-31T01:00:00Z")
+    let explicit = try! TimeZone.posix("AAA-1:00:30BBB-2:00:30,M3.5.0/2:00:00,M10.5.0/167")
+    assertEqual(explicit.offset(at: moment(2030, 1, 1, 0)).totalSeconds, 3630)
+}
+
+@test
+fn aMalformedPosixRuleIsSaidToBe() {
+    assertEqual(posixError("C1"), TimeZoneError.Malformed(id: "C1"))
+    for rule in [
+        "", "CET", "<+0530", "CET-1CEST,M3.5.0", "CET-1CEST;M3.5.0,M10.5.0", "CET-1CEST,M13.5.0,M10.5.0",
+        "CET-1CEST,M3.6.0,M10.5.0", "CET-1CEST,M3.5.7,M10.5.0", "CET-1CEST,J0,J365", "CET-1CEST,366,0",
+        "CET-1CEST,M3,M10.5.0", "CET-1CEST,M3.5,M10.5.0", "CET-168", "CET-1:", "CET-1:00:", "CET-1CEST,M3.5.0/x,M10.5.0",
+        "CET-1CEST,M3.5.0,M10.5.0/x", "CET-1CEST!", "CET-1CEST,M3.5.0,x", "CET-1 ",
+    ] {
+        assert(posixError(rule) != none, "\(rule) is not a rule")
+    }
+}
+
+@test
+fn tzifFilesAreRead() {
+    let change = 1800000000
+    let versions: U8[>..] = [0, 0x32, 0x33, 0x34]
+    for version in versions {
+        let zone = try! TimeZone.fromTZif(id: "Test/Zone", bytes: tzif(version: version, at: change, footer: "BBB-2"))
+        assertEqual(zone.id, "Test/Zone")
+        assertEqual(zone.offset(at: UtcDateTime.fromUnix(change - 1)).toString(), "+01:00")
+        assertEqual(zone.abbreviation(at: UtcDateTime.fromUnix(change - 1)), "AAA")
+        assertEqual(zone.offset(at: UtcDateTime.fromUnix(change)).toString(), "+02:00")
+        assert(zone.isDaylightSaving(at: UtcDateTime.fromUnix(change)))
+        assertEqual(zone.nextTransition(after: UtcDateTime.fromUnix(0))!.instant, UtcDateTime.fromUnix(change))
+        assert(zone.nextTransition(after: UtcDateTime.fromUnix(change)) == none)
+        assertEqual(zone.previousTransition(before: UtcDateTime.fromUnix(change + 1))!.instant, UtcDateTime.fromUnix(change))
+        var later = UtcDateTime.fromUnix(change)
+        later.nanosecond = 1
+        assertEqual(zone.previousTransition(before: later)!.instant, UtcDateTime.fromUnix(change))
+        assert(zone.previousTransition(before: UtcDateTime.fromUnix(change)) == none)
+        assert(!zone.isFixed)
+    }
+    // An empty footer keeps the last change's type.
+    let kept = try! TimeZone.fromTZif(id: "Test/Zone", bytes: tzif(version: 0x32, at: change, footer: ""))
+    assertEqual(kept.offset(at: UtcDateTime.fromUnix(change * 2)).toString(), "+02:00")
+}
+
+@test
+fn aMalformedTZifFileIsSaidToBe() {
+    assertEqual(tzifError([]), TimeZoneError.Malformed(id: "Test/Zone"))
+    var bad = tzif(version: 0x32, at: 0, footer: "BBB-2")
+    bad[0] = 0x55
+    assert(tzifError(bad) != none)
+    bad = tzif(version: 0x32, at: 0, footer: "not a rule")
+    assert(tzifError(bad) != none)
+    bad = tzif(version: 0x32, at: 0, footer: "BBB-2")
+    let _ = bad.removeLast()
+    assert(tzifError(bad) != none)
+    bad = tzif(version: 0x32, at: 0, footer: "BBB-2")
+    var truncated: U8[>..] = []
+    for byte in bad {
+        if truncated.count < 60 {
+            truncated.append(byte)
+        }
+    }
+    assert(tzifError(truncated) != none)
+    // A change to a type that is not there.
+    bad = tzif(version: 0, at: 0, footer: "")
+    bad[48] = 7
+    assert(tzifError(bad) != none)
+    // An abbreviation past the characters.
+    bad = tzif(version: 0, at: 0, footer: "")
+    bad[54] = 9
+    assert(tzifError(bad) != none)
+    // No types.
+    bad = tzif(version: 0, at: 0, footer: "")
+    bad[39] = 0
+    assert(tzifError(bad) != none)
+}
+
+@test
+fn anIdNamesAFileInTheDatabaseAndNothingElse() {
+    assertEqual(findError("Nowhere/Special"), TimeZoneError.NotFound(id: "Nowhere/Special"))
+    for id in ["", "/etc/localtime", "\\x", "../zoneinfo/UTC", "Europe//Prague", "Europe/./Prague", "Europe\\Prague"] {
+        assertEqual(findError(id), TimeZoneError.NotFound(id: id))
+    }
+    assertEqual(TimeZoneError.NotFound(id: "x").description(), "no time zone 'x'")
+    assertEqual(TimeZoneError.Malformed(id: "x").description(), "the time zone 'x' is malformed")
+    let at = LocalDateTime.of(year: 2026, month: 3, day: 8, hour: 2)!
+    assertEqual(TimeZoneError.Skipped(at).description(), "2026-03-08T02:00:00 is skipped by the time zone's clocks")
+    assertEqual(TimeZoneError.Ambiguous(at).description(), "2026-03-08T02:00:00 is shown twice by the time zone's clocks")
+    assertEqual(TimeZoneError.NotFound(id: "x").debugDescription(), "TimeZoneError.NotFound(id: \"x\")")
+    assertEqual(TimeZoneError.Malformed(id: "x").debugDescription(), "TimeZoneError.Malformed(id: \"x\")")
+    assertEqual(TimeZoneError.Skipped(at).debugDescription(), "TimeZoneError.Skipped(2026-03-08T02:00:00)")
+    assertEqual(TimeZoneError.Ambiguous(at).debugDescription(), "TimeZoneError.Ambiguous(2026-03-08T02:00:00)")
+    assert(TimeZoneError.Skipped(at) != TimeZoneError.Ambiguous(at))
+}
+
+@test
+fn theDatabaseListsItsZones() {
+    if !hasDatabase() {
+        return
+    }
+    let ids = TimeZone.identifiers()
+    assert(ids.contains("Europe/Prague"))
+    assert(ids.contains("America/Argentina/Buenos_Aires"))
+    assert(!ids.contains("posixrules"))
+    for id in ids {
+        assert(!id.hasPrefix("posix/") && !id.hasPrefix("right/"), id)
+    }
+    var i = 1
+    while i < ids.count {
+        assert(ids[i - 1] < ids[i])
+        i += 1
+    }
+}
+
+@test
+fn theSystemZoneIsTheOneTZNames() {
+    unsafe {
+        let _ = Runtime.setEnvironment("TZ", "Asia/Tokyo")
+    }
+    if hasDatabase() {
+        assertEqual(TimeZone.system().id, "Asia/Tokyo")
+        unsafe {
+            let _ = Runtime.setEnvironment("TZ", ":/usr/share/zoneinfo/Europe/Prague")
+        }
+        if Runtime.fileExists(path: "/usr/share/zoneinfo/Europe/Prague") {
+            assertEqual(TimeZone.system().id, "Europe/Prague")
+        }
+    }
+    unsafe {
+        let _ = Runtime.setEnvironment("TZ", "JST-9")
+    }
+    assertEqual(TimeZone.system().id, "JST-9")
+    assertEqual(TimeZone.system().offset(at: moment(2026, 1, 1, 0)).toString(), "+09:00")
+    unsafe {
+        let _ = Runtime.setEnvironment("TZ", "not a zone at all")
+    }
+    assertEqual(TimeZone.system(), TimeZone.utc)
+    unsafe {
+        let _ = Runtime.removeEnvironment("TZ")
+    }
+    assert(!TimeZone.system().id.isEmpty)
+}
+
+@test
+fn tzdirIsWhereTheDatabaseIs() {
+    unsafe {
+        let _ = Runtime.setEnvironment("TZDIR", "/nowhere/at/all")
+    }
+    // The directory TZDIR names first, then the system's.
+    assertEqual(try! TimeZone.find("UTC").id, "UTC")
+    unsafe {
+        let _ = Runtime.removeEnvironment("TZDIR")
+    }
+}

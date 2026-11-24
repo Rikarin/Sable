@@ -83,6 +83,11 @@ int64_t sable_time_monotonic(void) {
     return (int64_t)now.tv_sec * 1000000000 + now.tv_nsec;
 }
 
+// WASI has one monotonic clock, and does not say whether it stops in a sleep.
+int64_t sable_time_suspending(void) {
+    return sable_time_monotonic();
+}
+
 int64_t sable_time_wall_clock(void) {
     struct timespec now;
     clock_gettime(CLOCK_REALTIME, &now);

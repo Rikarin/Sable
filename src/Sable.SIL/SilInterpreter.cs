@@ -1904,7 +1904,8 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "process_executable_path":
                 return Allocate(new HeapString(""));
 
-            case "time_monotonic":
+            // .NET has one such clock for both: CLOCK_UPTIME_RAW, CLOCK_MONOTONIC or the performance counter.
+            case "time_monotonic" or "time_suspending":
                 return System.Diagnostics.Stopwatch.GetTimestamp() * (1_000_000_000L / System.Diagnostics.Stopwatch.Frequency);
 
             case "time_wall_clock":

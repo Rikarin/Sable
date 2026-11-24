@@ -92,9 +92,11 @@ static int64_t peak_memory(void);
 
 // ---- Time ----------------------------------------------------------------
 
-// Nanoseconds from some fixed point, never going back; since 1970; and a
-// wait of at least so many.
+// Nanoseconds from some fixed point, never going back; the same, but not
+// counting while the machine sleeps; since 1970; and a wait of at least so
+// many.
 int64_t sable_time_monotonic(void);
+int64_t sable_time_suspending(void);
 int64_t sable_time_wall_clock(void);
 void sable_time_sleep(int64_t nanoseconds);
 

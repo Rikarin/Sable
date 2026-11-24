@@ -2739,6 +2739,7 @@ public static class SilBuiltins {
         Add("file_map_flush", SilType.Bool, new ArrayType(SilType.U8), SilType.Int, SilType.Int);
         Add("file_map_advise", SilType.Unit, new ArrayType(SilType.U8), SilType.Int);
         Add("time_monotonic", SilType.Int);
+        Add("time_suspending", SilType.Int);
         Add("time_wall_clock", SilType.Int);
         Add("time_sleep", SilType.Unit, SilType.Int);
 

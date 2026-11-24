@@ -515,6 +515,7 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_io_succeeded()
                                 declare void @sable_set_arguments(i32, ptr)
                                 declare i64 @sable_time_monotonic()
+                                declare i64 @sable_time_suspending()
                                 declare i64 @sable_time_wall_clock()
                                 declare void @sable_time_sleep(i64)
                                 declare ptr @sable_process_run(ptr, ptr, ptr)
@@ -4662,7 +4663,7 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call zeroext i1 @sable_file_copy(ptr {operands[0]}, ptr {operands[1]})");
                     return;
 
-                case "time_monotonic" or "time_wall_clock":
+                case "time_monotonic" or "time_suspending" or "time_wall_clock":
                     Line($"{Result()} = call i64 @sable_{builtin.Name}()");
                     return;
 

@@ -400,6 +400,15 @@ static int64_t io_waiting, blocking_running;
 // Waiting for a background event, which alone keeps no program going.
 static int64_t background_waiting;
 
+// Tasks that wait until no other can go on (Task.settle()), the first to
+// wait first: woken one at a time, each as 'active' comes to nothing. While
+// the main thread runs the entry's own code it is not counted in 'active',
+// so 'main_running' says it.
+static SpinLock settle_lock;
+static SableTask *settle_head, *settle_tail;
+static int64_t settling;
+static int32_t main_running = 1;
+
 // The blocking pool's queue (below).
 static PlatformMutex blocking_lock;
 static PlatformCondition blocking_condition;
@@ -672,14 +681,42 @@ static void requeue(SableTask *task) {
 // nothing more will happen.
 static bool quiescent(void) {
     return __atomic_load_n(&active, __ATOMIC_SEQ_CST) == 0 && __atomic_load_n(&sleeper_count, __ATOMIC_SEQ_CST) == 0
-           && __atomic_load_n(&io_waiting, __ATOMIC_SEQ_CST) == 0 && __atomic_load_n(&blocking_running, __ATOMIC_SEQ_CST) == 0;
+           && __atomic_load_n(&io_waiting, __ATOMIC_SEQ_CST) == 0 && __atomic_load_n(&blocking_running, __ATOMIC_SEQ_CST) == 0
+           && __atomic_load_n(&settling, __ATOMIC_SEQ_CST) == 0;
 }
 
-// A task has run and waits, or finished: the main thread hears when that
-// leaves nothing to do.
+// Nothing may be queued or running any more: if so, the first of the tasks
+// that wait for that goes on. Whoever makes it so calls this after, and two
+// that do both look under the lock, where the first leaves a task active.
+static void wake_settler(void) {
+    if (__atomic_load_n(&settling, __ATOMIC_SEQ_CST) == 0) {
+        return;
+    }
+
+    spin_lock(&settle_lock);
+    SableTask *task = settle_head;
+    if (task != NULL && __atomic_load_n(&active, __ATOMIC_SEQ_CST) == 0 && !__atomic_load_n(&main_running, __ATOMIC_SEQ_CST)) {
+        settle_head = task->next_waiter;
+        if (settle_head == NULL) {
+            settle_tail = NULL;
+        }
+
+        // Active first, so that the program never looks finished between.
+        schedule(task);
+        __atomic_fetch_sub(&settling, 1, __ATOMIC_SEQ_CST);
+    }
+
+    spin_unlock(&settle_lock);
+}
+
+// A task has run and waits, or finished: one that waits for that goes on,
+// or else the main thread hears when it leaves nothing to do.
 static void active_done(void) {
-    if (__atomic_sub_fetch(&active, 1, __ATOMIC_SEQ_CST) == 0 && quiescent()) {
-        wake_main();
+    if (__atomic_sub_fetch(&active, 1, __ATOMIC_SEQ_CST) == 0) {
+        wake_settler();
+        if (quiescent()) {
+            wake_main();
+        }
     }
 }
 
@@ -1565,6 +1602,23 @@ static void after_suspend(SableTask *task) {
 
         case PENDING_PARK: {
             SableWaitList *list = on;
+            if (list == NULL) {
+                // Until no other task can go on: woken as this one, and
+                // every other, stops being active.
+                spin_lock(&settle_lock);
+                task->next_waiter = NULL;
+                if (settle_tail != NULL) {
+                    settle_tail->next_waiter = task;
+                } else {
+                    settle_head = task;
+                }
+
+                settle_tail = task;
+                __atomic_fetch_add(&settling, 1, __ATOMIC_SEQ_CST);
+                spin_unlock(&settle_lock);
+                break;
+            }
+
             spin_lock(&tree_lock);
             if (task->park_ticket >= 0 && list->ticket != task->park_ticket
                 || task->park_cancellable && __atomic_load_n(&task->cancelled, __ATOMIC_RELAXED)) {
@@ -1893,7 +1947,11 @@ bool sable_task_sleep(int64_t nanoseconds) {
         return sable_task_yield();
     }
 
-    current_task->deadline = sable_time_monotonic() + nanoseconds;
+    // A sleep past the clock's end is one that only a cancellation ends.
+    if (__builtin_add_overflow(sable_time_monotonic(), nanoseconds, &current_task->deadline)) {
+        current_task->deadline = INT64_MAX;
+    }
+
     current_task->pending = PENDING_SLEEP;
     return true;
 }
@@ -2169,7 +2227,8 @@ void sable_waitlist_free(void *pointer) {
     free(list);
 }
 
-// The running task parks in the list until it is woken: always a suspension.
+// The running task parks in the list until it is woken: always a
+// suspension. No list is Task.settle()'s: until no other task can go on.
 bool sable_task_park(void *list) {
     current_task->pending = PENDING_PARK;
     current_task->pending_on = list;
@@ -2234,6 +2293,8 @@ void sable_waitlist_wake(void *pointer) {
 // main actor, and, with no pool, every task — until the main task can go
 // on ('until'), or, with none, until nothing more will happen.
 static void main_loop(SableTask *until) {
+    __atomic_store_n(&main_running, 0, __ATOMIC_SEQ_CST);
+    wake_settler();
     for (;;) {
         SableTask *task = NULL;
         if (worker_count <= 0) {
@@ -2255,6 +2316,7 @@ static void main_loop(SableTask *until) {
                     task->held = task->actor;
                 }
 
+                __atomic_store_n(&main_running, 1, __ATOMIC_SEQ_CST);
                 active_done();
                 return;
             }

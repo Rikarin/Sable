@@ -4156,6 +4156,37 @@ public sealed partial class Binder {
             _ => null,
         };
 
+    /// <summary>
+    ///     Of two overloads that differ in whether a closure's parameter is
+    ///     async, the one the closure is written for: the async one when it
+    ///     awaits. Null when they do not differ so.
+    /// </summary>
+    static FunctionSymbol? ByAwaiting(FunctionSymbol first, FunctionSymbol second, ImmutableArray<BoundExpression> arguments, ImmutableArray<string?> labels) {
+        var firstSlots = Align(first, labels, arguments.Length);
+        var secondSlots = Align(second, labels, arguments.Length);
+        for (var i = 0; i < arguments.Length; i++) {
+            if (arguments[i] is BoundUnboundClosure { Syntax: ExpressionSyntax syntax }
+                && Unparenthesised(syntax) is ClosureExpressionSyntax or BraceClosureExpressionSyntax
+                && TakenBy(first, firstSlots[i]) is { } a
+                && TakenBy(second, secondSlots[i]) is { } b
+                && a.IsAsync != b.IsAsync) {
+                return a.IsAsync == Awaits(Unparenthesised(syntax)) ? first : second;
+            }
+        }
+
+        return null;
+
+        static FunctionTypeSymbol? TakenBy(FunctionSymbol function, int slot) =>
+            slot < function.Parameters.Length ? function.Parameters[slot].Type as FunctionTypeSymbol : null;
+
+        // What a closure within it awaits is that closure's.
+        static bool Awaits(SyntaxNode node) =>
+            node.ChildNodesAndTokens().Any(static child =>
+                child.AsNode() is { } inner
+                    ? inner is not (ClosureExpressionSyntax or BraceClosureExpressionSyntax) && Awaits(inner)
+                    : child.AsToken().Kind == SyntaxKind.AwaitKeyword);
+    }
+
     static FunctionSymbol? RequirementAndDefault(FunctionSymbol first, FunctionSymbol second) {
         static Symbol? Owner(FunctionSymbol f) => f.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : f.ContainingSymbol;
         static bool InExtension(FunctionSymbol f) => f.ContainingSymbol is ExtensionSymbol;
@@ -6142,14 +6173,22 @@ public sealed partial class Binder {
         ImmutableArray<TypeParameterSymbol> inferrable,
         Dictionary<TypeParameterSymbol, TypeSymbol> map
     ) {
-        if (function.SameTypeRequirements.IsEmpty) {
+        // An initialiser of a constrained extension says as much of the type
+        // it makes: 'Stopwatch()', of 'extension Stopwatch where C ==
+        // MonotonicClock', is a Stopwatch<MonotonicClock>.
+        var requirements = function.SameTypeRequirements;
+        if (function is { FunctionKind: FunctionKind.Initializer, ContainingSymbol: ExtensionSymbol { SameTypeRequirements.IsEmpty: false } extension }) {
+            requirements = requirements.AddRange(extension.SameTypeRequirements);
+        }
+
+        if (requirements.IsEmpty) {
             return;
         }
 
         // Each pass may settle what the next needs: 'where A == B, B == E[>..]'.
-        for (var pass = 0; pass < function.SameTypeRequirements.Length; pass++) {
+        for (var pass = 0; pass < requirements.Length; pass++) {
             var before = map.Count;
-            foreach (var (left, right) in function.SameTypeRequirements) {
+            foreach (var (left, right) in requirements) {
                 var known = Combine(outer, new(new Dictionary<TypeParameterSymbol, TypeSymbol>(map)));
                 var (l, r) = (known.Apply(left), known.Apply(right));
                 if (l is TypeParameterSymbol lp && inferrable.Contains(lp) && !map.ContainsKey(lp)) {
@@ -6346,6 +6385,13 @@ public sealed partial class Binder {
             // takes the one that only reads, which is written for reading.
             if (use == SubscriptUse.Read && ReadOnlyOfTwo(best, candidate) is { } reader) {
                 best = reader;
+                continue;
+            }
+
+            // 'measure { work() }' is the overload whose body is synchronous,
+            // 'measure { await work() }' the one whose body is async.
+            if (ByAwaiting(best, candidate, arguments, labels) is { } suspending) {
+                best = suspending;
                 continue;
             }
 

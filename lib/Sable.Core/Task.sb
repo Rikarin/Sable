@@ -73,6 +73,30 @@ public class Task<Success> {
     @intrinsic
     public static async fn `yield`()
 
+    /// Waits until no other task can go on: each has finished, or waits —
+    /// for another task, a channel, a sleep, a socket, or work on the
+    /// blocking pool. It is how a test knows that what it set off has run
+    /// as far as it can, on however many threads, where a number of
+    /// `Task.yield()`s only hopes so. Tasks that settle at once go on one
+    /// at a time, in the order they began.
+    ///
+    /// A sleep that ends, or a socket that becomes ready, is not waited
+    /// for; a task that never waits — one that loops on `Task.yield()` —
+    /// keeps this waiting for as long as it runs.
+    ///
+    /// ```sable
+    /// let steps = Atomic(0)
+    /// let _ = Task.detached {
+    ///     await Task.yield()
+    ///     steps.store(1)
+    /// }
+    /// await Task.settle()
+    /// assert(steps.load() == 1)
+    /// ```
+    public static async fn settle() {
+        await Task.park(0)
+    }
+
     /// Waits at least this many nanoseconds, off the run queue: every other
     /// task runs meanwhile, and the program waits only when none can. A
     /// task cancelled before or while it sleeps wakes at once, and the

@@ -3689,6 +3689,21 @@ public sealed partial class SilGen {
     internal FieldSymbol? ArrayProperty(ArrayTypeSymbol array, string name) =>
         _compilation.ArrayMembersNamed(array, name).OfType<FieldSymbol>().FirstOrDefault(static f => !f.IsStatic);
 
+    /// <summary>
+    ///     Whether the method is another requirement's, told apart from this
+    ///     one by its labels: a type's 'sleep(until:)' does not implement
+    ///     'sleep(for:)', for which it takes the protocol's default.
+    /// </summary>
+    static bool ImplementsOverload(FunctionSymbol method, FunctionSymbol requirement, NamedTypeSymbol? protocol) =>
+        !SameLabels(method, requirement)
+        && protocol is { TypeKind: TypeKind.Protocol }
+        && protocol.Members.OfType<FunctionSymbol>().Any(other =>
+            !ReferenceEquals(other, requirement)
+            && other.ContainingSymbol is NamedTypeSymbol
+            && other.Name == requirement.Name
+            && other.IsStatic == requirement.IsStatic
+            && SameLabels(other, method));
+
     internal static FunctionSymbol? Implementation(NamedTypeSymbol concrete, FunctionSymbol requirement) {
         // docs/03 §3.2: a protocol extension's member that is not a
         // requirement is chosen by the static type, not looked up on the
@@ -3711,7 +3726,8 @@ public sealed partial class SilGen {
                     && f.Parameters.Length == requirement.Parameters.Length
                     && Owner(f) is { TypeKind: not TypeKind.Protocol }
                     && (f.ExplicitProtocol is null
-                        || ReferenceEquals((f.ExplicitProtocol as NamedTypeSymbol)?.OriginalDefinition, required)))
+                        || ReferenceEquals((f.ExplicitProtocol as NamedTypeSymbol)?.OriginalDefinition, required))
+                    && !ImplementsOverload(f, requirement, required))
                 .OrderBy(f => f.ExplicitProtocol is null)
                 .ThenBy(f => !SameLabels(f, requirement))
                 .ThenBy(f => !SelfParametersMatch(f, requirement, type))

@@ -1,11 +1,14 @@
 // The .NET side of the Phase 4 exit criterion "Dictionary/List/String within
 // 15% of their .NET equivalents" (docs/04 §4.4): each benchmark here is a
-// port of ../versus-dotnet/<name>.sb — the same steps, sizes and output.
+// port of ../versus-dotnet/<name>.sb — the same steps, sizes and output —
+// and each 'programs/<name>' (Programs.cs) of ../<name>.sb.
 //
 //     dotnet run -c Release -- <name> [runs]
 //
-// Runs the benchmark 'runs' times in this process (default 5) and prints its
-// output once, then 'ms <fastest>' on standard error: the processor time
+// Runs the benchmark for a second and at least once, so that the JIT has
+// tiered up even a short one, then 'runs' times more (default 5), and prints its
+// output once, then 'ms <fastest>' on standard error (and 'times', each
+// run's): the processor time
 // (user and system) of the fastest run — the steady state, after the JIT has
 // tiered up, which is the hardest .NET time to match. Processor time rather
 // than wall time, as tools/bench/versus_dotnet.py measures Sable, so that a
@@ -35,6 +38,11 @@ var benchmarks = new Dictionary<string, Func<string>> {
     ["bigint-divide"] = BigIntDivide,
     ["bigint-tostring"] = BigIntToString,
     ["serialize"] = Serializing,
+    ["programs/binary-trees"] = Programs.BinaryTrees,
+    ["programs/nbody"] = Programs.NBody,
+    ["programs/shapes"] = Programs.Shapes,
+    ["programs/sort"] = Programs.Sort,
+    ["programs/words"] = Programs.Words,
 };
 
 if (args.Length == 0 || !benchmarks.TryGetValue(args[0], out var run)) {
@@ -44,18 +52,22 @@ if (args.Length == 0 || !benchmarks.TryGetValue(args[0], out var run)) {
 
 var runs = args.Length > 1 ? int.Parse(args[1]) : 5;
 string? output = null;
-var best = double.MaxValue;
-var process = Process.GetCurrentProcess();
+var times = new List<double>();
+var clock = Stopwatch.StartNew();
+do {
+    run();
+} while (clock.ElapsedMilliseconds < 1000);
+
 for (var i = 0; i < runs; i++) {
-    process.Refresh();
-    var before = process.TotalProcessorTime;
+    // Not Process.TotalProcessorTime, which on Linux counts ticks of 10 ms.
+    var before = Environment.CpuUsage.TotalTime;
     output = run();
-    process.Refresh();
-    best = Math.Min(best, (process.TotalProcessorTime - before).TotalMilliseconds);
+    times.Add((Environment.CpuUsage.TotalTime - before).TotalMilliseconds);
 }
 
 Console.WriteLine(output);
-Console.Error.WriteLine($"ms {best:F1}");
+Console.Error.WriteLine($"ms {times.Min():F1}");
+Console.Error.WriteLine($"times {string.Join(' ', times.Select(ms => ms.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)))}");
 return 0;
 
 // Four threads each taking the lock a quarter of a million times to add one

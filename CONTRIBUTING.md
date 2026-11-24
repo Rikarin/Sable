@@ -163,9 +163,29 @@ and a `#` reason; those marked "raise me" are files that were under the
 default when the check began — raise them as their tests grow, never lower
 them. A module with no tests yet is measured as run by nothing. `SABLE=...`
 picks the `sable` to use (by default src/Sable.Driver is built), and each
-module's LCOV is left in `target/stdlib-coverage/`. To see one file's lines
+module's LCOV is left in `target/stdlib-coverage/`, with a `report.tsv` that
+`tools/ci/coverage-report.py` prints as tables: the summary of CI's *Standard
+library coverage* runs. To see one file's lines
 not run, run the command above yourself: `sable test --cover
 lib/Sable.Collections/Stack.sb tests/lib/Sable.Collections/`.
+
+## Benchmarks
+
+```bash
+tools/bench/compare.py                  # against .NET, Rust and C
+tools/bench/compare.py map-int words    # some
+```
+
+It prints a table of each benchmark's time in each language, and CI's
+*Benchmarks* runs have the same tables as their summary. `benchmarks/*.sb` are
+whole programs and `benchmarks/versus-dotnet/*.sb` the standard library; the
+ports are in `benchmarks/dotnet`, `benchmarks/rust` and `benchmarks/c` (the
+library's under `library/`). Add a port by adding a file of the benchmark's
+name, or in .NET an entry in `Program.cs`. It must print what the Sable program
+prints, keep Sable's checks (integer overflow and bounds), and use nothing
+outside its language's own standard library, where .NET's includes
+`System.Numerics.Tensors`. CI fails on a port that does not build or prints
+something else, never on a time.
 
 ## The syntax tree
 

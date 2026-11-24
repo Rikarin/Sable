@@ -13,7 +13,11 @@
 #
 # Exits 1 if a test fails or a file is under its threshold. SABLE names the
 # `sable` to use; without it, src/Sable.Driver is built (Debug) and its build
-# used. The LCOV of each module is left in target/stdlib-coverage/.
+# used. The LCOV of each module is left in target/stdlib-coverage/, with
+# report.tsv, a row a file, which tools/ci/coverage-report.py makes tables of:
+# module, file, lines run, lines, branches run, branches, least lines, least
+# branches, verdict (ok or UNDER), and a row of the module alone, its verdict
+# FAILED, where its tests failed.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,6 +42,8 @@ fi
 
 out="target/stdlib-coverage"
 mkdir -p "$out"
+report="$out/report.tsv"
+: > "$report"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
@@ -64,6 +70,7 @@ for module in "${modules[@]}"; do
     if ! "${sable[@]}" test --cover "lib/$module" --lcov "$lcov" "$tests" > "$log" 2>&1; then
         cat "$log"
         echo "stdlib-coverage: $module: the tests failed" >&2
+        printf '%s\t\t0\t0\t0\t0\t0\t0\tFAILED\n' "$module" >> "$report"
         failed=1
         continue
     fi
@@ -71,13 +78,14 @@ for module in "${modules[@]}"; do
     if [[ ! -f "$lcov" ]]; then
         cat "$log"
         echo "stdlib-coverage: $module: no coverage was written" >&2
+        printf '%s\t\t0\t0\t0\t0\t0\t0\tFAILED\n' "$module" >> "$report"
         failed=1
         continue
     fi
 
     # Each file's lines and branches, against the last line of the
     # thresholds that names it (a glob; '*' is the default).
-    if ! awk -v thresholds="$thresholds" '
+    if ! awk -v thresholds="$thresholds" -v module="$module" -v report="$report" '
         function percent(part, whole) { return whole == 0 ? 100 : 100 * part / whole }
         BEGIN {
             count = 0; defaultLines = 85; defaultBranches = 70
@@ -121,6 +129,7 @@ for module in "${modules[@]}"; do
             verdict = "ok"
             if (lines + 0.05 < wantLines || branches + 0.05 < wantBranches) { verdict = "UNDER"; under = 1 }
             else if (overridden && lines + 0.05 >= defaultLines && branches + 0.05 >= defaultBranches) { verdict = "ok (meets the default: drop its override)" }
+            printf "%s\t%s\t%d\t%d\t%d\t%d\t%s\t%s\t%s\n", module, file, lh, lf, brh, brf, wantLines, wantBranches, (verdict == "UNDER" ? "UNDER" : "ok") >> report
             printf "  %-48s lines %5.1f%% (%d/%d)  branches %5.1f%% (%d/%d)  min %d/%d  %s\n", file, lines, lh, lf, branches, brh, brf, wantLines, wantBranches, verdict
         }
         END { exit (bad || under) ? 1 : 0 }

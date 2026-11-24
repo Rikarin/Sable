@@ -1,0 +1,64 @@
+# The standard library's coverage by its own tests (tests/lib/<Module>/):
+# each file of lib/ must meet its threshold in tools/stdlib-coverage.thresholds.
+# The tables — by module, the files under, every file — are the run's summary.
+# Linux x64 only: the library's code is the same everywhere.
+name: Standard library coverage
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  coverage:
+    name: Standard library coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "11.0.x"
+
+      - name: Install clang
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang
+
+      - name: Build the compiler
+        run: dotnet build src/Sable.Driver -c Release
+
+      - name: Coverage
+        id: coverage
+        env:
+          SABLE: src/Sable.Driver/bin/Release/net11.0/sable
+        run: tools/stdlib-coverage.sh
+
+      # The tables say what failed, so they are written when it did too.
+      - name: Report
+        if: ${{ !cancelled() && steps.coverage.outcome != 'skipped' }}
+        run: tools/ci/coverage-report.py | tee target/stdlib-coverage/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the report and the LCOV
+        if: ${{ !cancelled() && steps.coverage.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: stdlib-coverage
+          path: target/stdlib-coverage/

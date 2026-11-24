@@ -1,0 +1,70 @@
+# Sable against .NET, Rust and C (tools/bench/compare.py), the tables in the
+# run's summary. What fails it is a benchmark that does not build or run, or
+# a port that prints something else; never a time: a shared runner's are too
+# noisy to hold anyone to, and only those of one run compare.
+name: Benchmarks
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Runs of each benchmark (the median counts)
+        required: false
+        default: "5"
+
+concurrency:
+  group: benchmarks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  compare:
+    name: Sable against .NET, Rust and C
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "11.0.x"
+
+      # rustc is in the runner's image.
+      - name: Install clang
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang
+
+      - name: Build the compiler
+        run: dotnet build src/Sable.Driver -c Release
+
+      - name: Compare
+        id: compare
+        env:
+          SABLE: src/Sable.Driver/bin/Release/net11.0/sable
+          RUNS: ${{ inputs.runs || '5' }}
+        run: tools/bench/compare.py --runs "$RUNS" --require dotnet,rust,c --markdown benchmarks.md
+
+      - name: Report
+        if: ${{ !cancelled() && steps.compare.outcome != 'skipped' }}
+        run: cat benchmarks.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the report
+        if: ${{ !cancelled() && steps.compare.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmarks
+          path: benchmarks.md

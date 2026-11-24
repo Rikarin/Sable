@@ -1,6 +1,6 @@
 module Kernels
 
-// The vector kernels (Sable.Math's VectorKernels.sb, over SIMD<F32, 16>):
+// The vector kernels (Sable.Math's TensorPrimitives, over SIMD<F32, 16>):
 // a dot product, a sum and an elementwise multiply over 4096 F32s, fifty
 // thousand times, with one element changed a round so that no round's
 // work is the last's. The same work as plain loops — whose float sums the
@@ -24,8 +24,8 @@ fn main() {
     var round = 0
     while round < 50000 {
         x[round % n] = F32(round % 7 - 3)
-        total = total + F64(dot(x, y)) + F64(sum(x))
-        multiply(x, y, into: &products)
+        total = total + F64(TensorPrimitives.dot(x, y)) + F64(TensorPrimitives.sum(x))
+        TensorPrimitives.multiply(x, y, into: &products)
         total = total + F64(products[round % n])
         round = round + 1
     }

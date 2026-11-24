@@ -28,7 +28,7 @@ env:
 jobs:
   # Every test project but Sable.CodeGen.Tests, which the codegen job runs
   # in shards; then the timing tests, the formatting check and, on Linux
-  # x64, the library's coverage and doc examples.
+  # x64, the library's doc examples. (Its coverage is coverage.yml's.)
   test:
     name: Test (${{ matrix.os }})
     strategy:
@@ -90,18 +90,9 @@ jobs:
       - name: Library and examples are formatted
         run: src/Sable.Driver/bin/Release/net11.0/sable fmt --check lib examples tools/fuzz
 
-      # The library's own tests (tests/lib/<Module>/), with coverage counted
-      # in lib/<Module>/: each file must meet its threshold in
-      # tools/stdlib-coverage.thresholds. Once, on Linux x64: the library's
-      # code is the same everywhere.
-      - name: Standard library coverage
-        if: matrix.os == 'ubuntu-24.04'
-        env:
-          SABLE: src/Sable.Driver/bin/Release/net11.0/sable
-        run: tools/stdlib-coverage.sh
-
       # The ```sable examples of the library's doc comments, each module's
-      # run as its tests (sable test --doc). Once, on Linux x64, as above.
+      # run as its tests (sable test --doc). Once, on Linux x64: the
+      # library's code is the same everywhere.
       - name: Standard library doc examples
         if: matrix.os == 'ubuntu-24.04'
         run: |

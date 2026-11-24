@@ -39,23 +39,22 @@ def build(project, directory, name):
     return directory / name
 
 
-def sable_fastest(executable, runs):
-    best, output = None, None
+def sable_times(executable, runs):
+    times, output = [], None
     for _ in range(runs):
         before = resource.getrusage(resource.RUSAGE_CHILDREN)
         result = subprocess.run([executable], capture_output=True, text=True, check=True)
         after = resource.getrusage(resource.RUSAGE_CHILDREN)
-        elapsed = (after.ru_utime + after.ru_stime - before.ru_utime - before.ru_stime) * 1000
-        best = elapsed if best is None else min(best, elapsed)
+        times.append((after.ru_utime + after.ru_stime - before.ru_utime - before.ru_stime) * 1000)
         output = result.stdout
-    return best, output
+    return times, output
 
 
-def dotnet_fastest(executable, name, runs):
-    # One more run than asked: the first is the JIT's.
-    result = subprocess.run([executable, name, str(runs + 1)], capture_output=True, text=True, check=True)
-    ms = next(float(line.split()[1]) for line in result.stderr.splitlines() if line.startswith("ms "))
-    return ms, result.stdout
+def dotnet_times(executable, name, runs):
+    # The program warms the JIT up itself, before the runs it times.
+    result = subprocess.run([executable, name, str(runs)], capture_output=True, text=True, check=True)
+    times = next(line.split()[1:] for line in result.stderr.splitlines() if line.startswith("times "))
+    return [float(ms) for ms in times], result.stdout
 
 
 def main():
@@ -77,12 +76,12 @@ def main():
 
             executable = scratch / name
             subprocess.run([sable, "build", str(source), "-o", str(executable)], check=True)
-            sable_ms, sable_output = sable_fastest(executable, arguments.runs)
-            dotnet_ms, dotnet_output = dotnet_fastest(reference, name, arguments.runs)
+            sable_all, sable_output = sable_times(executable, arguments.runs)
+            dotnet_all, dotnet_output = dotnet_times(reference, name, arguments.runs)
             if sable_output != dotnet_output:
                 print(f"{name}: the outputs differ\n  sable:  {sable_output!r}\n  dotnet: {dotnet_output!r}", file=sys.stderr)
                 return 1
-            rows.append((name, dotnet_ms, sable_ms))
+            rows.append((name, min(dotnet_all), min(sable_all)))
 
     width = max([len("benchmark")] + [len(row[0]) for row in rows])
     print(f"{'benchmark':<{width}}  {'.NET ms':>9}  {'Sable ms':>9}  {'ratio':>6}")

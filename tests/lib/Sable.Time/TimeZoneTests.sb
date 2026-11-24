@@ -62,8 +62,7 @@ fn tzif(version: U8, at change: Int, footer: String) -> U8[>..] {
         if block == 8 && version == 0 {
             break
         }
-        bytes.append(contentsOf: [0x54, 0x5A, 0x69, 0x66])
-        bytes.append(version)
+        bytes.append(contentsOf: [0x54, 0x5A, 0x69, 0x66, version])
         bytes.append(contentsOf: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
         int32(0, &bytes)
         int32(0, &bytes)

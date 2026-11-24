@@ -1367,7 +1367,9 @@ expression of literals alone (`29 << 112`, `-(1 + 2)`, `~0`): the type of a
 `let` with one, a parameter's once the call's overload is chosen
 (`Decimal.fromBits(29 << 112)` shifts a U128), the other operand's, and an
 operand of `-`, `+` or `~` the operator's. With no context they are `Int` and
-`F64`.
+`F64`. An array literal's literals take the element type its context asks for,
+or else the type of its other elements: `[0x54, 0x5A, version]` with
+`version: U8` is a `U8` array.
 
 ### Interpolation and format specs
 

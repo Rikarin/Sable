@@ -151,6 +151,24 @@ public sealed class BindingTests {
     public void ALiteralArgumentThatFitsNoOverloadIsStillReported() =>
         Assert.NotEmpty(ErrorsIn("let v = byte(1.5 * 2)", Takers));
 
+    [Theory]
+    [InlineData("let version: U8 = 3\nlet v = bytes([0x54, 0x5A, version])", "Int")]
+    [InlineData("let version: U8 = 3\nlet v = [0x54, 1 << 3, version]", "U8[]")]
+    [InlineData("let version: U8 = 3\nlet v = [version, 0xFF]", "U8[]")]
+    public void ArrayLiteralsElementsTakeTheTypeOfTheOthersOrTheParameter(string body, string expected) =>
+        Assert.Equal(expected, TypeOfLast(body, Takers));
+
+    [Fact]
+    public void AnArrayLiteralsLiteralThatDoesNotFitItsElementTypeIsReported() =>
+        Assert.NotEmpty(ErrorsIn("let version: U8 = 3\nlet v = [300, version]", Takers));
+
+    [Fact]
+    public void AnArrayOfUnrelatedElementsIsStillReported() =>
+        Assert.Contains(
+            ErrorsIn("let s = \"a\"\nlet v = [s, 1]", Takers),
+            static e => e.Code == ErrorCode.ERR_InconsistentArrayElements
+        );
+
     [Fact]
     public void AComparisonsOperandsDoNotTakeItsContextsType() =>
         Assert.Equal("Bool", TypeOfLast("let v: Bool = 1 < 2"));

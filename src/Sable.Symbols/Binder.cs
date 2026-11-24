@@ -6435,13 +6435,16 @@ public sealed partial class Binder {
     /// <summary>
     ///     An argument whose type is the parameter's it is passed to, which is
     ///     not known until the overload is: an expression of literals alone
-    ///     (a bare literal is typed by the conversion already). It is bound
-    ///     first to choose the overload, then again with the parameter's type.
+    ///     (a bare literal is typed by the conversion already), or an array
+    ///     literal with one among its elements — <c>[0x54, 0x5A, version]</c>
+    ///     for a <c>U8[:]</c>. It is bound first to choose the overload, then
+    ///     again with the parameter's type.
     /// </summary>
     static bool TakesParameterType(ExpressionSyntax syntax) =>
         syntax switch {
             LiteralExpressionSyntax => false,
             ParenthesizedExpressionSyntax parenthesized => TakesParameterType(parenthesized.Expression),
+            ArrayExpressionSyntax array => array.Elements.Any(static e => IsLiteralOnly(e) || TakesParameterType(e)),
             _ => IsLiteralOnly(syntax),
         };
 
@@ -6850,9 +6853,27 @@ public sealed partial class Binder {
             ? expectedArray.ElementType
             : null;
 
-        var elements = syntax.Elements
-            .Select(e => BindExpression(e, expectedElement))
-            .ToImmutableArray();
+        // With no type asked for, the literals take the others' type, as they
+        // would one the context gave: '[0x54, 0x5A, version]' of a U8 is a
+        // U8 array. The others are bound first to say what it is.
+        var literalElements = expectedElement is null
+                              && syntax.Elements.Any(IsLiteralOnly)
+                              && !syntax.Elements.All(IsLiteralOnly);
+        var bound = new BoundExpression?[syntax.Elements.Count];
+        for (var i = 0; i < bound.Length; i++) {
+            if (!literalElements || !IsLiteralOnly(syntax.Elements[i])) {
+                bound[i] = BindExpression(syntax.Elements[i], expectedElement);
+            }
+        }
+
+        if (literalElements) {
+            var others = bound.First(static e => e is not null)!.Type;
+            for (var i = 0; i < bound.Length; i++) {
+                bound[i] ??= BindExpression(syntax.Elements[i], others.IsError ? null : others);
+            }
+        }
+
+        var elements = bound.Select(static e => e!).ToImmutableArray();
 
         // 'T[..k]' holds at most k.
         if (expectedType is ArrayTypeSymbol { ArrayKind: ArrayKind.Inline, Capacity: { } capacity } bounded && elements.Length > capacity) {

@@ -1,0 +1,246 @@
+module Sable.IO
+
+import Sable.Text
+
+/// A reader read a buffer at a time, so that many small reads cost one
+/// call to the system, with lines and delimited runs read off it: Rust's
+/// `BufReader`, .NET's `StreamReader` for bytes.
+///
+/// ```sable
+/// var lines = BufferedReader(MemoryStream([0x61, 0x0A, 0x62, 0x0D, 0x0A, 0x63]))
+/// assert(try! lines.readLine() == "a")
+/// assert(try! lines.readLine() == "b")
+/// assert(try! lines.readLine() == "c")
+/// assert(try! lines.readLine() == none)
+/// ```
+public struct BufferedReader<Inner: Reader>: Reader {
+    var inner: Inner
+    var buffer: U8[>..]
+    var position: Int
+    let capacity: Int
+
+    /// Reading the reader 64 KiB at a time, or 'capacity' bytes.
+    public init(_ inner: Inner, capacity: Int = 65536) {
+        self.inner = inner
+        self.buffer = []
+        self.position = 0
+        self.capacity = capacity > 0 ? capacity : 1
+    }
+
+    /// The reader it reads, given back.
+    public fn intoInner() -> Inner {
+        return inner
+    }
+
+    // More read into the buffer when what it holds is used up: false at
+    // the end.
+    mutating fn fill() throws(IoError) -> Bool {
+        if position < buffer.count {
+            return true
+        }
+        buffer = try inner.read(upTo: capacity)
+        position = 0
+        return !buffer.isEmpty
+    }
+
+    /// Up to 'count' bytes, from the buffer, or read when it is empty.
+    public mutating fn read(upTo count: Int) throws(IoError) -> U8[>..] {
+        if position >= buffer.count && count >= capacity {
+            return try inner.read(upTo: count)
+        }
+        if !(try fill()) {
+            return []
+        }
+        let end = position + count < buffer.count ? position + count : buffer.count
+        let bytes = buffer[position..<end].toArray()
+        position = end
+        return bytes
+    }
+
+    /// The bytes up to and with the delimiter, or to the end; none when the
+    /// end is reached first.
+    public mutating fn readUntil(_ delimiter: U8) throws(IoError) -> U8[>..] {
+        var run: U8[>..] = []
+        while try fill() {
+            let rest = buffer[position...]
+            if let at = rest.firstIndex(of: delimiter) {
+                run.append(contentsOf: rest[..<(at + 1)])
+                position = position + at + 1
+                return run
+            }
+            run.append(contentsOf: rest)
+            position = buffer.count
+        }
+        return run
+    }
+
+    /// The next line as UTF-8 text, without its "\n" or "\r\n", ill-formed
+    /// bytes made U+FFFD; none at the end.
+    public mutating fn readLine() throws(IoError) -> String? {
+        var line = try readUntil(0x0A)
+        if line.isEmpty {
+            return none
+        }
+        if line[line.count - 1] == 0x0A {
+            line.removeLast()
+            if !line.isEmpty && line[line.count - 1] == 0x0D {
+                line.removeLast()
+            }
+        }
+        return String.fromUtf8Lossy(line)
+    }
+
+    /// The lines to the end, read as they are asked for.
+    public fn lines() -> LineSequence<Inner> {
+        return LineSequence { reader: self }
+    }
+}
+
+/// The lines of a reader, read one at a time as they are asked for:
+/// `BufferedReader.lines()`, `File.lines(_:)`.
+public struct LineSequence<Inner: Reader>: Sequence {
+    public alias Element = String
+    public alias Failure = IoError
+    public alias Iter = LineIterator<Inner>
+
+    let reader: BufferedReader<Inner>
+
+    public fn makeIterator() -> LineIterator<Inner> {
+        return LineIterator { reader: reader }
+    }
+}
+
+/// Reads a reader's lines one at a time.
+public struct LineIterator<Inner: Reader>: Iterator {
+    public alias Element = String
+    public alias Failure = IoError
+
+    var reader: BufferedReader<Inner>
+
+    public mutating fn next() throws(IoError) -> String? {
+        return try reader.readLine()
+    }
+}
+
+/// A writer written a buffer at a time, so that many small writes cost one
+/// call to the system: Rust's `BufWriter`. What it holds is written by
+/// `flush()`, and as it goes, when nothing is left to report a failure to.
+///
+/// ```sable
+/// let buffered = BufferedWriter(MemoryStream())
+/// try! buffered.write([1, 2, 3])
+/// try! buffered.flush()
+/// assert(buffered.inner.bytes == [1, 2, 3])
+/// ```
+public final class BufferedWriter<Inner: Writer>: Writer {
+    /// The writer it writes to.
+    public var inner: Inner
+    var held: U8[>..]
+    let capacity: Int
+
+    /// Writing to the writer 64 KiB at a time, or 'capacity' bytes.
+    public init(_ inner: Inner, capacity: Int = 65536) {
+        self.inner = inner
+        self.held = []
+        self.capacity = capacity > 0 ? capacity : 1
+        held.reserveCapacity(self.capacity)
+    }
+
+    deinit {
+        if !held.isEmpty {
+            try? inner.write(held)
+            try? inner.flush()
+        }
+    }
+
+    /// The bytes held, or, when they would fill it, what it holds and them
+    /// written on.
+    public fn write(_ bytes: U8[:]) throws(IoError) {
+        if held.count + bytes.count > capacity {
+            try writeHeld()
+            if bytes.count >= capacity {
+                try inner.write(bytes)
+                return
+            }
+        }
+        held.append(contentsOf: bytes)
+    }
+
+    /// What it holds written on, and the writer flushed.
+    public fn flush() throws(IoError) {
+        try writeHeld()
+        try inner.flush()
+    }
+
+    fn writeHeld() throws(IoError) {
+        if !held.isEmpty {
+            let pending = held
+            held.removeAll(keepingCapacity: true)
+            try inner.write(pending)
+        }
+    }
+}
+
+/// Bytes in memory, read and written as a stream: .NET's `MemoryStream`,
+/// Rust's `Cursor<Vec<u8>>`. A write past the end grows it.
+///
+/// ```sable
+/// var stream = MemoryStream()
+/// try! stream.write([1, 2, 3])
+/// try! stream.seek(1, from: .Start)
+/// assert(try! stream.read(upTo: 5) == [2, 3])
+/// ```
+public struct MemoryStream: Reader, Writer, Seekable {
+    /// Every byte it holds.
+    public var bytes: U8[>..]
+    /// Where the next read or write is.
+    public var position: Int
+
+    /// Holding the bytes, read from the first.
+    public init(_ bytes: U8[>..] = []) {
+        self.bytes = bytes
+        self.position = 0
+    }
+
+    public mutating fn read(upTo count: Int) throws(IoError) -> U8[>..] {
+        if position >= bytes.count || count <= 0 {
+            return []
+        }
+        let end = position + count < bytes.count ? position + count : bytes.count
+        let read = bytes[position..<end].toArray()
+        position = end
+        return read
+    }
+
+    public mutating fn write(_ written: U8[:]) throws(IoError) {
+        while bytes.count < position {
+            bytes.append(0)
+        }
+        var i = 0
+        while i < written.count && position + i < bytes.count {
+            bytes[position + i] = written[i]
+            i = i + 1
+        }
+        while i < written.count {
+            bytes.append(written[i])
+            i = i + 1
+        }
+        position = position + written.count
+    }
+
+    public mutating fn flush() throws(IoError) { }
+
+    @discardable
+    public mutating fn seek(_ offset: Int, from origin: SeekOrigin) throws(IoError) -> Int {
+        let base = match origin {
+            case .Start   => 0
+            case .Current => position
+            case .End     => bytes.count
+        }
+        if base + offset < 0 {
+            throw IoError.InvalidInput(path: "memory")
+        }
+        position = base + offset
+        return position
+    }
+}

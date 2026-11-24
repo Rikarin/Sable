@@ -42,4 +42,11 @@ fn eachIoErrorSaysWhatWentWrong() {
     assertEqual(IoError.Unreachable(address: "h:1").description(), "'h:1' could not be reached")
     assertEqual(IoError.Disconnected.description(), "the connection failed or was closed")
     assertEqual(IoError.Cancelled.description(), "the task was cancelled while it waited")
+    assertEqual(IoError.PermissionDenied(path: "a").description(), "'a' may not be used so")
+    assertEqual(IoError.AlreadyExists(path: "a").description(), "something is at 'a' already")
+    assertEqual(IoError.IsDirectory(path: "a").description(), "'a' is a directory")
+    assertEqual(IoError.Interrupted.description(), "the call was interrupted")
+    assertEqual(IoError.UnexpectedEof.description(), "the stream ended before what was needed")
+    assertEqual(IoError.InvalidInput(path: "a").description(), "'a' was given something the system does not take")
+    assertEqual(IoError.Os(path: "a", code: 5).description(), "'a' failed with the system's error 5")
 }

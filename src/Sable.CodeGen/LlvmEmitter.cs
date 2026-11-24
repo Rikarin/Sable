@@ -477,6 +477,18 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_io_read_line()
                                 declare ptr @sable_io_read_file(ptr)
                                 declare zeroext i1 @sable_io_write_file(ptr, ptr, i1 zeroext)
+                                declare i64 @sable_file_error()
+                                declare i64 @sable_file_error_code()
+                                declare i64 @sable_file_open(ptr, i64, i64)
+                                declare ptr @sable_file_read(i64, i64, i64, ptr)
+                                declare i64 @sable_file_write(i64, ptr, i64, i64, i64)
+                                declare i64 @sable_file_seek(i64, i64, i64)
+                                declare zeroext i1 @sable_file_sync(i64)
+                                declare zeroext i1 @sable_file_set_length(i64, i64)
+                                declare i64 @sable_file_metadata(i64, i64)
+                                declare zeroext i1 @sable_file_close(i64)
+                                declare i64 @sable_file_standard(i64)
+                                declare zeroext i1 @sable_file_copy(ptr, ptr)
                                 declare zeroext i1 @sable_io_file_exists(ptr)
                                 declare zeroext i1 @sable_io_is_directory(ptr)
                                 declare zeroext i1 @sable_io_remove_file(ptr)
@@ -4396,6 +4408,52 @@ public sealed partial class LlvmEmitter {
 
                 case "io_write_file":
                     Line($"{Result()} = call zeroext i1 @sable_io_write_file(ptr {operands[0]}, ptr {operands[1]}, i1 zeroext {operands[2]})");
+                    return;
+
+                // Files by handle (runtime/io.c).
+                case "file_error" or "file_error_code":
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}()");
+                    return;
+
+                case "file_open":
+                    Line($"{Result()} = call i64 @sable_file_open(ptr {operands[0]}, i64 {operands[1]}, i64 {operands[2]})");
+                    return;
+
+                case "file_read":
+                    Line($"{Result()} = call ptr @sable_file_read(i64 {operands[0]}, i64 {operands[1]}, i64 {operands[2]}, ptr {module.ArrayMetadata(new ArrayType(SilType.U8))})");
+                    return;
+
+                case "file_write": {
+                    var type = (SliceType)builtin.Operands[1].Type;
+                    var buffer = SlicePart(operands[1], type, 0);
+                    var start = SlicePart(operands[1], type, 1);
+                    var count = SlicePart(operands[1], type, 2);
+                    Line($"{Result()} = call i64 @sable_file_write(i64 {operands[0]}, ptr {buffer}, i64 {start}, i64 {count}, i64 {operands[2]})");
+                    return;
+                }
+
+                case "file_seek":
+                    Line($"{Result()} = call i64 @sable_file_seek(i64 {operands[0]}, i64 {operands[1]}, i64 {operands[2]})");
+                    return;
+
+                case "file_sync" or "file_close":
+                    Line($"{Result()} = call zeroext i1 @sable_{builtin.Name}(i64 {operands[0]})");
+                    return;
+
+                case "file_set_length":
+                    Line($"{Result()} = call zeroext i1 @sable_file_set_length(i64 {operands[0]}, i64 {operands[1]})");
+                    return;
+
+                case "file_metadata":
+                    Line($"{Result()} = call i64 @sable_file_metadata(i64 {operands[0]}, i64 {operands[1]})");
+                    return;
+
+                case "file_standard":
+                    Line($"{Result()} = call i64 @sable_file_standard(i64 {operands[0]})");
+                    return;
+
+                case "file_copy":
+                    Line($"{Result()} = call zeroext i1 @sable_file_copy(ptr {operands[0]}, ptr {operands[1]})");
                     return;
 
                 case "time_monotonic" or "time_wall_clock":

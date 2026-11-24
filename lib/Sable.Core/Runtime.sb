@@ -114,6 +114,54 @@ public struct Runtime {
     // takes its mutex held, and a time of the monotonic clock to stop at,
     // or a negative one for none; it may wake for no reason.
 
+    // ---- Files by handle ----------------------------------------------------
+    // Sable.IO's FileHandle (runtime/io.c, "File handles"): a descriptor, or
+    // a Windows HANDLE, as an integer. A call that fails gives -1, nothing or
+    // false, and 'fileError' then says why: 1 not found, 2 permission denied,
+    // 3 already exists, 4 a directory, 5 interrupted, 6 invalid input, 7
+    // anything else, 'fileErrorCode' the system's own code. A read gives a
+    // new array of what it read, none at the end; a position or offset of -1
+    // is the file's own position.
+
+    @builtin("file_error")
+    public static fn fileError() -> Int
+
+    @builtin("file_error_code")
+    public static fn fileErrorCode() -> Int
+
+    @builtin("file_open")
+    public static fn fileOpen(_ path: String, _ flags: Int, _ permissions: Int) -> Int
+
+    @builtin("file_read")
+    public static fn fileRead(_ file: Int, _ most: Int, _ offset: Int) -> U8[>..]
+
+    @builtin("file_write")
+    public static fn fileWrite(_ file: Int, _ bytes: U8[:], _ offset: Int) -> Int
+
+    @builtin("file_seek")
+    public static fn fileSeek(_ file: Int, _ offset: Int, _ whence: Int) -> Int
+
+    @builtin("file_sync")
+    public static fn fileSync(_ file: Int) -> Bool
+
+    @builtin("file_set_length")
+    public static fn fileSetLength(_ file: Int, _ length: Int) -> Bool
+
+    /// 0 the size, 1 when last written (ns since 1970), 2 what it is (0 a
+    /// file, 1 a directory, 2 anything else); -1 on failure.
+    @builtin("file_metadata")
+    public static fn fileMetadata(_ file: Int, _ which: Int) -> Int
+
+    @builtin("file_close")
+    public static fn fileClose(_ file: Int) -> Bool
+
+    /// Standard input (0), output (1) or error (2), as a file.
+    @builtin("file_standard")
+    public static fn fileStandard(_ which: Int) -> Int
+
+    @builtin("file_copy")
+    public static fn fileCopy(_ source: String, _ target: String) -> Bool
+
     @builtin("lock_new")
     public static fn lockNew() -> Int
 

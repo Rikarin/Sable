@@ -263,8 +263,9 @@ fn main() {
     }
 
     /// <summary>
-    ///     A file's bytes need not be UTF-8, but a String's are: each byte of an
-    ///     ill-formed sequence reads as U+FFFD, and a byte-order mark is just
+    ///     A file's bytes need not be UTF-8, but a String's are: each
+    ///     ill-formed sequence (its longest start that could have been well
+    ///     formed, as Unicode recommends) reads as U+FFFD, and a byte-order mark is just
     ///     U+FEFF — not a request for UTF-16, and not dropped.
     /// </summary>
     [Fact]
@@ -291,7 +292,7 @@ fn main() {
                 """
             );
             Assert.Equal(
-                "15\n65279 65533 65533 65 65533 65533 65 233 65533 65533 65533 65533 65533 65533 65533 \n",
+                "14\n65279 65533 65533 65 65533 65 233 65533 65533 65533 65533 65533 65533 65533 \n",
                 run.Stdout
             );
         } finally {

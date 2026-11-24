@@ -1,48 +1,112 @@
 module Sable.IO
 
-// Files, directories, paths and the standard streams (docs/04 §4.3), written
-// in Sable over the runtime's calls (Sable.Core's Runtime).
+import Sable.Text
 
-/// Whole files, read and written at once.
+// Files, directories, paths and the standard streams (docs/04 §4.3), written
+// in Sable over the runtime's calls (Sable.Core's Runtime). Whole files are
+// read and written through a FileHandle, as anything else that opens one is.
+
+/// Files by path: opened as handles, or read and written whole.
 public struct File {
-    /// The file's contents.
+    /// The file opened as the options say: to read, unless they say more.
+    ///
+    /// ```sable
+    /// let path = "sable-file-open-example.txt"
+    /// try! File.write(path, "one\ntwo\n")
+    /// let lines = try! File.open(path)
+    /// assert(try! lines.read(upTo: 3) == [0x6F, 0x6E, 0x65])
+    /// try! File.remove(path)
+    /// ```
+    public static fn open(_ path: String, options: OpenOptions = .reading) throws(IoError) -> FileHandle {
+        let handle = Runtime.fileOpen(path, options.flags, options.permissions)
+        if handle == -1 {
+            throw IoError.lastFileError(path)
+        }
+        return FileHandle(handle: handle, path: path, owned: true)
+    }
+
+    /// Every byte of the file.
+    public static fn readBytes(_ path: String) throws(IoError) -> U8[>..] {
+        let file = try File.open(path)
+        // Read at its length at once, then on to the end in case it grew.
+        let size = try file.metadata().size
+        var bytes = try file.read(upTo: size > 0 ? size : 65536)
+        while true {
+            let more = try file.read(upTo: 65536)
+            if more.isEmpty {
+                return bytes
+            }
+            bytes.append(contentsOf: more)
+        }
+    }
+
+    /// The file's contents as UTF-8 text, each ill-formed sequence made
+    /// U+FFFD.
     public static fn read(_ path: String) throws(IoError) -> String {
-        if let text = Runtime.readFile(path) {
-            return text
-        }
-        if !Runtime.fileExists(path) {
-            throw IoError.NotFound(path: path)
-        }
-        throw IoError.Failed(path: path)
+        return String.fromUtf8Lossy(try File.readBytes(path))
     }
 
     /// The file's lines, without their endings; a last empty line is not one.
     public static fn readLines(_ path: String) throws(IoError) -> String[>..] {
-        let text = try File.read(path)
         var lines: String[>..] = []
-        if text.count == 0 {
-            return lines
-        }
-        for line in text.split('\n') {
-            lines.append(withoutReturn(line))
-        }
-        if lines.count > 0 && lines[lines.count - 1].count == 0 {
-            lines.removeLast()
+        for try line in try File.lines(path) {
+            lines.append(line)
         }
         return lines
     }
 
+    /// The file's lines, without their endings, read as they are asked
+    /// for: a file of any size goes through in a buffer's room.
+    ///
+    /// ```sable
+    /// let path = "sable-file-lines-example.txt"
+    /// try! File.write(path, "a\r\nb\n")
+    /// var count = 0
+    /// do {
+    ///     for try line in try File.lines(path) {
+    ///         count += line.count
+    ///     }
+    /// } catch {
+    ///     fail("could not read it")
+    /// }
+    /// assert(count == 2)
+    /// try! File.remove(path)
+    /// ```
+    public static fn lines(_ path: String) throws(IoError) -> LineSequence<FileHandle> {
+        return BufferedReader(try File.open(path)).lines()
+    }
+
+    /// The bytes written as the whole file, made if it is not there.
+    public static fn writeBytes(_ path: String, _ bytes: U8[:]) throws(IoError) {
+        let file = try File.open(path, options: .writing)
+        try file.write(bytes)
+        file.close()
+    }
+
+    /// The bytes added at the end of the file, made if it is not there, in
+    /// one write that other processes appending at once cannot split.
+    public static fn appendBytes(_ path: String, _ bytes: U8[:]) throws(IoError) {
+        let file = try File.open(path, options: .appending)
+        try file.write(bytes)
+        file.close()
+    }
+
     /// Replaces the file's contents, making it if it is not there.
     public static fn write(_ path: String, _ text: String) throws(IoError) {
-        if !Runtime.writeFile(path, text, false) {
-            throw IoError.Failed(path: path)
-        }
+        try File.writeBytes(path, text.utf8Bytes())
     }
 
     /// Adds to the end of the file, making it if it is not there.
     public static fn append(_ path: String, _ text: String) throws(IoError) {
-        if !Runtime.writeFile(path, text, true) {
-            throw IoError.Failed(path: path)
+        try File.appendBytes(path, text.utf8Bytes())
+    }
+
+    /// The file copied to another path, one there replaced, at the
+    /// system's fastest: a clone on APFS, copy_file_range on Linux,
+    /// CopyFileW on Windows.
+    public static fn copy(from source: String, to target: String) throws(IoError) {
+        if !Runtime.fileCopy(source, target) {
+            throw IoError.lastFileError(source)
         }
     }
 
@@ -58,11 +122,4 @@ public struct File {
             throw IoError.Failed(path: path)
         }
     }
-}
-
-fn withoutReturn(_ line: String) -> String {
-    if line.count > 0 && line.at(line.count - 1) == '\r' {
-        return line.slice(0, line.count - 1)
-    }
-    return line
 }

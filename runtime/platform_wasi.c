@@ -351,3 +351,7 @@ static char *executable_path(int argc, char **argv) {
 static bool random_bytes(void *buffer, size_t length) {
     return __wasi_random_get(buffer, length) == 0;
 }
+
+// ---- File handles ---------------------------------------------------------
+
+#include "platform_files_posix.c"

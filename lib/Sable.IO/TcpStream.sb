@@ -16,7 +16,7 @@ module Sable.IO
 /// }
 /// ```
 @immutable
-public class TcpStream {
+public class TcpStream: AsyncReader, AsyncWriter {
     let handle: Int
 
     init(handle: Int) {

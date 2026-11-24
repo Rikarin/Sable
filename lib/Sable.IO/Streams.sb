@@ -1,0 +1,100 @@
+module Sable.IO
+
+// What reads and writes bytes: a file, memory, a buffer over either, the
+// standard streams; and the async pair, which a TCP stream is. Rust's Read,
+// Write and Seek, .NET's Stream split in three. A read gives the bytes it
+// got as an array of their own, rather than filling one the caller holds:
+// the bytes a read fills would otherwise be in an array another copy of it
+// shares.
+
+/// Bytes read in order, as many as are ready up to a count at a time.
+///
+/// ```sable
+/// var stream = MemoryStream([1, 2, 3])
+/// assert(try! stream.read(upTo: 2) == [1, 2])
+/// assert(try! stream.readToEnd() == [3])
+/// assert(try! stream.read(upTo: 2).isEmpty)
+/// ```
+public protocol Reader {
+    /// Up to 'count' bytes: some, as soon as any are ready, and none only
+    /// at the end.
+    mutating fn read(upTo count: Int) throws(IoError) -> U8[>..]
+}
+
+/// Bytes written in order, some held back until they are flushed.
+public protocol Writer {
+    /// Every one of the bytes written, or held to be.
+    mutating fn write(_ bytes: U8[:]) throws(IoError)
+
+    /// What is held back written on.
+    mutating fn flush() throws(IoError)
+}
+
+/// Where a seek counts from.
+public enum SeekOrigin {
+    Start
+    Current
+    End
+}
+
+/// A stream with a position that can be moved.
+public protocol Seekable {
+    /// The position moved by the offset from the origin: where it is now,
+    /// counted from the start.
+    @discardable
+    mutating fn seek(_ offset: Int, from origin: SeekOrigin) throws(IoError) -> Int
+}
+
+/// Bytes read in order as they come, by a task that suspends while it
+/// waits (a TCP stream).
+public protocol AsyncReader {
+    fn read(upTo count: Int) async throws(IoError) -> U8[>..]
+}
+
+/// Bytes written in order by a task that suspends while it waits.
+public protocol AsyncWriter {
+    fn write(_ bytes: U8[:]) async throws(IoError)
+}
+
+extension Reader {
+    /// Every byte to the end.
+    public mutating fn readToEnd() throws(IoError) -> U8[>..] {
+        var all: U8[>..] = []
+        while true {
+            let bytes = try self.read(upTo: 65536)
+            if bytes.isEmpty {
+                return all
+            }
+            all.append(contentsOf: bytes)
+        }
+    }
+
+    /// Exactly 'count' bytes; `.UnexpectedEof` if the stream ends first.
+    public mutating fn readExactly(_ count: Int) throws(IoError) -> U8[>..] {
+        var all: U8[>..] = []
+        while all.count < count {
+            let bytes = try self.read(upTo: count - all.count)
+            if bytes.isEmpty {
+                throw IoError.UnexpectedEof
+            }
+            all.append(contentsOf: bytes)
+        }
+        return all
+    }
+}
+
+/// Every byte of the reader written to the writer, which is flushed: how
+/// many (Rust's io::copy).
+@discardable
+public fn copy<R: Reader, W: Writer>(from reader: inout R, to writer: inout W) throws(IoError) -> Int {
+    var total = 0
+    while true {
+        let bytes = try reader.read(upTo: 1 << 20)
+        if bytes.isEmpty {
+            try writer.flush()
+            return total
+        }
+        try writer.write(bytes)
+        total = total + bytes.count
+    }
+}

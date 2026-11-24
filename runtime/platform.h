@@ -218,6 +218,72 @@ static bool make_directory(const char *name);
 static char **list_directory(const char *name, size_t *count);
 static char *environment_variable(const char *name);
 
+// ---- File handles -----------------------------------------------------------
+//
+// A file opened by handle (Sable.IO's FileHandle): a descriptor on POSIX
+// and WASI, a HANDLE on Windows, as an integer; -1 for none. Each call that
+// fails says why in the FileError it is given: one of IoError's kinds, and
+// the system's own code (errno, or GetLastError).
+
+typedef int64_t PlatformFile;
+
+// What a file is opened to do, OR-ed together (Sable.IO's OpenOptions).
+enum {
+    FILE_READ = 1,
+    FILE_WRITE = 2,
+    FILE_APPEND = 4,
+    FILE_CREATE = 8,
+    FILE_CREATE_NEW = 16,
+    FILE_TRUNCATE = 32,
+};
+
+// Why a file call failed: IoError's cases, by number.
+enum {
+    FILE_ERROR_NONE = 0,
+    FILE_ERROR_NOT_FOUND = 1,
+    FILE_ERROR_PERMISSION = 2,
+    FILE_ERROR_EXISTS = 3,
+    FILE_ERROR_IS_DIRECTORY = 4,
+    FILE_ERROR_INTERRUPTED = 5,
+    FILE_ERROR_INVALID = 6,
+    FILE_ERROR_OTHER = 7,
+};
+
+typedef struct FileError {
+    int kind;
+    int64_t code;
+} FileError;
+
+typedef struct FileMetadata {
+    int64_t size;
+    // Nanoseconds since 1970, UTC.
+    int64_t modified;
+    // 0 a file, 1 a directory, 2 anything else.
+    int kind;
+} FileMetadata;
+
+// Opened as the flags say, a file made with the permissions (POSIX's mode
+// bits; Windows takes none); -1 if it cannot be. A directory is not opened.
+static PlatformFile file_open(const char *name, int flags, int permissions, FileError *error);
+// Up to 'most' bytes read into 'into', from the position (offset < 0) or
+// from the offset: how many; 0 at the end; -1 on failure.
+static int64_t file_read(PlatformFile file, void *into, int64_t most, int64_t offset, FileError *error);
+// Some of the bytes written, at the position or at the offset: how many;
+// -1 on failure.
+static int64_t file_write(PlatformFile file, const void *from, int64_t count, int64_t offset, FileError *error);
+// The position moved from the start (0), itself (1) or the end (2): where
+// it is now; -1 on failure.
+static int64_t file_seek(PlatformFile file, int64_t offset, int whence, FileError *error);
+// What is written made to reach the disk.
+static bool file_sync(PlatformFile file, FileError *error);
+static bool file_set_length(PlatformFile file, int64_t length, FileError *error);
+static bool file_metadata(PlatformFile file, FileMetadata *metadata, FileError *error);
+static bool file_close(PlatformFile file, FileError *error);
+// Standard input (0), output (1) or error (2), as a file.
+static PlatformFile file_standard(int which);
+// The whole file copied, at the system's fastest, a file at 'to' replaced.
+static bool file_copy(const char *from, const char *to, FileError *error);
+
 // ---- Processes -----------------------------------------------------------
 
 // Runs argv[0], found on PATH as the system finds a program, with the

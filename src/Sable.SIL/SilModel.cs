@@ -2653,6 +2653,21 @@ public static class SilBuiltins {
         Add("io_argument_count", SilType.Int);
         Add("io_argument", SilType.String, SilType.Int);
         Add("io_succeeded", SilType.Bool);
+        // Files by handle (runtime/io.c, "File handles"): a call that fails
+        // gives -1, nothing or false, and 'file_error' says why by IoError's
+        // kinds, 'file_error_code' by the system's own code.
+        Add("file_error", SilType.Int);
+        Add("file_error_code", SilType.Int);
+        Add("file_open", SilType.Int, SilType.String, SilType.Int, SilType.Int);
+        Add("file_read", new ArrayType(SilType.U8), SilType.Int, SilType.Int, SilType.Int);
+        Add("file_write", SilType.Int, SilType.Int, new SliceType(SilType.U8), SilType.Int);
+        Add("file_seek", SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        Add("file_sync", SilType.Bool, SilType.Int);
+        Add("file_set_length", SilType.Bool, SilType.Int, SilType.Int);
+        Add("file_metadata", SilType.Int, SilType.Int, SilType.Int);
+        Add("file_close", SilType.Bool, SilType.Int);
+        Add("file_standard", SilType.Int, SilType.Int);
+        Add("file_copy", SilType.Bool, SilType.String, SilType.String);
         Add("time_monotonic", SilType.Int);
         Add("time_wall_clock", SilType.Int);
         Add("time_sleep", SilType.Unit, SilType.Int);

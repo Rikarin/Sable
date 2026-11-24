@@ -1,0 +1,200 @@
+module Sable.IO
+
+import Sable.Text
+
+/// How text is written as bytes: what a TextReader decodes and a
+/// TextWriter encodes. Ill-formed input is read as U+FFFD; a scalar Latin-1
+/// cannot write is written as '?'.
+public enum TextEncoding {
+    Utf8
+    Utf16LittleEndian
+    Utf16BigEndian
+    Latin1
+}
+
+/// Text read from a reader of bytes in an encoding, a chunk at a time:
+/// .NET's `StreamReader`. A scalar a chunk ends partway through is kept
+/// until the next completes it.
+///
+/// ```sable
+/// var text = TextReader(MemoryStream([0x68, 0x00, 0x69, 0x00]), encoding: .Utf16LittleEndian)
+/// assert(try! text.readToEnd() == "hi")
+/// ```
+public struct TextReader<Inner: Reader> {
+    var inner: Inner
+    let encoding: TextEncoding
+    var utf8: Utf8Decoder
+    var utf16: Utf16Decoder
+    // A byte of a UTF-16 code unit the last chunk ended with: -1 for none.
+    var oddByte: Int
+    // Text decoded and not yet given as a line.
+    var pending: String
+    var ended: Bool
+
+    public init(_ inner: Inner, encoding: TextEncoding = .Utf8) {
+        self.inner = inner
+        self.encoding = encoding
+        self.utf8 = Utf8Decoder()
+        self.utf16 = Utf16Decoder()
+        self.oddByte = -1
+        self.pending = ""
+        self.ended = false
+    }
+
+    /// The text of the next chunk read; empty at the end.
+    public mutating fn read() throws(IoError) -> String {
+        if ended {
+            return ""
+        }
+        let bytes = try inner.read(upTo: 65536)
+        if bytes.isEmpty {
+            ended = true
+            return finish()
+        }
+        return decode(bytes)
+    }
+
+    mutating fn decode(_ bytes: U8[>..]) -> String {
+        return match encoding {
+            case .Utf8              => utf8.decode(bytes)
+            case .Latin1            => String.fromLatin1(bytes)
+            case .Utf16LittleEndian => utf16.decode(units(bytes, littleEndian: true))
+            case .Utf16BigEndian    => utf16.decode(units(bytes, littleEndian: false))
+        }
+    }
+
+    mutating fn finish() -> String {
+        return match encoding {
+            case .Utf8   => utf8.finish()
+            case .Latin1 => ""
+            case _ => {
+                // An odd byte left over is half a code unit: U+FFFD.
+                let half = oddByte >= 0 ? "\u{FFFD}" : ""
+                oddByte = -1
+                return utf16.finish() + half
+            }
+        }
+    }
+
+    // The bytes as UTF-16 code units, a byte left over kept for the next.
+    mutating fn units(_ bytes: U8[>..], littleEndian: Bool) -> U16[>..] {
+        var all: U8[>..] = []
+        if oddByte >= 0 {
+            all.append(U8.truncating(oddByte))
+            oddByte = -1
+        }
+        all.append(contentsOf: bytes)
+        var units: U16[>..] = []
+        var i = 0
+        while i + 1 < all.count {
+            let first = U16(all[i])
+            let second = U16(all[i + 1])
+            units.append(littleEndian ? first | (second << 8) : (first << 8) | second)
+            i = i + 2
+        }
+        if i < all.count {
+            oddByte = Int(all[i])
+        }
+        return units
+    }
+
+    /// Every character to the end.
+    public mutating fn readToEnd() throws(IoError) -> String {
+        var parts: String[>..] = [pending]
+        pending = ""
+        while true {
+            let text = try read()
+            if text.isEmpty && ended {
+                return parts.joined()
+            }
+            parts.append(text)
+        }
+    }
+
+    /// The next line, without its "\n" or "\r\n"; none at the end.
+    public mutating fn readLine() throws(IoError) -> String? {
+        while true {
+            if let newline = pending.firstIndex(of: '\n') {
+                var line = pending[..<newline].toString()
+                pending = pending[pending.index(after: newline)...].toString()
+                if line.hasSuffix("\r") {
+                    line = line[..<line.index(before: line.endIndex)].toString()
+                }
+                return line
+            }
+            if ended {
+                if pending.isEmpty {
+                    return none
+                }
+                let last = pending
+                pending = ""
+                return last
+            }
+            pending = pending + (try read())
+        }
+    }
+}
+
+/// Text written to a writer of bytes in an encoding: .NET's `StreamWriter`.
+///
+/// ```sable
+/// var text = TextWriter(MemoryStream(), encoding: .Utf16BigEndian)
+/// try! text.write("hi")
+/// assert(text.inner.bytes == [0x00, 0x68, 0x00, 0x69])
+/// ```
+public struct TextWriter<Inner: Writer> {
+    /// The writer it writes to.
+    public var inner: Inner
+    let encoding: TextEncoding
+
+    public init(_ inner: Inner, encoding: TextEncoding = .Utf8) {
+        self.inner = inner
+        self.encoding = encoding
+    }
+
+    /// The text, encoded and written.
+    public mutating fn write(_ text: String) throws(IoError) {
+        let bytes: U8[>..] = match encoding {
+            case .Utf8              => text.utf8Bytes()
+            case .Latin1            => TextWriter.latin1(text)
+            case .Utf16LittleEndian => TextWriter.utf16(text, littleEndian: true)
+            case .Utf16BigEndian    => TextWriter.utf16(text, littleEndian: false)
+        }
+        try inner.write(bytes)
+    }
+
+    /// The text and a "\n", encoded and written.
+    public mutating fn writeLine(_ text: String) throws(IoError) {
+        try write(text)
+        try write("\n")
+    }
+
+    public mutating fn flush() throws(IoError) {
+        try inner.flush()
+    }
+
+    static fn latin1(_ text: String) -> U8[>..] {
+        var bytes: U8[>..] = []
+        for scalar in text {
+            let code = scalar.codePoint
+            bytes.append(code < 256 ? U8.truncating(code) : 0x3F)
+        }
+        return bytes
+    }
+
+    static fn utf16(_ text: String, littleEndian: Bool) -> U8[>..] {
+        var bytes: U8[>..] = []
+        for unit in text.utf16 {
+            let high = U8.truncating(Int(unit) >> 8)
+            let low = U8.truncating(Int(unit) & 0xFF)
+            if littleEndian {
+                bytes.append(low)
+                bytes.append(high)
+            } else {
+                bytes.append(high)
+                bytes.append(low)
+            }
+        }
+        return bytes
+    }
+}

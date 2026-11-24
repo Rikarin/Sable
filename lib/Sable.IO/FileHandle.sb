@@ -1,0 +1,252 @@
+module Sable.IO
+
+/// How a file is opened: Rust's `OpenOptions`, .NET's `FileMode` and
+/// `FileAccess` together. Start from one of the common ones and change what
+/// differs.
+///
+/// ```sable
+/// var options = OpenOptions.writing
+/// options.createNew = true
+/// assert(options.write && options.truncate && options.createNew)
+/// ```
+public struct OpenOptions {
+    /// To read from it.
+    public var read: Bool = false
+    /// To write to it, at the position.
+    public var write: Bool = false
+    /// To write to it, every write at the end.
+    public var append: Bool = false
+    /// Made if it is not there.
+    public var create: Bool = false
+    /// Made, and an error if something is there already.
+    public var createNew: Bool = false
+    /// Emptied as it is opened.
+    public var truncate: Bool = false
+    /// The permissions a file made gets, POSIX's mode bits (Windows takes
+    /// none), less the process's umask.
+    public var permissions: Int = 0o644
+
+    public init() { }
+
+    /// To read a file that is there.
+    public static var reading: OpenOptions {
+        get {
+            var options = OpenOptions()
+            options.read = true
+            return options
+        }
+    }
+
+    /// To write a file from its start, made if it is not there and emptied
+    /// if it is: what `File.writeBytes` opens with.
+    public static var writing: OpenOptions {
+        get {
+            var options = OpenOptions()
+            options.write = true
+            options.create = true
+            options.truncate = true
+            return options
+        }
+    }
+
+    /// To add to the end of a file, made if it is not there.
+    public static var appending: OpenOptions {
+        get {
+            var options = OpenOptions()
+            options.append = true
+            options.create = true
+            return options
+        }
+    }
+
+    // The runtime's flags (platform.h's FILE_READ and the rest).
+    var flags: Int {
+        get {
+            var flags = 0
+            if read {
+                flags = flags | 1
+            }
+            if write {
+                flags = flags | 2
+            }
+            if append {
+                flags = flags | 4
+            }
+            if create {
+                flags = flags | 8
+            }
+            if createNew {
+                flags = flags | 16
+            }
+            if truncate {
+                flags = flags | 32
+            }
+            return flags
+        }
+    }
+}
+
+/// What a file is, when it was written, and how long it is.
+public struct FileMetadata {
+    /// Its length in bytes.
+    public let size: Int
+    /// When it was last written: nanoseconds since 1970, UTC.
+    public let modifiedNanoseconds: Int
+    /// Whether it is a directory.
+    public let isDirectory: Bool
+    /// Whether it is an ordinary file.
+    public let isFile: Bool
+}
+
+/// An open file, read and written at its position or at any offset: Rust's
+/// `File`, .NET's `FileStream` and `RandomAccess` together. Closed as it
+/// goes, or by `close()`. Unbuffered: each read and write is a call to the
+/// system, so many small ones go through a BufferedReader or a
+/// BufferedWriter.
+///
+/// ```sable
+/// let path = "sable-file-handle-example.txt"
+/// let file = try! File.open(path, options: .writing)
+/// try! file.write([0x68, 0x69])
+/// try! file.write(at: 0, [0x48])
+/// file.close()
+/// assert(try! File.readBytes(path) == [0x48, 0x69])
+/// try! File.remove(path)
+/// ```
+public final class FileHandle: Reader, Writer, Seekable {
+    var handle: Int
+    /// The path it was opened by.
+    public let path: String
+    // A standard stream's handle is the process's, never closed here.
+    let owned: Bool
+
+    init(handle: Int, path: String, owned: Bool) {
+        self.handle = handle
+        self.path = path
+        self.owned = owned
+    }
+
+    deinit {
+        if owned && handle != -1 {
+            Runtime.fileClose(handle)
+        }
+    }
+
+    /// Whether it is still open.
+    public var isOpen: Bool => handle != -1
+
+    @discardable
+    fn live() throws(IoError) -> Int {
+        if handle == -1 {
+            throw IoError.InvalidInput(path: path)
+        }
+        return handle
+    }
+
+    /// Up to 'count' bytes from the position, which moves past them: none
+    /// at the end.
+    public fn read(upTo count: Int) throws(IoError) -> U8[>..] {
+        let bytes = Runtime.fileRead(try live(), count, -1)
+        if bytes.isEmpty && Runtime.fileError() != 0 {
+            throw IoError.lastFileError(path)
+        }
+        return bytes
+    }
+
+    /// Up to 'count' bytes from the offset, the position left alone where
+    /// the system allows (POSIX; Windows moves it): none past the end.
+    public fn read(at offset: Int, upTo count: Int) throws(IoError) -> U8[>..] {
+        let bytes = Runtime.fileRead(try live(), count, offset)
+        if bytes.isEmpty && Runtime.fileError() != 0 {
+            throw IoError.lastFileError(path)
+        }
+        return bytes
+    }
+
+    /// Every one of the bytes written at the position, which moves past them.
+    public fn write(_ bytes: U8[:]) throws(IoError) {
+        var from = 0
+        while from < bytes.count {
+            let put = Runtime.fileWrite(try live(), bytes[from...], -1)
+            if put < 0 {
+                throw IoError.lastFileError(path)
+            }
+            from = from + put
+        }
+    }
+
+    /// Every one of the bytes written at the offset.
+    public fn write(at offset: Int, _ bytes: U8[:]) throws(IoError) {
+        var from = 0
+        while from < bytes.count {
+            let put = Runtime.fileWrite(try live(), bytes[from...], offset + from)
+            if put < 0 {
+                throw IoError.lastFileError(path)
+            }
+            from = from + put
+        }
+    }
+
+    /// Nothing is held back by a file handle: what it writes is the
+    /// system's at once. `sync()` makes it reach the disk.
+    public fn flush() throws(IoError) {
+        try live()
+    }
+
+    /// The position moved: where it is now.
+    @discardable
+    public fn seek(_ offset: Int, from origin: SeekOrigin) throws(IoError) -> Int {
+        let whence = match origin {
+            case .Start   => 0
+            case .Current => 1
+            case .End     => 2
+        }
+        let at = Runtime.fileSeek(try live(), offset, whence)
+        if at < 0 {
+            throw IoError.lastFileError(path)
+        }
+        return at
+    }
+
+    /// The position: how many bytes from the start.
+    public fn position() throws(IoError) -> Int {
+        return try seek(0, from: .Current)
+    }
+
+    /// What is written made to reach the disk (fsync, FlushFileBuffers).
+    public fn sync() throws(IoError) {
+        if !Runtime.fileSync(try live()) {
+            throw IoError.lastFileError(path)
+        }
+    }
+
+    /// The file cut or lengthened (with zeros) to the length.
+    public fn setLength(_ length: Int) throws(IoError) {
+        if !Runtime.fileSetLength(try live(), length) {
+            throw IoError.lastFileError(path)
+        }
+    }
+
+    /// What it is, its length and when it was written.
+    public fn metadata() throws(IoError) -> FileMetadata {
+        let handle = try live()
+        let size = Runtime.fileMetadata(handle, 0)
+        let modified = Runtime.fileMetadata(handle, 1)
+        let kind = Runtime.fileMetadata(handle, 2)
+        if size < 0 || kind < 0 {
+            throw IoError.lastFileError(path)
+        }
+        return FileMetadata { size: size, modifiedNanoseconds: modified, isDirectory: kind == 1, isFile: kind == 0 }
+    }
+
+    /// Closed now: reading or writing it after throws `.InvalidInput`.
+    /// Closing it again does nothing.
+    public fn close() {
+        if handle != -1 {
+            if owned {
+                Runtime.fileClose(handle)
+            }
+            handle = -1
+        }
+    }
+}

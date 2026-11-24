@@ -1033,3 +1033,204 @@ static char *executable_path(int argc, char **argv) {
 static bool random_bytes(void *buffer, size_t length) {
     return BCryptGenRandom(NULL, (PUCHAR)buffer, (ULONG)length, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
 }
+
+// ---- File handles ----------------------------------------------------------
+//
+// A file is a HANDLE, as an integer. Positional reads and writes give the
+// offset in an OVERLAPPED, which a handle opened for synchronous use reads
+// or writes at, moving its own position as it does (POSIX's pread leaves
+// it): Sable.IO's positional calls say nothing of the position after.
+
+// What GetLastError says went wrong, as IoError's kinds.
+static int file_error_of(DWORD code) {
+    switch (code) {
+        case ERROR_FILE_NOT_FOUND:
+        case ERROR_PATH_NOT_FOUND:
+        case ERROR_INVALID_NAME:
+            return FILE_ERROR_NOT_FOUND;
+        case ERROR_ACCESS_DENIED:
+        case ERROR_SHARING_VIOLATION:
+        case ERROR_LOCK_VIOLATION:
+            return FILE_ERROR_PERMISSION;
+        case ERROR_FILE_EXISTS:
+        case ERROR_ALREADY_EXISTS:
+            return FILE_ERROR_EXISTS;
+        case ERROR_DIRECTORY:
+            return FILE_ERROR_IS_DIRECTORY;
+        case ERROR_OPERATION_ABORTED:
+            return FILE_ERROR_INTERRUPTED;
+        case ERROR_INVALID_PARAMETER:
+        case ERROR_INVALID_HANDLE:
+            return FILE_ERROR_INVALID;
+        default:
+            return FILE_ERROR_OTHER;
+    }
+}
+
+static void file_failed(FileError *error) {
+    DWORD code = GetLastError();
+    error->kind = file_error_of(code);
+    error->code = (int64_t)code;
+}
+
+static PlatformFile file_open(const char *name, int flags, int permissions, FileError *error) {
+    (void)permissions;
+    DWORD access = 0;
+    if (flags & FILE_READ) {
+        access |= GENERIC_READ;
+    }
+    // Appending is FILE_APPEND_DATA without FILE_WRITE_DATA: every write
+    // goes at the end of the file as it is then.
+    if (flags & FILE_APPEND) {
+        access |= FILE_APPEND_DATA | SYNCHRONIZE;
+    } else if (flags & FILE_WRITE) {
+        access |= GENERIC_WRITE;
+    }
+
+    DWORD disposition = OPEN_EXISTING;
+    if (flags & FILE_CREATE_NEW) {
+        disposition = CREATE_NEW;
+    } else if ((flags & FILE_CREATE) && (flags & FILE_TRUNCATE)) {
+        disposition = CREATE_ALWAYS;
+    } else if (flags & FILE_CREATE) {
+        disposition = OPEN_ALWAYS;
+    } else if (flags & FILE_TRUNCATE) {
+        disposition = TRUNCATE_EXISTING;
+    }
+
+    wchar_t *wide = to_wide(name);
+    HANDLE file = CreateFileW(wide, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, disposition,
+                              FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) {
+        file_failed(error);
+        // A directory refuses access as a file: say what it is.
+        DWORD attributes = GetFileAttributesW(wide);
+        if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            error->kind = FILE_ERROR_IS_DIRECTORY;
+        }
+        free(wide);
+        return -1;
+    }
+
+    free(wide);
+    return (PlatformFile)(intptr_t)file;
+}
+
+static HANDLE handle_of(PlatformFile file) {
+    return (HANDLE)(intptr_t)file;
+}
+
+static int64_t file_read(PlatformFile file, void *into, int64_t most, int64_t offset, FileError *error) {
+    DWORD wanted = most > 0x40000000 ? 0x40000000 : (DWORD)most;
+    DWORD got = 0;
+    OVERLAPPED at = { 0 };
+    if (offset >= 0) {
+        at.Offset = (DWORD)((uint64_t)offset & 0xFFFFFFFF);
+        at.OffsetHigh = (DWORD)((uint64_t)offset >> 32);
+    }
+
+    if (!ReadFile(handle_of(file), into, wanted, &got, offset >= 0 ? &at : NULL)) {
+        DWORD code = GetLastError();
+        // The end of a file read at an offset, or of a pipe whose writer
+        // has gone: nothing more, not a failure.
+        if (code == ERROR_HANDLE_EOF || code == ERROR_BROKEN_PIPE) {
+            return 0;
+        }
+        file_failed(error);
+        return -1;
+    }
+
+    return (int64_t)got;
+}
+
+static int64_t file_write(PlatformFile file, const void *from, int64_t count, int64_t offset, FileError *error) {
+    DWORD wanted = count > 0x40000000 ? 0x40000000 : (DWORD)count;
+    DWORD put = 0;
+    OVERLAPPED at = { 0 };
+    if (offset >= 0) {
+        at.Offset = (DWORD)((uint64_t)offset & 0xFFFFFFFF);
+        at.OffsetHigh = (DWORD)((uint64_t)offset >> 32);
+    }
+
+    if (!WriteFile(handle_of(file), from, wanted, &put, offset >= 0 ? &at : NULL)) {
+        file_failed(error);
+        return -1;
+    }
+
+    return (int64_t)put;
+}
+
+static int64_t file_seek(PlatformFile file, int64_t offset, int whence, FileError *error) {
+    LARGE_INTEGER distance, at;
+    distance.QuadPart = offset;
+    DWORD method = whence == 0 ? FILE_BEGIN : whence == 1 ? FILE_CURRENT : FILE_END;
+    if (!SetFilePointerEx(handle_of(file), distance, &at, method)) {
+        file_failed(error);
+        return -1;
+    }
+
+    return at.QuadPart;
+}
+
+static bool file_sync(PlatformFile file, FileError *error) {
+    if (!FlushFileBuffers(handle_of(file))) {
+        file_failed(error);
+        return false;
+    }
+
+    return true;
+}
+
+static bool file_set_length(PlatformFile file, int64_t length, FileError *error) {
+    FILE_END_OF_FILE_INFO end;
+    end.EndOfFile.QuadPart = length;
+    if (!SetFileInformationByHandle(handle_of(file), FileEndOfFileInfo, &end, sizeof end)) {
+        file_failed(error);
+        return false;
+    }
+
+    return true;
+}
+
+static bool file_metadata(PlatformFile file, FileMetadata *metadata, FileError *error) {
+    BY_HANDLE_FILE_INFORMATION info;
+    if (!GetFileInformationByHandle(handle_of(file), &info)) {
+        file_failed(error);
+        return false;
+    }
+
+    metadata->size = (int64_t)(((uint64_t)info.nFileSizeHigh << 32) | info.nFileSizeLow);
+    int64_t ticks = (int64_t)(((uint64_t)info.ftLastWriteTime.dwHighDateTime << 32) | info.ftLastWriteTime.dwLowDateTime);
+    metadata->modified = (ticks - 116444736000000000LL) * 100;
+    metadata->kind = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
+    return true;
+}
+
+static bool file_close(PlatformFile file, FileError *error) {
+    if (!CloseHandle(handle_of(file))) {
+        file_failed(error);
+        return false;
+    }
+
+    return true;
+}
+
+static PlatformFile file_standard(int which) {
+    DWORD id = which == 0 ? STD_INPUT_HANDLE : which == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE;
+    return (PlatformFile)(intptr_t)GetStdHandle(id);
+}
+
+// The whole file copied by the system: CopyFileW, which copies the data and
+// the attributes, replacing a file there.
+static bool file_copy(const char *from, const char *to, FileError *error) {
+    wchar_t *source = to_wide(from);
+    wchar_t *target = to_wide(to);
+    BOOL copied = CopyFileW(source, target, FALSE);
+    if (!copied) {
+        file_failed(error);
+    }
+
+    free(source);
+    free(target);
+    return copied != 0;
+}

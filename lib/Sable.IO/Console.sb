@@ -31,4 +31,21 @@ public struct Console {
         }
         return lines
     }
+
+    /// Standard input, as a Reader: what Console.readLine reads too, through
+    /// the same buffer, so the two can be used in turn.
+    public static var standardInput: FileHandle => FileHandle(handle: Runtime.fileStandard(0), path: "<standard input>", owned: false)
+
+    /// Standard output, as a Writer: unbuffered, what print and
+    /// Console.write hold back written first. Many small writes go through
+    /// a BufferedWriter.
+    ///
+    /// ```sable
+    /// let output = Console.standardOutput
+    /// try! output.write([0x68, 0x69, 0x0A])
+    /// ```
+    public static var standardOutput: FileHandle => FileHandle(handle: Runtime.fileStandard(1), path: "<standard output>", owned: false)
+
+    /// Standard error, as a Writer, as standardOutput is.
+    public static var standardError: FileHandle => FileHandle(handle: Runtime.fileStandard(2), path: "<standard error>", owned: false)
 }

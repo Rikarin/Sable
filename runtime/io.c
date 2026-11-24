@@ -333,3 +333,135 @@ static void trap_hook_forget(void) {
     trap_hook_context = NULL;
     sable_release(context);
 }
+
+// ---- File handles (Sable.IO's FileHandle) ----------------------------------------
+//
+// Over the platform's file calls (platform.h, "File handles"). A call that
+// fails returns -1, NULL or false, and 'sable_file_error' then says why,
+// by IoError's kinds, and 'sable_file_error_code' the system's own code;
+// both are the calling thread's, and a call that succeeds clears them.
+
+static _Thread_local FileError file_last_error;
+
+int64_t sable_file_error(void) {
+    return file_last_error.kind;
+}
+
+int64_t sable_file_error_code(void) {
+    return file_last_error.code;
+}
+
+static FileError *file_error_cleared(void) {
+    file_last_error.kind = FILE_ERROR_NONE;
+    file_last_error.code = 0;
+    return &file_last_error;
+}
+
+int64_t sable_file_open(const SableString *path, int64_t flags, int64_t permissions) {
+    char *name = c_string(path);
+    PlatformFile file = file_open(name, (int)flags, (int)permissions, file_error_cleared());
+    free(name);
+    return file;
+}
+
+// The standard streams go through C's stdio too (print, Console): what it
+// holds back is written before bytes go to the same stream directly, and
+// standard input is read through it, so neither way loses the other's.
+static bool is_standard(PlatformFile file, int which) {
+    return file == file_standard(which);
+}
+
+// Up to 'most' bytes, read from the position (offset < 0) or the offset, as
+// a new array: NULL at the end, or on failure.
+SableArray *sable_file_read(int64_t file, int64_t most, int64_t offset, const SableMetadata *type) {
+    FileError *error = file_error_cleared();
+    if (most <= 0) {
+        return NULL;
+    }
+
+    char *buffer = buffer_alloc(most);
+    int64_t got;
+    if (offset < 0 && is_standard(file, 0)) {
+        got = (int64_t)fread(buffer, 1, (size_t)most, stdin);
+        if (got == 0 && ferror(stdin)) {
+            error->kind = FILE_ERROR_OTHER;
+            got = -1;
+        }
+    } else {
+        got = file_read(file, buffer, most, offset, error);
+    }
+
+    if (got <= 0) {
+        buffer_free(buffer, most);
+        return NULL;
+    }
+
+    SableArray *bytes = sable_alloc(type, (int64_t)sizeof(SableArray));
+    bytes->elements = buffer;
+    bytes->capacity = most;
+    bytes->count = got;
+    return bytes;
+}
+
+// Some of the slice's bytes written at the position (offset < 0) or the
+// offset: how many, or -1.
+int64_t sable_file_write(int64_t file, const SableArray *buffer, int64_t start, int64_t count, int64_t offset) {
+    FileError *error = file_error_cleared();
+    if (count == 0) {
+        return 0;
+    }
+
+    if (is_standard(file, 1)) {
+        fflush(stdout);
+    } else if (is_standard(file, 2)) {
+        fflush(stderr);
+    }
+
+    return file_write(file, slice_bytes(buffer, start), count, offset, error);
+}
+
+int64_t sable_file_seek(int64_t file, int64_t offset, int64_t whence) {
+    return file_seek(file, offset, (int)whence, file_error_cleared());
+}
+
+bool sable_file_sync(int64_t file) {
+    return file_sync(file, file_error_cleared());
+}
+
+bool sable_file_set_length(int64_t file, int64_t length) {
+    return file_set_length(file, length, file_error_cleared());
+}
+
+// One fact of the file: its size (0), when it was last written in
+// nanoseconds since 1970 (1), or what it is (2: 0 a file, 1 a directory,
+// 2 anything else); -1 on failure.
+int64_t sable_file_metadata(int64_t file, int64_t which) {
+    FileMetadata metadata;
+    if (!file_metadata(file, &metadata, file_error_cleared())) {
+        return -1;
+    }
+
+    return which == 0 ? metadata.size : which == 1 ? metadata.modified : metadata.kind;
+}
+
+bool sable_file_close(int64_t file) {
+    return file_close(file, file_error_cleared());
+}
+
+int64_t sable_file_standard(int64_t which) {
+    return file_standard((int)which);
+}
+
+bool sable_file_copy(const SableString *from, const SableString *to) {
+    char *source = c_string(from);
+    char *target = c_string(to);
+    bool copied = file_copy(source, target, file_error_cleared());
+    free(source);
+    free(target);
+    return copied;
+}
+
+// What stdio holds back for the stream (1 output, 2 error), written now.
+void sable_file_flush_standard(int64_t which) {
+    fflush(which == 2 ? stderr : stdout);
+}

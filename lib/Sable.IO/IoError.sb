@@ -1,9 +1,37 @@
 module Sable.IO
 
-/// Why a file, a directory or a connection could not be read, written or
-/// changed: an Error, so a bare 'throws' can throw it.
+/// Why a file, a directory, a stream or a connection could not be read,
+/// written or changed: an Error, so a bare 'throws' can throw it.
 public union IoError: Error {
+    /// Nothing is at the path.
     NotFound(path: String),
+
+    /// The system does not allow it: a file read-only to this user, or held
+    /// by another process.
+    PermissionDenied(path: String),
+
+    /// Something is at the path already, where a new file was asked for.
+    AlreadyExists(path: String),
+
+    /// The path is a directory, where a file was wanted.
+    IsDirectory(path: String),
+
+    /// The call was interrupted before it could finish; it may be tried
+    /// again.
+    Interrupted,
+
+    /// The stream ended before as many bytes as were needed came.
+    UnexpectedEof,
+
+    /// An argument the system does not take: a seek before the start, or
+    /// a handle already closed.
+    InvalidInput(path: String),
+
+    /// Any other failure the system reports, with its own code: errno on
+    /// POSIX, GetLastError on Windows.
+    Os(path: String, code: Int),
+
+    /// It could not be done, the system saying no more.
     Failed(path: String),
 
     /// Nothing could listen on, or connect to, the address.
@@ -18,11 +46,33 @@ public union IoError: Error {
     /// What went wrong, and with which path or address.
     public fn description() -> String {
         return match self {
-            case .NotFound(let path)       => "nothing is at '\(path)'"
-            case .Failed(let path)         => "'\(path)' could not be read, written or changed"
-            case .Unreachable(let address) => "'\(address)' could not be reached"
-            case .Disconnected             => "the connection failed or was closed"
-            case .Cancelled                => "the task was cancelled while it waited"
+            case .NotFound(let path)         => "nothing is at '\(path)'"
+            case .PermissionDenied(let path) => "'\(path)' may not be used so"
+            case .AlreadyExists(let path)    => "something is at '\(path)' already"
+            case .IsDirectory(let path)      => "'\(path)' is a directory"
+            case .Interrupted                => "the call was interrupted"
+            case .UnexpectedEof              => "the stream ended before what was needed"
+            case .InvalidInput(let path)     => "'\(path)' was given something the system does not take"
+            case .Os(let path, let code)     => "'\(path)' failed with the system's error \(code)"
+            case .Failed(let path)           => "'\(path)' could not be read, written or changed"
+            case .Unreachable(let address)   => "'\(address)' could not be reached"
+            case .Disconnected               => "the connection failed or was closed"
+            case .Cancelled                  => "the task was cancelled while it waited"
+        }
+    }
+
+    /// The error the last file call on this thread failed with, for the
+    /// path: by the kind the runtime says, the system's code kept where no
+    /// kind fits.
+    static fn lastFileError(_ path: String) -> IoError {
+        return match Runtime.fileError() {
+            case 1 => .NotFound(path: path)
+            case 2 => .PermissionDenied(path: path)
+            case 3 => .AlreadyExists(path: path)
+            case 4 => .IsDirectory(path: path)
+            case 5 => .Interrupted
+            case 6 => .InvalidInput(path: path)
+            case _ => .Os(path: path, code: Runtime.fileErrorCode())
         }
     }
 }

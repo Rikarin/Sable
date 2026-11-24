@@ -744,7 +744,12 @@ Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     generic over ElementaryFunctions; integer math;
                     BigInt, Decimal, SIMD<T, N>, Matrix, Quaternion,
                     statistics
-Sable.IO            File Directory Path Stream MemoryMappedFile stdio
+Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
+                    OpenOptions (positional reads and writes, metadata,
+                    setLength, sync), BufferedReader BufferedWriter
+                    MemoryStream TextReader TextWriter, File (bytes, text,
+                    lazy lines, copy at the system's fastest), Directory
+                    Path, the standard streams as handles, TCP
 Sable.Serialize     Encoder/Decoder protocols, conformance synthesis via
                     @derive(Serializable), JSON, TOML, MessagePack, and the
                     zero-copy @inline_layout path

@@ -1,0 +1,214 @@
+module StreamTests
+
+// Reader, Writer, BufferedReader, BufferedWriter, MemoryStream, TextReader
+// and TextWriter (Sable.IO), over memory: against models, with reads that
+// give a few bytes at a time so that every boundary is crossed.
+
+import Sable.IO
+import Sable.Testing
+
+/// A random walk of numbers: xorshift.
+struct Walk {
+    var state: U64
+
+    mutating fn next(_ below: Int) -> Int {
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        return Int(state % U64(below))
+    }
+}
+
+/// A reader that gives at most a few bytes a read: what a pipe or a socket
+/// may do.
+struct Trickle: Reader {
+    var bytes: U8[>..]
+    var position: Int
+    var walk: Walk
+
+    mutating fn read(upTo count: Int) throws(IoError) -> U8[>..] {
+        if position >= bytes.count {
+            return []
+        }
+        let most = 1 + walk.next(5)
+        let take = most < count ? most : count
+        let end = position + take < bytes.count ? position + take : bytes.count
+        let got = bytes[position..<end].toArray()
+        position = end
+        return got
+    }
+}
+
+fn trickle(_ bytes: U8[>..], seed: U64) -> Trickle {
+    return Trickle { bytes: bytes, position: 0, walk: Walk { state: seed } }
+}
+
+fn shown(_ bytes: U8[:]) -> String {
+    return "\(bytes.toArray())"
+}
+
+@test
+fn bufferedLinesAgreeWithSplittingTheText() throws {
+    var walk = Walk { state: 0x9E3779B97F4A7C15 }
+    var round = 0
+    while round < 200 {
+        // Lines of letters, ended by "\n" or "\r\n", the last maybe not.
+        var text = ""
+        var expected: String[>..] = []
+        var unended = false
+        let count = walk.next(12)
+        var i = 0
+        while i < count {
+            var line = ""
+            var j = 0
+            let length = walk.next(20)
+            while j < length {
+                line = line + String.fromChar(Char.fromCodePoint(0x61 + walk.next(26))!)
+                j += 1
+            }
+            expected.append(line)
+            let last = i == count - 1 && walk.next(2) == 0
+            unended = last
+            text = text + line + (last ? "" : walk.next(3) == 0 ? "\r\n" : "\n")
+            i += 1
+        }
+        // An empty last line with no ending is no line.
+        if unended && expected[count - 1].isEmpty {
+            expected.removeLast()
+        }
+        var reader = BufferedReader(trickle(text.utf8Bytes(), seed: U64(round + 1)), capacity: 1 + walk.next(8))
+        var got: String[>..] = []
+        while let line = try reader.readLine() {
+            got.append(line)
+        }
+        assertEqual(got.joined(separator: "|"), expected.joined(separator: "|"))
+        round += 1
+    }
+}
+
+@test
+fn bufferedReadsAndRunsGiveEveryByteInOrder() throws {
+    var walk = Walk { state: 0xD1B54A32D192ED03 }
+    var bytes: U8[>..] = []
+    while bytes.count < 5000 {
+        bytes.append(U8.truncating(walk.next(256)))
+    }
+    var reader = BufferedReader(trickle(bytes, seed: 7), capacity: 64)
+    var got: U8[>..] = []
+    while true {
+        let chunk = try reader.read(upTo: 1 + walk.next(200))
+        if chunk.isEmpty {
+            break
+        }
+        got.append(contentsOf: chunk)
+    }
+    assertEqual(shown(got), shown(bytes))
+
+    var runs = BufferedReader(MemoryStream([1, 0, 2, 3, 0, 4]), capacity: 2)
+    assertEqual(shown(try runs.readUntil(0)), "[1, 0]")
+    assertEqual(shown(try runs.readUntil(0)), "[2, 3, 0]")
+    assertEqual(shown(try runs.readUntil(0)), "[4]")
+    assert(try runs.readUntil(0).isEmpty)
+    assert(try runs.readLine() == none)
+
+    var whole = trickle(bytes, seed: 11)
+    assertEqual(shown(try whole.readToEnd()), shown(bytes))
+    var exact = trickle(bytes, seed: 13)
+    assertEqual(try exact.readExactly(1000).count, 1000)
+    do {
+        let _ = try exact.readExactly(10000)
+        fail("read past the end")
+    } catch .UnexpectedEof { }
+
+    var big = BufferedReader(MemoryStream(bytes), capacity: 16)
+    assertEqual(try big.read(upTo: 4096).count, 4096)
+    let lineSequence = BufferedReader(MemoryStream("x\ny\n".utf8Bytes())).lines()
+    var seen = 0
+    for try _ in lineSequence {
+        seen += 1
+    }
+    assertEqual(seen, 2)
+}
+
+@test
+fn aBufferedWriterWritesEverythingInOrder() throws {
+    var walk = Walk { state: 0x2545F4914F6CDD1D }
+    let writer = BufferedWriter(MemoryStream(), capacity: 50)
+    var expected: U8[>..] = []
+    var i = 0
+    while i < 400 {
+        var chunk: U8[>..] = []
+        let length = walk.next(120)
+        while chunk.count < length {
+            chunk.append(U8.truncating(walk.next(256)))
+        }
+        try writer.write(chunk)
+        expected.append(contentsOf: chunk)
+        i += 1
+    }
+    try writer.flush()
+    assertEqual(shown(writer.inner.bytes), shown(expected))
+}
+
+@test
+fn aMemoryStreamReadsWritesAndSeeks() throws {
+    var stream = MemoryStream([1, 2, 3])
+    assertEqual(shown(try stream.read(upTo: 2)), "[1, 2]")
+    try stream.write([9, 9])
+    assertEqual(shown(stream.bytes), "[1, 2, 9, 9]")
+    try stream.seek(6, from: .Start)
+    try stream.write([7])
+    assertEqual(shown(stream.bytes), "[1, 2, 9, 9, 0, 0, 7]")
+    assertEqual(try stream.seek(-1, from: .End), 6)
+    assertEqual(try stream.seek(-6, from: .Current), 0)
+    do {
+        try stream.seek(-1, from: .Start)
+        fail("seeked before the start")
+    } catch IoError.InvalidInput(_) { }
+    assert(try stream.read(upTo: 0).isEmpty)
+    try stream.flush()
+    assertEqual(shown(try stream.readExactly(3)), "[1, 2, 9]")
+    do {
+        let _ = try stream.readExactly(10)
+        fail("read past the end")
+    } catch .UnexpectedEof { }
+
+    var source = MemoryStream([5, 6, 7])
+    var target = MemoryStream()
+    assertEqual(try copy(from: &source, to: &target), 3)
+    assertEqual(shown(target.bytes), "[5, 6, 7]")
+}
+
+@test
+fn textRoundTripsThroughEveryEncoding() throws {
+    let text = "Grüße, мир 😀\r\nsecond line\nthird"
+    for encoding in [TextEncoding.Utf8, TextEncoding.Utf16LittleEndian, TextEncoding.Utf16BigEndian] {
+        var writer = TextWriter(MemoryStream(), encoding: encoding)
+        try writer.write("Grüße, мир 😀\r\n")
+        try writer.writeLine("second line")
+        try writer.write("third")
+        try writer.flush()
+        var whole = TextReader(trickle(writer.inner.bytes, seed: 3), encoding: encoding)
+        assertEqual(try whole.readToEnd(), text)
+        var lines = TextReader(trickle(writer.inner.bytes, seed: 9), encoding: encoding)
+        assertEqual(try lines.readLine() ?? "-", "Grüße, мир 😀")
+        assertEqual(try lines.readLine() ?? "-", "second line")
+        assertEqual(try lines.readLine() ?? "-", "third")
+        assert(try lines.readLine() == none)
+    }
+
+    var latin = TextWriter(MemoryStream(), encoding: .Latin1)
+    try latin.write("café 😀")
+    assertEqual(shown(latin.inner.bytes), "[99, 97, 102, 233, 32, 63]")
+    var back = TextReader(MemoryStream(latin.inner.bytes), encoding: .Latin1)
+    assertEqual(try back.readToEnd(), "café ?")
+
+    // Half a UTF-16 code unit at the end, and ill-formed UTF-8, read as U+FFFD.
+    var odd = TextReader(MemoryStream([0x68, 0x00, 0x69]), encoding: .Utf16LittleEndian)
+    assertEqual(try odd.readToEnd(), "h\u{FFFD}")
+    var bad = TextReader(MemoryStream([0x61, 0xFF]))
+    assertEqual(try bad.readToEnd(), "a\u{FFFD}")
+    var empty = TextReader(MemoryStream())
+    assert(try empty.readLine() == none)
+    assertEqual(try empty.read(), "")
+}

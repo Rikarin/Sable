@@ -1642,13 +1642,13 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             }
 
             case "bytes_find":
-                return (long)BytesOf(operands[0]).AsSpan().IndexOf((byte)operands[1]!);
+                return (long)BytesOf(operands[0]).AsSpan().IndexOf((byte)(long)operands[1]!);
 
             case "bytes_find_any":
                 return (long)BytesOf(operands[0]).AsSpan().IndexOfAny(BytesOf(operands[1]));
 
             case "bytes_count":
-                return (long)BytesOf(operands[0]).AsSpan().Count((byte)operands[1]!);
+                return (long)BytesOf(operands[0]).AsSpan().Count((byte)(long)operands[1]!);
 
             case "utf8_validate": {
                 var bytes = BytesOf(operands[0]);
@@ -2201,6 +2201,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
         if (builtin.Name.StartsWith("net_", StringComparison.Ordinal)) {
             return Net(builtin.Name, operands);
+        }
+
+        if (builtin.Name.StartsWith("file_", StringComparison.Ordinal)) {
+            return Files(builtin.Name, operands);
         }
 
         if (MetadataBuiltin(builtin, operands, depth, out var answer)) {

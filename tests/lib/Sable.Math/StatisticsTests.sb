@@ -340,4 +340,3 @@ fn everyNumberIsMeasuredExactlyWhereItCanBe() {
     assertSame(U64.max.measure, 18446744073709551616.0)
     assertSame((3 as U128).measure, 3.0)
 }
-

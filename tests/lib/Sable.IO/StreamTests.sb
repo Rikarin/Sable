@@ -160,7 +160,7 @@ fn aMemoryStreamReadsWritesAndSeeks() throws {
     do {
         try stream.seek(-1, from: .Start)
         fail("seeked before the start")
-    } catch IoError .InvalidInput(_) { }
+    } catch IoError.InvalidInput(_) { }
     assert(try stream.read(upTo: 0).isEmpty)
     try stream.flush()
     assertEqual(try stream.readExactly(3), [1, 2, 9])

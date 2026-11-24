@@ -30,12 +30,12 @@ fn cancellingAGroupReachesItsGrandchildren() async {
             group.spawn {
                 // A child with a group of its own: its children are cancelled too.
                 await withTaskGroup(of: Void.self) { inner in
-                    inner.spawn {
-                        if await sleepsUntilCancelled() {
-                            let _ = reached.update { $0 + 1 }
-                        }
+                inner.spawn {
+                    if await sleepsUntilCancelled() {
+                        let _ = reached.update { $0 + 1 }
                     }
                 }
+            }
             }
             i += 1
         }
@@ -51,12 +51,12 @@ fn aTimeoutCancelsTheBodysChildren() async {
     do {
         let _ = try await withTimeout(Duration.milliseconds(20)) {
             await withTaskGroup(of: Void.self) { group in
-                group.spawn {
-                    if await sleepsUntilCancelled() {
-                        stopped.store(true)
-                    }
+            group.spawn {
+                if await sleepsUntilCancelled() {
+                    stopped.store(true)
                 }
             }
+        }
         }
     } catch { }
     assert(stopped.load())
@@ -121,9 +121,9 @@ fn timeoutsNest() async {
     do {
         let _ = try await withTimeout(Duration.seconds(30)) {
             try await withTimeout(Duration.milliseconds(10)) {
-                try await Task.sleep(for: Duration.seconds(60))
-                return 0
-            }
+            try await Task.sleep(for: Duration.seconds(60))
+            return 0
+        }
         }
         fail("the inner one did not time out")
     } catch let error as TimeoutError {
@@ -225,8 +225,7 @@ fn aTokenStopsStructuredWork() async {
             return 1
         }
         fail("did not stop")
-    } catch let error as CancellationError {
-    } catch {
+    } catch let error as CancellationError { } catch {
         fail("threw \(error)")
     }
     // A body that finishes first gives its value, the token never firing.
@@ -340,7 +339,9 @@ fn theFirstToFinishWinsAndTheRestAreCancelled() async {
         fail("threw \(error)")
     }
     do {
-        let _ = try await race({ () throws -> Int in throw Broken() }, {
+        let _ = try await race({ () throws -> Int in
+            throw Broken()
+        }, {
             try await Task.sleep(for: Duration.seconds(60))
             return 0
         })

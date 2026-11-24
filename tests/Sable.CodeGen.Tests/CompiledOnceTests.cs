@@ -293,7 +293,7 @@ public sealed class CompiledOnceTests {
             let _ = log(["x"])
             print("end")
         }
-        """, "Test.use", "Test.tryMake", "Test.Cell.deinit"
+        """, "Test.use", "Test.tryMake"
     );
 
     /// <summary>A generic type's stored functions of its parameters' values: called, read, replaced and captured, by code that knows them and code that does not.</summary>
@@ -799,6 +799,111 @@ public sealed class CompiledOnceTests {
             for x in all {
                 let t: Type = type(of: x)
                 print("\(t)")
+            }
+        }
+        """
+    );
+
+    /// <summary>An optional of an opened type's value and an array of them are erased, as Self's are through an existential, and an unconstrained type's values as 'any Any'.</summary>
+    [Fact]
+    public void OptionalsAndArraysOfAnOpenedTypeAreErased() => Prints(
+        "meters 5\na Meters of 5\nnone\nmeters 5\nmeters 5\n0\nnone\nnone\nnone\nnone\n0\n2\n  meters 3\n  meters 9\ntwin meters 4\nsame meters 4\n2\n  meters 4\n  meters 9\ntwin meters 5\nsame word\n0\nint 3\nInt\nInt\nstring word\nString\n",
+        """
+        module Test
+
+        protocol Zero {
+            static fn zero() -> Self
+            fn label() -> String
+            fn same() -> Self?
+            fn many() -> Self[]
+            var twin: Self? { get }
+        }
+
+        protocol Source {
+            associatedtype Item
+            fn item() -> Item
+            fn items() -> Item[>..]
+        }
+
+        struct Meters: Zero, Source {
+            var value: Int
+            static fn zero() -> Meters => Meters { value: 5 }
+            fn label() -> String => "meters \(value)"
+            fn same() -> Meters? => value > 3 ? self : none
+            fn many() -> Meters[] => [self, Meters { value: 9 }]
+            var twin: Meters? => Meters { value: value + 1 }
+            fn item() -> Int => value
+            fn items() -> Int[>..] => [value, value]
+        }
+
+        struct Label: Zero, Source {
+            var text: String
+            static fn zero() -> Label => Label { text: "no" + "ne" }
+            fn label() -> String => text
+            fn same() -> Label? => self
+            fn many() -> Label[] => []
+            var twin: Label? => none
+            fn item() -> String => text
+            fn items() -> String[>..] => [text + "!"]
+        }
+
+        fn maybe<T: Zero>(_ t: T.Type, _ yes: Bool) -> T? => yes ? T.zero() : none
+
+        fn several<T: Zero>(_ t: T.Type) -> T[>..] => [T.zero(), T.zero()]
+
+        fn last<T: Zero>(_ all: T[], _ t: T.Type) -> Int => all.count
+
+        fn bare<T>(_ t: T.Type, _ n: Int) -> T[>..] => []
+
+        @main
+        fn main() {
+            let types: Type[] = [Meters.self, Label.self]
+            for t in types {
+                if let z = maybe(t, true) {
+                    print(z.label())
+                    if let m = z as? Meters {
+                        print("a Meters of \(m.value)")
+                    }
+                }
+
+                print(maybe(t, false) == none ? "none" : "some")
+                for each in several(t) {
+                    print(each.label())
+                }
+
+                print("\(bare(t, 3).count)")
+            }
+
+            let all: (any Zero)[] = [Meters { value: 3 }, Meters { value: 4 }, Label { text: "wo" + "rd" }]
+            for z in all {
+                if let s = z.same() {
+                    print("same \(s.label())")
+                }
+
+                print("\(z.many().count)")
+                for each in z.many() {
+                    print("  \(each.label())")
+                }
+
+                if let w = z.twin {
+                    print("twin \(w.label())")
+                }
+            }
+
+            let sources: (any Source)[] = [Meters { value: 3 }, Label { text: "wo" + "rd" }]
+            for s in sources {
+                if let i = s.item() as? Int {
+                    print("int \(i)")
+                }
+
+                if let i = s.item() as? String {
+                    print("string \(i)")
+                }
+
+                for each in s.items() {
+                    let t: Type = type(of: each)
+                    print("\(t)")
+                }
             }
         }
         """

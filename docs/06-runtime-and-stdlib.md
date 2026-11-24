@@ -534,10 +534,14 @@ unspecialised code makes is of the same class as one made where its types
 are known, a program built unspecialised registers each generic class's
 metadata it writes as it starts (`sable_register_generic_class`), and the
 runtime gives that record for those arguments: a class's metadata is its
-identity to `is` and `as?`. A class that a subclass may override is still
-specialised, as its vtable holds an instance for each class's arguments, and
-so is the initialiser of one with a deinit, which the metadata made at run
-time does not run. A **subscript**'s getter and setter, of a generic struct,
+identity to `is` and `as?`. A **deinit** is compiled once too: a program
+registers, by the class's name, a function that reads the type arguments
+from an object's class and calls it (`$template$deinit$…`,
+`sable_register_generic_deinit`), which a class made at run time runs before
+its fields go. A class that a subclass may override is still
+specialised, as its vtable holds an instance for each class's arguments. An
+**operator** a generic type declares is a static member of it. A
+**subscript**'s getter and setter, of a generic struct,
 union or class, are compiled once as methods are (a dictionary's `d[key]` and
 `d[key] = v`). A static member of a generic type that names none of its type
 parameters (`Task.sleep`, `Task.isCancelled`) is generic over its own alone,
@@ -578,8 +582,9 @@ error in a slot of its own and boxes it as `any Error` with the type's
 made where the type is known, with its table of the conformance to
 Error, and registered with the runtime as a describer is. So `map`,
 `filter`, `reduce` over any sequence are one function each. An error of
-one caught inside unspecialised code (`do`/`catch`, `try?`) keeps the
-function specialised.
+one caught inside unspecialised code is taken from a slot of its own: a
+`do` whose catches take it whole, and a `try?`; with another pattern, or
+mixed with other errors, it keeps the function specialised.
 
 **Closures.** A function type of a type parameter's values, `(T) -> U`,
 `(Element, Element) -> Bool`, `(inout Value) -> Void`, takes the generic
@@ -587,7 +592,9 @@ convention: each value of a type held indirectly is the address of the
 caller's storage, borrowed, and a result of one is written where the
 caller says, after the parameters (`@thick (@opaque(T), *@opaque(U)) ->
 ()`). A `rethrows` function's closures throw `any Error`, so one copy
-serves closures that throw and those that do not, as specialised. A
+serves closures that throw and those that do not, as specialised. One that
+throws an error of a type parameter, `() throws(E) -> T`, is given where the
+error goes after where the result does, and throws that address. A
 closure made where the types are known, `{ $0 * 2 }` as an `(Int) -> Int`,
 is given to such code through a **reabstraction thunk** (`$reabstract$…`)
 that converts: it loads each argument as the type it is, calls the
@@ -604,6 +611,22 @@ closure captures by value (a `let`, a parameter); one that shares a `var`
 of a type parameter's type, or captures `self`, or is inside another,
 keeps its function specialised, as does a function that returns a closure
 over its type parameters.
+
+A function **stored** in a field of a generic struct or class is kept, in an
+unspecialised build, in the generic convention of the type's own parameters
+(`@thick (@opaque(__Element)) -> …`), whatever the instance's arguments, so
+that code that knows them and code that does not agree on the field: what
+reads it makes of it the function the code has there — a cast, where only
+the parameters' names differ, or a reabstraction thunk — and what writes it
+converts likewise (`SilGen.StoredFunctionType`). So the Lazy adapters and
+`PriorityQueue` are compiled once. A specialised build keeps such a function
+in the convention of the instance's types, and calls it directly.
+
+A **requirement generic over its own parameters** (`relative<C:
+Collection>(to: C)`) has an entry that takes, before `Self`'s metadata, the
+metadata of each of them and the tables their constraints name; its witness
+is compiled once for them. A conformer whose member cannot be has an entry
+that traps, and a caller that knows the conformer calls a copy instead.
 
 **Async functions.** An async function compiled once is split as any is
 (§6.7): its start function takes the metadata and tables with its
@@ -633,7 +656,9 @@ the value into the box an existential keeps one of its type in
 (`any$box$of$T`, so `as? Meters` finds it), registered with the runtime as
 the image starts, as describers and error erasers are; the value in the
 buffer is then destroyed and the buffer freed, or, when the call throws,
-only freed. The existential holds the metadata and the tables, as `as? any
+only freed. An optional of `T`, or an array, is erased by a helper
+compiled once for the existential (`$erase$optional$…`, `$erase$array$…`),
+given `T`'s metadata, which boxes each value. The existential holds the metadata and the tables, as `as? any
 Q` makes them. The registry finds only the
 tables a program makes, so a call that opens a Type makes, for every type
 of the program that conforms to `T`'s protocols, its table with its generic
@@ -676,9 +701,9 @@ arguments qualified), and `==` holds the two to be one type.
 
 What unspecialised code cannot serve yet — an optional chain through a
 `T?`, a structural union of `T`, a method of a generic class
-a subclass may override, a field of a function type in a generic type, the
-initialiser of a class with a deinit, an async closure's
-parameter, or a generator — is still specialised for its type arguments in
+a subclass may override, `Task<T>`, an async closure's
+parameter, a generic type made of type parameters given where its
+conformance is required, or a generator — is still specialised for its type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
 says, for each generic function, which way it went and why. A specialised
 build (the default) makes no describers but for a call that opens a Type

@@ -62,9 +62,9 @@ public sealed partial class SilGen {
 
             // A box the program names the class of — 'as? Box<Meters>' asks for it — is what a value made at run time is boxed in too.
             // In a unit, an instance's box is one another unit may open a call to make.
-            if (_openedProtocols.Any(static o => o.Boxes) || _unit is { CompilesGenerics: false } || _module.Unit is not null && CompilesOnce) {
+            if (_erasesAny || _openedProtocols.Any(static o => o.Boxes) || _unit is { CompilesGenerics: false } || _module.Unit is not null && CompilesOnce) {
                 foreach (var box in _module.Types.OfType<ClassType>().Where(static t => t.Superclass?.Name == "any$box").ToList()) {
-                    if (_module.Unit is null || _openedProtocols.Any(static o => o.Boxes) || box.TypeArguments[0] is NominalType { TypeArguments.IsDefaultOrEmpty: false }) {
+                    if (_module.Unit is null || _unit is { CompilesGenerics: false } || box.TypeArguments[0] is NominalType { TypeArguments.IsDefaultOrEmpty: false }) {
                         Boxer(box.TypeArguments[0]);
                     }
                 }

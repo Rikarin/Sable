@@ -272,8 +272,7 @@ public sealed class MetatypeTests {
     [Theory]
     [InlineData("fn f<T: Zero>(_ type: T.Type, _ xs: T[]) -> Int { return 0 }", "f(t, [])", ErrorCode.ERR_CannotOpenType, "parameter 'xs' is of 'T' too")]
     [InlineData("open class Animal {}\nfn f<T: Animal>(_ type: T.Type) -> Int { return 0 }", "f(t)", ErrorCode.ERR_CannotOpenType, "'T' must be 'Animal'")]
-    [InlineData("fn f<T>(_ type: T.Type) -> T? { return none }", "f(t)", ErrorCode.ERR_OpenedResultNotErasable, "gives back a 'T?'")]
-    [InlineData("fn f<T>(_ type: T.Type) -> T { fatalError(\"no\") }", "f(t)", ErrorCode.ERR_OpenedResultNotErasable, "no protocol to be erased to")]
+    [InlineData("fn f<T>(_ type: T.Type) -> T?? { return none }", "f(t)", ErrorCode.ERR_OpenedResultNotErasable, "gives back a 'T??'")]
     public void WhatCannotBeOpenedIsAnError(string declaration, string body, ErrorCode code, string fragment) {
         var compilation = Compilation.Create($"{Opening}\n{declaration}\nfn probe(_ t: Type) {{ let made = {body} }}");
         var error = Assert.Single(compilation.GetAllDiagnostics(), static d => d.Severity == DiagnosticSeverity.Error);

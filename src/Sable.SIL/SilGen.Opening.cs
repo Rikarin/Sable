@@ -118,7 +118,171 @@ public sealed partial class SilGen {
         _module.Boxers[value.ToString()] = (value, name);
     }
 
+    /// <summary>Whether a value of a type known only at run time is erased to 'any Any', whose conformers are every type: each the program boxes has its boxer.</summary>
+    bool _erasesAny;
+
+    /// <summary>The module's optional of an opaque type named for a helper's own parameter.</summary>
+    EnumType OpaqueOptional(OpaqueType of) {
+        var name = $"Optional${Sanitise(of.ToString())}";
+        if (_module.FindType(name) is EnumType existing) {
+            return existing;
+        }
+
+        var made = new EnumType(name);
+        made.Cases.Add(("Some", of));
+        made.Cases.Add(("None", null));
+        return (EnumType)_module.AddType(made);
+    }
+
+    /// <summary>The metadata of an optional of a type known only by its own: what makes it, compiled once.</summary>
+    internal (string Name, FunctionType Type) OptionalMetadata() {
+        const string name = "$metadata$optional";
+        var type = new FunctionType([SilType.Metadata], SilType.Metadata);
+        if (_module.Find(name) is null) {
+            var function = new SilFunction(name, type);
+            function.ParameterNames.Add("$metadata.E");
+            var block = function.AddBlock();
+            block.AddArgument(SilType.Metadata);
+            block.Append(new ReturnInst(block.Append(new MetadataInst(OpaqueOptional(new OpaqueType("E"))))));
+            _module.Add(function);
+        }
+
+        return (name, type);
+    }
+
+    /// <summary>
+    ///     What erases an optional of a type a call opened, or an array of
+    ///     its values, to one of existentials (#297 stage 6): compiled once,
+    ///     given where the optional is (which it takes) or the array, the
+    ///     type's metadata and the existential's tables; each value is boxed
+    ///     by the type's boxer.
+    /// </summary>
+    internal (string Name, FunctionType Type) ManyEraser(SilType erased, StructType layout, int tables) {
+        var opaque = new OpaqueType("E");
+        var optional = erased as EnumType;
+        SilType source = optional is not null ? SilType.Address(OpaqueOptional(opaque)) : new ArrayType(opaque);
+        var name = $"$erase${(optional is not null ? "optional" : "array")}${Sanitise(layout.ToString())}";
+        var type = new FunctionType([source, SilType.Metadata, ..Enumerable.Repeat(SilType.WitnessTable, tables)], erased);
+        if (_module.Find(name) is not null) {
+            return (name, type);
+        }
+
+        var function = new SilFunction(name, type);
+        function.ParameterNames.AddRange(["$value", "$metadata.E", ..Enumerable.Range(0, tables).Select(static i => $"$table{i}")]);
+        var entry = function.AddBlock();
+        var value = entry.AddArgument(source);
+        var metadata = entry.AddArgument(SilType.Metadata);
+        var given = Enumerable.Range(0, tables).Select(_ => (SilValue)entry.AddArgument(SilType.WitnessTable)).ToList();
+        SilValue Boxed(SilBlock block, SilValue owned) {
+            var into = block.Append(new BuiltinInst("opaque_alloc", SilType.Address(opaque), metadata));
+            block.Append(new StoreInst(owned, into, StoreKind.Init));
+            var box = block.Append(new BuiltinInst("opaque_box", ExistentialBoxRoot(), into, metadata));
+            return block.Append(new StructInst(layout, [box, metadata, ..given]));
+        }
+
+        if (optional is not null) {
+            var taken = entry.Append(new LoadInst(value, LoadKind.Take));
+            var some = function.AddBlock();
+            var none = function.AddBlock();
+            var joined = function.AddBlock();
+            var result = joined.AddArgument(erased);
+            var payload = some.AddArgument(opaque, true);
+            entry.Append(new SwitchEnumInst(taken, [(0, some)], none));
+            var existential = Boxed(some, some.Append(new CopyValueInst(payload)));
+            some.Append(new DestroyValueInst(taken));
+            some.Append(new BranchInst(joined, [some.Append(new EnumInst(optional, optional.CaseIndex("Some"), existential))]));
+            none.Append(new DestroyValueInst(taken));
+            none.Append(new BranchInst(joined, [none.Append(new EnumInst(optional, optional.CaseIndex("None"), null))]));
+            joined.Append(new ReturnInst(result));
+        } else {
+            var made = entry.Append(new AllocStackInst(erased));
+            entry.Append(new StoreInst(entry.Append(new BuiltinInst("array_empty", erased)), made, StoreKind.Init));
+            var count = entry.Append(new BuiltinInst("array_count", SilType.Int, value));
+            var header = function.AddBlock();
+            var at = header.AddArgument(SilType.Int);
+            entry.Append(new BranchInst(header, [entry.Append(new IntegerLiteralInst(SilType.Int, 0))]));
+            var body = function.AddBlock();
+            var end = function.AddBlock();
+            header.Append(new CondBranchInst(header.Append(new BuiltinInst("cmp_lt_Int", SilType.Bool, at, count)), body, [], end, []));
+            var existential = Boxed(body, body.Append(new BuiltinInst("array_get", opaque, value, at)));
+            body.Append(new BuiltinInst("array_append", SilType.Unit, made, existential));
+            body.Append(new BranchInst(header, [body.Append(new BuiltinInst("add_Int", SilType.Int, at, body.Append(new IntegerLiteralInst(SilType.Int, 1))))]));
+            var result = end.Append(new LoadInst(made, LoadKind.Take));
+            end.Append(new DeallocStackInst(made));
+            end.Append(new ReturnInst(result));
+        }
+
+        _module.Add(function);
+        return (name, type);
+    }
+
     sealed partial class FunctionLowering {
+        /// <summary>
+        ///     The metadata that sizes a buffer for a result of the type a call
+        ///     opened, or an optional of one: what nothing here can keep
+        ///     otherwise. Null for any other result.
+        /// </summary>
+        SilValue? OpenedBufferMetadata(TypeSymbol result) {
+            if (IsOpenedHere(result)) {
+                return MetadataOf(result);
+            }
+
+            if (result is not OptionalTypeSymbol { UnderlyingType: var wrapped } || !IsOpenedHere(wrapped) || MetadataOf(wrapped) is not { } metadata) {
+                return null;
+            }
+
+            var (name, type) = generator.OptionalMetadata();
+            return Emit(new ApplyInst(Emit(new FunctionRefInst(name, type)), SilType.Metadata, [metadata]));
+        }
+
+        /// <summary>An optional of the opened type's value, in its buffer, or an array of them, owned, as one of existentials.</summary>
+        SilValue? ErasedMany(SilValue value, TypeSymbol opened, BoundConversion erasure) {
+            var (element, existential) = (opened, Sub(erasure.Type)) switch {
+                (OptionalTypeSymbol from, OptionalTypeSymbol to) => (from.UnderlyingType, to.UnderlyingType),
+                (ArrayTypeSymbol from, ArrayTypeSymbol to) => (from.ElementType, to.ElementType),
+                _ => default,
+            };
+            if (element is null || LowerType(existential) is not StructType layout || generator.TabledProtocols(layout) is not { } protocols
+                || MetadataOf(element) is not { } metadata || LowerType(erasure.Type) is not { } erased) {
+                return Missing(erasure, $"'{erasure.Type.ToDisplayString()}' made from a type known only at run time");
+            }
+
+            var tables = ErasedTables(element, protocols, metadata);
+            var (name, type) = generator.ManyEraser(erased, layout, tables.Count);
+            SilValue passed = value.Type == type.Parameters[0] ? value
+                : Emit(new BuiltinInst(value.Type is AddressType ? "opaque_cast" : "opaque_borrow_as", type.Parameters[0], value));
+            var result = Emit(new ApplyInst(Emit(new FunctionRefInst(name, type)), type.Result, [passed, metadata, ..tables]));
+            if (value.Type is AddressType) {
+                Emit(new BuiltinInst("opaque_free", SilType.Unit, value));
+            } else {
+                Destroy(value);
+            }
+
+            return result;
+        }
+
+        /// <summary>What an optional or an array is of; any other type, itself.</summary>
+        static TypeSymbol ElementOf(TypeSymbol type) =>
+            type switch {
+                OptionalTypeSymbol optional => optional.UnderlyingType,
+                ArrayTypeSymbol array => array.ElementType,
+                _ => type,
+            };
+
+        /// <summary>The tables of an opened type's conformances to an existential's protocols: those the call has, or the registry's.</summary>
+        List<SilValue> ErasedTables(TypeSymbol opened, List<NamedTypeSymbol> protocols, SilValue metadata) {
+            generator._erasesAny |= protocols.Count == 0;
+            var tables = new List<SilValue>();
+            foreach (var protocol in protocols) {
+                var definition = protocol.OriginalDefinition;
+                tables.Add(opened is TypeParameterSymbol parameter && _genericTables.TryGetValue((parameter, definition), out var given)
+                    ? given
+                    : Emit(new BuiltinInst($"witness_table_required:{QualifiedName(definition)}", SilType.WitnessTable, metadata)));
+            }
+
+            return tables;
+        }
+
         /// <summary>The call being lowered that opens a Type, once its metadata and tables are in hand: lowered as any generic call then.</summary>
         BoundCall? _openingCall;
 
@@ -178,7 +342,8 @@ public sealed partial class SilGen {
                         return result;
                     }
 
-                    return Erased(result, opened[0].Type, erasure);
+                    var given = Sub(call.Type);
+                    return given is OptionalTypeSymbol or ArrayTypeSymbol ? ErasedMany(result, given, erasure) : Erased(result, opened[0].Type, erasure);
                 }
             } finally {
                 _openingCall = null;
@@ -216,14 +381,7 @@ public sealed partial class SilGen {
             }
 
             var box = Emit(new BuiltinInst("opaque_box", generator.ExistentialBoxRoot(), buffer, metadata));
-            var tables = new List<SilValue>();
-            foreach (var protocol in protocols) {
-                var definition = protocol.OriginalDefinition;
-                tables.Add(opened is TypeParameterSymbol parameter && _genericTables.TryGetValue((parameter, definition), out var given)
-                    ? given
-                    : Emit(new BuiltinInst($"witness_table_required:{QualifiedName(definition)}", SilType.WitnessTable, metadata)));
-            }
-
+            var tables = ErasedTables(opened, protocols, metadata);
             return Emit(new StructInst(layout, [box, metadata, ..tables]));
         }
         /// <summary>
@@ -538,8 +696,13 @@ public sealed partial class SilGen {
             }
 
             // A result given back erased is boxed by its type's boxer, which every conformer of the protocols it is erased to needs.
-            var erasure = erasedTo is not null && Sub(erasedTo) is ExistentialTypeSymbol erasedType ? erasedType : null;
-            foreach (var each in erasure is null ? [] : ExistentialProtocols(erasure.Constraint) ?? []) {
+            var erasure = erasedTo is null ? null : Sub(erasedTo);
+            var erasedExistential = erasure switch {
+                OptionalTypeSymbol optionally => optionally.UnderlyingType,
+                ArrayTypeSymbol listed => listed.ElementType,
+                _ => erasure,
+            } as ExistentialTypeSymbol;
+            foreach (var each in erasedExistential is null ? [] : ExistentialProtocols(erasedExistential.Constraint) ?? []) {
                 generator.OpenedProtocol(each, true, false, at.Syntax);
             }
 
@@ -593,6 +756,8 @@ public sealed partial class SilGen {
                         // A result of Self or of an associated type, erased to the existential the call gives (#299, SE-0352).
                         if (erasure is not null && result is { Type: OpaqueType or AddressType { Pointee: OpaqueType } } && _current is not null) {
                             result = Erased(result, Sub(use.Type), new BoundConversion(at.Syntax, erasure, use, ConversionKind.Existential));
+                        } else if (erasure is OptionalTypeSymbol or ArrayTypeSymbol && IsOpenedHere(ElementOf(Sub(use.Type))) && result is not null && _current is not null) {
+                            result = ErasedMany(result, Sub(use.Type), new BoundConversion(at.Syntax, erasure, use, ConversionKind.Existential));
                         }
 
                         EndAll(borrows);

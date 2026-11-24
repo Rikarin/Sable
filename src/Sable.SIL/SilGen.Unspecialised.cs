@@ -742,6 +742,18 @@ public sealed partial class SilGen {
         }
     }
 
+    /// <summary>An array of Self's values, or of its associated types', as a requirement gives one back: the array, whatever they are.</summary>
+    SilType? ArrayOfSelf(TypeSymbol type, TypeParameterSymbol self, params ImmutableArray<TypeParameterSymbol> own) {
+        if (type is not ArrayTypeSymbol { ArrayKind: not ArrayKind.Slice } || !IsArrayOf(type, [self, ..own])) {
+            return null;
+        }
+
+        using (Opaque(new GenericShape([self, ..own], [])))
+        using (AssociatedContext(self.ContainingSymbol)) {
+            return Lower(type);
+        }
+    }
+
     /// <summary>
     ///     A requirement's type read through the type it is called on: its
     ///     protocol's Self that type, and each associated type the one read
@@ -1899,7 +1911,7 @@ public sealed partial class SilGen {
             return new FunctionType([..taken, SilType.Address(held), SilType.Metadata], SilType.Unit);
         }
 
-        return Mentions(fieldType, [self, ..protocol.AssociatedTypes]) || Lower(fieldType) is not { } result ? null : new FunctionType([..taken, SilType.Metadata], result);
+        return (Mentions(fieldType, [self, ..protocol.AssociatedTypes]) ? ArrayOfSelf(fieldType, self) : Lower(fieldType)) is not { } result ? null : new FunctionType([..taken, SilType.Metadata], result);
     }
 
     internal FunctionType? GenericEntryType(NamedTypeSymbol protocol, FunctionSymbol requirement) {
@@ -1939,7 +1951,7 @@ public sealed partial class SilGen {
             }
         }
 
-        if (Slot(requirement.ReturnType) is not { } result) {
+        if ((Slot(requirement.ReturnType) ?? ArrayOfSelf(arguments.Apply(requirement.ReturnType), self, requirement.TypeParameters)) is not { } result) {
             return null;
         }
 
@@ -3113,7 +3125,7 @@ public sealed partial class SilGen {
             var hasOut = arguments.Count < type.Parameters.Length - 1 - ownHidden - (errorOut is null ? 0 : 1);
             (SilValue Passed, AllocStackInst Slot)? result = null;
             SilValue? openedBuffer = null;
-            if (hasOut && IsOpenedHere(Sub(call.Type)) && type.Parameters[arguments.Count] is AddressType && MetadataOf(Sub(call.Type)) is { } resultMetadata) {
+            if (hasOut && type.Parameters[arguments.Count] is AddressType && OpenedBufferMetadata(Sub(call.Type)) is { } resultMetadata) {
                 // Of the type an existential was opened as, or one of its associated types: a buffer its metadata sizes, which the erasure takes, let go if the call throws.
                 var buffer = Emit(new BuiltinInst("opaque_alloc", type.Parameters[arguments.Count], resultMetadata));
                 openedBuffer = buffer;
@@ -3159,8 +3171,14 @@ public sealed partial class SilGen {
                 return invoked is null || _current is null ? invoked : openedBuffer;
             }
 
-            return result is { } written ? TakeOut(invoked, written.Slot) : invoked;
+            return result is { } written ? TakeOut(invoked, written.Slot) : AsSeen(invoked, call.Type);
         }
+
+        /// <summary>An array of a type parameter's values a table's entry gives back, seen as this code's array of them.</summary>
+        SilValue? AsSeen(SilValue? result, TypeSymbol wanted) =>
+            result is { Type: ArrayType given } && SilType.MentionsOpaque(given) && LowerType(wanted) is { } here && here != given && _current is not null
+                ? Emit(new BuiltinInst("opaque_take_as", here, result))
+                : result;
 
         /// <summary>
         ///     Whether a type is one an existential was opened as in the code
@@ -3213,7 +3231,7 @@ public sealed partial class SilGen {
 
             (SilValue Passed, AllocStackInst Slot)? result = null;
             SilValue? openedBuffer = null;
-            if (IsOpenedHere(Sub(access.Type)) && type.Parameters[arguments.Count] is AddressType && MetadataOf(Sub(access.Type)) is { } resultMetadata) {
+            if (type.Parameters[arguments.Count] is AddressType && OpenedBufferMetadata(Sub(access.Type)) is { } resultMetadata) {
                 // Of the type an existential was opened as, or one of its associated types: a buffer its metadata sizes, which the erasure takes.
                 openedBuffer = Emit(new BuiltinInst("opaque_alloc", type.Parameters[arguments.Count], resultMetadata));
                 arguments.Add(openedBuffer);
@@ -3227,7 +3245,7 @@ public sealed partial class SilGen {
                 return invoked is null || _current is null ? invoked : openedBuffer;
             }
 
-            return result is { } written ? TakeOut(invoked, written.Slot) : invoked;
+            return result is { } written ? TakeOut(invoked, written.Slot) : AsSeen(invoked, access.Type);
         }
 
         /// <summary>

@@ -3969,8 +3969,8 @@ public sealed partial class Binder {
                     ErrorCode.ERR_ExistentialResultNotErasable,
                     syntax.Name.Span,
                     $"'{name}' gives back or throws an associated type of '{found.Owner.ToDisplayString()}', which through "
-                    + $"'{receiverType.ToDisplayString()}' has no existential to be erased to (it is constrained to no protocol, "
-                    + $"or to one that is generic, or to 'Error'); reach it through a generic parameter "
+                    + $"'{receiverType.ToDisplayString()}' has no existential to be erased to (it is constrained to a protocol "
+                    + $"that is generic, or to 'Error'); reach it through a generic parameter "
                     + $"'T: {found.Owner.ToDisplayString()}' instead"
                 );
                 return new BoundError(syntax, receiver);
@@ -4286,13 +4286,21 @@ public sealed partial class Binder {
         var notErasable = false;
         var speaks = member switch {
             // An async one's result is not erased yet: its entry cannot write a value of Self across a suspension.
-            FunctionSymbol function => function.Parameters.Any(p => Mentions(p.Type)) || !Covariant(function.ReturnType)
+            FunctionSymbol function => function.Parameters.Any(p => Mentions(p.Type)) || !CovariantResult(function.ReturnType)
                 || function.ThrownType is { } thrown && !Covariant(thrown)
                 || function.IsAsync && (Mentions(function.ReturnType) || function.ThrownType is { } error && Mentions(error)),
-            FieldSymbol field => (field.IsComputed ? field.HasSetter : field.IsMutable) ? Mentions(field.Type) : !Covariant(field.Type),
+            FieldSymbol field => (field.IsComputed ? field.HasSetter : field.IsMutable) ? Mentions(field.Type) : !CovariantResult(field.Type),
             _ => false,
         };
         return speaks ? ThroughExistential.SpeaksOfSelf : notErasable ? ThroughExistential.NotErasable : ThroughExistential.Callable;
+
+        // Or an optional of one, or an array: each value erased.
+        bool CovariantResult(TypeSymbol type) =>
+            Covariant(type switch {
+                OptionalTypeSymbol optional => optional.UnderlyingType,
+                ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed } array => array.ElementType,
+                _ => type,
+            });
 
         // Nothing of Self's, or exactly Self or an associated type that can be erased.
         bool Covariant(TypeSymbol type) {
@@ -4337,7 +4345,7 @@ public sealed partial class Binder {
     ///     existential, whose conformer is known only when the program runs:
     ///     the existential of the protocols the associated type is
     ///     constrained to — <c>any Hashable</c> for <c>associatedtype Key:
-    ///     Hashable</c>. Null when there is none (an unconstrained one), or
+    ///     Hashable</c>, and an unconstrained one <c>any Any</c>. Null
     ///     when a constraint is not a protocol that is not generic, which the
     ///     registry cannot be asked about, or is <c>Error</c>, whose
     ///     existential is laid out as an object.
@@ -4354,7 +4362,6 @@ public sealed partial class Binder {
         }
 
         return protocols.Count switch {
-            0 => null,
             1 => new ExistentialTypeSymbol(protocols[0]),
             _ => new ExistentialTypeSymbol(new CompositionTypeSymbol([..protocols])),
         };
@@ -6099,18 +6106,20 @@ public sealed partial class Binder {
 
         var result = call.Type;
         if (opened.Count == 1 && ReferenceEquals(result, opened[0])) {
-            if (protocols.Count == 0) {
-                _diagnostics.Error(
-                    ErrorCode.ERR_OpenedResultNotErasable,
-                    syntax.Span,
-                    $"'{name}' gives back a '{opened[0].Name}', which is open here and has no protocol to be erased to as 'any P'"
-                );
-                return new BoundError(syntax, call);
-            }
-
-            var erased = new ExistentialTypeSymbol(protocols.Count == 1 ? protocols[0] : new CompositionTypeSymbol(protocols));
-            return new BoundConversion(syntax, erased, call, ConversionKind.OpenedErasure);
+            return new BoundConversion(syntax, Erased(), call, ConversionKind.OpenedErasure);
         }
+
+        // An optional of it, or an array of them: each value erased.
+        if (opened.Count == 1 && result is OptionalTypeSymbol { UnderlyingType: var wrapped } && ReferenceEquals(wrapped, opened[0])) {
+            return new BoundConversion(syntax, new OptionalTypeSymbol(Erased()), call, ConversionKind.OpenedErasure);
+        }
+
+        if (opened.Count == 1 && result is ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed, ElementType: var listed } array && ReferenceEquals(listed, opened[0])) {
+            return new BoundConversion(syntax, new ArrayTypeSymbol(Erased(), array.ArrayKind), call, ConversionKind.OpenedErasure);
+        }
+
+        // Of its protocols, or of none: 'any Any'.
+        ExistentialTypeSymbol Erased() => new(protocols.Count == 1 ? protocols[0] : new CompositionTypeSymbol(protocols));
 
         if (opened.Count == 1 && result is MetatypeTypeSymbol { InstanceType: var instanceType } && ReferenceEquals(instanceType, opened[0])) {
             return new BoundConversion(syntax, Core.Type, call, ConversionKind.Identity);
@@ -6122,7 +6131,7 @@ public sealed partial class Binder {
                     ErrorCode.ERR_OpenedResultNotErasable,
                     syntax.Span,
                     $"'{name}' gives back a '{result.ToDisplayString()}', which mentions '{each.Name}', open here: only a '{each.Name}' itself "
-                    + $"(as 'any P') or a '{each.Name}.Type' (as a 'Type') can be given back"
+                    + $"(as 'any P'), a '{each.Name}?', an array of '{each.Name}' or a '{each.Name}.Type' (as a 'Type') can be given back"
                 );
                 return new BoundError(syntax, call);
             }

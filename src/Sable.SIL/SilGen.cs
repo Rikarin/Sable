@@ -5328,7 +5328,11 @@ public sealed partial class SilGen {
 
                 Branch(_returnBlock);
             } else if (value is not null and not UnitValue) {
-                Branch(_returnBlock, Owned(value));
+                // A witness's array of Self's values, as its entry gives it.
+                var owned = Owned(value);
+                Branch(_returnBlock, Bridged is not null && owned.Type is ArrayType && function.Type.Result is ArrayType result && result != owned.Type && SilType.MentionsOpaque(result)
+                    ? Emit(new BuiltinInst("opaque_take_as", result, owned))
+                    : owned);
             }
         }
 
@@ -10799,7 +10803,7 @@ public sealed partial class SilGen {
             if (genericShape is not null) {
                 if (type.Result == SilType.Unit && arguments.Count < type.Parameters.Length && ResultOf(callee) is { } calleeResult && !calleeResult.Equals(Core.Void)) {
                     var returned = Substitute(WithAssociatedTypes(callee, bound), calleeResult);
-                    if (IsOpenedHere(returned) && type.Parameters[arguments.Count] is AddressType && MetadataOf(returned) is { } resultMetadata) {
+                    if (type.Parameters[arguments.Count] is AddressType && OpenedBufferMetadata(returned) is { } resultMetadata) {
                         // Of a type a Type was opened as: a buffer its metadata sizes, let go if the call throws.
                         var buffer = Emit(new BuiltinInst("opaque_alloc", type.Parameters[arguments.Count], resultMetadata));
                         openedBuffer = buffer;
@@ -10867,7 +10871,7 @@ public sealed partial class SilGen {
             }
 
             // A result of an array of them, or of a generic struct holding them by reference, seen as the type it is here.
-            if (genericShape is not null && invoked is { Type: var resultType } arrayResult && SilType.MentionsOpaque(resultType) && !SilType.IsIndirect(resultType)
+            if (genericShape is not null && invoked is { Type: var resultType } arrayResult && !(call.Type is ArrayTypeSymbol { ElementType: var listed } && IsOpenedHere(listed) && resultType is ArrayType) && SilType.MentionsOpaque(resultType) && !SilType.IsIndirect(resultType)
                 && LowerType(call.Type) is { } wanted && wanted != arrayResult.Type) {
                 return Emit(new BuiltinInst("opaque_take_as", wanted, arrayResult));
             }

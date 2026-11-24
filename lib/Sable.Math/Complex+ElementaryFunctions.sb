@@ -1,0 +1,495 @@
+module Sable.Math
+
+// The elementary functions of a complex number (Complex.sb), after Swift
+// Numerics' and Kahan's "Branch Cuts for Complex Elementary Functions"
+// (1987). Each is a static member, Complex.exp(z), and a module function
+// of the same name, exp(z), beside the real one.
+//
+// The multivalued functions take their principal values, with C99's
+// (Annex G) branch cuts: log, sqrt and pow along the negative real axis;
+// asin, acos and atanh along the real axis outside [-1, 1]; acosh along
+// it below 1; asinh and atan along the imaginary axis outside [-i, i]. On
+// a cut, the sign of the zero part says which side the value is on: a
+// +0.0 imaginary part is the side above, -0.0 the side below. A function
+// of the point at infinity (a part infinite or NaN) is the point at
+// infinity: its argument, returned as it is.
+//
+// What is done with care, and why:
+// - exp, sinh and cosh scale by e^(x/2) twice past the largest x whose
+//   e^x is finite, so a result with a small cosine or sine part is not
+//   lost to an infinity on the way.
+// - log takes log|z| as log1p(|z|² - 1)/2 near the unit circle, |z|² - 1
+//   computed exactly from fused products, where log(|z|) would cancel,
+//   and as log(u) + log1p((v/u)²)/2 elsewhere, which neither overflows nor
+//   underflows (u and v the larger and smaller part).
+// - sqrt takes the root of (|z| + |x|)/2, which does not cancel, and
+//   divides for the other part; scaled by a power of four at the ends of
+//   the range.
+// - tanh is Kahan's: from tan(y), sinh(x) and sqrt(1 + sinh²(x)), with
+//   sign(x) + 4 sin y cos y e^(-2|x|) i once tanh x is 1 in the type.
+// - asin, acos and acosh are Kahan's, from sqrt(1 - z) and sqrt(1 + z)
+//   (sqrt(z - 1) for acosh), whose signed zeros put each cut on its side.
+// - atanh is (log1p(4x / ((1 - x)² + y²)) + i atan2(2y, (1 - x)(1 + x) - y²))/4,
+//   by logs of hypot where the denominator would underflow near ±1, and as
+//   1/z ± i pi/2 past 1/epsilon, where the squares would overflow.
+// - sin, cos, tan, asinh and atan are the hyperbolic ones (or the
+//   circular ones) turned a quarter: sin(z) = -i sinh(iz), and so on.
+
+extension Complex {
+    /// e to the power z: `e^x (cos y + i sin y)`.
+    ///
+    /// ```sable
+    /// let w = Complex.exp(Complex(0.0, F64.pi))
+    /// assert(w.real == -1.0 && w.imaginary.abs() < 1e-15)
+    /// ```
+    public static fn exp(_ z: Complex<T>) -> Complex<T> {
+        if !z.isFinite {
+            return z
+        }
+        let cosine = T.cos(z.imaginary)
+        let sine = T.sin(z.imaginary)
+        if z.real < largestExponent() {
+            let scale = T.exp(z.real)
+            return Complex(scale * cosine, scale * sine)
+        }
+        let half = T.exp(z.real / T.converting(2))
+        return Complex(cosine * half * half, sine * half * half)
+    }
+
+    /// The natural logarithm's principal value: `log|z| + i phase`, the
+    /// imaginary part in [-pi, pi]; the cut is the negative real axis.
+    /// log(0) is `-inf` with the zero's phase.
+    ///
+    /// ```sable
+    /// let w = Complex.log(Complex(-1.0, 0.0))
+    /// assert(w.real == 0.0 && w.imaginary == F64.pi)
+    /// ```
+    public static fn log(_ z: Complex<T>) -> Complex<T> {
+        if !z.isFinite {
+            return z
+        }
+        let phase = T.atan2(y: z.imaginary, x: z.real)
+        let u = z.real.abs().maximum(z.imaginary.abs())
+        let v = z.real.abs().minimum(z.imaginary.abs())
+        if u.isZero {
+            return Complex(-T.infinity, phase)
+        }
+        return Complex(logOfMagnitude(u, v), phase)
+    }
+
+    /// z to the power w: `exp(w · log(z))`, with log's cut. Zero to a power
+    /// with a positive real part is zero, and to the power zero one.
+    ///
+    /// ```sable
+    /// let w = Complex.pow(Complex<F64>.i, Complex<F64>.i)
+    /// assert((w.real - 0.20787957635076193).abs() < 1e-16 && w.imaginary == 0.0)
+    /// ```
+    public static fn pow(_ z: Complex<T>, _ w: Complex<T>) -> Complex<T> {
+        if z.isZero {
+            if w.isZero {
+                return Complex<T>.one
+            }
+            return w.real > T.zero ? Complex<T>.zero : Complex<T>.infinity
+        }
+        return Complex.exp(w * Complex.log(z))
+    }
+
+    /// z to an integer power, by repeated squaring: exact where every
+    /// product is, as `pow(i, 2)` is -1. A negative power is of 1/z.
+    ///
+    /// ```sable
+    /// assert(Complex.pow(Complex(1.0, 1.0), 4) == Complex(-4.0, 0.0))
+    /// assert(Complex.pow(Complex(0.0, 2.0), -2) == Complex(-0.25, 0.0))
+    /// ```
+    public static fn pow(_ z: Complex<T>, _ n: Int) -> Complex<T> {
+        var base = z
+        var remaining = n
+        var result = Complex<T>.one
+        if n < 0 {
+            base = Complex<T>.one / z
+            // -(n + 1) cannot overflow, as -n can for Int.min.
+            remaining = 0 - (n + 1)
+            result = base
+        }
+        while remaining > 0 {
+            if (remaining & 1) == 1 {
+                result = result * base
+            }
+            remaining = remaining >> 1
+            if remaining > 0 {
+                base = base * base
+            }
+        }
+        return result
+    }
+
+    /// The principal square root: the root with a non-negative real part,
+    /// and the cut along the negative real axis, where the zero's sign
+    /// picks the root: `sqrt(-4 + 0i)` is 2i, `sqrt(-4 - 0i)` -2i.
+    ///
+    /// ```sable
+    /// assert(Complex.sqrt(Complex(-4.0, 0.0)) == Complex(0.0, 2.0))
+    /// assert(Complex.sqrt(Complex(-4.0, -0.0)) == Complex(0.0, -2.0))
+    /// assert(Complex.sqrt(Complex(3.0, 4.0)) == Complex(2.0, 1.0))
+    /// ```
+    public static fn sqrt(_ z: Complex<T>) -> Complex<T> {
+        if !z.isFinite {
+            return z
+        }
+        var x = z.real
+        var y = z.imaginary
+        if x.isZero && y.isZero {
+            return Complex(T.zero, y)
+        }
+        // Scaled by 4^k, the root is scaled by 2^k: away from overflow
+        // in |z| + |x|, and up from the subnormals, where it would lose bits.
+        var power = 0
+        let u = x.abs().maximum(y.abs())
+        if u > T.greatestFiniteMagnitude / T.converting(4) {
+            power = 1
+        } else if u < T.leastNormalMagnitude * T.converting(4) {
+            power = 0 - (T.significandBitCount + 1)
+        }
+        x = x.scaled(byPowerOfTwo: 0 - 2 * power)
+        y = y.scaled(byPowerOfTwo: 0 - 2 * power)
+        let r = T.hypot(x, y)
+        var re = T.zero
+        var im = T.zero
+        if x >= T.zero {
+            re = ((r + x) / T.converting(2)).squareRoot()
+            im = y / (re + re)
+        } else {
+            im = ((r - x) / T.converting(2)).squareRoot().copySign(y)
+            re = y.abs() / (im.abs() + im.abs())
+        }
+        return Complex(re.scaled(byPowerOfTwo: power), im.scaled(byPowerOfTwo: power))
+    }
+
+    /// The sine: `sin x cosh y + i cos x sinh y`, which is -i sinh(iz).
+    ///
+    /// ```sable
+    /// let w = Complex.sin(Complex(0.0, 1.0))
+    /// assert(w.real == 0.0 && w.imaginary == sinh(1.0))
+    /// ```
+    public static fn sin(_ z: Complex<T>) -> Complex<T> {
+        let w = Complex.sinh(Complex(-z.imaginary, z.real))
+        return Complex(w.imaginary, -w.real)
+    }
+
+    /// The cosine: `cos x cosh y - i sin x sinh y`, which is cosh(iz).
+    public static fn cos(_ z: Complex<T>) -> Complex<T> {
+        return Complex.cosh(Complex(-z.imaginary, z.real))
+    }
+
+    /// The tangent: -i tanh(iz).
+    public static fn tan(_ z: Complex<T>) -> Complex<T> {
+        let w = Complex.tanh(Complex(-z.imaginary, z.real))
+        return Complex(w.imaginary, -w.real)
+    }
+
+    /// The hyperbolic sine: `sinh x cos y + i cosh x sin y`.
+    public static fn sinh(_ z: Complex<T>) -> Complex<T> {
+        if !z.isFinite {
+            return z
+        }
+        let x = z.real
+        let y = z.imaginary
+        if x.abs() < largestExponent() {
+            return Complex(T.sinh(x) * T.cos(y), T.cosh(x) * T.sin(y))
+        }
+        // sinh x and cosh x are ±e^|x|/2 here, scaled by halves.
+        let half = T.exp(x.abs() / T.converting(2))
+        let cosine = x < T.zero ? -T.cos(y) : T.cos(y)
+        return Complex(cosine * (half / T.converting(2)) * half, T.sin(y) * (half / T.converting(2)) * half)
+    }
+
+    /// The hyperbolic cosine: `cosh x cos y + i sinh x sin y`.
+    public static fn cosh(_ z: Complex<T>) -> Complex<T> {
+        if !z.isFinite {
+            return z
+        }
+        let x = z.real
+        let y = z.imaginary
+        if x.abs() < largestExponent() {
+            return Complex(T.cosh(x) * T.cos(y), T.sinh(x) * T.sin(y))
+        }
+        let half = T.exp(x.abs() / T.converting(2))
+        let sine = x < T.zero ? -T.sin(y) : T.sin(y)
+        return Complex(T.cos(y) * (half / T.converting(2)) * half, sine * (half / T.converting(2)) * half)
+    }
+
+    /// The hyperbolic tangent, by Kahan's formula: with t = tan y,
+    /// s = sinh x and c = sqrt(1 + s²), `((1 + t²) s c + i t) / (1 + (1 + t²) s²)`;
+    /// once tanh x rounds to ±1, `±1 + 4i sin y cos y e^(-2|x|)`.
+    ///
+    /// ```sable
+    /// let w = Complex.tanh(Complex(1000.0, 1.0))
+    /// assert(w.real == 1.0 && w.imaginary == 0.0)
+    /// ```
+    public static fn tanh(_ z: Complex<T>) -> Complex<T> {
+        if !z.isFinite {
+            return z
+        }
+        let x = z.real
+        let y = z.imaginary
+        // Past (p + 9) ln 2 / 2, for p bits of significand, tanh x is 1 in
+        // the type with room to spare, and sinh² x is still far from overflow.
+        let limit = T.converting(T.significandBitCount + 9) * T.ln2 / T.converting(2)
+        if x.abs() > limit {
+            let decay = T.exp(-x.abs())
+            return Complex(T.one.copySign(x), T.converting(4) * T.sin(y) * T.cos(y) * decay * decay)
+        }
+        let t = T.tan(y)
+        let beta = T.one + t * t
+        let s = T.sinh(x)
+        let rho = (T.one + s * s).squareRoot()
+        let denominator = T.one + beta * s * s
+        return Complex(beta * rho * s / denominator, t / denominator)
+    }
+
+    /// The inverse sine's principal value, its real part in [-pi/2, pi/2],
+    /// with cuts along the real axis outside [-1, 1]. Kahan's: the real
+    /// part `atan2(x, Re(sqrt(1 - z) sqrt(1 + z)))`, the imaginary
+    /// `asinh(Im(conj(sqrt(1 - z)) sqrt(1 + z)))`.
+    ///
+    /// ```sable
+    /// let above = Complex.asin(Complex(2.0, 0.0))
+    /// let below = Complex.asin(Complex(2.0, -0.0))
+    /// assert(above.real == F64.pi / 2.0 && above.imaginary > 0.0)
+    /// assert(below.imaginary == -above.imaginary)
+    /// ```
+    public static fn asin(_ z: Complex<T>) -> Complex<T> {
+        if !z.isFinite {
+            return z
+        }
+        let x = z.real
+        let y = z.imaginary
+        let s = Complex.sqrt(Complex(T.one - x, -y))
+        let t = Complex.sqrt(Complex(T.one + x, y))
+        let re = likeSignedSum(s.real, t.real, -s.imaginary, t.imaginary)
+        let im = likeSignedSum(s.real, t.imaginary, -s.imaginary, t.real)
+        return Complex(T.atan2(y: x.scaled(byPowerOfTwo: 0 - re.power), x: re.value), asinhScaled(im))
+    }
+
+    /// The inverse cosine's principal value, its real part in [0, pi], with
+    /// cuts along the real axis outside [-1, 1]. Kahan's: the real part
+    /// `2 atan2(Re sqrt(1 - z), Re sqrt(1 + z))`, the imaginary
+    /// `asinh(Im(conj(sqrt(1 + z)) sqrt(1 - z)))`.
+    ///
+    /// ```sable
+    /// let w = Complex.acos(Complex(-1.0, 0.0))
+    /// assert(w.real == F64.pi && w.imaginary == -0.0)
+    /// ```
+    public static fn acos(_ z: Complex<T>) -> Complex<T> {
+        if !z.isFinite {
+            return z
+        }
+        let x = z.real
+        let y = z.imaginary
+        let s = Complex.sqrt(Complex(T.one - x, -y))
+        let t = Complex.sqrt(Complex(T.one + x, y))
+        let im = likeSignedSum(t.real, s.imaginary, -t.imaginary, s.real)
+        return Complex(T.converting(2) * T.atan2(y: s.real, x: t.real), asinhScaled(im))
+    }
+
+    /// The inverse tangent's principal value, its real part in
+    /// [-pi/2, pi/2], with cuts along the imaginary axis outside [-i, i]:
+    /// -i atanh(iz).
+    public static fn atan(_ z: Complex<T>) -> Complex<T> {
+        let w = Complex.atanh(Complex(-z.imaginary, z.real))
+        return Complex(w.imaginary, -w.real)
+    }
+
+    /// The inverse hyperbolic sine's principal value, its imaginary part in
+    /// [-pi/2, pi/2], with cuts along the imaginary axis outside [-i, i]:
+    /// -i asin(iz).
+    ///
+    /// ```sable
+    /// let w = Complex.asinh(Complex(1.0, 0.0))
+    /// assert(w.real == asinh(1.0) && w.imaginary == 0.0)
+    /// ```
+    public static fn asinh(_ z: Complex<T>) -> Complex<T> {
+        let w = Complex.asin(Complex(-z.imaginary, z.real))
+        return Complex(w.imaginary, -w.real)
+    }
+
+    /// The inverse hyperbolic cosine's principal value, its real part not
+    /// negative and its imaginary part in [-pi, pi], with the cut along the
+    /// real axis below 1. Kahan's: the real part
+    /// `asinh(Re(conj(sqrt(z - 1)) sqrt(z + 1)))`, the imaginary
+    /// `2 atan2(Im sqrt(z - 1), Re sqrt(z + 1))`.
+    ///
+    /// ```sable
+    /// let w = Complex.acosh(Complex(0.0, 0.0))
+    /// assert(w.real == 0.0 && w.imaginary == F64.pi / 2.0)
+    /// ```
+    public static fn acosh(_ z: Complex<T>) -> Complex<T> {
+        if !z.isFinite {
+            return z
+        }
+        let x = z.real
+        let y = z.imaginary
+        let s = Complex.sqrt(Complex(x - T.one, y))
+        let t = Complex.sqrt(Complex(x + T.one, y))
+        let re = likeSignedSum(s.real, t.real, s.imaginary, t.imaginary)
+        return Complex(asinhScaled(re), T.converting(2) * T.atan2(y: s.imaginary, x: t.real))
+    }
+
+    /// The inverse hyperbolic tangent's principal value, its imaginary part
+    /// in [-pi/2, pi/2], with cuts along the real axis outside [-1, 1]:
+    /// `(log(1 + z) - log(1 - z)) / 2`, computed without its cancellation.
+    /// ±1 are poles: atanh(1) is +inf.
+    ///
+    /// ```sable
+    /// let w = Complex.atanh(Complex(2.0, 0.0))
+    /// assert(w.imaginary == F64.pi / 2.0)
+    /// assert(Complex.atanh(Complex(2.0, -0.0)).imaginary == -F64.pi / 2.0)
+    /// ```
+    public static fn atanh(_ z: Complex<T>) -> Complex<T> {
+        if !z.isFinite {
+            return z
+        }
+        // atanh is odd: worked out for x ≥ 0 (a zero's sign kept), whose
+        // log1p does not cancel.
+        if z.real.isSignMinus {
+            let w = atanhOfRightHalf(-z.real, -z.imaginary)
+            return Complex(-w.real, -w.imaginary)
+        }
+        return atanhOfRightHalf(z.real, z.imaginary)
+    }
+}
+
+/// e to the power z (Complex.exp).
+public fn exp<T: ElementaryFunctions>(_ z: Complex<T>) -> Complex<T> => Complex.exp(z)
+
+/// The natural logarithm's principal value (Complex.log).
+public fn log<T: ElementaryFunctions>(_ z: Complex<T>) -> Complex<T> => Complex.log(z)
+
+/// z to the power w (Complex.pow).
+public fn pow<T: ElementaryFunctions>(_ z: Complex<T>, _ w: Complex<T>) -> Complex<T> => Complex.pow(z, w)
+
+/// z to an integer power, by repeated squaring (Complex.pow).
+///
+/// ```sable
+/// assert(pow(Complex<F64>.i, 3) == Complex(0.0, -1.0))
+/// ```
+public fn pow<T: ElementaryFunctions>(_ z: Complex<T>, _ n: Int) -> Complex<T> => Complex.pow(z, n)
+
+/// The principal square root (Complex.sqrt).
+///
+/// ```sable
+/// assert(sqrt(Complex(-1.0, 0.0)) == Complex<F64>.i)
+/// ```
+public fn sqrt<T: ElementaryFunctions>(_ z: Complex<T>) -> Complex<T> => Complex.sqrt(z)
+
+/// The sine (Complex.sin).
+public fn sin<T: ElementaryFunctions>(_ z: Complex<T>) -> Complex<T> => Complex.sin(z)
+
+/// The cosine (Complex.cos).
+public fn cos<T: ElementaryFunctions>(_ z: Complex<T>) -> Complex<T> => Complex.cos(z)
+
+/// The tangent (Complex.tan).
+public fn tan<T: ElementaryFunctions>(_ z: Complex<T>) -> Complex<T> => Complex.tan(z)
+
+/// The inverse sine's principal value (Complex.asin).
+public fn asin<T: ElementaryFunctions>(_ z: Complex<T>) -> Complex<T> => Complex.asin(z)
+
+/// The inverse cosine's principal value (Complex.acos).
+public fn acos<T: ElementaryFunctions>(_ z: Complex<T>) -> Complex<T> => Complex.acos(z)
+
+/// The inverse tangent's principal value (Complex.atan).
+public fn atan<T: ElementaryFunctions>(_ z: Complex<T>) -> Complex<T> => Complex.atan(z)
+
+/// The hyperbolic sine (Complex.sinh).
+public fn sinh<T: ElementaryFunctions>(_ z: Complex<T>) -> Complex<T> => Complex.sinh(z)
+
+/// The hyperbolic cosine (Complex.cosh).
+public fn cosh<T: ElementaryFunctions>(_ z: Complex<T>) -> Complex<T> => Complex.cosh(z)
+
+/// The hyperbolic tangent (Complex.tanh).
+public fn tanh<T: ElementaryFunctions>(_ z: Complex<T>) -> Complex<T> => Complex.tanh(z)
+
+/// The inverse hyperbolic sine's principal value (Complex.asinh).
+public fn asinh<T: ElementaryFunctions>(_ z: Complex<T>) -> Complex<T> => Complex.asinh(z)
+
+/// The inverse hyperbolic cosine's principal value (Complex.acosh).
+public fn acosh<T: ElementaryFunctions>(_ z: Complex<T>) -> Complex<T> => Complex.acosh(z)
+
+/// The inverse hyperbolic tangent's principal value (Complex.atanh).
+public fn atanh<T: ElementaryFunctions>(_ z: Complex<T>) -> Complex<T> => Complex.atanh(z)
+
+/// The x past which e^x overflows, less 1 for libms that round it apart.
+fn largestExponent<T: ElementaryFunctions>() -> T => T.log(T.greatestFiniteMagnitude) - T.one
+
+/// log sqrt(u² + v²), for u ≥ v ≥ 0 and u > 0.
+fn logOfMagnitude<T: ElementaryFunctions>(_ u: T, _ v: T) -> T {
+    let uu = u * u
+    let vv = v * v
+    let squared = uu + vv
+    if squared >= T.one / T.converting(2) && squared <= T.converting(2) {
+        // Near the unit circle: u² + v² - 1 summed from exact pieces, the
+        // products' rounding errors from fused multiply-adds.
+        let uuError = u.fusedMultiplyAdd(u, -uu)
+        let vvError = v.fusedMultiplyAdd(v, -vv)
+        let first = twoSum(uu, -T.one)
+        let second = twoSum(first.sum, vv)
+        let excess = second.sum + (first.error + second.error + uuError + vvError)
+        return T.log1p(excess) / T.converting(2)
+    }
+    let ratio = v / u
+    return T.log(u) + T.log1p(ratio * ratio) / T.converting(2)
+}
+
+/// a + b, and what rounding it lost: sum + error is a + b exactly (Knuth's TwoSum).
+fn twoSum<T: ElementaryFunctions>(_ a: T, _ b: T) -> (sum: T, error: T) {
+    let sum = a + b
+    let bPart = sum - a
+    let aPart = sum - bPart
+    return (sum: sum, error: (a - aPart) + (b - bPart))
+}
+
+/// a·b + c·d, of two products the caller knows to have one sign, so that
+/// only overflow can spoil it: then computed from halves, as value·2^power.
+fn likeSignedSum<T: ElementaryFunctions>(_ a: T, _ b: T, _ c: T, _ d: T) -> (value: T, power: Int) {
+    let sum = a * b + c * d
+    if sum.isFinite {
+        return (value: sum, power: 0)
+    }
+    let h = T.one / T.converting(2)
+    return (value: (a * h) * (b * h) + (c * h) * (d * h), power: 2)
+}
+
+/// asinh(value·2^power): past overflow, log(2|p|) with p's sign, which
+/// asinh is to the type's precision there.
+fn asinhScaled<T: ElementaryFunctions>(_ p: (value: T, power: Int)) -> T {
+    if p.power == 0 {
+        return T.asinh(p.value)
+    }
+    return (T.log(p.value.abs()) + T.converting(p.power + 1) * T.ln2).copySign(p.value)
+}
+
+/// atanh(x + iy) for x ≥ 0 (or +0).
+fn atanhOfRightHalf<T: ElementaryFunctions>(_ x: T, _ y: T) -> Complex<T> {
+    let halfPi = T.pi / T.converting(2)
+    let u = x.maximum(y.abs())
+    if u > T.one / T.epsilon {
+        // atanh z = atanh(1/z) ± i pi/2, and atanh(1/z) is 1/z, conj(z)/|z|²,
+        // to the type's precision here: scaled by u, whose squares overflow.
+        let a = x / u
+        let b = y / u
+        let norm = a * a + b * b
+        return Complex(a / norm / u, halfPi.copySign(y) - b / norm / u)
+    }
+    let oneMinus = T.one - x
+    let onePlus = T.one + x
+    let denominator = oneMinus * oneMinus + y * y
+    var re = T.zero
+    if denominator > T.epsilon {
+        re = T.log1p(T.converting(4) * x / denominator) / T.converting(4)
+    } else {
+        // Near 1, where the squares underflow: the logs of the distances.
+        re = (T.log(T.hypot(onePlus, y)) - T.log(T.hypot(oneMinus, y))) / T.converting(2)
+    }
+    let im = T.atan2(y: y + y, x: (-y).fusedMultiplyAdd(y, oneMinus * onePlus)) / T.converting(2)
+    return Complex(re, im)
+}

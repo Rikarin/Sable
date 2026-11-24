@@ -68,4 +68,25 @@ public sealed class OperatorTests {
                 print(held != none)
             """
         );
+
+    [Fact]
+    public void APrefixOperatorOfAGenericTypeTakesItsTypeArgumentsFromTheOperand() =>
+        Prints(
+            "-1.5 -2.0\n3 -4\n",
+            """
+            struct Pair<T: SignedNumeric> {
+                var first: T
+                var second: T
+                prefix operator - (p: Pair<T>) -> Pair<T> { return Pair(first: -p.first, second: -p.second) }
+                prefix operator ~ (p: Pair<T>) -> Pair<T> { return Pair(first: p.first, second: -p.second) }
+            }
+            fn flipped<T: SignedNumeric>(_ p: Pair<T>) -> Pair<T> { return -p }
+            """,
+            """
+                let a = -Pair(first: 1.5, second: 2.0)
+                print("\(a.first) \(a.second)")
+                let b = ~flipped(Pair(first: -3, second: -4))
+                print("\(b.first) \(b.second)")
+            """
+        );
 }

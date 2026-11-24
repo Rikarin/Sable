@@ -749,7 +749,9 @@ Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, validated
                     replace in one vectorised pass; at parity with .NET's
                     StringBuilder)
 Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
-                    generic over ElementaryFunctions; integer math;
+                    generic over ElementaryFunctions; Complex<T> with
+                    them all (Kahan's branch cuts, signed zeros, one point
+                    at infinity); integer math;
                     BigInt, Decimal, SIMD<T, N>, Matrix, Quaternion,
                     statistics generic over every number type (mean,
                     median, mode, quantiles, variance, covariance,

@@ -819,4 +819,43 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    /// <summary>
+    ///     'T.zero' where T is a generic type whose own static property meets
+    ///     the requirement: the property's getter is the instance for the
+    ///     type's arguments, 'Pair&lt;F64&gt;.zero'.
+    /// </summary>
+    [Fact]
+    public void AStaticRequirementMetByAGenericTypeIsReadForItsArguments() =>
+        Assert.Equal(
+            "0.0 0.0\n4 6\n",
+            AssertAgree(
+                Program(
+                    """
+                    struct Pair<T: AdditiveArithmetic>: AdditiveArithmetic {
+                        var first: T
+                        var second: T
+                        static var zero: Pair<T> => Pair(first: T.zero, second: T.zero)
+                        operator + (a: Pair<T>, b: Pair<T>) -> Pair<T> { return Pair(first: a.first + b.first, second: a.second + b.second) }
+                        operator - (a: Pair<T>, b: Pair<T>) -> Pair<T> { return Pair(first: a.first - b.first, second: a.second - b.second) }
+                        operator == (a: Pair<T>, b: Pair<T>) -> Bool { return a.first == b.first && a.second == b.second }
+                    }
+                    fn total<T: AdditiveArithmetic>(_ values: T[:]) -> T {
+                        var sum = T.zero
+                        for value in values {
+                            sum = sum + value
+                        }
+                        return sum
+                    }
+                    """,
+                    """
+                        let nothing: Pair<F64>[>..] = []
+                        let empty = total(nothing)
+                        print("\(empty.first) \(empty.second)")
+                        let sum = total([Pair(first: 1, second: 2), Pair(first: 3, second: 4)])
+                        print("\(sum.first) \(sum.second)")
+                    """
+                )
+            ).Stdout
+        );
 }

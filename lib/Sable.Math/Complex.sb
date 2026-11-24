@@ -1,0 +1,232 @@
+module Sable.Math
+
+// Complex numbers over the floats with the elementary functions, as Swift
+// Numerics' Complex is: the arithmetic here, the elementary functions in
+// Complex+ElementaryFunctions.sb, text in Complex+Text.sb.
+//
+// Every value with a part that is infinite or NaN is the one point at
+// infinity: they are all equal, hash alike, have an infinite magnitude and
+// no phase. A complex plane has no direction for an infinity to point in,
+// and with one such point '==' is an equivalence, as Hashable needs, where
+// comparing the parts would make NaN unequal to itself.
+
+/// A complex number, `real + imaginary·i`, its parts floats with the
+/// elementary functions: `Complex<F64>` or `Complex<F32>`.
+///
+/// The arithmetic is the plane's: `*` multiplies magnitudes and adds
+/// phases, and `/` scales its operands by a power of two where the plain
+/// formula would overflow or underflow, so a quotient is finite whenever
+/// it is representable. A value with an infinite or NaN part is the one
+/// point at infinity (`Complex.infinity`): all such values are equal.
+///
+/// ```sable
+/// let z = Complex(3.0, 4.0)
+/// assert(z.magnitude == 5.0)
+/// assert(z * z.conjugate == Complex(25.0, 0.0))
+/// assert(Complex<F64>.i * Complex<F64>.i == Complex(-1.0, 0.0))
+/// assert((z / z) == Complex<F64>.one)
+/// ```
+public struct Complex<T: ElementaryFunctions>: SignedNumeric, Hashable {
+    /// The real part.
+    public var real: T
+
+    /// The imaginary part: the multiple of i.
+    public var imaginary: T
+
+    /// The number `real + imaginary·i`.
+    public init(_ real: T, _ imaginary: T) {
+        self.real = real
+        self.imaginary = imaginary
+    }
+
+    /// The number at the distance `magnitude` from zero, at the angle
+    /// `phase` (in radians) from the positive real axis: `magnitude ·
+    /// (cos phase + i sin phase)`. With an infinite or NaN phase, a zero
+    /// or infinite magnitude is still itself; any other is NaN.
+    ///
+    /// ```sable
+    /// let z = Complex(magnitude: 2.0, phase: F64.pi / 2.0)
+    /// assert((z.real).abs() < 1e-15 && z.imaginary == 2.0)
+    /// ```
+    public init(magnitude length: T, phase angle: T) {
+        if angle.isFinite {
+            self.real = length * T.cos(angle)
+            self.imaginary = length * T.sin(angle)
+        } else if length.isZero || length.isInfinite {
+            self.real = length
+            self.imaginary = T.zero
+        } else {
+            self.real = T.nan
+            self.imaginary = T.nan
+        }
+    }
+
+    /// 0 + 0i.
+    public static var zero: Complex<T> => Complex(T.zero, T.zero)
+
+    /// 1 + 0i.
+    public static var one: Complex<T> => Complex(T.one, T.zero)
+
+    /// The imaginary unit, 0 + 1i, whose square is -1.
+    public static var i: Complex<T> => Complex(T.zero, T.one)
+
+    /// The point at infinity, written +inf + 0i: what every value with an
+    /// infinite or NaN part equals.
+    public static var infinity: Complex<T> => Complex(T.infinity, T.zero)
+
+    /// The reflection in the real axis: `real - imaginary·i`.
+    public var conjugate: Complex<T> => Complex(real, -imaginary)
+
+    /// Whether both parts are finite: false for the point at infinity.
+    public var isFinite: Bool => real.isFinite && imaginary.isFinite
+
+    /// Whether both parts are zero, of either sign.
+    public var isZero: Bool => real.isZero && imaginary.isZero
+
+    /// The distance from zero, `sqrt(real² + imaginary²)`, without the
+    /// overflow or underflow of computing it so (it is `hypot`). +inf for
+    /// the point at infinity.
+    ///
+    /// ```sable
+    /// assert(Complex(3e300, 4e300).magnitude == 5e300)
+    /// ```
+    public var magnitude: T {
+        get {
+            if !self.isFinite {
+                return T.infinity
+            }
+            return T.hypot(real, imaginary)
+        }
+    }
+
+    /// `real² + imaginary²`, the square of the magnitude: cheaper, and
+    /// exact enough where it neither overflows nor underflows.
+    public var magnitudeSquared: T => real * real + imaginary * imaginary
+
+    /// The angle from the positive real axis, in [-pi, pi], as `atan2`
+    /// gives it: the signs of zero parts choose between pi and -pi, 0 and
+    /// -0. NaN for the point at infinity, which has none.
+    ///
+    /// ```sable
+    /// assert(Complex(-1.0, 0.0).phase == F64.pi)
+    /// assert(Complex(-1.0, -0.0).phase == -F64.pi)
+    /// ```
+    public var phase: T {
+        get {
+            if !self.isFinite {
+                return T.nan
+            }
+            return T.atan2(y: imaginary, x: real)
+        }
+    }
+
+    /// The number times a real one: each part scaled, exactly as the
+    /// parts' own product rounds.
+    public fn multiplied(by scale: T) -> Complex<T> {
+        return Complex(real * scale, imaginary * scale)
+    }
+
+    /// The number over a real one: each part divided.
+    public fn divided(by scale: T) -> Complex<T> {
+        return Complex(real / scale, imaginary / scale)
+    }
+
+    /// The sum, part by part.
+    public operator + (lhs: Complex<T>, rhs: Complex<T>) -> Complex<T> {
+        return Complex(lhs.real + rhs.real, lhs.imaginary + rhs.imaginary)
+    }
+
+    /// The difference, part by part.
+    public operator - (lhs: Complex<T>, rhs: Complex<T>) -> Complex<T> {
+        return Complex(lhs.real - rhs.real, lhs.imaginary - rhs.imaginary)
+    }
+
+    /// Both parts negated.
+    public prefix operator - (operand: Complex<T>) -> Complex<T> {
+        return Complex(-operand.real, -operand.imaginary)
+    }
+
+    /// The product, `(ac - bd) + (ad + bc)i`. A product too large for the
+    /// type is the point at infinity.
+    public operator * (lhs: Complex<T>, rhs: Complex<T>) -> Complex<T> {
+        let a = lhs.real
+        let b = lhs.imaginary
+        let c = rhs.real
+        let d = rhs.imaginary
+        return Complex(a * c - b * d, a * d + b * c)
+    }
+
+    /// The quotient, without spurious overflow or underflow: where the
+    /// divisor's squared magnitude is not a normal float, both operands are
+    /// first scaled by the power of two that brings the divisor near 1,
+    /// which leaves the quotient as it was (C99's Annex G divides so), and
+    /// then multiplied by the divisor's reciprocal, whose parts are near
+    /// 1/|divisor|. Dividing by zero gives the point at infinity,
+    /// and a finite number over the point at infinity zero; zero over zero,
+    /// or infinity over infinity, is NaN.
+    ///
+    /// ```sable
+    /// let tiny = Complex(1.0, 1.0) / Complex(1e300, 1e300)
+    /// assert((tiny.real * 1e300 - 1.0).abs() < 1e-15 && tiny.imaginary == 0.0)
+    /// assert(Complex(1.0, 0.0) / Complex(0.0, 0.0) == Complex<F64>.infinity)
+    /// ```
+    public operator / (lhs: Complex<T>, rhs: Complex<T>) -> Complex<T> {
+        if rhs.isZero {
+            return lhs.isZero || !lhs.isFinite ? Complex(T.nan, T.nan) : Complex<T>.infinity
+        }
+        if !rhs.isFinite {
+            return lhs.isFinite ? Complex<T>.zero : Complex(T.nan, T.nan)
+        }
+        if !lhs.isFinite {
+            return Complex<T>.infinity
+        }
+        var a = lhs.real
+        var b = lhs.imaginary
+        var c = rhs.real
+        var d = rhs.imaginary
+        var denominator = c * c + d * d
+        if !denominator.isNormal {
+            let power = 0 - c.abs().maximum(d.abs()).exponent
+            a = a.scaled(byPowerOfTwo: power)
+            b = b.scaled(byPowerOfTwo: power)
+            c = c.scaled(byPowerOfTwo: power)
+            d = d.scaled(byPowerOfTwo: power)
+            denominator = c * c + d * d
+        }
+        // Times the divisor's reciprocal, conj(w) / |w|²: its parts are
+        // near 1/|w|, so no product overflows or underflows unless the
+        // quotient itself does, as (ac + bd) / |w|² could.
+        let p = c / denominator
+        let q = -d / denominator
+        return Complex(a * p - b * q, a * q + b * p)
+    }
+
+    /// Equal parts (a zero of either sign equal to the other), or both the
+    /// point at infinity: every value with an infinite or NaN part is equal
+    /// to every other, so '==' is an equivalence even with NaN.
+    ///
+    /// ```sable
+    /// let nan = Complex(F64.nan, 0.0)
+    /// assert(nan == nan)
+    /// assert(nan == Complex<F64>.infinity)
+    /// assert(Complex(0.0, -0.0) == Complex<F64>.zero)
+    /// ```
+    public operator == (lhs: Complex<T>, rhs: Complex<T>) -> Bool {
+        if !lhs.isFinite || !rhs.isFinite {
+            return !lhs.isFinite && !rhs.isFinite
+        }
+        return lhs.real == rhs.real && lhs.imaginary == rhs.imaginary
+    }
+
+    /// The parts, or for the point at infinity the one hash every such
+    /// value shares: equal values hash equal.
+    public fn hash(into hasher: inout Hasher) {
+        if !self.isFinite {
+            hasher.combine(T.infinity)
+            hasher.combine(T.zero)
+            return
+        }
+        hasher.combine(real)
+        hasher.combine(imaginary)
+    }
+}

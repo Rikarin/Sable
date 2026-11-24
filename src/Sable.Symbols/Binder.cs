@@ -8265,7 +8265,7 @@ public sealed partial class Binder {
             if (FindUserUnaryOperator(syntax.OperatorToken.Text, operand.Type, OperatorFixity.Prefix) is { } method) {
                 return new BoundUnaryOperator(
                     syntax,
-                    UserResultType(method, operand.Type),
+                    UserResultType(method, operand.Type, OwnerOf(operand.Type)),
                     UnaryOperatorKind.UserDefined,
                     UserOperand(method, operand),
                     method
@@ -8369,7 +8369,7 @@ public sealed partial class Binder {
         }
 
         if (FindUserUnaryOperator(syntax.OperatorToken.Text, operand.Type, OperatorFixity.Postfix) is { } method) {
-            return new BoundUnaryOperator(syntax, UserResultType(method, operand.Type), UnaryOperatorKind.UserDefined, UserOperand(method, operand), method);
+            return new BoundUnaryOperator(syntax, UserResultType(method, operand.Type, OwnerOf(operand.Type)), UnaryOperatorKind.UserDefined, UserOperand(method, operand), method);
         }
 
         if (!operand.HasError) {
@@ -8789,7 +8789,10 @@ public sealed partial class Binder {
             return null;
         }
 
-        foreach (var member in named.Members) {
+        // A generic type's operator, seen through the operand's type
+        // arguments, as an infix one's is: '-z' on a Complex<F64>.
+        var members = TypeSubstitution.For(named);
+        foreach (var member in named.OriginalDefinition.Members) {
             if (member is not FunctionSymbol { FunctionKind: FunctionKind.Operator } function) {
                 continue;
             }
@@ -8806,7 +8809,7 @@ public sealed partial class Binder {
                 continue;
             }
 
-            if (_conversions.HasImplicitConversion(operand, function.Parameters[0].Type)) {
+            if (_conversions.HasImplicitConversion(operand, members.Apply(function.Parameters[0].Type))) {
                 return function;
             }
         }
@@ -8832,6 +8835,10 @@ public sealed partial class Binder {
     bool IsBuiltinOperand(TypeSymbol type) =>
         Core.IsNumeric(type) || type.Equals(Core.String) || type.Equals(Core.Bool) || type.Equals(Core.Char)
         || type is OptionalTypeSymbol || type.IsError;
+
+    /// <summary>What the type parameters of the operand's generic type stand for, where it is one.</summary>
+    static TypeSubstitution? OwnerOf(TypeSymbol operand) =>
+        operand is NamedTypeSymbol named ? TypeSubstitution.For(named) : null;
 
     /// <summary>What a user operator gives: 'Self' in a protocol's requirement is the operand's type.</summary>
     static TypeSymbol UserResultType(FunctionSymbol method, TypeSymbol operand, TypeSubstitution? owner = null) =>

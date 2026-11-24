@@ -1056,7 +1056,7 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   standard input and compares standard error between the two.
 - `Sable.Time`: `Duration` (to the nanosecond, Comparable and Hashable,
   printed in its largest whole unit), `Instant` on the monotonic clock,
-  `Clock.sleep` and `Clock.measure`, and `DateTime` (now `UtcDateTime`) in UTC — fields,
+  `Clock.sleep` and `Clock.measure` (since: docs/06's clocks), and `DateTime` (now `UtcDateTime`) in UTC — fields,
   ISO 8601 weekday and day of the year, `iso8601()`, `parse`, arithmetic —
   over proleptic Gregorian 400-year eras, so dates before 1970 work. Over
   three more runtime calls (`time_monotonic`, `time_wall_clock`,
@@ -1523,7 +1523,7 @@ frames and nothing else while it waits: a hundred thousand tasks each
 sleeping a second take 1.04 s and under a kilobyte each — the task
 with its slab's first chunk 640 bytes, its `Task` object and its closure the
 rest — 93 MB at the peak (`AHundredThousandSleepingTasksTakeASecondInBoundedMemory`).
-`Clock.sleep` and `Sable.Concurrency`'s `sleep` are timers; only
+`Clock.sleep` (now a clock's `sleep(for:)`) and `Sable.Concurrency`'s `sleep` are timers; only
 `Runtime.sleep` holds the thread. `SABLE_STATS` says how many tasks ran, how many
 were alive at once and were dropped, how many frames and chunks the slabs
 made, and the peak memory. `Task.spawn { … }` queues a task (a class
@@ -1544,7 +1544,7 @@ handlers it has installed (`withTaskCancellationHandler`, which runs one
 at once in a task cancelled already) where the cancelling is done, wakes a
 sleep it is in, and goes on down through its children; the task goes on
 until it asks — `Task.isCancelled`, or `Task.checkCancellation()`, which
-throws `CancellationError`, as `Task.sleep`, `Clock.sleep` and `sleep` do
+throws `CancellationError`, as `Task.sleep`, a clock's `sleep` and `sleep` do
 when the sleep was cut short. Waiting for a task or a group's next child
 does not end early: the children are cancelled with the waiter, and finish
 as soon as they notice.

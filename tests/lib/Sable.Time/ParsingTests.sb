@@ -81,8 +81,7 @@ fn aDurationRoundTrips() {
     while n < 7000000000000 {
         let duration = Duration.nanoseconds(n)
         let back = try! Duration.parse(duration.toString())
-        // toString keeps three decimals of its unit, and no more.
-        assert((back - duration).totalNanoseconds.abs() < 1000000, "\(duration.toString()) read back as \(back.toString())")
+        assertEqual(back, duration)
         n += 123456789123
     }
     assertEqual(try! Duration.parse(Duration.nanoseconds(999).toString()), Duration.nanoseconds(999))

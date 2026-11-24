@@ -1,0 +1,35 @@
+module Sable.Time
+
+/// The clock that never goes back, and stops while the machine sleeps: it
+/// counts the time the machine is awake.
+///
+/// It is `CLOCK_UPTIME_RAW` on macOS, `CLOCK_MONOTONIC` on Linux (where
+/// `MonotonicClock` is the same clock) and `QueryUnbiasedInterruptTime` on
+/// Windows, which is no finer than the system's tick, 0.5 to 15.6 ms. WASI
+/// has one monotonic clock, and does not say whether it stops.
+///
+/// ```sable
+/// let clock = SuspendingClock()
+/// let start = clock.now()
+/// try! await clock.sleep(for: Duration.milliseconds(1))
+/// assert(clock.now().durationSince(start) >= Duration.milliseconds(1))
+/// ```
+public struct SuspendingClock: Clock {
+    public init() { }
+
+    public fn now() -> SuspendingInstant {
+        return SuspendingInstant.now()
+    }
+
+    public fn sleep(until deadline: SuspendingInstant) async throws(CancellationError) {
+        // The wait is on the monotonic clock, which may have counted the
+        // machine's sleep: what it fell short by is waited for again.
+        while true {
+            let left = deadline.nanoseconds.saturatingSub(Runtime.suspendingNanoseconds())
+            try await Task.sleep(nanoseconds: left)
+            if Runtime.suspendingNanoseconds() >= deadline.nanoseconds {
+                return
+            }
+        }
+    }
+}

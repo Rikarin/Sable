@@ -1,0 +1,113 @@
+module Sable.Time
+
+// ISO 8601's durations: 'PT1H2M3.5S'.
+
+extension Duration {
+    /// As ISO 8601 writes it, exactly, in hours, minutes and seconds, the
+    /// parts that are zero left out: `PT1H2M3.5S`, and `PT0S` for none. A
+    /// negative one has a `-` before it all, as ISO 8601-2 has it:
+    /// `-PT1.5S`. Hours are not made days, which are not all as long.
+    ///
+    /// ```sable
+    /// assert(Duration.milliseconds(3723500).iso8601() == "PT1H2M3.5S")
+    /// assert(Duration.days(2).iso8601() == "PT48H")
+    /// ```
+    public fn iso8601() -> String {
+        let n = totalNanoseconds.magnitude
+        if n == 0 {
+            return "PT0S"
+        }
+        var text = totalNanoseconds < 0 ? "-PT" : "PT"
+        let hours = n / 3600000000000
+        if hours > 0 {
+            text += "\(hours)H"
+        }
+        let minutes = n / 60000000000 % 60
+        if minutes > 0 {
+            text += "\(minutes)M"
+        }
+        let rest = n % 60000000000
+        if rest > 0 {
+            text += decimalText(rest, 9, none) + "S"
+        }
+        return text
+    }
+
+    /// The duration ISO 8601 writes as weeks, days, hours, minutes and
+    /// seconds in that order, any left out but not all: `PT1H2M3.5S`,
+    /// `P1DT12H`, `P2W`. A week is 7 days and a day 24 hours exactly. The
+    /// last part may have a fraction, after a point or a comma (`PT0.5H`,
+    /// `PT1,5S`), read to the nearest nanosecond, the even one of two as
+    /// near; letters may be small; and a `-` or `+` may go before it all.
+    ///
+    /// Refused, as `.Invalid` where they are: years and months (`P1Y`,
+    /// `P1M`), which have no fixed length — a `Period` has them; a sign on
+    /// a part (`PT-1H`); parts out of order, twice, or after one with a
+    /// fraction; and the form of a date and time (`P0000-00-00T01:00:00`).
+    ///
+    /// ```sable
+    /// assert(try! Duration.parse(iso8601: "P1DT0.5H") == Duration.minutes(1470))
+    /// assert((try? Duration.parse(iso8601: "P1M")) == none)
+    /// assert((try? Duration.parse(iso8601: "PT1M")) == Duration.minutes(1))
+    /// ```
+    public static fn parse<S: StringProtocol>(iso8601 source: S) throws(ParseError) -> Duration {
+        let scalars = source.toString().toArray()
+        let count = scalars.count
+        if count == 0 {
+            throw .Empty
+        }
+        var total = DurationSum()
+        var i = 0
+        if scalars[0] == '-' || scalars[0] == '+' {
+            total.negative = scalars[0] == '-'
+            i = 1
+        }
+        if i == count || scalars[i] != 'P' && scalars[i] != 'p' {
+            throw .Invalid(at: i)
+        }
+        i += 1
+        var time = false
+        // How many parts there are, and since the T; the last's place in the order.
+        var parts = 0
+        var last = 0
+        var fractional = false
+        while i < count {
+            if (scalars[i] == 'T' || scalars[i] == 't') && !time {
+                time = true
+                parts = 0
+                i += 1
+                continue
+            }
+            if fractional || !isDecimalDigit(scalars[i]) {
+                throw .Invalid(at: i)
+            }
+            let number = try DurationNumber.read(scalars, i, comma: true)
+            i = number.end
+            if i == count || number.hasPoint && number.places == 0 {
+                throw .Invalid(at: i)
+            }
+            let unit = scalars[i].uppercased()
+            let (rank, nanoseconds) = match (time, unit) {
+                case (false, "W") => (1, 604800000000000)
+                case (false, "D") => (2, 86400000000000)
+                case (true, "H")  => (3, 3600000000000)
+                case (true, "M")  => (4, 60000000000)
+                case (true, "S")  => (5, 1000000000)
+                case _            => (0, 0)
+            }
+            if rank <= last {
+                throw .Invalid(at: i)
+            }
+            last = rank
+            fractional = number.hasPoint
+            try total.add(number, nanoseconds)
+            parts += 1
+            i += 1
+        }
+        // Nothing after the P, or after the T.
+        if parts == 0 {
+            throw .Invalid(at: count)
+        }
+        return try total.duration()
+    }
+}

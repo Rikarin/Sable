@@ -20,8 +20,13 @@ extension AsyncSequence where Self: Sendable, Element: Sendable {
     ///     return await typed.debounce(for: Duration.milliseconds(300)).collect()
     /// }
     /// ```
-    public fn debounce(for interval: Duration) -> AsyncDebounceSequence<Self> {
-        return AsyncDebounceSequence<Self> { base: self, interval: interval }
+    public fn debounce(for interval: Duration) -> AsyncDebounceSequence<Self, MonotonicClock> {
+        return debounce(for: interval, clock: MonotonicClock())
+    }
+
+    /// As `debounce(for:)`, the interval measured on the clock.
+    public fn debounce<C: Clock>(for interval: Duration, clock: C) -> AsyncDebounceSequence<Self, C> {
+        return AsyncDebounceSequence<Self, C> { base: self, interval: interval, clock: clock }
     }
 
     /// At most one element per interval: the first is given at once, and
@@ -34,22 +39,28 @@ extension AsyncSequence where Self: Sendable, Element: Sendable {
     ///     return await moves.throttle(for: Duration.milliseconds(100)).collect()
     /// }
     /// ```
-    public fn throttle(for interval: Duration, latest: Bool = true) -> AsyncThrottleSequence<Self> {
-        return AsyncThrottleSequence<Self> { base: self, interval: interval, latest: latest }
+    public fn throttle(for interval: Duration, latest: Bool = true) -> AsyncThrottleSequence<Self, MonotonicClock> {
+        return throttle(for: interval, latest: latest, clock: MonotonicClock())
+    }
+
+    /// As `throttle(for:latest:)`, the interval measured on the clock.
+    public fn throttle<C: Clock>(for interval: Duration, latest: Bool = true, clock: C) -> AsyncThrottleSequence<Self, C> {
+        return AsyncThrottleSequence<Self, C> { base: self, interval: interval, latest: latest, clock: clock }
     }
 }
 
 /// What 'debounce(for:)' makes: the elements after which the sequence was
 /// quiet for the interval.
-public struct AsyncDebounceSequence<Base: AsyncSequence>: AsyncSequence where Base: Sendable, Base.Element: Sendable {
+public struct AsyncDebounceSequence<Base: AsyncSequence, C: Clock>: AsyncSequence where Base: Sendable, Base.Element: Sendable {
     let base: Base
     let interval: Duration
+    let clock: C
 
     /// An iterator of the elements from now on: the task that goes through
     /// the sequence is started.
     public fn makeAsyncIterator() -> AsyncTimedIterator<Base.Element, Base.Failure> {
         let (stream, continuation) = AsyncThrowingStream<Base.Element, Base.Failure>.make()
-        let gate = TimedGate<Base.Element, Base.Failure>(continuation, interval, debounce: true, latest: true)
+        let gate = TimedGate<Base.Element, Base.Failure, C>(continuation, interval, clock, debounce: true, latest: true)
         return startTimed(base, gate, stream, continuation)
     }
 }
@@ -71,7 +82,7 @@ public struct AsyncTimedIterator<Value: Sendable, Failure: Error>: AsyncIterator
 // The task that hands the sequence's elements to the gate, started; it is
 // cancelled when the stream ends early — its consumer cancelled — or the
 // iterator is let go.
-fn startTimed<S: AsyncSequence>(_ base: S, _ gate: TimedGate<S.Element, S.Failure>, _ stream: AsyncThrowingStream<S.Element, S.Failure>, _ continuation: StreamContinuation<S.Element, S.Failure>) -> AsyncTimedIterator<S.Element, S.Failure>
+fn startTimed<S: AsyncSequence, C: Clock>(_ base: S, _ gate: TimedGate<S.Element, S.Failure, C>, _ stream: AsyncThrowingStream<S.Element, S.Failure>, _ continuation: StreamContinuation<S.Element, S.Failure>) -> AsyncTimedIterator<S.Element, S.Failure>
     where S: Sendable, S.Element: Sendable {
     let pump = Task.detached {
         var iterator = base.makeAsyncIterator()
@@ -95,37 +106,40 @@ fn startTimed<S: AsyncSequence>(_ base: S, _ gate: TimedGate<S.Element, S.Failur
 // replaces the one waiting and starts the timer again; throttling, one is
 // let through at once if the interval since the last has passed, else it
 // waits — the newest, or the first — for a timer to the interval's end.
-actor TimedGate<Element: Sendable, Failure: Error> {
+actor TimedGate<Element: Sendable, Failure: Error, C: Clock> {
     let output: StreamContinuation<Element, Failure>
-    let interval: Int
+    let interval: Duration
+    let clock: C
     let debounce: Bool
     let latest: Bool
     var pending: Element? = none
     var generation: Int = 0
     var timer: Task<Void>? = none
-    var lastSent: Int? = none
+    var lastSent: C.Instant? = none
 
-    init(_ output: StreamContinuation<Element, Failure>, _ interval: Duration, debounce: Bool, latest: Bool) {
+    init(_ output: StreamContinuation<Element, Failure>, _ interval: Duration, _ clock: C, debounce: Bool, latest: Bool) {
         self.output = output
-        self.interval = interval.totalNanoseconds
+        self.interval = interval
+        self.clock = clock
         self.debounce = debounce
         self.latest = latest
     }
 
     fn got(_ value: Element) {
-        let now = Runtime.monotonicNanoseconds()
         if debounce {
             pending = value
             start(after: interval)
             return
         }
+        let now = clock.now()
         if let last = lastSent {
-            if now - last < interval {
+            let passed = now.durationSince(last)
+            if passed < interval {
                 if latest || pending.isNone {
                     pending = value
                 }
                 if timer.isNone {
-                    start(after: last + interval - now)
+                    start(after: interval - passed)
                 }
                 return
             }
@@ -134,15 +148,16 @@ actor TimedGate<Element: Sendable, Failure: Error> {
     }
 
     // A timer for the element waiting, in place of any before it.
-    fn start(after nanoseconds: Int) {
+    fn start(after duration: Duration) {
         generation += 1
         if let running = timer {
             running.cancel()
         }
         let expected = generation
         let gate = self
+        let clock = self.clock
         timer = Task.detached {
-            if (try? await Task.sleep(nanoseconds: nanoseconds)) == none {
+            if (try? await clock.sleep(for: duration)) == none {
                 return
             }
             await gate.fire(expected)
@@ -156,11 +171,11 @@ actor TimedGate<Element: Sendable, Failure: Error> {
         timer = none
         if let value = pending {
             pending = none
-            send(value, at: Runtime.monotonicNanoseconds())
+            send(value, at: clock.now())
         }
     }
 
-    fn send(_ value: Element, at now: Int) {
+    fn send(_ value: Element, at now: C.Instant) {
         lastSent = now
         output.yield(value)
     }

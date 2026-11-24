@@ -31,10 +31,31 @@ union Raced<T> {
 /// } catch { assert(false) }
 /// ```
 public fn withTimeout<T: Sendable>(_ duration: Duration, _ body: @Sendable async () throws -> T) async throws -> T {
+    return try await withTimeout(duration, clock: MonotonicClock(), body)
+}
+
+/// As `withTimeout(_:_:)`, the duration measured on the clock.
+///
+/// ```sable
+/// let clock = TestClock()
+/// let timed = Task.spawn {
+///     do {
+///         let _ = try await withTimeout(Duration.minutes(1), clock: clock) {
+///             try await clock.sleep(for: Duration.hours(1))
+///         }
+///         return false
+///     } catch let error as TimeoutError {
+///         return true
+///     } catch { return false }
+/// }
+/// await clock.advance(by: Duration.minutes(1))
+/// assert(await timed.value)
+/// ```
+public fn withTimeout<T: Sendable, C: Clock>(_ duration: Duration, clock: C, _ body: @Sendable async () throws -> T) async throws -> T {
     let raced = try await withThrowingTaskGroup(of: Raced<T>.self) { group in
         group.spawn { Raced<T>.Finished(try await body()) }
         group.spawn {
-            try await Task.sleep(for: duration)
+            try await clock.sleep(for: duration)
             return Raced<T>.Stopped
         }
         let first = try await group.next()!

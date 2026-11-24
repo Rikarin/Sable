@@ -1,0 +1,235 @@
+module Sable.Concurrency
+
+import Sable.Time
+
+/// A clock whose time passes only when it is told to: what a test gives
+/// code that takes a `Clock`, so that an hour of it is over at once and
+/// always goes the same way. .NET's `FakeTimeProvider`.
+///
+/// Advancing wakes the tasks that sleep on it one at a time, in the order
+/// of their deadlines — those of one deadline in the order they began to
+/// sleep — with the clock at that deadline. Each is let run, with whatever
+/// it sets off, until no task can go on (`Task.settle()`), before the next
+/// is woken: a task that sleeps again within the time advanced is woken
+/// again within it, and all that can happen by the new time has happened
+/// when `advance` returns. Tasks not yet asleep when it is called are let
+/// get there first, so nothing need wait for them. A sleeper cancelled is
+/// no longer one.
+///
+/// What it does not wait for is work that waits for something else: a sleep
+/// on a real clock, a socket, the blocking pool (files, processes). Where a
+/// task goes to sleep only after such work, `waitForSleepers` waits until
+/// it has. A task that never waits, but loops on `Task.yield()`, keeps
+/// `advance` from returning.
+///
+/// Its instants are the monotonic clock's, or any other's it is given one
+/// of: `TestClock(at: UtcDateTime.unixEpoch)` stands in for a SystemClock.
+/// Copies are the same clock.
+///
+/// ```sable
+/// let clock = TestClock()
+/// let job = Task.spawn {
+///     try! await clock.sleep(for: Duration.hours(1))
+///     return clock.now()
+/// }
+/// await clock.advance(by: Duration.hours(3))
+/// assert(await job.value == Instant.origin + Duration.hours(1))
+/// ```
+public struct TestClock<I: ClockInstant>: Clock {
+    let state: TestClockState<I>
+
+    /// A clock that shows the instant until it is advanced.
+    public init(at instant: I) {
+        state = TestClockState<I>(instant)
+    }
+
+    public fn now() -> I {
+        return state.sleepers.withLock { $0.now }
+    }
+
+    public fn sleep(until deadline: I) async throws(CancellationError) {
+        try Task.checkCancellation()
+        await state.sleep(until: deadline)
+        try Task.checkCancellation()
+    }
+
+    /// Moves the clock on by so much, as `advance(to:)` does. Traps for a
+    /// negative duration.
+    public fn advance(by duration: Duration) async {
+        precondition(!duration.isNegative, "a TestClock does not go back")
+        await Task.settle()
+        await state.advance(to: now().saturatingAdding(duration))
+    }
+
+    /// Moves the clock on to the instant, waking the sleepers due by then
+    /// as the type describes; returns once none of them, nor anything they
+    /// set off, can go on. An instant before now does not move it, but what
+    /// can go on does.
+    public fn advance(to instant: I) async {
+        await Task.settle()
+        await state.advance(to: instant)
+    }
+
+    /// How many tasks sleep on it now.
+    public var sleeperCount: Int => state.sleepers.withLock { $0.waiting.count }
+
+    /// The deadline of the next to be woken, if any task sleeps.
+    public var nextDeadline: I? => state.sleepers.withLock { $0.waiting.isEmpty ? none : $0.waiting[0].deadline }
+
+    /// Waits until so many tasks sleep on it, or more: for those that first
+    /// wait for something that advancing does not wait for. Throws if
+    /// cancelled.
+    ///
+    /// ```sable
+    /// let clock = TestClock()
+    /// let job = Task.spawn {
+    ///     let size = await Task.blocking { 10 }
+    ///     try! await clock.sleep(for: Duration.seconds(size))
+    /// }
+    /// try! await clock.waitForSleepers(1)
+    /// await clock.advance(by: Duration.seconds(10))
+    /// await job.value
+    /// ```
+    public fn waitForSleepers(_ count: Int = 1) async throws(CancellationError) {
+        while true {
+            try Task.checkCancellation()
+            let ticket = state.changed.ticket
+            if sleeperCount >= count {
+                return
+            }
+            await state.changed.parkCancellably(since: ticket)
+        }
+    }
+}
+
+extension TestClock where I == Instant {
+    /// A clock that stands in for the monotonic one, at `Instant.origin`
+    /// until it is advanced.
+    public init() {
+        self.init(at: Instant.origin)
+    }
+}
+
+// A task asleep on a test clock: woken through a list of its own, so that
+// no other is.
+struct TestSleeper<I> {
+    let id: Int
+    let deadline: I
+    let woken: WaitList
+}
+
+struct TestSleepers<I: ClockInstant> {
+    var now: I
+    // By deadline, those of one in the order they began.
+    var waiting: TestSleeper<I>[>..] = []
+    var lastId: Int = 0
+
+    init(_ now: I) {
+        self.now = now
+    }
+
+    mutating fn add(_ sleeper: TestSleeper<I>) {
+        waiting.append(sleeper)
+        var at = waiting.count - 1
+        while at > 0 && sleeper.deadline < waiting[at - 1].deadline {
+            waiting[at] = waiting[at - 1]
+            at -= 1
+        }
+        waiting[at] = sleeper
+    }
+
+    mutating fn remove(_ id: Int) {
+        var kept: TestSleeper<I>[>..] = []
+        for sleeper in waiting {
+            if sleeper.id != id {
+                kept.append(sleeper)
+            }
+        }
+        waiting = kept
+    }
+}
+
+@immutable
+final class TestClockState<I: ClockInstant> {
+    let sleepers: Mutex<TestSleepers<I>>
+    // Woken as a task begins to sleep.
+    let changed: WaitList
+
+    init(_ now: I) {
+        sleepers = Mutex(TestSleepers<I>(now))
+        changed = WaitList()
+    }
+
+    // Asleep until the deadline, or cancelled; which, the caller asks.
+    fn sleep(until deadline: I) async {
+        let woken = WaitList()
+        let id = sleepers.withLock { (s: inout TestSleepers<I>) -> Int in
+            if deadline <= s.now {
+                return 0
+            }
+            s.lastId += 1
+            s.add(TestSleeper<I> { id: s.lastId, deadline: deadline, woken: woken })
+            return s.lastId
+        }
+        if id == 0 {
+            await Task.yield()
+            return
+        }
+        changed.wakeAll()
+        await withTaskCancellationHandler(operation: {
+            while true {
+                let ticket = woken.ticket
+                if !self.isAsleep(id) || Task.isCancelled {
+                    break
+                }
+                await woken.parkCancellably(since: ticket)
+            }
+        }, onCancel: {
+            self.remove(id)
+        })
+        remove(id)
+    }
+
+    fn isAsleep(_ id: Int) -> Bool {
+        return sleepers.withLock { (s: inout TestSleepers<I>) -> Bool in
+            for sleeper in s.waiting {
+                if sleeper.id == id {
+                    return true
+                }
+            }
+            return false
+        }
+    }
+
+    fn remove(_ id: Int) {
+        sleepers.withLock { $0.remove(id) }
+    }
+
+    fn advance(to instant: I) async {
+        while true {
+            // The next due, the clock at its deadline; or none, and the
+            // clock at the instant. Never back: another may advance it too.
+            let due = sleepers.withLock { (s: inout TestSleepers<I>) -> WaitList? in
+                let next = s.waiting.isEmpty ? instant : s.waiting[0].deadline
+                if next > instant || s.waiting.isEmpty {
+                    if s.now < instant {
+                        s.now = instant
+                    }
+                    return none
+                }
+                if s.now < next {
+                    s.now = next
+                }
+                let first = s.waiting[0]
+                s.remove(first.id)
+                return first.woken
+            }
+            if let sleeper = due {
+                sleeper.wakeAll()
+                await Task.settle()
+            } else {
+                return
+            }
+        }
+    }
+}

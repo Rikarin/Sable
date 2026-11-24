@@ -1,0 +1,38 @@
+module Sable.Time
+
+/// The date and time the system has, in UTC: the wall clock, which its user
+/// or a time server may set forward or back at any moment. For deadlines
+/// that are moments — a certificate's, a schedule's; how long something
+/// took is `MonotonicClock`'s to say.
+///
+/// It is `CLOCK_REALTIME` on macOS, Linux and WASI and
+/// `GetSystemTimePreciseAsFileTime` on Windows. A sleep until a moment
+/// waits until the clock shows it: one set back makes it wait for longer,
+/// and one set forward, or a machine that slept past the moment, is noticed
+/// within a minute.
+///
+/// ```sable
+/// let moment = SystemClock().now()
+/// assert(moment.year >= 2026)
+/// ```
+public struct SystemClock: Clock {
+    public init() { }
+
+    public fn now() -> UtcDateTime {
+        return UtcDateTime.now()
+    }
+
+    public fn sleep(until deadline: UtcDateTime) async throws(CancellationError) {
+        while true {
+            let now = UtcDateTime.now()
+            var left = Duration.minutes(1)
+            if deadline < now.adding(left) {
+                left = deadline > now ? deadline.durationSince(now) : Duration.zero
+            }
+            try await Task.sleep(nanoseconds: left.totalNanoseconds)
+            if UtcDateTime.now() >= deadline {
+                return
+            }
+        }
+    }
+}

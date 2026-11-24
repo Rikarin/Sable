@@ -1,0 +1,14 @@
+module Sable.Concurrency
+
+/// What an `Interval` does about the ticks that came due while nothing
+/// waited for them. Either way a tick's deadline is the start and a whole
+/// number of periods, so the ticks never drift.
+public enum MissedTicks {
+    /// They are one tick, the latest of them, given at once; the next is
+    /// the next that is due: .NET's `PeriodicTimer`, Tokio's `Skip`.
+    Skip
+
+    /// Each is given, one at once after another, until none is behind:
+    /// Tokio's `Burst`.
+    Burst
+}

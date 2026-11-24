@@ -1,0 +1,33 @@
+module Sable.Time
+
+/// How long the body took to run, on the monotonic clock. What it throws,
+/// this throws.
+///
+/// ```sable
+/// var total = 0
+/// let took = measure { total += 1 }
+/// assert(took >= Duration.zero && total == 1)
+/// ```
+public fn measure<E: Error>(_ body: () throws(E) -> Void) throws(E) -> Duration {
+    return try MonotonicClock().measure(body)
+}
+
+/// How long the body took to run, its waits with it, on the monotonic clock.
+///
+/// ```sable
+/// let took = await measure { await Task.yield() }
+/// assert(took >= Duration.zero)
+/// ```
+public fn measure<E: Error>(_ body: async () throws(E) -> Void) async throws(E) -> Duration {
+    return try await MonotonicClock().measure(body)
+}
+
+/// How long the body took to run, on the clock.
+public fn measure<C: Clock, E: Error>(clock: C, _ body: () throws(E) -> Void) throws(E) -> Duration {
+    return try clock.measure(body)
+}
+
+/// How long the body took to run, its waits with it, on the clock.
+public fn measure<C: Clock, E: Error>(clock: C, _ body: async () throws(E) -> Void) async throws(E) -> Duration {
+    return try await clock.measure(body)
+}

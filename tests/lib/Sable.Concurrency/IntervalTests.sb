@@ -1,0 +1,117 @@
+module IntervalTests
+
+// Interval.sb in Sable.Concurrency, on a TestClock.
+
+import Sable.Concurrency
+import Sable.Testing
+import Sable.Time
+
+fn seconds(_ tick: Instant?) -> Int {
+    return tick.isNone ? -1 : (tick! - Instant.origin).totalSeconds
+}
+
+// What an interval of 10 seconds gives a loop that takes so many seconds of
+// the clock over each tick: the ticks, and when it heard of each.
+fn ticks(_ missed: MissedTicks, _ busy: Int[], until end: Int) async -> String {
+    let clock = TestClock()
+    let lines: Mutex<String[>..]> = Mutex([])
+    let _ = Task.spawn {
+        var iterator = Interval(every: Duration.seconds(10), clock: clock, missed: missed).makeAsyncIterator()
+        for work in busy {
+            let tick = await iterator.next()
+            lines.withLock { $0.append("\(seconds(tick))@\(seconds(clock.now()))") }
+            try! await clock.sleep(for: Duration.seconds(work))
+        }
+    }
+    await clock.advance(by: Duration.seconds(end))
+    return lines.withLock { $0.joined(separator: " ") }
+}
+
+@test
+fn ticksAreWholePeriodsFromTheStart() async {
+    assertEqual(await ticks(.Skip, [3, 9, 1, 0, 5], until: 100), "10@10 20@20 30@30 40@40 50@50")
+}
+
+@test
+fn ticksMissedAreOneTickTheLatest() async {
+    // Busy from 10 to 45: 20, 30 and 40 are missed, and 40 is given.
+    assertEqual(await ticks(.Skip, [35, 2, 1], until: 100), "10@10 40@45 50@50")
+    // Heard of as it is due.
+    assertEqual(await ticks(.Skip, [10, 10, 10], until: 100), "10@10 20@20 30@30")
+}
+
+@test
+fn ticksMissedAreEachGivenIfAskedFor() async {
+    assertEqual(await ticks(.Burst, [35, 2, 1, 0, 0], until: 100), "10@10 20@45 30@47 40@48 50@50")
+}
+
+@test
+fn aCancelledIntervalEnds() async {
+    let clock = TestClock()
+    let ticking = Task.spawn {
+        var count = 0
+        for await _ in Interval(every: Duration.seconds(1), clock: clock) {
+            count += 1
+        }
+        return count
+    }
+    await clock.advance(by: Duration.seconds(3))
+    ticking.cancel()
+    assertEqual(await ticking.value, 3)
+    assertEqual(clock.sleeperCount, 0)
+}
+
+@test
+fn anIntervalBehindEndsOnceCancelled() async {
+    let clock = TestClock()
+    let ticking = Task.spawn {
+        var iterator = Interval(every: Duration.seconds(1), clock: clock, missed: .Burst).makeAsyncIterator()
+        await clock.advance(by: Duration.seconds(5))
+        while !Task.isCancelled {
+            await Task.yield()
+        }
+        let first = await iterator.next()
+        let second = await iterator.next()
+        return first.isNone && second.isNone
+    }
+    ticking.cancel()
+    assert(await ticking.value)
+}
+
+@test
+fn eachIteratorBeginsItsOwn() async {
+    let clock = TestClock()
+    let interval = Interval(every: Duration.seconds(10), clock: clock)
+    assertEqual(interval.period, Duration.seconds(10))
+    var first = interval.makeAsyncIterator()
+    await clock.advance(by: Duration.seconds(4))
+    var second = interval.makeAsyncIterator()
+    await clock.advance(by: Duration.seconds(10))
+    assertEqual(seconds(await first.next()), 10)
+    assertEqual(seconds(await second.next()), 14)
+}
+
+@test
+fn aPeriodAsLongAsTheClockIsOneTick() async {
+    let clock = TestClock()
+    var iterator = Interval(every: Duration.max, clock: clock).makeAsyncIterator()
+    await clock.advance(by: Duration.max)
+    assertEqual((await iterator.next())! - Instant.origin, Duration.max)
+}
+
+@test
+fn intervalsAreOnTheMonotonicClockUnlessTold() async {
+    let start = Instant.now()
+    var count = 0
+    for await tick in Interval(every: Duration.milliseconds(1)).prefix(3) {
+        assert(tick > start && tick <= Instant.now())
+        count += 1
+    }
+    assertEqual(count, 3)
+    assert(start.elapsed >= Duration.milliseconds(3))
+}
+
+@test(traps: "above zero")
+fn aPeriodOfNoTimeIsRefused() {
+    let _ = Interval(every: Duration.zero)
+}

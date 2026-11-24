@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Sable.SIL;
 using static Sable.CodeGen.Tests.Programs;
 
 namespace Sable.CodeGen.Tests;
@@ -331,7 +332,7 @@ public sealed class AsyncTests {
                     var tasks: Task<Int>[>..] = []
                     for i in 0..<100_000 {
                         tasks.append(Task.spawn {
-                            try? await Clock.sleep(Duration.seconds(1))
+                            try? await Task.sleep(nanoseconds: 1_000_000_000)
                             return i % 2
                         })
                     }
@@ -348,4 +349,178 @@ public sealed class AsyncTests {
         var peak = long.Parse(Regex.Match(run.Stderr, @"peak memory (\d+) KiB").Groups[1].Value, CultureInfo.InvariantCulture);
         Assert.InRange(peak, 1, 256 * 1024);
     }
+
+    /// <summary>Task.settle() goes on once no other task can, however many threads there are, and one at a time.</summary>
+    [Theory]
+    [InlineData("0")]
+    [InlineData("1")]
+    [InlineData("8")]
+    public void SettlingWaitsUntilNoOtherTaskCanGoOn(string workers) {
+        if (!CanBuild) {
+            return;
+        }
+
+        var program = AsyncProgram("", """
+                let steps = Atomic(0)
+                let never = WaitList()
+                for i in 0..<20 {
+                    let _ = Task.detached {
+                        for _ in 0..<200 {
+                            await Task.yield()
+                        }
+                        let child = Task.spawn {
+                            await Task.yield()
+                            let _ = steps.update { $0 + 1 }
+                        }
+                        await child.value
+                        let _ = steps.update { $0 + 1 }
+                        if i % 2 == 0 {
+                            await never.park()
+                        }
+                    }
+                }
+                await Task.settle()
+                print(steps.load())
+
+                // From other tasks, each alone.
+                let running = Atomic(0)
+                let most = Atomic(0)
+                var settlers: Task<Void>[>..] = []
+                for _ in 0..<8 {
+                    settlers.append(Task.spawn {
+                        for _ in 0..<50 {
+                            await Task.settle()
+                            let now = running.update { $0 + 1 } + 1
+                            let _ = most.update { $0 > now ? $0 : now }
+                            let _ = running.update { $0 - 1 }
+                        }
+                    })
+                }
+                for settler in settlers {
+                    await settler.value
+                }
+                print(most.load())
+                await Task.settle()
+                print("done")
+            """);
+        Assert.Equal("40\n1\ndone\n", BuildAndRun(program, environment: new Dictionary<string, string> { ["SABLE_WORKERS"] = workers }).Stdout);
+        Assert.Equal("40\n1\ndone\n", AssertAgree(program).Stdout);
+    }
+
+    /// <summary>A task still settling as main returns goes on, and only then: main running is a task that can go on.</summary>
+    [Fact]
+    public void ATaskSettlingGoesOnAsMainReturns() =>
+        Assert.Equal("main\nsettled\n", AssertAgree(AsyncProgram("", """
+                let _ = Task.detached {
+                    await Task.settle()
+                    print("settled")
+                }
+                Runtime.sleep(nanoseconds: 5_000_000)
+                print("main")
+            """)).Stdout);
+
+    /// <summary>A closure that awaits, over a type parameter's values, is async in generic code compiled once, throwing or not.</summary>
+    [Theory]
+    [InlineData(GenericsMode.Specialised)]
+    [InlineData(GenericsMode.Unspecialised)]
+    public void AnAsyncClosureInGenericCodeWaits(GenericsMode mode) {
+        using var _ = SilGen.UseGenerics(mode);
+        Assert.Equal("7\n", AssertAgree(AsyncProgram("""
+                protocol Waiter: Sendable {
+                    fn wait() async throws(CancellationError)
+                }
+                struct Napper: Waiter {
+                    fn wait() async throws(CancellationError) {
+                        try await Task.sleep(nanoseconds: 1_000_000)
+                    }
+                }
+                fn later<W: Waiter>(_ waiter: W, _ value: Int) -> Task<Int> {
+                    return Task.detached {
+                        try? await waiter.wait()
+                        return value
+                    }
+                }
+            """, "    print(await later(Napper(), 7).value)")).Stdout);
+    }
+
+    /// <summary>Of two overloads that differ in whether a closure is async, the one the closure is written for.</summary>
+    [Fact]
+    public void AClosureThatAwaitsChoosesTheAsyncOverload() =>
+        Assert.Equal("sync\nasync\nasync\nsync\n", AssertAgree(AsyncProgram("""
+                fn run(_ body: () -> Int) -> String {
+                    let _ = body()
+                    return "sync"
+                }
+                fn run(_ body: async () -> Int) async -> String {
+                    let _ = await body()
+                    return "async"
+                }
+                fn one() async -> Int { return 1 }
+            """, """
+                print(run { 1 })
+                print(await run { await one() })
+                print(await run {
+                    var total = 0
+                    for _ in 0..<2 { total += await one() }
+                    return total
+                })
+                print(run {
+                    let nested: async () -> Int = { await one() }
+                    return 2
+                })
+            """)).Stdout);
+
+    /// <summary>A requirement with a default is not implemented by a type's overload of another requirement of its name.</summary>
+    [Theory]
+    [InlineData(GenericsMode.Specialised)]
+    [InlineData(GenericsMode.Unspecialised)]
+    public void AnOverloadOfAnotherRequirementDoesNotStandInForADefault(GenericsMode mode) {
+        using var _ = SilGen.UseGenerics(mode);
+        Assert.Equal("until 3\nuntil 10\nuntil 10\nfor 1\n", AssertAgree("""
+            module Test
+            protocol Sleeper {
+                fn sleep(until moment: Int)
+                fn sleep(for length: String)
+            }
+            extension Sleeper {
+                fn sleep(for length: String) { sleep(until: 10) }
+            }
+            struct Plain: Sleeper {
+                fn sleep(until moment: Int) { print("until \(moment)") }
+            }
+            struct Both: Sleeper {
+                fn sleep(until moment: Int) { }
+                fn sleep(for length: String) { print("for \(length)") }
+            }
+            fn go<S: Sleeper>(_ s: S, _ length: String) { s.sleep(for: length) }
+            @main
+            fn main() {
+                Plain().sleep(until: 3)
+                go(Plain(), "1")
+                let boxed: any Sleeper = Plain()
+                boxed.sleep(for: "1")
+                go(Both(), "1")
+            }
+            """).Stdout);
+    }
+
+    /// <summary>An initialiser of a constrained extension settles the type parameters of the type it makes.</summary>
+    [Fact]
+    public void AConstrainedExtensionsInitialiserSettlesItsType() =>
+        Assert.Equal("5\n9\n", AssertAgree("""
+            module Test
+            struct Holder<T> {
+                let value: T
+                init(value: T) { self.value = value }
+            }
+            extension Holder where T == Int {
+                init(doubled: Bool = false) { self.init(value: doubled ? 10 : 5) }
+            }
+            @main
+            fn main() {
+                let plain = Holder()
+                print(plain.value)
+                print(Holder(value: 9).value)
+            }
+            """).Stdout);
 }

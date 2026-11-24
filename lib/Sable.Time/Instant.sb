@@ -1,9 +1,21 @@
 module Sable.Time
 
-/// A point on the monotonic clock: only for measuring, never for dates.
-public struct Instant: Comparable {
+/// A point on the monotonic clock (`MonotonicClock`): only for measuring,
+/// never for dates.
+///
+/// ```sable
+/// let start = Instant.now()
+/// let deadline = start + Duration.seconds(5)
+/// assert(deadline - start == Duration.seconds(5))
+/// ```
+public struct Instant: ClockInstant, Hashable {
     var nanoseconds: Int
 
+    /// The point the clock counts from, whenever that was: where a
+    /// `TestClock` starts.
+    public static var origin: Instant => Instant { nanoseconds: 0 }
+
+    /// The instant it is now.
     public static fn now() -> Instant {
         return Instant { nanoseconds: Runtime.monotonicNanoseconds() }
     }
@@ -13,12 +25,33 @@ public struct Instant: Comparable {
         get { return Duration { totalNanoseconds: Runtime.monotonicNanoseconds() - nanoseconds } }
     }
 
+    /// How long after the earlier one this is. Traps where no Duration is
+    /// as long.
     public fn durationSince(_ earlier: Instant) -> Duration {
         return Duration { totalNanoseconds: nanoseconds - earlier.nanoseconds }
     }
 
+    /// So long after this, or before it for a negative duration. Traps past
+    /// the clock's end.
     public fn adding(_ duration: Duration) -> Instant {
         return Instant { nanoseconds: nanoseconds + duration.totalNanoseconds }
+    }
+
+    /// So long after this, or the clock's end where that is past it.
+    public fn saturatingAdding(_ duration: Duration) -> Instant {
+        return Instant { nanoseconds: nanoseconds.saturatingAdd(duration.totalNanoseconds) }
+    }
+
+    public operator + (a: Instant, duration: Duration) -> Instant {
+        return a.adding(duration)
+    }
+
+    public operator - (a: Instant, duration: Duration) -> Instant {
+        return Instant { nanoseconds: a.nanoseconds - duration.totalNanoseconds }
+    }
+
+    public operator - (a: Instant, earlier: Instant) -> Duration {
+        return a.durationSince(earlier)
     }
 
     public operator == (a: Instant, b: Instant) -> Bool {
@@ -27,5 +60,16 @@ public struct Instant: Comparable {
 
     public operator < (a: Instant, b: Instant) -> Bool {
         return a.nanoseconds < b.nanoseconds
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(nanoseconds)
+    }
+}
+
+extension Instant: Debug {
+    /// How far the clock had counted: `Instant(1.5s)`.
+    public fn debugDescription() -> String {
+        return "Instant(\(Duration.nanoseconds(nanoseconds)))"
     }
 }

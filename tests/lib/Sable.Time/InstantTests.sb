@@ -10,5 +10,21 @@ fn instantsMeasureTheMonotonicClock() {
     assertEqual(later.durationSince(start), Duration.milliseconds(5))
     assert(start < later)
     assert(start == start)
-    assert(start.elapsed >= Duration.zero())
+    assert(start.elapsed >= Duration.zero)
+}
+
+@test
+fn instantsAreAddedToAndSubtracted() {
+    let start = Instant.origin + Duration.seconds(5)
+    assertEqual(start - Duration.seconds(5), Instant.origin)
+    assertEqual(Instant.origin - start, Duration.seconds(-5))
+    assertEqual(start.saturatingAdding(Duration.max) - Instant.origin, Duration.max)
+    assertEqual(start.debugDescription(), "Instant(5s)")
+    let seen: [Instant: Int] = [start: 1]
+    assertEqual(seen[Instant.origin + Duration.seconds(5)] ?? 0, 1)
+}
+
+@test(traps: "overflow")
+fn anInstantPastTheClocksEndTraps() {
+    let _ = Instant.origin + Duration.seconds(1) + Duration.max
 }

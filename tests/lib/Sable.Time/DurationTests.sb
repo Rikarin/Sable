@@ -1,0 +1,446 @@
+module TimeDurationTests
+
+// Duration.sb, Duration+Arithmetic.sb, Duration+Text.sb and
+// Duration+Iso8601.sb in Sable.Time: their edges above all.
+
+import Sable.Testing
+import Sable.Time
+
+fn ns(_ count: Int) -> Duration {
+    return Duration.nanoseconds(count)
+}
+
+fn parseError(_ text: String) -> ParseError? {
+    do {
+        let _ = try Duration.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+fn isoError(_ text: String) -> ParseError? {
+    do {
+        let _ = try Duration.parse(iso8601: text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+// ---- Units ------------------------------------------------------------------
+
+@test
+fn unitsAreWholeNanoseconds() {
+    assertEqual(Duration.microseconds(3), ns(3_000))
+    assertEqual(Duration.days(2), Duration.hours(48))
+    assertEqual(Duration.hours(1), Duration.minutes(60))
+    assertEqual(Duration.minutes(-1), Duration.seconds(-60))
+    assertEqual(Duration.seconds(9223372036).totalSeconds, 9223372036)
+}
+
+@test
+fn wholeUnitsRoundTowardsZero() {
+    let d = ns(-90_061_999_999_999)
+    assertEqual(d.totalDays, -1)
+    assertEqual(d.totalHours, -25)
+    assertEqual(d.totalMinutes, -1501)
+    assertEqual(d.totalSeconds, -90_061)
+    assertEqual(d.totalMilliseconds, -90_061_999)
+    assertEqual(d.totalMicroseconds, -90_061_999_999)
+}
+
+@test
+fn unitsWithFractions() {
+    let d = Duration.milliseconds(90_500)
+    assertEqual(d.inSeconds, 90.5)
+    assertEqual(d.inMilliseconds, 90500.0)
+    assertEqual(d.inMicroseconds, 90500000.0)
+    assertEqual(Duration.seconds(90).inMinutes, 1.5)
+    assertEqual(Duration.minutes(-90).inHours, -1.5)
+}
+
+@test
+fn componentsShareTheSign() {
+    let min = Duration.min.components
+    assertEqual(min.hours, -2562047)
+    assertEqual(min.minutes, -47)
+    assertEqual(min.seconds, -16)
+    assertEqual(min.nanoseconds, -854775808)
+    let max = Duration.max.components
+    assertEqual(max.hours * 3600 + max.minutes * 60 + max.seconds, 9223372036)
+    assert(Duration.zero.isZero && !Duration.zero.isNegative && ns(-1).isNegative)
+}
+
+@test(traps: "overflow")
+fn aUnitThatDoesNotFitTraps() {
+    let _ = Duration.hours(2562048)
+}
+
+// ---- Fractions --------------------------------------------------------------
+
+@test
+fn fractionsRoundToTheNearestNanosecond() {
+    assertEqual(Duration.seconds(1.5), Duration.milliseconds(1500))
+    assertEqual(Duration.seconds(0.1), Duration.milliseconds(100))
+    assertEqual(Duration.seconds(-0.1), Duration.milliseconds(-100))
+    assertEqual(Duration.milliseconds(0.25), ns(250_000))
+    assertEqual(Duration.microseconds(0.0005), ns(1))   // a little over a half
+    assertEqual(Duration.minutes(0.5), Duration.seconds(30))
+    assertEqual(Duration.hours(1.0 / 3.0), Duration.minutes(20))
+    // Halves exactly, in binary: to the even one.
+    assertEqual(ns(1) * 0.5, ns(0))
+    assertEqual(ns(3) * 0.5, ns(2))
+    assertEqual(ns(5) * 0.5, ns(2))
+    assertEqual(ns(-3) * 0.5, ns(-2))
+    assertEqual(ns(-1) * 0.5, ns(0))
+}
+
+@test
+fn fractionsUnderANanosecondVanish() {
+    assertEqual(Duration.seconds(4.0e-10), Duration.zero)
+    assertEqual(Duration.seconds(6.0e-10), ns(1))
+    assertEqual(Duration.max * 5.0e-324, Duration.zero)
+    assertEqual(Duration.max * 1.0e-19, ns(1))
+    assertEqual(Duration.max * 1.0e-20, Duration.zero)
+    assertEqual(Duration.zero * 1.0e300, Duration.zero)
+}
+
+@test
+fn fractionsAreExactAtTheLimits() {
+    assertEqual(Duration.max * 1.0, Duration.max)
+    assertEqual(Duration.min * 1.0, Duration.min)
+    assertEqual(1.0 * Duration.max, Duration.max)
+    assertEqual(Duration.max.checkedMul(-1.0), ns(-Int.max))
+    assertEqual(Duration.min.checkedMul(-1.0), none)
+    assertEqual(Duration.checked(9223372036854774784.0, of: ns(1)), ns(9223372036854774784))
+    assertEqual(Duration.checked(9223372036854775808.0, of: ns(1)), none)
+    assertEqual(Duration.checked(-9223372036854775808.0, of: ns(1)), Duration.min)
+    assertEqual(Duration.checked(-9223372036854777856.0, of: ns(1)), none)
+    assertEqual(Duration.checked(1.0e19, of: ns(1)), none)
+    assertEqual(Duration.checked(F64.nan, of: ns(1)), none)
+    assertEqual(Duration.checked(F64.infinity, of: ns(1)), none)
+    assertEqual(Duration.checked(1.0e300, of: ns(1)), none)
+}
+
+@test(traps: "does not fit")
+fn aFractionThatDoesNotFitTraps() {
+    let _ = Duration.seconds(1.0e10)
+}
+
+@test(traps: "does not fit")
+fn aNaNOfAUnitTraps() {
+    let _ = Duration.seconds(F64.nan)
+}
+
+// ---- Operators --------------------------------------------------------------
+
+@test
+fn operatorsAreTheIntegersOwn() {
+    assertEqual(Duration.seconds(1) + Duration.milliseconds(1), Duration.milliseconds(1001))
+    assertEqual(Duration.seconds(1) - Duration.seconds(3), Duration.seconds(-2))
+    assertEqual(-Duration.seconds(2), Duration.seconds(-2))
+    assertEqual(Duration.seconds(2) * 3, Duration.seconds(6))
+    assertEqual(3 * Duration.seconds(2), Duration.seconds(6))
+    assertEqual(Duration.seconds(-7) / 2, Duration.milliseconds(-3500))
+    assertEqual(ns(-7) / 2, ns(-3))
+    assertEqual(Duration.seconds(3) / Duration.seconds(2), 1.5)
+    assertEqual(ns(-7) % ns(3), ns(-1))
+    assertEqual(ns(-7).count(of: ns(3)), -2)
+    assertEqual(ns(-7).magnitude, ns(7))
+    var sum = Duration.zero
+    sum += Duration.seconds(1)
+    sum -= Duration.milliseconds(1)
+    assertEqual(sum, Duration.milliseconds(999))
+    assert(Duration.min < Duration.zero && Duration.zero < Duration.max && ns(1) >= ns(1))
+}
+
+@test(traps: "overflow")
+fn aSumThatDoesNotFitTraps() {
+    let _ = Duration.max + ns(1)
+}
+
+@test(traps: "overflow")
+fn aDifferenceThatDoesNotFitTraps() {
+    let _ = Duration.min - ns(1)
+}
+
+@test(traps: "overflow")
+fn aProductThatDoesNotFitTraps() {
+    let _ = Duration.max * 2
+}
+
+@test(traps: "overflow")
+fn theNegationOfTheLeastTraps() {
+    let _ = -Duration.min
+}
+
+@test(traps)
+fn aQuotientThatDoesNotFitTraps() {
+    let _ = Duration.min / -1
+}
+
+@test(traps: "zero")
+fn aDivisionByZeroTraps() {
+    let _ = Duration.max / 0
+}
+
+// ---- Checked and saturating -------------------------------------------------
+
+@test
+fn checkedArithmeticGivesNoneAtTheEdges() {
+    assertEqual(Duration.max.checkedAdd(Duration.zero), Duration.max)
+    assertEqual(Duration.max.checkedAdd(ns(1)), none)
+    assertEqual(Duration.min.checkedAdd(ns(-1)), none)
+    assertEqual(Duration.min.checkedSub(ns(1)), none)
+    assertEqual(Duration.max.checkedSub(ns(-1)), none)
+    assertEqual(ns(-1).checkedSub(Duration.max), Duration.min)
+    assertEqual(Duration.max.checkedMul(2), none)
+    assertEqual(Duration.min.checkedMul(-1), none)
+    assertEqual(Duration.min.checkedMul(1), Duration.min)
+    assertEqual(Duration.min.checkedDiv(-1), none)
+    assertEqual(Duration.min.checkedDiv(0), none)
+    assertEqual(Duration.min.checkedDiv(2), ns(-4611686018427387904))
+    assertEqual(Duration.min.checkedNeg(), none)
+    assertEqual(Duration.max.checkedNeg(), ns(-Int.max))
+    assertEqual(Duration.min.checkedAbs(), none)
+    assertEqual(ns(-5).checkedAbs(), ns(5))
+}
+
+@test
+fn saturatingArithmeticGivesTheLimitsAtTheEdges() {
+    assertEqual(Duration.max.saturatingAdd(ns(1)), Duration.max)
+    assertEqual(Duration.min.saturatingAdd(ns(-1)), Duration.min)
+    assertEqual(Duration.min.saturatingSub(ns(1)), Duration.min)
+    assertEqual(Duration.max.saturatingSub(ns(-1)), Duration.max)
+    assertEqual(Duration.max.saturatingMul(2), Duration.max)
+    assertEqual(Duration.max.saturatingMul(-2), Duration.min)
+    assertEqual(Duration.max.saturatingMul(2.0), Duration.max)
+    assertEqual(Duration.max.saturatingMul(-2.0), Duration.min)
+    assertEqual(Duration.min.saturatingMul(-2.0), Duration.max)
+    assertEqual(Duration.min.saturatingMul(F64.infinity), Duration.min)
+    assertEqual(Duration.max.saturatingMul(F64.nan), Duration.zero)
+    assertEqual(Duration.zero.saturatingMul(F64.infinity), Duration.zero)
+    assertEqual(ns(3).saturatingMul(0.5), ns(2))
+    assertEqual(Duration.min.saturatingNeg(), Duration.max)
+    assertEqual(Duration.min.saturatingAbs(), Duration.max)
+    assertEqual(ns(-5).saturatingAbs(), ns(5))
+    assertEqual(ns(5).saturatingAbs(), ns(5))
+}
+
+// ---- Rounding ---------------------------------------------------------------
+
+@test
+fn roundingFollowsItsRule() {
+    let unit = ns(10)
+    let rules: RoundingRule[] = [.ToNearestOrAwayFromZero, .ToNearestOrEven, .Up, .Down, .TowardZero, .AwayFromZero]
+    let cases: (Int, Int[])[] = [
+        (25, [30, 20, 30, 20, 20, 30]),
+        (-25, [-30, -20, -20, -30, -20, -30]),
+        (35, [40, 40, 40, 30, 30, 40]),
+        (24, [20, 20, 30, 20, 20, 30]),
+        (-26, [-30, -30, -20, -30, -20, -30]),
+        (40, [40, 40, 40, 40, 40, 40]),
+        (0, [0, 0, 0, 0, 0, 0]),
+    ]
+    for (value, wanted) in cases {
+        for i in 0..<rules.count {
+            assertEqual(ns(value).rounded(to: unit, rules[i]), ns(wanted[i]))
+        }
+    }
+    assertEqual(Duration.milliseconds(1500).rounded(to: Duration.seconds(1)), Duration.seconds(2))
+    assertEqual(Duration.seconds(-59).truncated(to: Duration.minutes(1)), Duration.zero)
+}
+
+@test
+fn roundingAtTheLimits() {
+    let second = Duration.seconds(1)
+    assertEqual(Duration.max.checkedRounded(to: second), none)
+    assertEqual(Duration.min.checkedRounded(to: second), none)
+    assertEqual(Duration.max.truncated(to: second), Duration.seconds(9223372036))
+    assertEqual(Duration.min.rounded(to: second, .Up), Duration.seconds(-9223372036))
+    assertEqual(Duration.max.rounded(to: Duration.max), Duration.max)
+    assertEqual(Duration.min.checkedRounded(to: Duration.max), ns(-Int.max))
+    assertEqual(Duration.min.checkedRounded(to: Duration.max, .AwayFromZero), none)
+    assertEqual(ns(-4611686018427387904).rounded(to: Duration.max), ns(-Int.max))
+    assertEqual(ns(4611686018427387903).rounded(to: Duration.max), Duration.zero)
+    assertEqual(Duration.max.rounded(to: ns(1)), Duration.max)
+}
+
+@test(traps: "does not fit")
+fn aRoundingThatDoesNotFitTraps() {
+    let _ = Duration.max.rounded(to: Duration.seconds(1), .Up)
+}
+
+@test(traps: "above zero")
+fn aUnitOfNoTimeIsRefused() {
+    let _ = Duration.max.truncated(to: Duration.zero)
+}
+
+// ---- Text -------------------------------------------------------------------
+
+@test
+fn textIsExact() {
+    assertEqual(Duration.zero.toString(), "0s")
+    assertEqual(ns(1).toString(), "1ns")
+    assertEqual(ns(-999).toString(), "-999ns")
+    assertEqual(ns(1_000).toString(), "1µs")
+    assertEqual(ns(1_001).toString(), "1.001µs")
+    assertEqual(ns(999_999).toString(), "999.999µs")
+    assertEqual(ns(1_000_000).toString(), "1ms")
+    assertEqual(ns(-12_000_001).toString(), "-12.000001ms")
+    assertEqual(Duration.milliseconds(1_500).toString(), "1.5s")
+    assertEqual(ns(59_999_999_999).toString(), "59.999999999s")
+    assertEqual(Duration.minutes(1).toString(), "1m")
+    assertEqual(Duration.seconds(3_601).toString(), "1h 1s")
+    assertEqual(Duration.seconds(3_723).toString(), "1h 2m 3s")
+    assertEqual(Duration.days(2).toString(), "48h")
+    assertEqual(Duration.max.toString(), "2562047h 47m 16.854775807s")
+    assertEqual(Duration.min.toString(), "-2562047h 47m 16.854775808s")
+    assertEqual(Duration.min.debugDescription(), "Duration.nanoseconds(-9223372036854775808)")
+}
+
+@test
+fn textHonoursItsSpec() {
+    assertEqual("\(ns(1_234_567):.2)", "1.23ms")
+    assertEqual("\(ns(1_235_000):.2)", "1.24ms")   // a half, to the even
+    assertEqual("\(ns(1_245_000):.2)", "1.24ms")
+    assertEqual("\(ns(999_999):.0)", "1ms")
+    assertEqual("\(ns(999_999):.1)", "1.0ms")
+    assertEqual("\(ns(59_999_999_999):.3)", "1m")
+    assertEqual("\(ns(3_599_999_999_999):.1)", "1h")
+    assertEqual("\(Duration.milliseconds(1500):.0)", "2s")
+    assertEqual("\(Duration.milliseconds(1500):.12)", "1.500000000000s")
+    assertEqual("\(ns(17):.3)", "17ns")
+    assertEqual("\(Duration.milliseconds(61_500):.2)", "1m 1.50s")
+    assertEqual("\(Duration.max:.0)", "2562047h 47m 17s")
+    assertEqual("\(Duration.min:.0)", "-2562047h 47m 17s")
+    assertEqual("[\(Duration.milliseconds(12):>6)]", "[  12ms]")
+    assertEqual("[\(Duration.milliseconds(12):+)]", "[+12ms]")
+    assertEqual("[\(Duration.milliseconds(12): )]", "[ 12ms]")
+    assertEqual("[\(Duration.milliseconds(-12):+)]", "[-12ms]")
+}
+
+@test
+fn textReadsBackTheSame() {
+    for n in [0, 1, -1, 999, 1000, 1001, 999_999_999, 1_000_000_001, 59_999_999_999, 60_000_000_000, 3_600_000_000_001, Int.max, Int.min, Int.min + 1] {
+        assertEqual(try! Duration.parse(ns(n).toString()), ns(n))
+        assertEqual(try! Duration.parse(ns(n).iso8601()), ns(n))
+        assertEqual(try! Duration.parse(iso8601: ns(n).iso8601()), ns(n))
+    }
+    var n = Int.max
+    while n != 0 {
+        assertEqual(try! Duration.parse(ns(n).toString()), ns(n))
+        assertEqual(try! Duration.parse(ns(-n).iso8601()), ns(-n))
+        n = n / 7
+    }
+}
+
+@test
+fn textIsReadInAnyParts() {
+    assertEqual(try! Duration.parse("1d 2h"), Duration.hours(26))
+    assertEqual(try! Duration.parse("2h30m"), Duration.minutes(150))
+    assertEqual(try! Duration.parse("+1.5h"), Duration.minutes(90))
+    assertEqual(try! Duration.parse(".5s"), Duration.milliseconds(500))
+    assertEqual(try! Duration.parse("5.s"), Duration.seconds(5))
+    assertEqual(try! Duration.parse("007s"), Duration.seconds(7))
+}
+
+@test
+fn textUnderANanosecondIsRounded() {
+    assertEqual(try! Duration.parse("0.4ns"), ns(0))
+    assertEqual(try! Duration.parse("0.5ns"), ns(0))
+    assertEqual(try! Duration.parse("0.50000000000000000000000000001ns"), ns(1))
+    assertEqual(try! Duration.parse("1.5ns"), ns(2))
+    assertEqual(try! Duration.parse("-1.5ns"), ns(-2))
+    assertEqual(try! Duration.parse("2.5ns"), ns(2))
+    // Rounded once, after the parts are added.
+    assertEqual(try! Duration.parse("0.4ns 0.4ns"), ns(1))
+    assertEqual(try! Duration.parse("0.9ns 0.6ns 0.5ns"), ns(2))
+    assertEqual(try! Duration.parse("0.333333333333333333333333333333h"), Duration.minutes(20))
+}
+
+@test
+fn textPastTheLimitsOverflows() {
+    assertEqual(try! Duration.parse("9223372036854775807ns"), Duration.max)
+    assertEqual(try! Duration.parse("9223372036854775807.4ns"), Duration.max)
+    assertEqual(try! Duration.parse("-9223372036854775808ns"), Duration.min)
+    assertEqual(parseError("9223372036854775807.5ns"), ParseError.Overflow)
+    assertEqual(parseError("9223372036854775808ns"), ParseError.Overflow)
+    assertEqual(parseError("-9223372036854775809ns"), ParseError.Underflow)
+    assertEqual(parseError("-9223372036854775808.6ns"), ParseError.Underflow)
+    assertEqual(parseError("999999999999999999999999999999999999999999d"), ParseError.Overflow)
+    assertEqual(parseError("-2562047h 48m"), ParseError.Underflow)
+}
+
+@test
+fn textThatIsNoDurationSaysWhere() {
+    assertEqual(parseError("  "), ParseError.Empty)
+    assertEqual(parseError("-"), ParseError.Empty)
+    assertEqual(parseError("5"), ParseError.Invalid(at: 1))
+    assertEqual(parseError("5x"), ParseError.Invalid(at: 1))
+    assertEqual(parseError("1,5s"), ParseError.Invalid(at: 1))
+    assertEqual(parseError("."), ParseError.InvalidDigit(at: 0))
+    assertEqual(parseError("1h -2m"), ParseError.InvalidDigit(at: 3))
+    assertEqual(parseError("1.5.5s"), ParseError.Invalid(at: 3))
+}
+
+// ---- ISO 8601 ---------------------------------------------------------------
+
+@test
+fn iso8601IsHoursMinutesAndSeconds() {
+    assertEqual(Duration.zero.iso8601(), "PT0S")
+    assertEqual(ns(1).iso8601(), "PT0.000000001S")
+    assertEqual(Duration.milliseconds(-1_500).iso8601(), "-PT1.5S")
+    assertEqual(Duration.hours(1).iso8601(), "PT1H")
+    assertEqual(Duration.seconds(3_605).iso8601(), "PT1H5S")
+    assertEqual(Duration.seconds(150).iso8601(), "PT2M30S")
+    assertEqual(Duration.max.iso8601(), "PT2562047H47M16.854775807S")
+}
+
+@test
+fn iso8601IsRead() {
+    assertEqual(try! Duration.parse(iso8601: "P2W"), Duration.days(14))
+    assertEqual(try! Duration.parse(iso8601: "P1W2D"), Duration.days(9))
+    assertEqual(try! Duration.parse(iso8601: "P1DT12H"), Duration.hours(36))
+    assertEqual(try! Duration.parse(iso8601: "P1.5D"), Duration.hours(36))
+    assertEqual(try! Duration.parse(iso8601: "PT1,5S"), Duration.milliseconds(1500))
+    assertEqual(try! Duration.parse(iso8601: "pt1h0.5m"), Duration.seconds(3630))
+    assertEqual(try! Duration.parse(iso8601: "+PT1S"), Duration.seconds(1))
+    assertEqual(try! Duration.parse(iso8601: "-P1D"), Duration.days(-1))
+    assertEqual(try! Duration.parse(iso8601: "PT36000S"), Duration.hours(10))
+    assertEqual(try! Duration.parse(iso8601: "PT0.0000000015S"), ns(2))
+    assertEqual(try! Duration.parse(" PT1M "), Duration.minutes(1))
+    assertEqual(isoError("P99999999W"), ParseError.Overflow)
+    assertEqual(isoError("-PT2562047H47M16.854775809S"), ParseError.Underflow)
+}
+
+@test
+fn iso8601FormsThatAreNoDurationAreRefused() {
+    assertEqual(isoError(""), ParseError.Empty)
+    assertEqual(isoError("1S"), ParseError.Invalid(at: 0))
+    assertEqual(isoError("-"), ParseError.Invalid(at: 1))
+    assertEqual(isoError("P"), ParseError.Invalid(at: 1))
+    assertEqual(isoError("PT"), ParseError.Invalid(at: 2))
+    assertEqual(isoError("P1DT"), ParseError.Invalid(at: 4))
+    assertEqual(isoError("P1Y"), ParseError.Invalid(at: 2))
+    assertEqual(isoError("P1M"), ParseError.Invalid(at: 2))
+    assertEqual(isoError("P1H"), ParseError.Invalid(at: 2))
+    assertEqual(isoError("PT1D"), ParseError.Invalid(at: 3))
+    assertEqual(isoError("PT-1H"), ParseError.Invalid(at: 2))
+    assertEqual(isoError("PT1S1M"), ParseError.Invalid(at: 5))
+    assertEqual(isoError("PT1M1M"), ParseError.Invalid(at: 5))
+    assertEqual(isoError("PT1.5M1S"), ParseError.Invalid(at: 6))
+    assertEqual(isoError("PT.5S"), ParseError.Invalid(at: 2))
+    assertEqual(isoError("PT1.S"), ParseError.Invalid(at: 4))
+    assertEqual(isoError("PT1"), ParseError.Invalid(at: 3))
+    assertEqual(isoError("PT1ST1S"), ParseError.Invalid(at: 4))
+    assertEqual(isoError("P0000-00-00T01:00:00"), ParseError.Invalid(at: 5))
+    assertEqual(isoError("PT1S "), ParseError.Invalid(at: 4))
+}
+
+@test
+fn equalDurationsHashAlike() {
+    let seen: [Duration: Int] = [Duration.seconds(60): 1]
+    assertEqual(seen[Duration.minutes(1)] ?? 0, 1)
+}

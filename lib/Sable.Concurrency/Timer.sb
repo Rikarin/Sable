@@ -1,0 +1,39 @@
+module Sable.Concurrency
+
+import Sable.Time
+
+/// Waits for a time to come. Ticks that come again and again are an
+/// `Interval`'s.
+public struct Timer {
+    /// Waits at least this long on the monotonic clock; a task cancelled
+    /// before or while it waits goes on at once, and the wait throws.
+    ///
+    /// ```sable
+    /// try! await Timer.after(Duration.milliseconds(1))
+    /// ```
+    public static fn after(_ duration: Duration) async throws(CancellationError) {
+        try await Task.sleep(nanoseconds: duration.totalNanoseconds)
+    }
+
+    /// Waits at least this long on the clock.
+    ///
+    /// ```sable
+    /// let clock = TestClock()
+    /// let waiting = Task.spawn { try! await Timer.after(Duration.hours(1), clock: clock) }
+    /// await clock.advance(by: Duration.hours(1))
+    /// await waiting.value
+    /// ```
+    public static fn after<C: Clock>(_ duration: Duration, clock: C) async throws(CancellationError) {
+        try await clock.sleep(for: duration)
+    }
+
+    /// Waits until the monotonic clock shows the instant.
+    public static fn at(_ deadline: Instant) async throws(CancellationError) {
+        try await MonotonicClock().sleep(until: deadline)
+    }
+
+    /// Waits until the clock shows the instant.
+    public static fn at<C: Clock>(_ deadline: C.Instant, clock: C) async throws(CancellationError) {
+        try await clock.sleep(until: deadline)
+    }
+}

@@ -3127,7 +3127,7 @@ public sealed partial class SilGen {
             // The code, generic as this function is.
             var line = source.GetLinePosition(closureExpression.Syntax.Span.Start).Line;
             var hidden = contextType.Fields.Skip(hiddenAt).Select(static f => f.Type).ToList();
-            var bodyType = new FunctionType([..thick.Signature.Parameters, ..hidden, SilType.Object], thick.Signature.Result, thick.Signature.Thrown);
+            var bodyType = new FunctionType([..thick.Signature.Parameters, ..hidden, SilType.Object], thick.Signature.Result, thick.Signature.Thrown, isAsync: thick.Signature.IsAsync);
             var bodyName = $"{name}$generic";
             generator._unspecialised[bodyName] = (enclosing, shape);
             var code = new SilFunction(bodyName, bodyType) { SourceFile = function.SourceFile, Line = line };

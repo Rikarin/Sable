@@ -1,0 +1,49 @@
+module Sable.Time
+
+/// A point on the clock that stops while the machine sleeps
+/// (`SuspendingClock`): a type of its own, as it cannot be compared with
+/// the monotonic clock's.
+public struct SuspendingInstant: ClockInstant, Hashable {
+    var nanoseconds: Int
+
+    /// The instant it is now.
+    public static fn now() -> SuspendingInstant {
+        return SuspendingInstant { nanoseconds: Runtime.suspendingNanoseconds() }
+    }
+
+    /// How long after the earlier one this is, the machine awake. Traps
+    /// where no Duration is as long.
+    public fn durationSince(_ earlier: SuspendingInstant) -> Duration {
+        return Duration { totalNanoseconds: nanoseconds - earlier.nanoseconds }
+    }
+
+    /// So long after this, or before it for a negative duration. Traps past
+    /// the clock's end.
+    public fn adding(_ duration: Duration) -> SuspendingInstant {
+        return SuspendingInstant { nanoseconds: nanoseconds + duration.totalNanoseconds }
+    }
+
+    /// So long after this, or the clock's end where that is past it.
+    public fn saturatingAdding(_ duration: Duration) -> SuspendingInstant {
+        return SuspendingInstant { nanoseconds: nanoseconds.saturatingAdd(duration.totalNanoseconds) }
+    }
+
+    public operator == (a: SuspendingInstant, b: SuspendingInstant) -> Bool {
+        return a.nanoseconds == b.nanoseconds
+    }
+
+    public operator < (a: SuspendingInstant, b: SuspendingInstant) -> Bool {
+        return a.nanoseconds < b.nanoseconds
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(nanoseconds)
+    }
+}
+
+extension SuspendingInstant: Debug {
+    /// How far the clock had counted: `SuspendingInstant(1.5s)`.
+    public fn debugDescription() -> String {
+        return "SuspendingInstant(\(Duration.nanoseconds(nanoseconds)))"
+    }
+}

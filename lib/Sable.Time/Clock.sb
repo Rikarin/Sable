@@ -1,19 +1,69 @@
 module Sable.Time
 
-public struct Clock {
-    /// Waits at least this long, off the run queue: every other task runs
-    /// meanwhile, and the program waits only when none can — two tasks that
-    /// each sleep a second take a second between them. 'Runtime.sleep'
-    /// waits without letting any task run. A task cancelled before or
-    /// while it sleeps wakes at once, and the sleep throws CancellationError.
-    public static async fn sleep(_ duration: Duration) throws(CancellationError) {
-        try await Task.sleep(nanoseconds: duration.totalNanoseconds)
+/// What tells the time, and waits for it: Swift's `Clock`, .NET's
+/// `TimeProvider`. Code that takes a clock rather than asking the system —
+/// `fn retry<C: Clock>(clock: C) async` — is run in a test with a
+/// `TestClock` (Sable.Concurrency), whose time passes when the test says.
+///
+/// A clock is `MonotonicClock`, what everything measures and waits with
+/// unless told otherwise; `SuspendingClock`, which stops while the machine
+/// sleeps; `SystemClock`, the date and time; or one of the program's own,
+/// which needs `now()` and `sleep(until:)` alone.
+///
+/// ```sable
+/// // Whether the work succeeded within three tries, a second between them.
+/// fn retry<C: Clock>(clock: C, _ work: () -> Bool) async throws(CancellationError) -> Bool {
+///     for _ in 0..<3 {
+///         if work() {
+///             return true
+///         }
+///         try await clock.sleep(for: Duration.seconds(1))
+///     }
+///     return false
+/// }
+///
+/// assert(try! await retry(clock: MonotonicClock(), { true }))
+/// ```
+public protocol Clock: Sendable {
+    /// A point on the clock.
+    associatedtype Instant: ClockInstant
+
+    /// The instant it is now.
+    fn now() -> Instant
+
+    /// Waits until the instant, or a little after, off the run queue; not
+    /// at all once it has passed. A task cancelled before or while it waits
+    /// goes on at once, and the wait throws CancellationError.
+    fn sleep(until deadline: Instant) async throws(CancellationError)
+
+    /// Waits at least this long: until the instant so long from now, unless
+    /// the clock has a shorter way to say it.
+    fn sleep(for duration: Duration) async throws(CancellationError)
+}
+
+extension Clock {
+    public fn sleep(for duration: Duration) async throws(CancellationError) {
+        try await sleep(until: now().saturatingAdding(duration))
     }
 
-    /// How long the body took to run.
-    public static fn measure(_ body: () -> Void) -> Duration {
-        let start = Instant.now()
-        body()
-        return start.elapsed
+    /// How long the body took to run, on this clock. What it throws, this
+    /// throws.
+    ///
+    /// ```sable
+    /// var total = 0
+    /// let took = MonotonicClock().measure { total += 1 }
+    /// assert(took >= Duration.zero && total == 1)
+    /// ```
+    public fn measure<E: Error>(_ body: () throws(E) -> Void) throws(E) -> Duration {
+        let start = now()
+        try body()
+        return now().durationSince(start)
+    }
+
+    /// How long the body took to run, its waits with it, on this clock.
+    public fn measure<E: Error>(_ body: async () throws(E) -> Void) async throws(E) -> Duration {
+        let start = now()
+        try await body()
+        return now().durationSince(start)
     }
 }

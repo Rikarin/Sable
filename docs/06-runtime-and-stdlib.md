@@ -1003,6 +1003,8 @@ trap; the interpreter computes each lane with the scalar builtin, so the
 two agree by construction. The rest move lanes (`swizzled`, `concat`,
 `lowHalf`, .NET 11's `zip` and `unzip`), load and store them from arrays
 (one unaligned vector load or store, the index checked as an element's),
+give a mask as bits (`mask.bits`, x86's movemask, with `firstTrue`,
+`lastTrue` and `trueCount` over them),
 convert them as `unchecked as` does (never trapping: wrapped, saturated,
 rounded), and reduce them: an integer's sum wraps, and a float's is added
 pairwise — lane i with lane i + N/2, down to one — in that order natively

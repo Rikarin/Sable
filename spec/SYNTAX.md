@@ -835,6 +835,10 @@ extension U8[:] { fn toString() -> String { } }
   comes first.
 - Inside, `self` is the array. The parameters may be constrained, inline or
   with `where`; the members are an array's only where its element meets them.
+- Of two members that fit a call equally well, the one for an element type of
+  its own comes before one for any element, and one whose constraints imply the
+  other's before that other: `extension<E: SIMDScalar> E[:]`, as SIMDScalar
+  refines Comparable, before `extension<E: Equatable> E[:]`.
 - Each parameter must appear in the array type.
 - An extension of every growable array of a kind, `T[>..]` or `T[>..<]`, may
   declare initialisers, as such an array always has a value to begin from:

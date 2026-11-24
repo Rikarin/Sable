@@ -74,7 +74,7 @@ public static class SimdBuiltins {
     /// </summary>
     public static bool IsPure(string name, IReadOnlyList<SilType> operands) {
         var op = Op(name);
-        if (op is "splat" or "select" or "concat" or "low_half" or "high_half" or "zip_low" or "zip_high" or "unzip_even" or "unzip_odd" or "convert"
+        if (op is "splat" or "select" or "concat" or "low_half" or "high_half" or "zip_low" or "zip_high" or "unzip_even" or "unzip_odd" or "convert" or "mask_bits"
             || Reductions.Contains(op)) {
             return true;
         }
@@ -123,9 +123,13 @@ public static class SimdBuiltins {
                                && flag == SilType.Bool && mask.Count == chosen.Count && other == chosen:
                 return new([mask, chosen, chosen], chosen);
 
-            // Lanes picked by index, as many as there are indices: each index outside 0..<N traps.
-            case "swizzle" when operands is [VectorType vector, VectorType { Element: var index } indices] && index == SilType.Int:
+            // Lanes picked by index — an Int, or a byte — as many as there are indices: each index outside 0..<N traps.
+            case "swizzle" when operands is [VectorType vector, VectorType { Element: var index } indices] && (index == SilType.Int || index == SilType.U8):
                 return new([vector, indices], new VectorType(vector.Element, indices.Count));
+
+            // A mask's lanes as bits, lane i's at bit i, the rest zero.
+            case "mask_bits" when operands is [VectorType { Element: var maskLane } mask] && maskLane == SilType.Bool:
+                return new([mask], SilType.U64);
 
             // The first vector's lanes, then the second's.
             case "concat" when operands is [VectorType first, var second] && second == first:

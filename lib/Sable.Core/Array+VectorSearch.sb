@@ -1,0 +1,232 @@
+module Sable.Core
+
+// Searching arrays of the types a SIMD lane can be, a vector at a time:
+// the searches every array of Equatable elements has (Array+Search.sb,
+// Collection+Algorithms.sb), chosen over those where the element is an
+// integer or a float. A step is two of the target's vector registers,
+// whatever the element: 32 I8s, 4 F64s. An array of at least a step ends
+// with a step over its last elements again, some of them already seen, so
+// the scalar loop is only for an array shorter than one. A lane's
+// comparison is the scalar's '==': a NaN is never found.
+
+extension<Element: SIMDScalar> Element[:] {
+    /// Whether an element equal to this one is in the array.
+    public fn contains(element: Element) -> Bool => firstEqual(self, element) >= 0
+
+    /// Where the first element equal to this one is, or none.
+    ///
+    /// ```sable
+    /// let xs: I32[>..] = [4, 7, 7, 9]
+    /// assert(xs.firstIndex(of: 7) == 1)
+    /// assert(xs.firstIndex(of: 5) == none)
+    /// ```
+    public fn firstIndex(of element: Element) -> Int? {
+        let at = firstEqual(self, element)
+        return at < 0 ? none : at
+    }
+
+    /// Where the last element equal to this one is, or none.
+    ///
+    /// ```sable
+    /// let xs: I32[>..] = [4, 7, 7, 9]
+    /// assert(xs.lastIndex(of: 7) == 2)
+    /// ```
+    public fn lastIndex(of element: Element) -> Int? {
+        let at = lastEqual(self, element)
+        return at < 0 ? none : at
+    }
+
+    /// How many elements equal this one.
+    ///
+    /// ```sable
+    /// let xs: F64[>..] = [1, 2, 1]
+    /// assert(xs.count(of: 1) == 2)
+    /// ```
+    public fn count(of element: Element) -> Int {
+        let width = Element.preferredVectorWidth
+        if width == 16 {
+            return countEqual(self, element, SIMD<Element, 32>(repeating: element), SIMD<U8, 32>(repeating: 1))
+        }
+        if width == 8 {
+            return countEqual(self, element, SIMD<Element, 16>(repeating: element), SIMD<U16, 16>(repeating: 1))
+        }
+        if width == 4 {
+            return countEqual(self, element, SIMD<Element, 8>(repeating: element), SIMD<U32, 8>(repeating: 1))
+        }
+        return countEqual(self, element, SIMD<Element, 4>(repeating: element), SIMD<U64, 4>(repeating: 1))
+    }
+
+    /// Where the first element equal to any of the candidates is, or none
+    /// (.NET's IndexOfAny): up to five of them are compared with a vector
+    /// of elements at a time.
+    ///
+    /// ```sable
+    /// let xs: U16[>..] = [4, 7, 2, 9]
+    /// assert(xs.firstIndex(ofAny: [9, 2]) == 2)
+    /// ```
+    public fn firstIndex(ofAny candidates: Element[:]) -> Int? {
+        let at = firstEqualToAny(self, candidates)
+        return at < 0 ? none : at
+    }
+}
+
+// Where the first element equal to the value is, or -1.
+fn firstEqual<T: SIMDScalar>(_ xs: T[:], _ value: T) -> Int {
+    let width = T.preferredVectorWidth
+    if width == 16 {
+        return xs.count < 32
+            ? firstEqual(xs, value, SIMD<T, 16>(repeating: value))
+            : firstEqual(xs, value, SIMD<T, 32>(repeating: value))
+    }
+    if width == 8 {
+        return xs.count < 16
+            ? firstEqual(xs, value, SIMD<T, 8>(repeating: value))
+            : firstEqual(xs, value, SIMD<T, 16>(repeating: value))
+    }
+    if width == 4 {
+        return firstEqual(xs, value, SIMD<T, 8>(repeating: value))
+    }
+    return firstEqual(xs, value, SIMD<T, 4>(repeating: value))
+}
+
+fn firstEqual<T: SIMDScalar, N: Int>(_ xs: T[:], _ value: T, _ wanted: SIMD<T, N>) -> Int {
+    let count = xs.count
+    var i = 0
+    if count < N {
+        while i < count {
+            if xs[i] == value {
+                return i
+            }
+            i += 1
+        }
+        return -1
+    }
+    let last = count - N
+    while i < last {
+        let found = SIMD<T, N>.load(from: xs, at: i).lanesEqual(wanted)
+        if found.anyTrue {
+            return i + found.firstTrue
+        }
+        i += N
+    }
+    let found = SIMD<T, N>.load(from: xs, at: last).lanesEqual(wanted)
+    return found.anyTrue ? last + found.firstTrue : -1
+}
+
+// Where the last element equal to the value is, or -1.
+fn lastEqual<T: SIMDScalar>(_ xs: T[:], _ value: T) -> Int {
+    let width = T.preferredVectorWidth
+    if width == 16 {
+        return xs.count < 32
+            ? lastEqual(xs, value, SIMD<T, 16>(repeating: value))
+            : lastEqual(xs, value, SIMD<T, 32>(repeating: value))
+    }
+    if width == 8 {
+        return xs.count < 16
+            ? lastEqual(xs, value, SIMD<T, 8>(repeating: value))
+            : lastEqual(xs, value, SIMD<T, 16>(repeating: value))
+    }
+    if width == 4 {
+        return lastEqual(xs, value, SIMD<T, 8>(repeating: value))
+    }
+    return lastEqual(xs, value, SIMD<T, 4>(repeating: value))
+}
+
+fn lastEqual<T: SIMDScalar, N: Int>(_ xs: T[:], _ value: T, _ wanted: SIMD<T, N>) -> Int {
+    var end = xs.count
+    if end < N {
+        while end > 0 {
+            end -= 1
+            if xs[end] == value {
+                return end
+            }
+        }
+        return -1
+    }
+    while end > N {
+        let found = SIMD<T, N>.load(from: xs, at: end - N).lanesEqual(wanted)
+        if found.anyTrue {
+            return end - N + found.lastTrue
+        }
+        end -= N
+    }
+    let found = SIMD<T, N>.load(from: xs, at: 0).lanesEqual(wanted)
+    return found.anyTrue ? found.lastTrue : -1
+}
+
+// Each lane counts its own matches, in an unsigned integer of the element's
+// size, for as many steps as it can before it is gathered.
+fn countEqual<T: SIMDScalar, C: SIMDScalar & FixedWidthInteger, N: Int>(_ xs: T[:], _ value: T, _ wanted: SIMD<T, N>, _ one: SIMD<C, N>) -> Int {
+    let count = xs.count
+    let whole = count - count % N
+    var total = 0
+    var i = 0
+    while i < whole {
+        let gathered = whole - i > 255 * N ? i + 255 * N : whole
+        var lanes = SIMD<C, N>()
+        while i < gathered {
+            let found = SIMD<T, N>.load(from: xs, at: i).lanesEqual(wanted)
+            lanes = lanes &+ SIMD<C, N>.select(found, one, SIMD<C, N>())
+            i += N
+        }
+        total = total &+ SIMD<Int, N>.converting(lanes).reduceAdd()
+    }
+    while i < count {
+        if xs[i] == value {
+            total = total &+ 1
+        }
+        i += 1
+    }
+    return total
+}
+
+// Where the first element equal to any of the candidates is, or -1.
+fn firstEqualToAny<T: SIMDScalar>(_ xs: T[:], _ candidates: T[:]) -> Int {
+    let width = T.preferredVectorWidth
+    if candidates.count == 0 || candidates.count > 5 || xs.count < width {
+        var i = 0
+        while i < xs.count {
+            for candidate in candidates {
+                if xs[i] == candidate {
+                    return i
+                }
+            }
+            i += 1
+        }
+        return -1
+    }
+    if width == 16 {
+        return firstEqualToAny(xs, candidates, SIMD<T, 16>())
+    }
+    if width == 8 {
+        return firstEqualToAny(xs, candidates, SIMD<T, 8>())
+    }
+    if width == 4 {
+        return firstEqualToAny(xs, candidates, SIMD<T, 4>())
+    }
+    return firstEqualToAny(xs, candidates, SIMD<T, 2>())
+}
+
+// Of one to five candidates in at least a step's elements: the fifth, or
+// whichever there are, compared again in place of those there are not.
+fn firstEqualToAny<T: SIMDScalar, N: Int>(_ xs: T[:], _ candidates: T[:], _ zero: SIMD<T, N>) -> Int {
+    let most = candidates.count - 1
+    let a = SIMD<T, N>(repeating: candidates[0])
+    let b = SIMD<T, N>(repeating: candidates[most < 1 ? most : 1])
+    let c = SIMD<T, N>(repeating: candidates[most < 2 ? most : 2])
+    let d = SIMD<T, N>(repeating: candidates[most < 3 ? most : 3])
+    let e = SIMD<T, N>(repeating: candidates[most])
+    let last = xs.count - N
+    var i = 0
+    while true {
+        let v = SIMD<T, N>.load(from: xs, at: i)
+        let found = v.lanesEqual(a) | v.lanesEqual(b) | v.lanesEqual(c) | v.lanesEqual(d) | v.lanesEqual(e)
+        if found.anyTrue {
+            return i + found.firstTrue
+        }
+        if i == last {
+            return -1
+        }
+        i = last - i < N ? last : i + N
+    }
+}

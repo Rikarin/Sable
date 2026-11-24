@@ -5,6 +5,10 @@ module Sable.Core
 // and Comparable — in lexicographic order — when they are. So an array is
 // a dictionary's key, a set's element, and what 'assertEqual' compares.
 
+// How many elements it takes for the call that compares them by their bits
+// (Array's 'mismatch') to be quicker than comparing each where they are.
+const comparedByBits = 8
+
 extension<Element: Equatable> Element[:]: Equatable {
     /// Whether the two hold equal elements in the same order: as long as
     /// each other, and equal element by element.
@@ -17,6 +21,12 @@ extension<Element: Equatable> Element[:]: Equatable {
     public operator == (lhs: Element[:], rhs: Element[:]) -> Bool {
         if lhs.count != rhs.count {
             return false
+        }
+        if lhs.count >= comparedByBits {
+            let at = lhs.mismatch(rhs)
+            if at >= 0 {
+                return at == lhs.count
+            }
         }
         var i = 0
         while i < lhs.count {
@@ -60,6 +70,12 @@ extension<Element: Comparable> Element[:]: Comparable {
     /// ```
     public operator < (lhs: Element[:], rhs: Element[:]) -> Bool {
         let shorter = lhs.count < rhs.count ? lhs.count : rhs.count
+        if shorter >= comparedByBits {
+            let at = lhs.mismatch(rhs)
+            if at >= 0 {
+                return at < shorter ? lhs[at] < rhs[at] : lhs.count < rhs.count
+            }
+        }
         var i = 0
         while i < shorter {
             if lhs[i] < rhs[i] {

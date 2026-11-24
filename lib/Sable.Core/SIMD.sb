@@ -370,6 +370,16 @@ public struct SIMD<Scalar: SIMDScalar, N: Int> where N >= 2 && (N == 2 || N == 3
     @builtin("simd_swizzle")
     public fn swizzled<M: Int>(_ indices: SIMD<Int, M>) -> SIMD<Scalar, M>
 
+    /// The same, by bytes: a shuffle's indices as one short vector, which is
+    /// what a table of them is kept as.
+    ///
+    /// ```sable
+    /// let v = SIMD<U8, 4>([10, 20, 30, 40])
+    /// assert(v.swizzled(SIMD<U8, 4>([3, 2, 1, 0])) == SIMD<U8, 4>([40, 30, 20, 10]))
+    /// ```
+    @builtin("simd_swizzle")
+    public fn swizzled<M: Int>(_ indices: SIMD<U8, M>) -> SIMD<Scalar, M>
+
     /// The first vector's lanes, then the second's: N is twice theirs.
     ///
     /// ```sable

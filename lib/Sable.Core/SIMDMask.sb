@@ -69,18 +69,32 @@ public struct SIMDMask<N: Int> where N >= 2 && (N == 2 || N == 3 || N == 4 || N 
     @builtin("simd_reduce_and")
     public var allTrue: Bool { get }
 
+    /// The lanes as bits, lane i's at bit i (.NET's ExtractMostSignificantBits,
+    /// x86's movemask): the bits past the N lanes are zero.
+    ///
+    /// ```sable
+    /// assert(SIMDMask<4>([true, false, true, true]).bits == 0b1101)
+    /// ```
+    @builtin("simd_mask_bits")
+    public var bits: U64 { get }
+
     /// How many lanes are true.
-    public var trueCount: Int {
-        get {
-            var count = 0
-            for i in 0..<N {
-                if self[i] {
-                    count += 1
-                }
-            }
-            return count
-        }
-    }
+    public var trueCount: Int => self.bits.popCount
+
+    /// The first lane that is true, or 64 where none is: with 'anyTrue'
+    /// asked first, the lane a search stops at.
+    ///
+    /// ```sable
+    /// assert(SIMDMask<4>([false, false, true, true]).firstTrue == 2)
+    /// ```
+    public var firstTrue: Int => self.bits.trailingZeroCount
+
+    /// The last lane that is true, or -1 where none is.
+    ///
+    /// ```sable
+    /// assert(SIMDMask<4>([true, true, false, false]).lastTrue == 1)
+    /// ```
+    public var lastTrue: Int => 63 - self.bits.leadingZeroCount
 
     /// Where both masks are true.
     @builtin("simd_and")

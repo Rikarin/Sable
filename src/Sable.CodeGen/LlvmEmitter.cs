@@ -756,6 +756,8 @@ public sealed partial class LlvmEmitter {
                                 declare i64 @sable_string_utf8_find(ptr, ptr, i64)
                                 declare i64 @sable_string_utf8_find_last(ptr, ptr, i64)
                                 declare i64 @sable_utf8_validate(ptr, i64, i64)
+                                declare i64 @sable_array_mismatch(ptr, i64, i64, ptr, i64, i64, i64)
+                                declare i64 @sable_opaque_mismatch(ptr, i64, i64, ptr, i64, i64, ptr)
                                 declare i64 @sable_bytes_find(ptr, i64, i64, i8)
                                 declare i64 @sable_bytes_find_any(ptr, i64, i64, ptr, i64, i64)
                                 declare i64 @sable_bytes_count(ptr, i64, i64, i8)
@@ -5048,6 +5050,29 @@ public sealed partial class LlvmEmitter {
                 case "array_capacity":
                     Line($"{Result()} = call i64 @sable_array_capacity(ptr {operands[0]})");
                     return;
+
+                // A type known to compare by its bits by the runtime's vector
+                // loop; one known not to, -1, with no call; an opaque one as
+                // its metadata says.
+                case "array_mismatch": {
+                    var element = ArrayType.ElementOf(builtin.Operands[0].Type)!;
+                    var opaque = SilType.IsIndirect(element);
+                    if (!opaque && !SilBuiltins.ComparesByBits(element)) {
+                        _names[builtin] = "-1";
+                        return;
+                    }
+
+                    // An array is its buffer, all of it.
+                    string Run(int operand) => builtin.Operands[operand].Type is SliceType type
+                        ? $"ptr {SlicePart(operands[operand], type, 0)}, i64 {SlicePart(operands[operand], type, 1)}, i64 {SlicePart(operands[operand], type, 2)}"
+                        : $"ptr {operands[operand]}, i64 0, i64 {Count(operands[operand])}";
+
+                    var runs = $"{Run(0)}, {Run(1)}";
+                    Line(opaque
+                        ? $"{Result()} = call i64 @sable_opaque_mismatch({runs}, ptr {OpaqueMetadata(element)})"
+                        : $"{Result()} = call i64 @sable_array_mismatch({runs}, i64 {Size(element)})");
+                    return;
+                }
 
                 case "array_rotate": {
                     var pointee = ((AddressType)builtin.Operands[0].Type).Pointee;

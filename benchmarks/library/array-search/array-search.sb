@@ -1,0 +1,43 @@
+module ArraySearchBench
+
+// Searching and comparing arrays of 32- and 64-bit integers and of bytes:
+// the first and the last of a value near the far end, how many of one, any
+// of three, and whether two arrays are equal, over 64 Ki elements and, as
+// often as not what a program has, over 24.
+
+fn work(_ words: I32[:], _ others: I32[:], _ longs: Int[:], _ bytes: U8[:], _ rounds: Int) -> Int {
+    var total = 0
+    for _ in 0..<rounds {
+        total += words.firstIndex(of: 999) ?? 0
+        total += words.lastIndex(of: 998) ?? 0
+        total += words.count(of: 7)
+        total += words == others ? 1 : 0
+        total += longs.firstIndex(of: 999) ?? 0
+        total += longs.contains(998) ? 1 : 0
+        total += bytes.firstIndex(ofAny: [200, 201, 202]) ?? 0
+        total += bytes.lastIndex(of: 199) ?? 0
+    }
+    return total
+}
+
+@main
+fn main() {
+    var words: I32[>..] = []
+    var longs: Int[>..] = []
+    var bytes: U8[>..] = []
+    for i in 0..<65536 {
+        words.append(I32(i % 97))
+        longs.append(i % 97)
+        bytes.append(U8(i % 97))
+    }
+    words[65530] = 999
+    words[3] = 998
+    longs[65530] = 999
+    bytes[65530] = 202
+    bytes[3] = 199
+    var others: I32[>..] = []
+    for word in words {
+        others.append(word)
+    }
+    print(work(words, others, longs, bytes, 1000) + work(words[..<24], others[..<24], longs[..<24], bytes[..<24], 200000))
+}

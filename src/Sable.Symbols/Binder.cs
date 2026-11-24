@@ -4086,6 +4086,18 @@ public sealed partial class Binder {
             if (aGeneric != bGeneric) {
                 return aGeneric ? second : first;
             }
+
+            // And of two for any element, the one that asks more of it:
+            // 'extension<Element: SIMDScalar> Element[:]' over
+            // 'extension<Element: Equatable> Element[:]', as SIMDScalar
+            // refines Comparable and so Equatable.
+            if (aGeneric) {
+                var elementA = (TypeParameterSymbol)arrayA.ElementType;
+                var elementB = (TypeParameterSymbol)arrayB.ElementType;
+                var aImplies = Implies(elementA, elementB);
+                var bImplies = Implies(elementB, elementA);
+                return aImplies == bImplies ? null : aImplies ? first : second;
+            }
         }
 
         var aIsProtocol = a.TypeKind == TypeKind.Protocol;
@@ -4102,6 +4114,15 @@ public sealed partial class Binder {
 
         static bool Refines(NamedTypeSymbol protocol, NamedTypeSymbol other) =>
             AssociatedTypes.RefinedProtocols(protocol).Any(p => ReferenceEquals(p, other));
+
+        // Whether whatever meets the one parameter's constraints meets the other's.
+        static bool Implies(TypeParameterSymbol one, TypeParameterSymbol other) {
+            var met = Parts(one).OfType<NamedTypeSymbol>().ToList();
+            return Parts(other).All(wanted => met.Any(has => has.Equals(wanted) || wanted is NamedTypeSymbol named && Refines(has, named)));
+
+            static IEnumerable<TypeSymbol> Parts(TypeParameterSymbol parameter) =>
+                parameter.Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c));
+        }
     }
 
     /// <summary>What an overload is resolved for: a call, or a subscript read or stored through.</summary>

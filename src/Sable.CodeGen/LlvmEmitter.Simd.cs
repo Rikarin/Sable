@@ -84,10 +84,22 @@ public sealed partial class LlvmEmitter {
                     for (var i = 0; i < result.Count; i++) {
                         var (index, lane) = (Fresh(), Fresh());
                         Line($"{index} = extractelement {Type(indices)} {operands[1]}, i64 {i}");
-                        Line($"{lane} = extractelement {Type(first)} {operands[0]}, i64 {index}");
+                        Line($"{lane} = extractelement {Type(first)} {operands[0]}, {Type(indices.Element)} {index}");
                         var next = i == result.Count - 1 ? Result() : Fresh();
                         Line($"{next} = insertelement {Type(result)} {built}, {Type(result.Element)} {lane}, i64 {i}");
                         built = next;
+                    }
+
+                    return;
+                }
+
+                // A bit a lane: the first lane's the lowest, as every target
+                // here is little-endian (x86's movemask, WebAssembly's bitmask).
+                case "mask_bits": {
+                    var bits = first!.Count == 64 ? Result() : Fresh();
+                    Line($"{bits} = bitcast {Type(first)} {operands[0]} to i{first.Count}");
+                    if (first.Count < 64) {
+                        Line($"{Result()} = zext i{first.Count} {bits} to i64");
                     }
 
                     return;

@@ -217,6 +217,32 @@ public sealed class ArrayConformanceTests {
         );
 
     [Fact]
+    public void AnArrayMemberThatAsksMoreOfItsElementBeatsOneThatAsksLess() =>
+        // SIMDScalar refines Comparable, and so Equatable: its member is
+        // chosen for an Int's array, a refinement's over both, the generic
+        // one where the element is only Equatable.
+        AssertClean(
+            """
+            protocol Marked: SIMDScalar { }
+            extension I8: Marked { }
+            extension<Element: Equatable> Element[:] {
+                fn probe(_ value: Element) -> Int { return 1 }
+            }
+            extension<Element: SIMDScalar> Element[:] {
+                fn probe(_ value: Element) -> Bool { return true }
+            }
+            extension<Element: Marked> Element[:] {
+                fn probe(_ value: Element) -> String { return "marked" }
+            }
+            fn words(_ values: String[>..]) -> Int { return values.probe("a") }
+            fn numbers(_ values: Int[>..]) -> Bool { return values.probe(2) }
+            fn marked(_ values: I8[>..]) -> String { return values.probe(2) }
+            fn anything<T: Equatable>(_ values: T[:], _ value: T) -> Int { return values.probe(value) }
+            fn anyLanes<T: SIMDScalar>(_ values: T[:], _ value: T) -> Bool { return values.probe(value) }
+            """
+        );
+
+    [Fact]
     public void OverloadsFromSeveralProtocolsAreOneSet() =>
         AssertClean(
             """

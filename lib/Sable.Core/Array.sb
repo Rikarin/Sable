@@ -41,6 +41,13 @@ extension<Element> Element[:] {
     /// ```
     @builtin("array_of_slice")
     public fn toArray() -> Element[>..]
+
+    // Where the two first differ, or the shorter's count where they do not,
+    // if elements of this type are equal just when their bits are — an
+    // integer, a Bool, a Char — found a vector at a time; -1 if not. The
+    // type is known as it is compiled, or by its metadata.
+    @builtin("array_mismatch")
+    fn mismatch(_ other: Element[:]) -> Int
 }
 
 extension<Element: Equatable> Element[:] {

@@ -9795,6 +9795,9 @@ public sealed partial class SilGen {
         ///     them (<paramref name="byPayload" />): a type's own '==', or a
         ///     tuple's element by element.
         /// </remarks>
+        /// <summary>How many elements it takes for the runtime's comparison of them all to be quicker than comparing each: Array+Comparison.sb's <c>comparedByBits</c>.</summary>
+        const int ComparedByBits = 8;
+
         /// <summary>
         ///     Two arrays compared: unequal at once if their counts differ, and
         ///     otherwise element by element, each pair bound to the comparison's
@@ -9813,7 +9816,23 @@ public sealed partial class SilGen {
             var after = function.AddBlock();
             var result = after.AddArgument(SilType.Bool);
             var differ = Emit(new IntegerLiteralInst(SilType.Bool, 0));
-            Jump(new CondBranchInst(sameCount, header, [Emit(new IntegerLiteralInst(SilType.Int, 0))], after, [differ]));
+            if (SilBuiltins.ComparesByBits(element)) {
+                // More than a few elements that are equal when their bits
+                // are, as Array+Comparison.sb's '==' compares them: at once.
+                var sized = function.AddBlock();
+                var atOnce = function.AddBlock();
+                Jump(new CondBranchInst(sameCount, sized, [], after, [differ]));
+
+                _current = sized;
+                var many = Emit(new BuiltinInst("cmp_ge_Int", SilType.Bool, count, Emit(new IntegerLiteralInst(SilType.Int, ComparedByBits))));
+                Jump(new CondBranchInst(many, atOnce, [], header, [Emit(new IntegerLiteralInst(SilType.Int, 0))]));
+
+                _current = atOnce;
+                var mismatch = Emit(new BuiltinInst("array_mismatch", SilType.Int, left, right));
+                Branch(after, Emit(new BuiltinInst("cmp_eq_Int", SilType.Bool, mismatch, count)));
+            } else {
+                Jump(new CondBranchInst(sameCount, header, [Emit(new IntegerLiteralInst(SilType.Int, 0))], after, [differ]));
+            }
 
             // Every index looked at, and every element equal: the arrays are.
             _current = header;

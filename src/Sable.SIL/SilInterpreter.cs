@@ -2057,6 +2057,22 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "array_count":
                 return (long)ElementsOf(operands[0]).Count;
 
+            case "array_mismatch": {
+                if (!SilBuiltins.ComparesByBits(ArrayType.ElementOf(builtin.Operands[0].Type)!)) {
+                    return -1L;
+                }
+
+                var (first, firstStart, firstCount) = ElementsOf(operands[0]);
+                var (second, secondStart, secondCount) = ElementsOf(operands[1]);
+                var shorter = Math.Min(firstCount, secondCount);
+                var at = 0;
+                while (at < shorter && Equals(first!.Elements[firstStart + at], second!.Elements[secondStart + at])) {
+                    at++;
+                }
+
+                return (long)at;
+            }
+
             // An array's element, or a slice's — checked against the slice's
             // count, not its buffer's.
             case "array_get" or "array_get_borrowed": {

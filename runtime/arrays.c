@@ -719,6 +719,77 @@ int64_t sable_utf8_validate(const SableArray *buffer, int64_t start, int64_t cou
     return count == 0 ? -1 : first_invalid_utf8(slice_bytes(buffer, start), count);
 }
 
+// ---- Comparing elements by their bits
+
+// Where the two runs of bytes first differ, or their length: sixty-four and
+// then sixteen at a time, the last sixteen over again in place of a scalar
+// tail, so that only a run of fewer is walked by eight and by one.
+static int64_t first_difference(const uint8_t *a, const uint8_t *b, int64_t length) {
+    int64_t i = 0;
+    while (i + 64 <= length) {
+        const char *x = (const char *)a + i, *y = (const char *)b + i;
+        if (any16((sable_mask16)((load16(x) ^ load16(y)) | (load16(x + 16) ^ load16(y + 16)) | (load16(x + 32) ^ load16(y + 32)) | (load16(x + 48) ^ load16(y + 48))))) {
+            break;
+        }
+
+        i += 64;
+    }
+
+    while (i + 16 <= length) {
+        sable_mask16 differs = (sable_mask16)(load16((const char *)a + i) != load16((const char *)b + i));
+        if (any16(differs)) {
+            return i + (int64_t)(__builtin_ctzll(mask16_bits(differs)) / MASK16_LANE_BITS);
+        }
+
+        i += 16;
+    }
+
+    if (i < length && length >= 16) {
+        i = length - 16;
+        sable_mask16 differs = (sable_mask16)(load16((const char *)a + i) != load16((const char *)b + i));
+        return any16(differs) ? i + (int64_t)(__builtin_ctzll(mask16_bits(differs)) / MASK16_LANE_BITS) : length;
+    }
+
+    while (i + 8 <= length) {
+        uint64_t x, y;
+        memcpy(&x, a + i, 8);
+        memcpy(&y, b + i, 8);
+        if (x != y) {
+            return i + __builtin_ctzll(x ^ y) / 8;
+        }
+
+        i += 8;
+    }
+
+    while (i < length && a[i] == b[i]) {
+        i++;
+    }
+
+    return i;
+}
+
+// Where two slices of elements of 'size' bytes, compared as bytes, first
+// differ, or the shorter's count.
+int64_t sable_array_mismatch(const SableArray *a, int64_t aStart, int64_t aCount, const SableArray *b, int64_t bStart, int64_t bCount, int64_t size) {
+    int64_t shorter = aCount < bCount ? aCount : bCount;
+    if (shorter == 0) {
+        return 0;
+    }
+
+    return first_difference((const uint8_t *)a->elements + aStart * size, (const uint8_t *)b->elements + bStart * size, shorter * size) / size;
+}
+
+// The same of a type known only by its metadata: -1 unless it is one whose
+// '==' compares its bits, which of the scalars all but the floats ('F16' …
+// 'F64', 'BF16') are.
+int64_t sable_opaque_mismatch(const SableArray *a, int64_t aStart, int64_t aCount, const SableArray *b, int64_t bStart, int64_t bCount, const SableTypeMetadata *type) {
+    if (type->kind != SABLE_KIND_SCALAR || type->name == NULL || type->name[0] == 'F' || (type->name[0] == 'B' && type->name[1] == 'F')) {
+        return -1;
+    }
+
+    return sable_array_mismatch(a, aStart, aCount, b, bStart, bCount, type->size);
+}
+
 // ---- Searching bytes (U8[:]'s own contains, firstIndex and count)
 
 // Where the byte first is in the slice, or -1: memchr, which the C library

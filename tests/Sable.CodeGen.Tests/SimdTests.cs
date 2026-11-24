@@ -430,6 +430,87 @@ public sealed class SimdTests {
         );
 
     [Fact]
+    public void AMasksBitsAreItsLanes() =>
+        Assert.Equal(
+            "5 2 0 2\n4 3\n9223372036854775809 2 0 63\n4294967295 32 0 31\n0 0 64 -1\n0b1010101010101010\n",
+            AssertAgree(
+                Program(
+                    """
+                    fn show<N: Int>(_ m: SIMDMask<N>) {
+                        print("\(m.bits) \(m.trueCount) \(m.firstTrue) \(m.lastTrue)")
+                    }
+                    """,
+                    """
+                        show(SIMDMask<3>([true, false, true]))
+                        let two = SIMDMask<4>([false, false, true, true])
+                        print("\(two.bits >> 2 << 2 & 7) \(two.lastTrue)")
+                        var wide = SIMDMask<64>()
+                        wide[0] = true
+                        wide[63] = true
+                        show(wide)
+                        show(SIMDMask<32>(repeating: true))
+                        show(SIMDMask<16>())
+                        let odd = SIMD<U8, 16>.sequence(start: 0, step: 1) & SIMD<U8, 16>(repeating: 1)
+                        print("\(odd.lanesEqual(SIMD<U8, 16>(repeating: 1)).bits:#b)")
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void ByteIndicesPickLanes() =>
+        Assert.Equal(
+            "<30, 10, 30, 20>\n<13, 14, 15, 16, 1, 2, 3, 4>\n",
+            AssertAgree(
+                Program(
+                    "",
+                    """
+                        print(SIMD<I32, 4>([10, 20, 30, 40]).swizzled(SIMD<U8, 4>([2, 0, 2, 1])))
+                        print(SIMD<U8, 16>.sequence(start: 1, step: 1).swizzled(SIMD<U8, 8>([12, 13, 14, 15, 0, 1, 2, 3])))
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void AByteIndexOutsideTheVectorTraps() {
+        var trapped = AssertAgree(Program("", "print(SIMD<I32, 4>([1, 2, 3, 4]).swizzled(SIMD<U8, 2>([0, 4])))"));
+        Assert.NotEqual(0, trapped.ExitCode);
+        Assert.Contains("SIMD lane index out of range", trapped.Stderr);
+    }
+
+    /// <summary>Array+VectorSearch.sb's searches and the comparison by bits: at lengths about a step's, a match at each end and in the middle.</summary>
+    [Fact]
+    public void TheArraySearchesAgree() =>
+        AssertAgree(
+            Program(
+                """
+                fn probe<T: SIMDScalar>(_ other: T, _ wanted: T) {
+                    for n in [0, 1, 7, 8, 9, 31, 32, 33, 70] as Int[>..] {
+                        var xs = T[>..](repeating: other, count: n)
+                        let all = xs
+                        for at in [0, n / 2, n - 1] as Int[>..] {
+                            if at < 0 || at >= n {
+                                continue
+                            }
+                            xs[at] = wanted
+                            print("\(n) \(at): \(xs.firstIndex(of: wanted) ?? -1) \(xs.lastIndex(of: wanted) ?? -1) \(xs.count(of: wanted)) \(xs.contains(wanted)) \(xs.firstIndex(ofAny: [wanted, wanted]) ?? -1) \(xs == all) \(xs < all) \(xs.commonPrefixLength(with: all))")
+                        }
+                        print("\(n): \(all.contains(wanted)) \(all.lastIndex(of: wanted) ?? -1) \(all == all[..<n])")
+                    }
+                }
+                """,
+                """
+                    probe(U8(1), U8(200))
+                    probe(I16(1), I16(-2))
+                    probe(I32(1), I32(-2))
+                    probe(1, 2)
+                    probe(1.0, 0.5)
+                """
+            )
+        );
+
+    [Fact]
     public void TheKernelLoopAgrees() =>
         Assert.Equal(
             "[3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0]\n10.0\n",

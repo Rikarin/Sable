@@ -90,7 +90,17 @@ public sealed partial class SilInterpreter {
 
             case "swizzle": {
                 var (lanes, indices) = (Lanes(operands[0]), Lanes(operands[1]));
-                return new SimdValue([..indices.Select(index => lanes[(int)LaneIndex((long)index!, lanes.Length)])]);
+                return new SimdValue([..indices.Select(index => lanes[(int)LaneIndex(Convert.ToInt64(index), lanes.Length)])]);
+            }
+
+            case "mask_bits": {
+                var lanes = Lanes(operands[0]);
+                var bits = 0ul;
+                for (var i = 0; i < lanes.Length; i++) {
+                    bits |= (bool)lanes[i]! ? 1ul << i : 0;
+                }
+
+                return bits;
             }
 
             case "concat":

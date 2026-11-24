@@ -1362,6 +1362,13 @@ Int[>..]()                 // empty grow-only array, likewise; and Int[>..<]()
 Point { x: 1, y: 2 }       // record literal; every field carries its value
 ```
 
+A numeric literal has the type its context asks for, and so does an
+expression of literals alone (`29 << 112`, `-(1 + 2)`, `~0`): the type of a
+`let` with one, a parameter's once the call's overload is chosen
+(`Decimal.fromBits(29 << 112)` shifts a U128), the other operand's, and an
+operand of `-`, `+` or `~` the operator's. With no context they are `Int` and
+`F64`.
+
 ### Interpolation and format specs
 
 A hole, `\(expr)`, writes its value: a string as it is, a number, a `Bool`

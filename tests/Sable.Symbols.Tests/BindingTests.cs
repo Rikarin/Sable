@@ -115,6 +115,42 @@ public sealed class BindingTests {
     public void LiteralOperandsTakeTheTypeTheContextAsks(string body, string expected) =>
         Assert.Equal(expected, TypeOfLast(body));
 
+    [Theory]
+    [InlineData("let a: U128 = 5\nlet v = a & ~(1 << 127)", "U128")]
+    [InlineData("let v: I8 = -(1 + 2)", "I8")]
+    [InlineData("let v: U8 = ~0", "U8")]
+    public void APrefixOperatorPassesTheContextsTypeToItsOperand(string body, string expected) =>
+        Assert.Equal(expected, TypeOfLast(body));
+
+    // ---- Literals as arguments -------------------------------------------------
+
+    const string Takers = """
+                          fn wide(_ x: U128) -> U128 { return x }
+                          fn byte(_ x: U8) -> U8 { return x }
+                          fn bytes(_ xs: U8[:]) -> Int { return xs.count }
+                          fn twice(_ x: Int) -> Int { return x * 2 }
+                          fn twice(_ x: U128) -> U128 { return x * 2 }
+                          fn same<T>(_ x: T) -> T { return x }
+                          """;
+
+    [Theory]
+    [InlineData("let v = wide(29 << 112)", "U128")]
+    [InlineData("let v = wide((1 + 2) * 3 << 100)", "U128")]
+    [InlineData("let v = byte((200 + 55))", "U8")]
+    [InlineData("let v = U128(1 << 100)", "U128")]
+    [InlineData("let v = twice(1 << 3)", "Int")]
+    [InlineData("let v = same(1 << 3)", "Int")]
+    public void LiteralsAloneInAnArgumentTakeTheParametersType(string body, string expected) =>
+        Assert.Equal(expected, TypeOfLast(body, Takers));
+
+    [Fact]
+    public void ALiteralArgumentStillHasToFitTheParameter() =>
+        Assert.Contains(ErrorsIn("let v = byte(300 + 1)", Takers), static e => e.Code == ErrorCode.ERR_IntegerDoesNotFit);
+
+    [Fact]
+    public void ALiteralArgumentThatFitsNoOverloadIsStillReported() =>
+        Assert.NotEmpty(ErrorsIn("let v = byte(1.5 * 2)", Takers));
+
     [Fact]
     public void AComparisonsOperandsDoNotTakeItsContextsType() =>
         Assert.Equal("Bool", TypeOfLast("let v: Bool = 1 < 2"));

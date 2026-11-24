@@ -83,9 +83,9 @@ public struct CharSet: Pattern {
         var code = first.codePoint
         while code <= last.codePoint && code < 128 {
             if code < 64 {
-                low = low | (1 as U64) << U64(code)
+                low = low | 1 << U64(code)
             } else {
-                high = high | (1 as U64) << U64(code - 64)
+                high = high | 1 << U64(code - 64)
             }
             code = code + 1
         }

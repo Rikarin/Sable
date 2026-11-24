@@ -68,4 +68,23 @@ public sealed class OperatorTests {
                 print(held != none)
             """
         );
+
+    [Fact]
+    public void LiteralsInArgumentsTakeTheParametersType() =>
+        Prints(
+            "150576608897510001227384393547382784\n255\n16\n170141183460469231731687303715884105727\n",
+            """
+            fn wide(_ x: U128) -> U128 { return x }
+            fn byte(_ x: U8) -> U8 { return x }
+            fn twice(_ x: Int) -> Int { return x * 2 }
+            fn twice(_ x: U128) -> U128 { return x * 2 }
+            """,
+            """
+                print(wide(29 << 112))
+                print(byte((200 + 55)))
+                print(twice(1 << 3))
+                let all: U128 = 340282366920938463463374607431768211455
+                print(all & ~(1 << 127))
+            """
+        );
 }

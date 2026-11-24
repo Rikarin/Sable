@@ -100,10 +100,10 @@ public struct Decimal: SignedNumeric, Comparable, Hashable {
     /// ```sable
     /// let bits: U128 = (2 << 112) | 125
     /// assert(Decimal.fromBits(bits) == Decimal(125, scale: 2))
-    /// assert(Decimal.fromBits((29 as U128) << 112) == none)
+    /// assert(Decimal.fromBits(29 << 112) == none)
     /// ```
     public static fn fromBits(_ bits: U128) -> Decimal? {
-        let reserved: U128 = (0x7F00_FFFF as U128) << 96
+        let reserved: U128 = 0x7F00_FFFF << 96
         if (bits & reserved) != 0 || ((bits >> 112) & 0xFF) > 28 {
             return none
         }
@@ -174,7 +174,7 @@ public struct Decimal: SignedNumeric, Comparable, Hashable {
     /// assert(Decimal(-15, scale: 1).abs() == Decimal(15, scale: 1))
     /// ```
     public fn abs() -> Decimal {
-        return Decimal { storage: self.storage & ~((1 as U128) << 127) }
+        return Decimal { storage: self.storage & ~(1 << 127) }
     }
 
     // ---- Arithmetic --------------------------------------------------------

@@ -300,6 +300,10 @@ type-checking of modules trivially possible.
    member-lookup, literal-default constraints).
 2. Simplify: propagate equalities, resolve unambiguous overloads, apply
    defaults (integer literal → `Int`, float literal → `F64`).
+   An expression of literals alone (`29 << 112`) is one literal here: it
+   takes the type its context gives — a parameter's once the overload is
+   chosen, the other operand's — and
+   defaults only when nothing does.
 3. Solve the remainder by ranked search over overload choices, with a score
    penalising implicit conversions and `any` boxing.
 4. Apply the best solution; if several tie, report ambiguity with the candidates.

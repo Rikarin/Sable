@@ -4598,11 +4598,11 @@ public sealed partial class Binder {
         // them are closure bodies, is not known until they are bound. Each
         // is then bound for real, in the place it turned out to have — the
         // call's own, or a closure's.
-        if (!MayTakeAutoclosure(syntax.Expression)) {
-            return BindInvocationArguments(syntax, expectedType, speculative: false);
-        }
+        var bound = BindInvocationArguments(syntax, expectedType, speculative: MayTakeAutoclosure(syntax.Expression));
 
-        var bound = BindInvocationArguments(syntax, expectedType, speculative: true);
+        // One left as a question by a call that never chose an overload —
+        // an autoclosure's, or a literal's waiting for its parameter — is
+        // bound for real now, so its diagnostics are had.
         foreach (var argument in ArgumentSyntaxes(syntax)) {
             if (_speculated.Remove(argument)) {
                 BindExpression(argument);
@@ -4707,7 +4707,7 @@ public sealed partial class Binder {
         var labels = labelBuilder.ToImmutable();
 
         var arguments = syntaxes
-            .Select(e => IsClosure(e) ? new BoundUnboundClosure(e) : speculative ? Speculate(e) : BindExpression(e))
+            .Select(e => IsClosure(e) ? new BoundUnboundClosure(e) : speculative || TakesParameterType(e) ? Speculate(e) : BindExpression(e))
             .ToImmutableArray();
 
         var callee = BindCallee(syntax.Expression, expectedType);
@@ -4781,6 +4781,12 @@ public sealed partial class Binder {
                     && arguments is [var converted]
                     && labels is [null]
                     && Core.IsNumeric(converted.Type)) {
+                    // 'U128(1 << 100)': literals alone are of the type made.
+                    if (syntaxes is [var only] && IsLiteralOnly(only) && _speculated.Remove(only)) {
+                        var typed = BindExpression(only, namedType);
+                        return typed.Type.Equals(namedType) ? typed : new BoundConversion(syntax, namedType, typed, ConversionKind.Explicit);
+                    }
+
                     return converted is BoundLiteral literalArgument && _conversions.HasImplicitConversion(literalArgument.Type, namedType, true)
                         ? new BoundConversion(syntax, namedType, literalArgument, ConversionKind.LiteralTyping)
                         : new BoundConversion(syntax, namedType, converted, ConversionKind.Explicit);
@@ -5165,10 +5171,11 @@ public sealed partial class Binder {
                     continue;
                 }
 
-                realised[i] = ParameterFor(resolved, slots, i) is { IsAutoclosure: true } lazy
+                var parameter = ParameterFor(resolved, slots, i);
+                realised[i] = parameter is { IsAutoclosure: true } lazy
                               && substitution.Apply(lazy.Type) is FunctionTypeSymbol { ParameterTypes.IsEmpty: true } lazyType
                     ? BindAutoclosure(syntaxes[i], lazyType)
-                    : BindExpression(syntaxes[i]);
+                    : BindExpression(syntaxes[i], TakesParameterType(syntaxes[i]) ? ParameterTypeFor(parameter, substitution, resolved) : null);
             }
 
             arguments = realised.ToImmutable();
@@ -6268,7 +6275,7 @@ public sealed partial class Binder {
                 wanted = elements.ElementType;
             }
 
-            var conversion = _conversions.Classify(arguments[i].Type, wanted, IsLiteral(arguments[i]));
+            var conversion = _conversions.Classify(arguments[i].Type, wanted, IsLiteral(arguments[i]) || IsLiteralOnly(arguments[i].Syntax));
 
             // An '@autoclosure' parameter passed on bare is the overload it
             // was meant for, and is told to call it (S3516).
@@ -6407,6 +6414,51 @@ public sealed partial class Binder {
     ///     A numeric literal has no type until something asks for one, and an
     ///     array literal has no storage kind; both bend to fit.
     /// </remarks>
+    /// <summary>
+    ///     An expression of literals alone — <c>29 &lt;&lt; 112</c>, <c>-(1 + 2)</c> —
+    ///     which, like a literal, has the type its context asks for.
+    /// </summary>
+    static bool IsLiteralOnly(SyntaxNode? syntax) =>
+        syntax switch {
+            LiteralExpressionSyntax literal => literal.Token.Kind is SyntaxKind.IntegerLiteralToken or SyntaxKind.FloatLiteralToken,
+            ParenthesizedExpressionSyntax parenthesized => IsLiteralOnly(parenthesized.Expression),
+            PrefixUnaryExpressionSyntax unary => unary.OperatorToken.Kind is SyntaxKind.MinusToken or SyntaxKind.PlusToken or SyntaxKind.TildeToken
+                                                 && IsLiteralOnly(unary.Operand),
+            BinaryExpressionSyntax binary => binary.OperatorToken.Kind is SyntaxKind.PlusToken or SyntaxKind.MinusToken or SyntaxKind.StarToken
+                                                 or SyntaxKind.SlashToken or SyntaxKind.PercentToken or SyntaxKind.AmpersandToken
+                                                 or SyntaxKind.PipeToken or SyntaxKind.CaretToken or SyntaxKind.LessLessToken
+                                                 or SyntaxKind.GreaterGreaterToken
+                                             && IsLiteralOnly(binary.Left) && IsLiteralOnly(binary.Right),
+            _ => false,
+        };
+
+    /// <summary>
+    ///     An argument whose type is the parameter's it is passed to, which is
+    ///     not known until the overload is: an expression of literals alone
+    ///     (a bare literal is typed by the conversion already). It is bound
+    ///     first to choose the overload, then again with the parameter's type.
+    /// </summary>
+    static bool TakesParameterType(ExpressionSyntax syntax) =>
+        syntax switch {
+            LiteralExpressionSyntax => false,
+            ParenthesizedExpressionSyntax parenthesized => TakesParameterType(parenthesized.Expression),
+            _ => IsLiteralOnly(syntax),
+        };
+
+    /// <summary>The type an argument for <paramref name="parameter" /> is bound to, once the call is resolved: null while inference has left it open.</summary>
+    static TypeSymbol? ParameterTypeFor(ParameterSymbol? parameter, TypeSubstitution substitution, FunctionSymbol function) {
+        if (parameter is null) {
+            return null;
+        }
+
+        var type = substitution.Apply(parameter.Type);
+        if (parameter.IsVariadic && type is ArrayTypeSymbol variadic) {
+            type = variadic.ElementType;
+        }
+
+        return ContainsUninferred(type, function) ? null : type;
+    }
+
     static bool IsLiteral(BoundExpression expression) =>
         expression is BoundLiteral or BoundArray or BoundDictionary
         || expression is BoundRange range && (range.Lower is null or BoundLiteral) && (range.Upper is null or BoundLiteral);
@@ -8297,7 +8349,13 @@ public sealed partial class Binder {
         // an array is a place.
         List<SyntaxNode> inout = syntax.OperatorToken.Kind == SyntaxKind.AmpersandToken ? [..Spine(syntax.Operand)] : [];
         _inoutSpine.UnionWith(inout);
-        var operand = BindExpression(syntax.Operand);
+
+        // '-', '+' and '~' give their operand's type, so it is the one the
+        // context asks for: 'x & ~(1 << 127)' complements a U128.
+        var operandExpected = syntax.OperatorToken.Kind is SyntaxKind.MinusToken or SyntaxKind.PlusToken or SyntaxKind.TildeToken
+            ? expectedType
+            : null;
+        var operand = BindExpression(syntax.Operand, operandExpected);
         _inoutSpine.ExceptWith(inout);
         if (syntax.OperatorToken.Kind is not (SyntaxKind.AmpersandToken or SyntaxKind.MoveKeyword)) {
             operand = ImplicitlyUnwrapped(Dereferenced(operand));

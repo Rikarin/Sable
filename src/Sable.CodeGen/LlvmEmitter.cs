@@ -809,7 +809,7 @@ public sealed partial class LlvmEmitter {
             _ when type == SilType.F64 => "double",
             _ when type == SilType.F32 => "float",
             _ when type == SilType.F16 => "half",
-            _ when type == SilType.BF16 => "bfloat",
+            _ when type == SilType.BF16 => "i16",
             _ when SilType.IntegerInfo(type) is var (bits, _) => $"i{bits}",
             _ when type == SilType.Char => "i32",
             _ when type == SilType.String => "ptr",
@@ -1802,6 +1802,101 @@ public sealed partial class LlvmEmitter {
         }
 
         /// <summary>
+        ///     A BF16 is lowered to its bits, an i16, and widened and narrowed
+        ///     by integer arithmetic alone: LLVM's own bfloat is selected on
+        ///     some targets not at all (AArch64 without +bf16, LLVM 18) and
+        ///     narrowed from a double on others through a float, rounding twice.
+        ///     This is the float a BF16 widens to exactly: its bits, the float's
+        ///     top sixteen.
+        /// </summary>
+        string Bf16ToFloat(string value) {
+            var wide = Fresh();
+            var shifted = Fresh();
+            var result = Fresh();
+            Line($"{wide} = zext i16 {value} to i32");
+            Line($"{shifted} = shl i32 {wide}, 16");
+            Line($"{result} = bitcast i32 {shifted} to float");
+            return result;
+        }
+
+        /// <summary>The double a BF16 widens to exactly.</summary>
+        string Bf16ToDouble(string value) {
+            var result = Fresh();
+            Line($"{result} = fpext float {Bf16ToFloat(value)} to double");
+            return result;
+        }
+
+        /// <summary>
+        ///     The float rounded to the nearest BF16, ties to even, as
+        ///     <c>BFloat16.FromSingle</c>: a NaN stays one, made quiet.
+        /// </summary>
+        void FloatToBf16(string value, string result) {
+            var bits = Fresh();
+            var high = Fresh();
+            var odd = Fresh();
+            var bias = Fresh();
+            var rounded = Fresh();
+            var roundedHigh = Fresh();
+            var quiet = Fresh();
+            var isNaN = Fresh();
+            var chosen = Fresh();
+            Line($"{bits} = bitcast float {value} to i32");
+            Line($"{high} = lshr i32 {bits}, 16");
+            Line($"{odd} = and i32 {high}, 1");
+            Line($"{bias} = add i32 {odd}, 32767");
+            Line($"{rounded} = add i32 {bits}, {bias}");
+            Line($"{roundedHigh} = lshr i32 {rounded}, 16");
+            Line($"{quiet} = or i32 {high}, 64");
+            Line($"{isNaN} = fcmp uno float {value}, {value}");
+            Line($"{chosen} = select i1 {isNaN}, i32 {quiet}, i32 {roundedHigh}");
+            Line($"{result} = trunc i32 {chosen} to i16");
+        }
+
+        /// <summary>
+        ///     The double rounded once to the nearest BF16, as
+        ///     <c>BFloat16.FromDouble</c>: through a float rounded to odd, its
+        ///     last bit set where anything was cut off, so the second rounding
+        ///     never lands on a tie the first made. A NaN is the quiet one.
+        /// </summary>
+        void DoubleToBf16(string value, string result) {
+            var single = Fresh();
+            var back = Fresh();
+            var inexact = Fresh();
+            var magnitude = Fresh();
+            var finite = Fresh();
+            var adjust = Fresh();
+            var bits = Fresh();
+            var backMagnitude = Fresh();
+            var valueMagnitude = Fresh();
+            var away = Fresh();
+            var down = Fresh();
+            var towardZero = Fresh();
+            var odd = Fresh();
+            var adjusted = Fresh();
+            var oddSingle = Fresh();
+            var narrowed = Fresh();
+            var isNaN = Fresh();
+            Line($"{single} = fptrunc double {value} to float");
+            Line($"{back} = fpext float {single} to double");
+            Line($"{inexact} = fcmp one double {back}, {value}");
+            Line($"{magnitude} = call float @llvm.fabs.f32(float {single})");
+            Line($"{finite} = fcmp one float {magnitude}, 0x7FF0000000000000");
+            Line($"{adjust} = and i1 {inexact}, {finite}");
+            Line($"{bits} = bitcast float {single} to i32");
+            Line($"{backMagnitude} = call double @llvm.fabs.f64(double {back})");
+            Line($"{valueMagnitude} = call double @llvm.fabs.f64(double {value})");
+            Line($"{away} = fcmp ogt double {backMagnitude}, {valueMagnitude}");
+            Line($"{down} = sub i32 {bits}, 1");
+            Line($"{towardZero} = select i1 {away}, i32 {down}, i32 {bits}");
+            Line($"{odd} = or i32 {towardZero}, 1");
+            Line($"{adjusted} = select i1 {adjust}, i32 {odd}, i32 {bits}");
+            Line($"{oddSingle} = bitcast i32 {adjusted} to float");
+            FloatToBf16(oddSingle, narrowed);
+            Line($"{isNaN} = fcmp uno double {value}, {value}");
+            Line($"{result} = select i1 {isNaN}, i16 32704, i16 {narrowed}");
+        }
+
+        /// <summary>
         ///     A BF16's intrinsic: on the double it widens to exactly, then
         ///     narrowed once — as the interpreter computes it, and with nothing
         ///     asked of the machine's bfloat support but the two conversions.
@@ -1814,15 +1909,13 @@ public sealed partial class LlvmEmitter {
                     return operands[index];
                 }
 
-                var wide = Fresh();
-                Line($"{wide} = fpext bfloat {operands[index]} to double");
-                return wide;
+                return Bf16ToDouble(operands[index]);
             }
 
             string Narrowed(string wide) {
                 var name = Fresh();
                 _names[builtin] = name;
-                Line($"{name} = fptrunc double {wide} to bfloat");
+                DoubleToBf16(wide, name);
                 return name;
             }
 
@@ -1909,18 +2002,18 @@ public sealed partial class LlvmEmitter {
                     var fromZero = Fresh();
                     var isStuck = Fresh();
                     var value = Fresh();
-                    Line($"{bits} = bitcast bfloat {operands[0]} to i16");
+                    Line($"{bits} = or i16 {operands[0]}, 0");
                     Line($"{up} = add i16 {bits}, 1");
                     Line($"{down} = sub i16 {bits}, 1");
                     Line($"{positive} = fcmp ogt double {x}, {FloatZero}");
                     Line($"{stepped} = select i1 {positive}, i16 {up}, i16 {down}");
                     Line($"{isZero} = fcmp oeq double {x}, {FloatZero}");
                     Line($"{fromZero} = select i1 {isZero}, i16 1, i16 {stepped}");
-                    Line($"{value} = bitcast i16 {fromZero} to bfloat");
+                    Line($"{value} = or i16 {fromZero}, 0");
                     Line($"{isStuck} = fcmp ueq double {x}, {FloatInfinity}");
                     var result = Fresh();
                     _names[builtin] = result;
-                    Line($"{result} = select i1 {isStuck}, bfloat {operands[0]}, bfloat {value}");
+                    Line($"{result} = select i1 {isStuck}, i16 {operands[0]}, i16 {value}");
                     return true;
                 }
             }
@@ -2469,9 +2562,9 @@ public sealed partial class LlvmEmitter {
                         : literal.WideValue.ToString(CultureInfo.InvariantCulture);
                     return;
 
-                // A BF16's is its own bits: LLVM writes a bfloat only as '0xR'.
-                case FloatLiteralInst { Type: var bfloat } literal when bfloat == SilType.BF16:
-                    _names[literal] = "0xR" + Sable.SIL.BFloat16.FromDouble(literal.Value).Bits.ToString("X4", CultureInfo.InvariantCulture);
+                // A BF16's is its own bits, the i16 it is lowered to.
+                case FloatLiteralInst { Type: var bf16 } literal when bf16 == SilType.BF16:
+                    _names[literal] = ((short)Sable.SIL.BFloat16.FromDouble(literal.Value).Bits).ToString(CultureInfo.InvariantCulture);
                     return;
 
                 case FloatLiteralInst literal:
@@ -5495,11 +5588,7 @@ public sealed partial class LlvmEmitter {
             // narrowed back, as the interpreter computes it: a float has room
             // enough that the two roundings never disagree.
             if (type == SilType.BF16) {
-                string Wide(string operand) {
-                    var wide = Fresh();
-                    Line($"{wide} = fpext bfloat {operand} to float");
-                    return wide;
-                }
+                string Wide(string operand) => Bf16ToFloat(operand);
 
                 switch (op) {
                     case "add" or "sub" or "mul" or "div" or "rem" or "min" or "max": {
@@ -5508,7 +5597,7 @@ public sealed partial class LlvmEmitter {
                         Line(op is "min" or "max"
                             ? $"{computed} = call float @llvm.{(op == "min" ? "minnum" : "maxnum")}.f32(float {a}, float {b})"
                             : $"{computed} = f{op} float {a}, {b}");
-                        Line($"{result} = fptrunc float {computed} to bfloat");
+                        FloatToBf16(computed, result);
                         return true;
                     }
 
@@ -5516,7 +5605,7 @@ public sealed partial class LlvmEmitter {
                         var a = Wide(operands[0]);
                         var computed = Fresh();
                         Line(op == "neg" ? $"{computed} = fneg float {a}" : $"{computed} = call float @llvm.fabs.f32(float {a})");
-                        Line($"{result} = fptrunc float {computed} to bfloat");
+                        FloatToBf16(computed, result);
                         return true;
                     }
 
@@ -5729,12 +5818,11 @@ public sealed partial class LlvmEmitter {
             // nothing is asked of the machine's bfloat but the conversions.
             if (from == SilType.BF16 && to != SilType.BF16) {
                 if (to == SilType.F64) {
-                    Line($"{result} = fpext bfloat {value} to double");
+                    Line($"{result} = fpext float {Bf16ToFloat(value)} to double");
                     return;
                 }
 
-                var wide = Fresh();
-                Line($"{wide} = fpext bfloat {value} to double");
+                var wide = Bf16ToDouble(value);
                 Convert(SilType.F64, to, wide, result);
                 return;
             }
@@ -5746,7 +5834,7 @@ public sealed partial class LlvmEmitter {
                     Convert(from, SilType.F64, value, wide);
                 }
 
-                Line($"{result} = fptrunc double {wide} to bfloat");
+                DoubleToBf16(wide, result);
                 return;
             }
 
@@ -5840,12 +5928,11 @@ public sealed partial class LlvmEmitter {
             // nothing is asked of the machine's bfloat but the conversions.
             if (from == SilType.BF16 && to != SilType.BF16) {
                 if (to == SilType.F64) {
-                    Line($"{result} = fpext bfloat {value} to double");
+                    Line($"{result} = fpext float {Bf16ToFloat(value)} to double");
                     return;
                 }
 
-                var wide = Fresh();
-                Line($"{wide} = fpext bfloat {value} to double");
+                var wide = Bf16ToDouble(value);
                 Wrap(SilType.F64, to, wide, result);
                 return;
             }
@@ -5857,7 +5944,7 @@ public sealed partial class LlvmEmitter {
                     Wrap(from, SilType.F64, value, wide);
                 }
 
-                Line($"{result} = fptrunc double {wide} to bfloat");
+                DoubleToBf16(wide, result);
                 return;
             }
 

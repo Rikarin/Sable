@@ -370,7 +370,18 @@ public sealed partial class LlvmEmitter {
             return $"i32 {promoted}";
         }
 
-        if (type == SilType.F32 || type == SilType.F16 || type == SilType.BF16) {
+        if (type == SilType.BF16) {
+            var wide = promoted + ".wide";
+            var shifted = promoted + ".shifted";
+            var single = promoted + ".single";
+            text.Append($"  {wide} = zext i16 {value} to i32\n");
+            text.Append($"  {shifted} = shl i32 {wide}, 16\n");
+            text.Append($"  {single} = bitcast i32 {shifted} to float\n");
+            text.Append($"  {promoted} = fpext float {single} to double\n");
+            return $"double {promoted}";
+        }
+
+        if (type == SilType.F32 || type == SilType.F16) {
             text.Append($"  {promoted} = fpext {Type(type)} {value} to double\n");
             return $"double {promoted}";
         }

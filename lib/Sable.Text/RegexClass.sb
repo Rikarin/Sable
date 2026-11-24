@@ -1,0 +1,293 @@
+module Sable.Text
+
+// The sets of characters a pattern's classes match: `[a-z]`, `\d`, `\p{Lu}`,
+// `[\w&&[^\d]]`, and a letter matched ignoring case. A set is the union of
+// ranges of code points, general categories and properties — or two sets
+// intersected, subtracted or told apart — and then perhaps negated. Every
+// set knows its answer for each ASCII character in two words of bits, so
+// that the engines decide an ASCII character with a shift; the rest are
+// decided from the set itself.
+
+// The properties a set may hold beside its ranges and categories.
+const propertyAlphabetic = 1
+const propertyWhiteSpace = 2
+const propertyUppercase = 4
+const propertyLowercase = 8
+const propertyWord = 16
+const propertyAny = 32
+const propertyAscii = 64
+const propertyAssigned = 128
+
+// How a set is made of its parts.
+const classUnion = 0
+const classIntersection = 1
+const classDifference = 2
+const classSymmetricDifference = 3
+
+/// The largest number of code points a set ignoring case has each of its
+/// ranges' characters' other cases added for: past it, a range is so wide
+/// that it holds them already.
+const caseClosureLimit = 0x30000
+
+/// A set of characters, as a class of a pattern describes it.
+final class RegexCharClass {
+    // Sorted, disjoint and not touching once finished: low and high code
+    // point of each range, in pairs.
+    var ranges: Int[>..] = []
+    // A bit for each general category, by GeneralCategory's raw value.
+    var categories: Int = 0
+    var properties: Int = 0
+    // Under classUnion, sets whose characters are in this one too; under
+    // the others, the two operands.
+    var parts: RegexCharClass[>..] = []
+    var operation: Int = classUnion
+    var negated: Bool = false
+    var ignoreCase: Bool = false
+    // Membership of each ASCII character, once finished.
+    var asciiLow: U64 = 0
+    var asciiHigh: U64 = 0
+
+    init() { }
+
+    /// The set of one character.
+    init(single code: Int, ignoreCase: Bool) {
+        self.ignoreCase = ignoreCase
+        ranges.append(code)
+        ranges.append(code)
+        finish()
+    }
+
+    /// The set made of two by an operation.
+    init(_ operation: Int, _ left: RegexCharClass, _ right: RegexCharClass) {
+        self.operation = operation
+        parts.append(left)
+        parts.append(right)
+    }
+
+    fn addRange(_ low: Int, _ high: Int) {
+        ranges.append(low)
+        ranges.append(high)
+    }
+
+    fn add(_ code: Int) {
+        ranges.append(code)
+        ranges.append(code)
+    }
+
+    /// Whether the set has nothing but ranges, none negated.
+    var isPlainRanges: Bool => categories == 0 && properties == 0 && parts.count == 0 && operation == classUnion && !negated
+
+    /// Sorts and merges the ranges — with each character's other cases
+    /// added first when the set ignores case — and works out the ASCII
+    /// characters' membership.
+    fn finish() {
+        if ignoreCase {
+            closeOverCase()
+        }
+        normalizeRanges()
+        asciiLow = 0
+        asciiHigh = 0
+        var code = 0
+        while code < 128 {
+            if matches(code) {
+                if code < 64 {
+                    asciiLow = asciiLow | ((1 as U64) << U64(code))
+                } else {
+                    asciiHigh = asciiHigh | ((1 as U64) << U64(code - 64))
+                }
+            }
+            code += 1
+        }
+    }
+
+    fn closeOverCase() {
+        var total = 0
+        var i = 0
+        while i < ranges.count {
+            total += ranges[i + 1] - ranges[i] + 1
+            i += 2
+        }
+        if total > caseClosureLimit {
+            return
+        }
+        let count = ranges.count
+        i = 0
+        while i < count {
+            var code = ranges[i]
+            let high = ranges[i + 1]
+            while code <= high {
+                if let character = Char.fromCodePoint(code) {
+                    addVariant(code, character.simpleLowercase.codePoint)
+                    addVariant(code, character.simpleUppercase.codePoint)
+                    let folded = character.caseFolded
+                    addVariant(code, folded.codePoint)
+                    addVariant(code, folded.simpleUppercase.codePoint)
+                }
+                code += 1
+            }
+            i += 2
+        }
+    }
+
+    fn addVariant(_ code: Int, _ variant: Int) {
+        if variant != code {
+            add(variant)
+        }
+    }
+
+    fn normalizeRanges() {
+        if ranges.count <= 2 {
+            return
+        }
+        // Each range as one number, its low end above its high, sorted.
+        var keys: Int[>..] = []
+        keys.reserveCapacity(ranges.count / 2)
+        var i = 0
+        while i < ranges.count {
+            keys.append(ranges[i] << 21 | ranges[i + 1])
+            i += 2
+        }
+        keys.sort()
+        var merged: Int[>..] = []
+        for key in keys {
+            let low = key >> 21
+            let high = key & 0x1FFFFF
+            let last = merged.count
+            if last > 0 && low <= merged[last - 1] + 1 {
+                if high > merged[last - 1] {
+                    merged[last - 1] = high
+                }
+            } else {
+                merged.append(low)
+                merged.append(high)
+            }
+        }
+        ranges = merged
+    }
+
+    /// Whether the character is in the set.
+    fn contains(_ code: Int) -> Bool {
+        if code < 64 {
+            return ((asciiLow >> U64(code)) & 1) != 0
+        }
+        if code < 128 {
+            return ((asciiHigh >> U64(code - 64)) & 1) != 0
+        }
+        return matches(code)
+    }
+
+    /// Whether the character is in the set, worked out from its parts.
+    fn matches(_ code: Int) -> Bool {
+        var inside = positive(code)
+        if !inside && ignoreCase && operation == classUnion {
+            if let character = Char.fromCodePoint(code) {
+                let folded = character.caseFolded.codePoint
+                let lower = character.simpleLowercase.codePoint
+                let upper = character.simpleUppercase.codePoint
+                inside = (folded != code && positive(folded))
+                    || (lower != code && lower != folded && positive(lower))
+                    || (upper != code && positive(upper))
+            }
+        }
+        return inside != negated
+    }
+
+    /// Whether the character is in the set before it is negated, without
+    /// its other cases.
+    fn positive(_ code: Int) -> Bool {
+        if operation == classIntersection {
+            return parts[0].matches(code) && parts[1].matches(code)
+        }
+        if operation == classDifference {
+            return parts[0].matches(code) && !parts[1].matches(code)
+        }
+        if operation == classSymmetricDifference {
+            return parts[0].matches(code) != parts[1].matches(code)
+        }
+        if inRanges(code) {
+            return true
+        }
+        if categories != 0 || properties != 0 {
+            if let character = Char.fromCodePoint(code) {
+                if categories != 0 && ((categories >> Int(character.generalCategory as U8)) & 1) != 0 {
+                    return true
+                }
+                if properties != 0 && hasProperty(character, properties) {
+                    return true
+                }
+            }
+        }
+        for part in parts {
+            if part.matches(code) {
+                return true
+            }
+        }
+        return false
+    }
+
+    fn inRanges(_ code: Int) -> Bool {
+        var low = 0
+        var high = ranges.count / 2
+        while low < high {
+            let middle = (low + high) / 2
+            if code < ranges[middle * 2] {
+                high = middle
+            } else if code > ranges[middle * 2 + 1] {
+                low = middle + 1
+            } else {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+/// Whether the character has any of the properties.
+fn hasProperty(_ character: Char, _ properties: Int) -> Bool {
+    if (properties & propertyAny) != 0 {
+        return true
+    }
+    if (properties & propertyAscii) != 0 && character.codePoint < 128 {
+        return true
+    }
+    if (properties & propertyAlphabetic) != 0 && character.isAlphabetic {
+        return true
+    }
+    if (properties & propertyWhiteSpace) != 0 && character.isWhitespace {
+        return true
+    }
+    if (properties & propertyUppercase) != 0 && character.isUppercase {
+        return true
+    }
+    if (properties & propertyLowercase) != 0 && character.isLowercase {
+        return true
+    }
+    if (properties & propertyWord) != 0 && isWordCharacter(character.codePoint) {
+        return true
+    }
+    if (properties & propertyAssigned) != 0 && character.generalCategory != .Unassigned {
+        return true
+    }
+    return false
+}
+
+/// Whether the character is a word character, as `\w` and `\b` have it:
+/// Unicode's (UTS #18 Annex C) — alphabetic, a mark, a decimal digit, a
+/// connector such as '_', or a joiner.
+fn isWordCharacter(_ code: Int) -> Bool {
+    if code < 128 {
+        return (code >= 0x61 && code <= 0x7A) || (code >= 0x41 && code <= 0x5A) || (code >= 0x30 && code <= 0x39) || code == 0x5F
+    }
+    if code == 0x200C || code == 0x200D {
+        return true
+    }
+    if let character = Char.fromCodePoint(code) {
+        if character.isAlphabetic {
+            return true
+        }
+        let category = Int(character.generalCategory as U8)
+        // Mn, Mc, Me, Nd and Pc.
+        return (category >= 5 && category <= 8) || category == 11
+    }
+    return false
+}

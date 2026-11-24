@@ -1,0 +1,261 @@
+module Sable.Text
+
+// The backtracker, for a regex made with `.Backtracking`: one path through
+// the program at a time, the preferred branch first, going back to the
+// last choice when a path fails — as .NET's and Perl's engines do. It can
+// do what the automata cannot (back references, lookaround, atomic groups)
+// and pays for it: a pattern such as (a+)+b takes time exponential in the
+// text's length.
+
+// A choice to go back to is three numbers on the stack: the instruction
+// and the position to try from; or, when the first is negative, a slot to
+// put back, -slot - 1, and what it held.
+
+final class RegexBacktracker {
+    let program: RegexProgram
+    let width: Int
+    var slots: Int[>..]
+    var text: String = ""
+    var start: Int = 0
+    var end: Int = 0
+
+    init(_ program: RegexProgram) {
+        self.program = program
+        width = program.slotCount + program.registers
+        slots = filled(-1, width)
+    }
+
+    /// The leftmost-first match in the text from 'start' to 'end' that
+    /// starts at or after 'from' — at 'from' when anchored, and ending at
+    /// 'requiredEnd' unless that is -1 — with its slots written to
+    /// 'found'; false when there is none.
+    fn search(_ text: String, _ start: Int, _ end: Int, _ from: Int, anchored: Bool, requiredEnd: Int, leading: String, _ found: inout Int[>..]) -> Bool {
+        self.text = text
+        self.start = start
+        self.end = end
+        var at = from
+        while at <= end {
+            if leading.utf8Count > 0 && !anchored {
+                // No match starts before the next place the prefix is.
+                at = Runtime.findUtf8(text, at, end, leading, 0, leading.utf8Count)
+                if at < 0 {
+                    return false
+                }
+            }
+            var k = 0
+            while k < width {
+                slots[k] = -1
+                k += 1
+            }
+            if run(regexAnchoredStart, at, requiredEnd) >= 0 {
+                k = 0
+                while k < program.slotCount {
+                    found[k] = slots[k]
+                    k += 1
+                }
+                return true
+            }
+            if anchored || at >= end {
+                return false
+            }
+            at += scalarAt(text, at) >> 21
+        }
+        return false
+    }
+
+    fn before(_ at: Int) -> Int {
+        return at > start ? scalarBefore(text, at) & 0x1FFFFF : -1
+    }
+
+    fn after(_ at: Int) -> Int {
+        return at < end ? scalarAt(text, at) & 0x1FFFFF : -1
+    }
+
+    /// Runs the program from the instruction at the position: where the
+    /// match (or the body, up to its opSubMatch) ends, or -1.
+    fn run(_ entry: Int, _ position: Int, _ requiredEnd: Int) -> Int {
+        var stack: Int[>..] = []
+        var pc = entry
+        var at = position
+        while true {
+            let op = program.ops[pc]
+            var failed = false
+            if op <= opAnyButNewline {
+                if at < end {
+                    let packed = scalarAt(text, at)
+                    if program.takes(pc, packed & 0x1FFFFF) {
+                        at += packed >> 21
+                        pc = program.ys[pc]
+                        continue
+                    }
+                }
+                failed = true
+            } else if op == opSplit {
+                stack.append(program.ys[pc])
+                stack.append(at)
+                pc = program.xs[pc]
+            } else if op == opJump {
+                pc = program.xs[pc]
+            } else if op == opSave || op == opMark {
+                let slot = program.xs[pc]
+                stack.append(-slot - 1)
+                stack.append(slots[slot])
+                slots[slot] = at
+                pc = program.ys[pc]
+            } else if op == opCheck {
+                if slots[program.xs[pc]] == at {
+                    failed = true
+                } else {
+                    pc = program.ys[pc]
+                }
+            } else if op == opLook {
+                if lookHolds(program.xs[pc], before(at), after(at)) {
+                    pc = program.ys[pc]
+                } else {
+                    failed = true
+                }
+            } else if op == opMatch || op == opSubMatch {
+                if requiredEnd < 0 || at == requiredEnd {
+                    return at
+                }
+                failed = true
+            } else if op == opBackref {
+                let length = matchBackref(program.xs[pc], at, program.zs[pc] != 0)
+                if length < 0 {
+                    failed = true
+                } else {
+                    at += length
+                    pc = program.ys[pc]
+                }
+            } else if op == opLookAround {
+                let saved = slots
+                let behind = (program.zs[pc] & 1) != 0
+                let negated = (program.zs[pc] & 2) != 0
+                var holds = false
+                if behind {
+                    var k = at
+                    while true {
+                        if run(program.xs[pc], k, at) >= 0 {
+                            holds = true
+                            break
+                        }
+                        if k <= start {
+                            break
+                        }
+                        k -= scalarBefore(text, k) >> 21
+                    }
+                } else {
+                    holds = run(program.xs[pc], at, -1) >= 0
+                }
+                if negated {
+                    slots = saved
+                    holds = !holds
+                }
+                if holds {
+                    keep(saved, &stack)
+                    pc = program.ys[pc]
+                } else {
+                    slots = saved
+                    failed = true
+                }
+            } else if op == opAtomic {
+                let saved = slots
+                let bodyEnd = run(program.xs[pc], at, -1)
+                if bodyEnd < 0 {
+                    slots = saved
+                    failed = true
+                } else {
+                    keep(saved, &stack)
+                    at = bodyEnd
+                    pc = program.ys[pc]
+                }
+            } else {
+                failed = true
+            }
+            if failed {
+                // Back to the last choice, putting back the slots changed since.
+                var resumed = false
+                while stack.count > 0 {
+                    let value = stack.removeLast()
+                    let first = stack.removeLast()
+                    if first < 0 {
+                        slots[-first - 1] = value
+                    } else {
+                        pc = first
+                        at = value
+                        resumed = true
+                        break
+                    }
+                }
+                if !resumed {
+                    return -1
+                }
+            }
+        }
+        return -1
+    }
+
+    /// Records, to be put back on backtracking, the slots a body that
+    /// matched changed from what they were.
+    fn keep(_ saved: Int[>..], _ stack: inout Int[>..]) {
+        var k = 0
+        while k < width {
+            if slots[k] != saved[k] {
+                stack.append(-k - 1)
+                stack.append(saved[k])
+            }
+            k += 1
+        }
+    }
+
+    /// The length of what the group matched, when it is next in the text
+    /// at the position; -1 when it is not, or the group matched nothing.
+    fn matchBackref(_ group: Int, _ at: Int, _ ignoreCase: Bool) -> Int {
+        let from = slots[2 * group]
+        let to = slots[2 * group + 1]
+        if from < 0 || to < 0 {
+            return -1
+        }
+        let bytes = text.utf8
+        if !ignoreCase {
+            let length = to - from
+            if at + length > end {
+                return -1
+            }
+            var i = 0
+            while i < length {
+                if bytes[from + i] != bytes[at + i] {
+                    return -1
+                }
+                i += 1
+            }
+            return length
+        }
+        var i = from
+        var j = at
+        while i < to {
+            if j >= end {
+                return -1
+            }
+            let left = scalarAt(text, i)
+            let right = scalarAt(text, j)
+            if foldedCode(left & 0x1FFFFF) != foldedCode(right & 0x1FFFFF) {
+                return -1
+            }
+            i += left >> 21
+            j += right >> 21
+        }
+        return j - at
+    }
+}
+
+/// The character case-folded, as a code point.
+fn foldedCode(_ code: Int) -> Int {
+    if code < 128 {
+        return code >= 0x41 && code <= 0x5A ? code + 32 : code
+    }
+    if let character = Char.fromCodePoint(code) {
+        return character.caseFolded.codePoint
+    }
+    return code
+}

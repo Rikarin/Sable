@@ -1,0 +1,37 @@
+module Sable.Text
+
+/// The kinds of mistake a pattern can have: `RegexError.kind`.
+@derive(Equatable, Hashable, Debug)
+public enum RegexErrorKind {
+    /// A `(` with no `)`.
+    UnclosedGroup
+    /// A `)` with no `(`.
+    UnopenedGroup
+    /// A `[` with no `]`.
+    UnclosedClass
+    /// A range in a class whose end is before its start, `[z-a]`, or one
+    /// with a class at an end, `[\d-z]`.
+    InvalidRange
+    /// A `\` with nothing after it, or with something it cannot escape.
+    InvalidEscape
+    /// A quantifier with nothing before it to repeat, `*a`, or after
+    /// another, `a**`.
+    NothingToRepeat
+    /// A count in braces that is too large, or whose minimum is above its
+    /// maximum, `a{3,2}`.
+    InvalidRepetition
+    /// A `\p{…}` naming no property this engine knows.
+    UnknownProperty
+    /// A group's name that is not a name, or is used twice.
+    InvalidGroupName
+    /// A back reference to a group the pattern does not have.
+    UnknownGroup
+    /// A flag in `(?…)` that is not one of `imsxU`.
+    InvalidFlag
+    /// A back reference, a lookaround, an atomic group or a possessive
+    /// quantifier, in a regex not made with `.Backtracking`.
+    NeedsBacktracking
+    /// A pattern that compiles to more than the engine's limit of
+    /// instructions, as a large count of a large group does.
+    TooLarge
+}

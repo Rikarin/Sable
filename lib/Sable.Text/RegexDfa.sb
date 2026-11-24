@@ -1,0 +1,619 @@
+module Sable.Text
+
+// The lazy DFA: the program's sets of threads become states as the text
+// needs them, and each step from a state on a character, once worked out,
+// is kept, so that the next time it costs one look-up. That makes the
+// common case a loop of table reads over the bytes, as RE2's and Rust's
+// regex do, while the worst case stays what the PikeVM's is — each step
+// worked out at most once per character, in time proportional to the
+// program — so a search is linear in the text whatever the pattern.
+//
+// A state is the instructions threads are waiting at (its kernel, in order
+// of priority) and what the character before it was: a word character, a
+// line feed, or none at all, for the assertions. A step follows the empty
+// transitions from the kernel, deciding the assertions between the
+// character before and the one being taken, and keeps the instructions
+// that take it. Whether a match ended before that character comes out of
+// the same step, so it is kept in the step's low bit: a match is seen one
+// character late, as Rust's DFA sees it.
+//
+// ASCII characters are steps in a table of classes of bytes that every
+// instruction treats alike; any other character is a step in a dictionary
+// by state and character. The cache is cleared when it grows past its
+// limit, and the search goes on.
+//
+// Run forwards it finds where the leftmost-first match ends; the reverse
+// program run backwards from there finds where it starts.
+
+// What a state knows of the character before it.
+const contextWord = 1
+const contextNewline = 2
+const contextStart = 4
+
+/// The most table entries the cache holds before it is cleared.
+const dfaCacheLimit = 1 << 20
+
+final class RegexDfa {
+    let program: RegexProgram
+    // Keep every thread after a match, rather than only those preferred to
+    // it: to find the longest match, as the reverse search wants.
+    let longest: Bool
+    let size: Int
+    // The class of each ASCII byte, and how many classes.
+    var classOf: Int[>..] = []
+    var stride: Int = 0
+    var flagMask: Int = 0
+    var maxStates: Int = 0
+
+    // The states, by number; 0 is the dead state, which matches nothing.
+    var pool: Int[>..] = []
+    var kernelFrom: Int[>..] = []
+    var kernelTo: Int[>..] = []
+    var flagsOf: Int[>..] = []
+    var isStart: Int[>..] = []
+    // stride steps for each state: -1 not worked out yet; or where the row
+    // of the state it goes to starts (its number times stride), shifted left
+    // twice, with whether that state is a start state in bit 1 and whether
+    // a match ended before the character in bit 0.
+    var steps: Int[>..] = []
+    // Whether a match ends at the end of the text: -1 not worked out yet.
+    var atEnd: Int[>..] = []
+    // An open-addressed table of the states, each number plus one.
+    var table: Int[>..] = []
+    // Steps on characters past ASCII, by state and character.
+    var wide: [Int: Int] = [:]
+    var starts: Int[>..] = []
+    // Cleared each time the cache is.
+    var generation: Int = 0
+    // For each byte, whether the unanchored start state goes back to itself
+    // on it, matching nothing: a search there can step over it unread.
+    // Worked out on the first search; empty when the state's assertions
+    // depend on the character before, when the pattern starts with a
+    // literal (searched for instead), or when most bytes start a match.
+    var skippable: Bool[>..] = []
+    var skippableKnown: Bool = false
+
+    // Scratch for a step.
+    var seenDense: Int[>..] = []
+    var seenSparse: Int[>..] = []
+    var seenCount: Int = 0
+    var stack: Int[>..] = []
+    var closed: Int[>..] = []
+    var kernel: Int[>..] = []
+
+    init(_ program: RegexProgram, longest: Bool) {
+        self.program = program
+        self.longest = longest
+        size = program.count
+        seenDense = filled(0, size)
+        seenSparse = filled(0, size)
+        let looks = program.looks
+        if (looks & ((1 << lookStartText) | (1 << lookStartLine))) != 0 {
+            flagMask = flagMask | contextStart
+        }
+        if (looks & (1 << lookStartLine)) != 0 {
+            flagMask = flagMask | contextNewline
+        }
+        if (looks & ((1 << lookWordBoundary) | (1 << lookNotWordBoundary))) != 0 {
+            flagMask = flagMask | contextWord
+        }
+        computeClasses()
+        maxStates = dfaCacheLimit / stride
+        if maxStates < 64 {
+            maxStates = 64
+        }
+        reset()
+    }
+
+    /// Splits the ASCII bytes into classes that every instruction, and the
+    /// assertions, treat alike.
+    fn computeClasses() {
+        classOf = filled(0, 128)
+        stride = 1
+        var member: Bool[>..] = []
+        var b = 0
+        while b < 128 {
+            member.append(b == 0x0A)
+            b += 1
+        }
+        refine(member)
+        b = 0
+        while b < 128 {
+            member[b] = isWordCharacter(b)
+            b += 1
+        }
+        refine(member)
+        var seenClass = filled(0, program.classes.count)
+        var seenChar = filled(0, 128)
+        var pc = 0
+        while pc < size {
+            let op = program.ops[pc]
+            let x = program.xs[pc]
+            if op == opChar && x < 128 && seenChar[x] == 0 {
+                seenChar[x] = 1
+                b = 0
+                while b < 128 {
+                    member[b] = b == x
+                    b += 1
+                }
+                refine(member)
+            } else if op == opClass && seenClass[x] == 0 {
+                seenClass[x] = 1
+                let chars = program.classes[x]
+                b = 0
+                while b < 128 {
+                    member[b] = chars.contains(b)
+                    b += 1
+                }
+                refine(member)
+            }
+            pc += 1
+        }
+    }
+
+    /// Splits each class in two by whether its bytes are members.
+    fn refine(_ member: Bool[>..]) {
+        var renamed = filled(-1, stride * 2)
+        var count = 0
+        var b = 0
+        while b < 128 {
+            let key = classOf[b] * 2 + (member[b] ? 1 : 0)
+            if renamed[key] < 0 {
+                renamed[key] = count
+                count += 1
+            }
+            classOf[b] = renamed[key]
+            b += 1
+        }
+        stride = count
+    }
+
+    /// Empties the cache, leaving the dead state.
+    fn reset() {
+        pool.clear()
+        kernelFrom.clear()
+        kernelTo.clear()
+        flagsOf.clear()
+        isStart.clear()
+        steps.clear()
+        atEnd.clear()
+        table = filled(0, 1024)
+        wide = [:]
+        starts = filled(-1, 16)
+        generation += 1
+        kernelFrom.append(0)
+        kernelTo.append(0)
+        flagsOf.append(0)
+        isStart.append(0)
+        atEnd.append(0)
+        var i = 0
+        while i < stride {
+            // The dead state stays dead.
+            steps.append(0)
+            i += 1
+        }
+    }
+
+    var stateCount: Int => flagsOf.count
+
+    /// The state for the kernel in the scratch, after a character with
+    /// these flags: found, or made.
+    fn intern(_ flags: Int) -> Int {
+        if kernel.count == 0 {
+            return 0
+        }
+        var hash = flags
+        for pc in kernel {
+            hash = (hash &* 0x100000001B3) ^ pc
+        }
+        var mask = table.count - 1
+        var slot = hash & mask
+        while table[slot] != 0 {
+            let state = table[slot] - 1
+            if flagsOf[state] == flags && sameKernel(state) {
+                return state
+            }
+            slot = (slot + 1) & mask
+        }
+        if stateCount >= maxStates || pool.count > 4 * dfaCacheLimit {
+            reset()
+            mask = table.count - 1
+            slot = hash & mask
+        }
+        let state = stateCount
+        kernelFrom.append(pool.count)
+        pool.append(contentsOf: kernel)
+        kernelTo.append(pool.count)
+        flagsOf.append(flags)
+        isStart.append(kernel.count == 1 && kernel[0] == 0 ? 1 : 0)
+        atEnd.append(-1)
+        var i = 0
+        while i < stride {
+            steps.append(-1)
+            i += 1
+        }
+        table[slot] = state + 1
+        if stateCount * 2 > table.count {
+            grow()
+        }
+        return state
+    }
+
+    fn sameKernel(_ state: Int) -> Bool {
+        let from = kernelFrom[state]
+        if kernelTo[state] - from != kernel.count {
+            return false
+        }
+        var i = 0
+        while i < kernel.count {
+            if pool[from + i] != kernel[i] {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+
+    fn grow() {
+        table = filled(0, table.count * 2)
+        let mask = table.count - 1
+        var state = 1
+        while state < stateCount {
+            var hash = flagsOf[state]
+            var i = kernelFrom[state]
+            while i < kernelTo[state] {
+                hash = (hash &* 0x100000001B3) ^ pool[i]
+                i += 1
+            }
+            var slot = hash & mask
+            while table[slot] != 0 {
+                slot = (slot + 1) & mask
+            }
+            table[slot] = state + 1
+            state += 1
+        }
+    }
+
+    /// Whether the assertion holds after a character with these flags and
+    /// before this one, -1 for the end.
+    fn holds(_ kind: Int, _ flags: Int, _ next: Int) -> Bool {
+        if kind == lookStartText {
+            return (flags & contextStart) != 0
+        }
+        if kind == lookEndText {
+            return next < 0
+        }
+        if kind == lookStartLine {
+            return (flags & (contextStart | contextNewline)) != 0
+        }
+        if kind == lookEndLine {
+            return next < 0 || next == 0x0A
+        }
+        let boundary = ((flags & contextWord) != 0) != (next >= 0 && isWordCharacter(next))
+        return kind == lookWordBoundary ? boundary : !boundary
+    }
+
+    /// Follows the empty transitions from the state's kernel, with the next
+    /// character (-1 for the end) deciding the assertions, into 'closed':
+    /// the instructions that wait on a character, in priority order.
+    /// Whether a match is reached.
+    fn close(_ state: Int, _ next: Int) -> Bool {
+        seenCount = 0
+        closed.clear()
+        let flags = flagsOf[state]
+        var matched = false
+        var i = kernelFrom[state]
+        let to = kernelTo[state]
+        while i < to {
+            stack.append(pool[i])
+            i += 1
+            while stack.count > 0 {
+                var pc = stack.removeLast()
+                while true {
+                    let index = seenSparse[pc]
+                    if index < seenCount && seenDense[index] == pc {
+                        break
+                    }
+                    seenDense[seenCount] = pc
+                    seenSparse[pc] = seenCount
+                    seenCount += 1
+                    let op = program.ops[pc]
+                    if op <= opAnyButNewline {
+                        closed.append(pc)
+                        break
+                    }
+                    if op == opSplit {
+                        stack.append(program.ys[pc])
+                        pc = program.xs[pc]
+                    } else if op == opJump {
+                        pc = program.xs[pc]
+                    } else if op == opLook {
+                        if !holds(program.xs[pc], flags, next) {
+                            break
+                        }
+                        pc = program.ys[pc]
+                    } else if op == opMatch {
+                        matched = true
+                        if !longest {
+                            // Every thread still to follow is of lower priority.
+                            stack.clear()
+                            return true
+                        }
+                        break
+                    } else if op == opSave || op == opMark || op == opCheck {
+                        pc = program.ys[pc]
+                    } else {
+                        break
+                    }
+                }
+            }
+        }
+        return matched
+    }
+
+    /// The step from the state on the character: the row of the state it
+    /// goes to, packed as `steps` packs it.
+    fn step(_ state: Int, _ code: Int) -> Int {
+        let matched = close(state, code)
+        kernel.clear()
+        seenCount = 0
+        for pc in closed {
+            if program.takes(pc, code) {
+                let target = program.ys[pc]
+                let index = seenSparse[target]
+                if !(index < seenCount && seenDense[index] == target) {
+                    seenDense[seenCount] = target
+                    seenSparse[target] = seenCount
+                    seenCount += 1
+                    kernel.append(target)
+                }
+            }
+        }
+        var flags = 0
+        if isWordCharacter(code) {
+            flags = flags | contextWord
+        }
+        if code == 0x0A {
+            flags = flags | contextNewline
+        }
+        let target = intern(flags & flagMask)
+        return packedRow(target) | (matched ? 1 : 0)
+    }
+
+    /// The state's row, shifted left twice, with whether it is a start state.
+    fn packedRow(_ state: Int) -> Int {
+        return ((state * stride) << 2) | (isStart[state] << 1)
+    }
+
+    /// The step on an ASCII character, kept for its class.
+    fn asciiStep(_ state: Int, _ byte: Int) -> Int {
+        let before = generation
+        let packed = step(state, byte)
+        if generation == before {
+            steps[state * stride + classOf[byte]] = packed
+        }
+        return packed
+    }
+
+    /// The step on any other character, kept in the dictionary.
+    fn wideStep(_ state: Int, _ code: Int) -> Int {
+        let key = state * 0x200000 + code
+        if let packed = wide[key] {
+            return packed
+        }
+        let before = generation
+        let packed = step(state, code)
+        if generation == before {
+            wide[key] = packed
+        }
+        return packed
+    }
+
+    /// Whether a match ends at the text's end, in the state.
+    fn matchesAtEnd(_ state: Int) -> Bool {
+        var known = atEnd[state]
+        if known < 0 {
+            known = close(state, -1) ? 1 : 0
+            atEnd[state] = known
+        }
+        return known == 1
+    }
+
+    /// Works out which bytes the unanchored start state steps over.
+    fn computeSkippable() {
+        skippableKnown = true
+        if flagMask != 0 {
+            return
+        }
+        let start = startState(0, anchored: false)
+        let packed = packedRow(start)
+        var found: Bool[>..] = []
+        var starting = 0
+        var byte = 0
+        while byte < 256 {
+            var skip = false
+            if byte < 128 {
+                var step = steps[start * stride + classOf[byte]]
+                if step < 0 {
+                    step = asciiStep(start, byte)
+                }
+                skip = step == packed
+            }
+            if byte < 128 && !skip {
+                starting += 1
+            }
+            found.append(skip)
+            byte += 1
+        }
+        // Stepping over bytes pays when few start a match, as in an
+        // alternation of words; when most do, as for \w+, leaving and
+        // entering the loop costs more than it saves.
+        if starting <= 24 {
+            skippable = found
+        }
+    }
+
+    /// The state a search starts in, after a character with these flags,
+    /// packed as `steps` packs it.
+    fn startRow(_ flags: Int, anchored: Bool) -> Int {
+        return packedRow(startState(flags, anchored: anchored))
+    }
+
+    /// The state a search starts in, after a character with these flags.
+    fn startState(_ flags: Int, anchored: Bool) -> Int {
+        let key = (flags & flagMask) * 2 + (anchored ? 1 : 0)
+        var state = starts[key]
+        if state < 0 {
+            kernel.clear()
+            kernel.append(anchored ? regexAnchoredStart : 0)
+            state = intern(flags & flagMask)
+            starts[key] = state
+        }
+        return state
+    }
+
+    /// What the character at the offset tells the assertions after it.
+    fn flagsOfCode(_ code: Int) -> Int {
+        var flags = 0
+        if isWordCharacter(code) {
+            flags = flags | contextWord
+        }
+        if code == 0x0A {
+            flags = flags | contextNewline
+        }
+        return flags
+    }
+
+    /// Where the leftmost-first match in the text from 'start' to 'end'
+    /// that starts at or after 'from' ends — or, when 'earliest', where the
+    /// first match seen ends — or -1 when there is none. A match starts
+    /// with the prefix, when it is not empty.
+    // The searches keep the tables they read in locals, so that the loop
+    // reads no field of the DFA. Working out a step adds to the tables, so
+    // the locals let go of them first: a table shared with a local would be
+    // copied by the first change.
+
+    fn findEnd(_ text: String, _ start: Int, _ end: Int, _ from: Int, anchored: Bool, earliest: Bool, leading: String) -> Int {
+        let bytes = text.utf8
+        let prefixLength = leading.utf8Count
+        if !skippableKnown && prefixLength == 0 && !anchored {
+            computeSkippable()
+        }
+        let skip = prefixLength == 0 && !anchored ? skippable : []
+        let skipping = skip.count > 0
+        let classes = classOf
+        let width = stride
+        var packed = startRow(flagMask == 0 ? 0 : from > start ? flagsOfCode(scalarBefore(text, from) & 0x1FFFFF) : contextStart, anchored: anchored)
+        var table = steps
+        var row = packed >> 2
+        var last = -1
+        var at = from
+        while at < end {
+            if prefixLength > 0 && (packed & 2) != 0 {
+                // Nothing can match before the prefix's next occurrence.
+                let found = Runtime.findUtf8(text, at, end, leading, 0, prefixLength)
+                if found < 0 {
+                    return last
+                }
+                if found > at {
+                    at = found
+                    table = []
+                    packed = startRow(flagMask == 0 ? 0 : flagsOfCode(scalarBefore(text, at) & 0x1FFFFF), anchored: false)
+                    table = steps
+                    row = packed >> 2
+                }
+            } else if skipping && (packed & 2) != 0 {
+                // Over the bytes no match starts with, unread by the automaton.
+                while at < end && skip[Int(bytes[at])] {
+                    at += 1
+                }
+                if at >= end {
+                    break
+                }
+            }
+            let byte = Int(bytes[at])
+            let position = at
+            if byte < 128 {
+                packed = table[row + classes[byte]]
+                if packed < 0 {
+                    table = []
+                    packed = asciiStep(row / width, byte)
+                    table = steps
+                }
+                at += 1
+            } else {
+                let scalar = scalarAt(text, at)
+                table = []
+                packed = wideStep(row / width, scalar & 0x1FFFFF)
+                table = steps
+                at += scalar >> 21
+            }
+            if (packed & 1) != 0 {
+                // A match ended before the character just taken.
+                last = position
+                if earliest {
+                    return last
+                }
+            }
+            row = packed >> 2
+            if row == 0 {
+                return last
+            }
+        }
+        table = []
+        if matchesAtEnd(row / width) {
+            last = end
+        }
+        return last
+    }
+
+    /// Run backwards from 'from' with the reverse program, anchored there:
+    /// the smallest offset, no smaller than 'limit', that a match from it
+    /// to 'from' starts at, or -1. The text runs from 'start' to 'end'.
+    fn findStart(_ text: String, _ start: Int, _ end: Int, _ from: Int, limit: Int) -> Int {
+        let bytes = text.utf8
+        let classes = classOf
+        let width = stride
+        var row = startRow(flagMask == 0 ? 0 : from < end ? flagsOfCode(scalarAt(text, from) & 0x1FFFFF) : contextStart, anchored: true) >> 2
+        var table = steps
+        var last = -1
+        var at = from
+        while at > limit {
+            let byte = Int(bytes[at - 1])
+            var packed = 0
+            let previous = at
+            if byte < 128 {
+                packed = table[row + classes[byte]]
+                if packed < 0 {
+                    table = []
+                    packed = asciiStep(row / width, byte)
+                    table = steps
+                }
+                at -= 1
+            } else {
+                let scalar = scalarBefore(text, at)
+                table = []
+                packed = wideStep(row / width, scalar & 0x1FFFFF)
+                table = steps
+                at -= scalar >> 21
+            }
+            if (packed & 1) != 0 {
+                last = previous
+            }
+            row = packed >> 2
+            if row == 0 {
+                return last
+            }
+        }
+        table = []
+        if limit == start {
+            if matchesAtEnd(row / width) {
+                last = start
+            }
+        } else if (wideStep(row / width, scalarBefore(text, limit) & 0x1FFFFF) & 1) != 0 {
+            // The character before the limit decides the assertions there.
+            last = limit
+        }
+        return last
+    }
+}

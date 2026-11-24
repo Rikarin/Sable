@@ -16,6 +16,7 @@
 // Sable's is.
 
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 var benchmarks = new Dictionary<string, Func<string>> {
     ["map-int"] = MapInt,
@@ -37,6 +38,16 @@ var benchmarks = new Dictionary<string, Func<string>> {
     ["bigint-multiply"] = BigIntMultiply,
     ["bigint-divide"] = BigIntDivide,
     ["bigint-tostring"] = BigIntToString,
+    ["regex-literal"] = () => RegexCount("Sherlock Holmes", RegexOptions.Compiled),
+    ["regex-literal/nonbacktracking"] = () => RegexCount("Sherlock Holmes", RegexOptions.NonBacktracking),
+    ["regex-alternation"] = () => RegexCount("Sherlock|Holmes|Watson|Irene|Adler", RegexOptions.Compiled),
+    ["regex-alternation/nonbacktracking"] = () => RegexCount("Sherlock|Holmes|Watson|Irene|Adler", RegexOptions.NonBacktracking),
+    ["regex-words"] = () => RegexCount(@"\w+", RegexOptions.Compiled),
+    ["regex-words/nonbacktracking"] = () => RegexCount(@"\w+", RegexOptions.NonBacktracking),
+    ["regex-email"] = () => RegexCount(@"[\w.+-]+@[\w-]+\.[\w.-]+", RegexOptions.Compiled),
+    ["regex-email/nonbacktracking"] = () => RegexCount(@"[\w.+-]+@[\w-]+\.[\w.-]+", RegexOptions.NonBacktracking),
+    ["regex-pathological"] = () => RegexPathological(RegexOptions.Compiled),
+    ["regex-pathological/nonbacktracking"] = () => RegexPathological(RegexOptions.NonBacktracking),
     ["serialize"] = Serializing,
     ["programs/binary-trees"] = Programs.BinaryTrees,
     ["programs/nbody"] = Programs.NBody,
@@ -692,6 +703,77 @@ static string Utf8Validate() {
     }
 }
 
+// The regex benchmarks' text, as ../versus-dotnet/regex-*.sb make it: about a
+// megabyte of words chosen by xorshift, with names and e-mail addresses among
+// them, in lines of a dozen words or so, a few of the words not ASCII.
+static string RegexText() {
+    string[] words = [
+        "the", "of", "and", "to", "in", "was", "he", "it", "that", "his", "with", "had", "as", "for",
+        "you", "at", "which", "on", "but", "be", "not", "by", "from", "my", "have", "there", "one",
+        "been", "all", "naïve", "café", "so", "door", "room", "said", "upon", "little", "man", "matter", "case",
+    ];
+    string[] names = ["Sherlock Holmes", "Holmes", "Watson", "Irene Adler", "Lestrade", "Mrs. Hudson"];
+    string[] emails = ["sherlock.holmes@baker-street.co.uk", "j.watson+notes@example.com", "irene@adler.org"];
+    var state = 0x9E3779B97F4A7C15UL;
+
+    int Next(int below) {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        return (int)(state % (ulong)below);
+    }
+
+    var builder = new System.Text.StringBuilder();
+    for (var i = 0; i < 150000; i++) {
+        var choice = Next(100);
+        if (choice < 3) {
+            builder.Append(names[Next(names.Length)]);
+        } else if (choice < 4) {
+            builder.Append(emails[Next(emails.Length)]);
+        } else {
+            builder.Append(words[Next(words.Length)]);
+        }
+
+        builder.Append(Next(12) == 0 ? ".\n" : " ");
+    }
+
+    return builder.ToString();
+}
+
+// The matches of the pattern in the text, counted ten times over; the text's
+// length is in UTF-8 bytes, as Sable counts it.
+static string RegexCount(string pattern, RegexOptions options) {
+    checked {
+        var text = RegexText();
+        var regex = new Regex(pattern, options);
+        long count = 0;
+        for (var round = 0; round < 10; round++) {
+            count += regex.Count(text);
+        }
+
+        return $"{count} {System.Text.Encoding.UTF8.GetByteCount(text)}";
+    }
+}
+
+// A pattern that takes a backtracker time exponential in the length of each
+// line it fails on: a hundred lines of twenty 'a's and a '!'.
+static string RegexPathological(RegexOptions options) {
+    checked {
+        var builder = new System.Text.StringBuilder();
+        for (var i = 0; i < 100; i++) {
+            builder.Append("aaaaaaaaaaaaaaaaaaaa!\n");
+        }
+
+        var text = builder.ToString();
+        var regex = new Regex(@"(?m)^(a|aa)+$", options);
+        long count = 0;
+        for (var round = 0; round < 10; round++) {
+            count += regex.Count(text);
+        }
+
+        return $"{count} {text.Length}";
+    }
+}
 record Item(string Sku, long Quantity, double Price);
 
 record Order(long Id, string Customer, bool Paid, string? Note, List<Item> Items);

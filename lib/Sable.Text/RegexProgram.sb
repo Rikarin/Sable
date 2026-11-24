@@ -1,0 +1,378 @@
+module Sable.Text
+
+// A pattern's tree compiled to a Thompson NFA: a program of instructions,
+// each an op and up to three operands, kept as parallel arrays. The
+// engines run the same program — the PikeVM (RegexPikeVM.sb) as threads,
+// the lazy DFA (RegexDfa.sb) as sets of instructions, the backtracker
+// (RegexBacktracker.sb) one path at a time.
+//
+// Every program begins with an unanchored prefix — instruction 0 prefers
+// the pattern at 2, and otherwise 1 takes any character and goes back to 0
+// — so that the DFA finds a match starting anywhere; the anchored entry
+// is 2.
+
+// Instructions that take a character, going to y: x is the character for
+// opChar, the class for opClass.
+const opChar = 0
+const opClass = 1
+const opAny = 2
+const opAnyButNewline = 3
+// Empty transitions.
+const opSplit = 4 // to x, preferred, and to y
+const opJump = 5 // to x
+const opSave = 6 // the position to slot x, then y
+const opLook = 7 // assertion x, then y
+const opMark = 8 // the position to register x, then y
+const opCheck = 9 // fails unless the position moved since register x was marked
+// The end.
+const opMatch = 10 // pattern x matched
+const opFail = 11
+// The backtracker's own.
+const opBackref = 12 // what group x matched (z: 1 ignoring case), then y
+const opLookAround = 13 // the body at x (z: 1 behind, 2 negated), then y
+const opAtomic = 14 // the body at x, its first match only, then y
+const opSubMatch = 15 // the end of a lookaround's or an atomic group's body
+
+/// The most instructions a program may have.
+const regexProgramLimit = 500000
+
+/// The entry of the pattern itself, past the unanchored prefix.
+const regexAnchoredStart = 2
+
+final class RegexProgram {
+    var ops: Int[>..] = []
+    var xs: Int[>..] = []
+    var ys: Int[>..] = []
+    var zs: Int[>..] = []
+    let classes: RegexCharClass[>..]
+    let groupCount: Int
+    let names: String[>..]
+    // Registers for opMark and opCheck, after the capture slots.
+    var registers: Int = 0
+    // A bit for each kind of assertion the program makes.
+    var looks: Int = 0
+    // Compiled to be run from the end of the text to its start.
+    let reverse: Bool
+
+    init(classes: RegexCharClass[>..], groupCount: Int, names: String[>..], reverse: Bool) {
+        self.classes = classes
+        self.groupCount = groupCount
+        self.names = names
+        self.reverse = reverse
+        // The unanchored prefix: 0 prefers 2, the pattern; 1 takes a character and goes back.
+        add(opSplit, regexAnchoredStart, 1, 0)
+        add(opAny, 0, 0, 0)
+    }
+
+    /// The program of one pattern, matching as pattern 0.
+    static fn compile(_ root: RegexNode, classes: RegexCharClass[>..], groupCount: Int, names: String[>..], reverse: Bool) throws(RegexError) -> RegexProgram {
+        let program = RegexProgram(classes: classes, groupCount: groupCount, names: names, reverse: reverse)
+        if !reverse {
+            program.add(opSave, 0, program.count + 1, 0)
+        }
+        try program.emit(root)
+        if !reverse {
+            program.add(opSave, 1, program.count + 1, 0)
+        }
+        program.add(opMatch, 0, 0, 0)
+        return program
+    }
+
+    /// The program of several patterns, any of which may match: each
+    /// matches as its index.
+    static fn compileSet(_ roots: RegexNode[>..], classes: RegexCharClass[>..]) throws(RegexError) -> RegexProgram {
+        let program = RegexProgram(classes: classes, groupCount: 0, names: [""], reverse: false)
+        if roots.count == 0 {
+            program.add(opFail, 0, 0, 0)
+        }
+        var i = 0
+        while i < roots.count {
+            var split = -1
+            if i + 1 < roots.count {
+                split = program.add(opSplit, program.count + 1, -1, 0)
+            }
+            try program.emit(roots[i])
+            program.add(opMatch, i, 0, 0)
+            if split >= 0 {
+                program.ys[split] = program.count
+            }
+            i += 1
+        }
+        return program
+    }
+
+    var count: Int => ops.count
+
+    /// The number of slots a match's captures take: a start and an end
+    /// for the whole match and for each group.
+    var slotCount: Int => 2 * (groupCount + 1)
+
+    @discardable
+    fn add(_ op: Int, _ x: Int, _ y: Int, _ z: Int) -> Int {
+        ops.append(op)
+        xs.append(x)
+        ys.append(y)
+        zs.append(z)
+        return ops.count - 1
+    }
+
+    fn checkSize() throws(RegexError) {
+        if ops.count > regexProgramLimit {
+            throw RegexError(.TooLarge, at: 0, "the pattern compiles to more than \(regexProgramLimit) instructions")
+        }
+    }
+
+    /// Instructions for the node, going on to the instruction after them.
+    fn emit(_ node: RegexNode) throws(RegexError) {
+        try checkSize()
+        match node {
+            case .Empty => { }
+            case .Literal(let code) => {
+                add(opChar, code, count + 1, 0)
+            }
+            case .Set(let index) => {
+                add(opClass, index, count + 1, 0)
+            }
+            case .AnyChar => {
+                add(opAny, 0, count + 1, 0)
+            }
+            case .AnyButNewline => {
+                add(opAnyButNewline, 0, count + 1, 0)
+            }
+            case .Look(let kind) => {
+                let actual = reverse ? reversedLook(kind) : kind
+                looks = looks | (1 << actual)
+                add(opLook, actual, count + 1, 0)
+            }
+            case .Group(let inner, let index) => {
+                if !reverse {
+                    add(opSave, 2 * index, count + 1, 0)
+                }
+                try emit(inner)
+                if !reverse {
+                    add(opSave, 2 * index + 1, count + 1, 0)
+                }
+            }
+            case .Concat(let items) => {
+                if reverse {
+                    var i = items.count - 1
+                    while i >= 0 {
+                        try emit(items[i])
+                        i -= 1
+                    }
+                } else {
+                    for item in items {
+                        try emit(item)
+                    }
+                }
+            }
+            case .Alternate(let items) => {
+                var jumps: Int[>..] = []
+                var i = 0
+                while i + 1 < items.count {
+                    let split = add(opSplit, count + 1, -1, 0)
+                    try emit(items[i])
+                    jumps.append(add(opJump, -1, 0, 0))
+                    ys[split] = count
+                    i += 1
+                }
+                try emit(items[items.count - 1])
+                for jump in jumps {
+                    xs[jump] = count
+                }
+            }
+            case .Repeat(let inner, let min, let max, let greedy) => {
+                try emitRepeat(inner, min, max, greedy)
+            }
+            case .Atomic(let inner) => {
+                let at = add(opAtomic, count + 1, -1, 0)
+                try emit(inner)
+                add(opSubMatch, 0, 0, 0)
+                ys[at] = count
+            }
+            case .LookAround(let inner, let behind, let negated) => {
+                let at = add(opLookAround, count + 1, -1, (behind ? 1 : 0) | (negated ? 2 : 0))
+                try emit(inner)
+                add(opSubMatch, 0, 0, 0)
+                ys[at] = count
+            }
+            case .Backref(let group, let name, let ignoreCase, let offset) => {
+                var index = group
+                if index < 0 {
+                    index = names.firstIndex(of: name) ?? -1
+                    if index < 0 {
+                        throw RegexError(.UnknownGroup, at: offset, "no group named '\(name)'")
+                    }
+                } else if index > groupCount {
+                    throw RegexError(.UnknownGroup, at: offset, "no group \(index)")
+                }
+                add(opBackref, index, count + 1, ignoreCase ? 1 : 0)
+            }
+        }
+    }
+
+    fn emitRepeat(_ inner: RegexNode, _ min: Int, _ max: Int, _ greedy: Bool) throws(RegexError) {
+        let nullable = canBeEmpty(inner)
+        if max < 0 && min > 0 && !nullable {
+            // n-1 copies, then one looping back to itself.
+            var i = 0
+            while i + 1 < min {
+                try emit(inner)
+                i += 1
+            }
+            let loop = count
+            try emit(inner)
+            if greedy {
+                add(opSplit, loop, count + 1, 0)
+            } else {
+                add(opSplit, count + 1, loop, 0)
+            }
+            return
+        }
+        var i = 0
+        while i < min {
+            try emit(inner)
+            i += 1
+        }
+        if max < 0 {
+            // A loop of the body; one that can match empty must move to go round again.
+            let split = add(opSplit, -1, -1, 0)
+            var register = -1
+            if nullable {
+                register = slotCount + registers
+                registers += 1
+                add(opMark, register, count + 1, 0)
+            }
+            let body = split + 1
+            try emit(inner)
+            if nullable {
+                add(opCheck, register, count + 1, 0)
+            }
+            add(opJump, split, 0, 0)
+            xs[split] = greedy ? body : count
+            ys[split] = greedy ? count : body
+            return
+        }
+        // Each optional copy may stop the repetition.
+        var splits: Int[>..] = []
+        while i < max {
+            let split = add(opSplit, -1, -1, 0)
+            splits.append(split)
+            try emit(inner)
+            i += 1
+        }
+        for split in splits {
+            xs[split] = greedy ? split + 1 : count
+            ys[split] = greedy ? count : split + 1
+        }
+    }
+
+    /// Whether the instruction takes a character, and that one.
+    fn takes(_ pc: Int, _ code: Int) -> Bool {
+        let op = ops[pc]
+        if op == opChar {
+            return xs[pc] == code
+        }
+        if op == opClass {
+            return classes[xs[pc]].contains(code)
+        }
+        if op == opAny {
+            return true
+        }
+        return op == opAnyButNewline && code != 0x0A
+    }
+}
+
+/// An assertion as a program run backwards makes it: the start of the
+/// text is where the reversed run ends.
+fn reversedLook(_ kind: Int) -> Int {
+    if kind == lookStartText {
+        return lookEndText
+    }
+    if kind == lookEndText {
+        return lookStartText
+    }
+    if kind == lookStartLine {
+        return lookEndLine
+    }
+    if kind == lookEndLine {
+        return lookStartLine
+    }
+    return kind
+}
+
+/// Whether the assertion holds between two characters, -1 for the text's
+/// start or end.
+fn lookHolds(_ kind: Int, _ before: Int, _ after: Int) -> Bool {
+    if kind == lookStartText {
+        return before < 0
+    }
+    if kind == lookEndText {
+        return after < 0
+    }
+    if kind == lookStartLine {
+        return before < 0 || before == 0x0A
+    }
+    if kind == lookEndLine {
+        return after < 0 || after == 0x0A
+    }
+    let boundary = (before >= 0 && isWordCharacter(before)) != (after >= 0 && isWordCharacter(after))
+    return kind == lookWordBoundary ? boundary : !boundary
+}
+
+/// Whether the node can match the empty string.
+fn canBeEmpty(_ node: RegexNode) -> Bool {
+    return match node {
+        case .Empty                            => true
+        case .Literal(_)                       => false
+        case .Set(_)                           => false
+        case .AnyChar                          => false
+        case .AnyButNewline                    => false
+        case .Look(_)                          => true
+        case .Group(let inner, _)              => canBeEmpty(inner)
+        case .Concat(let items)                => items.allSatisfy { canBeEmpty($0) }
+        case .Alternate(let items)             => items.contains(where: { (item: RegexNode) in canBeEmpty(item) })
+        case .Repeat(let inner, let min, _, _) => min == 0 || canBeEmpty(inner)
+        case .Atomic(let inner)                => canBeEmpty(inner)
+        case .LookAround(_, _, _)              => true
+        case .Backref(_, _, _, _)              => true
+    }
+}
+
+/// Whether every match of the node starts at the start of the text.
+fn anchoredAtStart(_ node: RegexNode) -> Bool {
+    return match node {
+        case .Look(let kind)                   => kind == lookStartText
+        case .Group(let inner, _)              => anchoredAtStart(inner)
+        case .Concat(let items)                => items.count > 0 && anchoredAtStart(items[0])
+        case .Alternate(let items)             => items.allSatisfy { anchoredAtStart($0) }
+        case .Repeat(let inner, let min, _, _) => min > 0 && anchoredAtStart(inner)
+        case .Atomic(let inner)                => anchoredAtStart(inner)
+        default                                => false
+    }
+}
+
+/// The characters every match of the node starts with, matched exactly,
+/// added to the prefix; whether the node is nothing but them.
+fn literalPrefix(_ node: RegexNode, into leading: inout Int[>..]) -> Bool {
+    if case .Literal(let code) = node {
+        leading.append(code)
+        return true
+    }
+    if case .Concat(let items) = node {
+        return literalPrefixOf(items, into: &leading)
+    }
+    if case .Empty = node {
+        return true
+    }
+    return false
+}
+
+fn literalPrefixOf(_ items: RegexNode[>..], into leading: inout Int[>..]) -> Bool {
+    for item in items {
+        if !literalPrefix(item, into: &leading) {
+            return false
+        }
+    }
+    return true
+}

@@ -1,0 +1,165 @@
+module Sable.Text
+
+/// Several regexes matched against a text at once, in one pass over it:
+/// which of them match, and whether any does. Rust's `RegexSet` — the
+/// question a router or a lexer's keyword table asks, answered without
+/// searching the text once for each pattern. The patterns are compiled
+/// into one program, and the pass is linear in the text.
+///
+/// ```sable
+/// let kinds = try! RegexSet([#"\d+"#, "[a-z]+", "@"])
+/// assert(kinds.matches("abc 123") == [0, 1])
+/// assert(kinds.isMatch("!@!"))
+/// assert(!kinds.isMatch("---"))
+/// ```
+public class RegexSet {
+    /// The patterns, in order: a pattern's index is the number `matches`
+    /// gives for it.
+    public let patterns: String[>..]
+
+    let program: RegexProgram
+    let size: Int
+    var dense: Int[>..] = []
+    var sparse: Int[>..] = []
+    var sizes: Int[>..] = [0, 0]
+    var stack: Int[>..] = []
+    var matched: Bool[>..] = []
+    var matchedCount: Int = 0
+
+    /// The set of the patterns, each read with the options as `Regex(_:)`
+    /// reads it; a mistake in one is a `RegexError` whose message says
+    /// which. `.Backtracking` cannot be one of the options: a set matches
+    /// as the automata do.
+    public init(_ patterns: String[:], options: RegexOptions = .None) throws(RegexError) {
+        var plain = options
+        plain = plain & ~RegexOptions.Backtracking
+        let parser = RegexParser(plain)
+        var roots: RegexNode[>..] = []
+        var i = 0
+        while i < patterns.count {
+            parser.load(patterns[i])
+            do {
+                roots.append(try parser.parse())
+            } catch {
+                throw RegexError(error.kind, at: error.offset, "pattern \(i): \(error.message)")
+            }
+            i += 1
+        }
+        self.patterns = patterns.toArray()
+        program = try RegexProgram.compileSet(roots, classes: parser.classes)
+        size = program.count
+        dense = filled(0, 2 * size)
+        sparse = filled(0, 2 * size)
+        var k = 0
+        while k < patterns.count {
+            matched.append(false)
+            k += 1
+        }
+    }
+
+    /// How many patterns there are.
+    public var count: Int => patterns.count
+
+    /// Whether any of the patterns matches anywhere in the text.
+    public fn isMatch(_ text: some StringProtocol) -> Bool {
+        return run(text.asSubstring, stopAtFirst: true) > 0
+    }
+
+    /// The indexes of the patterns that match somewhere in the text, in
+    /// order.
+    public fn matches(_ text: some StringProtocol) -> Int[>..] {
+        let _ = run(text.asSubstring, stopAtFirst: false)
+        var found: Int[>..] = []
+        var i = 0
+        while i < matched.count {
+            if matched[i] {
+                found.append(i)
+            }
+            i += 1
+        }
+        return found
+    }
+
+    fn contains(_ list: Int, _ pc: Int) -> Bool {
+        let i = sparse[list * size + pc]
+        return i < sizes[list] && dense[list * size + i] == pc
+    }
+
+    /// Adds what the empty transitions from the instruction reach, between
+    /// the two characters, to the list; notes the patterns that match.
+    fn follow(_ list: Int, _ from: Int, _ before: Int, _ after: Int) {
+        stack.append(from)
+        while stack.count > 0 {
+            var pc = stack.removeLast()
+            while !contains(list, pc) {
+                let n = sizes[list]
+                dense[list * size + n] = pc
+                sparse[list * size + pc] = n
+                sizes[list] = n + 1
+                let op = program.ops[pc]
+                if op == opSplit {
+                    stack.append(program.ys[pc])
+                    pc = program.xs[pc]
+                } else if op == opJump {
+                    pc = program.xs[pc]
+                } else if op == opLook {
+                    if !lookHolds(program.xs[pc], before, after) {
+                        break
+                    }
+                    pc = program.ys[pc]
+                } else if op == opSave || op == opMark || op == opCheck {
+                    pc = program.ys[pc]
+                } else {
+                    if op == opMatch && !matched[program.xs[pc]] {
+                        matched[program.xs[pc]] = true
+                        matchedCount += 1
+                    }
+                    break
+                }
+            }
+        }
+    }
+
+    /// Runs every pattern over the text at once: how many match.
+    fn run(_ text: Substring, stopAtFirst: Bool) -> Int {
+        let base = text.base
+        let start = text.startIndex.utf8Offset
+        let end = text.endIndex.utf8Offset
+        var k = 0
+        while k < matched.count {
+            matched[k] = false
+            k += 1
+        }
+        matchedCount = 0
+        var current = 0
+        sizes[0] = 0
+        var at = start
+        var before = -1
+        var here = at < end ? scalarAt(base, at) : -1
+        while true {
+            let code = here < 0 ? -1 : here & 0x1FFFFF
+            follow(current, regexAnchoredStart, before, code)
+            if matchedCount == matched.count || (stopAtFirst && matchedCount > 0) || at >= end {
+                break
+            }
+            let length = here >> 21
+            let ahead = at + length < end ? scalarAt(base, at + length) : -1
+            let afterCode = ahead < 0 ? -1 : ahead & 0x1FFFFF
+            let next = 1 - current
+            sizes[next] = 0
+            var i = 0
+            while i < sizes[current] {
+                let pc = dense[current * size + i]
+                if program.ops[pc] <= opAnyButNewline && program.takes(pc, code) {
+                    follow(next, program.ys[pc], code, afterCode)
+                }
+                i += 1
+            }
+            current = next
+            before = code
+            at += length
+            here = ahead
+        }
+        return matchedCount
+    }
+}

@@ -29,6 +29,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 SOURCES = ROOT / "benchmarks" / "versus-dotnet"
 DOTNET = ROOT / "benchmarks" / "dotnet"
 
+# Benchmarks, by the part of their name before the first '-', that .NET also
+# runs another way: <name>/<variant> in benchmarks/dotnet.
+VARIANTS = {"regex": ["nonbacktracking"]}
+
 
 def build(project, directory, name):
     subprocess.run(
@@ -82,6 +86,16 @@ def main():
                 print(f"{name}: the outputs differ\n  sable:  {sable_output!r}\n  dotnet: {dotnet_output!r}", file=sys.stderr)
                 return 1
             rows.append((name, min(dotnet_all), min(sable_all)))
+
+            # The regex benchmarks run against both of .NET's engines that
+            # matter here: RegexOptions.Compiled, under the benchmark's own
+            # name, and the linear-time NonBacktracking, as Sable's is.
+            for variant in VARIANTS.get(name.split("-")[0], []):
+                variant_ms, variant_output = dotnet_fastest(reference, f"{name}/{variant}", arguments.runs)
+                if sable_output != variant_output:
+                    print(f"{name}/{variant}: the outputs differ\n  sable:  {sable_output!r}\n  dotnet: {variant_output!r}", file=sys.stderr)
+                    return 1
+                rows.append((f"{name}/{variant}", variant_ms, sable_ms))
 
     width = max([len("benchmark")] + [len(row[0]) for row in rows])
     print(f"{'benchmark':<{width}}  {'.NET ms':>9}  {'Sable ms':>9}  {'ratio':>6}")

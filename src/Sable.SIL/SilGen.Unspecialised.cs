@@ -186,7 +186,15 @@ public sealed partial class SilGen {
     /// </summary>
     void AssociatedRecipes(SilFunction function, FunctionSymbol symbol, GenericShape shape) {
         var names = new SortedSet<string>(StringComparer.Ordinal);
+
+        // A union may hold itself, in an array or a box of a case: each
+        // nominal type is looked through once.
+        var seen = new HashSet<NominalType>(ReferenceEqualityComparer.Instance);
         void Collect(SilType? type) {
+            if (type is NominalType nominal && !seen.Add(nominal)) {
+                return;
+            }
+
             switch (type) {
                 case OpaqueType opaque when opaque.Name.Contains('.'):
                     names.Add(opaque.Name);

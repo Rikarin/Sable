@@ -891,7 +891,7 @@ let p: any Producer<Animal> = DogProducer()     // legal: T is 'out'
 ### Conditional conformance
 
 ```sable
-extension<T: Equatable> T[:]: Equatable { … }      // Sable.Core's, for every array
+extension<T: Equatable> T[:]: Equatable { }      // Sable.Core's, for every array
 extension Optional<T>: Serializable where T: Serializable { }
 ```
 

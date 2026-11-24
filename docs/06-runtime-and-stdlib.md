@@ -918,7 +918,7 @@ rounded), and reduce them: an integer's sum wraps, and a float's is added
 pairwise — lane i with lane i + N/2, down to one — in that order natively
 and in the interpreter alike, so that a sum is the same number either way.
 
-`Sable.Math`'s kernels (`VectorKernels.sb`, .NET's TensorPrimitives) are
+`Sable.Math`'s kernels (`VectorKernels.sb`) are `TensorPrimitives`' static functions, as .NET's are,
 written once over `SIMD<T, N>` and a scalar tail — `sum`, `dot`, `norm`,
 `cosineSimilarity`, `min`, `max`, `softmax` and the elementwise `add`,
 `subtract`, `multiply` and `divide` into a destination — and given 64

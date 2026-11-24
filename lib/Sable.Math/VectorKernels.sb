@@ -14,143 +14,148 @@ module Sable.Math
 // .NET's does, and is usually closer. Inputs that should be the same
 // length are checked to be, and the destination to have room.
 
-/// The sum of the elements: 0 for none.
-///
-/// ```sable
-/// assert(sum([1.0, 2.0, 3.0, 4.0, 5.0] as F64[:]) == 15.0)
-/// ```
-public fn sum(_ x: F32[:]) -> F32 => sumOf(x, SIMD<F32, 16>())
+/// The kernels over arrays of floats, a vector at a time, as .NET's
+/// TensorPrimitives: named apart from the statistics' generic `sum`,
+/// `minimum` and `maximum`, which add with compensation, element by element.
+public struct TensorPrimitives {
+    /// The sum of the elements: 0 for none.
+    ///
+    /// ```sable
+    /// assert(TensorPrimitives.sum([1.0, 2.0, 3.0, 4.0, 5.0] as F64[:]) == 15.0)
+    /// ```
+    public static fn sum(_ x: F32[:]) -> F32 => sumOf(x, SIMD<F32, 16>())
 
-/// The sum of the elements: 0 for none.
-public fn sum(_ x: F64[:]) -> F64 => sumOf(x, SIMD<F64, 8>())
+    /// The sum of the elements: 0 for none.
+    public static fn sum(_ x: F64[:]) -> F64 => sumOf(x, SIMD<F64, 8>())
 
-/// The dot product: the sum of the products of the elements at each
-/// index. Traps unless the two are the same length.
-///
-/// ```sable
-/// let x: F32[>..] = [1, 2, 3]
-/// let y: F32[>..] = [4, 5, 6]
-/// assert(dot(x, y) == 32)
-/// ```
-public fn dot(_ x: F32[:], _ y: F32[:]) -> F32 => dotOf(x, y, SIMD<F32, 16>())
+    /// The dot product: the sum of the products of the elements at each
+    /// index. Traps unless the two are the same length.
+    ///
+    /// ```sable
+    /// let x: F32[>..] = [1, 2, 3]
+    /// let y: F32[>..] = [4, 5, 6]
+    /// assert(TensorPrimitives.dot(x, y) == 32)
+    /// ```
+    public static fn dot(_ x: F32[:], _ y: F32[:]) -> F32 => dotOf(x, y, SIMD<F32, 16>())
 
-/// The dot product: the sum of the products of the elements at each
-/// index. Traps unless the two are the same length.
-public fn dot(_ x: F64[:], _ y: F64[:]) -> F64 => dotOf(x, y, SIMD<F64, 8>())
+    /// The dot product: the sum of the products of the elements at each
+    /// index. Traps unless the two are the same length.
+    public static fn dot(_ x: F64[:], _ y: F64[:]) -> F64 => dotOf(x, y, SIMD<F64, 8>())
 
-/// The Euclidean norm, √(Σ xᵢ²): the length of the vector the elements are.
-///
-/// ```sable
-/// assert(norm([3.0, 4.0] as F64[:]) == 5.0)
-/// ```
-public fn norm(_ x: F32[:]) -> F32 => dotOf(x, x, SIMD<F32, 16>()).squareRoot()
+    /// The Euclidean norm, √(Σ xᵢ²): the length of the vector the elements are.
+    ///
+    /// ```sable
+    /// assert(TensorPrimitives.norm([3.0, 4.0] as F64[:]) == 5.0)
+    /// ```
+    public static fn norm(_ x: F32[:]) -> F32 => dotOf(x, x, SIMD<F32, 16>()).squareRoot()
 
-/// The Euclidean norm, √(Σ xᵢ²): the length of the vector the elements are.
-public fn norm(_ x: F64[:]) -> F64 => dotOf(x, x, SIMD<F64, 8>()).squareRoot()
+    /// The Euclidean norm, √(Σ xᵢ²): the length of the vector the elements are.
+    public static fn norm(_ x: F64[:]) -> F64 => dotOf(x, x, SIMD<F64, 8>()).squareRoot()
 
-/// The cosine of the angle between two vectors, x·y / (|x| |y|): 1 for
-/// the same direction, 0 at right angles, -1 opposite; NaN if either is
-/// all zeros. Traps unless the two are the same length.
-///
-/// ```sable
-/// let x: F64[>..] = [1, 0]
-/// let y: F64[>..] = [0, 2]
-/// assert(cosineSimilarity(x, y) == 0.0)
-/// assert(cosineSimilarity(x, x) == 1.0)
-/// ```
-public fn cosineSimilarity(_ x: F32[:], _ y: F32[:]) -> F32 => cosineOf(x, y, SIMD<F32, 16>())
+    /// The cosine of the angle between two vectors, x·y / (|x| |y|): 1 for
+    /// the same direction, 0 at right angles, -1 opposite; NaN if either is
+    /// all zeros. Traps unless the two are the same length.
+    ///
+    /// ```sable
+    /// let x: F64[>..] = [1, 0]
+    /// let y: F64[>..] = [0, 2]
+    /// assert(TensorPrimitives.cosineSimilarity(x, y) == 0.0)
+    /// assert(TensorPrimitives.cosineSimilarity(x, x) == 1.0)
+    /// ```
+    public static fn cosineSimilarity(_ x: F32[:], _ y: F32[:]) -> F32 => cosineOf(x, y, SIMD<F32, 16>())
 
-/// The cosine of the angle between two vectors, x·y / (|x| |y|). Traps
-/// unless the two are the same length.
-public fn cosineSimilarity(_ x: F64[:], _ y: F64[:]) -> F64 => cosineOf(x, y, SIMD<F64, 8>())
+    /// The cosine of the angle between two vectors, x·y / (|x| |y|). Traps
+    /// unless the two are the same length.
+    public static fn cosineSimilarity(_ x: F64[:], _ y: F64[:]) -> F64 => cosineOf(x, y, SIMD<F64, 8>())
 
-/// The least element: lane-wise minimums, then the least of those. A NaN
-/// is passed over (as 'min' passes it over) unless every element is one.
-/// Traps on none.
-///
-/// ```sable
-/// assert(min([3.0, -1.0, 2.0] as F64[:]) == -1.0)
-/// ```
-public fn min(_ x: F32[:]) -> F32 => extremeOf(x, SIMD<F32, 16>(), least: true)
+    /// The least element: lane-wise minimums, then the least of those. A NaN
+    /// is passed over (as 'min' passes it over) unless every element is one.
+    /// Traps on none.
+    ///
+    /// ```sable
+    /// assert(TensorPrimitives.min([3.0, -1.0, 2.0] as F64[:]) == -1.0)
+    /// ```
+    public static fn min(_ x: F32[:]) -> F32 => extremeOf(x, SIMD<F32, 16>(), least: true)
 
-/// The least element. Traps on none.
-public fn min(_ x: F64[:]) -> F64 => extremeOf(x, SIMD<F64, 8>(), least: true)
+    /// The least element. Traps on none.
+    public static fn min(_ x: F64[:]) -> F64 => extremeOf(x, SIMD<F64, 8>(), least: true)
 
-/// The greatest element. A NaN is passed over unless every element is
-/// one. Traps on none.
-public fn max(_ x: F32[:]) -> F32 => extremeOf(x, SIMD<F32, 16>(), least: false)
+    /// The greatest element. A NaN is passed over unless every element is
+    /// one. Traps on none.
+    public static fn max(_ x: F32[:]) -> F32 => extremeOf(x, SIMD<F32, 16>(), least: false)
 
-/// The greatest element. Traps on none.
-public fn max(_ x: F64[:]) -> F64 => extremeOf(x, SIMD<F64, 8>(), least: false)
+    /// The greatest element. Traps on none.
+    public static fn max(_ x: F64[:]) -> F64 => extremeOf(x, SIMD<F64, 8>(), least: false)
 
-/// Writes each 'x[i] + y[i]' to 'destination[i]'. Traps unless x and y
-/// are the same length and the destination at least as long.
-///
-/// ```sable
-/// var result: F32[>..] = [0, 0, 0]
-/// add([1, 2, 3], [10, 20, 30], into: &result)
-/// assert(result == [11, 22, 33])
-/// ```
-public fn add(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
-    elementwise(x, y, &destination, SIMD<F32, 16>(), .Add)
-}
+    /// Writes each 'x[i] + y[i]' to 'destination[i]'. Traps unless x and y
+    /// are the same length and the destination at least as long.
+    ///
+    /// ```sable
+    /// var result: F32[>..] = [0, 0, 0]
+    /// TensorPrimitives.add([1, 2, 3], [10, 20, 30], into: &result)
+    /// assert(result == [11, 22, 33])
+    /// ```
+    public static fn add(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
+        elementwise(x, y, &destination, SIMD<F32, 16>(), .Add)
+    }
 
-/// Writes each 'x[i] + y[i]' to 'destination[i]'.
-public fn add(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
-    elementwise(x, y, &destination, SIMD<F64, 8>(), .Add)
-}
+    /// Writes each 'x[i] + y[i]' to 'destination[i]'.
+    public static fn add(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
+        elementwise(x, y, &destination, SIMD<F64, 8>(), .Add)
+    }
 
-/// Writes each 'x[i] - y[i]' to 'destination[i]'. Traps unless x and y
-/// are the same length and the destination at least as long.
-public fn subtract(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
-    elementwise(x, y, &destination, SIMD<F32, 16>(), .Subtract)
-}
+    /// Writes each 'x[i] - y[i]' to 'destination[i]'. Traps unless x and y
+    /// are the same length and the destination at least as long.
+    public static fn subtract(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
+        elementwise(x, y, &destination, SIMD<F32, 16>(), .Subtract)
+    }
 
-/// Writes each 'x[i] - y[i]' to 'destination[i]'.
-public fn subtract(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
-    elementwise(x, y, &destination, SIMD<F64, 8>(), .Subtract)
-}
+    /// Writes each 'x[i] - y[i]' to 'destination[i]'.
+    public static fn subtract(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
+        elementwise(x, y, &destination, SIMD<F64, 8>(), .Subtract)
+    }
 
-/// Writes each 'x[i] × y[i]' to 'destination[i]'. Traps unless x and y
-/// are the same length and the destination at least as long.
-public fn multiply(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
-    elementwise(x, y, &destination, SIMD<F32, 16>(), .Multiply)
-}
+    /// Writes each 'x[i] × y[i]' to 'destination[i]'. Traps unless x and y
+    /// are the same length and the destination at least as long.
+    public static fn multiply(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
+        elementwise(x, y, &destination, SIMD<F32, 16>(), .Multiply)
+    }
 
-/// Writes each 'x[i] × y[i]' to 'destination[i]'.
-public fn multiply(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
-    elementwise(x, y, &destination, SIMD<F64, 8>(), .Multiply)
-}
+    /// Writes each 'x[i] × y[i]' to 'destination[i]'.
+    public static fn multiply(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
+        elementwise(x, y, &destination, SIMD<F64, 8>(), .Multiply)
+    }
 
-/// Writes each 'x[i] / y[i]' to 'destination[i]'. Traps unless x and y
-/// are the same length and the destination at least as long.
-public fn divide(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
-    elementwise(x, y, &destination, SIMD<F32, 16>(), .Divide)
-}
+    /// Writes each 'x[i] / y[i]' to 'destination[i]'. Traps unless x and y
+    /// are the same length and the destination at least as long.
+    public static fn divide(_ x: F32[:], _ y: F32[:], into destination: inout F32[>..]) {
+        elementwise(x, y, &destination, SIMD<F32, 16>(), .Divide)
+    }
 
-/// Writes each 'x[i] / y[i]' to 'destination[i]'.
-public fn divide(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
-    elementwise(x, y, &destination, SIMD<F64, 8>(), .Divide)
-}
+    /// Writes each 'x[i] / y[i]' to 'destination[i]'.
+    public static fn divide(_ x: F64[:], _ y: F64[:], into destination: inout F64[>..]) {
+        elementwise(x, y, &destination, SIMD<F64, 8>(), .Divide)
+    }
 
-/// Writes the softmax of x to the destination: each 'exp(x[i] - m) / Σ
-/// exp(x[j] - m)', m the greatest element (which keeps every exponential
-/// at most 1, so none overflows). The results are positive and sum to 1.
-/// Traps on no elements, or a destination shorter than x.
-///
-/// ```sable
-/// var result: F64[>..] = [0, 0]
-/// softmax([0.0, 0.0], into: &result)
-/// assert(result == [0.5, 0.5])
-/// ```
-public fn softmax(_ x: F32[:], into destination: inout F32[>..]) {
-    softmaxOf(x, &destination, SIMD<F32, 16>())
-}
+    /// Writes the softmax of x to the destination: each 'exp(x[i] - m) / Σ
+    /// exp(x[j] - m)', m the greatest element (which keeps every exponential
+    /// at most 1, so none overflows). The results are positive and sum to 1.
+    /// Traps on no elements, or a destination shorter than x.
+    ///
+    /// ```sable
+    /// var result: F64[>..] = [0, 0]
+    /// TensorPrimitives.softmax([0.0, 0.0], into: &result)
+    /// assert(result == [0.5, 0.5])
+    /// ```
+    public static fn softmax(_ x: F32[:], into destination: inout F32[>..]) {
+        softmaxOf(x, &destination, SIMD<F32, 16>())
+    }
 
-/// Writes the softmax of x to the destination. Traps on no elements, or a
-/// destination shorter than x.
-public fn softmax(_ x: F64[:], into destination: inout F64[>..]) {
-    softmaxOf(x, &destination, SIMD<F64, 8>())
+    /// Writes the softmax of x to the destination. Traps on no elements, or a
+    /// destination shorter than x.
+    public static fn softmax(_ x: F64[:], into destination: inout F64[>..]) {
+        softmaxOf(x, &destination, SIMD<F64, 8>())
+    }
 }
 
 // ---- The kernels, generic over the lanes and the width ----

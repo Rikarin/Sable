@@ -31,10 +31,10 @@ fn main() {
     var round = 0
     while round < 20000 {
         x[round % n] = F32(round % 7 - 3)
-        total = total + F64(sum(x)) + F64(dot(x, y))
-        cosine = cosine + F64(cosineSimilarity(x, y))
-        add(x, y, into: &sums)
-        multiply(sums, y, into: &products)
+        total = total + F64(TensorPrimitives.sum(x)) + F64(TensorPrimitives.dot(x, y))
+        cosine = cosine + F64(TensorPrimitives.cosineSimilarity(x, y))
+        TensorPrimitives.add(x, y, into: &sums)
+        TensorPrimitives.multiply(sums, y, into: &products)
         total = total + F64(products[round % n])
         round = round + 1
     }
@@ -43,10 +43,10 @@ fn main() {
     round = 0
     while round < 2000 {
         y[round % n] = F32(round % 5 - 2)
-        softmax(y, into: &probabilities)
+        TensorPrimitives.softmax(y, into: &probabilities)
         spread = spread + F64(probabilities[round % n])
         round = round + 1
     }
 
-    print("\(total:.1f) \(cosine:.3f) \(F64(sum(products)):.1f) \(spread:.4f)")
+    print("\(total:.1f) \(cosine:.3f) \(F64(TensorPrimitives.sum(products)):.1f) \(spread:.4f)")
 }

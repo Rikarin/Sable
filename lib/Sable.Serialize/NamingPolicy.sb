@@ -1,0 +1,73 @@
+module Sable.Serialize
+
+/// How a type's field names become keys: `@serialize(renameAll: …)`, .NET's
+/// JsonNamingPolicy, serde's rename_all. Fields are lowerCamelCase in
+/// Sable, so `.CamelCase` leaves them as they are.
+@derive(Equatable, Debug)
+public enum NamingPolicy {
+    /// `userName`.
+    CamelCase
+    /// `UserName`.
+    PascalCase
+    /// `user_name`.
+    SnakeCase
+    /// `USER_NAME`.
+    ScreamingSnakeCase
+    /// `user-name`.
+    KebabCase
+
+    /// The name as the policy writes it, from lowerCamelCase or
+    /// UpperCamelCase: words start at each upper-case letter.
+    ///
+    /// ```sable
+    /// assert(NamingPolicy.SnakeCase.apply("userIdHash") == "user_id_hash")
+    /// assert(NamingPolicy.KebabCase.apply("HTTPServer") == "h-t-t-p-server")
+    /// ```
+    public fn apply(_ name: String) -> String {
+        var words: String[>..] = []
+        var current = ""
+        for c in name {
+            if c >= 'A' && c <= 'Z' && !current.isEmpty {
+                words.append(current)
+                current = ""
+            }
+            current = current + String.fromChar(c)
+        }
+        if !current.isEmpty {
+            words.append(current)
+        }
+        var lower: String[>..] = []
+        for word in words {
+            lower.append(word.lowercased())
+        }
+        return match self {
+            case .CamelCase => {
+                var text = ""
+                var i = 0
+                for word in lower {
+                    text = text + (i == 0 ? word : NamingPolicy.capitalized(word))
+                    i += 1
+                }
+                return text
+            }
+            case .PascalCase => {
+                var text = ""
+                for word in lower {
+                    text = text + NamingPolicy.capitalized(word)
+                }
+                return text
+            }
+            case .SnakeCase          => lower.joined(separator: "_")
+            case .ScreamingSnakeCase => lower.joined(separator: "_").uppercased()
+            case .KebabCase          => lower.joined(separator: "-")
+        }
+    }
+
+    static fn capitalized(_ word: String) -> String {
+        if word.isEmpty {
+            return word
+        }
+        let first = word[..<word.index(after: word.startIndex)].toString().uppercased()
+        return first + word[word.index(after: word.startIndex)...].toString()
+    }
+}

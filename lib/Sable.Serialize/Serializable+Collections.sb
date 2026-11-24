@@ -1,0 +1,116 @@
+module Sable.Serialize
+
+// Optional, the arrays and Dictionary: an optional as its value or null (a
+// missing field reads as none), an array as a JSON array, a dictionary with
+// String keys as an object.
+
+extension Optional: Serializable where Wrapped: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        if let value = self {
+            try value.encode(to: encoder)
+        } else {
+            encoder.encodeNull()
+        }
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> Wrapped? {
+        if decoder.isMissing || decoder.isNull {
+            return none
+        }
+        return try Wrapped.decode(from: decoder)
+    }
+}
+
+extension<Element: Serializable> Element[>..]: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        encoder.beginArray()
+        for element in self {
+            try element.encode(to: encoder)
+        }
+        encoder.endArray()
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> Element[>..] {
+        var all: Element[>..] = []
+        for element in try decoder.elements() {
+            all.append(try Element.decode(from: element))
+        }
+        return all
+    }
+}
+
+extension Dictionary: Serializable where Key == String, Value: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        encoder.beginObject()
+        for (key, value) in self {
+            encoder.key(key)
+            try value.encode(to: encoder)
+        }
+        encoder.endObject()
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> Dictionary<Key, Value> {
+        var all = Dictionary<Key, Value>()
+        for member in try decoder.members() {
+            all[member.key] = try Value.decode(from: member.value)
+        }
+        return all
+    }
+}
+
+extension JsonValue: Serializable {
+    /// The value as the JSON it is.
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        match self {
+            case .Null              => encoder.encodeNull()
+            case .Bool(let value)   => encoder.encodeBool(value)
+            case .Number(let value) => try encoder.encodeFloat(value)
+            case .Text(let value)   => try encoder.encodeString(value)
+            case .Array(let items) => {
+                encoder.beginArray()
+                for item in items {
+                    try item.encode(to: encoder)
+                }
+                encoder.endArray()
+            }
+            case .Object(let members) => {
+                encoder.beginObject()
+                for member in members {
+                    encoder.key(member.key)
+                    try member.value.encode(to: encoder)
+                }
+                encoder.endObject()
+            }
+        }
+    }
+
+    /// Whatever JSON value is there, as a JsonValue: the typed world's way
+    /// back to the document.
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> JsonValue {
+        if decoder.isMissing {
+            throw decoder.mismatch("a value")
+        }
+        if decoder.isNull {
+            return JsonValue.Null
+        }
+        let kind = decoder.document.kinds[decoder.node]
+        if kind == jsonTrue || kind == jsonFalse {
+            return JsonValue.Bool(value: kind == jsonTrue)
+        }
+        if kind == jsonNumber {
+            return JsonValue.Number(value: try decoder.decodeFloat())
+        }
+        if kind == jsonString {
+            return JsonValue.Text(value: try decoder.decodeString())
+        }
+        if kind == jsonArray {
+            var items: JsonValue[>..] = []
+            for element in try decoder.elements() {
+                items.append(try JsonValue.decode(from: element))
+            }
+            return JsonValue.Array(items: items)
+        }
+        var members: Member[>..] = []
+        for member in try decoder.members() {
+            members.append(Member { key: member.key, value: try JsonValue.decode(from: member.value) })
+        }
+        return JsonValue.Object(members: members)
+    }
+}

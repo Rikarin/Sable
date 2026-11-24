@@ -1,0 +1,49 @@
+module Sable.Net
+
+/// Which code points percent-encoding writes as %XX, by the WHATWG URL
+/// standard's sets: each a superset of the one before.
+@derive(Equatable, Hashable, Debug)
+public enum PercentEncodeSet {
+    /// C0 controls and everything above '~'.
+    C0Control
+    /// And space, '"', '<', '>' and '`': a fragment's.
+    Fragment
+    /// And space, '"', '#', '<' and '>' (not '`'): a query's.
+    Query
+    /// The query set and '\'': a special URL's query.
+    SpecialQuery
+    /// The query set and '?', '^', '`', '{' and '}': a path segment's.
+    Path
+    /// The path set and '/', ':', ';', '=', '@', '[' to '^' and '|': a
+    /// username's or password's.
+    Userinfo
+    /// The userinfo set and '$' to '&', '+' and ',': JavaScript's
+    /// encodeURIComponent.
+    Component
+    /// The component set and '!', '\'' to ')' and '~':
+    /// application/x-www-form-urlencoded.
+    FormUrlencoded
+
+    /// Whether the set holds the byte (or ASCII code point).
+    public fn contains(_ code: Int) -> Bool {
+        if code < 0x20 || code > 0x7E {
+            return true
+        }
+        let fragment = code == 0x20 || code == 0x22 || code == 0x3C || code == 0x3E
+        let query = code == 0x20 || code == 0x22 || code == 0x23 || code == 0x3C || code == 0x3E
+        let path = query || code == 0x3F || code == 0x5E || code == 0x60 || code == 0x7B || code == 0x7D
+        let userinfo = path || code == 0x2F || code == 0x3A || code == 0x3B || code == 0x3D || code == 0x40
+            || code >= 0x5B && code <= 0x5E || code == 0x7C
+        let component = userinfo || code >= 0x24 && code <= 0x26 || code == 0x2B || code == 0x2C
+        return match self {
+            case .C0Control      => false
+            case .Fragment       => fragment || code == 0x60
+            case .Query          => query
+            case .SpecialQuery   => query || code == 0x27
+            case .Path           => path
+            case .Userinfo       => userinfo
+            case .Component      => component
+            case .FormUrlencoded => component || code == 0x21 || code >= 0x27 && code <= 0x29 || code == 0x7E
+        }
+    }
+}

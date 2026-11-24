@@ -1,0 +1,203 @@
+module Sable.Net
+
+/// Punycode (RFC 3492): Unicode text in the letters, digits and hyphen a
+/// DNS label may hold — what an internationalised domain's labels become
+/// after "xn--". On code points, as IDNA uses it.
+///
+/// ```sable
+/// let encoded = Punycode.encode("bücher".unicodeScalarValues())!
+/// assert(encoded == "bcher-kva")
+/// assert(Punycode.decode("bcher-kva")!.count == 6)
+/// ```
+public struct Punycode {
+    static fn digitValue(_ c: Int) -> Int {
+        if c >= 0x30 && c <= 0x39 {
+            return c - 0x30 + 26
+        }
+        if c >= 0x41 && c <= 0x5A {
+            return c - 0x41
+        }
+        if c >= 0x61 && c <= 0x7A {
+            return c - 0x61
+        }
+        return -1
+    }
+
+    static fn digitCode(_ d: Int) -> Int {
+        return d < 26 ? 0x61 + d : 0x30 + d - 26
+    }
+
+    static fn adapt(_ delta: Int, _ points: Int, _ first: Bool) -> Int {
+        var d = first ? delta / 700 : delta / 2
+        d += d / points
+        var k = 0
+        while d > 455 {
+            d = d / 35
+            k += 36
+        }
+        return k + 36 * d / (d + 38)
+    }
+
+    /// The code points as Punycode; none when they overflow it.
+    public static fn encode(_ input: Int[:]) -> String? {
+        var output: U8[>..] = []
+        for c in input {
+            if c < 0x80 {
+                output.append(U8.truncating(c))
+            }
+        }
+        let basic = output.count
+        var handled = basic
+        if basic > 0 {
+            output.append(0x2D)
+        }
+        var n = 128
+        var delta = 0
+        var bias = 72
+        while handled < input.count {
+            var m = Int.max
+            for c in input {
+                if c >= n && c < m {
+                    m = c
+                }
+            }
+            if m - n > (Int.max - delta) / (handled + 1) {
+                return none
+            }
+            delta += (m - n) * (handled + 1)
+            n = m
+            for c in input {
+                if c < n {
+                    delta += 1
+                }
+                if c == n {
+                    var q = delta
+                    var k = 36
+                    while true {
+                        let t = k <= bias ? 1 : k >= bias + 26 ? 26 : k - bias
+                        if q < t {
+                            break
+                        }
+                        output.append(U8.truncating(Punycode.digitCode(t + (q - t) % (36 - t))))
+                        q = (q - t) / (36 - t)
+                        k += 36
+                    }
+                    output.append(U8.truncating(Punycode.digitCode(q)))
+                    bias = Punycode.adapt(delta, handled + 1, handled == basic)
+                    delta = 0
+                    handled += 1
+                }
+            }
+            delta += 1
+            n += 1
+        }
+        unsafe {
+            return String.fromUtf8Unchecked(output)
+        }
+    }
+
+    /// The Punycode's code points; none when it is not well-formed
+    /// Punycode (a non-basic character, a bad digit, an overflow, or a
+    /// code point that is not a scalar).
+    public static fn decode(_ input: String) -> Int[>..]? {
+        var codes: Int[>..] = []
+        for byte in input.utf8 {
+            codes.append(Int(byte))
+        }
+        for c in codes {
+            if c >= 0x80 {
+                return none
+            }
+        }
+        var output: Int[>..] = []
+        var start = 0
+        var last = -1
+        var i = 0
+        while i < codes.count {
+            if codes[i] == 0x2D {
+                last = i
+            }
+            i += 1
+        }
+        if last >= 0 {
+            var j = 0
+            while j < last {
+                output.append(codes[j])
+                j += 1
+            }
+            start = last + 1
+        }
+        var n = 128
+        var index = 0
+        var bias = 72
+        var at = start
+        while at < codes.count {
+            let old = index
+            var w = 1
+            var k = 36
+            while true {
+                if at >= codes.count {
+                    return none
+                }
+                let digit = Punycode.digitValue(codes[at])
+                at += 1
+                if digit < 0 || digit > (Int.max - index) / w {
+                    return none
+                }
+                index += digit * w
+                let t = k <= bias ? 1 : k >= bias + 26 ? 26 : k - bias
+                if digit < t {
+                    break
+                }
+                if w > Int.max / (36 - t) {
+                    return none
+                }
+                w *= 36 - t
+                k += 36
+            }
+            let length = output.count + 1
+            bias = Punycode.adapt(index - old, length, old == 0)
+            if index / length > Int.max - n {
+                return none
+            }
+            n += index / length
+            index = index % length
+            if n > 0x10FFFF || (n >= 0xD800 && n <= 0xDFFF) {
+                return none
+            }
+            // Insert n at index.
+            output.append(n)
+            var slot = output.count - 1
+            while slot > index {
+                output[slot] = output[slot - 1]
+                slot -= 1
+            }
+            output[index] = n
+            index += 1
+        }
+        return output
+    }
+}
+
+extension String {
+    /// The string's scalars as code points: what Punycode and IDNA work on.
+    public fn unicodeScalarValues() -> Int[>..] {
+        var codes: Int[>..] = []
+        for c in self {
+            codes.append(c.codePoint)
+        }
+        return codes
+    }
+}
+
+/// The code points as a String: each is a scalar, which Punycode.decode and
+/// IDNA's mapping make sure of.
+fn stringOf(_ codes: Int[:]) -> String {
+    var bytes: U8[>..] = []
+    for code in codes {
+        Char.fromCodePoint(value: code)!.encodeUtf8(into: &bytes)
+    }
+    unsafe {
+        return String.fromUtf8Unchecked(bytes)
+    }
+}

@@ -1,0 +1,175 @@
+module Sable.Serialize
+
+// The primitives' conformances: a Bool as true or false, the integers and
+// floats as numbers (U64 and UInt in full, their range checked on the way
+// back), a String and a Char as strings, a UUID as its canonical string.
+
+extension Bool: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        encoder.encodeBool(self)
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> Bool {
+        return try decoder.decodeBool()
+    }
+}
+
+extension Int: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        try encoder.encodeInt(self)
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> Int {
+        return try decoder.decodeInt()
+    }
+}
+
+extension I8: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        try encoder.encodeInt(Int(self))
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> I8 {
+        guard let value = I8.exactly(try decoder.decodeInt()) else {
+            throw decoder.invalid("out of an I8's range")
+        }
+        return value
+    }
+}
+
+extension I16: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        try encoder.encodeInt(Int(self))
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> I16 {
+        guard let value = I16.exactly(try decoder.decodeInt()) else {
+            throw decoder.invalid("out of an I16's range")
+        }
+        return value
+    }
+}
+
+extension I32: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        try encoder.encodeInt(Int(self))
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> I32 {
+        guard let value = I32.exactly(try decoder.decodeInt()) else {
+            throw decoder.invalid("out of an I32's range")
+        }
+        return value
+    }
+}
+
+extension I64: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        try encoder.encodeInt(Int(self))
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> I64 {
+        return I64(try decoder.decodeInt())
+    }
+}
+
+extension U8: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        try encoder.encodeInt(Int(self))
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> U8 {
+        guard let value = U8.exactly(try decoder.decodeInt()) else {
+            throw decoder.invalid("out of a U8's range")
+        }
+        return value
+    }
+}
+
+extension U16: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        try encoder.encodeInt(Int(self))
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> U16 {
+        guard let value = U16.exactly(try decoder.decodeInt()) else {
+            throw decoder.invalid("out of a U16's range")
+        }
+        return value
+    }
+}
+
+extension U32: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        try encoder.encodeInt(Int(self))
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> U32 {
+        guard let value = U32.exactly(try decoder.decodeInt()) else {
+            throw decoder.invalid("out of a U32's range")
+        }
+        return value
+    }
+}
+
+extension U64: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        try encoder.encodeUInt(self)
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> U64 {
+        return try decoder.decodeUInt()
+    }
+}
+
+extension UInt: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        try encoder.encodeUInt(U64(self))
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> UInt {
+        return UInt(try decoder.decodeUInt())
+    }
+}
+
+extension F64: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        try encoder.encodeFloat(self)
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> F64 {
+        return try decoder.decodeFloat()
+    }
+}
+
+extension F32: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        try encoder.encodeFloat(F64(self))
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> F32 {
+        return F32(try decoder.decodeFloat())
+    }
+}
+
+extension String: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        try encoder.encodeString(self)
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> String {
+        return try decoder.decodeString()
+    }
+}
+
+extension Char: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        try encoder.encodeString(String.fromChar(self))
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> Char {
+        let text = try decoder.decodeString()
+        if text.count != 1 {
+            throw decoder.invalid("'\(text)' is not one character")
+        }
+        return text.at(index: 0)
+    }
+}
+
+extension UUID: Serializable {
+    public fn encode(to encoder: Encoder) throws(SerializeError) {
+        try encoder.encodeString(self.toString())
+    }
+    public static fn decode(from decoder: Decoder) throws(SerializeError) -> UUID {
+        let text = try decoder.decodeString()
+        guard let id = try? UUID.parse(text) else {
+            throw decoder.invalid("'\(text)' is not a UUID")
+        }
+        return id
+    }
+}

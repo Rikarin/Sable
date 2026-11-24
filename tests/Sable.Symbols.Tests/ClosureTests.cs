@@ -322,4 +322,32 @@ public sealed class ClosureTests {
             """);
         Assert.Equal("Void", TypeOfLast("let u = ()"));
     }
+
+    // ---- Trailing closures for labelled parameters ------------------------------
+
+    const string Labelled = """
+                            fn replacing(_ r: Int, with f: (Int) -> Int) -> Int { return f(r) }
+                            fn both(_ r: Int, then a: (Int) -> Int, finally b: (Int) -> Int) -> Int { return b(a(r)) }
+                            fn scaled(_ r: Int, scale: Int = 2, by f: (Int) -> Int) -> Int { return f(r) * scale }
+                            fn maybe(_ r: Int, with f: ((Int) -> Int)? = none) -> Int { return f?(r) ?? r }
+                            fn later<T>(_ make: () -> T) -> T { return make() }
+                            """;
+
+    [Theory]
+    [InlineData("let v = replacing(3) { $0 + 1 }", "Int")]
+    [InlineData("let v = both(3) { $0 + 1 } finally: { $0 * 10 }", "Int")]
+    [InlineData("let v = scaled(3) { $0 + 1 }", "Int")]
+    [InlineData("let v = scaled(3, scale: 4) { $0 + 1 }", "Int")]
+    [InlineData("let v = maybe(3) { $0 + 1 }", "Int")]
+    [InlineData("let v = later { 1.5 }", "F64")]
+    public void ATrailingClosureGoesToTheNextParameterThatTakesOneLabelledOrNot(string body, string expected) =>
+        Assert.Equal(expected, TypeOfLast(body, Labelled));
+
+    [Fact]
+    public void AnArgumentInParenthesesStillNeedsItsLabel() =>
+        Assert.Contains(ErrorsIn("let v = replacing(3, { $0 + 1 })", Labelled), static e => e.Code == ErrorCode.ERR_NoMatchingOverload);
+
+    [Fact]
+    public void ATrailingClosureWithNoParameterLeftIsReported() =>
+        Assert.NotEmpty(ErrorsIn("let v = replacing(3, with: { $0 }) { $0 + 1 }", Labelled));
 }

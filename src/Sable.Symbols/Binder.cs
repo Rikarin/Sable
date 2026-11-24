@@ -4713,7 +4713,7 @@ public sealed partial class Binder {
 
         if (syntax.TrailingClosure is { } trailing) {
             argumentSyntax.Add(trailing);
-            labelBuilder.Add(null);
+            labelBuilder.Add(TrailingClosureLabel);
         }
 
         // 'both { 1 } onFail: { 2 }': the closures after the first carry
@@ -4799,7 +4799,7 @@ public sealed partial class Binder {
                 // 'U64(x)': a numeric conversion, as 'x as U64'; 'U64(1)': a literal of that type.
                 if (Core.IsNumeric(namedType)
                     && arguments is [var converted]
-                    && labels is [null]
+                    && labels is [null or TrailingClosureLabel]
                     && Core.IsNumeric(converted.Type)) {
                     // 'U128(1 << 100)': literals alone are of the type made.
                     if (syntaxes is [var only] && IsLiteralOnly(only) && _speculated.Remove(only)) {
@@ -4984,7 +4984,7 @@ public sealed partial class Binder {
             var field = unionCase.Payload[i];
 
             if (i < labels.Length
-                && labels[i] is { } label
+                && labels[i] is { } label and not TrailingClosureLabel
                 && !string.Equals(label, field.Name, StringComparison.Ordinal)) {
                 _diagnostics.Error(
                     ErrorCode.ERR_NameNotFound,
@@ -6278,9 +6278,13 @@ public sealed partial class Binder {
                 break;
             }
 
+            // A trailing closure written without a label goes to the
+            // parameter it was aligned with, labelled or not, as Swift's does.
+            if (i < labels.Length && labels[i] == TrailingClosureLabel) {
+                // Checked by its conversion below.
+            } else if (parameter.IsVariadic && i > 0 && slots[i - 1] == slots[i]) {
             // A variadic parameter's label goes on the first of its elements
             // only, as in 'sum(of: 1, 2, 3)'; the rest follow unlabelled.
-            if (parameter.IsVariadic && i > 0 && slots[i - 1] == slots[i]) {
                 if (i < labels.Length && labels[i] is { } repeated) {
                     return Reject(
                         $"argument {i + 1} is labelled '{repeated}', and it is another element "
@@ -6396,7 +6400,18 @@ public sealed partial class Binder {
         var slots = new int[count];
         var next = 0;
         for (var i = 0; i < count; i++) {
-            if (i < labels.Length && labels[i] is { } label) {
+            if (i < labels.Length && labels[i] == TrailingClosureLabel) {
+                // Swift's forward scan: a parameter with a default that could
+                // not take a closure is passed over, 'scale: Int = 2' in
+                // 'f(3) { … }' of 'f(_ x: Int, scale: Int = 2, by: (Int) -> Int)'.
+                while (next < parameters.Length - 1
+                       && !parameters[next].IsVariadic
+                       && (parameters[next].DeclaringSyntax is [ParameterSyntax { DefaultValue: not null }]
+                           || MemberwiseField(parameters[next]) is not null)
+                       && !ResemblesFunction(parameters[next].Type)) {
+                    next++;
+                }
+            } else if (i < labels.Length && labels[i] is { } label) {
                 var reach = next;
                 while (reach < parameters.Length
                        && (parameters[reach].DeclaringSyntax is [ParameterSyntax { DefaultValue: not null, EllipsisToken.IsNone: true }]
@@ -6417,7 +6432,23 @@ public sealed partial class Binder {
 
         static bool Names(ParameterSymbol parameter, string label) =>
             string.Equals(parameter.Label ?? parameter.Name, label, StringComparison.Ordinal);
+
+        static bool ResemblesFunction(TypeSymbol type) =>
+            type switch {
+                FunctionTypeSymbol => true,
+                OptionalTypeSymbol optional => ResemblesFunction(optional.UnderlyingType),
+                TypeParameterSymbol => true,
+                _ => false,
+            };
     }
+
+    /// <summary>
+    ///     The label a call's first trailing closure is given, written with
+    ///     none: it is passed to the next parameter that can take it, labelled
+    ///     or not (<see cref="Align" />), where an argument without one in
+    ///     the parentheses needs a parameter that asks for none.
+    /// </summary>
+    const string TrailingClosureLabel = "\0trailing";
 
     /// <summary>True when a type still names one of the candidate's own, uninferred, parameters.</summary>
     /// <summary>Whether a type still names a parameter of the type a bare call infers (<see cref="_ownerTypeParameters" />).</summary>

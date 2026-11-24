@@ -1537,6 +1537,13 @@ attempt {
 }
 ```
 
+The first trailing closure, written without a label, goes to the next
+parameter the arguments in parentheses left, labelled or not, passing over
+one with a default whose type is no function (Swift's forward scan):
+`text.replacing(pattern) { match in … }` for `replacing(_ pattern:, with
+replacement:)`, and `scaled(3) { … }` for `scaled(_ x: Int, scale: Int = 2,
+by f: …)`. In the parentheses an argument still needs its parameter's label.
+
 ### Braces: record literal, trailing closure, or body
 
 Three constructs open with `{`, and the rule between them is:

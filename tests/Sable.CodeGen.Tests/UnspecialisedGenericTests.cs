@@ -1107,9 +1107,13 @@ public sealed class UnspecialisedGenericTests {
                 var it = xs.makeIterator()
                 print(it.next() ?? 0)
             """);
-        foreach (var name in new[] { "Test.firstOf", "Test.total", "Test.middle", "Test.overwrite", "Test.Window.last", "Sable.Core.Array$Slice$8.sort", "Sable.Core.ArrayIterator.next" }) {
+        foreach (var name in new[] { "Test.firstOf", "Test.total", "Test.middle", "Test.overwrite", "Test.Window.last", "Sable.Core.ArrayIterator.next" }) {
             Assert.Contains($"{name}$generic", functions);
         }
+
+        // The slice extension's number is its place among the array
+        // extensions, which moves as files are added: any of them.
+        Assert.Contains(functions, static f => System.Text.RegularExpressions.Regex.IsMatch(f, @"^Sable\.Core\.Array\$Slice\$\d+\.sort\$generic$"));
     }
 
     const string Classes = """

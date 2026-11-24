@@ -1,0 +1,575 @@
+module Sable.Serialize
+
+import Sable.Text
+
+/// A TOML text to edit: what is not changed keeps its comments, its order
+/// and every space, as Rust's `toml_edit` has it. A path is the keys down to
+/// a value, an array's element by its index's digits.
+///
+/// ```sable
+/// var document = try! TomlDocument.parse("# mine\n[package]\nname = 'a'   # short\n")
+/// try! document.set(["package", "name"], .Text(value: "b"))
+/// try! document.set(["dependencies", "json"], .Text(value: "1.0"))
+/// assert(document.text() == "# mine\n[package]\nname = \"b\"   # short\n\n[dependencies]\njson = \"1.0\"\n")
+/// assert(document.get(["package", "name"])! == .Text(value: "b"))
+/// ```
+public struct TomlDocument {
+    var bytes: U8[>..]
+    var root: TomlNode
+    var sections: TomlNode[>..]
+    let maximumDepth: Int
+
+    /// A document of nothing.
+    public init() {
+        self.bytes = []
+        self.root = TomlNode(origin: .Root, depth: 0)
+        self.sections = []
+        self.maximumDepth = 128
+    }
+
+    init(_ bytes: U8[>..], _ maximumDepth: Int) throws(TomlError) {
+        var parser = TomlParser(bytes, maximumDepth)
+        try parser.parse()
+        self.bytes = bytes
+        self.root = parser.root
+        self.sections = parser.sections
+        self.maximumDepth = maximumDepth
+    }
+
+    /// The document the text is, nested no deeper than that.
+    public static fn parse(_ text: String, maximumDepth: Int = 128) throws(TomlError) -> TomlDocument {
+        return try TomlDocument(utf8Bytes(text), maximumDepth)
+    }
+
+    /// The text, every byte of it as it was but what was changed.
+    public fn text() -> String {
+        return asciiText(bytes, 0)
+    }
+
+    /// The document's values.
+    public fn table() -> TomlTable {
+        return root.table
+    }
+
+    /// The value of the type the document holds.
+    public fn decode<T: Serializable>(_ type: T.Type) throws(SerializeError) -> T {
+        return try T.decode(from: TomlDecoder(root, parent: none, key: none, index: -1))
+    }
+
+    /// The value there; none when nothing is.
+    public fn get(_ path: String[>..]) -> TomlValue? {
+        return find(path)?.value
+    }
+
+    /// Where the value's key is written, or for an element the value; none
+    /// when nothing is there.
+    public fn position(_ path: String[>..]) -> Position? {
+        guard let node = find(path) else {
+            return none
+        }
+        let start = node.itemStart >= 0 ? node.itemStart : node.headerStart
+        return start < 0 ? none : TomlError(bytes, start, "").position
+    }
+
+    // ---- Finding -------------------------------------------------------------
+
+    // The nodes down the path, the root first, as far as there are any.
+    fn chain(_ path: String[>..]) -> TomlNode[>..] {
+        var nodes: TomlNode[>..] = [root]
+        var node = root
+        for step in path {
+            var next = node.child(step)
+            if node.isArray {
+                if let index = try? Int.parse(step) {
+                    if index >= 0 && index < node.children.count {
+                        next = node.children[index]
+                    }
+                }
+            }
+            guard let found = next else {
+                return nodes
+            }
+            nodes.append(found)
+            node = found
+        }
+        return nodes
+    }
+
+    fn find(_ path: String[>..]) -> TomlNode? {
+        let nodes = chain(path)
+        return nodes.count == path.count + 1 ? nodes[path.count] : none
+    }
+
+    fn fault(_ path: String[>..], _ reason: String) -> SerializeError {
+        var text = "$"
+        for key in path {
+            text = text + jsonPathKey(key)
+        }
+        return SerializeError.InvalidValue(path: text, reason: reason)
+    }
+
+    // ---- Changing ------------------------------------------------------------
+
+    // The text between the two replaced, and read again.
+    mutating fn splice(_ start: Int, _ end: Int, _ text: String, _ path: String[>..]) throws(SerializeError) {
+        var changed: U8[>..] = []
+        changed.append(contentsOf: bytes[0..<start])
+        changed.append(utf8: text)
+        changed.append(contentsOf: bytes[end..<bytes.count])
+        do {
+            self = try TomlDocument(changed, maximumDepth)
+        } catch {
+            throw fault(path, "cannot be changed so: " + error.description())
+        }
+    }
+
+    // The document's line break: its first.
+    var newline: String {
+        get {
+            for i in 0..<bytes.count {
+                if bytes[i] == 0x0A {
+                    return i > 0 && bytes[i - 1] == 0x0D ? "\r\n" : "\n"
+                }
+            }
+            return "\n"
+        }
+    }
+
+    /// Makes the value that, in place of the one there or, where there is
+    /// none, as a new one: after the last of its table's values, under its
+    /// table's header, which is written at the document's end if there is
+    /// none. Throws, with nothing changed, when a value on the way is not a
+    /// table, or the value is not one TOML has.
+    public mutating fn set(_ path: String[>..], _ value: TomlValue) throws(SerializeError) {
+        if path.isEmpty {
+            throw fault(path, "the document itself cannot be set")
+        }
+        if let reason = tomlFault(value) {
+            throw fault(path, reason)
+        }
+        let before = self
+        do {
+            if let node = find(path) {
+                if node.start >= 0 {
+                    try splice(node.start, node.end, tomlInline(value), path)
+                } else if find(path[0..<(path.count - 1)].toArray())!.isTableArray {
+                    throw fault(path, "is a table under its own header: set its values, or take it out and add another")
+                } else {
+                    let _ = try remove(path)
+                    try insert(path, value)
+                }
+            } else {
+                try insert(path, value)
+            }
+            if find(path) == none {
+                throw fault(path, "cannot be set there")
+            }
+        } catch {
+            self = before
+            throw error
+        }
+    }
+
+    mutating fn insert(_ path: String[>..], _ value: TomlValue) throws(SerializeError) {
+        let nodes = chain(path)
+        let parent = nodes[nodes.count - 1]
+        if !parent.isTable {
+            throw fault(path[0..<(nodes.count - 1)].toArray(), "is \(parent.kindName), not a table")
+        }
+        // The section the parent's values are written in, and the dotted
+        // key's beginning for them there; the last element of an array of
+        // tables on the way; and the path as a header has it.
+        var section = root
+        var dotted: String[>..] = []
+        var element: TomlNode? = none
+        var names: String[>..] = []
+        for i in 1..<nodes.count {
+            let node = nodes[i]
+            if nodes[i - 1].isArray {
+                element = nodes[i - 1].isTableArray ? node : element
+            } else {
+                names.append(path[i - 1])
+            }
+            if node.state == .Header || node.state == .Inline {
+                section = node
+                dotted = []
+            } else if !node.isArray {
+                dotted.append(path[i - 1])
+            }
+        }
+        let rest = path[(nodes.count - 1)...].toArray()
+        if section.state == .Inline {
+            dotted.append(contentsOf: rest)
+            try insertInline(section, dotted, value, path)
+            return
+        }
+        if parent.state == .Dotted || parent.state != .Implicit && rest.count == 1 {
+            dotted.append(contentsOf: rest)
+            try insertStatement(section, dotted, value, path)
+            return
+        }
+        names.append(contentsOf: rest[0..<(rest.count - 1)])
+        let entry = tomlKey(rest[rest.count - 1]) + " = " + tomlInline(value)
+        let at = element?.bodyEnd ?? bytes.count
+        try insertSection("[" + tomlPath(names) + "]" + newline + entry + newline, at, path)
+    }
+
+    // A new section, a blank line before it, and after it if more follows.
+    mutating fn insertSection(_ text: String, _ at: Int, _ path: String[>..]) throws(SerializeError) {
+        var all = text
+        if at > 0 && !(at == 3 && lineStart(at) == 3) {
+            all = (startsLine(at) ? "" : newline) + (endsBlank(at) ? "" : newline) + all
+        }
+        if at < bytes.count && bytes[at] != 0x0A && bytes[at] != 0x0D {
+            all = all + newline
+        }
+        try splice(at, at, all, path)
+    }
+
+    // Whether the line before the position is blank.
+    fn endsBlank(_ at: Int) -> Bool {
+        var i = at - 1
+        while i >= 0 && bytes[i] != 0x0A {
+            i -= 1
+        }
+        if i < at - 1 {
+            return false
+        }
+        i -= 1
+        while i >= 0 && (bytes[i] == 0x20 || bytes[i] == 0x09 || bytes[i] == 0x0D) {
+            i -= 1
+        }
+        return i < 0 || bytes[i] == 0x0A
+    }
+
+    // 'key = value' after the last line of the section, indented as that is.
+    mutating fn insertStatement(_ section: TomlNode, _ keys: String[>..], _ value: TomlValue, _ path: String[>..]) throws(SerializeError) {
+        var at = section.bodyEnd
+        var after = ""
+        if at < 0 {
+            // The document's own, the first: before the first header, and
+            // its comments.
+            at = bytes.count
+            if !sections.isEmpty {
+                at = commentStart(sections[0].headerStart, sections[0].leadStart)
+                after = newline
+            }
+        }
+        let line = section.lastStatement >= 0 ? section.lastStatement : section.headerStart
+        var indent = ""
+        if line >= 0 {
+            indent = asciiText(bytes[lineStart(line)..<line].toArray(), 0)
+        }
+        let before = startsLine(at) ? "" : newline
+        try splice(at, at, before + indent + tomlPath(keys) + " = " + tomlInline(value) + newline + after, path)
+    }
+
+    fn startsLine(_ at: Int) -> Bool {
+        return at == 0 || bytes[at - 1] == 0x0A || lineStart(at) == at
+    }
+
+    // Where the line the position is on starts.
+    fn lineStart(_ position: Int) -> Int {
+        var i = position
+        while i > 0 && bytes[i - 1] != 0x0A {
+            i -= 1
+        }
+        // Past the byte order mark.
+        return i == 0 && position >= 3 && bytes[0] == 0xEF ? 3 : i
+    }
+
+    // Where the comments on the lines right above the position's start, back
+    // no further than what is before them.
+    fn commentStart(_ position: Int, _ floor: Int) -> Int {
+        var start = lineStart(position)
+        while start > floor {
+            let above = lineStart(start - 1)
+            var i = above
+            while i < start && (bytes[i] == 0x20 || bytes[i] == 0x09) {
+                i += 1
+            }
+            if above < floor || bytes[i] != 0x23 {
+                return start
+            }
+            start = above
+        }
+        return start
+    }
+
+    mutating fn insertInline(_ node: TomlNode, _ keys: String[>..], _ value: TomlValue, _ path: String[>..]) throws(SerializeError) {
+        let item = tomlPath(keys) + " = " + tomlInline(value)
+        if node.itemEnds.isEmpty {
+            try splice(node.start, node.end, "{ " + item + " }", path)
+        } else {
+            let at = node.itemEnds[node.itemEnds.count - 1]
+            try splice(at, at, ", " + item, path)
+        }
+    }
+
+    // ---- Adding to an array --------------------------------------------------
+
+    /// Adds the value to the end of the array there, which is made if there
+    /// is none: an array of tables under [[headers]], when the value is a
+    /// table. An array written over several lines stays so.
+    public mutating fn append(_ path: String[>..], _ value: TomlValue) throws(SerializeError) {
+        if let reason = tomlFault(value) {
+            throw fault(path, reason)
+        }
+        guard let node = find(path) else {
+            if let table = value.table {
+                try appendTable(path, table)
+            } else {
+                try self.set(path, .Array(items: [value]))
+            }
+            return
+        }
+        if !node.isArray {
+            throw fault(path, "is \(node.kindName), not an array")
+        }
+        if node.isTableArray {
+            guard let table = value.table else {
+                throw fault(path, "is an array of tables, and the value is \(value.kindName)")
+            }
+            try appendTable(path, table)
+        } else {
+            try appendItem(node, value, path)
+        }
+    }
+
+    mutating fn appendTable(_ path: String[>..], _ table: TomlTable) throws(SerializeError) {
+        if path.isEmpty {
+            throw fault(path, "the document itself is not an array")
+        }
+        // The header has no indexes: a table in an array is in its last.
+        let nodes = chain(path)
+        var names: String[>..] = []
+        var element: TomlNode? = none
+        for i in 0..<path.count {
+            if i < nodes.count && nodes[i].isArray {
+                if i + 1 < nodes.count {
+                    element = nodes[i + 1]
+                }
+            } else {
+                names.append(path[i])
+            }
+        }
+        if nodes.count == path.count + 1 {
+            let elements = nodes[path.count].children
+            element = elements[elements.count - 1]
+        }
+        var at = bytes.count
+        if let element = element {
+            at = extent(element)
+        }
+        var body: U8[>..] = []
+        body.append(utf8: "[[" + tomlPath(names) + "]]" + newline)
+        writeTomlTable(&body, table, names, newline)
+        let before = self
+        let count = find(path)?.children?.count ?? 0
+        try insertSection(asciiText(body, 0), at, path)
+        if find(path)?.children?.count != count + 1 {
+            self = before
+            throw fault(path, "cannot be added to there")
+        }
+    }
+
+    // The end of the last line of the table and all the tables in it.
+    fn extent(_ node: TomlNode) -> Int {
+        var end = node.bodyEnd > node.lineEnd ? node.bodyEnd : node.lineEnd
+        for child in node.children {
+            let childEnd = extent(child)
+            end = childEnd > end ? childEnd : end
+        }
+        return end
+    }
+
+    mutating fn appendItem(_ node: TomlNode, _ value: TomlValue, _ path: String[>..]) throws(SerializeError) {
+        let text = tomlInline(value)
+        if node.itemEnds.isEmpty {
+            try splice(node.start, node.end, "[" + text + "]", path)
+            return
+        }
+        let last = node.itemEnds[node.itemEnds.count - 1]
+        let close = node.end - 1
+        let line = lineStart(close)
+        if line <= last {
+            try splice(last, last, ", " + text, path)
+            return
+        }
+        // The ']' has a line of its own: the value has one before it, as
+        // indented as the last one, and the comma the last one lacks.
+        var comma = last
+        var hasComma = false
+        while comma < close && !hasComma && bytes[comma] != 0x23 {
+            hasComma = bytes[comma] == 0x2C
+            comma += 1
+        }
+        let first = node.itemStarts[node.itemStarts.count - 1]
+        var indent = lineStart(first)
+        while indent < first && (bytes[indent] == 0x20 || bytes[indent] == 0x09) {
+            indent += 1
+        }
+        let spaces = asciiText(bytes[lineStart(first)..<indent].toArray(), 0)
+        let added = spaces + text + (hasComma ? "," : "") + newline
+        if hasComma {
+            try splice(line, line, added, path)
+        } else {
+            try splice(last, line, "," + asciiText(bytes[last..<line].toArray(), 0) + added, path)
+        }
+    }
+
+    // ---- Taking out ----------------------------------------------------------
+
+    /// Takes the value there out, with the comments right above it and on
+    /// its line; a table with every section of it. False when nothing is
+    /// there.
+    public mutating fn remove(_ path: String[>..]) throws(SerializeError) -> Bool {
+        if path.isEmpty {
+            throw fault(path, "the document itself cannot be taken out")
+        }
+        let nodes = chain(path)
+        if nodes.count != path.count + 1 {
+            return false
+        }
+        // The innermost array or inline table on the way holds items.
+        var holder: TomlNode? = none
+        for i in 0..<path.count {
+            if nodes[i].start >= 0 {
+                holder = nodes[i]
+            }
+        }
+        var cuts: (Int, Int)[>..] = []
+        if let holder = holder {
+            var starts: Int[>..] = []
+            itemStarts(nodes[path.count], &starts)
+            cutItems(holder, starts, &cuts)
+        } else {
+            cutLines(nodes[path.count], &cuts)
+        }
+        cuts.sort(by: { $0.0 < $1.0 })
+        var kept: U8[>..] = []
+        var from = 0
+        for (start, end) in cuts {
+            if start > from {
+                kept.append(contentsOf: bytes[from..<start])
+            }
+            from = end > from ? end : from
+        }
+        kept.append(contentsOf: bytes[from..<bytes.count])
+        let end = bytes.count
+        try splice(0, end, asciiText(kept, 0), path)
+        return true
+    }
+
+    // Where the items the value is written as start: its own, or each of
+    // those that dotted keys make it of.
+    fn itemStarts(_ node: TomlNode, _ starts: inout Int[>..]) {
+        if node.itemStart >= 0 {
+            starts.append(node.itemStart)
+            return
+        }
+        for child in node.children {
+            itemStarts(child, &starts)
+        }
+    }
+
+    // What to cut to take the items out, each with one comma.
+    fn cutItems(_ holder: TomlNode, _ starts: Int[>..], _ cuts: inout (Int, Int)[>..]) {
+        let count = holder.itemStarts.count
+        var lastKept = -1
+        for i in 0..<count {
+            if !starts.contains(holder.itemStarts[i]) {
+                lastKept = i
+            }
+        }
+        for i in 0..<count {
+            if !starts.contains(holder.itemStarts[i]) {
+                continue
+            }
+            if i < lastKept {
+                cuts.append((holder.itemStarts[i], holder.itemStarts[i + 1]))
+            } else if lastKept >= 0 {
+                // A comma after the last of all goes on being after it.
+                cuts.append((holder.itemEnds[i - 1], holder.itemEnds[i]))
+            } else {
+                cuts.append((holder.start + 1, holder.end - 1))
+            }
+        }
+    }
+
+    // The lines the value is written as: its statement, or its section and
+    // every statement and section in it.
+    fn cutLines(_ node: TomlNode, _ cuts: inout (Int, Int)[>..]) {
+        if node.isStatement {
+            cuts.append((commentStart(node.itemStart, node.leadStart), node.lineEnd))
+            return
+        }
+        if node.headerStart >= 0 {
+            var end = bytes.count
+            for section in sections {
+                if section.headerStart > node.headerStart {
+                    end = commentStart(section.headerStart, section.leadStart)
+                    break
+                }
+            }
+            cuts.append((commentStart(node.headerStart, node.leadStart), end))
+        }
+        for child in node.children {
+            cutLines(child, &cuts)
+        }
+    }
+
+    // ---- Comments ------------------------------------------------------------
+
+    // The comments of a statement's or a header's lines: where they start,
+    // and the line they are above.
+    fn comments(_ path: String[>..]) -> (Int, Int)? {
+        guard let node = find(path) else {
+            return none
+        }
+        let start = node.isStatement ? node.itemStart : node.headerStart
+        if start < 0 {
+            return none
+        }
+        return (commentStart(start, node.leadStart), lineStart(start))
+    }
+
+    /// The comment on the lines right above the value's line or its table's
+    /// header, a line each and without its `#`; none when there is none, or
+    /// the value has no line of its own.
+    public fn comment(_ path: String[>..]) -> String? {
+        guard let (start, end) = comments(path) else {
+            return none
+        }
+        if start == end {
+            return none
+        }
+        var lines: String[>..] = []
+        for line in asciiText(bytes[start..<end].toArray(), 0).lines() {
+            var text = line.trimmed()
+            text = text.hasPrefix("# ") ? text.slice(from: 2, to: text.count) : text.slice(from: 1, to: text.count)
+            lines.append(text)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Makes the comment above the value's line or its table's header that,
+    /// a line of it on each; or takes it out, for none.
+    public mutating fn setComment(_ path: String[>..], _ comment: String?) throws(SerializeError) {
+        guard let (start, end) = comments(path) else {
+            throw fault(path, "has no line of its own to put a comment above")
+        }
+        var text = ""
+        if let comment = comment {
+            var indent = end
+            while indent < bytes.count && (bytes[indent] == 0x20 || bytes[indent] == 0x09) {
+                indent += 1
+            }
+            let spaces = asciiText(bytes[end..<indent].toArray(), 0)
+            for line in comment.lines() {
+                text = text + spaces + (line.isEmpty ? "#" : "# " + line) + newline
+            }
+        }
+        try splice(start, end, text, path)
+    }
+}

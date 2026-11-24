@@ -1,0 +1,275 @@
+module Sable.Serialize
+
+import Sable.Text
+
+/// The Decoder that reads TOML, as TomlEncoder writes it: a value of a
+/// document, at a path (`$.items[3].name`) that every error names. A date or
+/// a time reads as the string it is in other formats, too, which is what a
+/// UtcDateTime asks for. What `Toml.decode` uses.
+///
+/// ```sable
+/// let root = try! TomlDecoder.parse("[a]\nb = [1, 2.5]\nday = 2026-11-24")
+/// assert(try! root.field("a").field("b").element(1).decodeFloat() == 2.5)
+/// assert(try! root.field("a").field("day").decodeString() == "2026-11-24")
+/// assert(root.field("a").field("c").isMissing)
+/// ```
+public final class TomlDecoder: Decoder {
+    // The node; none for a field that is not there. The decoder this one's
+    // value is in, and the step from there, as JsonDecoder has them.
+    let node: TomlNode?
+    let parent: TomlDecoder?
+    let key: String?
+    let index: Int
+    let excluded: String[>..]?
+
+    init(_ node: TomlNode?, parent: TomlDecoder?, key: String?, index: Int, excluded: String[>..]? = none) {
+        self.node = node
+        self.parent = parent
+        self.key = key
+        self.index = index
+        self.excluded = excluded
+    }
+
+    /// A decoder of the table the text is; SerializeError.Syntax when it is
+    /// not TOML, or nests deeper than that.
+    public static fn parse(_ text: String, maximumDepth: Int = 128) throws(SerializeError) -> TomlDecoder {
+        return try TomlDecoder.parse(bytes: utf8Bytes(text), maximumDepth: maximumDepth)
+    }
+
+    /// A decoder of the table the UTF-8 bytes are.
+    public static fn parse(bytes: U8[>..], maximumDepth: Int = 128) throws(SerializeError) -> TomlDecoder {
+        var parser = TomlParser(bytes, maximumDepth)
+        do {
+            try parser.parse()
+        } catch {
+            throw SerializeError.Syntax(reason: "not TOML: " + error.description())
+        }
+        return TomlDecoder(parser.root, parent: none, key: none, index: -1)
+    }
+
+    /// Where the value is, from the document's root.
+    public var path: String {
+        get {
+            if let parent = parent {
+                if let key = key {
+                    return parent.path + jsonPathKey(key)
+                }
+                return index >= 0 ? parent.path + "[\(index)]" : parent.path
+            }
+            return "$"
+        }
+    }
+
+    // ---- What it holds -------------------------------------------------------
+
+    public var isMissing: Bool => node == none
+
+    /// False: TOML has no null.
+    public var isNull: Bool => false
+
+    /// What the value is: a date or a time is a String.
+    public var kind: DecodedKind {
+        get {
+            guard let node = node else {
+                return .Missing
+            }
+            guard let scalar = node.scalar else {
+                return node.isTable ? .Map : .Sequence
+            }
+            return match scalar {
+                case .Integer(_) => .Number
+                case .Float(_)   => .Number
+                case .Bool(_)    => .Bool
+                case _           => .String
+            }
+        }
+    }
+
+    /// What the value is, as an error says it: "a table", "a string", …;
+    /// "nothing" for a missing one.
+    public var kindName: String => node?.kindName ?? "nothing"
+
+    /// How many elements or values the array or table has; 0 for any other.
+    public var count: Int => node?.children?.count ?? 0
+
+    public fn mismatch(_ expected: String) -> SerializeError {
+        if node == none {
+            return SerializeError.MissingField(path: path)
+        }
+        return SerializeError.TypeMismatch(path: path, expected: expected, found: kindName)
+    }
+
+    public fn invalid(_ reason: String) -> SerializeError {
+        return SerializeError.InvalidValue(path: path, reason: reason)
+    }
+
+    public fn unknownCase(_ name: String) -> SerializeError {
+        return SerializeError.UnknownCase(path: path, name: name)
+    }
+
+    // ---- Values --------------------------------------------------------------
+
+    public fn decodeBool() throws(SerializeError) -> Bool {
+        if case .Some(.Bool(let value)) = node?.scalar {
+            return value
+        }
+        throw mismatch("a Bool")
+    }
+
+    public fn decodeInt() throws(SerializeError) -> Int {
+        if case .Some(.Integer(let value)) = node?.scalar {
+            return value
+        }
+        throw mismatch("an integer")
+    }
+
+    /// An integer that is not negative.
+    public fn decodeUInt() throws(SerializeError) -> U64 {
+        if case .Some(.Integer(let value)) = node?.scalar {
+            guard let unsigned = U64.exactly(value) else {
+                throw invalid("\(value) does not fit a U64")
+            }
+            return unsigned
+        }
+        throw mismatch("an unsigned integer")
+    }
+
+    /// A float, or an integer as the nearest one.
+    public fn decodeFloat() throws(SerializeError) -> F64 {
+        if case .Some(.Float(let value)) = node?.scalar {
+            return value
+        }
+        if case .Some(.Integer(let value)) = node?.scalar {
+            return F64(value)
+        }
+        throw mismatch("a number")
+    }
+
+    /// A string, or a date or a time as RFC 3339 writes it.
+    public fn decodeString() throws(SerializeError) -> String {
+        if let text = node?.scalar?.text {
+            return text
+        }
+        throw mismatch("a string")
+    }
+
+    /// Bytes, from a string of their base64 (RFC 4648; the padding may be
+    /// left off).
+    public fn decodeBytes() throws(SerializeError) -> U8[>..] {
+        if case .Some(.Text(let text)) = node?.scalar {
+            guard let bytes = try? Base64.decode(text) else {
+                throw invalid("'\(text)' is not base64")
+            }
+            return bytes
+        }
+        throw mismatch("a base64 string")
+    }
+
+    /// The value as it is.
+    public fn decodeValue() throws(SerializeError) -> TomlValue {
+        guard let node = node else {
+            throw mismatch("a value")
+        }
+        return node.value
+    }
+
+    // ---- Sequences -----------------------------------------------------------
+
+    /// The array's elements, in order.
+    public fn decodeSequence() throws(SerializeError) -> TomlDecoder[>..] {
+        guard let node = node, node.isArray else {
+            throw mismatch("an array")
+        }
+        var all: TomlDecoder[>..] = []
+        for child in node.children {
+            all.append(TomlDecoder(child, parent: self, key: none, index: all.count))
+        }
+        return all
+    }
+
+    public fn element(_ index: Int) -> TomlDecoder {
+        var found: TomlNode? = none
+        if let node = node {
+            if node.isArray && index >= 0 && index < node.children.count {
+                found = node.children[index]
+            }
+        }
+        return TomlDecoder(found, parent: self, key: none, index: index)
+    }
+
+    // ---- Maps and structs ----------------------------------------------------
+
+    /// The table's entries, in order.
+    public fn decodeMap() throws(SerializeError) -> DecodedMember<TomlDecoder>[>..] {
+        guard let node = node, node.isTable else {
+            throw mismatch("a table")
+        }
+        var all: DecodedMember<TomlDecoder>[>..] = []
+        for i in 0..<node.keys.count {
+            let key = node.keys[i]
+            if !excludes(key) {
+                all.append(DecodedMember { key: key, value: TomlDecoder(node.children[i], parent: self, key: key, index: -1) })
+            }
+        }
+        return all
+    }
+
+    /// Throws unless the value is a table.
+    public fn beginStruct(_ name: String) throws(SerializeError) {
+        if node == none || !node!.isTable {
+            throw mismatch("a table (\(name))")
+        }
+    }
+
+    /// The value of the key, or a missing decoder when the table has none
+    /// (or this is not a table).
+    public fn field(_ key: String) -> TomlDecoder {
+        let found: TomlNode? = excludes(key) ? none : node?.child(key)
+        return TomlDecoder(found, parent: self, key: key, index: -1)
+    }
+
+    public fn hasField(_ key: String) -> Bool {
+        return !field(key).isMissing
+    }
+
+    fn excludes(_ key: String) -> Bool {
+        if let excluded = excluded {
+            return excluded.contains(key)
+        }
+        return false
+    }
+
+    public fn excluding(_ keys: String[>..]) -> TomlDecoder {
+        var all = excluded ?? []
+        for key in keys {
+            all.append(key)
+        }
+        return TomlDecoder(node, parent: parent, key: key, index: index, excluded: all)
+    }
+
+    // ---- Unions --------------------------------------------------------------
+
+    /// A string for a case that carries nothing, or the one key of a table
+    /// whose value is its payload.
+    public fn caseName() throws(SerializeError) -> String {
+        if case .Some(.Text(let text)) = node?.scalar {
+            return text
+        }
+        if let node = node {
+            if node.isTable && node.keys.count == 1 {
+                return node.keys[0]
+            }
+        }
+        throw mismatch("a case's name, or a table of one value")
+    }
+
+    /// The table's one value; missing for a case written as a string.
+    public fn casePayload() -> TomlDecoder {
+        if let node = node {
+            if node.isTable && node.keys.count == 1 {
+                return TomlDecoder(node.children[0], parent: self, key: node.keys[0], index: -1)
+            }
+        }
+        return TomlDecoder(none, parent: self, key: none, index: -1)
+    }
+}

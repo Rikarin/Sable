@@ -1,0 +1,50 @@
+module Sable.Serialize
+
+/// TOML 1.0: a table from text and back, and Serializable values in it, as
+/// serde's `toml` has them — a struct or a map a table, a case that carries
+/// nothing its name as a string and one that does a table of one value, an
+/// optional's none left out. For a document edited in place, its comments
+/// and layout kept, TomlDocument.
+///
+/// ```sable
+/// @derive(Serializable)
+/// struct Server {
+///     var host: String
+///     var ports: Int[>..]
+///     var note: String?
+/// }
+/// let server = try! Toml.decode(Server.self, from: "host = 'a' # here\nports = [80, 443]")
+/// assert(server.ports == [80, 443] && server.note == none)
+/// assert(try! Toml.encode(server) == "host = \"a\"\nports = [80, 443]\n")
+/// ```
+public struct Toml {
+    /// The table the text is, nested no deeper than that.
+    public static fn parse(_ text: String, maximumDepth: Int = 128) throws(TomlError) -> TomlTable {
+        var parser = TomlParser(utf8Bytes(text), maximumDepth)
+        try parser.parse()
+        return parser.root.table
+    }
+
+    /// The table as TOML: its own values first, then each table in it under
+    /// its header.
+    public static fn write(_ table: TomlTable) throws(SerializeError) -> String {
+        if let fault = tomlFault(.Table(table: table)) {
+            throw SerializeError.InvalidValue(path: "$", reason: fault)
+        }
+        var written: U8[>..] = []
+        writeTomlTable(&written, table, [], "\n")
+        return asciiText(written, 0)
+    }
+
+    /// The value as TOML, which must be a table: a struct or a map.
+    public static fn encode<T: Serializable>(_ value: T) throws(SerializeError) -> String {
+        let encoder = TomlEncoder()
+        try value.encode(to: encoder)
+        return try encoder.text()
+    }
+
+    /// The value of the type the TOML text holds, nested no deeper than that.
+    public static fn decode<T: Serializable>(_ type: T.Type, from text: String, maximumDepth: Int = 128) throws(SerializeError) -> T {
+        return try T.decode(from: try TomlDecoder.parse(text, maximumDepth: maximumDepth))
+    }
+}

@@ -1,0 +1,108 @@
+module Sable.Serialize
+
+import Sable.Collections
+
+/// A TOML table: values by key, in the order the keys were put in. Two
+/// tables are equal that have the same values, whatever their order.
+///
+/// ```sable
+/// var table = TomlTable()
+/// table["name"] = .Text(value: "render")
+/// table["port"] = .Integer(value: 8080)
+/// table["name"] = none
+/// assert(table.keys == ["port"])
+/// assert(table["port"]! == .Integer(value: 8080))
+/// ```
+public struct TomlTable {
+    var names: String[>..] = []
+    var values: TomlValue[>..] = []
+    var places: Dictionary<String, Int> = Dictionary<String, Int>()
+
+    /// A table of nothing.
+    public init() { }
+
+    /// How many values the table has.
+    public var count: Int => names.count
+
+    public var isEmpty: Bool => names.isEmpty
+
+    /// The keys, in order.
+    public var keys: String[>..] => names
+
+    /// The table's entries, in order.
+    public var entries: TomlEntry[>..] {
+        get {
+            var all: TomlEntry[>..] = []
+            for i in 0..<names.count {
+                all.append(TomlEntry { key: names[i], value: values[i] })
+            }
+            return all
+        }
+    }
+
+    /// The value of the key; none when there is none, and storing none takes
+    /// it out. A new key goes last.
+    public subscript(key: String) -> TomlValue? {
+        get {
+            if let place = places[key] {
+                return values[place]
+            }
+            return none
+        }
+        set {
+            guard let value = newValue else {
+                remove(key)
+                return
+            }
+            if let place = places[key] {
+                values[place] = value
+                return
+            }
+            places[key] = names.count
+            names.append(key)
+            values.append(value)
+        }
+    }
+
+    mutating fn remove(_ key: String) {
+        guard let place = places[key] else {
+            return
+        }
+        var keptNames: String[>..] = []
+        var keptValues: TomlValue[>..] = []
+        places = Dictionary<String, Int>()
+        for i in 0..<names.count {
+            if i != place {
+                places[names[i]] = keptNames.count
+                keptNames.append(names[i])
+                keptValues.append(values[i])
+            }
+        }
+        names = keptNames
+        values = keptValues
+    }
+}
+
+extension TomlTable: Equatable {
+    public operator == (a: TomlTable, b: TomlTable) -> Bool {
+        if a.count != b.count {
+            return false
+        }
+        for i in 0..<a.names.count {
+            guard let other = b[a.names[i]] else {
+                return false
+            }
+            if a.values[i] != other {
+                return false
+            }
+        }
+        return true
+    }
+}
+
+extension TomlTable: Debug {
+    /// The table as an inline one is written.
+    public fn debugDescription() -> String {
+        return tomlInline(.Table(table: self))
+    }
+}

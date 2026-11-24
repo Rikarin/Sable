@@ -128,6 +128,13 @@ public sealed class FunctionSymbol : Symbol {
     public bool IsMutating { get; internal set; }
 
     /// <summary>
+    ///     True for a <c>mutating</c> member that a closure inside changes
+    ///     <c>self</c> from: for the call, self lives in a box the closures
+    ///     share, written back to the caller's value as the call ends.
+    /// </summary>
+    public bool SelfChangedInClosure { get; internal set; }
+
+    /// <summary>
     ///     <c>@polymorphic</c> (docs/03 §3.4): a generic function compiled
     ///     once, each type parameter a box holding the value with its
     ///     witness table, rather than once for each set of types it is

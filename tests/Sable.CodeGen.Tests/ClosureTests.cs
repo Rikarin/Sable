@@ -338,4 +338,87 @@ public sealed class ClosureTests {
                 let parts = fold([] as String[>..], [1, 2, 3], { (acc: inout String[>..], x: Int) in acc.append("\(x)") })
                 print("\(parts.count) \(fold(0, [1, 2, 3], { $0 += $1 }))")
             """);
+
+    /// <summary>
+    ///     A closure that does not escape, inside a mutating method, changes
+    ///     self as Swift's does: by assignment, through a mutating method of
+    ///     self or of a part of it, nested, and with the method leaving early
+    ///     or throwing — the change reaches the caller's value however the
+    ///     call ends.
+    /// </summary>
+    [Fact]
+    public void ANonEscapingClosureInAMutatingMethodChangesSelf() =>
+        Prints(
+            "10 4 xxxx\n13\n3\n7 [\"a\", \"b\"]\n5\n",
+            """
+            fn each(_ n: Int, _ body: (Int) -> Void) {
+                for i in 0..<n {
+                    body(i)
+                }
+            }
+
+            fn attempt(_ body: () throws(String) -> Void) throws(String) {
+                try body()
+            }
+
+            struct Counter {
+                var n: Int
+                var log: String[>..]
+
+                mutating fn bump(by k: Int) {
+                    n += k
+                }
+
+                mutating fn run() {
+                    each(4) { i in
+                        bump(by: i)
+                        n += 1
+                        self.log.append("x")
+                    }
+                }
+
+                mutating fn nested() -> Int {
+                    each(1) { i in
+                        each(3) { j in n += 1 }
+                    }
+                    return n
+                }
+
+                mutating fn failing() throws(String) {
+                    try attempt {
+                        n = 3
+                        throw "stop"
+                    }
+                }
+            }
+
+            struct Box<T> {
+                var items: T[>..]
+                var count: Int
+
+                mutating fn add(_ xs: T[>..]) {
+                    each(xs.count) { i in
+                        items.append(xs[i])
+                        count += 1
+                    }
+                }
+            }
+            """,
+            """
+                var c = Counter { n: 0, log: [] }
+                c.run()
+                print("\(c.n) \(c.log.count) \(c.log[0])\(c.log[1])\(c.log[2])\(c.log[3])")
+                print(c.nested())
+                do {
+                    try c.failing()
+                } catch {
+                    print(c.n)
+                }
+                var b = Box<String> { items: [], count: 5 }
+                b.add(["a", "b"])
+                print("\(b.count) \(b.items)")
+                var d = Counter { n: 0, log: [] }
+                each(5) { i in d.bump(by: 1) }
+                print(d.n)
+            """);
 }

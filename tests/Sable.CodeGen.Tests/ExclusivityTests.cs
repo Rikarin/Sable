@@ -67,6 +67,74 @@ public sealed class ExclusivityTests {
         Assert.Contains(errors, e => e.Contains("S3062", StringComparison.Ordinal) && e.Contains(message, StringComparison.Ordinal));
     }
 
+    /// <summary>
+    ///     A closure that changes a mutating member's self, written into a
+    ///     call that changes a part of self too, is two accesses to self for
+    ///     the length of the call, as in Swift: the closure has all of self.
+    /// </summary>
+    [Theory]
+    [InlineData("withWrite(&n) { n += 1 }", "argument 1 ('x') is inout, and argument 2 is a closure that changes it")]
+    [InlineData("withWrite(&n) { reset() }", "argument 2 is a closure that changes it")]
+    [InlineData("inner.with { count += 1 }", "the call to the mutating 'with' changes it")]
+    [InlineData("with { inner.x = 1 }", "the call to the mutating 'with' changes it")]
+    public void AClosureChangingSelfOverlapsTheCallsOtherAccessesToIt(string body, string message) {
+        var declarations = Declarations + """
+
+                                          struct Inner {
+                                              var x: Int
+
+                                              mutating fn with(_ f: () -> Void) {
+                                                  x += 1
+                                                  f()
+                                              }
+                                          }
+
+                                          struct Outer {
+                                              var n: Int
+                                              var count: Int
+                                              var inner: Inner
+
+                                              mutating fn reset() {
+                                                  n = 0
+                                              }
+
+                                              mutating fn with(_ f: () -> Void) {
+                                                  f()
+                                              }
+
+                                              mutating fn probe() {
+                                                  BODY
+                                              }
+                                          }
+                                          """;
+        var errors = Pipeline.Compile(new SourceText(Program(declarations.Replace("BODY", body), ""), "test.sb")).Errors;
+        Assert.Contains(errors, e => e.Contains("S3062", StringComparison.Ordinal) && e.Contains("overlapping accesses to 'self", StringComparison.Ordinal) && e.Contains(message, StringComparison.Ordinal));
+    }
+
+    /// <summary>One that changes self beside a call that changes other storage is fine.</summary>
+    [Fact]
+    public void AClosureChangingSelfBesideOtherStorageIsFine() =>
+        Assert.Equal(
+            "3 2\n",
+            AssertAgree(Program(Declarations + """
+
+                                               struct Outer {
+                                                   var n: Int
+                                                   var count: Int
+
+                                                   mutating fn probe(_ other: inout Int) {
+                                                       withWrite(&other) { n += 1 }
+                                                       withWrite(&other) { count = n }
+                                                   }
+                                               }
+                                               """, """
+                                                   var o = Outer { n: 1, count: 0 }
+                                                   var m = 0
+                                                   o.probe(&m)
+                                                   print("\(o.n + o.count - 1) \(m)")
+                                               """)).Stdout
+        );
+
     [Fact]
     public void DistinctStorageIsFine() =>
         Assert.Equal(

@@ -1560,7 +1560,16 @@ unowned capture is the object itself, and reading it once the object is gone
 traps. `[weak x = expression]` captures what the expression gives.
 
 An escaping closure must be declared `@escaping` on the parameter; non-escaping
-closures are stack-allocated and cost nothing. An `@autoclosure` argument
+closures are stack-allocated and cost nothing.
+
+Inside a `mutating` member, a closure that does not escape may change `self`,
+as the member may: `each(n) { i in total += i; log.append(i) }`. It runs
+during the member's call if at all, so it changes the caller's value; for
+the call, `self` is shared with such closures as a captured `inout`
+parameter is, and written back to the caller however the call ends. A
+closure that may escape may read `self` but not change it (S3205). The
+closure's accesses are the call's accesses to all of `self`, so a call that
+also changes part of `self` overlaps it (S3062): `inner.with { count += 1 }`. An `@autoclosure` argument
 (§5) is a closure of this kind, written as the expression it returns.
 
 ---

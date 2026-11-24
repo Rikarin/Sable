@@ -3349,13 +3349,24 @@ public sealed partial class SilGen {
                     Add(access.Parameter, access.Parameter.Type, access.Parameter.Modifier == ParameterModifier.InOut, null);
                     break;
 
+                // A mutating member's self, which some closure changes, is
+                // shared in a box as an inout parameter is.
                 case BoundSelfAccess self:
-                    Add(SelfKey, self.Type, false, null);
+                    Add(SelfKey, self.Type, self is { IsMutable: true, Type.IsReferenceType: false } && OutermostFunction(symbol) is { SelfChangedInClosure: true }, null);
                     break;
             }
         }
 
         return captures;
+    }
+
+    /// <summary>The function a closure or local function is written in, through any around it.</summary>
+    static FunctionSymbol OutermostFunction(FunctionSymbol function) {
+        while (function.ContainingSymbol is FunctionSymbol outer) {
+            function = outer;
+        }
+
+        return function;
     }
 
     /// <summary>
@@ -4405,6 +4416,22 @@ public sealed partial class SilGen {
                 }
 
                 UnpackIndirectCaptures();
+
+                // A mutating member's self, shared in a box: the closure
+                // reads and changes it there, holding the box for its call.
+                if (_context is not null && closure.Captures.TryGetValue(SelfKey, out var capturedSelf) && capturedSelf.Boxed) {
+                    _selfBox = Emit(new LoadInst(Emit(new RefElementAddrInst(_context, capturedSelf.Field))));
+                    _selfAddress = Emit(new RefElementAddrInst(_selfBox, 0));
+                }
+            } else if (symbol.SelfChangedInClosure && _selfAddress is { Type: AddressType { Pointee: var boxedSelf } } selfAddress) {
+                // A closure inside changes self: for the call, self is a box
+                // the closures share, copied in now and back out to the
+                // caller's value at every exit.
+                var box = Emit(new AllocRefInst(generator.BoxType(boxedSelf)));
+                Emit(new StoreInst(Emit(new LoadInst(selfAddress)), Emit(new RefElementAddrInst(box, 0)), StoreKind.Assign));
+                _selfBox = box;
+                _selfOriginal = selfAddress;
+                _selfAddress = Emit(new RefElementAddrInst(box, 0));
             }
 
             // A struct's initialiser builds 'self' in a slot of its own, field
@@ -4716,7 +4743,25 @@ public sealed partial class SilGen {
                 Emit(new StoreInst(Emit(new LoadInst(Emit(new RefElementAddrInst(box, 0)))), original, StoreKind.Assign));
                 Emit(new DestroyValueInst(box));
             }
+
+            if (_selfBox is { } selfBox) {
+                if (_selfOriginal is { } original) {
+                    Emit(new StoreInst(Emit(new LoadInst(Emit(new RefElementAddrInst(selfBox, 0)))), original, StoreKind.Assign));
+                }
+
+                Emit(new DestroyValueInst(selfBox));
+            }
         }
+
+        /// <summary>
+        ///     The box a mutating member's self lives in for the call, when a
+        ///     closure inside changes it — the member's own, or, in such a
+        ///     closure, the one its context holds — and the caller's value it
+        ///     is written back to, in the member.
+        /// </summary>
+        SilValue? _selfBox;
+
+        SilValue? _selfOriginal;
 
         void DestroyOwnedParameters() {
             for (var i = 0; i < _entry.Arguments.Count; i++) {
@@ -11339,6 +11384,9 @@ public sealed partial class SilGen {
 
                 case FunctionSymbol local:
                     return LocalFunctionValue(local, at);
+
+                case SelfKey when capture.Boxed:
+                    return _selfBox is { } selfBox ? Emit(new CopyValueInst(selfBox)) : Missing(at, "capturing 'self' to change");
 
                 case SelfKey:
                     return _selfValue is { } self ? Owned(self)

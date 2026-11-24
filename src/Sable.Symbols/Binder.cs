@@ -640,25 +640,39 @@ public sealed partial class Binder {
     /// <remarks>
     ///     A class or actor is a reference, so self is always writable through.
     ///     A struct is a value, so only a <c>mutating</c> member — or an
-    ///     initialiser, which is building it — may change it.
+    ///     initialiser, which is building it — may change it. A closure inside
+    ///     a <c>mutating</c> member may change it too, as Swift's may, when the
+    ///     closure does not escape: it runs during the member's call, if at
+    ///     all, and reaches the same self (one that may escape is refused by
+    ///     <see cref="EscapeChecker" />).
     /// </remarks>
     bool SelfIsMutable(NamedTypeSymbol type) {
         if (type.IsReferenceType) {
             return true;
         }
 
+        var throughClosure = false;
         for (var symbol = _containingSymbol; symbol is not null; symbol = symbol.ContainingSymbol) {
             if (symbol is not FunctionSymbol function) {
                 continue;
             }
 
+            if (IsClosureSymbol(function)) {
+                throughClosure = true;
+                continue;
+            }
+
             return function.IsMutating
-                || function.FunctionKind
+                || !throughClosure && function.FunctionKind
                     is FunctionKind.Initializer or FunctionKind.Deinitializer;
         }
 
         return false;
     }
+
+    /// <summary>A closure's own symbol: it has no name, as a local function has.</summary>
+    internal static bool IsClosureSymbol(FunctionSymbol function) =>
+        function.Name.Length == 0 && function.FunctionKind == FunctionKind.Ordinary && function.ContainingSymbol is FunctionSymbol;
 
     /// <summary>What <c>self</c> is in a member of the type: the type, or the array an array extension extends.</summary>
     /// <summary>

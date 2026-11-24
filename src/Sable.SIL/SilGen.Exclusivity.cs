@@ -68,7 +68,8 @@ public sealed partial class SilGen {
         }
 
         /// <summary>A storage path: a variable, then the fields and elements inside it.</summary>
-        sealed record AccessPath(Symbol Root, ImmutableArray<string> Steps, string Text) {
+        /// <remarks>A value's own self, in its mutating members and the closures inside them, is the root <see cref="SelfKey" />.</remarks>
+        sealed record AccessPath(object Root, ImmutableArray<string> Steps, string Text) {
             public bool Overlaps(AccessPath other) =>
                 ReferenceEquals(Root, other.Root)
                 && Steps.Zip(other.Steps).All(static pair => pair.First == pair.Second || pair.First == "[]" || pair.Second == "[]");
@@ -87,6 +88,9 @@ public sealed partial class SilGen {
 
                 case BoundParameterAccess parameter:
                     return new(parameter.Parameter, [], parameter.Parameter.Name);
+
+                case BoundSelfAccess { IsMutable: true, Type.IsReferenceType: false }:
+                    return new(SelfKey, [], "self");
 
                 // A field of an object reached through the same variable is the
                 // same storage; through two variables, that is the runtime's to tell.
@@ -107,8 +111,8 @@ public sealed partial class SilGen {
             expression is BoundConversion conversion ? Unconverted(conversion.Operand) : expression;
 
         /// <summary>The variables of the code around a closure that its body uses, and whether it assigns to each.</summary>
-        static Dictionary<Symbol, bool> OuterVariables(BoundClosure closure) {
-            var found = new Dictionary<Symbol, bool>(ReferenceEqualityComparer.Instance);
+        static Dictionary<object, bool> OuterVariables(BoundClosure closure) {
+            var found = new Dictionary<object, bool>(ReferenceEqualityComparer.Instance);
 
             bool Inside(Symbol symbol) {
                 for (var container = symbol.ContainingSymbol; container is not null; container = container.ContainingSymbol) {
@@ -122,8 +126,21 @@ public sealed partial class SilGen {
 
             void Visit(BoundNode node) {
                 switch (node) {
-                    case BoundAssignment { Target: var target } when Root(target) is { } assigned && !Inside(assigned):
+                    case BoundAssignment { Target: var target } when Root(target) is { } assigned && (assigned is not Symbol symbol || !Inside(symbol)):
                         found[assigned] = true;
+                        break;
+
+                    // A mutating method of self, or of a part of it, changes self.
+                    case BoundCall { Function.IsMutating: true } call when (call.Receiver is null ? SelfIsMutated(call) : Root(call.Receiver)) is string selfRoot:
+                        found[selfRoot] = true;
+                        break;
+
+                    case BoundUnaryOperator { OperatorKind: UnaryOperatorKind.AddressOf, Operand: var operand } when Root(operand) is string selfRoot:
+                        found[selfRoot] = true;
+                        break;
+
+                    case BoundSelfAccess { IsMutable: true, Type.IsReferenceType: false }:
+                        found.TryAdd(SelfKey, false);
                         break;
 
                     case BoundLocalAccess local when !Inside(local.Local):
@@ -140,7 +157,11 @@ public sealed partial class SilGen {
                 }
             }
 
-            static Symbol? Root(BoundExpression target) => PathOf(target)?.Root;
+            static object? Root(BoundExpression target) => PathOf(target)?.Root;
+
+            // 'bump()' inside a mutating member's closure: self's own method.
+            static object? SelfIsMutated(BoundCall call) =>
+                call.Function is { IsStatic: false, ContainingSymbol: NamedTypeSymbol or ExtensionSymbol } ? SelfKey : null;
 
             Visit(closure.Body);
             return found;
@@ -151,6 +172,8 @@ public sealed partial class SilGen {
             var accesses = new List<(AccessPath Path, bool Modify, string What, bool InClosure, SyntaxNode? Syntax)>();
             if (mutatingReceiver && call.Receiver is { } receiver && PathOf(receiver) is { } self) {
                 accesses.Add((self, true, $"the call to the mutating '{callee.Name}' changes it", false, receiver.Syntax));
+            } else if (mutatingReceiver && call.Receiver is null && callee is { IsStatic: false } && _selfAddress is not null) {
+                accesses.Add((new AccessPath(SelfKey, [], "self"), true, $"the call to the mutating '{callee.Name}' changes it", false, call.Syntax));
             }
 
             for (var i = 0; i < call.Arguments.Length && i < callee.Parameters.Length; i++) {
@@ -176,7 +199,7 @@ public sealed partial class SilGen {
 
                 foreach (var (variable, changes) in OuterVariables(closure)) {
                     accesses.Add((
-                        new AccessPath(variable, [], variable.Name),
+                        new AccessPath(variable, [], variable is Symbol named ? named.Name : "self"),
                         changes,
                         $"argument {i + 1} is a closure that {(changes ? "changes" : "reads")} it",
                         true,

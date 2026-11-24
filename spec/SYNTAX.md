@@ -1574,8 +1574,9 @@ during the member's call if at all, so it changes the caller's value; for
 the call, `self` is shared with such closures as a captured `inout`
 parameter is, and written back to the caller however the call ends. A
 closure that may escape may read `self` but not change it (S3205). The
-closure's accesses are the call's accesses to all of `self`, so a call that
-also changes part of `self` overlaps it (S3062): `inner.with { count += 1 }`. An `@autoclosure` argument
+closure's accesses to `self` are made during the call, so a call that changes
+what the closure uses overlaps it (S3062): `inner.with { inner.x = 1 }` is
+refused, and `inner.with { count += 1 }`, another field, is not. An `@autoclosure` argument
 (§5) is a closure of this kind, written as the expression it returns.
 
 ---

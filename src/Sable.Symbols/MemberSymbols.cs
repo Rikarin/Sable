@@ -135,6 +135,13 @@ public sealed class FunctionSymbol : Symbol {
     public bool SelfChangedInClosure { get; internal set; }
 
     /// <summary>
+    ///     True for a closure that cannot outlive the member it is written
+    ///     in: neither it nor any closure around it escapes. Only such a one
+    ///     shares the member's self; any other holds a copy of it.
+    /// </summary>
+    public bool IsContainedClosure { get; internal set; }
+
+    /// <summary>
     ///     <c>@polymorphic</c> (docs/03 §3.4): a generic function compiled
     ///     once, each type parameter a box holding the value with its
     ///     witness table, rather than once for each set of types it is

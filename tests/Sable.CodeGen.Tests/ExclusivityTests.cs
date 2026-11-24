@@ -70,12 +70,12 @@ public sealed class ExclusivityTests {
     /// <summary>
     ///     A closure that changes a mutating member's self, written into a
     ///     call that changes a part of self too, is two accesses to self for
-    ///     the length of the call, as in Swift: the closure has all of self.
+    ///     the length of the call, as in Swift; a different field is not.
     /// </summary>
     [Theory]
     [InlineData("withWrite(&n) { n += 1 }", "argument 1 ('x') is inout, and argument 2 is a closure that changes it")]
     [InlineData("withWrite(&n) { reset() }", "argument 2 is a closure that changes it")]
-    [InlineData("inner.with { count += 1 }", "the call to the mutating 'with' changes it")]
+    [InlineData("inner.with { inner.x = 2 }", "the call to the mutating 'with' changes it")]
     [InlineData("with { inner.x = 1 }", "the call to the mutating 'with' changes it")]
     public void AClosureChangingSelfOverlapsTheCallsOtherAccessesToIt(string body, string message) {
         var declarations = Declarations + """
@@ -124,6 +124,8 @@ public sealed class ExclusivityTests {
 
                                                    mutating fn probe(_ other: inout Int) {
                                                        withWrite(&other) { n += 1 }
+                                                       withWrite(&count) { n += 1 }
+                                                       n -= 1
                                                        withWrite(&other) { count = n }
                                                    }
                                                }

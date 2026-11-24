@@ -74,6 +74,10 @@ internal static class EscapeChecker {
 
                     for (var i = 0; i < call.Arguments.Length && i < call.Function.Parameters.Length; i++) {
                         var parameter = call.Function.Parameters[i];
+                        if (parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out) {
+                            SelfWritten(call.Arguments[i]);
+                        }
+
                         if (parameter.IsVariadic || parameter.IsEscaping || parameter.Type is not FunctionTypeSymbol || parameter.DeclaringSyntax.IsEmpty) {
                             continue;
                         }
@@ -90,8 +94,19 @@ internal static class EscapeChecker {
 
                     break;
 
-                case BoundIndirectCall { Callee: var callee }:
+                case BoundIndirectCall { Callee: var callee } indirect:
                     _allowed.Add(Unwrapped(callee));
+                    for (var i = 0; i < indirect.Arguments.Length; i++) {
+                        if (callee.Type is FunctionTypeSymbol called && called.IsInOut(i)) {
+                            SelfWritten(indirect.Arguments[i]);
+                        }
+                    }
+
+                    break;
+
+                // A lazy property's first read stores it.
+                case BoundFieldAccess { Field.IsLazy: true } lazy when ChangesSelf(lazy):
+                    SelfChanged(lazy);
                     break;
 
                 case BoundLocalDeclaration { Local: { IsMutable: false, IsAsyncLet: false }, Initializer: { } initializer } declaration
@@ -127,9 +142,6 @@ internal static class EscapeChecker {
                     SelfChanged(target);
                     break;
 
-                case BoundUnaryOperator { OperatorKind: UnaryOperatorKind.AddressOf, Operand: var operand } when ChangesSelf(operand):
-                    SelfChanged(operand);
-                    break;
             }
 
             foreach (var child in node.Children) {
@@ -139,6 +151,10 @@ internal static class EscapeChecker {
 
         void Nested(BoundNode node, Symbol owner, bool escapes) {
             Frames.Add((owner, escapes));
+            if (owner is FunctionSymbol function && !Frames.Skip(1).Any(static f => f.Escapes)) {
+                function.IsContainedClosure = true;
+            }
+
             foreach (var child in node.Children) {
                 Visit(child);
             }
@@ -219,6 +235,14 @@ internal static class EscapeChecker {
                     default:
                         return false;
                 }
+            }
+        }
+
+        /// <summary>An argument a call may write: 'bump(&amp;n)'.</summary>
+        void SelfWritten(BoundExpression argument) {
+            var place = argument is BoundUnaryOperator { OperatorKind: UnaryOperatorKind.AddressOf, Operand: var operand } ? operand : argument;
+            if (ChangesSelf(place)) {
+                SelfChanged(place);
             }
         }
 

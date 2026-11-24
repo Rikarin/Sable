@@ -3350,9 +3350,10 @@ public sealed partial class SilGen {
                     break;
 
                 // A mutating member's self, which some closure changes, is
-                // shared in a box as an inout parameter is.
+                // shared in a box with those that cannot outlive the call;
+                // any other closure, which only reads it, holds a copy.
                 case BoundSelfAccess self:
-                    Add(SelfKey, self.Type, self is { IsMutable: true, Type.IsReferenceType: false } && OutermostFunction(symbol) is { SelfChangedInClosure: true }, null);
+                    Add(SelfKey, self.Type, symbol.IsContainedClosure && self is { IsMutable: true, Type.IsReferenceType: false } && OutermostFunction(symbol) is { SelfChangedInClosure: true }, null);
                     break;
             }
         }
@@ -4426,10 +4427,12 @@ public sealed partial class SilGen {
                 }
             } else if (symbol.SelfChangedInClosure && _selfAddress is { Type: AddressType { Pointee: var boxedSelf } } selfAddress) {
                 // A closure inside changes self: for the call, self is a box
-                // the closures share, copied in now and back out to the
-                // caller's value at every exit.
+                // the closures share, moved in now and back out to the
+                // caller's storage at every exit: moved, not copied, so that
+                // what it holds has no second reference a change would have
+                // to copy for, and a move-only self may be.
                 var box = Emit(new AllocRefInst(generator.BoxType(boxedSelf)));
-                Emit(new StoreInst(Emit(new LoadInst(selfAddress)), Emit(new RefElementAddrInst(box, 0)), StoreKind.Assign));
+                Emit(new StoreInst(Emit(new LoadInst(selfAddress, boxedSelf.IsTrivial ? null : LoadKind.Take)), Emit(new RefElementAddrInst(box, 0)), StoreKind.Assign));
                 _selfBox = box;
                 _selfOriginal = selfAddress;
                 _selfAddress = Emit(new RefElementAddrInst(box, 0));
@@ -4747,7 +4750,8 @@ public sealed partial class SilGen {
 
             if (_selfBox is { } selfBox) {
                 if (_selfOriginal is { } original) {
-                    Emit(new StoreInst(Emit(new LoadInst(Emit(new RefElementAddrInst(selfBox, 0)))), original, StoreKind.Assign));
+                    var trivial = ((AddressType)original.Type).Pointee.IsTrivial;
+                    Emit(new StoreInst(Emit(new LoadInst(Emit(new RefElementAddrInst(selfBox, 0)), trivial ? null : LoadKind.Take)), original, trivial ? StoreKind.Assign : StoreKind.Init));
                 }
 
                 Emit(new DestroyValueInst(selfBox));
@@ -7746,6 +7750,12 @@ public sealed partial class SilGen {
                 return loaded;
             }
 
+            // A field of a self shared in a box: that field alone, as a call
+            // with another field of it inout may be in progress.
+            if (_selfBox is not null && SelfPart(access) && Place(access) is { } shared) {
+                return ReadField(shared);
+            }
+
             // A field of something in memory, read without copying the whole of it.
             if (!IsTrivialType(receiver.Type) && !IsBorrowable(access) && Place(access) is { } place) {
                 return ReadField(place);
@@ -7777,6 +7787,11 @@ public sealed partial class SilGen {
                 ? Missing(access, $"the member '{field.Name}'")
                 : Emit(new StructExtractInst(value, fieldIndex));
         }
+
+        /// <summary>A stored field of self's value, or of one inside it.</summary>
+        static bool SelfPart(BoundFieldAccess access) =>
+            access.Receiver is BoundSelfAccess { Type.IsReferenceType: false }
+            || access.Receiver is BoundFieldAccess { Type.IsReferenceType: false, Field: { IsComputed: false, IsStatic: false } } outer && SelfPart(outer);
 
         /// <summary>
         ///     The address of a local, of <c>self</c> in memory, or of a field or

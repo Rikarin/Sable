@@ -48,6 +48,8 @@ fn outIsNotCaptured(out x: Int) {
 // A mutating member's self may be changed by a closure that does not
 // escape, which runs during the call; one that may escape could change it
 // after the call is over, so it may not.
+fn increment(_ x: inout Int) { x += 1 }
+
 struct Tally {
     var n: Int
 
@@ -79,6 +81,12 @@ struct Tally {
             n = 0                       //! S3010 the left side of an assignment must be a mutable binding
         }
         reset()
+    }
+
+    mutating fn laterByInout() -> () -> Void {
+        return () => {
+            increment(&n)               //! S3205 a closure that may outlive the call cannot change 'self'
+        }
     }
 
     mutating fn readingIsFine() -> () -> Int {

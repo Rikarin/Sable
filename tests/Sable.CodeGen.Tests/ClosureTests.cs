@@ -421,4 +421,100 @@ public sealed class ClosureTests {
                 each(5) { i in d.bump(by: 1) }
                 print(d.n)
             """);
+
+    /// <summary>
+    ///     Through an inout argument, an element and self itself; while self
+    ///     is being walked; of a move-only self; and beside an escaping
+    ///     closure, which holds a copy of self rather than the shared one.
+    ///     Self is moved in and out, so its arrays keep their buffers.
+    /// </summary>
+    [Fact]
+    public void AClosuresChangesToSelfTakeEveryForm() =>
+        Prints(
+            "6\n[\"e\", \"two2\"]\n11 [\"z7\"]\n[\"qz7\"]\n99 [\"w\"]\ntrue\nn1! n1!\ngone 4\n",
+            """
+            fn each(_ n: Int, _ body: (Int) -> Void) {
+                for i in 0..<n { body(i) }
+            }
+            fn inc(_ x: inout Int) { x += 1 }
+
+            struct S {
+                var n: Int
+                var items: String[>..]
+
+                mutating fn viaInout() {
+                    each(3) { i in inc(&n) }
+                }
+                mutating fn viaInoutSelf() {
+                    each(3) { i in inc(&self.n) }
+                }
+                mutating fn replaceWhileWalking() {
+                    items.forEach { s in
+                        items = ["z\(n)"]
+                        n += s.count
+                    }
+                }
+                fn walk(_ f: (String) -> Void) {
+                    for s in items { f(s) }
+                }
+                mutating fn replaceInWalk() {
+                    walk { s in items = ["q\(s)"] }
+                }
+                mutating fn whole() {
+                    each(1) { i in self = S { n: 99, items: ["w"] } }
+                }
+                mutating fn element() {
+                    each(1) { i in items[0] = "e" }
+                }
+                mutating fn many() {
+                    each(1) { i in items.append("a") }
+                }
+            }
+
+            @noncopy
+            struct R {
+                var n: Int
+                deinit { print("gone \(n)") }
+                mutating fn run() { each(3) { i in n += 1 } }
+            }
+
+            struct Reader {
+                var name: String
+                mutating fn both() -> () -> String {
+                    each(1) { i in name = name + "!" }
+                    return () => name
+                }
+            }
+
+            struct Waiter {
+                var names: String[>..]
+                mutating fn go() async {
+                    each(2) { i in names.append("w\(i)") }
+                    await Task.yield()
+                    each(1) { i in names.append("end") }
+                }
+            }
+            """,
+            """
+                var s = S { n: 0, items: ["one\(1)", "two\(2)"] }
+                s.viaInout()
+                s.viaInoutSelf()
+                print(s.n)
+                s.element()
+                print(s.items)
+                s.replaceWhileWalking()
+                print("\(s.n) \(s.items)")
+                s.replaceInWalk()
+                print(s.items)
+                s.whole()
+                print("\(s.n) \(s.items)")
+                s.items.reserveCapacity(64)
+                s.many()
+                print(s.items.capacity >= 64)
+                var r = R { n: 1 }
+                r.run()
+                var reader = Reader { name: "n\(1)" }
+                let later = reader.both()
+                print("\(later()) \(reader.name)")
+            """);
 }

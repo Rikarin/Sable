@@ -82,7 +82,7 @@ fn writesReachTheFileOrStayPrivate() throws {
     try File.writeBytes(path, [0, 1, 2, 3, 4, 5, 6, 7])
 
     let shared = try MappedFile.open(path, mode: .ReadWrite)
-    let seen = shared.bytes
+    var seen = shared.bytes
     try shared.write([20, 30], at: 2)
     assert(same(shared.bytes, [0, 1, 20, 30, 4, 5, 6, 7]))
     // An array taken before the write is the mapping, and sees it.
@@ -114,6 +114,25 @@ fn writesReachTheFileOrStayPrivate() throws {
     assertEqual(grown.count, 12)
     assertEqual(grown[11], 99)
     assertEqual(grown[9], 0)
+
+    // Cut while the old mapping is held: not on Windows, which leaves the
+    // file and its mapping as they were.
+    do {
+        try shared.resize(to: 10)
+        assertEqual(shared.count, 10)
+    } catch IoError.Os(_, let code) {
+        assertEqual(code, 1224)
+        assertEqual(Platform.operatingSystem, OperatingSystem.Windows)
+        assertEqual(shared.count, 12)
+        assertEqual(shared.bytes[11], 99)
+    }
+    assertEqual(seen[3], 30)
+
+    // Cut once it is let go: on every system.
+    seen = []
+    try shared.resize(to: 10)
+    assertEqual(shared.count, 10)
+    assertEqual(try File.readBytes(path).count, 10)
     try shared.resize(to: 0)
     assertEqual(shared.count, 0)
     assert(shared.bytes.isEmpty)

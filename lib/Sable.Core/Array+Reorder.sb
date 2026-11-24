@@ -92,6 +92,11 @@ extension<Element> Element[:] {
     /// assert(xs == [7, 8, 9])
     /// ```
     public mutating fn copy(from source: Element[:]) {
+        if source.count == self.count && self.count >= 16 {
+            self[0..<self.count] = source
+            return
+        }
+        // Of different lengths, the first index outside one of them traps.
         let longer = source.count > self.count ? source.count : self.count
         var i = 0
         while i < longer {

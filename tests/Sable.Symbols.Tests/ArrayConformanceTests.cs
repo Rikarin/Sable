@@ -243,6 +243,28 @@ public sealed class ArrayConformanceTests {
         );
 
     [Fact]
+    public void AnArraysOwnMemberThatTakesASliceBeatsAProtocolsThatTakesAnySequence() =>
+        // Viewing the argument as a slice is no reason to take it as any
+        // sequence: the array's own copies its elements at once. What is not
+        // an array still goes to the protocol's.
+        AssertClean(
+            """
+            extension<Element> Element[>..] {
+                fn taking(_ other: Element[:]) -> Int { return 1 }
+            }
+            extension RangeReplaceableCollection {
+                fn taking<S: Sequence>(_ other: S) -> Bool where S.Element == Element { return true }
+            }
+            fn grown(_ xs: Int[>..], _ ys: Int[>..]) -> Int { return xs.taking(ys) }
+            fn literal(_ xs: Int[>..]) -> Int { return xs.taking([1, 2]) }
+            fn bytes(_ xs: U8[>..]) -> Int { return xs.taking([1, 2]) }
+            fn empty(_ xs: Int[>..]) -> Int { return xs.taking([]) }
+            fn slice(_ xs: Int[>..], _ ys: Int[:]) -> Int { return xs.taking(ys) }
+            fn range(_ xs: Int[>..]) -> Bool { return xs.taking(0..<3) }
+            """
+        );
+
+    [Fact]
     public void OverloadsFromSeveralProtocolsAreOneSet() =>
         AssertClean(
             """

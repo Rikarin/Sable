@@ -116,11 +116,8 @@ extension<Element> Element[>..] {
     /// xs.append(contentsOf: [2, 3])
     /// assert(xs == [1, 2, 3])
     /// ```
-    public mutating fn append(contentsOf other: Element[:]) {
-        for element in other {
-            self.append(element)
-        }
-    }
+    @builtin("array_append_all")
+    public mutating fn append(contentsOf other: Element[:])
 
     /// The last element, taken out; an empty array traps.
     @builtin("array_remove_last")
@@ -207,11 +204,8 @@ extension<Element> Element[>..<] {
     public mutating fn append(repeating value: Element, count: Int)
 
     /// Every element of 'other', added at the end in order.
-    public mutating fn append(contentsOf other: Element[:]) {
-        for element in other {
-            self.append(element)
-        }
-    }
+    @builtin("array_append_all")
+    public mutating fn append(contentsOf other: Element[:])
 
     /// The last element, taken out; an empty array traps.
     @builtin("array_remove_last")

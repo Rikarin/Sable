@@ -1,0 +1,44 @@
+module Sable.Core
+
+// An array's elements reversed a vector at a time, where they are of a type
+// a SIMD lane can be: one from each end, each with its lanes the other way
+// round, stored at the other's, until the two would meet. What is left
+// between them is fewer than two vectors, swapped an element at a time — as
+// short arrays are whole, and those of sixty-four-bit elements, which two to
+// a vector gain nothing.
+
+extension<Element: SIMDScalar> Element[:] {
+    /// Puts the elements in the opposite order, in place.
+    ///
+    /// ```sable
+    /// var xs: I32[>..] = [1, 2, 3, 4, 5]
+    /// xs.reverse()
+    /// assert(xs == [5, 4, 3, 2, 1])
+    /// ```
+    public mutating fn reverse() {
+        let width = Element.preferredVectorWidth
+        if width < 4 || self.count < 32 {
+            self.reverse(from: 0, to: self.count)
+        } else if width == 16 {
+            self.reverseVectors(SIMD<U8, 16>([15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]))
+        } else if width == 8 {
+            self.reverseVectors(SIMD<U8, 8>([7, 6, 5, 4, 3, 2, 1, 0]))
+        } else {
+            self.reverseVectors(SIMD<U8, 4>([3, 2, 1, 0]))
+        }
+    }
+
+    mutating fn reverseVectors<N: Int>(_ backwards: SIMD<U8, N>) {
+        var low = 0
+        var high = self.count
+        while high - low >= 2 * N {
+            let first = SIMD<Element, N>.load(from: self, at: low)
+            let last = SIMD<Element, N>.load(from: self, at: high - N)
+            self.store(last.swizzled(backwards), at: low)
+            self.store(first.swizzled(backwards), at: high - N)
+            low += N
+            high -= N
+        }
+        self.reverse(from: low, to: high)
+    }
+}

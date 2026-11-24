@@ -131,25 +131,13 @@ public class Bencher {
     }
 }
 
-/// The mean, median and standard deviation of the samples.
+/// The mean, median and standard deviation of the samples (Sable.Math's
+/// statistics), each 0 where there are too few samples for it.
 public fn summarise(_ name: String, _ times: F64[>..], _ iterations: Int) -> BenchResult {
-    var total = 0.0
-    for t in times {
-        total = total + t
-    }
-    let mean = times.count == 0 ? 0.0 : total / F64(times.count)
-    var squares = 0.0
-    for t in times {
-        squares = squares + (t - mean) * (t - mean)
-    }
-    let deviation = times.count < 2 ? 0.0 : squareRoot(squares / F64(times.count - 1))
-    let ordered = times.sorted()
-    var median = 0.0
-    if ordered.count > 0 {
-        let middle = ordered.count / 2
-        median = ordered.count % 2 == 1 ? ordered[middle] : (ordered[middle - 1] + ordered[middle]) / 2.0
-    }
-    return BenchResult { name: name, mean: mean, median: median, deviation: deviation, iterations: iterations }
+    let average = times.isEmpty ? 0.0 : mean(times)
+    let middle = times.isEmpty ? 0.0 : median(times)
+    let deviation = times.count < 2 ? 0.0 : standardDeviation(times, .Sample)
+    return BenchResult { name: name, mean: average, median: middle, deviation: deviation, iterations: iterations }
 }
 
 struct BenchOptions {

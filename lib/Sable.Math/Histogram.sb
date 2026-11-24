@@ -1,0 +1,22 @@
+module Sable.Math
+
+/// Values counted into bins of equal width: NumPy's `histogram`. Bin i
+/// holds the values in [edges[i], edges[i + 1]), the last bin its upper
+/// edge too.
+public struct Histogram {
+    /// The bins' edges, one more than there are bins.
+    public let edges: F64[>..]
+    /// How many values fell in each bin.
+    public let counts: Int[>..]
+
+    /// How many values were counted: those in the range, NaN never.
+    public var total: Int {
+        get {
+            var sum = 0
+            for count in counts {
+                sum += count
+            }
+            return sum
+        }
+    }
+}

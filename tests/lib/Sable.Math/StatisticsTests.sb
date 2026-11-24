@@ -1,0 +1,343 @@
+module StatisticsTests
+
+// Sable.Math's statistics: what they give, what they give for nothing and
+// for NaN, and — the point of them — their accuracy where the textbook
+// formulas lose it: values far from zero and close together, small values
+// among huge ones, sums that overflow.
+
+import Sable.Math
+import Sable.Testing
+import FloatAssertions
+
+/// Fails unless the two are within a relative distance of each other.
+fn assertNear(_ actual: F64, _ expected: F64, _ within: F64 = 1.0e-12) {
+    let scale = expected.abs() > 1.0 ? expected.abs() : 1.0
+    assert((actual - expected).abs() <= within * scale, "expected \(expected), got \(actual)")
+}
+
+/// A random walk of numbers: xorshift.
+struct Walk {
+    var state: U64
+
+    mutating fn next() -> F64 {
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        return F64(state >> 11) / 9007199254740992.0
+    }
+}
+
+@test
+fn theUsualStatistics() {
+    let xs = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]
+    assertSame(sum(xs), 40.0)
+    assertSame(mean(xs), 5.0)
+    assertSame(variance(xs, .Population), 4.0)
+    assertNear(variance(xs), 32.0 / 7.0)
+    assertSame(standardDeviation(xs, .Population), 2.0)
+    assertSame(minimum(xs), 2.0)
+    assertSame(maximum(xs), 9.0)
+    assertSame(median(xs), 4.5)
+    assertSame(median([3.0, 1.0, 2.0]), 2.0)
+    assertSame(median([7.0]), 7.0)
+
+    let five = [5.0, 1.0, 4.0, 2.0, 3.0]
+    assertSame(quantile(five, 0.0), 1.0)
+    assertSame(quantile(five, 1.0), 5.0)
+    assertSame(quantile(five, 0.25), 2.0)
+    assertNear(quantile(five, 0.1), 1.4)
+    assertNear(quantile(five, 0.3), 2.2)
+    assertSame(percentile(five, 50.0), 3.0)
+    assertNear(percentile(five, 90.0), 4.6)
+    assert(quantile(five, -0.1).isNaN && quantile(five, 1.5).isNaN && quantile(five, nan).isNaN)
+    let several = quantiles(five, [0.0, 0.5, 1.0, 2.0])
+    assertEqual(several.count, 4)
+    assertSame(several[1], 3.0)
+    assertSame(several[2], 5.0)
+    assert(several[3].isNaN)
+    // Equal neighbours give themselves, never a rounding off them.
+    assertSame(quantile([0.1, 0.1, 0.1], 0.37), 0.1)
+
+    let modes = mode([3.0, 1.0, 2.0, 2.0, 3.0, nan, nan, nan])
+    assertEqual(modes.count, 2)
+    assertSame(modes[0], 2.0)
+    assertSame(modes[1], 3.0)
+    assertEqual(mode([0.0, -0.0, 1.0]).count, 1)
+    assertEqual(mode([4.0, 1.0]).count, 2)
+    let noValues: F64[>..] = []
+    assert(mode(noValues).isEmpty)
+
+    assertSame(covariance([1.0, 2.0, 3.0], [1.0, 2.0, 3.0], .Population), 2.0 / 3.0)
+    assertSame(covariance([1.0, 2.0, 3.0], [6.0, 4.0, 2.0]), -2.0)
+    assertSame(correlation([1.0, 2.0, 3.0, 4.0], [2.0, 4.0, 6.0, 8.0]), 1.0)
+    assertSame(correlation([1.0, 2.0, 3.0], [3.0, 2.0, 1.0]), -1.0)
+    assertNear(correlation([1.0, 2.0, 3.0, 4.0], [1.0, 3.0, 2.0, 4.0]), 0.8)
+}
+
+@test
+fn nothingAndNaNGiveNaN() {
+    let nothing: F64[>..] = []
+    assertSame(sum(nothing), 0.0)
+    assert(mean(nothing).isNaN && median(nothing).isNaN && quantile(nothing, 0.5).isNaN)
+    assert(variance(nothing).isNaN && variance([1.0]).isNaN)
+    assertSame(variance([1.0], .Population), 0.0)
+    assert(variance(nothing, .Population).isNaN)
+    assert(minimum(nothing).isNaN && maximum(nothing).isNaN)
+    let several = quantiles(nothing, [0.5])
+    assert(several[0].isNaN)
+
+    let poisoned = [1.0, nan, 3.0]
+    assert(sum(poisoned).isNaN && mean(poisoned).isNaN && variance(poisoned).isNaN)
+    assert(median(poisoned).isNaN && minimum(poisoned).isNaN && maximum(poisoned).isNaN)
+    assert(quantiles(poisoned, [0.5])[0].isNaN)
+    assertSame(sum([inf, 1.0]), inf)
+    assert(sum([inf, -inf]).isNaN)
+    assert(covariance([1.0, 2.0], [1.0]).isNaN && covariance([1.0], [1.0]).isNaN)
+    assert(correlation([1.0, 1.0, 1.0], [1.0, 2.0, 3.0]).isNaN)
+    assert(correlation([1.0, 2.0], [1.0]).isNaN)
+}
+
+@test
+fn sumsLoseNothingToRounding() {
+    // A plain sum gives 0 here, and 1000.0000000001588 below.
+    assertSame(sum([1.0e100, 1.0, -1.0e100]), 1.0)
+    assertSame(sum([1.0, 1.0e100, 1.0, -1.0e100]), 2.0)
+    var tenths: F64[>..] = []
+    while tenths.count < 10000 {
+        tenths.append(0.1)
+    }
+    assertSame(sum(tenths), 1000.0)
+    assertSame(mean(tenths), 0.1)
+
+    // A sum that overflows, of values whose mean does not.
+    let big = F64.greatestFiniteMagnitude
+    assertSame(mean([big, big]), big)
+    assertSame(mean([big, big, -big]), big / 3.0)
+    assertSame(mean([-big, -big]), -big)
+    var many: F64[>..] = []
+    while many.count < 1000 {
+        many.append(big)
+    }
+    assertSame(mean(many), big)
+}
+
+@test
+fn variancesFarFromZeroKeepTheirDigits() {
+    // Sum of squares over n minus the mean squared gives garbage here:
+    // the squares are 1e30, their difference 30.
+    var offset = 1.0e9
+    while offset <= 1.0e15 {
+        let xs = [offset + 4.0, offset + 7.0, offset + 13.0, offset + 16.0]
+        assertNear(variance(xs), 30.0)
+        assertNear(variance(xs, .Population), 22.5)
+        assertNear(mean(xs), offset + 10.0)
+        var running = RunningStatistics()
+        running.add(contentsOf: xs)
+        assertNear(running.variance(), 30.0)
+        assertNear(running.mean, offset + 10.0)
+        // Twice the deviations: a perfect correlation.
+        let ys = [offset + 8.0, offset + 14.0, offset + 26.0, offset + 32.0]
+        assertNear(correlation(xs, ys), 1.0)
+        assertNear(covariance(xs, ys), 60.0)
+        let zs = [offset + 1.0, offset + 2.0, offset + 3.0, offset + 4.0]
+        assertNear(correlation(xs, zs), 5.25 / (22.5 * 1.25).squareRoot())
+        offset = offset * 1000.0
+    }
+
+    // Many values with a tiny spread around a large mean.
+    var walk = Walk { state: 0x9E3779B97F4A7C15 }
+    var xs: F64[>..] = []
+    var exact: F64[>..] = []
+    while xs.count < 100000 {
+        let small = walk.next()
+        exact.append(small)
+        xs.append(1.0e8 + small)
+    }
+    // The spread is that of the small parts, which are not offset at all.
+    assertNear(variance(xs), variance(exact), 1.0e-6)
+    assertNear(standardDeviation(xs), (1.0 / 12.0).squareRoot(), 1.0e-2)
+}
+
+@test
+fn runningStatisticsMatchAndMerge() {
+    var walk = Walk { state: 0xD1B54A32D192ED03 }
+    var xs: F64[>..] = []
+    while xs.count < 3000 {
+        xs.append(walk.next() * 100.0 - 30.0)
+    }
+    var all = RunningStatistics()
+    all.add(contentsOf: xs)
+    assertEqual(all.count, 3000)
+    assertNear(all.mean, mean(xs))
+    assertNear(all.variance(), variance(xs), 1.0e-10)
+    assertNear(all.standardDeviation(.Population), standardDeviation(xs, .Population), 1.0e-10)
+    assertSame(all.minimum, minimum(xs))
+    assertSame(all.maximum, maximum(xs))
+    assertNear(all.sum, sum(xs), 1.0e-10)
+
+    // Three runs merged are the one run.
+    var a = RunningStatistics()
+    var b = RunningStatistics()
+    var c = RunningStatistics()
+    a.add(contentsOf: xs[0..<100])
+    b.add(contentsOf: xs[100..<2500])
+    c.add(contentsOf: xs[2500...])
+    let merged = a.merged(with: b).merged(with: c)
+    assertEqual(merged.count, 3000)
+    assertNear(merged.mean, all.mean)
+    assertNear(merged.variance(), all.variance(), 1.0e-10)
+    assertSame(merged.minimum, all.minimum)
+    assertSame(merged.maximum, all.maximum)
+    let empty = RunningStatistics()
+    assertEqual(empty.merged(with: a).count, 100)
+    assertEqual(a.merged(with: empty).count, 100)
+
+    assert(empty.mean.isNaN && empty.variance().isNaN && empty.minimum.isNaN && empty.maximum.isNaN)
+    assertSame(empty.sum, 0.0)
+    var one = RunningStatistics()
+    one.add(4.0)
+    assert(one.variance().isNaN)
+    assertSame(one.variance(.Population), 0.0)
+    var poisoned = RunningStatistics()
+    poisoned.add(1.0)
+    poisoned.add(nan)
+    assert(poisoned.mean.isNaN && poisoned.variance().isNaN && poisoned.minimum.isNaN && poisoned.maximum.isNaN)
+    assert(empty.merged(with: poisoned).merged(with: one).mean.isNaN)
+}
+
+@test
+fn histogramsCountIntoEqualBins() {
+    let h = histogram([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, nan], bins: 5)
+    assertEqual(h.edges.count, 6)
+    assertSame(h.edges[0], 0.0)
+    assertSame(h.edges[5], 9.0)
+    assertEqual("\(h.counts)", "[2, 2, 2, 2, 2]")
+    assertEqual(h.total, 10)
+
+    // Over a range: the values outside it are not counted, its end is.
+    let ranged = histogram([-1.0, 0.0, 0.5, 1.0, 2.0], bins: 2, range: 0.0...1.0)
+    assertEqual("\(ranged.counts)", "[1, 2]")
+    // Edges a tenth apart that rounding does not place exactly.
+    var tenths: F64[>..] = []
+    var i = 0
+    while i <= 10 {
+        tenths.append(F64(i) / 10.0)
+        i += 1
+    }
+    let fine = histogram(tenths, bins: 10, range: 0.0...1.0)
+    assertEqual("\(fine.counts)", "[1, 1, 1, 1, 1, 1, 1, 1, 1, 2]")
+    // A run of one value: one bin a unit wide around it.
+    let flat = histogram([3.0, 3.0], bins: 1)
+    assertSame(flat.edges[0], 2.5)
+    assertSame(flat.edges[1], 3.5)
+    assertEqual(flat.total, 2)
+    let noValues: F64[>..] = []
+    let nothing = histogram(noValues, bins: 2)
+    assertEqual(nothing.total, 0)
+    assertSame(nothing.edges[2], 1.0)
+    assert(VarianceKind.Sample != VarianceKind.Population)
+}
+
+@test
+fn benchmarksAreSummedUpByTheseStatistics() {
+    let result = summarise("x", [3.0, 1.0, 2.0], 7)
+    assertSame(result.mean, 2.0)
+    assertSame(result.median, 2.0)
+    assertSame(result.deviation, 1.0)
+    assertEqual(result.iterations, 7)
+    let empty = summarise("y", [], 1)
+    assertSame(empty.mean, 0.0)
+    assertSame(empty.median, 0.0)
+    assertSame(empty.deviation, 0.0)
+    assertSame(summarise("z", [5.0], 1).deviation, 0.0)
+}
+
+@test
+fn everyNumberTypeHasItsStatistics() {
+    // Floats: the answer in the type, computed in F64 and rounded once.
+    let singles: F32[>..] = [1.5, 2.5, 3.5, 4.5]
+    assert(mean(singles) == (3.0 as F32))
+    assert(median(singles) == (3.0 as F32))
+    assert(variance(singles, .Population) == (1.25 as F32))
+    assert(minimum(singles) == (1.5 as F32) && maximum(singles) == (4.5 as F32))
+    assert(quantile(singles, 1.0) == (4.5 as F32))
+    assert(quantiles(singles, [0.0])[0] == (1.5 as F32))
+    assert(percentile(singles, 0.0) == (1.5 as F32))
+    assert(sum(singles) == (12.0 as F32))
+    assert(standardDeviation(singles, .Population) == F32.rounding(wideValue: (1.25).squareRoot()))
+    assert(covariance(singles, singles, .Population) == (1.25 as F32))
+    assert(correlation(singles, singles) == (1.0 as F32))
+    // An F32 sum in F32 loses 1 at 2^24; in F64, rounded once, it does not.
+    let big: F32[>..] = [16777216.0, 1.0, 1.0]
+    assert(sum(big) == (16777218.0 as F32))
+    var empty32: F32[>..] = []
+    assert(mean(empty32).isNaN && minimum(empty32).isNaN && maximum(empty32).isNaN)
+    empty32.append(F32.nan)
+    assert(minimum(empty32).isNaN && maximum(empty32).isNaN)
+
+    let halves: F16[>..] = [0.5, 1.5]
+    assert(mean(halves) == (1.0 as F16))
+    let brains: BF16[>..] = [2.0, 4.0]
+    assert(mean(brains) == (3.0 as BF16))
+    assertEqual(mode(halves).count, 2)
+
+    // Integers: an F64 where the answer need not be one, the type where it is.
+    let ints: Int[>..] = [4, 1, 3, 2]
+    assertSame(mean(ints), 2.5)
+    assertSame(median(ints), 2.5)
+    assertSame(variance(ints, .Population), 1.25)
+    assertSame(standardDeviation(ints), (5.0 / 3.0).squareRoot())
+    assertSame(quantile(ints, 0.0), 1.0)
+    assertSame(quantiles(ints, [1.0])[0], 4.0)
+    assertSame(percentile(ints, 100.0), 4.0)
+    assertSame(covariance(ints, ints, .Population), 1.25)
+    assertSame(correlation(ints, [8, 2, 6, 4]), 1.0)
+    assertEqual(sum(ints), 10)
+    assertEqual(minimum(ints) ?? -1, 1)
+    assertEqual(maximum(ints) ?? -1, 4)
+    let noInts: Int[>..] = []
+    assert(minimum(noInts) == none && maximum(noInts) == none)
+    assert(mean(noInts).isNaN && median(noInts).isNaN)
+    assertEqual(sum(noInts), 0)
+
+    let bytes: U8[>..] = [200, 250, 250]
+    assertNear(mean(bytes), 700.0 / 3.0)
+    assertEqual(mode(bytes)[0], 250)
+    assert(maximum(bytes) == (250 as U8))
+    let small: I8[>..] = [-128, 127]
+    assertSame(mean(small), -0.5)
+    let huge: I128[>..] = [I128.max, I128.max]
+    assertNear(mean(huge), F64.converting(I128.max))
+    let h = histogram(ints, bins: 3)
+    assertEqual("\(h.counts)", "[1, 1, 2]")
+
+    // And one at a time, any of them.
+    var running = RunningStatistics()
+    running.add(singles[0])
+    running.add(ints[0])
+    running.add(bytes[0])
+    running.add(contentsOf: halves)
+    assertEqual(running.count, 5)
+    assertSame(running.maximum, 200.0)
+}
+
+@test
+fn everyNumberIsMeasuredExactlyWhereItCanBe() {
+    assertSame((1.5 as F16).measure, 1.5)
+    assertSame((1.5 as BF16).measure, 1.5)
+    assertSame((0.1 as F32).measure, 0.100000001490116119384765625)
+    assertSame((0.1 as F64).measure, 0.1)
+    assertSame((-3 as Int).measure, -3.0)
+    assertSame((-3 as I8).measure, -3.0)
+    assertSame((-3 as I16).measure, -3.0)
+    assertSame((-3 as I32).measure, -3.0)
+    assertSame((-3 as I64).measure, -3.0)
+    assertSame((-3 as I128).measure, -3.0)
+    assertSame((3 as UInt).measure, 3.0)
+    assertSame((3 as U8).measure, 3.0)
+    assertSame((3 as U16).measure, 3.0)
+    assertSame((3 as U32).measure, 3.0)
+    assertSame(U64.max.measure, 18446744073709551616.0)
+    assertSame((3 as U128).measure, 3.0)
+}
+

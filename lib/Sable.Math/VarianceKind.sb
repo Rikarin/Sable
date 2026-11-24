@@ -1,0 +1,10 @@
+module Sable.Math
+
+/// Whose variance: of a sample of a larger population, divided by n - 1
+/// (Bessel's correction: .NET's and Excel's VAR.S, NumPy's ddof=1), or of
+/// the whole population, divided by n (VAR.P, NumPy's default).
+@derive(Equatable, Hashable, Debug)
+public enum VarianceKind {
+    Sample
+    Population
+}

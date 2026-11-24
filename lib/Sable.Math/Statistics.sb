@@ -1,0 +1,497 @@
+module Sable.Math
+
+// Descriptive statistics (docs/06's "statistics") of any built-in number
+// type, written once over Measurable and monomorphised for each type used.
+// Floats give their own type back, computed in F64 and rounded once, so an
+// F32's or an F16's mean is as accurate as the type holds; integers give an
+// F64 for what need not be an integer (a mean, a variance, a quantile), and
+// their own type for a sum, a minimum and a maximum.
+//
+// Written for accuracy first. Sums are compensated (Neumaier), so adding
+// many values, or values of very different sizes, loses no more than a
+// rounding; a variance takes its deviations from a mean computed first and
+// corrects for that mean's own error (the corrected two-pass algorithm),
+// which keeps its accuracy where summing the squares does not — values far
+// from zero, close together. RunningStatistics does the same a value at a
+// time.
+//
+// A NaN in, a NaN out: an empty run's mean, median and the rest are NaN,
+// as NumPy's are, and so are those of a run with a NaN in it. A sum of
+// nothing is zero.
+
+// ---- The work, in F64 --------------------------------------------------------
+
+// The compensated sum of the values' measures.
+fn wideSum<T: Measurable>(_ values: T[:]) -> F64 {
+    var total = 0.0
+    var lost = 0.0
+    for value in values {
+        let x = value.measure
+        let next = total + x
+        // What the addition rounded away, from whichever was smaller.
+        if total.abs() >= x.abs() {
+            lost = lost + ((total - next) + x)
+        } else {
+            lost = lost + ((x - next) + total)
+        }
+        total = next
+    }
+    // Infinities, and NaN, are what they are; a compensation for them is NaN.
+    return total.isFinite ? total + lost : total
+}
+
+fn wideMean<T: Measurable>(_ values: T[:]) -> F64 {
+    if values.isEmpty {
+        return F64.nan
+    }
+    let total = wideSum(values)
+    if total.isFinite || total.isNaN {
+        return total / F64(values.count)
+    }
+    // The sum overflowed; the mean may not have. Scaled by a power of two
+    // at least the count, which is exact, the sum cannot.
+    var scale = 1.0
+    var room = 1
+    while room < values.count {
+        room = room * 2
+        scale = scale * 0.5
+    }
+    var scaled: F64[>..] = []
+    scaled.reserveCapacity(values.count)
+    for value in values {
+        scaled.append(value.measure * scale)
+    }
+    return wideSum(scaled) / (F64(values.count) * scale)
+}
+
+fn wideCovariance<T: Measurable>(_ xs: T[:], _ ys: T[:], _ kind: VarianceKind) -> F64 {
+    let n = kind == .Sample ? xs.count - 1 : xs.count
+    if xs.count != ys.count || n <= 0 {
+        return F64.nan
+    }
+    let mx = wideMean(xs)
+    let my = wideMean(ys)
+    var products = 0.0
+    var dxs = 0.0
+    var dys = 0.0
+    var i = 0
+    while i < xs.count {
+        let dx = xs[i].measure - mx
+        let dy = ys[i].measure - my
+        products = products + dx * dy
+        dxs = dxs + dx
+        dys = dys + dy
+        i += 1
+    }
+    // The deviations sum to zero but for the means' error: take it out.
+    return (products - dxs * dys / F64(xs.count)) / F64(n)
+}
+
+fn wideVariance<T: Measurable>(_ values: T[:], _ kind: VarianceKind) -> F64 {
+    return wideCovariance(values, values, kind)
+}
+
+fn wideCorrelation<T: Measurable>(_ xs: T[:], _ ys: T[:]) -> F64 {
+    let together = wideCovariance(xs, ys, .Population)
+    let spread = (wideVariance(xs, .Population) * wideVariance(ys, .Population)).squareRoot()
+    if together.isNaN || spread == 0.0 {
+        return F64.nan
+    }
+    let r = together / spread
+    // Rounding may take a perfect correlation a little past 1.
+    return r > 1.0 ? 1.0 : r < -1.0 ? -1.0 : r
+}
+
+// The values in order, or none when a NaN is among them (the one value
+// not equal to itself).
+fn ordered<T: Measurable>(_ values: T[:]) -> T[>..]? {
+    var sorted = values.toArray()
+    for x in sorted {
+        if x != x {
+            return none
+        }
+    }
+    sorted.sortUnstable()
+    return sorted
+}
+
+// The type-7 quantile of values already in order, which are not empty.
+fn quantileOfOrdered<T: Measurable>(_ sorted: T[:], _ p: F64) -> F64 {
+    if p.isNaN || p < 0.0 || p > 1.0 {
+        return F64.nan
+    }
+    let at = p * F64(sorted.count - 1)
+    let below = Int(at.rounded(.Down))
+    if below >= sorted.count - 1 {
+        return sorted[sorted.count - 1].measure
+    }
+    let fraction = at - F64(below)
+    let low = sorted[below].measure
+    let high = sorted[below + 1].measure
+    // Exact at the ends, and monotone between: no overshoot from rounding.
+    return fraction == 0.0 ? low : low + (high - low) * fraction
+}
+
+fn wideQuantile<T: Measurable>(_ values: T[:], _ p: F64) -> F64 {
+    if let sorted = ordered(values) {
+        if sorted.isEmpty {
+            return F64.nan
+        }
+        return quantileOfOrdered(sorted, p)
+    }
+    return F64.nan
+}
+
+fn wideQuantiles<T: Measurable>(_ values: T[:], _ ps: F64[:]) -> F64[>..] {
+    var result: F64[>..] = []
+    let sorted = ordered(values)
+    for p in ps {
+        if let sorted = sorted {
+            result.append(sorted.isEmpty ? F64.nan : quantileOfOrdered(sorted, p))
+        } else {
+            result.append(F64.nan)
+        }
+    }
+    return result
+}
+
+// ---- Floats: results in their own type ---------------------------------------
+
+/// The values' sum, compensated: exact but for a final rounding where a
+/// plain sum loses the small values among large ones.
+///
+/// ```sable
+/// let xs = [1.0e100, 1.0, -1.0e100]
+/// assert(sum(xs) == 1.0)
+/// let halves: F32[>..] = [0.5, 0.25, 0.25]
+/// assert(sum(halves) == (1.0 as F32))
+/// ```
+public fn sum<T>(_ values: T[:]) -> T where T: FloatingPoint, T: Measurable {
+    return T.rounding(wideValue: wideSum(values))
+}
+
+/// The arithmetic mean: the compensated sum over the count, the values
+/// scaled down first where their sum would overflow.
+///
+/// ```sable
+/// assert(mean([1.0, 2.0, 3.0, 4.0]) == 2.5)
+/// let empty: F64[>..] = []
+/// assert(mean(empty).isNaN)
+/// ```
+public fn mean<T>(_ values: T[:]) -> T where T: FloatingPoint, T: Measurable {
+    return T.rounding(wideValue: wideMean(values))
+}
+
+/// The variance of a sample (over n - 1) or of the whole population (over
+/// n), by the corrected two-pass algorithm. NaN with too few values: none,
+/// or one for a sample.
+///
+/// ```sable
+/// let xs = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]
+/// assert(variance(xs, .Population) == 4.0)
+/// assert(standardDeviation(xs, .Population) == 2.0)
+/// ```
+public fn variance<T>(_ values: T[:], _ kind: VarianceKind = .Sample) -> T where T: FloatingPoint, T: Measurable {
+    return T.rounding(wideValue: wideVariance(values, kind))
+}
+
+/// The square root of the variance.
+public fn standardDeviation<T>(_ values: T[:], _ kind: VarianceKind = .Sample) -> T where T: FloatingPoint, T: Measurable {
+    return T.rounding(wideValue: wideVariance(values, kind).squareRoot())
+}
+
+/// The least value; NaN with none, or with a NaN among them.
+public fn minimum<T>(_ values: T[:]) -> T where T: FloatingPoint, T: Measurable {
+    if values.isEmpty {
+        return T.nan
+    }
+    var least = T.infinity
+    for x in values {
+        if x.isNaN {
+            return x
+        }
+        if x < least {
+            least = x
+        }
+    }
+    return least
+}
+
+/// The greatest value; NaN with none, or with a NaN among them.
+public fn maximum<T>(_ values: T[:]) -> T where T: FloatingPoint, T: Measurable {
+    if values.isEmpty {
+        return T.nan
+    }
+    var greatest = -T.infinity
+    for x in values {
+        if x.isNaN {
+            return x
+        }
+        if x > greatest {
+            greatest = x
+        }
+    }
+    return greatest
+}
+
+/// The middle value: the mean of the two middle ones for an even count.
+///
+/// ```sable
+/// assert(median([3.0, 1.0, 2.0]) == 2.0)
+/// assert(median([4.0, 1.0, 3.0, 2.0]) == 2.5)
+/// ```
+public fn median<T>(_ values: T[:]) -> T where T: FloatingPoint, T: Measurable {
+    return T.rounding(wideValue: wideQuantile(values, 0.5))
+}
+
+/// The value below which the share p (0 to 1) of them lie, interpolated
+/// linearly between the two nearest: Hyndman and Fan's type 7, R's and
+/// NumPy's default, Excel's PERCENTILE.INC. NaN for p outside [0, 1].
+///
+/// ```sable
+/// let xs = [1.0, 2.0, 3.0, 4.0, 5.0]
+/// assert(quantile(xs, 0.25) == 2.0)
+/// assert(quantile(xs, 0.875) == 4.5)
+/// ```
+public fn quantile<T>(_ values: T[:], _ p: F64) -> T where T: FloatingPoint, T: Measurable {
+    return T.rounding(wideValue: wideQuantile(values, p))
+}
+
+/// The quantiles at each p, the values put in order once for them all.
+public fn quantiles<T>(_ values: T[:], _ ps: F64[:]) -> T[>..] where T: FloatingPoint, T: Measurable {
+    var result: T[>..] = []
+    for q in wideQuantiles(values, ps) {
+        result.append(T.rounding(wideValue: q))
+    }
+    return result
+}
+
+/// The quantile at a percentage, 0 to 100.
+public fn percentile<T>(_ values: T[:], _ percent: F64) -> T where T: FloatingPoint, T: Measurable {
+    return T.rounding(wideValue: wideQuantile(values, percent / 100.0))
+}
+
+/// The covariance of paired values, of a sample or of the population, by
+/// two passes with the means' error taken out. NaN for runs of different
+/// lengths, or too short.
+public fn covariance<T>(_ xs: T[:], _ ys: T[:], _ kind: VarianceKind = .Sample) -> T where T: FloatingPoint, T: Measurable {
+    return T.rounding(wideValue: wideCovariance(xs, ys, kind))
+}
+
+/// Pearson's correlation of paired values, -1 to 1: NaN for runs of
+/// different lengths or fewer than two, or where either does not vary.
+///
+/// ```sable
+/// assert(correlation([1.0, 2.0, 3.0], [2.0, 4.0, 6.0]) == 1.0)
+/// assert(correlation([1.0, 2.0, 3.0], [3.0, 2.0, 1.0]) == -1.0)
+/// ```
+public fn correlation<T>(_ xs: T[:], _ ys: T[:]) -> T where T: FloatingPoint, T: Measurable {
+    return T.rounding(wideValue: wideCorrelation(xs, ys))
+}
+
+// ---- Integers: an F64 where the answer need not be an integer ----------------
+
+/// The integers' sum, exact: an overflow traps, as '+' does.
+///
+/// ```sable
+/// let xs: I32[>..] = [1, 2, 3]
+/// assert(sum(xs) == (6 as I32))
+/// ```
+public fn sum<T>(_ values: T[:]) -> T where T: BinaryInteger, T: Measurable {
+    var total = T.zero
+    for x in values {
+        total = total + x
+    }
+    return total
+}
+
+/// The integers' mean, as an F64 (NaN for none).
+///
+/// ```sable
+/// let xs: Int[>..] = [1, 2, 3, 4]
+/// assert(mean(xs) == 2.5)
+/// ```
+public fn mean<T>(_ values: T[:]) -> F64 where T: BinaryInteger, T: Measurable {
+    return wideMean(values)
+}
+
+/// The integers' variance, of a sample or of the population, as an F64.
+public fn variance<T>(_ values: T[:], _ kind: VarianceKind = .Sample) -> F64 where T: BinaryInteger, T: Measurable {
+    return wideVariance(values, kind)
+}
+
+/// The square root of the integers' variance.
+public fn standardDeviation<T>(_ values: T[:], _ kind: VarianceKind = .Sample) -> F64 where T: BinaryInteger, T: Measurable {
+    return wideVariance(values, kind).squareRoot()
+}
+
+/// The least integer; none with none.
+public fn minimum<T>(_ values: T[:]) -> T? where T: BinaryInteger, T: Measurable {
+    if values.isEmpty {
+        return none
+    }
+    var least = values[values.startIndex]
+    for x in values {
+        if x < least {
+            least = x
+        }
+    }
+    return least
+}
+
+/// The greatest integer; none with none.
+public fn maximum<T>(_ values: T[:]) -> T? where T: BinaryInteger, T: Measurable {
+    if values.isEmpty {
+        return none
+    }
+    var greatest = values[values.startIndex]
+    for x in values {
+        if x > greatest {
+            greatest = x
+        }
+    }
+    return greatest
+}
+
+/// The integers' median, as an F64: the mean of the two middle ones for
+/// an even count.
+public fn median<T>(_ values: T[:]) -> F64 where T: BinaryInteger, T: Measurable {
+    return wideQuantile(values, 0.5)
+}
+
+/// The integers' type-7 quantile at p (0 to 1), as an F64.
+public fn quantile<T>(_ values: T[:], _ p: F64) -> F64 where T: BinaryInteger, T: Measurable {
+    return wideQuantile(values, p)
+}
+
+/// The integers' quantiles at each p, put in order once for them all.
+public fn quantiles<T>(_ values: T[:], _ ps: F64[:]) -> F64[>..] where T: BinaryInteger, T: Measurable {
+    return wideQuantiles(values, ps)
+}
+
+/// The integers' quantile at a percentage, 0 to 100.
+public fn percentile<T>(_ values: T[:], _ percent: F64) -> F64 where T: BinaryInteger, T: Measurable {
+    return wideQuantile(values, percent / 100.0)
+}
+
+/// The paired integers' covariance, as an F64.
+public fn covariance<T>(_ xs: T[:], _ ys: T[:], _ kind: VarianceKind = .Sample) -> F64 where T: BinaryInteger, T: Measurable {
+    return wideCovariance(xs, ys, kind)
+}
+
+/// The paired integers' Pearson correlation, as an F64.
+public fn correlation<T>(_ xs: T[:], _ ys: T[:]) -> F64 where T: BinaryInteger, T: Measurable {
+    return wideCorrelation(xs, ys)
+}
+
+// ---- Any number --------------------------------------------------------------
+
+/// The values that come most often, in ascending order: more than one when
+/// they tie, none for no values. NaN is no value here; -0.0 is 0.0.
+///
+/// ```sable
+/// let modes = mode([1.0, 2.0, 2.0, 3.0, 3.0])
+/// assert(modes.count == 2 && modes[0] == 2.0 && modes[1] == 3.0)
+/// let counts: U8[>..] = [7, 7, 1]
+/// assert(mode(counts)[0] == 7)
+/// ```
+public fn mode<T: Measurable>(_ values: T[:]) -> T[>..] {
+    var sorted: T[>..] = []
+    for x in values {
+        if x == x {
+            sorted.append(x)
+        }
+    }
+    sorted.sortUnstable()
+    var modes: T[>..] = []
+    var best = 0
+    var i = 0
+    while i < sorted.count {
+        var j = i + 1
+        while j < sorted.count && sorted[j] == sorted[i] {
+            j += 1
+        }
+        let run = j - i
+        if run > best {
+            best = run
+            modes = [sorted[i]]
+        } else if run == best {
+            modes.append(sorted[i])
+        }
+        i = j
+    }
+    return modes
+}
+
+/// The values counted into 'bins' bins of equal width from the least to
+/// the greatest of them, or over the range given; NaN, and values outside
+/// the range, are not counted. One bin of width 1 around a run of equal
+/// values, as NumPy makes it.
+///
+/// ```sable
+/// let h = histogram([1.0, 2.0, 2.0, 3.0, 4.0], bins: 3)
+/// assert(h.counts.count == 3 && h.counts[0] == 1 && h.counts[1] == 2 && h.counts[2] == 2)
+/// ```
+public fn histogram<T: Measurable>(_ values: T[:], bins: Int) -> Histogram {
+    var low = 0.0
+    var high = 1.0
+    var seen = false
+    for value in values {
+        let x = value.measure
+        if x.isNaN {
+            continue
+        }
+        if !seen || x < low {
+            low = x
+        }
+        if !seen || x > high {
+            high = x
+        }
+        seen = true
+    }
+    return counted(values, bins, low, high)
+}
+
+/// The values counted into 'bins' bins of equal width over the range.
+public fn histogram<T: Measurable>(_ values: T[:], bins: Int, range: ClosedRange<F64>) -> Histogram {
+    return counted(values, bins, range.lowerBound, range.upperBound)
+}
+
+fn counted<T: Measurable>(_ values: T[:], _ bins: Int, _ from: F64, _ to: F64) -> Histogram {
+    precondition(bins > 0, "a histogram of \(bins) bins")
+    var low = from
+    var high = to
+    if low == high {
+        low = low - 0.5
+        high = high + 0.5
+    }
+    var edges: F64[>..] = []
+    var i = 0
+    while i <= bins {
+        // Each edge from the ends, so the last is the range's end exactly.
+        edges.append(i == bins ? high : low + (high - low) * (F64(i) / F64(bins)))
+        i += 1
+    }
+    var counts: Int[>..] = []
+    i = 0
+    while i < bins {
+        counts.append(0)
+        i += 1
+    }
+    for value in values {
+        let x = value.measure
+        if x.isNaN || x < low || x > high {
+            continue
+        }
+        var bin = Int(((x - low) / (high - low) * F64(bins)).rounded(.Down))
+        bin = bin >= bins ? bins - 1 : bin
+        // Rounding may put a value on an edge into the next bin or the last.
+        if bin > 0 && x < edges[bin] {
+            bin -= 1
+        } else if bin < bins - 1 && x >= edges[bin + 1] {
+            bin += 1
+        }
+        counts[bin] += 1
+    }
+    return Histogram { edges: edges, counts: counts }
+}

@@ -743,7 +743,10 @@ Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, validated
 Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     generic over ElementaryFunctions; integer math;
                     BigInt, Decimal, SIMD<T, N>, Matrix, Quaternion,
-                    statistics
+                    statistics generic over every number type (mean,
+                    median, mode, quantiles, variance, covariance,
+                    correlation, histogram; compensated and two-pass;
+                    RunningStatistics by Welford, mergeable)
 Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     OpenOptions (positional reads and writes, metadata,
                     setLength, sync), BufferedReader BufferedWriter

@@ -1,0 +1,73 @@
+module Sable.Math
+
+/// A number statistics are taken of: any built-in float or integer, as an
+/// F64 to compute with. A float's is exact (an F64 holds every F16, BF16
+/// and F32); an integer's is the nearest F64, exact up to 2^53.
+public protocol Measurable: Comparable {
+    /// The value as an F64.
+    var measure: F64 { get }
+}
+
+extension F16: Measurable {
+    public var measure: F64 => self.wideValue
+}
+
+extension BF16: Measurable {
+    public var measure: F64 => self.wideValue
+}
+
+extension F32: Measurable {
+    public var measure: F64 => self.wideValue
+}
+
+extension F64: Measurable {
+    public var measure: F64 => self.wideValue
+}
+
+extension Int: Measurable {
+    public var measure: F64 => F64.converting(self)
+}
+
+extension I8: Measurable {
+    public var measure: F64 => F64.converting(self)
+}
+
+extension I16: Measurable {
+    public var measure: F64 => F64.converting(self)
+}
+
+extension I32: Measurable {
+    public var measure: F64 => F64.converting(self)
+}
+
+extension I64: Measurable {
+    public var measure: F64 => F64.converting(self)
+}
+
+extension I128: Measurable {
+    public var measure: F64 => F64.converting(self)
+}
+
+extension UInt: Measurable {
+    public var measure: F64 => F64.converting(self)
+}
+
+extension U8: Measurable {
+    public var measure: F64 => F64.converting(self)
+}
+
+extension U16: Measurable {
+    public var measure: F64 => F64.converting(self)
+}
+
+extension U32: Measurable {
+    public var measure: F64 => F64.converting(self)
+}
+
+extension U64: Measurable {
+    public var measure: F64 => F64.converting(self)
+}
+
+extension U128: Measurable {
+    public var measure: F64 => F64.converting(self)
+}

@@ -1,0 +1,126 @@
+module Sable.Math
+
+/// Statistics of numbers seen one at a time, of any type and in F64, in
+/// constant room: the count,
+/// mean, variance, minimum and maximum, by Welford's update, which keeps
+/// its accuracy where summing the squares loses it. Two accumulators of
+/// separate runs merge into the one of both (Chan, Golub and LeVeque), so
+/// work split across tasks is summed up at the end.
+///
+/// ```sable
+/// var stats = RunningStatistics()
+/// for x in [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0] {
+///     stats.add(x)
+/// }
+/// assert(stats.count == 8 && stats.mean == 5.0)
+/// assert(stats.standardDeviation(.Population) == 2.0)
+/// ```
+public struct RunningStatistics {
+    /// How many values were added.
+    public var count: Int
+    var average: F64
+    // The sum of squared differences from the mean.
+    var squares: F64
+    var least: F64
+    var greatest: F64
+    var sawNaN: Bool
+
+    /// No values yet.
+    public init() {
+        count = 0
+        average = 0.0
+        squares = 0.0
+        least = F64.infinity
+        greatest = -F64.infinity
+        sawNaN = false
+    }
+
+    /// The value counted in: any number, as an F64.
+    public mutating fn add<T: Measurable>(_ value: T) {
+        let x = value.measure
+        if x.isNaN {
+            sawNaN = true
+        }
+        count += 1
+        let delta = x - average
+        average = average + delta / F64(count)
+        squares = squares + delta * (x - average)
+        if x < least {
+            least = x
+        }
+        if x > greatest {
+            greatest = x
+        }
+    }
+
+    /// Every value counted in.
+    public mutating fn add<T: Measurable>(contentsOf values: T[:]) {
+        for x in values {
+            add(x)
+        }
+    }
+
+    /// The statistics of this run and the other together, as if every
+    /// value had been added to one.
+    public fn merged(with other: RunningStatistics) -> RunningStatistics {
+        if other.count == 0 {
+            return self
+        }
+        if count == 0 {
+            return other
+        }
+        var both = RunningStatistics()
+        both.count = count + other.count
+        let delta = other.average - average
+        let share = F64(other.count) / F64(both.count)
+        both.average = average + delta * share
+        both.squares = squares + other.squares + delta * delta * F64(count) * share
+        both.least = least < other.least ? least : other.least
+        both.greatest = greatest > other.greatest ? greatest : other.greatest
+        both.sawNaN = sawNaN || other.sawNaN
+        return both
+    }
+
+    /// The mean: NaN with no values, or after a NaN.
+    public var mean: F64 {
+        get {
+            return count == 0 || sawNaN ? F64.nan : average
+        }
+    }
+
+    /// The variance of a sample or of the whole population: NaN with too
+    /// few values (none, or one for a sample), or after a NaN.
+    public fn variance(_ kind: VarianceKind = .Sample) -> F64 {
+        let n = kind == .Sample ? count - 1 : count
+        if n <= 0 || sawNaN {
+            return F64.nan
+        }
+        return squares / F64(n)
+    }
+
+    /// The square root of the variance.
+    public fn standardDeviation(_ kind: VarianceKind = .Sample) -> F64 {
+        return variance(kind).squareRoot()
+    }
+
+    /// The least value: NaN with none, or after a NaN.
+    public var minimum: F64 {
+        get {
+            return count == 0 || sawNaN ? F64.nan : least
+        }
+    }
+
+    /// The greatest value: NaN with none, or after a NaN.
+    public var maximum: F64 {
+        get {
+            return count == 0 || sawNaN ? F64.nan : greatest
+        }
+    }
+
+    /// The sum: the mean times the count.
+    public var sum: F64 {
+        get {
+            return count == 0 ? 0.0 : mean * F64(count)
+        }
+    }
+}

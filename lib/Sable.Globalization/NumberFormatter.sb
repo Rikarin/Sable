@@ -1,0 +1,252 @@
+module Sable.Globalization
+
+/// A locale's way of writing numbers, made once to write many: what
+/// `format(_:locale:)` makes for each number it is given. ECMA-402's
+/// Intl.NumberFormat.
+///
+/// ```sable
+/// let money = NumberFormatter(.currency("CZK"), locale: Locale.of("cs")!)
+/// assert(money.format(1234.5) == "1\u{A0}234,50\u{A0}Kč")
+/// let read: F64 = try! money.parse("1 234,50 Kč")
+/// assert(read == 1234.5)
+/// ```
+public struct NumberFormatter {
+    /// What numbers are written as.
+    public let numberFormat: NumberFormat
+    /// Whose way they are written in.
+    public let locale: Locale
+    let pattern: NumberPattern
+    /// The digits 0 to 9.
+    let digits: Char[>..]
+    let decimal: String
+    let group: String
+    let minus: String
+    let plus: String
+    let percent: String
+    let exponent: String
+    let notANumber: String
+    let infinity: String
+    let minimumGrouping: Int
+    let currencyCode: String
+    let currency: String
+    let minimumFraction: Int
+    let maximumFraction: Int
+
+    /// The locale's way of writing numbers in the format. Money in a
+    /// currency that is not three letters traps.
+    public init(_ format: NumberFormat, locale: Locale) {
+        let data = locale.data
+        let system = locale.numberingSystem
+        let (symbols, patterns) = data.numbers(system)
+        var code = ""
+        var which = 0
+        match format.kind {
+            case .Decimal    => { }
+            case .Percent    => { which = 1 }
+            case .Scientific => { which = 2 }
+            case .Currency(let asked) => {
+                which = format.accounting ? 4 : 3
+                code = asked.asciiUppercased()
+                precondition(code.count == 3 && isAlpha(asked.asciiLowercased()), "a currency is three letters, not '\(asked)'")
+            }
+        }
+        let money = which >= 3
+        let pattern = NumberPattern(patterns[which])
+        var least = pattern.minimumFraction
+        var most = pattern.maximumFraction
+        if which == 2 {
+            least = 0
+            most = 3
+        } else if money {
+            least = (listed(currencyDigits, code) ?? "2").toInt() ?? 2
+            most = least
+        }
+        if let asked = format.minimumFractionDigits {
+            least = asked
+            most = most < asked ? asked : most
+        }
+        if let asked = format.maximumFractionDigits {
+            most = asked
+            least = least > asked ? asked : least
+        }
+        self.numberFormat = format
+        self.locale = locale
+        self.pattern = pattern
+        self.digits = (listed(numberingSystems, system) ?? "0123456789").toArray()
+        self.decimal = money ? symbols[9] : symbols[0]
+        self.group = money ? symbols[10] : symbols[1]
+        self.minus = symbols[2]
+        self.plus = symbols[3]
+        self.percent = symbols[4]
+        self.exponent = symbols[6]
+        self.notANumber = symbols[7]
+        self.infinity = symbols[8]
+        self.minimumGrouping = data.text("minimumGrouping").toInt() ?? 1
+        self.currencyCode = code
+        self.currency = currencyText(code, format.currencyDisplay, data)
+        self.minimumFraction = least
+        self.maximumFraction = most
+    }
+
+    /// The number as the locale writes it.
+    public fn format<T: LocalizableNumber>(_ value: T) -> String {
+        if numberFormat.kind == .Scientific {
+            var spec = FormatSpec()
+            spec.kind = .Exponent
+            spec.precision = maximumFraction
+            return localized(withoutZeros(value.format(spec)))
+        }
+        return localized(plainText(value))
+    }
+
+    /// The number's digits, as many as the format writes.
+    fn plainText<T: LocalizableNumber>(_ value: T) -> String {
+        let isPercent = numberFormat.kind == .Percent
+        let shortest = value.plainDigits(places: none, percent: isPercent)
+        let parts = NumberParts(shortest)
+        if parts.fraction.count <= maximumFraction {
+            return withoutZeros(shortest)
+        }
+        return withoutZeros(value.plainDigits(places: maximumFraction, percent: isPercent))
+    }
+
+    /// The digits with their fraction as long as the format wants it: zeros
+    /// taken from its end, or put there.
+    fn withoutZeros(_ text: String) -> String {
+        var parts = NumberParts(text)
+        if !parts.isFinite {
+            return text
+        }
+        while parts.fraction.count > minimumFraction && parts.fraction.hasSuffix("0") {
+            parts.fraction = parts.fraction.slice(from: 0, to: parts.fraction.count - 1)
+        }
+        parts.fraction = parts.fraction.paddedEnd(toWidth: minimumFraction, with: '0')
+        return parts.text
+    }
+
+    /// Plain digits as the locale writes them, every one of them.
+    fn localized(_ text: String) -> String {
+        let parts = NumberParts(text)
+        var body = ""
+        if parts.isFinite {
+            body = grouped(parts.whole.paddedStart(toWidth: numberFormat.minimumIntegerDigits, with: '0'))
+            if !parts.fraction.isEmpty {
+                body += decimal + inDigits(parts.fraction)
+            }
+            if let power = parts.power {
+                body += exponent + (power < 0 ? minus + inDigits("\(0 - power)") : inDigits("\(power)"))
+            }
+        } else {
+            body = parts.isNaN ? notANumber : infinity
+        }
+        let (leading, trailing) = affixes(parts)
+        return leading + body + trailing
+    }
+
+    /// The whole digits in the locale's digits and groups.
+    fn grouped(_ whole: String) -> String {
+        let primary = pattern.primaryGroup
+        let least = numberFormat.grouping == .Always ? 1 : minimumGrouping
+        if numberFormat.grouping == .Never || primary == 0 || whole.count < primary + least {
+            return inDigits(whole)
+        }
+        var pieces: String[>..] = []
+        var end = whole.count - primary
+        pieces.append(inDigits(whole.slice(from: end, to: whole.count)))
+        while end > 0 {
+            let start = end > pattern.secondaryGroup ? end - pattern.secondaryGroup : 0
+            pieces.append(inDigits(whole.slice(from: start, to: end)))
+            end = start
+        }
+        pieces.reverse()
+        return pieces.joined(separator: group)
+    }
+
+    /// ASCII digits as the locale's.
+    fn inDigits(_ text: String) -> String {
+        return localDigits(text, digits)
+    }
+
+    /// What goes before the number and after it.
+    fn affixes(_ parts: NumberParts) -> (String, String) {
+        var sign = ""
+        if parts.negative {
+            sign = minus
+        } else if parts.isNaN {
+            sign = ""
+        } else if numberFormat.sign == .Always {
+            sign = plus
+        } else if numberFormat.sign == .Space {
+            sign = " "
+        }
+        if !sign.isEmpty && pattern.hasNegative && (parts.negative || pattern.negativeLeading.contains(where: { $0.kind == .Minus })
+            || pattern.negativeTrailing.contains(where: { $0.kind == .Minus })) {
+            return (affixText(pattern.negativeLeading, sign, parts, true), affixText(pattern.negativeTrailing, sign, parts, false))
+        }
+        return (sign + affixText(pattern.leading, sign, parts, true), affixText(pattern.trailing, sign, parts, false))
+    }
+
+    /// A leading or trailing, with a space between a currency's letters and the
+    /// digits where the pattern has none (UTS #35, currency spacing).
+    fn affixText(_ pieces: AffixPiece[>..], _ sign: String, _ parts: NumberParts, _ isPrefix: Bool) -> String {
+        var text = ""
+        var i = 0
+        for piece in pieces {
+            let touches = isPrefix ? i == pieces.count - 1 : i == 0
+            let space = touches && parts.isFinite && piece.kind == .Currency && needsSpace(isPrefix) ? "\u{A0}" : ""
+            text += match piece.kind {
+                case .Text     => piece.text
+                case .Minus    => sign
+                case .Plus     => plus
+                case .Percent  => percent
+                case .Currency => isPrefix ? currency + space : space + currency
+            }
+            i += 1
+        }
+        return text
+    }
+
+    /// Whether the currency's end beside the number is neither a symbol nor
+    /// a space already.
+    fn needsSpace(_ isPrefix: Bool) -> Bool {
+        if currency.isEmpty {
+            return false
+        }
+        let edge = isPrefix ? currency.last! : currency.first!
+        return match edge.generalCategory {
+            case .CurrencySymbol, .MathSymbol, .ModifierSymbol, .OtherSymbol, .SpaceSeparator => false
+            case _                                                                            => true
+        }
+    }
+}
+
+/// How the locale writes the currency.
+fn currencyText(_ code: String, _ display: CurrencyDisplay, _ data: LocaleData) -> String {
+    if code.isEmpty || display == .Code {
+        return code
+    }
+    if display == .Narrow {
+        if let found = listed(data.text("currencies.narrow").replacing("|", with: "\n"), code) {
+            return found
+        }
+        if let found = listed(currencyNarrowSymbols, code) {
+            return found
+        }
+    }
+    if let found = listed(data.text("currencies").replacing("|", with: "\n"), code) {
+        return found
+    }
+    return listed(currencySymbols, code) ?? code
+}
+
+/// ASCII digits as the ten given.
+fn localDigits(_ text: String, _ digits: Char[>..]) -> String {
+    if digits[0] == '0' {
+        return text
+    }
+    var written: Char[>..] = []
+    for c in text {
+        written.append(c >= '0' && c <= '9' ? digits[c.codePoint - 48] : c)
+    }
+    return String(written)
+}

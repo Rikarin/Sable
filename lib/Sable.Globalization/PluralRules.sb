@@ -1,0 +1,187 @@
+module Sable.Globalization
+
+/// Which form a language's plural takes for a number: "1 file" but "2
+/// files", and in Czech "2 soubory" but "5 souborů". The CLDR's rules, by
+/// the number as it is written: in English it is "1 file" but "1.0 files".
+/// ECMA-402's Intl.PluralRules.
+///
+/// ```sable
+/// let czech = PluralRules(Locale.of("cs")!)
+/// assert(czech.category(1) == .One && czech.category(3) == .Few)
+/// assert(czech.category(5) == .Other && czech.category(1.5) == .Many)
+///
+/// let order = PluralRules(Locale.of("en")!, ordinal: true)
+/// assert(order.category(1) == .One && order.category(2) == .Two)
+/// assert(order.category(3) == .Few && order.category(11) == .Other)
+/// ```
+public struct PluralRules {
+    /// Whose rules they are.
+    public let locale: Locale
+    let rules: PluralRule[>..]
+
+    /// The locale's rules for how many there are, or (`ordinal`) for which
+    /// one of them it is.
+    public init(_ locale: Locale, ordinal: Bool = false) {
+        var rules: PluralRule[>..] = []
+        for text in locale.data.text(ordinal ? "ordinals" : "plurals").split(';') {
+            if let (name, condition) = text.splitOnce(':') {
+                rules.append(PluralRule(PluralCategory.of(name)!, condition))
+            }
+        }
+        self.locale = locale
+        self.rules = rules
+    }
+
+    /// The categories the language has, `Other` last.
+    ///
+    /// ```sable
+    /// assert(PluralRules(Locale.of("ar")!).categories.count == 6)
+    /// assert(PluralRules(Locale.of("ja")!).categories == [.Other])
+    /// ```
+    public var categories: PluralCategory[>..] {
+        get {
+            var all: PluralCategory[>..] = []
+            for rule in rules {
+                all.append(rule.category)
+            }
+            all.append(.Other)
+            return all
+        }
+    }
+
+    /// The category of the number as the format writes it.
+    ///
+    /// ```sable
+    /// let english = PluralRules(Locale.of("en")!)
+    /// var oneDecimal = NumberFormat.decimal
+    /// oneDecimal.minimumFractionDigits = 1
+    /// assert(english.category(1) == .One)
+    /// assert(english.category(1, format: oneDecimal) == .Other)
+    /// ```
+    public fn category<T: LocalizableNumber>(_ value: T, format: NumberFormat = .decimal) -> PluralCategory {
+        let parts = NumberParts(NumberFormatter(format, locale: locale).plainText(value))
+        if !parts.isFinite {
+            return .Other
+        }
+        let operands = PluralOperands(parts)
+        for rule in rules {
+            if rule.holds(operands) {
+                return rule.category
+            }
+        }
+        return .Other
+    }
+}
+
+/// What a number is, to plural rules (UTS #35 part 3, §5.1.1).
+struct PluralOperands {
+    /// The whole part; of a long one, its last digits past the greatest the
+    /// rules ask of, with nothing lost of any remainder they take.
+    let i: Int
+    /// The digits of the fraction, and how many; then without the zeros at
+    /// its end.
+    let f: Int
+    let v: Int
+    let t: Int
+    let w: Int
+
+    init(_ parts: NumberParts) {
+        let trimmed = parts.fraction.trimmedEnd(where: { $0 == '0' })
+        self.i = lastDigits(parts.whole)
+        self.f = lastDigits(parts.fraction)
+        self.v = parts.fraction.count
+        self.t = lastDigits(trimmed)
+        self.w = trimmed.count
+    }
+}
+
+/// The digits' number; for one of more than fifteen, one as large with the
+/// same last fifteen.
+fn lastDigits(_ text: String) -> Int {
+    if text.count <= 15 {
+        return text.toInt() ?? 0
+    }
+    return 1000000000000000 + text.slice(from: text.count - 15, to: text.count).toInt()!
+}
+
+/// A category, and the condition its numbers meet: any of some groups of
+/// relations that all hold.
+struct PluralRule {
+    let category: PluralCategory
+    let alternatives: PluralRelation[>..][>..]
+
+    init(_ category: PluralCategory, _ condition: String) {
+        var alternatives: PluralRelation[>..][>..] = []
+        for group in condition.split(" or ") {
+            var relations: PluralRelation[>..] = []
+            for relation in group.split(" and ") {
+                relations.append(PluralRelation(relation))
+            }
+            alternatives.append(relations)
+        }
+        self.category = category
+        self.alternatives = alternatives
+    }
+
+    fn holds(_ operands: PluralOperands) -> Bool {
+        for relations in alternatives {
+            if relations.allSatisfy({ $0.holds(operands) }) {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+/// A relation: "n % 100 != 11..19,71".
+struct PluralRelation {
+    let operand: Char
+    let modulus: Int
+    let equal: Bool
+    let ranges: (Int, Int)[>..]
+
+    init(_ text: String) {
+        let words = text.splitWhitespace()
+        var at = 1
+        var modulus = 0
+        if words[1] == "%" {
+            modulus = words[2].toInt()!
+            at = 3
+        }
+        var ranges: (Int, Int)[>..] = []
+        for item in words[at + 1].split(',') {
+            if let (low, high) = item.splitOnce("..") {
+                ranges.append((low.toInt()!, high.toInt()!))
+            } else {
+                ranges.append((item.toInt()!, item.toInt()!))
+            }
+        }
+        self.operand = words[0].first!
+        self.modulus = modulus
+        self.equal = words[at] == "="
+        self.ranges = ranges
+    }
+
+    fn holds(_ operands: PluralOperands) -> Bool {
+        // 'n' with a fraction is no whole number, so in no range. 'c' and
+        // 'e', compact notation's exponent, are 0: there is none here.
+        var value = match operand {
+            case 'i', 'n' => operands.i
+            case 'f'      => operands.f
+            case 't'      => operands.t
+            case 'v'      => operands.v
+            case 'w'      => operands.w
+            case _        => 0
+        }
+        if modulus > 0 {
+            value = value % modulus
+        }
+        var found = false
+        if operand != 'n' || operands.t == 0 {
+            for (low, high) in ranges {
+                found = found || value >= low && value <= high
+            }
+        }
+        return found == equal
+    }
+}

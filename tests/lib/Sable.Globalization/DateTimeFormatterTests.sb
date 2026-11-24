@@ -1,0 +1,160 @@
+module GlobalizationDateTests
+
+import Sable.Globalization
+import Sable.Testing
+import Sable.Time
+
+fn moment() -> LocalDateTime {
+    return LocalDateTime.of(year: 2026, month: 11, day: 7, hour: 13, minute: 5, second: 9, nanosecond: 123456789)!
+}
+
+fn written(_ pattern: String, _ tag: String = "en") -> String {
+    return DateTimeFormatter(pattern: pattern, locale: Locale.of(tag)!).format(moment())
+}
+
+fn at(_ pattern: String, _ seconds: Int, _ tag: String = "en") -> String {
+    let there = OffsetDateTime(local: moment(), offset: UtcOffset.of(seconds: seconds)!)
+    return DateTimeFormatter(pattern: pattern, locale: Locale.of(tag)!).format(there)
+}
+
+fn dateError(_ text: String, _ pattern: String, _ tag: String = "en") -> ParseError? {
+    do {
+        let _ = try DateTimeFormatter(pattern: pattern, locale: Locale.of(tag)!).parseDateTime(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn aPatternsFieldsAreWrittenAsTheCldrSays() {
+    assertEqual(written("y yy yyyy yyyyyy u uuuu"), "2026 26 2026 002026 2026 2026")
+    assertEqual(written("M MM MMM MMMM MMMMM"), "11 11 Nov November N")
+    assertEqual(written("L LL LLL LLLL LLLLL", "cs"), "11 11 lis listopad 11")
+    assertEqual(written("MMMM", "cs"), "listopadu")
+    assertEqual(written("d dd D DDD"), "7 07 311 311")
+    assertEqual(written("E EEE EEEE EEEEE"), "Sat Sat Saturday S")
+    assertEqual(written("ccc cccc ccccc", "fi"), "la lauantai L")
+    assertEqual(written("G"), "AD")
+    assertEqual(written("h hh H HH K KK k kk a"), "1 01 13 13 1 01 13 13 PM")
+    assertEqual(written("m mm s ss"), "5 05 9 09")
+    assertEqual(written("S SSS SSSSSS SSSSSSSSS SSSSSSSSSS"), "1 123 123456 123456789 1234567890")
+    assertEqual(written("h B"), "1 PM")
+    assertEqual(written("'o''clock' h''"), "o'clock 1'")
+    assertEqual(written("dd.MM.yyyy", "ar-EG"), "٠٧.١١.٢٠٢٦")
+    let midnight = TimeOfDay.midnight
+    assertEqual(DateTimeFormatter(pattern: "h K k a", locale: Locale.of("en")!).format(midnight), "12 0 24 AM")
+}
+
+@test
+fn aYearBeforeChristIsOfItsEra() {
+    let date = Date.of(year: -43, month: 3, day: 15)!
+    assertEqual(DateTimeFormatter(pattern: "y G u", locale: Locale.of("en")!).format(date), "44 BC -43")
+    let read = try! DateTimeFormatter(pattern: "d.M.y G", locale: Locale.of("en")!).parseDate("15.3.44 BC")
+    assertEqual(read, date)
+}
+
+@test
+fn anOffsetIsWrittenAsItsLettersSay() {
+    assertEqual(at("z|zzzz|O|OOOO", 3600), "GMT+1|GMT+01:00|GMT+1|GMT+01:00")
+    assertEqual(at("z|zzzz", 0), "GMT|GMT")
+    assertEqual(at("z|zzzz", -12600), "GMT-3:30|GMT-03:30")
+    assertEqual(at("z|zzzz", 19800, "fr"), "UTC+5:30|UTC+05:30")
+    assertEqual(at("x xx xxx", 19800), "+0530 +0530 +05:30")
+    assertEqual(at("x X XXX", 3600), "+01 +01 +01:00")
+    assertEqual(at("x X XX", 0), "+00 Z Z")
+    assertEqual(at("Z ZZZZ", -18000), "-0500 GMT-05:00")
+}
+
+@test
+fn anOffsetThatIsNotThereIsLeftOut() {
+    assertEqual(written("H:mm zzzz"), "13:05")
+    assertEqual(written("H:mm (zzzz)"), "13:05")
+    assertEqual(written("zzzz H:mm"), "13:05")
+    let time = TimeOfDay.of(hour: 13, minute: 5, second: 9)!
+    for tag in Locale.available {
+        let text = time.format(.Full, locale: Locale.of(tag)!)
+        assert(!text.hasSuffix(",") && !text.hasSuffix(" ") && !text.hasPrefix(" ") && !text.contains("("), text)
+    }
+    assertEqual(time.format(.Full, locale: Locale.of("ja")!), "13時05分09秒")
+    assertEqual(time.format(.Long, locale: Locale.of("es")!), "13:05:09")
+}
+
+@test
+fn aMomentIsWrittenAsItsClocksShowIt() {
+    let there = OffsetDateTime(local: moment(), offset: UtcOffset.of(seconds: 7200)!)
+    assertEqual(there.format(date: .Medium, time: .Long, locale: Locale.of("de")!), "07.11.2026, 13:05:09 GMT+2")
+    let zoned = moment().zoned(in: TimeZone.fixed(UtcOffset.of(seconds: 7200)!))
+    assertEqual(zoned.format(date: .Short, time: .Short, locale: Locale.of("de")!), "07.11.26, 13:05")
+    assertEqual(moment().format(date: .Short, time: .Medium, locale: .invariant), "2026-11-07 13:05:09")
+    assertEqual(there.format(date: .Short, time: .Full, locale: .invariant), "2026-11-07 13:05:09+02:00")
+    let formatter = DateTimeFormatter(locale: Locale.of("de")!)
+    assertEqual(formatter.format(moment()), "")
+    assertEqual(formatter.pattern, "")
+}
+
+@test
+fn aDateIsReadWhateverItsNamesCaseAndLength() {
+    let english = DateTimeFormatter(date: .Long, locale: Locale.of("en")!)
+    let wanted = Date.of(year: 2026, month: 11, day: 7)!
+    for text in ["November 7, 2026", "november 7,2026", "NOV 07, 2026", "  November  7 , 2026 "] {
+        assertEqual(try! english.parseDate(text), wanted)
+    }
+    assertEqual(try! Date.parse("7/11/26", .Short, locale: Locale.of("fr")!), wanted)
+    assertEqual(try! Date.parse("٧ نوفمبر ٢٠٢٦", .Long, locale: Locale.of("ar-EG")!), wanted)
+    assertEqual(try! Date.parse("2026年11月7日", .Long, locale: Locale.of("ja")!), wanted)
+    let packed = DateTimeFormatter(pattern: "yyyyMMdd", locale: .invariant)
+    assertEqual(try! packed.parseDate("20261107"), wanted)
+    let ordinal = DateTimeFormatter(pattern: "y-DDD", locale: .invariant)
+    assertEqual(try! ordinal.parseDate("2026-311"), wanted)
+    let old = DateTimeFormatter(pattern: "d/M/yy", locale: .invariant)
+    assertEqual(try! old.parseDate("7/11/50"), Date.of(year: 1950, month: 11, day: 7)!)
+    assertEqual(try! old.parseDate("7/11/49"), Date.of(year: 2049, month: 11, day: 7)!)
+}
+
+@test
+fn aTimeIsReadByItsHalfOrPartOfTheDay() {
+    let english = Locale.of("en")!
+    assertEqual(try! TimeOfDay.parse("12:00 AM", .Short, locale: english), TimeOfDay.midnight)
+    assertEqual(try! TimeOfDay.parse("12:30 pm", .Short, locale: english), TimeOfDay.of(hour: 12, minute: 30)!)
+    assertEqual(try! TimeOfDay.parse("오후 1:05", .Short, locale: Locale.of("ko")!), TimeOfDay.of(hour: 13, minute: 5)!)
+    assertEqual(try! TimeOfDay.parse("下午1:05", .Short, locale: Locale.of("zh-TW")!), TimeOfDay.of(hour: 13, minute: 5)!)
+    assertEqual(dateError("2026-11-07 清晨1:05", "y-MM-dd Bh:mm", "zh-Hant")!, ParseError.Invalid(at: 13))
+    let exact = DateTimeFormatter(pattern: "kk:mm:ss.SSS", locale: english)
+    assertEqual(try! exact.parseTime("24:00:01.5"), TimeOfDay.of(hour: 0, minute: 0, second: 1, nanosecond: 500000000)!)
+    let eleven = DateTimeFormatter(pattern: "K:mm a", locale: english)
+    assertEqual(try! eleven.parseTime("0:05 PM"), TimeOfDay.of(hour: 12, minute: 5)!)
+    let offset = DateTimeFormatter(pattern: "H:mm (z)", locale: english)
+    assertEqual(try! offset.parseTime("13:05 (GMT+1)"), TimeOfDay.of(hour: 13, minute: 5)!)
+    assertEqual(try! offset.parseTime("13:05"), TimeOfDay.of(hour: 13, minute: 5)!)
+}
+
+@test
+fn aTypeReadsWhatItWrites() {
+    for tag in ["en", "de", "ar-EG", "ko", "zh-TW", "hi", "fr-CA"] {
+        let locale = Locale.of(tag)!
+        let text = moment().format(date: .Long, time: .Medium, locale: locale)
+        let whole = LocalDateTime.of(year: 2026, month: 11, day: 7, hour: 13, minute: 5, second: 9)!
+        assertEqual(try! LocalDateTime.parse(text, date: .Long, time: .Medium, locale: locale), whole)
+        assertEqual(try! Date.parse(whole.date.format(.Full, locale: locale), .Full, locale: locale), whole.date)
+        assertEqual(try! TimeOfDay.parse(whole.time.format(.Medium, locale: locale), .Medium, locale: locale), whole.time)
+    }
+}
+
+@test
+fn whatIsNoDateIsRefusedWhereItIsWrong() {
+    assertEqual(dateError("", "y-MM-dd")!, ParseError.Empty)
+    assertEqual(dateError("2026/11/07", "y-MM-dd")!, ParseError.Invalid(at: 4))
+    assertEqual(dateError("2026-xx-07", "y-MM-dd")!, ParseError.InvalidDigit(at: 5))
+    assertEqual(dateError("2026-13-07", "y-MM-dd")!, ParseError.Invalid(at: 5))
+    assertEqual(dateError("2026-02-30", "y-MM-dd")!, ParseError.Invalid(at: 8))
+    assertEqual(dateError("2026-02-03x", "y-MM-dd")!, ParseError.Invalid(at: 10))
+    assertEqual(dateError("2026-02", "y-MM-dd")!, ParseError.Invalid(at: 7))
+    assertEqual(dateError("7 Nvm 2026", "d MMM y")!, ParseError.Invalid(at: 2))
+    assertEqual(dateError("Mon 7 Nov 2026", "E d MMM y")!, ParseError.Invalid(at: 0))
+    assertEqual(dateError("25:00", "H:mm")!, ParseError.Invalid(at: 0))
+    assertEqual(dateError("13:00 PM", "h:mm a")!, ParseError.Invalid(at: 0))
+    assertEqual(dateError("0:00", "k:mm")!, ParseError.Invalid(at: 0))
+    assertEqual(dateError("12:60", "H:mm")!, ParseError.Invalid(at: 3))
+    assertEqual(dateError("12:00:60", "H:mm:ss")!, ParseError.Invalid(at: 6))
+}

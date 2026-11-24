@@ -1,0 +1,111 @@
+module Sable.Globalization
+
+/// A locale's way of writing a list: ECMA-402's Intl.ListFormat.
+///
+/// ```sable
+/// assert(ListFormatter(Locale.of("en")!).format(["a", "b", "c"]) == "a, b, and c")
+/// assert(ListFormatter(Locale.of("de")!).format(["a", "b", "c"]) == "a, b und c")
+/// assert(ListFormatter(Locale.of("ja")!, kind: .Or).format(["甲", "乙"]) == "甲または乙")
+/// assert(ListFormatter(Locale.of("es")!).format(["agujas", "hilo", "imanes"]) == "agujas, hilo e imanes")
+/// ```
+public struct ListFormatter {
+    /// Whose way it is.
+    public let locale: Locale
+    /// What joins the items.
+    public let kind: ListKind
+    /// The patterns of two items, of the first two, of those between and of
+    /// the last two.
+    let patterns: String[>..]
+
+    /// The locale's way of joining items by the kind.
+    public init(_ locale: Locale, kind: ListKind = .And, width: ListWidth = .Wide) {
+        let kindName = match kind {
+            case .And  => "and"
+            case .Or   => "or"
+            case .Unit => "unit"
+        }
+        let widthName = match width {
+            case .Wide   => "wide"
+            case .Short  => "short"
+            case .Narrow => "narrow"
+        }
+        self.locale = locale
+        self.kind = kind
+        self.patterns = locale.data.items("list.\(kindName).\(widthName)")
+    }
+
+    /// The items joined; nothing for none, and one as it is.
+    public fn format<S: Sequence>(_ items: S) throws(S.Failure) -> String where S.Element == String {
+        var all: String[>..] = []
+        for try item in items {
+            all.append(item)
+        }
+        if all.count < 2 {
+            return all.isEmpty ? "" : all[0]
+        }
+        if all.count == 2 {
+            return joined(patterns[0], all[0], all[1])
+        }
+        var text = joined(patterns[1], all[0], all[1])
+        var i = 2
+        while i < all.count - 1 {
+            text = joined(patterns[2], text, all[i])
+            i += 1
+        }
+        return joined(patterns[3], text, all[i])
+    }
+
+    /// The pattern with the two texts in it.
+    fn joined(_ pattern: String, _ first: String, _ second: String) -> String {
+        return filled(beforeSound(pattern, second), first, second)
+    }
+
+    /// The pattern with the word before the second text as that text's
+    /// sound has it: Spanish "y" is "e" before an "i", and "o" is "u"
+    /// before an "o"; Hebrew's "and" takes a hyphen before another script.
+    fn beforeSound(_ pattern: String, _ next: String) -> String {
+        if locale.data.tag.hasPrefix("es") {
+            if pattern.contains(" y {1}") && startsWithI(next) {
+                return pattern.replacing(" y {1}", with: " e {1}")
+            }
+            if pattern.contains(" o {1}") && startsWithO(next) {
+                return pattern.replacing(" o {1}", with: " u {1}")
+            }
+        } else if locale.data.tag == "he" && pattern.contains(" \u{5D5}{1}") {
+            if let c = next.first {
+                if c.codePoint < 0x590 || c.codePoint > 0x5FF {
+                    return pattern.replacing(" \u{5D5}{1}", with: " \u{5D5}-{1}")
+                }
+            }
+        }
+        return pattern
+    }
+}
+
+/// Whether Spanish reads the text with an 'i' first: "hielo" is not.
+fn startsWithI(_ text: String) -> Bool {
+    let lower = text.lowercased()
+    return lower.hasPrefix("i") || lower.hasPrefix("í") || lower.hasPrefix("hi") && !lower.hasPrefix("hia") && !lower.hasPrefix("hie")
+}
+
+/// Whether Spanish reads the text with an 'o' first: "8" and "11" are.
+fn startsWithO(_ text: String) -> Bool {
+    let lower = text.lowercased()
+    return lower.hasPrefix("o") || lower.hasPrefix("ó") || lower.hasPrefix("ho") || lower.hasPrefix("hó") || lower.hasPrefix("8") || lower == "11"
+        || lower.hasPrefix("11 ")
+}
+
+/// A pattern of "{0}" and "{1}" with the texts in their places, whatever
+/// the texts hold.
+fn filled(_ pattern: String, _ zero: String, _ one: String) -> String {
+    var pieces: String[>..] = []
+    var first = true
+    for part in pattern.split("{0}") {
+        if !first {
+            pieces.append(zero)
+        }
+        first = false
+        pieces.append(part.split("{1}").joined(separator: one))
+    }
+    return pieces.joined(separator: "")
+}

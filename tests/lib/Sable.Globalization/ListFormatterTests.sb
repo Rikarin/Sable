@@ -1,0 +1,34 @@
+module GlobalizationListTests
+
+import Sable.Globalization
+import Sable.Testing
+
+@test
+fn aListOfFewIsJustThem() {
+    let formatter = ListFormatter(Locale.of("en")!)
+    let nothing: String[>..] = []
+    assertEqual(formatter.format(nothing), "")
+    assertEqual(formatter.format(["a"]), "a")
+    assertEqual(formatter.format(["a", "b"]), "a and b")
+    assert(formatter.kind == .And && formatter.locale.tag == "en")
+}
+
+@test
+fn anItemMayHoldWhatAPatternDoes() {
+    let formatter = ListFormatter(Locale.of("en")!, kind: .Or)
+    assertEqual(formatter.format(["{1}", "{0}"]), "{1} or {0}")
+    assertEqual(formatter.format(["{0}", "{1}", "{0}"]), "{0}, {1}, or {0}")
+}
+
+@test
+fn anInvariantListIsItsItemsAndCommas() {
+    assertEqual(ListFormatter(.invariant).format(["a", "b", "c"]), "a, b, c")
+}
+
+@test
+fn hebrewHyphenatesBeforeAnotherScript() {
+    let formatter = ListFormatter(Locale.of("he")!)
+    assertEqual(formatter.format(["א", "ב"]), "א וב")
+    assertEqual(formatter.format(["א", "B"]), "א ו-B")
+    assertEqual(formatter.format(["א", ""]), "א ו")
+}

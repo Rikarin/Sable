@@ -1,0 +1,239 @@
+module GlobalizationNumberTests
+
+import Sable.Globalization
+import Sable.Math
+import Sable.Testing
+
+fn locale(_ tag: String) -> Locale {
+    return Locale.of(tag)!
+}
+
+fn spec(_ text: String) -> FormatSpec {
+    return try! FormatSpec.parse(text)
+}
+
+fn readError(_ text: String, _ tag: String, _ format: NumberFormat = .decimal) -> ParseError? {
+    do {
+        let _ = try F64.parse(text, format: format, locale: locale(tag))
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn everyNumberTypeIsWrittenAndReadByALocale() {
+    let german = locale("de")
+    assertEqual((-127 as I8).format(.decimal, locale: german), "-127")
+    assertEqual((12345 as I16).format(.decimal, locale: german), "12.345")
+    assertEqual((12345 as I32).format(.decimal, locale: german), "12.345")
+    assertEqual((12345 as I64).format(.decimal, locale: german), "12.345")
+    assertEqual((12345 as I128).format(.decimal, locale: german), "12.345")
+    assertEqual((255 as U8).format(.decimal, locale: german), "255")
+    assertEqual((12345 as U16).format(.decimal, locale: german), "12.345")
+    assertEqual((12345 as U32).format(.decimal, locale: german), "12.345")
+    assertEqual((18446744073709551615 as U64).format(.decimal, locale: german), "18.446.744.073.709.551.615")
+    assertEqual((12345 as UInt).format(.decimal, locale: german), "12.345")
+    assertEqual((12345 as U128).format(.decimal, locale: german), "12.345")
+    assertEqual(BigInt(1234567).format(.decimal, locale: german), "1.234.567")
+    assertEqual((1.5 as F32).format(.decimal, locale: german), "1,5")
+    assertEqual((1.5 as F16).format(.decimal, locale: german), "1,5")
+    assertEqual((0.1 as F32).format(.decimal, locale: german), "0,1")
+    assertEqual(Decimal(123450, scale: 2).format(.decimal, locale: german), "1.234,5")
+    assertEqual(Decimal(125, scale: 3).format(.percent, locale: german), "12\u{A0}%")
+    assertEqual(5.format(.percent, locale: german), "500\u{A0}%")
+    assertEqual(0.format(.percent, locale: german), "0\u{A0}%")
+    assertEqual(try! BigInt.parse("1.234.567", locale: german), BigInt(1234567))
+    assertEqual(try! Decimal.parse("1.234,50", locale: german), Decimal(123450, scale: 2))
+    assertEqual(try! U8.parse("255", locale: german), 255)
+    let tooLarge: U8? = try? U8.parse("256", locale: german)
+    assert(tooLarge == none)
+}
+
+@test
+fn anOptionSaysHowManyDigitsThereAre() {
+    let english = locale("en")
+    var format = NumberFormat.decimal
+    format.minimumFractionDigits = 2
+    assertEqual(1.format(format, locale: english), "1.00")
+    assertEqual(1.23456.format(format, locale: english), "1.235")
+    format.minimumFractionDigits = 5
+    assertEqual(1.5.format(format, locale: english), "1.50000")
+    format.maximumFractionDigits = 1
+    assertEqual(1.55.format(format, locale: english), "1.6")
+    assertEqual(0.25.format(format, locale: english), "0.2")
+    format = NumberFormat.decimal
+    format.maximumFractionDigits = 0
+    assertEqual(2.5.format(format, locale: english), "2")
+    assertEqual((-0.4).format(format, locale: english), "-0")
+    format.minimumIntegerDigits = 5
+    assertEqual(12.format(format, locale: english), "00,012")
+    format = NumberFormat.currency("EUR")
+    format.maximumFractionDigits = 0
+    assertEqual(12.6.format(format, locale: english), "€13")
+    format.minimumFractionDigits = 3
+    format.maximumFractionDigits = 3
+    assertEqual(12.6.format(format, locale: english), "€12.600")
+    format = NumberFormat.scientific
+    format.maximumFractionDigits = 1
+    assertEqual(123456.format(format, locale: english), "1.2E5")
+    assertEqual(0.00012.format(.scientific, locale: locale("sv")), "1,2×10^−4")
+}
+
+@test
+fn groupsAreTheLocalesOrAsAsked() {
+    assertEqual(1234.format(.decimal, locale: locale("es")), "1234")
+    assertEqual(12345.format(.decimal, locale: locale("es")), "12.345")
+    var format = NumberFormat.decimal
+    format.grouping = .Always
+    assertEqual(1234.format(format, locale: locale("es")), "1.234")
+    format.grouping = .Never
+    assertEqual(1234567.format(format, locale: locale("en")), "1234567")
+    assertEqual(123456789.format(.decimal, locale: locale("en-IN")), "12,34,56,789")
+    assertEqual(123456789.format(.decimal, locale: locale("bn")), "১২,৩৪,৫৬,৭৮৯")
+}
+
+@test
+fn aSignIsWhatTheFormatSays() {
+    var format = NumberFormat.currency("USD")
+    format.sign = .Always
+    assertEqual(5.format(format, locale: locale("en")), "+$5.00")
+    format.accounting = true
+    assertEqual(5.format(format, locale: locale("en")), "+$5.00")
+    assertEqual((-5).format(format, locale: locale("en")), "($5.00)")
+    format = NumberFormat.decimal
+    format.sign = .Space
+    assertEqual(5.format(format, locale: locale("en")), " 5")
+    assertEqual((-5).format(format, locale: locale("sv")), "−5")
+    // The negative pattern has a place for the sign, and '+' takes it.
+    format = NumberFormat.currency("EUR")
+    format.sign = .Always
+    assertEqual((-5).format(format, locale: locale("ar-u-nu-latn")).hasSuffix("5.00\u{A0}€"), true)
+    assertEqual(5.format(format, locale: locale("ar-u-nu-latn")).contains("+"), true)
+}
+
+@test
+fn whatIsNotFiniteHasTheLocalesWords() {
+    let infinite = 1.0 / 0.0
+    assertEqual(infinite.format(.decimal, locale: locale("en")), "∞")
+    assertEqual((0.0 - infinite).format(.decimal, locale: locale("en")), "-∞")
+    assertEqual((infinite - infinite).format(.decimal, locale: locale("en")), "NaN")
+    assertEqual(infinite.format(.currency("CHF"), locale: locale("en")), "CHF∞")
+    assertEqual(infinite.format(.scientific, locale: locale("en")), "∞")
+    assertEqual(infinite.format(.decimal, locale: .invariant), "inf")
+    assert((try! F64.parse("-∞", locale: locale("en"))) == 0.0 - infinite)
+    let nan = try! F64.parse("NaN", locale: locale("en"))
+    assert(nan != nan)
+    let all = try! F64.parse("∞%", format: .percent, locale: locale("en"))
+    assert(all == infinite)
+}
+
+@test
+fn aSpecIsWrittenAsTheLocaleWrites() {
+    let french = locale("fr")
+    assertEqual(1234.5.format(spec(","), locale: french), "1\u{202F}234,5")
+    assertEqual(1234.5.format(spec(""), locale: french), "1234,5")
+    assertEqual(1.0.format(spec(""), locale: french), "1,0")
+    assertEqual(1.5.format(spec(".3"), locale: french), "1,500")
+    assertEqual(0.125.format(spec(".1%"), locale: french), "12,5\u{A0}%")
+    assertEqual((-1.5).format(spec("08"), locale: french), "-00001,5")
+    assertEqual(1.5.format(spec("+"), locale: french), "+1,5")
+    assertEqual(7.format(spec("<5"), locale: french) + "|", "7    |")
+    assertEqual(7.format(spec("*^5"), locale: french), "**7**")
+    assertEqual(255.format(spec("#x"), locale: french), "0xff")
+    assertEqual(255.format(spec("?"), locale: french), "255")
+    assertEqual(1500.0.format(spec(".2e"), locale: french), "1,50E3")
+    assertEqual(123.format(spec(""), locale: locale("ar-EG")), "١٢٣")
+    let nan = 0.0 / 0.0
+    assertEqual(nan.format(spec(""), locale: french), "NaN")
+    assertEqual(nan.format(spec("06"), locale: french), "   NaN")
+}
+
+@test
+fn theInvariantLocaleWritesAsNoLocaleDoes() {
+    let specs = ["", ",", ".2", "+08.3f", ".1%", "e", "g", "*^20,.4", "x"]
+    for text in specs {
+        assertEqual(1234567.format(spec(text), locale: .invariant), 1234567.format(spec(text)))
+    }
+    for text in ["", ",", ".2", "+015.3f", ".1%", "e", "g", "*^20,.4"] {
+        assertEqual((-1234.5678).format(spec(text), locale: .invariant), (-1234.5678).format(spec(text)))
+    }
+    assertEqual(1234567.format(.decimal, locale: .invariant), "1234567")
+    assertEqual(0.5.format(.percent, locale: .invariant), "50%")
+    assertEqual(2.5.format(.currency("EUR"), locale: .invariant), "€2.50")
+}
+
+@test
+fn aNumberIsReadHoweverItsSpacesAndSignsAreWritten() {
+    let french = locale("fr")
+    assertEqual(try! F64.parse("1 234 567,5", locale: french), 1234567.5)
+    assertEqual(try! F64.parse("1\u{202F}234\u{A0}567,5", locale: french), 1234567.5)
+    assertEqual(try! F64.parse("  -12,5 ", locale: french), -12.5)
+    assertEqual(try! F64.parse("\u{2212}12,5", locale: french), -12.5)
+    assertEqual(try! F64.parse("+12,5", locale: french), 12.5)
+    assertEqual(try! F64.parse(",5", locale: french), 0.5)
+    assertEqual(try! F64.parse("5,", locale: french), 5.0)
+    assertEqual(try! F64.parse("1234567", locale: french), 1234567.0)
+    assertEqual(try! F64.parse("1’234.5", locale: locale("de-CH")), 1234.5)
+    assertEqual(try! F64.parse("12,34,567.5", locale: locale("hi")), 1234567.5)
+    assertEqual(try! F64.parse("\u{61C}-١٬٢٣٤٫٥", locale: locale("ar-EG")), -1234.5)
+    assertEqual(try! F64.parse("1234.5", locale: locale("ar-EG-u-nu-latn")), 1234.5)
+    assertEqual(try! F64.parse("1.5E-3", format: .scientific, locale: locale("en")), 0.0015)
+    assertEqual(try! F64.parse("1,5×10^−3", format: .scientific, locale: locale("sv")), 0.0015)
+    assertEqual(try! F64.parse("1.e+3", format: .scientific, locale: locale("en")), 1000.0)
+}
+
+@test
+fn aPercentageIsReadAsTheNumberOfOneItIs() {
+    assertEqual(try! F64.parse("12.5%", format: .percent, locale: locale("en")), 0.125)
+    assertEqual(try! F64.parse("%5", format: .percent, locale: locale("tr")), 0.05)
+    assertEqual(try! F64.parse("-5 %", format: .percent, locale: locale("de")), -0.05)
+    assertEqual(try! Int.parse("500%", format: .percent, locale: locale("en")), 5)
+    assertEqual(readError("12.5", "en", .percent)!, ParseError.Invalid(at: 0))
+}
+
+@test
+fn moneyIsReadWithItsSymbolOrCodeOrNeither() {
+    let money = NumberFormat.currency("CAD")
+    for text in ["CA$12.50", "$12.50", "CAD 12.50", "CAD12.50", "12.50"] {
+        assertEqual(try! F64.parse(text, format: money, locale: locale("en")), 12.5)
+        assertEqual(try! F64.parse("-" + text, format: money, locale: locale("en")), -12.5)
+    }
+    var accounts = money
+    accounts.accounting = true
+    assertEqual(try! F64.parse("(CA$12.50)", format: accounts, locale: locale("en")), -12.5)
+    assertEqual(readError("€12.50", "en", money)!, ParseError.InvalidDigit(at: 0))
+}
+
+@test
+fn whatIsNoNumberIsRefusedWhereItStopsBeingOne() {
+    assertEqual(readError("", "en")!, ParseError.Empty)
+    assertEqual(readError("  ", "en")!, ParseError.Empty)
+    assertEqual(readError("12x", "en")!, ParseError.InvalidDigit(at: 2))
+    assertEqual(readError("-", "en")!, ParseError.InvalidDigit(at: 0))
+    assertEqual(readError("-x", "en")!, ParseError.InvalidDigit(at: 1))
+    assertEqual(readError("1.2.3", "en")!, ParseError.InvalidDigit(at: 3))
+    assertEqual(readError("1.234,5", "en")!, ParseError.InvalidDigit(at: 5))
+    assertEqual(readError(".", "en")!, ParseError.InvalidDigit(at: 1))
+    assertEqual(readError("1e5", "en")!, ParseError.InvalidDigit(at: 1))
+    assertEqual(readError("1E", "en", .scientific)!, ParseError.InvalidDigit(at: 2))
+    assertEqual(readError("1Ex", "en", .scientific)!, ParseError.InvalidDigit(at: 2))
+    // Separators belong where the locale has them.
+    assertEqual(readError("1.5", "de")!, ParseError.Invalid(at: 0))
+    assertEqual(readError("12,34", "en")!, ParseError.Invalid(at: 0))
+    assertEqual(readError("1234,567", "en")!, ParseError.Invalid(at: 0))
+    assertEqual(readError("1,23,456", "en")!, ParseError.Invalid(at: 0))
+    assertEqual(readError(",123", "en")!, ParseError.InvalidDigit(at: 0))
+    assertEqual(readError("1,,234", "en")!, ParseError.InvalidDigit(at: 2))
+}
+
+@test
+fn aFormatterIsMadeOnceForMany() {
+    let formatter = NumberFormatter(.currency("usd"), locale: locale("en"))
+    assertEqual(formatter.format(1), "$1.00")
+    assertEqual(formatter.format(Decimal(199, scale: 2)), "$1.99")
+    let read: Decimal = try! formatter.parse("$1,234.56")
+    assertEqual(read, Decimal(123456, scale: 2))
+    assertEqual(formatter.locale.tag, "en")
+    assert(formatter.numberFormat.kind == .Currency("usd"))
+}

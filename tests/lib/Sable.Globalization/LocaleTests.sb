@@ -1,0 +1,126 @@
+module GlobalizationLocaleTests
+
+import Sable.Globalization
+import Sable.IO
+import Sable.Testing
+import Sable.Time
+
+fn localeError(_ text: String) -> ParseError? {
+    do {
+        let _ = try Locale.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn aTagIsPutInCanonicalForm() {
+    let all = [
+        ("EN", "en"), ("en-us", "en-US"), ("ZH-HANT-tw", "zh-Hant-TW"), ("sr-cyrl", "sr-Cyrl"), ("es-419", "es-419"),
+        ("de-1996-DE-x-y", ""), ("de-DE-1996", "de-DE-1996"), ("sl-rozaj-biske-1994", "sl-1994-biske-rozaj"),
+        ("en-u-attr-nu-latn-ca-buddhist", "en-u-attr-ca-buddhist-nu-latn"), ("en-u-kn-true", "en-u-kn"),
+        ("de-t-en-u-co-phonebk", "de-t-en-u-co-phonebk"), ("en-x-A-b", "en-x-a-b"), ("x-whatever", "und-x-whatever"),
+        ("i-klingon", "tlh"), ("zh-min-nan", "nan"), ("iw-IL", "he-IL"), ("sh", "sr-Latn"), ("sh-Cyrl", "sr-Cyrl"), ("de-DD", "de-DE"),
+        ("en-UK", "en-GB"), ("zh-yue-HK", "yue-HK"), ("en-a-bbb-x-a-ccc", "en-a-bbb-x-a-ccc"), ("und", "und"),
+    ]
+    for (text, tag) in all {
+        assertEqual(Locale.of(text)?.tag ?? "", tag)
+    }
+}
+
+@test
+fn aTagThatIsNoneIsRefusedWhereItIsWrong() {
+    assertEqual(localeError(""), ParseError.Empty)
+    assertEqual(localeError("e"), ParseError.Invalid(at: 0))
+    assertEqual(localeError("engl"), ParseError.Invalid(at: 0))
+    assertEqual(localeError("en--US"), ParseError.Invalid(at: 3))
+    assertEqual(localeError("en_US"), ParseError.Invalid(at: 0))
+    assertEqual(localeError("en-averylongsubtag"), ParseError.Invalid(at: 3))
+    assertEqual(localeError("en-US-GB"), ParseError.Invalid(at: 6))
+    assertEqual(localeError("en-u"), ParseError.Invalid(at: 4))
+    assertEqual(localeError("en-u-a"), ParseError.Invalid(at: 5))
+    assertEqual(localeError("en-x"), ParseError.Invalid(at: 4))
+    assertEqual(localeError("x"), ParseError.Invalid(at: 1))
+    assertEqual(localeError("de-1996-1996"), ParseError.Invalid(at: 8))
+    assertEqual(localeError("en-a-bb-a-cc"), ParseError.Invalid(at: 8))
+    assertEqual(localeError("čs"), ParseError.Invalid(at: 0))
+}
+
+@test
+fn aLocaleNamesItsParts() {
+    let locale = Locale.of("zh-Hant-TW-u-nu-hanidec")!
+    assert(locale.language == "zh" && locale.script! == "Hant" && locale.region! == "TW")
+    assert(locale.keyword("nu")! == "hanidec" && locale.keyword("ca") == none)
+    assertEqual("\(locale)", "zh-Hant-TW-u-nu-hanidec")
+    assertEqual("[\(Locale.of("en")!:>4)]", "[  en]")
+    assertEqual("\(locale:?)", "Locale.of(\"zh-Hant-TW-u-nu-hanidec\")")
+    assertEqual(locale.toString(), locale.tag)
+    let same: [Locale: Int] = [Locale.of("EN-us")!: 1]
+    assert(same[Locale.of("en-US")!]! == 1)
+}
+
+@test
+fn aLocaleWithNoDataOfItsOwnHasItsAncestors() {
+    let all = [
+        ("en-US", "en"), ("en-GB", "en-GB"), ("en-ZW", "en-001"), ("en-Latn-GB", "en-GB"), ("es-AR", "es-419"), ("es-ES", "es"), ("pt-AO", "pt-PT"),
+        ("zh-TW", "zh-Hant"), ("zh-Hant-HK", "zh-Hant"), ("zh-Hans-TW", "zh"), ("zh-CN", "zh"), ("sr-Latn", "und"), ("sr-Latn-RS", "und"), ("sr-RS", "sr"), ("no", "nb"),
+        ("no-NO", "nb"), ("tlh", "und"), ("und", "und"), ("en-Cyrl", "und"),
+    ]
+    for (tag, data) in all {
+        assertEqual(Locale.of(tag)!.dataLocale, data)
+    }
+    for tag in Locale.available {
+        assertEqual(Locale.of(tag)!.dataLocale, tag)
+    }
+    assert(Locale.available.count > 50)
+}
+
+@test
+fn aPosixNameIsALocale() {
+    assertEqual(Locale.fromPosix("en_US.UTF-8")!.tag, "en-US")
+    assertEqual(Locale.fromPosix("de_DE@euro")!.tag, "de-DE")
+    assertEqual(Locale.fromPosix("sr_RS.UTF-8@latin")!.tag, "sr-Latn-RS")
+    assertEqual(Locale.fromPosix("sr@cyrillic")!.tag, "sr-Cyrl")
+    assertEqual(Locale.fromPosix("sr_Latn_RS@latin")!.tag, "sr-Latn-RS")
+    assertEqual(Locale.fromPosix("POSIX")!.tag, "und")
+    assert(Locale.fromPosix("") == none && Locale.fromPosix("!") == none)
+}
+
+@test
+fn theCurrentLocaleIsTheEnvironments() {
+    #if !os(windows)
+    unsafe {
+        Environment.set("LC_ALL", "cs_CZ.UTF-8")
+    }
+    assertEqual(Locale.current.tag, "cs-CZ")
+    unsafe {
+        Environment.set("LC_ALL", "")
+        Environment.set("LC_MESSAGES", "C")
+    }
+    assertEqual(Locale.current.tag, "und")
+    unsafe {
+        Environment.set("LC_MESSAGES", "?")
+    }
+    assertEqual(Locale.current.tag, "und")
+    unsafe {
+        Environment.remove("LC_ALL")
+        Environment.remove("LC_MESSAGES")
+        Environment.remove("LANG")
+    }
+    #endif
+    assert(!Locale.current.tag.isEmpty)
+}
+
+@test
+fn aNumberingSystemIsTheLocalesOrTheOneAsked() {
+    assertEqual(Locale.of("fa")!.numberingSystem, "arabext")
+    assertEqual(Locale.of("hi")!.numberingSystem, "latn")
+    assertEqual(Locale.of("hi-u-nu-native")!.numberingSystem, "deva")
+    assertEqual(Locale.of("hi-u-nu-traditio")!.numberingSystem, "deva")
+    assertEqual(Locale.of("en-u-nu-thai")!.numberingSystem, "thai")
+    assertEqual(Locale.of("en-u-nu-nothing")!.numberingSystem, "latn")
+    assertEqual(Locale.invariant.firstDayOfWeek, Weekday.Monday)
+    assertEqual(Locale.of("ar-EG")!.firstDayOfWeek, Weekday.Saturday)
+    assertEqual(cldrVersion, "49")
+}

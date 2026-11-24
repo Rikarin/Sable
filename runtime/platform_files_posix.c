@@ -462,6 +462,35 @@ static char *os_version(void) {
 #endif
 }
 
+// CoreFoundation is found at run time, so that a program that never asks is
+// not linked with it.
+static char *user_locale(void) {
+    char *found = NULL;
+#if defined(__APPLE__)
+    void *cf = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_LAZY | RTLD_LOCAL);
+    if (cf == NULL) {
+        return NULL;
+    }
+    const void *(*copy_current)(void) = (const void *(*)(void))dlsym(cf, "CFLocaleCopyCurrent");
+    const void *(*identifier)(const void *) = (const void *(*)(const void *))dlsym(cf, "CFLocaleGetIdentifier");
+    unsigned char (*get_text)(const void *, char *, long, uint32_t) =
+        (unsigned char (*)(const void *, char *, long, uint32_t))dlsym(cf, "CFStringGetCString");
+    void (*release)(const void *) = (void (*)(const void *))dlsym(cf, "CFRelease");
+    if (copy_current != NULL && identifier != NULL && get_text != NULL && release != NULL) {
+        const void *locale = copy_current();
+        if (locale != NULL) {
+            char text[256];
+            if (get_text(identifier(locale), text, sizeof text, 0x08000100)) { // UTF-8
+                found = strdup(text);
+            }
+            release(locale);
+        }
+    }
+    dlclose(cf);
+#endif
+    return found;
+}
+
 static int64_t page_size(void) {
 #if defined(__wasi__)
     return 65536;

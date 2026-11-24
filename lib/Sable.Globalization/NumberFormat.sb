@@ -1,0 +1,59 @@
+module Sable.Globalization
+
+/// What a number is written as by a locale: a plain number, a percentage,
+/// money or scientific notation, and how many digits, separators and signs
+/// it has. .NET's NumberFormatInfo and ECMA-402's Intl.NumberFormat options;
+/// what is not said is the locale's.
+///
+/// ```sable
+/// var price = NumberFormat.currency("JPY")
+/// assert(1234.5.format(price, locale: Locale.of("en")!) == "¥1,234")
+/// price.currencyDisplay = .Code
+/// assert(1234.5.format(price, locale: Locale.of("en")!) == "JPY\u{A0}1,234")
+///
+/// var signed = NumberFormat.percent
+/// signed.sign = .Always
+/// signed.maximumFractionDigits = 1
+/// assert(0.1234.format(signed, locale: Locale.of("sv")!) == "+12,3\u{A0}%")
+/// ```
+public struct NumberFormat {
+    /// What the number is.
+    public var kind: NumberKind
+    /// The fewest digits written after the point; none is the kind's own,
+    /// none of them for a plain number and the currency's for money.
+    public var minimumFractionDigits: Int? = none
+    /// The most digits written after the point, the number rounded to them,
+    /// to nearest with ties to even; none is three for a plain number, none
+    /// for a percentage, and the currency's for money.
+    public var maximumFractionDigits: Int? = none
+    /// The fewest digits written before the point, zeros making them up.
+    public var minimumIntegerDigits: Int = 1
+    /// When digits are put in groups.
+    public var grouping: NumberGrouping = .Automatic
+    /// Which numbers get a sign.
+    public var sign: FormatSign = .Negative
+    /// How money's currency is written.
+    public var currencyDisplay: CurrencyDisplay = .Symbol
+    /// Whether negative money is written as accounts write it, in
+    /// parentheses in many locales.
+    public var accounting: Bool = false
+
+    /// The format of the kind, all else the locale's.
+    public init(_ kind: NumberKind) {
+        self.kind = kind
+    }
+
+    /// A plain number.
+    public static var decimal: NumberFormat => NumberFormat(.Decimal)
+
+    /// A percentage: 0.5 as "50%".
+    public static var percent: NumberFormat => NumberFormat(.Percent)
+
+    /// Scientific notation: "1.234E3".
+    public static var scientific: NumberFormat => NumberFormat(.Scientific)
+
+    /// Money, in the currency of the ISO 4217 code.
+    public static fn currency(_ code: String) -> NumberFormat {
+        return NumberFormat(.Currency(code))
+    }
+}

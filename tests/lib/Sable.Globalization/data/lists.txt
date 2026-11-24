@@ -1,0 +1,2250 @@
+# Written by tools/locale-tests.mjs from Node's Intl (ICU 79.1, CLDR 49.0); do not edit.
+en	conjunction	long	A	A
+en	conjunction	long	A|B	A and B
+en	conjunction	long	A|B|C	A, B, and C
+en	conjunction	long	A|B|C|D	A, B, C, and D
+en	conjunction	short	A	A
+en	conjunction	short	A|B	A & B
+en	conjunction	short	A|B|C	A, B, & C
+en	conjunction	short	A|B|C|D	A, B, C, & D
+en	conjunction	narrow	A	A
+en	conjunction	narrow	A|B	A, B
+en	conjunction	narrow	A|B|C	A, B, C
+en	conjunction	narrow	A|B|C|D	A, B, C, D
+en	disjunction	long	A	A
+en	disjunction	long	A|B	A or B
+en	disjunction	long	A|B|C	A, B, or C
+en	disjunction	long	A|B|C|D	A, B, C, or D
+en	disjunction	short	A	A
+en	disjunction	short	A|B	A or B
+en	disjunction	short	A|B|C	A, B, or C
+en	disjunction	short	A|B|C|D	A, B, C, or D
+en	disjunction	narrow	A	A
+en	disjunction	narrow	A|B	A or B
+en	disjunction	narrow	A|B|C	A, B, or C
+en	disjunction	narrow	A|B|C|D	A, B, C, or D
+en	unit	long	A	A
+en	unit	long	A|B	A, B
+en	unit	long	A|B|C	A, B, C
+en	unit	long	A|B|C|D	A, B, C, D
+en	unit	short	A	A
+en	unit	short	A|B	A, B
+en	unit	short	A|B|C	A, B, C
+en	unit	short	A|B|C|D	A, B, C, D
+en	unit	narrow	A	A
+en	unit	narrow	A|B	A B
+en	unit	narrow	A|B|C	A B C
+en	unit	narrow	A|B|C|D	A B C D
+en-001	conjunction	long	A	A
+en-001	conjunction	long	A|B	A and B
+en-001	conjunction	long	A|B|C	A, B and C
+en-001	conjunction	long	A|B|C|D	A, B, C and D
+en-001	conjunction	short	A	A
+en-001	conjunction	short	A|B	A and B
+en-001	conjunction	short	A|B|C	A, B and C
+en-001	conjunction	short	A|B|C|D	A, B, C and D
+en-001	conjunction	narrow	A	A
+en-001	conjunction	narrow	A|B	A, B
+en-001	conjunction	narrow	A|B|C	A, B, C
+en-001	conjunction	narrow	A|B|C|D	A, B, C, D
+en-001	disjunction	long	A	A
+en-001	disjunction	long	A|B	A or B
+en-001	disjunction	long	A|B|C	A, B or C
+en-001	disjunction	long	A|B|C|D	A, B, C or D
+en-001	disjunction	short	A	A
+en-001	disjunction	short	A|B	A or B
+en-001	disjunction	short	A|B|C	A, B or C
+en-001	disjunction	short	A|B|C|D	A, B, C or D
+en-001	disjunction	narrow	A	A
+en-001	disjunction	narrow	A|B	A or B
+en-001	disjunction	narrow	A|B|C	A, B or C
+en-001	disjunction	narrow	A|B|C|D	A, B, C or D
+en-001	unit	long	A	A
+en-001	unit	long	A|B	A, B
+en-001	unit	long	A|B|C	A, B, C
+en-001	unit	long	A|B|C|D	A, B, C, D
+en-001	unit	short	A	A
+en-001	unit	short	A|B	A, B
+en-001	unit	short	A|B|C	A, B, C
+en-001	unit	short	A|B|C|D	A, B, C, D
+en-001	unit	narrow	A	A
+en-001	unit	narrow	A|B	A B
+en-001	unit	narrow	A|B|C	A B C
+en-001	unit	narrow	A|B|C|D	A B C D
+en-AU	conjunction	long	A	A
+en-AU	conjunction	long	A|B	A and B
+en-AU	conjunction	long	A|B|C	A, B and C
+en-AU	conjunction	long	A|B|C|D	A, B, C and D
+en-AU	conjunction	short	A	A
+en-AU	conjunction	short	A|B	A and B
+en-AU	conjunction	short	A|B|C	A, B and C
+en-AU	conjunction	short	A|B|C|D	A, B, C and D
+en-AU	conjunction	narrow	A	A
+en-AU	conjunction	narrow	A|B	A, B
+en-AU	conjunction	narrow	A|B|C	A, B, C
+en-AU	conjunction	narrow	A|B|C|D	A, B, C, D
+en-AU	disjunction	long	A	A
+en-AU	disjunction	long	A|B	A or B
+en-AU	disjunction	long	A|B|C	A, B or C
+en-AU	disjunction	long	A|B|C|D	A, B, C or D
+en-AU	disjunction	short	A	A
+en-AU	disjunction	short	A|B	A or B
+en-AU	disjunction	short	A|B|C	A, B or C
+en-AU	disjunction	short	A|B|C|D	A, B, C or D
+en-AU	disjunction	narrow	A	A
+en-AU	disjunction	narrow	A|B	A or B
+en-AU	disjunction	narrow	A|B|C	A, B or C
+en-AU	disjunction	narrow	A|B|C|D	A, B, C or D
+en-AU	unit	long	A	A
+en-AU	unit	long	A|B	A, B
+en-AU	unit	long	A|B|C	A, B, C
+en-AU	unit	long	A|B|C|D	A, B, C, D
+en-AU	unit	short	A	A
+en-AU	unit	short	A|B	A, B
+en-AU	unit	short	A|B|C	A, B, C
+en-AU	unit	short	A|B|C|D	A, B, C, D
+en-AU	unit	narrow	A	A
+en-AU	unit	narrow	A|B	A B
+en-AU	unit	narrow	A|B|C	A B C
+en-AU	unit	narrow	A|B|C|D	A B C D
+en-CA	conjunction	long	A	A
+en-CA	conjunction	long	A|B	A and B
+en-CA	conjunction	long	A|B|C	A, B and C
+en-CA	conjunction	long	A|B|C|D	A, B, C and D
+en-CA	conjunction	short	A	A
+en-CA	conjunction	short	A|B	A and B
+en-CA	conjunction	short	A|B|C	A, B and C
+en-CA	conjunction	short	A|B|C|D	A, B, C and D
+en-CA	conjunction	narrow	A	A
+en-CA	conjunction	narrow	A|B	A, B
+en-CA	conjunction	narrow	A|B|C	A, B, C
+en-CA	conjunction	narrow	A|B|C|D	A, B, C, D
+en-CA	disjunction	long	A	A
+en-CA	disjunction	long	A|B	A or B
+en-CA	disjunction	long	A|B|C	A, B or C
+en-CA	disjunction	long	A|B|C|D	A, B, C or D
+en-CA	disjunction	short	A	A
+en-CA	disjunction	short	A|B	A or B
+en-CA	disjunction	short	A|B|C	A, B or C
+en-CA	disjunction	short	A|B|C|D	A, B, C or D
+en-CA	disjunction	narrow	A	A
+en-CA	disjunction	narrow	A|B	A or B
+en-CA	disjunction	narrow	A|B|C	A, B or C
+en-CA	disjunction	narrow	A|B|C|D	A, B, C or D
+en-CA	unit	long	A	A
+en-CA	unit	long	A|B	A, B
+en-CA	unit	long	A|B|C	A, B, C
+en-CA	unit	long	A|B|C|D	A, B, C, D
+en-CA	unit	short	A	A
+en-CA	unit	short	A|B	A, B
+en-CA	unit	short	A|B|C	A, B, C
+en-CA	unit	short	A|B|C|D	A, B, C, D
+en-CA	unit	narrow	A	A
+en-CA	unit	narrow	A|B	A B
+en-CA	unit	narrow	A|B|C	A B C
+en-CA	unit	narrow	A|B|C|D	A B C D
+en-GB	conjunction	long	A	A
+en-GB	conjunction	long	A|B	A and B
+en-GB	conjunction	long	A|B|C	A, B and C
+en-GB	conjunction	long	A|B|C|D	A, B, C and D
+en-GB	conjunction	short	A	A
+en-GB	conjunction	short	A|B	A and B
+en-GB	conjunction	short	A|B|C	A, B and C
+en-GB	conjunction	short	A|B|C|D	A, B, C and D
+en-GB	conjunction	narrow	A	A
+en-GB	conjunction	narrow	A|B	A, B
+en-GB	conjunction	narrow	A|B|C	A, B, C
+en-GB	conjunction	narrow	A|B|C|D	A, B, C, D
+en-GB	disjunction	long	A	A
+en-GB	disjunction	long	A|B	A or B
+en-GB	disjunction	long	A|B|C	A, B or C
+en-GB	disjunction	long	A|B|C|D	A, B, C or D
+en-GB	disjunction	short	A	A
+en-GB	disjunction	short	A|B	A or B
+en-GB	disjunction	short	A|B|C	A, B or C
+en-GB	disjunction	short	A|B|C|D	A, B, C or D
+en-GB	disjunction	narrow	A	A
+en-GB	disjunction	narrow	A|B	A or B
+en-GB	disjunction	narrow	A|B|C	A, B or C
+en-GB	disjunction	narrow	A|B|C|D	A, B, C or D
+en-GB	unit	long	A	A
+en-GB	unit	long	A|B	A, B
+en-GB	unit	long	A|B|C	A, B, C
+en-GB	unit	long	A|B|C|D	A, B, C, D
+en-GB	unit	short	A	A
+en-GB	unit	short	A|B	A, B
+en-GB	unit	short	A|B|C	A, B, C
+en-GB	unit	short	A|B|C|D	A, B, C, D
+en-GB	unit	narrow	A	A
+en-GB	unit	narrow	A|B	A B
+en-GB	unit	narrow	A|B|C	A B C
+en-GB	unit	narrow	A|B|C|D	A B C D
+en-IE	conjunction	long	A	A
+en-IE	conjunction	long	A|B	A and B
+en-IE	conjunction	long	A|B|C	A, B and C
+en-IE	conjunction	long	A|B|C|D	A, B, C and D
+en-IE	conjunction	short	A	A
+en-IE	conjunction	short	A|B	A and B
+en-IE	conjunction	short	A|B|C	A, B and C
+en-IE	conjunction	short	A|B|C|D	A, B, C and D
+en-IE	conjunction	narrow	A	A
+en-IE	conjunction	narrow	A|B	A, B
+en-IE	conjunction	narrow	A|B|C	A, B, C
+en-IE	conjunction	narrow	A|B|C|D	A, B, C, D
+en-IE	disjunction	long	A	A
+en-IE	disjunction	long	A|B	A or B
+en-IE	disjunction	long	A|B|C	A, B or C
+en-IE	disjunction	long	A|B|C|D	A, B, C or D
+en-IE	disjunction	short	A	A
+en-IE	disjunction	short	A|B	A or B
+en-IE	disjunction	short	A|B|C	A, B or C
+en-IE	disjunction	short	A|B|C|D	A, B, C or D
+en-IE	disjunction	narrow	A	A
+en-IE	disjunction	narrow	A|B	A or B
+en-IE	disjunction	narrow	A|B|C	A, B or C
+en-IE	disjunction	narrow	A|B|C|D	A, B, C or D
+en-IE	unit	long	A	A
+en-IE	unit	long	A|B	A, B
+en-IE	unit	long	A|B|C	A, B, C
+en-IE	unit	long	A|B|C|D	A, B, C, D
+en-IE	unit	short	A	A
+en-IE	unit	short	A|B	A, B
+en-IE	unit	short	A|B|C	A, B, C
+en-IE	unit	short	A|B|C|D	A, B, C, D
+en-IE	unit	narrow	A	A
+en-IE	unit	narrow	A|B	A B
+en-IE	unit	narrow	A|B|C	A B C
+en-IE	unit	narrow	A|B|C|D	A B C D
+en-IN	conjunction	long	A	A
+en-IN	conjunction	long	A|B	A and B
+en-IN	conjunction	long	A|B|C	A, B and C
+en-IN	conjunction	long	A|B|C|D	A, B, C and D
+en-IN	conjunction	short	A	A
+en-IN	conjunction	short	A|B	A and B
+en-IN	conjunction	short	A|B|C	A, B and C
+en-IN	conjunction	short	A|B|C|D	A, B, C and D
+en-IN	conjunction	narrow	A	A
+en-IN	conjunction	narrow	A|B	A, B
+en-IN	conjunction	narrow	A|B|C	A, B, C
+en-IN	conjunction	narrow	A|B|C|D	A, B, C, D
+en-IN	disjunction	long	A	A
+en-IN	disjunction	long	A|B	A or B
+en-IN	disjunction	long	A|B|C	A, B or C
+en-IN	disjunction	long	A|B|C|D	A, B, C or D
+en-IN	disjunction	short	A	A
+en-IN	disjunction	short	A|B	A or B
+en-IN	disjunction	short	A|B|C	A, B or C
+en-IN	disjunction	short	A|B|C|D	A, B, C or D
+en-IN	disjunction	narrow	A	A
+en-IN	disjunction	narrow	A|B	A or B
+en-IN	disjunction	narrow	A|B|C	A, B or C
+en-IN	disjunction	narrow	A|B|C|D	A, B, C or D
+en-IN	unit	long	A	A
+en-IN	unit	long	A|B	A, B
+en-IN	unit	long	A|B|C	A, B, C
+en-IN	unit	long	A|B|C|D	A, B, C, D
+en-IN	unit	short	A	A
+en-IN	unit	short	A|B	A, B
+en-IN	unit	short	A|B|C	A, B, C
+en-IN	unit	short	A|B|C|D	A, B, C, D
+en-IN	unit	narrow	A	A
+en-IN	unit	narrow	A|B	A B
+en-IN	unit	narrow	A|B|C	A B C
+en-IN	unit	narrow	A|B|C|D	A B C D
+en-NZ	conjunction	long	A	A
+en-NZ	conjunction	long	A|B	A and B
+en-NZ	conjunction	long	A|B|C	A, B and C
+en-NZ	conjunction	long	A|B|C|D	A, B, C and D
+en-NZ	conjunction	short	A	A
+en-NZ	conjunction	short	A|B	A and B
+en-NZ	conjunction	short	A|B|C	A, B and C
+en-NZ	conjunction	short	A|B|C|D	A, B, C and D
+en-NZ	conjunction	narrow	A	A
+en-NZ	conjunction	narrow	A|B	A, B
+en-NZ	conjunction	narrow	A|B|C	A, B, C
+en-NZ	conjunction	narrow	A|B|C|D	A, B, C, D
+en-NZ	disjunction	long	A	A
+en-NZ	disjunction	long	A|B	A or B
+en-NZ	disjunction	long	A|B|C	A, B or C
+en-NZ	disjunction	long	A|B|C|D	A, B, C or D
+en-NZ	disjunction	short	A	A
+en-NZ	disjunction	short	A|B	A or B
+en-NZ	disjunction	short	A|B|C	A, B or C
+en-NZ	disjunction	short	A|B|C|D	A, B, C or D
+en-NZ	disjunction	narrow	A	A
+en-NZ	disjunction	narrow	A|B	A or B
+en-NZ	disjunction	narrow	A|B|C	A, B or C
+en-NZ	disjunction	narrow	A|B|C|D	A, B, C or D
+en-NZ	unit	long	A	A
+en-NZ	unit	long	A|B	A, B
+en-NZ	unit	long	A|B|C	A, B, C
+en-NZ	unit	long	A|B|C|D	A, B, C, D
+en-NZ	unit	short	A	A
+en-NZ	unit	short	A|B	A, B
+en-NZ	unit	short	A|B|C	A, B, C
+en-NZ	unit	short	A|B|C|D	A, B, C, D
+en-NZ	unit	narrow	A	A
+en-NZ	unit	narrow	A|B	A B
+en-NZ	unit	narrow	A|B|C	A B C
+en-NZ	unit	narrow	A|B|C|D	A B C D
+en-ZA	conjunction	long	A	A
+en-ZA	conjunction	long	A|B	A and B
+en-ZA	conjunction	long	A|B|C	A, B and C
+en-ZA	conjunction	long	A|B|C|D	A, B, C and D
+en-ZA	conjunction	short	A	A
+en-ZA	conjunction	short	A|B	A and B
+en-ZA	conjunction	short	A|B|C	A, B and C
+en-ZA	conjunction	short	A|B|C|D	A, B, C and D
+en-ZA	conjunction	narrow	A	A
+en-ZA	conjunction	narrow	A|B	A, B
+en-ZA	conjunction	narrow	A|B|C	A, B, C
+en-ZA	conjunction	narrow	A|B|C|D	A, B, C, D
+en-ZA	disjunction	long	A	A
+en-ZA	disjunction	long	A|B	A or B
+en-ZA	disjunction	long	A|B|C	A, B or C
+en-ZA	disjunction	long	A|B|C|D	A, B, C or D
+en-ZA	disjunction	short	A	A
+en-ZA	disjunction	short	A|B	A or B
+en-ZA	disjunction	short	A|B|C	A, B or C
+en-ZA	disjunction	short	A|B|C|D	A, B, C or D
+en-ZA	disjunction	narrow	A	A
+en-ZA	disjunction	narrow	A|B	A or B
+en-ZA	disjunction	narrow	A|B|C	A, B or C
+en-ZA	disjunction	narrow	A|B|C|D	A, B, C or D
+en-ZA	unit	long	A	A
+en-ZA	unit	long	A|B	A, B
+en-ZA	unit	long	A|B|C	A, B, C
+en-ZA	unit	long	A|B|C|D	A, B, C, D
+en-ZA	unit	short	A	A
+en-ZA	unit	short	A|B	A, B
+en-ZA	unit	short	A|B|C	A, B, C
+en-ZA	unit	short	A|B|C|D	A, B, C, D
+en-ZA	unit	narrow	A	A
+en-ZA	unit	narrow	A|B	A B
+en-ZA	unit	narrow	A|B|C	A B C
+en-ZA	unit	narrow	A|B|C|D	A B C D
+de	conjunction	long	A	A
+de	conjunction	long	A|B	A und B
+de	conjunction	long	A|B|C	A, B und C
+de	conjunction	long	A|B|C|D	A, B, C und D
+de	conjunction	short	A	A
+de	conjunction	short	A|B	A und B
+de	conjunction	short	A|B|C	A, B und C
+de	conjunction	short	A|B|C|D	A, B, C und D
+de	conjunction	narrow	A	A
+de	conjunction	narrow	A|B	A und B
+de	conjunction	narrow	A|B|C	A, B und C
+de	conjunction	narrow	A|B|C|D	A, B, C und D
+de	disjunction	long	A	A
+de	disjunction	long	A|B	A oder B
+de	disjunction	long	A|B|C	A, B oder C
+de	disjunction	long	A|B|C|D	A, B, C oder D
+de	disjunction	short	A	A
+de	disjunction	short	A|B	A oder B
+de	disjunction	short	A|B|C	A, B oder C
+de	disjunction	short	A|B|C|D	A, B, C oder D
+de	disjunction	narrow	A	A
+de	disjunction	narrow	A|B	A oder B
+de	disjunction	narrow	A|B|C	A, B oder C
+de	disjunction	narrow	A|B|C|D	A, B, C oder D
+de	unit	long	A	A
+de	unit	long	A|B	A, B
+de	unit	long	A|B|C	A, B und C
+de	unit	long	A|B|C|D	A, B, C und D
+de	unit	short	A	A
+de	unit	short	A|B	A, B
+de	unit	short	A|B|C	A, B und C
+de	unit	short	A|B|C|D	A, B, C und D
+de	unit	narrow	A	A
+de	unit	narrow	A|B	A, B
+de	unit	narrow	A|B|C	A, B und C
+de	unit	narrow	A|B|C|D	A, B, C und D
+de-AT	conjunction	long	A	A
+de-AT	conjunction	long	A|B	A und B
+de-AT	conjunction	long	A|B|C	A, B und C
+de-AT	conjunction	long	A|B|C|D	A, B, C und D
+de-AT	conjunction	short	A	A
+de-AT	conjunction	short	A|B	A und B
+de-AT	conjunction	short	A|B|C	A, B und C
+de-AT	conjunction	short	A|B|C|D	A, B, C und D
+de-AT	conjunction	narrow	A	A
+de-AT	conjunction	narrow	A|B	A und B
+de-AT	conjunction	narrow	A|B|C	A, B und C
+de-AT	conjunction	narrow	A|B|C|D	A, B, C und D
+de-AT	disjunction	long	A	A
+de-AT	disjunction	long	A|B	A oder B
+de-AT	disjunction	long	A|B|C	A, B oder C
+de-AT	disjunction	long	A|B|C|D	A, B, C oder D
+de-AT	disjunction	short	A	A
+de-AT	disjunction	short	A|B	A oder B
+de-AT	disjunction	short	A|B|C	A, B oder C
+de-AT	disjunction	short	A|B|C|D	A, B, C oder D
+de-AT	disjunction	narrow	A	A
+de-AT	disjunction	narrow	A|B	A oder B
+de-AT	disjunction	narrow	A|B|C	A, B oder C
+de-AT	disjunction	narrow	A|B|C|D	A, B, C oder D
+de-AT	unit	long	A	A
+de-AT	unit	long	A|B	A, B
+de-AT	unit	long	A|B|C	A, B und C
+de-AT	unit	long	A|B|C|D	A, B, C und D
+de-AT	unit	short	A	A
+de-AT	unit	short	A|B	A, B
+de-AT	unit	short	A|B|C	A, B und C
+de-AT	unit	short	A|B|C|D	A, B, C und D
+de-AT	unit	narrow	A	A
+de-AT	unit	narrow	A|B	A, B
+de-AT	unit	narrow	A|B|C	A, B und C
+de-AT	unit	narrow	A|B|C|D	A, B, C und D
+de-CH	conjunction	long	A	A
+de-CH	conjunction	long	A|B	A und B
+de-CH	conjunction	long	A|B|C	A, B und C
+de-CH	conjunction	long	A|B|C|D	A, B, C und D
+de-CH	conjunction	short	A	A
+de-CH	conjunction	short	A|B	A und B
+de-CH	conjunction	short	A|B|C	A, B und C
+de-CH	conjunction	short	A|B|C|D	A, B, C und D
+de-CH	conjunction	narrow	A	A
+de-CH	conjunction	narrow	A|B	A und B
+de-CH	conjunction	narrow	A|B|C	A, B und C
+de-CH	conjunction	narrow	A|B|C|D	A, B, C und D
+de-CH	disjunction	long	A	A
+de-CH	disjunction	long	A|B	A oder B
+de-CH	disjunction	long	A|B|C	A, B oder C
+de-CH	disjunction	long	A|B|C|D	A, B, C oder D
+de-CH	disjunction	short	A	A
+de-CH	disjunction	short	A|B	A oder B
+de-CH	disjunction	short	A|B|C	A, B oder C
+de-CH	disjunction	short	A|B|C|D	A, B, C oder D
+de-CH	disjunction	narrow	A	A
+de-CH	disjunction	narrow	A|B	A oder B
+de-CH	disjunction	narrow	A|B|C	A, B oder C
+de-CH	disjunction	narrow	A|B|C|D	A, B, C oder D
+de-CH	unit	long	A	A
+de-CH	unit	long	A|B	A, B
+de-CH	unit	long	A|B|C	A, B und C
+de-CH	unit	long	A|B|C|D	A, B, C und D
+de-CH	unit	short	A	A
+de-CH	unit	short	A|B	A, B
+de-CH	unit	short	A|B|C	A, B und C
+de-CH	unit	short	A|B|C|D	A, B, C und D
+de-CH	unit	narrow	A	A
+de-CH	unit	narrow	A|B	A, B
+de-CH	unit	narrow	A|B|C	A, B und C
+de-CH	unit	narrow	A|B|C|D	A, B, C und D
+fr	conjunction	long	A	A
+fr	conjunction	long	A|B	A et B
+fr	conjunction	long	A|B|C	A, B et C
+fr	conjunction	long	A|B|C|D	A, B, C et D
+fr	conjunction	short	A	A
+fr	conjunction	short	A|B	A et B
+fr	conjunction	short	A|B|C	A, B et C
+fr	conjunction	short	A|B|C|D	A, B, C et D
+fr	conjunction	narrow	A	A
+fr	conjunction	narrow	A|B	A, B
+fr	conjunction	narrow	A|B|C	A, B, C
+fr	conjunction	narrow	A|B|C|D	A, B, C, D
+fr	disjunction	long	A	A
+fr	disjunction	long	A|B	A ou B
+fr	disjunction	long	A|B|C	A, B ou C
+fr	disjunction	long	A|B|C|D	A, B, C ou D
+fr	disjunction	short	A	A
+fr	disjunction	short	A|B	A ou B
+fr	disjunction	short	A|B|C	A, B ou C
+fr	disjunction	short	A|B|C|D	A, B, C ou D
+fr	disjunction	narrow	A	A
+fr	disjunction	narrow	A|B	A ou B
+fr	disjunction	narrow	A|B|C	A, B ou C
+fr	disjunction	narrow	A|B|C|D	A, B, C ou D
+fr	unit	long	A	A
+fr	unit	long	A|B	A et B
+fr	unit	long	A|B|C	A, B et C
+fr	unit	long	A|B|C|D	A, B, C et D
+fr	unit	short	A	A
+fr	unit	short	A|B	A et B
+fr	unit	short	A|B|C	A, B et C
+fr	unit	short	A|B|C|D	A, B, C et D
+fr	unit	narrow	A	A
+fr	unit	narrow	A|B	A B
+fr	unit	narrow	A|B|C	A B C
+fr	unit	narrow	A|B|C|D	A B C D
+fr-CA	conjunction	long	A	A
+fr-CA	conjunction	long	A|B	A et B
+fr-CA	conjunction	long	A|B|C	A, B et C
+fr-CA	conjunction	long	A|B|C|D	A, B, C et D
+fr-CA	conjunction	short	A	A
+fr-CA	conjunction	short	A|B	A et B
+fr-CA	conjunction	short	A|B|C	A, B et C
+fr-CA	conjunction	short	A|B|C|D	A, B, C et D
+fr-CA	conjunction	narrow	A	A
+fr-CA	conjunction	narrow	A|B	A, B
+fr-CA	conjunction	narrow	A|B|C	A, B, C
+fr-CA	conjunction	narrow	A|B|C|D	A, B, C, D
+fr-CA	disjunction	long	A	A
+fr-CA	disjunction	long	A|B	A ou B
+fr-CA	disjunction	long	A|B|C	A, B ou C
+fr-CA	disjunction	long	A|B|C|D	A, B, C ou D
+fr-CA	disjunction	short	A	A
+fr-CA	disjunction	short	A|B	A ou B
+fr-CA	disjunction	short	A|B|C	A, B ou C
+fr-CA	disjunction	short	A|B|C|D	A, B, C ou D
+fr-CA	disjunction	narrow	A	A
+fr-CA	disjunction	narrow	A|B	A ou B
+fr-CA	disjunction	narrow	A|B|C	A, B ou C
+fr-CA	disjunction	narrow	A|B|C|D	A, B, C ou D
+fr-CA	unit	long	A	A
+fr-CA	unit	long	A|B	A et B
+fr-CA	unit	long	A|B|C	A, B et C
+fr-CA	unit	long	A|B|C|D	A, B, C et D
+fr-CA	unit	short	A	A
+fr-CA	unit	short	A|B	A et B
+fr-CA	unit	short	A|B|C	A, B et C
+fr-CA	unit	short	A|B|C|D	A, B, C et D
+fr-CA	unit	narrow	A	A
+fr-CA	unit	narrow	A|B	A B
+fr-CA	unit	narrow	A|B|C	A B C
+fr-CA	unit	narrow	A|B|C|D	A B C D
+fr-CH	conjunction	long	A	A
+fr-CH	conjunction	long	A|B	A et B
+fr-CH	conjunction	long	A|B|C	A, B et C
+fr-CH	conjunction	long	A|B|C|D	A, B, C et D
+fr-CH	conjunction	short	A	A
+fr-CH	conjunction	short	A|B	A et B
+fr-CH	conjunction	short	A|B|C	A, B et C
+fr-CH	conjunction	short	A|B|C|D	A, B, C et D
+fr-CH	conjunction	narrow	A	A
+fr-CH	conjunction	narrow	A|B	A, B
+fr-CH	conjunction	narrow	A|B|C	A, B, C
+fr-CH	conjunction	narrow	A|B|C|D	A, B, C, D
+fr-CH	disjunction	long	A	A
+fr-CH	disjunction	long	A|B	A ou B
+fr-CH	disjunction	long	A|B|C	A, B ou C
+fr-CH	disjunction	long	A|B|C|D	A, B, C ou D
+fr-CH	disjunction	short	A	A
+fr-CH	disjunction	short	A|B	A ou B
+fr-CH	disjunction	short	A|B|C	A, B ou C
+fr-CH	disjunction	short	A|B|C|D	A, B, C ou D
+fr-CH	disjunction	narrow	A	A
+fr-CH	disjunction	narrow	A|B	A ou B
+fr-CH	disjunction	narrow	A|B|C	A, B ou C
+fr-CH	disjunction	narrow	A|B|C|D	A, B, C ou D
+fr-CH	unit	long	A	A
+fr-CH	unit	long	A|B	A et B
+fr-CH	unit	long	A|B|C	A, B et C
+fr-CH	unit	long	A|B|C|D	A, B, C et D
+fr-CH	unit	short	A	A
+fr-CH	unit	short	A|B	A et B
+fr-CH	unit	short	A|B|C	A, B et C
+fr-CH	unit	short	A|B|C|D	A, B, C et D
+fr-CH	unit	narrow	A	A
+fr-CH	unit	narrow	A|B	A B
+fr-CH	unit	narrow	A|B|C	A B C
+fr-CH	unit	narrow	A|B|C|D	A B C D
+es	conjunction	long	A	A
+es	conjunction	long	A|B	A y B
+es	conjunction	long	A|B|C	A, B y C
+es	conjunction	long	A|B|C|D	A, B, C y D
+es	conjunction	short	A	A
+es	conjunction	short	A|B	A y B
+es	conjunction	short	A|B|C	A, B y C
+es	conjunction	short	A|B|C|D	A, B, C y D
+es	conjunction	narrow	A	A
+es	conjunction	narrow	A|B	A y B
+es	conjunction	narrow	A|B|C	A, B y C
+es	conjunction	narrow	A|B|C|D	A, B, C y D
+es	disjunction	long	A	A
+es	disjunction	long	A|B	A o B
+es	disjunction	long	A|B|C	A, B o C
+es	disjunction	long	A|B|C|D	A, B, C o D
+es	disjunction	short	A	A
+es	disjunction	short	A|B	A o B
+es	disjunction	short	A|B|C	A, B o C
+es	disjunction	short	A|B|C|D	A, B, C o D
+es	disjunction	narrow	A	A
+es	disjunction	narrow	A|B	A o B
+es	disjunction	narrow	A|B|C	A, B o C
+es	disjunction	narrow	A|B|C|D	A, B, C o D
+es	unit	long	A	A
+es	unit	long	A|B	A y B
+es	unit	long	A|B|C	A, B y C
+es	unit	long	A|B|C|D	A, B, C y D
+es	unit	short	A	A
+es	unit	short	A|B	A y B
+es	unit	short	A|B|C	A, B, C
+es	unit	short	A|B|C|D	A, B, C, D
+es	unit	narrow	A	A
+es	unit	narrow	A|B	A B
+es	unit	narrow	A|B|C	A B C
+es	unit	narrow	A|B|C|D	A B C D
+es-419	conjunction	long	A	A
+es-419	conjunction	long	A|B	A y B
+es-419	conjunction	long	A|B|C	A, B y C
+es-419	conjunction	long	A|B|C|D	A, B, C y D
+es-419	conjunction	short	A	A
+es-419	conjunction	short	A|B	A y B
+es-419	conjunction	short	A|B|C	A, B y C
+es-419	conjunction	short	A|B|C|D	A, B, C y D
+es-419	conjunction	narrow	A	A
+es-419	conjunction	narrow	A|B	A y B
+es-419	conjunction	narrow	A|B|C	A, B y C
+es-419	conjunction	narrow	A|B|C|D	A, B, C y D
+es-419	disjunction	long	A	A
+es-419	disjunction	long	A|B	A o B
+es-419	disjunction	long	A|B|C	A, B o C
+es-419	disjunction	long	A|B|C|D	A, B, C o D
+es-419	disjunction	short	A	A
+es-419	disjunction	short	A|B	A o B
+es-419	disjunction	short	A|B|C	A, B o C
+es-419	disjunction	short	A|B|C|D	A, B, C o D
+es-419	disjunction	narrow	A	A
+es-419	disjunction	narrow	A|B	A o B
+es-419	disjunction	narrow	A|B|C	A, B o C
+es-419	disjunction	narrow	A|B|C|D	A, B, C o D
+es-419	unit	long	A	A
+es-419	unit	long	A|B	A y B
+es-419	unit	long	A|B|C	A, B y C
+es-419	unit	long	A|B|C|D	A, B, C y D
+es-419	unit	short	A	A
+es-419	unit	short	A|B	A y B
+es-419	unit	short	A|B|C	A, B, C
+es-419	unit	short	A|B|C|D	A, B, C, D
+es-419	unit	narrow	A	A
+es-419	unit	narrow	A|B	A B
+es-419	unit	narrow	A|B|C	A B C
+es-419	unit	narrow	A|B|C|D	A B C D
+es-MX	conjunction	long	A	A
+es-MX	conjunction	long	A|B	A y B
+es-MX	conjunction	long	A|B|C	A, B y C
+es-MX	conjunction	long	A|B|C|D	A, B, C y D
+es-MX	conjunction	short	A	A
+es-MX	conjunction	short	A|B	A y B
+es-MX	conjunction	short	A|B|C	A, B y C
+es-MX	conjunction	short	A|B|C|D	A, B, C y D
+es-MX	conjunction	narrow	A	A
+es-MX	conjunction	narrow	A|B	A y B
+es-MX	conjunction	narrow	A|B|C	A, B y C
+es-MX	conjunction	narrow	A|B|C|D	A, B, C y D
+es-MX	disjunction	long	A	A
+es-MX	disjunction	long	A|B	A o B
+es-MX	disjunction	long	A|B|C	A, B o C
+es-MX	disjunction	long	A|B|C|D	A, B, C o D
+es-MX	disjunction	short	A	A
+es-MX	disjunction	short	A|B	A o B
+es-MX	disjunction	short	A|B|C	A, B o C
+es-MX	disjunction	short	A|B|C|D	A, B, C o D
+es-MX	disjunction	narrow	A	A
+es-MX	disjunction	narrow	A|B	A o B
+es-MX	disjunction	narrow	A|B|C	A, B o C
+es-MX	disjunction	narrow	A|B|C|D	A, B, C o D
+es-MX	unit	long	A	A
+es-MX	unit	long	A|B	A y B
+es-MX	unit	long	A|B|C	A, B y C
+es-MX	unit	long	A|B|C|D	A, B, C y D
+es-MX	unit	short	A	A
+es-MX	unit	short	A|B	A y B
+es-MX	unit	short	A|B|C	A, B, C
+es-MX	unit	short	A|B|C|D	A, B, C, D
+es-MX	unit	narrow	A	A
+es-MX	unit	narrow	A|B	A B
+es-MX	unit	narrow	A|B|C	A B C
+es-MX	unit	narrow	A|B|C|D	A B C D
+it	conjunction	long	A	A
+it	conjunction	long	A|B	A e B
+it	conjunction	long	A|B|C	A, B e C
+it	conjunction	long	A|B|C|D	A, B, C e D
+it	conjunction	short	A	A
+it	conjunction	short	A|B	A e B
+it	conjunction	short	A|B|C	A, B e C
+it	conjunction	short	A|B|C|D	A, B, C e D
+it	conjunction	narrow	A	A
+it	conjunction	narrow	A|B	A e B
+it	conjunction	narrow	A|B|C	A, B e C
+it	conjunction	narrow	A|B|C|D	A, B, C e D
+it	disjunction	long	A	A
+it	disjunction	long	A|B	A o B
+it	disjunction	long	A|B|C	A, B o C
+it	disjunction	long	A|B|C|D	A, B, C o D
+it	disjunction	short	A	A
+it	disjunction	short	A|B	A o B
+it	disjunction	short	A|B|C	A, B o C
+it	disjunction	short	A|B|C|D	A, B, C o D
+it	disjunction	narrow	A	A
+it	disjunction	narrow	A|B	A o B
+it	disjunction	narrow	A|B|C	A, B o C
+it	disjunction	narrow	A|B|C|D	A, B, C o D
+it	unit	long	A	A
+it	unit	long	A|B	A e B
+it	unit	long	A|B|C	A, B e C
+it	unit	long	A|B|C|D	A, B, C e D
+it	unit	short	A	A
+it	unit	short	A|B	A e B
+it	unit	short	A|B|C	A, B e C
+it	unit	short	A|B|C|D	A, B, C e D
+it	unit	narrow	A	A
+it	unit	narrow	A|B	A B
+it	unit	narrow	A|B|C	A B C
+it	unit	narrow	A|B|C|D	A B C D
+it-CH	conjunction	long	A	A
+it-CH	conjunction	long	A|B	A e B
+it-CH	conjunction	long	A|B|C	A, B e C
+it-CH	conjunction	long	A|B|C|D	A, B, C e D
+it-CH	conjunction	short	A	A
+it-CH	conjunction	short	A|B	A e B
+it-CH	conjunction	short	A|B|C	A, B e C
+it-CH	conjunction	short	A|B|C|D	A, B, C e D
+it-CH	conjunction	narrow	A	A
+it-CH	conjunction	narrow	A|B	A e B
+it-CH	conjunction	narrow	A|B|C	A, B e C
+it-CH	conjunction	narrow	A|B|C|D	A, B, C e D
+it-CH	disjunction	long	A	A
+it-CH	disjunction	long	A|B	A o B
+it-CH	disjunction	long	A|B|C	A, B o C
+it-CH	disjunction	long	A|B|C|D	A, B, C o D
+it-CH	disjunction	short	A	A
+it-CH	disjunction	short	A|B	A o B
+it-CH	disjunction	short	A|B|C	A, B o C
+it-CH	disjunction	short	A|B|C|D	A, B, C o D
+it-CH	disjunction	narrow	A	A
+it-CH	disjunction	narrow	A|B	A o B
+it-CH	disjunction	narrow	A|B|C	A, B o C
+it-CH	disjunction	narrow	A|B|C|D	A, B, C o D
+it-CH	unit	long	A	A
+it-CH	unit	long	A|B	A e B
+it-CH	unit	long	A|B|C	A, B e C
+it-CH	unit	long	A|B|C|D	A, B, C e D
+it-CH	unit	short	A	A
+it-CH	unit	short	A|B	A e B
+it-CH	unit	short	A|B|C	A, B e C
+it-CH	unit	short	A|B|C|D	A, B, C e D
+it-CH	unit	narrow	A	A
+it-CH	unit	narrow	A|B	A B
+it-CH	unit	narrow	A|B|C	A B C
+it-CH	unit	narrow	A|B|C|D	A B C D
+pt	conjunction	long	A	A
+pt	conjunction	long	A|B	A e B
+pt	conjunction	long	A|B|C	A, B e C
+pt	conjunction	long	A|B|C|D	A, B, C e D
+pt	conjunction	short	A	A
+pt	conjunction	short	A|B	A e B
+pt	conjunction	short	A|B|C	A, B e C
+pt	conjunction	short	A|B|C|D	A, B, C e D
+pt	conjunction	narrow	A	A
+pt	conjunction	narrow	A|B	A, B
+pt	conjunction	narrow	A|B|C	A, B, C
+pt	conjunction	narrow	A|B|C|D	A, B, C, D
+pt	disjunction	long	A	A
+pt	disjunction	long	A|B	A ou B
+pt	disjunction	long	A|B|C	A, B ou C
+pt	disjunction	long	A|B|C|D	A, B, C ou D
+pt	disjunction	short	A	A
+pt	disjunction	short	A|B	A ou B
+pt	disjunction	short	A|B|C	A, B ou C
+pt	disjunction	short	A|B|C|D	A, B, C ou D
+pt	disjunction	narrow	A	A
+pt	disjunction	narrow	A|B	A ou B
+pt	disjunction	narrow	A|B|C	A, B ou C
+pt	disjunction	narrow	A|B|C|D	A, B, C ou D
+pt	unit	long	A	A
+pt	unit	long	A|B	A e B
+pt	unit	long	A|B|C	A, B e C
+pt	unit	long	A|B|C|D	A, B, C e D
+pt	unit	short	A	A
+pt	unit	short	A|B	A e B
+pt	unit	short	A|B|C	A, B e C
+pt	unit	short	A|B|C|D	A, B, C e D
+pt	unit	narrow	A	A
+pt	unit	narrow	A|B	A B
+pt	unit	narrow	A|B|C	A B C
+pt	unit	narrow	A|B|C|D	A B C D
+pt-PT	conjunction	long	A	A
+pt-PT	conjunction	long	A|B	A e B
+pt-PT	conjunction	long	A|B|C	A, B e C
+pt-PT	conjunction	long	A|B|C|D	A, B, C e D
+pt-PT	conjunction	short	A	A
+pt-PT	conjunction	short	A|B	A e B
+pt-PT	conjunction	short	A|B|C	A, B e C
+pt-PT	conjunction	short	A|B|C|D	A, B, C e D
+pt-PT	conjunction	narrow	A	A
+pt-PT	conjunction	narrow	A|B	A, B
+pt-PT	conjunction	narrow	A|B|C	A, B, C
+pt-PT	conjunction	narrow	A|B|C|D	A, B, C, D
+pt-PT	disjunction	long	A	A
+pt-PT	disjunction	long	A|B	A ou B
+pt-PT	disjunction	long	A|B|C	A, B ou C
+pt-PT	disjunction	long	A|B|C|D	A, B, C ou D
+pt-PT	disjunction	short	A	A
+pt-PT	disjunction	short	A|B	A ou B
+pt-PT	disjunction	short	A|B|C	A, B ou C
+pt-PT	disjunction	short	A|B|C|D	A, B, C ou D
+pt-PT	disjunction	narrow	A	A
+pt-PT	disjunction	narrow	A|B	A ou B
+pt-PT	disjunction	narrow	A|B|C	A, B ou C
+pt-PT	disjunction	narrow	A|B|C|D	A, B, C ou D
+pt-PT	unit	long	A	A
+pt-PT	unit	long	A|B	A e B
+pt-PT	unit	long	A|B|C	A, B e C
+pt-PT	unit	long	A|B|C|D	A, B, C e D
+pt-PT	unit	short	A	A
+pt-PT	unit	short	A|B	A e B
+pt-PT	unit	short	A|B|C	A, B e C
+pt-PT	unit	short	A|B|C|D	A, B, C e D
+pt-PT	unit	narrow	A	A
+pt-PT	unit	narrow	A|B	A e B
+pt-PT	unit	narrow	A|B|C	A, B e C
+pt-PT	unit	narrow	A|B|C|D	A, B, C e D
+nl	conjunction	long	A	A
+nl	conjunction	long	A|B	A en B
+nl	conjunction	long	A|B|C	A, B en C
+nl	conjunction	long	A|B|C|D	A, B, C en D
+nl	conjunction	short	A	A
+nl	conjunction	short	A|B	A & B
+nl	conjunction	short	A|B|C	A, B & C
+nl	conjunction	short	A|B|C|D	A, B, C & D
+nl	conjunction	narrow	A	A
+nl	conjunction	narrow	A|B	A, B
+nl	conjunction	narrow	A|B|C	A, B, C
+nl	conjunction	narrow	A|B|C|D	A, B, C, D
+nl	disjunction	long	A	A
+nl	disjunction	long	A|B	A of B
+nl	disjunction	long	A|B|C	A, B of C
+nl	disjunction	long	A|B|C|D	A, B, C of D
+nl	disjunction	short	A	A
+nl	disjunction	short	A|B	A of B
+nl	disjunction	short	A|B|C	A, B of C
+nl	disjunction	short	A|B|C|D	A, B, C of D
+nl	disjunction	narrow	A	A
+nl	disjunction	narrow	A|B	A of B
+nl	disjunction	narrow	A|B|C	A, B of C
+nl	disjunction	narrow	A|B|C|D	A, B, C of D
+nl	unit	long	A	A
+nl	unit	long	A|B	A en B
+nl	unit	long	A|B|C	A, B en C
+nl	unit	long	A|B|C|D	A, B, C en D
+nl	unit	short	A	A
+nl	unit	short	A|B	A, B
+nl	unit	short	A|B|C	A, B, C
+nl	unit	short	A|B|C|D	A, B, C, D
+nl	unit	narrow	A	A
+nl	unit	narrow	A|B	A, B
+nl	unit	narrow	A|B|C	A, B, C
+nl	unit	narrow	A|B|C|D	A, B, C, D
+ca	conjunction	long	A	A
+ca	conjunction	long	A|B	A i B
+ca	conjunction	long	A|B|C	A, B i C
+ca	conjunction	long	A|B|C|D	A, B, C i D
+ca	conjunction	short	A	A
+ca	conjunction	short	A|B	A i B
+ca	conjunction	short	A|B|C	A, B i C
+ca	conjunction	short	A|B|C|D	A, B, C i D
+ca	conjunction	narrow	A	A
+ca	conjunction	narrow	A|B	A i B
+ca	conjunction	narrow	A|B|C	A, B i C
+ca	conjunction	narrow	A|B|C|D	A, B, C i D
+ca	disjunction	long	A	A
+ca	disjunction	long	A|B	A o B
+ca	disjunction	long	A|B|C	A, B o C
+ca	disjunction	long	A|B|C|D	A, B, C o D
+ca	disjunction	short	A	A
+ca	disjunction	short	A|B	A o B
+ca	disjunction	short	A|B|C	A, B o C
+ca	disjunction	short	A|B|C|D	A, B, C o D
+ca	disjunction	narrow	A	A
+ca	disjunction	narrow	A|B	A o B
+ca	disjunction	narrow	A|B|C	A, B o C
+ca	disjunction	narrow	A|B|C|D	A, B, C o D
+ca	unit	long	A	A
+ca	unit	long	A|B	A i B
+ca	unit	long	A|B|C	A, B i C
+ca	unit	long	A|B|C|D	A, B, C i D
+ca	unit	short	A	A
+ca	unit	short	A|B	A i B
+ca	unit	short	A|B|C	A, B i C
+ca	unit	short	A|B|C|D	A, B, C i D
+ca	unit	narrow	A	A
+ca	unit	narrow	A|B	A i B
+ca	unit	narrow	A|B|C	A, B i C
+ca	unit	narrow	A|B|C|D	A, B, C i D
+sv	conjunction	long	A	A
+sv	conjunction	long	A|B	A och B
+sv	conjunction	long	A|B|C	A, B och C
+sv	conjunction	long	A|B|C|D	A, B, C och D
+sv	conjunction	short	A	A
+sv	conjunction	short	A|B	A och B
+sv	conjunction	short	A|B|C	A, B och C
+sv	conjunction	short	A|B|C|D	A, B, C och D
+sv	conjunction	narrow	A	A
+sv	conjunction	narrow	A|B	A, B
+sv	conjunction	narrow	A|B|C	A, B, C
+sv	conjunction	narrow	A|B|C|D	A, B, C, D
+sv	disjunction	long	A	A
+sv	disjunction	long	A|B	A eller B
+sv	disjunction	long	A|B|C	A, B eller C
+sv	disjunction	long	A|B|C|D	A, B, C eller D
+sv	disjunction	short	A	A
+sv	disjunction	short	A|B	A eller B
+sv	disjunction	short	A|B|C	A, B eller C
+sv	disjunction	short	A|B|C|D	A, B, C eller D
+sv	disjunction	narrow	A	A
+sv	disjunction	narrow	A|B	A eller B
+sv	disjunction	narrow	A|B|C	A, B eller C
+sv	disjunction	narrow	A|B|C|D	A, B, C eller D
+sv	unit	long	A	A
+sv	unit	long	A|B	A, B
+sv	unit	long	A|B|C	A, B, C
+sv	unit	long	A|B|C|D	A, B, C, D
+sv	unit	short	A	A
+sv	unit	short	A|B	A, B
+sv	unit	short	A|B|C	A, B, C
+sv	unit	short	A|B|C|D	A, B, C, D
+sv	unit	narrow	A	A
+sv	unit	narrow	A|B	A B
+sv	unit	narrow	A|B|C	A B C
+sv	unit	narrow	A|B|C|D	A B C D
+da	conjunction	long	A	A
+da	conjunction	long	A|B	A og B
+da	conjunction	long	A|B|C	A, B og C
+da	conjunction	long	A|B|C|D	A, B, C og D
+da	conjunction	short	A	A
+da	conjunction	short	A|B	A og B
+da	conjunction	short	A|B|C	A, B og C
+da	conjunction	short	A|B|C|D	A, B, C og D
+da	conjunction	narrow	A	A
+da	conjunction	narrow	A|B	A og B
+da	conjunction	narrow	A|B|C	A, B og C
+da	conjunction	narrow	A|B|C|D	A, B, C og D
+da	disjunction	long	A	A
+da	disjunction	long	A|B	A eller B
+da	disjunction	long	A|B|C	A, B eller C
+da	disjunction	long	A|B|C|D	A, B, C eller D
+da	disjunction	short	A	A
+da	disjunction	short	A|B	A el. B
+da	disjunction	short	A|B|C	A, B el. C
+da	disjunction	short	A|B|C|D	A, B, C el. D
+da	disjunction	narrow	A	A
+da	disjunction	narrow	A|B	A el. B
+da	disjunction	narrow	A|B|C	A, B el. C
+da	disjunction	narrow	A|B|C|D	A, B, C el. D
+da	unit	long	A	A
+da	unit	long	A|B	A og B
+da	unit	long	A|B|C	A, B og C
+da	unit	long	A|B|C|D	A, B, C og D
+da	unit	short	A	A
+da	unit	short	A|B	A og B
+da	unit	short	A|B|C	A, B og C
+da	unit	short	A|B|C|D	A, B, C og D
+da	unit	narrow	A	A
+da	unit	narrow	A|B	A og B
+da	unit	narrow	A|B|C	A, B og C
+da	unit	narrow	A|B|C|D	A, B, C og D
+nb	conjunction	long	A	A
+nb	conjunction	long	A|B	A og B
+nb	conjunction	long	A|B|C	A, B og C
+nb	conjunction	long	A|B|C|D	A, B, C og D
+nb	conjunction	short	A	A
+nb	conjunction	short	A|B	A og B
+nb	conjunction	short	A|B|C	A, B og C
+nb	conjunction	short	A|B|C|D	A, B, C og D
+nb	conjunction	narrow	A	A
+nb	conjunction	narrow	A|B	A og B
+nb	conjunction	narrow	A|B|C	A, B og C
+nb	conjunction	narrow	A|B|C|D	A, B, C og D
+nb	disjunction	long	A	A
+nb	disjunction	long	A|B	A eller B
+nb	disjunction	long	A|B|C	A, B eller C
+nb	disjunction	long	A|B|C|D	A, B, C eller D
+nb	disjunction	short	A	A
+nb	disjunction	short	A|B	A eller B
+nb	disjunction	short	A|B|C	A, B eller C
+nb	disjunction	short	A|B|C|D	A, B, C eller D
+nb	disjunction	narrow	A	A
+nb	disjunction	narrow	A|B	A eller B
+nb	disjunction	narrow	A|B|C	A, B eller C
+nb	disjunction	narrow	A|B|C|D	A, B, C eller D
+nb	unit	long	A	A
+nb	unit	long	A|B	A og B
+nb	unit	long	A|B|C	A, B og C
+nb	unit	long	A|B|C|D	A, B, C og D
+nb	unit	short	A	A
+nb	unit	short	A|B	A, B
+nb	unit	short	A|B|C	A, B, C
+nb	unit	short	A|B|C|D	A, B, C, D
+nb	unit	narrow	A	A
+nb	unit	narrow	A|B	A, B
+nb	unit	narrow	A|B|C	A, B, C
+nb	unit	narrow	A|B|C|D	A, B, C, D
+fi	conjunction	long	A	A
+fi	conjunction	long	A|B	A ja B
+fi	conjunction	long	A|B|C	A, B ja C
+fi	conjunction	long	A|B|C|D	A, B, C ja D
+fi	conjunction	short	A	A
+fi	conjunction	short	A|B	A ja B
+fi	conjunction	short	A|B|C	A, B ja C
+fi	conjunction	short	A|B|C|D	A, B, C ja D
+fi	conjunction	narrow	A	A
+fi	conjunction	narrow	A|B	A ja B
+fi	conjunction	narrow	A|B|C	A, B ja C
+fi	conjunction	narrow	A|B|C|D	A, B, C ja D
+fi	disjunction	long	A	A
+fi	disjunction	long	A|B	A tai B
+fi	disjunction	long	A|B|C	A, B tai C
+fi	disjunction	long	A|B|C|D	A, B, C tai D
+fi	disjunction	short	A	A
+fi	disjunction	short	A|B	A tai B
+fi	disjunction	short	A|B|C	A, B tai C
+fi	disjunction	short	A|B|C|D	A, B, C tai D
+fi	disjunction	narrow	A	A
+fi	disjunction	narrow	A|B	A tai B
+fi	disjunction	narrow	A|B|C	A, B tai C
+fi	disjunction	narrow	A|B|C|D	A, B, C tai D
+fi	unit	long	A	A
+fi	unit	long	A|B	A ja B
+fi	unit	long	A|B|C	A, B ja C
+fi	unit	long	A|B|C|D	A, B, C ja D
+fi	unit	short	A	A
+fi	unit	short	A|B	A, B
+fi	unit	short	A|B|C	A, B, C
+fi	unit	short	A|B|C|D	A, B, C, D
+fi	unit	narrow	A	A
+fi	unit	narrow	A|B	A B
+fi	unit	narrow	A|B|C	A B C
+fi	unit	narrow	A|B|C|D	A B C D
+is	conjunction	long	A	A
+is	conjunction	long	A|B	A og B
+is	conjunction	long	A|B|C	A, B og C
+is	conjunction	long	A|B|C|D	A, B, C og D
+is	conjunction	short	A	A
+is	conjunction	short	A|B	A og B
+is	conjunction	short	A|B|C	A, B og C
+is	conjunction	short	A|B|C|D	A, B, C og D
+is	conjunction	narrow	A	A
+is	conjunction	narrow	A|B	A, B
+is	conjunction	narrow	A|B|C	A, B, C
+is	conjunction	narrow	A|B|C|D	A, B, C, D
+is	disjunction	long	A	A
+is	disjunction	long	A|B	A eða B
+is	disjunction	long	A|B|C	A, B eða C
+is	disjunction	long	A|B|C|D	A, B, C eða D
+is	disjunction	short	A	A
+is	disjunction	short	A|B	A eða B
+is	disjunction	short	A|B|C	A, B eða C
+is	disjunction	short	A|B|C|D	A, B, C eða D
+is	disjunction	narrow	A	A
+is	disjunction	narrow	A|B	A eða B
+is	disjunction	narrow	A|B|C	A, B eða C
+is	disjunction	narrow	A|B|C|D	A, B, C eða D
+is	unit	long	A	A
+is	unit	long	A|B	A og B
+is	unit	long	A|B|C	A, B og C
+is	unit	long	A|B|C|D	A, B, C og D
+is	unit	short	A	A
+is	unit	short	A|B	A og B
+is	unit	short	A|B|C	A, B og C
+is	unit	short	A|B|C|D	A, B, C og D
+is	unit	narrow	A	A
+is	unit	narrow	A|B	A og B
+is	unit	narrow	A|B|C	A B og C
+is	unit	narrow	A|B|C|D	A B C og D
+pl	conjunction	long	A	A
+pl	conjunction	long	A|B	A i B
+pl	conjunction	long	A|B|C	A, B i C
+pl	conjunction	long	A|B|C|D	A, B, C i D
+pl	conjunction	short	A	A
+pl	conjunction	short	A|B	A i B
+pl	conjunction	short	A|B|C	A, B i C
+pl	conjunction	short	A|B|C|D	A, B, C i D
+pl	conjunction	narrow	A	A
+pl	conjunction	narrow	A|B	A i B
+pl	conjunction	narrow	A|B|C	A, B i C
+pl	conjunction	narrow	A|B|C|D	A, B, C i D
+pl	disjunction	long	A	A
+pl	disjunction	long	A|B	A lub B
+pl	disjunction	long	A|B|C	A, B lub C
+pl	disjunction	long	A|B|C|D	A, B, C lub D
+pl	disjunction	short	A	A
+pl	disjunction	short	A|B	A lub B
+pl	disjunction	short	A|B|C	A, B lub C
+pl	disjunction	short	A|B|C|D	A, B, C lub D
+pl	disjunction	narrow	A	A
+pl	disjunction	narrow	A|B	A lub B
+pl	disjunction	narrow	A|B|C	A, B lub C
+pl	disjunction	narrow	A|B|C|D	A, B, C lub D
+pl	unit	long	A	A
+pl	unit	long	A|B	A i B
+pl	unit	long	A|B|C	A, B i C
+pl	unit	long	A|B|C|D	A, B, C i D
+pl	unit	short	A	A
+pl	unit	short	A|B	A i B
+pl	unit	short	A|B|C	A, B i C
+pl	unit	short	A|B|C|D	A, B, C i D
+pl	unit	narrow	A	A
+pl	unit	narrow	A|B	A i B
+pl	unit	narrow	A|B|C	A, B i C
+pl	unit	narrow	A|B|C|D	A, B, C i D
+cs	conjunction	long	A	A
+cs	conjunction	long	A|B	A a B
+cs	conjunction	long	A|B|C	A, B a C
+cs	conjunction	long	A|B|C|D	A, B, C a D
+cs	conjunction	short	A	A
+cs	conjunction	short	A|B	A a B
+cs	conjunction	short	A|B|C	A, B a C
+cs	conjunction	short	A|B|C|D	A, B, C a D
+cs	conjunction	narrow	A	A
+cs	conjunction	narrow	A|B	A, B
+cs	conjunction	narrow	A|B|C	A, B, C
+cs	conjunction	narrow	A|B|C|D	A, B, C, D
+cs	disjunction	long	A	A
+cs	disjunction	long	A|B	A nebo B
+cs	disjunction	long	A|B|C	A, B nebo C
+cs	disjunction	long	A|B|C|D	A, B, C nebo D
+cs	disjunction	short	A	A
+cs	disjunction	short	A|B	A nebo B
+cs	disjunction	short	A|B|C	A, B nebo C
+cs	disjunction	short	A|B|C|D	A, B, C nebo D
+cs	disjunction	narrow	A	A
+cs	disjunction	narrow	A|B	A nebo B
+cs	disjunction	narrow	A|B|C	A, B nebo C
+cs	disjunction	narrow	A|B|C|D	A, B, C nebo D
+cs	unit	long	A	A
+cs	unit	long	A|B	A a B
+cs	unit	long	A|B|C	A, B a C
+cs	unit	long	A|B|C|D	A, B, C a D
+cs	unit	short	A	A
+cs	unit	short	A|B	A, B
+cs	unit	short	A|B|C	A, B a C
+cs	unit	short	A|B|C|D	A, B, C a D
+cs	unit	narrow	A	A
+cs	unit	narrow	A|B	A B
+cs	unit	narrow	A|B|C	A B C
+cs	unit	narrow	A|B|C|D	A B C D
+sk	conjunction	long	A	A
+sk	conjunction	long	A|B	A a B
+sk	conjunction	long	A|B|C	A, B a C
+sk	conjunction	long	A|B|C|D	A, B, C a D
+sk	conjunction	short	A	A
+sk	conjunction	short	A|B	A a B
+sk	conjunction	short	A|B|C	A, B a C
+sk	conjunction	short	A|B|C|D	A, B, C a D
+sk	conjunction	narrow	A	A
+sk	conjunction	narrow	A|B	A a B
+sk	conjunction	narrow	A|B|C	A, B a C
+sk	conjunction	narrow	A|B|C|D	A, B, C a D
+sk	disjunction	long	A	A
+sk	disjunction	long	A|B	A alebo B
+sk	disjunction	long	A|B|C	A, B alebo C
+sk	disjunction	long	A|B|C|D	A, B, C alebo D
+sk	disjunction	short	A	A
+sk	disjunction	short	A|B	A alebo B
+sk	disjunction	short	A|B|C	A, B alebo C
+sk	disjunction	short	A|B|C|D	A, B, C alebo D
+sk	disjunction	narrow	A	A
+sk	disjunction	narrow	A|B	A alebo B
+sk	disjunction	narrow	A|B|C	A, B alebo C
+sk	disjunction	narrow	A|B|C|D	A, B, C alebo D
+sk	unit	long	A	A
+sk	unit	long	A|B	A, B
+sk	unit	long	A|B|C	A, B, C
+sk	unit	long	A|B|C|D	A, B, C, D
+sk	unit	short	A	A
+sk	unit	short	A|B	A, B
+sk	unit	short	A|B|C	A, B, C
+sk	unit	short	A|B|C|D	A, B, C, D
+sk	unit	narrow	A	A
+sk	unit	narrow	A|B	A, B
+sk	unit	narrow	A|B|C	A, B, C
+sk	unit	narrow	A|B|C|D	A, B, C, D
+sl	conjunction	long	A	A
+sl	conjunction	long	A|B	A in B
+sl	conjunction	long	A|B|C	A, B in C
+sl	conjunction	long	A|B|C|D	A, B, C in D
+sl	conjunction	short	A	A
+sl	conjunction	short	A|B	A in B
+sl	conjunction	short	A|B|C	A, B in C
+sl	conjunction	short	A|B|C|D	A, B, C in D
+sl	conjunction	narrow	A	A
+sl	conjunction	narrow	A|B	A in B
+sl	conjunction	narrow	A|B|C	A, B in C
+sl	conjunction	narrow	A|B|C|D	A, B, C in D
+sl	disjunction	long	A	A
+sl	disjunction	long	A|B	A ali B
+sl	disjunction	long	A|B|C	A, B ali C
+sl	disjunction	long	A|B|C|D	A, B, C ali D
+sl	disjunction	short	A	A
+sl	disjunction	short	A|B	A ali B
+sl	disjunction	short	A|B|C	A, B ali C
+sl	disjunction	short	A|B|C|D	A, B, C ali D
+sl	disjunction	narrow	A	A
+sl	disjunction	narrow	A|B	A ali B
+sl	disjunction	narrow	A|B|C	A, B ali C
+sl	disjunction	narrow	A|B|C|D	A, B, C ali D
+sl	unit	long	A	A
+sl	unit	long	A|B	A in B
+sl	unit	long	A|B|C	A, B in C
+sl	unit	long	A|B|C|D	A, B, C in D
+sl	unit	short	A	A
+sl	unit	short	A|B	A in B
+sl	unit	short	A|B|C	A, B in C
+sl	unit	short	A|B|C|D	A, B, C in D
+sl	unit	narrow	A	A
+sl	unit	narrow	A|B	A in B
+sl	unit	narrow	A|B|C	A, B in C
+sl	unit	narrow	A|B|C|D	A, B, C in D
+hr	conjunction	long	A	A
+hr	conjunction	long	A|B	A i B
+hr	conjunction	long	A|B|C	A, B i C
+hr	conjunction	long	A|B|C|D	A, B, C i D
+hr	conjunction	short	A	A
+hr	conjunction	short	A|B	A i B
+hr	conjunction	short	A|B|C	A, B i C
+hr	conjunction	short	A|B|C|D	A, B, C i D
+hr	conjunction	narrow	A	A
+hr	conjunction	narrow	A|B	A i B
+hr	conjunction	narrow	A|B|C	A, B i C
+hr	conjunction	narrow	A|B|C|D	A, B, C i D
+hr	disjunction	long	A	A
+hr	disjunction	long	A|B	A ili B
+hr	disjunction	long	A|B|C	A, B ili C
+hr	disjunction	long	A|B|C|D	A, B, C ili D
+hr	disjunction	short	A	A
+hr	disjunction	short	A|B	A ili B
+hr	disjunction	short	A|B|C	A, B ili C
+hr	disjunction	short	A|B|C|D	A, B, C ili D
+hr	disjunction	narrow	A	A
+hr	disjunction	narrow	A|B	A ili B
+hr	disjunction	narrow	A|B|C	A, B ili C
+hr	disjunction	narrow	A|B|C|D	A, B, C ili D
+hr	unit	long	A	A
+hr	unit	long	A|B	A i B
+hr	unit	long	A|B|C	A, B i C
+hr	unit	long	A|B|C|D	A, B, C i D
+hr	unit	short	A	A
+hr	unit	short	A|B	A i B
+hr	unit	short	A|B|C	A, B i C
+hr	unit	short	A|B|C|D	A, B, C i D
+hr	unit	narrow	A	A
+hr	unit	narrow	A|B	A B
+hr	unit	narrow	A|B|C	A B C
+hr	unit	narrow	A|B|C|D	A B C D
+sr	conjunction	long	A	A
+sr	conjunction	long	A|B	A и B
+sr	conjunction	long	A|B|C	A, B и C
+sr	conjunction	long	A|B|C|D	A, B, C и D
+sr	conjunction	short	A	A
+sr	conjunction	short	A|B	A и B
+sr	conjunction	short	A|B|C	A, B и C
+sr	conjunction	short	A|B|C|D	A, B, C и D
+sr	conjunction	narrow	A	A
+sr	conjunction	narrow	A|B	A и B
+sr	conjunction	narrow	A|B|C	A, B и C
+sr	conjunction	narrow	A|B|C|D	A, B, C и D
+sr	disjunction	long	A	A
+sr	disjunction	long	A|B	A или B
+sr	disjunction	long	A|B|C	A, B или C
+sr	disjunction	long	A|B|C|D	A, B, C или D
+sr	disjunction	short	A	A
+sr	disjunction	short	A|B	A или B
+sr	disjunction	short	A|B|C	A, B или C
+sr	disjunction	short	A|B|C|D	A, B, C или D
+sr	disjunction	narrow	A	A
+sr	disjunction	narrow	A|B	A или B
+sr	disjunction	narrow	A|B|C	A, B или C
+sr	disjunction	narrow	A|B|C|D	A, B, C или D
+sr	unit	long	A	A
+sr	unit	long	A|B	A и B
+sr	unit	long	A|B|C	A, B и C
+sr	unit	long	A|B|C|D	A, B, C и D
+sr	unit	short	A	A
+sr	unit	short	A|B	A и B
+sr	unit	short	A|B|C	A, B и C
+sr	unit	short	A|B|C|D	A, B, C и D
+sr	unit	narrow	A	A
+sr	unit	narrow	A|B	A и B
+sr	unit	narrow	A|B|C	A, B и C
+sr	unit	narrow	A|B|C|D	A, B, C и D
+hu	conjunction	long	A	A
+hu	conjunction	long	A|B	A és B
+hu	conjunction	long	A|B|C	A, B és C
+hu	conjunction	long	A|B|C|D	A, B, C és D
+hu	conjunction	short	A	A
+hu	conjunction	short	A|B	A és B
+hu	conjunction	short	A|B|C	A, B és C
+hu	conjunction	short	A|B|C|D	A, B, C és D
+hu	conjunction	narrow	A	A
+hu	conjunction	narrow	A|B	A és B
+hu	conjunction	narrow	A|B|C	A, B és C
+hu	conjunction	narrow	A|B|C|D	A, B, C és D
+hu	disjunction	long	A	A
+hu	disjunction	long	A|B	A vagy B
+hu	disjunction	long	A|B|C	A, B vagy C
+hu	disjunction	long	A|B|C|D	A, B, C vagy D
+hu	disjunction	short	A	A
+hu	disjunction	short	A|B	A vagy B
+hu	disjunction	short	A|B|C	A, B vagy C
+hu	disjunction	short	A|B|C|D	A, B, C vagy D
+hu	disjunction	narrow	A	A
+hu	disjunction	narrow	A|B	A vagy B
+hu	disjunction	narrow	A|B|C	A, B vagy C
+hu	disjunction	narrow	A|B|C|D	A, B, C vagy D
+hu	unit	long	A	A
+hu	unit	long	A|B	A és B
+hu	unit	long	A|B|C	A, B és C
+hu	unit	long	A|B|C|D	A, B, C és D
+hu	unit	short	A	A
+hu	unit	short	A|B	A és B
+hu	unit	short	A|B|C	A, B és C
+hu	unit	short	A|B|C|D	A, B, C és D
+hu	unit	narrow	A	A
+hu	unit	narrow	A|B	A és B
+hu	unit	narrow	A|B|C	A, B és C
+hu	unit	narrow	A|B|C|D	A, B, C és D
+ro	conjunction	long	A	A
+ro	conjunction	long	A|B	A și B
+ro	conjunction	long	A|B|C	A, B și C
+ro	conjunction	long	A|B|C|D	A, B, C și D
+ro	conjunction	short	A	A
+ro	conjunction	short	A|B	A și B
+ro	conjunction	short	A|B|C	A, B și C
+ro	conjunction	short	A|B|C|D	A, B, C și D
+ro	conjunction	narrow	A	A
+ro	conjunction	narrow	A|B	A, B
+ro	conjunction	narrow	A|B|C	A, B, C
+ro	conjunction	narrow	A|B|C|D	A, B, C, D
+ro	disjunction	long	A	A
+ro	disjunction	long	A|B	A sau B
+ro	disjunction	long	A|B|C	A, B sau C
+ro	disjunction	long	A|B|C|D	A, B, C sau D
+ro	disjunction	short	A	A
+ro	disjunction	short	A|B	A sau B
+ro	disjunction	short	A|B|C	A, B sau C
+ro	disjunction	short	A|B|C|D	A, B, C sau D
+ro	disjunction	narrow	A	A
+ro	disjunction	narrow	A|B	A sau B
+ro	disjunction	narrow	A|B|C	A, B sau C
+ro	disjunction	narrow	A|B|C|D	A, B, C sau D
+ro	unit	long	A	A
+ro	unit	long	A|B	A și B
+ro	unit	long	A|B|C	A, B, C
+ro	unit	long	A|B|C|D	A, B, C, D
+ro	unit	short	A	A
+ro	unit	short	A|B	A, B
+ro	unit	short	A|B|C	A, B, C
+ro	unit	short	A|B|C|D	A, B, C, D
+ro	unit	narrow	A	A
+ro	unit	narrow	A|B	A, B
+ro	unit	narrow	A|B|C	A, B, C
+ro	unit	narrow	A|B|C|D	A, B, C, D
+bg	conjunction	long	A	A
+bg	conjunction	long	A|B	A и B
+bg	conjunction	long	A|B|C	A, B и C
+bg	conjunction	long	A|B|C|D	A, B, C и D
+bg	conjunction	short	A	A
+bg	conjunction	short	A|B	A и B
+bg	conjunction	short	A|B|C	A, B и C
+bg	conjunction	short	A|B|C|D	A, B, C и D
+bg	conjunction	narrow	A	A
+bg	conjunction	narrow	A|B	A, B
+bg	conjunction	narrow	A|B|C	A, B и C
+bg	conjunction	narrow	A|B|C|D	A, B, C и D
+bg	disjunction	long	A	A
+bg	disjunction	long	A|B	A или B
+bg	disjunction	long	A|B|C	A, B или C
+bg	disjunction	long	A|B|C|D	A, B, C или D
+bg	disjunction	short	A	A
+bg	disjunction	short	A|B	A или B
+bg	disjunction	short	A|B|C	A, B или C
+bg	disjunction	short	A|B|C|D	A, B, C или D
+bg	disjunction	narrow	A	A
+bg	disjunction	narrow	A|B	A или B
+bg	disjunction	narrow	A|B|C	A, B или C
+bg	disjunction	narrow	A|B|C|D	A, B, C или D
+bg	unit	long	A	A
+bg	unit	long	A|B	A и B
+bg	unit	long	A|B|C	A, B и C
+bg	unit	long	A|B|C|D	A, B, C и D
+bg	unit	short	A	A
+bg	unit	short	A|B	A и B
+bg	unit	short	A|B|C	A, B, C
+bg	unit	short	A|B|C|D	A, B, C, D
+bg	unit	narrow	A	A
+bg	unit	narrow	A|B	A и B
+bg	unit	narrow	A|B|C	A, B, C
+bg	unit	narrow	A|B|C|D	A, B, C, D
+ru	conjunction	long	A	A
+ru	conjunction	long	A|B	A и B
+ru	conjunction	long	A|B|C	A, B и C
+ru	conjunction	long	A|B|C|D	A, B, C и D
+ru	conjunction	short	A	A
+ru	conjunction	short	A|B	A и B
+ru	conjunction	short	A|B|C	A, B и C
+ru	conjunction	short	A|B|C|D	A, B, C и D
+ru	conjunction	narrow	A	A
+ru	conjunction	narrow	A|B	A, B
+ru	conjunction	narrow	A|B|C	A, B, C
+ru	conjunction	narrow	A|B|C|D	A, B, C, D
+ru	disjunction	long	A	A
+ru	disjunction	long	A|B	A или B
+ru	disjunction	long	A|B|C	A, B или C
+ru	disjunction	long	A|B|C|D	A, B, C или D
+ru	disjunction	short	A	A
+ru	disjunction	short	A|B	A или B
+ru	disjunction	short	A|B|C	A, B или C
+ru	disjunction	short	A|B|C|D	A, B, C или D
+ru	disjunction	narrow	A	A
+ru	disjunction	narrow	A|B	A или B
+ru	disjunction	narrow	A|B|C	A, B или C
+ru	disjunction	narrow	A|B|C|D	A, B, C или D
+ru	unit	long	A	A
+ru	unit	long	A|B	A B
+ru	unit	long	A|B|C	A B C
+ru	unit	long	A|B|C|D	A B C D
+ru	unit	short	A	A
+ru	unit	short	A|B	A B
+ru	unit	short	A|B|C	A B C
+ru	unit	short	A|B|C|D	A B C D
+ru	unit	narrow	A	A
+ru	unit	narrow	A|B	A B
+ru	unit	narrow	A|B|C	A B C
+ru	unit	narrow	A|B|C|D	A B C D
+uk	conjunction	long	A	A
+uk	conjunction	long	A|B	A і B
+uk	conjunction	long	A|B|C	A, B і C
+uk	conjunction	long	A|B|C|D	A, B, C і D
+uk	conjunction	short	A	A
+uk	conjunction	short	A|B	A і B
+uk	conjunction	short	A|B|C	A, B і C
+uk	conjunction	short	A|B|C|D	A, B, C і D
+uk	conjunction	narrow	A	A
+uk	conjunction	narrow	A|B	A, B
+uk	conjunction	narrow	A|B|C	A, B, C
+uk	conjunction	narrow	A|B|C|D	A, B, C, D
+uk	disjunction	long	A	A
+uk	disjunction	long	A|B	A або B
+uk	disjunction	long	A|B|C	A, B або C
+uk	disjunction	long	A|B|C|D	A, B, C або D
+uk	disjunction	short	A	A
+uk	disjunction	short	A|B	A або B
+uk	disjunction	short	A|B|C	A, B або C
+uk	disjunction	short	A|B|C|D	A, B, C або D
+uk	disjunction	narrow	A	A
+uk	disjunction	narrow	A|B	A або B
+uk	disjunction	narrow	A|B|C	A, B або C
+uk	disjunction	narrow	A|B|C|D	A, B, C або D
+uk	unit	long	A	A
+uk	unit	long	A|B	A і B
+uk	unit	long	A|B|C	A, B і C
+uk	unit	long	A|B|C|D	A, B, C і D
+uk	unit	short	A	A
+uk	unit	short	A|B	A і B
+uk	unit	short	A|B|C	A, B і C
+uk	unit	short	A|B|C|D	A, B, C і D
+uk	unit	narrow	A	A
+uk	unit	narrow	A|B	A і B
+uk	unit	narrow	A|B|C	A, B і C
+uk	unit	narrow	A|B|C|D	A, B, C і D
+el	conjunction	long	A	A
+el	conjunction	long	A|B	A και B
+el	conjunction	long	A|B|C	A, B και C
+el	conjunction	long	A|B|C|D	A, B, C και D
+el	conjunction	short	A	A
+el	conjunction	short	A|B	A και B
+el	conjunction	short	A|B|C	A, B και C
+el	conjunction	short	A|B|C|D	A, B, C και D
+el	conjunction	narrow	A	A
+el	conjunction	narrow	A|B	A, B
+el	conjunction	narrow	A|B|C	A, B, C
+el	conjunction	narrow	A|B|C|D	A, B, C, D
+el	disjunction	long	A	A
+el	disjunction	long	A|B	A ή B
+el	disjunction	long	A|B|C	A, B ή C
+el	disjunction	long	A|B|C|D	A, B, C ή D
+el	disjunction	short	A	A
+el	disjunction	short	A|B	A ή B
+el	disjunction	short	A|B|C	A, B ή C
+el	disjunction	short	A|B|C|D	A, B, C ή D
+el	disjunction	narrow	A	A
+el	disjunction	narrow	A|B	A ή B
+el	disjunction	narrow	A|B|C	A, B ή C
+el	disjunction	narrow	A|B|C|D	A, B, C ή D
+el	unit	long	A	A
+el	unit	long	A|B	A, B
+el	unit	long	A|B|C	A, B, C
+el	unit	long	A|B|C|D	A, B, C, D
+el	unit	short	A	A
+el	unit	short	A|B	A, B
+el	unit	short	A|B|C	A, B, C
+el	unit	short	A|B|C|D	A, B, C, D
+el	unit	narrow	A	A
+el	unit	narrow	A|B	A B
+el	unit	narrow	A|B|C	A B C
+el	unit	narrow	A|B|C|D	A B C D
+tr	conjunction	long	A	A
+tr	conjunction	long	A|B	A ve B
+tr	conjunction	long	A|B|C	A, B ve C
+tr	conjunction	long	A|B|C|D	A, B, C ve D
+tr	conjunction	short	A	A
+tr	conjunction	short	A|B	A ve B
+tr	conjunction	short	A|B|C	A, B ve C
+tr	conjunction	short	A|B|C|D	A, B, C ve D
+tr	conjunction	narrow	A	A
+tr	conjunction	narrow	A|B	A, B
+tr	conjunction	narrow	A|B|C	A, B, C
+tr	conjunction	narrow	A|B|C|D	A, B, C, D
+tr	disjunction	long	A	A
+tr	disjunction	long	A|B	A veya B
+tr	disjunction	long	A|B|C	A, B veya C
+tr	disjunction	long	A|B|C|D	A, B, C veya D
+tr	disjunction	short	A	A
+tr	disjunction	short	A|B	A veya B
+tr	disjunction	short	A|B|C	A, B veya C
+tr	disjunction	short	A|B|C|D	A, B, C veya D
+tr	disjunction	narrow	A	A
+tr	disjunction	narrow	A|B	A veya B
+tr	disjunction	narrow	A|B|C	A, B veya C
+tr	disjunction	narrow	A|B|C|D	A, B, C veya D
+tr	unit	long	A	A
+tr	unit	long	A|B	A B
+tr	unit	long	A|B|C	A B C
+tr	unit	long	A|B|C|D	A B C D
+tr	unit	short	A	A
+tr	unit	short	A|B	A B
+tr	unit	short	A|B|C	A B C
+tr	unit	short	A|B|C|D	A B C D
+tr	unit	narrow	A	A
+tr	unit	narrow	A|B	A B
+tr	unit	narrow	A|B|C	A B C
+tr	unit	narrow	A|B|C|D	A B C D
+lt	conjunction	long	A	A
+lt	conjunction	long	A|B	A ir B
+lt	conjunction	long	A|B|C	A, B ir C
+lt	conjunction	long	A|B|C|D	A, B, C ir D
+lt	conjunction	short	A	A
+lt	conjunction	short	A|B	A ir B
+lt	conjunction	short	A|B|C	A, B ir C
+lt	conjunction	short	A|B|C|D	A, B, C ir D
+lt	conjunction	narrow	A	A
+lt	conjunction	narrow	A|B	A ir B
+lt	conjunction	narrow	A|B|C	A, B ir C
+lt	conjunction	narrow	A|B|C|D	A, B, C ir D
+lt	disjunction	long	A	A
+lt	disjunction	long	A|B	A ar B
+lt	disjunction	long	A|B|C	A, B ar C
+lt	disjunction	long	A|B|C|D	A, B, C ar D
+lt	disjunction	short	A	A
+lt	disjunction	short	A|B	A ar B
+lt	disjunction	short	A|B|C	A, B ar C
+lt	disjunction	short	A|B|C|D	A, B, C ar D
+lt	disjunction	narrow	A	A
+lt	disjunction	narrow	A|B	A ar B
+lt	disjunction	narrow	A|B|C	A, B ar C
+lt	disjunction	narrow	A|B|C|D	A, B, C ar D
+lt	unit	long	A	A
+lt	unit	long	A|B	A ir B
+lt	unit	long	A|B|C	A B ir C
+lt	unit	long	A|B|C|D	A B C ir D
+lt	unit	short	A	A
+lt	unit	short	A|B	A B
+lt	unit	short	A|B|C	A B C
+lt	unit	short	A|B|C|D	A B C D
+lt	unit	narrow	A	A
+lt	unit	narrow	A|B	A B
+lt	unit	narrow	A|B|C	A B C
+lt	unit	narrow	A|B|C|D	A B C D
+lv	conjunction	long	A	A
+lv	conjunction	long	A|B	A un B
+lv	conjunction	long	A|B|C	A, B un C
+lv	conjunction	long	A|B|C|D	A, B, C un D
+lv	conjunction	short	A	A
+lv	conjunction	short	A|B	A un B
+lv	conjunction	short	A|B|C	A, B un C
+lv	conjunction	short	A|B|C|D	A, B, C un D
+lv	conjunction	narrow	A	A
+lv	conjunction	narrow	A|B	A un B
+lv	conjunction	narrow	A|B|C	A, B un C
+lv	conjunction	narrow	A|B|C|D	A, B, C un D
+lv	disjunction	long	A	A
+lv	disjunction	long	A|B	A vai B
+lv	disjunction	long	A|B|C	A, B vai C
+lv	disjunction	long	A|B|C|D	A, B, C vai D
+lv	disjunction	short	A	A
+lv	disjunction	short	A|B	A vai B
+lv	disjunction	short	A|B|C	A, B vai C
+lv	disjunction	short	A|B|C|D	A, B, C vai D
+lv	disjunction	narrow	A	A
+lv	disjunction	narrow	A|B	A vai B
+lv	disjunction	narrow	A|B|C	A, B vai C
+lv	disjunction	narrow	A|B|C|D	A, B, C vai D
+lv	unit	long	A	A
+lv	unit	long	A|B	A un B
+lv	unit	long	A|B|C	A, B un C
+lv	unit	long	A|B|C|D	A, B, C un D
+lv	unit	short	A	A
+lv	unit	short	A|B	A un B
+lv	unit	short	A|B|C	A, B un C
+lv	unit	short	A|B|C|D	A, B, C un D
+lv	unit	narrow	A	A
+lv	unit	narrow	A|B	A B
+lv	unit	narrow	A|B|C	A B C
+lv	unit	narrow	A|B|C|D	A B C D
+et	conjunction	long	A	A
+et	conjunction	long	A|B	A ja B
+et	conjunction	long	A|B|C	A, B ja C
+et	conjunction	long	A|B|C|D	A, B, C ja D
+et	conjunction	short	A	A
+et	conjunction	short	A|B	A ja B
+et	conjunction	short	A|B|C	A, B ja C
+et	conjunction	short	A|B|C|D	A, B, C ja D
+et	conjunction	narrow	A	A
+et	conjunction	narrow	A|B	A, B
+et	conjunction	narrow	A|B|C	A, B, C
+et	conjunction	narrow	A|B|C|D	A, B, C, D
+et	disjunction	long	A	A
+et	disjunction	long	A|B	A või B
+et	disjunction	long	A|B|C	A, B või C
+et	disjunction	long	A|B|C|D	A, B, C või D
+et	disjunction	short	A	A
+et	disjunction	short	A|B	A või B
+et	disjunction	short	A|B|C	A, B või C
+et	disjunction	short	A|B|C|D	A, B, C või D
+et	disjunction	narrow	A	A
+et	disjunction	narrow	A|B	A või B
+et	disjunction	narrow	A|B|C	A, B või C
+et	disjunction	narrow	A|B|C|D	A, B, C või D
+et	unit	long	A	A
+et	unit	long	A|B	A, B
+et	unit	long	A|B|C	A, B, C
+et	unit	long	A|B|C|D	A, B, C, D
+et	unit	short	A	A
+et	unit	short	A|B	A, B
+et	unit	short	A|B|C	A, B, C
+et	unit	short	A|B|C|D	A, B, C, D
+et	unit	narrow	A	A
+et	unit	narrow	A|B	A B
+et	unit	narrow	A|B|C	A B C
+et	unit	narrow	A|B|C|D	A B C D
+cy	conjunction	long	A	A
+cy	conjunction	long	A|B	A a(c) B
+cy	conjunction	long	A|B|C	A, B, a(c) C
+cy	conjunction	long	A|B|C|D	A, B, C, a(c) D
+cy	conjunction	short	A	A
+cy	conjunction	short	A|B	A a(c) B
+cy	conjunction	short	A|B|C	A, B, a(c) C
+cy	conjunction	short	A|B|C|D	A, B, C, a(c) D
+cy	conjunction	narrow	A	A
+cy	conjunction	narrow	A|B	A, B
+cy	conjunction	narrow	A|B|C	A, B, C
+cy	conjunction	narrow	A|B|C|D	A, B, C, D
+cy	disjunction	long	A	A
+cy	disjunction	long	A|B	A neu B
+cy	disjunction	long	A|B|C	A, B neu C
+cy	disjunction	long	A|B|C|D	A, B, C neu D
+cy	disjunction	short	A	A
+cy	disjunction	short	A|B	A neu B
+cy	disjunction	short	A|B|C	A, B neu C
+cy	disjunction	short	A|B|C|D	A, B, C neu D
+cy	disjunction	narrow	A	A
+cy	disjunction	narrow	A|B	A neu B
+cy	disjunction	narrow	A|B|C	A, B neu C
+cy	disjunction	narrow	A|B|C|D	A, B, C neu D
+cy	unit	long	A	A
+cy	unit	long	A|B	A, B
+cy	unit	long	A|B|C	A, B, C
+cy	unit	long	A|B|C|D	A, B, C, D
+cy	unit	short	A	A
+cy	unit	short	A|B	A, B
+cy	unit	short	A|B|C	A, B, C
+cy	unit	short	A|B|C|D	A, B, C, D
+cy	unit	narrow	A	A
+cy	unit	narrow	A|B	A, B
+cy	unit	narrow	A|B|C	A, B, C
+cy	unit	narrow	A|B|C|D	A, B, C, D
+ga	conjunction	long	A	A
+ga	conjunction	long	A|B	A agus B
+ga	conjunction	long	A|B|C	A, B agus C
+ga	conjunction	long	A|B|C|D	A, B, C agus D
+ga	conjunction	short	A	A
+ga	conjunction	short	A|B	A agus B
+ga	conjunction	short	A|B|C	A, B agus C
+ga	conjunction	short	A|B|C|D	A, B, C agus D
+ga	conjunction	narrow	A	A
+ga	conjunction	narrow	A|B	A, B
+ga	conjunction	narrow	A|B|C	A, B, C
+ga	conjunction	narrow	A|B|C|D	A, B, C, D
+ga	disjunction	long	A	A
+ga	disjunction	long	A|B	A nó B
+ga	disjunction	long	A|B|C	A, B nó C
+ga	disjunction	long	A|B|C|D	A, B, C nó D
+ga	disjunction	short	A	A
+ga	disjunction	short	A|B	A nó B
+ga	disjunction	short	A|B|C	A, B nó C
+ga	disjunction	short	A|B|C|D	A, B, C nó D
+ga	disjunction	narrow	A	A
+ga	disjunction	narrow	A|B	A nó B
+ga	disjunction	narrow	A|B|C	A, B nó C
+ga	disjunction	narrow	A|B|C|D	A, B, C nó D
+ga	unit	long	A	A
+ga	unit	long	A|B	A agus B
+ga	unit	long	A|B|C	A, B agus C
+ga	unit	long	A|B|C|D	A, B, C agus D
+ga	unit	short	A	A
+ga	unit	short	A|B	A, B
+ga	unit	short	A|B|C	A, B, C
+ga	unit	short	A|B|C|D	A, B, C, D
+ga	unit	narrow	A	A
+ga	unit	narrow	A|B	A B
+ga	unit	narrow	A|B|C	A B C
+ga	unit	narrow	A|B|C|D	A B C D
+ar	conjunction	long	A	A
+ar	conjunction	long	A|B	A وB
+ar	conjunction	long	A|B|C	A وB وC
+ar	conjunction	long	A|B|C|D	A وB وC وD
+ar	conjunction	short	A	A
+ar	conjunction	short	A|B	A وB
+ar	conjunction	short	A|B|C	A وB وC
+ar	conjunction	short	A|B|C|D	A وB وC وD
+ar	conjunction	narrow	A	A
+ar	conjunction	narrow	A|B	A وB
+ar	conjunction	narrow	A|B|C	A وB وC
+ar	conjunction	narrow	A|B|C|D	A وB وC وD
+ar	disjunction	long	A	A
+ar	disjunction	long	A|B	A أو B
+ar	disjunction	long	A|B|C	A أو B أو C
+ar	disjunction	long	A|B|C|D	A أو B أو C أو D
+ar	disjunction	short	A	A
+ar	disjunction	short	A|B	A أو B
+ar	disjunction	short	A|B|C	A أو B أو C
+ar	disjunction	short	A|B|C|D	A أو B أو C أو D
+ar	disjunction	narrow	A	A
+ar	disjunction	narrow	A|B	A أو B
+ar	disjunction	narrow	A|B|C	A أو B أو C
+ar	disjunction	narrow	A|B|C|D	A أو B أو C أو D
+ar	unit	long	A	A
+ar	unit	long	A|B	A وB
+ar	unit	long	A|B|C	A، وB، وC
+ar	unit	long	A|B|C|D	A، وB، وC، وD
+ar	unit	short	A	A
+ar	unit	short	A|B	A وB
+ar	unit	short	A|B|C	A، وB، وC
+ar	unit	short	A|B|C|D	A، وB، وC، وD
+ar	unit	narrow	A	A
+ar	unit	narrow	A|B	A وB
+ar	unit	narrow	A|B|C	A وB وC
+ar	unit	narrow	A|B|C|D	A وB وC وD
+ar-EG	conjunction	long	A	A
+ar-EG	conjunction	long	A|B	A وB
+ar-EG	conjunction	long	A|B|C	A وB وC
+ar-EG	conjunction	long	A|B|C|D	A وB وC وD
+ar-EG	conjunction	short	A	A
+ar-EG	conjunction	short	A|B	A وB
+ar-EG	conjunction	short	A|B|C	A وB وC
+ar-EG	conjunction	short	A|B|C|D	A وB وC وD
+ar-EG	conjunction	narrow	A	A
+ar-EG	conjunction	narrow	A|B	A وB
+ar-EG	conjunction	narrow	A|B|C	A وB وC
+ar-EG	conjunction	narrow	A|B|C|D	A وB وC وD
+ar-EG	disjunction	long	A	A
+ar-EG	disjunction	long	A|B	A أو B
+ar-EG	disjunction	long	A|B|C	A أو B أو C
+ar-EG	disjunction	long	A|B|C|D	A أو B أو C أو D
+ar-EG	disjunction	short	A	A
+ar-EG	disjunction	short	A|B	A أو B
+ar-EG	disjunction	short	A|B|C	A أو B أو C
+ar-EG	disjunction	short	A|B|C|D	A أو B أو C أو D
+ar-EG	disjunction	narrow	A	A
+ar-EG	disjunction	narrow	A|B	A أو B
+ar-EG	disjunction	narrow	A|B|C	A أو B أو C
+ar-EG	disjunction	narrow	A|B|C|D	A أو B أو C أو D
+ar-EG	unit	long	A	A
+ar-EG	unit	long	A|B	A وB
+ar-EG	unit	long	A|B|C	A، وB، وC
+ar-EG	unit	long	A|B|C|D	A، وB، وC، وD
+ar-EG	unit	short	A	A
+ar-EG	unit	short	A|B	A وB
+ar-EG	unit	short	A|B|C	A، وB، وC
+ar-EG	unit	short	A|B|C|D	A، وB، وC، وD
+ar-EG	unit	narrow	A	A
+ar-EG	unit	narrow	A|B	A وB
+ar-EG	unit	narrow	A|B|C	A وB وC
+ar-EG	unit	narrow	A|B|C|D	A وB وC وD
+fa	conjunction	long	A	A
+fa	conjunction	long	A|B	A و B
+fa	conjunction	long	A|B|C	A،‏ B، و C
+fa	conjunction	long	A|B|C|D	A،‏ B،‏ C، و D
+fa	conjunction	short	A	A
+fa	conjunction	short	A|B	A و B
+fa	conjunction	short	A|B|C	A،‏ B، و C
+fa	conjunction	short	A|B|C|D	A،‏ B،‏ C، و D
+fa	conjunction	narrow	A	A
+fa	conjunction	narrow	A|B	A،‏ B
+fa	conjunction	narrow	A|B|C	A،‏ B،‏ C
+fa	conjunction	narrow	A|B|C|D	A،‏ B،‏ C،‏ D
+fa	disjunction	long	A	A
+fa	disjunction	long	A|B	A یا B
+fa	disjunction	long	A|B|C	A،‏ B، یا C
+fa	disjunction	long	A|B|C|D	A،‏ B،‏ C، یا D
+fa	disjunction	short	A	A
+fa	disjunction	short	A|B	A یا B
+fa	disjunction	short	A|B|C	A،‏ B، یا C
+fa	disjunction	short	A|B|C|D	A،‏ B،‏ C، یا D
+fa	disjunction	narrow	A	A
+fa	disjunction	narrow	A|B	A یا B
+fa	disjunction	narrow	A|B|C	A،‏ B، یا C
+fa	disjunction	narrow	A|B|C|D	A،‏ B،‏ C، یا D
+fa	unit	long	A	A
+fa	unit	long	A|B	A و B
+fa	unit	long	A|B|C	A،‏ B، و C
+fa	unit	long	A|B|C|D	A،‏ B،‏ C، و D
+fa	unit	short	A	A
+fa	unit	short	A|B	A،‏ B
+fa	unit	short	A|B|C	A،‏ B، و C
+fa	unit	short	A|B|C|D	A،‏ B،‏ C، و D
+fa	unit	narrow	A	A
+fa	unit	narrow	A|B	A B
+fa	unit	narrow	A|B|C	A B C
+fa	unit	narrow	A|B|C|D	A B C D
+he	conjunction	long	A	A
+he	conjunction	long	A|B	A ו-B
+he	conjunction	long	A|B|C	A, B ו-C
+he	conjunction	long	A|B|C|D	A, B, C ו-D
+he	conjunction	short	A	A
+he	conjunction	short	A|B	A ו-B
+he	conjunction	short	A|B|C	A, B ו-C
+he	conjunction	short	A|B|C|D	A, B, C ו-D
+he	conjunction	narrow	A	A
+he	conjunction	narrow	A|B	A ו-B
+he	conjunction	narrow	A|B|C	A, B ו-C
+he	conjunction	narrow	A|B|C|D	A, B, C ו-D
+he	disjunction	long	A	A
+he	disjunction	long	A|B	A או B
+he	disjunction	long	A|B|C	A, B או C
+he	disjunction	long	A|B|C|D	A, B, C או D
+he	disjunction	short	A	A
+he	disjunction	short	A|B	A או B
+he	disjunction	short	A|B|C	A, B או C
+he	disjunction	short	A|B|C|D	A, B, C או D
+he	disjunction	narrow	A	A
+he	disjunction	narrow	A|B	A או B
+he	disjunction	narrow	A|B|C	A, B או C
+he	disjunction	narrow	A|B|C|D	A, B, C או D
+he	unit	long	A	A
+he	unit	long	A|B	A, B
+he	unit	long	A|B|C	A, B, C
+he	unit	long	A|B|C|D	A, B, C, D
+he	unit	short	A	A
+he	unit	short	A|B	A, B
+he	unit	short	A|B|C	A, B, C
+he	unit	short	A|B|C|D	A, B, C, D
+he	unit	narrow	A	A
+he	unit	narrow	A|B	A B
+he	unit	narrow	A|B|C	A B C
+he	unit	narrow	A|B|C|D	A B C D
+hi	conjunction	long	A	A
+hi	conjunction	long	A|B	A और B
+hi	conjunction	long	A|B|C	A, B और C
+hi	conjunction	long	A|B|C|D	A, B, C और D
+hi	conjunction	short	A	A
+hi	conjunction	short	A|B	A और B
+hi	conjunction	short	A|B|C	A, B और C
+hi	conjunction	short	A|B|C|D	A, B, C और D
+hi	conjunction	narrow	A	A
+hi	conjunction	narrow	A|B	A और B
+hi	conjunction	narrow	A|B|C	A, B और C
+hi	conjunction	narrow	A|B|C|D	A, B, C और D
+hi	disjunction	long	A	A
+hi	disjunction	long	A|B	A या B
+hi	disjunction	long	A|B|C	A, B या C
+hi	disjunction	long	A|B|C|D	A, B, C या D
+hi	disjunction	short	A	A
+hi	disjunction	short	A|B	A या B
+hi	disjunction	short	A|B|C	A, B या C
+hi	disjunction	short	A|B|C|D	A, B, C या D
+hi	disjunction	narrow	A	A
+hi	disjunction	narrow	A|B	A या B
+hi	disjunction	narrow	A|B|C	A, B या C
+hi	disjunction	narrow	A|B|C|D	A, B, C या D
+hi	unit	long	A	A
+hi	unit	long	A|B	A और B
+hi	unit	long	A|B|C	A, B और C
+hi	unit	long	A|B|C|D	A, B, C और D
+hi	unit	short	A	A
+hi	unit	short	A|B	A, B
+hi	unit	short	A|B|C	A, B, C
+hi	unit	short	A|B|C|D	A, B, C, D
+hi	unit	narrow	A	A
+hi	unit	narrow	A|B	A B
+hi	unit	narrow	A|B|C	A, B C
+hi	unit	narrow	A|B|C|D	A, B, C D
+bn	conjunction	long	A	A
+bn	conjunction	long	A|B	A এবং B
+bn	conjunction	long	A|B|C	A, B এবং C
+bn	conjunction	long	A|B|C|D	A, B, C এবং D
+bn	conjunction	short	A	A
+bn	conjunction	short	A|B	A এবং B
+bn	conjunction	short	A|B|C	A, B এবং C
+bn	conjunction	short	A|B|C|D	A, B, C এবং D
+bn	conjunction	narrow	A	A
+bn	conjunction	narrow	A|B	A, B
+bn	conjunction	narrow	A|B|C	A, B, C
+bn	conjunction	narrow	A|B|C|D	A, B, C, D
+bn	disjunction	long	A	A
+bn	disjunction	long	A|B	A বা B
+bn	disjunction	long	A|B|C	A, B, বা C
+bn	disjunction	long	A|B|C|D	A, B, C, বা D
+bn	disjunction	short	A	A
+bn	disjunction	short	A|B	A বা B
+bn	disjunction	short	A|B|C	A, B, বা C
+bn	disjunction	short	A|B|C|D	A, B, C, বা D
+bn	disjunction	narrow	A	A
+bn	disjunction	narrow	A|B	A বা B
+bn	disjunction	narrow	A|B|C	A, B, বা C
+bn	disjunction	narrow	A|B|C|D	A, B, C, বা D
+bn	unit	long	A	A
+bn	unit	long	A|B	A, B
+bn	unit	long	A|B|C	A, B, C
+bn	unit	long	A|B|C|D	A, B, C, D
+bn	unit	short	A	A
+bn	unit	short	A|B	A, B
+bn	unit	short	A|B|C	A, B, C
+bn	unit	short	A|B|C|D	A, B, C, D
+bn	unit	narrow	A	A
+bn	unit	narrow	A|B	A, B
+bn	unit	narrow	A|B|C	A, B, C
+bn	unit	narrow	A|B|C|D	A, B, C, D
+mr	conjunction	long	A	A
+mr	conjunction	long	A|B	A आणि B
+mr	conjunction	long	A|B|C	A, B आणि C
+mr	conjunction	long	A|B|C|D	A, B, C आणि D
+mr	conjunction	short	A	A
+mr	conjunction	short	A|B	A आणि B
+mr	conjunction	short	A|B|C	A, B आणि C
+mr	conjunction	short	A|B|C|D	A, B, C आणि D
+mr	conjunction	narrow	A	A
+mr	conjunction	narrow	A|B	A आणि B
+mr	conjunction	narrow	A|B|C	A, B आणि C
+mr	conjunction	narrow	A|B|C|D	A, B, C आणि D
+mr	disjunction	long	A	A
+mr	disjunction	long	A|B	A किंवा B
+mr	disjunction	long	A|B|C	A, B, किंवा C
+mr	disjunction	long	A|B|C|D	A, B, C, किंवा D
+mr	disjunction	short	A	A
+mr	disjunction	short	A|B	A किंवा B
+mr	disjunction	short	A|B|C	A, B किंवा C
+mr	disjunction	short	A|B|C|D	A, B, C किंवा D
+mr	disjunction	narrow	A	A
+mr	disjunction	narrow	A|B	A किंवा B
+mr	disjunction	narrow	A|B|C	A, B किंवा C
+mr	disjunction	narrow	A|B|C|D	A, B, C किंवा D
+mr	unit	long	A	A
+mr	unit	long	A|B	A, B
+mr	unit	long	A|B|C	A, B, C
+mr	unit	long	A|B|C|D	A, B, C, D
+mr	unit	short	A	A
+mr	unit	short	A|B	A, B
+mr	unit	short	A|B|C	A, B, C
+mr	unit	short	A|B|C|D	A, B, C, D
+mr	unit	narrow	A	A
+mr	unit	narrow	A|B	A B
+mr	unit	narrow	A|B|C	A B C
+mr	unit	narrow	A|B|C|D	A B C D
+ta	conjunction	long	A	A
+ta	conjunction	long	A|B	A மற்றும் B
+ta	conjunction	long	A|B|C	A, B மற்றும் C
+ta	conjunction	long	A|B|C|D	A, B, C மற்றும் D
+ta	conjunction	short	A	A
+ta	conjunction	short	A|B	A மற்றும் B
+ta	conjunction	short	A|B|C	A, B மற்றும் C
+ta	conjunction	short	A|B|C|D	A, B, C மற்றும் D
+ta	conjunction	narrow	A	A
+ta	conjunction	narrow	A|B	A மற்றும் B
+ta	conjunction	narrow	A|B|C	A, B மற்றும் C
+ta	conjunction	narrow	A|B|C|D	A, B, C மற்றும் D
+ta	disjunction	long	A	A
+ta	disjunction	long	A|B	A அல்லது B
+ta	disjunction	long	A|B|C	A, B அல்லது C
+ta	disjunction	long	A|B|C|D	A, B, C அல்லது D
+ta	disjunction	short	A	A
+ta	disjunction	short	A|B	A அல்லது B
+ta	disjunction	short	A|B|C	A, B அல்லது C
+ta	disjunction	short	A|B|C|D	A, B, C அல்லது D
+ta	disjunction	narrow	A	A
+ta	disjunction	narrow	A|B	A அல்லது B
+ta	disjunction	narrow	A|B|C	A, B அல்லது C
+ta	disjunction	narrow	A|B|C|D	A, B, C அல்லது D
+ta	unit	long	A	A
+ta	unit	long	A|B	A, B
+ta	unit	long	A|B|C	A, B, C
+ta	unit	long	A|B|C|D	A, B, C, D
+ta	unit	short	A	A
+ta	unit	short	A|B	A, B
+ta	unit	short	A|B|C	A, B, C
+ta	unit	short	A|B|C|D	A, B, C, D
+ta	unit	narrow	A	A
+ta	unit	narrow	A|B	A B
+ta	unit	narrow	A|B|C	A B C
+ta	unit	narrow	A|B|C|D	A B C D
+th	conjunction	long	A	A
+th	conjunction	long	A|B	AและB
+th	conjunction	long	A|B|C	A B และC
+th	conjunction	long	A|B|C|D	A B C และD
+th	conjunction	short	A	A
+th	conjunction	short	A|B	AและB
+th	conjunction	short	A|B|C	A B และC
+th	conjunction	short	A|B|C|D	A B C และD
+th	conjunction	narrow	A	A
+th	conjunction	narrow	A|B	AและB
+th	conjunction	narrow	A|B|C	A B และC
+th	conjunction	narrow	A|B|C|D	A B C และD
+th	disjunction	long	A	A
+th	disjunction	long	A|B	A หรือ B
+th	disjunction	long	A|B|C	A, B หรือ C
+th	disjunction	long	A|B|C|D	A, B, C หรือ D
+th	disjunction	short	A	A
+th	disjunction	short	A|B	AหรือB
+th	disjunction	short	A|B|C	A, B หรือ C
+th	disjunction	short	A|B|C|D	A, B, C หรือ D
+th	disjunction	narrow	A	A
+th	disjunction	narrow	A|B	AหรือB
+th	disjunction	narrow	A|B|C	A, B หรือ C
+th	disjunction	narrow	A|B|C|D	A, B, C หรือ D
+th	unit	long	A	A
+th	unit	long	A|B	A และ B
+th	unit	long	A|B|C	A B และ C
+th	unit	long	A|B|C|D	A B C และ D
+th	unit	short	A	A
+th	unit	short	A|B	A B
+th	unit	short	A|B|C	A B และ C
+th	unit	short	A|B|C|D	A B C และ D
+th	unit	narrow	A	A
+th	unit	narrow	A|B	A B
+th	unit	narrow	A|B|C	A B C
+th	unit	narrow	A|B|C|D	A B C D
+vi	conjunction	long	A	A
+vi	conjunction	long	A|B	A và B
+vi	conjunction	long	A|B|C	A, B và C
+vi	conjunction	long	A|B|C|D	A, B, C và D
+vi	conjunction	short	A	A
+vi	conjunction	short	A|B	A và B
+vi	conjunction	short	A|B|C	A, B và C
+vi	conjunction	short	A|B|C|D	A, B, C và D
+vi	conjunction	narrow	A	A
+vi	conjunction	narrow	A|B	A, B
+vi	conjunction	narrow	A|B|C	A, B, C
+vi	conjunction	narrow	A|B|C|D	A, B, C, D
+vi	disjunction	long	A	A
+vi	disjunction	long	A|B	A hoặc B
+vi	disjunction	long	A|B|C	A, B hoặc C
+vi	disjunction	long	A|B|C|D	A, B, C hoặc D
+vi	disjunction	short	A	A
+vi	disjunction	short	A|B	A hoặc B
+vi	disjunction	short	A|B|C	A, B hoặc C
+vi	disjunction	short	A|B|C|D	A, B, C hoặc D
+vi	disjunction	narrow	A	A
+vi	disjunction	narrow	A|B	A hoặc B
+vi	disjunction	narrow	A|B|C	A, B hoặc C
+vi	disjunction	narrow	A|B|C|D	A, B, C hoặc D
+vi	unit	long	A	A
+vi	unit	long	A|B	A, B
+vi	unit	long	A|B|C	A, B, C
+vi	unit	long	A|B|C|D	A, B, C, D
+vi	unit	short	A	A
+vi	unit	short	A|B	A, B
+vi	unit	short	A|B|C	A, B, C
+vi	unit	short	A|B|C|D	A, B, C, D
+vi	unit	narrow	A	A
+vi	unit	narrow	A|B	A B
+vi	unit	narrow	A|B|C	A B C
+vi	unit	narrow	A|B|C|D	A B C D
+id	conjunction	long	A	A
+id	conjunction	long	A|B	A dan B
+id	conjunction	long	A|B|C	A, B, dan C
+id	conjunction	long	A|B|C|D	A, B, C, dan D
+id	conjunction	short	A	A
+id	conjunction	short	A|B	A dan B
+id	conjunction	short	A|B|C	A, B, dan C
+id	conjunction	short	A|B|C|D	A, B, C, dan D
+id	conjunction	narrow	A	A
+id	conjunction	narrow	A|B	A, B
+id	conjunction	narrow	A|B|C	A, B, C
+id	conjunction	narrow	A|B|C|D	A, B, C, D
+id	disjunction	long	A	A
+id	disjunction	long	A|B	A atau B
+id	disjunction	long	A|B|C	A, B, atau C
+id	disjunction	long	A|B|C|D	A, B, C, atau D
+id	disjunction	short	A	A
+id	disjunction	short	A|B	A atau B
+id	disjunction	short	A|B|C	A, B, atau C
+id	disjunction	short	A|B|C|D	A, B, C, atau D
+id	disjunction	narrow	A	A
+id	disjunction	narrow	A|B	A atau B
+id	disjunction	narrow	A|B|C	A, B, atau C
+id	disjunction	narrow	A|B|C|D	A, B, C, atau D
+id	unit	long	A	A
+id	unit	long	A|B	A, B
+id	unit	long	A|B|C	A, B, C
+id	unit	long	A|B|C|D	A, B, C, D
+id	unit	short	A	A
+id	unit	short	A|B	A, B
+id	unit	short	A|B|C	A, B, C
+id	unit	short	A|B|C|D	A, B, C, D
+id	unit	narrow	A	A
+id	unit	narrow	A|B	A, B
+id	unit	narrow	A|B|C	A, B, C
+id	unit	narrow	A|B|C|D	A, B, C, D
+ko	conjunction	long	A	A
+ko	conjunction	long	A|B	A 및 B
+ko	conjunction	long	A|B|C	A, B 및 C
+ko	conjunction	long	A|B|C|D	A, B, C 및 D
+ko	conjunction	short	A	A
+ko	conjunction	short	A|B	A 및 B
+ko	conjunction	short	A|B|C	A, B 및 C
+ko	conjunction	short	A|B|C|D	A, B, C 및 D
+ko	conjunction	narrow	A	A
+ko	conjunction	narrow	A|B	A 및 B
+ko	conjunction	narrow	A|B|C	A, B 및 C
+ko	conjunction	narrow	A|B|C|D	A, B, C 및 D
+ko	disjunction	long	A	A
+ko	disjunction	long	A|B	A 또는 B
+ko	disjunction	long	A|B|C	A, B 또는 C
+ko	disjunction	long	A|B|C|D	A, B, C 또는 D
+ko	disjunction	short	A	A
+ko	disjunction	short	A|B	A 또는 B
+ko	disjunction	short	A|B|C	A, B 또는 C
+ko	disjunction	short	A|B|C|D	A, B, C 또는 D
+ko	disjunction	narrow	A	A
+ko	disjunction	narrow	A|B	A 또는 B
+ko	disjunction	narrow	A|B|C	A, B 또는 C
+ko	disjunction	narrow	A|B|C|D	A, B, C 또는 D
+ko	unit	long	A	A
+ko	unit	long	A|B	A B
+ko	unit	long	A|B|C	A B C
+ko	unit	long	A|B|C|D	A B C D
+ko	unit	short	A	A
+ko	unit	short	A|B	A B
+ko	unit	short	A|B|C	A B C
+ko	unit	short	A|B|C|D	A B C D
+ko	unit	narrow	A	A
+ko	unit	narrow	A|B	A B
+ko	unit	narrow	A|B|C	A B C
+ko	unit	narrow	A|B|C|D	A B C D
+ja	conjunction	long	A	A
+ja	conjunction	long	A|B	A、B
+ja	conjunction	long	A|B|C	A、B、C
+ja	conjunction	long	A|B|C|D	A、B、C、D
+ja	conjunction	short	A	A
+ja	conjunction	short	A|B	A、B
+ja	conjunction	short	A|B|C	A、B、C
+ja	conjunction	short	A|B|C|D	A、B、C、D
+ja	conjunction	narrow	A	A
+ja	conjunction	narrow	A|B	A、B
+ja	conjunction	narrow	A|B|C	A、B、C
+ja	conjunction	narrow	A|B|C|D	A、B、C、D
+ja	disjunction	long	A	A
+ja	disjunction	long	A|B	AまたはB
+ja	disjunction	long	A|B|C	A、B、またはC
+ja	disjunction	long	A|B|C|D	A、B、C、またはD
+ja	disjunction	short	A	A
+ja	disjunction	short	A|B	AまたはB
+ja	disjunction	short	A|B|C	A、B、またはC
+ja	disjunction	short	A|B|C|D	A、B、C、またはD
+ja	disjunction	narrow	A	A
+ja	disjunction	narrow	A|B	AまたはB
+ja	disjunction	narrow	A|B|C	A、B、またはC
+ja	disjunction	narrow	A|B|C|D	A、B、C、またはD
+ja	unit	long	A	A
+ja	unit	long	A|B	A B
+ja	unit	long	A|B|C	A B C
+ja	unit	long	A|B|C|D	A B C D
+ja	unit	short	A	A
+ja	unit	short	A|B	A B
+ja	unit	short	A|B|C	A B C
+ja	unit	short	A|B|C|D	A B C D
+ja	unit	narrow	A	A
+ja	unit	narrow	A|B	AB
+ja	unit	narrow	A|B|C	ABC
+ja	unit	narrow	A|B|C|D	ABCD
+zh	conjunction	long	A	A
+zh	conjunction	long	A|B	A和B
+zh	conjunction	long	A|B|C	A、B和C
+zh	conjunction	long	A|B|C|D	A、B、C和D
+zh	conjunction	short	A	A
+zh	conjunction	short	A|B	A和B
+zh	conjunction	short	A|B|C	A、B和C
+zh	conjunction	short	A|B|C|D	A、B、C和D
+zh	conjunction	narrow	A	A
+zh	conjunction	narrow	A|B	A、B
+zh	conjunction	narrow	A|B|C	A、B、C
+zh	conjunction	narrow	A|B|C|D	A、B、C、D
+zh	disjunction	long	A	A
+zh	disjunction	long	A|B	A或B
+zh	disjunction	long	A|B|C	A、B或C
+zh	disjunction	long	A|B|C|D	A、B、C或D
+zh	disjunction	short	A	A
+zh	disjunction	short	A|B	A或B
+zh	disjunction	short	A|B|C	A、B或C
+zh	disjunction	short	A|B|C|D	A、B、C或D
+zh	disjunction	narrow	A	A
+zh	disjunction	narrow	A|B	A或B
+zh	disjunction	narrow	A|B|C	A、B或C
+zh	disjunction	narrow	A|B|C|D	A、B、C或D
+zh	unit	long	A	A
+zh	unit	long	A|B	AB
+zh	unit	long	A|B|C	ABC
+zh	unit	long	A|B|C|D	ABCD
+zh	unit	short	A	A
+zh	unit	short	A|B	AB
+zh	unit	short	A|B|C	ABC
+zh	unit	short	A|B|C|D	ABCD
+zh	unit	narrow	A	A
+zh	unit	narrow	A|B	AB
+zh	unit	narrow	A|B|C	ABC
+zh	unit	narrow	A|B|C|D	ABCD
+zh-Hant	conjunction	long	A	A
+zh-Hant	conjunction	long	A|B	A和B
+zh-Hant	conjunction	long	A|B|C	A、B和C
+zh-Hant	conjunction	long	A|B|C|D	A、B、C和D
+zh-Hant	conjunction	short	A	A
+zh-Hant	conjunction	short	A|B	A和B
+zh-Hant	conjunction	short	A|B|C	A、B和C
+zh-Hant	conjunction	short	A|B|C|D	A、B、C和D
+zh-Hant	conjunction	narrow	A	A
+zh-Hant	conjunction	narrow	A|B	A、B
+zh-Hant	conjunction	narrow	A|B|C	A、B和C
+zh-Hant	conjunction	narrow	A|B|C|D	A、B、C和D
+zh-Hant	disjunction	long	A	A
+zh-Hant	disjunction	long	A|B	A或B
+zh-Hant	disjunction	long	A|B|C	A、B或C
+zh-Hant	disjunction	long	A|B|C|D	A、B、C或D
+zh-Hant	disjunction	short	A	A
+zh-Hant	disjunction	short	A|B	A或B
+zh-Hant	disjunction	short	A|B|C	A、B或C
+zh-Hant	disjunction	short	A|B|C|D	A、B、C或D
+zh-Hant	disjunction	narrow	A	A
+zh-Hant	disjunction	narrow	A|B	A或B
+zh-Hant	disjunction	narrow	A|B|C	A、B或C
+zh-Hant	disjunction	narrow	A|B|C|D	A、B、C或D
+zh-Hant	unit	long	A	A
+zh-Hant	unit	long	A|B	A B
+zh-Hant	unit	long	A|B|C	A B C
+zh-Hant	unit	long	A|B|C|D	A B C D
+zh-Hant	unit	short	A	A
+zh-Hant	unit	short	A|B	A B
+zh-Hant	unit	short	A|B|C	A B C
+zh-Hant	unit	short	A|B|C|D	A B C D
+zh-Hant	unit	narrow	A	A
+zh-Hant	unit	narrow	A|B	AB
+zh-Hant	unit	narrow	A|B|C	ABC
+zh-Hant	unit	narrow	A|B|C|D	ABCD
+es	conjunction	long	uno|idea	uno e idea
+es	disjunction	long	uno|idea	uno o idea
+es	conjunction	long	x|hielo	x y hielo
+es	disjunction	long	x|hielo	x o hielo
+es	conjunction	long	x|hijo	x e hijo
+es	disjunction	long	x|hijo	x o hijo
+es	conjunction	long	siete|ocho	siete y ocho
+es	disjunction	long	siete|ocho	siete u ocho
+es	conjunction	long	7|8	7 y 8
+es	disjunction	long	7|8	7 u 8
+es	conjunction	long	10|11	10 y 11
+es	disjunction	long	10|11	10 u 11
+es	conjunction	long	a|oro	a y oro
+es	disjunction	long	a|oro	a u oro
+he	conjunction	long	א|ב	א וב
+he	conjunction	long	א|B	א ו-B
+he	conjunction	long	א|ב|3	א, ב ו-3

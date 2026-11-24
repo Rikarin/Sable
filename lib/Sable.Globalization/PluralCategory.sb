@@ -1,0 +1,46 @@
+module Sable.Globalization
+
+/// The forms languages' plurals take, by the CLDR's names: a language has
+/// some of them, and `Other` always. English has `One` and `Other`, Polish
+/// `One`, `Few`, `Many` and `Other`, Arabic all six.
+@derive(Equatable, Hashable, Debug)
+public enum PluralCategory {
+    Zero
+    One
+    Two
+    Few
+    Many
+    Other
+
+    /// The CLDR's name, as message catalogues write it: "few".
+    ///
+    /// ```sable
+    /// assert(PluralCategory.Few.name == "few")
+    /// assert(PluralCategory.of("many")! == .Many)
+    /// ```
+    public var name: String {
+        get {
+            return match self {
+                case .Zero  => "zero"
+                case .One   => "one"
+                case .Two   => "two"
+                case .Few   => "few"
+                case .Many  => "many"
+                case .Other => "other"
+            }
+        }
+    }
+
+    /// The category of the name; none for any other text.
+    public static fn of(_ name: String) -> PluralCategory? {
+        return match name {
+            case "zero"  => PluralCategory.Zero
+            case "one"   => PluralCategory.One
+            case "two"   => PluralCategory.Two
+            case "few"   => PluralCategory.Few
+            case "many"  => PluralCategory.Many
+            case "other" => PluralCategory.Other
+            case _       => none
+        }
+    }
+}

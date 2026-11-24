@@ -1,0 +1,11 @@
+module Sable.Globalization
+
+/// What joins a list's items.
+public enum ListKind {
+    /// All of them: "a, b, and c".
+    And
+    /// One of them: "a, b, or c".
+    Or
+    /// A measure's parts: "5 ft, 10 in".
+    Unit
+}

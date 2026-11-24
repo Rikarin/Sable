@@ -1,0 +1,329 @@
+module Sable.Globalization
+
+import Sable.Time
+
+// Reading dates and times as a locale writes them: the pattern's fields in
+// their order, with the locale's names for months, weekdays and halves of the
+// day, in any case.
+
+extension DateTimeFormatter {
+    /// The date the text writes as the locale does, its whole: the pattern's
+    /// fields, each number in the locale's digits or ASCII ones, each name in
+    /// any case and of any length. A year of two digits is of 1950 to 2049,
+    /// as it is to `Date.parse(_:pattern:)`, unless the pattern has an era. A weekday must be the date's.
+    ///
+    /// ```sable
+    /// let french = DateTimeFormatter(date: .Full, locale: Locale.of("fr")!)
+    /// assert(try! french.parseDate("mardi 17 novembre 2026") == Date.of(year: 2026, month: 11, day: 17)!)
+    /// assert((try? french.parseDate("lundi 17 novembre 2026")) == none)
+    /// ```
+    public fn parseDate(_ text: String) throws(ParseError) -> Date {
+        return try read(text).date()
+    }
+
+    /// The time the text writes as the locale does, its whole.
+    ///
+    /// ```sable
+    /// let english = DateTimeFormatter(time: .Short, locale: Locale.of("en")!)
+    /// assert(try! english.parseTime("9:05 pm") == TimeOfDay.of(hour: 21, minute: 5)!)
+    /// ```
+    public fn parseTime(_ text: String) throws(ParseError) -> TimeOfDay {
+        return try read(text).time()
+    }
+
+    /// The date and time the text writes as the locale does, its whole. An
+    /// offset the pattern has is passed over, or may be left off.
+    ///
+    /// ```sable
+    /// let czech = DateTimeFormatter(date: .Short, time: .Short, locale: Locale.of("cs")!)
+    /// let read = try! czech.parseDateTime("17.11.2026 9:05")
+    /// assert(read == LocalDateTime.of(year: 2026, month: 11, day: 17, hour: 9, minute: 5)!)
+    /// ```
+    public fn parseDateTime(_ text: String) throws(ParseError) -> LocalDateTime {
+        let fields = try read(text)
+        return LocalDateTime(date: try fields.date(), time: try fields.time())
+    }
+
+    fn read(_ text: String) throws(ParseError) -> DateFields {
+        let data = locale.data
+        var reader = DateReader(text, digits)
+        var fields = DateFields()
+        reader.skipSpaces()
+        if reader.atEnd {
+            throw .Empty
+        }
+        // "44 BC" is the year 44.
+        let hasEra = tokens.contains(where: { $0.letter == 'G' })
+        var index = 0
+        for token in tokens {
+            let n = token.count
+            let start = reader.position
+            // A number directly before another takes only its own digits.
+            let packed = index + 1 < tokens.count && isNumeric(tokens[index + 1])
+            index += 1
+            match token.letter {
+                case ' ' => { try reader.literal(token.text) }
+                case 'G' => {
+                    let era = try reader.name([data.items("era")])
+                    fields.beforeChrist = era == 0
+                }
+                case 'y', 'u' => {
+                    let before = reader.at
+                    let year = try reader.number(packed && n > 1 ? n : 6)
+                    fields.year = !hasEra && n <= 2 && reader.at - before == 2 ? year + (year < 50 ? 2000 : 1900) : year
+                    fields.yearAt = start
+                }
+                case 'M', 'L' => {
+                    fields.month = n < 3
+                        ? try reader.number(2)
+                        : try reader.name([data.items("months"), data.items("months.alone"), data.items("months.short"), data.items("months.alone.short")]) + 1
+                    fields.monthAt = start
+                }
+                case 'd' => {
+                    fields.day = try reader.number(2)
+                    fields.dayAt = start
+                }
+                case 'D' => {
+                    fields.dayOfYear = try reader.number(3)
+                    fields.dayAt = start
+                }
+                case 'E', 'e', 'c' => {
+                    fields.weekday = try reader.name([data.items("days"), data.items("days.alone"), data.items("days.short"), data.items("days.alone.short")]) + 1
+                    fields.weekdayAt = start
+                }
+                case 'B' where data.fields["parts"] != none => {
+                    let part = try reader.name([data.items("parts")])
+                    fields.partOfDay = data.items("parts")[part]
+                    fields.parts = data.items("parts")
+                }
+                case 'a', 'b', 'B' => {
+                    let half = try reader.name([data.items("ampm"), ["AM", "PM"]])
+                    fields.afternoon = half == 1
+                }
+                case 'h', 'K', 'H', 'k' => {
+                    fields.hour = try reader.number(2)
+                    fields.hourLetter = token.letter
+                    fields.hourAt = start
+                }
+                case 'm' => {
+                    fields.minute = try reader.number(2)
+                    fields.minuteAt = start
+                }
+                case 's' => {
+                    fields.second = try reader.number(2)
+                    fields.secondAt = start
+                }
+                case 'S' => {
+                    let before = reader.at
+                    var value = try reader.number(n > 9 ? 9 : n)
+                    var places = reader.at - before
+                    while places < 9 {
+                        value *= 10
+                        places += 1
+                    }
+                    fields.nanosecond = value
+                }
+                case _ => { reader.skipOffset() }
+            }
+        }
+        reader.skipSpaces()
+        if !reader.atEnd {
+            throw .Invalid(at: reader.position)
+        }
+        return fields
+    }
+
+    fn isNumeric(_ token: DateToken) -> Bool {
+        return match token.letter {
+            case 'M', 'L'                                              => token.count < 3
+            case 'y', 'u', 'd', 'D', 'h', 'H', 'k', 'K', 'm', 's', 'S' => true
+            case _                                                     => false
+        }
+    }
+}
+
+/// What the text's fields said.
+struct DateFields {
+    var year: Int = 1
+    var yearAt: Int = 0
+    var beforeChrist: Bool = false
+    var month: Int = 1
+    var monthAt: Int = 0
+    var day: Int = 1
+    var dayAt: Int = 0
+    var dayOfYear: Int = 0
+    var weekday: Int = 0
+    var weekdayAt: Int = 0
+    var hour: Int = 0
+    var hourLetter: Char = 'H'
+    var hourAt: Int = 0
+    var afternoon: Bool? = none
+    /// The part of the day named, and what each hour's is.
+    var partOfDay: String = ""
+    var parts: String[>..] = []
+    var minute: Int = 0
+    var minuteAt: Int = 0
+    var second: Int = 0
+    var secondAt: Int = 0
+    var nanosecond: Int = 0
+
+    init() { }
+
+    fn date() throws(ParseError) -> Date {
+        if month < 1 || month > 12 {
+            throw .Invalid(at: monthAt)
+        }
+        let astronomical = beforeChrist ? 1 - year : year
+        let found = dayOfYear > 0 ? Date.of(year: astronomical, dayOfYear: dayOfYear) : Date.of(year: astronomical, month: month, day: day)
+        guard let date = found else {
+            throw .Invalid(at: dayAt)
+        }
+        if weekday != 0 && date.weekday.number != weekday {
+            throw .Invalid(at: weekdayAt)
+        }
+        return date
+    }
+
+    fn time() throws(ParseError) -> TimeOfDay {
+        var h = hour
+        if hourLetter == 'h' {
+            if h < 1 || h > 12 {
+                throw .Invalid(at: hourAt)
+            }
+            h = h % 12
+        } else if hourLetter == 'K' && h > 11 || hourLetter == 'k' && h < 1 {
+            throw .Invalid(at: hourAt)
+        } else if hourLetter == 'k' {
+            h = h % 24
+        }
+        if hourLetter == 'h' || hourLetter == 'K' {
+            h += afternoon ?? false ? 12 : 0
+            if !partOfDay.isEmpty && parts[h] != partOfDay {
+                h += 12
+                if parts[h] != partOfDay {
+                    throw .Invalid(at: hourAt)
+                }
+            }
+        }
+        if minute > 59 {
+            throw .Invalid(at: minuteAt)
+        }
+        if second > 59 {
+            throw .Invalid(at: secondAt)
+        }
+        guard let time = TimeOfDay.of(hour: h, minute: minute, second: second, nanosecond: nanosecond) else {
+            throw .Invalid(at: hourAt)
+        }
+        return time
+    }
+}
+
+/// A text being read from its start.
+struct DateReader {
+    let chars: ReadChar[>..]
+    let digits: Char[>..]
+    let length: Int
+    var at: Int = 0
+
+    init(_ text: String, _ digits: Char[>..]) {
+        self.chars = readable(text)
+        self.digits = digits
+        self.length = text.count
+    }
+
+    var atEnd: Bool => at >= chars.count
+
+    /// Where in the text it is.
+    var position: Int => at < chars.count ? chars[at].at : length
+
+    mutating fn skipSpaces() {
+        while at < chars.count && chars[at].char == ' ' {
+            at += 1
+        }
+    }
+
+    /// The pattern's own text: white space as any or none of it, and the
+    /// rest as it is written.
+    mutating fn literal(_ text: String) throws(ParseError) {
+        for wanted in readable(text) {
+            if wanted.char == ' ' {
+                skipSpaces()
+                continue
+            }
+            skipSpaces()
+            if at >= chars.count && (wanted.char == ')' || wanted.char == '(') {
+                // The brackets of an offset left off.
+                continue
+            }
+            if at >= chars.count || chars[at].char != wanted.char {
+                throw .Invalid(at: position)
+            }
+            at += 1
+        }
+    }
+
+    /// A number of at most so many digits.
+    mutating fn number(_ most: Int) throws(ParseError) -> Int {
+        skipSpaces()
+        var value = 0
+        var count = 0
+        while at < chars.count && count < most {
+            let c = chars[at].char
+            let digit = c >= '0' && c <= '9' ? c.codePoint - 48 : digits.firstIndex(of: c) ?? -1
+            if digit < 0 {
+                break
+            }
+            value = value * 10 + digit
+            count += 1
+            at += 1
+        }
+        if count == 0 {
+            throw .InvalidDigit(at: position)
+        }
+        return value
+    }
+
+    /// The place in its list of the longest name that comes next.
+    mutating fn name(_ lists: String[>..][>..]) throws(ParseError) -> Int {
+        skipSpaces()
+        var best = -1
+        var longest = 0
+        for names in lists {
+            var i = 0
+            for name in names {
+                let wanted = readable(name)
+                if wanted.count > longest && at + wanted.count <= chars.count && matches(wanted) {
+                    best = i
+                    longest = wanted.count
+                }
+                i += 1
+            }
+        }
+        if best < 0 {
+            throw .Invalid(at: position)
+        }
+        at += longest
+        return best
+    }
+
+    fn matches(_ wanted: ReadChar[>..]) -> Bool {
+        var i = 0
+        while i < wanted.count {
+            let a = chars[at + i].char
+            let b = wanted[i].char
+            if a != b && String.fromChar(a).caseFolded() != String.fromChar(b).caseFolded() {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+
+    /// An offset, up to a bracket, white space or the end.
+    mutating fn skipOffset() {
+        skipSpaces()
+        while at < chars.count && chars[at].char != ' ' && chars[at].char != ')' {
+            at += 1
+        }
+    }
+}

@@ -1,0 +1,14 @@
+module Sable.Globalization
+
+/// What a `NumberFormat` writes a number as.
+@derive(Equatable)
+public union NumberKind {
+    /// A plain number: "1,234.5".
+    Decimal
+    /// A number of one, as a number of a hundred: 0.5 as "50%".
+    Percent
+    /// A digit, a fraction and a power of ten: "1.234E3".
+    Scientific
+    /// An amount of money, in the currency of the ISO 4217 code: "€1,234.50".
+    Currency(String)
+}

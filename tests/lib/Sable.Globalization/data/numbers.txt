@@ -1,0 +1,4217 @@
+# Written by tools/locale-tests.mjs from Node's Intl (ICU 79.1, CLDR 49.0); do not edit.
+en	decimal	0	0
+en	decimal	1	1
+en	percent	1	100%
+en	scientific	1	1E0
+en	currency:EUR	1	€1.00
+en	currency:USD	1	$1.00
+en	currency:JPY	1	¥1
+en	currency:INR	1	₹1.00
+en	currency:CHF	1	CHF 1.00
+en	currency:KWD	1	KWD 1.000
+en	currency:CZK	1	CZK 1.00
+en	accounting:USD	1	$1.00
+en	code:USD	1	USD 1.00
+en	narrow:CAD	1	$1.00
+en	signed	1	+1
+en	decimal	-1	-1
+en	percent	-1	-100%
+en	scientific	-1	-1E0
+en	decimal	1234	1,234
+en	decimal	12345	12,345
+en	percent	12345	1,234,500%
+en	scientific	12345	1.234E4
+en	currency:EUR	12345	€12,345.00
+en	currency:USD	12345	$12,345.00
+en	currency:JPY	12345	¥12,345
+en	currency:INR	12345	₹12,345.00
+en	currency:CHF	12345	CHF 12,345.00
+en	currency:KWD	12345	KWD 12,345.000
+en	currency:CZK	12345	CZK 12,345.00
+en	accounting:USD	12345	$12,345.00
+en	code:USD	12345	USD 12,345.00
+en	narrow:CAD	12345	$12,345.00
+en	signed	12345	+12,345
+en	decimal	-1234567.891	-1,234,567.891
+en	currency:EUR	-1234567.891	-€1,234,567.89
+en	currency:USD	-1234567.891	-$1,234,567.89
+en	currency:JPY	-1234567.891	-¥1,234,568
+en	currency:INR	-1234567.891	-₹1,234,567.89
+en	currency:CHF	-1234567.891	-CHF 1,234,567.89
+en	currency:KWD	-1234567.891	-KWD 1,234,567.891
+en	currency:CZK	-1234567.891	-CZK 1,234,567.89
+en	accounting:USD	-1234567.891	($1,234,567.89)
+en	code:USD	-1234567.891	-USD 1,234,567.89
+en	narrow:CAD	-1234567.891	-$1,234,567.89
+en	signed	-1234567.891	-1,234,567.89
+en	decimal	0.5	0.5
+en	percent	0.5	50%
+en	scientific	0.5	5E-1
+en	currency:EUR	0.5	€0.50
+en	currency:USD	0.5	$0.50
+en	currency:JPY	0.5	¥0
+en	currency:INR	0.5	₹0.50
+en	currency:CHF	0.5	CHF 0.50
+en	currency:KWD	0.5	KWD 0.500
+en	currency:CZK	0.5	CZK 0.50
+en	accounting:USD	0.5	$0.50
+en	code:USD	0.5	USD 0.50
+en	narrow:CAD	0.5	$0.50
+en	signed	0.5	+0.5
+en	decimal	1234567890123	1,234,567,890,123
+en	decimal	0.0625	0.062
+en	decimal	99.995	99.995
+en-001	decimal	0	0
+en-001	decimal	1	1
+en-001	percent	1	100%
+en-001	scientific	1	1E0
+en-001	currency:EUR	1	€1.00
+en-001	currency:USD	1	US$1.00
+en-001	currency:JPY	1	JP¥1
+en-001	currency:INR	1	₹1.00
+en-001	currency:CHF	1	CHF 1.00
+en-001	currency:KWD	1	KWD 1.000
+en-001	currency:CZK	1	CZK 1.00
+en-001	accounting:USD	1	US$1.00
+en-001	code:USD	1	USD 1.00
+en-001	narrow:CAD	1	$1.00
+en-001	signed	1	+1
+en-001	decimal	-1	-1
+en-001	percent	-1	-100%
+en-001	scientific	-1	-1E0
+en-001	decimal	1234	1,234
+en-001	decimal	12345	12,345
+en-001	percent	12345	1,234,500%
+en-001	scientific	12345	1.234E4
+en-001	currency:EUR	12345	€12,345.00
+en-001	currency:USD	12345	US$12,345.00
+en-001	currency:JPY	12345	JP¥12,345
+en-001	currency:INR	12345	₹12,345.00
+en-001	currency:CHF	12345	CHF 12,345.00
+en-001	currency:KWD	12345	KWD 12,345.000
+en-001	currency:CZK	12345	CZK 12,345.00
+en-001	accounting:USD	12345	US$12,345.00
+en-001	code:USD	12345	USD 12,345.00
+en-001	narrow:CAD	12345	$12,345.00
+en-001	signed	12345	+12,345
+en-001	decimal	-1234567.891	-1,234,567.891
+en-001	currency:EUR	-1234567.891	-€1,234,567.89
+en-001	currency:USD	-1234567.891	-US$1,234,567.89
+en-001	currency:JPY	-1234567.891	-JP¥1,234,568
+en-001	currency:INR	-1234567.891	-₹1,234,567.89
+en-001	currency:CHF	-1234567.891	-CHF 1,234,567.89
+en-001	currency:KWD	-1234567.891	-KWD 1,234,567.891
+en-001	currency:CZK	-1234567.891	-CZK 1,234,567.89
+en-001	accounting:USD	-1234567.891	(US$1,234,567.89)
+en-001	code:USD	-1234567.891	-USD 1,234,567.89
+en-001	narrow:CAD	-1234567.891	-$1,234,567.89
+en-001	signed	-1234567.891	-1,234,567.89
+en-001	decimal	0.5	0.5
+en-001	percent	0.5	50%
+en-001	scientific	0.5	5E-1
+en-001	currency:EUR	0.5	€0.50
+en-001	currency:USD	0.5	US$0.50
+en-001	currency:JPY	0.5	JP¥0
+en-001	currency:INR	0.5	₹0.50
+en-001	currency:CHF	0.5	CHF 0.50
+en-001	currency:KWD	0.5	KWD 0.500
+en-001	currency:CZK	0.5	CZK 0.50
+en-001	accounting:USD	0.5	US$0.50
+en-001	code:USD	0.5	USD 0.50
+en-001	narrow:CAD	0.5	$0.50
+en-001	signed	0.5	+0.5
+en-001	decimal	1234567890123	1,234,567,890,123
+en-001	decimal	0.0625	0.062
+en-001	decimal	99.995	99.995
+en-AU	decimal	0	0
+en-AU	decimal	1	1
+en-AU	percent	1	100%
+en-AU	scientific	1	1e0
+en-AU	currency:EUR	1	EUR 1.00
+en-AU	currency:USD	1	USD 1.00
+en-AU	currency:JPY	1	JPY 1
+en-AU	currency:INR	1	INR 1.00
+en-AU	currency:CHF	1	CHF 1.00
+en-AU	currency:KWD	1	KWD 1.000
+en-AU	currency:CZK	1	CZK 1.00
+en-AU	accounting:USD	1	USD 1.00
+en-AU	code:USD	1	USD 1.00
+en-AU	narrow:CAD	1	$1.00
+en-AU	signed	1	+1
+en-AU	decimal	-1	-1
+en-AU	percent	-1	-100%
+en-AU	scientific	-1	-1e0
+en-AU	decimal	1234	1,234
+en-AU	decimal	12345	12,345
+en-AU	percent	12345	1,234,500%
+en-AU	scientific	12345	1.234e4
+en-AU	currency:EUR	12345	EUR 12,345.00
+en-AU	currency:USD	12345	USD 12,345.00
+en-AU	currency:JPY	12345	JPY 12,345
+en-AU	currency:INR	12345	INR 12,345.00
+en-AU	currency:CHF	12345	CHF 12,345.00
+en-AU	currency:KWD	12345	KWD 12,345.000
+en-AU	currency:CZK	12345	CZK 12,345.00
+en-AU	accounting:USD	12345	USD 12,345.00
+en-AU	code:USD	12345	USD 12,345.00
+en-AU	narrow:CAD	12345	$12,345.00
+en-AU	signed	12345	+12,345
+en-AU	decimal	-1234567.891	-1,234,567.891
+en-AU	currency:EUR	-1234567.891	-EUR 1,234,567.89
+en-AU	currency:USD	-1234567.891	-USD 1,234,567.89
+en-AU	currency:JPY	-1234567.891	-JPY 1,234,568
+en-AU	currency:INR	-1234567.891	-INR 1,234,567.89
+en-AU	currency:CHF	-1234567.891	-CHF 1,234,567.89
+en-AU	currency:KWD	-1234567.891	-KWD 1,234,567.891
+en-AU	currency:CZK	-1234567.891	-CZK 1,234,567.89
+en-AU	accounting:USD	-1234567.891	(USD 1,234,567.89)
+en-AU	code:USD	-1234567.891	-USD 1,234,567.89
+en-AU	narrow:CAD	-1234567.891	-$1,234,567.89
+en-AU	signed	-1234567.891	-1,234,567.89
+en-AU	decimal	0.5	0.5
+en-AU	percent	0.5	50%
+en-AU	scientific	0.5	5e-1
+en-AU	currency:EUR	0.5	EUR 0.50
+en-AU	currency:USD	0.5	USD 0.50
+en-AU	currency:JPY	0.5	JPY 0
+en-AU	currency:INR	0.5	INR 0.50
+en-AU	currency:CHF	0.5	CHF 0.50
+en-AU	currency:KWD	0.5	KWD 0.500
+en-AU	currency:CZK	0.5	CZK 0.50
+en-AU	accounting:USD	0.5	USD 0.50
+en-AU	code:USD	0.5	USD 0.50
+en-AU	narrow:CAD	0.5	$0.50
+en-AU	signed	0.5	+0.5
+en-AU	decimal	1234567890123	1,234,567,890,123
+en-AU	decimal	0.0625	0.062
+en-AU	decimal	99.995	99.995
+en-CA	decimal	0	0
+en-CA	decimal	1	1
+en-CA	percent	1	100%
+en-CA	scientific	1	1E0
+en-CA	currency:EUR	1	€1.00
+en-CA	currency:USD	1	US$1.00
+en-CA	currency:JPY	1	JP¥1
+en-CA	currency:INR	1	₹1.00
+en-CA	currency:CHF	1	CHF 1.00
+en-CA	currency:KWD	1	KWD 1.000
+en-CA	currency:CZK	1	CZK 1.00
+en-CA	accounting:USD	1	US$1.00
+en-CA	code:USD	1	USD 1.00
+en-CA	narrow:CAD	1	$1.00
+en-CA	signed	1	+1
+en-CA	decimal	-1	-1
+en-CA	percent	-1	-100%
+en-CA	scientific	-1	-1E0
+en-CA	decimal	1234	1,234
+en-CA	decimal	12345	12,345
+en-CA	percent	12345	1,234,500%
+en-CA	scientific	12345	1.234E4
+en-CA	currency:EUR	12345	€12,345.00
+en-CA	currency:USD	12345	US$12,345.00
+en-CA	currency:JPY	12345	JP¥12,345
+en-CA	currency:INR	12345	₹12,345.00
+en-CA	currency:CHF	12345	CHF 12,345.00
+en-CA	currency:KWD	12345	KWD 12,345.000
+en-CA	currency:CZK	12345	CZK 12,345.00
+en-CA	accounting:USD	12345	US$12,345.00
+en-CA	code:USD	12345	USD 12,345.00
+en-CA	narrow:CAD	12345	$12,345.00
+en-CA	signed	12345	+12,345
+en-CA	decimal	-1234567.891	-1,234,567.891
+en-CA	currency:EUR	-1234567.891	-€1,234,567.89
+en-CA	currency:USD	-1234567.891	-US$1,234,567.89
+en-CA	currency:JPY	-1234567.891	-JP¥1,234,568
+en-CA	currency:INR	-1234567.891	-₹1,234,567.89
+en-CA	currency:CHF	-1234567.891	-CHF 1,234,567.89
+en-CA	currency:KWD	-1234567.891	-KWD 1,234,567.891
+en-CA	currency:CZK	-1234567.891	-CZK 1,234,567.89
+en-CA	accounting:USD	-1234567.891	(US$1,234,567.89)
+en-CA	code:USD	-1234567.891	-USD 1,234,567.89
+en-CA	narrow:CAD	-1234567.891	-$1,234,567.89
+en-CA	signed	-1234567.891	-1,234,567.89
+en-CA	decimal	0.5	0.5
+en-CA	percent	0.5	50%
+en-CA	scientific	0.5	5E-1
+en-CA	currency:EUR	0.5	€0.50
+en-CA	currency:USD	0.5	US$0.50
+en-CA	currency:JPY	0.5	JP¥0
+en-CA	currency:INR	0.5	₹0.50
+en-CA	currency:CHF	0.5	CHF 0.50
+en-CA	currency:KWD	0.5	KWD 0.500
+en-CA	currency:CZK	0.5	CZK 0.50
+en-CA	accounting:USD	0.5	US$0.50
+en-CA	code:USD	0.5	USD 0.50
+en-CA	narrow:CAD	0.5	$0.50
+en-CA	signed	0.5	+0.5
+en-CA	decimal	1234567890123	1,234,567,890,123
+en-CA	decimal	0.0625	0.062
+en-CA	decimal	99.995	99.995
+en-GB	decimal	0	0
+en-GB	decimal	1	1
+en-GB	percent	1	100%
+en-GB	scientific	1	1E0
+en-GB	currency:EUR	1	€1.00
+en-GB	currency:USD	1	US$1.00
+en-GB	currency:JPY	1	JP¥1
+en-GB	currency:INR	1	₹1.00
+en-GB	currency:CHF	1	CHF 1.00
+en-GB	currency:KWD	1	KWD 1.000
+en-GB	currency:CZK	1	CZK 1.00
+en-GB	accounting:USD	1	US$1.00
+en-GB	code:USD	1	USD 1.00
+en-GB	narrow:CAD	1	$1.00
+en-GB	signed	1	+1
+en-GB	decimal	-1	-1
+en-GB	percent	-1	-100%
+en-GB	scientific	-1	-1E0
+en-GB	decimal	1234	1,234
+en-GB	decimal	12345	12,345
+en-GB	percent	12345	1,234,500%
+en-GB	scientific	12345	1.234E4
+en-GB	currency:EUR	12345	€12,345.00
+en-GB	currency:USD	12345	US$12,345.00
+en-GB	currency:JPY	12345	JP¥12,345
+en-GB	currency:INR	12345	₹12,345.00
+en-GB	currency:CHF	12345	CHF 12,345.00
+en-GB	currency:KWD	12345	KWD 12,345.000
+en-GB	currency:CZK	12345	CZK 12,345.00
+en-GB	accounting:USD	12345	US$12,345.00
+en-GB	code:USD	12345	USD 12,345.00
+en-GB	narrow:CAD	12345	$12,345.00
+en-GB	signed	12345	+12,345
+en-GB	decimal	-1234567.891	-1,234,567.891
+en-GB	currency:EUR	-1234567.891	-€1,234,567.89
+en-GB	currency:USD	-1234567.891	-US$1,234,567.89
+en-GB	currency:JPY	-1234567.891	-JP¥1,234,568
+en-GB	currency:INR	-1234567.891	-₹1,234,567.89
+en-GB	currency:CHF	-1234567.891	-CHF 1,234,567.89
+en-GB	currency:KWD	-1234567.891	-KWD 1,234,567.891
+en-GB	currency:CZK	-1234567.891	-CZK 1,234,567.89
+en-GB	accounting:USD	-1234567.891	(US$1,234,567.89)
+en-GB	code:USD	-1234567.891	-USD 1,234,567.89
+en-GB	narrow:CAD	-1234567.891	-$1,234,567.89
+en-GB	signed	-1234567.891	-1,234,567.89
+en-GB	decimal	0.5	0.5
+en-GB	percent	0.5	50%
+en-GB	scientific	0.5	5E-1
+en-GB	currency:EUR	0.5	€0.50
+en-GB	currency:USD	0.5	US$0.50
+en-GB	currency:JPY	0.5	JP¥0
+en-GB	currency:INR	0.5	₹0.50
+en-GB	currency:CHF	0.5	CHF 0.50
+en-GB	currency:KWD	0.5	KWD 0.500
+en-GB	currency:CZK	0.5	CZK 0.50
+en-GB	accounting:USD	0.5	US$0.50
+en-GB	code:USD	0.5	USD 0.50
+en-GB	narrow:CAD	0.5	$0.50
+en-GB	signed	0.5	+0.5
+en-GB	decimal	1234567890123	1,234,567,890,123
+en-GB	decimal	0.0625	0.062
+en-GB	decimal	99.995	99.995
+en-IE	decimal	0	0
+en-IE	decimal	1	1
+en-IE	percent	1	100%
+en-IE	scientific	1	1E0
+en-IE	currency:EUR	1	€1.00
+en-IE	currency:USD	1	US$1.00
+en-IE	currency:JPY	1	JP¥1
+en-IE	currency:INR	1	₹1.00
+en-IE	currency:CHF	1	CHF 1.00
+en-IE	currency:KWD	1	KWD 1.000
+en-IE	currency:CZK	1	CZK 1.00
+en-IE	accounting:USD	1	US$1.00
+en-IE	code:USD	1	USD 1.00
+en-IE	narrow:CAD	1	$1.00
+en-IE	signed	1	+1
+en-IE	decimal	-1	-1
+en-IE	percent	-1	-100%
+en-IE	scientific	-1	-1E0
+en-IE	decimal	1234	1,234
+en-IE	decimal	12345	12,345
+en-IE	percent	12345	1,234,500%
+en-IE	scientific	12345	1.234E4
+en-IE	currency:EUR	12345	€12,345.00
+en-IE	currency:USD	12345	US$12,345.00
+en-IE	currency:JPY	12345	JP¥12,345
+en-IE	currency:INR	12345	₹12,345.00
+en-IE	currency:CHF	12345	CHF 12,345.00
+en-IE	currency:KWD	12345	KWD 12,345.000
+en-IE	currency:CZK	12345	CZK 12,345.00
+en-IE	accounting:USD	12345	US$12,345.00
+en-IE	code:USD	12345	USD 12,345.00
+en-IE	narrow:CAD	12345	$12,345.00
+en-IE	signed	12345	+12,345
+en-IE	decimal	-1234567.891	-1,234,567.891
+en-IE	currency:EUR	-1234567.891	-€1,234,567.89
+en-IE	currency:USD	-1234567.891	-US$1,234,567.89
+en-IE	currency:JPY	-1234567.891	-JP¥1,234,568
+en-IE	currency:INR	-1234567.891	-₹1,234,567.89
+en-IE	currency:CHF	-1234567.891	-CHF 1,234,567.89
+en-IE	currency:KWD	-1234567.891	-KWD 1,234,567.891
+en-IE	currency:CZK	-1234567.891	-CZK 1,234,567.89
+en-IE	accounting:USD	-1234567.891	(US$1,234,567.89)
+en-IE	code:USD	-1234567.891	-USD 1,234,567.89
+en-IE	narrow:CAD	-1234567.891	-$1,234,567.89
+en-IE	signed	-1234567.891	-1,234,567.89
+en-IE	decimal	0.5	0.5
+en-IE	percent	0.5	50%
+en-IE	scientific	0.5	5E-1
+en-IE	currency:EUR	0.5	€0.50
+en-IE	currency:USD	0.5	US$0.50
+en-IE	currency:JPY	0.5	JP¥0
+en-IE	currency:INR	0.5	₹0.50
+en-IE	currency:CHF	0.5	CHF 0.50
+en-IE	currency:KWD	0.5	KWD 0.500
+en-IE	currency:CZK	0.5	CZK 0.50
+en-IE	accounting:USD	0.5	US$0.50
+en-IE	code:USD	0.5	USD 0.50
+en-IE	narrow:CAD	0.5	$0.50
+en-IE	signed	0.5	+0.5
+en-IE	decimal	1234567890123	1,234,567,890,123
+en-IE	decimal	0.0625	0.062
+en-IE	decimal	99.995	99.995
+en-IN	decimal	0	0
+en-IN	decimal	1	1
+en-IN	percent	1	100%
+en-IN	scientific	1	1E0
+en-IN	currency:EUR	1	€1.00
+en-IN	currency:USD	1	$1.00
+en-IN	currency:JPY	1	JP¥1
+en-IN	currency:INR	1	₹1.00
+en-IN	currency:CHF	1	CHF 1.00
+en-IN	currency:KWD	1	KWD 1.000
+en-IN	currency:CZK	1	CZK 1.00
+en-IN	accounting:USD	1	$1.00
+en-IN	code:USD	1	USD 1.00
+en-IN	narrow:CAD	1	$1.00
+en-IN	signed	1	+1
+en-IN	decimal	-1	-1
+en-IN	percent	-1	-100%
+en-IN	scientific	-1	-1E0
+en-IN	decimal	1234	1,234
+en-IN	decimal	12345	12,345
+en-IN	percent	12345	12,34,500%
+en-IN	scientific	12345	1.234E4
+en-IN	currency:EUR	12345	€12,345.00
+en-IN	currency:USD	12345	$12,345.00
+en-IN	currency:JPY	12345	JP¥12,345
+en-IN	currency:INR	12345	₹12,345.00
+en-IN	currency:CHF	12345	CHF 12,345.00
+en-IN	currency:KWD	12345	KWD 12,345.000
+en-IN	currency:CZK	12345	CZK 12,345.00
+en-IN	accounting:USD	12345	$12,345.00
+en-IN	code:USD	12345	USD 12,345.00
+en-IN	narrow:CAD	12345	$12,345.00
+en-IN	signed	12345	+12,345
+en-IN	decimal	-1234567.891	-12,34,567.891
+en-IN	currency:EUR	-1234567.891	-€12,34,567.89
+en-IN	currency:USD	-1234567.891	-$12,34,567.89
+en-IN	currency:JPY	-1234567.891	-JP¥12,34,568
+en-IN	currency:INR	-1234567.891	-₹12,34,567.89
+en-IN	currency:CHF	-1234567.891	-CHF 12,34,567.89
+en-IN	currency:KWD	-1234567.891	-KWD 12,34,567.891
+en-IN	currency:CZK	-1234567.891	-CZK 12,34,567.89
+en-IN	accounting:USD	-1234567.891	($1,234,567.89)
+en-IN	code:USD	-1234567.891	-USD 12,34,567.89
+en-IN	narrow:CAD	-1234567.891	-$12,34,567.89
+en-IN	signed	-1234567.891	-12,34,567.89
+en-IN	decimal	0.5	0.5
+en-IN	percent	0.5	50%
+en-IN	scientific	0.5	5E-1
+en-IN	currency:EUR	0.5	€0.50
+en-IN	currency:USD	0.5	$0.50
+en-IN	currency:JPY	0.5	JP¥0
+en-IN	currency:INR	0.5	₹0.50
+en-IN	currency:CHF	0.5	CHF 0.50
+en-IN	currency:KWD	0.5	KWD 0.500
+en-IN	currency:CZK	0.5	CZK 0.50
+en-IN	accounting:USD	0.5	$0.50
+en-IN	code:USD	0.5	USD 0.50
+en-IN	narrow:CAD	0.5	$0.50
+en-IN	signed	0.5	+0.5
+en-IN	decimal	1234567890123	12,34,56,78,90,123
+en-IN	decimal	0.0625	0.062
+en-IN	decimal	99.995	99.995
+en-NZ	decimal	0	0
+en-NZ	decimal	1	1
+en-NZ	percent	1	100%
+en-NZ	scientific	1	1E0
+en-NZ	currency:EUR	1	€1.00
+en-NZ	currency:USD	1	US$1.00
+en-NZ	currency:JPY	1	JP¥1
+en-NZ	currency:INR	1	₹1.00
+en-NZ	currency:CHF	1	CHF 1.00
+en-NZ	currency:KWD	1	KWD 1.000
+en-NZ	currency:CZK	1	CZK 1.00
+en-NZ	accounting:USD	1	US$1.00
+en-NZ	code:USD	1	USD 1.00
+en-NZ	narrow:CAD	1	$1.00
+en-NZ	signed	1	+1
+en-NZ	decimal	-1	-1
+en-NZ	percent	-1	-100%
+en-NZ	scientific	-1	-1E0
+en-NZ	decimal	1234	1,234
+en-NZ	decimal	12345	12,345
+en-NZ	percent	12345	1,234,500%
+en-NZ	scientific	12345	1.234E4
+en-NZ	currency:EUR	12345	€12,345.00
+en-NZ	currency:USD	12345	US$12,345.00
+en-NZ	currency:JPY	12345	JP¥12,345
+en-NZ	currency:INR	12345	₹12,345.00
+en-NZ	currency:CHF	12345	CHF 12,345.00
+en-NZ	currency:KWD	12345	KWD 12,345.000
+en-NZ	currency:CZK	12345	CZK 12,345.00
+en-NZ	accounting:USD	12345	US$12,345.00
+en-NZ	code:USD	12345	USD 12,345.00
+en-NZ	narrow:CAD	12345	$12,345.00
+en-NZ	signed	12345	+12,345
+en-NZ	decimal	-1234567.891	-1,234,567.891
+en-NZ	currency:EUR	-1234567.891	-€1,234,567.89
+en-NZ	currency:USD	-1234567.891	-US$1,234,567.89
+en-NZ	currency:JPY	-1234567.891	-JP¥1,234,568
+en-NZ	currency:INR	-1234567.891	-₹1,234,567.89
+en-NZ	currency:CHF	-1234567.891	-CHF 1,234,567.89
+en-NZ	currency:KWD	-1234567.891	-KWD 1,234,567.891
+en-NZ	currency:CZK	-1234567.891	-CZK 1,234,567.89
+en-NZ	accounting:USD	-1234567.891	(US$1,234,567.89)
+en-NZ	code:USD	-1234567.891	-USD 1,234,567.89
+en-NZ	narrow:CAD	-1234567.891	-$1,234,567.89
+en-NZ	signed	-1234567.891	-1,234,567.89
+en-NZ	decimal	0.5	0.5
+en-NZ	percent	0.5	50%
+en-NZ	scientific	0.5	5E-1
+en-NZ	currency:EUR	0.5	€0.50
+en-NZ	currency:USD	0.5	US$0.50
+en-NZ	currency:JPY	0.5	JP¥0
+en-NZ	currency:INR	0.5	₹0.50
+en-NZ	currency:CHF	0.5	CHF 0.50
+en-NZ	currency:KWD	0.5	KWD 0.500
+en-NZ	currency:CZK	0.5	CZK 0.50
+en-NZ	accounting:USD	0.5	US$0.50
+en-NZ	code:USD	0.5	USD 0.50
+en-NZ	narrow:CAD	0.5	$0.50
+en-NZ	signed	0.5	+0.5
+en-NZ	decimal	1234567890123	1,234,567,890,123
+en-NZ	decimal	0.0625	0.062
+en-NZ	decimal	99.995	99.995
+en-ZA	decimal	0	0
+en-ZA	decimal	1	1
+en-ZA	percent	1	100%
+en-ZA	scientific	1	1E0
+en-ZA	currency:EUR	1	€1,00
+en-ZA	currency:USD	1	US$1,00
+en-ZA	currency:JPY	1	JP¥1
+en-ZA	currency:INR	1	₹1,00
+en-ZA	currency:CHF	1	CHF 1,00
+en-ZA	currency:KWD	1	KWD 1,000
+en-ZA	currency:CZK	1	CZK 1,00
+en-ZA	accounting:USD	1	US$1,00
+en-ZA	code:USD	1	USD 1,00
+en-ZA	narrow:CAD	1	$1,00
+en-ZA	signed	1	+1
+en-ZA	decimal	-1	-1
+en-ZA	percent	-1	-100%
+en-ZA	scientific	-1	-1E0
+en-ZA	decimal	1234	1 234
+en-ZA	decimal	12345	12 345
+en-ZA	percent	12345	1 234 500%
+en-ZA	scientific	12345	1,234E4
+en-ZA	currency:EUR	12345	€12 345,00
+en-ZA	currency:USD	12345	US$12 345,00
+en-ZA	currency:JPY	12345	JP¥12 345
+en-ZA	currency:INR	12345	₹12 345,00
+en-ZA	currency:CHF	12345	CHF 12 345,00
+en-ZA	currency:KWD	12345	KWD 12 345,000
+en-ZA	currency:CZK	12345	CZK 12 345,00
+en-ZA	accounting:USD	12345	US$12 345,00
+en-ZA	code:USD	12345	USD 12 345,00
+en-ZA	narrow:CAD	12345	$12 345,00
+en-ZA	signed	12345	+12 345
+en-ZA	decimal	-1234567.891	-1 234 567,891
+en-ZA	currency:EUR	-1234567.891	-€1 234 567,89
+en-ZA	currency:USD	-1234567.891	-US$1 234 567,89
+en-ZA	currency:JPY	-1234567.891	-JP¥1 234 568
+en-ZA	currency:INR	-1234567.891	-₹1 234 567,89
+en-ZA	currency:CHF	-1234567.891	-CHF 1 234 567,89
+en-ZA	currency:KWD	-1234567.891	-KWD 1 234 567,891
+en-ZA	currency:CZK	-1234567.891	-CZK 1 234 567,89
+en-ZA	accounting:USD	-1234567.891	(US$1 234 567,89)
+en-ZA	code:USD	-1234567.891	-USD 1 234 567,89
+en-ZA	narrow:CAD	-1234567.891	-$1 234 567,89
+en-ZA	signed	-1234567.891	-1 234 567,89
+en-ZA	decimal	0.5	0,5
+en-ZA	percent	0.5	50%
+en-ZA	scientific	0.5	5E-1
+en-ZA	currency:EUR	0.5	€0,50
+en-ZA	currency:USD	0.5	US$0,50
+en-ZA	currency:JPY	0.5	JP¥0
+en-ZA	currency:INR	0.5	₹0,50
+en-ZA	currency:CHF	0.5	CHF 0,50
+en-ZA	currency:KWD	0.5	KWD 0,500
+en-ZA	currency:CZK	0.5	CZK 0,50
+en-ZA	accounting:USD	0.5	US$0,50
+en-ZA	code:USD	0.5	USD 0,50
+en-ZA	narrow:CAD	0.5	$0,50
+en-ZA	signed	0.5	+0,5
+en-ZA	decimal	1234567890123	1 234 567 890 123
+en-ZA	decimal	0.0625	0,062
+en-ZA	decimal	99.995	99,995
+de	decimal	0	0
+de	decimal	1	1
+de	percent	1	100 %
+de	scientific	1	1E0
+de	currency:EUR	1	1,00 €
+de	currency:USD	1	1,00 $
+de	currency:JPY	1	1 ¥
+de	currency:INR	1	1,00 ₹
+de	currency:CHF	1	1,00 CHF
+de	currency:KWD	1	1,000 KWD
+de	currency:CZK	1	1,00 CZK
+de	accounting:USD	1	1,00 $
+de	code:USD	1	1,00 USD
+de	narrow:CAD	1	1,00 $
+de	signed	1	+1
+de	decimal	-1	-1
+de	percent	-1	-100 %
+de	scientific	-1	-1E0
+de	decimal	1234	1.234
+de	decimal	12345	12.345
+de	percent	12345	1.234.500 %
+de	scientific	12345	1,234E4
+de	currency:EUR	12345	12.345,00 €
+de	currency:USD	12345	12.345,00 $
+de	currency:JPY	12345	12.345 ¥
+de	currency:INR	12345	12.345,00 ₹
+de	currency:CHF	12345	12.345,00 CHF
+de	currency:KWD	12345	12.345,000 KWD
+de	currency:CZK	12345	12.345,00 CZK
+de	accounting:USD	12345	12.345,00 $
+de	code:USD	12345	12.345,00 USD
+de	narrow:CAD	12345	12.345,00 $
+de	signed	12345	+12.345
+de	decimal	-1234567.891	-1.234.567,891
+de	currency:EUR	-1234567.891	-1.234.567,89 €
+de	currency:USD	-1234567.891	-1.234.567,89 $
+de	currency:JPY	-1234567.891	-1.234.568 ¥
+de	currency:INR	-1234567.891	-1.234.567,89 ₹
+de	currency:CHF	-1234567.891	-1.234.567,89 CHF
+de	currency:KWD	-1234567.891	-1.234.567,891 KWD
+de	currency:CZK	-1234567.891	-1.234.567,89 CZK
+de	accounting:USD	-1234567.891	-1.234.567,89 $
+de	code:USD	-1234567.891	-1.234.567,89 USD
+de	narrow:CAD	-1234567.891	-1.234.567,89 $
+de	signed	-1234567.891	-1.234.567,89
+de	decimal	0.5	0,5
+de	percent	0.5	50 %
+de	scientific	0.5	5E-1
+de	currency:EUR	0.5	0,50 €
+de	currency:USD	0.5	0,50 $
+de	currency:JPY	0.5	0 ¥
+de	currency:INR	0.5	0,50 ₹
+de	currency:CHF	0.5	0,50 CHF
+de	currency:KWD	0.5	0,500 KWD
+de	currency:CZK	0.5	0,50 CZK
+de	accounting:USD	0.5	0,50 $
+de	code:USD	0.5	0,50 USD
+de	narrow:CAD	0.5	0,50 $
+de	signed	0.5	+0,5
+de	decimal	1234567890123	1.234.567.890.123
+de	decimal	0.0625	0,062
+de	decimal	99.995	99,995
+de-AT	decimal	0	0
+de-AT	decimal	1	1
+de-AT	percent	1	100 %
+de-AT	scientific	1	1E0
+de-AT	currency:EUR	1	€ 1,00
+de-AT	currency:USD	1	$ 1,00
+de-AT	currency:JPY	1	¥ 1
+de-AT	currency:INR	1	₹ 1,00
+de-AT	currency:CHF	1	CHF 1,00
+de-AT	currency:KWD	1	KWD 1,000
+de-AT	currency:CZK	1	CZK 1,00
+de-AT	accounting:USD	1	$ 1,00
+de-AT	code:USD	1	USD 1,00
+de-AT	narrow:CAD	1	$ 1,00
+de-AT	signed	1	+1
+de-AT	decimal	-1	-1
+de-AT	percent	-1	-100 %
+de-AT	scientific	-1	-1E0
+de-AT	decimal	1234	1 234
+de-AT	decimal	12345	12 345
+de-AT	percent	12345	1 234 500 %
+de-AT	scientific	12345	1,234E4
+de-AT	currency:EUR	12345	€ 12.345,00
+de-AT	currency:USD	12345	$ 12.345,00
+de-AT	currency:JPY	12345	¥ 12.345
+de-AT	currency:INR	12345	₹ 12.345,00
+de-AT	currency:CHF	12345	CHF 12.345,00
+de-AT	currency:KWD	12345	KWD 12.345,000
+de-AT	currency:CZK	12345	CZK 12.345,00
+de-AT	accounting:USD	12345	$ 12.345,00
+de-AT	code:USD	12345	USD 12.345,00
+de-AT	narrow:CAD	12345	$ 12.345,00
+de-AT	signed	12345	+12 345
+de-AT	decimal	-1234567.891	-1 234 567,891
+de-AT	currency:EUR	-1234567.891	-€ 1.234.567,89
+de-AT	currency:USD	-1234567.891	-$ 1.234.567,89
+de-AT	currency:JPY	-1234567.891	-¥ 1.234.568
+de-AT	currency:INR	-1234567.891	-₹ 1.234.567,89
+de-AT	currency:CHF	-1234567.891	-CHF 1.234.567,89
+de-AT	currency:KWD	-1234567.891	-KWD 1.234.567,891
+de-AT	currency:CZK	-1234567.891	-CZK 1.234.567,89
+de-AT	accounting:USD	-1234567.891	-$ 1.234.567,89
+de-AT	code:USD	-1234567.891	-USD 1.234.567,89
+de-AT	narrow:CAD	-1234567.891	-$ 1.234.567,89
+de-AT	signed	-1234567.891	-1 234 567,89
+de-AT	decimal	0.5	0,5
+de-AT	percent	0.5	50 %
+de-AT	scientific	0.5	5E-1
+de-AT	currency:EUR	0.5	€ 0,50
+de-AT	currency:USD	0.5	$ 0,50
+de-AT	currency:JPY	0.5	¥ 0
+de-AT	currency:INR	0.5	₹ 0,50
+de-AT	currency:CHF	0.5	CHF 0,50
+de-AT	currency:KWD	0.5	KWD 0,500
+de-AT	currency:CZK	0.5	CZK 0,50
+de-AT	accounting:USD	0.5	$ 0,50
+de-AT	code:USD	0.5	USD 0,50
+de-AT	narrow:CAD	0.5	$ 0,50
+de-AT	signed	0.5	+0,5
+de-AT	decimal	1234567890123	1 234 567 890 123
+de-AT	decimal	0.0625	0,062
+de-AT	decimal	99.995	99,995
+de-CH	decimal	0	0
+de-CH	decimal	1	1
+de-CH	percent	1	100%
+de-CH	scientific	1	1E0
+de-CH	currency:EUR	1	EUR 1.00
+de-CH	currency:USD	1	$ 1.00
+de-CH	currency:JPY	1	¥ 1
+de-CH	currency:INR	1	₹ 1.00
+de-CH	currency:CHF	1	CHF 1.00
+de-CH	currency:KWD	1	KWD 1.000
+de-CH	currency:CZK	1	CZK 1.00
+de-CH	accounting:USD	1	$ 1.00
+de-CH	code:USD	1	USD 1.00
+de-CH	narrow:CAD	1	$ 1.00
+de-CH	signed	1	+1
+de-CH	decimal	-1	-1
+de-CH	percent	-1	-100%
+de-CH	scientific	-1	-1E0
+de-CH	decimal	1234	1'234
+de-CH	decimal	12345	12'345
+de-CH	percent	12345	1'234'500%
+de-CH	scientific	12345	1.234E4
+de-CH	currency:EUR	12345	EUR 12'345.00
+de-CH	currency:USD	12345	$ 12'345.00
+de-CH	currency:JPY	12345	¥ 12'345
+de-CH	currency:INR	12345	₹ 12'345.00
+de-CH	currency:CHF	12345	CHF 12'345.00
+de-CH	currency:KWD	12345	KWD 12'345.000
+de-CH	currency:CZK	12345	CZK 12'345.00
+de-CH	accounting:USD	12345	$ 12'345.00
+de-CH	code:USD	12345	USD 12'345.00
+de-CH	narrow:CAD	12345	$ 12'345.00
+de-CH	signed	12345	+12'345
+de-CH	decimal	-1234567.891	-1'234'567.891
+de-CH	currency:EUR	-1234567.891	EUR-1'234'567.89
+de-CH	currency:USD	-1234567.891	$-1'234'567.89
+de-CH	currency:JPY	-1234567.891	¥-1'234'568
+de-CH	currency:INR	-1234567.891	₹-1'234'567.89
+de-CH	currency:CHF	-1234567.891	CHF-1'234'567.89
+de-CH	currency:KWD	-1234567.891	KWD-1'234'567.891
+de-CH	currency:CZK	-1234567.891	CZK-1'234'567.89
+de-CH	accounting:USD	-1234567.891	$-1'234'567.89
+de-CH	code:USD	-1234567.891	USD-1'234'567.89
+de-CH	narrow:CAD	-1234567.891	$-1'234'567.89
+de-CH	signed	-1234567.891	-1'234'567.89
+de-CH	decimal	0.5	0.5
+de-CH	percent	0.5	50%
+de-CH	scientific	0.5	5E-1
+de-CH	currency:EUR	0.5	EUR 0.50
+de-CH	currency:USD	0.5	$ 0.50
+de-CH	currency:JPY	0.5	¥ 0
+de-CH	currency:INR	0.5	₹ 0.50
+de-CH	currency:CHF	0.5	CHF 0.50
+de-CH	currency:KWD	0.5	KWD 0.500
+de-CH	currency:CZK	0.5	CZK 0.50
+de-CH	accounting:USD	0.5	$ 0.50
+de-CH	code:USD	0.5	USD 0.50
+de-CH	narrow:CAD	0.5	$ 0.50
+de-CH	signed	0.5	+0.5
+de-CH	decimal	1234567890123	1'234'567'890'123
+de-CH	decimal	0.0625	0.062
+de-CH	decimal	99.995	99.995
+fr	decimal	0	0
+fr	decimal	1	1
+fr	percent	1	100 %
+fr	scientific	1	1E0
+fr	currency:EUR	1	1,00 €
+fr	currency:USD	1	1,00 $US
+fr	currency:JPY	1	1 JPY
+fr	currency:INR	1	1,00 ₹
+fr	currency:CHF	1	1,00 CHF
+fr	currency:KWD	1	1,000 KWD
+fr	currency:CZK	1	1,00 CZK
+fr	accounting:USD	1	1,00 $US
+fr	code:USD	1	1,00 USD
+fr	narrow:CAD	1	1,00 $
+fr	signed	1	+1
+fr	decimal	-1	-1
+fr	percent	-1	-100 %
+fr	scientific	-1	-1E0
+fr	decimal	1234	1 234
+fr	decimal	12345	12 345
+fr	percent	12345	1 234 500 %
+fr	scientific	12345	1,234E4
+fr	currency:EUR	12345	12 345,00 €
+fr	currency:USD	12345	12 345,00 $US
+fr	currency:JPY	12345	12 345 JPY
+fr	currency:INR	12345	12 345,00 ₹
+fr	currency:CHF	12345	12 345,00 CHF
+fr	currency:KWD	12345	12 345,000 KWD
+fr	currency:CZK	12345	12 345,00 CZK
+fr	accounting:USD	12345	12 345,00 $US
+fr	code:USD	12345	12 345,00 USD
+fr	narrow:CAD	12345	12 345,00 $
+fr	signed	12345	+12 345
+fr	decimal	-1234567.891	-1 234 567,891
+fr	currency:EUR	-1234567.891	-1 234 567,89 €
+fr	currency:USD	-1234567.891	-1 234 567,89 $US
+fr	currency:JPY	-1234567.891	-1 234 568 JPY
+fr	currency:INR	-1234567.891	-1 234 567,89 ₹
+fr	currency:CHF	-1234567.891	-1 234 567,89 CHF
+fr	currency:KWD	-1234567.891	-1 234 567,891 KWD
+fr	currency:CZK	-1234567.891	-1 234 567,89 CZK
+fr	accounting:USD	-1234567.891	(1 234 567,89 $US)
+fr	code:USD	-1234567.891	-1 234 567,89 USD
+fr	narrow:CAD	-1234567.891	-1 234 567,89 $
+fr	signed	-1234567.891	-1 234 567,89
+fr	decimal	0.5	0,5
+fr	percent	0.5	50 %
+fr	scientific	0.5	5E-1
+fr	currency:EUR	0.5	0,50 €
+fr	currency:USD	0.5	0,50 $US
+fr	currency:JPY	0.5	0 JPY
+fr	currency:INR	0.5	0,50 ₹
+fr	currency:CHF	0.5	0,50 CHF
+fr	currency:KWD	0.5	0,500 KWD
+fr	currency:CZK	0.5	0,50 CZK
+fr	accounting:USD	0.5	0,50 $US
+fr	code:USD	0.5	0,50 USD
+fr	narrow:CAD	0.5	0,50 $
+fr	signed	0.5	+0,5
+fr	decimal	1234567890123	1 234 567 890 123
+fr	decimal	0.0625	0,062
+fr	decimal	99.995	99,995
+fr-CA	decimal	0	0
+fr-CA	decimal	1	1
+fr-CA	percent	1	100 %
+fr-CA	scientific	1	1E0
+fr-CA	currency:EUR	1	1,00 €
+fr-CA	currency:USD	1	1,00 $ US
+fr-CA	currency:JPY	1	1 ¥
+fr-CA	currency:INR	1	1,00 INR
+fr-CA	currency:CHF	1	1,00 CHF
+fr-CA	currency:KWD	1	1,000 KWD
+fr-CA	currency:CZK	1	1,00 CZK
+fr-CA	accounting:USD	1	1,00 $ US
+fr-CA	code:USD	1	1,00 USD
+fr-CA	narrow:CAD	1	1,00 $
+fr-CA	signed	1	+1
+fr-CA	decimal	-1	-1
+fr-CA	percent	-1	-100 %
+fr-CA	scientific	-1	-1E0
+fr-CA	decimal	1234	1 234
+fr-CA	decimal	12345	12 345
+fr-CA	percent	12345	1 234 500 %
+fr-CA	scientific	12345	1,234E4
+fr-CA	currency:EUR	12345	12 345,00 €
+fr-CA	currency:USD	12345	12 345,00 $ US
+fr-CA	currency:JPY	12345	12 345 ¥
+fr-CA	currency:INR	12345	12 345,00 INR
+fr-CA	currency:CHF	12345	12 345,00 CHF
+fr-CA	currency:KWD	12345	12 345,000 KWD
+fr-CA	currency:CZK	12345	12 345,00 CZK
+fr-CA	accounting:USD	12345	12 345,00 $ US
+fr-CA	code:USD	12345	12 345,00 USD
+fr-CA	narrow:CAD	12345	12 345,00 $
+fr-CA	signed	12345	+12 345
+fr-CA	decimal	-1234567.891	-1 234 567,891
+fr-CA	currency:EUR	-1234567.891	-1 234 567,89 €
+fr-CA	currency:USD	-1234567.891	-1 234 567,89 $ US
+fr-CA	currency:JPY	-1234567.891	-1 234 568 ¥
+fr-CA	currency:INR	-1234567.891	-1 234 567,89 INR
+fr-CA	currency:CHF	-1234567.891	-1 234 567,89 CHF
+fr-CA	currency:KWD	-1234567.891	-1 234 567,891 KWD
+fr-CA	currency:CZK	-1234567.891	-1 234 567,89 CZK
+fr-CA	accounting:USD	-1234567.891	(1 234 567,89 $ US)
+fr-CA	code:USD	-1234567.891	-1 234 567,89 USD
+fr-CA	narrow:CAD	-1234567.891	-1 234 567,89 $
+fr-CA	signed	-1234567.891	-1 234 567,89
+fr-CA	decimal	0.5	0,5
+fr-CA	percent	0.5	50 %
+fr-CA	scientific	0.5	5E-1
+fr-CA	currency:EUR	0.5	0,50 €
+fr-CA	currency:USD	0.5	0,50 $ US
+fr-CA	currency:JPY	0.5	0 ¥
+fr-CA	currency:INR	0.5	0,50 INR
+fr-CA	currency:CHF	0.5	0,50 CHF
+fr-CA	currency:KWD	0.5	0,500 KWD
+fr-CA	currency:CZK	0.5	0,50 CZK
+fr-CA	accounting:USD	0.5	0,50 $ US
+fr-CA	code:USD	0.5	0,50 USD
+fr-CA	narrow:CAD	0.5	0,50 $
+fr-CA	signed	0.5	+0,5
+fr-CA	decimal	1234567890123	1 234 567 890 123
+fr-CA	decimal	0.0625	0,062
+fr-CA	decimal	99.995	99,995
+fr-CH	decimal	0	0
+fr-CH	decimal	1	1
+fr-CH	percent	1	100%
+fr-CH	scientific	1	1E0
+fr-CH	currency:EUR	1	1.00 €
+fr-CH	currency:USD	1	1.00 $US
+fr-CH	currency:JPY	1	1 JPY
+fr-CH	currency:INR	1	1.00 ₹
+fr-CH	currency:CHF	1	1.00 CHF
+fr-CH	currency:KWD	1	1.000 KWD
+fr-CH	currency:CZK	1	1.00 CZK
+fr-CH	accounting:USD	1	1.00 $US
+fr-CH	code:USD	1	1.00 USD
+fr-CH	narrow:CAD	1	1.00 $
+fr-CH	signed	1	+1
+fr-CH	decimal	-1	-1
+fr-CH	percent	-1	-100%
+fr-CH	scientific	-1	-1E0
+fr-CH	decimal	1234	1'234
+fr-CH	decimal	12345	12'345
+fr-CH	percent	12345	1'234'500%
+fr-CH	scientific	12345	1,234E4
+fr-CH	currency:EUR	12345	12'345.00 €
+fr-CH	currency:USD	12345	12'345.00 $US
+fr-CH	currency:JPY	12345	12'345 JPY
+fr-CH	currency:INR	12345	12'345.00 ₹
+fr-CH	currency:CHF	12345	12'345.00 CHF
+fr-CH	currency:KWD	12345	12'345.000 KWD
+fr-CH	currency:CZK	12345	12'345.00 CZK
+fr-CH	accounting:USD	12345	12'345.00 $US
+fr-CH	code:USD	12345	12'345.00 USD
+fr-CH	narrow:CAD	12345	12'345.00 $
+fr-CH	signed	12345	+12'345
+fr-CH	decimal	-1234567.891	-1'234'567,891
+fr-CH	currency:EUR	-1234567.891	-1'234'567.89 €
+fr-CH	currency:USD	-1234567.891	-1'234'567.89 $US
+fr-CH	currency:JPY	-1234567.891	-1'234'568 JPY
+fr-CH	currency:INR	-1234567.891	-1'234'567.89 ₹
+fr-CH	currency:CHF	-1234567.891	-1'234'567.89 CHF
+fr-CH	currency:KWD	-1234567.891	-1'234'567.891 KWD
+fr-CH	currency:CZK	-1234567.891	-1'234'567.89 CZK
+fr-CH	accounting:USD	-1234567.891	(1'234'567.89 $US)
+fr-CH	code:USD	-1234567.891	-1'234'567.89 USD
+fr-CH	narrow:CAD	-1234567.891	-1'234'567.89 $
+fr-CH	signed	-1234567.891	-1'234'567,89
+fr-CH	decimal	0.5	0,5
+fr-CH	percent	0.5	50%
+fr-CH	scientific	0.5	5E-1
+fr-CH	currency:EUR	0.5	0.50 €
+fr-CH	currency:USD	0.5	0.50 $US
+fr-CH	currency:JPY	0.5	0 JPY
+fr-CH	currency:INR	0.5	0.50 ₹
+fr-CH	currency:CHF	0.5	0.50 CHF
+fr-CH	currency:KWD	0.5	0.500 KWD
+fr-CH	currency:CZK	0.5	0.50 CZK
+fr-CH	accounting:USD	0.5	0.50 $US
+fr-CH	code:USD	0.5	0.50 USD
+fr-CH	narrow:CAD	0.5	0.50 $
+fr-CH	signed	0.5	+0,5
+fr-CH	decimal	1234567890123	1'234'567'890'123
+fr-CH	decimal	0.0625	0,062
+fr-CH	decimal	99.995	99,995
+es	decimal	0	0
+es	decimal	1	1
+es	percent	1	100 %
+es	scientific	1	1E0
+es	currency:EUR	1	1,00 €
+es	currency:USD	1	1,00 US$
+es	currency:JPY	1	1 JPY
+es	currency:INR	1	1,00 INR
+es	currency:CHF	1	1,00 CHF
+es	currency:KWD	1	1,000 KWD
+es	currency:CZK	1	1,00 CZK
+es	accounting:USD	1	1,00 US$
+es	code:USD	1	1,00 USD
+es	narrow:CAD	1	1,00 $
+es	signed	1	+1
+es	decimal	-1	-1
+es	percent	-1	-100 %
+es	scientific	-1	-1E0
+es	decimal	1234	1234
+es	decimal	12345	12.345
+es	percent	12345	1.234.500 %
+es	scientific	12345	1,234E4
+es	currency:EUR	12345	12.345,00 €
+es	currency:USD	12345	12.345,00 US$
+es	currency:JPY	12345	12.345 JPY
+es	currency:INR	12345	12.345,00 INR
+es	currency:CHF	12345	12.345,00 CHF
+es	currency:KWD	12345	12.345,000 KWD
+es	currency:CZK	12345	12.345,00 CZK
+es	accounting:USD	12345	12.345,00 US$
+es	code:USD	12345	12.345,00 USD
+es	narrow:CAD	12345	12.345,00 $
+es	signed	12345	+12.345
+es	decimal	-1234567.891	-1.234.567,891
+es	currency:EUR	-1234567.891	-1.234.567,89 €
+es	currency:USD	-1234567.891	-1.234.567,89 US$
+es	currency:JPY	-1234567.891	-1.234.568 JPY
+es	currency:INR	-1234567.891	-1.234.567,89 INR
+es	currency:CHF	-1234567.891	-1.234.567,89 CHF
+es	currency:KWD	-1234567.891	-1.234.567,891 KWD
+es	currency:CZK	-1234567.891	-1.234.567,89 CZK
+es	accounting:USD	-1234567.891	-1.234.567,89 US$
+es	code:USD	-1234567.891	-1.234.567,89 USD
+es	narrow:CAD	-1234567.891	-1.234.567,89 $
+es	signed	-1234567.891	-1.234.567,89
+es	decimal	0.5	0,5
+es	percent	0.5	50 %
+es	scientific	0.5	5E-1
+es	currency:EUR	0.5	0,50 €
+es	currency:USD	0.5	0,50 US$
+es	currency:JPY	0.5	0 JPY
+es	currency:INR	0.5	0,50 INR
+es	currency:CHF	0.5	0,50 CHF
+es	currency:KWD	0.5	0,500 KWD
+es	currency:CZK	0.5	0,50 CZK
+es	accounting:USD	0.5	0,50 US$
+es	code:USD	0.5	0,50 USD
+es	narrow:CAD	0.5	0,50 $
+es	signed	0.5	+0,5
+es	decimal	1234567890123	1.234.567.890.123
+es	decimal	0.0625	0,062
+es	decimal	99.995	99,995
+es-419	decimal	0	0
+es-419	decimal	1	1
+es-419	percent	1	100%
+es-419	scientific	1	1E0
+es-419	currency:EUR	1	EUR 1.00
+es-419	currency:USD	1	USD 1.00
+es-419	currency:JPY	1	JPY 1
+es-419	currency:INR	1	INR 1.00
+es-419	currency:CHF	1	CHF 1.00
+es-419	currency:KWD	1	KWD 1.000
+es-419	currency:CZK	1	CZK 1.00
+es-419	accounting:USD	1	USD 1.00
+es-419	code:USD	1	USD 1.00
+es-419	narrow:CAD	1	$1.00
+es-419	signed	1	+1
+es-419	decimal	-1	-1
+es-419	percent	-1	-100%
+es-419	scientific	-1	-1E0
+es-419	decimal	1234	1,234
+es-419	decimal	12345	12,345
+es-419	percent	12345	1,234,500%
+es-419	scientific	12345	1.234E4
+es-419	currency:EUR	12345	EUR 12,345.00
+es-419	currency:USD	12345	USD 12,345.00
+es-419	currency:JPY	12345	JPY 12,345
+es-419	currency:INR	12345	INR 12,345.00
+es-419	currency:CHF	12345	CHF 12,345.00
+es-419	currency:KWD	12345	KWD 12,345.000
+es-419	currency:CZK	12345	CZK 12,345.00
+es-419	accounting:USD	12345	USD 12,345.00
+es-419	code:USD	12345	USD 12,345.00
+es-419	narrow:CAD	12345	$12,345.00
+es-419	signed	12345	+12,345
+es-419	decimal	-1234567.891	-1,234,567.891
+es-419	currency:EUR	-1234567.891	-EUR 1,234,567.89
+es-419	currency:USD	-1234567.891	-USD 1,234,567.89
+es-419	currency:JPY	-1234567.891	-JPY 1,234,568
+es-419	currency:INR	-1234567.891	-INR 1,234,567.89
+es-419	currency:CHF	-1234567.891	-CHF 1,234,567.89
+es-419	currency:KWD	-1234567.891	-KWD 1,234,567.891
+es-419	currency:CZK	-1234567.891	-CZK 1,234,567.89
+es-419	accounting:USD	-1234567.891	-USD 1,234,567.89
+es-419	code:USD	-1234567.891	-USD 1,234,567.89
+es-419	narrow:CAD	-1234567.891	-$1,234,567.89
+es-419	signed	-1234567.891	-1,234,567.89
+es-419	decimal	0.5	0.5
+es-419	percent	0.5	50%
+es-419	scientific	0.5	5E-1
+es-419	currency:EUR	0.5	EUR 0.50
+es-419	currency:USD	0.5	USD 0.50
+es-419	currency:JPY	0.5	JPY 0
+es-419	currency:INR	0.5	INR 0.50
+es-419	currency:CHF	0.5	CHF 0.50
+es-419	currency:KWD	0.5	KWD 0.500
+es-419	currency:CZK	0.5	CZK 0.50
+es-419	accounting:USD	0.5	USD 0.50
+es-419	code:USD	0.5	USD 0.50
+es-419	narrow:CAD	0.5	$0.50
+es-419	signed	0.5	+0.5
+es-419	decimal	1234567890123	1,234,567,890,123
+es-419	decimal	0.0625	0.062
+es-419	decimal	99.995	99.995
+es-MX	decimal	0	0
+es-MX	decimal	1	1
+es-MX	percent	1	100%
+es-MX	scientific	1	1E0
+es-MX	currency:EUR	1	EUR 1.00
+es-MX	currency:USD	1	USD 1.00
+es-MX	currency:JPY	1	JPY 1
+es-MX	currency:INR	1	INR 1.00
+es-MX	currency:CHF	1	CHF 1.00
+es-MX	currency:KWD	1	KWD 1.000
+es-MX	currency:CZK	1	CZK 1.00
+es-MX	accounting:USD	1	USD 1.00
+es-MX	code:USD	1	USD 1.00
+es-MX	narrow:CAD	1	$1.00
+es-MX	signed	1	+1
+es-MX	decimal	-1	-1
+es-MX	percent	-1	-100%
+es-MX	scientific	-1	-1E0
+es-MX	decimal	1234	1,234
+es-MX	decimal	12345	12,345
+es-MX	percent	12345	1,234,500%
+es-MX	scientific	12345	1.234E4
+es-MX	currency:EUR	12345	EUR 12,345.00
+es-MX	currency:USD	12345	USD 12,345.00
+es-MX	currency:JPY	12345	JPY 12,345
+es-MX	currency:INR	12345	INR 12,345.00
+es-MX	currency:CHF	12345	CHF 12,345.00
+es-MX	currency:KWD	12345	KWD 12,345.000
+es-MX	currency:CZK	12345	CZK 12,345.00
+es-MX	accounting:USD	12345	USD 12,345.00
+es-MX	code:USD	12345	USD 12,345.00
+es-MX	narrow:CAD	12345	$12,345.00
+es-MX	signed	12345	+12,345
+es-MX	decimal	-1234567.891	-1,234,567.891
+es-MX	currency:EUR	-1234567.891	-EUR 1,234,567.89
+es-MX	currency:USD	-1234567.891	-USD 1,234,567.89
+es-MX	currency:JPY	-1234567.891	-JPY 1,234,568
+es-MX	currency:INR	-1234567.891	-INR 1,234,567.89
+es-MX	currency:CHF	-1234567.891	-CHF 1,234,567.89
+es-MX	currency:KWD	-1234567.891	-KWD 1,234,567.891
+es-MX	currency:CZK	-1234567.891	-CZK 1,234,567.89
+es-MX	accounting:USD	-1234567.891	-USD 1,234,567.89
+es-MX	code:USD	-1234567.891	-USD 1,234,567.89
+es-MX	narrow:CAD	-1234567.891	-$1,234,567.89
+es-MX	signed	-1234567.891	-1,234,567.89
+es-MX	decimal	0.5	0.5
+es-MX	percent	0.5	50%
+es-MX	scientific	0.5	5E-1
+es-MX	currency:EUR	0.5	EUR 0.50
+es-MX	currency:USD	0.5	USD 0.50
+es-MX	currency:JPY	0.5	JPY 0
+es-MX	currency:INR	0.5	INR 0.50
+es-MX	currency:CHF	0.5	CHF 0.50
+es-MX	currency:KWD	0.5	KWD 0.500
+es-MX	currency:CZK	0.5	CZK 0.50
+es-MX	accounting:USD	0.5	USD 0.50
+es-MX	code:USD	0.5	USD 0.50
+es-MX	narrow:CAD	0.5	$0.50
+es-MX	signed	0.5	+0.5
+es-MX	decimal	1234567890123	1,234,567,890,123
+es-MX	decimal	0.0625	0.062
+es-MX	decimal	99.995	99.995
+it	decimal	0	0
+it	decimal	1	1
+it	percent	1	100%
+it	scientific	1	1E0
+it	currency:EUR	1	1,00 €
+it	currency:USD	1	1,00 USD
+it	currency:JPY	1	1 JPY
+it	currency:INR	1	1,00 INR
+it	currency:CHF	1	1,00 CHF
+it	currency:KWD	1	1,000 KWD
+it	currency:CZK	1	1,00 CZK
+it	accounting:USD	1	1,00 USD
+it	code:USD	1	1,00 USD
+it	narrow:CAD	1	1,00 $
+it	signed	1	+1
+it	decimal	-1	-1
+it	percent	-1	-100%
+it	scientific	-1	-1E0
+it	decimal	1234	1234
+it	decimal	12345	12.345
+it	percent	12345	1.234.500%
+it	scientific	12345	1,234E4
+it	currency:EUR	12345	12.345,00 €
+it	currency:USD	12345	12.345,00 USD
+it	currency:JPY	12345	12.345 JPY
+it	currency:INR	12345	12.345,00 INR
+it	currency:CHF	12345	12.345,00 CHF
+it	currency:KWD	12345	12.345,000 KWD
+it	currency:CZK	12345	12.345,00 CZK
+it	accounting:USD	12345	12.345,00 USD
+it	code:USD	12345	12.345,00 USD
+it	narrow:CAD	12345	12.345,00 $
+it	signed	12345	+12.345
+it	decimal	-1234567.891	-1.234.567,891
+it	currency:EUR	-1234567.891	-1.234.567,89 €
+it	currency:USD	-1234567.891	-1.234.567,89 USD
+it	currency:JPY	-1234567.891	-1.234.568 JPY
+it	currency:INR	-1234567.891	-1.234.567,89 INR
+it	currency:CHF	-1234567.891	-1.234.567,89 CHF
+it	currency:KWD	-1234567.891	-1.234.567,891 KWD
+it	currency:CZK	-1234567.891	-1.234.567,89 CZK
+it	accounting:USD	-1234567.891	-1.234.567,89 USD
+it	code:USD	-1234567.891	-1.234.567,89 USD
+it	narrow:CAD	-1234567.891	-1.234.567,89 $
+it	signed	-1234567.891	-1.234.567,89
+it	decimal	0.5	0,5
+it	percent	0.5	50%
+it	scientific	0.5	5E-1
+it	currency:EUR	0.5	0,50 €
+it	currency:USD	0.5	0,50 USD
+it	currency:JPY	0.5	0 JPY
+it	currency:INR	0.5	0,50 INR
+it	currency:CHF	0.5	0,50 CHF
+it	currency:KWD	0.5	0,500 KWD
+it	currency:CZK	0.5	0,50 CZK
+it	accounting:USD	0.5	0,50 USD
+it	code:USD	0.5	0,50 USD
+it	narrow:CAD	0.5	0,50 $
+it	signed	0.5	+0,5
+it	decimal	1234567890123	1.234.567.890.123
+it	decimal	0.0625	0,062
+it	decimal	99.995	99,995
+it-CH	decimal	0	0
+it-CH	decimal	1	1
+it-CH	percent	1	100%
+it-CH	scientific	1	1E0
+it-CH	currency:EUR	1	€ 1.00
+it-CH	currency:USD	1	USD 1.00
+it-CH	currency:JPY	1	JPY 1
+it-CH	currency:INR	1	INR 1.00
+it-CH	currency:CHF	1	CHF 1.00
+it-CH	currency:KWD	1	KWD 1.000
+it-CH	currency:CZK	1	CZK 1.00
+it-CH	accounting:USD	1	USD 1.00
+it-CH	code:USD	1	USD 1.00
+it-CH	narrow:CAD	1	$ 1.00
+it-CH	signed	1	+1
+it-CH	decimal	-1	-1
+it-CH	percent	-1	-100%
+it-CH	scientific	-1	-1E0
+it-CH	decimal	1234	1234
+it-CH	decimal	12345	12'345
+it-CH	percent	12345	1'234'500%
+it-CH	scientific	12345	1.234E4
+it-CH	currency:EUR	12345	€ 12'345.00
+it-CH	currency:USD	12345	USD 12'345.00
+it-CH	currency:JPY	12345	JPY 12'345
+it-CH	currency:INR	12345	INR 12'345.00
+it-CH	currency:CHF	12345	CHF 12'345.00
+it-CH	currency:KWD	12345	KWD 12'345.000
+it-CH	currency:CZK	12345	CZK 12'345.00
+it-CH	accounting:USD	12345	USD 12'345.00
+it-CH	code:USD	12345	USD 12'345.00
+it-CH	narrow:CAD	12345	$ 12'345.00
+it-CH	signed	12345	+12'345
+it-CH	decimal	-1234567.891	-1'234'567.891
+it-CH	currency:EUR	-1234567.891	€-1'234'567.89
+it-CH	currency:USD	-1234567.891	USD-1'234'567.89
+it-CH	currency:JPY	-1234567.891	JPY-1'234'568
+it-CH	currency:INR	-1234567.891	INR-1'234'567.89
+it-CH	currency:CHF	-1234567.891	CHF-1'234'567.89
+it-CH	currency:KWD	-1234567.891	KWD-1'234'567.891
+it-CH	currency:CZK	-1234567.891	CZK-1'234'567.89
+it-CH	accounting:USD	-1234567.891	USD-1'234'567.89
+it-CH	code:USD	-1234567.891	USD-1'234'567.89
+it-CH	narrow:CAD	-1234567.891	$-1'234'567.89
+it-CH	signed	-1234567.891	-1'234'567.89
+it-CH	decimal	0.5	0.5
+it-CH	percent	0.5	50%
+it-CH	scientific	0.5	5E-1
+it-CH	currency:EUR	0.5	€ 0.50
+it-CH	currency:USD	0.5	USD 0.50
+it-CH	currency:JPY	0.5	JPY 0
+it-CH	currency:INR	0.5	INR 0.50
+it-CH	currency:CHF	0.5	CHF 0.50
+it-CH	currency:KWD	0.5	KWD 0.500
+it-CH	currency:CZK	0.5	CZK 0.50
+it-CH	accounting:USD	0.5	USD 0.50
+it-CH	code:USD	0.5	USD 0.50
+it-CH	narrow:CAD	0.5	$ 0.50
+it-CH	signed	0.5	+0.5
+it-CH	decimal	1234567890123	1'234'567'890'123
+it-CH	decimal	0.0625	0.062
+it-CH	decimal	99.995	99.995
+pt	decimal	0	0
+pt	decimal	1	1
+pt	percent	1	100%
+pt	scientific	1	1E0
+pt	currency:EUR	1	€ 1,00
+pt	currency:USD	1	US$ 1,00
+pt	currency:JPY	1	JP¥ 1
+pt	currency:INR	1	₹ 1,00
+pt	currency:CHF	1	CHF 1,00
+pt	currency:KWD	1	KWD 1,000
+pt	currency:CZK	1	CZK 1,00
+pt	accounting:USD	1	US$ 1,00
+pt	code:USD	1	USD 1,00
+pt	narrow:CAD	1	$ 1,00
+pt	signed	1	+1
+pt	decimal	-1	-1
+pt	percent	-1	-100%
+pt	scientific	-1	-1E0
+pt	decimal	1234	1.234
+pt	decimal	12345	12.345
+pt	percent	12345	1.234.500%
+pt	scientific	12345	1,234E4
+pt	currency:EUR	12345	€ 12.345,00
+pt	currency:USD	12345	US$ 12.345,00
+pt	currency:JPY	12345	JP¥ 12.345
+pt	currency:INR	12345	₹ 12.345,00
+pt	currency:CHF	12345	CHF 12.345,00
+pt	currency:KWD	12345	KWD 12.345,000
+pt	currency:CZK	12345	CZK 12.345,00
+pt	accounting:USD	12345	US$ 12.345,00
+pt	code:USD	12345	USD 12.345,00
+pt	narrow:CAD	12345	$ 12.345,00
+pt	signed	12345	+12.345
+pt	decimal	-1234567.891	-1.234.567,891
+pt	currency:EUR	-1234567.891	-€ 1.234.567,89
+pt	currency:USD	-1234567.891	-US$ 1.234.567,89
+pt	currency:JPY	-1234567.891	-JP¥ 1.234.568
+pt	currency:INR	-1234567.891	-₹ 1.234.567,89
+pt	currency:CHF	-1234567.891	-CHF 1.234.567,89
+pt	currency:KWD	-1234567.891	-KWD 1.234.567,891
+pt	currency:CZK	-1234567.891	-CZK 1.234.567,89
+pt	accounting:USD	-1234567.891	-US$ 1.234.567,89
+pt	code:USD	-1234567.891	-USD 1.234.567,89
+pt	narrow:CAD	-1234567.891	-$ 1.234.567,89
+pt	signed	-1234567.891	-1.234.567,89
+pt	decimal	0.5	0,5
+pt	percent	0.5	50%
+pt	scientific	0.5	5E-1
+pt	currency:EUR	0.5	€ 0,50
+pt	currency:USD	0.5	US$ 0,50
+pt	currency:JPY	0.5	JP¥ 0
+pt	currency:INR	0.5	₹ 0,50
+pt	currency:CHF	0.5	CHF 0,50
+pt	currency:KWD	0.5	KWD 0,500
+pt	currency:CZK	0.5	CZK 0,50
+pt	accounting:USD	0.5	US$ 0,50
+pt	code:USD	0.5	USD 0,50
+pt	narrow:CAD	0.5	$ 0,50
+pt	signed	0.5	+0,5
+pt	decimal	1234567890123	1.234.567.890.123
+pt	decimal	0.0625	0,062
+pt	decimal	99.995	99,995
+pt-PT	decimal	0	0
+pt-PT	decimal	1	1
+pt-PT	percent	1	100%
+pt-PT	scientific	1	1E0
+pt-PT	currency:EUR	1	1,00 €
+pt-PT	currency:USD	1	1,00 US$
+pt-PT	currency:JPY	1	1 JP¥
+pt-PT	currency:INR	1	1,00 ₹
+pt-PT	currency:CHF	1	1,00 CHF
+pt-PT	currency:KWD	1	1,000 KWD
+pt-PT	currency:CZK	1	1,00 CZK
+pt-PT	accounting:USD	1	1,00 US$
+pt-PT	code:USD	1	1,00 USD
+pt-PT	narrow:CAD	1	1,00 $
+pt-PT	signed	1	+1
+pt-PT	decimal	-1	-1
+pt-PT	percent	-1	-100%
+pt-PT	scientific	-1	-1E0
+pt-PT	decimal	1234	1234
+pt-PT	decimal	12345	12 345
+pt-PT	percent	12345	1 234 500%
+pt-PT	scientific	12345	1,234E4
+pt-PT	currency:EUR	12345	12 345,00 €
+pt-PT	currency:USD	12345	12 345,00 US$
+pt-PT	currency:JPY	12345	12 345 JP¥
+pt-PT	currency:INR	12345	12 345,00 ₹
+pt-PT	currency:CHF	12345	12 345,00 CHF
+pt-PT	currency:KWD	12345	12 345,000 KWD
+pt-PT	currency:CZK	12345	12 345,00 CZK
+pt-PT	accounting:USD	12345	12 345,00 US$
+pt-PT	code:USD	12345	12 345,00 USD
+pt-PT	narrow:CAD	12345	12 345,00 $
+pt-PT	signed	12345	+12 345
+pt-PT	decimal	-1234567.891	-1 234 567,891
+pt-PT	currency:EUR	-1234567.891	-1 234 567,89 €
+pt-PT	currency:USD	-1234567.891	-1 234 567,89 US$
+pt-PT	currency:JPY	-1234567.891	-1 234 568 JP¥
+pt-PT	currency:INR	-1234567.891	-1 234 567,89 ₹
+pt-PT	currency:CHF	-1234567.891	-1 234 567,89 CHF
+pt-PT	currency:KWD	-1234567.891	-1 234 567,891 KWD
+pt-PT	currency:CZK	-1234567.891	-1 234 567,89 CZK
+pt-PT	accounting:USD	-1234567.891	(1 234 567,89 US$)
+pt-PT	code:USD	-1234567.891	-1 234 567,89 USD
+pt-PT	narrow:CAD	-1234567.891	-1 234 567,89 $
+pt-PT	signed	-1234567.891	-1 234 567,89
+pt-PT	decimal	0.5	0,5
+pt-PT	percent	0.5	50%
+pt-PT	scientific	0.5	5E-1
+pt-PT	currency:EUR	0.5	0,50 €
+pt-PT	currency:USD	0.5	0,50 US$
+pt-PT	currency:JPY	0.5	0 JP¥
+pt-PT	currency:INR	0.5	0,50 ₹
+pt-PT	currency:CHF	0.5	0,50 CHF
+pt-PT	currency:KWD	0.5	0,500 KWD
+pt-PT	currency:CZK	0.5	0,50 CZK
+pt-PT	accounting:USD	0.5	0,50 US$
+pt-PT	code:USD	0.5	0,50 USD
+pt-PT	narrow:CAD	0.5	0,50 $
+pt-PT	signed	0.5	+0,5
+pt-PT	decimal	1234567890123	1 234 567 890 123
+pt-PT	decimal	0.0625	0,062
+pt-PT	decimal	99.995	99,995
+nl	decimal	0	0
+nl	decimal	1	1
+nl	percent	1	100%
+nl	scientific	1	1E0
+nl	currency:EUR	1	€ 1,00
+nl	currency:USD	1	US$ 1,00
+nl	currency:JPY	1	JP¥ 1
+nl	currency:INR	1	₹ 1,00
+nl	currency:CHF	1	CHF 1,00
+nl	currency:KWD	1	KWD 1,000
+nl	currency:CZK	1	CZK 1,00
+nl	accounting:USD	1	US$ 1,00
+nl	code:USD	1	USD 1,00
+nl	narrow:CAD	1	$ 1,00
+nl	signed	1	+1
+nl	decimal	-1	-1
+nl	percent	-1	-100%
+nl	scientific	-1	-1E0
+nl	decimal	1234	1.234
+nl	decimal	12345	12.345
+nl	percent	12345	1.234.500%
+nl	scientific	12345	1,234E4
+nl	currency:EUR	12345	€ 12.345,00
+nl	currency:USD	12345	US$ 12.345,00
+nl	currency:JPY	12345	JP¥ 12.345
+nl	currency:INR	12345	₹ 12.345,00
+nl	currency:CHF	12345	CHF 12.345,00
+nl	currency:KWD	12345	KWD 12.345,000
+nl	currency:CZK	12345	CZK 12.345,00
+nl	accounting:USD	12345	US$ 12.345,00
+nl	code:USD	12345	USD 12.345,00
+nl	narrow:CAD	12345	$ 12.345,00
+nl	signed	12345	+12.345
+nl	decimal	-1234567.891	-1.234.567,891
+nl	currency:EUR	-1234567.891	€ -1.234.567,89
+nl	currency:USD	-1234567.891	US$ -1.234.567,89
+nl	currency:JPY	-1234567.891	JP¥ -1.234.568
+nl	currency:INR	-1234567.891	₹ -1.234.567,89
+nl	currency:CHF	-1234567.891	CHF -1.234.567,89
+nl	currency:KWD	-1234567.891	KWD -1.234.567,891
+nl	currency:CZK	-1234567.891	CZK -1.234.567,89
+nl	accounting:USD	-1234567.891	(US$ 1.234.567,89)
+nl	code:USD	-1234567.891	USD -1.234.567,89
+nl	narrow:CAD	-1234567.891	$ -1.234.567,89
+nl	signed	-1234567.891	-1.234.567,89
+nl	decimal	0.5	0,5
+nl	percent	0.5	50%
+nl	scientific	0.5	5E-1
+nl	currency:EUR	0.5	€ 0,50
+nl	currency:USD	0.5	US$ 0,50
+nl	currency:JPY	0.5	JP¥ 0
+nl	currency:INR	0.5	₹ 0,50
+nl	currency:CHF	0.5	CHF 0,50
+nl	currency:KWD	0.5	KWD 0,500
+nl	currency:CZK	0.5	CZK 0,50
+nl	accounting:USD	0.5	US$ 0,50
+nl	code:USD	0.5	USD 0,50
+nl	narrow:CAD	0.5	$ 0,50
+nl	signed	0.5	+0,5
+nl	decimal	1234567890123	1.234.567.890.123
+nl	decimal	0.0625	0,062
+nl	decimal	99.995	99,995
+ca	decimal	0	0
+ca	decimal	1	1
+ca	percent	1	100 %
+ca	scientific	1	1E0
+ca	currency:EUR	1	1,00 €
+ca	currency:USD	1	1,00 USD
+ca	currency:JPY	1	1 ¥
+ca	currency:INR	1	1,00 ₹
+ca	currency:CHF	1	1,00 CHF
+ca	currency:KWD	1	1,000 KWD
+ca	currency:CZK	1	1,00 CZK
+ca	accounting:USD	1	1,00 USD
+ca	code:USD	1	1,00 USD
+ca	narrow:CAD	1	1,00 $
+ca	signed	1	+1
+ca	decimal	-1	-1
+ca	percent	-1	-100 %
+ca	scientific	-1	-1E0
+ca	decimal	1234	1.234
+ca	decimal	12345	12.345
+ca	percent	12345	1.234.500 %
+ca	scientific	12345	1,234E4
+ca	currency:EUR	12345	12.345,00 €
+ca	currency:USD	12345	12.345,00 USD
+ca	currency:JPY	12345	12.345 ¥
+ca	currency:INR	12345	12.345,00 ₹
+ca	currency:CHF	12345	12.345,00 CHF
+ca	currency:KWD	12345	12.345,000 KWD
+ca	currency:CZK	12345	12.345,00 CZK
+ca	accounting:USD	12345	12.345,00 USD
+ca	code:USD	12345	12.345,00 USD
+ca	narrow:CAD	12345	12.345,00 $
+ca	signed	12345	+12.345
+ca	decimal	-1234567.891	-1.234.567,891
+ca	currency:EUR	-1234567.891	-1.234.567,89 €
+ca	currency:USD	-1234567.891	-1.234.567,89 USD
+ca	currency:JPY	-1234567.891	-1.234.568 ¥
+ca	currency:INR	-1234567.891	-1.234.567,89 ₹
+ca	currency:CHF	-1234567.891	-1.234.567,89 CHF
+ca	currency:KWD	-1234567.891	-1.234.567,891 KWD
+ca	currency:CZK	-1234567.891	-1.234.567,89 CZK
+ca	accounting:USD	-1234567.891	(1.234.567,89 USD)
+ca	code:USD	-1234567.891	-1.234.567,89 USD
+ca	narrow:CAD	-1234567.891	-1.234.567,89 $
+ca	signed	-1234567.891	-1.234.567,89
+ca	decimal	0.5	0,5
+ca	percent	0.5	50 %
+ca	scientific	0.5	5E-1
+ca	currency:EUR	0.5	0,50 €
+ca	currency:USD	0.5	0,50 USD
+ca	currency:JPY	0.5	0 ¥
+ca	currency:INR	0.5	0,50 ₹
+ca	currency:CHF	0.5	0,50 CHF
+ca	currency:KWD	0.5	0,500 KWD
+ca	currency:CZK	0.5	0,50 CZK
+ca	accounting:USD	0.5	0,50 USD
+ca	code:USD	0.5	0,50 USD
+ca	narrow:CAD	0.5	0,50 $
+ca	signed	0.5	+0,5
+ca	decimal	1234567890123	1.234.567.890.123
+ca	decimal	0.0625	0,062
+ca	decimal	99.995	99,995
+sv	decimal	0	0
+sv	decimal	1	1
+sv	percent	1	100 %
+sv	scientific	1	1×10^0
+sv	currency:EUR	1	1,00 €
+sv	currency:USD	1	1,00 US$
+sv	currency:JPY	1	1 JPY
+sv	currency:INR	1	1,00 INR
+sv	currency:CHF	1	1,00 CHF
+sv	currency:KWD	1	1,000 KWD
+sv	currency:CZK	1	1,00 CZK
+sv	accounting:USD	1	1,00 US$
+sv	code:USD	1	1,00 USD
+sv	narrow:CAD	1	1,00 $
+sv	signed	1	+1
+sv	decimal	-1	−1
+sv	percent	-1	−100 %
+sv	scientific	-1	−1×10^0
+sv	decimal	1234	1 234
+sv	decimal	12345	12 345
+sv	percent	12345	1 234 500 %
+sv	scientific	12345	1,234×10^4
+sv	currency:EUR	12345	12 345,00 €
+sv	currency:USD	12345	12 345,00 US$
+sv	currency:JPY	12345	12 345 JPY
+sv	currency:INR	12345	12 345,00 INR
+sv	currency:CHF	12345	12 345,00 CHF
+sv	currency:KWD	12345	12 345,000 KWD
+sv	currency:CZK	12345	12 345,00 CZK
+sv	accounting:USD	12345	12 345,00 US$
+sv	code:USD	12345	12 345,00 USD
+sv	narrow:CAD	12345	12 345,00 $
+sv	signed	12345	+12 345
+sv	decimal	-1234567.891	−1 234 567,891
+sv	currency:EUR	-1234567.891	−1 234 567,89 €
+sv	currency:USD	-1234567.891	−1 234 567,89 US$
+sv	currency:JPY	-1234567.891	−1 234 568 JPY
+sv	currency:INR	-1234567.891	−1 234 567,89 INR
+sv	currency:CHF	-1234567.891	−1 234 567,89 CHF
+sv	currency:KWD	-1234567.891	−1 234 567,891 KWD
+sv	currency:CZK	-1234567.891	−1 234 567,89 CZK
+sv	accounting:USD	-1234567.891	−1 234 567,89 US$
+sv	code:USD	-1234567.891	−1 234 567,89 USD
+sv	narrow:CAD	-1234567.891	−1 234 567,89 $
+sv	signed	-1234567.891	−1 234 567,89
+sv	decimal	0.5	0,5
+sv	percent	0.5	50 %
+sv	scientific	0.5	5×10^−1
+sv	currency:EUR	0.5	0,50 €
+sv	currency:USD	0.5	0,50 US$
+sv	currency:JPY	0.5	0 JPY
+sv	currency:INR	0.5	0,50 INR
+sv	currency:CHF	0.5	0,50 CHF
+sv	currency:KWD	0.5	0,500 KWD
+sv	currency:CZK	0.5	0,50 CZK
+sv	accounting:USD	0.5	0,50 US$
+sv	code:USD	0.5	0,50 USD
+sv	narrow:CAD	0.5	0,50 $
+sv	signed	0.5	+0,5
+sv	decimal	1234567890123	1 234 567 890 123
+sv	decimal	0.0625	0,062
+sv	decimal	99.995	99,995
+da	decimal	0	0
+da	decimal	1	1
+da	percent	1	100 %
+da	scientific	1	1E0
+da	currency:EUR	1	1,00 €
+da	currency:USD	1	1,00 USD
+da	currency:JPY	1	1 JP¥
+da	currency:INR	1	1,00 ₹
+da	currency:CHF	1	1,00 CHF
+da	currency:KWD	1	1,000 KWD
+da	currency:CZK	1	1,00 CZK
+da	accounting:USD	1	1,00 USD
+da	code:USD	1	1,00 USD
+da	narrow:CAD	1	1,00 $
+da	signed	1	+1
+da	decimal	-1	-1
+da	percent	-1	-100 %
+da	scientific	-1	-1E0
+da	decimal	1234	1.234
+da	decimal	12345	12.345
+da	percent	12345	1.234.500 %
+da	scientific	12345	1,234E4
+da	currency:EUR	12345	12.345,00 €
+da	currency:USD	12345	12.345,00 USD
+da	currency:JPY	12345	12.345 JP¥
+da	currency:INR	12345	12.345,00 ₹
+da	currency:CHF	12345	12.345,00 CHF
+da	currency:KWD	12345	12.345,000 KWD
+da	currency:CZK	12345	12.345,00 CZK
+da	accounting:USD	12345	12.345,00 USD
+da	code:USD	12345	12.345,00 USD
+da	narrow:CAD	12345	12.345,00 $
+da	signed	12345	+12.345
+da	decimal	-1234567.891	-1.234.567,891
+da	currency:EUR	-1234567.891	-1.234.567,89 €
+da	currency:USD	-1234567.891	-1.234.567,89 USD
+da	currency:JPY	-1234567.891	-1.234.568 JP¥
+da	currency:INR	-1234567.891	-1.234.567,89 ₹
+da	currency:CHF	-1234567.891	-1.234.567,89 CHF
+da	currency:KWD	-1234567.891	-1.234.567,891 KWD
+da	currency:CZK	-1234567.891	-1.234.567,89 CZK
+da	accounting:USD	-1234567.891	-1.234.567,89 USD
+da	code:USD	-1234567.891	-1.234.567,89 USD
+da	narrow:CAD	-1234567.891	-1.234.567,89 $
+da	signed	-1234567.891	-1.234.567,89
+da	decimal	0.5	0,5
+da	percent	0.5	50 %
+da	scientific	0.5	5E-1
+da	currency:EUR	0.5	0,50 €
+da	currency:USD	0.5	0,50 USD
+da	currency:JPY	0.5	0 JP¥
+da	currency:INR	0.5	0,50 ₹
+da	currency:CHF	0.5	0,50 CHF
+da	currency:KWD	0.5	0,500 KWD
+da	currency:CZK	0.5	0,50 CZK
+da	accounting:USD	0.5	0,50 USD
+da	code:USD	0.5	0,50 USD
+da	narrow:CAD	0.5	0,50 $
+da	signed	0.5	+0,5
+da	decimal	1234567890123	1.234.567.890.123
+da	decimal	0.0625	0,062
+da	decimal	99.995	99,995
+nb	decimal	0	0
+nb	decimal	1	1
+nb	percent	1	100 %
+nb	scientific	1	1E0
+nb	currency:EUR	1	1,00 €
+nb	currency:USD	1	1,00 USD
+nb	currency:JPY	1	1 JPY
+nb	currency:INR	1	1,00 INR
+nb	currency:CHF	1	1,00 CHF
+nb	currency:KWD	1	1,000 KWD
+nb	currency:CZK	1	1,00 CZK
+nb	accounting:USD	1	USD 1,00
+nb	code:USD	1	1,00 USD
+nb	narrow:CAD	1	1,00 $
+nb	signed	1	+1
+nb	decimal	-1	−1
+nb	percent	-1	−100 %
+nb	scientific	-1	−1E0
+nb	decimal	1234	1 234
+nb	decimal	12345	12 345
+nb	percent	12345	1 234 500 %
+nb	scientific	12345	1,234E4
+nb	currency:EUR	12345	12 345,00 €
+nb	currency:USD	12345	12 345,00 USD
+nb	currency:JPY	12345	12 345 JPY
+nb	currency:INR	12345	12 345,00 INR
+nb	currency:CHF	12345	12 345,00 CHF
+nb	currency:KWD	12345	12 345,000 KWD
+nb	currency:CZK	12345	12 345,00 CZK
+nb	accounting:USD	12345	USD 12 345,00
+nb	code:USD	12345	12 345,00 USD
+nb	narrow:CAD	12345	12 345,00 $
+nb	signed	12345	+12 345
+nb	decimal	-1234567.891	−1 234 567,891
+nb	currency:EUR	-1234567.891	−1 234 567,89 €
+nb	currency:USD	-1234567.891	−1 234 567,89 USD
+nb	currency:JPY	-1234567.891	−1 234 568 JPY
+nb	currency:INR	-1234567.891	−1 234 567,89 INR
+nb	currency:CHF	-1234567.891	−1 234 567,89 CHF
+nb	currency:KWD	-1234567.891	−1 234 567,891 KWD
+nb	currency:CZK	-1234567.891	−1 234 567,89 CZK
+nb	accounting:USD	-1234567.891	(USD 1 234 567,89)
+nb	code:USD	-1234567.891	−1 234 567,89 USD
+nb	narrow:CAD	-1234567.891	−1 234 567,89 $
+nb	signed	-1234567.891	−1 234 567,89
+nb	decimal	0.5	0,5
+nb	percent	0.5	50 %
+nb	scientific	0.5	5E−1
+nb	currency:EUR	0.5	0,50 €
+nb	currency:USD	0.5	0,50 USD
+nb	currency:JPY	0.5	0 JPY
+nb	currency:INR	0.5	0,50 INR
+nb	currency:CHF	0.5	0,50 CHF
+nb	currency:KWD	0.5	0,500 KWD
+nb	currency:CZK	0.5	0,50 CZK
+nb	accounting:USD	0.5	USD 0,50
+nb	code:USD	0.5	0,50 USD
+nb	narrow:CAD	0.5	0,50 $
+nb	signed	0.5	+0,5
+nb	decimal	1234567890123	1 234 567 890 123
+nb	decimal	0.0625	0,062
+nb	decimal	99.995	99,995
+fi	decimal	0	0
+fi	decimal	1	1
+fi	percent	1	100 %
+fi	scientific	1	1E0
+fi	currency:EUR	1	1,00 €
+fi	currency:USD	1	1,00 $
+fi	currency:JPY	1	1 ¥
+fi	currency:INR	1	1,00 INR
+fi	currency:CHF	1	1,00 CHF
+fi	currency:KWD	1	1,000 KWD
+fi	currency:CZK	1	1,00 CZK
+fi	accounting:USD	1	1,00 $
+fi	code:USD	1	1,00 USD
+fi	narrow:CAD	1	1,00 CAD
+fi	signed	1	+1
+fi	decimal	-1	−1
+fi	percent	-1	−100 %
+fi	scientific	-1	−1E0
+fi	decimal	1234	1 234
+fi	decimal	12345	12 345
+fi	percent	12345	1 234 500 %
+fi	scientific	12345	1,234E4
+fi	currency:EUR	12345	12 345,00 €
+fi	currency:USD	12345	12 345,00 $
+fi	currency:JPY	12345	12 345 ¥
+fi	currency:INR	12345	12 345,00 INR
+fi	currency:CHF	12345	12 345,00 CHF
+fi	currency:KWD	12345	12 345,000 KWD
+fi	currency:CZK	12345	12 345,00 CZK
+fi	accounting:USD	12345	12 345,00 $
+fi	code:USD	12345	12 345,00 USD
+fi	narrow:CAD	12345	12 345,00 CAD
+fi	signed	12345	+12 345
+fi	decimal	-1234567.891	−1 234 567,891
+fi	currency:EUR	-1234567.891	−1 234 567,89 €
+fi	currency:USD	-1234567.891	−1 234 567,89 $
+fi	currency:JPY	-1234567.891	−1 234 568 ¥
+fi	currency:INR	-1234567.891	−1 234 567,89 INR
+fi	currency:CHF	-1234567.891	−1 234 567,89 CHF
+fi	currency:KWD	-1234567.891	−1 234 567,891 KWD
+fi	currency:CZK	-1234567.891	−1 234 567,89 CZK
+fi	accounting:USD	-1234567.891	−1 234 567,89 $
+fi	code:USD	-1234567.891	−1 234 567,89 USD
+fi	narrow:CAD	-1234567.891	−1 234 567,89 CAD
+fi	signed	-1234567.891	−1 234 567,89
+fi	decimal	0.5	0,5
+fi	percent	0.5	50 %
+fi	scientific	0.5	5E−1
+fi	currency:EUR	0.5	0,50 €
+fi	currency:USD	0.5	0,50 $
+fi	currency:JPY	0.5	0 ¥
+fi	currency:INR	0.5	0,50 INR
+fi	currency:CHF	0.5	0,50 CHF
+fi	currency:KWD	0.5	0,500 KWD
+fi	currency:CZK	0.5	0,50 CZK
+fi	accounting:USD	0.5	0,50 $
+fi	code:USD	0.5	0,50 USD
+fi	narrow:CAD	0.5	0,50 CAD
+fi	signed	0.5	+0,5
+fi	decimal	1234567890123	1 234 567 890 123
+fi	decimal	0.0625	0,062
+fi	decimal	99.995	99,995
+is	decimal	0	0
+is	decimal	1	1
+is	percent	1	100%
+is	scientific	1	1E0
+is	currency:EUR	1	1,00 EUR
+is	currency:USD	1	1,00 USD
+is	currency:JPY	1	1 JP¥
+is	currency:INR	1	1,00 INR
+is	currency:CHF	1	1,00 CHF
+is	currency:KWD	1	1,000 KWD
+is	currency:CZK	1	1,00 CZK
+is	accounting:USD	1	1,00 USD
+is	code:USD	1	1,00 USD
+is	narrow:CAD	1	1,00 $
+is	signed	1	+1
+is	decimal	-1	-1
+is	percent	-1	-100%
+is	scientific	-1	-1E0
+is	decimal	1234	1.234
+is	decimal	12345	12.345
+is	percent	12345	1.234.500%
+is	scientific	12345	1,234E4
+is	currency:EUR	12345	12.345,00 EUR
+is	currency:USD	12345	12.345,00 USD
+is	currency:JPY	12345	12.345 JP¥
+is	currency:INR	12345	12.345,00 INR
+is	currency:CHF	12345	12.345,00 CHF
+is	currency:KWD	12345	12.345,000 KWD
+is	currency:CZK	12345	12.345,00 CZK
+is	accounting:USD	12345	12.345,00 USD
+is	code:USD	12345	12.345,00 USD
+is	narrow:CAD	12345	12.345,00 $
+is	signed	12345	+12.345
+is	decimal	-1234567.891	-1.234.567,891
+is	currency:EUR	-1234567.891	-1.234.567,89 EUR
+is	currency:USD	-1234567.891	-1.234.567,89 USD
+is	currency:JPY	-1234567.891	-1.234.568 JP¥
+is	currency:INR	-1234567.891	-1.234.567,89 INR
+is	currency:CHF	-1234567.891	-1.234.567,89 CHF
+is	currency:KWD	-1234567.891	-1.234.567,891 KWD
+is	currency:CZK	-1234567.891	-1.234.567,89 CZK
+is	accounting:USD	-1234567.891	-1.234.567,89 USD
+is	code:USD	-1234567.891	-1.234.567,89 USD
+is	narrow:CAD	-1234567.891	-1.234.567,89 $
+is	signed	-1234567.891	-1.234.567,89
+is	decimal	0.5	0,5
+is	percent	0.5	50%
+is	scientific	0.5	5E-1
+is	currency:EUR	0.5	0,50 EUR
+is	currency:USD	0.5	0,50 USD
+is	currency:JPY	0.5	0 JP¥
+is	currency:INR	0.5	0,50 INR
+is	currency:CHF	0.5	0,50 CHF
+is	currency:KWD	0.5	0,500 KWD
+is	currency:CZK	0.5	0,50 CZK
+is	accounting:USD	0.5	0,50 USD
+is	code:USD	0.5	0,50 USD
+is	narrow:CAD	0.5	0,50 $
+is	signed	0.5	+0,5
+is	decimal	1234567890123	1.234.567.890.123
+is	decimal	0.0625	0,062
+is	decimal	99.995	99,995
+pl	decimal	0	0
+pl	decimal	1	1
+pl	percent	1	100%
+pl	scientific	1	1E0
+pl	currency:EUR	1	1,00 €
+pl	currency:USD	1	1,00 USD
+pl	currency:JPY	1	1 JPY
+pl	currency:INR	1	1,00 INR
+pl	currency:CHF	1	1,00 CHF
+pl	currency:KWD	1	1,000 KWD
+pl	currency:CZK	1	1,00 CZK
+pl	accounting:USD	1	1,00 USD
+pl	code:USD	1	1,00 USD
+pl	narrow:CAD	1	1,00 $
+pl	signed	1	+1
+pl	decimal	-1	-1
+pl	percent	-1	-100%
+pl	scientific	-1	-1E0
+pl	decimal	1234	1234
+pl	decimal	12345	12 345
+pl	percent	12345	1 234 500%
+pl	scientific	12345	1,234E4
+pl	currency:EUR	12345	12 345,00 €
+pl	currency:USD	12345	12 345,00 USD
+pl	currency:JPY	12345	12 345 JPY
+pl	currency:INR	12345	12 345,00 INR
+pl	currency:CHF	12345	12 345,00 CHF
+pl	currency:KWD	12345	12 345,000 KWD
+pl	currency:CZK	12345	12 345,00 CZK
+pl	accounting:USD	12345	12 345,00 USD
+pl	code:USD	12345	12 345,00 USD
+pl	narrow:CAD	12345	12 345,00 $
+pl	signed	12345	+12 345
+pl	decimal	-1234567.891	-1 234 567,891
+pl	currency:EUR	-1234567.891	-1 234 567,89 €
+pl	currency:USD	-1234567.891	-1 234 567,89 USD
+pl	currency:JPY	-1234567.891	-1 234 568 JPY
+pl	currency:INR	-1234567.891	-1 234 567,89 INR
+pl	currency:CHF	-1234567.891	-1 234 567,89 CHF
+pl	currency:KWD	-1234567.891	-1 234 567,891 KWD
+pl	currency:CZK	-1234567.891	-1 234 567,89 CZK
+pl	accounting:USD	-1234567.891	(1 234 567,89 USD)
+pl	code:USD	-1234567.891	-1 234 567,89 USD
+pl	narrow:CAD	-1234567.891	-1 234 567,89 $
+pl	signed	-1234567.891	-1 234 567,89
+pl	decimal	0.5	0,5
+pl	percent	0.5	50%
+pl	scientific	0.5	5E-1
+pl	currency:EUR	0.5	0,50 €
+pl	currency:USD	0.5	0,50 USD
+pl	currency:JPY	0.5	0 JPY
+pl	currency:INR	0.5	0,50 INR
+pl	currency:CHF	0.5	0,50 CHF
+pl	currency:KWD	0.5	0,500 KWD
+pl	currency:CZK	0.5	0,50 CZK
+pl	accounting:USD	0.5	0,50 USD
+pl	code:USD	0.5	0,50 USD
+pl	narrow:CAD	0.5	0,50 $
+pl	signed	0.5	+0,5
+pl	decimal	1234567890123	1 234 567 890 123
+pl	decimal	0.0625	0,062
+pl	decimal	99.995	99,995
+cs	decimal	0	0
+cs	decimal	1	1
+cs	percent	1	100 %
+cs	scientific	1	1E0
+cs	currency:EUR	1	1,00 €
+cs	currency:USD	1	1,00 US$
+cs	currency:JPY	1	1 JP¥
+cs	currency:INR	1	1,00 INR
+cs	currency:CHF	1	1,00 CHF
+cs	currency:KWD	1	1,000 KWD
+cs	currency:CZK	1	1,00 Kč
+cs	accounting:USD	1	1,00 US$
+cs	code:USD	1	1,00 USD
+cs	narrow:CAD	1	1,00 $
+cs	signed	1	+1
+cs	decimal	-1	-1
+cs	percent	-1	-100 %
+cs	scientific	-1	-1E0
+cs	decimal	1234	1 234
+cs	decimal	12345	12 345
+cs	percent	12345	1 234 500 %
+cs	scientific	12345	1,234E4
+cs	currency:EUR	12345	12 345,00 €
+cs	currency:USD	12345	12 345,00 US$
+cs	currency:JPY	12345	12 345 JP¥
+cs	currency:INR	12345	12 345,00 INR
+cs	currency:CHF	12345	12 345,00 CHF
+cs	currency:KWD	12345	12 345,000 KWD
+cs	currency:CZK	12345	12 345,00 Kč
+cs	accounting:USD	12345	12 345,00 US$
+cs	code:USD	12345	12 345,00 USD
+cs	narrow:CAD	12345	12 345,00 $
+cs	signed	12345	+12 345
+cs	decimal	-1234567.891	-1 234 567,891
+cs	currency:EUR	-1234567.891	-1 234 567,89 €
+cs	currency:USD	-1234567.891	-1 234 567,89 US$
+cs	currency:JPY	-1234567.891	-1 234 568 JP¥
+cs	currency:INR	-1234567.891	-1 234 567,89 INR
+cs	currency:CHF	-1234567.891	-1 234 567,89 CHF
+cs	currency:KWD	-1234567.891	-1 234 567,891 KWD
+cs	currency:CZK	-1234567.891	-1 234 567,89 Kč
+cs	accounting:USD	-1234567.891	-1 234 567,89 US$
+cs	code:USD	-1234567.891	-1 234 567,89 USD
+cs	narrow:CAD	-1234567.891	-1 234 567,89 $
+cs	signed	-1234567.891	-1 234 567,89
+cs	decimal	0.5	0,5
+cs	percent	0.5	50 %
+cs	scientific	0.5	5E-1
+cs	currency:EUR	0.5	0,50 €
+cs	currency:USD	0.5	0,50 US$
+cs	currency:JPY	0.5	0 JP¥
+cs	currency:INR	0.5	0,50 INR
+cs	currency:CHF	0.5	0,50 CHF
+cs	currency:KWD	0.5	0,500 KWD
+cs	currency:CZK	0.5	0,50 Kč
+cs	accounting:USD	0.5	0,50 US$
+cs	code:USD	0.5	0,50 USD
+cs	narrow:CAD	0.5	0,50 $
+cs	signed	0.5	+0,5
+cs	decimal	1234567890123	1 234 567 890 123
+cs	decimal	0.0625	0,062
+cs	decimal	99.995	99,995
+sk	decimal	0	0
+sk	decimal	1	1
+sk	percent	1	100 %
+sk	scientific	1	1e0
+sk	currency:EUR	1	1,00 €
+sk	currency:USD	1	1,00 USD
+sk	currency:JPY	1	1 JPY
+sk	currency:INR	1	1,00 INR
+sk	currency:CHF	1	1,00 CHF
+sk	currency:KWD	1	1,000 KWD
+sk	currency:CZK	1	1,00 CZK
+sk	accounting:USD	1	1,00 USD
+sk	code:USD	1	1,00 USD
+sk	narrow:CAD	1	1,00 $
+sk	signed	1	+1
+sk	decimal	-1	-1
+sk	percent	-1	-100 %
+sk	scientific	-1	-1e0
+sk	decimal	1234	1 234
+sk	decimal	12345	12 345
+sk	percent	12345	1 234 500 %
+sk	scientific	12345	1,234e4
+sk	currency:EUR	12345	12 345,00 €
+sk	currency:USD	12345	12 345,00 USD
+sk	currency:JPY	12345	12 345 JPY
+sk	currency:INR	12345	12 345,00 INR
+sk	currency:CHF	12345	12 345,00 CHF
+sk	currency:KWD	12345	12 345,000 KWD
+sk	currency:CZK	12345	12 345,00 CZK
+sk	accounting:USD	12345	12 345,00 USD
+sk	code:USD	12345	12 345,00 USD
+sk	narrow:CAD	12345	12 345,00 $
+sk	signed	12345	+12 345
+sk	decimal	-1234567.891	-1 234 567,891
+sk	currency:EUR	-1234567.891	-1 234 567,89 €
+sk	currency:USD	-1234567.891	-1 234 567,89 USD
+sk	currency:JPY	-1234567.891	-1 234 568 JPY
+sk	currency:INR	-1234567.891	-1 234 567,89 INR
+sk	currency:CHF	-1234567.891	-1 234 567,89 CHF
+sk	currency:KWD	-1234567.891	-1 234 567,891 KWD
+sk	currency:CZK	-1234567.891	-1 234 567,89 CZK
+sk	accounting:USD	-1234567.891	(1 234 567,89 USD)
+sk	code:USD	-1234567.891	-1 234 567,89 USD
+sk	narrow:CAD	-1234567.891	-1 234 567,89 $
+sk	signed	-1234567.891	-1 234 567,89
+sk	decimal	0.5	0,5
+sk	percent	0.5	50 %
+sk	scientific	0.5	5e-1
+sk	currency:EUR	0.5	0,50 €
+sk	currency:USD	0.5	0,50 USD
+sk	currency:JPY	0.5	0 JPY
+sk	currency:INR	0.5	0,50 INR
+sk	currency:CHF	0.5	0,50 CHF
+sk	currency:KWD	0.5	0,500 KWD
+sk	currency:CZK	0.5	0,50 CZK
+sk	accounting:USD	0.5	0,50 USD
+sk	code:USD	0.5	0,50 USD
+sk	narrow:CAD	0.5	0,50 $
+sk	signed	0.5	+0,5
+sk	decimal	1234567890123	1 234 567 890 123
+sk	decimal	0.0625	0,062
+sk	decimal	99.995	99,995
+sl	decimal	0	0
+sl	decimal	1	1
+sl	percent	1	100 %
+sl	scientific	1	1e0
+sl	currency:EUR	1	1,00 €
+sl	currency:USD	1	1,00 $
+sl	currency:JPY	1	1 ¥
+sl	currency:INR	1	1,00 ₹
+sl	currency:CHF	1	1,00 CHF
+sl	currency:KWD	1	1,000 KWD
+sl	currency:CZK	1	1,00 CZK
+sl	accounting:USD	1	1,00 $
+sl	code:USD	1	1,00 USD
+sl	narrow:CAD	1	1,00 $
+sl	signed	1	+1
+sl	decimal	-1	−1
+sl	percent	-1	−100 %
+sl	scientific	-1	−1e0
+sl	decimal	1234	1234
+sl	decimal	12345	12.345
+sl	percent	12345	1.234.500 %
+sl	scientific	12345	1,234e4
+sl	currency:EUR	12345	12.345,00 €
+sl	currency:USD	12345	12.345,00 $
+sl	currency:JPY	12345	12.345 ¥
+sl	currency:INR	12345	12.345,00 ₹
+sl	currency:CHF	12345	12.345,00 CHF
+sl	currency:KWD	12345	12.345,000 KWD
+sl	currency:CZK	12345	12.345,00 CZK
+sl	accounting:USD	12345	12.345,00 $
+sl	code:USD	12345	12.345,00 USD
+sl	narrow:CAD	12345	12.345,00 $
+sl	signed	12345	+12.345
+sl	decimal	-1234567.891	−1.234.567,891
+sl	currency:EUR	-1234567.891	−1.234.567,89 €
+sl	currency:USD	-1234567.891	−1.234.567,89 $
+sl	currency:JPY	-1234567.891	−1.234.568 ¥
+sl	currency:INR	-1234567.891	−1.234.567,89 ₹
+sl	currency:CHF	-1234567.891	−1.234.567,89 CHF
+sl	currency:KWD	-1234567.891	−1.234.567,891 KWD
+sl	currency:CZK	-1234567.891	−1.234.567,89 CZK
+sl	accounting:USD	-1234567.891	(1.234.567,89 $)
+sl	code:USD	-1234567.891	−1.234.567,89 USD
+sl	narrow:CAD	-1234567.891	−1.234.567,89 $
+sl	signed	-1234567.891	−1.234.567,89
+sl	decimal	0.5	0,5
+sl	percent	0.5	50 %
+sl	scientific	0.5	5e−1
+sl	currency:EUR	0.5	0,50 €
+sl	currency:USD	0.5	0,50 $
+sl	currency:JPY	0.5	0 ¥
+sl	currency:INR	0.5	0,50 ₹
+sl	currency:CHF	0.5	0,50 CHF
+sl	currency:KWD	0.5	0,500 KWD
+sl	currency:CZK	0.5	0,50 CZK
+sl	accounting:USD	0.5	0,50 $
+sl	code:USD	0.5	0,50 USD
+sl	narrow:CAD	0.5	0,50 $
+sl	signed	0.5	+0,5
+sl	decimal	1234567890123	1.234.567.890.123
+sl	decimal	0.0625	0,062
+sl	decimal	99.995	99,995
+hr	decimal	0	0
+hr	decimal	1	1
+hr	percent	1	100 %
+hr	scientific	1	1E0
+hr	currency:EUR	1	1,00 €
+hr	currency:USD	1	1,00 USD
+hr	currency:JPY	1	1 JPY
+hr	currency:INR	1	1,00 INR
+hr	currency:CHF	1	1,00 CHF
+hr	currency:KWD	1	1,000 KWD
+hr	currency:CZK	1	1,00 CZK
+hr	accounting:USD	1	1,00 USD
+hr	code:USD	1	1,00 USD
+hr	narrow:CAD	1	1,00 $
+hr	signed	1	+1
+hr	decimal	-1	−1
+hr	percent	-1	−100 %
+hr	scientific	-1	−1E0
+hr	decimal	1234	1.234
+hr	decimal	12345	12.345
+hr	percent	12345	1.234.500 %
+hr	scientific	12345	1,234E4
+hr	currency:EUR	12345	12.345,00 €
+hr	currency:USD	12345	12.345,00 USD
+hr	currency:JPY	12345	12.345 JPY
+hr	currency:INR	12345	12.345,00 INR
+hr	currency:CHF	12345	12.345,00 CHF
+hr	currency:KWD	12345	12.345,000 KWD
+hr	currency:CZK	12345	12.345,00 CZK
+hr	accounting:USD	12345	12.345,00 USD
+hr	code:USD	12345	12.345,00 USD
+hr	narrow:CAD	12345	12.345,00 $
+hr	signed	12345	+12.345
+hr	decimal	-1234567.891	−1.234.567,891
+hr	currency:EUR	-1234567.891	−1.234.567,89 €
+hr	currency:USD	-1234567.891	−1.234.567,89 USD
+hr	currency:JPY	-1234567.891	−1.234.568 JPY
+hr	currency:INR	-1234567.891	−1.234.567,89 INR
+hr	currency:CHF	-1234567.891	−1.234.567,89 CHF
+hr	currency:KWD	-1234567.891	−1.234.567,891 KWD
+hr	currency:CZK	-1234567.891	−1.234.567,89 CZK
+hr	accounting:USD	-1234567.891	−1.234.567,89 USD
+hr	code:USD	-1234567.891	−1.234.567,89 USD
+hr	narrow:CAD	-1234567.891	−1.234.567,89 $
+hr	signed	-1234567.891	−1.234.567,89
+hr	decimal	0.5	0,5
+hr	percent	0.5	50 %
+hr	scientific	0.5	5E−1
+hr	currency:EUR	0.5	0,50 €
+hr	currency:USD	0.5	0,50 USD
+hr	currency:JPY	0.5	0 JPY
+hr	currency:INR	0.5	0,50 INR
+hr	currency:CHF	0.5	0,50 CHF
+hr	currency:KWD	0.5	0,500 KWD
+hr	currency:CZK	0.5	0,50 CZK
+hr	accounting:USD	0.5	0,50 USD
+hr	code:USD	0.5	0,50 USD
+hr	narrow:CAD	0.5	0,50 $
+hr	signed	0.5	+0,5
+hr	decimal	1234567890123	1.234.567.890.123
+hr	decimal	0.0625	0,062
+hr	decimal	99.995	99,995
+sr	decimal	0	0
+sr	decimal	1	1
+sr	percent	1	100%
+sr	scientific	1	1E0
+sr	currency:EUR	1	1,00 €
+sr	currency:USD	1	1,00 US$
+sr	currency:JPY	1	1 ¥
+sr	currency:INR	1	1,00 ₹
+sr	currency:CHF	1	1,00 CHF
+sr	currency:KWD	1	1,000 KWD
+sr	currency:CZK	1	1,00 CZK
+sr	accounting:USD	1	1,00 US$
+sr	code:USD	1	1,00 USD
+sr	narrow:CAD	1	1,00 $
+sr	signed	1	+1
+sr	decimal	-1	-1
+sr	percent	-1	-100%
+sr	scientific	-1	-1E0
+sr	decimal	1234	1.234
+sr	decimal	12345	12.345
+sr	percent	12345	1.234.500%
+sr	scientific	12345	1,234E4
+sr	currency:EUR	12345	12.345,00 €
+sr	currency:USD	12345	12.345,00 US$
+sr	currency:JPY	12345	12.345 ¥
+sr	currency:INR	12345	12.345,00 ₹
+sr	currency:CHF	12345	12.345,00 CHF
+sr	currency:KWD	12345	12.345,000 KWD
+sr	currency:CZK	12345	12.345,00 CZK
+sr	accounting:USD	12345	12.345,00 US$
+sr	code:USD	12345	12.345,00 USD
+sr	narrow:CAD	12345	12.345,00 $
+sr	signed	12345	+12.345
+sr	decimal	-1234567.891	-1.234.567,891
+sr	currency:EUR	-1234567.891	-1.234.567,89 €
+sr	currency:USD	-1234567.891	-1.234.567,89 US$
+sr	currency:JPY	-1234567.891	-1.234.568 ¥
+sr	currency:INR	-1234567.891	-1.234.567,89 ₹
+sr	currency:CHF	-1234567.891	-1.234.567,89 CHF
+sr	currency:KWD	-1234567.891	-1.234.567,891 KWD
+sr	currency:CZK	-1234567.891	-1.234.567,89 CZK
+sr	accounting:USD	-1234567.891	(1.234.567,89 US$)
+sr	code:USD	-1234567.891	-1.234.567,89 USD
+sr	narrow:CAD	-1234567.891	-1.234.567,89 $
+sr	signed	-1234567.891	-1.234.567,89
+sr	decimal	0.5	0,5
+sr	percent	0.5	50%
+sr	scientific	0.5	5E-1
+sr	currency:EUR	0.5	0,50 €
+sr	currency:USD	0.5	0,50 US$
+sr	currency:JPY	0.5	0 ¥
+sr	currency:INR	0.5	0,50 ₹
+sr	currency:CHF	0.5	0,50 CHF
+sr	currency:KWD	0.5	0,500 KWD
+sr	currency:CZK	0.5	0,50 CZK
+sr	accounting:USD	0.5	0,50 US$
+sr	code:USD	0.5	0,50 USD
+sr	narrow:CAD	0.5	0,50 $
+sr	signed	0.5	+0,5
+sr	decimal	1234567890123	1.234.567.890.123
+sr	decimal	0.0625	0,062
+sr	decimal	99.995	99,995
+hu	decimal	0	0
+hu	decimal	1	1
+hu	percent	1	100%
+hu	scientific	1	1E0
+hu	currency:EUR	1	1,00 EUR
+hu	currency:USD	1	1,00 USD
+hu	currency:JPY	1	1 ¥
+hu	currency:INR	1	1,00 INR
+hu	currency:CHF	1	1,00 CHF
+hu	currency:KWD	1	1,000 KWD
+hu	currency:CZK	1	1,00 CZK
+hu	accounting:USD	1	1,00 USD
+hu	code:USD	1	1,00 USD
+hu	narrow:CAD	1	1,00 $
+hu	signed	1	+1
+hu	decimal	-1	-1
+hu	percent	-1	-100%
+hu	scientific	-1	-1E0
+hu	decimal	1234	1234
+hu	decimal	12345	12 345
+hu	percent	12345	1 234 500%
+hu	scientific	12345	1,234E4
+hu	currency:EUR	12345	12 345,00 EUR
+hu	currency:USD	12345	12 345,00 USD
+hu	currency:JPY	12345	12 345 ¥
+hu	currency:INR	12345	12 345,00 INR
+hu	currency:CHF	12345	12 345,00 CHF
+hu	currency:KWD	12345	12 345,000 KWD
+hu	currency:CZK	12345	12 345,00 CZK
+hu	accounting:USD	12345	12 345,00 USD
+hu	code:USD	12345	12 345,00 USD
+hu	narrow:CAD	12345	12 345,00 $
+hu	signed	12345	+12 345
+hu	decimal	-1234567.891	-1 234 567,891
+hu	currency:EUR	-1234567.891	-1 234 567,89 EUR
+hu	currency:USD	-1234567.891	-1 234 567,89 USD
+hu	currency:JPY	-1234567.891	-1 234 568 ¥
+hu	currency:INR	-1234567.891	-1 234 567,89 INR
+hu	currency:CHF	-1234567.891	-1 234 567,89 CHF
+hu	currency:KWD	-1234567.891	-1 234 567,891 KWD
+hu	currency:CZK	-1234567.891	-1 234 567,89 CZK
+hu	accounting:USD	-1234567.891	-1 234 567,89 USD
+hu	code:USD	-1234567.891	-1 234 567,89 USD
+hu	narrow:CAD	-1234567.891	-1 234 567,89 $
+hu	signed	-1234567.891	-1 234 567,89
+hu	decimal	0.5	0,5
+hu	percent	0.5	50%
+hu	scientific	0.5	5E-1
+hu	currency:EUR	0.5	0,50 EUR
+hu	currency:USD	0.5	0,50 USD
+hu	currency:JPY	0.5	0 ¥
+hu	currency:INR	0.5	0,50 INR
+hu	currency:CHF	0.5	0,50 CHF
+hu	currency:KWD	0.5	0,500 KWD
+hu	currency:CZK	0.5	0,50 CZK
+hu	accounting:USD	0.5	0,50 USD
+hu	code:USD	0.5	0,50 USD
+hu	narrow:CAD	0.5	0,50 $
+hu	signed	0.5	+0,5
+hu	decimal	1234567890123	1 234 567 890 123
+hu	decimal	0.0625	0,062
+hu	decimal	99.995	99,995
+ro	decimal	0	0
+ro	decimal	1	1
+ro	percent	1	100 %
+ro	scientific	1	1E0
+ro	currency:EUR	1	1,00 EUR
+ro	currency:USD	1	1,00 USD
+ro	currency:JPY	1	1 JPY
+ro	currency:INR	1	1,00 INR
+ro	currency:CHF	1	1,00 CHF
+ro	currency:KWD	1	1,000 KWD
+ro	currency:CZK	1	1,00 CZK
+ro	accounting:USD	1	1,00 USD
+ro	code:USD	1	1,00 USD
+ro	narrow:CAD	1	1,00 $
+ro	signed	1	+1
+ro	decimal	-1	-1
+ro	percent	-1	-100 %
+ro	scientific	-1	-1E0
+ro	decimal	1234	1.234
+ro	decimal	12345	12.345
+ro	percent	12345	1.234.500 %
+ro	scientific	12345	1,234E4
+ro	currency:EUR	12345	12.345,00 EUR
+ro	currency:USD	12345	12.345,00 USD
+ro	currency:JPY	12345	12.345 JPY
+ro	currency:INR	12345	12.345,00 INR
+ro	currency:CHF	12345	12.345,00 CHF
+ro	currency:KWD	12345	12.345,000 KWD
+ro	currency:CZK	12345	12.345,00 CZK
+ro	accounting:USD	12345	12.345,00 USD
+ro	code:USD	12345	12.345,00 USD
+ro	narrow:CAD	12345	12.345,00 $
+ro	signed	12345	+12.345
+ro	decimal	-1234567.891	-1.234.567,891
+ro	currency:EUR	-1234567.891	-1.234.567,89 EUR
+ro	currency:USD	-1234567.891	-1.234.567,89 USD
+ro	currency:JPY	-1234567.891	-1.234.568 JPY
+ro	currency:INR	-1234567.891	-1.234.567,89 INR
+ro	currency:CHF	-1234567.891	-1.234.567,89 CHF
+ro	currency:KWD	-1234567.891	-1.234.567,891 KWD
+ro	currency:CZK	-1234567.891	-1.234.567,89 CZK
+ro	accounting:USD	-1234567.891	(1.234.567,89 USD)
+ro	code:USD	-1234567.891	-1.234.567,89 USD
+ro	narrow:CAD	-1234567.891	-1.234.567,89 $
+ro	signed	-1234567.891	-1.234.567,89
+ro	decimal	0.5	0,5
+ro	percent	0.5	50 %
+ro	scientific	0.5	5E-1
+ro	currency:EUR	0.5	0,50 EUR
+ro	currency:USD	0.5	0,50 USD
+ro	currency:JPY	0.5	0 JPY
+ro	currency:INR	0.5	0,50 INR
+ro	currency:CHF	0.5	0,50 CHF
+ro	currency:KWD	0.5	0,500 KWD
+ro	currency:CZK	0.5	0,50 CZK
+ro	accounting:USD	0.5	0,50 USD
+ro	code:USD	0.5	0,50 USD
+ro	narrow:CAD	0.5	0,50 $
+ro	signed	0.5	+0,5
+ro	decimal	1234567890123	1.234.567.890.123
+ro	decimal	0.0625	0,062
+ro	decimal	99.995	99,995
+bg	decimal	0	0
+bg	decimal	1	1
+bg	percent	1	100%
+bg	scientific	1	1E0
+bg	currency:EUR	1	1,00 €
+bg	currency:USD	1	1,00 щ.д.
+bg	currency:JPY	1	1 JPY
+bg	currency:INR	1	1,00 INR
+bg	currency:CHF	1	1,00 CHF
+bg	currency:KWD	1	1,000 KWD
+bg	currency:CZK	1	1,00 CZK
+bg	accounting:USD	1	1,00 щ.д.
+bg	code:USD	1	1,00 USD
+bg	narrow:CAD	1	1,00 CAD
+bg	signed	1	+1
+bg	decimal	-1	-1
+bg	percent	-1	-100%
+bg	scientific	-1	-1E0
+bg	decimal	1234	1234
+bg	decimal	12345	12 345
+bg	percent	12345	1 234 500%
+bg	scientific	12345	1,234E4
+bg	currency:EUR	12345	12 345,00 €
+bg	currency:USD	12345	12 345,00 щ.д.
+bg	currency:JPY	12345	12 345 JPY
+bg	currency:INR	12345	12 345,00 INR
+bg	currency:CHF	12345	12 345,00 CHF
+bg	currency:KWD	12345	12 345,000 KWD
+bg	currency:CZK	12345	12 345,00 CZK
+bg	accounting:USD	12345	12 345,00 щ.д.
+bg	code:USD	12345	12 345,00 USD
+bg	narrow:CAD	12345	12 345,00 CAD
+bg	signed	12345	+12 345
+bg	decimal	-1234567.891	-1 234 567,891
+bg	currency:EUR	-1234567.891	-1 234 567,89 €
+bg	currency:USD	-1234567.891	-1 234 567,89 щ.д.
+bg	currency:JPY	-1234567.891	-1 234 568 JPY
+bg	currency:INR	-1234567.891	-1 234 567,89 INR
+bg	currency:CHF	-1234567.891	-1 234 567,89 CHF
+bg	currency:KWD	-1234567.891	-1 234 567,891 KWD
+bg	currency:CZK	-1234567.891	-1 234 567,89 CZK
+bg	accounting:USD	-1234567.891	(1 234 567,89 щ.д.)
+bg	code:USD	-1234567.891	-1 234 567,89 USD
+bg	narrow:CAD	-1234567.891	-1 234 567,89 CAD
+bg	signed	-1234567.891	-1 234 567,89
+bg	decimal	0.5	0,5
+bg	percent	0.5	50%
+bg	scientific	0.5	5E-1
+bg	currency:EUR	0.5	0,50 €
+bg	currency:USD	0.5	0,50 щ.д.
+bg	currency:JPY	0.5	0 JPY
+bg	currency:INR	0.5	0,50 INR
+bg	currency:CHF	0.5	0,50 CHF
+bg	currency:KWD	0.5	0,500 KWD
+bg	currency:CZK	0.5	0,50 CZK
+bg	accounting:USD	0.5	0,50 щ.д.
+bg	code:USD	0.5	0,50 USD
+bg	narrow:CAD	0.5	0,50 CAD
+bg	signed	0.5	+0,5
+bg	decimal	1234567890123	1 234 567 890 123
+bg	decimal	0.0625	0,062
+bg	decimal	99.995	99,995
+ru	decimal	0	0
+ru	decimal	1	1
+ru	percent	1	100 %
+ru	scientific	1	1E0
+ru	currency:EUR	1	1,00 €
+ru	currency:USD	1	1,00 $
+ru	currency:JPY	1	1 ¥
+ru	currency:INR	1	1,00 ₹
+ru	currency:CHF	1	1,00 CHF
+ru	currency:KWD	1	1,000 KWD
+ru	currency:CZK	1	1,00 CZK
+ru	accounting:USD	1	1,00 $
+ru	code:USD	1	1,00 USD
+ru	narrow:CAD	1	1,00 $
+ru	signed	1	+1
+ru	decimal	-1	-1
+ru	percent	-1	-100 %
+ru	scientific	-1	-1E0
+ru	decimal	1234	1 234
+ru	decimal	12345	12 345
+ru	percent	12345	1 234 500 %
+ru	scientific	12345	1,234E4
+ru	currency:EUR	12345	12 345,00 €
+ru	currency:USD	12345	12 345,00 $
+ru	currency:JPY	12345	12 345 ¥
+ru	currency:INR	12345	12 345,00 ₹
+ru	currency:CHF	12345	12 345,00 CHF
+ru	currency:KWD	12345	12 345,000 KWD
+ru	currency:CZK	12345	12 345,00 CZK
+ru	accounting:USD	12345	12 345,00 $
+ru	code:USD	12345	12 345,00 USD
+ru	narrow:CAD	12345	12 345,00 $
+ru	signed	12345	+12 345
+ru	decimal	-1234567.891	-1 234 567,891
+ru	currency:EUR	-1234567.891	-1 234 567,89 €
+ru	currency:USD	-1234567.891	-1 234 567,89 $
+ru	currency:JPY	-1234567.891	-1 234 568 ¥
+ru	currency:INR	-1234567.891	-1 234 567,89 ₹
+ru	currency:CHF	-1234567.891	-1 234 567,89 CHF
+ru	currency:KWD	-1234567.891	-1 234 567,891 KWD
+ru	currency:CZK	-1234567.891	-1 234 567,89 CZK
+ru	accounting:USD	-1234567.891	-1 234 567,89 $
+ru	code:USD	-1234567.891	-1 234 567,89 USD
+ru	narrow:CAD	-1234567.891	-1 234 567,89 $
+ru	signed	-1234567.891	-1 234 567,89
+ru	decimal	0.5	0,5
+ru	percent	0.5	50 %
+ru	scientific	0.5	5E-1
+ru	currency:EUR	0.5	0,50 €
+ru	currency:USD	0.5	0,50 $
+ru	currency:JPY	0.5	0 ¥
+ru	currency:INR	0.5	0,50 ₹
+ru	currency:CHF	0.5	0,50 CHF
+ru	currency:KWD	0.5	0,500 KWD
+ru	currency:CZK	0.5	0,50 CZK
+ru	accounting:USD	0.5	0,50 $
+ru	code:USD	0.5	0,50 USD
+ru	narrow:CAD	0.5	0,50 $
+ru	signed	0.5	+0,5
+ru	decimal	1234567890123	1 234 567 890 123
+ru	decimal	0.0625	0,062
+ru	decimal	99.995	99,995
+uk	decimal	0	0
+uk	decimal	1	1
+uk	percent	1	100%
+uk	scientific	1	1Е0
+uk	currency:EUR	1	1,00 EUR
+uk	currency:USD	1	1,00 USD
+uk	currency:JPY	1	1 ¥
+uk	currency:INR	1	1,00 INR
+uk	currency:CHF	1	1,00 CHF
+uk	currency:KWD	1	1,000 KWD
+uk	currency:CZK	1	1,00 CZK
+uk	accounting:USD	1	1,00 USD
+uk	code:USD	1	1,00 USD
+uk	narrow:CAD	1	1,00 $
+uk	signed	1	+1
+uk	decimal	-1	-1
+uk	percent	-1	-100%
+uk	scientific	-1	-1Е0
+uk	decimal	1234	1 234
+uk	decimal	12345	12 345
+uk	percent	12345	1 234 500%
+uk	scientific	12345	1,234Е4
+uk	currency:EUR	12345	12 345,00 EUR
+uk	currency:USD	12345	12 345,00 USD
+uk	currency:JPY	12345	12 345 ¥
+uk	currency:INR	12345	12 345,00 INR
+uk	currency:CHF	12345	12 345,00 CHF
+uk	currency:KWD	12345	12 345,000 KWD
+uk	currency:CZK	12345	12 345,00 CZK
+uk	accounting:USD	12345	12 345,00 USD
+uk	code:USD	12345	12 345,00 USD
+uk	narrow:CAD	12345	12 345,00 $
+uk	signed	12345	+12 345
+uk	decimal	-1234567.891	-1 234 567,891
+uk	currency:EUR	-1234567.891	-1 234 567,89 EUR
+uk	currency:USD	-1234567.891	-1 234 567,89 USD
+uk	currency:JPY	-1234567.891	-1 234 568 ¥
+uk	currency:INR	-1234567.891	-1 234 567,89 INR
+uk	currency:CHF	-1234567.891	-1 234 567,89 CHF
+uk	currency:KWD	-1234567.891	-1 234 567,891 KWD
+uk	currency:CZK	-1234567.891	-1 234 567,89 CZK
+uk	accounting:USD	-1234567.891	-1 234 567,89 USD
+uk	code:USD	-1234567.891	-1 234 567,89 USD
+uk	narrow:CAD	-1234567.891	-1 234 567,89 $
+uk	signed	-1234567.891	-1 234 567,89
+uk	decimal	0.5	0,5
+uk	percent	0.5	50%
+uk	scientific	0.5	5Е-1
+uk	currency:EUR	0.5	0,50 EUR
+uk	currency:USD	0.5	0,50 USD
+uk	currency:JPY	0.5	0 ¥
+uk	currency:INR	0.5	0,50 INR
+uk	currency:CHF	0.5	0,50 CHF
+uk	currency:KWD	0.5	0,500 KWD
+uk	currency:CZK	0.5	0,50 CZK
+uk	accounting:USD	0.5	0,50 USD
+uk	code:USD	0.5	0,50 USD
+uk	narrow:CAD	0.5	0,50 $
+uk	signed	0.5	+0,5
+uk	decimal	1234567890123	1 234 567 890 123
+uk	decimal	0.0625	0,062
+uk	decimal	99.995	99,995
+el	decimal	0	0
+el	decimal	1	1
+el	percent	1	100%
+el	scientific	1	1e0
+el	currency:EUR	1	1,00 €
+el	currency:USD	1	1,00 $
+el	currency:JPY	1	1 JP¥
+el	currency:INR	1	1,00 ₹
+el	currency:CHF	1	1,00 CHF
+el	currency:KWD	1	1,000 KWD
+el	currency:CZK	1	1,00 CZK
+el	accounting:USD	1	1,00 $
+el	code:USD	1	1,00 USD
+el	narrow:CAD	1	1,00 $
+el	signed	1	+1
+el	decimal	-1	-1
+el	percent	-1	-100%
+el	scientific	-1	-1e0
+el	decimal	1234	1.234
+el	decimal	12345	12.345
+el	percent	12345	1.234.500%
+el	scientific	12345	1,234e4
+el	currency:EUR	12345	12.345,00 €
+el	currency:USD	12345	12.345,00 $
+el	currency:JPY	12345	12.345 JP¥
+el	currency:INR	12345	12.345,00 ₹
+el	currency:CHF	12345	12.345,00 CHF
+el	currency:KWD	12345	12.345,000 KWD
+el	currency:CZK	12345	12.345,00 CZK
+el	accounting:USD	12345	12.345,00 $
+el	code:USD	12345	12.345,00 USD
+el	narrow:CAD	12345	12.345,00 $
+el	signed	12345	+12.345
+el	decimal	-1234567.891	-1.234.567,891
+el	currency:EUR	-1234567.891	-1.234.567,89 €
+el	currency:USD	-1234567.891	-1.234.567,89 $
+el	currency:JPY	-1234567.891	-1.234.568 JP¥
+el	currency:INR	-1234567.891	-1.234.567,89 ₹
+el	currency:CHF	-1234567.891	-1.234.567,89 CHF
+el	currency:KWD	-1234567.891	-1.234.567,891 KWD
+el	currency:CZK	-1234567.891	-1.234.567,89 CZK
+el	accounting:USD	-1234567.891	-1.234.567,89 $
+el	code:USD	-1234567.891	-1.234.567,89 USD
+el	narrow:CAD	-1234567.891	-1.234.567,89 $
+el	signed	-1234567.891	-1.234.567,89
+el	decimal	0.5	0,5
+el	percent	0.5	50%
+el	scientific	0.5	5e-1
+el	currency:EUR	0.5	0,50 €
+el	currency:USD	0.5	0,50 $
+el	currency:JPY	0.5	0 JP¥
+el	currency:INR	0.5	0,50 ₹
+el	currency:CHF	0.5	0,50 CHF
+el	currency:KWD	0.5	0,500 KWD
+el	currency:CZK	0.5	0,50 CZK
+el	accounting:USD	0.5	0,50 $
+el	code:USD	0.5	0,50 USD
+el	narrow:CAD	0.5	0,50 $
+el	signed	0.5	+0,5
+el	decimal	1234567890123	1.234.567.890.123
+el	decimal	0.0625	0,062
+el	decimal	99.995	99,995
+tr	decimal	0	0
+tr	decimal	1	1
+tr	percent	1	%100
+tr	scientific	1	1E0
+tr	currency:EUR	1	€1,00
+tr	currency:USD	1	$1,00
+tr	currency:JPY	1	¥1
+tr	currency:INR	1	₹1,00
+tr	currency:CHF	1	CHF 1,00
+tr	currency:KWD	1	KWD 1,000
+tr	currency:CZK	1	CZK 1,00
+tr	accounting:USD	1	$1,00
+tr	code:USD	1	USD 1,00
+tr	narrow:CAD	1	$1,00
+tr	signed	1	+1
+tr	decimal	-1	-1
+tr	percent	-1	-%100
+tr	scientific	-1	-1E0
+tr	decimal	1234	1.234
+tr	decimal	12345	12.345
+tr	percent	12345	%1.234.500
+tr	scientific	12345	1,234E4
+tr	currency:EUR	12345	€12.345,00
+tr	currency:USD	12345	$12.345,00
+tr	currency:JPY	12345	¥12.345
+tr	currency:INR	12345	₹12.345,00
+tr	currency:CHF	12345	CHF 12.345,00
+tr	currency:KWD	12345	KWD 12.345,000
+tr	currency:CZK	12345	CZK 12.345,00
+tr	accounting:USD	12345	$12.345,00
+tr	code:USD	12345	USD 12.345,00
+tr	narrow:CAD	12345	$12.345,00
+tr	signed	12345	+12.345
+tr	decimal	-1234567.891	-1.234.567,891
+tr	currency:EUR	-1234567.891	-€1.234.567,89
+tr	currency:USD	-1234567.891	-$1.234.567,89
+tr	currency:JPY	-1234567.891	-¥1.234.568
+tr	currency:INR	-1234567.891	-₹1.234.567,89
+tr	currency:CHF	-1234567.891	-CHF 1.234.567,89
+tr	currency:KWD	-1234567.891	-KWD 1.234.567,891
+tr	currency:CZK	-1234567.891	-CZK 1.234.567,89
+tr	accounting:USD	-1234567.891	($1.234.567,89)
+tr	code:USD	-1234567.891	-USD 1.234.567,89
+tr	narrow:CAD	-1234567.891	-$1.234.567,89
+tr	signed	-1234567.891	-1.234.567,89
+tr	decimal	0.5	0,5
+tr	percent	0.5	%50
+tr	scientific	0.5	5E-1
+tr	currency:EUR	0.5	€0,50
+tr	currency:USD	0.5	$0,50
+tr	currency:JPY	0.5	¥0
+tr	currency:INR	0.5	₹0,50
+tr	currency:CHF	0.5	CHF 0,50
+tr	currency:KWD	0.5	KWD 0,500
+tr	currency:CZK	0.5	CZK 0,50
+tr	accounting:USD	0.5	$0,50
+tr	code:USD	0.5	USD 0,50
+tr	narrow:CAD	0.5	$0,50
+tr	signed	0.5	+0,5
+tr	decimal	1234567890123	1.234.567.890.123
+tr	decimal	0.0625	0,062
+tr	decimal	99.995	99,995
+lt	decimal	0	0
+lt	decimal	1	1
+lt	percent	1	100 %
+lt	scientific	1	1×10^0
+lt	currency:EUR	1	1,00 €
+lt	currency:USD	1	1,00 USD
+lt	currency:JPY	1	1 JPY
+lt	currency:INR	1	1,00 INR
+lt	currency:CHF	1	1,00 CHF
+lt	currency:KWD	1	1,000 KWD
+lt	currency:CZK	1	1,00 CZK
+lt	accounting:USD	1	1,00 USD
+lt	code:USD	1	1,00 USD
+lt	narrow:CAD	1	1,00 $
+lt	signed	1	+1
+lt	decimal	-1	−1
+lt	percent	-1	−100 %
+lt	scientific	-1	−1×10^0
+lt	decimal	1234	1 234
+lt	decimal	12345	12 345
+lt	percent	12345	1 234 500 %
+lt	scientific	12345	1,234×10^4
+lt	currency:EUR	12345	12 345,00 €
+lt	currency:USD	12345	12 345,00 USD
+lt	currency:JPY	12345	12 345 JPY
+lt	currency:INR	12345	12 345,00 INR
+lt	currency:CHF	12345	12 345,00 CHF
+lt	currency:KWD	12345	12 345,000 KWD
+lt	currency:CZK	12345	12 345,00 CZK
+lt	accounting:USD	12345	12 345,00 USD
+lt	code:USD	12345	12 345,00 USD
+lt	narrow:CAD	12345	12 345,00 $
+lt	signed	12345	+12 345
+lt	decimal	-1234567.891	−1 234 567,891
+lt	currency:EUR	-1234567.891	−1 234 567,89 €
+lt	currency:USD	-1234567.891	−1 234 567,89 USD
+lt	currency:JPY	-1234567.891	−1 234 568 JPY
+lt	currency:INR	-1234567.891	−1 234 567,89 INR
+lt	currency:CHF	-1234567.891	−1 234 567,89 CHF
+lt	currency:KWD	-1234567.891	−1 234 567,891 KWD
+lt	currency:CZK	-1234567.891	−1 234 567,89 CZK
+lt	accounting:USD	-1234567.891	−1 234 567,89 USD
+lt	code:USD	-1234567.891	−1 234 567,89 USD
+lt	narrow:CAD	-1234567.891	−1 234 567,89 $
+lt	signed	-1234567.891	−1 234 567,89
+lt	decimal	0.5	0,5
+lt	percent	0.5	50 %
+lt	scientific	0.5	5×10^−1
+lt	currency:EUR	0.5	0,50 €
+lt	currency:USD	0.5	0,50 USD
+lt	currency:JPY	0.5	0 JPY
+lt	currency:INR	0.5	0,50 INR
+lt	currency:CHF	0.5	0,50 CHF
+lt	currency:KWD	0.5	0,500 KWD
+lt	currency:CZK	0.5	0,50 CZK
+lt	accounting:USD	0.5	0,50 USD
+lt	code:USD	0.5	0,50 USD
+lt	narrow:CAD	0.5	0,50 $
+lt	signed	0.5	+0,5
+lt	decimal	1234567890123	1 234 567 890 123
+lt	decimal	0.0625	0,062
+lt	decimal	99.995	99,995
+lv	decimal	0	0
+lv	decimal	1	1
+lv	percent	1	100%
+lv	scientific	1	1E0
+lv	currency:EUR	1	1,00 €
+lv	currency:USD	1	1,00 $
+lv	currency:JPY	1	1 ¥
+lv	currency:INR	1	1,00 ₹
+lv	currency:CHF	1	1,00 CHF
+lv	currency:KWD	1	1,000 KWD
+lv	currency:CZK	1	1,00 CZK
+lv	accounting:USD	1	1,00 $
+lv	code:USD	1	1,00 USD
+lv	narrow:CAD	1	1,00 $
+lv	signed	1	+1
+lv	decimal	-1	-1
+lv	percent	-1	-100%
+lv	scientific	-1	-1E0
+lv	decimal	1234	1234
+lv	decimal	12345	12 345
+lv	percent	12345	1 234 500%
+lv	scientific	12345	1,234E4
+lv	currency:EUR	12345	12 345,00 €
+lv	currency:USD	12345	12 345,00 $
+lv	currency:JPY	12345	12 345 ¥
+lv	currency:INR	12345	12 345,00 ₹
+lv	currency:CHF	12345	12 345,00 CHF
+lv	currency:KWD	12345	12 345,000 KWD
+lv	currency:CZK	12345	12 345,00 CZK
+lv	accounting:USD	12345	12 345,00 $
+lv	code:USD	12345	12 345,00 USD
+lv	narrow:CAD	12345	12 345,00 $
+lv	signed	12345	+12 345
+lv	decimal	-1234567.891	-1 234 567,891
+lv	currency:EUR	-1234567.891	-1 234 567,89 €
+lv	currency:USD	-1234567.891	-1 234 567,89 $
+lv	currency:JPY	-1234567.891	-1 234 568 ¥
+lv	currency:INR	-1234567.891	-1 234 567,89 ₹
+lv	currency:CHF	-1234567.891	-1 234 567,89 CHF
+lv	currency:KWD	-1234567.891	-1 234 567,891 KWD
+lv	currency:CZK	-1234567.891	-1 234 567,89 CZK
+lv	accounting:USD	-1234567.891	-1 234 567,89 $
+lv	code:USD	-1234567.891	-1 234 567,89 USD
+lv	narrow:CAD	-1234567.891	-1 234 567,89 $
+lv	signed	-1234567.891	-1 234 567,89
+lv	decimal	0.5	0,5
+lv	percent	0.5	50%
+lv	scientific	0.5	5E-1
+lv	currency:EUR	0.5	0,50 €
+lv	currency:USD	0.5	0,50 $
+lv	currency:JPY	0.5	0 ¥
+lv	currency:INR	0.5	0,50 ₹
+lv	currency:CHF	0.5	0,50 CHF
+lv	currency:KWD	0.5	0,500 KWD
+lv	currency:CZK	0.5	0,50 CZK
+lv	accounting:USD	0.5	0,50 $
+lv	code:USD	0.5	0,50 USD
+lv	narrow:CAD	0.5	0,50 $
+lv	signed	0.5	+0,5
+lv	decimal	1234567890123	1 234 567 890 123
+lv	decimal	0.0625	0,062
+lv	decimal	99.995	99,995
+et	decimal	0	0
+et	decimal	1	1
+et	percent	1	100%
+et	scientific	1	1×10^0
+et	currency:EUR	1	1,00 €
+et	currency:USD	1	1,00 $
+et	currency:JPY	1	1 ¥
+et	currency:INR	1	1,00 ₹
+et	currency:CHF	1	1,00 CHF
+et	currency:KWD	1	1,000 KWD
+et	currency:CZK	1	1,00 CZK
+et	accounting:USD	1	1,00 $
+et	code:USD	1	1,00 USD
+et	narrow:CAD	1	1,00 $
+et	signed	1	+1
+et	decimal	-1	−1
+et	percent	-1	−100%
+et	scientific	-1	−1×10^0
+et	decimal	1234	1234
+et	decimal	12345	12 345
+et	percent	12345	1 234 500%
+et	scientific	12345	1,234×10^4
+et	currency:EUR	12345	12 345,00 €
+et	currency:USD	12345	12 345,00 $
+et	currency:JPY	12345	12 345 ¥
+et	currency:INR	12345	12 345,00 ₹
+et	currency:CHF	12345	12 345,00 CHF
+et	currency:KWD	12345	12 345,000 KWD
+et	currency:CZK	12345	12 345,00 CZK
+et	accounting:USD	12345	12 345,00 $
+et	code:USD	12345	12 345,00 USD
+et	narrow:CAD	12345	12 345,00 $
+et	signed	12345	+12 345
+et	decimal	-1234567.891	−1 234 567,891
+et	currency:EUR	-1234567.891	−1 234 567,89 €
+et	currency:USD	-1234567.891	−1 234 567,89 $
+et	currency:JPY	-1234567.891	−1 234 568 ¥
+et	currency:INR	-1234567.891	−1 234 567,89 ₹
+et	currency:CHF	-1234567.891	−1 234 567,89 CHF
+et	currency:KWD	-1234567.891	−1 234 567,891 KWD
+et	currency:CZK	-1234567.891	−1 234 567,89 CZK
+et	accounting:USD	-1234567.891	(1 234 567,89 $)
+et	code:USD	-1234567.891	−1 234 567,89 USD
+et	narrow:CAD	-1234567.891	−1 234 567,89 $
+et	signed	-1234567.891	−1 234 567,89
+et	decimal	0.5	0,5
+et	percent	0.5	50%
+et	scientific	0.5	5×10^−1
+et	currency:EUR	0.5	0,50 €
+et	currency:USD	0.5	0,50 $
+et	currency:JPY	0.5	0 ¥
+et	currency:INR	0.5	0,50 ₹
+et	currency:CHF	0.5	0,50 CHF
+et	currency:KWD	0.5	0,500 KWD
+et	currency:CZK	0.5	0,50 CZK
+et	accounting:USD	0.5	0,50 $
+et	code:USD	0.5	0,50 USD
+et	narrow:CAD	0.5	0,50 $
+et	signed	0.5	+0,5
+et	decimal	1234567890123	1 234 567 890 123
+et	decimal	0.0625	0,062
+et	decimal	99.995	99,995
+cy	decimal	0	0
+cy	decimal	1	1
+cy	percent	1	100%
+cy	scientific	1	1E0
+cy	currency:EUR	1	€1.00
+cy	currency:USD	1	US$1.00
+cy	currency:JPY	1	JP¥1
+cy	currency:INR	1	₹1.00
+cy	currency:CHF	1	CHF 1.00
+cy	currency:KWD	1	KWD 1.000
+cy	currency:CZK	1	CZK 1.00
+cy	accounting:USD	1	US$1.00
+cy	code:USD	1	USD 1.00
+cy	narrow:CAD	1	$1.00
+cy	signed	1	+1
+cy	decimal	-1	-1
+cy	percent	-1	-100%
+cy	scientific	-1	-1E0
+cy	decimal	1234	1,234
+cy	decimal	12345	12,345
+cy	percent	12345	1,234,500%
+cy	scientific	12345	1.234E4
+cy	currency:EUR	12345	€12,345.00
+cy	currency:USD	12345	US$12,345.00
+cy	currency:JPY	12345	JP¥12,345
+cy	currency:INR	12345	₹12,345.00
+cy	currency:CHF	12345	CHF 12,345.00
+cy	currency:KWD	12345	KWD 12,345.000
+cy	currency:CZK	12345	CZK 12,345.00
+cy	accounting:USD	12345	US$12,345.00
+cy	code:USD	12345	USD 12,345.00
+cy	narrow:CAD	12345	$12,345.00
+cy	signed	12345	+12,345
+cy	decimal	-1234567.891	-1,234,567.891
+cy	currency:EUR	-1234567.891	-€1,234,567.89
+cy	currency:USD	-1234567.891	-US$1,234,567.89
+cy	currency:JPY	-1234567.891	-JP¥1,234,568
+cy	currency:INR	-1234567.891	-₹1,234,567.89
+cy	currency:CHF	-1234567.891	-CHF 1,234,567.89
+cy	currency:KWD	-1234567.891	-KWD 1,234,567.891
+cy	currency:CZK	-1234567.891	-CZK 1,234,567.89
+cy	accounting:USD	-1234567.891	(US$1,234,567.89)
+cy	code:USD	-1234567.891	-USD 1,234,567.89
+cy	narrow:CAD	-1234567.891	-$1,234,567.89
+cy	signed	-1234567.891	-1,234,567.89
+cy	decimal	0.5	0.5
+cy	percent	0.5	50%
+cy	scientific	0.5	5E-1
+cy	currency:EUR	0.5	€0.50
+cy	currency:USD	0.5	US$0.50
+cy	currency:JPY	0.5	JP¥0
+cy	currency:INR	0.5	₹0.50
+cy	currency:CHF	0.5	CHF 0.50
+cy	currency:KWD	0.5	KWD 0.500
+cy	currency:CZK	0.5	CZK 0.50
+cy	accounting:USD	0.5	US$0.50
+cy	code:USD	0.5	USD 0.50
+cy	narrow:CAD	0.5	$0.50
+cy	signed	0.5	+0.5
+cy	decimal	1234567890123	1,234,567,890,123
+cy	decimal	0.0625	0.062
+cy	decimal	99.995	99.995
+ga	decimal	0	0
+ga	decimal	1	1
+ga	percent	1	100%
+ga	scientific	1	1E0
+ga	currency:EUR	1	€1.00
+ga	currency:USD	1	$1.00
+ga	currency:JPY	1	¥1
+ga	currency:INR	1	₹1.00
+ga	currency:CHF	1	CHF 1.00
+ga	currency:KWD	1	KWD 1.000
+ga	currency:CZK	1	CZK 1.00
+ga	accounting:USD	1	$1.00
+ga	code:USD	1	USD 1.00
+ga	narrow:CAD	1	$1.00
+ga	signed	1	+1
+ga	decimal	-1	-1
+ga	percent	-1	-100%
+ga	scientific	-1	-1E0
+ga	decimal	1234	1,234
+ga	decimal	12345	12,345
+ga	percent	12345	1,234,500%
+ga	scientific	12345	1.234E4
+ga	currency:EUR	12345	€12,345.00
+ga	currency:USD	12345	$12,345.00
+ga	currency:JPY	12345	¥12,345
+ga	currency:INR	12345	₹12,345.00
+ga	currency:CHF	12345	CHF 12,345.00
+ga	currency:KWD	12345	KWD 12,345.000
+ga	currency:CZK	12345	CZK 12,345.00
+ga	accounting:USD	12345	$12,345.00
+ga	code:USD	12345	USD 12,345.00
+ga	narrow:CAD	12345	$12,345.00
+ga	signed	12345	+12,345
+ga	decimal	-1234567.891	-1,234,567.891
+ga	currency:EUR	-1234567.891	-€1,234,567.89
+ga	currency:USD	-1234567.891	-$1,234,567.89
+ga	currency:JPY	-1234567.891	-¥1,234,568
+ga	currency:INR	-1234567.891	-₹1,234,567.89
+ga	currency:CHF	-1234567.891	-CHF 1,234,567.89
+ga	currency:KWD	-1234567.891	-KWD 1,234,567.891
+ga	currency:CZK	-1234567.891	-CZK 1,234,567.89
+ga	accounting:USD	-1234567.891	($1,234,567.89)
+ga	code:USD	-1234567.891	-USD 1,234,567.89
+ga	narrow:CAD	-1234567.891	-$1,234,567.89
+ga	signed	-1234567.891	-1,234,567.89
+ga	decimal	0.5	0.5
+ga	percent	0.5	50%
+ga	scientific	0.5	5E-1
+ga	currency:EUR	0.5	€0.50
+ga	currency:USD	0.5	$0.50
+ga	currency:JPY	0.5	¥0
+ga	currency:INR	0.5	₹0.50
+ga	currency:CHF	0.5	CHF 0.50
+ga	currency:KWD	0.5	KWD 0.500
+ga	currency:CZK	0.5	CZK 0.50
+ga	accounting:USD	0.5	$0.50
+ga	code:USD	0.5	USD 0.50
+ga	narrow:CAD	0.5	$0.50
+ga	signed	0.5	+0.5
+ga	decimal	1234567890123	1,234,567,890,123
+ga	decimal	0.0625	0.062
+ga	decimal	99.995	99.995
+ar	decimal	0	0
+ar	decimal	1	1
+ar	percent	1	100‎%‎
+ar	scientific	1	1E0
+ar	currency:EUR	1	‏1.00 €
+ar	currency:USD	1	‏1.00 US$
+ar	currency:JPY	1	‏1 JP¥
+ar	currency:INR	1	‏1.00 ₹
+ar	currency:CHF	1	‏1.00 CHF
+ar	currency:KWD	1	‏1.000 د.ك.‏
+ar	currency:CZK	1	‏1.00 CZK
+ar	accounting:USD	1	؜1.00 US$
+ar	code:USD	1	‏1.00 USD
+ar	narrow:CAD	1	‏1.00 CA$
+ar	signed	1	‎+1
+ar	decimal	-1	‎-1
+ar	percent	-1	‎-100‎%‎
+ar	scientific	-1	‎-1E0
+ar	decimal	1234	1,234
+ar	decimal	12345	12,345
+ar	percent	12345	1,234,500‎%‎
+ar	scientific	12345	1.234E4
+ar	currency:EUR	12345	‏12,345.00 €
+ar	currency:USD	12345	‏12,345.00 US$
+ar	currency:JPY	12345	‏12,345 JP¥
+ar	currency:INR	12345	‏12,345.00 ₹
+ar	currency:CHF	12345	‏12,345.00 CHF
+ar	currency:KWD	12345	‏12,345.000 د.ك.‏
+ar	currency:CZK	12345	‏12,345.00 CZK
+ar	accounting:USD	12345	؜12,345.00 US$
+ar	code:USD	12345	‏12,345.00 USD
+ar	narrow:CAD	12345	‏12,345.00 CA$
+ar	signed	12345	‎+12,345
+ar	decimal	-1234567.891	‎-1,234,567.891
+ar	currency:EUR	-1234567.891	‏‎-1,234,567.89 €
+ar	currency:USD	-1234567.891	‏‎-1,234,567.89 US$
+ar	currency:JPY	-1234567.891	‏‎-1,234,568 JP¥
+ar	currency:INR	-1234567.891	‏‎-1,234,567.89 ₹
+ar	currency:CHF	-1234567.891	‏‎-1,234,567.89 CHF
+ar	currency:KWD	-1234567.891	‏‎-1,234,567.891 د.ك.‏
+ar	currency:CZK	-1234567.891	‏‎-1,234,567.89 CZK
+ar	accounting:USD	-1234567.891	(؜1,234,567.89 US$)
+ar	code:USD	-1234567.891	‏‎-1,234,567.89 USD
+ar	narrow:CAD	-1234567.891	‏‎-1,234,567.89 CA$
+ar	signed	-1234567.891	‎-1,234,567.89
+ar	decimal	0.5	0.5
+ar	percent	0.5	50‎%‎
+ar	scientific	0.5	5E‎-1
+ar	currency:EUR	0.5	‏0.50 €
+ar	currency:USD	0.5	‏0.50 US$
+ar	currency:JPY	0.5	‏0 JP¥
+ar	currency:INR	0.5	‏0.50 ₹
+ar	currency:CHF	0.5	‏0.50 CHF
+ar	currency:KWD	0.5	‏0.500 د.ك.‏
+ar	currency:CZK	0.5	‏0.50 CZK
+ar	accounting:USD	0.5	؜0.50 US$
+ar	code:USD	0.5	‏0.50 USD
+ar	narrow:CAD	0.5	‏0.50 CA$
+ar	signed	0.5	‎+0.5
+ar	decimal	1234567890123	1,234,567,890,123
+ar	decimal	0.0625	0.062
+ar	decimal	99.995	99.995
+ar-EG	decimal	0	٠
+ar-EG	decimal	1	١
+ar-EG	percent	1	١٠٠٪؜
+ar-EG	scientific	1	١أس٠
+ar-EG	currency:EUR	1	‏١٫٠٠ €
+ar-EG	currency:USD	1	‏١٫٠٠ US$
+ar-EG	currency:JPY	1	‏١ JP¥
+ar-EG	currency:INR	1	‏١٫٠٠ ₹
+ar-EG	currency:CHF	1	‏١٫٠٠ CHF
+ar-EG	currency:KWD	1	‏١٫٠٠٠ د.ك.‏
+ar-EG	currency:CZK	1	‏١٫٠٠ CZK
+ar-EG	accounting:USD	1	‏١٫٠٠ US$
+ar-EG	code:USD	1	‏١٫٠٠ USD
+ar-EG	narrow:CAD	1	‏١٫٠٠ CA$
+ar-EG	signed	1	؜+١
+ar-EG	decimal	-1	؜-١
+ar-EG	percent	-1	؜-١٠٠٪؜
+ar-EG	scientific	-1	؜-١أس٠
+ar-EG	decimal	1234	١٬٢٣٤
+ar-EG	decimal	12345	١٢٬٣٤٥
+ar-EG	percent	12345	١٬٢٣٤٬٥٠٠٪؜
+ar-EG	scientific	12345	١٫٢٣٤أس٤
+ar-EG	currency:EUR	12345	‏١٢٬٣٤٥٫٠٠ €
+ar-EG	currency:USD	12345	‏١٢٬٣٤٥٫٠٠ US$
+ar-EG	currency:JPY	12345	‏١٢٬٣٤٥ JP¥
+ar-EG	currency:INR	12345	‏١٢٬٣٤٥٫٠٠ ₹
+ar-EG	currency:CHF	12345	‏١٢٬٣٤٥٫٠٠ CHF
+ar-EG	currency:KWD	12345	‏١٢٬٣٤٥٫٠٠٠ د.ك.‏
+ar-EG	currency:CZK	12345	‏١٢٬٣٤٥٫٠٠ CZK
+ar-EG	accounting:USD	12345	‏١٢٬٣٤٥٫٠٠ US$
+ar-EG	code:USD	12345	‏١٢٬٣٤٥٫٠٠ USD
+ar-EG	narrow:CAD	12345	‏١٢٬٣٤٥٫٠٠ CA$
+ar-EG	signed	12345	؜+١٢٬٣٤٥
+ar-EG	decimal	-1234567.891	؜-١٬٢٣٤٬٥٦٧٫٨٩١
+ar-EG	currency:EUR	-1234567.891	؜-‏١٬٢٣٤٬٥٦٧٫٨٩ €
+ar-EG	currency:USD	-1234567.891	؜-‏١٬٢٣٤٬٥٦٧٫٨٩ US$
+ar-EG	currency:JPY	-1234567.891	؜-‏١٬٢٣٤٬٥٦٨ JP¥
+ar-EG	currency:INR	-1234567.891	؜-‏١٬٢٣٤٬٥٦٧٫٨٩ ₹
+ar-EG	currency:CHF	-1234567.891	؜-‏١٬٢٣٤٬٥٦٧٫٨٩ CHF
+ar-EG	currency:KWD	-1234567.891	؜-‏١٬٢٣٤٬٥٦٧٫٨٩١ د.ك.‏
+ar-EG	currency:CZK	-1234567.891	؜-‏١٬٢٣٤٬٥٦٧٫٨٩ CZK
+ar-EG	accounting:USD	-1234567.891	؜-‏١٬٢٣٤٬٥٦٧٫٨٩ US$
+ar-EG	code:USD	-1234567.891	؜-‏١٬٢٣٤٬٥٦٧٫٨٩ USD
+ar-EG	narrow:CAD	-1234567.891	؜-‏١٬٢٣٤٬٥٦٧٫٨٩ CA$
+ar-EG	signed	-1234567.891	؜-١٬٢٣٤٬٥٦٧٫٨٩
+ar-EG	decimal	0.5	٠٫٥
+ar-EG	percent	0.5	٥٠٪؜
+ar-EG	scientific	0.5	٥أس؜-١
+ar-EG	currency:EUR	0.5	‏٠٫٥٠ €
+ar-EG	currency:USD	0.5	‏٠٫٥٠ US$
+ar-EG	currency:JPY	0.5	‏٠ JP¥
+ar-EG	currency:INR	0.5	‏٠٫٥٠ ₹
+ar-EG	currency:CHF	0.5	‏٠٫٥٠ CHF
+ar-EG	currency:KWD	0.5	‏٠٫٥٠٠ د.ك.‏
+ar-EG	currency:CZK	0.5	‏٠٫٥٠ CZK
+ar-EG	accounting:USD	0.5	‏٠٫٥٠ US$
+ar-EG	code:USD	0.5	‏٠٫٥٠ USD
+ar-EG	narrow:CAD	0.5	‏٠٫٥٠ CA$
+ar-EG	signed	0.5	؜+٠٫٥
+ar-EG	decimal	1234567890123	١٬٢٣٤٬٥٦٧٬٨٩٠٬١٢٣
+ar-EG	decimal	0.0625	٠٫٠٦٢
+ar-EG	decimal	99.995	٩٩٫٩٩٥
+fa	decimal	0	۰
+fa	decimal	1	۱
+fa	percent	1	۱۰۰٪
+fa	scientific	1	۱×۱۰^۰
+fa	currency:EUR	1	‎€۱٫۰۰
+fa	currency:USD	1	‎$۱٫۰۰
+fa	currency:JPY	1	‎¥۱
+fa	currency:INR	1	‎₹۱٫۰۰
+fa	currency:CHF	1	‎CHF ۱٫۰۰
+fa	currency:KWD	1	‎KWD ۱٫۰۰۰
+fa	currency:CZK	1	‎CZK ۱٫۰۰
+fa	accounting:USD	1	۱٫۰۰ $
+fa	code:USD	1	‎USD ۱٫۰۰
+fa	narrow:CAD	1	‎$۱٫۰۰
+fa	signed	1	‎+۱
+fa	decimal	-1	‎−۱
+fa	percent	-1	‎−۱۰۰٪
+fa	scientific	-1	‎−۱×۱۰^۰
+fa	decimal	1234	۱٬۲۳۴
+fa	decimal	12345	۱۲٬۳۴۵
+fa	percent	12345	۱٬۲۳۴٬۵۰۰٪
+fa	scientific	12345	۱٫۲۳۴×۱۰^۴
+fa	currency:EUR	12345	‎€۱۲٬۳۴۵٫۰۰
+fa	currency:USD	12345	‎$۱۲٬۳۴۵٫۰۰
+fa	currency:JPY	12345	‎¥۱۲٬۳۴۵
+fa	currency:INR	12345	‎₹۱۲٬۳۴۵٫۰۰
+fa	currency:CHF	12345	‎CHF ۱۲٬۳۴۵٫۰۰
+fa	currency:KWD	12345	‎KWD ۱۲٬۳۴۵٫۰۰۰
+fa	currency:CZK	12345	‎CZK ۱۲٬۳۴۵٫۰۰
+fa	accounting:USD	12345	۱۲٬۳۴۵٫۰۰ $
+fa	code:USD	12345	‎USD ۱۲٬۳۴۵٫۰۰
+fa	narrow:CAD	12345	‎$۱۲٬۳۴۵٫۰۰
+fa	signed	12345	‎+۱۲٬۳۴۵
+fa	decimal	-1234567.891	‎−۱٬۲۳۴٬۵۶۷٫۸۹۱
+fa	currency:EUR	-1234567.891	‎−‎€۱٬۲۳۴٬۵۶۷٫۸۹
+fa	currency:USD	-1234567.891	‎−‎$۱٬۲۳۴٬۵۶۷٫۸۹
+fa	currency:JPY	-1234567.891	‎−‎¥۱٬۲۳۴٬۵۶۸
+fa	currency:INR	-1234567.891	‎−‎₹۱٬۲۳۴٬۵۶۷٫۸۹
+fa	currency:CHF	-1234567.891	‎−‎CHF ۱٬۲۳۴٬۵۶۷٫۸۹
+fa	currency:KWD	-1234567.891	‎−‎KWD ۱٬۲۳۴٬۵۶۷٫۸۹۱
+fa	currency:CZK	-1234567.891	‎−‎CZK ۱٬۲۳۴٬۵۶۷٫۸۹
+fa	accounting:USD	-1234567.891	(۱٬۲۳۴٬۵۶۷٫۸۹ $)
+fa	code:USD	-1234567.891	‎−‎USD ۱٬۲۳۴٬۵۶۷٫۸۹
+fa	narrow:CAD	-1234567.891	‎−‎$۱٬۲۳۴٬۵۶۷٫۸۹
+fa	signed	-1234567.891	‎−۱٬۲۳۴٬۵۶۷٫۸۹
+fa	decimal	0.5	۰٫۵
+fa	percent	0.5	۵۰٪
+fa	scientific	0.5	۵×۱۰^‎−۱
+fa	currency:EUR	0.5	‎€۰٫۵۰
+fa	currency:USD	0.5	‎$۰٫۵۰
+fa	currency:JPY	0.5	‎¥۰
+fa	currency:INR	0.5	‎₹۰٫۵۰
+fa	currency:CHF	0.5	‎CHF ۰٫۵۰
+fa	currency:KWD	0.5	‎KWD ۰٫۵۰۰
+fa	currency:CZK	0.5	‎CZK ۰٫۵۰
+fa	accounting:USD	0.5	۰٫۵۰ $
+fa	code:USD	0.5	‎USD ۰٫۵۰
+fa	narrow:CAD	0.5	‎$۰٫۵۰
+fa	signed	0.5	‎+۰٫۵
+fa	decimal	1234567890123	۱٬۲۳۴٬۵۶۷٬۸۹۰٬۱۲۳
+fa	decimal	0.0625	۰٫۰۶۲
+fa	decimal	99.995	۹۹٫۹۹۵
+he	decimal	0	0
+he	decimal	1	1
+he	percent	1	100%
+he	scientific	1	1E0
+he	currency:EUR	1	‏1.00 ‏€
+he	currency:USD	1	‏1.00 ‏$
+he	currency:JPY	1	‏1 ‏¥
+he	currency:INR	1	‏1.00 ‏₹
+he	currency:CHF	1	‏1.00 ‏CHF
+he	currency:KWD	1	‏1.000 ‏KWD
+he	currency:CZK	1	‏1.00 ‏CZK
+he	accounting:USD	1	‏1.00 ‏$
+he	code:USD	1	‏1.00 ‏USD
+he	narrow:CAD	1	‏1.00 ‏$
+he	signed	1	‎+1
+he	decimal	-1	‎-1
+he	percent	-1	‎-100%
+he	scientific	-1	‎-1E0
+he	decimal	1234	1,234
+he	decimal	12345	12,345
+he	percent	12345	1,234,500%
+he	scientific	12345	1.234E4
+he	currency:EUR	12345	‏12,345.00 ‏€
+he	currency:USD	12345	‏12,345.00 ‏$
+he	currency:JPY	12345	‏12,345 ‏¥
+he	currency:INR	12345	‏12,345.00 ‏₹
+he	currency:CHF	12345	‏12,345.00 ‏CHF
+he	currency:KWD	12345	‏12,345.000 ‏KWD
+he	currency:CZK	12345	‏12,345.00 ‏CZK
+he	accounting:USD	12345	‏12,345.00 ‏$
+he	code:USD	12345	‏12,345.00 ‏USD
+he	narrow:CAD	12345	‏12,345.00 ‏$
+he	signed	12345	‎+12,345
+he	decimal	-1234567.891	‎-1,234,567.891
+he	currency:EUR	-1234567.891	‏‎-1,234,567.89 ‏€
+he	currency:USD	-1234567.891	‏‎-1,234,567.89 ‏$
+he	currency:JPY	-1234567.891	‏‎-1,234,568 ‏¥
+he	currency:INR	-1234567.891	‏‎-1,234,567.89 ‏₹
+he	currency:CHF	-1234567.891	‏‎-1,234,567.89 ‏CHF
+he	currency:KWD	-1234567.891	‏‎-1,234,567.891 ‏KWD
+he	currency:CZK	-1234567.891	‏‎-1,234,567.89 ‏CZK
+he	accounting:USD	-1234567.891	‏‎-1,234,567.89 ‏$
+he	code:USD	-1234567.891	‏‎-1,234,567.89 ‏USD
+he	narrow:CAD	-1234567.891	‏‎-1,234,567.89 ‏$
+he	signed	-1234567.891	‎-1,234,567.89
+he	decimal	0.5	0.5
+he	percent	0.5	50%
+he	scientific	0.5	5E‎-1
+he	currency:EUR	0.5	‏0.50 ‏€
+he	currency:USD	0.5	‏0.50 ‏$
+he	currency:JPY	0.5	‏0 ‏¥
+he	currency:INR	0.5	‏0.50 ‏₹
+he	currency:CHF	0.5	‏0.50 ‏CHF
+he	currency:KWD	0.5	‏0.500 ‏KWD
+he	currency:CZK	0.5	‏0.50 ‏CZK
+he	accounting:USD	0.5	‏0.50 ‏$
+he	code:USD	0.5	‏0.50 ‏USD
+he	narrow:CAD	0.5	‏0.50 ‏$
+he	signed	0.5	‎+0.5
+he	decimal	1234567890123	1,234,567,890,123
+he	decimal	0.0625	0.062
+he	decimal	99.995	99.995
+hi	decimal	0	0
+hi	decimal	1	1
+hi	percent	1	100%
+hi	scientific	1	1E0
+hi	currency:EUR	1	€1.00
+hi	currency:USD	1	$1.00
+hi	currency:JPY	1	JP¥1
+hi	currency:INR	1	₹1.00
+hi	currency:CHF	1	CHF 1.00
+hi	currency:KWD	1	KWD 1.000
+hi	currency:CZK	1	CZK 1.00
+hi	accounting:USD	1	$1.00
+hi	code:USD	1	USD 1.00
+hi	narrow:CAD	1	$1.00
+hi	signed	1	+1
+hi	decimal	-1	-1
+hi	percent	-1	-100%
+hi	scientific	-1	-1E0
+hi	decimal	1234	1,234
+hi	decimal	12345	12,345
+hi	percent	12345	12,34,500%
+hi	scientific	12345	1.234E4
+hi	currency:EUR	12345	€12,345.00
+hi	currency:USD	12345	$12,345.00
+hi	currency:JPY	12345	JP¥12,345
+hi	currency:INR	12345	₹12,345.00
+hi	currency:CHF	12345	CHF 12,345.00
+hi	currency:KWD	12345	KWD 12,345.000
+hi	currency:CZK	12345	CZK 12,345.00
+hi	accounting:USD	12345	$12,345.00
+hi	code:USD	12345	USD 12,345.00
+hi	narrow:CAD	12345	$12,345.00
+hi	signed	12345	+12,345
+hi	decimal	-1234567.891	-12,34,567.891
+hi	currency:EUR	-1234567.891	-€12,34,567.89
+hi	currency:USD	-1234567.891	-$12,34,567.89
+hi	currency:JPY	-1234567.891	-JP¥12,34,568
+hi	currency:INR	-1234567.891	-₹12,34,567.89
+hi	currency:CHF	-1234567.891	-CHF 12,34,567.89
+hi	currency:KWD	-1234567.891	-KWD 12,34,567.891
+hi	currency:CZK	-1234567.891	-CZK 12,34,567.89
+hi	accounting:USD	-1234567.891	-$12,34,567.89
+hi	code:USD	-1234567.891	-USD 12,34,567.89
+hi	narrow:CAD	-1234567.891	-$12,34,567.89
+hi	signed	-1234567.891	-12,34,567.89
+hi	decimal	0.5	0.5
+hi	percent	0.5	50%
+hi	scientific	0.5	5E-1
+hi	currency:EUR	0.5	€0.50
+hi	currency:USD	0.5	$0.50
+hi	currency:JPY	0.5	JP¥0
+hi	currency:INR	0.5	₹0.50
+hi	currency:CHF	0.5	CHF 0.50
+hi	currency:KWD	0.5	KWD 0.500
+hi	currency:CZK	0.5	CZK 0.50
+hi	accounting:USD	0.5	$0.50
+hi	code:USD	0.5	USD 0.50
+hi	narrow:CAD	0.5	$0.50
+hi	signed	0.5	+0.5
+hi	decimal	1234567890123	12,34,56,78,90,123
+hi	decimal	0.0625	0.062
+hi	decimal	99.995	99.995
+bn	decimal	0	০
+bn	decimal	1	১
+bn	percent	1	১০০%
+bn	scientific	1	১E০
+bn	currency:EUR	1	১.০০€
+bn	currency:USD	1	১.০০ US$
+bn	currency:JPY	1	১ JP¥
+bn	currency:INR	1	১.০০₹
+bn	currency:CHF	1	১.০০ CHF
+bn	currency:KWD	1	১.০০০ KWD
+bn	currency:CZK	1	১.০০ CZK
+bn	accounting:USD	1	১.০০ US$
+bn	code:USD	1	১.০০ USD
+bn	narrow:CAD	1	১.০০$
+bn	signed	1	+১
+bn	decimal	-1	-১
+bn	percent	-1	-১০০%
+bn	scientific	-1	-১E০
+bn	decimal	1234	১,২৩৪
+bn	decimal	12345	১২,৩৪৫
+bn	percent	12345	১,২৩৪,৫০০%
+bn	scientific	12345	১.২৩৪E৪
+bn	currency:EUR	12345	১২,৩৪৫.০০€
+bn	currency:USD	12345	১২,৩৪৫.০০ US$
+bn	currency:JPY	12345	১২,৩৪৫ JP¥
+bn	currency:INR	12345	১২,৩৪৫.০০₹
+bn	currency:CHF	12345	১২,৩৪৫.০০ CHF
+bn	currency:KWD	12345	১২,৩৪৫.০০০ KWD
+bn	currency:CZK	12345	১২,৩৪৫.০০ CZK
+bn	accounting:USD	12345	১২,৩৪৫.০০ US$
+bn	code:USD	12345	১২,৩৪৫.০০ USD
+bn	narrow:CAD	12345	১২,৩৪৫.০০$
+bn	signed	12345	+১২,৩৪৫
+bn	decimal	-1234567.891	-১২,৩৪,৫৬৭.৮৯১
+bn	currency:EUR	-1234567.891	-১২,৩৪,৫৬৭.৮৯€
+bn	currency:USD	-1234567.891	-১২,৩৪,৫৬৭.৮৯ US$
+bn	currency:JPY	-1234567.891	-১২,৩৪,৫৬৮ JP¥
+bn	currency:INR	-1234567.891	-১২,৩৪,৫৬৭.৮৯₹
+bn	currency:CHF	-1234567.891	-১২,৩৪,৫৬৭.৮৯ CHF
+bn	currency:KWD	-1234567.891	-১২,৩৪,৫৬৭.৮৯১ KWD
+bn	currency:CZK	-1234567.891	-১২,৩৪,৫৬৭.৮৯ CZK
+bn	accounting:USD	-1234567.891	(১২,৩৪,৫৬৭.৮৯ US$)
+bn	code:USD	-1234567.891	-১২,৩৪,৫৬৭.৮৯ USD
+bn	narrow:CAD	-1234567.891	-১২,৩৪,৫৬৭.৮৯$
+bn	signed	-1234567.891	-১২,৩৪,৫৬৭.৮৯
+bn	decimal	0.5	০.৫
+bn	percent	0.5	৫০%
+bn	scientific	0.5	৫E-১
+bn	currency:EUR	0.5	০.৫০€
+bn	currency:USD	0.5	০.৫০ US$
+bn	currency:JPY	0.5	০ JP¥
+bn	currency:INR	0.5	০.৫০₹
+bn	currency:CHF	0.5	০.৫০ CHF
+bn	currency:KWD	0.5	০.৫০০ KWD
+bn	currency:CZK	0.5	০.৫০ CZK
+bn	accounting:USD	0.5	০.৫০ US$
+bn	code:USD	0.5	০.৫০ USD
+bn	narrow:CAD	0.5	০.৫০$
+bn	signed	0.5	+০.৫
+bn	decimal	1234567890123	১২,৩৪,৫৬,৭৮,৯০,১২৩
+bn	decimal	0.0625	০.০৬২
+bn	decimal	99.995	৯৯.৯৯৫
+mr	decimal	0	०
+mr	decimal	1	१
+mr	percent	1	१००%
+mr	scientific	1	१E०
+mr	currency:EUR	1	€१.००
+mr	currency:USD	1	$१.००
+mr	currency:JPY	1	JP¥१
+mr	currency:INR	1	₹१.००
+mr	currency:CHF	1	CHF १.००
+mr	currency:KWD	1	KWD १.०००
+mr	currency:CZK	1	CZK १.००
+mr	accounting:USD	1	$१.००
+mr	code:USD	1	USD १.००
+mr	narrow:CAD	1	$१.००
+mr	signed	1	+१
+mr	decimal	-1	-१
+mr	percent	-1	-१००%
+mr	scientific	-1	-१E०
+mr	decimal	1234	१,२३४
+mr	decimal	12345	१२,३४५
+mr	percent	12345	१,२३४,५००%
+mr	scientific	12345	१.२३४E४
+mr	currency:EUR	12345	€१२,३४५.००
+mr	currency:USD	12345	$१२,३४५.००
+mr	currency:JPY	12345	JP¥१२,३४५
+mr	currency:INR	12345	₹१२,३४५.००
+mr	currency:CHF	12345	CHF १२,३४५.००
+mr	currency:KWD	12345	KWD १२,३४५.०००
+mr	currency:CZK	12345	CZK १२,३४५.००
+mr	accounting:USD	12345	$१२,३४५.००
+mr	code:USD	12345	USD १२,३४५.००
+mr	narrow:CAD	12345	$१२,३४५.००
+mr	signed	12345	+१२,३४५
+mr	decimal	-1234567.891	-१२,३४,५६७.८९१
+mr	currency:EUR	-1234567.891	-€१,२३४,५६७.८९
+mr	currency:USD	-1234567.891	-$१,२३४,५६७.८९
+mr	currency:JPY	-1234567.891	-JP¥१,२३४,५६८
+mr	currency:INR	-1234567.891	-₹१,२३४,५६७.८९
+mr	currency:CHF	-1234567.891	-CHF १,२३४,५६७.८९
+mr	currency:KWD	-1234567.891	-KWD १,२३४,५६७.८९१
+mr	currency:CZK	-1234567.891	-CZK १,२३४,५६७.८९
+mr	accounting:USD	-1234567.891	($१,२३४,५६७.८९)
+mr	code:USD	-1234567.891	-USD १,२३४,५६७.८९
+mr	narrow:CAD	-1234567.891	-$१,२३४,५६७.८९
+mr	signed	-1234567.891	-१२,३४,५६७.८९
+mr	decimal	0.5	०.५
+mr	percent	0.5	५०%
+mr	scientific	0.5	५E-१
+mr	currency:EUR	0.5	€०.५०
+mr	currency:USD	0.5	$०.५०
+mr	currency:JPY	0.5	JP¥०
+mr	currency:INR	0.5	₹०.५०
+mr	currency:CHF	0.5	CHF ०.५०
+mr	currency:KWD	0.5	KWD ०.५००
+mr	currency:CZK	0.5	CZK ०.५०
+mr	accounting:USD	0.5	$०.५०
+mr	code:USD	0.5	USD ०.५०
+mr	narrow:CAD	0.5	$०.५०
+mr	signed	0.5	+०.५
+mr	decimal	1234567890123	१२,३४,५६,७८,९०,१२३
+mr	decimal	0.0625	०.०६२
+mr	decimal	99.995	९९.९९५
+ta	decimal	0	0
+ta	decimal	1	1
+ta	percent	1	100%
+ta	scientific	1	1E0
+ta	currency:EUR	1	€ 1.00
+ta	currency:USD	1	$ 1.00
+ta	currency:JPY	1	¥ 1
+ta	currency:INR	1	₹ 1.00
+ta	currency:CHF	1	CHF 1.00
+ta	currency:KWD	1	KWD 1.000
+ta	currency:CZK	1	CZK 1.00
+ta	accounting:USD	1	$1.00
+ta	code:USD	1	USD 1.00
+ta	narrow:CAD	1	$ 1.00
+ta	signed	1	+1
+ta	decimal	-1	-1
+ta	percent	-1	-100%
+ta	scientific	-1	-1E0
+ta	decimal	1234	1,234
+ta	decimal	12345	12,345
+ta	percent	12345	12,34,500%
+ta	scientific	12345	1.234E4
+ta	currency:EUR	12345	€ 12,345.00
+ta	currency:USD	12345	$ 12,345.00
+ta	currency:JPY	12345	¥ 12,345
+ta	currency:INR	12345	₹ 12,345.00
+ta	currency:CHF	12345	CHF 12,345.00
+ta	currency:KWD	12345	KWD 12,345.000
+ta	currency:CZK	12345	CZK 12,345.00
+ta	accounting:USD	12345	$12,345.00
+ta	code:USD	12345	USD 12,345.00
+ta	narrow:CAD	12345	$ 12,345.00
+ta	signed	12345	+12,345
+ta	decimal	-1234567.891	-12,34,567.891
+ta	currency:EUR	-1234567.891	-€ 1,234,567.89
+ta	currency:USD	-1234567.891	-$ 1,234,567.89
+ta	currency:JPY	-1234567.891	-¥ 1,234,568
+ta	currency:INR	-1234567.891	-₹ 1,234,567.89
+ta	currency:CHF	-1234567.891	-CHF 1,234,567.89
+ta	currency:KWD	-1234567.891	-KWD 1,234,567.891
+ta	currency:CZK	-1234567.891	-CZK 1,234,567.89
+ta	accounting:USD	-1234567.891	($1,234,567.89)
+ta	code:USD	-1234567.891	-USD 1,234,567.89
+ta	narrow:CAD	-1234567.891	-$ 1,234,567.89
+ta	signed	-1234567.891	-12,34,567.89
+ta	decimal	0.5	0.5
+ta	percent	0.5	50%
+ta	scientific	0.5	5E-1
+ta	currency:EUR	0.5	€ 0.50
+ta	currency:USD	0.5	$ 0.50
+ta	currency:JPY	0.5	¥ 0
+ta	currency:INR	0.5	₹ 0.50
+ta	currency:CHF	0.5	CHF 0.50
+ta	currency:KWD	0.5	KWD 0.500
+ta	currency:CZK	0.5	CZK 0.50
+ta	accounting:USD	0.5	$0.50
+ta	code:USD	0.5	USD 0.50
+ta	narrow:CAD	0.5	$ 0.50
+ta	signed	0.5	+0.5
+ta	decimal	1234567890123	12,34,56,78,90,123
+ta	decimal	0.0625	0.062
+ta	decimal	99.995	99.995
+th	decimal	0	0
+th	decimal	1	1
+th	percent	1	100%
+th	scientific	1	1E0
+th	currency:EUR	1	€1.00
+th	currency:USD	1	US$1.00
+th	currency:JPY	1	¥1
+th	currency:INR	1	₹1.00
+th	currency:CHF	1	CHF 1.00
+th	currency:KWD	1	KWD 1.000
+th	currency:CZK	1	CZK 1.00
+th	accounting:USD	1	US$1.00
+th	code:USD	1	USD 1.00
+th	narrow:CAD	1	$1.00
+th	signed	1	+1
+th	decimal	-1	-1
+th	percent	-1	-100%
+th	scientific	-1	-1E0
+th	decimal	1234	1,234
+th	decimal	12345	12,345
+th	percent	12345	1,234,500%
+th	scientific	12345	1.234E4
+th	currency:EUR	12345	€12,345.00
+th	currency:USD	12345	US$12,345.00
+th	currency:JPY	12345	¥12,345
+th	currency:INR	12345	₹12,345.00
+th	currency:CHF	12345	CHF 12,345.00
+th	currency:KWD	12345	KWD 12,345.000
+th	currency:CZK	12345	CZK 12,345.00
+th	accounting:USD	12345	US$12,345.00
+th	code:USD	12345	USD 12,345.00
+th	narrow:CAD	12345	$12,345.00
+th	signed	12345	+12,345
+th	decimal	-1234567.891	-1,234,567.891
+th	currency:EUR	-1234567.891	-€1,234,567.89
+th	currency:USD	-1234567.891	-US$1,234,567.89
+th	currency:JPY	-1234567.891	-¥1,234,568
+th	currency:INR	-1234567.891	-₹1,234,567.89
+th	currency:CHF	-1234567.891	-CHF 1,234,567.89
+th	currency:KWD	-1234567.891	-KWD 1,234,567.891
+th	currency:CZK	-1234567.891	-CZK 1,234,567.89
+th	accounting:USD	-1234567.891	(US$1,234,567.89)
+th	code:USD	-1234567.891	-USD 1,234,567.89
+th	narrow:CAD	-1234567.891	-$1,234,567.89
+th	signed	-1234567.891	-1,234,567.89
+th	decimal	0.5	0.5
+th	percent	0.5	50%
+th	scientific	0.5	5E-1
+th	currency:EUR	0.5	€0.50
+th	currency:USD	0.5	US$0.50
+th	currency:JPY	0.5	¥0
+th	currency:INR	0.5	₹0.50
+th	currency:CHF	0.5	CHF 0.50
+th	currency:KWD	0.5	KWD 0.500
+th	currency:CZK	0.5	CZK 0.50
+th	accounting:USD	0.5	US$0.50
+th	code:USD	0.5	USD 0.50
+th	narrow:CAD	0.5	$0.50
+th	signed	0.5	+0.5
+th	decimal	1234567890123	1,234,567,890,123
+th	decimal	0.0625	0.062
+th	decimal	99.995	99.995
+vi	decimal	0	0
+vi	decimal	1	1
+vi	percent	1	100%
+vi	scientific	1	1E0
+vi	currency:EUR	1	1,00 €
+vi	currency:USD	1	1,00 US$
+vi	currency:JPY	1	1 ¥
+vi	currency:INR	1	1,00 ₹
+vi	currency:CHF	1	1,00 CHF
+vi	currency:KWD	1	1,000 KWD
+vi	currency:CZK	1	1,00 CZK
+vi	accounting:USD	1	1,00 US$
+vi	code:USD	1	1,00 USD
+vi	narrow:CAD	1	1,00 $
+vi	signed	1	+1
+vi	decimal	-1	-1
+vi	percent	-1	-100%
+vi	scientific	-1	-1E0
+vi	decimal	1234	1.234
+vi	decimal	12345	12.345
+vi	percent	12345	1.234.500%
+vi	scientific	12345	1,234E4
+vi	currency:EUR	12345	12.345,00 €
+vi	currency:USD	12345	12.345,00 US$
+vi	currency:JPY	12345	12.345 ¥
+vi	currency:INR	12345	12.345,00 ₹
+vi	currency:CHF	12345	12.345,00 CHF
+vi	currency:KWD	12345	12.345,000 KWD
+vi	currency:CZK	12345	12.345,00 CZK
+vi	accounting:USD	12345	12.345,00 US$
+vi	code:USD	12345	12.345,00 USD
+vi	narrow:CAD	12345	12.345,00 $
+vi	signed	12345	+12.345
+vi	decimal	-1234567.891	-1.234.567,891
+vi	currency:EUR	-1234567.891	-1.234.567,89 €
+vi	currency:USD	-1234567.891	-1.234.567,89 US$
+vi	currency:JPY	-1234567.891	-1.234.568 ¥
+vi	currency:INR	-1234567.891	-1.234.567,89 ₹
+vi	currency:CHF	-1234567.891	-1.234.567,89 CHF
+vi	currency:KWD	-1234567.891	-1.234.567,891 KWD
+vi	currency:CZK	-1234567.891	-1.234.567,89 CZK
+vi	accounting:USD	-1234567.891	-1.234.567,89 US$
+vi	code:USD	-1234567.891	-1.234.567,89 USD
+vi	narrow:CAD	-1234567.891	-1.234.567,89 $
+vi	signed	-1234567.891	-1.234.567,89
+vi	decimal	0.5	0,5
+vi	percent	0.5	50%
+vi	scientific	0.5	5E-1
+vi	currency:EUR	0.5	0,50 €
+vi	currency:USD	0.5	0,50 US$
+vi	currency:JPY	0.5	0 ¥
+vi	currency:INR	0.5	0,50 ₹
+vi	currency:CHF	0.5	0,50 CHF
+vi	currency:KWD	0.5	0,500 KWD
+vi	currency:CZK	0.5	0,50 CZK
+vi	accounting:USD	0.5	0,50 US$
+vi	code:USD	0.5	0,50 USD
+vi	narrow:CAD	0.5	0,50 $
+vi	signed	0.5	+0,5
+vi	decimal	1234567890123	1.234.567.890.123
+vi	decimal	0.0625	0,062
+vi	decimal	99.995	99,995
+id	decimal	0	0
+id	decimal	1	1
+id	percent	1	100%
+id	scientific	1	1E0
+id	currency:EUR	1	€1,00
+id	currency:USD	1	US$1,00
+id	currency:JPY	1	JP¥1
+id	currency:INR	1	Rs 1,00
+id	currency:CHF	1	CHF 1,00
+id	currency:KWD	1	KWD 1,000
+id	currency:CZK	1	CZK 1,00
+id	accounting:USD	1	US$1,00
+id	code:USD	1	USD 1,00
+id	narrow:CAD	1	$1,00
+id	signed	1	+1
+id	decimal	-1	-1
+id	percent	-1	-100%
+id	scientific	-1	-1E0
+id	decimal	1234	1.234
+id	decimal	12345	12.345
+id	percent	12345	1.234.500%
+id	scientific	12345	1,234E4
+id	currency:EUR	12345	€12.345,00
+id	currency:USD	12345	US$12.345,00
+id	currency:JPY	12345	JP¥12.345
+id	currency:INR	12345	Rs 12.345,00
+id	currency:CHF	12345	CHF 12.345,00
+id	currency:KWD	12345	KWD 12.345,000
+id	currency:CZK	12345	CZK 12.345,00
+id	accounting:USD	12345	US$12.345,00
+id	code:USD	12345	USD 12.345,00
+id	narrow:CAD	12345	$12.345,00
+id	signed	12345	+12.345
+id	decimal	-1234567.891	-1.234.567,891
+id	currency:EUR	-1234567.891	-€1.234.567,89
+id	currency:USD	-1234567.891	-US$1.234.567,89
+id	currency:JPY	-1234567.891	-JP¥1.234.568
+id	currency:INR	-1234567.891	-Rs 1.234.567,89
+id	currency:CHF	-1234567.891	-CHF 1.234.567,89
+id	currency:KWD	-1234567.891	-KWD 1.234.567,891
+id	currency:CZK	-1234567.891	-CZK 1.234.567,89
+id	accounting:USD	-1234567.891	-US$1.234.567,89
+id	code:USD	-1234567.891	-USD 1.234.567,89
+id	narrow:CAD	-1234567.891	-$1.234.567,89
+id	signed	-1234567.891	-1.234.567,89
+id	decimal	0.5	0,5
+id	percent	0.5	50%
+id	scientific	0.5	5E-1
+id	currency:EUR	0.5	€0,50
+id	currency:USD	0.5	US$0,50
+id	currency:JPY	0.5	JP¥0
+id	currency:INR	0.5	Rs 0,50
+id	currency:CHF	0.5	CHF 0,50
+id	currency:KWD	0.5	KWD 0,500
+id	currency:CZK	0.5	CZK 0,50
+id	accounting:USD	0.5	US$0,50
+id	code:USD	0.5	USD 0,50
+id	narrow:CAD	0.5	$0,50
+id	signed	0.5	+0,5
+id	decimal	1234567890123	1.234.567.890.123
+id	decimal	0.0625	0,062
+id	decimal	99.995	99,995
+ko	decimal	0	0
+ko	decimal	1	1
+ko	percent	1	100%
+ko	scientific	1	1E0
+ko	currency:EUR	1	€1.00
+ko	currency:USD	1	US$1.00
+ko	currency:JPY	1	JP¥1
+ko	currency:INR	1	₹1.00
+ko	currency:CHF	1	CHF 1.00
+ko	currency:KWD	1	KWD 1.000
+ko	currency:CZK	1	CZK 1.00
+ko	accounting:USD	1	US$1.00
+ko	code:USD	1	USD 1.00
+ko	narrow:CAD	1	$1.00
+ko	signed	1	+1
+ko	decimal	-1	-1
+ko	percent	-1	-100%
+ko	scientific	-1	-1E0
+ko	decimal	1234	1,234
+ko	decimal	12345	12,345
+ko	percent	12345	1,234,500%
+ko	scientific	12345	1.234E4
+ko	currency:EUR	12345	€12,345.00
+ko	currency:USD	12345	US$12,345.00
+ko	currency:JPY	12345	JP¥12,345
+ko	currency:INR	12345	₹12,345.00
+ko	currency:CHF	12345	CHF 12,345.00
+ko	currency:KWD	12345	KWD 12,345.000
+ko	currency:CZK	12345	CZK 12,345.00
+ko	accounting:USD	12345	US$12,345.00
+ko	code:USD	12345	USD 12,345.00
+ko	narrow:CAD	12345	$12,345.00
+ko	signed	12345	+12,345
+ko	decimal	-1234567.891	-1,234,567.891
+ko	currency:EUR	-1234567.891	-€1,234,567.89
+ko	currency:USD	-1234567.891	-US$1,234,567.89
+ko	currency:JPY	-1234567.891	-JP¥1,234,568
+ko	currency:INR	-1234567.891	-₹1,234,567.89
+ko	currency:CHF	-1234567.891	-CHF 1,234,567.89
+ko	currency:KWD	-1234567.891	-KWD 1,234,567.891
+ko	currency:CZK	-1234567.891	-CZK 1,234,567.89
+ko	accounting:USD	-1234567.891	(US$1,234,567.89)
+ko	code:USD	-1234567.891	-USD 1,234,567.89
+ko	narrow:CAD	-1234567.891	-$1,234,567.89
+ko	signed	-1234567.891	-1,234,567.89
+ko	decimal	0.5	0.5
+ko	percent	0.5	50%
+ko	scientific	0.5	5E-1
+ko	currency:EUR	0.5	€0.50
+ko	currency:USD	0.5	US$0.50
+ko	currency:JPY	0.5	JP¥0
+ko	currency:INR	0.5	₹0.50
+ko	currency:CHF	0.5	CHF 0.50
+ko	currency:KWD	0.5	KWD 0.500
+ko	currency:CZK	0.5	CZK 0.50
+ko	accounting:USD	0.5	US$0.50
+ko	code:USD	0.5	USD 0.50
+ko	narrow:CAD	0.5	$0.50
+ko	signed	0.5	+0.5
+ko	decimal	1234567890123	1,234,567,890,123
+ko	decimal	0.0625	0.062
+ko	decimal	99.995	99.995
+ja	decimal	0	0
+ja	decimal	1	1
+ja	percent	1	100%
+ja	scientific	1	1E0
+ja	currency:EUR	1	€1.00
+ja	currency:USD	1	$1.00
+ja	currency:JPY	1	￥1
+ja	currency:INR	1	₹1.00
+ja	currency:CHF	1	CHF 1.00
+ja	currency:KWD	1	KWD 1.000
+ja	currency:CZK	1	CZK 1.00
+ja	accounting:USD	1	$1.00
+ja	code:USD	1	USD 1.00
+ja	narrow:CAD	1	$1.00
+ja	signed	1	+1
+ja	decimal	-1	-1
+ja	percent	-1	-100%
+ja	scientific	-1	-1E0
+ja	decimal	1234	1,234
+ja	decimal	12345	12,345
+ja	percent	12345	1,234,500%
+ja	scientific	12345	1.234E4
+ja	currency:EUR	12345	€12,345.00
+ja	currency:USD	12345	$12,345.00
+ja	currency:JPY	12345	￥12,345
+ja	currency:INR	12345	₹12,345.00
+ja	currency:CHF	12345	CHF 12,345.00
+ja	currency:KWD	12345	KWD 12,345.000
+ja	currency:CZK	12345	CZK 12,345.00
+ja	accounting:USD	12345	$12,345.00
+ja	code:USD	12345	USD 12,345.00
+ja	narrow:CAD	12345	$12,345.00
+ja	signed	12345	+12,345
+ja	decimal	-1234567.891	-1,234,567.891
+ja	currency:EUR	-1234567.891	-€1,234,567.89
+ja	currency:USD	-1234567.891	-$1,234,567.89
+ja	currency:JPY	-1234567.891	-￥1,234,568
+ja	currency:INR	-1234567.891	-₹1,234,567.89
+ja	currency:CHF	-1234567.891	-CHF 1,234,567.89
+ja	currency:KWD	-1234567.891	-KWD 1,234,567.891
+ja	currency:CZK	-1234567.891	-CZK 1,234,567.89
+ja	accounting:USD	-1234567.891	($1,234,567.89)
+ja	code:USD	-1234567.891	-USD 1,234,567.89
+ja	narrow:CAD	-1234567.891	-$1,234,567.89
+ja	signed	-1234567.891	-1,234,567.89
+ja	decimal	0.5	0.5
+ja	percent	0.5	50%
+ja	scientific	0.5	5E-1
+ja	currency:EUR	0.5	€0.50
+ja	currency:USD	0.5	$0.50
+ja	currency:JPY	0.5	￥0
+ja	currency:INR	0.5	₹0.50
+ja	currency:CHF	0.5	CHF 0.50
+ja	currency:KWD	0.5	KWD 0.500
+ja	currency:CZK	0.5	CZK 0.50
+ja	accounting:USD	0.5	$0.50
+ja	code:USD	0.5	USD 0.50
+ja	narrow:CAD	0.5	$0.50
+ja	signed	0.5	+0.5
+ja	decimal	1234567890123	1,234,567,890,123
+ja	decimal	0.0625	0.062
+ja	decimal	99.995	99.995
+zh	decimal	0	0
+zh	decimal	1	1
+zh	percent	1	100%
+zh	scientific	1	1E0
+zh	currency:EUR	1	€1.00
+zh	currency:USD	1	US$1.00
+zh	currency:JPY	1	JP¥1
+zh	currency:INR	1	₹1.00
+zh	currency:CHF	1	CHF 1.00
+zh	currency:KWD	1	KWD 1.000
+zh	currency:CZK	1	CZK 1.00
+zh	accounting:USD	1	US$1.00
+zh	code:USD	1	USD 1.00
+zh	narrow:CAD	1	$1.00
+zh	signed	1	+1
+zh	decimal	-1	-1
+zh	percent	-1	-100%
+zh	scientific	-1	-1E0
+zh	decimal	1234	1,234
+zh	decimal	12345	12,345
+zh	percent	12345	1,234,500%
+zh	scientific	12345	1.234E4
+zh	currency:EUR	12345	€12,345.00
+zh	currency:USD	12345	US$12,345.00
+zh	currency:JPY	12345	JP¥12,345
+zh	currency:INR	12345	₹12,345.00
+zh	currency:CHF	12345	CHF 12,345.00
+zh	currency:KWD	12345	KWD 12,345.000
+zh	currency:CZK	12345	CZK 12,345.00
+zh	accounting:USD	12345	US$12,345.00
+zh	code:USD	12345	USD 12,345.00
+zh	narrow:CAD	12345	$12,345.00
+zh	signed	12345	+12,345
+zh	decimal	-1234567.891	-1,234,567.891
+zh	currency:EUR	-1234567.891	-€1,234,567.89
+zh	currency:USD	-1234567.891	-US$1,234,567.89
+zh	currency:JPY	-1234567.891	-JP¥1,234,568
+zh	currency:INR	-1234567.891	-₹1,234,567.89
+zh	currency:CHF	-1234567.891	-CHF 1,234,567.89
+zh	currency:KWD	-1234567.891	-KWD 1,234,567.891
+zh	currency:CZK	-1234567.891	-CZK 1,234,567.89
+zh	accounting:USD	-1234567.891	(US$1,234,567.89)
+zh	code:USD	-1234567.891	-USD 1,234,567.89
+zh	narrow:CAD	-1234567.891	-$1,234,567.89
+zh	signed	-1234567.891	-1,234,567.89
+zh	decimal	0.5	0.5
+zh	percent	0.5	50%
+zh	scientific	0.5	5E-1
+zh	currency:EUR	0.5	€0.50
+zh	currency:USD	0.5	US$0.50
+zh	currency:JPY	0.5	JP¥0
+zh	currency:INR	0.5	₹0.50
+zh	currency:CHF	0.5	CHF 0.50
+zh	currency:KWD	0.5	KWD 0.500
+zh	currency:CZK	0.5	CZK 0.50
+zh	accounting:USD	0.5	US$0.50
+zh	code:USD	0.5	USD 0.50
+zh	narrow:CAD	0.5	$0.50
+zh	signed	0.5	+0.5
+zh	decimal	1234567890123	1,234,567,890,123
+zh	decimal	0.0625	0.062
+zh	decimal	99.995	99.995
+zh-Hant	decimal	0	0
+zh-Hant	decimal	1	1
+zh-Hant	percent	1	100%
+zh-Hant	scientific	1	1E0
+zh-Hant	currency:EUR	1	€1.00
+zh-Hant	currency:USD	1	US$1.00
+zh-Hant	currency:JPY	1	¥1
+zh-Hant	currency:INR	1	₹1.00
+zh-Hant	currency:CHF	1	CHF 1.00
+zh-Hant	currency:KWD	1	KWD 1.000
+zh-Hant	currency:CZK	1	CZK 1.00
+zh-Hant	accounting:USD	1	US$1.00
+zh-Hant	code:USD	1	USD 1.00
+zh-Hant	narrow:CAD	1	$1.00
+zh-Hant	signed	1	+1
+zh-Hant	decimal	-1	-1
+zh-Hant	percent	-1	-100%
+zh-Hant	scientific	-1	-1E0
+zh-Hant	decimal	1234	1,234
+zh-Hant	decimal	12345	12,345
+zh-Hant	percent	12345	1,234,500%
+zh-Hant	scientific	12345	1.234E4
+zh-Hant	currency:EUR	12345	€12,345.00
+zh-Hant	currency:USD	12345	US$12,345.00
+zh-Hant	currency:JPY	12345	¥12,345
+zh-Hant	currency:INR	12345	₹12,345.00
+zh-Hant	currency:CHF	12345	CHF 12,345.00
+zh-Hant	currency:KWD	12345	KWD 12,345.000
+zh-Hant	currency:CZK	12345	CZK 12,345.00
+zh-Hant	accounting:USD	12345	US$12,345.00
+zh-Hant	code:USD	12345	USD 12,345.00
+zh-Hant	narrow:CAD	12345	$12,345.00
+zh-Hant	signed	12345	+12,345
+zh-Hant	decimal	-1234567.891	-1,234,567.891
+zh-Hant	currency:EUR	-1234567.891	-€1,234,567.89
+zh-Hant	currency:USD	-1234567.891	-US$1,234,567.89
+zh-Hant	currency:JPY	-1234567.891	-¥1,234,568
+zh-Hant	currency:INR	-1234567.891	-₹1,234,567.89
+zh-Hant	currency:CHF	-1234567.891	-CHF 1,234,567.89
+zh-Hant	currency:KWD	-1234567.891	-KWD 1,234,567.891
+zh-Hant	currency:CZK	-1234567.891	-CZK 1,234,567.89
+zh-Hant	accounting:USD	-1234567.891	(US$1,234,567.89)
+zh-Hant	code:USD	-1234567.891	-USD 1,234,567.89
+zh-Hant	narrow:CAD	-1234567.891	-$1,234,567.89
+zh-Hant	signed	-1234567.891	-1,234,567.89
+zh-Hant	decimal	0.5	0.5
+zh-Hant	percent	0.5	50%
+zh-Hant	scientific	0.5	5E-1
+zh-Hant	currency:EUR	0.5	€0.50
+zh-Hant	currency:USD	0.5	US$0.50
+zh-Hant	currency:JPY	0.5	¥0
+zh-Hant	currency:INR	0.5	₹0.50
+zh-Hant	currency:CHF	0.5	CHF 0.50
+zh-Hant	currency:KWD	0.5	KWD 0.500
+zh-Hant	currency:CZK	0.5	CZK 0.50
+zh-Hant	accounting:USD	0.5	US$0.50
+zh-Hant	code:USD	0.5	USD 0.50
+zh-Hant	narrow:CAD	0.5	$0.50
+zh-Hant	signed	0.5	+0.5
+zh-Hant	decimal	1234567890123	1,234,567,890,123
+zh-Hant	decimal	0.0625	0.062
+zh-Hant	decimal	99.995	99.995
+zh-TW	decimal	0	0
+zh-TW	decimal	1	1
+zh-TW	percent	1	100%
+zh-TW	scientific	1	1E0
+zh-TW	currency:EUR	1	€1.00
+zh-TW	currency:USD	1	US$1.00
+zh-TW	currency:JPY	1	¥1
+zh-TW	currency:INR	1	₹1.00
+zh-TW	currency:CHF	1	CHF 1.00
+zh-TW	currency:KWD	1	KWD 1.000
+zh-TW	currency:CZK	1	CZK 1.00
+zh-TW	accounting:USD	1	US$1.00
+zh-TW	code:USD	1	USD 1.00
+zh-TW	narrow:CAD	1	$1.00
+zh-TW	signed	1	+1
+zh-TW	decimal	-1	-1
+zh-TW	percent	-1	-100%
+zh-TW	scientific	-1	-1E0
+zh-TW	decimal	1234	1,234
+zh-TW	decimal	12345	12,345
+zh-TW	percent	12345	1,234,500%
+zh-TW	scientific	12345	1.234E4
+zh-TW	currency:EUR	12345	€12,345.00
+zh-TW	currency:USD	12345	US$12,345.00
+zh-TW	currency:JPY	12345	¥12,345
+zh-TW	currency:INR	12345	₹12,345.00
+zh-TW	currency:CHF	12345	CHF 12,345.00
+zh-TW	currency:KWD	12345	KWD 12,345.000
+zh-TW	currency:CZK	12345	CZK 12,345.00
+zh-TW	accounting:USD	12345	US$12,345.00
+zh-TW	code:USD	12345	USD 12,345.00
+zh-TW	narrow:CAD	12345	$12,345.00
+zh-TW	signed	12345	+12,345
+zh-TW	decimal	-1234567.891	-1,234,567.891
+zh-TW	currency:EUR	-1234567.891	-€1,234,567.89
+zh-TW	currency:USD	-1234567.891	-US$1,234,567.89
+zh-TW	currency:JPY	-1234567.891	-¥1,234,568
+zh-TW	currency:INR	-1234567.891	-₹1,234,567.89
+zh-TW	currency:CHF	-1234567.891	-CHF 1,234,567.89
+zh-TW	currency:KWD	-1234567.891	-KWD 1,234,567.891
+zh-TW	currency:CZK	-1234567.891	-CZK 1,234,567.89
+zh-TW	accounting:USD	-1234567.891	(US$1,234,567.89)
+zh-TW	code:USD	-1234567.891	-USD 1,234,567.89
+zh-TW	narrow:CAD	-1234567.891	-$1,234,567.89
+zh-TW	signed	-1234567.891	-1,234,567.89
+zh-TW	decimal	0.5	0.5
+zh-TW	percent	0.5	50%
+zh-TW	scientific	0.5	5E-1
+zh-TW	currency:EUR	0.5	€0.50
+zh-TW	currency:USD	0.5	US$0.50
+zh-TW	currency:JPY	0.5	¥0
+zh-TW	currency:INR	0.5	₹0.50
+zh-TW	currency:CHF	0.5	CHF 0.50
+zh-TW	currency:KWD	0.5	KWD 0.500
+zh-TW	currency:CZK	0.5	CZK 0.50
+zh-TW	accounting:USD	0.5	US$0.50
+zh-TW	code:USD	0.5	USD 0.50
+zh-TW	narrow:CAD	0.5	$0.50
+zh-TW	signed	0.5	+0.5
+zh-TW	decimal	1234567890123	1,234,567,890,123
+zh-TW	decimal	0.0625	0.062
+zh-TW	decimal	99.995	99.995
+nb-NO	decimal	0	0
+nb-NO	decimal	1	1
+nb-NO	percent	1	100 %
+nb-NO	scientific	1	1E0
+nb-NO	currency:EUR	1	1,00 €
+nb-NO	currency:USD	1	1,00 USD
+nb-NO	currency:JPY	1	1 JPY
+nb-NO	currency:INR	1	1,00 INR
+nb-NO	currency:CHF	1	1,00 CHF
+nb-NO	currency:KWD	1	1,000 KWD
+nb-NO	currency:CZK	1	1,00 CZK
+nb-NO	accounting:USD	1	USD 1,00
+nb-NO	code:USD	1	1,00 USD
+nb-NO	narrow:CAD	1	1,00 $
+nb-NO	signed	1	+1
+nb-NO	decimal	-1	−1
+nb-NO	percent	-1	−100 %
+nb-NO	scientific	-1	−1E0
+nb-NO	decimal	1234	1 234
+nb-NO	decimal	12345	12 345
+nb-NO	percent	12345	1 234 500 %
+nb-NO	scientific	12345	1,234E4
+nb-NO	currency:EUR	12345	12 345,00 €
+nb-NO	currency:USD	12345	12 345,00 USD
+nb-NO	currency:JPY	12345	12 345 JPY
+nb-NO	currency:INR	12345	12 345,00 INR
+nb-NO	currency:CHF	12345	12 345,00 CHF
+nb-NO	currency:KWD	12345	12 345,000 KWD
+nb-NO	currency:CZK	12345	12 345,00 CZK
+nb-NO	accounting:USD	12345	USD 12 345,00
+nb-NO	code:USD	12345	12 345,00 USD
+nb-NO	narrow:CAD	12345	12 345,00 $
+nb-NO	signed	12345	+12 345
+nb-NO	decimal	-1234567.891	−1 234 567,891
+nb-NO	currency:EUR	-1234567.891	−1 234 567,89 €
+nb-NO	currency:USD	-1234567.891	−1 234 567,89 USD
+nb-NO	currency:JPY	-1234567.891	−1 234 568 JPY
+nb-NO	currency:INR	-1234567.891	−1 234 567,89 INR
+nb-NO	currency:CHF	-1234567.891	−1 234 567,89 CHF
+nb-NO	currency:KWD	-1234567.891	−1 234 567,891 KWD
+nb-NO	currency:CZK	-1234567.891	−1 234 567,89 CZK
+nb-NO	accounting:USD	-1234567.891	(USD 1 234 567,89)
+nb-NO	code:USD	-1234567.891	−1 234 567,89 USD
+nb-NO	narrow:CAD	-1234567.891	−1 234 567,89 $
+nb-NO	signed	-1234567.891	−1 234 567,89
+nb-NO	decimal	0.5	0,5
+nb-NO	percent	0.5	50 %
+nb-NO	scientific	0.5	5E−1
+nb-NO	currency:EUR	0.5	0,50 €
+nb-NO	currency:USD	0.5	0,50 USD
+nb-NO	currency:JPY	0.5	0 JPY
+nb-NO	currency:INR	0.5	0,50 INR
+nb-NO	currency:CHF	0.5	0,50 CHF
+nb-NO	currency:KWD	0.5	0,500 KWD
+nb-NO	currency:CZK	0.5	0,50 CZK
+nb-NO	accounting:USD	0.5	USD 0,50
+nb-NO	code:USD	0.5	0,50 USD
+nb-NO	narrow:CAD	0.5	0,50 $
+nb-NO	signed	0.5	+0,5
+nb-NO	decimal	1234567890123	1 234 567 890 123
+nb-NO	decimal	0.0625	0,062
+nb-NO	decimal	99.995	99,995
+ar-EG-u-nu-latn	decimal	0	0
+ar-EG-u-nu-latn	decimal	1	1
+ar-EG-u-nu-latn	percent	1	100‎%‎
+ar-EG-u-nu-latn	scientific	1	1E0
+ar-EG-u-nu-latn	currency:EUR	1	‏1.00 €
+ar-EG-u-nu-latn	currency:USD	1	‏1.00 US$
+ar-EG-u-nu-latn	currency:JPY	1	‏1 JP¥
+ar-EG-u-nu-latn	currency:INR	1	‏1.00 ₹
+ar-EG-u-nu-latn	currency:CHF	1	‏1.00 CHF
+ar-EG-u-nu-latn	currency:KWD	1	‏1.000 د.ك.‏
+ar-EG-u-nu-latn	currency:CZK	1	‏1.00 CZK
+ar-EG-u-nu-latn	accounting:USD	1	؜1.00 US$
+ar-EG-u-nu-latn	code:USD	1	‏1.00 USD
+ar-EG-u-nu-latn	narrow:CAD	1	‏1.00 CA$
+ar-EG-u-nu-latn	signed	1	‎+1
+ar-EG-u-nu-latn	decimal	-1	‎-1
+ar-EG-u-nu-latn	percent	-1	‎-100‎%‎
+ar-EG-u-nu-latn	scientific	-1	‎-1E0
+ar-EG-u-nu-latn	decimal	1234	1,234
+ar-EG-u-nu-latn	decimal	12345	12,345
+ar-EG-u-nu-latn	percent	12345	1,234,500‎%‎
+ar-EG-u-nu-latn	scientific	12345	1.234E4
+ar-EG-u-nu-latn	currency:EUR	12345	‏12,345.00 €
+ar-EG-u-nu-latn	currency:USD	12345	‏12,345.00 US$
+ar-EG-u-nu-latn	currency:JPY	12345	‏12,345 JP¥
+ar-EG-u-nu-latn	currency:INR	12345	‏12,345.00 ₹
+ar-EG-u-nu-latn	currency:CHF	12345	‏12,345.00 CHF
+ar-EG-u-nu-latn	currency:KWD	12345	‏12,345.000 د.ك.‏
+ar-EG-u-nu-latn	currency:CZK	12345	‏12,345.00 CZK
+ar-EG-u-nu-latn	accounting:USD	12345	؜12,345.00 US$
+ar-EG-u-nu-latn	code:USD	12345	‏12,345.00 USD
+ar-EG-u-nu-latn	narrow:CAD	12345	‏12,345.00 CA$
+ar-EG-u-nu-latn	signed	12345	‎+12,345
+ar-EG-u-nu-latn	decimal	-1234567.891	‎-1,234,567.891
+ar-EG-u-nu-latn	currency:EUR	-1234567.891	‏‎-1,234,567.89 €
+ar-EG-u-nu-latn	currency:USD	-1234567.891	‏‎-1,234,567.89 US$
+ar-EG-u-nu-latn	currency:JPY	-1234567.891	‏‎-1,234,568 JP¥
+ar-EG-u-nu-latn	currency:INR	-1234567.891	‏‎-1,234,567.89 ₹
+ar-EG-u-nu-latn	currency:CHF	-1234567.891	‏‎-1,234,567.89 CHF
+ar-EG-u-nu-latn	currency:KWD	-1234567.891	‏‎-1,234,567.891 د.ك.‏
+ar-EG-u-nu-latn	currency:CZK	-1234567.891	‏‎-1,234,567.89 CZK
+ar-EG-u-nu-latn	accounting:USD	-1234567.891	(؜1,234,567.89 US$)
+ar-EG-u-nu-latn	code:USD	-1234567.891	‏‎-1,234,567.89 USD
+ar-EG-u-nu-latn	narrow:CAD	-1234567.891	‏‎-1,234,567.89 CA$
+ar-EG-u-nu-latn	signed	-1234567.891	‎-1,234,567.89
+ar-EG-u-nu-latn	decimal	0.5	0.5
+ar-EG-u-nu-latn	percent	0.5	50‎%‎
+ar-EG-u-nu-latn	scientific	0.5	5E‎-1
+ar-EG-u-nu-latn	currency:EUR	0.5	‏0.50 €
+ar-EG-u-nu-latn	currency:USD	0.5	‏0.50 US$
+ar-EG-u-nu-latn	currency:JPY	0.5	‏0 JP¥
+ar-EG-u-nu-latn	currency:INR	0.5	‏0.50 ₹
+ar-EG-u-nu-latn	currency:CHF	0.5	‏0.50 CHF
+ar-EG-u-nu-latn	currency:KWD	0.5	‏0.500 د.ك.‏
+ar-EG-u-nu-latn	currency:CZK	0.5	‏0.50 CZK
+ar-EG-u-nu-latn	accounting:USD	0.5	؜0.50 US$
+ar-EG-u-nu-latn	code:USD	0.5	‏0.50 USD
+ar-EG-u-nu-latn	narrow:CAD	0.5	‏0.50 CA$
+ar-EG-u-nu-latn	signed	0.5	‎+0.5
+ar-EG-u-nu-latn	decimal	1234567890123	1,234,567,890,123
+ar-EG-u-nu-latn	decimal	0.0625	0.062
+ar-EG-u-nu-latn	decimal	99.995	99.995
+hi-u-nu-deva	decimal	0	०
+hi-u-nu-deva	decimal	1	१
+hi-u-nu-deva	percent	1	१००%
+hi-u-nu-deva	scientific	1	१E०
+hi-u-nu-deva	currency:EUR	1	€१.००
+hi-u-nu-deva	currency:USD	1	$१.००
+hi-u-nu-deva	currency:JPY	1	JP¥१
+hi-u-nu-deva	currency:INR	1	₹१.००
+hi-u-nu-deva	currency:CHF	1	CHF १.००
+hi-u-nu-deva	currency:KWD	1	KWD १.०००
+hi-u-nu-deva	currency:CZK	1	CZK १.००
+hi-u-nu-deva	accounting:USD	1	$१.००
+hi-u-nu-deva	code:USD	1	USD १.००
+hi-u-nu-deva	narrow:CAD	1	$१.००
+hi-u-nu-deva	signed	1	+१
+hi-u-nu-deva	decimal	-1	-१
+hi-u-nu-deva	percent	-1	-१००%
+hi-u-nu-deva	scientific	-1	-१E०
+hi-u-nu-deva	decimal	1234	१,२३४
+hi-u-nu-deva	decimal	12345	१२,३४५
+hi-u-nu-deva	percent	12345	१२,३४,५००%
+hi-u-nu-deva	scientific	12345	१.२३४E४
+hi-u-nu-deva	currency:EUR	12345	€१२,३४५.००
+hi-u-nu-deva	currency:USD	12345	$१२,३४५.००
+hi-u-nu-deva	currency:JPY	12345	JP¥१२,३४५
+hi-u-nu-deva	currency:INR	12345	₹१२,३४५.००
+hi-u-nu-deva	currency:CHF	12345	CHF १२,३४५.००
+hi-u-nu-deva	currency:KWD	12345	KWD १२,३४५.०००
+hi-u-nu-deva	currency:CZK	12345	CZK १२,३४५.००
+hi-u-nu-deva	accounting:USD	12345	$१२,३४५.००
+hi-u-nu-deva	code:USD	12345	USD १२,३४५.००
+hi-u-nu-deva	narrow:CAD	12345	$१२,३४५.००
+hi-u-nu-deva	signed	12345	+१२,३४५
+hi-u-nu-deva	decimal	-1234567.891	-१२,३४,५६७.८९१
+hi-u-nu-deva	currency:EUR	-1234567.891	-€१२,३४,५६७.८९
+hi-u-nu-deva	currency:USD	-1234567.891	-$१२,३४,५६७.८९
+hi-u-nu-deva	currency:JPY	-1234567.891	-JP¥१२,३४,५६८
+hi-u-nu-deva	currency:INR	-1234567.891	-₹१२,३४,५६७.८९
+hi-u-nu-deva	currency:CHF	-1234567.891	-CHF १२,३४,५६७.८९
+hi-u-nu-deva	currency:KWD	-1234567.891	-KWD १२,३४,५६७.८९१
+hi-u-nu-deva	currency:CZK	-1234567.891	-CZK १२,३४,५६७.८९
+hi-u-nu-deva	accounting:USD	-1234567.891	-$१२,३४,५६७.८९
+hi-u-nu-deva	code:USD	-1234567.891	-USD १२,३४,५६७.८९
+hi-u-nu-deva	narrow:CAD	-1234567.891	-$१२,३४,५६७.८९
+hi-u-nu-deva	signed	-1234567.891	-१२,३४,५६७.८९
+hi-u-nu-deva	decimal	0.5	०.५
+hi-u-nu-deva	percent	0.5	५०%
+hi-u-nu-deva	scientific	0.5	५E-१
+hi-u-nu-deva	currency:EUR	0.5	€०.५०
+hi-u-nu-deva	currency:USD	0.5	$०.५०
+hi-u-nu-deva	currency:JPY	0.5	JP¥०
+hi-u-nu-deva	currency:INR	0.5	₹०.५०
+hi-u-nu-deva	currency:CHF	0.5	CHF ०.५०
+hi-u-nu-deva	currency:KWD	0.5	KWD ०.५००
+hi-u-nu-deva	currency:CZK	0.5	CZK ०.५०
+hi-u-nu-deva	accounting:USD	0.5	$०.५०
+hi-u-nu-deva	code:USD	0.5	USD ०.५०
+hi-u-nu-deva	narrow:CAD	0.5	$०.५०
+hi-u-nu-deva	signed	0.5	+०.५
+hi-u-nu-deva	decimal	1234567890123	१२,३४,५६,७८,९०,१२३
+hi-u-nu-deva	decimal	0.0625	०.०६२
+hi-u-nu-deva	decimal	99.995	९९.९९५
+th-u-nu-thai	decimal	0	๐
+th-u-nu-thai	decimal	1	๑
+th-u-nu-thai	percent	1	๑๐๐%
+th-u-nu-thai	scientific	1	๑E๐
+th-u-nu-thai	currency:EUR	1	€๑.๐๐
+th-u-nu-thai	currency:USD	1	US$๑.๐๐
+th-u-nu-thai	currency:JPY	1	¥๑
+th-u-nu-thai	currency:INR	1	₹๑.๐๐
+th-u-nu-thai	currency:CHF	1	CHF ๑.๐๐
+th-u-nu-thai	currency:KWD	1	KWD ๑.๐๐๐
+th-u-nu-thai	currency:CZK	1	CZK ๑.๐๐
+th-u-nu-thai	accounting:USD	1	US$๑.๐๐
+th-u-nu-thai	code:USD	1	USD ๑.๐๐
+th-u-nu-thai	narrow:CAD	1	$๑.๐๐
+th-u-nu-thai	signed	1	+๑
+th-u-nu-thai	decimal	-1	-๑
+th-u-nu-thai	percent	-1	-๑๐๐%
+th-u-nu-thai	scientific	-1	-๑E๐
+th-u-nu-thai	decimal	1234	๑,๒๓๔
+th-u-nu-thai	decimal	12345	๑๒,๓๔๕
+th-u-nu-thai	percent	12345	๑,๒๓๔,๕๐๐%
+th-u-nu-thai	scientific	12345	๑.๒๓๔E๔
+th-u-nu-thai	currency:EUR	12345	€๑๒,๓๔๕.๐๐
+th-u-nu-thai	currency:USD	12345	US$๑๒,๓๔๕.๐๐
+th-u-nu-thai	currency:JPY	12345	¥๑๒,๓๔๕
+th-u-nu-thai	currency:INR	12345	₹๑๒,๓๔๕.๐๐
+th-u-nu-thai	currency:CHF	12345	CHF ๑๒,๓๔๕.๐๐
+th-u-nu-thai	currency:KWD	12345	KWD ๑๒,๓๔๕.๐๐๐
+th-u-nu-thai	currency:CZK	12345	CZK ๑๒,๓๔๕.๐๐
+th-u-nu-thai	accounting:USD	12345	US$๑๒,๓๔๕.๐๐
+th-u-nu-thai	code:USD	12345	USD ๑๒,๓๔๕.๐๐
+th-u-nu-thai	narrow:CAD	12345	$๑๒,๓๔๕.๐๐
+th-u-nu-thai	signed	12345	+๑๒,๓๔๕
+th-u-nu-thai	decimal	-1234567.891	-๑,๒๓๔,๕๖๗.๘๙๑
+th-u-nu-thai	currency:EUR	-1234567.891	-€๑,๒๓๔,๕๖๗.๘๙
+th-u-nu-thai	currency:USD	-1234567.891	-US$๑,๒๓๔,๕๖๗.๘๙
+th-u-nu-thai	currency:JPY	-1234567.891	-¥๑,๒๓๔,๕๖๘
+th-u-nu-thai	currency:INR	-1234567.891	-₹๑,๒๓๔,๕๖๗.๘๙
+th-u-nu-thai	currency:CHF	-1234567.891	-CHF ๑,๒๓๔,๕๖๗.๘๙
+th-u-nu-thai	currency:KWD	-1234567.891	-KWD ๑,๒๓๔,๕๖๗.๘๙๑
+th-u-nu-thai	currency:CZK	-1234567.891	-CZK ๑,๒๓๔,๕๖๗.๘๙
+th-u-nu-thai	accounting:USD	-1234567.891	(US$๑,๒๓๔,๕๖๗.๘๙)
+th-u-nu-thai	code:USD	-1234567.891	-USD ๑,๒๓๔,๕๖๗.๘๙
+th-u-nu-thai	narrow:CAD	-1234567.891	-$๑,๒๓๔,๕๖๗.๘๙
+th-u-nu-thai	signed	-1234567.891	-๑,๒๓๔,๕๖๗.๘๙
+th-u-nu-thai	decimal	0.5	๐.๕
+th-u-nu-thai	percent	0.5	๕๐%
+th-u-nu-thai	scientific	0.5	๕E-๑
+th-u-nu-thai	currency:EUR	0.5	€๐.๕๐
+th-u-nu-thai	currency:USD	0.5	US$๐.๕๐
+th-u-nu-thai	currency:JPY	0.5	¥๐
+th-u-nu-thai	currency:INR	0.5	₹๐.๕๐
+th-u-nu-thai	currency:CHF	0.5	CHF ๐.๕๐
+th-u-nu-thai	currency:KWD	0.5	KWD ๐.๕๐๐
+th-u-nu-thai	currency:CZK	0.5	CZK ๐.๕๐
+th-u-nu-thai	accounting:USD	0.5	US$๐.๕๐
+th-u-nu-thai	code:USD	0.5	USD ๐.๕๐
+th-u-nu-thai	narrow:CAD	0.5	$๐.๕๐
+th-u-nu-thai	signed	0.5	+๐.๕
+th-u-nu-thai	decimal	1234567890123	๑,๒๓๔,๕๖๗,๘๙๐,๑๒๓
+th-u-nu-thai	decimal	0.0625	๐.๐๖๒
+th-u-nu-thai	decimal	99.995	๙๙.๙๙๕
+bn-u-nu-latn	decimal	0	0
+bn-u-nu-latn	decimal	1	1
+bn-u-nu-latn	percent	1	100%
+bn-u-nu-latn	scientific	1	1E0
+bn-u-nu-latn	currency:EUR	1	1.00€
+bn-u-nu-latn	currency:USD	1	1.00 US$
+bn-u-nu-latn	currency:JPY	1	1 JP¥
+bn-u-nu-latn	currency:INR	1	1.00₹
+bn-u-nu-latn	currency:CHF	1	1.00 CHF
+bn-u-nu-latn	currency:KWD	1	1.000 KWD
+bn-u-nu-latn	currency:CZK	1	1.00 CZK
+bn-u-nu-latn	accounting:USD	1	1.00 US$
+bn-u-nu-latn	code:USD	1	1.00 USD
+bn-u-nu-latn	narrow:CAD	1	1.00$
+bn-u-nu-latn	signed	1	+1
+bn-u-nu-latn	decimal	-1	-1
+bn-u-nu-latn	percent	-1	-100%
+bn-u-nu-latn	scientific	-1	-1E0
+bn-u-nu-latn	decimal	1234	1,234
+bn-u-nu-latn	decimal	12345	12,345
+bn-u-nu-latn	percent	12345	12,34,500%
+bn-u-nu-latn	scientific	12345	1.234E4
+bn-u-nu-latn	currency:EUR	12345	12,345.00€
+bn-u-nu-latn	currency:USD	12345	12,345.00 US$
+bn-u-nu-latn	currency:JPY	12345	12,345 JP¥
+bn-u-nu-latn	currency:INR	12345	12,345.00₹
+bn-u-nu-latn	currency:CHF	12345	12,345.00 CHF
+bn-u-nu-latn	currency:KWD	12345	12,345.000 KWD
+bn-u-nu-latn	currency:CZK	12345	12,345.00 CZK
+bn-u-nu-latn	accounting:USD	12345	12,345.00 US$
+bn-u-nu-latn	code:USD	12345	12,345.00 USD
+bn-u-nu-latn	narrow:CAD	12345	12,345.00$
+bn-u-nu-latn	signed	12345	+12,345
+bn-u-nu-latn	decimal	-1234567.891	-12,34,567.891
+bn-u-nu-latn	currency:EUR	-1234567.891	-12,34,567.89€
+bn-u-nu-latn	currency:USD	-1234567.891	-12,34,567.89 US$
+bn-u-nu-latn	currency:JPY	-1234567.891	-12,34,568 JP¥
+bn-u-nu-latn	currency:INR	-1234567.891	-12,34,567.89₹
+bn-u-nu-latn	currency:CHF	-1234567.891	-12,34,567.89 CHF
+bn-u-nu-latn	currency:KWD	-1234567.891	-12,34,567.891 KWD
+bn-u-nu-latn	currency:CZK	-1234567.891	-12,34,567.89 CZK
+bn-u-nu-latn	accounting:USD	-1234567.891	(12,34,567.89 US$)
+bn-u-nu-latn	code:USD	-1234567.891	-12,34,567.89 USD
+bn-u-nu-latn	narrow:CAD	-1234567.891	-12,34,567.89$
+bn-u-nu-latn	signed	-1234567.891	-12,34,567.89
+bn-u-nu-latn	decimal	0.5	0.5
+bn-u-nu-latn	percent	0.5	50%
+bn-u-nu-latn	scientific	0.5	5E-1
+bn-u-nu-latn	currency:EUR	0.5	0.50€
+bn-u-nu-latn	currency:USD	0.5	0.50 US$
+bn-u-nu-latn	currency:JPY	0.5	0 JP¥
+bn-u-nu-latn	currency:INR	0.5	0.50₹
+bn-u-nu-latn	currency:CHF	0.5	0.50 CHF
+bn-u-nu-latn	currency:KWD	0.5	0.500 KWD
+bn-u-nu-latn	currency:CZK	0.5	0.50 CZK
+bn-u-nu-latn	accounting:USD	0.5	0.50 US$
+bn-u-nu-latn	code:USD	0.5	0.50 USD
+bn-u-nu-latn	narrow:CAD	0.5	0.50$
+bn-u-nu-latn	signed	0.5	+0.5
+bn-u-nu-latn	decimal	1234567890123	12,34,56,78,90,123
+bn-u-nu-latn	decimal	0.0625	0.062
+bn-u-nu-latn	decimal	99.995	99.995

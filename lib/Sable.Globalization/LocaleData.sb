@@ -1,0 +1,155 @@
+module Sable.Globalization
+
+// What the library knows of a locale: the fields of its record in
+// LocaleTables.sb, which tools/locale-tables.py generates and describes, read
+// by name.
+
+/// The invariant locale's record: what the rest of the library writes with
+/// no locale said. Numbers have no grouping, dates are ISO 8601's, names are
+/// English. A locale there is no data for has it too.
+const invariantRecord = """
+    tag=und
+    likely=und
+    numbers=latn|latn
+    symbols.latn=.|,|-|+|%|‰|e|nan|inf|.|,
+    patterns.latn=0.###|0%|#E0|¤0.00|¤0.00
+    minimumGrouping=1
+    currencies=
+    currencies.narrow=
+    era=BC|AD
+    months=January|February|March|April|May|June|July|August|September|October|November|December
+    months.short=Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec
+    months.alone=January|February|March|April|May|June|July|August|September|October|November|December
+    months.alone.short=Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec
+    months.narrow=J|F|M|A|M|J|J|A|S|O|N|D
+    days=Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday
+    days.short=Mon|Tue|Wed|Thu|Fri|Sat|Sun
+    days.alone=Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday
+    days.alone.short=Mon|Tue|Wed|Thu|Fri|Sat|Sun
+    days.narrow=M|T|W|T|F|S|S
+    ampm=AM|PM
+    dates=yyyy-MM-dd|yyyy-MM-dd|yyyy-MM-dd|yyyy-MM-dd
+    times=HH:mm:ssxxx|HH:mm:ssxxx|HH:mm:ss|HH:mm
+    joins={1} {0}|{1} {0}|{1} {0}|{1} {0}
+    week=1|4
+    gmt=UTC{0}|UTC|+HH:mm;-HH:mm
+    list.and.wide={0}, {1}|{0}, {1}|{0}, {1}|{0}, {1}
+    list.and.short={0}, {1}|{0}, {1}|{0}, {1}|{0}, {1}
+    list.and.narrow={0}, {1}|{0}, {1}|{0}, {1}|{0}, {1}
+    list.or.wide={0}, {1}|{0}, {1}|{0}, {1}|{0}, {1}
+    list.or.short={0}, {1}|{0}, {1}|{0}, {1}|{0}, {1}
+    list.or.narrow={0}, {1}|{0}, {1}|{0}, {1}|{0}, {1}
+    list.unit.wide={0}, {1}|{0}, {1}|{0}, {1}|{0}, {1}
+    list.unit.short={0}, {1}|{0}, {1}|{0}, {1}|{0}, {1}
+    list.unit.narrow={0}, {1}|{0}, {1}|{0}, {1}|{0}, {1}
+    plurals=
+    ordinals=
+    """
+
+/// A locale's record, its fields by name. Never changed once made.
+final class LocaleData {
+    /// The locale the record is of.
+    let tag: String
+    let fields: [String: String]
+
+    init(_ record: String) {
+        var fields: [String: String] = [:]
+        for line in record.split('\n') {
+            if let (key, value) = line.splitOnce('=') {
+                fields[key.toString()] = value.toString()
+            }
+        }
+        self.tag = fields["tag"] ?? "und"
+        self.fields = fields
+    }
+
+    /// The field's text; a field every record has.
+    fn text(_ key: String) -> String {
+        return fields[key] ?? ""
+    }
+
+    /// The field's items.
+    fn items(_ key: String) -> String[>..] {
+        return text(key).split('|')
+    }
+
+    /// The numbering system of the tag's 'nu' keyword: one by name, or
+    /// 'native', or the locale's own.
+    fn numberingSystem(_ asked: String?) -> String {
+        let systems = items("numbers")
+        if let name = asked {
+            if name == "native" || name == "traditio" {
+                return systems[1]
+            }
+            if listed(numberingSystems, name) != none {
+                return name
+            }
+        }
+        return systems[0]
+    }
+
+    /// The symbols numbers are written with in the system, and their
+    /// patterns: the Latin ones' for a system the locale says nothing of.
+    fn numbers(_ system: String) -> (String[>..], String[>..]) {
+        let known = fields["symbols.\(system)"] != none ? system : "latn"
+        return (items("symbols.\(known)"), items("patterns.\(known)"))
+    }
+}
+
+/// The value a table of 'key=value' lines has for the key.
+fn listed(_ table: String, _ key: String) -> String? {
+    for line in table.split('\n') {
+        if let (name, value) = line.splitOnce('=') {
+            if name.toString() == key {
+                return value.toString()
+            }
+        }
+    }
+    return none
+}
+
+/// The data a locale is given: its own record or its nearest ancestor's, by
+/// the script and region it names, then without them.
+fn localeData(language: String, script: String?, territory: String?) -> LocaleData {
+    // Norwegian is Bokmål where nothing else is said.
+    let name = language == "no" ? "nb" : language
+    var tries: String[>..] = []
+    if let s = script {
+        if let r = territory {
+            tries.append("\(name)-\(s)-\(r)")
+            tries.append("\(name)-\(r)")
+        }
+        tries.append("\(name)-\(s)")
+    } else if let r = territory {
+        tries.append("\(name)-\(r)")
+    }
+    tries.append(name)
+    for tag in tries {
+        // A tag's script rules out records in another: 'zh-Hans-TW' is not
+        // what 'zh-TW' is.
+        if let record = localeRecord(tag) {
+            if hasScript(record, script) {
+                return LocaleData(record)
+            }
+        }
+        if let parent = listed(localeParents, tag) {
+            if parent == "und" {
+                break
+            }
+            if let record = localeRecord(parent) {
+                if hasScript(record, script) {
+                    return LocaleData(record)
+                }
+            }
+        }
+    }
+    return LocaleData(invariantRecord)
+}
+
+/// Whether the record's locale is written in the script, if one is named.
+fn hasScript(_ record: String, _ script: String?) -> Bool {
+    if let named = script {
+        return LocaleData(record).text("likely").contains("-\(named)-")
+    }
+    return true
+}

@@ -1,0 +1,117 @@
+module GlobalizationCollatorTests
+
+import Sable.Globalization
+import Sable.Testing
+
+fn inOrder(_ collator: Collator, _ texts: String[>..]) {
+    var i = 1
+    while i < texts.count {
+        let pair = "\(texts[i - 1]) \(texts[i])"
+        assertEqual(collator.compare(texts[i - 1], texts[i]), Ordering.Less)
+        assertEqual(collator.compare(texts[i], texts[i - 1]), Ordering.Greater)
+        assert(collator.sortKey(texts[i - 1]) < collator.sortKey(texts[i]), pair)
+        i += 1
+    }
+}
+
+@test
+fn theRootOrdersByLettersThenAccentsThenCase() {
+    let root = Collator(.invariant)
+    inOrder(root, ["", " ", "-", "1", "a", "A", "á", "ab", "Ab", "áb", "b", "z", "α", "я", "א", "ا", "क", "ก", "가", "あ", "一", "丁"])
+    inOrder(root, ["cote", "coté", "côte", "côté"])
+    assertEqual(root.compare("a", "a"), Ordering.Equal)
+    assertEqual(root.compare("\u{E9}", "e\u{301}"), Ordering.Equal)
+    assertEqual(root.sortKey("\u{E9}"), root.sortKey("e\u{301}"))
+}
+
+@test
+fn aLanguageOrdersItsLettersItsOwnWay() {
+    inOrder(Collator(Locale.of("sv")!), ["zon", "ål", "ärm", "öl"])
+    inOrder(Collator(Locale.of("de")!), ["ad", "ärm", "az", "öl", "zon"])
+    inOrder(Collator(Locale.of("de-u-co-phonebk")!), ["ad", "ae", "ärm", "af"])
+    inOrder(Collator(Locale.of("cs")!), ["cena", "čas", "hora", "chata", "jih"])
+    inOrder(Collator(Locale.of("es")!), ["nz", "ñandú", "o"])
+    inOrder(Collator(Locale.of("es-u-co-trad")!), ["cz", "chico", "d", "lz", "llama", "m"])
+    inOrder(Collator(Locale.of("da")!), ["zebra", "Ærø", "ærø", "ø", "å"])
+    inOrder(Collator(Locale.of("no")!), ["zebra", "ærø", "ø", "å"])
+    inOrder(Collator(Locale.of("fr-CA")!), ["cote", "côte", "coté", "côté"])
+    inOrder(Collator(Locale.of("ru")!), ["1", "я", "a", "α"])
+    inOrder(Collator(Locale.of("sr-Latn")!), ["c", "č", "ć", "d", "dž", "đ"])
+    inOrder(Collator(Locale.of("xx")!), ["a", "ä", "b"])
+}
+
+@test
+fn aStrengthSaysHowSmallADifferenceCounts() {
+    let letters = Collator(.invariant, strength: .Primary)
+    assertEqual(letters.compare("RÔLE", "role"), Ordering.Equal)
+    assertEqual(letters.sortKey("RÔLE"), letters.sortKey("role"))
+    let accents = Collator(.invariant, strength: .Secondary)
+    assertEqual(accents.compare("ROLE", "role"), Ordering.Equal)
+    assertEqual(accents.compare("rôle", "role"), Ordering.Greater)
+    let all = Collator(.invariant, strength: .Identical)
+    assertEqual(Collator(.invariant).compare("a\u{0}", "a"), Ordering.Equal)
+    inOrder(all, ["a", "a\u{0}", "a\u{1}"])
+    assertEqual(all.compare("\u{E9}", "e\u{301}"), Ordering.Equal)
+}
+
+@test
+fn aCaseMayComeFirst() {
+    inOrder(Collator(.invariant, caseFirst: .Upper), ["A", "a", "B", "b"])
+    inOrder(Collator(.invariant, caseFirst: .Lower), ["a", "A", "b", "B"])
+    inOrder(Collator(.invariant, caseFirst: .Upper), ["A\u{338}", "a\u{338}"])
+}
+
+@test
+fn digitsMayBeNumbers() {
+    let natural = Collator(.invariant, numeric: true)
+    inOrder(natural, ["a", "a0", "a1", "a9", "a10", "a٢٠", "a100", "a100b", "a20000000000000000000", "b1"])
+    assertEqual(natural.compare("a007", "a7"), Ordering.Equal)
+    inOrder(Collator(Locale.of("ru")!, numeric: true), ["9", "10", "я", "z"])
+}
+
+@test
+fn punctuationMayBePassedOver() {
+    let loose = Collator(.invariant, ignorePunctuation: true)
+    assertEqual(loose.compare("co-op", "coop"), Ordering.Equal)
+    assertEqual(loose.compare("co -\u{301}op", "coop"), Ordering.Equal)
+    assertEqual(loose.compare("a+b", "ab"), Ordering.Less)
+    assert(Collator(Locale.of("th")!).ignorePunctuation)
+}
+
+@test
+fn aLocalesKeywordsSayWhatArgumentsDo() {
+    let asked = Collator(Locale.of("en-u-kn-ks-level2-kf-upper-ka-shifted")!)
+    assert(asked.numeric && asked.strength == .Secondary && asked.caseFirst == .Upper && asked.ignorePunctuation)
+    let off = Collator(Locale.of("da-u-kn-false-ks-level1-kf-false")!)
+    assert(!off.numeric && off.strength == .Primary && off.caseFirst == .Off)
+    let over = Collator(Locale.of("th-u-kn-ks-identic-kf-lower-ka-noignore")!, strength: .Tertiary)
+    assert(over.strength == .Tertiary && over.caseFirst == .Lower && !over.ignorePunctuation)
+    assert(Collator(Locale.of("da")!).caseFirst == .Upper)
+}
+
+@test
+fn marksFarFromTheirLetterAreStillItsOwn() {
+    // 'å' with a dot below, whose ring NFD puts after the dot.
+    inOrder(Collator(Locale.of("sv")!), ["za", "a\u{30A}", "a\u{323}\u{30A}", "ä"])
+    // A mark of the same class between blocks it: no 'å' there.
+    inOrder(Collator(Locale.of("sv")!), ["a\u{301}\u{30A}", "b", "å"])
+}
+
+@test
+fn whatIsInNoTableHasItsPlace() {
+    inOrder(Collator(.invariant), ["\u{FFFE}", "a", "\u{4E00}", "\u{9FFF}", "\u{FA0E}", "\u{3400}", "\u{20000}", "\u{E000}", "\u{10FFFD}", "\u{FFFD}", "\u{FFFF}"])
+}
+
+@test
+fn aCollatorSortsAndCompares() {
+    let czech = Collator(Locale.of("cs")!)
+    assertEqual(["chata", "dům", "čas", "cena"].sorted(by: czech.areInIncreasingOrder), ["cena", "čas", "dům", "chata"])
+    assertEqual(["chata", "dům"].sorted(using: czech.comparator), ["dům", "chata"])
+    assertEqual("chata".compare("dům", locale: Locale.of("cs")!), Ordering.Greater)
+    assertEqual("chata".compare("dům"), Ordering.Less)
+    let key = Collator(.invariant, strength: .Primary).sortKey("")
+    assertEqual("\(key:?)", "SortKey()")
+    assert("\(czech.sortKey("a"):?)".hasPrefix("SortKey("))
+    let places = [czech.sortKey("a"): 1]
+    assert(places[czech.sortKey("a")]! == 1 && czech.sortKey("a").bytes.count > 3)
+}

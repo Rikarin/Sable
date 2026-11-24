@@ -1,0 +1,12 @@
+module Sable.Globalization
+
+/// When a number's digits are put in groups, with the locale's separator.
+public enum NumberGrouping {
+    /// Where the locale groups them: Spanish and Polish leave a number of
+    /// four digits whole.
+    Automatic
+    /// Wherever there are more digits than a group's.
+    Always
+    /// Not at all.
+    Never
+}

@@ -1,0 +1,204 @@
+module Sable.Globalization
+
+import Sable.Time
+
+/// A language, and how the people who speak it somewhere write: which
+/// digits, what between a number's thousands, how a date goes, what order
+/// words are in. Named by a BCP 47 tag, "de-CH", "zh-Hant-TW",
+/// "ar-EG-u-nu-latn"; .NET's CultureInfo, ECMA-402's Intl.Locale.
+///
+/// A locale is always given: nothing in the library writes or reads by the
+/// system's locale unless the program passes `Locale.current`, and what is
+/// given no locale is written the same everywhere. `Locale.invariant` writes
+/// as that does.
+///
+/// The data is the CLDR's, the same on every system, for the locales of
+/// `Locale.available`; another takes its nearest ancestor's (`dataLocale`),
+/// and one of a language there is nothing for, the invariant locale's.
+///
+/// ```sable
+/// let swiss = Locale.of("de-ch")!
+/// assert(swiss.tag == "de-CH" && swiss.region == "CH")
+/// assert(1234567.891.format(.decimal, locale: swiss) == "1'234'567.891")
+/// assert(1234567.891.format(.decimal, locale: Locale.of("hi")!) == "12,34,567.891")
+/// ```
+public struct Locale: Hashable {
+    /// The language, "de", in lower case; "und" when it is not determined.
+    public let language: String
+    /// The script the tag names, "Hant"; none when it names none.
+    public let script: String?
+    /// The region the tag names, "CH" or "419"; none when it names none.
+    public let `region`: String?
+    /// The whole tag in canonical form.
+    public let tag: String
+    /// The 'u' extension's keywords, by their keys.
+    let keywords: [String: String]
+    let data: LocaleData
+
+    init(_ parsed: LocaleTag) {
+        self.language = parsed.language
+        self.script = parsed.script
+        self.region = parsed.territory
+        self.tag = parsed.canonical
+        self.keywords = parsed.keywords
+        self.data = localeData(language: parsed.language, script: parsed.script, territory: parsed.territory)
+    }
+
+    /// The locale the BCP 47 tag names; none for text that is no tag.
+    ///
+    /// ```sable
+    /// assert(Locale.of("EN-latn-us")!.tag == "en-Latn-US")
+    /// assert(Locale.of("iw")!.tag == "he")
+    /// assert(Locale.of("not a tag") == none)
+    /// ```
+    public static fn of(_ tag: String) -> Locale? {
+        return try? Locale.parse(tag)
+    }
+
+    /// The locale that is nobody's: what everything is written in when no
+    /// locale is said. Its tag is "und".
+    ///
+    /// ```sable
+    /// assert(1234.5.format(.decimal, locale: .invariant) == "1234.5")
+    /// ```
+    public static var invariant: Locale => Locale(LocaleTag(language: "und"))
+
+    /// The locale the program's user has chosen: on POSIX systems what the
+    /// environment's LC_ALL, LC_MESSAGES or LANG says, the first that is set;
+    /// then what the system is set to, on macOS and Windows. The invariant
+    /// locale when nothing says ("C" and "POSIX" are the invariant locale).
+    ///
+    /// ```sable
+    /// assert(!Locale.current.tag.isEmpty)
+    /// ```
+    public static var current: Locale {
+        get {
+            #if !os(windows)
+            for name in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+                if let value = Runtime.environment(name) {
+                    if !value.isEmpty {
+                        return Locale.fromPosix(value) ?? Locale.invariant
+                    }
+                }
+            }
+            #endif
+            return Locale.fromPosix(Runtime.systemText(5)) ?? Locale.invariant
+        }
+    }
+
+    /// The locale a POSIX name is, "cs_CZ.UTF-8", "sr_RS@latin"; "C" and
+    /// "POSIX" are the invariant locale. None for what is no name of one.
+    ///
+    /// ```sable
+    /// assert(Locale.fromPosix("pt_BR.UTF-8")!.tag == "pt-BR")
+    /// assert(Locale.fromPosix("sr_RS@latin")!.tag == "sr-Latn-RS")
+    /// assert(Locale.fromPosix("C.UTF-8")! == .invariant)
+    /// ```
+    public static fn fromPosix(_ name: String) -> Locale? {
+        var text = name
+        var modifier = ""
+        if let (before, after) = name.splitOnce('@') {
+            modifier = after
+            text = before
+        }
+        if let (before, _) = text.splitOnce('.') {
+            text = before
+        }
+        if text == "C" || text == "POSIX" {
+            return Locale.invariant
+        }
+        guard let found = Locale.of(text.replacing("_", with: "-")) else {
+            return none
+        }
+        let script = modifier == "latin" ? "Latn" : modifier == "cyrillic" ? "Cyrl" : ""
+        if script.isEmpty || found.script != none {
+            return found
+        }
+        return Locale.of("\(found.language)-\(script)" + (found.region == none ? "" : "-\(found.region!)"))
+    }
+
+    /// The locales there is data for, by their tags.
+    ///
+    /// ```sable
+    /// assert(Locale.available.contains("pl") && !Locale.available.contains("tlh"))
+    /// ```
+    public static var available: String[>..] => localeTags.splitWhitespace()
+
+    /// The tag of the locale whose data this one has: "es-419" for Argentina's
+    /// Spanish, "und" for a language there is none for.
+    ///
+    /// ```sable
+    /// assert(Locale.of("es-AR")!.dataLocale == "es-419")
+    /// assert(Locale.of("tlh")!.dataLocale == "und")
+    /// ```
+    public var dataLocale: String => data.tag
+
+    /// What the tag's 'u' extension says for the key, "latn" for "nu" in
+    /// "ar-u-nu-latn"; "" for a key with no value, none for one that is not
+    /// there.
+    ///
+    /// ```sable
+    /// assert(Locale.of("de-u-co-phonebk")!.keyword("co")! == "phonebk")
+    /// ```
+    public fn keyword(_ key: String) -> String? {
+        return keywords[key]
+    }
+
+    /// The numbering system numbers are written in: "latn", "arab".
+    ///
+    /// ```sable
+    /// assert(Locale.of("ar-EG")!.numberingSystem == "arab")
+    /// assert(Locale.of("ar-EG-u-nu-latn")!.numberingSystem == "latn")
+    /// ```
+    public var numberingSystem: String => data.numberingSystem(keywords["nu"])
+
+    /// The day weeks begin on.
+    ///
+    /// ```sable
+    /// assert(Locale.of("en")!.firstDayOfWeek == .Sunday)
+    /// assert(Locale.of("de")!.firstDayOfWeek == .Monday)
+    /// ```
+    public var firstDayOfWeek: Weekday => Weekday.of(data.items("week")[0].toInt() ?? 1) ?? Weekday.Monday
+
+    public operator == (a: Locale, b: Locale) -> Bool {
+        return a.tag == b.tag
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        tag.hash(into: &hasher)
+    }
+
+    /// The tag.
+    public fn toString() -> String {
+        return tag
+    }
+}
+
+extension Locale: Parsable {
+    /// The locale the BCP 47 (RFC 5646) tag names, in canonical form: case
+    /// as the standard recommends, variants, extensions and keywords in
+    /// order, the old codes it has replaced replaced. A subtag that cannot
+    /// be where it is is `.Invalid` there.
+    ///
+    /// ```sable
+    /// assert(try! Locale.parse("sl-rozaj-biske").tag == "sl-biske-rozaj")
+    /// assert(try! Locale.parse("en-u-nu-latn-ca-gregory").tag == "en-u-ca-gregory-nu-latn")
+    /// ```
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> Locale {
+        return Locale(try LocaleTag.parse(text.toString()))
+    }
+}
+
+extension Locale: Formattable {
+    /// The tag, padded as text is.
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(spec.kind == .Debug ? debugDescription() : tag)
+    }
+}
+
+extension Locale: Debug {
+    /// As source makes it: `Locale.of("de-CH")`.
+    public fn debugDescription() -> String {
+        return "Locale.of(\"\(tag)\")"
+    }
+}

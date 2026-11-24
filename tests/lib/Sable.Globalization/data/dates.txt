@@ -1,0 +1,2041 @@
+# Written by tools/locale-tests.mjs from Node's Intl (ICU 79.1, CLDR 49.0); do not edit.
+en	full	-	2026-11-17T09:05:03	Tuesday, November 17, 2026
+en	full	short	2026-11-17T09:05:03	Tuesday, November 17, 2026 at 9:05 AM
+en	long	-	2026-11-17T09:05:03	November 17, 2026
+en	long	short	2026-11-17T09:05:03	November 17, 2026 at 9:05 AM
+en	medium	-	2026-11-17T09:05:03	Nov 17, 2026
+en	medium	short	2026-11-17T09:05:03	Nov 17, 2026, 9:05 AM
+en	short	-	2026-11-17T09:05:03	11/17/26
+en	short	short	2026-11-17T09:05:03	11/17/26, 9:05 AM
+en	-	medium	2026-11-17T09:05:03	9:05:03 AM
+en	-	short	2026-11-17T09:05:03	9:05 AM
+en	full	-	2024-02-29T00:30:00	Thursday, February 29, 2024
+en	full	short	2024-02-29T00:30:00	Thursday, February 29, 2024 at 12:30 AM
+en	long	-	2024-02-29T00:30:00	February 29, 2024
+en	long	short	2024-02-29T00:30:00	February 29, 2024 at 12:30 AM
+en	medium	-	2024-02-29T00:30:00	Feb 29, 2024
+en	medium	short	2024-02-29T00:30:00	Feb 29, 2024, 12:30 AM
+en	short	-	2024-02-29T00:30:00	2/29/24
+en	short	short	2024-02-29T00:30:00	2/29/24, 12:30 AM
+en	-	medium	2024-02-29T00:30:00	12:30:00 AM
+en	-	short	2024-02-29T00:30:00	12:30 AM
+en	full	-	1999-08-01T13:45:59	Sunday, August 1, 1999
+en	full	short	1999-08-01T13:45:59	Sunday, August 1, 1999 at 1:45 PM
+en	long	-	1999-08-01T13:45:59	August 1, 1999
+en	long	short	1999-08-01T13:45:59	August 1, 1999 at 1:45 PM
+en	medium	-	1999-08-01T13:45:59	Aug 1, 1999
+en	medium	short	1999-08-01T13:45:59	Aug 1, 1999, 1:45 PM
+en	short	-	1999-08-01T13:45:59	8/1/99
+en	short	short	1999-08-01T13:45:59	8/1/99, 1:45 PM
+en	-	medium	1999-08-01T13:45:59	1:45:59 PM
+en	-	short	1999-08-01T13:45:59	1:45 PM
+en-001	full	-	2026-11-17T09:05:03	Tuesday, 17 November 2026
+en-001	full	short	2026-11-17T09:05:03	Tuesday, 17 November 2026 at 9:05 am
+en-001	long	-	2026-11-17T09:05:03	17 November 2026
+en-001	long	short	2026-11-17T09:05:03	17 November 2026 at 9:05 am
+en-001	medium	-	2026-11-17T09:05:03	17 Nov 2026
+en-001	medium	short	2026-11-17T09:05:03	17 Nov 2026, 9:05 am
+en-001	short	-	2026-11-17T09:05:03	17/11/2026
+en-001	short	short	2026-11-17T09:05:03	17/11/2026, 9:05 am
+en-001	-	medium	2026-11-17T09:05:03	9:05:03 am
+en-001	-	short	2026-11-17T09:05:03	9:05 am
+en-001	full	-	2024-02-29T00:30:00	Thursday, 29 February 2024
+en-001	full	short	2024-02-29T00:30:00	Thursday, 29 February 2024 at 12:30 am
+en-001	long	-	2024-02-29T00:30:00	29 February 2024
+en-001	long	short	2024-02-29T00:30:00	29 February 2024 at 12:30 am
+en-001	medium	-	2024-02-29T00:30:00	29 Feb 2024
+en-001	medium	short	2024-02-29T00:30:00	29 Feb 2024, 12:30 am
+en-001	short	-	2024-02-29T00:30:00	29/02/2024
+en-001	short	short	2024-02-29T00:30:00	29/02/2024, 12:30 am
+en-001	-	medium	2024-02-29T00:30:00	12:30:00 am
+en-001	-	short	2024-02-29T00:30:00	12:30 am
+en-001	full	-	1999-08-01T13:45:59	Sunday, 1 August 1999
+en-001	full	short	1999-08-01T13:45:59	Sunday, 1 August 1999 at 1:45 pm
+en-001	long	-	1999-08-01T13:45:59	1 August 1999
+en-001	long	short	1999-08-01T13:45:59	1 August 1999 at 1:45 pm
+en-001	medium	-	1999-08-01T13:45:59	1 Aug 1999
+en-001	medium	short	1999-08-01T13:45:59	1 Aug 1999, 1:45 pm
+en-001	short	-	1999-08-01T13:45:59	01/08/1999
+en-001	short	short	1999-08-01T13:45:59	01/08/1999, 1:45 pm
+en-001	-	medium	1999-08-01T13:45:59	1:45:59 pm
+en-001	-	short	1999-08-01T13:45:59	1:45 pm
+en-AU	full	-	2026-11-17T09:05:03	Tuesday, 17 November 2026
+en-AU	full	short	2026-11-17T09:05:03	Tuesday, 17 November 2026 at 9:05 am
+en-AU	long	-	2026-11-17T09:05:03	17 November 2026
+en-AU	long	short	2026-11-17T09:05:03	17 November 2026 at 9:05 am
+en-AU	medium	-	2026-11-17T09:05:03	17 Nov 2026
+en-AU	medium	short	2026-11-17T09:05:03	17 Nov 2026, 9:05 am
+en-AU	short	-	2026-11-17T09:05:03	17/11/26
+en-AU	short	short	2026-11-17T09:05:03	17/11/26, 9:05 am
+en-AU	-	medium	2026-11-17T09:05:03	9:05:03 am
+en-AU	-	short	2026-11-17T09:05:03	9:05 am
+en-AU	full	-	2024-02-29T00:30:00	Thursday, 29 February 2024
+en-AU	full	short	2024-02-29T00:30:00	Thursday, 29 February 2024 at 12:30 am
+en-AU	long	-	2024-02-29T00:30:00	29 February 2024
+en-AU	long	short	2024-02-29T00:30:00	29 February 2024 at 12:30 am
+en-AU	medium	-	2024-02-29T00:30:00	29 Feb 2024
+en-AU	medium	short	2024-02-29T00:30:00	29 Feb 2024, 12:30 am
+en-AU	short	-	2024-02-29T00:30:00	29/2/24
+en-AU	short	short	2024-02-29T00:30:00	29/2/24, 12:30 am
+en-AU	-	medium	2024-02-29T00:30:00	12:30:00 am
+en-AU	-	short	2024-02-29T00:30:00	12:30 am
+en-AU	full	-	1999-08-01T13:45:59	Sunday, 1 August 1999
+en-AU	full	short	1999-08-01T13:45:59	Sunday, 1 August 1999 at 1:45 pm
+en-AU	long	-	1999-08-01T13:45:59	1 August 1999
+en-AU	long	short	1999-08-01T13:45:59	1 August 1999 at 1:45 pm
+en-AU	medium	-	1999-08-01T13:45:59	1 Aug 1999
+en-AU	medium	short	1999-08-01T13:45:59	1 Aug 1999, 1:45 pm
+en-AU	short	-	1999-08-01T13:45:59	1/8/99
+en-AU	short	short	1999-08-01T13:45:59	1/8/99, 1:45 pm
+en-AU	-	medium	1999-08-01T13:45:59	1:45:59 pm
+en-AU	-	short	1999-08-01T13:45:59	1:45 pm
+en-CA	full	-	2026-11-17T09:05:03	Tuesday, November 17, 2026
+en-CA	full	short	2026-11-17T09:05:03	Tuesday, November 17, 2026 at 9:05 a.m.
+en-CA	long	-	2026-11-17T09:05:03	November 17, 2026
+en-CA	long	short	2026-11-17T09:05:03	November 17, 2026 at 9:05 a.m.
+en-CA	medium	-	2026-11-17T09:05:03	Nov 17, 2026
+en-CA	medium	short	2026-11-17T09:05:03	Nov 17, 2026, 9:05 a.m.
+en-CA	short	-	2026-11-17T09:05:03	2026-11-17
+en-CA	short	short	2026-11-17T09:05:03	2026-11-17, 9:05 a.m.
+en-CA	-	medium	2026-11-17T09:05:03	9:05:03 a.m.
+en-CA	-	short	2026-11-17T09:05:03	9:05 a.m.
+en-CA	full	-	2024-02-29T00:30:00	Thursday, February 29, 2024
+en-CA	full	short	2024-02-29T00:30:00	Thursday, February 29, 2024 at 12:30 a.m.
+en-CA	long	-	2024-02-29T00:30:00	February 29, 2024
+en-CA	long	short	2024-02-29T00:30:00	February 29, 2024 at 12:30 a.m.
+en-CA	medium	-	2024-02-29T00:30:00	Feb 29, 2024
+en-CA	medium	short	2024-02-29T00:30:00	Feb 29, 2024, 12:30 a.m.
+en-CA	short	-	2024-02-29T00:30:00	2024-02-29
+en-CA	short	short	2024-02-29T00:30:00	2024-02-29, 12:30 a.m.
+en-CA	-	medium	2024-02-29T00:30:00	12:30:00 a.m.
+en-CA	-	short	2024-02-29T00:30:00	12:30 a.m.
+en-CA	full	-	1999-08-01T13:45:59	Sunday, August 1, 1999
+en-CA	full	short	1999-08-01T13:45:59	Sunday, August 1, 1999 at 1:45 p.m.
+en-CA	long	-	1999-08-01T13:45:59	August 1, 1999
+en-CA	long	short	1999-08-01T13:45:59	August 1, 1999 at 1:45 p.m.
+en-CA	medium	-	1999-08-01T13:45:59	Aug 1, 1999
+en-CA	medium	short	1999-08-01T13:45:59	Aug 1, 1999, 1:45 p.m.
+en-CA	short	-	1999-08-01T13:45:59	1999-08-01
+en-CA	short	short	1999-08-01T13:45:59	1999-08-01, 1:45 p.m.
+en-CA	-	medium	1999-08-01T13:45:59	1:45:59 p.m.
+en-CA	-	short	1999-08-01T13:45:59	1:45 p.m.
+en-GB	full	-	2026-11-17T09:05:03	Tuesday, 17 November 2026
+en-GB	full	short	2026-11-17T09:05:03	Tuesday, 17 November 2026 at 09:05
+en-GB	long	-	2026-11-17T09:05:03	17 November 2026
+en-GB	long	short	2026-11-17T09:05:03	17 November 2026 at 09:05
+en-GB	medium	-	2026-11-17T09:05:03	17 Nov 2026
+en-GB	medium	short	2026-11-17T09:05:03	17 Nov 2026, 09:05
+en-GB	short	-	2026-11-17T09:05:03	17/11/2026
+en-GB	short	short	2026-11-17T09:05:03	17/11/2026, 09:05
+en-GB	-	medium	2026-11-17T09:05:03	09:05:03
+en-GB	-	short	2026-11-17T09:05:03	09:05
+en-GB	full	-	2024-02-29T00:30:00	Thursday, 29 February 2024
+en-GB	full	short	2024-02-29T00:30:00	Thursday, 29 February 2024 at 00:30
+en-GB	long	-	2024-02-29T00:30:00	29 February 2024
+en-GB	long	short	2024-02-29T00:30:00	29 February 2024 at 00:30
+en-GB	medium	-	2024-02-29T00:30:00	29 Feb 2024
+en-GB	medium	short	2024-02-29T00:30:00	29 Feb 2024, 00:30
+en-GB	short	-	2024-02-29T00:30:00	29/02/2024
+en-GB	short	short	2024-02-29T00:30:00	29/02/2024, 00:30
+en-GB	-	medium	2024-02-29T00:30:00	00:30:00
+en-GB	-	short	2024-02-29T00:30:00	00:30
+en-GB	full	-	1999-08-01T13:45:59	Sunday, 1 August 1999
+en-GB	full	short	1999-08-01T13:45:59	Sunday, 1 August 1999 at 13:45
+en-GB	long	-	1999-08-01T13:45:59	1 August 1999
+en-GB	long	short	1999-08-01T13:45:59	1 August 1999 at 13:45
+en-GB	medium	-	1999-08-01T13:45:59	1 Aug 1999
+en-GB	medium	short	1999-08-01T13:45:59	1 Aug 1999, 13:45
+en-GB	short	-	1999-08-01T13:45:59	01/08/1999
+en-GB	short	short	1999-08-01T13:45:59	01/08/1999, 13:45
+en-GB	-	medium	1999-08-01T13:45:59	13:45:59
+en-GB	-	short	1999-08-01T13:45:59	13:45
+en-IE	full	-	2026-11-17T09:05:03	Tuesday 17 November 2026
+en-IE	full	short	2026-11-17T09:05:03	Tuesday 17 November 2026 at 09:05
+en-IE	long	-	2026-11-17T09:05:03	17 November 2026
+en-IE	long	short	2026-11-17T09:05:03	17 November 2026 at 09:05
+en-IE	medium	-	2026-11-17T09:05:03	17 Nov 2026
+en-IE	medium	short	2026-11-17T09:05:03	17 Nov 2026, 09:05
+en-IE	short	-	2026-11-17T09:05:03	17/11/2026
+en-IE	short	short	2026-11-17T09:05:03	17/11/2026, 09:05
+en-IE	-	medium	2026-11-17T09:05:03	09:05:03
+en-IE	-	short	2026-11-17T09:05:03	09:05
+en-IE	full	-	2024-02-29T00:30:00	Thursday 29 February 2024
+en-IE	full	short	2024-02-29T00:30:00	Thursday 29 February 2024 at 00:30
+en-IE	long	-	2024-02-29T00:30:00	29 February 2024
+en-IE	long	short	2024-02-29T00:30:00	29 February 2024 at 00:30
+en-IE	medium	-	2024-02-29T00:30:00	29 Feb 2024
+en-IE	medium	short	2024-02-29T00:30:00	29 Feb 2024, 00:30
+en-IE	short	-	2024-02-29T00:30:00	29/02/2024
+en-IE	short	short	2024-02-29T00:30:00	29/02/2024, 00:30
+en-IE	-	medium	2024-02-29T00:30:00	00:30:00
+en-IE	-	short	2024-02-29T00:30:00	00:30
+en-IE	full	-	1999-08-01T13:45:59	Sunday 1 August 1999
+en-IE	full	short	1999-08-01T13:45:59	Sunday 1 August 1999 at 13:45
+en-IE	long	-	1999-08-01T13:45:59	1 August 1999
+en-IE	long	short	1999-08-01T13:45:59	1 August 1999 at 13:45
+en-IE	medium	-	1999-08-01T13:45:59	1 Aug 1999
+en-IE	medium	short	1999-08-01T13:45:59	1 Aug 1999, 13:45
+en-IE	short	-	1999-08-01T13:45:59	01/08/1999
+en-IE	short	short	1999-08-01T13:45:59	01/08/1999, 13:45
+en-IE	-	medium	1999-08-01T13:45:59	13:45:59
+en-IE	-	short	1999-08-01T13:45:59	13:45
+en-IN	full	-	2026-11-17T09:05:03	Tuesday, 17 November 2026
+en-IN	full	short	2026-11-17T09:05:03	Tuesday, 17 November 2026 at 9:05 AM
+en-IN	long	-	2026-11-17T09:05:03	17 November 2026
+en-IN	long	short	2026-11-17T09:05:03	17 November 2026 at 9:05 AM
+en-IN	medium	-	2026-11-17T09:05:03	17 Nov 2026
+en-IN	medium	short	2026-11-17T09:05:03	17 Nov 2026, 9:05 AM
+en-IN	short	-	2026-11-17T09:05:03	17/11/26
+en-IN	short	short	2026-11-17T09:05:03	17/11/26, 9:05 AM
+en-IN	-	medium	2026-11-17T09:05:03	9:05:03 AM
+en-IN	-	short	2026-11-17T09:05:03	9:05 AM
+en-IN	full	-	2024-02-29T00:30:00	Thursday, 29 February 2024
+en-IN	full	short	2024-02-29T00:30:00	Thursday, 29 February 2024 at 12:30 AM
+en-IN	long	-	2024-02-29T00:30:00	29 February 2024
+en-IN	long	short	2024-02-29T00:30:00	29 February 2024 at 12:30 AM
+en-IN	medium	-	2024-02-29T00:30:00	29 Feb 2024
+en-IN	medium	short	2024-02-29T00:30:00	29 Feb 2024, 12:30 AM
+en-IN	short	-	2024-02-29T00:30:00	29/02/24
+en-IN	short	short	2024-02-29T00:30:00	29/02/24, 12:30 AM
+en-IN	-	medium	2024-02-29T00:30:00	12:30:00 AM
+en-IN	-	short	2024-02-29T00:30:00	12:30 AM
+en-IN	full	-	1999-08-01T13:45:59	Sunday, 1 August 1999
+en-IN	full	short	1999-08-01T13:45:59	Sunday, 1 August 1999 at 1:45 PM
+en-IN	long	-	1999-08-01T13:45:59	1 August 1999
+en-IN	long	short	1999-08-01T13:45:59	1 August 1999 at 1:45 PM
+en-IN	medium	-	1999-08-01T13:45:59	1 Aug 1999
+en-IN	medium	short	1999-08-01T13:45:59	1 Aug 1999, 1:45 PM
+en-IN	short	-	1999-08-01T13:45:59	01/08/99
+en-IN	short	short	1999-08-01T13:45:59	01/08/99, 1:45 PM
+en-IN	-	medium	1999-08-01T13:45:59	1:45:59 PM
+en-IN	-	short	1999-08-01T13:45:59	1:45 PM
+en-NZ	full	-	2026-11-17T09:05:03	Tuesday, 17 November 2026
+en-NZ	full	short	2026-11-17T09:05:03	Tuesday, 17 November 2026 at 9:05 am
+en-NZ	long	-	2026-11-17T09:05:03	17 November 2026
+en-NZ	long	short	2026-11-17T09:05:03	17 November 2026 at 9:05 am
+en-NZ	medium	-	2026-11-17T09:05:03	17 Nov 2026
+en-NZ	medium	short	2026-11-17T09:05:03	17 Nov 2026, 9:05 am
+en-NZ	short	-	2026-11-17T09:05:03	17/11/2026
+en-NZ	short	short	2026-11-17T09:05:03	17/11/2026, 9:05 am
+en-NZ	-	medium	2026-11-17T09:05:03	9:05:03 am
+en-NZ	-	short	2026-11-17T09:05:03	9:05 am
+en-NZ	full	-	2024-02-29T00:30:00	Thursday, 29 February 2024
+en-NZ	full	short	2024-02-29T00:30:00	Thursday, 29 February 2024 at 12:30 am
+en-NZ	long	-	2024-02-29T00:30:00	29 February 2024
+en-NZ	long	short	2024-02-29T00:30:00	29 February 2024 at 12:30 am
+en-NZ	medium	-	2024-02-29T00:30:00	29 Feb 2024
+en-NZ	medium	short	2024-02-29T00:30:00	29 Feb 2024, 12:30 am
+en-NZ	short	-	2024-02-29T00:30:00	29/02/2024
+en-NZ	short	short	2024-02-29T00:30:00	29/02/2024, 12:30 am
+en-NZ	-	medium	2024-02-29T00:30:00	12:30:00 am
+en-NZ	-	short	2024-02-29T00:30:00	12:30 am
+en-NZ	full	-	1999-08-01T13:45:59	Sunday, 1 August 1999
+en-NZ	full	short	1999-08-01T13:45:59	Sunday, 1 August 1999 at 1:45 pm
+en-NZ	long	-	1999-08-01T13:45:59	1 August 1999
+en-NZ	long	short	1999-08-01T13:45:59	1 August 1999 at 1:45 pm
+en-NZ	medium	-	1999-08-01T13:45:59	1 Aug 1999
+en-NZ	medium	short	1999-08-01T13:45:59	1 Aug 1999, 1:45 pm
+en-NZ	short	-	1999-08-01T13:45:59	01/08/1999
+en-NZ	short	short	1999-08-01T13:45:59	01/08/1999, 1:45 pm
+en-NZ	-	medium	1999-08-01T13:45:59	1:45:59 pm
+en-NZ	-	short	1999-08-01T13:45:59	1:45 pm
+en-ZA	full	-	2026-11-17T09:05:03	Tuesday, 17 November 2026
+en-ZA	full	short	2026-11-17T09:05:03	Tuesday, 17 November 2026 at 09:05
+en-ZA	long	-	2026-11-17T09:05:03	17 November 2026
+en-ZA	long	short	2026-11-17T09:05:03	17 November 2026 at 09:05
+en-ZA	medium	-	2026-11-17T09:05:03	17 Nov 2026
+en-ZA	medium	short	2026-11-17T09:05:03	17 Nov 2026, 09:05
+en-ZA	short	-	2026-11-17T09:05:03	2026/11/17
+en-ZA	short	short	2026-11-17T09:05:03	2026/11/17, 09:05
+en-ZA	-	medium	2026-11-17T09:05:03	09:05:03
+en-ZA	-	short	2026-11-17T09:05:03	09:05
+en-ZA	full	-	2024-02-29T00:30:00	Thursday, 29 February 2024
+en-ZA	full	short	2024-02-29T00:30:00	Thursday, 29 February 2024 at 00:30
+en-ZA	long	-	2024-02-29T00:30:00	29 February 2024
+en-ZA	long	short	2024-02-29T00:30:00	29 February 2024 at 00:30
+en-ZA	medium	-	2024-02-29T00:30:00	29 Feb 2024
+en-ZA	medium	short	2024-02-29T00:30:00	29 Feb 2024, 00:30
+en-ZA	short	-	2024-02-29T00:30:00	2024/02/29
+en-ZA	short	short	2024-02-29T00:30:00	2024/02/29, 00:30
+en-ZA	-	medium	2024-02-29T00:30:00	00:30:00
+en-ZA	-	short	2024-02-29T00:30:00	00:30
+en-ZA	full	-	1999-08-01T13:45:59	Sunday, 01 August 1999
+en-ZA	full	short	1999-08-01T13:45:59	Sunday, 01 August 1999 at 13:45
+en-ZA	long	-	1999-08-01T13:45:59	01 August 1999
+en-ZA	long	short	1999-08-01T13:45:59	01 August 1999 at 13:45
+en-ZA	medium	-	1999-08-01T13:45:59	01 Aug 1999
+en-ZA	medium	short	1999-08-01T13:45:59	01 Aug 1999, 13:45
+en-ZA	short	-	1999-08-01T13:45:59	1999/08/01
+en-ZA	short	short	1999-08-01T13:45:59	1999/08/01, 13:45
+en-ZA	-	medium	1999-08-01T13:45:59	13:45:59
+en-ZA	-	short	1999-08-01T13:45:59	13:45
+de	full	-	2026-11-17T09:05:03	Dienstag, 17. November 2026
+de	full	short	2026-11-17T09:05:03	Dienstag, 17. November 2026 um 09:05
+de	long	-	2026-11-17T09:05:03	17. November 2026
+de	long	short	2026-11-17T09:05:03	17. November 2026 um 09:05
+de	medium	-	2026-11-17T09:05:03	17.11.2026
+de	medium	short	2026-11-17T09:05:03	17.11.2026, 09:05
+de	short	-	2026-11-17T09:05:03	17.11.26
+de	short	short	2026-11-17T09:05:03	17.11.26, 09:05
+de	-	medium	2026-11-17T09:05:03	09:05:03
+de	-	short	2026-11-17T09:05:03	09:05
+de	full	-	2024-02-29T00:30:00	Donnerstag, 29. Februar 2024
+de	full	short	2024-02-29T00:30:00	Donnerstag, 29. Februar 2024 um 00:30
+de	long	-	2024-02-29T00:30:00	29. Februar 2024
+de	long	short	2024-02-29T00:30:00	29. Februar 2024 um 00:30
+de	medium	-	2024-02-29T00:30:00	29.02.2024
+de	medium	short	2024-02-29T00:30:00	29.02.2024, 00:30
+de	short	-	2024-02-29T00:30:00	29.02.24
+de	short	short	2024-02-29T00:30:00	29.02.24, 00:30
+de	-	medium	2024-02-29T00:30:00	00:30:00
+de	-	short	2024-02-29T00:30:00	00:30
+de	full	-	1999-08-01T13:45:59	Sonntag, 1. August 1999
+de	full	short	1999-08-01T13:45:59	Sonntag, 1. August 1999 um 13:45
+de	long	-	1999-08-01T13:45:59	1. August 1999
+de	long	short	1999-08-01T13:45:59	1. August 1999 um 13:45
+de	medium	-	1999-08-01T13:45:59	01.08.1999
+de	medium	short	1999-08-01T13:45:59	01.08.1999, 13:45
+de	short	-	1999-08-01T13:45:59	01.08.99
+de	short	short	1999-08-01T13:45:59	01.08.99, 13:45
+de	-	medium	1999-08-01T13:45:59	13:45:59
+de	-	short	1999-08-01T13:45:59	13:45
+de-AT	full	-	2026-11-17T09:05:03	Dienstag, 17. November 2026
+de-AT	full	short	2026-11-17T09:05:03	Dienstag, 17. November 2026 um 09:05
+de-AT	long	-	2026-11-17T09:05:03	17. November 2026
+de-AT	long	short	2026-11-17T09:05:03	17. November 2026 um 09:05
+de-AT	medium	-	2026-11-17T09:05:03	17.11.2026
+de-AT	medium	short	2026-11-17T09:05:03	17.11.2026, 09:05
+de-AT	short	-	2026-11-17T09:05:03	17.11.26
+de-AT	short	short	2026-11-17T09:05:03	17.11.26, 09:05
+de-AT	-	medium	2026-11-17T09:05:03	09:05:03
+de-AT	-	short	2026-11-17T09:05:03	09:05
+de-AT	full	-	2024-02-29T00:30:00	Donnerstag, 29. Februar 2024
+de-AT	full	short	2024-02-29T00:30:00	Donnerstag, 29. Februar 2024 um 00:30
+de-AT	long	-	2024-02-29T00:30:00	29. Februar 2024
+de-AT	long	short	2024-02-29T00:30:00	29. Februar 2024 um 00:30
+de-AT	medium	-	2024-02-29T00:30:00	29.02.2024
+de-AT	medium	short	2024-02-29T00:30:00	29.02.2024, 00:30
+de-AT	short	-	2024-02-29T00:30:00	29.02.24
+de-AT	short	short	2024-02-29T00:30:00	29.02.24, 00:30
+de-AT	-	medium	2024-02-29T00:30:00	00:30:00
+de-AT	-	short	2024-02-29T00:30:00	00:30
+de-AT	full	-	1999-08-01T13:45:59	Sonntag, 1. August 1999
+de-AT	full	short	1999-08-01T13:45:59	Sonntag, 1. August 1999 um 13:45
+de-AT	long	-	1999-08-01T13:45:59	1. August 1999
+de-AT	long	short	1999-08-01T13:45:59	1. August 1999 um 13:45
+de-AT	medium	-	1999-08-01T13:45:59	01.08.1999
+de-AT	medium	short	1999-08-01T13:45:59	01.08.1999, 13:45
+de-AT	short	-	1999-08-01T13:45:59	01.08.99
+de-AT	short	short	1999-08-01T13:45:59	01.08.99, 13:45
+de-AT	-	medium	1999-08-01T13:45:59	13:45:59
+de-AT	-	short	1999-08-01T13:45:59	13:45
+de-CH	full	-	2026-11-17T09:05:03	Dienstag, 17. November 2026
+de-CH	full	short	2026-11-17T09:05:03	Dienstag, 17. November 2026 um 09:05
+de-CH	long	-	2026-11-17T09:05:03	17. November 2026
+de-CH	long	short	2026-11-17T09:05:03	17. November 2026 um 09:05
+de-CH	medium	-	2026-11-17T09:05:03	17.11.2026
+de-CH	medium	short	2026-11-17T09:05:03	17.11.2026, 09:05
+de-CH	short	-	2026-11-17T09:05:03	17.11.26
+de-CH	short	short	2026-11-17T09:05:03	17.11.26, 09:05
+de-CH	-	medium	2026-11-17T09:05:03	09:05:03
+de-CH	-	short	2026-11-17T09:05:03	09:05
+de-CH	full	-	2024-02-29T00:30:00	Donnerstag, 29. Februar 2024
+de-CH	full	short	2024-02-29T00:30:00	Donnerstag, 29. Februar 2024 um 00:30
+de-CH	long	-	2024-02-29T00:30:00	29. Februar 2024
+de-CH	long	short	2024-02-29T00:30:00	29. Februar 2024 um 00:30
+de-CH	medium	-	2024-02-29T00:30:00	29.02.2024
+de-CH	medium	short	2024-02-29T00:30:00	29.02.2024, 00:30
+de-CH	short	-	2024-02-29T00:30:00	29.02.24
+de-CH	short	short	2024-02-29T00:30:00	29.02.24, 00:30
+de-CH	-	medium	2024-02-29T00:30:00	00:30:00
+de-CH	-	short	2024-02-29T00:30:00	00:30
+de-CH	full	-	1999-08-01T13:45:59	Sonntag, 1. August 1999
+de-CH	full	short	1999-08-01T13:45:59	Sonntag, 1. August 1999 um 13:45
+de-CH	long	-	1999-08-01T13:45:59	1. August 1999
+de-CH	long	short	1999-08-01T13:45:59	1. August 1999 um 13:45
+de-CH	medium	-	1999-08-01T13:45:59	01.08.1999
+de-CH	medium	short	1999-08-01T13:45:59	01.08.1999, 13:45
+de-CH	short	-	1999-08-01T13:45:59	01.08.99
+de-CH	short	short	1999-08-01T13:45:59	01.08.99, 13:45
+de-CH	-	medium	1999-08-01T13:45:59	13:45:59
+de-CH	-	short	1999-08-01T13:45:59	13:45
+fr	full	-	2026-11-17T09:05:03	mardi 17 novembre 2026
+fr	full	short	2026-11-17T09:05:03	mardi 17 novembre 2026 à 09:05
+fr	long	-	2026-11-17T09:05:03	17 novembre 2026
+fr	long	short	2026-11-17T09:05:03	17 novembre 2026 à 09:05
+fr	medium	-	2026-11-17T09:05:03	17 nov. 2026
+fr	medium	short	2026-11-17T09:05:03	17 nov. 2026, 09:05
+fr	short	-	2026-11-17T09:05:03	17/11/2026
+fr	short	short	2026-11-17T09:05:03	17/11/2026 09:05
+fr	-	medium	2026-11-17T09:05:03	09:05:03
+fr	-	short	2026-11-17T09:05:03	09:05
+fr	full	-	2024-02-29T00:30:00	jeudi 29 février 2024
+fr	full	short	2024-02-29T00:30:00	jeudi 29 février 2024 à 00:30
+fr	long	-	2024-02-29T00:30:00	29 février 2024
+fr	long	short	2024-02-29T00:30:00	29 février 2024 à 00:30
+fr	medium	-	2024-02-29T00:30:00	29 févr. 2024
+fr	medium	short	2024-02-29T00:30:00	29 févr. 2024, 00:30
+fr	short	-	2024-02-29T00:30:00	29/02/2024
+fr	short	short	2024-02-29T00:30:00	29/02/2024 00:30
+fr	-	medium	2024-02-29T00:30:00	00:30:00
+fr	-	short	2024-02-29T00:30:00	00:30
+fr	full	-	1999-08-01T13:45:59	dimanche 1 août 1999
+fr	full	short	1999-08-01T13:45:59	dimanche 1 août 1999 à 13:45
+fr	long	-	1999-08-01T13:45:59	1 août 1999
+fr	long	short	1999-08-01T13:45:59	1 août 1999 à 13:45
+fr	medium	-	1999-08-01T13:45:59	1 août 1999
+fr	medium	short	1999-08-01T13:45:59	1 août 1999, 13:45
+fr	short	-	1999-08-01T13:45:59	01/08/1999
+fr	short	short	1999-08-01T13:45:59	01/08/1999 13:45
+fr	-	medium	1999-08-01T13:45:59	13:45:59
+fr	-	short	1999-08-01T13:45:59	13:45
+fr-CA	full	-	2026-11-17T09:05:03	mardi 17 novembre 2026
+fr-CA	full	short	2026-11-17T09:05:03	mardi 17 novembre 2026 à 09 h 05
+fr-CA	long	-	2026-11-17T09:05:03	17 novembre 2026
+fr-CA	long	short	2026-11-17T09:05:03	17 novembre 2026 à 09 h 05
+fr-CA	medium	-	2026-11-17T09:05:03	17 nov. 2026
+fr-CA	medium	short	2026-11-17T09:05:03	17 nov. 2026, 09 h 05
+fr-CA	short	-	2026-11-17T09:05:03	2026-11-17
+fr-CA	short	short	2026-11-17T09:05:03	2026-11-17 09 h 05
+fr-CA	-	medium	2026-11-17T09:05:03	09 h 05 min 03 s
+fr-CA	-	short	2026-11-17T09:05:03	09 h 05
+fr-CA	full	-	2024-02-29T00:30:00	jeudi 29 février 2024
+fr-CA	full	short	2024-02-29T00:30:00	jeudi 29 février 2024 à 00 h 30
+fr-CA	long	-	2024-02-29T00:30:00	29 février 2024
+fr-CA	long	short	2024-02-29T00:30:00	29 février 2024 à 00 h 30
+fr-CA	medium	-	2024-02-29T00:30:00	29 févr. 2024
+fr-CA	medium	short	2024-02-29T00:30:00	29 févr. 2024, 00 h 30
+fr-CA	short	-	2024-02-29T00:30:00	2024-02-29
+fr-CA	short	short	2024-02-29T00:30:00	2024-02-29 00 h 30
+fr-CA	-	medium	2024-02-29T00:30:00	00 h 30 min 00 s
+fr-CA	-	short	2024-02-29T00:30:00	00 h 30
+fr-CA	full	-	1999-08-01T13:45:59	dimanche 1 août 1999
+fr-CA	full	short	1999-08-01T13:45:59	dimanche 1 août 1999 à 13 h 45
+fr-CA	long	-	1999-08-01T13:45:59	1 août 1999
+fr-CA	long	short	1999-08-01T13:45:59	1 août 1999 à 13 h 45
+fr-CA	medium	-	1999-08-01T13:45:59	1 août 1999
+fr-CA	medium	short	1999-08-01T13:45:59	1 août 1999, 13 h 45
+fr-CA	short	-	1999-08-01T13:45:59	1999-08-01
+fr-CA	short	short	1999-08-01T13:45:59	1999-08-01 13 h 45
+fr-CA	-	medium	1999-08-01T13:45:59	13 h 45 min 59 s
+fr-CA	-	short	1999-08-01T13:45:59	13 h 45
+fr-CH	full	-	2026-11-17T09:05:03	mardi, 17 novembre 2026
+fr-CH	full	short	2026-11-17T09:05:03	mardi, 17 novembre 2026 à 09:05
+fr-CH	long	-	2026-11-17T09:05:03	17 novembre 2026
+fr-CH	long	short	2026-11-17T09:05:03	17 novembre 2026 à 09:05
+fr-CH	medium	-	2026-11-17T09:05:03	17 nov. 2026
+fr-CH	medium	short	2026-11-17T09:05:03	17 nov. 2026, 09:05
+fr-CH	short	-	2026-11-17T09:05:03	17.11.26
+fr-CH	short	short	2026-11-17T09:05:03	17.11.26 09:05
+fr-CH	-	medium	2026-11-17T09:05:03	09:05:03
+fr-CH	-	short	2026-11-17T09:05:03	09:05
+fr-CH	full	-	2024-02-29T00:30:00	jeudi, 29 février 2024
+fr-CH	full	short	2024-02-29T00:30:00	jeudi, 29 février 2024 à 00:30
+fr-CH	long	-	2024-02-29T00:30:00	29 février 2024
+fr-CH	long	short	2024-02-29T00:30:00	29 février 2024 à 00:30
+fr-CH	medium	-	2024-02-29T00:30:00	29 févr. 2024
+fr-CH	medium	short	2024-02-29T00:30:00	29 févr. 2024, 00:30
+fr-CH	short	-	2024-02-29T00:30:00	29.02.24
+fr-CH	short	short	2024-02-29T00:30:00	29.02.24 00:30
+fr-CH	-	medium	2024-02-29T00:30:00	00:30:00
+fr-CH	-	short	2024-02-29T00:30:00	00:30
+fr-CH	full	-	1999-08-01T13:45:59	dimanche, 1 août 1999
+fr-CH	full	short	1999-08-01T13:45:59	dimanche, 1 août 1999 à 13:45
+fr-CH	long	-	1999-08-01T13:45:59	1 août 1999
+fr-CH	long	short	1999-08-01T13:45:59	1 août 1999 à 13:45
+fr-CH	medium	-	1999-08-01T13:45:59	1 août 1999
+fr-CH	medium	short	1999-08-01T13:45:59	1 août 1999, 13:45
+fr-CH	short	-	1999-08-01T13:45:59	01.08.99
+fr-CH	short	short	1999-08-01T13:45:59	01.08.99 13:45
+fr-CH	-	medium	1999-08-01T13:45:59	13:45:59
+fr-CH	-	short	1999-08-01T13:45:59	13:45
+es	full	-	2026-11-17T09:05:03	martes, 17 de noviembre de 2026
+es	full	short	2026-11-17T09:05:03	martes, 17 de noviembre de 2026, 9:05
+es	long	-	2026-11-17T09:05:03	17 de noviembre de 2026
+es	long	short	2026-11-17T09:05:03	17 de noviembre de 2026 a las 9:05
+es	medium	-	2026-11-17T09:05:03	17 nov 2026
+es	medium	short	2026-11-17T09:05:03	17 nov 2026, 9:05
+es	short	-	2026-11-17T09:05:03	17/11/26
+es	short	short	2026-11-17T09:05:03	17/11/26, 9:05
+es	-	medium	2026-11-17T09:05:03	9:05:03
+es	-	short	2026-11-17T09:05:03	9:05
+es	full	-	2024-02-29T00:30:00	jueves, 29 de febrero de 2024
+es	full	short	2024-02-29T00:30:00	jueves, 29 de febrero de 2024, 0:30
+es	long	-	2024-02-29T00:30:00	29 de febrero de 2024
+es	long	short	2024-02-29T00:30:00	29 de febrero de 2024 a las 0:30
+es	medium	-	2024-02-29T00:30:00	29 feb 2024
+es	medium	short	2024-02-29T00:30:00	29 feb 2024, 0:30
+es	short	-	2024-02-29T00:30:00	29/2/24
+es	short	short	2024-02-29T00:30:00	29/2/24, 0:30
+es	-	medium	2024-02-29T00:30:00	0:30:00
+es	-	short	2024-02-29T00:30:00	0:30
+es	full	-	1999-08-01T13:45:59	domingo, 1 de agosto de 1999
+es	full	short	1999-08-01T13:45:59	domingo, 1 de agosto de 1999, 13:45
+es	long	-	1999-08-01T13:45:59	1 de agosto de 1999
+es	long	short	1999-08-01T13:45:59	1 de agosto de 1999 a las 13:45
+es	medium	-	1999-08-01T13:45:59	1 ago 1999
+es	medium	short	1999-08-01T13:45:59	1 ago 1999, 13:45
+es	short	-	1999-08-01T13:45:59	1/8/99
+es	short	short	1999-08-01T13:45:59	1/8/99, 13:45
+es	-	medium	1999-08-01T13:45:59	13:45:59
+es	-	short	1999-08-01T13:45:59	13:45
+es-419	full	-	2026-11-17T09:05:03	martes, 17 de noviembre de 2026
+es-419	full	short	2026-11-17T09:05:03	martes, 17 de noviembre de 2026, 9:05 a.m.
+es-419	long	-	2026-11-17T09:05:03	17 de noviembre de 2026
+es-419	long	short	2026-11-17T09:05:03	17 de noviembre de 2026 a las 9:05 a.m.
+es-419	medium	-	2026-11-17T09:05:03	17 nov 2026
+es-419	medium	short	2026-11-17T09:05:03	17 nov 2026, 9:05 a.m.
+es-419	short	-	2026-11-17T09:05:03	17/11/26
+es-419	short	short	2026-11-17T09:05:03	17/11/26, 9:05 a.m.
+es-419	-	medium	2026-11-17T09:05:03	9:05:03 a.m.
+es-419	-	short	2026-11-17T09:05:03	9:05 a.m.
+es-419	full	-	2024-02-29T00:30:00	jueves, 29 de febrero de 2024
+es-419	full	short	2024-02-29T00:30:00	jueves, 29 de febrero de 2024, 12:30 a.m.
+es-419	long	-	2024-02-29T00:30:00	29 de febrero de 2024
+es-419	long	short	2024-02-29T00:30:00	29 de febrero de 2024 a las 12:30 a.m.
+es-419	medium	-	2024-02-29T00:30:00	29 feb 2024
+es-419	medium	short	2024-02-29T00:30:00	29 feb 2024, 12:30 a.m.
+es-419	short	-	2024-02-29T00:30:00	29/2/24
+es-419	short	short	2024-02-29T00:30:00	29/2/24, 12:30 a.m.
+es-419	-	medium	2024-02-29T00:30:00	12:30:00 a.m.
+es-419	-	short	2024-02-29T00:30:00	12:30 a.m.
+es-419	full	-	1999-08-01T13:45:59	domingo, 1 de agosto de 1999
+es-419	full	short	1999-08-01T13:45:59	domingo, 1 de agosto de 1999, 1:45 p.m.
+es-419	long	-	1999-08-01T13:45:59	1 de agosto de 1999
+es-419	long	short	1999-08-01T13:45:59	1 de agosto de 1999 a las 1:45 p.m.
+es-419	medium	-	1999-08-01T13:45:59	1 ago 1999
+es-419	medium	short	1999-08-01T13:45:59	1 ago 1999, 1:45 p.m.
+es-419	short	-	1999-08-01T13:45:59	1/8/99
+es-419	short	short	1999-08-01T13:45:59	1/8/99, 1:45 p.m.
+es-419	-	medium	1999-08-01T13:45:59	1:45:59 p.m.
+es-419	-	short	1999-08-01T13:45:59	1:45 p.m.
+es-MX	full	-	2026-11-17T09:05:03	martes, 17 de noviembre de 2026
+es-MX	full	short	2026-11-17T09:05:03	martes, 17 de noviembre de 2026, 9:05 a.m.
+es-MX	long	-	2026-11-17T09:05:03	17 de noviembre de 2026
+es-MX	long	short	2026-11-17T09:05:03	17 de noviembre de 2026 a las 9:05 a.m.
+es-MX	medium	-	2026-11-17T09:05:03	17 nov 2026
+es-MX	medium	short	2026-11-17T09:05:03	17 nov 2026, 9:05 a.m.
+es-MX	short	-	2026-11-17T09:05:03	17/11/26
+es-MX	short	short	2026-11-17T09:05:03	17/11/26, 9:05 a.m.
+es-MX	-	medium	2026-11-17T09:05:03	9:05:03 a.m.
+es-MX	-	short	2026-11-17T09:05:03	9:05 a.m.
+es-MX	full	-	2024-02-29T00:30:00	jueves, 29 de febrero de 2024
+es-MX	full	short	2024-02-29T00:30:00	jueves, 29 de febrero de 2024, 12:30 a.m.
+es-MX	long	-	2024-02-29T00:30:00	29 de febrero de 2024
+es-MX	long	short	2024-02-29T00:30:00	29 de febrero de 2024 a las 12:30 a.m.
+es-MX	medium	-	2024-02-29T00:30:00	29 feb 2024
+es-MX	medium	short	2024-02-29T00:30:00	29 feb 2024, 12:30 a.m.
+es-MX	short	-	2024-02-29T00:30:00	29/02/24
+es-MX	short	short	2024-02-29T00:30:00	29/02/24, 12:30 a.m.
+es-MX	-	medium	2024-02-29T00:30:00	12:30:00 a.m.
+es-MX	-	short	2024-02-29T00:30:00	12:30 a.m.
+es-MX	full	-	1999-08-01T13:45:59	domingo, 1 de agosto de 1999
+es-MX	full	short	1999-08-01T13:45:59	domingo, 1 de agosto de 1999, 1:45 p.m.
+es-MX	long	-	1999-08-01T13:45:59	1 de agosto de 1999
+es-MX	long	short	1999-08-01T13:45:59	1 de agosto de 1999 a las 1:45 p.m.
+es-MX	medium	-	1999-08-01T13:45:59	1 ago 1999
+es-MX	medium	short	1999-08-01T13:45:59	1 ago 1999, 1:45 p.m.
+es-MX	short	-	1999-08-01T13:45:59	01/08/99
+es-MX	short	short	1999-08-01T13:45:59	01/08/99, 1:45 p.m.
+es-MX	-	medium	1999-08-01T13:45:59	1:45:59 p.m.
+es-MX	-	short	1999-08-01T13:45:59	1:45 p.m.
+it	full	-	2026-11-17T09:05:03	martedì 17 novembre 2026
+it	full	short	2026-11-17T09:05:03	martedì 17 novembre 2026 alle ore 09:05
+it	long	-	2026-11-17T09:05:03	17 novembre 2026
+it	long	short	2026-11-17T09:05:03	17 novembre 2026 alle ore 09:05
+it	medium	-	2026-11-17T09:05:03	17 nov 2026
+it	medium	short	2026-11-17T09:05:03	17 nov 2026, 09:05
+it	short	-	2026-11-17T09:05:03	17/11/26
+it	short	short	2026-11-17T09:05:03	17/11/26, 09:05
+it	-	medium	2026-11-17T09:05:03	09:05:03
+it	-	short	2026-11-17T09:05:03	09:05
+it	full	-	2024-02-29T00:30:00	giovedì 29 febbraio 2024
+it	full	short	2024-02-29T00:30:00	giovedì 29 febbraio 2024 alle ore 00:30
+it	long	-	2024-02-29T00:30:00	29 febbraio 2024
+it	long	short	2024-02-29T00:30:00	29 febbraio 2024 alle ore 00:30
+it	medium	-	2024-02-29T00:30:00	29 feb 2024
+it	medium	short	2024-02-29T00:30:00	29 feb 2024, 00:30
+it	short	-	2024-02-29T00:30:00	29/02/24
+it	short	short	2024-02-29T00:30:00	29/02/24, 00:30
+it	-	medium	2024-02-29T00:30:00	00:30:00
+it	-	short	2024-02-29T00:30:00	00:30
+it	full	-	1999-08-01T13:45:59	domenica 1 agosto 1999
+it	full	short	1999-08-01T13:45:59	domenica 1 agosto 1999 alle ore 13:45
+it	long	-	1999-08-01T13:45:59	1 agosto 1999
+it	long	short	1999-08-01T13:45:59	1 agosto 1999 alle ore 13:45
+it	medium	-	1999-08-01T13:45:59	1 ago 1999
+it	medium	short	1999-08-01T13:45:59	1 ago 1999, 13:45
+it	short	-	1999-08-01T13:45:59	01/08/99
+it	short	short	1999-08-01T13:45:59	01/08/99, 13:45
+it	-	medium	1999-08-01T13:45:59	13:45:59
+it	-	short	1999-08-01T13:45:59	13:45
+it-CH	full	-	2026-11-17T09:05:03	martedì, 17 novembre 2026
+it-CH	full	short	2026-11-17T09:05:03	martedì, 17 novembre 2026 alle ore 09:05
+it-CH	long	-	2026-11-17T09:05:03	17 novembre 2026
+it-CH	long	short	2026-11-17T09:05:03	17 novembre 2026 alle ore 09:05
+it-CH	medium	-	2026-11-17T09:05:03	17 nov 2026
+it-CH	medium	short	2026-11-17T09:05:03	17 nov 2026, 09:05
+it-CH	short	-	2026-11-17T09:05:03	17.11.26
+it-CH	short	short	2026-11-17T09:05:03	17.11.26, 09:05
+it-CH	-	medium	2026-11-17T09:05:03	09:05:03
+it-CH	-	short	2026-11-17T09:05:03	09:05
+it-CH	full	-	2024-02-29T00:30:00	giovedì, 29 febbraio 2024
+it-CH	full	short	2024-02-29T00:30:00	giovedì, 29 febbraio 2024 alle ore 00:30
+it-CH	long	-	2024-02-29T00:30:00	29 febbraio 2024
+it-CH	long	short	2024-02-29T00:30:00	29 febbraio 2024 alle ore 00:30
+it-CH	medium	-	2024-02-29T00:30:00	29 feb 2024
+it-CH	medium	short	2024-02-29T00:30:00	29 feb 2024, 00:30
+it-CH	short	-	2024-02-29T00:30:00	29.02.24
+it-CH	short	short	2024-02-29T00:30:00	29.02.24, 00:30
+it-CH	-	medium	2024-02-29T00:30:00	00:30:00
+it-CH	-	short	2024-02-29T00:30:00	00:30
+it-CH	full	-	1999-08-01T13:45:59	domenica, 1 agosto 1999
+it-CH	full	short	1999-08-01T13:45:59	domenica, 1 agosto 1999 alle ore 13:45
+it-CH	long	-	1999-08-01T13:45:59	1 agosto 1999
+it-CH	long	short	1999-08-01T13:45:59	1 agosto 1999 alle ore 13:45
+it-CH	medium	-	1999-08-01T13:45:59	1 ago 1999
+it-CH	medium	short	1999-08-01T13:45:59	1 ago 1999, 13:45
+it-CH	short	-	1999-08-01T13:45:59	01.08.99
+it-CH	short	short	1999-08-01T13:45:59	01.08.99, 13:45
+it-CH	-	medium	1999-08-01T13:45:59	13:45:59
+it-CH	-	short	1999-08-01T13:45:59	13:45
+pt	full	-	2026-11-17T09:05:03	terça-feira, 17 de novembro de 2026
+pt	full	short	2026-11-17T09:05:03	terça-feira, 17 de novembro de 2026 às 09:05
+pt	long	-	2026-11-17T09:05:03	17 de novembro de 2026
+pt	long	short	2026-11-17T09:05:03	17 de novembro de 2026 às 09:05
+pt	medium	-	2026-11-17T09:05:03	17 de nov. de 2026
+pt	medium	short	2026-11-17T09:05:03	17 de nov. de 2026, 09:05
+pt	short	-	2026-11-17T09:05:03	17/11/2026
+pt	short	short	2026-11-17T09:05:03	17/11/2026, 09:05
+pt	-	medium	2026-11-17T09:05:03	09:05:03
+pt	-	short	2026-11-17T09:05:03	09:05
+pt	full	-	2024-02-29T00:30:00	quinta-feira, 29 de fevereiro de 2024
+pt	full	short	2024-02-29T00:30:00	quinta-feira, 29 de fevereiro de 2024 às 00:30
+pt	long	-	2024-02-29T00:30:00	29 de fevereiro de 2024
+pt	long	short	2024-02-29T00:30:00	29 de fevereiro de 2024 às 00:30
+pt	medium	-	2024-02-29T00:30:00	29 de fev. de 2024
+pt	medium	short	2024-02-29T00:30:00	29 de fev. de 2024, 00:30
+pt	short	-	2024-02-29T00:30:00	29/02/2024
+pt	short	short	2024-02-29T00:30:00	29/02/2024, 00:30
+pt	-	medium	2024-02-29T00:30:00	00:30:00
+pt	-	short	2024-02-29T00:30:00	00:30
+pt	full	-	1999-08-01T13:45:59	domingo, 1 de agosto de 1999
+pt	full	short	1999-08-01T13:45:59	domingo, 1 de agosto de 1999 às 13:45
+pt	long	-	1999-08-01T13:45:59	1 de agosto de 1999
+pt	long	short	1999-08-01T13:45:59	1 de agosto de 1999 às 13:45
+pt	medium	-	1999-08-01T13:45:59	1 de ago. de 1999
+pt	medium	short	1999-08-01T13:45:59	1 de ago. de 1999, 13:45
+pt	short	-	1999-08-01T13:45:59	01/08/1999
+pt	short	short	1999-08-01T13:45:59	01/08/1999, 13:45
+pt	-	medium	1999-08-01T13:45:59	13:45:59
+pt	-	short	1999-08-01T13:45:59	13:45
+pt-PT	full	-	2026-11-17T09:05:03	terça-feira, 17 de novembro de 2026
+pt-PT	full	short	2026-11-17T09:05:03	terça-feira, 17 de novembro de 2026 às 09:05
+pt-PT	long	-	2026-11-17T09:05:03	17 de novembro de 2026
+pt-PT	long	short	2026-11-17T09:05:03	17 de novembro de 2026 às 09:05
+pt-PT	medium	-	2026-11-17T09:05:03	17/11/2026
+pt-PT	medium	short	2026-11-17T09:05:03	17/11/2026, 09:05
+pt-PT	short	-	2026-11-17T09:05:03	17/11/26
+pt-PT	short	short	2026-11-17T09:05:03	17/11/26, 09:05
+pt-PT	-	medium	2026-11-17T09:05:03	09:05:03
+pt-PT	-	short	2026-11-17T09:05:03	09:05
+pt-PT	full	-	2024-02-29T00:30:00	quinta-feira, 29 de fevereiro de 2024
+pt-PT	full	short	2024-02-29T00:30:00	quinta-feira, 29 de fevereiro de 2024 às 00:30
+pt-PT	long	-	2024-02-29T00:30:00	29 de fevereiro de 2024
+pt-PT	long	short	2024-02-29T00:30:00	29 de fevereiro de 2024 às 00:30
+pt-PT	medium	-	2024-02-29T00:30:00	29/02/2024
+pt-PT	medium	short	2024-02-29T00:30:00	29/02/2024, 00:30
+pt-PT	short	-	2024-02-29T00:30:00	29/02/24
+pt-PT	short	short	2024-02-29T00:30:00	29/02/24, 00:30
+pt-PT	-	medium	2024-02-29T00:30:00	00:30:00
+pt-PT	-	short	2024-02-29T00:30:00	00:30
+pt-PT	full	-	1999-08-01T13:45:59	domingo, 1 de agosto de 1999
+pt-PT	full	short	1999-08-01T13:45:59	domingo, 1 de agosto de 1999 às 13:45
+pt-PT	long	-	1999-08-01T13:45:59	1 de agosto de 1999
+pt-PT	long	short	1999-08-01T13:45:59	1 de agosto de 1999 às 13:45
+pt-PT	medium	-	1999-08-01T13:45:59	01/08/1999
+pt-PT	medium	short	1999-08-01T13:45:59	01/08/1999, 13:45
+pt-PT	short	-	1999-08-01T13:45:59	01/08/99
+pt-PT	short	short	1999-08-01T13:45:59	01/08/99, 13:45
+pt-PT	-	medium	1999-08-01T13:45:59	13:45:59
+pt-PT	-	short	1999-08-01T13:45:59	13:45
+nl	full	-	2026-11-17T09:05:03	dinsdag 17 november 2026
+nl	full	short	2026-11-17T09:05:03	dinsdag 17 november 2026 om 09:05
+nl	long	-	2026-11-17T09:05:03	17 november 2026
+nl	long	short	2026-11-17T09:05:03	17 november 2026 om 09:05
+nl	medium	-	2026-11-17T09:05:03	17 nov 2026
+nl	medium	short	2026-11-17T09:05:03	17 nov 2026, 09:05
+nl	short	-	2026-11-17T09:05:03	17-11-2026
+nl	short	short	2026-11-17T09:05:03	17-11-2026, 09:05
+nl	-	medium	2026-11-17T09:05:03	09:05:03
+nl	-	short	2026-11-17T09:05:03	09:05
+nl	full	-	2024-02-29T00:30:00	donderdag 29 februari 2024
+nl	full	short	2024-02-29T00:30:00	donderdag 29 februari 2024 om 00:30
+nl	long	-	2024-02-29T00:30:00	29 februari 2024
+nl	long	short	2024-02-29T00:30:00	29 februari 2024 om 00:30
+nl	medium	-	2024-02-29T00:30:00	29 feb 2024
+nl	medium	short	2024-02-29T00:30:00	29 feb 2024, 00:30
+nl	short	-	2024-02-29T00:30:00	29-02-2024
+nl	short	short	2024-02-29T00:30:00	29-02-2024, 00:30
+nl	-	medium	2024-02-29T00:30:00	00:30:00
+nl	-	short	2024-02-29T00:30:00	00:30
+nl	full	-	1999-08-01T13:45:59	zondag 1 augustus 1999
+nl	full	short	1999-08-01T13:45:59	zondag 1 augustus 1999 om 13:45
+nl	long	-	1999-08-01T13:45:59	1 augustus 1999
+nl	long	short	1999-08-01T13:45:59	1 augustus 1999 om 13:45
+nl	medium	-	1999-08-01T13:45:59	1 aug 1999
+nl	medium	short	1999-08-01T13:45:59	1 aug 1999, 13:45
+nl	short	-	1999-08-01T13:45:59	01-08-1999
+nl	short	short	1999-08-01T13:45:59	01-08-1999, 13:45
+nl	-	medium	1999-08-01T13:45:59	13:45:59
+nl	-	short	1999-08-01T13:45:59	13:45
+ca	full	-	2026-11-17T09:05:03	dimarts, 17 de novembre del 2026
+ca	full	short	2026-11-17T09:05:03	dimarts, 17 de novembre del 2026, a les 9:05
+ca	long	-	2026-11-17T09:05:03	17 de novembre del 2026
+ca	long	short	2026-11-17T09:05:03	17 de novembre del 2026, a les 9:05
+ca	medium	-	2026-11-17T09:05:03	17 de nov. 2026
+ca	medium	short	2026-11-17T09:05:03	17 de nov. 2026, 9:05
+ca	short	-	2026-11-17T09:05:03	17/11/26
+ca	short	short	2026-11-17T09:05:03	17/11/26 9:05
+ca	-	medium	2026-11-17T09:05:03	9:05:03
+ca	-	short	2026-11-17T09:05:03	9:05
+ca	full	-	2024-02-29T00:30:00	dijous, 29 de febrer del 2024
+ca	full	short	2024-02-29T00:30:00	dijous, 29 de febrer del 2024, a les 0:30
+ca	long	-	2024-02-29T00:30:00	29 de febrer del 2024
+ca	long	short	2024-02-29T00:30:00	29 de febrer del 2024, a les 0:30
+ca	medium	-	2024-02-29T00:30:00	29 de febr. 2024
+ca	medium	short	2024-02-29T00:30:00	29 de febr. 2024, 0:30
+ca	short	-	2024-02-29T00:30:00	29/2/24
+ca	short	short	2024-02-29T00:30:00	29/2/24 0:30
+ca	-	medium	2024-02-29T00:30:00	0:30:00
+ca	-	short	2024-02-29T00:30:00	0:30
+ca	full	-	1999-08-01T13:45:59	diumenge, 1 d’agost del 1999
+ca	full	short	1999-08-01T13:45:59	diumenge, 1 d’agost del 1999, a les 13:45
+ca	long	-	1999-08-01T13:45:59	1 d’agost del 1999
+ca	long	short	1999-08-01T13:45:59	1 d’agost del 1999, a les 13:45
+ca	medium	-	1999-08-01T13:45:59	1 d’ag. 1999
+ca	medium	short	1999-08-01T13:45:59	1 d’ag. 1999, 13:45
+ca	short	-	1999-08-01T13:45:59	1/8/99
+ca	short	short	1999-08-01T13:45:59	1/8/99 13:45
+ca	-	medium	1999-08-01T13:45:59	13:45:59
+ca	-	short	1999-08-01T13:45:59	13:45
+sv	full	-	2026-11-17T09:05:03	tisdag 17 november 2026
+sv	full	short	2026-11-17T09:05:03	tisdag 17 november 2026 kl. 09:05
+sv	long	-	2026-11-17T09:05:03	17 november 2026
+sv	long	short	2026-11-17T09:05:03	17 november 2026 kl. 09:05
+sv	medium	-	2026-11-17T09:05:03	17 nov. 2026
+sv	medium	short	2026-11-17T09:05:03	17 nov. 2026 09:05
+sv	short	-	2026-11-17T09:05:03	2026-11-17
+sv	short	short	2026-11-17T09:05:03	2026-11-17 09:05
+sv	-	medium	2026-11-17T09:05:03	09:05:03
+sv	-	short	2026-11-17T09:05:03	09:05
+sv	full	-	2024-02-29T00:30:00	torsdag 29 februari 2024
+sv	full	short	2024-02-29T00:30:00	torsdag 29 februari 2024 kl. 00:30
+sv	long	-	2024-02-29T00:30:00	29 februari 2024
+sv	long	short	2024-02-29T00:30:00	29 februari 2024 kl. 00:30
+sv	medium	-	2024-02-29T00:30:00	29 feb. 2024
+sv	medium	short	2024-02-29T00:30:00	29 feb. 2024 00:30
+sv	short	-	2024-02-29T00:30:00	2024-02-29
+sv	short	short	2024-02-29T00:30:00	2024-02-29 00:30
+sv	-	medium	2024-02-29T00:30:00	00:30:00
+sv	-	short	2024-02-29T00:30:00	00:30
+sv	full	-	1999-08-01T13:45:59	söndag 1 augusti 1999
+sv	full	short	1999-08-01T13:45:59	söndag 1 augusti 1999 kl. 13:45
+sv	long	-	1999-08-01T13:45:59	1 augusti 1999
+sv	long	short	1999-08-01T13:45:59	1 augusti 1999 kl. 13:45
+sv	medium	-	1999-08-01T13:45:59	1 aug. 1999
+sv	medium	short	1999-08-01T13:45:59	1 aug. 1999 13:45
+sv	short	-	1999-08-01T13:45:59	1999-08-01
+sv	short	short	1999-08-01T13:45:59	1999-08-01 13:45
+sv	-	medium	1999-08-01T13:45:59	13:45:59
+sv	-	short	1999-08-01T13:45:59	13:45
+da	full	-	2026-11-17T09:05:03	tirsdag den 17. november 2026
+da	full	short	2026-11-17T09:05:03	tirsdag den 17. november 2026 kl. 09.05
+da	long	-	2026-11-17T09:05:03	17. november 2026
+da	long	short	2026-11-17T09:05:03	17. november 2026 kl. 09.05
+da	medium	-	2026-11-17T09:05:03	17. nov. 2026
+da	medium	short	2026-11-17T09:05:03	17. nov. 2026, 09.05
+da	short	-	2026-11-17T09:05:03	17.11.2026
+da	short	short	2026-11-17T09:05:03	17.11.2026, 09.05
+da	-	medium	2026-11-17T09:05:03	09.05.03
+da	-	short	2026-11-17T09:05:03	09.05
+da	full	-	2024-02-29T00:30:00	torsdag den 29. februar 2024
+da	full	short	2024-02-29T00:30:00	torsdag den 29. februar 2024 kl. 00.30
+da	long	-	2024-02-29T00:30:00	29. februar 2024
+da	long	short	2024-02-29T00:30:00	29. februar 2024 kl. 00.30
+da	medium	-	2024-02-29T00:30:00	29. feb. 2024
+da	medium	short	2024-02-29T00:30:00	29. feb. 2024, 00.30
+da	short	-	2024-02-29T00:30:00	29.02.2024
+da	short	short	2024-02-29T00:30:00	29.02.2024, 00.30
+da	-	medium	2024-02-29T00:30:00	00.30.00
+da	-	short	2024-02-29T00:30:00	00.30
+da	full	-	1999-08-01T13:45:59	søndag den 1. august 1999
+da	full	short	1999-08-01T13:45:59	søndag den 1. august 1999 kl. 13.45
+da	long	-	1999-08-01T13:45:59	1. august 1999
+da	long	short	1999-08-01T13:45:59	1. august 1999 kl. 13.45
+da	medium	-	1999-08-01T13:45:59	1. aug. 1999
+da	medium	short	1999-08-01T13:45:59	1. aug. 1999, 13.45
+da	short	-	1999-08-01T13:45:59	01.08.1999
+da	short	short	1999-08-01T13:45:59	01.08.1999, 13.45
+da	-	medium	1999-08-01T13:45:59	13.45.59
+da	-	short	1999-08-01T13:45:59	13.45
+nb	full	-	2026-11-17T09:05:03	tirsdag 17. november 2026
+nb	full	short	2026-11-17T09:05:03	tirsdag 17. november 2026 kl. 09:05
+nb	long	-	2026-11-17T09:05:03	17. november 2026
+nb	long	short	2026-11-17T09:05:03	17. november 2026 kl. 09:05
+nb	medium	-	2026-11-17T09:05:03	17. nov. 2026
+nb	medium	short	2026-11-17T09:05:03	17. nov. 2026, 09:05
+nb	short	-	2026-11-17T09:05:03	17.11.2026
+nb	short	short	2026-11-17T09:05:03	17.11.2026, 09:05
+nb	-	medium	2026-11-17T09:05:03	09:05:03
+nb	-	short	2026-11-17T09:05:03	09:05
+nb	full	-	2024-02-29T00:30:00	torsdag 29. februar 2024
+nb	full	short	2024-02-29T00:30:00	torsdag 29. februar 2024 kl. 00:30
+nb	long	-	2024-02-29T00:30:00	29. februar 2024
+nb	long	short	2024-02-29T00:30:00	29. februar 2024 kl. 00:30
+nb	medium	-	2024-02-29T00:30:00	29. feb. 2024
+nb	medium	short	2024-02-29T00:30:00	29. feb. 2024, 00:30
+nb	short	-	2024-02-29T00:30:00	29.02.2024
+nb	short	short	2024-02-29T00:30:00	29.02.2024, 00:30
+nb	-	medium	2024-02-29T00:30:00	00:30:00
+nb	-	short	2024-02-29T00:30:00	00:30
+nb	full	-	1999-08-01T13:45:59	søndag 1. august 1999
+nb	full	short	1999-08-01T13:45:59	søndag 1. august 1999 kl. 13:45
+nb	long	-	1999-08-01T13:45:59	1. august 1999
+nb	long	short	1999-08-01T13:45:59	1. august 1999 kl. 13:45
+nb	medium	-	1999-08-01T13:45:59	1. aug. 1999
+nb	medium	short	1999-08-01T13:45:59	1. aug. 1999, 13:45
+nb	short	-	1999-08-01T13:45:59	01.08.1999
+nb	short	short	1999-08-01T13:45:59	01.08.1999, 13:45
+nb	-	medium	1999-08-01T13:45:59	13:45:59
+nb	-	short	1999-08-01T13:45:59	13:45
+fi	full	-	2026-11-17T09:05:03	tiistai 17. marraskuuta 2026
+fi	full	short	2026-11-17T09:05:03	tiistai 17. marraskuuta 2026 klo 9.05
+fi	long	-	2026-11-17T09:05:03	17. marraskuuta 2026
+fi	long	short	2026-11-17T09:05:03	17. marraskuuta 2026 klo 9.05
+fi	medium	-	2026-11-17T09:05:03	17.11.2026
+fi	medium	short	2026-11-17T09:05:03	17.11.2026 klo 9.05
+fi	short	-	2026-11-17T09:05:03	17.11.2026
+fi	short	short	2026-11-17T09:05:03	17.11.2026 klo 9.05
+fi	-	medium	2026-11-17T09:05:03	9.05.03
+fi	-	short	2026-11-17T09:05:03	9.05
+fi	full	-	2024-02-29T00:30:00	torstai 29. helmikuuta 2024
+fi	full	short	2024-02-29T00:30:00	torstai 29. helmikuuta 2024 klo 0.30
+fi	long	-	2024-02-29T00:30:00	29. helmikuuta 2024
+fi	long	short	2024-02-29T00:30:00	29. helmikuuta 2024 klo 0.30
+fi	medium	-	2024-02-29T00:30:00	29.2.2024
+fi	medium	short	2024-02-29T00:30:00	29.2.2024 klo 0.30
+fi	short	-	2024-02-29T00:30:00	29.2.2024
+fi	short	short	2024-02-29T00:30:00	29.2.2024 klo 0.30
+fi	-	medium	2024-02-29T00:30:00	0.30.00
+fi	-	short	2024-02-29T00:30:00	0.30
+fi	full	-	1999-08-01T13:45:59	sunnuntai 1. elokuuta 1999
+fi	full	short	1999-08-01T13:45:59	sunnuntai 1. elokuuta 1999 klo 13.45
+fi	long	-	1999-08-01T13:45:59	1. elokuuta 1999
+fi	long	short	1999-08-01T13:45:59	1. elokuuta 1999 klo 13.45
+fi	medium	-	1999-08-01T13:45:59	1.8.1999
+fi	medium	short	1999-08-01T13:45:59	1.8.1999 klo 13.45
+fi	short	-	1999-08-01T13:45:59	1.8.1999
+fi	short	short	1999-08-01T13:45:59	1.8.1999 klo 13.45
+fi	-	medium	1999-08-01T13:45:59	13.45.59
+fi	-	short	1999-08-01T13:45:59	13.45
+is	full	-	2026-11-17T09:05:03	þriðjudagur, 17. nóvember 2026
+is	full	short	2026-11-17T09:05:03	þriðjudagur, 17. nóvember 2026 kl. 09:05
+is	long	-	2026-11-17T09:05:03	17. nóvember 2026
+is	long	short	2026-11-17T09:05:03	17. nóvember 2026 kl. 09:05
+is	medium	-	2026-11-17T09:05:03	17. nóv. 2026
+is	medium	short	2026-11-17T09:05:03	17. nóv. 2026, 09:05
+is	short	-	2026-11-17T09:05:03	17.11.2026
+is	short	short	2026-11-17T09:05:03	17.11.2026, 09:05
+is	-	medium	2026-11-17T09:05:03	09:05:03
+is	-	short	2026-11-17T09:05:03	09:05
+is	full	-	2024-02-29T00:30:00	fimmtudagur, 29. febrúar 2024
+is	full	short	2024-02-29T00:30:00	fimmtudagur, 29. febrúar 2024 kl. 00:30
+is	long	-	2024-02-29T00:30:00	29. febrúar 2024
+is	long	short	2024-02-29T00:30:00	29. febrúar 2024 kl. 00:30
+is	medium	-	2024-02-29T00:30:00	29. feb. 2024
+is	medium	short	2024-02-29T00:30:00	29. feb. 2024, 00:30
+is	short	-	2024-02-29T00:30:00	29.2.2024
+is	short	short	2024-02-29T00:30:00	29.2.2024, 00:30
+is	-	medium	2024-02-29T00:30:00	00:30:00
+is	-	short	2024-02-29T00:30:00	00:30
+is	full	-	1999-08-01T13:45:59	sunnudagur, 1. ágúst 1999
+is	full	short	1999-08-01T13:45:59	sunnudagur, 1. ágúst 1999 kl. 13:45
+is	long	-	1999-08-01T13:45:59	1. ágúst 1999
+is	long	short	1999-08-01T13:45:59	1. ágúst 1999 kl. 13:45
+is	medium	-	1999-08-01T13:45:59	1. ágú. 1999
+is	medium	short	1999-08-01T13:45:59	1. ágú. 1999, 13:45
+is	short	-	1999-08-01T13:45:59	1.8.1999
+is	short	short	1999-08-01T13:45:59	1.8.1999, 13:45
+is	-	medium	1999-08-01T13:45:59	13:45:59
+is	-	short	1999-08-01T13:45:59	13:45
+pl	full	-	2026-11-17T09:05:03	wtorek, 17 listopada 2026
+pl	full	short	2026-11-17T09:05:03	wtorek, 17 listopada 2026 09:05
+pl	long	-	2026-11-17T09:05:03	17 listopada 2026
+pl	long	short	2026-11-17T09:05:03	17 listopada 2026 09:05
+pl	medium	-	2026-11-17T09:05:03	17 lis 2026
+pl	medium	short	2026-11-17T09:05:03	17 lis 2026, 09:05
+pl	short	-	2026-11-17T09:05:03	17.11.2026
+pl	short	short	2026-11-17T09:05:03	17.11.2026, 09:05
+pl	-	medium	2026-11-17T09:05:03	09:05:03
+pl	-	short	2026-11-17T09:05:03	09:05
+pl	full	-	2024-02-29T00:30:00	czwartek, 29 lutego 2024
+pl	full	short	2024-02-29T00:30:00	czwartek, 29 lutego 2024 00:30
+pl	long	-	2024-02-29T00:30:00	29 lutego 2024
+pl	long	short	2024-02-29T00:30:00	29 lutego 2024 00:30
+pl	medium	-	2024-02-29T00:30:00	29 lut 2024
+pl	medium	short	2024-02-29T00:30:00	29 lut 2024, 00:30
+pl	short	-	2024-02-29T00:30:00	29.02.2024
+pl	short	short	2024-02-29T00:30:00	29.02.2024, 00:30
+pl	-	medium	2024-02-29T00:30:00	00:30:00
+pl	-	short	2024-02-29T00:30:00	00:30
+pl	full	-	1999-08-01T13:45:59	niedziela, 1 sierpnia 1999
+pl	full	short	1999-08-01T13:45:59	niedziela, 1 sierpnia 1999 13:45
+pl	long	-	1999-08-01T13:45:59	1 sierpnia 1999
+pl	long	short	1999-08-01T13:45:59	1 sierpnia 1999 13:45
+pl	medium	-	1999-08-01T13:45:59	1 sie 1999
+pl	medium	short	1999-08-01T13:45:59	1 sie 1999, 13:45
+pl	short	-	1999-08-01T13:45:59	1.08.1999
+pl	short	short	1999-08-01T13:45:59	1.08.1999, 13:45
+pl	-	medium	1999-08-01T13:45:59	13:45:59
+pl	-	short	1999-08-01T13:45:59	13:45
+cs	full	-	2026-11-17T09:05:03	úterý 17. listopadu 2026
+cs	full	short	2026-11-17T09:05:03	úterý 17. listopadu 2026 v 9:05
+cs	long	-	2026-11-17T09:05:03	17. listopadu 2026
+cs	long	short	2026-11-17T09:05:03	17. listopadu 2026 v 9:05
+cs	medium	-	2026-11-17T09:05:03	17. 11. 2026
+cs	medium	short	2026-11-17T09:05:03	17. 11. 2026 9:05
+cs	short	-	2026-11-17T09:05:03	17.11.26
+cs	short	short	2026-11-17T09:05:03	17.11.26 9:05
+cs	-	medium	2026-11-17T09:05:03	9:05:03
+cs	-	short	2026-11-17T09:05:03	9:05
+cs	full	-	2024-02-29T00:30:00	čtvrtek 29. února 2024
+cs	full	short	2024-02-29T00:30:00	čtvrtek 29. února 2024 v 0:30
+cs	long	-	2024-02-29T00:30:00	29. února 2024
+cs	long	short	2024-02-29T00:30:00	29. února 2024 v 0:30
+cs	medium	-	2024-02-29T00:30:00	29. 2. 2024
+cs	medium	short	2024-02-29T00:30:00	29. 2. 2024 0:30
+cs	short	-	2024-02-29T00:30:00	29.02.24
+cs	short	short	2024-02-29T00:30:00	29.02.24 0:30
+cs	-	medium	2024-02-29T00:30:00	0:30:00
+cs	-	short	2024-02-29T00:30:00	0:30
+cs	full	-	1999-08-01T13:45:59	neděle 1. srpna 1999
+cs	full	short	1999-08-01T13:45:59	neděle 1. srpna 1999 v 13:45
+cs	long	-	1999-08-01T13:45:59	1. srpna 1999
+cs	long	short	1999-08-01T13:45:59	1. srpna 1999 v 13:45
+cs	medium	-	1999-08-01T13:45:59	1. 8. 1999
+cs	medium	short	1999-08-01T13:45:59	1. 8. 1999 13:45
+cs	short	-	1999-08-01T13:45:59	01.08.99
+cs	short	short	1999-08-01T13:45:59	01.08.99 13:45
+cs	-	medium	1999-08-01T13:45:59	13:45:59
+cs	-	short	1999-08-01T13:45:59	13:45
+sk	full	-	2026-11-17T09:05:03	utorok 17. novembra 2026
+sk	full	short	2026-11-17T09:05:03	utorok 17. novembra 2026 o 9:05
+sk	long	-	2026-11-17T09:05:03	17. novembra 2026
+sk	long	short	2026-11-17T09:05:03	17. novembra 2026 o 9:05
+sk	medium	-	2026-11-17T09:05:03	17. 11. 2026
+sk	medium	short	2026-11-17T09:05:03	17. 11. 2026, 9:05
+sk	short	-	2026-11-17T09:05:03	17. 11. 2026
+sk	short	short	2026-11-17T09:05:03	17. 11. 2026 9:05
+sk	-	medium	2026-11-17T09:05:03	9:05:03
+sk	-	short	2026-11-17T09:05:03	9:05
+sk	full	-	2024-02-29T00:30:00	štvrtok 29. februára 2024
+sk	full	short	2024-02-29T00:30:00	štvrtok 29. februára 2024 o 0:30
+sk	long	-	2024-02-29T00:30:00	29. februára 2024
+sk	long	short	2024-02-29T00:30:00	29. februára 2024 o 0:30
+sk	medium	-	2024-02-29T00:30:00	29. 2. 2024
+sk	medium	short	2024-02-29T00:30:00	29. 2. 2024, 0:30
+sk	short	-	2024-02-29T00:30:00	29. 2. 2024
+sk	short	short	2024-02-29T00:30:00	29. 2. 2024 0:30
+sk	-	medium	2024-02-29T00:30:00	0:30:00
+sk	-	short	2024-02-29T00:30:00	0:30
+sk	full	-	1999-08-01T13:45:59	nedeľa 1. augusta 1999
+sk	full	short	1999-08-01T13:45:59	nedeľa 1. augusta 1999 o 13:45
+sk	long	-	1999-08-01T13:45:59	1. augusta 1999
+sk	long	short	1999-08-01T13:45:59	1. augusta 1999 o 13:45
+sk	medium	-	1999-08-01T13:45:59	1. 8. 1999
+sk	medium	short	1999-08-01T13:45:59	1. 8. 1999, 13:45
+sk	short	-	1999-08-01T13:45:59	1. 8. 1999
+sk	short	short	1999-08-01T13:45:59	1. 8. 1999 13:45
+sk	-	medium	1999-08-01T13:45:59	13:45:59
+sk	-	short	1999-08-01T13:45:59	13:45
+sl	full	-	2026-11-17T09:05:03	torek, 17. november 2026
+sl	full	short	2026-11-17T09:05:03	torek, 17. november 2026 ob 09:05
+sl	long	-	2026-11-17T09:05:03	17. november 2026
+sl	long	short	2026-11-17T09:05:03	17. november 2026 ob 09:05
+sl	medium	-	2026-11-17T09:05:03	17. nov. 2026
+sl	medium	short	2026-11-17T09:05:03	17. nov. 2026, 09:05
+sl	short	-	2026-11-17T09:05:03	17. 11. 2026
+sl	short	short	2026-11-17T09:05:03	17. 11. 2026, 09:05
+sl	-	medium	2026-11-17T09:05:03	09:05:03
+sl	-	short	2026-11-17T09:05:03	09:05
+sl	full	-	2024-02-29T00:30:00	četrtek, 29. februar 2024
+sl	full	short	2024-02-29T00:30:00	četrtek, 29. februar 2024 ob 00:30
+sl	long	-	2024-02-29T00:30:00	29. februar 2024
+sl	long	short	2024-02-29T00:30:00	29. februar 2024 ob 00:30
+sl	medium	-	2024-02-29T00:30:00	29. feb. 2024
+sl	medium	short	2024-02-29T00:30:00	29. feb. 2024, 00:30
+sl	short	-	2024-02-29T00:30:00	29. 2. 2024
+sl	short	short	2024-02-29T00:30:00	29. 2. 2024, 00:30
+sl	-	medium	2024-02-29T00:30:00	00:30:00
+sl	-	short	2024-02-29T00:30:00	00:30
+sl	full	-	1999-08-01T13:45:59	nedelja, 1. avgust 1999
+sl	full	short	1999-08-01T13:45:59	nedelja, 1. avgust 1999 ob 13:45
+sl	long	-	1999-08-01T13:45:59	1. avgust 1999
+sl	long	short	1999-08-01T13:45:59	1. avgust 1999 ob 13:45
+sl	medium	-	1999-08-01T13:45:59	1. avg. 1999
+sl	medium	short	1999-08-01T13:45:59	1. avg. 1999, 13:45
+sl	short	-	1999-08-01T13:45:59	1. 8. 1999
+sl	short	short	1999-08-01T13:45:59	1. 8. 1999, 13:45
+sl	-	medium	1999-08-01T13:45:59	13:45:59
+sl	-	short	1999-08-01T13:45:59	13:45
+hr	full	-	2026-11-17T09:05:03	utorak, 17. studenoga 2026.
+hr	full	short	2026-11-17T09:05:03	utorak, 17. studenoga 2026. u 09:05
+hr	long	-	2026-11-17T09:05:03	17. studenoga 2026.
+hr	long	short	2026-11-17T09:05:03	17. studenoga 2026. u 09:05
+hr	medium	-	2026-11-17T09:05:03	17. stu 2026.
+hr	medium	short	2026-11-17T09:05:03	17. stu 2026. 09:05
+hr	short	-	2026-11-17T09:05:03	17. 11. 2026.
+hr	short	short	2026-11-17T09:05:03	17. 11. 2026. 09:05
+hr	-	medium	2026-11-17T09:05:03	09:05:03
+hr	-	short	2026-11-17T09:05:03	09:05
+hr	full	-	2024-02-29T00:30:00	četvrtak, 29. veljače 2024.
+hr	full	short	2024-02-29T00:30:00	četvrtak, 29. veljače 2024. u 00:30
+hr	long	-	2024-02-29T00:30:00	29. veljače 2024.
+hr	long	short	2024-02-29T00:30:00	29. veljače 2024. u 00:30
+hr	medium	-	2024-02-29T00:30:00	29. velj 2024.
+hr	medium	short	2024-02-29T00:30:00	29. velj 2024. 00:30
+hr	short	-	2024-02-29T00:30:00	29. 02. 2024.
+hr	short	short	2024-02-29T00:30:00	29. 02. 2024. 00:30
+hr	-	medium	2024-02-29T00:30:00	00:30:00
+hr	-	short	2024-02-29T00:30:00	00:30
+hr	full	-	1999-08-01T13:45:59	nedjelja, 1. kolovoza 1999.
+hr	full	short	1999-08-01T13:45:59	nedjelja, 1. kolovoza 1999. u 13:45
+hr	long	-	1999-08-01T13:45:59	1. kolovoza 1999.
+hr	long	short	1999-08-01T13:45:59	1. kolovoza 1999. u 13:45
+hr	medium	-	1999-08-01T13:45:59	1. kol 1999.
+hr	medium	short	1999-08-01T13:45:59	1. kol 1999. 13:45
+hr	short	-	1999-08-01T13:45:59	01. 08. 1999.
+hr	short	short	1999-08-01T13:45:59	01. 08. 1999. 13:45
+hr	-	medium	1999-08-01T13:45:59	13:45:59
+hr	-	short	1999-08-01T13:45:59	13:45
+sr	full	-	2026-11-17T09:05:03	уторак, 17. новембар 2026.
+sr	full	short	2026-11-17T09:05:03	уторак, 17. новембар 2026. 09:05
+sr	long	-	2026-11-17T09:05:03	17. новембар 2026.
+sr	long	short	2026-11-17T09:05:03	17. новембар 2026. 09:05
+sr	medium	-	2026-11-17T09:05:03	17. 11. 2026.
+sr	medium	short	2026-11-17T09:05:03	17. 11. 2026. 09:05
+sr	short	-	2026-11-17T09:05:03	17. 11. 2026.
+sr	short	short	2026-11-17T09:05:03	17. 11. 2026. 09:05
+sr	-	medium	2026-11-17T09:05:03	09:05:03
+sr	-	short	2026-11-17T09:05:03	09:05
+sr	full	-	2024-02-29T00:30:00	четвртак, 29. фебруар 2024.
+sr	full	short	2024-02-29T00:30:00	четвртак, 29. фебруар 2024. 00:30
+sr	long	-	2024-02-29T00:30:00	29. фебруар 2024.
+sr	long	short	2024-02-29T00:30:00	29. фебруар 2024. 00:30
+sr	medium	-	2024-02-29T00:30:00	29. 2. 2024.
+sr	medium	short	2024-02-29T00:30:00	29. 2. 2024. 00:30
+sr	short	-	2024-02-29T00:30:00	29. 2. 2024.
+sr	short	short	2024-02-29T00:30:00	29. 2. 2024. 00:30
+sr	-	medium	2024-02-29T00:30:00	00:30:00
+sr	-	short	2024-02-29T00:30:00	00:30
+sr	full	-	1999-08-01T13:45:59	недеља, 1. август 1999.
+sr	full	short	1999-08-01T13:45:59	недеља, 1. август 1999. 13:45
+sr	long	-	1999-08-01T13:45:59	1. август 1999.
+sr	long	short	1999-08-01T13:45:59	1. август 1999. 13:45
+sr	medium	-	1999-08-01T13:45:59	1. 8. 1999.
+sr	medium	short	1999-08-01T13:45:59	1. 8. 1999. 13:45
+sr	short	-	1999-08-01T13:45:59	1. 8. 1999.
+sr	short	short	1999-08-01T13:45:59	1. 8. 1999. 13:45
+sr	-	medium	1999-08-01T13:45:59	13:45:59
+sr	-	short	1999-08-01T13:45:59	13:45
+hu	full	-	2026-11-17T09:05:03	2026. november 17., kedd
+hu	full	short	2026-11-17T09:05:03	2026. november 17., kedd 9:05
+hu	long	-	2026-11-17T09:05:03	2026. november 17.
+hu	long	short	2026-11-17T09:05:03	2026. november 17. 9:05
+hu	medium	-	2026-11-17T09:05:03	2026. nov. 17.
+hu	medium	short	2026-11-17T09:05:03	2026. nov. 17. 9:05
+hu	short	-	2026-11-17T09:05:03	2026. 11. 17.
+hu	short	short	2026-11-17T09:05:03	2026. 11. 17. 9:05
+hu	-	medium	2026-11-17T09:05:03	9:05:03
+hu	-	short	2026-11-17T09:05:03	9:05
+hu	full	-	2024-02-29T00:30:00	2024. február 29., csütörtök
+hu	full	short	2024-02-29T00:30:00	2024. február 29., csütörtök 0:30
+hu	long	-	2024-02-29T00:30:00	2024. február 29.
+hu	long	short	2024-02-29T00:30:00	2024. február 29. 0:30
+hu	medium	-	2024-02-29T00:30:00	2024. febr. 29.
+hu	medium	short	2024-02-29T00:30:00	2024. febr. 29. 0:30
+hu	short	-	2024-02-29T00:30:00	2024. 02. 29.
+hu	short	short	2024-02-29T00:30:00	2024. 02. 29. 0:30
+hu	-	medium	2024-02-29T00:30:00	0:30:00
+hu	-	short	2024-02-29T00:30:00	0:30
+hu	full	-	1999-08-01T13:45:59	1999. augusztus 1., vasárnap
+hu	full	short	1999-08-01T13:45:59	1999. augusztus 1., vasárnap 13:45
+hu	long	-	1999-08-01T13:45:59	1999. augusztus 1.
+hu	long	short	1999-08-01T13:45:59	1999. augusztus 1. 13:45
+hu	medium	-	1999-08-01T13:45:59	1999. aug. 1.
+hu	medium	short	1999-08-01T13:45:59	1999. aug. 1. 13:45
+hu	short	-	1999-08-01T13:45:59	1999. 08. 01.
+hu	short	short	1999-08-01T13:45:59	1999. 08. 01. 13:45
+hu	-	medium	1999-08-01T13:45:59	13:45:59
+hu	-	short	1999-08-01T13:45:59	13:45
+ro	full	-	2026-11-17T09:05:03	marți, 17 noiembrie 2026
+ro	full	short	2026-11-17T09:05:03	marți, 17 noiembrie 2026 la 09:05
+ro	long	-	2026-11-17T09:05:03	17 noiembrie 2026
+ro	long	short	2026-11-17T09:05:03	17 noiembrie 2026 la 09:05
+ro	medium	-	2026-11-17T09:05:03	17 nov. 2026
+ro	medium	short	2026-11-17T09:05:03	17 nov. 2026, 09:05
+ro	short	-	2026-11-17T09:05:03	17.11.2026
+ro	short	short	2026-11-17T09:05:03	17.11.2026, 09:05
+ro	-	medium	2026-11-17T09:05:03	09:05:03
+ro	-	short	2026-11-17T09:05:03	09:05
+ro	full	-	2024-02-29T00:30:00	joi, 29 februarie 2024
+ro	full	short	2024-02-29T00:30:00	joi, 29 februarie 2024 la 00:30
+ro	long	-	2024-02-29T00:30:00	29 februarie 2024
+ro	long	short	2024-02-29T00:30:00	29 februarie 2024 la 00:30
+ro	medium	-	2024-02-29T00:30:00	29 feb. 2024
+ro	medium	short	2024-02-29T00:30:00	29 feb. 2024, 00:30
+ro	short	-	2024-02-29T00:30:00	29.02.2024
+ro	short	short	2024-02-29T00:30:00	29.02.2024, 00:30
+ro	-	medium	2024-02-29T00:30:00	00:30:00
+ro	-	short	2024-02-29T00:30:00	00:30
+ro	full	-	1999-08-01T13:45:59	duminică, 1 august 1999
+ro	full	short	1999-08-01T13:45:59	duminică, 1 august 1999 la 13:45
+ro	long	-	1999-08-01T13:45:59	1 august 1999
+ro	long	short	1999-08-01T13:45:59	1 august 1999 la 13:45
+ro	medium	-	1999-08-01T13:45:59	1 aug. 1999
+ro	medium	short	1999-08-01T13:45:59	1 aug. 1999, 13:45
+ro	short	-	1999-08-01T13:45:59	01.08.1999
+ro	short	short	1999-08-01T13:45:59	01.08.1999, 13:45
+ro	-	medium	1999-08-01T13:45:59	13:45:59
+ro	-	short	1999-08-01T13:45:59	13:45
+bg	full	-	2026-11-17T09:05:03	вторник, 17 ноември 2026 г.
+bg	full	short	2026-11-17T09:05:03	вторник, 17 ноември 2026 г. в 9:05
+bg	long	-	2026-11-17T09:05:03	17 ноември 2026 г.
+bg	long	short	2026-11-17T09:05:03	17 ноември 2026 г. в 9:05
+bg	medium	-	2026-11-17T09:05:03	17.11.2026 г.
+bg	medium	short	2026-11-17T09:05:03	17.11.2026 г., 9:05 ч.
+bg	short	-	2026-11-17T09:05:03	17.11.26 г.
+bg	short	short	2026-11-17T09:05:03	17.11.26 г., 9:05 ч.
+bg	-	medium	2026-11-17T09:05:03	9:05:03
+bg	-	short	2026-11-17T09:05:03	9:05
+bg	full	-	2024-02-29T00:30:00	четвъртък, 29 февруари 2024 г.
+bg	full	short	2024-02-29T00:30:00	четвъртък, 29 февруари 2024 г. в 0:30
+bg	long	-	2024-02-29T00:30:00	29 февруари 2024 г.
+bg	long	short	2024-02-29T00:30:00	29 февруари 2024 г. в 0:30
+bg	medium	-	2024-02-29T00:30:00	29.02.2024 г.
+bg	medium	short	2024-02-29T00:30:00	29.02.2024 г., 0:30 ч.
+bg	short	-	2024-02-29T00:30:00	29.02.24 г.
+bg	short	short	2024-02-29T00:30:00	29.02.24 г., 0:30 ч.
+bg	-	medium	2024-02-29T00:30:00	0:30:00
+bg	-	short	2024-02-29T00:30:00	0:30
+bg	full	-	1999-08-01T13:45:59	неделя, 1 август 1999 г.
+bg	full	short	1999-08-01T13:45:59	неделя, 1 август 1999 г. в 13:45
+bg	long	-	1999-08-01T13:45:59	1 август 1999 г.
+bg	long	short	1999-08-01T13:45:59	1 август 1999 г. в 13:45
+bg	medium	-	1999-08-01T13:45:59	1.08.1999 г.
+bg	medium	short	1999-08-01T13:45:59	1.08.1999 г., 13:45 ч.
+bg	short	-	1999-08-01T13:45:59	1.08.99 г.
+bg	short	short	1999-08-01T13:45:59	1.08.99 г., 13:45 ч.
+bg	-	medium	1999-08-01T13:45:59	13:45:59
+bg	-	short	1999-08-01T13:45:59	13:45
+ru	full	-	2026-11-17T09:05:03	вторник, 17 ноября 2026 г.
+ru	full	short	2026-11-17T09:05:03	вторник, 17 ноября 2026 г. в 09:05
+ru	long	-	2026-11-17T09:05:03	17 ноября 2026 г.
+ru	long	short	2026-11-17T09:05:03	17 ноября 2026 г. в 09:05
+ru	medium	-	2026-11-17T09:05:03	17 нояб. 2026 г.
+ru	medium	short	2026-11-17T09:05:03	17 нояб. 2026 г., 09:05
+ru	short	-	2026-11-17T09:05:03	17.11.2026
+ru	short	short	2026-11-17T09:05:03	17.11.2026, 09:05
+ru	-	medium	2026-11-17T09:05:03	09:05:03
+ru	-	short	2026-11-17T09:05:03	09:05
+ru	full	-	2024-02-29T00:30:00	четверг, 29 февраля 2024 г.
+ru	full	short	2024-02-29T00:30:00	четверг, 29 февраля 2024 г. в 00:30
+ru	long	-	2024-02-29T00:30:00	29 февраля 2024 г.
+ru	long	short	2024-02-29T00:30:00	29 февраля 2024 г. в 00:30
+ru	medium	-	2024-02-29T00:30:00	29 февр. 2024 г.
+ru	medium	short	2024-02-29T00:30:00	29 февр. 2024 г., 00:30
+ru	short	-	2024-02-29T00:30:00	29.02.2024
+ru	short	short	2024-02-29T00:30:00	29.02.2024, 00:30
+ru	-	medium	2024-02-29T00:30:00	00:30:00
+ru	-	short	2024-02-29T00:30:00	00:30
+ru	full	-	1999-08-01T13:45:59	воскресенье, 1 августа 1999 г.
+ru	full	short	1999-08-01T13:45:59	воскресенье, 1 августа 1999 г. в 13:45
+ru	long	-	1999-08-01T13:45:59	1 августа 1999 г.
+ru	long	short	1999-08-01T13:45:59	1 августа 1999 г. в 13:45
+ru	medium	-	1999-08-01T13:45:59	1 авг. 1999 г.
+ru	medium	short	1999-08-01T13:45:59	1 авг. 1999 г., 13:45
+ru	short	-	1999-08-01T13:45:59	01.08.1999
+ru	short	short	1999-08-01T13:45:59	01.08.1999, 13:45
+ru	-	medium	1999-08-01T13:45:59	13:45:59
+ru	-	short	1999-08-01T13:45:59	13:45
+uk	full	-	2026-11-17T09:05:03	вівторок, 17 листопада 2026 р.
+uk	full	short	2026-11-17T09:05:03	вівторок, 17 листопада 2026 р. о 09:05
+uk	long	-	2026-11-17T09:05:03	17 листопада 2026 р.
+uk	long	short	2026-11-17T09:05:03	17 листопада 2026 р. о 09:05
+uk	medium	-	2026-11-17T09:05:03	17 лист. 2026 р.
+uk	medium	short	2026-11-17T09:05:03	17 лист. 2026 р., 09:05
+uk	short	-	2026-11-17T09:05:03	17.11.26
+uk	short	short	2026-11-17T09:05:03	17.11.26, 09:05
+uk	-	medium	2026-11-17T09:05:03	09:05:03
+uk	-	short	2026-11-17T09:05:03	09:05
+uk	full	-	2024-02-29T00:30:00	четвер, 29 лютого 2024 р.
+uk	full	short	2024-02-29T00:30:00	четвер, 29 лютого 2024 р. о 00:30
+uk	long	-	2024-02-29T00:30:00	29 лютого 2024 р.
+uk	long	short	2024-02-29T00:30:00	29 лютого 2024 р. о 00:30
+uk	medium	-	2024-02-29T00:30:00	29 лют. 2024 р.
+uk	medium	short	2024-02-29T00:30:00	29 лют. 2024 р., 00:30
+uk	short	-	2024-02-29T00:30:00	29.02.24
+uk	short	short	2024-02-29T00:30:00	29.02.24, 00:30
+uk	-	medium	2024-02-29T00:30:00	00:30:00
+uk	-	short	2024-02-29T00:30:00	00:30
+uk	full	-	1999-08-01T13:45:59	неділя, 1 серпня 1999 р.
+uk	full	short	1999-08-01T13:45:59	неділя, 1 серпня 1999 р. о 13:45
+uk	long	-	1999-08-01T13:45:59	1 серпня 1999 р.
+uk	long	short	1999-08-01T13:45:59	1 серпня 1999 р. о 13:45
+uk	medium	-	1999-08-01T13:45:59	1 серп. 1999 р.
+uk	medium	short	1999-08-01T13:45:59	1 серп. 1999 р., 13:45
+uk	short	-	1999-08-01T13:45:59	01.08.99
+uk	short	short	1999-08-01T13:45:59	01.08.99, 13:45
+uk	-	medium	1999-08-01T13:45:59	13:45:59
+uk	-	short	1999-08-01T13:45:59	13:45
+el	full	-	2026-11-17T09:05:03	Τρίτη 17 Νοεμβρίου 2026
+el	full	short	2026-11-17T09:05:03	Τρίτη 17 Νοεμβρίου 2026 στις 9:05 π.μ.
+el	long	-	2026-11-17T09:05:03	17 Νοεμβρίου 2026
+el	long	short	2026-11-17T09:05:03	17 Νοεμβρίου 2026 στις 9:05 π.μ.
+el	medium	-	2026-11-17T09:05:03	17 Νοε 2026
+el	medium	short	2026-11-17T09:05:03	17 Νοε 2026, 9:05 π.μ.
+el	short	-	2026-11-17T09:05:03	17/11/26
+el	short	short	2026-11-17T09:05:03	17/11/26, 9:05 π.μ.
+el	-	medium	2026-11-17T09:05:03	9:05:03 π.μ.
+el	-	short	2026-11-17T09:05:03	9:05 π.μ.
+el	full	-	2024-02-29T00:30:00	Πέμπτη 29 Φεβρουαρίου 2024
+el	full	short	2024-02-29T00:30:00	Πέμπτη 29 Φεβρουαρίου 2024 στις 12:30 π.μ.
+el	long	-	2024-02-29T00:30:00	29 Φεβρουαρίου 2024
+el	long	short	2024-02-29T00:30:00	29 Φεβρουαρίου 2024 στις 12:30 π.μ.
+el	medium	-	2024-02-29T00:30:00	29 Φεβ 2024
+el	medium	short	2024-02-29T00:30:00	29 Φεβ 2024, 12:30 π.μ.
+el	short	-	2024-02-29T00:30:00	29/2/24
+el	short	short	2024-02-29T00:30:00	29/2/24, 12:30 π.μ.
+el	-	medium	2024-02-29T00:30:00	12:30:00 π.μ.
+el	-	short	2024-02-29T00:30:00	12:30 π.μ.
+el	full	-	1999-08-01T13:45:59	Κυριακή 1 Αυγούστου 1999
+el	full	short	1999-08-01T13:45:59	Κυριακή 1 Αυγούστου 1999 στις 1:45 μ.μ.
+el	long	-	1999-08-01T13:45:59	1 Αυγούστου 1999
+el	long	short	1999-08-01T13:45:59	1 Αυγούστου 1999 στις 1:45 μ.μ.
+el	medium	-	1999-08-01T13:45:59	1 Αυγ 1999
+el	medium	short	1999-08-01T13:45:59	1 Αυγ 1999, 1:45 μ.μ.
+el	short	-	1999-08-01T13:45:59	1/8/99
+el	short	short	1999-08-01T13:45:59	1/8/99, 1:45 μ.μ.
+el	-	medium	1999-08-01T13:45:59	1:45:59 μ.μ.
+el	-	short	1999-08-01T13:45:59	1:45 μ.μ.
+tr	full	-	2026-11-17T09:05:03	17 Kasım 2026 Salı
+tr	full	short	2026-11-17T09:05:03	17 Kasım 2026 Salı 09:05
+tr	long	-	2026-11-17T09:05:03	17 Kasım 2026
+tr	long	short	2026-11-17T09:05:03	17 Kasım 2026 09:05
+tr	medium	-	2026-11-17T09:05:03	17 Kas 2026
+tr	medium	short	2026-11-17T09:05:03	17 Kas 2026 09:05
+tr	short	-	2026-11-17T09:05:03	17.11.2026
+tr	short	short	2026-11-17T09:05:03	17.11.2026 09:05
+tr	-	medium	2026-11-17T09:05:03	09:05:03
+tr	-	short	2026-11-17T09:05:03	09:05
+tr	full	-	2024-02-29T00:30:00	29 Şubat 2024 Perşembe
+tr	full	short	2024-02-29T00:30:00	29 Şubat 2024 Perşembe 00:30
+tr	long	-	2024-02-29T00:30:00	29 Şubat 2024
+tr	long	short	2024-02-29T00:30:00	29 Şubat 2024 00:30
+tr	medium	-	2024-02-29T00:30:00	29 Şub 2024
+tr	medium	short	2024-02-29T00:30:00	29 Şub 2024 00:30
+tr	short	-	2024-02-29T00:30:00	29.02.2024
+tr	short	short	2024-02-29T00:30:00	29.02.2024 00:30
+tr	-	medium	2024-02-29T00:30:00	00:30:00
+tr	-	short	2024-02-29T00:30:00	00:30
+tr	full	-	1999-08-01T13:45:59	1 Ağustos 1999 Pazar
+tr	full	short	1999-08-01T13:45:59	1 Ağustos 1999 Pazar 13:45
+tr	long	-	1999-08-01T13:45:59	1 Ağustos 1999
+tr	long	short	1999-08-01T13:45:59	1 Ağustos 1999 13:45
+tr	medium	-	1999-08-01T13:45:59	1 Ağu 1999
+tr	medium	short	1999-08-01T13:45:59	1 Ağu 1999 13:45
+tr	short	-	1999-08-01T13:45:59	1.08.1999
+tr	short	short	1999-08-01T13:45:59	1.08.1999 13:45
+tr	-	medium	1999-08-01T13:45:59	13:45:59
+tr	-	short	1999-08-01T13:45:59	13:45
+lt	full	-	2026-11-17T09:05:03	2026 m. lapkričio 17 d., antradienis
+lt	full	short	2026-11-17T09:05:03	2026 m. lapkričio 17 d., antradienis 09:05
+lt	long	-	2026-11-17T09:05:03	2026 m. lapkričio 17 d.
+lt	long	short	2026-11-17T09:05:03	2026 m. lapkričio 17 d. 09:05
+lt	medium	-	2026-11-17T09:05:03	2026-11-17
+lt	medium	short	2026-11-17T09:05:03	2026-11-17 09:05
+lt	short	-	2026-11-17T09:05:03	2026-11-17
+lt	short	short	2026-11-17T09:05:03	2026-11-17 09:05
+lt	-	medium	2026-11-17T09:05:03	09:05:03
+lt	-	short	2026-11-17T09:05:03	09:05
+lt	full	-	2024-02-29T00:30:00	2024 m. vasario 29 d., ketvirtadienis
+lt	full	short	2024-02-29T00:30:00	2024 m. vasario 29 d., ketvirtadienis 00:30
+lt	long	-	2024-02-29T00:30:00	2024 m. vasario 29 d.
+lt	long	short	2024-02-29T00:30:00	2024 m. vasario 29 d. 00:30
+lt	medium	-	2024-02-29T00:30:00	2024-02-29
+lt	medium	short	2024-02-29T00:30:00	2024-02-29 00:30
+lt	short	-	2024-02-29T00:30:00	2024-02-29
+lt	short	short	2024-02-29T00:30:00	2024-02-29 00:30
+lt	-	medium	2024-02-29T00:30:00	00:30:00
+lt	-	short	2024-02-29T00:30:00	00:30
+lt	full	-	1999-08-01T13:45:59	1999 m. rugpjūčio 1 d., sekmadienis
+lt	full	short	1999-08-01T13:45:59	1999 m. rugpjūčio 1 d., sekmadienis 13:45
+lt	long	-	1999-08-01T13:45:59	1999 m. rugpjūčio 1 d.
+lt	long	short	1999-08-01T13:45:59	1999 m. rugpjūčio 1 d. 13:45
+lt	medium	-	1999-08-01T13:45:59	1999-08-01
+lt	medium	short	1999-08-01T13:45:59	1999-08-01 13:45
+lt	short	-	1999-08-01T13:45:59	1999-08-01
+lt	short	short	1999-08-01T13:45:59	1999-08-01 13:45
+lt	-	medium	1999-08-01T13:45:59	13:45:59
+lt	-	short	1999-08-01T13:45:59	13:45
+lv	full	-	2026-11-17T09:05:03	otrdiena, 2026. gada 17. novembris
+lv	full	short	2026-11-17T09:05:03	otrdiena, 2026. gada 17. novembris 09:05
+lv	long	-	2026-11-17T09:05:03	2026. gada 17. novembris
+lv	long	short	2026-11-17T09:05:03	2026. gada 17. novembris 09:05
+lv	medium	-	2026-11-17T09:05:03	2026. gada 17. nov.
+lv	medium	short	2026-11-17T09:05:03	2026. gada 17. nov. 09:05
+lv	short	-	2026-11-17T09:05:03	17.11.26
+lv	short	short	2026-11-17T09:05:03	17.11.26 09:05
+lv	-	medium	2026-11-17T09:05:03	09:05:03
+lv	-	short	2026-11-17T09:05:03	09:05
+lv	full	-	2024-02-29T00:30:00	ceturtdiena, 2024. gada 29. februāris
+lv	full	short	2024-02-29T00:30:00	ceturtdiena, 2024. gada 29. februāris 00:30
+lv	long	-	2024-02-29T00:30:00	2024. gada 29. februāris
+lv	long	short	2024-02-29T00:30:00	2024. gada 29. februāris 00:30
+lv	medium	-	2024-02-29T00:30:00	2024. gada 29. febr.
+lv	medium	short	2024-02-29T00:30:00	2024. gada 29. febr. 00:30
+lv	short	-	2024-02-29T00:30:00	29.02.24
+lv	short	short	2024-02-29T00:30:00	29.02.24 00:30
+lv	-	medium	2024-02-29T00:30:00	00:30:00
+lv	-	short	2024-02-29T00:30:00	00:30
+lv	full	-	1999-08-01T13:45:59	svētdiena, 1999. gada 1. augusts
+lv	full	short	1999-08-01T13:45:59	svētdiena, 1999. gada 1. augusts 13:45
+lv	long	-	1999-08-01T13:45:59	1999. gada 1. augusts
+lv	long	short	1999-08-01T13:45:59	1999. gada 1. augusts 13:45
+lv	medium	-	1999-08-01T13:45:59	1999. gada 1. aug.
+lv	medium	short	1999-08-01T13:45:59	1999. gada 1. aug. 13:45
+lv	short	-	1999-08-01T13:45:59	01.08.99
+lv	short	short	1999-08-01T13:45:59	01.08.99 13:45
+lv	-	medium	1999-08-01T13:45:59	13:45:59
+lv	-	short	1999-08-01T13:45:59	13:45
+et	full	-	2026-11-17T09:05:03	teisipäev, 17. november 2026
+et	full	short	2026-11-17T09:05:03	teisipäev, 17. november 2026, kell 09:05
+et	long	-	2026-11-17T09:05:03	17. november 2026
+et	long	short	2026-11-17T09:05:03	17. november 2026, kell 09:05
+et	medium	-	2026-11-17T09:05:03	17. nov 2026
+et	medium	short	2026-11-17T09:05:03	17. nov 2026, 09:05
+et	short	-	2026-11-17T09:05:03	17.11.26
+et	short	short	2026-11-17T09:05:03	17.11.26, 09:05
+et	-	medium	2026-11-17T09:05:03	09:05:03
+et	-	short	2026-11-17T09:05:03	09:05
+et	full	-	2024-02-29T00:30:00	neljapäev, 29. veebruar 2024
+et	full	short	2024-02-29T00:30:00	neljapäev, 29. veebruar 2024, kell 00:30
+et	long	-	2024-02-29T00:30:00	29. veebruar 2024
+et	long	short	2024-02-29T00:30:00	29. veebruar 2024, kell 00:30
+et	medium	-	2024-02-29T00:30:00	29. veebr 2024
+et	medium	short	2024-02-29T00:30:00	29. veebr 2024, 00:30
+et	short	-	2024-02-29T00:30:00	29.02.24
+et	short	short	2024-02-29T00:30:00	29.02.24, 00:30
+et	-	medium	2024-02-29T00:30:00	00:30:00
+et	-	short	2024-02-29T00:30:00	00:30
+et	full	-	1999-08-01T13:45:59	pühapäev, 1. august 1999
+et	full	short	1999-08-01T13:45:59	pühapäev, 1. august 1999, kell 13:45
+et	long	-	1999-08-01T13:45:59	1. august 1999
+et	long	short	1999-08-01T13:45:59	1. august 1999, kell 13:45
+et	medium	-	1999-08-01T13:45:59	1. aug 1999
+et	medium	short	1999-08-01T13:45:59	1. aug 1999, 13:45
+et	short	-	1999-08-01T13:45:59	01.08.99
+et	short	short	1999-08-01T13:45:59	01.08.99, 13:45
+et	-	medium	1999-08-01T13:45:59	13:45:59
+et	-	short	1999-08-01T13:45:59	13:45
+cy	full	-	2026-11-17T09:05:03	Dydd Mawrth, 17 Tachwedd 2026
+cy	full	short	2026-11-17T09:05:03	Dydd Mawrth, 17 Tachwedd 2026 am 09:05
+cy	long	-	2026-11-17T09:05:03	17 Tachwedd 2026
+cy	long	short	2026-11-17T09:05:03	17 Tachwedd 2026 am 09:05
+cy	medium	-	2026-11-17T09:05:03	17 Tach 2026
+cy	medium	short	2026-11-17T09:05:03	17 Tach 2026, 09:05
+cy	short	-	2026-11-17T09:05:03	17/11/26
+cy	short	short	2026-11-17T09:05:03	17/11/26, 09:05
+cy	-	medium	2026-11-17T09:05:03	09:05:03
+cy	-	short	2026-11-17T09:05:03	09:05
+cy	full	-	2024-02-29T00:30:00	Dydd Iau, 29 Chwefror 2024
+cy	full	short	2024-02-29T00:30:00	Dydd Iau, 29 Chwefror 2024 am 00:30
+cy	long	-	2024-02-29T00:30:00	29 Chwefror 2024
+cy	long	short	2024-02-29T00:30:00	29 Chwefror 2024 am 00:30
+cy	medium	-	2024-02-29T00:30:00	29 Chwef 2024
+cy	medium	short	2024-02-29T00:30:00	29 Chwef 2024, 00:30
+cy	short	-	2024-02-29T00:30:00	29/02/24
+cy	short	short	2024-02-29T00:30:00	29/02/24, 00:30
+cy	-	medium	2024-02-29T00:30:00	00:30:00
+cy	-	short	2024-02-29T00:30:00	00:30
+cy	full	-	1999-08-01T13:45:59	Dydd Sul, 1 Awst 1999
+cy	full	short	1999-08-01T13:45:59	Dydd Sul, 1 Awst 1999 am 13:45
+cy	long	-	1999-08-01T13:45:59	1 Awst 1999
+cy	long	short	1999-08-01T13:45:59	1 Awst 1999 am 13:45
+cy	medium	-	1999-08-01T13:45:59	1 Awst 1999
+cy	medium	short	1999-08-01T13:45:59	1 Awst 1999, 13:45
+cy	short	-	1999-08-01T13:45:59	01/08/99
+cy	short	short	1999-08-01T13:45:59	01/08/99, 13:45
+cy	-	medium	1999-08-01T13:45:59	13:45:59
+cy	-	short	1999-08-01T13:45:59	13:45
+ga	full	-	2026-11-17T09:05:03	Dé Máirt 17 Samhain 2026
+ga	full	short	2026-11-17T09:05:03	Dé Máirt 17 Samhain 2026 ag 09:05
+ga	long	-	2026-11-17T09:05:03	17 Samhain 2026
+ga	long	short	2026-11-17T09:05:03	17 Samhain 2026 ag 09:05
+ga	medium	-	2026-11-17T09:05:03	17 Samh 2026
+ga	medium	short	2026-11-17T09:05:03	17 Samh 2026, 09:05
+ga	short	-	2026-11-17T09:05:03	17/11/26
+ga	short	short	2026-11-17T09:05:03	17/11/26, 09:05
+ga	-	medium	2026-11-17T09:05:03	09:05:03
+ga	-	short	2026-11-17T09:05:03	09:05
+ga	full	-	2024-02-29T00:30:00	Déardaoin 29 Feabhra 2024
+ga	full	short	2024-02-29T00:30:00	Déardaoin 29 Feabhra 2024 ag 00:30
+ga	long	-	2024-02-29T00:30:00	29 Feabhra 2024
+ga	long	short	2024-02-29T00:30:00	29 Feabhra 2024 ag 00:30
+ga	medium	-	2024-02-29T00:30:00	29 Feabh 2024
+ga	medium	short	2024-02-29T00:30:00	29 Feabh 2024, 00:30
+ga	short	-	2024-02-29T00:30:00	29/2/24
+ga	short	short	2024-02-29T00:30:00	29/2/24, 00:30
+ga	-	medium	2024-02-29T00:30:00	00:30:00
+ga	-	short	2024-02-29T00:30:00	00:30
+ga	full	-	1999-08-01T13:45:59	Dé Domhnaigh 1 Lúnasa 1999
+ga	full	short	1999-08-01T13:45:59	Dé Domhnaigh 1 Lúnasa 1999 ag 13:45
+ga	long	-	1999-08-01T13:45:59	1 Lúnasa 1999
+ga	long	short	1999-08-01T13:45:59	1 Lúnasa 1999 ag 13:45
+ga	medium	-	1999-08-01T13:45:59	1 Lún 1999
+ga	medium	short	1999-08-01T13:45:59	1 Lún 1999, 13:45
+ga	short	-	1999-08-01T13:45:59	1/8/99
+ga	short	short	1999-08-01T13:45:59	1/8/99, 13:45
+ga	-	medium	1999-08-01T13:45:59	13:45:59
+ga	-	short	1999-08-01T13:45:59	13:45
+ar	full	-	2026-11-17T09:05:03	الثلاثاء، 17 نوفمبر 2026
+ar	full	short	2026-11-17T09:05:03	الثلاثاء، 17 نوفمبر 2026 في 9:05 ص
+ar	long	-	2026-11-17T09:05:03	17 نوفمبر 2026
+ar	long	short	2026-11-17T09:05:03	17 نوفمبر 2026 في 9:05 ص
+ar	medium	-	2026-11-17T09:05:03	17‏/11‏/2026
+ar	medium	short	2026-11-17T09:05:03	17‏/11‏/2026، 9:05 ص
+ar	short	-	2026-11-17T09:05:03	17‏/11‏/2026
+ar	short	short	2026-11-17T09:05:03	17‏/11‏/2026، 9:05 ص
+ar	-	medium	2026-11-17T09:05:03	9:05:03 ص
+ar	-	short	2026-11-17T09:05:03	9:05 ص
+ar	full	-	2024-02-29T00:30:00	الخميس، 29 فبراير 2024
+ar	full	short	2024-02-29T00:30:00	الخميس، 29 فبراير 2024 في 12:30 ص
+ar	long	-	2024-02-29T00:30:00	29 فبراير 2024
+ar	long	short	2024-02-29T00:30:00	29 فبراير 2024 في 12:30 ص
+ar	medium	-	2024-02-29T00:30:00	29‏/02‏/2024
+ar	medium	short	2024-02-29T00:30:00	29‏/02‏/2024، 12:30 ص
+ar	short	-	2024-02-29T00:30:00	29‏/2‏/2024
+ar	short	short	2024-02-29T00:30:00	29‏/2‏/2024، 12:30 ص
+ar	-	medium	2024-02-29T00:30:00	12:30:00 ص
+ar	-	short	2024-02-29T00:30:00	12:30 ص
+ar	full	-	1999-08-01T13:45:59	الأحد، 1 أغسطس 1999
+ar	full	short	1999-08-01T13:45:59	الأحد، 1 أغسطس 1999 في 1:45 م
+ar	long	-	1999-08-01T13:45:59	1 أغسطس 1999
+ar	long	short	1999-08-01T13:45:59	1 أغسطس 1999 في 1:45 م
+ar	medium	-	1999-08-01T13:45:59	01‏/08‏/1999
+ar	medium	short	1999-08-01T13:45:59	01‏/08‏/1999، 1:45 م
+ar	short	-	1999-08-01T13:45:59	1‏/8‏/1999
+ar	short	short	1999-08-01T13:45:59	1‏/8‏/1999، 1:45 م
+ar	-	medium	1999-08-01T13:45:59	1:45:59 م
+ar	-	short	1999-08-01T13:45:59	1:45 م
+ar-EG	full	-	2026-11-17T09:05:03	الثلاثاء، ١٧ نوفمبر ٢٠٢٦
+ar-EG	full	short	2026-11-17T09:05:03	الثلاثاء، ١٧ نوفمبر ٢٠٢٦ في ٩:٠٥ ص
+ar-EG	long	-	2026-11-17T09:05:03	١٧ نوفمبر ٢٠٢٦
+ar-EG	long	short	2026-11-17T09:05:03	١٧ نوفمبر ٢٠٢٦ في ٩:٠٥ ص
+ar-EG	medium	-	2026-11-17T09:05:03	١٧‏/١١‏/٢٠٢٦
+ar-EG	medium	short	2026-11-17T09:05:03	١٧‏/١١‏/٢٠٢٦، ٩:٠٥ ص
+ar-EG	short	-	2026-11-17T09:05:03	١٧‏/١١‏/٢٠٢٦
+ar-EG	short	short	2026-11-17T09:05:03	١٧‏/١١‏/٢٠٢٦، ٩:٠٥ ص
+ar-EG	-	medium	2026-11-17T09:05:03	٩:٠٥:٠٣ ص
+ar-EG	-	short	2026-11-17T09:05:03	٩:٠٥ ص
+ar-EG	full	-	2024-02-29T00:30:00	الخميس، ٢٩ فبراير ٢٠٢٤
+ar-EG	full	short	2024-02-29T00:30:00	الخميس، ٢٩ فبراير ٢٠٢٤ في ١٢:٣٠ ص
+ar-EG	long	-	2024-02-29T00:30:00	٢٩ فبراير ٢٠٢٤
+ar-EG	long	short	2024-02-29T00:30:00	٢٩ فبراير ٢٠٢٤ في ١٢:٣٠ ص
+ar-EG	medium	-	2024-02-29T00:30:00	٢٩‏/٠٢‏/٢٠٢٤
+ar-EG	medium	short	2024-02-29T00:30:00	٢٩‏/٠٢‏/٢٠٢٤، ١٢:٣٠ ص
+ar-EG	short	-	2024-02-29T00:30:00	٢٩‏/٢‏/٢٠٢٤
+ar-EG	short	short	2024-02-29T00:30:00	٢٩‏/٢‏/٢٠٢٤، ١٢:٣٠ ص
+ar-EG	-	medium	2024-02-29T00:30:00	١٢:٣٠:٠٠ ص
+ar-EG	-	short	2024-02-29T00:30:00	١٢:٣٠ ص
+ar-EG	full	-	1999-08-01T13:45:59	الأحد، ١ أغسطس ١٩٩٩
+ar-EG	full	short	1999-08-01T13:45:59	الأحد، ١ أغسطس ١٩٩٩ في ١:٤٥ م
+ar-EG	long	-	1999-08-01T13:45:59	١ أغسطس ١٩٩٩
+ar-EG	long	short	1999-08-01T13:45:59	١ أغسطس ١٩٩٩ في ١:٤٥ م
+ar-EG	medium	-	1999-08-01T13:45:59	٠١‏/٠٨‏/١٩٩٩
+ar-EG	medium	short	1999-08-01T13:45:59	٠١‏/٠٨‏/١٩٩٩، ١:٤٥ م
+ar-EG	short	-	1999-08-01T13:45:59	١‏/٨‏/١٩٩٩
+ar-EG	short	short	1999-08-01T13:45:59	١‏/٨‏/١٩٩٩، ١:٤٥ م
+ar-EG	-	medium	1999-08-01T13:45:59	١:٤٥:٥٩ م
+ar-EG	-	short	1999-08-01T13:45:59	١:٤٥ م
+fa	full	-	2026-11-17T09:05:03	سه‌شنبه ۱۷ نوامبر ۲۰۲۶
+fa	full	short	2026-11-17T09:05:03	سه‌شنبه ۱۷ نوامبر ۲۰۲۶ ساعت ۹:۰۵
+fa	long	-	2026-11-17T09:05:03	۱۷ نوامبر ۲۰۲۶
+fa	long	short	2026-11-17T09:05:03	۱۷ نوامبر ۲۰۲۶ ساعت ۹:۰۵
+fa	medium	-	2026-11-17T09:05:03	۱۷ نوامبر ۲۰۲۶
+fa	medium	short	2026-11-17T09:05:03	۱۷ نوامبر ۲۰۲۶، ۹:۰۵
+fa	short	-	2026-11-17T09:05:03	۲۰۲۶/۱۱/۱۷
+fa	short	short	2026-11-17T09:05:03	۲۰۲۶/۱۱/۱۷, ۹:۰۵
+fa	-	medium	2026-11-17T09:05:03	۹:۰۵:۰۳
+fa	-	short	2026-11-17T09:05:03	۹:۰۵
+fa	full	-	2024-02-29T00:30:00	پنجشنبه ۲۹ فوریه ۲۰۲۴
+fa	full	short	2024-02-29T00:30:00	پنجشنبه ۲۹ فوریه ۲۰۲۴ ساعت ۰:۳۰
+fa	long	-	2024-02-29T00:30:00	۲۹ فوریه ۲۰۲۴
+fa	long	short	2024-02-29T00:30:00	۲۹ فوریه ۲۰۲۴ ساعت ۰:۳۰
+fa	medium	-	2024-02-29T00:30:00	۲۹ فوریه ۲۰۲۴
+fa	medium	short	2024-02-29T00:30:00	۲۹ فوریه ۲۰۲۴، ۰:۳۰
+fa	short	-	2024-02-29T00:30:00	۲۰۲۴/۲/۲۹
+fa	short	short	2024-02-29T00:30:00	۲۰۲۴/۲/۲۹, ۰:۳۰
+fa	-	medium	2024-02-29T00:30:00	۰:۳۰:۰۰
+fa	-	short	2024-02-29T00:30:00	۰:۳۰
+fa	full	-	1999-08-01T13:45:59	یکشنبه ۱ اوت ۱۹۹۹
+fa	full	short	1999-08-01T13:45:59	یکشنبه ۱ اوت ۱۹۹۹ ساعت ۱۳:۴۵
+fa	long	-	1999-08-01T13:45:59	۱ اوت ۱۹۹۹
+fa	long	short	1999-08-01T13:45:59	۱ اوت ۱۹۹۹ ساعت ۱۳:۴۵
+fa	medium	-	1999-08-01T13:45:59	۱ اوت ۱۹۹۹
+fa	medium	short	1999-08-01T13:45:59	۱ اوت ۱۹۹۹، ۱۳:۴۵
+fa	short	-	1999-08-01T13:45:59	۱۹۹۹/۸/۱
+fa	short	short	1999-08-01T13:45:59	۱۹۹۹/۸/۱, ۱۳:۴۵
+fa	-	medium	1999-08-01T13:45:59	۱۳:۴۵:۵۹
+fa	-	short	1999-08-01T13:45:59	۱۳:۴۵
+he	full	-	2026-11-17T09:05:03	יום שלישי, 17 בנובמבר 2026
+he	full	short	2026-11-17T09:05:03	יום שלישי, 17 בנובמבר 2026 בשעה 9:05
+he	long	-	2026-11-17T09:05:03	17 בנובמבר 2026
+he	long	short	2026-11-17T09:05:03	17 בנובמבר 2026 בשעה 9:05
+he	medium	-	2026-11-17T09:05:03	17 בנוב׳ 2026
+he	medium	short	2026-11-17T09:05:03	17 בנוב׳ 2026, 9:05
+he	short	-	2026-11-17T09:05:03	17.11.2026
+he	short	short	2026-11-17T09:05:03	17.11.2026, 9:05
+he	-	medium	2026-11-17T09:05:03	9:05:03
+he	-	short	2026-11-17T09:05:03	9:05
+he	full	-	2024-02-29T00:30:00	יום חמישי, 29 בפברואר 2024
+he	full	short	2024-02-29T00:30:00	יום חמישי, 29 בפברואר 2024 בשעה 0:30
+he	long	-	2024-02-29T00:30:00	29 בפברואר 2024
+he	long	short	2024-02-29T00:30:00	29 בפברואר 2024 בשעה 0:30
+he	medium	-	2024-02-29T00:30:00	29 בפבר׳ 2024
+he	medium	short	2024-02-29T00:30:00	29 בפבר׳ 2024, 0:30
+he	short	-	2024-02-29T00:30:00	29.2.2024
+he	short	short	2024-02-29T00:30:00	29.2.2024, 0:30
+he	-	medium	2024-02-29T00:30:00	0:30:00
+he	-	short	2024-02-29T00:30:00	0:30
+he	full	-	1999-08-01T13:45:59	יום ראשון, 1 באוגוסט 1999
+he	full	short	1999-08-01T13:45:59	יום ראשון, 1 באוגוסט 1999 בשעה 13:45
+he	long	-	1999-08-01T13:45:59	1 באוגוסט 1999
+he	long	short	1999-08-01T13:45:59	1 באוגוסט 1999 בשעה 13:45
+he	medium	-	1999-08-01T13:45:59	1 באוג׳ 1999
+he	medium	short	1999-08-01T13:45:59	1 באוג׳ 1999, 13:45
+he	short	-	1999-08-01T13:45:59	1.8.1999
+he	short	short	1999-08-01T13:45:59	1.8.1999, 13:45
+he	-	medium	1999-08-01T13:45:59	13:45:59
+he	-	short	1999-08-01T13:45:59	13:45
+hi	full	-	2026-11-17T09:05:03	मंगलवार, 17 नवंबर 2026
+hi	full	short	2026-11-17T09:05:03	मंगलवार, 17 नवंबर 2026 को 9:05 am बजे
+hi	long	-	2026-11-17T09:05:03	17 नवंबर 2026
+hi	long	short	2026-11-17T09:05:03	17 नवंबर 2026 को 9:05 am बजे
+hi	medium	-	2026-11-17T09:05:03	17 नव॰ 2026
+hi	medium	short	2026-11-17T09:05:03	17 नव॰ 2026, 9:05 am
+hi	short	-	2026-11-17T09:05:03	17/11/26
+hi	short	short	2026-11-17T09:05:03	17/11/26, 9:05 am
+hi	-	medium	2026-11-17T09:05:03	9:05:03 am
+hi	-	short	2026-11-17T09:05:03	9:05 am
+hi	full	-	2024-02-29T00:30:00	गुरुवार, 29 फ़रवरी 2024
+hi	full	short	2024-02-29T00:30:00	गुरुवार, 29 फ़रवरी 2024 को 12:30 am बजे
+hi	long	-	2024-02-29T00:30:00	29 फ़रवरी 2024
+hi	long	short	2024-02-29T00:30:00	29 फ़रवरी 2024 को 12:30 am बजे
+hi	medium	-	2024-02-29T00:30:00	29 फ़र॰ 2024
+hi	medium	short	2024-02-29T00:30:00	29 फ़र॰ 2024, 12:30 am
+hi	short	-	2024-02-29T00:30:00	29/2/24
+hi	short	short	2024-02-29T00:30:00	29/2/24, 12:30 am
+hi	-	medium	2024-02-29T00:30:00	12:30:00 am
+hi	-	short	2024-02-29T00:30:00	12:30 am
+hi	full	-	1999-08-01T13:45:59	रविवार, 1 अगस्त 1999
+hi	full	short	1999-08-01T13:45:59	रविवार, 1 अगस्त 1999 को 1:45 pm बजे
+hi	long	-	1999-08-01T13:45:59	1 अगस्त 1999
+hi	long	short	1999-08-01T13:45:59	1 अगस्त 1999 को 1:45 pm बजे
+hi	medium	-	1999-08-01T13:45:59	1 अग॰ 1999
+hi	medium	short	1999-08-01T13:45:59	1 अग॰ 1999, 1:45 pm
+hi	short	-	1999-08-01T13:45:59	1/8/99
+hi	short	short	1999-08-01T13:45:59	1/8/99, 1:45 pm
+hi	-	medium	1999-08-01T13:45:59	1:45:59 pm
+hi	-	short	1999-08-01T13:45:59	1:45 pm
+bn	full	-	2026-11-17T09:05:03	মঙ্গলবার, ১৭ নভেম্বর, ২০২৬
+bn	full	short	2026-11-17T09:05:03	মঙ্গলবার, ১৭ নভেম্বর, ২০২৬ এ ৯:০৫ AM
+bn	long	-	2026-11-17T09:05:03	১৭ নভেম্বর, ২০২৬
+bn	long	short	2026-11-17T09:05:03	১৭ নভেম্বর, ২০২৬ এ ৯:০৫ AM
+bn	medium	-	2026-11-17T09:05:03	১৭ নভে, ২০২৬
+bn	medium	short	2026-11-17T09:05:03	১৭ নভে, ২০২৬, ৯:০৫ AM
+bn	short	-	2026-11-17T09:05:03	১৭/১১/২৬
+bn	short	short	2026-11-17T09:05:03	১৭/১১/২৬, ৯:০৫ AM
+bn	-	medium	2026-11-17T09:05:03	৯:০৫:০৩ AM
+bn	-	short	2026-11-17T09:05:03	৯:০৫ AM
+bn	full	-	2024-02-29T00:30:00	বৃহস্পতিবার, ২৯ ফেব্রুয়ারি, ২০২৪
+bn	full	short	2024-02-29T00:30:00	বৃহস্পতিবার, ২৯ ফেব্রুয়ারি, ২০২৪ এ ১২:৩০ AM
+bn	long	-	2024-02-29T00:30:00	২৯ ফেব্রুয়ারি, ২০২৪
+bn	long	short	2024-02-29T00:30:00	২৯ ফেব্রুয়ারি, ২০২৪ এ ১২:৩০ AM
+bn	medium	-	2024-02-29T00:30:00	২৯ ফেব, ২০২৪
+bn	medium	short	2024-02-29T00:30:00	২৯ ফেব, ২০২৪, ১২:৩০ AM
+bn	short	-	2024-02-29T00:30:00	২৯/২/২৪
+bn	short	short	2024-02-29T00:30:00	২৯/২/২৪, ১২:৩০ AM
+bn	-	medium	2024-02-29T00:30:00	১২:৩০:০০ AM
+bn	-	short	2024-02-29T00:30:00	১২:৩০ AM
+bn	full	-	1999-08-01T13:45:59	রবিবার, ১ আগস্ট, ১৯৯৯
+bn	full	short	1999-08-01T13:45:59	রবিবার, ১ আগস্ট, ১৯৯৯ এ ১:৪৫ PM
+bn	long	-	1999-08-01T13:45:59	১ আগস্ট, ১৯৯৯
+bn	long	short	1999-08-01T13:45:59	১ আগস্ট, ১৯৯৯ এ ১:৪৫ PM
+bn	medium	-	1999-08-01T13:45:59	১ আগ, ১৯৯৯
+bn	medium	short	1999-08-01T13:45:59	১ আগ, ১৯৯৯, ১:৪৫ PM
+bn	short	-	1999-08-01T13:45:59	১/৮/৯৯
+bn	short	short	1999-08-01T13:45:59	১/৮/৯৯, ১:৪৫ PM
+bn	-	medium	1999-08-01T13:45:59	১:৪৫:৫৯ PM
+bn	-	short	1999-08-01T13:45:59	১:৪৫ PM
+mr	full	-	2026-11-17T09:05:03	मंगळवार, १७ नोव्हेंबर, २०२६
+mr	full	short	2026-11-17T09:05:03	मंगळवार, १७ नोव्हेंबर, २०२६ रोजी ९:०५ AM
+mr	long	-	2026-11-17T09:05:03	१७ नोव्हेंबर, २०२६
+mr	long	short	2026-11-17T09:05:03	१७ नोव्हेंबर, २०२६ रोजी ९:०५ AM वाजता
+mr	medium	-	2026-11-17T09:05:03	१७ नोव्हें, २०२६
+mr	medium	short	2026-11-17T09:05:03	१७ नोव्हें, २०२६, ९:०५ AM
+mr	short	-	2026-11-17T09:05:03	१७/११/२६
+mr	short	short	2026-11-17T09:05:03	१७/११/२६, ९:०५ AM
+mr	-	medium	2026-11-17T09:05:03	९:०५:०३ AM
+mr	-	short	2026-11-17T09:05:03	९:०५ AM
+mr	full	-	2024-02-29T00:30:00	गुरुवार, २९ फेब्रुवारी, २०२४
+mr	full	short	2024-02-29T00:30:00	गुरुवार, २९ फेब्रुवारी, २०२४ रोजी १२:३० AM
+mr	long	-	2024-02-29T00:30:00	२९ फेब्रुवारी, २०२४
+mr	long	short	2024-02-29T00:30:00	२९ फेब्रुवारी, २०२४ रोजी १२:३० AM वाजता
+mr	medium	-	2024-02-29T00:30:00	२९ फेब्रु, २०२४
+mr	medium	short	2024-02-29T00:30:00	२९ फेब्रु, २०२४, १२:३० AM
+mr	short	-	2024-02-29T00:30:00	२९/२/२४
+mr	short	short	2024-02-29T00:30:00	२९/२/२४, १२:३० AM
+mr	-	medium	2024-02-29T00:30:00	१२:३०:०० AM
+mr	-	short	2024-02-29T00:30:00	१२:३० AM
+mr	full	-	1999-08-01T13:45:59	रविवार, १ ऑगस्ट, १९९९
+mr	full	short	1999-08-01T13:45:59	रविवार, १ ऑगस्ट, १९९९ रोजी १:४५ PM
+mr	long	-	1999-08-01T13:45:59	१ ऑगस्ट, १९९९
+mr	long	short	1999-08-01T13:45:59	१ ऑगस्ट, १९९९ रोजी १:४५ PM वाजता
+mr	medium	-	1999-08-01T13:45:59	१ ऑग, १९९९
+mr	medium	short	1999-08-01T13:45:59	१ ऑग, १९९९, १:४५ PM
+mr	short	-	1999-08-01T13:45:59	१/८/९९
+mr	short	short	1999-08-01T13:45:59	१/८/९९, १:४५ PM
+mr	-	medium	1999-08-01T13:45:59	१:४५:५९ PM
+mr	-	short	1999-08-01T13:45:59	१:४५ PM
+ta	full	-	2026-11-17T09:05:03	செவ்வாய், 17 நவம்பர், 2026
+ta	full	short	2026-11-17T09:05:03	செவ்வாய், 17 நவம்பர், 2026 அன்று 9:05 AM
+ta	long	-	2026-11-17T09:05:03	17 நவம்பர், 2026
+ta	long	short	2026-11-17T09:05:03	17 நவம்பர், 2026 அன்று 9:05 AM
+ta	medium	-	2026-11-17T09:05:03	17 நவ., 2026
+ta	medium	short	2026-11-17T09:05:03	17 நவ., 2026, 9:05 AM
+ta	short	-	2026-11-17T09:05:03	17/11/26
+ta	short	short	2026-11-17T09:05:03	17/11/26, 9:05 AM
+ta	-	medium	2026-11-17T09:05:03	9:05:03 AM
+ta	-	short	2026-11-17T09:05:03	9:05 AM
+ta	full	-	2024-02-29T00:30:00	வியாழன், 29 பிப்ரவரி, 2024
+ta	full	short	2024-02-29T00:30:00	வியாழன், 29 பிப்ரவரி, 2024 அன்று 12:30 AM
+ta	long	-	2024-02-29T00:30:00	29 பிப்ரவரி, 2024
+ta	long	short	2024-02-29T00:30:00	29 பிப்ரவரி, 2024 அன்று 12:30 AM
+ta	medium	-	2024-02-29T00:30:00	29 பிப்., 2024
+ta	medium	short	2024-02-29T00:30:00	29 பிப்., 2024, 12:30 AM
+ta	short	-	2024-02-29T00:30:00	29/2/24
+ta	short	short	2024-02-29T00:30:00	29/2/24, 12:30 AM
+ta	-	medium	2024-02-29T00:30:00	12:30:00 AM
+ta	-	short	2024-02-29T00:30:00	12:30 AM
+ta	full	-	1999-08-01T13:45:59	ஞாயிறு, 1 ஆகஸ்ட், 1999
+ta	full	short	1999-08-01T13:45:59	ஞாயிறு, 1 ஆகஸ்ட், 1999 அன்று 1:45 PM
+ta	long	-	1999-08-01T13:45:59	1 ஆகஸ்ட், 1999
+ta	long	short	1999-08-01T13:45:59	1 ஆகஸ்ட், 1999 அன்று 1:45 PM
+ta	medium	-	1999-08-01T13:45:59	1 ஆக., 1999
+ta	medium	short	1999-08-01T13:45:59	1 ஆக., 1999, 1:45 PM
+ta	short	-	1999-08-01T13:45:59	1/8/99
+ta	short	short	1999-08-01T13:45:59	1/8/99, 1:45 PM
+ta	-	medium	1999-08-01T13:45:59	1:45:59 PM
+ta	-	short	1999-08-01T13:45:59	1:45 PM
+th	full	-	2026-11-17T09:05:03	วันอังคารที่ 17 พฤศจิกายน ค.ศ. 2026
+th	full	short	2026-11-17T09:05:03	วันอังคารที่ 17 พฤศจิกายน ค.ศ. 2026 เวลา 09:05 น.
+th	long	-	2026-11-17T09:05:03	17 พฤศจิกายน ค.ศ. 2026
+th	long	short	2026-11-17T09:05:03	17 พฤศจิกายน ค.ศ. 2026 เวลา 09:05 น.
+th	medium	-	2026-11-17T09:05:03	17 พ.ย. 2026
+th	medium	short	2026-11-17T09:05:03	17 พ.ย. 2026 09:05 น.
+th	short	-	2026-11-17T09:05:03	17/11/26
+th	short	short	2026-11-17T09:05:03	17/11/26 09:05 น.
+th	-	medium	2026-11-17T09:05:03	09:05:03
+th	-	short	2026-11-17T09:05:03	09:05 น.
+th	full	-	2024-02-29T00:30:00	วันพฤหัสบดีที่ 29 กุมภาพันธ์ ค.ศ. 2024
+th	full	short	2024-02-29T00:30:00	วันพฤหัสบดีที่ 29 กุมภาพันธ์ ค.ศ. 2024 เวลา 00:30 น.
+th	long	-	2024-02-29T00:30:00	29 กุมภาพันธ์ ค.ศ. 2024
+th	long	short	2024-02-29T00:30:00	29 กุมภาพันธ์ ค.ศ. 2024 เวลา 00:30 น.
+th	medium	-	2024-02-29T00:30:00	29 ก.พ. 2024
+th	medium	short	2024-02-29T00:30:00	29 ก.พ. 2024 00:30 น.
+th	short	-	2024-02-29T00:30:00	29/2/24
+th	short	short	2024-02-29T00:30:00	29/2/24 00:30 น.
+th	-	medium	2024-02-29T00:30:00	00:30:00
+th	-	short	2024-02-29T00:30:00	00:30 น.
+th	full	-	1999-08-01T13:45:59	วันอาทิตย์ที่ 1 สิงหาคม ค.ศ. 1999
+th	full	short	1999-08-01T13:45:59	วันอาทิตย์ที่ 1 สิงหาคม ค.ศ. 1999 เวลา 13:45 น.
+th	long	-	1999-08-01T13:45:59	1 สิงหาคม ค.ศ. 1999
+th	long	short	1999-08-01T13:45:59	1 สิงหาคม ค.ศ. 1999 เวลา 13:45 น.
+th	medium	-	1999-08-01T13:45:59	1 ส.ค. 1999
+th	medium	short	1999-08-01T13:45:59	1 ส.ค. 1999 13:45 น.
+th	short	-	1999-08-01T13:45:59	1/8/99
+th	short	short	1999-08-01T13:45:59	1/8/99 13:45 น.
+th	-	medium	1999-08-01T13:45:59	13:45:59
+th	-	short	1999-08-01T13:45:59	13:45 น.
+vi	full	-	2026-11-17T09:05:03	Thứ Ba, 17 tháng 11, 2026
+vi	full	short	2026-11-17T09:05:03	lúc 09:05 Thứ Ba, 17 tháng 11, 2026
+vi	long	-	2026-11-17T09:05:03	17 tháng 11, 2026
+vi	long	short	2026-11-17T09:05:03	lúc 09:05 17 tháng 11, 2026
+vi	medium	-	2026-11-17T09:05:03	17 thg 11, 2026
+vi	medium	short	2026-11-17T09:05:03	09:05 17 thg 11, 2026
+vi	short	-	2026-11-17T09:05:03	17/11/26
+vi	short	short	2026-11-17T09:05:03	09:05 17/11/26
+vi	-	medium	2026-11-17T09:05:03	09:05:03
+vi	-	short	2026-11-17T09:05:03	09:05
+vi	full	-	2024-02-29T00:30:00	Thứ Năm, 29 tháng 2, 2024
+vi	full	short	2024-02-29T00:30:00	lúc 00:30 Thứ Năm, 29 tháng 2, 2024
+vi	long	-	2024-02-29T00:30:00	29 tháng 2, 2024
+vi	long	short	2024-02-29T00:30:00	lúc 00:30 29 tháng 2, 2024
+vi	medium	-	2024-02-29T00:30:00	29 thg 2, 2024
+vi	medium	short	2024-02-29T00:30:00	00:30 29 thg 2, 2024
+vi	short	-	2024-02-29T00:30:00	29/2/24
+vi	short	short	2024-02-29T00:30:00	00:30 29/2/24
+vi	-	medium	2024-02-29T00:30:00	00:30:00
+vi	-	short	2024-02-29T00:30:00	00:30
+vi	full	-	1999-08-01T13:45:59	Chủ Nhật, 1 tháng 8, 1999
+vi	full	short	1999-08-01T13:45:59	lúc 13:45 Chủ Nhật, 1 tháng 8, 1999
+vi	long	-	1999-08-01T13:45:59	1 tháng 8, 1999
+vi	long	short	1999-08-01T13:45:59	lúc 13:45 1 tháng 8, 1999
+vi	medium	-	1999-08-01T13:45:59	1 thg 8, 1999
+vi	medium	short	1999-08-01T13:45:59	13:45 1 thg 8, 1999
+vi	short	-	1999-08-01T13:45:59	1/8/99
+vi	short	short	1999-08-01T13:45:59	13:45 1/8/99
+vi	-	medium	1999-08-01T13:45:59	13:45:59
+vi	-	short	1999-08-01T13:45:59	13:45
+id	full	-	2026-11-17T09:05:03	Selasa, 17 November 2026
+id	full	short	2026-11-17T09:05:03	Selasa, 17 November 2026 pukul 09.05
+id	long	-	2026-11-17T09:05:03	17 November 2026
+id	long	short	2026-11-17T09:05:03	17 November 2026 pukul 09.05
+id	medium	-	2026-11-17T09:05:03	17 Nov 2026
+id	medium	short	2026-11-17T09:05:03	17 Nov 2026, 09.05
+id	short	-	2026-11-17T09:05:03	17/11/26
+id	short	short	2026-11-17T09:05:03	17/11/26, 09.05
+id	-	medium	2026-11-17T09:05:03	09.05.03
+id	-	short	2026-11-17T09:05:03	09.05
+id	full	-	2024-02-29T00:30:00	Kamis, 29 Februari 2024
+id	full	short	2024-02-29T00:30:00	Kamis, 29 Februari 2024 pukul 00.30
+id	long	-	2024-02-29T00:30:00	29 Februari 2024
+id	long	short	2024-02-29T00:30:00	29 Februari 2024 pukul 00.30
+id	medium	-	2024-02-29T00:30:00	29 Feb 2024
+id	medium	short	2024-02-29T00:30:00	29 Feb 2024, 00.30
+id	short	-	2024-02-29T00:30:00	29/2/24
+id	short	short	2024-02-29T00:30:00	29/2/24, 00.30
+id	-	medium	2024-02-29T00:30:00	00.30.00
+id	-	short	2024-02-29T00:30:00	00.30
+id	full	-	1999-08-01T13:45:59	Minggu, 01 Agustus 1999
+id	full	short	1999-08-01T13:45:59	Minggu, 01 Agustus 1999 pukul 13.45
+id	long	-	1999-08-01T13:45:59	1 Agustus 1999
+id	long	short	1999-08-01T13:45:59	1 Agustus 1999 pukul 13.45
+id	medium	-	1999-08-01T13:45:59	1 Agu 1999
+id	medium	short	1999-08-01T13:45:59	1 Agu 1999, 13.45
+id	short	-	1999-08-01T13:45:59	1/8/99
+id	short	short	1999-08-01T13:45:59	1/8/99, 13.45
+id	-	medium	1999-08-01T13:45:59	13.45.59
+id	-	short	1999-08-01T13:45:59	13.45
+ko	full	-	2026-11-17T09:05:03	2026년 11월 17일 화요일
+ko	full	short	2026-11-17T09:05:03	2026년 11월 17일 화요일 오전 9:05
+ko	long	-	2026-11-17T09:05:03	2026년 11월 17일
+ko	long	short	2026-11-17T09:05:03	2026년 11월 17일 오전 9:05
+ko	medium	-	2026-11-17T09:05:03	2026. 11. 17.
+ko	medium	short	2026-11-17T09:05:03	2026. 11. 17. 오전 9:05
+ko	short	-	2026-11-17T09:05:03	26. 11. 17.
+ko	short	short	2026-11-17T09:05:03	26. 11. 17. 오전 9:05
+ko	-	medium	2026-11-17T09:05:03	오전 9:05:03
+ko	-	short	2026-11-17T09:05:03	오전 9:05
+ko	full	-	2024-02-29T00:30:00	2024년 2월 29일 목요일
+ko	full	short	2024-02-29T00:30:00	2024년 2월 29일 목요일 오전 12:30
+ko	long	-	2024-02-29T00:30:00	2024년 2월 29일
+ko	long	short	2024-02-29T00:30:00	2024년 2월 29일 오전 12:30
+ko	medium	-	2024-02-29T00:30:00	2024. 2. 29.
+ko	medium	short	2024-02-29T00:30:00	2024. 2. 29. 오전 12:30
+ko	short	-	2024-02-29T00:30:00	24. 2. 29.
+ko	short	short	2024-02-29T00:30:00	24. 2. 29. 오전 12:30
+ko	-	medium	2024-02-29T00:30:00	오전 12:30:00
+ko	-	short	2024-02-29T00:30:00	오전 12:30
+ko	full	-	1999-08-01T13:45:59	1999년 8월 1일 일요일
+ko	full	short	1999-08-01T13:45:59	1999년 8월 1일 일요일 오후 1:45
+ko	long	-	1999-08-01T13:45:59	1999년 8월 1일
+ko	long	short	1999-08-01T13:45:59	1999년 8월 1일 오후 1:45
+ko	medium	-	1999-08-01T13:45:59	1999. 8. 1.
+ko	medium	short	1999-08-01T13:45:59	1999. 8. 1. 오후 1:45
+ko	short	-	1999-08-01T13:45:59	99. 8. 1.
+ko	short	short	1999-08-01T13:45:59	99. 8. 1. 오후 1:45
+ko	-	medium	1999-08-01T13:45:59	오후 1:45:59
+ko	-	short	1999-08-01T13:45:59	오후 1:45
+ja	full	-	2026-11-17T09:05:03	2026年11月17日火曜日
+ja	full	short	2026-11-17T09:05:03	2026年11月17日火曜日 9:05
+ja	long	-	2026-11-17T09:05:03	2026年11月17日
+ja	long	short	2026-11-17T09:05:03	2026年11月17日 9:05
+ja	medium	-	2026-11-17T09:05:03	2026/11/17
+ja	medium	short	2026-11-17T09:05:03	2026/11/17 9:05
+ja	short	-	2026-11-17T09:05:03	2026/11/17
+ja	short	short	2026-11-17T09:05:03	2026/11/17 9:05
+ja	-	medium	2026-11-17T09:05:03	9:05:03
+ja	-	short	2026-11-17T09:05:03	9:05
+ja	full	-	2024-02-29T00:30:00	2024年2月29日木曜日
+ja	full	short	2024-02-29T00:30:00	2024年2月29日木曜日 0:30
+ja	long	-	2024-02-29T00:30:00	2024年2月29日
+ja	long	short	2024-02-29T00:30:00	2024年2月29日 0:30
+ja	medium	-	2024-02-29T00:30:00	2024/02/29
+ja	medium	short	2024-02-29T00:30:00	2024/02/29 0:30
+ja	short	-	2024-02-29T00:30:00	2024/02/29
+ja	short	short	2024-02-29T00:30:00	2024/02/29 0:30
+ja	-	medium	2024-02-29T00:30:00	0:30:00
+ja	-	short	2024-02-29T00:30:00	0:30
+ja	full	-	1999-08-01T13:45:59	1999年8月1日日曜日
+ja	full	short	1999-08-01T13:45:59	1999年8月1日日曜日 13:45
+ja	long	-	1999-08-01T13:45:59	1999年8月1日
+ja	long	short	1999-08-01T13:45:59	1999年8月1日 13:45
+ja	medium	-	1999-08-01T13:45:59	1999/08/01
+ja	medium	short	1999-08-01T13:45:59	1999/08/01 13:45
+ja	short	-	1999-08-01T13:45:59	1999/08/01
+ja	short	short	1999-08-01T13:45:59	1999/08/01 13:45
+ja	-	medium	1999-08-01T13:45:59	13:45:59
+ja	-	short	1999-08-01T13:45:59	13:45
+zh	full	-	2026-11-17T09:05:03	2026年11月17日星期二
+zh	full	short	2026-11-17T09:05:03	2026年11月17日星期二 09:05
+zh	long	-	2026-11-17T09:05:03	2026年11月17日
+zh	long	short	2026-11-17T09:05:03	2026年11月17日 09:05
+zh	medium	-	2026-11-17T09:05:03	2026年11月17日
+zh	medium	short	2026-11-17T09:05:03	2026年11月17日 09:05
+zh	short	-	2026-11-17T09:05:03	2026/11/17
+zh	short	short	2026-11-17T09:05:03	2026/11/17 09:05
+zh	-	medium	2026-11-17T09:05:03	09:05:03
+zh	-	short	2026-11-17T09:05:03	09:05
+zh	full	-	2024-02-29T00:30:00	2024年2月29日星期四
+zh	full	short	2024-02-29T00:30:00	2024年2月29日星期四 00:30
+zh	long	-	2024-02-29T00:30:00	2024年2月29日
+zh	long	short	2024-02-29T00:30:00	2024年2月29日 00:30
+zh	medium	-	2024-02-29T00:30:00	2024年2月29日
+zh	medium	short	2024-02-29T00:30:00	2024年2月29日 00:30
+zh	short	-	2024-02-29T00:30:00	2024/2/29
+zh	short	short	2024-02-29T00:30:00	2024/2/29 00:30
+zh	-	medium	2024-02-29T00:30:00	00:30:00
+zh	-	short	2024-02-29T00:30:00	00:30
+zh	full	-	1999-08-01T13:45:59	1999年8月1日星期日
+zh	full	short	1999-08-01T13:45:59	1999年8月1日星期日 13:45
+zh	long	-	1999-08-01T13:45:59	1999年8月1日
+zh	long	short	1999-08-01T13:45:59	1999年8月1日 13:45
+zh	medium	-	1999-08-01T13:45:59	1999年8月1日
+zh	medium	short	1999-08-01T13:45:59	1999年8月1日 13:45
+zh	short	-	1999-08-01T13:45:59	1999/8/1
+zh	short	short	1999-08-01T13:45:59	1999/8/1 13:45
+zh	-	medium	1999-08-01T13:45:59	13:45:59
+zh	-	short	1999-08-01T13:45:59	13:45
+zh-Hant	full	-	2026-11-17T09:05:03	2026年11月17日 星期二
+zh-Hant	full	short	2026-11-17T09:05:03	2026年11月17日 星期二 上午9:05
+zh-Hant	long	-	2026-11-17T09:05:03	2026年11月17日
+zh-Hant	long	short	2026-11-17T09:05:03	2026年11月17日 上午9:05
+zh-Hant	medium	-	2026-11-17T09:05:03	2026年11月17日
+zh-Hant	medium	short	2026-11-17T09:05:03	2026年11月17日 上午9:05
+zh-Hant	short	-	2026-11-17T09:05:03	2026/11/17
+zh-Hant	short	short	2026-11-17T09:05:03	2026/11/17 上午9:05
+zh-Hant	-	medium	2026-11-17T09:05:03	上午9:05:03
+zh-Hant	-	short	2026-11-17T09:05:03	上午9:05
+zh-Hant	full	-	2024-02-29T00:30:00	2024年2月29日 星期四
+zh-Hant	full	short	2024-02-29T00:30:00	2024年2月29日 星期四 凌晨12:30
+zh-Hant	long	-	2024-02-29T00:30:00	2024年2月29日
+zh-Hant	long	short	2024-02-29T00:30:00	2024年2月29日 凌晨12:30
+zh-Hant	medium	-	2024-02-29T00:30:00	2024年2月29日
+zh-Hant	medium	short	2024-02-29T00:30:00	2024年2月29日 凌晨12:30
+zh-Hant	short	-	2024-02-29T00:30:00	2024/2/29
+zh-Hant	short	short	2024-02-29T00:30:00	2024/2/29 凌晨12:30
+zh-Hant	-	medium	2024-02-29T00:30:00	凌晨12:30:00
+zh-Hant	-	short	2024-02-29T00:30:00	凌晨12:30
+zh-Hant	full	-	1999-08-01T13:45:59	1999年8月1日 星期日
+zh-Hant	full	short	1999-08-01T13:45:59	1999年8月1日 星期日 下午1:45
+zh-Hant	long	-	1999-08-01T13:45:59	1999年8月1日
+zh-Hant	long	short	1999-08-01T13:45:59	1999年8月1日 下午1:45
+zh-Hant	medium	-	1999-08-01T13:45:59	1999年8月1日
+zh-Hant	medium	short	1999-08-01T13:45:59	1999年8月1日 下午1:45
+zh-Hant	short	-	1999-08-01T13:45:59	1999/8/1
+zh-Hant	short	short	1999-08-01T13:45:59	1999/8/1 下午1:45
+zh-Hant	-	medium	1999-08-01T13:45:59	下午1:45:59
+zh-Hant	-	short	1999-08-01T13:45:59	下午1:45
+zh-TW	full	-	2026-11-17T09:05:03	2026年11月17日 星期二
+zh-TW	full	short	2026-11-17T09:05:03	2026年11月17日 星期二 上午9:05
+zh-TW	long	-	2026-11-17T09:05:03	2026年11月17日
+zh-TW	long	short	2026-11-17T09:05:03	2026年11月17日 上午9:05
+zh-TW	medium	-	2026-11-17T09:05:03	2026年11月17日
+zh-TW	medium	short	2026-11-17T09:05:03	2026年11月17日 上午9:05
+zh-TW	short	-	2026-11-17T09:05:03	2026/11/17
+zh-TW	short	short	2026-11-17T09:05:03	2026/11/17 上午9:05
+zh-TW	-	medium	2026-11-17T09:05:03	上午9:05:03
+zh-TW	-	short	2026-11-17T09:05:03	上午9:05
+zh-TW	full	-	2024-02-29T00:30:00	2024年2月29日 星期四
+zh-TW	full	short	2024-02-29T00:30:00	2024年2月29日 星期四 凌晨12:30
+zh-TW	long	-	2024-02-29T00:30:00	2024年2月29日
+zh-TW	long	short	2024-02-29T00:30:00	2024年2月29日 凌晨12:30
+zh-TW	medium	-	2024-02-29T00:30:00	2024年2月29日
+zh-TW	medium	short	2024-02-29T00:30:00	2024年2月29日 凌晨12:30
+zh-TW	short	-	2024-02-29T00:30:00	2024/2/29
+zh-TW	short	short	2024-02-29T00:30:00	2024/2/29 凌晨12:30
+zh-TW	-	medium	2024-02-29T00:30:00	凌晨12:30:00
+zh-TW	-	short	2024-02-29T00:30:00	凌晨12:30
+zh-TW	full	-	1999-08-01T13:45:59	1999年8月1日 星期日
+zh-TW	full	short	1999-08-01T13:45:59	1999年8月1日 星期日 下午1:45
+zh-TW	long	-	1999-08-01T13:45:59	1999年8月1日
+zh-TW	long	short	1999-08-01T13:45:59	1999年8月1日 下午1:45
+zh-TW	medium	-	1999-08-01T13:45:59	1999年8月1日
+zh-TW	medium	short	1999-08-01T13:45:59	1999年8月1日 下午1:45
+zh-TW	short	-	1999-08-01T13:45:59	1999/8/1
+zh-TW	short	short	1999-08-01T13:45:59	1999/8/1 下午1:45
+zh-TW	-	medium	1999-08-01T13:45:59	下午1:45:59
+zh-TW	-	short	1999-08-01T13:45:59	下午1:45
+nb-NO	full	-	2026-11-17T09:05:03	tirsdag 17. november 2026
+nb-NO	full	short	2026-11-17T09:05:03	tirsdag 17. november 2026 kl. 09:05
+nb-NO	long	-	2026-11-17T09:05:03	17. november 2026
+nb-NO	long	short	2026-11-17T09:05:03	17. november 2026 kl. 09:05
+nb-NO	medium	-	2026-11-17T09:05:03	17. nov. 2026
+nb-NO	medium	short	2026-11-17T09:05:03	17. nov. 2026, 09:05
+nb-NO	short	-	2026-11-17T09:05:03	17.11.2026
+nb-NO	short	short	2026-11-17T09:05:03	17.11.2026, 09:05
+nb-NO	-	medium	2026-11-17T09:05:03	09:05:03
+nb-NO	-	short	2026-11-17T09:05:03	09:05
+nb-NO	full	-	2024-02-29T00:30:00	torsdag 29. februar 2024
+nb-NO	full	short	2024-02-29T00:30:00	torsdag 29. februar 2024 kl. 00:30
+nb-NO	long	-	2024-02-29T00:30:00	29. februar 2024
+nb-NO	long	short	2024-02-29T00:30:00	29. februar 2024 kl. 00:30
+nb-NO	medium	-	2024-02-29T00:30:00	29. feb. 2024
+nb-NO	medium	short	2024-02-29T00:30:00	29. feb. 2024, 00:30
+nb-NO	short	-	2024-02-29T00:30:00	29.02.2024
+nb-NO	short	short	2024-02-29T00:30:00	29.02.2024, 00:30
+nb-NO	-	medium	2024-02-29T00:30:00	00:30:00
+nb-NO	-	short	2024-02-29T00:30:00	00:30
+nb-NO	full	-	1999-08-01T13:45:59	søndag 1. august 1999
+nb-NO	full	short	1999-08-01T13:45:59	søndag 1. august 1999 kl. 13:45
+nb-NO	long	-	1999-08-01T13:45:59	1. august 1999
+nb-NO	long	short	1999-08-01T13:45:59	1. august 1999 kl. 13:45
+nb-NO	medium	-	1999-08-01T13:45:59	1. aug. 1999
+nb-NO	medium	short	1999-08-01T13:45:59	1. aug. 1999, 13:45
+nb-NO	short	-	1999-08-01T13:45:59	01.08.1999
+nb-NO	short	short	1999-08-01T13:45:59	01.08.1999, 13:45
+nb-NO	-	medium	1999-08-01T13:45:59	13:45:59
+nb-NO	-	short	1999-08-01T13:45:59	13:45
+ar-EG-u-nu-latn	full	-	2026-11-17T09:05:03	الثلاثاء، 17 نوفمبر 2026
+ar-EG-u-nu-latn	full	short	2026-11-17T09:05:03	الثلاثاء، 17 نوفمبر 2026 في 9:05 ص
+ar-EG-u-nu-latn	long	-	2026-11-17T09:05:03	17 نوفمبر 2026
+ar-EG-u-nu-latn	long	short	2026-11-17T09:05:03	17 نوفمبر 2026 في 9:05 ص
+ar-EG-u-nu-latn	medium	-	2026-11-17T09:05:03	17‏/11‏/2026
+ar-EG-u-nu-latn	medium	short	2026-11-17T09:05:03	17‏/11‏/2026، 9:05 ص
+ar-EG-u-nu-latn	short	-	2026-11-17T09:05:03	17‏/11‏/2026
+ar-EG-u-nu-latn	short	short	2026-11-17T09:05:03	17‏/11‏/2026، 9:05 ص
+ar-EG-u-nu-latn	-	medium	2026-11-17T09:05:03	9:05:03 ص
+ar-EG-u-nu-latn	-	short	2026-11-17T09:05:03	9:05 ص
+ar-EG-u-nu-latn	full	-	2024-02-29T00:30:00	الخميس، 29 فبراير 2024
+ar-EG-u-nu-latn	full	short	2024-02-29T00:30:00	الخميس، 29 فبراير 2024 في 12:30 ص
+ar-EG-u-nu-latn	long	-	2024-02-29T00:30:00	29 فبراير 2024
+ar-EG-u-nu-latn	long	short	2024-02-29T00:30:00	29 فبراير 2024 في 12:30 ص
+ar-EG-u-nu-latn	medium	-	2024-02-29T00:30:00	29‏/02‏/2024
+ar-EG-u-nu-latn	medium	short	2024-02-29T00:30:00	29‏/02‏/2024، 12:30 ص
+ar-EG-u-nu-latn	short	-	2024-02-29T00:30:00	29‏/2‏/2024
+ar-EG-u-nu-latn	short	short	2024-02-29T00:30:00	29‏/2‏/2024، 12:30 ص
+ar-EG-u-nu-latn	-	medium	2024-02-29T00:30:00	12:30:00 ص
+ar-EG-u-nu-latn	-	short	2024-02-29T00:30:00	12:30 ص
+ar-EG-u-nu-latn	full	-	1999-08-01T13:45:59	الأحد، 1 أغسطس 1999
+ar-EG-u-nu-latn	full	short	1999-08-01T13:45:59	الأحد، 1 أغسطس 1999 في 1:45 م
+ar-EG-u-nu-latn	long	-	1999-08-01T13:45:59	1 أغسطس 1999
+ar-EG-u-nu-latn	long	short	1999-08-01T13:45:59	1 أغسطس 1999 في 1:45 م
+ar-EG-u-nu-latn	medium	-	1999-08-01T13:45:59	01‏/08‏/1999
+ar-EG-u-nu-latn	medium	short	1999-08-01T13:45:59	01‏/08‏/1999، 1:45 م
+ar-EG-u-nu-latn	short	-	1999-08-01T13:45:59	1‏/8‏/1999
+ar-EG-u-nu-latn	short	short	1999-08-01T13:45:59	1‏/8‏/1999، 1:45 م
+ar-EG-u-nu-latn	-	medium	1999-08-01T13:45:59	1:45:59 م
+ar-EG-u-nu-latn	-	short	1999-08-01T13:45:59	1:45 م
+hi-u-nu-deva	full	-	2026-11-17T09:05:03	मंगलवार, १७ नवंबर २०२६
+hi-u-nu-deva	full	short	2026-11-17T09:05:03	मंगलवार, १७ नवंबर २०२६ को ९:०५ am बजे
+hi-u-nu-deva	long	-	2026-11-17T09:05:03	१७ नवंबर २०२६
+hi-u-nu-deva	long	short	2026-11-17T09:05:03	१७ नवंबर २०२६ को ९:०५ am बजे
+hi-u-nu-deva	medium	-	2026-11-17T09:05:03	१७ नव॰ २०२६
+hi-u-nu-deva	medium	short	2026-11-17T09:05:03	१७ नव॰ २०२६, ९:०५ am
+hi-u-nu-deva	short	-	2026-11-17T09:05:03	१७/११/२६
+hi-u-nu-deva	short	short	2026-11-17T09:05:03	१७/११/२६, ९:०५ am
+hi-u-nu-deva	-	medium	2026-11-17T09:05:03	९:०५:०३ am
+hi-u-nu-deva	-	short	2026-11-17T09:05:03	९:०५ am
+hi-u-nu-deva	full	-	2024-02-29T00:30:00	गुरुवार, २९ फ़रवरी २०२४
+hi-u-nu-deva	full	short	2024-02-29T00:30:00	गुरुवार, २९ फ़रवरी २०२४ को १२:३० am बजे
+hi-u-nu-deva	long	-	2024-02-29T00:30:00	२९ फ़रवरी २०२४
+hi-u-nu-deva	long	short	2024-02-29T00:30:00	२९ फ़रवरी २०२४ को १२:३० am बजे
+hi-u-nu-deva	medium	-	2024-02-29T00:30:00	२९ फ़र॰ २०२४
+hi-u-nu-deva	medium	short	2024-02-29T00:30:00	२९ फ़र॰ २०२४, १२:३० am
+hi-u-nu-deva	short	-	2024-02-29T00:30:00	२९/२/२४
+hi-u-nu-deva	short	short	2024-02-29T00:30:00	२९/२/२४, १२:३० am
+hi-u-nu-deva	-	medium	2024-02-29T00:30:00	१२:३०:०० am
+hi-u-nu-deva	-	short	2024-02-29T00:30:00	१२:३० am
+hi-u-nu-deva	full	-	1999-08-01T13:45:59	रविवार, १ अगस्त १९९९
+hi-u-nu-deva	full	short	1999-08-01T13:45:59	रविवार, १ अगस्त १९९९ को १:४५ pm बजे
+hi-u-nu-deva	long	-	1999-08-01T13:45:59	१ अगस्त १९९९
+hi-u-nu-deva	long	short	1999-08-01T13:45:59	१ अगस्त १९९९ को १:४५ pm बजे
+hi-u-nu-deva	medium	-	1999-08-01T13:45:59	१ अग॰ १९९९
+hi-u-nu-deva	medium	short	1999-08-01T13:45:59	१ अग॰ १९९९, १:४५ pm
+hi-u-nu-deva	short	-	1999-08-01T13:45:59	१/८/९९
+hi-u-nu-deva	short	short	1999-08-01T13:45:59	१/८/९९, १:४५ pm
+hi-u-nu-deva	-	medium	1999-08-01T13:45:59	१:४५:५९ pm
+hi-u-nu-deva	-	short	1999-08-01T13:45:59	१:४५ pm
+th-u-nu-thai	full	-	2026-11-17T09:05:03	วันอังคารที่ ๑๗ พฤศจิกายน ค.ศ. ๒๐๒๖
+th-u-nu-thai	full	short	2026-11-17T09:05:03	วันอังคารที่ ๑๗ พฤศจิกายน ค.ศ. ๒๐๒๖ เวลา ๐๙:๐๕ น.
+th-u-nu-thai	long	-	2026-11-17T09:05:03	๑๗ พฤศจิกายน ค.ศ. ๒๐๒๖
+th-u-nu-thai	long	short	2026-11-17T09:05:03	๑๗ พฤศจิกายน ค.ศ. ๒๐๒๖ เวลา ๐๙:๐๕ น.
+th-u-nu-thai	medium	-	2026-11-17T09:05:03	๑๗ พ.ย. ๒๐๒๖
+th-u-nu-thai	medium	short	2026-11-17T09:05:03	๑๗ พ.ย. ๒๐๒๖ ๐๙:๐๕ น.
+th-u-nu-thai	short	-	2026-11-17T09:05:03	๑๗/๑๑/๒๖
+th-u-nu-thai	short	short	2026-11-17T09:05:03	๑๗/๑๑/๒๖ ๐๙:๐๕ น.
+th-u-nu-thai	-	medium	2026-11-17T09:05:03	๐๙:๐๕:๐๓
+th-u-nu-thai	-	short	2026-11-17T09:05:03	๐๙:๐๕ น.
+th-u-nu-thai	full	-	2024-02-29T00:30:00	วันพฤหัสบดีที่ ๒๙ กุมภาพันธ์ ค.ศ. ๒๐๒๔
+th-u-nu-thai	full	short	2024-02-29T00:30:00	วันพฤหัสบดีที่ ๒๙ กุมภาพันธ์ ค.ศ. ๒๐๒๔ เวลา ๐๐:๓๐ น.
+th-u-nu-thai	long	-	2024-02-29T00:30:00	๒๙ กุมภาพันธ์ ค.ศ. ๒๐๒๔
+th-u-nu-thai	long	short	2024-02-29T00:30:00	๒๙ กุมภาพันธ์ ค.ศ. ๒๐๒๔ เวลา ๐๐:๓๐ น.
+th-u-nu-thai	medium	-	2024-02-29T00:30:00	๒๙ ก.พ. ๒๐๒๔
+th-u-nu-thai	medium	short	2024-02-29T00:30:00	๒๙ ก.พ. ๒๐๒๔ ๐๐:๓๐ น.
+th-u-nu-thai	short	-	2024-02-29T00:30:00	๒๙/๒/๒๔
+th-u-nu-thai	short	short	2024-02-29T00:30:00	๒๙/๒/๒๔ ๐๐:๓๐ น.
+th-u-nu-thai	-	medium	2024-02-29T00:30:00	๐๐:๓๐:๐๐
+th-u-nu-thai	-	short	2024-02-29T00:30:00	๐๐:๓๐ น.
+th-u-nu-thai	full	-	1999-08-01T13:45:59	วันอาทิตย์ที่ ๑ สิงหาคม ค.ศ. ๑๙๙๙
+th-u-nu-thai	full	short	1999-08-01T13:45:59	วันอาทิตย์ที่ ๑ สิงหาคม ค.ศ. ๑๙๙๙ เวลา ๑๓:๔๕ น.
+th-u-nu-thai	long	-	1999-08-01T13:45:59	๑ สิงหาคม ค.ศ. ๑๙๙๙
+th-u-nu-thai	long	short	1999-08-01T13:45:59	๑ สิงหาคม ค.ศ. ๑๙๙๙ เวลา ๑๓:๔๕ น.
+th-u-nu-thai	medium	-	1999-08-01T13:45:59	๑ ส.ค. ๑๙๙๙
+th-u-nu-thai	medium	short	1999-08-01T13:45:59	๑ ส.ค. ๑๙๙๙ ๑๓:๔๕ น.
+th-u-nu-thai	short	-	1999-08-01T13:45:59	๑/๘/๙๙
+th-u-nu-thai	short	short	1999-08-01T13:45:59	๑/๘/๙๙ ๑๓:๔๕ น.
+th-u-nu-thai	-	medium	1999-08-01T13:45:59	๑๓:๔๕:๕๙
+th-u-nu-thai	-	short	1999-08-01T13:45:59	๑๓:๔๕ น.
+bn-u-nu-latn	full	-	2026-11-17T09:05:03	মঙ্গলবার, 17 নভেম্বর, 2026
+bn-u-nu-latn	full	short	2026-11-17T09:05:03	মঙ্গলবার, 17 নভেম্বর, 2026 এ 9:05 AM
+bn-u-nu-latn	long	-	2026-11-17T09:05:03	17 নভেম্বর, 2026
+bn-u-nu-latn	long	short	2026-11-17T09:05:03	17 নভেম্বর, 2026 এ 9:05 AM
+bn-u-nu-latn	medium	-	2026-11-17T09:05:03	17 নভে, 2026
+bn-u-nu-latn	medium	short	2026-11-17T09:05:03	17 নভে, 2026, 9:05 AM
+bn-u-nu-latn	short	-	2026-11-17T09:05:03	17/11/26
+bn-u-nu-latn	short	short	2026-11-17T09:05:03	17/11/26, 9:05 AM
+bn-u-nu-latn	-	medium	2026-11-17T09:05:03	9:05:03 AM
+bn-u-nu-latn	-	short	2026-11-17T09:05:03	9:05 AM
+bn-u-nu-latn	full	-	2024-02-29T00:30:00	বৃহস্পতিবার, 29 ফেব্রুয়ারি, 2024
+bn-u-nu-latn	full	short	2024-02-29T00:30:00	বৃহস্পতিবার, 29 ফেব্রুয়ারি, 2024 এ 12:30 AM
+bn-u-nu-latn	long	-	2024-02-29T00:30:00	29 ফেব্রুয়ারি, 2024
+bn-u-nu-latn	long	short	2024-02-29T00:30:00	29 ফেব্রুয়ারি, 2024 এ 12:30 AM
+bn-u-nu-latn	medium	-	2024-02-29T00:30:00	29 ফেব, 2024
+bn-u-nu-latn	medium	short	2024-02-29T00:30:00	29 ফেব, 2024, 12:30 AM
+bn-u-nu-latn	short	-	2024-02-29T00:30:00	29/2/24
+bn-u-nu-latn	short	short	2024-02-29T00:30:00	29/2/24, 12:30 AM
+bn-u-nu-latn	-	medium	2024-02-29T00:30:00	12:30:00 AM
+bn-u-nu-latn	-	short	2024-02-29T00:30:00	12:30 AM
+bn-u-nu-latn	full	-	1999-08-01T13:45:59	রবিবার, 1 আগস্ট, 1999
+bn-u-nu-latn	full	short	1999-08-01T13:45:59	রবিবার, 1 আগস্ট, 1999 এ 1:45 PM
+bn-u-nu-latn	long	-	1999-08-01T13:45:59	1 আগস্ট, 1999
+bn-u-nu-latn	long	short	1999-08-01T13:45:59	1 আগস্ট, 1999 এ 1:45 PM
+bn-u-nu-latn	medium	-	1999-08-01T13:45:59	1 আগ, 1999
+bn-u-nu-latn	medium	short	1999-08-01T13:45:59	1 আগ, 1999, 1:45 PM
+bn-u-nu-latn	short	-	1999-08-01T13:45:59	1/8/99
+bn-u-nu-latn	short	short	1999-08-01T13:45:59	1/8/99, 1:45 PM
+bn-u-nu-latn	-	medium	1999-08-01T13:45:59	1:45:59 PM
+bn-u-nu-latn	-	short	1999-08-01T13:45:59	1:45 PM

@@ -65,6 +65,18 @@ extension String {
     }
 }
 
+extension Char {
+    /// The scalar's canonical combining class (Unicode §3.11): 0 for a
+    /// starter, and for a mark the place normalization gives it among the
+    /// marks after one starter.
+    ///
+    /// ```sable
+    /// assert('a'.canonicalCombiningClass == 0)
+    /// assert('\u{301}'.canonicalCombiningClass == 230 && '\u{323}'.canonicalCombiningClass == 220)
+    /// ```
+    public var canonicalCombiningClass: Int => combiningClassOf(self.codePoint)
+}
+
 /// Each run of combining marks sorted by combining class, stably: a mark of
 /// class 0, a starter, is never moved past.
 fn putInCanonicalOrder(_ scalars: inout Int[>..]) {

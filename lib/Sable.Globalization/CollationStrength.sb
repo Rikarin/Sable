@@ -1,0 +1,13 @@
+module Sable.Globalization
+
+/// How small a difference tells two texts apart.
+public enum CollationStrength {
+    /// The letters alone: "role", "Rôle" and "ROLE" are one.
+    Primary
+    /// Accents too: "role" and "rôle" are two, "role" and "Role" one.
+    Secondary
+    /// Case and other variants too, as dictionaries order words.
+    Tertiary
+    /// Every difference of scalars, where all else is the same.
+    Identical
+}

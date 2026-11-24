@@ -1,0 +1,42 @@
+module GlobalizationPluralTests
+
+import Sable.Globalization
+import Sable.Math
+import Sable.Testing
+
+@test
+fn aPluralIsOfTheNumberAsItIsWritten() {
+    let english = PluralRules(Locale.of("en")!)
+    var one = NumberFormat.decimal
+    one.minimumFractionDigits = 1
+    assertEqual(english.category(1), PluralCategory.One)
+    assertEqual(english.category(1.0), PluralCategory.One)
+    assertEqual(english.category(1, format: one), PluralCategory.Other)
+    assertEqual(english.category(-1), PluralCategory.One)
+    assertEqual(english.category(Decimal(10, scale: 1)), PluralCategory.One)
+    assertEqual(english.category(0.0 / 0.0), PluralCategory.Other)
+}
+
+@test
+fn aLongNumberIsOfItsLastDigits() {
+    let russian = PluralRules(Locale.of("ru")!)
+    assertEqual(russian.category(BigInt(1000000000) * BigInt(1000000000) + BigInt(1)), PluralCategory.One)
+    assertEqual(russian.category(BigInt(1000000000) * BigInt(1000000000) + BigInt(3)), PluralCategory.Few)
+    assertEqual(PluralRules(Locale.of("en")!).category(BigInt(1000000000) * BigInt(1000000000) + BigInt(1)), PluralCategory.Other)
+}
+
+@test
+fn theCategoriesAreTheLanguages() {
+    assertEqual(PluralRules(Locale.of("pl")!).categories, [.One, .Few, .Many, .Other])
+    assertEqual(PluralRules(.invariant).categories, [.Other])
+    assertEqual(PluralRules(Locale.of("en")!, ordinal: true).categories, [.One, .Two, .Few, .Other])
+    assertEqual(PluralRules(Locale.of("cy")!).locale.tag, "cy")
+}
+
+@test
+fn aCategoryHasItsName() {
+    for name in ["zero", "one", "two", "few", "many", "other"] {
+        assertEqual(PluralCategory.of(name)!.name, name)
+    }
+    assert(PluralCategory.of("several") == none)
+}

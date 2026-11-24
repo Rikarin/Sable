@@ -1,0 +1,12 @@
+module Sable.Globalization
+
+/// Which case of a letter comes first, of two texts that differ in case
+/// alone.
+public enum CollationCaseFirst {
+    /// The lower, by a difference smaller than any other variant's.
+    Off
+    /// The lower, before any other variant is looked at.
+    Lower
+    /// The upper, as Danish and Maltese dictionaries have it.
+    Upper
+}

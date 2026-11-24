@@ -1,0 +1,37 @@
+module Sable.Globalization
+
+/// A text's place in a collator's order, as bytes: `a.sortKey < b.sortKey`
+/// as `collator.compare(a, b)` is less, for keys of one collator. A key is
+/// longer than its text and takes longer to make than a comparison, so it
+/// is for texts compared many times: sorting a long list, an index.
+public struct SortKey: Comparable, Hashable {
+    /// The key's bytes, ordered as the keys are.
+    public let bytes: U8[>..]
+
+    init(_ bytes: U8[>..]) {
+        self.bytes = bytes
+    }
+
+    public operator == (a: SortKey, b: SortKey) -> Bool {
+        return a.bytes == b.bytes
+    }
+
+    public operator < (a: SortKey, b: SortKey) -> Bool {
+        return a.bytes < b.bytes
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        bytes.hash(into: &hasher)
+    }
+}
+
+extension SortKey: Debug {
+    /// The bytes in hexadecimal: "SortKey(1d0203)".
+    public fn debugDescription() -> String {
+        var text = ""
+        for b in bytes {
+            text += "\(b:02x)"
+        }
+        return "SortKey(\(text))"
+    }
+}

@@ -31,7 +31,7 @@ struct SystemHostClock: HostClock {
             if most < left {
                 left = most
             }
-            if left <= Duration.zero() {
+            if left <= Duration.zero {
                 return
             }
             let minute = Duration.minutes(1)

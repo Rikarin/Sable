@@ -15,7 +15,7 @@ import HostingSupport
 @test
 fn servicesAreMadeInOrderFromTheContext() {
     let made = Record()
-    let builder = quietBuilder(TestClock())
+    let builder = quietBuilder(FakeHostClock())
     builder.environment = HostEnvironment(name: "Development", applicationName: "app")
     builder.services.add("a", make: { context in
         made.add("a:\(context.environment.applicationName)")
@@ -33,7 +33,7 @@ fn servicesAreMadeInOrderFromTheContext() {
 
 @test
 fn whatMakingAServiceThrowsBuildThrows() {
-    let builder = quietBuilder(TestClock())
+    let builder = quietBuilder(FakeHostClock())
     builder.services.add("bad", make: { _context in
         throw TestError("not made")
     })
@@ -48,7 +48,7 @@ fn whatMakingAServiceThrowsBuildThrows() {
 @test
 fn aWorkerIsGivenTheContext() async {
     let record = Record()
-    let builder = quietBuilder(TestClock())
+    let builder = quietBuilder(FakeHostClock())
     builder.services.addWorker("w") { context, cancellation in
         record.add(context.environment.isProduction || true ? "ran" : "")
         context.lifetime.requestStop()
@@ -60,7 +60,7 @@ fn aWorkerIsGivenTheContext() async {
 
 @test
 fn theContextSleepsByTheHostsClock() async {
-    let clock = TestClock()
+    let clock = FakeHostClock()
     let record = Record()
     let builder = quietBuilder(clock)
     builder.services.addWorker("w") { context, cancellation in

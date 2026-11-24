@@ -329,7 +329,7 @@ public final class Host {
         guard let interval = Systemd.watchdogInterval else { return }
         while true {
             do {
-                try await context.clock.sleep(until: context.clock.now.adding(interval.dividedBy(2)))
+                try await context.clock.sleep(until: context.clock.now.adding(interval / 2))
             } catch {
                 return
             }

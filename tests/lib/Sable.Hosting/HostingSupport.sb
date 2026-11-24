@@ -10,7 +10,7 @@ import Sable.Time
 
 /// A clock a test sets: no time passes but what it says does.
 @immutable
-public final class TestClock: HostClock {
+public final class FakeHostClock: HostClock {
     let state: Mutex<TestClockState>
     let changed: WaitList
 
@@ -35,7 +35,7 @@ public final class TestClock: HostClock {
     /// are once as long has passed as they meant to sleep.
     public fn setBack(_ duration: Duration) {
         state.withLock { (s: inout TestClockState) -> Void in
-            s.now = s.now.adding(Duration.zero() - duration)
+            s.now = s.now.adding(Duration.zero - duration)
             s.early += 1
         }
         changed.wakeAll()
@@ -219,7 +219,7 @@ public fn forever() async {
 }
 
 /// A builder that says nothing and hears no signal, on a test's clock.
-public fn quietBuilder(_ clock: TestClock) -> ApplicationBuilder {
+public fn quietBuilder(_ clock: FakeHostClock) -> ApplicationBuilder {
     let builder = ApplicationBuilder()
     builder.logging.minimumLevel = none
     builder.options.handleSignals = false

@@ -63,7 +63,7 @@ public final class HostedServices {
     /// A job run on the schedule. An interval that is not above zero traps.
     public fn addRecurring(schedule: RecurringSchedule, name: String, options: RecurringOptions = RecurringOptions(), _ body: @escaping @Sendable async (CancellationToken) throws -> Void) {
         if case .Every(let interval) = schedule {
-            precondition(interval > Duration.zero(), "a recurring job's interval must be above zero")
+            precondition(interval > Duration.zero, "a recurring job's interval must be above zero")
         }
         add(name, onFailure: ServiceFailurePolicy.StopHost, make: { context in
             RecurringJob(name: name, schedule: schedule, options: options, context: context, body: body)

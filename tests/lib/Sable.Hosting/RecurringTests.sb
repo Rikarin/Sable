@@ -12,11 +12,11 @@ import HostingSupport
 
 @test
 fn anIntervalsJobRunsEachTimeItHasPassed() async {
-    let clock = TestClock()
+    let clock = FakeHostClock()
     let record = Record()
     let builder = quietBuilder(clock)
     builder.services.addRecurring(every: Duration.minutes(5)) { _cancellation in record.add("run") }
-    assert(builder.services.names == ["every 5m 0.000s"])
+    assert(builder.services.names == ["every 5m"])
     let host = try! builder.build()
     let running = Task.spawn { await outcome(host) }
     var i = 1
@@ -33,7 +33,7 @@ fn anIntervalsJobRunsEachTimeItHasPassed() async {
 
 @test
 fn aCronJobRunsWhenItSays() async {
-    let clock = TestClock()
+    let clock = FakeHostClock()
     let record = Record()
     let builder = quietBuilder(clock)
     try! builder.services.addRecurring("0 */5 * * *") { _cancellation in record.add("run") }
@@ -50,7 +50,7 @@ fn aCronJobRunsWhenItSays() async {
 
 @test
 fn aTextThatIsNotCronIsRefusedAsItIsAdded() {
-    let builder = quietBuilder(TestClock())
+    let builder = quietBuilder(FakeHostClock())
     do {
         try builder.services.addRecurring("sometimes") { _cancellation in }
         assert(false)
@@ -61,7 +61,7 @@ fn aTextThatIsNotCronIsRefusedAsItIsAdded() {
 
 @test
 fn aJobMayRunAsTheHostStarts() async {
-    let clock = TestClock()
+    let clock = FakeHostClock()
     let record = Record()
     let builder = quietBuilder(clock)
     builder.services.addRecurring(every: Duration.hours(1), options: RecurringOptions(runAtStart: true)) { _cancellation in record.add("run") }
@@ -73,7 +73,7 @@ fn aJobMayRunAsTheHostStarts() async {
 }
 
 // A job each minute, each run of which takes until it is let go.
-fn overlapping(_ policy: OverlapPolicy, _ clock: TestClock, _ record: Record, _ gate: AsyncSemaphore) -> Host {
+fn overlapping(_ policy: OverlapPolicy, _ clock: FakeHostClock, _ record: Record, _ gate: AsyncSemaphore) -> Host {
     let builder = quietBuilder(clock)
     builder.services.addRecurring(every: Duration.minutes(1), name: "job", options: RecurringOptions(overlap: policy)) { _cancellation in
         record.add("begin")
@@ -85,7 +85,7 @@ fn overlapping(_ policy: OverlapPolicy, _ clock: TestClock, _ record: Record, _ 
 
 @test
 fn aRunThatOverlapsIsSkipped() async {
-    let clock = TestClock()
+    let clock = FakeHostClock()
     let record = Record()
     let gate = AsyncSemaphore(permits: 0)
     let host = overlapping(.Skip, clock, record, gate)
@@ -117,7 +117,7 @@ fn settle() async {
 
 @test
 fn runsThatOverlapMayQueue() async {
-    let clock = TestClock()
+    let clock = FakeHostClock()
     let record = Record()
     let gate = AsyncSemaphore(permits: 0)
     let host = overlapping(.Queue, clock, record, gate)
@@ -141,7 +141,7 @@ fn runsThatOverlapMayQueue() async {
 
 @test
 fn runsThatOverlapMayRunTogether() async {
-    let clock = TestClock()
+    let clock = FakeHostClock()
     let record = Record()
     let gate = AsyncSemaphore(permits: 0)
     let host = overlapping(.Concurrent, clock, record, gate)
@@ -158,7 +158,7 @@ fn runsThatOverlapMayRunTogether() async {
 
 @test
 fn aRunThatFailsIsRunAgainWhenDue() async {
-    let clock = TestClock()
+    let clock = FakeHostClock()
     let record = Record()
     let builder = quietBuilder(clock)
     builder.services.addRecurring(every: Duration.minutes(1)) { _cancellation in
@@ -178,7 +178,7 @@ fn aRunThatFailsIsRunAgainWhenDue() async {
 
 @test
 fn aRunThatFailsMayStopTheHost() async {
-    let clock = TestClock()
+    let clock = FakeHostClock()
     let builder = quietBuilder(clock)
     builder.services.addRecurring(every: Duration.minutes(1), name: "job", options: RecurringOptions(onFailure: ServiceFailurePolicy.StopHost)) { _cancellation in
         throw TestError("no")
@@ -191,7 +191,7 @@ fn aRunThatFailsMayStopTheHost() async {
 
 @test
 fn aRunEndedByItsCancellationHasNotFailed() async {
-    let clock = TestClock()
+    let clock = FakeHostClock()
     let record = Record()
     let builder = quietBuilder(clock)
     builder.services.addRecurring(every: Duration.minutes(1), options: RecurringOptions(onFailure: ServiceFailurePolicy.StopHost)) { cancellation in
@@ -209,7 +209,7 @@ fn aRunEndedByItsCancellationHasNotFailed() async {
 
 @test
 fn whatWasMissedIsNotMadeUpFor() async {
-    let clock = TestClock()
+    let clock = FakeHostClock()
     let record = Record()
     let builder = quietBuilder(clock)
     builder.services.addRecurring(every: Duration.minutes(1)) { _cancellation in record.add("run") }
@@ -228,7 +228,7 @@ fn whatWasMissedIsNotMadeUpFor() async {
 
 @test
 fn aClockSetBackDoesNotHoldACronJobUp() async {
-    let clock = TestClock()
+    let clock = FakeHostClock()
     let record = Record()
     let builder = quietBuilder(clock)
     try! builder.services.addRecurring("0 * * * *") { _cancellation in record.add("run") }
@@ -247,7 +247,7 @@ fn aClockSetBackDoesNotHoldACronJobUp() async {
 
 @test
 fn aClockSetBackDoesNotHoldAnIntervalUp() async {
-    let clock = TestClock()
+    let clock = FakeHostClock()
     let record = Record()
     let builder = quietBuilder(clock)
     builder.services.addRecurring(every: Duration.minutes(1)) { _cancellation in record.add("run") }

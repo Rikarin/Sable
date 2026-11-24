@@ -314,7 +314,7 @@ fn aCancelledWriteLeavesTheConnectionOpen() async {
 fn aWriteToAnEndThatIsGoneThrows() async {
     do {
         let (client, server) = try await pair()
-        try server.setLinger(Duration.zero())
+        try server.setLinger(Duration.zero)
         server.close()
         var said = ""
         for _ in 0..<50 {

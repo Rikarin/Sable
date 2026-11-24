@@ -35,7 +35,7 @@ public union RecurringSchedule: Sendable {
                     return now.adding(interval)
                 }
                 let passed = past < 0 ? 0 : past / step
-                return last.adding(interval.times(passed + 1))
+                return last.adding(interval * (passed + 1))
             }
         }
     }

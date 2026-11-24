@@ -76,7 +76,7 @@ fn aCancelledLookupThrows() async {
 @test
 fn aLookupWithNoTimeTimesOutOrIsDone() async {
     let said = await thrown {
-        let _ = try await Dns.resolve("localhost", timeout: Duration.zero())
+        let _ = try await Dns.resolve("localhost", timeout: Duration.zero)
     }
     assert(said == "" || said == "it took too long", said)
 }

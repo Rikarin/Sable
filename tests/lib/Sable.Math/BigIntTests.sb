@@ -1,0 +1,596 @@
+module BigIntTests
+
+// BigInt (Sable.Math), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Math
+//
+// In I128's range every operation is held to I128's own, on random
+// operands of every width; past it, to identities that the algorithms for
+// each size must agree on — a product against one made a limb at a time,
+// a quotient against its remainder — and to numbers whose digits are known.
+
+import Sable.Math
+import Sable.Testing
+
+// ---- Helpers ------------------------------------------------------------------
+
+/// A random I128 of 1 to 127 bits, either sign.
+fn randomI128(_ generator: inout SeededRandomNumberGenerator) -> I128 {
+    let bits = Int(generator.next() % 127) + 1
+    let raw = (U128(generator.next()) << 64) | U128(generator.next())
+    let value = I128(raw >> U128(128 - bits))
+    return generator.next() % 2 == 0 ? value : 0 - value
+}
+
+/// A random non-negative BigInt of that many limbs.
+fn randomBig(_ limbs: Int, _ generator: inout SeededRandomNumberGenerator) -> BigInt {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < limbs * 8 {
+        bytes.append(U8.truncating(generator.next()))
+        i = i + 1
+    }
+    // The top byte not zero, so it has all its limbs.
+    bytes.append(1)
+    return BigInt(bytes: bytes, signed: false)
+}
+
+/// a * b, a limb of b at a time: each product a one-limb multiplication,
+/// whatever algorithm the sizes would choose.
+fn productByLimbs(_ a: BigInt, _ b: BigInt) -> BigInt {
+    let mask = BigInt(U64.max)
+    var result = BigInt(0)
+    var rest = b
+    var shift = 0
+    while !rest.isZero {
+        result = result + ((a * (rest & mask)) << shift)
+        rest = rest >> 64
+        shift = shift + 64
+    }
+    return result
+}
+
+/// The digits of an I128 in the radix, by dividing: what toString(radix:)
+/// must write.
+fn digitsOf(_ value: I128, _ radix: Int) -> String {
+    let symbols = "0123456789abcdefghijklmnopqrstuvwxyz"
+    if value == 0 {
+        return "0"
+    }
+    var rest = value < 0 ? (0 &- (value unchecked as U128)) : U128(value)
+    var backwards: String[>..] = []
+    while rest != 0 {
+        let digit = Int(rest % U128(radix))
+        backwards.append(symbols.slice(from: digit, to: digit + 1))
+        rest = rest / U128(radix)
+    }
+    var text = value < 0 ? "-" : ""
+    var i = backwards.count - 1
+    while i >= 0 {
+        text = text + backwards[i]
+        i = i - 1
+    }
+    return text
+}
+
+fn big(_ text: String) -> BigInt {
+    return try! BigInt.parse(text)
+}
+
+// ---- Small values, against I128 --------------------------------------------------
+
+@test
+fn arithmeticAgreesWithI128() {
+    var generator = SeededRandomNumberGenerator(seed: 37)
+    var i = 0
+    while i < 3000 {
+        let a = randomI128(&generator)
+        let b = randomI128(&generator)
+        let x = BigInt(a)
+        let y = BigInt(b)
+        if let sum = a.checkedAdd(b) {
+            assertEqual(x + y, BigInt(sum))
+        }
+        if let difference = a.checkedSub(b) {
+            assertEqual(x - y, BigInt(difference))
+        }
+        if let product = a.checkedMul(b) {
+            assertEqual(x * y, BigInt(product))
+        }
+        if b != 0 {
+            assertEqual(x / y, BigInt(a / b))
+            assertEqual(x % y, BigInt(a % b))
+        }
+        assertEqual(-x, BigInt(0 - a))
+        assertEqual(x < y, a < b)
+        assertEqual(x == y, a == b)
+        assertEqual(x.sign, a < 0 ? -1 : a == 0 ? 0 : 1)
+        i = i + 1
+    }
+}
+
+@test
+fn bitOperationsAgreeWithI128() {
+    var generator = SeededRandomNumberGenerator(seed: 38)
+    var i = 0
+    while i < 3000 {
+        let a = randomI128(&generator)
+        let b = randomI128(&generator)
+        let x = BigInt(a)
+        let y = BigInt(b)
+        assertEqual(x & y, BigInt(a & b))
+        assertEqual(x | y, BigInt(a | b))
+        assertEqual(x ^ y, BigInt(a ^ b))
+        assertEqual(~x, BigInt(~a))
+        let count = Int(generator.next() % 130)
+        assertEqual(x >> count, BigInt(count >= 128 ? (a < 0 ? I128(-1) : I128(0)) : a >> I128(count)))
+        assertEqual(x << count, x * BigInt(2).pow(count))
+        assertEqual(x.bitLength, 128 - (a < 0 ? ~a : a).leadingZeroCount)
+        if a != 0 {
+            assertEqual(x.trailingZeroCount, a.trailingZeroCount)
+        }
+        i = i + 1
+    }
+}
+
+@test
+fn textAgreesWithI128InEveryRadix() {
+    var generator = SeededRandomNumberGenerator(seed: 39)
+    var i = 0
+    while i < 400 {
+        let a = randomI128(&generator)
+        let x = BigInt(a)
+        assertEqual(x.toString(), "\(a)")
+        assertEqual("\(x)", "\(a)")
+        var radix = 2
+        while radix <= 36 {
+            let text = x.toString(radix: radix)
+            assertEqual(text, digitsOf(a, radix))
+            assertEqual(try! BigInt.parse(text, radix: radix), x)
+            radix = radix + 1
+        }
+        i = i + 1
+    }
+}
+
+@test
+fn conversionsAgreeWithI128() {
+    var generator = SeededRandomNumberGenerator(seed: 40)
+    var i = 0
+    while i < 1000 {
+        let a = randomI128(&generator)
+        let x = BigInt(a)
+        assertEqual(I128.exactly(x) ?? 0, a)
+        assertEqual(x.wideBitPattern, a unchecked as U128)
+        assertEqual(F64.converting(x), F64.converting(a))
+        assertEqual(I64.exactly(x) == none, I64.exactly(a) == none)
+        assertEqual(I64.clamping(x), I64.clamping(a))
+        assertEqual(BigInt(bytes: x.toBytes()), x)
+        assertEqual(BigInt(bytes: x.toBytes(.Big), endian: .Big), x)
+        assertEqual(x.toBytes().count, x.bitLength / 8 + 1)
+        assertEqual(x.hashValue == BigInt(a).hashValue, true)
+        i = i + 1
+    }
+}
+
+// ---- Representation -------------------------------------------------------------
+
+@test
+fn valuesAnI64HoldsAllocateNothing() {
+    assertNoAllocations(() => {
+        let a = BigInt(1_000_000_007)
+        let b = BigInt(-3)
+        let c = (a * b + BigInt(5)) / BigInt(7) % BigInt(1000)
+        let d = (c << 3) >> 1
+        assert(d == BigInt(-1720))
+        assert(a > b && (a & b) == BigInt(1_000_000_005) && a.pow(2) == BigInt(1_000_000_014_000_000_049))
+    })
+}
+
+@test
+fn valuesPastAnI64AreTheSameNumberHoweverMade() {
+    let max = BigInt(I64.max)
+    let min = BigInt(I64.min)
+    assertEqual(max + BigInt(1), -min)
+    assertEqual(-(max + BigInt(1)), min)
+    assertEqual(min - BigInt(1) + BigInt(1), min)
+    assertEqual(min / BigInt(-1), max + BigInt(1))
+    assertEqual(min % BigInt(-1), BigInt(0))
+    assertEqual((max + BigInt(1)) - BigInt(1), max)
+    assertEqual(BigInt(U64.max), max + max + BigInt(1))
+    assertEqual(BigInt(U128.max).toString(), "340282366920938463463374607431768211455")
+    assertEqual(BigInt(I128.min).toString(), "-170141183460469231731687303715884105728")
+    assertEqual(BigInt.fromWideBitPattern(U128.max), BigInt(-1))
+    assertEqual(BigInt(5 as U8) * BigInt(-7 as I16), BigInt(-35))
+    assert(BigInt.isSigned)
+}
+
+@test
+fn aBigIntIsABigIntGenerically() {
+    let n = BigInt(2).pow(200) + BigInt(12345)
+    // BigInt from a BigInt, through the generic initialiser.
+    assertEqual(BigInt(n), n)
+    assertEqual(BigInt(-n), -n)
+    assertEqual(gcd(n * BigInt(6), BigInt(4)), BigInt(2))
+    assertEqual(power(BigInt(10), 30), BigInt(10).pow(30))
+    assertEqual(lcm(BigInt(2).pow(70), BigInt(6)), BigInt(2).pow(70) * BigInt(3))
+    assertEqual(n.abs(), n)
+    assertEqual((-n).abs(), n)
+    assertEqual((-n).magnitude, n)
+    assertEqual((-n).signum(), BigInt(-1))
+    let (q, r) = (-n).divRem(BigInt(10))
+    assertEqual(q * BigInt(10) + r, -n)
+    assertEqual(r, BigInt(-1))
+    assert(n.isOdd && !n.isEven && (n + BigInt(1)).isEven && BigInt(4).isEven)
+    assert(!n.isZero && BigInt(0).isZero)
+}
+
+@test
+fn conversionsPastI128SayItDoesNotFit() {
+    let n = BigInt(2).pow(127)
+    assertEqual(I128.exactly(n) == none, true)
+    assertEqual(I128.exactly(-n) ?? 0, I128.min)
+    assertEqual(U128.exactly(n) ?? 0, U128(1) << 127)
+    assertEqual(U128.exactly(BigInt(2).pow(128)) == none, true)
+    assertEqual(I64.clamping(BigInt(2).pow(300)), I64.max)
+    assertEqual(I64.clamping(-BigInt(2).pow(300)), I64.min)
+    assertEqual(U8.truncating(BigInt(2).pow(300) + BigInt(7)), 7)
+    assertEqual(BigInt(2).pow(300).fitsWideBitPattern, false)
+    assertEqual((BigInt(2).pow(64) * BigInt(3)).fitsWideBitPattern, true)
+}
+
+@test
+fn floatsAreTheNearestToTheValue() {
+    assertEqual(F64.converting(BigInt(2).pow(1000)), (1.0).scaled(byPowerOfTwo: 1000))
+    assertEqual(F64.converting(-BigInt(2).pow(1000)), -(1.0).scaled(byPowerOfTwo: 1000))
+    assertEqual(F64.converting(BigInt(2).pow(1024)), F64.infinity)
+    // Halfway between two F64s: to even, unless anything is below.
+    let base = BigInt(2).pow(200)
+    let half = BigInt(2).pow(147)
+    assertEqual(F64.converting(base + half), (1.0).scaled(byPowerOfTwo: 200))
+    assertEqual(F64.converting(base + half + BigInt(1)), (1.0).scaled(byPowerOfTwo: 200) + (1.0).scaled(byPowerOfTwo: 148))
+    assertEqual(F32.converting(BigInt(2).pow(130)), F32.infinity)
+    assertEqual(BigInt(10).pow(30).measure, 1e30)
+}
+
+// ---- Large values -----------------------------------------------------------------
+
+@test
+fn productsAgreeWithOnesMadeALimbAtATime() {
+    var generator = SeededRandomNumberGenerator(seed: 41)
+    // Schoolbook, Karatsuba, Toom-3 and the unbalanced cut.
+    let sizes = [(3, 2), (39, 39), (40, 40), (70, 45), (120, 100), (159, 159), (160, 160), (250, 200), (300, 260), (520, 270), (400, 90), (500, 30), (700, 700)]
+    for (n, m) in sizes {
+        let a = randomBig(n, &generator)
+        let b = randomBig(m, &generator)
+        let expected = productByLimbs(a, b)
+        assertEqual(a * b, expected)
+        assertEqual(b * a, expected)
+        assertEqual(-a * b, -expected)
+        assertEqual(-a * -b, expected)
+    }
+}
+
+@test
+fn squaresOfAllOnesAreExact() {
+    // (2^k - 1)^2 = 2^2k - 2^(k+1) + 1: the carries run the whole way.
+    for k in [64, 640, 2560, 10240, 64000] {
+        let ones = BigInt(2).pow(k) - BigInt(1)
+        assertEqual(ones * ones, BigInt(2).pow(2 * k) - BigInt(2).pow(k + 1) + BigInt(1))
+    }
+}
+
+@test
+fn quotientsAndRemaindersPutTheDividendBack() {
+    var generator = SeededRandomNumberGenerator(seed: 42)
+    // Schoolbook, a one-limb divisor, and Burnikel–Ziegler at depth.
+    let sizes = [(3, 2), (5, 1), (50, 20), (200, 80), (300, 120), (500, 200), (900, 330), (1200, 250), (1500, 500), (100, 99)]
+    for (n, m) in sizes {
+        let a = randomBig(n, &generator)
+        let b = randomBig(m, &generator)
+        let (q, r) = a.divRem(b)
+        assertEqual(q * b + r, a)
+        assert(r >= BigInt(0) && r < b)
+        assertEqual(a / b, q)
+        assertEqual(a % b, r)
+        assertEqual((a * b) / b, a)
+        assertEqual((a * b + r) % b, r)
+        let (nq, nr) = (-a).divRem(b)
+        assertEqual(nq, -q)
+        assertEqual(nr, -r)
+        assertEqual(a / -b, -q)
+    }
+}
+
+@test
+fn knuthsRareCorrectionsAreRight() {
+    // Dividends whose quotient's first estimate is one too large even after
+    // the two-limb check, so the divisor is added back.
+    let a = try! BigInt.parse("0x7fffffffffffffffffffffffffffffff800000000000000180000000000000018000000000000000", radix: 16, styles: .Prefix)
+    let b = try! BigInt.parse("ffffffffffffffffffffffffffffffff8000000000000001", radix: 16)
+    assertEqual(a / b, big("170141183460469231731687303715884105727"))
+    assertEqual(a % b, big("4707826301540010573217124434326688275558587934853503647745"))
+    let c = try! BigInt.parse("80000000000000008000000000000000800000000000000000000000000000020000000000000001", radix: 16)
+    let d = try! BigInt.parse("10000000000000000000000000000000100000000", radix: 16)
+    assertEqual(c / d, big("730750818665451459141456497615273678624738246655"))
+    assertEqual(c % d, big("1461501637160761734743215601021489204091762507777"))
+}
+
+@test(traps: "division by zero")
+fn dividingByZeroTraps() {
+    let _ = BigInt(2).pow(100) / BigInt(0)
+}
+
+@test(traps: "division by zero")
+fn aSmallRemainderByZeroTraps() {
+    let _ = BigInt(7) % BigInt(0)
+}
+
+@test
+fn powersOfTenPrintAsAOneAndZeros() {
+    for k in [19, 20, 38, 600, 5000, 20000] {
+        let text = BigInt(10).pow(k).toString()
+        assertEqual(text, "1" + "0".repeated(k))
+        assertEqual((BigInt(10).pow(k) - BigInt(1)).toString(), "9".repeated(k))
+        assertEqual(-BigInt(10).pow(k), big("-1" + "0".repeated(k)))
+    }
+}
+
+@test
+fn longNumbersGoToTextAndBackInEveryRadix() {
+    var generator = SeededRandomNumberGenerator(seed: 43)
+    let n = randomBig(150, &generator)
+    var radix = 2
+    while radix <= 36 {
+        let text = n.toString(radix: radix)
+        assertEqual(try! BigInt.parse(text, radix: radix), n)
+        assertEqual(try! BigInt.parse("-" + text.uppercased(), radix: radix), -n)
+        radix = radix + 1
+    }
+    let decimal = randomBig(2000, &generator)
+    assertEqual(big(decimal.toString()), decimal)
+    assertEqual(big(decimal.toString()) * BigInt(10).pow(5000), big(decimal.toString() + "0".repeated(5000)))
+}
+
+@test
+fn hexIsTheLimbsBits() {
+    let n = BigInt(2).pow(200) - BigInt(1)
+    assertEqual(n.toString(radix: 16), "f".repeated(50))
+    assertEqual(n.toString(radix: 16, uppercase: true), "F".repeated(50))
+    assertEqual(n.toString(radix: 2), "1".repeated(200))
+    assertEqual(n.toString(radix: 32), "v".repeated(40))
+    assertEqual((n + BigInt(1)).toString(radix: 8), "4" + "0".repeated(66))
+}
+
+// ---- Text -------------------------------------------------------------------------
+
+@test
+fn formattingFollowsTheSpec() {
+    let n = BigInt(2).pow(70)
+    assertEqual("\(n)", "1180591620717411303424")
+    assertEqual("\(n:x)", "400000000000000000")
+    assertEqual("\(n:#X)", "0x400000000000000000")
+    assertEqual("\(n:o)", "2" + "0".repeated(23))
+    assertEqual("\(n:,)", "1,180,591,620,717,411,303,424")
+    assertEqual("\(n:_x)", "40_0000_0000_0000_0000")
+    assertEqual("\(-n:+)", "-1180591620717411303424")
+    assertEqual("\(n:+)", "+1180591620717411303424")
+    assertEqual("\(n: )", " 1180591620717411303424")
+    assertEqual("\(BigInt(-42):+06)", "-00042")
+    assertEqual("\(BigInt(42):08,)", "0,000,042")
+    assertEqual("[\(BigInt(42):>6)]", "[    42]")
+    assertEqual("[\(BigInt(42):<6)]", "[42    ]")
+    assertEqual("[\(BigInt(42):*^7)]", "[**42***]")
+    assertEqual("[\(BigInt(42):6)]", "[    42]")
+    assertEqual("[\(n:3)]", "[1180591620717411303424]")
+    assertEqual("\(n:e)", "1.1805916207174113e+21")
+    assertEqual("\(BigInt(5):.2f)", "5.00")
+    assertEqual("\(n:?)", "1180591620717411303424")
+    assertEqual(n.debugDescription(), "1180591620717411303424")
+}
+
+@test
+fn parsingTakesWhatTheStylesAllow() {
+    assertEqual(big("+123"), BigInt(123))
+    assertEqual(big("-0"), BigInt(0))
+    assertEqual(try! BigInt.parse("  1_000_000_000_000_000_000_000  ", radix: 10, styles: .Any), BigInt(10).pow(21))
+    assertEqual(try! BigInt.parse("1,000", radix: 10, styles: .Thousands), BigInt(1000))
+    assertEqual(try! BigInt.parse("0b101", radix: 2, styles: .Prefix), BigInt(5))
+    assertEqual(try! BigInt.parse("0o17", radix: 8, styles: .Prefix), BigInt(15))
+    assertEqual(try! BigInt.parse("0XFF", radix: 16, styles: .Prefix), BigInt(255))
+    let text = "n = 98765432109876543210"
+    assertEqual(try! BigInt.parse(text[text.index(atScalar: 4)...]), big("98765432109876543210"))
+}
+
+@test
+fn parsingSaysWhereTheTextIsWrong() {
+    assertEqual(parseError(""), ParseError.Empty)
+    assertEqual(parseError("   "), ParseError.InvalidDigit(at: 0))
+    assertEqual(parseError("12x4"), ParseError.InvalidDigit(at: 2))
+    assertEqual(parseError("-"), ParseError.InvalidDigit(at: 1))
+    assertEqual(parseError("1__0"), ParseError.InvalidDigit(at: 2))
+    assertEqual(parseError("+ 1"), ParseError.InvalidDigit(at: 1))
+    do {
+        let _ = try BigInt.parse("12", radix: 2)
+        assert(false)
+    } catch {
+        assertEqual(error, ParseError.InvalidDigit(at: 1))
+    }
+    do {
+        let _ = try BigInt.parse("  ", radix: 10, styles: .Whitespace)
+        assert(false)
+    } catch {
+        assertEqual(error, ParseError.Empty)
+    }
+}
+
+fn parseError(_ text: String) -> ParseError {
+    do {
+        let _ = try BigInt.parse(text, radix: 10, styles: [.Sign, .Separators])
+    } catch {
+        return error
+    }
+    return .Invalid(at: -1)
+}
+
+@test(traps: "a radix must be 2 to 36, not 37")
+fn aRadixPast36Traps() {
+    let _ = BigInt(5).toString(radix: 37)
+}
+
+// ---- Bits and bytes ---------------------------------------------------------------
+
+@test
+fn bitsActAsAnInfiniteTwosComplement() {
+    let big = BigInt(2).pow(100)
+    assertEqual(BigInt(-1) & big, big)
+    assertEqual((-big) & (big - BigInt(1)), BigInt(0))
+    assertEqual((-big) | BigInt(5), -big + BigInt(5))
+    assertEqual(big ^ big, BigInt(0))
+    assertEqual(~big, -big - BigInt(1))
+    assertEqual(~(~big), big)
+    assertEqual(-big >> 100, BigInt(-1))
+    assertEqual((-big - BigInt(1)) >> 100, BigInt(-2))
+    assertEqual((-big) >> 99, BigInt(-2))
+    assertEqual((-big) >> 500, BigInt(-1))
+    assertEqual(big >> 500, BigInt(0))
+    assertEqual((-big + BigInt(1)) >> 1, -BigInt(2).pow(99))
+    assertEqual(big >> BigInt(98), BigInt(4))
+    assertEqual(BigInt(1) << BigInt(100), big)
+    assertEqual(big.bitLength, 101)
+    assertEqual((-big).bitLength, 100)
+    assertEqual((-big - BigInt(1)).bitLength, 101)
+    assertEqual(BigInt(0).bitLength, 0)
+    assertEqual(BigInt(-1).bitLength, 0)
+    assertEqual(big.trailingZeroCount, 100)
+    assertEqual(BigInt(0).trailingZeroCount, 0)
+}
+
+@test(traps: "shift out of range")
+fn aNegativeShiftTraps() {
+    let _ = BigInt(1) << -1
+}
+
+@test(traps: "shift out of range")
+fn aShiftByAHugeBigIntTraps() {
+    let _ = BigInt(1) >> BigInt(2).pow(70)
+}
+
+@test
+fn bytesAreTheTwosComplement() {
+    assert(BigInt(0).toBytes() == [0])
+    assert(BigInt(-1).toBytes() == [255])
+    assert(BigInt(127).toBytes() == [127])
+    assert(BigInt(128).toBytes() == [128, 0])
+    assert(BigInt(-128).toBytes() == [128])
+    assert(BigInt(-129).toBytes(.Big) == [255, 127])
+    let n = BigInt(2).pow(64)
+    assert(n.toBytes() == [0, 0, 0, 0, 0, 0, 0, 0, 1])
+    assert(n.toBytes(.Big) == [1, 0, 0, 0, 0, 0, 0, 0, 0])
+    assert((-n).toBytes() == [0, 0, 0, 0, 0, 0, 0, 0, 255])
+    assertEqual(BigInt(bytes: []), BigInt(0))
+    assertEqual(BigInt(bytes: [0, 0, 0, 0, 0, 0, 0, 0, 255]), -n)
+    assertEqual(BigInt(bytes: [255, 255, 255, 255, 255, 255, 255, 255, 255], signed: false), BigInt(2).pow(72) - BigInt(1))
+    assertEqual(BigInt(bytes: [1, 0, 0, 0, 0, 0, 0, 0, 0], endian: .Big), n)
+    var generator = SeededRandomNumberGenerator(seed: 44)
+    let long = randomBig(40, &generator)
+    assertEqual(BigInt(bytes: long.toBytes()), long)
+    assertEqual(BigInt(bytes: (-long).toBytes(.Big), endian: .Big), -long)
+}
+
+// ---- Number theory ----------------------------------------------------------------
+
+@test
+fn powersMultiplyOut() {
+    assertEqual(BigInt(3).pow(0), BigInt(1))
+    assertEqual(BigInt(0).pow(0), BigInt(1))
+    assertEqual(BigInt(-3).pow(3), BigInt(-27))
+    assertEqual(BigInt(7).pow(50), big("1798465042647412146620280340569649349251249"))
+    assertEqual(BigInt(2).pow(10), BigInt(1024))
+}
+
+@test(traps: "the exponent must not be negative, but is -1")
+fn aNegativePowerTraps() {
+    let _ = BigInt(2).pow(-1)
+}
+
+@test
+fn modularPowersStayBelowTheModulus() {
+    // 2^127 - 1 is prime: Fermat's little theorem holds for it.
+    let p = BigInt(2).pow(127) - BigInt(1)
+    assertEqual(BigInt(3).powMod(p - BigInt(1), p), BigInt(1))
+    assertEqual(BigInt(5).powMod(BigInt(0), BigInt(1)), BigInt(0))
+    assertEqual(BigInt(-2).powMod(BigInt(3), BigInt(5)), BigInt(2))
+    assertEqual(powMod(BigInt(4), BigInt(13), BigInt(497)), BigInt(445))
+    let m = BigInt(10).pow(40) + BigInt(7)
+    let e = BigInt(2).pow(100) + BigInt(1)
+    // a^(2^100 + 1) = (a^(2^100)) · a.
+    var squared = BigInt(12345)
+    var i = 0
+    while i < 100 {
+        squared = squared * squared % m
+        i = i + 1
+    }
+    assertEqual(BigInt(12345).powMod(e, m), squared * BigInt(12345) % m)
+}
+
+@test(traps: "the modulus must be positive, not 0")
+fn aZeroModulusTraps() {
+    let _ = BigInt(2).powMod(BigInt(3), BigInt(0))
+}
+
+@test(traps: "the exponent must not be negative, but is -3")
+fn aNegativeModularExponentTraps() {
+    let _ = BigInt(2).powMod(BigInt(-3), BigInt(7))
+}
+
+@test
+fn gcdsAreTheLargestCommonFactor() {
+    assertEqual(gcd(BigInt(0), BigInt(0)), BigInt(0))
+    assertEqual(gcd(BigInt(0), BigInt(-12)), BigInt(12))
+    assertEqual(gcd(BigInt(-12), BigInt(18)), BigInt(6))
+    let a = BigInt(2).pow(150) * BigInt(3).pow(40) * BigInt(7)
+    let b = BigInt(2).pow(90) * BigInt(3).pow(60) * BigInt(11)
+    assertEqual(a.gcd(b), BigInt(2).pow(90) * BigInt(3).pow(40))
+    assertEqual(BigInt(I64.min).gcd(BigInt(6)), BigInt(2))
+    // Consecutive Fibonacci numbers are coprime: Euclid's worst case.
+    var x = BigInt(1)
+    var y = BigInt(1)
+    var i = 0
+    while i < 300 {
+        let next = x + y
+        x = y
+        y = next
+        i = i + 1
+    }
+    assertEqual(gcd(x, y), BigInt(1))
+}
+
+@test
+fn integerSquareRootsAreTheFloor() {
+    assertEqual(isqrt(BigInt(0)), BigInt(0))
+    assertEqual(isqrt(BigInt(15)), BigInt(3))
+    assertEqual(isqrt(BigInt(16)), BigInt(4))
+    let r = BigInt(10).pow(300) + BigInt(12345)
+    assertEqual(isqrt(r * r), r)
+    assertEqual(isqrt(r * r - BigInt(1)), r - BigInt(1))
+    assertEqual(isqrt(r * r + r * BigInt(2)), r)
+    assertEqual(BigInt(2).pow(201).isqrt(), big("1792728671193156477399422023278"))
+}
+
+@test(traps: "isqrt's argument must not be negative, but is -4")
+fn aNegativeSquareRootTraps() {
+    let _ = isqrt(BigInt(-4))
+}
+
+@test
+fn hashesOfEqualValuesAreEqual() {
+    let a = BigInt(10).pow(50)
+    let b = big("1" + "0".repeated(50))
+    assertEqual(a.hashValue, b.hashValue)
+    var counts: [BigInt: Int] = [:]
+    counts[a] = 1
+    counts[b] = 2
+    counts[BigInt(5)] = 3
+    assertEqual(counts.count, 2)
+    assertEqual(counts[a] ?? 0, 2)
+}

@@ -750,7 +750,11 @@ Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, validated
                     StringBuilder)
 Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     generic over ElementaryFunctions; integer math;
-                    BigInt, Decimal, SIMD<T, N>, Matrix, Quaternion,
+                    BigInt (an I64 inline, limbs past it; schoolbook,
+                    Karatsuba and Toom-3 products, Burnikel–Ziegler
+                    division, text in any radix by halves; pow, powMod,
+                    gcd, isqrt, two's-complement bits, bytes),
+                    Decimal, SIMD<T, N>, Matrix, Quaternion,
                     statistics generic over every number type (mean,
                     median, mode, quantiles, variance, covariance,
                     correlation, histogram; compensated and two-pass;

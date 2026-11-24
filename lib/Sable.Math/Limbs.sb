@@ -1,0 +1,540 @@
+module Sable.Math
+
+// The arithmetic BigInt's magnitudes are made of: unsigned numbers as runs
+// of 64-bit limbs, the least significant first. A run may have zero limbs
+// at its top; each function says what it gives back. Products of two limbs
+// are taken in a U128 with the wrapping operators, whose high half is the
+// carry, so nothing here traps on overflow.
+//
+// Multiplication is schoolbook below KARATSUBA_THRESHOLD limbs, Karatsuba
+// up to TOOM3_THRESHOLD, and Toom-3 (Bodrato's interpolation) above it;
+// division is Knuth's algorithm D below BURNIKEL_ZIEGLER_THRESHOLD limbs
+// of divisor and Burnikel–Ziegler's recursive division above it. The
+// thresholds were measured with benchmarks/versus-dotnet/bigint-*.sb's
+// numbers, on Apple silicon; Toom-3, whose interpolation is worked in
+// BigInts, only gains on Karatsuba from a few hundred limbs on.
+
+/// Below this many limbs in the shorter factor, schoolbook multiplication.
+let KARATSUBA_THRESHOLD = 48
+
+/// From this many limbs in the shorter factor, Toom-3 rather than Karatsuba.
+let TOOM3_THRESHOLD = 250
+
+/// From this many limbs in the divisor, and as many more in the dividend,
+/// Burnikel–Ziegler rather than schoolbook division.
+let BURNIKEL_ZIEGLER_THRESHOLD = 240
+
+/// A run of that many zero limbs.
+fn zeroLimbs(_ count: Int) -> U64[>..] {
+    var limbs: U64[>..] = []
+    limbs.reserveCapacity(count)
+    var i = 0
+    while i < count {
+        limbs.append(0)
+        i = i + 1
+    }
+    return limbs
+}
+
+/// How many limbs the run has below its zero ones at the top.
+fn significantCount(_ a: U64[:]) -> Int {
+    var n = a.count
+    while n > 0 && a[n - 1] == 0 {
+        n = n - 1
+    }
+    return n
+}
+
+/// The run without its zero limbs at the top.
+fn trimmed(_ a: U64[:]) -> U64[:] {
+    return a.slice(from: 0, to: significantCount(a))
+}
+
+/// -1, 0 or 1 as a is less than, equal to or greater than b, as numbers:
+/// zero limbs at the top of either change nothing.
+fn compareLimbs(_ a: U64[:], _ b: U64[:]) -> Int {
+    let n = significantCount(a)
+    let m = significantCount(b)
+    if n != m {
+        return n < m ? -1 : 1
+    }
+    var i = n - 1
+    while i >= 0 {
+        let x = a[i]
+        let y = b[i]
+        if x != y {
+            return x < y ? -1 : 1
+        }
+        i = i - 1
+    }
+    return 0
+}
+
+/// a + b, in one limb more than the longer has (the top one the carry).
+fn addLimbs(_ a: U64[:], _ b: U64[:]) -> U64[>..] {
+    if a.count < b.count {
+        return addLimbs(b, a)
+    }
+    // The longer copied at once, and the shorter added in place.
+    var sum = a.toArray()
+    sum.append(0)
+    addInto(&sum, 0, b)
+    return sum
+}
+
+/// a - b, which must not be negative, in as many limbs as a has.
+fn subLimbs(_ a: U64[:], _ b: U64[:]) -> U64[>..] {
+    var difference = a.toArray()
+    subtractFrom(&difference, 0, b)
+    return difference
+}
+
+/// Adds x into the limbs of r from 'offset' on, carrying as far as it
+/// goes. The sum must fit r.
+fn addInto(_ r: inout U64[>..], _ offset: Int, _ x: U64[:]) {
+    let n = significantCount(x)
+    var carry: U64 = 0
+    var i = 0
+    while i < n {
+        let t = U128(r[offset + i]) &+ U128(x[i]) &+ U128(carry)
+        r[offset + i] = t unchecked as U64
+        carry = (t >> 64) unchecked as U64
+        i = i + 1
+    }
+    var k = offset + n
+    while carry != 0 {
+        let t = U128(r[k]) &+ U128(carry)
+        r[k] = t unchecked as U64
+        carry = (t >> 64) unchecked as U64
+        k = k + 1
+    }
+}
+
+/// Takes x from the limbs of r from 'offset' on, borrowing as far as it
+/// goes. The difference must not be negative.
+fn subtractFrom(_ r: inout U64[>..], _ offset: Int, _ x: U64[:]) {
+    let n = significantCount(x)
+    var borrow: U64 = 0
+    var i = 0
+    while i < n {
+        let t = U128(r[offset + i]) &- U128(x[i]) &- U128(borrow)
+        r[offset + i] = t unchecked as U64
+        borrow = (t >> 127) unchecked as U64
+        i = i + 1
+    }
+    var k = offset + n
+    while borrow != 0 {
+        let t = U128(r[k]) &- U128(borrow)
+        r[k] = t unchecked as U64
+        borrow = (t >> 127) unchecked as U64
+        k = k + 1
+    }
+}
+
+/// a times one limb, plus a limb, in one limb more than a has.
+fn mulAddSmall(_ a: U64[:], _ factor: U64, _ addend: U64) -> U64[>..] {
+    var product: U64[>..] = []
+    product.reserveCapacity(a.count + 1)
+    var carry = addend
+    var i = 0
+    while i < a.count {
+        let t = U128(a[i]) &* U128(factor) &+ U128(carry)
+        product.append(t unchecked as U64)
+        carry = (t >> 64) unchecked as U64
+        i = i + 1
+    }
+    product.append(carry)
+    return product
+}
+
+/// Divides the limbs by one, in place, and gives the remainder.
+fn divideSmallInPlace(_ a: inout U64[>..], _ divisor: U64) -> U64 {
+    let d = U128(divisor)
+    var remainder: U128 = 0
+    var i = a.count - 1
+    while i >= 0 {
+        let current = (remainder << 64) | U128(a[i])
+        let q = current / d
+        a[i] = q unchecked as U64
+        remainder = current &- q &* d
+        i = i - 1
+    }
+    return remainder unchecked as U64
+}
+
+/// The limbs moved up by 'bits' (under 64) and by 'limbs' whole limbs, in
+/// that many and one more than a has.
+fn shiftLimbsLeft(_ a: U64[:], _ bits: Int, limbs: Int = 0) -> U64[>..] {
+    var shifted: U64[>..] = []
+    if limbs == 0 {
+        // Copied at once, then moved in place from the top down.
+        shifted = a.toArray()
+        shifted.append(0)
+    } else {
+        shifted.reserveCapacity(limbs + a.count + 1)
+        var i = 0
+        while i < limbs {
+            shifted.append(0)
+            i = i + 1
+        }
+        i = 0
+        while i < a.count {
+            shifted.append(a[i])
+            i = i + 1
+        }
+        shifted.append(0)
+    }
+    if bits == 0 {
+        return shifted
+    }
+    let up = U64(bits)
+    let down = U64(64 - bits)
+    var i = limbs + a.count
+    while i > limbs {
+        shifted[i] = (shifted[i] << up) | (shifted[i - 1] >> down)
+        i = i - 1
+    }
+    shifted[limbs] = shifted[limbs] << up
+    return shifted
+}
+
+/// The limbs moved down by 'bits' (under 64), in as many limbs as a has.
+fn shiftLimbsRight(_ a: U64[:], _ bits: Int) -> U64[>..] {
+    var shifted = a.toArray()
+    if bits == 0 || shifted.count == 0 {
+        return shifted
+    }
+    let down = U64(bits)
+    let up = U64(64 - bits)
+    let last = shifted.count - 1
+    var i = 0
+    while i < last {
+        shifted[i] = (shifted[i] >> down) | (shifted[i + 1] << up)
+        i = i + 1
+    }
+    shifted[last] = shifted[last] >> down
+    return shifted
+}
+
+// ---- Multiplication ----------------------------------------------------------
+
+/// a * b, in a.count + b.count limbs, by whichever algorithm suits their
+/// lengths.
+fn mulLimbs(_ a: U64[:], _ b: U64[:]) -> U64[>..] {
+    if a.count < b.count {
+        return mulLimbs(b, a)
+    }
+    let n = a.count
+    let m = b.count
+    if m < KARATSUBA_THRESHOLD {
+        return schoolbookMul(a, b)
+    }
+    if 2 * m <= n {
+        return unbalancedMul(a, b)
+    }
+    if m < TOOM3_THRESHOLD {
+        return karatsubaMul(a, b)
+    }
+    return toom3Mul(a, b)
+}
+
+/// a * b, a limb of b at a time: O(n·m).
+fn schoolbookMul(_ a: U64[:], _ b: U64[:]) -> U64[>..] {
+    let n = a.count
+    let m = b.count
+    var product = zeroLimbs(n + m)
+    var j = 0
+    while j < m {
+        let factor = U128(b[j])
+        if factor != 0 {
+            var carry: U64 = 0
+            var i = 0
+            var k = j
+            while i < n {
+                let t = U128(a[i]) &* factor &+ U128(product[k]) &+ U128(carry)
+                product[k] = t unchecked as U64
+                carry = (t >> 64) unchecked as U64
+                i = i + 1
+                k = k + 1
+            }
+            product[k] = carry
+        }
+        j = j + 1
+    }
+    return product
+}
+
+/// a * b for a b at most half as long as a: a cut into pieces as long as b,
+/// each multiplied by it as an equal, and the products added in place.
+fn unbalancedMul(_ a: U64[:], _ b: U64[:]) -> U64[>..] {
+    let n = a.count
+    let m = b.count
+    var product = zeroLimbs(n + m)
+    var start = 0
+    while start < n {
+        let end = start + m < n ? start + m : n
+        let piece = mulLimbs(a.slice(from: start, to: end), b)
+        addInto(&product, start, piece)
+        start = end
+    }
+    return product
+}
+
+/// a * b, b more than half as long as a, by Karatsuba: with a and b cut in
+/// two at k limbs, three products of half the length rather than four.
+fn karatsubaMul(_ a: U64[:], _ b: U64[:]) -> U64[>..] {
+    let n = a.count
+    let m = b.count
+    let k = (n + 1) / 2
+    let a0 = a.slice(from: 0, to: k)
+    let a1 = a.slice(from: k, to: n)
+    let b0 = b.slice(from: 0, to: k)
+    let b1 = b.slice(from: k, to: m)
+
+    let low = mulLimbs(trimmed(a0), trimmed(b0))
+    let high = mulLimbs(trimmed(a1), trimmed(b1))
+    let aSum = addLimbs(a0, a1)
+    let bSum = addLimbs(b0, b1)
+    // (a0 + a1)(b0 + b1) - a0·b0 - a1·b1 = a0·b1 + a1·b0.
+    var middle = mulLimbs(trimmed(aSum), trimmed(bSum))
+    subtractFrom(&middle, 0, low)
+    subtractFrom(&middle, 0, high)
+
+    var product = zeroLimbs(n + m)
+    addInto(&product, 0, low)
+    addInto(&product, 2 * k, high)
+    addInto(&product, k, middle)
+    return product
+}
+
+/// a * b, b more than half as long as a, by Toom-3: with each cut in three
+/// at k limbs, as polynomials in x = 2^(64k), five products of a third of
+/// the length — the values at 0, 1, -1, -2 and infinity — and the product
+/// interpolated from them (Bodrato's sequence). Its values can be
+/// negative, so it is worked in BigInts.
+fn toom3Mul(_ a: U64[:], _ b: U64[:]) -> U64[>..] {
+    let n = a.count
+    let m = b.count
+    let k = (n + 2) / 3
+    let a0 = BigInt(magnitude: a.slice(from: 0, to: k))
+    let a1 = BigInt(magnitude: a.slice(from: k, to: 2 * k))
+    let a2 = BigInt(magnitude: a.slice(from: 2 * k, to: n))
+    let b0 = BigInt(magnitude: b.slice(from: 0, to: k < m ? k : m))
+    let b1 = BigInt(magnitude: k < m ? b.slice(from: k, to: 2 * k < m ? 2 * k : m) : [])
+    let b2 = BigInt(magnitude: 2 * k < m ? b.slice(from: 2 * k, to: m) : [])
+
+    // The polynomials' values.
+    let p = a0 + a2
+    let pOne = p + a1
+    let pMinusOne = p - a1
+    let pMinusTwo = ((pMinusOne + a2) << 1) - a0
+    let q = b0 + b2
+    let qOne = q + b1
+    let qMinusOne = q - b1
+    let qMinusTwo = ((qMinusOne + b2) << 1) - b0
+
+    let r0 = a0 * b0
+    let rOne = pOne * qOne
+    let rMinusOne = pMinusOne * qMinusOne
+    let rMinusTwo = pMinusTwo * qMinusTwo
+    let rInfinity = a2 * b2
+
+    // The product's coefficients.
+    var r3 = (rMinusTwo - rOne).dividedExactly(by: 3)
+    var r1 = (rOne - rMinusOne) >> 1
+    var r2 = rMinusOne - r0
+    r3 = ((r2 - r3) >> 1) + (rInfinity << 1)
+    r2 = r2 + r1 - rInfinity
+    r1 = r1 - r3
+
+    var product = zeroLimbs(n + m)
+    addInto(&product, 0, r0.limbView)
+    addInto(&product, k, r1.limbView)
+    addInto(&product, 2 * k, r2.limbView)
+    addInto(&product, 3 * k, r3.limbView)
+    addInto(&product, 4 * k, rInfinity.limbView)
+    return product
+}
+
+// ---- Division ----------------------------------------------------------------
+
+/// The quotient and remainder of a by b, b not zero, each without zero
+/// limbs at its top.
+fn divRemLimbs(_ a: U64[:], _ b: U64[:]) -> (U64[>..], U64[>..]) {
+    let divisor = trimmed(b)
+    let dividend = trimmed(a)
+    if compareLimbs(dividend, divisor) < 0 {
+        return ([], dividend.toArray())
+    }
+    if divisor.count == 1 {
+        var quotient = dividend.toArray()
+        let remainder = divideSmallInPlace(&quotient, divisor[0])
+        let rest: U64[>..] = remainder == 0 ? [] : [remainder]
+        return (trimmed(quotient).toArray(), rest)
+    }
+    if divisor.count >= BURNIKEL_ZIEGLER_THRESHOLD && dividend.count - divisor.count >= BURNIKEL_ZIEGLER_THRESHOLD {
+        return burnikelZiegler(dividend, divisor)
+    }
+    return knuthDivRem(dividend, divisor)
+}
+
+/// The quotient and remainder of a by b, b of two limbs or more, by Knuth's
+/// algorithm D (The Art of Computer Programming, 4.3.1): b shifted until its
+/// top bit is set, then a limb of the quotient at a time, each estimated
+/// from the top two limbs of what is left and the top two of b, which is
+/// at most one too large, and put right when it is.
+fn knuthDivRem(_ a: U64[:], _ b: U64[:]) -> (U64[>..], U64[>..]) {
+    let n = b.count
+    if a.count < n {
+        // Burnikel–Ziegler's steps can ask this of a shorter number.
+        return ([], trimmed(a).toArray())
+    }
+    let shift = b[n - 1].leadingZeroCount
+    let v = shiftLimbsLeft(b, shift)
+    var u = shiftLimbsLeft(a, shift)
+    let top = U128(v[n - 1])
+    let next = U128(v[n - 2])
+    let base: U128 = 18446744073709551616
+    var quotient = zeroLimbs(a.count - n + 1)
+    var j = a.count - n
+    while j >= 0 {
+        let numerator = (U128(u[j + n]) << 64) | U128(u[j + n - 1])
+        var estimate = numerator / top
+        if estimate >= base {
+            estimate = base - 1
+        }
+        var rest = numerator &- estimate &* top
+        while rest < base && estimate &* next > ((rest << 64) | U128(u[j + n - 2])) {
+            estimate = estimate - 1
+            rest = rest + top
+        }
+
+        // u[j...j + n] -= estimate * v.
+        var carry: U64 = 0
+        var borrow: U64 = 0
+        var i = 0
+        var k = j
+        while i < n {
+            let p = estimate &* U128(v[i]) &+ U128(carry)
+            carry = (p >> 64) unchecked as U64
+            let t = U128(u[k]) &- (p & 18446744073709551615) &- U128(borrow)
+            u[k] = t unchecked as U64
+            borrow = (t >> 127) unchecked as U64
+            i = i + 1
+            k = k + 1
+        }
+        let t = U128(u[j + n]) &- U128(carry) &- U128(borrow)
+        u[j + n] = t unchecked as U64
+        var digit = estimate unchecked as U64
+        if (t >> 127) != 0 {
+            // One too many: v added back, the carry out of the top dropped.
+            digit = digit - 1
+            var c: U64 = 0
+            i = 0
+            k = j
+            while i < n {
+                let s = U128(u[k]) &+ U128(v[i]) &+ U128(c)
+                u[k] = s unchecked as U64
+                c = (s >> 64) unchecked as U64
+                i = i + 1
+                k = k + 1
+            }
+            u[j + n] = u[j + n] &+ c
+        }
+        quotient[j] = digit
+        j = j - 1
+    }
+    let remainder = shiftLimbsRight(u.slice(from: 0, to: n), shift)
+    return (trimmed(quotient).toArray(), trimmed(remainder).toArray())
+}
+
+/// The quotient and remainder of a by b by Burnikel and Ziegler's recursive
+/// division ("Fast Recursive Division", 1998): b, shifted to fill a whole
+/// number of blocks of n limbs, divides a two blocks at a time, each step a
+/// division of 2n limbs by n made of two of 3n/2 by n, each of those one
+/// of n by n/2 and a multiplication — so division costs a small multiple
+/// of multiplication, Karatsuba's and Toom-3's speed with it.
+fn burnikelZiegler(_ a: U64[:], _ b: U64[:]) -> (U64[>..], U64[>..]) {
+    let s = b.count
+    // n = j·m, m a power of two with n/m under the threshold, so each
+    // recursion halves evenly down to the schoolbook division.
+    var m = 1
+    while s / m >= BURNIKEL_ZIEGLER_THRESHOLD {
+        m = m * 2
+    }
+    let j = (s + m - 1) / m
+    let n = j * m
+    let sigma = n * 64 - limbBitLength(of: b)
+    let divisor = BigInt(magnitude: b) << sigma
+    let dividend = BigInt(magnitude: a) << sigma
+    var blocks = (limbBitLength(of: dividend.limbView) + n * 64) / (n * 64)
+    if blocks < 2 {
+        blocks = 2
+    }
+
+    var quotient = zeroLimbs(blocks * n)
+    var z = dividend.limbs(from: (blocks - 2) * n, to: blocks * n)
+    var remainder = BigInt.zero
+    var i = blocks - 2
+    while i >= 0 {
+        let (q, r) = divide2n1n(z, divisor, n)
+        addInto(&quotient, i * n, q.limbView)
+        if i > 0 {
+            z = r.shiftedLimbs(by: n) + dividend.limbs(from: (i - 1) * n, to: i * n)
+        } else {
+            remainder = r
+        }
+        i = i - 1
+    }
+    return (trimmed(quotient).toArray(), (remainder >> sigma).limbView.toArray())
+}
+
+/// a by b, b of n limbs with its top bit set and a less than b·2^(64n):
+/// two divisions of 3/2 the length by b, or the schoolbook one where n is
+/// odd or under the threshold.
+fn divide2n1n(_ a: BigInt, _ b: BigInt, _ n: Int) -> (BigInt, BigInt) {
+    if n % 2 != 0 || n < BURNIKEL_ZIEGLER_THRESHOLD {
+        let (q, r) = knuthDivRem(a.limbView, b.limbView)
+        return (BigInt(magnitude: q), BigInt(magnitude: r))
+    }
+    let half = n / 2
+    let (q1, r) = divide3n2n(a.limbs(from: half, to: 4 * half), b, half)
+    let (q2, s) = divide3n2n(r.shiftedLimbs(by: half) + a.limbs(from: 0, to: half), b, half)
+    return (q1.shiftedLimbs(by: half) + q2, s)
+}
+
+/// a by b, a of 3h limbs and b of 2h with its top bit set, a less than
+/// b·2^(64h): the quotient estimated from a's top 2h limbs over b's top h,
+/// which is at most two too large, and put right.
+fn divide3n2n(_ a: BigInt, _ b: BigInt, _ h: Int) -> (BigInt, BigInt) {
+    let b1 = b.limbs(from: h, to: 2 * h)
+    let b2 = b.limbs(from: 0, to: h)
+    let a12 = a.limbs(from: h, to: 3 * h)
+    let a1 = a.limbs(from: 2 * h, to: 3 * h)
+    var q = BigInt.zero
+    var r1 = BigInt.zero
+    if a1 < b1 {
+        let (quotient, remainder) = divide2n1n(a12, b1, h)
+        q = quotient
+        r1 = remainder
+    } else {
+        // The quotient's greatest, 2^(64h) - 1.
+        q = BigInt.one.shiftedLimbs(by: h) - BigInt.one
+        r1 = a12 - b1.shiftedLimbs(by: h) + b1
+    }
+    var r = r1.shiftedLimbs(by: h) + a.limbs(from: 0, to: h) - q * b2
+    while r < BigInt.zero {
+        r = r + b
+        q = q - BigInt.one
+    }
+    return (q, r)
+}
+
+/// How many bits the run's number takes: 0 for zero.
+fn limbBitLength(of a: U64[:]) -> Int {
+    let n = significantCount(a)
+    if n == 0 {
+        return 0
+    }
+    return n * 64 - a[n - 1].leadingZeroCount
+}

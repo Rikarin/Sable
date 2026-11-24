@@ -1,0 +1,271 @@
+module Sable.Math
+
+// BigInt's bits: the bitwise operators and shifts, as on an infinite two's
+// complement — a negative value has ones without end above its bits — and
+// the value as bytes. A value is held as a sign and a magnitude; the
+// operators that mix bits make each side's two's complement, one limb
+// wider than either magnitude so its top bit is the sign, and read the
+// result back.
+
+extension BigInt {
+    /// The value's two's complement in that many limbs, which must be more
+    /// than its magnitude takes.
+    fn twosComplement(_ count: Int) -> U64[>..] {
+        var limbs = limbView
+        while limbs.count < count {
+            limbs.append(0)
+        }
+        if negative {
+            // -m is ~m + 1.
+            var carry: U64 = 1
+            var i = 0
+            while i < count {
+                let t = U128(~limbs[i]) &+ U128(carry)
+                limbs[i] = t unchecked as U64
+                carry = (t >> 64) unchecked as U64
+                i = i + 1
+            }
+        }
+        return limbs
+    }
+
+    /// The value whose two's complement the limbs are: negative when the
+    /// top limb's top bit is set.
+    static fn fromTwosComplement(_ limbs: U64[>..]) -> BigInt {
+        let count = limbs.count
+        if count == 0 || limbs[count - 1] >> 63 == 0 {
+            return BigInt.make(false, limbs)
+        }
+        var magnitude = limbs
+        var carry: U64 = 1
+        var i = 0
+        while i < count {
+            let t = U128(~magnitude[i]) &+ U128(carry)
+            magnitude[i] = t unchecked as U64
+            carry = (t >> 64) unchecked as U64
+            i = i + 1
+        }
+        return BigInt.make(true, magnitude)
+    }
+
+    /// The two values' two's complements, limb by limb, through the operation.
+    static fn bitwise(_ lhs: BigInt, _ rhs: BigInt, _ operation: (U64, U64) -> U64) -> BigInt {
+        let count = (lhs.limbCount > rhs.limbCount ? lhs.limbCount : rhs.limbCount) + 1
+        let a = lhs.twosComplement(count)
+        let b = rhs.twosComplement(count)
+        var result: U64[>..] = []
+        result.reserveCapacity(count)
+        var i = 0
+        while i < count {
+            result.append(operation(a[i], b[i]))
+            i = i + 1
+        }
+        return BigInt.fromTwosComplement(result)
+    }
+
+    /// How many bits the value takes in two's complement, its sign bit not
+    /// counted (.NET's 'GetBitLength', Java's 'bitLength'): 0 for 0 and -1.
+    ///
+    /// ```sable
+    /// assert(BigInt(255).bitLength == 8)
+    /// assert(BigInt(-256).bitLength == 8)
+    /// assert(BigInt(2).pow(100).bitLength == 101)
+    /// ```
+    public var bitLength: Int {
+        get {
+            if large.isEmpty {
+                let x = small < 0 ? ~small : small
+                return 64 - x.leadingZeroCount
+            }
+            if !negative {
+                return limbBitLength(of: large)
+            }
+            // -m takes as many bits as m - 1 does.
+            return limbBitLength(of: subLimbs(large, [1]))
+        }
+    }
+
+    /// The value moved toward the high end by 'count' bits, a multiple of
+    /// two to the count. A negative count traps.
+    ///
+    /// ```sable
+    /// assert(BigInt(3) << 100 == BigInt(3) * BigInt(2).pow(100))
+    /// assert(BigInt(-1) << 64 == -BigInt(2).pow(64))
+    /// ```
+    public operator << (lhs: BigInt, rhs: Int) -> BigInt {
+        precondition(rhs >= 0, "shift out of range")
+        if lhs.large.isEmpty {
+            if lhs.small == 0 || rhs == 0 {
+                return lhs
+            }
+            if rhs < 63 {
+                let shifted = lhs.small << I64(rhs)
+                if shifted >> I64(rhs) == lhs.small {
+                    return BigInt { small: shifted, large: [] }
+                }
+            }
+        }
+        return BigInt.make(lhs.negative, shiftLimbsLeft(lhs.limbView, rhs % 64, limbs: rhs / 64))
+    }
+
+    /// The value moved toward the low end by 'count' bits, rounding toward
+    /// negative infinity as a two's complement does: a floor division by two
+    /// to the count. A negative count traps.
+    ///
+    /// ```sable
+    /// assert(BigInt(2).pow(100) >> 98 == BigInt(4))
+    /// assert(BigInt(-5) >> 1 == BigInt(-3))
+    /// ```
+    public operator >> (lhs: BigInt, rhs: Int) -> BigInt {
+        precondition(rhs >= 0, "shift out of range")
+        if lhs.large.isEmpty {
+            return BigInt { small: rhs >= 63 ? (lhs.small < 0 ? -1 : 0) : lhs.small >> I64(rhs), large: [] }
+        }
+        let whole = rhs / 64
+        let magnitude = lhs.large
+        if whole >= magnitude.count {
+            return lhs.negative ? BigInt(-1) : BigInt.zero
+        }
+        let shifted = shiftLimbsRight(magnitude.slice(from: whole, to: magnitude.count), rhs % 64)
+        let result = BigInt.make(lhs.negative, shifted)
+        if lhs.negative {
+            // Rounded down, not toward zero: one further from zero if any
+            // bit shifted out was set.
+            var lost = (magnitude[whole] << U64(63 - rhs % 64)) << 1 != 0
+            var i = 0
+            while !lost && i < whole {
+                lost = magnitude[i] != 0
+                i = i + 1
+            }
+            if lost {
+                return result - BigInt.one
+            }
+        }
+        return result
+    }
+
+    /// The value moved toward the high end, the count a BigInt: one past
+    /// Int's greatest traps, as a negative one does.
+    public operator << (lhs: BigInt, rhs: BigInt) -> BigInt {
+        return lhs << BigInt.shiftCount(rhs)
+    }
+
+    /// The value moved toward the low end, the count a BigInt.
+    public operator >> (lhs: BigInt, rhs: BigInt) -> BigInt {
+        return lhs >> BigInt.shiftCount(rhs)
+    }
+
+    /// A shift's count as an Int.
+    static fn shiftCount(_ count: BigInt) -> Int {
+        precondition(count.large.isEmpty && count.small >= 0, "shift out of range")
+        return Int(count.small)
+    }
+
+    /// The bits set in both.
+    ///
+    /// ```sable
+    /// assert((BigInt(-1) & BigInt(2).pow(70)) == BigInt(2).pow(70))
+    /// assert((BigInt(12) & BigInt(-4)) == BigInt(12))
+    /// ```
+    public operator & (lhs: BigInt, rhs: BigInt) -> BigInt {
+        if lhs.large.isEmpty && rhs.large.isEmpty {
+            return BigInt { small: lhs.small & rhs.small, large: [] }
+        }
+        return BigInt.bitwise(lhs, rhs, (a: U64, b: U64) => a & b)
+    }
+
+    /// The bits set in either.
+    ///
+    /// ```sable
+    /// assert((BigInt(2).pow(64) | BigInt(1)) == BigInt(2).pow(64) + BigInt(1))
+    /// ```
+    public operator | (lhs: BigInt, rhs: BigInt) -> BigInt {
+        if lhs.large.isEmpty && rhs.large.isEmpty {
+            return BigInt { small: lhs.small | rhs.small, large: [] }
+        }
+        return BigInt.bitwise(lhs, rhs, (a: U64, b: U64) => a | b)
+    }
+
+    /// The bits set in one and not the other.
+    ///
+    /// ```sable
+    /// assert((BigInt(-1) ^ BigInt(2).pow(64)) == -BigInt(2).pow(64) - BigInt(1))
+    /// ```
+    public operator ^ (lhs: BigInt, rhs: BigInt) -> BigInt {
+        if lhs.large.isEmpty && rhs.large.isEmpty {
+            return BigInt { small: lhs.small ^ rhs.small, large: [] }
+        }
+        return BigInt.bitwise(lhs, rhs, (a: U64, b: U64) => a ^ b)
+    }
+
+    /// Every bit turned over: -x - 1.
+    ///
+    /// ```sable
+    /// assert(~BigInt(0) == BigInt(-1))
+    /// assert(~BigInt(2).pow(64) == -BigInt(2).pow(64) - BigInt(1))
+    /// ```
+    public prefix operator ~ (operand: BigInt) -> BigInt {
+        if operand.large.isEmpty {
+            return BigInt { small: ~operand.small, large: [] }
+        }
+        return -operand - BigInt.one
+    }
+
+    // ---- Bytes ---------------------------------------------------------------
+
+    /// The value's two's complement in the fewest bytes that hold it, its
+    /// sign bit among them (.NET's 'ToByteArray'): the least significant
+    /// byte first, or the most with '.Big'. 0 is one zero byte.
+    ///
+    /// ```sable
+    /// assert(BigInt(256).toBytes() == [0, 1])
+    /// assert(BigInt(-129).toBytes(.Big) == [255, 127])
+    /// assert(BigInt(128).toBytes() == [128, 0])
+    /// ```
+    public fn toBytes(_ endian: Endian = .Little) -> U8[>..] {
+        let count = bitLength / 8 + 1
+        let limbs = twosComplement(limbCount + 1)
+        var bytes: U8[>..] = []
+        bytes.reserveCapacity(count)
+        var i = 0
+        while i < count {
+            let index = endian == .Little ? i : count - 1 - i
+            bytes.append((limbs[index / 8] >> U64(index % 8 * 8)) unchecked as U8)
+            i = i + 1
+        }
+        return bytes
+    }
+
+    /// The value the bytes are, the least significant first or, with
+    /// '.Big', the most: a two's complement, negative when the most
+    /// significant byte's top bit is set, unless 'signed' is false and
+    /// they are a magnitude. No bytes are 0.
+    ///
+    /// ```sable
+    /// assert(BigInt(bytes: [0, 1]) == BigInt(256))
+    /// assert(BigInt(bytes: [255, 127], endian: .Big) == BigInt(-129))
+    /// assert(BigInt(bytes: [255], signed: false) == BigInt(255))
+    /// ```
+    public init(bytes: U8[:], endian: Endian = .Little, signed: Bool = true) {
+        let count = bytes.count
+        var limbs = zeroLimbs(count / 8 + 1)
+        var i = 0
+        while i < count {
+            let byte = endian == .Little ? bytes[i] : bytes[count - 1 - i]
+            limbs[i / 8] = limbs[i / 8] | (U64(byte) << U64(i % 8 * 8))
+            i = i + 1
+        }
+        let mostSignificant: U8 = count == 0 ? 0 : endian == .Little ? bytes[count - 1] : bytes[0]
+        if signed && mostSignificant >= 128 {
+            // Ones above the top byte, to the end of the top limb.
+            var j = count
+            while j < limbs.count * 8 {
+                limbs[j / 8] = limbs[j / 8] | (U64(255) << U64(j % 8 * 8))
+                j = j + 1
+            }
+            self = BigInt.fromTwosComplement(limbs)
+        } else {
+            self = BigInt.make(false, limbs)
+        }
+    }
+}

@@ -1,0 +1,20 @@
+module BigIntToString
+
+// Writing BigInts in decimal against .NET's BigInteger.ToString: a number of
+// 10⁵ digits (3^209590), five times over, each a little different.
+
+import Sable.Math
+
+@main
+fn main() {
+    let a = BigInt(3).pow(209590)
+    var total = 0
+    var text = ""
+    var i = 0
+    while i < 5 {
+        text = (a + BigInt(i)).toString()
+        total = total + text.count
+        i = i + 1
+    }
+    print("\(total) \(text.slice(from: 0, to: 12)) \(text.slice(from: text.count - 12, to: text.count))")
+}

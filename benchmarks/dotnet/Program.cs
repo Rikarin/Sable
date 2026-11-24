@@ -29,6 +29,9 @@ var benchmarks = new Dictionary<string, Func<string>> {
     ["concurrent-queue"] = ConcurrentQueueBench,
     ["sorted-dictionary"] = SortedDictionaryBench,
     ["text-builder"] = TextBuilding,
+    ["bigint-multiply"] = BigIntMultiply,
+    ["bigint-divide"] = BigIntDivide,
+    ["bigint-tostring"] = BigIntToString,
 };
 
 if (args.Length == 0 || !benchmarks.TryGetValue(args[0], out var run)) {
@@ -404,6 +407,57 @@ static string Sort() {
         }
 
         return $"{(ordered ? "true" : "false")} {a[0]} {a[a.Count / 2]} {b[0]} {b[^1]}";
+    }
+}
+
+// Two BigIntegers of about 10^5 decimal digits (3^209590 and 7^118330),
+// multiplied ten times over.
+static string BigIntMultiply() {
+    checked {
+        var a = System.Numerics.BigInteger.Pow(3, 209590);
+        var b = System.Numerics.BigInteger.Pow(7, 118330);
+        long bits = 0;
+        ulong low = 0;
+        for (var i = 0; i < 10; i++) {
+            var product = a * (b + i);
+            bits += (long)product.GetBitLength();
+            low ^= (ulong)(product & ulong.MaxValue);
+        }
+
+        return $"{bits} {low}";
+    }
+}
+
+// A BigInteger of 10^5 decimal digits divided by one of half as many, ten
+// times over, for the quotient and the remainder at once.
+static string BigIntDivide() {
+    checked {
+        var a = System.Numerics.BigInteger.Pow(3, 209590);
+        var b = System.Numerics.BigInteger.Pow(7, 59165);
+        long bits = 0;
+        ulong low = 0;
+        for (var i = 0; i < 10; i++) {
+            var (quotient, remainder) = System.Numerics.BigInteger.DivRem(a + i, b);
+            bits += (long)quotient.GetBitLength();
+            low ^= (ulong)(remainder & ulong.MaxValue);
+        }
+
+        return $"{bits} {low}";
+    }
+}
+
+// A BigInteger of 10^5 digits (3^209590) in decimal, five times over.
+static string BigIntToString() {
+    checked {
+        var a = System.Numerics.BigInteger.Pow(3, 209590);
+        long total = 0;
+        var text = "";
+        for (var i = 0; i < 5; i++) {
+            text = (a + i).ToString();
+            total += text.Length;
+        }
+
+        return $"{total} {text[..12]} {text[^12..]}";
     }
 }
 

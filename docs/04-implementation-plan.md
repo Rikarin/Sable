@@ -976,7 +976,7 @@ Sable.Math         fixed/float math, SIMD vectors, random
 Sable.IO           File, Directory, Stream, Path, stdin/stdout
 Sable.Serialize    Encoder/Decoder protocols, JSON, binary, the zero-copy path
 Sable.Concurrency  Task, TaskGroup, Actor runtime, Channel, Mutex, Atomic
-Sable.Net          Socket, TcpListener, Http client
+Sable.Net          Url, sockets, Dns; Http client to come
 Sable.Time         Instant, Duration, Clock, Calendar
 Sable.Process      spawn, environment, signals
 Sable.Diagnostics  Logger, tracing, metrics
@@ -1667,7 +1667,7 @@ for handing tasks between cores, which a task that does little between
 spawns and awaits cannot win back.
 
 **I/O** — the fourth stage (`tests/Sable.CodeGen.Tests/ReactorTests.cs`,
-`tests/lib/Sable.IO/TcpListenerTests.sb` and `TcpStreamTests.sb`).
+`tests/lib/Sable.Net/`'s socket tests).
 
 - *The reactor* is the platform layer's (`platform.h`): kqueue on macOS and
   the BSDs, epoll on Linux, an I/O completion port on Windows told of
@@ -1690,15 +1690,22 @@ spawns and awaits cannot win back.
   waits is not lost. A call that would block says so, and the library
   waits (`Runtime.waitForSocket`, the `task_io_wait` builtin, a place a
   task suspends) and calls again. A source is never freed — closed, it is
-  used again with its generation bumped, which a handle carries — so a
+  used again with its generation bumped, which a handle carries with the
+  source's place in a table (24 bits of place and 38 of generation) — so a
   report gathered for a socket since closed lands on memory that is still
-  a source, and a stale handle names nothing. Cancelling a task waiting
+  a source, and a stale handle names nothing. A call is a user of its source
+  while it runs, and a close waits for the users before the system's own:
+  else the number just closed could be another socket's by the time a call
+  on another thread used it. A task that has suspended looks, under the
+  source's lock, whether its handle still names the source, and is among its
+  waiters before it looks whether it is cancelled: a cancel between the two
+  would be missed the other way round. Any number of tasks wait on a source
+  the same way, and a report wakes them all. Cancelling a task waiting
   on a socket wakes it, and it throws; closing the socket wakes it too.
-  `Sable.IO` has `TcpListener` (`bind`, `accept`) and `TcpStream`
-  (`connect`, `read(upTo:)`, `readAll`, `write`, `finishWriting`), both
-  `@immutable` and so Sendable: a connection accepted in one task is
-  served in another. The interpreter has them too, over .NET's sockets,
-  its executor waiting in `Socket.Select` when nothing else can run. A
+  `Sable.Net` has the types (docs/06), all `@immutable` and so Sendable: a
+  connection accepted in one task is served in another. The interpreter has
+  them too, over .NET's sockets, its executor waiting in `Socket.Select`
+  when nothing else can run, and lookups done at once. A
   source may also be a child's pipe, or an event no reactor watches — a
   child ended, a signal came — which the thread it happens on reports.
 - *The blocking pool.* `Task.blocking { … }` (Tokio's `spawn_blocking`)

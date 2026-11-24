@@ -1,0 +1,167 @@
+module Sable.Net
+
+// What kind of address one is, by IANA's special-purpose address registries
+// (RFC 6890), as they were in 2026. Each question is asked of the canonical
+// address: '::ffff:127.0.0.1' is the loopback, as a packet to it would find,
+// and a filter that said otherwise would let a request through to it.
+
+extension IpAddress {
+    // The IPv4 address's bits; none for an IPv6 one that is not mapped.
+    var v4Bits: U64? => family == .V4 || isV4Mapped ? low & 0xFFFF_FFFF : none
+
+    // The last 32 bits of an IPv6 address that a translator takes packets
+    // for an IPv4 one at: NAT64's well-known prefix (RFC 6052).
+    var translatedV4: IpAddress? => family == .V6 && high == 0x0064_FF9B_0000_0000 && low >> 32 == 0 ? IpAddress(v4: low unchecked as U32) : none
+
+    /// Whether it is no address at all: `0.0.0.0`, `::`.
+    public var isUnspecified: Bool => canonical.high == 0 && canonical.low == 0
+
+    /// Whether it is this machine's own: 127.0.0.0/8, `::1`.
+    public var isLoopback: Bool {
+        get {
+            if let bits = v4Bits {
+                return bits >> 24 == 127
+            }
+            return high == 0 && low == 1
+        }
+    }
+
+    /// Whether it is a private network's: 10.0.0.0/8, 172.16.0.0/12 and
+    /// 192.168.0.0/16 (RFC 1918), and fc00::/7 (RFC 4193).
+    public var isPrivate: Bool {
+        get {
+            if let bits = v4Bits {
+                return bits >> 24 == 10 || bits >> 20 == 0xAC1 || bits >> 16 == 0xC0A8
+            }
+            return high >> 57 == 0xFC >> 1
+        }
+    }
+
+    /// Whether it is of one link, and means nothing on another:
+    /// 169.254.0.0/16, fe80::/10. The metadata services of cloud providers
+    /// are at such addresses.
+    public var isLinkLocal: Bool {
+        get {
+            if let bits = v4Bits {
+                return bits >> 16 == 0xA9FE
+            }
+            return high >> 54 == 0xFE80 >> 6
+        }
+    }
+
+    /// Whether it is shared by a provider's customers: 100.64.0.0/10
+    /// (RFC 6598).
+    public var isShared: Bool {
+        get {
+            if let bits = v4Bits {
+                return bits >> 22 == 0x6440 >> 6
+            }
+            return false
+        }
+    }
+
+    /// Whether it is for examples: 192.0.2.0/24, 198.51.100.0/24,
+    /// 203.0.113.0/24, 2001:db8::/32 and 3fff::/20.
+    public var isDocumentation: Bool {
+        get {
+            if let bits = v4Bits {
+                let network = bits >> 8
+                return network == 0xC00002 || network == 0xC63364 || network == 0xCB0071
+            }
+            return high >> 32 == 0x2001_0DB8 || high >> 44 == 0x3FFF0
+        }
+    }
+
+    /// Whether it is for benchmarking networks: 198.18.0.0/15, 2001:2::/48.
+    public var isBenchmarking: Bool {
+        get {
+            if let bits = v4Bits {
+                return bits >> 17 == 0xC612 >> 1
+            }
+            return high >> 16 == 0x2001_0002_0000
+        }
+    }
+
+    /// Whether it is a group's: 224.0.0.0/4, ff00::/8.
+    public var isMulticast: Bool {
+        get {
+            if let bits = v4Bits {
+                return bits >> 28 == 0xE
+            }
+            return high >> 56 == 0xFF
+        }
+    }
+
+    /// Whether it is everyone's on the network: 255.255.255.255.
+    public var isBroadcast: Bool {
+        get {
+            if let bits = v4Bits {
+                return bits == 0xFFFF_FFFF
+            }
+            return false
+        }
+    }
+
+    /// Whether it is kept for a use not yet given: 240.0.0.0/4, but for the
+    /// broadcast address.
+    public var isReserved: Bool {
+        get {
+            if let bits = v4Bits {
+                return bits >> 28 == 0xF && bits != 0xFFFF_FFFF
+            }
+            return false
+        }
+    }
+
+    /// Whether it is one machine's, reachable from anywhere on the internet:
+    /// what a program that connects where it is told to by strangers may
+    /// connect to. The registries' word, and where they leave it open, no: a
+    /// multicast or 6to4 (2002::/16) address is not, nor any IPv6 one outside
+    /// 2000::/3, but for NAT64's (64:ff9b::/96), which is if its IPv4 one is.
+    ///
+    /// It says where a packet goes, not what it finds. A name must be asked
+    /// for once, and the address it gave both looked at and connected to: a
+    /// second lookup may give another.
+    ///
+    /// ```sable
+    /// assert((try! IpAddress.parse("8.8.8.8")).isGlobal)
+    /// assert(!(try! IpAddress.parse("169.254.169.254")).isGlobal)
+    /// assert(!(try! IpAddress.parse("::ffff:10.0.0.1")).isGlobal)
+    /// assert(!(try! IpAddress.parse("64:ff9b::7f00:1")).isGlobal)
+    /// ```
+    public var isGlobal: Bool {
+        get {
+            if let bits = v4Bits {
+                return IpAddress.isGlobalV4(bits)
+            }
+            if let v4 = translatedV4 {
+                return v4.isGlobal
+            }
+            if high >> 61 != 1 {
+                return false
+            }
+            // 2001::/23, the IETF's, but for what it has given out since.
+            if high >> 41 == 0x2001_0000 >> 9 {
+                if high == 0x2001_0001_0000_0000 {
+                    return low >= 1 && low <= 3
+                }
+                return high >> 32 == 0x2001_0003 || high >> 16 == 0x2001_0004_0112 || high >> 36 == 0x2001_002 || high >> 36 == 0x2001_003
+            }
+            return !isDocumentation && high >> 48 != 0x2002
+        }
+    }
+
+    static fn isGlobalV4(_ bits: U64) -> Bool {
+        let address = IpAddress(v4: bits unchecked as U32)
+        if bits >> 24 == 0 || bits >> 28 >= 0xE || address.isPrivate || address.isShared || address.isLoopback || address.isLinkLocal
+            || address.isDocumentation || address.isBenchmarking {
+            return false
+        }
+        // 192.0.0.0/24, the IETF's: two of its anycast addresses are.
+        if bits >> 8 == 0xC00000 {
+            return bits == 0xC000_0009 || bits == 0xC000_000A
+        }
+        // 192.88.99.0/24, 6to4's relays, withdrawn.
+        return bits >> 8 != 0xC05863
+    }
+}

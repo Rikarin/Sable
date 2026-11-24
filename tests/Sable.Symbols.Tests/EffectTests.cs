@@ -330,6 +330,31 @@ public sealed class EffectTests {
             """
         );
 
+    /// <summary>
+    ///     What a closure throws is its caller's: the closure, or the body,
+    ///     it is written in does not throw it, and its inferred type does not
+    ///     say it does.
+    /// </summary>
+    [Fact]
+    public void AClosureWithinAClosureThrowsForItselfAlone() =>
+        AssertClean(
+            """
+            fn thrown(_ body: () throws(IoError) -> String) -> String {
+                do {
+                    return try body()
+                } catch {
+                    return "failed"
+                }
+            }
+            fn plain<T>(_ body: () -> T) -> T {
+                return body()
+            }
+            fn probe() -> String {
+                return plain { thrown { try read("a") } }
+            }
+            """
+        );
+
     // ---- Error types and From ----------------------------------------------
 
     [Fact]

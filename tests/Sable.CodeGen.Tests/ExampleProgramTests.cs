@@ -5,7 +5,8 @@ namespace Sable.CodeGen.Tests;
 /// <summary>
 ///     The showcase programs in <c>examples/</c>, each with a <c>main</c>,
 ///     compiled and run — natively and in the interpreter, which must agree —
-///     and held to what they print. None of them needs a network.
+///     and held to what they print. None of them needs a network
+///     but the loopback interface.
 /// </summary>
 [Native]
 public sealed class ExampleProgramTests {
@@ -80,6 +81,10 @@ public sealed class ExampleProgramTests {
             """,
             Run("04-async-service.sb", OneThread)
         );
+
+    [Fact]
+    public void TheEchoServerTalksToItself() =>
+        Assert.Equal("hello\n100 of 100 heard themselves\nechoed 995 bytes\n", Run("05-echo-server.sb"));
 
     /// <summary>Run with no pool, for the service: which of its workers serves which request depends on how they interleave.</summary>
     static string Run(string example, IReadOnlyDictionary<string, string>? environment = null) =>

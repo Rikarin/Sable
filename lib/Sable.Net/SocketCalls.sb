@@ -1,0 +1,188 @@
+module Sable.Net
+
+import Sable.IO
+import Sable.Time
+
+// What the sockets' types share: waiting, reading and writing by handle, and
+// telling failures apart.
+
+// Why the last call on a socket failed, for the address it was to: by the
+// runtime's kinds (platform.h's NET_ERROR_), the system's code kept where
+// none fits.
+fn socketError(_ address: String) -> IoError {
+    return match Runtime.socketError() {
+        case 1  => .Disconnected
+        case 2  => .ConnectionRefused(address: address)
+        case 3  => .TimedOut
+        case 4  => .Unreachable(address: address)
+        case 5  => .AddressInUse(address: address)
+        case 6  => .PermissionDenied(path: address)
+        case 8  => .InvalidInput(path: address)
+        case 9  => .MessageTooLong
+        case 10 => .Unsupported(what: address)
+        case 11 => .NotFound(path: address)
+        case 12 => .Disconnected
+        case _  => .Os(path: address, code: Runtime.socketErrorCode())
+    }
+}
+
+// The failure of a call on a socket that is there: what is on the other end
+// has no address to say.
+fn socketError() -> IoError {
+    return socketError("the socket")
+}
+
+// Waits for the socket, once a call on it has found it would block; or
+// throws, if the call failed, or the task is cancelled.
+fn waitForSocket(_ handle: Int, writable: Bool) async throws(IoError) {
+    if Runtime.socketStatus() != 1 {
+        throw socketError()
+    }
+    if Task.isCancelled {
+        throw IoError.Cancelled
+    }
+    await Runtime.waitForSocket(handle, writable: writable)
+    if Task.isCancelled {
+        throw IoError.Cancelled
+    }
+}
+
+// Out of descriptors, memory or room, and nothing will say when there is
+// some: whether the last call failed so.
+fn isOutOfRoom() -> Bool {
+    return Runtime.socketStatus() == 2 && Runtime.socketError() == 7
+}
+
+// A while, longer each time, to a tenth of a second.
+fn waitForRoom(_ times: Int) async throws(IoError) {
+    var milliseconds = 1
+    for _ in 0..<(times < 7 ? times : 7) {
+        milliseconds *= 2
+    }
+    do {
+        try await Task.sleep(nanoseconds: (milliseconds < 100 ? milliseconds : 100) * 1_000_000)
+    } catch {
+        throw IoError.Cancelled
+    }
+}
+
+fn readFrom(_ handle: Int, upTo count: Int) async throws(IoError) -> U8[>..] {
+    while true {
+        let bytes = Runtime.readSocket(handle, count)
+        if Runtime.socketStatus() == 0 {
+            return bytes
+        }
+        try await waitForSocket(handle, writable: false)
+    }
+}
+
+fn readAllFrom(_ handle: Int) async throws(IoError) -> U8[>..] {
+    var all: U8[>..] = []
+    while true {
+        let bytes = try await readFrom(handle, upTo: 65536)
+        if bytes.isEmpty {
+            return all
+        }
+        all.append(contentsOf: bytes)
+    }
+}
+
+fn writeTo(_ handle: Int, _ bytes: U8[:]) async throws(IoError) {
+    var from = 0
+    while from < bytes.count {
+        let written = Runtime.writeSocket(handle, bytes[from..<bytes.count])
+        if Runtime.socketStatus() == 0 {
+            from += written
+        } else {
+            try await waitForSocket(handle, writable: true)
+        }
+    }
+}
+
+// A connection taken from the listener, its peer's address kept for
+// 'SocketAddress.ofLastCall'. Out of descriptors, the connection stays
+// where it is, and no reactor says when there are some: so it is asked for
+// again in a while, rather than at once and for ever.
+fn acceptFrom(_ handle: Int) async throws(IoError) -> Int {
+    var times = 0
+    while true {
+        let accepted = Runtime.accept(handle)
+        if accepted != 0 {
+            return accepted
+        }
+        if isOutOfRoom() {
+            try await waitForRoom(times)
+            times += 1
+        } else {
+            try await waitForSocket(handle, writable: false)
+        }
+    }
+}
+
+// Waits until the connection begun is made, or throws; closed, whatever the
+// wait was, when the time is up.
+fn waitUntilConnected(_ handle: Int, _ address: String, timeout: Duration?) async throws(IoError) {
+    guard let limit = timeout else {
+        try await connected(handle, address)
+        return
+    }
+    let timer = Task.spawn { () -> Bool in
+        do {
+            try await Task.sleep(nanoseconds: limit.totalNanoseconds)
+            Runtime.closeSocket(handle)
+            return true
+        } catch {
+            return false
+        }
+    }
+    var failure: IoError? = none
+    do {
+        try await connected(handle, address)
+    } catch {
+        failure = error
+    }
+    timer.cancel()
+    // The timer may have had its way as the connection was made.
+    if await timer.value {
+        throw IoError.TimedOut
+    }
+    if let failure {
+        throw failure
+    }
+}
+
+fn connected(_ handle: Int, _ address: String) async throws(IoError) {
+    while true {
+        await Runtime.waitForSocket(handle, writable: true)
+        if Task.isCancelled {
+            throw IoError.Cancelled
+        }
+        if Runtime.socketConnected(handle) {
+            return
+        }
+        if Runtime.socketStatus() == 2 {
+            throw socketError(address)
+        }
+    }
+}
+
+// An option set, or asked for, by its number (platform.h's NET_OPTION_).
+fn setOption(_ handle: Int, _ option: Int, _ value: Int) throws(IoError) {
+    if !Runtime.setSocketOption(handle, option, value) {
+        throw socketError("the socket's option")
+    }
+}
+
+fn option(_ handle: Int, _ option: Int) throws(IoError) -> Int {
+    let value = Runtime.socketOption(handle, option)
+    if Runtime.socketStatus() != 0 {
+        throw socketError("the socket's option")
+    }
+    return value
+}
+
+// Seconds, rounded up: a system counts these in no less.
+fn wholeSeconds(_ duration: Duration) -> Int {
+    let seconds = duration.totalNanoseconds / 1_000_000_000
+    return duration.totalNanoseconds > seconds * 1_000_000_000 ? seconds + 1 : seconds
+}

@@ -7403,6 +7403,10 @@ public sealed partial class Binder {
         _awaitDepth = tryAndAwait ? 1 : 0;
         _catchDepth = 0;
         _threwInTry = false;
+
+        // What the closure throws, it throws where it is called, and the body
+        // around it only if that is there: not for being written in it.
+        var (savedThrown, savedThrewOwn) = (_thrownInBody, _threwOwnError);
         _thrownInBody = null;
 
         PushScope();
@@ -7506,6 +7510,7 @@ public sealed partial class Binder {
         // out, not what the context would have allowed: a closure that does
         // not throw is not a throwing closure, which is what 'rethrows' reads.
         _closureThrows = _thrownInBody;
+        (_thrownInBody, _threwOwnError) = (savedThrown, savedThrewOwn);
 
         PopScope();
         RestoreEffects(savedEffects);

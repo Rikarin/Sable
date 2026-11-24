@@ -1,0 +1,91 @@
+module Examples.Echo
+
+import Sable.Concurrency
+import Sable.IO
+import Sable.Net
+import Sable.Text
+import Sable.Time
+
+// ---------------------------------------------------------------------------
+// A TCP echo server: each connection served by a task of its own, all of
+// them on a few threads. With an address it serves there until it is ended:
+//
+//     sable run examples/05-echo-server.sb -- 127.0.0.1:7000
+//
+// With none it serves a free port of the loopback interface, talks to itself
+// for a while, and stops.
+// ---------------------------------------------------------------------------
+
+/// Sends back what comes until the other end has sent all it will; and lets
+/// go of one that says nothing for too long.
+fn echo(_ connection: TcpStream, idle: Duration) async -> Int {
+    var echoed = 0
+    do {
+        while true {
+            let bytes = try await withTimeout(idle) { try await connection.read(upTo: 16384) }
+            if bytes.isEmpty {
+                break
+            }
+            // Waits while the other end is slow to read: what is not yet
+            // read is the system's to hold back, and not this program's.
+            try await connection.write(bytes)
+            echoed += bytes.count
+        }
+    } catch {
+        // Gone, or silent: nothing more is owed to it.
+    }
+    connection.close()
+    return echoed
+}
+
+/// Serves until the listener is closed, and then waits for the connections
+/// there are: how many bytes came back.
+fn serve(_ listener: TcpListener) async -> Int {
+    return await withTaskGroup(of: Int.self) { group in
+        while let connection = try? await listener.accept() {
+            group.spawn { await echo(connection, idle: Duration.seconds(30)) }
+        }
+        var total = 0
+        for await echoed in group {
+            total += echoed
+        }
+        return total
+    }
+}
+
+/// What the server says to the message.
+fn ask(_ address: SocketAddress, _ message: String) async throws(IoError) -> String {
+    let connection = try await TcpStream.connect(address, timeout: Duration.seconds(5))
+    try await connection.write(message.utf8.toArray())
+    connection.finishWriting()
+    return String.fromUtf8Lossy(try await connection.readAll())
+}
+
+@main
+fn main() async throws {
+    if let wanted = Environment.arguments().first {
+        let listener = try TcpListener.bind(try SocketAddress.parse(wanted))
+        print("serving \(listener.localAddress)")
+        let _ = await serve(listener)
+        return
+    }
+
+    let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+    let server = Task.spawn { await serve(listener) }
+    let address = listener.localAddress
+    print(try await ask(address, "hello"))
+
+    // A hundred at once, each in a task.
+    var asking: Task<Bool>[>..] = []
+    for i in 0..<100 {
+        asking.append(Task.spawn { (try? await ask(address, "message \(i)")) == "message \(i)" })
+    }
+    var right = 0
+    for task in asking {
+        right += await task.value ? 1 : 0
+    }
+    print("\(right) of 100 heard themselves")
+
+    listener.close()
+    print("echoed \(await server.value) bytes")
+}

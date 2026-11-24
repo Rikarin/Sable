@@ -1,0 +1,136 @@
+module Sable.Net
+
+/// An IP address and a port: where a socket is, or what it connects to.
+/// Rust's `SocketAddr`, .NET's `IPEndPoint`.
+///
+/// ```sable
+/// let address = try! SocketAddress.parse("[2001:db8::1]:443")
+/// assert(address.port == 443 && address.ip.isV6)
+/// assert("\(SocketAddress(.v4Loopback, port: 80))" == "127.0.0.1:80")
+/// ```
+public struct SocketAddress {
+    /// The address.
+    public let ip: IpAddress
+
+    /// The port, 0 to 65535: 0, to bind to, is any the system has free.
+    public let port: Int
+
+    public init(_ ip: IpAddress, port: Int) {
+        precondition(port >= 0 && port <= 65535, "a port is from 0 to 65535, and \(port) is not")
+        self.ip = ip
+        self.port = port
+    }
+
+    // ---- As the runtime has it ------------------------------------------
+
+    var familyNumber: Int => ip.family == .V4 ? 4 : 6
+    var highBits: Int => ip.high unchecked as Int
+    var lowBits: Int => ip.low unchecked as Int
+    var scopeNumber: Int => Int(ip.scope)
+
+    // The address the runtime's last call gave; none for one of no family.
+    static fn ofLastCall() -> SocketAddress? {
+        let family = Runtime.socketAddress(0)
+        if family == 4 {
+            return SocketAddress(IpAddress(v4: Runtime.socketAddress(2) unchecked as U32), port: Runtime.socketAddress(4))
+        }
+        if family == 6 {
+            let ip = IpAddress(high: Runtime.socketAddress(1) unchecked as U64, low: Runtime.socketAddress(2) unchecked as U64, scope: U32(Runtime.socketAddress(3)))
+            return SocketAddress(ip, port: Runtime.socketAddress(4))
+        }
+        return none
+    }
+
+    // The socket's own address, or its peer's.
+    static fn of(_ handle: Int, peer: Bool) -> SocketAddress? {
+        return Runtime.socketName(handle, peer: peer) ? SocketAddress.ofLastCall() : none
+    }
+}
+
+extension SocketAddress: Hashable, Comparable {
+    public operator == (lhs: SocketAddress, rhs: SocketAddress) -> Bool {
+        return lhs.ip == rhs.ip && lhs.port == rhs.port
+    }
+
+    /// By address, then by port.
+    public operator < (lhs: SocketAddress, rhs: SocketAddress) -> Bool {
+        return lhs.ip < rhs.ip || lhs.ip == rhs.ip && lhs.port < rhs.port
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        ip.hash(into: &hasher)
+        hasher.combine(port)
+    }
+}
+
+extension SocketAddress: Parsable {
+    /// The address the whole text writes: `192.0.2.1:80`, or
+    /// `[2001:db8::1]:80`, the port always there.
+    ///
+    /// ```sable
+    /// assert((try? SocketAddress.parse("127.0.0.1")) == none)
+    /// assert((try? SocketAddress.parse("::1:80")) == none)
+    /// assert((try? SocketAddress.parse("127.0.0.1:65536")) == none)
+    /// ```
+    public static fn parse<S: StringProtocol>(_ text: S) throws(ParseError) -> SocketAddress {
+        let scalars = text.toString().toArray()
+        if scalars.isEmpty {
+            throw .Empty
+        }
+        var ip = IpAddress.v4Any
+        var at = 0
+        if scalars[0] == '[' {
+            while at < scalars.count && scalars[at] != ']' {
+                at += 1
+            }
+            if at == scalars.count {
+                throw .Invalid(at: at)
+            }
+            ip = try IpAddress.parseV6(scalars, 1, at)
+            at += 1
+        } else {
+            while at < scalars.count && scalars[at] != ':' {
+                at += 1
+            }
+            ip = IpAddress(v4: (try IpAddress.parseV4(scalars, 0, at)) unchecked as U32)
+        }
+        if at >= scalars.count || scalars[at] != ':' {
+            throw .Invalid(at: at)
+        }
+        at += 1
+        if at == scalars.count {
+            throw .InvalidDigit(at: at)
+        }
+        var port = 0
+        while at < scalars.count {
+            let digit = scalars[at].codePoint - 48
+            if digit < 0 || digit > 9 {
+                throw .InvalidDigit(at: at)
+            }
+            port = port * 10 + digit
+            if port > 65535 {
+                throw .Overflow
+            }
+            at += 1
+        }
+        return SocketAddress(ip, port: port)
+    }
+}
+
+extension SocketAddress: Formattable {
+    /// `192.0.2.1:80`, or `[2001:db8::1]:80`.
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(toString())
+    }
+
+    /// `192.0.2.1:80`, or `[2001:db8::1]:80`.
+    public fn toString() -> String {
+        return ip.isV4 ? "\(ip.toString()):\(port)" : "[\(ip.toString())]:\(port)"
+    }
+}
+
+extension SocketAddress: Debug {
+    public fn debugDescription() -> String {
+        return toString()
+    }
+}

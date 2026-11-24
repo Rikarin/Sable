@@ -7,6 +7,8 @@
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <afunix.h>
+#include <iphlpapi.h>
 #include <bcrypt.h>
 #include <dbghelp.h>
 #include <fcntl.h>
@@ -17,6 +19,7 @@
 #pragma comment(lib, "advapi32")
 #pragma comment(lib, "bcrypt")
 #pragma comment(lib, "dbghelp")
+#pragma comment(lib, "iphlpapi")
 #pragma comment(lib, "shell32")
 #pragma comment(lib, "ws2_32")
 
@@ -464,116 +467,301 @@ static void reactor_wake(void) {
 
 // ---- Sockets -----------------------------------------------------------------
 
+static int socket_error_kind(int code) {
+    switch (code) {
+        case WSAECONNRESET: case WSAENOTCONN: case WSAECONNABORTED: case WSAESHUTDOWN: case WSAENETRESET: return NET_ERROR_DISCONNECTED;
+        case WSAECONNREFUSED: return NET_ERROR_REFUSED;
+        case WSAETIMEDOUT: return NET_ERROR_TIMED_OUT;
+        case WSAENETUNREACH: case WSAEHOSTUNREACH: case WSAENETDOWN: case WSAEHOSTDOWN: case WSAEADDRNOTAVAIL: return NET_ERROR_UNREACHABLE;
+        case WSAEADDRINUSE: return NET_ERROR_IN_USE;
+        // Another's socket has the address to itself (SO_EXCLUSIVEADDRUSE),
+        // or the program may not have it: Windows says the same of both.
+        case WSAEACCES: return NET_ERROR_PERMISSION;
+        case WSAEMFILE: case WSAENOBUFS: case WSA_NOT_ENOUGH_MEMORY: return NET_ERROR_TRY_LATER;
+        case WSAEINVAL: case WSAEFAULT: case WSAENAMETOOLONG: case WSAEDESTADDRREQ: case WSAEISCONN: return NET_ERROR_INVALID;
+        case WSAEMSGSIZE: return NET_ERROR_TOO_LONG;
+        case WSAEOPNOTSUPP: case WSAENOPROTOOPT: case WSAEAFNOSUPPORT: case WSAEPROTONOSUPPORT: case WSAEPROTOTYPE: case WSAESOCKTNOSUPPORT:
+            return NET_ERROR_UNSUPPORTED;
+        default: return NET_ERROR_OTHER;
+    }
+}
+
+static int socket_fail(void) {
+    net_last_failure.code = WSAGetLastError();
+    net_last_failure.kind = socket_error_kind((int)net_last_failure.code);
+    return IO_FAILED;
+}
+
+static int socket_fail_as(int kind) {
+    net_last_failure.code = 0;
+    net_last_failure.kind = kind;
+    return IO_FAILED;
+}
+
+// A call that failed: it would block, or why it did.
+static int64_t socket_status(void) {
+    return WSAGetLastError() == WSAEWOULDBLOCK ? IO_WOULD_BLOCK : socket_fail();
+}
+
 static bool socket_prepare(SOCKET socket) {
     u_long one = 1;
+    // No program started inherits it.
+    SetHandleInformation((HANDLE)socket, HANDLE_FLAG_INHERIT, 0);
     return ioctlsocket(socket, FIONBIO, &one) == 0;
 }
 
-static int64_t socket_status(void) {
-    int error = WSAGetLastError();
-    return error == WSAEWOULDBLOCK ? IO_WOULD_BLOCK : IO_FAILED;
+// The address as the system takes it: its length, or 0 for one it cannot.
+static int socket_address(const PlatformAddress *address, struct sockaddr_storage *to) {
+    memset(to, 0, sizeof *to);
+    if (address->family == NET_IPV4) {
+        struct sockaddr_in *at = (struct sockaddr_in *)to;
+        at->sin_family = AF_INET;
+        at->sin_port = htons((u_short)address->port);
+        at->sin_addr.s_addr = htonl((u_long)address->low);
+        return sizeof *at;
+    }
+
+    if (address->family == NET_IPV6) {
+        struct sockaddr_in6 *at = (struct sockaddr_in6 *)to;
+        at->sin6_family = AF_INET6;
+        at->sin6_port = htons((u_short)address->port);
+        at->sin6_scope_id = address->scope;
+        for (int i = 0; i < 8; i++) {
+            at->sin6_addr.s6_addr[i] = (uint8_t)(address->high >> (56 - 8 * i));
+            at->sin6_addr.s6_addr[8 + i] = (uint8_t)(address->low >> (56 - 8 * i));
+        }
+
+        return sizeof *at;
+    }
+
+    struct sockaddr_un *at = (struct sockaddr_un *)to;
+    at->sun_family = AF_UNIX;
+    if (address->path_length == 0 || address->path_length >= sizeof at->sun_path
+        || memchr(address->path, '\0', address->path_length) != NULL) {
+        return 0;
+    }
+
+    memcpy(at->sun_path, address->path, address->path_length);
+    return (int)(offsetof(struct sockaddr_un, sun_path) + address->path_length + 1);
 }
 
-static struct addrinfo *socket_resolve(const char *host, int port, bool passive) {
+static void socket_address_from(const struct sockaddr_storage *from, int length, PlatformAddress *address) {
+    memset(address, 0, sizeof *address);
+    if (length >= (int)sizeof(struct sockaddr_in) && from->ss_family == AF_INET) {
+        const struct sockaddr_in *at = (const struct sockaddr_in *)from;
+        address->family = NET_IPV4;
+        address->port = ntohs(at->sin_port);
+        address->low = ntohl(at->sin_addr.s_addr);
+    } else if (length >= (int)sizeof(struct sockaddr_in6) && from->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *at = (const struct sockaddr_in6 *)from;
+        address->family = NET_IPV6;
+        address->port = ntohs(at->sin6_port);
+        address->scope = at->sin6_scope_id;
+        for (int i = 0; i < 8; i++) {
+            address->high = address->high << 8 | at->sin6_addr.s6_addr[i];
+            address->low = address->low << 8 | at->sin6_addr.s6_addr[8 + i];
+        }
+    } else if (length >= (int)offsetof(struct sockaddr_un, sun_path) && from->ss_family == AF_UNIX) {
+        const struct sockaddr_un *at = (const struct sockaddr_un *)from;
+        size_t most = (size_t)length - offsetof(struct sockaddr_un, sun_path);
+        address->family = NET_UNIX;
+        address->path_length = strnlen(at->sun_path, most > sizeof at->sun_path ? sizeof at->sun_path : most);
+        memcpy(address->path, at->sun_path, address->path_length);
+    }
+}
+
+static SOCKET socket_open(const PlatformAddress *address, int kind) {
     if (!sockets_start()) {
-        return NULL;
+        return INVALID_SOCKET;
     }
 
-    char service[16];
-    snprintf(service, sizeof service, "%d", port);
-    struct addrinfo hints = { 0 };
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = passive ? AI_PASSIVE : 0;
-    struct addrinfo *found = NULL;
-    return getaddrinfo(host[0] == '\0' ? NULL : host, service, &hints, &found) == 0 ? found : NULL;
-}
-
-static PlatformSocket socket_listen(const char *host, int port, int *bound) {
-    struct addrinfo *found = socket_resolve(host, port, true);
-    SOCKET handle = INVALID_SOCKET;
-    for (struct addrinfo *at = found; at != NULL && handle == INVALID_SOCKET; at = at->ai_next) {
-        handle = socket(at->ai_family, at->ai_socktype, at->ai_protocol);
-        if (handle == INVALID_SOCKET) {
-            continue;
-        }
-
-        if (!socket_prepare(handle) || bind(handle, at->ai_addr, (int)at->ai_addrlen) != 0 || listen(handle, SOMAXCONN) != 0) {
-            closesocket(handle);
-            handle = INVALID_SOCKET;
-        }
+    if (address->family == NET_UNIX && kind != SOCK_STREAM) {
+        WSASetLastError(WSAESOCKTNOSUPPORT);
+        return INVALID_SOCKET;
     }
 
-    if (found != NULL) {
-        freeaddrinfo(found);
-    }
-
-    if (handle == INVALID_SOCKET) {
-        return IO_FAILED;
-    }
-
-    struct sockaddr_storage address;
-    int length = sizeof address;
-    getsockname(handle, (struct sockaddr *)&address, &length);
-    *bound = address.ss_family == AF_INET6 ? ntohs(((struct sockaddr_in6 *)&address)->sin6_port)
-                                           : ntohs(((struct sockaddr_in *)&address)->sin_port);
-    return (PlatformSocket)handle;
-}
-
-static PlatformSocket socket_accept(PlatformSocket listener) {
-    SOCKET handle = accept((SOCKET)listener, NULL, NULL);
-    if (handle == INVALID_SOCKET) {
-        return (PlatformSocket)socket_status();
-    }
-
-    BOOL one = TRUE;
-    if (!socket_prepare(handle)) {
+    SOCKET handle = socket(address->family == NET_IPV4 ? AF_INET : address->family == NET_IPV6 ? AF_INET6 : AF_UNIX, kind, 0);
+    if (handle != INVALID_SOCKET && !socket_prepare(handle)) {
+        int code = WSAGetLastError();
         closesocket(handle);
-        return IO_FAILED;
+        WSASetLastError(code);
+        return INVALID_SOCKET;
     }
 
-    setsockopt(handle, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one);
+    return handle;
+}
+
+static int socket_give_up(SOCKET handle) {
+    int code = WSAGetLastError();
+    closesocket(handle);
+    WSASetLastError(code);
+    return socket_fail();
+}
+
+static bool socket_set(SOCKET handle, int level, int name, int value) {
+    return setsockopt(handle, level, name, (const char *)&value, sizeof value) == 0;
+}
+
+// SO_REUSEADDR here lets a second socket take a port another listens on,
+// whoever's it is, so it is only for datagram sockets that share one, and
+// every other socket has its port to itself.
+static bool socket_before_bind(SOCKET handle, const PlatformAddress *address, int flags) {
+    if (flags & NET_REUSE_PORT) {
+        WSASetLastError(WSAENOPROTOOPT);
+        return false;
+    }
+
+    if (address->family == NET_UNIX) {
+        return true;
+    }
+
+    return socket_set(handle, SOL_SOCKET, flags & NET_REUSE_ADDRESS ? SO_REUSEADDR : SO_EXCLUSIVEADDRUSE, 1)
+           && (address->family != NET_IPV6 || socket_set(handle, IPPROTO_IPV6, IPV6_V6ONLY, !(flags & NET_DUAL_STACK)));
+}
+
+static bool socket_bind(SOCKET handle, const PlatformAddress *address, int flags) {
+    struct sockaddr_storage at;
+    int length = socket_address(address, &at);
+    if (length == 0) {
+        WSASetLastError(WSAEINVAL);
+        return false;
+    }
+
+    if (address->family == NET_UNIX && (flags & NET_REPLACE)) {
+        // A Unix domain socket's file is a reparse point of its own kind.
+        char *name = ((struct sockaddr_un *)&at)->sun_path;
+        wchar_t *wide = to_wide(name);
+        WIN32_FIND_DATAW found;
+        HANDLE search = FindFirstFileW(wide, &found);
+        if (search != INVALID_HANDLE_VALUE) {
+            FindClose(search);
+            if ((found.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && found.dwReserved0 == 0x80000023L) {
+                DeleteFileW(wide);
+            }
+        }
+
+        free(wide);
+    }
+
+    return bind(handle, (struct sockaddr *)&at, length) == 0;
+}
+
+static PlatformSocket socket_listen(const PlatformAddress *address, int backlog, int flags) {
+    SOCKET handle = socket_open(address, SOCK_STREAM);
+    if (handle == INVALID_SOCKET) {
+        return socket_fail();
+    }
+
+    if (!socket_before_bind(handle, address, flags & ~NET_REUSE_ADDRESS) || !socket_bind(handle, address, flags) || listen(handle, backlog) != 0) {
+        return socket_give_up(handle);
+    }
+
     return (PlatformSocket)handle;
 }
 
-static PlatformSocket socket_connect(const char *host, int port) {
-    struct addrinfo *found = socket_resolve(host, port, false);
-    SOCKET handle = INVALID_SOCKET;
-    for (struct addrinfo *at = found; at != NULL && handle == INVALID_SOCKET; at = at->ai_next) {
-        handle = socket(at->ai_family, at->ai_socktype, at->ai_protocol);
-        if (handle == INVALID_SOCKET) {
-            continue;
+static PlatformSocket socket_accept(PlatformSocket listener, PlatformAddress *peer) {
+    for (;;) {
+        struct sockaddr_storage from;
+        int length = sizeof from;
+        SOCKET handle = accept((SOCKET)listener, (struct sockaddr *)&from, &length);
+        if (handle != INVALID_SOCKET) {
+            if (!socket_prepare(handle)) {
+                closesocket(handle);
+                continue;
+            }
+
+            if (from.ss_family != AF_UNIX) {
+                socket_set(handle, IPPROTO_TCP, TCP_NODELAY, 1);
+            }
+
+            socket_address_from(&from, length, peer);
+            return (PlatformSocket)handle;
         }
 
-        if (!socket_prepare(handle) || (connect(handle, at->ai_addr, (int)at->ai_addrlen) != 0 && WSAGetLastError() != WSAEWOULDBLOCK)) {
-            closesocket(handle);
-            handle = INVALID_SOCKET;
+        // A connection that went before it was accepted: the next one's turn.
+        if (WSAGetLastError() != WSAECONNRESET && WSAGetLastError() != WSAECONNABORTED) {
+            return (PlatformSocket)socket_status();
         }
     }
+}
 
-    if (found != NULL) {
-        freeaddrinfo(found);
+static PlatformSocket socket_connect(const PlatformAddress *address) {
+    struct sockaddr_storage to;
+    int length = socket_address(address, &to);
+    if (length == 0) {
+        return socket_fail_as(NET_ERROR_INVALID);
     }
 
+    SOCKET handle = socket_open(address, SOCK_STREAM);
     if (handle == INVALID_SOCKET) {
-        return IO_FAILED;
+        return socket_fail();
     }
 
-    BOOL one = TRUE;
-    setsockopt(handle, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one);
+    if (connect(handle, (struct sockaddr *)&to, length) != 0 && WSAGetLastError() != WSAEWOULDBLOCK) {
+        return socket_give_up(handle);
+    }
+
+    if (address->family != NET_UNIX) {
+        socket_set(handle, IPPROTO_TCP, TCP_NODELAY, 1);
+    }
+
     return (PlatformSocket)handle;
 }
 
 static int socket_connected(PlatformSocket socket) {
     int error = 0;
     int length = sizeof error;
-    if (getsockopt((SOCKET)socket, SOL_SOCKET, SO_ERROR, (char *)&error, &length) != 0 || error != 0) {
-        return IO_FAILED;
+    if (getsockopt((SOCKET)socket, SOL_SOCKET, SO_ERROR, (char *)&error, &length) != 0) {
+        return socket_fail();
+    }
+
+    if (error != 0) {
+        WSASetLastError(error);
+        return socket_fail();
     }
 
     struct sockaddr_storage peer;
     int peer_length = sizeof peer;
-    return getpeername((SOCKET)socket, (struct sockaddr *)&peer, &peer_length) == 0 ? 0 : IO_FAILED;
+    if (getpeername((SOCKET)socket, (struct sockaddr *)&peer, &peer_length) == 0) {
+        return 0;
+    }
+
+    int code = WSAGetLastError();
+    WSAPOLLFD now = { .fd = (SOCKET)socket, .events = POLLWRNORM };
+    if (WSAPoll(&now, 1, 0) == 0) {
+        return IO_WOULD_BLOCK;
+    }
+
+    WSASetLastError(code);
+    return socket_fail();
+}
+
+static PlatformSocket socket_datagram(const PlatformAddress *address, int flags) {
+    SOCKET handle = socket_open(address, SOCK_DGRAM);
+    if (handle == INVALID_SOCKET) {
+        return socket_fail();
+    }
+
+    if (!socket_before_bind(handle, address, flags) || !socket_bind(handle, address, flags)) {
+        return socket_give_up(handle);
+    }
+
+    // A datagram no one took would have a receive fail some time later, as
+    // it does on no other system (SIO_UDP_CONNRESET).
+    BOOL off = FALSE;
+    DWORD ignored = 0;
+    WSAIoctl(handle, _WSAIOW(IOC_VENDOR, 12), &off, sizeof off, NULL, 0, &ignored, NULL, NULL);
+    return (PlatformSocket)handle;
+}
+
+static int socket_connect_datagram(PlatformSocket socket, const PlatformAddress *address) {
+    struct sockaddr_storage to;
+    int length = socket_address(address, &to);
+    if (length == 0) {
+        return socket_fail_as(NET_ERROR_INVALID);
+    }
+
+    return connect((SOCKET)socket, (struct sockaddr *)&to, length) == 0 ? 0 : socket_fail();
 }
 
 static int64_t socket_read(PlatformSocket socket, void *bytes, int64_t size) {
@@ -586,12 +774,302 @@ static int64_t socket_write(PlatformSocket socket, const void *bytes, int64_t si
     return sent >= 0 ? sent : socket_status();
 }
 
-static void socket_shutdown_write(PlatformSocket socket) {
-    shutdown((SOCKET)socket, SD_SEND);
+static int64_t socket_send_to(PlatformSocket socket, const void *bytes, int64_t size, const PlatformAddress *address) {
+    if (size > INT32_MAX) {
+        return socket_fail_as(NET_ERROR_TOO_LONG);
+    }
+
+    if (address->family == NET_NONE) {
+        return socket_write(socket, bytes, size);
+    }
+
+    struct sockaddr_storage to;
+    int length = socket_address(address, &to);
+    if (length == 0) {
+        return socket_fail_as(NET_ERROR_INVALID);
+    }
+
+    int sent = sendto((SOCKET)socket, bytes, (int)size, 0, (struct sockaddr *)&to, length);
+    return sent >= 0 ? sent : socket_status();
+}
+
+static int64_t socket_receive(PlatformSocket socket, void *bytes, int64_t size, PlatformAddress *from, bool *truncated) {
+    struct sockaddr_storage address;
+    int length = sizeof address;
+    memset(&address, 0, sizeof address);
+    int got = recvfrom((SOCKET)socket, bytes, size > INT32_MAX ? INT32_MAX : (int)size, 0, (struct sockaddr *)&address, &length);
+    *truncated = got < 0 && WSAGetLastError() == WSAEMSGSIZE;
+    if (*truncated) {
+        got = (int)size;
+    }
+
+    if (got < 0) {
+        return socket_status();
+    }
+
+    socket_address_from(&address, length, from);
+    return got;
+}
+
+static bool socket_name(PlatformSocket socket, bool peer, PlatformAddress *address) {
+    struct sockaddr_storage at;
+    int length = sizeof at;
+    memset(&at, 0, sizeof at);
+    if ((peer ? getpeername((SOCKET)socket, (struct sockaddr *)&at, &length) : getsockname((SOCKET)socket, (struct sockaddr *)&at, &length)) != 0) {
+        socket_fail();
+        return false;
+    }
+
+    socket_address_from(&at, length, address);
+    return true;
+}
+
+static bool socket_is_six(SOCKET handle) {
+    struct sockaddr_storage at;
+    int length = sizeof at;
+    memset(&at, 0, sizeof at);
+    return getsockname(handle, (struct sockaddr *)&at, &length) == 0 && at.ss_family == AF_INET6;
+}
+
+// The level and name of an option that is a number; false for one that is not.
+static bool socket_option_name(SOCKET handle, int option, int *level, int *name) {
+    bool six = socket_is_six(handle);
+    *level = SOL_SOCKET;
+    switch (option) {
+        case NET_OPTION_NO_DELAY: *level = IPPROTO_TCP; *name = TCP_NODELAY; return true;
+        case NET_OPTION_KEEP_ALIVE: *name = SO_KEEPALIVE; return true;
+        case NET_OPTION_KEEP_IDLE: *level = IPPROTO_TCP; *name = TCP_KEEPIDLE; return true;
+        case NET_OPTION_KEEP_INTERVAL: *level = IPPROTO_TCP; *name = TCP_KEEPINTVL; return true;
+        case NET_OPTION_KEEP_COUNT: *level = IPPROTO_TCP; *name = TCP_KEEPCNT; return true;
+        case NET_OPTION_RECEIVE_BUFFER: *name = SO_RCVBUF; return true;
+        case NET_OPTION_SEND_BUFFER: *name = SO_SNDBUF; return true;
+        case NET_OPTION_HOPS: *level = six ? IPPROTO_IPV6 : IPPROTO_IP; *name = six ? IPV6_UNICAST_HOPS : IP_TTL; return true;
+        case NET_OPTION_BROADCAST: *name = SO_BROADCAST; return true;
+        case NET_OPTION_MULTICAST_LOOP: *level = six ? IPPROTO_IPV6 : IPPROTO_IP; *name = six ? IPV6_MULTICAST_LOOP : IP_MULTICAST_LOOP; return true;
+        case NET_OPTION_MULTICAST_HOPS: *level = six ? IPPROTO_IPV6 : IPPROTO_IP; *name = six ? IPV6_MULTICAST_HOPS : IP_MULTICAST_TTL; return true;
+        case NET_OPTION_MULTICAST_INTERFACE: *level = six ? IPPROTO_IPV6 : IPPROTO_IP; *name = six ? IPV6_MULTICAST_IF : IP_MULTICAST_IF; return true;
+        case NET_OPTION_IPV6_ONLY: *level = IPPROTO_IPV6; *name = IPV6_V6ONLY; return true;
+        default: return false;
+    }
+}
+
+static bool socket_set_option(PlatformSocket socket, int option, int64_t value) {
+    if (value < INT32_MIN || value > INT32_MAX) {
+        socket_fail_as(NET_ERROR_INVALID);
+        return false;
+    }
+
+    SOCKET handle = (SOCKET)socket;
+    int level = 0, name = 0;
+    bool done = false;
+    if (option == NET_OPTION_LINGER) {
+        if (value > UINT16_MAX) {
+            socket_fail_as(NET_ERROR_INVALID);
+            return false;
+        }
+
+        struct linger linger = { .l_onoff = value >= 0, .l_linger = (u_short)(value < 0 ? 0 : value) };
+        done = setsockopt(handle, SOL_SOCKET, SO_LINGER, (const char *)&linger, sizeof linger) == 0;
+    } else if (option != NET_OPTION_IPV6_ONLY && socket_option_name(handle, option, &level, &name)) {
+        // An IPv4 interface's index is given in network order.
+        done = socket_set(handle, level, name, option == NET_OPTION_MULTICAST_INTERFACE && level == IPPROTO_IP ? (int)htonl((u_long)value) : (int)value);
+    } else {
+        WSASetLastError(WSAENOPROTOOPT);
+    }
+
+    if (!done) {
+        socket_fail();
+    }
+
+    return done;
+}
+
+static bool socket_get_option(PlatformSocket socket, int option, int64_t *value) {
+    SOCKET handle = (SOCKET)socket;
+    if (option == NET_OPTION_LINGER) {
+        struct linger linger = { 0 };
+        int size = sizeof linger;
+        if (getsockopt(handle, SOL_SOCKET, SO_LINGER, (char *)&linger, &size) != 0) {
+            socket_fail();
+            return false;
+        }
+
+        *value = linger.l_onoff ? linger.l_linger : -1;
+        return true;
+    }
+
+    int level = 0, name = 0, number = 0;
+    int size = sizeof number;
+    if (option == NET_OPTION_MULTICAST_INTERFACE || !socket_option_name(handle, option, &level, &name)) {
+        WSASetLastError(WSAENOPROTOOPT);
+        socket_fail();
+        return false;
+    }
+
+    if (getsockopt(handle, level, name, (char *)&number, &size) != 0) {
+        socket_fail();
+        return false;
+    }
+
+    *value = size == 1 ? number & 0xFF : number;
+    return true;
+}
+
+static bool socket_membership(PlatformSocket socket, bool join, const PlatformAddress *group, uint32_t index) {
+    GROUP_REQ request;
+    memset(&request, 0, sizeof request);
+    if (group->family == NET_UNIX || socket_address(group, &request.gr_group) == 0) {
+        socket_fail_as(NET_ERROR_INVALID);
+        return false;
+    }
+
+    request.gr_interface = index;
+    int level = group->family == NET_IPV6 ? IPPROTO_IPV6 : IPPROTO_IP;
+    if (setsockopt((SOCKET)socket, level, join ? MCAST_JOIN_GROUP : MCAST_LEAVE_GROUP, (const char *)&request, sizeof request) != 0) {
+        socket_fail();
+        return false;
+    }
+
+    return true;
+}
+
+static void socket_shutdown(PlatformSocket socket, bool writing) {
+    shutdown((SOCKET)socket, writing ? SD_SEND : SD_RECEIVE);
 }
 
 static void socket_close(PlatformSocket socket) {
     closesocket((SOCKET)socket);
+}
+
+// ---- Names and interfaces ------------------------------------------------------
+
+static int host_resolve(const char *host, int family, PlatformAddress **addresses, int *code) {
+    *addresses = NULL;
+    *code = NET_ERROR_OTHER;
+    if (!sockets_start()) {
+        return -1;
+    }
+
+    ADDRINFOW hints = { 0 };
+    hints.ai_family = family == NET_IPV4 ? AF_INET : family == NET_IPV6 ? AF_INET6 : AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    ADDRINFOW *found = NULL;
+    wchar_t *wide = to_wide(host);
+    int error = GetAddrInfoW(wide, NULL, &hints, &found);
+    free(wide);
+    if (error != 0) {
+        *code = error == WSAHOST_NOT_FOUND || error == WSANO_DATA || error == WSAEAFNOSUPPORT ? NET_ERROR_NOT_FOUND
+                : error == WSATRY_AGAIN ? NET_ERROR_TRY_LATER
+                                        : NET_ERROR_OTHER;
+        return -1;
+    }
+
+    int count = 0;
+    for (ADDRINFOW *at = found; at != NULL; at = at->ai_next) {
+        count++;
+    }
+
+    PlatformAddress *all = calloc((size_t)count + 1, sizeof *all);
+    if (all == NULL) {
+        sable_trap("out of memory");
+    }
+
+    int n = 0;
+    for (ADDRINFOW *at = found; at != NULL; at = at->ai_next) {
+        struct sockaddr_storage address;
+        memset(&address, 0, sizeof address);
+        if (at->ai_addrlen <= sizeof address) {
+            memcpy(&address, at->ai_addr, at->ai_addrlen);
+            socket_address_from(&address, (int)at->ai_addrlen, &all[n]);
+            n += all[n].family == NET_IPV4 || all[n].family == NET_IPV6 ? 1 : 0;
+        }
+    }
+
+    FreeAddrInfoW(found);
+    *addresses = all;
+    return n;
+}
+
+static uint32_t interface_index(const char *name) {
+    return if_nametoindex(name);
+}
+
+static int interfaces_list(PlatformInterface **interfaces) {
+    *interfaces = NULL;
+    ULONG size = 32768;
+    IP_ADAPTER_ADDRESSES *found = NULL;
+    ULONG error = ERROR_BUFFER_OVERFLOW;
+    for (int tries = 0; tries < 4 && error == ERROR_BUFFER_OVERFLOW; tries++) {
+        free(found);
+        found = malloc(size);
+        if (found == NULL) {
+            sable_trap("out of memory");
+        }
+
+        error = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER, NULL, found, &size);
+    }
+
+    if (error != ERROR_SUCCESS) {
+        free(found);
+        net_last_failure.kind = NET_ERROR_OTHER;
+        net_last_failure.code = error;
+        return error == ERROR_NO_DATA ? 0 : -1;
+    }
+
+    int count = 0;
+    for (IP_ADAPTER_ADDRESSES *at = found; at != NULL; at = at->Next) {
+        count++;
+        for (IP_ADAPTER_UNICAST_ADDRESS *one = at->FirstUnicastAddress; one != NULL; one = one->Next) {
+            count++;
+        }
+    }
+
+    PlatformInterface *all = calloc((size_t)count + 1, sizeof *all);
+    if (all == NULL) {
+        sable_trap("out of memory");
+    }
+
+    int n = 0;
+    for (IP_ADAPTER_ADDRESSES *at = found; at != NULL; at = at->Next) {
+        PlatformInterface row = { 0 };
+        // The name if_nametoindex takes, which is not the one people gave it.
+        row.index = at->IfIndex != 0 ? at->IfIndex : at->Ipv6IfIndex;
+        if (if_indextoname(row.index, row.name) == NULL) {
+            snprintf(row.name, sizeof row.name, "%s", at->AdapterName);
+        }
+
+        row.flags = (at->OperStatus == IfOperStatusUp ? NET_INTERFACE_UP | NET_INTERFACE_RUNNING : 0)
+                    | (at->IfType == IF_TYPE_SOFTWARE_LOOPBACK ? NET_INTERFACE_LOOPBACK : 0)
+                    | (at->IfType == IF_TYPE_PPP || at->IfType == IF_TYPE_TUNNEL ? NET_INTERFACE_POINT_TO_POINT : 0)
+                    | (at->Flags & IP_ADAPTER_NO_MULTICAST ? 0 : NET_INTERFACE_MULTICAST);
+        row.mtu = at->Mtu == 0xFFFFFFFF ? 0 : (int64_t)at->Mtu;
+        row.hardware = -1;
+        if (at->PhysicalAddressLength == 6) {
+            row.hardware = 0;
+            for (int i = 0; i < 6; i++) {
+                row.hardware = row.hardware << 8 | at->PhysicalAddress[i];
+            }
+        }
+
+        all[n++] = row;
+        for (IP_ADAPTER_UNICAST_ADDRESS *one = at->FirstUnicastAddress; one != NULL; one = one->Next) {
+            struct sockaddr_storage address;
+            memset(&address, 0, sizeof address);
+            if (one->Address.iSockaddrLength > (int)sizeof address) {
+                continue;
+            }
+
+            memcpy(&address, one->Address.lpSockaddr, (size_t)one->Address.iSockaddrLength);
+            PlatformInterface with = row;
+            socket_address_from(&address, one->Address.iSockaddrLength, &with.address);
+            with.prefix = one->OnLinkPrefixLength;
+            all[n++] = with;
+        }
+    }
+
+    free(found);
+    *interfaces = all;
+    return n;
 }
 
 // ---- Arguments, files and the environment ----------------------------------

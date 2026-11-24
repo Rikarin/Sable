@@ -1,0 +1,158 @@
+module Sable.Net
+
+/// An IPv4 or IPv6 address; an IPv6 one has its scope too, the interface a
+/// link-local one is on. Rust's `IpAddr`, .NET's `IPAddress`.
+///
+/// `::ffff:192.0.2.1` is an IPv6 address, and not equal to `192.0.2.1`,
+/// though packets to it go there: compare `canonical` addresses where that
+/// matters. Classifying one (`isLoopback`, `isGlobal`) does so already.
+///
+/// ```sable
+/// let address = try! IpAddress.parse("2001:DB8:0:0:0:0:0:1")
+/// assert("\(address)" == "2001:db8::1")
+/// assert(address.isDocumentation && !address.isGlobal)
+/// assert((try! IpAddress.parse("::ffff:127.0.0.1")).isLoopback)
+/// assert((try? IpAddress.parse("127.1")) == none)
+/// ```
+public struct IpAddress {
+    /// The family it is of.
+    public let family: IpFamily
+
+    /// The first 64 bits of an IPv6 address; 0 for an IPv4 one.
+    public let high: U64
+
+    /// The last 64 bits of an IPv6 address; an IPv4 one's 32.
+    public let low: U64
+
+    /// The index of the interface a link-local IPv6 address is on, or 0.
+    public let scope: U32
+
+    /// The IPv6 address of the two halves.
+    public init(high: U64, low: U64, scope: U32 = 0) {
+        family = .V6
+        self.high = high
+        self.low = low
+        self.scope = scope
+    }
+
+    /// The IPv4 address of the 32 bits.
+    public init(v4 bits: U32) {
+        family = .V4
+        high = 0
+        low = U64(bits)
+        scope = 0
+    }
+
+    /// The IPv4 address of the four bytes: `a.b.c.d`.
+    public init(_ a: U8, _ b: U8, _ c: U8, _ d: U8) {
+        family = .V4
+        high = 0
+        low = U64(a) << 24 | U64(b) << 16 | U64(c) << 8 | U64(d)
+        scope = 0
+    }
+
+    /// The address of 4 or 16 bytes, as a packet has them; none for any
+    /// other count.
+    ///
+    /// ```sable
+    /// assert(IpAddress.fromBytes([192, 0, 2, 1]) == IpAddress(192, 0, 2, 1))
+    /// assert(IpAddress.fromBytes([1, 2, 3]) == none)
+    /// ```
+    public static fn fromBytes(_ bytes: U8[:]) -> IpAddress? {
+        if bytes.count == 4 {
+            return IpAddress(bytes[0], bytes[1], bytes[2], bytes[3])
+        }
+        if bytes.count != 16 {
+            return none
+        }
+        var high: U64 = 0
+        var low: U64 = 0
+        for i in 0..<8 {
+            high = high << 8 | U64(bytes[i])
+            low = low << 8 | U64(bytes[8 + i])
+        }
+        return IpAddress(high: high, low: low)
+    }
+
+    /// Its 4 or 16 bytes, as a packet has them.
+    public var bytes: U8[>..] {
+        get {
+            var bytes: U8[>..] = []
+            if family == .V6 {
+                for i in 0..<8 {
+                    bytes.append((high >> U64(56 - 8 * i)) unchecked as U8)
+                }
+            }
+            let count = family == .V6 ? 8 : 4
+            for i in 0..<count {
+                bytes.append((low >> U64(8 * (count - 1 - i))) unchecked as U8)
+            }
+            return bytes
+        }
+    }
+
+    /// 0.0.0.0: to listen on, every IPv4 interface.
+    public static var v4Any: IpAddress => IpAddress(0, 0, 0, 0)
+
+    /// 127.0.0.1: this machine, and no one else's way to it.
+    public static var v4Loopback: IpAddress => IpAddress(127, 0, 0, 1)
+
+    /// 255.255.255.255: everyone on the network.
+    public static var v4Broadcast: IpAddress => IpAddress(255, 255, 255, 255)
+
+    /// `::`: to listen on, every IPv6 interface.
+    public static var v6Any: IpAddress => IpAddress(high: 0, low: 0)
+
+    /// `::1`: this machine, and no one else's way to it.
+    public static var v6Loopback: IpAddress => IpAddress(high: 0, low: 1)
+
+    /// Whether it is an IPv4 address.
+    public var isV4: Bool => family == .V4
+
+    /// Whether it is an IPv6 address.
+    public var isV6: Bool => family == .V6
+
+    /// Whether it is an IPv6 address that is an IPv4 one's
+    /// (`::ffff:a.b.c.d`).
+    public var isV4Mapped: Bool => family == .V6 && high == 0 && low >> 32 == 0xFFFF
+
+    /// The address it goes to: a v4-mapped one's IPv4 address, any other
+    /// itself.
+    ///
+    /// ```sable
+    /// assert((try! IpAddress.parse("::ffff:10.0.0.1")).canonical == IpAddress(10, 0, 0, 1))
+    /// ```
+    public var canonical: IpAddress => isV4Mapped ? IpAddress(v4: low unchecked as U32) : self
+
+    /// The IPv6 address an IPv4 one is mapped to; an IPv6 one itself.
+    public var mappedToV6: IpAddress => family == .V4 ? IpAddress(high: 0, low: 0xFFFF_0000_0000 | low) : self
+
+    /// The same address, on the interface of the index.
+    public fn scoped(to scope: U32) -> IpAddress {
+        return family == .V6 ? IpAddress(high: high, low: low, scope: scope) : self
+    }
+}
+
+extension IpAddress: Hashable, Comparable {
+    public operator == (lhs: IpAddress, rhs: IpAddress) -> Bool {
+        return lhs.family == rhs.family && lhs.high == rhs.high && lhs.low == rhs.low && lhs.scope == rhs.scope
+    }
+
+    /// Every IPv4 address before every IPv6 one; then by their bytes.
+    public operator < (lhs: IpAddress, rhs: IpAddress) -> Bool {
+        if lhs.family != rhs.family {
+            return lhs.family == .V4
+        }
+        if lhs.high != rhs.high {
+            return lhs.high < rhs.high
+        }
+        return lhs.low < rhs.low || lhs.low == rhs.low && lhs.scope < rhs.scope
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(family == .V6)
+        hasher.write(high)
+        hasher.write(low)
+        hasher.combine(Int(scope))
+    }
+}

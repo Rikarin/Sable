@@ -2746,16 +2746,41 @@ public static class SilBuiltins {
         // that would block says so ('net_status' 1, failed 2) and the
         // library waits for the socket ('task_io_wait': a place a task
         // suspends, AsyncLowering) before calling again.
-        Add("net_listen", SilType.Int, SilType.String, SilType.Int);
-        Add("net_port", SilType.Int, SilType.Int);
+        Add("net_status", SilType.Int);
+        Add("net_error", SilType.Int);
+        Add("net_error_code", SilType.Int);
+        Add("net_address", SilType.Int, SilType.Int);
+        Add("net_path", SilType.String);
         Add("net_accept", SilType.Int, SilType.Int);
-        Add("net_connect", SilType.Int, SilType.String, SilType.Int);
         Add("net_connected", SilType.Bool, SilType.Int);
         Add("net_read", new ArrayType(SilType.U8), SilType.Int, SilType.Int);
         Add("net_write", SilType.Int, SilType.Int, new SliceType(SilType.U8));
-        Add("net_shutdown", SilType.Unit, SilType.Int);
+        Add("net_receive", new ArrayType(SilType.U8), SilType.Int, SilType.Int);
+        Add("net_name", SilType.Bool, SilType.Int, SilType.Bool);
+        Add("net_set_option", SilType.Bool, SilType.Int, SilType.Int, SilType.Int);
+        Add("net_option", SilType.Int, SilType.Int, SilType.Int);
+        Add("net_membership", SilType.Bool, SilType.Int, SilType.Bool, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        Add("net_shutdown", SilType.Unit, SilType.Int, SilType.Bool);
         Add("net_close", SilType.Unit, SilType.Int);
-        Add("net_status", SilType.Int);
+
+        // An address is its family (4, 6; 1, a Unix domain socket's), its
+        // halves, its scope, its port and its path.
+        Add("net_listen", SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.String, SilType.Int, SilType.Int);
+        Add("net_connect", SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.String);
+        Add("net_datagram", SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.String, SilType.Int);
+        Add("net_connect_datagram", SilType.Bool, SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.String);
+        Add("net_send", SilType.Int, SilType.Int, new SliceType(SilType.U8), SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.String);
+
+        // Names looked up, and the machine's interfaces.
+        Add("net_resolve", SilType.Int, SilType.String, SilType.Int);
+        Add("net_resolve_event", SilType.Int, SilType.Int);
+        Add("net_resolved", SilType.Int, SilType.Int);
+        Add("net_resolved_take", SilType.Unit, SilType.Int, SilType.Int);
+        Add("net_resolve_end", SilType.Unit, SilType.Int);
+        Add("net_interfaces", SilType.Int, SilType.Bool);
+        Add("net_interface_name", SilType.String, SilType.Int);
+        Add("net_interface", SilType.Int, SilType.Int, SilType.Int);
+        Add("net_interface_index", SilType.Int, SilType.String);
         Add("task_io_wait", SilType.Unit, SilType.Int, SilType.Bool);
 
         // Tasks (runtime/tasks.c): whether the running one is cancelled, its

@@ -1,0 +1,91 @@
+module Sable.Net
+
+import Sable.IO
+
+/// A TCP socket listening for connections. Waiting for one suspends the
+/// task, not its thread: the runtime's I/O reactor (kqueue, epoll, an I/O
+/// completion port) wakes it as one comes, and other tasks run meanwhile.
+/// Deeply immutable, so Sendable: a listener may be handed to another task,
+/// and several may accept from it at once.
+///
+/// ```sable
+/// fn serve() async throws(IoError) {
+///     let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+///     let connection = try await listener.accept()
+///     try await connection.write([1, 2, 3])
+/// }
+/// ```
+@immutable
+public final class TcpListener {
+    let handle: Int
+
+    /// Where it listens, the port the one asked for, or the one the system
+    /// chose when asked for 0.
+    public let localAddress: SocketAddress
+
+    init(handle: Int, localAddress: SocketAddress) {
+        self.handle = handle
+        self.localAddress = localAddress
+    }
+
+    deinit {
+        Runtime.closeSocket(handle)
+    }
+
+    /// Listens on the address; on port 0, on a free one the system chooses.
+    /// There is no address it listens on unless told: `IpAddress.v4Any` and
+    /// `.v6Any` are every interface, and anyone who can reach the machine;
+    /// `.v4Loopback` and `.v6Loopback` the machine alone.
+    ///
+    /// An IPv6 listener takes IPv6 connections only, on every system, but
+    /// with `dualStack` IPv4 ones too, from mapped addresses. `backlog` is
+    /// how many connections wait to be accepted, as far as the system's own
+    /// limit. With `sharePort` several listeners, each saying so, listen on
+    /// one port, and the system divides connections among them (Unsupported
+    /// on Windows). A port another listens on is in use, also on Windows;
+    /// one that only connections of an earlier listener still close on is
+    /// not.
+    ///
+    /// Throws AddressInUse, PermissionDenied (a port below 1024, for most),
+    /// or Unreachable for an address that is not this machine's.
+    public static fn bind(_ address: SocketAddress, backlog: Int = 1024, dualStack: Bool = false, sharePort: Bool = false) throws(IoError) -> TcpListener {
+        let flags = (sharePort ? 2 : 0) + (dualStack ? 4 : 0)
+        let handle = Runtime.listen(address.familyNumber, address.highBits, address.lowBits, address.scopeNumber, address.port, "", backlog, flags)
+        if handle == 0 {
+            throw socketError("\(address)")
+        }
+        return TcpListener(handle: handle, localAddress: SocketAddress.of(handle, peer: false) ?? address)
+    }
+
+    /// The port it listens on.
+    public var port: Int => localAddress.port
+
+    /// The next connection, waiting until one comes. One that its other end
+    /// gave up before it was accepted is passed over. Where the program or
+    /// the system has no descriptor to give it, connections wait in the
+    /// system's queue and this waits with them, a little longer each time it
+    /// asks again, until there is one: a loop over 'accept' neither ends nor
+    /// spins then. (macOS drops the connection that first finds there is
+    /// none, as it does whoever asks; those behind it wait.)
+    ///
+    /// A task cancelled while it waits throws Cancelled, and the listener
+    /// listens on; one whose listener is closed throws Disconnected.
+    public fn accept() async throws(IoError) -> TcpStream {
+        let accepted = try await acceptFrom(handle)
+        return TcpStream(handle: accepted, peerAddress: SocketAddress.ofLastCall())
+    }
+
+    /// Asks for receive buffers of so many bytes for the connections it
+    /// accepts from now on, which a window larger than 64 KiB needs set
+    /// before they are made.
+    public fn setReceiveBufferSize(_ bytes: Int) throws(IoError) {
+        try setOption(handle, 6, bytes)
+    }
+
+    /// Stops listening: the port is free again as this returns, tasks
+    /// waiting in 'accept' wake and throw, and connections already accepted
+    /// go on. Dropping the listener closes it too.
+    public fn close() {
+        Runtime.closeSocket(handle)
+    }
+}

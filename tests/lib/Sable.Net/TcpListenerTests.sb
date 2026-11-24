@@ -1,0 +1,243 @@
+module TcpListenerTests
+
+// TcpListener (Sable.Net), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Net
+
+import Sable.IO
+import Sable.Net
+import Sable.Testing
+import Sable.Time
+
+/// Bytes as text, to compare.
+fn text(_ bytes: U8[>..]) -> String {
+    var said = ""
+    for b in bytes {
+        said += "\(b) "
+    }
+    return said
+}
+
+@test
+fn aListenerOnPortZeroIsGivenAFreePort() {
+    do {
+        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+        assert(listener.port > 0)
+    } catch {
+        assert(false, error.description())
+    }
+}
+
+@test
+fn listeningOnAnAddressThatIsNotOursThrows() {
+    var thrown = ""
+    do {
+        let _ = try TcpListener.bind(SocketAddress(IpAddress(192, 0, 2, 1), port: 0))
+    } catch {
+        thrown = error.description()
+    }
+    assertEqual(thrown, "'192.0.2.1:0' could not be reached")
+}
+
+@test
+fn aListenerAcceptsAConnection() async {
+    do {
+        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+        let port = listener.port
+        let client = Task.spawn { try? await TcpStream.connect(host: "127.0.0.1", port: port) }
+        let accepted = try await listener.accept()
+        try await accepted.write([7])
+        accepted.close()
+        if let stream = await client.value {
+            assertEqual(text(try await stream.readAll()), text([7]))
+        } else {
+            assert(false, "the client did not connect")
+        }
+    } catch {
+        assert(false, error.description())
+    }
+}
+
+@test
+fn closingAListenerWakesItsAccept() async {
+    do {
+        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+        let waiting = Task.spawn { () -> String in
+            do {
+                let _ = try await listener.accept()
+                return "accepted"
+            } catch {
+                return error.description()
+            }
+        }
+        await Task.yield()
+        listener.close()
+        assertEqual(await waiting.value, "the connection failed or was closed")
+    } catch {
+        assert(false, error.description())
+    }
+}
+
+@test
+fn cancellingATaskWakesItsAccept() async {
+    do {
+        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+        let waiting = Task.spawn { () -> String in
+            do {
+                let _ = try await listener.accept()
+                return "accepted"
+            } catch {
+                return error.description()
+            }
+        }
+        await Task.yield()
+        waiting.cancel()
+        assertEqual(await waiting.value, "the task was cancelled while it waited")
+    } catch {
+        assert(false, error.description())
+    }
+}
+
+/// What the body throws; "" for nothing.
+fn thrown(_ body: async () throws(IoError) -> ()) async -> String {
+    do {
+        try await body()
+        return ""
+    } catch {
+        return error.description()
+    }
+}
+
+@test
+fn aPortInUseIsSaidToBe() async {
+    do {
+        let first = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+        let address = first.localAddress
+        assertEqual(await thrown {
+            let _ = try TcpListener.bind(address)
+        }, "'\(address)' is in use")
+        first.close()
+        let _ = try TcpListener.bind(address)
+    } catch {
+        assert(false, error.description())
+    }
+}
+
+@test
+fn aPortIsFreeAgainThoughItsConnectionsStillClose() async {
+    do {
+        let first = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+        let address = first.localAddress
+        let client = try await TcpStream.connect(address)
+        let server = try await first.accept()
+        // The end that closes first is the one that waits (TIME_WAIT).
+        server.close()
+        assertEqual((try await client.readAll()).count, 0)
+        client.close()
+        first.close()
+        let again = try TcpListener.bind(address)
+        assertEqual(again.port, address.port)
+    } catch {
+        assert(false, error.description())
+    }
+}
+
+@test
+fn severalListenersShareAPortThatAllSayTheyShare() {
+    do {
+        let first = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0), sharePort: true)
+        let second = try TcpListener.bind(first.localAddress, sharePort: true)
+        assertEqual(first.port, second.port)
+    } catch {
+        assert(false, error.description())
+    }
+}
+
+@test
+fn anIpv6ListenerTakesIpv6AloneUnlessTold() async {
+    do {
+        let six = try TcpListener.bind(SocketAddress(.v6Any, port: 0))
+        // The port is free for IPv4: another may listen on it there.
+        let four = try TcpListener.bind(SocketAddress(.v4Loopback, port: six.port))
+        four.close()
+        let port = six.port
+        assert((await thrown {
+            let _ = try await TcpStream.connect(SocketAddress(.v4Loopback, port: port))
+        }) != "")
+        let _ = try await TcpStream.connect(SocketAddress(.v6Loopback, port: port))
+
+        let both = try TcpListener.bind(SocketAddress(.v6Any, port: 0), dualStack: true)
+        let client = try await TcpStream.connect(SocketAddress(.v4Loopback, port: both.port))
+        let accepted = try await both.accept()
+        assert(accepted.peerAddress!.ip.isV4Mapped)
+        assert(accepted.peerAddress!.ip.isLoopback)
+        assertEqual(accepted.peerAddress!.ip.canonical, client.localAddress!.ip)
+    } catch {
+        assert(false, error.description())
+    }
+}
+
+@test
+fn severalTasksAcceptAtOnce() async {
+    do {
+        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+        let address = listener.localAddress
+        var accepting: Task<Int>[>..] = []
+        for _ in 0..<4 {
+            accepting.append(Task.spawn { () -> Int in
+                var taken = 0
+                while let connection = try? await listener.accept() {
+                    connection.close()
+                    taken += 1
+                }
+                return taken
+            })
+        }
+        for _ in 0..<40 {
+            let stream = try await TcpStream.connect(address)
+            assertEqual((try await stream.readAll()).count, 0)
+        }
+        listener.close()
+        var total = 0
+        for task in accepting {
+            total += await task.value
+        }
+        assertEqual(total, 40)
+    } catch {
+        assert(false, error.description())
+    }
+}
+
+@test
+fn aCancelledAcceptLeavesTheListenerListening() async {
+    do {
+        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+        for _ in 0..<50 {
+            let waiting = Task.spawn { (try? await listener.accept()) == none }
+            if Int.random(in: 0..<2) == 0 {
+                await Task.yield()
+            }
+            waiting.cancel()
+            assert(await waiting.value)
+        }
+        let client = try await TcpStream.connect(listener.localAddress)
+        let accepted = try await listener.accept()
+        assertEqual(accepted.peerAddress, client.localAddress)
+    } catch {
+        assert(false, error.description())
+    }
+}
+
+@test
+fn theReceiveBufferIsWhatItsConnectionsHave() async {
+    do {
+        let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+        try listener.setReceiveBufferSize(262_144)
+        let _ = try await TcpStream.connect(listener.localAddress)
+        let accepted = try await listener.accept()
+        assert((try accepted.receiveBufferSize()) >= 262_144)
+        listener.close()
+        assertEqual(await thrown { try listener.setReceiveBufferSize(1000) }, "the connection failed or was closed")
+    } catch {
+        assert(false, error.description())
+    }
+}

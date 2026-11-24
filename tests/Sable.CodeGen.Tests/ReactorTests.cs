@@ -15,7 +15,7 @@ namespace Sable.CodeGen.Tests;
 [Native]
 public sealed class ReactorTests {
     static string AsyncProgram(string declarations, string body) =>
-        $"module Test\nimport Sable.IO\nimport Sable.Time\n{declarations}\n@main\nfn main() async throws {{\n{body}\n}}\n";
+        $"module Test\nimport Sable.IO\nimport Sable.Net\nimport Sable.Time\n{declarations}\n@main\nfn main() async throws {{\n{body}\n}}\n";
 
     const string EchoServer = """
                               fn serve(_ listener: TcpListener, _ count: Int) async throws(IoError) -> Int {
@@ -60,7 +60,7 @@ public sealed class ReactorTests {
     [Fact]
     public void TasksTalkOverSocketsWithoutBlockingAWorker() {
         var source = AsyncProgram(EchoServer, """
-                let listener = try TcpListener.bind(host: "127.0.0.1", port: 0)
+                let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
                 let server = Task.spawn { try? await serve(listener, 4) }
                 var clients: Task<Int?>[>..] = []
                 for i in 0..<4 {
@@ -86,7 +86,7 @@ public sealed class ReactorTests {
     [Fact]
     public void AWriterWaitsForASlowReader() {
         var source = AsyncProgram(EchoServer, """
-                let listener = try TcpListener.bind(host: "127.0.0.1", port: 0)
+                let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
                 let server = Task.spawn { try? await serve(listener, 1) }
                 let total = try await ask(listener.port, 1, 1_000_000)
                 print("\(total) \(await server.value ?? -1)")
@@ -103,7 +103,7 @@ public sealed class ReactorTests {
     [Fact]
     public void ACancelledAcceptThrowsAndSleepersWakeMeanwhile() {
         var source = AsyncProgram("", """
-                let listener = try TcpListener.bind(host: "127.0.0.1", port: 0)
+                let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
                 let waiting = Task.spawn { () -> String in
                     do {
                         let _ = try await listener.accept()
@@ -129,7 +129,7 @@ public sealed class ReactorTests {
     [Fact]
     public void ConnectingToNothingThrowsAndClosingWakesAnAccept() {
         var source = AsyncProgram("", """
-                let listener = try TcpListener.bind(host: "127.0.0.1", port: 0)
+                let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
                 let port = listener.port
                 let waiting = Task.spawn { () -> String in
                     do {
@@ -146,11 +146,115 @@ public sealed class ReactorTests {
                     let _ = try await TcpStream.connect(host: "127.0.0.1", port: port)
                     print("connected")
                 } catch {
-                    print(error.description() == "'127.0.0.1:\(port)' could not be reached")
+                    print(error.description() == "'127.0.0.1:\(port)' refused the connection")
                 }
             """);
         Assert.Equal("the connection failed or was closed\ntrue\n", AssertAgree(source).Stdout);
     }
+
+    /// <summary>
+    ///     With no descriptor for a connection, accept waits with it, asking
+    ///     now and then rather than at once and for ever: it neither throws
+    ///     nor takes the processor; and it has the connection once there is
+    ///     one, and is woken by a close, or cancelled, before.
+    /// </summary>
+    [PosixFact("it runs the program from a shell that limits its descriptors")]
+    public void AnAcceptWithNoDescriptorsLeftWaits() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var source = AsyncProgram("""
+            fn waits(_ listener: TcpListener) -> Task<String> {
+                return Task.spawn { () -> String in
+                    do {
+                        let connection = try await listener.accept()
+                        return "accepted \(connection.peerAddress != none)"
+                    } catch {
+                        return error.description()
+                    }
+                }
+            }
+
+            fn fill() -> FileHandle[>..] {
+                var files: FileHandle[>..] = []
+                while let file = try? File.open("/dev/null", options: .reading) {
+                    files.append(file)
+                }
+                return files
+            }
+            """, """
+                let listener = try TcpListener.bind(SocketAddress(.v4Loopback, port: 0))
+                let first = try await TcpStream.connect(listener.localAddress)
+                let second = try await TcpStream.connect(listener.localAddress)
+                let third = try await TcpStream.connect(listener.localAddress)
+                var files = fill()
+                print(files.count > 2)
+                let accepting = waits(listener)
+                try await Task.sleep(nanoseconds: 100_000_000)
+                for file in files {
+                    file.close()
+                }
+                print(await accepting.value)
+                files = fill()
+                let cancelled = waits(listener)
+                try await Task.sleep(nanoseconds: 30_000_000)
+                cancelled.cancel()
+                print(await cancelled.value)
+                let closed = waits(listener)
+                try await Task.sleep(nanoseconds: 30_000_000)
+                listener.close()
+                print(await closed.value)
+                for file in files {
+                    file.close()
+                }
+                first.close()
+                second.close()
+                third.close()
+            """);
+        Assert.Equal(
+            "true\naccepted true\nthe task was cancelled while it waited\nthe connection failed or was closed\n",
+            BuildAndRun(source, descriptors: 40).Stdout
+        );
+        Assert.Equal(
+            "true\naccepted true\nthe task was cancelled while it waited\nthe connection failed or was closed\n",
+            BuildAndRun(source, descriptors: 40, environment: OneThread).Stdout
+        );
+    }
+
+    /// <summary>
+    ///     Datagrams, Unix domain sockets, lookups and interfaces, natively
+    ///     and interpreted: what the library's own tests ask natively.
+    /// </summary>
+    [PosixFact("it makes Unix domain sockets under /tmp")]
+    public void TheInterpreterHasTheSameSockets() =>
+        Assert.Equal(
+            "[1, 2] true\ntrue\n[3, 4]\ntrue\n'127.0.0.1:1' could not be used\n",
+            AssertAgree(AsyncProgram("import Sable.Process", """
+                    let a = try UdpSocket.bind(SocketAddress(.v4Loopback, port: 0))
+                    let b = try UdpSocket.bind(SocketAddress(.v4Loopback, port: 0))
+                    let waiting = Task.spawn { try? await b.receive() }
+                    try await a.send([1, 2], to: b.localAddress)
+                    let got = (await waiting.value)!
+                    print("\(got.bytes) \(got.source == a.localAddress)")
+                    try a.setHopLimit(9)
+                    print((try a.hopLimit()) == 9 && (try await Dns.resolve("localhost", family: .V4)) == [.v4Loopback])
+                    let path = "/tmp/sable-\(Process.id())-agree"
+                    let listener = try UnixListener.bind(path)
+                    let client = try await UnixStream.connect(path)
+                    let server = try await listener.accept()
+                    try await server.write([3, 4])
+                    server.close()
+                    print(try await client.readAll())
+                    try File.remove(path)
+                    print((try NetworkInterface.all()).contains(where: { $0.isLoopback && $0.addresses.contains(where: { $0.address.isLoopback }) }))
+                    do {
+                        let _ = try await TcpStream.connect(host: "127.0.0.1", port: 1)
+                    } catch {
+                        print("'127.0.0.1:1' could not be used")
+                    }
+                """)).Stdout
+        );
 
     /// <summary>
     ///     Work that blocks runs on the blocking pool: on one worker, four

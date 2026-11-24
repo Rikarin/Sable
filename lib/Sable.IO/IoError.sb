@@ -37,6 +37,24 @@ public union IoError: Error {
     /// Nothing could listen on, or connect to, the address.
     Unreachable(address: String),
 
+    /// Nothing listens at the address, or it will not be connected to.
+    ConnectionRefused(address: String),
+
+    /// Another socket has the address already.
+    AddressInUse(address: String),
+
+    /// The host has no address, of the family asked for if one was.
+    HostNotFound(host: String),
+
+    /// It took longer than it was given, or than the system gives it.
+    TimedOut,
+
+    /// The message has more bytes than one can.
+    MessageTooLong,
+
+    /// The system has no such thing.
+    Unsupported(what: String),
+
     /// The connection failed, or was closed, while it was used.
     Disconnected,
 
@@ -46,18 +64,24 @@ public union IoError: Error {
     /// What went wrong, and with which path or address.
     public fn description() -> String {
         return match self {
-            case .NotFound(let path)         => "nothing is at '\(path)'"
-            case .PermissionDenied(let path) => "'\(path)' may not be used so"
-            case .AlreadyExists(let path)    => "something is at '\(path)' already"
-            case .IsDirectory(let path)      => "'\(path)' is a directory"
-            case .Interrupted                => "the call was interrupted"
-            case .UnexpectedEof              => "the stream ended before what was needed"
-            case .InvalidInput(let path)     => "'\(path)' was given something the system does not take"
-            case .Os(let path, let code)     => "'\(path)' failed with the system's error \(code)"
-            case .Failed(let path)           => "'\(path)' could not be read, written or changed"
-            case .Unreachable(let address)   => "'\(address)' could not be reached"
-            case .Disconnected               => "the connection failed or was closed"
-            case .Cancelled                  => "the task was cancelled while it waited"
+            case .NotFound(let path)             => "nothing is at '\(path)'"
+            case .PermissionDenied(let path)     => "'\(path)' may not be used so"
+            case .AlreadyExists(let path)        => "something is at '\(path)' already"
+            case .IsDirectory(let path)          => "'\(path)' is a directory"
+            case .Interrupted                    => "the call was interrupted"
+            case .UnexpectedEof                  => "the stream ended before what was needed"
+            case .InvalidInput(let path)         => "'\(path)' was given something the system does not take"
+            case .Os(let path, let code)         => "'\(path)' failed with the system's error \(code)"
+            case .Failed(let path)               => "'\(path)' could not be read, written or changed"
+            case .Unreachable(let address)       => "'\(address)' could not be reached"
+            case .ConnectionRefused(let address) => "'\(address)' refused the connection"
+            case .AddressInUse(let address)      => "'\(address)' is in use"
+            case .HostNotFound(let host)         => "'\(host)' has no address"
+            case .TimedOut                       => "it took too long"
+            case .MessageTooLong                 => "the message is too long"
+            case .Unsupported(let what)          => "the system does not support '\(what)'"
+            case .Disconnected                   => "the connection failed or was closed"
+            case .Cancelled                      => "the task was cancelled while it waited"
         }
     }
 

@@ -5,6 +5,8 @@
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -13,22 +15,26 @@
 #include <sched.h>
 #include <signal.h>
 #include <spawn.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/random.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
 #if defined(__linux__)
 #include <link.h>
+#include <netpacket/packet.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #else
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <net/if_dl.h>
 #include <sys/event.h>
 #include <sys/sysctl.h>
 #endif
@@ -837,15 +843,50 @@ static void reactor_wake(void) {
 
 // ---- Sockets -----------------------------------------------------------------
 
+// What the system said of the last call that failed, as the library tells
+// failures apart.
+static int socket_error_kind(int code) {
+    switch (code) {
+        case ECONNRESET: case EPIPE: case ENOTCONN: case ECONNABORTED: case ESHUTDOWN: return NET_ERROR_DISCONNECTED;
+        case ECONNREFUSED: return NET_ERROR_REFUSED;
+        case ETIMEDOUT: return NET_ERROR_TIMED_OUT;
+        case ENETUNREACH: case EHOSTUNREACH: case ENETDOWN: case EHOSTDOWN: return NET_ERROR_UNREACHABLE;
+        case EADDRINUSE: return NET_ERROR_IN_USE;
+        case EADDRNOTAVAIL: return NET_ERROR_UNREACHABLE;
+        case EACCES: case EPERM: return NET_ERROR_PERMISSION;
+        case EMFILE: case ENFILE: case ENOBUFS: case ENOMEM: return NET_ERROR_TRY_LATER;
+        case EINVAL: case ENAMETOOLONG: case EDESTADDRREQ: case EISCONN: case EDOM: return NET_ERROR_INVALID;
+        case EMSGSIZE: return NET_ERROR_TOO_LONG;
+        case ENOENT: case ENOTDIR: return NET_ERROR_NOT_FOUND;
+        case EOPNOTSUPP: case ENOPROTOOPT: case EAFNOSUPPORT: case EPROTONOSUPPORT: case EPROTOTYPE: return NET_ERROR_UNSUPPORTED;
+        default: return NET_ERROR_OTHER;
+    }
+}
+
+static int socket_fail(void) {
+    net_last_failure.code = errno;
+    net_last_failure.kind = socket_error_kind(errno);
+    return IO_FAILED;
+}
+
+static int socket_fail_as(int kind) {
+    net_last_failure.code = 0;
+    net_last_failure.kind = kind;
+    return IO_FAILED;
+}
+
+static bool socket_blocks(void) {
+    return errno == EAGAIN || errno == EWOULDBLOCK;
+}
+
 // Nonblocking, closed on exec, and never a SIGPIPE: a write to a closed
 // connection fails instead.
 static bool socket_prepare(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 || fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
         return false;
     }
 
-    fcntl(fd, F_SETFD, FD_CLOEXEC);
 #ifdef SO_NOSIGPIPE
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
@@ -867,115 +908,292 @@ static bool socket_prepare(int fd) {
 #define SOCKET_CLOEXEC 0
 #endif
 
-static struct addrinfo *socket_resolve(const char *host, int port, bool passive) {
-    char service[16];
-    snprintf(service, sizeof service, "%d", port);
-    struct addrinfo hints = { 0 };
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = passive ? AI_PASSIVE : 0;
-    struct addrinfo *found = NULL;
-    return getaddrinfo(host[0] == '\0' ? NULL : host, service, &hints, &found) == 0 ? found : NULL;
+// The address as the system takes it: its length, or 0 for one it cannot.
+static socklen_t socket_address(const PlatformAddress *address, struct sockaddr_storage *to) {
+    memset(to, 0, sizeof *to);
+    if (address->family == NET_IPV4) {
+        struct sockaddr_in *at = (struct sockaddr_in *)to;
+        at->sin_family = AF_INET;
+        at->sin_port = htons((uint16_t)address->port);
+        at->sin_addr.s_addr = htonl((uint32_t)address->low);
+        return sizeof *at;
+    }
+
+    if (address->family == NET_IPV6) {
+        struct sockaddr_in6 *at = (struct sockaddr_in6 *)to;
+        at->sin6_family = AF_INET6;
+        at->sin6_port = htons((uint16_t)address->port);
+        at->sin6_scope_id = address->scope;
+        for (int i = 0; i < 8; i++) {
+            at->sin6_addr.s6_addr[i] = (uint8_t)(address->high >> (56 - 8 * i));
+            at->sin6_addr.s6_addr[8 + i] = (uint8_t)(address->low >> (56 - 8 * i));
+        }
+
+        return sizeof *at;
+    }
+
+    struct sockaddr_un *at = (struct sockaddr_un *)to;
+    at->sun_family = AF_UNIX;
+    size_t length = address->path_length;
+    bool abstract = length > 0 && address->path[0] == '\0';
+#if !defined(__linux__)
+    if (abstract) {
+        return 0;
+    }
+#endif
+    // A name ends at its first zero byte, but for an abstract one.
+    if (length == 0 || length + (abstract ? 0 : 1) > sizeof at->sun_path || (!abstract && memchr(address->path, '\0', length) != NULL)) {
+        return 0;
+    }
+
+    memcpy(at->sun_path, address->path, length);
+    return (socklen_t)(offsetof(struct sockaddr_un, sun_path) + length + (abstract ? 0 : 1));
 }
 
-static PlatformSocket socket_listen(const char *host, int port, int *bound) {
-    struct addrinfo *found = socket_resolve(host, port, true);
-    int fd = -1;
-    for (struct addrinfo *at = found; at != NULL && fd < 0; at = at->ai_next) {
-        fd = socket(at->ai_family, at->ai_socktype | SOCKET_CLOEXEC, at->ai_protocol);
-        if (fd < 0) {
-            continue;
+static void socket_address_from(const struct sockaddr_storage *from, socklen_t length, PlatformAddress *address) {
+    memset(address, 0, sizeof *address);
+    if (length >= (socklen_t)sizeof(struct sockaddr_in) && from->ss_family == AF_INET) {
+        const struct sockaddr_in *at = (const struct sockaddr_in *)from;
+        address->family = NET_IPV4;
+        address->port = ntohs(at->sin_port);
+        address->low = ntohl(at->sin_addr.s_addr);
+    } else if (length >= (socklen_t)sizeof(struct sockaddr_in6) && from->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *at = (const struct sockaddr_in6 *)from;
+        address->family = NET_IPV6;
+        address->port = ntohs(at->sin6_port);
+        address->scope = at->sin6_scope_id;
+        for (int i = 0; i < 8; i++) {
+            address->high = address->high << 8 | at->sin6_addr.s6_addr[i];
+            address->low = address->low << 8 | at->sin6_addr.s6_addr[8 + i];
+        }
+    } else if (length >= (socklen_t)offsetof(struct sockaddr_un, sun_path) && from->ss_family == AF_UNIX) {
+        const struct sockaddr_un *at = (const struct sockaddr_un *)from;
+        size_t most = (size_t)length - offsetof(struct sockaddr_un, sun_path);
+        if (most > sizeof at->sun_path) {
+            most = sizeof at->sun_path;
         }
 
-        int one = 1;
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-        if (!socket_prepare(fd) || bind(fd, at->ai_addr, at->ai_addrlen) != 0 || listen(fd, SOMAXCONN) != 0) {
-            close(fd);
-            fd = -1;
+        address->family = NET_UNIX;
+        address->path_length = most > 0 && at->sun_path[0] == '\0' ? most : strnlen(at->sun_path, most);
+#if !defined(__linux__)
+        if (most > 0 && at->sun_path[0] == '\0') {
+            address->path_length = 0;
         }
+#endif
+        memcpy(address->path, at->sun_path, address->path_length);
     }
+}
 
-    if (found != NULL) {
-        freeaddrinfo(found);
-    }
-
+// A socket for the address, prepared; or -1.
+static int socket_open(const PlatformAddress *address, int kind) {
+    int family = address->family == NET_IPV4 ? AF_INET : address->family == NET_IPV6 ? AF_INET6 : AF_UNIX;
+    int fd = socket(family, kind | SOCKET_CLOEXEC, 0);
     if (fd < 0) {
-        return IO_FAILED;
+        return -1;
     }
 
-    struct sockaddr_storage address;
-    socklen_t length = sizeof address;
-    getsockname(fd, (struct sockaddr *)&address, &length);
-    *bound = address.ss_family == AF_INET6 ? ntohs(((struct sockaddr_in6 *)&address)->sin6_port)
-                                           : ntohs(((struct sockaddr_in *)&address)->sin_port);
+    if (!socket_prepare(fd)) {
+        int code = errno;
+        close(fd);
+        errno = code;
+        return -1;
+    }
+
     return fd;
 }
 
-static PlatformSocket socket_accept(PlatformSocket listener) {
+static int socket_give_up(int fd) {
+    int code = errno;
+    close(fd);
+    errno = code;
+    return socket_fail();
+}
+
+static bool socket_set(int fd, int level, int name, int value) {
+    return setsockopt(fd, level, name, &value, sizeof value) == 0;
+}
+
+// What is settled before a socket is bound. An IPv6 socket takes IPv4 too
+// only if it is asked to, whatever the system's own default is.
+static bool socket_before_bind(int fd, const PlatformAddress *address, int flags) {
+    return (!(flags & NET_REUSE_ADDRESS) || socket_set(fd, SOL_SOCKET, SO_REUSEADDR, 1))
+           && (!(flags & NET_REUSE_PORT) || socket_set(fd, SOL_SOCKET, SO_REUSEPORT, 1))
+           && (address->family != NET_IPV6 || socket_set(fd, IPPROTO_IPV6, IPV6_V6ONLY, !(flags & NET_DUAL_STACK)));
+}
+
+static bool socket_bind(int fd, const PlatformAddress *address, int flags) {
+    struct sockaddr_storage at;
+    socklen_t length = socket_address(address, &at);
+    if (length == 0) {
+        errno = EINVAL;
+        return false;
+    }
+
+    struct stat found;
+    if (address->family == NET_UNIX && (flags & NET_REPLACE) && address->path[0] != '\0'
+        && lstat(((struct sockaddr_un *)&at)->sun_path, &found) == 0 && S_ISSOCK(found.st_mode)) {
+        unlink(((struct sockaddr_un *)&at)->sun_path);
+    }
+
+    return bind(fd, (struct sockaddr *)&at, length) == 0;
+}
+
+static PlatformSocket socket_listen(const PlatformAddress *address, int backlog, int flags) {
+    int fd = socket_open(address, SOCK_STREAM);
+    if (fd < 0) {
+        return socket_fail();
+    }
+
+    // SO_REUSEADDR here lets a server take its port again while connections
+    // of its last run are in TIME_WAIT; it lets no two listen at once.
+    if (!socket_before_bind(fd, address, flags | (address->family == NET_UNIX ? 0 : NET_REUSE_ADDRESS)) || !socket_bind(fd, address, flags)
+        || listen(fd, backlog) != 0) {
+        return socket_give_up(fd);
+    }
+
+    return fd;
+}
+
+// The last accept found no descriptor to give its connection, which macOS
+// then closes: until there is one to be had, another would lose another.
+static bool sockets_short;
+
+static PlatformSocket socket_accept(PlatformSocket listener, PlatformAddress *peer) {
+    if (__atomic_load_n(&sockets_short, __ATOMIC_RELAXED)) {
+        int spare = fcntl((int)listener, F_DUPFD_CLOEXEC, 0);
+        if (spare < 0) {
+            return socket_fail();
+        }
+
+        close(spare);
+        __atomic_store_n(&sockets_short, false, __ATOMIC_RELAXED);
+    }
+
     for (;;) {
+        struct sockaddr_storage from;
+        socklen_t length = sizeof from;
 #if defined(__linux__)
-        int fd = accept4((int)listener, NULL, NULL, SOCK_CLOEXEC);
+        int fd = accept4((int)listener, (struct sockaddr *)&from, &length, SOCK_CLOEXEC);
 #else
-        int fd = accept((int)listener, NULL, NULL);
+        int fd = accept((int)listener, (struct sockaddr *)&from, &length);
 #endif
         if (fd >= 0) {
-            if (!socket_prepare(fd)) {
+            // Its peer gone already, macOS gives a socket with no address.
+            if (length == 0 || !socket_prepare(fd)) {
                 close(fd);
-                return IO_FAILED;
+                continue;
             }
 
-            int one = 1;
-            setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+            if (from.ss_family != AF_UNIX) {
+                socket_set(fd, IPPROTO_TCP, TCP_NODELAY, 1);
+            }
+
+            socket_address_from(&from, length, peer);
             return fd;
         }
 
-        if (errno == EINTR || errno == ECONNABORTED) {
-            continue;
+        if (errno == EMFILE || errno == ENFILE) {
+            __atomic_store_n(&sockets_short, true, __ATOMIC_RELAXED);
         }
 
-        return errno == EAGAIN || errno == EWOULDBLOCK ? IO_WOULD_BLOCK : IO_FAILED;
+        switch (errno) {
+            // A connection that went before it was accepted is the next
+            // one's turn; Linux gives its pending errors here too.
+            case EINTR: case ECONNABORTED: case EPROTO:
+#if defined(__linux__)
+            case ENETDOWN: case ENOPROTOOPT: case EHOSTDOWN: case ENONET: case EHOSTUNREACH: case EOPNOTSUPP: case ENETUNREACH:
+#endif
+                continue;
+        }
+
+        return socket_blocks() ? IO_WOULD_BLOCK : socket_fail();
     }
 }
 
-static PlatformSocket socket_connect(const char *host, int port) {
-    struct addrinfo *found = socket_resolve(host, port, false);
-    int fd = -1;
-    for (struct addrinfo *at = found; at != NULL && fd < 0; at = at->ai_next) {
-        fd = socket(at->ai_family, at->ai_socktype | SOCKET_CLOEXEC, at->ai_protocol);
-        if (fd < 0) {
-            continue;
-        }
-
-        if (!socket_prepare(fd) || (connect(fd, at->ai_addr, at->ai_addrlen) != 0 && errno != EINPROGRESS)) {
-            close(fd);
-            fd = -1;
-        }
+static PlatformSocket socket_connect(const PlatformAddress *address) {
+    struct sockaddr_storage to;
+    socklen_t length = socket_address(address, &to);
+    if (length == 0) {
+        return socket_fail_as(NET_ERROR_INVALID);
     }
 
-    if (found != NULL) {
-        freeaddrinfo(found);
-    }
-
+    int fd = socket_open(address, SOCK_STREAM);
     if (fd < 0) {
-        return IO_FAILED;
+        return socket_fail();
     }
 
-    int one = 1;
-    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+    if (connect(fd, (struct sockaddr *)&to, length) != 0 && errno != EINPROGRESS && errno != EINTR) {
+        // Linux: a Unix listener whose queue is full.
+        bool later = socket_blocks();
+        socket_give_up(fd);
+        return later ? socket_fail_as(NET_ERROR_TRY_LATER) : IO_FAILED;
+    }
+
+    if (address->family != NET_UNIX) {
+        socket_set(fd, IPPROTO_TCP, TCP_NODELAY, 1);
+    }
+
     return fd;
 }
 
 static int socket_connected(PlatformSocket socket) {
     int error = 0;
     socklen_t length = sizeof error;
-    if (getsockopt((int)socket, SOL_SOCKET, SO_ERROR, &error, &length) != 0 || error != 0) {
-        return IO_FAILED;
+    if (getsockopt((int)socket, SOL_SOCKET, SO_ERROR, &error, &length) != 0) {
+        return socket_fail();
+    }
+
+    if (error != 0) {
+        errno = error;
+        return socket_fail();
     }
 
     // Writable with no error yet is not always made: a peer says it is.
     struct sockaddr_storage peer;
     socklen_t peer_length = sizeof peer;
-    return getpeername((int)socket, (struct sockaddr *)&peer, &peer_length) == 0 ? 0 : IO_FAILED;
+    if (getpeername((int)socket, (struct sockaddr *)&peer, &peer_length) == 0) {
+        return 0;
+    }
+
+    int code = errno;
+    struct pollfd now = { .fd = (int)socket, .events = POLLOUT };
+    if (poll(&now, 1, 0) == 0) {
+        return IO_WOULD_BLOCK;
+    }
+
+    errno = code;
+    return socket_fail();
+}
+
+static PlatformSocket socket_datagram(const PlatformAddress *address, int flags) {
+    int fd = socket_open(address, SOCK_DGRAM);
+    if (fd < 0) {
+        return socket_fail();
+    }
+
+#if !defined(__linux__)
+    // Sockets that share a port for multicast each take every datagram with
+    // SO_REUSEPORT here, and SO_REUSEADDR there.
+    if (flags & NET_REUSE_ADDRESS && address->family != NET_UNIX) {
+        flags |= NET_REUSE_PORT;
+    }
+#endif
+    bool unbound = address->family == NET_UNIX && address->path_length == 0;
+    if (!unbound && (!socket_before_bind(fd, address, flags) || !socket_bind(fd, address, flags))) {
+        return socket_give_up(fd);
+    }
+
+    return fd;
+}
+
+static int socket_connect_datagram(PlatformSocket socket, const PlatformAddress *address) {
+    struct sockaddr_storage to;
+    socklen_t length = socket_address(address, &to);
+    if (length == 0) {
+        return socket_fail_as(NET_ERROR_INVALID);
+    }
+
+    return connect((int)socket, (struct sockaddr *)&to, length) == 0 ? 0 : socket_fail();
 }
 
 static int64_t socket_read(PlatformSocket socket, void *bytes, int64_t size) {
@@ -986,7 +1204,7 @@ static int64_t socket_read(PlatformSocket socket, void *bytes, int64_t size) {
         }
 
         if (errno != EINTR) {
-            return errno == EAGAIN || errno == EWOULDBLOCK ? IO_WOULD_BLOCK : IO_FAILED;
+            return socket_blocks() ? IO_WOULD_BLOCK : socket_fail();
         }
     }
 }
@@ -999,17 +1217,386 @@ static int64_t socket_write(PlatformSocket socket, const void *bytes, int64_t si
         }
 
         if (errno != EINTR) {
-            return errno == EAGAIN || errno == EWOULDBLOCK ? IO_WOULD_BLOCK : IO_FAILED;
+            return socket_blocks() ? IO_WOULD_BLOCK : socket_fail();
         }
     }
 }
 
-static void socket_shutdown_write(PlatformSocket socket) {
-    shutdown((int)socket, SHUT_WR);
+static int64_t socket_send_to(PlatformSocket socket, const void *bytes, int64_t size, const PlatformAddress *address) {
+    struct sockaddr_storage to;
+    socklen_t length = 0;
+    if (address->family != NET_NONE) {
+        length = socket_address(address, &to);
+        if (length == 0) {
+            return socket_fail_as(NET_ERROR_INVALID);
+        }
+    }
+
+    for (;;) {
+        ssize_t sent = sendto((int)socket, bytes, (size_t)size, SOCKET_SEND_FLAGS, length == 0 ? NULL : (struct sockaddr *)&to, length);
+        if (sent >= 0) {
+            return sent;
+        }
+
+        if (errno != EINTR) {
+            return socket_blocks() ? IO_WOULD_BLOCK : socket_fail();
+        }
+    }
+}
+
+static int64_t socket_receive(PlatformSocket socket, void *bytes, int64_t size, PlatformAddress *from, bool *truncated) {
+    for (;;) {
+        struct sockaddr_storage address;
+        struct iovec part = { .iov_base = bytes, .iov_len = (size_t)size };
+        struct msghdr message = { 0 };
+        memset(&address, 0, sizeof address);
+        message.msg_name = &address;
+        message.msg_namelen = sizeof address;
+        message.msg_iov = &part;
+        message.msg_iovlen = 1;
+        ssize_t got = recvmsg((int)socket, &message, 0);
+        if (got >= 0) {
+            socket_address_from(&address, message.msg_namelen, from);
+            *truncated = (message.msg_flags & MSG_TRUNC) != 0;
+            return got;
+        }
+
+        if (errno != EINTR) {
+            return socket_blocks() ? IO_WOULD_BLOCK : socket_fail();
+        }
+    }
+}
+
+static bool socket_name(PlatformSocket socket, bool peer, PlatformAddress *address) {
+    struct sockaddr_storage at;
+    socklen_t length = sizeof at;
+    memset(&at, 0, sizeof at);
+    if ((peer ? getpeername : getsockname)((int)socket, (struct sockaddr *)&at, &length) != 0) {
+        socket_fail();
+        return false;
+    }
+
+    socket_address_from(&at, length, address);
+    return true;
+}
+
+#if defined(__APPLE__)
+#define SOCKET_KEEP_IDLE TCP_KEEPALIVE
+#define SOCKET_LINGER SO_LINGER_SEC
+#else
+#define SOCKET_KEEP_IDLE TCP_KEEPIDLE
+#define SOCKET_LINGER SO_LINGER
+#endif
+
+static bool socket_set_option(PlatformSocket socket, int option, int64_t value) {
+    int fd = (int)socket;
+    if (value < INT32_MIN || value > INT32_MAX) {
+        socket_fail_as(NET_ERROR_INVALID);
+        return false;
+    }
+
+    struct sockaddr_storage at;
+    socklen_t length = sizeof at;
+    memset(&at, 0, sizeof at);
+    if (getsockname(fd, (struct sockaddr *)&at, &length) != 0) {
+        socket_fail();
+        return false;
+    }
+
+    bool six = at.ss_family == AF_INET6;
+    int number = (int)value;
+    bool done = false;
+    switch (option) {
+        case NET_OPTION_NO_DELAY: done = socket_set(fd, IPPROTO_TCP, TCP_NODELAY, number); break;
+        case NET_OPTION_KEEP_ALIVE: done = socket_set(fd, SOL_SOCKET, SO_KEEPALIVE, number); break;
+        case NET_OPTION_KEEP_IDLE: done = socket_set(fd, IPPROTO_TCP, SOCKET_KEEP_IDLE, number); break;
+        case NET_OPTION_KEEP_INTERVAL: done = socket_set(fd, IPPROTO_TCP, TCP_KEEPINTVL, number); break;
+        case NET_OPTION_KEEP_COUNT: done = socket_set(fd, IPPROTO_TCP, TCP_KEEPCNT, number); break;
+        case NET_OPTION_RECEIVE_BUFFER: done = socket_set(fd, SOL_SOCKET, SO_RCVBUF, number); break;
+        case NET_OPTION_SEND_BUFFER: done = socket_set(fd, SOL_SOCKET, SO_SNDBUF, number); break;
+        case NET_OPTION_LINGER: {
+            struct linger linger = { .l_onoff = number >= 0, .l_linger = number < 0 ? 0 : number };
+            done = setsockopt(fd, SOL_SOCKET, SOCKET_LINGER, &linger, sizeof linger) == 0;
+            break;
+        }
+
+        case NET_OPTION_HOPS:
+            done = six ? socket_set(fd, IPPROTO_IPV6, IPV6_UNICAST_HOPS, number) : socket_set(fd, IPPROTO_IP, IP_TTL, number);
+            break;
+        case NET_OPTION_BROADCAST: done = socket_set(fd, SOL_SOCKET, SO_BROADCAST, number); break;
+        case NET_OPTION_MULTICAST_LOOP: {
+            unsigned char loop = number != 0;
+            done = six ? socket_set(fd, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, number != 0)
+                       : setsockopt(fd, IPPROTO_IP, IP_MULTICAST_LOOP, &loop, sizeof loop) == 0;
+            break;
+        }
+
+        case NET_OPTION_MULTICAST_HOPS: {
+            unsigned char hops = (unsigned char)number;
+            done = six ? socket_set(fd, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, number)
+                       : setsockopt(fd, IPPROTO_IP, IP_MULTICAST_TTL, &hops, sizeof hops) == 0;
+            break;
+        }
+
+        case NET_OPTION_MULTICAST_INTERFACE:
+            if (six) {
+                done = socket_set(fd, IPPROTO_IPV6, IPV6_MULTICAST_IF, number);
+            } else {
+                struct ip_mreqn interface = { 0 };
+                interface.imr_ifindex = number;
+                done = setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &interface, sizeof interface) == 0;
+            }
+
+            break;
+        default:
+            errno = ENOPROTOOPT;
+    }
+
+    if (!done) {
+        socket_fail();
+    }
+
+    return done;
+}
+
+static bool socket_get_option(PlatformSocket socket, int option, int64_t *value) {
+    int fd = (int)socket;
+    struct sockaddr_storage at;
+    socklen_t length = sizeof at;
+    memset(&at, 0, sizeof at);
+    if (getsockname(fd, (struct sockaddr *)&at, &length) != 0) {
+        socket_fail();
+        return false;
+    }
+
+    bool six = at.ss_family == AF_INET6;
+    int level = SOL_SOCKET, name = 0;
+    switch (option) {
+        case NET_OPTION_NO_DELAY: level = IPPROTO_TCP; name = TCP_NODELAY; break;
+        case NET_OPTION_KEEP_ALIVE: name = SO_KEEPALIVE; break;
+        case NET_OPTION_KEEP_IDLE: level = IPPROTO_TCP; name = SOCKET_KEEP_IDLE; break;
+        case NET_OPTION_KEEP_INTERVAL: level = IPPROTO_TCP; name = TCP_KEEPINTVL; break;
+        case NET_OPTION_KEEP_COUNT: level = IPPROTO_TCP; name = TCP_KEEPCNT; break;
+        case NET_OPTION_RECEIVE_BUFFER: name = SO_RCVBUF; break;
+        case NET_OPTION_SEND_BUFFER: name = SO_SNDBUF; break;
+        case NET_OPTION_LINGER: {
+            struct linger linger = { 0 };
+            length = sizeof linger;
+            if (getsockopt(fd, SOL_SOCKET, SOCKET_LINGER, &linger, &length) != 0) {
+                socket_fail();
+                return false;
+            }
+
+            *value = linger.l_onoff ? linger.l_linger : -1;
+            return true;
+        }
+
+        case NET_OPTION_HOPS: level = six ? IPPROTO_IPV6 : IPPROTO_IP; name = six ? IPV6_UNICAST_HOPS : IP_TTL; break;
+        case NET_OPTION_BROADCAST: name = SO_BROADCAST; break;
+        case NET_OPTION_MULTICAST_LOOP: level = six ? IPPROTO_IPV6 : IPPROTO_IP; name = six ? IPV6_MULTICAST_LOOP : IP_MULTICAST_LOOP; break;
+        case NET_OPTION_MULTICAST_HOPS: level = six ? IPPROTO_IPV6 : IPPROTO_IP; name = six ? IPV6_MULTICAST_HOPS : IP_MULTICAST_TTL; break;
+        case NET_OPTION_IPV6_ONLY: level = IPPROTO_IPV6; name = IPV6_V6ONLY; break;
+        default: errno = ENOPROTOOPT; socket_fail(); return false;
+    }
+
+    // Some answer in a byte, some in an int.
+    union {
+        int number;
+        unsigned char byte;
+    } got = { 0 };
+    length = sizeof got;
+    if (getsockopt(fd, level, name, &got, &length) != 0) {
+        socket_fail();
+        return false;
+    }
+
+    *value = length == 1 ? got.byte : got.number;
+    return true;
+}
+
+static bool socket_membership(PlatformSocket socket, bool join, const PlatformAddress *group, uint32_t interface) {
+    struct group_req request;
+    struct sockaddr_storage at;
+    memset(&request, 0, sizeof request);
+    socklen_t length = socket_address(group, &at);
+    if (length == 0 || group->family == NET_UNIX) {
+        socket_fail_as(NET_ERROR_INVALID);
+        return false;
+    }
+
+    request.gr_interface = interface;
+    memcpy(&request.gr_group, &at, length);
+#if !defined(__linux__)
+    request.gr_group.ss_len = (uint8_t)length;
+#endif
+    int level = group->family == NET_IPV6 ? IPPROTO_IPV6 : IPPROTO_IP;
+    if (setsockopt((int)socket, level, join ? MCAST_JOIN_GROUP : MCAST_LEAVE_GROUP, &request, sizeof request) != 0) {
+        socket_fail();
+        return false;
+    }
+
+    return true;
+}
+
+static void socket_shutdown(PlatformSocket socket, bool writing) {
+    shutdown((int)socket, writing ? SHUT_WR : SHUT_RD);
 }
 
 static void socket_close(PlatformSocket socket) {
     close((int)socket);
+}
+
+// ---- Names and interfaces ------------------------------------------------------
+
+static int host_resolve(const char *host, int family, PlatformAddress **addresses, int *code) {
+    *addresses = NULL;
+    *code = 0;
+    struct addrinfo hints = { 0 };
+    hints.ai_family = family == NET_IPV4 ? AF_INET : family == NET_IPV6 ? AF_INET6 : AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *found = NULL;
+    int error = getaddrinfo(host, NULL, &hints, &found);
+    if (error != 0) {
+        *code = error == EAI_SYSTEM ? errno : error;
+        switch (error) {
+            case EAI_NONAME:
+#ifdef EAI_NODATA
+#if EAI_NODATA != EAI_NONAME
+            case EAI_NODATA:
+#endif
+#endif
+            case EAI_FAMILY:
+                *code = NET_ERROR_NOT_FOUND;
+                break;
+            case EAI_AGAIN:
+                *code = NET_ERROR_TRY_LATER;
+                break;
+            default:
+                *code = NET_ERROR_OTHER;
+        }
+
+        return -1;
+    }
+
+    int count = 0;
+    for (struct addrinfo *at = found; at != NULL; at = at->ai_next) {
+        count++;
+    }
+
+    PlatformAddress *all = calloc((size_t)count + 1, sizeof *all);
+    if (all == NULL) {
+        sable_trap("out of memory");
+    }
+
+    int n = 0;
+    for (struct addrinfo *at = found; at != NULL; at = at->ai_next) {
+        struct sockaddr_storage address;
+        memset(&address, 0, sizeof address);
+        if (at->ai_addrlen <= sizeof address) {
+            memcpy(&address, at->ai_addr, at->ai_addrlen);
+            socket_address_from(&address, at->ai_addrlen, &all[n]);
+            n += all[n].family == NET_IPV4 || all[n].family == NET_IPV6 ? 1 : 0;
+        }
+    }
+
+    freeaddrinfo(found);
+    *addresses = all;
+    return n;
+}
+
+static uint32_t interface_index(const char *name) {
+    return if_nametoindex(name);
+}
+
+static int interfaces_list(PlatformInterface **interfaces) {
+    *interfaces = NULL;
+    struct ifaddrs *found = NULL;
+    if (getifaddrs(&found) != 0) {
+        socket_fail();
+        return -1;
+    }
+
+    int count = 0;
+    for (struct ifaddrs *at = found; at != NULL; at = at->ifa_next) {
+        count++;
+    }
+
+    PlatformInterface *all = calloc((size_t)count + 1, sizeof *all);
+    if (all == NULL) {
+        sable_trap("out of memory");
+    }
+
+    int probe = socket(AF_INET, SOCK_DGRAM | SOCKET_CLOEXEC, 0);
+    int n = 0;
+    for (struct ifaddrs *at = found; at != NULL; at = at->ifa_next) {
+        PlatformInterface *row = &all[n++];
+        snprintf(row->name, sizeof row->name, "%s", at->ifa_name);
+        row->index = if_nametoindex(at->ifa_name);
+        row->flags = (at->ifa_flags & IFF_UP ? NET_INTERFACE_UP : 0) | (at->ifa_flags & IFF_RUNNING ? NET_INTERFACE_RUNNING : 0)
+                     | (at->ifa_flags & IFF_LOOPBACK ? NET_INTERFACE_LOOPBACK : 0)
+                     | (at->ifa_flags & IFF_POINTOPOINT ? NET_INTERFACE_POINT_TO_POINT : 0)
+                     | (at->ifa_flags & IFF_MULTICAST ? NET_INTERFACE_MULTICAST : 0)
+                     | (at->ifa_flags & IFF_BROADCAST ? NET_INTERFACE_BROADCAST : 0);
+        row->hardware = -1;
+        struct ifreq request;
+        memset(&request, 0, sizeof request);
+        snprintf(request.ifr_name, sizeof request.ifr_name, "%s", at->ifa_name);
+        row->mtu = probe >= 0 && ioctl(probe, SIOCGIFMTU, &request) == 0 ? request.ifr_mtu : 0;
+        if (at->ifa_addr == NULL) {
+            continue;
+        }
+
+        const uint8_t *hardware = NULL;
+#if defined(__linux__)
+        if (at->ifa_addr->sa_family == AF_PACKET && ((struct sockaddr_ll *)at->ifa_addr)->sll_halen == 6) {
+            hardware = ((struct sockaddr_ll *)at->ifa_addr)->sll_addr;
+        }
+#else
+        if (at->ifa_addr->sa_family == AF_LINK && ((struct sockaddr_dl *)at->ifa_addr)->sdl_alen == 6) {
+            hardware = (const uint8_t *)LLADDR((struct sockaddr_dl *)at->ifa_addr);
+        }
+#endif
+        if (hardware != NULL) {
+            row->hardware = 0;
+            for (int i = 0; i < 6; i++) {
+                row->hardware = row->hardware << 8 | hardware[i];
+            }
+        }
+
+        bool six = at->ifa_addr->sa_family == AF_INET6;
+        if (!six && at->ifa_addr->sa_family != AF_INET) {
+            continue;
+        }
+
+        struct sockaddr_storage address;
+        memset(&address, 0, sizeof address);
+        size_t size = six ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
+        memcpy(&address, at->ifa_addr, size);
+        socket_address_from(&address, (socklen_t)size, &row->address);
+        if (six && row->address.high >> 54 == 0xFE80 >> 6) {
+#if defined(__APPLE__)
+            // The kernel keeps a link-local address's scope within it.
+            row->address.high &= ~UINT64_C(0x0000FFFF00000000);
+#endif
+            row->address.scope = row->index;
+        }
+
+        if (at->ifa_netmask != NULL) {
+            const uint8_t *mask = six ? ((struct sockaddr_in6 *)at->ifa_netmask)->sin6_addr.s6_addr
+                                      : (const uint8_t *)&((struct sockaddr_in *)at->ifa_netmask)->sin_addr.s_addr;
+            for (int i = 0; i < (six ? 16 : 4); i++) {
+                row->prefix += __builtin_popcount(mask[i]);
+            }
+        }
+    }
+
+    if (probe >= 0) {
+        close(probe);
+    }
+
+    freeifaddrs(found);
+    *interfaces = all;
+    return n;
 }
 
 // ---- Arguments, files and the environment ----------------------------------

@@ -730,7 +730,10 @@ Sable.Core          ── always linked, no dependencies
 Sable.Collections   List Dictionary Set Deque OrderedDictionary
                     PriorityQueue BitSet InlineArray SmallVec,
                     SortedDictionary SortedSet (B-trees, range queries)
-Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs; normalisation
+Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, validated
+                    (UTF-8 sixteen bytes a step) and transcoded a chunk at
+                    a time (OperationStatus, Utf8Decoder, Utf16Decoder);
+                    normalisation
                     (NFC, NFD, NFKC, NFKD); grapheme clusters, words and
                     sentences (UAX #29) and line breaks (UAX #14), each
                     passing the UCD's conformance tests, from tables

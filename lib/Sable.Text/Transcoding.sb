@@ -1,0 +1,108 @@
+module Sable.Text
+
+// UTF-8 and UTF-16 converted a chunk at a time, as .NET's Utf8.ToUtf16 and
+// Utf8.FromUtf16 do: each call converts what it can of its source onto the
+// end of a destination array, and says how far it got and why it stopped.
+// A chunk that ends partway through a sequence stops before it, so that the
+// caller can carry those few units over to the next chunk; the last chunk
+// says it is the last, and a sequence cut short there is an error.
+// Ill-formed input is either U+FFFD, the most of a sequence that could have
+// begun well replaced at a time (as String.fromUtf8Lossy does), or where
+// the conversion stops.
+
+/// Why a chunked conversion stopped: .NET's `OperationStatus`. A growable
+/// destination is never too small, so there is no `DestinationTooSmall`.
+public enum OperationStatus {
+    /// The whole source was converted.
+    Done
+    /// The source ends partway through a sequence, and was not said to be
+    /// the last: the units from where it stopped belong with the next chunk.
+    NeedMoreData
+    /// An ill-formed sequence starts where it stopped, and replacing was
+    /// not asked for.
+    InvalidData
+}
+
+extension Utf8 {
+    /// The UTF-8 bytes, converted onto the end of the UTF-16 code units:
+    /// why it stopped, and how many bytes it read. With
+    /// `replacingInvalid`, each ill-formed sequence becomes U+FFFD; without,
+    /// it stops there with `.InvalidData`. Unless `isFinalBlock`, a sequence
+    /// the bytes end partway through is left unread, with `.NeedMoreData`.
+    ///
+    /// ```sable
+    /// var units: U16[>..] = []
+    /// let chunk: U8[>..] = [0x68, 0x69, 0xF0, 0x9F]
+    /// let (status, read) = Utf8.toUtf16(chunk, into: &units, isFinalBlock: false)
+    /// assert(status == .NeedMoreData && read == 2 && units == [0x68, 0x69])
+    /// ```
+    public static fn toUtf16(_ bytes: U8[:], into units: inout U16[>..], replacingInvalid: Bool = true, isFinalBlock: Bool = true) -> (status: OperationStatus, read: Int) {
+        var at = 0
+        while at < bytes.count {
+            let rest = bytes[at...]
+            let bad = Runtime.validateUtf8(rest)
+            let goodEnd = bad < 0 ? rest.count : bad
+            for unit in Runtime.decodeUtf8(rest[..<goodEnd])!.utf16 {
+                units.append(unit)
+            }
+            if bad < 0 {
+                return (status: .Done, read: bytes.count)
+            }
+            let error = Utf8.errorAt(rest, bad)
+            if error.errorLength == none && !isFinalBlock {
+                return (status: .NeedMoreData, read: at + bad)
+            }
+            if !replacingInvalid {
+                return (status: .InvalidData, read: at + bad)
+            }
+            units.append(0xFFFD)
+            at = at + bad + (error.errorLength ?? rest.count - bad)
+        }
+        return (status: .Done, read: bytes.count)
+    }
+
+    /// The UTF-16 code units, converted onto the end of the UTF-8 bytes:
+    /// why it stopped, and how many units it read. A surrogate without its
+    /// other half becomes U+FFFD with `replacingInvalid`, and stops it with
+    /// `.InvalidData` without; unless `isFinalBlock`, a leading surrogate
+    /// at the end is left unread, with `.NeedMoreData`.
+    ///
+    /// ```sable
+    /// var bytes: U8[>..] = []
+    /// let units: U16[>..] = [0x68, 0xD83D, 0xDE00]
+    /// let (status, read) = Utf8.fromUtf16(units, into: &bytes)
+    /// assert(status == .Done && read == 3 && bytes.count == 5)
+    /// ```
+    public static fn fromUtf16(_ units: U16[:], into bytes: inout U8[>..], replacingInvalid: Bool = true, isFinalBlock: Bool = true) -> (status: OperationStatus, read: Int) {
+        var i = 0
+        while i < units.count {
+            let unit = units[i]
+            var code = Int(unit)
+            var width = 1
+            if Utf16.isLeading(unit) {
+                if i + 1 >= units.count {
+                    if !isFinalBlock {
+                        return (status: .NeedMoreData, read: i)
+                    }
+                    code = -1
+                } else if Utf16.isTrailing(units[i + 1]) {
+                    code = 0x10000 + ((Int(unit) - 0xD800) << 10) + (Int(units[i + 1]) - 0xDC00)
+                    width = 2
+                } else {
+                    code = -1
+                }
+            } else if Utf16.isTrailing(unit) {
+                code = -1
+            }
+            if code < 0 {
+                if !replacingInvalid {
+                    return (status: .InvalidData, read: i)
+                }
+                code = 0xFFFD
+            }
+            Char.fromCodePoint(code)!.encodeUtf8(into: &bytes)
+            i = i + width
+        }
+        return (status: .Done, read: units.count)
+    }
+}

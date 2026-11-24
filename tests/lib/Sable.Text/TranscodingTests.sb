@@ -1,0 +1,171 @@
+module TranscodingTests
+
+// Utf8.toUtf16, Utf8.fromUtf16 and Utf16Decoder (Sable.Text): fuzzed
+// against the whole-input conversions, in one go and a random chunk at a
+// time. Run with
+//     tools/stdlib-coverage.sh Sable.Text
+
+import Sable.Testing
+import Sable.Text
+
+/// A random walk, its bytes weighted to the ranges UTF-8's rules turn on and
+/// its code units to the surrogates.
+struct Source {
+    var state: U64
+
+    mutating fn next() -> Int {
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        return Int(state >> 1)
+    }
+
+    mutating fn byte() -> U8 {
+        let pick = next() % 16
+        let low = next() % 64
+        let value = pick < 6 ? low + 0x20 : pick < 10 ? 0x80 + low : pick < 12 ? 0xC0 + low % 32 : pick < 14 ? 0xE0 + low % 16 : 0xF0 + low % 16
+        return U8.truncating(value)
+    }
+
+    mutating fn unit() -> U16 {
+        let pick = next() % 8
+        if pick < 4 {
+            return U16.truncating(0x20 + next() % 0x500)
+        }
+        if pick < 6 {
+            return U16.truncating(0xD800 + next() % 0x400)
+        }
+        return U16.truncating(0xDC00 + next() % 0x400)
+    }
+}
+
+fn shown(_ units: U16[:]) -> String {
+    return "\(units.toArray())"
+}
+
+fn shownBytes(_ bytes: U8[:]) -> String {
+    return "\(bytes.toArray())"
+}
+
+@test
+fn utf8ToUtf16AgreesWithLossyDecoding() {
+    var source = Source { state: 0x9E3779B97F4A7C15 }
+    var round = 0
+    while round < 600 {
+        var bytes: U8[>..] = []
+        let length = source.next() % 40
+        while bytes.count < length {
+            bytes.append(source.byte())
+        }
+        let expected = String.fromUtf8Lossy(bytes).utf16Units()
+
+        var whole: U16[>..] = []
+        let (status, read) = Utf8.toUtf16(bytes, into: &whole)
+        assert(status == .Done && read == bytes.count, "one go")
+        assertEqual(shown(whole), shown(expected))
+
+        // A chunk at a time, what is unread carried over to the next.
+        var chunked: U16[>..] = []
+        var carried: U8[>..] = []
+        var start = 0
+        while start < bytes.count {
+            let end = start + 1 + source.next() % 6
+            let stop = end < bytes.count ? end : bytes.count
+            var chunk = carried
+            chunk.append(contentsOf: bytes[start..<stop])
+            let last = stop == bytes.count
+            let (chunkStatus, chunkRead) = Utf8.toUtf16(chunk, into: &chunked, isFinalBlock: last)
+            assert(chunkStatus == (last ? .Done : chunkRead == chunk.count ? .Done : .NeedMoreData), "a chunk's status")
+            carried = chunk[chunkRead...].toArray()
+            start = stop
+        }
+        assertEqual(shown(chunked), shown(expected))
+
+        // Not replacing: it stops where the first error is.
+        var strict: U16[>..] = []
+        let (strictStatus, strictRead) = Utf8.toUtf16(bytes, into: &strict, replacingInvalid: false)
+        if let at = Utf8.validate(bytes) {
+            assert(strictStatus == .InvalidData, "stops at an error")
+            assertEqual(strictRead, at)
+        } else {
+            assert(strictStatus == .Done, "valid input is done")
+        }
+        round += 1
+    }
+}
+
+@test
+fn fromUtf16AgreesWithLossyDecoding() {
+    var source = Source { state: 0xD1B54A32D192ED03 }
+    var round = 0
+    while round < 600 {
+        var units: U16[>..] = []
+        let length = source.next() % 30
+        while units.count < length {
+            units.append(source.unit())
+        }
+        let expected = String.fromUtf16Lossy(units).utf8Bytes()
+
+        var whole: U8[>..] = []
+        let (status, read) = Utf8.fromUtf16(units, into: &whole)
+        assert(status == .Done && read == units.count, "one go")
+        assertEqual(shownBytes(whole), shownBytes(expected))
+
+        var chunked: U8[>..] = []
+        var carried: U16[>..] = []
+        var start = 0
+        while start < units.count {
+            let end = start + 1 + source.next() % 4
+            let stop = end < units.count ? end : units.count
+            var chunk = carried
+            chunk.append(contentsOf: units[start..<stop])
+            let (_, chunkRead) = Utf8.fromUtf16(chunk, into: &chunked, isFinalBlock: stop == units.count)
+            carried = chunk[chunkRead...].toArray()
+            start = stop
+        }
+        assertEqual(shownBytes(chunked), shownBytes(expected))
+
+        var strict: U8[>..] = []
+        let (strictStatus, strictRead) = Utf8.fromUtf16(units, into: &strict, replacingInvalid: false)
+        if let at = Utf16.validate(units) {
+            assert(strictStatus == .InvalidData, "stops at a lone surrogate")
+            assertEqual(strictRead, at)
+        } else {
+            assert(strictStatus == .Done, "valid input is done")
+        }
+
+        // The streaming decoder, fed random chunks, tells the same story.
+        var decoder = Utf16Decoder()
+        var text = ""
+        start = 0
+        while start < units.count {
+            let end = start + 1 + source.next() % 4
+            let stop = end < units.count ? end : units.count
+            text = text + decoder.decode(units[start..<stop])
+            start = stop
+        }
+        text = text + decoder.finish()
+        assertEqual(text, String.fromUtf16Lossy(units))
+        assertEqual(decoder.sawInvalid, Utf16.validate(units) != none)
+        round += 1
+    }
+}
+
+@test
+fn transcodingByExample() {
+    var units: U16[>..] = []
+    let cut: U8[>..] = [0x68, 0x69, 0xF0, 0x9F]
+    let (status, read) = Utf8.toUtf16(cut, into: &units, isFinalBlock: false)
+    assert(status == .NeedMoreData && read == 2)
+    let (finalStatus, finalRead) = Utf8.toUtf16(cut, into: &units, replacingInvalid: false)
+    assert(finalStatus == .InvalidData && finalRead == 2)
+    var bytes: U8[>..] = []
+    let lone: U16[>..] = [0x41, 0xD800]
+    let (pairStatus, pairRead) = Utf8.fromUtf16(lone, into: &bytes, isFinalBlock: false)
+    assert(pairStatus == .NeedMoreData && pairRead == 1)
+    var decoder = Utf16Decoder()
+    assertEqual(decoder.decode(lone), "A")
+    assertEqual(decoder.finish(), "\u{FFFD}")
+    assert(decoder.sawInvalid)
+    assertEqual(decoder.finish(), "")
+}

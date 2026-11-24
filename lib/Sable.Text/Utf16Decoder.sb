@@ -1,0 +1,67 @@
+module Sable.Text
+
+/// UTF-16 decoded a chunk at a time, as it comes from a file or a socket: a
+/// surrogate pair split across two chunks is kept until the next completes
+/// it, so the text is what decoding all the units at once would give. A
+/// surrogate without its other half is made U+FFFD, as
+/// `String.fromUtf16Lossy` makes it.
+///
+/// ```sable
+/// var decoder = Utf16Decoder()
+/// let first: U16[>..] = [0x48, 0xD83D]
+/// let second: U16[>..] = [0xDE00, 0x21]
+/// var text = decoder.decode(first)
+/// text = text + decoder.decode(second) + decoder.finish()
+/// assert(text == "H😀!")
+/// assert(!decoder.sawInvalid)
+/// ```
+public struct Utf16Decoder {
+    // A leading surrogate the last chunk ended with: 0 for none.
+    var pending: U16
+    /// Whether any surrogate without its other half has been made U+FFFD
+    /// so far.
+    public var sawInvalid: Bool
+
+    public init() {
+        self.pending = 0
+        self.sawInvalid = false
+    }
+
+    /// The text the chunk completes: its scalars, each lone surrogate as
+    /// U+FFFD, and none of a pair it ends partway through, which waits for
+    /// the next chunk.
+    public mutating fn decode(_ chunk: U16[:]) -> String {
+        var units: U16[>..] = []
+        if pending != 0 {
+            units.append(pending)
+            pending = 0
+        }
+        units.append(contentsOf: chunk)
+        return convert(units, isFinalBlock: false)
+    }
+
+    /// The text of what was held back: a leading surrogate the last chunk
+    /// ended with, as U+FFFD. The decoder is ready for new input after.
+    public mutating fn finish() -> String {
+        if pending == 0 {
+            return ""
+        }
+        let held: U16[>..] = [pending]
+        pending = 0
+        return convert(held, isFinalBlock: true)
+    }
+
+    mutating fn convert(_ units: U16[>..], isFinalBlock: Bool) -> String {
+        var bytes: U8[>..] = []
+        let (status, read) = Utf8.fromUtf16(units, into: &bytes, isFinalBlock: isFinalBlock)
+        if status == .NeedMoreData {
+            pending = units[read]
+        }
+        if Utf16.validate(units[..<read]) != none {
+            sawInvalid = true
+        }
+        unsafe {
+            return String.fromUtf8Unchecked(bytes)
+        }
+    }
+}

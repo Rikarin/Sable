@@ -3562,7 +3562,7 @@ internal sealed class Parser {
         // 'throws async' has the effects the wrong way round. The tree has
         // one place for 'async', before 'throws', so a late one is kept as
         // skipped text rather than moved — moving it would change the source.
-        if (throwsSpec is not null && At(SyntaxKind.AsyncKeyword)) {
+        if (throwsSpec is not null && At(SyntaxKind.AsyncKeyword) && !HasNewLineBeforeCurrent) {
             ReportUnexpected(ErrorCode.ERR_ExpectedToken, "'async' goes before 'throws', not after it");
             SkipCurrentToken();
         }

@@ -347,4 +347,56 @@ public sealed class StackPromotionTests {
             Assert.Contains("allocations 0,", stats, StringComparison.Ordinal);
         }
     }
+
+    /// <summary>
+    ///     An array literal borrowed across an await is in no frame: the one
+    ///     that made it is gone while the task waits.
+    /// </summary>
+    [Fact]
+    public void AnArrayLiteralOutlivesASuspension() =>
+        Assert.Equal(
+            "a one\nb two\n",
+            Programs.AssertAgree(
+                """
+                module P
+
+                protocol Named: Sendable {
+                    async fn named() throws
+                    async fn name() -> String
+                }
+
+                extension Named {
+                    async fn named() throws { }
+                }
+
+                @immutable
+                final class One: Named {
+                    async fn name() -> String { return "one" }
+                }
+
+                @immutable
+                final class Two: Named {
+                    async fn name() -> String { return "two" }
+                }
+
+                struct Entry: Sendable {
+                    let key: String
+                    let value: any Named
+                }
+
+                fn all(_ entries: Entry[>..]) async {
+                    for entry in entries {
+                        let value = entry.value
+                        let task = Task.detached { await value.name() }
+                        print("\(entry.key) \(await task.value)")
+                    }
+                }
+
+                @main
+                async fn main() {
+                    await all([Entry { key: "a", value: One() }, Entry { key: "b", value: Two() }])
+                }
+                """
+            ).Stdout
+        );
 }

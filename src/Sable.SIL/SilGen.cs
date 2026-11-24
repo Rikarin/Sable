@@ -7399,12 +7399,11 @@ public sealed partial class SilGen {
             for (var i = 0; i < call.Arguments.Length; i++) {
                 // An inout argument passes where it is, as to any function.
                 if (i < call.Function.Parameters.Length && call.Function.Parameters[i].Modifier == ParameterModifier.InOut) {
-                    if (Address(call.Arguments[i], borrows) is not { } address) {
+                    if (InoutArgument(call.Arguments[i], borrows) is not { } address) {
                         return null;
                     }
 
                     arguments.Add(address);
-                    BeginAccess(address, modify: true, borrows);
                     continue;
                 }
 
@@ -10732,12 +10731,11 @@ public sealed partial class SilGen {
 
                 // An inout or out argument passes where it is; the rest are borrowed.
                 if (i < callee.Parameters.Length && callee.Parameters[i].Modifier is ParameterModifier.InOut or ParameterModifier.Out) {
-                    if (Address(call.Arguments[i], borrows) is not { } address) {
+                    if (InoutArgument(call.Arguments[i], borrows) is not { } address) {
                         return null;
                     }
 
                     arguments.Add(address);
-                    BeginAccess(address, modify: true, borrows);
 
                     // To unspecialised code, a type parameter's: the same storage, seen as the callee's.
                     if (genericShape is not null && type.Parameters[arguments.Count - 1] is var changed && changed != address.Type && SilType.MentionsOpaque(changed)) {
@@ -11710,12 +11708,11 @@ public sealed partial class SilGen {
 
                 // An inout argument passes where it is, as to a declared function.
                 if (functionType?.IsInOut(i) == true) {
-                    if (Address(argument, borrows) is not { } address) {
+                    if (InoutArgument(argument, borrows) is not { } address) {
                         return null;
                     }
 
                     arguments.Add(address);
-                    BeginAccess(address, modify: true, borrows);
                     continue;
                 }
 

@@ -299,6 +299,11 @@ nothing. The array is accessed for the length of the call, so
 one array passed inout are, and through two references to one object it
 traps.
 
+The whole of an array passes as an `inout T[:]` too, `sortAll(&xs)`, with
+nothing copied: the callee's slice is the array's buffer, as it is for a
+`mutating` member of `T[:]` (`xs.sort()`), and a slice that comes back with
+another count traps.
+
 A slice never changes its count; a callee can only give it another by
 replacing it whole (`s = other`), and one that comes back with another count
 traps (`a slice of count 1 stored over a range of count 3`), whatever the

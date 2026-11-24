@@ -119,6 +119,60 @@ public sealed partial class SilGen {
         }
 
         /// <summary>
+        ///     Where an inout argument is, its access begun among the call's:
+        ///     its own place, or, for an array where a slice of it is wanted,
+        ///     the array viewed whole.
+        /// </summary>
+        SilValue? InoutArgument(BoundExpression argument, List<SilValue> borrows) {
+            if (argument is BoundConversion view && IsArrayView(argument) && !IsInlineArray(view.Operand)) {
+                return WholeArrayInout(view, borrows);
+            }
+
+            if (Address(argument, borrows) is not { } address) {
+                return null;
+            }
+
+            BeginAccess(address, modify: true, borrows);
+            return address;
+        }
+
+        /// <summary>
+        ///     The whole of an array passed as an inout slice, <c>sortAll(&amp;xs)</c>
+        ///     of a <c>sortAll(_: inout Int[:])</c>: changed where it is, as by a
+        ///     mutating member of a slice (<see cref="AsMutableSliceReceiver" />).
+        ///     What a range passed inout is held to, it is held to: the slice
+        ///     that comes back has the array's count, or the call traps.
+        /// </summary>
+        SilValue? WholeArrayInout(BoundConversion view, List<SilValue> borrows) {
+            if (Address(view.Operand, borrows) is not { Type: AddressType { Pointee: ArrayType arrayType } } place) {
+                return Missing(view, $"'{Describe(view.Syntax)}' as a slice to change");
+            }
+
+            var sliceType = new SliceType(arrayType.Element);
+            var slot = NewSlot(sliceType, "$slice");
+            SilValue? before = null;
+            borrows.Add(new DeferredStep(() => {
+                Emit(new BuiltinInst("array_make_unique", SilType.Unit, place));
+                Emit(new StoreInst(Builtin("slice_of_take", sliceType, Emit(new LoadInst(place, LoadKind.Take))), slot, StoreKind.Init));
+                before = Count(slot);
+            }));
+            borrows.Add(new WriteBack(() => {
+                var same = Builtin("cmp_eq_Int", SilType.Bool, Count(slot), before!);
+                Emit(new CondFailInst(Builtin("not_Bool", SilType.Bool, same), "a slice of another count given back for the whole of an array"));
+                Emit(new StoreInst(Builtin("array_of_slice_take", arrayType, Emit(new LoadInst(slot, LoadKind.Take))), place, StoreKind.Init));
+            }));
+            BeginAccess(place, modify: true, borrows);
+            return slot;
+
+            SilValue Count(SilValue at) {
+                var slice = Emit(new LoadBorrowInst(at));
+                var count = Builtin("array_count", SilType.Int, slice);
+                Emit(new EndBorrowInst(slice));
+                return count;
+            }
+        }
+
+        /// <summary>
         ///     The range of an array's own slicing, <c>xs[1..&lt;3]</c> or, as a
         ///     place, <c>xs[1..&lt;^1]</c>: a range of integers of any shape, or
         ///     one counted from the end. Null for any other indexing.

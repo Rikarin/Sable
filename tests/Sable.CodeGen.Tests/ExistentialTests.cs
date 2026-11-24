@@ -691,4 +691,68 @@ public sealed class ComputedPropertyTests {
         Assert.DoesNotContain("witness_generic", describe, StringComparison.Ordinal);
         Assert.Equal(2, describe.Split("function_ref @$generic$witness$Test.Circle$Test.Shape$").Length - 1);
     }
+
+    [Fact]
+    public void AnErrorIsAskedWhatItIs() =>
+        Assert.Equal(
+            "true false\nfalse true\n",
+            Programs.AssertAgree(
+                """
+                module P
+
+                struct Plain: Error { }
+
+                union Coded: Error {
+                    Code(n: Int)
+                }
+
+                fn ask(_ body: () throws -> Void) {
+                    do {
+                        try body()
+                    } catch {
+                        print("\(error is Plain) \(error is Coded)")
+                    }
+                }
+
+                @main
+                fn main() {
+                    ask { throw Plain { } }
+                    ask { throw Coded.Code(n: 3) }
+                }
+                """
+            ).Stdout
+        );
+
+    /// <summary>A closure in a 'do' hides nothing that is thrown before it there.</summary>
+    [Fact]
+    public void ADoCatchesWhatIsThrownBeforeAClosure() =>
+        Assert.Equal(
+            "caught Early()\n",
+            Programs.AssertAgree(
+                """
+                module P
+
+                struct Early: Error { }
+
+                struct Late: Error { }
+
+                fn early() throws(Early) { throw Early { } }
+
+                fn late(_ body: () -> Void) throws(Late) {
+                    body()
+                    throw Late { }
+                }
+
+                @main
+                fn main() {
+                    do {
+                        try early()
+                        try late { print("late") }
+                    } catch {
+                        print("caught \(error)")
+                    }
+                }
+                """
+            ).Stdout
+        );
 }

@@ -18,6 +18,8 @@
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -1010,6 +1012,48 @@ static void socket_shutdown_write(PlatformSocket socket) {
 
 static void socket_close(PlatformSocket socket) {
     close((int)socket);
+}
+
+static int unix_datagram_send(const char *name, size_t name_length, const void *bytes, size_t length) {
+    bool abstract = name_length > 0 && name[0] == '@';
+#if !defined(__linux__)
+    if (abstract) {
+        return 1;
+    }
+#endif
+    if (name_length < 2 || (!abstract && name[0] != '/')) {
+        return 1;
+    }
+
+    struct sockaddr_un to;
+    memset(&to, 0, sizeof to);
+    to.sun_family = AF_UNIX;
+    if (name_length >= sizeof to.sun_path) {
+        return 2;
+    }
+
+    // An abstract name is all the bytes after a NUL in '@''s place, and no more.
+    memcpy(to.sun_path, name, name_length);
+    if (abstract) {
+        to.sun_path[0] = '\0';
+    }
+
+    int fd = socket(AF_UNIX, SOCK_DGRAM | SOCKET_CLOEXEC, 0);
+    if (fd < 0) {
+        return 2;
+    }
+
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    // A receiver that has stopped reading holds its sender up, but not for ever.
+    struct timeval limit = {.tv_sec = 5, .tv_usec = 0};
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &limit, sizeof limit);
+    socklen_t size = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + name_length + (abstract ? 0 : 1));
+    ssize_t sent;
+    do {
+        sent = sendto(fd, bytes, length, SOCKET_SEND_FLAGS, (struct sockaddr *)&to, size);
+    } while (sent < 0 && errno == EINTR);
+    close(fd);
+    return sent == (ssize_t)length ? 0 : 2;
 }
 
 // ---- Arguments, files and the environment ----------------------------------

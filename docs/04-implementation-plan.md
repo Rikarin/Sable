@@ -979,6 +979,7 @@ Sable.Concurrency  Task, TaskGroup, Actor runtime, Channel, Mutex, Atomic
 Sable.Net          Socket, TcpListener, Http client
 Sable.Time         Instant, Duration, Clock, Calendar
 Sable.Process      spawn, environment, signals
+Sable.Hosting      host, lifetime, services, cron jobs
 Sable.Diagnostics  Logger, tracing, metrics
 Sable.Testing      the test harness `sable test` drives
 ```

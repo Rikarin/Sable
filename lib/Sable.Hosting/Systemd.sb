@@ -1,0 +1,62 @@
+module Sable.Hosting
+
+import Sable.IO
+import Sable.Process
+import Sable.Time
+
+/// What systemd is told by the programs it starts (`Type=notify`):
+/// sd_notify, over the socket NOTIFY_SOCKET names. `ApplicationBuilder.useSystemd`
+/// has the host do it. (launchd wants nothing told: a program it starts
+/// stays in the foreground and ends on SIGTERM, as a host does.)
+///
+/// ```sable
+/// if Systemd.isActive {
+///     let told = Systemd.notify("STATUS=Warming the cache")
+///     assert(told || Systemd.isActive)
+/// }
+/// ```
+public struct Systemd {
+    static let ready: String = "READY=1"
+    static let stopping: String = "STOPPING=1"
+    static let reloading: String = "RELOADING=1"
+    static let watchdog: String = "WATCHDOG=1"
+
+    /// Whether systemd is there to be told.
+    public static var isActive: Bool => !(Environment.variable("NOTIFY_SOCKET") ?? "").isEmpty
+
+    /// How often systemd wants to hear that the program is alive, or it
+    /// ends it: WATCHDOG_USEC's, when meant for this process.
+    public static var watchdogInterval: Duration? {
+        get {
+            if let pid = Environment.variable("WATCHDOG_PID") {
+                if pid != Process.id().toString() {
+                    return none
+                }
+            }
+            guard let text = Environment.variable("WATCHDOG_USEC") else { return none }
+            guard let microseconds = try? Int.parse(text) else { return none }
+            return microseconds > 0 ? Duration.microseconds(microseconds) : none
+        }
+    }
+
+    /// Tells systemd this, a `NAME=value` a line: whether it was sent; false
+    /// where there is no one to tell. It may wait, though not past five
+    /// seconds, for systemd to have read what it was sent before.
+    @discardable
+    public static fn notify(_ state: String) -> Bool {
+        guard let socket = Environment.variable("NOTIFY_SOCKET") else { return false }
+        return notify(state, socket: socket)
+    }
+
+    /// Tells what listens at this socket: a path, or '@' and an abstract
+    /// name, on Linux. (A vsock address is not one it can send to.)
+    @discardable
+    public static fn notify(_ state: String, socket: String) -> Bool {
+        return Runtime.notifyService(socket, state) == 0
+    }
+
+    // Type=notify-reload's, which wants to know when.
+    static fn reloadingNow() -> String {
+        return "RELOADING=1\nMONOTONIC_USEC=\(Runtime.monotonicNanoseconds() / 1000)"
+    }
+}

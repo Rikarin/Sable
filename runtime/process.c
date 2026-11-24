@@ -496,6 +496,12 @@ bool sable_process_change_directory(const SableString *path) {
     return changed;
 }
 
+// What systemd's sd_notify sends: the message as a datagram to the socket
+// NOTIFY_SOCKET names (unix_datagram_send, and what it gives).
+int64_t sable_process_notify(const SableString *socket, const SableString *message) {
+    return unix_datagram_send(socket->bytes, (size_t)socket->length, message->bytes, (size_t)message->length);
+}
+
 int64_t sable_process_id(void) {
     return process_id();
 }

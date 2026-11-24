@@ -1,0 +1,41 @@
+module Sable.Hosting
+
+import Sable.IO
+
+/// Where the program runs, and as what: .NET's `IHostEnvironment`.
+///
+/// ```sable
+/// let environment = HostEnvironment(name: "Staging", applicationName: "shop")
+/// assert(environment.isStaging && !environment.isProduction)
+/// ```
+public struct HostEnvironment: Sendable {
+    /// The environment's name, as it was given: "Development", "Staging",
+    /// "Production", or any other.
+    public var name: String
+    /// The program's name.
+    public var applicationName: String
+
+    /// The environment of this name.
+    public init(name: String, applicationName: String = "") {
+        self.name = name
+        self.applicationName = applicationName
+    }
+
+    /// The environment this program was started in: SABLE_ENVIRONMENT's
+    /// name, "Production" when it names none; the program's file's name.
+    public static fn current() -> HostEnvironment {
+        let given = Environment.variable("SABLE_ENVIRONMENT") ?? ""
+        let program = Environment.executablePath?.stem ?? ""
+        return HostEnvironment(name: given.isEmpty ? "Production" : given, applicationName: program)
+    }
+
+    /// Whether the name is this, however either is cased.
+    public fn isEnvironment(_ other: String) -> Bool => name.lowercased() == other.lowercased()
+
+    /// Whether it is "Development".
+    public var isDevelopment: Bool => isEnvironment("Development")
+    /// Whether it is "Staging".
+    public var isStaging: Bool => isEnvironment("Staging")
+    /// Whether it is "Production".
+    public var isProduction: Bool => isEnvironment("Production")
+}

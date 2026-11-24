@@ -594,6 +594,12 @@ static void socket_close(PlatformSocket socket) {
     closesocket((SOCKET)socket);
 }
 
+// Windows' Unix sockets are streams alone.
+static int unix_datagram_send(const char *name, size_t name_length, const void *bytes, size_t length) {
+    (void)name, (void)name_length, (void)bytes, (void)length;
+    return 1;
+}
+
 // ---- Arguments, files and the environment ----------------------------------
 
 // main() is given its arguments in the ANSI code page, which cannot hold

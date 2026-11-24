@@ -1,0 +1,32 @@
+module Sable.Hosting
+
+import Sable.Time
+
+/// Why a host ended badly: the first thing that went wrong. Each is logged
+/// as it happens.
+public union HostError: Error {
+    /// A service's `start` threw: the host never started, and those before
+    /// it were stopped.
+    StartFailed(service: String, error: any Error)
+    /// A service's `start` took longer than `HostOptions.startupTimeout`.
+    StartTimedOut(service: String)
+    /// A service's `run` threw, its policy being to stop the host.
+    ServiceFailed(service: String, error: any Error)
+    /// A service's `stop` threw.
+    StopFailed(service: String, error: any Error)
+    /// The shutdown timeout ran out with these services not ended, the last
+    /// added first: the host waited no more for them, and their tasks may
+    /// be running yet (`Host.runToExit`).
+    ShutdownTimedOut(services: String[>..])
+
+    /// What went wrong.
+    public fn description() -> String {
+        return match self {
+            case .StartFailed(let service, let error)   => "the service '\(service)' did not start: \(error.description())"
+            case .StartTimedOut(let service)            => "the service '\(service)' did not start in time"
+            case .ServiceFailed(let service, let error) => "the service '\(service)' failed: \(error.description())"
+            case .StopFailed(let service, let error)    => "the service '\(service)' did not stop cleanly: \(error.description())"
+            case .ShutdownTimedOut(let services)        => "not stopped in time: \(services.joined(separator: ", "))"
+        }
+    }
+}

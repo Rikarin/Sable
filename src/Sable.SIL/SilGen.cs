@@ -8894,6 +8894,18 @@ public sealed partial class SilGen {
                 return conforms;
             }
 
+            // 'error is CancellationError': whether an 'any Error' boxes one.
+            if (LowerType(test.Operand.Type) == generator.AnyErrorType() && CastTarget(test.TestedType) is not ExistentialTypeSymbol
+                && LowerType(test.TestedType) is { } boxed) {
+                if (Borrow(test.Operand) is not { } error) {
+                    return null;
+                }
+
+                var boxes = Emit(new BuiltinInst($"class_is:{generator.ErrorBox(boxed).Name}", SilType.Bool, error));
+                End(error);
+                return boxes;
+            }
+
             if (LowerType(test.TestedType) is not ClassType target || Borrow(test.Operand) is not { Type: ClassType } value) {
                 return Missing(test, $"'is {test.TestedType.ToDisplayString()}' on '{test.Operand.Type.ToDisplayString()}'");
             }

@@ -1,0 +1,73 @@
+module Sable.Hosting
+
+import Sable.Concurrency
+
+/// When the host starts and stops, for whoever wants to know, and how to ask
+/// it to stop: .NET's `IHostApplicationLifetime`. Each event is a token,
+/// cancelled as it comes: to register a handler on, to wait for, to ask.
+///
+/// ```sable
+/// let builder = ApplicationBuilder()
+/// builder.options.handleSignals = false
+/// let host = try! builder.build()
+/// let _ = host.lifetime.started.register { host.lifetime.requestStop() }
+/// try! await host.run()
+/// assert(host.lifetime.stopped.isCancellationRequested)
+/// ```
+@immutable
+public final class ApplicationLifetime {
+    let startedSource: CancellationTokenSource
+    let stoppingSource: CancellationTokenSource
+    let stoppedSource: CancellationTokenSource
+    let reloads: Mutex<ReloadHandlers>
+    let reloading: AsyncMutex
+
+    init() {
+        startedSource = CancellationTokenSource()
+        stoppingSource = CancellationTokenSource()
+        stoppedSource = CancellationTokenSource()
+        reloads = Mutex(ReloadHandlers())
+        reloading = AsyncMutex()
+    }
+
+    /// Every service has started.
+    public var started: CancellationToken => startedSource.token
+
+    /// The host has been asked to stop: no service has been told yet when
+    /// its handlers run.
+    public var stopping: CancellationToken => stoppingSource.token
+
+    /// Every service has stopped, or the shutdown timeout has run out.
+    public var stopped: CancellationToken => stoppedSource.token
+
+    /// Asks the host to stop. Asking again does nothing.
+    public fn requestStop() {
+        stoppingSource.cancel()
+    }
+
+    /// The handler run each time the host reloads, in the order added.
+    public fn onReload(_ action: @escaping @Sendable async () -> Void) {
+        reloads.withLock { (list: inout ReloadHandlers) -> Void in
+            list.entries.append(ReloadHandler { run: action })
+        }
+    }
+
+    // The handlers run, one reload at a time.
+    fn reload(_ first: @Sendable async () -> Void) async {
+        await reloading.withLock {
+            await first()
+            let handlers = reloads.withLock { (list: inout ReloadHandlers) -> ReloadHandler[>..] in list.entries }
+            for each in handlers {
+                await each.run()
+            }
+        }
+    }
+}
+
+struct ReloadHandlers {
+    var entries: ReloadHandler[>..] = []
+}
+
+struct ReloadHandler {
+    let run: async () -> Void
+}

@@ -1,0 +1,263 @@
+module RecurringTests
+
+// Sable.Hosting, tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Hosting
+
+import Sable.Concurrency
+import Sable.Hosting
+import Sable.Testing
+import Sable.Time
+
+import HostingSupport
+
+@test
+fn anIntervalsJobRunsEachTimeItHasPassed() async {
+    let clock = TestClock()
+    let record = Record()
+    let builder = quietBuilder(clock)
+    builder.services.addRecurring(every: Duration.minutes(5)) { _cancellation in record.add("run") }
+    assert(builder.services.names == ["every 5m 0.000s"])
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    var i = 1
+    while i <= 3 {
+        await clock.pass(Duration.minutes(5))
+        await record.awaitLine("run", i)
+        i += 1
+    }
+    await clock.awaitSleep(Duration.minutes(5))
+    host.lifetime.requestStop()
+    assertEqual(await running.value, "")
+    assertEqual(record.count("run"), 3)
+}
+
+@test
+fn aCronJobRunsWhenItSays() async {
+    let clock = TestClock()
+    let record = Record()
+    let builder = quietBuilder(clock)
+    try! builder.services.addRecurring("0 */5 * * *") { _cancellation in record.add("run") }
+    assert(builder.services.names == ["0 */5 * * *"])
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await clock.pass(Duration.hours(5))
+    await record.awaitLine("run", 1)
+    await clock.pass(Duration.hours(5))
+    await record.awaitLine("run", 2)
+    host.lifetime.requestStop()
+    assertEqual(await running.value, "")
+}
+
+@test
+fn aTextThatIsNotCronIsRefusedAsItIsAdded() {
+    let builder = quietBuilder(TestClock())
+    do {
+        try builder.services.addRecurring("sometimes") { _cancellation in }
+        assert(false)
+    } catch {
+        assertEqual(error.description(), "'sometimes' is not a cron expression: it has 1 fields, not 5")
+    }
+}
+
+@test
+fn aJobMayRunAsTheHostStarts() async {
+    let clock = TestClock()
+    let record = Record()
+    let builder = quietBuilder(clock)
+    builder.services.addRecurring(every: Duration.hours(1), options: RecurringOptions(runAtStart: true)) { _cancellation in record.add("run") }
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await record.awaitLine("run")
+    host.lifetime.requestStop()
+    assertEqual(await running.value, "")
+}
+
+// A job each minute, each run of which takes until it is let go.
+fn overlapping(_ policy: OverlapPolicy, _ clock: TestClock, _ record: Record, _ gate: AsyncSemaphore) -> Host {
+    let builder = quietBuilder(clock)
+    builder.services.addRecurring(every: Duration.minutes(1), name: "job", options: RecurringOptions(overlap: policy)) { _cancellation in
+        record.add("begin")
+        await gate.acquire()
+        record.add("end")
+    }
+    return try! builder.build()
+}
+
+@test
+fn aRunThatOverlapsIsSkipped() async {
+    let clock = TestClock()
+    let record = Record()
+    let gate = AsyncSemaphore(permits: 0)
+    let host = overlapping(.Skip, clock, record, gate)
+    let running = Task.spawn { await outcome(host) }
+    await clock.pass(Duration.minutes(1))
+    await record.awaitLine("begin")
+    await clock.pass(Duration.minutes(1))
+    await clock.pass(Duration.minutes(1))
+    await clock.awaitSleep(Duration.minutes(1))
+    assertEqual(record.count("begin"), 1)
+    await gate.release()
+    await record.awaitLine("end")
+    // Its end is heard of before the next is due, if a while after.
+    await settle()
+    await clock.pass(Duration.minutes(1))
+    await record.awaitLine("begin", 2)
+    await gate.release()
+    host.lifetime.requestStop()
+    assertEqual(await running.value, "")
+}
+
+fn settle() async {
+    var i = 0
+    while i < 20 {
+        try? await Task.sleep(for: Duration.milliseconds(1))
+        i += 1
+    }
+}
+
+@test
+fn runsThatOverlapMayQueue() async {
+    let clock = TestClock()
+    let record = Record()
+    let gate = AsyncSemaphore(permits: 0)
+    let host = overlapping(.Queue, clock, record, gate)
+    let running = Task.spawn { await outcome(host) }
+    await clock.pass(Duration.minutes(1))
+    await clock.pass(Duration.minutes(1))
+    await clock.pass(Duration.minutes(1))
+    await clock.awaitSleep(Duration.minutes(1))
+    assertEqual(record.count("begin"), 1)
+    await gate.release()
+    await record.awaitLine("begin", 2)
+    assertEqual(record.all, "begin end begin")
+    // Stopping, the one running is waited for; the one waiting is not run.
+    host.lifetime.requestStop()
+    await settle()
+    assert(!host.lifetime.stopped.isCancellationRequested)
+    await gate.release()
+    assertEqual(await running.value, "")
+    assertEqual(record.all, "begin end begin end")
+}
+
+@test
+fn runsThatOverlapMayRunTogether() async {
+    let clock = TestClock()
+    let record = Record()
+    let gate = AsyncSemaphore(permits: 0)
+    let host = overlapping(.Concurrent, clock, record, gate)
+    let running = Task.spawn { await outcome(host) }
+    await clock.pass(Duration.minutes(1))
+    await clock.pass(Duration.minutes(1))
+    await record.awaitLine("begin", 2)
+    assertEqual(record.all, "begin begin")
+    await gate.release()
+    await gate.release()
+    host.lifetime.requestStop()
+    assertEqual(await running.value, "")
+}
+
+@test
+fn aRunThatFailsIsRunAgainWhenDue() async {
+    let clock = TestClock()
+    let record = Record()
+    let builder = quietBuilder(clock)
+    builder.services.addRecurring(every: Duration.minutes(1)) { _cancellation in
+        record.add("run")
+        throw TestError("no")
+    }
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await clock.pass(Duration.minutes(1))
+    await record.awaitLine("run")
+    await settle()
+    await clock.pass(Duration.minutes(1))
+    await record.awaitLine("run", 2)
+    host.lifetime.requestStop()
+    assertEqual(await running.value, "")
+}
+
+@test
+fn aRunThatFailsMayStopTheHost() async {
+    let clock = TestClock()
+    let builder = quietBuilder(clock)
+    builder.services.addRecurring(every: Duration.minutes(1), name: "job", options: RecurringOptions(onFailure: ServiceFailurePolicy.StopHost)) { _cancellation in
+        throw TestError("no")
+    }
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await clock.pass(Duration.minutes(1))
+    assertEqual(await running.value, "the service 'job' failed: no")
+}
+
+@test
+fn aRunEndedByItsCancellationHasNotFailed() async {
+    let clock = TestClock()
+    let record = Record()
+    let builder = quietBuilder(clock)
+    builder.services.addRecurring(every: Duration.minutes(1), options: RecurringOptions(onFailure: ServiceFailurePolicy.StopHost)) { cancellation in
+        record.add("run")
+        let _ = await cancellation.cancellationRequested()
+        throw CancellationError()
+    }
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await clock.pass(Duration.minutes(1))
+    await record.awaitLine("run")
+    host.lifetime.requestStop()
+    assertEqual(await running.value, "")
+}
+
+@test
+fn whatWasMissedIsNotMadeUpFor() async {
+    let clock = TestClock()
+    let record = Record()
+    let builder = quietBuilder(clock)
+    builder.services.addRecurring(every: Duration.minutes(1)) { _cancellation in record.add("run") }
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await clock.awaitSleep(Duration.minutes(1))
+    clock.advance(Duration.seconds(630))
+    await record.awaitLine("run")
+    // Next at the eleventh minute, half a minute on.
+    await clock.pass(Duration.seconds(30))
+    await record.awaitLine("run", 2)
+    host.lifetime.requestStop()
+    assertEqual(await running.value, "")
+    assertEqual(record.count("run"), 2)
+}
+
+@test
+fn aClockSetBackDoesNotHoldACronJobUp() async {
+    let clock = TestClock()
+    let record = Record()
+    let builder = quietBuilder(clock)
+    try! builder.services.addRecurring("0 * * * *") { _cancellation in record.add("run") }
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await clock.awaitSleep(Duration.hours(1))
+    // To half past, a day before: due next half an hour from then.
+    clock.setBack(Duration.minutes(24 * 60 + 30))
+    await clock.pass(Duration.minutes(30))
+    await record.awaitLine("run")
+    await clock.awaitSleep(Duration.hours(1))
+    host.lifetime.requestStop()
+    assertEqual(await running.value, "")
+    assertEqual(record.count("run"), 1)
+}
+
+@test
+fn aClockSetBackDoesNotHoldAnIntervalUp() async {
+    let clock = TestClock()
+    let record = Record()
+    let builder = quietBuilder(clock)
+    builder.services.addRecurring(every: Duration.minutes(1)) { _cancellation in record.add("run") }
+    let host = try! builder.build()
+    let running = Task.spawn { await outcome(host) }
+    await clock.awaitSleep(Duration.minutes(1))
+    clock.setBack(Duration.hours(24))
+    await record.awaitLine("run", 1)
+    await clock.pass(Duration.minutes(1))
+    await record.awaitLine("run", 2)
+    host.lifetime.requestStop()
+    assertEqual(await running.value, "")
+}

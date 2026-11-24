@@ -1,0 +1,86 @@
+module Sable.Hosting
+
+import Sable.Concurrency
+import Sable.Time
+
+// One service of a host, as it runs.
+@immutable
+final class ServiceRun {
+    let name: String
+    let service: any HostedService
+    let onFailure: ServiceFailurePolicy
+    // Cancelled to stop its run.
+    let source: CancellationTokenSource
+    let run: ServiceStep
+
+    init(name: String, service: any HostedService, onFailure: ServiceFailurePolicy) {
+        self.name = name
+        self.service = service
+        self.onFailure = onFailure
+        source = CancellationTokenSource()
+        run = ServiceStep()
+    }
+}
+
+// How a step of a service's ended: whether it has, or is waited for no more.
+union StepEnd: Sendable {
+    Done
+    Failed(error: any Error)
+    Abandoned
+}
+
+// A step of a service's — its start, its run, its stop — in a task of its
+// own, which the host waits for until the step ends or it is abandoned. A
+// task's child could not be let go: its parent waits for it to end, however
+// long that is.
+@immutable
+final class ServiceStep {
+    let ended: Promise<StepEnd, Never>
+    let task: Mutex<StepTask>
+
+    init() {
+        ended = Promise<StepEnd, Never>()
+        task = Mutex(StepTask())
+    }
+
+    fn begin(_ body: @escaping @Sendable async () throws -> Void) {
+        let ended = self.ended
+        let held = self.task
+        let running = Task.detached {
+            do {
+                try await body()
+                let _ = ended.succeed(StepEnd.Done)
+            } catch {
+                let _ = ended.succeed(StepEnd.Failed(error: error))
+            }
+            held.withLock { (step: inout StepTask) -> Void in
+                step.task = none
+                step.over = true
+            }
+        }
+        held.withLock { (step: inout StepTask) -> Void in
+            // One over already is kept by nothing: its body holds the host,
+            // which holds this.
+            if !step.over {
+                step.task = running
+            }
+        }
+    }
+
+    // No longer waited for; its task cancelled, if it listens to that.
+    fn abandon() {
+        if ended.succeed(StepEnd.Abandoned) {
+            let running = task.withLock { (held: inout StepTask) -> Task<Void>? in held.task }
+            running?.cancel()
+        }
+    }
+
+    fn end() async -> StepEnd {
+        return await ended.value()
+    }
+}
+
+struct StepTask {
+    var task: Task<Void>? = none
+    var over: Bool = false
+}

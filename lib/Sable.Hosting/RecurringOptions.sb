@@ -1,0 +1,24 @@
+module Sable.Hosting
+
+import Sable.Time
+
+/// How a recurring job is run.
+public struct RecurringOptions: Sendable {
+    /// What is done when it falls due while it runs.
+    public var overlap: OverlapPolicy
+    /// What is done when a run throws: logged, and run when next due, or
+    /// the host stopped.
+    public var onFailure: ServiceFailurePolicy
+    /// The zone whose clocks a cron expression is of.
+    public var zone: TimeZone
+    /// Whether it runs as the host starts, besides.
+    public var runAtStart: Bool
+
+    /// The usual ones: UTC; a run that overlaps skipped, a failure ignored.
+    public init(overlap: OverlapPolicy = OverlapPolicy.Skip, onFailure: ServiceFailurePolicy = ServiceFailurePolicy.Ignore, zone: TimeZone = TimeZone.utc, runAtStart: Bool = false) {
+        self.overlap = overlap
+        self.onFailure = onFailure
+        self.zone = zone
+        self.runAtStart = runAtStart
+    }
+}

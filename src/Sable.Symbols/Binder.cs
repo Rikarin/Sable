@@ -7372,6 +7372,7 @@ public sealed partial class Binder {
         var savedSwitchCases = _switchCases;
         var savedOpen = _openTypeParameters;
         var savedEffects = SaveEffects();
+        var (savedThrown, savedOwn) = (_thrownInBody, _threwOwnError);
 
         _containingSymbol = symbol;
         _returnType = returnType;
@@ -7403,6 +7404,7 @@ public sealed partial class Binder {
         _catchDepth = 0;
         _threwInTry = false;
         _thrownInBody = null;
+        _threwOwnError = false;
 
         PushScope();
         foreach (var parameter in symbol.Parameters) {
@@ -7505,6 +7507,9 @@ public sealed partial class Binder {
         // out, not what the context would have allowed: a closure that does
         // not throw is not a throwing closure, which is what 'rethrows' reads.
         _closureThrows = _thrownInBody;
+
+        // And what it throws is not thrown around it: what else is, is.
+        (_thrownInBody, _threwOwnError) = (savedThrown, savedOwn);
 
         PopScope();
         RestoreEffects(savedEffects);

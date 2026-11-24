@@ -1,0 +1,13 @@
+module Sable.Hosting
+
+/// What is done when a job falls due while a run of it is going.
+@derive(Equatable, Debug)
+public enum OverlapPolicy {
+    /// Nothing: that run is skipped.
+    Skip
+    /// It is run once the one going has ended, however many wait; those
+    /// waiting when the host stops are not run.
+    Queue
+    /// It is run beside the one going.
+    Concurrent
+}

@@ -1,0 +1,78 @@
+module Sable.Hosting
+
+import Sable.Diagnostics
+import Sable.IO
+import Sable.Time
+
+/// Where a program's host is put together: .NET's `Host.CreateApplicationBuilder`.
+///
+/// ```sable
+/// let builder = ApplicationBuilder()
+/// builder.environment.name = "Development"
+/// builder.options.shutdownTimeout = Duration.seconds(5)
+/// builder.options.handleSignals = false
+/// builder.services.addWorker("once") { context, _cancellation in
+///     context.lifetime.requestStop()
+/// }
+/// let host = try! builder.build()
+/// try! await host.run()
+/// ```
+public final class ApplicationBuilder {
+    /// The services to run.
+    public let services: HostedServices
+    /// What they are configured by: the environment's variables, if not set.
+    public var configuration: any HostConfiguration
+    /// How they log.
+    public var logging: HostLogging
+    /// Where they run.
+    public var environment: HostEnvironment
+    /// How the host starts and stops.
+    public var options: HostOptions
+    /// The time it goes by: the system's, if not set.
+    public var clock: any HostClock
+    var systemd: Bool = false
+
+    /// A builder with the usual settings. SABLE_LOG's level is the logging's.
+    public init() {
+        services = HostedServices()
+        configuration = EnvironmentConfiguration()
+        logging = HostLogging(minimumLevel: ApplicationBuilder.levelFromEnvironment())
+        environment = HostEnvironment.current()
+        options = HostOptions()
+        clock = SystemHostClock()
+    }
+
+    static fn levelFromEnvironment() -> Level? {
+        if let text = Environment.variable("SABLE_LOG") {
+            if let level = parseLevel(text) {
+                return level
+            }
+        }
+        return Level.Info
+    }
+
+    /// Tells systemd when the host is ready, reloading and stopping, and
+    /// that it is alive as often as its watchdog wants (`Systemd`). Where
+    /// systemd did not start the program, nothing.
+    public fn useSystemd() {
+        systemd = true
+    }
+
+    /// The host, its services made, each from its closure in order. What a
+    /// closure throws, this throws.
+    public fn build() throws -> Host {
+        let context = HostContext {
+            environment: environment,
+            configuration: configuration,
+            logging: logging,
+            lifetime: ApplicationLifetime(),
+            clock: clock
+        }
+        var runs: ServiceRun[>..] = []
+        for entry in services.entries {
+            let service = try entry.make(context)
+            runs.append(ServiceRun(name: entry.name, service: service, onFailure: entry.onFailure ?? options.onServiceFailure))
+        }
+        return Host(context: context, options: options, runs: runs, systemd: systemd && Systemd.isActive)
+    }
+}

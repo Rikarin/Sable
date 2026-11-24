@@ -1,0 +1,11 @@
+module Sable.Hosting
+
+/// What the host does about a service whose `run` throws: .NET's
+/// `BackgroundServiceExceptionBehavior`.
+@derive(Equatable, Debug)
+public enum ServiceFailurePolicy {
+    /// It stops, and `Host.run` throws the failure once it has.
+    StopHost
+    /// It logs the failure; the other services run on.
+    Ignore
+}

@@ -672,4 +672,22 @@ public sealed partial class SilInterpreter {
                 throw new SilTrap($"no signal call '{name}'");
         }
     }
+
+    /// <summary>The runtime's unix_datagram_send: 0 sent, 1 the system has none such, 2 it could not be.</summary>
+    static long Notify(string name, string message) {
+        var isAbstract = name.StartsWith('@');
+        if (OperatingSystem.IsWindows() || name.Length < 2 || (isAbstract ? !OperatingSystem.IsLinux() : name[0] != '/')) {
+            return 1;
+        }
+
+        try {
+            using var socket = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Dgram, System.Net.Sockets.ProtocolType.Unspecified);
+            socket.SendTimeout = 5000;
+            var bytes = System.Text.Encoding.UTF8.GetBytes(message);
+            var to = new System.Net.Sockets.UnixDomainSocketEndPoint(isAbstract ? "\0" + name[1..] : name);
+            return socket.SendTo(bytes, to) == bytes.Length ? 0 : 2;
+        } catch (Exception e) when (e is System.Net.Sockets.SocketException or ArgumentException) {
+            return 2;
+        }
+    }
 }

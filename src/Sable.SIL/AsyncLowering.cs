@@ -457,9 +457,21 @@ public static class AsyncLowering {
 
             CoroutineSplit.SlotsToFields(function, fields);
 
-            // An object made in the frame would be gone when it suspends.
-            foreach (var alloc in function.Blocks.SelectMany(static b => b.Instructions).OfType<AllocRefInst>()) {
-                alloc.OnStack = false;
+            // An object, an array or a block made in the frame would be gone when it suspends.
+            foreach (var inFrame in function.Blocks.SelectMany(static b => b.Instructions)) {
+                switch (inFrame) {
+                    case AllocRefInst alloc:
+                        alloc.OnStack = false;
+                        break;
+
+                    case BuiltinInst { Name: "array_literal_stack" } literal:
+                        literal.Rename("array_literal");
+                        break;
+
+                    case BuiltinInst { Name: "inline_new_stack" } block:
+                        block.Rename("inline_new");
+                        break;
+                }
             }
 
             // Each place it may suspend, a state.

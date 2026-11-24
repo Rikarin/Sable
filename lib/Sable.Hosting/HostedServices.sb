@@ -1,0 +1,78 @@
+module Sable.Hosting
+
+import Sable.Concurrency
+import Sable.Time
+
+/// The services a host is to run, in the order they start; they stop in the
+/// reverse. No container: each is made by a closure, typed, when the host is
+/// built, from a `HostContext` and whatever the closure captures. What two
+/// services share is made before them, and captured by both.
+///
+/// ```sable
+/// let builder = ApplicationBuilder()
+/// builder.services.addWorker("greeter") { context, cancellation in
+///     context.logging.logger("greeter").info("in \(context.environment.name)")
+///     let _ = await cancellation.cancellationRequested()
+/// }
+/// assert(builder.services.names == ["greeter"])
+/// ```
+public final class HostedServices {
+    var entries: HostedServiceEntry[>..] = []
+
+    init() { }
+
+    /// The services' names, in order.
+    public var names: String[>..] => entries.map { $0.name }.toArray()
+
+    /// A service the closure makes as the host is built, with its own
+    /// policy for its failure, if not the host's.
+    public fn add(_ name: String, onFailure: ServiceFailurePolicy? = none, make: @escaping (HostContext) throws -> any HostedService) {
+        entries.append(HostedServiceEntry { name: name, onFailure: onFailure, make: make })
+    }
+
+    /// A service already made.
+    public fn add(_ name: String, _ service: any HostedService, onFailure: ServiceFailurePolicy? = none) {
+        add(name, onFailure: onFailure, make: { _cancellation in service })
+    }
+
+    /// A service that is a closure, run until its token is cancelled.
+    public fn addWorker(_ name: String, onFailure: ServiceFailurePolicy? = none, _ body: @escaping @Sendable async (HostContext, CancellationToken) throws -> Void) {
+        add(name, onFailure: onFailure, make: { context in
+            ClosureService { cancellation in try await body(context, cancellation) }
+        })
+    }
+
+    /// A job run when the cron expression says, in the options' zone.
+    ///
+    /// ```sable
+    /// let builder = ApplicationBuilder()
+    /// try! builder.services.addRecurring("0 */5 * * *") { _cancellation in
+    ///     print("every five hours")
+    /// }
+    /// ```
+    public fn addRecurring(_ cron: String, name: String? = none, options: RecurringOptions = RecurringOptions(), _ body: @escaping @Sendable async (CancellationToken) throws -> Void) throws(CronError) {
+        let expression = try CronExpression.parse(cron)
+        addRecurring(schedule: RecurringSchedule.Cron(expression: expression), name: name ?? cron, options: options, body)
+    }
+
+    /// A job run each time this long has passed.
+    public fn addRecurring(every interval: Duration, name: String? = none, options: RecurringOptions = RecurringOptions(), _ body: @escaping @Sendable async (CancellationToken) throws -> Void) {
+        addRecurring(schedule: RecurringSchedule.Every(interval: interval), name: name ?? "every \(interval.toString())", options: options, body)
+    }
+
+    /// A job run on the schedule. An interval that is not above zero traps.
+    public fn addRecurring(schedule: RecurringSchedule, name: String, options: RecurringOptions = RecurringOptions(), _ body: @escaping @Sendable async (CancellationToken) throws -> Void) {
+        if case .Every(let interval) = schedule {
+            precondition(interval > Duration.zero(), "a recurring job's interval must be above zero")
+        }
+        add(name, onFailure: ServiceFailurePolicy.StopHost, make: { context in
+            RecurringJob(name: name, schedule: schedule, options: options, context: context, body: body)
+        })
+    }
+}
+
+struct HostedServiceEntry {
+    let name: String
+    let onFailure: ServiceFailurePolicy?
+    let make: (HostContext) throws -> any HostedService
+}

@@ -1333,7 +1333,10 @@ static bool executor_try_take(SableExecutor *executor, SableTask *task) {
 // A task that waits escalates the holder to its own priority, so that a
 // lower-priority holder, queued behind others, does not keep it waiting
 // (docs/06 §6.7). The holder is read under the tree's lock: a task is freed
-// only under it, and lets the actor go — clearing 'holder' — before.
+// only under it, and lets the actor go — clearing 'holder' — before. It is
+// read before the task is in the inbox: once it is, another thread may run
+// it, and the actor go with it. (One that takes the actor in between is not
+// escalated.)
 static bool executor_take_or_wait(SableExecutor *executor, SableTask *task) {
     // Read now: once in the inbox, the task is another thread's to run.
     int64_t priority = __atomic_load_n(&task->priority, __ATOMIC_RELAXED);
@@ -1348,16 +1351,17 @@ static bool executor_take_or_wait(SableExecutor *executor, SableTask *task) {
             continue;
         }
 
+        spin_lock(&tree_lock);
+        SableTask *holder = __atomic_load_n(&executor->holder, __ATOMIC_ACQUIRE);
         task->next_mail = (SableTask *)(inbox & ~(uintptr_t)EXECUTOR_HELD);
-        if (__atomic_compare_exchange_n(&executor->inbox, &inbox, (uintptr_t)task | EXECUTOR_HELD, true, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
-            spin_lock(&tree_lock);
-            SableTask *holder = __atomic_load_n(&executor->holder, __ATOMIC_ACQUIRE);
-            if (holder != NULL && holder != task && __atomic_load_n(&holder->priority, __ATOMIC_RELAXED) < priority) {
-                escalate(holder, priority);
-                actor_escalations++;
-            }
+        bool waits = __atomic_compare_exchange_n(&executor->inbox, &inbox, (uintptr_t)task | EXECUTOR_HELD, true, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+        if (waits && holder != NULL && holder != task && __atomic_load_n(&holder->priority, __ATOMIC_RELAXED) < priority) {
+            escalate(holder, priority);
+            actor_escalations++;
+        }
 
-            spin_unlock(&tree_lock);
+        spin_unlock(&tree_lock);
+        if (waits) {
             return false;
         }
     }
@@ -1597,7 +1601,14 @@ static void after_suspend(SableTask *task) {
             break;
 
         default:
-            // A hop: queued again, to take its actor as it runs.
+            // A hop: queued again, to take its actor as it runs. The one it
+            // leaves is let go first: what the task holds keeps it there,
+            // until another thread runs the task.
+            if (release != NULL) {
+                executor_release(release);
+                release = NULL;
+            }
+
             schedule(task);
             break;
     }

@@ -1,0 +1,132 @@
+module Sable.Hosting
+
+import Sable.Concurrency
+import Sable.Diagnostics
+import Sable.Time
+
+// A job's service: a loop over its events — a time due, a run ended — which
+// are its task group's children, so that a run's end is heard of as it comes
+// and nothing is kept of it.
+@immutable
+final class RecurringJob: HostedService {
+    let name: String
+    let schedule: RecurringSchedule
+    let options: RecurringOptions
+    let context: HostContext
+    let body: async (CancellationToken) throws -> Void
+
+    init(name: String, schedule: RecurringSchedule, options: RecurringOptions, context: HostContext, body: @escaping @Sendable async (CancellationToken) throws -> Void) {
+        self.name = name
+        self.schedule = schedule
+        self.options = options
+        self.context = context
+        self.body = body
+    }
+
+    async fn run(cancellation: CancellationToken) throws {
+        // Cancelled too by a run that fails, when that is to stop the host.
+        let source = CancellationTokenSource.linked([cancellation])
+        let token = source.token
+        let failure = await withTaskGroup(of: JobEvent.self) { group in
+            var failure: (any Error)? = none
+            var running = 0
+            var waiting = 0
+            var last = self.context.clock.now
+            if self.options.runAtStart {
+                running += 1
+                group.spawn { await self.runOnce(token) }
+            }
+            var due = self.schedule.next(after: last, now: last, zone: self.options.zone)
+            if let time = due {
+                group.spawn { await self.wait(until: time, token) }
+            }
+            while let event = await group.next() {
+                match event {
+                    case .Stopped => {
+                        waiting = 0
+                    }
+                    case .Due => {
+                        // Not yet, after all: the clock was set back.
+                        if self.schedule.isCron && self.context.clock.now < due! {
+                            due = self.schedule.next(after: due!, now: self.context.clock.now, zone: self.options.zone)
+                            if let time = due {
+                                group.spawn { await self.wait(until: time, token) }
+                            }
+                            continue
+                        }
+                        last = due!
+                        if running == 0 || self.options.overlap == OverlapPolicy.Concurrent {
+                            running += 1
+                            group.spawn { await self.runOnce(token) }
+                        } else if self.options.overlap == OverlapPolicy.Queue {
+                            waiting += 1
+                        } else {
+                            self.log(Level.Warning, "a run was skipped: the one before has not ended", [])
+                        }
+                        due = self.schedule.next(after: last, now: self.context.clock.now, zone: self.options.zone)
+                        if let time = due {
+                            group.spawn { await self.wait(until: time, token) }
+                        }
+                    }
+                    case .Ended(let error) => {
+                        running -= 1
+                        if let thrown = error {
+                            self.log(Level.Error, "a run failed", [field("error", thrown.description())])
+                            if self.options.onFailure == ServiceFailurePolicy.StopHost {
+                                if failure == none {
+                                    failure = thrown
+                                }
+                                source.cancel()
+                            }
+                        }
+                        if waiting > 0 && !token.isCancellationRequested {
+                            waiting -= 1
+                            running += 1
+                            group.spawn { await self.runOnce(token) }
+                        }
+                    }
+                }
+            }
+            return failure
+        }
+        if let error = failure {
+            throw error
+        }
+        // A schedule with no more times to come is done, but the job is not
+        // a reason to stop.
+    }
+
+    fn wait(until time: UtcDateTime, _ token: CancellationToken) async -> JobEvent {
+        do {
+            try await context.sleep(until: time, cancellation: token)
+            return token.isCancellationRequested ? JobEvent.Stopped : JobEvent.Due
+        } catch {
+            return JobEvent.Stopped
+        }
+    }
+
+    fn runOnce(_ token: CancellationToken) async -> JobEvent {
+        do {
+            try await body(token)
+        } catch {
+            if !(token.isCancellationRequested && error is CancellationError) {
+                return JobEvent.Ended(error: error)
+            }
+        }
+        return JobEvent.Ended(error: none)
+    }
+
+    fn log(_ level: Level, _ message: String, _ fields: Field[>..]) {
+        var all: Field[>..] = [field("job", name)]
+        for each in fields {
+            all.append(each)
+        }
+        context.logging.write(level, message, all)
+    }
+}
+
+union JobEvent: Sendable {
+    Due
+    Stopped
+    Ended(error: (any Error)?)
+}

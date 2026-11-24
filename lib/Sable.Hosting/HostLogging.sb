@@ -1,0 +1,39 @@
+module Sable.Hosting
+
+import Sable.Diagnostics
+
+/// How the host and its services log: what each logger it makes is set to.
+/// A `Logger` is one task's; this is what tasks share, and make theirs from.
+///
+/// ```sable
+/// let logging = HostLogging(minimumLevel: .Warning)
+/// let logger = logging.logger("orders")
+/// assert(!logger.isEnabled(.Info) && logger.isEnabled(.Error))
+/// ```
+public struct HostLogging: Sendable {
+    /// What is logged, and nothing below it; nothing at all for none.
+    public var minimumLevel: Level?
+    /// Whether each line is stamped with the time.
+    public var timestamps: Bool
+
+    /// Logging from this level up.
+    public init(minimumLevel: Level? = Level.Info, timestamps: Bool = false) {
+        self.minimumLevel = minimumLevel
+        self.timestamps = timestamps
+    }
+
+    /// A logger under this name: a category.
+    public fn logger(_ name: String) -> Logger {
+        let logger = Logger(name)
+        logger.threshold = minimumLevel ?? Level.Error
+        logger.timestamps = timestamps
+        return logger
+    }
+
+    // A line of the host's own.
+    fn write(_ level: Level, _ message: String, _ fields: Field[>..]) {
+        if minimumLevel != none {
+            logger("host").log(level, message, fields)
+        }
+    }
+}

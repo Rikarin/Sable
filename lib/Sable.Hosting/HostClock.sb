@@ -1,0 +1,41 @@
+module Sable.Hosting
+
+import Sable.Concurrency
+import Sable.Time
+
+/// The time the host goes by — its timeouts, its jobs' schedules — and the
+/// one place it does: a test's clock takes its place
+/// (`ApplicationBuilder.clock`). No more than that: the seam a clock of
+/// Sable.Time's is to take.
+public protocol HostClock: Sendable {
+    /// What time it is.
+    var now: UtcDateTime { get }
+
+    /// Waits until it is this time, or the task is cancelled; no longer than
+    /// it was to be, though the clock be set back meanwhile.
+    fn sleep(until time: UtcDateTime) async throws(CancellationError)
+}
+
+// The system's clock.
+struct SystemHostClock: HostClock {
+    var now: UtcDateTime => UtcDateTime.now()
+
+    // A minute at most at a time: the clock may be set, or the machine
+    // sleep, meanwhile.
+    fn sleep(until time: UtcDateTime) async throws(CancellationError) {
+        let start = Instant.now()
+        let whole = time.durationSince(UtcDateTime.now())
+        while true {
+            var left = time.durationSince(UtcDateTime.now())
+            let most = whole - start.elapsed
+            if most < left {
+                left = most
+            }
+            if left <= Duration.zero() {
+                return
+            }
+            let minute = Duration.minutes(1)
+            try await Task.sleep(for: left < minute ? left : minute)
+        }
+    }
+}

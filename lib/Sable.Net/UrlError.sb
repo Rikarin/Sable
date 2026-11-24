@@ -1,0 +1,15 @@
+module Sable.Net
+
+/// Why text is not a URL.
+@derive(Equatable, Debug)
+public union UrlError: Error {
+    /// The text is not a URL: what was wrong, as the WHATWG URL standard's
+    /// validation errors name it.
+    Invalid(input: String, reason: String)
+
+    public fn description() -> String {
+        return match self {
+            case .Invalid(let input, let reason) => "'\(input)' is not a URL: \(reason)"
+        }
+    }
+}

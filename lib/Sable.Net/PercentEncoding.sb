@@ -1,0 +1,93 @@
+module Sable.Net
+
+import Sable.Text
+
+/// Percent-encoding (RFC 3986, by the WHATWG URL standard's rules): each
+/// byte of a code point's UTF-8 that the set holds written as '%' and two
+/// upper-case hexadecimal digits; and decoding back.
+///
+/// ```sable
+/// assert(PercentEncoding.encode("a b/ü", .Path) == "a%20b/%C3%BC")
+/// assert(PercentEncoding.encode("a b/ü", .Component) == "a%20b%2F%C3%BC")
+/// assert(PercentEncoding.decodeText("a%20b%2F%C3%BC") == "a b/ü")
+/// ```
+public struct PercentEncoding {
+    /// The text with every code point the set holds percent-encoded; a
+    /// space as '+' rather than %20 when asked, as forms write it.
+    public static fn encode(_ text: String, _ encodeSet: PercentEncodeSet, spaceAsPlus: Bool = false) -> String {
+        var written: U8[>..] = []
+        for c in text {
+            PercentEncoding.append(c.codePoint, encodeSet, spaceAsPlus, &written)
+        }
+        unsafe {
+            return String.fromUtf8Unchecked(written)
+        }
+    }
+
+    static fn append(_ code: Int, _ encodeSet: PercentEncodeSet, _ spaceAsPlus: Bool, _ written: inout U8[>..]) {
+        if spaceAsPlus && code == 0x20 {
+            written.append(0x2B)
+            return
+        }
+        var bytes: U8[>..] = []
+        Char.fromCodePoint(value: code)!.encodeUtf8(into: &bytes)
+        for byte in bytes {
+            if encodeSet.contains(Int(byte)) {
+                written.append(0x25)
+                written.append(hexDigit(Int(byte) >> 4))
+                written.append(hexDigit(Int(byte) & 15))
+            } else {
+                written.append(byte)
+            }
+        }
+    }
+
+    /// The bytes the text's percent-encoding writes: each '%' and two
+    /// hexadecimal digits one byte, anything else its UTF-8.
+    public static fn decode(_ text: String) -> U8[>..] {
+        var bytes: U8[>..] = []
+        bytes.append(utf8: text)
+        return PercentEncoding.decodeBytes(bytes)
+    }
+
+    /// The bytes' percent-encoding decoded: '%' and two hexadecimal digits
+    /// as the byte they write, every other byte as it is.
+    public static fn decodeBytes(_ bytes: U8[:]) -> U8[>..] {
+        var written: U8[>..] = []
+        var i = 0
+        while i < bytes.count {
+            let byte = bytes[i]
+            if byte == 0x25 && i + 2 < bytes.count && hexValueOf(Int(bytes[i + 1])) >= 0 && hexValueOf(Int(bytes[i + 2])) >= 0 {
+                written.append(U8.truncating(hexValueOf(Int(bytes[i + 1])) * 16 + hexValueOf(Int(bytes[i + 2]))))
+                i += 3
+            } else {
+                written.append(byte)
+                i += 1
+            }
+        }
+        return written
+    }
+
+    /// The text's percent-encoding decoded, as UTF-8 text: a byte that is
+    /// not UTF-8 read as U+FFFD.
+    public static fn decodeText(_ text: String) -> String {
+        return String.fromUtf8Lossy(PercentEncoding.decode(text))
+    }
+}
+
+fn hexDigit(_ value: Int) -> U8 {
+    return U8.truncating(value < 10 ? 0x30 + value : 0x41 + value - 10)
+}
+
+fn hexValueOf(_ code: Int) -> Int {
+    if code >= 0x30 && code <= 0x39 {
+        return code - 0x30
+    }
+    if code >= 0x41 && code <= 0x46 {
+        return code - 0x41 + 10
+    }
+    if code >= 0x61 && code <= 0x66 {
+        return code - 0x61 + 10
+    }
+    return -1
+}

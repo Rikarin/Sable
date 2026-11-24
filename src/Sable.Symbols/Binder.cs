@@ -9260,6 +9260,10 @@ public sealed partial class Binder {
         Core.IsNumeric(type) || type.Equals(Core.String) || type.Equals(Core.Bool) || type.Equals(Core.Char)
         || type is OptionalTypeSymbol || type.IsError;
 
+    /// <summary>What the type parameters of the operand's generic type stand for, where it is one.</summary>
+    static TypeSubstitution? OwnerOf(TypeSymbol operand) =>
+        operand is NamedTypeSymbol named ? TypeSubstitution.For(named) : null;
+
     /// <summary>What a user operator gives: 'Self' in a protocol's requirement is the operand's type.</summary>
     static TypeSymbol UserResultType(FunctionSymbol method, TypeSymbol operand, TypeSubstitution? owner = null) =>
         method.ReturnType is TypeParameterSymbol { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } ? operand

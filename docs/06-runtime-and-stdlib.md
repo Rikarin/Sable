@@ -814,7 +814,9 @@ Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, validated
                     Base32 (and base32hex) and Hex, RFC 4648, strict, a
                     DecodeError naming the offset, encoded in place
 Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
-                    generic over ElementaryFunctions; integer math; the
+                    generic over ElementaryFunctions; Complex<T> with
+                    them all (Kahan's branch cuts, signed zeros, one point
+                    at infinity); integer math; the
                     vector kernels over F32[:] and F64[:] (sum, dot,
                     cosineSimilarity, softmax, …: TensorPrimitives');
                     Decimal (.NET's layout and rounding, below);

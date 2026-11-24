@@ -1,0 +1,322 @@
+module ComplexTests
+
+// Complex (Sable.Math): its arithmetic, equality, hashing and text, tested
+// with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Math
+// The elementary functions are in ComplexElementaryFunctionsTests.sb.
+
+import Sable.Math
+import Sable.Testing
+import FloatAssertions
+
+/// Fails unless both parts are exactly these: a zero's sign, and NaN as NaN.
+fn assertParts(_ actual: Complex<F64>, _ re: F64, _ im: F64) {
+    assertSame(actual.real, re)
+    assertSame(actual.imaginary, im)
+}
+
+/// Fails unless both parts are exactly these, as F32s.
+fn assertParts(_ actual: Complex<F32>, _ re: F32, _ im: F32) {
+    assertSame(actual.real, re)
+    assertSame(actual.imaginary, im)
+}
+
+/// Written once over Numeric, for any type that is one.
+fn sumOfSquares<T: Numeric>(_ values: T[:]) -> T {
+    var total = T.zero
+    for value in values {
+        total += value * value
+    }
+    return total
+}
+
+/// Written once over SignedNumeric.
+fn negated<T: SignedNumeric>(_ x: T) -> T => -x
+
+// Construction and parts.
+
+@test
+fn aNumberHasTheRealAndImaginaryPartsItWasMadeOf() {
+    let z = Complex(1.5, -2.0)
+    assertSame(z.real, 1.5)
+    assertSame(z.imaginary, -2.0)
+    var w = z
+    w.imaginary = 3.0
+    assertParts(w, 1.5, 3.0)
+    assertParts(Complex<F64>.zero, 0.0, 0.0)
+    assertParts(Complex<F64>.one, 1.0, 0.0)
+    assertParts(Complex<F64>.i, 0.0, 1.0)
+    assertParts(Complex<F32>.i, 0.0, 1.0)
+}
+
+@test
+fn polarCoordinatesMakeTheNumberAtThatDistanceAndAngle() {
+    let z = Complex(magnitude: 2.0, phase: F64.pi / 3.0)
+    assertWithin(z.real, 1.0000000000000002, ulps: 1)
+    assertWithin(z.imaginary, 1.7320508075688772, ulps: 1)
+    assertParts(Complex(magnitude: 3.0, phase: 0.0), 3.0, 0.0)
+    assertParts(Complex(magnitude: 0.0, phase: inf), 0.0, 0.0)
+    assertParts(Complex(magnitude: inf, phase: nan), inf, 0.0)
+    assertParts(Complex(magnitude: 1.0, phase: inf), nan, nan)
+    let back = Complex(magnitude: z.magnitude, phase: z.phase)
+    assert((back - z).magnitude < 4.0 * F64.epsilon)
+}
+
+@test
+fn theConjugateReflectsInTheRealAxis() {
+    assertParts(Complex(1.0, 2.0).conjugate, 1.0, -2.0)
+    assertParts(Complex(1.0, -0.0).conjugate, 1.0, 0.0)
+}
+
+@test
+fn theMagnitudeIsHypotWithoutOverflowOrUnderflow() {
+    assertSame(Complex(3.0, 4.0).magnitude, 5.0)
+    assertSame(Complex(-3e300, 4e300).magnitude, 5e300)
+    assertSame(Complex(3e-310, -4e-310).magnitude, 5e-310)
+    assertSame(Complex(3.0 as F32, 4.0).magnitude, 5.0)
+    assertSame(Complex(3e30 as F32, 4e30).magnitude, 5e30)
+    assertSame(Complex(3.0, 4.0).magnitudeSquared, 25.0)
+    assertSame(Complex(nan, 1.0).magnitude, inf)
+    assertSame(Complex(1.0, -inf).magnitude, inf)
+}
+
+@test
+fn thePhaseIsAtan2OfTheParts() {
+    assertSame(Complex(1.0, 1.0).phase, F64.pi / 4.0)
+    assertSame(Complex(-1.0, 0.0).phase, F64.pi)
+    assertSame(Complex(-1.0, -0.0).phase, -F64.pi)
+    assertSame(Complex(0.0, -0.0).phase, -0.0)
+    assertSame(Complex(inf, 0.0).phase, nan)
+}
+
+@test
+fn finitenessAndZeroLookAtBothParts() {
+    assert(Complex(1.0, 2.0).isFinite)
+    assert(!Complex(1.0, inf).isFinite)
+    assert(!Complex(nan, 0.0).isFinite)
+    assert(Complex(-0.0, 0.0).isZero)
+    assert(!Complex(0.0, 1e-300).isZero)
+}
+
+// Arithmetic.
+
+@test
+fn sumsDifferencesAndNegationArePartByPart() {
+    let a = Complex(1.5, -2.0)
+    let b = Complex(0.25, 4.0)
+    assertParts(a + b, 1.75, 2.0)
+    assertParts(a - b, 1.25, -6.0)
+    assertParts(-a, -1.5, 2.0)
+    var c = a
+    c += b
+    c -= Complex(1.0, 1.0)
+    assertParts(c, 0.75, 1.0)
+    assertParts(Complex(1.0 as F32, 2.0) + Complex(3.0, 4.0), 4.0, 6.0)
+}
+
+@test
+fn productsMultiplyMagnitudesAndAddPhases() {
+    assertParts(Complex(1.0, 2.0) * Complex(3.0, 4.0), -5.0, 10.0)
+    assertParts(Complex<F64>.i * Complex<F64>.i, -1.0, 0.0)
+    assertParts(Complex(3.0, 4.0) * Complex(3.0, 4.0).conjugate, 25.0, 0.0)
+    var z = Complex(0.0, 2.0)
+    z *= z
+    assertParts(z, -4.0, 0.0)
+    assertParts(Complex(1.0, -2.0).multiplied(by: 2.0), 2.0, -4.0)
+    assertParts(Complex(1.0, -2.0).divided(by: 4.0), 0.25, -0.5)
+    assertParts(Complex(2.0 as F32, 1.0) * Complex(2.0, -1.0), 5.0, 0.0)
+}
+
+@test
+fn aProductTooLargeIsThePointAtInfinity() {
+    let big = Complex(1e200, 1e200)
+    assert(!(big * big).isFinite)
+    assert(big * big == Complex<F64>.infinity)
+}
+
+@test
+fn quotientsAreExactWhereTheyCanBe() {
+    assertParts(Complex(-5.0, 10.0) / Complex(3.0, 4.0), 1.0, 2.0)
+    assertParts(Complex(1.0, 0.0) / Complex<F64>.i, 0.0, -1.0)
+    var z = Complex(4.0, 2.0)
+    z /= Complex(2.0, 0.0)
+    assertParts(z, 2.0, 1.0)
+    assertParts(Complex(5.0 as F32, 0.0) / Complex(2.0, 1.0), 2.0, -1.0)
+    let third = Complex(1.0, 2.0) / Complex(3.0, -4.0)
+    assertWithin(third.real, -0.2, ulps: 1)
+    assertWithin(third.imaginary, 0.4, ulps: 1)
+}
+
+@test
+fn quotientsNeitherOverflowNorUnderflowOnTheWay() {
+    // The divisors' squared magnitudes overflow, or underflow, in the type.
+    let quarterTurn = Complex(1e300, 1e300) / Complex(1e300, -1e300)
+    assertSame(quarterTurn.real, 0.0)
+    assertWithin(quarterTurn.imaginary, 1.0, ulps: 1)
+    let small = Complex(1e-300, 1e-300) / Complex(1e-300, -1e-300)
+    assertSame(small.real, 0.0)
+    assertWithin(small.imaginary, 1.0, ulps: 1)
+    let subnormal = Complex(3e-320, 4e-320) / Complex(0.0, 5e-320)
+    assertWithin(subnormal.real, 0.8, ulps: 1)
+    assertWithin(subnormal.imaginary, -0.6, ulps: 1)
+    let large = Complex(6e307, 8e307) / Complex(3e307, 4e307)
+    assertWithin(large.real, 2.0, ulps: 1)
+    assert(large.imaginary.abs() < 1e-15)
+    let narrow = Complex(1e30 as F32, 1e30) / Complex(1e30, -1e30)
+    assertWithin(narrow.imaginary, 1.0, ulps: 1)
+    let narrowSubnormal = Complex(2e-40 as F32, 0.0) / Complex(0.0, 2e-40)
+    assertSame(narrowSubnormal.real, 0.0)
+    assertWithin(narrowSubnormal.imaginary, -1.0, ulps: 1)
+    // Neither a large dividend nor a small divisor overflows on the way.
+    assertParts(Complex(1e308, 1e308) / Complex(1.0, 1.0), 1e308, 0.0)
+    let lifted = Complex(1e-200, 0.0) / Complex(1e-150, 1e-150)
+    assertWithin(lifted.real, 5e-51, ulps: 1)
+    assertWithin(lifted.imaginary, -5e-51, ulps: 1)
+    let tiny = Complex(1.0, 1.0) / Complex(1e300, 1e300)
+    assertWithin(tiny.real, 1e-300, ulps: 1)
+    assertParts(Complex(1e-300, 0.0) / Complex(1e300, 0.0), 0.0, 0.0)
+    assert(!(Complex(1e300, 0.0) / Complex(1e-300, 0.0)).isFinite)
+}
+
+@test
+fn dividingByZeroOrInfinityGivesInfinityZeroOrNaN() {
+    assert(Complex(1.0, 0.0) / Complex<F64>.zero == Complex<F64>.infinity)
+    assertParts(Complex(1.0, 2.0) / Complex(inf, 0.0), 0.0, 0.0)
+    assert(Complex(inf, 0.0) / Complex(1.0, 0.0) == Complex<F64>.infinity)
+    assert((Complex<F64>.zero / Complex<F64>.zero).real.isNaN)
+    assert((Complex(inf, 0.0) / Complex(nan, 0.0)).real.isNaN)
+    assert((Complex(nan, 0.0) / Complex<F64>.zero).real.isNaN)
+}
+
+@test
+fn genericNumericCodeTakesComplexNumbers() {
+    let values = [Complex(1.0, 1.0), Complex(0.0, 2.0)]
+    assertParts(sumOfSquares(values), -4.0, 2.0)
+    assertParts(negated(Complex(1.0, -1.0)), -1.0, 1.0)
+    assert(power(Complex<F64>.i, 2) == Complex(-1.0, 0.0))
+}
+
+// Equality and hashing.
+
+@test
+fn equalNumbersHaveEqualPartsAZeroOfEitherSign() {
+    assert(Complex(1.0, 2.0) == Complex(1.0, 2.0))
+    assert(Complex(1.0, 2.0) != Complex(1.0, -2.0))
+    assert(Complex(0.0, 0.0) == Complex(-0.0, -0.0))
+    assert(Complex(1.0 as F32, 2.0) == Complex(1.0, 2.0))
+}
+
+@test
+fn everyNonFiniteNumberIsTheOnePointAtInfinity() {
+    let nanReal = Complex(nan, 1.0)
+    assert(nanReal == nanReal)
+    assert(nanReal == Complex(2.0, -inf))
+    assert(Complex(inf, 0.0) == Complex(-inf, nan))
+    assert(Complex(inf, 0.0) != Complex(1e308, 0.0))
+    assert(Complex(1.0, 0.0) != Complex(nan, 0.0))
+}
+
+@test
+fn equalNumbersHashAlike() {
+    assert(Complex(0.0, -0.0).hashValue == Complex<F64>.zero.hashValue)
+    assert(Complex(nan, 3.0).hashValue == Complex<F64>.infinity.hashValue)
+    assert(Complex(1.0, 2.0).hashValue == Complex(1.0, 2.0).hashValue)
+    assert(Complex(1.0, 2.0).hashValue != Complex(2.0, 1.0).hashValue)
+    var seen: [Complex<F64>: Int] = [:]
+    seen[Complex(1.0, 2.0)] = 1
+    seen[Complex(1.0, 2.0)] = 2
+    seen[Complex(nan, 0.0)] = 3
+    seen[Complex(0.0, inf)] = 4
+    assert(seen.count == 2 && seen[Complex(-inf, 1.0)] == 4)
+}
+
+// Text.
+
+@test
+fn aNumberIsWrittenAsItsPartsWithTheImaginaryOnesSign() {
+    assert("\(Complex(1.5, -2.0))" == "1.5 - 2.0i")
+    assert("\(Complex(1.5, 2.0))" == "1.5 + 2.0i")
+    assert("\(Complex(-1.0, -0.0))" == "-1.0 - 0.0i")
+    assert("\(Complex(0.5 as F32, 0.25))" == "0.5 + 0.25i")
+    assert("\(Complex(inf, nan))" == "inf + nani")
+}
+
+@test
+fn theSpecAppliesToEachPartAndTheWidthToTheWhole() {
+    let z = Complex(1.0, -2.5)
+    assert("\(z:.2)" == "1.00 - 2.50i")
+    assert("\(z:+)" == "+1.0 - 2.5i")
+    assert("\(z:e)" == "1e+00 - 2.5e+00i")
+    assert("[\(z:>12)]" == "[  1.0 - 2.5i]")
+    assert("[\(z:<12)]" == "[1.0 - 2.5i  ]")
+    assert("[\(z:*^14)]" == "[**1.0 - 2.5i**]")
+    assert("[\(z:012)]" == "[  1.0 - 2.5i]")
+}
+
+@test
+fn debugWritesTheNumberAsSourceWould() {
+    assert(Complex(1.0, -2.0).debugDescription() == "Complex(1.0, -2.0)")
+    assert("\(Complex(1.0, 0.5):?)" == "Complex(1.0, 0.5)")
+    assert("[\(Complex(1.0, 0.5):>20?)]" == "[   Complex(1.0, 0.5)]")
+    assert(Complex(2.0 as F32, 0.0).debugDescription() == "Complex(2.0, 0.0)")
+}
+
+@test
+fn parsingReadsWhatFormattingWrites() {
+    let points = [Complex(1.5, -2.0), Complex(-0.1, 1e-300), Complex(1e300, -7.25), Complex(0.0, -0.0)]
+    for z in points {
+        assertParts(try! Complex<F64>.parse("\(z)"), z.real, z.imaginary)
+    }
+    let narrow = Complex(0.1 as F32, -3.75)
+    assertParts(try! Complex<F32>.parse("\(narrow)"), 0.1, -3.75)
+}
+
+@test
+fn parsingTakesEitherPartAloneWithOrWithoutSpaces() {
+    assertParts(try! Complex<F64>.parse("3"), 3.0, 0.0)
+    assertParts(try! Complex<F64>.parse("  -2.5  "), -2.5, 0.0)
+    assertParts(try! Complex<F64>.parse("2i"), 0.0, 2.0)
+    assertParts(try! Complex<F64>.parse("-4.5i"), 0.0, -4.5)
+    assertParts(try! Complex<F64>.parse("i"), 0.0, 1.0)
+    assertParts(try! Complex<F64>.parse("-i"), 0.0, -1.0)
+    assertParts(try! Complex<F64>.parse("+i"), 0.0, 1.0)
+    assertParts(try! Complex<F64>.parse("1+i"), 1.0, 1.0)
+    assertParts(try! Complex<F64>.parse("1 - i"), 1.0, -1.0)
+    assertParts(try! Complex<F64>.parse("1e-3+2.5e2i"), 0.001, 250.0)
+    assertParts(try! Complex<F64>.parse("-1E+2 - 3E-2i"), -100.0, -0.03)
+    assertParts(try! Complex<F64>.parse("2.5e-2i"), 0.0, 0.025)
+    assertParts(try! Complex<F64>.parse("1. - 2.i"), 1.0, -2.0)
+    let special = try! Complex<F64>.parse("inf - nani")
+    assertSame(special.real, inf)
+    assert(special.imaginary.isNaN)
+}
+
+@test
+fn parsingSaysWhatIsWrongAndWhere() {
+    for blank in ["", "   "] {
+        do {
+            let _ = try Complex<F64>.parse(blank)
+            assert(false, "parsed")
+        } catch {
+            assert(error == .Empty)
+        }
+    }
+    do {
+        let _ = try Complex<F64>.parse("1 + 2xi")
+        assert(false, "parsed")
+    } catch {
+        assert(error == .InvalidDigit(at: 5) || error == .Invalid(at: 5), "\(error.description())")
+    }
+    do {
+        let _ = try Complex<F64>.parse("1x + 2i")
+        assert(false, "parsed")
+    } catch {
+        assert(error == .InvalidDigit(at: 1) || error == .Invalid(at: 1), "\(error.description())")
+    }
+    do {
+        let _ = try Complex<F64>.parse("j")
+        assert(false, "parsed")
+    } catch {
+        assert(error != .Empty)
+    }
+}

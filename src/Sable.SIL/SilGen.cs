@@ -7145,7 +7145,7 @@ public sealed partial class SilGen {
                     return UserBinary(userBinary, binaryMethod);
 
                 case BoundUnaryOperator { Method: { } unaryMethod } userUnary:
-                    return Expression(new BoundCall(userUnary.Syntax, null, OperatorWitness(unaryMethod, userUnary.Operand.Type) ?? unaryMethod, [userUnary.Operand], userUnary.Type));
+                    return UserUnary(userUnary, unaryMethod);
 
                 case BoundUnaryOperator unary:
                     return Unary(unary);
@@ -8383,6 +8383,20 @@ public sealed partial class SilGen {
             };
 
         /// <summary>
+        ///     '-z' through an operator the program declares: a call to it,
+        ///     which, on a generic type, takes its type arguments from the
+        ///     operand's — from what the operand refers to, when it is passed
+        ///     by reference.
+        /// </summary>
+        SilValue? UserUnary(BoundUnaryOperator unary, FunctionSymbol method) {
+            var callee = OperatorWitness(method, unary.Operand.Type) ?? method;
+            var owner = Sub(unary.Operand.Type) is ReferenceTypeSymbol reference ? reference.ReferencedType : Sub(unary.Operand.Type);
+            return Expression(new BoundCall(unary.Syntax, null, callee, [unary.Operand], unary.Type) {
+                Substitution = OwnerOf(callee) is { IsGenericDefinition: true } ? TypeSubstitution.For(owner) : TypeSubstitution.Empty,
+            });
+        }
+
+        /// <summary>
         ///     'a == b' through an operator the program declares: a call to it.
         ///     '!=' is the negation of '=='; '>' is '<' with the operands
         ///     swapped, '<=' its negation, '>=' the negation of '<'.
@@ -9064,7 +9078,10 @@ public sealed partial class SilGen {
             if (!IsExtensionOnly(property)
                 && Sub(on.ReferencedType) is NamedTypeSymbol { TypeKind: not TypeKind.Protocol } concrete
                 && StaticField(concrete, property.Name) is { } own) {
-                return Expression(new BoundFieldAccess(access.Syntax, null, own, access.Type));
+                // A generic type's, 'Complex<F64>.zero', is the instance for its arguments.
+                return Expression(new BoundFieldAccess(access.Syntax, null, own, access.Type) {
+                    Substitution = TypeSubstitution.For(concrete),
+                });
             }
 
             var chosen = IsExtensionOnly(property) ? property : DefaultStaticField(property);

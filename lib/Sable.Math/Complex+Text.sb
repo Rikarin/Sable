@@ -1,0 +1,152 @@
+module Sable.Math
+
+// A complex number as text (Complex.sb): written `a + bi` or `a - bi`, each
+// part as its float writes itself, and read back from the same, or from
+// either part alone.
+
+extension Complex: Formattable where T: Formattable {
+    /// `real + imaginaryi`, or `real - |imaginary|i` when the imaginary part
+    /// is negative (-0.0 included), each part written as the spec says
+    /// (its sign option for the real part, its precision and kind for
+    /// both), the whole then padded to the width, on the left unless the
+    /// spec aligns it.
+    ///
+    /// ```sable
+    /// let z = Complex(1.5, -2.0)
+    /// assert("\(z)" == "1.5 - 2.0i")
+    /// assert("\(z:.2)" == "1.50 - 2.00i")
+    /// assert("[\(Complex(1.0, 1.0):>12)]" == "[  1.0 + 1.0i]")
+    /// assert("\(z:?)" == "Complex(1.5, -2.0)")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String {
+        var part = spec
+        part.width = 0
+        part.fill = ' '
+        part.alignment = .Automatic
+        part.zeroPadded = false
+        if spec.kind == .Debug {
+            return spec.padded("Complex(\(real.format(part)), \(imaginary.format(part)))")
+        }
+        var magnitude = part
+        magnitude.sign = .Negative
+        let between = imaginary.isSignMinus ? " - " : " + "
+        let text = real.format(part) + between + imaginary.abs().format(magnitude) + "i"
+        var whole = spec
+        if whole.alignment == .Automatic {
+            whole.alignment = .Right
+        }
+        return whole.padded(text)
+    }
+}
+
+extension Complex: Debug where T: Debug {
+    /// As source writes it: `Complex(1.5, -2.0)`.
+    public fn debugDescription() -> String {
+        return "Complex(\(real.debugDescription()), \(imaginary.debugDescription()))"
+    }
+}
+
+extension Complex: Parsable where T: Parsable {
+    /// The number the text writes: `a + bi` or `a - bi` as `format` writes
+    /// it, with or without the spaces; a real part alone, `a`; or an
+    /// imaginary part alone, `bi`, where a missing `b` is 1 (`i`, `-i`).
+    /// Each part is what the float's own `parse` reads, `inf` and `nan`
+    /// included. White space around the whole is allowed.
+    ///
+    /// ```sable
+    /// assert(try! Complex<F64>.parse("1.5 - 2i") == Complex(1.5, -2.0))
+    /// assert(try! Complex<F64>.parse("-i") == Complex(0.0, -1.0))
+    /// assert(try! Complex<F64>.parse("3") == Complex(3.0, 0.0))
+    /// assert(try! Complex<F64>.parse("1e-3+2.5e2i") == Complex(0.001, 250.0))
+    /// let z = Complex(0.1, -7.25)
+    /// assert(try! Complex<F64>.parse("\(z)") == z)
+    /// ```
+    public static fn parse<S: StringProtocol>(_ source: S) throws(ParseError) -> Complex<T> {
+        let text = source.toString()
+        let scalars = text.toArray()
+        var start = 0
+        var end = scalars.count
+        while start < end && isSpace(scalars[start]) {
+            start += 1
+        }
+        while end > start && isSpace(scalars[end - 1]) {
+            end -= 1
+        }
+        if start == end {
+            throw .Empty
+        }
+        if scalars[end - 1] != 'i' {
+            let real: T = try parsePart(text, start, end)
+            return Complex(real, T.zero)
+        }
+        // The sign between the parts: the last '+' or '-' not at the start
+        // and not an exponent's.
+        var split = end - 2
+        while split > start {
+            let c = scalars[split]
+            if (c == '+' || c == '-') && !isExponentMark(scalars, start, split) {
+                break
+            }
+            split -= 1
+        }
+        if split <= start {
+            let imaginary: T = try parseImaginary(text, scalars, start, end - 1)
+            return Complex(T.zero, imaginary)
+        }
+        var realEnd = split
+        while realEnd > start && isSpace(scalars[realEnd - 1]) {
+            realEnd -= 1
+        }
+        let real: T = try parsePart(text, start, realEnd)
+        let imaginary: T = try parseImaginary(text, scalars, split, end - 1)
+        return Complex(real, imaginary)
+    }
+}
+
+fn isSpace(_ c: Char) -> Bool => c == ' ' || c == '\t' || c == '\n' || c == '\r'
+
+/// Whether the sign at the position follows an exponent's 'e' that follows
+/// a digit or a point: '1e-3', where the sign is the exponent's.
+fn isExponentMark(_ scalars: Char[>..], _ start: Int, _ at: Int) -> Bool {
+    if at - 1 <= start {
+        return false
+    }
+    let mark = scalars[at - 1]
+    if mark != 'e' && mark != 'E' {
+        return false
+    }
+    let before = scalars[at - 2]
+    return (before >= '0' && before <= '9') || before == '.'
+}
+
+/// The float in text[start..<end], its errors' positions counted in the whole text.
+fn parsePart<T: Parsable>(_ text: String, _ start: Int, _ end: Int) throws(ParseError) -> T {
+    do {
+        return try T.parse(text.slice(from: start, to: end))
+    } catch {
+        throw match error {
+            case .InvalidDigit(let at) => ParseError.InvalidDigit(at: start + at)
+            case .Invalid(let at)      => ParseError.Invalid(at: start + at)
+            case _                     => error
+        }
+    }
+}
+
+/// The imaginary part in text[start..<end], the 'i' already taken off: a
+/// sign, if any, then the float, if any (1 without one).
+fn parseImaginary<T: ElementaryFunctions & Parsable>(_ text: String, _ scalars: Char[>..], _ start: Int, _ end: Int) throws(ParseError) -> T {
+    var at = start
+    var negative = false
+    if at < end && (scalars[at] == '+' || scalars[at] == '-') {
+        negative = scalars[at] == '-'
+        at += 1
+        while at < end && isSpace(scalars[at]) {
+            at += 1
+        }
+    }
+    if at == end {
+        return negative ? -T.one : T.one
+    }
+    let value: T = try parsePart(text, at, end)
+    return negative ? -value : value
+}

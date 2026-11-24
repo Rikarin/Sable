@@ -1,0 +1,97 @@
+module Sable.Serialize
+
+import Sable.Time
+
+/// A MessagePack extension value: an application's own type, 0 to 127, and
+/// its data, or one of MessagePack's, which are negative: -1 is a timestamp.
+/// As a Serializable it is an extension in MessagePack, and a map of its
+/// type and data in any other format.
+///
+/// ```sable
+/// let moment = UtcDateTime.fromUnix(1700000000)
+/// let written = MessagePackExtension(moment)
+/// assert(written.type == -1 && written.data.count == 4)
+/// assert(written.timestamp! == moment)
+/// assert(MessagePackExtension(type: 5, data: [1]).timestamp == none)
+/// ```
+@derive(Equatable, Debug)
+public struct MessagePackExtension {
+    public let type: I8
+    public let data: U8[>..]
+
+    /// The extension of that type and data.
+    public init(type: I8, data: U8[>..]) {
+        self.type = type
+        self.data = data
+    }
+
+    /// The moment as a timestamp, in the shortest of its three forms: 32
+    /// bits of seconds, 30 of nanoseconds and 34 of seconds, or 32 and 64.
+    public init(_ moment: UtcDateTime) {
+        let seconds = moment.secondsSinceEpoch
+        let nanoseconds = moment.nanosecond
+        var bytes: U8[>..] = []
+        if seconds >= 0 && seconds <= 0xFFFFFFFF && nanoseconds == 0 {
+            appendBigEndian(&bytes, U64(seconds), 4)
+        } else if seconds >= 0 && seconds <= 0x3FFFFFFFF {
+            appendBigEndian(&bytes, U64(nanoseconds) << 34 | U64(seconds), 8)
+        } else {
+            appendBigEndian(&bytes, U64(nanoseconds), 4)
+            appendBigEndian(&bytes, U64.truncating(seconds), 8)
+        }
+        self.type = -1
+        self.data = bytes
+    }
+
+    /// The moment a timestamp is; none for another extension, for a
+    /// timestamp of no form there is, or of more nanoseconds than a second.
+    public var timestamp: UtcDateTime? {
+        get {
+            if type != -1 {
+                return none
+            }
+            var seconds = 0
+            var nanoseconds = 0
+            if data.count == 4 {
+                seconds = Int(readBigEndian(data, 0, 4))
+            } else if data.count == 8 {
+                let both = readBigEndian(data, 0, 8)
+                seconds = Int(both & 0x3FFFFFFFF)
+                nanoseconds = Int(both >> 34)
+            } else if data.count == 12 {
+                nanoseconds = Int(readBigEndian(data, 0, 4))
+                seconds = Int.truncating(readBigEndian(data, 4, 8))
+            } else {
+                return none
+            }
+            if nanoseconds > 999999999 {
+                return none
+            }
+            return UtcDateTime { secondsSinceEpoch: seconds, nanosecond: nanoseconds }
+        }
+    }
+}
+
+extension MessagePackExtension: Serializable {
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        if let encoder = encoder as? MessagePackEncoder {
+            try encoder.encodeExtension(type, data)
+            return
+        }
+        try encoder.beginStruct("MessagePackExtension", count: 2)
+        try encoder.encodeField("type")
+        try encoder.encodeInt(Int(type))
+        try encoder.encodeField("data")
+        try encoder.encodeBytes(data)
+        try encoder.endStruct()
+    }
+
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> MessagePackExtension {
+        if let decoder = decoder as? MessagePackDecoder {
+            return try decoder.decodeExtension()
+        }
+        try decoder.beginStruct("MessagePackExtension")
+        let type = try I8.decode(from: decoder.field("type"))
+        return MessagePackExtension(type: type, data: try decoder.field("data").decodeBytes())
+    }
+}

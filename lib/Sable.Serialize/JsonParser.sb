@@ -21,7 +21,7 @@ struct JsonParser {
     /// The document the bytes are, or why they are not JSON.
     static fn parse(_ bytes: U8[>..]) throws(SerializeError) -> JsonDocument {
         if Runtime.validateUtf8(bytes: bytes) >= 0 {
-            throw SerializeError.Syntax(reason: "ill-formed UTF-8")
+            throw SerializeError.Syntax(reason: "not JSON: ill-formed UTF-8")
         }
         var parser = JsonParser(bytes)
         parser.skipSpace()
@@ -43,7 +43,7 @@ struct JsonParser {
     }
 
     fn error(_ what: String) -> SerializeError {
-        return SerializeError.Syntax(reason: "\(what) at byte \(at)")
+        return SerializeError.Syntax(reason: "not JSON: \(what) at byte \(at)")
     }
 
     mutating fn skipSpace() {

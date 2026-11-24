@@ -1,6 +1,6 @@
 module Sable.Serialize
 
-/// Why a value could not be encoded, or text not decoded into a type: each
+/// Why a value could not be encoded, or a document not decoded into a type: each
 /// with where, as a JSONPath from the document's root — `$.items[3].name`.
 @derive(Equatable, Debug)
 public union SerializeError: Error {
@@ -14,7 +14,7 @@ public union SerializeError: Error {
     InvalidValue(path: String, reason: String)
     /// A union's or an enum's case that it does not have.
     UnknownCase(path: String, name: String)
-    /// The text is not well-formed: what the parser found.
+    /// The document is not well-formed: what its format's parser found.
     Syntax(reason: String)
 
     public fn description() -> String {
@@ -23,7 +23,7 @@ public union SerializeError: Error {
             case .TypeMismatch(let path, let expected, let found) => "\(path): expected \(expected), found \(found)"
             case .InvalidValue(let path, let reason)              => "\(path): \(reason)"
             case .UnknownCase(let path, let name)                 => "\(path): no case '\(name)'"
-            case .Syntax(let reason)                              => "not JSON: \(reason)"
+            case .Syntax(let reason)                              => reason
         }
     }
 }

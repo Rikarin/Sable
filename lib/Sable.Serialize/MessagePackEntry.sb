@@ -1,0 +1,8 @@
+module Sable.Serialize
+
+/// A MessagePack map's entry, as `MessagePackValue.Map` holds them.
+@derive(Equatable, Debug)
+public struct MessagePackEntry {
+    public var key: MessagePackValue
+    public var value: MessagePackValue
+}

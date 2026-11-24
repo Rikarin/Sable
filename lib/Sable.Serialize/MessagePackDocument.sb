@@ -1,0 +1,208 @@
+module Sable.Serialize
+
+import Sable.Text
+
+// What a MessagePack value's first byte says it is.
+enum MessagePackKind {
+    Null
+    Bool
+    UInt
+    Int
+    Float
+    String
+    Bytes
+    Array
+    Map
+    Extension
+}
+
+// A MessagePack document as an index of its values, in the order they are
+// written: where each starts, and the value after it and all it holds. An
+// array's or map's first child is the value after it. Made by
+// MessagePackParser, which has checked every length in it, so a value's
+// bytes are always there.
+final class MessagePackDocument {
+    let bytes: U8[>..]
+    let starts: Int[>..]
+    let afters: Int[>..]
+
+    init(bytes: U8[>..], starts: Int[>..], afters: Int[>..]) {
+        self.bytes = bytes
+        self.starts = starts
+        self.afters = afters
+    }
+
+    fn kind(_ node: Int) -> MessagePackKind {
+        return messagePackKind(bytes[starts[node]])
+    }
+
+    // How many elements the array, or entries the map, has.
+    fn count(_ node: Int) -> Int {
+        return messagePackLength(bytes, starts[node])
+    }
+
+    // Where the string's, bytes' or extension's data starts.
+    fn dataStart(_ node: Int) -> Int {
+        return starts[node] + messagePackHeadSize(bytes[starts[node]])
+    }
+
+    fn data(_ node: Int) -> U8[>..] {
+        let start = dataStart(node)
+        return bytes[start..<(start + count(node))].toArray()
+    }
+
+    fn string(_ node: Int) -> String {
+        let start = dataStart(node)
+        unsafe {
+            return String.fromUtf8Unchecked(bytes[start..<(start + count(node))])
+        }
+    }
+
+    // Whether the node is the string, without making one.
+    fn isString(_ node: Int, _ text: String) -> Bool {
+        if kind(node) != .String {
+            return false
+        }
+        let start = dataStart(node)
+        let length = text.utf8Count
+        if count(node) != length {
+            return false
+        }
+        let other = text.utf8
+        var i = 0
+        while i < length {
+            if bytes[start + i] != other[i] {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+
+    fn bool(_ node: Int) -> Bool {
+        return bytes[starts[node]] == 0xC3
+    }
+
+    // The unsigned integer's value.
+    fn unsigned(_ node: Int) -> U64 {
+        let start = starts[node]
+        let first = bytes[start]
+        return first < 0x80 ? U64(first) : readBigEndian(bytes, start + 1, 1 << (Int(first) - 0xCC))
+    }
+
+    // The signed integer's value.
+    fn signed(_ node: Int) -> Int {
+        let start = starts[node]
+        let first = bytes[start]
+        if first == 0xD0 {
+            return Int(I8.truncating(bytes[start + 1]))
+        }
+        if first == 0xD1 {
+            return Int(I16.truncating(readBigEndian(bytes, start + 1, 2)))
+        }
+        if first == 0xD2 {
+            return Int(I32.truncating(readBigEndian(bytes, start + 1, 4)))
+        }
+        if first == 0xD3 {
+            return Int.truncating(readBigEndian(bytes, start + 1, 8))
+        }
+        return Int(I8.truncating(first))
+    }
+
+    fn float(_ node: Int) -> F64 {
+        let start = starts[node]
+        if bytes[start] == 0xCA {
+            return F64(F32.fromBits(U32.truncating(readBigEndian(bytes, start + 1, 4))))
+        }
+        return F64.fromBits(readBigEndian(bytes, start + 1, 8))
+    }
+
+    fn extensionValue(_ node: Int) -> MessagePackExtension {
+        return MessagePackExtension(type: I8.truncating(bytes[dataStart(node) - 1]), data: data(node))
+    }
+
+    // A key as a member's name: a string, or an integer's digits; none for a
+    // key of any other kind.
+    fn name(_ node: Int) -> String? {
+        let kind = self.kind(node)
+        if kind == .String {
+            return string(node)
+        }
+        if kind == .UInt {
+            return "\(unsigned(node))"
+        }
+        if kind == .Int {
+            return "\(signed(node))"
+        }
+        return none
+    }
+}
+
+fn messagePackKind(_ first: U8) -> MessagePackKind {
+    if first < 0x80 {
+        return .UInt
+    }
+    if first < 0x90 {
+        return .Map
+    }
+    if first < 0xA0 {
+        return .Array
+    }
+    if first < 0xC0 {
+        return .String
+    }
+    if first >= 0xE0 {
+        return .Int
+    }
+    return match first {
+        case 0xC0, 0xC1             => .Null
+        case 0xC2, 0xC3             => .Bool
+        case 0xC4, 0xC5, 0xC6       => .Bytes
+        case 0xC7, 0xC8, 0xC9       => .Extension
+        case 0xCA, 0xCB             => .Float
+        case 0xCC, 0xCD, 0xCE, 0xCF => .UInt
+        case 0xD0, 0xD1, 0xD2, 0xD3 => .Int
+        case 0xD9, 0xDA, 0xDB       => .String
+        case 0xDC, 0xDD             => .Array
+        case 0xDE, 0xDF             => .Map
+        case _                      => .Extension
+    }
+}
+
+// How many bytes of the value there are before its data: the first byte, its
+// length's and an extension's type; of a number, all of it.
+fn messagePackHeadSize(_ first: U8) -> Int {
+    return match first {
+        case 0xC4, 0xCC, 0xD0, 0xD9                   => 2
+        case 0xD4, 0xD5, 0xD6, 0xD7, 0xD8             => 2
+        case 0xC5, 0xCD, 0xD1, 0xDA, 0xDC, 0xDE, 0xC7 => 3
+        case 0xC8                                     => 4
+        case 0xC6, 0xCE, 0xD2, 0xDB, 0xDD, 0xDF, 0xCA => 5
+        case 0xC9                                     => 6
+        case 0xCF, 0xD3, 0xCB                         => 9
+        case _                                        => 1
+    }
+}
+
+// The data's bytes, or an array's elements or a map's entries; 0 for a
+// number. The head is there.
+fn messagePackLength(_ bytes: U8[>..], _ start: Int) -> Int {
+    let first = bytes[start]
+    if first >= 0x80 && first < 0xA0 {
+        return Int(first & 15)
+    }
+    if first >= 0xA0 && first < 0xC0 {
+        return Int(first & 31)
+    }
+    return match first {
+        case 0xC4, 0xC7, 0xD9             => Int(bytes[start + 1])
+        case 0xC5, 0xC8, 0xDA, 0xDC, 0xDE => Int(readBigEndian(bytes, start + 1, 2))
+        case 0xC6, 0xC9, 0xDB, 0xDD, 0xDF => Int(readBigEndian(bytes, start + 1, 4))
+        case 0xD4                         => 1
+        case 0xD5                         => 2
+        case 0xD6                         => 4
+        case 0xD7                         => 8
+        case 0xD8                         => 16
+        case _                            => 0
+    }
+}

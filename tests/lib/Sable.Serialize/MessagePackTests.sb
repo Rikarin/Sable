@@ -1,0 +1,455 @@
+module MessagePackTests
+
+import Sable.Collections
+import Sable.Serialize
+import Sable.Testing
+import Sable.Text
+import Sable.Time
+
+@derive(Serializable, Equatable, Debug)
+union Shape {
+    Circle(radius: F64)
+    Point(Int, Int)
+    Empty
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Meta {
+    var version: U64
+    var rate: F32
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Record {
+    var name: String
+    @serialize(flatten)
+    var meta: Meta
+    var shapes: Shape[>..]
+    var note: String?
+    var when: UtcDateTime
+}
+
+fn hex(_ bytes: U8[>..]) -> String {
+    let digits = "0123456789abcdef"
+    var text = ""
+    for byte in bytes {
+        text = text + String.fromChar(digits.at(index: Int(byte) / 16)) + String.fromChar(digits.at(index: Int(byte) % 16))
+    }
+    return text
+}
+
+// What an encoder wrote, or the error it threw.
+fn wrote(_ body: (MessagePackEncoder) throws(SerializeError) -> Void) -> String {
+    let encoder = MessagePackEncoder()
+    do {
+        try body(encoder)
+        return hex(try encoder.bytes())
+    } catch {
+        return error.description()
+    }
+}
+
+// The error the bytes do not parse by; "" when they parse.
+fn refusal(_ bytes: U8[>..], depth: Int = 128) -> String {
+    do {
+        let _ = try MessagePackValue.parse(bytes, maximumDepth: depth)
+        return ""
+    } catch {
+        return error.description()
+    }
+}
+
+fn repeated(_ byte: U8, _ count: Int) -> U8[>..] {
+    var all: U8[>..] = []
+    all.append(repeating: byte, count: count)
+    return all
+}
+
+@test
+fn integersAreWrittenInTheirShortestForm() throws {
+    let cases: (Int, String)[>..] = [
+        (0, "00"), (127, "7f"), (128, "cc80"), (255, "ccff"), (256, "cd0100"), (65535, "cdffff"),
+        (65536, "ce00010000"), (4294967295, "ceffffffff"), (4294967296, "cf0000000100000000"),
+        (Int.max, "cf7fffffffffffffff"), (-1, "ff"), (-32, "e0"), (-33, "d0df"), (-128, "d080"),
+        (-129, "d1ff7f"), (-32768, "d18000"), (-32769, "d2ffff7fff"), (-2147483648, "d280000000"),
+        (-2147483649, "d3ffffffff7fffffff"), (Int.min, "d38000000000000000"),
+    ]
+    for (value, text) in cases {
+        let bytes = try MessagePack.encode(value)
+        assertEqual(hex(bytes), text)
+        assertEqual(try MessagePack.decode(Int.self, from: bytes), value)
+        assertEqual(try MessagePackValue.parse(bytes), MessagePackValue.Integer(value: value))
+    }
+    let most = try MessagePack.encode(U64.max)
+    assertEqual(hex(most), "cfffffffffffffffff")
+    assertEqual(try MessagePack.decode(U64.self, from: most), U64.max)
+    assertEqual(try MessagePackValue.parse(most), MessagePackValue.Unsigned(value: U64.max))
+    assertEqual((try? MessagePack.decode(Int.self, from: most)) == none, true)
+    assertEqual((try? MessagePack.decode(U64.self, from: [0xFF])) == none, true)
+}
+
+@test
+fn anIntegerIsReadFromAnyForm() throws {
+    for bytes in [[0x01], [0xCC, 1], [0xCD, 0, 1], [0xCE, 0, 0, 0, 1], [0xCF, 0, 0, 0, 0, 0, 0, 0, 1], [0xD0, 1], [0xD1, 0, 1], [0xD2, 0, 0, 0, 1], [0xD3, 0, 0, 0, 0, 0, 0, 0, 1]] as U8[>..][>..] {
+        assertEqual(try MessagePack.decode(Int.self, from: bytes), 1)
+        assertEqual(try MessagePack.decode(U64.self, from: bytes), 1)
+        assertEqual(try MessagePack.decode(F64.self, from: bytes), 1.0)
+    }
+}
+
+@test
+fn floatsTakeFourBytesWhenThatLosesNothing() throws {
+    assertEqual(hex(try MessagePack.encode(1.5)), "ca3fc00000")
+    assertEqual(hex(try MessagePack.encode(0.1)), "cb3fb999999999999a")
+    assertEqual(hex(try MessagePack.encode(-0.0)), "ca80000000")
+    assertEqual(hex(try MessagePack.encode(1.0 / 0.0)), "ca7f800000")
+    assertEqual(hex(try MessagePack.encode(1e300)), "cb7e37e43c8800759c")
+    let nan = F64.fromBits(0x7FF8_0000_0000_1234)
+    assertEqual((try MessagePack.decode(F64.self, from: try MessagePack.encode(nan))).bits, nan.bits)
+    for value in [0.1, 1.5, 1e300, -2.25, 5e-324] {
+        assertEqual(try MessagePack.decode(F64.self, from: try MessagePack.encode(value)), value)
+    }
+    assertEqual(try MessagePack.decode(F32.self, from: try MessagePack.encode(0.1 as F32)), 0.1 as F32)
+}
+
+@test
+fn stringsAndBytesTakeTheShortestLength() throws {
+    for (count, head) in [(0, "a0"), (31, "bf"), (32, "d920"), (255, "d9ff"), (256, "da0100"), (65535, "daffff"), (65536, "db00010000")] as (Int, String)[>..] {
+        let text = String.fromUtf8Lossy(repeated(0x78, count))
+        let bytes = try MessagePack.encode(text)
+        assertEqual(hex(bytes[0..<(head.count / 2)].toArray()), head)
+        assertEqual(bytes.count, head.count / 2 + count)
+        assertEqual(try MessagePack.decode(String.self, from: bytes), text)
+    }
+    for (count, head) in [(0, "c400"), (255, "c4ff"), (256, "c50100"), (65536, "c600010000")] as (Int, String)[>..] {
+        let encoder = MessagePackEncoder()
+        try encoder.encodeBytes(repeated(7, count))
+        let bytes = try encoder.bytes()
+        assertEqual(hex(bytes[0..<(head.count / 2)].toArray()), head)
+        assertEqual((try MessagePackDecoder.parse(bytes).decodeBytes()).count, count)
+    }
+    assertEqual(try MessagePack.decode(String.self, from: try MessagePack.encode("h\u{e9}\u{1F600}")), "h\u{e9}\u{1F600}")
+}
+
+@test
+fn arraysAndMapsTakeTheShortestCount() throws {
+    for (count, head) in [(0, "90"), (15, "9f"), (16, "dc0010"), (65535, "dcffff"), (65536, "dd00010000")] as (Int, String)[>..] {
+        var all: Int[>..] = []
+        all.append(repeating: 1, count: count)
+        let bytes = try MessagePack.encode(all)
+        assertEqual(hex(bytes[0..<(head.count / 2)].toArray()), head)
+        assertEqual(try MessagePack.decode(Int[>..].self, from: bytes), all)
+        // The same when the count is known only at the end.
+        let unsized = MessagePackEncoder()
+        try unsized.beginSequence(count: none)
+        for value in all {
+            try unsized.encodeInt(value)
+        }
+        try unsized.endSequence()
+        assert(try unsized.bytes() == bytes)
+    }
+    for (count, head) in [(0, "80"), (15, "8f"), (16, "de0010"), (65536, "df00010000")] as (Int, String)[>..] {
+        let encoder = MessagePackEncoder()
+        try encoder.beginMap(count: count)
+        for i in 0..<count {
+            try encoder.encodeInt(i)
+            try encoder.encodeNull()
+        }
+        try encoder.endMap()
+        assertEqual(hex((try encoder.bytes())[0..<(head.count / 2)].toArray()), head)
+        assertEqual(try MessagePackDecoder.parse(try encoder.bytes()).count, count)
+    }
+}
+
+@test
+fn extensionsTakeTheirFixedFormsWhereTheyFit() throws {
+    for (count, head) in [(1, "d405"), (2, "d505"), (4, "d605"), (8, "d705"), (16, "d805"), (0, "c70005"), (3, "c70305"), (255, "c7ff05"), (256, "c8010005"), (65536, "c90001000005")] as (Int, String)[>..] {
+        let value = MessagePackExtension(type: 5, data: repeated(9, count))
+        let bytes = try MessagePack.encode(value)
+        assertEqual(hex(bytes[0..<(head.count / 2)].toArray()), head)
+        assertEqual(bytes.count, head.count / 2 + count)
+        assert(try MessagePack.decode(MessagePackExtension.self, from: bytes) == value)
+        assert(try MessagePackDecoder.parse(bytes).kind == .Bytes)
+        assertEqual((try MessagePackDecoder.parse(bytes).decodeBytes()).count, count)
+    }
+    assertEqual(try MessagePack.decode(MessagePackExtension.self, from: [0xD4, 0x80, 1]).type, -128)
+    // In a format without extensions, its parts.
+    let text = try Json.encode(MessagePackExtension(type: -3, data: [1, 2]))
+    assertEqual(text, "{\"type\":-3,\"data\":\"AQI=\"}")
+    assert(try Json.decode(MessagePackExtension.self, from: text) == MessagePackExtension(type: -3, data: [1, 2]))
+}
+
+@test
+fn timestampsTakeTheShortestOfTheirThreeForms() throws {
+    let cases: (Int, Int, String)[>..] = [
+        (0, 0, "d6ff00000000"), (4294967295, 0, "d6ffffffffff"),
+        (0, 1, "d7ff0000000400000000"), (4294967296, 0, "d7ff0000000100000000"),
+        (17179869183, 999999999, "d7ffee6b27ffffffffff"),
+        (17179869184, 0, "c70cff000000000000000400000000"),
+        (-1, 999999999, "c70cff3b9ac9ffffffffffffffffff"),
+        (Int.min, 0, "c70cff000000008000000000000000"),
+    ]
+    for (seconds, nanoseconds, text) in cases {
+        let moment = UtcDateTime { secondsSinceEpoch: seconds, nanosecond: nanoseconds }
+        let encoder = MessagePackEncoder()
+        try encoder.encodeTimestamp(moment)
+        assertEqual(hex(try encoder.bytes()), text)
+        assert(try MessagePackDecoder.parse(try encoder.bytes()).decodeTimestamp() == moment)
+    }
+}
+
+@test
+fn aTimestampIsAUtcDateTimeOfAnyType() throws {
+    let moment = UtcDateTime { secondsSinceEpoch: 1700000000, nanosecond: 250000000 }
+    let decoder = try MessagePackDecoder.parse(try MessagePack.encode(MessagePackExtension(moment)))
+    assert(decoder.kind == .String)
+    assert(try UtcDateTime.decode(from: decoder) == moment)
+    // A year RFC 3339 does not write, nanoseconds over a second's, a length
+    // that is no timestamp's, and another type.
+    for bytes in [[0xC7, 12, 0xFF, 0, 0, 0, 0, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], [0xC7, 12, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0], [0xD5, 0xFF, 0, 0], [0xD6, 5, 0, 0, 0, 0]] as U8[>..][>..] {
+        assert((try? MessagePack.decode(UtcDateTime.self, from: bytes)) == none)
+    }
+    do {
+        let _ = try MessagePackDecoder.parse([0xD4, 5, 0]).decodeTimestamp()
+        fail("not a timestamp")
+    } catch {
+        assertEqual(error.description(), "$: the extension of type 5 is not a timestamp")
+    }
+}
+
+@test
+fn aDerivedTypeGoesThereAndBack() throws {
+    let record = Record {
+        name: "r",
+        meta: Meta { version: U64.max, rate: 0.5 },
+        shapes: [.Circle(radius: 0.1), .Point(-1, 2), .Empty],
+        note: none,
+        when: UtcDateTime.fromUnix(1700000000),
+    }
+    let bytes = try MessagePack.encode(record)
+    // The flattened struct's fields are the record's own: six, and the count
+    // is right though it was not known when the map was begun.
+    assertEqual(bytes[0], 0x86)
+    assert(try MessagePack.decode(Record.self, from: bytes) == record)
+    var counts = Dictionary<String, Int>()
+    counts["one"] = 1
+    assertEqual(hex(try MessagePack.encode(counts)), "81a36f6e6501")
+    assertEqual((try MessagePack.decode(Dictionary<String, Int>.self, from: try MessagePack.encode(counts)))["one"] ?? 0, 1)
+    assertEqual(hex(try MessagePack.encode(Shape.Empty)), "a5456d707479")
+    assertEqual(hex(try MessagePack.encode(Shape.Point(1, 2))), "81a5506f696e74920102")
+}
+
+@test
+fn aValueOfEveryKindGoesThereAndBack() throws {
+    let value = MessagePackValue.Map(entries: [
+        MessagePackEntry { key: .Text(value: "a"), value: .Array(items: [.Null, .Bool(value: true), .Bool(value: false)]) },
+        MessagePackEntry { key: .Integer(value: -7), value: .Float(value: 2.5) },
+        MessagePackEntry { key: .Unsigned(value: U64.max), value: .Bytes(value: [1, 2]) },
+        MessagePackEntry { key: .Array(items: []), value: .Extension(value: MessagePackExtension(type: 1, data: [3])) },
+        MessagePackEntry { key: .Null, value: .Map(entries: []) },
+    ])
+    let bytes = try value.bytes()
+    assertEqual(try MessagePackValue.parse(bytes), value)
+    assertEqual(try MessagePack.decode(MessagePackValue.self, from: bytes), value)
+    assertEqual(value["a"]!, MessagePackValue.Array(items: [.Null, .Bool(value: true), .Bool(value: false)]))
+    assert(value["b"] == none && MessagePackValue.Null["a"] == none)
+    assert((try? Json.encode(value)) == none)
+}
+
+@test
+fn aValueGoesThroughOtherFormats() throws {
+    let text = "{\"a\":[1,-2,18446744073709551615,0.5,null,true],\"b\":\"x\"}"
+    let value = try Json.decode(MessagePackValue.self, from: text)
+    assertEqual(try Json.encode(value), text)
+    let numbered = try MessagePackValue.parse([0x82, 0x01, 0xC0, 0xCF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x02])
+    assertEqual(try Json.encode(numbered), "{\"1\":null,\"18446744073709551615\":2}")
+    assert((try? MessagePackValue.decode(from: try JsonDecoder.parse("{}").field("a"))) == none)
+    assert((try? MessagePackValue.decode(from: try MessagePackDecoder.parse([0x80]).field("a"))) == none)
+    let json = try JsonValue.decode(from: try MessagePackDecoder.parse([0x93, 0xCB, 0x3F, 0xE0, 0, 0, 0, 0, 0, 0, 0x2A, 0xC4, 0x01, 0xFF]))
+    assertEqual(try Json.encode(json), "[0.5,42.0,[255.0]]")
+}
+
+@test
+fn decodersSayWhereAndWhatIsWrong() throws {
+    let root = try MessagePackDecoder.parse([0x83, 0xA1, 0x61, 0x92, 0x01, 0xA1, 0x78, 0x05, 0xC3, 0xA3, 0x62, 0x20, 0x63, 0x81, 0xC0, 0x01])
+    assertEqual(root.path, "$")
+    assertEqual(root.count, 3)
+    assert(root.kind == .Map && !root.isNull && !root.isMissing)
+    assertEqual(root.field("a").element(1).path, "$.a[1]")
+    assert(root.field("a").element(2).isMissing && root.field("a").element(-1).isMissing && root.element(0).isMissing)
+    assert(root.hasField("a") && !root.hasField("c") && !root.hasField("5") && !root.field("a").hasField("a"))
+    assert(!root.excluding(["a"]).hasField("a"))
+    assertEqual(try root.excluding(["a"]).excluding(["5"]).decodeMap().count, 1)
+    var messages: String[>..] = []
+    let attempts: (() throws(SerializeError) -> Void)[>..] = [
+        {
+            let _ = try root.field("zz").decodeInt()
+        },
+        {
+            let _ = try root.decodeInt()
+        },
+        {
+            let _ = try root.field("a").decodeString()
+        },
+        {
+            let _ = try root.field("a").element(1).decodeBool()
+        },
+        {
+            let _ = try root.field("a").element(0).decodeBytes()
+        },
+        {
+            let _ = try root.field("a").element(0).decodeSequence()
+        },
+        {
+            let _ = try root.field("a").element(0).decodeExtension()
+        },
+        {
+            let _ = try root.field("b c").decodeMap()
+        },
+        {
+            let _ = try root.field("a").caseName()
+        },
+        {
+            let _ = try root.field("b c").caseName()
+        },
+        { try root.field("a").beginStruct("T") },
+        {
+            throw root.unknownCase("Z")
+        },
+        {
+            throw root.field("a").invalid("bad")
+        },
+    ]
+    for attempt in attempts {
+        do {
+            try attempt()
+            fail("read")
+        } catch {
+            messages.append(error.description())
+        }
+    }
+    assertEqual(messages.joined(separator: "\n"), """
+        $.zz: missing
+        $: expected an integer, found a map
+        $.a: expected a string, found an array
+        $.a[1]: expected a Bool, found a string
+        $.a[0]: expected bytes, found an integer
+        $.a[0]: expected an array, found an integer
+        $.a[0]: expected an extension, found an integer
+        $['b c']: a key is neither a string nor an integer
+        $.a: expected a case's name, or a map of one entry, found an array
+        $['b c']: expected a case's name, or a map of one entry, found a map
+        $.a: expected a map (T), found an array
+        $: no case 'Z'
+        $.a: bad
+        """)
+    let every: U8[>..][>..] = [[0xC0], [0xC2], [0x01], [0xFF], [0xCA, 0, 0, 0, 0], [0xA0], [0xC4, 0], [0x90], [0x80], [0xD4, 1, 1]]
+    var kinds = ""
+    for bytes in every {
+        kinds += "\(try MessagePackDecoder.parse(bytes).kind) "
+        assert(!(try MessagePackDecoder.parse(bytes).kindName.isEmpty))
+    }
+    assertEqual(kinds, "Null Bool Number Number Number String Bytes Sequence Map Bytes ")
+    assert(root.field("zz").kind == .Missing && root.field("zz").kindName == "nothing")
+    assert(root.casePayload().isMissing)
+}
+
+@test
+fn theEncoderRefusesWhatWouldNotBeMessagePack() {
+    assertEqual(wrote({
+        try $0.beginSequence(count: 2);
+        try $0.encodeNull();
+        try $0.endSequence()
+    }), "$: 2 elements were declared and 1 written")
+    assertEqual(wrote({
+        try $0.beginMap(count: 1);
+        try $0.endMap()
+    }), "$: 1 entries were declared and 0 written")
+    assertEqual(wrote({
+        try $0.beginMap(count: none);
+        try $0.encodeKey("a");
+        try $0.endMap()
+    }), "$: a key was written without its value")
+    assertEqual(wrote({
+        try $0.beginMap(count: none);
+        try $0.encodeKey("a");
+        try $0.encodeKey("b")
+    }), "$: the key 'b' is not where a key goes")
+    assertEqual(wrote({ try $0.encodeKey("a") }), "$: the key 'a' is not where a key goes")
+    assertEqual(wrote({ try $0.beginSequence(count: none) }), "$: an array or a map was begun and not ended")
+    assertEqual(wrote({ try $0.endSequence() }), "$: ended what was not begun")
+    assertEqual(wrote({ try $0.endMap() }), "$: ended what was not begun")
+    assertEqual(wrote({
+        try $0.flattenNext();
+        try $0.encodeInt(1)
+    }), "$: only a struct or a map can be flattened")
+    assertEqual(wrote({ try $0.beginSequence(count: -1) }), "$: MessagePack has no array or map of -1")
+}
+
+@test
+fn illFormedMessagePackIsRefused() {
+    assertEqual(refusal([]), "not MessagePack: no value where one should be at byte 0")
+    assertEqual(refusal([0xC1]), "not MessagePack: 0xC1 is no value's first byte, at byte 0")
+    assertEqual(refusal([0x01, 0x02]), "not MessagePack: more after the value at byte 1")
+    assertEqual(refusal([0xCD, 0x01]), "not MessagePack: the end of the bytes in the value at byte 0")
+    assertEqual(refusal([0xA2, 0xC3, 0x28]), "not MessagePack: ill-formed UTF-8 in the string at byte 0")
+    assertEqual(refusal([0x92, 0x01]), "not MessagePack: more values than there are bytes for at byte 0")
+    assertEqual(refusal([0x92, 0x91, 0xC0]), "not MessagePack: no value where one should be at byte 3")
+}
+
+@test
+fn everyPrefixOfAValueIsRefused() throws {
+    let record = Record { name: "a name", meta: Meta { version: 70000, rate: 0.5 }, shapes: [.Circle(radius: 0.1)], note: "n", when: UtcDateTime.fromUnix(0) }
+    let bytes = try MessagePack.encode(record)
+    for count in 0..<bytes.count {
+        assert(!refusal(bytes[0..<count].toArray()).isEmpty)
+    }
+}
+
+@test
+fn declaredLengthsAreCheckedBeforeAnythingIsMade() {
+    // Strings, bytes, extensions, arrays and maps of 4 GB in a few bytes.
+    for first in [0xDB, 0xC6, 0xC9, 0xDD, 0xDF] as U8[>..] {
+        assert(!refusal([first, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x02]).isEmpty)
+    }
+    // Arrays that each claim all that is left.
+    var nested: U8[>..] = []
+    for _ in 0..<100 {
+        nested.append(0xDC)
+        nested.append(0xFF)
+        nested.append(0xFF)
+    }
+    assert(refusal(nested).contains("more values than there are bytes for"))
+}
+
+@test
+fn nestingIsBounded() {
+    var deep = repeated(0x91, 128)
+    deep.append(0xC0)
+    assertEqual(refusal(deep), "")
+    assertEqual(refusal(deep, depth: 127), "not MessagePack: nested more than 127 deep at byte 127")
+    let hostile = repeated(0x91, 1000000)
+    assertEqual(refusal(hostile), "not MessagePack: nested more than 128 deep at byte 128")
+    var maps: U8[>..] = []
+    for _ in 0..<100000 {
+        maps.append(0x81)
+        maps.append(0xC0)
+    }
+    assert(refusal(maps).contains("nested more than 128 deep"))
+}
+
+@test
+fn anyBytesAreReadOrRefused() {
+    var random = SeededRandomNumberGenerator(seed: 53)
+    for _ in 0..<3000 {
+        var bytes: U8[>..] = []
+        for _ in 0..<Int.random(in: 0..<40, using: &random) {
+            bytes.append(U8.truncating(Int.random(in: 0..<256, using: &random)))
+        }
+        if let value = try? MessagePackValue.parse(bytes) {
+            // Its shortest form reads as the same value, a NaN apart.
+            let again = try! value.bytes()
+            assert(try! MessagePackValue.parse(again).bytes() == again)
+        }
+    }
+}

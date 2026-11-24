@@ -1,0 +1,27 @@
+module Sable.Serialize
+
+/// Serializable values to MessagePack and back, as MessagePack-CSharp and
+/// rmp-serde do: a struct or a map a map, a case that carries nothing its
+/// name and one that does a map of one entry, as JSON has them. For values
+/// of no declared type, MessagePackValue.
+///
+/// ```sable
+/// let numbers: Int[>..] = [1, 2, 300]
+/// let bytes = try! MessagePack.encode(numbers)
+/// assert(bytes == [0x93, 0x01, 0x02, 0xCD, 0x01, 0x2C])
+/// assert(try! MessagePack.decode(Int[>..].self, from: bytes) == numbers)
+/// ```
+public struct MessagePack {
+    /// The value as MessagePack.
+    public static fn encode<T: Serializable>(_ value: T) throws(SerializeError) -> U8[>..] {
+        let encoder = MessagePackEncoder()
+        try value.encode(to: encoder)
+        return try encoder.bytes()
+    }
+
+    /// The value of the type the MessagePack holds, which nests arrays and
+    /// maps no deeper than that.
+    public static fn decode<T: Serializable>(_ type: T.Type, from bytes: U8[>..], maximumDepth: Int = 128) throws(SerializeError) -> T {
+        return try T.decode(from: try MessagePackDecoder.parse(bytes, maximumDepth: maximumDepth))
+    }
+}

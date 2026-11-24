@@ -138,6 +138,49 @@ public sealed class ClassTests {
             ).Stdout
         );
 
+    /// <summary>An instance of a generic function knows its parameter's class: a cast may be down, up, or to a class on another line.</summary>
+    [Fact]
+    public void AGenericValueCastToAClassOnAnyLine() =>
+        Assert.Equal(
+            "base:base \nbase:derived derived:derived \nother:other \nderived\n",
+            AssertAgree(
+                """
+                module Test
+
+                protocol Named { fn name() -> String }
+                open class Base: Named {
+                    init() {}
+                    open fn name() -> String { return "base" }
+                }
+                final class Derived: Base {
+                    override fn name() -> String { return "derived" }
+                }
+                final class Other: Named {
+                    init() {}
+                    fn name() -> String { return "other" }
+                }
+
+                fn cast<T: Named>(_ value: T) -> String {
+                    var all = ""
+                    if let b = value as? Base { all = all + "base:" + b.name() + " " }
+                    if let d = value as? Derived { all = all + "derived:" + d.name() + " " }
+                    if let o = value as? Other { all = all + "other:" + o.name() + " " }
+                    return all
+                }
+
+                fn force<T: Named>(_ value: T) -> String { return (value as! Base).name() }
+
+                @main
+                fn main() {
+                    print(cast(Base()))
+                    print(cast(Derived()))
+                    print(cast(Other()))
+                    print(force(Derived()))
+                }
+                """
+            ).Stdout
+        );
+
     [Theory]
     [InlineData("    let c = Counter()\n    c.value = 5", "'value' can be read here but not written: its setter is private")]
     [InlineData("    print(1)", "'later' needs a type annotation")]

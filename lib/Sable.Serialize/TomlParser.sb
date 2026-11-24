@@ -1,0 +1,622 @@
+module Sable.Serialize
+
+import Sable.Text
+import Sable.Time
+
+// A part of a dotted key, and where it starts.
+struct TomlKey {
+    let name: String
+    let start: Int
+}
+
+// Reads TOML 1.0 into TomlNodes. How deep a value is, by its own brackets,
+// its header's path and its dotted key together, is bounded, so neither
+// reading it nor anything done with it later can overflow the stack.
+struct TomlParser {
+    let bytes: U8[>..]
+    let maximumDepth: Int
+    var at: Int = 0
+    let root: TomlNode = TomlNode(origin: .Root, depth: 0)
+    // The [header] tables, in order.
+    var sections: TomlNode[>..] = []
+    // The end of the statement before.
+    var lead: Int = 0
+
+    init(_ bytes: U8[>..], _ maximumDepth: Int) {
+        self.bytes = bytes
+        self.maximumDepth = maximumDepth
+    }
+
+    fn error(_ reason: String, _ position: Int? = none) -> TomlError {
+        return TomlError(bytes, position ?? at, reason)
+    }
+
+    // The byte that many after the position; 0 past the end, which is no
+    // byte TOML allows anywhere.
+    fn peek(_ offset: Int = 0) -> U8 {
+        return at + offset < bytes.count ? bytes[at + offset] : 0
+    }
+
+    var atEnd: Bool => at >= bytes.count
+
+    // ---- Lines ---------------------------------------------------------------
+
+    mutating fn parse() throws(TomlError) {
+        let bad = Runtime.validateUtf8(bytes: bytes)
+        if bad >= 0 {
+            throw error("ill-formed UTF-8", bad)
+        }
+        // A byte order mark is let go by.
+        if bytes.count >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF {
+            at = 3
+            lead = 3
+        }
+        var current = root
+        while true {
+            try skipBlank()
+            if atEnd {
+                return
+            }
+            if peek() == 0x5B {
+                current = try header()
+            } else {
+                try statement(current)
+            }
+        }
+    }
+
+    mutating fn skipSpace() {
+        while peek() == 0x20 || peek() == 0x09 {
+            at += 1
+        }
+    }
+
+    // The bytes of a line break here: 1, 2 for a carriage return's, or 0.
+    fn lineBreak() -> Int {
+        if peek() == 0x0A {
+            return 1
+        }
+        return peek() == 0x0D && peek(1) == 0x0A ? 2 : 0
+    }
+
+    mutating fn skipComment() throws(TomlError) {
+        if peek() != 0x23 {
+            return
+        }
+        while !atEnd && lineBreak() == 0 {
+            if isControl(peek()) {
+                throw error("a control character in a comment")
+            }
+            at += 1
+        }
+    }
+
+    // Spaces, comments and line breaks.
+    mutating fn skipBlank() throws(TomlError) {
+        while true {
+            skipSpace()
+            try skipComment()
+            let length = lineBreak()
+            if length == 0 {
+                return
+            }
+            at += length
+        }
+    }
+
+    // The rest of a statement's line: nothing but a comment.
+    mutating fn endLine() throws(TomlError) {
+        skipSpace()
+        try skipComment()
+        if !atEnd {
+            let length = lineBreak()
+            if length == 0 {
+                throw error("expected the end of the line, found \(found())")
+            }
+            at += length
+        }
+        lead = at
+    }
+
+    // What is at the position, as an error says it.
+    fn found() -> String {
+        if atEnd {
+            return "the end"
+        }
+        if peek() < 0x20 || peek() == 0x7F {
+            return lineBreak() > 0 ? "the end of the line" : "a control character"
+        }
+        var end = at + 1
+        while end < bytes.count && (bytes[end] & 0xC0) == 0x80 {
+            end += 1
+        }
+        unsafe {
+            return "'" + String.fromUtf8Unchecked(bytes[at..<end]) + "'"
+        }
+    }
+
+    // ---- Tables --------------------------------------------------------------
+
+    fn made(_ origin: TomlOrigin, _ depth: Int, _ position: Int) throws(TomlError) -> TomlNode {
+        if depth > maximumDepth {
+            throw error("nested more than \(maximumDepth) deep", position)
+        }
+        return TomlNode(origin: origin, depth: depth)
+    }
+
+    mutating fn header() throws(TomlError) -> TomlNode {
+        let start = at
+        at += 1
+        let ofArray = peek() == 0x5B
+        if ofArray {
+            at += 1
+        }
+        let path = try key()
+        if peek() != 0x5D || ofArray && peek(1) != 0x5D {
+            throw error("expected '\(ofArray ? "]]" : "]")' to close the header, found \(found())")
+        }
+        at += ofArray ? 2 : 1
+        var table = root
+        for i in 0..<(path.count - 1) {
+            table = try onTheWay(table, path, i)
+        }
+        let last = path[path.count - 1]
+        let made = try defined(table, path, last, ofArray)
+        made.headerStart = start
+        made.leadStart = lead
+        try endLine()
+        made.lineEnd = at
+        made.bodyEnd = at
+        sections.append(made)
+        return made
+    }
+
+    // The table a header's path names before its last part, made if need be.
+    fn onTheWay(_ table: TomlNode, _ path: TomlKey[>..], _ i: Int) throws(TomlError) -> TomlNode {
+        let key = path[i]
+        guard let next = table.child(key.name) else {
+            let made = try self.made(.Implicit, table.depth + 1, key.start)
+            table.add(key.name, made)
+            return made
+        }
+        if next.isTableArray {
+            return next.children[next.children.count - 1]
+        }
+        if !next.isTable {
+            throw error("'\(dotted(path, i))' is already \(next.kindName), not a table", key.start)
+        }
+        if next.origin == .Inline {
+            throw error("'\(dotted(path, i))' is an inline table, closed once written", key.start)
+        }
+        return next
+    }
+
+    // The table the header begins.
+    fn defined(_ table: TomlNode, _ path: TomlKey[>..], _ last: TomlKey, _ ofArray: Bool) throws(TomlError) -> TomlNode {
+        let name = dotted(path, path.count - 1)
+        let existing = table.child(last.name)
+        if ofArray {
+            var array: TomlNode
+            if let existing = existing {
+                if !existing.isTableArray {
+                    throw error("'\(name)' is already \(existing.kindName), not an array of tables", last.start)
+                }
+                array = existing
+            } else {
+                array = try made(.Value, table.depth + 1, last.start)
+                array.isArray = true
+                array.isTableArray = true
+                table.add(last.name, array)
+            }
+            let element = try made(.Header, array.depth + 1, last.start)
+            array.children.append(element)
+            return element
+        }
+        guard let found = existing else {
+            let fresh = try made(.Header, table.depth + 1, last.start)
+            table.add(last.name, fresh)
+            return fresh
+        }
+        if !found.isTable {
+            throw error("'\(name)' is already \(found.kindName), not a table", last.start)
+        }
+        if found.state != .Implicit {
+            throw error("the table '\(name)' is defined twice", last.start)
+        }
+        found.defined = .Header
+        return found
+    }
+
+    mutating fn statement(_ section: TomlNode) throws(TomlError) {
+        let leadStart = lead
+        let start = at
+        let node = try keyValue(section)
+        node.isStatement = true
+        node.leadStart = leadStart
+        try endLine()
+        node.lineEnd = at
+        section.bodyEnd = at
+        section.lastStatement = start
+    }
+
+    // 'key = value', into the table, or a dotted key's table in it.
+    mutating fn keyValue(_ section: TomlNode) throws(TomlError) -> TomlNode {
+        let start = at
+        let path = try key()
+        if peek() != 0x3D {
+            throw error("expected '=' after the key, found \(found())")
+        }
+        at += 1
+        skipSpace()
+        var table = section
+        for i in 0..<(path.count - 1) {
+            table = try dottedInto(table, path, i)
+        }
+        let last = path[path.count - 1]
+        if table.child(last.name) != none {
+            throw error("the key '\(dotted(path, path.count - 1))' is defined twice", last.start)
+        }
+        let node = try value(table.depth + 1)
+        node.itemStart = start
+        table.add(last.name, node)
+        return node
+    }
+
+    // The table a dotted key names before its last part, made if need be.
+    fn dottedInto(_ table: TomlNode, _ path: TomlKey[>..], _ i: Int) throws(TomlError) -> TomlNode {
+        let key = path[i]
+        guard let next = table.child(key.name) else {
+            let made = try self.made(.Dotted, table.depth + 1, key.start)
+            table.add(key.name, made)
+            return made
+        }
+        if next.state == .Implicit {
+            next.defined = .Dotted
+            return next
+        }
+        if next.state != .Dotted {
+            let what = next.state == .Header ? "a table with a header" : next.state == .Inline ? "an inline table" : next.kindName
+            throw error("'\(dotted(path, i))' is already \(what), so a dotted key cannot add to it", key.start)
+        }
+        return next
+    }
+
+    // The path as it would be written, down to the part.
+    fn dotted(_ path: TomlKey[>..], _ last: Int) -> String {
+        var text = ""
+        for i in 0...last {
+            text = text + (i > 0 ? "." : "") + tomlKey(path[i].name)
+        }
+        return text
+    }
+
+    // A key's parts, and the spaces after it.
+    mutating fn key() throws(TomlError) -> TomlKey[>..] {
+        var parts: TomlKey[>..] = []
+        while true {
+            skipSpace()
+            let start = at
+            var name = ""
+            if peek() == 0x22 {
+                name = try basicString()
+            } else if peek() == 0x27 {
+                name = try literalString()
+            } else {
+                while isBare(peek()) {
+                    at += 1
+                }
+                if at == start {
+                    throw error("expected a key, found \(found())")
+                }
+                name = text(start, at)
+            }
+            parts.append(TomlKey(name: name, start: start))
+            if parts.count > maximumDepth {
+                throw error("nested more than \(maximumDepth) deep", start)
+            }
+            skipSpace()
+            if peek() != 0x2E {
+                return parts
+            }
+            at += 1
+        }
+    }
+
+    fn text(_ from: Int, _ to: Int) -> String {
+        unsafe {
+            return String.fromUtf8Unchecked(bytes[from..<to])
+        }
+    }
+
+    // ---- Values --------------------------------------------------------------
+
+    mutating fn value(_ depth: Int) throws(TomlError) -> TomlNode {
+        let start = at
+        let first = peek()
+        if first == 0x5B {
+            return try array(depth)
+        }
+        if first == 0x7B {
+            return try inlineTable(depth)
+        }
+        let node = try made(.Value, depth, start)
+        if first == 0x22 {
+            node.scalar = .Text(value: peek(1) == 0x22 && peek(2) == 0x22 ? try multilineBasic() : try basicString())
+        } else if first == 0x27 {
+            node.scalar = .Text(value: peek(1) == 0x27 && peek(2) == 0x27 ? try multilineLiteral() : try literalString())
+        } else {
+            node.scalar = try plain()
+        }
+        node.start = start
+        node.end = at
+        return node
+    }
+
+    mutating fn array(_ depth: Int) throws(TomlError) -> TomlNode {
+        let node = try made(.Value, depth, at)
+        node.isArray = true
+        node.start = at
+        at += 1
+        try skipBlank()
+        while peek() != 0x5D {
+            if atEnd {
+                throw error("the array is not closed with ']'", node.start)
+            }
+            let item = try value(depth + 1)
+            item.itemStart = item.start
+            node.children.append(item)
+            node.itemStarts.append(item.start)
+            node.itemEnds.append(at)
+            try skipBlank()
+            if peek() == 0x2C {
+                at += 1
+                try skipBlank()
+            } else if peek() != 0x5D {
+                throw atEnd ? error("the array is not closed with ']'", node.start) : error("expected ',' or ']' in the array, found \(found())")
+            }
+        }
+        at += 1
+        node.end = at
+        return node
+    }
+
+    mutating fn inlineTable(_ depth: Int) throws(TomlError) -> TomlNode {
+        let node = try made(.Inline, depth, at)
+        node.start = at
+        at += 1
+        skipSpace()
+        while peek() != 0x7D {
+            let start = at
+            if lineBreak() > 0 || peek() == 0x23 {
+                throw error("an inline table is written on one line")
+            }
+            let _ = try keyValue(node)
+            node.itemStarts.append(start)
+            node.itemEnds.append(at)
+            skipSpace()
+            if peek() == 0x2C {
+                at += 1
+                skipSpace()
+                if peek() == 0x7D {
+                    throw error("an inline table has no comma after its last value")
+                }
+            } else if peek() != 0x7D {
+                throw lineBreak() > 0 ? error("an inline table is written on one line") : error("expected ',' or '}' in the inline table, found \(found())")
+            }
+        }
+        at += 1
+        node.end = at
+        return node
+    }
+
+    // A number, a Bool, a date or a time: a run of the bytes they have.
+    mutating fn plain() throws(TomlError) -> TomlValue {
+        let start = at
+        while isBare(peek()) || peek() == 0x2B || peek() == 0x2E || peek() == 0x3A {
+            at += 1
+        }
+        if at == start {
+            throw error("expected a value, found \(found())")
+        }
+        // A date and a time with a space between them.
+        if at - start == 10 && bytes[start + 4] == 0x2D && peek() == 0x20 && isDigit(peek(1)) {
+            at += 1
+            while isBare(peek()) || peek() == 0x2B || peek() == 0x2E || peek() == 0x3A {
+                at += 1
+            }
+        }
+        let word = text(start, at)
+        if word == "true" {
+            return .Bool(value: true)
+        }
+        if word == "false" {
+            return .Bool(value: false)
+        }
+        if isDigit(bytes[start]) && at - start >= 5 && (bytes[start + 4] == 0x2D || bytes[start + 2] == 0x3A) {
+            if let moment = tomlMoment(bytes[start..<at].toArray()) {
+                return moment
+            }
+            throw error("'\(word)' is not a date or a time", start)
+        }
+        if let number = tomlNumber(bytes[start..<at].toArray()) {
+            return number
+        }
+        throw error(tomlIntegerOverflows(word) ? "'\(word)' does not fit 64 bits" : "'\(word)' is not a value: a string needs quotes", start)
+    }
+
+    // ---- Strings -------------------------------------------------------------
+
+    mutating fn basicString() throws(TomlError) -> String {
+        let start = at
+        at += 1
+        var written: U8[>..] = []
+        while peek() != 0x22 {
+            if atEnd || lineBreak() > 0 {
+                throw error("the string is not closed on its line", start)
+            }
+            if peek() == 0x5C {
+                try escape(&written)
+            } else {
+                try plainByte(&written)
+            }
+        }
+        at += 1
+        unsafe {
+            return String.fromUtf8Unchecked(written)
+        }
+    }
+
+    mutating fn literalString() throws(TomlError) -> String {
+        let start = at
+        at += 1
+        while peek() != 0x27 {
+            if atEnd || lineBreak() > 0 {
+                throw error("the string is not closed on its line", start)
+            }
+            if isControl(peek()) {
+                throw error("a control character in a string")
+            }
+            at += 1
+        }
+        at += 1
+        return text(start + 1, at - 1)
+    }
+
+    mutating fn plainByte(_ written: inout U8[>..]) throws(TomlError) {
+        if isControl(peek()) {
+            throw error("a control character in a string, which needs an escape")
+        }
+        written.append(peek())
+        at += 1
+    }
+
+    mutating fn multilineBasic() throws(TomlError) -> String {
+        return try multiline(0x22)
+    }
+
+    mutating fn multilineLiteral() throws(TomlError) -> String {
+        return try multiline(0x27)
+    }
+
+    // A string of three quotes, its lines' ends as one line feed each.
+    mutating fn multiline(_ quote: U8) throws(TomlError) -> String {
+        let start = at
+        at += 3
+        at += lineBreak()
+        var written: U8[>..] = []
+        while true {
+            if atEnd {
+                throw error("the string is not closed with three quotes", start)
+            }
+            if peek() == quote && peek(1) == quote && peek(2) == quote {
+                // Up to two quotes may be next to the three.
+                var run = 3
+                while run < 5 && peek(run) == quote {
+                    run += 1
+                }
+                written.append(repeating: quote, count: run - 3)
+                at += run
+                unsafe {
+                    return String.fromUtf8Unchecked(written)
+                }
+            }
+            let length = lineBreak()
+            if length > 0 {
+                written.append(0x0A)
+                at += length
+            } else if peek() == 0x5C && quote == 0x22 {
+                if !skipLineEnd() {
+                    try escape(&written)
+                }
+            } else {
+                try plainByte(&written)
+            }
+        }
+    }
+
+    // A backslash that ends a line: it, the line break and all the space
+    // after it are no part of the string.
+    mutating fn skipLineEnd() -> Bool {
+        let start = at
+        at += 1
+        skipSpace()
+        if lineBreak() == 0 {
+            at = start
+            return false
+        }
+        while true {
+            skipSpace()
+            let length = lineBreak()
+            if length == 0 {
+                return true
+            }
+            at += length
+        }
+    }
+
+    mutating fn escape(_ written: inout U8[>..]) throws(TomlError) {
+        let start = at
+        let kind = peek(1)
+        at += 2
+        if kind == 0x62 {
+            written.append(0x08)
+        } else if kind == 0x74 {
+            written.append(0x09)
+        } else if kind == 0x6E {
+            written.append(0x0A)
+        } else if kind == 0x66 {
+            written.append(0x0C)
+        } else if kind == 0x72 {
+            written.append(0x0D)
+        } else if kind == 0x22 || kind == 0x5C {
+            written.append(kind)
+        } else if kind == 0x75 || kind == 0x55 {
+            let digits = kind == 0x75 ? 4 : 8
+            var code = 0
+            for _ in 0..<digits {
+                let digit = tomlDigit(peek())
+                if digit < 0 || digit > 15 {
+                    throw error("an escape '\\\(kind == 0x75 ? "u" : "U")' needs \(digits) hexadecimal digits", start)
+                }
+                code = code * 16 + digit
+                at += 1
+            }
+            guard let char = Char.fromCodePoint(value: code) else {
+                throw error("the escape is not a Unicode scalar value", start)
+            }
+            char.encodeUtf8(into: &written)
+        } else {
+            at = start
+            throw error("not an escape TOML has")
+        }
+    }
+}
+
+// ---- Bytes -------------------------------------------------------------------
+
+// A control character TOML has nowhere: any but the tab.
+fn isControl(_ byte: U8) -> Bool {
+    return byte < 0x20 && byte != 0x09 || byte == 0x7F
+}
+
+fn isDigit(_ byte: U8) -> Bool {
+    return byte >= 0x30 && byte <= 0x39
+}
+
+fn isBare(_ byte: U8) -> Bool {
+    return isDigit(byte) || byte >= 0x41 && byte <= 0x5A || byte >= 0x61 && byte <= 0x7A || byte == 0x5F || byte == 0x2D
+}
+
+// A digit's value, up to 35; -1 for a byte that is none.
+fn tomlDigit(_ byte: U8) -> Int {
+    if isDigit(byte) {
+        return Int(byte) - 0x30
+    }
+    if byte >= 0x61 && byte <= 0x7A {
+        return Int(byte) - 0x61 + 10
+    }
+    if byte >= 0x41 && byte <= 0x5A {
+        return Int(byte) - 0x41 + 10
+    }
+    return -1
+}

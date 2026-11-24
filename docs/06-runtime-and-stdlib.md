@@ -878,8 +878,15 @@ Sable.Serialize     Serializable (encode(to:), static decode(from:)) for
                     can conform to; JsonEncoder, which writes JSON as it
                     goes, and JsonDecoder, over a one-pass index of the
                     document, every error at its path ($.items[3].name);
-                    Json.encode/decode; JsonValue. Not yet: TOML,
-                    MessagePack, and the zero-copy @inline_layout path
+                    Json.encode/decode; JsonValue. TOML 1.0: Toml, TomlValue,
+                    TomlEncoder and TomlDecoder, and TomlDocument, which
+                    edits a text and keeps its comments and layout.
+                    MessagePack: extensions and timestamps. CBOR (RFC 8949):
+                    tags, indefinite lengths, the deterministic encoding, and
+                    CborReader a token at a time. Each bounds depth and checks
+                    a declared length before making anything of it. A type
+                    asks `encoder as? CborEncoder` for what one format alone
+                    has. Not yet: the zero-copy @inline_layout path
 Sable.Concurrency   Channel and ThrowingChannel (unbounded, or bounded with
                     a full mode: wait — the sender's backpressure — or
                     drop oldest, newest or the write; close(error:);

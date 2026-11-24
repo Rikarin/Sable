@@ -1,0 +1,38 @@
+module Sable.Serialize
+
+/// Why a text is not TOML, and where: the line and the column are counted
+/// from 1, the column in characters.
+///
+/// ```sable
+/// do {
+///     let _ = try Toml.parse("a = 1\na = 2")
+/// } catch {
+///     assert(error.position.line == 2 && error.position.column == 1)
+///     assert(error.description() == "line 2, column 1: the key 'a' is defined twice")
+/// }
+/// ```
+public struct TomlError: Error {
+    public let position: Position
+    public let reason: String
+
+    init(_ bytes: U8[>..], _ at: Int, _ reason: String) {
+        var line = 1
+        var column = 1
+        var i = 0
+        while i < at && i < bytes.count {
+            if bytes[i] == 0x0A {
+                line += 1
+                column = 1
+            } else if (bytes[i] & 0xC0) != 0x80 {
+                column += 1
+            }
+            i += 1
+        }
+        self.position = Position(offset: at, line: line, column: column)
+        self.reason = reason
+    }
+
+    public fn description() -> String {
+        return "\(describePosition(position)): \(reason)"
+    }
+}

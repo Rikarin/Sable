@@ -1,0 +1,144 @@
+module Sable.Serialize
+
+import Sable.Text
+
+/// CBOR (RFC 8949) read a token at a time, what it nests checked as it
+/// goes: every array and map ends where it says, a map has its values and a
+/// tag its item. Reads one item, or, going on after the first, a sequence of
+/// them (RFC 8742).
+///
+/// ```sable
+/// var reader = CborReader([0x82, 0x01, 0x9F, 0xF6, 0xFF])
+/// assert(try! reader.next()! == .BeginArray(count: 2))
+/// assert(try! reader.next()! == .Unsigned(value: 1))
+/// assert(try! reader.next()! == .BeginArray(count: none))
+/// assert(try! reader.next()! == .Simple(value: 22))
+/// assert(try! reader.next()! == .End)
+/// assert(try! reader.next()! == .End)
+/// assert(try! reader.next() == none)
+/// ```
+public struct CborReader {
+    let bytes: U8[>..]
+    let maximumDepth: Int
+    // The arrays, maps and tags open: for each, its major type, how many
+    // more items it holds (-1 for an indefinite length), and how many it
+    // has had.
+    var majors: Int[>..] = []
+    var left: Int[>..] = []
+    var counts: Int[>..] = []
+    var at: Int = 0
+
+    /// A reader of the bytes, which may nest no deeper than that.
+    public init(_ bytes: U8[>..], maximumDepth: Int = 128) {
+        self.bytes = bytes
+        self.maximumDepth = maximumDepth
+    }
+
+    /// How many bytes have been read.
+    public var position: Int => at
+
+    /// How many arrays, maps and tags the next token is in.
+    public var depth: Int => majors.count
+
+    /// The next token; none at the end of the bytes, after a whole item.
+    public mutating fn next() throws(SerializeError) -> CborToken? {
+        // Tags end with their item, silently.
+        while !left.isEmpty && left[left.count - 1] == 0 {
+            let major = majors[majors.count - 1]
+            pop()
+            if major != 6 {
+                return .End
+            }
+        }
+        if at == bytes.count && majors.isEmpty {
+            return none
+        }
+        let start = at
+        let head = try cborHead(bytes, at)
+        if head.major == 8 {
+            try endIndefinite(start)
+            at += 1
+            return .End
+        }
+        if head.major < 4 || head.major == 7 {
+            let token = try self.token(start, head)
+            count()
+            return token
+        }
+        if head.major == 6 {
+            try push(head, 1, start)
+            return .Tag(number: head.argument)
+        }
+        if head.isIndefinite {
+            try push(head, -1, start)
+            return head.major == 4 ? .BeginArray(count: none) : .BeginMap(count: none)
+        }
+        let each = head.major == 5 ? 2 : 1
+        // Each item is a byte at least.
+        if head.argument > U64((bytes.count - start - head.size) / each) {
+            throw cborFault("more items than there are bytes for", start)
+        }
+        let items = Int(head.argument)
+        try push(head, items * each, start)
+        return head.major == 4 ? .BeginArray(count: items) : .BeginMap(count: items)
+    }
+
+    // The token of an item that holds no others, read past.
+    mutating fn token(_ start: Int, _ head: CborHead) throws(SerializeError) -> CborToken {
+        at = start + head.size
+        if head.major == 0 {
+            return .Unsigned(value: head.argument)
+        }
+        if head.major == 1 {
+            return .Negative(n: head.argument)
+        }
+        if head.major == 7 {
+            return head.info < 25 ? .Simple(value: U8(head.argument)) : .Float(value: cborFloat(head))
+        }
+        let found = try CborString(bytes, start, head)
+        at = found.end
+        if head.major == 2 {
+            return .Bytes(value: found.data(bytes))
+        }
+        unsafe {
+            return .Text(value: String.fromUtf8Unchecked(found.data(bytes)))
+        }
+    }
+
+    // Counts an item in what is open.
+    mutating fn count() {
+        if !left.isEmpty {
+            counts[counts.count - 1] += 1
+            if left[left.count - 1] > 0 {
+                left[left.count - 1] -= 1
+            }
+        }
+    }
+
+    mutating fn push(_ head: CborHead, _ items: Int, _ start: Int) throws(SerializeError) {
+        if majors.count >= maximumDepth {
+            throw cborFault("nested more than \(maximumDepth) deep", start)
+        }
+        count()
+        majors.append(head.major)
+        left.append(items)
+        counts.append(0)
+        at = start + head.size
+    }
+
+    mutating fn pop() {
+        let _ = majors.removeLast()
+        let _ = left.removeLast()
+        let _ = counts.removeLast()
+    }
+
+    mutating fn endIndefinite(_ start: Int) throws(SerializeError) {
+        if left.isEmpty || left[left.count - 1] >= 0 {
+            throw cborFault("a break outside an indefinite length", start)
+        }
+        if majors[majors.count - 1] == 5 && counts[counts.count - 1] % 2 != 0 {
+            throw cborFault("a key without its value", start)
+        }
+        pop()
+    }
+}

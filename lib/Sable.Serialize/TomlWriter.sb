@@ -1,0 +1,138 @@
+module Sable.Serialize
+
+// Values as TOML: a table's own values first, then each table in it under a
+// [header] and each array of tables under [[headers]].
+
+// A key, bare when it can be.
+fn tomlKey(_ key: String) -> String {
+    var bare = !key.isEmpty
+    for byte in utf8Bytes(key) {
+        bare = bare && isBare(byte)
+    }
+    return bare ? key : tomlQuoted(key)
+}
+
+// A path of keys, as a header or a dotted key has it.
+fn tomlPath(_ keys: String[>..]) -> String {
+    return keys.map({ tomlKey($0) }).joined(separator: ".")
+}
+
+// A basic string.
+fn tomlQuoted(_ value: String) -> String {
+    var written: U8[>..] = [0x22]
+    for byte in utf8Bytes(value) {
+        if byte == 0x22 || byte == 0x5C {
+            written.append(0x5C)
+            written.append(byte)
+        } else if byte == 0x0A {
+            written.append(utf8: "\\n")
+        } else if byte == 0x0D {
+            written.append(utf8: "\\r")
+        } else if byte == 0x09 {
+            written.append(utf8: "\\t")
+        } else if byte < 0x20 || byte == 0x7F {
+            written.append(utf8: "\\u00")
+            written.append(jsonHex(Int(byte) >> 4))
+            written.append(jsonHex(Int(byte) & 15))
+        } else {
+            written.append(byte)
+        }
+    }
+    written.append(0x22)
+    return asciiText(written, 0)
+}
+
+// A value where one goes after '=' or in an array, all on one line.
+fn tomlInline(_ value: TomlValue) -> String {
+    return match value {
+        case .Text(let text)       => tomlQuoted(text)
+        case .Integer(let integer) => "\(integer)"
+        case .Float(let float)     => tomlFloat(float)
+        case .Bool(let bool)       => bool ? "true" : "false"
+        case .Array(let items)     => "[" + items.map({ tomlInline($0) }).joined(separator: ", ") + "]"
+        case .Table(let table) => table.isEmpty
+            ? "{}"
+            : "{ " + table.entries.map({ tomlKey($0.key) + " = " + tomlInline($0.value) }).joined(separator: ", ") + " }"
+        case _ => value.text!
+    }
+}
+
+fn tomlFloat(_ value: F64) -> String {
+    if value != value {
+        return "nan"
+    }
+    if !value.isFinite {
+        return value > 0.0 ? "inf" : "-inf"
+    }
+    return "\(value)"
+}
+
+// Whether the value is an array of tables, of one at least.
+fn isTableArray(_ value: TomlValue) -> Bool {
+    guard let items = value.items else {
+        return false
+    }
+    return !items.isEmpty && items.allSatisfy({ $0.table != none })
+}
+
+// The table's own values, and then the tables in it; a line break between
+// them and what is written before.
+fn writeTomlTable(_ to: inout U8[>..], _ table: TomlTable, _ path: String[>..], _ newline: String) {
+    for entry in table.entries {
+        if entry.value.table == none && !isTableArray(entry.value) {
+            to.append(utf8: tomlKey(entry.key) + " = " + tomlInline(entry.value) + newline)
+        }
+    }
+    for entry in table.entries {
+        var below = path
+        below.append(entry.key)
+        if let inner = entry.value.table {
+            // A table of nothing but tables is named by theirs.
+            let named = inner.isEmpty || inner.entries.contains(where: { $0.value.table == none && !isTableArray($0.value) })
+            if named {
+                writeTomlHeader(&to, "[" + tomlPath(below) + "]", newline)
+            }
+            writeTomlTable(&to, inner, below, newline)
+        } else if isTableArray(entry.value) {
+            for item in entry.value.items! {
+                writeTomlHeader(&to, "[[" + tomlPath(below) + "]]", newline)
+                writeTomlTable(&to, item.table!, below, newline)
+            }
+        }
+    }
+}
+
+// A header, after a blank line when anything is before it.
+fn writeTomlHeader(_ to: inout U8[>..], _ header: String, _ newline: String) {
+    if !to.isEmpty {
+        to.append(utf8: newline)
+    }
+    to.append(utf8: header + newline)
+}
+
+// The first thing in the value that TOML cannot write, or none: a date of a
+// year RFC 3339 does not have.
+fn tomlFault(_ value: TomlValue) -> String? {
+    let year = match value {
+        case .OffsetDateTime(let moment) => moment.year
+        case .LocalDateTime(let moment)  => moment.year
+        case .LocalDate(let date)        => date.year
+        case _                           => 0
+    }
+    if year < 0 || year > 9999 {
+        return "TOML has no year \(year)"
+    }
+    if let table = value.table {
+        for entry in table.entries {
+            if let fault = tomlFault(entry.value) {
+                return fault
+            }
+        }
+    }
+    for item in value.items ?? [] {
+        if let fault = tomlFault(item) {
+            return fault
+        }
+    }
+    return none
+}

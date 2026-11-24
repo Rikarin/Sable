@@ -1,0 +1,155 @@
+module Sable.Serialize
+
+import Sable.Time
+
+/// Any TOML value. As a Serializable it is the value it holds, in TOML; in
+/// another format a date or a time is a string, as RFC 3339 writes it.
+///
+/// ```sable
+/// let table = try! Toml.parse("day = 2026-11-24\nports = [1, 2]")
+/// assert(table["day"]!.text == "2026-11-24")
+/// assert(table["ports"]! == .Array(items: [.Integer(value: 1), .Integer(value: 2)]))
+/// ```
+@frozen
+@derive(Equatable, Debug)
+public union TomlValue {
+    Text(value: String)
+    Integer(value: Int)
+    Float(value: F64)
+    Bool(value: Bool)
+    /// A date and a time with an offset from UTC.
+    OffsetDateTime(value: OffsetDateTime)
+    LocalDateTime(value: LocalDateTime)
+    LocalDate(value: Date)
+    LocalTime(value: TimeOfDay)
+    Array(items: TomlValue[>..])
+    Table(table: TomlTable)
+
+    /// The text of a string, or of a date or a time.
+    public var text: String? {
+        get {
+            return match self {
+                case .Text(let value)           => value
+                case .OffsetDateTime(let value) => value.offset == UtcOffset.utc ? value.local.toString() + "Z" : value.rfc3339()
+                case .LocalDateTime(let value)  => value.toString()
+                case .LocalDate(let value)      => value.toString()
+                case .LocalTime(let value)      => value.toString()
+                case _                          => none
+            }
+        }
+    }
+
+    /// The table, if this is one.
+    public var table: TomlTable? {
+        get {
+            if case .Table(let table) = self {
+                return table
+            }
+            return none
+        }
+    }
+
+    /// The elements, if this is an array.
+    public var items: TomlValue[>..]? {
+        get {
+            if case .Array(let items) = self {
+                return items
+            }
+            return none
+        }
+    }
+
+    /// What the value is, as an error says it: "a string", "a table", …
+    public var kindName: String {
+        get {
+            return match self {
+                case .Text(_)           => "a string"
+                case .Integer(_)        => "an integer"
+                case .Float(_)          => "a float"
+                case .Bool(_)           => "a Bool"
+                case .OffsetDateTime(_) => "a date-time"
+                case .LocalDateTime(_)  => "a date-time"
+                case .LocalDate(_)      => "a date"
+                case .LocalTime(_)      => "a time"
+                case .Array(_)          => "an array"
+                case .Table(_)          => "a table"
+            }
+        }
+    }
+}
+
+extension TomlValue: Serializable {
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        if let encoder = encoder as? TomlEncoder {
+            try encoder.encodeValue(self)
+            return
+        }
+        match self {
+            case .Integer(let value) => try encoder.encodeInt(value)
+            case .Float(let value)   => try encoder.encodeFloat(value)
+            case .Bool(let value)    => try encoder.encodeBool(value)
+            case .Array(let items) => {
+                try encoder.beginSequence(count: items.count)
+                for item in items {
+                    try item.encode(to: encoder)
+                }
+                try encoder.endSequence()
+            }
+            case .Table(let table) => {
+                try encoder.beginMap(count: table.count)
+                for entry in table.entries {
+                    try encoder.encodeKey(entry.key)
+                    try entry.value.encode(to: encoder)
+                }
+                try encoder.endMap()
+            }
+            case _ => try encoder.encodeString(text!)
+        }
+    }
+
+    /// Whatever value is there, from TOML or any other format, but null,
+    /// which TOML has none of.
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> TomlValue {
+        if let decoder = decoder as? TomlDecoder {
+            return try decoder.decodeValue()
+        }
+        let kind = decoder.kind
+        if kind == .Missing {
+            throw decoder.mismatch("a value")
+        }
+        if kind == .Null {
+            throw decoder.invalid("TOML has no null")
+        }
+        if kind == .Bool {
+            return .Bool(value: try decoder.decodeBool())
+        }
+        if kind == .Number {
+            if let value = try? decoder.decodeInt() {
+                return .Integer(value: value)
+            }
+            return .Float(value: try decoder.decodeFloat())
+        }
+        if kind == .String {
+            return .Text(value: try decoder.decodeString())
+        }
+        if kind == .Bytes {
+            var items: TomlValue[>..] = []
+            for byte in try decoder.decodeBytes() {
+                items.append(.Integer(value: Int(byte)))
+            }
+            return .Array(items: items)
+        }
+        if kind == .Sequence {
+            var items: TomlValue[>..] = []
+            for element in try decoder.decodeSequence() {
+                items.append(try TomlValue.decode(from: element))
+            }
+            return .Array(items: items)
+        }
+        var table = TomlTable()
+        for member in try decoder.decodeMap() {
+            table[member.key] = try TomlValue.decode(from: member.value)
+        }
+        return .Table(table: table)
+    }
+}

@@ -1,0 +1,73 @@
+module Sable.Serialize
+
+// An array or a map a binary encoder has open.
+struct BinaryFrame {
+    // Where its contents start, and its header is to go if its count was not
+    // known when it was begun.
+    let start: Int
+    let isMap: Bool
+    // How many items it was said to have, a map's keys and values both.
+    let count: Int?
+    // How many have been written: in a map, an even number means a key next.
+    var written: Int = 0
+    // Where each of a map's keys and values starts, kept only to sort them.
+    var starts: Int[>..] = []
+}
+
+// What is wrong with the frame now it is ended, or none.
+fn frameFault(_ frame: BinaryFrame) -> String? {
+    if frame.isMap && frame.written % 2 != 0 {
+        return "a key was written without its value"
+    }
+    if let count = frame.count {
+        if count != frame.written {
+            let unit = frame.isMap ? 2 : 1
+            return "\(count / unit) \(frame.isMap ? "entries" : "elements") were declared and \(frame.written / unit) written"
+        }
+    }
+    return none
+}
+
+// The bytes put in at the position, what is after it moved along.
+fn insertBytes(_ into: inout U8[>..], _ bytes: U8[>..], at position: Int) {
+    let end = into.count
+    let by = bytes.count
+    into.append(repeating: 0, count: by)
+    var i = end - 1
+    while i >= position {
+        into[i + by] = into[i]
+        i -= 1
+    }
+    i = 0
+    while i < by {
+        into[position + i] = bytes[i]
+        i += 1
+    }
+}
+
+// The big-endian bytes of the value's low 'width' bytes.
+fn appendBigEndian(_ to: inout U8[>..], _ value: U64, _ width: Int) {
+    var shift = (width - 1) * 8
+    while shift >= 0 {
+        to.append(U8.truncating(value >> U64(shift)))
+        shift -= 8
+    }
+}
+
+// The unsigned big-endian integer of 'width' bytes there.
+fn readBigEndian(_ bytes: U8[>..], _ at: Int, _ width: Int) -> U64 {
+    var value: U64 = 0
+    var i = 0
+    while i < width {
+        value = value << 8 | U64(bytes[at + i])
+        i += 1
+    }
+    return value
+}
+
+// A text's bytes.
+fn utf8Bytes(_ text: String) -> U8[>..] {
+    var bytes: U8[>..] = []
+    bytes.append(utf8: text)
+    return bytes
+}

@@ -1,0 +1,140 @@
+module Sable.Serialize
+
+import Sable.Text
+
+// What kind of item a CBOR node is.
+enum CborKind {
+    Unsigned
+    Negative
+    Bytes
+    Text
+    Array
+    Map
+    Tag
+    Bool
+    Null
+    Undefined
+    Simple
+    Float
+}
+
+// A CBOR document as an index of its items, in the order they are written:
+// where each starts, and the item after it and all it holds. An array's,
+// map's or tag's first child is the item after it. Made by CborParser, which
+// has checked every length in it.
+final class CborDocument {
+    let bytes: U8[>..]
+    let starts: Int[>..]
+    let afters: Int[>..]
+
+    init(bytes: U8[>..], starts: Int[>..], afters: Int[>..]) {
+        self.bytes = bytes
+        self.starts = starts
+        self.afters = afters
+    }
+
+    // The node's head, which the parser has read once.
+    fn head(_ node: Int) -> CborHead {
+        return try! cborHead(bytes, starts[node])
+    }
+
+    fn kind(_ node: Int) -> CborKind {
+        let first = bytes[starts[node]]
+        let info = first & 31
+        return match first >> 5 {
+            case 0 => .Unsigned
+            case 1 => .Negative
+            case 2 => .Bytes
+            case 3 => .Text
+            case 4 => .Array
+            case 5 => .Map
+            case 6 => .Tag
+            case _ => info == 20 || info == 21 ? .Bool : info == 22 ? .Null : info == 23 ? .Undefined : info < 25 ? .Simple : .Float
+        }
+    }
+
+    // The node the tags on this one are of.
+    fn untagged(_ node: Int) -> Int {
+        var found = node
+        while kind(found) == .Tag {
+            found += 1
+        }
+        return found
+    }
+
+    // The elements of an array, or a map's entries.
+    fn count(_ node: Int) -> Int {
+        let head = self.head(node)
+        if !head.isIndefinite {
+            return Int(head.argument)
+        }
+        var count = 0
+        var child = node + 1
+        while child < afters[node] {
+            count += 1
+            child = afters[child]
+        }
+        return kind(node) == .Map ? count / 2 : count
+    }
+
+    // Whether the map has one entry.
+    fn hasOneEntry(_ node: Int) -> Bool {
+        return afters[node] > node + 1 && afters[afters[node + 1]] == afters[node]
+    }
+
+    fn data(_ node: Int) -> U8[>..] {
+        return (try! CborString(bytes, starts[node], head(node))).data(bytes)
+    }
+
+    fn string(_ node: Int) -> String {
+        unsafe {
+            return String.fromUtf8Unchecked(data(node))
+        }
+    }
+
+    // Whether the node is the text, without making one.
+    fn isString(_ node: Int, _ text: String) -> Bool {
+        if kind(node) != .Text {
+            return false
+        }
+        let head = self.head(node)
+        if head.isIndefinite {
+            return string(node) == text
+        }
+        let length = text.utf8Count
+        if head.argument != U64(length) {
+            return false
+        }
+        let start = starts[node] + head.size
+        let other = text.utf8
+        var i = 0
+        while i < length {
+            if bytes[start + i] != other[i] {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+
+    // A key as a member's name: text, or an integer's digits; none for a key
+    // of any other kind.
+    fn name(_ node: Int) -> String? {
+        let kind = self.kind(node)
+        if kind == .Text {
+            return string(node)
+        }
+        if kind == .Unsigned {
+            return "\(head(node).argument)"
+        }
+        if kind == .Negative {
+            return negativeText(head(node).argument)
+        }
+        return none
+    }
+}
+
+// The digits of -1 - n.
+fn negativeText(_ n: U64) -> String {
+    return n == U64.max ? "-18446744073709551616" : "-\(n + 1)"
+}

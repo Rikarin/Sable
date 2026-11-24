@@ -8880,6 +8880,13 @@ public sealed partial class SilGen {
                 return Missing(conversion, $"the cast to '{targetSymbol.ToDisplayString()}'");
             }
 
+            // In an instance of a generic function, where what was a type
+            // parameter's value is of a known class, the cast may go up, which
+            // always succeeds, or to a class on another line, which never does.
+            if (value.Type is ClassType known && !target.IsSubclassOf(known)) {
+                return SettledCast(conversion, value, known.IsSubclassOf(target) ? target : null, targetSymbol);
+            }
+
             var isA = Emit(new BuiltinInst($"class_is:{target.Name}", SilType.Bool, value));
             if (!optional) {
                 Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, isA)), $"cast to '{targetSymbol.ToDisplayString()}' failed"));
@@ -8910,6 +8917,33 @@ public sealed partial class SilGen {
 
             _current = after;
             return joined;
+        }
+
+        /// <summary>A downcast that always gives <paramref name="value" /> as <paramref name="up" />, a class it inherits from, or, with none, never succeeds.</summary>
+        SilValue? SettledCast(BoundConversion conversion, SilValue value, ClassType? up, TypeSymbol targetSymbol) {
+            if (LowerType(conversion.Type) is not { } result) {
+                Destroy(value);
+                return Missing(conversion, $"the cast to '{targetSymbol.ToDisplayString()}'");
+            }
+
+            var optional = Sub(conversion.Type) is OptionalTypeSymbol ? result as EnumType : null;
+            if (up is not null) {
+                var cast = Emit(new CopyValueInst(Emit(new UpcastInst(value, up))));
+                Destroy(value);
+                return optional is null ? cast : Emit(new EnumInst(optional, optional.CaseIndex("Some"), cast));
+            }
+
+            Destroy(value);
+            if (optional is not null) {
+                return Emit(new EnumInst(optional, optional.CaseIndex("None"), null));
+            }
+
+            Emit(new CondFailInst(Emit(new IntegerLiteralInst(SilType.Bool, 1)), $"cast to '{targetSymbol.ToDisplayString()}' failed"));
+            Jump(new UnreachableInst());
+
+            // Never reached: a block nothing branches to, dropped with what uses it.
+            _current = function.AddBlock();
+            return _current.AddArgument(result);
         }
 
         /// <summary>

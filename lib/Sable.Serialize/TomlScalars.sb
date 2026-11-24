@@ -1,0 +1,216 @@
+module Sable.Serialize
+
+import Sable.Text
+import Sable.Time
+
+// TOML's numbers, dates and times, from the bytes of one.
+
+// The integer or float the bytes are, or none.
+fn tomlNumber(_ word: U8[>..]) -> TomlValue? {
+    var start = 0
+    if word[0] == 0x2B || word[0] == 0x2D {
+        start = 1
+    }
+    let rest = word.count - start
+    if rest == 3 {
+        let name = asciiText(word, start)
+        if name == "inf" {
+            return .Float(value: word[0] == 0x2D ? -F64.infinity : F64.infinity)
+        }
+        if name == "nan" {
+            return .Float(value: F64.nan)
+        }
+    }
+    if start == 0 && rest > 2 && word[0] == 0x30 {
+        let base = word[1] == 0x78 ? 16 : word[1] == 0x6F ? 8 : word[1] == 0x62 ? 2 : 0
+        if base > 0 {
+            if let value = tomlDigits(word, 2, word.count, base, false) {
+                return .Integer(value: value)
+            }
+            return none
+        }
+    }
+    var i = digitsEnd(word, start)
+    if i == start || word[start] == 0x30 && i > start + 1 {
+        return none
+    }
+    if i == word.count {
+        if let value = tomlDigits(word, start, i, 10, word[0] == 0x2D) {
+            return .Integer(value: value)
+        }
+        return none
+    }
+    if word[i] == 0x2E {
+        let end = digitsEnd(word, i + 1)
+        if end == i + 1 {
+            return none
+        }
+        i = end
+    }
+    if i < word.count && (word[i] == 0x65 || word[i] == 0x45) {
+        i += 1
+        if i < word.count && (word[i] == 0x2B || word[i] == 0x2D) {
+            i += 1
+        }
+        let end = digitsEnd(word, i)
+        if end == i {
+            return none
+        }
+        i = end
+    }
+    if i != word.count {
+        return none
+    }
+    var plain: U8[>..] = []
+    for byte in word {
+        if byte != 0x5F {
+            plain.append(byte)
+        }
+    }
+    if let value = try? F64.parse(asciiText(plain, 0)) {
+        return .Float(value: value)
+    }
+    return none
+}
+
+fn asciiText(_ bytes: U8[>..], _ from: Int) -> String {
+    unsafe {
+        return String.fromUtf8Unchecked(bytes[from..<bytes.count])
+    }
+}
+
+// The end of the run of decimal digits there, with underscores between
+// them; the start itself when there is none, or an underscore is elsewhere.
+fn digitsEnd(_ word: U8[>..], _ start: Int) -> Int {
+    var i = start
+    while i < word.count && (isDigit(word[i]) || word[i] == 0x5F) {
+        if word[i] == 0x5F && (i == start || i + 1 >= word.count || !isDigit(word[i + 1])) {
+            return start
+        }
+        i += 1
+    }
+    return i
+}
+
+// The integer the digits are, with underscores between them, or none: not
+// digits, or past 64 bits.
+fn tomlDigits(_ word: U8[>..], _ start: Int, _ end: Int, _ base: Int, _ negative: Bool) -> Int? {
+    // Accumulated negatively, so that Int.min fits.
+    var value = 0
+    var afterDigit = false
+    for i in start..<end {
+        if word[i] == 0x5F {
+            if !afterDigit {
+                return none
+            }
+            afterDigit = false
+            continue
+        }
+        let digit = tomlDigit(word[i])
+        if digit < 0 || digit >= base || value < (Int.min + digit) / base {
+            return none
+        }
+        value = value * base - digit
+        afterDigit = true
+    }
+    if !afterDigit || !negative && value == Int.min {
+        return none
+    }
+    return negative ? value : -value
+}
+
+// Whether the word is an integer's, of more than 64 bits.
+fn tomlIntegerOverflows(_ word: String) -> Bool {
+    let bytes = utf8Bytes(word)
+    let signed = bytes[0] == 0x2B || bytes[0] == 0x2D
+    let start = signed ? 1 : 0
+    return bytes.count - start >= 19 && bytes[start] != 0x30 && digitsEnd(bytes, start) == bytes.count
+}
+
+// The date, the time or both that the bytes are, or none.
+fn tomlMoment(_ word: U8[>..]) -> TomlValue? {
+    if word[2] == 0x3A {
+        if let (time, end) = tomlTime(word, 0) {
+            return end == word.count ? .LocalTime(value: time) : none
+        }
+        return none
+    }
+    guard word.count >= 10 && word[4] == 0x2D && word[7] == 0x2D, let year = twoOrMore(word, 0, 4), let month = twoOrMore(word, 5, 2),
+        let day = twoOrMore(word, 8, 2), let date = Date.of(year: year, month: month, day: day) else {
+        return none
+    }
+    if word.count == 10 {
+        return .LocalDate(value: date)
+    }
+    if word[10] != 0x54 && word[10] != 0x74 && word[10] != 0x20 {
+        return none
+    }
+    guard let (time, end) = tomlTime(word, 11) else {
+        return none
+    }
+    let local = LocalDateTime(date: date, time: time)
+    if end == word.count {
+        return .LocalDateTime(value: local)
+    }
+    if word[end] == 0x5A || word[end] == 0x7A {
+        return end + 1 == word.count ? .OffsetDateTime(value: local.withOffset(UtcOffset.utc)) : none
+    }
+    guard word.count == end + 6 && word[end + 3] == 0x3A && (word[end] == 0x2B || word[end] == 0x2D), let hours = twoOrMore(word, end + 1, 2),
+        let minutes = twoOrMore(word, end + 4, 2) else {
+        return none
+    }
+    if hours > 23 || minutes > 59 {
+        return none
+    }
+    let seconds = (hours * 60 + minutes) * 60
+    return .OffsetDateTime(value: local.withOffset(UtcOffset.of(seconds: word[end] == 0x2D ? -seconds : seconds)!))
+}
+
+// The number of exactly that many digits there, or none.
+fn twoOrMore(_ word: U8[>..], _ start: Int, _ count: Int) -> Int? {
+    if start + count > word.count {
+        return none
+    }
+    var value = 0
+    for i in start..<(start + count) {
+        if !isDigit(word[i]) {
+            return none
+        }
+        value = value * 10 + Int(word[i]) - 0x30
+    }
+    return value
+}
+
+// 'HH:MM:SS', and a fraction if there is one, cut off after nanoseconds; and
+// where it ends. A leap second, 60, is the last second of its minute, as it
+// is to Sable.Time.
+fn tomlTime(_ word: U8[>..], _ start: Int) -> (TimeOfDay, Int)? {
+    if word.count < start + 8 || word[start + 2] != 0x3A || word[start + 5] != 0x3A {
+        return none
+    }
+    guard let hour = twoOrMore(word, start, 2), let minute = twoOrMore(word, start + 3, 2), let second = twoOrMore(word, start + 6, 2) else {
+        return none
+    }
+    if second > 60 {
+        return none
+    }
+    var nanosecond = 0
+    var i = start + 8
+    if i < word.count && word[i] == 0x2E {
+        let first = i + 1
+        i = first
+        var unit = 100000000
+        while i < word.count && isDigit(word[i]) {
+            nanosecond += (Int(word[i]) - 0x30) * unit
+            unit = unit / 10
+            i += 1
+        }
+        if i == first {
+            return none
+        }
+    }
+    guard let time = TimeOfDay.of(hour: hour, minute: minute, second: second == 60 ? 59 : second, nanosecond: nanosecond) else {
+        return none
+    }
+    return (time, i)
+}

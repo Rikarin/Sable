@@ -1,0 +1,8 @@
+module Sable.Serialize
+
+/// A TOML table's entry, as `TomlTable.entries` gives them.
+@derive(Equatable, Debug)
+public struct TomlEntry {
+    public var key: String
+    public var value: TomlValue
+}

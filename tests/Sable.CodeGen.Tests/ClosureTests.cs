@@ -609,4 +609,25 @@ public sealed class ClosureTests {
                 pool.giveBack(move rented)
                 print(pool.rent(minimumCapacity: 1000).capacity)
             """);
+
+    /// <summary>What a closure throws is its own: not what one inside it throws, and not lost to one that throws nothing.</summary>
+    [Fact]
+    public void AClosureInsideAClosureThrowsForItself() =>
+        Prints(
+            "caught\nthrew\n",
+            """
+            struct Bad: Error {}
+            fn risky() throws(Bad) { throw Bad {} }
+            fn run<E>(_ body: () throws(E) -> Void) throws(E) { try body() }
+            fn caught(_ body: () throws(Bad) -> Void) -> String {
+                do { try body(); return "fine" } catch { return "caught" }
+            }
+            """,
+            """
+                let quiet = { () -> String in caught({ try risky() }) }
+                print(quiet())
+                do {
+                    try run({ try risky(); let _ = caught({ }) })
+                } catch { print("threw") }
+            """);
 }

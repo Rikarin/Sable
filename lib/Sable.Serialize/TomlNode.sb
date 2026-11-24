@@ -1,0 +1,122 @@
+module Sable.Serialize
+
+import Sable.Collections
+
+// How a table came to be, which says what may be added to it.
+enum TomlOrigin {
+    // Not a table.
+    Value
+    // The document's own.
+    Root
+    // Named on the way by a [header] of a table in it.
+    Implicit
+    // A [header]'s, or an element a [[header]] made.
+    Header
+    // Named on the way by a dotted key.
+    Dotted
+    // Written { … }, closed once written.
+    Inline
+}
+
+// A value of a TOML document, and where in the text it is.
+final class TomlNode {
+    let origin: TomlOrigin
+    // How many tables and arrays it is in.
+    let depth: Int
+    // A value that is neither an array nor a table.
+    var scalar: TomlValue? = none
+    var isArray: Bool = false
+    // Made by [[header]] lines rather than written as a value.
+    var isTableArray: Bool = false
+    // A table's keys and values, or an array's elements.
+    var keys: String[>..] = []
+    var children: TomlNode[>..] = []
+    var places: Dictionary<String, Int> = Dictionary<String, Int>()
+
+    // Where the value is written, -1 for one that is not in one place.
+    var start: Int = -1
+    var end: Int = -1
+    // Where the 'key = value', or the element, starts, and where what is
+    // between it and the one before starts: a statement's, when it is a line
+    // of its own.
+    var itemStart: Int = -1
+    var isStatement: Bool = false
+    var leadStart: Int = 0
+    // The line's end, with its comment and line break: a statement's or a
+    // header's, and the last line's of the table the header begins, or -1
+    // when nothing is in the document's own.
+    var lineEnd: Int = -1
+    var headerStart: Int = -1
+    var bodyEnd: Int = -1
+    // Where the last of its statements starts.
+    var lastStatement: Int = -1
+    // The items of an array or an inline table: an inline table's as they
+    // are written, a dotted key's once.
+    var itemStarts: Int[>..] = []
+    var itemEnds: Int[>..] = []
+
+    init(origin: TomlOrigin, depth: Int) {
+        self.origin = origin
+        self.depth = depth
+    }
+
+    // A dotted key or a header has made a table of it since: an implicit
+    // one, defined.
+    var defined: TomlOrigin? = none
+
+    // What the table is now.
+    var state: TomlOrigin => defined ?? origin
+
+    var isTable: Bool => origin != .Value
+
+    // The child of the key, in a table.
+    fn child(_ key: String) -> TomlNode? {
+        if let place = places[key] {
+            return children[place]
+        }
+        return none
+    }
+
+    fn add(_ key: String, _ node: TomlNode) {
+        places[key] = children.count
+        keys.append(key)
+        children.append(node)
+    }
+
+    // What an error calls it.
+    var kindName: String {
+        get {
+            if let scalar = scalar {
+                return scalar.kindName
+            }
+            return isTable ? "a table" : isTableArray ? "an array of tables" : "an array"
+        }
+    }
+
+    // The value, as deep a recursion as the parser allowed.
+    var value: TomlValue {
+        get {
+            if let scalar = scalar {
+                return scalar
+            }
+            if isTable {
+                return .Table(table: table)
+            }
+            var items: TomlValue[>..] = []
+            for child in children {
+                items.append(child.value)
+            }
+            return .Array(items: items)
+        }
+    }
+
+    var table: TomlTable {
+        get {
+            var made = TomlTable()
+            for i in 0..<keys.count {
+                made[keys[i]] = children[i].value
+            }
+            return made
+        }
+    }
+}

@@ -1,0 +1,248 @@
+module Sable.Serialize
+
+import Sable.Text
+
+/// The Encoder that writes TOML, as a table that is written when it is whole:
+/// a table's own values go before the tables in it, whatever order they are
+/// encoded in. A struct or a map is a table, a sequence an array, bytes a
+/// base64 string, a case that carries nothing its name and one that does a
+/// table of one value. TOML has no null: a field or a map's entry that is
+/// one is left out, and an array's element is an error, as is a document
+/// that is not a table.
+///
+/// ```sable
+/// let encoder = TomlEncoder()
+/// try! encoder.beginMap(count: 2)
+/// try! encoder.encodeKey("inner")
+/// try! encoder.beginMap(count: 1)
+/// try! encoder.encodeKey("a b")
+/// try! encoder.encodeNull()
+/// try! encoder.encodeKey("c")
+/// try! encoder.encodeFloat(1.0)
+/// try! encoder.endMap()
+/// try! encoder.encodeKey("first")
+/// try! encoder.encodeBool(true)
+/// try! encoder.endMap()
+/// assert(try! encoder.text() == "first = true\n\n[inner]\nc = 1.0\n")
+/// ```
+public final class TomlEncoder: Encoder {
+    var root: TomlValue? = none
+    var frames: TomlFrame[>..] = []
+    // Whether the table written next is to be part of the one open, and for
+    // each struct, map or case open, whether it is part of the one around it.
+    var flattening: Bool = false
+    var flattened: Bool[>..] = []
+
+    /// An encoder that has written nothing.
+    public init() { }
+
+    /// The table encoded.
+    public fn table() throws(SerializeError) -> TomlTable {
+        if !frames.isEmpty || !flattened.isEmpty {
+            throw fault("an array or a table was begun and not ended")
+        }
+        guard let table = root?.table else {
+            throw fault("a TOML document is a table")
+        }
+        return table
+    }
+
+    /// The table encoded, as TOML.
+    public fn text() throws(SerializeError) -> String {
+        return try Toml.write(try table())
+    }
+
+    fn fault(_ reason: String) -> SerializeError {
+        return SerializeError.InvalidValue(path: "$", reason: reason)
+    }
+
+    /// Any TOML value, a date or a time among them.
+    public fn encodeValue(_ value: TomlValue) throws(SerializeError) {
+        if flattening {
+            guard let table = value.table else {
+                throw fault("only a struct or a map can be flattened")
+            }
+            flattening = false
+            for entry in table.entries {
+                try key(entry.key)
+                try encodeValue(entry.value)
+            }
+            return
+        }
+        if frames.isEmpty {
+            if root != none {
+                throw fault("a TOML document is one table")
+            }
+            root = value
+            return
+        }
+        let frame = frames[frames.count - 1]
+        if !frame.isTable {
+            frame.items.append(value)
+            return
+        }
+        guard let key = frame.key else {
+            throw fault("a value was written without its key")
+        }
+        frame.key = none
+        if frame.table[key] != none {
+            throw fault("the key '\(key)' was written twice")
+        }
+        frame.table[key] = value
+    }
+
+    /// Nothing, where a field's or an entry's value would be, which takes its
+    /// key with it; an error anywhere else.
+    public fn encodeNull() throws(SerializeError) {
+        if flattening {
+            throw fault("only a struct or a map can be flattened")
+        }
+        if frames.isEmpty || frames[frames.count - 1].key == none {
+            throw fault("TOML has no null")
+        }
+        frames[frames.count - 1].key = none
+    }
+
+    public fn encodeBool(_ value: Bool) throws(SerializeError) {
+        try encodeValue(.Bool(value: value))
+    }
+
+    public fn encodeInt(_ value: Int) throws(SerializeError) {
+        try encodeValue(.Integer(value: value))
+    }
+
+    /// An integer, which TOML bounds by `Int.max`.
+    public fn encodeUInt(_ value: U64) throws(SerializeError) {
+        guard let integer = Int.exactly(value) else {
+            throw fault("TOML has no integer as large as \(value)")
+        }
+        try encodeValue(.Integer(value: integer))
+    }
+
+    public fn encodeFloat(_ value: F64) throws(SerializeError) {
+        try encodeValue(.Float(value: value))
+    }
+
+    public fn encodeString(_ value: String) throws(SerializeError) {
+        try encodeValue(.Text(value: value))
+    }
+
+    /// Bytes, as a string of their base64 (RFC 4648, padded).
+    public fn encodeBytes(_ value: U8[>..]) throws(SerializeError) {
+        try encodeValue(.Text(value: Base64.encode(value)))
+    }
+
+    // ---- Arrays and tables ---------------------------------------------------
+
+    // Whether a table or an array may be begun here, before anything is put
+    // in it.
+    fn begin(_ isTable: Bool) throws(SerializeError) {
+        if flattening {
+            throw fault("only a struct or a map can be flattened")
+        }
+        frames.append(TomlFrame(isTable: isTable))
+    }
+
+    fn close(_ isTable: Bool) throws(SerializeError) {
+        if frames.isEmpty || frames[frames.count - 1].isTable != isTable {
+            throw fault("ended what was not begun")
+        }
+        let frame = frames.removeLast()
+        if frame.key != none {
+            throw fault("a key was written without its value")
+        }
+        try encodeValue(isTable ? TomlValue.Table(table: frame.table) : TomlValue.Array(items: frame.items))
+    }
+
+    fn beginTable() throws(SerializeError) {
+        if flattening {
+            flattening = false
+            flattened.append(true)
+            return
+        }
+        try begin(true)
+        flattened.append(false)
+    }
+
+    fn closeTable() throws(SerializeError) {
+        if flattened.isEmpty {
+            throw fault("ended what was not begun")
+        }
+        if !flattened.removeLast() {
+            try close(true)
+        }
+    }
+
+    fn key(_ name: String) throws(SerializeError) {
+        if frames.isEmpty || !frames[frames.count - 1].isTable || frames[frames.count - 1].key != none {
+            throw fault("the key '\(name)' is not where a key goes")
+        }
+        frames[frames.count - 1].key = name
+    }
+
+    /// An array: of tables under [[headers]], when it is all tables.
+    public fn beginSequence(count: Int?) throws(SerializeError) {
+        try begin(false)
+    }
+
+    public fn endSequence() throws(SerializeError) {
+        try close(false)
+    }
+
+    /// A table.
+    public fn beginMap(count: Int?) throws(SerializeError) {
+        try beginTable()
+    }
+
+    public fn encodeKey(_ key: String) throws(SerializeError) {
+        try self.key(key)
+    }
+
+    public fn endMap() throws(SerializeError) {
+        try closeTable()
+    }
+
+    /// A table, as a map is.
+    public fn beginStruct(_ name: String, count: Int?) throws(SerializeError) {
+        try beginTable()
+    }
+
+    public fn encodeField(_ key: String) throws(SerializeError) {
+        try self.key(key)
+    }
+
+    public fn endStruct() throws(SerializeError) {
+        try closeTable()
+    }
+
+    public fn flattenNext() throws(SerializeError) {
+        flattening = true
+    }
+
+    /// The case's name, as a string.
+    public fn encodeUnitCase(_ name: String, of type: String) throws(SerializeError) {
+        try encodeString(name)
+    }
+
+    /// A table of one value, the payload, by the case's name.
+    public fn beginCase(_ name: String, of type: String) throws(SerializeError) {
+        try beginTable()
+        try key(name)
+    }
+
+    public fn endCase() throws(SerializeError) {
+        try closeTable()
+    }
+}
+
+// An array or a table open.
+final class TomlFrame {
+    let isTable: Bool
+    var table: TomlTable = TomlTable()
+    var items: TomlValue[>..] = []
+    var key: String? = none
+
+    init(isTable: Bool) {
+        self.isTable = isTable
+    }
+}

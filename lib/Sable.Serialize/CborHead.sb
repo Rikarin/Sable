@@ -1,0 +1,124 @@
+module Sable.Serialize
+
+// An item's first bytes: its major type (a break is 8), its additional
+// information, its argument, and how many bytes they are.
+struct CborHead {
+    let major: Int
+    let info: Int
+    let argument: U64
+    let size: Int
+
+    // Whether the length is indefinite, for a string, an array or a map.
+    var isIndefinite: Bool => info == 31 && major != 8
+}
+
+// The head at the position, or what is wrong with it.
+fn cborHead(_ bytes: U8[>..], _ at: Int) throws(SerializeError) -> CborHead {
+    if at >= bytes.count {
+        throw cborFault("no item where one should be", at)
+    }
+    let major = Int(bytes[at] >> 5)
+    let info = Int(bytes[at] & 31)
+    if info < 24 {
+        return CborHead(major: major, info: info, argument: U64(info), size: 1)
+    }
+    if info == 31 {
+        if major == 7 {
+            return CborHead(major: 8, info: info, argument: 0, size: 1)
+        }
+        if major >= 2 && major <= 5 {
+            return CborHead(major: major, info: info, argument: 0, size: 1)
+        }
+    }
+    if info >= 28 {
+        throw cborFault("a reserved first byte", at)
+    }
+    let width = 1 << (info - 24)
+    if width >= bytes.count - at {
+        throw cborFault("the end of the bytes in the item", at)
+    }
+    let argument = readBigEndian(bytes, at + 1, width)
+    if major == 7 && info == 24 && argument < 32 {
+        throw cborFault("a simple value below 32 in two bytes", at)
+    }
+    return CborHead(major: major, info: info, argument: argument, size: 1 + width)
+}
+
+fn cborFault(_ what: String, _ at: Int) -> SerializeError {
+    return SerializeError.Syntax(reason: "not CBOR: \(what) at byte \(at)")
+}
+
+// The float a head of major type 7 is.
+fn cborFloat(_ head: CborHead) -> F64 {
+    if head.info == 25 {
+        return F64(F16.fromBits(U16.truncating(head.argument)))
+    }
+    if head.info == 26 {
+        return F64(F32.fromBits(U32.truncating(head.argument)))
+    }
+    return F64.fromBits(head.argument)
+}
+
+// The string's data, after its head: a definite one's, or an indefinite
+// one's chunks', put together, and where it ends. A chunk's length is
+// checked before anything is made of it, and a text chunk is well-formed
+// UTF-8 by itself.
+struct CborString {
+    let head: CborHead
+    // Where the data, or the first chunk, starts, and the byte after it all.
+    let start: Int
+    let end: Int
+
+    init(_ bytes: U8[>..], _ at: Int, _ head: CborHead) throws(SerializeError) {
+        self.head = head
+        self.start = at + head.size
+        if !head.isIndefinite {
+            self.end = try checkedCborEnd(bytes, at, head)
+            return
+        }
+        var next = at + head.size
+        while true {
+            let chunk = try cborHead(bytes, next)
+            if chunk.major == 8 {
+                break
+            }
+            if chunk.major != head.major || chunk.isIndefinite {
+                throw cborFault("a chunk that is not a definite string of the same kind", next)
+            }
+            next = try checkedCborEnd(bytes, next, chunk)
+        }
+        self.end = next + 1
+    }
+
+    // The data of an index's string, whose chunks were checked.
+    fn data(_ bytes: U8[>..]) -> U8[>..] {
+        if !head.isIndefinite {
+            return bytes[start..<end].toArray()
+        }
+        var all: U8[>..] = []
+        var next = start
+        while let chunk = try? cborHead(bytes, next) {
+            if chunk.major == 8 {
+                break
+            }
+            let dataStart = next + chunk.size
+            next = dataStart + Int(chunk.argument)
+            all.append(contentsOf: bytes[dataStart..<next])
+        }
+        return all
+    }
+}
+
+// The end of the definite string at the position, once its data is there
+// and, for text, well-formed.
+fn checkedCborEnd(_ bytes: U8[>..], _ at: Int, _ head: CborHead) throws(SerializeError) -> Int {
+    let start = at + head.size
+    if head.argument > U64(bytes.count - start) {
+        throw cborFault("more data than there are bytes", at)
+    }
+    let end = start + Int(head.argument)
+    if head.major == 3 && Runtime.validateUtf8(bytes: bytes[start..<end]) >= 0 {
+        throw cborFault("ill-formed UTF-8 in the string", at)
+    }
+    return end
+}

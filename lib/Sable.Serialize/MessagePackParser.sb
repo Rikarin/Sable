@@ -1,0 +1,90 @@
+module Sable.Serialize
+
+// Makes a MessagePackDocument in one pass: no recursion, so nesting costs
+// no stack, and nothing is made of a length before as many bytes are seen
+// to be there.
+struct MessagePackParser {
+    let bytes: U8[>..]
+    let maximumDepth: Int
+    var starts: Int[>..] = []
+    var afters: Int[>..] = []
+    // The arrays and maps open, and how many more values each holds.
+    var opened: Int[>..] = []
+    var left: Int[>..] = []
+    var at: Int = 0
+
+    init(_ bytes: U8[>..], _ maximumDepth: Int) {
+        self.bytes = bytes
+        self.maximumDepth = maximumDepth
+    }
+
+    static fn parse(_ bytes: U8[>..], _ maximumDepth: Int) throws(SerializeError) -> MessagePackDocument {
+        var parser = MessagePackParser(bytes, maximumDepth)
+        try parser.value()
+        while !parser.opened.isEmpty {
+            try parser.value()
+        }
+        if parser.at < bytes.count {
+            throw parser.error("more after the value")
+        }
+        return MessagePackDocument(bytes: bytes, starts: parser.starts, afters: parser.afters)
+    }
+
+    fn error(_ what: String) -> SerializeError {
+        return SerializeError.Syntax(reason: "not MessagePack: \(what) at byte \(at)")
+    }
+
+    // The value at the position, or its header when it holds others.
+    mutating fn value() throws(SerializeError) {
+        if at >= bytes.count {
+            throw error("no value where one should be")
+        }
+        let first = bytes[at]
+        if first == 0xC1 {
+            throw error("0xC1 is no value's first byte,")
+        }
+        let head = messagePackHeadSize(first)
+        if head > bytes.count - at {
+            throw error("the end of the bytes in the value")
+        }
+        let length = messagePackLength(bytes, at)
+        let kind = messagePackKind(first)
+        let node = starts.count
+        starts.append(at)
+        afters.append(node + 1)
+        if kind == .Array || kind == .Map {
+            let children = kind == .Map ? length * 2 : length
+            // Each child is a byte at least.
+            if children > bytes.count - at - head {
+                throw error("more values than there are bytes for")
+            }
+            if opened.count >= maximumDepth {
+                throw error("nested more than \(maximumDepth) deep")
+            }
+            at += head
+            if children > 0 {
+                opened.append(node)
+                left.append(children)
+                return
+            }
+        } else {
+            if length > bytes.count - at - head {
+                throw error("more data than there are bytes")
+            }
+            if kind == .String && Runtime.validateUtf8(bytes: bytes[(at + head)..<(at + head + length)]) >= 0 {
+                throw error("ill-formed UTF-8 in the string")
+            }
+            at += head + length
+        }
+        // A whole value: the last one of what is open, perhaps.
+        while !left.isEmpty {
+            left[left.count - 1] -= 1
+            if left[left.count - 1] > 0 {
+                return
+            }
+            afters[opened[opened.count - 1]] = starts.count
+            let _ = opened.removeLast()
+            let _ = left.removeLast()
+        }
+    }
+}

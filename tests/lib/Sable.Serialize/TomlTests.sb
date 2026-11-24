@@ -1,0 +1,710 @@
+module TomlTests
+
+// TOML 1.0, section by section of its specification: what is valid with the
+// values it has, and what is not.
+
+import Sable.Collections
+import Sable.Serialize
+import Sable.Testing
+import Sable.Text
+import Sable.Time
+
+// A value with what kind it is: s"…" a string, i an integer, f a float, dt,
+// ldt, ld and lt dates and times.
+fn show(_ value: TomlValue) -> String {
+    return match value {
+        case .Text(let text)            => "s" + (try! Json.encode(text))
+        case .Integer(let integer)      => "i\(integer)"
+        case .Float(let float)          => "f\(float)"
+        case .Bool(let bool)            => "\(bool)"
+        case .OffsetDateTime(let value) => "dt" + TomlValue.OffsetDateTime(value: value).text!
+        case .LocalDateTime(let value)  => "ldt" + value.toString()
+        case .LocalDate(let value)      => "ld" + value.toString()
+        case .LocalTime(let value)      => "lt" + value.toString()
+        case .Array(let items)          => "[" + items.map({ show($0) }).joined(separator: ",") + "]"
+        case .Table(let table)          => "{" + table.entries.map({ $0.key + ":" + show($0.value) }).joined(separator: ",") + "}"
+    }
+}
+
+// What the text holds, or why it is not TOML.
+fn read(_ text: String) -> String {
+    do {
+        return show(.Table(table: try Toml.parse(text)))
+    } catch {
+        return "error: " + error.description()
+    }
+}
+
+// The value of the text after 'a = '.
+fn value(_ text: String) -> String {
+    let all = read("a = " + text)
+    return all.hasPrefix("{a:") ? all.slice(from: 3, to: all.count - 1) : all
+}
+
+fn invalid(_ texts: String[>..]) {
+    for text in texts {
+        assert(read(text).hasPrefix("error: "), "is read: " + text + " as " + read(text))
+        assert((try? TomlDocument.parse(text)) == none)
+    }
+}
+
+// ---- Comments, keys ----------------------------------------------------------
+
+@test
+fn commentsAndBlankLinesHoldNothing() {
+    assertEqual(read(""), "{}")
+    assertEqual(read("\n \t\r\n# only\n#\n\t# tab\there"), "{}")
+    assertEqual(read("a = 1 # after\n# b = 2\nc = \"# not one\"#x"), "{a:i1,c:s\"# not one\"}")
+    assertEqual(read("\u{feff}a = 1"), "{a:i1}")
+    assertEqual(read("# \u{e9}\u{1f600}\na=1"), "{a:i1}")
+    invalid(["# a\u{0}b", "# a\u{1}", "# a\u{1f}", "# a\u{7f}", "# a\u{8}", "a = 1 # \u{c}", "# a\rb", "# a\r", "a = 1\r", "a = 1\rb = 2", "a\u{feff} = 1", "x = 1\n\u{feff}"])
+}
+
+@test
+fn keysAreBareQuotedOrDotted() {
+    assertEqual(read("key = 1\nbare_key = 2\nbare-key = 3\n1234 = 4"), "{key:i1,bare_key:i2,bare-key:i3,1234:i4}")
+    assertEqual(read(#""127.0.0.1" = 1"# + "\n" + #""ʎǝʞ" = 2"# + "\n" + #"'quoted "v"' = 3"# + "\n'' = 4"), "{127.0.0.1:i1,ʎǝʞ:i2,quoted \"v\":i3,:i4}")
+    assertEqual(read("a.b = 1\na . c = 2\na.\"d.e\" = 3\n'a'.f.g=4"), "{a:{b:i1,c:i2,d.e:i3,f:{g:i4}}}")
+    assertEqual(read("3.14159 = 'pi'"), "{3:{14159:s\"pi\"}}")
+    assertEqual(read("apple.type = 1\norange.type = 2\napple.skin = 3"), "{apple:{type:i1,skin:i3},orange:{type:i2}}")
+    assertEqual(read(#""a\u0062\n" = 1"#), "{ab\n:i1}")
+    assertEqual(read("true = 1\ninf = 2\n1979-05-27 = 3\n-_- = 4"), "{true:i1,inf:i2,1979-05-27:i3,-_-:i4}")
+    invalid([
+        "= 1", "a", "a =", "a = # c", "a = \n1", "a\n= 1", "a b = 1", "a. = 1", ".a = 1", "a..b = 1", "a = 1 b = 2", "a = 1\na = 2",
+        "spelling = 1\n\"spelling\" = 2", "a.b = 1\na.b.c = 2", "a = 1\na.b = 2", "a.b = 1\na = 2", "a.b = 1\na.b = 2", "é = 1",
+        "a! = 1", "a = 1, b = 2", "\"a = 1", "'a = 1", "\"\"\"a\"\"\" = 1", "'''a''' = 1", "\"a\nb\" = 1", "a+b = 1", "[a] = 1", "a = b", "a == 1", "a: 1",
+        "\"a\" \"b\" = 1", "a\"b\" = 1", "a = 1.a", "\"\\x41\" = 1",
+    ])
+}
+
+// ---- Strings -----------------------------------------------------------------
+
+@test
+fn basicStringsHaveEscapes() {
+    assertEqual(value(#""\b\t\n\f\r\"\\ \u00e9 \U0001F600 \u0000""#), #"s"\u0008\t\n\u000c\r\"\\ é 😀 \u0000""#)
+    assertEqual(value("\"\""), "s\"\"")
+    assertEqual(value("\"tab\there 'x' é\""), "s\"tab\\there 'x' é\"")
+    assertEqual(value(#""\uD7FF\uE000\U0010FFFF""#), "s\"\u{D7FF}\u{E000}\u{10FFFF}\"")
+    invalid([
+        #"a = "\a""#, #"a = "\e""#, #"a = "\x41""#, #"a = "\ ""#, #"a = "\u""#, #"a = "\u12""#, #"a = "\u123g""#, #"a = "\U0000004""#, #"a = "\uD800""#, #"a = "\uDFFF""#,
+        #"a = "\U00110000""#, #"a = "\UFFFFFFFF""#, #"a = "\"#, #"a = "\""#, "a = \"x", "a = \"x\ny\"", "a = \"\u{0}\"", "a = \"\u{1f}\"", "a = \"\u{7f}\"", "a = \"\r\"",
+        "a = \"\u{b}\"", "a = \"x\" y", "a = \"x\"\"y\"", "a = \"x\\\ny\"", #"a = "\'""#, #"a = "\/""#, #"a = "\N""#,
+    ])
+}
+
+@test
+fn literalStringsHaveNone() {
+    assertEqual(value(#"'C:\Users\n "x"	'"#), #"s"C:\\Users\\n \"x\"\t""#)
+    assertEqual(value("''"), "s\"\"")
+    invalid(["a = 'x", "a = 'x\ny'", "a = 'it's'", "a = '\u{0}'", "a = '\u{7f}'", "a = '\u{1}'", "a = '\r'", "a = 'x\ry'"])
+}
+
+@test
+fn multiLineBasicStringsTrimAndFold() {
+    let q = "\"\"\""
+    assertEqual(value(q + "\nRoses\nViolets" + q), "s\"Roses\\nViolets\"")
+    assertEqual(value(q + "\r\nRoses\r\nViolets" + q), "s\"Roses\\nViolets\"")
+    assertEqual(value(q + "\n\nx" + q), "s\"\\nx\"")
+    assertEqual(value(q + q), "s\"\"")
+    assertEqual(value(q + "\n" + q), "s\"\"")
+    assertEqual(value(q + "\nThe quick \\\n\n\n  fox \\\n    jumps.\\\n   " + q), "s\"The quick fox jumps.\"")
+    assertEqual(value(q + "a \\  \t\r\n \t b" + q), "s\"a b\"")
+    assertEqual(value(q + "two: \"\"." + q), "s\"two: \\\"\\\".\"")
+    assertEqual(value(q + "\"" + q), "s\"\\\"\"")
+    assertEqual(value(q + "\"\"x\"\"" + q), "s\"\\\"\\\"x\\\"\\\"\"")
+    assertEqual(value(q + "a\\\"\"\"\\\"b" + q), "s\"a\\\"\\\"\\\"\\\"b\"")
+    assertEqual(value(q + "\\u00e9\\t" + "\t" + q), "s\"é\\t\\t\"")
+    invalid([
+        "a = " + q, "a = " + q + "x", "a = " + q + "x\"\"", "a = " + q + "x" + q + q, "a = " + q + "\u{0}" + q, "a = " + q + "\u{7f}" + q, "a = " + q + "x\ry" + q,
+        "a = " + q + "\\q" + q, "a = " + q + "\\ x" + q, "a = " + q + "a \\ b" + q, "a = " + q + "\\", "a = " + q + "\\uD800" + q, "a = " + q + "x" + q + " y",
+        "a = " + q + "\\\r" + q, "a = " + q + q + q,
+    ])
+}
+
+@test
+fn multiLineLiteralStringsTakeEverything() {
+    let q = "'''"
+    assertEqual(value(q + "\nraw \\n stays\n\\\nx" + q), #"s"raw \\n stays\n\\\nx""#)
+    assertEqual(value(q + "it's" + q), "s\"it's\"")
+    assertEqual(value(q + "'x''" + q), "s\"'x''\"")
+    assertEqual(value(q + "\r\n\r\n" + q), "s\"\\n\"")
+    assertEqual(value(q + q), "s\"\"")
+    assertEqual(value(q + "\"\"\"" + q), #"s"\"\"\"""#)
+    invalid(["a = " + q, "a = " + q + "x''", "a = " + q + "x" + q + q, "a = " + q + "\u{0}" + q, "a = " + q + "\u{1b}" + q, "a = " + q + "x\ry" + q, "a = " + q + q + q])
+}
+
+// ---- Numbers, Bools ----------------------------------------------------------
+
+@test
+fn integersAreDecimalHexadecimalOctalOrBinary() {
+    let cases: (String, String)[>..] = [
+        ("+99", "i99"), ("42", "i42"), ("0", "i0"), ("-17", "i-17"), ("+0", "i0"), ("-0", "i0"), ("1_000", "i1000"), ("5_349_221", "i5349221"), ("53_49_221", "i5349221"),
+        ("1_2_3_4_5", "i12345"), ("0xDEADBEEF", "i3735928559"), ("0xdeadbeef", "i3735928559"), ("0xdead_beef", "i3735928559"), ("0o01234567", "i342391"), ("0o755", "i493"),
+        ("0b11010110", "i214"), ("0b1_0", "i2"), ("0x0", "i0"), ("0x00ff", "i255"), ("9223372036854775807", "i9223372036854775807"),
+        ("-9223372036854775808", "i-9223372036854775808"), ("0x7fffffffffffffff", "i9223372036854775807"), ("0o777777777777777777777", "i9223372036854775807"),
+        ("0b111111111111111111111111111111111111111111111111111111111111111", "i9223372036854775807"),
+    ]
+    for (text, shown) in cases {
+        assertEqual(value(text), shown)
+    }
+    for text in [
+        "01", "+01", "-01", "00", "-00", "0_0", "_1", "1_", "1__0", "+_1", "+", "-", "++1", "--1", "+-1", "1 2", "0x", "0o", "0b", "0x_1", "0x1_", "0x1__2", "0xg", "0o8", "0b2", "0X1", "0O1", "0B1",
+        "+0x1", "-0x1", "+0o1", "-0b1", "1a", "0x1.0", "9223372036854775808", "-9223372036854775809", "0x8000000000000000", "0xffffffffffffffff", "0o1000000000000000000000",
+        "0b1000000000000000000000000000000000000000000000000000000000000000", "1,000", "1'000", "1L", "0xDEADBEEFG", "_", "1_000_", "\u{0661}", "1\u{a0}", "e1",
+    ] as String[>..] {
+        assert(value(text).hasPrefix("error: "), text)
+    }
+    assertEqual(value("9223372036854775808"), "error: line 1, column 5: '9223372036854775808' does not fit 64 bits")
+}
+
+@test
+fn floatsHaveFractionsAndExponents() {
+    let cases: (String, String)[>..] = [
+        ("+1.0", "f1.0"), ("3.1415", "f3.1415"), ("-0.01", "f-0.01"), ("5e+22", "f5e+22"), ("1e06", "f1000000.0"), ("-2E-2", "f-0.02"), ("6.626e-34", "f6.626e-34"),
+        ("224_617.445_991_228", "f224617.445991228"), ("0.0", "f0.0"), ("-0.0", "f-0.0"), ("+0.0", "f0.0"), ("0e0", "f0.0"), ("1e0_0", "f1.0"), ("1_0e1_0", "f100000000000.0"), ("0.1_2", "f0.12"),
+        ("inf", "finf"), ("+inf", "finf"), ("-inf", "f-inf"), ("nan", "fnan"), ("+nan", "fnan"), ("-nan", "fnan"), ("1e400", "finf"), ("3e-400", "f0.0"),
+    ]
+    for (text, shown) in cases {
+        assertEqual(value(text), shown)
+    }
+    for text in [
+        ".7", "7.", "3.e+20", "1.", "+.1", "1e", "1e+", "1e1.0", "1e_1", "1e1_", "1_.0", "1._0", "1.0_", "1.0_e1", "1__0.0", "01.0", "-01.0", "00.0", "1.2.3", "Inf", "NaN", "INF", "++inf", "in f", "infinity",
+        "nan1", "1e1e1", "0x1p3", "1.0f", "1.e1", "1.0e", "_1.0", "+ 1.0", "1,5", "inf_", "0_1.0", "e", "1e 1",
+    ] as String[>..] {
+        assert(value(text).hasPrefix("error: "), text)
+    }
+}
+
+@test
+fn boolsAreLowerCase() {
+    assertEqual(value("true"), "true")
+    assertEqual(value("false"), "false")
+    invalid(["a = True", "a = FALSE", "a = truer", "a = fals", "a = t", "a = true false", "a = true_", "a = 1true", "a = yes", "a = null", "a = \"a\"true"])
+}
+
+// ---- Dates and times ---------------------------------------------------------
+
+@test
+fn datesAndTimesAreRfc3339s() {
+    let cases: (String, String)[>..] = [
+        ("1979-05-27T07:32:00Z", "dt1979-05-27T07:32:00Z"), ("1979-05-27T00:32:00-07:00", "dt1979-05-27T00:32:00-07:00"),
+        ("1979-05-27T00:32:00.999999-07:00", "dt1979-05-27T00:32:00.999999-07:00"), ("1979-05-27 07:32:00Z", "dt1979-05-27T07:32:00Z"),
+        ("1979-05-27t07:32:00z", "dt1979-05-27T07:32:00Z"), ("1979-05-27T07:32:00+23:59", "dt1979-05-27T07:32:00+23:59"), ("1979-05-27T07:32:00+00:00", "dt1979-05-27T07:32:00Z"),
+        ("1979-05-27T07:32:00", "ldt1979-05-27T07:32:00"), ("1979-05-27T00:32:00.5", "ldt1979-05-27T00:32:00.5"), ("1979-05-27 07:32:00 # c", "ldt1979-05-27T07:32:00"),
+        ("1979-05-27", "ld1979-05-27"), ("2000-02-29", "ld2000-02-29"), ("0000-01-01", "ld0000-01-01"), ("9999-12-31", "ld9999-12-31"), ("1979-05-27 # c", "ld1979-05-27"), ("1979-05-27 ", "ld1979-05-27"),
+        ("07:32:00", "lt07:32:00"), ("00:32:00.999999", "lt00:32:00.999999"), ("23:59:59.1234567899", "lt23:59:59.123456789"), ("23:59:60", "lt23:59:59"),
+    ]
+    for (text, shown) in cases {
+        assertEqual(value(text), shown)
+    }
+    for text in [
+        "1979-13-01", "1979-00-01", "1979-01-32", "1979-01-00", "1979-02-29", "1900-02-29", "1979-04-31", "79-05-27", "1979-5-27", "1979-05-7", "1979-05-27T", "1979-05-27T07", "1979-05-27T07:32",
+        "1979-05-27T07:32Z", "1979-05-27T24:00:00", "1979-05-27T07:60:00", "1979-05-27T07:32:61", "1979-05-27T07:32:00.", "1979-05-27T07:32:00.Z", "1979-05-27T7:32:00", "1979-05-27T07:32:00+24:00",
+        "1979-05-27T07:32:00+07:60", "1979-05-27T07:32:00+07", "1979-05-27T07:32:00+0700", "1979-05-27T07:32:00Zz", "1979-05-27T07:32:00z1", "1979-05-27TT07:32:00", "1979-05-27  07:32:00", "1979-05-27x07:32:00",
+        "07:32", "7:32:00", "07:32:0", "24:00:00", "07:60:00", "07:32:61", "07:32:00Z", "07:32:00.", "07:32:00.1.2", "07:32:00+01:00", "07-32-00", "1979/05/27", "10000-01-01", "-1979-05-27", "1979-05-27-", "1979-05-27T07:32:00-7:00",
+        "1987-07-05 17:45:00\tZ", "12:34:5a", "1a:00:00", "2021-1-1", "198a-01-01",
+    ] as String[>..] {
+        assert(value(text).hasPrefix("error: "), text)
+    }
+}
+
+// ---- Arrays, inline tables ---------------------------------------------------
+
+@test
+fn arraysHoldAnyValuesOverAnyLines() {
+    assertEqual(value("[]"), "[]")
+    assertEqual(value("[ ]"), "[]")
+    assertEqual(value("[ 1, 2, 3 ]"), "[i1,i2,i3]")
+    assertEqual(value("[1,2,]"), "[i1,i2]")
+    assertEqual(value("[[1, 2], ['a', \"b\"], [], 1.5, true, {x = 1}, 1979-05-27]"), "[[i1,i2],[s\"a\",s\"b\"],[],f1.5,true,{x:i1},ld1979-05-27]")
+    assertEqual(value("[ # c\n  1 # d\n # e\n , # f\n  2,\r\n# g ]\n]"), "[i1,i2]")
+    assertEqual(value("[\n]"), "[]")
+    assertEqual(value("[\"\"\"\nx\"\"\", '''y''']"), "[s\"x\",s\"y\"]")
+    invalid(["a = [", "a = ]", "a = [1", "a = [1,", "a = [,]", "a = [1,,2]", "a = [,1]", "a = [1 2]", "a = [1\n2]", "a = [1]]", "a = [1] 2", "a = [a]", "a = [b = 1]", "a = [1 # c]", "a = [1;2]", "a = [1,,]", "a = [{]", "a = [\"x]"])
+}
+
+@test
+fn inlineTablesAreOnOneLineAndClosed() {
+    assertEqual(value("{}"), "{}")
+    assertEqual(value("{ }"), "{}")
+    assertEqual(value("{ first = \"T\", last='P' }"), "{first:s\"T\",last:s\"P\"}")
+    assertEqual(value("{x=1,y={z=[1,\n2]}}"), "{x:i1,y:{z:[i1,i2]}}")
+    assertEqual(value("{ type.name = 'pug', type.age = 2, \"q k\" = 1 }"), "{type:{name:s\"pug\",age:i2},q k:i1}")
+    assertEqual(value("{ a.b.c = 1, a.b.d = 2, a.e = 3 }"), "{a:{b:{c:i1,d:i2},e:i3}}")
+    assertEqual(value("{ x = \"\"\"\na\nb\"\"\" }"), "{x:s\"a\\nb\"}")
+    invalid([
+        "a = {", "a = }", "a = {x = 1", "a = {x = 1,}", "a = {,}", "a = {x = 1,,y = 2}", "a = {x = 1 y = 2}", "a = {x}", "a = {x = }", "a = {1}", "a = {\n}", "a = {x = 1\n}", "a = {x = 1,\ny = 2}", "a = { # c\n}", "a = {x = 1 # c\n}",
+        "a = {x = 1, x = 2}", "a = {x = 1, x.y = 2}", "a = {x.y = 1, x = 2}", "a = {x.y = 1, x.y = 2}", "a = {x = {y = 1}, x.z = 2}", "a = {x = [1], x.y = 2}", "a = {x = 1}\na.y = 2", "a = {x = {}}\na.x.y = 2", "a = {}\n[a]", "a = {}\n[a.b]", "a = {}\n[[a]]",
+        "a = {b = {}}\n[a.b]", "a = {b = {}}\n[a.b.c]", "[a]\nb = {}\n[a.b]", "[a]\nb = {}\n[a.b.c]", "a = {x = 1} 2", "a.b = {}\na.b.c = 1", "a = {x = 1]}", "a = {\"x\"}", "a = [{b = 1}]\n[a.c]", "a = [{b = 1}]\n[[a]]", "a = [{}]\n[a]",
+    ])
+}
+
+// ---- Tables ------------------------------------------------------------------
+
+@test
+fn headersMakeTables() {
+    assertEqual(read("[table]\nk = 1\n[ d . \"e.f\" . 'g' ] # c\nk = 2\n[empty]"), "{table:{k:i1},d:{e.f:{g:{k:i2}}},empty:{}}")
+    assertEqual(read("[x.y.z.w]\na = 1\n[x]\nb = 2\n[x.y]\nc = 3"), "{x:{y:{z:{w:{a:i1}},c:i3},b:i2}}")
+    assertEqual(read("top = 1\n[fruit]\napple.color = 'r'\napple.taste.sweet = true\n[fruit.apple.texture]\nsmooth = true"), "{top:i1,fruit:{apple:{color:s\"r\",taste:{sweet:true},texture:{smooth:true}}}}")
+    assertEqual(read("[fruit.apple]\n[animal]\n[fruit.orange]"), "{fruit:{apple:{},orange:{}},animal:{}}")
+    assertEqual(read("[a.b.c]\nz = 9\n[a]\nb.x = 1"), "{a:{b:{c:{z:i9},x:i1}}}")
+    assertEqual(read("a.b = 1\n[a.c]\nd = 2"), "{a:{b:i1,c:{d:i2}}}")
+    assertEqual(read("['']\n['a'.''.b]"), "{:{},a:{:{b:{}}}}")
+    invalid([
+        "[fruit]\napple = 1\n[fruit]\norange = 2", "[a]\n[a]", "[fruit]\napple = 1\n[fruit.apple]", "a = 1\n[a]", "a = 1\n[a.b]", "[]", "[a", "[a]]", "[a.]", "[.a]", "[a..b]", "[ ]", "[a] b = 1", "[a]b", "[a b]", "[a\n]", "[\na]", "[a # c\n]",
+        "[a = 1]", "[\"a]", "[[a]", "a.b = 1\n[a]", "a.b.c = 1\n[a.b]", "[fruit]\napple.color = 1\n[fruit.apple]", "[fruit]\napple.taste.sweet = 1\n[fruit.apple.taste]", "[a.b.c]\nz = 9\n[a]\nb.c.t = 1", "[a.b.c.d]\nz = 9\n[a]\nb.c.d.k.t = 1",
+        "[a.b]\n[a]\nb.x = 1", "[a.b.c]\nz = 9\n[a]\nb.x = 1\n[a.b]", "[a]\nb = 1\n[a.b.c]", "[\"a\"]\n['a']", "[a]\n\"b\" = 1\nb = 2", "a = 1\n[b]\n[a]", "[a.b]\n[a.b]", "[a]x=1", "\"a\"]", "]a[", "[a.\"b]",
+    ])
+}
+
+@test
+fn doubleHeadersMakeArraysOfTables() {
+    assertEqual(read("[[p]]\nn = 1\n[[p]] # empty\n[[p]]\nn = 2"), "{p:[{n:i1},{},{n:i2}]}")
+    assertEqual(
+        read("[[f]]\nn = 'a'\n[f.p]\nc = 1\n[[f.v]]\nn = 'x'\n[[f.v]]\nn = 'y'\n[[f]]\nn = 'b'\n[[f.v]]\nn = 'z'"),
+        "{f:[{n:s\"a\",p:{c:i1},v:[{n:s\"x\"},{n:s\"y\"}]},{n:s\"b\",v:[{n:s\"z\"}]}]}"
+    )
+    assertEqual(read("[[a.b]]\nx = 1\n[a]\ny = 2\n[[a.b]]"), "{a:{b:[{x:i1},{}],y:i2}}")
+    assertEqual(read("[[ a . 'b' ]]\n[a.b.c]\n[[a.b]]\n[a.b.c]"), "{a:{b:[{c:{}},{c:{}}]}}")
+    invalid([
+        "[fruit.physical]\n[[fruit]]", "fruits = []\n[[fruits]]", "[[f]]\nn = 1\n[[f.v]]\nn = 2\n[f.v]", "[[f]]\n[f.p]\n[[f.p]]", "[[a]]\n[a]", "[a]\n[[a]]", "a = 1\n[[a]]", "[[a]", "[[a]]]", "[ [a]]", "[[a] ]", "[[]]", "[[ ]]", "[[a.]]", "[[a]] b = 1",
+        "[[a.b]]\n[a]\nb.y = 2", "a = [1]\n[[a]]", "a = [{}]\n[[a.b]]", "[[a]]\nb = 1\n[a.b]", "[[a]]\nb = 1\n[[a.b]]", "[[a.b]]\n[a.b]", "a.b = 1\n[[a]]", "[[a]]\n[a.b]\n[a.b]", "[a.b]\n[[a]]",
+    ])
+}
+
+// ---- Errors, bounds ----------------------------------------------------------
+
+@test
+fn errorsSayWhereAndWhy() {
+    let cases: (String, String)[>..] = [
+        ("é = 1", "line 1, column 1: expected a key, found 'é'"),
+        ("a = 1\n\n  b = é", "line 3, column 7: expected a value, found 'é'"),
+        ("\"é\" = 1 x", "line 1, column 9: expected the end of the line, found 'x'"),
+        ("[t]\n[t]", "line 2, column 2: the table 't' is defined twice"),
+        ("a = \"open", "line 1, column 5: the string is not closed on its line"),
+        ("a = hello", "line 1, column 5: 'hello' is not a value: a string needs quotes"),
+        ("a = [1, 2", "line 1, column 5: the array is not closed with ']'"),
+        ("a = [1 2]", "line 1, column 8: expected ',' or ']' in the array, found '2'"),
+        ("a = { b = 1,\n c = 2 }", "line 1, column 13: an inline table is written on one line"),
+        ("a = { b = 1, }", "line 1, column 14: an inline table has no comma after its last value"),
+        ("a = { b = 1 c = 2 }", "line 1, column 13: expected ',' or '}' in the inline table, found 'c'"),
+        ("[a\nb = 1", "line 1, column 3: expected ']' to close the header, found the end of the line"),
+        ("[[a", "line 1, column 4: expected ']]' to close the header, found the end"),
+        ("a", "line 1, column 2: expected '=' after the key, found the end"),
+        ("a\u{1}", "line 1, column 2: expected '=' after the key, found a control character"),
+        ("x = { y = 1 }\n[x.z]", "line 2, column 2: 'x' is an inline table, closed once written"),
+        ("[a.\"b c\"]\n[a]\n\"b c\".d = 1", "line 3, column 1: '\"b c\"' is already a table with a header, so a dotted key cannot add to it"),
+        ("a = 1\n[[a]]", "line 2, column 3: 'a' is already an integer, not an array of tables"),
+        ("a = \"\"\"x", "line 1, column 5: the string is not closed with three quotes"),
+        ("a = 1979-02-30", "line 1, column 5: '1979-02-30' is not a date or a time"),
+        ("a = \"\\u12\"", "line 1, column 6: an escape '\\u' needs 4 hexadecimal digits"),
+        ("a = \"\\uD800\"", "line 1, column 6: the escape is not a Unicode scalar value"),
+        ("a = \"\\q\"", "line 1, column 6: not an escape TOML has"),
+    ]
+    for (text, message) in cases {
+        assertEqual(read(text), "error: " + message)
+    }
+    do {
+        let _ = try Toml.decode(Dictionary<String, Int>.self, from: "a = ")
+        fail("read")
+    } catch {
+        assertEqual(error.description(), "not TOML: line 1, column 5: expected a value, found the end")
+    }
+    do {
+        let _ = try TomlDecoder.parse(bytes: [0x61, 0x3D, 0x22, 0xFF, 0x22])
+        fail("read")
+    } catch {
+        assertEqual(error.description(), "not TOML: line 1, column 4: ill-formed UTF-8")
+    }
+}
+
+fn repeated(_ text: String, _ count: Int) -> String {
+    var bytes: U8[>..] = []
+    for _ in 0..<count {
+        bytes.append(utf8: text)
+    }
+    return String.fromUtf8Lossy(bytes)
+}
+
+@test
+fn nestingIsBoundedHoweverItIsWritten() {
+    let hostile: String[>..] = [
+        "a = " + repeated("[", 100000), "a = " + repeated("{a=", 100000), repeated("a.", 100000) + "a = 1", "[" + repeated("a.", 100000) + "a]", "[[" + repeated("a.", 100000) + "a]]",
+        // Little by little: each header and dotted key deeper in the last.
+        "[" + repeated("a.", 100) + "a]\n" + repeated("b.", 100) + "c = 1", "[" + repeated("a.", 100) + "a]\nb = " + repeated("[", 100) + repeated("]", 100),
+        "a = {" + repeated("b.", 100) + "b = {" + repeated("b.", 100) + "b = 1}}",
+    ]
+    for text in hostile {
+        assert(read(text).contains("nested more than 128 deep"))
+    }
+    var arrays = ""
+    var path = "a"
+    for _ in 0..<100 {
+        arrays = arrays + "[[" + path + "]]\n"
+        path = path + ".a"
+    }
+    // Each [[a.a…]] is two deeper: an array, and a table in it.
+    assert(read(arrays).contains("nested more than 128 deep"))
+    assert(!read("a = " + repeated("[", 128) + repeated("]", 128)).hasPrefix("error: "))
+    assert(read("a = " + repeated("[", 129) + repeated("]", 129)).hasPrefix("error: "))
+    assert((try? Toml.parse("a.b.c = 1", maximumDepth: 2)) == none)
+    assert((try? Toml.parse("a.b.c = 1", maximumDepth: 3)) != none)
+}
+
+@test
+fn manyKeysAreNotQuadratic() throws {
+    var text: U8[>..] = []
+    for i in 0..<20000 {
+        text.append(utf8: "key\(i) = \(i)\n")
+    }
+    let table = try Toml.parse(String.fromUtf8Lossy(text))
+    assertEqual(table.count, 20000)
+    assert(table["key19999"]! == .Integer(value: 19999))
+}
+
+@test
+fn anyTextIsReadOrRefused() throws {
+    let pieces: String[>..] = ["a", "b", ".", "=", " ", "\n", "[", "]", "[[", "]]", "{", "}", ",", "\"", "'", "\"\"\"", "'''", "#", "1", "0x", "_", "-", "+", "e", "inf", "true", "1979-05-27", "T07:32:00", "Z", "\\", "\\u00e9", "é", "\r\n", "\t", "a = 1\n", "[a]\n", "[[a]]\n", "a.b = 2\n"]
+    var random = SeededRandomNumberGenerator(seed: 1)
+    var valid = 0
+    for _ in 0..<6000 {
+        var text = ""
+        for _ in 0..<Int.random(in: 1..<14, using: &random) {
+            text = text + pieces[Int.random(in: 0..<pieces.count, using: &random)]
+        }
+        if let table = try? Toml.parse(text) {
+            valid += 1
+            // What is written is read as the same.
+            let again = try Toml.parse(try Toml.write(table))
+            assertEqual(show(.Table(table: again)).count, show(.Table(table: table)).count)
+            assert((try TomlDocument.parse(text)).text() == text)
+        }
+    }
+    assert(valid > 100, "\(valid)")
+}
+
+// ---- Tables as values, writing -----------------------------------------------
+
+@test
+fn aTableKeepsItsOrder() {
+    var table = TomlTable()
+    assert(table.isEmpty && table["a"] == none)
+    table["b"] = .Integer(value: 1)
+    table["a"] = .Bool(value: true)
+    table["b"] = .Integer(value: 2)
+    table["c"] = .Text(value: "x")
+    table["missing"] = none
+    assertEqual(table.keys, ["b", "a", "c"])
+    table["b"] = none
+    assertEqual(table.keys, ["a", "c"])
+    assert(table["c"]!.text == "x" && table["b"] == none)
+    var other = TomlTable()
+    other["c"] = .Text(value: "x")
+    assert(table != other)
+    other["a"] = .Bool(value: true)
+    assert(table == other)
+    other["a"] = .Bool(value: false)
+    assert(table != other)
+    other["a"] = none
+    other["d"] = .Bool(value: true)
+    assert(table != other)
+    assertEqual(table.debugDescription(), "{ a = true, c = \"x\" }")
+    assertEqual(table.entries[1], TomlEntry { key: "c", value: .Text(value: "x") })
+}
+
+@test
+fn writingPutsValuesBeforeTables() throws {
+    let text = "a = 1\n\n[t]\nx = 1\n\n[t.u]\ny = 2\n\n[only.sub]\nz = [1, { w = 2 }]\n\n[[many]]\nn = 1\n\n[many.sub]\nm = 2\n\n[[many]]\n\n[empty]\n"
+    let table = try Toml.parse(text)
+    assertEqual(try Toml.write(table), text)
+    var shuffled = TomlTable()
+    shuffled["t"] = table["t"]
+    shuffled["a"] = table["a"]
+    assertEqual(try Toml.write(shuffled), "a = 1\n\n[t]\nx = 1\n\n[t.u]\ny = 2\n")
+    assertEqual(try Toml.write(TomlTable()), "")
+    var odd = TomlTable()
+    odd["a b"] = .Text(value: "q\"\\\n\r\t\u{1}\u{7f}é")
+    odd[""] = .Float(value: 1e300)
+    odd["n"] = .Array(items: [.Float(value: 0.0 / 0.0), .Float(value: 1.0 / 0.0), .Float(value: -1.0 / 0.0), .Float(value: 2.0), .Array(items: []), .Table(table: TomlTable())])
+    odd["d"] = try Toml.parse("d = [1979-05-27, 07:32:00.5, 1979-05-27T07:32:00, 1979-05-27T07:32:00.25+01:30]")["d"]
+    let written = try Toml.write(odd)
+    assertEqual(
+        written,
+        "\"a b\" = \"q\\\"\\\\\\n\\r\\t\\u0001\\u007Fé\"\n\"\" = 1e+300\nn = [nan, inf, -inf, 2.0, [], {}]\nd = [1979-05-27, 07:32:00.5, 1979-05-27T07:32:00, 1979-05-27T07:32:00.25+01:30]\n"
+        .replacing("7F", with: "7f")
+    )
+    assertEqual(show(.Table(table: try Toml.parse(written))), show(.Table(table: odd)))
+    let late = TomlValue.LocalDate(value: Date.of(year: 10000, month: 1, day: 1)!)
+    var tables = TomlTable()
+    tables["x"] = .Array(items: [late])
+    do {
+        let _ = try Toml.write(tables)
+        fail("written")
+    } catch {
+        assertEqual(error.description(), "$: TOML has no year 10000")
+    }
+}
+
+// ---- Serializable ------------------------------------------------------------
+
+@derive(Serializable, Equatable, Debug)
+union Shape {
+    Circle(radius: F64)
+    Point(Int, Int)
+    Empty
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Meta {
+    var version: U64
+    var rate: F32
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Record {
+    @serialize(flatten)
+    var meta: Meta
+    var shapes: Shape[>..]
+    var inner: Meta
+    var name: String
+    var note: String?
+    var when: UtcDateTime
+    var day: TomlValue
+}
+
+fn record() -> Record {
+    return Record {
+        meta: Meta { version: 3, rate: 0.5 },
+        shapes: [.Circle(radius: 0.1), .Circle(radius: 2.0)],
+        inner: Meta { version: 4, rate: 1.5 },
+        name: "r",
+        note: none,
+        when: UtcDateTime.fromUnix(1700000000),
+        day: .LocalDate(value: Date.of(year: 2026, month: 11, day: 24)!),
+    }
+}
+
+@test
+fn aDerivedTypeGoesThereAndBack() throws {
+    let text = try Toml.encode(record())
+    assertEqual(
+        text,
+        "version = 3\nrate = 0.5\nname = \"r\"\nwhen = \"2023-11-14T22:13:20Z\"\nday = 2026-11-24\n\n[[shapes]]\n\n[shapes.Circle]\nradius = 0.1\n\n[[shapes]]\n\n[shapes.Circle]\nradius = 2.0\n\n[inner]\nversion = 4\nrate = 1.5\n"
+    )
+    assert(try Toml.decode(Record.self, from: text) == record())
+    // A date and time of TOML's own reads as a UtcDateTime too.
+    assert(try Toml.decode(Record.self, from: text.replacing("\"2023-11-14T22:13:20Z\"", with: "2023-11-14T23:13:20+01:00")) == record())
+    assert(try TomlDocument.parse(text).decode(Record.self) == record())
+    var mixed = record()
+    mixed.shapes = [.Point(1, 2), .Empty]
+    assert(try Toml.encode(mixed).contains("shapes = [{ Point = [1, 2] }, \"Empty\"]"))
+    assert(try Toml.decode(Record.self, from: try Toml.encode(mixed)) == mixed)
+    var counts = Dictionary<String, Int?>()
+    counts["one"] = 1
+    counts["none"] = none
+    assertEqual(try Toml.encode(counts), "one = 1\n")
+}
+
+// What an encoder wrote, or the error it threw.
+fn wrote(_ body: (TomlEncoder) throws(SerializeError) -> Void) -> String {
+    let encoder = TomlEncoder()
+    do {
+        try body(encoder)
+        return try encoder.text()
+    } catch {
+        return error.description()
+    }
+}
+
+@test
+fn theEncoderRefusesWhatTomlHasNot() {
+    let empty: Int?[>..] = [none]
+    assertEqual(wrote({ try $0.encodeInt(1) }), "$: a TOML document is a table")
+    assertEqual(wrote({ try $0.encodeNull() }), "$: TOML has no null")
+    assertEqual(wrote({ try empty.encode(to: $0) }), "$: TOML has no null")
+    assertEqual(wrote({ (encoder: TomlEncoder) throws(SerializeError) in }), "$: a TOML document is a table")
+    assertEqual(wrote({
+        try $0.beginMap(count: 0);
+        try $0.endMap();
+        try $0.encodeInt(1)
+    }), "$: a TOML document is one table")
+    assertEqual(wrote({
+        try $0.beginMap(count: 1);
+        try $0.encodeInt(1)
+    }), "$: a value was written without its key")
+    assertEqual(wrote({
+        try $0.beginMap(count: 1);
+        try $0.encodeKey("a");
+        try $0.endMap()
+    }), "$: a key was written without its value")
+    assertEqual(wrote({
+        try $0.beginMap(count: 1);
+        try $0.encodeKey("a");
+        try $0.encodeKey("b")
+    }), "$: the key 'b' is not where a key goes")
+    assertEqual(wrote({
+        try $0.beginMap(count: 2);
+        try $0.encodeKey("a");
+        try $0.encodeInt(1);
+        try $0.encodeKey("a");
+        try $0.encodeInt(1)
+    }), "$: the key 'a' was written twice")
+    assertEqual(wrote({
+        try $0.beginMap(count: 1);
+        try $0.encodeKey("a");
+        try $0.encodeUInt(U64.max)
+    }), "$: TOML has no integer as large as 18446744073709551615")
+    assertEqual(wrote({ try $0.beginMap(count: 1) }), "$: an array or a table was begun and not ended")
+    assertEqual(wrote({ try $0.endMap() }), "$: ended what was not begun")
+    assertEqual(wrote({ try $0.endSequence() }), "$: ended what was not begun")
+    assertEqual(wrote({
+        try $0.flattenNext();
+        try $0.encodeNull()
+    }), "$: only a struct or a map can be flattened")
+    assertEqual(wrote({
+        try $0.flattenNext();
+        try $0.encodeInt(1)
+    }), "$: only a struct or a map can be flattened")
+    assertEqual(wrote({
+        try $0.flattenNext();
+        try $0.beginSequence(count: 0)
+    }), "$: only a struct or a map can be flattened")
+    assertEqual(wrote({ (encoder: TomlEncoder) throws(SerializeError) in
+        var table = TomlTable()
+        table["x"] = .Integer(value: 1)
+        try encoder.beginMap(count: none)
+        try encoder.flattenNext()
+        try encoder.encodeValue(.Table(table: table))
+        try encoder.encodeKey("y")
+        try encoder.encodeBytes([1, 2])
+        try encoder.endMap()
+    }), "x = 1\ny = \"AQI=\"\n")
+}
+
+@test
+fn decodersSayWhereAndWhatIsWrong() throws {
+    let root = try TomlDecoder.parse("a = [1, 'x']\n'b c' = {d = -1, e = 'AQI', f = '!'}\ng = 1.5\n[[h]]\ni = true\nj = 2026-11-24")
+    assertEqual(root.path, "$")
+    assertEqual(root.count, 4)
+    assert(root.kind == .Map && !root.isNull && !root.isMissing)
+    assertEqual(root.field("a").element(1).path, "$.a[1]")
+    assertEqual(root.field("h").element(0).field("i").path, "$.h[0].i")
+    assert(root.field("a").element(2).isMissing && root.field("a").element(-1).isMissing && root.element(0).isMissing)
+    assert(root.hasField("a") && !root.hasField("c") && !root.field("a").hasField("a"))
+    assert(!root.excluding(["a"]).hasField("a"))
+    assertEqual(try root.excluding(["a"]).excluding(["g"]).decodeMap().count, 2)
+    assert(try root.field("b c").field("e").decodeBytes() == [1, 2])
+    assertEqual(try root.field("a").element(0).decodeUInt(), 1)
+    assertEqual(try root.field("a").element(0).decodeFloat(), 1.0)
+    assert(try root.field("h").element(0).field("i").decodeBool())
+    var messages: String[>..] = []
+    let attempts: (() throws(SerializeError) -> Void)[>..] = [
+        {
+            let _ = try root.field("zz").decodeInt()
+        },
+        {
+            let _ = try root.field("zz").decodeValue()
+        },
+        {
+            let _ = try root.decodeInt()
+        },
+        {
+            let _ = try root.field("a").decodeString()
+        },
+        {
+            let _ = try root.field("a").element(1).decodeBool()
+        },
+        {
+            let _ = try root.field("a").element(0).decodeBytes()
+        },
+        {
+            let _ = try root.field("a").element(0).decodeSequence()
+        },
+        {
+            let _ = try root.field("a").element(1).decodeFloat()
+        },
+        {
+            let _ = try root.field("a").element(1).decodeUInt()
+        },
+        {
+            let _ = try root.field("b c").field("d").decodeUInt()
+        },
+        {
+            let _ = try root.field("b c").field("f").decodeBytes()
+        },
+        {
+            let _ = try root.field("g").decodeInt()
+        },
+        {
+            let _ = try root.field("h").decodeMap()
+        },
+        {
+            let _ = try root.field("a").caseName()
+        },
+        {
+            let _ = try root.field("b c").caseName()
+        },
+        { try root.field("a").beginStruct("T") },
+        { try root.field("zz").beginStruct("T") },
+        {
+            throw root.unknownCase("Z")
+        },
+        {
+            throw root.field("h").mismatch("x")
+        },
+        {
+            throw root.field("h").element(0).field("j").mismatch("x")
+        },
+    ]
+    for attempt in attempts {
+        do {
+            try attempt()
+            fail("read")
+        } catch {
+            messages.append(error.description())
+        }
+    }
+    assertEqual(messages.joined(separator: "\n"), """
+        $.zz: missing
+        $.zz: missing
+        $: expected an integer, found a table
+        $.a: expected a string, found an array
+        $.a[1]: expected a Bool, found a string
+        $.a[0]: expected a base64 string, found an integer
+        $.a[0]: expected an array, found an integer
+        $.a[1]: expected a number, found a string
+        $.a[1]: expected an unsigned integer, found a string
+        $['b c'].d: -1 does not fit a U64
+        $['b c'].f: '!' is not base64
+        $.g: expected an integer, found a float
+        $.h: expected a table, found an array of tables
+        $.a: expected a case's name, or a table of one value, found an array
+        $['b c']: expected a case's name, or a table of one value, found a table
+        $.a: expected a table (T), found an array
+        $.zz: missing
+        $: no case 'Z'
+        $.h: expected x, found an array of tables
+        $.h[0].j: expected x, found a date
+        """)
+    var kinds = ""
+    for decoder in [root.field("a"), root.field("g"), root.field("a").element(1), root.field("h").element(0).field("i"), root.field("h").element(0).field("j"), root.field("zz")] {
+        kinds += "\(decoder.kind) "
+    }
+    assertEqual(kinds, "Sequence Number String Bool String Missing ")
+    assert(root.casePayload().isMissing && root.field("zz").kindName == "nothing")
+}
+
+@test
+fn aValueGoesThroughOtherFormats() throws {
+    let table = TomlValue.Table(table: try Toml.parse("a = [1, 2.5, true, 'x']\n[b]\nd = 1979-05-27T07:32:00Z\nt = 07:32:00"))
+    assertEqual(try Json.encode(table), "{\"a\":[1,2.5,true,\"x\"],\"b\":{\"d\":\"1979-05-27T07:32:00Z\",\"t\":\"07:32:00\"}}")
+    let back = try Json.decode(TomlValue.self, from: "{\"a\":[1,2.5,true,\"x\"]}")
+    assertEqual(show(back), "{a:[i1,f2.5,true,s\"x\"]}")
+    assertEqual(show(try Toml.decode(TomlValue.self, from: "a = 1")), "{a:i1}")
+    assertEqual(show(try MessagePack.decode(TomlValue.self, from: [0xC4, 1, 255])), "[i255]")
+    assert((try? Json.decode(TomlValue.self, from: "null")) == none)
+    assert((try? TomlValue.decode(from: try JsonDecoder.parse("{}").field("a"))) == none)
+    let document = try JsonValue.decode(from: try TomlDecoder.parse("a = [1, 'x', 2026-11-24]"))
+    assertEqual(try Json.encode(document), "{\"a\":[1.0,\"x\",\"2026-11-24\"]}")
+    assert(table.table != none && table.items == none && table.text == none && table.kindName == "a table")
+}

@@ -1,0 +1,302 @@
+module Sable.Serialize
+
+import Sable.Time
+
+/// The Encoder that writes MessagePack, each value in its shortest form: an
+/// integer in as few bytes as hold it, a float in four bytes when that loses
+/// nothing. A struct or a map is a map, a sequence an array, a case that
+/// carries nothing its name and one that does a map of one entry. A map's
+/// key may be any value: where a key would be, encode it. What
+/// `MessagePack.encode` uses; alone, a writer of any MessagePack.
+///
+/// ```sable
+/// let encoder = MessagePackEncoder()
+/// try! encoder.beginMap(count: 2)
+/// try! encoder.encodeKey("at")
+/// try! encoder.encodeTimestamp(UtcDateTime.fromUnix(1))
+/// try! encoder.encodeInt(-1)
+/// try! encoder.encodeExtension(5, [0xAA])
+/// try! encoder.endMap()
+/// assert(try! encoder.bytes() == [0x82, 0xA2, 0x61, 0x74, 0xD6, 0xFF, 0, 0, 0, 1, 0xFF, 0xD4, 5, 0xAA])
+/// ```
+public final class MessagePackEncoder: Encoder {
+    var written: U8[>..] = []
+    var frames: BinaryFrame[>..] = []
+    // Whether the map written next is to be part of the one open, and for
+    // each struct, map or case open, whether it is part of the one around it.
+    var flattening: Bool = false
+    var flattened: Bool[>..] = []
+
+    /// An encoder that has written nothing.
+    public init() { }
+
+    /// The MessagePack written: an array or a map still open is an error.
+    public fn bytes() throws(SerializeError) -> U8[>..] {
+        if !frames.isEmpty || !flattened.isEmpty {
+            throw fault("an array or a map was begun and not ended")
+        }
+        return written
+    }
+
+    fn fault(_ reason: String) -> SerializeError {
+        return SerializeError.InvalidValue(path: "$", reason: reason)
+    }
+
+    // Counts the value about to be written in what is open.
+    fn beginItem() throws(SerializeError) {
+        if flattening {
+            throw fault("only a struct or a map can be flattened")
+        }
+        if !frames.isEmpty {
+            frames[frames.count - 1].written += 1
+        }
+    }
+
+    public fn encodeNull() throws(SerializeError) {
+        try beginItem()
+        written.append(0xC0)
+    }
+
+    public fn encodeBool(_ value: Bool) throws(SerializeError) {
+        try beginItem()
+        written.append(U8(value ? 0xC3 : 0xC2))
+    }
+
+    public fn encodeInt(_ value: Int) throws(SerializeError) {
+        if value >= 0 {
+            try encodeUInt(U64(value))
+            return
+        }
+        try beginItem()
+        let bits = U64.truncating(value)
+        if value >= -32 {
+            written.append(U8.truncating(bits))
+        } else if value >= -128 {
+            written.append(0xD0)
+            appendBigEndian(&written, bits, 1)
+        } else if value >= -32768 {
+            written.append(0xD1)
+            appendBigEndian(&written, bits, 2)
+        } else if value >= -2147483648 {
+            written.append(0xD2)
+            appendBigEndian(&written, bits, 4)
+        } else {
+            written.append(0xD3)
+            appendBigEndian(&written, bits, 8)
+        }
+    }
+
+    public fn encodeUInt(_ value: U64) throws(SerializeError) {
+        try beginItem()
+        if value < 0x80 {
+            written.append(U8.truncating(value))
+        } else {
+            appendSized(value, 0xCC, 0xCD, 0xCE, 0xCF)
+        }
+    }
+
+    // The value after the marker for the fewest bytes that hold it.
+    fn appendSized(_ value: U64, _ one: U8, _ two: U8, _ four: U8, _ eight: U8) {
+        if value <= 0xFF {
+            written.append(one)
+            appendBigEndian(&written, value, 1)
+        } else if value <= 0xFFFF {
+            written.append(two)
+            appendBigEndian(&written, value, 2)
+        } else if value <= 0xFFFFFFFF {
+            written.append(four)
+            appendBigEndian(&written, value, 4)
+        } else {
+            written.append(eight)
+            appendBigEndian(&written, value, 8)
+        }
+    }
+
+    /// A float: 32 bits when they hold it exactly, 64 otherwise.
+    public fn encodeFloat(_ value: F64) throws(SerializeError) {
+        try beginItem()
+        let single = F32(value)
+        if F64(single) == value {
+            written.append(0xCA)
+            appendBigEndian(&written, U64(single.bits), 4)
+        } else {
+            written.append(0xCB)
+            appendBigEndian(&written, value.bits, 8)
+        }
+    }
+
+    public fn encodeString(_ value: String) throws(SerializeError) {
+        try beginItem()
+        let count = value.utf8Count
+        if count < 32 {
+            written.append(0xA0 + U8(count))
+        } else {
+            try appendLength(count, 0xD9, 0xDA, 0xDB)
+        }
+        written.append(utf8: value)
+    }
+
+    public fn encodeBytes(_ value: U8[>..]) throws(SerializeError) {
+        try beginItem()
+        try appendLength(value.count, 0xC4, 0xC5, 0xC6)
+        written.append(contentsOf: value)
+    }
+
+    fn appendLength(_ count: Int, _ one: U8, _ two: U8, _ four: U8) throws(SerializeError) {
+        if count > 0xFFFFFFFF {
+            throw fault("MessagePack holds at most 4294967295 bytes in one value")
+        }
+        appendSized(U64(count), one, two, four, four)
+    }
+
+    /// An extension: the application's type, 0 to 127 (MessagePack's own are
+    /// negative), and its data.
+    public fn encodeExtension(_ type: I8, _ data: U8[>..]) throws(SerializeError) {
+        try beginItem()
+        if data.count == 1 {
+            written.append(0xD4)
+        } else if data.count == 2 {
+            written.append(0xD5)
+        } else if data.count == 4 {
+            written.append(0xD6)
+        } else if data.count == 8 {
+            written.append(0xD7)
+        } else if data.count == 16 {
+            written.append(0xD8)
+        } else {
+            try appendLength(data.count, 0xC7, 0xC8, 0xC9)
+        }
+        written.append(U8.truncating(type))
+        written.append(contentsOf: data)
+    }
+
+    /// A moment as MessagePack's timestamp extension, in as few bytes as
+    /// hold it: 4, 8 or 12.
+    public fn encodeTimestamp(_ value: UtcDateTime) throws(SerializeError) {
+        let timestamp = MessagePackExtension(value)
+        try encodeExtension(timestamp.type, timestamp.data)
+    }
+
+    // ---- Arrays and maps -----------------------------------------------------
+
+    // The header of an array or a map of that many elements or entries.
+    fn header(_ isMap: Bool, _ count: Int) throws(SerializeError) -> U8[>..] {
+        var bytes: U8[>..] = []
+        if count < 0 || count > 0xFFFFFFFF {
+            throw fault("MessagePack has no array or map of \(count)")
+        }
+        if count < 16 {
+            bytes.append(U8(count + (isMap ? 0x80 : 0x90)))
+        } else if count <= 0xFFFF {
+            bytes.append(U8(isMap ? 0xDE : 0xDC))
+            appendBigEndian(&bytes, U64(count), 2)
+        } else {
+            bytes.append(U8(isMap ? 0xDF : 0xDD))
+            appendBigEndian(&bytes, U64(count), 4)
+        }
+        return bytes
+    }
+
+    fn begin(_ isMap: Bool, _ count: Int?) throws(SerializeError) {
+        try beginItem()
+        if let count = count {
+            written.append(contentsOf: try header(isMap, count))
+            frames.append(BinaryFrame(start: written.count, isMap: isMap, count: isMap ? count * 2 : count))
+        } else {
+            frames.append(BinaryFrame(start: written.count, isMap: isMap, count: none))
+        }
+    }
+
+    fn close(_ isMap: Bool) throws(SerializeError) {
+        if frames.isEmpty || frames[frames.count - 1].isMap != isMap {
+            throw fault("ended what was not begun")
+        }
+        let frame = frames.removeLast()
+        if let reason = frameFault(frame) {
+            throw fault(reason)
+        }
+        if frame.count == none {
+            insertBytes(&written, try header(isMap, isMap ? frame.written / 2 : frame.written), at: frame.start)
+        }
+    }
+
+    fn openMap(_ count: Int?) throws(SerializeError) {
+        if flattening {
+            flattening = false
+            flattened.append(true)
+            return
+        }
+        try begin(true, count)
+        flattened.append(false)
+    }
+
+    fn closeMap() throws(SerializeError) {
+        if flattened.isEmpty {
+            throw fault("ended what was not begun")
+        }
+        if !flattened.removeLast() {
+            try close(true)
+        }
+    }
+
+    fn key(_ name: String) throws(SerializeError) {
+        if frames.isEmpty || !frames[frames.count - 1].isMap || frames[frames.count - 1].written % 2 != 0 {
+            throw fault("the key '\(name)' is not where a key goes")
+        }
+        try encodeString(name)
+    }
+
+    /// An array; one whose count is not known is given it when it ends.
+    public fn beginSequence(count: Int?) throws(SerializeError) {
+        try begin(false, count)
+    }
+
+    public fn endSequence() throws(SerializeError) {
+        try close(false)
+    }
+
+    /// A map; one whose count is not known is given it when it ends.
+    public fn beginMap(count: Int?) throws(SerializeError) {
+        try openMap(count)
+    }
+
+    public fn encodeKey(_ key: String) throws(SerializeError) {
+        try self.key(key)
+    }
+
+    public fn endMap() throws(SerializeError) {
+        try closeMap()
+    }
+
+    /// A map, its keys the fields' names.
+    public fn beginStruct(_ name: String, count: Int?) throws(SerializeError) {
+        try openMap(count)
+    }
+
+    public fn encodeField(_ key: String) throws(SerializeError) {
+        try self.key(key)
+    }
+
+    public fn endStruct() throws(SerializeError) {
+        try closeMap()
+    }
+
+    public fn flattenNext() throws(SerializeError) {
+        flattening = true
+    }
+
+    /// The case's name, as a string.
+    public fn encodeUnitCase(_ name: String, of type: String) throws(SerializeError) {
+        try encodeString(name)
+    }
+
+    /// A map of one entry, the case's name, whose value is the payload.
+    public fn beginCase(_ name: String, of type: String) throws(SerializeError) {
+        try openMap(1)
+        try key(name)
+    }
+
+    public fn endCase() throws(SerializeError) {
+        try closeMap()
+    }
+}

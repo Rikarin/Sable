@@ -1,0 +1,337 @@
+module Sable.Serialize
+
+import Sable.Time
+
+/// The Decoder that reads MessagePack, as MessagePackEncoder writes it: a
+/// value of an indexed document, at a path (`$.items[3].name`) that every
+/// error names. A map's keys are strings, or integers, which are read as
+/// their digits; a timestamp reads as the string a UtcDateTime is in other
+/// formats, too. What `MessagePack.decode` uses.
+///
+/// ```sable
+/// let root = try! MessagePackDecoder.parse([0x81, 0xA1, 0x61, 0x92, 0x01, 0xC0])
+/// let items = try! root.field("a").decodeSequence()
+/// assert(try! items[0].decodeInt() == 1)
+/// assert(items[1].isNull && root.field("b").isMissing)
+/// ```
+public final class MessagePackDecoder: Decoder {
+    let document: MessagePackDocument
+    // The node, or -1 for a field that is not there; the decoder this one's
+    // value is in, and the step from there, as JsonDecoder has them.
+    let node: Int
+    let parent: MessagePackDecoder?
+    let key: String?
+    let index: Int
+    let excluded: String[>..]?
+
+    init(_ document: MessagePackDocument, _ node: Int, parent: MessagePackDecoder?, key: String?, index: Int, excluded: String[>..]? = none) {
+        self.document = document
+        self.node = node
+        self.parent = parent
+        self.key = key
+        self.index = index
+        self.excluded = excluded
+    }
+
+    /// A decoder of the one value the bytes are; SerializeError.Syntax when
+    /// they are not one, or nest arrays and maps deeper than that.
+    public static fn parse(_ bytes: U8[>..], maximumDepth: Int = 128) throws(SerializeError) -> MessagePackDecoder {
+        let document = try MessagePackParser.parse(bytes, maximumDepth)
+        return MessagePackDecoder(document, 0, parent: none, key: none, index: -1)
+    }
+
+    /// Where the value is, from the document's root.
+    public var path: String {
+        get {
+            if let parent = parent {
+                if let key = key {
+                    return parent.path + jsonPathKey(key)
+                }
+                return index >= 0 ? parent.path + "[\(index)]" : parent.path
+            }
+            return "$"
+        }
+    }
+
+    // ---- What it holds -------------------------------------------------------
+
+    public var isMissing: Bool => node < 0
+
+    public var isNull: Bool => holds(.Null)
+
+    fn holds(_ kind: MessagePackKind) -> Bool {
+        return node >= 0 && document.kind(node) == kind
+    }
+
+    /// What the value is: a timestamp is a String, any other extension Bytes.
+    public var kind: DecodedKind {
+        get {
+            if node < 0 {
+                return .Missing
+            }
+            return match document.kind(node) {
+                case .Null      => .Null
+                case .Bool      => .Bool
+                case .UInt      => .Number
+                case .Int       => .Number
+                case .Float     => .Number
+                case .String    => .String
+                case .Bytes     => .Bytes
+                case .Array     => .Sequence
+                case .Map       => .Map
+                case .Extension => document.extensionValue(node).timestamp == none ? .Bytes : .String
+            }
+        }
+    }
+
+    /// What the value is, as an error says it: "a map", "a string", …;
+    /// "nothing" for a missing one.
+    public var kindName: String {
+        get {
+            if node < 0 {
+                return "nothing"
+            }
+            return match document.kind(node) {
+                case .Null      => "null"
+                case .Bool      => "a Bool"
+                case .UInt      => "an integer"
+                case .Int       => "an integer"
+                case .Float     => "a float"
+                case .String    => "a string"
+                case .Bytes     => "bytes"
+                case .Array     => "an array"
+                case .Map       => "a map"
+                case .Extension => "an extension"
+            }
+        }
+    }
+
+    /// How many elements or entries the value has; 0 for any other.
+    public var count: Int => holds(.Array) || holds(.Map) ? document.count(node) : 0
+
+    public fn mismatch(_ expected: String) -> SerializeError {
+        if node < 0 {
+            return SerializeError.MissingField(path: path)
+        }
+        return SerializeError.TypeMismatch(path: path, expected: expected, found: kindName)
+    }
+
+    public fn invalid(_ reason: String) -> SerializeError {
+        return SerializeError.InvalidValue(path: path, reason: reason)
+    }
+
+    public fn unknownCase(_ name: String) -> SerializeError {
+        return SerializeError.UnknownCase(path: path, name: name)
+    }
+
+    fn expect(_ kind: MessagePackKind, _ expected: String) throws(SerializeError) {
+        if !holds(kind) {
+            throw mismatch(expected)
+        }
+    }
+
+    // ---- Values --------------------------------------------------------------
+
+    public fn decodeBool() throws(SerializeError) -> Bool {
+        try expect(.Bool, "a Bool")
+        return document.bool(node)
+    }
+
+    /// An integer, in any of its forms, that fits.
+    public fn decodeInt() throws(SerializeError) -> Int {
+        if holds(.UInt) {
+            guard let value = Int.exactly(document.unsigned(node)) else {
+                throw invalid("\(document.unsigned(node)) does not fit an Int")
+            }
+            return value
+        }
+        try expect(.Int, "an integer")
+        return document.signed(node)
+    }
+
+    /// An integer that is not negative, in any of its forms.
+    public fn decodeUInt() throws(SerializeError) -> U64 {
+        if holds(.UInt) {
+            return document.unsigned(node)
+        }
+        try expect(.Int, "an unsigned integer")
+        guard let value = U64.exactly(document.signed(node)) else {
+            throw invalid("\(document.signed(node)) does not fit a U64")
+        }
+        return value
+    }
+
+    /// A float of either size, or an integer as the nearest one.
+    public fn decodeFloat() throws(SerializeError) -> F64 {
+        if holds(.UInt) {
+            return F64(document.unsigned(node))
+        }
+        if holds(.Int) {
+            return F64(document.signed(node))
+        }
+        try expect(.Float, "a number")
+        return document.float(node)
+    }
+
+    /// A string, or a timestamp as RFC 3339 writes it.
+    public fn decodeString() throws(SerializeError) -> String {
+        if holds(.Extension) {
+            if let moment = document.extensionValue(node).timestamp {
+                return try text(moment)
+            }
+        }
+        try expect(.String, "a string")
+        return document.string(node)
+    }
+
+    // Four-digit years alone, which is all that RFC 3339 writes.
+    fn text(_ moment: UtcDateTime) throws(SerializeError) -> String {
+        let seconds = moment.secondsSinceEpoch
+        if seconds < -62167219200 || seconds >= 253402300800 {
+            throw invalid("the timestamp is not in the years 0 to 9999")
+        }
+        return moment.rfc3339()
+    }
+
+    /// Bytes, or an extension's data, whatever its type.
+    public fn decodeBytes() throws(SerializeError) -> U8[>..] {
+        if !holds(.Extension) {
+            try expect(.Bytes, "bytes")
+        }
+        return document.data(node)
+    }
+
+    /// An extension, its type and data.
+    public fn decodeExtension() throws(SerializeError) -> MessagePackExtension {
+        try expect(.Extension, "an extension")
+        return document.extensionValue(node)
+    }
+
+    /// A timestamp, as the moment it is.
+    public fn decodeTimestamp() throws(SerializeError) -> UtcDateTime {
+        let found = try decodeExtension()
+        guard let moment = found.timestamp else {
+            throw invalid("the extension of type \(found.type) is not a timestamp")
+        }
+        return moment
+    }
+
+    // ---- Sequences -----------------------------------------------------------
+
+    /// The array's elements, in order.
+    public fn decodeSequence() throws(SerializeError) -> MessagePackDecoder[>..] {
+        try expect(.Array, "an array")
+        var all: MessagePackDecoder[>..] = []
+        let end = document.afters[node]
+        var child = node + 1
+        while child < end {
+            all.append(MessagePackDecoder(document, child, parent: self, key: none, index: all.count))
+            child = document.afters[child]
+        }
+        return all
+    }
+
+    public fn element(_ index: Int) -> MessagePackDecoder {
+        var found = -1
+        if holds(.Array) && index >= 0 && index < document.count(node) {
+            found = node + 1
+            var i = 0
+            while i < index {
+                found = document.afters[found]
+                i += 1
+            }
+        }
+        return MessagePackDecoder(document, found, parent: self, key: none, index: index)
+    }
+
+    // ---- Maps and structs ----------------------------------------------------
+
+    /// The map's entries, in order; a key that is neither a string nor an
+    /// integer is an error.
+    public fn decodeMap() throws(SerializeError) -> DecodedMember<MessagePackDecoder>[>..] {
+        try expect(.Map, "a map")
+        var all: DecodedMember<MessagePackDecoder>[>..] = []
+        let end = document.afters[node]
+        var child = node + 1
+        while child < end {
+            let value = document.afters[child]
+            guard let name = document.name(child) else {
+                throw invalid("a key is neither a string nor an integer")
+            }
+            if !excludes(name) {
+                all.append(DecodedMember { key: name, value: MessagePackDecoder(document, value, parent: self, key: name, index: -1) })
+            }
+            child = document.afters[value]
+        }
+        return all
+    }
+
+    /// Throws unless the value is a map.
+    public fn beginStruct(_ name: String) throws(SerializeError) {
+        try expect(.Map, "a map (\(name))")
+    }
+
+    /// The value of the first entry of that key, or a missing decoder when
+    /// the map has none (or this is not a map).
+    public fn field(_ key: String) -> MessagePackDecoder {
+        if holds(.Map) && !excludes(key) {
+            let end = document.afters[node]
+            var child = node + 1
+            while child < end {
+                let value = document.afters[child]
+                if document.isString(child, key) {
+                    return MessagePackDecoder(document, value, parent: self, key: key, index: -1)
+                }
+                child = document.afters[value]
+            }
+        }
+        return MessagePackDecoder(document, -1, parent: self, key: key, index: -1)
+    }
+
+    public fn hasField(_ key: String) -> Bool {
+        return !field(key).isMissing
+    }
+
+    fn excludes(_ key: String) -> Bool {
+        if let excluded = excluded {
+            return excluded.contains(key)
+        }
+        return false
+    }
+
+    public fn excluding(_ keys: String[>..]) -> MessagePackDecoder {
+        var all = excluded ?? []
+        for key in keys {
+            all.append(key)
+        }
+        return MessagePackDecoder(document, node, parent: parent, key: key, index: index, excluded: all)
+    }
+
+    // ---- Unions --------------------------------------------------------------
+
+    // Whether this is a case with a payload: a map of one entry, by a string.
+    fn holdsCase() -> Bool {
+        return holds(.Map) && document.count(node) == 1 && document.kind(node + 1) == .String
+    }
+
+    /// A string for a case that carries nothing, or the one key of a map
+    /// whose value is its payload.
+    public fn caseName() throws(SerializeError) -> String {
+        if holds(.String) {
+            return document.string(node)
+        }
+        if holdsCase() {
+            return document.string(node + 1)
+        }
+        throw mismatch("a case's name, or a map of one entry")
+    }
+
+    /// The value of the map's one entry; missing for a case written as a
+    /// string.
+    public fn casePayload() -> MessagePackDecoder {
+        if holdsCase() {
+            return MessagePackDecoder(document, node + 2, parent: self, key: document.string(node + 1), index: -1)
+        }
+        return MessagePackDecoder(document, -1, parent: self, key: none, index: -1)
+    }
+}

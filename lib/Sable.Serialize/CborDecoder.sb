@@ -1,0 +1,408 @@
+module Sable.Serialize
+
+import Sable.Time
+
+/// The Decoder that reads CBOR (RFC 8949), as CborEncoder writes it: a value
+/// of an indexed document, at a path (`$.items[3].name`) that every error
+/// names. A tag is read through to the value it tags; an integer tagged as a
+/// bignum that fits reads as one, and a moment tagged by its seconds, as the
+/// string a UtcDateTime is in other formats, too. A map's keys are text, or
+/// integers, which are read as their digits. What `Cbor.decode` uses.
+///
+/// ```sable
+/// let root = try! CborDecoder.parse([0xA1, 0x61, 0x61, 0x9F, 0xC2, 0x41, 0x05, 0xF7, 0xFF])
+/// let items = try! root.field("a").decodeSequence()
+/// assert(try! items[0].decodeInt() == 5)
+/// assert(items[0].tags == [2])
+/// assert(items[1].isNull && root.field("b").isMissing)
+/// ```
+public final class CborDecoder: Decoder {
+    let document: CborDocument
+    // The node its tags begin at, and the one they tag; -1 for a field that
+    // is not there. The decoder this one's value is in, and the step from
+    // there, as JsonDecoder has them.
+    let tagged: Int
+    let node: Int
+    let parent: CborDecoder?
+    let key: String?
+    let index: Int
+    let excluded: String[>..]?
+
+    init(_ document: CborDocument, _ node: Int, parent: CborDecoder?, key: String?, index: Int, excluded: String[>..]? = none) {
+        self.document = document
+        self.tagged = node
+        self.node = node < 0 ? -1 : document.untagged(node)
+        self.parent = parent
+        self.key = key
+        self.index = index
+        self.excluded = excluded
+    }
+
+    /// A decoder of the one item the bytes are; SerializeError.Syntax when
+    /// they are not one, or nest arrays, maps and tags deeper than that, or
+    /// are not the deterministic encoding (RFC 8949 §4.2.1), if it is asked
+    /// for.
+    public static fn parse(_ bytes: U8[>..], maximumDepth: Int = 128, deterministic: Bool = false) throws(SerializeError) -> CborDecoder {
+        let document = try CborParser.parse(bytes, maximumDepth, deterministic)
+        return CborDecoder(document, 0, parent: none, key: none, index: -1)
+    }
+
+    /// Where the value is, from the document's root.
+    public var path: String {
+        get {
+            if let parent = parent {
+                if let key = key {
+                    return parent.path + jsonPathKey(key)
+                }
+                return index >= 0 ? parent.path + "[\(index)]" : parent.path
+            }
+            return "$"
+        }
+    }
+
+    /// The tags on the value, the outermost first.
+    public var tags: U64[>..] {
+        get {
+            var all: U64[>..] = []
+            var i = tagged
+            while i < node {
+                all.append(document.head(i).argument)
+                i += 1
+            }
+            return all
+        }
+    }
+
+    // The tag next to the value; none for a value with no tag.
+    var tag: U64? => tagged < node ? document.head(node - 1).argument : none
+
+    // ---- What it holds -------------------------------------------------------
+
+    public var isMissing: Bool => node < 0
+
+    /// Whether the value is null, or undefined.
+    public var isNull: Bool => holds(.Null) || holds(.Undefined)
+
+    fn holds(_ kind: CborKind) -> Bool {
+        return node >= 0 && document.kind(node) == kind
+    }
+
+    /// What the value is, its tags aside; a simple value is a Number.
+    public var kind: DecodedKind {
+        get {
+            if node < 0 {
+                return .Missing
+            }
+            return match document.kind(node) {
+                case .Unsigned  => .Number
+                case .Negative  => .Number
+                case .Bytes     => isBignum ? .Number : .Bytes
+                case .Text      => .String
+                case .Array     => .Sequence
+                case .Map       => .Map
+                case .Tag       => .Missing
+                case .Bool      => .Bool
+                case .Null      => .Null
+                case .Undefined => .Null
+                case .Simple    => .Number
+                case .Float     => .Number
+            }
+        }
+    }
+
+    /// What the value is, as an error says it: "a map", "a string", …;
+    /// "nothing" for a missing one.
+    public var kindName: String {
+        get {
+            if node < 0 {
+                return "nothing"
+            }
+            return match document.kind(node) {
+                case .Unsigned  => "an integer"
+                case .Negative  => "an integer"
+                case .Bytes     => "bytes"
+                case .Text      => "a string"
+                case .Array     => "an array"
+                case .Map       => "a map"
+                case .Tag       => "a tag"
+                case .Bool      => "a Bool"
+                case .Null      => "null"
+                case .Undefined => "undefined"
+                case .Simple    => "a simple value"
+                case .Float     => "a float"
+            }
+        }
+    }
+
+    /// How many elements or entries the value has; 0 for any other.
+    public var count: Int => holds(.Array) || holds(.Map) ? document.count(node) : 0
+
+    public fn mismatch(_ expected: String) -> SerializeError {
+        if node < 0 {
+            return SerializeError.MissingField(path: path)
+        }
+        return SerializeError.TypeMismatch(path: path, expected: expected, found: kindName)
+    }
+
+    public fn invalid(_ reason: String) -> SerializeError {
+        return SerializeError.InvalidValue(path: path, reason: reason)
+    }
+
+    public fn unknownCase(_ name: String) -> SerializeError {
+        return SerializeError.UnknownCase(path: path, name: name)
+    }
+
+    fn expect(_ kind: CborKind, _ expected: String) throws(SerializeError) {
+        if !holds(kind) {
+            throw mismatch(expected)
+        }
+    }
+
+    // ---- Values --------------------------------------------------------------
+
+    public fn decodeBool() throws(SerializeError) -> Bool {
+        try expect(.Bool, "a Bool")
+        return document.head(node).info == 21
+    }
+
+    // Whether the value is bytes tagged as an integer's.
+    var isBignum: Bool {
+        get {
+            if let tag = tag {
+                return holds(.Bytes) && (tag == 2 || tag == 3)
+            }
+            return false
+        }
+    }
+
+    // The integer: whether it is negative, and its value or n of -1 - n.
+    fn integer(_ expected: String) throws(SerializeError) -> (negative: Bool, value: U64) {
+        if isBignum {
+            let data = document.data(node)
+            var value: U64 = 0
+            for byte in data {
+                if value >> 56 != 0 {
+                    throw invalid("the bignum does not fit 64 bits")
+                }
+                value = value << 8 | U64(byte)
+            }
+            return (negative: tag == 3, value: value)
+        }
+        if !holds(.Negative) {
+            try expect(.Unsigned, expected)
+        }
+        return (negative: holds(.Negative), value: document.head(node).argument)
+    }
+
+    fn integerText(_ negative: Bool, _ value: U64) -> String {
+        return negative ? negativeText(value) : "\(value)"
+    }
+
+    /// An integer, or a bignum, that fits.
+    public fn decodeInt() throws(SerializeError) -> Int {
+        let (negative, value) = try integer("an integer")
+        guard let magnitude = Int.exactly(value) else {
+            throw invalid("\(integerText(negative, value)) does not fit an Int")
+        }
+        return negative ? -1 - magnitude : magnitude
+    }
+
+    /// An integer, or a bignum, that is not negative and fits.
+    public fn decodeUInt() throws(SerializeError) -> U64 {
+        let (negative, value) = try integer("an unsigned integer")
+        if negative {
+            throw invalid("\(integerText(negative, value)) does not fit a U64")
+        }
+        return value
+    }
+
+    /// A float of any size, or an integer as the nearest one.
+    public fn decodeFloat() throws(SerializeError) -> F64 {
+        if isBignum {
+            var value = 0.0
+            for byte in document.data(node) {
+                value = value * 256.0 + F64(byte)
+            }
+            return tag == 3 ? -1.0 - value : value
+        }
+        if holds(.Unsigned) {
+            return F64(document.head(node).argument)
+        }
+        if holds(.Negative) {
+            return -1.0 - F64(document.head(node).argument)
+        }
+        try expect(.Float, "a number")
+        return cborFloat(document.head(node))
+    }
+
+    /// Text, or a number tagged as a moment (tag 1), as RFC 3339 writes it.
+    public fn decodeString() throws(SerializeError) -> String {
+        if tag == 1 && !holds(.Text) {
+            return (try decodeTimestamp()).rfc3339()
+        }
+        try expect(.Text, "a string")
+        return document.string(node)
+    }
+
+    /// A moment: text tagged 0, as RFC 3339 writes one, or a number tagged
+    /// 1, its seconds since 1970; of the years 0 to 9999.
+    public fn decodeTimestamp() throws(SerializeError) -> UtcDateTime {
+        if tag == 0 {
+            return try UtcDateTime.decode(from: self)
+        }
+        if tag != 1 {
+            throw mismatch("a moment")
+        }
+        let range = -62167219200..<253402300800
+        if holds(.Float) {
+            let value = try decodeFloat()
+            if value >= F64(range.lowerBound) && value < F64(range.upperBound) {
+                let whole = value.rounded(.Down)
+                let nanoseconds = ((value - whole) * 1000000000.0).rounded(.Down)
+                return UtcDateTime { secondsSinceEpoch: whole as Int, nanosecond: nanoseconds as Int }
+            }
+        } else {
+            let seconds = try decodeInt()
+            if range.contains(seconds) {
+                return UtcDateTime.fromUnix(seconds)
+            }
+        }
+        throw invalid("the moment is not in the years 0 to 9999")
+    }
+
+    /// A byte string, put together from its chunks if it has any.
+    public fn decodeBytes() throws(SerializeError) -> U8[>..] {
+        try expect(.Bytes, "bytes")
+        return document.data(node)
+    }
+
+    /// The value as it is, with its tags.
+    public fn decodeValue() throws(SerializeError) -> CborValue {
+        if node < 0 {
+            throw mismatch("a value")
+        }
+        return cborValue(document, tagged)
+    }
+
+    // ---- Sequences -----------------------------------------------------------
+
+    /// The array's elements, in order.
+    public fn decodeSequence() throws(SerializeError) -> CborDecoder[>..] {
+        try expect(.Array, "an array")
+        var all: CborDecoder[>..] = []
+        let end = document.afters[node]
+        var child = node + 1
+        while child < end {
+            all.append(CborDecoder(document, child, parent: self, key: none, index: all.count))
+            child = document.afters[child]
+        }
+        return all
+    }
+
+    public fn element(_ index: Int) -> CborDecoder {
+        var found = -1
+        if holds(.Array) && index >= 0 {
+            let end = document.afters[node]
+            found = node + 1
+            var i = 0
+            while found < end && i < index {
+                found = document.afters[found]
+                i += 1
+            }
+            if found >= end {
+                found = -1
+            }
+        }
+        return CborDecoder(document, found, parent: self, key: none, index: index)
+    }
+
+    // ---- Maps and structs ----------------------------------------------------
+
+    /// The map's entries, in order; a key that is neither text nor an
+    /// integer is an error.
+    public fn decodeMap() throws(SerializeError) -> DecodedMember<CborDecoder>[>..] {
+        try expect(.Map, "a map")
+        var all: DecodedMember<CborDecoder>[>..] = []
+        let end = document.afters[node]
+        var child = node + 1
+        while child < end {
+            let value = document.afters[child]
+            guard let name = document.name(child) else {
+                throw invalid("a key is neither a string nor an integer")
+            }
+            if !excludes(name) {
+                all.append(DecodedMember { key: name, value: CborDecoder(document, value, parent: self, key: name, index: -1) })
+            }
+            child = document.afters[value]
+        }
+        return all
+    }
+
+    /// Throws unless the value is a map.
+    public fn beginStruct(_ name: String) throws(SerializeError) {
+        try expect(.Map, "a map (\(name))")
+    }
+
+    /// The value of the first entry of that key, or a missing decoder when
+    /// the map has none (or this is not a map).
+    public fn field(_ key: String) -> CborDecoder {
+        if holds(.Map) && !excludes(key) {
+            let end = document.afters[node]
+            var child = node + 1
+            while child < end {
+                let value = document.afters[child]
+                if document.isString(child, key) {
+                    return CborDecoder(document, value, parent: self, key: key, index: -1)
+                }
+                child = document.afters[value]
+            }
+        }
+        return CborDecoder(document, -1, parent: self, key: key, index: -1)
+    }
+
+    public fn hasField(_ key: String) -> Bool {
+        return !field(key).isMissing
+    }
+
+    fn excludes(_ key: String) -> Bool {
+        if let excluded = excluded {
+            return excluded.contains(key)
+        }
+        return false
+    }
+
+    public fn excluding(_ keys: String[>..]) -> CborDecoder {
+        var all = excluded ?? []
+        for key in keys {
+            all.append(key)
+        }
+        return CborDecoder(document, tagged, parent: parent, key: key, index: index, excluded: all)
+    }
+
+    // ---- Unions --------------------------------------------------------------
+
+    // Whether this is a case with a payload: a map of one entry, by text.
+    fn holdsCase() -> Bool {
+        return holds(.Map) && document.hasOneEntry(node) && document.kind(node + 1) == .Text
+    }
+
+    /// Text for a case that carries nothing, or the one key of a map whose
+    /// value is its payload.
+    public fn caseName() throws(SerializeError) -> String {
+        if holds(.Text) {
+            return document.string(node)
+        }
+        if holdsCase() {
+            return document.string(node + 1)
+        }
+        throw mismatch("a case's name, or a map of one entry")
+    }
+
+    /// The value of the map's one entry; missing for a case written as text.
+    public fn casePayload() -> CborDecoder {
+        if holdsCase() {
+            return CborDecoder(document, node + 2, parent: self, key: document.string(node + 1), index: -1)
+        }
+        return CborDecoder(document, -1, parent: self, key: none, index: -1)
+    }
+}

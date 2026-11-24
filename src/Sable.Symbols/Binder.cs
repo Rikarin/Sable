@@ -7417,7 +7417,6 @@ public sealed partial class Binder {
 
         // What the closure throws, it throws where it is called, and the body
         // around it only if that is there: not for being written in it.
-        var (savedThrown, savedThrewOwn) = (_thrownInBody, _threwOwnError);
         _thrownInBody = null;
         _threwOwnError = false;
 
@@ -7522,8 +7521,6 @@ public sealed partial class Binder {
         // out, not what the context would have allowed: a closure that does
         // not throw is not a throwing closure, which is what 'rethrows' reads.
         _closureThrows = _thrownInBody;
-        (_thrownInBody, _threwOwnError) = (savedThrown, savedThrewOwn);
-
         // And what it throws is not thrown around it: what else is, is.
         (_thrownInBody, _threwOwnError) = (savedThrown, savedOwn);
 

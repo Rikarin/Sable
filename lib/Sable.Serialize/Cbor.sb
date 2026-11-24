@@ -1,0 +1,34 @@
+module Sable.Serialize
+
+/// Serializable values to CBOR (RFC 8949) and back, as ciborium does: a
+/// struct or a map a map, a case that carries nothing its name and one that
+/// does a map of one entry, as JSON has them. For values of no declared
+/// type, CborValue; item by item, CborEncoder and CborReader.
+///
+/// ```sable
+/// let numbers: Int[>..] = [1, 2, 300]
+/// let bytes = try! Cbor.encode(numbers)
+/// assert(bytes == [0x83, 0x01, 0x02, 0x19, 0x01, 0x2C])
+/// assert(try! Cbor.decode(Int[>..].self, from: bytes) == numbers)
+/// ```
+public struct Cbor {
+    /// The value as CBOR: in the deterministic encoding (RFC 8949 §4.2.1),
+    /// if asked, in which a value has one encoding only.
+    public static fn encode<T: Serializable>(_ value: T, deterministic: Bool = false) throws(SerializeError) -> U8[>..] {
+        let encoder = CborEncoder(deterministic: deterministic)
+        try value.encode(to: encoder)
+        return try encoder.bytes()
+    }
+
+    /// The value of the type the CBOR holds, which nests arrays, maps and
+    /// tags no deeper than that, and is in the deterministic encoding, if
+    /// that is asked for.
+    public static fn decode<T: Serializable>(
+        _ type: T.Type,
+        from bytes: U8[>..],
+        maximumDepth: Int = 128,
+        deterministic: Bool = false
+    ) throws(SerializeError) -> T {
+        return try T.decode(from: try CborDecoder.parse(bytes, maximumDepth: maximumDepth, deterministic: deterministic))
+    }
+}

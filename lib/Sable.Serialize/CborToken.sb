@@ -1,0 +1,25 @@
+module Sable.Serialize
+
+/// An item of CBOR, or the beginning or end of one, as CborReader reads it.
+@frozen
+@derive(Equatable, Debug)
+public union CborToken {
+    Unsigned(value: U64)
+    /// The negative integer -1 - n.
+    Negative(n: U64)
+    /// A byte string, its chunks put together if it had any.
+    Bytes(value: U8[>..])
+    /// A text string, its chunks put together if it had any.
+    Text(value: String)
+    /// An array of that many elements, or of an indefinite length.
+    BeginArray(count: Int?)
+    /// A map of that many entries, or of an indefinite length.
+    BeginMap(count: Int?)
+    /// The end of the array or the map last begun, whatever its length.
+    End
+    /// A tag, of the item after it.
+    Tag(number: U64)
+    /// A simple value: false, true, null and undefined are 20 to 23.
+    Simple(value: U8)
+    Float(value: F64)
+}

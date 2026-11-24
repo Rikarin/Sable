@@ -1,0 +1,295 @@
+module TomlDocumentTests
+
+import Sable.Serialize
+import Sable.Testing
+
+// The text after the edit, or the error it threw with the text unchanged.
+fn edited(_ text: String, _ edit: (inout TomlDocument) throws(SerializeError) -> Void) -> String {
+    var document = try! TomlDocument.parse(text)
+    do {
+        try edit(&document)
+    } catch {
+        assertEqual(document.text(), text)
+        return "error: " + error.description()
+    }
+    // What is left is TOML, and the document holds what its text does.
+    assert(try! Toml.parse(document.text()) == document.table())
+    return document.text()
+}
+
+fn setting(_ text: String, _ path: String[>..], _ value: TomlValue) -> String {
+    return edited(text, { (document: inout TomlDocument) throws(SerializeError) in
+        try document.set(path, value)
+        assert(document.get(path)! == value)
+    })
+}
+
+fn removing(_ text: String, _ path: String[>..]) -> String {
+    return edited(text, { (document: inout TomlDocument) throws(SerializeError) in
+        let was = document.get(path) != none
+        let removed = try document.remove(path)
+        assert(removed == was)
+    })
+}
+
+fn appending(_ text: String, _ path: String[>..], _ value: TomlValue) -> String {
+    return edited(text, { (document: inout TomlDocument) throws(SerializeError) in
+        let count = document.get(path)?.items?.count ?? 0
+        try document.append(path, value)
+        assertEqual(document.get(path)!.items!.count, count + 1)
+        assert(document.get(path)!.items![count] == value)
+    })
+}
+
+let one: TomlValue = .Integer(value: 1)
+
+fn table(_ text: String) -> TomlValue {
+    return .Table(table: try! Toml.parse(text))
+}
+
+let manifest = """
+    # My package.
+
+    [package]          # about it
+    name    = "a"      # short
+      version='0.1.0'
+
+    # What it needs.
+    [dependencies]
+    json = "1.0"
+    image = { version = "0.6", features = [ "png" ] } # pictures
+
+    # The programs.
+    [[bin]]
+    name = "one"
+
+    [[bin]]
+    name = "two"
+    [bin.options]
+    fast = true
+
+    """
+
+@test
+fn aTextUnchangedIsTheSame() throws {
+    for text in ["", "\n", manifest, "a=1", "a = 1\r\n[b]\r\n", "\u{feff}a = 1", "# only", "[[a]]\n[[a]]\n", "a = [ 1 ,\n 2, # c\n]\n\n\n"] {
+        assertEqual(try TomlDocument.parse(text).text(), text)
+    }
+    assertEqual(TomlDocument().text(), "")
+    assert(TomlDocument().table().isEmpty)
+    assert((try? TomlDocument.parse("a = ")) == none)
+    assert((try? TomlDocument.parse("a.b = 1", maximumDepth: 1)) == none)
+}
+
+@test
+fn valuesAreFoundByPath() throws {
+    let document = try TomlDocument.parse(manifest)
+    assert(document.get(["package", "name"])! == .Text(value: "a"))
+    assert(document.get(["dependencies", "image", "features", "0"])! == .Text(value: "png"))
+    assert(document.get(["bin", "1", "options", "fast"])! == .Bool(value: true))
+    assertEqual(document.get([])!.table!.keys, ["package", "dependencies", "bin"])
+    for path in [["x"], ["bin", "2"], ["bin", "-1"], ["bin", "name"], ["package", "name", "x"]] as String[>..][>..] {
+        assert(document.get(path) == none && document.position(path) == none)
+    }
+    let at = document.position(["bin", "1", "name"])!
+    assertEqual(at.line, 17)
+    assertEqual(at.column, 1)
+    assertEqual(document.position(["dependencies", "image", "version"])!.column, 11)
+    assertEqual(document.position(["bin", "1"])!.line, 16)
+    assert(document.position(["bin"]) == none)
+}
+
+@test
+fn settingReplacesAValueWhereItIs() {
+    assertEqual(setting("# c\na  =  'x'  # d\nb = 2", ["a"], .Text(value: "y")), "# c\na  =  \"y\"  # d\nb = 2")
+    assertEqual(setting("a = [\n 1, # one\n 2\n]", ["a", "1"], .Integer(value: 3)), "a = [\n 1, # one\n 3\n]")
+    assertEqual(setting("a = {b = 1, c={d=2}}", ["a", "c", "d"], .Bool(value: true)), "a = {b = 1, c={d=true}}")
+    assertEqual(setting("a.b = 1 # x", ["a", "b"], .Float(value: 2.0)), "a.b = 2.0 # x")
+    assertEqual(setting("a = \"\"\"\nx\n\"\"\"\nb = 1\n", ["a"], table("c = 1")), "a = { c = 1 }\nb = 1\n")
+    assertEqual(setting("a = 1\n", ["a"], .Array(items: [one, .Text(value: "x")])), "a = [1, \"x\"]\n")
+}
+
+@test
+fn settingANewValuePutsItAfterItsTablesLast() {
+    assertEqual(setting("", ["a"], one), "a = 1\n")
+    assertEqual(setting("a = 1", ["b"], one), "a = 1\nb = 1\n")
+    assertEqual(setting("a = 1 # x\n\n# t\n[t]\nb = 2\n\n[u]", ["t", "c d"], one), "a = 1 # x\n\n# t\n[t]\nb = 2\n\"c d\" = 1\n\n[u]")
+    assertEqual(setting("[t]\n  b = 2\n[u]\n", ["t", "c"], one), "[t]\n  b = 2\n  c = 1\n[u]\n")
+    assertEqual(setting("[t]\n[u]\n", ["t", "c"], one), "[t]\nc = 1\n[u]\n")
+    assertEqual(setting("  [t]\n[u]\n", ["t", "c"], one), "  [t]\n  c = 1\n[u]\n")
+    assertEqual(setting("[u]", ["u", "c"], one), "[u]\nc = 1\n")
+    assertEqual(setting("a = 1\n[t]\nx = 1\n", ["b"], one), "a = 1\nb = 1\n[t]\nx = 1\n")
+    assertEqual(setting("# license\n\n# about t\n[t]\n", ["b"], one), "# license\n\nb = 1\n\n# about t\n[t]\n")
+    assertEqual(setting("a = 1\r\n[t]\r\n", ["t", "b"], one), "a = 1\r\n[t]\r\nb = 1\r\n")
+    assertEqual(setting("\u{feff}[t]\n", ["a"], one), "\u{feff}a = 1\n\n[t]\n")
+}
+
+@test
+fn settingInATableThatIsNotThereMakesItsHeader() {
+    assertEqual(setting("a = 1\n", ["t", "b"], one), "a = 1\n\n[t]\nb = 1\n")
+    assertEqual(setting("", ["t", "u v", "b"], one), "[t.\"u v\"]\nb = 1\n")
+    assertEqual(setting("[t]\nx = 1\n\n", ["t", "u", "b"], one), "[t]\nx = 1\n\n[t.u]\nb = 1\n")
+    // A table only its tables' headers name.
+    assertEqual(setting("[t.u]\nx = 1", ["t", "b"], one), "[t.u]\nx = 1\n\n[t]\nb = 1\n")
+    // In an array's table, under its own header.
+    assertEqual(setting("[[a]]\nx = 1\n\n[[a]]\nx = 2\n", ["a", "0", "t", "b"], one), "[[a]]\nx = 1\n\n[a.t]\nb = 1\n\n[[a]]\nx = 2\n")
+    assertEqual(setting("[[a]]\nx = 1\n\n[[a]]\nx = 2\n", ["a", "0", "b"], one), "[[a]]\nx = 1\nb = 1\n\n[[a]]\nx = 2\n")
+    assertEqual(setting("[[a]]\n[a.b.c]\nx = 1\n[[a]]\n", ["a", "0", "b", "y"], one), "[[a]]\n\n[a.b]\ny = 1\n\n[a.b.c]\nx = 1\n[[a]]\n")
+}
+
+@test
+fn settingInADottedOrInlineTableKeepsToIt() {
+    assertEqual(setting("a.b = 1\n\n[t]\n", ["a", "c"], one), "a.b = 1\na.c = 1\n\n[t]\n")
+    assertEqual(setting("[t]\na.b.c = 1\n[u]", ["t", "a", "b", "d", "e"], one), "[t]\na.b.c = 1\na.b.d.e = 1\n[u]")
+    assertEqual(setting("a = {}", ["a", "b"], one), "a = { b = 1 }")
+    assertEqual(setting("a = { b = 1 } # c", ["a", "c", "d"], one), "a = { b = 1, c.d = 1 } # c")
+    assertEqual(setting("a = { b.c = 1 }", ["a", "b", "d"], one), "a = { b.c = 1, b.d = 1 }")
+    assertEqual(setting("a = [{ b = 1 }]", ["a", "0", "c"], one), "a = [{ b = 1, c = 1 }]")
+}
+
+@test
+fn settingATableOfLinesTakesThemOutFirst() {
+    assertEqual(setting("[a]\nx = 1\n[a.b]\ny = 2\n[c]\nz = 3\n", ["a"], one), "a = 1\n\n[c]\nz = 3\n")
+    assertEqual(setting("a.b = 1\na.c = 2\nd = 3\n", ["a"], one), "d = 3\na = 1\n")
+    assertEqual(setting("[[a]]\n[[a]]\n[b]\n", ["a"], .Array(items: [])), "a = []\n\n[b]\n")
+    assert(setting("[[a]]\n[[a]]\n", ["a", "0"], one).hasPrefix("error: $.a.0: is a table under its own header"))
+}
+
+@test
+fn settingRefusesWhatCannotBe() {
+    assertEqual(setting("a = 1", ["a", "b"], one), "error: $.a: is an integer, not a table")
+    assertEqual(setting("a = [1]", ["a", "1"], one), "error: $.a: is an array, not a table")
+    assertEqual(setting("a = [{b = [1]}]", ["a", "0", "b", "x", "y"], one), "error: $.a.0.b: is an array, not a table")
+    assertEqual(setting("", [], one), "error: $: the document itself cannot be set")
+    assert((try? TomlDocument.parse("", maximumDepth: 2)) != none)
+    var shallow = try! TomlDocument.parse("", maximumDepth: 2)
+    do {
+        try shallow.set(["a", "b", "c", "d"], one)
+        fail("set")
+    } catch {
+        assertEqual(error.description(), "$.a.b.c.d: cannot be changed so: line 1, column 6: nested more than 2 deep")
+        assertEqual(shallow.text(), "")
+    }
+}
+
+@test
+fn removingTakesALineAndItsComments() {
+    assertEqual(removing("a = 1\n# about b\n# more\n\tb = 2 # b\nc = 3\n", ["b"]), "a = 1\nc = 3\n")
+    assertEqual(removing("# kept\n\n# about b\nb = 2", ["b"]), "# kept\n\n")
+    assertEqual(removing("a = \"\"\"\n# not a comment\"\"\"\nb = 1\n", ["b"]), "a = \"\"\"\n# not a comment\"\"\"\n")
+    assertEqual(removing("a = 1\n", ["b"]), "a = 1\n")
+    assertEqual(removing("a = 1\n", ["a", "b"]), "a = 1\n")
+    assertEqual(removing("a.b = 1\nc = 2\na.d = 3\n", ["a"]), "c = 2\n")
+    assertEqual(removing("a.b = 1\na.c = 2\n", ["a", "b"]), "a.c = 2\n")
+    assertEqual(removing("a = 1", []), "error: $: the document itself cannot be taken out")
+}
+
+@test
+fn removingTakesEverySectionOfATable() {
+    assertEqual(removing("[a]\nx = 1\n\n# about b\n[b]\ny = 2\n# in b\n\n# about c\n[c]\nz = 3\n", ["b"]), "[a]\nx = 1\n\n# about c\n[c]\nz = 3\n")
+    assertEqual(removing("[a]\n[a.b]\nx = 1\n[c]\n[a.d]\ny = 1\n", ["a"]), "[c]\n")
+    assertEqual(removing("[a.b]\n[c]\n[a.d]\n", ["a"]), "[c]\n")
+    assertEqual(removing(manifest, ["bin"]), manifest.splitOnce("# The programs.")!.0)
+    assertEqual(removing("[[a]]\nx = 1\n[a.b]\n[[a]]\nx = 2\n[c]\n", ["a", "0"]), "[[a]]\nx = 2\n[c]\n")
+    assertEqual(removing("[[a]]\nx = 1\n[[a]]\nx = 2\n[a.b]\n[c]\n", ["a", "1"]), "[[a]]\nx = 1\n[c]\n")
+}
+
+@test
+fn removingAnItemTakesOneComma() {
+    assertEqual(removing("a = [1, 2, 3]", ["a", "0"]), "a = [2, 3]")
+    assertEqual(removing("a = [1, 2, 3]", ["a", "1"]), "a = [1, 3]")
+    assertEqual(removing("a = [1, 2, 3]", ["a", "2"]), "a = [1, 2]")
+    assertEqual(removing("a = [1, 2, 3, ]", ["a", "2"]), "a = [1, 2, ]")
+    assertEqual(removing("a = [1]", ["a", "0"]), "a = []")
+    assertEqual(removing("a = [\n  1,\n]", ["a", "0"]), "a = []")
+    assertEqual(removing("a = [\n  1, # one\n  2, # two\n  3,\n]", ["a", "1"]), "a = [\n  1, # one\n  3,\n]")
+    assertEqual(removing("a = { b = 1, c = 2 }", ["a", "b"]), "a = { c = 2 }")
+    assertEqual(removing("a = { b = 1, c = 2 }", ["a", "c"]), "a = { b = 1 }")
+    assertEqual(removing("a = { b = 1 }", ["a", "b"]), "a = {}")
+    assertEqual(removing("a = { b.x = 1, c = 2, b.y = 3, b.z = 4 }", ["a", "b"]), "a = { c = 2 }")
+    assertEqual(removing("a = { b.x = 1, b.y = 3 }", ["a", "b"]), "a = {}")
+    assertEqual(removing("a = [{ b = [1, 2] }, 3]", ["a", "0", "b", "0"]), "a = [{ b = [2] }, 3]")
+}
+
+@test
+fn appendingKeepsAnArraysShape() {
+    assertEqual(appending("a = []", ["a"], one), "a = [1]")
+    assertEqual(appending("a = [ 1, 2 ] # c", ["a"], one), "a = [ 1, 2, 1 ] # c")
+    assertEqual(appending("a = [1, 2,]", ["a"], one), "a = [1, 2, 1,]")
+    assertEqual(appending("a = [\n  1, # one\n  2, # two\n]\n", ["a"], one), "a = [\n  1, # one\n  2, # two\n  1,\n]\n")
+    assertEqual(appending("a = [\n  1,\n  2 # two\n]\n", ["a"], one), "a = [\n  1,\n  2, # two\n  1\n]\n")
+    assertEqual(appending("a = [1,\n  2]\n", ["a"], one), "a = [1,\n  2, 1]\n")
+    assertEqual(appending("a = [1, 2\n]\n", ["a"], one), "a = [1, 2,\n1\n]\n")
+    assertEqual(appending("a = [\r\n\t1,\r\n]\r\n", ["a"], one), "a = [\r\n\t1,\r\n\t1,\r\n]\r\n")
+    assertEqual(appending("", ["a"], one), "a = [1]\n")
+    assertEqual(appending("a = [{x = 1}]", ["a"], table("y = 2")), "a = [{x = 1}, { y = 2 }]")
+    assertEqual(appending("a = { b = [] }", ["a", "b"], one), "a = { b = [1] }")
+}
+
+@test
+fn appendingATableMakesADoubleHeader() {
+    assertEqual(appending("", ["a"], table("x = 1\nt.y = 2")), "[[a]]\nx = 1\n\n[a.t]\ny = 2\n")
+    assertEqual(appending("[[a]]\nx = 1\n[a.t]\ny = 1\n\n# b\n[b]\n", ["a"], table("x = 2")), "[[a]]\nx = 1\n[a.t]\ny = 1\n\n[[a]]\nx = 2\n\n# b\n[b]\n")
+    assertEqual(appending("[[a]]\n[[a.b]]\n[[a]]\n", ["a", "0", "b"], table("x = 2")), "[[a]]\n[[a.b]]\n\n[[a.b]]\nx = 2\n\n[[a]]\n")
+    assertEqual(appending("[[a]]\n[[a]]\n", ["a", "0", "b"], table("x = 2")), "[[a]]\n\n[[a.b]]\nx = 2\n\n[[a]]\n")
+    assertEqual(appending("[[a]]\n", ["a"], one), "error: $.a: is an array of tables, and the value is an integer")
+    assertEqual(appending("a = 1\n", ["a"], one), "error: $.a: is an integer, not an array")
+    assertEqual(appending("a = 1", [], table("")), "error: $: is a table, not an array")
+    assert(appending("a = 1\n", ["a", "b"], table("")).hasPrefix("error: "))
+    assert(appending("a = {}\n", ["a", "b"], table("")).hasPrefix("error: "))
+}
+
+fn above(_ text: String, _ path: String[>..], _ comment: String?) -> String {
+    return edited(text, { (document: inout TomlDocument) throws(SerializeError) in try document.setComment(path, comment) })
+}
+
+@test
+fn commentsAreThoseRightAbove() throws {
+    let document = try TomlDocument.parse(manifest)
+    assertEqual(document.comment(["dependencies"])!, "What it needs.")
+    assertEqual(document.comment(["bin", "0"])!, "The programs.")
+    assert(document.comment(["package"]) == none && document.comment(["bin", "1"]) == none && document.comment(["bin"]) == none && document.comment(["x"]) == none)
+    assert(document.comment(["dependencies", "image", "version"]) == none)
+    assertEqual((try TomlDocument.parse("#a\n  # b\n#\n  c = 1")).comment(["c"])!, "a\nb\n")
+    assertEqual(above("a = 1\n  b = 2\n", ["b"], "x\n\ny"), "a = 1\n  # x\n  #\n  # y\n  b = 2\n")
+    assertEqual(above("# old\n# older\n[t]\n", ["t"], "new"), "# new\n[t]\n")
+    assertEqual(above("# old\n[t]\n", ["t"], none), "[t]\n")
+    assertEqual(above("a = 1", ["a"], "\u{1}"), "error: $.a: cannot be changed so: line 1, column 3: a control character in a comment")
+    assertEqual(above("a = {b = 1}", ["a", "b"], "x"), "error: $.a.b: has no line of its own to put a comment above")
+}
+
+@test
+fn anyEditsLeaveTomlWithTheRestAsItWas() throws {
+    let texts: String[>..] = [manifest, "a.b = 1\na.c = [1, 2]\n[d]\ne = { f = 1, g.h = 2 }\n[[i]]\nj = 1\n[[i]]\n[i.k]\nl = 1\n[m.n]\no = 1\n", "", "x = 1"]
+    let keys: String[>..] = ["a", "b", "c", "d", "e", "f", "g", "i", "0", "1", "k", "m", "n", "package", "dependencies", "image", "bin", "name", "x"]
+    var random = SeededRandomNumberGenerator(seed: 79)
+    for text in texts {
+        for _ in 0..<40 {
+            var document = try TomlDocument.parse(text)
+            for step in 0..<12 {
+                var path: String[>..] = []
+                for _ in 0..<Int.random(in: 1..<4, using: &random) {
+                    path.append(keys[Int.random(in: 0..<keys.count, using: &random)])
+                }
+                let before = document.text()
+                let value: TomlValue = step % 3 == 0 ? table("v = \(step)\nt.u = 1") : .Integer(value: step)
+                do {
+                    if step % 4 == 0 {
+                        let _ = try document.remove(path)
+                        if (path.last ?? "") != "0" && (path.last ?? "") != "1" {
+                            assert(document.get(path) == none)
+                        }
+                    } else if step % 4 == 1 {
+                        try document.append(path, value)
+                    } else {
+                        try document.set(path, value)
+                        assert(document.get(path)! == value)
+                    }
+                } catch {
+                    assertEqual(document.text(), before)
+                }
+                assert(try Toml.parse(document.text()) == document.table())
+            }
+        }
+    }
+}

@@ -1,0 +1,200 @@
+module Sable.Serialize
+
+/// Any MessagePack value: what a document of no declared type is read as.
+/// An Integer holds one that fits an Int, whichever form it is written in,
+/// and Unsigned one above that. As a Serializable it is the value it holds,
+/// in MessagePack; in another format, a map's keys are strings or integers.
+///
+/// ```sable
+/// let value = try! MessagePackValue.parse([0x82, 0xA1, 0x61, 0x01, 0x02, 0xC3])
+/// assert(value["a"]! == .Integer(value: 1))
+/// assert(value == .Map(entries: [
+///     MessagePackEntry { key: .Text(value: "a"), value: .Integer(value: 1) },
+///     MessagePackEntry { key: .Integer(value: 2), value: .Bool(value: true) },
+/// ]))
+/// assert(try! value.bytes() == [0x82, 0xA1, 0x61, 0x01, 0x02, 0xC3])
+/// ```
+@frozen
+@derive(Equatable, Debug)
+public union MessagePackValue {
+    Null
+    Bool(value: Bool)
+    Integer(value: Int)
+    /// An integer above `Int.max`.
+    Unsigned(value: U64)
+    Float(value: F64)
+    Text(value: String)
+    Bytes(value: U8[>..])
+    Array(items: MessagePackValue[>..])
+    Map(entries: MessagePackEntry[>..])
+    Extension(value: MessagePackExtension)
+
+    /// The one value the bytes are, nested no deeper than that.
+    public static fn parse(_ bytes: U8[>..], maximumDepth: Int = 128) throws(SerializeError) -> MessagePackValue {
+        return messagePackValue(try MessagePackParser.parse(bytes, maximumDepth), 0)
+    }
+
+    /// The value as MessagePack, in its shortest form.
+    public fn bytes() throws(SerializeError) -> U8[>..] {
+        return try MessagePack.encode(self)
+    }
+
+    /// The value of the first entry of that key; none when there is none,
+    /// or this is not a map.
+    public subscript(key: String) -> MessagePackValue? {
+        get {
+            if case .Map(let entries) = self {
+                for entry in entries {
+                    if case .Text(let name) = entry.key {
+                        if name == key {
+                            return entry.value
+                        }
+                    }
+                }
+            }
+            return none
+        }
+    }
+}
+
+// The node as a value: as deep a recursion as the parser allowed.
+fn messagePackValue(_ document: MessagePackDocument, _ node: Int) -> MessagePackValue {
+    let kind = document.kind(node)
+    if kind == .Null {
+        return .Null
+    }
+    if kind == .Bool {
+        return .Bool(value: document.bool(node))
+    }
+    if kind == .UInt {
+        let value = document.unsigned(node)
+        if let small = Int.exactly(value) {
+            return .Integer(value: small)
+        }
+        return .Unsigned(value: value)
+    }
+    if kind == .Int {
+        return .Integer(value: document.signed(node))
+    }
+    if kind == .Float {
+        return .Float(value: document.float(node))
+    }
+    if kind == .String {
+        return .Text(value: document.string(node))
+    }
+    if kind == .Bytes {
+        return .Bytes(value: document.data(node))
+    }
+    if kind == .Extension {
+        return .Extension(value: document.extensionValue(node))
+    }
+    let end = document.afters[node]
+    var child = node + 1
+    if kind == .Array {
+        var items: MessagePackValue[>..] = []
+        while child < end {
+            items.append(messagePackValue(document, child))
+            child = document.afters[child]
+        }
+        return .Array(items: items)
+    }
+    var entries: MessagePackEntry[>..] = []
+    while child < end {
+        let value = document.afters[child]
+        entries.append(MessagePackEntry { key: messagePackValue(document, child), value: messagePackValue(document, value) })
+        child = document.afters[value]
+    }
+    return .Map(entries: entries)
+}
+
+extension MessagePackValue: Serializable {
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        match self {
+            case .Null                 => try encoder.encodeNull()
+            case .Bool(let value)      => try encoder.encodeBool(value)
+            case .Integer(let value)   => try encoder.encodeInt(value)
+            case .Unsigned(let value)  => try encoder.encodeUInt(value)
+            case .Float(let value)     => try encoder.encodeFloat(value)
+            case .Text(let value)      => try encoder.encodeString(value)
+            case .Bytes(let value)     => try encoder.encodeBytes(value)
+            case .Extension(let value) => try value.encode(to: encoder)
+            case .Array(let items) => {
+                try encoder.beginSequence(count: items.count)
+                for item in items {
+                    try item.encode(to: encoder)
+                }
+                try encoder.endSequence()
+            }
+            case .Map(let entries) => {
+                let own = encoder as? MessagePackEncoder
+                try encoder.beginMap(count: entries.count)
+                for entry in entries {
+                    if let own = own {
+                        try entry.key.encode(to: own)
+                    } else {
+                        try encoder.encodeKey(try keyText(entry.key))
+                    }
+                    try entry.value.encode(to: encoder)
+                }
+                try encoder.endMap()
+            }
+        }
+    }
+
+    // A key in a format whose keys are strings.
+    fn keyText(_ key: MessagePackValue) throws(SerializeError) -> String {
+        return match key {
+            case .Text(let value)     => value
+            case .Integer(let value)  => "\(value)"
+            case .Unsigned(let value) => "\(value)"
+            case _                    => throw SerializeError.InvalidValue(path: "$", reason: "a key is neither a string nor an integer")
+        }
+    }
+
+    /// Whatever value is there, from MessagePack or any other format.
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> MessagePackValue {
+        if let decoder = decoder as? MessagePackDecoder {
+            if decoder.isMissing {
+                throw decoder.mismatch("a value")
+            }
+            return messagePackValue(decoder.document, decoder.node)
+        }
+        let kind = decoder.kind
+        if kind == .Missing {
+            throw decoder.mismatch("a value")
+        }
+        if kind == .Null {
+            return .Null
+        }
+        if kind == .Bool {
+            return .Bool(value: try decoder.decodeBool())
+        }
+        if kind == .Number {
+            if let value = try? decoder.decodeInt() {
+                return .Integer(value: value)
+            }
+            if let value = try? decoder.decodeUInt() {
+                return .Unsigned(value: value)
+            }
+            return .Float(value: try decoder.decodeFloat())
+        }
+        if kind == .String {
+            return .Text(value: try decoder.decodeString())
+        }
+        if kind == .Bytes {
+            return .Bytes(value: try decoder.decodeBytes())
+        }
+        if kind == .Sequence {
+            var items: MessagePackValue[>..] = []
+            for element in try decoder.decodeSequence() {
+                items.append(try MessagePackValue.decode(from: element))
+            }
+            return .Array(items: items)
+        }
+        var entries: MessagePackEntry[>..] = []
+        for member in try decoder.decodeMap() {
+            entries.append(MessagePackEntry { key: .Text(value: member.key), value: try MessagePackValue.decode(from: member.value) })
+        }
+        return .Map(entries: entries)
+    }
+}

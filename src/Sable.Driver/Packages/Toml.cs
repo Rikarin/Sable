@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Sable.Driver.Packages;
 
@@ -103,7 +104,7 @@ public sealed class TomlTable : TomlValue {
 ///     every base, floats, booleans, arrays and comments. Dates and times are
 ///     read and kept as text. Every error names the file, line and column.
 /// </summary>
-public sealed class TomlReader {
+public sealed partial class TomlReader {
     readonly string _text;
     readonly string _file;
     int _position;
@@ -112,6 +113,10 @@ public sealed class TomlReader {
 
     TomlReader(string text, string file) {
         _text = text.Replace("\r\n", "\n", StringComparison.Ordinal);
+        if (_text.StartsWith('\uFEFF')) {
+            _text = _text[1..];
+        }
+
         _file = file;
     }
 
@@ -150,7 +155,7 @@ public sealed class TomlReader {
         }
 
         while (!AtEnd && Current != '\n') {
-            if (Current < 0x20 && Current != '\t') {
+            if (IsControl(Current)) {
                 throw Error("a control character is not allowed in a comment");
             }
 
@@ -298,6 +303,7 @@ public sealed class TomlReader {
                 table.Add(key, made, position);
                 table = made;
             } else if (next is TomlTable { IsInline: false, DefinedByHeader: false } t) {
+                t.DefinedByDottedKey = true;
                 table = t;
             } else {
                 throw Error($"'{Dotted(keys, i)}' is already {next.Kind}, so a dotted key cannot add to it", position);
@@ -336,6 +342,10 @@ public sealed class TomlReader {
             }
 
             keys.Add((key, position));
+            if (keys.Count > MaximumDepth) {
+                throw Error($"nested more than {MaximumDepth} deep", position);
+            }
+
             SkipSpaces();
             if (Current != '.') {
                 return keys;
@@ -345,8 +355,18 @@ public sealed class TomlReader {
         }
     }
 
+    /// <summary>How deep a value's brackets may go: what a hostile one would overflow the stack with.</summary>
+    const int MaximumDepth = 128;
+
+    int _depth;
+
     TomlValue ParseValue() {
         var position = Here;
+        if (_depth >= MaximumDepth) {
+            throw Error($"nested more than {MaximumDepth} deep");
+        }
+
+        _depth++;
         TomlValue value = Current switch {
             '"' when Peek(1) == '"' && Peek(2) == '"' => new TomlString(ParseMultilineBasicString()),
             '"' => new TomlString(ParseBasicString()),
@@ -359,6 +379,7 @@ public sealed class TomlReader {
             _ => ParseNumberOrDate(),
         };
 
+        _depth--;
         return value switch {
             TomlString s => new TomlString(s.Value) { Position = position },
             TomlBoolean b => new TomlBoolean(b.Value) { Position = position },
@@ -416,7 +437,7 @@ public sealed class TomlReader {
                 text += " " + time;
             }
 
-            return new TomlDateTime(text) { Position = position };
+            return IsDateOrTime(text) ? new TomlDateTime(text) { Position = position } : throw Error($"'{text}' is not a date or a time", position);
         }
 
         for (var i = 0; i < word.Length; i++) {
@@ -432,6 +453,32 @@ public sealed class TomlReader {
         }
 
         throw Error($"'{word}' is not a value: a string needs quotes", position);
+    }
+
+    [GeneratedRegex(@"^(?:(\d{4})-(\d\d)-(\d\d)(?:[Tt ](?=\d)|$))?(?:(\d\d):(\d\d):(\d\d)(?:\.\d+)?([Zz]|[+-](\d\d):(\d\d))?)?$", RegexOptions.ECMAScript)]
+    private static partial Regex DateOrTime();
+
+    /// <summary>A date, a time, or both with an offset or without: RFC 3339's, each part in its range.</summary>
+    static bool IsDateOrTime(string text) {
+        var match = DateOrTime().Match(text);
+        if (!match.Success || text.Length == 0) {
+            return false;
+        }
+
+        int Part(int group) => int.Parse(match.Groups[group].ValueSpan, CultureInfo.InvariantCulture);
+        if (match.Groups[1].Success) {
+            // The year 0, which DateTime has none of, is a leap year, as 2000 is.
+            var (year, month) = (Part(1) == 0 ? 2000 : Part(1), Part(2));
+            if (month is < 1 or > 12 || Part(3) < 1 || Part(3) > DateTime.DaysInMonth(year, month)) {
+                return false;
+            }
+        } else if (match.Groups[7].Success) {
+            return false;
+        }
+
+        // A leap second may be the sixtieth.
+        return (!match.Groups[4].Success || Part(4) < 24 && Part(5) < 60 && Part(6) <= 60)
+            && (!match.Groups[8].Success || Part(8) < 24 && Part(9) < 60);
     }
 
     static long? ParseInteger(string word) {
@@ -472,6 +519,9 @@ public sealed class TomlReader {
         static long? Unsigned(long value) => value < 0 ? null : value;
     }
 
+    [GeneratedRegex(@"^[+-]?(?:0|[1-9](?:_?[0-9])*)(?=[.eE])(?:\.[0-9](?:_?[0-9])*)?(?:[eE][+-]?[0-9](?:_?[0-9])*)?\z")]
+    private static partial Regex Float();
+
     static double? ParseFloat(string word) {
         switch (word) {
             case "inf" or "+inf": return double.PositiveInfinity;
@@ -479,15 +529,13 @@ public sealed class TomlReader {
             case "nan" or "+nan" or "-nan": return double.NaN;
         }
 
-        if (word.Contains("__", StringComparison.Ordinal) || word.StartsWith('_') || word.EndsWith('_') || word.Contains("._", StringComparison.Ordinal) || word.Contains("_.", StringComparison.Ordinal)) {
+        // Digits with an underscore only between them, and no zero before
+        // others of a whole number.
+        if (!Float().IsMatch(word)) {
             return null;
         }
 
         var clean = word.Replace("_", "", StringComparison.Ordinal);
-        if (!clean.Any(static c => c is '.' or 'e' or 'E') || clean.EndsWith('.') || clean.StartsWith('.') || clean.Contains(".e", StringComparison.OrdinalIgnoreCase)) {
-            return null;
-        }
-
         return double.TryParse(clean, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ? value : null;
     }
 
@@ -558,12 +606,22 @@ public sealed class TomlReader {
                 throw Error("the string is not closed on its line", start);
             }
 
+            RefuseControl();
             builder.Append(Current);
             Advance();
         }
 
         Advance();
         return builder.ToString();
+    }
+
+    /// <summary>A control character TOML has nowhere: any but the tab.</summary>
+    static bool IsControl(char c) => (c < 0x20 && c != '\t') || c == 0x7F;
+
+    void RefuseControl(bool multiLine = false) {
+        if (IsControl(Current) && !(multiLine && Current == '\n')) {
+            throw Error("a control character must be escaped in a string");
+        }
     }
 
     string ParseMultilineLiteralString() {
@@ -596,6 +654,7 @@ public sealed class TomlReader {
                 return builder.ToString();
             }
 
+            RefuseControl(multiLine: true);
             builder.Append(Current);
             Advance();
         }
@@ -615,10 +674,7 @@ public sealed class TomlReader {
                 continue;
             }
 
-            if (Current < 0x20 && Current != '\t') {
-                throw Error("a control character must be escaped in a string");
-            }
-
+            RefuseControl();
             builder.Append(Current);
             Advance();
         }
@@ -677,6 +733,7 @@ public sealed class TomlReader {
                 continue;
             }
 
+            RefuseControl(multiLine: true);
             builder.Append(Current);
             Advance();
         }
@@ -697,7 +754,6 @@ public sealed class TomlReader {
             case 'n': return "\n";
             case 'f': return "\f";
             case 'r': return "\r";
-            case 'e': return "\u001b";
             case '"': return "\"";
             case '\\': return "\\";
             case 'u' or 'U':

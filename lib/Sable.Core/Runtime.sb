@@ -300,6 +300,12 @@ public struct Runtime {
     @builtin("process_change_directory")
     public static fn changeDirectory(path: String) -> Bool
 
+    /// How many objects (arrays' buffers among them) the running thread
+    /// has allocated so far: compared before and after, how many some code
+    /// allocates. The interpreter counts its own the same way.
+    @builtin("memory_allocations")
+    public static fn allocationCount() -> Int
+
     @builtin("process_id")
     public static fn processId() -> Int
 

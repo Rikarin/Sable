@@ -253,3 +253,53 @@ fn aSmallVecIsWrittenFromTheEndInlineOrNot() {
     small[1...^1] = SmallVec<Int, 2>([5])
     assert(small.toArray() == [0, 5])
 }
+
+@test
+fn aSmallVecWithinItsRoomAllocatesOnceAtMost() {
+    // Its inline room's buffer, once, and nothing per element; none at all
+    // once T[..N] is laid out inline (#304).
+    let made = allocations(during: () => {
+        var v = SmallVec<Int, 8>()
+        var i = 0
+        while i < 8 {
+            v.append(i)
+            i += 1
+        }
+        v[0] = 5
+        let _ = v.remove(at: 2)
+        v.insert(7, at: 0)
+        var total = 0
+        for x in v {
+            total += x
+        }
+        let _ = v.contains(total)
+        let _ = v.first
+        let _ = v.popLast()
+        v.truncate(to: 3)
+    })
+    assert(made <= 1, "\(made) allocations")
+    // Past its room, it moves to the heap: an allocation, as it should.
+    let spilled = allocations(during: () => {
+        var v = SmallVec<Int, 2>()
+        v.append(1)
+        v.append(2)
+        v.append(3)
+    })
+    assert(spilled > 0)
+}
+
+@bench
+fn fillingASmallVecWithinItsRoom(_ b: Bencher) {
+    b.iterate(() => {
+        var v = SmallVec<Int, 16>()
+        var i = 0
+        while i < 16 {
+            v.append(i)
+            i += 1
+        }
+        var total = 0
+        for x in v {
+            total += x
+        }
+    })
+}

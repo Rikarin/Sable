@@ -514,6 +514,7 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_process_executable_path()
                                 declare zeroext i1 @sable_process_change_directory(ptr)
                                 declare i64 @sable_process_id()
+                                declare i64 @sable_memory_allocations()
                                 declare ptr @sable_string_split(ptr, i32)
                                 declare i64 @sable_string_hash(ptr, i64)
                                 declare i64 @sable_string_hash_range(ptr, i64, i64, i64)
@@ -4588,7 +4589,7 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call ptr @sable_process_run(ptr {operands[0]}, ptr {operands[1]}, ptr {operands[2]})");
                     return;
 
-                case "process_status" or "process_id":
+                case "process_status" or "process_id" or "memory_allocations":
                     Line($"{Result()} = call i64 @sable_{builtin.Name}()");
                     return;
 

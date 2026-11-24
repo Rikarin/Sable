@@ -1930,6 +1930,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     return false;
                 }
 
+            case "memory_allocations":
+                return (long)Allocations;
+
             case "process_id":
                 return (long)Environment.ProcessId;
 

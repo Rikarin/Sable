@@ -32,6 +32,11 @@ public class Bencher {
 
     /// What 'iterate' measured; none until it has.
     var measured: BenchResult? = none
+    /// How many objects an iteration allocated, on average: counted over a
+    /// pass of its own, after the timed ones, so that nothing of the
+    /// bencher's is counted. Exact for 'iterate'; for 'iterateAsync' only
+    /// as far as the task stays on one thread, which the count is kept by.
+    public var allocationsPerIteration: F64 = 0.0
     var name: String
 
     public init(name: String, samples: Int, sampleNanoseconds: Int, warmUpNanoseconds: Int) {
@@ -84,6 +89,13 @@ public class Bencher {
             s = s + 1
         }
         measured = summarise(name, times, iterations)
+        let before = Runtime.allocationCount()
+        var k = 0
+        while k < iterations {
+            body()
+            k = k + 1
+        }
+        allocationsPerIteration = F64(Runtime.allocationCount() - before) / F64(iterations)
     }
 
     /// As 'iterate', for a body that awaits: each iteration is awaited
@@ -128,7 +140,22 @@ public class Bencher {
             s = s + 1
         }
         measured = summarise(name, times, iterations)
+        let before = Runtime.allocationCount()
+        var k = 0
+        while k < iterations {
+            await body()
+            k = k + 1
+        }
+        allocationsPerIteration = F64(Runtime.allocationCount() - before) / F64(iterations)
     }
+}
+
+/// Allocations per iteration: a whole number as one, else to a hundredth.
+fn formatAllocations(_ value: F64) -> String {
+    if value.rounded(.ToNearestOrEven) == value {
+        return "\(Int(value))"
+    }
+    return "\(value:.2)"
 }
 
 /// The mean, median and standard deviation of the samples (Sable.Math's
@@ -242,7 +269,7 @@ public async fn runBenchmarks(_ benches: BenchCase[>..]) -> Int {
             continue
         }
         results.append(result)
-        var line = "bench \(bench.name) ... mean \(formatNanoseconds(result.mean)) / iter, median \(formatNanoseconds(result.median)), ± \(formatNanoseconds(result.deviation)) (\(options.samples) × \(result.iterations) iterations)"
+        var line = "bench \(bench.name) ... mean \(formatNanoseconds(result.mean)) / iter, median \(formatNanoseconds(result.median)), ± \(formatNanoseconds(result.deviation)) (\(options.samples) × \(result.iterations) iterations), \(formatAllocations(bencher.allocationsPerIteration)) allocations / iter"
         if comparing {
             if let old = findResult(against, bench.name) {
                 let (text, regressed) = comparison(old, result)

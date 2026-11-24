@@ -409,6 +409,12 @@ static void *alloc_object(const SableMetadata *type, int64_t size, bool zero) {
     return object;
 }
 
+// How many objects this thread has allocated since it started: what a test
+// that something allocates nothing compares before and after.
+int64_t sable_memory_allocations(void) {
+    return current_thread()->allocations;
+}
+
 // A new object, its count one and the rest of it zero: every field empty.
 void *sable_alloc(const SableMetadata *type, int64_t size) {
     return alloc_object(type, size, true);

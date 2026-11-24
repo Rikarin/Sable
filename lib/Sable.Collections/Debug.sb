@@ -72,6 +72,13 @@ extension PriorityQueue: Debug where Element: Debug {
     }
 }
 
+extension ArrayVec: Debug where Element: Debug {
+    /// `ArrayVec([1, 2])`.
+    public fn debugDescription() -> String {
+        return described("ArrayVec", descriptions(self))
+    }
+}
+
 extension SmallVec: Debug where Element: Debug {
     /// `SmallVec([1, 2])`.
     public fn debugDescription() -> String {

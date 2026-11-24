@@ -1,9 +1,11 @@
 module Sable.Collections
 
-/// A growable array that keeps its first `N` elements inline, in the value
-/// itself, and moves to the heap only when it outgrows them: Rust's
-/// smallvec, LLVM's SmallVector. Most lists of a few things then cost no
-/// allocation at all.
+/// A growable array that keeps its first `N` elements in room of its own,
+/// `Element[..N]`, and moves to a growable heap array only when it outgrows
+/// them: Rust's smallvec, LLVM's SmallVector. Up to `N` elements cost one
+/// allocation, that room's buffer, and none per element or as it grows;
+/// none at all once fixed-capacity arrays are laid out inline in the value
+/// (#304).
 ///
 /// Up to `N` elements live in an `Element[..N]`; the append that would make
 /// `N + 1` moves them, with the new one, into a heap array, where the
@@ -239,10 +241,11 @@ extension SmallVec where Element: Equatable {
 // replaced in place, and that grows and shrinks, as an array is: its
 // positions are its offsets, from 0, wherever the elements are kept.
 extension SmallVec: RandomAccessCollection, MutableCollection, RangeReplaceableCollection, FromSequence<Element> {
-    /// An iterator over the elements, first to last: a view of them taken
-    /// when it was made, which later changes to the vector do not touch.
-    public fn makeIterator() -> SmallVecIterator<Element> {
-        return SmallVecIterator<Element>(elements: toArray(), position: 0)
+    /// An iterator over the elements, first to last: a copy of the vector
+    /// — its inline elements copied, a heap array's shared — which later
+    /// changes to the vector do not touch, and which allocates nothing.
+    public fn makeIterator() -> SmallVecIterator<Element, N> {
+        return SmallVecIterator<Element, N> { elements: self, position: 0 }
     }
 
     /// The first element's position: 0.
@@ -270,8 +273,8 @@ extension SmallVec: RandomAccessCollection, MutableCollection, RangeReplaceableC
 }
 
 /// The elements of a small vector, first to last.
-public struct SmallVecIterator<Element>: Iterator {
-    let elements: Element[>..]
+public struct SmallVecIterator<Element, N: Int>: Iterator where N > 0 {
+    let elements: SmallVec<Element, N>
     var position: Int
 
     /// The next element, or none past the last.

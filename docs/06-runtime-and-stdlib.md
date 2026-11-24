@@ -728,7 +728,7 @@ Sable.Core          ── always linked, no dependencies
   (xoshiro256**), behind 'random(in:)', 'randomElement' and 'shuffle'
 
 Sable.Collections   List Dictionary Set Deque OrderedDictionary
-                    PriorityQueue BitSet InlineArray SmallVec,
+                    PriorityQueue BitSet InlineArray SmallVec ArrayVec,
                     SortedDictionary SortedSet (B-trees, range queries),
                     LinkedList (an arena of nodes, constant-time handles,
                     order-maintained comparable positions)

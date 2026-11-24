@@ -52,7 +52,7 @@ public sealed class BenchRunnerTests {
         }
         """;
 
-    const string Line = @"mean [0-9.]+ (ns|µs|ms) / iter, median [0-9.]+ (ns|µs|ms), ± [0-9.]+ (ns|µs|ms) \(3 × \d+ iterations\)";
+    const string Line = @"mean [0-9.]+ (ns|µs|ms) / iter, median [0-9.]+ (ns|µs|ms), ± [0-9.]+ (ns|µs|ms) \(3 × \d+ iterations\), [0-9.]+ allocations / iter";
 
     [Fact]
     public void EachBenchmarkReportsItsTimePerIteration() {

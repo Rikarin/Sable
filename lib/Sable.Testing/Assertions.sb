@@ -62,6 +62,27 @@ public fn assertEqualText(_ left: String, _ right: String) {
 }
 
 /// Fails the test unless the two differ.
+/// How many objects the body allocated, arrays' buffers among them, on the
+/// running thread: what a test that code allocates nothing compares.
+///
+/// ```sable
+/// let made = allocations(during: () => {
+///     let x = 1 + 2
+/// })
+/// assert(made == 0)
+/// ```
+public fn allocations(during body: () -> Void) -> Int {
+    let before = Runtime.allocationCount()
+    body()
+    return Runtime.allocationCount() - before
+}
+
+/// Fails unless the body allocates nothing on the running thread.
+public fn assertNoAllocations(_ body: () -> Void) {
+    let made = allocations(during: body)
+    assert(made == 0, "expected no allocations, got \(made)")
+}
+
 public fn assertNotEqual<T>(_ left: T, _ right: T) where T: Equatable, T: Debug {
     if left != right {
         return

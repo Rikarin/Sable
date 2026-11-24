@@ -1,9 +1,11 @@
 module Sable.Collections
 
-/// Exactly `N` elements, stored inline in the value that holds them, with
-/// no heap allocation: Swift's InlineArray, .NET's [InlineArray(N)], Rust's
-/// `[T; N]`. It is the built-in fixed-size array, `Element[N]`, by the name
-/// other languages give it, with every member an array has.
+/// Exactly `N` elements: Swift's InlineArray, .NET's [InlineArray(N)],
+/// Rust's `[T; N]`. It is the built-in fixed-size array, `Element[N]`, by
+/// the name other languages give it, with every member an array has. Read,
+/// written and gone through, it allocates nothing; made, it is one buffer
+/// today, which members written over slices (`reverse()`, `firstIndex`)
+/// copy, until fixed-size arrays are laid out inline in the value (#304).
 ///
 /// For up to `N` elements that can grow and shrink within that room, inline
 /// too, use `Element[..N]`; for an array that may outgrow it, `SmallVec`.

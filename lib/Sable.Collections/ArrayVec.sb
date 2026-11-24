@@ -1,0 +1,251 @@
+module Sable.Collections
+
+/// Up to `N` elements in room of its own, `Element[..N]`, which never
+/// grows: Rust's arrayvec, a vector of fixed room. Where SmallVec moves to
+/// the heap when it outgrows its room, an ArrayVec does not grow at all:
+/// `append` past the room traps, and `tryAppend` says, with false, that it
+/// is full — for a buffer whose bound is the program's to keep. Its room is
+/// one allocation, made once and never again; none once fixed-capacity
+/// arrays are laid out inline in the value (#304).
+///
+/// A value: a copy is a vector of its own, its elements copied with it.
+/// Appending and removing at the end are constant time; inserting and
+/// removing at an index move the elements after it.
+///
+/// ```sable
+/// var recent = ArrayVec<Int, 3>()
+/// assert(recent.tryAppend(1) && recent.tryAppend(2) && recent.tryAppend(3))
+/// assert(!recent.tryAppend(4) && recent.isFull)
+/// assert(recent.remove(at: 0) == 1 && recent.tryAppend(4))
+/// assert(recent.toArray() == [2, 3, 4])
+/// ```
+public struct ArrayVec<Element, N: Int> where N > 0 {
+    var storage: Element[..N] = []
+
+    /// An empty vector.
+    public init() { }
+
+    /// A vector of the sequence's elements, in order; more than `N` traps.
+    /// What going through them throws, it throws.
+    public init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element {
+        for try element in elements {
+            append(element)
+        }
+    }
+
+    /// How many elements it holds.
+    public var count: Int => storage.count
+
+    /// Whether it holds no elements.
+    public var isEmpty: Bool => storage.count == 0
+
+    /// How many elements it has room for: `N`, always.
+    public var capacity: Int => N
+
+    /// Whether it holds `N` elements, and has room for no more.
+    public var isFull: Bool => storage.count == N
+
+    /// How many more elements it has room for.
+    public var remainingCapacity: Int => N - storage.count
+
+    /// The first element, or none when there are none.
+    public var first: Element? => if storage.count == 0 { none } else { storage[0] }
+
+    /// The last element, or none when there are none.
+    public var last: Element? => if storage.count == 0 { none } else { storage[storage.count - 1] }
+
+    /// The element at 'index'; outside 0..<count traps.
+    public subscript(index: Int) -> Element {
+        get {
+            return storage[index]
+        }
+        set {
+            storage[index] = newValue
+        }
+    }
+
+    /// The elements in a grow-only array, in order: on the heap, as any.
+    public fn toArray() -> Element[>..] {
+        return storage.toArray()
+    }
+
+    // ---- Growing -----------------------------------------------------------
+
+    /// Adds the element at the end; a full vector traps.
+    public mutating fn append(_ element: Element) {
+        precondition(storage.count < N, "ArrayVec.append: full, at \(N)")
+        storage.append(element)
+    }
+
+    /// Adds the element at the end if there is room: whether there was.
+    public mutating fn tryAppend(_ element: Element) -> Bool {
+        if storage.count == N {
+            return false
+        }
+        storage.append(element)
+        return true
+    }
+
+    /// Adds the elements at the end, in order; more than there is room for
+    /// traps, adding none.
+    public mutating fn append(contentsOf elements: Element[:]) {
+        precondition(elements.count <= N - storage.count, "ArrayVec.append(contentsOf:): \(elements.count) more than the room for \(N - storage.count)")
+        for element in elements {
+            storage.append(element)
+        }
+    }
+
+    /// Adds the elements at the end if there is room for them all: whether
+    /// there was. None are added when there is not.
+    public mutating fn tryAppend(contentsOf elements: Element[:]) -> Bool {
+        if elements.count > N - storage.count {
+            return false
+        }
+        for element in elements {
+            storage.append(element)
+        }
+        return true
+    }
+
+    /// Puts the element at 'index', moving it and those after it up one;
+    /// 'index' may be the count, and outside 0...count traps, as does a
+    /// full vector.
+    public mutating fn insert(_ element: Element, at index: Int) {
+        precondition(index >= 0 && index <= storage.count, "ArrayVec.insert: index out of range")
+        append(element)
+        storage.rotate(from: index, to: storage.count, left: -1)
+    }
+
+    /// Puts the element at 'index' if there is room: whether there was.
+    /// 'index' outside 0...count traps.
+    public mutating fn tryInsert(_ element: Element, at index: Int) -> Bool {
+        precondition(index >= 0 && index <= storage.count, "ArrayVec.tryInsert: index out of range")
+        if storage.count == N {
+            return false
+        }
+        insert(element, at: index)
+        return true
+    }
+
+    // ---- Shrinking ---------------------------------------------------------
+
+    /// Takes out the last element and gives it back; an empty vector traps.
+    public mutating fn removeLast() -> Element {
+        return storage.removeLast()
+    }
+
+    /// Takes out the last element and gives it back, or none when empty.
+    public mutating fn popLast() -> Element? {
+        if storage.count == 0 {
+            return none
+        }
+        return storage.removeLast()
+    }
+
+    /// Takes out the element at 'index' and gives it back, moving those
+    /// after it down one; outside 0..<count traps.
+    public mutating fn remove(at index: Int) -> Element {
+        let _ = storage[index]
+        storage.rotate(from: index, to: storage.count, left: 1)
+        return storage.removeLast()
+    }
+
+    /// Takes out the element at 'index' and gives it back, the last element
+    /// put in its place: constant time, the order not kept.
+    public mutating fn swapRemove(at index: Int) -> Element {
+        let removed = storage[index]
+        let last = storage.count - 1
+        if index != last {
+            storage[index] = storage[last]
+        }
+        let _ = storage.removeLast()
+        return removed
+    }
+
+    /// Takes out the elements from 'count' on; a count at or past the
+    /// vector's own changes nothing.
+    public mutating fn truncate(to count: Int) {
+        precondition(count >= 0, "ArrayVec.truncate: negative count")
+        while storage.count > count {
+            let _ = storage.removeLast()
+        }
+    }
+
+    /// Takes out every element.
+    public mutating fn removeAll() {
+        storage.clear()
+    }
+}
+
+extension ArrayVec where Element: Equatable {
+    /// Whether an element equal to this one is in the vector.
+    public fn contains(_ element: Element) -> Bool {
+        return storage.contains(element: element)
+    }
+}
+
+extension ArrayVec: Equatable where Element: Equatable {
+    /// The same elements in the same order.
+    public operator == (lhs: ArrayVec<Element, N>, rhs: ArrayVec<Element, N>) -> Bool {
+        if lhs.count != rhs.count {
+            return false
+        }
+        var i = 0
+        while i < lhs.count {
+            if lhs[i] != rhs[i] {
+                return false
+            }
+            i += 1
+        }
+        return true
+    }
+}
+
+// An array vector is a random-access collection whose elements can be
+// replaced in place: its positions are its offsets, from 0.
+extension ArrayVec: RandomAccessCollection, MutableCollection, FromSequence<Element> {
+    /// An iterator over the elements, first to last: a copy of the vector,
+    /// inline as it is, which later changes to the vector do not touch.
+    public fn makeIterator() -> ArrayVecIterator<Element, N> {
+        return ArrayVecIterator<Element, N> { elements: self, position: 0 }
+    }
+
+    /// The first element's position: 0.
+    public var startIndex: Int => 0
+
+    /// The position past the last element: the count.
+    public var endIndex: Int => storage.count
+
+    /// The next position.
+    public fn index(after position: Int) -> Int => position + 1
+
+    /// The position before.
+    public fn index(before position: Int) -> Int => position - 1
+
+    /// The position 'distance' on.
+    public fn index(_ position: Int, offsetBy distance: Int) -> Int => position + distance
+
+    /// How far on 'end' is from 'start'.
+    public fn distance(from start: Int, to end: Int) -> Int => end - start
+
+    /// Takes out every element: 'removeAll()', by the name arrays give it.
+    public mutating fn clear() {
+        storage.clear()
+    }
+}
+
+/// The elements of an array vector, first to last, read from a copy of it,
+/// which shares its room: no allocation.
+public struct ArrayVecIterator<Element, N: Int>: Iterator where N > 0 {
+    let elements: ArrayVec<Element, N>
+    var position: Int
+
+    /// The next element, or none past the last.
+    public mutating fn next() -> Element? {
+        if position >= elements.count {
+            return none
+        }
+        position = position + 1
+        return elements[position - 1]
+    }
+}

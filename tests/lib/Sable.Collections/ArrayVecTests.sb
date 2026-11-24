@@ -1,0 +1,149 @@
+module ArrayVecTests
+
+// ArrayVec (Sable.Collections): fixed room, never the heap — filled,
+// refused when full, edited in the middle, and none of it allocating.
+
+import Sable.Collections
+import Sable.Testing
+
+@test
+fn anArrayVecFillsItsRoomAndRefusesMore() {
+    var v = ArrayVec<Int, 4>()
+    assert(v.isEmpty && !v.isFull)
+    assertEqual(v.capacity, 4)
+    assertEqual(v.remainingCapacity, 4)
+    assert(v.first == none && v.last == none && v.popLast() == none)
+    v.append(1)
+    assert(v.tryAppend(2))
+    assert(v.tryAppend(contentsOf: [3, 4]))
+    assert(v.isFull && v.remainingCapacity == 0)
+    assert(!v.tryAppend(5))
+    assert(!v.tryAppend(contentsOf: [5]))
+    assert(!v.tryInsert(0, at: 0))
+    assert(v.toArray() == [1, 2, 3, 4])
+    assertEqual(v.first ?? 0, 1)
+    assertEqual(v.last ?? 0, 4)
+    assert(v.contains(3) && !v.contains(9))
+}
+
+@test
+fn editsInTheMiddleMoveTheRest() {
+    var v = ArrayVec<String, 5>(["a", "b", "c"])
+    v.insert("x", at: 1)
+    assert(v.tryInsert("y", at: 4))
+    assert(v.toArray() == ["a", "x", "b", "c", "y"])
+    assertEqual(v.remove(at: 1), "x")
+    assertEqual(v.swapRemove(at: 0), "a")
+    assert(v.toArray() == ["y", "b", "c"])
+    assertEqual(v.swapRemove(at: 2), "c")
+    v[0] = "z"
+    assertEqual(v.removeLast(), "b")
+    assertEqual(v.popLast() ?? "", "z")
+    v.append(contentsOf: ["p", "q", "r"])
+    v.truncate(to: 10)
+    v.truncate(to: 1)
+    assert(v.toArray() == ["p"])
+    v.removeAll()
+    assert(v.isEmpty)
+    v.append("s")
+    v.clear()
+    assertEqual(v.count, 0)
+}
+
+@test
+fn anArrayVecIsAValueAndACollection() {
+    var a = ArrayVec<Int, 3>([3, 1, 2])
+    var b = a
+    b[0] = 9
+    assertEqual(a[0], 3)
+    assert(a != b)
+    b[0] = 3
+    assert(a == b)
+    assert(ArrayVec<Int, 3>([1]) != ArrayVec<Int, 3>([1, 2]))
+    var total = 0
+    for x in a {
+        total += x
+    }
+    assertEqual(total, 6)
+    assertEqual(a.firstIndex(of: 2) ?? -1, 2)
+    assertEqual(a.startIndex, 0)
+    assertEqual(a.endIndex, 3)
+    assertEqual(a.index(before: 2), 1)
+    assertEqual(a.index(0, offsetBy: 2), 2)
+    assertEqual(a.distance(from: 0, to: 3), 3)
+    assertEqual(a.debugDescription(), "ArrayVec([3, 1, 2])")
+    a.append(contentsOf: [])
+}
+
+@test
+fn anArrayVecAllocatesItsRoomOnceAtMost() {
+    // One allocation at most, its room's buffer, however much is done to
+    // it: none per element. None at all once T[..N] is laid out inline (#304).
+    let made = allocations(during: () => {
+        var v = ArrayVec<Int, 8>()
+        var i = 0
+        while i < 6 {
+            v.append(i)
+            i += 1
+        }
+        let _ = v.tryAppend(99)
+        v.insert(-1, at: 0)
+        let _ = v.remove(at: 3)
+        let _ = v.swapRemove(at: 1)
+        var total = 0
+        for x in v {
+            total += x
+        }
+        v[0] = total
+        let _ = v.contains(5)
+        v.truncate(to: 2)
+        // A copy shares the room, as an array's copy shares its buffer.
+        let copy = v
+        let _ = copy == v
+    })
+    assert(made <= 1, "\(made) allocations")
+}
+
+@test(traps: "ArrayVec.append: full, at 2")
+fn appendingToAFullOneTraps() {
+    var v = ArrayVec<Int, 2>([1, 2])
+    v.append(3)
+}
+
+@test(traps: "ArrayVec.append(contentsOf:): 3 more than the room for 2")
+fn appendingTooManyTraps() {
+    var v = ArrayVec<Int, 2>()
+    v.append(contentsOf: [1, 2, 3])
+}
+
+@test(traps: "ArrayVec.insert: index out of range")
+fn insertingPastTheEndTraps() {
+    var v = ArrayVec<Int, 2>()
+    v.insert(1, at: 1)
+}
+
+@test(traps: "ArrayVec.tryInsert: index out of range")
+fn tryInsertingPastTheEndTraps() {
+    var v = ArrayVec<Int, 2>()
+    let _ = v.tryInsert(1, at: 1)
+}
+
+@test(traps: "ArrayVec.truncate: negative count")
+fn truncatingToANegativeCountTraps() {
+    var v = ArrayVec<Int, 2>()
+    v.truncate(to: -1)
+}
+
+@bench
+fn fillingAndDrainingAnArrayVec(_ b: Bencher) {
+    b.iterate(() => {
+        var v = ArrayVec<Int, 16>()
+        var i = 0
+        while i < 16 {
+            v.append(i)
+            i += 1
+        }
+        while let _ = v.popLast() {
+        }
+    })
+}

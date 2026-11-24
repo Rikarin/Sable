@@ -23,3 +23,43 @@ fn anInlineArrayHasEveryArrayMember() {
     assert(names.toArray() == ["a", "b", "c"])
     assert(names.contains(element: "b"))
 }
+
+@test
+fn anInlineArrayHasTheWholeArrayAPI() {
+    var xs: InlineArray<Int, 6> = [5, 3, 9, 1, 7, 3]
+    assertEqual(xs.firstIndex(of: 9) ?? -1, 2)
+    assertEqual(xs.count(where: { $0 == 3 }), 2)
+    xs.swapAt(0, 5)
+    xs.reverse()
+    assert(xs.toArray() == [5, 7, 1, 9, 3, 3])
+    xs.rotate(left: 2)
+    assert(xs.toArray() == [1, 9, 3, 3, 5, 7])
+    xs.sortUnstable()
+    assert(xs.isSorted(by: { $0 < $1 }))
+    assert(xs.starts(with: [1, 3]))
+    assertEqual(xs.chunks(of: 4).count, 2)
+    assertEqual(xs.windows(of: 5).count, 2)
+    xs.fill(0)
+    assert(xs.toArray() == [0, 0, 0, 0, 0, 0])
+}
+
+@test
+fn readingAndWritingAnInlineArrayAllocatesNothing() {
+    // Made, it is a buffer today: its first write copies a literal's
+    // elements into one of its own, and members over T[:] such as reverse()
+    // and firstIndex(of:) copy (#304). Read, written, swapped and gone
+    // through where it is after that, nothing.
+    var xs: InlineArray<Int, 4> = [4, 2, 3, 1]
+    xs[3] = 1
+    assertNoAllocations(() => {
+        xs[0] = 8
+        xs.swapAt(1, 2)
+        var total = 0
+        for x in xs {
+            total += x
+        }
+        let _ = xs.contains(element: total)
+        let _ = xs.count
+    })
+    assertEqual(xs[0], 8)
+}

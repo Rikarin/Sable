@@ -2731,6 +2731,7 @@ public static class SilBuiltins {
         Add("process_current_directory", SilType.String);
         Add("process_change_directory", SilType.Bool, SilType.String);
         Add("process_id", SilType.Int);
+        Add("memory_allocations", SilType.Int);
         Add("process_executable_path", SilType.String);
 
         // What a type's metadata says (docs/06 §6.2): MetadataSignature has the rest of the metadata builtins.

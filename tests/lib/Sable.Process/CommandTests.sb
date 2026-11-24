@@ -9,6 +9,10 @@ import Sable.Process
 import Sable.Testing
 import Sable.Time
 
+// Shells, paths and signals as POSIX has them; Windows' are tested by
+// Sable.CodeGen.Tests' ProcessTests.
+#if !os(windows)
+
 fn sh(_ script: String) -> Command {
     return Command("sh").arguments(["-c", script])
 }
@@ -308,3 +312,5 @@ fn isGone(_ id: String) async -> Bool {
     }
     return false
 }
+
+#endif

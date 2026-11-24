@@ -6,6 +6,10 @@ module ProcessTests
 import Sable.Process
 import Sable.Testing
 
+// Shells, paths and signals as POSIX has them; Windows' are tested by
+// Sable.CodeGen.Tests' ProcessTests.
+#if !os(windows)
+
 @test
 fn aProgramRunGivesWhatItWroteAndHowItEnded() {
     let done = try! Process.run("sh", ["-c", "echo out; echo err >&2; exit 3"])
@@ -80,3 +84,5 @@ fn theDirectoryCanBeChanged() {
     assert(Process.changeDirectory(start))
     assert(Process.id() > 0)
 }
+
+#endif

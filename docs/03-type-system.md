@@ -210,6 +210,14 @@ type's `where` predicates over its value parameters — whole numbers,
 `true`, `false` and operators — are evaluated for the numbers each
 instance written with them is given, and a false one is S3421.
 
+A value parameter may also be given a constant by name, `SIMD<F32, lanes>`
+or `Buf<Int, Platform.vectorBytes>`, whose value the compiler works out as it
+reads the type: integer literals, other such constants, and the integer
+operators over them (`const lanes = Platform.vectorBytes / 4`). A constant
+computed by a call is worked out only later, when constants are evaluated,
+which is too late for a type (S3420). An expression is not written in the
+angle brackets themselves, where `>` would end them: a constant names it.
+
 `~Copyable` is the opt-out that lets a generic container hold move-only types:
 
 ```sable

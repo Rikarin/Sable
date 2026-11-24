@@ -1499,7 +1499,7 @@ internal sealed class TypeBinder(Compilation compilation) {
         s_primaryWanted = false;
         var arguments = argumentList is null
             ? ImmutableArray<TypeSymbol>.Empty
-            : [..argumentList.Arguments.Select(a => BindType(a, context, scope))];
+            : [..argumentList.Arguments.Select(a => BindTypeArgument(symbol, a, context, scope))];
 
         switch (symbol) {
             case TypeParameterSymbol typeParameter:
@@ -1892,6 +1892,118 @@ internal sealed class TypeBinder(Compilation compilation) {
     ErrorTypeSymbol Error(ErrorCode code, TextSpan span, string message) {
         _diagnostics.Error(code, span, message);
         return ErrorTypeSymbol.Instance;
+    }
+
+    /// <summary>
+    ///     One argument of a generic name. For a value parameter, a name may be
+    ///     a constant's, <c>SIMD&lt;F32, lanes&gt;</c> or
+    ///     <c>Buf&lt;Int, Platform.vectorBytes&gt;</c>: its value, worked out
+    ///     here (<see cref="EvaluateConstant" />).
+    /// </summary>
+    TypeSymbol BindTypeArgument(Symbol generic, TypeSyntax syntax, Symbol context, FileScope? scope) {
+        // Whether the parameter takes a value may not be known yet — its
+        // constraint is bound later — but a constant is no type, so a name
+        // that is one is a value, and the arguments are checked against the
+        // parameters once they are.
+        if (generic is not (NamedTypeSymbol { TypeParameters.IsEmpty: false } or AliasSymbol { TypeParameters.IsEmpty: false })
+            || ConstantNamed(syntax, context, scope) is not { } constant) {
+            return BindType(syntax, context, scope);
+        }
+
+        return EvaluateConstant(constant, []) is { } value && value >= long.MinValue && value <= long.MaxValue
+            ? new ValueTypeArgumentSymbol((long)value)
+            : Error(
+                ErrorCode.ERR_ValueGenericArgument,
+                syntax.Span,
+                $"'{constant.Name}' is a constant, but not one whose value is known while types are read: "
+                + "a value generic parameter takes a constant that is a whole number of integer arithmetic over literals and other such constants"
+            );
+    }
+
+    /// <summary>The constant a type argument names, <c>lanes</c> or <c>Platform.vectorBytes</c>; null for a type, or a value parameter of the declaration around.</summary>
+    FieldSymbol? ConstantNamed(TypeSyntax syntax, Symbol context, FileScope? scope) =>
+        syntax switch {
+            SimpleNameTypeSyntax { TypeArgumentList: null } name
+                when Lookup(name.Identifier.Text, context, scope, name.Span, report: false) is null or not (TypeSymbol or AliasSymbol)
+                => LookupValue(name.Identifier.Text, context, scope) as FieldSymbol is { } field && IsConstant(field) ? field : null,
+            QualifiedNameSyntax { Left: SimpleNameTypeSyntax { TypeArgumentList: null } owner, Right: { TypeArgumentList: null } member }
+                when Lookup(owner.Identifier.Text, context, scope, owner.Span, report: false) is NamedTypeSymbol ownerType
+                => ownerType.GetMembers(member.Identifier.Text).OfType<FieldSymbol>().FirstOrDefault(IsConstant),
+            _ => null,
+        };
+
+    static bool IsConstant(FieldSymbol field) => field.DeclaringSyntax is [ConstDeclarationSyntax];
+
+    /// <summary>
+    ///     A constant's value as the compiler reads types, before anything
+    ///     runs: integer literals, other such constants, and the integer
+    ///     operators over them. Null for anything else — a call, a constant
+    ///     that needs itself — which compile-time evaluation works out later,
+    ///     too late for a type.
+    /// </summary>
+    System.Numerics.BigInteger? EvaluateConstant(FieldSymbol constant, HashSet<FieldSymbol> visiting) {
+        if (constant.DeclaringSyntax is not [ConstDeclarationSyntax { Initializer.Value: { } value } declaration]
+            || !visiting.Add(constant)) {
+            return null;
+        }
+
+        try {
+            return Evaluate(value, constant, compilation.FileScopeOf(declaration));
+        } finally {
+            visiting.Remove(constant);
+        }
+
+        System.Numerics.BigInteger? Evaluate(ExpressionSyntax expression, Symbol context, FileScope? scope) {
+            switch (expression) {
+                case LiteralExpressionSyntax { Token.Kind: SyntaxKind.IntegerLiteralToken, Token.Value: var number }:
+                    return number switch {
+                        long l => l,
+                        ulong u => u,
+                        int i => i,
+                        System.Numerics.BigInteger b => b,
+                        _ => null,
+                    };
+
+                case ParenthesizedExpressionSyntax parenthesized:
+                    return Evaluate(parenthesized.Expression, context, scope);
+
+                case PrefixUnaryExpressionSyntax unary when Evaluate(unary.Operand, context, scope) is { } operand:
+                    return unary.OperatorToken.Kind switch {
+                        SyntaxKind.MinusToken => -operand,
+                        SyntaxKind.PlusToken => operand,
+                        SyntaxKind.TildeToken => -operand - 1,
+                        _ => null,
+                    };
+
+                case BinaryExpressionSyntax binary
+                    when Evaluate(binary.Left, context, scope) is { } left && Evaluate(binary.Right, context, scope) is { } right:
+                    return binary.OperatorToken.Kind switch {
+                        SyntaxKind.PlusToken => left + right,
+                        SyntaxKind.MinusToken => left - right,
+                        SyntaxKind.StarToken => left * right,
+                        SyntaxKind.SlashToken when !right.IsZero => System.Numerics.BigInteger.Divide(left, right),
+                        SyntaxKind.PercentToken when !right.IsZero => System.Numerics.BigInteger.Remainder(left, right),
+                        SyntaxKind.LessLessToken when right >= 0 && right < 64 => left << (int)right,
+                        SyntaxKind.GreaterGreaterToken when right >= 0 && right < 64 => left >> (int)right,
+                        SyntaxKind.AmpersandToken => left & right,
+                        SyntaxKind.PipeToken => left | right,
+                        SyntaxKind.CaretToken => left ^ right,
+                        _ => null,
+                    };
+
+                case IdentifierNameSyntax name when LookupValue(name.Identifier.Text, context, scope) is FieldSymbol other && IsConstant(other):
+                    return EvaluateConstant(other, visiting);
+
+                // 'Platform.vectorBytes / 4': a type's constant.
+                case MemberAccessExpressionSyntax { Expression: IdentifierNameSyntax owner, Name: IdentifierNameSyntax memberName }
+                    when Lookup(owner.Identifier.Text, context, scope, owner.Span, report: false) is NamedTypeSymbol ownerType
+                         && ownerType.GetMembers(memberName.Identifier.Text).OfType<FieldSymbol>().FirstOrDefault(IsConstant) is { } member:
+                    return EvaluateConstant(member, visiting);
+
+                default:
+                    return null;
+            }
+        }
     }
 
     /// <summary>A generic parameter that stands for a number, <c>N: Int</c>.</summary>

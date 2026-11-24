@@ -109,4 +109,57 @@ public sealed class SimdTypeTests {
         var error = Assert.Single(errors);
         Assert.Contains("cannot be generic", error.Message, StringComparison.Ordinal);
     }
+
+    // ---- A constant as the lane count -------------------------------------------
+
+    [Fact]
+    public void AConstantIsALaneCount() =>
+        AssertClean(
+            """
+            module M
+            const f32Lanes = Platform.vectorBytes / 4
+            const wide = f32Lanes * (1 << 2)
+            struct Holder {
+                const lanes = 8
+            }
+            alias Wide = SIMD<F32, wide>
+            fn probe() {
+                let a = SIMD<F32, f32Lanes>(repeating: 1)
+                let b: SIMD<F32, 4> = a
+                let c: Wide = SIMD<F32, 16>()
+                let d = SIMD<F64, Holder.lanes>.zero
+                let e: SIMD<F64, 8> = d
+                let f = SIMD<U8, Platform.vectorBytes>()
+                let g: SIMD<U8, 16> = f
+            }
+            """
+        );
+
+    [Fact]
+    public void AConstantLaneCountMeetsTheTypesRequirements() =>
+        Assert.Equal(
+            ErrorCode.ERR_ConstGenericPredicateFails,
+            SingleError("module M\nconst five = 2 + 3\nfn probe(_ v: SIMD<F32, five>) { }").Code
+        );
+
+    [Fact]
+    public void AConstantNotKnownWhileTypesAreReadIsNotALaneCount() {
+        var error = SingleError(
+            """
+            module M
+            const fn four() -> Int { return 4 }
+            const lanes = four()
+            fn probe(_ v: SIMD<F32, lanes>) { }
+            """
+        );
+        Assert.Equal(ErrorCode.ERR_ValueGenericArgument, error.Code);
+        Assert.Contains("'lanes' is a constant", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ANameThatIsATypeIsStillATypeArgument() =>
+        Assert.Equal(
+            ErrorCode.ERR_ValueGenericArgument,
+            SingleError("module M\nstruct lanes { }\nfn probe(_ v: SIMD<F32, lanes>) { }").Code
+        );
 }

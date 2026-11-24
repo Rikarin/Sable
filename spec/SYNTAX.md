@@ -269,6 +269,49 @@ print(area(bounds))                 // read in place: plain
 let first = &bag.items[0]           // an 'Item&'
 ```
 
+What an `&` argument names must be a place an assignment could write — a
+`var`, a field or an element of one, a property or a subscript with a setter
+— and an element is one only where its array is: `&xs[0]` and `xs[0] = 1`
+are refused for a `let xs`, and for an array a call gives, `&make()[0]`
+(S3010), rather than writing a copy that is then dropped.
+
+### A range of an array as a place
+
+A range of an array's elements is a place of type `T[:]`, by any range of
+integers or one counted from the end, of every kind of array and of a slice:
+`sortAll(&xs[1..<4])`, `sortAll(&xs[^3...])`, `sortAll(&model.items[..<2])`,
+`sortAll(&xs[1..<5][1..<3])`, and the receiver of a `mutating` member of
+`T[:]`, `xs[2...].sort()`. No slice is stored in the array to change where it
+is, so the range is read out and written back, as a property with accessors
+is: the callee is given a view of the range sharing the array's buffer, its
+first write copies the run (the array still holds the buffer), and when the
+call returns the slice's elements are stored over the range, writing the
+array's own buffer in place — and nothing is stored if the callee wrote
+nothing. The array is accessed for the length of the call, so
+`swapRuns(&xs[0..<2], &xs[1..<3])` is an error (S3062), as two elements of
+one array passed inout are, and through two references to one object it
+traps.
+
+A slice never changes its count; a callee can only give it another by
+replacing it whole (`s = other`), and one that comes back with another count
+traps (`a slice of count 1 stored over a range of count 3`), whatever the
+kind of array: the parameter is a slice, and the range it came from is
+written back element by element. A store to a range is element by element
+too, and the value must have the range's count — except a store straight to
+a range of a growable array, `xs[1..<3] = [7]`, which replaces it with as
+many elements as are stored (§ Ranges, "Indexing from the end").
+
+```sable
+fn sortAll(_ s: inout Int[:]) { s.sort() }
+
+var xs: Int[>..] = [5, 4, 3, 2, 1]
+sortAll(&xs[1..<4])                 // [5, 2, 3, 4, 1]
+xs[^2...].reverse()                 // [5, 2, 3, 1, 4]
+var fixed: Int[] = [1, 2, 3, 4]
+fixed[1..<3] = [8, 9]               // [1, 8, 9, 4]; [8] would trap
+xs[1..<3] = [7]                     // [5, 7, 1, 4]: a growable array's range replaced
+```
+
 A function type's parameter may be `inout` too, and so may a closure's; the
 call passes `&x`, as to a declared function:
 
@@ -1422,12 +1465,15 @@ A mutable collection (every array but a slice, `List`, `Deque`) is written
 through a `FromEnd` as well, and one that can replace a range of its
 elements (a growable array, `List`, `SmallVec`) through any range,
 `RelativeRange` among them; the elements stored may be more or fewer than
-the range's:
+the range's. Every other array, and a slice, stores a range element by
+element, as many as the range has or a trap, and a range of any array may
+be passed `inout` (§5, "A range of an array as a place"):
 
 ```sable
 xs[^1] = 9         // the last element replaced
 xs[^2] += 1
 xs[1..<^1] = [7]   // all but the first and the last, replaced by one
+fixed[^2...] = [8, 9]   // a fixed array's last two, stored over
 ```
 
 Where a collection has a subscript of the same labels that only reads and

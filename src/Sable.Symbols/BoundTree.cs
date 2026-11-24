@@ -566,13 +566,13 @@ public sealed class BoundIndexAccess(
     public TypeSubstitution Substitution { get; init; } = TypeSubstitution.Empty;
 
     /// <summary>
-    ///     An array's element or a dictionary's entry may be written; a
-    ///     subscript's only when it has a setter and, as for a stored field,
-    ///     the value it indexes can be written through.
+    ///     An array's element, a range of its elements or a dictionary's
+    ///     entry may be written, and a subscript's when it has a setter —
+    ///     each, as a stored field, only where the value it indexes can be
+    ///     written through: not a 'let' array's, nor one a call gives.
     /// </summary>
     public override bool IsAssignable =>
-        Subscript is null
-        || (HasSetter(Subscript) && (Receiver.Type.IsReferenceType || Receiver.IsAssignable));
+        (Subscript is null || HasSetter(Subscript)) && (Receiver.Type.IsReferenceType || Receiver.IsAssignable);
 
     /// <summary>True when a subscript declares a <c>set</c>.</summary>
     public static bool HasSetter(FunctionSymbol subscript) =>

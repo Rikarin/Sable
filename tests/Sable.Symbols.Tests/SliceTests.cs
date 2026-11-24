@@ -80,9 +80,25 @@ public sealed class SliceTests {
     public void ARangeOfElementsIsASlice(string expression) =>
         Assert.Equal("String[:]", TypeOf("let xs: String[>..] = []", expression));
 
-    [Fact]
-    public void ARangeOfElementsIsNotAPlaceToStore() {
-        var error = Assert.Single(ErrorsIn("fn f() { var xs: Int[>..] = [1, 2]; xs[0..<1] = [3] }"));
+    /// <summary>A range of a 'var' array is a place, stored to and passed inout, by any range (#301).</summary>
+    [Theory]
+    [InlineData("var xs: Int[>..] = [1, 2]; xs[0..<1] = [3]")]
+    [InlineData("var xs: Int[] = [1, 2]; xs[0..<1] = [3]")]
+    [InlineData("var xs: Int[] = [1, 2]; xs[^1...] = [3]")]
+    [InlineData("var xs: Int[>..<] = [1, 2]; g(&xs[1..<^0])")]
+    [InlineData("var xs: Int[] = [1, 2]; g(&xs[...0])")]
+    [InlineData("var xs: Int[>..] = [1, 2]; xs[1...].sort()")]
+    public void ARangeOfAVarArrayIsAPlace(string body) =>
+        Assert.Empty(ErrorsIn($"fn g(_ s: inout Int[:]) {{ }}\nfn f() {{ {body} }}"));
+
+    /// <summary>A range, or an element, of a 'let' array or of one a call gives is no place (S3010).</summary>
+    [Theory]
+    [InlineData("let xs: Int[>..] = [1, 2]; xs[0..<1] = [3]")]
+    [InlineData("let xs: Int[] = [1, 2]; xs[0] = 3")]
+    [InlineData("let xs: Int[] = [1, 2]; g(&xs[^1...])")]
+    [InlineData("g(&make()[0..<1])")]
+    public void ARangeOfAnArrayThatCannotChangeIsNotAPlace(string body) {
+        var error = Assert.Single(ErrorsIn($"fn g(_ s: inout Int[:]) {{ }}\nfn make() -> Int[>..] {{ return [1] }}\nfn f() {{ {body} }}"));
         Assert.Equal(ErrorCode.ERR_NotAssignable, error.Code);
     }
 

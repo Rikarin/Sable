@@ -212,3 +212,20 @@ fn reorderingChangesAFieldOfAnObjectInPlace() {
 class Holder {
     var values: Int[>..] = [1, 2, 3]
 }
+
+@test
+fn reorderingARangeChangesThoseElementsInTheArray() {
+    var values: Int[>..] = [1, 2, 3, 4, 5]
+    values[1...3].reverse()
+    assert(values == [1, 4, 3, 2, 5])
+    values[^2...].swapAt(0, 1)
+    assert(values == [1, 4, 3, 5, 2])
+    values[..<3].rotate(left: 1)
+    assert(values == [4, 3, 1, 5, 2])
+}
+
+@test(traps: "array slice out of range")
+fn reorderingARangePastTheEndTraps() {
+    var values: Int[>..] = [1, 2, 3]
+    values[1..<5].reverse()
+}

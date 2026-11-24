@@ -548,6 +548,8 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_array_append_utf8(ptr nocapture, ptr, ptr, i64, i64)
                                 declare void @sable_array_rotate(ptr nocapture, ptr, i64, i64, i64)
                                 declare void @sable_slice_rotate(ptr nocapture, ptr, i64, i64, i64)
+                                declare void @sable_array_store_slice(ptr nocapture, ptr, i64, i64, ptr, i64, i64)
+                                declare void @sable_slice_store_slice(ptr nocapture, ptr, i64, i64, ptr, i64, i64)
                                 declare ptr @sable_slice_mutable_element(ptr nocapture, ptr, i64)
                                 declare void @sable_slice_make_unique(ptr nocapture, ptr)
                                 declare ptr @sable_array_of_slice(ptr, i64, i64, ptr)
@@ -4889,6 +4891,20 @@ public sealed partial class LlvmEmitter {
                     var function = pointee is SliceType ? "sable_slice_rotate" : "sable_array_rotate";
                     SiteForRuntime();
                     Line($"call void @{function}(ptr {operands[0]}, ptr {ArrayMetadataOf(new ArrayType(element))}, i64 {operands[1]}, i64 {operands[2]}, i64 {operands[3]})");
+                    return;
+                }
+
+                // A slice's elements stored over [from, to) of the array or
+                // the slice at the address: the runtime checks the counts,
+                // and stores nothing when the slice is still that range's view.
+                case "array_store_slice": {
+                    var pointee = ((AddressType)builtin.Operands[0].Type).Pointee;
+                    var element = pointee is SliceType written ? written.Element : ((ArrayType)pointee).Element;
+                    var function = pointee is SliceType ? "sable_slice_store_slice" : "sable_array_store_slice";
+                    var source = (SliceType)builtin.Operands[3].Type;
+                    var (buffer, start, count) = (SlicePart(operands[3], source, 0), SlicePart(operands[3], source, 1), SlicePart(operands[3], source, 2));
+                    SiteForRuntime();
+                    Line($"call void @{function}(ptr {operands[0]}, ptr {ArrayMetadataOf(new ArrayType(element))}, i64 {operands[1]}, i64 {operands[2]}, ptr {buffer}, i64 {start}, i64 {count})");
                     return;
                 }
 

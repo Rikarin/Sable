@@ -1,0 +1,11 @@
+module Sable.Crypto
+
+/// Hash functions that are broken, and kept for what already uses them: that
+/// their names begin with `Insecure` says so wherever they are used.
+///
+/// ```sable
+/// assert("\(Insecure.Sha1.hash(utf8: ""))" == "da39a3ee5e6b4b0d3255bfef95601890afd80709")
+/// ```
+public struct Insecure {
+    private init() { }
+}

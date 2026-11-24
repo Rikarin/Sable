@@ -1,0 +1,102 @@
+module Md5Tests
+
+// Insecure.Md5 (Sable.Crypto): the standard's messages, every length around
+// the blocks' ends, and every way of cutting a message in two. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+@test
+fn thePublishedMessagesHaveTheirDigests() {
+    assertEqual("\(Insecure.Md5.hash(utf8: ""))", "d41d8cd98f00b204e9800998ecf8427e")
+    assertEqual("\(Insecure.Md5.hash(utf8: "a"))", "0cc175b9c0f1b6a831c399e269772661")
+    assertEqual("\(Insecure.Md5.hash(utf8: "abc"))", "900150983cd24fb0d6963f7d28e17f72")
+    assertEqual("\(Insecure.Md5.hash(utf8: "message digest"))", "f96b697d7cb7938d525a2f31aaf161d0")
+    assertEqual("\(Insecure.Md5.hash(utf8: "abcdefghijklmnopqrstuvwxyz"))", "c3fcd3d76192e4007dfb496cca67e13b")
+    assertEqual("\(Insecure.Md5.hash(utf8: "12345678901234567890123456789012345678901234567890123456789012345678901234567890"))", "57edf4a22be3c955ac49da2e2107b67a")
+}
+
+// Every length to past three blocks, its digest among those hashed here;
+// the digest of them all from Python's hashlib.
+@test
+fn everyLengthHasItsDigest() {
+    var all = Insecure.Md5()
+    var count = 0
+    while count < 194 {
+        all.update(Insecure.Md5.hash(message(count)).bytes)
+        count += 1
+    }
+    assertEqual("\(all.finalize())", "08cd77e29618512ec504651ad1d7a62c")
+}
+
+@test
+fn aMessageInTwoPartsIsTheWholeWhereverItIsCut() {
+    let whole = message(133)
+    let expected = Insecure.Md5.hash(whole)
+    var cut = 0
+    while cut <= whole.count {
+        var hash = Insecure.Md5()
+        hash.update(whole[..<cut])
+        hash.update(whole[cut...])
+        assert(hash.finalize() == expected)
+        cut += 1
+    }
+}
+
+@test
+fn aMessageAByteAtATimeIsTheWhole() {
+    let whole = message(133)
+    var hash = Insecure.Md5()
+    for byte in whole {
+        hash.update([byte])
+        hash.update([])
+    }
+    assert(hash.finalize() == Insecure.Md5.hash(whole))
+}
+
+@test
+fn finalizingLeavesTheFunctionToGoOn() {
+    let whole = message(73)
+    var hash = Insecure.Md5()
+    hash.update(whole[..<64])
+    assert(hash.finalize() == Insecure.Md5.hash(whole[..<64]))
+    assert(hash.finalize() == Insecure.Md5.hash(whole[..<64]))
+    hash.update(whole[64...])
+    assert(hash.finalize() == Insecure.Md5.hash(whole))
+}
+
+@test
+fn aCopyHashesOnByItself() {
+    let whole = message(73)
+    var first = Insecure.Md5()
+    first.update(whole[..<7])
+    var second = first
+    first.update(whole[7...])
+    second.update(whole[..<3])
+    assert(first.finalize() == Insecure.Md5.hash(whole))
+    assert(second.finalize() == Insecure.Md5.hash(joined(message(7), message(3))))
+}
+
+@test
+fn itsSizesAreTheStandards() {
+    assertEqual(Insecure.Md5.digestByteCount, 16)
+    assertEqual(Insecure.Md5.blockByteCount, 64)
+    assertEqual(Insecure.Md5.hash(message(3)).count, 16)
+}
+
+fn joined(_ a: U8[:], _ b: U8[:]) -> U8[>..] {
+    var bytes = a.toArray()
+    bytes.append(contentsOf: b)
+    return bytes
+}

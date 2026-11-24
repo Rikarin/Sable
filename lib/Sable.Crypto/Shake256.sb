@@ -1,0 +1,28 @@
+module Sable.Crypto
+
+/// SHAKE256, FIPS 202: as many bytes of output as are asked for, 256 bits
+/// strong once there are 64 of them. A longer output begins with a shorter one.
+///
+/// ```sable
+/// let output = Shake256.hash(utf8: "abc", count: 8)
+/// assert("\(Digest(output))" == "483366601360a877")
+/// var shake = Shake256()
+/// shake.update(utf8: "abc")
+/// var reader = shake.reader()
+/// assert(reader.read(count: 3) == output[..<3] && reader.read(count: 5) == output[3...])
+/// ```
+public struct Shake256: ExtendableOutputFunction {
+    var sponge: Sponge
+
+    public init() {
+        sponge = Sponge(rate: 136, suffix: 0x1F)
+    }
+
+    public mutating fn update(_ bytes: U8[:]) {
+        sponge.update(bytes)
+    }
+
+    public fn reader() -> OutputReader {
+        return OutputReader(sponge: sponge.finish(), rate: 136)
+    }
+}

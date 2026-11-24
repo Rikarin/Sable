@@ -1,0 +1,108 @@
+module Blake3Tests
+
+// Blake3 (Sable.Crypto): every shape of tree up to a hundred chunks, hashed,
+// keyed and deriving a key, against @noble/hashes. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+// The reference vectors' inputs: bytes counting to 250, over and over.
+fn counting(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8(i % 251))
+        i += 1
+    }
+    return bytes
+}
+
+let lengths: Int[>..] = [0, 1, 2, 63, 64, 65, 127, 128, 129, 1023, 1024, 1025, 2047, 2048, 2049, 3072, 3073, 4096, 4097, 5120, 5121, 6144, 6145, 7168, 7169, 8192, 8193, 16384, 31744, 102400]
+
+fn digestOfAll(_ make: () -> Blake3) -> String {
+    var all = Sha256()
+    for count in lengths {
+        var hash = make()
+        hash.update(counting(count))
+        all.update(hash.finalize(count: 131))
+    }
+    return "\(all.finalize())"
+}
+
+@test
+fn theEmptyMessageAndOneByteHaveTheirDigests() {
+    assertEqual("\(Blake3.hash([]))", "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262")
+    assertEqual("\(Blake3.hash([0]))", "2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213")
+}
+
+// 131 bytes of output of each, hashed together: what @noble/hashes gives.
+@test
+fn everyShapeOfTreeHasItsOutput() {
+    assertEqual(digestOfAll { Blake3() }, "4b582a0f2ab118c9a0e82181842e3b70301a59d612fc1f47c63ed75029732c2f")
+}
+
+@test
+fn everyShapeOfTreeUnderAKeyHasItsOutput() {
+    var key: U8[>..] = []
+    key.append(utf8: "whats the Elvish word for friend")
+    assertEqual(digestOfAll { Blake3(key: SymmetricKey(key)) }, "1538b8d413bcc38177be122e8f8cac0e94c008d3f29ce4d4427825eb298c887d")
+}
+
+@test
+fn everyShapeOfTreeDerivingAKeyHasItsOutput() {
+    assertEqual(digestOfAll { Blake3(derivingKeyFor: "context string 1") }, "5ac1770cbf399f5dc11f4a2b6145e99e78cada634b5a6e200521ec7cbeab41cc")
+}
+
+@test
+fn aMessageInTwoPartsIsTheWholeWhereverItIsCut() {
+    let whole = counting(2100)
+    let expected = Blake3.hash(whole)
+    var cut = 0
+    while cut <= whole.count {
+        var hash = Blake3()
+        hash.update(whole[..<cut])
+        hash.update(whole[cut...])
+        assert(hash.finalize() == expected)
+        cut += 7
+    }
+}
+
+@test
+fn aMessageAByteAtATimeIsTheWhole() {
+    let whole = counting(3100)
+    var hash = Blake3()
+    for byte in whole {
+        hash.update([byte])
+        hash.update([])
+    }
+    assert(hash.finalize() == Blake3.hash(whole))
+}
+
+@test
+fn finalizingLeavesTheFunctionToGoOn() {
+    let whole = counting(4000)
+    var hash = Blake3()
+    hash.update(whole[..<2048])
+    let copy = hash
+    assert(hash.finalize() == Blake3.hash(whole[..<2048]))
+    hash.update(whole[2048...])
+    assert(hash.finalize() == Blake3.hash(whole))
+    assert(copy.finalize() == Blake3.hash(whole[..<2048]))
+}
+
+@test
+fn itsOutputReadInPartsIsTheWhole() {
+    let whole = Blake3.hash(utf8: "abc", count: 300)
+    var hash = Blake3()
+    hash.update(utf8: "abc")
+    var reader = hash.reader()
+    var parts: U8[>..] = []
+    while parts.count < 300 {
+        parts.append(contentsOf: reader.read(count: 25))
+    }
+    assert(parts == whole)
+    assert(whole.starts(with: hash.finalize().bytes))
+    assertEqual(Blake3.digestByteCount, 32)
+    assertEqual(Blake3.blockByteCount, 64)
+}

@@ -1,0 +1,52 @@
+module Sable.Crypto
+
+import Sable.Text
+
+/// What a hash function or a message authentication code gives: its bytes,
+/// written in hexadecimal. Two are compared in a time that depends on how
+/// many bytes they have, never on what those are, so a digest that must not
+/// be guessed can be compared with '=='.
+///
+/// ```sable
+/// let digest = Sha256.hash(utf8: "abc")
+/// assert(digest.bytes.count == 32 && digest.bytes[0] == 0xBA)
+/// assert("\(digest)" == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+/// assert(digest != Sha256.hash(utf8: "abd"))
+/// ```
+public struct Digest: Hashable, Formattable, Debug, Sendable {
+    /// The digest's bytes, in order.
+    public let bytes: U8[>..]
+
+    /// The digest those bytes are: one read from a file, say, to compare
+    /// with one computed.
+    public init(_ bytes: U8[:]) {
+        self.bytes = bytes.toArray()
+    }
+
+    /// How many bytes the digest has.
+    public var count: Int => bytes.count
+
+    /// Whether the two are the same bytes, in constant time.
+    public operator == (lhs: Digest, rhs: Digest) -> Bool {
+        return constantTimeEquals(lhs.bytes, rhs.bytes)
+    }
+
+    public fn hash(into hasher: inout Hasher) {
+        hasher.write(bytes)
+    }
+
+    /// The bytes in hexadecimal, lower case, or upper with `X`, padded as
+    /// the spec says.
+    ///
+    /// ```sable
+    /// assert("\(Digest([0xAB, 0x01]):X)" == "AB01")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(Hex.encode(bytes, uppercase: spec.kind == .UpperHex))
+    }
+
+    /// The type and the bytes in hexadecimal: "Digest(ab01)".
+    public fn debugDescription() -> String {
+        return "Digest(" + Hex.encode(bytes) + ")"
+    }
+}

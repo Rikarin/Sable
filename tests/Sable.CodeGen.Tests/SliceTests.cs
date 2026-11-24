@@ -453,6 +453,95 @@ public sealed class SliceTests {
                          """;
 
     /// <summary>
+    ///     The whole of an array passed as an inout slice, which changes it
+    ///     where it is: every kind of array, a field's, an object's, an
+    ///     element's, to a declared function and a closure, and one whose
+    ///     buffer is shared, the other's kept.
+    /// </summary>
+    [Fact]
+    public void TheWholeOfAnArrayPassesAsAnInoutSlice() =>
+        Prints(
+            """
+            10 3 2
+            3
+            2 3 10
+            40 5
+            7 8 9
+            20 1
+            20 1
+            1 2
+            3 4
+            a b
+            77 3 10 3
+
+            0
+
+            """,
+            Inout + """
+
+                    class Box { var xs: Int[>..]; init(_ xs: Int[>..]) { self.xs = xs } }
+                    fn nested(_ s: inout Int[:]) { bump(&s) }
+                    fn first(_ s: inout Int[:], _ value: Int) { s[0] = value }
+                    """,
+            """
+                var xs: Int[>..] = [3, 1, 2]
+                let kept = xs
+                bump(&xs)
+                print(show(xs))
+                print(kept[0])
+                sortAll(&xs)
+                print(show(xs))
+                var fixed: Int[] = [5, 4]
+                bump(&fixed)
+                print(show(fixed))
+                var shrinking: Int[>..<] = [9, 8, 7]
+                sortAll(&shrinking)
+                print(show(shrinking))
+                var model = Model(items: [1, 2])
+                nested(&model.items)
+                print(show(model.items))
+                let box = Box([1, 2])
+                bump(&box.xs)
+                print(show(box.xs))
+                var bounded: Int[..4] = [2, 1]
+                sortAll(&bounded)
+                print(show(bounded))
+                var grid: Int[>..][>..] = [[2, 1], [4, 3]]
+                sortAll(&grid[1])
+                print(show(grid[1]))
+                var words: String[>..] = ["b", "a"]
+                sortAll(&words)
+                print(show(words))
+                let change = { (s: inout Int[:]) in s[0] = 77 }
+                change(&xs)
+                first(&xs, xs[0])
+                print("\(show(xs)) \(xs.count)")
+                var empty: Int[>..] = []
+                sortAll(&empty)
+                print(show(empty))
+                print(empty.count)
+            """
+        );
+
+    [Fact]
+    public void TheWholeOfAnArrayGivenBackWithAnotherCountTraps() {
+        var execution = AssertAgree(
+            Program(
+                Inout + """
+
+                        fn shorten(_ s: inout Int[:]) { s = s[0..<1] }
+                        """,
+                """
+                    var xs: Int[>..] = [1, 2]
+                    shorten(&xs)
+                    print("unreachable")
+                """
+            )
+        );
+        Assert.StartsWith("fatal error: a slice of another count given back for the whole of an array\n", execution.Stderr, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     A range of an array passed inout (#301): every kind of array, by
     ///     every shape of range and one counted from the end — read out as a
     ///     slice, changed by the callee and stored back over the range.

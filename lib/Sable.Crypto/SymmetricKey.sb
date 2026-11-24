@@ -1,0 +1,85 @@
+module Sable.Crypto
+
+/// A secret's bytes — a key, or what keys are derived from — kept in one
+/// place, which is zeroed when the last copy of the value goes. Printing one
+/// says how many bytes it has, and not what they are.
+///
+/// Copies of the value share the one place. `bytes()` gives the secret out
+/// as an array, which nothing zeroes but `secureZero`.
+///
+/// ```sable
+/// let key = SymmetricKey.random(byteCount: 32)
+/// assert("\(key)" == "SymmetricKey(32 bytes)")
+/// assert(key != SymmetricKey.random(byteCount: 32))
+/// ```
+public struct SymmetricKey: Equatable, Formattable, Debug, Sendable {
+    let memory: SecretMemory
+
+    /// The key those bytes are. The array they were in is still the
+    /// caller's to zero.
+    public init(_ bytes: U8[:]) {
+        memory = SecretMemory(bytes)
+    }
+
+    init(memory: SecretMemory) {
+        self.memory = memory
+    }
+
+    /// A new key from the system's random source.
+    ///
+    /// ```sable
+    /// assert(SymmetricKey.random(byteCount: 16).byteCount == 16)
+    /// ```
+    public static fn random(byteCount: Int) -> SymmetricKey {
+        precondition(byteCount >= 0, "a key of \(byteCount) bytes")
+        let memory = SecretMemory(count: byteCount)
+        unsafe {
+            Native.random(memory.address, byteCount)
+        }
+        return SymmetricKey(memory: memory)
+    }
+
+    /// How many bytes the key has.
+    public var byteCount: Int => memory.count
+
+    /// The secret itself, in an array.
+    ///
+    /// ```sable
+    /// var secret = SymmetricKey([1, 2, 3]).bytes()
+    /// assert(secret == [1, 2, 3])
+    /// secureZero(&secret)
+    /// ```
+    public fn bytes() -> U8[>..] {
+        return memory.bytes(from: 0, count: memory.count)
+    }
+
+    /// Whether the two are the same bytes, in constant time.
+    public operator == (lhs: SymmetricKey, rhs: SymmetricKey) -> Bool {
+        let count = lhs.byteCount
+        if count != rhs.byteCount {
+            return false
+        }
+        // As constantTimeEquals.
+        var difference: U8 = 0
+        unsafe {
+            let a = RawPtr<U8>(address: lhs.memory.address)
+            let b = RawPtr<U8>(address: rhs.memory.address)
+            var i = 0
+            while i < count {
+                difference = blackBox(difference | (a.load(at: i) ^ b.load(at: i)))
+                i += 1
+            }
+        }
+        return difference == 0
+    }
+
+    /// How many bytes the key has: "SymmetricKey(32 bytes)".
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(self.debugDescription())
+    }
+
+    /// How many bytes the key has: "SymmetricKey(32 bytes)".
+    public fn debugDescription() -> String {
+        return "SymmetricKey(\(byteCount) bytes)"
+    }
+}

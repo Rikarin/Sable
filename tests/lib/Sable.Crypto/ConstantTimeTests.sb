@@ -1,0 +1,75 @@
+module ConstantTimeTests
+
+// constantTimeEquals and secureZero (Sable.Crypto). Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+@test
+fn bytesAreEqualOnlyWhenEveryOneIs() {
+    var count = 0
+    while count < 40 {
+        assert(constantTimeEquals(message(count), message(count)))
+        var i = 0
+        while i < count {
+            var bit = 0
+            while bit < 8 {
+                var other = message(count)
+                other[i] = other[i] ^ (1 << U8(bit))
+                assert(!constantTimeEquals(message(count), other))
+                bit += 1
+            }
+            i += 1
+        }
+        assert(!constantTimeEquals(message(count), message(count + 1)))
+        count += 1
+    }
+}
+
+@test
+fn slicesAreComparedFromWhereTheyStart() {
+    let bytes = message(60)
+    assert(constantTimeEquals(bytes[3..<30], bytes[3..<30]))
+    assert(!constantTimeEquals(bytes[3..<30], bytes[4..<31]))
+}
+
+@test
+fn zeroingLeavesNothing() {
+    var bytes = message(50)
+    secureZero(&bytes)
+    assert(bytes == U8[>..](repeating: 0, count: 50))
+    var fixed: U8[] = [1, 2, 3]
+    secureZero(&fixed)
+    assert(fixed[0] == 0 && fixed[2] == 0)
+    var empty: U8[>..] = []
+    secureZero(&empty)
+    assertEqual(empty.count, 0)
+}
+
+@test
+fn zeroingARangeLeavesTheRest() {
+    var bytes = message(10)
+    secureZero(&bytes[2..<5])
+    assert(bytes[2] == 0 && bytes[4] == 0)
+    assert(bytes[1] == message(10)[1] && bytes[5] == message(10)[5])
+}
+
+@test
+fn zeroingACopyLeavesTheOriginal() {
+    let original = message(10)
+    var copy = original
+    secureZero(&copy)
+    assert(original == message(10))
+    assert(copy == U8[>..](repeating: 0, count: 10))
+}

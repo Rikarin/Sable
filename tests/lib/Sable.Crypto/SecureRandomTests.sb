@@ -1,0 +1,45 @@
+module SecureRandomTests
+
+// SecureRandom (Sable.Crypto). Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+@test
+fn itGivesAsManyBytesAsAreAskedFor() {
+    for count in [0, 1, 7, 255, 256, 257, 1000, 100_000] {
+        assertEqual(SecureRandom.bytes(count).count, count)
+    }
+}
+
+// Every byte of a long run is as likely as any: none is missing from 100,000.
+@test
+fn everyByteComes() {
+    var seen = U8[>..](repeating: 0, count: 256)
+    for byte in SecureRandom.bytes(100_000) {
+        seen[Int(byte)] = 1
+    }
+    assert(!seen.contains(element: 0))
+}
+
+@test
+fn fillingReplacesEveryByte() {
+    var bytes = U8[>..](repeating: 0, count: 1000)
+    SecureRandom.fill(&bytes)
+    // Each 100 bytes of zeros left has a chance of one in 2^800.
+    var start = 0
+    while start < 1000 {
+        assert(bytes[start..<start + 100] != U8[>..](repeating: 0, count: 100)[0...])
+        start += 100
+    }
+    let before = bytes
+    SecureRandom.fill(&bytes[..<500])
+    assert(bytes[500...] == before[500...])
+    assert(bytes[..<500] != before[..<500])
+}
+
+@test
+fn noTwoAreAlike() {
+    assert(SecureRandom.bytes(32) != SecureRandom.bytes(32))
+}

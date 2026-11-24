@@ -552,8 +552,11 @@ public sealed partial class LlvmEmitter {
                                 declare i64 @sable_string_utf8_find_range(ptr, i64, i64, ptr, i64, i64)
                                 declare i64 @sable_string_utf8_find_last_range(ptr, i64, i64, ptr, i64, i64)
                                 @sable_hash_seed = external global i64
-                                declare i32 @getentropy(ptr, i64)
-                                declare i32 @rand_s(ptr)
+                                declare i64 @sable_random_bits()
+                                declare void @sable_random_fill(ptr, i64)
+                                declare void @sable_secure_zero(ptr, i64)
+                                declare zeroext i1 @sable_crypto_blocks(i64, ptr, ptr, i64, i64)
+                                declare zeroext i1 @sable_crypto_blocks_raw(i64, ptr, ptr, i64)
                                 declare ptr @sable_string_join(ptr, ptr)
                                 declare i64 @sable_string_compare(ptr, ptr)
                                 declare i64 @sable_string_find(ptr, ptr, i64)
@@ -4360,22 +4363,53 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = load i64, ptr @sable_hash_seed");
                     return;
 
-                // 64 bits from the operating system's random source: C's
-                // getentropy, or, on Windows, two of the CRT's rand_s.
-                case "random_bits": {
-                    var bits = Scratch("i64", 8);
-                    if (module._windows) {
-                        var high = Fresh();
-                        Line($"{Fresh()} = call i32 @rand_s(ptr {bits})");
-                        Line($"{high} = getelementptr i8, ptr {bits}, i64 4");
-                        Line($"{Fresh()} = call i32 @rand_s(ptr {high})");
-                    } else {
-                        Line($"{Fresh()} = call i32 @getentropy(ptr {bits}, i64 8)");
-                    }
+                // Bits, or bytes, from the operating system's random source:
+                // the runtime traps rather than give weak ones.
+                case "random_bits":
+                    Line($"{Result()} = call i64 @sable_random_bits()");
+                    return;
 
-                    Line($"{Result()} = load i64, ptr {bits}");
+                case "raw_random" or "raw_secure_zero": {
+                    var function = builtin.Name == "raw_random" ? "random_fill" : "secure_zero";
+                    Line($"call void @sable_{function}(ptr {RawAddress(operands[0])}, i64 {operands[1]})");
                     return;
                 }
+
+                // The same over a slice of bytes, made the only reference to
+                // its run first, as a write of its first byte would.
+                case "bytes_random" or "bytes_secure_zero": {
+                    var type = (SliceType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    var function = builtin.Name == "bytes_random" ? "random_fill" : "secure_zero";
+                    var slice = Fresh();
+                    var empty = Fresh();
+                    var any = NewLabel("bytes");
+                    var after = NewLabel("after");
+                    Line($"{slice} = load {Type(type)}, ptr {operands[0]}");
+                    var count = SlicePart(slice, type, 2);
+                    Line($"{empty} = icmp eq i64 {count}, 0");
+                    Line($"br i1 {empty}, label %{after}, label %{any}");
+                    Continue(any);
+                    var first = SliceMutableElement(operands[0], "0", type);
+                    Line($"call void @sable_{function}(ptr {first}, i64 {count})");
+                    Line($"br label %{after}");
+                    Continue(after);
+                    return;
+                }
+
+                // Whole blocks of a hash worked into the state at an address,
+                // by the processor's instructions where it has them.
+                case "crypto_blocks": {
+                    var type = (SliceType)builtin.Operands[2].Type;
+                    var buffer = SlicePart(operands[2], type, 0);
+                    var start = SlicePart(operands[2], type, 1);
+                    var count = SlicePart(operands[2], type, 2);
+                    Line($"{Result()} = call zeroext i1 @sable_crypto_blocks(i64 {operands[0]}, ptr {RawAddress(operands[1])}, ptr {buffer}, i64 {start}, i64 {count})");
+                    return;
+                }
+
+                case "crypto_blocks_raw":
+                    Line($"{Result()} = call zeroext i1 @sable_crypto_blocks_raw(i64 {operands[0]}, ptr {RawAddress(operands[1])}, ptr {RawAddress(operands[2])}, i64 {operands[3]})");
+                    return;
 
                 case "string_find":
                     Line($"{Result()} = call i64 @sable_string_find(ptr {operands[0]}, ptr {operands[1]}, i64 {operands[2]})");

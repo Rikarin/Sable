@@ -1,0 +1,100 @@
+module Sha512Tests
+
+// Sha512 (Sable.Crypto): the standard's messages, every length around
+// the blocks' ends, and every way of cutting a message in two. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+@test
+fn thePublishedMessagesHaveTheirDigests() {
+    assertEqual("\(Sha512.hash(utf8: ""))", "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e")
+    assertEqual("\(Sha512.hash(utf8: "abc"))", "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f")
+    assertEqual("\(Sha512.hash(utf8: "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"))", "8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018501d289e4900f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909")
+    assertEqual("\(Sha512.hash(U8[>..](repeating: 0x61, count: 1_000_000)))", "e718483d0ce769644e2e42c7bc15b4638e1f98b13b2044285632a803afa973ebde0ff244877ea60a4cb0432ce577c31beb009c5c2c49aa2e4eadb217ad8cc09b")
+}
+
+// Every length to past three blocks, its digest among those hashed here;
+// the digest of them all from Python's hashlib.
+@test
+fn everyLengthHasItsDigest() {
+    var all = Sha512()
+    var count = 0
+    while count < 386 {
+        all.update(Sha512.hash(message(count)).bytes)
+        count += 1
+    }
+    assertEqual("\(all.finalize())", "ada767eae824f240febf3002feff309cdf827cadc7a223c2709941423898ba8408cda1da1cb455b2cc2e9113498673edee402b11d491d79b6821e24d96fa9e28")
+}
+
+@test
+fn aMessageInTwoPartsIsTheWholeWhereverItIsCut() {
+    let whole = message(261)
+    let expected = Sha512.hash(whole)
+    var cut = 0
+    while cut <= whole.count {
+        var hash = Sha512()
+        hash.update(whole[..<cut])
+        hash.update(whole[cut...])
+        assert(hash.finalize() == expected)
+        cut += 1
+    }
+}
+
+@test
+fn aMessageAByteAtATimeIsTheWhole() {
+    let whole = message(261)
+    var hash = Sha512()
+    for byte in whole {
+        hash.update([byte])
+        hash.update([])
+    }
+    assert(hash.finalize() == Sha512.hash(whole))
+}
+
+@test
+fn finalizingLeavesTheFunctionToGoOn() {
+    let whole = message(137)
+    var hash = Sha512()
+    hash.update(whole[..<128])
+    assert(hash.finalize() == Sha512.hash(whole[..<128]))
+    assert(hash.finalize() == Sha512.hash(whole[..<128]))
+    hash.update(whole[128...])
+    assert(hash.finalize() == Sha512.hash(whole))
+}
+
+@test
+fn aCopyHashesOnByItself() {
+    let whole = message(137)
+    var first = Sha512()
+    first.update(whole[..<7])
+    var second = first
+    first.update(whole[7...])
+    second.update(whole[..<3])
+    assert(first.finalize() == Sha512.hash(whole))
+    assert(second.finalize() == Sha512.hash(joined(message(7), message(3))))
+}
+
+@test
+fn itsSizesAreTheStandards() {
+    assertEqual(Sha512.digestByteCount, 64)
+    assertEqual(Sha512.blockByteCount, 128)
+    assertEqual(Sha512.hash(message(3)).count, 64)
+}
+
+fn joined(_ a: U8[:], _ b: U8[:]) -> U8[>..] {
+    var bytes = a.toArray()
+    bytes.append(contentsOf: b)
+    return bytes
+}

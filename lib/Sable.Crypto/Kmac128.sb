@@ -1,0 +1,78 @@
+module Sable.Crypto
+
+/// KMAC128, SP 800-185: a message authentication code of any length from
+/// Keccak, its length part of what it authenticates — a shorter code is not
+/// the start of a longer one. A customization, text of the caller's, makes
+/// the codes of one use no good for another.
+///
+/// ```sable
+/// let key = SymmetricKey.random(byteCount: 16)
+/// let message: U8[>..] = [1, 2, 3]
+/// let code = Kmac128.authenticationCode(for: message, using: key)
+/// assert(code.count == 32)
+/// assert(Kmac128.isValid(code.bytes, for: message, using: key))
+/// assert(!Kmac128.isValid(code.bytes, for: [1, 2], using: key))
+/// ```
+public struct Kmac128: Sendable {
+    var sponge: Sponge
+
+    /// A code begun under the key, which should have at least 16 bytes.
+    public init(key: SymmetricKey, customization: U8[:] = []) {
+        sponge = kmacSponge(rate: 168, key: key, customization: customization)
+    }
+
+    /// Authenticates the bytes after those already given.
+    public mutating fn update(_ bytes: U8[:]) {
+        sponge.update(bytes)
+    }
+
+    /// The code, of so many bytes, of every byte given so far; more can
+    /// still be given.
+    public fn finalize(count: Int = 32) -> Digest {
+        precondition(count >= 0, "a code of \(count) bytes")
+        var ended = sponge
+        ended.update(kmacRightEncode((count * 8) unchecked as U64))
+        return Digest(ended.output(count: count))
+    }
+
+    /// KMACXOF128: output of a length that is not fixed beforehand, and that
+    /// the code does not cover.
+    ///
+    /// ```sable
+    /// let key = SymmetricKey.random(byteCount: 32)
+    /// var reader = Kmac128(key: key).reader()
+    /// assert(reader.read(count: 100) != reader.read(count: 100))
+    /// ```
+    public fn reader() -> OutputReader {
+        var ended = sponge
+        ended.update(kmacRightEncode(0))
+        return OutputReader(sponge: ended.finish(), rate: 168)
+    }
+
+    /// The code of the bytes, at once.
+    public static fn authenticationCode(
+        for bytes: U8[:],
+        using key: SymmetricKey,
+        count: Int = 32,
+        customization: U8[:] = []
+    ) -> Digest {
+        var code = Kmac128(key: key, customization: customization)
+        code.update(bytes)
+        return code.finalize(count: count)
+    }
+
+    /// Whether the code, of whatever length, is the bytes' under the key,
+    /// compared in constant time. One of fewer than 16 bytes never is.
+    public static fn isValid(
+        _ code: U8[:],
+        for bytes: U8[:],
+        using key: SymmetricKey,
+        customization: U8[:] = []
+    ) -> Bool {
+        if code.count < 16 {
+            return false
+        }
+        let expected = Kmac128.authenticationCode(for: bytes, using: key, count: code.count, customization: customization)
+        return constantTimeEquals(expected.bytes, code)
+    }
+}

@@ -1,0 +1,193 @@
+module Sable.Crypto
+
+/// scrypt, RFC 7914: a key from a password, slow and of as much memory as
+/// is asked for: 128 · cost · blockSize bytes. Argon2id is the newer design.
+///
+/// ```sable
+/// let scrypt = try! Scrypt(cost: 1024, blockSize: 8, parallelism: 1)
+/// let password = SymmetricKey([0x68, 0x75, 0x6E, 0x74])
+/// let key = try! scrypt.deriveKey(from: password, salt: SecureRandom.bytes(16), byteCount: 32)
+/// assert(key.byteCount == 32)
+/// let encoded = scrypt.hash(password: "correct horse")
+/// assert(try! PasswordHash.verify(password: "correct horse", against: encoded))
+/// ```
+public struct Scrypt: Sendable {
+    /// How much work, and memory, it is: a power of two. RFC 7914's N.
+    public let cost: Int
+
+    /// How long the blocks are that are mixed. RFC 7914's r.
+    public let blockSize: Int
+
+    /// How many times it is done, one after another. RFC 7914's p.
+    public let parallelism: Int
+
+    /// The parameters; OWASP asks for a cost of 2^17, with a block size of
+    /// 8. Throws for those scrypt is not defined for, and for those that
+    /// would take more memory than the limit.
+    public init(cost: Int = 131072, blockSize: Int = 8, parallelism: Int = 1, maximumMemory: Int = 1_073_741_824) throws(CryptoError) {
+        if cost < 2 || (cost & (cost - 1)) != 0 {
+            throw CryptoError.InvalidParameter(reason: "scrypt's cost must be a power of two greater than 1, not \(cost)")
+        }
+        if blockSize < 1 || parallelism < 1 || blockSize > 0x3FFF_FFFF || parallelism > 0x3FFF_FFFF / blockSize {
+            throw CryptoError.InvalidParameter(reason: "scrypt's block size and parallelism must be at least 1, and their product less than 2^30: \(blockSize) and \(parallelism)")
+        }
+        // The cost must be less than 2 to the power of 16 times the block size.
+        if blockSize < 4 && cost >> (16 * blockSize) != 0 {
+            throw CryptoError.InvalidParameter(reason: "a cost of \(cost) is too great for a block size of \(blockSize)")
+        }
+        // Blocks of 128 times the block size: the cost's, the
+        // parallelism's, and three to work in.
+        if cost > maximumMemory / (128 * blockSize) - parallelism - 3 {
+            throw CryptoError.LimitExceeded(reason: "scrypt with cost \(cost), block size \(blockSize) and parallelism \(parallelism) takes more than \(maximumMemory) bytes")
+        }
+        self.cost = cost
+        self.blockSize = blockSize
+        self.parallelism = parallelism
+    }
+
+    /// A key of so many bytes.
+    public fn deriveKey(from password: SymmetricKey, salt: U8[:], byteCount: Int) throws(CryptoError) -> SymmetricKey {
+        let length = 128 * blockSize
+        let blocks = try Pbkdf2<Sha256>.deriveKey(from: password, salt: salt, iterations: 1, byteCount: length * parallelism)
+        // The table, then the block it is mixed into, and one to work in.
+        let table = SecretMemory(count: length * cost)
+        let work = SecretMemory(count: length)
+        var lane = 0
+        while lane < parallelism {
+            unsafe {
+                mix(blocks.memory.address + length * lane, table.address, work.address)
+            }
+            lane += 1
+        }
+        var mixed = blocks.bytes()
+        let key = try Pbkdf2<Sha256>.deriveKey(from: password, salt: mixed, iterations: 1, byteCount: byteCount)
+        mixed.zeroSecurely()
+        return key
+    }
+
+    /// RFC 7914's scryptROMix, on the block at an address.
+    unsafe fn mix(_ block: Int, _ table: Int, _ work: Int) {
+        let length = 128 * blockSize
+        var i = 0
+        while i < cost {
+            NativeMemory.copy(from: RawPtr<U8>(address: block), to: RawPtr<U8>(address: table + length * i), byteCount: length)
+            mixBlock(block, work)
+            i += 1
+        }
+        i = 0
+        while i < cost {
+            // The first word of the block's last 64 bytes says which to mix in.
+            let chosen = table + length * ((load64(block + length - 64) & ((cost - 1) unchecked as U64)) unchecked as Int)
+            var j = 0
+            while j < length {
+                store64(load64(block + j) ^ load64(chosen + j), block + j)
+                j += 8
+            }
+            mixBlock(block, work)
+            i += 1
+        }
+    }
+
+    /// RFC 7914's scryptBlockMix, on the block at an address.
+    unsafe fn mixBlock(_ block: Int, _ work: Int) {
+        let length = 128 * blockSize
+        var last = block + length - 64
+        var i = 0
+        while i < 2 * blockSize {
+            // Even ones to the first half, odd ones to the second.
+            let target = work + 64 * ((i >> 1) + (i & 1) * blockSize)
+            salsaBlock(last, block + 64 * i, target)
+            last = target
+            i += 1
+        }
+        NativeMemory.copy(from: RawPtr<U8>(address: work), to: RawPtr<U8>(address: block), byteCount: length)
+    }
+}
+
+/// Salsa20/8 of two 64-byte blocks combined by exclusive or.
+unsafe fn salsaBlock(_ a: Int, _ b: Int, _ target: Int) {
+    let y0 = load32(a) ^ load32(b)
+    let y1 = load32(a + 4) ^ load32(b + 4)
+    let y2 = load32(a + 8) ^ load32(b + 8)
+    let y3 = load32(a + 12) ^ load32(b + 12)
+    let y4 = load32(a + 16) ^ load32(b + 16)
+    let y5 = load32(a + 20) ^ load32(b + 20)
+    let y6 = load32(a + 24) ^ load32(b + 24)
+    let y7 = load32(a + 28) ^ load32(b + 28)
+    let y8 = load32(a + 32) ^ load32(b + 32)
+    let y9 = load32(a + 36) ^ load32(b + 36)
+    let y10 = load32(a + 40) ^ load32(b + 40)
+    let y11 = load32(a + 44) ^ load32(b + 44)
+    let y12 = load32(a + 48) ^ load32(b + 48)
+    let y13 = load32(a + 52) ^ load32(b + 52)
+    let y14 = load32(a + 56) ^ load32(b + 56)
+    let y15 = load32(a + 60) ^ load32(b + 60)
+    var x0 = y0
+    var x1 = y1
+    var x2 = y2
+    var x3 = y3
+    var x4 = y4
+    var x5 = y5
+    var x6 = y6
+    var x7 = y7
+    var x8 = y8
+    var x9 = y9
+    var x10 = y10
+    var x11 = y11
+    var x12 = y12
+    var x13 = y13
+    var x14 = y14
+    var x15 = y15
+    var round = 0
+    while round < 4 {
+        x4 = x4 ^ (x0 &+ x12).rotatedLeft(by: 7)
+        x8 = x8 ^ (x4 &+ x0).rotatedLeft(by: 9)
+        x12 = x12 ^ (x8 &+ x4).rotatedLeft(by: 13)
+        x0 = x0 ^ (x12 &+ x8).rotatedLeft(by: 18)
+        x9 = x9 ^ (x5 &+ x1).rotatedLeft(by: 7)
+        x13 = x13 ^ (x9 &+ x5).rotatedLeft(by: 9)
+        x1 = x1 ^ (x13 &+ x9).rotatedLeft(by: 13)
+        x5 = x5 ^ (x1 &+ x13).rotatedLeft(by: 18)
+        x14 = x14 ^ (x10 &+ x6).rotatedLeft(by: 7)
+        x2 = x2 ^ (x14 &+ x10).rotatedLeft(by: 9)
+        x6 = x6 ^ (x2 &+ x14).rotatedLeft(by: 13)
+        x10 = x10 ^ (x6 &+ x2).rotatedLeft(by: 18)
+        x3 = x3 ^ (x15 &+ x11).rotatedLeft(by: 7)
+        x7 = x7 ^ (x3 &+ x15).rotatedLeft(by: 9)
+        x11 = x11 ^ (x7 &+ x3).rotatedLeft(by: 13)
+        x15 = x15 ^ (x11 &+ x7).rotatedLeft(by: 18)
+        x1 = x1 ^ (x0 &+ x3).rotatedLeft(by: 7)
+        x2 = x2 ^ (x1 &+ x0).rotatedLeft(by: 9)
+        x3 = x3 ^ (x2 &+ x1).rotatedLeft(by: 13)
+        x0 = x0 ^ (x3 &+ x2).rotatedLeft(by: 18)
+        x6 = x6 ^ (x5 &+ x4).rotatedLeft(by: 7)
+        x7 = x7 ^ (x6 &+ x5).rotatedLeft(by: 9)
+        x4 = x4 ^ (x7 &+ x6).rotatedLeft(by: 13)
+        x5 = x5 ^ (x4 &+ x7).rotatedLeft(by: 18)
+        x11 = x11 ^ (x10 &+ x9).rotatedLeft(by: 7)
+        x8 = x8 ^ (x11 &+ x10).rotatedLeft(by: 9)
+        x9 = x9 ^ (x8 &+ x11).rotatedLeft(by: 13)
+        x10 = x10 ^ (x9 &+ x8).rotatedLeft(by: 18)
+        x12 = x12 ^ (x15 &+ x14).rotatedLeft(by: 7)
+        x13 = x13 ^ (x12 &+ x15).rotatedLeft(by: 9)
+        x14 = x14 ^ (x13 &+ x12).rotatedLeft(by: 13)
+        x15 = x15 ^ (x14 &+ x13).rotatedLeft(by: 18)
+        round += 1
+    }
+    store32(x0 &+ y0, target)
+    store32(x1 &+ y1, target + 4)
+    store32(x2 &+ y2, target + 8)
+    store32(x3 &+ y3, target + 12)
+    store32(x4 &+ y4, target + 16)
+    store32(x5 &+ y5, target + 20)
+    store32(x6 &+ y6, target + 24)
+    store32(x7 &+ y7, target + 28)
+    store32(x8 &+ y8, target + 32)
+    store32(x9 &+ y9, target + 36)
+    store32(x10 &+ y10, target + 40)
+    store32(x11 &+ y11, target + 44)
+    store32(x12 &+ y12, target + 48)
+    store32(x13 &+ y13, target + 52)
+    store32(x14 &+ y14, target + 56)
+    store32(x15 &+ y15, target + 60)
+}

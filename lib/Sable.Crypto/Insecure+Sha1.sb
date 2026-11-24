@@ -1,0 +1,35 @@
+module Sable.Crypto
+
+extension Insecure {
+    /// SHA-1, FIPS 180-4: a 20-byte digest. Collisions have been found: for old
+    /// formats and protocols only (Git's names, a WebSocket's handshake).
+    ///
+    /// ```sable
+    /// assert("\(Insecure.Sha1.hash(utf8: "abc"))" == "a9993e364706816aba3e25717850c26c9cd0d89d")
+    /// ```
+    public struct Sha1: HashFunction {
+        var state: BlockState<Sha1Blocks>
+
+        public init() {
+            state = BlockState<Sha1Blocks>(initial: Insecure.Sha1.initialState)
+        }
+
+        static let initialState: U32[>..] = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0]
+
+        public static var digestByteCount: Int => 20
+
+        public static var blockByteCount: Int => 64
+
+        public mutating fn update(_ bytes: U8[:]) {
+            state.update(bytes)
+        }
+
+        public fn finalize() -> Digest {
+            return bigEndianDigest32(state.finish(), count: 20)
+        }
+
+        public static fn iterateHmac(inner: Insecure.Sha1, outer: Insecure.Sha1, first: U8[:], iterations: Int) -> U8[>..] {
+            return BlockState<Sha1Blocks>.iterateHmac(inner: inner.state, outer: outer.state, first: first, iterations: iterations)
+        }
+    }
+}

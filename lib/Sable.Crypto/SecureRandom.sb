@@ -1,0 +1,35 @@
+module Sable.Crypto
+
+/// Bytes no one can predict, from the system: for keys, salts, nonces and
+/// tokens. The source is the one `SystemRandomNumberGenerator` draws from —
+/// getentropy on macOS and Linux, BCryptGenRandom on Windows, random_get on
+/// WASI — and a program it fails for is stopped, never given weaker bytes.
+/// .NET's `RandomNumberGenerator`.
+///
+/// ```sable
+/// let salt = SecureRandom.bytes(16)
+/// assert(salt.count == 16 && salt != SecureRandom.bytes(16))
+/// ```
+public struct SecureRandom {
+    private init() { }
+
+    /// So many random bytes.
+    public static fn bytes(_ count: Int) -> U8[>..] {
+        precondition(count >= 0, "\(count) random bytes")
+        var bytes: U8[>..] = []
+        bytes.append(repeating: 0, count: count)
+        bytes.fillRandomly()
+        return bytes
+    }
+
+    /// Every byte replaced by a random one.
+    ///
+    /// ```sable
+    /// var nonce = U8[>..](repeating: 0, count: 24)
+    /// SecureRandom.fill(&nonce)
+    /// assert(nonce != U8[>..](repeating: 0, count: 24))
+    /// ```
+    public static fn fill(_ bytes: inout U8[:]) {
+        bytes.fillRandomly()
+    }
+}

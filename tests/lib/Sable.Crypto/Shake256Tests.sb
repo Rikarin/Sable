@@ -1,0 +1,74 @@
+module Shake256Tests
+
+// Shake256 (Sable.Crypto): FIPS 202's empty message, every length of
+// message and output, and output read in parts. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+@test
+fn theEmptyMessageHasItsOutput() {
+    assertEqual("\(Digest(Shake256().finalize(count: 32)))", "46b9dd2b0ba88d13233b3feb743eeb243fcd52ea62b81b82b50c27646ed5762f")
+}
+
+// The outputs' digest is from Python's hashlib.
+@test
+fn everyLengthOfMessageAndOutputHasItsBytes() {
+    var all = Sha256()
+    var count = 0
+    while count < 275 {
+        all.update(Shake256.hash(message(count), count: count))
+        count += 1
+    }
+    assertEqual("\(all.finalize())", "5a1be71bc9c090cba2d2656f9a5eb0f146363d2b1f62b125ed899d03ba2d1811")
+}
+
+@test
+fn outputReadInPartsIsTheWhole() {
+    let whole = Shake256.hash(message(10), count: 500)
+    var shake = Shake256()
+    for byte in message(10) {
+        shake.update([byte])
+    }
+    var step = 1
+    while step <= 340 {
+        var reader = shake.reader()
+        var parts: U8[>..] = []
+        while parts.count + step <= 500 {
+            parts.append(contentsOf: reader.read(count: step))
+        }
+        assert(whole.starts(with: parts))
+        step += 13
+    }
+}
+
+@test
+fn aMessageGoesOnAfterItsOutputIsRead() {
+    var shake = Shake256()
+    shake.update(message(100)[..<60])
+    var first = shake.reader()
+    var copy = first
+    assert(first.read(count: 20) == copy.read(count: 20))
+    shake.update(message(100)[60...])
+    assert(shake.finalize(count: 20) == Shake256.hash(message(100), count: 20))
+}
+
+@test
+fn textIsHashedAsItsUtf8Bytes() {
+    var shake = Shake256()
+    shake.update(utf8: "abc")
+    assert(shake.finalize(count: 9) == Shake256.hash([0x61, 0x62, 0x63], count: 9))
+    assert(shake.finalize(count: 9) == Shake256.hash(utf8: "abc", count: 9))
+    assert(shake.finalize(count: 0).count == 0)
+}

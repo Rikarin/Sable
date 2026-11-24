@@ -1,0 +1,47 @@
+module Pbkdf2Tests
+
+// Pbkdf2 (Sable.Crypto): RFC 6070's cases, and every function against
+// Python's hashlib. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn derive<H: HashFunction>(_ function: H.Type, _ password: String, _ salt: String, _ iterations: Int, _ count: Int) -> String {
+    var secret: U8[>..] = []
+    secret.append(utf8: password)
+    var salted: U8[>..] = []
+    salted.append(utf8: salt)
+    let key = try! Pbkdf2<H>.deriveKey(from: SymmetricKey(secret), salt: salted, iterations: iterations, byteCount: count)
+    return "\(Digest(key.bytes()))"
+}
+
+// RFC 6070's, of SHA-1, and RFC 7914's, of SHA-256.
+@test
+fn theStandardsCasesHaveTheirKeys() {
+    assertEqual(derive(Insecure.Sha1.self, "password", "salt", 1, 20), "0c60c80f961f0e71f3a9b524af6012062fe037a6")
+    assertEqual(derive(Insecure.Sha1.self, "password", "salt", 2, 20), "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957")
+    assertEqual(derive(Insecure.Sha1.self, "password", "salt", 4096, 20), "4b007901b765489abead49d926f721d065a429c1")
+    assertEqual(derive(Insecure.Sha1.self, "passwordPASSWORDpassword", "saltSALTsaltSALTsaltSALTsaltSALTsalt", 4096, 25), "3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038")
+    assertEqual(derive(Sha256.self, "passwd", "salt", 1, 64), "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783")
+}
+
+// Against Python's hashlib: the library's loop for SHA-1 and SHA-2, and every
+// other function's.
+@test
+fn everyFunctionHasItsKey() {
+    assertEqual(derive(Sha256.self, "pass", "salt", 100, 100), "509c2e9b78030983b83a793c35784e4e7c285d4b7ca61fab22c659168d57a97da256cb8822ae4dae5d88868d93a456ac1bfeabd35799e9a6773bbc897c7cfc81183b3a8f232163d8a287508143edeca646a07926e2a39caa7051677958316be1ce95c7f2")
+    assertEqual(derive(Sha384.self, "pass", "salt", 100, 100), "b057a946429bd209ff90d0168088480670e74dea14643dd9ce0469aa6e6d3e0dcbeae1a676fe133f3520a457de3d03bb90e8773a2e38e819be8ca1d2f4cb749748d14109b996b0dc98caf9259f4c8f932618b5907ad7a2293f6cb2c3716eda1a088f8df1")
+    assertEqual(derive(Sha512.self, "pass", "salt", 100, 100), "787c6c657ccc5ce7af134a1abea00a3604560353d7828874d9765a5a27568cef1cac97412403d55fdad183c99a829df6b216ef93f71634328f3c9a6c1b595f91f4d035a2d9a80b2130c1d326e3ece137bc1a828b33962cfedb2ed30b42013bd25761ce5f")
+    assertEqual(derive(Sha3_256.self, "pass", "salt", 100, 100), "727d59fc8dfe8d44376f6e4bfc83bde16d99a05f2edf8b52d24f814dc70301af80565511dd440f393c2a536f13fc46648b791b44f146d0e0ff281b1a8773b3c087d6c4581f6b65c3f3115c9fa7c40b31fdd6a2f61f7459b9f9891a0212973c710f933b59")
+    assertEqual(derive(Insecure.Md5.self, "pass", "salt", 100, 100), "e2495ed2b496f291d6b41b5e3763b11bc1735d01c1a65b509a51672ac23b6c528aaf42a6757dc72a378ba3f379764099171f63c9fc4020a380d03bcf9a77bf2b38bc05ae278449c0710122d49b2080a3269e1414ae6e04d01eec4c09073c78c03b386c60")
+}
+
+@test
+fn noIterationsAndNoBytesAreRefused() {
+    let secret = SymmetricKey([1])
+    assert((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: 0, byteCount: 1)) == none)
+    assert((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: -1, byteCount: 1)) == none)
+    assert((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: 1, byteCount: 0)) == none)
+    assert((try? Pbkdf2<Sha256>.deriveKey(from: secret, salt: [1], iterations: 1, byteCount: Int.max)) == none)
+}

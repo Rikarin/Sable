@@ -1,0 +1,52 @@
+module HkdfTests
+
+// Hkdf (Sable.Crypto): RFC 5869's first case, and keys of many lengths
+// against OpenSSL's. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+// RFC 5869, appendix A.1.
+@test
+fn theStandardsCaseHasItsKey() {
+    let secret = SymmetricKey(U8[>..](repeating: 0x0B, count: 22))
+    let salt: U8[>..] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    let info: U8[>..] = [0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9]
+    let extracted = Hkdf<Sha256>.extract(secret, salt: salt)
+    assertEqual("\(Digest(extracted.bytes()))", "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5")
+    let key = try! Hkdf<Sha256>.deriveKey(from: secret, salt: salt, info: info, byteCount: 42)
+    assertEqual("\(Digest(key.bytes()))", "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865")
+    assert((try! Hkdf<Sha256>.expand(extracted, info: info, byteCount: 42)) == key)
+}
+
+@test
+fn everyLengthHasItsKey() {
+    var all = Sha256()
+    var i = 0
+    while i < 80 {
+        let key = try! Hkdf<Sha512>.deriveKey(from: SymmetricKey(message(i + 1)), salt: message(i), info: message(2 * i), byteCount: 3 * i + 1)
+        all.update(key.bytes())
+        i += 1
+    }
+    assertEqual("\(all.finalize())", "a7322bea490804d48fdb3df406f920d67008f19b7a9f5df4e9859671fd63afd1")
+}
+
+@test
+fn aKeyOfMoreThan255DigestsIsRefused() {
+    let secret = SymmetricKey(message(32))
+    assertEqual((try! Hkdf<Sha256>.deriveKey(from: secret, byteCount: 255 * 32)).byteCount, 255 * 32)
+    assertEqual((try! Hkdf<Sha256>.deriveKey(from: secret, byteCount: 0)).byteCount, 0)
+    assert((try? Hkdf<Sha256>.deriveKey(from: secret, byteCount: 255 * 32 + 1)) == none)
+    assert((try? Hkdf<Sha256>.deriveKey(from: secret, byteCount: -1)) == none)
+}

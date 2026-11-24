@@ -1,0 +1,81 @@
+module Sable.Crypto
+
+/// Reads what an extendable-output function gives, from its start, as much
+/// as is asked for. A value: a copy reads on from where the copy was made.
+///
+/// ```sable
+/// var reader = Shake256().reader()
+/// let first = reader.read(count: 10)
+/// let next = reader.read(count: 10)
+/// let whole = Shake256().finalize(count: 20)
+/// assert(first == whole[..<10] && next == whole[10...])
+/// ```
+public struct OutputReader: Sendable {
+    // A finished sponge's state, whose first 'size' bytes are output, then a
+    // block of zeros; or a tree's root, its chaining value and block, then
+    // the 64 bytes of output last worked out.
+    var box: SecretBox
+    let tree: Bool
+    let size: Int
+    var used: Int
+
+    // What the tree's root is compressed with, and how many times it was.
+    let length: U32
+    let flags: U32
+    var next: U64
+
+    /// Reads a finished sponge.
+    init(sponge memory: SecretMemory, rate: Int) {
+        box = SecretBox(memory: memory)
+        tree = false
+        size = rate
+        used = 0
+        length = 0
+        flags = 0
+        next = 0
+    }
+
+    /// Reads a finished tree, its root's block compressed once for each 64 bytes.
+    init(tree memory: SecretMemory, length: U32, flags: U32) {
+        box = SecretBox(memory: memory)
+        tree = true
+        size = 64
+        used = 64
+        self.length = length
+        self.flags = flags
+        next = 0
+    }
+
+    /// The next so many bytes.
+    public mutating fn read(count: Int) -> U8[>..] {
+        precondition(count >= 0, "\(count) bytes of output")
+        var bytes: U8[>..] = []
+        bytes.reserveCapacity(count)
+        while bytes.count < count {
+            let memory = box.mutableAddress()
+            if used == size {
+                advance(memory)
+            }
+            let wanted = count - bytes.count
+            let taken = size - used < wanted ? size - used : wanted
+            unsafe {
+                appendBytes(to: &bytes, from: memory + (tree ? 96 : 0) + used, count: taken)
+            }
+            used += taken
+        }
+        return bytes
+    }
+
+    /// The output after what is used up, worked out.
+    mutating fn advance(_ memory: Int) {
+        unsafe {
+            if tree {
+                compressBlake3(memory, memory + 32, counter: next, length: length, flags: flags, to: memory + 96, extended: true)
+                next = next &+ 1
+            } else if !Native.blocks(Native.keccak(rate: size), memory, at: memory + 200, count: size) {
+                permuteKeccak(memory)
+            }
+        }
+        used = 0
+    }
+}

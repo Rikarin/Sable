@@ -1,0 +1,65 @@
+module Sable.Crypto
+
+/// HKDF, RFC 5869: keys derived from a secret that is strong already — a
+/// shared secret, another key. It is far too quick for passwords, which are
+/// Argon2id's.
+///
+/// ```sable
+/// let master = SymmetricKey.random(byteCount: 32)
+/// let a = try! Hkdf<Sha256>.deriveKey(from: master, info: [1], byteCount: 32)
+/// let b = try! Hkdf<Sha256>.deriveKey(from: master, info: [2], byteCount: 32)
+/// assert(a.byteCount == 32 && a != b)
+/// ```
+public struct Hkdf<H: HashFunction> {
+    private init() { }
+
+    /// A key of so many bytes: extracted from the secret under the salt,
+    /// which need not be secret, and expanded for what the info says it is
+    /// for. At most 255 digests' bytes.
+    public static fn deriveKey(
+        from secret: SymmetricKey,
+        salt: U8[:] = [],
+        info: U8[:] = [],
+        byteCount: Int
+    ) throws(CryptoError) -> SymmetricKey {
+        return try Hkdf<H>.expand(Hkdf<H>.extract(secret, salt: salt), info: info, byteCount: byteCount)
+    }
+
+    /// The first step: the secret made a key of a digest's length.
+    public static fn extract(_ secret: SymmetricKey, salt: U8[:] = []) -> SymmetricKey {
+        var code = Hmac<H>(secret: salt)
+        var bytes = secret.bytes()
+        code.update(bytes)
+        bytes.zeroSecurely()
+        return SymmetricKey(code.finalize().bytes)
+    }
+
+    /// The second: a key of a digest's length, or any strong one, made a key
+    /// of so many bytes for what the info says it is for.
+    public static fn expand(_ key: SymmetricKey, info: U8[:] = [], byteCount: Int) throws(CryptoError) -> SymmetricKey {
+        if byteCount < 0 || byteCount > 255 * H.digestByteCount {
+            throw CryptoError.InvalidParameter(reason: "HKDF derives at most \(255 * H.digestByteCount) bytes with this hash, not \(byteCount)")
+        }
+        let keyed = Hmac<H>(key: key)
+        let derived = SecretMemory(count: byteCount)
+        var block: U8[>..] = []
+        var at = 0
+        var counter = 1
+        while at < byteCount {
+            var code = keyed
+            code.update(block)
+            code.update(info)
+            code.update([counter unchecked as U8])
+            block.zeroSecurely()
+            block = code.finalize().bytes
+            let taken = block.count < byteCount - at ? block.count : byteCount - at
+            unsafe {
+                store(block[..<taken], at: derived.address + at)
+            }
+            at += taken
+            counter += 1
+        }
+        block.zeroSecurely()
+        return SymmetricKey(memory: derived)
+    }
+}

@@ -1,0 +1,31 @@
+module Sable.Crypto
+
+extension Insecure {
+    /// MD5, RFC 1321: a 16-byte digest. Collisions take seconds to find: for
+    /// old formats and protocols only, never where anyone could gain by one.
+    ///
+    /// ```sable
+    /// assert("\(Insecure.Md5.hash(utf8: "abc"))" == "900150983cd24fb0d6963f7d28e17f72")
+    /// ```
+    public struct Md5: HashFunction {
+        var state: BlockState<Md5Blocks>
+
+        public init() {
+            state = BlockState<Md5Blocks>(initial: Insecure.Md5.initialState)
+        }
+
+        static let initialState: U32[>..] = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476]
+
+        public static var digestByteCount: Int => 16
+
+        public static var blockByteCount: Int => 64
+
+        public mutating fn update(_ bytes: U8[:]) {
+            state.update(bytes)
+        }
+
+        public fn finalize() -> Digest {
+            return Digest(state.finish().bytes(from: 0, count: 16))
+        }
+    }
+}

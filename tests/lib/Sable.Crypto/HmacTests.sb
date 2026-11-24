@@ -1,0 +1,87 @@
+module HmacTests
+
+// Hmac (Sable.Crypto): RFC 4231's cases, every length of key, and codes
+// checked. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+fn digestOfAll<H: HashFunction>(_ function: H.Type) -> String {
+    var all = Sha256()
+    var count = 0
+    while count < 150 {
+        let key = SymmetricKey(message(count * 2))
+        all.update(Hmac<H>.authenticationCode(for: message(count), using: key).bytes)
+        count += 1
+    }
+    return "\(all.finalize())"
+}
+
+// Keys from none to past two blocks; the codes hashed together, as Python's
+// hmac gives them.
+@test
+fn everyKeyLengthHasItsCode() {
+    assertEqual(digestOfAll(Sha256.self), "6ce8f553228028b5611fff26c228e3a19feee585fb6ed8db7903bce54534a582")
+    assertEqual(digestOfAll(Sha384.self), "e4fe09f3648643ea6a553ec76132345d9a47634c7d257c942489d1419819239c")
+    assertEqual(digestOfAll(Sha512.self), "752b381e8c8f754f66bac2abfedc1a9b6dce391ff5e1105c23dddba6f650c5bd")
+    assertEqual(digestOfAll(Sha3_256.self), "1fa1263ff290dfd4755a295763517d7841b6c5b647a73883be9d1c336ac96a63")
+    assertEqual(digestOfAll(Insecure.Md5.self), "c53aaf69974e8ad4b1e277c288356fa2e3eaf42c32e52fe3340c088e80ac282e")
+    assertEqual(digestOfAll(Insecure.Sha1.self), "8db91969e96c40aa6fa992bc04e49dc9ae9776fb867cb583db4d0be6cf8e301c")
+    assertEqual(digestOfAll(Blake2b.self), "fb0dbc2aed87d19c5da115b418c5a64a52a7fa1bd2685fdaa34ff4798298b290")
+}
+
+// RFC 4231's cases 1, 2 and 6.
+@test
+fn theStandardsCasesHaveTheirCodes() {
+    assertEqual(code(U8[>..](repeating: 11, count: 20), "Hi There"), "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7")
+    assertEqual(code([74, 101, 102, 101], "what do ya want for nothing?"), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
+    assertEqual(code(U8[>..](repeating: 170, count: 131), "Test Using Larger Than Block-Size Key - Hash Key First"), "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54")
+}
+
+fn code(_ key: U8[:], _ text: String) -> String {
+    var code = Hmac<Sha256>(key: SymmetricKey(key))
+    code.update(utf8: text)
+    return "\(code.finalize())"
+}
+
+@test
+fn aCodeIsValidForItsBytesAndKeyAlone() {
+    let key = SymmetricKey(message(32))
+    let code = Hmac<Sha256>.authenticationCode(for: message(50), using: key)
+    assert(Hmac<Sha256>.isValid(code, for: message(50), using: key))
+    assert(Hmac<Sha256>.isValid(code.bytes, for: message(50), using: key))
+    assert(!Hmac<Sha256>.isValid(code, for: message(49), using: key))
+    assert(!Hmac<Sha256>.isValid(code, for: message(50), using: SymmetricKey(message(31))))
+    assert(!Hmac<Sha256>.isValid(code.bytes[..<16], for: message(50), using: key))
+    assert(!Hmac<Sha256>.isValid([], for: message(50), using: key))
+    var i = 0
+    while i < 32 {
+        var wrong = code.bytes
+        wrong[i] = wrong[i] ^ 0x80
+        assert(!Hmac<Sha256>.isValid(wrong, for: message(50), using: key))
+        i += 1
+    }
+}
+
+@test
+fn aCodeInPartsIsTheWholes() {
+    let key = SymmetricKey(message(40))
+    var code = Hmac<Sha512>(key: key)
+    code.update(message(300)[..<100])
+    let begun = code
+    assert(code.finalize() == Hmac<Sha512>.authenticationCode(for: message(100), using: key))
+    code.update(message(300)[100...])
+    assert(code.finalize() == Hmac<Sha512>.authenticationCode(for: message(300), using: key))
+    assert(begun.finalize() == Hmac<Sha512>.authenticationCode(for: message(100), using: key))
+}

@@ -1,0 +1,119 @@
+module Blake2bTests
+
+// Blake2b (Sable.Crypto): the standard's messages, every length around
+// the blocks' ends, and every way of cutting a message in two. Run with
+//     tools/stdlib-coverage.sh Sable.Crypto
+
+import Sable.Crypto
+import Sable.Testing
+
+fn message(_ count: Int) -> U8[>..] {
+    var bytes: U8[>..] = []
+    var i = 0
+    while i < count {
+        bytes.append(U8((i * 7 + 3) & 0xFF))
+        i += 1
+    }
+    return bytes
+}
+
+@test
+fn thePublishedMessagesHaveTheirDigests() {
+    assertEqual("\(Blake2b.hash(utf8: ""))", "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce")
+    assertEqual("\(Blake2b.hash(utf8: "abc"))", "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923")
+}
+
+// Every length to past three blocks, its digest among those hashed here;
+// the digest of them all from Python's hashlib.
+@test
+fn everyLengthHasItsDigest() {
+    var all = Blake2b()
+    var count = 0
+    while count < 386 {
+        all.update(Blake2b.hash(message(count)).bytes)
+        count += 1
+    }
+    assertEqual("\(all.finalize())", "9da0c2641725191045877ccf72c3db1fec97d1eec631f0c6f3c046c69a236ca450504a1756916f17773defc3382b3e021cfbc2799131e0bd9530f5679cdc936e")
+}
+
+@test
+fn aMessageInTwoPartsIsTheWholeWhereverItIsCut() {
+    let whole = message(261)
+    let expected = Blake2b.hash(whole)
+    var cut = 0
+    while cut <= whole.count {
+        var hash = Blake2b()
+        hash.update(whole[..<cut])
+        hash.update(whole[cut...])
+        assert(hash.finalize() == expected)
+        cut += 1
+    }
+}
+
+@test
+fn aMessageAByteAtATimeIsTheWhole() {
+    let whole = message(261)
+    var hash = Blake2b()
+    for byte in whole {
+        hash.update([byte])
+        hash.update([])
+    }
+    assert(hash.finalize() == Blake2b.hash(whole))
+}
+
+@test
+fn finalizingLeavesTheFunctionToGoOn() {
+    let whole = message(137)
+    var hash = Blake2b()
+    hash.update(whole[..<128])
+    assert(hash.finalize() == Blake2b.hash(whole[..<128]))
+    assert(hash.finalize() == Blake2b.hash(whole[..<128]))
+    hash.update(whole[128...])
+    assert(hash.finalize() == Blake2b.hash(whole))
+}
+
+@test
+fn aCopyHashesOnByItself() {
+    let whole = message(137)
+    var first = Blake2b()
+    first.update(whole[..<7])
+    var second = first
+    first.update(whole[7...])
+    second.update(whole[..<3])
+    assert(first.finalize() == Blake2b.hash(whole))
+    assert(second.finalize() == Blake2b.hash(joined(message(7), message(3))))
+}
+
+@test
+fn itsSizesAreTheStandards() {
+    assertEqual(Blake2b.digestByteCount, 64)
+    assertEqual(Blake2b.blockByteCount, 128)
+    assertEqual(Blake2b.hash(message(3)).count, 64)
+}
+
+fn joined(_ a: U8[:], _ b: U8[:]) -> U8[>..] {
+    var bytes = a.toArray()
+    bytes.append(contentsOf: b)
+    return bytes
+}
+
+// Every size of digest with every size of key, from Python's hashlib.
+@test
+fn everyDigestSizeAndKeySizeHasItsDigest() {
+    var all = Blake2b()
+    var count = 0
+    while count < 300 {
+        var hash = Blake2b(digestByteCount: 1 + count % 64, key: SymmetricKey(message(count % 65)))
+        hash.update(message(count))
+        all.update(hash.finalize().bytes)
+        count += 1
+    }
+    assertEqual("\(all.finalize())", "65829fe5b28075e8d0638d025ef8ffd8946a8d680578c31abcc47b00e509d3aa0156f5b69f0b86473d036f0723fcf9a9bd8f02b0d738f8fce4a7e110af61c53c")
+}
+
+@test
+fn aShorterDigestIsNotTheStartOfALonger() {
+    let short = Blake2b(digestByteCount: 32).finalize()
+    assertEqual(short.count, 32)
+    assert(!Blake2b().finalize().bytes.starts(with: short.bytes))
+}

@@ -1,0 +1,82 @@
+module Sable.Crypto
+
+/// SHA-1's compression function.
+struct Sha1Blocks: BlockHash {
+    static var blockBytes: Int => 64
+
+    static var stateBytes: Int => 20
+
+    static var lengthBytes: Int => 8
+
+    static var bigEndianLength: Bool => true
+
+    static var kernel: Int => 0
+
+    unsafe static fn compress(state: Int, block: Int) {
+        let w = block + blockBytes
+        var t = 0
+        while t < 16 {
+            store32(load32(block + 4 * t).byteSwapped, w + 4 * t)
+            t += 1
+        }
+        var a = load32(state)
+        var b = load32(state + 4)
+        var c = load32(state + 8)
+        var d = load32(state + 12)
+        var e = load32(state + 16)
+        t = 0
+        while t < 20 {
+            let next = a.rotatedLeft(by: 5) &+ (d ^ (b & (c ^ d))) &+ e &+ 0x5A827999 &+ Sha1Blocks.scheduled(w, t)
+            e = d
+            d = c
+            c = b.rotatedLeft(by: 30)
+            b = a
+            a = next
+            t += 1
+        }
+        while t < 40 {
+            let next = a.rotatedLeft(by: 5) &+ (b ^ c ^ d) &+ e &+ 0x6ED9EBA1 &+ Sha1Blocks.scheduled(w, t)
+            e = d
+            d = c
+            c = b.rotatedLeft(by: 30)
+            b = a
+            a = next
+            t += 1
+        }
+        while t < 60 {
+            let next = a.rotatedLeft(by: 5) &+ ((b & c) | (d & (b | c))) &+ e &+ 0x8F1BBCDC &+ Sha1Blocks.scheduled(w, t)
+            e = d
+            d = c
+            c = b.rotatedLeft(by: 30)
+            b = a
+            a = next
+            t += 1
+        }
+        while t < 80 {
+            let next = a.rotatedLeft(by: 5) &+ (b ^ c ^ d) &+ e &+ 0xCA62C1D6 &+ Sha1Blocks.scheduled(w, t)
+            e = d
+            d = c
+            c = b.rotatedLeft(by: 30)
+            b = a
+            a = next
+            t += 1
+        }
+        store32(load32(state) &+ a, state)
+        store32(load32(state + 4) &+ b, state + 4)
+        store32(load32(state + 8) &+ c, state + 8)
+        store32(load32(state + 12) &+ d, state + 12)
+        store32(load32(state + 16) &+ e, state + 16)
+    }
+
+    /// The schedule's word of a round, worked out in the window of sixteen.
+    @inline(always)
+    unsafe static fn scheduled(_ w: Int, _ t: Int) -> U32 {
+        let at = w + 4 * (t & 15)
+        if t < 16 {
+            return load32(at)
+        }
+        let word = load32(w + 4 * ((t + 13) & 15)) ^ load32(w + 4 * ((t + 8) & 15)) ^ load32(w + 4 * ((t + 2) & 15)) ^ load32(at)
+        store32(word.rotatedLeft(by: 1), at)
+        return word.rotatedLeft(by: 1)
+    }
+}

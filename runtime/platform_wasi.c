@@ -343,7 +343,24 @@ static char *executable_path(int argc, char **argv) {
 // ---- Randomness ----------------------------------------------------------
 
 static bool random_bytes(void *buffer, size_t length) {
-    return __wasi_random_get(buffer, length) == 0;
+    // A host may refuse more than 64 KiB at once (a browser's does).
+    uint8_t *next = buffer;
+    while (length > 0) {
+        size_t part = length < 65536 ? length : 65536;
+        __wasi_errno_t error = __wasi_random_get(next, part);
+        if (error == __WASI_ERRNO_INTR || error == __WASI_ERRNO_AGAIN) {
+            continue;
+        }
+
+        if (error != 0) {
+            return false;
+        }
+
+        next += part;
+        length -= part;
+    }
+
+    return true;
 }
 
 // ---- File handles ---------------------------------------------------------

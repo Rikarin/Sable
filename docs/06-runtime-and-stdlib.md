@@ -905,6 +905,11 @@ Sable.Hosting       ApplicationBuilder and Host (services started in order,
                     timeout; signals; failure policies), HostedService,
                     ApplicationLifetime, recurring jobs (CronExpression,
                     intervals, overlap policies), Systemd (sd_notify)
+Sable.Crypto        HashFunction and Digest: SHA-2, SHA-3, BLAKE2b, BLAKE3,
+                    Insecure.Md5 and Sha1; SHAKE; Hmac, KMAC; Hkdf, Pbkdf2,
+                    Scrypt, Argon2id; PasswordHash (PHC strings);
+                    SymmetricKey, SecureRandom, constantTimeEquals,
+                    secureZero
 Sable.Diagnostics   Logger (structured), tracing spans, metrics, Backtrace
 Sable.Testing       @test @bench, assertions, snapshot testing, property testing
 Sable.Interop       C FFI helpers, CString, CVarArg, callback shims
@@ -1218,6 +1223,47 @@ swift-service-lifecycle's ordering: `ApplicationBuilder` (`services`,
   built: its control dispatcher takes over a thread for the service's life
   and its stop request comes to a handler there, which is a runtime layer
   that could not be tested here.
+
+### Cryptography
+
+`Sable.Crypto`'s algorithms are written in Sable, and the same code runs on
+every platform and in the interpreter; nothing of the operating system's is
+linked. The alternative was CommonCrypto, CNG and OpenSSL: three libraries
+whose algorithms differ (none has BLAKE3; SHA-3 and Argon2 depend on the
+version), the last of which a Linux machine need not have, and none of which
+the interpreter could call. What only they had is speed, which is the
+processor's instructions, and those are in `runtime/crypto.c`: the SHA-256
+block by ARMv8's and x86's SHA extensions, and SHA-512's and Keccak's by
+ARMv8.2's. Which the processor has is asked once (sysctl, getauxval,
+IsProcessorFeaturePresent, cpuid); a kernel is asked for whole blocks
+(`crypto_blocks`) and says whether it did them, and where it did not the
+portable loop does. `SABLE_CRYPTO_PORTABLE=1` says the processor has none,
+for tests. x86's SHA-512 and SHA-3, and everything else, are portable only.
+
+- **State** — a hash's, an HMAC's, a key's — is raw memory of its own
+  (`SecretMemory`), zeroed by its owner's deinit, where no copy of it is
+  made unasked; a hasher is a value that copies it before changing one that
+  is shared (the builtin `ref_is_unique`). `finalize()` works on a copy and
+  leaves the hasher as it was. Registers and stack slots are not wiped, and
+  a secret given out as an array, or come from a String, is the caller's.
+- **Constant time.** No algorithm branches on, or indexes by, a secret,
+  but Argon2id in its second part and scrypt, whose memory accesses depend
+  on the password by design. `constantTimeEquals`, `Digest`'s and
+  `SymmetricKey`'s `==` pass every step through `blackBox`, so that LLVM
+  cannot find the loop to be one it may leave early.
+- **`secureZero`** is a call of the runtime's whose memset is kept by an
+  assembly barrier, in the link's optimiser too.
+- **Randomness** is one source, `random_bytes` of the platform layer, for
+  `SecureRandom`, `SystemRandomNumberGenerator` and UUIDs: getentropy 256
+  bytes at a time (again on EINTR), BCryptGenRandom, or WASI's random_get.
+  When it fails the program traps.
+- **Passwords.** Argon2id fills its lanes one after another. Verifying reads
+  a PHC string strictly — one spelling of each number, the parameters in
+  their order, a salt of at least 8 bytes and a hash of at least 16 — and
+  refuses one that asks for more memory or work than the caller's limits.
+
+SHA-256, SHA-512, SHA3-256 and HMAC are timed against .NET by the benchmarks
+of those names. Symmetric ciphers and signatures are not here yet.
 
 ### Source layout
 

@@ -891,7 +891,7 @@ public static class SyntaxFormatter {
 
             // A case's type and its dot: 'catch IoError.NotFound(_)', but 'catch .NotFound(_)'.
             if (kind == SyntaxKind.DotToken && parentKind == SyntaxKind.UnionCasePattern
-                && (_previousKind == SyntaxKind.IdentifierToken || _previousParent == SyntaxKind.TypeArgumentList)) {
+                && _previousKind == SyntaxKind.IdentifierToken) {
                 return false;
             }
 

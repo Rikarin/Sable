@@ -1,0 +1,26 @@
+module QueueBench
+
+import Sable.Collections
+
+// Queue<Int>: five million numbers through a queue that stays a thousand
+// long, then through one that grows to a million.
+
+@main
+fn main() {
+    let queue = Queue<Int>()
+    var total = 0
+    for i in 0..<1000 {
+        queue.enqueue(i)
+    }
+    for i in 0..<5000000 {
+        queue.enqueue(i)
+        total += queue.dequeue()!
+    }
+    for i in 0..<1000000 {
+        queue.enqueue(i)
+    }
+    while let value = queue.dequeue() {
+        total += value
+    }
+    print(total)
+}

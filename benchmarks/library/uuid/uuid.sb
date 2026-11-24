@@ -1,0 +1,17 @@
+module UuidBench
+
+// UUIDs: 300,000 written as text and read back, three times.
+
+@main
+fn main() {
+    var total = 0
+    for round in 0..<3 {
+        for i in 0..<300000 {
+            let id = UUID(high: 0x119108F752D14320 + U64(i), low: 0x1BACF847DB4148A8 + U64(round))
+            let text = id.toString()
+            let back = try! UUID.parse(text)
+            if back == id { total += text.count }
+        }
+    }
+    print(total)
+}

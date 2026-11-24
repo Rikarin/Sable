@@ -1,0 +1,16 @@
+module GraphemesBench
+
+import Sable.Text
+
+// Grapheme clusters: the user-perceived characters of a megabyte of text,
+// some of them several scalars.
+
+@main
+fn main() {
+    let text = "Plain words, e\u{301}te\u{301}, мир, 世界 and \u{1F600}\r\n".repeated(20000)
+    var total = 0
+    for _ in 0..<3 {
+        total += text.graphemeCount
+    }
+    print(total)
+}

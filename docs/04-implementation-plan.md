@@ -775,7 +775,7 @@ whose body branches, and a local function's context, allocate nothing.
       unretained, since the loop walks a copy nothing else can change
       (shapes: 903K to 2.6K); `return result` a move; and an optional class
       reference one nullable word rather than a tag and a payload. The C
-      ports in `benchmarks/c` — same allocations, checks and output — are
+      ports in `benchmarks/programs` — same allocations, checks and output — are
       timed beside it. Closing that gap was code generation, not ARC:
       inout and `T&` parameters are LLVM `noalias` (exclusivity guarantees
       it), array headers and elements carry distinct TBAA tags, array
@@ -799,7 +799,7 @@ whose body branches, and a local function's context, allocate nothing.
       `lines: OrderLine[>..]`, `parent: Order&<u32>?`) for customer "Ann"
       with one line is 26 bytes against Goose's 29, and building it, reading
       it and totalling it allocates nothing (`SABLE_STATS`: allocations 0);
-      `benchmarks/orders.sb` builds a million of them with 2,000
+      `benchmarks/programs/orders` builds a million of them with 2,000
       allocations, all in the thousand that go out as bytes and back
 - [x] Round-trip `Bytes.of` / `fromBytes` survives a 10M-case fuzzer with no
       memory-safety failure on corrupt input — `tools/fuzz/run.sh` builds
@@ -1127,8 +1127,8 @@ A call is that builtin, applied where it is called to the receiver (if
 any) and then the arguments, in order, each borrowed for it — no function
 is generated, so it costs what the special case in `SilGen` it replaces
 cost: hello world (52,392 bytes for `print("hello, world")` on the machine
-this was measured on) and every benchmark in `benchmarks` and
-`benchmarks/versus-dotnet` build to the same number of bytes, and run at the
+this was measured on) and every benchmark in `benchmarks/programs` and
+`benchmarks/library` build to the same number of bytes, and run at the
 same speed, before and after. A builtin that answers with a flag — parsing,
 a fallible runtime call — is a raw, internal `@builtin` with a public Sable
 function over it (`toInt`, `Char.fromCodePoint`, `Runtime.readFile`), which
@@ -1199,7 +1199,7 @@ growing an array that cannot change is now an error the binder reports
 (S3041) rather than a store lowering could not make. Deleted from C#:
 `CoreTypes.GetArrayMembers`, and `SilGen`'s array cases of `CoreMember` and
 `ComputedProperty`. `count`, `append` and indexing lower exactly as before:
-every benchmark in `benchmarks` and `benchmarks/versus-dotnet` compiles to
+every benchmark in `benchmarks/programs` and `benchmarks/library` compiles to
 identical LLVM IR, and `list` measured 1.13 against .NET before and 1.10
 after (processor time, fastest of five, on a busy machine).
 
@@ -1255,9 +1255,9 @@ yet), and a directly recursive union, which SIL lowering does not lay out.
 
 ### Against .NET
 
-The exit criterion below, measured: `benchmarks/versus-dotnet/*.sb` and
-their C# ports in `benchmarks/dotnet` (Release, tiered PGO), run by
-`tools/bench/versus_dotnet.py`, which checks the two print the same line.
+The exit criterion below, measured: `benchmarks/library/*/*.sb` and
+their C# ports beside them (Release, tiered PGO), run by
+`tools/bench/compare.py`, which checks the two print the same line.
 `map-int` is a million pseudo-random `Int` keys in `HashMap` against
 `Dictionary<long, long>` (insert, three rounds of lookups, a million misses,
 half removed, looked up again); `map-string` 200,000 interpolated keys in

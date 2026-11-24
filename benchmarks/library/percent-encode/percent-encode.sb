@@ -1,0 +1,17 @@
+module PercentEncodeBench
+
+import Sable.Net
+
+// Percent-encoding: 100,000 strings encoded as URL components and decoded.
+
+@main
+fn main() {
+    var total = 0
+    for i in 0..<100000 {
+        let text = "name \(i) & value = 50% / größe ✓"
+        let encoded = PercentEncoding.encode(text, .Component)
+        total += encoded.count
+        if PercentEncoding.decodeText(encoded) == text { total += 1 }
+    }
+    print(total)
+}

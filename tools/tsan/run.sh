@@ -5,7 +5,7 @@
 # SABLE_CHECK_LEAKS set. Prints each program's reports' summaries; nothing
 # but the program's own output means no race was seen.
 #
-#   tools/tsan/run.sh benchmarks/concurrency/*.sb examples/04-async-service.sb
+#   tools/tsan/run.sh benchmarks/concurrency/*/*.sb examples/04-async-service.sb
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"

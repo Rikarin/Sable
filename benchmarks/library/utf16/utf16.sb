@@ -1,0 +1,19 @@
+module Utf16Bench
+
+import Sable.Text
+
+// Text to UTF-16 and back: a megabyte of mixed text, fifty times.
+
+@main
+fn main() {
+    let bytes = "Grüße, мир, 世界 😀 and plain words too. ".repeated(20000).utf8Bytes()
+    var total = 0
+    for _ in 0..<50 {
+        var units: U16[>..] = []
+        let _ = Utf8.toUtf16(bytes, into: &units)
+        var back: U8[>..] = []
+        let _ = Utf8.fromUtf16(units, into: &back)
+        total += units.count + back.count
+    }
+    print(total)
+}

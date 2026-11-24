@@ -1,0 +1,18 @@
+module TimeZoneBench
+
+import Sable.Time
+
+// Time zones: the offset of New York at half a million moments of twenty years.
+
+@main
+fn main() throws(TimeZoneError) {
+    let zone = try TimeZone.find("America/New_York")
+    var total = 0
+    for i in 0..<500000 {
+        let moment = UtcDateTime.fromUnix(946684800 + i * 1261)
+        let there = moment.zoned(in: zone)
+        total += there.hour
+        if there.isDaylightSaving { total += 1 }
+    }
+    print(total)
+}

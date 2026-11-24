@@ -1,0 +1,28 @@
+module RwLockBench
+
+import Sable.Concurrency
+
+// RwLock<Int>: four tasks on the pool, each taking the lock a quarter of a
+// million times: to read, but once in a hundred to write.
+
+@main
+fn main() async {
+    let count = RwLock<Int>(0)
+    await withTaskGroup(of: Int.self) { group in
+        for task in 0..<4 {
+            group.spawn {
+                var sum = 0
+                for i in 0..<250000 {
+                    if i % 100 == task {
+                        count.write { $0 += 1 }
+                    } else {
+                        sum += count.read { $0 } % 2
+                    }
+                }
+                return 0
+            }
+        }
+        await group.waitForAll()
+    }
+    print(count.read { $0 })
+}

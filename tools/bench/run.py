@@ -4,7 +4,7 @@ tracked per-commit".
 
     tools/bench/run.py [--record] [--runs N] [name ...]
 
-Builds the compiler, then each benchmark (benchmarks/*.sb, and the JSON exit
+Builds the compiler, then each benchmark (benchmarks/programs, and the JSON exit
 program), optimised; runs each N times and keeps the fastest; and runs it once
 more with SABLE_STATS for what ARC did. Prints a table. With --record, appends
 a row per benchmark to benchmarks/history.tsv, keyed by commit, so that a
@@ -26,7 +26,7 @@ HEADER = "date\tcommit\tbenchmark\tms\tallocations\tretains\treleases\n"
 
 
 def benchmarks():
-    found = sorted((ROOT / "benchmarks").glob("*.sb"))
+    found = sorted((ROOT / "benchmarks").glob("programs/*/*.sb"))
     found.append(ROOT / "tests" / "programs" / "json.sb")
     return found
 

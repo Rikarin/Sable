@@ -1,0 +1,22 @@
+module ChannelBench
+
+import Sable.Concurrency
+
+// Channel<Int>: one task sends half a million numbers, another receives them.
+
+@main
+fn main() async {
+    let channel = Channel<Int>()
+    let producer = Task.spawn {
+        for i in 0..<500000 {
+            await channel.send(i)
+        }
+        await channel.close()
+    }
+    var total = 0
+    while let value = await channel.receive() {
+        total += value
+    }
+    await producer.value
+    print(total)
+}

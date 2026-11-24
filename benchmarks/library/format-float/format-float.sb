@@ -1,0 +1,16 @@
+module FormatFloatBench
+
+// F64s as text, the shortest that reads back: 200,000 with a
+// fraction of up to sixteen digits.
+
+@main
+fn main() {
+    var x = 12345
+    var characters = 0
+    for _ in 0..<200000 {
+        x = (x * 1103515245 + 12345) % 2147483648
+        let value = F64(x * 2 + 1) / 4096.0 / 3.0 + 0.5
+        characters += value.toString().count
+    }
+    print(characters)
+}

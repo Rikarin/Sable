@@ -961,8 +961,8 @@ in flight). A store into an array reaches it inline when the array is its
 buffer's only reference, as an element's write does. Measured on an Apple
 M-series machine (arm64, NEON): a dot product, a sum and a multiply over
 4096 F32s, 50,000 times, take 0.05 s against 0.41 s as plain loops
-(`benchmarks/kernels.sb`); the six kernels of
-`benchmarks/versus-dotnet/tensor-primitives.sb` take 0.06 s of processor
+(`benchmarks/programs/kernels`); the six kernels of
+`benchmarks/library/tensor-primitives` take 0.06 s of processor
 time, start-up included, against 87 ms for .NET 11 with
 System.Numerics.Tensors 9.0's TensorPrimitives, steady state. F16 and BF16
 kernels, and an exponential of vectors for softmax (it calls libm's for
@@ -992,7 +992,7 @@ and it takes .NET's `decimal` layout rather than IEEE 754-2008's
   is U64 steps wherever the coefficient fits 64 bits. BID's decimal128
   needs 113-bit coefficients unpacked and a 34-digit product's 226 bits
   at every multiplication. Against .NET's `decimal` on the same work
-  (`benchmarks/versus-dotnet/decimal.sb`: a million invoice lines
+  (`benchmarks/library/decimal`: a million invoice lines
   multiplied, rounded to the cent, summed and divided three ways) it is
   1.26 times .NET's time — most of the difference the 128-bit divisions of
   long quotients, which compiler-rt does in software.

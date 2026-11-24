@@ -10,7 +10,7 @@ module Sable.Math
 // up to TOOM3_THRESHOLD, and Toom-3 (Bodrato's interpolation) above it;
 // division is Knuth's algorithm D below BURNIKEL_ZIEGLER_THRESHOLD limbs
 // of divisor and Burnikel–Ziegler's recursive division above it. The
-// thresholds were measured with benchmarks/versus-dotnet/bigint-*.sb's
+// thresholds were measured with benchmarks/library/bigint-*'s
 // numbers, on Apple silicon; Toom-3, whose interpolation is worked in
 // BigInts, only gains on Karatsuba from a few hundred limbs on.
 

@@ -1,0 +1,26 @@
+module LinkedListBench
+
+import Sable.Collections
+
+// LinkedList<Int>: half a million appended, gone through ten times, and
+// two million moved from the front to the back.
+
+@main
+fn main() {
+    var list = LinkedList<Int>()
+    for i in 0..<500000 {
+        list.append(i)
+    }
+    var total = 0
+    for _ in 0..<10 {
+        for value in list {
+            total += value
+        }
+    }
+    for _ in 0..<2000000 {
+        let value = list.removeFirst()!
+        total += value
+        list.append(value)
+    }
+    print("\(list.count) \(total)")
+}

@@ -1,0 +1,25 @@
+module BinarySearchBench
+
+// Binary search: two million searches in a sorted array of a million.
+
+@main
+fn main() {
+    var values: Int[>..] = []
+    for i in 0..<1000000 {
+        values.append(i * 3)
+    }
+    var x = 12345
+    var found = 0
+    var total = 0
+    for _ in 0..<2000000 {
+        x = (x * 1103515245 + 12345) % 2147483648
+        match values.binarySearch(for: x % 3000000) {
+            case .Ok(let index) => {
+                found += 1
+                total += index
+            }
+            default => { }
+        }
+    }
+    print("\(found) \(total)")
+}

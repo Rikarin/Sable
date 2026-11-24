@@ -1,0 +1,83 @@
+module Sable.Text
+
+// What word, sentence and line segmentation share: the text's scalars with
+// a property each, read once, and the pieces between the boundaries the
+// rules find. Their rules look back and ahead past characters they ignore,
+// so the boundaries are found for the whole text before the first piece is
+// given.
+
+/// The text's scalars: where each starts, and a property of each.
+struct ScalarProperties {
+    // offsets[i] is where scalar i starts; offsets[count] is the end.
+    var offsets: Int[>..]
+    var values: Int[>..]
+    var codes: Int[>..]
+
+    init(_ text: String, _ property: (Int) -> Int) {
+        offsets = []
+        values = []
+        codes = []
+        var index = text.startIndex
+        while index.utf8Offset < text.utf8Count {
+            let code = text[index].codePoint
+            offsets.append(index.utf8Offset)
+            values.append(property(code))
+            codes.append(code)
+            index = text.index(after: index)
+        }
+        offsets.append(text.utf8Count)
+    }
+
+    var count: Int => values.count
+}
+
+/// A sequence of the pieces between boundaries: `String.words` and
+/// `String.sentences`.
+public struct SegmentView: Sequence {
+    public alias Element = Substring
+    public alias Iter = SegmentIterator
+
+    let text: String
+    let boundaries: (String) -> Int[>..]
+
+    public fn makeIterator() -> SegmentIterator {
+        return SegmentIterator { text: text, boundaries: boundaries(text), next: 1 }
+    }
+}
+
+/// Gives the pieces of a text between its boundaries, from the first.
+public struct SegmentIterator: Iterator {
+    let text: String
+    // Byte offsets, the start and the end among them.
+    let boundaries: Int[>..]
+    var next: Int
+
+    public mutating fn next() -> Substring? {
+        if next >= boundaries.count {
+            return none
+        }
+        let start = String.Index(utf8Offset: boundaries[next - 1])
+        let end = String.Index(utf8Offset: boundaries[next])
+        next = next + 1
+        return text[start..<end]
+    }
+}
+
+/// The byte offsets of the boundaries the rule finds between scalar i - 1
+/// and scalar i, with the start and the end: none for empty text.
+fn boundariesWhere(_ scalars: ScalarProperties, _ breaks: (Int) -> Bool) -> Int[>..] {
+    var boundaries: Int[>..] = []
+    if scalars.count == 0 {
+        return boundaries
+    }
+    boundaries.append(0)
+    var i = 1
+    while i < scalars.count {
+        if breaks(i) {
+            boundaries.append(scalars.offsets[i])
+        }
+        i = i + 1
+    }
+    boundaries.append(scalars.offsets[scalars.count])
+    return boundaries
+}

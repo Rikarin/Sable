@@ -1,0 +1,138 @@
+module NormalizationTests
+
+// Unicode normalization (Sable.Text's NormalizationForm), against the
+// Unicode Character Database's NormalizationTest.txt (Unicode 16, in
+// tests/lib/Sable.Text/ucd/). Run with
+//     tools/stdlib-coverage.sh Sable.Text
+
+import Sable.Collections
+import Sable.IO
+import Sable.Testing
+import Sable.Text
+
+fn hexValue(_ digits: String) -> Int {
+    var value = 0
+    for digit in digits {
+        let code = digit.codePoint
+        value = value * 16 + (code <= 0x39 ? code - 0x30 : (code | 0x20) - 0x61 + 10)
+    }
+    return value
+}
+
+fn scalars(_ field: String) -> String {
+    var text = ""
+    for code in field.trimmed().split(separator: ' ') {
+        if !code.isEmpty {
+            text = text + String.fromChar(Char.fromCodePoint(hexValue(code))!)
+        }
+    }
+    return text
+}
+
+/// Where a UCD test file is: in tests/lib/Sable.Text/ucd/ of the repository,
+/// found from the directory the tests run in, which may be below its root.
+fn ucdFile(_ name: String) -> String {
+    var up = ""
+    var depth = 0
+    while depth < 8 {
+        let path = "\(up)tests/lib/Sable.Text/ucd/\(name)"
+        if File.exists(path) {
+            return path
+        }
+        up = up + "../"
+        depth = depth + 1
+    }
+    return "tests/lib/Sable.Text/ucd/\(name)"
+}
+
+@test
+fn everyFormAgreesWithNormalizationTest() throws {
+    // Each line is five strings, c1 to c5, with c2 = NFC(c1), c3 = NFD(c1),
+    // c4 = NFKC(c1) and c5 = NFKD(c1), and the invariants of its header.
+    // Part 1 lists every scalar that changes under some form: every other
+    // one is left as it is by all four.
+    var wrong = 0
+    var described = ""
+    var cases = 0
+    var listed = Set<Int>()
+    var inPartOne = false
+    for line in try File.readLines(ucdFile("NormalizationTest.txt")) {
+        if line.hasPrefix("@Part") {
+            inPartOne = line.hasPrefix("@Part1")
+            continue
+        }
+        let data = line.split(separator: '#')[0]
+        if data.trimmed().isEmpty {
+            continue
+        }
+        let fields = data.split(separator: ';')
+        let c1 = scalars(fields[0])
+        let c2 = scalars(fields[1])
+        let c3 = scalars(fields[2])
+        let c4 = scalars(fields[3])
+        let c5 = scalars(fields[4])
+        if inPartOne {
+            listed.insert(c1.first!.codePoint)
+        }
+        cases = cases + 1
+        let right = c2 == c1.normalized(.NFC) && c2 == c2.normalized(.NFC) && c2 == c3.normalized(.NFC)
+            && c4 == c4.normalized(.NFC) && c4 == c5.normalized(.NFC)
+            && c3 == c1.normalized(.NFD) && c3 == c2.normalized(.NFD) && c3 == c3.normalized(.NFD)
+            && c5 == c4.normalized(.NFD) && c5 == c5.normalized(.NFD)
+            && c4 == c1.normalized(.NFKC) && c4 == c2.normalized(.NFKC) && c4 == c3.normalized(.NFKC)
+            && c4 == c4.normalized(.NFKC) && c4 == c5.normalized(.NFKC)
+            && c5 == c1.normalized(.NFKD) && c5 == c2.normalized(.NFKD) && c5 == c3.normalized(.NFKD)
+            && c5 == c4.normalized(.NFKD) && c5 == c5.normalized(.NFKD)
+        if !right {
+            wrong = wrong + 1
+            if wrong <= 5 {
+                described = described + "\n  \(data)"
+            }
+        }
+    }
+    assert(cases > 18000, "the file is read")
+    assertEqual(wrong == 0 ? "" : "\(wrong) of \(cases) wrong:\(described)", "")
+
+    var unchanged = 0
+    var code = 0
+    while code <= 0x10FFFF {
+        if !listed.contains(code) {
+            if let scalar = Char.fromCodePoint(code) {
+                let text = String.fromChar(scalar)
+                if text.normalized(.NFC) != text || text.normalized(.NFD) != text
+                    || text.normalized(.NFKC) != text || text.normalized(.NFKD) != text {
+                    unchanged = unchanged + 1
+                }
+            }
+        }
+        code = code + 1
+    }
+    assertEqual(unchanged, 0)
+}
+
+@test
+fn normalizingByExample() {
+    let composed = "caf\u{E9}"
+    let decomposed = "cafe\u{301}"
+    assertEqual(decomposed.normalized(.NFC), composed)
+    assertEqual(composed.normalized(.NFD), decomposed)
+    assert(composed.isNormalized(.NFC), "composed is NFC")
+    assert(!composed.isNormalized(.NFD), "composed is not NFD")
+    assert("plain".isNormalized(.NFKD), "ASCII is in every form")
+    assertEqual("\u{FB01}".normalized(.NFKD), "fi")
+    assertEqual("x\u{B2}".normalized(.NFKC), "x2")
+    assertEqual("\u{D55C}".normalized(.NFD), "\u{1112}\u{1161}\u{11AB}")
+    assertEqual("\u{1112}\u{1161}\u{11AB}".normalized(.NFC), "\u{D55C}")
+    // Marks in the order of their combining classes: below (220) before above (230).
+    assertEqual("a\u{301}\u{323}".normalized(.NFD), "a\u{323}\u{301}")
+    assertEqual("a\u{301}\u{323}".normalized(.NFC), "\u{1EA1}\u{301}")
+}
+
+@test
+fn caseFoldingInFull() {
+    assertEqual("Straße".caseFolded(), "strasse")
+    assertEqual("ﬁ".caseFolded(), "fi")
+    assertEqual("ΣΑΣ".caseFolded(), "σασ")
+    assertEqual("K".caseFolded(), "k")
+    assertEqual("ǅ".caseFolded(), "ǆ")
+}

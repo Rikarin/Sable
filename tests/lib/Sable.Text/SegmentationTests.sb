@@ -1,0 +1,175 @@
+module SegmentationTests
+
+// Text segmentation (Sable.Text): grapheme clusters, words and sentences
+// (UAX #29) and line breaks (UAX #14), against the Unicode Character
+// Database's own conformance tests (tests/lib/Sable.Text/ucd/, Unicode 16):
+// each line of one is a string written as its scalars, '÷' where it breaks
+// and '×' where it does not. Run with
+//     tools/stdlib-coverage.sh Sable.Text
+
+import Sable.IO
+import Sable.Testing
+import Sable.Text
+
+/// A case of a UCD break test: the text, and the pieces it breaks into.
+struct BreakCase {
+    let text: String
+    let pieces: String[>..]
+    let line: String
+}
+
+fn hexValue(_ digits: String) -> Int {
+    var value = 0
+    for digit in digits {
+        let code = digit.codePoint
+        value = value * 16 + (code <= 0x39 ? code - 0x30 : (code | 0x20) - 0x61 + 10)
+    }
+    return value
+}
+
+/// Where a UCD test file is: in tests/lib/Sable.Text/ucd/ of the repository,
+/// found from the directory the tests run in, which may be below its root.
+fn ucdFile(_ name: String) -> String {
+    var up = ""
+    var depth = 0
+    while depth < 8 {
+        let path = "\(up)tests/lib/Sable.Text/ucd/\(name)"
+        if File.exists(path) {
+            return path
+        }
+        up = up + "../"
+        depth = depth + 1
+    }
+    return "tests/lib/Sable.Text/ucd/\(name)"
+}
+
+/// The cases of a break test file, comments and blank lines left out.
+fn breakCases(_ name: String) throws -> BreakCase[>..] {
+    var cases: BreakCase[>..] = []
+    for line in try File.readLines(ucdFile(name)) {
+        let data = line.split(separator: '#')[0].trimmed()
+        if data.isEmpty {
+            continue
+        }
+        var text = ""
+        var piece = ""
+        var pieces: String[>..] = []
+        for token in data.split(separator: ' ') {
+            if token == "÷" {
+                if !piece.isEmpty {
+                    pieces.append(piece)
+                    piece = ""
+                }
+            } else if token != "×" && !token.isEmpty {
+                let scalar = String.fromChar(Char.fromCodePoint(hexValue(token))!)
+                text = text + scalar
+                piece = piece + scalar
+            }
+        }
+        cases.append(BreakCase { text: text, pieces: pieces, line: data })
+    }
+    return cases
+}
+
+/// Each case the segmentation gets wrong, the first few described.
+fn check(_ cases: BreakCase[>..], _ segment: (String) -> String[>..]) -> String {
+    var wrong = 0
+    var described = ""
+    for testCase in cases {
+        let pieces = segment(testCase.text)
+        if pieces != testCase.pieces {
+            wrong = wrong + 1
+            if wrong <= 5 {
+                described = described + "\n  \(testCase.line): got \(pieces.count) pieces"
+            }
+        }
+    }
+    return wrong == 0 ? "" : "\(wrong) of \(cases.count) wrong:\(described)"
+}
+
+fn pieces<S: Sequence>(_ sequence: S) -> String[>..] where S.Element == Substring, S.Failure == Never {
+    var result: String[>..] = []
+    for piece in sequence {
+        result.append(piece.toString())
+    }
+    return result
+}
+
+/// The pieces, each between bars: what the examples compare.
+fn shown<S: Sequence>(_ sequence: S) -> String where S.Element == Substring, S.Failure == Never {
+    var text = "|"
+    for piece in sequence {
+        text = text + piece.toString() + "|"
+    }
+    return text
+}
+
+@test
+fn graphemeClustersAgreeWithGraphemeBreakTest() throws {
+    let cases = try breakCases("GraphemeBreakTest.txt")
+    assert(cases.count > 700, "the file is read")
+    assertEqual(check(cases, { pieces($0.graphemes) }), "")
+}
+
+@test
+fn graphemeClustersByExample() {
+    assertEqual(shown("e\u{301}x".graphemes), "|e\u{301}|x|")
+    assertEqual(shown("\r\n\n".graphemes), "|\r\n|\n|")
+    assertEqual(shown("🇨🇿🇩🇪🇫".graphemes), "|🇨🇿|🇩🇪|🇫|")
+    assertEqual(shown("👨‍👩‍👧!".graphemes), "|👨‍👩‍👧|!|")
+    assertEqual("नमस्ते".graphemeCount, 3)
+    assertEqual("".graphemeCount, 0)
+    let text = "ab\u{301}c"
+    assertEqual(text.graphemeEnd(from: text.index(after: text.startIndex)).utf8Offset, 4)
+}
+
+/// The pieces between a text's line-break opportunities.
+fn lines(_ text: String) -> String[>..] {
+    var result: String[>..] = []
+    var start = text.startIndex
+    for opportunity in text.lineBreaks {
+        result.append(text[start..<opportunity.index].toString())
+        start = opportunity.index
+    }
+    return result
+}
+
+@test
+fn wordsAgreeWithWordBreakTest() throws {
+    let cases = try breakCases("WordBreakTest.txt")
+    assert(cases.count > 1800, "the file is read")
+    assertEqual(check(cases, { pieces($0.words) }), "")
+}
+
+@test
+fn sentencesAgreeWithSentenceBreakTest() throws {
+    let cases = try breakCases("SentenceBreakTest.txt")
+    assert(cases.count > 500, "the file is read")
+    assertEqual(check(cases, { pieces($0.sentences) }), "")
+}
+
+@test
+fn lineBreaksAgreeWithLineBreakTest() throws {
+    let cases = try breakCases("LineBreakTest.txt")
+    assert(cases.count > 15000, "the file is read")
+    assertEqual(check(cases, lines), "")
+}
+
+@test
+fn wordsSentencesAndLinesByExample() {
+    assertEqual(shown("It's 3.14, ok?".words), "|It's| |3.14|,| |ok|?|")
+    assertEqual(shown("e.g. 1,000.5 カタカナ".words), "|e.g|.| |1,000.5| |カタカナ|")
+    assertEqual(shown("".words), "|")
+    assertEqual(shown("Hi there. It costs 3.50 e.g. today! Ok".sentences), "|Hi there. |It costs 3.50 e.g. today! |Ok|")
+    assertEqual(shown("One.\nTwo".sentences), "|One.\n|Two|")
+    var breaks: String[>..] = []
+    for opportunity in "a b\nc".lineBreaks {
+        breaks.append("\(opportunity.index.utf8Offset)\(opportunity.isMandatory ? "!" : "")")
+    }
+    assertEqual(breaks.count, 3)
+    assertEqual(breaks[0], "2")
+    assertEqual(breaks[1], "4!")
+    assertEqual(breaks[2], "5")
+    assertEqual(lines("Wrap me, (please)!\nDone").count, 4)
+    assertEqual(lines("$100 (50%)").count, 2)
+}

@@ -1,0 +1,77 @@
+module StringViewsTests
+
+// String's views (Sable.Core): its UTF-8 bytes, UTF-16 code units and
+// Unicode scalars, tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn lastOf<C: BidirectionalCollection>(_ c: C) -> C.Element? {
+    return c.isEmpty ? none : c[c.index(before: c.endIndex)]
+}
+
+fn gap<C: RandomAccessCollection>(_ c: C) -> Int {
+    return c.distance(from: c.startIndex, to: c.endIndex)
+}
+
+@test
+fn utf8IsTheStringsOwnBytes() {
+    let text = "é!a😀"
+    let bytes = text.utf8
+    assertEqual(bytes.count, 8)
+    assertEqual(bytes.startIndex, 0)
+    assertEqual(bytes.endIndex, 8)
+    assertEqual(bytes[0], 0xC3 as U8)
+    assertEqual(bytes[1], 0xA9 as U8)
+    assertEqual(bytes[bytes.index(before: 3)], 0x21 as U8)
+    assertEqual(bytes[bytes.index(after: 2)], 0x61 as U8)
+    assertEqual(bytes[bytes.index(0, offsetBy: 4)], 0xF0 as U8)
+    assertEqual(gap(bytes), 8)
+    assertEqual(lastOf(bytes) ?? 0, 0x80 as U8)
+    var sum = 0
+    for byte in bytes {
+        sum = sum + Int(byte)
+    }
+    assertEqual(sum, 0xC3 + 0xA9 + 0x21 + 0x61 + 0xF0 + 0x9F + 0x98 + 0x80)
+    assertEqual("".utf8.count, 0)
+    var seen = 0
+    for _ in "".utf8 {
+        seen = seen + 1
+    }
+    assertEqual(seen, 0)
+}
+
+@test
+fn utf16PairsScalarsPastTheBasicPlane() {
+    var units: U16[>..] = []
+    for unit in "aé😀".utf16 {
+        units.append(unit)
+    }
+    assertEqual(units.count, 4)
+    assertEqual(units[0], 0x61 as U16)
+    assertEqual(units[1], 0xE9 as U16)
+    assertEqual(units[2], 0xD83D as U16)
+    assertEqual(units[3], 0xDE00 as U16)
+    var empty = 0
+    for _ in "".utf16 {
+        empty = empty + 1
+    }
+    assertEqual(empty, 0)
+}
+
+@test
+fn scalarsAreTheStringsCharacters() {
+    let text = "e\u{301}x"
+    let scalars = text.scalars
+    assertEqual(scalars.count, 3)
+    assertEqual(scalars[scalars.startIndex], 'e')
+    assertEqual(scalars[scalars.index(after: scalars.startIndex)], '\u{301}')
+    assertEqual(scalars[scalars.index(scalars.startIndex, offsetBy: 2)], 'x')
+    assertEqual(lastOf(scalars) ?? '?', 'x')
+    assertEqual(scalars.endIndex, text.endIndex)
+    var collected = ""
+    for scalar in scalars {
+        collected = collected + String.fromChar(scalar)
+    }
+    assertEqual(collected, text)
+}

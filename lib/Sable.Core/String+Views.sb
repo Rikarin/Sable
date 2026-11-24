@@ -1,0 +1,169 @@
+module Sable.Core
+
+// A string seen as its encodings: its UTF-8 bytes where they are, its UTF-16
+// code units made as they are asked for, and its Unicode scalars (what the
+// string itself is a collection of). None copies the string. Sable.Text
+// adds the views that need Unicode's tables: graphemes, words, sentences.
+
+extension String {
+    /// The UTF-8 bytes, read where the string keeps them: nothing is
+    /// copied, and each byte is reached at once by its offset.
+    ///
+    /// ```sable
+    /// let bytes = "é!".utf8
+    /// assert(bytes.count == 3)
+    /// assert(bytes[0] == 0xC3 && bytes[2] == 0x21)
+    /// ```
+    public var utf8: Utf8View => Utf8View { text: self }
+
+    /// The UTF-16 code units, made one scalar at a time as they are read: a
+    /// scalar past U+FFFF is two, a surrogate pair.
+    ///
+    /// ```sable
+    /// var units: U16[>..] = []
+    /// for unit in "a😀".utf16 {
+    ///     units.append(unit)
+    /// }
+    /// assert(units == [0x61, 0xD83D, 0xDE00])
+    /// ```
+    public var utf16: Utf16View => Utf16View { text: self }
+
+    /// The Unicode scalars: the string's own characters, by its indices.
+    ///
+    /// ```sable
+    /// let scalars = "e\u{301}".scalars
+    /// assert(scalars.count == 2)
+    /// assert(scalars.last == '\u{301}')
+    /// ```
+    public var scalars: ScalarView => ScalarView { text: self }
+}
+
+/// A string's UTF-8 bytes, by their offsets: `String.utf8`.
+public struct Utf8View: RandomAccessCollection {
+    public alias Element = U8
+    public alias Index = Int
+    public alias Iter = Utf8Iterator
+
+    let text: String
+
+    /// How many bytes the encoding takes.
+    public var count: Int => text.utf8Count
+
+    public var startIndex: Int => 0
+
+    public var endIndex: Int => text.utf8Count
+
+    /// The byte at an offset; one outside the string traps.
+    public subscript(position: Int) -> U8 {
+        get => text.utf8Byte(position)
+    }
+
+    public fn index(after position: Int) -> Int {
+        return position + 1
+    }
+
+    public fn index(before position: Int) -> Int {
+        return position - 1
+    }
+
+    public fn index(_ position: Int, offsetBy distance: Int) -> Int {
+        return position + distance
+    }
+
+    public fn distance(from start: Int, to end: Int) -> Int {
+        return end - start
+    }
+
+    public fn makeIterator() -> Utf8Iterator {
+        return Utf8Iterator { text: text, offset: 0 }
+    }
+}
+
+/// Gives a string's UTF-8 bytes from the first.
+public struct Utf8Iterator: Iterator {
+    let text: String
+    var offset: Int
+
+    public mutating fn next() -> U8? {
+        if offset >= text.utf8Count {
+            return none
+        }
+        let byte = text.utf8Byte(offset)
+        offset = offset + 1
+        return byte
+    }
+}
+
+/// A string's UTF-16 code units, made as they are read: `String.utf16`.
+public struct Utf16View: Sequence {
+    public alias Element = U16
+    public alias Iter = Utf16Iterator
+
+    let text: String
+
+    public fn makeIterator() -> Utf16Iterator {
+        return Utf16Iterator { scalars: text.makeIterator(), trailing: 0 }
+    }
+}
+
+/// Gives a string's UTF-16 code units, a surrogate pair for a scalar past
+/// U+FFFF.
+public struct Utf16Iterator: Iterator {
+    var scalars: StringIterator
+    // The second unit of a pair, still to give; 0 when there is none.
+    var trailing: U16
+
+    public mutating fn next() -> U16? {
+        if trailing != 0 {
+            let unit = trailing
+            trailing = 0
+            return unit
+        }
+        guard let scalar = scalars.next() else {
+            return none
+        }
+        let code = scalar.codePoint
+        if code < 0x10000 {
+            return U16.truncating(code)
+        }
+        let above = code - 0x10000
+        trailing = U16.truncating(0xDC00 + (above & 0x3FF))
+        return U16.truncating(0xD800 + (above >> 10))
+    }
+}
+
+/// A string's Unicode scalars, by the string's indices: `String.scalars`.
+public struct ScalarView: BidirectionalCollection {
+    public alias Element = Char
+    public alias Index = String.Index
+    public alias Iter = StringIterator
+
+    let text: String
+
+    /// How many scalars there are.
+    public var count: Int => text.count
+
+    public var startIndex: String.Index => text.startIndex
+
+    public var endIndex: String.Index => text.endIndex
+
+    public subscript(position: String.Index) -> Char {
+        get => text[position]
+    }
+
+    public fn index(after position: String.Index) -> String.Index {
+        return text.index(after: position)
+    }
+
+    public fn index(before position: String.Index) -> String.Index {
+        return text.index(before: position)
+    }
+
+    public fn index(_ position: String.Index, offsetBy distance: Int) -> String.Index {
+        return text.index(position, offsetBy: distance)
+    }
+
+    public fn makeIterator() -> StringIterator {
+        return text.makeIterator()
+    }
+}

@@ -1,0 +1,378 @@
+module Sable.Text
+
+// Line-break opportunities (UAX #14): where text may be wrapped onto the
+// next line, and where it must be. A line may break after the spaces after
+// a word, after a hyphen, between two ideographs, but not before a closing
+// bracket or a full stop, between a number and its unit or currency, or
+// inside a word; it must break after a line feed or paragraph separator.
+// The rules are Unicode 16's defaults, with no tailoring.
+
+/// A place a line may break: before the scalar at the index, or at the end.
+public struct LineBreak: Equatable, Debug {
+    /// Where the next line would start.
+    public let index: String.Index
+
+    /// Whether the line must break here: after a line feed, carriage
+    /// return, next-line or line or paragraph separator.
+    public let isMandatory: Bool
+
+    public operator == (lhs: LineBreak, rhs: LineBreak) -> Bool {
+        return lhs.index == rhs.index && lhs.isMandatory == rhs.isMandatory
+    }
+
+    public fn debugDescription() -> String {
+        return "LineBreak(\(index.utf8Offset)\(isMandatory ? ", mandatory" : ""))"
+    }
+}
+
+extension String {
+    /// Each place a line may break, after the start, in order: the end of
+    /// the text is the last.
+    ///
+    /// ```sable
+    /// var lines: String[>..] = []
+    /// var start = "".startIndex
+    /// let text = "Wrap me, (please)!\nDone"
+    /// for opportunity in text.lineBreaks {
+    ///     lines.append(text[start..<opportunity.index].toString())
+    ///     start = opportunity.index
+    /// }
+    /// assert(lines == ["Wrap ", "me, ", "(please)!\n", "Done"])
+    /// ```
+    public var lineBreaks: LineBreakView => LineBreakView { text: self }
+}
+
+/// A text's line-break opportunities: `String.lineBreaks`.
+public struct LineBreakView: Sequence {
+    public alias Element = LineBreak
+    public alias Iter = LineBreakIterator
+
+    let text: String
+
+    public fn makeIterator() -> LineBreakIterator {
+        var units = LineUnits(text)
+        return LineBreakIterator { text: text, breaks: units.breaks(), next: 0 }
+    }
+}
+
+/// Gives a text's line-break opportunities, from the first.
+public struct LineBreakIterator: Iterator {
+    let text: String
+    // Byte offsets, negative for a mandatory break (-1 - offset).
+    let breaks: Int[>..]
+    var next: Int
+
+    public mutating fn next() -> LineBreak? {
+        if next >= breaks.count {
+            return none
+        }
+        let found = breaks[next]
+        next = next + 1
+        let offset = found < 0 ? -1 - found : found
+        return LineBreak { index: String.Index(utf8Offset: offset), isMandatory: found < 0 }
+    }
+}
+
+// lineBreakOf's flags beside the class.
+const eastAsianFlag = 64
+const pictographicFlag = 128
+
+/// The text as LB9 and LB10 see it: each scalar but a combining mark or
+/// ZWJ, with the marks and ZWJs after it; a mark or ZWJ with nothing it
+/// can attach to is a unit of class AL.
+struct LineUnits {
+    var classes: Int[>..] = []
+    var eastAsian: Bool[>..] = []
+    var pictographic: Bool[>..] = []
+    var codes: Int[>..] = []
+    var joined: Bool[>..] = []
+    // Where each unit starts; one more for the end.
+    var offsets: Int[>..] = []
+
+    init(_ text: String) {
+        var index = text.startIndex
+        while index.utf8Offset < text.utf8Count {
+            let code = text[index].codePoint
+            let value = lineBreakOf(code)
+            let kind = value % 64
+            let attaches = kind == lineBreakCM || kind == lineBreakZWJ
+            let base = classes.count == 0 ? -1 : classes[classes.count - 1]
+            if attaches && classes.count > 0 && base != lineBreakBK && base != lineBreakCR && base != lineBreakLF
+                && base != lineBreakNL && base != lineBreakSP && base != lineBreakZW {
+                joined[joined.count - 1] = kind == lineBreakZWJ // LB9
+            } else {
+                classes.append(attaches ? lineBreakAL : kind) // LB10
+                eastAsian.append((value / eastAsianFlag) % 2 == 1)
+                pictographic.append(value >= pictographicFlag)
+                codes.append(code)
+                joined.append(kind == lineBreakZWJ)
+                offsets.append(index.utf8Offset)
+            }
+            index = text.index(after: index)
+        }
+        offsets.append(text.utf8Count)
+    }
+
+    var count: Int => classes.count
+
+    /// The class of unit i; -1 past either end, as sot and eot.
+    fn at(_ i: Int) -> Int {
+        return i >= 0 && i < classes.count ? classes[i] : -1
+    }
+
+    fn isQuote(_ i: Int) -> Bool {
+        let kind = at(i)
+        return kind == lineBreakQU || kind == lineBreakQUPi || kind == lineBreakQUPf
+    }
+
+    /// Whether unit i is East Asian (East_Asian_Width F, W or H); not past
+    /// either end.
+    fn wide(_ i: Int) -> Bool {
+        return i >= 0 && i < classes.count && eastAsian[i]
+    }
+
+    /// The unit before i and any spaces before it: the first before i that
+    /// is not SP, or -1.
+    fn beforeSpaces(_ i: Int) -> Int {
+        var j = i - 1
+        while j >= 0 && classes[j] == lineBreakSP {
+            j = j - 1
+        }
+        return j
+    }
+
+    /// Whether unit i is an orthographic syllable's base for LB28a: AK, AS
+    /// or U+25CC DOTTED CIRCLE.
+    fn syllableBase(_ i: Int) -> Bool {
+        let kind = at(i)
+        return kind == lineBreakAK || kind == lineBreakAS || kind == lineBreakAL && codes[i] == 0x25CC
+    }
+
+    /// The byte offsets after the start where a line may break, negated
+    /// (-1 - offset) where it must: the end is always one.
+    mutating fn breaks() -> Int[>..] {
+        var found: Int[>..] = []
+        var i = 1
+        while i < classes.count {
+            let decision = decide(i)
+            if decision != 0 {
+                found.append(decision > 0 ? offsets[i] : -1 - offsets[i])
+            }
+            i = i + 1
+        }
+        if classes.count > 0 {
+            let last = classes[classes.count - 1]
+            let mandatory = last == lineBreakBK || last == lineBreakCR || last == lineBreakLF || last == lineBreakNL
+            found.append(mandatory ? -1 - offsets[classes.count] : offsets[classes.count])
+        }
+        return found
+    }
+
+    /// Between unit i - 1 and unit i: -1 for a mandatory break, 1 for a
+    /// break the line may take, 0 for none.
+    fn decide(_ i: Int) -> Int {
+        let a = classes[i - 1]
+        let b = classes[i]
+        if a == lineBreakBK {
+            return -1 // LB4
+        }
+        if a == lineBreakCR && b == lineBreakLF {
+            return 0 // LB5
+        }
+        if a == lineBreakCR || a == lineBreakLF || a == lineBreakNL {
+            return -1 // LB5
+        }
+        if b == lineBreakBK || b == lineBreakCR || b == lineBreakLF || b == lineBreakNL {
+            return 0 // LB6
+        }
+        if b == lineBreakSP || b == lineBreakZW {
+            return 0 // LB7
+        }
+        let beforeSpaces = self.beforeSpaces(i)
+        if at(beforeSpaces) == lineBreakZW {
+            return 1 // LB8
+        }
+        if joined[i - 1] {
+            return 0 // LB8a
+        }
+        if a == lineBreakWJ || b == lineBreakWJ {
+            return 0 // LB11
+        }
+        if a == lineBreakGL {
+            return 0 // LB12
+        }
+        if b == lineBreakGL && a != lineBreakSP && a != lineBreakBA && a != lineBreakHY {
+            return 0 // LB12a
+        }
+        if b == lineBreakCL || b == lineBreakCP || b == lineBreakEX || b == lineBreakSY {
+            return 0 // LB13
+        }
+        if at(beforeSpaces) == lineBreakOP {
+            return 0 // LB14
+        }
+        if at(beforeSpaces) == lineBreakQUPi {
+            // LB15a: an initial quotation mark after what opens, with any
+            // spaces after it.
+            let opener = at(beforeSpaces - 1)
+            if opener == -1 || opener == lineBreakBK || opener == lineBreakCR || opener == lineBreakLF
+                || opener == lineBreakNL || opener == lineBreakOP || isQuote(beforeSpaces - 1)
+                || opener == lineBreakGL || opener == lineBreakSP || opener == lineBreakZW {
+                return 0
+            }
+        }
+        if b == lineBreakQUPf {
+            // LB15b: a final quotation mark before what closes.
+            let closer = at(i + 1)
+            if closer == -1 || closer == lineBreakSP || closer == lineBreakGL || closer == lineBreakWJ
+                || closer == lineBreakCL || isQuote(i + 1) || closer == lineBreakCP || closer == lineBreakEX
+                || closer == lineBreakIS || closer == lineBreakSY || closer == lineBreakBK || closer == lineBreakCR
+                || closer == lineBreakLF || closer == lineBreakNL || closer == lineBreakZW {
+                return 0
+            }
+        }
+        if a == lineBreakSP && b == lineBreakIS && at(i + 1) == lineBreakNU {
+            return 1 // LB15c
+        }
+        if b == lineBreakIS {
+            return 0 // LB15d
+        }
+        let spacedFrom = at(beforeSpaces)
+        if (spacedFrom == lineBreakCL || spacedFrom == lineBreakCP) && b == lineBreakNS {
+            return 0 // LB16
+        }
+        if spacedFrom == lineBreakB2 && b == lineBreakB2 {
+            return 0 // LB17
+        }
+        if a == lineBreakSP {
+            return 1 // LB18
+        }
+        if b == lineBreakQU || b == lineBreakQUPf || a == lineBreakQU || a == lineBreakQUPi {
+            return 0 // LB19
+        }
+        if isQuote(i) && (!wide(i - 1) || !wide(i + 1)) {
+            return 0 // LB19a
+        }
+        if isQuote(i - 1) && (!wide(i) || !wide(i - 2)) {
+            return 0 // LB19a
+        }
+        if a == lineBreakCB || b == lineBreakCB {
+            return 1 // LB20
+        }
+        if (a == lineBreakHY || codes[i - 1] == 0x2010) && b == lineBreakAL {
+            // LB20a: a hyphen that starts a word.
+            let before = at(i - 2)
+            if before == -1 || before == lineBreakBK || before == lineBreakCR || before == lineBreakLF
+                || before == lineBreakNL || before == lineBreakSP || before == lineBreakZW
+                || before == lineBreakCB || before == lineBreakGL {
+                return 0
+            }
+        }
+        if b == lineBreakBA || b == lineBreakHY || b == lineBreakNS || a == lineBreakBB {
+            return 0 // LB21
+        }
+        if (a == lineBreakHY || a == lineBreakBA && !wide(i - 1)) && at(i - 2) == lineBreakHL && b != lineBreakHL {
+            return 0 // LB21a
+        }
+        if a == lineBreakSY && b == lineBreakHL {
+            return 0 // LB21b
+        }
+        if b == lineBreakIN {
+            return 0 // LB22
+        }
+        let letter = a == lineBreakAL || a == lineBreakHL
+        let toLetter = b == lineBreakAL || b == lineBreakHL
+        if letter && b == lineBreakNU || a == lineBreakNU && toLetter {
+            return 0 // LB23
+        }
+        if a == lineBreakPR && (b == lineBreakID || b == lineBreakEB || b == lineBreakEM)
+            || (a == lineBreakID || a == lineBreakEB || a == lineBreakEM) && b == lineBreakPO {
+            return 0 // LB23a
+        }
+        if (a == lineBreakPR || a == lineBreakPO) && toLetter || letter && (b == lineBreakPR || b == lineBreakPO) {
+            return 0 // LB24
+        }
+        if numberJoins(i) {
+            return 0 // LB25
+        }
+        let jamo = a == lineBreakJL || a == lineBreakJV || a == lineBreakJT || a == lineBreakH2 || a == lineBreakH3
+        if a == lineBreakJL && (b == lineBreakJL || b == lineBreakJV || b == lineBreakH2 || b == lineBreakH3)
+            || (a == lineBreakJV || a == lineBreakH2) && (b == lineBreakJV || b == lineBreakJT)
+            || (a == lineBreakJT || a == lineBreakH3) && b == lineBreakJT {
+            return 0 // LB26
+        }
+        let toJamo = b == lineBreakJL || b == lineBreakJV || b == lineBreakJT || b == lineBreakH2 || b == lineBreakH3
+        if jamo && b == lineBreakPO || a == lineBreakPR && toJamo {
+            return 0 // LB27
+        }
+        if letter && toLetter {
+            return 0 // LB28
+        }
+        if a == lineBreakAP && syllableBase(i)
+            || syllableBase(i - 1) && (b == lineBreakVF || b == lineBreakVI)
+            || a == lineBreakVI && syllableBase(i - 2) && (b == lineBreakAK || b == lineBreakAL && codes[i] == 0x25CC)
+            || syllableBase(i - 1) && syllableBase(i) && at(i + 1) == lineBreakVF {
+            return 0 // LB28a
+        }
+        if a == lineBreakIS && toLetter {
+            return 0 // LB29
+        }
+        if (letter || a == lineBreakNU) && b == lineBreakOP && !wide(i)
+            || a == lineBreakCP && !wide(i - 1) && (toLetter || b == lineBreakNU) {
+            return 0 // LB30
+        }
+        if a == lineBreakRI && b == lineBreakRI {
+            // LB30a: regional indicators pair off from the first of a run.
+            var run = 0
+            var j = i - 1
+            while j >= 0 && classes[j] == lineBreakRI {
+                run = run + 1
+                j = j - 1
+            }
+            return run % 2 == 1 ? 0 : 1
+        }
+        if b == lineBreakEM && (a == lineBreakEB || pictographic[i - 1]) {
+            return 0 // LB30b
+        }
+        return 1 // LB31
+    }
+
+    /// LB25: no break inside a number with its prefix, suffix, separators
+    /// and brackets, as its regular expressions say.
+    fn numberJoins(_ i: Int) -> Bool {
+        let a = classes[i - 1]
+        let b = classes[i]
+        if b == lineBreakPO || b == lineBreakPR {
+            // NU (SY | IS)* (CL | CP)? × (PO | PR)
+            var j = i - 1
+            if a == lineBreakCL || a == lineBreakCP {
+                j = j - 1
+            }
+            while j >= 0 && (classes[j] == lineBreakSY || classes[j] == lineBreakIS) {
+                j = j - 1
+            }
+            return at(j) == lineBreakNU
+        }
+        if a == lineBreakPO || a == lineBreakPR {
+            // (PO | PR) × OP? IS? NU
+            if b == lineBreakNU {
+                return true
+            }
+            if b == lineBreakOP {
+                return at(i + 1) == lineBreakNU || at(i + 1) == lineBreakIS && at(i + 2) == lineBreakNU
+            }
+            return false
+        }
+        if (a == lineBreakHY || a == lineBreakIS) && b == lineBreakNU {
+            return true
+        }
+        if b == lineBreakNU {
+            // NU (SY | IS)* × NU
+            var j = i - 1
+            while j >= 0 && (classes[j] == lineBreakSY || classes[j] == lineBreakIS) {
+                j = j - 1
+            }
+            return at(j) == lineBreakNU
+        }
+        return false
+    }
+}

@@ -1,0 +1,120 @@
+module Sable.Text
+
+// Sentence boundaries (UAX #29): a sentence ends after a full stop,
+// question mark or exclamation mark, with any closing quotes and brackets,
+// spaces and paragraph separator after it; but not after a full stop that a
+// lower-case word, a digit or a capital letter right after it shows is an
+// abbreviation or a number ("e.g. this", "3.5", "U.S.A."). A paragraph
+// separator ends one too.
+
+extension String {
+    /// The sentences, each as a Substring with the spaces and line breaks
+    /// that follow it: every scalar in one of them.
+    ///
+    /// ```sable
+    /// var sentences: String[>..] = []
+    /// for sentence in "Hi there. It costs 3.50 e.g. today! Ok".sentences {
+    ///     sentences.append(sentence.toString())
+    /// }
+    /// assert(sentences == ["Hi there. ", "It costs 3.50 e.g. today! ", "Ok"])
+    /// ```
+    public var sentences: SegmentView => SegmentView { text: self, boundaries: sentenceBoundaries }
+}
+
+/// The byte offsets of the text's sentence boundaries, its start and end
+/// among them.
+fn sentenceBoundaries(_ text: String) -> Int[>..] {
+    let scalars = ScalarProperties(text, sentenceBreakOf)
+    return boundariesWhere(scalars, { sentenceBreaks(scalars, $0) })
+}
+
+fn paragraphSeparator(_ kind: Int) -> Bool {
+    return kind == sentenceBreakSep || kind == sentenceBreakCR || kind == sentenceBreakLF
+}
+
+fn sentenceTerminator(_ kind: Int) -> Bool {
+    return kind == sentenceBreakATerm || kind == sentenceBreakSTerm
+}
+
+/// SB5's characters, which attach to what is before them: Extend, Format.
+fn sentenceIgnored(_ kind: Int) -> Bool {
+    return kind == sentenceBreakExtend || kind == sentenceBreakFormat
+}
+
+/// The scalar before i that SB5 leaves to the rules; -1 at the start.
+fn sentenceBefore(_ scalars: ScalarProperties, _ i: Int) -> Int {
+    var j = i - 1
+    while j > 0 && sentenceIgnored(scalars.values[j]) {
+        j = j - 1
+    }
+    return j
+}
+
+/// Whether the rules break between scalar i - 1 and scalar i.
+fn sentenceBreaks(_ scalars: ScalarProperties, _ i: Int) -> Bool {
+    let rawLeft = scalars.values[i - 1]
+    let right = scalars.values[i]
+    if rawLeft == sentenceBreakCR && right == sentenceBreakLF {
+        return false // SB3
+    }
+    if paragraphSeparator(rawLeft) {
+        return true // SB4
+    }
+    if sentenceIgnored(right) {
+        return false // SB5
+    }
+
+    let at = sentenceBefore(scalars, i)
+    let left = scalars.values[at]
+    if left == sentenceBreakATerm && right == sentenceBreakNumeric {
+        return false // SB6
+    }
+    if left == sentenceBreakATerm && right == sentenceBreakUpper && at > 0 {
+        let before = scalars.values[sentenceBefore(scalars, at)]
+        if before == sentenceBreakUpper || before == sentenceBreakLower {
+            return false // SB7
+        }
+    }
+
+    // SB8 to SB11 look back for SATerm Close* Sp*.
+    var j = at
+    var spaces = false
+    while scalars.values[j] == sentenceBreakSp && j > 0 {
+        spaces = true
+        j = sentenceBefore(scalars, j)
+    }
+    while scalars.values[j] == sentenceBreakClose && j > 0 {
+        j = sentenceBefore(scalars, j)
+    }
+    let terminator = scalars.values[j]
+    if !sentenceTerminator(terminator) {
+        return false // SB998
+    }
+
+    if terminator == sentenceBreakATerm {
+        // SB8: no break before a lower-case letter that only characters of
+        // no other kind separate from it.
+        var k = i
+        while k < scalars.count {
+            let kind = scalars.values[k]
+            if kind == sentenceBreakOLetter || kind == sentenceBreakUpper || kind == sentenceBreakLower
+                || paragraphSeparator(kind) || sentenceTerminator(kind) {
+                break
+            }
+            k = k + 1
+        }
+        if k < scalars.count && scalars.values[k] == sentenceBreakLower {
+            return false
+        }
+    }
+    if right == sentenceBreakSContinue || sentenceTerminator(right) {
+        return false // SB8a
+    }
+    if !spaces && (right == sentenceBreakClose || right == sentenceBreakSp || paragraphSeparator(right)) {
+        return false // SB9
+    }
+    if right == sentenceBreakSp || paragraphSeparator(right) {
+        return false // SB10
+    }
+    return true // SB11
+}

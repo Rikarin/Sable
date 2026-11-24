@@ -1,0 +1,121 @@
+module Sable.Text
+
+// Unicode normalization (UAX #15): text that looks the same, written with
+// the same scalars. 'é' is one scalar, U+00E9, or two, 'e' and U+0301 the
+// combining acute accent; NFC writes it as the one, NFD as the two. The K
+// forms also fold compatibility characters into what they stand for: 'ﬁ'
+// into "fi", '²' into '2'. Decomposition is from the tables of
+// UnicodeTextTables.sb, Hangul syllables by arithmetic; the marks after a
+// starter are put in the order of their combining classes; composition
+// puts back together whatever pairs compose and are not excluded.
+
+/// The four normalization forms of Unicode: composed or decomposed, by
+/// canonical equivalence alone or by compatibility too.
+public enum NormalizationForm {
+    /// Canonical decomposition, then canonical composition: the shortest
+    /// form, and what text from the web or a keyboard usually is.
+    NFC
+    /// Canonical decomposition: each accented letter a base and its marks.
+    NFD
+    /// Compatibility decomposition, then canonical composition: what
+    /// identifiers and search keys are compared in.
+    NFKC
+    /// Compatibility decomposition.
+    NFKD
+}
+
+extension String {
+    /// The text in the normalization form: equal to any canonically
+    /// equivalent text in the same form (and, for NFKC and NFKD, to any
+    /// compatibility-equivalent one). ASCII is the same in every form.
+    ///
+    /// ```sable
+    /// let composed = "caf\u{E9}"
+    /// let decomposed = "cafe\u{301}"
+    /// assert(composed != decomposed)
+    /// assert(decomposed.normalized(.NFC) == composed)
+    /// assert(composed.normalized(.NFD) == decomposed)
+    /// assert("\u{FB01}le".normalized(.NFKC) == "file")
+    /// ```
+    public fn normalized(_ form: NormalizationForm) -> String {
+        if self.utf8Count == self.count {
+            return self
+        }
+        let compatibility = form == .NFKC || form == .NFKD
+        var scalars: Int[>..] = []
+        scalars.reserveCapacity(self.utf8Count)
+        for scalar in self {
+            decompose(scalar.codePoint, compatibility: compatibility, into: &scalars)
+        }
+        putInCanonicalOrder(&scalars)
+        if form == .NFC || form == .NFKC {
+            composeCanonically(&scalars)
+        }
+        return stringOfScalars(scalars)
+    }
+
+    /// Whether the text is already in the normalization form.
+    ///
+    /// ```sable
+    /// assert("caf\u{E9}".isNormalized(.NFC))
+    /// assert(!"caf\u{E9}".isNormalized(.NFD))
+    /// ```
+    public fn isNormalized(_ form: NormalizationForm) -> Bool {
+        return self.utf8Count == self.count || self.normalized(form) == self
+    }
+}
+
+/// Each run of combining marks sorted by combining class, stably: a mark of
+/// class 0, a starter, is never moved past.
+fn putInCanonicalOrder(_ scalars: inout Int[>..]) {
+    var i = 1
+    while i < scalars.count {
+        let mark = scalars[i]
+        let markClass = combiningClassOf(mark)
+        if markClass != 0 {
+            var j = i
+            while j > 0 && combiningClassOf(scalars[j - 1]) > markClass {
+                scalars[j] = scalars[j - 1]
+                j = j - 1
+            }
+            scalars[j] = mark
+        }
+        i = i + 1
+    }
+}
+
+/// Canonical composition of decomposed, ordered scalars: each scalar joins
+/// the last starter before it when the two have a primary composite and no
+/// scalar between them blocks it (one of class 0, or of a class not below
+/// its own).
+fn composeCanonically(_ scalars: inout Int[>..]) {
+    var kept = 0
+    var starter = -1
+    var i = 0
+    while i < scalars.count {
+        let scalar = scalars[i]
+        let scalarClass = combiningClassOf(scalar)
+        var composed = false
+        if starter >= 0 {
+            let lastClass = kept - 1 == starter ? -1 : combiningClassOf(scalars[kept - 1])
+            if lastClass == -1 || lastClass != 0 && lastClass < scalarClass {
+                let composite = compose(scalars[starter], scalar)
+                if composite >= 0 {
+                    scalars[starter] = composite
+                    composed = true
+                }
+            }
+        }
+        if !composed {
+            if scalarClass == 0 {
+                starter = kept
+            }
+            scalars[kept] = scalar
+            kept = kept + 1
+        }
+        i = i + 1
+    }
+    while scalars.count > kept {
+        scalars.removeLast()
+    }
+}

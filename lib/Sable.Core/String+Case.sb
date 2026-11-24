@@ -53,8 +53,16 @@ extension String {
         return self.shiftingAscii(low: 0x41, high: 0x5A, by: 32)
     }
 
-    /// The string case-folded, scalar by scalar (`Char.caseFolded`): two
-    /// strings that differ only in case fold to the same one.
+    /// The string case-folded in full (Unicode's CaseFolding.txt, statuses
+    /// C and F): two strings that differ only in case fold to the same one,
+    /// even where a scalar folds to more than one ('ß' to "ss"), as
+    /// `Char.caseFolded`, one scalar to one, cannot.
+    ///
+    /// ```sable
+    /// assert("Straße".caseFolded() == "strasse")
+    /// assert("STRASSE".caseFolded() == "strasse")
+    /// assert("ǅ".caseFolded() == "ǆ")
+    /// ```
     public fn caseFolded() -> String {
         var pieces: String[>..] = []
         var start = 0
@@ -63,6 +71,15 @@ extension String {
         while offset < end {
             let next = self.offsetAfter(offset)
             let scalar = self.scalar(at: offset)
+            if scalar.codePoint >= 0xDF {
+                if let full = unicodeSpecial(fullFoldingTable, count: fullFoldingTableCount, scalar.codePoint) {
+                    pieces.append(self.utf8Slice(start, offset))
+                    pieces.append(full)
+                    start = next
+                    offset = next
+                    continue
+                }
+            }
             let folded = scalar.caseFolded
             if folded != scalar {
                 pieces.append(self.utf8Slice(start, offset))

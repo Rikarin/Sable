@@ -1,0 +1,156 @@
+module Sable.Text
+
+// Word boundaries (UAX #29): the pieces a text breaks into at each word's
+// start and end. Words are pieces, and so are the spaces and the punctuation
+// between them: "can't stop." is "can't", " ", "stop" and ".". A letter
+// joins the letters beside it, and a digit the digits, an apostrophe or
+// full stop between two letters ("can't", "e.g") and a comma or full stop
+// between two digits ("3.14", "1,000") join them too; Katakana join each
+// other, and an emoji its modifiers and the emoji a ZWJ joins it to.
+
+extension String {
+    /// The pieces between word boundaries, each as a Substring: the words,
+    /// and the spaces and punctuation between them, every scalar in one of
+    /// them.
+    ///
+    /// ```sable
+    /// var pieces: String[>..] = []
+    /// for piece in "It's 3.14, ok?".words {
+    ///     pieces.append(piece.toString())
+    /// }
+    /// assert(pieces == ["It's", " ", "3.14", ",", " ", "ok", "?"])
+    /// ```
+    public var words: SegmentView => SegmentView { text: self, boundaries: wordBoundaries }
+}
+
+/// The byte offsets of the text's word boundaries, its start and end among
+/// them.
+fn wordBoundaries(_ text: String) -> Int[>..] {
+    let scalars = ScalarProperties(text, wordBreakOf)
+    return boundariesWhere(scalars, { wordBreaks(scalars, $0) })
+}
+
+fn wordKind(_ scalars: ScalarProperties, _ i: Int) -> Int {
+    return scalars.values[i] % 32
+}
+
+/// WB4's characters, which attach to what is before them: Extend, Format, ZWJ.
+fn wordIgnored(_ kind: Int) -> Bool {
+    return kind == wordBreakExtend || kind == wordBreakFormat || kind == wordBreakZWJ
+}
+
+fn ahLetter(_ kind: Int) -> Bool {
+    return kind == wordBreakALetter || kind == wordBreakHebrewLetter
+}
+
+fn midLetterOrQuote(_ kind: Int) -> Bool {
+    return kind == wordBreakMidLetter || kind == wordBreakMidNumLet || kind == wordBreakSingleQuote
+}
+
+fn midNumberOrQuote(_ kind: Int) -> Bool {
+    return kind == wordBreakMidNum || kind == wordBreakMidNumLet || kind == wordBreakSingleQuote
+}
+
+/// The scalar before i that WB4 leaves to the rules: the last before it that
+/// is not Extend, Format or ZWJ; -1 at the start.
+fn wordBefore(_ scalars: ScalarProperties, _ i: Int) -> Int {
+    var j = i - 1
+    while j > 0 && wordIgnored(wordKind(scalars, j)) {
+        j = j - 1
+    }
+    return j
+}
+
+/// The scalar after i that WB4 leaves to the rules; -1 at the end.
+fn wordAfter(_ scalars: ScalarProperties, _ i: Int) -> Int {
+    var j = i + 1
+    while j < scalars.count && wordIgnored(wordKind(scalars, j)) {
+        j = j + 1
+    }
+    return j < scalars.count ? j : -1
+}
+
+/// Whether the rules break between scalar i - 1 and scalar i.
+fn wordBreaks(_ scalars: ScalarProperties, _ i: Int) -> Bool {
+    let rawLeft = wordKind(scalars, i - 1)
+    let right = wordKind(scalars, i)
+    if rawLeft == wordBreakCR && right == wordBreakLF {
+        return false // WB3
+    }
+    if rawLeft == wordBreakNewline || rawLeft == wordBreakCR || rawLeft == wordBreakLF {
+        return true // WB3a
+    }
+    if right == wordBreakNewline || right == wordBreakCR || right == wordBreakLF {
+        return true // WB3b
+    }
+    if rawLeft == wordBreakZWJ && scalars.values[i] >= 32 {
+        return false // WB3c
+    }
+    if rawLeft == wordBreakWSegSpace && right == wordBreakWSegSpace {
+        return false // WB3d
+    }
+    if wordIgnored(right) {
+        return false // WB4
+    }
+
+    let at = wordBefore(scalars, i)
+    let left = wordKind(scalars, at)
+    let before = at > 0 ? wordBefore(scalars, at) : -1
+    let beforeLeft = before >= 0 ? wordKind(scalars, before) : -1
+    let ahead = wordAfter(scalars, i)
+    let afterRight = ahead >= 0 ? wordKind(scalars, ahead) : -1
+
+    if ahLetter(left) && ahLetter(right) {
+        return false // WB5
+    }
+    if ahLetter(left) && midLetterOrQuote(right) && ahLetter(afterRight) {
+        return false // WB6
+    }
+    if before >= 0 && ahLetter(beforeLeft) && midLetterOrQuote(left) && ahLetter(right) {
+        return false // WB7
+    }
+    if left == wordBreakHebrewLetter && right == wordBreakSingleQuote {
+        return false // WB7a
+    }
+    if left == wordBreakHebrewLetter && right == wordBreakDoubleQuote && afterRight == wordBreakHebrewLetter {
+        return false // WB7b
+    }
+    if before >= 0 && beforeLeft == wordBreakHebrewLetter && left == wordBreakDoubleQuote && right == wordBreakHebrewLetter {
+        return false // WB7c
+    }
+    if left == wordBreakNumeric && right == wordBreakNumeric {
+        return false // WB8
+    }
+    if ahLetter(left) && right == wordBreakNumeric {
+        return false // WB9
+    }
+    if left == wordBreakNumeric && ahLetter(right) {
+        return false // WB10
+    }
+    if before >= 0 && beforeLeft == wordBreakNumeric && midNumberOrQuote(left) && right == wordBreakNumeric {
+        return false // WB11
+    }
+    if left == wordBreakNumeric && midNumberOrQuote(right) && afterRight == wordBreakNumeric {
+        return false // WB12
+    }
+    if left == wordBreakKatakana && right == wordBreakKatakana {
+        return false // WB13
+    }
+    if (ahLetter(left) || left == wordBreakNumeric || left == wordBreakKatakana || left == wordBreakExtendNumLet) && right == wordBreakExtendNumLet {
+        return false // WB13a
+    }
+    if left == wordBreakExtendNumLet && (ahLetter(right) || right == wordBreakNumeric || right == wordBreakKatakana) {
+        return false // WB13b
+    }
+    if left == wordBreakRegionalIndicator && right == wordBreakRegionalIndicator {
+        // WB15, WB16: regional indicators pair off from the first of a run.
+        var run = 0
+        var j = at
+        while j >= 0 && wordKind(scalars, j) == wordBreakRegionalIndicator {
+            run = run + 1
+            j = j > 0 ? wordBefore(scalars, j) : -1
+        }
+        return run % 2 == 0
+    }
+    return true // WB999
+}

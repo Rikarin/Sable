@@ -1,0 +1,174 @@
+module Sable.Text
+
+// Reading the tables of UnicodeTextTables.sb, which tools/unicode-tables.py
+// generates and describes: fixed-width records of base-32 digits, '0' for 0
+// to 'O' for 31, textRecordsPerLine to a line. A property of every code
+// point is two lookups, its block's and then its own; a decomposition or a
+// composition is a binary search of records sorted by code point.
+
+/// The number the digits from byte 'at' of the table write.
+fn textNumber(_ table: String, _ at: Int, _ width: Int) -> Int {
+    let bytes = table.utf8
+    var value = 0
+    var i = 0
+    while i < width {
+        value = value * 32 + Int(bytes[at + i]) - 48
+        i = i + 1
+    }
+    return value
+}
+
+/// Where record r of a table of records 'width' digits wide starts.
+fn textRecord(_ record: Int, _ width: Int) -> Int {
+    return record * width + record / textRecordsPerLine
+}
+
+/// A two-stage table's value for the code point: its block of 128 from the
+/// index, then its place in that block.
+fn textStaged(_ index: String, _ blocks: String, _ width: Int, _ code: Int) -> Int {
+    let block = textNumber(index, textRecord(code >> 7, 2), 2)
+    return textNumber(blocks, textRecord(block * 128 + (code & 127), width), width)
+}
+
+/// The record whose key, its first 'keyWidth' digits, is the key; -1 when
+/// none is.
+fn textFind(_ table: String, count: Int, width: Int, keyWidth: Int, _ key: Int) -> Int {
+    var low = 0
+    var high = count
+    while low < high {
+        let middle = (low + high) / 2
+        let found = textNumber(table, textRecord(middle, width), keyWidth)
+        if found == key {
+            return middle
+        }
+        if found < key {
+            low = middle + 1
+        } else {
+            high = middle
+        }
+    }
+    return -1
+}
+
+/// Grapheme_Cluster_Break, Extended_Pictographic and Indic_Conjunct_Break,
+/// as graphemeBreakIndex's values put them together.
+fn graphemeBreakOf(_ code: Int) -> Int {
+    return textStaged(graphemeBreakIndex, graphemeBreakBlocks, graphemeBreakWidth, code)
+}
+
+/// Word_Break, and 32 more for Extended_Pictographic.
+fn wordBreakOf(_ code: Int) -> Int {
+    return textStaged(wordBreakIndex, wordBreakBlocks, wordBreakWidth, code)
+}
+
+fn sentenceBreakOf(_ code: Int) -> Int {
+    return textStaged(sentenceBreakIndex, sentenceBreakBlocks, sentenceBreakWidth, code)
+}
+
+/// Line_Break as LB1 resolves it, and 64 more for East_Asian_Width F, W or
+/// H, and 128 more for an unassigned Extended_Pictographic code point.
+fn lineBreakOf(_ code: Int) -> Int {
+    return textStaged(lineBreakIndex, lineBreakBlocks, lineBreakWidth, code)
+}
+
+/// Canonical_Combining_Class: 0 for a starter.
+fn combiningClassOf(_ code: Int) -> Int {
+    if code < 0x300 {
+        return 0
+    }
+    return textStaged(combiningClassIndex, combiningClassBlocks, combiningClassWidth, code)
+}
+
+// Hangul syllables decompose and compose by arithmetic (Unicode §3.12).
+const hangulBase = 0xAC00
+const leadingBase = 0x1100
+const vowelBase = 0x1161
+const trailingBase = 0x11A7
+const vowelCount = 21
+const trailingCount = 28
+const syllableCount = 11172
+
+/// The code point's full decomposition, canonical or with compatibility
+/// mappings too, added to the scalars; the code point itself when it has
+/// none.
+fn decompose(_ code: Int, compatibility: Bool, into scalars: inout Int[>..]) {
+    if code < 0xC0 && !(compatibility && code >= 0xA0) {
+        scalars.append(code)
+        return
+    }
+    let syllable = code - hangulBase
+    if syllable >= 0 && syllable < syllableCount {
+        scalars.append(leadingBase + syllable / (vowelCount * trailingCount))
+        scalars.append(vowelBase + syllable % (vowelCount * trailingCount) / trailingCount)
+        if syllable % trailingCount != 0 {
+            scalars.append(trailingBase + syllable % trailingCount)
+        }
+        return
+    }
+    let table = compatibility ? compatibilityDecompositionTable : canonicalDecompositionTable
+    let count = compatibility ? compatibilityDecompositionTableCount : canonicalDecompositionTableCount
+    let pool = compatibility ? compatibilityDecompositionPool : canonicalDecompositionPool
+    let record = textFind(table, count: count, width: 10, keyWidth: 5, code)
+    if record < 0 {
+        scalars.append(code)
+        return
+    }
+    let at = textRecord(record, 10)
+    let start = textNumber(table, at + 5, 4)
+    let length = textNumber(table, at + 9, 1)
+    var i = 0
+    while i < length {
+        scalars.append(textNumber(pool, textRecord(start + i, 5), 5))
+        i = i + 1
+    }
+}
+
+/// The primary composite of the two, or -1 when they do not compose.
+fn compose(_ first: Int, _ second: Int) -> Int {
+    if second < 0x300 {
+        return -1 // the second of every pair, Hangul's among them, is above U+02FF
+    }
+    let leading = first - leadingBase
+    if leading >= 0 && leading < 19 {
+        let vowel = second - vowelBase
+        if vowel >= 0 && vowel < vowelCount {
+            return hangulBase + (leading * vowelCount + vowel) * trailingCount
+        }
+        return -1
+    }
+    let syllable = first - hangulBase
+    if syllable >= 0 && syllable < syllableCount && syllable % trailingCount == 0 {
+        let trailing = second - trailingBase
+        if trailing > 0 && trailing < trailingCount {
+            return first + trailing
+        }
+        return -1
+    }
+    let record = textFind(compositionTable, count: compositionTableCount, width: 15, keyWidth: 10, first * 33554432 + second)
+    if record < 0 {
+        return -1
+    }
+    return textNumber(compositionTable, textRecord(record, 15) + 10, 5)
+}
+
+/// The scalars, as a string.
+fn stringOfScalars(_ scalars: Int[:]) -> String {
+    var bytes: U8[>..] = []
+    bytes.reserveCapacity(scalars.count)
+    for code in scalars {
+        Char.fromCodePoint(code)!.encodeUtf8(into: &bytes)
+    }
+    unsafe {
+        return String.fromUtf8Unchecked(bytes)
+    }
+}
+
+/// The string's scalars, as code points.
+fn scalarsOf(_ text: String) -> Int[>..] {
+    var codes: Int[>..] = []
+    codes.reserveCapacity(text.utf8Count)
+    for scalar in text {
+        codes.append(scalar.codePoint)
+    }
+    return codes
+}

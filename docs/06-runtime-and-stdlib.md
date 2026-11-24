@@ -729,7 +729,11 @@ Sable.Core          ── always linked, no dependencies
 
 Sable.Collections   List Dictionary Set Deque OrderedDictionary
                     PriorityQueue BitSet InlineArray SmallVec
-Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, normalisation,
+Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs; normalisation
+                    (NFC, NFD, NFKC, NFKD); grapheme clusters, words and
+                    sentences (UAX #29) and line breaks (UAX #14), each
+                    passing the UCD's conformance tests, from tables
+                    tools/unicode-tables.py generates (Unicode 16);
                     formatting, Regex (a compiled NFA/DFA hybrid),
                     TextBuilder
 Sable.Math          the elementary functions (sin, exp, pow, gamma, …),

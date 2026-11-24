@@ -2324,6 +2324,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     throw new SilTrap("cannot append a negative number of elements");
                 }
 
+                if (count > int.MaxValue) {
+                    throw new SilTrap("cannot append so many elements");
+                }
+
                 if (count > 0) {
                     var array = Unique(builtin.Operands[0], (IReference)operands[0]!);
                     var element = builtin.Operands[1].Type;

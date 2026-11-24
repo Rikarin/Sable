@@ -417,7 +417,13 @@ void sable_array_append_repeating(SableArray **slot, const SableMetadata *type, 
         return;
     }
 
+    // No buffer is this long: checked before the sizes below can overflow.
     int64_t size = type->element_size;
+    int64_t held = *slot == NULL ? 0 : (*slot)->count;
+    if (count > INT64_MAX / 4 / (size > 0 ? size : 1) - held) {
+        trap_here("cannot append so many elements");
+    }
+
     SableArray *array = unique(slot, type, count);
     if (array->count + count > array->capacity) {
         int64_t old = array->capacity;

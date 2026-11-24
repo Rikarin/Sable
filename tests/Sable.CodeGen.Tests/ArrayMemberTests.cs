@@ -387,6 +387,12 @@ public sealed class ArrayMemberTests {
             """);
 
     [Fact]
+    public void RepeatingMoreThanAnyBufferHoldsTraps() {
+        var execution = AssertAgree(Program("", "    var xs: Int[>..] = [1]\n    let n = Int.max\n    xs.append(repeating: 0, count: n)\n    print(xs.count)"));
+        Assert.Contains("cannot append so many elements", execution.Stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RepeatingANegativeCountTraps() {
         var execution = AssertAgree(Program("", "    var xs: Int[>..] = []\n    let n = -1\n    xs.append(repeating: 0, count: n)\n    print(xs.count)"));
         Assert.Contains("cannot append a negative number of elements", execution.Stderr, StringComparison.Ordinal);

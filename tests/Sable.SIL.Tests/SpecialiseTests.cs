@@ -293,23 +293,36 @@ public sealed class SpecialiseTests {
     ///     A closure given to generic code is reabstracted to its convention
     ///     where it is made: one that returns a type parameter's value then
     ///     writes it where it is told. A copy is given the closure itself,
-    ///     returning its result. Those a lazy sequence keeps stay in the one
-    ///     convention every instance keeps them in, and its copies convert. A
-    ///     requirement whose error type is Never boxes no error.
+    ///     returning its result, and the reabstraction goes. A requirement
+    ///     whose error type is Never boxes no error.
     /// </summary>
     [Fact]
     public void AClosureGivenToGenericCodeIsGivenToTheCopyAsItWasMade() {
+        // As an optimised build lowers it: the lazy views keep the closures as they are made.
+        using var optimised = SilGen.UseOptimised(true);
         var module = Specialised(Lazy);
         var reduce = module.Functions.Single(static f => f.Name.StartsWith("Sable.Core.Sequence.reduce", StringComparison.Ordinal) && f.Name.Contains("$specialised$", StringComparison.Ordinal));
-        Assert.False(reduce.IsUnspecialised, reduce.Name);
+        AssertNothingGeneric(reduce);
         Assert.Contains(reduce.Type.Parameters, static p => p.ToString() == "@thick (Int, Int) throws(any$Error) -> Int");
+        var main = Instructions(module.Find("M.main")!);
+        Assert.DoesNotContain(main, static i => i is FunctionRefInst { Function: var f } && f.StartsWith("$reabstract$", StringComparison.Ordinal));
         Assert.DoesNotContain(module.Functions, static f => f.Name.StartsWith("Sable.Core.Sequence.reduce", StringComparison.Ordinal) && f.IsUnspecialised);
-        Assert.DoesNotContain(module.Functions, static f => f.Name.StartsWith("Sable.Core.Lazy", StringComparison.Ordinal) && f.IsUnspecialised);
 
         const string expected = "254\n";
         Assert.Equal(expected, Run(Lower(Lazy, GenericsMode.Specialised)));
         Assert.Equal(expected, Run(module));
         Assert.Equal(expected, Run(Optimised(Lazy)));
+    }
+
+    /// <summary>
+    ///     A closure a lazy view keeps, lowered as an unoptimised build does:
+    ///     in the one convention every instance keeps it in, which the copies
+    ///     for the types convert from.
+    /// </summary>
+    [Fact]
+    public void AClosureAGenericTypeKeepsIsConvertedInTheCopies() {
+        var module = Specialised(Lazy);
+        Assert.Equal("254\n", Run(module));
     }
 
     const string Predicates = """

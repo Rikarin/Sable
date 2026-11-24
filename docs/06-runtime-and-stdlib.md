@@ -620,7 +620,10 @@ reads it makes of it the function the code has there — a cast, where only
 the parameters' names differ, or a reabstraction thunk — and what writes it
 converts likewise (`SilGen.StoredFunctionType`). So the Lazy adapters and
 `PriorityQueue` are compiled once. A specialised build keeps such a function
-in the convention of the instance's types, and calls it directly.
+in the convention of the instance's types, and calls it directly; so does an
+optimised unspecialised one (`SilGen.UseOptimised`), where those types' code
+is copied for each instance, as the specialisation pass would leave a
+conversion at every use.
 
 A **requirement generic over its own parameters** (`relative<C:
 Collection>(to: C)`) has an entry that takes, before `Self`'s metadata, the

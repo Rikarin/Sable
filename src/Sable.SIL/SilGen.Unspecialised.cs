@@ -77,6 +77,20 @@ public sealed partial class SilGen {
         return new Restore(() => AmbientGenerics.Value = before);
     }
 
+    static readonly AsyncLocal<bool> AmbientOptimised = new();
+
+    /// <summary>
+    ///     Lowers for an optimised build, or not, until the handle is
+    ///     disposed: one keeps the functions its generic types store in the
+    ///     convention of their types (<see cref="StoredFunctionType" />), as
+    ///     the specialisation pass would otherwise convert them at each use.
+    /// </summary>
+    public static IDisposable UseOptimised(bool optimised) {
+        var before = AmbientOptimised.Value;
+        AmbientOptimised.Value = optimised;
+        return new Restore(() => AmbientOptimised.Value = before);
+    }
+
     sealed class Restore(Action undo) : IDisposable {
         public void Dispose() => undo();
     }
@@ -660,13 +674,13 @@ public sealed partial class SilGen {
 
     /// <summary>
     ///     A function type of a generic type's type parameters' values that a
-    ///     field of it has: in a build that compiles generics once, every
+    ///     field of it has: in an unoptimised build that compiles generics once, every
     ///     instance keeps it in the generic convention, of the type's own
     ///     parameters (<see cref="StoredFunctionType" />), as code that knows
     ///     the instance's arguments and code that does not both use it.
     /// </summary>
     static bool IsStoredFunction(TypeSymbol type, NamedTypeSymbol definition) =>
-        type is FunctionTypeSymbol && Generics == GenericsMode.Unspecialised && Mentions(type, definition.TypeParameters) && IsGenericFunction(type, definition.TypeParameters);
+        type is FunctionTypeSymbol && Generics == GenericsMode.Unspecialised && !AmbientOptimised.Value && Mentions(type, definition.TypeParameters) && IsGenericFunction(type, definition.TypeParameters);
 
     readonly Dictionary<FieldSymbol, ThickFunctionType?> _storedFunctions = new(ReferenceEqualityComparer.Instance);
 

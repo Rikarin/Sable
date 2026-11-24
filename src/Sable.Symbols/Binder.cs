@@ -4121,10 +4121,12 @@ public sealed partial class Binder {
     ///     True for an argument that waits for its parameter's type and could
     ///     not be bound to it whatever is in it: an array literal where a
     ///     struct, a class or a union is wanted, a leading dot where an array
-    ///     is. <c>on([.Interrupt, .Quit])</c> means the <c>on</c> that takes
-    ///     an array, and <c>on(.Interrupt)</c> the other.
+    ///     is, or where the type has no member of its name.
+    ///     <c>on([.Interrupt, .Quit])</c> means the <c>on</c> that takes
+    ///     an array, and <c>on(.Interrupt)</c> the other; <c>.decimal</c> is
+    ///     of the one whose type has a <c>decimal</c>.
     /// </summary>
-    static bool IsMisshapen(ExpressionSyntax? argument, TypeSymbol wanted) {
+    bool IsMisshapen(ExpressionSyntax? argument, TypeSymbol wanted) {
         while (argument is ParenthesizedExpressionSyntax parenthesized) {
             argument = parenthesized.Expression;
         }
@@ -4143,9 +4145,17 @@ public sealed partial class Binder {
 
         return argument switch {
             ArrayExpressionSyntax => type is NamedTypeSymbol { IsFlags: false, TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Union or TypeKind.Enum },
-            ImplicitMemberAccessExpressionSyntax or InvocationExpressionSyntax { Expression: ImplicitMemberAccessExpressionSyntax } => type is ArrayTypeSymbol,
+            ImplicitMemberAccessExpressionSyntax member => LacksMember(member),
+            InvocationExpressionSyntax { Expression: ImplicitMemberAccessExpressionSyntax member } => LacksMember(member),
             _ => false,
         };
+
+        bool LacksMember(ImplicitMemberAccessExpressionSyntax member) =>
+            type is ArrayTypeSymbol
+            || (type is NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Union or TypeKind.Enum } named
+                && CalleeName(member.Name) is { Length: > 0 } name
+                && !HasMember(named, name)
+                && LookupMemberOfKind(named, name, instance: false) is null);
     }
 
     /// <summary>Of two subscripts, the one with no setter, when the other has one; null when both or neither do.</summary>
@@ -4385,9 +4395,12 @@ public sealed partial class Binder {
                 continue;
             }
 
+            // What one protocol gives is all there: its overloads of the same
+            // labels, told apart by their types, do not hide one another.
+            var nearer = members.Count;
             var added = false;
             foreach (var member in inherited.Members) {
-                if (!members.Any(own => Hides(own, member))) {
+                if (!members.Take(nearer).Any(own => Hides(own, member))) {
                     members.Add(member);
                     added = true;
                 }

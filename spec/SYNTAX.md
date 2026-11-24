@@ -446,6 +446,10 @@ Overloading on parameter types, counts and labels is allowed. Overloading on
 return type alone is not. Resolution order: exact match → label match →
 implicit widening → protocol conformance → generic.
 
+Two overloads that differ only in whether a closure they take is async are
+told apart by the closure: one that awaits is passed to the async one,
+`await measure { await work() }`, and any other to the one that is not.
+
 ---
 
 ## 6. Structs

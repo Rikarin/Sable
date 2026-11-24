@@ -1,0 +1,46 @@
+module TimeStopwatchTests
+
+import Sable.Testing
+import Sable.Time
+
+// A clock moved on by hand, that nothing sleeps on.
+struct HandClock: Clock {
+    let seconds: Atomic<Int>
+
+    fn pass(_ count: Int) {
+        let _ = seconds.update { $0 + count }
+    }
+
+    fn now() -> Instant {
+        return Instant.origin + Duration.seconds(seconds.load())
+    }
+
+    fn sleep(until deadline: Instant) async throws(CancellationError) {
+        fatalError("nothing sleeps on this clock")
+    }
+}
+
+@test
+fn aStopwatchMeasuresItsClockWhileItRuns() {
+    let clock = HandClock(seconds: Atomic(0))
+    var watch = Stopwatch(clock: clock)
+    clock.pass(2)
+    assertEqual(watch.elapsed, Duration.seconds(2))
+    watch.start()
+    assertEqual(watch.stop(), Duration.seconds(2))
+    assert(!watch.isRunning)
+    clock.pass(3)
+    assertEqual(watch.stop(), Duration.seconds(2))
+    watch.start()
+    clock.pass(5)
+    let copy = watch
+    assertEqual(watch.restart(), Duration.seconds(7))
+    clock.pass(1)
+    assertEqual(watch.elapsed, Duration.seconds(1))
+    assertEqual(copy.elapsed, Duration.seconds(8))
+    watch.reset()
+    assertEqual(watch.elapsed, Duration.zero)
+    assert(!Stopwatch(clock: clock, running: false).isRunning)
+    let real = Stopwatch(running: false)
+    assertEqual(real.elapsed, Duration.zero)
+}

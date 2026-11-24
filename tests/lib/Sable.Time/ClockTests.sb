@@ -79,9 +79,13 @@ fn aClockOfTheProgramsOwnNeedsTwoMethods() async {
 @test
 fn measuringIsOnTheClock() async {
     let clock = StepClock(steps: Atomic(0))
-    assertEqual(clock.measure({ let _ = 1 }), Duration.seconds(1))
+    assertEqual(clock.measure({
+        let _ = 1
+    }), Duration.seconds(1))
     assertEqual(await clock.measure { await Task.yield() }, Duration.seconds(1))
-    assertEqual(measure(clock: clock, { let _ = 1 }), Duration.seconds(1))
+    assertEqual(measure(clock: clock, {
+        let _ = 1
+    }), Duration.seconds(1))
     assertEqual(await measure(clock: clock) { await Task.yield() }, Duration.seconds(1))
     assert(measure { Runtime.sleep(nanoseconds: 1_000_000) } >= Duration.milliseconds(1))
     assert(await measure { try! await MonotonicClock().sleep(for: Duration.milliseconds(1)) } >= Duration.milliseconds(1))
@@ -90,7 +94,9 @@ fn measuringIsOnTheClock() async {
 @test
 fn measuringThrowsWhatTheBodyThrows() async {
     do {
-        let _ = try measure { () throws(Oops) -> Void in throw Oops() }
+        let _ = try measure { () throws(Oops) -> Void in
+            throw Oops()
+        }
         assert(false)
     } catch { }
     do {

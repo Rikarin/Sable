@@ -85,7 +85,7 @@ fn fractionsRoundToTheNearestNanosecond() {
     assertEqual(Duration.seconds(0.1), Duration.milliseconds(100))
     assertEqual(Duration.seconds(-0.1), Duration.milliseconds(-100))
     assertEqual(Duration.milliseconds(0.25), ns(250_000))
-    assertEqual(Duration.microseconds(0.0005), ns(1))   // a little over a half
+    assertEqual(Duration.microseconds(0.0005), ns(1)) // a little over a half
     assertEqual(Duration.minutes(0.5), Duration.seconds(30))
     assertEqual(Duration.hours(1.0 / 3.0), Duration.minutes(20))
     // Halves exactly, in binary: to the even one.
@@ -303,7 +303,7 @@ fn textIsExact() {
 @test
 fn textHonoursItsSpec() {
     assertEqual("\(ns(1_234_567):.2)", "1.23ms")
-    assertEqual("\(ns(1_235_000):.2)", "1.24ms")   // a half, to the even
+    assertEqual("\(ns(1_235_000):.2)", "1.24ms") // a half, to the even
     assertEqual("\(ns(1_245_000):.2)", "1.24ms")
     assertEqual("\(ns(999_999):.0)", "1ms")
     assertEqual("\(ns(999_999):.1)", "1.0ms")

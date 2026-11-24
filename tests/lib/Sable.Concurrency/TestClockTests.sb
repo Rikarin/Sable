@@ -351,31 +351,6 @@ fn throttlingIsOnTheClock() async {
 }
 
 @test
-fn stopwatchesMeasureTheClock() async {
-    let clock = TestClock()
-    var watch = Stopwatch(clock: clock)
-    await clock.advance(by: Duration.seconds(2))
-    assertEqual(watch.elapsed, Duration.seconds(2))
-    watch.start()
-    assertEqual(watch.stop(), Duration.seconds(2))
-    assert(!watch.isRunning)
-    await clock.advance(by: Duration.seconds(3))
-    assertEqual(watch.stop(), Duration.seconds(2))
-    watch.start()
-    await clock.advance(by: Duration.seconds(5))
-    let copy = watch
-    assertEqual(watch.restart(), Duration.seconds(7))
-    await clock.advance(by: Duration.seconds(1))
-    assertEqual(watch.elapsed, Duration.seconds(1))
-    assertEqual(copy.elapsed, Duration.seconds(8))
-    watch.reset()
-    assertEqual(watch.elapsed, Duration.zero)
-    assert(!Stopwatch(clock: clock, running: false).isRunning)
-    let real = Stopwatch(running: false)
-    assertEqual(real.elapsed, Duration.zero)
-}
-
-@test
 fn bodiesAreMeasuredOnTheClock() async {
     let clock = TestClock()
     let job = Task.spawn {

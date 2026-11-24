@@ -48,7 +48,9 @@ static class Libm {
 
     static T Find<T>(string name) where T : Delegate =>
         (T)Functions.GetOrAdd(name, static n => Marshal.GetDelegateForFunctionPointer<T>(
+            // The universal C runtime exports its F32 hypot as '_hypotf' alone.
             NativeLibrary.TryGetExport(Library.Value, n, out var address)
+            || OperatingSystem.IsWindows() && NativeLibrary.TryGetExport(Library.Value, "_" + n, out address)
                 ? address
                 : throw new SilTrap($"the C math library has no '{n}'")));
 

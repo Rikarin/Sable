@@ -69,18 +69,19 @@ public sealed class ProcessTests {
                 """), stepLimit: 200_000_000).Stdout
         );
 
+    /// <remarks>Whole lines ended as Windows ends them: its find.exe takes "a\nb\n" for UTF-16.</remarks>
     [Fact]
     public void AChildsStreamsAreReadAndWrittenAsItRuns() =>
         Assert.Equal(
-            "true\na\nb\ntrue\n",
+            "true\nthe first line\nthe second line\ntrue\n",
             AssertAgree(Async($$"""
                 let child = try {{Echo}}.stdin(.Piped).stdout(.Piped).spawn()
                 print(child.tryWait() == none && child.stderr == none)
-                try await child.stdin!.write("a\n")
-                try await child.stdin!.write("b\n")
+                try await child.stdin!.write("the first line\r\n")
+                try await child.stdin!.write("the second line\r\n")
                 child.stdin!.close()
                 for try await line in child.stdout!.lines() {
-                    print(line)
+                    print(line.trimmed())
                 }
                 print(try await child.wait().success)
                 """)).Stdout

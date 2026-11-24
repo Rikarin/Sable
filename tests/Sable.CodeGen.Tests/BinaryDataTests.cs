@@ -96,7 +96,7 @@ public sealed class BinaryDataTests {
     [Fact]
     public void AppendingANegativeNumberOfBytesTraps() {
         var execution = AssertAgree(Program("", "var b: U8[>..] = []\nb.append(repeating: 0, count: -1)"));
-        Assert.Contains("cannot append a negative number of bytes", execution.Stderr, StringComparison.Ordinal);
+        Assert.Contains("cannot append a negative number of elements", execution.Stderr, StringComparison.Ordinal);
     }
 
     /// <summary>

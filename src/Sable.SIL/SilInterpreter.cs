@@ -2146,6 +2146,46 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return null;
             }
 
+            // A slice's elements stored over [from, to) of an array or a
+            // slice: nothing when it is still the view of that range.
+            case "array_store_slice": {
+                var address = (IReference)operands[0]!;
+                var (from, to) = ((long)operands[1]!, (long)operands[2]!);
+                var (destination, destinationStart, destinationCount) = ElementsOf(address.Peek());
+                if (from < 0 || to > destinationCount || from > to) {
+                    throw new SilTrap("array slice out of range");
+                }
+
+                var (source, sourceStart, sourceCount) = ElementsOf(operands[3]);
+                if (sourceCount != to - from) {
+                    throw new SilTrap($"a slice of count {sourceCount} stored over a range of count {to - from}");
+                }
+
+                if (sourceCount == 0 || ReferenceEquals(source, destination) && sourceStart == destinationStart + from) {
+                    return null;
+                }
+
+                var values = source!.Elements.GetRange(sourceStart, sourceCount);
+                HeapArray buffer;
+                var start = 0;
+                if (address.Peek() is SliceValue) {
+                    var unique = UniqueSlice(builtin.Operands[0], address);
+                    (buffer, start) = (unique.Buffer!, unique.Start);
+                } else {
+                    buffer = Unique(builtin.Operands[0], address);
+                }
+
+                for (var i = 0; i < values.Count; i++) {
+                    var at = start + (int)from + i;
+                    var old = buffer.Elements[at];
+                    Retain(buffer.Type.Element, values[i]);
+                    buffer.Elements[at] = values[i];
+                    Release(buffer.Type.Element, old, depth);
+                }
+
+                return null;
+            }
+
             case "array_capacity":
                 return operands[0] is HeapArray held ? (long)Alive(held).Elements.Capacity : 0L;
 

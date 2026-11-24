@@ -529,6 +529,58 @@ void sable_slice_rotate(SableSlice *slice, const SableMetadata *type, int64_t fr
     rotate_elements(base, to - from, shift, type->element_size);
 }
 
+// The 'count' elements of the run at 'buffer', from 'start', stored over
+// those at 'destination', each replaced: what 'f(&xs[1..<3])' writes back,
+// and 'xs[1..<3] = s'. The caller has made the destination's buffer the
+// only reference to it, so the two runs are not one buffer's.
+static void store_run(char *destination, const SableMetadata *type, const SableArray *buffer, int64_t start, int64_t count) {
+    int64_t size = type->element_size;
+    for (int64_t i = 0; i < count; i++) {
+        char *element = destination + i * size;
+        element_destroy(type, element);
+        element_copy(type, element, buffer->elements + (start + i) * size);
+    }
+}
+
+// The range [from, to) of a run of 'count' elements checked, and that the
+// slice stored over it is as long.
+static void check_store(int64_t from, int64_t to, int64_t count, int64_t stored) {
+    if (from < 0 || to > count || from > to) {
+        trap_here("array slice out of range");
+    }
+
+    if (stored != to - from) {
+        char message[96];
+        snprintf(message, sizeof message, "a slice of count %lld stored over a range of count %lld", (long long)stored, (long long)(to - from));
+        trap_here(message);
+    }
+}
+
+// The slice 'buffer'/'start'/'count' stored over elements [from, to) of the
+// array at '*slot', in place: nothing when it is still the view of that
+// range, whose elements are the range's already; else the array made the
+// only reference to its buffer, and each element replaced.
+void sable_array_store_slice(SableArray **slot, const SableMetadata *type, int64_t from, int64_t to, SableArray *buffer, int64_t start, int64_t count) {
+    check_store(from, to, sable_array_count(*slot), count);
+    if (count == 0 || (buffer == *slot && start == from)) {
+        return;
+    }
+
+    SableArray *array = unique(slot, type, 0);
+    store_run(array->elements + from * type->element_size, type, buffer, start, count);
+}
+
+// The same, over elements [from, to) of the slice at '*slice'.
+void sable_slice_store_slice(SableSlice *slice, const SableMetadata *type, int64_t from, int64_t to, SableArray *buffer, int64_t start, int64_t count) {
+    check_store(from, to, slice->count, count);
+    if (count == 0 || (buffer == slice->buffer && start == slice->start + from)) {
+        return;
+    }
+
+    sable_slice_make_unique(slice, type);
+    store_run(slice->buffer->elements + (slice->start + from) * type->element_size, type, buffer, start, count);
+}
+
 static void copy_string_element(void *destination, const void *source) {
     memcpy(destination, source, sizeof(void *));
     sable_retain(*(void *const *)source);

@@ -1,4 +1,5 @@
 using Sable.Symbols;
+using Sable.Syntax;
 
 namespace Sable.SIL;
 
@@ -112,6 +113,172 @@ public sealed partial class SilGen {
             }));
             BeginAccess(place, modify: true, borrows);
             return view.Type == wanted ? view : Emit(new BuiltinInst("opaque_cast", wanted, view));
+        }
+
+        /// <summary>
+        ///     The range of an array's own slicing, <c>xs[1..&lt;3]</c> or, as a
+        ///     place, <c>xs[1..&lt;^1]</c>: a range of integers of any shape, or
+        ///     one counted from the end. Null for any other indexing.
+        /// </summary>
+        BoundExpression? SlicingRange(BoundIndexAccess index) =>
+            index is { Subscript: null, Indices: [var range] }
+            && Sub(index.Receiver.Type) is ArrayTypeSymbol
+            && Sub(range.Type) is NamedTypeSymbol rangeType
+            && (Core.IsAnyRange(rangeType) || Core.RelativeRange is { } relative && rangeType.Equals(relative))
+                ? range
+                : null;
+
+        /// <summary>
+        ///     The positions a range of an array names, from the first to the
+        ///     one past the last; <paramref name="count" /> gives the array's
+        ///     count, asked for only when a bound is left out or counted from
+        ///     the end. Whether they are within the array is the slicing's to
+        ///     check (<c>array_slice</c>, <c>array_store_slice</c>), except a
+        ///     range counted from the end, which its own <c>offsets(in:)</c>
+        ///     checks, saying so.
+        /// </summary>
+        (SilValue From, SilValue To)? RangeBounds(BoundExpression rangeIndex, Func<SilValue> count) {
+            if (Core.RelativeRange is { } relative && Sub(rangeIndex.Type).Equals(relative)) {
+                if (relative.GetMembers("offsets").OfType<FunctionSymbol>().FirstOrDefault() is not { } offsets) {
+                    Missing(rangeIndex, "a range counted from the end, with no 'RelativeRange.offsets(in:)'");
+                    return null;
+                }
+
+                if (Expression(rangeIndex) is not { } range) {
+                    return null;
+                }
+
+                var held = Temporary(range, rangeIndex.Syntax, rangeIndex.Type, "$range");
+                var counted = Temporary(count(), rangeIndex.Syntax, Core.Int, "$count");
+                if (Expression(new BoundCall(rangeIndex.Syntax, held, offsets, [counted])) is not { } pair) {
+                    return null;
+                }
+
+                return (Emit(new TupleExtractInst(pair, 0)), Emit(new TupleExtractInst(pair, 1)));
+            }
+
+            SilValue? from, to;
+            bool inclusive;
+            if (rangeIndex is BoundRange written) {
+                from = written.Lower is { } lower ? Expression(lower) : Emit(new IntegerLiteralInst(SilType.Int, 0));
+                to = written.Upper is { } upper ? Expression(upper) : count();
+                inclusive = written.IsInclusive && written.Upper is not null;
+            } else {
+                if (Expression(rangeIndex) is not { Type: StructType rangeType } range) {
+                    return null;
+                }
+
+                // A one-sided range held in a variable has only one of the
+                // fields: the start, or the array's count, stands in for the other.
+                from = rangeType.FieldIndex("lowerBound") is var lowerIndex and >= 0
+                    ? Emit(new StructExtractInst(range, lowerIndex))
+                    : Emit(new IntegerLiteralInst(SilType.Int, 0));
+                var upperIndex = rangeType.FieldIndex("upperBound");
+                to = upperIndex >= 0 ? Emit(new StructExtractInst(range, upperIndex)) : count();
+                var definition = ((NamedTypeSymbol)Sub(rangeIndex.Type)).OriginalDefinition;
+                inclusive = upperIndex >= 0
+                    && (ReferenceEquals(definition, Core.ClosedRange) || ReferenceEquals(definition, Core.PartialRangeThrough));
+            }
+
+            if (from is null || to is null) {
+                return null;
+            }
+
+            if (inclusive) {
+                to = Emit(new BuiltinInst("add_Int", SilType.Int, to, Emit(new IntegerLiteralInst(SilType.Int, 1))));
+            }
+
+            return (from, to);
+        }
+
+        /// <summary>A value made already, kept in a slot of its own and read as a local is: an operand of a call built here.</summary>
+        BoundLocalAccess Temporary(SilValue value, SyntaxNode syntax, TypeSymbol type, string name) {
+            var slot = NewSlot(value.Type, name);
+            Emit(new StoreInst(Owned(value), slot, StoreKind.Init));
+            var local = new LocalSymbol(name, Core.Module, null, false);
+            _slots[local] = slot;
+            return new BoundLocalAccess(syntax, local, type);
+        }
+
+        /// <summary>The positions a range names in the array or slice at <paramref name="place" />.</summary>
+        (SilValue From, SilValue To)? PlaceBounds(SilValue place, BoundExpression rangeIndex) =>
+            RangeBounds(rangeIndex, () => {
+                var array = Emit(new LoadInst(place));
+                var count = Emit(new BuiltinInst("array_count", SilType.Int, array));
+                Destroy(array);
+                return count;
+            });
+
+        /// <summary>
+        ///     A range of an array's elements as a place — <c>f(&amp;xs[1..&lt;3])</c>,
+        ///     <c>xs[2...].sort()</c>, <c>xs[..&lt;2][0] = v</c> (SYNTAX.md §5, "A range of an array as a place"):
+        ///     there is no slice in the array to change where it is, so the
+        ///     range is read out as one, a view sharing the array's buffer,
+        ///     into a slot of its own, which is changed instead; once the
+        ///     caller ends <paramref name="borrows" />, the slice is stored
+        ///     back over the range (<c>array_store_slice</c>). A write through
+        ///     the view copies its run first, as the array still holds the
+        ///     buffer, and storing it back writes the array's own buffer in
+        ///     place; a slice nothing wrote is still the view, and is not
+        ///     stored. The slice must come back with the range's count, or
+        ///     the store traps: the callee was given a slice, which never
+        ///     changes its count, and only replacing it whole can. The array
+        ///     is accessed for the call, as it is for an element passed inout.
+        /// </summary>
+        SilValue? SliceForWriteBack(BoundIndexAccess sliced, BoundExpression rangeIndex, List<SilValue> borrows) {
+            if (Address(sliced.Receiver, borrows) is not { Type: AddressType { Pointee: var pointee } } place) {
+                return null;
+            }
+
+            if (ArrayType.ElementOf(pointee) is not { } element) {
+                return Missing(sliced, $"'{Describe(sliced.Syntax)}' as a place");
+            }
+
+            if (PlaceBounds(place, rangeIndex) is not var (from, to)) {
+                return null;
+            }
+
+            var array = Emit(new LoadInst(place));
+            var view = Emit(new BuiltinInst("array_slice", new SliceType(element), array, from, to));
+            Destroy(array);
+            var slot = NewSlot(view.Type, "$slice");
+            Emit(new StoreInst(view, slot, StoreKind.Init));
+
+            // Written back after the access ends, as a mutating member of a
+            // slice puts the array back (AsMutableSliceReceiver).
+            borrows.Add(new WriteBack(() => {
+                var changed = Emit(new LoadInst(slot, LoadKind.Take));
+                Emit(new BuiltinInst("array_store_slice", SilType.Unit, place, from, to, changed));
+                Destroy(changed);
+            }));
+            BeginAccess(place, modify: true, borrows);
+            return slot;
+        }
+
+        /// <summary>
+        ///     <c>xs[1..&lt;3] = v</c>, of an array that does not replace a range
+        ///     (a growable one does, through its RangeReplaceableCollection
+        ///     subscript), or of a slice: the elements stored over the range's,
+        ///     the value as many as the range has, or a trap.
+        /// </summary>
+        SilValue? RangeStore(BoundIndexAccess target, BoundExpression rangeIndex, SilValue value) {
+            var ends = new List<SilValue>();
+            if (Address(target.Receiver, ends) is not { Type: AddressType { Pointee: var pointee } } place) {
+                EndAll(ends);
+                return null;
+            }
+
+            if (ArrayType.ElementOf(pointee) is null || PlaceBounds(place, rangeIndex) is not var (from, to)) {
+                EndAll(ends);
+                return ArrayType.ElementOf(pointee) is null ? Missing(target, $"storing to '{Describe(target.Syntax)}'") : null;
+            }
+
+            Unhold(value);
+            var stored = value.Type is ArrayType ? WholeSlice(value) : value;
+            Emit(new BuiltinInst("array_store_slice", SilType.Unit, place, from, to, stored));
+            Destroy(stored);
+            EndAll(ends);
+            return UnitValue.Instance;
         }
 
         /// <summary>

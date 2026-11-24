@@ -201,4 +201,39 @@ public sealed class ExclusivityTests {
         var execution = AssertAgree(SharedProgram("    let box = Box()\n    grow(&box.items[0], box)\n    print(\"unreachable\")"));
         Assert.Equal("fatal error: overlapping accesses to the same storage\n  at test.sb:25:5\n", execution.Stderr);
     }
+
+    // ---- A range of an array passed inout (#301) -------------------------------
+
+    const string Ranges = """
+                          class Rows {
+                              var items: Int[>..] = [1, 2, 3, 4]
+                          }
+
+                          fn swapRuns(_ a: inout Int[:], _ b: inout Int[:]) {
+                              let first = a[0]
+                              a[0] = b[0]
+                              b[0] = first
+                          }
+
+                          fn runs(_ one: Rows, _ two: Rows) {
+                              swapRuns(&one.items[0..<2], &two.items[2...])
+                          }
+                          """;
+
+    /// <summary>Two ranges of one array passed inout to one call are two accesses to the array, whether or not they overlap.</summary>
+    [Theory]
+    [InlineData("var values: Int[>..] = [1, 2, 3]\nswapRuns(&values[0..<2], &values[1..<3])")]
+    [InlineData("var values: Int[>..] = [1, 2, 3, 4]\nswapRuns(&values[0..<2], &values[^2...])")]
+    public void TwoRangesOfOneArrayInOneCallAreRejected(string body) {
+        var errors = Pipeline.Compile(new SourceText(Program(Ranges, body), "test.sb")).Errors;
+        Assert.Contains(errors, e => e.Contains("S3062", StringComparison.Ordinal) && e.Contains("overlapping accesses to 'values[…]'", StringComparison.Ordinal));
+    }
+
+    /// <summary>Ranges of two objects' arrays are fine; of one object's, reached through two references, they trap as the program runs.</summary>
+    [Fact]
+    public void TwoRangesOfOneObjectsArrayTrapAsTheProgramRuns() {
+        var execution = AssertAgree(Program(Ranges, "    let rows = Rows()\n    runs(rows, Rows())\n    print(\"\\(rows.items)\")\n    runs(rows, rows)\n    print(\"unreachable\")"));
+        Assert.Equal("[3, 2, 3, 4]\n", execution.Stdout);
+        Assert.StartsWith("fatal error: overlapping accesses to the same storage\n", execution.Stderr, StringComparison.Ordinal);
+    }
 }

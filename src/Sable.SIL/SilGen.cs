@@ -7795,6 +7795,11 @@ public sealed partial class SilGen {
 
             Hold(value);
 
+            // 'a[1..<3] = v': the elements stored over the range's.
+            if (assignment.Target is BoundIndexAccess rangeTarget && SlicingRange(rangeTarget) is { } rangeIndex) {
+                return RangeStore(rangeTarget, rangeIndex, value);
+            }
+
             // 'a[i] = v': the array, made unique, takes the value.
             if (assignment.Target is BoundIndexAccess { Indices: [var indexExpression] } indexAccess
                 && Sub(indexAccess.Receiver.Type) is ArrayTypeSymbol) {
@@ -8225,6 +8230,11 @@ public sealed partial class SilGen {
                     return Address(element.Receiver, borrows) is { } tuple
                         ? Emit(new TupleElementAddrInst(tuple, element.Index))
                         : null;
+
+                // A range of an array's elements, read out and written back:
+                // 'sortAll(&values[1..<^1])', 'values[2...].sort()'.
+                case BoundIndexAccess sliced when SlicingRange(sliced) is { } rangeIndex && !IsInlineArray(sliced.Receiver):
+                    return SliceForWriteBack(sliced, rangeIndex, borrows);
 
                 // An element of an array, where it is: 'bump(&values[0])'.
                 case BoundIndexAccess { Subscript: null, Indices: [var indexExpression] } element
@@ -9411,7 +9421,7 @@ public sealed partial class SilGen {
                     : Missing(index, $"indexing '{index.Receiver.Type.ToDisplayString()}'");
             }
 
-            if (index.Indices is [var rangeIndex] && Core.IsAnyRange(Sub(rangeIndex.Type)) && !IsInlineArray(index.Receiver)) {
+            if (SlicingRange(index) is { } rangeIndex) {
                 return RangeRead(index, rangeIndex);
             }
 
@@ -9444,55 +9454,31 @@ public sealed partial class SilGen {
         ///     where the range is not within the array. A range written in place
         ///     may leave out a bound: the start, or the array's count. A slice
         ///     of a slice is a view of the same buffer, its range within the
-        ///     slice's.
+        ///     slice's. An array field of an inline struct is viewed whole
+        ///     first, its elements copied out (InlineArrayAsSlice).
         /// </summary>
         SilValue? RangeRead(BoundIndexAccess index, BoundExpression rangeIndex) {
-            if (Borrow(index.Receiver) is not { } array) {
+            var inline = IsInlineArray(index.Receiver);
+            if ((inline ? InlineArrayAsSlice(index.Receiver) : Borrow(index.Receiver)) is not { } array) {
                 return null;
             }
 
-            if (ArrayType.ElementOf(array.Type) is not { } elementType) {
-                End(array);
-                return null;
-            }
-
-            SilValue? from, to;
-            bool inclusive;
-            if (rangeIndex is BoundRange written) {
-                from = written.Lower is { } lower ? Expression(lower) : Emit(new IntegerLiteralInst(SilType.Int, 0));
-                to = written.Upper is { } upper ? Expression(upper) : Emit(new BuiltinInst("array_count", SilType.Int, array));
-                inclusive = written.IsInclusive && written.Upper is not null;
-            } else {
-                if (Expression(rangeIndex) is not { Type: StructType rangeType } range) {
+            void Done() {
+                if (inline) {
+                    Destroy(array);
+                } else {
                     End(array);
-                    return null;
                 }
-
-                // A one-sided range held in a variable has only one of the
-                // fields: the start, or the array's count, stands in for the other.
-                from = rangeType.FieldIndex("lowerBound") is var lowerIndex and >= 0
-                    ? Emit(new StructExtractInst(range, lowerIndex))
-                    : Emit(new IntegerLiteralInst(SilType.Int, 0));
-                var upperIndex = rangeType.FieldIndex("upperBound");
-                to = upperIndex >= 0
-                    ? Emit(new StructExtractInst(range, upperIndex))
-                    : Emit(new BuiltinInst("array_count", SilType.Int, array));
-                var definition = ((NamedTypeSymbol)Sub(rangeIndex.Type)).OriginalDefinition;
-                inclusive = upperIndex >= 0
-                    && (ReferenceEquals(definition, Core.ClosedRange) || ReferenceEquals(definition, Core.PartialRangeThrough));
             }
 
-            if (from is null || to is null) {
-                End(array);
+            if (ArrayType.ElementOf(array.Type) is not { } elementType
+                || RangeBounds(rangeIndex, () => Emit(new BuiltinInst("array_count", SilType.Int, array))) is not var (from, to)) {
+                Done();
                 return null;
-            }
-
-            if (inclusive) {
-                to = Emit(new BuiltinInst("add_Int", SilType.Int, to, Emit(new IntegerLiteralInst(SilType.Int, 1))));
             }
 
             var slice = Emit(new BuiltinInst("array_slice", new SliceType(elementType), array, from, to));
-            End(array);
+            Done();
             return slice;
         }
 

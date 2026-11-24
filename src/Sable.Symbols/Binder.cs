@@ -2709,7 +2709,20 @@ public sealed partial class Binder {
             return new BoundError(expression);
         }
 
+        // An argument marked '&' or 'out' is written by the call: a
+        // subscript chosen for it, or for what it is a part of, must store.
+        List<SyntaxNode>? written = expression.Parent is ArgumentSyntax { ModifierToken.Kind: SyntaxKind.AmpersandToken or SyntaxKind.OutKeyword } argument
+                                    && ReferenceEquals(argument.Expression, expression)
+            ? [..Spine(expression)]
+            : null;
+        if (written is not null) {
+            _inoutSpine.UnionWith(written);
+        }
+
         var bound = BindExpressionCore(expression, expectedType);
+        if (written is not null) {
+            _inoutSpine.ExceptWith(written);
+        }
 
         // 'E.Bad' names a case that carries a value. Called, it makes one;
         // anywhere else ('let x = E.Bad', 'throw .Bad', '(E.Bad, 1)') it is
@@ -3131,6 +3144,12 @@ public sealed partial class Binder {
 
     /// <summary>The expressions an assignment being bound writes through: its target, and what that is a part of.</summary>
     readonly HashSet<SyntaxNode> _assignedSpine = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>The expressions an '&amp;' being bound passes inout: its operand, and what that is a part of.</summary>
+    readonly HashSet<SyntaxNode> _inoutSpine = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>What the assignment being bound stores to, its parentheses taken off.</summary>
+    SyntaxNode? _storeTarget;
 
     static IEnumerable<SyntaxNode> Spine(ExpressionSyntax target) {
         for (SyntaxNode? node = target; node is not null;) {
@@ -6468,16 +6487,23 @@ public sealed partial class Binder {
     ) {
         CheckEndAsElement(syntax);
 
-        // 'xs[^1]' and 'xs[1..<^1]' are the collection protocols' subscripts,
-        // an array's as any collection's, written over its own indexing.
-        if (receiver.Type is ArrayTypeSymbol array && !IndexesThroughSubscript(indices)) {
-            indices = BindUnbound(indices);
+        // 'xs[1..<3]', 'xs[1..<^1]', 'xs[2...]': the elements in the range,
+        // as a slice — the compiler's own slicing, by a range of integers of
+        // any shape or one counted from the end (SYNTAX.md §11). As a place,
+        // 'f(&xs[1..<^1])', 'xs[2...].sort()', 'xs[1..<3] = v', the slice is
+        // read out and written back over the range (§5, "A range of an
+        // array as a place") — except a store straight to a range of a
+        // growable array, which the RangeReplaceableCollection subscript's
+        // setter replaces with as many elements as are stored.
+        if (receiver.Type is ArrayTypeSymbol placed && IsSlicingRange(indices) && !IsReplacedRange(syntax, placed, indices)) {
+            return new BoundIndexAccess(syntax, new ArrayTypeSymbol(placed.ElementType, ArrayKind.Slice), receiver, indices);
+        }
 
-            // 'xs[1..<3]', 'xs[2...]', 'xs[..<2]': the elements in the range,
-            // as a slice (SYNTAX.md §11).
-            if (indices is [{ Type: NamedTypeSymbol { TypeArguments: [var bound] } range }] && Core.IsAnyRange(range) && bound.Equals(Core.Int)) {
-                return new BoundIndexAccess(syntax, new ArrayTypeSymbol(array.ElementType, ArrayKind.Slice), receiver, indices);
-            }
+        // 'xs[^1]' and a range of another RangeExpression are the collection
+        // protocols' subscripts, an array's as any collection's, written
+        // over its own indexing.
+        if (receiver.Type is ArrayTypeSymbol array && !IndexesThroughSubscript(indices) && !IsReplacedRange(syntax, array, indices)) {
+            indices = BindUnbound(indices);
 
             indices = CheckIndices(indices, Core.Int, syntax);
             return new BoundIndexAccess(syntax, array.ElementType, receiver, indices);
@@ -6492,7 +6518,7 @@ public sealed partial class Binder {
             if (!group.Candidates.IsEmpty) {
                 // Stored through, 'xs[^1] = v' and 'xs[^1].x = v' want a
                 // subscript with a setter, of those whose labels fit.
-                var use = _assignedSpine.Contains(syntax) ? SubscriptUse.Store : SubscriptUse.Read;
+                var use = IsPlaceBeingWritten(syntax) ? SubscriptUse.Store : SubscriptUse.Read;
                 var resolved = ResolveOverload(group.Candidates, indices, [], syntax, found.Substitution, use);
 
                 if (resolved is null) {
@@ -6573,6 +6599,30 @@ public sealed partial class Binder {
                 _ => type.ToDisplayString(),
             };
     }
+
+    /// <summary>
+    ///     A range an array is sliced by where the slice is a place: one of
+    ///     integers, of any shape, or one with a bound counted from the end.
+    /// </summary>
+    bool IsSlicingRange(ImmutableArray<BoundExpression> indices) =>
+        indices is [{ Type: NamedTypeSymbol type }]
+        && (Core.IsAnyRange(type) && type.TypeArguments is [var bound] && bound.Equals(Core.Int)
+            || Core.RelativeRange is { } relative && type.Equals(relative));
+
+    /// <summary>
+    ///     A store straight to a range of a growable array, 'xs[1..&lt;3] = v':
+    ///     the RangeReplaceableCollection subscript's setter replaces it.
+    /// </summary>
+    bool IsReplacedRange(ElementAccessExpressionSyntax syntax, ArrayTypeSymbol array, ImmutableArray<BoundExpression> indices) =>
+        ReferenceEquals(syntax, _storeTarget)
+        && array.ArrayKind is ArrayKind.Grow or ArrayKind.GrowShrink
+        && IsSlicingRange(indices);
+
+    /// <summary>
+    ///     True for what an assignment stores to or an '&amp;' passes inout,
+    ///     and for anything either changes a part of.
+    /// </summary>
+    bool IsPlaceBeingWritten(SyntaxNode syntax) => _assignedSpine.Contains(syntax) || _inoutSpine.Contains(syntax);
 
     /// <summary>
     ///     An index an array does not take itself: a position from the end,
@@ -8019,7 +8069,10 @@ public sealed partial class Binder {
     BoundExpression BindAssignment(AssignmentExpressionSyntax syntax) {
         var spine = Spine(syntax.Left).ToList();
         _assignedSpine.UnionWith(spine);
+        var outerTarget = _storeTarget;
+        _storeTarget = spine.FirstOrDefault(static node => node is not ParenthesizedExpressionSyntax);
         var target = BindExpression(syntax.Left);
+        _storeTarget = outerTarget;
         _assignedSpine.ExceptWith(spine);
 
         // A plain store replaces the value, so it may store anything the
@@ -8052,17 +8105,6 @@ public sealed partial class Binder {
                 ErrorCode.ERR_NotAssignable,
                 syntax.OperatorToken.Span,
                 $"'{syntax.OperatorToken.Text}' through '?.' is not supported; unwrap with 'if let' first"
-            );
-            return new BoundError(syntax, target, value);
-        }
-
-        // 'xs[1..<3]' is the elements in the range, read out: there is no
-        // place in the array that is all of them to store to.
-        if (target is BoundIndexAccess { Subscript: null, Indices: [var rangeIndex] } && Core.IsAnyRange(rangeIndex.Type)) {
-            _diagnostics.Error(
-                ErrorCode.ERR_NotAssignable,
-                syntax.Left.Span,
-                "a range of an array's elements is read as a slice, and cannot be stored to; store each element"
             );
             return new BoundError(syntax, target, value);
         }
@@ -8228,7 +8270,13 @@ public sealed partial class Binder {
             return BindFromEnd(syntax);
         }
 
+        // '&x' is written by the call it is passed to: a subscript chosen
+        // for it, or for what it is a part of, must store, and a range of
+        // an array is a place.
+        List<SyntaxNode> inout = syntax.OperatorToken.Kind == SyntaxKind.AmpersandToken ? [..Spine(syntax.Operand)] : [];
+        _inoutSpine.UnionWith(inout);
         var operand = BindExpression(syntax.Operand);
+        _inoutSpine.ExceptWith(inout);
         if (syntax.OperatorToken.Kind is not (SyntaxKind.AmpersandToken or SyntaxKind.MoveKeyword)) {
             operand = ImplicitlyUnwrapped(Dereferenced(operand));
         }

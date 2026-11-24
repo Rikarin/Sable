@@ -433,4 +433,236 @@ public sealed class SliceTests {
             Assert.Contains("allocations 2,", stats, StringComparison.Ordinal);
         }
     }
+
+    const string Inout = """
+                         struct Model { var items: Int[>..] }
+                         fn bump(_ s: inout Int[:]) {
+                             s.swapAt(0, 1)
+                             s[0] = s[0] * 10
+                         }
+                         fn sortAll<T: Comparable>(_ s: inout T[:]) { s.sort() }
+                         fn show<T>(_ xs: T[:]) -> String {
+                             var text = ""
+                             var first = true
+                             for x in xs {
+                                 text += first ? "\(x)" : " \(x)"
+                                 first = false
+                             }
+                             return text
+                         }
+                         """;
+
+    /// <summary>
+    ///     A range of an array passed inout (#301): every kind of array, by
+    ///     every shape of range and one counted from the end — read out as a
+    ///     slice, changed by the callee and stored back over the range.
+    /// </summary>
+    [Fact]
+    public void ARangeOfEveryKindOfArrayPassesInout() =>
+        Prints(
+            """
+            1 30 2 4 5
+            1 20 30 4 5
+            1 300 20 4 5
+            1 200 300 4 5
+            1 200 300 50 4
+            2000 1 300 50 4
+            10 2000 300 50 4
+            10 2000 300 40 50
+            1 30 40 2 5
+            300 1 2 4 5
+            20 1 3 4 5
+            c a d b
+            1 30 2 4
+
+            """,
+            Inout,
+            """
+                var grow: Int[>..] = [1, 2, 3, 4, 5]
+                bump(&grow[1..<4])
+                print(show(grow))
+                bump(&grow[1...3])
+                print(show(grow))
+                bump(&grow[1..<^1])
+                print(show(grow))
+                bump(&grow[^4...^2])
+                print(show(grow))
+                bump(&grow[3...])
+                print(show(grow))
+                bump(&grow[..<2])
+                print(show(grow))
+                bump(&grow[...1])
+                print(show(grow))
+                bump(&grow[^2...])
+                print(show(grow))
+                var shrink: Int[>..<] = [1, 2, 3, 4, 5]
+                bump(&shrink[1..<4])
+                bump(&shrink[^3...])
+                print(show(shrink))
+                var fixed: Int[] = [1, 2, 3, 4, 5]
+                bump(&fixed[1..<4])
+                bump(&fixed[..<^3])
+                print(show(fixed))
+                var sized: Int[5] = [1, 2, 3, 4, 5]
+                bump(&sized[0..<2])
+                print(show(sized))
+                var names: String[>..] = ["d", "c", "b", "a"]
+                sortAll(&names[0..<2])
+                sortAll(&names[^2...])
+                sortAll(&names[1..<3])
+                print(show(names))
+                var held: Int[>..] = [1, 2, 3, 4]
+                let range = 1..<3
+                bump(&held[range])
+                print(show(held))
+            """
+        );
+
+    /// <summary>
+    ///     A range of a range, of a struct's field, of an inout slice; a
+    ///     mutating member of a slice called on a range; an element of a
+    ///     range stored to; and the array another shares is copied by the
+    ///     write, so the other keeps what it had.
+    /// </summary>
+    [Fact]
+    public void RangesOfRangesFieldsAndSlicesPassInout() =>
+        Prints(
+            """
+            1 2 40 3 5 6
+            1 30 2 4
+            5 2 3 4 1
+            5 2 3 1 4
+            42 2 3
+            300 1 2 / 1 30 2
+            a c b d
+
+            """,
+            Inout + """
+
+                    fn inner(_ s: inout Int[:]) { bump(&s[1..<3]) }
+                    """,
+            """
+                var nested: Int[>..] = [1, 2, 3, 4, 5, 6]
+                bump(&nested[1..<5][1..<3])
+                print(show(nested))
+                var model = Model { items: [1, 2, 3, 4] }
+                bump(&model.items[1..<3])
+                print(show(model.items))
+                var xs: Int[>..] = [5, 4, 3, 2, 1]
+                xs[1..<4].sort()
+                print(show(xs))
+                xs[^2...].reverse()
+                print(show(xs))
+                var parts: Int[] = [1, 2, 3]
+                parts[0..<2][0] = 42
+                print(show(parts))
+                var shared: Int[>..] = [1, 2, 3]
+                bump(&shared[^2...])
+                let kept = shared
+                bump(&shared[0..<2])
+                print("\(show(shared)) / \(show(kept))")
+                var strings: String[>..] = ["a", "b", "c", "d"]
+                strings[1..<3].reverse()
+                print(show(strings))
+            """
+        );
+
+    /// <summary>
+    ///     A store to a range of an array that does not grow, or of a slice,
+    ///     is element by element (#293 refused it); a growable array's range
+    ///     is replaced, as many elements as are stored.
+    /// </summary>
+    [Fact]
+    public void ARangeIsStoredTo() =>
+        Prints(
+            """
+            1 8 9 4
+            1 8 1 8
+            1 7 4
+            0 0 3
+
+            """,
+            Inout + """
+
+                    fn clear(_ s: inout Int[:]) { s[0..<2] = [0, 0] }
+                    """,
+            """
+                var fixed: Int[] = [1, 2, 3, 4]
+                fixed[1..<3] = [8, 9]
+                print(show(fixed))
+                fixed[^2...] = fixed[0..<2]
+                print(show(fixed))
+                var grow: Int[>..] = [1, 2, 3, 4]
+                grow[1..<3] = [7]
+                print(show(grow))
+                var small: Int[>..] = [1, 2, 3]
+                clear(&small[0...])
+                print(show(small))
+            """
+        );
+
+    /// <summary>
+    ///     A callee can give its slice another count only by replacing it
+    ///     whole; stored back over the range, that traps, as a store of
+    ///     another count to a fixed array's range does.
+    /// </summary>
+    [Fact]
+    public void ARangeGivenBackWithAnotherCountTraps() {
+        var execution = AssertAgree(
+            Program(
+                Inout + """
+
+                        fn shorten(_ s: inout Int[:]) { s = s[0..<1] }
+                        """,
+                """
+                    var xs: Int[>..] = [1, 2, 3, 4]
+                    shorten(&xs[0..<1])
+                    print(show(xs))
+                    shorten(&xs[1..<4])
+                    print("unreachable")
+                """
+            )
+        );
+        Assert.Equal("1 2 3 4\n", execution.Stdout);
+        Assert.StartsWith("fatal error: a slice of count 1 stored over a range of count 3\n", execution.Stderr, StringComparison.Ordinal);
+
+        var fixedStore = AssertAgree(Program("", "    var fixed: Int[] = [1, 2, 3]\n    fixed[0..<2] = [9]\n    print(\"unreachable\")"));
+        Assert.StartsWith("fatal error: a slice of count 1 stored over a range of count 2\n", fixedStore.Stderr, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The range's view is the array's buffer: a callee that only reads
+    ///     copies nothing, and one that writes copies the run once, stored
+    ///     back in place.
+    /// </summary>
+    [Fact]
+    public void ARangePassedInoutCopiesOnlyWhatIsWritten() {
+        var source = Program(
+            Inout + """
+
+                    fn peek(_ s: inout Int[:]) -> Int => s[0]
+                    """,
+            """
+                var xs: Int[>..] = []
+                for i in 0..<8 { xs.append(i) }
+                var total = 0
+                var k = 0
+                while k < 10 {
+                    total += peek(&xs[2..<6])
+                    k += 1
+                }
+                bump(&xs[2..<6])
+                print(total)
+                print(xs[2])
+                print(xs[3])
+            """
+        );
+        Assert.Equal("20\n30\n2\n", AssertAgree(source).Stdout);
+
+        if (CanBuild) {
+            var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
+            // The array's own, and the one copy of the run 'bump' writes.
+            Assert.Contains("allocations 2,", stats, StringComparison.Ordinal);
+        }
+    }
 }

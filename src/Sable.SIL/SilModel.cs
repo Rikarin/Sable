@@ -1973,6 +1973,10 @@ public static class SilBuiltins {
             return fixedSignature;
         }
 
+        if (SimdBuiltins.Is(name)) {
+            return SimdBuiltins.Resolve(name, operands, result);
+        }
+
         if (name == "array_empty") {
             return operands.Count == 0 && result is ArrayType or SliceType ? new([], result) : null;
         }

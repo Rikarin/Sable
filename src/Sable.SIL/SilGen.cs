@@ -2142,6 +2142,12 @@ public sealed partial class SilGen {
             return SilType.Char;
         }
 
+        // 'SIMD<F32, 4>' is four F32 lanes, and 'SIMDMask<4>' four Bools: a
+        // vector (Simd.cs), however Sable.Core declares the struct.
+        if (Core.SimdLanes(type) is var (lane, count)) {
+            return count is >= 1 and <= 1024 && Lower(lane) is { } element && VectorType.IsLane(element) ? new VectorType(element, (int)count) : null;
+        }
+
         // Never has no values: what gives it never returns, so it is laid
         // out as nothing at all, and a call to it is followed by 'unreachable'.
         if (type.Equals(Core.Void) || type.Equals(Core.Never)) {
@@ -8351,6 +8357,13 @@ public sealed partial class SilGen {
             // by reference.
             var owner = Sub(first.Type) is ReferenceTypeSymbol reference ? reference.ReferencedType : Sub(first.Type);
             owner = owner is OptionalTypeSymbol && OwnerOf(callee) is { ExtendedOptional: not null } ? Nominal(owner)! : owner;
+
+            // '3 * v': the type is the second operand's.
+            if (OwnerOf(callee) is { IsGenericDefinition: true } definition && !(owner is NamedTypeSymbol mine && mine.OriginalDefinition.Equals(definition))
+                && Sub(second.Type) is NamedTypeSymbol theirs && theirs.OriginalDefinition.Equals(definition)) {
+                owner = theirs;
+            }
+
             var call = new BoundCall(binary.Syntax, null, callee, [first, second], resultType) {
                 Substitution = OwnerOf(callee) is { IsGenericDefinition: true } ? TypeSubstitution.For(owner) : TypeSubstitution.Empty,
             };

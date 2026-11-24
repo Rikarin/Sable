@@ -2306,6 +2306,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return null;
         }
 
+        if (SimdBuiltins.Is(builtin.Name)) {
+            return Simd(builtin, operands);
+        }
+
         if (builtin.Name.StartsWith("bytes_load_", StringComparison.Ordinal)) {
             var width = BytesWidth(builtin.Type);
             var (buffer, start, count) = ElementsOf(operands[0]);

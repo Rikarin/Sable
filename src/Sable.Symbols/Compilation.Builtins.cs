@@ -52,7 +52,10 @@ public sealed partial class Compilation {
             return Malformed(attribute, "a '@builtin' function has no body: the builtin is its body");
         }
 
-        if (declaration.TypeParameters is not null) {
+        // The SIMD builtins take their signatures from the vectors they are
+        // given where they are used, so one may be generic over a vector's
+        // lane count: 'fn store<N: Int>(_ vector: SIMD<Element, N>, at: Int)'.
+        if (declaration.TypeParameters is not null && !IsSimdBuiltin(attribute)) {
             return Malformed(attribute, "a '@builtin' function cannot be generic: a builtin works on the types its signature names");
         }
 
@@ -169,6 +172,11 @@ public sealed partial class Compilation {
         && name.Length > 0
             ? name
             : Malformed(attribute, "'@builtin' takes the builtin's name as one string literal: '@builtin(\"string_trimmed\")'");
+
+    /// <summary>A SIMD builtin (<c>simd_…</c>), whose signature follows the vectors it is given.</summary>
+    static bool IsSimdBuiltin(AttributeSyntax attribute) =>
+        attribute.ArgumentList is { Arguments: [{ Expression: LiteralExpressionSyntax { Token.Value: string name } }] }
+        && name.StartsWith("simd_", StringComparison.Ordinal);
 
     string? Malformed(AttributeSyntax attribute, string message) {
         ReportDeclaration(ErrorCode.ERR_MalformedBuiltin, attribute.Span, message);

@@ -1,0 +1,41 @@
+// SIMD vectors: '@simd(T, N)', N lanes of a number or a Bool, and the
+// builtins on them — lane-wise ones named for the scalar builtin each lane
+// is, comparisons into masks, a select, reductions, shuffles, loads.
+
+sil @axpy : $(F32, @simd(F32, 4), @simd(F32, 4)) -> @simd(F32, 4) {
+bb0(%0 : $F32, %1 : $@simd(F32, 4), %2 : $@simd(F32, 4)):
+  %3 = builtin "simd_splat"(%0) : $@simd(F32, 4)
+  %4 = builtin "simd_mul"(%3, %1) : $@simd(F32, 4)
+  %5 = builtin "simd_add"(%4, %2) : $@simd(F32, 4)
+  return %5
+}
+
+sil @clampedSum : $(@simd(I32, 8), I32) -> I32 {
+bb0(%0 : $@simd(I32, 8), %1 : $I32):
+  %2 = builtin "simd_splat"(%1) : $@simd(I32, 8)
+  %3 = builtin "simd_cmp_gt"(%0, %2) : $@simd(Bool, 8)
+  %4 = builtin "simd_select"(%3, %2, %0) : $@simd(I32, 8)
+  %5 = builtin "simd_reduce_add"(%4) : $I32
+  return %5
+}
+
+sil @reversedLow : $(@simd(U8, 16), @simd(Int, 4)) -> @simd(U8, 4) {
+bb0(%0 : $@simd(U8, 16), %1 : $@simd(Int, 4)):
+  %2 = builtin "simd_swizzle"(%0, %1) : $@simd(U8, 4)
+  return %2
+}
+
+sil @widened : $(@simd(F16, 2), @simd(F16, 2)) -> @simd(F64, 4) {
+bb0(%0 : $@simd(F16, 2), %1 : $@simd(F16, 2)):
+  %2 = builtin "simd_concat"(%0, %1) : $@simd(F16, 4)
+  %3 = builtin "simd_convert"(%2) : $@simd(F64, 4)
+  return %3
+}
+
+sil @firstFour : $([F64:], Int) -> F64 {
+bb0(%0 : $[F64:], %1 : $Int):
+  %2 = builtin "simd_load"(%0, %1) : $@simd(F64, 4)
+  %3 = integer_literal $Int, 3
+  %4 = builtin "simd_extract"(%2, %3) : $F64
+  return %4
+}

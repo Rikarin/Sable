@@ -1,0 +1,140 @@
+module VectorKernelsTests
+
+// VectorKernels (Sable.Math): sums, products, norms, softmax and
+// elementwise arithmetic over arrays of floats, a vector at a time with a
+// scalar tail — lengths chosen to have both.
+
+import Sable.Math
+import Sable.Testing
+
+/// Fails unless the two are within the tolerance of each other.
+fn assertClose(_ actual: F64, _ expected: F64, tolerance: F64 = 1e-12) {
+    let difference = actual > expected ? actual - expected : expected - actual
+    assert(difference <= tolerance, "expected \(expected), got \(actual)")
+}
+
+/// 0, 1, 2, … as F32s.
+fn rampF32(_ count: Int) -> F32[>..] {
+    var values: F32[>..] = []
+    for i in 0..<count {
+        values.append(F32(i))
+    }
+    return values
+}
+
+/// 0, 1, 2, … as F64s.
+fn rampF64(_ count: Int) -> F64[>..] {
+    var values: F64[>..] = []
+    for i in 0..<count {
+        values.append(F64(i))
+    }
+    return values
+}
+
+@test
+fn sumAddsEveryElement() {
+    assertEqual(sum(rampF32(37)), 666)
+    assertEqual(sum(rampF64(21)), 210)
+    let empty: F64[>..] = []
+    assertEqual(sum(empty), 0)
+    let few: F32[>..] = [1.5, 2.5]
+    assertEqual(sum(few), 4)
+}
+
+@test
+fn dotSumsTheProducts() {
+    assertEqual(dot(rampF32(19), rampF32(19)), 2109)
+    assertEqual(dot(rampF64(11), rampF64(11)), 385)
+}
+
+@test
+fn normIsTheLength() {
+    let x: F32[>..] = [3, 4]
+    assertEqual(norm(x), 5)
+    var y = rampF64(9)
+    y[8] = 0
+    assertEqual(norm(y), 140.0.squareRoot())
+}
+
+@test
+fn cosineSimilarityIsTheAnglesCosine() {
+    let x = rampF64(20)
+    assertClose(cosineSimilarity(x, x), 1.0)
+    var negated: F64[>..] = []
+    for value in x {
+        negated.append(-value)
+    }
+    assertClose(cosineSimilarity(x, negated), -1.0)
+    let a: F32[>..] = [1, 0]
+    let b: F32[>..] = [0, 1]
+    assertEqual(cosineSimilarity(a, b), 0)
+    assertClose(F64(cosineSimilarity(rampF32(33), rampF32(33))), 1.0, tolerance: 1e-6)
+}
+
+@test
+fn minAndMaxFindTheExtremes() {
+    var x = rampF32(40)
+    x[17] = -3
+    x[38] = 100
+    assertEqual(min(x), -3)
+    assertEqual(max(x), 100)
+    var y = rampF64(5)
+    y[3] = -1
+    assertEqual(min(y), -1)
+    assertEqual(max(y), 4)
+    var z = rampF64(30)
+    z[29] = 1000
+    assertEqual(max(z), 1000)
+    assertEqual(min(z), 0)
+    let one: F32[>..] = [7]
+    assertEqual(max(one), 7)
+}
+
+@test
+fn elementwiseArithmeticWritesTheDestination() {
+    let x = rampF32(18)
+    var y: F32[>..] = []
+    for _ in 0..<18 {
+        y.append(2)
+    }
+    var result = rampF32(18)
+    add(x, y, into: &result)
+    assertEqual(result[17], 19)
+    subtract(x, y, into: &result)
+    assertEqual(result[0], -2)
+    assertEqual(result[17], 15)
+    multiply(x, y, into: &result)
+    assertEqual(result[16], 32)
+    assertEqual(result[17], 34)
+    divide(x, y, into: &result)
+    assertEqual(result[15], 7.5)
+    assertEqual(result[17], 8.5)
+
+    let p = rampF64(9)
+    let q = rampF64(9)
+    var wide = rampF64(10)
+    add(p, q, into: &wide)
+    assertEqual(wide[8], 16)
+    assertEqual(wide[9], 9)
+    subtract(p, q, into: &wide)
+    assertEqual(wide[8], 0)
+    multiply(p, q, into: &wide)
+    assertEqual(wide[8], 64)
+    divide(q, q, into: &wide)
+    assertEqual(wide[8], 1)
+}
+
+@test
+fn softmaxIsPositiveAndSumsToOne() {
+    var result = rampF32(20)
+    softmax(rampF32(20), into: &result)
+    assertClose(F64(sum(result)), 1.0, tolerance: 1e-6)
+    assert(result[19] > result[18])
+    var wide = rampF64(3)
+    softmax(rampF64(3), into: &wide)
+    assertClose(sum(wide), 1.0)
+    assertClose(wide[1] / wide[0], 2.718281828459045)
+    var big = rampF64(11)
+    softmax(rampF64(11), into: &big)
+    assertClose(sum(big), 1.0)
+}

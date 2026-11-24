@@ -1,0 +1,151 @@
+module Sable.Core
+
+/// N Bools side by side, one a lane: what comparing 'SIMD' vectors gives,
+/// and what 'SIMD.select' chooses lanes by. It lowers, as a vector does, to
+/// LLVM's '<N x i1>', which the target keeps as it keeps a comparison's
+/// result — a mask register, or lanes of all ones and all zeros.
+///
+/// ```sable
+/// let a = SIMD<I32, 4>([1, 5, 2, 8])
+/// let big = a.lanesGreater(than: SIMD<I32, 4>(repeating: 4))
+/// assert(big.anyTrue && !big.allTrue)
+/// assert(big.trueCount == 2)
+/// assert(big[1] && !big[0])
+/// ```
+public struct SIMDMask<N: Int> where N >= 2 && (N == 2 || N == 3 || N == 4 || N == 8 || N == 16 || N == 32 || N == 64) {
+    /// Every lane false.
+    public init() {
+        self = SIMDMask<N>.splat(false)
+    }
+
+    /// Every lane the value.
+    public init(repeating value: Bool) {
+        self = SIMDMask<N>.splat(value)
+    }
+
+    /// The lanes, in order; traps unless there are exactly N of them.
+    ///
+    /// ```sable
+    /// let mask = SIMDMask<2>([true, false])
+    /// assert(mask[0] && !mask[1])
+    /// ```
+    public init(_ lanes: Bool[:]) {
+        if lanes.count != N {
+            preconditionFailure("a SIMD mask of \(N) lanes made from \(lanes.count)")
+        }
+        self = SIMDMask<N>()
+        for i in 0..<N {
+            self[i] = lanes[i]
+        }
+    }
+
+    @builtin("simd_splat")
+    static fn splat(_ value: Bool) -> SIMDMask<N>
+
+    /// How many lanes there are: N.
+    public var count: Int => N
+
+    /// The lane at the index; outside 0..<N traps.
+    public subscript(lane: Int) -> Bool {
+        get {
+            return self.extract(lane)
+        }
+        set {
+            self = self.inserting(newValue, at: lane)
+        }
+    }
+
+    @builtin("simd_extract")
+    fn extract(_ lane: Int) -> Bool
+
+    @builtin("simd_insert")
+    fn inserting(_ value: Bool, at lane: Int) -> SIMDMask<N>
+
+    /// Whether any lane is true.
+    @builtin("simd_reduce_or")
+    public var anyTrue: Bool { get }
+
+    /// Whether every lane is true.
+    @builtin("simd_reduce_and")
+    public var allTrue: Bool { get }
+
+    /// How many lanes are true.
+    public var trueCount: Int {
+        get {
+            var count = 0
+            for i in 0..<N {
+                if self[i] {
+                    count += 1
+                }
+            }
+            return count
+        }
+    }
+
+    /// Where both masks are true.
+    @builtin("simd_and")
+    public operator & (lhs: SIMDMask<N>, rhs: SIMDMask<N>) -> SIMDMask<N>
+
+    /// Where either mask is true.
+    @builtin("simd_or")
+    public operator | (lhs: SIMDMask<N>, rhs: SIMDMask<N>) -> SIMDMask<N>
+
+    /// Where one mask is true and not the other.
+    @builtin("simd_xor")
+    public operator ^ (lhs: SIMDMask<N>, rhs: SIMDMask<N>) -> SIMDMask<N>
+
+    /// Where the mask is false.
+    ///
+    /// ```sable
+    /// let mask = SIMDMask<2>([true, false])
+    /// assert(!(~mask)[0] && (~mask)[1])
+    /// ```
+    @builtin("simd_not")
+    public prefix operator ~ (operand: SIMDMask<N>) -> SIMDMask<N>
+}
+
+extension SIMDMask: Equatable {
+    /// Whether every lane equals the other's.
+    @builtin("simd_cmp_eq")
+    fn lanesEqual(_ other: SIMDMask<N>) -> SIMDMask<N>
+
+    public operator == (lhs: SIMDMask<N>, rhs: SIMDMask<N>) -> Bool {
+        return lhs.lanesEqual(rhs).allTrue
+    }
+}
+
+extension SIMDMask: Hashable {
+    public fn hash(into hasher: inout Hasher) {
+        for i in 0..<N {
+            self[i].hash(into: &hasher)
+        }
+    }
+}
+
+extension SIMDMask: Formattable {
+    /// The lanes between angle brackets: '<true, false>'.
+    public fn format(_ spec: FormatSpec) -> String {
+        var text = "<"
+        for i in 0..<N {
+            if i > 0 {
+                text += ", "
+            }
+            text += self[i] ? "true" : "false"
+        }
+        return text + ">"
+    }
+}
+
+extension SIMDMask: Debug {
+    /// The type and its lanes: 'SIMDMask<2>(true, false)'.
+    public fn debugDescription() -> String {
+        var text = "SIMDMask<\(N)>("
+        for i in 0..<N {
+            if i > 0 {
+                text += ", "
+            }
+            text += self[i] ? "true" : "false"
+        }
+        return text + ")"
+    }
+}

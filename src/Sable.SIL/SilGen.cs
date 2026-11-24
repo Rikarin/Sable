@@ -2125,7 +2125,7 @@ public sealed partial class SilGen {
             _module.MeetConditionalConformances(type);
 
             // Laid out at run time, for arguments known only there: its conformances get template tables (SilGen.Templates.cs).
-            if (named.IsConstructed && type is StructType or ClassType && !type.TypeArguments.IsDefaultOrEmpty && type.TypeArguments.Any(SilType.MentionsOpaque)) {
+            if (named.IsConstructed && type is StructType or ClassType or EnumType && !type.TypeArguments.IsDefaultOrEmpty && type.TypeArguments.Any(SilType.MentionsOpaque)) {
                 _runtimeInstances.Add((named, type));
             }
         }
@@ -4370,7 +4370,7 @@ public sealed partial class SilGen {
 
             // Initialising an object: it comes first, already allocated.
             _initializing = symbol.FunctionKind == FunctionKind.Initializer && function.Type.Result == SilType.Unit
-                && parameterTypes.Length > 0 && parameterTypes[0] is ClassType;
+                && parameterTypes.Length > 0 && parameterTypes[0] is ClassType && OwnerOf(symbol) is { TypeKind: TypeKind.Class or TypeKind.Actor };
 
             if (HasSelf(symbol) || _initializing) {
                 var self = _entry.AddArgument(parameterTypes[next++]);
@@ -4466,7 +4466,7 @@ public sealed partial class SilGen {
             // A struct's initialiser builds 'self' in a slot of its own, field
             // by field.
             if (symbol.FunctionKind == FunctionKind.Initializer && !_initializing) {
-                _selfAddress = NewSlot(function.Type.Result, "self");
+                _selfAddress = NewSlot(_indirectResult is { Type: AddressType { Pointee: var made } } ? made : function.Type.Result, "self");
             }
 
             // The entry point first gives every global its initial value.
@@ -10789,8 +10789,8 @@ public sealed partial class SilGen {
             (SilValue Passed, AllocStackInst? Slot, bool CannotThrow)? genericError = null;
             SilValue? openedBuffer = null;
             if (genericShape is not null) {
-                if (type.Result == SilType.Unit && arguments.Count < type.Parameters.Length && !callee.ReturnType.Equals(Core.Void)) {
-                    var returned = Substitute(WithAssociatedTypes(callee, bound), callee.ReturnType);
+                if (type.Result == SilType.Unit && arguments.Count < type.Parameters.Length && ResultOf(callee) is { } calleeResult && !calleeResult.Equals(Core.Void)) {
+                    var returned = Substitute(WithAssociatedTypes(callee, bound), calleeResult);
                     if (IsOpenedHere(returned) && type.Parameters[arguments.Count] is AddressType && MetadataOf(returned) is { } resultMetadata) {
                         // Of a type a Type was opened as: a buffer its metadata sizes, let go if the call throws.
                         var buffer = Emit(new BuiltinInst("opaque_alloc", type.Parameters[arguments.Count], resultMetadata));

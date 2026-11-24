@@ -184,7 +184,7 @@ public sealed partial class SilGen {
     ///     a protocol the step before conforms to, found in the table of that
     ///     conformance: one the function is given, or the registry's.
     /// </summary>
-    void AssociatedRecipes(SilFunction function, FunctionSymbol symbol, GenericShape shape) {
+    void AssociatedRecipes(SilFunction function, Symbol symbol, GenericShape shape) {
         var names = new SortedSet<string>(StringComparer.Ordinal);
 
         // A union may hold itself, in an array or a box of a case: each
@@ -249,6 +249,10 @@ public sealed partial class SilGen {
 
                 if (instruction.HasResult) {
                     Collect(instruction.Type);
+                }
+
+                if (instruction is MetadataInst { Described: var described }) {
+                    Collect(described);
                 }
             }
         }
@@ -909,9 +913,10 @@ public sealed partial class SilGen {
     ///     its own and returns it, as a static member that returns Self does.
     /// </summary>
     static bool IsValueInitializer(FunctionSymbol symbol) =>
-        symbol is { FunctionKind: FunctionKind.Initializer, IsSynthesized: false } && Owner(symbol)?.OriginalDefinition is { TypeKind: TypeKind.Struct, ExtendedArray: null, ExtendedOptional: null } owner
-        // Built in a slot of its layout, which does not depend on its arguments: what it holds of them is behind references.
-        && StoredFields(owner).All(f => !Mentions(f.Type, owner.TypeParameters) || ByReference(f.Type, owner.TypeParameters));
+        symbol is { FunctionKind: FunctionKind.Initializer, IsSynthesized: false } && Owner(symbol)?.OriginalDefinition is { TypeKind: TypeKind.Struct, ExtendedArray: null, ExtendedOptional: null };
+
+    /// <summary>What a call of a function gives: its result, or what an initialiser makes; null for one of no type.</summary>
+    static TypeSymbol? ResultOf(FunctionSymbol symbol) => symbol.FunctionKind == FunctionKind.Initializer ? SelfType(symbol, TypeSubstitution.Empty) : symbol.ReturnType;
 
     /// <summary>The extension a member is in: itself, or the property or subscript it is an accessor of.</summary>
     static ExtensionSymbol? ExtensionOf(FunctionSymbol symbol) =>
@@ -1379,7 +1384,7 @@ public sealed partial class SilGen {
             }
 
             if (callee is { FunctionKind: FunctionKind.Initializer, IsSynthesized: true, Parameters.IsEmpty: false }
-                && call.Type is NamedTypeSymbol { IsConstructed: true, TypeKind: TypeKind.Struct } made && IsHeld(V(made), _own) && ByReference(made, _own)) {
+                && call.Type is NamedTypeSymbol { IsConstructed: true, TypeKind: TypeKind.Struct } made && IsHeld(V(made), _own)) {
                 return call.Arguments.All(a => Simple(a.Type)) && call.Arguments.Length == StoredFields(made.OriginalDefinition).Count();
             }
 
@@ -2012,9 +2017,17 @@ public sealed partial class SilGen {
         }
 
         function.RemoveUnreachableBlocks();
+        TemplateRecipes(function, concrete, template);
         AsTrampoline(function);
         _module.Add(function);
         return name;
+    }
+
+    /// <summary>How a template's witness, compiled once for the generic type, finds the metadata of what it reads through its type parameters.</summary>
+    void TemplateRecipes(SilFunction function, TypeSymbol concrete, (string Name, GenericShape Shape)? template) {
+        if (template is { } compiledOnce) {
+            AssociatedRecipes(function, ((NamedTypeSymbol)concrete).OriginalDefinition, compiledOnce.Shape);
+        }
     }
 
     /// <summary>The binary operator a requirement's name writes, as the binder knows it; null for one it binds as a call.</summary>
@@ -2079,6 +2092,7 @@ public sealed partial class SilGen {
         }
 
         function.RemoveUnreachableBlocks();
+        TemplateRecipes(function, concrete, template);
         AsTrampoline(function);
         _module.Add(function);
         return name;
@@ -2477,7 +2491,7 @@ public sealed partial class SilGen {
         void GenericParameters(ImmutableArray<SilType> parameterTypes, ref int next) {
             if (generator._unspecialised.TryGetValue(function.Name, out var generic)) {
                 if (function.Type.Result == SilType.Unit && next < parameterTypes.Length && parameterTypes[next] is AddressType { Pointee: var pointee } && SilType.IsIndirect(pointee)
-                    && generator.Lower(symbol.ReturnType) is { } returned && SilType.IsIndirect(returned)) {
+                    && ResultOf(symbol) is { } made && generator.Lower(made) is { } returned && SilType.IsIndirect(returned)) {
                     _indirectResult = _entry.AddArgument(parameterTypes[next++]);
                     NameArgument("$out");
                 }

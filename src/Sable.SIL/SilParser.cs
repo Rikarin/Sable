@@ -321,6 +321,11 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_template_table")) {
+                ParseWitnessTable(template: true);
+                continue;
+            }
+
             if (Accept("sil_witness_table")) {
                 ParseWitnessTable();
                 continue;
@@ -373,16 +378,18 @@ public sealed class SilParser {
     }
 
     /// <summary><c>sil_witness_table $T : "M.P" { "m": @f : $type … "n": none … associated "A": $T … conforms 0: "M.Q" … base "M.R" … }</c>.</summary>
-    void ParseWitnessTable() {
+    void ParseWitnessTable(bool template = false) {
         var conformer = ParseType();
         Expect(":");
-        var table = new SilWitnessTable(conformer, Expect(TokenKind.String, "a protocol's name").Text);
+        var table = new SilWitnessTable(conformer, Expect(TokenKind.String, "a protocol's name").Text) { IsTemplate = template };
         Expect("{");
         while (!Accept("}")) {
             if (Accept("associated")) {
                 var name = Expect(TokenKind.String, "an associated type's name").Text;
                 Expect(":");
                 table.AssociatedTypes.Add((name, ParseType()));
+            } else if (Accept("accessor")) {
+                table.Accessors.Add(Expect(TokenKind.Global, "an accessor's name").Text);
             } else if (Accept("conforms")) {
                 var index = Count("an associated type's index");
                 Expect(":");

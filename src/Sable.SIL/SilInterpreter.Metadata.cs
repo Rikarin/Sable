@@ -105,7 +105,6 @@ public sealed partial class SilInterpreter {
         var arguments = generic.TypeArguments.Select(Concrete).ToList();
         var at = generic.Name.IndexOf("$of$", StringComparison.Ordinal);
         var name = $"{(at < 0 ? generic.Name : generic.Name[..at])}$of${string.Join("$", arguments.Select(static a => SilGen.Sanitise(a.ToString())))}";
-        _templates.TryAdd(name, generic);
         if (module.FindType(name) is { } existing) {
             return existing;
         }
@@ -214,7 +213,7 @@ public sealed partial class SilInterpreter {
             foreach (var (name, table) in module.ConformancesOf(at)) {
                 if (name == protocol) {
                     // An instance made here, at run time: its generic type's template, as its shape points the native one at.
-                    return table ?? (_templates.TryGetValue(at.ToString(), out var generic) ? module.FindWitnessTable(generic, protocol) is { IsTemplate: true } template ? template : null : null);
+                    return table ?? TemplateInstance(at, protocol);
                 }
             }
         }
@@ -222,11 +221,39 @@ public sealed partial class SilInterpreter {
         return null;
     }
 
+    readonly Dictionary<(string Type, string Protocol), SilWitnessTable> _templateInstances = [];
+
+    /// <summary>
+    ///     An instance's table of a conformance whose generic type has a
+    ///     template for it: the template's entries, with the instance's own
+    ///     associated types, as <c>sable_witness_table</c> makes one. Null for none.
+    /// </summary>
+    SilWitnessTable? TemplateInstance(SilType type, string protocol) {
+        if (_templateInstances.TryGetValue((type.ToString(), protocol), out var made)) {
+            return made;
+        }
+
+        if (type is not NominalType { TypeArguments.IsEmpty: false, DisplayName: { } display } || display.IndexOf('<') is not (> 0 and var open)
+            || module.WitnessTables.FirstOrDefault(t => t.IsTemplate && t.Protocol == protocol && t.Conformer is NominalType { DisplayName: { } generic }
+                                                       && generic.IndexOf('<') == open && generic.AsSpan(0, open).SequenceEqual(display.AsSpan(0, open))) is not { } template) {
+            return null;
+        }
+
+        made = new SilWitnessTable(type, protocol);
+        _templateInstances[(type.ToString(), protocol)] = made;
+        made.Entries.AddRange(template.Entries);
+        made.Bases.AddRange(template.Bases);
+        made.AssociatedConformances.AddRange(template.AssociatedConformances);
+        for (var i = 0; i < template.Accessors.Count && i < template.AssociatedTypes.Count; i++) {
+            var accessor = module.Find(template.Accessors[i]) ?? throw new SilTrap($"no accessor '{template.Accessors[i]}'");
+            made.AssociatedTypes.Add((template.AssociatedTypes[i].Name, ((MetadataModel)Call(accessor, [MetadataOf(type)], 0)!).Type));
+        }
+
+        return made;
+    }
+
     /// <summary>The box class made for each type no code boxes, by the type's name.</summary>
     readonly Dictionary<string, ClassType> _madeBoxes = new(StringComparer.Ordinal);
-
-    /// <summary>Each instance of a generic type made at run time, by name, with the instance its template tables are of.</summary>
-    readonly Dictionary<string, NominalType> _templates = new(StringComparer.Ordinal);
 
     /// <summary>
     ///     Whether a value of the first type is one of the second, as

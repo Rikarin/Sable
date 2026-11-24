@@ -127,6 +127,39 @@ internal static class Programs {
     /// </summary>
     public static readonly IReadOnlyDictionary<string, string> OneThread = new Dictionary<string, string> { ["SABLE_WORKERS"] = "0" };
 
+    /// <summary>
+    ///     The program compiled separately (docs/05 §5.4) — its file's
+    ///     declarations dealt into files of their own, each a unit — and run
+    ///     natively, leak-checked, as a dev build is.
+    /// </summary>
+    public static Execution BuildSeparatelyAndRun(string source, int parts = 3) {
+        var root = (CompilationUnitSyntax)SyntaxTree.Parse(new SourceText(source, "test.sb")).Root;
+        var members = root.Members.ToList();
+        var bodies = Enumerable.Range(0, Math.Min(parts, members.Count)).Select(_ => new System.Text.StringBuilder(source[..members[0].FullSpan.Start])).ToList();
+        for (var i = 0; i < members.Count; i++) {
+            bodies[i % bodies.Count].Append(source.AsSpan(members[i].FullSpan.Start, members[i].FullSpan.Length)).Append('\n');
+        }
+
+        var directory = Directory.CreateTempSubdirectory("sable-units-").FullName;
+        try {
+            var units = bodies.Select((body, i) => {
+                var path = Path.Combine(directory, $"part{i}.sb");
+                File.WriteAllText(path, body.ToString());
+                return new Driver.Build.UnitPlan($"part{i}", [new Driver.Build.SourceFile(path, $"part{i}.sb", [])]);
+            }).ToList();
+            var executable = Path.Combine(directory, "program");
+            var built = Driver.Build.IncrementalBuild.Build(units, new Driver.Build.BuildSettings("dev", false, null, true), executable, Path.Combine(directory, "cache"));
+            Assert.True(built.Succeeded, string.Join("\n", built.Errors));
+            Assert.True(built.FellBack is null, built.FellBack);
+            var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true }.Utf8();
+            start.Environment["SABLE_CHECK_LEAKS"] = "1";
+            var run = ChildProcess.Run(start, ChildProcess.ProgramLimit, "");
+            return new(run.Stdout, run.Stderr, run.ExitCode);
+        } finally {
+            Directory.Delete(directory, true);
+        }
+    }
+
     /// <summary>A program with one main, as most tests want.</summary>
     public static string Program(string declarations, string body) =>
         $"module Test\n{declarations}\n@main\nfn main() {{\n{body}\n}}\n";

@@ -142,6 +142,10 @@ public sealed partial class LlvmEmitter {
             constructors.Add(registration);
         }
 
+        if (TemplateRegistration(module) is { } templates) {
+            constructors.Add(templates);
+        }
+
         if (DescriberRegistration(module) is { } describers) {
             constructors.Add(describers);
         }

@@ -640,17 +640,23 @@ of the program that conforms to `T`'s protocols, its table with its generic
 entries, its boxer when the result is erased, and its describer when the
 callee writes a value out; an instance of a generic type made at run time
 has its declaration's **template** tables (src/Sable.SIL/SilGen.Templates.cs),
-one per conformance for every instance, which the type's shape points at:
-each entry reads the type arguments from `Self`'s metadata
+one per conformance for every instance, registered by the generic type's name
+as the image starts (`sable_register_template`): each entry reads the type arguments from `Self`'s metadata
 (`metadata_argument`), finds the tables the conformance requires of them in
 the registry, and calls the witness compiled once for the generic type. They
 are made for the protocols a program opens a type as or casts to, whole or
-not at all: a conformance to a protocol with associated types, or with a
-requirement the convention cannot pass or whose member is not compiled once,
-has none, and the opening traps. A value of such an instance is boxed in a
-class the runtime makes for it (`sable_opaque_box`). A program built in
-units points at no templates, as every unit's shape must be the same, so
-there it still traps.
+not at all: a conformance with a requirement the convention cannot pass or
+whose member is not compiled once has none, and the opening traps. Where the
+protocol, or one it refines, has associated types, which differ per instance,
+the template has a function for each that gives its metadata from `Self`'s
+(`$template$associated$…`), and the registry makes the instance a table of
+its own the first time it is asked, with them asked and its bases the
+instance's; one bound to an array, an optional or a tuple of type parameters
+that must itself conform has no template. A value of such an instance is
+boxed in a class the runtime makes for it (`sable_opaque_box`). In a program
+built in units, one unit may make the instance and another open it: the unit
+that opens a type as a protocol, or casts to it, makes the templates of every
+generic type of the program that conforms.
 
 A specialised build compiles generic code once too, from the first call
 that opens a Type: such a call, and the code compiled once it reaches,
@@ -671,7 +677,7 @@ arguments qualified), and `==` holds the two to be one type.
 What unspecialised code cannot serve yet — an optional chain through a
 `T?`, a structural union of `T`, a method of a generic class
 a subclass may override, a field of a function type in a generic type, the
-initialiser of a class with a deinit or of a struct that holds `T` by value, an async closure's
+initialiser of a class with a deinit, an async closure's
 parameter, or a generator — is still specialised for its type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
 says, for each generic function, which way it went and why. A specialised

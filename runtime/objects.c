@@ -205,6 +205,98 @@ static const SableWitnessTable *registered_table(const SableTypeMetadata *type, 
     return NULL;
 }
 
+// The template tables of generic types' conformances (#297, #299): one for
+// every instance whose type arguments are known only at run time, by the
+// generic type's name, registered by each image as it starts. Its entries
+// read the type arguments from Self's metadata. One with associated types
+// gives the functions that make their metadata from Self's: an instance then
+// has a table of its own, made once, with those metadata in it.
+typedef const SableTypeMetadata *(*SableAssociatedAccessor)(const SableTypeMetadata *self);
+
+static struct {
+    const char *name; // 'M.Box', of 'M.Box<M.Label>'
+    size_t length;
+    const SableWitnessTable *table;
+    const SableAssociatedAccessor *associated; // null: the table is every instance's
+} *templates;
+static int64_t template_count, template_capacity;
+
+void sable_register_template(const char *name, const SableWitnessTable *table, const SableAssociatedAccessor *associated) {
+    if (template_count == template_capacity) {
+        template_capacity = template_capacity == 0 ? 16 : template_capacity * 2;
+        templates = realloc(templates, (size_t)template_capacity * sizeof *templates);
+        if (templates == NULL) {
+            sable_trap("out of memory");
+        }
+    }
+
+    templates[template_count].name = name;
+    templates[template_count].length = strlen(name);
+    templates[template_count].table = table;
+    templates[template_count].associated = associated;
+    template_count++;
+}
+
+typedef struct SableTemplateInstance {
+    const SableTypeMetadata *type;
+    const SableWitnessTable *template_table;
+    const SableWitnessTable *table;
+    struct SableTemplateInstance *next;
+} SableTemplateInstance;
+
+static SableTemplateInstance *template_instances;
+
+const SableWitnessTable *sable_witness_table(const SableTypeMetadata *type, const SableProtocol *protocol);
+
+// The table an instance has of its own: the template's, its associated types' metadata and its bases' tables the instance's.
+static const SableWitnessTable *template_instance(const SableTypeMetadata *type, const SableWitnessTable *of, const SableAssociatedAccessor *associated) {
+    for (SableTemplateInstance *at = __atomic_load_n(&template_instances, __ATOMIC_ACQUIRE); at != NULL; at = at->next) {
+        if (at->type == type && at->template_table == of) {
+            return at->table;
+        }
+    }
+
+    size_t size = sizeof(SableWitnessTable) + (size_t)of->requirement_count * sizeof of->requirements[0];
+    SableWitnessTable *table = malloc(size);
+    const SableTypeMetadata **types = calloc((size_t)of->associated_type_count + 1, sizeof *types);
+    const SableWitnessTable **bases = calloc((size_t)of->base_count + 1, sizeof *bases);
+    SableTemplateInstance *made = malloc(sizeof *made);
+    if (table == NULL || types == NULL || bases == NULL || made == NULL) {
+        sable_trap("out of memory");
+    }
+
+    memcpy(table, of, size);
+    for (int64_t i = 0; i < of->associated_type_count; i++) {
+        types[i] = associated[i](type);
+    }
+
+    for (int64_t i = 0; i < of->base_count; i++) {
+        bases[i] = of->bases[i] == NULL ? NULL : sable_witness_table(type, of->bases[i]->protocol);
+    }
+
+    table->associated_types = types;
+    table->bases = bases;
+    made->type = type;
+    made->template_table = of;
+    made->table = table;
+    made->next = __atomic_load_n(&template_instances, __ATOMIC_ACQUIRE);
+    while (!__atomic_compare_exchange_n(&template_instances, &made->next, made, true, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+    }
+
+    return table;
+}
+
+static const SableWitnessTable *template_table(const SableTypeMetadata *type, const SableProtocol *protocol) {
+    for (int64_t i = 0; i < template_count; i++) {
+        if (same_protocol(templates[i].table->protocol, protocol) && strncmp(type->name, templates[i].name, templates[i].length) == 0
+            && type->name[templates[i].length] == '<') {
+            return templates[i].associated == NULL ? templates[i].table : template_instance(type, templates[i].table, templates[i].associated);
+        }
+    }
+
+    return NULL;
+}
+
 // The record of the type's conformance to the protocol — its own, or for a
 // class one it inherits from a superclass — or null when it does not
 // conform. This is the conformance registry: each type's metadata carries
@@ -233,13 +325,22 @@ const SableConformance *sable_conformance(const SableMetadata *type, const Sable
 // existential from.
 const SableWitnessTable *sable_witness_table(const SableTypeMetadata *type, const SableProtocol *protocol) {
     for (; type != NULL; type = superclass_of(type)) {
+        bool conforms = false;
         for (int64_t i = 0; i < type->conformance_count; i++) {
-            if (same_protocol(type->conformances[i].protocol, protocol) && type->conformances[i].witnesses != NULL) {
-                return type->conformances[i].witnesses;
+            if (same_protocol(type->conformances[i].protocol, protocol)) {
+                if (type->conformances[i].witnesses != NULL) {
+                    return type->conformances[i].witnesses;
+                }
+
+                conforms = true;
             }
         }
 
         const SableWitnessTable *table = registered_table(type, protocol);
+        if (table == NULL && conforms && type->argument_count > 0 && type->name != NULL) {
+            table = template_table(type, protocol);
+        }
+
         if (table != NULL) {
             return table;
         }

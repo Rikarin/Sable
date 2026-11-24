@@ -112,6 +112,13 @@ public static class SilPassManager {
             pending.Push(entry);
         }
 
+        // A template table's entries: for instances of its type made at run time.
+        foreach (var table in module.WitnessTables.Where(static t => t.IsTemplate)) {
+            foreach (var function in table.Entries.Select(static e => e.Function).OfType<string>().Concat(table.Accessors)) {
+                pending.Push(function);
+            }
+        }
+
         foreach (var type in module.Types) {
             switch (type) {
                 case StructType { Deinit: { } deinit }:

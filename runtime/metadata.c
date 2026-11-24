@@ -566,9 +566,6 @@ typedef struct SableShapeConformance {
     const SableProtocol *protocol;
     int64_t requirement_count;
     const SableShapeRequirement *requirements;
-    // Its template table, one for every instance: each entry reads the type
-    // arguments from Self's metadata (#297, #299). Null where none is made.
-    const SableWitnessTable *witnesses;
 } SableShapeConformance;
 
 typedef struct SableAggregateShape {
@@ -584,9 +581,8 @@ typedef struct SableAggregateShape {
 // The conformance records of an instance of a generic type made at run time
 // (#297): each its declaration has that holds for these arguments — a
 // conditional one where each argument it constrains conforms — as the
-// compiler gives an instance it knows the arguments of, each with its
-// declaration's template table where the compiler made one, so the registry
-// finds a table for the instance as for one the program names.
+// compiler gives an instance it knows the arguments of. The registry finds
+// its declaration's template tables (sable_register_template).
 static void instance_conformances(SableTypeMetadata *type, const SableAggregateShape *shape) {
     if (shape == NULL || shape->conformance_count == 0) {
         return;
@@ -609,7 +605,6 @@ static void instance_conformances(SableTypeMetadata *type, const SableAggregateS
 
         if (holds) {
             records[count].protocol = conformance->protocol;
-            records[count].witnesses = conformance->witnesses;
             count++;
         }
     }

@@ -102,7 +102,7 @@ public sealed class StaticSiteTests {
         var source = File.ReadAllText(Path.Combine(Root, "examples/ssg/ssg.sb"));
         Assert.Equal("usage: ssg <site> <output>\n", Programs.InterpretWithArguments(source, []).Errors);
         Assert.Equal(
-            $"ssg: no such file or directory: {missing}/site.txt\n",
+            $"ssg: no such file or directory: {Path.Combine(missing, "site.txt")}\n",
             Programs.InterpretWithArguments(source, [missing, missing + "-out"]).Errors
         );
     }

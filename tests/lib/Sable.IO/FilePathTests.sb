@@ -261,7 +261,10 @@ fn theFileSystemResolvesWhatTheBytesCannot() throws {
 
 @test
 fn pathsAsTextGoThroughFilePath() {
-    assertEqual(Path.join("a", "b"), "a/b")
+    // The host's style: Windows joins with '\\' and roots only with a drive.
+    let onWindows = FilePath("").style == .Windows
+    let s = "\(FilePath("").separator)"
+    assertEqual(Path.join("a", "b"), "a\(s)b")
     assertEqual(Path.join("", "b"), "b")
     assertEqual(Path.join("/a", "/b"), "/b")
     assertEqual(Path.fileName("a/b.txt"), "b.txt")
@@ -273,8 +276,8 @@ fn pathsAsTextGoThroughFilePath() {
     assertEqual(Path.extension("a/b.tar.gz") ?? "-", "gz")
     assert(Path.extension(".hidden") == none)
     assertEqual(Path.withoutExtension("x/y/report.md"), "x/y/report")
-    assertEqual(Path.normalized("a/./b/../c"), "a/c")
+    assertEqual(Path.normalized("a/./b/../c"), "a\(s)c")
     assertEqual(Path.relative("/a/b", to: "/a") ?? "-", "b")
     assert(Path.relative("a", to: "/a") == none)
-    assert(Path.isAbsolute("/a") && !Path.isAbsolute("a"))
+    assert(Path.isAbsolute(onWindows ? "C:\\a" : "/a") && !Path.isAbsolute("a"))
 }

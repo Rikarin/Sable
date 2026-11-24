@@ -2,6 +2,8 @@
 // what platform.h's "File handles" says each platform gives. Part of
 // platform_posix.c and platform_wasi.c, which include it.
 
+#include <fcntl.h>
+
 #if defined(__APPLE__)
 #include <copyfile.h>
 #endif

@@ -1,0 +1,143 @@
+module Sable.Serialize.Yaml
+
+import Sable.Serialize
+
+/// YAML 1.2 (docs/06 §6.4): Serializable values to YAML and back, nodes of
+/// any shape, and events; a YamlStream is a text to edit. Go's `yaml.v3`,
+/// .NET's YamlDotNet, `serde_yaml`.
+///
+/// It is safe to read what anyone wrote: a tag makes no type, the same key
+/// twice is an error, and YamlOptions bounds how deep a document nests and
+/// how much its aliases stand for.
+///
+/// ```sable
+/// @derive(Serializable)
+/// struct Service {
+///     var name: String
+///     var ports: Int[>..]
+/// }
+/// let text = try! Yaml.encode(Service { name: "on", ports: [80, 443] })
+/// assert(text == "name: \"on\"\nports:\n  - 80\n  - 443\n")
+/// assert(try! Yaml.decode(Service.self, from: text).ports[1] == 443)
+/// ```
+public struct Yaml {
+    // ---- Serializable values -------------------------------------------------
+
+    /// The value as a YAML document.
+    public static fn encode<T: Serializable>(_ value: T, _ options: YamlPrintOptions = YamlPrintOptions()) throws(SerializeError) -> String {
+        let encoder = YamlEncoder(options)
+        try value.encode(to: encoder)
+        return try encoder.text()
+    }
+
+    /// The values as a stream of YAML documents, one each.
+    public static fn encodeAll<T: Serializable>(_ values: T[>..], _ options: YamlPrintOptions = YamlPrintOptions()) throws(SerializeError) -> String {
+        var each = options
+        each.explicitStart = options.explicitStart || values.count > 1
+        var parts: String[>..] = []
+        for value in values {
+            parts.append(try Yaml.encode(value, each))
+        }
+        return parts.joined()
+    }
+
+    /// The value of the type the one YAML document of the text holds.
+    public static fn decode<T: Serializable>(_ type: T.Type, from text: String, _ options: YamlOptions = YamlOptions()) throws(SerializeError) -> T {
+        return try T.decode(from: try YamlDecoder.parse(text, options))
+    }
+
+    /// The values of the type the text's documents hold.
+    public static fn decodeAll<T: Serializable>(_ type: T.Type, from text: String, _ options: YamlOptions = YamlOptions()) throws(SerializeError) -> T[>..] {
+        var roots: YamlNode[>..] = []
+        do {
+            roots = try Yaml.parseAll(text, options)
+        } catch {
+            throw SerializeError.Syntax(reason: "not YAML: " + error.description())
+        }
+        var all: T[>..] = []
+        for root in roots {
+            all.append(try T.decode(from: YamlDecoder(root)))
+        }
+        return all
+    }
+
+    // ---- Nodes ---------------------------------------------------------------
+
+    /// The one document the text is; null for a text with none.
+    public static fn parse(_ text: String, _ options: YamlOptions = YamlOptions()) throws(YamlError) -> YamlNode {
+        return try Yaml.one(YamlParser(text, options))
+    }
+
+    /// The one document the bytes are, in any of YAML's encodings.
+    public static fn parse(bytes: U8[>..], _ options: YamlOptions = YamlOptions()) throws(YamlError) -> YamlNode {
+        return try Yaml.one(try YamlParser(bytes: bytes, options))
+    }
+
+    static fn one(_ parser: YamlParser) throws(YamlError) -> YamlNode {
+        let composer = YamlComposer(parser)
+        guard let root = try composer.document() else {
+            return YamlNode(.Scalar, line: 1, column: 1)
+        }
+        if (try composer.document()) != none {
+            throw parser.error(composer.documentStart.start, "a second document, where one is read: 'parseAll' reads them all")
+        }
+        return root
+    }
+
+    /// Every document of the text.
+    ///
+    /// ```sable
+    /// let all = try! Yaml.parseAll("--- 1\n--- 2\n")
+    /// assert(all.count == 2 && all[1].int == 2)
+    /// ```
+    public static fn parseAll(_ text: String, _ options: YamlOptions = YamlOptions()) throws(YamlError) -> YamlNode[>..] {
+        let composer = YamlComposer(YamlParser(text, options))
+        var all: YamlNode[>..] = []
+        while let root = try composer.document() {
+            all.append(root)
+        }
+        return all
+    }
+
+    /// The node as a YAML document, in the styles its nodes have.
+    public static fn print(_ node: YamlNode, _ options: YamlPrintOptions = YamlPrintOptions()) throws(YamlError) -> String {
+        return try Yaml.printAll([node], options)
+    }
+
+    /// The nodes as a stream of YAML documents.
+    public static fn printAll(_ nodes: YamlNode[>..], _ options: YamlPrintOptions = YamlPrintOptions()) throws(YamlError) -> String {
+        let emitter = YamlEmitter(options)
+        try emitter.emit(YamlEvent.streamStart())
+        for node in nodes {
+            try emitter.emit(YamlEvent.documentStart())
+            if let comment = node.comment {
+                try emitter.comment(comment)
+            }
+            try YamlPrinter(emitter).node(node)
+            try emitter.emit(YamlEvent.documentEnd())
+        }
+        try emitter.emit(YamlEvent.streamEnd())
+        return emitter.text()
+    }
+
+    // ---- Events --------------------------------------------------------------
+
+    /// The text's events, all of them.
+    public static fn events(_ text: String, _ options: YamlOptions = YamlOptions()) throws(YamlError) -> YamlEvent[>..] {
+        let parser = YamlParser(text, options)
+        var all: YamlEvent[>..] = []
+        while let event = try parser.next() {
+            all.append(event)
+        }
+        return all
+    }
+
+    /// The events as YAML.
+    public static fn print(events: YamlEvent[>..], _ options: YamlPrintOptions = YamlPrintOptions()) throws(YamlError) -> String {
+        let emitter = YamlEmitter(options)
+        for event in events {
+            try emitter.emit(event)
+        }
+        return emitter.text()
+    }
+}

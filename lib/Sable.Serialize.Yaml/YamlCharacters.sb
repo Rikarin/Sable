@@ -1,0 +1,62 @@
+module Sable.Serialize.Yaml
+
+// The characters of YAML 1.2.2's productions, as bytes of UTF-8.
+
+// c-indicator
+fn yamlIsIndicator(_ b: U8) -> Bool {
+    return yamlIsAmong(b, "-?:,[]{}#&*!|>'\"%@`")
+}
+
+// ns-word-char
+fn yamlIsWord(_ b: U8) -> Bool {
+    return b >= 0x30 && b <= 0x39 || b >= 0x41 && b <= 0x5A || b >= 0x61 && b <= 0x7A || b == 0x2D
+}
+
+// ns-uri-char, '%' standing for its escapes
+fn yamlIsUriChar(_ b: U8) -> Bool {
+    return yamlIsTagChar(b) || b == 0x21 || b == 0x2C || b == 0x5B || b == 0x5D
+}
+
+// ns-tag-char, '%' standing for its escapes
+fn yamlIsTagChar(_ b: U8) -> Bool {
+    return yamlIsWord(b) || yamlIsAmong(b, "#;/?:@&=+$_.~*'()%")
+}
+
+fn yamlIsAmong(_ b: U8, _ all: String) -> Bool {
+    let bytes = all.utf8
+    var i = 0
+    while i < bytes.count {
+        if bytes[i] == b {
+            return true
+        }
+        i += 1
+    }
+    return false
+}
+
+fn yamlHexValue(_ b: U8) -> Int {
+    if b >= 0x30 && b <= 0x39 {
+        return Int(b) - 0x30
+    }
+    if b >= 0x61 && b <= 0x66 {
+        return Int(b) - 0x57
+    }
+    if b >= 0x41 && b <= 0x46 {
+        return Int(b) - 0x37
+    }
+    return -1
+}
+
+// The number in hex, upper case, at least that many digits.
+fn yamlHex(_ value: Int, _ digits: Int) -> String {
+    var text = ""
+    var rest = value
+    var i = 0
+    while rest > 0 || i < digits {
+        let digit = rest % 16
+        text = String.fromChar(Char.fromCodePoint(value: digit < 10 ? 48 + digit : 55 + digit)!) + text
+        rest = rest / 16
+        i += 1
+    }
+    return text
+}

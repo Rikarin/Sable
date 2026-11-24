@@ -1,0 +1,20 @@
+module Sable.Serialize.Yaml
+
+/// What a YAML document may ask of its reader.
+///
+/// ```sable
+/// let few = YamlOptions(maxAliasExpansion: 3)
+/// assert((try? Yaml.parse("- &a [1, 2, 3, 4]\n- *a\n", few)) == none)
+/// ```
+public struct YamlOptions {
+    /// How deep collections may nest, an alias's included where it stands.
+    public var maxDepth: Int
+    /// How many nodes the document's aliases may stand for in all, beyond
+    /// those written: what stops a "billion laughs" of aliases to aliases.
+    public var maxAliasExpansion: Int
+
+    public init(maxDepth: Int = 256, maxAliasExpansion: Int = 100000) {
+        self.maxDepth = maxDepth
+        self.maxAliasExpansion = maxAliasExpansion
+    }
+}

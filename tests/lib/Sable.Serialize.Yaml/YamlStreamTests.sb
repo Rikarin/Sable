@@ -1,0 +1,334 @@
+module YamlStreamTests
+
+import Sable.Serialize.Yaml
+import Sable.Testing
+
+// The text after a change of its first document's root.
+fn edited(_ text: String, _ change: (YamlNode) -> Void) throws -> String {
+    let stream = try YamlStream(text)
+    change(stream.documents[0].root)
+    let after = try stream.text()
+    assert((try Yaml.parseAll(after))[0] == stream.documents[0].root, after)
+    return after
+}
+
+let config = """
+# The header,
+# of two lines.
+
+name: demo   # the name
+image: "a:1"
+
+# Where it runs.
+server:
+    # inside
+    host: 'h'
+    ports:
+    - 80
+    - 443   # tls
+
+    opts: { a: 1, b: [x,  y] }  # flow
+script: |   # run
+    echo 1
+    # not a comment
+
+tail: ~
+# The end.
+
+"""
+
+@test
+fn anUneditedTextIsTheSameByteForByte() throws {
+    let texts = [
+        "", "\n", "# only\n", "a", "a: 1", config, "\u{FEFF}a: b\r\n\r\n# c\r\nd:  e\r\n", "a: 1\rb: |\r x\r",
+        "%YAML 1.2\n%TAG ! !x\n---   # c\n!a b\n...  # d\n\n# e\n--- |+\n x\n\n\n--- >-\n\n y\n...\nz", "--- a\n--- b\n---\n---\n...\n# t", "? a\n:   b\n? c\n",
+        "[a,\n  b ,\t\"c\\\n   d\"  , # e\n{f: g}: h]\n", "- - - a\n-\n  - b\n- &x !!str 'c'\n- *x\n", "a:    \n  - \tb\n\n\n\n  -   c:   d\n      e:  f",
+    ]
+    for text in texts {
+        let stream = try YamlStream(text)
+        assertEqual(try stream.text(), text)
+        for document in stream.documents {
+            let _ = try document.text()
+        }
+    }
+    assertEqual((try YamlStream(texts[8])).documents.count, 4)
+}
+
+@test
+fn commentsAreGiven() throws {
+    let root = (try YamlStream(config)).documents[0].root
+    assertEqual(root["name"]!.trailingComment ?? "", "the name")
+    assertEqual(root.entries[2].key.comment ?? "", "Where it runs.")
+    assertEqual(root["server"]!.entries[0].key.comment ?? "", "inside")
+    assertEqual(root["server"]!["ports"]![1]!.trailingComment ?? "", "tls")
+    assertEqual(root["server"]!["opts"]!.trailingComment ?? "", "flow")
+    assertEqual(root["script"]!.trailingComment ?? "", "run")
+    assert(root.entries[0].key.comment == none && root["tail"]!.trailingComment == none && root.entries[4].key.comment == none)
+    let top = (try YamlStream("# one\n#two\nk: &a !!map # on\n  # in\n  x: 1\n")).documents[0].root
+    assertEqual(top.entries[0].key.comment ?? "", "one\ntwo")
+    assertEqual(top["k"]!.trailingComment ?? "", "on")
+    assertEqual(top["k"]!.entries[0].key.comment ?? "", "in")
+    let scalar = (try YamlStream("# s\nx # t\n")).documents[0].root
+    assertEqual((scalar.comment ?? "") + (scalar.trailingComment ?? ""), "st")
+    assertEqual((try YamlStream("- a\r\n# c\r\n- b\r\n")).documents[0].root[1]!.comment ?? "", "c")
+}
+
+@test
+fn scalarsAreChangedWhereTheyAre() throws {
+    let after = try edited(config) { root in
+        root["name"] = YamlNode.string("yes")
+        root["image"]!.value = "a:2"
+        root["server"]!["ports"]!.items[1] = YamlNode.int(8443)
+        root["server"]!["host"]!.value = "it's"
+        root["server"]!["opts"]!["b"]!.items[0] = YamlNode.string("z, w")
+        root["tail"] = YamlNode.int(1)
+    }
+    assertEqual(after, config.replacing("demo   # the name", with: "\"yes\" # the name").replacing("a:1", with: "a:2").replacing("443   # tls", with: "8443 # tls").replacing("'h'", with: "'it''s'").replacing("[x,  y]", with: "[\"z, w\",  y]").replacing("~", with: "1"))
+    assertEqual(try edited("a:\nb: 1") { $0["a"] = YamlNode.string("x") }, "a: x\nb: 1")
+    assertEqual(try edited("- a\n-\n") { $0.items[1] = YamlNode.string("x") }, "- a\n- x\n")
+    assertEqual(try edited("{a, b: , c: 1}") { root in
+        root["a"] = YamlNode.int(1)
+        root["b"] = YamlNode.int(2)
+    }, "{a: 1, b: 2 , c: 1}".replacing("2 ,", with: "2 ,"))
+    assertEqual(try edited("a: 1 # x\n") { $0["a"]!.trailingComment = "y" }, "a: 1 # y\n")
+    assertEqual(try edited("a: 1 # x\nb: 2\n") { $0["a"]!.trailingComment = none }, "a: 1\nb: 2\n")
+    assertEqual(try edited("a: |\n  x\n  y\nb: 1\n") { $0["a"]!.value = "z\n" }, "a: |\n  z\nb: 1\n")
+    assertEqual(try edited("a: |\n  x\n") { $0["a"] = YamlNode.string("z") }, "a: z\n")
+    assertEqual(try edited("a: 1\nb: 2") { $0["b"] = YamlNode.string("x\ny\n") }, "a: 1\nb: |\n  x\n  y\n")
+    assertEqual(try edited("a: 1 # c\nb: 2\n") { $0["a"] = YamlNode.string("x\ny\n") }, "a: | # c\n  x\n  y\nb: 2\n")
+    assertEqual(try edited("x # t\n") { $0.value = "y" }, "y # t\n")
+    assertEqual(try edited("---   x\n...\n") { $0.value = "y" }, "--- y\n...\n")
+    assertEqual(try edited("? a\n: b\n") { $0["a"] = YamlNode.string("c") }, "? a\n: c\n")
+    assertEqual(try edited("- a: 1\n  b: 2\n- c\n") { $0[0]!["a"] = YamlNode.int(3) }, "- a: 3\n  b: 2\n- c\n")
+}
+
+@test
+fn keysAreRenamed() throws {
+    assertEqual(try edited("a:  1 # c\n\"b\": 2\n") { root in
+        root.entries[0].key.value = "x y"
+        root.entries[1].key.value = "z"
+    }, "x y:  1 # c\n\"z\": 2\n")
+    assertEqual(try edited("{a: 1, b: 2}\n") { $0.entries[0].key.value = "c" }, "{c: 1, b: 2}\n")
+    assertEqual(try edited("? a\n: 1\n") { $0.entries[0].key.value = "c" }, "c: 1\n")
+}
+
+@test
+fn entriesAreAdded() throws {
+    let after = try edited(config) { root in
+        root["server"]!["ports"]!.append(YamlNode.int(8080))
+        root["server"]!["ports"]!.insert(YamlNode.int(22), at: 0)
+        root["server"]!["opts"]!["c"] = YamlNode.string("no")
+        root["server"]!["opts"]!["b"]!.append(YamlNode.int(3))
+        root["server"]!["log"] = YamlNode.mapping([YamlEntry(YamlNode.string("level"), YamlNode.string("info"))])
+        root["extra"] = YamlNode.sequence([YamlNode.int(1), YamlNode.sequence([YamlNode.int(2)])])
+        root.insert(YamlEntry(YamlNode.string("script2"), YamlNode.string("x\n\n")), at: 4)
+    }
+    assertEqual(after, config
+        .replacing("    - 80\n", with: "    - 22\n    - 80\n")
+        .replacing("# tls\n", with: "# tls\n    - 8080\n")
+        .replacing("y] }", with: "y, 3], c: \"no\" }")
+        .replacing("# flow\n", with: "# flow\n    log:\n        level: info\n")
+        .replacing("comment\n\n", with: "comment\nscript2: |+\n    x\n\n")
+        .replacing("tail: ~\n", with: "tail: ~\nextra:\n- 1\n- - 2\n"))
+    assertEqual(try edited("a: 1") { $0["b"] = YamlNode.int(2) }, "a: 1\nb: 2")
+    assertEqual(try edited("- a: 1\n") { $0[0]!.insert(YamlEntry(YamlNode.string("z"), YamlNode.int(0)), at: 0) }, "- z: 0\n  a: 1\n")
+    assertEqual(try edited("- - 1\n") { $0[0]!.insert(YamlNode.int(0), at: 0) }, "- - 0\n  - 1\n")
+    assertEqual(try edited("a: {}\nb: []\n") { root in
+        root["a"]!["x"] = YamlNode.int(1)
+        root["b"]!.append(YamlNode.int(2))
+    }, "a: {x: 1}\nb: [2]\n")
+    assertEqual(try edited("# h\na: 1\n") { $0.insert(YamlEntry(YamlNode.string("z"), YamlNode.int(0)), at: 0) }, "z: 0\n# h\na: 1\n")
+    assertEqual(try edited("[ 1 ]\n") { root in
+        root.insert(YamlNode.int(0), at: 0)
+        root.append(YamlNode.int(2))
+    }, "[ 0, 1, 2 ]\n")
+    let noted = YamlNode.int(2)
+    noted.trailingComment = "two"
+    assertEqual(try edited("a: 1\n") { root in
+        root["b"] = noted
+        root.entries[1].key.comment = "why\nso"
+    }, "a: 1\n# why\n# so\nb: 2 # two\n")
+}
+
+@test
+fn entriesAreTakenOut() throws {
+    let after = try edited(config) { root in
+        root["server"]!["host"] = none
+        root["server"]!["ports"]!.remove(at: 0)
+        root["server"]!["opts"]!["a"] = none
+        root["server"]!["opts"]!["b"]!.remove(at: 1)
+        root["script"] = none
+        root["name"] = none
+    }
+    assertEqual(after, config
+        .replacing("name: demo   # the name\n", with: "")
+        .replacing("    # inside\n    host: 'h'\n", with: "")
+        .replacing("    - 80\n", with: "")
+        .replacing("{ a: 1, b: [x,  y] }", with: "{ b: [x] }")
+        .replacing("script: |   # run\n    echo 1\n    # not a comment\n", with: ""))
+    assertEqual(try edited("- a: 1\n  b: 2\n  c: 3\n") { root in
+        root[0]!["a"] = none
+        root[0]!["b"] = none
+    }, "- c: 3\n")
+    assertEqual(try edited("a:\n  b: 1\nc: 2\n") { $0["a"]!["b"] = none }, "a: {}\nc: 2\n")
+    assertEqual(try edited("[1, 2, 3, 4]") { root in
+        root.remove(at: 3)
+        root.remove(at: 1)
+    }, "[1, 3]")
+    assertEqual(try edited("[1, 2, 3]") { root in
+        root.remove(at: 0)
+        root.remove(at: 0)
+        root.append(YamlNode.int(9))
+    }, "[3, 9]")
+    assertEqual(try edited("a: 1\nb: 2") { $0["b"] = none }, "a: 1\n")
+}
+
+@test
+fn collectionsTakeAnothersPlace() throws {
+    let map = YamlNode.mapping([YamlEntry(YamlNode.string("x"), YamlNode.int(1)), YamlEntry(YamlNode.string("y"), YamlNode.int(2))])
+    assertEqual(try edited("a: 1 # c\nb: 2\n") { $0["a"] = map }, "a: # c\n  x: 1\n  y: 2\nb: 2\n")
+    assertEqual(try edited("- 1\n- 2\n") { $0.items[0] = map }, "- x: 1\n  y: 2\n- 2\n")
+    assertEqual(try edited("a: # c\n  - 1\n  - 2\nb: 2\n") { $0["a"] = YamlNode.string("x") }, "a: x # c\nb: 2\n")
+    assertEqual(try edited("a: [1]\n") { $0["a"] = map }, "a:\n  x: 1\n  y: 2\n")
+    assertEqual(try edited("a: [1, {b: 2}]\n") { $0["a"]!.items[0] = map }, "a: [{x: 1, y: 2}, {b: 2}]\n")
+    assertEqual(try edited("a:\n  - 2\n  - 1 # one\n# end\n") { root in
+        let items = root["a"]!.items
+        root["a"]!.items = [items[1], items[0]]
+    }, "a:\n  - 1 # one\n  - 2\n# end\n")
+    let stream = try YamlStream("# h\n--- # s\n- a\n...\n")
+    stream.documents[0].root = YamlNode.string("b")
+    assertEqual(try stream.text(), "# h\n--- # s\nb\n...\n")
+    stream.documents[0].root = map
+    assertEqual(try stream.text(), "# h\n--- # s\nx: 1\ny: 2\n...\n")
+    assertEqual(try edited("a: &k [1]\nb: *k\n") { $0["b"] = YamlNode.int(1) }, "a: &k [1]\nb: 1\n")
+    assertEqual(try edited("a: &k [1]\nb: *k\n") { $0["a"] = none }, "b: &k [1]\n")
+    assertEqual(try edited("a: &k [1]\nb: 2\n") { root in
+        root["b"] = YamlNode.aliasOf(root["a"]!)
+    }, "a: &k [1]\nb: *k\n")
+    assertEqual(try edited("a: [1]\n") { $0["a"]!.collectionStyle = .Block }, "a:\n  - 1\n")
+    assertEqual(try edited("a: 1\n") { $0["a"]!.tag = "!t" }, "a: !t 1\n")
+    assertEqual(try edited("a: 1\nb: 2\n") { $0.entries[1].key.comment = "now" }, "a: 1\n# now\nb: 2\n")
+    assertEqual(try edited("a: 1\n# was\nb: 2\n") { $0.entries[1].key.comment = none }, "a: 1\nb: 2\n")
+}
+
+@test
+fn documentsAreAddedAndTakenOut() throws {
+    let stream = try YamlStream("a: 1")
+    stream.documents.append(YamlDocument(YamlNode.string("b")))
+    assertEqual(try stream.text(), "a: 1\n---\nb\n")
+    stream.documents = [stream.documents[1], stream.documents[0]]
+    assertEqual(try stream.text(), "b\n---\na: 1")
+    let other = try YamlStream("%YAML 1.2\n---\nx\n")
+    other.documents = [YamlDocument(YamlNode.int(1)), other.documents[0]]
+    assertEqual(try other.text(), "1\n...\n%YAML 1.2\n---\nx\n")
+    let made = YamlStream()
+    assertEqual(try made.text(), "")
+    made.documents.append(YamlDocument(YamlNode.null()))
+    assertEqual(try made.text(), "null\n")
+}
+
+// ---- Properties --------------------------------------------------------------
+
+struct Edits {
+    var random: SeededRandomNumberGenerator
+
+    mutating fn below(_ n: Int) -> Int {
+        return Int.random(in: 0..<n, using: &random)
+    }
+
+    mutating fn scalar() -> YamlNode {
+        let texts = ["a", "", "no", "x: y", "two\nlines\n", " s", "1", "#", "'", "é", "k\n\n", "\n z"]
+        return below(2) == 0 ? YamlNode.int(below(100)) : YamlNode.string(texts[below(texts.count)])
+    }
+
+    mutating fn made(_ depth: Int) -> YamlNode {
+        let choice = below(depth > 2 ? 1 : 3)
+        let style: YamlCollectionStyle = below(3) == 0 ? .Flow : .Block
+        let node = choice == 0 ? scalar() : choice == 1 ? YamlNode.sequence(style: style) : YamlNode.mapping(style: style)
+        var n = choice == 0 ? 0 : below(4)
+        while n > 0 {
+            if choice == 1 {
+                node.append(made(depth + 1))
+            } else {
+                node["k\(below(50))"] = made(depth + 1)
+            }
+            n -= 1
+        }
+        return node
+    }
+
+    // A random node of the tree, a collection if it can be.
+    mutating fn pick(_ node: YamlNode) -> YamlNode {
+        var at = node
+        while true {
+            if at.kind == .Scalar || at.count == 0 || below(3) == 0 {
+                return at
+            }
+            let i = below(at.count)
+            at = at.kind == .Sequence ? at.items[i] : at.entries[i].value
+        }
+    }
+
+    mutating fn change(_ root: YamlNode) {
+        let node = pick(root)
+        let choice = below(5)
+        if node.kind == .Scalar {
+            node.value = scalar().value
+            if node.style == .Plain {
+                node.style = .Automatic
+            }
+        } else if choice == 0 && node.count > 0 {
+            node.remove(at: below(node.count))
+        } else if choice < 3 {
+            if node.kind == .Sequence {
+                node.insert(made(1), at: below(node.count + 1))
+            } else {
+                let key = "n\(below(1000000))"
+                if node[key] == none {
+                    node.insert(YamlEntry(YamlNode.string(key), made(1)), at: below(node.count + 1))
+                }
+            }
+        } else if node.count > 0 {
+            let i = below(node.count)
+            if node.kind == .Sequence {
+                node.items[i] = made(1)
+            } else {
+                node.entries[i].value = made(1)
+            }
+        }
+    }
+}
+
+// Whatever is changed, what is written is the nodes; and it is written by
+// changing the text, not from nothing: the comment at its top stays.
+@test
+fn anyEditsReadBackAsTheyWereMade() throws {
+    var edits = Edits { random: SeededRandomNumberGenerator(seed: 79) }
+    let layouts = [YamlPrintOptions(), YamlPrintOptions(indent: 4), YamlPrintOptions(indentSequences: false), YamlPrintOptions(flow: true)]
+    var rounds = 0
+    var kept = 0
+    while rounds < 600 {
+        let tree = YamlNode.mapping([YamlEntry(YamlNode.string("first"), edits.made(0)), YamlEntry(YamlNode.string("second"), edits.made(0)), YamlEntry(YamlNode.string("third"), edits.made(0))])
+        let text = "# top\n\n" + (try Yaml.print(tree, layouts[edits.below(4)])) + "# bottom\n"
+        let stream = try YamlStream(text)
+        assertEqual(try stream.text(), text)
+        var n = 1 + edits.below(4)
+        while n > 0 {
+            edits.change(stream.documents[0].root)
+            n -= 1
+        }
+        let after = try stream.text()
+        do {
+            if (try Yaml.parse(after)) != stream.documents[0].root {
+                fail(text + "\nbecame\n" + after)
+            }
+        } catch {
+            fail(text + "\nbecame\n" + after + error.description())
+        }
+        if after.hasPrefix("# top\n") {
+            kept += 1
+        }
+        rounds += 1
+    }
+    assertEqual(kept, rounds)
+}

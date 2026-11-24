@@ -1,0 +1,143 @@
+module Sable.Serialize.Yaml
+
+/// A piece of a YAML stream, as YamlParser reads it and YamlEmitter writes
+/// it: YAML 1.2.2's serialization tree, as events.
+///
+/// ```sable
+/// let events = try! Yaml.events("- &a x\n- *a\n")
+/// assert(events[3].description() == "=VAL &a :x")
+/// assert(events[4].description() == "=ALI *a")
+/// ```
+@derive(Equatable)
+public struct YamlEvent {
+    public var kind: YamlEventKind
+    /// The anchor a node has, or the one an alias names, without the `&` or `*`.
+    public var anchor: String?
+    /// The tag written, resolved to a whole one: `tag:yaml.org,2002:str` for
+    /// `!!str`. None where none was written.
+    public var tag: String?
+    /// A scalar's content.
+    public var value: String
+    /// A scalar's style.
+    public var style: YamlScalarStyle
+    /// A collection's style.
+    public var collectionStyle: YamlCollectionStyle
+    /// Whether a document starts with `---`, or ends with `...`.
+    public var isExplicit: Bool
+    /// Where it starts and ends in the UTF-8 text, in bytes:
+    /// `YamlParser.position(at:)` makes a line and a column of one.
+    public var start: Int = 0
+    public var end: Int = 0
+    // Where a node's content starts, after its anchor and tag.
+    var content: Int = 0
+    // A place kept for a mapping's start that turned out not to be one.
+    var isPlaceholder: Bool = false
+
+    init(_ kind: YamlEventKind, anchor: String? = none, tag: String? = none, value: String = "", style: YamlScalarStyle = .Plain, collectionStyle: YamlCollectionStyle = .Block, isExplicit: Bool = false) {
+        self.kind = kind
+        self.anchor = anchor
+        self.tag = tag
+        self.value = value
+        self.style = style
+        self.collectionStyle = collectionStyle
+        self.isExplicit = isExplicit
+    }
+
+    public static fn streamStart() -> YamlEvent {
+        return YamlEvent(.StreamStart)
+    }
+
+    public static fn streamEnd() -> YamlEvent {
+        return YamlEvent(.StreamEnd)
+    }
+
+    public static fn documentStart(isExplicit: Bool = false) -> YamlEvent {
+        return YamlEvent(.DocumentStart, isExplicit: isExplicit)
+    }
+
+    public static fn documentEnd(isExplicit: Bool = false) -> YamlEvent {
+        return YamlEvent(.DocumentEnd, isExplicit: isExplicit)
+    }
+
+    public static fn aliasOf(_ anchor: String) -> YamlEvent {
+        return YamlEvent(.Alias, anchor: anchor)
+    }
+
+    public static fn scalar(_ value: String, style: YamlScalarStyle = .Automatic, anchor: String? = none, tag: String? = none) -> YamlEvent {
+        return YamlEvent(.Scalar, anchor: anchor, tag: tag, value: value, style: style)
+    }
+
+    public static fn sequenceStart(style: YamlCollectionStyle = .Block, anchor: String? = none, tag: String? = none) -> YamlEvent {
+        return YamlEvent(.SequenceStart, anchor: anchor, tag: tag, collectionStyle: style)
+    }
+
+    public static fn sequenceEnd() -> YamlEvent {
+        return YamlEvent(.SequenceEnd)
+    }
+
+    public static fn mappingStart(style: YamlCollectionStyle = .Block, anchor: String? = none, tag: String? = none) -> YamlEvent {
+        return YamlEvent(.MappingStart, anchor: anchor, tag: tag, collectionStyle: style)
+    }
+
+    public static fn mappingEnd() -> YamlEvent {
+        return YamlEvent(.MappingEnd)
+    }
+
+    /// The event as the yaml-test-suite writes it, in one line.
+    public fn description() -> String {
+        var text = match kind {
+            case .StreamStart   => "+STR"
+            case .StreamEnd     => "-STR"
+            case .DocumentStart => isExplicit ? "+DOC ---" : "+DOC"
+            case .DocumentEnd   => isExplicit ? "-DOC ..." : "-DOC"
+            case .Alias         => "=ALI *" + (anchor ?? "")
+            case .Scalar        => "=VAL"
+            case .SequenceStart => collectionStyle == .Flow ? "+SEQ []" : "+SEQ"
+            case .SequenceEnd   => "-SEQ"
+            case .MappingStart  => collectionStyle == .Flow ? "+MAP {}" : "+MAP"
+            case .MappingEnd    => "-MAP"
+        }
+        if kind == .Alias {
+            return text
+        }
+        if let anchor = anchor {
+            text = text + " &" + anchor
+        }
+        if let tag = tag {
+            text = text + " <" + tag + ">"
+        }
+        if kind == .Scalar {
+            let mark = match style {
+                case .SingleQuoted => "'"
+                case .DoubleQuoted => "\""
+                case .Literal      => "|"
+                case .Folded       => ">"
+                case _             => ":"
+            }
+            text = text + " " + mark + YamlEvent.escaped(value)
+        }
+        return text
+    }
+
+    static fn escaped(_ value: String) -> String {
+        var written: U8[>..] = []
+        for byte in value.utf8 {
+            if byte == 0x5C {
+                written.append(utf8: "\\\\")
+            } else if byte == 0x0A {
+                written.append(utf8: "\\n")
+            } else if byte == 0x09 {
+                written.append(utf8: "\\t")
+            } else if byte == 0x0D {
+                written.append(utf8: "\\r")
+            } else if byte == 0x08 {
+                written.append(utf8: "\\b")
+            } else {
+                written.append(byte)
+            }
+        }
+        unsafe {
+            return String.fromUtf8Unchecked(written)
+        }
+    }
+}

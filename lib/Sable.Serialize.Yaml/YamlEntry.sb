@@ -1,0 +1,13 @@
+module Sable.Serialize.Yaml
+
+/// A mapping's entry. Its key is a node like any other: usually a scalar,
+/// but YAML allows any.
+public struct YamlEntry {
+    public let key: YamlNode
+    public var value: YamlNode
+
+    public init(_ key: YamlNode, _ value: YamlNode) {
+        self.key = key
+        self.value = value
+    }
+}

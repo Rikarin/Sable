@@ -1,0 +1,102 @@
+module Sable.Serialize.Yaml
+
+/// A document of a YamlStream: its root, and the text it was read from.
+public final class YamlDocument {
+    /// The document's value, which may be changed, or be another.
+    public var root: YamlNode
+    let parser: YamlParser?
+    // Its text, and what it was when it was read.
+    let start: Int
+    let end: Int
+    let content: Int
+    let first: YamlNode
+    var origins: YamlOrigin[>..]
+    let startsExplicitly: Bool
+    let endsExplicitly: Bool
+    let hasDirectives: Bool
+
+    /// A new document of the value.
+    public init(_ root: YamlNode) {
+        self.root = root
+        self.first = root
+        self.parser = none
+        self.start = 0
+        self.end = 0
+        self.content = 0
+        self.origins = []
+        self.startsExplicitly = false
+        self.endsExplicitly = false
+        self.hasDirectives = false
+    }
+
+    init(_ parser: YamlParser, _ composer: YamlComposer, _ root: YamlNode, start: Int, end: Int) {
+        self.root = root
+        self.first = root
+        self.parser = parser
+        self.start = start
+        self.end = end
+        self.content = composer.documentStart.end
+        self.startsExplicitly = composer.documentStart.isExplicit
+        self.endsExplicitly = composer.documentEnd.isExplicit
+        var directives = false
+        var i = start
+        while i < composer.documentStart.start {
+            if parser.bytes[i] == 0x25 && (i == start || parser.isBreak(i - 1)) {
+                directives = true
+            }
+            i += 1
+        }
+        self.hasDirectives = directives
+        self.origins = composer.origins
+        let comments = YamlComments(parser, origins)
+        comments.root(root, bound: startsExplicitly ? content : start, from: content)
+        self.origins = comments.origins
+    }
+
+    fn endsLine(_ text: String) -> Bool {
+        let bytes = text.utf8
+        return bytes.count == 0 || bytes[bytes.count - 1] == 0x0A || bytes[bytes.count - 1] == 0x0D
+    }
+
+    /// The document's text, as its nodes now are.
+    public fn text() throws(YamlError) -> String {
+        guard let parser = parser else {
+            return try Yaml.print(root)
+        }
+        let before = parser.text(start, end)
+        // The nodes are what counts: formatting is kept where it can be, and
+        // else what comes before and after the root is.
+        for whole in [false, true] {
+            if let after = try YamlEditor(parser, self).text(whole: whole) {
+                if after == before && !whole {
+                    return before
+                }
+                if let same = try? reads(after, parser.options) {
+                    if same {
+                        return after
+                    }
+                }
+            }
+        }
+        return try rewritten()
+    }
+
+    // Whether the text is one document, the root's.
+    fn reads(_ text: String, _ options: YamlOptions) throws(YamlError) -> Bool {
+        let composer = YamlComposer(YamlParser(text, options))
+        guard let again = try composer.document() else {
+            return false
+        }
+        if (try composer.document()) != none {
+            return false
+        }
+        return again == root
+    }
+
+    // The document with none of its formatting but its nodes' styles and
+    // comments.
+    fn rewritten() throws(YamlError) -> String {
+        let text = try Yaml.print(root, YamlPrintOptions(explicitStart: startsExplicitly))
+        return endsExplicitly ? text + "...\n" : text
+    }
+}

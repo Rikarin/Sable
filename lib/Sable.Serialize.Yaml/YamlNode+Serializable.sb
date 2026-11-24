@@ -1,0 +1,91 @@
+module Sable.Serialize.Yaml
+
+import Sable.Serialize
+
+extension YamlNode: Serializable {
+    /// The node as what it is in the core schema, to any format: a mapping's
+    /// keys as their text, and an alias as what it names.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        let node = resolved
+        match type {
+            case .Null   => try encoder.encodeNull()
+            case .Bool   => try encoder.encodeBool(node.bool == true)
+            case .Float  => try encoder.encodeFloat(node.float ?? 0.0)
+            case .String => try encoder.encodeString(node.value)
+            case .Int => {
+                if let value = node.int {
+                    try encoder.encodeInt(value)
+                } else if let value = node.uint {
+                    try encoder.encodeUInt(value)
+                } else {
+                    throw SerializeError.InvalidValue(path: "$", reason: "\(node.value) does not fit a U64")
+                }
+            }
+            case .Binary => {
+                guard let bytes = node.binary else {
+                    throw SerializeError.InvalidValue(path: "$", reason: "'\(node.value)' is not base64")
+                }
+                try encoder.encodeBytes(bytes)
+            }
+            case .Sequence => {
+                try encoder.beginSequence(count: node.items.count)
+                for item in node.items {
+                    try item.encode(to: encoder)
+                }
+                try encoder.endSequence()
+            }
+            case .Mapping => {
+                try encoder.beginMap(count: node.entries.count)
+                for entry in node.entries {
+                    guard let key = entry.key.text else {
+                        throw SerializeError.InvalidValue(path: "$", reason: "a key that is a collection")
+                    }
+                    try encoder.encodeKey(key)
+                    try entry.value.encode(to: encoder)
+                }
+                try encoder.endMap()
+            }
+        }
+    }
+
+    /// Whatever value is there, from any format, as a node.
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> YamlNode {
+        return match decoder.kind {
+            case .Missing  => throw decoder.mismatch("a value")
+            case .Null     => YamlNode.null()
+            case .Bool     => YamlNode.bool(try decoder.decodeBool())
+            case .String   => YamlNode.string(try decoder.decodeString())
+            case .Bytes    => YamlNode.binary(try decoder.decodeBytes())
+            case .Number   => try YamlNode.number(from: decoder)
+            case .Sequence => try YamlNode.elements(from: decoder)
+            case .Map      => try YamlNode.members(from: decoder)
+        }
+    }
+
+    // An integer where it is one that fits, as no format says which it is.
+    static fn number<D: Decoder>(from decoder: D) throws(SerializeError) -> YamlNode {
+        if let value = try? decoder.decodeInt() {
+            return YamlNode.int(value)
+        }
+        if let value = try? decoder.decodeUInt() {
+            return YamlNode.uint(value)
+        }
+        return YamlNode.float(try decoder.decodeFloat())
+    }
+
+    static fn elements<D: Decoder>(from decoder: D) throws(SerializeError) -> YamlNode {
+        let node = YamlNode.sequence()
+        for element in try decoder.decodeSequence() {
+            node.items.append(try YamlNode.decode(from: element))
+        }
+        return node
+    }
+
+    static fn members<D: Decoder>(from decoder: D) throws(SerializeError) -> YamlNode {
+        let node = YamlNode.mapping()
+        for member in try decoder.decodeMap() {
+            node.entries.append(YamlEntry(YamlNode.string(member.key), try YamlNode.decode(from: member.value)))
+        }
+        return node
+    }
+}

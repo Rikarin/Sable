@@ -887,6 +887,13 @@ Sable.Serialize     Serializable (encode(to:), static decode(from:)) for
                     a declared length before making anything of it. A type
                     asks `encoder as? CborEncoder` for what one format alone
                     has. Not yet: the zero-copy @inline_layout path
+Sable.Serialize.Yaml YAML 1.2: YamlParser (events, linear in the text,
+                    errors by line and column) and YamlEmitter, YamlNode
+                    (the core schema; aliases within an expansion budget;
+                    no types from tags; a key twice is an error),
+                    YamlStream (edited with its comments and formatting
+                    kept, unedited byte for byte), YamlEncoder and
+                    YamlDecoder, Yaml.encode/decode
 Sable.Concurrency   Channel and ThrowingChannel (unbounded, or bounded with
                     a full mode: wait — the sender's backpressure — or
                     drop oldest, newest or the write; close(error:);

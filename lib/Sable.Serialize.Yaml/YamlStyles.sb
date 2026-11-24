@@ -1,0 +1,183 @@
+module Sable.Serialize.Yaml
+
+let yamlBinaryTag = "tag:yaml.org,2002:binary"
+
+// c-printable, the line breaks and the tab among them.
+fn yamlIsPrintable(_ c: Char) -> Bool {
+    let code = c.codePoint
+    return code >= 0x20 && code < 0x7F || code == 9 || code == 10 || code == 13 || code == 0x85 || code >= 0xA0 && code <= 0xFFFD || code >= 0x10000
+}
+
+// The style that can hold a scalar where it is: the event's own, or the
+// nearest to it.
+fn yamlStyle(_ event: YamlEvent, flow: Bool, key: Bool) -> YamlScalarStyle {
+    let value = event.value
+    if event.style == .Plain && (value.isEmpty || yamlIsPlain(value, flow)) {
+        return .Plain
+    }
+    if event.style == .Literal || event.style == .Folded {
+        return !flow && yamlIsBlock(value) ? event.style : .DoubleQuoted
+    }
+    let line = yamlIsLine(value)
+    if event.style == .SingleQuoted {
+        return line ? .SingleQuoted : .DoubleQuoted
+    }
+    if event.style == .DoubleQuoted {
+        return .DoubleQuoted
+    }
+    if !value.isEmpty && yamlIsPlain(value, flow) && (event.tag != none || yamlTypeOf(value) == .String && !yamlIsOldType(value)) {
+        return .Plain
+    }
+    if !flow && !key && !line && value.contains('\n') && yamlIsBlock(value) {
+        return .Literal
+    }
+    return line && (value.contains('"') || value.contains('\\')) ? .SingleQuoted : .DoubleQuoted
+}
+
+// Whether the text is one line of printable characters that no reader takes
+// for anything else.
+fn yamlIsLine(_ value: String) -> Bool {
+    for c in value {
+        let code = c.codePoint
+        if code < 0x20 || code >= 0x7F && code <= 0xA0 || code == 0x2028 || code == 0x2029 || code == 0xFEFF || !yamlIsPrintable(c) {
+            return false
+        }
+    }
+    return true
+}
+
+// Whether a block scalar can hold the text.
+fn yamlIsBlock(_ value: String) -> Bool {
+    for c in value {
+        let code = c.codePoint
+        if code == 13 || code == 0x85 || code == 0x2028 || code == 0x2029 || code == 0xFEFF || !yamlIsPrintable(c) {
+            return false
+        }
+    }
+    return true
+}
+
+// Whether the text, written plain, is one plain scalar and that text.
+fn yamlIsPlain(_ value: String, _ flow: Bool) -> Bool {
+    let bytes = value.utf8
+    let count = bytes.count
+    let first = bytes[0]
+    if first == 0x2D || first == 0x3F || first == 0x3A {
+        if count == 1 {
+            return false
+        }
+        let second = bytes[1]
+        if second == 0x20 || flow && yamlIsAmong(second, ",[]{}") {
+            return false
+        }
+    } else if yamlIsIndicator(first) {
+        return false
+    }
+    if first == 0x20 || bytes[count - 1] == 0x20 || bytes[count - 1] == 0x3A {
+        return false
+    }
+    if value.hasPrefix("---") || value.hasPrefix("...") {
+        return false
+    }
+    var i = 0
+    while i < count {
+        let b = bytes[i]
+        if b == 0x3A && i + 1 < count && (bytes[i + 1] == 0x20 || flow && yamlIsAmong(bytes[i + 1], ",[]{}")) {
+            return false
+        }
+        if b == 0x23 && i > 0 && bytes[i - 1] == 0x20 {
+            return false
+        }
+        if flow && yamlIsAmong(b, ",[]{}") {
+            return false
+        }
+        i += 1
+    }
+    return yamlIsLine(value)
+}
+
+fn yamlDoubleQuoted(_ value: String) -> String {
+    var written: U8[>..] = [0x22]
+    for c in value {
+        let code = c.codePoint
+        if code == 0x22 {
+            written.append(utf8: "\\\"")
+        } else if code == 0x5C {
+            written.append(utf8: "\\\\")
+        } else if code >= 0x20 && code < 0x7F || code > 0xA0 && code != 0x2028 && code != 0x2029 && code != 0xFEFF && yamlIsPrintable(c) {
+            c.encodeUtf8(into: &written)
+        } else if code == 10 {
+            written.append(utf8: "\\n")
+        } else if code == 9 {
+            written.append(utf8: "\\t")
+        } else if code == 13 {
+            written.append(utf8: "\\r")
+        } else if code == 0 {
+            written.append(utf8: "\\0")
+        } else if code == 0x85 {
+            written.append(utf8: "\\N")
+        } else if code == 0xA0 {
+            written.append(utf8: "\\_")
+        } else if code == 0x2028 {
+            written.append(utf8: "\\L")
+        } else if code == 0x2029 {
+            written.append(utf8: "\\P")
+        } else if code < 0x100 {
+            written.append(utf8: "\\x" + yamlHex(code, 2))
+        } else {
+            written.append(utf8: "\\u" + yamlHex(code, 4))
+        }
+    }
+    written.append(0x22)
+    unsafe {
+        return String.fromUtf8Unchecked(written)
+    }
+}
+
+// A whole tag as it is written: '!!str', '!local', '!' or '!<uri>'.
+fn yamlTagText(_ tag: String) -> String {
+    let core = "tag:yaml.org,2002:"
+    if tag == "!" {
+        return tag
+    }
+    var text = ""
+    var rest = tag
+    var strict = true
+    if tag.hasPrefix("!") {
+        text = "!"
+        rest = tag.slice(1, tag.count)
+    } else if tag.hasPrefix(core) && tag.count > core.count {
+        text = "!!"
+        rest = tag.slice(core.count, tag.count)
+    } else {
+        text = "!<"
+        strict = false
+    }
+    var written: U8[>..] = []
+    written.append(utf8: text)
+    for b in rest.utf8 {
+        if b != 0x25 && yamlIsTagChar(b) || !strict && yamlIsUriChar(b) {
+            written.append(b)
+        } else {
+            written.append(utf8: "%" + yamlHex(Int(b), 2))
+        }
+    }
+    if !strict {
+        written.append(0x3E)
+    }
+    unsafe {
+        return String.fromUtf8Unchecked(written)
+    }
+}
+
+// A number as the core schema reads one back.
+fn yamlFloatText(_ value: F64) -> String {
+    if value.isNaN {
+        return ".nan"
+    }
+    if !value.isFinite {
+        return value < 0.0 ? "-.inf" : ".inf"
+    }
+    let text = "\(value)"
+    return yamlTypeOf(text) == .Int ? text + ".0" : text
+}

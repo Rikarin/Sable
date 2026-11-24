@@ -1,0 +1,302 @@
+module Sable.Serialize.Yaml
+
+import Sable.Serialize
+
+/// The Decoder that reads YAML: a node of a document, at a path
+/// (`$.items[3].name`) that every error names. Scalars are what YAML 1.2's
+/// core schema says: `no` is a string and `0x1F` an integer. An alias is
+/// what it names, within YamlOptions' budget, and a tag chooses no type. A
+/// map's key is its text, whatever it is. What `Yaml.decode` uses.
+///
+/// ```sable
+/// let root = try! YamlDecoder.parse("base: &b {x: 1}\nitem: *b\n")
+/// assert(try! root.field("item").field("x").decodeInt() == 1)
+/// assert(root.field("item").node!.line == 2)
+/// assert(root.field("other").isMissing)
+/// ```
+public final class YamlDecoder: Decoder {
+    /// The node it reads, as it is written; none for a field that is not there.
+    public let node: YamlNode?
+    // What the node is, an alias looked through.
+    let resolved: YamlNode?
+    let parent: YamlDecoder?
+    let key: String?
+    let index: Int
+    let excluded: String[>..]?
+
+    init(_ node: YamlNode?, parent: YamlDecoder?, key: String?, index: Int, excluded: String[>..]? = none) {
+        self.node = node
+        self.resolved = node?.resolved
+        self.parent = parent
+        self.key = key
+        self.index = index
+        self.excluded = excluded
+    }
+
+    /// A decoder of the node.
+    public init(_ node: YamlNode) {
+        self.node = node
+        self.resolved = node.resolved
+        self.parent = none
+        self.key = none
+        self.index = -1
+        self.excluded = none
+    }
+
+    /// A decoder of the one document the text is; SerializeError.Syntax when
+    /// it is not one.
+    public static fn parse(_ text: String, _ options: YamlOptions = YamlOptions()) throws(SerializeError) -> YamlDecoder {
+        do {
+            return YamlDecoder(try Yaml.parse(text, options))
+        } catch {
+            throw SerializeError.Syntax(reason: "not YAML: " + error.description())
+        }
+    }
+
+    /// Where the value is, from the document's root.
+    public var path: String {
+        get {
+            if let parent = parent {
+                if let key = key {
+                    return parent.path + yamlPathKey(key)
+                }
+                return index >= 0 ? parent.path + "[\(index)]" : parent.path
+            }
+            return "$"
+        }
+    }
+
+    // ---- What it holds -------------------------------------------------------
+
+    public var isMissing: Bool => node == none
+
+    public var isNull: Bool => type == .Null
+
+    var type: YamlType? {
+        get {
+            if let resolved = resolved {
+                return resolved.type
+            }
+            return none
+        }
+    }
+
+    public var kind: DecodedKind {
+        get {
+            guard let type = type else {
+                return .Missing
+            }
+            return match type {
+                case .Null     => .Null
+                case .Bool     => .Bool
+                case .Int      => .Number
+                case .Float    => .Number
+                case .String   => .String
+                case .Binary   => .Bytes
+                case .Sequence => .Sequence
+                case .Mapping  => .Map
+            }
+        }
+    }
+
+    /// What the value is, as an error says it.
+    public var kindName: String {
+        get {
+            guard let type = type else {
+                return "nothing"
+            }
+            return match type {
+                case .Null     => "null"
+                case .Bool     => "a Bool"
+                case .Int      => "an integer"
+                case .Float    => "a float"
+                case .String   => "a string"
+                case .Binary   => "bytes"
+                case .Sequence => "a sequence"
+                case .Mapping  => "a mapping"
+            }
+        }
+    }
+
+    public fn mismatch(_ expected: String) -> SerializeError {
+        if node == none {
+            return SerializeError.MissingField(path: path)
+        }
+        return SerializeError.TypeMismatch(path: path, expected: expected, found: kindName)
+    }
+
+    public fn invalid(_ reason: String) -> SerializeError {
+        return SerializeError.InvalidValue(path: path, reason: reason)
+    }
+
+    public fn unknownCase(_ name: String) -> SerializeError {
+        return SerializeError.UnknownCase(path: path, name: name)
+    }
+
+    fn take(_ wanted: YamlType, _ expected: String) throws(SerializeError) -> YamlNode {
+        if let resolved = resolved {
+            if resolved.type == wanted {
+                return resolved
+            }
+        }
+        throw mismatch(expected)
+    }
+
+    // ---- Values --------------------------------------------------------------
+
+    public fn decodeBool() throws(SerializeError) -> Bool {
+        return (try take(.Bool, "a Bool")).bool == true
+    }
+
+    /// An integer, decimal, octal or hexadecimal, that fits.
+    public fn decodeInt() throws(SerializeError) -> Int {
+        let node = try take(.Int, "an integer")
+        guard let value = node.int else {
+            throw invalid("\(node.value) does not fit an Int")
+        }
+        return value
+    }
+
+    /// An unsigned integer, up to U64.max.
+    public fn decodeUInt() throws(SerializeError) -> U64 {
+        let node = try take(.Int, "an unsigned integer")
+        guard let value = node.uint else {
+            throw invalid(node.value.hasPrefix("-") ? "\(node.value) is not an unsigned integer" : "\(node.value) does not fit a U64")
+        }
+        return value
+    }
+
+    /// A number: a float, infinite or not a number too, or an integer.
+    public fn decodeFloat() throws(SerializeError) -> F64 {
+        if type != .Int && type != .Float {
+            throw mismatch("a number")
+        }
+        let text = resolved!.value
+        guard let value = yamlFloat(text) else {
+            throw invalid("\(text) is out of range")
+        }
+        if !value.isFinite && text.utf8[text.utf8Count - 1] <= 0x39 {
+            throw invalid("\(text) is out of range")
+        }
+        return value
+    }
+
+    public fn decodeString() throws(SerializeError) -> String {
+        return (try take(.String, "a string")).value
+    }
+
+    /// Bytes, from `!!binary` or a string of base64.
+    public fn decodeBytes() throws(SerializeError) -> U8[>..] {
+        if type != .Binary && type != .String {
+            throw mismatch("bytes")
+        }
+        let text = resolved!.value
+        guard let bytes = yamlBytes(text) else {
+            throw invalid("'\(text)' is not base64")
+        }
+        return bytes
+    }
+
+    // ---- Sequences -----------------------------------------------------------
+
+    public fn decodeSequence() throws(SerializeError) -> YamlDecoder[>..] {
+        let node = try take(.Sequence, "a sequence")
+        var all: YamlDecoder[>..] = []
+        for item in node.items {
+            all.append(YamlDecoder(item, parent: self, key: none, index: all.count))
+        }
+        return all
+    }
+
+    public fn element(_ index: Int) -> YamlDecoder {
+        var item: YamlNode? = none
+        if let resolved = resolved {
+            item = resolved[index]
+        }
+        return YamlDecoder(item, parent: self, key: none, index: index)
+    }
+
+    // ---- Maps and structs ----------------------------------------------------
+
+    public fn decodeMap() throws(SerializeError) -> DecodedMember<YamlDecoder>[>..] {
+        let node = try take(.Mapping, "a mapping")
+        var all: DecodedMember<YamlDecoder>[>..] = []
+        for entry in node.entries {
+            guard let key = entry.key.text else {
+                throw invalid("a key that is a collection")
+            }
+            if !excludes(key) {
+                all.append(DecodedMember { key: key, value: YamlDecoder(entry.value, parent: self, key: key, index: -1) })
+            }
+        }
+        return all
+    }
+
+    public fn beginStruct(_ name: String) throws(SerializeError) {
+        let _ = try take(.Mapping, "a mapping (\(name))")
+    }
+
+    public fn field(_ key: String) -> YamlDecoder {
+        var value: YamlNode? = none
+        if let resolved = resolved {
+            if !excludes(key) {
+                value = resolved[key]
+            }
+        }
+        return YamlDecoder(value, parent: self, key: key, index: -1)
+    }
+
+    public fn hasField(_ key: String) -> Bool {
+        return !field(key).isMissing
+    }
+
+    fn excludes(_ key: String) -> Bool {
+        if let excluded = excluded {
+            return excluded.contains(key)
+        }
+        return false
+    }
+
+    public fn excluding(_ keys: String[>..]) -> YamlDecoder {
+        var all = excluded ?? []
+        for key in keys {
+            all.append(key)
+        }
+        return YamlDecoder(node, parent: parent, key: key, index: index, excluded: all)
+    }
+
+    // ---- Unions --------------------------------------------------------------
+
+    public fn caseName() throws(SerializeError) -> String {
+        if let resolved = resolved {
+            if resolved.type == .String {
+                return resolved.value
+            }
+            if resolved.kind == .Mapping && resolved.entries.count == 1 {
+                if let name = resolved.entries[0].key.text {
+                    return name
+                }
+            }
+        }
+        throw mismatch("a case's name, or a mapping of one entry")
+    }
+
+    public fn casePayload() -> YamlDecoder {
+        if let resolved = resolved {
+            if resolved.kind == .Mapping && resolved.entries.count == 1 {
+                let entry = resolved.entries[0]
+                return YamlDecoder(entry.value, parent: self, key: entry.key.text ?? "", index: -1)
+            }
+        }
+        return YamlDecoder(none, parent: self, key: none, index: -1)
+    }
+}
+
+// A key as JSONPath writes it: '.name' for a plain name, ['…'] otherwise.
+fn yamlPathKey(_ key: String) -> String {
+    var plain = !key.isEmpty
+    for c in key {
+        plain = plain && (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_')
+    }
+    return plain ? "." + key : "['" + key.replacing("'", with: "\\'") + "']"
+}

@@ -1,0 +1,28 @@
+module Sable.Serialize.Yaml
+
+/// What a node is in YAML 1.2's core schema: what its tag says, or else what
+/// a plain scalar's text looks like. A tag the schema does not know makes a
+/// scalar a string and nothing else: no tag makes a type.
+///
+/// ```sable
+/// let types = try! Yaml.parse("[~, true, 0x1F, 1e3, no, \"1\", !!str 2, !Ref x]")
+/// let names = types.items.map { $0.type.debugDescription() }
+/// assert(names[0...4].joined(separator: " ") == "YamlType.Null YamlType.Bool YamlType.Int YamlType.Float YamlType.String")
+/// assert(types.items[5].type == .String && types.items[6].type == .String && types.items[7].type == .String)
+/// ```
+@derive(Equatable, Debug)
+public enum YamlType {
+    /// Nothing, `~`, `null`, `Null` or `NULL`.
+    Null
+    /// `true`, `True`, `TRUE`, or false so.
+    Bool
+    /// Decimal, or `0o` octal or `0x` hexadecimal.
+    Int
+    /// A number with a point or an exponent, `.inf` or `.nan`.
+    Float
+    String
+    /// `!!binary`, base64.
+    Binary
+    Sequence
+    Mapping
+}

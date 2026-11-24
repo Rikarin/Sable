@@ -1,0 +1,20 @@
+module Sable.Serialize.Yaml
+
+/// How a scalar is written: the styles of YAML 1.2.2, chapters 7 and 8.
+@derive(Equatable, Debug)
+public enum YamlScalarStyle {
+    /// A string, in whichever style the emitter finds clearest: plain when
+    /// it reads back as that string, literal for lines, quoted otherwise. No
+    /// parsed scalar has it.
+    Automatic
+    /// `text`: the one style whose content decides its type.
+    Plain
+    /// `'text'`
+    SingleQuoted
+    /// `"text"`
+    DoubleQuoted
+    /// `|`, its lines kept.
+    Literal
+    /// `>`, its lines folded.
+    Folded
+}

@@ -1,0 +1,121 @@
+module Sable.Serialize.Yaml
+
+// Gives a document's nodes the comments they have in its text: those above
+// an entry, and the one after a value on its line.
+final class YamlComments: YamlLayout {
+    fn root(_ node: YamlNode, bound: Int, from content: Int) {
+        let kept = origin(node)
+        if kept.collectionStyle == .Block && kept.kind != .Scalar && kept.kind != .Alias {
+            collection(node, bound: bound, from: content)
+        } else {
+            value(node, from: content)
+            if kept.kind != .Scalar && kept.kind != .Alias {
+                return
+            }
+            if isFirst(kept.start) {
+                setComment(node, kept.start, bound)
+            }
+        }
+    }
+
+    fn setComment(_ node: YamlNode, _ at: Int, _ bound: Int) {
+        let line = lineStart(at)
+        let top = commentStart(line, bound)
+        if top < line {
+            var lines: String[>..] = []
+            var i = top
+            while i < line {
+                let end = lineEnd(i)
+                lines.append(commentText(i, end))
+                i = parser.afterBreak(end)
+            }
+            node.comment = lines.joined(separator: "\n")
+            origins[node.origin].comment = node.comment
+        }
+    }
+
+    // A comment's text, without its '#' and one space.
+    fn commentText(_ from: Int, _ to: Int) -> String {
+        var i = from
+        while parser.isWhite(i) {
+            i += 1
+        }
+        i += 1
+        if i < to && parser.bytes[i] == 0x20 {
+            i += 1
+        }
+        return parser.text(i, to)
+    }
+
+    // The comment after a place on its line.
+    fn trailing(_ node: YamlNode, _ from: Int) {
+        let end = lineEnd(from)
+        var i = from
+        while parser.isWhite(i) {
+            i += 1
+        }
+        if i > from && i < end && parser.bytes[i] == 0x23 {
+            node.trailingComment = commentText(i, end)
+            origins[node.origin].trailingComment = node.trailingComment
+        }
+    }
+
+    // A value of a block collection, or a root, whose indicator ends there.
+    fn value(_ node: YamlNode, from: Int) {
+        let kept = origin(node)
+        if kept.kind == .Scalar && (kept.style == .Literal || kept.style == .Folded) {
+            // In its header, after the indicators.
+            var i = kept.content
+            while !parser.isBlank(i) {
+                i += 1
+            }
+            trailing(node, i)
+            return
+        }
+        if kept.kind == .Scalar || kept.kind == .Alias || kept.collectionStyle == .Flow {
+            trailing(node, kept.end)
+            return
+        }
+        collection(node, bound: from, from: from)
+    }
+
+    fn collection(_ node: YamlNode, bound: Int, from: Int) {
+        let kept = origin(node)
+        // On the indicator's line, when the entries start on a later one.
+        let end = lineEnd(from)
+        if end < kept.content {
+            var i = from
+            while i < end && !(parser.bytes[i] == 0x23 && parser.isWhite(i - 1)) {
+                i += 1
+            }
+            if i < end {
+                var white = i
+                while white > from && parser.isWhite(white - 1) {
+                    white -= 1
+                }
+                trailing(node, white)
+            }
+        }
+        let all = starts(kept)
+        var limit = bound
+        var i = 0
+        while i < all.count {
+            let first = kept.kind == .Sequence ? kept.items[i] : kept.entries[i].key
+            if isFirst(all[i]) && all[i] > 0 {
+                setComment(first, all[i], limit)
+            }
+            var last = first
+            if kept.kind == .Sequence {
+                value(first, from: all[i] + 1)
+            } else {
+                last = kept.entries[i].value
+                let at = colon(kept.entries[i])
+                if at >= 0 {
+                    value(last, from: at + 1)
+                }
+            }
+            limit = after(origin(last))
+            i += 1
+        }
+    }
+}

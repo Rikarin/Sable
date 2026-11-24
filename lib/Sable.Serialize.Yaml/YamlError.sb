@@ -1,0 +1,29 @@
+module Sable.Serialize.Yaml
+
+/// Why a text is not YAML, or not YAML this library takes, and exactly
+/// where: the character the message is about, by offset, line and column.
+///
+/// ```sable
+/// do {
+///     let _ = try Yaml.parse("a: 1\nb: [1, 2\n")
+/// } catch {
+///     assert(error.description() == "line 3, column 1: the text ends inside '[' of line 2, column 4")
+/// }
+/// ```
+@derive(Equatable, Debug)
+public struct YamlError: Error {
+    /// What kind of error it is.
+    public let kind: YamlErrorKind
+    /// Where, counted in characters: the offset from 0, the line and the
+    /// column from 1. All 0 for an error of no text's.
+    public let offset: Int
+    public let line: Int
+    public let column: Int
+    /// What is wrong there.
+    public let reason: String
+
+    /// Where, and what is wrong there.
+    public fn description() -> String {
+        return line == 0 ? reason : "line \(line), column \(column): \(reason)"
+    }
+}

@@ -1,0 +1,21 @@
+module Sable.Serialize.Yaml
+
+/// What kind of thing is wrong, as YamlError.kind says.
+@derive(Equatable, Debug)
+public enum YamlErrorKind {
+    /// The text is not YAML.
+    Syntax
+    /// A character YAML does not allow, or bytes that are not the text
+    /// their encoding promises.
+    Character
+    /// Nested deeper than YamlOptions.maxDepth, or aliases that would be.
+    TooDeep
+    /// A mapping with the same key twice.
+    DuplicateKey
+    /// An alias to no anchor, or to the node it is in.
+    Alias
+    /// Aliases standing for more than YamlOptions.maxAliasExpansion nodes.
+    TooManyAliases
+    /// Events, or nodes, that are no document: what an emitter was given.
+    Structure
+}

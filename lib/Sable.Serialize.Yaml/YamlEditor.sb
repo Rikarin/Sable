@@ -1,0 +1,577 @@
+module Sable.Serialize.Yaml
+
+// Writes a document whose nodes were changed: its text, with the pieces that
+// changed cut out and written anew.
+final class YamlEditor: YamlLayout {
+    let document: YamlDocument
+    var splices: YamlSplice[>..] = []
+    var options: YamlPrintOptions = YamlPrintOptions()
+    var named: [String: YamlNode] = [:]
+
+    init(_ parser: YamlParser, _ document: YamlDocument) {
+        self.document = document
+        super.init(parser, document.origins)
+    }
+
+    // The document's text — whole: with all of its root written anew — or
+    // none when two changes are of one piece of it.
+    fn text(whole: Bool) throws(YamlError) -> String? {
+        let kept = origin(document.first)
+        collectNames(document.root)
+        options = YamlPrintOptions(indent: indent(document.first, 0) ?? 2, indentSequences: indentsSequences(document.first) ?? true)
+        let done = !whole && document.root === document.first && !isChanged(document.first) ? try edit(document.first) : false
+        if !done {
+            splices = []
+            try replaceRoot(kept)
+        }
+        if splices.isEmpty {
+            return parser.text(document.start, document.end)
+        }
+        // In the text's order, and of two at a place, in the order made.
+        let ordered = splices.sorted { $0.start < $1.start }
+        var written: U8[>..] = []
+        var at = document.start
+        for splice in ordered {
+            if splice.start < at {
+                return none
+            }
+            written.append(contentsOf: parser.bytes[at..<splice.start])
+            written.append(utf8: splice.text)
+            at = splice.end
+        }
+        written.append(contentsOf: parser.bytes[at..<document.end])
+        unsafe {
+            return String.fromUtf8Unchecked(written)
+        }
+    }
+
+    fn splice(_ start: Int, _ end: Int, _ text: String) {
+        splices.append(YamlSplice { start: start, end: end, text: text })
+    }
+
+    // ---- What the text's layout is -------------------------------------------
+
+    fn collectNames(_ node: YamlNode) {
+        if node.kind != .Alias {
+            if let anchor = node.anchor {
+                named[anchor] = node
+            }
+        }
+        for item in node.items {
+            collectNames(item)
+        }
+        for entry in node.entries {
+            collectNames(entry.key)
+            collectNames(entry.value)
+        }
+    }
+
+    // How far the first block mapping in another is indented.
+    fn indent(_ node: YamlNode, _ depth: Int) -> Int? {
+        let kept = origin(node)
+        if kept.kind == .Scalar || kept.kind == .Alias || kept.collectionStyle == .Flow {
+            return none
+        }
+        for entry in kept.entries {
+            let value = origin(entry.value)
+            if value.kind == .Mapping && value.collectionStyle == .Block {
+                let by = column(value.content) - column(kept.content)
+                return by >= 1 && by <= 9 ? by : 2
+            }
+            if let by = indent(entry.value, depth + 1) {
+                return by
+            }
+        }
+        for item in kept.items {
+            if let by = indent(item, depth + 1) {
+                return by
+            }
+        }
+        return none
+    }
+
+    // Whether the first block sequence in a mapping is indented.
+    fn indentsSequences(_ node: YamlNode) -> Bool? {
+        let kept = origin(node)
+        if kept.kind == .Scalar || kept.kind == .Alias || kept.collectionStyle == .Flow {
+            return none
+        }
+        for entry in kept.entries {
+            let value = origin(entry.value)
+            if value.kind == .Sequence && value.collectionStyle == .Block {
+                return column(value.content) > column(kept.content)
+            }
+            if let found = indentsSequences(entry.value) {
+                return found
+            }
+        }
+        for item in kept.items {
+            if let found = indentsSequences(item) {
+                return found
+            }
+        }
+        return none
+    }
+
+    // ---- Changes -------------------------------------------------------------
+
+    // Whether the node itself, not its parts, is other than it was read.
+    fn isChanged(_ node: YamlNode) -> Bool {
+        let kept = origin(node)
+        if node.kind != kept.kind || node.tag != kept.tag || node.anchor != kept.anchor || node.trailingComment != kept.trailingComment {
+            return true
+        }
+        if node.kind == .Scalar {
+            return node.value != kept.value || node.style != kept.style
+        }
+        if node.kind == .Alias {
+            if let target = node.target {
+                if let before = kept.target {
+                    return !(target === before)
+                }
+            }
+            return true
+        }
+        return node.collectionStyle != kept.collectionStyle
+    }
+
+    // The collection's parts, changed where they are: false when that cannot
+    // be, and it must be written anew. A scalar has none.
+    fn edit(_ node: YamlNode) throws(YamlError) -> Bool {
+        let kept = origin(node)
+        if kept.kind == .Scalar || kept.kind == .Alias {
+            return true
+        }
+        let sequence = kept.kind == .Sequence
+        let count = sequence ? kept.items.count : kept.entries.count
+        let now = sequence ? node.items.count : node.entries.count
+        if count == 0 || now == 0 {
+            return count == now
+        }
+        // Which of the entries read each of the present ones is, in order.
+        var places: [Int: Int] = [:]
+        var i = 0
+        while i < count {
+            places[(sequence ? kept.items[i] : kept.entries[i].key).origin] = i
+            i += 1
+        }
+        var was: Int[>..] = []
+        var isKept: Bool[>..] = []
+        isKept.append(repeating: false, count: count)
+        var last = -1
+        i = 0
+        var same = now == count
+        while i < now {
+            let part = sequence ? node.items[i] : node.entries[i].key
+            var place = -1
+            if part.origin >= 0 {
+                if let found = places[part.origin] {
+                    if (sequence ? kept.items[found] : kept.entries[found].key) === part {
+                        place = found
+                    }
+                }
+            }
+            if place >= 0 {
+                if place <= last {
+                    return false
+                }
+                last = place
+                isKept[place] = true
+            }
+            same = same && place == i
+            was.append(place)
+            i += 1
+        }
+        if sequence {
+            pair(&was, &isKept)
+            last = was.max() ?? -1
+        }
+        let flow = kept.collectionStyle == .Flow
+        if last < 0 || !same && flow && parser.byte(kept.content) != (sequence ? 0x5B : 0x7B) {
+            return false
+        }
+        let all = starts(kept)
+        return flow
+            ? try editFlow(node, kept, all, was, isKept)
+            : try editBlock(node, kept, all, was, isKept)
+    }
+
+    // A sequence's new element in the place of one that is gone is that one
+    // changed, and has its comments.
+    fn pair(_ was: inout Int[>..], _ isKept: inout Bool[>..]) {
+        var place = 0
+        var i = 0
+        while i < was.count {
+            if was[i] >= 0 {
+                place = was[i] + 1
+            } else if place < isKept.count && !isKept[place] {
+                was[i] = place
+                isKept[place] = true
+                place += 1
+            }
+            i += 1
+        }
+    }
+
+    fn valueOf(_ kept: YamlOrigin, _ i: Int) -> YamlNode {
+        return kept.kind == .Sequence ? kept.items[i] : kept.entries[i].value
+    }
+
+    fn firstOf(_ kept: YamlOrigin, _ i: Int) -> YamlNode {
+        return kept.kind == .Sequence ? kept.items[i] : kept.entries[i].key
+    }
+
+    fn editBlock(_ node: YamlNode, _ kept: YamlOrigin, _ all: Int[>..], _ was: Int[>..], _ isKept: Bool[>..]) throws(YamlError) -> Bool {
+        let sequence = kept.kind == .Sequence
+        let at = column(kept.content)
+        // Those before the first kept, then each kept and those after it.
+        var next = 0
+        while was[next] < 0 {
+            next += 1
+        }
+        if next > 0 {
+            try insertBlock(node, 0, next, kept, all, at, after: -1)
+        }
+        var i = 0
+        while i < all.count {
+            let bound = i == 0 ? document.start : after(origin(valueOf(kept, i - 1)))
+            if !isKept[i] {
+                if isFirst(all[i]) {
+                    splice(commentStart(lineStart(all[i]), bound), after(origin(valueOf(kept, i))), "")
+                    i += 1
+                } else {
+                    // The first, on its collection's indicator's line: the
+                    // next kept takes its place.
+                    var j = i
+                    while !isKept[j] {
+                        j += 1
+                    }
+                    splice(all[i], all[j], "")
+                    i = j
+                }
+                continue
+            }
+            let first = firstOf(kept, i)
+            if first.comment != origin(first).comment {
+                if !isFirst(all[i]) {
+                    return false
+                }
+                let line = lineStart(all[i])
+                splice(commentStart(line, bound), line, commentLines(first.comment, at))
+            }
+            let placed = next
+            while next + 1 < was.count && was[next + 1] < 0 {
+                next += 1
+            }
+            if sequence {
+                if !(try value(node.items[placed], valueOf(kept, i), all[i] + 1, at, dash: true, explicit: false)) {
+                    return false
+                }
+            } else {
+                let entry = kept.entries[i]
+                let explicit = parser.byte(all[i]) == 0x3F && parser.isBlank(all[i] + 1)
+                if isChanged(entry.key) || !(entry.key.kind == .Scalar || entry.key.kind == .Alias) {
+                    if !(try key(entry.key, explicit)) {
+                        return false
+                    }
+                }
+                let colon = self.colon(entry)
+                let value = node.entries[placed].value
+                if colon >= 0 {
+                    if !(try self.value(value, entry.value, colon + 1, at, dash: false, explicit: explicit)) {
+                        return false
+                    }
+                } else if !(value === entry.value) || isChanged(value) {
+                    return false
+                }
+            }
+            if next > placed {
+                try insertBlock(node, placed + 1, next + 1, kept, all, at, after: i)
+            }
+            next += 1
+            i += 1
+        }
+        return true
+    }
+
+    fn commentLines(_ comment: String?, _ at: Int) -> String {
+        guard let comment = comment else {
+            return ""
+        }
+        var parts: String[>..] = []
+        for line in comment.split('\n') {
+            parts.append(" ".repeated(at) + (line.isEmpty ? "#" : "# " + line) + "\n")
+        }
+        return parts.joined()
+    }
+
+    // New entries, after one that was there or before the first.
+    fn insertBlock(_ node: YamlNode, _ from: Int, _ to: Int, _ kept: YamlOrigin, _ all: Int[>..], _ at: Int, after i: Int) throws(YamlError) {
+        let emitter = piece(YamlLevel(isMap: node.kind == .Mapping, isFlow: false, column: at, compact: i < 0 && !isFirst(all[0])))
+        let printer = YamlPrinter(emitter)
+        printer.anchors = named
+        var j = from
+        while j < to {
+            if node.kind == .Sequence {
+                if let comment = node.items[j].comment {
+                    try emitter.comment(comment)
+                }
+                try printer.node(node.items[j])
+            } else {
+                if let comment = node.entries[j].key.comment {
+                    try emitter.comment(comment)
+                }
+                try printer.node(node.entries[j].key)
+                try printer.node(node.entries[j].value)
+            }
+            j += 1
+        }
+        emitter.newline()
+        let text = emitter.text()
+        if i < 0 {
+            if isFirst(all[0]) {
+                let top = commentStart(lineStart(all[0]), document.start)
+                splice(top, top, text)
+            } else {
+                splice(all[0], all[0], text + " ".repeated(at))
+            }
+            return
+        }
+        let end = after(origin(valueOf(kept, i)))
+        if end > 0 && !parser.isBreak(end - 1) {
+            // The text's last line has no break.
+            splice(end, end, "\n" + text.slice(0, text.count - 1))
+        } else {
+            splice(end, afterBlank(end, text), text)
+        }
+    }
+
+    // A key changed where it is.
+    fn key(_ node: YamlNode, _ explicit: Bool) throws(YamlError) -> Bool {
+        if !isChanged(node) {
+            return try edit(node)
+        }
+        if explicit || node.kind != .Scalar {
+            return false
+        }
+        let emitter = piece(YamlLevel(isMap: true, isFlow: false, column: 0, compact: true))
+        try printWith(emitter, node)
+        let text = emitter.text()
+        if emitter.levels[0].explicitKey || emitter.levels[0].spaced {
+            return false
+        }
+        splice(origin(node).start, origin(node).end, text)
+        return true
+    }
+
+    // A block collection's value, after the indicator that ends there.
+    fn value(_ now: YamlNode, _ before: YamlNode, _ from: Int, _ at: Int, dash: Bool, explicit: Bool) throws(YamlError) -> Bool {
+        if now === before && !isChanged(now) {
+            let mark = splices.count
+            if try edit(now) {
+                return true
+            }
+            while splices.count > mark {
+                let _ = splices.removeLast()
+            }
+        }
+        let kept = origin(before)
+        var level = YamlLevel(isMap: !dash, isFlow: false, column: at, compact: true)
+        level.onValue = !dash
+        level.explicitKey = explicit
+        let emitter = piece(level)
+        if !(now === before) && now.trailingComment == none {
+            if let comment = kept.trailingComment {
+                emitter.trailingComment(comment)
+            }
+        }
+        try printWith(emitter, now)
+        let text = emitter.text()
+        replace(from, kept, text.slice(1, text.count))
+        return true
+    }
+
+    // The text from an indicator to the end of a value's last line.
+    fn replace(_ from: Int, _ kept: YamlOrigin, _ text: String) {
+        let end = lastLineEnd(kept)
+        var body = text
+        let ends = text.hasSuffix("\n")
+        if end > 0 && parser.isBreak(end - 1) && endsLine(kept) {
+            if !ends {
+                body = text + "\n"
+            }
+        } else if ends && end < parser.count {
+            body = text.slice(0, text.count - 1)
+        }
+        splice(from, body.hasSuffix("\n") ? afterBlank(end, body) : end, body)
+    }
+
+    // A block scalar that keeps the blank lines after it, as a text ending
+    // in one does, would keep the document's: they are taken out.
+    fn afterBlank(_ at: Int, _ text: String) -> Int {
+        var i = at
+        if !text.hasSuffix("\n\n") {
+            return i
+        }
+        while i < document.end {
+            let end = lineEnd(i)
+            var j = i
+            while parser.isWhite(j) {
+                j += 1
+            }
+            if j < end || end >= parser.count {
+                break
+            }
+            i = parser.afterBreak(end)
+        }
+        return i
+    }
+
+    fn replaceRoot(_ kept: YamlOrigin) throws(YamlError) {
+        let emitter = YamlEmitter(options)
+        emitter.state = 2
+        var from = document.content
+        if document.startsExplicitly && lineEnd(document.content) >= kept.start {
+            emitter.afterMarker = true
+            emitter.needsSpace = true
+        } else {
+            from = lineStart(kept.start)
+            from = from < document.content ? document.content : from
+            if document.root === document.first && document.root.count > 0 {
+                // The comment above its first entry is written with it.
+                let first = origin(firstOf(kept, 0))
+                if first.comment != none {
+                    from = commentStart(from, document.startsExplicitly ? document.content : document.start)
+                }
+            }
+        }
+        // A block collection's, on the marker's line, stays there.
+        let block = kept.kind != .Scalar && kept.kind != .Alias && kept.collectionStyle == .Block
+        if !block && document.root.trailingComment == none && !(document.root === document.first) {
+            if let comment = kept.trailingComment {
+                emitter.trailingComment(comment)
+            }
+        }
+        try YamlPrinter(emitter).node(document.root)
+        replace(from, kept, emitter.text())
+    }
+
+    // ---- Flow collections ----------------------------------------------------
+
+    fn editFlow(_ node: YamlNode, _ kept: YamlOrigin, _ all: Int[>..], _ was: Int[>..], _ isKept: Bool[>..]) throws(YamlError) -> Bool {
+        var next = 0
+        while was[next] < 0 {
+            next += 1
+        }
+        if next > 0 {
+            splice(all[0], all[0], (try flowEntries(node, 0, next)) + ", ")
+        }
+        // Where the last kept entry ended.
+        var end = -1
+        var i = 0
+        while i < all.count {
+            let value = origin(valueOf(kept, i))
+            if !isKept[i] {
+                if end >= 0 {
+                    splice(end, value.end, "")
+                    end = value.end
+                } else {
+                    splice(all[i], all[i + 1], "")
+                }
+                i += 1
+                continue
+            }
+            let placed = next
+            while next + 1 < was.count && was[next + 1] < 0 {
+                next += 1
+            }
+            if kept.kind == .Sequence {
+                if !(try flowValue(node.items[placed], valueOf(kept, i), map: false, lead: "")) {
+                    return false
+                }
+            } else {
+                let entry = kept.entries[i]
+                if isChanged(entry.key) {
+                    return false
+                }
+                if !(try edit(entry.key)) {
+                    return false
+                }
+                let colon = self.colon(entry)
+                let spaced = value.start > 0 && parser.isWhite(value.start - 1)
+                let lead = colon < 0 ? ": " : value.start == value.end && !spaced ? " " : ""
+                if !(try flowValue(node.entries[placed].value, entry.value, map: true, lead: lead)) {
+                    return false
+                }
+            }
+            if next > placed {
+                splice(value.end, value.end, ", " + (try flowEntries(node, placed + 1, next + 1)))
+            }
+            end = value.end
+            next += 1
+            i += 1
+        }
+        return true
+    }
+
+    fn flowEntries(_ node: YamlNode, _ from: Int, _ to: Int) throws(YamlError) -> String {
+        let emitter = piece(YamlLevel(isMap: node.kind == .Mapping, isFlow: true, column: 0, compact: false))
+        let printer = YamlPrinter(emitter)
+        printer.anchors = named
+        var j = from
+        while j < to {
+            if node.kind == .Sequence {
+                try printer.node(node.items[j])
+            } else {
+                try printer.node(node.entries[j].key)
+                try printer.node(node.entries[j].value)
+            }
+            j += 1
+        }
+        return emitter.text()
+    }
+
+    fn flowValue(_ now: YamlNode, _ before: YamlNode, map: Bool, lead: String) throws(YamlError) -> Bool {
+        if now === before && !isChanged(now) {
+            let mark = splices.count
+            if try edit(now) {
+                return true
+            }
+            while splices.count > mark {
+                let _ = splices.removeLast()
+            }
+        }
+        var level = YamlLevel(isMap: map, isFlow: true, column: 0, compact: false)
+        level.onValue = map
+        let emitter = piece(level)
+        try printWith(emitter, now)
+        var text = emitter.text()
+        if map {
+            text = text.slice(1, text.count).trimmedStart()
+        }
+        splice(origin(before).start, origin(before).end, lead + text)
+        return true
+    }
+
+    // ---- Pieces --------------------------------------------------------------
+
+    fn piece(_ level: YamlLevel) -> YamlEmitter {
+        let emitter = YamlEmitter(options)
+        emitter.state = 3
+        emitter.levels = [level]
+        return emitter
+    }
+
+    fn printWith(_ emitter: YamlEmitter, _ node: YamlNode) throws(YamlError) {
+        let printer = YamlPrinter(emitter)
+        printer.anchors = named
+        try printer.node(node)
+    }
+}
+
+// A piece of text cut out, and what is in its place.
+struct YamlSplice {
+    let start: Int
+    let end: Int
+    let text: String
+}

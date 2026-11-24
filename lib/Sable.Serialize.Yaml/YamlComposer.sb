@@ -1,0 +1,171 @@
+module Sable.Serialize.Yaml
+
+// Makes nodes of a parser's events (YAML 1.2.2 §3.1.2's composing), and
+// checks what only a tree tells: that aliases name nodes before them, and
+// stand for no more than the options allow, and that keys differ.
+final class YamlComposer {
+    let parser: YamlParser
+    // Whether nodes keep their origins, for a stream that can be edited.
+    let editable: Bool
+    var origins: YamlOrigin[>..] = []
+    var anchors: [String: YamlNode] = [:]
+    var made: Int = 0
+    // The last document's events.
+    var documentStart: YamlEvent = YamlEvent(.DocumentStart)
+    var documentEnd: YamlEvent = YamlEvent(.DocumentEnd)
+    // A place in the text whose line and column are known: nodes come in
+    // the text's order, so none is counted to twice.
+    var knownByte: Int = 0
+    var knownLine: Int = 1
+    var knownColumn: Int = 1
+
+    init(_ parser: YamlParser, editable: Bool = false) {
+        self.parser = parser
+        self.editable = editable
+    }
+
+    // The next document's root, or none after the last.
+    fn document() throws(YamlError) -> YamlNode? {
+        while let event = try parser.next() {
+            if event.kind == .DocumentStart {
+                documentStart = event
+                anchors = [:]
+                made = 0
+                let root = try node(try next())
+                documentEnd = try next()
+                return root
+            }
+        }
+        return none
+    }
+
+    fn next() throws(YamlError) -> YamlEvent {
+        guard let event = try parser.next() else {
+            throw parser.error(parser.count, "the events end inside a document", kind: .Structure)
+        }
+        return event
+    }
+
+    fn count(to byte: Int) {
+        if byte < knownByte {
+            let place = parser.position(at: byte)
+            knownByte = byte
+            knownLine = place.line
+            knownColumn = place.column
+            return
+        }
+        while knownByte < byte {
+            let b = parser.bytes[knownByte]
+            if b == 0x0A || b == 0x0D && parser.byte(knownByte + 1) != 0x0A {
+                knownLine += 1
+                knownColumn = 1
+            } else if (b & 0xC0) != 0x80 {
+                knownColumn += 1
+            }
+            knownByte += 1
+        }
+    }
+
+    fn node(_ event: YamlEvent) throws(YamlError) -> YamlNode {
+        count(to: event.start)
+        let before = made
+        made += 1
+        if event.kind == .Alias {
+            let name = event.anchor ?? ""
+            guard let target = anchors[name] else {
+                throw parser.error(event.start, "the alias '*\(name)' names no anchor before it", kind: .Alias)
+            }
+            if target.isOpen {
+                throw parser.error(event.start, "the alias '*\(name)' is inside the node it names", kind: .Alias)
+            }
+            let again = YamlNode(.Alias, anchor: name, line: knownLine, column: knownColumn)
+            again.target = target
+            again.size = target.size
+            again.height = target.height
+            place(again, event, event.end)
+            return again
+        }
+        let kind: YamlNodeKind = event.kind == .Scalar ? .Scalar : event.kind == .SequenceStart ? .Sequence : .Mapping
+        let made = YamlNode(kind, value: event.value, style: event.style, collectionStyle: event.collectionStyle, tag: event.tag, anchor: event.anchor, line: knownLine, column: knownColumn)
+        if let anchor = event.anchor {
+            anchors[anchor] = made
+        }
+        if kind == .Scalar {
+            place(made, event, event.end)
+            return made
+        }
+        made.isOpen = true
+        var keys = YamlKeys()
+        var end = event.end
+        while true {
+            let part = try next()
+            if part.kind == .SequenceEnd || part.kind == .MappingEnd {
+                end = part.end
+                break
+            }
+            let child = try node(part)
+            try grow(made, child, part, before)
+            if kind == .Sequence {
+                made.items.append(child)
+                continue
+            }
+            if !keys.add(child) {
+                let shown = child.text ?? "a collection"
+                throw parser.error(part.start, "the key '\(shown)' is in the mapping twice", kind: .DuplicateKey)
+            }
+            let place = try next()
+            let value = try node(place)
+            try grow(made, value, place, before)
+            made.entries.append(YamlEntry(child, value))
+        }
+        made.isOpen = false
+        place(made, event, end)
+        return made
+    }
+
+    // The node's origin, for a stream that can be edited.
+    fn place(_ node: YamlNode, _ event: YamlEvent, _ end: Int) {
+        if editable {
+            node.origin = origins.count
+            origins.append(YamlOrigin(node, start: event.start, content: event.content, end: end))
+        }
+    }
+
+    // A collection's child counted: its aliases' targets in their places.
+    fn grow(_ node: YamlNode, _ child: YamlNode, _ event: YamlEvent, _ before: Int) throws(YamlError) {
+        node.size += child.size
+        // What is written of it is in 'made'; the rest, aliases stand for.
+        if node.size - (made - before) > parser.options.maxAliasExpansion {
+            throw parser.error(event.start, "the document's aliases stand for more than \(parser.options.maxAliasExpansion) nodes", kind: .TooManyAliases)
+        }
+        if child.height + 1 > node.height {
+            node.height = child.height + 1
+        }
+        if node.height > parser.options.maxDepth {
+            throw parser.error(event.start, "nested more than \(parser.options.maxDepth) deep, with what its aliases name", kind: .TooDeep)
+        }
+    }
+}
+
+// A mapping's keys, to tell one that is there already.
+struct YamlKeys {
+    var scalars: [String: Bool] = [:]
+    var others: [U64: YamlNode[>..]] = [:]
+
+    // Whether the key is new.
+    mutating fn add(_ key: YamlNode) -> Bool {
+        let node = key.resolved
+        if node.kind == .Scalar {
+            return scalars.insert(true, forKey: node.canonical)
+        }
+        let hash = node.hash
+        node.keyHash = hash
+        for other in others[hash] ?? [] {
+            if other == node {
+                return false
+            }
+        }
+        others[hash, default: []].append(node)
+        return true
+    }
+}

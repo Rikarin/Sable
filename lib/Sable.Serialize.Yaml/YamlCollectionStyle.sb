@@ -1,0 +1,10 @@
+module Sable.Serialize.Yaml
+
+/// How a sequence or a mapping is written.
+@derive(Equatable, Debug)
+public enum YamlCollectionStyle {
+    /// By lines and indentation.
+    Block
+    /// In brackets, `[a, b]` and `{a: b}`, as JSON is.
+    Flow
+}

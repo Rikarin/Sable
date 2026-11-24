@@ -1,0 +1,70 @@
+module Sable.Serialize.Yaml
+
+// The bytes as UTF-8, whichever of YAML's encodings they are in (§5.2): told
+// by a byte order mark, or by the zeros around the first character, which
+// is always ASCII.
+fn yamlUtf8(_ bytes: U8[>..]) throws(YamlError) -> U8[>..] {
+    let count = bytes.count
+    let b0 = count > 0 ? Int(bytes[0]) : 256
+    let b1 = count > 1 ? Int(bytes[1]) : 256
+    let b2 = count > 2 ? Int(bytes[2]) : 256
+    let b3 = count > 3 ? Int(bytes[3]) : 256
+    if b0 == 0 && b1 == 0 && (b2 == 0xFE && b3 == 0xFF || b2 == 0 && b3 < 256) {
+        return try yamlFromUnits(bytes, width: 4, bigEndian: true)
+    }
+    if b0 < 256 && b2 == 0 && b3 == 0 && (b1 == 0 || b0 == 0xFF && b1 == 0xFE) {
+        return try yamlFromUnits(bytes, width: 4, bigEndian: false)
+    }
+    if b0 == 0xFE && b1 == 0xFF || b0 == 0 && b1 < 256 {
+        return try yamlFromUnits(bytes, width: 2, bigEndian: true)
+    }
+    if b0 == 0xFF && b1 == 0xFE || b0 < 256 && b1 == 0 {
+        return try yamlFromUnits(bytes, width: 2, bigEndian: false)
+    }
+    let bad = Runtime.validateUtf8(bytes: bytes)
+    if bad >= 0 {
+        throw yamlBadText("ill-formed UTF-8 at byte \(bad)")
+    }
+    return bytes
+}
+
+fn yamlBadText(_ reason: String) -> YamlError {
+    return YamlError { kind: .Character, offset: 0, line: 0, column: 0, reason: reason }
+}
+
+fn yamlFromUnits(_ bytes: U8[>..], width: Int, bigEndian: Bool) throws(YamlError) -> U8[>..] {
+    let name = width == 2 ? "UTF-16" : "UTF-32"
+    if bytes.count % width != 0 {
+        throw yamlBadText("\(name) text of \(bytes.count) bytes")
+    }
+    var written: U8[>..] = []
+    written.reserveCapacity(bytes.count)
+    var i = 0
+    while i < bytes.count {
+        let start = i
+        var code = yamlUnit(bytes, i, width, bigEndian)
+        i += width
+        if width == 2 && code >= 0xD800 && code <= 0xDBFF && i < bytes.count {
+            let low = yamlUnit(bytes, i, width, bigEndian)
+            if low >= 0xDC00 && low <= 0xDFFF {
+                code = 0x10000 + (code - 0xD800) * 1024 + (low - 0xDC00)
+                i += 2
+            }
+        }
+        guard let character = Char.fromCodePoint(value: code) else {
+            throw yamlBadText("ill-formed \(name) at byte \(start)")
+        }
+        character.encodeUtf8(into: &written)
+    }
+    return written
+}
+
+fn yamlUnit(_ bytes: U8[>..], _ at: Int, _ width: Int, _ bigEndian: Bool) -> Int {
+    var value = 0
+    var i = 0
+    while i < width {
+        value = value << 8 | Int(bytes[at + (bigEndian ? i : width - 1 - i)])
+        i += 1
+    }
+    return value
+}

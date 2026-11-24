@@ -1,0 +1,11 @@
+module Sable.Serialize.Yaml
+
+/// What a YamlNode is, as it is written.
+@derive(Equatable, Debug)
+public enum YamlNodeKind {
+    Scalar
+    Sequence
+    Mapping
+    /// `*name`: the node of that anchor, again.
+    Alias
+}

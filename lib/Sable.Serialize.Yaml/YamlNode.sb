@@ -1,0 +1,485 @@
+module Sable.Serialize.Yaml
+
+/// A node of a YAML document: a scalar, a sequence, a mapping, or an alias
+/// of another node. It is what `Yaml.parse` gives, with its styles, tag and
+/// anchor as written, and it can be changed: `Yaml.print` writes it, and a
+/// node of a YamlStream is written back where it was, in the stream's own
+/// formatting.
+///
+/// An alias is a node of its own whose `target` is the node it names; the
+/// accessors — `type`, `string`, `items`' elements through a subscript, and
+/// the rest — look through it.
+///
+/// ```sable
+/// let node = try! Yaml.parse("name: web\nports: [80, 443]\n")
+/// assert(node["name"]?.string == "web")
+/// assert(node["ports"]?[1]?.int == 443)
+/// node["name"] = YamlNode.string("no")
+/// node["ports"]!.append(YamlNode.int(8080))
+/// assert(try! Yaml.print(node) == "name: \"no\"\nports: [80, 443, 8080]\n")
+/// ```
+public final class YamlNode {
+    public var kind: YamlNodeKind
+    /// The tag written, resolved (`tag:yaml.org,2002:str` for `!!str`); none
+    /// where none was.
+    public var tag: String?
+    /// The name other nodes' aliases have for this one; of an alias, the
+    /// name it was written with.
+    public var anchor: String?
+    /// A scalar's content.
+    public var value: String
+    /// A scalar's style.
+    public var style: YamlScalarStyle
+    /// A sequence's or a mapping's.
+    public var collectionStyle: YamlCollectionStyle
+    /// A sequence's elements.
+    public var items: YamlNode[>..] = []
+    /// A mapping's entries, in order.
+    public var entries: YamlEntry[>..] = []
+    /// The node an alias names.
+    public var target: YamlNode? = none
+    /// The comment on the lines before a sequence's element or a mapping's
+    /// key (the key has it), without the '#'s, a line for each; a document's
+    /// nodes have theirs when it was read as a YamlStream's.
+    public var comment: String? = none
+    /// The comment after it on its line.
+    public var trailingComment: String? = none
+    /// Where a parsed node starts in its text, from 1; 0 for one that was
+    /// made.
+    public let line: Int
+    public let column: Int
+
+    // Which of its document's origins is its own, in a stream that can be
+    // edited.
+    var origin: Int = -1
+    // While it is read: whether it is still open, and how many nodes it is,
+    // and how deep, with its aliases' targets in their places.
+    var isOpen: Bool = false
+    var size: Int = 1
+    var height: Int = 0
+    // Its hash, when it was a key; 0 before.
+    var keyHash: U64 = 0
+
+    init(_ kind: YamlNodeKind, value: String = "", style: YamlScalarStyle = .Plain, collectionStyle: YamlCollectionStyle = .Block, tag: String? = none, anchor: String? = none, line: Int = 0, column: Int = 0) {
+        self.kind = kind
+        self.value = value
+        self.style = style
+        self.collectionStyle = collectionStyle
+        self.tag = tag
+        self.anchor = anchor
+        self.line = line
+        self.column = column
+    }
+
+    // ---- Making one ----------------------------------------------------------
+
+    /// A string, quoted when it is written if it would read back as
+    /// anything else.
+    public static fn string(_ value: String, style: YamlScalarStyle = .Automatic) -> YamlNode {
+        return YamlNode(.Scalar, value: value, style: style == .Plain ? .Automatic : style)
+    }
+
+    public static fn int(_ value: Int) -> YamlNode {
+        return YamlNode(.Scalar, value: "\(value)")
+    }
+
+    public static fn uint(_ value: U64) -> YamlNode {
+        return YamlNode(.Scalar, value: "\(value)")
+    }
+
+    public static fn float(_ value: F64) -> YamlNode {
+        return YamlNode(.Scalar, value: yamlFloatText(value))
+    }
+
+    public static fn bool(_ value: Bool) -> YamlNode {
+        return YamlNode(.Scalar, value: value ? "true" : "false")
+    }
+
+    public static fn null() -> YamlNode {
+        return YamlNode(.Scalar, value: "null")
+    }
+
+    /// Bytes, as `!!binary` base64.
+    public static fn binary(_ bytes: U8[>..]) -> YamlNode {
+        return YamlNode(.Scalar, value: yamlBase64(bytes), style: .Automatic, tag: yamlBinaryTag)
+    }
+
+    public static fn sequence(_ items: YamlNode[>..] = [], style: YamlCollectionStyle = .Block) -> YamlNode {
+        let node = YamlNode(.Sequence, collectionStyle: style)
+        node.items = items
+        return node
+    }
+
+    public static fn mapping(_ entries: YamlEntry[>..] = [], style: YamlCollectionStyle = .Block) -> YamlNode {
+        let node = YamlNode(.Mapping, collectionStyle: style)
+        node.entries = entries
+        return node
+    }
+
+    /// An alias of the node, which is given the anchor if it has none.
+    public static fn aliasOf(_ target: YamlNode, anchor: String = "a") -> YamlNode {
+        let node = YamlNode(.Alias)
+        let named = target.resolved
+        if named.anchor == none {
+            named.anchor = anchor
+        }
+        node.anchor = named.anchor
+        node.target = named
+        return node
+    }
+
+    // ---- What it is ----------------------------------------------------------
+
+    /// The node itself, or the one an alias names.
+    public var resolved: YamlNode {
+        get {
+            var node = self
+            while let target = node.target {
+                node = target
+            }
+            return node
+        }
+    }
+
+    /// What it is in the core schema.
+    public var type: YamlType {
+        get {
+            let node = resolved
+            if node.kind == .Sequence {
+                return .Sequence
+            }
+            if node.kind == .Mapping {
+                return .Mapping
+            }
+            guard let tag = node.tag else {
+                return node.style == .Plain ? yamlTypeOf(node.value) : .String
+            }
+            if tag == yamlBinaryTag {
+                return .Binary
+            }
+            let type = yamlTypeOf(node.value)
+            if tag == "tag:yaml.org,2002:null" && type == .Null || tag == "tag:yaml.org,2002:bool" && type == .Bool || tag == "tag:yaml.org,2002:int" && type == .Int {
+                return type
+            }
+            if tag == "tag:yaml.org,2002:float" && (type == .Float || type == .Int) {
+                return .Float
+            }
+            return .String
+        }
+    }
+
+    public var isNull: Bool => type == .Null
+
+    /// A Bool's value; none of anything else.
+    public var bool: Bool? {
+        get {
+            if type != .Bool {
+                return none
+            }
+            return resolved.value.utf8[0] == 0x74 || resolved.value.utf8[0] == 0x54
+        }
+    }
+
+    /// An integer's value, if it is one and fits.
+    public var int: Int? {
+        get {
+            if type != .Int {
+                return none
+            }
+            guard let integer = yamlInteger(resolved.value) else {
+                return none
+            }
+            if integer.negative {
+                return integer.magnitude > 9223372036854775808 ? none : Int.truncating(0 &- integer.magnitude)
+            }
+            return integer.magnitude > 9223372036854775807 ? none : Int(integer.magnitude)
+        }
+    }
+
+    /// An unsigned integer's value, if it is one and fits.
+    public var uint: U64? {
+        get {
+            if type != .Int {
+                return none
+            }
+            guard let integer = yamlInteger(resolved.value) else {
+                return none
+            }
+            return integer.negative && integer.magnitude != 0 ? none : integer.magnitude
+        }
+    }
+
+    /// A number's value, integer or not.
+    public var float: F64? {
+        get {
+            let type = self.type
+            if type != .Float && type != .Int {
+                return none
+            }
+            return yamlFloat(resolved.value)
+        }
+    }
+
+    /// A string's value; none of a scalar that is not one — `text` has any's.
+    public var string: String? {
+        get {
+            return type == .String ? resolved.value : none
+        }
+    }
+
+    /// A scalar's content, whatever it is.
+    public var text: String? {
+        get {
+            return resolved.kind == .Scalar ? resolved.value : none
+        }
+    }
+
+    /// `!!binary`'s bytes, if they are base64.
+    public var binary: U8[>..]? {
+        get {
+            return type == .Binary ? yamlBytes(resolved.value) : none
+        }
+    }
+
+    /// How many elements or entries it has.
+    public var count: Int {
+        get {
+            let node = resolved
+            return node.kind == .Mapping ? node.entries.count : node.items.count
+        }
+    }
+
+    // ---- Its parts -----------------------------------------------------------
+
+    fn indexOf(_ key: String) -> Int {
+        var i = 0
+        while i < entries.count {
+            if entries[i].key.text == key {
+                return i
+            }
+            i += 1
+        }
+        return -1
+    }
+
+    /// The value of a mapping's key, by the key's text: none when it has
+    /// none, or this is no mapping. Setting one changes it or adds it at the
+    /// end; setting none removes the entry.
+    public subscript(key: String) -> YamlNode? {
+        get {
+            let node = resolved
+            let i = node.indexOf(key)
+            return i < 0 ? none : node.entries[i].value
+        }
+        set {
+            let node = resolved
+            let i = node.indexOf(key)
+            if let value = newValue {
+                if i < 0 {
+                    node.entries.append(YamlEntry(YamlNode.string(key), value))
+                } else {
+                    node.entries[i].value = value
+                }
+            } else if i >= 0 {
+                node.remove(at: i)
+            }
+        }
+    }
+
+    /// A sequence's element; none past its end, or of anything else.
+    public subscript(index: Int) -> YamlNode? {
+        get {
+            let node = resolved
+            return index < 0 || index >= node.items.count ? none : node.items[index]
+        }
+    }
+
+    /// An element added to a sequence.
+    public fn append(_ item: YamlNode) {
+        resolved.items.append(item)
+    }
+
+    /// An element put into a sequence at the position.
+    public fn insert(_ item: YamlNode, at index: Int) {
+        let node = resolved
+        var all: YamlNode[>..] = []
+        all.append(contentsOf: node.items[0..<index])
+        all.append(item)
+        all.append(contentsOf: node.items[index..<node.items.count])
+        node.items = all
+    }
+
+    /// An entry put into a mapping at the position.
+    public fn insert(_ entry: YamlEntry, at index: Int) {
+        let node = resolved
+        var all: YamlEntry[>..] = []
+        all.append(contentsOf: node.entries[0..<index])
+        all.append(entry)
+        all.append(contentsOf: node.entries[index..<node.entries.count])
+        node.entries = all
+    }
+
+    /// The element or the entry at the position, taken out.
+    public fn remove(at index: Int) {
+        let node = resolved
+        if node.kind == .Mapping {
+            var all: YamlEntry[>..] = []
+            all.append(contentsOf: node.entries[0..<index])
+            all.append(contentsOf: node.entries[index + 1..<node.entries.count])
+            node.entries = all
+        } else {
+            var all: YamlNode[>..] = []
+            all.append(contentsOf: node.items[0..<index])
+            all.append(contentsOf: node.items[index + 1..<node.items.count])
+            node.items = all
+        }
+    }
+
+    // ---- Equality ------------------------------------------------------------
+
+    // A scalar's type and canonical content, so that 10 and 0xA are one key.
+    var canonical: String {
+        get {
+            return match type {
+                case .Null   => "n"
+                case .Bool   => bool == true ? "b1" : "b0"
+                case .Int    => canonicalInt
+                case .Float  => "f\(float ?? 0.0)"
+                case .Binary => "y" + value
+                case _       => (tag == none || tag == "!" || tag == "tag:yaml.org,2002:str" ? "s" : "t" + tag! + "\u{0}") + value
+            }
+        }
+    }
+
+    var canonicalInt: String {
+        get {
+            if let integer = yamlInteger(value) {
+                return (integer.negative && integer.magnitude != 0 ? "i-" : "i") + "\(integer.magnitude)"
+            }
+            return "i" + value
+        }
+    }
+
+    // The same for equal nodes, whatever order a mapping's entries are in.
+    var hash: U64 {
+        get {
+            let node = resolved
+            if node.keyHash != 0 {
+                return node.keyHash
+            }
+            var hasher = Hasher()
+            if node.kind == .Scalar {
+                hasher.combine(node.canonical)
+            } else if node.kind == .Sequence {
+                hasher.combine(1)
+                for item in node.items {
+                    hasher.write(item.hash)
+                }
+            } else {
+                var sum: U64 = 0
+                for entry in node.entries {
+                    var pair = Hasher()
+                    pair.write(entry.key.hash)
+                    pair.write(entry.value.hash)
+                    sum = sum &+ U64.truncating(pair.finalize())
+                }
+                hasher.combine(2)
+                hasher.write(sum)
+            }
+            let hash = U64.truncating(hasher.finalize()) | 1
+            return hash
+        }
+    }
+}
+
+extension YamlNode: Equatable {
+    /// Whether the two are the same data: type and content, not style,
+    /// anchors or comments, an alias being what it names; a mapping's
+    /// entries in any order.
+    public operator == (lhs: YamlNode, rhs: YamlNode) -> Bool {
+        let a = lhs.resolved
+        let b = rhs.resolved
+        if a === b {
+            return true
+        }
+        if a.kind != b.kind {
+            return false
+        }
+        if a.kind == .Scalar {
+            return a.canonical == b.canonical
+        }
+        if a.kind == .Sequence {
+            if a.items.count != b.items.count {
+                return false
+            }
+            var i = 0
+            while i < a.items.count {
+                if a.items[i] != b.items[i] {
+                    return false
+                }
+                i += 1
+            }
+            return true
+        }
+        if a.entries.count != b.entries.count {
+            return false
+        }
+        // By the keys' hashes, so that a long mapping takes no longer.
+        var places: [U64: Int[>..]] = [:]
+        var i = 0
+        while i < b.entries.count {
+            places[b.entries[i].key.hash, default: []].append(i)
+            i += 1
+        }
+        for entry in a.entries {
+            var found = false
+            for place in places[entry.key.hash] ?? [] {
+                if !found && b.entries[place].key == entry.key {
+                    found = true
+                    if b.entries[place].value != entry.value {
+                        return false
+                    }
+                }
+            }
+            if !found {
+                return false
+            }
+        }
+        return true
+    }
+}
+
+// Where a node was read in a stream that can be edited, and as what: a node
+// is unchanged while it is still all that.
+struct YamlOrigin {
+    // Its first byte, its content's (after its anchor and tag), and the end.
+    let start: Int
+    let content: Int
+    let end: Int
+    let kind: YamlNodeKind
+    let tag: String?
+    let anchor: String?
+    let value: String
+    let style: YamlScalarStyle
+    let collectionStyle: YamlCollectionStyle
+    let items: YamlNode[>..]
+    let entries: YamlEntry[>..]
+    let target: YamlNode?
+    var comment: String? = none
+    var trailingComment: String? = none
+
+    init(_ node: YamlNode, start: Int, content: Int, end: Int) {
+        self.start = start
+        self.content = content
+        self.end = end
+        self.kind = node.kind
+        self.tag = node.tag
+        self.anchor = node.anchor
+        self.value = node.value
+        self.style = node.style
+        self.collectionStyle = node.collectionStyle
+        self.items = node.items
+        self.entries = node.entries
+        self.target = node.target
+    }
+}

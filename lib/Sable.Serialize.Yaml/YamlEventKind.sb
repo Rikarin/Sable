@@ -1,0 +1,16 @@
+module Sable.Serialize.Yaml
+
+/// What a YamlEvent is.
+@derive(Equatable, Debug)
+public enum YamlEventKind {
+    StreamStart
+    StreamEnd
+    DocumentStart
+    DocumentEnd
+    Alias
+    Scalar
+    SequenceStart
+    SequenceEnd
+    MappingStart
+    MappingEnd
+}

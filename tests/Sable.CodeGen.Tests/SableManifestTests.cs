@@ -23,7 +23,7 @@ public sealed class SableManifestTests {
                                 .registry("image", "0.6", features: ["png", "jpeg"], defaultFeatures: false),
                                 .path("platform", "../platform"),
                                 .registry("vulkan-sys", "1", optional: true),
-                                .registry("metal-sys", "1", optional: true, when: .os(.macOS)),
+                                .registry("metal-sys", "1", optional: true, when: .os(.MacOS)),
                             ],
                             devDependencies: [.registry("bench-harness", "0.3")],
                             features: [
@@ -275,7 +275,7 @@ public sealed class SableManifestTests {
 
     [Fact]
     public void ADependencyForAnotherPlatformIsLockedButNotBuilt() {
-        var other = OperatingSystem.IsMacOS() ? ".linux" : ".macOS";
+        var other = OperatingSystem.IsMacOS() ? ".Linux" : ".MacOS";
         using var fixture = new PackageFixture();
         fixture.Write("helper/package.sb", "import Sable.Build\nlet manifest = Package { name: \"helper\", version: \"0.1.0\" }");
         fixture.Write("helper/src/lib.sb", "module Helper\n\npublic fn help() -> Int {\n    return 1\n}");

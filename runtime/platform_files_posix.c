@@ -6,7 +6,14 @@
 
 #if defined(__APPLE__)
 #include <copyfile.h>
+#include <sys/sysctl.h>
 #endif
+#if !defined(__wasi__)
+#include <pwd.h>
+#include <sys/utsname.h>
+#endif
+
+extern char **environ;
 
 // What errno says went wrong, as IoError's kinds.
 static int file_error_of(int code) {
@@ -359,3 +366,121 @@ static void file_map_advise(void *base, int64_t length, int advice) {
 }
 
 #endif
+
+// ---- The environment, written ------------------------------------------------
+
+static bool set_environment_variable(const char *name, const char *value) {
+    return (value == NULL ? unsetenv(name) : setenv(name, value, 1)) == 0;
+}
+
+static char **environment_entries(size_t *count) {
+    size_t n = 0;
+    while (environ != NULL && environ[n] != NULL) {
+        n++;
+    }
+
+    char **entries = malloc((n > 0 ? n : 1) * sizeof(char *));
+    if (entries == NULL) {
+        sable_trap("out of memory");
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        entries[i] = strdup(environ[i]);
+    }
+
+    *count = n;
+    return entries;
+}
+
+// ---- The system ----------------------------------------------------------
+
+static char *host_name(void) {
+#if defined(__wasi__)
+    return NULL;
+#else
+    char name[256];
+    if (gethostname(name, sizeof name) != 0) {
+        return NULL;
+    }
+
+    name[sizeof name - 1] = '\0';
+    return strdup(name);
+#endif
+}
+
+static char *user_name(void) {
+#if !defined(__wasi__)
+    struct passwd *entry = getpwuid(geteuid());
+    if (entry != NULL && entry->pw_name != NULL) {
+        return strdup(entry->pw_name);
+    }
+#endif
+    return environment_variable("USER");
+}
+
+static char *home_directory(void) {
+    char *home = environment_variable("HOME");
+#if !defined(__wasi__)
+    if (home == NULL || home[0] == '\0') {
+        free(home);
+        struct passwd *entry = getpwuid(geteuid());
+        home = entry != NULL && entry->pw_dir != NULL ? strdup(entry->pw_dir) : NULL;
+    }
+#endif
+    return home;
+}
+
+static char *temporary_directory(void) {
+    char *directory = environment_variable("TMPDIR");
+    if (directory == NULL || directory[0] == '\0') {
+        free(directory);
+        return strdup("/tmp");
+    }
+
+    // macOS's ends in '/': the directory, without it.
+    size_t length = strlen(directory);
+    if (length > 1 && directory[length - 1] == '/') {
+        directory[length - 1] = '\0';
+    }
+
+    return directory;
+}
+
+static char *os_version(void) {
+#if defined(__APPLE__)
+    char version[64];
+    size_t size = sizeof version;
+    if (sysctlbyname("kern.osproductversion", version, &size, NULL, 0) == 0) {
+        return strdup(version);
+    }
+    return NULL;
+#elif defined(__wasi__)
+    return NULL;
+#else
+    struct utsname name;
+    return uname(&name) == 0 ? strdup(name.release) : NULL;
+#endif
+}
+
+static int64_t page_size(void) {
+#if defined(__wasi__)
+    return 65536;
+#else
+    long size = sysconf(_SC_PAGESIZE);
+    return size > 0 ? size : 4096;
+#endif
+}
+
+static int64_t physical_memory(void) {
+#if defined(__APPLE__)
+    uint64_t bytes = 0;
+    size_t size = sizeof bytes;
+    return sysctlbyname("hw.memsize", &bytes, &size, NULL, 0) == 0 ? (int64_t)bytes : 0;
+#elif defined(__wasi__)
+    return 0;
+#else
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long size = sysconf(_SC_PAGESIZE);
+    return pages > 0 && size > 0 ? (int64_t)pages * size : 0;
+#endif
+}

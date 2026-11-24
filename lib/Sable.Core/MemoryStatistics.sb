@@ -1,0 +1,40 @@
+module Sable.Core
+
+/// What the memory manager has done, for diagnostics: .NET's
+/// `GC.GetGCMemoryInfo`, in a reference-counted runtime's terms. A
+/// snapshot, taken by `current()`.
+///
+/// ```sable
+/// let before = MemoryStatistics.current()
+/// let numbers: Int[>..] = [1, 2, 3]
+/// let after = MemoryStatistics.current()
+/// assert(after.allocations >= before.allocations)
+/// ```
+public struct MemoryStatistics {
+    /// Objects (arrays' buffers among them) allocated so far, by every thread.
+    public let allocations: Int
+    /// Objects alive now.
+    public let liveObjects: Int
+    /// Retains and releases so far: counted only when the program runs
+    /// with SABLE_STATS set, which costs a shared counter; 0 otherwise.
+    public let retains: Int
+    public let releases: Int
+    /// The allocator's slabs (blocks of small objects of one size) held
+    /// now, the most held at once, and those given back to the system.
+    public let slabsHeld: Int
+    public let slabsMost: Int
+    public let slabsReturned: Int
+
+    /// The counts now.
+    public static fn current() -> MemoryStatistics {
+        return MemoryStatistics {
+            allocations: Runtime.memoryStatistic(0),
+            liveObjects: Runtime.memoryStatistic(1),
+            retains: Runtime.memoryStatistic(2),
+            releases: Runtime.memoryStatistic(3),
+            slabsHeld: Runtime.memoryStatistic(4),
+            slabsMost: Runtime.memoryStatistic(5),
+            slabsReturned: Runtime.memoryStatistic(6)
+        }
+    }
+}

@@ -1,0 +1,64 @@
+module Sable.Core
+
+/// An operating system's version: macOS's product version (15.2), Linux's
+/// kernel release (6.8.0), Windows's major, minor and build (10.0.22631).
+/// Versions compare part by part.
+///
+/// ```sable
+/// let version = OperatingSystemVersion.parse("6.8.0-45-generic")
+/// assert(version.major == 6 && version.minor == 8 && version.patch == 0)
+/// assert(version.text == "6.8.0-45-generic")
+/// assert(OperatingSystemVersion.parse("15.2") > OperatingSystemVersion.parse("14.7.1"))
+/// ```
+public struct OperatingSystemVersion {
+    public let major: Int
+    public let minor: Int
+    /// The third part: a patch, or Windows's build.
+    public let patch: Int
+    /// The version as the system writes it, suffixes and all.
+    public let text: String
+
+    /// The version a system's text gives: its first three dot-separated
+    /// numbers (a missing one 0), whatever follows them kept in 'text'.
+    public static fn parse(_ text: String) -> OperatingSystemVersion {
+        var parts: Int[>..] = [0, 0, 0]
+        var part = 0
+        var i = 0
+        while i < text.count && part < 3 {
+            let c = text.at(index: i)
+            if c >= '0' && c <= '9' {
+                parts[part] = parts[part] * 10 + (c.codePoint - 0x30)
+            } else if c == '.' {
+                part += 1
+            } else {
+                break
+            }
+            i += 1
+        }
+        return OperatingSystemVersion { major: parts[0], minor: parts[1], patch: parts[2], text: text }
+    }
+}
+
+extension OperatingSystemVersion: Comparable {
+    /// The same three numbers.
+    public operator == (lhs: OperatingSystemVersion, rhs: OperatingSystemVersion) -> Bool {
+        return lhs.major == rhs.major && lhs.minor == rhs.minor && lhs.patch == rhs.patch
+    }
+
+    /// Before, part by part.
+    public operator < (lhs: OperatingSystemVersion, rhs: OperatingSystemVersion) -> Bool {
+        if lhs.major != rhs.major {
+            return lhs.major < rhs.major
+        }
+        if lhs.minor != rhs.minor {
+            return lhs.minor < rhs.minor
+        }
+        return lhs.patch < rhs.patch
+    }
+}
+
+extension OperatingSystemVersion: Debug {
+    public fn debugDescription() -> String {
+        return "\(major).\(minor).\(patch)"
+    }
+}

@@ -2656,6 +2656,13 @@ public static class SilBuiltins {
         Add("io_environment", SilType.String, SilType.String);
         Add("io_argument_count", SilType.Int);
         Add("io_argument", SilType.String, SilType.Int);
+        Add("io_argument_bytes", new ArrayType(SilType.U8), SilType.Int);
+        Add("env_set", SilType.Bool, SilType.String, SilType.String);
+        Add("env_remove", SilType.Bool, SilType.String);
+        Add("env_all", new ArrayType(SilType.String));
+        Add("system_text", SilType.String, SilType.Int);
+        Add("system_number", SilType.Int, SilType.Int);
+        Add("memory_statistic", SilType.Int, SilType.Int);
         Add("io_succeeded", SilType.Bool);
         // Files by handle (runtime/io.c, "File handles"): a call that fails
         // gives -1, nothing or false, and 'file_error' says why by IoError's

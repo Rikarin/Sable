@@ -1,0 +1,26 @@
+module Sable.Core
+
+/// An operating system, as `#if os(...)` names them: what the program runs
+/// on (`Platform.operatingSystem`), and what a package's manifest asks for
+/// (Sable.Build's `Condition.os`).
+@derive(Equatable, Hashable, Debug)
+public enum OperatingSystem {
+    MacOS
+    Linux
+    Windows
+    /// WebAssembly's system interface: a host's sandbox, not an OS.
+    Wasi
+
+    /// Its name as `#if os(...)` writes it: "macos", "linux", "windows",
+    /// "wasi".
+    public var name: String {
+        get {
+            return match self {
+                case .MacOS   => "macos"
+                case .Linux   => "linux"
+                case .Windows => "windows"
+                case .Wasi    => "wasi"
+            }
+        }
+    }
+}

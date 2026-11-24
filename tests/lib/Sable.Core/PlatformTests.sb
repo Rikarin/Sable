@@ -1,0 +1,97 @@
+module PlatformTests
+
+// Platform's run-time answers (Sable.Core), against the compile-time
+// constants and the machine's own sense; OperatingSystemVersion's reading
+// of each system's version text; and MemoryStatistics.
+
+import Sable.Testing
+
+@test
+fn theRunTimeAnswersAgreeWithTheConstants() {
+    assertEqual(Platform.operatingSystem.name, Platform.os)
+    assertEqual(Platform.architecture.name, Platform.arch)
+    assert(Platform.operatingSystem == .MacOS || Platform.operatingSystem == .Linux || Platform.operatingSystem == .Windows || Platform.operatingSystem == .Wasi)
+    assert(Platform.is64Bit == (Platform.pointerWidth == 64))
+    assertEqual(Platform.newline, Platform.operatingSystem == .Windows ? "\r\n" : "\n")
+}
+
+@test
+fn theMachineIsDescribed() {
+    assert(Platform.processorCount >= 1)
+    let page = Platform.pageSize
+    assert(page >= 4096 && (page & (page - 1)) == 0, "page size \(page)")
+    assert(Platform.physicalMemory > 1 << 20)
+    assert(!Platform.hostName.isEmpty)
+    assert(!Platform.userName.isEmpty)
+    let version = Platform.osVersion
+    assert(version.major > 0, "version \(version.text)")
+    assert(!version.text.isEmpty)
+}
+
+@test
+fn versionsAreAtLeastOnTheirOwnSystemAlone() {
+    let here = Platform.operatingSystem
+    let version = Platform.osVersion
+    assert(Platform.isAtLeast(here, version.major, version.minor, version.patch))
+    assert(Platform.isAtLeast(here, version.major))
+    assert(!Platform.isAtLeast(here, version.major + 1))
+    let elsewhere: OperatingSystem = here == .Linux ? .Windows : .Linux
+    assert(!Platform.isAtLeast(elsewhere, 0))
+    assert(Platform.isAtLeast(macOS: 1) == (here == .MacOS))
+    assert(!Platform.isAtLeast(macOS: 999))
+    assert(Platform.isAtLeast(windows: 1) == (here == .Windows))
+    assert(!Platform.isAtLeast(windows: 10, 0, build: 999999))
+}
+
+@test
+fn eachSystemsVersionTextIsRead() {
+    let mac = OperatingSystemVersion.parse("15.2")
+    assert(mac.major == 15 && mac.minor == 2 && mac.patch == 0)
+    let linux = OperatingSystemVersion.parse("6.8.0-45-generic")
+    assert(linux.major == 6 && linux.minor == 8 && linux.patch == 0)
+    assertEqual(linux.text, "6.8.0-45-generic")
+    let windows = OperatingSystemVersion.parse("10.0.22631")
+    assertEqual(windows.patch, 22631)
+    let empty = OperatingSystemVersion.parse("")
+    assert(empty.major == 0 && empty.minor == 0 && empty.patch == 0)
+    let partial = OperatingSystemVersion.parse("7")
+    assertEqual(partial.major, 7)
+    let extra = OperatingSystemVersion.parse("1.2.3.4")
+    assertEqual(extra.patch, 3)
+
+    assert(OperatingSystemVersion.parse("15.2") > OperatingSystemVersion.parse("14.7.1"))
+    assert(OperatingSystemVersion.parse("15.2") < OperatingSystemVersion.parse("15.10"))
+    assert(OperatingSystemVersion.parse("15.2.1") > OperatingSystemVersion.parse("15.2"))
+    assert(OperatingSystemVersion.parse("15.2") == OperatingSystemVersion.parse("15.2.0"))
+    assertEqual(linux.debugDescription(), "6.8.0")
+}
+
+@test
+fn systemsAndArchitecturesHaveTheirIfNames() {
+    assertEqual(OperatingSystem.MacOS.name, "macos")
+    assertEqual(OperatingSystem.Linux.name, "linux")
+    assertEqual(OperatingSystem.Windows.name, "windows")
+    assertEqual(OperatingSystem.Wasi.name, "wasi")
+    assertEqual(Architecture.Arm64.name, "arm64")
+    assertEqual(Architecture.X86_64.name, "x86_64")
+    assertEqual(Architecture.Wasm32.name, "wasm32")
+    assert(OperatingSystem.MacOS != OperatingSystem.Linux)
+    assertEqual(Architecture.Arm64.hashValue, Architecture.Arm64.hashValue)
+}
+
+@test
+fn memoryStatisticsCountWhatIsMade() {
+    let before = MemoryStatistics.current()
+    var made: String[>..] = []
+    var i = 0
+    while i < 10 {
+        made.append("item \(i)")
+        i += 1
+    }
+    let after = MemoryStatistics.current()
+    assert(after.allocations >= before.allocations + 10, "\(before.allocations) then \(after.allocations)")
+    assert(after.liveObjects > 0)
+    assert(after.retains >= 0 && after.releases >= 0)
+    assert(after.slabsHeld >= 0 && after.slabsMost >= after.slabsHeld && after.slabsReturned >= 0)
+    assertEqual(made.count, 10)
+}

@@ -1,0 +1,35 @@
+module Sable.IO
+
+/// A folder every user has, where a program keeps its files or finds the
+/// user's: what `Environment.knownFolder` finds, by the system's own rules
+/// — the XDG base directories on Linux, Apple's on macOS, Windows's known
+/// folders — as Rust's `dirs` and .NET's `Environment.GetFolderPath` do.
+@derive(Equatable, Hashable, Debug)
+public enum KnownFolder {
+    /// The user's home.
+    Home
+    /// Settings: XDG_CONFIG_HOME (~/.config), ~/Library/Application Support,
+    /// %APPDATA%.
+    Config
+    /// What can be made again: XDG_CACHE_HOME (~/.cache), ~/Library/Caches,
+    /// %LOCALAPPDATA%.
+    Cache
+    /// What a program keeps: XDG_DATA_HOME (~/.local/share),
+    /// ~/Library/Application Support, %APPDATA%.
+    Data
+    /// What a program keeps between runs that is neither setting nor data
+    /// (history, logs): XDG_STATE_HOME (~/.local/state),
+    /// ~/Library/Application Support, %LOCALAPPDATA%.
+    State
+    /// The user's documents, downloads, desktop, pictures, music and
+    /// videos: the XDG user directory's variable where it is set (Linux),
+    /// else the folder of that name in the home.
+    Documents
+    Downloads
+    Desktop
+    Pictures
+    Music
+    Videos
+    /// Files that do not outlast the session: Environment.temporaryDirectory.
+    Temporary
+}

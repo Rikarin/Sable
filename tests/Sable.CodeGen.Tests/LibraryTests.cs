@@ -263,6 +263,46 @@ fn main() {
     }
 
     /// <summary>
+    ///     The environment written and read back, the known folders by each
+    ///     system's rules, and the platform as the program and the compiler
+    ///     name it: the same natively and interpreted, where set and remove
+    ///     write the program's own variables, never the compiler's.
+    /// </summary>
+    [Fact]
+    public void TheEnvironmentAndPlatformAgreeBothWays() {
+        var run = AssertAgree(
+            """
+            module P
+            import Sable.IO
+
+            @main
+            fn main() {
+                unsafe {
+                    Environment.set("SABLE_AGREE_VALUE", "a=b")
+                }
+                print(Environment.variable("SABLE_AGREE_VALUE") ?? "-")
+                print(Environment.variables()["SABLE_AGREE_VALUE"] ?? "-")
+                unsafe {
+                    Environment.remove("SABLE_AGREE_VALUE")
+                }
+                print(Environment.variable("SABLE_AGREE_VALUE") ?? "unset")
+                var variables = Dictionary<String, String>()
+                variables["XDG_DATA_HOME"] = "/data"
+                let home = FilePath("/home/x", style: .Posix)
+                print(Environment.knownFolder(.Data, on: .Linux, home: home, variables: variables)!)
+                print(Environment.knownFolder(.Cache, on: .MacOS, home: home, variables: variables)!)
+                print(Platform.operatingSystem.name == Platform.os && Platform.architecture.name == Platform.arch)
+                print(Platform.processorCount > 0 && Platform.pageSize > 0 && !Platform.userName.isEmpty)
+                print(Environment.temporaryDirectory.isAbsolute && Environment.currentDirectory.isAbsolute)
+                print(OperatingSystemVersion.parse("10.0.22631").patch)
+            }
+            """
+        );
+        Assert.Equal("a=b\na=b\nunset\n/data\n/home/x/Library/Caches\ntrue\ntrue\ntrue\n22631\n", run.Stdout);
+        Assert.Null(Environment.GetEnvironmentVariable("SABLE_AGREE_VALUE"));
+    }
+
+    /// <summary>
     ///     TextBuilder's appends — text, characters and integers into its
     ///     byte buffer — and its edits in the middle, and a byte array's
     ///     append(utf8:): the same natively and interpreted.

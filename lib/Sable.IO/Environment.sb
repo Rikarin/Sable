@@ -1,13 +1,78 @@
 module Sable.IO
 
-/// What the program was started with.
+/// What the program was started with, and where it is: its arguments, its
+/// environment variables, and the folders it and its user have — .NET's
+/// `Environment`, Rust's `std::env`. The machine itself is Sable.Core's
+/// `Platform`.
 public struct Environment {
+    // ---- Variables ---------------------------------------------------------
+
     /// The value of an environment variable, when it is set.
     public static fn variable(_ name: String) -> String? {
         return Runtime.environment(name)
     }
 
-    /// The program's arguments, after its own name.
+    /// Every environment variable, by name.
+    ///
+    /// ```sable
+    /// let all = Environment.variables()
+    /// assert(all.count >= 0)
+    /// ```
+    public static fn variables() -> Dictionary<String, String> {
+        var all = Dictionary<String, String>()
+        for entry in Runtime.environmentEntries() {
+            if let equals = entry.firstIndex(of: '=') {
+                let name = entry[..<equals].toString()
+                if !name.isEmpty {
+                    all[name] = entry[entry.index(after: equals)...].toString()
+                }
+            }
+        }
+        return all
+    }
+
+    /// The variable set to the value, for this program and the programs it
+    /// runs after. Unsafe, as Rust 2024's `set_var` is: the environment is
+    /// one per process, and another thread reading it at once — in the C
+    /// library, a resolver, a library of the system's — may read freed
+    /// memory. Set it at the start, before any thread is. A name that is
+    /// empty, or holds '=' or NUL, traps.
+    ///
+    /// ```sable
+    /// unsafe {
+    ///     Environment.set("SABLE_EXAMPLE_SETTING", "on")
+    /// }
+    /// assert(Environment.variable("SABLE_EXAMPLE_SETTING") == "on")
+    /// unsafe {
+    ///     Environment.remove("SABLE_EXAMPLE_SETTING")
+    /// }
+    /// assert(Environment.variable("SABLE_EXAMPLE_SETTING") == none)
+    /// ```
+    public unsafe static fn set(_ name: String, _ value: String) {
+        Environment.checkName(name)
+        precondition(!value.contains('\u{0}'), "an environment variable's value with a NUL in it")
+        unsafe {
+            precondition(Runtime.setEnvironment(name, value), "the system refused to set '\(name)'")
+        }
+    }
+
+    /// The variable removed, for this program and the programs it runs
+    /// after; one that is not set stays so. Unsafe, as `set` is.
+    public unsafe static fn remove(_ name: String) {
+        Environment.checkName(name)
+        unsafe {
+            let _ = Runtime.removeEnvironment(name)
+        }
+    }
+
+    static fn checkName(_ name: String) {
+        precondition(!name.isEmpty && !name.contains('=') && !name.contains('\u{0}'), "'\(name)' is not an environment variable's name")
+    }
+
+    // ---- Arguments ---------------------------------------------------------
+
+    /// The program's arguments, after its own name: each as text, a byte
+    /// that is not UTF-8 read as U+FFFD.
     public static fn arguments() -> String[>..] {
         var all: String[>..] = []
         var i = 0
@@ -16,5 +81,174 @@ public struct Environment {
             i += 1
         }
         return all
+    }
+
+    /// The program's arguments as the system gave them, each its bytes,
+    /// UTF-8 or not: Rust's `args_os`. A file name in one need not be text.
+    public static fn argumentBytes() -> U8[>..][>..] {
+        var all: U8[>..][>..] = []
+        var i = 0
+        while i < Runtime.argumentCount() {
+            all.append(Runtime.argumentBytes(index: i))
+            i += 1
+        }
+        return all
+    }
+
+    // ---- Places ------------------------------------------------------------
+
+    /// The program's working directory, which relative paths start from.
+    public static var currentDirectory: FilePath {
+        get {
+            return FilePath(Runtime.currentDirectory())
+        }
+    }
+
+    /// The working directory changed: false when the directory is not there.
+    public static fn changeCurrentDirectory(to path: FilePath) -> Bool {
+        return Runtime.changeDirectory(path: "\(path)")
+    }
+
+    /// The program's own file, to start it again with; none where there is
+    /// none (the interpreter).
+    public static var executablePath: FilePath? {
+        get {
+            let path = Runtime.executablePath()
+            return path.isEmpty ? none : FilePath(path)
+        }
+    }
+
+    /// The user's home: HOME (USERPROFILE on Windows), else the system's
+    /// record of the user; none where there is none.
+    public static var homeDirectory: FilePath? {
+        get {
+            let home = Runtime.systemText(2)
+            return home.isEmpty ? none : FilePath(home)
+        }
+    }
+
+    /// Where files that do not outlast the session go: TMPDIR, else /tmp
+    /// (Windows: the user's temporary folder).
+    public static var temporaryDirectory: FilePath {
+        get {
+            let temporary = Runtime.systemText(3)
+            return FilePath(temporary.isEmpty ? "/tmp" : temporary)
+        }
+    }
+
+    /// The folder by the rules of the system the program runs on; none
+    /// where it has none (no home to put it in).
+    ///
+    /// ```sable
+    /// if let config = Environment.knownFolder(.Config) {
+    ///     let settings = config.appending("my-tool").appending("settings.toml")
+    ///     assert(settings.isAbsolute || !config.isAbsolute)
+    /// }
+    /// ```
+    public static fn knownFolder(_ folder: KnownFolder) -> FilePath? {
+        if folder == .Temporary {
+            return temporaryDirectory
+        }
+        if let home = homeDirectory {
+            return Environment.knownFolder(folder, on: Platform.operatingSystem, home: home, variables: Environment.variables())
+        }
+        return none
+    }
+
+    /// The folder by the rules of the system named, for a home and the
+    /// variables given: what `knownFolder(_:)` works out, for any system
+    /// wherever the program runs. Temporary is the variables' TMPDIR (TEMP
+    /// on Windows), else the system's usual.
+    ///
+    /// ```sable
+    /// var variables = Dictionary<String, String>()
+    /// variables["XDG_CACHE_HOME"] = "/fast/cache"
+    /// let home = FilePath("/home/ana", style: .Posix)
+    /// let cache = Environment.knownFolder(.Cache, on: .Linux, home: home, variables: variables)
+    /// assert(cache!.string! == "/fast/cache")
+    /// let config = Environment.knownFolder(.Config, on: .Linux, home: home, variables: variables)
+    /// assert(config!.string! == "/home/ana/.config")
+    /// ```
+    public static fn knownFolder(_ folder: KnownFolder, on system: OperatingSystem, home: FilePath, variables: Dictionary<String, String>) -> FilePath? {
+        let style: PathStyle = system == .Windows ? .Windows : .Posix
+        let root = FilePath(bytes: home.bytes, style: style)
+        if folder == .Home {
+            return root
+        }
+        return match system {
+            case .Windows => Environment.windowsFolder(folder, root, variables)
+            case .MacOS   => Environment.appleFolder(folder, root, variables)
+            case _        => Environment.xdgFolder(folder, root, variables)
+        }
+    }
+
+    // An absolute path in the variable, when it is set to one; XDG says a
+    // relative one is to be ignored.
+    static fn given(_ name: String, _ variables: Dictionary<String, String>, _ style: PathStyle) -> FilePath? {
+        if let value = variables[name] {
+            let path = FilePath(value, style: style)
+            if path.isAbsolute {
+                return path
+            }
+        }
+        return none
+    }
+
+    static fn xdgFolder(_ folder: KnownFolder, _ home: FilePath, _ variables: Dictionary<String, String>) -> FilePath? {
+        let (variable, fallback) = match folder {
+            case .Config    => ("XDG_CONFIG_HOME", ".config")
+            case .Cache     => ("XDG_CACHE_HOME", ".cache")
+            case .Data      => ("XDG_DATA_HOME", ".local/share")
+            case .State     => ("XDG_STATE_HOME", ".local/state")
+            case .Documents => ("XDG_DOCUMENTS_DIR", "Documents")
+            case .Downloads => ("XDG_DOWNLOAD_DIR", "Downloads")
+            case .Desktop   => ("XDG_DESKTOP_DIR", "Desktop")
+            case .Pictures  => ("XDG_PICTURES_DIR", "Pictures")
+            case .Music     => ("XDG_MUSIC_DIR", "Music")
+            case .Videos    => ("XDG_VIDEOS_DIR", "Videos")
+            case _          => ("TMPDIR", "")
+        }
+        if let found = Environment.given(variable, variables, .Posix) {
+            return found
+        }
+        return fallback.isEmpty ? FilePath("/tmp", style: .Posix) : home.appending(fallback)
+    }
+
+    static fn appleFolder(_ folder: KnownFolder, _ home: FilePath, _ variables: Dictionary<String, String>) -> FilePath? {
+        let under = match folder {
+            case .Config    => "Library/Application Support"
+            case .Data      => "Library/Application Support"
+            case .State     => "Library/Application Support"
+            case .Cache     => "Library/Caches"
+            case .Documents => "Documents"
+            case .Downloads => "Downloads"
+            case .Desktop   => "Desktop"
+            case .Pictures  => "Pictures"
+            case .Music     => "Music"
+            case .Videos    => "Movies"
+            case _          => ""
+        }
+        if under.isEmpty {
+            return Environment.given("TMPDIR", variables, .Posix) ?? FilePath("/tmp", style: .Posix)
+        }
+        return home.appending(under)
+    }
+
+    static fn windowsFolder(_ folder: KnownFolder, _ home: FilePath, _ variables: Dictionary<String, String>) -> FilePath? {
+        let roaming = Environment.given("APPDATA", variables, .Windows) ?? home.appending("AppData\\Roaming")
+        let local = Environment.given("LOCALAPPDATA", variables, .Windows) ?? home.appending("AppData\\Local")
+        return match folder {
+            case .Config    => roaming
+            case .Data      => roaming
+            case .Cache     => local
+            case .State     => local
+            case .Documents => home.appending("Documents")
+            case .Downloads => home.appending("Downloads")
+            case .Desktop   => home.appending("Desktop")
+            case .Pictures  => home.appending("Pictures")
+            case .Music     => home.appending("Music")
+            case .Videos    => home.appending("Videos")
+            case _          => Environment.given("TEMP", variables, .Windows) ?? local.appending("Temp")
+        }
     }
 }

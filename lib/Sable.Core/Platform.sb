@@ -38,6 +38,105 @@ public struct Platform {
     #else
     public const pointerWidth: Int = 64
     #endif
+
+    // ---- What the program runs on ------------------------------------------
+    // Asked of the system when the program runs (the constants above are
+    // the compiler's): .NET's Environment and RuntimeInformation, Rust's
+    // std::env::consts.
+
+    /// The operating system: `.MacOS` where `os` is "macos", and so on.
+    public static var operatingSystem: OperatingSystem {
+        get {
+            #if os(macos)
+            return .MacOS
+            #elseif os(windows)
+            return .Windows
+            #elseif os(wasi)
+            return .Wasi
+            #else
+            return .Linux
+            #endif
+        }
+    }
+
+    /// The processor architecture: `.Arm64` where `arch` is "arm64", and so on.
+    public static var architecture: Architecture {
+        get {
+            #if arch(arm64)
+            return .Arm64
+            #elseif arch(wasm32)
+            return .Wasm32
+            #else
+            return .X86_64
+            #endif
+        }
+    }
+
+    /// The operating system's version, as it reports it (0.0.0 where it
+    /// reports none, as under WASI).
+    public static var osVersion: OperatingSystemVersion {
+        get {
+            return OperatingSystemVersion.parse(Runtime.systemText(4))
+        }
+    }
+
+    /// Whether the program runs on this operating system at this version or
+    /// later: .NET's `OperatingSystem.IsMacOSVersionAtLeast` and the rest.
+    /// Another system is never at least.
+    ///
+    /// ```sable
+    /// if Platform.isAtLeast(.MacOS, 13) {
+    ///     // macOS Ventura's calls
+    /// }
+    /// ```
+    public static fn isAtLeast(_ system: OperatingSystem, _ major: Int, _ minor: Int = 0, _ patch: Int = 0) -> Bool {
+        if system != operatingSystem {
+            return false
+        }
+        let version = osVersion
+        return version >= OperatingSystemVersion { major: major, minor: minor, patch: patch, text: "" }
+    }
+
+    /// Whether this is macOS at the version or later.
+    public static fn isAtLeast(macOS major: Int, _ minor: Int = 0) -> Bool {
+        return isAtLeast(.MacOS, major, minor)
+    }
+
+    /// Whether this is Windows at the version and build or later
+    /// (Windows 11 is 10.0 build 22000).
+    public static fn isAtLeast(windows major: Int, _ minor: Int = 0, build: Int = 0) -> Bool {
+        return isAtLeast(.Windows, major, minor, build)
+    }
+
+    /// How many processors the program can run on at once.
+    public static var processorCount: Int => Runtime.systemNumber(0)
+
+    /// The size of a page of memory, in bytes.
+    public static var pageSize: Int => Runtime.systemNumber(1)
+
+    /// The machine's physical memory, in bytes; 0 where it is not known.
+    public static var physicalMemory: Int => Runtime.systemNumber(2)
+
+    /// The machine's name on the network; empty where there is none.
+    public static var hostName: String => Runtime.systemText(0)
+
+    /// The name of the user the program runs as; empty where there is none.
+    public static var userName: String => Runtime.systemText(1)
+
+    /// What ends a line of text on the system: "\r\n" on Windows, "\n"
+    /// elsewhere.
+    public static var newline: String {
+        get {
+            #if os(windows)
+            return "\r\n"
+            #else
+            return "\n"
+            #endif
+        }
+    }
+
+    /// Whether pointers are 64 bits: .NET's `Is64BitProcess`.
+    public static var is64Bit: Bool => pointerWidth == 64
 }
 
 /// Stops the compile with the message, where the call is: a 'comptime'

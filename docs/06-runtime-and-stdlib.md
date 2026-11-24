@@ -725,7 +725,10 @@ Sable.Core          ── always linked, no dependencies
   Formattable/FormatSpec (what "\(x:spec)" writes through),
   Parsable/ParseError/NumberStyles (text back to values), and
   RandomNumberGenerator with the system's generator and a seeded one
-  (xoshiro256**), behind 'random(in:)', 'randomElement' and 'shuffle'
+  (xoshiro256**), behind 'random(in:)', 'randomElement' and 'shuffle';
+  Platform (the target's constants, and at run time the operating system
+  and architecture, OS version and isAtLeast, processors, page size,
+  memory, host and user names, newline) and MemoryStatistics
 
 Sable.Collections   List Dictionary Set Deque OrderedDictionary
                     PriorityQueue BitSet InlineArray SmallVec ArrayVec,
@@ -764,7 +767,10 @@ Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     copy-on-write mappings as a U8 array, flush, advise,
                     resize), Pipe with PipeReader PipeWriter (pooled
                     segments, ByteSequence views, consumed/examined,
-                    backpressure), the standard streams as handles, TCP
+                    backpressure), the standard streams as handles, TCP,
+                    Environment (variables listed, set and removed under
+                    'unsafe', arguments as text and bytes, home, temporary
+                    and known folders by XDG, Apple and Windows rules)
 Sable.Serialize     Encoder/Decoder protocols, conformance synthesis via
                     @derive(Serializable), JSON, TOML, MessagePack, and the
                     zero-copy @inline_layout path

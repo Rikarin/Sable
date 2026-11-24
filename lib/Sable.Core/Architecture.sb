@@ -1,0 +1,22 @@
+module Sable.Core
+
+/// A processor architecture, as `#if arch(...)` names them: what the
+/// program runs on (`Platform.architecture`), and what a package's manifest
+/// asks for (Sable.Build's `Condition.arch`).
+@derive(Equatable, Hashable, Debug)
+public enum Architecture {
+    Arm64
+    X86_64
+    Wasm32
+
+    /// Its name as `#if arch(...)` writes it: "arm64", "x86_64", "wasm32".
+    public var name: String {
+        get {
+            return match self {
+                case .Arm64  => "arm64"
+                case .X86_64 => "x86_64"
+                case .Wasm32 => "wasm32"
+            }
+        }
+    }
+}

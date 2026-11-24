@@ -217,6 +217,32 @@ static bool make_directory(const char *name);
 // 'count'. NULL when it cannot be read.
 static char **list_directory(const char *name, size_t *count);
 static char *environment_variable(const char *name);
+// The variable set to the value, or removed when the value is NULL: false
+// when the system refused (a name it does not take).
+static bool set_environment_variable(const char *name, const char *value);
+// Every variable as "NAME=value", in no order; their number in 'count'.
+// The caller frees each and the list.
+static char **environment_entries(size_t *count);
+
+// ---- The system ----------------------------------------------------------
+//
+// What Platform and Environment report about the machine and its user. A
+// text the system does not give is NULL; the caller frees one it does.
+
+static char *host_name(void);
+// The name of the user the process runs as.
+static char *user_name(void);
+// HOME (USERPROFILE on Windows), else the user database's.
+static char *home_directory(void);
+// TMPDIR (Windows: GetTempPathW), else the system's usual.
+static char *temporary_directory(void);
+// The operating system's version as it writes it: macOS's product version
+// ("15.2"), Linux's kernel release ("6.8.0-45-generic"), Windows's
+// "major.minor.build" ("10.0.22631").
+static char *os_version(void);
+static int64_t page_size(void);
+// The machine's physical memory in bytes; 0 when it is not known.
+static int64_t physical_memory(void);
 
 // ---- File handles -----------------------------------------------------------
 //

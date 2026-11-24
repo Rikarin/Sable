@@ -502,6 +502,13 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_io_environment(ptr)
                                 declare i64 @sable_io_argument_count()
                                 declare ptr @sable_io_argument(i64)
+                                declare ptr @sable_io_argument_bytes(i64, ptr)
+                                declare zeroext i1 @sable_env_set(ptr, ptr)
+                                declare zeroext i1 @sable_env_remove(ptr)
+                                declare ptr @sable_env_all()
+                                declare ptr @sable_system_text(i64)
+                                declare i64 @sable_system_number(i64)
+                                declare i64 @sable_memory_statistic(i64)
                                 declare zeroext i1 @sable_io_succeeded()
                                 declare void @sable_set_arguments(i32, ptr)
                                 declare i64 @sable_time_monotonic()
@@ -4603,6 +4610,31 @@ public sealed partial class LlvmEmitter {
 
                 case "time_sleep":
                     Line($"call void @sable_time_sleep(i64 {operands[0]})");
+                    return;
+
+                case "io_argument_bytes":
+                    SiteForRuntime();
+                    Line($"{Result()} = call ptr @sable_io_argument_bytes(i64 {operands[0]}, ptr {module.ArrayMetadata(new ArrayType(SilType.U8))})");
+                    return;
+
+                case "env_set":
+                    Line($"{Result()} = call zeroext i1 @sable_env_set(ptr {operands[0]}, ptr {operands[1]})");
+                    return;
+
+                case "env_remove":
+                    Line($"{Result()} = call zeroext i1 @sable_env_remove(ptr {operands[0]})");
+                    return;
+
+                case "env_all":
+                    Line($"{Result()} = call ptr @sable_env_all()");
+                    return;
+
+                case "system_text":
+                    Line($"{Result()} = call ptr @sable_system_text(i64 {operands[0]})");
+                    return;
+
+                case "system_number" or "memory_statistic":
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}(i64 {operands[0]})");
                     return;
 
                 case "io_argument":

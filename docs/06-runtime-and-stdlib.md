@@ -901,7 +901,9 @@ cost over the compiler doing it by special case (docs/04, "Sable.Core in
 Sable"). Outside the core, `Sable.Math` declares the elementary functions
 this way: its `ElementaryFunctions` protocol's static requirements
 (`static fn sin(_ x: Self) -> Self`, …) are libm's for F64 and F32
-(`math_sin_F64`, through LLVM's intrinsic where it has one), and its free
+(`math_sin_F64`, a call of libm's `sin` that LLVM may neither fold nor
+rewrite, so a constant operand gives the bits the interpreter's call of the
+same libm does, at every optimisation level), and its free
 functions are generic over it, written once — `sin(x)` is `T.sin(x)`,
 monomorphised to the call to libm. Floats have no `x.sin()` method.
 

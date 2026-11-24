@@ -111,7 +111,7 @@ public sealed class ElementaryFunctionTests {
         );
 
     [Fact]
-    public void ElementaryFunctionsLowerToIntrinsicsOrLibm() {
+    public void ElementaryFunctionsLowerToLibmCallsLLVMMayNotFold() {
         var result = Pipeline.Compile(
             new SourceText(
                 Program(
@@ -132,18 +132,74 @@ public sealed class ElementaryFunctionTests {
         );
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
         var ir = result.LlvmIr!;
-        Assert.Contains("call double @llvm.sin.f64(double", ir, StringComparison.Ordinal);
-        Assert.Contains("call double @llvm.pow.f64(double", ir, StringComparison.Ordinal);
+        Assert.Contains("call double @sin(double", ir, StringComparison.Ordinal);
+        Assert.Contains("call double @pow(double", ir, StringComparison.Ordinal);
         Assert.Contains("call double @cbrt(double", ir, StringComparison.Ordinal);
         Assert.Contains("call double @atan2(double", ir, StringComparison.Ordinal);
-        Assert.Contains("call float @llvm.sin.f32(float", ir, StringComparison.Ordinal);
+        Assert.Contains("call float @sinf(float", ir, StringComparison.Ordinal);
         Assert.Contains("call float @tanf(float", ir, StringComparison.Ordinal);
+        Assert.Matches(@"call float @tanf\(float [^)]*\) nobuiltin", ir);
+        Assert.DoesNotContain("@llvm.sin.", ir, StringComparison.Ordinal);
         Assert.Contains("call i32 @llvm.bswap.i32(i32", ir, StringComparison.Ordinal);
         Assert.Contains("bitcast double", ir, StringComparison.Ordinal);
 
         // Optimised, the generic functions are monomorphised and inlined to
         // the call itself: no function of Sable.Math's is called for them.
         Assert.DoesNotContain("@\"sable.Sable.Math.", ir, StringComparison.Ordinal);
+    }
+
+    static readonly string[] Unary = [
+        "cbrt", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+        "exp", "exp2", "expm1", "log", "log2", "log10", "log1p", "gamma", "logGamma", "erf", "erfc",
+    ];
+
+    static readonly string[] Binary = ["atan2", "pow", "hypot"];
+
+    static readonly string[] Operands = ["0.0", "-0.0", "0.1", "-0.5", "0.7", "1.0", "-1.0", "1.5", "2.5", "-3.75", "10.0", "100.0"];
+
+    /// <summary>
+    ///     Every function of the table, of F64 and of F32, given constants
+    ///     and the same operands known only at run time: each line's two
+    ///     answers are libm's bits, the same, and the interpreter, an
+    ///     optimised build and an unoptimised one print the same lines. LLVM
+    ///     folded a constant call with its own arithmetic — an F32 one in F64,
+    ///     rounded — so macOS's <c>atan2f(-0, -1)</c>, the F32 below pi, was
+    ///     the one above it where the operands were constants.
+    /// </summary>
+    [Fact]
+    public void ConstantsAndRunTimeValuesGiveLibmsBitsAtEveryLevel() {
+        var body = new System.Text.StringBuilder("    let one: F64 = Runtime.argumentCount() < 100 ? 1.0 : 2.0\n    let narrow = F32(one)\n");
+        foreach (var type in new[] { "F64", "F32" }) {
+            var unit = type == "F64" ? "one" : "narrow";
+            foreach (var function in Unary) {
+                foreach (var x in Operands) {
+                    body.Append($"    print(\"{type} {function}({x}) \\({function}({x} as {type}).bits) \\({function}(({x} as {type}) * {unit}).bits)\")\n");
+                }
+            }
+
+            foreach (var function in Binary) {
+                foreach (var y in Operands) {
+                    foreach (var x in new[] { "-1.0", "0.5", "-0.0", "2.0" }) {
+                        body.Append($"    print(\"{type} {function}({y}, {x}) \\({function}({y} as {type}, {x}) .bits) \\({function}(({y} as {type}) * {unit}, ({x} as {type}) * {unit}).bits)\")\n");
+                    }
+                }
+            }
+        }
+
+        var program = Program("import Sable.Math", body.ToString().Replace(") .bits", ").bits", StringComparison.Ordinal));
+        var interpreted = AssertAgree(program).Stdout;
+        foreach (var line in interpreted.Split('\n', StringSplitOptions.RemoveEmptyEntries)) {
+            var parts = line.Split(' ');
+            Assert.True(parts[^1] == parts[^2], $"a constant and a value known at run time differ: {line}");
+        }
+
+        Assert.Contains("F32 atan2(-0.0, -1.0) ", interpreted, StringComparison.Ordinal);
+        if (!CanBuild) {
+            return;
+        }
+
+        Assert.Equal(interpreted, BuildAndRun(program).Stdout);
+        Assert.Equal(interpreted, BuildAndRun(program, optimise: false).Stdout);
     }
 
     [Fact]

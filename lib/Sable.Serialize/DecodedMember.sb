@@ -1,7 +1,8 @@
 module Sable.Serialize
 
-/// An object's member, as `Decoder.members()` gives it.
-public struct DecodedMember {
+/// A map's entry, as `Decoder.decodeMap()` gives it: its key, and a decoder
+/// of its value.
+public struct DecodedMember<D: Decoder> {
     public let key: String
-    public let value: Decoder
+    public let value: D
 }

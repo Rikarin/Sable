@@ -1,0 +1,310 @@
+module Sable.Serialize
+
+/// The Encoder that writes JSON, as it goes — no tree is built — compact,
+/// or indented when asked: a struct or a map as an object, a sequence as an
+/// array, bytes as a base64 string, a case that carries nothing as its name
+/// and one that does as `{"Name": payload}`. What `Json.encode` uses.
+///
+/// ```sable
+/// let encoder = JsonEncoder()
+/// try! encoder.beginMap(count: 1)
+/// try! encoder.encodeKey("tags")
+/// try! encoder.beginSequence(count: 2)
+/// try! encoder.encodeString("a\"b")
+/// try! encoder.encodeInt(-3)
+/// try! encoder.endSequence()
+/// try! encoder.endMap()
+/// assert(encoder.text() == "{\"tags\":[\"a\\\"b\",-3]}")
+/// ```
+public final class JsonEncoder: Encoder {
+    var written: U8[>..] = []
+    // For each array or object open: whether nothing is in it yet.
+    var empty: Bool[>..] = []
+    // Whether a key was just written, its value next.
+    var afterKey: Bool = false
+    // Whether the object written next is to be part of the one open.
+    var flattening: Bool = false
+    // For each object open: whether it is part of the one around it.
+    var flattened: Bool[>..] = []
+    let indent: Int
+
+    /// An encoder writing compact JSON, or JSON indented by that many spaces.
+    public init(indent: Int = 0) {
+        self.indent = indent
+    }
+
+    /// The JSON written.
+    public fn text() -> String {
+        unsafe {
+            return String.fromUtf8Unchecked(written)
+        }
+    }
+
+    /// The JSON written, as UTF-8.
+    public fn bytes() -> U8[>..] {
+        return written
+    }
+
+    fn newline() {
+        if indent > 0 {
+            written.append(0x0A)
+            var i = 0
+            while i < indent * empty.count {
+                written.append(0x20)
+                i += 1
+            }
+        }
+    }
+
+    // What comes before a value: a comma after the one before it, and the
+    // indentation; nothing after a key.
+    fn beforeValue() throws(SerializeError) {
+        if flattening {
+            throw SerializeError.InvalidValue(path: "$", reason: "only a struct or a map can be flattened")
+        }
+        if afterKey {
+            afterKey = false
+            return
+        }
+        if !empty.isEmpty {
+            if !empty[empty.count - 1] {
+                written.append(0x2C)
+            }
+            empty[empty.count - 1] = false
+            newline()
+        }
+    }
+
+    public fn encodeNull() throws(SerializeError) {
+        try beforeValue()
+        written.append(utf8: "null")
+    }
+
+    public fn encodeBool(_ value: Bool) throws(SerializeError) {
+        try beforeValue()
+        written.append(utf8: value ? "true" : "false")
+    }
+
+    public fn encodeInt(_ value: Int) throws(SerializeError) {
+        try beforeValue()
+        if value < 0 {
+            written.append(0x2D)
+            // Negated as unsigned, so that Int.min's magnitude fits.
+            appendDigits(0 &- U64.truncating(value))
+        } else {
+            appendDigits(U64(value))
+        }
+    }
+
+    public fn encodeUInt(_ value: U64) throws(SerializeError) {
+        try beforeValue()
+        appendDigits(value)
+    }
+
+    // The decimal digits, most significant first.
+    fn appendDigits(_ value: U64) {
+        // Least significant first, then turned around.
+        let start = written.count
+        var rest = value
+        written.append(U8.truncating(rest % 10) + 0x30)
+        rest = rest / 10
+        while rest > 0 {
+            written.append(U8.truncating(rest % 10) + 0x30)
+            rest = rest / 10
+        }
+        var low = start
+        var high = written.count - 1
+        while low < high {
+            let byte = written[low]
+            written[low] = written[high]
+            written[high] = byte
+            low += 1
+            high -= 1
+        }
+    }
+
+    /// A number; JSON has no NaN or infinity, which are refused.
+    public fn encodeFloat(_ value: F64) throws(SerializeError) {
+        if !value.isFinite {
+            throw SerializeError.InvalidValue(path: "$", reason: "JSON has no \(value)")
+        }
+        try beforeValue()
+        written.append(utf8: "\(value)")
+    }
+
+    public fn encodeString(_ value: String) throws(SerializeError) {
+        try beforeValue()
+        appendQuoted(value)
+    }
+
+    fn appendQuoted(_ value: String) {
+        written.append(0x22)
+        // Runs that need no escape copied whole.
+        var start = 0
+        var i = 0
+        let bytes = value.utf8
+        let count = value.utf8Count
+        while i < count {
+            let byte = bytes[i]
+            if byte == 0x22 || byte == 0x5C || byte < 0x20 {
+                written.append(utf8: value, from: start, to: i)
+                if byte == 0x22 {
+                    written.append(utf8: "\\\"")
+                } else if byte == 0x5C {
+                    written.append(utf8: "\\\\")
+                } else if byte == 0x0A {
+                    written.append(utf8: "\\n")
+                } else if byte == 0x0D {
+                    written.append(utf8: "\\r")
+                } else if byte == 0x09 {
+                    written.append(utf8: "\\t")
+                } else {
+                    written.append(utf8: "\\u00")
+                    written.append(jsonHex(Int(byte) >> 4))
+                    written.append(jsonHex(Int(byte) & 15))
+                }
+                start = i + 1
+            }
+            i += 1
+        }
+        written.append(utf8: value, from: start, to: count)
+        written.append(0x22)
+    }
+
+    /// Bytes, as a string of their base64 (RFC 4648, padded).
+    public fn encodeBytes(_ value: U8[>..]) throws(SerializeError) {
+        try beforeValue()
+        written.append(0x22)
+        var i = 0
+        while i + 2 < value.count {
+            let group = Int(value[i]) << 16 | Int(value[i + 1]) << 8 | Int(value[i + 2])
+            written.append(base64Digit(group >> 18))
+            written.append(base64Digit(group >> 12 & 63))
+            written.append(base64Digit(group >> 6 & 63))
+            written.append(base64Digit(group & 63))
+            i += 3
+        }
+        let left = value.count - i
+        if left > 0 {
+            let group = Int(value[i]) << 16 | (left == 2 ? Int(value[i + 1]) << 8 : 0)
+            written.append(base64Digit(group >> 18))
+            written.append(base64Digit(group >> 12 & 63))
+            written.append(left == 2 ? base64Digit(group >> 6 & 63) : 0x3D)
+            written.append(0x3D)
+        }
+        written.append(0x22)
+    }
+
+    fn openBracket(_ bracket: U8) throws(SerializeError) {
+        try beforeValue()
+        written.append(bracket)
+        empty.append(true)
+    }
+
+    fn closeBracket(_ bracket: U8) {
+        let wasEmpty = empty.removeLast()
+        if !wasEmpty {
+            newline()
+        }
+        written.append(bracket)
+    }
+
+    fn openObject() throws(SerializeError) {
+        flattened.append(flattening)
+        if flattening {
+            flattening = false
+            return
+        }
+        try openBracket(0x7B)
+    }
+
+    fn closeObject() {
+        if !flattened.removeLast() {
+            closeBracket(0x7D)
+        }
+    }
+
+    // A key, and the value next: a string written where a value would be.
+    fn key(_ name: String) throws(SerializeError) {
+        try beforeValue()
+        appendQuoted(name)
+        written.append(0x3A)
+        if indent > 0 {
+            written.append(0x20)
+        }
+        afterKey = true
+    }
+
+    /// An array.
+    public fn beginSequence(count: Int?) throws(SerializeError) {
+        try openBracket(0x5B)
+    }
+
+    public fn endSequence() throws(SerializeError) {
+        closeBracket(0x5D)
+    }
+
+    /// An object.
+    public fn beginMap(count: Int?) throws(SerializeError) {
+        try openObject()
+    }
+
+    public fn encodeKey(_ key: String) throws(SerializeError) {
+        try self.key(key)
+    }
+
+    public fn endMap() throws(SerializeError) {
+        closeObject()
+    }
+
+    /// An object, as a map is.
+    public fn beginStruct(_ name: String, count: Int?) throws(SerializeError) {
+        try openObject()
+    }
+
+    public fn encodeField(_ key: String) throws(SerializeError) {
+        try self.key(key)
+    }
+
+    public fn endStruct() throws(SerializeError) {
+        closeObject()
+    }
+
+    public fn flattenNext() throws(SerializeError) {
+        flattening = true
+    }
+
+    /// The case's name, as a string.
+    public fn encodeUnitCase(_ name: String, of type: String) throws(SerializeError) {
+        try beforeValue()
+        appendQuoted(name)
+    }
+
+    /// An object of one member, the case's name, whose value is the payload.
+    public fn beginCase(_ name: String, of type: String) throws(SerializeError) {
+        try openObject()
+        try key(name)
+    }
+
+    public fn endCase() throws(SerializeError) {
+        closeObject()
+    }
+}
+
+fn jsonHex(_ value: Int) -> U8 {
+    return U8.truncating(value < 10 ? 0x30 + value : 0x61 + value - 10)
+}
+
+// The base64 alphabet's digit of a value of six bits.
+fn base64Digit(_ value: Int) -> U8 {
+    if value < 26 {
+        return U8.truncating(0x41 + value)
+    }
+    if value < 52 {
+        return U8.truncating(0x61 + value - 26)
+    }
+    if value < 62 {
+        return U8.truncating(0x30 + value - 52)
+    }
+    return value == 62 ? 0x2B : 0x2F
+}

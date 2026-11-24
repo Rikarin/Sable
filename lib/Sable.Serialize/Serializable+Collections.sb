@@ -1,18 +1,20 @@
 module Sable.Serialize
 
-// Optional, the arrays and Dictionary: an optional as its value or null (a
-// missing field reads as none), an array as a JSON array, a dictionary with
-// String keys as an object.
+import Sable.Collections
+
+// Optional, the arrays, Set and Dictionary: an optional as its value or
+// null (a missing field reads as none), an array or a set as a sequence, a
+// dictionary with String keys as a map.
 
 extension Optional: Serializable where Wrapped: Serializable {
-    public fn encode(to encoder: Encoder) throws(SerializeError) {
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
         if let value = self {
             try value.encode(to: encoder)
         } else {
-            encoder.encodeNull()
+            try encoder.encodeNull()
         }
     }
-    public static fn decode(from decoder: Decoder) throws(SerializeError) -> Wrapped? {
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Wrapped? {
         if decoder.isMissing || decoder.isNull {
             return none
         }
@@ -21,34 +23,54 @@ extension Optional: Serializable where Wrapped: Serializable {
 }
 
 extension<Element: Serializable> Element[>..]: Serializable {
-    public fn encode(to encoder: Encoder) throws(SerializeError) {
-        encoder.beginArray()
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginSequence(count: self.count)
         for element in self {
             try element.encode(to: encoder)
         }
-        encoder.endArray()
+        try encoder.endSequence()
     }
-    public static fn decode(from decoder: Decoder) throws(SerializeError) -> Element[>..] {
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Element[>..] {
         var all: Element[>..] = []
-        for element in try decoder.elements() {
+        for element in try decoder.decodeSequence() {
             all.append(try Element.decode(from: element))
         }
         return all
     }
 }
 
+/// A set as a sequence of its elements, in the set's order; read back, an
+/// element that repeats is kept once.
+extension Set: Serializable where Element: Serializable {
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginSequence(count: self.count)
+        for element in self {
+            try element.encode(to: encoder)
+        }
+        try encoder.endSequence()
+    }
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Set<Element> {
+        let elements = try decoder.decodeSequence()
+        var all = Set<Element>(minimumCapacity: elements.count)
+        for element in elements {
+            let _ = all.insert(try Element.decode(from: element))
+        }
+        return all
+    }
+}
+
 extension Dictionary: Serializable where Key == String, Value: Serializable {
-    public fn encode(to encoder: Encoder) throws(SerializeError) {
-        encoder.beginObject()
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.beginMap(count: self.count)
         for (key, value) in self {
-            encoder.key(key)
+            try encoder.encodeKey(key)
             try value.encode(to: encoder)
         }
-        encoder.endObject()
+        try encoder.endMap()
     }
-    public static fn decode(from decoder: Decoder) throws(SerializeError) -> Dictionary<Key, Value> {
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Dictionary<Key, Value> {
         var all = Dictionary<Key, Value>()
-        for member in try decoder.members() {
+        for member in try decoder.decodeMap() {
             all[member.key] = try Value.decode(from: member.value)
         }
         return all
@@ -56,59 +78,67 @@ extension Dictionary: Serializable where Key == String, Value: Serializable {
 }
 
 extension JsonValue: Serializable {
-    /// The value as the JSON it is.
-    public fn encode(to encoder: Encoder) throws(SerializeError) {
+    /// The value as the JSON it is: an object a map, an array a sequence.
+    public fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
         match self {
-            case .Null              => encoder.encodeNull()
-            case .Bool(let value)   => encoder.encodeBool(value)
+            case .Null              => try encoder.encodeNull()
+            case .Bool(let value)   => try encoder.encodeBool(value)
             case .Number(let value) => try encoder.encodeFloat(value)
             case .Text(let value)   => try encoder.encodeString(value)
             case .Array(let items) => {
-                encoder.beginArray()
+                try encoder.beginSequence(count: items.count)
                 for item in items {
                     try item.encode(to: encoder)
                 }
-                encoder.endArray()
+                try encoder.endSequence()
             }
             case .Object(let members) => {
-                encoder.beginObject()
+                try encoder.beginMap(count: members.count)
                 for member in members {
-                    encoder.key(member.key)
+                    try encoder.encodeKey(member.key)
                     try member.value.encode(to: encoder)
                 }
-                encoder.endObject()
+                try encoder.endMap()
             }
         }
     }
 
-    /// Whatever JSON value is there, as a JsonValue: the typed world's way
-    /// back to the document.
-    public static fn decode(from decoder: Decoder) throws(SerializeError) -> JsonValue {
-        if decoder.isMissing {
+    /// Whatever value is there, as a JsonValue: the typed world's way back
+    /// to the document, from JSON or any other format.
+    public static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> JsonValue {
+        let kind = decoder.kind
+        if kind == .Missing {
             throw decoder.mismatch("a value")
         }
-        if decoder.isNull {
+        if kind == .Null {
             return JsonValue.Null
         }
-        let kind = decoder.document.kinds[decoder.node]
-        if kind == jsonTrue || kind == jsonFalse {
-            return JsonValue.Bool(value: kind == jsonTrue)
+        if kind == .Bool {
+            return JsonValue.Bool(value: try decoder.decodeBool())
         }
-        if kind == jsonNumber {
+        if kind == .Number {
             return JsonValue.Number(value: try decoder.decodeFloat())
         }
-        if kind == jsonString {
+        if kind == .String {
             return JsonValue.Text(value: try decoder.decodeString())
         }
-        if kind == jsonArray {
+        if kind == .Bytes {
+            // As JSON has them: an array of numbers.
             var items: JsonValue[>..] = []
-            for element in try decoder.elements() {
+            for byte in try decoder.decodeBytes() {
+                items.append(JsonValue.Number(value: F64(byte)))
+            }
+            return JsonValue.Array(items: items)
+        }
+        if kind == .Sequence {
+            var items: JsonValue[>..] = []
+            for element in try decoder.decodeSequence() {
                 items.append(try JsonValue.decode(from: element))
             }
             return JsonValue.Array(items: items)
         }
         var members: Member[>..] = []
-        for member in try decoder.members() {
+        for member in try decoder.decodeMap() {
             members.append(Member { key: member.key, value: try JsonValue.decode(from: member.value) })
         }
         return JsonValue.Object(members: members)

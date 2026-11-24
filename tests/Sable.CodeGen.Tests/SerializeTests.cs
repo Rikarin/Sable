@@ -95,6 +95,64 @@ public sealed class SerializeTests {
                 """).Stdout
         );
 
+    /// <summary>A union that holds itself, and a generic struct with what it is of flattened, compiled each way.</summary>
+    [Theory]
+    [InlineData(GenericsMode.Specialised)]
+    [InlineData(GenericsMode.Unspecialised)]
+    public void AnUntaggedUnionOfItselfAndAFlattenedParameterAgree(GenericsMode generics) {
+        using var _ = SilGen.UseGenerics(generics);
+        Assert.Equal(
+            """
+            {"at":1,"x":2,"deep":[[],"t",null]}
+            {"at":1,"x":2,"deep":[[],"t",null]}
+            $.deep: expected a case of Tree, found a Bool
+
+            """,
+            AssertAgree("""
+                module P
+                import Sable.Serialize
+
+                @derive(Serializable)
+                @serialize(untagged)
+                union Tree {
+                    Many(Tree[>..])
+                    Text(String)
+                    Nothing
+                }
+
+                @derive(Serializable)
+                struct Inner {
+                    var x: Int
+                    var deep: Tree
+                }
+
+                @derive(Serializable)
+                struct Logged<T> {
+                    var at: Int
+                    @serialize(flatten)
+                    var what: T
+                }
+
+                fn describe(_ error: SerializeError) -> String {
+                    return error.description()
+                }
+
+                @main
+                fn main() throws(SerializeError) {
+                    let value: Logged<Inner> = Logged(at: 1, what: Inner(x: 2, deep: .Many([.Many([]), .Text("t"), .Nothing])))
+                    let text = try Json.encode(value)
+                    print(text)
+                    print(try Json.encode(try Json.decode(Logged<Inner>.self, from: text)))
+                    do {
+                        let _ = try Json.decode(Logged<Inner>.self, from: "{\"at\":1,\"x\":2,\"deep\":true}")
+                    } catch {
+                        print(describe(error))
+                    }
+                }
+                """).Stdout
+        );
+    }
+
     [Fact]
     public void AnUnknownNamingPolicyIsNamed() =>
         Assert.Contains("'renameAll' is one of", SingleError("@derive(Serializable)\n@serialize(renameAll: .Shouting)\nstruct S {\n    var a: Int\n}"));
@@ -121,11 +179,65 @@ public sealed class SerializeTests {
 
     [Fact]
     public void AnUnknownOptionIsNamed() =>
-        Assert.Contains("takes 'rename:'", SingleError("@derive(Serializable)\nstruct S {\n    @serialize(flatten)\n    var a: Int\n}"));
+        Assert.Contains("takes 'rename:'", SingleError("@derive(Serializable)\nstruct S {\n    @serialize(hidden)\n    var a: Int\n}"));
 
     [Fact]
     public void ASkippedOrDefaultedFieldNeedsAnInitialValue() {
         Assert.Contains("'a' is skipped", SingleError("@derive(Serializable)\nstruct S {\n    @serialize(skip)\n    var a: Int\n}"));
         Assert.Contains("'a' is defaulted", SingleError("@derive(Serializable)\nstruct S {\n    @serialize(defaulted)\n    var a: Int\n}"));
     }
+
+    [Theory]
+    [InlineData("Int", "a single value")]
+    [InlineData("String", "a single value")]
+    [InlineData("Int[>..]", "an array")]
+    [InlineData("Inner?", "an optional")]
+    [InlineData("Tagged", "a union without a 'tag:'")]
+    [InlineData("E", "an enum")]
+    public void WhatIsNoStructIsNotFlattened(string type, string why) =>
+        Assert.Contains(
+            why,
+            SingleError(
+                "@derive(Serializable)\nstruct Inner {\n    var b: Int\n}\n@derive(Serializable)\nenum E {\n    A\n}\n"
+                + "@derive(Serializable)\nunion Tagged {\n    A(b: Int)\n}\n"
+                + $"@derive(Serializable)\nstruct S {{\n    @serialize(flatten)\n    var a: {type}\n}}"
+            )
+        );
+
+    [Theory]
+    [InlineData("rename: \"x\"")]
+    [InlineData("skip")]
+    [InlineData("defaulted")]
+    public void AFlattenedFieldHasNoKey(string option) =>
+        Assert.Contains(
+            "no key of its own",
+            SingleError($"@derive(Serializable)\nstruct I {{\n    var b: Int\n}}\n@derive(Serializable)\nstruct S {{\n    @serialize(flatten, {option})\n    var a: I = I(b: 1)\n}}")
+        );
+
+    [Fact]
+    public void AFlattenedKeyIsNotRepeated() =>
+        Assert.Contains(
+            "the key \"b\" twice",
+            SingleError("@derive(Serializable)\nstruct I {\n    var b: Int\n}\n@derive(Serializable)\nstruct S {\n    var b: Int\n    @serialize(flatten)\n    var a: I\n}")
+        );
+
+    [Fact]
+    public void ACaseIsNotFlattened() =>
+        Assert.Contains("'flatten' is for a field", SingleError("@derive(Serializable)\nunion U {\n    @serialize(flatten)\n    A(Int)\n}"));
+
+    [Fact]
+    public void UntaggedIsForAUnion() =>
+        Assert.Contains("'S' is not a union", SingleError("@derive(Serializable)\n@serialize(untagged)\nstruct S {\n    var a: Int\n}"));
+
+    [Fact]
+    public void UntaggedHasNoTag() =>
+        Assert.Contains("leaves the tag out", SingleError("@derive(Serializable)\n@serialize(untagged, tag: \"t\")\nunion U {\n    A(b: Int)\n}"));
+
+    [Fact]
+    public void AnUntaggedCaseIsNotRenamed() =>
+        Assert.Contains("nothing to rename", SingleError("@derive(Serializable)\n@serialize(untagged)\nunion U {\n    @serialize(rename: \"x\")\n    A(Int)\n}"));
+
+    [Fact]
+    public void OneUntaggedCaseIsNull() =>
+        Assert.Contains("'C' would never be read back", SingleError("@derive(Serializable)\n@serialize(untagged)\nunion U {\n    A(Int)\n    B\n    C\n}"));
 }

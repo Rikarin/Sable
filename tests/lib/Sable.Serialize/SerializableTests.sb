@@ -5,8 +5,10 @@ module SerializableTests
 // renamed, skipped and defaulted fields, naming policies, generic types,
 // enums, unions tagged each way, and errors that say where.
 
+import Sable.Collections
 import Sable.Serialize
 import Sable.Testing
+import Sable.Time
 
 @derive(Serializable, Equatable, Debug)
 struct Everything {
@@ -247,9 +249,9 @@ fn errorsSayWhere() {
 
 @test
 fn theDecoderAndJsonValuesDirectly() throws {
-    let root = try Decoder.json("{\"a\":[1,{\"b c\":null}],\"u\":\"\\u00e9\\ud83d\\ude00\\n\",\"lone\":\"\\ud800\",\"n\":-0.5e2,\"t\":true,\"f\":false}")
+    let root = try JsonDecoder.parse("{\"a\":[1,{\"b c\":null}],\"u\":\"\\u00e9\\ud83d\\ude00\\n\",\"lone\":\"\\ud800\",\"n\":-0.5e2,\"t\":true,\"f\":false}")
     assertEqual(root.count, 6)
-    let a = try root.field("a").elements()
+    let a = try root.field("a").decodeSequence()
     assertEqual(a.count, 2)
     assertEqual(a[1].field("b c").path, "$.a[1]['b c']")
     assert(a[1].field("b c").isNull && !a[1].field("b c").isMissing)
@@ -264,11 +266,14 @@ fn theDecoderAndJsonValuesDirectly() throws {
     assertEqual(root.field("n").kindName, "a number")
     assertEqual(root.field("a").kindName, "an array")
     assertEqual(root.kindName, "an object")
+    assert(root.kind == .Map && root.field("missing").kind == .Missing && root.field("t").kind == .Bool && root.field("f").kind == .Bool)
+    assert(root.field("a").kind == .Sequence && root.field("n").kind == .Number && root.field("u").kind == .String)
+    assert(a[1].field("b c").kind == .Null)
     assertEqual(a[0].kindName, "a number")
     assertEqual(a[1].field("b c").kindName, "null")
     assert(root.hasField("t") && !root.hasField("x"))
     var keys: String[>..] = []
-    for member in try root.members() {
+    for member in try root.decodeMap() {
         keys.append(member.key)
     }
     assertEqual(keys.joined(separator: ","), "a,u,lone,n,t,f")
@@ -321,4 +326,203 @@ fn theDecoderAndJsonValuesDirectly() throws {
     assertEqual(failure(Int.self, "\"a\u{1}\""), "not JSON: a control character in a string at byte 2")
     assertEqual(failure(Int.self, "{1:2}"), "not JSON: not a key at byte 1")
     assertEqual(failure(Int.self, "{\"a\" 2}"), "not JSON: no ':' after a key at byte 5")
+}
+
+// ---- Flattened fields ----------------------------------------------------
+
+@derive(Serializable, Equatable, Debug)
+struct Page {
+    var offset: Int
+    @serialize(rename: "max")
+    var limit: Int
+}
+
+@derive(Serializable)
+struct Listing {
+    var name: String
+    @serialize(flatten)
+    var page: Page
+    @serialize(flatten)
+    var extra: Dictionary<String, Int>
+}
+
+@derive(Serializable)
+struct Outer {
+    @serialize(flatten)
+    var listing: Listing
+    var last: Bool
+}
+
+@derive(Serializable, Equatable, Debug)
+struct Logged<T> {
+    var at: Int
+    @serialize(flatten)
+    var what: T
+}
+
+@test
+fn aFlattenedFieldIsPartOfItsStruct() throws {
+    var listing = Listing { name: "n", page: Page { offset: 2, limit: 10 }, extra: Dictionary<String, Int>() }
+    listing.extra["more"] = 5
+    let text = try Json.encode(listing)
+    assertEqual(text, "{\"name\":\"n\",\"offset\":2,\"max\":10,\"more\":5}")
+    // The map has what the others left over.
+    let back = try Json.decode(Listing.self, from: text)
+    assertEqual(back.page, listing.page)
+    assertEqual(back.extra.count, 1)
+    assertEqual(back.extra["more"] ?? 0, 5)
+
+    // Nothing at all, and indented.
+    listing.extra = Dictionary<String, Int>()
+    assertEqual(try Json.encode(listing, indent: 1), "{\n \"name\": \"n\",\n \"offset\": 2,\n \"max\": 10\n}")
+
+    // One inside another: what it leaves out, both leave out.
+    let outer = Outer { listing: listing, last: true }
+    let nested = try Json.encode(outer)
+    assertEqual(nested, "{\"name\":\"n\",\"offset\":2,\"max\":10,\"last\":true}")
+    assertEqual(try Json.encode(try Json.decode(Outer.self, from: nested)), nested)
+
+    // In an array, where the struct's own beginning and end still are.
+    let pair: Outer[>..] = [outer, outer]
+    assertEqual((try Json.decode(Outer[>..].self, from: try Json.encode(pair))).count, 2)
+
+    assertEqual(failure(Listing.self, "{\"name\":\"n\",\"offset\":2}"), "$.max: missing")
+    assertEqual(failure(Listing.self, "{\"name\":\"n\",\"offset\":2,\"max\":1,\"x\":\"y\"}"), "$.x: expected an integer, found a string")
+}
+
+@test
+fn whatIsFlattenedIsAnyStruct() throws {
+    let click: Logged<Event> = Logged(at: 7, what: .Click(x: 1, y: 2))
+    let text = try Json.encode(click)
+    assertEqual(text, "{\"at\":7,\"type\":\"Click\",\"x\":1,\"y\":2}")
+    assert((try Json.decode(Logged<Event>.self, from: text)) == click)
+
+    // Only running tells that a type parameter's value is not a struct.
+    let number: Logged<Int> = Logged(at: 7, what: 3)
+    do {
+        let _ = try Json.encode(number)
+        fail("a number was flattened")
+    } catch {
+        assertEqual(error.description(), "$: only a struct or a map can be flattened")
+    }
+}
+
+// ---- Untagged unions -----------------------------------------------------
+
+@derive(Serializable, Equatable, Debug)
+@serialize(untagged)
+union Id {
+    Number(Int)
+    Name(String)
+    Range(from: Int, to: Int)
+    Pair(Int, String)
+    Page(Page)
+    Nothing
+}
+
+@derive(Serializable, Equatable, Debug)
+@serialize(untagged)
+union Loose {
+    Maybe(a: Int?, b: Int?)
+    Many(Loose[>..])
+    Text(String)
+}
+
+@test
+fn anUntaggedUnionIsItsFirstCaseThatDecodes() throws {
+    let ids: Id[>..] = [.Number(3), .Name("x"), .Range(from: 1, to: 2), .Pair(4, "y"), .Page(Page { offset: 1, limit: 2 }), .Nothing]
+    let text = try Json.encode(ids)
+    assertEqual(text, "[3,\"x\",{\"from\":1,\"to\":2},[4,\"y\"],{\"offset\":1,\"max\":2},null]")
+    assert((try Json.decode(Id[>..].self, from: text)) == ids)
+    assertEqual(failure(Id.self, "true"), "$: expected a case of Id, found a Bool")
+    assertEqual(failure(Id[>..].self, "[1,{}]"), "$[1]: expected a case of Id, found an object")
+
+    // A struct's payload is read from a struct alone, though every field of
+    // it may be missing; and the union may hold itself.
+    let loose = try Json.decode(Loose.self, from: "[\"t\",{},[]]")
+    assert(loose == .Many([.Text("t"), .Maybe(a: none, b: none), .Many([])]))
+}
+
+// ---- Other conformances --------------------------------------------------
+
+@test
+fn aSetIsASequence() throws {
+    var unique = Set<Int>()
+    let _ = unique.insert(3)
+    assertEqual(try Json.encode(unique), "[3]")
+    let back = try Json.decode(Set<String>.self, from: "[\"a\",\"b\",\"a\"]")
+    assert(back.count == 2 && back.contains("a") && back.contains("b"))
+    assert((try roundTrip(back)) == back)
+    assertEqual(failure(Set<Int>.self, "{}"), "$: expected an array, found an object")
+    assertEqual(failure(Set<Int>.self, "[1,\"x\"]"), "$[1]: expected an integer, found a string")
+}
+
+@test
+fn aDurationIsItsNanoseconds() throws {
+    assertEqual(try Json.encode(Duration.milliseconds(-1500)), "-1500000000")
+    assert((try roundTrip(Duration.nanoseconds(Int.min))) == Duration.nanoseconds(Int.min))
+    assertEqual(failure(Duration.self, "\"1s\""), "$: expected an integer, found a string")
+}
+
+@test
+fn aDateTimeIsIso8601() throws {
+    let whole = DateTime.fromUnix(1700000000)
+    assertEqual(try Json.encode(whole), "\"2023-11-14T22:13:20Z\"")
+    assert((try roundTrip(whole)) == whole)
+    let exact = DateTime { secondsSinceEpoch: 1700000000, nanosecond: 5000100 }
+    assertEqual(try Json.encode(exact), "\"2023-11-14T22:13:20.0050001Z\"")
+    assert((try roundTrip(exact)) == exact)
+    let before = DateTime { secondsSinceEpoch: -1, nanosecond: 1 }
+    assert((try roundTrip(before)) == before)
+    assert((try Json.decode(DateTime.self, from: "\"2023-11-15T00:13:20+02:00\"")) == whole)
+    assertEqual(failure(DateTime.self, "\"soon\""), "$: 'soon' is not an ISO 8601 date and time")
+    do {
+        let _ = try Json.encode(DateTime.fromUnix(400000000000))
+        fail("a year of five digits was written")
+    } catch {
+        assert(error.description().hasPrefix("$: ISO 8601 has no year 14"))
+    }
+}
+
+struct Blob: Serializable {
+    var bytes: U8[>..]
+    fn encode<E: Encoder>(to encoder: E) throws(SerializeError) {
+        try encoder.encodeBytes(bytes)
+    }
+    static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Blob {
+        return Blob { bytes: try decoder.decodeBytes() }
+    }
+}
+
+@test
+fn bytesAreBase64InJson() throws {
+    // RFC 4648's vectors, and the alphabet's last two digits.
+    let vectors: (String, String)[>..] = [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")]
+    for (text, encoded) in vectors {
+        var bytes: U8[>..] = []
+        bytes.append(utf8: text)
+        assertEqual(try Json.encode(Blob { bytes: bytes }), "\"" + encoded + "\"")
+        assert((try Json.decode(Blob.self, from: "\"" + encoded + "\"")).bytes == bytes)
+    }
+    assertEqual(try Json.encode(Blob { bytes: [251, 255, 191] }), "\"+/+/\"")
+    assert((try Json.decode(Blob.self, from: "\"+/+/\"")).bytes == [251, 255, 191])
+    assert((try Json.decode(Blob.self, from: "\"Zg\"")).bytes == [102])
+    for bad in ["Z", "Zg===", "Z!==", "Zh==", "Zg=", "===="] {
+        assertEqual(failure(Blob.self, "\"" + bad + "\""), "$: '" + bad + "' is not base64")
+    }
+    assertEqual(failure(Blob.self, "1"), "$: expected a base64 string, found a number")
+}
+
+@test
+fn integersAtTheirEnds() throws {
+    let ends: Int[>..] = [Int.min, -10, -1, 0, 9, 10, 99, 100, Int.max]
+    assertEqual(try Json.encode(ends), "[-9223372036854775808,-10,-1,0,9,10,99,100,9223372036854775807]")
+    assertEqual(try Json.encode(U64.max), "18446744073709551615")
+}
+
+@test
+fn anEnumHasNoPayload() {
+    assertEqual(failure(Direction.self, "{\"North\":1}"), "$: expected a case's name, found an object")
+    assertEqual(failure(Direction.self, "1"), "$: expected a case's name, or an object of one member, found a number")
+    assertEqual(failure(Shape.self, "{\"Circle\":5}"), "$.Circle: expected an object (Circle), found a number")
 }

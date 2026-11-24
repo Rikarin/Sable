@@ -9,18 +9,21 @@ namespace Sable.Symbols;
 ///     policy and, on a union, how a case is tagged — externally by default
 ///     (<c>{"Circle": {…}}</c>, a case with no payload its bare name),
 ///     internally (<c>tag: "type"</c>, the tag a member beside the payload's
-///     fields) or adjacently (<c>tag: "t", content: "c"</c>); on a field or a
+///     fields) or adjacently (<c>tag: "t", content: "c"</c>) or not at all
+///     (<c>untagged</c>: the first case whose payload decodes); on a field or a
 ///     case, <c>rename:</c> its key, and on a field <c>skip</c> (never
 ///     written, its initial value on reading) or <c>defaulted</c> (its initial
-///     value when the key is missing).
+///     value when the key is missing) or <c>flatten</c> (its members are the
+///     enclosing struct's).
 /// </summary>
 internal sealed class SerializeOptions {
     public string? RenameAll { get; private init; }
     public string? Tag { get; private init; }
     public string? Content { get; private init; }
+    public bool Untagged { get; private init; }
 
-    /// <summary>The key a field or a case is written under, and whether it is skipped or defaulted.</summary>
-    public sealed record Member(string Key, bool Skip, bool Default);
+    /// <summary>The key a field or a case is written under, and whether it is skipped, defaulted or flattened.</summary>
+    public sealed record Member(string Key, bool Skip, bool Default, bool Flatten);
 
     static readonly string[] Policies = ["CamelCase", "PascalCase", "SnakeCase", "ScreamingSnakeCase", "KebabCase"];
 
@@ -32,6 +35,8 @@ internal sealed class SerializeOptions {
 
     static string Label(ArgumentSyntax argument) => argument.NameToken.IsMissing ? "" : argument.NameToken.Text;
 
+    static string Value(ArgumentSyntax argument) => argument.Expression.ToString().Trim();
+
     static string? StringValue(ArgumentSyntax argument) {
         var text = argument.Expression.ToString().Trim();
         return text.Length >= 2 && text[0] == '"' && text[^1] == '"' ? text[1..^1] : null;
@@ -40,6 +45,7 @@ internal sealed class SerializeOptions {
     /// <summary>The type's options.</summary>
     public static SerializeOptions Of(NamedTypeSymbol type) {
         string? renameAll = null, tag = null, content = null;
+        var untagged = false;
         foreach (var argument in SerializeAttributes(type).SelectMany(Arguments)) {
             switch (Label(argument)) {
                 case "renameAll":
@@ -51,16 +57,19 @@ internal sealed class SerializeOptions {
                 case "content":
                     content = StringValue(argument);
                     break;
+                case "" when Value(argument) == "untagged":
+                    untagged = true;
+                    break;
             }
         }
 
-        return new SerializeOptions { RenameAll = renameAll, Tag = tag, Content = content };
+        return new SerializeOptions { RenameAll = renameAll, Tag = tag, Content = content, Untagged = untagged };
     }
 
     /// <summary>A field's or a case's key, after its own rename or the type's policy.</summary>
     public Member MemberOf(Symbol member, string name) {
         string? rename = null;
-        bool skip = false, defaulted = false;
+        bool skip = false, defaulted = false, flatten = false;
         foreach (var argument in SerializeAttributes(member).SelectMany(Arguments)) {
             switch (Label(argument), argument.Expression.ToString().Trim()) {
                 case ("rename", _):
@@ -72,11 +81,54 @@ internal sealed class SerializeOptions {
                 case ("", "defaulted"):
                     defaulted = true;
                     break;
+                case ("", "flatten"):
+                    flatten = true;
+                    break;
             }
         }
 
-        return new Member(rename ?? Apply(RenameAll, name), skip, defaulted);
+        return new Member(rename ?? Apply(RenameAll, name), skip, defaulted, flatten);
     }
+
+    /// <summary>
+    ///     The keys a struct's fields are written under, leaving out
+    ///     <paramref name="but" />: a flattened field's own members' where its
+    ///     type is a struct that derives them, which is when they are known.
+    /// </summary>
+    public static IEnumerable<string> Keys(NamedTypeSymbol type, TypeSubstitution substitution, FieldSymbol? but = null) {
+        var options = Of(type.OriginalDefinition);
+        foreach (var field in DerivedConformance.StoredFields(type.OriginalDefinition)) {
+            var member = options.MemberOf(field, field.Name);
+            if (member.Skip || ReferenceEquals(field, but)) {
+                continue;
+            }
+
+            if (!member.Flatten) {
+                yield return member.Key;
+            } else if (substitution.Apply(field.Type) is NamedTypeSymbol { TypeKind: TypeKind.Struct } inner && Derives(inner)) {
+                foreach (var key in Keys(inner, TypeSubstitution.For(inner))) {
+                    yield return key;
+                }
+            }
+        }
+    }
+
+    static bool Derives(NamedTypeSymbol type) =>
+        type.OriginalDefinition.DeclaringSyntax.SelectMany(Compilation.AttributesOf)
+            .Any(static a => a.Name.ToString().Trim() == "derive" && Arguments(a).Any(static d => Value(d) == "Serializable"));
+
+    /// <summary>Why a field's type can never be flattened, or null: it is written as no struct or map.</summary>
+    static string? Unflattenable(TypeSymbol type) =>
+        type switch {
+            ArrayTypeSymbol => "an array",
+            OptionalTypeSymbol => "an optional, whose none would be no members at all",
+            TupleTypeSymbol => "a tuple",
+            NamedTypeSymbol { TypeKind: TypeKind.Enum } => "an enum, written as its case's name",
+            NamedTypeSymbol { TypeKind: TypeKind.Union } union when Derives(union) && Of(union.OriginalDefinition) is { Tag: null } =>
+                "a union without a 'tag:', which may be written as anything but a struct",
+            NamedTypeSymbol named when named.OriginalDefinition.ContainingSymbol?.Name == "Sable.Core" && named.Name != "Dictionary" => $"'{named.Name}', a single value",
+            _ => null,
+        };
 
     /// <summary>Checks the options on the type and its members, reporting what is wrong; false when anything was.</summary>
     public static bool Check(NamedTypeSymbol type, Action<TextSpan, string> report) {
@@ -94,8 +146,13 @@ internal sealed class SerializeOptions {
                 } else if (label is "tag" or "content" && StringValue(argument) is null) {
                     report(argument.Span, $"'{label}' is a key, written as a string literal");
                     ok = false;
+                } else if (label.Length == 0 && value == "untagged") {
+                    if (type.TypeKind != TypeKind.Union) {
+                        report(argument.Span, $"'untagged' leaves a union's case without a tag; '{type.Name}' is not a union");
+                        ok = false;
+                    }
                 } else if (label is not ("renameAll" or "tag" or "content")) {
-                    report(argument.Span, $"'@serialize' on a type takes 'renameAll:', and on a union 'tag:' and 'content:'; not '{argument}'");
+                    report(argument.Span, $"'@serialize' on a type takes 'renameAll:', and on a union 'tag:', 'content:' and 'untagged'; not '{argument}'");
                     ok = false;
                 }
             }
@@ -105,6 +162,22 @@ internal sealed class SerializeOptions {
         if (options.Content is not null && options.Tag is null) {
             report(SerializeAttributes(type).First().Span, "'content:' goes with 'tag:': the case's name, and beside it its payload");
             ok = false;
+        }
+
+        if (options.Untagged && (options.Tag is not null || options.Content is not null)) {
+            report(SerializeAttributes(type).First().Span, "'untagged' leaves the tag out, so there is none for 'tag:' or 'content:' to name");
+            ok = false;
+        }
+
+        // An untagged case that carries nothing is null, which the first such takes.
+        if (options.Untagged) {
+            foreach (var second in type.Members.OfType<UnionCaseSymbol>().Where(static c => !c.HasPayload).Skip(1)) {
+                report(
+                    second.DeclaringSyntax.FirstOrDefault()?.Span ?? SerializeAttributes(type).First().Span,
+                    $"an untagged case that carries nothing is written as null, and an earlier one of '{type.Name}' already is, so '{second.Name}' would never be read back"
+                );
+                ok = false;
+            }
         }
 
         // An internally tagged case's payload is members beside the tag: each named.
@@ -131,11 +204,28 @@ internal sealed class SerializeOptions {
                 if (label == "rename" && StringValue(argument) is null) {
                     report(argument.Span, "'rename' is a key, written as a string literal");
                     ok = false;
+                } else if (label == "rename" && !isField && options.Untagged) {
+                    report(argument.Span, $"an untagged case's name is never written, so '{member.Name}' has nothing to rename");
+                    ok = false;
+                } else if (label.Length == 0 && value is "flatten" && !isField) {
+                    report(argument.Span, "'flatten' is for a field, whose members it writes into the struct's; a case has no members of its own");
+                    ok = false;
                 } else if (label.Length == 0 && value is "skip" or "defaulted" && !isField) {
                     report(argument.Span, $"'{value}' is for a field; a case is renamed, never skipped");
                     ok = false;
-                } else if (!(label == "rename" || label.Length == 0 && value is "skip" or "defaulted")) {
-                    report(argument.Span, $"'@serialize' on a {(isField ? "field" : "case")} takes 'rename:'{(isField ? ", 'skip' and 'defaulted'" : "")}; not '{argument}'");
+                } else if (!(label == "rename" || label.Length == 0 && value is "skip" or "defaulted" or "flatten")) {
+                    report(argument.Span, $"'@serialize' on a {(isField ? "field" : "case")} takes 'rename:'{(isField ? ", 'skip', 'defaulted' and 'flatten'" : "")}; not '{argument}'");
+                    ok = false;
+                }
+            }
+
+            if (member is FieldSymbol flattened && options.MemberOf(flattened, flattened.Name) is { Flatten: true } asks) {
+                var at = SerializeAttributes(flattened).First().Span;
+                if (asks.Skip || asks.Default || SerializeAttributes(flattened).SelectMany(Arguments).Any(static a => Label(a) == "rename")) {
+                    report(at, $"'{flattened.Name}' is flattened, so it has no key of its own: 'flatten' does not go with 'rename:', 'skip' or 'defaulted'");
+                    ok = false;
+                } else if (Unflattenable(flattened.Type) is { } why) {
+                    report(at, $"'{flattened.Name}' cannot be flattened: only what is written as a struct or a map has members to write into '{type.Name}', and it is {why}");
                     ok = false;
                 }
             }
@@ -151,6 +241,16 @@ internal sealed class SerializeOptions {
                     );
                     ok = false;
                 }
+            }
+        }
+
+        // A flattened field's members are beside the struct's own: no key twice.
+        if (ok && type.TypeKind == TypeKind.Struct) {
+            var seen = new HashSet<string>();
+            var flattens = DerivedConformance.StoredFields(type).FirstOrDefault(f => options.MemberOf(f, f.Name).Flatten);
+            if (flattens is not null && Keys(type, TypeSubstitution.Empty).FirstOrDefault(key => !seen.Add(key)) is { } twice) {
+                report(SerializeAttributes(flattens).First().Span, $"flattened, '{type.Name}' has the key \"{twice}\" twice; rename one of them");
+                ok = false;
             }
         }
 

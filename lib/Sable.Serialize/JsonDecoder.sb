@@ -1,0 +1,400 @@
+module Sable.Serialize
+
+import Sable.Text
+
+/// The Decoder that reads JSON: a value of a parsed document, at a path
+/// (`$.items[3].name`) that every error names. An object is a struct or a
+/// map, an array a sequence, a base64 string bytes; a case is its name as a
+/// string, or an object of one member, its name, whose value is its payload.
+/// What `Json.decode` uses.
+///
+/// ```sable
+/// let root = try! JsonDecoder.parse("{\"items\":[{\"name\":\"a\"},{}]}")
+/// let items = try! root.field("items").decodeSequence()
+/// assert(try! items[0].field("name").decodeString() == "a")
+/// assert(items[1].field("name").isMissing)
+/// do {
+///     let _ = try items[1].field("name").decodeString()
+/// } catch {
+///     assert(error.description() == "$.items[1].name: missing")
+/// }
+/// ```
+public final class JsonDecoder: Decoder {
+    let document: JsonDocument
+    // The node, or -1 for a field that is not there.
+    let node: Int
+    // The decoder this one's value is in, none at the root, and the step
+    // from there: a member's key, or else an element's index (-1 for none).
+    // The path is made from them only when it is asked for: an error's.
+    let parent: JsonDecoder?
+    let key: String?
+    let index: Int
+    // The members the decoder leaves out, none of them almost always.
+    let excluded: String[>..]?
+
+    init(_ document: JsonDocument, _ node: Int, parent: JsonDecoder?, key: String?, index: Int, excluded: String[>..]? = none) {
+        self.document = document
+        self.node = node
+        self.parent = parent
+        self.key = key
+        self.index = index
+        self.excluded = excluded
+    }
+
+    /// Where the value is, from the document's root.
+    public var path: String {
+        get {
+            if let parent = parent {
+                if let key = key {
+                    return parent.path + jsonPathKey(key)
+                }
+                return index >= 0 ? parent.path + "[\(index)]" : parent.path
+            }
+            return "$"
+        }
+    }
+
+    /// A decoder of the JSON document the text is; SerializeError.Syntax
+    /// when it is not one.
+    public static fn parse(_ text: String) throws(SerializeError) -> JsonDecoder {
+        var bytes: U8[>..] = []
+        bytes.append(utf8: text)
+        return try JsonDecoder.parse(bytes: bytes)
+    }
+
+    /// A decoder of the JSON document the UTF-8 bytes are.
+    public static fn parse(bytes: U8[>..]) throws(SerializeError) -> JsonDecoder {
+        let document = try JsonDocument.parse(bytes)
+        return JsonDecoder(document, 0, parent: none, key: none, index: -1)
+    }
+
+    // ---- What it holds -------------------------------------------------------
+
+    public var isMissing: Bool => node < 0
+
+    public var isNull: Bool => node >= 0 && document.kinds[node] == jsonNull
+
+    /// What the value is: a JSON number, integer or not, is a Number, an
+    /// object a Map.
+    public var kind: DecodedKind {
+        get {
+            if node < 0 {
+                return .Missing
+            }
+            return match document.kinds[node] {
+                case 0 => .Null
+                case 1 => .Bool
+                case 2 => .Bool
+                case 3 => .Number
+                case 4 => .String
+                case 5 => .Sequence
+                case _ => .Map
+            }
+        }
+    }
+
+    /// What the value is, as an error says it: "an object", "a string", …;
+    /// "nothing" for a missing one.
+    public var kindName: String {
+        get {
+            if node < 0 {
+                return "nothing"
+            }
+            return match document.kinds[node] {
+                case 0 => "null"
+                case 1 => "a Bool"
+                case 2 => "a Bool"
+                case 3 => "a number"
+                case 4 => "a string"
+                case 5 => "an array"
+                case _ => "an object"
+            }
+        }
+    }
+
+    /// How many elements or members the value has; 0 for any other.
+    public var count: Int => node < 0 ? 0 : document.counts[node]
+
+    public fn mismatch(_ expected: String) -> SerializeError {
+        if node < 0 {
+            return SerializeError.MissingField(path: path)
+        }
+        return SerializeError.TypeMismatch(path: path, expected: expected, found: kindName)
+    }
+
+    public fn invalid(_ reason: String) -> SerializeError {
+        return SerializeError.InvalidValue(path: path, reason: reason)
+    }
+
+    public fn unknownCase(_ name: String) -> SerializeError {
+        return SerializeError.UnknownCase(path: path, name: name)
+    }
+
+    fn expect(_ kind: Int, _ expected: String) throws(SerializeError) {
+        if node < 0 || document.kinds[node] != kind {
+            throw mismatch(expected)
+        }
+    }
+
+    // ---- Values --------------------------------------------------------------
+
+    public fn decodeBool() throws(SerializeError) -> Bool {
+        if node >= 0 && document.kinds[node] == jsonFalse {
+            return false
+        }
+        try expect(jsonTrue, "a Bool")
+        return true
+    }
+
+    /// An integer: a number with no fraction or exponent that fits.
+    public fn decodeInt() throws(SerializeError) -> Int {
+        try expect(jsonNumber, "an integer")
+        let start = document.starts[node]
+        let end = document.ends[node]
+        var negative = false
+        var i = start
+        if document.bytes[i] == 0x2D {
+            negative = true
+            i += 1
+        }
+        // Accumulated negatively, so that Int.min fits.
+        var value = 0
+        while i < end {
+            let byte = Int(document.bytes[i])
+            if byte < 0x30 || byte > 0x39 {
+                throw invalid("\(document.text(node)) is not an integer")
+            }
+            let digit = byte - 0x30
+            if value < (Int.min + digit) / 10 {
+                throw invalid("\(document.text(node)) does not fit an Int")
+            }
+            value = value * 10 - digit
+            i += 1
+        }
+        if !negative {
+            if value == Int.min {
+                throw invalid("\(document.text(node)) does not fit an Int")
+            }
+            return -value
+        }
+        return value
+    }
+
+    /// An unsigned integer, up to U64.max.
+    public fn decodeUInt() throws(SerializeError) -> U64 {
+        try expect(jsonNumber, "an unsigned integer")
+        var value: U64 = 0
+        var i = document.starts[node]
+        let end = document.ends[node]
+        while i < end {
+            let byte = Int(document.bytes[i])
+            if byte < 0x30 || byte > 0x39 {
+                throw invalid("\(document.text(node)) is not an unsigned integer")
+            }
+            let digit = U64(byte - 0x30)
+            if value > (U64.max - digit) / 10 {
+                throw invalid("\(document.text(node)) does not fit a U64")
+            }
+            value = value * 10 + digit
+            i += 1
+        }
+        return value
+    }
+
+    /// A number, finite.
+    public fn decodeFloat() throws(SerializeError) -> F64 {
+        try expect(jsonNumber, "a number")
+        guard let value = try? F64.parse(document.text(node)) else {
+            throw invalid("\(document.text(node)) is not a number")
+        }
+        if !value.isFinite {
+            throw invalid("\(document.text(node)) is out of range")
+        }
+        return value
+    }
+
+    public fn decodeString() throws(SerializeError) -> String {
+        try expect(jsonString, "a string")
+        return document.string(node)
+    }
+
+    /// Bytes, from a string of their base64 (RFC 4648; the padding may be
+    /// left off).
+    public fn decodeBytes() throws(SerializeError) -> U8[>..] {
+        try expect(jsonString, "a base64 string")
+        let text = document.string(node)
+        let digits = text.utf8
+        var count = text.utf8Count
+        while count > 0 && digits[count - 1] == 0x3D {
+            count -= 1
+        }
+        // All the padding, or none.
+        let padding = text.utf8Count - count
+        if count % 4 == 1 || padding > 0 && (padding > 2 || text.utf8Count % 4 != 0) {
+            throw invalid("'\(text)' is not base64")
+        }
+        var bytes: U8[>..] = []
+        var group = 0
+        var bits = 0
+        var i = 0
+        while i < count {
+            guard let value = base64Value(digits[i]) else {
+                throw invalid("'\(text)' is not base64")
+            }
+            group = (group << 6 | value) & 0xFFFF
+            bits += 6
+            if bits >= 8 {
+                bits -= 8
+                bytes.append(U8.truncating(group >> bits & 255))
+            }
+            i += 1
+        }
+        // The bits past the last byte are no one's.
+        if (group & ((1 << bits) - 1)) != 0 {
+            throw invalid("'\(text)' is not base64")
+        }
+        return bytes
+    }
+
+    // ---- Sequences -----------------------------------------------------------
+
+    /// The array's elements, in order.
+    public fn decodeSequence() throws(SerializeError) -> JsonDecoder[>..] {
+        try expect(jsonArray, "an array")
+        var all: JsonDecoder[>..] = []
+        var child = document.firsts[node]
+        var i = 0
+        while child >= 0 {
+            all.append(JsonDecoder(document, child, parent: self, key: none, index: i))
+            child = document.nexts[child]
+            i += 1
+        }
+        return all
+    }
+
+    public fn element(_ index: Int) -> JsonDecoder {
+        if node < 0 || document.kinds[node] != jsonArray {
+            return JsonDecoder(document, -1, parent: self, key: none, index: index)
+        }
+        var child = document.firsts[node]
+        var i = 0
+        while child >= 0 && i < index {
+            child = document.nexts[child]
+            i += 1
+        }
+        return JsonDecoder(document, child, parent: self, key: none, index: index)
+    }
+
+    // ---- Maps and structs ----------------------------------------------------
+
+    /// The object's members, in order.
+    public fn decodeMap() throws(SerializeError) -> DecodedMember<JsonDecoder>[>..] {
+        try expect(jsonObject, "an object")
+        var all: DecodedMember<JsonDecoder>[>..] = []
+        var child = document.firsts[node]
+        while child >= 0 {
+            let key = document.string(child)
+            let value = document.nexts[child]
+            if !excludes(key) {
+                all.append(DecodedMember { key: key, value: JsonDecoder(document, value, parent: self, key: key, index: -1) })
+            }
+            child = document.nexts[value]
+        }
+        return all
+    }
+
+    /// Throws unless the value is an object.
+    public fn beginStruct(_ name: String) throws(SerializeError) {
+        try expect(jsonObject, "an object (\(name))")
+    }
+
+    /// The member's value, or a missing decoder when the object has no
+    /// member of that name (or this is not an object).
+    public fn field(_ key: String) -> JsonDecoder {
+        if node < 0 || document.kinds[node] != jsonObject || excludes(key) {
+            return JsonDecoder(document, -1, parent: self, key: key, index: -1)
+        }
+        var child = document.firsts[node]
+        while child >= 0 {
+            if document.keyEquals(child, key) {
+                return JsonDecoder(document, document.nexts[child], parent: self, key: key, index: -1)
+            }
+            child = document.nexts[document.nexts[child]]
+        }
+        return JsonDecoder(document, -1, parent: self, key: key, index: -1)
+    }
+
+    public fn hasField(_ key: String) -> Bool {
+        return !field(key).isMissing
+    }
+
+    fn excludes(_ key: String) -> Bool {
+        if let excluded = excluded {
+            return excluded.contains(key)
+        }
+        return false
+    }
+
+    public fn excluding(_ keys: String[>..]) -> JsonDecoder {
+        var all = excluded ?? []
+        for key in keys {
+            all.append(key)
+        }
+        return JsonDecoder(document, node, parent: parent, key: key, index: index, excluded: all)
+    }
+
+    // ---- Unions --------------------------------------------------------------
+
+    /// A string for a case that carries nothing, or the one key of an object
+    /// whose value is its payload.
+    public fn caseName() throws(SerializeError) -> String {
+        if node >= 0 && document.kinds[node] == jsonString {
+            return document.string(node)
+        }
+        if node >= 0 && document.kinds[node] == jsonObject && document.counts[node] == 1 {
+            return document.string(document.firsts[node])
+        }
+        throw mismatch("a case's name, or an object of one member")
+    }
+
+    /// The value of the object's one member; missing for a case written as
+    /// a string.
+    public fn casePayload() -> JsonDecoder {
+        if node >= 0 && document.kinds[node] == jsonObject && document.counts[node] == 1 {
+            let key = document.firsts[node]
+            return JsonDecoder(document, document.nexts[key], parent: self, key: document.string(key), index: -1)
+        }
+        return JsonDecoder(document, -1, parent: self, key: none, index: -1)
+    }
+}
+
+// A key as JSONPath writes it: '.name' for a plain name, ['…'] otherwise.
+fn jsonPathKey(_ key: String) -> String {
+    var plain = !key.isEmpty
+    for c in key {
+        let ok = c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
+        plain = plain && ok
+    }
+    return plain ? "." + key : "['" + key.replacing("'", with: "\\'") + "']"
+}
+
+// A base64 digit's value of six bits; none for a byte that is not one.
+fn base64Value(_ byte: U8) -> Int? {
+    let c = Int(byte)
+    if c >= 0x41 && c <= 0x5A {
+        return c - 0x41
+    }
+    if c >= 0x61 && c <= 0x7A {
+        return c - 0x61 + 26
+    }
+    if c >= 0x30 && c <= 0x39 {
+        return c - 0x30 + 52
+    }
+    if c == 0x2B {
+        return 62
+    }
+    if c == 0x2F {
+        return 63
+    }
+    return none
+}

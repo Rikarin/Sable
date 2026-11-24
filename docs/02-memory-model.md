@@ -208,7 +208,9 @@ read or write to the same storage may occur. Enforced statically where the
 accesses are to provably distinct storage, and with dynamic access markers
 (`beginAccess`/`endAccess`) where they are not. Dynamic checks are on in debug,
 off in release, and `-fexclusivity=checked` keeps them on in release for
-programs that want it.
+programs that want it. A read of a class's `let` field is never checked: the
+initialiser wrote it before anything could read it, and nothing can change it
+after.
 
 ---
 

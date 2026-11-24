@@ -186,7 +186,13 @@ public sealed partial class SilGen {
     /// </summary>
     void AssociatedRecipes(SilFunction function, FunctionSymbol symbol, GenericShape shape) {
         var names = new SortedSet<string>(StringComparer.Ordinal);
+        // A recursive type, a union that holds an array of itself, is walked once.
+        var walked = new HashSet<SilType>(ReferenceEqualityComparer.Instance);
         void Collect(SilType? type) {
+            if (type is EnumType or StructType && !walked.Add(type)) {
+                return;
+            }
+
             switch (type) {
                 case OpaqueType opaque when opaque.Name.Contains('.'):
                     names.Add(opaque.Name);

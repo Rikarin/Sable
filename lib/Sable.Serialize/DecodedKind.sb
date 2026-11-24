@@ -1,0 +1,16 @@
+module Sable.Serialize
+
+/// What kind of value a Decoder holds, as `Decoder.kind` says.
+@derive(Equatable, Debug)
+public enum DecodedKind {
+    /// Nothing: a field that is not there.
+    Missing
+    Null
+    Bool
+    /// An integer or a float: a format like JSON does not tell them apart.
+    Number
+    String
+    Bytes
+    Sequence
+    Map
+}

@@ -1,12 +1,12 @@
 module Sable.Serialize
 
 /// A value that can be written to an Encoder and read back from a Decoder,
-/// in any format they speak (JSON today): Swift's `Codable`, Rust's serde.
-/// `@derive(Serializable)` writes both for a struct, an enum or a union,
-/// field by field, at compile time — no reflection at run time — with
-/// `@serialize(…)` to rename, skip or default a field (`rename:`, `skip`,
-/// `defaulted`), rename them all, and
-/// choose how a union's case is tagged.
+/// in whatever format they speak — JSON is one (JsonEncoder, JsonDecoder) —
+/// as Swift's `Codable` and Rust's serde do. `@derive(Serializable)` writes
+/// both for a struct, an enum or a union, field by field, at compile time —
+/// no reflection at run time — with `@serialize(…)` to rename, skip, default
+/// or flatten a field (`rename:`, `skip`, `defaulted`, `flatten`), rename
+/// them all, and choose how a union's case is tagged, or leave it untagged.
 ///
 /// ```sable
 /// @derive(Serializable)
@@ -19,9 +19,9 @@ module Sable.Serialize
 /// assert(try! Json.decode(Point.self, from: text).y == 2)
 /// ```
 public protocol Serializable {
-    /// The value written to the encoder.
-    fn encode(to encoder: Encoder) throws(SerializeError)
+    /// The value, written to the encoder in its data model.
+    fn encode<E: Encoder>(to encoder: E) throws(SerializeError)
 
     /// The value the decoder holds, or why it holds none.
-    static fn decode(from decoder: Decoder) throws(SerializeError) -> Self
+    static fn decode<D: Decoder>(from decoder: D) throws(SerializeError) -> Self
 }

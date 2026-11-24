@@ -68,7 +68,9 @@ public sealed class AtomicTests {
             clang.WaitForExit();
             Assert.Equal(0, clang.ExitCode);
 
-            var adds = File.ReadAllLines(optimised).Where(static l => l.Contains("atomicrmw add", StringComparison.Ordinal)).ToList();
+            // The counter's own: not the runtime's counts of releases, where the object is not on the stack.
+            var adds = File.ReadAllLines(optimised)
+                .Where(static l => l.Contains("atomicrmw add", StringComparison.Ordinal) && !l.Contains("@sable_", StringComparison.Ordinal)).ToList();
             var add = Assert.Single(adds);
             Assert.Contains("i64 1 monotonic", add, StringComparison.Ordinal);
         } finally {

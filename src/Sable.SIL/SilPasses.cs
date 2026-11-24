@@ -112,8 +112,11 @@ public static class SilPassManager {
             pending.Push(entry);
         }
 
-        foreach (var deinit in module.GenericDeinits.Values) {
-            pending.Push(deinit);
+        // A generic class's deinit, for objects of a class the runtime makes: in a unit, another's code may make them.
+        if (module.Unit is not null || module.IsLibrary) {
+            foreach (var deinit in module.GenericDeinits.Values) {
+                pending.Push(deinit);
+            }
         }
 
         // A template table's entries: for instances of its type made at run time.
@@ -150,6 +153,37 @@ public static class SilPassManager {
         // (A table's own witnesses take Self's metadata too, but know the type.)
         var unspecialised = module.Functions.Any(static f => f.IsUnspecialised && !f.Name.StartsWith("$generic$witness$", StringComparison.Ordinal));
         var tabled = new HashSet<string>(StringComparer.Ordinal);
+
+        // The protocols whose tables the code reached asks for, and those a table asked for refines.
+        var whole = module.Unit is null && !module.IsLibrary;
+        var asked = new HashSet<string>(StringComparer.Ordinal);
+        var waiting = new Dictionary<string, List<SilWitnessTable>>(StringComparer.Ordinal);
+        var refines = module.WitnessTables.GroupBy(static t => t.Protocol).ToDictionary(static g => g.Key, static g => g.First(), StringComparer.Ordinal);
+        void Entries(SilWitnessTable table) {
+            foreach (var entry in table.Entries) {
+                if (entry.Function is { } witness) {
+                    pending.Push(witness);
+                }
+            }
+        }
+
+        void Ask(string protocol) {
+            if (!asked.Add(protocol)) {
+                return;
+            }
+
+            if (waiting.Remove(protocol, out var held)) {
+                held.ForEach(Entries);
+            }
+
+            if (refines.TryGetValue(protocol, out var any)) {
+                any.Bases.ForEach(Ask);
+                foreach (var (_, each) in any.AssociatedConformances) {
+                    Ask(each);
+                }
+            }
+        }
+
         // Those of a generic type's arguments are reached by what reads them from its metadata: a template table's entries, a deinit compiled once.
         var readsArguments = module.GenericDeinits.Count > 0 || module.WitnessTables.Any(static t => t.IsTemplate);
         void Witnesses(SilType? type) {
@@ -161,10 +195,11 @@ public static class SilPassManager {
                 }
 
                 foreach (var table in tables[type.ToString()]) {
-                    foreach (var entry in table.Entries) {
-                        if (entry.Function is { } witness) {
-                            pending.Push(witness);
-                        }
+                    // In a program compiled whole, only a table code asks for by its protocol.
+                    if (whole && !asked.Contains(table.Protocol)) {
+                        (waiting.TryGetValue(table.Protocol, out var held) ? held : waiting[table.Protocol] = []).Add(table);
+                    } else {
+                        Entries(table);
                     }
 
                     // Its associated types' metadata, which unspecialised code
@@ -189,7 +224,15 @@ public static class SilPassManager {
                 continue;
             }
 
+            foreach (var associated in function.AssociatedMetadata) {
+                Ask(associated.Protocol);
+            }
+
             foreach (var instruction in function.Blocks.SelectMany(static b => b.Instructions)) {
+                if (instruction is BuiltinInst { Name: var asks } && asks.StartsWith("witness_table", StringComparison.Ordinal) && asks.IndexOf(':') is > 0 and var colon) {
+                    Ask(asks[(colon + 1)..]);
+                }
+
                 switch (instruction) {
                     case FunctionRefInst reference:
                         pending.Push(reference.Function);
@@ -210,6 +253,11 @@ public static class SilPassManager {
                         }
 
                         Witnesses(alloc.ClassType);
+                        if (alloc.ClassType is { HasGenericDeinit: true, DisplayName: { } display } && display.IndexOf('<') is > 0 and var open
+                            && module.GenericDeinits.TryGetValue(display[..open], out var genericDeinit)) {
+                            pending.Push(genericDeinit);
+                        }
+
                         if (alloc.ClassType.TypeArguments is [var held] && alloc.ClassType.Name.StartsWith("any$box$of$", StringComparison.Ordinal)) {
                             Witnesses(held);
                         }

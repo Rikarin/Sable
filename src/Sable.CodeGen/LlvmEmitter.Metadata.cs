@@ -396,7 +396,7 @@ public sealed partial class LlvmEmitter {
     ///     class's name (<c>sable_register_generic_deinit</c>). Null for none.
     /// </summary>
     string? GenericDeinitRegistration(SilModule module) {
-        var deinits = module.GenericDeinits.Where(d => module.Find(d.Value) is not null).ToList();
+        var deinits = module.GenericDeinits.Where(d => _reachable?.Contains(d.Value) != false && module.Find(d.Value) is not null).ToList();
         if (deinits.Count == 0) {
             return null;
         }

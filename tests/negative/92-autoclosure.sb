@@ -31,7 +31,7 @@ fn forwards(_ value: @autoclosure () -> Int) -> Int {
 }
 
 fn aClosureIsNotTheValue() -> Int {
-    return lazily({ 1 }) //! S3004 expected 'Int'
+    return lazily({ 1 }) //! S3007 argument 1 is a closure, and 'value' takes 'Int'
 }
 
 fn theArgumentIsStillTyped() -> Int {

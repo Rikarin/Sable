@@ -376,3 +376,14 @@ built-in conformances, and generators cover the rest.
   so a generator cannot either. Roslyn's generators add them through
   `partial` types. Sable has no `partial`, and adding it would be a language
   decision, not a generator one.
+- **Patterns checked while compiling.** .NET's `[GeneratedRegex]` reads a
+  literal pattern at build time and reports a bad one as an error. Sable's
+  `Regex` (Sable.Text) cannot do that through a generator: generators belong
+  to a package's `generators/` directory, which the standard library, embedded
+  in the compiler, does not have, and a generator sees declarations, not the
+  `Regex("…")` calls in bodies. Nor through `const fn`: `compileError` takes
+  only a literal message, so it could not say what is wrong where, and every
+  function the parser calls, its class's initialiser and methods among them,
+  would have to be a `const fn`. What would: a check in the compiler that runs `Regex.init` in the SIL
+  interpreter, as generators are run, for each call whose pattern and options
+  are constants, and reports the `RegexError` it throws at the literal's place.

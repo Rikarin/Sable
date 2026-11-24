@@ -4570,10 +4570,12 @@ public sealed partial class Binder {
                 // A base is read with this type's arguments first: through
                 // 'Counted<String>', 'protocol Counted<U>: Source<U>' is a
                 // Source<String>, whose T is then String.
-                foreach (var baseType in MostRefinedFirst(named.BaseTypes)) {
-                    if (LookupMemberCore(substitution.Apply(baseType), name, substitution, visited, selfType, wanted)
-                        is { } inherited) {
-                        return inherited;
+                var bases = MostRefinedFirst(named.BaseTypes).Select(substitution.Apply).ToList();
+                for (var i = 0; i < bases.Count; i++) {
+                    if (LookupMemberCore(bases[i], name, substitution, visited, selfType, wanted) is { } inherited) {
+                        // And the overloads the protocols after it add: a
+                        // type that is both has each one's 'hash'.
+                        return WithProtocolOverloads(inherited, bases.Skip(i + 1), name, substitution, visited, selfType, wanted);
                     }
                 }
 

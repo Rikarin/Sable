@@ -9,17 +9,19 @@ namespace Sable.SIL;
 /// <remarks>
 ///     <para>
 ///         Each is C's function of the same name in the platform's libm
-///         (<c>sinf</c> for an F32). Native code calls it, through LLVM's
-///         intrinsic where LLVM 18 — the oldest clang the build supports —
-///         has one, so that LLVM can fold and vectorise it; the others are
-///         called by their C names. The interpreter calls the same libm (see
+///         (<c>sinf</c> for an F32), computed at the precision of its type.
+///         Native code calls it by its C name, at every optimisation level,
+///         as a call LLVM may not fold or rewrite (LLVM folds a constant
+///         call with its own arithmetic, an F32 one in F64, which can be an
+///         ulp from libm's). The interpreter calls the same libm (see
 ///         <see cref="Libm" />), so a program, its constants and the REPL
-///         agree to the bit wherever the native code calls libm.
+///         agree to the bit.
 ///     </para>
 ///     <para>
 ///         None traps and none has an effect: a domain error gives NaN, an
-///         overflow an infinity, as C's do. So each is pure for constant
-///         folding and dead-code removal.
+///         overflow an infinity, as C's do. So each is pure for dead-code
+///         removal and sharing; a constant the compiler evaluates is the
+///         interpreter's call of libm.
 ///     </para>
 /// </remarks>
 public static class FloatFunctions {
@@ -27,15 +29,14 @@ public static class FloatFunctions {
 
     /// <summary>
     ///     A function: its name in Sable and in C (the F64 one; the F32 one
-    ///     adds 'f'), how many operands it takes, and LLVM's intrinsic for
-    ///     it, if LLVM 18 has one.
+    ///     adds 'f') and how many operands it takes.
     /// </summary>
-    public sealed record Function(string Name, string C, int Arity, string? Intrinsic = null);
+    public sealed record Function(string Name, string C, int Arity);
 
     public static readonly ImmutableArray<Function> All = [
         new("cbrt", "cbrt", 1),
-        new("sin", "sin", 1, "sin"),
-        new("cos", "cos", 1, "cos"),
+        new("sin", "sin", 1),
+        new("cos", "cos", 1),
         new("tan", "tan", 1),
         new("asin", "asin", 1),
         new("acos", "acos", 1),
@@ -47,14 +48,14 @@ public static class FloatFunctions {
         new("asinh", "asinh", 1),
         new("acosh", "acosh", 1),
         new("atanh", "atanh", 1),
-        new("exp", "exp", 1, "exp"),
-        new("exp2", "exp2", 1, "exp2"),
+        new("exp", "exp", 1),
+        new("exp2", "exp2", 1),
         new("expm1", "expm1", 1),
-        new("log", "log", 1, "log"),
-        new("log2", "log2", 1, "log2"),
-        new("log10", "log10", 1, "log10"),
+        new("log", "log", 1),
+        new("log2", "log2", 1),
+        new("log10", "log10", 1),
         new("log1p", "log1p", 1),
-        new("pow", "pow", 2, "pow"),
+        new("pow", "pow", 2),
         new("hypot", "hypot", 2),
         new("gamma", "tgamma", 1),
         new("logGamma", "lgamma", 1),

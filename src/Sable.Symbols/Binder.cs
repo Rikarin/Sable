@@ -3943,11 +3943,25 @@ public sealed partial class Binder {
 
         // Through 'any P', Self and P's associated types are some conformer's,
         // and which one is not known: 'a.same(b)' could compare two different
-        // types. A requirement that speaks of them is reached only through a
-        // generic parameter, which names one conformer.
+        // types. A requirement that takes them is reached only through a
+        // generic parameter, which names one conformer; one that only gives
+        // one back opens the existential, and its result is erased again
+        // (SE-0352): 'shape.doubled()' is an 'any Shape'.
         if (_conversions.Equivalence.Canonical(receiverType) is ExistentialTypeSymbol
-            && instanceMembers.Where(m => !SpeaksOfSelf(m)).ToList() is var callable
+            && instanceMembers.Where(m => SpeaksOfSelf(m) == ThroughExistential.Callable).ToList() is var callable
             && callable.Count < instanceMembers.Count) {
+            if (callable.Count == 0 && instanceMembers.All(m => SpeaksOfSelf(m) == ThroughExistential.NotErasable)) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_ExistentialResultNotErasable,
+                    syntax.Name.Span,
+                    $"'{name}' gives back or throws an associated type of '{found.Owner.ToDisplayString()}', which through "
+                    + $"'{receiverType.ToDisplayString()}' has no existential to be erased to (it is constrained to no protocol, "
+                    + $"or to one that is generic, or to 'Error'); reach it through a generic parameter "
+                    + $"'T: {found.Owner.ToDisplayString()}' instead"
+                );
+                return new BoundError(syntax, receiver);
+            }
+
             if (callable.Count == 0) {
                 _diagnostics.Error(
                     ErrorCode.ERR_SelfRequirementOnExistential,
@@ -4188,25 +4202,72 @@ public sealed partial class Binder {
     ///     substitution, so a member of <c>Base&lt;Int&gt;</c> reached through
     ///     <c>Derived : Base&lt;Int&gt;</c> still reports Int.
     /// </remarks>
+    /// <summary>What a requirement's signature lets a call through an existential do (#299, SE-0352).</summary>
+    enum ThroughExistential {
+        /// <summary>Callable: Self and the associated types appear, if at all, only as the whole result or error, which can be erased.</summary>
+        Callable,
+
+        /// <summary>Not callable: a parameter, or a result made of Self (<c>Self?</c>, <c>Self[]</c>), mentions one (S3161).</summary>
+        SpeaksOfSelf,
+
+        /// <summary>Not callable: the result is an associated type with nothing it can be erased to (S3165).</summary>
+        NotErasable,
+    }
+
     /// <summary>
-    ///     True for a protocol's requirement whose signature mentions the
-    ///     protocol's <c>Self</c> or one of its associated types.
+    ///     What a call of a protocol's requirement through <c>any P</c> may do
+    ///     with its signature. The existential is opened for the call, so a
+    ///     result (or an error) that is exactly <c>Self</c> or one of P's
+    ///     associated types is erased back — <c>Self</c> to the existential, an
+    ///     associated type to the existential of the protocols it is
+    ///     constrained to (<see cref="ErasedAssociated" />). A parameter that
+    ///     mentions one would need a value of a type only the opened value
+    ///     knows, and so would a result that is made of one.
     /// </summary>
-    static bool SpeaksOfSelf(Symbol member) {
+    ThroughExistential SpeaksOfSelf(Symbol member) {
         if (member.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
-            return false;
+            return ThroughExistential.Callable;
         }
 
         var own = new HashSet<TypeParameterSymbol>(AssociatedTypes.All(protocol));
-        if (protocol.SelfTypeParameter is { } self) {
+        var self = protocol.SelfTypeParameter;
+        if (self is not null) {
             own.Add(self);
         }
 
-        return member switch {
-            FunctionSymbol function => function.Parameters.Any(p => Mentions(p.Type)) || Mentions(function.ReturnType),
-            FieldSymbol field => Mentions(field.Type),
+        var notErasable = false;
+        var speaks = member switch {
+            // An async one's result is not erased yet: its entry cannot write a value of Self across a suspension.
+            FunctionSymbol function => function.Parameters.Any(p => Mentions(p.Type)) || !Covariant(function.ReturnType)
+                || function.ThrownType is { } thrown && !Covariant(thrown)
+                || function.IsAsync && (Mentions(function.ReturnType) || function.ThrownType is { } error && Mentions(error)),
+            FieldSymbol field => (field.IsComputed ? field.HasSetter : field.IsMutable) ? Mentions(field.Type) : !Covariant(field.Type),
             _ => false,
         };
+        return speaks ? ThroughExistential.SpeaksOfSelf : notErasable ? ThroughExistential.NotErasable : ThroughExistential.Callable;
+
+        // Nothing of Self's, or exactly Self or an associated type that can be erased.
+        bool Covariant(TypeSymbol type) {
+            if (!Mentions(type)) {
+                return true;
+            }
+
+            if (ReferenceEquals(type, self)) {
+                return true;
+            }
+
+            var associated = type switch {
+                TypeParameterSymbol parameter when own.Contains(parameter) => parameter,
+                DependentMemberTypeSymbol { BaseType: var on, Associated: var named } when ReferenceEquals(on, self) && own.Contains(named) => named,
+                _ => null,
+            };
+            if (associated is null) {
+                return false;
+            }
+
+            notErasable |= ErasedAssociated(associated) is null;
+            return true;
+        }
 
         bool Mentions(TypeSymbol type) =>
             type switch {
@@ -4221,6 +4282,34 @@ public sealed partial class Binder {
                 ReferenceTypeSymbol reference => Mentions(reference.ReferencedType),
                 _ => false,
             };
+    }
+
+    /// <summary>
+    ///     What a value of an associated type comes back as through an
+    ///     existential, whose conformer is known only when the program runs:
+    ///     the existential of the protocols the associated type is
+    ///     constrained to — <c>any Hashable</c> for <c>associatedtype Key:
+    ///     Hashable</c>. Null when there is none (an unconstrained one), or
+    ///     when a constraint is not a protocol that is not generic, which the
+    ///     registry cannot be asked about, or is <c>Error</c>, whose
+    ///     existential is laid out as an object.
+    /// </summary>
+    ExistentialTypeSymbol? ErasedAssociated(TypeParameterSymbol associated) {
+        var protocols = new List<TypeSymbol>();
+        foreach (var constraint in associated.Constraints.SelectMany(static c => CompositionTypeSymbol.PartsOf(c))) {
+            if (constraint is not NamedTypeSymbol { TypeKind: TypeKind.Protocol, IsConstructed: false, TypeParameters.IsEmpty: true } protocol
+                || protocol.Equals(Core.Error)) {
+                return null;
+            }
+
+            protocols.Add(protocol);
+        }
+
+        return protocols.Count switch {
+            0 => null,
+            1 => new ExistentialTypeSymbol(protocols[0]),
+            _ => new ExistentialTypeSymbol(new CompositionTypeSymbol([..protocols])),
+        };
     }
 
     /// <summary>
@@ -4365,7 +4454,16 @@ public sealed partial class Binder {
                     // The conformer also says what the associated types are.
                     // Through a generic parameter they are read through it:
                     // 'b.first()' for B: Bag is a B.Item, not any bag's Item.
-                    if (AssociatedTypes.IsAbstract(selfType)
+                    if (_conversions.Equivalence.Canonical(selfType) is ExistentialTypeSymbol) {
+                        // Through an existential, an associated type is some
+                        // conformer's: a result of one comes back erased
+                        // to the protocols it is constrained to (#299).
+                        foreach (var associated in AssociatedTypes.All(named)) {
+                            if (ErasedAssociated(associated) is { } erased) {
+                                map[associated] = erased;
+                            }
+                        }
+                    } else if (AssociatedTypes.IsAbstract(selfType)
                         && !AssociatedTypes.IsProtocolSelf(selfType)
                         || selfType is ArrayTypeSymbol or OpaqueTypeSymbol) {
                         foreach (var associated in AssociatedTypes.All(named)) {

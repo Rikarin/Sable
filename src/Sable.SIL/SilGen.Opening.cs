@@ -202,43 +202,62 @@ public sealed partial class SilGen {
         ///     boxer (which takes it, and lets the buffer go), with the type's
         ///     metadata and its tables.
         /// </summary>
-        SilValue? Erased(SilValue buffer, TypeParameterSymbol opened, BoundConversion erasure) {
-            if (LowerType(erasure.Type) is not StructType layout || generator.TabledProtocols(layout) is not { } protocols) {
+        SilValue? Erased(SilValue buffer, TypeSymbol opened, BoundConversion erasure) {
+            if (LowerType(erasure.Type) is not StructType layout || generator.TabledProtocols(layout) is not { } protocols
+                || MetadataOf(opened) is not { } metadata) {
                 return Missing(erasure, $"'{erasure.Type.ToDisplayString()}' made from a type known only at run time");
             }
 
-            var metadata = _genericMetadata[opened];
+            // A value, not yet in a buffer of its own (a requirement's result through an opened existential): moved into one.
+            if (buffer.Type is OpaqueType value) {
+                var into = Emit(new BuiltinInst("opaque_alloc", SilType.Address(value), metadata));
+                Emit(new StoreInst(Owned(buffer), into, StoreKind.Init));
+                buffer = into;
+            }
+
             var box = Emit(new BuiltinInst("opaque_box", generator.ExistentialBoxRoot(), buffer, metadata));
             var tables = new List<SilValue>();
             foreach (var protocol in protocols) {
                 var definition = protocol.OriginalDefinition;
-                tables.Add(_genericTables.TryGetValue((opened, definition), out var given) ? given : Required(opened, definition));
+                tables.Add(opened is TypeParameterSymbol parameter && _genericTables.TryGetValue((parameter, definition), out var given)
+                    ? given
+                    : Emit(new BuiltinInst($"witness_table_required:{QualifiedName(definition)}", SilType.WitnessTable, metadata)));
             }
 
             return Emit(new StructInst(layout, [box, metadata, ..tables]));
         }
         /// <summary>
-        ///     The type parameter a call of generic code binds to an
-        ///     existential, and the one argument that gives it, when the call
-        ///     opens it (#299, SE-0352): a type parameter constrained to
-        ///     protocols, bound to <c>any P</c> of protocols that are not
-        ///     generic, which one parameter of exactly that type takes and
-        ///     nothing else of the callee's signature names but its result;
-        ///     the callee compiled once. Null for any other call, which runs
-        ///     the callee's instance for the existential as before.
+        ///     The type parameters a call of generic code binds to existentials,
+        ///     each with the one argument that gives it, when the call opens
+        ///     them (#299, SE-0352). A type parameter is opened when it is
+        ///     constrained to protocols, bound to <c>any P</c> of protocols that
+        ///     are not generic, and exactly one parameter, of exactly that type
+        ///     and taken by value, names it — so several, each from its own
+        ///     argument (<c>pair(a, b)</c> for <c>fn pair&lt;A: P, B: Q&gt;(_ a:
+        ///     A, _ b: B)</c>) — and the result, if it names it at all, is it
+        ///     (boxed again as the existential). Not opened: a type parameter
+        ///     two parameters name (the two existentials may hold different
+        ///     types), one a parameter names inside another type (<c>T?</c>,
+        ///     <c>T[]</c>, <c>(T) -> Int</c>, which would need a value of that
+        ///     type made of the opened one), one taken <c>inout</c>, one a result
+        ///     or an error names inside another type, which cannot be erased —
+        ///     those calls run the callee's instance for the existential, as
+        ///     before. The callee is compiled once. Null when none opens.
         /// </summary>
-        (TypeParameterSymbol Parameter, int Argument)? OpensExistential(BoundCall call) {
+        List<(TypeParameterSymbol Parameter, int Argument)>? OpensExistential(BoundCall call) {
             var callee = call.Function;
             if (callee.TypeParameters.IsEmpty || call.Arguments.Length != callee.Parameters.Length || _current is null) {
                 return null;
             }
 
+            var opens = new List<(TypeParameterSymbol, int)>();
             foreach (var parameter in callee.TypeParameters) {
                 if (parameter.Constraints.IsEmpty || call.Substitution.Lookup(parameter) is not ExistentialTypeSymbol { Constraint: var constraint } existential
                     || constraint.Equals(Core.Error) || ExistentialProtocols(constraint) is not { Count: > 0 } protocols
                     || protocols.Exists(static p => p.IsConstructed || !p.TypeParameters.IsEmpty)
                     || callee.ThrownType is { } thrown && Mentions(thrown, [parameter])
-                    || callee.ReturnType is var result && !result.Equals(parameter) && Mentions(result, [parameter])) {
+                    || callee.ReturnType is var result && !result.Equals(parameter) && Mentions(result, [parameter])
+                    || callee.SameTypeRequirements.Any(r => Mentions(r.Left, [parameter]) || Mentions(r.Right, [parameter]))) {
                     continue;
                 }
 
@@ -254,77 +273,143 @@ public sealed partial class SilGen {
                     }
                 }
 
-                if (taking is not [var argument] || other || generator.OpenedShape(callee) is null) {
+                if (taking is not [var argument] || other) {
                     continue;
                 }
 
-                return (parameter, argument);
+                opens.Add((parameter, argument));
             }
 
-            return null;
-        }
-
-        /// <summary>
-        ///     A call that opens the existential it gives generic code for a
-        ///     type parameter (#299, SE-0352): its value, where its box holds
-        ///     it, is the argument, of a type known here only by the metadata
-        ///     the existential holds, conforming by its tables; the callee
-        ///     compiled once is called as it is for a Type opened, and a result
-        ///     of the type erased to the existential again, by the type's boxer.
-        /// </summary>
-        SilValue? OpenedExistentialCall(BoundCall call, TypeParameterSymbol parameter, int index) {
-            var argument = call.Arguments[index];
-            var existentialType = (ExistentialTypeSymbol)call.Substitution.Lookup(parameter)!;
-            if (LowerType(existentialType) is not StructType layout || generator.TabledProtocols(layout) is not { } protocols) {
-                return Missing(call, $"opening '{existentialType.ToDisplayString()}'");
-            }
-
-            var erases = call.Function.ReturnType.Equals(parameter);
-            foreach (var protocol in protocols) {
-                generator.OpenedProtocol(protocol, erases, generator.DescribesValues(call.Function), call.Syntax);
-            }
-
-            // The arguments before the existential are evaluated before it, as the call would.
-            var opened = TypeParameterSymbol.OpenedExistential(parameter, [..protocols]);
-            if (Expression(argument) is not { } existential) {
+            // Another type parameter's constraints naming an opened one ('U: Container, U.Item == T') would tie them: none opens then.
+            if (opens.Count == 0 || callee.TypeParameters.Any(p => p.Constraints.Any(c => Mentions(c, [..opens.Select(static o => o.Item1)])))
+                || generator.OpenedShape(callee) is null) {
                 return null;
             }
 
-            Hold(existential);
-            var metadata = Emit(new StructExtractInst(existential, 1));
-            _genericMetadata[opened] = metadata;
-            for (var i = 0; i < protocols.Count; i++) {
-                _genericTables[(opened, protocols[i].OriginalDefinition)] = Emit(new StructExtractInst(existential, SilGen.ExistentialTables + i));
+            return opens;
+        }
+
+        /// <summary>
+        ///     A call that opens the existentials it gives generic code for its
+        ///     type parameters (#299, SE-0352): each one's value, where its box
+        ///     holds it, is its argument, of a type known here only by the
+        ///     metadata the existential holds, conforming by its tables; the
+        ///     callee compiled once is called as it is for a Type opened, and a
+        ///     result of one of the types erased to its existential again, by
+        ///     the type's boxer. The arguments are evaluated in their order.
+        /// </summary>
+        SilValue? OpenedExistentialCall(BoundCall call, List<(TypeParameterSymbol Parameter, int Argument)> opens) {
+            var layouts = new List<(TypeParameterSymbol Parameter, int Argument, ExistentialTypeSymbol Type, List<NamedTypeSymbol> Protocols)>();
+            foreach (var (parameter, index) in opens) {
+                var existentialType = (ExistentialTypeSymbol)call.Substitution.Lookup(parameter)!;
+                if (LowerType(existentialType) is not StructType layout || generator.TabledProtocols(layout) is not { } protocols) {
+                    return Missing(call, $"opening '{existentialType.ToDisplayString()}'");
+                }
+
+                layouts.Add((parameter, index, existentialType, protocols));
             }
 
-            var given = ParameterSymbol.Synthetic("$opened", symbol, opened);
+            var erasedFrom = layouts.FindIndex(l => call.Function.ReturnType.Equals(l.Parameter));
+            foreach (var (_, _, _, protocols) in layouts) {
+                foreach (var protocol in protocols) {
+                    generator.OpenedProtocol(protocol, erasedFrom >= 0, generator.DescribesValues(call.Function), call.Syntax);
+                }
+            }
+
+            // Each existential, held for the call, in the order of its argument.
+            var held = new List<SilValue>();
+            var lent = new List<SilValue>();
+            var temporaries = new List<ParameterSymbol>();
+
+            // Those still held: the call ends an argument it was lent as it ends any temporary of its own.
+            void EndLent() {
+                foreach (var each in Enumerable.Reverse(lent)) {
+                    if (_temporaries.Contains(each)) {
+                        Destroy(Unhold(each));
+                    }
+                }
+            }
+
+            var openedTypes = new List<TypeParameterSymbol>();
+            var givens = new List<ParameterSymbol>();
+            var arguments = call.Arguments.ToArray();
+            var substitution = call.Substitution;
+            var requirements = new List<(TypeParameterSymbol, NamedTypeSymbol)>();
             try {
-                using (generator.Opaque(new GenericShape([opened], [..protocols.Select(p => (opened, p.OriginalDefinition))]))) {
-                    _parameters[given] = Emit(new BuiltinInst("box_project", LowerType(opened)!, Emit(new StructExtractInst(existential, 0)), metadata));
-                    var arguments = call.Arguments.ToArray();
-                    arguments[index] = new BoundParameterAccess(argument.Syntax, given);
-                    var opening = new BoundCall(call.Syntax, call.Receiver, call.Function, [..arguments], erases ? opened : call.Type) {
-                        Substitution = Opening(call.Substitution, opened, parameter),
+                var evaluated = 0;
+                foreach (var (parameter, index, _, protocols) in layouts.OrderBy(static l => l.Argument)) {
+                    // The arguments before it are evaluated before it, as the call says, and lent to the call from here.
+                    for (; evaluated < index; evaluated++) {
+                        var before = call.Arguments[evaluated];
+                        if (layouts.Exists(l => l.Argument == evaluated) || call.Function.Parameters[evaluated] is not { Modifier: ParameterModifier.None or ParameterModifier.In, IsVariadic: false }
+                            || before is BoundLiteral or BoundClosure or BoundLocalAccess or BoundParameterAccess) {
+                            continue;
+                        }
+
+                        if (Expression(before) is not { } value) {
+                            EndLent();
+                            return null;
+                        }
+
+                        lent.Add(Hold(value));
+                        var temporary = ParameterSymbol.Synthetic($"$before{evaluated}", symbol, before.Type);
+                        _parameters[temporary] = value;
+                        temporaries.Add(temporary);
+                        arguments[evaluated] = new BoundParameterAccess(before.Syntax, temporary);
+                    }
+
+                    var opened = TypeParameterSymbol.OpenedExistential(parameter, [..protocols]);
+                    if (Expression(call.Arguments[index]) is not { } existential) {
+                        EndLent();
+                        return null;
+                    }
+
+                    held.Add(Hold(existential));
+                    lent.Add(existential);
+                    var metadata = Emit(new StructExtractInst(existential, 1));
+                    _genericMetadata[opened] = metadata;
+                    for (var i = 0; i < protocols.Count; i++) {
+                        _genericTables[(opened, protocols[i].OriginalDefinition)] = Emit(new StructExtractInst(existential, SilGen.ExistentialTables + i));
+                        requirements.Add((opened, protocols[i].OriginalDefinition));
+                    }
+
+                    var given = ParameterSymbol.Synthetic($"$opened{givens.Count}", symbol, opened);
+                    givens.Add(given);
+                    openedTypes.Add(opened);
+                    arguments[index] = new BoundParameterAccess(call.Arguments[index].Syntax, given);
+                    substitution = Opening(substitution, opened, parameter);
+                }
+
+                using (generator.Opaque(new GenericShape([..openedTypes], [..requirements]))) {
+                    // Each value where its box holds it, of the type it is opened as.
+                    for (var i = 0; i < givens.Count; i++) {
+                        _parameters[givens[i]] = Emit(new BuiltinInst("box_project", LowerType(openedTypes[i])!, Emit(new StructExtractInst(held[i], 0)), _genericMetadata[openedTypes[i]]));
+                    }
+
+                    TypeSymbol? erased = erasedFrom >= 0 ? substitution.Lookup(layouts[erasedFrom].Parameter) : null;
+                    var opening = new BoundCall(call.Syntax, call.Receiver, call.Function, [..arguments], erased ?? call.Type) {
+                        Substitution = substitution,
                     };
                     _openingCall = opening;
                     var result = Call(opening);
                     _openingCall = null;
                     if (result is null || _current is null) {
-                        Destroy(Unhold(existential));
+                        EndLent();
                         return result;
                     }
 
-                    var value = erases ? Erased(result, opened, new BoundConversion(call.Syntax, existentialType, call, ConversionKind.Existential)) : result;
-                    Destroy(Unhold(existential));
+                    var value = erased is not null
+                        ? Erased(result, erased, new BoundConversion(call.Syntax, layouts[erasedFrom].Type, call, ConversionKind.Existential))
+                        : result;
+                    EndLent();
                     return value;
                 }
             } finally {
                 _openingCall = null;
-                _parameters.Remove(given);
-                _genericMetadata.Remove(opened);
-                foreach (var protocol in protocols) {
-                    _genericTables.Remove((opened, protocol.OriginalDefinition));
-                }
+                givens.ForEach(g => _parameters.Remove(g));
+                temporaries.ForEach(t => _parameters.Remove(t));
+                openedTypes.ForEach(o => _genericMetadata.Remove(o));
+                requirements.ForEach(r => _genericTables.Remove(r));
             }
         }
 
@@ -332,11 +417,74 @@ public sealed partial class SilGen {
         bool IsRequirementOf(BoundExpression existential, string key) =>
             LowerType(existential.Type) is StructType layout && generator.IsExistentialLayout(layout) && generator.RequirementOf(layout, key) is not null;
 
-        /// <summary>A call's substitution with the protocol's <c>Self</c> bound to the type an existential is opened as.</summary>
+        /// <summary>
+        ///     A call's substitution with the protocol's <c>Self</c> bound to the
+        ///     type an existential is opened as, and — through the existential
+        ///     erased — its associated types read through that type again
+        ///     (<c>Opened.Element</c>).
+        /// </summary>
         static TypeSubstitution Opening(TypeSubstitution substitution, TypeParameterSymbol opened, TypeParameterSymbol? parameter = null) {
             var map = substitution.Parameters.ToDictionary(static p => p, substitution.Apply);
             map[parameter ?? opened.OpenedFrom!] = opened;
+            if (parameter is null) {
+                foreach (var associated in AssociatedOf(opened)) {
+                    map[associated] = new DependentMemberTypeSymbol(opened, associated);
+                }
+            }
+
             return new TypeSubstitution(map);
+        }
+
+        /// <summary>The associated types of the protocol an existential is opened as Self of, and of those it refines.</summary>
+        static List<TypeParameterSymbol> AssociatedOf(TypeParameterSymbol opened) {
+            var all = new List<TypeParameterSymbol>();
+            var seen = new HashSet<NamedTypeSymbol>(ReferenceEqualityComparer.Instance);
+            void Visit(NamedTypeSymbol protocol) {
+                if (!seen.Add(protocol.OriginalDefinition)) {
+                    return;
+                }
+
+                all.AddRange(protocol.OriginalDefinition.AssociatedTypes);
+                foreach (var refined in Bases(protocol.OriginalDefinition)) {
+                    Visit(refined);
+                }
+            }
+
+            if (opened.OpenedFrom?.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+                Visit(protocol);
+            }
+
+            return all;
+        }
+
+        /// <summary>
+        ///     Whether a requirement's result or error is its protocol's
+        ///     <c>Self</c> or one of its associated types, which a call through
+        ///     an existential gives back only by opening it and erasing the
+        ///     value again (#299, SE-0352).
+        /// </summary>
+        static bool OpensForResult(Symbol member, TypeSymbol result, TypeSymbol? thrown) {
+            if (member.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } self } protocol) {
+                return false;
+            }
+
+            var own = new List<TypeParameterSymbol> { self };
+            own.AddRange(AssociatedOf(TypeParameterSymbol.OpenedExistential(self, [protocol])));
+            return Mentions(result, own) || thrown is not null && Mentions(thrown, own);
+        }
+
+        /// <summary>A member's type, of a protocol's <c>Self</c> or associated type, read on the type an existential is opened as.</summary>
+        static TypeSymbol OpenedMember(Symbol member, TypeSymbol type, TypeParameterSymbol opened, TypeSymbol given) {
+            if (!OpensForResult(member, type, null)) {
+                return given;
+            }
+
+            var map = new Dictionary<TypeParameterSymbol, TypeSymbol> { [opened.OpenedFrom!] = opened };
+            foreach (var associated in AssociatedOf(opened)) {
+                map[associated] = new DependentMemberTypeSymbol(opened, associated);
+            }
+
+            return new TypeSubstitution(map).Apply(type);
         }
 
         /// <summary>
@@ -349,7 +497,7 @@ public sealed partial class SilGen {
         ///     the value and the type). One that changes the value is given its
         ///     address, the box first made the existential's own.
         /// </summary>
-        SilValue? OpenedExistential(BoundExpression receiver, Symbol member, bool changes, BoundNode at, Func<BoundExpression, TypeParameterSymbol, BoundExpression> rebuild) {
+        SilValue? OpenedExistential(BoundExpression receiver, Symbol member, bool changes, BoundNode at, Func<BoundExpression, TypeParameterSymbol, BoundExpression> rebuild, TypeSymbol? erasedTo = null) {
             var protocol = (member.ContainingSymbol as ExtensionSymbol)?.ExtendedType as NamedTypeSymbol
                 ?? ((member.ContainingSymbol as FieldSymbol)?.ContainingSymbol as ExtensionSymbol)?.ExtendedType as NamedTypeSymbol
                 ?? member.ContainingSymbol as NamedTypeSymbol;
@@ -363,6 +511,12 @@ public sealed partial class SilGen {
                 generator.OpenedShape(function);
             } else {
                 generator.Opening();
+            }
+
+            // A result given back erased is boxed by its type's boxer, which every conformer of the protocols it is erased to needs.
+            var erasure = erasedTo is not null && Sub(erasedTo) is ExistentialTypeSymbol erasedType ? erasedType : null;
+            foreach (var each in erasure is null ? [] : ExistentialProtocols(erasure.Constraint) ?? []) {
+                generator.OpenedProtocol(each, true, false, at.Syntax);
             }
 
             var opened = TypeParameterSymbol.OpenedExistential(self, [..protocols]);
@@ -409,7 +563,14 @@ public sealed partial class SilGen {
                     var parameter = ParameterSymbol.Synthetic("self", symbol, opened, changes ? ParameterModifier.InOut : ParameterModifier.None);
                     _parameters[parameter] = held;
                     try {
-                        var result = Expression(rebuild(new BoundParameterAccess(at.Syntax, parameter), opened));
+                        var use = rebuild(new BoundParameterAccess(at.Syntax, parameter), opened);
+                        var result = Expression(use);
+
+                        // A result of Self or of an associated type, erased to the existential the call gives (#299, SE-0352).
+                        if (erasure is not null && result is { Type: OpaqueType or AddressType { Pointee: OpaqueType } } && _current is not null) {
+                            result = Erased(result, Sub(use.Type), new BoundConversion(at.Syntax, erasure, use, ConversionKind.Existential));
+                        }
+
                         EndAll(borrows);
                         return result;
                     } finally {

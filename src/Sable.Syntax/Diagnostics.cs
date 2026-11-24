@@ -190,6 +190,7 @@ public enum ErrorCode {
     ERR_CannotOpenType = 3162,
     ERR_OpenedResultNotErasable = 3163,
     ERR_OpenedCalleeSpecialised = 3164,
+    ERR_ExistentialResultNotErasable = 3165,
 
     // Ownership, escape and isolation checks (S3200-S3209).
     ERR_IntegerDoesNotFit = 3200,

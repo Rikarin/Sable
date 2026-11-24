@@ -13,8 +13,13 @@ namespace Sable.CodeGen.Tests;
 /// </summary>
 [Native]
 public sealed class OpenedTypeTests {
-    static Execution Runs(string declarations, string body) {
-        var program = Program(declarations, body);
+    static Execution Runs(string declarations, string body) => RunsBoth(Program(declarations, body));
+
+    /// <summary>A program whose main is async, run as <see cref="Runs" /> runs one.</summary>
+    static void PrintsAsync(string expected, string declarations, string body) =>
+        Assert.Equal(expected, RunsBoth($"module Test\n{declarations}\n@main\nfn main() async {{\n{body}\n}}\n").Stdout);
+
+    static Execution RunsBoth(string program) {
         Execution unspecialised;
         using (SilGen.UseGenerics(GenericsMode.Unspecialised)) {
             unspecialised = AssertAgree(program);
@@ -374,6 +379,291 @@ public sealed class OpenedTypeTests {
             """
         );
     /// <summary>
+    ///     A requirement whose result is Self or an associated type, called
+    ///     through <c>any P</c> (#299, SE-0352): the existential is opened, the
+    ///     requirement's entry writes the result to a buffer its type's
+    ///     metadata sizes, and the result is boxed again — as <c>any Shape</c>
+    ///     for Self, as the existential of an associated type's protocols for
+    ///     one of those (its metadata read from the conformance's table). So
+    ///     are a property of Self, a requirement that throws, one that changes
+    ///     the value, and an extension member giving Self; and the value given
+    ///     back is its type's, as a cast finds.
+    /// </summary>
+    [Fact]
+    public void ARequirementGivingSelfOrAnAssociatedTypeIsCalledThroughAnExistential() =>
+        Prints(
+            """
+            sq4 sq8 2cm sq2 sq2 sq3
+            a square of 4
+            sq3 again
+            circle abab circle abababab 3cm circle ab! circle ab! circle ab!
+            sq4 tagged
+            caught Refused(side: 2)
+
+            """,
+            """
+            protocol Named {
+                fn name() -> String
+            }
+
+            protocol Shape {
+                associatedtype Unit: Named
+                fn doubled() -> Self
+                fn name() -> String
+                fn unit() -> Unit
+                var me: Self { get }
+                mutating fn grown() -> Self
+                fn again() throws -> Self
+            }
+
+            protocol Tagged {
+                fn tag() -> String
+            }
+
+            extension Shape {
+                fn same() -> Self => self
+            }
+
+            struct Refused: Error {
+                var side: Int
+            }
+
+            struct Cm: Named {
+                var n: Int
+                fn name() -> String => "\(n)cm"
+            }
+
+            struct Sq: Shape, Tagged {
+                var side: Int
+                fn doubled() -> Sq => Sq { side: side * 2 }
+                fn name() -> String => "sq\(side)"
+                fn unit() -> Cm => Cm { n: side }
+                var me: Sq { get => self }
+                mutating fn grown() -> Sq {
+                    side = side + 1
+                    return self
+                }
+
+                fn again() throws -> Sq {
+                    if side == 2 {
+                        throw Refused { side: side }
+                    }
+
+                    return self
+                }
+
+                fn tag() -> String => "tagged"
+            }
+
+            final class Circle: Shape {
+                var r: String
+                init(r: String) {
+                    self.r = r
+                }
+
+                fn doubled() -> Circle => Circle(r: r + r)
+                fn name() -> String => "circle \(r)"
+                fn unit() -> Cm => Cm { n: r.count }
+                var me: Circle { get => self }
+                fn grown() -> Circle {
+                    r = r + "!"
+                    return self
+                }
+
+                fn again() throws -> Circle => self
+            }
+            """,
+            """
+                let shapes: (any Shape)[] = [Sq { side: 2 }, Circle(r: "ab")]
+                for s in shapes {
+                    let d = s.doubled()
+                    var g = s
+                    let grown = g.grown()
+                    print("\(d.name()) \(d.doubled().name()) \(s.unit().name()) \(s.me.name()) \(s.same().name()) \(grown.name())")
+                    if let sq = d as? Sq {
+                        print("a square of \(sq.side)")
+                        if let again = try? grown.again() {
+                            print("\(again.name()) again")
+                        }
+                    }
+                }
+
+                let both: any Shape & Tagged = Sq { side: 2 }
+                let twice = both.doubled()
+                print("\(twice.name()) \(twice.tag())")
+                do {
+                    let _ = try both.again()
+                } catch {
+                    print("caught \(error)")
+                }
+            """
+        );
+
+    /// <summary>
+    ///     Generic code given several existentials opens each for its own
+    ///     type parameter (#299, SE-0352): the arguments evaluated in their
+    ///     order, each value's address, metadata and tables given, a result of
+    ///     one of the types boxed again, a requirement that takes Self
+    ///     callable on each. A type parameter two parameters name, or one a
+    ///     parameter names inside an optional, is not opened: the callee's copy
+    ///     for the existential runs, as before.
+    /// </summary>
+    [Fact]
+    public void SeveralExistentialsAreOpenedEachForItsOwnTypeParameter() =>
+        Prints(
+            """
+            first a3 second b
+            true
+            a3 true b true
+            kept b
+            same type? false
+            maybe a3
+
+            """,
+            """
+            protocol P {
+                fn same(_ other: Self) -> Bool
+                fn name() -> String
+            }
+
+            protocol Q {
+                fn label() -> String
+            }
+
+            struct A: P {
+                var n: Int
+                fn same(_ other: A) -> Bool => n == other.n
+                fn name() -> String => "a\(n)"
+            }
+
+            struct B: P, Q {
+                fn same(_ other: B) -> Bool => true
+                fn name() -> String => "b"
+                fn label() -> String => "b"
+            }
+
+            fn order(_ text: String) -> String {
+                print(text)
+                return text
+            }
+
+            fn pair<X: P, Y: Q>(_ x: X, _ tag: String, _ y: Y) -> String => "\(x.name()) \(x.same(x)) \(y.label()) \(tag)"
+
+            fn second<X: P, Y: P>(_ x: X, _ y: Y) -> Y => y
+
+            fn both<T: P>(_ a: T, _ b: T) -> Bool => a.name() == b.name()
+
+            fn maybe<T: P>(_ x: T?) -> String => x?.name() ?? "none"
+            """,
+            """
+                let a: any P = A { n: 3 }
+                let b: any P & Q = B()
+                let q: any Q = B()
+                print("first \(a.name()) second \(b.label())")
+                print(pair(a, order("true") == "true" ? "true" : "false", q))
+                print("kept \(second(a, b).name())")
+                let other: any P = B()
+                print("same type? \(both(a, other))")
+                let held: (any P)? = a
+                print("maybe \(maybe(held))")
+            """
+        );
+
+    /// <summary>
+    ///     An async requirement called through <c>any P</c> (#299): its
+    ///     table's entry is an async function in the generic convention, the
+    ///     value's address in the box and the metadata given it, and the call
+    ///     awaits it as any async call — one that suspends part-way, one that
+    ///     throws, one that changes the value (its box made the existential's
+    ///     own first), and one that never suspends, which stays async since
+    ///     its table holds it.
+    /// </summary>
+    [Fact]
+    public void AnAsyncRequirementIsAwaitedThroughAnExistential() =>
+        PrintsAsync(
+            """
+            local 0 now;remote 12 #1;remote 25 #1;local 38 now;
+            remote 2 #2
+            refused 3
+            counter 2
+
+            """,
+            """
+            struct Refused: Error {
+                var n: Int
+            }
+
+            protocol Fetcher {
+                fn fetch(_ n: Int) async -> String
+                fn check(_ n: Int) async throws -> Int
+                mutating fn bump() async -> Int
+            }
+
+            struct Local: Fetcher {
+                var label: String
+                var count = 0
+                fn fetch(_ n: Int) async -> String => "\(label) \(n) now"
+                fn check(_ n: Int) async throws -> Int => n
+                mutating fn bump() async -> Int {
+                    await Task.yield()
+                    count = count + 1
+                    return count
+                }
+            }
+
+            final class Remote: Fetcher {
+                var count = 0
+                fn fetch(_ n: Int) async -> String {
+                    await Task.yield()
+                    count = count + 1
+                    return "remote \(n) #\(count)"
+                }
+
+                fn check(_ n: Int) async throws -> Int {
+                    await Task.yield()
+                    if n % 2 == 1 {
+                        throw Refused { n: n }
+                    }
+
+                    return n
+                }
+
+                fn bump() async -> Int => count
+            }
+
+            fn all(_ fetchers: (any Fetcher)[]) async -> String {
+                var text = ""
+                for f in fetchers {
+                    text = text + (await f.fetch(text.count)) + ";"
+                }
+
+                return text
+            }
+            """,
+            """
+                let remote = Remote()
+                let fetchers: (any Fetcher)[] = [Local { label: "local" }, remote, Remote(), Local { label: "local" }]
+                print(await all(fetchers))
+                let again: any Fetcher = remote
+                print(await again.fetch(2))
+                do {
+                    print(try await again.check(3))
+                } catch let refused as Refused {
+                    print("refused \(refused.n)")
+                } catch {
+                    print("other")
+                }
+
+                var counter: any Fetcher = Local { label: "c" }
+                var copy = counter
+                let _ = await counter.bump()
+                let bumped = await counter.bump()
+                let unchanged = await copy.bump()
+                print("counter \(bumped + unchanged - 1)")
+            """
+        );
+
+    /// <summary>
     ///     A generic struct and a generic class made only at run time, for a
     ///     type opened from a dictionary, have the conformance records their
     ///     declarations give them: the class's always, the struct's
@@ -391,9 +681,32 @@ public sealed class OpenedTypeTests {
             Test.Box<Test.Box<Test.Plain>> false true
             Test.Cell<Test.Plain> true false
             true false
+            box of meters
+            box of box of meters
+            cell of Test.Meters
+            cell of Test.Plain
+            false
 
             """,
             """
+            protocol Kind {
+                static fn kind() -> String
+            }
+
+            extension Meters: Kind {
+                static fn kind() -> String => "meters"
+            }
+
+            extension Box: Kind where T: Kind {
+                static fn kind() -> String => "box of \(T.kind())"
+            }
+
+            extension Cell: Kind {
+                static fn kind() -> String => "cell of \(T.self)"
+            }
+
+            fn kindOf<T: Kind>(_ type: T.Type) -> String => T.kind()
+
             protocol Zero {
                 static fn zero() -> Self
             }
@@ -448,6 +761,281 @@ public sealed class OpenedTypeTests {
 
             let named: Type[] = [Box<Meters>.self, Box<Plain>.self]
             print("\(named[0].isSubtype(of: (any P).self)) \(named[1].isSubtype(of: (any P).self))")
+
+            // Opened as a constrained T: the registry finds each instance's template table, whose entry reads T from its metadata.
+            let meters = types["meters"]!
+            print(kindOf(boxOf(meters)))
+            print(kindOf(boxOf(boxOf(meters))))
+            print(kindOf(cellOf(meters)))
+            print(kindOf(cellOf(types["plain"]!)))
+            print(boxOf(types["plain"]!).isSubtype(of: (any Kind).self))
             """
         );
+
+    /// <summary>
+    ///     The arguments of a call that opens existentials are evaluated in
+    ///     their order, those between the existentials too, and each is let go
+    ///     when the callee, or a later argument, throws.
+    /// </summary>
+    [Fact]
+    public void AnOpenedCallsArgumentsAreEvaluatedInOrder() =>
+        Prints(
+            """
+            mk a
+            order bx
+            mk c
+            abxc
+            order ok
+            mk long text one
+            mk long text two
+            long text twook
+            long text twook!
+            order bad
+            mk long text one
+            mk long text two
+            caught Bad(why: "long text twobad")
+            mk first long text
+            caught Bad(why: "stop now")
+            mk ext
+            order +
+            ext+
+
+            """,
+            """
+            struct Bad: Error {
+                var why: String
+            }
+
+            protocol P {
+                fn name() -> String
+                fn copy(_ tag: String) throws -> Self
+            }
+
+            struct A: P {
+                var text: String
+                fn name() -> String => text
+                fn copy(_ tag: String) throws -> A {
+                    if tag == "bad" {
+                        throw Bad { why: text + tag }
+                    }
+
+                    return A { text: text + tag }
+                }
+            }
+
+            extension P {
+                fn renamed(_ tag: String) -> String => name() + tag
+                fn itself() throws -> Self => try copy("!")
+            }
+
+            fn mk(_ text: String) -> any P {
+                print("mk \(text)")
+                return A { text: text }
+            }
+
+            fn order(_ text: String) -> String {
+                print("order \(text)")
+                return text
+            }
+
+            fn failing(_ text: String) throws -> String {
+                throw Bad { why: text }
+            }
+
+            fn pair<X: P, Y: P>(_ x: X, _ tag: String, _ y: Y) -> String => x.name() + tag + y.name()
+
+            fn keep<X: P, Y: P>(_ tag: String, _ x: X, _ y: Y) throws -> Y => try y.copy(tag)
+            """,
+            """
+                print(pair(mk("a"), order("b" + "x"), mk("c")))
+                for tag in ["ok", "bad"] {
+                    do {
+                        let kept = try keep(order(tag + ""), mk("long text one"), mk("long text two"))
+                        print(kept.name())
+                        print(try kept.itself().name())
+                    } catch {
+                        print("caught \(error)")
+                    }
+                }
+
+                do {
+                    print(pair(mk("first long text"), try failing("stop now"), mk("never")))
+                } catch {
+                    print("caught \(error)")
+                }
+
+                print(mk("ext").renamed(order("+")))
+            """
+        );
+
+    /// <summary>
+    ///     A value of a generic type made only at run time: its type, opened
+    ///     as a constrained T, makes one through its template table, which
+    ///     reads the arguments from the type's metadata; the result is boxed
+    ///     in a class made for it, is cast to another protocol its
+    ///     declaration conforms it to and to the type itself, copied, and
+    ///     changed on its own.
+    /// </summary>
+    [Fact]
+    public void AValueOfAGenericTypeMadeAtRunTimeIsBoxedAndCast() =>
+        Prints(
+            """
+            box of meters a long label 7 7 tagged box(m7)
+            box of box of meters a long label 7 7 tagged box(box(m7))
+            cell of meters a long label 7 8 tagged cell m7
+            box of plain 0 0 no tag
+            a box of 7
+            caught 7
+
+            """,
+            """
+            struct Bad: Error {
+                var n: Int
+            }
+
+            protocol Zero {
+                static fn zero() -> Self
+                var label: String { get }
+                fn count() -> Int
+                mutating fn bump()
+                fn check() throws -> Self
+            }
+
+            protocol Tagged {
+                fn tag() -> String
+            }
+
+            struct Meters: Zero, Tagged {
+                var value: Int
+                var text: String
+                var label: String { get => "meters \(text)" }
+                static fn zero() -> Meters => Meters { value: 7, text: "a long label" }
+                fn count() -> Int => value
+                mutating fn bump() {
+                    value = value + 1
+                }
+
+                fn check() throws -> Meters {
+                    throw Bad { n: value }
+                }
+
+                fn tag() -> String => "m\(value)"
+            }
+
+            struct Plain: Zero {
+                var label: String { get => "plain" }
+                static fn zero() -> Plain => Plain {}
+                fn count() -> Int => 0
+                mutating fn bump() {}
+                fn check() throws -> Plain => self
+            }
+
+            struct Box<T> {
+                var item: T
+            }
+
+            extension Box: Zero where T: Zero {
+                var label: String { get => "box of \(item.label)" }
+                static fn zero() -> Box<T> => Box { item: T.zero() }
+                fn count() -> Int => item.count()
+                mutating fn bump() {
+                    item.bump()
+                }
+
+                fn check() throws -> Box<T> => Box { item: try item.check() }
+            }
+
+            extension Box: Tagged where T: Tagged {
+                fn tag() -> String => "box(\(item.tag()))"
+            }
+
+            final class Cell<T> {
+                var item: T
+                var bumps = 0
+                init(item: T) {
+                    self.item = item
+                }
+            }
+
+            extension Cell: Zero where T: Zero {
+                var label: String { get => "cell of \(item.label)" }
+                static fn zero() -> Cell<T> => Cell(item: T.zero())
+                fn count() -> Int => item.count() + bumps
+                fn bump() {
+                    bumps = bumps + 1
+                }
+
+                fn check() throws -> Cell<T> => self
+            }
+
+            extension Cell: Tagged where T: Tagged {
+                fn tag() -> String => "cell \(item.tag())"
+            }
+
+            fn boxOf<T>(_ type: T.Type) -> Type => Box<T>.self
+
+            fn cellOf<T>(_ type: T.Type) -> Type => Cell<T>.self
+
+            fn make<T: Zero>(_ type: T.Type) -> T => T.zero()
+            """,
+            """
+                let types: [String: Type] = ["meters": Meters.self, "plain": Plain.self]
+                let meters = types["meters"]!
+                for t in [boxOf(meters), boxOf(boxOf(meters)), cellOf(meters), boxOf(types["plain"]!)] {
+                    let made = make(t)
+                    var copy = made
+                    let before = made.count()
+                    copy.bump()
+                    if let tagged = made as? any Tagged {
+                        print("\(made.label) \(before) \(made.count()) tagged \(tagged.tag())")
+                    } else {
+                        print("\(made.label) \(before) \(made.count()) no tag")
+                    }
+                }
+
+                let made = make(boxOf(meters))
+                if let box = made as? Box<Meters> {
+                    print("a box of \(box.item.value)")
+                }
+
+                do {
+                    let _ = try made.check()
+                } catch let bad as Bad {
+                    print("caught \(bad.n)")
+                } catch {
+                    print("other")
+                }
+            """
+        );
+
+    /// <summary>A conformance a template cannot be made whole for has none: opening the type traps, as one that does not conform does.</summary>
+    [Fact]
+    public void AGenericTypeMadeAtRunTimeWithNoTableTraps() {
+        var execution = Runs(
+            """
+            protocol Takes {
+                associatedtype Item
+                static fn name() -> String
+            }
+
+            struct Plain {}
+
+            struct Box<T>: Takes {
+                alias Item = T
+                var item: T
+                static fn name() -> String => "box"
+            }
+
+            fn boxOf<T>(_ type: T.Type) -> Type => Box<T>.self
+
+            fn name<T: Takes>(_ type: T.Type) -> String => T.name()
+            """,
+            """
+                let t: Type = Plain.self
+                print(name(boxOf(t)))
+            """
+        );
+        Assert.NotEqual(0, execution.ExitCode);
+        Assert.Contains("'Test.Box<Test.Plain>' does not conform to 'Test.Takes'", execution.Stderr, StringComparison.Ordinal);
+    }
 }

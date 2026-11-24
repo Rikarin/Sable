@@ -455,6 +455,8 @@ void sable_register_boxer(const SableTypeMetadata *type, SableBoxer box) {
     boxer_count++;
 }
 
+static void *box_made(void *value, const SableTypeMetadata *type);
+
 void *sable_opaque_box(void *buffer, const SableTypeMetadata *type) {
     SableBoxer box = NULL;
     for (int64_t i = 0; i < boxer_count && box == NULL; i++) {
@@ -469,13 +471,8 @@ void *sable_opaque_box(void *buffer, const SableTypeMetadata *type) {
         }
     }
 
-    if (box == NULL) {
-        char message[512];
-        snprintf(message, sizeof message, "a '%s' with no way to box it as an existential", type->name == NULL ? "?" : type->name);
-        trap_here(message);
-    }
-
-    void *boxed = box(buffer, type);
+    // No image knows an instance of a generic type made at run time: its box's class is made here too.
+    void *boxed = box != NULL ? box(buffer, type) : box_made(buffer, type);
     type->witnesses->destroy(buffer, type);
     free(buffer);
     return boxed;
@@ -569,6 +566,9 @@ typedef struct SableShapeConformance {
     const SableProtocol *protocol;
     int64_t requirement_count;
     const SableShapeRequirement *requirements;
+    // Its template table, one for every instance: each entry reads the type
+    // arguments from Self's metadata (#297, #299). Null where none is made.
+    const SableWitnessTable *witnesses;
 } SableShapeConformance;
 
 typedef struct SableAggregateShape {
@@ -584,9 +584,9 @@ typedef struct SableAggregateShape {
 // The conformance records of an instance of a generic type made at run time
 // (#297): each its declaration has that holds for these arguments — a
 // conditional one where each argument it constrains conforms — as the
-// compiler gives an instance it knows the arguments of. No witness table is
-// made for them, so a cast that needs one finds none; 'is' and
-// 'isSubtype(of:)' answer by them.
+// compiler gives an instance it knows the arguments of, each with its
+// declaration's template table where the compiler made one, so the registry
+// finds a table for the instance as for one the program names.
 static void instance_conformances(SableTypeMetadata *type, const SableAggregateShape *shape) {
     if (shape == NULL || shape->conformance_count == 0) {
         return;
@@ -609,7 +609,7 @@ static void instance_conformances(SableTypeMetadata *type, const SableAggregateS
 
         if (holds) {
             records[count].protocol = conformance->protocol;
-            records[count].witnesses = NULL;
+            records[count].witnesses = conformance->witnesses;
             count++;
         }
     }
@@ -1234,4 +1234,19 @@ const SableTypeMetadata *sable_class_type(void **cache, const SableAggregateShap
     }
 
     return found;
+}
+
+// A box for a value of a type no image boxes, an instance of a generic type
+// made at run time (#297): an object of a class made here for the type, laid
+// out as a compiled box is, its one field the value and its one type argument
+// the type, so that what it holds is found as any box's is.
+static void *box_made(void *value, const SableTypeMetadata *type) {
+    static const char *const names[] = {"value"};
+    static const SableAggregateShape shape = {SABLE_KIND_CLASS, 1, names, "any$box$of", 1, 0, NULL};
+    void *cache = NULL;
+    const SableTypeMetadata *parts[] = {type, type};
+    const SableTypeMetadata *made = sable_class_type(&cache, &shape, parts);
+    void *box = sable_alloc(made->object, made->object->size);
+    type->witnesses->initialize_with_copy((char *)box + made->fields[0].offset, value, type);
+    return box;
 }

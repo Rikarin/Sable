@@ -242,6 +242,11 @@ public static class AsyncLowering {
                 escapes.UnionWith(type.VTable.Select(static m => m.Function));
             }
 
+            // A witness, called through its table's entry by code that knows only the entry's type (#299).
+            foreach (var table in module.WitnessTables) {
+                escapes.UnionWith(table.Entries.Select(static e => e.Function).OfType<string>());
+            }
+
             foreach (var instruction in module.Functions.SelectMany(static f => f.Blocks).SelectMany(static b => b.Instructions)) {
                 for (var i = 0; i < instruction.Operands.Count; i++) {
                     if (instruction.Operands[i] is FunctionRefInst reference

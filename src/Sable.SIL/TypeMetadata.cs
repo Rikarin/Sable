@@ -336,6 +336,14 @@ public sealed class SilWitnessTable(SilType conformer, string protocol) {
     public string Protocol { get; } = protocol;
 
     /// <summary>
+    ///     A generic type's table for every instance of it made at run time
+    ///     (SilGen.Templates.cs): its conformer is the instance with the type's
+    ///     own parameters opaque, and its entries read the type arguments from
+    ///     Self's metadata. Pointed at by the type's shape, not registered.
+    /// </summary>
+    public bool IsTemplate { get; init; }
+
+    /// <summary>
     ///     Each requirement the protocol itself declares, in declaration order,
     ///     with its witness in the generic calling convention (#297, #299):
     ///     <c>self</c> (its storage's address, for one that changes it) unless

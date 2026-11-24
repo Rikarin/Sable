@@ -220,13 +220,16 @@ public sealed partial class LlvmEmitter {
                 _globals.Append($"{required} = {SharedLinkage} constant [{requirements.Length} x {{ i64, ptr }}] [{each}]{Comdat(required, SharedLinkage)}\n");
             }
 
-            records.Add($"{{ ptr, i64, ptr }} {{ ptr {ProtocolDescriptor(protocol)}, i64 {requirements.Length}, ptr {required} }}");
+            // Its template table, whose entries read the arguments from Self's metadata (SilGen.Templates.cs); null for none.
+            // A program built in units leaves it null, so every unit's shape is the same.
+            var template = _module is { Unit: null } && _module.FindWitnessTable(type, protocol) is { IsTemplate: true } table ? WitnessTableGlobal(table) : "null";
+            records.Add($"{{ ptr, i64, ptr, ptr }} {{ ptr {ProtocolDescriptor(protocol)}, i64 {requirements.Length}, ptr {required}, ptr {template} }}");
         }
 
         var conformances = "null";
         if (records.Count > 0) {
             conformances = $"@\"sable.shape.conformances.{Mangled(type)}\"";
-            _globals.Append($"{conformances} = {SharedLinkage} constant [{records.Count} x {{ ptr, i64, ptr }}] [{string.Join(", ", records)}]{Comdat(conformances, SharedLinkage)}\n");
+            _globals.Append($"{conformances} = {SharedLinkage} constant [{records.Count} x {{ ptr, i64, ptr, ptr }}] [{string.Join(", ", records)}]{Comdat(conformances, SharedLinkage)}\n");
         }
 
         _globals.Append($"{name} = {SharedLinkage} constant {{ i64, i64, ptr, ptr, i64, i64, ptr }} {{ i64 {(int)TypeMetadata.KindOf(type)}, i64 {parts.Count}, ptr {names}, ")
@@ -365,7 +368,7 @@ public sealed partial class LlvmEmitter {
         }
 
         var body = new StringBuilder("define internal void @\"sable.witnesses.register\"() {\nentry:\n");
-        foreach (var table in module.WitnessTables) {
+        foreach (var table in module.WitnessTables.Where(static t => !t.IsTemplate)) {
             body.Append($"  call void @sable_register_witness_table(ptr {TypeMetadataGlobal(table.Conformer)}, ptr {WitnessTableGlobal(table)})\n");
         }
 

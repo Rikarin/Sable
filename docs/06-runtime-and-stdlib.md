@@ -244,14 +244,31 @@ A member of an extension of the protocol, which is no requirement, has no
 entry: a call of it on an existential opens the existential as a type known
 only by its metadata — its value where the box holds it, its tables those
 the existential holds — and calls the member compiled once, as on a type
-parameter's value (SE-0352). So does a call of generic code given an
-existential for a type parameter that one parameter takes as itself and
-nothing else of its signature names but its result: `twice(e)` for `fn
-twice<T: P>(_ x: T)` runs `twice` compiled once with the value's address,
-the metadata and the tables, so requirements that mention `Self` or an
-associated type (`x.same(x)`) are callable on it; a result of `T` is boxed
-again by the type's boxer. A specialised build compiles such callees once
-from the first call that needs them, as a call that opens a Type does.
+parameter's value (SE-0352). So does a requirement whose result (or a
+get-only property whose type) is `Self` or one of the protocol's associated
+types: the entry writes the result to a buffer its metadata sizes
+(`opaque_alloc`) — an associated type's metadata read from the table
+(`witness_associated:i`) — and the value is boxed again by its type's boxer,
+as the existential of `Self` or of the protocols the associated type is
+constrained to (SYNTAX.md "Opening an existential"). An async requirement's
+entry is an async function in the same convention, awaited as any async
+call; one is not made yet for an async requirement that takes or gives a
+value of `Self` or an associated type other than `self`, since a suspension
+would have to keep the caller's storage. A witness is referenced from its
+table, so AsyncLowering keeps it async even where it never suspends.
+
+So does a call of generic code given existentials for its type
+parameters, each of which one parameter takes as itself and nothing else of
+its signature names but its result: `twice(e)` for `fn twice<T: P>(_ x:
+T)`, and `pair(a, b)` for `fn pair<A: P, B: Q>(_ a: A, _ b: B)` with both,
+run the callee compiled once with each value's address, metadata and
+tables, so requirements that mention `Self` or an associated type
+(`x.same(x)`) are callable on it; a result of one of them is boxed again by
+the type's boxer. A type parameter two parameters name, or one named in a
+`T?`, a `T[]` or another type made of it, in an `inout`, in a result or an
+error other than as itself, or in a `where` clause, is not opened. A
+specialised build compiles such callees once from the first call that needs
+them, as a call that opens a Type does.
 
 **Witness tables.** Each conformance a program needs — a type put in an
 existential, a type conforming to a protocol cast to, a type unspecialised
@@ -283,9 +300,10 @@ Index`) is passed by the address of its caller's storage. A requirement
 whose error is of an associated type, `throws(Failure)`, writes the error
 where its caller says and throws that address: the witness of a conformer
 whose `Failure` is `Never` never writes it. A requirement that convention
-cannot pass yet (generic itself, async, an initialiser, or `Self` inside
-another type than an optional or a tuple) has an empty entry, and a call
-of it through an existential is not lowered (S7000). Each witness
+cannot pass yet (generic itself, an initialiser, async with a value of
+`Self` or an associated type other than `self`, or `Self` inside another
+type than an optional or a tuple) has an empty entry, and a call of it
+through an existential is not lowered (S7000). Each witness
 (`$generic$witness$T$P$i$name`) is the requirement lowered as if its body
 called itself on the conforming type, so it is met as code that knows the
 type meets it: the type's member — through its vtable for a class a
@@ -620,8 +638,19 @@ Q` makes them. The registry finds only the
 tables a program makes, so a call that opens a Type makes, for every type
 of the program that conforms to `T`'s protocols, its table with its generic
 entries, its boxer when the result is erased, and its describer when the
-callee writes a value out; a type that conforms only by a generic type's
-instance made at run time has none, and traps.
+callee writes a value out; an instance of a generic type made at run time
+has its declaration's **template** tables (src/Sable.SIL/SilGen.Templates.cs),
+one per conformance for every instance, which the type's shape points at:
+each entry reads the type arguments from `Self`'s metadata
+(`metadata_argument`), finds the tables the conformance requires of them in
+the registry, and calls the witness compiled once for the generic type. They
+are made for the protocols a program opens a type as or casts to, whole or
+not at all: a conformance to a protocol with associated types, or with a
+requirement the convention cannot pass or whose member is not compiled once,
+has none, and the opening traps. A value of such an instance is boxed in a
+class the runtime makes for it (`sable_opaque_box`). A program built in
+units points at no templates, as every unit's shape must be the same, so
+there it still traps.
 
 A specialised build compiles generic code once too, from the first call
 that opens a Type: such a call, and the code compiled once it reaches,
@@ -901,7 +930,9 @@ cost over the compiler doing it by special case (docs/04, "Sable.Core in
 Sable"). Outside the core, `Sable.Math` declares the elementary functions
 this way: its `ElementaryFunctions` protocol's static requirements
 (`static fn sin(_ x: Self) -> Self`, …) are libm's for F64 and F32
-(`math_sin_F64`, through LLVM's intrinsic where it has one), and its free
+(`math_sin_F64`, a call of libm's `sin` that LLVM may neither fold nor
+rewrite, so a constant operand gives the bits the interpreter's call of the
+same libm does, at every optimisation level), and its free
 functions are generic over it, written once — `sin(x)` is `T.sin(x)`,
 monomorphised to the call to libm. Floats have no `x.sin()` method.
 

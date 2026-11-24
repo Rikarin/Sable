@@ -3,16 +3,10 @@
 
     tools/bench/compare.py [--runs N] [--markdown FILE] [--require LANGUAGES] [name ...]
 
-Two sets of benchmarks:
-
-- library: benchmarks/versus-dotnet/*.sb, the standard library's types and
-  functions. The .NET ports are benchmarks/dotnet/Program.cs, the Rust ones
-  benchmarks/rust/library/*.rs and the C ones benchmarks/c/library/*.c: one
-  for each benchmark that language's own standard library can do (C has no
-  hash map, Rust no decimal).
-- programs: benchmarks/*.sb with a port, the language itself. The .NET ports
-  are benchmarks/dotnet/Programs.cs, and the others benchmarks/rust/*.rs and
-  benchmarks/c/*.c.
+A benchmark is a folder, benchmarks/<set>/<name>, with <name>.sb and the
+ports there are of it: <name>.cs, <name>.rs and <name>.c. The sets are
+'library', the standard library's types and functions, each ported where a
+language's own standard library has an equal, and 'programs', the language.
 
 A benchmark without a port in a language is a dash in its column. Ports must
 print what the Sable program does; one that prints something else, or does
@@ -22,7 +16,8 @@ rest have run. Being slower never does.
 Times are processor time, the median of N runs: not the fastest, which with
 threads is the run where they happened not to meet. For Sable, Rust and C that
 is the whole process; for .NET the benchmark alone, inside a process that has
-warmed the JIT (versus_dotnet.py says why). Rust and C trap on integer
+warmed the JIT (benchmarks/support/dotnet/Program.cs), so
+the comparison leans towards .NET, on purpose: it is the time to beat. Rust and C trap on integer
 overflow and check bounds, as Sable does.
 
 A name is 'map-int', or 'library/sort' where two sets have one. SABLE names
@@ -37,37 +32,59 @@ import math
 import os
 import pathlib
 import platform
+import resource
 import shutil
 import statistics
 import subprocess
 import sys
 import tempfile
 
-from versus_dotnet import DOTNET, ROOT, build, dotnet_times, sable_times
-
-LANGUAGES = {"dotnet": ".NET", "rust": "Rust", "c": "C"}
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 BENCHMARKS = ROOT / "benchmarks"
+DOTNET = BENCHMARKS / "support" / "dotnet"
+LANGUAGES = {"dotnet": ".NET", "rust": "Rust", "c": "C"}
+SETS = {"library": "Standard library", "programs": "Programs"}
+
+
+def build(project, directory, name):
+    subprocess.run(
+        ["dotnet", "build", str(project), "-c", "Release", "-o", str(directory), "-v", "quiet", "-nologo"],
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    return directory / name
+
+
+def process_times(executable, runs):
+    times, output = [], None
+    for _ in range(runs):
+        before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        result = subprocess.run([executable], cwd=executable.parent, capture_output=True, text=True, check=True)
+        after = resource.getrusage(resource.RUSAGE_CHILDREN)
+        times.append((after.ru_utime + after.ru_stime - before.ru_utime - before.ru_stime) * 1000)
+        output = result.stdout
+    return times, output
+
+
+def dotnet_times(executable, name, runs):
+    # The program warms the JIT up itself, before the runs it times.
+    result = subprocess.run([executable, name, str(runs)], cwd=executable.parent, capture_output=True, text=True, check=True)
+    times = next(line.split()[1:] for line in result.stderr.splitlines() if line.startswith("times "))
+    return [float(ms) for ms in times], result.stdout
 
 
 class Benchmark:
     """One Sable program and the ports there are of it."""
 
-    def __init__(self, group, source, dotnet):
-        self.group, self.name, self.source = group, source.stem, source
-        folder = "library" if group == "library" else "."
-        key = self.name if group == "library" else f"programs/{self.name}"
-        self.ports = {"dotnet": key if key in dotnet else None}
-        for language, extension in (("rust", "rs"), ("c", "c")):
-            port = BENCHMARKS / language / folder / f"{self.name}.{extension}"
+    def __init__(self, folder):
+        self.group, self.name = folder.parent.name, folder.name
+        self.source = folder / f"{self.name}.sb"
+        self.ports = {}
+        for language, extension in (("dotnet", "cs"), ("rust", "rs"), ("c", "c")):
+            port = folder / f"{self.name}.{extension}"
             self.ports[language] = port if port.exists() else None
         self.ms = {}  # language -> milliseconds
         self.errors = {}  # language -> what went wrong
-
-
-def dotnet_names(executable):
-    """The benchmarks the .NET program has, as its usage line lists them."""
-    usage = subprocess.run([executable], capture_output=True, text=True).stderr
-    return usage[usage.index("<") + 1 : usage.index(">")].split("|")
 
 
 def version(command, line=0):
@@ -90,7 +107,7 @@ def measure(benchmark, language, tools, scratch, runs):
     """The times of one side of a benchmark, and what it printed."""
     executable = scratch / f"{benchmark.group}-{benchmark.name}-{language}"
     if language == "dotnet":
-        return dotnet_times(tools["dotnet"], benchmark.ports["dotnet"], runs)
+        return dotnet_times(tools["dotnet"], f"{benchmark.group}/{benchmark.name}", runs)
     if language == "sable":
         command = [tools["sable"], "build", benchmark.source, "-o", executable]
     elif language == "rust":
@@ -98,7 +115,7 @@ def measure(benchmark, language, tools, scratch, runs):
     else:
         command = [tools["c"], "-O2", "-pthread", benchmark.ports["c"], "-o", executable, "-lm"]
     subprocess.run([str(part) for part in command], check=True, capture_output=True, text=True)
-    return sable_times(executable, runs)
+    return process_times(executable, runs)
 
 
 def run(benchmark, tools, scratch, runs):
@@ -199,14 +216,10 @@ def main():
         scratch = pathlib.Path(scratch)
         tools = {language: path for language, path in found.items() if path}
         tools["sable"] = os.environ.get("SABLE") or build(ROOT / "src" / "Sable.Driver", scratch / "compiler", "sable")
-        dotnet = []
         if "dotnet" in tools:
-            tools["dotnet"] = build(DOTNET, scratch / "dotnet", "VersusDotnet")
-            dotnet = dotnet_names(tools["dotnet"])
+            tools["dotnet"] = build(DOTNET, scratch / "dotnet", "Benchmarks")
 
-        sources = [("library", path) for path in sorted((BENCHMARKS / "versus-dotnet").glob("*.sb"))]
-        sources += [("programs", path) for path in sorted(BENCHMARKS.glob("*.sb"))]
-        benchmarks = [Benchmark(group, path, dotnet) for group, path in sources]
+        benchmarks = [Benchmark(path.parent) for group in SETS for path in sorted((BENCHMARKS / group).glob("*/*.sb"))]
         benchmarks = [b for b in benchmarks if any(b.ports.values())]
         if arguments.names:
             for name in arguments.names:
@@ -231,7 +244,7 @@ def main():
     )
     print("; ".join(about) + f"\n{notes}")
     page = ["## Sable against .NET, Rust and C", "", "; ".join(about), "", notes]
-    for group, title in (("library", "Standard library"), ("programs", "Programs")):
+    for group, title in SETS.items():
         if chosen := [b for b in benchmarks if b.group == group]:
             rows = table(chosen, languages)
             print(f"\n{title}\n{text(rows)}")

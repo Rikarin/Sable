@@ -41,7 +41,7 @@ public sealed class TypeMetadataTests {
                            }
                            """;
 
-    static string Ir(string source, bool denyReflection = false) {
+    internal static string Ir(string source, bool denyReflection = false) {
         var result = Pipeline.Compile([SyntaxTree.Parse(new SourceText(source, "zoo.sb"))], denyReflection: denyReflection);
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
         return result.LlvmIr!;

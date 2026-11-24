@@ -1007,18 +1007,18 @@ public sealed class IncrementalTests {
     [Theory]
     [InlineData("examples/ssg/ssg.sb", 1)]
     [InlineData("examples/ssg/ssg.sb", 6)]
-    [InlineData("benchmarks/shapes.sb", 3)]
-    [InlineData("benchmarks/words.sb", 3)]
-    [InlineData("benchmarks/sort.sb", 3)]
-    [InlineData("benchmarks/binary-trees.sb", 4)]
-    [InlineData("benchmarks/orders.sb", 4)]
+    [InlineData("benchmarks/programs/shapes/shapes.sb", 3)]
+    [InlineData("benchmarks/programs/words/words.sb", 3)]
+    [InlineData("benchmarks/programs/sort/sort.sb", 3)]
+    [InlineData("benchmarks/programs/binary-trees/binary-trees.sb", 4)]
+    [InlineData("benchmarks/programs/orders/orders.sb", 4)]
     // Optimised with ThinLTO: the SIL passes run on each unit apart.
     [InlineData("examples/ssg/ssg.sb", 6, true)]
-    [InlineData("benchmarks/shapes.sb", 3, true)]
-    [InlineData("benchmarks/words.sb", 3, true)]
-    [InlineData("benchmarks/sort.sb", 3, true)]
-    [InlineData("benchmarks/binary-trees.sb", 4, true)]
-    [InlineData("benchmarks/orders.sb", 4, true)]
+    [InlineData("benchmarks/programs/shapes/shapes.sb", 3, true)]
+    [InlineData("benchmarks/programs/words/words.sb", 3, true)]
+    [InlineData("benchmarks/programs/sort/sort.sb", 3, true)]
+    [InlineData("benchmarks/programs/binary-trees/binary-trees.sb", 4, true)]
+    [InlineData("benchmarks/programs/orders/orders.sb", 4, true)]
     public void SeparatelyCompiledProgramsBehaveAsWholeOnes(string file, int parts, bool release = false) {
         if (!CanBuild) {
             return;

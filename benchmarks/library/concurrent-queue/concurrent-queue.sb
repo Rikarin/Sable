@@ -1,0 +1,48 @@
+module ConcurrentQueueBench
+
+import Sable.Concurrency
+
+// ConcurrentQueue<Int> against .NET 11's: two producers enqueue half a
+// million numbers each while two consumers dequeue them all and add them
+// up. The .NET port does the same with four threads, and prints the
+// same line.
+
+@main
+fn main() async {
+    let queue = ConcurrentQueue<Int>()
+    let taken = Atomic<Int>(0)
+    let sum = await withTaskGroup(of: Int.self) { group -> Int in
+        var p = 0
+        while p < 2 {
+            group.spawn {
+                var i = 0
+                while i < 500000 {
+                    queue.enqueue(i)
+                    i = i + 1
+                }
+                return 0
+            }
+            p = p + 1
+        }
+        var c = 0
+        while c < 2 {
+            group.spawn {
+                var total = 0
+                while taken.load(ordering: .Relaxed) < 1000000 {
+                    if let value = queue.dequeue() {
+                        total = total + value
+                        taken.add(1, ordering: .Relaxed)
+                    }
+                }
+                return total
+            }
+            c = c + 1
+        }
+        var all = 0
+        for await part in group {
+            all = all + part
+        }
+        return all
+    }
+    print("\(sum)")
+}

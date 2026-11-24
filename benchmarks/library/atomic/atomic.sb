@@ -1,0 +1,29 @@
+module AtomicBench
+
+// Atomic<Int>: four tasks on the pool, each adding one to a shared count
+// half a million times, then as often by compare-and-exchange.
+
+@main
+fn main() async {
+    let count = Atomic<Int>(0)
+    await withTaskGroup(of: Int.self) { group in
+        for _ in 0..<4 {
+            group.spawn {
+                for _ in 0..<500000 {
+                    count.add(1)
+                }
+                for _ in 0..<500000 {
+                    var seen = count.load()
+                    while true {
+                        let (done, was) = count.compareExchange(expected: seen, desired: seen + 1)
+                        if done { break }
+                        seen = was
+                    }
+                }
+                return 0
+            }
+        }
+        await group.waitForAll()
+    }
+    print(count.load())
+}

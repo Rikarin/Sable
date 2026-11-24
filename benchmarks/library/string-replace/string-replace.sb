@@ -1,0 +1,15 @@
+module StringReplaceBench
+
+// Replacing text in text: a word by a longer one and a shorter one,
+// throughout a megabyte, twenty times.
+
+@main
+fn main() {
+    let text = "the cat sat on the mat and the dog lay on the rug; ".repeated(20000)
+    var total = 0
+    for _ in 0..<20 {
+        total += text.replacing("the", with: "every").count
+        total += text.replacing(" on ", with: " ").count
+    }
+    print(total)
+}

@@ -1,0 +1,20 @@
+module NormalizeBench
+
+import Sable.Text
+
+// Unicode normalisation: a megabyte of text to NFD and back to NFC, then
+// ASCII, which is neither.
+
+@main
+fn main() {
+    let accented = "Ça été où à la fête, señor Größe: Ärger über Öl. ".repeated(20000)
+    let ascii = "The quick brown fox jumps over the lazy dog, again. ".repeated(20000)
+    var total = 0
+    for _ in 0..<3 {
+        let apart = accented.normalized(.NFD)
+        total += apart.count
+        if apart.normalized(.NFC) == accented { total += 1 }
+        total += ascii.normalized(.NFC).count
+    }
+    print(total)
+}

@@ -1,0 +1,24 @@
+module JsonDomBench
+
+import Sable.Serialize
+
+// JSON as a tree: three megabytes parsed without a type, and walked.
+
+@main
+fn main() throws(ParseError) {
+    var parts: String[>..] = []
+    for i in 0..<30000 {
+        parts.append("{\"id\": \(i), \"name\": \"item \(i)\", \"price\": \(i % 1000).25, \"tags\": [\"a\", \"b\\n\", true, null]}")
+    }
+    let text = "[" + parts.joined(separator: ", ") + "]"
+    var total = 0.0
+    var count = 0
+    for _ in 0..<3 {
+        let document = try parse(text)
+        for item in itemsOf(document) {
+            total += asNumber(field(item, "id")!)! + asNumber(field(item, "price")!)!
+            count += countOf(field(item, "tags")!) + asText(field(item, "name")!)!.count
+        }
+    }
+    print("\(count) \(total:.2f)")
+}

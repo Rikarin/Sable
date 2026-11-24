@@ -1,0 +1,36 @@
+module SortedSetBench
+
+import Sable.Collections
+
+// SortedSet<Int>: 200,000 pseudo-random numbers inserted, looked up, a
+// third removed, then the rest gone through in order.
+
+@main
+fn main() {
+    var values: Int[>..] = []
+    var x = 12345
+    for _ in 0..<200000 {
+        x = (x * 1103515245 + 12345) % 2147483648
+        values.append(x)
+    }
+
+    var members = SortedSet<Int>()
+    for value in values {
+        members.insert(value)
+    }
+    var hits = 0
+    for value in values {
+        if members.contains(value) { hits += 1 }
+        if members.contains(value + 2147483648) { hits += 1 }
+    }
+    for i in 0..<200000 {
+        if i % 3 == 0 {
+            members.remove(values[i])
+        }
+    }
+    var total = 0
+    for value in members {
+        total = (total * 31 + value) % 1000000007
+    }
+    print("\(members.count) \(hits) \(total) \(members.first!) \(members.last!)")
+}

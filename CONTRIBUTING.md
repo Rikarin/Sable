@@ -177,15 +177,11 @@ tools/bench/compare.py map-int words    # some
 ```
 
 It prints a table of each benchmark's time in each language, and CI's
-*Benchmarks* runs have the same tables as their summary. `benchmarks/*.sb` are
-whole programs and `benchmarks/versus-dotnet/*.sb` the standard library; the
-ports are in `benchmarks/dotnet`, `benchmarks/rust` and `benchmarks/c` (the
-library's under `library/`). Add a port by adding a file of the benchmark's
-name, or in .NET an entry in `Program.cs`. It must print what the Sable program
-prints, keep Sable's checks (integer overflow and bounds), and use nothing
-outside its language's own standard library, where .NET's includes
-`System.Numerics.Tensors`. CI fails on a port that does not build or prints
-something else, never on a time.
+*Benchmarks* runs have the same tables as their summary. Each benchmark is a
+folder with its ports in it, under `benchmarks/library` (the standard library)
+or `benchmarks/programs`; [benchmarks/README.md](benchmarks/README.md) says how
+to add one. CI fails on a port that does not build or prints something else,
+never on a time.
 
 ## The syntax tree
 

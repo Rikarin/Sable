@@ -13,7 +13,7 @@ one where each retain, and each release that leaves an object alive, first
 does an equal, out-of-line operation on the object's header — and the
 difference is what the traffic costs. Overhead = cost / (time - cost).
 
-The hand-written C ports in benchmarks/c are timed beside it, for the whole
+The hand-written C ports in benchmarks/programs are timed beside it, for the whole
 gap to manual C: allocation, layout and code generation included.
 """
 
@@ -82,11 +82,11 @@ def main():
         for name in BENCHMARKS:
             ir = scratch / f"{name}.ll"
             with ir.open("w") as out:
-                subprocess.run([scratch / "compiler" / "sable", "build", ROOT / "benchmarks" / f"{name}.sb", "--emit", "llvm-ir"], check=True, stdout=out)
+                subprocess.run([scratch / "compiler" / "sable", "build", ROOT / "benchmarks" / "programs" / name / f"{name}.sb", "--emit", "llvm-ir"], check=True, stdout=out)
             plain, twice, c = scratch / name, scratch / f"{name}.twice", scratch / f"{name}.c"
             subprocess.run(["clang", "-O2", "-Wno-override-module", ir, ROOT / "runtime" / "sable_runtime.c", "-o", plain, "-lm"], check=True)
             subprocess.run(["clang", "-O2", "-Wno-override-module", ir, doubled, "-o", twice, "-lm"], check=True)
-            subprocess.run(["clang", "-O2", ROOT / "benchmarks" / "c" / f"{name}.c", "-o", c, "-lm"], check=True)
+            subprocess.run(["clang", "-O2", ROOT / "benchmarks" / "programs" / name / f"{name}.c", "-o", c, "-lm"], check=True)
 
             ms, ms_twice, ms_c = best(plain, arguments.runs), best(twice, arguments.runs), best(c, arguments.runs)
             cost = max(ms_twice - ms, 0.0)

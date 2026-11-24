@@ -1,0 +1,28 @@
+module OrderedDictionaryBench
+
+import Sable.Collections
+
+// OrderedDictionary<Int, Int>: 300,000 pseudo-random keys set, looked up
+// by key and read by position.
+
+@main
+fn main() {
+    let dictionary = OrderedDictionary<Int, Int>()
+    var keys: Int[>..] = []
+    var x = 12345
+    for i in 0..<300000 {
+        x = (x * 1103515245 + 12345) % 2147483648
+        keys.append(x)
+        dictionary.set(x, i)
+    }
+    var total = 0
+    for _ in 0..<3 {
+        for key in keys {
+            total += dictionary.get(key)!
+        }
+    }
+    for i in 0..<dictionary.count {
+        total = (total + dictionary.key(at: i) * 3 + dictionary.value(at: i)) % 1000000007
+    }
+    print("\(dictionary.count) \(total)")
+}

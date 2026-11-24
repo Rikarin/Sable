@@ -780,9 +780,17 @@ public sealed partial class LlvmEmitter {
     static string MainShim(SilFunction entry, bool keepEntry, bool wasm = false) {
         var call = $"@{Global(entry.Name)}()" + (keepEntry ? " noinline" : "");
         var name = wasm ? "__main_argc_argv" : "main";
-        return entry.Type.Result == SilType.Int
-            ? $"define i32 @{name}(i32 %argc, ptr %argv) {{\n  call void @sable_set_arguments(i32 %argc, ptr %argv)\n  %r = call i64 {call}\n  %c = trunc i64 %r to i32\n  ret i32 %c\n}}\n"
-            : $"define i32 @{name}(i32 %argc, ptr %argv) {{\n  call void @sable_set_arguments(i32 %argc, ptr %argv)\n  call void {call}\n  ret i32 0\n}}\n";
+        // By the type the function has: a throwing one's pair comes back, where
+        // the ABI has it so, through a pointer its caller passes. Nothing is
+        // thrown here: an error that would leave main ends the program in it.
+        var type = ReturnType(entry.Type);
+        var body = (entry.Type.Result == SilType.Int, entry.Type.Thrown) switch {
+            (true, null) => $"  %r = call {type} {call}\n  %c = trunc i64 %r to i32\n  ret i32 %c\n",
+            (true, _) => $"  %p = call {type} {call}\n  %r = extractvalue {type} %p, 1\n  %c = trunc i64 %r to i32\n  ret i32 %c\n",
+            (false, null) => $"  call {type} {call}\n  ret i32 0\n",
+            _ => $"  %p = call {type} {call}\n  ret i32 0\n",
+        };
+        return $"define i32 @{name}(i32 %argc, ptr %argv) {{\n  call void @sable_set_arguments(i32 %argc, ptr %argv)\n{body}}}\n";
     }
 
     /// <summary>

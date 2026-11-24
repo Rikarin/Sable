@@ -1,0 +1,27 @@
+module ByteOrderBench
+
+// Reading and writing integers of a byte order: a megabyte of big-endian
+// U32s and little-endian U64s, fifty times.
+
+@main
+fn main() {
+    var bytes: U8[>..] = []
+    for _ in 0..<1048576 {
+        bytes.append(0)
+    }
+    var total: U64 = 0
+    for round in 0..<50 {
+        var at = 0
+        while at < 1048576 {
+            bytes.writeU32(U32(at + round), at: at, endian: .Big)
+            bytes.writeU64(U64(at * 3), at: at + 4, endian: .Little)
+            at += 16
+        }
+        at = 0
+        while at < 1048576 {
+            total = (total + U64(bytes.readU32(at: at, endian: .Big)) + bytes.readU64(at: at + 4, endian: .Little)) % 1000000007
+            at += 16
+        }
+    }
+    print(total)
+}

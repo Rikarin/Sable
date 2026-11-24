@@ -1,0 +1,15 @@
+module UrlBench
+
+import Sable.Net
+
+// Urls: 100,000 parsed, and their hosts, paths and queries read.
+
+@main
+fn main() throws(UrlError) {
+    var total = 0
+    for i in 0..<100000 {
+        let url = try Url.parse("https://user@www.example.com:8443/a/path/\(i)/page.html?name=value&n=\(i)#top")
+        total += url.hostname.count + url.path.count + url.search.count + url.port!
+    }
+    print(total)
+}

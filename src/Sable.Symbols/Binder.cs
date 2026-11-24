@@ -8265,7 +8265,7 @@ public sealed partial class Binder {
             if (FindUserUnaryOperator(syntax.OperatorToken.Text, operand.Type, OperatorFixity.Prefix) is { } method) {
                 return new BoundUnaryOperator(
                     syntax,
-                    UserResultType(method, operand.Type),
+                    UserResultType(method, operand.Type, operand.Type is NamedTypeSymbol owner ? TypeSubstitution.For(owner) : null),
                     UnaryOperatorKind.UserDefined,
                     UserOperand(method, operand),
                     method
@@ -8369,7 +8369,7 @@ public sealed partial class Binder {
         }
 
         if (FindUserUnaryOperator(syntax.OperatorToken.Text, operand.Type, OperatorFixity.Postfix) is { } method) {
-            return new BoundUnaryOperator(syntax, UserResultType(method, operand.Type), UnaryOperatorKind.UserDefined, UserOperand(method, operand), method);
+            return new BoundUnaryOperator(syntax, UserResultType(method, operand.Type, operand.Type is NamedTypeSymbol owner ? TypeSubstitution.For(owner) : null), UnaryOperatorKind.UserDefined, UserOperand(method, operand), method);
         }
 
         if (!operand.HasError) {
@@ -8536,7 +8536,8 @@ public sealed partial class Binder {
                 or BinaryOperatorKind.GreaterThan or BinaryOperatorKind.GreaterThanOrEqual
             && left.Type.Equals(Core.String) && right.Type.Equals(Core.String);
         if (!IsBuiltinOperand(left.Type) || !IsBuiltinOperand(right.Type) || stringOrdering) {
-            if (FindUserOperator(symbol, left.Type, right.Type) is { } own) {
+            // A literal operand takes the parameter's type, as an argument does: 'v * 2' on a SIMD<F32, 4>.
+            if (FindUserOperator(symbol, left.Type, right.Type, leftLiteral: left is BoundLiteral, rightLiteral: right is BoundLiteral) is { } own) {
                 (left, right) = UserOperands(own, left, right);
                 return new BoundBinaryOperator(syntax, UserResultType(own.Method, left.Type, own.Owner), BinaryOperatorKind.UserDefined, left, right, own.Method);
             }
@@ -8789,7 +8790,12 @@ public sealed partial class Binder {
             return null;
         }
 
-        foreach (var member in named.Members) {
+        // A generic type's operator, seen through the operand's type
+        // arguments, and a constrained extension's only where its
+        // requirements hold: '-v' on a SIMD<F32, 4>, from 'extension SIMD
+        // where Scalar: SignedNumeric', and not on a SIMD<U8, 4>.
+        var members = TypeSubstitution.For(named);
+        foreach (var member in named.OriginalDefinition.Members) {
             if (member is not FunctionSymbol { FunctionKind: FunctionKind.Operator } function) {
                 continue;
             }
@@ -8806,7 +8812,11 @@ public sealed partial class Binder {
                 continue;
             }
 
-            if (_conversions.HasImplicitConversion(operand, function.Parameters[0].Type)) {
+            if (function.ContainingSymbol is ExtensionSymbol { IsConstrained: true } extension && extension.Unmet(members, _conversions.Equivalence) is not null) {
+                continue;
+            }
+
+            if (_conversions.HasImplicitConversion(operand, members.Apply(function.Parameters[0].Type))) {
                 return function;
             }
         }
@@ -8894,7 +8904,7 @@ public sealed partial class Binder {
     ///     type declares for the two; <paramref name="swapped" /> when the
     ///     left operand is passed second, as '>' passes its operands to '<'.
     /// </summary>
-    UserOperator? FindUserOperator(string symbol, TypeSymbol left, TypeSymbol right, bool swapped = false) {
+    UserOperator? FindUserOperator(string symbol, TypeSymbol left, TypeSymbol right, bool swapped = false, bool leftLiteral = false, bool rightLiteral = false) {
         // 'a < b' on two T: Comparable — the protocol's requirement, met by
         // whatever T turns out to be. 'C.Item' with 'associatedtype Item:
         // Comparable' is the same: its constraints are as good as T's.
@@ -8933,13 +8943,18 @@ public sealed partial class Binder {
                 }
 
                 // A generic type's operator, seen through the operand's type
-                // arguments; a derived one only where its conformance holds.
+                // arguments; a derived one only where its conformance holds,
+                // and a constrained extension's only where its requirements do.
                 var members = TypeSubstitution.For(named);
+                if (function.ContainingSymbol is ExtensionSymbol { IsConstrained: true } extension && extension.Unmet(members, _conversions.Equivalence) is not null) {
+                    continue;
+                }
+
                 var first = members.Apply(function.Parameters[0].Type);
                 var second = members.Apply(function.Parameters[1].Type);
                 var (leftParameter, rightParameter) = swapped ? (second, first) : (first, second);
-                if (_conversions.HasImplicitConversion(left, leftParameter)
-                    && _conversions.HasImplicitConversion(right, rightParameter)
+                if (_conversions.HasImplicitConversion(left, leftParameter, leftLiteral)
+                    && _conversions.HasImplicitConversion(right, rightParameter, rightLiteral)
                     && (_compilation.GetDerivation(function) is not { } derivation || Conversions.Satisfies(named, derivation.Protocol))) {
                     return new UserOperator(function, leftParameter, rightParameter, members);
                 }
@@ -9026,16 +9041,20 @@ public sealed partial class Binder {
             return expression;
         }
 
-        // '[1, 2, 3]' where a 'U16[]' is wanted: each element takes the element type.
+        // '[1, 2, 3]' where a 'U16[]' is wanted: each element takes the element
+        // type — '[1.5, 3]' too, whose '3' the literal made an F64 first.
+        static BoundExpression Written(BoundExpression element) =>
+            element is BoundConversion { Operand: BoundLiteral literal } ? literal : element;
+
         if (expression is BoundArray { Type: ArrayTypeSymbol literalArray } arrayLiteral
             && target is ArrayTypeSymbol wantedArray
             && !literalArray.ElementType.Equals(wantedArray.ElementType)
             && !arrayLiteral.Elements.IsEmpty
-            && arrayLiteral.Elements.All(static e => e is BoundLiteral)) {
+            && arrayLiteral.Elements.All(static e => Written(e) is BoundLiteral)) {
             expression = new BoundArray(
                 arrayLiteral.Syntax,
                 new ArrayTypeSymbol(wantedArray.ElementType, literalArray.ArrayKind),
-                [..arrayLiteral.Elements.Select(e => Convert(e, wantedArray.ElementType, e.Syntax))]
+                [..arrayLiteral.Elements.Select(e => Convert(Written(e), wantedArray.ElementType, e.Syntax))]
             );
             if (expression.Type.Equals(target)) {
                 return expression;

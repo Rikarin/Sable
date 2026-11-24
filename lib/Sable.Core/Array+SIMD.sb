@@ -1,0 +1,38 @@
+module Sable.Core
+
+// SIMD vectors written into arrays: every array kind views as a slice, so
+// any array of a SIMD scalar has these (SIMD.sb). A write makes the
+// elements the only reference to their buffer first, as any write to an
+// element does.
+
+extension<Element: SIMDScalar> Element[:] {
+    /// Writes the vector's lanes over N elements from the offset on: one
+    /// store. Traps unless all N are in the array (writing never grows it).
+    ///
+    /// ```sable
+    /// var values: F32[>..] = [0, 0, 0, 0, 0]
+    /// values.store(SIMD<F32, 4>([1, 2, 3, 4]), at: 1)
+    /// assert(values == [0, 1, 2, 3, 4])
+    /// ```
+    public mutating fn store<N: Int>(_ vector: SIMD<Element, N>, at offset: Int) {
+        self.storeLanes(vector, at: offset)
+    }
+
+    @builtin("simd_store")
+    mutating fn storeLanes<N: Int>(_ vector: SIMD<Element, N>, at offset: Int)
+
+    /// Writes each lane of the vector to the element its index says: lane
+    /// i to 'self[indices[i]]', in lane order, so that of two lanes with one
+    /// index the later stays. Traps where an index is outside the array.
+    ///
+    /// ```sable
+    /// var values: I32[>..] = [0, 0, 0, 0]
+    /// values.scatter(SIMD<I32, 2>([7, 9]), at: SIMD<Int, 2>([3, 0]))
+    /// assert(values == [9, 0, 0, 7])
+    /// ```
+    public mutating fn scatter<N: Int>(_ vector: SIMD<Element, N>, at indices: SIMD<Int, N>) {
+        for i in 0..<N {
+            self[indices[i]] = vector[i]
+        }
+    }
+}

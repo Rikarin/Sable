@@ -103,7 +103,7 @@ public sealed partial class LlvmEmitter {
     /// <summary>Whether LLVM has a type for values of this one to measure; else TypeLayout's numbers are written.</summary>
     static bool Measurable(SilType type) =>
         type != SilType.Unit && type is ScalarType or ClassType or ArrayType or SliceType or AddressType or FunctionType or ThickFunctionType or TupleType
-            or WeakStorageType or UnownedStorageType or StructType or EnumType;
+            or WeakStorageType or UnownedStorageType or StructType or EnumType or VectorType;
 
     static string LlvmSize(SilType type, TypeMetadata metadata) => Measurable(type) ? SizeOf(Type(type)) : metadata.Size.ToString(CultureInfo.InvariantCulture);
 

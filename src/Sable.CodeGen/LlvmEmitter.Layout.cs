@@ -133,7 +133,10 @@ public sealed partial class LlvmEmitter {
     ///     otherwise the alignment the address is known to have.
     /// </summary>
     static string AccessAlign(SilValue address, SilType type) {
-        var known = AddressAlign(address);
+        // A vector wider than a heap block's alignment may be in one (an
+        // array's element, an object's field) at no more than that: said
+        // so, so that the target uses loads that do not need more.
+        var known = type is VectorType ? Math.Min(AddressAlign(address), HeapAlign) : AddressAlign(address);
         return known < LlvmAlign(type) ? $", align {known}" : "";
     }
 

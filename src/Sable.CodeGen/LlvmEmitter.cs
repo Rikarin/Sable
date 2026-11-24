@@ -211,6 +211,9 @@ public sealed partial class LlvmEmitter {
         output.Append(MetadataDeclarations);
         output.Append(IntrinsicDeclarations);
         output.Append(MathDeclarations);
+        foreach (var declaration in _simdDeclarations) {
+            output.Append(declaration).Append('\n');
+        }
         output.Append('\n');
         output.Append(RetainAndRelease(module.CheckArc));
         output.Append('\n');
@@ -820,6 +823,7 @@ public sealed partial class LlvmEmitter {
             _ when SilType.IsIndirect(type) => "ptr",
             _ when type == SilType.Metadata || type == SilType.WitnessTable => "ptr",
             ThickFunctionType => "{ ptr, ptr }",
+            VectorType vector => $"<{vector.Count} x {Type(vector.Element)}>",
             WeakStorageType or UnownedStorageType => "ptr",
             StructType structType => LayoutOf(structType).Llvm,
             TupleType tuple => LayoutOf(tuple).Llvm,
@@ -3585,6 +3589,11 @@ public sealed partial class LlvmEmitter {
 
             if (builtin.Name.StartsWith("bitcast_", StringComparison.Ordinal)) {
                 Line($"{Result()} = bitcast {Type(builtin.Operands[0].Type)} {operands[0]} to {Type(builtin.Type)}");
+                return;
+            }
+
+            if (SimdBuiltins.Is(builtin.Name)) {
+                Simd(builtin, operands, Result);
                 return;
             }
 

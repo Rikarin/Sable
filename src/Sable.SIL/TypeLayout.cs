@@ -84,8 +84,17 @@ public static class TypeLayout {
             StructType structType => Of(structType).Size,
             TupleType tuple => Of(tuple).Size,
             SliceType slice => Size(slice.Parts),
+            VectorType vector => RoundUp(VectorBytes(vector), Align(vector)),
             _ => 0,
         };
+
+    /// <summary>
+    ///     The bytes a vector's lanes take, side by side: a Bool lane is a
+    ///     bit. LLVM stores <c>&lt;N x T&gt;</c> in that many, aligned to the
+    ///     power of two at or above it — its natural alignment, which every
+    ///     target Sable has leaves as it is — and rounds its size up to that.
+    /// </summary>
+    static int VectorBytes(VectorType vector) => (vector.Count * (vector.Element == SilType.Bool ? 1 : Size(vector.Element) * 8) + 7) / 8;
 
     public static int Align(SilType type) =>
         type switch {
@@ -102,6 +111,7 @@ public static class TypeLayout {
             EnumType enumType when IsNullable(enumType) => PointerBytes,
             EnumType enumType when Niche(enumType) is { } niche => niche.Bytes,
             EnumType enumType => Math.Max(Area(enumType).Unit, TagBytes(enumType)),
+            VectorType vector => (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)VectorBytes(vector)),
             _ => PointerBytes,
         };
 

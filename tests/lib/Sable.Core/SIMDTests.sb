@@ -1,0 +1,212 @@
+module SIMDTests
+
+// SIMD (Sable.Core): N lanes of a number, computed on all at once.
+
+import Sable.Testing
+
+@test
+fn aVectorIsMadeFromLanesOrOneValue() {
+    let zero = SIMD<I32, 4>()
+    assertEqual(zero, SIMD<I32, 4>(repeating: 0))
+    assertEqual(SIMD<I32, 4>.zero, zero)
+    let v = SIMD<I32, 4>([1, 2, 3, 4])
+    assertEqual(v[0], 1)
+    assertEqual(v[3], 4)
+    assertEqual(v.count, 4)
+    assert(v.toArray() == [1, 2, 3, 4])
+}
+
+@test
+fn aLaneIsReadAndWrittenByIndex() {
+    var v = SIMD<F64, 2>(repeating: 1.5)
+    v[1] = 2.5
+    assertEqual(v[0], 1.5)
+    assertEqual(v[1], 2.5)
+}
+
+@test
+fn sequencesStepOrMultiply() {
+    assertEqual(SIMD<I32, 4>.sequence(start: 1, step: 2), SIMD<I32, 4>([1, 3, 5, 7]))
+    assertEqual(SIMD<I32, 4>.geometricSequence(start: 1, ratio: 3), SIMD<I32, 4>([1, 3, 9, 27]))
+    assertEqual(SIMD<F32, 2>.geometricSequence(start: 2.0, ratio: 0.5), SIMD<F32, 2>([2.0, 1.0]))
+}
+
+@test
+fn arithmeticIsLaneByLane() {
+    let a = SIMD<F32, 4>([1, 2, 3, 4])
+    let b = SIMD<F32, 4>(repeating: 2)
+    assertEqual(a + b, SIMD<F32, 4>([3, 4, 5, 6]))
+    assertEqual(a - b, SIMD<F32, 4>([-1, 0, 1, 2]))
+    assertEqual(a * b, SIMD<F32, 4>([2, 4, 6, 8]))
+    assertEqual(a / b, SIMD<F32, 4>([0.5, 1, 1.5, 2]))
+    assertEqual(a + 1, SIMD<F32, 4>([2, 3, 4, 5]))
+    assertEqual(a - 1, SIMD<F32, 4>([0, 1, 2, 3]))
+    assertEqual(a * 3, SIMD<F32, 4>([3, 6, 9, 12]))
+    assertEqual(3 * a, SIMD<F32, 4>([3, 6, 9, 12]))
+    assertEqual(a / 2, SIMD<F32, 4>([0.5, 1, 1.5, 2]))
+    assertEqual(-a, SIMD<F32, 4>([-1, -2, -3, -4]))
+    assertEqual((-a).abs(), a)
+}
+
+@test
+fn integerArithmeticWrapsOnlyWhenAsked() {
+    let v = SIMD<U8, 2>([255, 1])
+    assertEqual(v &+ SIMD<U8, 2>(repeating: 1), SIMD<U8, 2>([0, 2]))
+    assertEqual(SIMD<U8, 2>([0, 5]) &- SIMD<U8, 2>(repeating: 1), SIMD<U8, 2>([255, 4]))
+    assertEqual(SIMD<U8, 2>([16, 2]) &* SIMD<U8, 2>(repeating: 17), SIMD<U8, 2>([16, 34]))
+    assertEqual(v.saturatingAdd(SIMD<U8, 2>(repeating: 1)), SIMD<U8, 2>([255, 2]))
+    assertEqual(SIMD<U8, 2>([0, 5]).saturatingSub(SIMD<U8, 2>(repeating: 1)), SIMD<U8, 2>([0, 4]))
+    assertEqual(SIMD<I32, 2>([7, -7]) / SIMD<I32, 2>(repeating: 2), SIMD<I32, 2>([3, -3]))
+    assertEqual(SIMD<I32, 2>([7, -7]) % SIMD<I32, 2>(repeating: 2), SIMD<I32, 2>([1, -1]))
+}
+
+@test
+fn bitsAreLaneByLane() {
+    let a = SIMD<U16, 2>([12, 3])
+    let b = SIMD<U16, 2>([10, 6])
+    assertEqual(a & b, SIMD<U16, 2>([8, 2]))
+    assertEqual(a | b, SIMD<U16, 2>([14, 7]))
+    assertEqual(a ^ b, SIMD<U16, 2>([6, 5]))
+    assertEqual(~SIMD<U16, 2>([0, 65535]), SIMD<U16, 2>([65535, 0]))
+    assertEqual(a << SIMD<U16, 2>(repeating: 1), SIMD<U16, 2>([24, 6]))
+    assertEqual(a >> SIMD<U16, 2>(repeating: 1), SIMD<U16, 2>([6, 1]))
+    assertEqual(a.reduceAnd(), 0)
+    assertEqual(a.reduceOr(), 15)
+    assertEqual(a.reduceXor(), 15)
+}
+
+@test
+fn reductionsCombineEveryLane() {
+    let v = SIMD<F64, 4>([1, 7, -2, 3])
+    assertEqual(v.reduceAdd(), 9)
+    assertEqual(v.reduceMin(), -2)
+    assertEqual(v.reduceMax(), 7)
+    assertEqual(SIMD<I8, 2>([100, 100]).reduceAdd(), -56)
+}
+
+@test
+fn minAndMaxAreLaneByLane() {
+    let a = SIMD<I32, 2>([1, 5])
+    let three = SIMD<I32, 2>(repeating: 3)
+    assertEqual(a.min(three), SIMD<I32, 2>([1, 3]))
+    assertEqual(a.max(three), SIMD<I32, 2>([3, 5]))
+    assertEqual(SIMD<I32, 2>([-4, 9]).clamped(lower: SIMD<I32, 2>(repeating: 0), upper: three), SIMD<I32, 2>([0, 3]))
+}
+
+@test
+fn comparisonsGiveMasks() {
+    let a = SIMD<I32, 4>([1, 2, 3, 4])
+    let two = SIMD<I32, 4>(repeating: 2)
+    assertEqual(a.lanesEqual(two), SIMDMask<4>([false, true, false, false]))
+    assertEqual(a.lanesNotEqual(two), SIMDMask<4>([true, false, true, true]))
+    assertEqual(a.lanesLess(than: two), SIMDMask<4>([true, false, false, false]))
+    assertEqual(a.lanesLessOrEqual(to: two), SIMDMask<4>([true, true, false, false]))
+    assertEqual(a.lanesGreater(than: two), SIMDMask<4>([false, false, true, true]))
+    assertEqual(a.lanesGreaterOrEqual(to: two), SIMDMask<4>([false, true, true, true]))
+}
+
+@test
+fn masksChooseLanes() {
+    let a = SIMD<I32, 4>([1, 2, 3, 4])
+    let zero = SIMD<I32, 4>()
+    let big = a.lanesGreater(than: SIMD<I32, 4>(repeating: 2))
+    assertEqual(SIMD<I32, 4>.select(big, a, zero), SIMD<I32, 4>([0, 0, 3, 4]))
+    assertEqual(a.replacing(with: zero, where: big), SIMD<I32, 4>([1, 2, 0, 0]))
+}
+
+@test
+fn lanesMoveAbout() {
+    let v = SIMD<I32, 4>([10, 20, 30, 40])
+    assertEqual(v.swizzled(SIMD<Int, 4>([3, 2, 1, 0])), SIMD<I32, 4>([40, 30, 20, 10]))
+    assertEqual(v.swizzled(SIMD<Int, 2>([1, 1])), SIMD<I32, 2>([20, 20]))
+    let whole = SIMD<I32, 4>.concat(SIMD<I32, 2>([1, 2]), SIMD<I32, 2>([3, 4]))
+    assertEqual(whole, SIMD<I32, 4>([1, 2, 3, 4]))
+    assertEqual(SIMD<I32, 2>.lowHalf(of: whole), SIMD<I32, 2>([1, 2]))
+    assertEqual(SIMD<I32, 2>.highHalf(of: whole), SIMD<I32, 2>([3, 4]))
+}
+
+@test
+fn zipInterleavesAndUnzipUndoesIt() {
+    let a = SIMD<I32, 4>([0, 1, 2, 3])
+    let b = SIMD<I32, 4>([10, 11, 12, 13])
+    let (low, high) = SIMD<I32, 4>.zip(a, b)
+    assertEqual(low, SIMD<I32, 4>([0, 10, 1, 11]))
+    assertEqual(high, SIMD<I32, 4>([2, 12, 3, 13]))
+    let (even, odd) = SIMD<I32, 4>.unzip(low, high)
+    assertEqual(even, a)
+    assertEqual(odd, b)
+}
+
+@test
+fn vectorsLoadFromAndGatherFromArrays() {
+    let values: F32[>..] = [1, 2, 3, 4, 5, 6]
+    assertEqual(SIMD<F32, 4>.load(from: values, at: 2), SIMD<F32, 4>([3, 4, 5, 6]))
+    let table: I32[>..] = [10, 20, 30, 40]
+    assertEqual(SIMD<I32, 4>.gather(from: table, at: SIMD<Int, 4>([3, 0, 2, 2])), SIMD<I32, 4>([40, 10, 30, 30]))
+}
+
+@test
+fn lanesConvertWithoutTrapping() {
+    var floats = SIMD<F32, 4>([1.5, -2.5, 1e10, 0.0])
+    floats[3] = F32.nan
+    assertEqual(SIMD<I32, 4>.converting(floats), SIMD<I32, 4>([1, -2, 2147483647, 0]))
+    assertEqual(SIMD<U8, 2>.converting(SIMD<I32, 2>([300, -1])), SIMD<U8, 2>([44, 255]))
+    assertEqual(SIMD<F64, 2>.converting(SIMD<I32, 2>([1, -1])), SIMD<F64, 2>([1, -1]))
+}
+
+@test
+fn floatsHaveTheirIeeeOperations() {
+    let x = SIMD<F64, 2>([4.0, 2.25])
+    assertEqual(x.squareRoot(), SIMD<F64, 2>([2.0, 1.5]))
+    assertEqual(x.fusedMultiplyAdd(SIMD<F64, 2>(repeating: 2), SIMD<F64, 2>(repeating: 1)), SIMD<F64, 2>([9.0, 5.5]))
+    assertEqual(x.floor(), SIMD<F64, 2>([4.0, 2.0]))
+    assertEqual(x.ceil(), SIMD<F64, 2>([4.0, 3.0]))
+    assertEqual(SIMD<F64, 2>([-2.5, 2.5]).truncated(), SIMD<F64, 2>([-2.0, 2.0]))
+    assertEqual(SIMD<F64, 2>([2.5, 3.5]).rounded(), SIMD<F64, 2>([2.0, 4.0]))
+    assertEqual(SIMD<F64, 2>([-0.0, 1.0]).minimum(SIMD<F64, 2>([0.0, 2.0]))[1], 1.0)
+    assertEqual(SIMD<F64, 2>([-0.0, 1.0]).maximum(SIMD<F64, 2>([0.0, 2.0])), SIMD<F64, 2>([0.0, 2.0]))
+}
+
+@test
+fn floatEqualityIsEveryLanes() {
+    var v = SIMD<F64, 2>(repeating: 1.0)
+    assert(v == SIMD<F64, 2>(repeating: 1.0))
+    v[0] = F64.nan
+    assert(v != v)
+}
+
+@test
+fn equalVectorsHashAlike() {
+    var counts: [SIMD<I16, 8>: Int] = [:]
+    counts[SIMD<I16, 8>(repeating: 2)] = 1
+    counts[SIMD<I16, 8>(repeating: 2)] = 2
+    counts[SIMD<I16, 8>(repeating: 3)] = 3
+    assertEqual(counts.count, 2)
+    assertEqual(counts[SIMD<I16, 8>(repeating: 2)], 2)
+}
+
+@test
+fn aVectorFormatsItsLanes() {
+    assertEqual("\(SIMD<I32, 4>([1, 2, 3, 4]))", "<1, 2, 3, 4>")
+    assertEqual("\(SIMD<F64, 2>([1.5, 2]):.2f)", "<1.50, 2.00>")
+    assertEqual(SIMD<I32, 2>([1, 2]).debugDescription(), "SIMD<I32, 2>(1, 2)")
+}
+
+@test
+fn eachScalarFillsTheTargetsVectorRegister() {
+    let bytes = Platform.vectorBytes
+    assertEqual(Int.preferredVectorWidth, bytes / 8)
+    assertEqual(UInt.preferredVectorWidth, bytes / 8)
+    assertEqual(I8.preferredVectorWidth, bytes)
+    assertEqual(U8.preferredVectorWidth, bytes)
+    assertEqual(I16.preferredVectorWidth, bytes / 2)
+    assertEqual(U16.preferredVectorWidth, bytes / 2)
+    assertEqual(I32.preferredVectorWidth, bytes / 4)
+    assertEqual(U32.preferredVectorWidth, bytes / 4)
+    assertEqual(I64.preferredVectorWidth, bytes / 8)
+    assertEqual(U64.preferredVectorWidth, bytes / 8)
+    assertEqual(F16.preferredVectorWidth, bytes / 2)
+    assertEqual(BF16.preferredVectorWidth, bytes / 2)
+    assertEqual(F32.preferredVectorWidth, bytes / 4)
+    assertEqual(F64.preferredVectorWidth, bytes / 8)
+}

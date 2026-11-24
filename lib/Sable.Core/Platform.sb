@@ -38,6 +38,13 @@ public struct Platform {
     #else
     public const pointerWidth: Int = 64
     #endif
+
+    /// How many bytes the target's vector registers hold, as the program
+    /// is compiled for it: 16 for SSE2 on x86-64 (the baseline every
+    /// x86-64 has), NEON on arm64 and simd128 on wasm32. 'SIMD' types of
+    /// this many bytes fill one register; wider ones are split across
+    /// several, and narrower ones fill part of one.
+    public const vectorBytes: Int = 16
 }
 
 /// Stops the compile with the message, where the call is: a 'comptime'

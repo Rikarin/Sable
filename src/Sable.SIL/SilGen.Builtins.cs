@@ -119,6 +119,14 @@ public sealed partial class SilGen {
     void CheckBuiltin(Symbol symbol, string name, SyntaxList<AttributeSyntax> attributes, List<TypeSymbol> operands, TypeSymbol result, bool throws,
         TypeSubstitution representative, bool mutating) {
         var at = attributes.First(static a => a.Name.ToString().Trim() == "builtin").Span;
+
+        // A SIMD builtin's signature follows the vectors it is given, which
+        // are known only where it is used: checked there (ApplyBuiltin).
+        if (SimdBuiltins.Is(name)) {
+            _soundBuiltins.Add(symbol);
+            return;
+        }
+
         var lowered = operands.Select(o => Lower(Represent(representative, o))).ToList();
         var loweredResult = Lower(Represent(representative, result));
 
@@ -223,6 +231,24 @@ public sealed partial class SilGen {
 
     sealed partial class FunctionLowering {
         /// <summary>
+        ///     Whether a SIMD builtin, which is checked where it is used, gives
+        ///     what its declaration says — reported where not. Every other
+        ///     builtin was checked where it was declared.
+        /// </summary>
+        bool Agrees(string name, SilBuiltins.Signature? signature, SilType? declared, BoundNode at) {
+            if (!SimdBuiltins.Is(name) || signature is not null && (declared is null || signature.Result == declared || declared == SilType.Unit && signature.Result == SilType.Unit)) {
+                return true;
+            }
+
+            _failed = true;
+            generator.Report(ErrorCode.ERR_BuiltinSignatureMismatch, at.Syntax.Span,
+                signature is null
+                    ? $"the SIMD builtin '{name}' does not apply to what it is given here"
+                    : $"the SIMD builtin '{name}' gives {signature.Result} here, where its declaration says {declared}");
+            return false;
+        }
+
+        /// <summary>
         ///     The builtin a family's member is for the type Self stands for at
         ///     this use, or null — reported — when there is none: the type is
         ///     not one of those the family was checked for.
@@ -295,7 +321,8 @@ public sealed partial class SilGen {
             }
 
             operands.AddRange(call.Arguments);
-            return callee.IsMutating ? ApplyMutatingBuiltin(name, operands) : ApplyBuiltin(name, operands);
+            var result = LowerType(call.Type);
+            return callee.IsMutating ? ApplyMutatingBuiltin(name, operands, result, call) : ApplyBuiltin(name, operands, result, call);
         }
 
         /// <summary>A read of a <c>@builtin</c> property: the builtin, on the borrowed receiver.</summary>
@@ -317,10 +344,10 @@ public sealed partial class SilGen {
                 return null;
             }
 
-            return ApplyBuiltin(name, [receiver]);
+            return ApplyBuiltin(name, [receiver], LowerType(access.Type), access);
         }
 
-        SilValue? ApplyBuiltin(string name, List<BoundExpression> operands) {
+        SilValue? ApplyBuiltin(string name, List<BoundExpression> operands, SilType? declared, BoundNode at) {
             var borrowed = new List<SilValue>();
             foreach (var operand in operands) {
                 if (Borrow(operand) is not { } value) {
@@ -336,7 +363,16 @@ public sealed partial class SilGen {
                 generator._module.FieldDescriptors = true;
             }
 
-            var result = (SilBuiltins.Find(name) ?? SilBuiltins.Resolve(name, [..borrowed.Select(static b => b.Type)]))!.Result;
+            // Only a SIMD builtin takes its type from the declaration; the rest are told by their operands.
+            var simd = SimdBuiltins.Is(name);
+            var resolved = SilBuiltins.Find(name) ?? SilBuiltins.Resolve(name, [..borrowed.Select(static b => b.Type)], simd ? declared : null);
+            if (!Agrees(name, resolved, declared, at) || resolved is not { } signature) {
+                _failed = true;
+                EndAll(borrowed);
+                return null;
+            }
+
+            var result = signature.Result;
             var applied = Emit(new BuiltinInst(name, result, [..borrowed]));
             EndAll(borrowed);
             return result == SilType.Unit ? UnitValue.Instance : applied;
@@ -347,7 +383,7 @@ public sealed partial class SilGen {
         ///     element taken — on the receiver where it is, and the rest of its
         ///     operands borrowed, or owned where it keeps them.
         /// </summary>
-        SilValue? ApplyMutatingBuiltin(string name, List<BoundExpression> operands) {
+        SilValue? ApplyMutatingBuiltin(string name, List<BoundExpression> operands, SilType? declared, BoundNode at) {
             var borrows = new List<SilValue>();
             if (Address(operands[0], borrows) is not { } address) {
                 EndAll(borrows);
@@ -373,8 +409,11 @@ public sealed partial class SilGen {
                 }
             }
 
-            if (SilBuiltins.Resolve(name, [..values.Select(static v => v.Type)]) is not { } signature) {
+            var resolved = SilBuiltins.Resolve(name, [..values.Select(static v => v.Type)], SimdBuiltins.Is(name) ? declared : null);
+            if (!Agrees(name, resolved, declared, at) || resolved is not { } signature) {
                 _failed = true;
+                EndAll(held);
+                EndAll(borrows);
                 return null;
             }
 

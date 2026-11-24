@@ -1,0 +1,621 @@
+module Sable.Core
+
+// Portable SIMD (docs/06 §6.4): a value of N lanes, each a number, that
+// one instruction works on at once. 'SIMD<T, N>' lowers to LLVM's vector
+// type '<N x T>' (the compiler knows the struct by name: SIL's '@simd(T,
+// N)'), so its arithmetic is the target's vector instructions — SSE2 on
+// x86-64, NEON on arm64 — and a vector wider than one register is split
+// across several. Its members are the SIMD builtins (Simd.cs), each lane
+// computed as the scalar builtin of the same name computes it, and the
+// interpreter does exactly that, lane by lane.
+
+/// What a lane of a 'SIMD' vector can be: the integers of up to 64 bits
+/// (I8 … I64, U8 … U64, Int, UInt) and the floats (F16, BF16, F32, F64).
+public protocol SIMDScalar: Numeric, Comparable, Hashable, Debug, Formattable {
+    /// How many lanes of this type fill one of the target's vector
+    /// registers (.NET's 'Vector<T>.Count'): 4 for F32 and 2 for F64 on
+    /// every target Sable has. A loop that takes this many elements a step
+    /// uses the registers fully whatever the type.
+    ///
+    /// ```sable
+    /// assert(F32.preferredVectorWidth == Platform.vectorBytes / 4)
+    /// assert(F64.preferredVectorWidth == Platform.vectorBytes / 8)
+    /// ```
+    static var preferredVectorWidth: Int { get }
+}
+
+extension Int: SIMDScalar {
+    public static var preferredVectorWidth: Int => Platform.vectorBytes / 8
+}
+
+extension I8: SIMDScalar {
+    public static var preferredVectorWidth: Int => Platform.vectorBytes
+}
+
+extension I16: SIMDScalar {
+    public static var preferredVectorWidth: Int => Platform.vectorBytes / 2
+}
+
+extension I32: SIMDScalar {
+    public static var preferredVectorWidth: Int => Platform.vectorBytes / 4
+}
+
+extension I64: SIMDScalar {
+    public static var preferredVectorWidth: Int => Platform.vectorBytes / 8
+}
+
+extension UInt: SIMDScalar {
+    public static var preferredVectorWidth: Int => Platform.vectorBytes / 8
+}
+
+extension U8: SIMDScalar {
+    public static var preferredVectorWidth: Int => Platform.vectorBytes
+}
+
+extension U16: SIMDScalar {
+    public static var preferredVectorWidth: Int => Platform.vectorBytes / 2
+}
+
+extension U32: SIMDScalar {
+    public static var preferredVectorWidth: Int => Platform.vectorBytes / 4
+}
+
+extension U64: SIMDScalar {
+    public static var preferredVectorWidth: Int => Platform.vectorBytes / 8
+}
+
+extension F16: SIMDScalar {
+    public static var preferredVectorWidth: Int => Platform.vectorBytes / 2
+}
+
+extension BF16: SIMDScalar {
+    public static var preferredVectorWidth: Int => Platform.vectorBytes / 2
+}
+
+extension F32: SIMDScalar {
+    public static var preferredVectorWidth: Int => Platform.vectorBytes / 4
+}
+
+extension F64: SIMDScalar {
+    public static var preferredVectorWidth: Int => Platform.vectorBytes / 8
+}
+
+/// N lanes of a number, side by side, that arithmetic works on all at
+/// once: Swift's SIMD4<Float>, .NET's Vector128<float>, Rust's
+/// 'Simd<f32, 4>'. N is 2, 3, 4, 8, 16, 32 or 64. A value, held in vector
+/// registers: no allocation, and copying it copies its lanes.
+///
+/// Arithmetic is lane by lane and means what it means for the scalar: an
+/// integer's '+', '-' and '*' trap if any lane overflows, and '&+', '&-'
+/// and '&*' keep the low bits; division traps on a zero divisor in any
+/// lane; a float's follow IEEE 754. A comparison gives a 'SIMDMask', one
+/// Bool a lane, which 'select' and 'replacing(with:where:)' choose by.
+///
+/// ```sable
+/// let a = SIMD<F32, 4>([1, 2, 3, 4])
+/// let b = SIMD<F32, 4>(repeating: 10)
+/// let c = a * b + a
+/// assert(c[2] == 33)
+/// assert(c.reduceAdd() == 110)
+/// assert(a.lanesLess(than: SIMD<F32, 4>(repeating: 3)).trueCount == 2)
+/// ```
+public struct SIMD<Scalar: SIMDScalar, N: Int> where N >= 2 && (N == 2 || N == 3 || N == 4 || N == 8 || N == 16 || N == 32 || N == 64) {
+    /// Every lane zero.
+    public init() {
+        self = SIMD<Scalar, N>.splat(Scalar.zero)
+    }
+
+    /// Every lane the value.
+    ///
+    /// ```sable
+    /// let v = SIMD<I32, 4>(repeating: 7)
+    /// assert(v[0] == 7 && v[3] == 7)
+    /// ```
+    public init(repeating value: Scalar) {
+        self = SIMD<Scalar, N>.splat(value)
+    }
+
+    /// The lanes, in order; traps unless there are exactly N of them.
+    ///
+    /// ```sable
+    /// let v = SIMD<F64, 2>([1.5, 2.5])
+    /// assert(v[1] == 2.5)
+    /// ```
+    public init(_ lanes: Scalar[:]) {
+        precondition(lanes.count == N, "a SIMD vector of \(N) lanes made from \(lanes.count)")
+        self = SIMD<Scalar, N>.load(from: lanes, at: 0)
+    }
+
+    @builtin("simd_splat")
+    static fn splat(_ value: Scalar) -> SIMD<Scalar, N>
+
+    /// N elements of the slice from the offset on, a lane each: one load.
+    /// Traps unless all N are in the slice.
+    ///
+    /// ```sable
+    /// let values: F32[>..] = [1, 2, 3, 4, 5, 6]
+    /// let v = SIMD<F32, 4>.load(from: values, at: 2)
+    /// assert(v[0] == 3 && v[3] == 6)
+    /// ```
+    @builtin("simd_load")
+    public static fn load(from source: Scalar[:], at offset: Int) -> SIMD<Scalar, N>
+
+    /// The lanes from the slice's elements at the indices, one a lane:
+    /// 'source[indices[i]]' in lane i. Traps where an index is outside the slice.
+    ///
+    /// ```sable
+    /// let table: I32[>..] = [10, 20, 30, 40]
+    /// let v = SIMD<I32, 4>.gather(from: table, at: SIMD<Int, 4>([3, 0, 2, 2]))
+    /// assert(v == SIMD<I32, 4>([40, 10, 30, 30]))
+    /// ```
+    public static fn gather(from source: Scalar[:], at indices: SIMD<Int, N>) -> SIMD<Scalar, N> {
+        var result = SIMD<Scalar, N>()
+        for i in 0..<N {
+            result[i] = source[indices[i]]
+        }
+        return result
+    }
+
+    /// 'start', 'start + step', 'start + 2 × step', … (.NET's CreateSequence).
+    ///
+    /// ```sable
+    /// assert(SIMD<I32, 4>.sequence(start: 1, step: 2) == SIMD<I32, 4>([1, 3, 5, 7]))
+    /// ```
+    public static fn sequence(start: Scalar, step: Scalar) -> SIMD<Scalar, N> {
+        var result = SIMD<Scalar, N>(repeating: start)
+        var value = start
+        for i in 1..<N {
+            value = value + step
+            result[i] = value
+        }
+        return result
+    }
+
+    /// 'start', 'start × ratio', 'start × ratio²', … (.NET 11's
+    /// CreateGeometricSequence). An integer's trap if a lane overflows.
+    ///
+    /// ```sable
+    /// assert(SIMD<I32, 4>.geometricSequence(start: 1, ratio: 3) == SIMD<I32, 4>([1, 3, 9, 27]))
+    /// ```
+    public static fn geometricSequence(start: Scalar, ratio: Scalar) -> SIMD<Scalar, N> {
+        var result = SIMD<Scalar, N>(repeating: start)
+        var value = start
+        for i in 1..<N {
+            value = value * ratio
+            result[i] = value
+        }
+        return result
+    }
+
+    /// How many lanes there are: N.
+    public var count: Int => N
+
+    /// The lane at the index; outside 0..<N traps.
+    public subscript(lane: Int) -> Scalar {
+        get {
+            return self.extract(lane)
+        }
+        set {
+            self = self.inserting(newValue, at: lane)
+        }
+    }
+
+    @builtin("simd_extract")
+    fn extract(_ lane: Int) -> Scalar
+
+    @builtin("simd_insert")
+    fn inserting(_ value: Scalar, at lane: Int) -> SIMD<Scalar, N>
+
+    /// The lanes, as an array.
+    ///
+    /// ```sable
+    /// assert(SIMD<U8, 2>([1, 2]).toArray() == [1, 2])
+    /// ```
+    public fn toArray() -> Scalar[>..] {
+        var lanes: Scalar[>..] = []
+        lanes.reserveCapacity(N)
+        for i in 0..<N {
+            lanes.append(self[i])
+        }
+        return lanes
+    }
+
+    // ---- Arithmetic, lane by lane ----
+
+    /// The sum of each pair of lanes; an integer's traps if any lane overflows.
+    @builtin("simd_add")
+    public operator + (lhs: SIMD<Scalar, N>, rhs: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// The difference of each pair of lanes; an integer's traps if any lane overflows.
+    @builtin("simd_sub")
+    public operator - (lhs: SIMD<Scalar, N>, rhs: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// The product of each pair of lanes; an integer's traps if any lane overflows.
+    @builtin("simd_mul")
+    public operator * (lhs: SIMD<Scalar, N>, rhs: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// Every lane added to the scalar.
+    public operator + (lhs: SIMD<Scalar, N>, rhs: Scalar) -> SIMD<Scalar, N> {
+        return lhs + SIMD<Scalar, N>(repeating: rhs)
+    }
+
+    /// Every lane less the scalar.
+    public operator - (lhs: SIMD<Scalar, N>, rhs: Scalar) -> SIMD<Scalar, N> {
+        return lhs - SIMD<Scalar, N>(repeating: rhs)
+    }
+
+    /// Every lane times the scalar.
+    ///
+    /// ```sable
+    /// assert(SIMD<F32, 2>([1, 2]) * 3 == SIMD<F32, 2>([3, 6]))
+    /// ```
+    public operator * (lhs: SIMD<Scalar, N>, rhs: Scalar) -> SIMD<Scalar, N> {
+        return lhs * SIMD<Scalar, N>(repeating: rhs)
+    }
+
+    /// The scalar times every lane.
+    public operator * (lhs: Scalar, rhs: SIMD<Scalar, N>) -> SIMD<Scalar, N> {
+        return SIMD<Scalar, N>(repeating: lhs) * rhs
+    }
+
+    /// The quotient in each lane: a float's correctly rounded; an
+    /// integer's toward zero, trapping if any divisor is zero or a signed
+    /// lane's least value is divided by -1.
+    @builtin("simd_div")
+    public operator / (lhs: SIMD<Scalar, N>, rhs: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// Every lane divided by the scalar.
+    public operator / (lhs: SIMD<Scalar, N>, rhs: Scalar) -> SIMD<Scalar, N> {
+        return lhs / SIMD<Scalar, N>(repeating: rhs)
+    }
+
+    /// The smaller of each pair of lanes.
+    ///
+    /// ```sable
+    /// let a = SIMD<I32, 2>([1, 5])
+    /// assert(a.min(SIMD<I32, 2>(repeating: 3)) == SIMD<I32, 2>([1, 3]))
+    /// ```
+    @builtin("simd_min")
+    public fn min(_ other: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// The larger of each pair of lanes.
+    @builtin("simd_max")
+    public fn max(_ other: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// Each lane held within the bounds' lanes: 'max(lower).min(upper)'.
+    public fn clamped(lower: SIMD<Scalar, N>, upper: SIMD<Scalar, N>) -> SIMD<Scalar, N> {
+        return self.max(lower).min(upper)
+    }
+
+    // ---- Comparisons, into masks ----
+
+    /// Where each lane equals the other's.
+    @builtin("simd_cmp_eq")
+    public fn lanesEqual(_ other: SIMD<Scalar, N>) -> SIMDMask<N>
+
+    /// Where each lane differs from the other's.
+    @builtin("simd_cmp_ne")
+    public fn lanesNotEqual(_ other: SIMD<Scalar, N>) -> SIMDMask<N>
+
+    /// Where each lane is less than the other's.
+    @builtin("simd_cmp_lt")
+    public fn lanesLess(than other: SIMD<Scalar, N>) -> SIMDMask<N>
+
+    /// Where each lane is less than or equal to the other's.
+    @builtin("simd_cmp_le")
+    public fn lanesLessOrEqual(to other: SIMD<Scalar, N>) -> SIMDMask<N>
+
+    /// Where each lane is greater than the other's.
+    @builtin("simd_cmp_gt")
+    public fn lanesGreater(than other: SIMD<Scalar, N>) -> SIMDMask<N>
+
+    /// Where each lane is greater than or equal to the other's.
+    @builtin("simd_cmp_ge")
+    public fn lanesGreaterOrEqual(to other: SIMD<Scalar, N>) -> SIMDMask<N>
+
+    /// Each lane from the first vector where the mask's is true, else from
+    /// the second (.NET's ConditionalSelect).
+    ///
+    /// ```sable
+    /// let a = SIMD<I32, 4>([1, 2, 3, 4])
+    /// let b = SIMD<I32, 4>(repeating: 0)
+    /// let mask = a.lanesGreater(than: SIMD<I32, 4>(repeating: 2))
+    /// assert(SIMD<I32, 4>.select(mask, a, b) == SIMD<I32, 4>([0, 0, 3, 4]))
+    /// ```
+    @builtin("simd_select")
+    public static fn select(_ mask: SIMDMask<N>, _ whenTrue: SIMD<Scalar, N>, _ whenFalse: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// These lanes, but the other's where the mask is true.
+    public fn replacing(with other: SIMD<Scalar, N>, where mask: SIMDMask<N>) -> SIMD<Scalar, N> {
+        return SIMD<Scalar, N>.select(mask, other, self)
+    }
+
+    // ---- Reductions ----
+
+    /// Every lane added together. An integer's sum wraps (as '&+'); a
+    /// float's is added pairwise, lane i with lane i + N/2 and so on down,
+    /// which is the order natively and in the interpreter alike.
+    ///
+    /// ```sable
+    /// assert(SIMD<I32, 4>([1, 2, 3, 4]).reduceAdd() == 10)
+    /// ```
+    @builtin("simd_reduce_add")
+    public fn reduceAdd() -> Scalar
+
+    /// The least lane.
+    @builtin("simd_reduce_min")
+    public fn reduceMin() -> Scalar
+
+    /// The greatest lane.
+    ///
+    /// ```sable
+    /// assert(SIMD<F64, 4>([1, 7, -2, 3]).reduceMax() == 7)
+    /// ```
+    @builtin("simd_reduce_max")
+    public fn reduceMax() -> Scalar
+
+    // ---- Moving lanes ----
+
+    /// The lanes the indices pick, in their order, as many as there are
+    /// indices: lane i is 'self[indices[i]]'. Traps where an index is
+    /// outside 0..<N. With indices known where it is compiled, one shuffle.
+    ///
+    /// ```sable
+    /// let v = SIMD<I32, 4>([10, 20, 30, 40])
+    /// assert(v.swizzled(SIMD<Int, 4>([3, 2, 1, 0])) == SIMD<I32, 4>([40, 30, 20, 10]))
+    /// assert(v.swizzled(SIMD<Int, 2>([1, 1])) == SIMD<I32, 2>([20, 20]))
+    /// ```
+    @builtin("simd_swizzle")
+    public fn swizzled<M: Int>(_ indices: SIMD<Int, M>) -> SIMD<Scalar, M>
+
+    /// The first vector's lanes, then the second's: N is twice theirs.
+    ///
+    /// ```sable
+    /// let low = SIMD<I32, 2>([1, 2])
+    /// let high = SIMD<I32, 2>([3, 4])
+    /// assert(SIMD<I32, 4>.concat(low, high) == SIMD<I32, 4>([1, 2, 3, 4]))
+    /// ```
+    @builtin("simd_concat")
+    public static fn concat<M: Int>(_ low: SIMD<Scalar, M>, _ high: SIMD<Scalar, M>) -> SIMD<Scalar, N>
+
+    /// The low half of a vector of twice N lanes.
+    ///
+    /// ```sable
+    /// let v = SIMD<I32, 4>([1, 2, 3, 4])
+    /// assert(SIMD<I32, 2>.lowHalf(of: v) == SIMD<I32, 2>([1, 2]))
+    /// assert(SIMD<I32, 2>.highHalf(of: v) == SIMD<I32, 2>([3, 4]))
+    /// ```
+    @builtin("simd_low_half")
+    public static fn lowHalf<M: Int>(of whole: SIMD<Scalar, M>) -> SIMD<Scalar, N>
+
+    /// The high half of a vector of twice N lanes.
+    @builtin("simd_high_half")
+    public static fn highHalf<M: Int>(of whole: SIMD<Scalar, M>) -> SIMD<Scalar, N>
+
+    @builtin("simd_zip_low")
+    static fn zipLow(_ a: SIMD<Scalar, N>, _ b: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    @builtin("simd_zip_high")
+    static fn zipHigh(_ a: SIMD<Scalar, N>, _ b: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    @builtin("simd_unzip_even")
+    static fn unzipEven(_ a: SIMD<Scalar, N>, _ b: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    @builtin("simd_unzip_odd")
+    static fn unzipOdd(_ a: SIMD<Scalar, N>, _ b: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// The two vectors' lanes interleaved, a0 b0 a1 b1 …: the first N of
+    /// them as 'low', the rest as 'high' (.NET 11's Zip). N is even.
+    ///
+    /// ```sable
+    /// let (low, high) = SIMD<I32, 4>.zip(SIMD<I32, 4>([0, 1, 2, 3]), SIMD<I32, 4>([10, 11, 12, 13]))
+    /// assert(low == SIMD<I32, 4>([0, 10, 1, 11]))
+    /// assert(high == SIMD<I32, 4>([2, 12, 3, 13]))
+    /// ```
+    public static fn zip(_ a: SIMD<Scalar, N>, _ b: SIMD<Scalar, N>) -> (low: SIMD<Scalar, N>, high: SIMD<Scalar, N>) {
+        return (low: SIMD<Scalar, N>.zipLow(a, b), high: SIMD<Scalar, N>.zipHigh(a, b))
+    }
+
+    /// What 'zip' undoes: the even lanes of the two, in order, and the odd
+    /// ones (.NET 11's Unzip). N is even.
+    ///
+    /// ```sable
+    /// let (even, odd) = SIMD<I32, 4>.unzip(SIMD<I32, 4>([0, 10, 1, 11]), SIMD<I32, 4>([2, 12, 3, 13]))
+    /// assert(even == SIMD<I32, 4>([0, 1, 2, 3]))
+    /// assert(odd == SIMD<I32, 4>([10, 11, 12, 13]))
+    /// ```
+    public static fn unzip(_ a: SIMD<Scalar, N>, _ b: SIMD<Scalar, N>) -> (even: SIMD<Scalar, N>, odd: SIMD<Scalar, N>) {
+        return (even: SIMD<Scalar, N>.unzipEven(a, b), odd: SIMD<Scalar, N>.unzipOdd(a, b))
+    }
+
+    // ---- Conversions ----
+
+    /// Each lane of the other converted as 'unchecked as' converts it,
+    /// which never traps: an integer keeps its low bits; a float to an
+    /// integer goes toward zero and saturates at the type's bounds, NaN
+    /// giving zero; anything to a float rounds to the nearest.
+    ///
+    /// ```sable
+    /// let f = SIMD<F32, 4>([1.5, -2.5, 1e10, 3])
+    /// assert(SIMD<I32, 4>.converting(f) == SIMD<I32, 4>([1, -2, 2147483647, 3]))
+    /// assert(SIMD<F64, 2>.converting(SIMD<I32, 2>([1, -1])) == SIMD<F64, 2>([1, -1]))
+    /// ```
+    @builtin("simd_convert")
+    public static fn converting<Other: SIMDScalar>(_ other: SIMD<Other, N>) -> SIMD<Scalar, N>
+}
+
+extension SIMD: Equatable {
+    /// Whether every lane equals the other's: a float's NaN equals nothing.
+    public operator == (lhs: SIMD<Scalar, N>, rhs: SIMD<Scalar, N>) -> Bool {
+        return lhs.lanesEqual(rhs).allTrue
+    }
+}
+
+extension SIMD: Hashable {
+    public fn hash(into hasher: inout Hasher) {
+        for i in 0..<N {
+            self[i].hash(into: &hasher)
+        }
+    }
+}
+
+extension SIMD: AdditiveArithmetic {
+    /// Every lane zero.
+    public static var zero: SIMD<Scalar, N> => SIMD<Scalar, N>()
+}
+
+extension SIMD: Formattable {
+    /// The lanes, each formatted by the spec, between angle brackets: '<1, 2, 3, 4>'.
+    ///
+    /// ```sable
+    /// assert("\(SIMD<I32, 4>([1, 2, 3, 4]))" == "<1, 2, 3, 4>")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String {
+        var text = "<"
+        for i in 0..<N {
+            if i > 0 {
+                text += ", "
+            }
+            text += self[i].format(spec)
+        }
+        return text + ">"
+    }
+}
+
+extension SIMD: Debug {
+    /// The type and its lanes: 'SIMD<I32, 2>(1, 2)'.
+    public fn debugDescription() -> String {
+        var text = "SIMD<\(Scalar.self), \(N)>("
+        for i in 0..<N {
+            if i > 0 {
+                text += ", "
+            }
+            text += self[i].debugDescription()
+        }
+        return text + ")"
+    }
+}
+
+extension SIMD where Scalar: SignedNumeric {
+    /// Each lane negated; an integer's traps on its least value.
+    @builtin("simd_neg")
+    public prefix operator - (operand: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// Each lane's magnitude; an integer's traps on its least value.
+    @builtin("simd_abs")
+    public fn abs() -> SIMD<Scalar, N>
+}
+
+extension SIMD where Scalar: FixedWidthInteger {
+    /// The sum's low bits in each lane: never traps.
+    ///
+    /// ```sable
+    /// let v = SIMD<U8, 2>([255, 1])
+    /// assert(v &+ SIMD<U8, 2>(repeating: 1) == SIMD<U8, 2>([0, 2]))
+    /// ```
+    @builtin("simd_wrapping_add")
+    public operator &+ (lhs: SIMD<Scalar, N>, rhs: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// The difference's low bits in each lane: never traps.
+    @builtin("simd_wrapping_sub")
+    public operator &- (lhs: SIMD<Scalar, N>, rhs: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// The product's low bits in each lane: never traps.
+    @builtin("simd_wrapping_mul")
+    public operator &* (lhs: SIMD<Scalar, N>, rhs: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// The remainder in each lane, with the dividend's sign; traps as '/' does.
+    @builtin("simd_rem")
+    public operator % (lhs: SIMD<Scalar, N>, rhs: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// Each lane's sum clamped to the type's bounds.
+    @builtin("simd_add_saturating")
+    public fn saturatingAdd(_ other: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// Each lane's difference clamped to the type's bounds.
+    @builtin("simd_sub_saturating")
+    public fn saturatingSub(_ other: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// The bits both lanes have.
+    @builtin("simd_and")
+    public operator & (lhs: SIMD<Scalar, N>, rhs: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// The bits either lane has.
+    @builtin("simd_or")
+    public operator | (lhs: SIMD<Scalar, N>, rhs: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// The bits one lane or the other has, not both.
+    @builtin("simd_xor")
+    public operator ^ (lhs: SIMD<Scalar, N>, rhs: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// Each lane's bits flipped.
+    @builtin("simd_not")
+    public prefix operator ~ (operand: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// Each lane shifted left by the other's count; a count outside
+    /// 0..<bitWidth in any lane traps.
+    @builtin("simd_shl")
+    public operator << (lhs: SIMD<Scalar, N>, rhs: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// Each lane shifted right — arithmetically for a signed type — by the
+    /// other's count; a count outside 0..<bitWidth in any lane traps.
+    @builtin("simd_shr")
+    public operator >> (lhs: SIMD<Scalar, N>, rhs: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// The bits every lane has.
+    @builtin("simd_reduce_and")
+    public fn reduceAnd() -> Scalar
+
+    /// The bits any lane has.
+    @builtin("simd_reduce_or")
+    public fn reduceOr() -> Scalar
+
+    /// The bits an odd number of lanes have.
+    @builtin("simd_reduce_xor")
+    public fn reduceXor() -> Scalar
+}
+
+extension SIMD where Scalar: BinaryFloatingPoint {
+    /// Each lane's square root, correctly rounded.
+    ///
+    /// ```sable
+    /// assert(SIMD<F64, 2>([4, 9]).squareRoot() == SIMD<F64, 2>([2, 3]))
+    /// ```
+    @builtin("simd_sqrt")
+    public fn squareRoot() -> SIMD<Scalar, N>
+
+    /// 'self × multiplier + addend' in each lane, rounded once.
+    ///
+    /// ```sable
+    /// let x = SIMD<F32, 4>(repeating: 2)
+    /// assert(x.fusedMultiplyAdd(SIMD<F32, 4>(repeating: 3), SIMD<F32, 4>(repeating: 1)) == SIMD<F32, 4>(repeating: 7))
+    /// ```
+    @builtin("simd_fma")
+    public fn fusedMultiplyAdd(_ multiplier: SIMD<Scalar, N>, _ addend: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// Each lane rounded down, to the integer at or below it.
+    @builtin("simd_floor")
+    public fn floor() -> SIMD<Scalar, N>
+
+    /// Each lane rounded up, to the integer at or above it.
+    @builtin("simd_ceil")
+    public fn ceil() -> SIMD<Scalar, N>
+
+    /// Each lane rounded toward zero.
+    @builtin("simd_trunc")
+    public fn truncated() -> SIMD<Scalar, N>
+
+    /// Each lane rounded to the nearest integer, a half to even.
+    @builtin("simd_round_even")
+    public fn rounded() -> SIMD<Scalar, N>
+
+    /// The smaller of each pair of lanes, a NaN in either giving NaN and -0
+    /// below +0 (IEEE 754-2019 minimum).
+    @builtin("simd_minimum")
+    public fn minimum(_ other: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+
+    /// The larger of each pair of lanes, a NaN in either giving NaN and +0
+    /// above -0 (IEEE 754-2019 maximum).
+    @builtin("simd_maximum")
+    public fn maximum(_ other: SIMD<Scalar, N>) -> SIMD<Scalar, N>
+}

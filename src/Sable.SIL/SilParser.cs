@@ -825,6 +825,17 @@ public sealed class SilParser {
             return new InlineArrayType(element, capacity);
         }
 
+        // '@simd(F32, 4)': four F32 lanes.
+        if (Current is { Kind: TokenKind.Global, Text: "simd" }) {
+            Next();
+            Expect("(");
+            var lane = ParseTypeBody();
+            Expect(",");
+            var lanes = Count("a lane count");
+            Expect(")");
+            return new VectorType(lane, lanes);
+        }
+
         if (Current is { Kind: TokenKind.Global, Text: "relative" or "relative_optional" } relative) {
             Next();
             Expect("(");

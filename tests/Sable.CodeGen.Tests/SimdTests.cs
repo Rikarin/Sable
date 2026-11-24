@@ -1,0 +1,396 @@
+using System.Diagnostics;
+using static Sable.CodeGen.Tests.Programs;
+
+namespace Sable.CodeGen.Tests;
+
+/// <summary>
+///     Portable SIMD (lib/Sable.Core/SIMD.sb): <c>SIMD&lt;T, N&gt;</c> is LLVM's
+///     <c>&lt;N x T&gt;</c>, its operations vector instructions; the
+///     interpreter computes each lane with the scalar builtin of the same
+///     name, and the two are held to the same answers and the same traps.
+/// </summary>
+[Native]
+public sealed class SimdTests {
+    [Fact]
+    public void FloatArithmeticIsLaneByLane() =>
+        Assert.Equal(
+            "<11.0, 22.0, 33.0, 44.0>\n110.0\n<0.5, 1.0, 1.5, 2.0>\n<1.0, 1.4142135, 1.7320508, 2.0>\n<-1.0, -2.0, -3.0, -4.0>\n<3.0, 5.0, 7.0, 9.0>\n",
+            AssertAgree(
+                Program(
+                    "",
+                    """
+                        let a = SIMD<F32, 4>([1, 2, 3, 4])
+                        let b = SIMD<F32, 4>(repeating: 10)
+                        let c = a * b + a
+                        print(c)
+                        print(c.reduceAdd())
+                        print(a / SIMD<F32, 4>(repeating: 2))
+                        print(a.squareRoot())
+                        print(-a)
+                        print(a.fusedMultiplyAdd(SIMD<F32, 4>(repeating: 2), SIMD<F32, 4>(repeating: 1)))
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void EveryLaneTypeAndWidthComputes() =>
+        AssertAgree(
+            Program(
+                """
+                fn show<T: SIMDScalar, N: Int>(_ v: SIMD<T, N>) {
+                    print("\(v) \(v.reduceAdd()) \(v.reduceMin()) \(v.reduceMax()) \(v.count)")
+                }
+                """,
+                """
+                    show(SIMD<I8, 16>.sequence(start: -8, step: 1))
+                    show(SIMD<U8, 32>.sequence(start: 0, step: 3))
+                    show(SIMD<I16, 8>.geometricSequence(start: 1, ratio: -3))
+                    show(SIMD<U16, 4>.sequence(start: 7, step: 1000))
+                    show(SIMD<I32, 64>.sequence(start: -100, step: 7))
+                    show(SIMD<U32, 2>([4000000000, 1]))
+                    show(SIMD<I64, 3>([-5, 9, 2]))
+                    show(SIMD<U64, 8>.geometricSequence(start: 1, ratio: 10))
+                    show(SIMD<Int, 4>.sequence(start: 100, step: -40))
+                    show(SIMD<UInt, 2>([1, 2]))
+                    show(SIMD<F64, 8>.sequence(start: 0.1, step: 0.2))
+                    show(SIMD<F32, 3>([0.1, 0.2, 0.3]))
+                    show(SIMD<F32, 16>.geometricSequence(start: 1.5, ratio: 1.1))
+                    show(SIMD<F16, 8>.sequence(start: 0.5, step: 0.25))
+                    show(SIMD<BF16, 4>.sequence(start: 1.5, step: 0.75))
+                    let h = SIMD<F16, 4>([1, 2, 3, 4]) * SIMD<F16, 4>(repeating: 0.1)
+                    print(h)
+                    let bf = SIMD<BF16, 4>([1, 2, 3, 4]) / SIMD<BF16, 4>(repeating: 3)
+                    print("\(bf) \(bf.squareRoot()) \(bf.fusedMultiplyAdd(bf, bf))")
+                """
+            )
+        );
+
+    [Fact]
+    public void IntegerArithmeticTrapsAsTheScalarDoes() {
+        var sums = Program("", """
+                                   let a = SIMD<I32, 4>([1, 2, 2147483647, 4])
+                                   print(a &+ SIMD<I32, 4>(repeating: 1))
+                                   print(a.saturatingAdd(SIMD<I32, 4>(repeating: 1)))
+                                   print(a + SIMD<I32, 4>(repeating: 1))
+                               """);
+        var run = AssertAgree(sums);
+        Assert.Equal("<2, 3, -2147483648, 5>\n<2, 3, 2147483647, 5>\n", run.Stdout);
+        Assert.Contains("integer overflow", run.Stderr, StringComparison.Ordinal);
+
+        Assert.Contains("division by zero", AssertAgree(Program("", """
+                                                                        let a = SIMD<U16, 4>([1, 2, 3, 4])
+                                                                        print(a / SIMD<U16, 4>([1, 1, 1, 2]))
+                                                                        print(a % SIMD<U16, 4>([3, 3, 3, 3]))
+                                                                        print(a / SIMD<U16, 4>([1, 0, 1, 1]))
+                                                                    """)).Stderr, StringComparison.Ordinal);
+        Assert.Contains("integer overflow", AssertAgree(Program("", """
+                                                                        let a = SIMD<I8, 2>([-128, 5])
+                                                                        print(a / SIMD<I8, 2>([-1, 1]))
+                                                                    """)).Stderr, StringComparison.Ordinal);
+        Assert.Contains("shift out of range", AssertAgree(Program("", """
+                                                                          let a = SIMD<U32, 2>([1, 2])
+                                                                          print(a << SIMD<U32, 2>([31, 1]))
+                                                                          print(a >> SIMD<U32, 2>([1, 32]))
+                                                                      """)).Stderr, StringComparison.Ordinal);
+        Assert.Contains("integer overflow", AssertAgree(Program("", """
+                                                                        let a = SIMD<I64, 2>([-9223372036854775807, 3])
+                                                                        print(a.abs())
+                                                                        print(-a)
+                                                                        print((a - SIMD<I64, 2>(repeating: 1)).abs())
+                                                                    """)).Stderr, StringComparison.Ordinal);
+        Assert.Contains("integer overflow", AssertAgree(Program("", """
+                                                                        let a = SIMD<U8, 4>([16, 1, 2, 3])
+                                                                        print(a &* a)
+                                                                        print(a * a)
+                                                                    """)).Stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BitsAndShiftsAreLaneByLane() =>
+        Assert.Equal(
+            "<8, 2, 0, 0> <14, 15, 15, 15> <6, 13, 15, 15> <-13, -4, -16, -9>\n<24, 12, 30, 16> <6, 0, 7, 4> <-1, -1, -1, 0>\n0 15 8\n",
+            AssertAgree(
+                Program(
+                    "",
+                    """
+                        let a = SIMD<I32, 4>([12, 3, 15, 8])
+                        let b = SIMD<I32, 4>([10, 14, 0, 7])
+                        print("\(a & b) \(a | b) \(a ^ b) \(~a)")
+                        let s = SIMD<I32, 4>([1, 2, 1, 1])
+                        print("\(a << s) \(a >> s) \(SIMD<I32, 4>([-1, -2, -3, 1]) >> SIMD<I32, 4>([1, 3, 2, 1]))")
+                        print("\(a.reduceAnd()) \(a.reduceOr()) \(a.reduceXor())")
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void ComparisonsMakeMasksThatSelect() =>
+        Assert.Equal(
+            "<false, false, true, true> 2 true false\n<1, 2, 30, 40>\n<10, 20, 3, 4>\n<true, true, false, false> true\nSIMDMask<4>(true, false, true, false) <false, true, false, true>\n<5, 2, 5, 4>\n",
+            AssertAgree(
+                Program(
+                    "",
+                    """
+                        let a = SIMD<I32, 4>([1, 2, 3, 4])
+                        let b = SIMD<I32, 4>([10, 20, 30, 40])
+                        let big = a.lanesGreater(than: SIMD<I32, 4>(repeating: 2))
+                        print("\(big) \(big.trueCount) \(big.anyTrue) \(big.allTrue)")
+                        print(SIMD<I32, 4>.select(big, b, a))
+                        print(a.replacing(with: b, where: ~big))
+                        let le = a.lanesLessOrEqual(to: SIMD<I32, 4>(repeating: 2))
+                        print("\(le) \(le == ~big)")
+                        let alternate = SIMDMask<4>([true, false, true, false])
+                        print("\(alternate.debugDescription()) \(alternate ^ SIMDMask<4>(repeating: true))")
+                        print(a.max(SIMD<I32, 4>([5, 0, 5, 0])).min(SIMD<I32, 4>([9, 2, 9, 4])))
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void FloatComparisonsFollowIeee() =>
+        Assert.Equal(
+            "<false, true, true> <true, false, false> false true\n<nan, 1.0, -0.0> nan\n",
+            AssertAgree(
+                Program(
+                    "",
+                    """
+                        let nan = F64.nan
+                        let a = SIMD<F64, 3>([nan, 1.0, -0.0])
+                        let b = SIMD<F64, 3>([nan, 1.0, 0.0])
+                        print("\(a.lanesLess(than: b) | a.lanesEqual(b)) \(a.lanesNotEqual(b) | a.lanesLess(than: b)) \(a == a) \(SIMD<F64, 3>([1, 2, 3]) == SIMD<F64, 3>([1, 2, 3]))")
+                        let m = SIMD<F64, 3>([1.0, 5.0, -0.0]).minimum(a)
+                        print("\(m) \(m.reduceAdd())")
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void LanesMoveAbout() =>
+        Assert.Equal(
+            "<40, 30, 20, 10> <20, 20>\n<1, 2, 3, 4> <1, 2> <3, 4>\n<0, 10, 1, 11> <2, 12, 3, 13>\n<0, 1, 2, 3> <10, 11, 12, 13>\n<7, 2, 3, 4> 7\n",
+            AssertAgree(
+                Program(
+                    "",
+                    """
+                        let v = SIMD<I32, 4>([10, 20, 30, 40])
+                        print("\(v.swizzled(SIMD<Int, 4>([3, 2, 1, 0]))) \(v.swizzled(SIMD<Int, 2>([1, 1])))")
+                        let whole = SIMD<I32, 4>.concat(SIMD<I32, 2>([1, 2]), SIMD<I32, 2>([3, 4]))
+                        print("\(whole) \(SIMD<I32, 2>.lowHalf(of: whole)) \(SIMD<I32, 2>.highHalf(of: whole))")
+                        let (low, high) = SIMD<I32, 4>.zip(SIMD<I32, 4>([0, 1, 2, 3]), SIMD<I32, 4>([10, 11, 12, 13]))
+                        print("\(low) \(high)")
+                        let (even, odd) = SIMD<I32, 4>.unzip(low, high)
+                        print("\(even) \(odd)")
+                        var w = whole
+                        w[0] = 7
+                        print("\(w) \(w[0])")
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void ALaneOutsideTheVectorTraps() {
+        Assert.Contains("SIMD lane index out of range", AssertAgree(Program("", """
+                                                                                    let v = SIMD<I32, 4>(repeating: 1)
+                                                                                    print(v[3])
+                                                                                    print(v[4])
+                                                                                """)).Stderr, StringComparison.Ordinal);
+        Assert.Contains("SIMD lane index out of range", AssertAgree(Program("", """
+                                                                                    let v = SIMD<I32, 4>(repeating: 1)
+                                                                                    print(v.swizzled(SIMD<Int, 2>([0, -1])))
+                                                                                """)).Stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void VectorsLoadAndStoreArrays() {
+        var run = AssertAgree(Program("", """
+                                              let values: F32[>..] = [1, 2, 3, 4, 5, 6]
+                                              let v = SIMD<F32, 4>.load(from: values, at: 2)
+                                              print(v)
+                                              var target: F32[>..] = [0, 0, 0, 0, 0]
+                                              let copy = target
+                                              target.store(v * SIMD<F32, 4>(repeating: 2), at: 1)
+                                              print("\(target) \(copy)")
+                                              var table: I32[>..] = [10, 20, 30, 40]
+                                              let g = SIMD<I32, 4>.gather(from: table, at: SIMD<Int, 4>([3, 0, 2, 2]))
+                                              print(g)
+                                              table.scatter(SIMD<I32, 2>([7, 9]), at: SIMD<Int, 2>([3, 0]))
+                                              print(table)
+                                              print(SIMD<F32, 4>(values[1..<5]))
+                                              print(SIMD<F32, 4>.load(from: values, at: 3))
+                                          """));
+        Assert.Equal("<3.0, 4.0, 5.0, 6.0>\n[0.0, 6.0, 8.0, 10.0, 12.0] [0.0, 0.0, 0.0, 0.0, 0.0]\n<40, 10, 30, 30>\n[9, 20, 30, 7]\n<2.0, 3.0, 4.0, 5.0>\n", run.Stdout);
+        Assert.Contains("array index out of range", run.Stderr, StringComparison.Ordinal);
+
+        Assert.Contains("array index out of range", AssertAgree(Program("", """
+                                                                                var target: I64[>..] = [0, 0, 0]
+                                                                                target.store(SIMD<I64, 2>(repeating: 1), at: 1)
+                                                                                print(target)
+                                                                                target.store(SIMD<I64, 2>(repeating: 1), at: -1)
+                                                                            """)).Stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LanesConvertAsUncheckedAsDoes() =>
+        Assert.Equal(
+            "<1, -2, 2147483647, 0>\n<1.0, -1.0>\n<44, 1>\n<255, 0, 1, 0>\n<1.5, -2.5>\n<3.0, 1.8446744073709552e+19>\n<1.0, 0.5> <1.0, 0.5>\n",
+            AssertAgree(
+                Program(
+                    "",
+                    """
+                        var floats = SIMD<F32, 4>([1.5, -2.5, 1e10, 0.0])
+                        floats[3] = F32.nan
+                        print(SIMD<I32, 4>.converting(floats))
+                        print(SIMD<F64, 2>.converting(SIMD<I32, 2>([1, -1])))
+                        print(SIMD<U8, 2>.converting(SIMD<I32, 2>([300, 257])))
+                        print(SIMD<U8, 4>.converting(SIMD<F64, 4>([1000.0, -5.0, 1.9, -0.9])))
+                        print(SIMD<F32, 2>.converting(SIMD<F64, 2>([1.5, -2.5])))
+                        var big = SIMD<U64, 2>(repeating: 3)
+                        big[1] = U64.max
+                        print(SIMD<F64, 2>.converting(big))
+                        print("\(SIMD<F64, 2>.converting(SIMD<BF16, 2>([1.0, 0.5]))) \(SIMD<BF16, 2>.converting(SIMD<F16, 2>([1.0, 0.5])))")
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void VectorsAreValuesInStructsArraysAndOptionals() =>
+        Assert.Equal(
+            "<1.0, 2.0> <3.0, 4.0> true\n<4.0, 6.0>\n2\n<2, 2, 2, 2, 2, 2, 2, 2>\n",
+            AssertAgree(
+                Program(
+                    """
+                    struct Particle {
+                        var position: SIMD<F64, 2>
+                        var velocity: SIMD<F64, 2>
+                    }
+                    """,
+                    """
+                        var p = Particle(position: SIMD<F64, 2>([1, 2]), velocity: SIMD<F64, 2>([3, 4]))
+                        let q = p
+                        p.position = p.position + p.velocity
+                        print("\(q.position) \(q.velocity) \(q.position != p.position)")
+                        var many: SIMD<F64, 2>[>..] = [p.position]
+                        many.append(q.velocity)
+                        print(many[0])
+                        let maybe: SIMD<I16, 8>? = SIMD<I16, 8>(repeating: 2)
+                        var seen: [SIMD<I16, 8>: Int] = [:]
+                        seen[maybe!] = 1
+                        seen[SIMD<I16, 8>(repeating: 3)] = 2
+                        print(seen.count)
+                        if let v = maybe {
+                            print(v)
+                        }
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void PreferredWidthIsTheTargetsVectorRegister() =>
+        Assert.Equal(
+            "4 2 16 2 8\n",
+            AssertAgree(Program("", "    print(\"\\(F32.preferredVectorWidth) \\(F64.preferredVectorWidth) \\(U8.preferredVectorWidth) \\(Int.preferredVectorWidth) \\(F16.preferredVectorWidth)\")")).Stdout
+        );
+
+    [Fact]
+    public void AWrongLaneCountTraps() =>
+        Assert.Contains("a SIMD vector of 4 lanes made from 3", AssertAgree(Program("", "    print(SIMD<I32, 4>([1, 2, 3]))")).Stderr, StringComparison.Ordinal);
+
+    /// <summary>The program's LLVM IR, before LLVM's passes, and after clang's -O2.</summary>
+    static (string Unoptimised, string Optimised) Ir(string source) {
+        var result = Pipeline.Compile(new SourceText(source, "test.sb"), optimised: true);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        var directory = Directory.CreateTempSubdirectory("sable-simd-");
+        try {
+            var input = Path.Combine(directory.FullName, "in.ll");
+            var output = Path.Combine(directory.FullName, "out.ll");
+            File.WriteAllText(input, result.LlvmIr!);
+            var start = new ProcessStartInfo(NativeBuild.CompilerPath) { RedirectStandardOutput = true, RedirectStandardError = true };
+            foreach (var argument in new[] { "-O2", "-S", "-emit-llvm", "-Wno-override-module", input, "-o", output }) {
+                start.ArgumentList.Add(argument);
+            }
+
+            var run = ChildProcess.Run(start, ChildProcess.ProgramLimit, "");
+            Assert.True(run.ExitCode == 0, run.Stderr);
+            return (result.LlvmIr!, File.ReadAllText(output));
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    const string Kernel = """
+                          @inline(never)
+                          fn axpy(_ a: F32, _ x: F32[:], _ y: inout F32[>..]) {
+                              let scale = SIMD<F32, 4>(repeating: a)
+                              var i = 0
+                              while i + 4 <= x.count {
+                                  let v = SIMD<F32, 4>.load(from: x, at: i) * scale + SIMD<F32, 4>.load(from: y, at: i)
+                                  y.store(v, at: i)
+                                  i += 4
+                              }
+                          }
+
+                          @inline(never)
+                          fn total(_ x: F64[:]) -> F64 {
+                              var sum = SIMD<F64, 2>()
+                              var i = 0
+                              while i + 2 <= x.count {
+                                  sum = sum + SIMD<F64, 2>.load(from: x, at: i)
+                                  i += 2
+                              }
+                              return sum.reduceAdd()
+                          }
+                          """;
+
+    [Fact]
+    public void ALoopOverVectorsIsVectorInstructions() {
+        if (!CanBuild) {
+            return;
+        }
+
+        // Arrays made at run time, so that LLVM cannot fold the loops away.
+        var (unoptimised, optimised) = Ir(Program(Kernel, """
+                                                              var x: F32[>..] = []
+                                                              var y: F32[>..] = []
+                                                              var z: F64[>..] = []
+                                                              for i in 0..<Runtime.argumentCount() * 8 {
+                                                                  x.append(F32(i))
+                                                                  y.append(1)
+                                                                  z.append(F64(i))
+                                                              }
+                                                              axpy(2, x, &y)
+                                                              print(y)
+                                                              print(total(z))
+                                                          """));
+
+        // As Sable lowers it, the SIMD type is LLVM's vector type, its operations vector instructions …
+        Assert.Contains("load <4 x float>, ptr", unoptimised, StringComparison.Ordinal);
+        Assert.Contains("fmul <4 x float>", unoptimised, StringComparison.Ordinal);
+        Assert.Contains("fadd <2 x double>", unoptimised, StringComparison.Ordinal);
+        Assert.Contains("store <4 x float>", unoptimised, StringComparison.Ordinal);
+
+        // … and they stay vector instructions through LLVM's -O2, inside the loops.
+        Assert.Matches(@"fmul (fast )?<4 x float>", optimised);
+        Assert.Matches(@"fadd (fast )?<4 x float>", optimised);
+        Assert.Matches(@"fadd (fast )?<2 x double>", optimised);
+        Assert.Contains("store <4 x float>", optimised, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheKernelLoopAgrees() =>
+        Assert.Equal(
+            "[3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0]\n10.0\n",
+            AssertAgree(Program(Kernel, """
+                                            var y: F32[>..] = [1, 1, 1, 1, 1, 1, 1, 1]
+                                            axpy(2, [1, 2, 3, 4, 5, 6, 7, 8], &y)
+                                            print(y)
+                                            print(total([1, 2, 3, 4]))
+                                        """)).Stdout
+        );
+}

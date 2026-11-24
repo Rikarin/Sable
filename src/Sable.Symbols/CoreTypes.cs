@@ -298,6 +298,35 @@ public sealed class CoreTypes {
     public bool IsDictionary(TypeSymbol type) =>
         type is NamedTypeSymbol named && Dictionary is { } dictionary && named.OriginalDefinition.Equals(dictionary);
 
+    /// <summary>
+    ///     <c>SIMD&lt;Scalar, N&gt;</c> and <c>SIMDMask&lt;N&gt;</c>, declared in
+    ///     <c>lib/Sable.Core/SIMD.sb</c> and lowered to vectors of N lanes:
+    ///     null in a compilation whose Sable.Core has none.
+    /// </summary>
+    public NamedTypeSymbol? Simd => _simd ??= DeclaredStruct("SIMD");
+
+    public NamedTypeSymbol? SimdMask => _simdMask ??= DeclaredStruct("SIMDMask");
+
+    NamedTypeSymbol? _simd;
+    NamedTypeSymbol? _simdMask;
+
+    /// <summary>The lane type and the number of lanes of a <c>SIMD&lt;T, N&gt;</c> (a mask's lanes are Bools), or null for any other type.</summary>
+    public (TypeSymbol Lane, long Count)? SimdLanes(TypeSymbol type) {
+        if (type is not NamedTypeSymbol { IsConstructed: true } named) {
+            return null;
+        }
+
+        if (Simd is { } simd && named.OriginalDefinition.Equals(simd) && named.TypeArguments is [var lane, ValueTypeArgumentSymbol { Value: var count }]) {
+            return (lane, count);
+        }
+
+        if (SimdMask is { } mask && named.OriginalDefinition.Equals(mask) && named.TypeArguments is [ValueTypeArgumentSymbol { Value: var lanes }]) {
+            return (Bool, lanes);
+        }
+
+        return null;
+    }
+
     public ImmutableArray<NamedTypeSymbol> Integers { get; }
     public ImmutableArray<NamedTypeSymbol> Floats { get; }
     public ImmutableArray<NamedTypeSymbol> Numerics { get; }

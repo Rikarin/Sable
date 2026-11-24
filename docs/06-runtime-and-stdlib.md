@@ -725,7 +725,8 @@ Sable.Core          ── always linked, no dependencies
   Formattable/FormatSpec (what "\(x:spec)" writes through),
   Parsable/ParseError/NumberStyles (text back to values), and
   RandomNumberGenerator with the system's generator and a seeded one
-  (xoshiro256**), behind 'random(in:)', 'randomElement' and 'shuffle'
+  (xoshiro256**), behind 'random(in:)', 'randomElement' and 'shuffle';
+  portable SIMD: SIMD<T, N> and SIMDMask<N>, LLVM's vectors
 
 Sable.Collections   List Dictionary Set Deque OrderedDictionary
                     PriorityQueue BitSet InlineArray SmallVec,
@@ -741,9 +742,10 @@ Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, validated
                     formatting, Regex (a compiled NFA/DFA hybrid),
                     TextBuilder
 Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
-                    generic over ElementaryFunctions; integer math;
-                    BigInt, Decimal, SIMD<T, N>, Matrix, Quaternion,
-                    statistics
+                    generic over ElementaryFunctions; integer math; the
+                    vector kernels over F32[:] and F64[:] (sum, dot,
+                    cosineSimilarity, softmax, …: TensorPrimitives');
+                    BigInt, Decimal, Matrix, Quaternion, statistics
 Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     OpenOptions (positional reads and writes, metadata,
                     setLength, sync), BufferedReader BufferedWriter
@@ -846,6 +848,36 @@ built-in types' default: a type of the program's own conforming to the
 protocol meets the requirement itself. Each type's own file
 (`Int.sb`, `U8.sb`, `F64.sb`, …) says only what differs: its limits and
 constants.
+
+### SIMD
+
+`SIMD<Scalar, N>` (`lib/Sable.Core/SIMD.sb`) is N lanes of an integer of
+up to 64 bits or a float (F16 and BF16 included; `SIMDScalar` says which),
+N being 2, 3, 4, 8, 16, 32 or 64 (a `where` the type checks, S3421). The
+compiler knows it by name, as it knows `Dictionary`: it lowers to SIL's
+`@simd(T, N)` and to LLVM's `<N x T>`, a value held in vector registers —
+16 bytes of them on every target Sable has (SSE2, NEON, simd128:
+`Platform.vectorBytes`, and `T.preferredVectorWidth` lanes of each type);
+a wider vector is split across several. `SIMDMask<N>` is N Bools,
+`<N x i1>`, what comparisons give and `select` chooses by.
+
+Its members are the SIMD builtins (`simd_…`, `src/Sable.SIL/Simd.cs`),
+whose signatures follow the vectors they are given and are checked where
+each is used. A lane-wise one is the scalar builtin of its name in every
+lane — `simd_add` on `@simd(I32, 4)` is `add_I32` four times — and means
+what it does: an integer's `+`, `-` and `*` trap if any lane overflows
+(`&+`, `&-`, `&*` and `saturatingAdd` do not), a division traps on a zero
+divisor in any lane, a shift on a count outside the width, as the scalar
+operators do; a float's follow IEEE 754. Natively each is the vector
+instruction or intrinsic, the overflow of a checked one reduced to one
+trap; the interpreter computes each lane with the scalar builtin, so the
+two agree by construction. The rest move lanes (`swizzled`, `concat`,
+`lowHalf`, .NET 11's `zip` and `unzip`), load and store them from arrays
+(one unaligned vector load or store, the index checked as an element's),
+convert them as `unchecked as` does (never trapping: wrapped, saturated,
+rounded), and reduce them: an integer's sum wraps, and a float's is added
+pairwise — lane i with lane i + N/2, down to one — in that order natively
+and in the interpreter alike, so that a sum is the same number either way.
 
 ### Source layout
 

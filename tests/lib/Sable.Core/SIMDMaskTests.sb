@@ -1,0 +1,53 @@
+module SIMDMaskTests
+
+// SIMDMask (Sable.Core): a Bool a lane, what comparing SIMD vectors gives.
+
+import Sable.Testing
+
+@test
+fn aMaskIsMadeFromLanesOrOneValue() {
+    let cleared = SIMDMask<4>()
+    assert(!cleared.anyTrue)
+    assertEqual(cleared, SIMDMask<4>(repeating: false))
+    let full = SIMDMask<4>(repeating: true)
+    assert(full.allTrue)
+    assertEqual(full.count, 4)
+    let mask = SIMDMask<2>([true, false])
+    assert(mask[0] && !mask[1])
+}
+
+@test
+fn aLaneIsReadAndWrittenByIndex() {
+    var mask = SIMDMask<8>()
+    mask[5] = true
+    assert(mask[5])
+    assertEqual(mask.trueCount, 1)
+    assert(mask.anyTrue && !mask.allTrue)
+}
+
+@test
+fn masksCombineLaneByLane() {
+    let a = SIMDMask<4>([true, true, false, false])
+    let b = SIMDMask<4>([true, false, true, false])
+    assertEqual(a & b, SIMDMask<4>([true, false, false, false]))
+    assertEqual(a | b, SIMDMask<4>([true, true, true, false]))
+    assertEqual(a ^ b, SIMDMask<4>([false, true, true, false]))
+    assertEqual(~a, SIMDMask<4>([false, false, true, true]))
+    assert(a != b)
+}
+
+@test
+fn equalMasksHashAlike() {
+    var seen: [SIMDMask<2>: Int] = [:]
+    seen[SIMDMask<2>([true, false])] = 1
+    seen[SIMDMask<2>([true, false])] = 2
+    seen[SIMDMask<2>([false, false])] = 3
+    assertEqual(seen.count, 2)
+}
+
+@test
+fn aMaskFormatsItsLanes() {
+    let mask = SIMDMask<2>([true, false])
+    assertEqual("\(mask)", "<true, false>")
+    assertEqual(mask.debugDescription(), "SIMDMask<2>(true, false)")
+}

@@ -26,6 +26,13 @@ extension List: Debug where Element: Debug {
     }
 }
 
+extension LinkedList: Debug where Element: Debug {
+    /// `LinkedList([1, 2])`, front first.
+    public fn debugDescription() -> String {
+        return described("LinkedList", descriptions(self))
+    }
+}
+
 extension Deque: Debug where Element: Debug {
     /// `Deque([1, 2])`, front first.
     public fn debugDescription() -> String {

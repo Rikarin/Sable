@@ -1,0 +1,473 @@
+module Sable.Collections
+
+/// A doubly linked list: .NET's `LinkedList<T>`, Rust's `LinkedList`. Its
+/// positions are handles to its nodes (LinkedListIndex): inserting before
+/// or after one, removing it, and moving it anywhere in the list are
+/// constant time, however long the list, and a handle stays good while
+/// its node is in the list — what an LRU cache or a scheduler's queue
+/// wants, which an array's shifting does not give.
+///
+/// The nodes live in one array of the list's own, an arena, linked by
+/// their slots, not as an object each: no reference count per node, no
+/// cycle to break, and a list is a value — copying it shares the arena
+/// until one of the two changes. A removed node's slot is reused; a handle
+/// to it then traps rather than reach the new one. Appending another list,
+/// or splitting one, moves the elements moved into the other arena: linear
+/// in how many, constant when appending to an empty list.
+///
+/// ```sable
+/// var recent = LinkedList<String>()
+/// let a = recent.append("a")
+/// recent.append("b")
+/// recent.append("c")
+/// // "a" was used: to the front, in constant time.
+/// let moved = recent.move(a, before: recent.startIndex)
+/// assert(recent.first == "a" && recent[moved] == "a")
+/// assert(recent.removeLast() == "c" && recent.count == 2)
+/// ```
+public struct LinkedList<Element> {
+    var nodes: LinkedNode<Element>[>..]
+    var head: Int
+    var tail: Int
+    // The removed slots, linked through 'next'.
+    var free: Int
+    var length: Int
+
+    /// An empty list.
+    public init() {
+        nodes = []
+        head = -1
+        tail = -1
+        free = -1
+        length = 0
+    }
+
+    /// A list of the sequence's elements, in order.
+    public init<S: Sequence>(_ elements: S) throws(S.Failure) where S.Element == Element {
+        self.init()
+        for try element in elements {
+            append(element)
+        }
+    }
+
+    /// How many elements it holds.
+    public var count: Int => length
+
+    /// Whether it holds none.
+    public var isEmpty: Bool => length == 0
+
+    /// The first element, or none.
+    public var first: Element? {
+        get {
+            return head < 0 ? none : nodes[head].value
+        }
+    }
+
+    /// The last element, or none.
+    public var last: Element? {
+        get {
+            return tail < 0 ? none : nodes[tail].value
+        }
+    }
+
+    /// Whether the position is one of the list's nodes still, or its end.
+    public fn isValid(_ position: LinkedListIndex) -> Bool {
+        if position.slot == -1 {
+            return true
+        }
+        return position.slot >= 0 && position.slot < nodes.count && nodes[position.slot].generation == position.generation
+            && nodes[position.slot].value != none
+    }
+
+    // ---- Adding ------------------------------------------------------------
+
+    /// The element added at the back; its position.
+    public mutating fn append(_ element: Element) -> LinkedListIndex {
+        return insert(element, between: tail, and: -1)
+    }
+
+    /// The element added at the front; its position.
+    public mutating fn prepend(_ element: Element) -> LinkedListIndex {
+        return insert(element, between: -1, and: head)
+    }
+
+    /// The element added before the position (at the back, before the
+    /// end); its position.
+    public mutating fn insert(_ element: Element, before position: LinkedListIndex) -> LinkedListIndex {
+        if position.slot == -1 {
+            return append(element)
+        }
+        let at = slotOf(position)
+        return insert(element, between: nodes[at].prev, and: at)
+    }
+
+    /// The element added after the position, which is not the end; its
+    /// position.
+    public mutating fn insert(_ element: Element, after position: LinkedListIndex) -> LinkedListIndex {
+        let at = slotOf(position)
+        return insert(element, between: at, and: nodes[at].next)
+    }
+
+    /// Every element of the sequence added at the back, in order.
+    public mutating fn append<S: Sequence>(contentsOf elements: S) throws(S.Failure) where S.Element == Element {
+        for try element in elements {
+            append(element)
+        }
+    }
+
+    /// Every element of the other list added at the back, in order: the
+    /// other's arena taken whole when this one is empty, else its elements
+    /// moved one by one. Its positions are not this list's after.
+    public mutating fn append(contentsOf other: LinkedList<Element>) {
+        if length == 0 {
+            self = other
+            return
+        }
+        var slot = other.head
+        while slot >= 0 {
+            append(other.nodes[slot].value!)
+            slot = other.nodes[slot].next
+        }
+    }
+
+    // ---- Removing ----------------------------------------------------------
+
+    /// The element at the position, which is not the end, removed; its
+    /// handle, and every copy of it, is no position after.
+    public mutating fn remove(at position: LinkedListIndex) -> Element {
+        let at = slotOf(position)
+        unlink(at)
+        return release(at)
+    }
+
+    /// The first element, removed; none when there is none.
+    public mutating fn removeFirst() -> Element? {
+        if head < 0 {
+            return none
+        }
+        let at = head
+        unlink(at)
+        return release(at)
+    }
+
+    /// The last element, removed; none when there is none.
+    public mutating fn removeLast() -> Element? {
+        if tail < 0 {
+            return none
+        }
+        let at = tail
+        unlink(at)
+        return release(at)
+    }
+
+    /// Every element removed, and the arena let go.
+    public mutating fn removeAll() {
+        self = LinkedList<Element>()
+    }
+
+    /// The elements from the position on, taken off into a list of their
+    /// own: this one keeps those before it. Linear in how many are taken.
+    public mutating fn split(at position: LinkedListIndex) -> LinkedList<Element> {
+        var taken = LinkedList<Element>()
+        if position.slot == -1 {
+            return taken
+        }
+        var slot = slotOf(position)
+        while slot >= 0 {
+            let next = nodes[slot].next
+            unlink(slot)
+            taken.append(release(slot))
+            slot = next
+        }
+        return taken
+    }
+
+    // ---- Reordering --------------------------------------------------------
+
+    /// The node at the position moved before another (to the back, before
+    /// the end), in constant time: its handle stays good, and its position
+    /// with the new order is given back.
+    public mutating fn move(_ position: LinkedListIndex, before target: LinkedListIndex) -> LinkedListIndex {
+        let at = slotOf(position)
+        if target.slot == at {
+            return index(of: at)
+        }
+        let before = target.slot == -1 ? -1 : slotOf(target)
+        unlink(at)
+        link(at, between: before == -1 ? tail : nodes[before].prev, and: before)
+        return index(of: at)
+    }
+
+    /// The elements in the opposite order. Positions stay good, their
+    /// order taken again.
+    public mutating fn reverse() {
+        var slot = head
+        while slot >= 0 {
+            let next = nodes[slot].next
+            nodes[slot].next = nodes[slot].prev
+            nodes[slot].prev = next
+            slot = next
+        }
+        let first = head
+        head = tail
+        tail = first
+        renumber(from: head, to: tail, count: length, low: lowest, high: highest)
+    }
+
+    // ---- The arena ---------------------------------------------------------
+
+    fn index(of slot: Int) -> LinkedListIndex {
+        return LinkedListIndex { slot: slot, generation: nodes[slot].generation, order: nodes[slot].order }
+    }
+
+    fn slotOf(_ position: LinkedListIndex) -> Int {
+        precondition(position.slot != -1, "the end of a LinkedList has no element")
+        precondition(isValid(position), "a LinkedList position whose element was removed, or another list's")
+        return position.slot
+    }
+
+    mutating fn insert(_ element: Element, between before: Int, and after: Int) -> LinkedListIndex {
+        var slot = free
+        if slot >= 0 {
+            free = nodes[slot].next
+            nodes[slot].value = element
+        } else {
+            slot = nodes.count
+            nodes.append(LinkedNode<Element> { value: element, next: -1, prev: -1, order: 0, generation: 0 })
+        }
+        length += 1
+        link(slot, between: before, and: after)
+        return index(of: slot)
+    }
+
+    // The slot's node put between two others (-1 for an end), and given
+    // an order between theirs.
+    mutating fn link(_ slot: Int, between before: Int, and after: Int) {
+        nodes[slot].prev = before
+        nodes[slot].next = after
+        if before >= 0 {
+            nodes[before].next = slot
+        } else {
+            head = slot
+        }
+        if after >= 0 {
+            nodes[after].prev = slot
+        } else {
+            tail = slot
+        }
+        nodes[slot].order = orderBetween(before, after, slot)
+    }
+
+    mutating fn unlink(_ slot: Int) {
+        let before = nodes[slot].prev
+        let after = nodes[slot].next
+        if before >= 0 {
+            nodes[before].next = after
+        } else {
+            head = after
+        }
+        if after >= 0 {
+            nodes[after].prev = before
+        } else {
+            tail = before
+        }
+    }
+
+    // The slot's element taken out, the slot freed for reuse, its handles
+    // made no position by a new generation.
+    mutating fn release(_ slot: Int) -> Element {
+        let element = nodes[slot].value!
+        nodes[slot].value = none
+        nodes[slot].generation += 1
+        nodes[slot].prev = -1
+        nodes[slot].next = free
+        free = slot
+        length -= 1
+        return element
+    }
+
+    // ---- Order labels ------------------------------------------------------
+    //
+    // Each node has a number, increasing along the list, which positions
+    // compare by (order maintenance). A node put between two takes the
+    // middle of their numbers, at an end a step past its neighbour; where
+    // there is no room, a run around it is renumbered evenly — the smallest
+    // run, doubling, whose numbers are spread thinly enough — so that a
+    // number costs constant time, amortised, wherever nodes go.
+
+    var lowest: Int => -(1 << 61)
+    var highest: Int => 1 << 61
+    var step: Int => 1 << 32
+
+    mutating fn orderBetween(_ before: Int, _ after: Int, _ slot: Int) -> Int {
+        let low = before < 0 ? lowest : nodes[before].order
+        let high = after < 0 ? highest : nodes[after].order
+        if high - low >= 2 {
+            if after < 0 && high - low > step {
+                return low + step
+            }
+            if before < 0 && high - low > step {
+                return high - step
+            }
+            return low + (high - low) / 2
+        }
+        // No room: renumber a run around the neighbours, this node among
+        // them, and its number is set with theirs.
+        renumberAround(slot)
+        return nodes[slot].order
+    }
+
+    mutating fn renumberAround(_ slot: Int) {
+        var left = slot
+        var right = slot
+        var width = 1
+        while true {
+            let low = nodes[left].prev < 0 ? lowest : nodes[nodes[left].prev].order
+            let high = nodes[right].next < 0 ? highest : nodes[nodes[right].next].order
+            let whole = nodes[left].prev < 0 && nodes[right].next < 0
+            // Thin enough: room for more than 4 width² numbers.
+            if whole || width < (1 << 28) && (high - low) / 4 > width * width {
+                renumber(from: left, to: right, count: width, low: low, high: high)
+                return
+            }
+            var grow = width
+            while grow > 0 && nodes[left].prev >= 0 {
+                left = nodes[left].prev
+                width += 1
+                grow -= 1
+            }
+            grow = width
+            while grow > 0 && nodes[right].next >= 0 {
+                right = nodes[right].next
+                width += 1
+                grow -= 1
+            }
+        }
+    }
+
+    // The 'count' nodes from one to the other numbered evenly between low
+    // and high, both left out.
+    mutating fn renumber(from left: Int, to right: Int, count: Int, low: Int, high: Int) {
+        if count == 0 {
+            return
+        }
+        let gap = (high - low) / (count + 1)
+        var slot = left
+        var i = 1
+        while i <= count {
+            nodes[slot].order = low + gap * i
+            if slot == right {
+                return
+            }
+            slot = nodes[slot].next
+            i += 1
+        }
+    }
+}
+
+// A node: its element (none once removed), its neighbours' slots (-1 at
+// an end; 'next' links the free slots), its order label, and how many
+// times its slot has been freed.
+struct LinkedNode<Element> {
+    var value: Element?
+    var next: Int
+    var prev: Int
+    var order: Int
+    var generation: Int
+}
+
+extension LinkedList: BidirectionalCollection, MutableCollection, FromSequence<Element> {
+    /// An iterator over the elements, front to back.
+    public fn makeIterator() -> LinkedListIterator<Element> {
+        return LinkedListIterator<Element> { nodes: nodes, slot: head }
+    }
+
+    /// The first node's position: the end when there is none.
+    public var startIndex: LinkedListIndex {
+        get {
+            return head < 0 ? endIndex : index(of: head)
+        }
+    }
+
+    /// The position after the last node.
+    public var endIndex: LinkedListIndex {
+        get {
+            return LinkedListIndex { slot: -1, generation: 0, order: Int.max }
+        }
+    }
+
+    /// The next node's position, or the end.
+    public fn index(after position: LinkedListIndex) -> LinkedListIndex {
+        let next = nodes[slotOf(position)].next
+        return next < 0 ? endIndex : index(of: next)
+    }
+
+    /// The node's before this position, which is not the first's: the
+    /// last node's, before the end.
+    public fn index(before position: LinkedListIndex) -> LinkedListIndex {
+        let before = position.slot == -1 ? tail : nodes[slotOf(position)].prev
+        precondition(before >= 0, "no position before a LinkedList's first")
+        return index(of: before)
+    }
+
+    /// The position 'distance' nodes on, or back when negative: linear in it.
+    public fn index(_ position: LinkedListIndex, offsetBy distance: Int) -> LinkedListIndex {
+        var at = position
+        var left = distance
+        while left > 0 {
+            at = index(after: at)
+            left -= 1
+        }
+        while left < 0 {
+            at = index(before: at)
+            left += 1
+        }
+        return at
+    }
+
+    /// The element at the position, which is not the end: to read or replace.
+    public subscript(position: LinkedListIndex) -> Element {
+        get {
+            return nodes[slotOf(position)].value!
+        }
+        set {
+            nodes[slotOf(position)].value = newValue
+        }
+    }
+}
+
+extension LinkedList: Equatable where Element: Equatable {
+    /// The same elements in the same order.
+    public operator == (lhs: LinkedList<Element>, rhs: LinkedList<Element>) -> Bool {
+        if lhs.length != rhs.length {
+            return false
+        }
+        var a = lhs.head
+        var b = rhs.head
+        while a >= 0 {
+            if lhs.nodes[a].value! != rhs.nodes[b].value! {
+                return false
+            }
+            a = lhs.nodes[a].next
+            b = rhs.nodes[b].next
+        }
+        return true
+    }
+}
+
+/// Gives a linked list's elements, front to back. It holds the list's
+/// arena as it was when it was made, sharing it until either changes.
+public struct LinkedListIterator<Element>: Iterator {
+    let nodes: LinkedNode<Element>[>..]
+    var slot: Int
+
+    /// The next element, or none past the back.
+    public mutating fn next() -> Element? {
+        if slot < 0 {
+            return none
+        }
+        let element = nodes[slot].value
+        slot = nodes[slot].next
+        return element
+    }
+}

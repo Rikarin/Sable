@@ -729,7 +729,9 @@ Sable.Core          ── always linked, no dependencies
 
 Sable.Collections   List Dictionary Set Deque OrderedDictionary
                     PriorityQueue BitSet InlineArray SmallVec,
-                    SortedDictionary SortedSet (B-trees, range queries)
+                    SortedDictionary SortedSet (B-trees, range queries),
+                    LinkedList (an arena of nodes, constant-time handles,
+                    order-maintained comparable positions)
 Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, validated
                     (UTF-8 sixteen bytes a step) and transcoded a chunk at
                     a time (OperationStatus, Utf8Decoder, Utf16Decoder);

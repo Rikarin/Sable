@@ -1,0 +1,43 @@
+module Sable.Collections
+
+/// A position in a LinkedList: a handle to one node. It stays the node's
+/// while the node is in the list, whatever is inserted or removed around
+/// it, so an insert or a removal at it is constant time; once the node is
+/// removed, using it traps. Positions compare by the list's order, as it
+/// was when they were taken: a move, or an insertion that renumbers the
+/// order around it, leaves the handle good but its order old — take it
+/// again to compare. The end position is after every node.
+public struct LinkedListIndex {
+    // The node's slot in the list's arena (-1 for the end), its slot's
+    // generation when it was taken, and its order label then.
+    let slot: Int
+    let generation: Int
+    let order: Int
+}
+
+extension LinkedListIndex: Equatable {
+    /// The same node, or both the end.
+    public operator == (lhs: LinkedListIndex, rhs: LinkedListIndex) -> Bool {
+        return lhs.slot == rhs.slot && lhs.generation == rhs.generation
+    }
+}
+
+extension LinkedListIndex: Comparable {
+    /// Before in the list's order.
+    public operator < (lhs: LinkedListIndex, rhs: LinkedListIndex) -> Bool {
+        return lhs.order < rhs.order
+    }
+}
+
+extension LinkedListIndex: Hashable {
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(slot)
+        hasher.combine(generation)
+    }
+}
+
+extension LinkedListIndex: Debug {
+    public fn debugDescription() -> String {
+        return slot < 0 ? "LinkedListIndex(end)" : "LinkedListIndex(\(slot))"
+    }
+}

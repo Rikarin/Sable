@@ -1,0 +1,230 @@
+module LinkedListTests
+
+// LinkedList (Sable.Collections): against an array as a model, with
+// inserts, removals and moves at handles chosen at random; handles kept
+// across changes and refused once removed; order labels renumbered under
+// inserts that crowd one spot; and the list as a value and a collection.
+
+import Sable.Collections
+import Sable.Testing
+
+/// A random walk of numbers: xorshift.
+struct Walk {
+    var state: U64
+
+    mutating fn next(_ below: Int) -> Int {
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        return Int(state % U64(below))
+    }
+}
+
+fn shown(_ list: LinkedList<Int>) -> String {
+    var parts: String[>..] = []
+    for x in list {
+        parts.append("\(x)")
+    }
+    return parts.joined(separator: ",")
+}
+
+fn shownModel(_ model: List<Int>) -> String {
+    var parts: String[>..] = []
+    for x in model {
+        parts.append("\(x)")
+    }
+    return parts.joined(separator: ",")
+}
+
+/// The list's positions, front to back, checked to be in order both ways.
+fn positions(_ list: LinkedList<Int>) -> LinkedListIndex[>..] {
+    var all: LinkedListIndex[>..] = []
+    var at = list.startIndex
+    while at != list.endIndex {
+        if !all.isEmpty {
+            assert(all[all.count - 1] < at, "positions out of order")
+        }
+        all.append(at)
+        at = list.index(after: at)
+    }
+    assert(all.isEmpty || all[all.count - 1] < list.endIndex)
+    // Backwards, the same positions.
+    var i = all.count
+    at = list.endIndex
+    while i > 0 {
+        at = list.index(before: at)
+        i -= 1
+        assert(at == all[i], "backwards differs")
+    }
+    return all
+}
+
+@test
+fn randomChangesAgreeWithAnArray() {
+    var walk = Walk { state: 0x9E3779B97F4A7C15 }
+    var list = LinkedList<Int>()
+    var model = List<Int>()
+    var removed: LinkedListIndex[>..] = []
+    var next = 0
+    var step = 0
+    while step < 4000 {
+        let all = positions(list)
+        assertEqual(all.count, model.count)
+        let choice = walk.next(10)
+        if model.isEmpty || choice < 4 {
+            // Insert before or after a random node, or at an end.
+            let value = next
+            next += 1
+            let spot = model.isEmpty ? 0 : walk.next(model.count + 1)
+            let at = spot == model.count ? list.endIndex : all[spot]
+            if walk.next(2) == 0 || spot == model.count {
+                let made = list.insert(value, before: at)
+                model.insert(value, at: spot)
+                assertEqual(list[made], value)
+            } else {
+                let made = list.insert(value, after: at)
+                model.insert(value, at: spot + 1)
+                assertEqual(list[made], value)
+            }
+        } else if choice < 7 {
+            let spot = walk.next(model.count)
+            let gone = all[spot]
+            assertEqual(list.remove(at: gone), model[spot])
+            let _ = model.remove(at: spot)
+            removed.append(gone)
+        } else if choice < 9 {
+            // Move a random node before another, or to the back.
+            let from = walk.next(model.count)
+            let to = walk.next(model.count + 1)
+            let target = to == model.count ? list.endIndex : all[to]
+            let value = model[from]
+            let moved = list.move(all[from], before: target)
+            assertEqual(list[moved], value)
+            if from != to {
+                let _ = model.remove(at: from)
+                model.insert(value, at: to > from ? to - 1 : to)
+            }
+        } else {
+            // Replace through a handle.
+            let spot = walk.next(model.count)
+            list[all[spot]] = -model[spot]
+            model[spot] = -model[spot]
+        }
+        assertEqual(list.count, model.count)
+        step += 1
+    }
+    assertEqual(shown(list), shownModel(model))
+    // Every removed handle is refused, even spot its slot was reused.
+    for gone in removed {
+        assert(!list.isValid(gone))
+    }
+    assert(list.isValid(list.endIndex))
+}
+
+@test
+fn crowdedInsertsAreRenumberedInOrder() {
+    // Always before the same node, and always just after the front: the
+    // middle of two numbers runs out after a few dozen, every time.
+    var list = LinkedList<Int>()
+    let anchor = list.append(1000000)
+    var i = 0
+    while i < 3000 {
+        list.insert(i, before: anchor)
+        list.insert(-i, after: list.startIndex)
+        i += 1
+    }
+    assertEqual(list.count, 6001)
+    assertEqual(positions(list).count, 6001)
+    assertEqual(list.last ?? 0, 1000000)
+    assertEqual(list.first ?? -1, 0)
+    // Prepending and appending past many: steps of their own.
+    var ends = LinkedList<Int>()
+    i = 0
+    while i < 5000 {
+        ends.prepend(-i)
+        ends.append(i)
+        i += 1
+    }
+    assertEqual(positions(ends).count, 10000)
+    assertEqual(ends.first ?? 0, -4999)
+    assertEqual(ends.last ?? 0, 4999)
+}
+
+@test
+fn endsSplitsAppendsAndReversal() {
+    var list = LinkedList<Int>([1, 2, 3, 4, 5])
+    assertEqual(list.first ?? 0, 1)
+    assertEqual(list.last ?? 0, 5)
+    assertEqual(list.removeFirst() ?? 0, 1)
+    assertEqual(list.removeLast() ?? 0, 5)
+    assertEqual(shown(list), "2,3,4")
+
+    let third = list.index(list.startIndex, offsetBy: 2)
+    assertEqual(list[third], 4)
+    assertEqual(list[list.index(third, offsetBy: -2)], 2)
+    var tail = list.split(at: list.index(after: list.startIndex))
+    assertEqual(shown(list), "2")
+    assertEqual(shown(tail), "3,4")
+    assert(list.split(at: list.endIndex).isEmpty)
+
+    list.append(contentsOf: tail)
+    assertEqual(shown(list), "2,3,4")
+    var empty = LinkedList<Int>()
+    empty.append(contentsOf: tail)
+    assertEqual(shown(empty), "3,4")
+    list.append(contentsOf: [7, 8])
+    assertEqual(shown(list), "2,3,4,7,8")
+
+    let handle = list.index(after: list.startIndex)
+    list.reverse()
+    assertEqual(shown(list), "8,7,4,3,2")
+    assertEqual(list[handle], 3)
+    assertEqual(positions(list).count, 5)
+    // Moving a node before itself, or to the back.
+    let same = list.move(handle, before: handle)
+    assertEqual(list[same], 3)
+    let back = list.move(list.startIndex, before: list.endIndex)
+    assertEqual(list[back], 8)
+    assertEqual(shown(list), "7,4,3,2,8")
+
+    tail.removeAll()
+    assert(tail.isEmpty && tail.first == none && tail.last == none)
+    assert(tail.removeFirst() == none && tail.removeLast() == none)
+    assert(tail.startIndex == tail.endIndex)
+}
+
+@test
+fn aListIsAValueAndACollection() {
+    var original = LinkedList<Int>([1, 2, 3])
+    var copy = original
+    copy.append(4)
+    copy[copy.startIndex] = 10
+    assertEqual(shown(original), "1,2,3")
+    assertEqual(shown(copy), "10,2,3,4")
+    // Handles taken from one are good in a copy made after.
+    let second = original.index(after: original.startIndex)
+    let later = original
+    assertEqual(later[second], 2)
+    original.remove(at: second)
+    assert(!original.isValid(second) && later.isValid(second))
+
+    assert(LinkedList<Int>([1, 2]) == LinkedList<Int>([1, 2]))
+    assert(LinkedList<Int>([1, 2]) != LinkedList<Int>([2, 1]))
+    assert(LinkedList<Int>([1]) != LinkedList<Int>([1, 1]))
+    assertEqual(LinkedList<Int>([1, 2]).debugDescription(), "LinkedList([1, 2])")
+    assertEqual(original.endIndex.debugDescription(), "LinkedListIndex(end)")
+    assert(original.startIndex.debugDescription().hasPrefix("LinkedListIndex("))
+    assertEqual(original.startIndex.hashValue, original.startIndex.hashValue)
+
+    // The collection's own algorithms work on it.
+    let words = LinkedList<String>(["a", "bb", "ccc"])
+    assertEqual(words.count, 3)
+    assert(!words.isEmpty)
+    let long = words.firstIndex(where: { $0.count > 1 })!
+    assertEqual(words[long], "bb")
+    var total = 0
+    for word in words {
+        total += word.count
+    }
+    assertEqual(total, 6)
+}

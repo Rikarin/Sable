@@ -37,6 +37,51 @@ public sealed class ArrayMemberTests {
         );
 
     /// <summary>
+    ///     A field set through a subscript, 'a[i].x = v': the element read
+    ///     out, changed and written back — taken when it holds references,
+    ///     loaded as plain bits when it is trivial, as a generic struct is
+    ///     once its parameter is a trivial type (it was taken there, which
+    ///     the SIL verifier refuses).
+    /// </summary>
+    [Fact]
+    public void AFieldIsSetThroughASubscriptOfAnyElement() =>
+        Prints(
+            "5 2\n7 9\nb 1\n",
+            """
+            struct Point {
+                var x: Int
+                var y: Int
+            }
+
+            struct Node<Value> {
+                var value: Value
+                var next: Int
+            }
+
+            struct Named {
+                var name: String
+                var count: Int
+            }
+
+            fn link<Value>(_ nodes: inout Node<Value>[>..], _ at: Int, _ next: Int) {
+                nodes[at].next = next
+            }
+            """,
+            """
+                var points: Point[>..] = [Point { x: 1, y: 2 }]
+                points[0].x = 5
+                print("\(points[0].x) \(points[0].y)")
+                var nodes: Node<Int>[>..] = [Node<Int> { value: 7, next: -1 }]
+                link(&nodes, 0, 9)
+                print("\(nodes[0].value) \(nodes[0].next)")
+                var named: Named[>..] = [Named { name: "a", count: 0 }]
+                named[0].name = "b"
+                named[0].count += 1
+                print("\(named[0].name) \(named[0].count)")
+            """
+        );
+
+    /// <summary>
     ///     An extension of every growable array of a kind declares
     ///     initialisers, whose self starts as '[]'; one throws part way,
     ///     and what it had appended goes.

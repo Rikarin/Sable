@@ -7904,7 +7904,7 @@ public sealed partial class SilGen {
                 return null;
             }
 
-            Emit(new BuiltinInst("array_set", SilType.Unit, arrayAddress, position, Emit(new LoadInst(slot, LoadKind.Take))));
+            Emit(new BuiltinInst("array_set", SilType.Unit, arrayAddress, position, Emit(new LoadInst(slot, elementType.IsTrivial ? LoadKind.Trivial : LoadKind.Take))));
             EndAll(ends);
             return result;
 

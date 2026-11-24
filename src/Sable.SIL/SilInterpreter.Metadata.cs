@@ -386,6 +386,28 @@ public sealed partial class SilInterpreter {
                 result = operands[0] is not null;
                 return true;
 
+            // An existential's value, where its box holds it (#299); and its
+            // storage, the box first made the existential's own — a new box
+            // with the value copied, when another existential shares it.
+            case "box_project":
+                result = Alive((HeapObject)operands[0]!).Fields[0];
+                return true;
+            case "box_project_unique": {
+                var slot = (IReference)operands[0]!;
+                var box = Alive((HeapObject)slot.Get()!);
+                if (box is not { Strong: 1, Immortal: false }) {
+                    var fresh = Allocate(new HeapObject(box.Type));
+                    Retain(box.Type.Fields[0].Type, box.Fields[0]);
+                    fresh.Fields[0] = box.Fields[0];
+                    slot.Set(fresh);
+                    Release(box.Type, box, depth);
+                    box = fresh;
+                }
+
+                result = new Field(box, 0);
+                return true;
+            }
+
             // A type parameter's value is held as the value of the type it
             // is: an address seen as another type is the same storage, and a
             // value's own storage is the value.
@@ -459,7 +481,7 @@ public sealed partial class SilInterpreter {
         if (builtin.Name.StartsWith("witness_generic:", StringComparison.Ordinal)) {
             var table = (SilWitnessTable)operands[0]!;
             var index = int.Parse(builtin.Name["witness_generic:".Length..], System.Globalization.CultureInfo.InvariantCulture);
-            result = table.GenericEntries[index].Function ?? throw new SilTrap("a requirement with no witness for generic code");
+            result = table.Entries[index].Function ?? throw new SilTrap("a requirement with no witness for generic code");
             return true;
         }
 
@@ -493,13 +515,6 @@ public sealed partial class SilInterpreter {
             var type = ((MetadataModel)operands[0]!).Type;
             var protocol = builtin.Name["witness_table_known:".Length..];
             result = module.FindWitnessTable(type, protocol) ?? WitnessTableOf(type, protocol);
-            return true;
-        }
-
-        if (builtin.Name.StartsWith("witness_entry:", StringComparison.Ordinal)) {
-            var table = (SilWitnessTable)operands[0]!;
-            var index = int.Parse(builtin.Name["witness_entry:".Length..], System.Globalization.CultureInfo.InvariantCulture);
-            result = table.Entries[index].Function;
             return true;
         }
 

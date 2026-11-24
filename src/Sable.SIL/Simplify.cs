@@ -58,6 +58,8 @@ public sealed class Simplify : ISilPass {
             changed |= SimplifyArguments(function);
             changed |= EliminateCommonSubexpressions(function);
             changed |= DirectCalls(function);
+            changed |= DirectWitnesses(function);
+            changed |= FoldBoxProjections(function);
         }
     }
 
@@ -103,6 +105,124 @@ public sealed class Simplify : ISilPass {
                 Uses.Replace(function, instruction, direct);
                 i += 2;
                 uses = null;
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>
+    ///     A requirement called through a witness table the function knows —
+    ///     an existential made here, of a type known here, or a table code
+    ///     that knows the type refers to (#299) — calls the conformance's
+    ///     witness directly: the entry is a constant of the program. LLVM can
+    ///     then inline it. The table is found through the struct the
+    ///     existential is, and a local slot stored once before the call.
+    /// </summary>
+    static bool DirectWitnesses(SilFunction function) {
+        if (function.Module is not { } module) {
+            return false;
+        }
+
+        var changed = false;
+        Dictionary<SilBlock, HashSet<SilBlock>>? dominators = null;
+        Uses? uses = null;
+        foreach (var block in function.Blocks) {
+            for (var i = 0; i < block.Instructions.Count; i++) {
+                if (block.Instructions[i] is not BuiltinInst { Operands: [var tableValue], Type: FunctionType type } entry
+                    || !entry.Name.StartsWith("witness_generic:", StringComparison.Ordinal)) {
+                    continue;
+                }
+
+                uses ??= new Uses(function);
+                var index = int.Parse(entry.Name["witness_generic:".Length..], System.Globalization.CultureInfo.InvariantCulture);
+                if (KnownTable(module, tableValue, entry, uses, () => dominators ??= SilVerifier.Dominators(function), 0) is not { } table
+                    || index >= table.Entries.Count || table.Entries[index] is not { Function: { } witness, Type: { } witnessType } || witnessType != type
+                    || module.Find(witness) is null && module.Unit is null) {
+                    continue;
+                }
+
+                var direct = new FunctionRefInst(witness, type) { Block = block, Location = entry.Location };
+                block.Instructions[i] = direct;
+                Uses.Replace(function, entry, direct);
+                uses = null;
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>The witness table a value is, when the function knows which: one code that knows the type refers to, an existential's made here, or a base of one.</summary>
+    static SilWitnessTable? KnownTable(SilModule module, SilValue value, SilInstruction at, Uses uses, Func<Dictionary<SilBlock, HashSet<SilBlock>>> dominators, int depth) {
+        if (depth > 8) {
+            return null;
+        }
+
+        switch (value) {
+            case StructExtractInst extract:
+                return Made(extract.Value, at, uses, dominators, depth + 1) is StructInst made
+                    ? KnownTable(module, made.Operands[extract.Field], at, uses, dominators, depth + 1)
+                    : null;
+
+            case BuiltinInst { Operands: [var metadata] } builtin when builtin.Name.StartsWith("witness_table_known:", StringComparison.Ordinal):
+                return KnownType(metadata, at, uses, dominators, depth + 1) is { } type
+                    ? module.FindWitnessTable(type, builtin.Name["witness_table_known:".Length..])
+                    : null;
+
+            case BuiltinInst { Operands: [var refining] } builtin when builtin.Name.StartsWith("witness_base:", StringComparison.Ordinal): {
+                var index = int.Parse(builtin.Name["witness_base:".Length..], System.Globalization.CultureInfo.InvariantCulture);
+                return KnownTable(module, refining, at, uses, dominators, depth + 1) is { } table && index < table.Bases.Count
+                    ? module.FindWitnessTable(table.Conformer, table.Bases[index])
+                    : null;
+            }
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>The type a metadata value describes, when it is a constant: directly, or as an existential's made here.</summary>
+    static SilType? KnownType(SilValue value, SilInstruction at, Uses uses, Func<Dictionary<SilBlock, HashSet<SilBlock>>> dominators, int depth) =>
+        depth > 8 ? null
+        : value switch {
+            MetadataInst { Described: var described } when !SilType.MentionsOpaque(described) => described,
+            StructExtractInst extract => Made(extract.Value, at, uses, dominators, depth + 1) is StructInst made
+                ? KnownType(made.Operands[extract.Field], at, uses, dominators, depth + 1)
+                : null,
+            _ => null,
+        };
+
+    /// <summary>
+    ///     The storage of an existential's value whose box the function knows
+    ///     the class of — one it made, of a type known here — is the box's
+    ///     field: what a witness called directly and inlined reads it from.
+    /// </summary>
+    static bool FoldBoxProjections(SilFunction function) {
+        var changed = false;
+        foreach (var block in function.Blocks) {
+            for (var i = 0; i < block.Instructions.Count; i++) {
+                if (block.Instructions[i] is not BuiltinInst { Name: "opaque_address", Operands: [BuiltinInst { Name: "box_project", Operands: [var box, _] }], Type: AddressType { Pointee: var held } } address) {
+                    continue;
+                }
+
+                var known = box;
+                while (known is UpcastInst or CopyValueInst) {
+                    known = ((SilInstruction)known).Operands[0];
+                }
+
+                if (known.Type is not ClassType { Fields: [(_, var field)] } boxClass || field != held || !boxClass.Name.StartsWith("any$box$of$", StringComparison.Ordinal)) {
+                    continue;
+                }
+
+                // The box itself, which the existential keeps alive, seen as its class.
+                var cast = new UncheckedRefCastInst(box, boxClass) { Block = block, Location = address.Location };
+                var element = new RefElementAddrInst(cast, 0) { Block = block, Location = address.Location };
+                block.Instructions[i] = element;
+                block.Instructions.Insert(i, cast);
+                Uses.Replace(function, address, element);
+                i++;
                 changed = true;
             }
         }

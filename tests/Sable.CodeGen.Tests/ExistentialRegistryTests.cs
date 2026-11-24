@@ -125,7 +125,8 @@ public sealed class ExistentialRegistryTests {
     /// <summary>
     ///     The cast finds the table and builds the existential from it: a
     ///     call of <c>sable_witness_table</c>, and the conformance record
-    ///     pointing at the table, which lists the witnesses in slot order.
+    ///     pointing at the table, which holds its witnesses inline, in the
+    ///     order the protocol declares its requirements (#299).
     /// </summary>
     [Fact]
     public void AConformanceRecordPointsAtItsWitnessTable() {
@@ -135,7 +136,7 @@ public sealed class ExistentialRegistryTests {
         var records = ir.Split('\n').Single(l => l.StartsWith("@\"sable.conformances.Test.Point\" = ", StringComparison.Ordinal));
         Assert.Contains("ptr @\"sable.protocol.Test.Sized\", ptr @\"sable.witnesses.Test.Point.Test.Sized\"", records, StringComparison.Ordinal);
         var table = ir.Split('\n').Single(l => l.StartsWith("@\"sable.witnesses.Test.Point.Test.Sized\" = ", StringComparison.Ordinal));
-        Assert.Contains("ptr @\"sable.protocol.Test.Sized\", i64 1, ptr @\"sable.witnesses.Test.Point.Test.Sized.requirements\"", table, StringComparison.Ordinal);
+        Assert.Contains("{ ptr @\"sable.protocol.Test.Sized\", i64 0, ptr null, i64 0, ptr null, i64 0, ptr null, i64 1, [1 x ptr] [ptr @\"sable.$generic$witness$Test.Point$Test.Sized$0$", table, StringComparison.Ordinal);
         Assert.DoesNotContain("$cast$to$any$Test.Sized\"(ptr %0) {\nentry:\n  %t0 = call zeroext i1 @sable_class_is", ir, StringComparison.Ordinal);
     }
 }

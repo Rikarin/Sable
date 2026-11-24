@@ -124,7 +124,7 @@ public sealed class MetadataLoweringTests {
 
     /// <summary>
     ///     A conformance an existential needs has a witness table: its
-    ///     requirements' witnesses in slot order, its associated types as the
+    ///     requirements' witnesses in declaration order, its associated types as the
     ///     conformance binds them and what each must conform to; a cast to a
     ///     protocol looks it up in the registry rather than trying each type.
     /// </summary>
@@ -170,9 +170,9 @@ public sealed class MetadataLoweringTests {
         var module = Lower(Tabled);
         var reached = SilPassManager.Reachable(module)!;
         var shelf = module.FindWitnessTable(module.FindType("M.Shelf")!, "M.Holder")!;
-        Assert.Contains(shelf.Entries[0].Function, reached);
+        Assert.Contains(shelf.Entries[0].Function!, reached);
         var tag = module.FindWitnessTable(module.FindType("M.Tag")!, "M.Named")!;
-        Assert.DoesNotContain(tag.Entries[0].Function, reached);
+        Assert.DoesNotContain(tag.Entries[0].Function!, reached);
     }
 
     const string Static = """

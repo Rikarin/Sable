@@ -481,6 +481,26 @@ void *sable_opaque_box(void *buffer, const SableTypeMetadata *type) {
     return boxed;
 }
 
+// The box at *slot made an existential's own before a witness changes the
+// value it holds (#299: a mutating requirement, a setter): when another
+// existential shares it, a new box of the same class, holding a copy of the
+// value, takes its place. Returns where the value is: just past the
+// header, aligned as its type is — what compiled code's 'box_project'
+// computes inline.
+void *sable_box_unique(void **slot, const SableTypeMetadata *type) {
+    SableObject *box = *slot;
+    int64_t offset = type->alignment > (int64_t)sizeof(SableObject) ? type->alignment : (int64_t)sizeof(SableObject);
+    if (box->strong == 1 && !(object_flags(box) & SABLE_IMMORTAL)) {
+        return (char *)box + offset;
+    }
+
+    SableObject *fresh = sable_alloc(box->type, box->type->size);
+    type->witnesses->initialize_with_copy((char *)fresh + offset, (char *)box + offset, type);
+    *slot = fresh;
+    sable_release(box);
+    return (char *)fresh + offset;
+}
+
 // A call's cache of the registry's answer for the type it was first asked
 // about (#297): the first table found is kept, once, and read without a
 // lock; a call asked about another type asks the registry. Null is not kept,

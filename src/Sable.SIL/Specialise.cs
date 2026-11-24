@@ -1381,7 +1381,7 @@ sealed partial class SpecialisedCopy(Specialiser specialiser, Specialiser.Plan p
         if (name.StartsWith("witness_generic:", StringComparison.Ordinal)) {
             var table = specialiser.KnownTable(Value(builtin.Operands[0])) ?? throw new Refused($"{name} of a table not known");
             var index = int.Parse(name["witness_generic:".Length..], System.Globalization.CultureInfo.InvariantCulture);
-            Map(builtin, new GenericReference(index < table.GenericEntries.Count && table.GenericEntries[index].Function is { } witness ? witness : throw new Refused($"no witness {index} in {table.Conformer}: {table.Protocol}")));
+            Map(builtin, new GenericReference(index < table.Entries.Count && table.Entries[index].Function is { } witness ? witness : throw new Refused($"no witness {index} in {table.Conformer}: {table.Protocol}")));
             return;
         }
 

@@ -71,28 +71,25 @@ typedef struct SableAssociatedConformance {
     const SableProtocol *protocol;
 } SableAssociatedConformance;
 
-// A conformance's witness table: the protocol's requirements in the order
-// of its existential's slots, each a function given the box an existential
-// keeps the value in, and then its associated types' metadata and what each
-// must conform to (found in this registry from that metadata).
+// A conformance's witness table (#299): its associated types' metadata and
+// what each must conform to (found in this registry from that metadata),
+// the conformer's tables of the protocols this one refines directly, in the
+// order it names them, and then, inline, the requirements the protocol
+// itself declares, in declaration order, each in the one calling convention
+// both unspecialised code and a call through an existential use: given self
+// and the arguments where the caller holds them, where a result of Self
+// goes, and Self's metadata. An existential holds a pointer to one per
+// protocol, so a call through it is two loads: the table, then the entry.
 typedef struct SableWitnessTable {
     const SableProtocol *protocol;
-    int64_t requirement_count;
-    void *const *requirements;
     int64_t associated_type_count;
     const struct SableTypeMetadata *const *associated_types;
     int64_t associated_conformance_count;
     const SableAssociatedConformance *associated_conformances;
-    // The requirements the protocol itself declares, in declaration order,
-    // in the generic calling convention unspecialised code calls them in
-    // (#297): each given self and the arguments where the caller holds them,
-    // where a result of Self goes, and Self's metadata.
-    int64_t generic_count;
-    void *const *generic_requirements;
-    // The conformer's tables of the protocols this one refines directly, in
-    // the order it names them: how unspecialised code reaches them.
     int64_t base_count;
     const struct SableWitnessTable *const *bases;
+    int64_t requirement_count;
+    void *const requirements[];
 } SableWitnessTable;
 
 // That a type conforms to a protocol: the record a dynamic cast looks up,

@@ -135,7 +135,8 @@ public static class SilPrinter {
         foreach (var table in module.WitnessTables) {
             builder.Append("sil_witness_table $").Append(table.Conformer).Append(" : ").Append(Quote(table.Protocol)).Append(" {\n");
             foreach (var (requirement, function, type) in table.Entries) {
-                builder.Append("  ").Append(Quote(requirement)).Append(": @").Append(function).Append(" : $").Append(type).Append('\n');
+                builder.Append("  ").Append(Quote(requirement)).Append(": ");
+                builder.Append(function is null || type is null ? "none" : $"@{function} : ${type}").Append('\n');
             }
 
             foreach (var (name, type) in table.AssociatedTypes) {
@@ -148,11 +149,6 @@ public static class SilPrinter {
 
             foreach (var refined in table.Bases) {
                 builder.Append("  base ").Append(Quote(refined)).Append('\n');
-            }
-
-            foreach (var (requirement, function, type) in table.GenericEntries) {
-                builder.Append("  generic ").Append(Quote(requirement)).Append(": ");
-                builder.Append(function is null || type is null ? "none" : $"@{function} : ${type}").Append('\n');
             }
 
             builder.Append("}\n");

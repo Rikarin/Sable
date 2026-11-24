@@ -213,42 +213,101 @@ cycles through two or more classes, broken by a `weak` or `unowned` field.
 
 An existential, `any P`, is its box — an object of a class for the value's
 type, `any$box$of$T`, each a subclass of one root class, whose metadata has
-T as its one type argument — and P's witnesses for that type, laid out
-inline after it: a function per requirement that takes the box. Copying an
-existential shares the box; a witness that changes the value (a setter, a
-mutating method) is given the box where the existential keeps it and first
-copies it if another existential shares it.
+T as its one type argument — then T's metadata, then a pointer to T's
+witness table for each of its protocols, one for `any P` and one per part
+of `any A & B` (#299, Swift's layout):
 
-**Witness tables.** The same functions are the conformance's witness
-table, `SableWitnessTable`, which T's metadata's conformance record for P
-points at: P's requirements in the order of its existential's slots, then
-T's associated types' metadata and what each must conform to (by index and
-protocol, found in the registry from that metadata).
+```
+any P  =  [ box* | metadata* | witnessTable_P* ]      (+ one table pointer per extra protocol)
+             └─> heap object any$box$of$T { header, value: T }
+```
+
+Its size does not grow with the protocol: three words for `any P`, four
+for `any A & B`. Copying an existential shares the box. A call through it
+**opens** it: the value's address in the box (just past the header,
+aligned as its metadata says: `box_project`), the entry for the
+requirement loaded from the table (`witness_generic:i`), and the call
+given the address, the arguments and the metadata — the same entry, in the
+same convention, that unspecialised generic code calls. A requirement that
+changes the value (a setter, a mutating method) is given its address after
+the box is made the existential's own (`box_project_unique`,
+`sable_box_unique`): when another existential shares the box, a new box of
+the same class with a copy of the value, made by its value witnesses,
+takes its place. A call is two dependent loads — the table, then the
+entry — where the slots of the old layout were one; an existential built
+where its type is known holds constant tables, so a call through it in the
+same function is a direct call of the witness (Simplify's
+`DirectWitnesses`), which LLVM can inline, and a witness inlined reads the
+value from the box's field (`FoldBoxProjections`).
+
+A member of an extension of the protocol, which is no requirement, has no
+entry: a call of it on an existential opens the existential as a type known
+only by its metadata — its value where the box holds it, its tables those
+the existential holds — and calls the member compiled once, as on a type
+parameter's value (SE-0352). So does a call of generic code given an
+existential for a type parameter that one parameter takes as itself and
+nothing else of its signature names but its result: `twice(e)` for `fn
+twice<T: P>(_ x: T)` runs `twice` compiled once with the value's address,
+the metadata and the tables, so requirements that mention `Self` or an
+associated type (`x.same(x)`) are callable on it; a result of `T` is boxed
+again by the type's boxer. A specialised build compiles such callees once
+from the first call that needs them, as a call that opens a Type does.
+
+**Witness tables.** Each conformance a program needs — a type put in an
+existential, a type conforming to a protocol cast to, a type unspecialised
+code is given — has one witness table, `SableWitnessTable`, which T's
+metadata's conformance record for P points at: T's associated types'
+metadata and what each must conform to (by index and protocol, found in
+the registry from that metadata), the conformer's tables of the protocols
+P refines directly, in the order it names them (`bases`), and then,
+inline, one entry per requirement P itself declares.
 
 ```c
 typedef struct { const SableProtocol *protocol;
-                 int64_t requirement_count; void *const *requirements;
                  int64_t associated_type_count; const SableTypeMetadata *const *associated_types;
                  int64_t associated_conformance_count;
-                 const SableAssociatedConformance *associated_conformances; } SableWitnessTable;
+                 const SableAssociatedConformance *associated_conformances;
+                 int64_t base_count; const SableWitnessTable *const *bases;
+                 int64_t requirement_count; void *const requirements[]; } SableWitnessTable;
 ```
 
-A table is made for each conformance an existential needs: a type put in
-an existential of P, and every type conforming to a protocol cast to — the
-program's non-generic conformers and each type boxed anywhere, whichever the
-program lowers first. Its witnesses are kept while its conformer can be made,
-boxed or asked about, and are dropped with it. An existential built where the
-type is known copies them into its slots, so a call through it costs what it
-did: there is no load from the table, and the inline slots are the table's
-contents cached in the value. Which records a type has follows from its
-declarations alone (a built-in type's from Sable.Core's extensions); which
-tables a unit makes depends on what its own code boxes and casts. So in a
-program built in units a record's `witnesses` is null, every unit's copy of
-it the same as `linkonce_odr` requires, and each unit's constructor hands
-the runtime the tables it made (`sable_register_witness_table`), which the
-lookup consults after the records; a program compiled whole points its
-records at its tables and registers nothing. (Swift keeps such records in a
-section the linker gathers; a constructor works on every target Sable has.)
+The entries are every method, operator, property getter and setter and
+subscript P itself declares, in declaration order, in one calling
+convention — the one unspecialised code calls them in, and a call through
+an existential too: `self` (the address of its storage, for a `mutating`
+one) unless the requirement is static, its parameters, the address a
+result of `Self` is written to, the address an error of an associated type
+is written to, and `Self`'s metadata last; a value of `Self` or of one of
+its associated types (`next() -> Element?`, `index(after: Index) ->
+Index`) is passed by the address of its caller's storage. A requirement
+whose error is of an associated type, `throws(Failure)`, writes the error
+where its caller says and throws that address: the witness of a conformer
+whose `Failure` is `Never` never writes it. A requirement that convention
+cannot pass yet (generic itself, async, an initialiser, or `Self` inside
+another type than an optional or a tuple) has an empty entry, and a call
+of it through an existential is not lowered (S7000). Each witness
+(`$generic$witness$T$P$i$name`) is the requirement lowered as if its body
+called itself on the conforming type, so it is met as code that knows the
+type meets it: the type's member — through its vtable for a class a
+subclass may override — a default, a builtin. That is the one function per
+requirement: the existential-convention slots, their thunks and the thunks
+bridging the two conventions of before #299 are gone, in specialised builds
+as in unspecialised ones.
+
+An instance of a generic protocol, `any Producer<Animal>`, holds the table
+of the conformer's own instance, `Producer<Dog>`: its entries take and give
+what the existential's entries are declared to, as an upcast of a class
+reference (and an optional of one) is the same bits. A table is made in
+full whatever needed it first, so that every unit's copy of it is the
+same. Which records a type has follows from its declarations alone (a
+built-in type's from Sable.Core's extensions); which tables a unit makes
+depends on what its own code boxes and casts. So in a program built in
+units a record's `witnesses` is null, every unit's copy of it the same as
+`linkonce_odr` requires, and each unit's constructor hands the runtime the
+tables it made (`sable_register_witness_table`), which the lookup consults
+after the records; a program compiled whole points its records at its
+tables and registers nothing. (Swift keeps such records in a section the
+linker gathers; a constructor works on every target Sable has.)
 
 **Casts.** `e as? Square` asks the box's class whether it is that type's
 box (or, for an object, a superclass's box, and then the object). `e as?
@@ -256,35 +315,13 @@ any Q` and `e is any Q` are registry lookups: the metadata of what the box
 holds — an object's own class, which may be a subclass of the one boxed
 (`sable_box_value_metadata`) — is asked for Q's witness table
 (`sable_witness_table`, each part's for `any A & B`), and the existential is
-the same box, shared, with the table's witnesses. `animal as? any Named`
-boxes the object as its static class and asks the same. An instance of a
-generic protocol, `any Producer<Animal>`, whose slots a conformer to
-`Producer<Dog>` may fill by variance, is still cast by trying each conforming
-type of the program in turn, from witnesses the compiler picks for each.
-
-A table's first entries are what an existential can call — requirements
-that mention `Self` have no slot — each taking the existential's box. Then
-come its **generic entries** (`generic_requirements`): every method,
-operator, property getter and setter the protocol itself declares, in declaration
-order, in the convention unspecialised code calls them in — `self` (the
-address of its storage, for a `mutating` one) unless the requirement is
-static, its parameters, the address a result of `Self` is written to, the
-address an error of an associated type is written to, and `Self`'s
-metadata last; a value of `Self` or of one of its associated types
-(`next() -> Element?`, `index(after: Index) -> Index`) is passed by the
-address of its caller's storage. A requirement whose error is of an
-associated type, `throws(Failure)`, writes the error where its caller says
-and throws that address: the witness of a conformer whose `Failure` is
-`Never` never writes it. A requirement that convention cannot pass yet
-(generic itself, async, an initialiser, or `Self` inside another type than
-an optional or a tuple) has an empty entry. Each witness is the requirement lowered
-as if its body called itself on the conforming type, so it is met as
-specialised code meets it: the type's member, a default, a builtin. Last
-come its **bases** (`bases`): the conformer's tables of the protocols this
-one refines directly, in the order it names them, so that unspecialised
-code given a `Greeter`'s table reaches its `Named` one with a load, not a
-lookup. A program built unspecialised fills every part of every table it
-makes, so that every unit's copy of a table is the same.
+the same box, shared, with that metadata and the tables. `animal as? any
+Named` boxes the object as its static class and asks the same. An instance
+of a generic protocol, `any Producer<Animal>`, which a conformer to
+`Producer<Dog>` may fill by variance, is cast by trying each conforming
+type of the program in turn, with its own table. `any Error` put in `any
+Debug` holds the tables of `any Error`'s own conformances, whose entries
+call the slots of the error object's vtable.
 
 **Unspecialised generic code** (#297 stage 4). With `-generics=unspecialised`
 (or `SABLE_GENERICS=unspecialised`), a generic function whose body uses its
@@ -396,7 +433,7 @@ parameter of a type parameter's type, `using generator: inout G`, is the
 address of the caller's storage, seen as `*@opaque(G)`, and a mutating
 requirement changes the value there. A protocol's subscript requirement,
 `self[position]` on a Collection, is read through the table as a method
-of its indices is, and set as a mutating method of its indices and the new value: the table's generic entries hold its getter, and its setter for one `{ get set }`, in its
+of its indices is, and set as a mutating method of its indices and the new value: the table's entries hold its getter, and its setter for one `{ get set }`, in its
 place among the protocol's requirements; a settable property's setter is an entry after its getter.
 
 An array of a type parameter's values (`T[]`, `T[>..]`, `T[>..<]`) is a
@@ -564,17 +601,6 @@ kept. A task dropped part-way destroys what its frames hold through their
 metadata, as a frame of known types does. The specialisation pass copies an
 async function as any other where its types are known.
 
-**Existential witnesses.** A slot of an existential's witness table whose
-witness is generic code compiled once — a method of a generic type boxed as
-`any P` (`Tag<Int>`), a protocol extension's default for the boxed type, an
-optional's member — calls that code, with the boxed type's metadata and
-tables, rather than an instance made for the slot alone. The thunk opens
-the box and makes the call as code that knows the type makes it (its
-arguments stored where unspecialised code takes them, its result taken out
-of a slot); it is lowered once everything pending has been, since the call
-may ask for the very table the thunk is in. Which way a slot goes depends
-on its witness alone, so every unit's copy of a table is the same.
-
 **Opening a Type** (#297 stage 6; SYNTAX.md "Opening a type"). A call
 that gives a `Type` for a generic function's `T.Type` runs the function
 compiled once, the value's metadata as `$metadata.T`. Its tables are the
@@ -589,8 +615,8 @@ the value into the box an existential keeps one of its type in
 (`any$box$of$T`, so `as? Meters` finds it), registered with the runtime as
 the image starts, as describers and error erasers are; the value in the
 buffer is then destroyed and the buffer freed, or, when the call throws,
-only freed. The existential's slots are the tables' witnesses
-(`witness_entry`), as `as? any Q` makes them. The registry finds only the
+only freed. The existential holds the metadata and the tables, as `as? any
+Q` makes them. The registry finds only the
 tables a program makes, so a call that opens a Type makes, for every type
 of the program that conforms to `T`'s protocols, its table with its generic
 entries, its boxer when the result is erased, and its describer when the
@@ -601,8 +627,7 @@ A specialised build compiles generic code once too, from the first call
 that opens a Type: such a call, and the code compiled once it reaches,
 call the callee's `$generic` instance — made from the body in this unit,
 since a specialised library archive has none — while code that knows its
-types still calls the copies made for them. Its tables made from then on
-have their generic entries. A function that only forwards to a requirement,
+types still calls the copies made for them. A function that only forwards to a requirement,
 otherwise left specialised, is compiled once when a call opens a Type for
 it; one that cannot be is S3164, with what in its body keeps it copied.
 
@@ -621,7 +646,8 @@ initialiser of a class with a deinit or of a struct that holds `T` by value, an 
 parameter, or a generator — is still specialised for its type arguments in
 the same program, so a program builds either way; `SABLE_GENERICS_TRACE=1`
 says, for each generic function, which way it went and why. A specialised
-build (the default) makes neither the generic entries nor the describers.
+build (the default) makes no describers but for a call that opens a Type
+or an existential.
 
 Field descriptors were meant to be emitted always, for every type; as built
 they are a class's always and every other type's only in a program that

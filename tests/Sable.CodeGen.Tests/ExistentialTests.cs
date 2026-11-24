@@ -207,6 +207,101 @@ public sealed class ExistentialTests {
             ).Stdout
         );
 
+    /// <summary>
+    ///     Generic code given an existential for its type parameter opens it
+    ///     (#299, SE-0352): it runs with the value's own type, so a requirement
+    ///     that takes Self, and one that gives an associated type, are callable
+    ///     there; a result of the type is an existential again.
+    /// </summary>
+    [Fact]
+    public void GenericCodeGivenAnExistentialOpensIt() =>
+        Prints(
+            "3 true a3 3\n7 false 9 7\n",
+            """
+            protocol P {
+                associatedtype Part
+                fn get() -> Int
+                fn same(_ other: Self) -> Bool
+                fn part() -> Part
+            }
+
+            struct A: P {
+                var n: Int
+                fn get() -> Int { return n }
+                fn same(_ other: A) -> Bool { return n == other.n }
+                fn part() -> String { return "a\(n)" }
+            }
+
+            struct B: P {
+                fn get() -> Int { return 7 }
+                fn same(_ other: B) -> Bool { return false }
+                fn part() -> Int { return 9 }
+            }
+
+            fn twice<T: P>(_ x: T) -> Bool { return x.same(x) }
+            fn partOf<T: P>(_ x: T) -> String { return "\(x.part())" }
+            fn keep<T: P>(_ x: T) -> T { return x }
+            """,
+            """
+                let es: (any P)[>..] = [A(n: 3), B()]
+                for e in es {
+                    print("\(e.get()) \(twice(e)) \(partOf(e)) \(keep(e).get())")
+                }
+            """
+        );
+
+    /// <summary>
+    ///     An instance of a generic protocol filled by a conformer to another
+    ///     instance, by variance (#299): the existential holds the table of the
+    ///     conformer's own instance, made and cast to, and reached through a
+    ///     protocol it refines.
+    /// </summary>
+    [Fact]
+    public void AVariantExistentialHoldsItsConformersOwnTable() =>
+        Prints(
+            "4 4\nnone\n2\n",
+            """
+            class Animal {
+                var legs: Int
+                init(legs: Int) { self.legs = legs }
+            }
+
+            class Bird: Animal {
+                init() { super.init(legs: 2) }
+            }
+
+            class Dog: Animal {
+                init() { super.init(legs: 4) }
+            }
+
+            protocol Producer<out T> { fn next() -> T? }
+            protocol Counter<out T>: Producer<T> { fn count() -> Int }
+
+            struct Kennel: Counter<Dog> {
+                var empty: Bool
+                fn next() -> Dog? => empty ? none : Dog()
+                fn count() -> Int => 1
+            }
+
+            struct Nest: Producer<Bird> {
+                fn next() -> Bird? => Bird()
+            }
+
+            fn legs(_ p: any Producer<Animal>) -> String {
+                if let animal = p.next() { return "\(animal.legs)" }
+                return "none"
+            }
+
+            fn fromCounter(_ c: any Counter<Animal>) -> String => legs(c)
+            """,
+            """
+                let p: any Producer<Animal> = Kennel(empty: false)
+                print("\(legs(p)) \(fromCounter(Kennel(empty: false)))")
+                print(legs(Kennel(empty: true)))
+                print(legs(Nest()))
+            """
+        );
+
     /// <summary>'any A &amp; B' has the slots of both, and converts to either.</summary>
     [Fact]
     public void ACompositionHasEveryPartsRequirements() =>
@@ -554,8 +649,9 @@ public sealed class ComputedPropertyTests {
             """)).Stdout);
     /// <summary>
     ///     An existential made in the function that calls through it: its
-    ///     witnesses are closures with no context, so each call is a direct
-    ///     call of the witness, passing none (#179) — which LLVM can inline.
+    ///     tables are constants of the type's conformance, so each call is a
+    ///     direct call of the table's witness (#179, #299) — which LLVM can
+    ///     inline — and loads nothing from the table.
     /// </summary>
     [Fact]
     public void AWitnessOfAnExistentialMadeHereIsCalledDirectly() {
@@ -592,6 +688,7 @@ public sealed class ComputedPropertyTests {
         var sil = SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sb"), optimised: true).Sil!);
         var describe = sil[sil.IndexOf("sil @Test.describe", StringComparison.Ordinal)..];
         describe = describe[..describe.IndexOf("\n}", StringComparison.Ordinal)];
-        Assert.Equal(2, describe.Split("builtin \"no_context\"").Length - 1);
+        Assert.DoesNotContain("witness_generic", describe, StringComparison.Ordinal);
+        Assert.Equal(2, describe.Split("function_ref @$generic$witness$Test.Circle$Test.Shape$").Length - 1);
     }
 }

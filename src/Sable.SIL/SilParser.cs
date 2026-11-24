@@ -372,7 +372,7 @@ public sealed class SilParser {
         return module;
     }
 
-    /// <summary><c>sil_witness_table $T : "M.P" { "slot": @f : $type … associated "A": $T … conforms 0: "M.Q" … generic "m": @g : $type … }</c>.</summary>
+    /// <summary><c>sil_witness_table $T : "M.P" { "m": @f : $type … "n": none … associated "A": $T … conforms 0: "M.Q" … base "M.R" … }</c>.</summary>
     void ParseWitnessTable() {
         var conformer = ParseType();
         Expect(":");
@@ -389,22 +389,16 @@ public sealed class SilParser {
                 table.AssociatedConformances.Add((index, Expect(TokenKind.String, "a protocol's name").Text));
             } else if (Accept("base")) {
                 table.Bases.Add(Expect(TokenKind.String, "a protocol's name").Text);
-            } else if (Accept("generic")) {
+            } else {
                 var requirement = Expect(TokenKind.String, "a requirement's name").Text;
                 Expect(":");
                 if (Accept("none")) {
-                    table.GenericEntries.Add((requirement, null, null));
+                    table.Entries.Add((requirement, null, null));
                 } else {
                     var function = Expect(TokenKind.Global, "a witness's name").Text;
                     Expect(":");
-                    table.GenericEntries.Add((requirement, function, ParseType() as FunctionType ?? throw Error("a witness's type is a function type")));
+                    table.Entries.Add((requirement, function, ParseType() as FunctionType ?? throw Error("a witness's type is a function type")));
                 }
-            } else {
-                var requirement = Expect(TokenKind.String, "a requirement's slot").Text;
-                Expect(":");
-                var function = Expect(TokenKind.Global, "a witness's name").Text;
-                Expect(":");
-                table.Entries.Add((requirement, function, ParseType() as FunctionType ?? throw Error("a witness's type is a function type")));
             }
         }
 

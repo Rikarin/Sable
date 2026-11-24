@@ -582,6 +582,19 @@ fn draw(_ d: some Drawable) { }   // generic, monomorphised — same as <D: Draw
 fn draw(_ d: any Drawable) { }    // existential, one copy of the code, vtable call
 ```
 
+An `any P` holds its value in a box on the heap, with the value's type's
+metadata and, for each protocol it names, the type's witness table for that
+conformance: three words for `any P`, a word more per extra protocol of `any
+A & B` (docs/06 §6.2). Copying one shares the box; changing the value through
+it (a setter, a `mutating` requirement) first copies the box if another `any P`
+shares it. A requirement is called through the table, with the value where
+the box holds it. A member of an extension of `P` that is no requirement, and
+generic code given the existential for a type parameter (`fn twice<T: P>(_ x:
+T)` called with an `any P`), **open** it: they run with the value's own type,
+known by its metadata, so requirements that mention `Self` or an associated
+type can be used there (`x.same(x)`); a result of that type is put back in an
+`any P`.
+
 A protocol's associated types may be given in angle brackets after a `some`,
 in the order the protocol declares them: `some Sequence<Int>` is a sequence
 whose `Element` is `Int`, which its users may rely on, and `some

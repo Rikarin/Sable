@@ -110,16 +110,16 @@ public sealed class UnspecialisedLoweringTests {
 
         // Each conformance's table has the protocol's requirements in the generic convention, in order.
         var table = module.FindWitnessTable(module.FindType("M.Square")!, "M.Shape")!;
-        Assert.Equal(["area", "name"], table.GenericEntries.Select(static e => e.Requirement));
-        Assert.Equal("(@opaque(Self), Metadata) -> Int", table.GenericEntries[0].Type!.ToString());
-        Assert.NotNull(module.Find(table.GenericEntries[1].Function!));
+        Assert.Equal(["area", "name"], table.Entries.Select(static e => e.Requirement));
+        Assert.Equal("(@opaque(Self), Metadata) -> Int", table.Entries[0].Type!.ToString());
+        Assert.NotNull(module.Find(table.Entries[1].Function!));
     }
 
     [Fact]
     public void UnspecialisedCodeRoundTripsThroughTextAndRunsAsSpecialisedCodeDoes() {
         var module = Lower(Shapes);
         var text = SilPrinter.Print(module);
-        Assert.Contains("generic \"area\": @", text, StringComparison.Ordinal);
+        Assert.Contains("  \"area\": @", text, StringComparison.Ordinal);
         var parsed = SilParser.Parse(text);
         Assert.Equal(text, SilPrinter.Print(parsed));
         Assert.Empty(SilVerifier.Verify(parsed));
@@ -181,8 +181,8 @@ public sealed class UnspecialisedLoweringTests {
         Assert.Contains("M.Meters", module.Describers.Keys);
 
         var table = module.FindWitnessTable(module.FindType("M.Meters")!, "M.Zero")!;
-        Assert.Equal("(*@opaque(Self), Metadata) -> ()", table.GenericEntries[0].Type!.ToString());
-        Assert.Equal("(@opaque(Self), @opaque(Self), *@opaque(Self), Metadata) -> ()", table.GenericEntries[1].Type!.ToString());
+        Assert.Equal("(*@opaque(Self), Metadata) -> ()", table.Entries[0].Type!.ToString());
+        Assert.Equal("(@opaque(Self), @opaque(Self), *@opaque(Self), Metadata) -> ()", table.Entries[1].Type!.ToString());
 
         const string expected = "0\n5\ntrue\nfalse\nM.Meters\n<7><seven><Meters(value: 7)>\n";
         Assert.Equal(expected, Run(module));
@@ -288,8 +288,8 @@ public sealed class UnspecialisedLoweringTests {
                            """);
         Assert.NotNull(module.Find("M.bumped$generic"));
         var table = module.FindWitnessTable(module.FindType("M.Clicks")!, "M.Counter")!;
-        Assert.Equal("(*@opaque(Self), Metadata) -> ()", table.GenericEntries[0].Type!.ToString());
-        Assert.Contains(Instructions(module.Find(table.GenericEntries[0].Function!)!), static i => i is BuiltinInst { Name: "opaque_cast" });
+        Assert.Equal("(*@opaque(Self), Metadata) -> ()", table.Entries[0].Type!.ToString());
+        Assert.Contains(Instructions(module.Find(table.Entries[0].Function!)!), static i => i is BuiltinInst { Name: "opaque_cast" });
         Assert.Equal("1\n3\n", Run(module));
     }
 
@@ -309,7 +309,7 @@ public sealed class UnspecialisedLoweringTests {
                            """);
         Assert.NotNull(module.Find("M.difference$generic"));
         var table = module.FindWitnessTable(SilType.Int, "Sable.Core.AdditiveArithmetic")!;
-        var witnesses = table.GenericEntries.Select(static e => e.Function).OfType<string>().ToList();
+        var witnesses = table.Entries.Select(static e => e.Function).OfType<string>().ToList();
         Assert.Equal(witnesses.Count, witnesses.Distinct().Count());
         Assert.Equal("13\n7\n0.75\n", Run(module));
     }
@@ -482,7 +482,7 @@ public sealed class UnspecialisedLoweringTests {
         Assert.NotNull(module.Find("M.joined$generic"));
 
         var table = module.FindWitnessTable(module.FindType("M.CountdownIterator")!, "Sable.Core.Iterator")!;
-        Assert.Equal("(*@opaque(Self), *Optional$$opaque$Self.Element$, *@opaque(Self.Failure), Metadata) throws(*@opaque(Self.Failure)) -> ()", table.GenericEntries[0].Type!.ToString());
+        Assert.Equal("(*@opaque(Self), *Optional$$opaque$Self.Element$, *@opaque(Self.Failure), Metadata) throws(*@opaque(Self.Failure)) -> ()", table.Entries[0].Type!.ToString());
 
         const string expected = "1\n1;2;3;\nstopped\n";
         Assert.Equal(expected, Run(module));

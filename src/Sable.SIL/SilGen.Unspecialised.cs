@@ -1615,113 +1615,6 @@ public sealed partial class SilGen {
     }
 
     // -----------------------------------------------------------------------
-    // Existential witnesses that call unspecialised code
-    // -----------------------------------------------------------------------
-
-    /// <summary>
-    ///     Witness thunks whose bodies are lowered once what is pending is:
-    ///     a call into unspecialised code may ask for the very table the
-    ///     thunk is being made for.
-    /// </summary>
-    readonly Queue<Action> _pendingThunks = new();
-
-    /// <summary>
-    ///     True when an existential's slot, in an unspecialised build, calls a
-    ///     generic witness compiled once rather than an instance of it: a
-    ///     method of the boxed value whose instance would take what the slot
-    ///     is given as it is, and give what the slot gives. The instance is
-    ///     then not made for the slot alone (#297).
-    /// </summary>
-    bool CallsGenericWitness(FunctionSymbol generic, TypeSubstitution bound, ThickFunctionType signature, bool givenBox, SyntaxNode at) {
-        if (!HasSelf(generic) || generic.IsAsync || IsDynamic(generic) || !_declarations.ContainsKey(generic) || UnspecialisedShape(generic) is null) {
-            return false;
-        }
-
-        var parameters = signature.Signature.Parameters;
-        if (SignatureOf(generic, at, WithAssociatedTypes(generic, bound)) is not { } type || type.Parameters.Length != parameters.Length
-            || type.Parameters[0] is AddressType && !givenBox
-            || type.Result != signature.Signature.Result || type.Thrown != signature.Implementation.Thrown) {
-            return false;
-        }
-
-        for (var i = 0; i + 1 < parameters.Length; i++) {
-            if (type.Parameters[i + 1] != parameters[i]) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    ///     The body of a witness thunk whose witness is generic code compiled
-    ///     once: it opens the box, and calls the witness on the value as code
-    ///     that knows the type does — with the type's metadata and tables.
-    ///     Lowered from the call, so that it passes and takes everything as
-    ///     any such call does; when that cannot be done, the thunk calls the
-    ///     witness's instance instead.
-    /// </summary>
-    void GenericWitnessThunk(SilFunction thunk, NamedTypeSymbol concrete, SilType value, ClassType box, string slot, Symbol requirement, ThickFunctionType signature,
-        FunctionSymbol callee, TypeSubstitution bound, SyntaxNode at) {
-        var parameters = signature.Signature.Parameters;
-        var entry = thunk.AddBlock();
-        var arguments = parameters.Take(parameters.Length - 1).Select(p => (SilValue)entry.AddArgument(p)).ToList();
-        var given = entry.AddArgument(parameters[^1]);
-        entry.AddArgument(SilType.Object);
-
-        var current = entry;
-        var held = (SilValue)given;
-        SilValue? loaded = null;
-        if (given.Type is AddressType) {
-            current = UniqueBox(thunk, entry, given, box);
-            loaded = held = current.Append(new LoadInst(given));
-        }
-
-        var opened = current.Append(new RefElementAddrInst(current.Append(new UncheckedRefCastInst(held, box)), 0));
-        var syntax = callee.DeclaringSyntax.FirstOrDefault() ?? at;
-        var lowered = false;
-        if (SourceOf(syntax) is { } source) {
-            var substitution = WithAssociatedTypes(callee, bound);
-            var call = new BoundCall(syntax, new BoundSelfAccess(syntax, concrete, callee.IsMutating), callee,
-                [..callee.Parameters.Select(p => (BoundExpression)new BoundParameterAccess(syntax, p))], callee.ReturnType) { Substitution = substitution };
-            var lowering = new FunctionLowering(this, callee, thunk, source, substitution);
-            using (_diagnostics.Suppress()) {
-                lowered = lowering.LowerWitnessCall(entry, current, opened, arguments, call, block => {
-                    if (loaded is not null) {
-                        block.Append(new DestroyValueInst(loaded));
-                    }
-                });
-            }
-        }
-
-        if (lowered) {
-            // The call is all it does: no line of its own, as the thunk it replaces had none.
-            foreach (var instruction in thunk.Blocks.SelectMany(static b => b.Instructions)) {
-                instruction.Location = null;
-            }
-
-            thunk.RemoveUnreachableBlocks();
-            return;
-        }
-
-        thunk.Blocks.Clear();
-        using (_diagnostics.Suppress()) {
-            if (FillWitnessThunk(thunk, concrete, value, box, slot, requirement, signature, at, viaGeneric: false)) {
-                return;
-            }
-        }
-
-        // Neither: a slot no program can reach yet, as a table that could not be made would be.
-        thunk.Blocks.Clear();
-        var stub = thunk.AddBlock();
-        foreach (var parameter in thunk.Type.Parameters) {
-            stub.AddArgument(parameter);
-        }
-
-        stub.Append(new UnreachableInst());
-    }
-
-    // -----------------------------------------------------------------------
     // Witness tables in the generic calling convention
     // -----------------------------------------------------------------------
 
@@ -1800,6 +1693,8 @@ public sealed partial class SilGen {
 
     /// <summary>A property's getter in the generic calling convention: <c>self</c> unless it is static, where a result of Self goes, then Self's metadata.</summary>
     FunctionType? GenericGetterType(NamedTypeSymbol protocol, FieldSymbol field) {
+        // An instance of a generic protocol's, with its arguments: 'next() -> T?' of a 'Source<Int>' gives an 'Int?'.
+        var arguments = TypeSubstitution.For(protocol);
         protocol = protocol.OriginalDefinition;
         if (protocol.SelfTypeParameter is not { } self) {
             return null;
@@ -1811,14 +1706,16 @@ public sealed partial class SilGen {
 
         var opaque = new OpaqueType(self.Name);
         ImmutableArray<SilType> taken = field.IsStatic ? [] : [opaque];
-        if (HeldOfSelf(field.Type, self) is { } held) {
+        var fieldType = arguments.Apply(field.Type);
+        if (HeldOfSelf(fieldType, self) is { } held) {
             return new FunctionType([..taken, SilType.Address(held), SilType.Metadata], SilType.Unit);
         }
 
-        return Mentions(field.Type, [self, ..protocol.AssociatedTypes]) || Lower(field.Type) is not { } result ? null : new FunctionType([..taken, SilType.Metadata], result);
+        return Mentions(fieldType, [self, ..protocol.AssociatedTypes]) || Lower(fieldType) is not { } result ? null : new FunctionType([..taken, SilType.Metadata], result);
     }
 
     internal FunctionType? GenericEntryType(NamedTypeSymbol protocol, FunctionSymbol requirement) {
+        var arguments = TypeSubstitution.For(protocol);
         protocol = protocol.OriginalDefinition;
         // An async one would keep the caller's storage across a suspension: not yet.
         if (protocol.SelfTypeParameter is not { } self || !requirement.TypeParameters.IsEmpty || requirement.IsRethrows || !requirement.OpaqueTypeParameters.IsEmpty
@@ -1828,8 +1725,10 @@ public sealed partial class SilGen {
 
         var own = new List<TypeParameterSymbol>([self, ..protocol.AssociatedTypes]);
         var opaque = new OpaqueType(self.Name);
-        SilType? Slot(TypeSymbol type) =>
-            type.Equals(self) ? opaque : HeldOfSelf(type, self) is { } held ? held : Mentions(type, own) ? null : Lower(type);
+        SilType? Slot(TypeSymbol type) {
+            type = arguments.Apply(type);
+            return type.Equals(self) ? opaque : HeldOfSelf(type, self) is { } held ? held : Mentions(type, own) ? null : Lower(type);
+        }
 
         var parameters = ImmutableArray.CreateBuilder<SilType>();
         if (HasSelf(requirement)) {
@@ -1881,9 +1780,6 @@ public sealed partial class SilGen {
         return new FunctionType(parameters.ToImmutable(), result, thrown);
     }
 
-    /// <summary>The generic entries made so far, by table.</summary>
-    readonly HashSet<SilWitnessTable> _genericTabled = new(ReferenceEqualityComparer.Instance);
-
     /// <summary>
     ///     A type's witness tables for a protocol and every protocol it
     ///     refines, with their entries in the generic calling convention: what
@@ -1916,17 +1812,7 @@ public sealed partial class SilGen {
         }
 
         foreach (var each in closure) {
-            var name = QualifiedName(each);
-            var table = _module.FindWitnessTable(value, name);
-            if (table is null) {
-                if (concrete is not NamedTypeSymbol boxed || !WitnessTable(boxed, value, each, at) || (table = _module.FindWitnessTable(value, name)) is null) {
-                    table = new SilWitnessTable(value, name) { HasEntries = false };
-                    AssociatedTypes(table, concrete, each);
-                    _module.AddWitnessTable(table);
-                }
-            }
-
-            GenericEntries(table, concrete, value, each, at);
+            WitnessTable(concrete, value, each, at);
         }
 
         // An error of the type, which unspecialised code may throw on as 'any Error'.
@@ -1985,34 +1871,6 @@ public sealed partial class SilGen {
         return read is null or DependentMemberTypeSymbol || read.Equals(Core.Never) ? null : read;
     }
 
-    /// <summary>
-    ///     Fills a table's entries in the generic calling convention, once, in
-    ///     an unspecialised build: every table it makes has them, whatever
-    ///     asked for the table first.
-    /// </summary>
-    void GenericEntries(SilWitnessTable table, TypeSymbol concrete, SilType value, NamedTypeSymbol protocol, SyntaxNode at) {
-        // A value laid out as another type than its nominal one (an optional, whose members are Optional's) has none yet.
-        if (!CompilesOnce || !IsTabledProtocol(protocol) || Lower(concrete) != value || !_genericTabled.Add(table)) {
-            return;
-        }
-
-        foreach (var refined in Bases(protocol.OriginalDefinition)) {
-            table.Bases.Add(QualifiedName(refined.OriginalDefinition));
-        }
-
-        foreach (var (key, member) in GenericRequirements(protocol)) {
-            string? witness = null;
-            var type = GenericEntryType(protocol, member);
-            if (type is not null) {
-                using (_diagnostics.Suppress()) {
-                    witness = GenericWitness(concrete, value, protocol, key, member, type, at);
-                }
-            }
-
-            table.GenericEntries.Add((key, witness, witness is null ? null : type));
-        }
-    }
-
     /// <summary>A table's associated types, as the conformance binds them, and the protocols each must conform to.</summary>
     void AssociatedTypes(SilWitnessTable table, TypeSymbol concrete, NamedTypeSymbol protocol) {
         foreach (var associated in protocol.OriginalDefinition.AssociatedTypes) {
@@ -2068,7 +1926,7 @@ public sealed partial class SilGen {
             return null;
         }
 
-        var substitution = WithAssociatedTypes(requirement, new TypeSubstitution(new Dictionary<TypeParameterSymbol, TypeSymbol> { [self] = concrete }));
+        var substitution = WithAssociatedTypes(requirement, new TypeSubstitution(WithProtocolArguments(protocol, new() { [self] = concrete })));
         BoundExpression? receiver = HasSelf(requirement) ? new BoundSelfAccess(syntax, self, requirement.IsMutating)
             : requirement.IsStatic ? new BoundTypeExpression(syntax, self)
             : null;
@@ -2124,6 +1982,7 @@ public sealed partial class SilGen {
         }
 
         function.RemoveUnreachableBlocks();
+        AsTrampoline(function);
         _module.Add(function);
         return name;
     }
@@ -2168,14 +2027,14 @@ public sealed partial class SilGen {
         }
 
         var self = protocol.OriginalDefinition.SelfTypeParameter!;
-        var substitution = WithAssociatedTypes(field, new TypeSubstitution(new Dictionary<TypeParameterSymbol, TypeSymbol> { [self] = concrete, [print.TypeParameters[0]] = concrete }));
+        var substitution = WithAssociatedTypes(field, new TypeSubstitution(WithProtocolArguments(protocol, new() { [self] = concrete, [print.TypeParameters[0]] = concrete })));
         BoundExpression receiver = field.IsStatic ? new BoundTypeExpression(syntax, self) : new BoundParameterAccess(syntax, print.Parameters[0]);
         var function = new SilFunction(name, type) {
             SourceFile = source.FileName,
             Line = source.GetLinePosition(syntax.Span.Start).Line,
         };
         var bridge = new Bridge(false, field.IsStatic ? [] : [print.Parameters[0]], Mentions(field.Type, [self])) {
-            Returns = new BoundFieldAccess(syntax, receiver, field, field.Type),
+            Returns = new BoundFieldAccess(syntax, receiver, concrete is NamedTypeSymbol named && !field.IsStatic && (FindField(named, field.Name) ?? DefaultProperty(named, field)) is { } own ? own : field, field.Type),
             TakesNoParameters = field.IsStatic,
             Self = concrete,
         };
@@ -2186,8 +2045,42 @@ public sealed partial class SilGen {
         }
 
         function.RemoveUnreachableBlocks();
+        AsTrampoline(function);
         _module.Add(function);
         return name;
+    }
+
+    /// <summary>
+    ///     A witness is the compiler's, not the program's: no line of its
+    ///     own, and, where it calls one function, a trampoline to it, so a
+    ///     debugger's 'step' through an existential goes on into the member.
+    /// </summary>
+    static void AsTrampoline(SilFunction function) {
+        function.SourceFile = null;
+        function.Line = 0;
+        foreach (var instruction in function.Blocks.SelectMany(static b => b.Instructions)) {
+            instruction.Location = null;
+        }
+
+        var called = function.Blocks.SelectMany(static b => b.Instructions)
+            .Where(static i => i is ApplyInst or TryApplyInst)
+            .Select(static i => i.Operands[0] is FunctionRefInst reference ? reference.Function : null)
+            .ToList();
+        if (called is [{ } target]) {
+            function.TrampolineTarget = target;
+        }
+    }
+
+    /// <summary>A map with an instance of a generic protocol's arguments added: its <c>T</c> as a <c>Producer&lt;Dog&gt;</c> gives it.</summary>
+    static Dictionary<TypeParameterSymbol, TypeSymbol> WithProtocolArguments(NamedTypeSymbol protocol, Dictionary<TypeParameterSymbol, TypeSymbol> map) {
+        if (protocol.IsConstructed) {
+            var arguments = TypeSubstitution.For(protocol);
+            foreach (var parameter in arguments.Parameters) {
+                map.TryAdd(parameter, arguments.Apply(parameter));
+            }
+        }
+
+        return map;
     }
 
     /// <summary>Sable.Core's <c>print&lt;T&gt;(_ value: T)</c>: what bridged functions of one opaque value are lowered as.</summary>
@@ -2448,48 +2341,6 @@ public sealed partial class SilGen {
     internal static readonly FormatSpecifier DebugFormat = FormatSpecifier.Default with { Kind = "Debug", KindLetter = '?' };
 
     sealed partial class FunctionLowering {
-        /// <summary>
-        ///     Lowers a witness thunk's call (<see cref="GenericWitnessThunk" />)
-        ///     into the thunk, from <paramref name="current" /> on: <c>self</c>
-        ///     the value in the box, at <paramref name="opened" />, and the
-        ///     callee's parameters what the thunk is given. Each way out frees
-        ///     what the call needed, then lets go of the box (<paramref name="release" />).
-        ///     False when the call cannot be lowered.
-        /// </summary>
-        internal bool LowerWitnessCall(SilBlock entry, SilBlock current, SilValue opened, IReadOnlyList<SilValue> arguments, BoundCall call, Action<SilBlock> release) {
-            _entry = entry;
-            _current = current;
-            _selfAddress = opened;
-            for (var i = 0; i < symbol.Parameters.Length; i++) {
-                _parameters[symbol.Parameters[i]] = arguments[i];
-            }
-
-            BoundStatement[] statements = symbol.ReturnType.Equals(Core.Void)
-                ? [new BoundExpressionStatement(call.Syntax, call), new BoundReturn(call.Syntax, null)]
-                : [new BoundReturn(call.Syntax, call)];
-            _body = new BoundBlock(call.Syntax, [], [..statements]);
-            Statement(_body);
-            if (_failed || _current is not null) {
-                return false;
-            }
-
-            if (_returnBlock is { } returnBlock) {
-                _current = returnBlock;
-                Deallocate();
-                release(_current);
-                Jump(new ReturnInst(returnBlock.Arguments.Count == 0 ? null : returnBlock.Arguments[0]));
-            }
-
-            if (_throwBlock is { } throwBlock) {
-                _current = throwBlock;
-                Deallocate();
-                release(_current);
-                Jump(new ThrowInst(throwBlock.Arguments[0]));
-            }
-
-            return !_failed;
-        }
-
         /// <summary>For a function generic code calls (<see cref="Bridge" />), what arrives as a type parameter's value.</summary>
         internal Bridge? Bridged { get; init; }
 

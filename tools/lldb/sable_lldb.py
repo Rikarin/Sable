@@ -20,7 +20,7 @@ in a suffix saying what kind of thing it is:
     union U         -> U$union                $tag (an enumeration of the cases), $payload (a C union)
     T?              -> T?$optional            the same; an optional class is the reference, null for none
     (A) -> R        -> (A) -> R$closure       $function, $context
-    any P           -> any P$existential      box (the value, in an any$box$of$T), then a witness per requirement
+    any P           -> any P$existential      box (the value, in an any$box$of$T), type (its metadata), a witness table per protocol
     @inline_layout  -> S$inline               $block -> header, length, capacity, fields (the fixed-size ones, packed)
 
 The formatters match those names by regular expression, so they work with

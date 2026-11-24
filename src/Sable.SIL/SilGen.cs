@@ -7149,6 +7149,15 @@ public sealed partial class SilGen {
                 case BoundIfExpression ifExpression:
                     return IfValue(ifExpression);
 
+                // 'throw e' where a value is wanted leaves; nothing after it runs.
+                case BoundThrowExpression throwExpression:
+                    Statement(throwExpression.Body);
+                    if (_current is not null) {
+                        Jump(new UnreachableInst());
+                    }
+
+                    return UnitValue.Instance;
+
                 case BoundTry tryExpression:
                     return Try(tryExpression);
 
@@ -9854,6 +9863,12 @@ public sealed partial class SilGen {
 
             Jump(new UnreachableInst());
             _current = after;
+
+            // Every arm left: nothing comes here.
+            if (match.Type.Equals(Core.Never)) {
+                Jump(new UnreachableInst());
+            }
+
             return result ?? (SilValue)UnitValue.Instance;
         }
 

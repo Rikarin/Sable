@@ -33,7 +33,7 @@ namespace Sable.Symbols;
 /// </remarks>
 public static class SymbolInterface {
     /// <summary>The section's own version: bump when what is written, or what it means, changes.</summary>
-    public const int Version = 1;
+    public const int Version = 2;
 
     enum Entry : byte {
         Module = 1,
@@ -374,11 +374,19 @@ public static class SymbolInterface {
                     break;
                 case FieldSymbol field:
                     output.Write(Flags(field.IsMutable, field.IsAsyncGetter, field.IsStatic, field.IsLazy, field.IsImmortal, field.IsOverride, field.IsFinal,
-                        field.IsComputed, field.HasSetter, field.IsAbstract, field.HasInitializer));
+                        field.IsComputed, field.HasSetter, field.IsAbstract, field.HasInitializer, field.IsConstant));
                     output.Write(field.SetterAccessibility is { } setter ? (byte)setter : byte.MaxValue);
                     output.Write((byte)field.ReferenceKind);
                     WriteString(output, field.ExportName);
                     WriteString(output, field.Builtin);
+
+                    // What a type elsewhere may be given it as: 'SIMD<F32, lanes>'.
+                    if (field.IsConstant) {
+                        var value = field.IntegerValue;
+                        output.Write(value is not null);
+                        output.Write(value ?? 0L);
+                    }
+
                     break;
                 case AliasSymbol alias:
                     output.Write(Listed(alias));
@@ -851,6 +859,8 @@ public static class SymbolInterface {
                         ReferenceKind = (ReferenceKind)_input.ReadByte(),
                         ExportName = ReadString(_input),
                         Builtin = ReadString(_input),
+                        IsConstant = Has(flags, 11),
+                        KnownValue = Has(flags, 11) ? ReadKnownValue() : null,
                     };
                     AddMember(container, field);
                     symbol = field;
@@ -1170,6 +1180,12 @@ public static class SymbolInterface {
             }
 
             return at as NamedTypeSymbol ?? throw new InvalidDataException($"'{moduleName}' declares no type '{path}'");
+        }
+
+        long? ReadKnownValue() {
+            var known = _input.ReadBoolean();
+            var value = _input.ReadInt64();
+            return known ? value : null;
         }
 
         static bool Has(int flags, int bit) => (flags & (1 << bit)) != 0;

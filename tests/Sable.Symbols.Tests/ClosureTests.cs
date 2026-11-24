@@ -322,4 +322,53 @@ public sealed class ClosureTests {
             """);
         Assert.Equal("Void", TypeOfLast("let u = ()"));
     }
+
+    // ---- Trailing closures for labelled parameters ------------------------------
+
+    const string Labelled = """
+                            fn replacing(_ r: Int, with f: (Int) -> Int) -> Int { return f(r) }
+                            fn both(_ r: Int, then a: (Int) -> Int, finally b: (Int) -> Int) -> Int { return b(a(r)) }
+                            fn scaled(_ r: Int, scale: Int = 2, by f: (Int) -> Int) -> Int { return f(r) * scale }
+                            fn maybe(_ r: Int, with f: ((Int) -> Int)? = none) -> Int { return f?(r) ?? r }
+                            fn later<T>(_ make: () -> T) -> T { return make() }
+                            """;
+
+    [Theory]
+    [InlineData("let v = replacing(3) { $0 + 1 }", "Int")]
+    [InlineData("let v = both(3) { $0 + 1 } finally: { $0 * 10 }", "Int")]
+    [InlineData("let v = scaled(3) { $0 + 1 }", "Int")]
+    [InlineData("let v = scaled(3, scale: 4) { $0 + 1 }", "Int")]
+    [InlineData("let v = maybe(3) { $0 + 1 }", "Int")]
+    [InlineData("let v = later { 1.5 }", "F64")]
+    public void ATrailingClosureGoesToTheNextParameterThatTakesOneLabelledOrNot(string body, string expected) =>
+        Assert.Equal(expected, TypeOfLast(body, Labelled));
+
+    [Fact]
+    public void AnArgumentInParenthesesStillNeedsItsLabel() =>
+        Assert.Contains(ErrorsIn("let v = replacing(3, { $0 + 1 })", Labelled), static e => e.Code == ErrorCode.ERR_NoMatchingOverload);
+
+    [Fact]
+    public void ATrailingClosureWithNoParameterLeftIsReported() =>
+        Assert.NotEmpty(ErrorsIn("let v = replacing(3, with: { $0 }) { $0 + 1 }", Labelled));
+
+    // ---- An implicit member or a closure fits a parameter of its shape --------------
+
+    const string Modes = """
+                         enum Mode { Fast, Slow }
+                         fn pick(_ m: Mode) -> String { return "value" }
+                         fn pick(_ m: () -> Mode) -> String { return "closure" }
+                         """;
+
+    [Fact]
+    public void AnImplicitMemberIsNotPassedWhereAFunctionGoes() {
+        var (compilation, tree) = Compile("let v = pick(.Fast)\nlet w = pick { .Slow }\nlet x = pick({ .Fast })", Modes);
+        var errors = compilation.GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error).ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
+
+        var model = compilation.GetSemanticModel(tree);
+        var chosen = tree.Root.DescendantNodes().OfType<InvocationExpressionSyntax>().Where(static c => c.Expression is IdentifierNameSyntax { Identifier.Text: "pick" })
+            .Select(c => ((FunctionSymbol)model.GetSymbolOf(c.Expression)!).Parameters[0].Type.ToDisplayString())
+            .ToList();
+        Assert.Equal(["Mode", "() -> Mode", "() -> Mode"], chosen);
+    }
 }

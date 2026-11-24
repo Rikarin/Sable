@@ -770,6 +770,26 @@ public sealed class IfExpressionSyntax : ExpressionSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitIfExpression(this);
 }
 
+/// <summary>`throw e` where a value is wanted, `case .Gap =&gt; throw e` or `x ?? throw e`: it never gives one, so its type is Never.</summary>
+public sealed class ThrowExpressionSyntax : ExpressionSyntax
+{
+    private ExpressionSyntax? _expression;
+
+    internal ThrowExpressionSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken ThrowKeyword => GetToken(0);
+    public ExpressionSyntax Expression => GetRed(ref _expression, 1);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        1 => Expression,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitThrowExpression(this);
+}
+
 /// <summary>`onFail: { ... }`: a trailing closure after the first, labelled for its parameter.</summary>
 public sealed class LabeledClosureSyntax : SyntaxNode
 {
@@ -3615,6 +3635,7 @@ public abstract class SyntaxVisitor
     public virtual void VisitImplicitMemberAccessExpression(ImplicitMemberAccessExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitInvocationExpression(InvocationExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitIfExpression(IfExpressionSyntax node) => DefaultVisit(node);
+    public virtual void VisitThrowExpression(ThrowExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitLabeledClosure(LabeledClosureSyntax node) => DefaultVisit(node);
     public virtual void VisitArgumentList(ArgumentListSyntax node) => DefaultVisit(node);
     public virtual void VisitArgument(ArgumentSyntax node) => DefaultVisit(node);

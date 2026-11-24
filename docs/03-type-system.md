@@ -210,6 +210,14 @@ type's `where` predicates over its value parameters — whole numbers,
 `true`, `false` and operators — are evaluated for the numbers each
 instance written with them is given, and a false one is S3421.
 
+A value parameter may also be given a constant by name, `SIMD<F32, lanes>`
+or `Buf<Int, Platform.vectorBytes>`, whose value the compiler works out as it
+reads the type: integer literals, other such constants, and the integer
+operators over them (`const lanes = Platform.vectorBytes / 4`). A constant
+computed by a call is worked out only later, when constants are evaluated,
+which is too late for a type (S3420). An expression is not written in the
+angle brackets themselves, where `>` would end them: a constant names it.
+
 `~Copyable` is the opt-out that lets a generic container hold move-only types:
 
 ```sable
@@ -290,6 +298,17 @@ subtyping family but deliberately more limited to keep it fast and predictable.
 | Literal types from context | Public API signatures |
 | Union case from leading-dot syntax | |
 
+Inference goes both ways. A generic call, initialiser or static member
+whose type parameters its arguments do not settle takes them from the type
+the context asks for: `let v: SIMD<F32, 4> = SIMD(repeating: 1)`,
+`let z: Complex<F64> = Complex.i`, `let n: F64 = two()` for
+`fn two<T: Numeric>() -> T`. An operator's operands are each other's
+context: the right operand of `+`, `*`, `==` and the other operators whose
+operands share a type is bound expecting the left's type, and a left operand
+that only its context can type — `.zero`, `Complex.i`, `Complex.polar(…)`,
+`two()` — is bound after the right and takes its type
+(`Complex.i + z`, `two() * x`). Evaluation is still left to right.
+
 **Public signatures are always fully explicit.** This is a hard rule: it makes
 module interfaces stable, makes error messages local, and makes parallel
 type-checking of modules trivially possible.
@@ -300,6 +319,10 @@ type-checking of modules trivially possible.
    member-lookup, literal-default constraints).
 2. Simplify: propagate equalities, resolve unambiguous overloads, apply
    defaults (integer literal → `Int`, float literal → `F64`).
+   An expression of literals alone (`29 << 112`) is one literal here: it
+   takes the type its context gives — a parameter's once the overload is
+   chosen, the other operand's, an array literal's other elements' — and
+   defaults only when nothing does.
 3. Solve the remainder by ranked search over overload choices, with a score
    penalising implicit conversions and `any` boxing.
 4. Apply the best solution; if several tie, report ambiguity with the candidates.

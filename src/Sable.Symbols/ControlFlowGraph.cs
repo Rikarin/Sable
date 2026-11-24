@@ -640,6 +640,10 @@ internal sealed class ControlFlowGraph {
 
         void ExpressionCore(BoundExpression expression) {
             switch (expression) {
+                case BoundThrowExpression throwExpression:
+                    Statement(throwExpression.Body);
+                    return;
+
                 case BoundLocalAccess access:
                     Op(FlowOpKind.Read, access.Local, access);
                     return;

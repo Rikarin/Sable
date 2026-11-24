@@ -1447,7 +1447,7 @@ public sealed partial class Compilation {
             declaration,
             AccessibilityOf(declaration.Modifiers, container),
             false
-        ) { IsStatic = true, HasInitializer = true };
+        ) { IsStatic = true, HasInitializer = true, IsConstant = true };
 
         TypeBinder.BindConstantType(field, declaration);
         RecordDeclaration(declaration, field);

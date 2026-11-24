@@ -448,6 +448,26 @@ public sealed class StatementParserTests {
     }
 
     [Fact]
+    public void AThrowWhereAValueIsWantedIsAnExpressionTakingAllAfterIt() {
+        var root = ParseRoot("let n = o ?? throw Failure.Missing(a + b)");
+        var declaration = Assert.IsType<LocalDeclarationStatementSyntax>(root);
+        var coalesce = Assert.IsType<BinaryExpressionSyntax>(declaration.Declarator.Initializer!.Value);
+        var thrown = Assert.IsType<ThrowExpressionSyntax>(coalesce.Right);
+        Assert.IsType<InvocationExpressionSyntax>(thrown.Expression);
+    }
+
+    [Fact]
+    public void AThrowIsAMatchArmsBody() {
+        var root = ParseRoot("match f {\n    case .Gap(_, _) => throw E.Skipped\n    case _ => 1\n}");
+        var match = Assert.IsType<MatchExpressionSyntax>(Assert.IsType<ExpressionStatementSyntax>(root).Expression);
+        Assert.IsType<ThrowExpressionSyntax>(Assert.IsType<MatchArmSyntax>(match.Arms[0]).Body);
+    }
+
+    [Fact]
+    public void AThrowAtTheStartOfAStatementIsTheStatement() =>
+        Assert.IsType<ThrowStatementSyntax>(ParseRoot("throw E.Skipped"));
+
+    [Fact]
     public void AnIfAtTheStartOfAStatementIsTheStatement() =>
         Assert.IsType<IfStatementSyntax>(ParseRoot("if x > 3 { f() } else { g() }"));
 

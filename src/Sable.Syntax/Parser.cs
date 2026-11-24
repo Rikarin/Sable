@@ -1023,6 +1023,14 @@ internal sealed class Parser {
             case SyntaxKind.IfKeyword:
                 return new IfExpressionGreen(ParseIfStatement());
 
+            // 'case .Gap => throw e', 'x ?? throw e': where a value is wanted,
+            // a 'throw' leaves instead of giving one. It takes the whole
+            // expression after it, as the statement does.
+            case SyntaxKind.ThrowKeyword: {
+                var throwKeyword = EatToken();
+                return new ThrowExpressionGreen(throwKeyword, ParseExpression());
+            }
+
             // Where a '{' opens the body — after 'if p.x ==' with its right
             // operand missing — it is the body, not a closure for an operand;
             // read as one, the body went with it and the '{' after went missing.

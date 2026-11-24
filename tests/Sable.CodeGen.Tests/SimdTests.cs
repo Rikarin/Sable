@@ -440,4 +440,33 @@ public sealed class SimdTests {
                                             print(total([1, 2, 3, 4]))
                                         """)).Stdout
         );
+
+    [Fact]
+    public void AConstantGivesTheLaneCount() =>
+        Assert.Equal(
+            "4\n<2.0, 2.0, 2.0, 2.0>\n32.0\n4.0\n16\n",
+            AssertAgree(
+                Program(
+                    """
+                    const f32Lanes = Platform.vectorBytes / 4
+                    const wide = f32Lanes * 4
+
+                    struct Holder {
+                        const lanes = 8
+                    }
+
+                    fn count<N: Int>(_ v: SIMD<F32, N>) -> Int { return N }
+                    """,
+                    """
+                        let a = SIMD<F32, f32Lanes>(repeating: 2)
+                        print(count(a))
+                        print(a)
+                        let b: SIMD<F32, wide> = SIMD(repeating: 2)
+                        print(b.reduceAdd())
+                        print(SIMD<F64, Holder.lanes>(repeating: 0.5).reduceAdd())
+                        print(SIMD<U8, Platform.vectorBytes>(repeating: 1).reduceAdd())
+                    """
+                )
+            ).Stdout
+        );
 }

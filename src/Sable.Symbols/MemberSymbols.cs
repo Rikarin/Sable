@@ -472,6 +472,18 @@ public sealed class FieldSymbol(
     public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
         declaration is null ? [] : [declaration];
 
+    /// <summary>A <c>const</c>.</summary>
+    public bool IsConstant { get; internal init; }
+
+    /// <summary>A constant's value, as the interface it was read from says.</summary>
+    internal long? KnownValue { get; init; }
+
+    internal Func<System.Numerics.BigInteger?>? ValueResolver { get; set; }
+
+    /// <summary>A constant's value when it is a whole number known while types are read (docs/03), else null.</summary>
+    public long? IntegerValue =>
+        KnownValue ?? (ValueResolver?.Invoke() is { } value && value >= long.MinValue && value <= long.MaxValue ? (long)value : null);
+
     /// <summary><c>private(set)</c> and the like: who may write it, when narrower than who may read it.</summary>
     /// <summary>A property whose read may suspend: <c>task.value</c>.</summary>
     public bool IsAsyncGetter { get; internal set; }

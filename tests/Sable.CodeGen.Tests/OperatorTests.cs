@@ -68,4 +68,31 @@ public sealed class OperatorTests {
                 print(held != none)
             """
         );
+
+    [Fact]
+    public void LiteralsInArgumentsAndArraysTakeTheParametersOrTheOthersType() =>
+        Prints(
+            "150576608897510001227384393547382784\n255\n5\n4\n7\n16\n170141183460469231731687303715884105727\n",
+            """
+            fn wide(_ x: U128) -> U128 { return x }
+            fn byte(_ x: U8) -> U8 { return x }
+            fn count(_ xs: U8[:]) -> Int { return xs.count }
+            fn twice(_ x: Int) -> Int { return x * 2 }
+            fn twice(_ x: U128) -> U128 { return x * 2 }
+            """,
+            """
+                print(wide(29 << 112))
+                print(byte((200 + 55)))
+                let version: U8 = 3
+                var bytes: U8[>..] = []
+                bytes.append(contentsOf: [0x54, 0x5A, 0x69, 0x66, version])
+                print(bytes.count)
+                print(count([1, 2, version, 0xFF]))
+                let mixed = [4, version]
+                print(mixed[0] + version)
+                print(twice(1 << 3))
+                let all: U128 = 340282366920938463463374607431768211455
+                print(all & ~(1 << 127))
+            """
+        );
 }

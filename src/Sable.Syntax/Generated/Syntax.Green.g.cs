@@ -1073,6 +1073,34 @@ internal sealed class IfExpressionGreen : GreenNode
         new IfExpressionSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="ThrowExpressionSyntax"/>.</summary>
+internal sealed class ThrowExpressionGreen : GreenNode
+{
+    private readonly GreenToken? _throwKeyword;
+    private readonly GreenNode? _expression;
+
+    public ThrowExpressionGreen(GreenToken? throwKeyword, GreenNode? expression)
+        : base(SyntaxKind.ThrowExpression, 0)
+    {
+        _throwKeyword = throwKeyword;
+        _expression = expression;
+        FullWidth = (throwKeyword?.FullWidth ?? 0)
+                    + (expression?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 2;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _throwKeyword,
+        1 => _expression,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new ThrowExpressionSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="LabeledClosureSyntax"/>.</summary>
 internal sealed class LabeledClosureGreen : GreenNode
 {

@@ -511,4 +511,81 @@ public sealed class PatternTests {
             static e => e.Code == ErrorCode.WRN_UnreachableCode
         );
     }
+
+    // ---- 'throw' where a value is wanted --------------------------------------
+
+    static IReadOnlyList<Diagnostic> ErrorsInModule(string source) => [
+        ..Compilation.Create(source).GetAllDiagnostics()
+            .Where(static d => d.Severity == DiagnosticSeverity.Error),
+    ];
+
+    [Fact]
+    public void AThrowIsAnArmOfAMatchThatGivesAValue() {
+        var errors = ErrorsInModule(
+            """
+            module M
+            union Failure { Skipped, Ambiguous }
+            union Fit { One(Int), Gap(Int, Int), Overlap }
+            fn resolve(_ f: Fit) throws(Failure) -> Int {
+                let n = match f {
+                    case .Gap(_, _) => throw Failure.Skipped
+                    case .One(let v) => v
+                    case _ => throw .Ambiguous
+                }
+                return n
+            }
+            """
+        );
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
+    }
+
+    [Fact]
+    public void AThrowIsTheRightOfACoalesce() {
+        var errors = ErrorsInModule(
+            """
+            module M
+            union Failure { Missing }
+            fn need(_ o: Int?) throws(Failure) -> Int {
+                return o ?? throw Failure.Missing
+            }
+            """
+        );
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
+    }
+
+    [Fact]
+    public void AThrowExpressionHasTheTypeNever() {
+        var compilation = Compilation.Create(
+            """
+            module M
+            union Failure { Missing }
+            fn f() throws(Failure) -> Int {
+                return match 1 {
+                    case 0 => throw Failure.Missing
+                    case _ => 2
+                }
+            }
+            """
+        );
+        var tree = compilation.SyntaxTrees[0];
+        var model = compilation.GetSemanticModel(tree);
+        var thrown = tree.Root.DescendantNodes().OfType<ThrowExpressionSyntax>().Single();
+        Assert.Equal("Never", model.GetTypeOf(thrown)!.ToDisplayString());
+        var match = tree.Root.DescendantNodes().OfType<MatchExpressionSyntax>().Single();
+        Assert.Equal("Int", model.GetTypeOf(match)!.ToDisplayString());
+    }
+
+    [Fact]
+    public void AThrowExpressionOutsideAThrowingFunctionIsAnError() {
+        var errors = ErrorsInModule(
+            """
+            module M
+            union Failure { Missing }
+            fn f(_ o: Int?) -> Int {
+                return o ?? throw Failure.Missing
+            }
+            """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_ThrowsNotDeclared);
+    }
 }

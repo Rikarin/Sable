@@ -819,4 +819,90 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    [Fact]
+    public void AGenericsParametersComeFromTheContext() =>
+        Assert.Equal(
+            "1.0\n3.0\n3.0\n3.0\n6.0\n6.0\n3.0\n<1.0, 1.0, 1.0, 1.0>\n-1.0\n1.0\ntrue\n",
+            AssertAgree(
+                Program(
+                    """
+                    struct Cx<T: FloatingPoint> {
+                        var re: T
+                        var im: T
+                        init(_ re: T, _ im: T) { self.re = re; self.im = im }
+                        static var i: Cx<T> => Cx(T.zero, T.one)
+                        static fn make() -> Cx<T> { return Cx(T.one, T.one) }
+                        static operator + (a: Cx<T>, b: Cx<T>) -> Cx<T> { return Cx(a.re + b.re, a.im + b.im) }
+                        static operator * (a: Cx<T>, b: Cx<T>) -> Cx<T> { return Cx(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re) }
+                        static operator == (a: Cx<T>, b: Cx<T>) -> Bool { return a.re == b.re && a.im == b.im }
+                    }
+
+                    fn two<T: Numeric>() -> T { return T.one + T.one }
+                    """,
+                    """
+                        let a: Cx<F64> = Cx.i
+                        print(a.im)
+                        let z: Cx<F64> = Cx(1.0, 2.0) + Cx.i
+                        print(z.im)
+                        let w = Cx(1.0, 2.0) + Cx.i
+                        print(w.im)
+                        let q = Cx.i + Cx(1.0, 2.0)
+                        print(q.im)
+                        let x: F64 = 3
+                        print(x * two())
+                        print(two() * x)
+                        let y: F64 = two() + 1
+                        print(y)
+                        let v: SIMD<F32, 4> = SIMD(repeating: 1)
+                        print(v)
+                        let m: Cx<F32> = Cx.make() * Cx.i
+                        print(m.re)
+                        let k: Cx<F32> = .i
+                        print(k.im)
+                        print(Cx.i == Cx(0.0, 1.0))
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    [Native]
+    public void ADefaultNamesTheGenericParametersItsCallGives() =>
+        Assert.Equal(
+            "0\n4\n1\n0\n2\n",
+            AssertAgree(
+                Program(
+                    """
+                    struct Q<E> {
+                        var items: E[>..] = []
+                        init() { }
+                    }
+
+                    struct S<E, N: Int> {
+                        var q: Q<E> = Q<E>()
+                        var size: Int = N
+                        var n: Int = 0
+                    }
+
+                    fn count<E>(_ x: E, _ q: Q<E> = Q<E>()) -> Int { return q.items.count }
+
+                    fn wrapped<T>(_ x: T) -> Int {
+                        var s = S<T, 2>()
+                        s.q.items.append(x)
+                        s.q.items.append(x)
+                        return s.q.items.count
+                    }
+                    """,
+                    """
+                        let s = S<String, 4>(n: 1)
+                        print(s.q.items.count)
+                        print(s.size)
+                        print(s.n)
+                        print(count(1.5))
+                        print(wrapped("a"))
+                    """
+                )
+            ).Stdout
+        );
 }

@@ -233,6 +233,13 @@ fn tryParse(_ s: String, out value: Int) -> Bool { }   // 'out' = must assign
 fn scale(v: inout Vec3, by f: F32) { v.x *= f; v.y *= f; v.z *= f }
 ```
 
+A default is worked out at each call that leaves it off, in the place it is
+written, so the names it uses are the declaration's; its generic parameters
+are what that call gives them. `fn count<E>(_ q: Queue<E> = Queue<E>())`
+called as `count()` on F64s makes a `Queue<F64>`, as does a stored field's
+initial value, `var q: Queue<E> = Queue<E>()`, left off an `S<F64>`'s
+memberwise initialiser.
+
 ### Ownership modifiers
 
 An ownership modifier may be written before the parameter name or after the
@@ -1362,6 +1369,15 @@ Int[>..]()                 // empty grow-only array, likewise; and Int[>..<]()
 Point { x: 1, y: 2 }       // record literal; every field carries its value
 ```
 
+A numeric literal has the type its context asks for, and so does an
+expression of literals alone (`29 << 112`, `-(1 + 2)`, `~0`): the type of a
+`let` with one, a parameter's once the call's overload is chosen
+(`Decimal.fromBits(29 << 112)` shifts a U128), the other operand's, and an
+operand of `-`, `+` or `~` the operator's. With no context they are `Int` and
+`F64`. An array literal's literals take the element type its context asks for,
+or else the type of its other elements: `[0x54, 0x5A, version]` with
+`version: U8` is a `U8` array.
+
 ### Interpolation and format specs
 
 A hole, `\(expr)`, writes its value: a string as it is, a number, a `Bool`
@@ -1521,6 +1537,18 @@ attempt {
 }
 ```
 
+The first trailing closure, written without a label, goes to the next
+parameter the arguments in parentheses left, labelled or not, passing over
+one with a default whose type is no function (Swift's forward scan):
+`text.replacing(pattern) { match in … }` for `replacing(_ pattern:, with
+replacement:)`, and `scaled(3) { … }` for `scaled(_ x: Int, scale: Int = 2,
+by f: …)`. In the parentheses an argument still needs its parameter's label.
+
+An argument whose type its parameter decides, a closure or an implicit member,
+fits only a parameter of its shape when overloads are chosen: `pick(.Fast)`
+is `pick(_: Mode)` and `pick { .Fast }` is `pick(_: () -> Mode)`, since a
+function type has no members to name with a dot, and a closure is no enum.
+
 ### Braces: record literal, trailing closure, or body
 
 Three constructs open with `{`, and the rule between them is:
@@ -1591,6 +1619,19 @@ fn caller() throws(AppError) {
 
 `try e catch { ... }` supplies an inline fallback: the braces hold a block
 whose value replaces the failed expression, or an expression after `catch`.
+
+`throw e` is also an expression, where a value is wanted: it leaves, so it
+never gives one, and its type is `Never`, which fits any type. It takes the
+whole expression after it, as the statement does.
+
+```sable
+let n = match fit {
+    case .One(let v) => v
+    case .Gap(_, _)  => throw TimeZoneError.Skipped(self)   // gives no type to the match
+    case _           => throw .Ambiguous(self)
+}
+let port = configured ?? throw ConfigError.Missing("port")
+```
 
 - `throws` with no type means `throws(any Error)`.
 - `Error` is Sable.Core's `protocol Error: Debug, Sendable`, with `var source:

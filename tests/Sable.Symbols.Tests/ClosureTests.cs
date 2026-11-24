@@ -200,6 +200,22 @@ public sealed class ClosureTests {
     }
 
     [Fact]
+    public void AClosureIsNoValueOfAConcreteTypeSoAnOverloadTakingOneDoesNotFit() {
+        // Each pair takes a value or a closure in the same place; a closure
+        // argument fits only the second.
+        const string extra = """
+                             enum Mode { Fast, Slow }
+                             fn replace(_ n: Int, with text: String) -> String { return text }
+                             fn replace(_ n: Int, with make: (Int) -> String) -> String { return make(n) }
+                             fn pick(_ mode: Mode) -> Int { return 1 }
+                             fn pick(_ make: () -> Mode) -> Int { return 2 }
+                             """;
+        Assert.Equal("String", TypeOfLast("let r = replace(1, with: { n in \"\\(n)\" })", extra));
+        Assert.Equal("String", TypeOfLast("let r = replace(1, with: \"x\")", extra));
+        Assert.Equal("Int", TypeOfLast("let r = pick({ .Slow })", extra));
+    }
+
+    [Fact]
     public void AClosureBodyIsCheckedAgainstItsParameterTypes() {
         var errors = ErrorsIn("let r = apply(1, x => x && true)");
         Assert.NotEmpty(errors);

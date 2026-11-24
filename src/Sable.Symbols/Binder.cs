@@ -5985,6 +5985,31 @@ public sealed partial class Binder {
     }
 
     /// <summary>
+    ///     Whether the argument is written as a closure. A leading-dot member,
+    ///     a bare 'none' and '[]' are left unbound as a closure is (IsClosure),
+    ///     but are values, not closures.
+    /// </summary>
+    static bool IsFunctionLiteral(SyntaxNode syntax) =>
+        syntax switch {
+            ClosureExpressionSyntax or BraceClosureExpressionSyntax => true,
+            ParenthesizedExpressionSyntax parenthesized => IsFunctionLiteral(parenthesized.Expression),
+            _ => false,
+        };
+
+    /// <summary>
+    ///     Whether a closure could be passed for a parameter of the type:
+    ///     anything but a struct, class, actor, union, enum or built-in
+    ///     type, an array or a tuple, none of which a closure can be.
+    /// </summary>
+    static bool CanTakeClosure(TypeSymbol type) =>
+        type switch {
+            NamedTypeSymbol named => named.TypeKind is not (TypeKind.Struct or TypeKind.Class or TypeKind.Actor
+                or TypeKind.Union or TypeKind.Enum or TypeKind.Builtin),
+            ArrayTypeSymbol or TupleTypeSymbol => false,
+            _ => true,
+        };
+
+    /// <summary>
     ///     A reference passed where a value is wanted is the value it refers
     ///     to: 'show(choose(s))', with 'choose' giving a 'String&amp;', makes
     ///     'show&lt;T&gt;' a 'show&lt;String&gt;', as passing to a 'String'
@@ -6227,6 +6252,15 @@ public sealed partial class Binder {
             var wanted = ArgumentTypeFor(parameter, substitution.Apply(parameter.Type), arguments[i]);
             if (parameter.IsVariadic && wanted is ArrayTypeSymbol elements) {
                 wanted = elements.ElementType;
+            }
+
+            // A closure not bound yet fits any type here, as its type waits
+            // on the candidate chosen; but no closure is a value of a
+            // concrete type that is not a function, so a candidate taking
+            // one there does not fit: 'replacing(regex) { … }' is not the
+            // overload taking a String.
+            if (arguments[i] is BoundUnboundClosure { Syntax: var written } && IsFunctionLiteral(written) && !CanTakeClosure(wanted)) {
+                return Reject($"argument {i + 1} is a closure, and '{parameter.Name}' takes '{wanted.ToDisplayString()}'");
             }
 
             var conversion = _conversions.Classify(arguments[i].Type, wanted, IsLiteral(arguments[i]));

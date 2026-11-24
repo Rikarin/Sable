@@ -1,0 +1,17 @@
+module ShuffleBench
+
+// An array of a hundred thousand integers shuffled fifty times: its sum.
+
+@main
+fn main() {
+    var generator = SeededRandomNumberGenerator(seed: 1)
+    var values = (0..<100000).toArray()
+    for _ in 0..<50 {
+        values.shuffle(using: &generator)
+    }
+    var total = 0
+    for i in 0..<100000 {
+        total += values[i]
+    }
+    print(total)
+}

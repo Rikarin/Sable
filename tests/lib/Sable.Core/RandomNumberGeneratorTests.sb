@@ -178,3 +178,13 @@ fn aBoundOfZeroTraps() {
     var generator = SeededRandomNumberGenerator(seed: 3)
     let _ = generator.next(upperBound: 0)
 }
+
+@test
+fn fillLeavesACopyOfTheArrayAlone() {
+    var generator = SeededRandomNumberGenerator(seed: 8)
+    let zeros = U8[>..](repeating: 0, count: 20)
+    var bytes = zeros
+    generator.fill(bytes: &bytes)
+    assert(zeros.allSatisfy({ $0 == 0 }))
+    assert(bytes != zeros)
+}

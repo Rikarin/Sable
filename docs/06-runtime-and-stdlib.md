@@ -779,8 +779,10 @@ Sable.Core          ── always linked, no dependencies
   sequence algorithms, eager and behind '.lazy',
   Formattable/FormatSpec (what "\(x:spec)" writes through),
   Parsable/ParseError/NumberStyles (text back to values), and
-  RandomNumberGenerator with the system's generator and a seeded one
-  (xoshiro256**), behind 'random(in:)', 'randomElement' and 'shuffle';
+  RandomNumberGenerator with the system's generator and seeded ones
+  (xoshiro256**, PCG XSL RR 128/64, ChaCha20, SplitMix64; the same stream on
+  every platform), behind 'random(in:)' (Lemire's integers, evenly spaced
+  floats), 'randomElement', 'shuffle', 'sample(count:)' and 'fill(bytes:)';
   portable SIMD: SIMD<T, N> and SIMDMask<N>, LLVM's vectors
   Platform (the target's constants, and at run time the operating system
   and architecture, OS version and isAtLeast, processors, page size,
@@ -828,7 +830,11 @@ Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
                     statistics generic over every number type (mean,
                     median, mode, quantiles, variance, covariance,
                     correlation, histogram; compensated and two-pass;
-                    RunningStatistics by Welford, mergeable)
+                    RunningStatistics by Welford, mergeable),
+                    and distributions over any generator (uniform, normal,
+                    exponential, Bernoulli, weighted index): here rather
+                    than beside the generators, as the core has no
+                    functions of them
 Sable.IO            Reader Writer Seekable (and async ones), FileHandle and
                     OpenOptions (positional reads and writes, metadata,
                     setLength, sync), BufferedReader BufferedWriter

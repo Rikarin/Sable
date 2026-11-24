@@ -63,7 +63,7 @@ public sealed class HoistUniqueness : ISilPass {
         foreach (var (header, body) in loops.OrderByDescending(static l => l.Value.Count)) {
             var addresses = body.SelectMany(static b => b.Instructions)
                 .OfType<BuiltinInst>()
-                .Where(static b => b.Name == "array_set")
+                .Where(static b => IsCheckedWrite(b.Name))
                 .Select(static b => b.Operands[0])
                 .Distinct()
                 .ToList();
@@ -79,14 +79,20 @@ public sealed class HoistUniqueness : ISilPass {
                 }
 
                 foreach (var write in body.SelectMany(static b => b.Instructions).OfType<BuiltinInst>()
-                             .Where(b => b.Name == "array_set" && ReferenceEquals(b.Operands[0], address)).ToList()) {
-                    write.Rename("array_set_unique");
+                             .Where(b => IsCheckedWrite(b.Name) && ReferenceEquals(b.Operands[0], address)).ToList()) {
+                    write.Rename(InPlace(write.Name));
                 }
 
                 uses = new Uses(function);
             }
         }
     }
+
+    /// <summary>A write that first makes its array the only reference to its buffer: an element, or an integer as bytes.</summary>
+    static bool IsCheckedWrite(string name) => name == "array_set" || name.StartsWith("bytes_store_U", StringComparison.Ordinal);
+
+    /// <summary>The same write, of an array known to be that.</summary>
+    static string InPlace(string name) => name == "array_set" ? "array_set_unique" : "bytes_store_unique_" + name["bytes_store_".Length..];
 
     /// <summary>
     ///     An array's place viewed whole for a mutating member of
@@ -102,10 +108,8 @@ public sealed class HoistUniqueness : ISilPass {
             }
 
             foreach (var write in uses.Of(slot).OfType<BuiltinInst>().ToList()) {
-                if (write.Name.StartsWith("bytes_store_U", StringComparison.Ordinal)) {
-                    write.Rename("bytes_store_unique_" + write.Name["bytes_store_".Length..]);
-                } else if (write.Name == "array_set") {
-                    write.Rename("array_set_unique");
+                if (IsCheckedWrite(write.Name)) {
+                    write.Rename(InPlace(write.Name));
                 }
             }
         }
@@ -166,13 +170,15 @@ public sealed class HoistUniqueness : ISilPass {
             }
 
             switch (user) {
-                case BuiltinInst { Name: "array_set" or "array_set_unique" } write when ReferenceEquals(write.Operands[0], address)
+                case BuiltinInst write when (IsCheckedWrite(write.Name) || write.Name is "array_set_unique" || write.Name.StartsWith("bytes_store_unique_", StringComparison.Ordinal))
+                    && ReferenceEquals(write.Operands[0], address)
                     && !write.Operands.Skip(1).Any(o => ReferenceEquals(o, address)):
                     break;
 
                 case LoadBorrowInst borrowed:
                     foreach (var reader in uses.Of(borrowed)) {
-                        if (reader is not (EndBorrowInst or BuiltinInst { Name: "array_get" or "array_get_borrowed" or "array_count" })) {
+                        if (reader is not (EndBorrowInst or BuiltinInst { Name: "array_get" or "array_get_borrowed" or "array_count" })
+                            && !(reader is BuiltinInst read && read.Name.StartsWith("bytes_load_", StringComparison.Ordinal))) {
                             return false;
                         }
                     }

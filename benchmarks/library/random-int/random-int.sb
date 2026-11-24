@@ -1,0 +1,15 @@
+module RandomIntBench
+
+// Random integers below a bound: twenty million, from a xoshiro256** generator
+// as .NET's unseeded Random is. The two draw different numbers, so what is
+// printed is what both's must come to: the mean, rounded.
+
+@main
+fn main() {
+    var generator = SeededRandomNumberGenerator(seed: 1)
+    var total = 0
+    for _ in 0..<20000000 {
+        total += Int.random(in: 0..<1000, using: &generator)
+    }
+    print((total + 100000000) / 200000000)
+}

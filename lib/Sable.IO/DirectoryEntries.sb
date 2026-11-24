@@ -1,0 +1,81 @@
+module Sable.IO
+
+/// What is in a directory, read from it as it is gone through, in no order:
+/// `Directory.entries`. Gone through once; what is made or removed
+/// meanwhile may come or not.
+public final class DirectoryEntries: Sequence {
+    public alias Element = DirEntry
+    public alias Failure = IoError
+    public alias Iter = DirectoryEntryIterator
+
+    let directory: FilePath
+    let depth: Int
+    var handle: Int
+
+    init(_ directory: FilePath, depth: Int = 1) throws(IoError) {
+        let opened = Runtime.openDirectory(try directory.given())
+        if opened == 0 {
+            throw IoError.lastFileError(Path.text(directory))
+        }
+        self.directory = directory
+        self.depth = depth
+        self.handle = opened
+    }
+
+    deinit {
+        close()
+    }
+
+    public fn makeIterator() -> DirectoryEntryIterator {
+        return DirectoryEntryIterator(entries: self)
+    }
+
+    fn close() {
+        if handle != 0 {
+            Runtime.closeDirectory(handle)
+            handle = 0
+        }
+    }
+
+    fn next() throws(IoError) -> DirEntry? {
+        if handle == 0 {
+            return none
+        }
+        let entry = Runtime.nextEntry(handle)
+        if entry.isEmpty {
+            let failed = Runtime.fileError() != 0
+            let error = IoError.lastFileError(Path.text(directory))
+            close()
+            if failed {
+                throw error
+            }
+            return none
+        }
+        let path = directory.inside(entry[1...])
+        var kind = FileKind.of(Int(entry[0]))
+        if entry[0] == 255 {
+            // The directory does not say: the system is asked. Gone
+            // already, it is nothing that is known.
+            let parts = Runtime.pathMetadata(path.systemString, false)
+            kind = parts.isEmpty ? .Other : FileKind.of(parts[1])
+        }
+        return DirEntry { path: path, kind: kind, depth: depth }
+    }
+}
+
+/// Goes through what is in a directory.
+public struct DirectoryEntryIterator: Iterator {
+    public alias Element = DirEntry
+    public alias Failure = IoError
+
+    let entries: DirectoryEntries
+
+    init(entries: DirectoryEntries) {
+        self.entries = entries
+    }
+
+    /// The next entry; none after the last.
+    public mutating fn next() throws(IoError) -> DirEntry? {
+        return try entries.next()
+    }
+}

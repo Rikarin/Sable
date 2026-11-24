@@ -1,35 +1,229 @@
 module Sable.IO
 
+/// Directories by path: made, gone through, copied and removed.
 public struct Directory {
-    public static fn exists(_ path: String) -> Bool {
-        return Runtime.isDirectory(path)
+    /// Whether a directory is at the path, or what a link there leads to is
+    /// one.
+    public static fn exists(_ path: some PathLike) -> Bool {
+        if let metadata = try? FileMetadata.of(path.filePath, followLinks: true) {
+            return metadata.isDirectory
+        }
+        return false
     }
 
-    /// Makes the directory; its parent must be there already.
-    public static fn create(_ path: String) throws(IoError) {
-        if !Runtime.makeDirectory(path) {
-            throw IoError.Failed(path: path)
+    /// Makes the directory. Unless 'recursive', its parent must be there
+    /// already and it must not; else every directory of the path that is
+    /// not there is made. The permissions are less the process's umask.
+    ///
+    /// ```sable
+    /// let temp = try! Temp.directory()
+    /// try! Directory.create(temp.path.appending("a/b/c"), recursive: true)
+    /// assert(Directory.exists(temp.path.appending("a/b/c")))
+    /// ```
+    public static fn create(_ path: some PathLike, recursive: Bool = false, permissions: FilePermissions = FilePermissions(mode: 0o777)) throws(IoError) {
+        let wanted = path.filePath
+        if recursive {
+            try Directory.createAll(wanted, permissions.mode)
+        } else if !Runtime.createDirectory(try wanted.given(), permissions.mode) {
+            throw IoError.lastFileError(Path.text(wanted))
         }
     }
 
-    /// The names of what the directory holds, sorted.
-    public static fn list(_ path: String) throws(IoError) -> String[>..] {
-        if let names = Runtime.listDirectory(path) {
-            return names
+    static fn createAll(_ path: FilePath, _ mode: Int) throws(IoError) {
+        if Runtime.createDirectory(try path.given(), mode) {
+            return
         }
-        if !Runtime.fileExists(path) {
-            throw IoError.NotFound(path: path)
+        let error = IoError.lastFileError(Path.text(path))
+        // There already, whatever the system says of making it: the root.
+        if Directory.exists(path) {
+            return
         }
-        throw IoError.Failed(path: path)
+        match error {
+            case .NotFound(_) => {
+                if let parent = path.parent {
+                    if !parent.isEmpty && parent != path {
+                        try Directory.createAll(parent, mode)
+                        // Another program may have made it meanwhile.
+                        if Runtime.createDirectory(path.systemString, mode) || Directory.exists(path) {
+                            return
+                        }
+                        throw IoError.lastFileError(Path.text(path))
+                    }
+                }
+                throw error
+            }
+            case _ => throw error
+        }
     }
 
-    /// Removes the directory, which must be empty.
-    public static fn remove(_ path: String) throws(IoError) {
-        if !Runtime.isDirectory(path) {
-            throw IoError.NotFound(path: path)
+    /// Removes the directory: an empty one, or, when 'recursive', with all
+    /// in it.
+    ///
+    /// Nothing outside the directory is removed: links, and Windows'
+    /// junctions, are removed and not followed, whatever another program
+    /// puts in the directory meanwhile. A path that is empty, a root, ends in
+    /// `.` or `..`, or is itself a link is refused (`.InvalidInput`, and
+    /// `.NotADirectory` for the link). When something cannot be removed it
+    /// throws there, and what was removed before is gone.
+    ///
+    /// ```sable
+    /// let temp = try! Temp.directory()
+    /// let path = temp.path.appending("old")
+    /// try! Directory.create(path)
+    /// try! File.write(path.appending("a.txt"), "a")
+    /// do {
+    ///     try Directory.remove(path)
+    ///     fail("it is not empty")
+    /// } catch {
+    ///     assert(Directory.exists(path))
+    /// }
+    /// try! Directory.remove(path, recursive: true)
+    /// assert(!Directory.exists(path))
+    /// ```
+    public static fn remove(_ path: some PathLike, recursive: Bool = false) throws(IoError) {
+        let name = try path.filePath.named()
+        if !(recursive ? Runtime.removeTree(name) : Runtime.removePath(name, true)) {
+            throw IoError.lastFileError(Path.text(path.filePath))
         }
-        if !Runtime.removeFile(path) {
-            throw IoError.Failed(path: path)
+    }
+
+    /// What is in the directory, read as it is gone through, in no order.
+    ///
+    /// ```sable
+    /// let temp = try! Temp.directory()
+    /// try! File.write(temp.path.appending("a.txt"), "a")
+    /// do {
+    ///     for try entry in try Directory.entries(temp.path) {
+    ///         assert(entry.name == "a.txt" && entry.isFile)
+    ///     }
+    /// } catch {
+    ///     fail("could not read it")
+    /// }
+    /// ```
+    public static fn entries(_ path: some PathLike) throws(IoError) -> DirectoryEntries {
+        return try DirectoryEntries(path.filePath)
+    }
+
+    /// The names of what the directory holds, sorted by their bytes.
+    public static fn list(_ path: some PathLike) throws(IoError) -> String[>..] {
+        var found: DirEntry[>..] = []
+        for try entry in try Directory.entries(path) {
+            found.append(entry)
         }
+        found.sort(by: { compareBytes($0.path.bytes, $1.path.bytes) < 0 })
+        var names: String[>..] = []
+        for entry in found {
+            names.append(entry.name)
+        }
+        return names
+    }
+
+    /// What is in the directory and the directories in it, each directory
+    /// before what is in it.
+    ///
+    /// ```sable
+    /// let temp = try! Temp.directory()
+    /// try! Directory.create(temp.path.appending("a/b"), recursive: true)
+    /// var options = WalkOptions()
+    /// options.sorted = true
+    /// var names: String[>..] = []
+    /// do {
+    ///     for try entry in try Directory.walk(temp.path, options: options) {
+    ///         names.append("\(entry.name)\(entry.depth)")
+    ///     }
+    /// } catch {
+    ///     fail("could not read it")
+    /// }
+    /// assert(names == ["a1", "b2"])
+    /// ```
+    public static fn walk(_ path: some PathLike, options: WalkOptions = WalkOptions()) throws(IoError) -> DirectoryWalk {
+        return try Directory.walk(path.filePath, options, none)
+    }
+
+    /// What is in the directory, and the directories in it, whose path from
+    /// it the pattern matches (`Glob`). Directories nothing in which could
+    /// match are not read.
+    ///
+    /// ```sable
+    /// let temp = try! Temp.directory()
+    /// try! File.write(temp.path.appending("a.sb"), "")
+    /// try! File.write(temp.path.appending("b.txt"), "")
+    /// do {
+    ///     for try entry in try Directory.glob(temp.path, "**/*.sb") {
+    ///         assert(entry.name == "a.sb")
+    ///     }
+    /// } catch {
+    ///     fail("could not read it")
+    /// }
+    /// ```
+    public static fn glob(_ path: some PathLike, _ pattern: String, options: WalkOptions = WalkOptions()) throws(IoError) -> DirectoryWalk {
+        return try Directory.walk(path.filePath, options, try Glob(pattern))
+    }
+
+    static fn walk(_ path: FilePath, _ options: WalkOptions, _ glob: Glob?) throws(IoError) -> DirectoryWalk {
+        if !(try FileMetadata.of(path, followLinks: true)).isDirectory {
+            throw IoError.NotADirectory(path: Path.text(path))
+        }
+        return DirectoryWalk { root: path, options: options, glob: glob }
+    }
+
+    /// The directory copied with all in it, to where nothing is: its files
+    /// as `File.copy` copies them, its links as links. What is neither a
+    /// file, a directory nor a link is an error, and so is a copy into the
+    /// directory itself.
+    ///
+    /// ```sable
+    /// let temp = try! Temp.directory()
+    /// let from = temp.path.appending("from")
+    /// try! Directory.create(from.appending("a"), recursive: true)
+    /// try! File.write(from.appending("a/b.txt"), "b")
+    /// try! Directory.copy(from: from, to: temp.path.appending("to"))
+    /// assert(try! File.read(temp.path.appending("to/a/b.txt")) == "b")
+    /// ```
+    public static fn copy<Source: PathLike, Target: PathLike>(from source: Source, to target: Target) throws(IoError) {
+        let from = source.filePath
+        let to = target.filePath
+        let whole = try FileMetadata.of(from, followLinks: true)
+        if !whole.isDirectory {
+            throw IoError.NotADirectory(path: Path.text(from))
+        }
+        // Writable while it is written in, whatever it is to be.
+        try Directory.create(to, permissions: whole.permissions.writable())
+        let inside = try to.canonical()
+        var above: FilePath? = inside
+        let itself = try from.canonical()
+        while let directory = above {
+            if directory == itself {
+                try Directory.remove(to)
+                throw IoError.InvalidInput(path: Path.text(to))
+            }
+            above = directory.parent
+        }
+        try Directory.copyInside(from, to)
+        try Directory.setCopied(to, whole.permissions)
+    }
+
+    static fn copyInside(_ from: FilePath, _ to: FilePath) throws(IoError) {
+        for try entry in try Directory.entries(from) {
+            let copied = to.inside(entry.path.lastComponent!.bytes)
+            match entry.kind {
+                case .File         => try File.copy(from: entry.path, to: copied, overwrite: false)
+                case .SymbolicLink => try File.createSymlink(at: copied, to: try File.readLink(entry.path))
+                case .Directory => {
+                    let permissions = (try entry.metadata()).permissions
+                    try Directory.create(copied, permissions: permissions.writable())
+                    try Directory.copyInside(entry.path, copied)
+                    try Directory.setCopied(copied, permissions)
+                }
+                case _ => throw IoError.InvalidInput(path: Path.text(entry.path))
+            }
+        }
+    }
+
+    // A directory of another's permissions, once it is written in; WASI has none.
+    static fn setCopied(_ path: FilePath, _ permissions: FilePermissions) throws(IoError) {
+        do {
+            try File.setPermissions(path, permissions)
+        } catch IoError.Unsupported(_) { }
     }
 }

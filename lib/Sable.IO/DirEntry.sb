@@ -1,0 +1,31 @@
+module Sable.IO
+
+/// Something in a directory, as `Directory.entries`, `Directory.walk` and
+/// `Directory.glob` find it: its name and what it is, which the directory
+/// says, so that nothing more is asked of the system.
+public struct DirEntry {
+    /// The directory's path, and the name in it.
+    public let path: FilePath
+    /// What it is: a link is one, whatever it leads to.
+    public let kind: FileKind
+    /// How far below the directory gone through: 1 for what is in it.
+    public let depth: Int
+
+    /// Its name, each ill-formed sequence made U+FFFD; its bytes are in `path`.
+    public var name: String => path.fileName!
+
+    /// Whether it is an ordinary file.
+    public var isFile: Bool => kind == .File
+
+    /// Whether it is a directory.
+    public var isDirectory: Bool => kind == .Directory
+
+    /// Whether it is a symbolic link.
+    public var isSymlink: Bool => kind == .SymbolicLink
+
+    /// Its length, times and permissions, asked of the system now: a
+    /// link's own unless followed.
+    public fn metadata(followLinks: Bool = false) throws(IoError) -> FileMetadata {
+        return try FileMetadata.of(path, followLinks: followLinks)
+    }
+}

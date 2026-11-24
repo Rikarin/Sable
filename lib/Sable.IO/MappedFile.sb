@@ -40,12 +40,7 @@ public final class MappedFile {
 
     /// The file at the path mapped whole, as the mode says. A mapping made
     /// to be written needs the file opened to write it.
-    public static fn open(_ path: String, mode: MapMode = .ReadOnly) throws(IoError) -> MappedFile {
-        return try MappedFile.open(FilePath(path), mode: mode)
-    }
-
-    /// The file at the path mapped whole, as the mode says.
-    public static fn open(_ path: FilePath, mode: MapMode = .ReadOnly) throws(IoError) -> MappedFile {
+    public static fn open(_ path: some PathLike, mode: MapMode = .ReadOnly) throws(IoError) -> MappedFile {
         var options = OpenOptions.reading
         options.write = mode == .ReadWrite
         let mapping = MappedFile(file: try File.open(path, options: options), mode: mode)

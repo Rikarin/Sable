@@ -453,6 +453,7 @@ static bool random_bytes(void *buffer, size_t length) {
 // ---- File handles ---------------------------------------------------------
 
 #include "platform_files_posix.c"
+#include "platform_fs_posix.c"
 
 // ---- Starting programs, and signals ----------------------------------------
 
@@ -531,4 +532,29 @@ static void signal_let_go(int signal) {
 static bool signal_raise(int signal) {
     (void)signal;
     return false;
+}
+
+// ---- Watching files ----------------------------------------------------------
+
+static void *watch_open(void *watch, const char *name, bool recursive, FileError *error) {
+    (void)watch;
+    (void)name;
+    (void)recursive;
+    error->kind = FILE_ERROR_UNSUPPORTED;
+    error->code = ENOTSUP;
+    return NULL;
+}
+
+static PlatformSocket watch_descriptor(void *state) {
+    (void)state;
+    return -1;
+}
+
+static bool watch_read(void *state) {
+    (void)state;
+    return false;
+}
+
+static void watch_close(void *state) {
+    (void)state;
 }

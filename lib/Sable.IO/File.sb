@@ -1,12 +1,15 @@
 module Sable.IO
 
 import Sable.Text
+import Sable.Time
 
 // Files, directories, paths and the standard streams (docs/04 §4.3), written
 // in Sable over the runtime's calls (Sable.Core's Runtime). Whole files are
 // read and written through a FileHandle, as anything else that opens one is.
 
-/// Files by path: opened as handles, or read and written whole.
+/// Files by path: opened as handles, read and written whole, copied, moved,
+/// linked and asked about. A path is a String or a FilePath, whose bytes are
+/// given to the system as they are, UTF-8 or not.
 public struct File {
     /// The file opened as the options say: to read, unless they say more.
     ///
@@ -17,19 +20,10 @@ public struct File {
     /// assert(try! lines.read(upTo: 3) == [0x6F, 0x6E, 0x65])
     /// try! File.remove(path)
     /// ```
-    public static fn open(_ path: String, options: OpenOptions = .reading) throws(IoError) -> FileHandle {
-        let handle = Runtime.fileOpen(path, options.flags, options.permissions)
-        if handle == -1 {
-            throw IoError.lastFileError(path)
-        }
-        return FileHandle(handle: handle, path: path, owned: true)
-    }
-
-    /// The file at the path opened as the options say, the path's bytes
-    /// given to the system as they are, UTF-8 or not.
-    public static fn open(_ path: FilePath, options: OpenOptions = .reading) throws(IoError) -> FileHandle {
-        let text = "\(path)"
-        let handle = Runtime.fileOpen(path.systemString, options.flags, options.permissions)
+    public static fn open(_ path: some PathLike, options: OpenOptions = .reading) throws(IoError) -> FileHandle {
+        let file = path.filePath
+        let text = Path.text(file)
+        let handle = Runtime.fileOpen(try file.given(), options.flags, options.permissions)
         if handle == -1 {
             throw IoError.lastFileError(text)
         }
@@ -37,7 +31,7 @@ public struct File {
     }
 
     /// Every byte of the file.
-    public static fn readBytes(_ path: String) throws(IoError) -> U8[>..] {
+    public static fn readBytes(_ path: some PathLike) throws(IoError) -> U8[>..] {
         let file = try File.open(path)
         // Read at its length at once, then on to the end in case it grew.
         let size = try file.metadata().size
@@ -53,12 +47,12 @@ public struct File {
 
     /// The file's contents as UTF-8 text, each ill-formed sequence made
     /// U+FFFD.
-    public static fn read(_ path: String) throws(IoError) -> String {
+    public static fn read(_ path: some PathLike) throws(IoError) -> String {
         return String.fromUtf8Lossy(try File.readBytes(path))
     }
 
     /// The file's lines, without their endings; a last empty line is not one.
-    public static fn readLines(_ path: String) throws(IoError) -> String[>..] {
+    public static fn readLines(_ path: some PathLike) throws(IoError) -> String[>..] {
         var lines: String[>..] = []
         for try line in try File.lines(path) {
             lines.append(line)
@@ -83,12 +77,12 @@ public struct File {
     /// assert(count == 2)
     /// try! File.remove(path)
     /// ```
-    public static fn lines(_ path: String) throws(IoError) -> LineSequence<FileHandle> {
+    public static fn lines(_ path: some PathLike) throws(IoError) -> LineSequence<FileHandle> {
         return BufferedReader(try File.open(path)).lines()
     }
 
     /// The bytes written as the whole file, made if it is not there.
-    public static fn writeBytes(_ path: String, _ bytes: U8[:]) throws(IoError) {
+    public static fn writeBytes(_ path: some PathLike, _ bytes: U8[:]) throws(IoError) {
         let file = try File.open(path, options: .writing)
         try file.write(bytes)
         file.close()
@@ -96,41 +90,195 @@ public struct File {
 
     /// The bytes added at the end of the file, made if it is not there, in
     /// one write that other processes appending at once cannot split.
-    public static fn appendBytes(_ path: String, _ bytes: U8[:]) throws(IoError) {
+    public static fn appendBytes(_ path: some PathLike, _ bytes: U8[:]) throws(IoError) {
         let file = try File.open(path, options: .appending)
         try file.write(bytes)
         file.close()
     }
 
     /// Replaces the file's contents, making it if it is not there.
-    public static fn write(_ path: String, _ text: String) throws(IoError) {
+    public static fn write(_ path: some PathLike, _ text: String) throws(IoError) {
         try File.writeBytes(path, text.utf8Bytes())
     }
 
     /// Adds to the end of the file, making it if it is not there.
-    public static fn append(_ path: String, _ text: String) throws(IoError) {
+    public static fn append(_ path: some PathLike, _ text: String) throws(IoError) {
         try File.appendBytes(path, text.utf8Bytes())
     }
 
-    /// The file copied to another path, one there replaced, at the
-    /// system's fastest: a clone on APFS, copy_file_range on Linux,
-    /// CopyFileW on Windows.
-    public static fn copy(from source: String, to target: String) throws(IoError) {
-        if !Runtime.fileCopy(source, target) {
-            throw IoError.lastFileError(source)
+    /// The file copied to another path with its permissions, at the
+    /// system's fastest: a clone on APFS, copy_file_range on Linux (which
+    /// clones where it can), CopyFileEx on Windows. A file there is written
+    /// over, or, unless 'overwrite', an error. One copied to itself is an
+    /// error, and left as it was.
+    ///
+    /// ```sable
+    /// let temp = try! Temp.directory()
+    /// let path = temp.path.appending("a.txt")
+    /// try! File.write(path, "a")
+    /// try! File.copy(from: path, to: temp.path.appending("b.txt"))
+    /// assert(try! File.read(temp.path.appending("b.txt")) == "a")
+    /// ```
+    public static fn copy<Source: PathLike, Target: PathLike>(from source: Source, to target: Target, overwrite: Bool = true) throws(IoError) {
+        let from = source.filePath
+        if !Runtime.fileCopy(try from.given(), try target.filePath.named(), overwrite) {
+            throw IoError.lastFileError(Path.text(from))
         }
     }
 
-    public static fn exists(_ path: String) -> Bool {
-        return Runtime.fileExists(path) && !Runtime.isDirectory(path)
+    /// The file, link or directory renamed in one step: what is at the new
+    /// path is replaced (a directory only by a directory, and only an empty
+    /// one; on Windows none), or, unless 'overwrite', is an error. Both paths
+    /// must be on one file system: `move` goes between them.
+    public static fn rename<Source: PathLike, Target: PathLike>(from source: Source, to target: Target, overwrite: Bool = true) throws(IoError) {
+        let from = source.filePath
+        if !Runtime.renamePath(try from.named(), try target.filePath.named(), overwrite) {
+            throw IoError.lastFileError(Path.text(from))
+        }
     }
 
-    public static fn remove(_ path: String) throws(IoError) {
-        if !File.exists(path) {
-            throw IoError.NotFound(path: path)
+    /// The file or link moved: renamed, or, to another file system, copied
+    /// beside where it is to be, renamed there, and then removed where it
+    /// was. A directory is moved within its file system alone.
+    ///
+    /// ```sable
+    /// let temp = try! Temp.directory()
+    /// let path = temp.path.appending("a.txt")
+    /// try! File.write(path, "a")
+    /// try! File.move(from: path, to: temp.path.appending("b.txt"))
+    /// assert(!File.exists(path) && File.exists(temp.path.appending("b.txt")))
+    /// ```
+    public static fn move<Source: PathLike, Target: PathLike>(from source: Source, to target: Target, overwrite: Bool = true) throws(IoError) {
+        let from = source.filePath
+        let to = target.filePath
+        do {
+            try File.rename(from: from, to: to, overwrite: overwrite)
+        } catch IoError.CrossesFileSystems(_) {
+            try File.moveByCopy(from, to, overwrite)
         }
-        if !Runtime.removeFile(path) {
-            throw IoError.Failed(path: path)
+    }
+
+    static fn moveByCopy(_ from: FilePath, _ to: FilePath, _ overwrite: Bool) throws(IoError) {
+        let metadata = try FileMetadata.of(from, followLinks: false)
+        let beside = Temp.path(".sable-move-", "", to.absolute().parent)
+        match metadata.kind {
+            case .File         => try File.copy(from: from, to: beside, overwrite: false)
+            case .SymbolicLink => try File.createSymlink(at: beside, to: try File.readLink(from))
+            case _             => throw IoError.CrossesFileSystems(path: Path.text(from))
+        }
+        do {
+            if metadata.kind == .File {
+                try File.setModified(beside, metadata.modified)
+            }
+            try File.rename(from: beside, to: to, overwrite: overwrite)
+        } catch {
+            Runtime.removePath(beside.systemString, false)
+            throw error
+        }
+        try File.remove(from)
+    }
+
+    /// What is at the path, its length, times and permissions: of what a
+    /// link there leads to, or, unless 'followLinks', the link's own.
+    public static fn metadata(_ path: some PathLike, followLinks: Bool = true) throws(IoError) -> FileMetadata {
+        return try FileMetadata.of(path.filePath, followLinks: followLinks)
+    }
+
+    /// Who may read, write and execute the file, set: that a link leads to,
+    /// too.
+    ///
+    /// ```sable
+    /// let file = try! Temp.file()
+    /// try! File.setPermissions(file.path, FilePermissions(mode: 0o444))
+    /// assert((try! File.metadata(file.path)).permissions.isReadOnly)
+    /// ```
+    public static fn setPermissions(_ path: some PathLike, _ permissions: FilePermissions) throws(IoError) {
+        if !Runtime.setPathPermissions(try path.filePath.given(), permissions.mode) {
+            throw IoError.lastFileError(Path.text(path.filePath))
+        }
+    }
+
+    /// When the file was last written, set: to what the file system keeps
+    /// of it (nanoseconds; on Windows hundreds of them).
+    ///
+    /// ```sable
+    /// let file = try! Temp.file()
+    /// try! File.setModified(file.path, UtcDateTime.fromUnix(1000000000))
+    /// assert((try! File.metadata(file.path)).modified == UtcDateTime.fromUnix(1000000000))
+    /// ```
+    public static fn setModified(_ path: some PathLike, _ time: UtcDateTime) throws(IoError) {
+        try File.setTime(path.filePath, 0, time)
+    }
+
+    /// When the file was last read, set.
+    public static fn setAccessed(_ path: some PathLike, _ time: UtcDateTime) throws(IoError) {
+        try File.setTime(path.filePath, 1, time)
+    }
+
+    static fn setTime(_ path: FilePath, _ which: Int, _ time: UtcDateTime) throws(IoError) {
+        if !Runtime.setPathTime(try path.given(), which, time.secondsSinceEpoch, time.nanosecond) {
+            throw IoError.lastFileError(Path.text(path))
+        }
+    }
+
+    /// A symbolic link made at the path, leading to the target, which need
+    /// not be there; a relative one is taken from the link's directory. On
+    /// Windows a link is to a file or to a directory, as the target is when
+    /// it is made, and making one needs a privilege, or developer mode.
+    ///
+    /// ```sable
+    /// let temp = try! Temp.directory()
+    /// try! File.write(temp.path.appending("a.txt"), "a")
+    /// #if os(windows)
+    /// #else
+    /// try! File.createSymlink(at: temp.path.appending("link"), to: "a.txt")
+    /// assert(try! File.readLink(temp.path.appending("link")) == FilePath("a.txt"))
+    /// assert(try! File.read(temp.path.appending("link")) == "a")
+    /// #endif
+    /// ```
+    public static fn createSymlink<Link: PathLike, Target: PathLike>(at path: Link, to target: Target) throws(IoError) {
+        let link = path.filePath
+        let to = target.filePath
+        let from = link.parent ?? FilePath("")
+        let directory = Directory.exists(from.isEmpty ? to : from.appending(to))
+        if !Runtime.linkPath(try to.given(), try link.named(), directory ? 2 : 1) {
+            throw IoError.lastFileError(Path.text(link))
+        }
+    }
+
+    /// Another name for the file, at the path: both are the file, which is
+    /// there until the last is removed.
+    public static fn createHardLink<Link: PathLike, Target: PathLike>(at path: Link, to target: Target) throws(IoError) {
+        if !Runtime.linkPath(try target.filePath.given(), try path.filePath.named(), 0) {
+            throw IoError.lastFileError(Path.text(path.filePath))
+        }
+    }
+
+    /// Where the symbolic link (or Windows' junction) at the path leads, as
+    /// it says it: one more link may be there, or nothing. `.InvalidInput`
+    /// for what is no link.
+    public static fn readLink(_ path: some PathLike) throws(IoError) -> FilePath {
+        let target = Runtime.readLink(try path.filePath.named())
+        if target.isEmpty {
+            throw IoError.lastFileError(Path.text(path.filePath))
+        }
+        return FilePath(bytes: target)
+    }
+
+    /// Whether something that is not a directory is at the path, or what a
+    /// link there leads to.
+    public static fn exists(_ path: some PathLike) -> Bool {
+        if let metadata = try? FileMetadata.of(path.filePath, followLinks: true) {
+            return !metadata.isDirectory
+        }
+        return false
+    }
+
+    /// Removes the file, or the link itself: a directory is removed by
+    /// `Directory.remove`.
+    public static fn remove(_ path: some PathLike) throws(IoError) {
+        if !Runtime.removePath(try path.filePath.named(), false) {
+            throw IoError.lastFileError(Path.text(path.filePath))
         }
     }
 }

@@ -432,16 +432,20 @@ bool sable_file_set_length(int64_t file, int64_t length) {
     return file_set_length(file, length, file_error_cleared());
 }
 
-// One fact of the file: its size (0), when it was last written in
-// nanoseconds since 1970 (1), or what it is (2: 0 a file, 1 a directory,
-// 2 anything else); -1 on failure.
-int64_t sable_file_metadata(int64_t file, int64_t which) {
-    FileMetadata metadata;
-    if (!file_metadata(file, &metadata, file_error_cleared())) {
-        return -1;
-    }
+// What the file is, as the ten integers of platform.h's FileMetadata: none
+// on failure.
+static SableArray *metadata_array(const FileMetadata *metadata, const SableMetadata *type) {
+    SableArray *array = sable_alloc(type, (int64_t)sizeof(SableArray));
+    array->elements = buffer_alloc((int64_t)sizeof *metadata);
+    memcpy(array->elements, metadata, sizeof *metadata);
+    array->capacity = (int64_t)(sizeof *metadata / sizeof(int64_t));
+    array->count = array->capacity;
+    return array;
+}
 
-    return which == 0 ? metadata.size : which == 1 ? metadata.modified : metadata.kind;
+SableArray *sable_file_metadata(int64_t file, const SableMetadata *type) {
+    FileMetadata metadata;
+    return file_metadata(file, &metadata, file_error_cleared()) ? metadata_array(&metadata, type) : NULL;
 }
 
 bool sable_file_close(int64_t file) {
@@ -452,10 +456,10 @@ int64_t sable_file_standard(int64_t which) {
     return file_standard((int)which);
 }
 
-bool sable_file_copy(const SableString *from, const SableString *to) {
+bool sable_file_copy(const SableString *from, const SableString *to, bool replace) {
     char *source = c_string(from);
     char *target = c_string(to);
-    bool copied = file_copy(source, target, file_error_cleared());
+    bool copied = file_copy(source, target, replace, file_error_cleared());
     free(source);
     free(target);
     return copied;

@@ -1,0 +1,10 @@
+module Sable.IO
+
+/// What happened to a file being watched, as a FileWatcher tells of it.
+@derive(Equatable, Hashable, Debug)
+public struct FileEvent {
+    /// What happened.
+    public let kind: FileEventKind
+    /// To what: inside the path watched, or that path itself.
+    public let path: FilePath
+}

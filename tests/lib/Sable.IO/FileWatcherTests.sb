@@ -1,0 +1,132 @@
+module FileWatcherTests
+
+// FileWatcher, FileEvent and FileEventKind (Sable.IO).
+
+import Sable.Concurrency
+import Sable.IO
+import Sable.Testing
+import Sable.Time
+
+// The next event of the kind at the path, what comes before it passed over;
+// none in ten seconds.
+fn comes(_ watcher: FileWatcher, _ kind: FileEventKind, _ path: FilePath) async -> Bool {
+    let found = try? await withTimeout(Duration.seconds(10)) {
+        for await event in watcher {
+            if event.kind == kind && event.path == path {
+                return true
+            }
+        }
+        return false
+    }
+    return found ?? false
+}
+
+@test
+fn whatHappensInADirectoryComes() async throws {
+    let temp = try Temp.directory()
+    let watcher = try FileWatcher.watch(temp.path)
+    assert(watcher.path == temp.path)
+    let path = temp.path.appending("file")
+    try File.write(path, "one")
+    assert(await comes(watcher, .Created, path))
+    try await Task.sleep(for: Duration.milliseconds(100))
+    try File.append(path, "two")
+    assert(await comes(watcher, .Modified, path))
+    try File.rename(from: path, to: temp.path.appending("other"))
+    assert(await comes(watcher, .Removed, path))
+}
+
+@test
+fn aRenameIsARemovalAndAMaking() async throws {
+    let temp = try Temp.directory()
+    let path = temp.path.appending("file")
+    try File.write(path, "one")
+    let watcher = try FileWatcher.watch(temp.path)
+    try File.rename(from: path, to: temp.path.appending("other"))
+    assert(await comes(watcher, .Created, temp.path.appending("other")))
+    try File.remove(temp.path.appending("other"))
+    assert(await comes(watcher, .Removed, temp.path.appending("other")))
+}
+
+@test
+fn directoriesMadeLaterAreWatchedToo() async throws {
+    let temp = try Temp.directory()
+    try Directory.create(temp.path.appending("there"))
+    let watcher = try FileWatcher.watch(temp.path)
+    try File.write(temp.path.appending("there/a"), "a")
+    assert(await comes(watcher, .Created, temp.path.appending("there/a")))
+    try Directory.create(temp.path.appending("new/deep"), recursive: true)
+    try File.write(temp.path.appending("new/deep/b"), "b")
+    assert(await comes(watcher, .Created, temp.path.appending("new/deep/b")))
+    try Directory.remove(temp.path.appending("new"), recursive: true)
+    assert(await comes(watcher, .Removed, temp.path.appending("new")))
+}
+
+@test
+fn aDirectoryAloneIsWatchedAlone() async throws {
+    let temp = try Temp.directory()
+    try Directory.create(temp.path.appending("inside"))
+    let watcher = try FileWatcher.watch(temp.path, recursive: false)
+    try File.write(temp.path.appending("inside/a"), "a")
+    try File.write(temp.path.appending("b"), "b")
+    var iterator = watcher.makeAsyncIterator()
+    while true {
+        let event = (await iterator.next())!
+        assert(event.path != temp.path.appending("inside/a"))
+        if event.path == temp.path.appending("b") {
+            break
+        }
+    }
+}
+
+@test
+fn aFileIsWatched() async throws {
+    let temp = try Temp.directory()
+    let path = temp.path.appending("file")
+    try File.write(path, "one")
+    let watcher = try FileWatcher.watch(path)
+    try File.write(temp.path.appending("another"), "x")
+    try File.append(path, "two")
+    assert(await comes(watcher, .Modified, path))
+    try File.remove(path)
+    assert(await comes(watcher, .Removed, path))
+}
+
+@test
+fn aTaskWaitingIsCancelled() async throws {
+    let temp = try Temp.directory()
+    let watcher = try FileWatcher.watch(temp.path)
+    let waiting = Task.spawn { () -> Bool in
+        for await event in watcher {
+            if event.path.fileName == "never" {
+                return false
+            }
+        }
+        return true
+    }
+    try? await Task.sleep(for: Duration.milliseconds(30))
+    waiting.cancel()
+    assert(await waiting.value)
+}
+
+@test
+fn nothingIsNotWatched() throws {
+    let temp = try Temp.directory()
+    do {
+        let _ = try FileWatcher.watch(temp.path.appending("missing"))
+        fail("it is not there")
+    } catch IoError.NotFound(_) { }
+}
+
+@test
+fn twoWatchersBothHear() async throws {
+    let temp = try Temp.directory()
+    let one = try FileWatcher.watch(temp.path)
+    let two = try FileWatcher.watch(temp.path)
+    let path = temp.path.appending("file")
+    try File.write(path, "x")
+    assert(await comes(one, .Created, path))
+    assert(await comes(two, .Created, path))
+    let event = FileEvent { kind: .Created, path: path }
+    assert(event == FileEvent { kind: .Created, path: path } && event != FileEvent { kind: .Rescan, path: path })
+}

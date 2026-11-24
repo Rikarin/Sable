@@ -182,7 +182,8 @@ fn readWholeFile(_ path: String) -> U8[>..]? {
     if handle < 0 {
         return none
     }
-    if Runtime.fileMetadata(handle, 2) != 0 {
+    let metadata = Runtime.fileMetadata(handle)
+    if metadata.isEmpty || metadata[1] != 0 {
         Runtime.fileClose(handle)
         return none
     }

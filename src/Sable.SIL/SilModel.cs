@@ -2742,15 +2742,35 @@ public static class SilBuiltins {
         Add("file_seek", SilType.Int, SilType.Int, SilType.Int, SilType.Int);
         Add("file_sync", SilType.Bool, SilType.Int);
         Add("file_set_length", SilType.Bool, SilType.Int, SilType.Int);
-        Add("file_metadata", SilType.Int, SilType.Int, SilType.Int);
+        Add("file_metadata", new ArrayType(SilType.Int), SilType.Int);
         Add("file_close", SilType.Bool, SilType.Int);
         Add("file_standard", SilType.Int, SilType.Int);
-        Add("file_copy", SilType.Bool, SilType.String, SilType.String);
+        Add("file_copy", SilType.Bool, SilType.String, SilType.String, SilType.Bool);
         Add("file_canonical", SilType.String, SilType.String);
         Add("file_map", new ArrayType(SilType.U8), SilType.Int, SilType.Int, SilType.Int);
         Add("file_map_store", SilType.Bool, new ArrayType(SilType.U8), SilType.Int, new SliceType(SilType.U8));
         Add("file_map_flush", SilType.Bool, new ArrayType(SilType.U8), SilType.Int, SilType.Int);
         Add("file_map_advise", SilType.Unit, new ArrayType(SilType.U8), SilType.Int);
+
+        // The file system by path (runtime/fs.c), failing as a file handle's
+        // calls do; and files watched as they change (runtime/watch.c): a
+        // watch, what to wait for ('task_io_wait') when none is to be taken.
+        Add("fs_metadata", new ArrayType(SilType.Int), SilType.String, SilType.Bool);
+        Add("fs_set_permissions", SilType.Bool, SilType.String, SilType.Int);
+        Add("fs_set_time", SilType.Bool, SilType.String, SilType.Int, SilType.Int, SilType.Int);
+        Add("fs_make_directory", SilType.Bool, SilType.String, SilType.Int);
+        Add("fs_remove", SilType.Bool, SilType.String, SilType.Bool);
+        Add("fs_remove_tree", SilType.Bool, SilType.String);
+        Add("fs_rename", SilType.Bool, SilType.String, SilType.String, SilType.Bool);
+        Add("fs_link", SilType.Bool, SilType.String, SilType.String, SilType.Int);
+        Add("fs_read_link", new ArrayType(SilType.U8), SilType.String);
+        Add("fs_open_directory", SilType.Int, SilType.String);
+        Add("fs_next_entry", new ArrayType(SilType.U8), SilType.Int);
+        Add("fs_close_directory", SilType.Unit, SilType.Int);
+        Add("fs_watch", SilType.Int, SilType.String, SilType.Bool);
+        Add("fs_watch_event", SilType.Int, SilType.Int);
+        Add("fs_watch_take", new ArrayType(SilType.U8), SilType.Int);
+        Add("fs_unwatch", SilType.Unit, SilType.Int);
         Add("time_monotonic", SilType.Int);
         Add("time_wall_clock", SilType.Int);
         Add("time_sleep", SilType.Unit, SilType.Int);

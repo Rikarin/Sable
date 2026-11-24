@@ -1,0 +1,37 @@
+module Sable.IO
+
+/// A directory made by `Temp.directory()`, removed with all in it as it
+/// goes: when nothing holds it any more, and not when the program ends with
+/// it held, or is ended. What is in it is removed as
+/// `Directory.remove(_:recursive:)` does, no link followed.
+public final class TempDirectory {
+    /// Where it is.
+    public let path: FilePath
+    var held: Bool
+
+    init(path: FilePath) {
+        self.path = path
+        held = true
+    }
+
+    deinit {
+        if held {
+            Runtime.removeTree(path.systemString)
+        }
+    }
+
+    /// Removed with all in it now, saying if it could not be.
+    public fn remove() throws(IoError) {
+        if held {
+            held = false
+            try Directory.remove(path, recursive: true)
+        }
+    }
+
+    /// No longer removed as it goes: its path.
+    @discardable
+    public fn keep() -> FilePath {
+        held = false
+        return path
+    }
+}

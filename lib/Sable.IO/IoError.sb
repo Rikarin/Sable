@@ -27,6 +27,16 @@ public union IoError: Error {
     /// a handle already closed.
     InvalidInput(path: String),
 
+    /// A directory that holds something, where an empty one was wanted.
+    DirectoryNotEmpty(path: String),
+
+    /// What is at the path is not a directory, where one was wanted.
+    NotADirectory(path: String),
+
+    /// The two paths are on different file systems, where one step cannot
+    /// reach from the one to the other.
+    CrossesFileSystems(path: String),
+
     /// Any other failure the system reports, with its own code: errno on
     /// POSIX, GetLastError on Windows.
     Os(path: String, code: Int),
@@ -52,7 +62,7 @@ public union IoError: Error {
     /// The message has more bytes than one can.
     MessageTooLong,
 
-    /// The system has no such thing.
+    /// The system, or the file system, has no such thing.
     Unsupported(what: String),
 
     /// The connection failed, or was closed, while it was used.
@@ -71,6 +81,9 @@ public union IoError: Error {
             case .Interrupted                    => "the call was interrupted"
             case .UnexpectedEof                  => "the stream ended before what was needed"
             case .InvalidInput(let path)         => "'\(path)' was given something the system does not take"
+            case .DirectoryNotEmpty(let path)    => "'\(path)' is not empty"
+            case .NotADirectory(let path)        => "'\(path)' is not a directory"
+            case .CrossesFileSystems(let path)   => "'\(path)' is on another file system"
             case .Os(let path, let code)         => "'\(path)' failed with the system's error \(code)"
             case .Failed(let path)               => "'\(path)' could not be read, written or changed"
             case .Unreachable(let address)       => "'\(address)' could not be reached"
@@ -79,7 +92,7 @@ public union IoError: Error {
             case .HostNotFound(let host)         => "'\(host)' has no address"
             case .TimedOut                       => "it took too long"
             case .MessageTooLong                 => "the message is too long"
-            case .Unsupported(let what)          => "the system does not support '\(what)'"
+            case .Unsupported(let what)          => "'\(what)' is not supported here"
             case .Disconnected                   => "the connection failed or was closed"
             case .Cancelled                      => "the task was cancelled while it waited"
         }
@@ -90,13 +103,17 @@ public union IoError: Error {
     /// kind fits.
     static fn lastFileError(_ path: String) -> IoError {
         return match Runtime.fileError() {
-            case 1 => .NotFound(path: path)
-            case 2 => .PermissionDenied(path: path)
-            case 3 => .AlreadyExists(path: path)
-            case 4 => .IsDirectory(path: path)
-            case 5 => .Interrupted
-            case 6 => .InvalidInput(path: path)
-            case _ => .Os(path: path, code: Runtime.fileErrorCode())
+            case 1  => .NotFound(path: path)
+            case 2  => .PermissionDenied(path: path)
+            case 3  => .AlreadyExists(path: path)
+            case 4  => .IsDirectory(path: path)
+            case 5  => .Interrupted
+            case 6  => .InvalidInput(path: path)
+            case 8  => .DirectoryNotEmpty(path: path)
+            case 9  => .NotADirectory(path: path)
+            case 10 => .CrossesFileSystems(path: path)
+            case 11 => .Unsupported(what: path)
+            case _  => .Os(path: path, code: Runtime.fileErrorCode())
         }
     }
 }

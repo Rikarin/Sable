@@ -1,0 +1,103 @@
+module GlobTests
+
+// Glob (Sable.IO): what each part of a pattern matches.
+
+import Sable.IO
+import Sable.Testing
+
+fn check(_ pattern: String, _ matching: String[>..], _ not: String[>..]) throws {
+    let glob = try Glob(pattern)
+    assertEqual(glob.pattern, pattern)
+    for path in matching {
+        assert(glob.matches(path), "'\(pattern)' matches '\(path)'")
+    }
+    for path in not {
+        assert(!glob.matches(path), "'\(pattern)' does not match '\(path)'")
+    }
+}
+
+@test
+fn aStarIsAnyRunInAName() throws {
+    try check("*.sb", ["a.sb", ".sb", "a.b.sb"], ["a.sc", "a.sb.", "d/a.sb"])
+    try check("a*b*c", ["abc", "axxbyyc", "abbc", "abcbc"], ["ab", "abd", "xabc", "ac"])
+    try check("*", ["a", ".hidden"], ["a/b"])
+    try check("**.sb", ["a.sb"], ["d/a.sb"])
+    try check("a*", ["a", "ab"], ["b"])
+    // No more than the name's length times the pattern's.
+    try check("*a*a*a*a*a*a*a*a*a*a*b", [], ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
+}
+
+@test
+fn aQuestionMarkIsOneCharacter() throws {
+    try check("?.sb", ["a.sb", "é.sb"], [".sb", "ab.sb"])
+    try check("a??", ["abc"], ["ab", "abcd"])
+}
+
+@test
+fn aClassIsOneOfItsCharacters() throws {
+    try check("[abc]", ["a", "c"], ["d", "ab", ""])
+    try check("[a-cx-z]1", ["a1", "b1", "z1"], ["d1", "a2"])
+    try check("[!a-c]", ["d", "-"], ["a"])
+    try check("[^a]", ["b"], ["a"])
+    try check("[]a]", ["]", "a"], ["b"])
+    try check("[!]a]", ["b"], ["]", "a"])
+    try check("[a-]", ["a", "-"], ["b"])
+    try check("[a\\]b]", ["]", "a", "b"], ["\\"])
+    try check("[\\--1]", ["-", "0", "1"], ["2"])
+    try check("[{,}]", ["{", ","], ["a"])
+    try check("[z-a]", [], ["a", "m", "z"])
+}
+
+@test
+fn bracesAreEither() throws {
+    try check("*.{md,txt}", ["a.md", "a.txt"], ["a.mdx", "a."])
+    try check("{a,b{c,d}}e", ["ae", "bce", "bde"], ["be", "abe"])
+    try check("{src,tests/lib}/*", ["src/a", "tests/lib/a"], ["tests/a"])
+    try check("a{,b}", ["a", "ab"], ["b"])
+    try check("a}", ["a}"], ["a"])
+    try check("{a}", ["a"], ["b"])
+}
+
+@test
+fn twoStarsAreAnyDirectories() throws {
+    try check("**/*.sb", ["a.sb", "d/a.sb", "d/e/a.sb"], ["a.txt", "a.sb/x"])
+    try check("a/**/b", ["a/b", "a/x/b", "a/x/y/b"], ["a/xb", "b", "a/b/c"])
+    try check("a/**", ["a/b", "a/b/c"], ["a", "b"])
+    try check("**", ["a", "a/b"], [""])
+    try check("**/a/**/b/**", ["a/b/c", "x/a/y/b/z/w"], ["a/b", "b/a/c"])
+    try check("**/**/a", ["a", "x/y/a"], ["b"])
+}
+
+@test
+fn aBackslashMakesACharacterItself() throws {
+    try check("\\*", ["*"], ["a"])
+    try check("a\\{b\\}", ["a{b}"], ["ab"])
+    try check("\\[a]", ["[a]"], ["a"])
+    try check("\\?\\\\", ["?\\"], ["a\\"])
+}
+
+@test
+fn aPatternFromTheRootMatchesPathsFromIt() throws {
+    try check("/usr/*", ["/usr/lib"], ["usr/lib", "/usr", "/usr/lib/x"])
+    try check("usr/*", ["usr/lib", "./usr/lib", "usr//lib"], ["/usr/lib"])
+    try check("./a", ["a"], ["b"])
+    try check("../a", ["../a"], ["a"])
+    let glob = try Glob("**/*.TXT", caseSensitive: false)
+    assert(glob.matches(FilePath("a/b.txt")) && glob.matches("A.Txt"))
+    assert(!(try Glob("A")).matches("a"))
+}
+
+@test
+fn whatIsNoPatternIsAnError() {
+    for pattern in ["[a", "a[", "[!]", "{a", "{a,{b}", "[]", "{a,[}"] {
+        do {
+            let _ = try Glob(pattern)
+            fail("'\(pattern)' is a pattern")
+        } catch { }
+    }
+    // Two to the twelfth ways through it.
+    do {
+        let _ = try Glob("{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}")
+        fail("it has too many ways through it")
+    } catch { }
+}

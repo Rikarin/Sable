@@ -60,7 +60,7 @@ fn readingWritingSeekingAndPositions() throws {
     let metadata = try file.metadata()
     assertEqual(metadata.size, 6)
     assert(metadata.isFile && !metadata.isDirectory)
-    assert(metadata.modifiedNanoseconds > 0)
+    assert(metadata.modified.secondsSinceEpoch > 0)
     try file.setLength(2)
     assertEqual(try file.metadata().size, 2)
     try file.setLength(4)

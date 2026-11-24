@@ -178,10 +178,13 @@ public struct Runtime {
     @builtin("file_set_length")
     public static fn fileSetLength(_ file: Int, _ length: Int) -> Bool
 
-    /// 0 the size, 1 when last written (ns since 1970), 2 what it is (0 a
-    /// file, 1 a directory, 2 anything else); -1 on failure.
+    /// What it is: its size, kind (0 a file, 1 a directory, 2 a symbolic
+    /// link, 3 a FIFO, 4 a socket, 5 a character and 6 a block device, 7
+    /// anything else), mode bits; seconds since 1970 and the nanoseconds
+    /// after of when it was written, read and made, and whether the last is
+    /// known (1). None on failure.
     @builtin("file_metadata")
-    public static fn fileMetadata(_ file: Int, _ which: Int) -> Int
+    public static fn fileMetadata(_ file: Int) -> Int[>..]
 
     @builtin("file_close")
     public static fn fileClose(_ file: Int) -> Bool
@@ -191,7 +194,7 @@ public struct Runtime {
     public static fn fileStandard(_ which: Int) -> Int
 
     @builtin("file_copy")
-    public static fn fileCopy(_ source: String, _ target: String) -> Bool
+    public static fn fileCopy(_ source: String, _ target: String, _ replace: Bool) -> Bool
 
     /// The path made absolute, every link resolved; empty when nothing is
     /// there, fileError then saying why.
@@ -219,6 +222,72 @@ public struct Runtime {
     /// 3 soon, 4 not again soon), for the system to read ahead or let go.
     @builtin("file_map_advise")
     public static fn fileMapAdvise(_ mapped: U8[>..], _ advice: Int)
+
+    // ---- The file system ---------------------------------------------------
+    // By path, failing as a file handle's calls do ('fileError': 8 not
+    // empty, 9 not a directory, 10 across file systems, 11 not on this
+    // system). What Sable.IO's File, Directory, Temp and FileWatcher are
+    // written over.
+
+    /// What is at the path, or what a link there leads to: as 'fileMetadata'.
+    @builtin("fs_metadata")
+    public static fn pathMetadata(_ path: String, _ follow: Bool) -> Int[>..]
+
+    @builtin("fs_set_permissions")
+    public static fn setPathPermissions(_ path: String, _ permissions: Int) -> Bool
+
+    /// When it was last written (0) or read (1).
+    @builtin("fs_set_time")
+    public static fn setPathTime(_ path: String, _ which: Int, _ seconds: Int, _ nanoseconds: Int) -> Bool
+
+    @builtin("fs_make_directory")
+    public static fn createDirectory(_ path: String, _ permissions: Int) -> Bool
+
+    /// A file or a link itself, or an empty directory.
+    @builtin("fs_remove")
+    public static fn removePath(_ path: String, _ directory: Bool) -> Bool
+
+    /// A directory and all in it, no link followed.
+    @builtin("fs_remove_tree")
+    public static fn removeTree(_ path: String) -> Bool
+
+    @builtin("fs_rename")
+    public static fn renamePath(_ source: String, _ target: String, _ replace: Bool) -> Bool
+
+    /// A hard link (0), or a symbolic one to a file (1) or a directory (2).
+    @builtin("fs_link")
+    public static fn linkPath(_ target: String, _ path: String, _ kind: Int) -> Bool
+
+    @builtin("fs_read_link")
+    public static fn readLink(_ path: String) -> U8[>..]
+
+    /// A directory open to read its entries, or 0.
+    @builtin("fs_open_directory")
+    public static fn openDirectory(_ path: String) -> Int
+
+    /// The next entry: its kind (255 where the directory does not say) and
+    /// its name's bytes; none at the end, or on failure.
+    @builtin("fs_next_entry")
+    public static fn nextEntry(_ directory: Int) -> U8[>..]
+
+    @builtin("fs_close_directory")
+    public static fn closeDirectory(_ directory: Int)
+
+    /// The path watched: a handle, to be given back by 'unwatchPath', or 0.
+    @builtin("fs_watch")
+    public static fn watchPath(_ path: String, _ recursive: Bool) -> Int
+
+    /// What 'waitForSocket' waits for, for more to be taken.
+    @builtin("fs_watch_event")
+    public static fn watchEvent(_ watch: Int) -> Int
+
+    /// What happened next (1 made, 2 written, 3 removed, 4 to be looked at
+    /// again) and the bytes of where, inside the path watched; none for now.
+    @builtin("fs_watch_take")
+    public static fn takeWatched(_ watch: Int) -> U8[>..]
+
+    @builtin("fs_unwatch")
+    public static fn unwatchPath(_ watch: Int)
 
     @builtin("lock_new")
     public static fn lockNew() -> Int

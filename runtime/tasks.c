@@ -877,8 +877,9 @@ static void wake_sleepers(void) {
 // happens (a child ended, a signal came). A background event is one that
 // may never happen, and the program need not wait for: one the main task
 // waits for is waited for, but a program whose main has returned ends,
-// whatever other tasks still wait for one.
-enum { SOURCE_SOCKET, SOURCE_PIPE, SOURCE_EVENT, SOURCE_BACKGROUND };
+// whatever other tasks still wait for one. A watch is background too, but a
+// descriptor the reactor does watch: files changing (inotify).
+enum { SOURCE_SOCKET, SOURCE_PIPE, SOURCE_EVENT, SOURCE_BACKGROUND, SOURCE_WATCH };
 
 typedef struct IoSource {
     SpinLock lock;
@@ -1010,7 +1011,7 @@ static int64_t io_source_open(PlatformSocket socket, uint8_t kind, uint8_t ready
     source->waiter[0] = source->waiter[1] = NULL;
     int64_t handle = source_handle(source);
     spin_unlock(&source->lock);
-    bool watched = kind == SOURCE_SOCKET ? reactor_add(socket, source) : kind == SOURCE_PIPE ? pipe_watch(socket, source) : true;
+    bool watched = kind == SOURCE_SOCKET || kind == SOURCE_WATCH ? reactor_add(socket, source) : kind == SOURCE_PIPE ? pipe_watch(socket, source) : true;
     if (!watched) {
         spin_lock(&source->lock);
         io_source_retire(source);
@@ -1116,7 +1117,7 @@ static void io_source_close(int64_t handle) {
     SableTask *readers = io_take_waiters(source, 0);
     SableTask *writers = io_take_waiters(source, 1);
     spin_unlock(&source->lock);
-    if (kind == SOURCE_SOCKET) {
+    if (kind == SOURCE_SOCKET || kind == SOURCE_WATCH) {
         reactor_remove(socket);
     } else if (kind == SOURCE_PIPE) {
         pipe_unwatch(socket);
@@ -1258,7 +1259,7 @@ bool sable_task_io_wait(int64_t handle, bool writable) {
 static void io_wait_after_suspend(SableTask *task, IoSource *source) {
     int direction = task->io_direction;
     spin_lock(&source->lock);
-    task->io_background = source->kind == SOURCE_BACKGROUND;
+    task->io_background = source->kind == SOURCE_BACKGROUND || source->kind == SOURCE_WATCH;
     __atomic_fetch_add(task->io_background ? &background_waiting : &io_waiting, 1, __ATOMIC_SEQ_CST);
     bool go_on = (source->ready & (direction == 0 ? REACTOR_READABLE : REACTOR_WRITABLE)) != 0 || source->socket == -1
                  || source_handle(source) != task->io_handle;
@@ -2427,6 +2428,7 @@ static void drop_task(SableTask *task) {
 }
 
 static void signals_stop(void);
+static void watches_stop(void);
 
 // As the entry point returns: every task still to run, run, the sleepers
 // too; then every task still waiting, which nothing will ever wake, dropped.
@@ -2437,9 +2439,11 @@ void sable_tasks_drain(void) {
 
     main_loop(NULL);
 
-    // A signal may have come as the last task stopped: no more are told of,
+    // A signal may have come as the last task stopped, or a watched file
+    // changed: no more are told of,
     // and what the last woke runs, before any task waiting is dropped.
     signals_stop();
+    watches_stop();
     main_loop(NULL);
 
     spin_lock(&tree_lock);

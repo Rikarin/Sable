@@ -1,0 +1,94 @@
+module Sable.IO
+
+/// Files watched as they change, gone through with 'for await', without
+/// end, until the task going through it is cancelled: .NET's
+/// `FileSystemWatcher`, Rust's `notify`. Over FSEvents on macOS, inotify on
+/// Linux and ReadDirectoryChangesW on Windows; elsewhere `watch` throws
+/// `.Unsupported`.
+///
+/// What comes is enough to keep up with the files, and not a log: a rename
+/// is a `.Removed` and a `.Created`; changes close together may come as
+/// one; one may come twice, or of a change just before the watching began;
+/// a file replaced may be `.Modified` or `.Created`; a directory renamed to
+/// inside the path, or out of it, may come without what is in it. Links are
+/// not followed, but the path itself when it is one.
+///
+/// Watching lasts as long as the watcher is held. One task at a time may
+/// wait for the next event, and one waiting keeps no program going once its
+/// main has returned.
+///
+/// ```sable
+/// let directory = try! Temp.directory()
+/// let watcher = try! FileWatcher.watch(directory.path)
+/// try! File.write(directory.path.appending("new.txt"), "hello")
+/// for await event in watcher {
+///     assert(event.kind == .Created && event.path.fileName == "new.txt")
+///     break
+/// }
+/// ```
+@immutable
+public final class FileWatcher: AsyncSequence {
+    public alias Element = FileEvent
+    public alias Iter = FileWatcherIterator
+
+    let handle: Int
+    /// The path watched, as it was given.
+    public let path: FilePath
+
+    init(handle: Int, path: FilePath) {
+        self.handle = handle
+        self.path = path
+    }
+
+    deinit {
+        Runtime.unwatchPath(handle)
+    }
+
+    /// The file, or the directory and, unless not 'recursive', all the
+    /// directories in it, watched from now on.
+    public static fn watch(_ path: some PathLike, recursive: Bool = true) throws(IoError) -> FileWatcher {
+        let watched = path.filePath
+        let handle = Runtime.watchPath(try watched.given(), recursive)
+        if handle == 0 {
+            throw IoError.lastFileError(Path.text(watched))
+        }
+        return FileWatcher(handle: handle, path: watched)
+    }
+
+    /// What goes through the events: those not yet taken first.
+    public fn makeAsyncIterator() -> FileWatcherIterator {
+        return FileWatcherIterator(watcher: self)
+    }
+}
+
+/// Goes through what happens to files being watched.
+public struct FileWatcherIterator: AsyncIterator {
+    public alias Element = FileEvent
+
+    let watcher: FileWatcher
+
+    init(watcher: FileWatcher) {
+        self.watcher = watcher
+    }
+
+    /// The next event, waiting for it; none once the task is cancelled.
+    public mutating fn next() async -> FileEvent? {
+        while true {
+            let taken = Runtime.takeWatched(watcher.handle)
+            if !taken.isEmpty {
+                let kind: FileEventKind = match taken[0] {
+                    case 1 => .Created
+                    case 2 => .Modified
+                    case 3 => .Removed
+                    case _ => .Rescan
+                }
+                let path = taken.count == 1 ? watcher.path : watcher.path.inside(taken[1...])
+                return FileEvent { kind: kind, path: path }
+            }
+            if Task.isCancelled {
+                return none
+            }
+            await Runtime.waitForSocket(Runtime.watchEvent(watcher.handle), writable: false)
+        }
+    }
+}

@@ -1,0 +1,106 @@
+module TempTests
+
+// Temp, TempFile and TempDirectory (Sable.IO).
+
+import Sable.IO
+import Sable.Testing
+
+@test
+fn aFileGoesAsItIsLetGo() throws {
+    var path = FilePath("")
+    do {
+        let file = try Temp.file(startingWith: "start-", endingWith: ".end")
+        path = file.path
+        assert(path.isAbsolute && File.exists(path))
+        assert(path.fileName!.hasPrefix("start-") && path.fileName!.hasSuffix(".end"))
+        try file.file.write([0x61, 0x62])
+        assertEqual(try File.read(path), "ab")
+        #if os(windows)
+        #else
+        assertEqual((try File.metadata(path)).permissions.mode, 0o600)
+        #endif
+    }
+    assert(!File.exists(path))
+}
+
+@test
+fn aFileIsRemovedKeptOrRenamed() throws {
+    let temp = try Temp.directory()
+    let removed = try Temp.file(in: temp.path)
+    try removed.remove()
+    try removed.remove()
+    assert(!File.exists(removed.path) && !removed.file.isOpen)
+
+    var kept = FilePath("")
+    do {
+        kept = (try Temp.file(in: temp.path)).keep()
+    }
+    assert(File.exists(kept))
+
+    let target = temp.path.appending("settings")
+    try File.write(target, "old")
+    do {
+        let file = try Temp.file(in: temp.path)
+        try file.file.write("new".utf8Bytes())
+        try file.persist(to: target)
+        do {
+            try file.persist(to: target)
+            fail("it was renamed already")
+        } catch IoError.InvalidInput(_) { }
+    }
+    assertEqual(try File.read(target), "new")
+    assertEqual(try Directory.list(temp.path).count, 2)
+}
+
+@test
+fn aDirectoryGoesWithAllInIt() throws {
+    var path = FilePath("")
+    do {
+        let directory = try Temp.directory(startingWith: "start-")
+        path = directory.path
+        assert(Directory.exists(path) && path.fileName!.hasPrefix("start-"))
+        #if os(windows)
+        #else
+        assertEqual((try File.metadata(path)).permissions.mode, 0o700)
+        #endif
+        try Directory.create(path.appending("a/b"), recursive: true)
+        try File.write(path.appending("a/b/c"), "c")
+    }
+    assert(!Directory.exists(path))
+}
+
+@test
+fn aDirectoryIsRemovedOrKept() throws {
+    let temp = try Temp.directory()
+    let removed = try Temp.directory(in: temp.path)
+    try removed.remove()
+    try removed.remove()
+    assert(!Directory.exists(removed.path))
+    var kept = FilePath("")
+    do {
+        kept = (try Temp.directory(in: temp.path)).keep()
+    }
+    assert(Directory.exists(kept))
+}
+
+@test
+fn noTwoHaveOneName() throws {
+    let temp = try Temp.directory()
+    var files: TempFile[>..] = []
+    var i = 0
+    while i < 50 {
+        files.append(try Temp.file(in: temp.path))
+        i += 1
+    }
+    assertEqual(try Directory.list(temp.path).count, 50)
+    files = []
+    assertEqual(try Directory.list(temp.path).count, 0)
+    do {
+        let _ = try Temp.file(in: temp.path.appending("missing"))
+        fail("there is nowhere to make it")
+    } catch IoError.NotFound(_) { }
+    do {
+        let _ = try Temp.directory(in: temp.path.appending("missing"))
+        fail("there is nowhere to make it")
+    } catch IoError.NotFound(_) { }
+}

@@ -33,9 +33,15 @@ public sealed partial class SilInterpreter {
         try {
             return FileCall(name, operands);
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or ObjectDisposedException) {
+            if (e is FileSystemFailure failure) {
+                _fileError = failure.Kind;
+                _fileErrorCode = failure.Code;
+                return name is "file_metadata" ? null : false;
+            }
+
             Failed(e, name is "file_open" or "file_copy" or "file_canonical" ? PathFor(operands[0], SilAccess.Read) : null);
             return name switch {
-                "file_read" or "file_map" or "file_map_advise" => null,
+                "file_read" or "file_metadata" or "file_map" or "file_map_advise" => null,
                 "file_map_store" or "file_map_flush" => false,
                 "file_canonical" => Allocate(new HeapString("")),
                 "file_sync" or "file_set_length" or "file_close" or "file_copy" => false,
@@ -145,14 +151,8 @@ public sealed partial class SilInterpreter {
                 FileOf((long)operands[0]!).SetLength((long)operands[1]!);
                 return true;
 
-            case "file_metadata": {
-                var stream = FileOf((long)operands[0]!);
-                return (long)operands[1]! switch {
-                    0 => stream.Length,
-                    1 => (File.GetLastWriteTimeUtc(stream.Name) - DateTime.UnixEpoch).Ticks * 100,
-                    _ => 0L,
-                };
-            }
+            case "file_metadata":
+                return IntArray(Metadata(FileOf((long)operands[0]!)));
 
             case "file_close": {
                 var handle = (long)operands[0]!;
@@ -243,7 +243,7 @@ public sealed partial class SilInterpreter {
             case "file_copy": {
                 var source = PathFor(operands[0], SilAccess.Read);
                 var target = PathFor(operands[1], SilAccess.Write);
-                File.Copy(source, target, overwrite: true);
+                CopyFile(source, target, (bool)operands[2]!);
                 return true;
             }
 

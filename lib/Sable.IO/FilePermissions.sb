@@ -1,0 +1,65 @@
+module Sable.IO
+
+/// Who may read, write and execute a file: POSIX's mode bits. Windows has
+/// only a read-only attribute: a file with it reads as `0o444`, one without
+/// as `0o666`, and setting permissions that let no one write sets it.
+///
+/// ```sable
+/// let permissions = FilePermissions(mode: 0o750)
+/// assert("\(permissions)" == "rwxr-x---")
+/// assert(!permissions.isReadOnly && permissions.isExecutable)
+/// assert(permissions.readOnly().mode == 0o550)
+/// ```
+@derive(Equatable, Hashable)
+public struct FilePermissions {
+    /// The bits: read 4, write 2 and execute 1, for the owner, the group
+    /// and others, an octal digit each; above them set-user-ID 4,
+    /// set-group-ID 2 and sticky 1.
+    public let mode: Int
+
+    /// The bits' permissions.
+    public init(mode: Int) {
+        self.mode = mode & 0o7777
+    }
+
+    /// Whether no one may write.
+    public var isReadOnly: Bool => (mode & 0o222) == 0
+
+    /// Whether anyone may execute it, or go through it, a directory.
+    public var isExecutable: Bool => (mode & 0o111) != 0
+
+    /// The same, but that no one may write.
+    public fn readOnly() -> FilePermissions {
+        return FilePermissions(mode: mode & ~0o222)
+    }
+
+    /// The same, and the owner may write.
+    public fn writable() -> FilePermissions {
+        return FilePermissions(mode: mode | 0o200)
+    }
+
+    /// The same, and whoever may read may execute.
+    public fn executable() -> FilePermissions {
+        return FilePermissions(mode: mode | ((mode & 0o444) >> 2))
+    }
+}
+
+extension FilePermissions: Formattable {
+    /// As `ls` writes them: "rw-r--r--".
+    public fn format(_ spec: FormatSpec) -> String {
+        var text = ""
+        var bit = 8
+        while bit >= 0 {
+            let has = (mode & (1 << bit)) != 0
+            text = text + (!has ? "-" : bit % 3 == 2 ? "r" : bit % 3 == 1 ? "w" : "x")
+            bit -= 1
+        }
+        return spec.padded(text)
+    }
+}
+
+extension FilePermissions: Debug {
+    public fn debugDescription() -> String {
+        return "FilePermissions(\(self))"
+    }
+}

@@ -1,0 +1,57 @@
+module Sable.IO
+
+import Sable.Time
+
+/// What something in the file system is, how long it is, when it was made,
+/// read and written, and who may do so: Rust's `fs::Metadata`, .NET's
+/// `FileInfo`. As it was when asked: it does not change.
+///
+/// ```sable
+/// let file = try! Temp.file()
+/// try! File.write(file.path, "hello")
+/// let metadata = try! File.metadata(file.path)
+/// assert(metadata.isFile && metadata.size == 5)
+/// assert(metadata.modified >= UtcDateTime.fromUnix(0))
+/// ```
+public struct FileMetadata {
+    /// Its length in bytes. What a directory's is depends on the system.
+    public let size: Int
+    /// What it is.
+    public let kind: FileKind
+    /// When it was last written.
+    public let modified: UtcDateTime
+    /// When it was last read, as far as the system keeps it.
+    public let accessed: UtcDateTime
+    /// When it was made; none where the system does not keep it.
+    public let created: UtcDateTime?
+    /// Who may read, write and execute it.
+    public let permissions: FilePermissions
+
+    // From the runtime's integers (platform.h's FileMetadata).
+    init(parts: Int[>..]) {
+        size = parts[0]
+        kind = FileKind.of(parts[1])
+        permissions = FilePermissions(mode: parts[2])
+        modified = UtcDateTime { secondsSinceEpoch: parts[3], nanosecond: parts[4] }
+        accessed = UtcDateTime { secondsSinceEpoch: parts[5], nanosecond: parts[6] }
+        created = parts[9] != 0 ? UtcDateTime { secondsSinceEpoch: parts[7], nanosecond: parts[8] } : none
+    }
+
+    // What is at the path, or what a link there leads to.
+    static fn of(_ path: FilePath, followLinks: Bool) throws(IoError) -> FileMetadata {
+        let parts = Runtime.pathMetadata(try path.given(), followLinks)
+        if parts.isEmpty {
+            throw IoError.lastFileError(Path.text(path))
+        }
+        return FileMetadata(parts: parts)
+    }
+
+    /// Whether it is an ordinary file.
+    public var isFile: Bool => kind == .File
+
+    /// Whether it is a directory.
+    public var isDirectory: Bool => kind == .Directory
+
+    /// Whether it is a symbolic link: never, where links were followed.
+    public var isSymlink: Bool => kind == .SymbolicLink
+}

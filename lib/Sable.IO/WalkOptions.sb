@@ -1,0 +1,26 @@
+module Sable.IO
+
+/// How `Directory.walk` and `Directory.glob` go through a directory.
+///
+/// ```sable
+/// var options = WalkOptions()
+/// options.maxDepth = 2
+/// options.sorted = true
+/// assert(!options.followLinks)
+/// ```
+public struct WalkOptions {
+    /// Whether what a link to a directory leads to is gone through. One
+    /// that leads to a directory being gone through already is not.
+    public var followLinks: Bool = false
+    /// How many directories deep to go: 1 for what is in the first alone;
+    /// none for all.
+    public var maxDepth: Int? = none
+    /// Whether each directory's entries come in the order of their names'
+    /// bytes, as on every system alike.
+    public var sorted: Bool = false
+    /// Whether a directory that may not be read is passed over, rather than
+    /// throwing.
+    public var skipUnreadable: Bool = false
+
+    public init() { }
+}

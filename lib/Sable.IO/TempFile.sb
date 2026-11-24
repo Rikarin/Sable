@@ -1,0 +1,62 @@
+module Sable.IO
+
+/// A file made by `Temp.file()`, removed as it goes: when nothing holds it
+/// any more, and not when the program ends with it held, or is ended.
+public final class TempFile {
+    /// Where it is.
+    public let path: FilePath
+    /// The file, open to be read and written.
+    public let file: FileHandle
+    var held: Bool
+
+    init(path: FilePath, file: FileHandle) {
+        self.path = path
+        self.file = file
+        held = true
+    }
+
+    deinit {
+        if held {
+            file.close()
+            Runtime.removePath(path.systemString, false)
+        }
+    }
+
+    /// Closed and removed now, saying if it could not be.
+    public fn remove() throws(IoError) {
+        if held {
+            held = false
+            file.close()
+            try File.remove(path)
+        }
+    }
+
+    /// No longer removed as it goes: its path.
+    @discardable
+    public fn keep() -> FilePath {
+        held = false
+        return path
+    }
+
+    /// Closed, renamed to the path in one step, a file there replaced, and
+    /// no longer removed as it goes: how a file is written so that no one
+    /// sees half of it. Make it in the directory it is to be in, as no
+    /// rename crosses file systems.
+    ///
+    /// ```sable
+    /// let directory = try! Temp.directory()
+    /// let path = directory.path.appending("settings.txt")
+    /// let file = try! Temp.file(in: directory.path)
+    /// try! file.file.write("on".utf8Bytes())
+    /// try! file.persist(to: path)
+    /// assert(try! File.read(path) == "on")
+    /// ```
+    public fn persist(to target: some PathLike) throws(IoError) {
+        if !held {
+            throw IoError.InvalidInput(path: Path.text(path))
+        }
+        file.close()
+        try File.rename(from: path, to: target)
+        held = false
+    }
+}

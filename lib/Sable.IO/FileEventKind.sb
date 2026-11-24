@@ -1,0 +1,16 @@
+module Sable.IO
+
+/// What may happen to a file being watched.
+@derive(Equatable, Hashable, Debug)
+public enum FileEventKind {
+    /// Something is there that was not, or took the place of what was: made
+    /// there, or renamed to there.
+    Created
+    /// A file's contents changed.
+    Modified
+    /// It is there no more: removed, or renamed to somewhere else.
+    Removed
+    /// More happened, at or below the path, than was kept: what was known
+    /// of it is to be looked at again.
+    Rescan
+}

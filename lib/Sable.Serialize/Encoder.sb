@@ -1,0 +1,178 @@
+module Sable.Serialize
+
+/// Where a Serializable value writes itself: values (null, a Bool, an
+/// integer, a number, a string), and arrays and objects of them. This one
+/// writes JSON as it goes — no tree is built — compact, or indented when
+/// asked. What `@derive(Serializable)` calls, and what a hand-written
+/// conformance calls too.
+///
+/// ```sable
+/// let encoder = Encoder()
+/// encoder.beginObject()
+/// encoder.key("tags")
+/// encoder.beginArray()
+/// try! encoder.encodeString("a\"b")
+/// try! encoder.encodeInt(-3)
+/// encoder.endArray()
+/// encoder.endObject()
+/// assert(encoder.text() == "{\"tags\":[\"a\\\"b\",-3]}")
+/// ```
+public final class Encoder {
+    var written: U8[>..] = []
+    // For each array or object open: whether nothing is in it yet.
+    var empty: Bool[>..] = []
+    // Whether a key was just written, its value next.
+    var afterKey: Bool = false
+    let indent: Int
+
+    /// An encoder writing compact JSON, or JSON indented by that many spaces.
+    public init(indent: Int = 0) {
+        self.indent = indent
+    }
+
+    /// The JSON written.
+    public fn text() -> String {
+        unsafe {
+            return String.fromUtf8Unchecked(written)
+        }
+    }
+
+    /// The JSON written, as UTF-8.
+    public fn bytes() -> U8[>..] {
+        return written
+    }
+
+    fn newline() {
+        if indent > 0 {
+            written.append(0x0A)
+            var i = 0
+            while i < indent * empty.count {
+                written.append(0x20)
+                i += 1
+            }
+        }
+    }
+
+    // What comes before a value: a comma after the one before it, and the
+    // indentation; nothing after a key.
+    fn beforeValue() {
+        if afterKey {
+            afterKey = false
+            return
+        }
+        if !empty.isEmpty {
+            if !empty[empty.count - 1] {
+                written.append(0x2C)
+            }
+            empty[empty.count - 1] = false
+            newline()
+        }
+    }
+
+    public fn encodeNull() {
+        beforeValue()
+        written.append(utf8: "null")
+    }
+
+    public fn encodeBool(_ value: Bool) {
+        beforeValue()
+        written.append(utf8: value ? "true" : "false")
+    }
+
+    public fn encodeInt(_ value: Int) throws(SerializeError) {
+        beforeValue()
+        written.append(utf8: "\(value)")
+    }
+
+    public fn encodeUInt(_ value: U64) throws(SerializeError) {
+        beforeValue()
+        written.append(utf8: "\(value)")
+    }
+
+    /// A number; JSON has no NaN or infinity, which are refused.
+    public fn encodeFloat(_ value: F64) throws(SerializeError) {
+        if !value.isFinite {
+            throw SerializeError.InvalidValue(path: "$", reason: "JSON has no \(value)")
+        }
+        beforeValue()
+        written.append(utf8: "\(value)")
+    }
+
+    public fn encodeString(_ value: String) throws(SerializeError) {
+        beforeValue()
+        written.append(0x22)
+        // Runs that need no escape copied whole.
+        var start = 0
+        var i = 0
+        let bytes = value.utf8
+        let count = value.utf8Count
+        while i < count {
+            let byte = bytes[i]
+            if byte == 0x22 || byte == 0x5C || byte < 0x20 {
+                written.append(utf8: value, from: start, to: i)
+                if byte == 0x22 {
+                    written.append(utf8: "\\\"")
+                } else if byte == 0x5C {
+                    written.append(utf8: "\\\\")
+                } else if byte == 0x0A {
+                    written.append(utf8: "\\n")
+                } else if byte == 0x0D {
+                    written.append(utf8: "\\r")
+                } else if byte == 0x09 {
+                    written.append(utf8: "\\t")
+                } else {
+                    written.append(utf8: "\\u00")
+                    written.append(jsonHex(Int(byte) >> 4))
+                    written.append(jsonHex(Int(byte) & 15))
+                }
+                start = i + 1
+            }
+            i += 1
+        }
+        written.append(utf8: value, from: start, to: count)
+        written.append(0x22)
+    }
+
+    public fn beginObject() {
+        beforeValue()
+        written.append(0x7B)
+        empty.append(true)
+    }
+
+    /// The next member's key; its value is what is encoded next.
+    public fn key(_ name: String) {
+        // A key is a string written where a value would be.
+        try! encodeString(name)
+        written.append(0x3A)
+        if indent > 0 {
+            written.append(0x20)
+        }
+        afterKey = true
+    }
+
+    public fn endObject() {
+        let wasEmpty = empty.removeLast()
+        if !wasEmpty {
+            newline()
+        }
+        written.append(0x7D)
+    }
+
+    public fn beginArray() {
+        beforeValue()
+        written.append(0x5B)
+        empty.append(true)
+    }
+
+    public fn endArray() {
+        let wasEmpty = empty.removeLast()
+        if !wasEmpty {
+            newline()
+        }
+        written.append(0x5D)
+    }
+}
+
+fn jsonHex(_ value: Int) -> U8 {
+    return U8.truncating(value < 10 ? 0x30 + value : 0x61 + value - 10)
+}

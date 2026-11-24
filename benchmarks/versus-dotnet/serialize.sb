@@ -1,0 +1,49 @@
+module Serializing
+
+// Serializing against .NET's source-generated System.Text.Json: a hundred
+// thousand orders of three items each, derived both ways, written to JSON
+// text and read back.
+
+import Sable.Serialize
+
+@derive(Serializable)
+struct Item {
+    var sku: String
+    var quantity: Int
+    var price: F64
+}
+
+@derive(Serializable)
+struct Order {
+    var id: Int
+    var customer: String
+    var paid: Bool
+    var note: String?
+    var items: Item[>..]
+}
+
+@main
+fn main() throws(SerializeError) {
+    var orders: Order[>..] = []
+    var i = 0
+    while i < 100000 {
+        var items: Item[>..] = []
+        var k = 0
+        while k < 3 {
+            items.append(Item(sku: "SKU-\(i % 977)-\(k)", quantity: (i + k) % 7 + 1, price: F64((i * 3 + k) % 1000) + 0.25))
+            k = k + 1
+        }
+        orders.append(Order(id: i, customer: "customer \(i % 5003)", paid: i % 3 == 0, note: i % 4 == 0 ? "leave at the door" : none, items: items))
+        i = i + 1
+    }
+
+    let text = try Json.encode(orders)
+    let back = try Json.decode(Order[>..].self, from: text)
+    var quantity = 0
+    for order in back {
+        for item in order.items {
+            quantity = quantity + item.quantity
+        }
+    }
+    print("\(text.utf8.count) \(back.count) \(quantity)")
+}

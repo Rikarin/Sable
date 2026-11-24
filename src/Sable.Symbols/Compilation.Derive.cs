@@ -16,6 +16,12 @@ public enum DerivedMember {
 
     /// <summary><c>debugDescription()</c>, as source would write the value: <c>Debug</c>.</summary>
     Debug,
+
+    /// <summary><c>encode(to:)</c>, field by field to an Encoder: Sable.Serialize's <c>Serializable</c>.</summary>
+    Encode,
+
+    /// <summary><c>static decode(from:)</c>, field by field from a Decoder: <c>Serializable</c>.</summary>
+    Decode,
 }
 
 /// <summary>One member <c>@derive</c> made, and where it was asked for.</summary>
@@ -62,6 +68,8 @@ public sealed partial class Compilation {
         ("Comparable", DerivedMember.LessThan),
         ("Hashable", DerivedMember.Hash),
         ("Debug", DerivedMember.Debug),
+        ("Serializable", DerivedMember.Encode),
+        ("Serializable", DerivedMember.Decode),
     ];
 
     readonly List<(NamedTypeSymbol Type, AttributeSyntax Attribute, FileScope? Scope)> _derivations = [];
@@ -85,7 +93,7 @@ public sealed partial class Compilation {
         }
 
         if (!_derivedBodies.TryGetValue(function, out var body)) {
-            _derivedBodyBuilder ??= new(Core, ProtocolRequirement);
+            _derivedBodyBuilder ??= new(Core, ProtocolRequirement, this);
             _derivedBodies[function] = body = _derivedBodyBuilder.Build(derivation);
         }
 
@@ -98,6 +106,30 @@ public sealed partial class Compilation {
 
     NamedTypeSymbol? CoreProtocol(string name) =>
         GetModule("Sable.Core")?.GetType(name) is { TypeKind: TypeKind.Protocol } protocol ? protocol : null;
+
+    /// <summary>A protocol <c>@derive</c> knows: Sable.Core's, or Sable.Serialize's <c>Serializable</c>.</summary>
+    NamedTypeSymbol? DerivableProtocol(string name) =>
+        name == "Serializable"
+            ? GetModule("Sable.Serialize")?.GetType(name) is { TypeKind: TypeKind.Protocol } serializable ? serializable : null
+            : CoreProtocol(name);
+
+    /// <summary>A type of Sable.Serialize's, which a derived Serializable conformance uses.</summary>
+    internal NamedTypeSymbol? SerializeType(string name) => GetModule("Sable.Serialize")?.GetType(name);
+
+    /// <summary>
+    ///     A field's initial value, bound as a memberwise initialiser would put
+    ///     it in: what a derived decoding uses for a field that is skipped, or
+    ///     defaulted and missing.
+    /// </summary>
+    internal BoundExpression? BindFieldDefault(FieldSymbol field, TypeSymbol type) {
+        if (field.DeclaringSyntax is not [FieldDeclarationSyntax declaration]
+            || FileScopeOf(declaration) is not { } scope
+            || declaration.Declarator.Initializer is not { } initializer) {
+            return null;
+        }
+
+        return new Binder(this, scope, field).BindInitializer(initializer.Value, type);
+    }
 
     /// <summary>Makes the members of every <c>@derive</c> declared since the last call.</summary>
     void DeclareDerivations() {
@@ -157,7 +189,7 @@ public sealed partial class Compilation {
                 ReportDeclaration(
                     ErrorCode.ERR_UnknownDerivation,
                     argument.Span,
-                    $"'{name}' cannot be derived; '@derive' knows Equatable, Hashable, Comparable, Debug and Copy"
+                    $"'{name}' cannot be derived; '@derive' knows Equatable, Hashable, Comparable, Debug, Serializable and Copy"
                 );
                 continue;
             }
@@ -177,9 +209,26 @@ public sealed partial class Compilation {
 
             var isExplicit = argument is not null;
             var at = argument?.Span ?? attribute.Span;
-            if (CoreProtocol(protocolName) is not { } protocol) {
-                ReportDeclaration(ErrorCode.ERR_CannotDerive, at, $"'@derive({protocolName})' needs Sable.Core's '{protocolName}', which is not here");
+            if (DerivableProtocol(protocolName) is not { } protocol) {
+                ReportDeclaration(
+                    ErrorCode.ERR_CannotDerive,
+                    at,
+                    protocolName == "Serializable"
+                        ? "'@derive(Serializable)' needs Sable.Serialize: 'import Sable.Serialize'"
+                        : $"'@derive({protocolName})' needs Sable.Core's '{protocolName}', which is not here"
+                );
                 continue;
+            }
+
+            var serialize = member is DerivedMember.Encode or DerivedMember.Decode;
+            if (serialize && (SerializeType("Encoder") is null || SerializeType("Decoder") is null || SerializeType("SerializeError") is null)) {
+                continue;
+            }
+
+            // The options '@serialize' gives are checked once, as the first
+            // of the two members is made.
+            if (member == DerivedMember.Encode && !SerializeOptions.Check(type, (span, message) => ReportDeclaration(ErrorCode.ERR_CannotDerive, span, message))) {
+                break;
             }
 
             var memberName = NameOf(member);
@@ -203,11 +252,14 @@ public sealed partial class Compilation {
             }
 
             var function = DeclareDerivedMember(type, self, member, attribute, hasher);
+            if (protocolName == "Serializable" && member == DerivedMember.Decode) {
+                isExplicit = false;
+            }
             var derivation = new Derivation(function, type, protocol, member, attribute, tree);
             _derived.Add(derivation);
             _derivedByFunction[function] = derivation;
 
-            if (type.IsGenericDefinition) {
+            if (type.IsGenericDefinition && !type.DerivedConformances.Contains(protocol)) {
                 type.DerivedConformances = type.DerivedConformances.Add(protocol);
             }
 
@@ -232,6 +284,8 @@ public sealed partial class Compilation {
             DerivedMember.Equals => "==",
             DerivedMember.LessThan => "<",
             DerivedMember.Hash => "hash",
+            DerivedMember.Encode => "encode",
+            DerivedMember.Decode => "decode",
             _ => "debugDescription",
         };
 
@@ -249,8 +303,19 @@ public sealed partial class Compilation {
             type.DeclaredAccessibility,
             isOperator ? FunctionKind.Operator : FunctionKind.Ordinary
         ) {
-            IsStatic = isOperator,
+            IsStatic = isOperator || member == DerivedMember.Decode,
         };
+
+        if (member is DerivedMember.Encode or DerivedMember.Decode) {
+            var error = SerializeType("SerializeError")!;
+            function.Parameters = member == DerivedMember.Encode
+                ? [new ParameterSymbol("encoder", "to", function, null, 0) { TypeResolver = () => SerializeType("Encoder")! }]
+                : [new ParameterSymbol("decoder", "from", function, null, 0) { TypeResolver = () => SerializeType("Decoder")! }];
+            function.ThrownTypeResolver = () => error;
+            function.ReturnTypeResolver = member == DerivedMember.Encode ? () => Core.Void : () => self;
+            type.AddMember(function);
+            return function;
+        }
 
         function.Parameters = isOperator
             ? [

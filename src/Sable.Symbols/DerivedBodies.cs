@@ -23,7 +23,7 @@ namespace Sable.Symbols;
 ///         lowering one is reported where the derivation was asked for.
 ///     </para>
 /// </remarks>
-internal sealed class DerivedBodies(CoreTypes core, Func<string, string, FunctionSymbol?> requirement) {
+internal sealed partial class DerivedBodies(CoreTypes core, Func<string, string, FunctionSymbol?> requirement, Compilation compilation) {
     SyntaxNode _at = null!;
     FunctionSymbol _function = null!;
 
@@ -32,6 +32,11 @@ internal sealed class DerivedBodies(CoreTypes core, Func<string, string, Functio
         _function = derivation.Function;
         var type = derivation.Type;
         var self = type.IsGenericDefinition ? type.Construct([..type.TypeParameters]) : type;
+
+        if (derivation.Member is DerivedMember.Encode or DerivedMember.Decode) {
+            var statements = derivation.Member == DerivedMember.Encode ? Encode(type, self) : Decode(type, self);
+            return statements is null ? null : new BoundBlock(_at, [], [..statements]);
+        }
 
         // 'hash(into:)' is statements, each feeding the hasher, and returns nothing.
         if (derivation.Member == DerivedMember.Hash) {

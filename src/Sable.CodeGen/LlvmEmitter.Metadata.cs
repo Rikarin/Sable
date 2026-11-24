@@ -69,6 +69,7 @@ public sealed partial class LlvmEmitter {
 
         // Everything it refers to is written first, so that no other global lands inside this one.
         var metadata = TypeMetadata.Of(type);
+        _debug?.Keep(type, metadata.Name);
         var fieldTypes = _module?.FieldDescriptors == true;
         var denied = _module?.DenyReflection == true;
         var fields = metadata.FieldsIn(_module);

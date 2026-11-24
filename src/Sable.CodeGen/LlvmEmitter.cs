@@ -1414,6 +1414,7 @@ public sealed partial class LlvmEmitter {
 
         var size = SizeOf(llvmElement);
         var typeName = TrapMessage(type.ToString());
+        _debug?.Keep(type, type.ToString());
         // An array object is the runtime's: its header, count, capacity and buffer.
         _globals.Append($"{name} = {SharedLinkage} constant %SableMetadata {{ ptr @sable_array_destroy, ptr {typeName}, i64 {size}, ptr {copy}, ptr {destroy}, ")
             .Append($"i64 {SizeOf("%SableArrayHeader")}, i64 {AlignmentOf("%SableArrayHeader")}, ptr {visit}, ptr null }}{Comdat(name, SharedLinkage)}\n");
@@ -2419,20 +2420,39 @@ public sealed partial class LlvmEmitter {
                         // name — a local's field is the name and a number —
                         // through the box of one a closure captures.
                         foreach (var (fieldName, fieldType, offset) in ObjectFields(frame)) {
-                            if (fieldName.StartsWith('$') || fieldType == SilType.Unit) {
+                            if (fieldName.StartsWith('$') && !fieldName.StartsWith("$metadata.", StringComparison.Ordinal) || fieldType == SilType.Unit) {
                                 continue;
                             }
 
                             var cut = fieldName.LastIndexOf('$');
                             var shown = cut > 0 && fieldName[(cut + 1)..].All(char.IsAsciiDigit) ? fieldName[..cut] : fieldName;
-                            declarations.Add(BoxedType(fieldType) is { } inner
+                            // One whose type only metadata knows: its address is in the frame.
+                            if (fieldType is AddressType { Pointee: var held } && SilType.IsIndirect(held)) {
+                                var at = Fresh();
+                                var loaded = Fresh();
+                                _entryAllocas.Append($"  {at} = getelementptr inbounds i8, ptr %p{i}, i64 {offset}\n  {loaded} = load ptr, ptr {at}\n");
+                                DeclareDynamic($"%p{i}.{offset}.debug", loaded, held, shown, _scope, file, line, 0, EntryLocation);
+                                continue;
+                            }
+
+                            declarations.Add(BoxedType(fieldType) is { } inner && !SilType.IsIndirect(inner)
                                 ? (Debug.Variable(shown, _scope, file, line, inner), $"DW_OP_deref, DW_OP_plus_uconst, {offset}, DW_OP_deref, DW_OP_plus_uconst, {ObjectHeaderSize}")
                                 : (Debug.Variable(shown, _scope, file, line, fieldType), $"DW_OP_deref, DW_OP_plus_uconst, {offset}"));
                         }
+                    } else if (i < function.ParameterNames.Count && SilType.IsIndirect(argument.Type is AddressType { Pointee: var pointee } ? pointee : argument.Type)) {
+                        // A value whose type only metadata knows, and an inout
+                        // parameter of one: given by address either way.
+                        if (!function.ParameterNames[i].StartsWith('$')) {
+                            DeclareDynamic(slot, _names[argument], argument.Type is AddressType { Pointee: var given } ? given : argument.Type, function.ParameterNames[i], _scope, file, line, i + 1, EntryLocation);
+                        }
+                    } else if (i < function.ParameterNames.Count && argument.Type is AddressType { Pointee: StructType or ArrayType or SliceType } inout && SilType.MentionsOpaque(inout)) {
+                        // So is an inout parameter whose type's name has a type
+                        // parameter in it, shown as the value.
+                        declarations.Add((Debug.Variable(function.ParameterNames[i], _scope, file, line, inout.Pointee, i + 1), "DW_OP_deref"));
                     } else if (i < function.ParameterNames.Count) {
                         declarations.Add((Debug.Variable(function.ParameterNames[i], _scope, file, line, argument.Type, i + 1), ""));
                     } else if (argument.Type == SilType.Object && ContextType(argument) is { } context) {
-                        if (BoxedType(context) is { } boxed) {
+                        if (BoxedType(context) is { } boxed && !SilType.IsIndirect(boxed)) {
                             // A protocol witness's context is the box an
                             // existential keeps its value in: that value is its self.
                             declarations.Add((Debug.Variable("self", _scope, file, line, boxed, i + 1), $"DW_OP_deref, DW_OP_plus_uconst, {ObjectHeaderSize}"));
@@ -2441,7 +2461,13 @@ public sealed partial class LlvmEmitter {
                             // name, as if a local — through the box of one
                             // captured by reference.
                             foreach (var (fieldName, fieldType, offset) in ObjectFields(context)) {
-                                declarations.Add(BoxedType(fieldType) is { } inner
+                                // One whose type only metadata knows is a local of the closure's own code, read from here.
+                                if (fieldType is ArrayType { Element: var element } && SilType.IsIndirect(element)
+                                    && function.Blocks.SelectMany(static b => b.Instructions).OfType<AllocStackInst>().Any(a => a.VariableName == fieldName && a.ElementType == element)) {
+                                    continue;
+                                }
+
+                                declarations.Add(BoxedType(fieldType) is { } inner && !SilType.IsIndirect(inner)
                                     ? (Debug.Variable(fieldName, _scope, file, line, inner), $"DW_OP_deref, DW_OP_plus_uconst, {offset}, DW_OP_deref, DW_OP_plus_uconst, {ObjectHeaderSize}")
                                     : (Debug.Variable(fieldName, _scope, file, line, fieldType), $"DW_OP_deref, DW_OP_plus_uconst, {offset}"));
                             }
@@ -2486,6 +2512,49 @@ public sealed partial class LlvmEmitter {
         }
 
         string Fresh() => $"%t{_temporaries++}";
+
+        /// <summary>
+        ///     Declares, where the function starts, a variable whose type only
+        ///     metadata knows: a slot holding the value's address and its
+        ///     type's metadata, so that a debugger reads both at any place in
+        ///     the function. The metadata is null where it is not known without
+        ///     asking the registry, which a debugger's slot is no reason to.
+        /// </summary>
+        void DeclareDynamic(string slot, string address, SilType type, string variable, string scope, string file, int line, int argument, string location) {
+            var metadata = (type is OpaqueType || function.SourceFile is not null) && MetadataAtHand(type, []) ? OpaqueMetadata(type) : "null";
+            var node = Debug!.DynamicVariable(variable, scope, file, line, type, argument);
+            _entryAllocas.Append($"  {slot} = alloca {{ ptr, ptr }}, align 8\n")
+                .Append($"  {slot}.metadata = getelementptr inbounds {{ ptr, ptr }}, ptr {slot}, i32 0, i32 1\n")
+                .Append($"  store ptr {address}, ptr {slot}\n")
+                .Append($"  store ptr {metadata}, ptr {slot}.metadata\n")
+                .Append($"  call void @llvm.dbg.declare(metadata ptr {slot}, metadata {node}, metadata !DIExpression()){location}\n");
+        }
+
+        /// <summary>Whether a type's metadata is had or made from what the function has already, asking nothing of the registry.</summary>
+        bool MetadataAtHand(SilType type, HashSet<string> inside) {
+            if (!SilType.MentionsOpaque(type)) {
+                return true;
+            }
+
+            return type switch {
+                OpaqueType opaque => _opaqueMetadata.ContainsKey(opaque.Name)
+                                     || function.AssociatedMetadata.Find(a => a.Name == opaque.Name) is { Table: { } table } associated && Hidden(table) is not null
+                                     && MetadataAtHand(new OpaqueType(associated.Base), inside),
+                _ when _runtimeMetadata.ContainsKey(type.ToString()) => true,
+                ArrayType or SliceType => MetadataAtHand(ArrayType.ElementOf(type)!, inside),
+                TupleType tuple => tuple.Elements.All(e => MetadataAtHand(e, inside)),
+                NominalType nominal when !inside.Contains(nominal.Name) => Parts(nominal).Concat(nominal.TypeArguments).All(p => MetadataAtHand(p, [..inside, nominal.Name])),
+                _ => false,
+            };
+
+            static IEnumerable<SilType> Parts(NominalType nominal) =>
+                nominal switch {
+                    EnumType enumType => enumType.Cases.Select(static c => c.Payload).OfType<SilType>(),
+                    StructType structType => structType.Fields.Select(static f => f.Type),
+                    ClassType classType => classType.Fields.Select(static f => f.Type),
+                    _ => [],
+                };
+        }
 
         /// <summary>The <c>!dbg</c> attachment for the function's prologue: its own line.</summary>
         string EntryLocation => function.SourceFile is null
@@ -2686,7 +2755,21 @@ public sealed partial class LlvmEmitter {
                 case AllocStackInst { ElementType: var opaqueSlot } alloc when SilType.IsIndirect(opaqueSlot): {
                     var buffer = OpaqueBuffer(opaqueSlot);
                     _names[alloc] = buffer;
+                    var here = _dbg;
+                    if (alloc.Block == function.Entry) {
+                        _dbg = "";
+                    }
+
                     Line($"call void @llvm.memset.p0.i64(ptr align 16 {buffer}, i8 0, i64 {OpaqueSize(opaqueSlot)}, i1 false)");
+                    _dbg = here;
+
+                    // A source variable: where it is and its type's metadata, kept for a debugger to read.
+                    if (_scope is not null && alloc.VariableName is { } name && !name.StartsWith('$')) {
+                        var scope = ScopeNode(alloc.Location?.Scope ?? 0);
+                        var declaredAt = alloc.Location is { Scope: > 0 } place ? $", !dbg {Debug!.Location(place.Line, place.Column, scope)}" : EntryLocation;
+                        DeclareDynamic($"{buffer}.debug", buffer, opaqueSlot, name, scope, Debug!.FileOf(function), alloc.Location?.Line ?? function.Line, 0, declaredAt);
+                    }
+
                     return;
                 }
 
@@ -2695,15 +2778,16 @@ public sealed partial class LlvmEmitter {
                     _names[alloc] = name;
 
                     // With debug information, a slot of the entry block is
-                    // made before anything else, at the function's own line:
-                    // the code that makes it is no statement to stop at, and
-                    // a breakpoint on its variable's line must find the
-                    // statement, not this.
+                    // made before anything else, with no line: the code that
+                    // makes it is the prologue's, no statement to stop at. A
+                    // breakpoint on its variable's line must find the
+                    // statement, not this, and one on the function its first
+                    // statement, the parameters' slots written by then.
                     var output = _out;
                     var savedDbg = _dbg;
                     if (_scope is not null && alloc.Block == function.Entry) {
                         _out = _entryAllocas;
-                        _dbg = EntryLocation;
+                        _dbg = "";
                     }
 
                     // The storage itself is the frame's, made where the
@@ -2734,11 +2818,15 @@ public sealed partial class LlvmEmitter {
 
                         // LLVM puts the variable in the scope of the
                         // declaration's location, not the variable's own.
+                        if (_dbg.Length == 0) {
+                            _dbg = EntryLocation;
+                        }
+
                         if (alloc.Location is { Scope: > 0 } declared) {
                             _dbg = $", !dbg {Debug!.Location(declared.Line, declared.Column, scope)}";
                         }
 
-                        if (BoxedType(alloc.ElementType) is { } boxed) {
+                        if (BoxedType(alloc.ElementType) is { } boxed && !SilType.IsIndirect(boxed)) {
                             var node = Debug!.Variable(variable, scope, Debug.FileOf(function), line, boxed);
                             Line($"call void @llvm.dbg.declare(metadata ptr {name}, metadata {node}, metadata !DIExpression(DW_OP_deref, DW_OP_plus_uconst, {ObjectHeaderSize}))");
                         } else {

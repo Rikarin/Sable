@@ -212,10 +212,20 @@ public sealed partial class DebuggerFormatterTests {
                 Assert.True(build.Succeeded, build.Output);
             }
 
+            return await Debug(lldb, executable, commands);
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    /// <summary>Runs lldb on a program, with the plugin loaded; returns what it printed.</summary>
+    static async Task<string> Debug(string lldb, string executable, IReadOnlyList<string> commands) {
+        var directory = Directory.CreateTempSubdirectory("sable-formatters-plugin-");
+        try {
             var plugin = Path.Combine(directory.FullName, "sable_lldb.py");
             File.WriteAllText(plugin, NativeBuild.LldbPluginSource);
 
-            var start = new ProcessStartInfo(lldb) { RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = directory.FullName };
+            var start = new ProcessStartInfo(lldb) { RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = Path.GetDirectoryName(executable)! };
             foreach (var argument in (string[]) [
                          "--batch",
                          "--one-line-before-file", "settings set target.load-script-from-symbol-file false",
@@ -736,7 +746,7 @@ public sealed partial class DebuggerFormatterTests {
             return;
         }
 
-        // Specialised frames: lldb reading unspecialised ones from their metadata is stage 9 of #297.
+        // Specialised functions, to break on one: an unspecialised one is 'Gen.describe<T>', one for every type.
         using var specialised = SilGen.UseGenerics(GenericsMode.Specialised);
         var output = await Run(lldb, Library, "gen.sb", [
             "b 'Gen.describe<String>'", $"b gen.sb:{LineOf(Library, "// push")}",
@@ -771,7 +781,9 @@ public sealed partial class DebuggerFormatterTests {
 
     /// <summary>The DWARF itself is well formed, as the platform's verifier sees it.</summary>
     [PosixFact("the debug information is DWARF, for lldb and gdb; a Windows build is CodeView, checked by AWindowsTargetIsDescribedInCodeView")]
-    public async Task DwarfVerifies() {
+    public Task DwarfVerifies() => Verifies(Values, "values.sb");
+
+    static async Task Verifies(string source, string fileName) {
         // Apple's dwarfdump, or LLVM's, perhaps under its version's name.
         string[] candidates = OperatingSystem.IsMacOS()
             ? ["dwarfdump"]
@@ -782,9 +794,9 @@ public sealed partial class DebuggerFormatterTests {
 
         var directory = Directory.CreateTempSubdirectory("sable-dwarf-");
         try {
-            var result = Pipeline.Compile(new SourceText(Values, "values.sb"), directory.FullName);
+            var result = Pipeline.Compile(new SourceText(source, fileName), directory.FullName);
             Assert.True(result.Succeeded, string.Join("\n", result.Errors));
-            var executable = Path.Combine(directory.FullName, "values");
+            var executable = Path.Combine(directory.FullName, Path.GetFileNameWithoutExtension(fileName));
             var build = NativeBuild.Build(result.LlvmIr!, executable, debug: true);
             Assert.True(build.Succeeded, build.Output);
 

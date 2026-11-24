@@ -825,7 +825,7 @@ not a debug build, whose debug information GNU ld would leave at address 0) and
 tables into one address); wasm-ld leaves out what nothing reaches unasked.
 What the units' constructors register (witness tables, describers, error
 erasers) stays, as `.init_array` and `.CRT$XCU` are roots, and so does the
-debugger's table of classes (`llvm.used`, `SHF_GNU_RETAIN`). Linux programs
+debugger's table of types (`llvm.used`, `SHF_GNU_RETAIN`). Linux programs
 no longer link `-rdynamic`, whose exported symbols would all be roots; a
 trap's backtrace names their frames from `.symtab`. Reckoned from the
 `examples/ssg` dev build's objects for x86_64 Linux and Windows (cross-
@@ -987,11 +987,11 @@ optimised, unspecialised generics in a dev build give an edit of
 warm first build about as quick, but an executable 39% larger (943 KB
 against 677 KB; it was 48%), and the program's own generic code at `-O0`
 is still 1.5× slower (`sort`, `words`); a cold build without a prebuilt
-cache is 2.9 s slower, once. Debugging the program's own generic frames
-(stage 9) is not done either: they show opaque values. So debug builds stay
-specialised for now: the edit gain is small next to the size and
-`-O0` run time, and the choice is to be made again once the binary-size
-follow-ups (#299, #300) and stage 9 land.
+cache is 2.9 s slower, once. (The program's own generic frames showed
+opaque values in a debugger then; since stage 9 they show their values and
+types, docs/04 "Debugging, as implemented".) So debug builds stay specialised for now: the
+edit gain is small next to the size and `-O0` run time, and the choice is to
+be made again once the binary-size follow-ups (#299, #300) land.
 
 *One witness-table convention (#299).* Existentials became Swift's
 layout, always boxed — the box, the value's metadata and a table pointer

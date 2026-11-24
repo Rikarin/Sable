@@ -287,6 +287,11 @@ public class BuildCommand : Command {
                 return 1;
             }
 
+            // The file's object goes with the temporary cache.
+            if (options.Debug && options.Emit != "staticlib") {
+                NativeBuild.GatherDebugInfo(Path.GetFullPath(executable), target);
+            }
+
             return null;
         } finally {
             cache.Delete(true);

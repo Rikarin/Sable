@@ -2521,10 +2521,10 @@ then fields); a union → `U$union`, a `$tag` enumeration of the case names and
 a `$payload` C union; `T?` → `T?$optional` (an optional class is the nullable
 reference); a closure → `$closure` (`$function`, `$context`); `any P` →
 `any P$existential`. An enum without payloads is a DWARF enumeration; a tuple
-a struct with members `0`, `1`, …; `Char` is `char32_t`. Every class's type is
-also a member of an unread global, `sable.debug.classes`, which keeps it past
-`dsymutil` and lets the plugin find a dynamic type by the name in an
-object's metadata.
+a struct with members `0`, `1`, …; `Char` is `char32_t`. Every class's type,
+and every type the program has metadata of, is also a member of an unread
+global, `sable.debug.types` (one in each unit), which keeps it past `dsymutil`
+and lets the plugin find a dynamic type by the name in its metadata.
 
 `tools/lldb/sable_lldb.py` (summaries and synthetic children, Python 3.9+):
 
@@ -2582,6 +2582,55 @@ executable, and which Windows' debuggers read (`AWindowsTargetIsDescribedInCodeV
 compiles a Windows object and finds `.debug$S` in it, no DWARF); the debugger
 tests still drive lldb with the plugin's DWARF-shaped names, and are run on
 macOS and Linux only.
+
+*Values whose type only metadata knows* (#297 stage 9). In code compiled once
+(`-generics=unspecialised`) a variable of a type laid out at run time — `T`,
+`T?`, `(T, Int)`, `M.Pair<T, Int>`, a union over `T`, and an `inout` of one —
+is described as `SableValue$dynamic` under the name it is written with: a slot
+of two words, where the value is and its type's metadata, written where the
+function starts (an async function's, where each of its parts does), so that
+both are read at any place in it. The plugin reads the metadata and shows the
+value as the program's own type of that name; one of a type made at run time,
+which no DWARF describes, from the metadata's field descriptors, with an
+enum's case told as the runtime lays it out (`lay_out_enum`). An array's
+elements, a generic class's fields and what an existential holds are found
+from the buffer's, the object's and the existential's own metadata. The
+metadata parameters are artificial variables, `$metadata.T`, left out of
+`frame variable` and a frame's arguments; the plugin names types and frames by
+them:
+
+```
+frame #0: Gen.show<Gen.Point>(value=(x: 1, y: 2), list=count = 2, maybe=none) at gen.sb:58
+(Gen.Point) value = { x = 1  y = 2 }
+([Gen.Point]) list = count = 2 { [0] = (x = 3, y = 4)  [1] = (x = 5, y = 6) }
+(Gen.Pair<Gen.Point, Int>) st = { first = (x = 1, y = 2)  second = 3 }
+(any Rt.Zero) made = Rt.Crate<Rt.Meters> { [value] = { item = (value = 7, text = "long") } }
+```
+
+Frames are named through lldb's `frame-format`, whose `${function.name-with-args}`
+the plugin replaces with a script of its own (an lldb of 17 or later; a format
+without it is left alone), so in `bt` and where the program stops. A front end
+that asks lldb for a function's name itself (lldb-dap, CodeLLDB) shows the
+name the function was compiled with, `Gen.show<T>`, as does
+`b 'Gen.show<T>'`, which stops for every type; so does a frame whose metadata
+cannot be read. A value of an associated type only the registry gives, which
+the function does not otherwise use, is `<type not known here>`.
+
+Nothing the plugin reads is trusted: at a function's first instruction its
+variables are whatever the stack held. Each record is checked before it is
+used, each count, name and depth is bounded, and what does not hold up is
+shown as a marker: `<uninitialised>`, `<invalid metadata at 0x10>`,
+`<invalid list at 0x…: count = …, capacity = …>`, `<invalid object at 0x…>`,
+`<invalid case 17>`. A slot's initial zeros have no line, so a breakpoint on a
+function stops at its first statement, its parameters there to read. What was
+read of a type is kept per process. Verified with macOS's lldb alone: not with
+Linux's, whose older ones may not take a formatter's type name
+(`get_type_name`) or have the frame's description (`GetDescriptionWithFormat`).
+
+Not yet, for such values: the labels of a union case's fields, where the type
+was made at run time (the metadata has none); an indirect capture seen from
+outside the closure, which is shown as the one-element array that holds it;
+and a Sable shared library's types, looked up in the executable alone.
 
 Not yet: an `@inline_layout` value's variable-size fields (bounded and
 grow-only arrays, whose offsets are only found by walking the bytes); the

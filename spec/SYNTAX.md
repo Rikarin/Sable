@@ -1592,6 +1592,19 @@ fn caller() throws(AppError) {
 `try e catch { ... }` supplies an inline fallback: the braces hold a block
 whose value replaces the failed expression, or an expression after `catch`.
 
+`throw e` is also an expression, where a value is wanted: it leaves, so it
+never gives one, and its type is `Never`, which fits any type. It takes the
+whole expression after it, as the statement does.
+
+```sable
+let n = match fit {
+    case .One(let v) => v
+    case .Gap(_, _)  => throw TimeZoneError.Skipped(self)   // gives no type to the match
+    case _           => throw .Ambiguous(self)
+}
+let port = configured ?? throw ConfigError.Missing("port")
+```
+
 - `throws` with no type means `throws(any Error)`.
 - `Error` is Sable.Core's `protocol Error: Debug, Sendable`, with `var source:
   (any Error)? { get }` and `fn description() -> String`, each with a default.

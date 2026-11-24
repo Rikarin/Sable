@@ -265,6 +265,12 @@
     <Field Name="Statement" Type="IfStatementSyntax" />
   </Node>
 
+  <Node Name="ThrowExpressionSyntax" Base="ExpressionSyntax" Kind="ThrowExpression"
+        Doc="`throw e` where a value is wanted, `case .Gap => throw e` or `x ?? throw e`: it never gives one, so its type is Never.">
+    <Field Name="ThrowKeyword" Type="Token" />
+    <Field Name="Expression" Type="ExpressionSyntax" />
+  </Node>
+
   <Node Name="LabeledClosureSyntax" Base="SyntaxNode" Kind="LabeledClosure"
         Doc="`onFail: { ... }`: a trailing closure after the first, labelled for its parameter.">
     <Field Name="NameToken" Type="Token" />

@@ -402,4 +402,43 @@ public sealed class PatternTests {
                 print(size(5))
             """
         );
+
+    [Fact]
+    public void AThrowInAnArmOrAfterACoalesceLeavesWithTheError() =>
+        Prints(
+            "7\nskipped\n3\nambiguous\n4\nmissing\n",
+            """
+            union Failure { Skipped, Ambiguous, Missing }
+            union Fit { One(Int), Gap(Int, Int), Overlap }
+
+            fn resolve(_ f: Fit) throws(Failure) -> Int {
+                let n = match f {
+                    case .Gap(_, _) => throw Failure.Skipped
+                    case .One(let v) => v
+                    case _ => throw .Ambiguous
+                }
+                return n + 1
+            }
+
+            fn need(_ o: Int?) throws(Failure) -> Int {
+                return o ?? throw Failure.Missing
+            }
+
+            fn show(_ f: Failure) -> String {
+                return match f {
+                    case .Skipped => "skipped"
+                    case .Ambiguous => "ambiguous"
+                    case .Missing => "missing"
+                }
+            }
+            """,
+            """
+                print(try resolve(.One(6)) catch { -1 })
+                do { print(try resolve(.Gap(1, 2))) } catch { print(show(error)) }
+                print(try resolve(.One(2)) catch { -1 })
+                do { print(try resolve(.Overlap)) } catch { print(show(error)) }
+                print(try need(4) catch { -1 })
+                do { print(try need(none)) } catch { print(show(error)) }
+            """
+        );
 }

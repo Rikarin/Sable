@@ -1462,32 +1462,43 @@ public sealed partial class Binder {
         );
     }
 
-    BoundStatement BindThrow(ThrowStatementSyntax statement) {
-        var value = BindExpression(statement.Expression, _declaredThrows);
+    BoundStatement BindThrow(ThrowStatementSyntax statement) =>
+        Record(statement, BindThrowCore(statement, statement.ThrowKeyword, statement.Expression));
+
+    /// <summary>
+    ///     <c>throw e</c> where a value is wanted — a match arm, the right of
+    ///     <c>??</c> — leaves as the statement does, so it gives no value: its
+    ///     type is Never, which fits any type wanted there.
+    /// </summary>
+    BoundExpression BindThrowExpression(ThrowExpressionSyntax syntax) =>
+        new BoundThrowExpression(syntax, Core.Never, BindThrowCore(syntax, syntax.ThrowKeyword, syntax.Expression));
+
+    BoundThrow BindThrowCore(SyntaxNode statement, SyntaxToken throwKeyword, ExpressionSyntax expression) {
+        var value = BindExpression(expression, _declaredThrows);
         _thrownInBody = Union(_thrownInBody, value.Type);
         _threwOwnError = true;
 
         var rethrownAlso = _rethrows && !value.HasError && FitsRethrownAlso(value.Type);
         if (!value.HasError && CanThrowHere() && !(_rethrows && _catchDepth == 0)) {
-            CheckErrorFits(value.Type, statement.Expression.Span, "this");
+            CheckErrorFits(value.Type, expression.Span, "this");
         }
 
         if (_rethrows && _catchDepth == 0 && !rethrownAlso) {
             _diagnostics.Error(
                 ErrorCode.ERR_RethrowsThrowsItsOwn,
-                statement.ThrowKeyword.Span,
+                throwKeyword.Span,
                 "a 'rethrows' function may only throw what one of its own "
                 + "closure parameters throws"
             );
         } else if (!CanThrowHere()) {
             _diagnostics.Error(
                 ErrorCode.ERR_ThrowsNotDeclared,
-                statement.ThrowKeyword.Span,
+                throwKeyword.Span,
                 "this function does not declare 'throws', so it cannot throw"
             );
         }
 
-        return Record(statement, new BoundThrow(statement, value));
+        return new BoundThrow(statement, value);
     }
 
     /// <summary>Binds a declaration written inside a body.</summary>
@@ -2784,6 +2795,7 @@ public sealed partial class Binder {
             TypeTestExpressionSyntax test => BindTypeTest(test),
             MatchExpressionSyntax match => BindMatch(match, expectedType),
             IfExpressionSyntax ifExpression => BindIfExpression(ifExpression, expectedType),
+            ThrowExpressionSyntax throwExpression => BindThrowExpression(throwExpression),
             RangeExpressionSyntax range => BindRange(range, expectedType),
             DictionaryExpressionSyntax dictionary => BindDictionary(dictionary, expectedType),
             BuiltinExpressionSyntax builtin => BindBuiltin(builtin),
@@ -9886,6 +9898,15 @@ public sealed partial class Binder {
                         body = BindBlock(block);
                     } else if (arm.Body is ExpressionSyntax expression) {
                         var value = BindExpression(expression, resultType);
+
+                        // An arm that never comes back, 'throw e' or 'fatal("…")',
+                        // gives no value, so it says nothing of the match's type.
+                        if (value.Type.Equals(Core.Never)) {
+                            body = value;
+                            arms.Add(new(arm, patterns.ToImmutable(), guard, body));
+                            break;
+                        }
+
                         resultType ??= value.Type;
                         sawValue = true;
 

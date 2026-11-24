@@ -56,9 +56,9 @@ public union Outcome<T, E> {
 
     /// The value, or the error thrown: from an outcome back to 'try'.
     public fn get() throws(E) -> T {
-        match self {
-            case .Ok(let value)  => { return value }
-            case .Err(let error) => { throw error }
+        return match self {
+            case .Ok(let value)  => value
+            case .Err(let error) => throw error
         }
     }
 

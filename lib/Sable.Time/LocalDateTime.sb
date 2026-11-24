@@ -127,8 +127,8 @@ public struct LocalDateTime: Comparable, Hashable {
             return ZonedDateTime(instant: withOffset(offset).instant, zone: zone, offset: offset)
         }
         match offsets {
-            case .Gap(_, _) => { throw TimeZoneError.Skipped(self) }
-            case _          => { throw TimeZoneError.Ambiguous(self) }
+            case .Gap(_, _) => throw TimeZoneError.Skipped(self)
+            case _          => throw TimeZoneError.Ambiguous(self)
         }
     }
 

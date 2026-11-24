@@ -357,6 +357,13 @@ public sealed class BoundConditional(
     public override IEnumerable<BoundNode> Children => Nodes(Condition, WhenTrue, WhenFalse);
 }
 
+/// <summary><c>throw e</c> as an expression: it leaves, so its type is Never.</summary>
+public sealed class BoundThrowExpression(SyntaxNode syntax, TypeSymbol type, BoundThrow body)
+    : BoundExpression(syntax, type) {
+    public BoundThrow Body { get; } = body;
+    public override IEnumerable<BoundNode> Children => Nodes(Body);
+}
+
 /// <summary>
 ///     <c>if c { a } else { b }</c> as a value. <see cref="Body" /> is the
 ///     <c>if</c>, with an <c>else</c> all the way down; each branch's block

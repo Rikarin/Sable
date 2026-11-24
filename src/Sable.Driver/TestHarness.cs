@@ -91,9 +91,13 @@ public static class TestHarness {
             program.AddRange(DocExamples.Extract(program.ToList()));
         }
 
-        // Every test build has Sable.Testing, whether or not a file imports it.
-        var testing = SyntaxTree.Parse(new SourceText($"module {HarnessModule}\nimport Sable.Testing\n", "<harness>"));
+        // Every test build has Sable.Testing, whether or not a file imports
+        // it. What the compiler writes is parsed as the program is: the
+        // library it imports is otherwise another profile's, beside the
+        // program's own.
         var primary = program[0];
+        var options = ParseOptions.Default.ForTarget(primary.Options.TargetOs, primary.Options.TargetArch) with { Symbols = primary.Options.Symbols };
+        var testing = SyntaxTree.Parse(new SourceText($"module {HarnessModule}\nimport Sable.Testing\n", "<harness>"), options);
 
         // The standard library's bodies, once it is known to check cleanly
         // with a program that cannot change that, are neither checked again
@@ -108,7 +112,7 @@ public static class TestHarness {
         }
 
         tests = checkedAlone.GetTestFunctions(kind);
-        var harness = Write(tests, kind);
+        var harness = Write(tests, kind, options);
         var compilation = Compilation.Create([..program, ..harness, ..LibraryFor([..program, ..harness])]);
         var check = wholeLibrary || kind == TestKind.Fuzz ? null : Library.CheckFor(compilation, [..program, ..harness]);
         var standard = check?.Skipped;
@@ -267,9 +271,10 @@ public static class TestHarness {
     ///     The harness's files: one per module with tests, then the entry
     ///     point's. Public so that a test can see what the compiler writes.
     /// </summary>
-    public static IReadOnlyList<SyntaxTree> Write(IReadOnlyList<TestFunction> tests, TestKind kind) {
+    public static IReadOnlyList<SyntaxTree> Write(IReadOnlyList<TestFunction> tests, TestKind kind, ParseOptions? options = null) {
+        options ??= ParseOptions.Default;
         if (kind == TestKind.Fuzz) {
-            return WriteFuzz(tests);
+            return WriteFuzz(tests, options);
         }
 
         var files = new List<SyntaxTree>();
@@ -298,7 +303,7 @@ public static class TestHarness {
             }
 
             thunks.Append("    ]\n}\n");
-            files.Add(SyntaxTree.Parse(new SourceText(thunks.ToString(), $"<harness:{module.Key}>")));
+            files.Add(SyntaxTree.Parse(new SourceText(thunks.ToString(), $"<harness:{module.Key}>"), options));
             main.Append(CultureInfo.InvariantCulture, $"import {module.Key}.{{ {list} }}\n");
         }
 
@@ -315,7 +320,7 @@ public static class TestHarness {
         }
 
         main.Append(CultureInfo.InvariantCulture, $"    return await {run}(all)\n}}\n");
-        files.Add(SyntaxTree.Parse(new SourceText(main.ToString(), "<harness>")));
+        files.Add(SyntaxTree.Parse(new SourceText(main.ToString(), "<harness>"), options));
         return files;
     }
 
@@ -339,7 +344,7 @@ public static class TestHarness {
     ///     integers cross to C, then <c>sable_harness_fuzz_run</c> with the number of
     ///     the target, in <paramref name="targets" />' order, to run on it.
     /// </summary>
-    static IReadOnlyList<SyntaxTree> WriteFuzz(IReadOnlyList<TestFunction> targets) {
+    static IReadOnlyList<SyntaxTree> WriteFuzz(IReadOnlyList<TestFunction> targets, ParseOptions options) {
         var files = new List<SyntaxTree>();
         var main = new StringBuilder();
         main.Append(CultureInfo.InvariantCulture, $"module {HarnessModule}\n\n");
@@ -361,7 +366,7 @@ public static class TestHarness {
             }
 
             thunks.Append("    ]\n}\n");
-            files.Add(SyntaxTree.Parse(new SourceText(thunks.ToString(), $"<harness:{modules[m].Key}>")));
+            files.Add(SyntaxTree.Parse(new SourceText(thunks.ToString(), $"<harness:{modules[m].Key}>"), options));
             main.Append(CultureInfo.InvariantCulture, $"import {modules[m].Key}.{{ {list} }}\n");
         }
 
@@ -384,7 +389,7 @@ public static class TestHarness {
             fn sableFuzzRun(_ target: Int) {
 
             """).Append(run).Append("}\n");
-        files.Add(SyntaxTree.Parse(new SourceText(main.ToString(), "<harness>")));
+        files.Add(SyntaxTree.Parse(new SourceText(main.ToString(), "<harness>"), options));
         return files;
     }
 

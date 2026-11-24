@@ -722,4 +722,37 @@ public sealed class ComputedPropertyTests {
                 """
             ).Stdout
         );
+
+    /// <summary>A closure in a 'do' hides nothing that is thrown before it there.</summary>
+    [Fact]
+    public void ADoCatchesWhatIsThrownBeforeAClosure() =>
+        Assert.Equal(
+            "caught Early()\n",
+            Programs.AssertAgree(
+                """
+                module P
+
+                struct Early: Error { }
+
+                struct Late: Error { }
+
+                fn early() throws(Early) { throw Early { } }
+
+                fn late(_ body: () -> Void) throws(Late) {
+                    body()
+                    throw Late { }
+                }
+
+                @main
+                fn main() {
+                    do {
+                        try early()
+                        try late { print("late") }
+                    } catch {
+                        print("caught \(error)")
+                    }
+                }
+                """
+            ).Stdout
+        );
 }

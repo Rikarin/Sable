@@ -836,6 +836,12 @@ extension U8[:] { fn toString() -> String { } }
 - Its members are generic over the parameters and monomorphised per element
   type, like any generic. `Sable.Core` declares the array family's own members
   (`count`, `append`, `contains`, …) this way.
+- It may conform the arrays to protocols, `extension<Element: Debug>
+  Element[:]: Debug`, and conforms them where its element meets its
+  constraints. So every kind of array, and a slice, is Equatable, Hashable and
+  Comparable (in lexicographic order) when its element is, as in Swift:
+  `assertEqual(words, ["a", "b"])`, `xs < ys`, an array as a dictionary's key.
+  An operator such a conformance declares on `T[:]` takes arrays of any kind.
 
 ---
 
@@ -878,7 +884,7 @@ let p: any Producer<Animal> = DogProducer()     // legal: T is 'out'
 ### Conditional conformance
 
 ```sable
-extension Array<T>: Equatable where T: Equatable { }
+extension<T: Equatable> T[:]: Equatable { … }      // Sable.Core's, for every array
 extension Optional<T>: Serializable where T: Serializable { }
 ```
 

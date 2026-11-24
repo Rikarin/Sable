@@ -39,14 +39,6 @@ struct Source {
     }
 }
 
-fn shown(_ units: U16[:]) -> String {
-    return "\(units.toArray())"
-}
-
-fn shownBytes(_ bytes: U8[:]) -> String {
-    return "\(bytes.toArray())"
-}
-
 @test
 fn utf8ToUtf16AgreesWithLossyDecoding() {
     var source = Source { state: 0x9E3779B97F4A7C15 }
@@ -62,7 +54,7 @@ fn utf8ToUtf16AgreesWithLossyDecoding() {
         var whole: U16[>..] = []
         let (status, read) = Utf8.toUtf16(bytes, into: &whole)
         assert(status == .Done && read == bytes.count, "one go")
-        assertEqual(shown(whole), shown(expected))
+        assertEqual(whole, expected)
 
         // A chunk at a time, what is unread carried over to the next.
         var chunked: U16[>..] = []
@@ -79,7 +71,7 @@ fn utf8ToUtf16AgreesWithLossyDecoding() {
             carried = chunk[chunkRead...].toArray()
             start = stop
         }
-        assertEqual(shown(chunked), shown(expected))
+        assertEqual(chunked, expected)
 
         // Not replacing: it stops where the first error is.
         var strict: U16[>..] = []
@@ -109,7 +101,7 @@ fn fromUtf16AgreesWithLossyDecoding() {
         var whole: U8[>..] = []
         let (status, read) = Utf8.fromUtf16(units, into: &whole)
         assert(status == .Done && read == units.count, "one go")
-        assertEqual(shownBytes(whole), shownBytes(expected))
+        assertEqual(whole, expected)
 
         var chunked: U8[>..] = []
         var carried: U16[>..] = []
@@ -123,7 +115,7 @@ fn fromUtf16AgreesWithLossyDecoding() {
             carried = chunk[chunkRead...].toArray()
             start = stop
         }
-        assertEqual(shownBytes(chunked), shownBytes(expected))
+        assertEqual(chunked, expected)
 
         var strict: U8[>..] = []
         let (strictStatus, strictRead) = Utf8.fromUtf16(units, into: &strict, replacingInvalid: false)

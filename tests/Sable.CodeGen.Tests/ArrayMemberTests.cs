@@ -309,4 +309,40 @@ public sealed class ArrayMemberTests {
             Assert.Contains("allocations 3,", stats, StringComparison.Ordinal);
         }
     }
+
+    /// <summary>
+    ///     Arrays are Equatable, Hashable and Comparable where their elements
+    ///     are: through a generic function, in a dictionary's keys, and with
+    ///     the operators written out, for every kind and a slice.
+    /// </summary>
+    [Fact]
+    public void ArraysCompareAndHashAsTheirElementsDo() =>
+        Prints(
+            "true false true true\ntrue false true true\ntrue false\n2 1\n",
+            """
+            fn same<T: Equatable>(_ a: T, _ b: T) -> Bool {
+                return a == b
+            }
+
+            fn first<T: Comparable>(_ a: T, _ b: T) -> Bool {
+                return a < b
+            }
+
+            fn key<T: Hashable>(_ a: T) -> Int {
+                return a.hashValue
+            }
+            """,
+            """
+                let words: String[>..] = ["a", "b"]
+                let fixed: Int[3] = [1, 2, 3]
+                let nested: Int[>..][>..] = [[1], [2, 3]]
+                let other: Int[>..][>..] = [[1], [2, 4]]
+                print("\(same(words, ["a", "b"])) \(same(words, ["a"])) \(same(fixed[1...], [2, 3])) \(same(nested, nested))")
+                print("\(first(nested, other)) \(first(other, nested)) \(words < ["b"]) \(fixed >= [1, 2, 3])")
+                print("\(key(words) == key(["a", "b"] as String[])) \(key(nested) == key(other))")
+                var counts: [String[>..]: Int] = [:]
+                counts[words] = 2
+                counts[["b"]] = 1
+                print("\(counts[["a", "b"]] ?? 0) \(counts[["b"]] ?? 0)")
+            """);
 }

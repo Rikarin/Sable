@@ -3641,8 +3641,9 @@ public sealed partial class SilGen {
             return requirement;
         }
 
+        // An operator is static wherever it is written; a requirement's says nothing.
         var own = _compilation.ArrayMembersNamed(array, requirement.Name).OfType<FunctionSymbol>()
-            .FirstOrDefault(f => f.IsStatic == requirement.IsStatic && SameLabels(f, requirement));
+            .FirstOrDefault(f => (f.IsStatic == requirement.IsStatic || requirement.FunctionKind == FunctionKind.Operator) && SameLabels(f, requirement));
         if (own is not null) {
             return own;
         }
@@ -8369,9 +8370,10 @@ public sealed partial class SilGen {
         ///     the operand turned out to be; the operator itself otherwise.
         /// </summary>
         FunctionSymbol? OperatorWitness(FunctionSymbol method, TypeSymbol operand) =>
-            OwnerOf(method) is { TypeKind: TypeKind.Protocol } && Nominal(Sub(operand)) is { } concrete
-                ? Implementation(concrete, method)
-                : method;
+            OwnerOf(method) is not { TypeKind: TypeKind.Protocol } ? method
+            : Sub(operand) is ArrayTypeSymbol array ? generator.ArrayImplementation(array, method)
+            : Nominal(Sub(operand)) is { } concrete ? Implementation(concrete, method)
+            : method;
 
         /// <summary>
         ///     The named type whose members a type has: itself, or for
@@ -8433,6 +8435,19 @@ public sealed partial class SilGen {
             if (OwnerOf(callee) is { IsGenericDefinition: true } definition && !(owner is NamedTypeSymbol mine && mine.OriginalDefinition.Equals(definition))
                 && Sub(second.Type) is NamedTypeSymbol theirs && theirs.OriginalDefinition.Equals(definition)) {
                 owner = theirs;
+            }
+
+            // An array extension's operator: its element is the operands',
+            // which it takes as slices of them, whatever kind they are.
+            if (OwnerOf(callee) is { ExtendedArray: not null } carrier) {
+                var view = Compilation.MatchArray(carrier, owner) ?? TypeSubstitution.Empty;
+                BoundExpression Viewed(BoundExpression operand, int i) =>
+                    view.Apply(callee.Parameters[i].Type) is ArrayTypeSymbol { ArrayKind: ArrayKind.Slice } slice && Sub(operand.Type) is ArrayTypeSymbol { ArrayKind: not ArrayKind.Slice }
+                        ? new BoundConversion(operand.Syntax, slice, operand, ConversionKind.Identity)
+                        : operand;
+                var arrayCall = new BoundCall(binary.Syntax, null, callee, [Viewed(first, 0), Viewed(second, 1)], resultType) { Substitution = view };
+                return Expression(arrayCall) is not { } compared ? null
+                    : negate ? Emit(new BuiltinInst("not_Bool", SilType.Bool, compared)) : compared;
             }
 
             var call = new BoundCall(binary.Syntax, null, callee, [first, second], resultType) {

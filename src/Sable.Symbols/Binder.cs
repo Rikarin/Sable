@@ -9046,6 +9046,31 @@ public sealed partial class Binder {
             }
         }
 
+        // An operator an array extension declares: 'xs < ys' on two arrays
+        // of Comparable elements, in lexicographic order. ('==' on two
+        // arrays is compared where it is written, element by element.)
+        if (symbol != "==") {
+            foreach (var owner in new[] { left, right }) {
+                if (owner is not ArrayTypeSymbol array || _compilation.LookupArrayMember(array, symbol, _conversions.Equivalence) is not { Owner: not null } found) {
+                    continue;
+                }
+
+                foreach (var function in found.Members.OfType<FunctionSymbol>()) {
+                    if (function is not { FunctionKind: FunctionKind.Operator, Fixity: OperatorFixity.Infix, Parameters.Length: 2 }) {
+                        continue;
+                    }
+
+                    var first = found.Substitution.Apply(function.Parameters[0].Type);
+                    var second = found.Substitution.Apply(function.Parameters[1].Type);
+                    var (leftParameter, rightParameter) = swapped ? (second, first) : (first, second);
+                    if (_conversions.HasImplicitConversion(left, leftParameter, leftLiteral)
+                        && _conversions.HasImplicitConversion(right, rightParameter, rightLiteral)) {
+                        return new UserOperator(function, leftParameter, rightParameter, found.Substitution);
+                    }
+                }
+            }
+        }
+
         // An operator a protocol's extension gives every conformer, on two
         // of one conforming type: 'a &+ b' on two Ints is FixedWidthInteger's.
         if (left is NamedTypeSymbol { TypeKind: not TypeKind.Protocol } conformer && left.Equals(right)) {

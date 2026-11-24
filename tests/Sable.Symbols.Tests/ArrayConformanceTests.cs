@@ -287,4 +287,46 @@ public sealed class ArrayConformanceTests {
             fn probe(_ box: Box) -> Int { return box.lazy + box.`lazy` }
             """
         );
+
+    /// <summary>
+    ///     Every kind of array, and a slice, is Equatable, Hashable and
+    ///     Comparable where its element is (Sable.Core's Array+Comparison.sb),
+    ///     and the operators work on arrays of any kind written out.
+    /// </summary>
+    [Fact]
+    public void ArraysAreEquatableHashableAndComparableWhereTheirElementsAre() =>
+        AssertClean(
+            """
+            fn same<T: Equatable>(_ a: T, _ b: T) -> Bool { return a == b }
+            fn first<T: Comparable>(_ a: T, _ b: T) -> Bool { return a < b }
+            fn key<T: Hashable>(_ a: T) -> Int { return a.hashValue }
+            fn probe(_ grow: String[>..], _ fixed: Int[3], _ slice: Int[:], _ nested: Int[>..][>..]) -> Bool {
+                let ordered = grow < ["b"] && fixed >= [1, 2, 3] && slice <= slice
+                return same(grow, grow) && same(fixed, fixed) && first(slice, slice) && same(nested, nested)
+                    && key(grow) == key(nested) && ordered
+            }
+            """
+        );
+
+    [Fact]
+    public void AnArrayOfElementsWithNoEqualityIsNotEquatable() {
+        var errors = ErrorsIn(
+            """
+            struct Opaque { var n: Int }
+            fn same<T: Equatable>(_ a: T, _ b: T) -> Bool { return a == b }
+            fn probe(_ xs: Opaque[>..]) -> Bool { return same(xs, xs) }
+            """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NoMatchingOverload);
+    }
+
+    [Fact]
+    public void AnArrayOfElementsWithNoOrderHasNoLessThan() {
+        var errors = ErrorsIn(
+            """
+            fn probe(_ xs: Bool[>..]) -> Bool { return xs < xs }
+            """
+        );
+        Assert.NotEmpty(errors);
+    }
 }

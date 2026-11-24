@@ -1094,4 +1094,47 @@ public sealed class GenericsAndConformanceTests {
         Assert.Contains("'T' would be 'Plain?', which is not 'Equatable'", error.Message);
         Assert.Contains(Errors(OverOptionals + "fn probe(_ p: Plain?) { let a = key(p) }"), static e => e.Code == ErrorCode.ERR_NoMatchingOverload);
     }
+
+    // ---- Inference from the context -------------------------------------------------
+
+    const string Cx = """
+                      struct Cx<T: FloatingPoint> {
+                          var re: T
+                          var im: T
+                          init(_ re: T, _ im: T) { self.re = re; self.im = im }
+                          static var i: Cx<T> => Cx(T.zero, T.one)
+                          static fn make() -> Cx<T> { return Cx(T.one, T.one) }
+                          static operator + (a: Cx<T>, b: Cx<T>) -> Cx<T> { return Cx(a.re + b.re, a.im + b.im) }
+                          static operator == (a: Cx<T>, b: Cx<T>) -> Bool { return a.re == b.re && a.im == b.im }
+                      }
+                      fn two<T: Numeric>() -> T { return T.one + T.one }
+
+                      """;
+
+    [Theory]
+    [InlineData("let v: Cx<F64> = Cx.i", "Cx<F64>")]
+    [InlineData("let v: Cx<F32>? = Cx.i", "Cx<F32>?")]
+    [InlineData("let v: Cx<F64> = Cx(1.0, 2.0) + Cx.i", "Cx<F64>")]
+    [InlineData("let v = Cx(1.0, 2.0) + Cx.i", "Cx<F64>")]
+    [InlineData("let v = Cx.i + Cx(1.0, 2.0)", "Cx<F64>")]
+    [InlineData("let v = Cx.make() + Cx(1 as F32, 2)", "Cx<F32>")]
+    [InlineData("let z = Cx(1.0, 2.0)\nlet v = (Cx.i) == z", "Bool")]
+    [InlineData("let x: F64 = 3\nlet v = x * two()", "F64")]
+    [InlineData("let x: F64 = 3\nlet v = two() * x", "F64")]
+    [InlineData("let v: F32 = two() + 1", "F32")]
+    [InlineData("let v = two() + 1", "Int")]
+    [InlineData("let v: SIMD<F32, 4> = SIMD(repeating: 1)", "SIMD<F32, 4>")]
+    public void AGenericsParametersComeFromTheContext(string body, string expected) =>
+        Assert.Equal(expected, TypeOfLast(Cx + "fn probe() {\n" + body + "\n}"));
+
+    [Fact]
+    public void AParameterNothingSaysIsStillUninferred() =>
+        Assert.Contains(
+            Errors(Cx + "fn probe() {\n    let v = two() * two()\n}"),
+            static e => e.Code == ErrorCode.ERR_CannotInferTypeArgument
+        );
+
+    [Fact]
+    public void AStaticPropertyOfAnotherTypeIsNotTakenFromTheContext() =>
+        Assert.NotEmpty(Errors(Cx + "struct Other<T> { static var count: Int => 1 }\nfn probe() {\n    let v: Cx<F64> = Other.count\n}"));
 }

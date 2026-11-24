@@ -298,6 +298,17 @@ subtyping family but deliberately more limited to keep it fast and predictable.
 | Literal types from context | Public API signatures |
 | Union case from leading-dot syntax | |
 
+Inference goes both ways. A generic call, initialiser or static member
+whose type parameters its arguments do not settle takes them from the type
+the context asks for: `let v: SIMD<F32, 4> = SIMD(repeating: 1)`,
+`let z: Complex<F64> = Complex.i`, `let n: F64 = two()` for
+`fn two<T: Numeric>() -> T`. An operator's operands are each other's
+context: the right operand of `+`, `*`, `==` and the other operators whose
+operands share a type is bound expecting the left's type, and a left operand
+that only its context can type — `.zero`, `Complex.i`, `Complex.polar(…)`,
+`two()` — is bound after the right and takes its type
+(`Complex.i + z`, `two() * x`). Evaluation is still left to right.
+
 **Public signatures are always fully explicit.** This is a hard rule: it makes
 module interfaces stable, makes error messages local, and makes parallel
 type-checking of modules trivially possible.

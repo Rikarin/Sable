@@ -2778,7 +2778,7 @@ public sealed partial class Binder {
             SuperExpressionSyntax super => BindSuper(super),
             ParenthesizedExpressionSyntax parenthesized =>
                 BindExpression(parenthesized.Expression, expectedType),
-            MemberAccessExpressionSyntax member => BindMemberAccess(member),
+            MemberAccessExpressionSyntax member => BindMemberAccess(member, expectedType),
             ImplicitMemberAccessExpressionSyntax implicitMember =>
                 BindImplicitMemberAccess(implicitMember, expectedType),
             InvocationExpressionSyntax invocation => AfterCall(BindInvocation(invocation, expectedType)),
@@ -3689,7 +3689,7 @@ public sealed partial class Binder {
             _ => false,
         };
 
-    BoundExpression BindMemberAccess(MemberAccessExpressionSyntax syntax) {
+    BoundExpression BindMemberAccess(MemberAccessExpressionSyntax syntax, TypeSymbol? expectedType = null) {
         // 'Sable.Math.gcd' and 'M.gcd': the left names a module, not a value.
         if (syntax.OperatorToken.Kind == SyntaxKind.DotToken && ModuleNamedBy(syntax.Expression) is { } module) {
             return BindModuleMember(
@@ -3740,6 +3740,18 @@ public sealed partial class Binder {
         if (receiver is BoundTypeExpression typeExpression) {
             if (name == "self") {
                 return new BoundMetatype(syntax, typeExpression.ReferencedType);
+            }
+
+            // 'Complex.i' where a Complex<F64> is wanted: a static property of
+            // the type named bare is the instance's the context asks for, as
+            // a call of a static function infers it from what it gives.
+            if (typeExpression.ReferencedType is NamedTypeSymbol { IsConstructed: false, TypeParameters.IsEmpty: false } bare
+                && Expand(expectedType) is NamedTypeSymbol { IsConstructed: true } wanted
+                && ReferenceEquals(wanted.OriginalDefinition, bare.OriginalDefinition)
+                && LookupMemberOfKind(bare, name, instance: false) is { } bareMembers
+                && bareMembers.Members.Any(IsStaticMember)
+                && bareMembers.Members.Where(IsStaticMember).All(static m => m is not FunctionSymbol)) {
+                typeExpression = new BoundTypeExpression(syntax.Expression, wanted);
             }
 
             // A type parameter reaches the static members of its constraints,
@@ -8547,6 +8559,19 @@ public sealed partial class Binder {
                 or SyntaxKind.AmpersandStarToken => expectedType,
             _ => null,
         };
+        // 'Complex.i + z', 'two() * x', '.zero == v': a left operand whose
+        // type only its context can say takes it from the right, which is
+        // bound first; the operands are still evaluated left to right.
+        if (operandExpected is null
+            && SharesOperandType(syntax.OperatorToken.Kind)
+            && TakesTypeFromContext(syntax.Left)
+            && !TakesTypeFromContext(syntax.Right)
+            && BinaryKindOf(syntax.OperatorToken.Kind) is { } early) {
+            var first = BindExpression(syntax.Right);
+            var then = BindExpression(syntax.Left, first.Type.IsError ? null : first.Type);
+            return BindBinaryOperator(syntax, early, then, first, syntax.OperatorToken);
+        }
+
         var left = BindExpression(syntax.Left, operandExpected);
 
         // The right side of '??' is typed by the left's unwrapped type.
@@ -8579,6 +8604,34 @@ public sealed partial class Binder {
 
         return BindBinaryOperator(syntax, kind.Value, left, right, syntax.OperatorToken);
     }
+
+    /// <summary>An operator whose operands are, as written in Sable.Core, of one type: arithmetic, bitwise, comparison.</summary>
+    static bool SharesOperandType(SyntaxKind kind) =>
+        kind is SyntaxKind.PlusToken or SyntaxKind.MinusToken or SyntaxKind.StarToken or SyntaxKind.SlashToken
+            or SyntaxKind.PercentToken or SyntaxKind.AmpersandToken or SyntaxKind.PipeToken or SyntaxKind.CaretToken
+            or SyntaxKind.AmpersandPlusToken or SyntaxKind.AmpersandMinusToken or SyntaxKind.AmpersandStarToken
+            or SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken or SyntaxKind.LessToken
+            or SyntaxKind.LessEqualsToken or SyntaxKind.GreaterToken or SyntaxKind.GreaterEqualsToken;
+
+    /// <summary>
+    ///     An operand whose type its context settles, by its form: <c>.zero</c>,
+    ///     <c>.init(…)</c>, a static member of a generic type named bare
+    ///     (<c>Complex.i</c>, <c>Complex.polar(…)</c>), or a call with no
+    ///     arguments to infer from (<c>two()</c>).
+    /// </summary>
+    bool TakesTypeFromContext(ExpressionSyntax syntax) =>
+        syntax switch {
+            ParenthesizedExpressionSyntax parenthesized => TakesTypeFromContext(parenthesized.Expression),
+            ImplicitMemberAccessExpressionSyntax => true,
+            MemberAccessExpressionSyntax { Expression: IdentifierNameSyntax owner } =>
+                LookupLocal(owner.Identifier.Text) is null
+                && _compilation.TypeBinder.Lookup(owner.Identifier.Text, _containingSymbol, _scope, owner.Span, report: false)
+                    is NamedTypeSymbol { IsConstructed: false, TypeParameters.IsEmpty: false },
+            InvocationExpressionSyntax { Expression: ImplicitMemberAccessExpressionSyntax or MemberAccessExpressionSyntax } call =>
+                TakesTypeFromContext(call.Expression),
+            InvocationExpressionSyntax { Expression: IdentifierNameSyntax, ArgumentList.Arguments.Count: 0, TrailingClosure: null } => true,
+            _ => false,
+        };
 
     static BinaryOperatorKind? BinaryKindOf(SyntaxKind kind) =>
         kind switch {

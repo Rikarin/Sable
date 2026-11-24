@@ -1,0 +1,91 @@
+module UrlTests
+
+// Url (Sable.Net) against the web platform's own conformance suite: every
+// entry of WPT's url/resources/urltestdata.json (in tests/lib/Sable.Net/data/),
+// each URL parsed — against its base, if it has one — and every part
+// compared with what a browser gives; and the API around it.
+
+import Sable.IO
+import Sable.Net
+import Sable.Serialize
+import Sable.Testing
+
+fn urlDataFile(_ name: String) -> String {
+    var up = ""
+    var depth = 0
+    while depth < 8 {
+        let path = "\(up)tests/lib/Sable.Net/data/\(name)"
+        if File.exists(path) {
+            return path
+        }
+        up = up + "../"
+        depth += 1
+    }
+    return "tests/lib/Sable.Net/data/\(name)"
+}
+
+fn expected(_ entry: JsonValue, _ key: String) -> String? {
+    if let value = field(entry, key) {
+        return asText(value)
+    }
+    return none
+}
+
+@test
+fn everyCaseOfWptsUrlTestData() throws {
+    let data = try parse(bytes: try File.readBytes(urlDataFile("urltestdata.json")))
+    var checked = 0
+    var failures: String[>..] = []
+    for entry in itemsOf(data) {
+        if asText(entry) != none {
+            continue
+        }
+        let input = expected(entry, "input")!
+        var base: Url? = none
+        if let given = field(entry, "base") {
+            if !isNull(given) {
+                base = try? Url.parse(asText(given)!)
+            }
+        }
+        checked += 1
+        let fails = if let failure = field(entry, "failure") { asBool(failure) ?? false } else { false }
+        let parsed = try? Url.parse(input, relativeTo: base)
+        if fails {
+            if let url = parsed {
+                failures.append("\(input) against \(expected(entry, "base") ?? "none"): parsed as \(url.href), expected a failure")
+            }
+            continue
+        }
+        guard let url = parsed else {
+            failures.append("\(input) against \(expected(entry, "base") ?? "none"): failed, expected \(expected(entry, "href") ?? "?")")
+            continue
+        }
+        var differences: String[>..] = []
+        let pairs: String[>..][>..] = [
+            ["href", url.href], ["origin", url.origin], ["protocol", url.protocolText], ["username", url.username],
+            ["password", url.password], ["host", url.hostAndPort], ["hostname", url.hostname], ["port", url.portText],
+            ["pathname", url.path], ["search", url.search], ["hash", url.hashText],
+            ["searchParams", QueryItem.serialize(url.queryItems)],
+        ]
+        for pair in pairs {
+            if let want = expected(entry, pair[0]) {
+                if want != pair[1] {
+                    differences.append("\(pair[0]) \(pair[1]) (expected \(want))")
+                }
+            }
+        }
+        if !differences.isEmpty {
+            failures.append("\(input) against \(expected(entry, "base") ?? "none"): " + differences.joined(separator: ", "))
+        }
+    }
+    if !failures.isEmpty {
+        var i = 0
+        while i < failures.count && i < 60 {
+            print(failures[i])
+            i += 1
+        }
+    }
+    print("urltestdata.json: \(checked) cases, \(failures.count) failed")
+    assertEqual(failures.count, 0)
+    assert(checked > 800)
+}

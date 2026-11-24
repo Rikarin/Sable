@@ -63,6 +63,12 @@ public class Task<Success> {
     @intrinsic
     static async fn park(_ waitList: Int)
 
+    /// Parks the running task in a wait list until it is woken or
+    /// cancelled, unless it was woken since the ticket (-1: none) or the
+    /// task is cancelled already: WaitList's 'parkCancellably'.
+    @intrinsic
+    static async fn parkCancellably(_ waitList: Int, _ ticket: Int)
+
     /// Lets every task queued run before this one goes on.
     @intrinsic
     public static async fn `yield`()

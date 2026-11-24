@@ -1,0 +1,95 @@
+module Sable.Concurrency
+
+/// One value, sent once and received once: Rust's `tokio::sync::oneshot`.
+/// The value is sent from any code, without waiting — a callback on
+/// another thread among it — and taken by the one receive that gets it;
+/// a second send is refused, and a receive after the value was taken, or
+/// after the oneshot is closed without one, gets none. (A Promise, by
+/// contrast, gives its one value to every task that waits.)
+///
+/// ```sable
+/// let reply = Oneshot<Int>()
+/// let asker = Task.spawn { await reply.receive() }
+/// assert(reply.send(42))
+/// assert(!reply.send(7))
+/// assert(await asker.value == 42)
+/// ```
+@immutable
+public final class Oneshot<T: Sendable> {
+    let state: Mutex<OneshotState<T>>
+    let arrived: WaitList
+
+    /// One with no value yet.
+    public init() {
+        state = Mutex(OneshotState<T>())
+        arrived = WaitList()
+    }
+
+    /// Sends the value: whether it was taken — false if a value was sent
+    /// already or the oneshot is closed.
+    @discardable
+    public fn send(_ value: T) -> Bool {
+        Runtime.share(value)
+        let taken = state.withLock { (state: inout OneshotState<T>) -> Bool in
+            if state.sent || state.closed {
+                return false
+            }
+            state.sent = true
+            state.value = value
+            return true
+        }
+        if taken {
+            arrived.wakeAll()
+        }
+        return taken
+    }
+
+    /// No value will be sent: a receive waiting, or to come, gets none.
+    /// A value sent already is still received.
+    public fn close() {
+        state.withLock { $0.closed = true }
+        arrived.wakeAll()
+    }
+
+    /// Whether a value has been sent, or the oneshot closed: a receive now
+    /// does not wait.
+    public var isCompleted: Bool => state.withLock { $0.sent || $0.closed }
+
+    /// The value, waiting for it to be sent: none if the oneshot is closed
+    /// without one, if another receive took it, or if the task is cancelled
+    /// while it waits.
+    public fn receive() async -> T? {
+        while true {
+            let ticket = arrived.ticket
+            let (value, waits) = state.withLock { (state: inout OneshotState<T>) -> (T?, Bool) in
+                if let value = state.value {
+                    state.value = none
+                    return (value, false)
+                }
+                return (none, !state.sent && !state.closed)
+            }
+            if !waits || Task.isCancelled {
+                return value
+            }
+            await arrived.parkCancellably(since: ticket)
+        }
+    }
+
+    /// The value if it has been sent and not yet taken; none otherwise,
+    /// without waiting.
+    public fn tryReceive() -> T? {
+        return state.withLock { (state: inout OneshotState<T>) -> T? in
+            let value = state.value
+            state.value = none
+            return value
+        }
+    }
+}
+
+struct OneshotState<T> {
+    var value: T? = none
+    var sent: Bool = false
+    var closed: Bool = false
+
+    init() { }
+}

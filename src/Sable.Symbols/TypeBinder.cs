@@ -690,6 +690,7 @@ internal sealed class TypeBinder(Compilation compilation) {
         // 'alias Json = … | Json[]' — and is then known by its name
         // (RecursiveUnionTypeSymbol). Made on the first mention of itself.
         RecursiveUnionTypeSymbol? recursive = null;
+        var constrained = false;
 
         alias.TypeResolver = () => {
             if (!_resolvingAliases.Add(alias)) {
@@ -706,6 +707,13 @@ internal sealed class TypeBinder(Compilation compilation) {
             }
 
             try {
+                // 'alias Channel<T: Sendable> = …': the parameters' constraints
+                // hold in the target, which may require them.
+                if (!constrained) {
+                    constrained = true;
+                    BindTypeParameterConstraints(alias.TypeParameters, alias, scope);
+                }
+
                 var type = BindType(target, alias, scope);
                 if (recursive is null) {
                     return type;
@@ -1555,7 +1563,27 @@ internal sealed class TypeBinder(Compilation compilation) {
                     map[alias.TypeParameters[i]] = arguments[i];
                 }
 
-                return new TypeSubstitution(map).Apply(alias.AliasedType);
+                // Resolving the target binds the parameters' constraints,
+                // which each argument must meet: 'Channel<T: Sendable>'.
+                var aliased = alias.AliasedType;
+                var substitution = new TypeSubstitution(map);
+                if (!arguments.Any(TypeSubstitution.ContainsError)) {
+                    var equivalence = TypeEquivalence.ForSymbol(context);
+                    for (var i = 0; i < expected; i++) {
+                        foreach (var constraint in alias.TypeParameters[i].Constraints) {
+                            if (!Conversions.Satisfies(arguments[i], substitution.Apply(constraint), equivalence)) {
+                                _diagnostics.Error(
+                                    ErrorCode.ERR_DoesNotConform,
+                                    span,
+                                    $"'{arguments[i].ToDisplayString()}' does not conform to '{constraint.ToDisplayString()}', "
+                                    + $"which '{alias.Name}' requires of '{alias.TypeParameters[i].Name}'"
+                                );
+                            }
+                        }
+                    }
+                }
+
+                return substitution.Apply(aliased);
             }
 
             // 'some Sequence<Int>': a protocol's associated types, in order.

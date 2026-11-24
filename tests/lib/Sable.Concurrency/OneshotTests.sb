@@ -1,0 +1,116 @@
+module OneshotTests
+
+// Oneshot (Sable.Concurrency), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Concurrency
+
+import Sable.Concurrency
+import Sable.Testing
+
+fn settle() async {
+    for _ in 0..<20 {
+        await Task.yield()
+    }
+}
+
+@test
+fn theValueSentIsReceived() async {
+    let oneshot = Oneshot<Int>()
+    assert(!oneshot.isCompleted)
+    assert(oneshot.send(5))
+    assert(oneshot.isCompleted)
+    assert(await oneshot.receive() == 5)
+}
+
+@test
+fn aSecondSendIsRefused() async {
+    let oneshot = Oneshot<String>()
+    assert(oneshot.send("first"))
+    assert(!oneshot.send("second"))
+    assert(await oneshot.receive() == "first")
+}
+
+@test
+fn aReceiverWaitsForTheValue() async {
+    let oneshot = Oneshot<Int>()
+    let receiver = Task.spawn { await oneshot.receive() }
+    await settle()
+    oneshot.send(8)
+    assert(await receiver.value == 8)
+}
+
+@test
+fn aValueSentFromAnotherThreadWakesTheReceiver() async {
+    let oneshot = Oneshot<Int>()
+    let sender = Task.detached {
+        await Task.yield()
+        oneshot.send(11)
+    }
+    assert(await oneshot.receive() == 11)
+    await sender.value
+}
+
+@test
+fn theValueIsTakenOnce() async {
+    let oneshot = Oneshot<Int>()
+    oneshot.send(1)
+    assert(oneshot.tryReceive() == 1)
+    assert(oneshot.tryReceive() == none)
+    assert(await oneshot.receive() == none)
+}
+
+@test
+fn tryReceiveBeforeTheSendGivesNone() {
+    let oneshot = Oneshot<Int>()
+    assert(oneshot.tryReceive() == none)
+}
+
+@test
+fn closingWithoutAValueEndsTheWait() async {
+    let oneshot = Oneshot<Int>()
+    let receiver = Task.spawn { await oneshot.receive() }
+    await settle()
+    oneshot.close()
+    assert(await receiver.value == none)
+    assert(oneshot.isCompleted)
+    assert(!oneshot.send(3))
+}
+
+@test
+fn closingKeepsAValueSentAlready() async {
+    let oneshot = Oneshot<Int>()
+    oneshot.send(4)
+    oneshot.close()
+    assert(await oneshot.receive() == 4)
+}
+
+@test
+fn aWaitingReceiveIsCancelled() async {
+    let oneshot = Oneshot<Int>()
+    let receiver = Task.spawn { await oneshot.receive() }
+    await settle()
+    receiver.cancel()
+    assert(await receiver.value == none)
+    // The value is still there for another.
+    oneshot.send(6)
+    assert(await oneshot.receive() == 6)
+}
+
+@test
+fn oneOfManyReceiversGetsTheValue() async {
+    let oneshot = Oneshot<Int>()
+    var receivers: Task<Int?>[>..] = []
+    for _ in 0..<3 {
+        receivers.append(Task.spawn { await oneshot.receive() })
+    }
+    await settle()
+    oneshot.send(9)
+    oneshot.close()
+    var got = 0
+    for receiver in receivers {
+        if let value = await receiver.value {
+            assertEqual(value, 9)
+            got += 1
+        }
+    }
+    assertEqual(got, 1)
+}

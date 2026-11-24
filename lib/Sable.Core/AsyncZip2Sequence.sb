@@ -1,0 +1,50 @@
+module Sable.Core
+
+/// Two async sequences' elements in pairs — the first of each, then the
+/// second of each — until either runs out. Each pair waits for the first
+/// sequence's element, then the second's.
+///
+/// ```sable
+/// var total = 0
+/// for await (count, price) in zip([1, 2, 3].async, [10, 20].async) {
+///     total += count * price
+/// }
+/// assert(total == 50)
+/// ```
+public fn zip<First: AsyncSequence, Second: AsyncSequence>(_ first: First, _ second: Second) -> AsyncZip2Sequence<First, Second> {
+    return AsyncZip2Sequence<First, Second> { first: first, second: second }
+}
+
+/// What 'zip(_:_:)' makes of two async sequences: their elements in pairs.
+public struct AsyncZip2Sequence<First: AsyncSequence, Second: AsyncSequence>: AsyncSequence {
+    let first: First
+    let second: Second
+
+    /// An iterator from the first pair.
+    public fn makeAsyncIterator() -> AsyncZip2Iterator<First.Iter, Second.Iter> {
+        return AsyncZip2Iterator<First.Iter, Second.Iter> { first: first.makeAsyncIterator(), second: second.makeAsyncIterator(), done: false }
+    }
+}
+
+/// Gives two async iterators' elements in pairs; it throws what either does.
+public struct AsyncZip2Iterator<First: AsyncIterator, Second: AsyncIterator>: AsyncIterator {
+    var first: First
+    var second: Second
+    var done: Bool
+
+    /// The next pair, or none once either is done.
+    public mutating fn next() async throws(First.Failure | Second.Failure) -> (First.Element, Second.Element)? {
+        if done {
+            return none
+        }
+        guard let a = try await first.next() else {
+            done = true
+            return none
+        }
+        guard let b = try await second.next() else {
+            done = true
+            return none
+        }
+        return (a, b)
+    }
+}

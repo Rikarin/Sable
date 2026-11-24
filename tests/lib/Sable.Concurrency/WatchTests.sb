@@ -1,0 +1,150 @@
+module WatchTests
+
+// Watch and WatchReceiver (Sable.Concurrency), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Concurrency
+
+import Sable.Concurrency
+import Sable.Testing
+
+fn settle() async {
+    for _ in 0..<20 {
+        await Task.yield()
+    }
+}
+
+@test
+fn itHoldsTheLatestValue() {
+    let watch = Watch<Int>(1)
+    assertEqual(watch.value, 1)
+    assertEqual(watch.version, 0)
+    assert(watch.send(2))
+    assertEqual(watch.value, 2)
+    assertEqual(watch.version, 1)
+}
+
+@test
+fn aReceiverWaitsForAChange() async {
+    let watch = Watch<String>("old")
+    let receiver = watch.subscribe()
+    let reader = Task.spawn {
+        var mine = receiver
+        return await mine.changed()
+    }
+    await settle()
+    watch.send("new")
+    assert(await reader.value == "new")
+}
+
+@test
+fn aSlowReceiverSkipsToTheNewest() async {
+    let watch = Watch<Int>(0)
+    var receiver = watch.subscribe()
+    assert(!receiver.hasChanged)
+    for i in 1...5 {
+        watch.send(i)
+    }
+    assert(receiver.hasChanged)
+    assert(await receiver.changed() == 5)
+    assert(!receiver.hasChanged)
+}
+
+@test
+fn borrowingMarksTheValueSeen() {
+    let watch = Watch<Int>(3)
+    var receiver = watch.subscribe()
+    watch.send(4)
+    assert(receiver.hasChanged)
+    assertEqual(receiver.borrowAndMarkSeen(), 4)
+    assert(!receiver.hasChanged)
+}
+
+@test
+fn updateChangesTheValueInPlace() {
+    let watch = Watch<Int[>..]>([1])
+    assert(watch.update { $0.append(2) })
+    assert(watch.value == [1, 2])
+    assertEqual(watch.version, 1)
+}
+
+@test
+fn everyReceiverSeesTheChange() async {
+    let watch = Watch<Int>(0)
+    var readers: Task<Int?>[>..] = []
+    for _ in 0..<3 {
+        let receiver = watch.subscribe()
+        readers.append(Task.spawn {
+            var mine = receiver
+            return await mine.changed()
+        })
+    }
+    await settle()
+    watch.send(7)
+    for reader in readers {
+        assert(await reader.value == 7)
+    }
+}
+
+@test
+fn closingEndsTheWaitOnceTheLastIsSeen() async {
+    let watch = Watch<Int>(0)
+    var receiver = watch.subscribe()
+    watch.send(1)
+    watch.close()
+    assert(watch.isClosed)
+    assert(!watch.send(2))
+    assert(!watch.update { $0 += 1 })
+    // The change made before closing is still seen, then none.
+    assert(await receiver.changed() == 1)
+    assert(await receiver.changed() == none)
+}
+
+@test
+fn closingWakesAWaitingReceiver() async {
+    let watch = Watch<Int>(0)
+    let receiver = watch.subscribe()
+    let reader = Task.spawn {
+        var mine = receiver
+        return await mine.changed()
+    }
+    await settle()
+    watch.close()
+    assert(await reader.value == none)
+}
+
+@test
+fn aWaitingReceiverIsCancelled() async {
+    let watch = Watch<Int>(0)
+    let receiver = watch.subscribe()
+    let reader = Task.spawn {
+        var mine = receiver
+        return await mine.changed()
+    }
+    await settle()
+    reader.cancel()
+    assert(await reader.value == none)
+}
+
+@test
+fn iteratingGivesTheValueThenEachChange() async {
+    let watch = Watch<Int>(10)
+    var iterator = watch.makeAsyncIterator()
+    assert(await iterator.next() == 10)
+    watch.send(20)
+    watch.send(30)
+    assert(await iterator.next() == 30)
+    watch.close()
+    assert(await iterator.next() == none)
+}
+
+@test
+fn aReceiverIsItsOwnIterator() async {
+    let watch = Watch<Int>(1)
+    let receiver = watch.subscribe()
+    watch.send(2)
+    watch.close()
+    var got: Int[>..] = []
+    for await value in receiver {
+        got.append(value)
+    }
+    assert(got == [2])
+}

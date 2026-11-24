@@ -1,0 +1,97 @@
+module Sable.Concurrency
+
+/// Two async sequences' elements as they come, interleaved, until both
+/// have ended: swift-async-algorithms' `merge`. Each is gone through by a
+/// task of its own, which waits while the merged sequence's consumer has
+/// not taken the element before; the first to throw ends it, with the
+/// error. An iterator let go, or its task cancelled, cancels those tasks.
+///
+/// ```sable
+/// let fast = Channel<Int>()
+/// let slow = Channel<Int>()
+/// await fast.send(1)
+/// await slow.send(2)
+/// await fast.close()
+/// await slow.close()
+/// var total = 0
+/// for await value in merge(fast, slow) {
+///     total += value
+/// }
+/// assert(total == 3)
+/// ```
+public fn merge<First: AsyncSequence, Second: AsyncSequence>(_ first: First, _ second: Second) -> AsyncMerge2Sequence<First, Second>
+    where First: Sendable, Second: Sendable, First.Element: Sendable, Second.Element == First.Element, Second.Failure == First.Failure {
+    return AsyncMerge2Sequence<First, Second> { first: first, second: second }
+}
+
+/// What 'merge(_:_:)' makes: two async sequences' elements as they come.
+public struct AsyncMerge2Sequence<First: AsyncSequence, Second: AsyncSequence>: AsyncSequence
+    where First: Sendable, Second: Sendable, First.Element: Sendable, Second.Element == First.Element, Second.Failure == First.Failure {
+    let first: First
+    let second: Second
+
+    /// An iterator of the elements from now on: the tasks that go through
+    /// the two sequences are started.
+    public fn makeAsyncIterator() -> AsyncMergeIterator<First.Element, First.Failure> {
+        let merged = ThrowingChannel<First.Element, First.Failure>(capacity: 1)
+        let remaining = Atomic(2)
+        let first = self.first
+        let second = self.second
+        let one = Task.detached {
+            await pumpInto(merged, first, remaining)
+        }
+        let two = Task.detached {
+            await pumpInto(merged, second, remaining)
+        }
+        return AsyncMergeIterator<First.Element, First.Failure> { merged: merged.makeAsyncIterator(), pumps: TaskCanceller([one, two]) }
+    }
+}
+
+/// Gives a merge's elements as they come.
+public struct AsyncMergeIterator<Value: Sendable, Failure: Error>: AsyncIterator {
+    public alias Element = Value
+
+    var merged: ChannelIterator<Value, Failure>
+    let pumps: TaskCanceller
+
+    /// The next element of either sequence; none once both have ended, or
+    /// if the task is cancelled while it waits.
+    public mutating fn next() async throws(Failure) -> Value? {
+        return try await merged.next()
+    }
+}
+
+// A sequence's elements sent on, until it ends, throws or the channel
+// takes no more; the last of the senders to end closes the channel.
+fn pumpInto<S: AsyncSequence>(_ channel: ThrowingChannel<S.Element, S.Failure>, _ base: S, _ remaining: Atomic<Int>) async where S.Element: Sendable {
+    var iterator = base.makeAsyncIterator()
+    do {
+        while let value = try await iterator.next() {
+            if await channel.send(value) != .Sent {
+                return
+            }
+        }
+    } catch {
+        await channel.close(error: error)
+        return
+    }
+    if remaining.update({ $0 - 1 }) == 1 {
+        await channel.close()
+    }
+}
+
+// The tasks an iterator started, cancelled as the last copy of it goes.
+@immutable
+final class TaskCanceller {
+    let tasks: Task<Void>[>..]
+
+    init(_ tasks: Task<Void>[>..]) {
+        self.tasks = tasks
+    }
+
+    deinit {
+        for task in tasks {
+            task.cancel()
+        }
+    }
+}

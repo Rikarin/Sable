@@ -1,0 +1,58 @@
+module Sable.Concurrency
+
+// The values a channel or a stream holds, in the order they came: taken
+// from the front, dropped from either end. Taking moves a head along the
+// array rather than shifting what is behind it; the array starts again
+// once it is emptied, and is compacted once most of it lies behind the
+// head, so a long-lived queue does not grow.
+struct ValueQueue<Element> {
+    var items: Element[>..] = []
+    var head: Int = 0
+
+    init() { }
+
+    var count: Int => items.count - head
+
+    var isEmpty: Bool => head >= items.count
+
+    // The value so many after the first.
+    fn at(_ offset: Int) -> Element {
+        return items[head + offset]
+    }
+
+    mutating fn append(_ value: Element) {
+        items.append(value)
+    }
+
+    mutating fn removeFirst() -> Element {
+        let value = items[head]
+        head += 1
+        if head == items.count {
+            items.removeAll(keepingCapacity: true)
+            head = 0
+        } else if head >= 32 && head * 2 >= items.count {
+            var kept: Element[>..] = []
+            kept.reserveCapacity(items.count - head)
+            for i in head..<items.count {
+                kept.append(items[i])
+            }
+            items = kept
+            head = 0
+        }
+        return value
+    }
+
+    mutating fn removeLast() -> Element {
+        let value = items.removeLast()
+        if head == items.count {
+            items.removeAll(keepingCapacity: true)
+            head = 0
+        }
+        return value
+    }
+
+    mutating fn removeAll() {
+        items.removeAll()
+        head = 0
+    }
+}

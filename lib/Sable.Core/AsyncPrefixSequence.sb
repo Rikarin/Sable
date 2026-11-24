@@ -1,0 +1,33 @@
+module Sable.Core
+
+/// At most so many of an async sequence's first elements: what 'prefix' on
+/// an AsyncSequence makes. Once it has given them, it asks the sequence for
+/// no more.
+public struct AsyncPrefixSequence<Base: AsyncSequence>: AsyncSequence {
+    let base: Base
+    let count: Int
+
+    /// An iterator from the first element.
+    public fn makeAsyncIterator() -> AsyncPrefixIterator<Base.Iter> {
+        return AsyncPrefixIterator<Base.Iter> { base: base.makeAsyncIterator(), remaining: count }
+    }
+}
+
+/// Gives an async iterator's elements until so many have been given.
+public struct AsyncPrefixIterator<Base: AsyncIterator>: AsyncIterator {
+    var base: Base
+    var remaining: Int
+
+    /// The next element, or none once the count is reached.
+    public mutating fn next() async throws(Base.Failure) -> Base.Element? {
+        if remaining <= 0 {
+            return none
+        }
+        remaining -= 1
+        guard let element = try await base.next() else {
+            remaining = 0
+            return none
+        }
+        return element
+    }
+}

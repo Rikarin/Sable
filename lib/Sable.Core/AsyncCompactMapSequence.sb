@@ -1,0 +1,29 @@
+module Sable.Core
+
+/// An async sequence's elements, transformed, leaving out those the
+/// closure makes none of: what 'compactMap' on an AsyncSequence makes.
+public struct AsyncCompactMapSequence<Base: AsyncSequence, T>: AsyncSequence {
+    let base: Base
+    let transform: async (Base.Element) -> T?
+
+    /// An iterator from the first element the closure keeps.
+    public fn makeAsyncIterator() -> AsyncCompactMapIterator<Base.Iter, T> {
+        return AsyncCompactMapIterator<Base.Iter, T> { base: base.makeAsyncIterator(), transform: transform }
+    }
+}
+
+/// Gives an async iterator's elements, transformed, leaving out none.
+public struct AsyncCompactMapIterator<Base: AsyncIterator, T>: AsyncIterator {
+    var base: Base
+    let transform: async (Base.Element) -> T?
+
+    /// The next transformed element that is not none, or none past the last.
+    public mutating fn next() async throws(Base.Failure) -> T? {
+        while let element = try await base.next() {
+            if let value = await transform(element) {
+                return value
+            }
+        }
+        return none
+    }
+}

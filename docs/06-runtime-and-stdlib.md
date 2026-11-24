@@ -850,16 +850,24 @@ Sable.Serialize     Serializable (encode(to:), static decode(from:)) for
                     ($.items[3].name); JsonValue. Not yet: format-agnostic
                     Encoder/Decoder protocols, TOML, MessagePack, and the
                     zero-copy @inline_layout path
-Sable.Concurrency   Channel, Mutex RwLock Condition Semaphore Barrier
+Sable.Concurrency   Channel and ThrowingChannel (unbounded, or bounded with
+                    a full mode: wait — the sender's backpressure — or
+                    drop oldest, newest or the write; close(error:);
+                    cancellable sends and receives), Broadcast, Watch,
+                    Oneshot, AsyncStream and AsyncThrowingStream (make,
+                    buffering policy, onTermination), merge, debounce,
+                    throttle, Mutex RwLock Condition Semaphore Barrier
                     CountdownLatch Once Lazy, AsyncMutex AsyncSemaphore,
-                    AsyncStream, ConcurrentDictionary (sharded)
+                    ConcurrentDictionary (sharded)
                     ConcurrentQueue (two-lock) ConcurrentStack,
                     CancellationTokenSource/CancellationToken (handlers,
                     linked, cancel(after:), withCancellation), Promise,
                     Continuation (checked; a leak traps in debug),
                     withTimeout, race, whenAll/whenAny/whenEach,
                     Task.sleep(for:)
-                    (Task, TaskGroup, AsyncSequence, Atomic<T> and OnceCell
+                    (Task, TaskGroup, WaitList, AsyncSequence with map,
+                    filter, compactMap, prefix, chunked, reduce,
+                    first(where:), collect and zip, Atomic<T> and OnceCell
                     are Sable.Core's: an Atomic's cell is Core's raw memory)
 Sable.Time          Instant Duration Clock, UtcDateTime (the moment),
                     Date TimeOfDay LocalDateTime (civil), UtcOffset
@@ -1239,6 +1247,18 @@ recover at the task boundary.
 - Cancellation is a flag per task, set down through its children, which runs
   the task's cancellation handlers and wakes a sleep it is in; the task stops
   where it asks.
+- Waits on state are wait lists (Sable.Core's `WaitList`): a task parks in
+  one and is woken, all at once, by whatever changes the state, then looks
+  again. Parked inside an actor's method, it lets the actor go only once it
+  is in the list, so no wake is missed. A park may be cancellable — the
+  task's cancellation takes it out of the list and wakes it, and a task
+  cancelled already does not park — which is how a channel's blocked send
+  or receive gives up; and it may be made against a ticket, the list's count
+  of wakes, taken before the look at the state: a wake since then ends the
+  park at once, so state guarded by a lock rather than an actor (an
+  AsyncStream's, which any thread yields to without waiting) misses none
+  either. Both are decided as the task suspends, under the lock a wake and
+  a cancellation take.
 - Priorities are inherited by children and order the run queues, by band.
   A task waiting for a lower-priority one escalates it, what it waits for
   and its children, so it does not invert; one waiting for an actor

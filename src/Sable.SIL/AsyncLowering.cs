@@ -31,7 +31,8 @@ namespace Sable.SIL;
 ///         <c>async_group_wait</c> (a group's next child to finish),
 ///         <c>async_hop</c> (an actor to be free, or the main thread),
 ///         <c>async_yield</c>, <c>async_sleep</c>, <c>async_park</c> (a
-///         wait list to be woken), <c>async_io_wait</c> (a socket to be
+///         wait list to be woken), <c>async_park_cancellable</c> (one to be
+///         woken, unless woken since a ticket, or the task cancelled), <c>async_io_wait</c> (a socket to be
 ///         ready, which the reactor says) and <c>async_blocking</c> (work
 ///         run on the blocking pool), each of which says whether the task must
 ///         suspend, having noted what it waits for: the executor puts it
@@ -151,7 +152,7 @@ public static class AsyncLowering {
             callee.Type as FunctionType ?? ((ThickFunctionType)callee.Type).Signature;
 
         static bool IsWait(SilInstruction instruction) =>
-            instruction is BuiltinInst { Name: "task_yield" or "task_sleep" or "task_wait" or "task_group_wait" or "task_hop" or "task_park" or "task_io_wait" or "task_blocking" };
+            instruction is BuiltinInst { Name: "task_yield" or "task_sleep" or "task_wait" or "task_group_wait" or "task_hop" or "task_park" or "task_park_cancellable" or "task_io_wait" or "task_blocking" };
 
         static bool IsSuspension(SilInstruction instruction) =>
             IsWait(instruction) || instruction is ApplyInst apply && IsAsyncCallee(apply.Callee) || instruction is TryApplyInst tryApply && IsAsyncCallee(tryApply.Callee);
@@ -747,13 +748,13 @@ public static class AsyncLowering {
                     break;
                 }
 
-                case BuiltinInst { Name: "task_yield" or "task_sleep" or "task_park" or "task_io_wait" or "task_blocking" } wait: {
+                case BuiltinInst { Name: "task_yield" or "task_sleep" or "task_park" or "task_park_cancellable" or "task_io_wait" or "task_blocking" } wait: {
                     if (!async) {
                         throw new InvalidOperationException($"'{wait.Name}' outside an async function, in {function.Name}");
                     }
 
                     var must = At(block, new BuiltinInst(wait.Name switch {
-                        "task_yield" => "async_yield", "task_park" => "async_park", "task_io_wait" => "async_io_wait", "task_blocking" => "async_blocking", _ => "async_sleep",
+                        "task_yield" => "async_yield", "task_park" => "async_park", "task_park_cancellable" => "async_park_cancellable", "task_io_wait" => "async_io_wait", "task_blocking" => "async_blocking", _ => "async_sleep",
                     }, SilType.Bool, [..wait.Operands]));
                     At(block, new CondBranchInst(must, Suspended(after), [], after, []));
                     break;

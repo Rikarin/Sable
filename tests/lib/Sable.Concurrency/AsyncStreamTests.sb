@@ -1,0 +1,236 @@
+module AsyncStreamTests
+
+// AsyncStream, AsyncThrowingStream and StreamContinuation
+// (Sable.Concurrency), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Concurrency
+
+import Sable.Concurrency
+import Sable.Testing
+
+enum Lost: Error {
+    Connection
+}
+
+fn settle() async {
+    for _ in 0..<20 {
+        await Task.yield()
+    }
+}
+
+// Waits, a millisecond at a time, until the condition holds: for what other
+// tasks, on other threads, are to have done (gives up after five seconds).
+fn until(_ condition: () -> Bool) async {
+    var waited = 0
+    while !condition() && waited < 5000 {
+        try? await Task.sleep(nanoseconds: 1_000_000)
+        waited += 1
+    }
+}
+
+fn enqueued<T>(_ result: YieldResult<T>) -> Int {
+    return match result {
+        case .Enqueued(let room) => room
+        case _                   => -1
+    }
+}
+
+@test
+fn valuesComeInTheOrderYielded() async {
+    let (stream, continuation) = AsyncStream<Int>.make()
+    for i in 1...4 {
+        continuation.yield(i)
+    }
+    continuation.finish()
+    assert(await stream.collect() == [1, 2, 3, 4])
+}
+
+@test
+fn theConsumerWaitsForAValue() async {
+    let (stream, continuation) = AsyncStream<String>.make()
+    let consumer = Task.spawn {
+        var iterator = stream.makeAsyncIterator()
+        return await iterator.next()
+    }
+    await settle()
+    continuation.yield("late")
+    assertEqual(await consumer.value ?? "none", "late")
+}
+
+@test
+fn aValueYieldedFromAnotherThreadWakesTheConsumer() async {
+    let (stream, continuation) = AsyncStream<Int>.make()
+    let producer = Task.detached {
+        for i in 0..<200 {
+            continuation.yield(i)
+            if i % 16 == 0 {
+                await Task.yield()
+            }
+        }
+        continuation.finish()
+    }
+    var expected = 0
+    for await value in stream {
+        assertEqual(value, expected)
+        expected += 1
+    }
+    await producer.value
+    assertEqual(expected, 200)
+}
+
+@test
+fn anUnboundedStreamHoldsEverything() async {
+    let (stream, continuation) = AsyncStream<Int>.make(bufferingPolicy: .Unbounded)
+    assertEqual(enqueued(continuation.yield(1)), Int.max)
+    continuation.finish()
+    assert(await stream.collect() == [1])
+}
+
+@test
+fn bufferingOldestDropsWhatIsYieldedWhileFull() async {
+    let (stream, continuation) = AsyncStream<Int>.make(bufferingPolicy: .BufferingOldest(2))
+    assertEqual(enqueued(continuation.yield(1)), 1)
+    assertEqual(enqueued(continuation.yield(2)), 0)
+    match continuation.yield(3) {
+        case .Dropped(let value) => assertEqual(value, 3)
+        case _                   => assert(false)
+    }
+    continuation.finish()
+    assert(await stream.collect() == [1, 2])
+}
+
+@test
+fn bufferingNewestDropsTheOldest() async {
+    let (stream, continuation) = AsyncStream<Int>.make(bufferingPolicy: .BufferingNewest(2))
+    continuation.yield(1)
+    continuation.yield(2)
+    match continuation.yield(3) {
+        case .Dropped(let value) => assertEqual(value, 1)
+        case _                   => assert(false)
+    }
+    continuation.finish()
+    assert(await stream.collect() == [2, 3])
+}
+
+@test
+fn aStreamBufferingNothingDropsWhatNoOneWaitsFor() async {
+    let (stream, continuation) = AsyncStream<Int>.make(bufferingPolicy: .BufferingNewest(0))
+    match continuation.yield(1) {
+        case .Dropped(let value) => assertEqual(value, 1)
+        case _                   => assert(false)
+    }
+    continuation.finish()
+    assert(await stream.collect() == [])
+}
+
+@test
+fn finishingKeepsWhatWasYielded() async {
+    let (stream, continuation) = AsyncStream<Int>.make()
+    continuation.yield(1)
+    continuation.finish()
+    continuation.finish()
+    assert(continuation.isTerminated)
+    match continuation.yield(2) {
+        case .Terminated => { }
+        case _           => assert(false)
+    }
+    var iterator = stream.makeAsyncIterator()
+    assertEqual(await iterator.next() ?? 0, 1)
+    assert(await iterator.next() == none)
+    assert(await iterator.next() == none)
+}
+
+@test
+fn finishingWithAnErrorThrowsItAfterTheValues() async {
+    let (stream, continuation) = AsyncThrowingStream<Int, Lost>.make()
+    continuation.yield(1)
+    continuation.yield(2)
+    continuation.finish(throwing: .Connection)
+    var got: Int[>..] = []
+    var iterator = stream.makeAsyncIterator()
+    do {
+        while let value = try await iterator.next() {
+            got.append(value)
+        }
+        assert(false)
+    } catch {
+        assert(error == .Connection)
+    }
+    assert(got == [1, 2])
+    assert(try! await iterator.next() == none)
+}
+
+@test
+fn aStreamFinishedWithoutAnErrorEndsQuietly() async throws {
+    let (stream, continuation) = AsyncThrowingStream<Int, Lost>.make()
+    continuation.yield(5)
+    continuation.finish()
+    var got: Int[>..] = []
+    for try await value in stream {
+        got.append(value)
+    }
+    assert(got == [5])
+}
+
+@test
+fn theConsumersCancellationEndsTheStream() async {
+    let (stream, continuation) = AsyncStream<Int>.make()
+    let heard = Atomic(0)
+    continuation.onTermination { reason in
+        heard.store(reason == .Cancelled ? 2 : 1)
+    }
+    let seen = Atomic(0)
+    let consumer = Task.spawn {
+        for await _ in stream {
+            seen.store(seen.load() + 1)
+        }
+        return seen.load()
+    }
+    continuation.yield(1)
+    await until { seen.load() == 1 }
+    consumer.cancel()
+    assertEqual(await consumer.value, 1)
+    assertEqual(heard.load(), 2)
+    assert(continuation.isTerminated)
+    match continuation.yield(2) {
+        case .Terminated => { }
+        case _           => assert(false)
+    }
+}
+
+@test
+fn onTerminationHearsTheFinish() {
+    let (_, continuation) = AsyncStream<Int>.make()
+    let heard = Atomic(0)
+    continuation.onTermination { reason in
+        heard.store(reason == .Finished ? 1 : 2)
+    }
+    continuation.finish()
+    continuation.finish()
+    assertEqual(heard.load(), 1)
+    // A handler set after the end runs at once.
+    continuation.onTermination { reason in
+        heard.store(reason == .Finished ? 3 : 4)
+    }
+    assertEqual(heard.load(), 3)
+}
+
+@test
+fn aContinuationLetGoFinishesTheStream() async {
+    let stream = AsyncStream<Int>(bufferingPolicy: .Unbounded) { continuation in
+        continuation.yield(1)
+        continuation.yield(2)
+    }
+    assert(await stream.collect() == [1, 2])
+}
+
+@test
+fn aContinuationKeptFeedsTheStreamLater() async {
+    let kept: Mutex<StreamContinuation<Int, Never>?> = Mutex(none)
+    let stream = AsyncStream<Int>(bufferingPolicy: .BufferingOldest(8)) { continuation in
+        kept.withLock { $0 = continuation }
+    }
+    let continuation = kept.withLock { $0 }!
+    continuation.yield(7)
+    continuation.finish()
+    assert(await stream.collect() == [7])
+}

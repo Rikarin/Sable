@@ -1,0 +1,15 @@
+module Sable.Concurrency
+
+/// What a bounded channel does with a value sent while it is full: .NET's
+/// `BoundedChannelFullMode`.
+@derive(Equatable, Hashable, Debug)
+public enum ChannelFullMode {
+    /// The sender waits until a receiver makes room: backpressure.
+    Wait
+    /// The oldest value waiting is dropped to make room for it.
+    DropOldest
+    /// The newest value waiting is dropped to make room for it.
+    DropNewest
+    /// The value sent is dropped, and what waits is kept.
+    DropWrite
+}

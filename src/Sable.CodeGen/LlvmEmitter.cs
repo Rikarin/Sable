@@ -634,6 +634,8 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_waitlist_free(ptr)
                                 declare void @sable_waitlist_wake(ptr)
                                 declare zeroext i1 @sable_task_park(ptr)
+                                declare zeroext i1 @sable_task_park_cancellable(ptr, i64)
+                                declare i64 @sable_waitlist_ticket(ptr)
                                 declare zeroext i1 @sable_task_io_wait(i64, i1 zeroext)
                                 declare zeroext i1 @sable_task_blocking(ptr, ptr)
                                 declare i64 @sable_net_status()
@@ -2262,7 +2264,7 @@ public sealed partial class LlvmEmitter {
                 // §2.3): nothing else the callee can reach is the same storage.
                 // That is LLVM's noalias, and what lets it keep an array's
                 // buffer and count in registers across writes to elements.
-                parameters.Add(argument.Type is AddressType ? $"ptr noalias %p{i}" : $"{Type(argument.Type)} %p{i}");
+                parameters.Add(argument.Type is AddressType ? $"ptr noalias %p{i}" : $"{ArgumentType(argument.Type)} %p{i}");
             }
 
             // Unspecialised code's metadata (#297): what its opaque values are
@@ -3169,8 +3171,10 @@ public sealed partial class LlvmEmitter {
                     var slot = Scratch(type);
                     Line($"store {type} zeroinitializer, ptr {slot}");
                     Line($"store {TagType(enumInst.EnumType)} {enumInst.Case}, ptr {slot}");
-                    // A payload of no bytes, an empty struct's, has no area to go in.
-                    if (enumInst.Payload is { } payload && Area(enumInst.EnumType).Count > 0) {
+                    // A payload of no bytes, an empty struct's, has no area to
+                    // go in; one laid out as nothing (Unit — Never's, say, in
+                    // a generic union's case) has no value to store.
+                    if (enumInst.Payload is { } payload && Area(enumInst.EnumType).Count > 0 && payload.Type != SilType.Unit) {
                         var area = Fresh();
                         Line($"{area} = getelementptr inbounds {type}, ptr {slot}, i32 0, i32 1");
                         Line($"store {Type(payload.Type)} {Name(payload)}, ptr {area}");
@@ -3564,8 +3568,15 @@ public sealed partial class LlvmEmitter {
         ///     What a call calls, and with what: a function as it is; a closure
         ///     by its code, with its context passed after the arguments.
         /// </summary>
+        /// <summary>
+        ///     A parameter's or an argument's type: Unit — a generic
+        ///     function's T where T is Void, or Never — is passed as the empty
+        ///     struct, since LLVM has no parameters of type void.
+        /// </summary>
+        string ArgumentType(SilType type) => type == SilType.Unit ? "{}" : Type(type);
+
         (string Target, string Arguments) Callee(SilValue callee, IEnumerable<SilValue> arguments) {
-            var passed = arguments.Select(a => $"{Type(a.Type)} {Aligned(a)}").ToList();
+            var passed = arguments.Select(a => $"{ArgumentType(a.Type)} {(a.Type == SilType.Unit ? "zeroinitializer" : Aligned(a))}").ToList();
             if (callee.Type is not ThickFunctionType) {
                 return (Name(callee), string.Join(", ", passed));
             }
@@ -4018,6 +4029,20 @@ public sealed partial class LlvmEmitter {
                     var list = Fresh();
                     Line($"{list} = inttoptr i64 {operands[0]} to ptr");
                     Line($"{Result()} = call zeroext i1 @sable_task_park(ptr {list})");
+                    return;
+                }
+
+                case "async_park_cancellable": {
+                    var list = Fresh();
+                    Line($"{list} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"{Result()} = call zeroext i1 @sable_task_park_cancellable(ptr {list}, i64 {operands[1]})");
+                    return;
+                }
+
+                case "task_waitlist_ticket": {
+                    var list = Fresh();
+                    Line($"{list} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"{Result()} = call i64 @sable_waitlist_ticket(ptr {list})");
                     return;
                 }
 

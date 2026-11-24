@@ -1,0 +1,186 @@
+module Sable.Concurrency
+
+import Sable.Time
+
+// The timed operators (swift-async-algorithms' 'debounce' and 'throttle'):
+// a task goes through the sequence and hands each element to an actor,
+// which decides, with timer tasks of its own, when to yield what to a
+// stream the iterator takes from. Nothing waits but on a timer or the
+// sequence; an iterator let go, or its consumer cancelled, cancels the task.
+
+extension AsyncSequence where Self: Sendable, Element: Sendable {
+    /// The elements after which the sequence was quiet for the interval:
+    /// each element waits the interval out and is given only if no other
+    /// came meanwhile. The last is given as the sequence ends, without
+    /// waiting.
+    ///
+    /// ```sable
+    /// fn settled(_ typed: Channel<String>) async -> String[>..] {
+    ///     // Each search waits until the typing pauses for 300 ms.
+    ///     return await typed.debounce(for: Duration.milliseconds(300)).collect()
+    /// }
+    /// ```
+    public fn debounce(for interval: Duration) -> AsyncDebounceSequence<Self> {
+        return AsyncDebounceSequence<Self> { base: self, interval: interval }
+    }
+
+    /// At most one element per interval: the first is given at once, and
+    /// the next no sooner than the interval after the one before — the
+    /// newest that came meanwhile if 'latest', else the first. One still
+    /// waiting is given as the sequence ends.
+    ///
+    /// ```sable
+    /// fn sampled(_ moves: Channel<Int>) async -> Int[>..] {
+    ///     return await moves.throttle(for: Duration.milliseconds(100)).collect()
+    /// }
+    /// ```
+    public fn throttle(for interval: Duration, latest: Bool = true) -> AsyncThrottleSequence<Self> {
+        return AsyncThrottleSequence<Self> { base: self, interval: interval, latest: latest }
+    }
+}
+
+/// What 'debounce(for:)' makes: the elements after which the sequence was
+/// quiet for the interval.
+public struct AsyncDebounceSequence<Base: AsyncSequence>: AsyncSequence where Base: Sendable, Base.Element: Sendable {
+    let base: Base
+    let interval: Duration
+
+    /// An iterator of the elements from now on: the task that goes through
+    /// the sequence is started.
+    public fn makeAsyncIterator() -> AsyncTimedIterator<Base.Element, Base.Failure> {
+        let (stream, continuation) = AsyncThrowingStream<Base.Element, Base.Failure>.make()
+        let gate = TimedGate<Base.Element, Base.Failure>(continuation, interval, debounce: true, latest: true)
+        return startTimed(base, gate, stream, continuation)
+    }
+}
+
+/// Gives a timed operator's elements as it lets them through.
+public struct AsyncTimedIterator<Value: Sendable, Failure: Error>: AsyncIterator {
+    public alias Element = Value
+
+    var output: StreamIterator<Value, Failure>
+    let pump: TaskCanceller
+
+    /// The next element let through; none once the sequence has ended, or
+    /// if the task is cancelled while it waits.
+    public mutating fn next() async throws(Failure) -> Value? {
+        return try await output.next()
+    }
+}
+
+// The task that hands the sequence's elements to the gate, started; it is
+// cancelled when the stream ends early — its consumer cancelled — or the
+// iterator is let go.
+fn startTimed<S: AsyncSequence>(_ base: S, _ gate: TimedGate<S.Element, S.Failure>, _ stream: AsyncThrowingStream<S.Element, S.Failure>, _ continuation: StreamContinuation<S.Element, S.Failure>) -> AsyncTimedIterator<S.Element, S.Failure>
+    where S: Sendable, S.Element: Sendable {
+    let pump = Task.detached {
+        var iterator = base.makeAsyncIterator()
+        do {
+            while let value = try await iterator.next() {
+                await gate.got(value)
+            }
+        } catch {
+            await gate.end(error)
+            return
+        }
+        await gate.end(none)
+    }
+    continuation.onTermination { reason in
+        pump.cancel()
+    }
+    return AsyncTimedIterator<S.Element, S.Failure> { output: stream.makeAsyncIterator(), pump: TaskCanceller([pump]) }
+}
+
+// When a timed operator lets an element through. Debouncing, each element
+// replaces the one waiting and starts the timer again; throttling, one is
+// let through at once if the interval since the last has passed, else it
+// waits — the newest, or the first — for a timer to the interval's end.
+actor TimedGate<Element: Sendable, Failure: Error> {
+    let output: StreamContinuation<Element, Failure>
+    let interval: Int
+    let debounce: Bool
+    let latest: Bool
+    var pending: Element? = none
+    var generation: Int = 0
+    var timer: Task<Void>? = none
+    var lastSent: Int? = none
+
+    init(_ output: StreamContinuation<Element, Failure>, _ interval: Duration, debounce: Bool, latest: Bool) {
+        self.output = output
+        self.interval = interval.totalNanoseconds
+        self.debounce = debounce
+        self.latest = latest
+    }
+
+    fn got(_ value: Element) {
+        let now = Runtime.monotonicNanoseconds()
+        if debounce {
+            pending = value
+            start(after: interval)
+            return
+        }
+        if let last = lastSent {
+            if now - last < interval {
+                if latest || pending.isNone {
+                    pending = value
+                }
+                if timer.isNone {
+                    start(after: last + interval - now)
+                }
+                return
+            }
+        }
+        send(value, at: now)
+    }
+
+    // A timer for the element waiting, in place of any before it.
+    fn start(after nanoseconds: Int) {
+        generation += 1
+        if let running = timer {
+            running.cancel()
+        }
+        let expected = generation
+        let gate = self
+        timer = Task.detached {
+            if (try? await Task.sleep(nanoseconds: nanoseconds)) == none {
+                return
+            }
+            await gate.fire(expected)
+        }
+    }
+
+    fn fire(_ expected: Int) {
+        if expected != generation {
+            return
+        }
+        timer = none
+        if let value = pending {
+            pending = none
+            send(value, at: Runtime.monotonicNanoseconds())
+        }
+    }
+
+    fn send(_ value: Element, at now: Int) {
+        lastSent = now
+        output.yield(value)
+    }
+
+    // The sequence has ended: the element waiting let through, and the
+    // stream finished — with the error, if it threw.
+    fn end(_ error: Failure?) {
+        generation += 1
+        if let running = timer {
+            running.cancel()
+            timer = none
+        }
+        if let value = pending {
+            pending = none
+            output.yield(value)
+        }
+        if let error = error {
+            output.finish(throwing: error)
+        } else {
+            output.finish()
+        }
+    }
+}

@@ -363,4 +363,29 @@ public sealed class ClosureTests {
                 print(pick { .Slow })
             """
         );
+
+    /// <summary>
+    ///     A closure that is a stored property's initial value takes no
+    ///     'self': it is a closure like any other, its parameters its own.
+    /// </summary>
+    [Fact, Native]
+    public void AClosureAsAPropertysInitialValueTakesItsOwnParameters() =>
+        Prints(
+            "2\nset 5\n",
+            """
+            final class Hooks {
+                var onValue: (Int) -> Void = { value in }
+                var double: (Int) -> Int = { $0 * 2 }
+
+                init() { }
+            }
+            """,
+            """
+                let hooks = Hooks()
+                hooks.onValue(1)
+                print(hooks.double(1))
+                hooks.onValue = { value in print("set \(value)") }
+                hooks.onValue(5)
+            """
+        );
 }

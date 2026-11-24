@@ -6,7 +6,8 @@ module Sable.Core
 /// go while it waits, so the call that wakes it can run, and takes the
 /// actor again as it goes on. Being woken says only that something changed:
 /// a parked task looks again at what it waits for, and parks again if it
-/// must.
+/// must. Its calls are safe from any thread, so it is '@immutable', and
+/// Sendable.
 ///
 /// ```sable
 /// actor Gate {
@@ -25,7 +26,8 @@ module Sable.Core
 ///     }
 /// }
 /// ```
-public class WaitList {
+@immutable
+public final class WaitList {
     let handle: Int
 
     public init() {
@@ -41,6 +43,51 @@ public class WaitList {
         await Task.park(handle)
     }
 
+    /// Parks the running task until 'wakeAll()' is next called or the task
+    /// is cancelled; a task cancelled already does not park. Woken, it asks
+    /// 'Task.isCancelled' to tell which: how a wait is made cancellable
+    /// without anything to wake it but the cancellation.
+    ///
+    /// ```sable
+    /// actor Mailbox {
+    ///     var letters: String[>..] = []
+    ///     let arrived = WaitList()
+    ///
+    ///     // The latest letter, or none once the task is cancelled.
+    ///     fn take() async -> String? {
+    ///         while letters.isEmpty {
+    ///             if Task.isCancelled {
+    ///                 return none
+    ///             }
+    ///             await arrived.parkCancellably()
+    ///         }
+    ///         return letters.removeLast()
+    ///     }
+    /// }
+    /// ```
+    public fn parkCancellably() async {
+        await Task.parkCancellably(handle, -1)
+    }
+
+    /// As 'parkCancellably()', but not parked at all if 'wakeAll()' has
+    /// been called since the ticket was taken: for state guarded by a lock
+    /// rather than an actor, where a wake may come between the look at the
+    /// state, under the lock, and the park, after it. The ticket is taken
+    /// first, under the lock, then the state looked at.
+    ///
+    /// ```sable
+    /// let list = WaitList()
+    /// let ticket = list.ticket
+    /// list.wakeAll()
+    /// await list.parkCancellably(since: ticket)   // goes on at once
+    /// ```
+    public fn parkCancellably(since ticket: Int) async {
+        await Task.parkCancellably(handle, ticket)
+    }
+
+    /// How many times 'wakeAll()' has been called: what 'parkCancellably(since:)' is given.
+    public var ticket: Int => WaitList.ticketOf(handle)
+
     /// Wakes every task parked, in the order they parked.
     public fn wakeAll() {
         WaitList.wake(handle)
@@ -54,4 +101,7 @@ public class WaitList {
 
     @builtin("task_waitlist_wake")
     static fn wake(_ handle: Int)
+
+    @builtin("task_waitlist_ticket")
+    static fn ticketOf(_ handle: Int) -> Int
 }

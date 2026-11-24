@@ -47,6 +47,9 @@ public sealed partial class SilInterpreter {
         /// <summary>Its cancellation handlers, the latest last: each a function and the object it is given.</summary>
         public List<(string Run, HeapObject Context)> Handlers { get; } = [];
 
+        /// <summary>The wait list it is parked in so that its cancellation wakes it (WaitList.parkCancellably), if it is.</summary>
+        public List<InterpretedTask>? ParkedIn;
+
         /// <summary>The task's frames, the most recent last: pushed and popped as its calls begin and end.</summary>
         public Stack<HeapObject> Frames { get; } = new();
     }
@@ -111,6 +114,9 @@ public sealed partial class SilInterpreter {
 
     /// <summary>The wait lists, by handle: tasks parked until woken, in the order they parked.</summary>
     readonly Dictionary<long, List<InterpretedTask>> _waitLists = [];
+
+    /// <summary>How many times each wait list has been woken: its ticket.</summary>
+    readonly Dictionary<long, long> _waitListTickets = [];
 
     // The sleepers, by deadline and then by when they began to sleep; a
     // ticket that is no longer the task's is one it has left (cancelled).
@@ -340,6 +346,12 @@ public sealed partial class SilInterpreter {
             Enqueue(task);
         }
 
+        if (task.ParkedIn is { } parkedIn) {
+            parkedIn.Remove(task);
+            task.ParkedIn = null;
+            Enqueue(task);
+        }
+
         IoCancel(task, resume: true);
         foreach (var child in task.Children.ToList()) {
             Cancel(child, depth);
@@ -349,6 +361,8 @@ public sealed partial class SilInterpreter {
     /// <summary>A task that can no longer go on, as the program ends: its frames destroyed from the root, and given back.</summary>
     void DropTask(InterpretedTask task) {
         IoCancel(task, resume: false);
+        task.ParkedIn?.Remove(task);
+        task.ParkedIn = null;
         if (task.Frame is { } frame) {
             var previous = _currentTask;
             _currentTask = task;
@@ -429,16 +443,42 @@ public sealed partial class SilInterpreter {
             }
 
             case "task_waitlist_free":
+                foreach (var parked in _waitLists[(long)operands[0]!]) {
+                    parked.ParkedIn = null;
+                }
+
                 _waitLists.Remove((long)operands[0]!);
+                _waitListTickets.Remove((long)operands[0]!);
                 return null;
 
             case "async_park":
                 _waitLists[(long)operands[0]!].Add(Current);
                 return true;
 
+            // Not parked if woken since the ticket, or cancelled; parked, a
+            // cancellation takes it out and wakes it.
+            case "async_park_cancellable": {
+                var handle = (long)operands[0]!;
+                var ticket = (long)operands[1]!;
+                if (ticket >= 0 && _waitListTickets.GetValueOrDefault(handle) != ticket || Current.Cancelled) {
+                    return false;
+                }
+
+                var list = _waitLists[handle];
+                list.Add(Current);
+                Current.ParkedIn = list;
+                return true;
+            }
+
+            case "task_waitlist_ticket":
+                return _waitListTickets.GetValueOrDefault((long)operands[0]!);
+
             case "task_waitlist_wake": {
-                var list = _waitLists[(long)operands[0]!];
+                var handle = (long)operands[0]!;
+                var list = _waitLists[handle];
+                _waitListTickets[handle] = _waitListTickets.GetValueOrDefault(handle) + 1;
                 foreach (var parked in list) {
+                    parked.ParkedIn = null;
                     Enqueue(parked);
                 }
 

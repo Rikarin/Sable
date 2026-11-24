@@ -1,0 +1,18 @@
+module Sable.Concurrency
+
+/// What became of a value sent on a channel.
+@derive(Equatable, Hashable, Debug)
+public enum SendResult {
+    /// It is in the channel, for a receiver — perhaps in place of another
+    /// value, which a dropping full mode let go.
+    Sent
+    /// The channel was full and drops what is sent while it is
+    /// (ChannelFullMode.DropWrite).
+    Dropped
+    /// The channel was full and 'trySend' does not wait.
+    Full
+    /// The channel was closed: it takes nothing more.
+    Closed
+    /// The sending task was cancelled while it waited for room.
+    Cancelled
+}

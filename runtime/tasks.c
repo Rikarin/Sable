@@ -150,6 +150,9 @@ typedef struct SableTask {
     bool finishing;                  // its body has finished, its children not yet
     bool released;                   // the program no longer holds it
     bool cancelled;                  // asked to stop: it asks Task.isCancelled, and sleeps end at once
+    int64_t park_ticket;             // PENDING_PARK: not parked if the list was woken since (-1: no ticket)
+    bool park_cancellable;           // PENDING_PARK: not parked if cancelled, and woken by a cancellation
+    struct SableWaitList *parked_in; // the list it is parked in so that a cancellation wakes it; under tree_lock
     FrameSlab frames;
     _Alignas(FRAME_ALIGN) char first_frames[FRAME_FIRST_CHUNK];
 } SableTask;
@@ -163,10 +166,30 @@ struct SableGroup {
     int64_t running;
 };
 
-// Tasks parked until woken: what Channel's receivers wait in.
+// Tasks parked until woken: what Channel's receivers wait in; and how many
+// times it has been woken, the ticket a park can be made conditional on.
 typedef struct SableWaitList {
     SableTask *head;
+    int64_t ticket;
 } SableWaitList;
+
+// A task parked cancellably, taken out of its list. Under tree_lock.
+static void unpark(SableTask *task) {
+    SableWaitList *list = task->parked_in;
+    if (list == NULL) {
+        return;
+    }
+
+    for (SableTask **at = &list->head; *at != NULL; at = &(*at)->next_waiter) {
+        if (*at == task) {
+            *at = task->next_waiter;
+            break;
+        }
+    }
+
+    task->next_waiter = NULL;
+    task->parked_in = NULL;
+}
 
 // TaskPriority.medium: the main task's, and a detached task's unless it says.
 enum { PRIORITY_MEDIUM = 21, BANDS = 4 };
@@ -1485,8 +1508,20 @@ static void after_suspend(SableTask *task) {
         case PENDING_PARK: {
             SableWaitList *list = on;
             spin_lock(&tree_lock);
-            task->next_waiter = list->head;
-            list->head = task;
+            if (task->park_ticket >= 0 && list->ticket != task->park_ticket
+                || task->park_cancellable && __atomic_load_n(&task->cancelled, __ATOMIC_RELAXED)) {
+                // Woken since its ticket, or cancelled: it goes on at once.
+                schedule(task);
+            } else {
+                task->next_waiter = list->head;
+                list->head = task;
+                if (task->park_cancellable) {
+                    task->parked_in = list;
+                }
+            }
+
+            task->park_ticket = -1;
+            task->park_cancellable = false;
             spin_unlock(&tree_lock);
             break;
         }
@@ -1890,6 +1925,10 @@ static void cancel(SableTask *task, HandlerList *handlers) {
 
     mutex_unlock(&timer_lock);
     io_cancel(task, true);
+    if (task->parked_in != NULL) {
+        unpark(task);
+        schedule(task);
+    }
 
     for (SableTask *child = task->children; child != NULL; child = child->next_sibling) {
         cancel(child, handlers);
@@ -2061,7 +2100,14 @@ void *sable_waitlist_new(void) {
     return list;
 }
 
-void sable_waitlist_free(void *list) {
+void sable_waitlist_free(void *pointer) {
+    SableWaitList *list = pointer;
+    spin_lock(&tree_lock);
+    for (SableTask *task = list->head; task != NULL; task = task->next_waiter) {
+        task->parked_in = NULL;
+    }
+
+    spin_unlock(&tree_lock);
     free(list);
 }
 
@@ -2069,6 +2115,34 @@ void sable_waitlist_free(void *list) {
 bool sable_task_park(void *list) {
     current_task->pending = PENDING_PARK;
     current_task->pending_on = list;
+    current_task->park_ticket = -1;
+    current_task->park_cancellable = false;
+    return true;
+}
+
+// How many times the list has been woken: taken before a look at what a
+// task waits for, so that a wake between that look and the park is not
+// missed (WaitList.parkCancellably(since:)). Changed only under tree_lock,
+// and read without it: the look that follows, under the state's own lock,
+// is ordered after the read, and a wake after the look after it.
+int64_t sable_waitlist_ticket(void *pointer) {
+    SableWaitList *list = pointer;
+    return __atomic_load_n(&list->ticket, __ATOMIC_ACQUIRE);
+}
+
+// The running task parks in the list until it is woken, or cancelled —
+// unless it is cancelled already, or the list has been woken since the
+// ticket (-1: no ticket). Decided as it suspends, under tree_lock, with
+// which both a wake and a cancellation are made: neither is missed.
+bool sable_task_park_cancellable(void *list, int64_t ticket) {
+    if (__atomic_load_n(&current_task->cancelled, __ATOMIC_ACQUIRE)) {
+        return false;
+    }
+
+    current_task->pending = PENDING_PARK;
+    current_task->pending_on = list;
+    current_task->park_ticket = ticket;
+    current_task->park_cancellable = true;
     return true;
 }
 
@@ -2078,8 +2152,10 @@ void sable_waitlist_wake(void *pointer) {
     spin_lock(&tree_lock);
     SableTask *parked_tasks = list->head, *in_order = NULL;
     list->head = NULL;
+    __atomic_store_n(&list->ticket, list->ticket + 1, __ATOMIC_RELEASE);
     while (parked_tasks != NULL) {
         SableTask *after = parked_tasks->next_waiter;
+        parked_tasks->parked_in = NULL;
         parked_tasks->next_waiter = in_order;
         in_order = parked_tasks;
         parked_tasks = after;
@@ -2175,6 +2251,9 @@ void sable_task_run_until_main(void) {
 // their drop functions say, and given back. Its waiters are dropped too.
 static void drop_task(SableTask *task) {
     io_cancel(task, false);
+    spin_lock(&tree_lock);
+    unpark(task);
+    spin_unlock(&tree_lock);
     if (task->frame != NULL) {
         SableTask *previous = current_task;
         switch_to(task);

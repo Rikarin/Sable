@@ -1,15 +1,15 @@
 module Sable.Concurrency
 
-import Sable.Time
+// Channels (docs/04 §4.3, docs/06 §6.7), written in Sable over the core's
+// Task and WaitList. A channel is an actor, so its buffer is changed by one
+// call at a time, whichever threads its senders and receivers run on. A
+// receiver with nothing to take, or a sender with no room, parks in a wait
+// list until a call changes what it waits for, holding no thread; it parks
+// cancellably, so that the task's cancellation wakes it, and it gives up.
 
-// Channels and waiting (docs/04 §4.3), written in Sable over the core's
-// Task and WaitList; task groups are the core's. A channel is an actor, so
-// its buffer is changed by one call at a time, whichever threads its
-// senders and receivers run on; a receiver with nothing to take parks
-// until a value is sent or the channel is closed, holding no thread.
-
-/// Values passed from task to task in the order sent; unbounded. What is
-/// sent crosses from one task to another, so it is Sendable.
+/// Values passed from task to task in the order sent, that cannot fail:
+/// a ThrowingChannel whose Failure is Never. What is sent crosses from one
+/// task to another, so it is Sendable.
 ///
 /// ```sable
 /// let channel = Channel<Int>()
@@ -26,79 +26,227 @@ import Sable.Time
 /// await channel.close()
 /// print(await consumer.value)   // 6
 /// ```
-public actor Channel<Element: Sendable>: AsyncSequence {
-    public alias Iter = ChannelIterator<Element>
+public alias Channel<Element: Sendable> = ThrowingChannel<Element, Never>
 
-    var buffer: Element[>..] = []
-    var head: Int = 0
+/// Values passed from task to task in the order sent: .NET's
+/// `System.Threading.Channels`, Rust's `mpsc`, Swift's `AsyncChannel`.
+/// Any number of tasks send, and any number receive: each value goes to
+/// one receiver, the one that asks first. Unbounded, a channel holds
+/// whatever is sent; bounded, it holds at most so many values, and its
+/// full mode says what a send to it while full does — wait for room (the
+/// sender's backpressure), or drop a value. Closed, it takes no more, and
+/// its receivers have what it holds, then none — or, closed with an
+/// error, the error thrown.
+///
+/// A send or a receive that waits is cancellable: the waiting task's
+/// cancellation ends the wait, the send returning `.Cancelled` and the
+/// receive none, with nothing sent or taken.
+///
+/// ```sable
+/// let jobs = Channel<Int>(capacity: 2)
+/// let worker = Task.spawn {
+///     var done = 0
+///     for await job in jobs {
+///         done += job
+///     }
+///     return done
+/// }
+/// for job in 1...10 {
+///     await jobs.send(job)     // waits while two are queued
+/// }
+/// await jobs.close()
+/// assert(await worker.value == 55)
+/// ```
+public actor ThrowingChannel<Element: Sendable, Failure: Error>: AsyncSequence {
+    public alias Iter = ChannelIterator<Element, Failure>
+
+    var queue: ValueQueue<Element> = ValueQueue<Element>()
     var closed: Bool = false
+    var failure: Failure? = none
+    var waitingReceivers: Int = 0
+    var waitingSenders: Int = 0
     let receivers: WaitList = WaitList()
+    let senders: WaitList = WaitList()
 
-    public init() { }
+    /// How many values it holds at most; none when unbounded.
+    public nonisolated let capacity: Int?
 
-    /// Adds the value for a receiver; a value sent after closing is dropped.
-    public fn send(_ value: Element) {
-        if !closed {
-            buffer.append(value)
-            receivers.wakeAll()
+    /// What a send to it does while it is full.
+    public nonisolated let fullMode: ChannelFullMode
+
+    /// An unbounded channel: a send never waits.
+    public init() {
+        capacity = none
+        fullMode = .Wait
+    }
+
+    /// A channel holding at most so many values; a send while it is full
+    /// does as the full mode says — by default, waits for room.
+    public init(capacity: Int, fullMode: ChannelFullMode = .Wait) {
+        precondition(capacity > 0, "a channel cannot hold \(capacity) values")
+        self.capacity = capacity
+        self.fullMode = fullMode
+    }
+
+    /// Sends the value, waiting while the channel is full if its full mode
+    /// is `.Wait`: what became of it. A send to a closed channel is
+    /// `.Closed`, and one whose task is cancelled while it waits for room
+    /// `.Cancelled`; either way the value is not sent.
+    @discardable
+    public fn send(_ value: Element) async -> SendResult {
+        while true {
+            if closed {
+                return .Closed
+            }
+            if let result = offer(value) {
+                return result
+            }
+            if Task.isCancelled {
+                return .Cancelled
+            }
+            waitingSenders += 1
+            await senders.parkCancellably()
+            waitingSenders -= 1
         }
     }
 
-    /// No more values will come: receivers get none once the buffer is empty.
-    public fn close() {
-        closed = true
-        receivers.wakeAll()
+    /// Sends the value if it can without waiting: `.Full` if the channel is
+    /// full and would have the sender wait.
+    @discardable
+    public fn trySend(_ value: Element) -> SendResult {
+        if closed {
+            return .Closed
+        }
+        return offer(value) ?? .Full
     }
 
-    public var isClosed: Bool => closed
+    // The value taken if there is room, or room made by the full mode:
+    // none if the sender must wait.
+    fn offer(_ value: Element) -> SendResult? {
+        if let capacity = capacity {
+            if queue.count >= capacity {
+                match fullMode {
+                    case .Wait => {
+                        return none
+                    }
+                    case .DropWrite => {
+                        return .Dropped
+                    }
+                    case .DropOldest => {
+                        let _ = queue.removeFirst()
+                    }
+                    case .DropNewest => {
+                        let _ = queue.removeLast()
+                    }
+                }
+            }
+        }
+        queue.append(value)
+        if waitingReceivers > 0 {
+            receivers.wakeAll()
+        }
+        return .Sent
+    }
 
-    /// Values sent and not yet received.
-    public var pending: Int => buffer.count - head
-
-    /// The next value, waiting for one; none once closed and empty.
-    public fn receive() async -> Element? {
-        while head >= buffer.count {
+    /// The next value, waiting for one: none once the channel is closed and
+    /// empty, or if the receiving task is cancelled while it waits. Closed
+    /// with an error and empty, it throws the error.
+    public fn receive() async throws(Failure) -> Element? {
+        while queue.isEmpty {
             if closed {
+                if let failure = failure {
+                    throw failure
+                }
                 return none
             }
-            await receivers.park()
+            if Task.isCancelled {
+                return none
+            }
+            waitingReceivers += 1
+            await receivers.parkCancellably()
+            waitingReceivers -= 1
         }
         return take()
     }
 
-    /// Its values as they are received, for 'for await'.
-    public nonisolated fn makeAsyncIterator() -> ChannelIterator<Element> {
-        return ChannelIterator<Element> { channel: self }
-    }
-
     /// The next value if one is there now; none otherwise.
     public fn tryReceive() -> Element? {
-        if head >= buffer.count {
+        if queue.isEmpty {
             return none
         }
         return take()
     }
 
     fn take() -> Element {
-        let value = buffer[head]
-        head += 1
-        // Emptied: start again, so a long-lived channel does not grow.
-        if head == buffer.count {
-            buffer = []
-            head = 0
+        let value = queue.removeFirst()
+        if waitingSenders > 0 {
+            senders.wakeAll()
         }
         return value
+    }
+
+    /// No more values will come: sends from now on are `.Closed`, those
+    /// waiting for room among them, and receivers get what the channel
+    /// holds, then none. Closing it again does nothing.
+    public fn close() {
+        if closed {
+            return
+        }
+        closed = true
+        receivers.wakeAll()
+        senders.wakeAll()
+    }
+
+    /// Closed with an error: receivers get what the channel holds, then the
+    /// error, thrown — .NET's `Complete(exception)`. Closing it again, with
+    /// or without an error, does nothing.
+    public fn close(error: Failure) {
+        if closed {
+            return
+        }
+        failure = error
+        close()
+    }
+
+    /// Whether it has been closed; it may still hold values to receive.
+    public var isClosed: Bool => closed
+
+    /// Values sent and not yet received.
+    public var count: Int => queue.count
+
+    /// Whether it holds no values now.
+    public var isEmpty: Bool => queue.isEmpty
+
+    /// Its values as they are received, for 'for await'.
+    public nonisolated fn makeAsyncIterator() -> ChannelIterator<Element, Failure> {
+        return ChannelIterator<Element, Failure> { channel: self, done: false }
     }
 }
 
 /// Receives a channel's values, one per 'next()': what 'for await value in
-/// channel' goes through, until the channel is closed and empty.
-public struct ChannelIterator<Value: Sendable>: AsyncIterator {
+/// channel' goes through, until the channel is closed and empty, or the
+/// task is cancelled. Several iterators of one channel share its values.
+public struct ChannelIterator<Value: Sendable, Failure: Error>: AsyncIterator {
     public alias Element = Value
 
-    let channel: Channel<Value>
+    let channel: ThrowingChannel<Value, Failure>
+    var done: Bool
 
-    public mutating fn next() async -> Value? {
-        return await channel.receive()
+    /// The next value received; none once there are no more, and after
+    /// the channel's error has been thrown.
+    public mutating fn next() async throws(Failure) -> Value? {
+        if done {
+            return none
+        }
+        do {
+            if let value = try await channel.receive() {
+                return value
+            }
+            done = true
+            return none
+        } catch {
+            done = true
+            throw error
+        }
     }
 }

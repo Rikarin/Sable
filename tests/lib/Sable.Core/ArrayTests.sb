@@ -159,3 +159,26 @@ fn elementsAreRemovedKeepingTheBuffer() {
     ys.removeLast(2)
     assert(ys == [1])
 }
+
+@test
+fn repeatingMakesCopiesOfAnyElement() {
+    assertEqual(Int[>..](repeating: 7, count: 3), [7, 7, 7])
+    assertEqual(String[>..<](repeating: "a", count: 2), ["a", "a"])
+    assert(Int[>..](repeating: 1, count: 0).isEmpty)
+    var bytes: U8[>..] = [1]
+    bytes.append(repeating: 0xFF, count: 100)
+    assertEqual(bytes.count, 101)
+    assertEqual(bytes[100], 0xFF)
+    var words: String[>..] = ["x"]
+    let before = words
+    words.append(repeating: "y", count: 2)
+    assertEqual(words, ["x", "y", "y"])
+    assertEqual(before, ["x"])
+}
+
+@test(traps: "cannot append a negative number of elements")
+fn repeatingANegativeCountTraps() {
+    var xs: Int[>..] = []
+    let n = -2
+    xs.append(repeating: 0, count: n)
+}

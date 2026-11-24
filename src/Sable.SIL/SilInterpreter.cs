@@ -2293,6 +2293,25 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return null;
             }
 
+            case "array_append_repeating": {
+                var count = (long)operands[2]!;
+                if (count < 0) {
+                    throw new SilTrap("cannot append a negative number of elements");
+                }
+
+                if (count > 0) {
+                    var array = Unique(builtin.Operands[0], (IReference)operands[0]!);
+                    var element = builtin.Operands[1].Type;
+                    array.Elements.EnsureCapacity(array.Elements.Count + (int)count);
+                    for (var i = 0; i < count; i++) {
+                        Retain(element, operands[1]);
+                        array.Elements.Add(operands[1]);
+                    }
+                }
+
+                return null;
+            }
+
             case "array_append_utf8": {
                 var all = System.Text.Encoding.UTF8.GetBytes(Text(operands[1]).Value);
                 var from = (long)operands[2]!;

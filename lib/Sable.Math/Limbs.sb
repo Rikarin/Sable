@@ -26,14 +26,7 @@ let BURNIKEL_ZIEGLER_THRESHOLD = 240
 
 /// A run of that many zero limbs.
 fn zeroLimbs(_ count: Int) -> U64[>..] {
-    var limbs: U64[>..] = []
-    limbs.reserveCapacity(count)
-    var i = 0
-    while i < count {
-        limbs.append(0)
-        i = i + 1
-    }
-    return limbs
+    return U64[>..](repeating: 0, count: count)
 }
 
 /// How many limbs the run has below its zero ones at the top.
@@ -172,16 +165,8 @@ fn shiftLimbsLeft(_ a: U64[:], _ bits: Int, limbs: Int = 0) -> U64[>..] {
         shifted.append(0)
     } else {
         shifted.reserveCapacity(limbs + a.count + 1)
-        var i = 0
-        while i < limbs {
-            shifted.append(0)
-            i = i + 1
-        }
-        i = 0
-        while i < a.count {
-            shifted.append(a[i])
-            i = i + 1
-        }
+        shifted.append(repeating: 0, count: limbs)
+        shifted.append(contentsOf: a)
         shifted.append(0)
     }
     if bits == 0 {

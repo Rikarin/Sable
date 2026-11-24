@@ -345,4 +345,50 @@ public sealed class ArrayMemberTests {
                 counts[["b"]] = 1
                 print("\(counts[["a", "b"]] ?? 0) \(counts[["b"]] ?? 0)")
             """);
+
+    /// <summary>
+    ///     'Element[>..](repeating:count:)' and 'append(repeating:count:)',
+    ///     for every element type: bytes and other trivial values copied as
+    ///     bytes, and strings, structs holding them, arrays and a type
+    ///     parameter's values copied as appending each would copy it.
+    /// </summary>
+    [Fact]
+    public void RepeatingFillsCopiesOfAnyElement() =>
+        Prints(
+            "[258, 258, 258]\n41 7 1\n[\"hi\", \"hi\"]\nn 1\n[[1, 2], [1, 2]]\n[\"g\", \"g\", \"g\"] [3.5]\n[4, 4]\n41 43\n",
+            """
+            struct P {
+                var x: I32
+                var name: String
+            }
+
+            fn filled<T>(_ value: T, _ n: Int) -> T[>..] {
+                var xs = T[>..](repeating: value, count: n)
+                xs.append(repeating: value, count: 1)
+                return xs
+            }
+            """,
+            """
+                print(Int[>..](repeating: 258, count: 3))
+                var b: U8[>..] = [1]
+                b.append(repeating: 7, count: 40)
+                print("\(b.count) \(b[40]) \(b[0])")
+                print(String[>..](repeating: "hi", count: 2))
+                let p = P[>..](repeating: P { x: 1, name: "n" }, count: 2)
+                print("\(p[1].name) \(p[0].x)")
+                print(Int[>..][>..](repeating: [1, 2], count: 2))
+                print("\(filled("g", 2)) \(filled(3.5, 0))")
+                var shrink = Int[>..<](repeating: 4, count: 2)
+                shrink.append(repeating: 0, count: 0)
+                print(shrink)
+                let shared = b
+                b.append(repeating: 9, count: 2)
+                print("\(shared.count) \(b.count)")
+            """);
+
+    [Fact]
+    public void RepeatingANegativeCountTraps() {
+        var execution = AssertAgree(Program("", "    var xs: Int[>..] = []\n    let n = -1\n    xs.append(repeating: 0, count: n)\n    print(xs.count)"));
+        Assert.Contains("cannot append a negative number of elements", execution.Stderr, StringComparison.Ordinal);
+    }
 }

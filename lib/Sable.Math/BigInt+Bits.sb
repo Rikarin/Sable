@@ -12,8 +12,8 @@ extension BigInt {
     /// than its magnitude takes.
     fn twosComplement(_ count: Int) -> U64[>..] {
         var limbs = limbView
-        while limbs.count < count {
-            limbs.append(0)
+        if limbs.count < count {
+            limbs.append(repeating: 0, count: count - limbs.count)
         }
         if negative {
             // -m is ~m + 1.

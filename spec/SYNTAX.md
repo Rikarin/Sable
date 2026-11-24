@@ -831,7 +831,7 @@ extension U8[:] { fn toString() -> String { } }
 - Each parameter must appear in the array type.
 - An extension of every growable array of a kind, `T[>..]` or `T[>..<]`, may
   declare initialisers, as such an array always has a value to begin from:
-  `self` starts as `[]`. `Int[>..](repeating: 0, times: 3)` calls one. An
+  `self` starts as `[]`. `Int[>..](repeating: 0, count: 3)` calls one. An
   `init()` requirement is met by `[]` unless the extension declares one.
 - Its members are generic over the parameters and monomorphised per element
   type, like any generic. `Sable.Core` declares the array family's own members

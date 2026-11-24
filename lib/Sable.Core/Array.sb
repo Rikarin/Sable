@@ -77,6 +77,31 @@ extension<Element> Element[>..] {
     @builtin("array_reserve")
     public mutating fn reserveCapacity(_ minimumCapacity: Int)
 
+    /// An array of so many copies of the value; a negative count traps.
+    ///
+    /// ```sable
+    /// let zeros = Int[>..](repeating: 0, count: 3)
+    /// assert(zeros == [0, 0, 0])
+    /// let words = String[>..](repeating: "ab", count: 2)
+    /// assert(words == ["ab", "ab"])
+    /// ```
+    public init(repeating value: Element, count: Int) {
+        self.append(repeating: value, count: count)
+    }
+
+    /// So many copies of the value added at the end at once, the buffer
+    /// grown once: a run of bytes is one memset, and any other element is
+    /// copied as appending it would copy it. A negative count traps.
+    ///
+    /// ```sable
+    /// var bytes: U8[>..] = [0x41]
+    /// bytes.append(repeating: 0, count: 3)
+    /// bytes[2] = 0x42
+    /// assert(bytes == [0x41, 0, 0x42, 0])
+    /// ```
+    @builtin("array_append_repeating")
+    public mutating fn append(repeating value: Element, count: Int)
+
     /// Every element of 'other', added at the end in order.
     ///
     /// ```sable
@@ -148,6 +173,31 @@ extension<Element> Element[>..<] {
     /// appending up to that many grows nothing.
     @builtin("array_reserve")
     public mutating fn reserveCapacity(_ minimumCapacity: Int)
+
+    /// An array of so many copies of the value; a negative count traps.
+    ///
+    /// ```sable
+    /// let zeros = Int[>..<](repeating: 0, count: 3)
+    /// assert(zeros == [0, 0, 0])
+    /// let words = String[>..<](repeating: "ab", count: 2)
+    /// assert(words == ["ab", "ab"])
+    /// ```
+    public init(repeating value: Element, count: Int) {
+        self.append(repeating: value, count: count)
+    }
+
+    /// So many copies of the value added at the end at once, the buffer
+    /// grown once: a run of bytes is one memset, and any other element is
+    /// copied as appending it would copy it. A negative count traps.
+    ///
+    /// ```sable
+    /// var bytes: U8[>..<] = [0x41]
+    /// bytes.append(repeating: 0, count: 3)
+    /// bytes[2] = 0x42
+    /// assert(bytes == [0x41, 0, 0x42, 0])
+    /// ```
+    @builtin("array_append_repeating")
+    public mutating fn append(repeating value: Element, count: Int)
 
     /// Every element of 'other', added at the end in order.
     public mutating fn append(contentsOf other: Element[:]) {

@@ -556,6 +556,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_array_reserve(ptr nocapture, ptr, i64)
                                 declare void @sable_array_truncate(ptr nocapture, ptr, i64)
                                 declare void @sable_array_append_utf8(ptr nocapture, ptr, ptr, i64, i64)
+                                declare void @sable_array_append_repeating(ptr nocapture, ptr, ptr nocapture readonly, i64)
                                 declare void @sable_array_rotate(ptr nocapture, ptr, i64, i64, i64)
                                 declare void @sable_slice_rotate(ptr nocapture, ptr, i64, i64, i64)
                                 declare void @sable_array_store_slice(ptr nocapture, ptr, i64, i64, ptr, i64, i64)
@@ -4952,6 +4953,22 @@ public sealed partial class LlvmEmitter {
                 case "array_truncate": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     Line($"call void @sable_array_truncate(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, i64 {operands[1]})");
+                    return;
+                }
+
+                // The element, borrowed, handed over where it is: in a slot
+                // of the frame's own for a value, its buffer for an opaque one.
+                case "array_append_repeating": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    var value = operands[1];
+                    if (!SilType.IsIndirect(arrayType.Element)) {
+                        value = Fresh();
+                        _entryAllocas.Append($"  {value} = alloca {Type(arrayType.Element)}, align 16\n");
+                        Line($"store {Type(arrayType.Element)} {operands[1]}, ptr {value}");
+                    }
+
+                    SiteForRuntime();
+                    Line($"call void @sable_array_append_repeating(ptr {operands[0]}, ptr {ArrayMetadataOf(arrayType)}, ptr {value}, i64 {operands[2]})");
                     return;
                 }
 

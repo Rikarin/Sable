@@ -403,6 +403,59 @@ void sable_array_append_utf8(SableArray **slot, const SableMetadata *type, const
     array->count += length;
 }
 
+// 'count' copies of the element at 'value' added at the end at once: the
+// array made the only reference to its buffer, grown as appending them one
+// at a time grows it. A trivial element is copied as bytes — by memset when
+// its bytes are all one, as a byte's always are, else by doubling memcpy —
+// and any other by its copy witness, once for each.
+void sable_array_append_repeating(SableArray **slot, const SableMetadata *type, const void *value, int64_t count) {
+    if (count < 0) {
+        trap_here("cannot append a negative number of elements");
+    }
+
+    if (count == 0) {
+        return;
+    }
+
+    int64_t size = type->element_size;
+    SableArray *array = unique(slot, type, count);
+    if (array->count + count > array->capacity) {
+        int64_t old = array->capacity;
+        int64_t wanted = array->capacity + array->capacity / 2;
+        wanted = wanted < array->count + count ? array->count + count : wanted;
+        wanted = wanted < 4 ? 4 : wanted;
+        array->capacity = wanted;
+        array->elements = resize_elements(array, old * size, wanted * size);
+    }
+
+    char *start = array->elements + array->count * size;
+    if (type->copy_element != NULL) {
+        for (int64_t i = 0; i < count; i++) {
+            element_copy(type, start + i * size, value);
+        }
+    } else if (size > 0) {
+        const unsigned char *bytes = value;
+        bool same = true;
+        for (int64_t i = 1; i < size && same; i++) {
+            same = bytes[i] == bytes[0];
+        }
+
+        if (same) {
+            memset(start, bytes[0], (size_t)(count * size));
+        } else {
+            memcpy(start, value, (size_t)size);
+            int64_t done = 1;
+            while (done < count) {
+                int64_t run = done < count - done ? done : count - done;
+                memcpy(start + done * size, start, (size_t)(run * size));
+                done += run;
+            }
+        }
+    }
+
+    array->count += count;
+}
+
 // The 'length' elements at 'base' rotated left by 'by' (0 < by < length):
 // the shorter side kept aside, the longer moved over in one go, and the
 // shorter put back after it. A permutation of the bytes, so no element is

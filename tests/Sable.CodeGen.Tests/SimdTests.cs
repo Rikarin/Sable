@@ -409,21 +409,21 @@ public sealed class SimdTests {
                     """
                         let x = ramp(38)
                         let y = ramp(38)
-                        print("\(sum(x)) \(dot(x, y) - dot(ramp(19), ramp(19))) \(cosineSimilarity(x, ramp(38)):.2f) \(min(x)) \(max(ramp(37)))")
+                        print("\(TensorPrimitives.sum(x)) \(TensorPrimitives.dot(x, y) - TensorPrimitives.dot(ramp(19), ramp(19))) \(TensorPrimitives.cosineSimilarity(x, ramp(38)):.2f) \(TensorPrimitives.min(x)) \(TensorPrimitives.max(ramp(37)))")
                         var result = ramp(38)
-                        add(x, y, into: &result)
+                        TensorPrimitives.add(x, y, into: &result)
                         let a = result[18]
-                        subtract(x, y, into: &result)
+                        TensorPrimitives.subtract(x, y, into: &result)
                         let b = result[18] - a
-                        multiply(ramp(4), ramp(4), into: &result)
+                        TensorPrimitives.multiply(ramp(4), ramp(4), into: &result)
                         let c = result[2] + result[3] - 1
-                        divide(ramp(38), y, into: &result)
+                        TensorPrimitives.divide(ramp(38), y, into: &result)
                         var probabilities = ramp(20)
-                        softmax(ramp(20), into: &probabilities)
-                        print("\(a) \(b) \(c) \(result[2] / 4) \(F64(sum(probabilities)):.2f)")
+                        TensorPrimitives.softmax(ramp(20), into: &probabilities)
+                        print("\(a) \(b) \(c) \(result[2] / 4) \(F64(TensorPrimitives.sum(probabilities)):.2f)")
                         let wide = rampWide(13)
                         let side: F64[>..] = [3, 4]
-                        print("\(norm(side)) \(dot(wide, wide)) \(sum(wide)) \(max(rampWide(4)))")
+                        print("\(TensorPrimitives.norm(side)) \(TensorPrimitives.dot(wide, wide)) \(TensorPrimitives.sum(wide)) \(TensorPrimitives.max(rampWide(4)))")
                     """
                 )
             ).Stdout

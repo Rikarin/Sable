@@ -1707,8 +1707,8 @@ static void after_suspend(SableTask *task) {
             }
 
             spin_lock(&tree_lock);
-            if (task->park_ticket >= 0 && list->ticket != task->park_ticket
-                || task->park_cancellable && __atomic_load_n(&task->cancelled, __ATOMIC_RELAXED)) {
+            if ((task->park_ticket >= 0 && list->ticket != task->park_ticket)
+                || (task->park_cancellable && __atomic_load_n(&task->cancelled, __ATOMIC_RELAXED))) {
                 // Woken since its ticket, or cancelled: it goes on at once.
                 schedule(task);
             } else {

@@ -154,15 +154,20 @@ SableArray *sable_fs_watch_take(int64_t handle, const SableMetadata *type) {
     FileWatch *watch = (FileWatch *)(intptr_t)handle;
     mutex_lock(&watch->reading);
     if (watch->polled && watch_empty(watch)) {
-        IoSource *source = source_of(watch->source);
-        uint64_t ticks = io_ticks(source, 0);
+        uint64_t ticks;
+        PlatformSocket descriptor;
+        IoSource *source = io_begin(watch->source, &descriptor, 0, &ticks);
         bool more = true;
         while (more && watch_empty(watch)) {
             more = watch_read(watch->state);
         }
 
-        if (!more && watch_empty(watch)) {
-            io_would_block(source, 0, ticks);
+        if (source != NULL) {
+            if (!more && watch_empty(watch)) {
+                io_would_block(source, 0, ticks);
+            }
+
+            io_end(source);
         }
     }
 
